@@ -20,6 +20,42 @@ describe('Electron single-instance persistence boundary', () => {
     expect(configuredUserData).toBeLessThan(processLock)
   })
 
+  it('resolves and opens the selected profile before any renderer or scheduler can mutate it', () => {
+    const main = readFileSync('apps/desktop/electron/main.ts', 'utf8')
+    const resolveProfile = main.indexOf('const dataProfileResolution = resolveDesktopDataProfile')
+    const processLock = main.indexOf('app.requestSingleInstanceLock()')
+    const blockSelection = main.indexOf("if (dataProfileResolution.status === 'blocked')")
+    const openStore = main.indexOf('await getStore()', blockSelection)
+    const registerHandlers = main.indexOf('registerIpcHandlers()', openStore)
+    const createFirstWindow = main.indexOf('createWindow()', registerHandlers)
+
+    expect(resolveProfile).toBeGreaterThanOrEqual(0)
+    expect(resolveProfile).toBeLessThan(processLock)
+    expect(blockSelection).toBeGreaterThan(processLock)
+    expect(openStore).toBeGreaterThan(blockSelection)
+    expect(openStore).toBeLessThan(registerHandlers)
+    expect(registerHandlers).toBeLessThan(createFirstWindow)
+  })
+
+  it('quits on a profile-selection conflict before workflow handlers or Team schedulers start', () => {
+    const main = readFileSync('apps/desktop/electron/main.ts', 'utf8')
+    const ready = main.slice(main.indexOf('app.whenReady().then'))
+    const blockedSelection = ready.indexOf("if (dataProfileResolution.status === 'blocked')")
+    const blockedReturn = ready.indexOf('return', blockedSelection)
+    const openStore = ready.indexOf('await getStore()', blockedReturn)
+    const registerHandlers = ready.indexOf('registerIpcHandlers()', openStore)
+    const remoteSyncScheduler = ready.indexOf('getRemoteSyncOutboxScheduler()', registerHandlers)
+    const gateScheduler = ready.indexOf('getGateCommandScheduler()', registerHandlers)
+
+    expect(ready.slice(blockedSelection, blockedReturn)).toContain('app.quit()')
+    expect(blockedSelection).toBeGreaterThanOrEqual(0)
+    expect(blockedReturn).toBeGreaterThan(blockedSelection)
+    expect(openStore).toBeGreaterThan(blockedReturn)
+    expect(registerHandlers).toBeGreaterThan(openStore)
+    expect(remoteSyncScheduler).toBeGreaterThan(registerHandlers)
+    expect(gateScheduler).toBeGreaterThan(registerHandlers)
+  })
+
   it('disables the packaged Chromium dictionary downloader', () => {
     const main = readFileSync('apps/desktop/electron/main.ts', 'utf8')
     const normalizedMain = main.replace(/\r\n/g, '\n')
@@ -35,7 +71,7 @@ describe('Electron single-instance persistence boundary', () => {
     expect(browserWindow).toContain('spellcheck: false')
     expect(main).toMatch(/import \{[\s\S]*?session[\s\S]*?\} from 'electron'/)
     expect(normalizedMain).toMatch(
-      /app\.whenReady\(\)\.then\(\(\) => \{\n\s+const defaultSession = session\.defaultSession\n\s+defaultSession\.setSpellCheckerLanguages\(\[\]\)\n\s+defaultSession\.setSpellCheckerEnabled\(false\)\n\s+registerIpcHandlers\(\)\n\s+createWindow\(\)/,
+      /app\.whenReady\(\)\.then\(async \(\) => \{[\s\S]*?await getStore\(\)[\s\S]*?const defaultSession = session\.defaultSession\n\s+defaultSession\.setSpellCheckerLanguages\(\[\]\)\n\s+defaultSession\.setSpellCheckerEnabled\(false\)\n\s+registerIpcHandlers\(\)\n\s+createWindow\(\)/,
     )
     expect(resolveDefaultSession).toBeGreaterThan(-1)
     expect(clearSessionSpellCheckerLanguages).toBeGreaterThan(resolveDefaultSession)

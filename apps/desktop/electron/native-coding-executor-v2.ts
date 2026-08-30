@@ -2,21 +2,24 @@ import { createHash, randomUUID } from 'node:crypto'
 import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import {
-  estimateOpenAiCompatibleUsageCost,
+  aggregateCodingRuntimeCostSettlements,
   parseCodingExecutorDescriptor,
   parseCodingExecutorRequest,
   parseCodingExecutorTurn,
+  DEEPSEEK_PRICING_SOURCE,
   redactLocalAbsolutePaths,
   redactSensitiveText,
   redactTestEvidenceForStorage,
   sanitizeCodingDiffArtifact,
   selectCodingExecutor,
+  settleCodingRuntimeCost,
   type AgentProvider,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingChangeSet,
   type CodingPermissionRequest,
   type CodingRuntimeCostSummary,
+  type RuntimeProviderCallSettlement,
   type TestEvidence,
 } from '@ai-devflow/shared'
 import type { CodingEngineStartInput } from './coding-engine.js'
@@ -47,8 +50,11 @@ const TEST_TIMEOUT_MS = 120_000
 type ProviderUsage = {
   inputTokens: number
   outputTokens: number
-  cacheReadTokens: number
-  costUsd: number
+  cacheReadTokens?: number
+  cacheMissTokens?: number
+  totalTokens?: number
+  cacheStatus?: 'complete' | 'unknown'
+  billingProvider?: 'deepseek' | 'openai_compatible'
 }
 
 type NativeV2ModelResult = {
@@ -61,6 +67,7 @@ export type NativeCodingV2DecisionProvider = {
   version: 2
   modelId: string
   billing: 'metered'
+  billingProvider?: ProviderUsage['billingProvider']
   complete(input: {
     phase: 'analysis' | 'initial' | 'repair'
     systemPrompt: string
@@ -156,18 +163,6 @@ function permissionExpiry(requestedAt: string, deadline: string): string {
   return new Date(timestamp).toISOString()
 }
 
-function mergeUsage(...values: Array<ProviderUsage | undefined>): ProviderUsage {
-  return values.reduce<ProviderUsage>(
-    (total, value) => ({
-      inputTokens: total.inputTokens + (value?.inputTokens ?? 0),
-      outputTokens: total.outputTokens + (value?.outputTokens ?? 0),
-      cacheReadTokens: total.cacheReadTokens + (value?.cacheReadTokens ?? 0),
-      costUsd: Number((total.costUsd + (value?.costUsd ?? 0)).toFixed(6)),
-    }),
-    { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 },
-  )
-}
-
 function costSummary(input: {
   codingRun: Pick<CodingAgentRun, 'runId' | 'nodeId' | 'requestedBy' | 'projectId'>
   providerId: string
@@ -175,29 +170,61 @@ function costSummary(input: {
   usage: ProviderUsage
   timestamp: string
 }): CodingRuntimeCostSummary {
-  const normalized = input.providerId.toLowerCase()
-  const provider = normalized.includes('anthropic') || normalized.includes('claude')
-    ? 'anthropic'
-    : normalized.includes('dashscope') || normalized.includes('qwen')
-      ? 'dashscope'
-      : 'openai'
-  return {
-    id: `coding-runtime-cost-${input.codingRun.runId}-${input.codingRun.nodeId}`,
+  return settleCodingRuntimeCost({
     runId: input.codingRun.runId,
     nodeId: input.codingRun.nodeId,
     userId: input.codingRun.requestedBy,
     projectId: input.codingRun.projectId,
-    provider,
     providerId: input.providerId,
     model: input.model,
-    inputTokens: input.usage.inputTokens,
-    outputTokens: input.usage.outputTokens,
-    cacheReadTokens: input.usage.cacheReadTokens,
-    costUsd: input.usage.costUsd,
+    usage: input.usage,
     timestamp: input.timestamp,
-    source: 'provider_reported',
+  })
+}
+
+function providerCallSettlementToSummary(
+  codingRun: CodingAgentRun,
+  settlement: RuntimeProviderCallSettlement,
+): CodingRuntimeCostSummary {
+  return {
+    id: `coding-runtime-cost-${codingRun.runId}-${codingRun.nodeId}`,
+    runId: codingRun.runId,
+    nodeId: codingRun.nodeId,
+    userId: codingRun.requestedBy,
+    projectId: codingRun.projectId,
+    provider: codingRun.runtimeCostSummary?.provider ?? 'openai',
+    providerId: settlement.providerId,
+    model: settlement.model,
+    inputTokens: settlement.inputTokens,
+    outputTokens: settlement.outputTokens,
+    cacheReadTokens: settlement.cacheReadTokens,
+    cacheMissTokens: settlement.cacheMissTokens,
+    totalTokens: settlement.totalTokens,
+    cacheHitRate: settlement.cacheHitRate,
+    usageStatus: settlement.usageStatus,
+    costStatus: settlement.costStatus,
+    phase: 'provider_settlement',
+    costUsd: settlement.costUsd,
+    pricingSnapshot: settlement.pricingSnapshot,
+    breakdown: settlement.breakdown,
+    timestamp: settlement.timestamp,
+    source: settlement.source,
     redacted: true,
   }
+}
+
+function previousProviderCallSettlements(codingRun: CodingAgentRun) {
+  const summary = codingRun.runtimeCostSummary
+  if (!summary || summary.source !== 'provider_reported') return []
+  if (summary.providerCallSettlements?.length) {
+    return summary.providerCallSettlements.map((settlement) => ({
+      requestPhase: settlement.requestPhase,
+      settlement: providerCallSettlementToSummary(codingRun, settlement),
+    }))
+  }
+  // Active rows written before per-call settlement cannot be decomposed. Preserve their saved
+  // price as one legacy initial call so a later repair is appended without repricing history.
+  return [{ requestPhase: 'initial' as const, settlement: summary }]
 }
 
 function usageFromRun(run: CodingAgentRun): ProviderUsage {
@@ -206,10 +233,43 @@ function usageFromRun(run: CodingAgentRun): ProviderUsage {
     ? {
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
-        cacheReadTokens: usage.cacheReadTokens,
-        costUsd: usage.costUsd,
+        totalTokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+        cacheStatus: usage.usageStatus === 'complete' ? 'complete' : 'unknown',
+        ...(usage.cacheReadTokens !== null ? { cacheReadTokens: usage.cacheReadTokens } : {}),
+        ...(typeof usage.cacheMissTokens === 'number'
+          ? { cacheMissTokens: usage.cacheMissTokens }
+          : {}),
+        ...(usage.pricingSnapshot?.source === DEEPSEEK_PRICING_SOURCE
+          ? { billingProvider: 'deepseek' as const }
+          : {}),
       }
-    : { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 }
+    : { inputTokens: 0, outputTokens: 0, totalTokens: 0, cacheStatus: 'unknown' }
+}
+
+function runtimeCostTrace(summary: CodingRuntimeCostSummary): Record<string, unknown> {
+  return {
+    phase: summary.phase ?? 'provider_settlement',
+    usageStatus: summary.usageStatus ?? 'legacy_unknown',
+    costStatus: summary.costStatus ?? 'legacy_unverified',
+    inputTokens: summary.inputTokens,
+    outputTokens: summary.outputTokens,
+    cacheReadTokens: summary.cacheReadTokens,
+    cacheMissTokens: summary.cacheMissTokens ?? null,
+    totalTokens: summary.totalTokens ?? summary.inputTokens + summary.outputTokens,
+    cacheHitRate: summary.cacheHitRate ?? null,
+    costUsd: summary.costUsd,
+    pricingTier: summary.pricingSnapshot?.tier ?? null,
+    pricingSourceVersion: summary.pricingSnapshot?.sourceVersion ?? null,
+    unitPrices: summary.pricingSnapshot
+      ? {
+          cacheHitInputUsdPerMillion: summary.pricingSnapshot.cacheHitInputUsdPerMillion,
+          cacheMissInputUsdPerMillion: summary.pricingSnapshot.cacheMissInputUsdPerMillion,
+          outputUsdPerMillion: summary.pricingSnapshot.outputUsdPerMillion,
+        }
+      : null,
+    breakdown: summary.breakdown ?? null,
+    providerCallSettlements: summary.providerCallSettlements ?? null,
+  }
 }
 
 function boundedPrompt(value: Record<string, unknown>): string {
@@ -542,6 +602,7 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
     version: 2,
     modelId: provider.model,
     billing: 'metered',
+    ...(provider.billingProvider ? { billingProvider: provider.billingProvider } : {}),
     async complete(input) {
       if (input.userPrompt.length > MAX_PROMPT_CHARS) {
         throw new Error('Native Coding v2 provider prompt exceeds the hard limit')
@@ -557,22 +618,41 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
         !Number.isSafeInteger(usage.inputTokens) ||
         !Number.isSafeInteger(usage.outputTokens) ||
         (usage.cacheReadTokens !== undefined && !Number.isSafeInteger(usage.cacheReadTokens)) ||
+        (usage.cacheMissTokens !== undefined && !Number.isSafeInteger(usage.cacheMissTokens)) ||
         Number(usage.inputTokens) < 0 ||
         Number(usage.outputTokens) < 0 ||
-        Number(usage.cacheReadTokens ?? 0) < 0
+        Number(usage.cacheReadTokens ?? 0) < 0 ||
+        Number(usage.cacheMissTokens ?? 0) < 0
       ) {
         throw new Error('Configured Coding Provider did not return exact integer token usage')
       }
       const inputTokens = Number(usage.inputTokens)
       const outputTokens = Number(usage.outputTokens)
-      const cacheReadTokens = Number(usage.cacheReadTokens ?? 0)
+      const cacheStatus = usage.cacheStatus ?? 'unknown'
+      if (
+        cacheStatus === 'complete' &&
+        (usage.cacheReadTokens === undefined ||
+          usage.cacheMissTokens === undefined ||
+          usage.cacheReadTokens + usage.cacheMissTokens !== inputTokens)
+      ) {
+        throw new Error('invalid_usage: cache hit + miss must equal input tokens')
+      }
       return {
         value: completed.value,
         usage: {
           inputTokens,
           outputTokens,
-          cacheReadTokens,
-          costUsd: estimateOpenAiCompatibleUsageCost({ inputTokens, outputTokens }),
+          totalTokens: usage.totalTokens ?? inputTokens + outputTokens,
+          cacheStatus,
+          ...(usage.cacheReadTokens !== undefined
+            ? { cacheReadTokens: usage.cacheReadTokens }
+            : {}),
+          ...(usage.cacheMissTokens !== undefined
+            ? { cacheMissTokens: usage.cacheMissTokens }
+            : {}),
+          ...(usage.billingProvider !== undefined
+            ? { billingProvider: usage.billingProvider }
+            : {}),
         },
       }
     },
@@ -661,6 +741,9 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     providerId: input.decisionProvider.id,
     modelId: input.decisionProvider.modelId,
     billing: 'metered',
+    ...(input.decisionProvider.billingProvider
+      ? { billingProvider: input.decisionProvider.billingProvider }
+      : {}),
     async ensure({ project }) {
       if (!project.id || !project.path || !project.testCommand.trim()) {
         throw new Error('Native Coding v2 requires a project and saved test command')
@@ -692,6 +775,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         repositoryManifest: manifest,
         limits: { maxFiles: 8, maxSearches: 8, literalSearchOnly: true },
       })
+      const analysisRequestedAt = canonicalNow(clock)
       const analysis = await input.decisionProvider.complete({
         phase: 'analysis',
         systemPrompt: [
@@ -717,6 +801,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         excerpts,
         limits: { existingUtf8Files: true, maxFiles: 6, maxReplacements: 12 },
       })
+      const initialRequestedAt = canonicalNow(clock)
       const initialResult = await input.decisionProvider.complete({
         phase: 'initial',
         systemPrompt: [
@@ -756,7 +841,34 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         requestedAt,
         phase: 'initial',
       })
-      const usage = mergeUsage(analysis.usage, initialResult.usage)
+      const costScope = {
+        runId: context.run.id,
+        nodeId: context.node.id,
+        requestedBy: context.requestedBy,
+        projectId: context.project.id,
+      }
+      const settledCost = aggregateCodingRuntimeCostSettlements([
+        {
+          requestPhase: 'analysis',
+          settlement: costSummary({
+            codingRun: costScope,
+            providerId: input.decisionProvider.id,
+            model: input.decisionProvider.modelId,
+            usage: analysis.usage,
+            timestamp: analysisRequestedAt,
+          }),
+        },
+        {
+          requestPhase: 'initial',
+          settlement: costSummary({
+            codingRun: costScope,
+            providerId: input.decisionProvider.id,
+            model: input.decisionProvider.modelId,
+            usage: initialResult.usage,
+            timestamp: initialRequestedAt,
+          }),
+        },
+      ])
       const codingRun: CodingAgentRun = {
         id: request.id,
         runId: context.run.id,
@@ -775,18 +887,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         summary: `Waiting for approval of ${changeSet.changes.length} file(s) in the exact Native Coding v2 Change Set.`,
         changedPaths: [],
         startedAt: request.requestedAt,
-        runtimeCostSummary: costSummary({
-          codingRun: {
-            runId: context.run.id,
-            nodeId: context.node.id,
-            requestedBy: context.requestedBy,
-            projectId: context.project.id,
-          },
-          providerId: input.decisionProvider.id,
-          model: input.decisionProvider.modelId,
-          usage,
-          timestamp: requestedAt,
-        }),
+        runtimeCostSummary: settledCost,
         redacted: true,
       }
       const events: CodingAgentEvent[] = [
@@ -801,7 +902,12 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           nodeId: context.node.id, sequence: 2, kind: 'permission',
           message: `Native Coding v2 proposed ${changeSet.changes.length} file(s) for exact approval.`,
           timestamp: requestedAt,
-          metadata: { requestId: permissionRequest.id, changeSetId: changeSet.id, changeSetDigest: changeSet.changeSetDigest },
+          metadata: {
+            requestId: permissionRequest.id,
+            changeSetId: changeSet.id,
+            changeSetDigest: changeSet.changeSetDigest,
+            runtimeCost: runtimeCostTrace(settledCost),
+          },
           redacted: true,
         },
       ]
@@ -834,6 +940,11 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         throw new Error('Native Coding v2 permission continuation is stale')
       }
       const changeSet = await findChangeSetForPermission(codingRun, request)
+      await context.reportPhase?.({
+        status: 'applying',
+        summary: 'Applying the exact approved Native Coding v2 Change Set atomically.',
+        timestamp: context.now,
+      })
       await applyCodingChangeSetAtomically({ changeSet, worktreePath: workspace.worktreePath, now: context.now })
       const recoveredPhase = await readCodingChangeSetExecutionPhase({
         changeSet,
@@ -843,6 +954,11 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         throw new Error(`Interrupted Native Coding v2 ${recoveredPhase} phase requires an explicit retry`)
       }
       const testedAt = canonicalNow(clock)
+      await context.reportPhase?.({
+        status: 'testing',
+        summary: 'The exact approved Change Set was applied; running the saved worktree test.',
+        timestamp: testedAt,
+      })
       await writeCodingChangeSetExecutionPhase({
         changeSet,
         worktreePath: workspace.worktreePath,
@@ -874,6 +990,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           excerpts,
           limits: { existingPreviouslyChangedFilesOnly: true, maxFiles: 6, maxReplacements: 12 },
         })
+        const repairRequestedAt = canonicalNow(clock)
         const repairResult = await input.decisionProvider.complete({
           phase: 'repair',
           systemPrompt: [
@@ -908,19 +1025,25 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           id: createId('coding-permission'), changeSet: repairChangeSet,
           runId: codingRun.runId, nodeId: codingRun.nodeId, requestedAt, phase: 'repair',
         })
-        const usage = mergeUsage(usageFromRun(codingRun), repairResult.usage)
+        const settledCost = aggregateCodingRuntimeCostSettlements([
+          ...previousProviderCallSettlements(codingRun),
+          {
+            requestPhase: 'repair',
+            settlement: costSummary({
+              codingRun,
+              providerId: input.decisionProvider.id,
+              model: input.decisionProvider.modelId,
+              usage: repairResult.usage,
+              timestamp: repairRequestedAt,
+            }),
+          },
+        ])
         const repairRun: CodingAgentRun = {
           ...codingRun,
           changeSetId: repairChangeSet.id,
           status: 'waiting_permission',
           summary: 'The saved test failed; waiting for approval of the exact repair Change Set.',
-          runtimeCostSummary: costSummary({
-            codingRun,
-            providerId: input.decisionProvider.id,
-            model: input.decisionProvider.modelId,
-            usage,
-            timestamp: requestedAt,
-          }),
+          runtimeCostSummary: settledCost,
         }
         const events: CodingAgentEvent[] = [
           {
@@ -934,7 +1057,12 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             nodeId: codingRun.nodeId, sequence: 2, kind: 'permission',
             message: 'Native Coding v2 requested fresh approval for the repair Change Set.',
             timestamp: requestedAt,
-            metadata: { requestId: permissionRequest.id, changeSetId: repairChangeSet.id, changeSetDigest: repairChangeSet.changeSetDigest },
+            metadata: {
+              requestId: permissionRequest.id,
+              changeSetId: repairChangeSet.id,
+              changeSetDigest: repairChangeSet.changeSetDigest,
+              runtimeCost: runtimeCostTrace(settledCost),
+            },
             redacted: true,
           },
         ]
@@ -1047,8 +1175,10 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           diffArtifactId: diff.id,
           testEvidenceIds: [tested.evidence.id],
           usage: {
-            tokens: usageFromRun(finalRun).inputTokens + usageFromRun(finalRun).outputTokens + usageFromRun(finalRun).cacheReadTokens,
-            costUsd: usageFromRun(finalRun).costUsd,
+            tokens: usageFromRun(finalRun).inputTokens + usageFromRun(finalRun).outputTokens,
+            // The canonical cost summary carries unknown as null. The v1 executor
+            // terminal counter is numeric-only and is not a billing settlement.
+            costUsd: finalRun.runtimeCostSummary?.costUsd ?? 0,
           },
           cleanup: { status: 'not_required', reasonCode: 'workspace_retained_for_delivery' },
           completedAt,

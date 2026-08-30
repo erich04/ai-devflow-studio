@@ -8,6 +8,8 @@ import {
   createWorkflowRunFromRequest,
   redactTestEvidenceForStorage,
   type AgentEvent,
+  type AgentTrace,
+  type AgentTokenUsage,
   type AgentReviewResult,
   type Artifact,
   type CodingAgentRun,
@@ -86,6 +88,19 @@ async function executeApplied(
 }
 
 describe('workflow runtime', () => {
+  it('keeps the original Raw Request Artifact immutable', async () => {
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-immutable-request', title: 'Immutable request', request: 'Original words.',
+      projectId: 'project-1', creatorId: 'user-1', branchName: 'ai/immutable-request', now,
+    })
+    const store = await createStore()
+    const raw = created.artifacts[0]!
+    await store.saveArtifact(raw)
+    await expect(store.saveArtifact({ ...raw, content: 'Renderer-forged replacement.' }))
+      .rejects.toThrow('raw_request Artifact is immutable')
+    expect(await store.listArtifacts(created.run.id)).toEqual([raw])
+  })
+
   it('derives the Gate actor from trusted local state instead of renderer identity fields', () => {
     const created = createWorkflowRunFromRequest({
       runId: 'run-trusted-actor',
@@ -194,6 +209,16 @@ describe('workflow runtime', () => {
     const nodeId = 'run-runtime-agent-clarify'
     const gateId = 'run-runtime-agent-clarify-gate'
     const candidate = clarificationCandidate(created.run.id, nodeId)
+    const trace: AgentTrace = {
+      id: 'trace-stage-agent-1', runId: created.run.id, nodeId, reviewId: candidate.artifact.id,
+      runtime: 'electron', createdAt: now,
+      steps: [{ id: 'step-1', kind: 'artifact', label: 'Persist revision', summary: candidate.artifact.id, timestamp: now }],
+    }
+    const usage: AgentTokenUsage = {
+      id: 'usage-stage-agent-1', runId: created.run.id, nodeId, userId: 'user-1',
+      projectId: created.run.projectId, provider: 'local', model: 'fixture', inputTokens: 10,
+      outputTokens: 5, cacheReadTokens: 0, costUsd: 0, timestamp: now, source: 'estimated',
+    }
     const store = await createStore()
     await store.saveRun(created.run)
     const runtime = createWorkflowRuntime(store)
@@ -209,6 +234,8 @@ describe('workflow runtime', () => {
       candidates: {
         artifacts: [candidate.artifact],
         events: [candidate.event],
+        agentTraces: [trace],
+        agentTokenUsage: [usage],
       },
       now: '2026-07-31T12:01:00.000Z',
     })
@@ -222,6 +249,8 @@ describe('workflow runtime', () => {
     expect((await store.getRun(created.run.id))?.version).toBe(2)
     expect(await store.listArtifacts(created.run.id)).toEqual([candidate.artifact])
     expect(await store.listEvents(created.run.id)).toEqual([candidate.event])
+    expect(await store.listAgentTraces(created.run.id)).toEqual([trace])
+    expect(await store.listAgentTokenUsage(created.run.id)).toEqual([usage])
 
     const duplicate = await runtime.execute({
       runId: created.run.id,

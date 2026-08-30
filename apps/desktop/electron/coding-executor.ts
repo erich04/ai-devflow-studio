@@ -8,6 +8,7 @@ import {
   type CodingExecutorRequest,
   type CodingExecutorTerminalTurn,
   type TestEvidence,
+  type AgentProviderUsage,
 } from '@ai-devflow/shared'
 import type {
   CodingEngineAdapter,
@@ -55,6 +56,7 @@ export type CodingExecutor = {
   engine: CodingEngineAdapter['engine']
   providerId: string
   modelId?: string
+  billingProvider?: AgentProviderUsage['billingProvider']
   billing?: 'no_cost' | 'metered'
   ensure(input: CodingEngineEnsureInput): Promise<CodingEngineEnsureResult>
   start(input: CodingExecutorStartInput): Promise<CodingExecutorStartResult>

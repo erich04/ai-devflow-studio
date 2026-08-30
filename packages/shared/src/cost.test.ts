@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEEPSEEK_PRICING_EFFECTIVE_AT,
+  aggregateCodingRuntimeCostSettlements,
+  annotateUnknownRuntimeCosts,
   estimateCodingRuntimeCost,
   evaluateRuntimeBudgetGuard,
   parseBudgetGuardDecision,
   runtimeCostSummaryToTokenUsage,
+  isDeepSeekPeakTime,
+  resolveDeepSeekPricingSnapshot,
+  settleCodingRuntimeCost,
 } from './cost'
 import type { RuntimeBudgetApproval, RuntimeBudgetPolicy } from './domain'
 
@@ -372,8 +378,12 @@ describe('runtimeCostSummaryToTokenUsage', () => {
       inputTokens: 100,
       outputTokens: 50,
       cacheReadTokens: 0,
+      cacheMissTokens: 100,
+      usageStatus: 'complete',
+      costStatus: 'settled',
+      phase: 'provider_settlement',
       costUsd: 0.012,
-      source: 'estimated',
+      source: 'provider_reported',
       redacted: true,
       runId: 'run-1',
       nodeId: 'node-1',
@@ -388,5 +398,325 @@ describe('runtimeCostSummaryToTokenUsage', () => {
       model: 'ark-code-latest',
       costUsd: 0.012,
     })
+  })
+
+  it('does not roll preflight estimates or legacy unverified costs into actual spend', () => {
+    const base = {
+      id: 'coding-runtime-cost-run-1-node-1',
+      provider: 'openai' as const,
+      providerId: 'double',
+      model: 'ark-code-latest',
+      inputTokens: 100,
+      outputTokens: 50,
+      cacheReadTokens: 0,
+      costUsd: 0.012,
+      source: 'estimated' as const,
+      redacted: true as const,
+      runId: 'run-1',
+      nodeId: 'node-1',
+      projectId: 'project-1',
+      userId: 'user-1',
+      timestamp: '2026-06-20T00:00:00.000Z',
+    }
+    expect(runtimeCostSummaryToTokenUsage({
+      ...base,
+      usageStatus: 'estimated',
+      costStatus: 'estimated',
+      phase: 'preflight_estimate',
+    })).toBeNull()
+    expect(runtimeCostSummaryToTokenUsage({
+      ...base,
+      cacheReadTokens: null,
+      usageStatus: 'legacy_unknown',
+      costStatus: 'legacy_unverified',
+    })).toBeNull()
+  })
+})
+
+describe('DeepSeek runtime settlement', () => {
+  const scope = {
+    providerId: 'deepseek-production',
+    model: 'deepseek-v4-flash',
+    runId: 'run-deepseek',
+    nodeId: 'node-build',
+    projectId: 'project-1',
+    userId: 'user-1',
+  }
+
+  it.each([
+    ['2026-08-31T00:59:59.999Z', false],
+    ['2026-08-31T01:00:00.000Z', true],
+    ['2026-08-31T03:59:59.999Z', true],
+    ['2026-08-31T04:00:00.000Z', false],
+    ['2026-08-31T06:00:00.000Z', true],
+    ['2026-08-31T09:59:59.999Z', true],
+    ['2026-08-31T10:00:00.000Z', false],
+    ['2026-08-30T02:00:00.000Z', false],
+    ['2026-08-29T07:00:00.000Z', false],
+  ])('selects official weekday peak boundaries for %s', (timestamp, expected) => {
+    expect(isDeepSeekPeakTime(timestamp)).toBe(expected)
+  })
+
+  it('uses an all-miss peak envelope for preflight even during off-peak hours', () => {
+    const estimate = estimateCodingRuntimeCost({
+      engine: 'native',
+      providerId: scope.providerId,
+      model: scope.model,
+      billingProvider: 'deepseek',
+      prompt: '1234',
+      maxOutputTokens: 100,
+      providerCallLimit: 1,
+      runId: scope.runId,
+      nodeId: scope.nodeId,
+      projectId: scope.projectId,
+      userId: scope.userId,
+      timestamp: '2026-08-31T00:30:00.000Z',
+    })
+    expect(estimate).toMatchObject({
+      phase: 'preflight_estimate',
+      usageStatus: 'estimated',
+      costStatus: 'estimated',
+      cacheReadTokens: 0,
+      cacheMissTokens: 1,
+      pricingSnapshot: { tier: 'peak' },
+    })
+    expect(estimate.costUsd).toBe(0.00013244)
+  })
+
+  it('does not use the DeepSeek preflight catalog for a compatible gateway exposing that model', () => {
+    const estimate = estimateCodingRuntimeCost({
+      engine: 'native',
+      providerId: 'compatible-gateway',
+      model: scope.model,
+      billingProvider: 'openai_compatible',
+      prompt: '1234',
+      maxOutputTokens: 100,
+      providerCallLimit: 1,
+      runId: scope.runId,
+      nodeId: scope.nodeId,
+      projectId: scope.projectId,
+      userId: scope.userId,
+      timestamp: '2026-08-31T01:00:00.000Z',
+    })
+
+    expect(estimate.pricingSnapshot).toMatchObject({ tier: 'legacy_estimate' })
+    expect(estimate.pricingSnapshot?.source).toContain('legacy-openai-compatible')
+  })
+
+  it('settles full miss, mixed cache, and full hit without double counting prompt tokens', () => {
+    const fullMiss = settleCodingRuntimeCost({
+      ...scope,
+      timestamp: '2026-08-31T00:30:00.000Z',
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        cacheReadTokens: 0,
+        cacheMissTokens: 1_000_000,
+        totalTokens: 2_000_000,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
+      },
+    })
+    expect(fullMiss).toMatchObject({
+      totalTokens: 2_000_000,
+      cacheHitRate: 0,
+      usageStatus: 'complete',
+      costStatus: 'settled',
+      costUsd: 0.88,
+      breakdown: {
+        cacheHitInputUsd: 0,
+        cacheMissInputUsd: 0.22,
+        outputUsd: 0.66,
+        totalUsd: 0.88,
+      },
+      pricingSnapshot: { tier: 'off_peak' },
+    })
+
+    const mixed = settleCodingRuntimeCost({
+      ...scope,
+      timestamp: '2026-08-31T00:30:00.000Z',
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        cacheReadTokens: 400_000,
+        cacheMissTokens: 600_000,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
+      },
+    })
+    expect(mixed).toMatchObject({
+      totalTokens: 1_100_000,
+      cacheHitRate: 0.4,
+      costUsd: 0.2008,
+      breakdown: {
+        cacheHitInputUsd: 0.0028,
+        cacheMissInputUsd: 0.132,
+        outputUsd: 0.066,
+        totalUsd: 0.2008,
+      },
+    })
+
+    const fullHit = settleCodingRuntimeCost({
+      ...scope,
+      timestamp: '2026-08-31T01:00:00.000Z',
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 1_000_000,
+        cacheMissTokens: 0,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
+      },
+    })
+    expect(fullHit).toMatchObject({
+      totalTokens: 1_000_000,
+      cacheHitRate: 1,
+      costUsd: 0.014,
+      pricingSnapshot: { tier: 'peak' },
+    })
+  })
+
+  it('does not apply DeepSeek prices to the same model name reported by another billing provider', () => {
+    const result = settleCodingRuntimeCost({
+      ...scope,
+      providerId: 'compatible-gateway',
+      timestamp: '2026-08-31T01:00:00.000Z',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 20,
+        cacheMissTokens: 80,
+        cacheStatus: 'complete',
+        billingProvider: 'openai_compatible',
+      },
+    })
+
+    expect(result).toMatchObject({
+      usageStatus: 'complete',
+      costStatus: 'unknown',
+      costUsd: null,
+      pricingSnapshot: null,
+      breakdown: null,
+    })
+  })
+
+  it('keeps missing cache split and unknown model cost explicitly unknown', () => {
+    const missingSplit = settleCodingRuntimeCost({
+      ...scope,
+      timestamp: '2026-08-31T01:00:00.000Z',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheStatus: 'unknown',
+        billingProvider: 'deepseek',
+      },
+    })
+    expect(missingSplit).toMatchObject({
+      cacheReadTokens: null,
+      cacheMissTokens: null,
+      usageStatus: 'incomplete',
+      costStatus: 'unknown',
+      costUsd: null,
+      breakdown: null,
+    })
+    expect(runtimeCostSummaryToTokenUsage(missingSplit)).toBeNull()
+
+    const unknownModel = settleCodingRuntimeCost({
+      ...scope,
+      model: 'deepseek-future-model',
+      timestamp: '2026-08-31T01:00:00.000Z',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 20,
+        cacheMissTokens: 80,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
+      },
+    })
+    expect(unknownModel).toMatchObject({
+      usageStatus: 'complete',
+      costStatus: 'unknown',
+      costUsd: null,
+      pricingSnapshot: null,
+    })
+    expect(
+      annotateUnknownRuntimeCosts([], [missingSplit, unknownModel], 'projectId'),
+    ).toEqual([
+      {
+        key: 'project-1',
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        totalTokens: 0,
+        costUsd: 0,
+        unknownCostCount: 2,
+      },
+    ])
+  })
+
+  it('does not apply the catalog before its official 2026-08-16 16:00 UTC effective boundary', () => {
+    expect(
+      resolveDeepSeekPricingSnapshot({
+        providerId: scope.providerId,
+        model: scope.model,
+        timestamp: '2026-08-16T15:59:59.999Z',
+      }),
+    ).toBeNull()
+    expect(Date.parse(DEEPSEEK_PRICING_EFFECTIVE_AT)).toBe(
+      Date.parse('2026-08-16T16:00:00.000Z'),
+    )
+    expect(
+      resolveDeepSeekPricingSnapshot({
+        providerId: scope.providerId,
+        model: scope.model,
+        timestamp: '2026-08-16T16:00:00.000Z',
+      }),
+    ).not.toBeNull()
+  })
+
+  it('keeps each provider call on its request-time price instead of repricing the aggregate', () => {
+    const peak = settleCodingRuntimeCost({
+      ...scope,
+      timestamp: '2026-08-31T09:59:59.999Z',
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheMissTokens: 1_000_000,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
+      },
+    })
+    const offPeak = settleCodingRuntimeCost({
+      ...scope,
+      timestamp: '2026-08-31T10:00:00.000Z',
+      usage: {
+        inputTokens: 1_000_000,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheMissTokens: 1_000_000,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
+      },
+    })
+
+    const aggregate = aggregateCodingRuntimeCostSettlements([
+      { requestPhase: 'analysis', settlement: peak },
+      { requestPhase: 'initial', settlement: offPeak },
+    ])
+
+    expect(aggregate).toMatchObject({
+      inputTokens: 2_000_000,
+      cacheMissTokens: 2_000_000,
+      costStatus: 'settled',
+      costUsd: 0.66,
+      pricingSnapshot: null,
+      breakdown: { cacheMissInputUsd: 0.66, totalUsd: 0.66 },
+    })
+    expect(aggregate.providerCallSettlements).toMatchObject([
+      { requestPhase: 'analysis', timestamp: peak.timestamp, costUsd: 0.44, pricingSnapshot: { tier: 'peak' } },
+      { requestPhase: 'initial', timestamp: offPeak.timestamp, costUsd: 0.22, pricingSnapshot: { tier: 'off_peak' } },
+    ])
   })
 })

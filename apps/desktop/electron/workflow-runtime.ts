@@ -1,6 +1,8 @@
 import {
   applyWorkflowCommand,
   type AgentEvent,
+  type AgentTrace,
+  type AgentTokenUsage,
   type Artifact,
   type BudgetGuardDecision,
   type DesktopPairingCredential,
@@ -20,6 +22,8 @@ export type WorkflowRuntimeCandidates = {
   artifacts?: readonly Artifact[]
   events?: readonly AgentEvent[]
   testEvidence?: readonly TestEvidence[]
+  agentTraces?: readonly AgentTrace[]
+  agentTokenUsage?: readonly AgentTokenUsage[]
 }
 
 export type ExecuteWorkflowCommandInput = {
@@ -137,7 +141,7 @@ export function createWorkflowRuntime(store: WorkflowRuntimeStore): WorkflowRunt
       }
 
       const candidates = input.candidates ?? {}
-      if (!candidatesBelongToCommand(candidates, run, input.command.nodeId)) {
+      if (!candidatesBelongToCommand(candidates, run, input.command)) {
         return {
           applied: false,
           run,
@@ -201,6 +205,12 @@ export function createWorkflowRuntime(store: WorkflowRuntimeStore): WorkflowRunt
         ...(candidates.testEvidence
           ? { testEvidence: candidates.testEvidence }
           : {}),
+        ...(candidates.agentTraces
+          ? { agentTraces: candidates.agentTraces }
+          : {}),
+        ...(candidates.agentTokenUsage
+          ? { agentTokenUsage: candidates.agentTokenUsage }
+          : {}),
       })
       if (!committed.committed) {
         return rejected(
@@ -225,11 +235,20 @@ export function createWorkflowRuntime(store: WorkflowRuntimeStore): WorkflowRunt
 function candidatesBelongToCommand(
   candidates: WorkflowRuntimeCandidates,
   run: WorkflowRun,
-  nodeId: string,
+  command: WorkflowCommand,
 ): boolean {
+  const nodeId = command.nodeId
+  const allowedArtifactNodeIds = new Set([nodeId])
+  if (command.type === 'approve_gate') {
+    for (const edge of run.edges) {
+      if (edge.target === nodeId && (edge.kind === 'normal' || edge.kind === 'gate')) {
+        allowedArtifactNodeIds.add(edge.source)
+      }
+    }
+  }
   return !(
     candidates.artifacts?.some(
-      (artifact) => artifact.runId !== run.id || artifact.nodeId !== nodeId,
+      (artifact) => artifact.runId !== run.id || !allowedArtifactNodeIds.has(artifact.nodeId),
     ) ||
     candidates.events?.some(
       (event) =>
@@ -241,6 +260,12 @@ function candidatesBelongToCommand(
         evidence.runId !== run.id ||
         evidence.projectId !== run.projectId ||
         evidence.nodeId !== nodeId,
+    ) ||
+    candidates.agentTraces?.some(
+      (trace) => trace.runId !== run.id || trace.nodeId !== nodeId,
+    ) ||
+    candidates.agentTokenUsage?.some(
+      (usage) => usage.runId !== run.id || usage.nodeId !== nodeId,
     )
   )
 }

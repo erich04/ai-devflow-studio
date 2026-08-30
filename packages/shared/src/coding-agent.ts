@@ -2,6 +2,7 @@ import type {
   Artifact,
   CodingAgentRun,
   CodingDiffArtifact,
+  CodingRuntimeCostSummary,
   DependencyBootstrapDecision,
   DependencyBootstrapSnapshot,
   GateDecision,
@@ -38,6 +39,7 @@ export const activeCodingAgentRunStatuses: readonly CodingAgentRun['status'][] =
   'waiting_permission',
   'bootstrapping',
   'running',
+  'applying',
   'testing',
 ]
 
@@ -355,7 +357,92 @@ function redactRemoteCodingCostSummaryForSync(
     inputTokens: summary.inputTokens,
     outputTokens: summary.outputTokens,
     cacheReadTokens: summary.cacheReadTokens,
+    ...(summary.cacheMissTokens !== undefined
+      ? { cacheMissTokens: summary.cacheMissTokens }
+      : {}),
+    ...(summary.totalTokens !== undefined ? { totalTokens: summary.totalTokens } : {}),
+    ...(summary.cacheHitRate !== undefined ? { cacheHitRate: summary.cacheHitRate } : {}),
+    ...(summary.usageStatus !== undefined ? { usageStatus: summary.usageStatus } : {}),
+    ...(summary.costStatus !== undefined ? { costStatus: summary.costStatus } : {}),
+    ...(summary.phase !== undefined ? { phase: summary.phase } : {}),
     costUsd: summary.costUsd,
+    ...(summary.pricingSnapshot !== undefined
+      ? {
+          pricingSnapshot: summary.pricingSnapshot
+            ? {
+                providerId: redactSensitiveText(summary.pricingSnapshot.providerId).value,
+                model: redactSensitiveText(summary.pricingSnapshot.model).value,
+                tier: summary.pricingSnapshot.tier,
+                effectiveAt: summary.pricingSnapshot.effectiveAt,
+                source: redactSensitiveText(summary.pricingSnapshot.source).value,
+                sourceVersion: redactSensitiveText(summary.pricingSnapshot.sourceVersion).value,
+                currency: summary.pricingSnapshot.currency,
+                unit: summary.pricingSnapshot.unit,
+                cacheHitInputUsdPerMillion: summary.pricingSnapshot.cacheHitInputUsdPerMillion,
+                cacheMissInputUsdPerMillion: summary.pricingSnapshot.cacheMissInputUsdPerMillion,
+                outputUsdPerMillion: summary.pricingSnapshot.outputUsdPerMillion,
+              }
+            : null,
+        }
+      : {}),
+    ...(summary.breakdown !== undefined
+      ? {
+          breakdown: summary.breakdown
+            ? {
+                cacheHitInputUsd: summary.breakdown.cacheHitInputUsd,
+                cacheMissInputUsd: summary.breakdown.cacheMissInputUsd,
+                outputUsd: summary.breakdown.outputUsd,
+                totalUsd: summary.breakdown.totalUsd,
+              }
+            : null,
+        }
+      : {}),
+    ...(summary.providerCallSettlements !== undefined
+      ? {
+          providerCallSettlements: summary.providerCallSettlements.map((settlement) => ({
+            requestPhase: settlement.requestPhase,
+            providerId: redactSensitiveText(settlement.providerId).value,
+            model: redactSensitiveText(settlement.model).value,
+            inputTokens: settlement.inputTokens,
+            outputTokens: settlement.outputTokens,
+            cacheReadTokens: settlement.cacheReadTokens,
+            cacheMissTokens: settlement.cacheMissTokens,
+            totalTokens: settlement.totalTokens,
+            cacheHitRate: settlement.cacheHitRate,
+            usageStatus: settlement.usageStatus,
+            costStatus: settlement.costStatus,
+            costUsd: settlement.costUsd,
+            pricingSnapshot: settlement.pricingSnapshot
+              ? {
+                  providerId: redactSensitiveText(settlement.pricingSnapshot.providerId).value,
+                  model: redactSensitiveText(settlement.pricingSnapshot.model).value,
+                  tier: settlement.pricingSnapshot.tier,
+                  effectiveAt: settlement.pricingSnapshot.effectiveAt,
+                  source: redactSensitiveText(settlement.pricingSnapshot.source).value,
+                  sourceVersion: redactSensitiveText(settlement.pricingSnapshot.sourceVersion).value,
+                  currency: settlement.pricingSnapshot.currency,
+                  unit: settlement.pricingSnapshot.unit,
+                  cacheHitInputUsdPerMillion:
+                    settlement.pricingSnapshot.cacheHitInputUsdPerMillion,
+                  cacheMissInputUsdPerMillion:
+                    settlement.pricingSnapshot.cacheMissInputUsdPerMillion,
+                  outputUsdPerMillion: settlement.pricingSnapshot.outputUsdPerMillion,
+                }
+              : null,
+            breakdown: settlement.breakdown
+              ? {
+                  cacheHitInputUsd: settlement.breakdown.cacheHitInputUsd,
+                  cacheMissInputUsd: settlement.breakdown.cacheMissInputUsd,
+                  outputUsd: settlement.breakdown.outputUsd,
+                  totalUsd: settlement.breakdown.totalUsd,
+                }
+              : null,
+            timestamp: settlement.timestamp,
+            source: settlement.source,
+            redacted: true,
+          })),
+        }
+      : {}),
     timestamp: summary.timestamp,
     source: summary.source,
     redacted: true,
@@ -454,12 +541,137 @@ function isRemoteCodingCostSummary(value: unknown): boolean {
     typeof value['model'] === 'string' &&
     typeof value['inputTokens'] === 'number' &&
     typeof value['outputTokens'] === 'number' &&
-    typeof value['cacheReadTokens'] === 'number' &&
-    typeof value['costUsd'] === 'number' &&
+    (typeof value['cacheReadTokens'] === 'number' || value['cacheReadTokens'] === null) &&
+    (typeof value['costUsd'] === 'number' || value['costUsd'] === null) &&
     typeof value['timestamp'] === 'string' &&
     (value['source'] === 'provider_reported' || value['source'] === 'estimated') &&
-    value['redacted'] === true
+    value['redacted'] === true &&
+    isOptionalRuntimeCostDetails(value)
   )
+}
+
+export function parseCodingRuntimeCostSummary(value: unknown): CodingRuntimeCostSummary {
+  if (!isRemoteCodingCostSummary(value)) {
+    throw new Error('Invalid coding runtime cost summary')
+  }
+  return redactRemoteCodingCostSummaryForSync(value as CodingRuntimeCostSummary)
+}
+
+function isOptionalRuntimeCostDetails(value: Record<string, unknown>): boolean {
+  const optionalNumberOrNull = (entry: unknown) =>
+    entry === undefined || entry === null || (typeof entry === 'number' && Number.isFinite(entry) && entry >= 0)
+  if (
+    !Number.isSafeInteger(value['inputTokens']) ||
+    Number(value['inputTokens']) < 0 ||
+    !Number.isSafeInteger(value['outputTokens']) ||
+    Number(value['outputTokens']) < 0 ||
+    (value['cacheReadTokens'] !== null &&
+      (!Number.isSafeInteger(value['cacheReadTokens']) || Number(value['cacheReadTokens']) < 0)) ||
+    !optionalNumberOrNull(value['cacheMissTokens']) ||
+    !optionalNumberOrNull(value['cacheHitRate']) ||
+    (value['totalTokens'] !== undefined &&
+      (!Number.isSafeInteger(value['totalTokens']) || Number(value['totalTokens']) < 0)) ||
+    (value['usageStatus'] !== undefined &&
+      !['estimated', 'complete', 'incomplete', 'legacy_unknown'].includes(String(value['usageStatus']))) ||
+    (value['costStatus'] !== undefined &&
+      !['estimated', 'settled', 'unknown', 'legacy_unverified'].includes(String(value['costStatus']))) ||
+    (value['phase'] !== undefined &&
+      value['phase'] !== 'preflight_estimate' &&
+      value['phase'] !== 'provider_settlement')
+  ) {
+    return false
+  }
+  if (value['pricingSnapshot'] !== undefined && value['pricingSnapshot'] !== null) {
+    const snapshot = value['pricingSnapshot']
+    if (
+      !isRecord(snapshot) ||
+      typeof snapshot['providerId'] !== 'string' ||
+      typeof snapshot['model'] !== 'string' ||
+      !['peak', 'off_peak', 'legacy_estimate'].includes(String(snapshot['tier'])) ||
+      typeof snapshot['effectiveAt'] !== 'string' ||
+      !Number.isFinite(Date.parse(snapshot['effectiveAt'])) ||
+      new Date(Date.parse(snapshot['effectiveAt'])).toISOString() !== snapshot['effectiveAt'] ||
+      typeof snapshot['source'] !== 'string' ||
+      typeof snapshot['sourceVersion'] !== 'string' ||
+      snapshot['currency'] !== 'USD' ||
+      snapshot['unit'] !== 'per_1m_tokens' ||
+      !['cacheHitInputUsdPerMillion', 'cacheMissInputUsdPerMillion', 'outputUsdPerMillion'].every(
+        (key) => typeof snapshot[key] === 'number' && Number.isFinite(snapshot[key]) && Number(snapshot[key]) >= 0,
+      )
+    ) {
+      return false
+    }
+  }
+  if (value['breakdown'] !== undefined && value['breakdown'] !== null) {
+    const breakdown = value['breakdown']
+    if (
+      !isRecord(breakdown) ||
+      !['cacheHitInputUsd', 'cacheMissInputUsd', 'outputUsd', 'totalUsd'].every(
+        (key) => typeof breakdown[key] === 'number' && Number.isFinite(breakdown[key]) && Number(breakdown[key]) >= 0,
+      )
+    ) {
+      return false
+    }
+  }
+  if (value['providerCallSettlements'] !== undefined) {
+    const calls = value['providerCallSettlements']
+    if (
+      !Array.isArray(calls) ||
+      calls.length < 1 ||
+      calls.length > 32 ||
+      !calls.every((call) =>
+        isRecord(call) &&
+        ['analysis', 'initial', 'repair'].includes(String(call['requestPhase'])) &&
+        typeof call['providerId'] === 'string' &&
+        typeof call['model'] === 'string' &&
+        typeof call['timestamp'] === 'string' &&
+        Number.isFinite(Date.parse(call['timestamp'])) &&
+        new Date(Date.parse(call['timestamp'])).toISOString() === call['timestamp'] &&
+        (call['source'] === 'provider_reported' || call['source'] === 'estimated') &&
+        call['redacted'] === true &&
+        isOptionalRuntimeCostDetails(call),
+      )
+    ) {
+      return false
+    }
+  }
+  const usageStatus = value['usageStatus']
+  const costStatus = value['costStatus']
+  if (usageStatus === 'complete') {
+    if (
+      !Number.isSafeInteger(value['cacheReadTokens']) ||
+      !Number.isSafeInteger(value['cacheMissTokens']) ||
+      Number(value['cacheReadTokens']) + Number(value['cacheMissTokens']) !== Number(value['inputTokens']) ||
+      (value['totalTokens'] !== undefined &&
+        Number(value['totalTokens']) !== Number(value['inputTokens']) + Number(value['outputTokens']))
+    ) {
+      return false
+    }
+  }
+  if (
+    (usageStatus === 'incomplete' || usageStatus === 'legacy_unknown') &&
+    value['cacheReadTokens'] !== null
+  ) {
+    return false
+  }
+  if (costStatus === 'settled') {
+    const calls = value['providerCallSettlements']
+    const hasAuditableCallPricing = Array.isArray(calls) && calls.length > 0 && calls.every(
+      (call) => isRecord(call) && call['costStatus'] === 'settled' && isRecord(call['pricingSnapshot']),
+    )
+    if (
+      typeof value['costUsd'] !== 'number' ||
+      (!isRecord(value['pricingSnapshot']) && !hasAuditableCallPricing) ||
+      !isRecord(value['breakdown']) ||
+      Math.abs(Number(value['breakdown']['totalUsd']) - value['costUsd']) > 1e-9
+    ) {
+      return false
+    }
+  }
+  if (costStatus === 'unknown' && (value['costUsd'] !== null || value['breakdown'] !== null)) {
+    return false
+  }
+  return true
 }
 
 function isRemoteBudgetDecision(value: unknown): boolean {
@@ -486,6 +698,7 @@ export function parseRemoteCodingAgentSummary(value: unknown): RemoteCodingAgent
     status === 'waiting_permission' ||
     status === 'bootstrapping' ||
     status === 'running' ||
+    status === 'applying' ||
     status === 'testing' ||
     status === 'completed' ||
     status === 'failed' ||

@@ -72,3 +72,12 @@ them remain readable, but the UI labels their unavailable semantics instead of i
 All provider-bound and remote-summary metadata passes the existing redaction boundary. Remote
 summaries retain only redacted identities, digests, revisions, states, and bounded explanations;
 they do not contain subject content, prompts, secrets, local absolute paths, or raw test output.
+
+## Requirement clarification executor and revision boundary
+
+Requirement clarification may use either the compatible direct Provider or the explicit read-only
+local Agent executor. Both consume one redacted stage context contract. The local executor adds
+repo-relative, digest-bound Repository Findings and cannot write the repository, expand permission,
+or advance Workflow. At Requirement Gate, Raw Request, Repository Findings, and exact current
+Clarification Revision are separate review subjects. Requesting changes creates an immutable
+feedback/revision lineage; approval of a stale revision fails closed.

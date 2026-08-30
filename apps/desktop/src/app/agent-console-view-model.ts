@@ -7,6 +7,7 @@ import {
   type AgentTrace,
   type CodingAgentEvent,
   type CodingAgentRun,
+  type CodingRuntimeCostSummary,
   type CodingDiffArtifact,
   type CodingPermissionRequest,
   type DependencyBootstrapEvidence,
@@ -28,6 +29,7 @@ import {
   type FieldDataSource,
 } from './desktop-view-model'
 import type { PendingInspectorAction } from './node-inspector-view-model'
+import type { CodingRuntimeActionProjection } from './coding-runtime-action-projection'
 
 export type AgentConsoleTone = 'good' | 'warn' | 'bad' | 'soft' | 'accent' | 'neutral'
 
@@ -35,6 +37,8 @@ export type AgentConsolePrimaryActionId =
   | 'complete-agent-node'
   | 'run-review'
   | 'run-coding'
+  | 'view-coding'
+  | 'configure-coding'
   | 'go-tests'
   | 'return-workbench'
   | 'resolve-permission'
@@ -132,6 +136,7 @@ export type BuildAgentConsoleViewModelInput = {
   diff: CodingDiffArtifact | undefined
   bootstrapEvidence: DependencyBootstrapEvidence | undefined
   testEvidence: TestEvidence | undefined
+  codingActionProjection?: CodingRuntimeActionProjection
 }
 
 export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInput): AgentConsoleViewModel {
@@ -147,6 +152,7 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
     isRunningTests: input.isRunningTests,
     pendingInspectorAction: input.pendingInspectorAction,
     pendingCodingPermission: input.pendingCodingPermission,
+    ...(input.codingActionProjection ? { codingActionProjection: input.codingActionProjection } : {}),
   })
   const advisory = buildAdvisorySummary(input.latestReview, input.selectedNode, input.pendingCodingPermission)
 
@@ -204,7 +210,50 @@ function buildPrimaryAction(input: {
   isRunningTests: boolean
   pendingInspectorAction: PendingInspectorAction | null
   pendingCodingPermission: CodingPermissionRequest | undefined
+  codingActionProjection?: CodingRuntimeActionProjection
 }): AgentConsoleAction {
+  if (input.codingActionProjection && input.selectedNode && isBuildTask(input.selectedNode)) {
+    const projected = input.codingActionProjection.action
+    if (projected.id === 'review-permission') {
+      return {
+        id: 'resolve-permission',
+        label: projected.label,
+        summary: projected.summary,
+        tone: 'warn',
+        disabled: false,
+      }
+    }
+    if (projected.id === 'start' || projected.id === 'retry') {
+      return {
+        id: 'run-coding',
+        label: projected.label,
+        summary: projected.disabledReason ?? projected.summary,
+        tone: projected.id === 'retry' ? 'warn' : 'accent',
+        disabled: projected.disabled,
+        ...(projected.disabledReason ? { disabledReason: projected.disabledReason } : {}),
+      }
+    }
+    if (projected.id === 'configure') {
+      return {
+        id: 'configure-coding',
+        label: projected.label,
+        summary: projected.summary,
+        tone: 'warn',
+        disabled: false,
+      }
+    }
+    if (projected.id === 'view-progress' || projected.id === 'view-result') {
+      return {
+        id: 'view-coding',
+        label: projected.label,
+        summary: projected.disabledReason ?? projected.summary,
+        tone: projected.id === 'view-result' ? 'good' : 'warn',
+        disabled: projected.disabled,
+        ...(projected.disabledReason ? { disabledReason: projected.disabledReason } : {}),
+      }
+    }
+  }
+
   if (input.pendingCodingPermission) {
     return {
       id: 'resolve-permission',
@@ -425,7 +474,12 @@ function buildPathStatuses(input: {
             ? 'bad'
             : 'warn'
         : 'soft',
-      emphasis: input.primaryAction.id === 'run-coding' || input.primaryAction.id === 'resolve-permission' ? 'primary' : 'secondary',
+      emphasis: input.primaryAction.id === 'run-coding' ||
+        input.primaryAction.id === 'view-coding' ||
+        input.primaryAction.id === 'configure-coding' ||
+        input.primaryAction.id === 'resolve-permission'
+        ? 'primary'
+        : 'secondary',
       facts: [
         { label: 'Runs', value: String(input.codingRuns.length) },
         { label: 'Latest status', value: input.latestCodingRun?.status ?? 'none' },
@@ -530,13 +584,21 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
       title: 'Coding Trace',
       summary: 'Brief, permission, diff, bootstrap, test, cleanup, and terminal runtime events.',
       tone: 'soft',
-      items: input.codingEvents.map((event) => ({
-        id: event.id,
-        eyebrow: event.kind,
-        title: event.message,
-        body: event.timestamp,
-        meta: event.redacted ? ['redacted'] : [],
-      })),
+      items: input.codingEvents.map((event) => {
+        const runtimeCost = recordValue(event.metadata?.runtimeCost)
+        const runtimeCostDetails = runtimeCost ? runtimeCostTraceDetails(runtimeCost) : null
+        return {
+          id: event.id,
+          eyebrow: event.kind,
+          title: event.message,
+          body: runtimeCostDetails?.body ?? event.timestamp,
+          meta: [
+            event.timestamp,
+            ...(runtimeCostDetails?.meta ?? []),
+            event.redacted ? 'redacted' : undefined,
+          ].filter(isPresent),
+        }
+      }),
     })
   }
 
@@ -618,23 +680,169 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
     })
   }
 
-  if (input.latestUsage) {
+  const runtimeCost = input.latestCodingRun?.runtimeCostSummary
+  if (runtimeCost || input.latestUsage) {
+    const runtimeItems = runtimeCost ? runtimeCostEvidenceItems(runtimeCost) : []
+    const legacyUsageItems: AgentConsoleEvidenceItem[] = input.latestUsage
+      ? [{
+          id: input.latestUsage.id,
+          eyebrow: input.latestUsage.source,
+          title: `${input.latestUsage.provider} · ${input.latestUsage.model}`,
+          body: `${input.latestUsage.inputTokens} input · ${input.latestUsage.outputTokens} output · ${input.latestUsage.cacheReadTokens} cache read`,
+          meta: [input.latestUsage.timestamp],
+        }]
+      : []
     groups.push({
       id: 'cost',
       title: 'Cost / Token',
-      summary: `${formatUsd(input.latestUsage.costUsd)} · ${input.latestUsage.source}`,
+      summary: runtimeCost
+        ? `${runtimeCost.phase === 'preflight_estimate' ? 'Preflight worst-case estimate' : 'Actual provider settlement'} · ${runtimeCost.costStatus ?? 'legacy_unverified'} · ${runtimeCost.costUsd === null ? 'unknown cost' : formatRuntimeUsd(runtimeCost.costUsd)}`
+        : `${formatUsd(input.latestUsage!.costUsd)} · ${input.latestUsage!.source}`,
       tone: 'soft',
-      items: [{
-        id: input.latestUsage.id,
-        eyebrow: input.latestUsage.source,
-        title: `${input.latestUsage.provider} · ${input.latestUsage.model}`,
-        body: `${input.latestUsage.inputTokens} input · ${input.latestUsage.outputTokens} output · ${input.latestUsage.cacheReadTokens} cache read`,
-        meta: [input.latestUsage.timestamp],
-      }],
+      items: [...runtimeItems, ...legacyUsageItems],
     })
   }
 
   return groups
+}
+
+function runtimeCostEvidenceItems(summary: CodingRuntimeCostSummary): AgentConsoleEvidenceItem[] {
+  const phase = summary.phase === 'preflight_estimate'
+    ? 'Preflight estimate'
+    : summary.phase === 'provider_settlement'
+      ? 'Actual settlement'
+      : 'Legacy cost'
+  const aggregate: AgentConsoleEvidenceItem = {
+    id: summary.id,
+    eyebrow: `${phase} · ${summary.costStatus ?? 'legacy_unverified'}`,
+    title: `${summary.providerId} · ${summary.model}`,
+    body: runtimeUsageText(summary),
+    meta: runtimeCostMeta(summary),
+  }
+  const calls = (summary.providerCallSettlements ?? []).map((settlement, index) => ({
+    id: `${summary.id}-provider-call-${index + 1}`,
+    eyebrow: `${settlement.requestPhase} · ${settlement.costStatus}`,
+    title: `${settlement.providerId} · ${settlement.model}`,
+    body: runtimeUsageText(settlement),
+    meta: runtimeCostMeta(settlement),
+  }))
+  return [aggregate, ...calls]
+}
+
+function runtimeUsageText(input: {
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number | null
+  cacheMissTokens?: number | null
+  totalTokens?: number
+}): string {
+  return [
+    `${input.inputTokens} input`,
+    `${input.cacheReadTokens ?? 'unknown'} cache hit`,
+    `${input.cacheMissTokens ?? 'unknown'} cache miss`,
+    `${input.outputTokens} output`,
+    `${input.totalTokens ?? input.inputTokens + input.outputTokens} total`,
+  ].join(' · ')
+}
+
+function runtimeCostMeta(input: {
+  cacheHitRate?: number | null
+  costUsd: number | null
+  pricingSnapshot?: CodingRuntimeCostSummary['pricingSnapshot']
+  breakdown?: CodingRuntimeCostSummary['breakdown']
+  timestamp: string
+}): string[] {
+  const snapshot = input.pricingSnapshot
+  const breakdown = input.breakdown
+  return [
+    typeof input.cacheHitRate === 'number'
+      ? `cache hit rate ${(input.cacheHitRate * 100).toFixed(1)}%`
+      : 'cache hit rate unknown',
+    snapshot
+      ? `hit ${formatRuntimeUsd(snapshot.cacheHitInputUsdPerMillion)} / 1M · miss ${formatRuntimeUsd(snapshot.cacheMissInputUsdPerMillion)} / 1M · output ${formatRuntimeUsd(snapshot.outputUsdPerMillion)} / 1M`
+      : 'unit prices unknown',
+    breakdown
+      ? `hit ${formatRuntimeUsd(breakdown.cacheHitInputUsd)} · miss ${formatRuntimeUsd(breakdown.cacheMissInputUsd)} · output ${formatRuntimeUsd(breakdown.outputUsd)} · total ${formatRuntimeUsd(breakdown.totalUsd)}`
+      : 'cost breakdown unknown',
+    snapshot ? `${snapshot.tier} · ${snapshot.sourceVersion}` : undefined,
+    input.costUsd === null ? 'total cost unknown' : `total ${formatRuntimeUsd(input.costUsd)}`,
+    input.timestamp,
+  ].filter(isPresent)
+}
+
+function runtimeCostTraceDetails(cost: Record<string, unknown>): { body: string; meta: string[] } {
+  const inputTokens = finiteNumber(cost.inputTokens)
+  const outputTokens = finiteNumber(cost.outputTokens)
+  const cacheReadTokens = finiteNumber(cost.cacheReadTokens)
+  const cacheMissTokens = finiteNumber(cost.cacheMissTokens)
+  const totalTokens = finiteNumber(cost.totalTokens)
+  const hitRate = finiteNumber(cost.cacheHitRate)
+  const costUsd = finiteNumber(cost.costUsd)
+  const unitPrices = recordValue(cost.unitPrices)
+  const breakdown = recordValue(cost.breakdown)
+  const providerCallMeta = Array.isArray(cost.providerCallSettlements)
+    ? cost.providerCallSettlements.slice(0, 32).flatMap(runtimeProviderCallTraceMeta)
+    : []
+  return {
+    body: [
+      `${inputTokens ?? 'unknown'} input`,
+      `${cacheReadTokens ?? 'unknown'} hit`,
+      `${cacheMissTokens ?? 'unknown'} miss`,
+      `${outputTokens ?? 'unknown'} output`,
+      `${totalTokens ?? 'unknown'} total`,
+    ].join(' · '),
+    meta: [
+      hitRate === undefined ? 'cache hit rate unknown' : `cache hit rate ${(hitRate * 100).toFixed(1)}%`,
+      unitPrices
+        ? `hit ${formatRuntimeUsd(finiteNumber(unitPrices.cacheHitInputUsdPerMillion))} / 1M · miss ${formatRuntimeUsd(finiteNumber(unitPrices.cacheMissInputUsdPerMillion))} / 1M · output ${formatRuntimeUsd(finiteNumber(unitPrices.outputUsdPerMillion))} / 1M`
+        : undefined,
+      breakdown
+        ? `hit ${formatRuntimeUsd(finiteNumber(breakdown.cacheHitInputUsd))} · miss ${formatRuntimeUsd(finiteNumber(breakdown.cacheMissInputUsd))} · output ${formatRuntimeUsd(finiteNumber(breakdown.outputUsd))} · total ${formatRuntimeUsd(finiteNumber(breakdown.totalUsd))}`
+        : undefined,
+      typeof cost.pricingTier === 'string' ? cost.pricingTier : undefined,
+      costUsd === undefined ? 'total cost unknown' : `total ${formatRuntimeUsd(costUsd)}`,
+      ...providerCallMeta,
+    ].filter(isPresent),
+  }
+}
+
+function runtimeProviderCallTraceMeta(value: unknown): string[] {
+  const call = recordValue(value)
+  if (!call) return []
+  const phase = typeof call.requestPhase === 'string' ? call.requestPhase : 'provider call'
+  const inputTokens = finiteNumber(call.inputTokens)
+  const outputTokens = finiteNumber(call.outputTokens)
+  const cacheReadTokens = finiteNumber(call.cacheReadTokens)
+  const cacheMissTokens = finiteNumber(call.cacheMissTokens)
+  const totalTokens = finiteNumber(call.totalTokens)
+  const hitRate = finiteNumber(call.cacheHitRate)
+  const snapshot = recordValue(call.pricingSnapshot)
+  const breakdown = recordValue(call.breakdown)
+  return [
+    `${phase} · ${inputTokens ?? 'unknown'} input · ${cacheReadTokens ?? 'unknown'} hit · ${cacheMissTokens ?? 'unknown'} miss · ${outputTokens ?? 'unknown'} output · ${totalTokens ?? 'unknown'} total · hit rate ${hitRate === undefined ? 'unknown' : `${(hitRate * 100).toFixed(1)}%`}`,
+    snapshot
+      ? `${phase} rates · hit ${formatRuntimeUsd(finiteNumber(snapshot.cacheHitInputUsdPerMillion))} / 1M · miss ${formatRuntimeUsd(finiteNumber(snapshot.cacheMissInputUsdPerMillion))} / 1M · output ${formatRuntimeUsd(finiteNumber(snapshot.outputUsdPerMillion))} / 1M`
+      : undefined,
+    breakdown
+      ? `${phase} cost · hit ${formatRuntimeUsd(finiteNumber(breakdown.cacheHitInputUsd))} · miss ${formatRuntimeUsd(finiteNumber(breakdown.cacheMissInputUsd))} · output ${formatRuntimeUsd(finiteNumber(breakdown.outputUsd))} · total ${formatRuntimeUsd(finiteNumber(breakdown.totalUsd))}`
+      : undefined,
+  ].filter(isPresent)
+}
+
+function formatRuntimeUsd(value: number | undefined): string {
+  if (value === undefined || !Number.isFinite(value)) return 'unknown'
+  const exact = value.toFixed(9).replace(/\.?0+$/u, '')
+  return `$${exact}`
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function evidenceTone(status: string): AgentConsoleTone {

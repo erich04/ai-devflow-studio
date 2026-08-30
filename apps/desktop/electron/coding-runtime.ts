@@ -21,6 +21,7 @@ import {
   type Artifact,
   type BudgetGuardDecision,
   type CodingRuntimeCostSummary,
+  type CodingRuntimeCostEstimate,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingPermissionDecision,
@@ -166,7 +167,7 @@ export type CodingRuntimeBudgetGuard = (input: {
   run: WorkflowRun
   node: WorkflowNode
   requestedBy: string
-  estimatedCost: CodingRuntimeCostSummary
+  estimatedCost: CodingRuntimeCostEstimate
   approvalId?: string
   metered: boolean
 }) => Promise<BudgetGuardDecision>
@@ -306,6 +307,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     'waiting_permission',
     'bootstrapping',
     'running',
+    'applying',
     'testing',
   ])
   async function findProject(projectId: string): Promise<LocalProject> {
@@ -925,7 +927,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       diffArtifactId: input.codingRun.diffArtifactId ?? null,
       testEvidenceIds: input.codingRun.testEvidenceId ? [input.codingRun.testEvidenceId] : [],
       usage: {
-        tokens: usage ? usage.inputTokens + usage.outputTokens + usage.cacheReadTokens : 0,
+        tokens: usage ? usage.inputTokens + usage.outputTokens : 0,
         costUsd: usage?.costUsd ?? 0,
       },
       cleanup: input.cleanup,
@@ -1240,6 +1242,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   ): Promise<CodingPermissionRequest> {
     const request = await findPermissionRequest(input)
     const timestamp = recoveryDecisionAt ?? now()
+    const requestExpiry = Date.parse(request.expiresAt)
+    const decisionTime = Date.parse(timestamp)
+    if (
+      input.decision !== 'expired' &&
+      (!Number.isFinite(requestExpiry) || !Number.isFinite(decisionTime) || requestExpiry <= decisionTime)
+    ) {
+      input = {
+        ...input,
+        decision: 'expired',
+        comment: 'Decision rejected because the exact Coding Permission had expired.',
+      }
+    }
     const updatedRequest: CodingPermissionRequest = {
       ...request,
       status:
@@ -1369,11 +1383,20 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     ) {
       return request
     }
+    const applyingRun: CodingAgentRun | undefined = input.decision === 'approved'
+      ? {
+          ...codingRun,
+          status: 'applying',
+          summary: 'Coding Permission approved; applying the exact approved change in the managed worktree.',
+        }
+      : undefined
+    let continuationExpectedRun = applyingRun ?? codingRun
     if (!nativeApprovedRecovery) {
       const claimed = await commitCodingAgentMutation({
         expectedRun: codingRun,
         expectedPendingPermissionRequestIds: [request.id],
         expectedPermissionRequests: [request],
+        ...(applyingRun ? { run: applyingRun } : {}),
         permissionRequests: [updatedRequest],
         permissionDecisions: [decision],
       })
@@ -1381,6 +1404,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
           (candidate) => candidate.id === input.requestId,
         ) ?? request
+      }
+    } else if (applyingRun) {
+      const resumed = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [],
+        run: applyingRun,
+      })
+      if (!resumed.committed) {
+        return request
       }
     }
 
@@ -1402,6 +1434,33 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             workspace,
             project,
             now: timestamp,
+            reportPhase: async (phase) => {
+              const currentRun = await findCodingRun(codingRun.id)
+              if (!activeCodingStatuses.has(currentRun.status)) {
+                throw new Error('Coding Agent execution phase cannot update a terminal run.')
+              }
+              if (currentRun.status === phase.status) {
+                continuationExpectedRun = currentRun
+                return
+              }
+              if (phase.status === 'testing' && currentRun.status !== 'applying') {
+                throw new Error(`Coding Agent cannot enter testing from ${currentRun.status}.`)
+              }
+              const phaseRun: CodingAgentRun = {
+                ...currentRun,
+                status: phase.status,
+                summary: phase.summary,
+              }
+              const phaseCommitted = await commitCodingAgentMutation({
+                expectedRun: currentRun,
+                expectedPendingPermissionRequestIds: [],
+                run: phaseRun,
+              })
+              if (!phaseCommitted.committed) {
+                throw new Error(`Coding Agent ${phase.status} phase could not be persisted safely.`)
+              }
+              continuationExpectedRun = phaseRun
+            },
           },
         })
       } catch (error) {
@@ -1481,7 +1540,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             : event,
         )
         const continuationCommitted = await commitCodingAgentMutation({
-          expectedRun: codingRun,
+          expectedRun: continuationExpectedRun,
           expectedPendingPermissionRequestIds: [],
           run: completed.codingRun,
           events: continuationEvents,
@@ -1513,7 +1572,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         return updatedRequest
       }
       await settleCompletedExecutorResult({
-        expectedRun: codingRun,
+        expectedRun: continuationExpectedRun,
         completed,
         workspace,
         project,
@@ -1698,6 +1757,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           codingRun.status === 'preparing' ||
           codingRun.status === 'running' ||
           codingRun.status === 'bootstrapping' ||
+          codingRun.status === 'applying' ||
           codingRun.status === 'testing'
         ) {
           const timestamp = now()
@@ -1829,12 +1889,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             requestedBy: input.requestedBy,
             providerId,
             model,
+            ...(executor.billingProvider
+              ? { billingProvider: executor.billingProvider }
+              : {}),
             timestamp: now(),
           })
         : estimateCodingRuntimeCost({
             engine: configuredEngine,
             providerId,
             model,
+            ...(executor.billingProvider
+              ? { billingProvider: executor.billingProvider }
+              : {}),
             prompt: canonicalBrief.prompt,
             runId: run.id,
             nodeId: node.id,
@@ -2387,8 +2453,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         budget: {
           maxTokens:
             estimatedCost.inputTokens +
-            estimatedCost.outputTokens +
-            estimatedCost.cacheReadTokens,
+            estimatedCost.outputTokens,
           maxCostUsd: budgetDecision.limitUsd ?? budgetDecision.projectedCostUsd,
         },
         expectedCheckpointVersion: 0,

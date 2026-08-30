@@ -23,7 +23,9 @@ import {
   type KnowledgeEntity,
   type KnowledgeRelation,
   type ProjectGitStatus,
+  type CodingChangeSetPreview,
   type WorkflowRun,
+  type StageAgentExecutorKind,
 } from '@ai-devflow/shared'
 import { useGateEnforcement } from './useGateEnforcement'
 import {
@@ -46,6 +48,8 @@ import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
 import { useCodingRuntimeReadiness } from './app/useCodingRuntimeReadiness'
+import { buildCodingRuntimeActionProjection } from './app/coding-runtime-action-projection'
+import type { DesktopDataProfileDiagnostics } from './desktop-api'
 import { WorkRequestInbox } from './WorkRequestInbox'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
 import {
@@ -216,6 +220,28 @@ export function App() {
     deleteRemote: boolean
   } | null>(null)
   const [isDeletingRun, setIsDeletingRun] = useState(false)
+  const [codingChangeSetPreview, setCodingChangeSetPreview] = useState<CodingChangeSetPreview | null>(null)
+  const [codingRuntimeNow, setCodingRuntimeNow] = useState(() => new Date().toISOString())
+  const [stageAgentExecutorKind, setStageAgentExecutorKind] = useState<StageAgentExecutorKind>('direct-provider')
+  const [dataProfileDiagnostics, setDataProfileDiagnostics] =
+    useState<DesktopDataProfileDiagnostics | null>(null)
+
+  useEffect(() => {
+    if (!desktopApi?.loadDataProfileDiagnostics) return
+    let disposed = false
+    const loadDiagnostics = async () => {
+      try {
+        const diagnostics = await desktopApi.loadDataProfileDiagnostics()
+        if (!disposed) setDataProfileDiagnostics(diagnostics)
+      } catch {
+        if (!disposed) setDataProfileDiagnostics(null)
+      }
+    }
+    void loadDiagnostics()
+    return () => {
+      disposed = true
+    }
+  }, [desktopApi, runs])
 
   useEffect(() => {
     if (!openRunMenuId) {
@@ -603,9 +629,15 @@ export function App() {
   const selectedCodingRuns = useMemo(
     () =>
       codingRuns
-        .filter((run) => run.runId === selectedRun?.id)
-        .sort((a, b) => (b.completedAt ?? b.startedAt).localeCompare(a.completedAt ?? a.startedAt)),
-    [codingRuns, selectedRun],
+        .filter((run) => (
+          run.runId === selectedRun?.id &&
+          run.projectId === selectedLocalProject?.id
+        ))
+        .sort((a, b) => {
+          const byActive = Number(isActiveCodingAgentRunStatus(b.status)) - Number(isActiveCodingAgentRunStatus(a.status))
+          return byActive || b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id)
+        }),
+    [codingRuns, selectedLocalProject, selectedRun],
   )
   const selectedRetryAttempts = useMemo(
     () =>
@@ -626,6 +658,33 @@ export function App() {
         .sort((a, b) => a.requestedAt.localeCompare(b.requestedAt))
     : []
   const pendingCodingPermission = selectedCodingPermissionRequests.find((request) => request.status === 'pending')
+
+  useEffect(() => {
+    if (!desktopApi || !pendingCodingPermission?.changeSetId) {
+      setCodingChangeSetPreview(null)
+      return
+    }
+    let active = true
+    setCodingChangeSetPreview(null)
+    void desktopApi.getCodingChangeSetPreview({
+      changeSetId: pendingCodingPermission.changeSetId,
+      codingRunId: pendingCodingPermission.codingRunId,
+    }).then((preview) => {
+      if (active) setCodingChangeSetPreview(preview)
+    }).catch(() => {
+      if (active) setCodingChangeSetPreview(null)
+    })
+    return () => {
+      active = false
+    }
+  }, [desktopApi, pendingCodingPermission?.changeSetId, pendingCodingPermission?.codingRunId])
+
+  useEffect(() => {
+    setCodingRuntimeNow(new Date().toISOString())
+    if (!pendingCodingPermission) return
+    const timer = window.setInterval(() => setCodingRuntimeNow(new Date().toISOString()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [pendingCodingPermission?.id])
   const selectedManagedWorkspace = latestCodingRun
     ? managedCodingWorkspaces.find((workspace) => workspace.id === latestCodingRun.managedWorkspaceId)
     : undefined
@@ -652,6 +711,41 @@ export function App() {
       pendingCodingPermission?.status ?? '',
     ].join('|'),
   })
+  const codingActionProjection = useMemo(() => {
+    if (!selectedRun || !selectedNode || !selectedLocalProject) return undefined
+    return buildCodingRuntimeActionProjection({
+      runId: selectedRun.id,
+      nodeId: selectedNode.id,
+      projectId: selectedLocalProject.id,
+      node: selectedNode,
+      isSelectedCurrentNode,
+      codingRuns,
+      permissionRequests: codingPermissionRequests,
+      workspaces: managedCodingWorkspaces,
+      diffArtifacts: codingDiffArtifacts,
+      testEvidence: scopedTestEvidence,
+      events: codingEvents,
+      readiness: codingRuntime.readiness,
+      isStartingCodingAgent,
+      changeSetPreview: codingChangeSetPreview,
+      now: codingRuntimeNow,
+    })
+  }, [
+    codingRuns,
+    codingPermissionRequests,
+    managedCodingWorkspaces,
+    codingDiffArtifacts,
+    scopedTestEvidence,
+    codingEvents,
+    codingChangeSetPreview,
+    codingRuntime.readiness,
+    codingRuntimeNow,
+    isSelectedCurrentNode,
+    isStartingCodingAgent,
+    selectedLocalProject,
+    selectedNode,
+    selectedRun,
+  ])
   const remoteRunIdSet = useMemo(() => new Set(remoteRunIds), [remoteRunIds])
   const remoteRunCount = scopedRuns.filter((run) => remoteRunIdSet.has(run.id)).length
   const localRunCount = scopedRuns.length - remoteRunCount
@@ -730,6 +824,7 @@ export function App() {
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
+    requestSelectedClarificationChanges,
     selectLocalProject,
     saveTestCommand,
     executeTestPlan,
@@ -769,6 +864,7 @@ export function App() {
       : {}),
     canVerifyGitHubDeliveryRevocation,
     gateEnforcementDecision: gateEnforcement.decision,
+    stageAgentExecutorKind,
     applyLocalExecutionState,
   })
 
@@ -1069,6 +1165,26 @@ export function App() {
             数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
             <em>{runtimeDataSource.status}</em>
           </span>
+          <details className="stat data-profile-diagnostics" data-testid="data-profile-diagnostics">
+            <summary>
+              本地数据 <strong>{dataProfileDiagnostics?.name ?? '正在读取'}</strong>
+            </summary>
+            {dataProfileDiagnostics ? (
+              <dl>
+                <div><dt>来源</dt><dd>{dataProfileDiagnostics.source}</dd></div>
+                <div><dt>Schema</dt><dd>v{dataProfileDiagnostics.schemaVersion}</dd></div>
+                <div><dt>项目</dt><dd>{dataProfileDiagnostics.projectCount}</dd></div>
+                <div><dt>Run</dt><dd>{dataProfileDiagnostics.runCount}</dd></div>
+                <div>
+                  <dt>最近更新</dt>
+                  <dd>{dataProfileDiagnostics.latestRunUpdatedAt ?? '暂无 Run'}</dd>
+                </div>
+                <div><dt>指纹</dt><dd>{dataProfileDiagnostics.pathFingerprint}</dd></div>
+              </dl>
+            ) : (
+              <p>本地数据诊断暂不可用。</p>
+            )}
+          </details>
           <span className="stat">Active Runs <strong>{scopedRuns.length}</strong></span>
           <span className="stat">Run Sources <strong>{localRunCount} local · {remoteRunCount} remote</strong></span>
           <span className="stat">Pending Gates <strong>{pendingGateCount}</strong></span>
@@ -1270,6 +1386,9 @@ export function App() {
                   canSaveOverride={gateEnforcement.canSaveOverride}
                   onApprove={approveSelectedGate}
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
+                  onRequestClarificationChanges={requestSelectedClarificationChanges}
+                  stageAgentExecutorKind={stageAgentExecutorKind}
+                  onStageAgentExecutorKindChange={setStageAgentExecutorKind}
                   onSaveGateOverride={gateEnforcement.saveOverride}
                   onStartRemediationRetry={startRemediationRetry}
                   pairingState={hasDeliveryProjectBinding ? 'paired' : 'unpaired'}
@@ -1278,9 +1397,14 @@ export function App() {
                   onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
                   onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行门禁审查并补齐 Gate Advisory')}
                   onOpenKnowledgeReference={openKnowledgeReference}
+                  onOpenCodingAgent={() => openSupportContext(
+                    'coding-agent',
+                    codingActionProjection?.action.label ?? '查看 Coding Agent',
+                  )}
                   codingReadiness={codingRuntime.readiness}
                   codingReadinessError={codingRuntime.error}
-                  onOpenCodingConfiguration={() => setActiveView('agents')}
+                  onOpenCodingConfiguration={() => openSupportContext('coding-agent', '配置 Coding Runtime')}
+                  {...(codingActionProjection ? { codingActionProjection } : {})}
                   onRunCodingAgent={runCodingAgent}
                   onCreatePrDraft={generatePrDraft}
                   onPrepareGitHubDelivery={prepareSelectedGitHubDelivery}
@@ -1420,6 +1544,8 @@ export function App() {
             runtimeBudgetApprovalId={runtimeBudgetApprovalId}
             onRuntimeBudgetApprovalIdChange={setRuntimeBudgetApprovalId}
             codingRuns={selectedCodingRuns}
+            codingHistoryEvents={codingEvents}
+            codingHistoryPermissionRequests={codingPermissionRequests}
             retryAttempts={selectedRetryAttempts}
             latestCodingRun={latestCodingRun}
             codingEvents={selectedCodingEvents}
@@ -1434,6 +1560,7 @@ export function App() {
             codingReadiness={codingRuntime.readiness}
             codingReadinessError={codingRuntime.error}
             onRefreshCodingReadiness={codingRuntime.refresh}
+            {...(codingActionProjection ? { codingActionProjection } : {})}
           />
         )}
 

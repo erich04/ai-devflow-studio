@@ -104,7 +104,7 @@ describe('Native Coding Executor', () => {
       maxOutputTokens: 1_024,
     })).resolves.toMatchObject({
       decision: { stateVersion: 1 },
-      usage: { tokens: 32, costUsd: expect.any(Number) },
+      usage: { tokens: 30, costUsd: expect.any(Number) },
     })
     expect(provider).toMatchObject({ billing: 'metered', modelId: 'gpt-native-coding' })
     expect(completeStructuredJson).toHaveBeenCalledOnce()

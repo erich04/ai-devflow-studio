@@ -178,6 +178,7 @@ async function launchApp() {
     env: {
       ...process.env,
       DEVFLOW_USER_DATA_DIR: userDataDir,
+      DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userDataDir, 'data-profiles.json'),
       DEVFLOW_API_BASE_URL: apiServerUrl,
       DEVFLOW_CODING_ENGINE: 'fake',
       DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
@@ -728,6 +729,7 @@ try {
   expect(completedClarify.run.currentNodeId).toBe(localNodes.clarifyGate.id)
   expect(completedClarify.artifact.kind).toBe('clarification')
   expect(completedClarify.artifact.content).toContain('Acceptance Criteria')
+  expect(completedClarify.artifact.clarificationRevision).toBeTruthy()
   expect(completedClarify.event.kind).toBe('thinking')
   expect(completedClarify.persistedArtifact?.id).toBe(completedClarify.artifact.id)
   localRun = completedClarify.run
@@ -755,12 +757,21 @@ try {
   }, { runId: localRun.id, nodeId: localNodes.clarifyGate.id, projectId: localProjectId })
   expect(clarifyGateDecision.blocksApproval).toBe(false)
 
-  const approvedClarify = await first.page.evaluate(async ({ runId, nodeId }) => {
+  const approvedClarify = await first.page.evaluate(async ({ runId, nodeId, expectedClarificationRevision }) => {
     return window.aiDevFlowDesktop.approveGate({
       runId,
       nodeId,
+      expectedClarificationRevision,
     })
-  }, { runId: localRun.id, nodeId: localNodes.clarifyGate.id })
+  }, {
+    runId: localRun.id,
+    nodeId: localNodes.clarifyGate.id,
+    expectedClarificationRevision: {
+      artifactId: completedClarify.artifact.id,
+      revision: completedClarify.artifact.clarificationRevision.revision,
+      revisionDigest: completedClarify.artifact.clarificationRevision.revisionDigest,
+    },
+  })
   expect(approvedClarify.event.kind).toBe('approval')
   expect(approvedClarify.run.currentNodeId).toBe(localNodes.designAgent.id)
   localRun = approvedClarify.run
@@ -1003,6 +1014,40 @@ try {
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')
   await persistThemePreference(first.page, 'dark')
+  const durableIdentityBeforeRestart = await first.page.evaluate(async (runId) => {
+    const [state, profile, pairing, providers] = await Promise.all([
+      window.aiDevFlowDesktop.loadState(),
+      window.aiDevFlowDesktop.loadDataProfileDiagnostics(),
+      window.aiDevFlowDesktop.loadDesktopPairing(),
+      window.aiDevFlowDesktop.listAgentProviders(),
+    ])
+    const run = state.runs.find((candidate) => candidate.id === runId)
+    return {
+      profile,
+      run: run
+        ? { id: run.id, currentNodeId: run.currentNodeId, version: run.version }
+        : null,
+      pairing: pairing
+        ? {
+            tokenId: pairing.tokenId,
+            organizationId: pairing.organizationId,
+            projectId: pairing.projectId,
+            localProjectId: pairing.localProjectId,
+            userId: pairing.userId,
+          }
+        : null,
+      providers: providers.map((provider) => ({
+        id: provider.id,
+        kind: provider.kind,
+        model: provider.model,
+        enabled: provider.enabled,
+      })),
+    }
+  }, localRun.id)
+  expect(durableIdentityBeforeRestart.run?.id).toBe(localRun.id)
+  expect(durableIdentityBeforeRestart.profile.runCount).toBeGreaterThan(0)
+  expect(durableIdentityBeforeRestart.profile.latestRunUpdatedAt).toBeTruthy()
+  expect(durableIdentityBeforeRestart.pairing?.localProjectId).toBe(localProjectId)
   await first.app.close()
 
   const second = await launchApp()
@@ -1017,6 +1062,37 @@ try {
   await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'dark', {
     timeout: 20_000,
   })
+  const durableIdentityAfterRestart = await second.page.evaluate(async (runId) => {
+    const [state, profile, pairing, providers] = await Promise.all([
+      window.aiDevFlowDesktop.loadState(),
+      window.aiDevFlowDesktop.loadDataProfileDiagnostics(),
+      window.aiDevFlowDesktop.loadDesktopPairing(),
+      window.aiDevFlowDesktop.listAgentProviders(),
+    ])
+    const run = state.runs.find((candidate) => candidate.id === runId)
+    return {
+      profile,
+      run: run
+        ? { id: run.id, currentNodeId: run.currentNodeId, version: run.version }
+        : null,
+      pairing: pairing
+        ? {
+            tokenId: pairing.tokenId,
+            organizationId: pairing.organizationId,
+            projectId: pairing.projectId,
+            localProjectId: pairing.localProjectId,
+            userId: pairing.userId,
+          }
+        : null,
+      providers: providers.map((provider) => ({
+        id: provider.id,
+        kind: provider.kind,
+        model: provider.model,
+        enabled: provider.enabled,
+      })),
+    }
+  }, localRun.id)
+  expect(durableIdentityAfterRestart).toEqual(durableIdentityBeforeRestart)
   await expect(
     second.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true }),
   ).toBeVisible()

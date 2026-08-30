@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalProject, WorkflowRun } from '@ai-devflow/shared'
 import { createCodingRuntime } from './coding-runtime.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
@@ -93,7 +93,14 @@ describe('Native Coding Executor v2 runtime', () => {
                 searches: [],
                 summary: 'Inspect the message module.',
               },
-              usage: { inputTokens: 20, outputTokens: 10, cacheReadTokens: 0, costUsd: 0.000009 },
+              usage: {
+                inputTokens: 20,
+                outputTokens: 10,
+                cacheReadTokens: 0,
+                cacheMissTokens: 20,
+                cacheStatus: 'complete',
+                billingProvider: 'deepseek',
+              },
             }
           : {
               value: {
@@ -104,24 +111,41 @@ describe('Native Coding Executor v2 runtime', () => {
                 }],
                 summary: 'Replace only the requested message.',
               },
-              usage: { inputTokens: 30, outputTokens: 15, cacheReadTokens: 0, costUsd: 0.000014 },
+              usage: {
+                inputTokens: 30,
+                outputTokens: 15,
+                cacheReadTokens: 0,
+                cacheMissTokens: 30,
+                cacheStatus: 'complete',
+                billingProvider: 'deepseek',
+              },
             }
       },
     }
     const store = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
     await store.upsertProject(project)
     await store.saveRun(run)
-    const clock = () => '2026-08-29T09:01:00.000Z'
+    const clock = () => '2026-08-31T00:30:00.000Z'
+    let statusDuringSavedTest: string | undefined
     const executor = createNativeCodingExecutorV2({
       store,
       decisionProvider: provider,
       configVersion: 1,
       clock,
-      runSavedTest: runLocalTestCommand,
+      runSavedTest: async (input) => {
+        statusDuringSavedTest = (await store.listCodingAgentRuns(run.id))[0]?.status
+        return runLocalTestCommand(input)
+      },
     })
+    const publishRunStatus = vi.fn()
     const runtime = createCodingRuntime({
       store,
       executor,
+      publisher: {
+        publishRunStatus,
+        publishEvent: vi.fn(),
+        publishPermission: vi.fn(),
+      },
       worktreeRoot,
       now: clock,
       runTestCommand: runLocalTestCommand,
@@ -182,9 +206,20 @@ describe('Native Coding Executor v2 runtime', () => {
     expect(completed).toMatchObject({
       status: 'completed', changedPaths: ['src/message.ts'],
       runtimeCostSummary: {
-        source: 'provider_reported', inputTokens: 50, outputTokens: 25, costUsd: 0.000023,
+        source: 'provider_reported', inputTokens: 50, outputTokens: 25,
+        cacheReadTokens: 0, cacheMissTokens: 50, totalTokens: 75,
+        usageStatus: 'complete', costStatus: 'settled', costUsd: 0.0000275,
+        providerCallSettlements: [
+          { requestPhase: 'analysis', inputTokens: 20, outputTokens: 10, costUsd: 0.000011 },
+          { requestPhase: 'initial', inputTokens: 30, outputTokens: 15, costUsd: 0.0000165 },
+        ],
       },
     })
+    expect(statusDuringSavedTest).toBe('testing')
+    const persistedStatuses = publishRunStatus.mock.calls.map(([candidate]) => candidate.status)
+    expect(persistedStatuses).toContain('applying')
+    expect(persistedStatuses.indexOf('applying')).toBeLessThan(persistedStatuses.indexOf('testing'))
+    expect(persistedStatuses.indexOf('testing')).toBeLessThan(persistedStatuses.lastIndexOf('completed'))
     const [workspace] = await store.listManagedCodingWorkspaces(project.id)
     await expect(readFile(path.join(workspace!.worktreePath, 'src/message.ts'), 'utf8'))
       .resolves.toBe('export const message = "new"\n')
@@ -194,6 +229,20 @@ describe('Native Coding Executor v2 runtime', () => {
     expect(evidence).toMatchObject({ status: 'passed', cwd: '<workspace>', redacted: true })
     const [diff] = await store.listCodingDiffArtifacts(run.id)
     expect(diff).toMatchObject({ changedPaths: ['src/message.ts'], truncated: false })
+    const costEvent = (await store.listCodingAgentEvents(completed!.id)).find(
+      (event) => typeof event.metadata?.runtimeCost === 'object',
+    )
+    expect(costEvent?.metadata?.runtimeCost).toMatchObject({
+      usageStatus: 'complete',
+      costStatus: 'settled',
+      inputTokens: 50,
+      outputTokens: 25,
+      cacheReadTokens: 0,
+      cacheMissTokens: 50,
+      totalTokens: 75,
+      pricingTier: 'off_peak',
+      pricingSourceVersion: 'deepseek-pricing-snapshot-2026-08-30',
+    })
     store.close()
   }, 20_000)
 })

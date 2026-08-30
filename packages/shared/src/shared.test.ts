@@ -242,7 +242,8 @@ describe('rollupTokenUsage', () => {
     const [project] = rollupTokenUsage(tokenUsage, 'projectId')
 
     expect(project?.key).toBe('p-payments')
-    expect(project?.totalTokens).toBe(31_980)
+    // cacheReadTokens is a subset of inputTokens and must not be billed twice.
+    expect(project?.totalTokens).toBe(27_780)
     expect(project?.costUsd).toBeCloseTo(0.109)
   })
 })

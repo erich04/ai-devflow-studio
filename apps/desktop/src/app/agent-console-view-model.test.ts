@@ -344,6 +344,48 @@ describe('agent console view model', () => {
       changedPaths: ['src/change.ts'],
       startedAt: '2026-06-17T00:00:00.000Z',
       completedAt: '2026-06-17T00:03:00.000Z',
+      runtimeCostSummary: {
+        id: 'coding-cost-1',
+        runId: run.id,
+        nodeId: 'n-build',
+        userId: 'u-wang',
+        projectId: run.projectId,
+        provider: 'openai',
+        providerId: 'deepseek',
+        model: 'deepseek-v4-flash',
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 40,
+        cacheMissTokens: 60,
+        totalTokens: 120,
+        cacheHitRate: 0.4,
+        usageStatus: 'complete',
+        costStatus: 'settled',
+        phase: 'provider_settlement',
+        costUsd: 0.00002668,
+        pricingSnapshot: {
+          providerId: 'deepseek',
+          model: 'deepseek-v4-flash',
+          tier: 'off_peak',
+          effectiveAt: '2026-06-17T00:00:00.000Z',
+          source: 'https://pricing.example.test',
+          sourceVersion: 'pricing-v1',
+          currency: 'USD',
+          unit: 'per_1m_tokens',
+          cacheHitInputUsdPerMillion: 0.007,
+          cacheMissInputUsdPerMillion: 0.22,
+          outputUsdPerMillion: 0.66,
+        },
+        breakdown: {
+          cacheHitInputUsd: 0.00000028,
+          cacheMissInputUsd: 0.0000132,
+          outputUsd: 0.0000132,
+          totalUsd: 0.00002668,
+        },
+        timestamp: '2026-06-17T00:01:00.000Z',
+        source: 'provider_reported',
+        redacted: true,
+      },
       redacted: true,
     }
     const permission: CodingPermissionRequest = {
@@ -375,6 +417,63 @@ describe('agent console view model', () => {
           skillName: 'shell-runner',
           inputSummary: 'bash: pnpm test',
           redactionApplied: true,
+        },
+        redacted: true,
+      },
+      {
+        id: 'coding-event-cost',
+        codingRunId: codingRun.id,
+        runId: run.id,
+        nodeId: 'n-build',
+        sequence: 2,
+        kind: 'permission',
+        message: 'Provider settlement archived.',
+        timestamp: '2026-06-17T00:01:01.000Z',
+        metadata: {
+          runtimeCost: {
+            usageStatus: 'complete',
+            costStatus: 'settled',
+            inputTokens: 100,
+            outputTokens: 20,
+            cacheReadTokens: 40,
+            cacheMissTokens: 60,
+            totalTokens: 120,
+            cacheHitRate: 0.4,
+            costUsd: 0.00002668,
+            pricingTier: 'off_peak',
+            unitPrices: {
+              cacheHitInputUsdPerMillion: 0.007,
+              cacheMissInputUsdPerMillion: 0.22,
+              outputUsdPerMillion: 0.66,
+            },
+            breakdown: {
+              cacheHitInputUsd: 0.00000028,
+              cacheMissInputUsd: 0.0000132,
+              outputUsd: 0.0000132,
+              totalUsd: 0.00002668,
+            },
+            providerCallSettlements: [{
+              requestPhase: 'analysis',
+              inputTokens: 40,
+              outputTokens: 5,
+              cacheReadTokens: 10,
+              cacheMissTokens: 30,
+              totalTokens: 45,
+              cacheHitRate: 0.25,
+              costUsd: 0.00001,
+              pricingSnapshot: {
+                cacheHitInputUsdPerMillion: 0.007,
+                cacheMissInputUsdPerMillion: 0.22,
+                outputUsdPerMillion: 0.66,
+              },
+              breakdown: {
+                cacheHitInputUsd: 0.00000007,
+                cacheMissInputUsd: 0.0000066,
+                outputUsd: 0.0000033,
+                totalUsd: 0.00000997,
+              },
+            }],
+          },
         },
         redacted: true,
       },
@@ -439,5 +538,19 @@ describe('agent console view model', () => {
     expect(viewModel.evidenceGroups.find((group) => group.id === 'diff')?.items[0]?.eyebrow).toBe(
       '2 secret replacements',
     )
+    const costGroup = viewModel.evidenceGroups.find((group) => group.id === 'cost')!
+    expect(costGroup.summary).toContain('Actual provider settlement')
+    expect(costGroup.items[0]?.body).toContain('40 cache hit · 60 cache miss · 20 output')
+    expect(costGroup.items[0]?.meta).toEqual(expect.arrayContaining([
+      'hit $0.007 / 1M · miss $0.22 / 1M · output $0.66 / 1M',
+      'hit $0.00000028 · miss $0.0000132 · output $0.0000132 · total $0.00002668',
+    ]))
+    const costTrace = viewModel.evidenceGroups.find((group) => group.id === 'coding-trace')
+      ?.items.find((item) => item.id === 'coding-event-cost')
+    expect(costTrace?.body).toContain('40 hit · 60 miss · 20 output')
+    expect(costTrace?.meta).toContain('total $0.00002668')
+    expect(costTrace?.meta).toContain('analysis · 40 input · 10 hit · 30 miss · 5 output · 45 total · hit rate 25.0%')
+    expect(costTrace?.meta).toContain('analysis rates · hit $0.007 / 1M · miss $0.22 / 1M · output $0.66 / 1M')
+    expect(costTrace?.meta).toContain('analysis cost · hit $0.00000007 · miss $0.0000066 · output $0.0000033 · total $0.00000997')
   })
 })

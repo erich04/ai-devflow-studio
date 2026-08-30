@@ -13,6 +13,7 @@ import type {
   AgentTokenUsage,
   Artifact,
   BudgetGuardDecision,
+  ClarificationRepositoryFindings,
   GateAdvisory,
   KnowledgeChunk,
   KnowledgeDocument,
@@ -21,6 +22,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { buildKnowledgeReferences, projectKnowledgeReferencesForNode } from './knowledge'
+import { isDeepSeekUsageContext, parseOpenAiCompatibleProviderUsage } from './provider-usage'
 import { redactSecrets, redactSensitiveText } from './redaction'
 import {
   projectWorkflowContext,
@@ -65,7 +67,7 @@ export type WorkflowArtifactProviderRequest = {
 export type WorkflowArtifactProviderContext = {
   run: Pick<WorkflowRun, 'id' | 'title' | 'request' | 'projectId' | 'status' | 'branchName'>
   node: Pick<WorkflowNode, 'id' | 'stage' | 'title' | 'subtitle' | 'kind' | 'status'>
-  artifacts: Array<Pick<Artifact, 'id' | 'kind' | 'title' | 'summary' | 'content' | 'redacted'>>
+  artifacts: Array<Pick<Artifact, 'id' | 'kind' | 'title' | 'summary' | 'content' | 'redacted' | 'updatedAt' | 'clarificationRevision' | 'clarificationFeedback'>>
 }
 
 export type WorkflowArtifactProviderInput = {
@@ -85,6 +87,7 @@ export type WorkflowArtifactProviderOutput = {
   openQuestions: string[]
   assumptions?: string[]
   risks?: string[]
+  repositoryFindings?: ClarificationRepositoryFindings
   usage?: AgentProviderUsage
 }
 
@@ -92,6 +95,7 @@ export type AgentProvider = {
   id: string
   name: string
   model: string
+  billingProvider?: AgentProviderUsage['billingProvider']
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
   completeStructuredJson?: (input: {
@@ -1540,6 +1544,9 @@ export function createOpenAiCompatibleAgentProvider({
     id,
     name,
     model,
+    billingProvider: isDeepSeekUsageContext({ providerId: id, baseUrl })
+      ? 'deepseek'
+      : 'openai_compatible',
     async reviewKnowledge({ prompt }) {
       const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
         method: 'POST',
@@ -1567,22 +1574,14 @@ export function createOpenAiCompatibleAgentProvider({
 
       const body = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>
-        usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number }
+        usage?: unknown
       }
       const raw = body.choices?.[0]?.message?.content
       if (!raw) {
         throw new Error('Agent provider returned empty review output')
       }
       const parsed = parseProviderJson<KnowledgeReviewProviderOutput>(raw, 'review')
-      const usage = body.usage
-        ? {
-            ...(typeof body.usage.prompt_tokens === 'number' ? { inputTokens: body.usage.prompt_tokens } : {}),
-            ...(typeof body.usage.completion_tokens === 'number'
-              ? { outputTokens: body.usage.completion_tokens }
-              : {}),
-            ...(typeof body.usage.cached_tokens === 'number' ? { cacheReadTokens: body.usage.cached_tokens } : {}),
-          }
-        : undefined
+      const usage = parseOpenAiCompatibleProviderUsage(body.usage, { providerId: id, model, baseUrl })
 
       const conclusion = providerValueToString(parsed.conclusion, 'Knowledge review completed.')
       const summary = providerValueToString(parsed.summary, conclusion || 'Knowledge review completed.')
@@ -1664,22 +1663,14 @@ export function createOpenAiCompatibleAgentProvider({
         }
         const value = parseStructuredProviderOutput(raw)
         let usage: AgentProviderUsage | undefined
-        if (typeof usageValue === 'object' && usageValue !== null && !Array.isArray(usageValue)) {
-          const candidate = usageValue as Record<string, unknown>
-          const valid = [candidate.prompt_tokens, candidate.completion_tokens, candidate.cached_tokens]
-            .every((entry) => entry === undefined || (Number.isInteger(entry) && Number(entry) >= 0))
-          if (!valid) throw new Error('Agent provider structured usage is invalid')
-          usage = {
-            ...(typeof candidate.prompt_tokens === 'number'
-              ? { inputTokens: candidate.prompt_tokens }
-              : {}),
-            ...(typeof candidate.completion_tokens === 'number'
-              ? { outputTokens: candidate.completion_tokens }
-              : {}),
-            ...(typeof candidate.cached_tokens === 'number'
-              ? { cacheReadTokens: candidate.cached_tokens }
-              : {}),
-          }
+        try {
+          usage = parseOpenAiCompatibleProviderUsage(usageValue, {
+            providerId: id,
+            model,
+            baseUrl,
+          })
+        } catch {
+          throw new Error('Agent provider structured usage is invalid')
         }
         return { value, ...(usage ? { usage } : {}) }
       } catch (error) {
@@ -1726,22 +1717,14 @@ export function createOpenAiCompatibleAgentProvider({
 
       const body = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>
-        usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number }
+        usage?: unknown
       }
       const raw = body.choices?.[0]?.message?.content
       if (!raw) {
         throw new Error('Agent provider returned empty workflow artifact output')
       }
       const parsed = parseProviderJson<WorkflowArtifactProviderOutput>(raw, 'workflow artifact')
-      const usage = body.usage
-        ? {
-            ...(typeof body.usage.prompt_tokens === 'number' ? { inputTokens: body.usage.prompt_tokens } : {}),
-            ...(typeof body.usage.completion_tokens === 'number'
-              ? { outputTokens: body.usage.completion_tokens }
-              : {}),
-            ...(typeof body.usage.cached_tokens === 'number' ? { cacheReadTokens: body.usage.cached_tokens } : {}),
-          }
-        : undefined
+      const usage = parseOpenAiCompatibleProviderUsage(body.usage, { providerId: id, model, baseUrl })
 
       const title = providerValueToString(parsed.title, request.stage === 'clarify' ? '需求澄清结果' : '方案设计')
       const summary = providerValueToString(parsed.summary, title)

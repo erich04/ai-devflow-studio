@@ -1027,6 +1027,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         }), { status: 200, headers: { 'content-type': 'application/json' } })
       },
     })
+    expect(provider.billingProvider).toBe('openai_compatible')
 
     await expect(provider.completeStructuredJson?.({
       systemPrompt: 'Return one exact JSON object.',
@@ -1034,7 +1035,14 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       maxOutputTokens: 1_024,
     })).resolves.toEqual({
       value: { stateVersion: 1, ok: true },
-      usage: { inputTokens: 21, outputTokens: 8, cacheReadTokens: 3 },
+      usage: {
+        inputTokens: 21,
+        outputTokens: 8,
+        cacheReadTokens: 3,
+        cacheMissTokens: 18,
+        cacheStatus: 'complete',
+        billingProvider: 'openai_compatible',
+      },
     })
     expect(requestBody).toMatchObject({
       model: 'gpt-native-coding',
@@ -1042,6 +1050,40 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       max_tokens: 1_024,
     })
     expect(redirect).toBe('error')
+  })
+
+  it('preserves the exact DeepSeek cache hit/miss partition at the HTTP boundary', async () => {
+    const provider = createOpenAiCompatibleAgentProvider({
+      id: 'deepseek-production',
+      model: 'deepseek-v4-flash',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'secret-key',
+      fetcher: async () => new Response(JSON.stringify({
+        choices: [{ message: { content: '{"stateVersion":2,"ok":true}' } }],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          prompt_cache_hit_tokens: 40,
+          prompt_cache_miss_tokens: 60,
+          total_tokens: 120,
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } }),
+    })
+    expect(provider.billingProvider).toBe('deepseek')
+
+    await expect(provider.completeStructuredJson?.({
+      systemPrompt: 'Return JSON.', userPrompt: 'Plan.', maxOutputTokens: 100,
+    })).resolves.toMatchObject({
+      usage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: 40,
+        cacheMissTokens: 60,
+        totalTokens: 120,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
+      },
+    })
   })
 
   it('accepts one json Markdown fence but rejects prose or nested fences', async () => {
@@ -1054,6 +1096,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       apiKey: 'secret-key',
       fetcher: async () => responseFor('```json\n{"stateVersion":2,"ok":true}\n```'),
     })
+    expect(fenced.billingProvider).toBe('openai_compatible')
     await expect(fenced.completeStructuredJson?.({
       systemPrompt: 'Return JSON.', userPrompt: 'Plan.', maxOutputTokens: 100,
     })).resolves.toMatchObject({ value: { stateVersion: 2, ok: true } })

@@ -447,27 +447,25 @@ export function useDesktopWorkspace(input: {
     }
 
     let disposed = false
-    const unsubscribeRun = desktopApi.onCodingRunStatusUpdated((run) => {
-      setCodingRuns((previous) => mergeById(previous, [run]))
-      if (run.status !== 'completed') {
-        return
-      }
-
+    const refreshCodingState = (fallbackMessage: string) => {
       void desktopApi
         .loadState()
         .then((state) => {
-          if (!disposed) {
-            applyLocalExecutionState(state)
-          }
+          if (!disposed) applyLocalExecutionState(state)
         })
         .catch((error: unknown) => {
-          if (!disposed) {
-            setToast(error instanceof Error ? error.message : '刷新 Coding Agent 完成状态失败')
-          }
+          if (!disposed) setToast(error instanceof Error ? error.message : fallbackMessage)
         })
+    }
+    const unsubscribeRun = desktopApi.onCodingRunStatusUpdated((run) => {
+      setCodingRuns((previous) => mergeById(previous, [run]))
+      if (['completed', 'failed', 'timed_out', 'interrupted', 'cancelled'].includes(run.status)) {
+        refreshCodingState('刷新 Coding Agent 终态失败')
+      }
     })
     const unsubscribeEvent = desktopApi.onCodingEventAppended((event) => {
       setCodingEvents((previous) => mergeById(previous, [event]))
+      if (event.kind === 'cleanup') refreshCodingState('刷新 managed workspace 清理状态失败')
     })
     const unsubscribePermission = desktopApi.onCodingPermissionUpdated((request) => {
       setCodingPermissionRequests((previous) => mergeById(previous, [request]))

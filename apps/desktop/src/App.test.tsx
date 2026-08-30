@@ -11,6 +11,7 @@ import {
   resolveEffectivePolicy,
   type AgentReviewResult,
   type Artifact,
+  type CodingAgentRun,
   type CodingRuntimeReadiness,
   type DesktopPairingCredential,
   type GitHubDeliveryIntent,
@@ -492,6 +493,17 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   const api: DevFlowDesktopApi = {
     platform: 'test',
     loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
+    loadDataProfileDiagnostics: vi.fn().mockResolvedValue({
+      id: 'development-0123456789abcdef',
+      name: 'local-development',
+      mode: 'development',
+      source: 'saved_profile',
+      pathFingerprint: '0123456789abcdef',
+      schemaVersion: 34,
+      projectCount: 1,
+      runCount: 2,
+      latestRunUpdatedAt: '2026-08-30T12:00:00.000Z',
+    }),
     loadRemoteSnapshot: vi.fn().mockResolvedValue({
       projects: [],
       members: [],
@@ -1672,6 +1684,23 @@ describe('App', () => {
     expect(toast).toHaveAttribute('aria-live', 'polite')
   })
 
+  it('shows safe LocalStore profile diagnostics without an absolute path', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.loadDataProfileDiagnostics).toHaveBeenCalled())
+    const diagnostics = screen.getByTestId('data-profile-diagnostics')
+    fireEvent.click(within(diagnostics).getByText(/本地数据/))
+
+    expect(diagnostics).toHaveTextContent('local-development')
+    expect(diagnostics).toHaveTextContent('saved_profile')
+    expect(diagnostics).toHaveTextContent('Schema')
+    expect(diagnostics).toHaveTextContent('v34')
+    expect(diagnostics).toHaveTextContent('Run2')
+    expect(diagnostics).toHaveTextContent('0123456789abcdef')
+    expect(diagnostics).not.toHaveTextContent('/Users/')
+  })
+
   it('toggles theme preference through the topbar control', () => {
     render(<App />)
 
@@ -2364,7 +2393,7 @@ describe('App', () => {
 
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     const inspector = await screen.findByTestId('node-inspector')
-    expect(inspector).toHaveTextContent('启动 Coding Agent')
+    await waitFor(() => expect(inspector).toHaveTextContent('启动 Coding Agent'))
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
     expect(api.loadEnforcementPolicy).not.toHaveBeenCalled()
     expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
@@ -2380,6 +2409,298 @@ describe('App', () => {
       })),
     )
     expect(api.ensureCodingEngine).not.toHaveBeenCalled()
+  })
+
+  it('shows exact pending Change Set context in Workbench and jumps to the single Agents approval surface', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const codingRun = {
+      id: 'coding-run-exact-review',
+      runId: buildRun.id,
+      nodeId: 'n-build',
+      projectId: localProject.id,
+      requestedBy: 'u-ling',
+      providerId: agentProvider.id,
+      engine: 'native' as const,
+      status: 'waiting_permission' as const,
+      managedWorkspaceId: 'workspace-exact-review',
+      changeSetId: 'change-set-exact-review',
+      branchName: 'devflow/exact-review',
+      userInstruction: 'Review the exact patch.',
+      prompt: 'local prompt',
+      summary: 'Waiting for exact Change Set approval.',
+      changedPaths: [],
+      startedAt: '2026-08-30T12:00:00.000Z',
+      redacted: true,
+    }
+    const digest = 'd'.repeat(64)
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [buildRun],
+        desktopPairingCredential: fixturePairingCredential,
+        codingRuns: [codingRun],
+        codingPermissionRequests: [{
+          id: 'permission-exact-review',
+          codingRunId: codingRun.id,
+          runId: buildRun.id,
+          nodeId: 'n-build',
+          origin: 'coding_executor',
+          permission: 'patch',
+          title: 'Apply exact two-file Change Set',
+          changeSetId: codingRun.changeSetId,
+          changeSetDigest: digest,
+          risk: 'warn',
+          reasons: ['Review both files.'],
+          status: 'pending',
+          requestedAt: '2026-08-30T12:00:00.000Z',
+          expiresAt: '2099-08-30T12:05:00.000Z',
+        }],
+        managedCodingWorkspaces: [{
+          id: 'workspace-exact-review',
+          projectId: localProject.id,
+          codingRunId: codingRun.id,
+          sourcePath: localProject.path,
+          worktreePath: '/tmp/exact-review',
+          branchName: codingRun.branchName,
+          baseBranch: 'main',
+          createdAt: '2026-08-30T12:00:00.000Z',
+          cleanupStatus: 'active',
+        }],
+      })),
+      getCodingChangeSetPreview: vi.fn().mockResolvedValue({
+        stateVersion: 2,
+        id: codingRun.changeSetId,
+        codingRunId: codingRun.id,
+        phase: 'initial',
+        changedPaths: ['src/a.ts', 'src/b.ts'],
+        unifiedDiff: 'diff --git a/src/a.ts b/src/a.ts\n+a\ndiff --git a/src/b.ts b/src/b.ts\n+b',
+        changeSetDigest: digest,
+        createdAt: '2026-08-30T12:00:00.000Z',
+        expiresAt: '2099-08-30T12:05:00.000Z',
+      }),
+    })
+    render(<App />)
+
+    const inspector = await screen.findByTestId('node-inspector')
+    const summary = await within(inspector).findByTestId('workbench-coding-permission-summary')
+    expect(summary).toHaveTextContent('2 个文件')
+    expect(summary).toHaveTextContent(digest)
+    expect(within(inspector).queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument()
+
+    fireEvent.click(within(inspector).getByRole('button', { name: '审查并批准修改' }))
+    const review = await screen.findByTestId('coding-change-set-review')
+    expect(within(review).getByLabelText('src/a.ts diff')).toBeInTheDocument()
+    expect(within(review).getByLabelText('src/b.ts diff')).toBeInTheDocument()
+    expect(within(review).getByRole('button', { name: 'Approve exact Change Set' })).toBeEnabled()
+    expect(api.replyCodingPermission).not.toHaveBeenCalled()
+  })
+
+  it('explains terminal timeout evidence and confirms that retry creates a newly billable Run', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const timedOutRun = {
+      id: 'coding-run-timeout',
+      runId: buildRun.id,
+      nodeId: 'n-build',
+      projectId: localProject.id,
+      requestedBy: 'u-ling',
+      providerId: agentProvider.id,
+      engine: 'native' as const,
+      status: 'timed_out' as const,
+      managedWorkspaceId: 'workspace-timeout',
+      diffArtifactId: 'diff-timeout',
+      testEvidenceId: 'test-timeout',
+      branchName: 'devflow/timeout',
+      userInstruction: 'Implement safely.',
+      prompt: 'local prompt',
+      summary: 'Provider response timed out.',
+      changedPaths: ['src/timeout.ts'],
+      startedAt: '2026-08-30T12:00:00.000Z',
+      completedAt: '2026-08-30T12:01:00.000Z',
+      runtimeCostSummary: {
+        id: 'usage-timeout', runId: buildRun.id, nodeId: 'n-build', userId: 'u-ling', projectId: localProject.id,
+        provider: 'openai' as const, providerId: agentProvider.id, model: 'ark-code-latest', inputTokens: 140,
+        outputTokens: 20, cacheReadTokens: 10, cacheMissTokens: 130, totalTokens: 160,
+        cacheHitRate: 10 / 140, usageStatus: 'complete' as const, costStatus: 'settled' as const,
+        phase: 'provider_settlement' as const, costUsd: 0.02,
+        pricingSnapshot: {
+          providerId: agentProvider.id, model: 'ark-code-latest', tier: 'off_peak' as const,
+          effectiveAt: '2026-08-30T00:00:00.000Z', source: 'https://pricing.example.test',
+          sourceVersion: 'pricing-v1', currency: 'USD' as const, unit: 'per_1m_tokens' as const,
+          cacheHitInputUsdPerMillion: 1, cacheMissInputUsdPerMillion: 2, outputUsdPerMillion: 3,
+        },
+        breakdown: { cacheHitInputUsd: 0.001, cacheMissInputUsd: 0.004, outputUsd: 0.015, totalUsd: 0.02 },
+        providerCallSettlements: [{
+          requestPhase: 'initial' as const,
+          providerId: agentProvider.id,
+          model: 'ark-code-latest',
+          inputTokens: 140,
+          outputTokens: 20,
+          cacheReadTokens: 10,
+          cacheMissTokens: 130,
+          totalTokens: 160,
+          cacheHitRate: 10 / 140,
+          usageStatus: 'complete' as const,
+          costStatus: 'settled' as const,
+          costUsd: 0.02,
+          pricingSnapshot: {
+            providerId: agentProvider.id, model: 'ark-code-latest', tier: 'off_peak' as const,
+            effectiveAt: '2026-08-30T00:00:00.000Z', source: 'https://pricing.example.test',
+            sourceVersion: 'pricing-v1', currency: 'USD' as const, unit: 'per_1m_tokens' as const,
+            cacheHitInputUsdPerMillion: 1, cacheMissInputUsdPerMillion: 2, outputUsdPerMillion: 3,
+          },
+          breakdown: { cacheHitInputUsd: 0.001, cacheMissInputUsd: 0.004, outputUsd: 0.015, totalUsd: 0.02 },
+          timestamp: '2026-08-30T12:01:00.000Z',
+          source: 'provider_reported' as const,
+          redacted: true as const,
+        }],
+        timestamp: '2026-08-30T12:01:00.000Z',
+        source: 'provider_reported' as const, redacted: true as const,
+      },
+      redacted: true,
+    }
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [buildRun],
+        desktopPairingCredential: fixturePairingCredential,
+        codingRuns: [timedOutRun],
+        testEvidence: [{
+          id: 'test-timeout', runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+          command: 'pnpm test', cwd: '<workspace>', status: 'failed', exitCode: 1, durationMs: 20,
+          stdout: '', stderr: 'failed', summary: 'Saved test failed before timeout.', redacted: true,
+          createdAt: timedOutRun.completedAt,
+        }],
+        codingDiffArtifacts: [{
+          id: 'diff-timeout', runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+          changedPaths: ['src/timeout.ts'], patch: 'diff --git a/src/timeout.ts b/src/timeout.ts\n+timed out',
+          truncated: false, redacted: true, createdAt: timedOutRun.completedAt,
+        }],
+        managedCodingWorkspaces: [{
+          id: 'workspace-timeout', projectId: localProject.id, codingRunId: timedOutRun.id,
+          sourcePath: localProject.path, worktreePath: '/tmp/deleted-timeout', branchName: timedOutRun.branchName,
+          baseBranch: 'main', createdAt: timedOutRun.startedAt, deletedAt: timedOutRun.completedAt,
+          cleanupStatus: 'deleted',
+        }],
+        codingEvents: [{
+          id: 'event-timeout', codingRunId: timedOutRun.id, runId: buildRun.id, nodeId: 'n-build', sequence: 1,
+          kind: 'error', message: 'Provider response exceeded the runtime deadline.', timestamp: timedOutRun.completedAt,
+          redacted: true,
+        }],
+      })),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),
+    })
+    render(<App />)
+
+    const inspector = await screen.findByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('上次运行超时 · 重新运行 Coding Agent')
+    const workbenchTerminal = within(inspector).getByTestId('workbench-coding-terminal')
+    expect(workbenchTerminal).toHaveTextContent('Provider response exceeded the runtime deadline.')
+    expect(workbenchTerminal).toHaveTextContent('Saved test failed before timeout.')
+    expect(workbenchTerminal).toHaveTextContent('+timed out')
+    expect(within(workbenchTerminal).getByRole('list', { name: 'Coding Run terminal trace' })).toHaveTextContent('Provider response exceeded the runtime deadline.')
+    fireEvent.click(within(inspector).getByRole('button', { name: '上次运行超时 · 重新运行 Coding Agent' }))
+
+    const agents = await screen.findByTestId('agent-workbench')
+    expect(agents).toHaveTextContent('Provider response exceeded the runtime deadline.')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('140 / 20')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('10 / 130')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('7.1%')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('settled')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('pricing-v1')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('Actual provider settlement')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('hit $1 / 1M')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('miss $2 / 1M')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('output $3 / 1M')
+    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('total $0.02')
+    expect(screen.getByTestId('coding-provider-call-settlements')).toHaveTextContent('initial · off_peak')
+    expect(screen.getByTestId('coding-provider-call-settlements')).toHaveTextContent('140 input · 10 hit · 130 miss · 20 output')
+    expect(within(agents).queryByRole('button', { name: 'Open worktree' })).not.toBeInTheDocument()
+    fireEvent.click(within(agents).getByRole('button', { name: '上次运行超时 · 重新运行 Coding Agent' }))
+    const confirmation = screen.getByRole('alertdialog')
+    expect(confirmation).toHaveTextContent('新的 Run ID')
+    expect(confirmation).toHaveTextContent('token')
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    fireEvent.click(within(confirmation).getByRole('button', { name: '新建 Run 并重试' }))
+    await waitFor(() => expect(api.runCodingAgent).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps a completed Coding Run read-only without start or retry actions', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [buildRun],
+        desktopPairingCredential: fixturePairingCredential,
+        codingRuns: [{
+          id: 'coding-run-complete', runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+          requestedBy: 'u-ling', providerId: agentProvider.id, engine: 'native', status: 'completed',
+          branchName: 'devflow/completed', userInstruction: 'Done', prompt: 'Done', summary: 'Completed.',
+          changedPaths: ['src/done.ts'], startedAt: '2026-08-30T12:00:00.000Z',
+          completedAt: '2026-08-30T12:01:00.000Z', redacted: true,
+        }],
+      })),
+    })
+    render(<App />)
+
+    const inspector = await screen.findByTestId('node-inspector')
+    expect(inspector).toHaveTextContent('查看 Coding Run 结果')
+    expect(within(inspector).queryByRole('button', { name: '启动 Coding Agent' })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: /重试/ })).not.toBeInTheDocument()
+  })
+
+  it('selects prior Coding Runs for permission, trace, terminal, and cost audit after retry', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const oldCompletedAt = '2026-08-30T12:01:00.000Z'
+    const oldRun: CodingAgentRun = {
+      id: 'coding-run-old-failed', runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+      requestedBy: 'u-ling', providerId: agentProvider.id, engine: 'native' as const, status: 'failed' as const,
+      branchName: 'devflow/old-failed', userInstruction: 'First try', prompt: 'First try', summary: 'Old provider failure.',
+      changedPaths: [], startedAt: '2026-08-30T12:00:00.000Z', completedAt: oldCompletedAt,
+      runtimeCostSummary: {
+        id: 'cost-old', runId: buildRun.id, nodeId: 'n-build', userId: 'u-ling', projectId: localProject.id,
+        provider: 'openai' as const, providerId: agentProvider.id, model: 'old-model', inputTokens: 90,
+        outputTokens: 10, cacheReadTokens: 0, costUsd: 0.01, timestamp: '2026-08-30T12:01:00.000Z',
+        source: 'provider_reported' as const, redacted: true,
+      },
+      redacted: true,
+    }
+    const { runtimeCostSummary: _oldRuntimeCostSummary, ...oldRunWithoutCost } = oldRun
+    const latestRun: CodingAgentRun = {
+      ...oldRunWithoutCost,
+      id: 'coding-run-new-completed',
+      status: 'completed' as const,
+      branchName: 'devflow/new-completed',
+      summary: 'Retry completed.',
+      startedAt: '2026-08-30T13:00:00.000Z',
+      completedAt: '2026-08-30T13:01:00.000Z',
+    }
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject], runs: [buildRun], desktopPairingCredential: fixturePairingCredential,
+        codingRuns: [oldRun, latestRun],
+        codingPermissionRequests: [{
+          id: 'permission-old', codingRunId: oldRun.id, runId: buildRun.id, nodeId: 'n-build',
+          origin: 'coding_executor', permission: 'patch', title: 'Old exact Change Set', risk: 'warn',
+          reasons: ['Old request'], status: 'rejected', requestedAt: oldRun.startedAt, expiresAt: oldCompletedAt,
+        }],
+        codingEvents: [{
+          id: 'event-old', codingRunId: oldRun.id, runId: buildRun.id, nodeId: 'n-build', sequence: 1,
+          kind: 'error', message: 'Old terminal trace.', timestamp: oldCompletedAt, redacted: true,
+        }],
+      })),
+    })
+    render(<App />)
+
+    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+    const picker = await screen.findByLabelText('Coding Run history')
+    expect(picker).toHaveValue(latestRun.id)
+    fireEvent.change(picker, { target: { value: oldRun.id } })
+    const audit = screen.getByTestId('coding-run-audit')
+    expect(audit).toHaveTextContent(oldRun.id)
+    expect(audit).toHaveTextContent('Old provider failure.')
+    expect(audit).toHaveTextContent('permission-old · rejected')
+    expect(audit).toHaveTextContent('Old terminal trace.')
+    expect(audit).toHaveTextContent('100 · $0.01')
   })
 
   it('fails closed in Workbench when no Coding Engine is available and opens the shared configuration', async () => {
@@ -2402,14 +2723,14 @@ describe('App', () => {
     render(<App />)
 
     const inspector = await screen.findByTestId('node-inspector')
-    const codingAction = within(inspector).getByRole('button', { name: /Coding Agent/ })
-    await waitFor(() => expect(codingAction).toBeDisabled())
+    const codingAction = await within(inspector).findByRole('button', { name: '完成 Coding Runtime 配置' })
+    expect(codingAction).toBeEnabled()
     expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
       '请先选择 Coding Executor。',
     )
     expect(api.runCodingAgent).not.toHaveBeenCalled()
 
-    fireEvent.click(within(inspector).getByRole('button', { name: /配置 Coding Engine \/ Executor/ }))
+    fireEvent.click(codingAction)
     expect(await screen.findByTestId('agent-workbench')).toBeInTheDocument()
     expect(screen.getByLabelText('Coding Executor')).toBeInTheDocument()
   })
@@ -2434,7 +2755,7 @@ describe('App', () => {
 
     const inspector = await screen.findByTestId('node-inspector')
     await waitFor(() =>
-      expect(within(inspector).getByRole('button', { name: /Coding Agent/ })).toBeDisabled(),
+      expect(within(inspector).getByRole('button', { name: '完成 Coding Runtime 配置' })).toBeEnabled(),
     )
     expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
       '预算评估阻止本次运行',
@@ -3806,8 +4127,9 @@ describe('App', () => {
             inputTokens: 100,
             outputTokens: 50,
             cacheReadTokens: 25,
-            totalTokens: 175,
+            totalTokens: 150,
             costUsd: 0.25,
+            unknownCostCount: 1,
           },
         ],
         memberCost: [
@@ -3816,11 +4138,12 @@ describe('App', () => {
             inputTokens: 100,
             outputTokens: 50,
             cacheReadTokens: 25,
-            totalTokens: 175,
+            totalTokens: 150,
             costUsd: 0.25,
+            unknownCostCount: 1,
           },
         ],
-        totalCost: '$0.250',
+        totalCost: '$0.250 + unknown',
       }),
     })
     render(<App />)
@@ -3840,7 +4163,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
     expect(screen.getAllByText('Remote Team API').length).toBeGreaterThan(0)
     expect(screen.getByText('erich/remote-team-api')).toBeInTheDocument()
-    expect(screen.getAllByText('$0.250').length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/\$0\.250.*unknown/).length).toBeGreaterThan(0)
     expect(screen.getByText('Remote Lead')).toBeInTheDocument()
     expect(screen.queryByText('erich/payments-api')).not.toBeInTheDocument()
   })
@@ -5103,6 +5426,7 @@ describe('App', () => {
         redacted: true,
       })
     })
+    fireEvent.click(screen.getByTestId('flow-node-n-build'))
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
     expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('Waiting for pushed permission.')
@@ -5166,6 +5490,61 @@ describe('App', () => {
       expect(screen.getByTestId('flow-node-n-test')).toHaveTextContent('当前步骤'),
     )
     expect(screen.getByTestId('flow-node-n-build')).toHaveTextContent('已完成')
+  })
+
+  it('reloads the trusted workflow state when a coding run times out', async () => {
+    const handlers: {
+      run?: Parameters<NonNullable<DevFlowDesktopApi['onCodingRunStatusUpdated']>>[0]
+    } = {}
+    const onCodingRunStatusUpdated = vi.fn((listener: NonNullable<typeof handlers.run>) => {
+      handlers.run = listener
+      return vi.fn()
+    })
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const timedOutCodingRun = {
+      id: 'coding-run-timed-out', runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+      requestedBy: 'u-ling', providerId: 'fake-coding-engine', engine: 'fake' as const,
+      status: 'timed_out' as const, managedWorkspaceId: 'workspace-timed-out', branchName: 'devflow/timed-out',
+      userInstruction: 'Complete the build.', prompt: 'local prompt', summary: 'Provider deadline exceeded.',
+      changedPaths: [], startedAt: '2026-06-17T00:00:00.000Z', completedAt: '2026-06-17T00:01:00.000Z',
+      redacted: true,
+    }
+    const loadState = vi
+      .fn()
+      .mockResolvedValueOnce(desktopState({ projects: [localProject], runs: [buildRun] }))
+      .mockResolvedValueOnce(desktopState({
+        projects: [localProject],
+        runs: [buildRun],
+        codingRuns: [timedOutCodingRun],
+      }))
+    installDesktopApi({ loadState, onCodingRunStatusUpdated })
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    act(() => handlers.run?.(timedOutCodingRun))
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
+  })
+
+  it('reloads managed workspace cleanup state after a cleanup event', async () => {
+    const handlers: {
+      event?: Parameters<NonNullable<DevFlowDesktopApi['onCodingEventAppended']>>[0]
+    } = {}
+    const onCodingEventAppended = vi.fn((listener: NonNullable<typeof handlers.event>) => {
+      handlers.event = listener
+      return vi.fn()
+    })
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const loadState = vi.fn().mockResolvedValue(desktopState({ projects: [localProject], runs: [buildRun] }))
+    installDesktopApi({ loadState, onCodingEventAppended })
+    render(<App />)
+
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    act(() => handlers.event?.({
+      id: 'coding-cleanup-event', codingRunId: 'coding-run-cleanup', runId: buildRun.id, nodeId: 'n-build',
+      sequence: 5, kind: 'cleanup', message: 'Managed coding workspace cleanup completed.',
+      timestamp: '2026-06-17T00:02:00.000Z', metadata: { cleanupStatus: 'deleted' }, redacted: true,
+    }))
+    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
   })
 
   it('explains real opencode runtime evidence without exposing raw workspace paths', async () => {
@@ -5368,7 +5747,8 @@ describe('App', () => {
     })
     render(<App />)
 
-    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+    fireEvent.click(await screen.findByTestId('flow-node-n-build'))
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
     const workbench = await screen.findByTestId('agent-workbench')
     expect(workbench).toHaveTextContent('real opencode')
@@ -5392,7 +5772,7 @@ describe('App', () => {
   })
 
   it('shows runtime budget approval retry controls for blocked coding runs', async () => {
-    installDesktopApi({
+    const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue({
         projects: [localProject],
         runs: [{ ...fixtureRuns[0]!, currentNodeId: 'n-build' }],
@@ -5477,7 +5857,19 @@ describe('App', () => {
     expect(workbench).toHaveTextContent('projected $0.42')
     expect(workbench).toHaveTextContent('limit $0.20')
     expect(screen.getByLabelText('Runtime budget approval ID')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Retry with approval/ })).toBeDisabled()
+    const retry = screen.getByRole('button', { name: '使用预算批准重新运行' })
+    expect(retry).toBeDisabled()
+    fireEvent.change(screen.getByLabelText('Runtime budget approval ID'), {
+      target: { value: 'runtime-budget-approval-1' },
+    })
+    expect(retry).toBeEnabled()
+    fireEvent.click(retry)
+    const confirmation = screen.getByRole('alertdialog')
+    expect(confirmation).toHaveTextContent('runtime-budget-approval-1')
+    expect(confirmation).toHaveTextContent('新的 token 与费用单独结算')
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    fireEvent.click(within(confirmation).getByRole('button', { name: '新建 Run 并重试' }))
+    await waitFor(() => expect(api.runCodingAgent).toHaveBeenCalledTimes(1))
   })
 
   it('presents an unavailable runtime budget guard as a blocking recovery state without an approval retry', async () => {
@@ -5533,7 +5925,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
     await screen.findByTestId('agent-workbench')
     expect(screen.queryByLabelText('Runtime budget approval ID')).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Retry with approval/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '使用预算批准重新运行' })).not.toBeInTheDocument()
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {

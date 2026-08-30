@@ -9,8 +9,10 @@ describe('Agent Provider Native Coding v2 boundary', () => {
       id: 'deepseek',
       name: 'DeepSeek',
       model: 'deepseek-v4-flash',
+      billingProvider: 'deepseek',
       completeStructuredJson,
     } as unknown as AgentProvider)
+    expect(decisionProvider.billingProvider).toBe('deepseek')
 
     await expect(decisionProvider.complete({
       phase: 'initial',
@@ -48,7 +50,14 @@ describe('Agent Provider Native Coding v2 boundary', () => {
       model: 'deepseek-v4-flash',
       completeStructuredJson: vi.fn(async () => ({
         value: { stateVersion: 2 },
-        usage: { inputTokens: 120, outputTokens: 30, cacheReadTokens: 10 },
+        usage: {
+          inputTokens: 120,
+          outputTokens: 30,
+          cacheReadTokens: 10,
+          cacheMissTokens: 110,
+          cacheStatus: 'complete',
+          billingProvider: 'deepseek',
+        },
       })),
     } as unknown as AgentProvider)
 
@@ -63,6 +72,9 @@ describe('Agent Provider Native Coding v2 boundary', () => {
         inputTokens: 120,
         outputTokens: 30,
         cacheReadTokens: 10,
+        cacheMissTokens: 110,
+        cacheStatus: 'complete',
+        billingProvider: 'deepseek',
       },
     })
   })

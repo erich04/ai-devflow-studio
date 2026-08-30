@@ -1253,6 +1253,7 @@ try {
   const desktopEnvironment = {
     ...process.env,
     DEVFLOW_USER_DATA_DIR: userDataDirectory,
+    DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userDataDirectory, 'data-profiles.json'),
     DEVFLOW_API_BASE_URL: apiProxy.url,
     DEVFLOW_CODING_ENGINE: 'fake',
     DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',

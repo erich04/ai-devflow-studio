@@ -1,9 +1,11 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   formatUsd,
+  annotateUnknownRuntimeCosts,
   buildPolicyAwareDeliverySummaries,
   rollupTokenUsage,
   runtimeCostSummaryToTokenUsage,
+  parseCodingRuntimeCostSummary,
   parseRemoteAgentRuntimeSummary,
   parseRemoteAgentMemorySummary,
   parseRemoteAgentCoordinationSummary,
@@ -350,6 +352,7 @@ type CodingAgentSummaryRow = {
   cost_cache_read_tokens: number | null
   cost_usd: string | number | null
   cost_source: NonNullable<RemoteCodingAgentSummary['costSummary']>['source'] | null
+  cost_details: unknown
   redacted: boolean
 }
 
@@ -959,7 +962,12 @@ function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSum
   }
 
   if (row.cost_provider && row.cost_model && row.cost_source) {
-    summary.costSummary = {
+    const details = isRecord(row.cost_details) ? row.cost_details : null
+    const legacyCost =
+      !details ||
+      typeof details['usageStatus'] !== 'string' ||
+      typeof details['costStatus'] !== 'string'
+    summary.costSummary = parseCodingRuntimeCostSummary({
       id: `coding-runtime-cost-${row.run_id}-${row.node_id}`,
       runId: row.run_id,
       nodeId: row.node_id,
@@ -970,15 +978,112 @@ function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSum
       model: row.cost_model,
       inputTokens: Number(row.cost_input_tokens ?? 0),
       outputTokens: Number(row.cost_output_tokens ?? 0),
-      cacheReadTokens: Number(row.cost_cache_read_tokens ?? 0),
-      costUsd: Number(row.cost_usd ?? 0),
-      timestamp: timestamp(row.completed_at ?? row.started_at),
+      cacheReadTokens: legacyCost
+        ? null
+        : readNullableNumber(details['cacheReadTokens']),
+      ...(legacyCost
+        ? {
+            cacheMissTokens: null,
+            totalTokens: Number(row.cost_input_tokens ?? 0) + Number(row.cost_output_tokens ?? 0),
+            cacheHitRate: null,
+          }
+        : {
+            ...('cacheMissTokens' in details
+              ? { cacheMissTokens: readNullableNumber(details['cacheMissTokens']) }
+              : {}),
+            ...(typeof details['totalTokens'] === 'number'
+              ? { totalTokens: details['totalTokens'] }
+              : {}),
+            ...('cacheHitRate' in details
+              ? { cacheHitRate: readNullableNumber(details['cacheHitRate']) }
+              : {}),
+          }),
+      ...(!legacyCost && typeof details['usageStatus'] === 'string'
+        ? { usageStatus: details['usageStatus'] as Exclude<NonNullable<RemoteCodingAgentSummary['costSummary']>['usageStatus'], undefined> }
+        : legacyCost
+          ? { usageStatus: 'legacy_unknown' as const }
+          : {}),
+      ...(!legacyCost && typeof details['costStatus'] === 'string'
+        ? { costStatus: details['costStatus'] as Exclude<NonNullable<RemoteCodingAgentSummary['costSummary']>['costStatus'], undefined> }
+        : legacyCost
+          ? { costStatus: 'legacy_unverified' as const }
+          : {}),
+      ...(!legacyCost && typeof details['phase'] === 'string'
+        ? { phase: details['phase'] as Exclude<NonNullable<RemoteCodingAgentSummary['costSummary']>['phase'], undefined> }
+        : {}),
+      costUsd: details && 'costUsd' in details
+        ? readNullableNumber(details['costUsd'])
+        : Number(row.cost_usd ?? 0),
+      ...(legacyCost
+        ? { pricingSnapshot: null }
+        : 'pricingSnapshot' in details
+          ? { pricingSnapshot: details['pricingSnapshot'] as Exclude<NonNullable<RemoteCodingAgentSummary['costSummary']>['pricingSnapshot'], undefined> }
+          : {}),
+      ...(legacyCost
+        ? { breakdown: null }
+        : 'breakdown' in details
+          ? { breakdown: details['breakdown'] as Exclude<NonNullable<RemoteCodingAgentSummary['costSummary']>['breakdown'], undefined> }
+          : {}),
+      ...(!legacyCost && 'providerCallSettlements' in details
+        ? {
+            providerCallSettlements: details['providerCallSettlements'] as Exclude<
+              NonNullable<RemoteCodingAgentSummary['costSummary']>['providerCallSettlements'],
+              undefined
+            >,
+          }
+        : {}),
+      timestamp: !legacyCost && typeof details['timestamp'] === 'string'
+        ? details['timestamp']
+        : timestamp(row.completed_at ?? row.started_at),
       source: row.cost_source,
       redacted: true,
-    }
+    })
   }
 
   return summary
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function readNullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function codingCostDetails(
+  summary: RemoteCodingAgentSummary['costSummary'],
+): Record<string, unknown> | null {
+  if (!summary) return null
+  if (summary.usageStatus === undefined || summary.costStatus === undefined) {
+    return {
+      cacheReadTokens: null,
+      cacheMissTokens: null,
+      totalTokens: summary.inputTokens + summary.outputTokens,
+      cacheHitRate: null,
+      usageStatus: 'legacy_unknown',
+      costStatus: 'legacy_unverified',
+      costUsd: summary.costUsd,
+      pricingSnapshot: null,
+      breakdown: null,
+    }
+  }
+  return {
+    cacheReadTokens: summary.cacheReadTokens,
+    ...(summary.cacheMissTokens !== undefined ? { cacheMissTokens: summary.cacheMissTokens } : {}),
+    ...(summary.totalTokens !== undefined ? { totalTokens: summary.totalTokens } : {}),
+    ...(summary.cacheHitRate !== undefined ? { cacheHitRate: summary.cacheHitRate } : {}),
+    ...(summary.usageStatus !== undefined ? { usageStatus: summary.usageStatus } : {}),
+    ...(summary.costStatus !== undefined ? { costStatus: summary.costStatus } : {}),
+    ...(summary.phase !== undefined ? { phase: summary.phase } : {}),
+    costUsd: summary.costUsd,
+    ...(summary.pricingSnapshot !== undefined ? { pricingSnapshot: summary.pricingSnapshot } : {}),
+    ...(summary.breakdown !== undefined ? { breakdown: summary.breakdown } : {}),
+    ...(summary.providerCallSettlements !== undefined
+      ? { providerCallSettlements: summary.providerCallSettlements }
+      : {}),
+    timestamp: summary.timestamp,
+  }
 }
 
 function mapAgentRuntimeSummary(row: AgentRuntimeSummaryRow): RemoteAgentRuntimeSummary {
@@ -2248,7 +2353,14 @@ export function createPostgresTeamRepository(
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
         .map(runtimeCostSummaryToTokenUsage)
+        .filter((usage): usage is TokenUsage => usage !== null)
       const allTokenUsage = [...tokenUsage, ...codingTokenUsage]
+      const codingCostSummaries = codingAgentSummaries
+        .map((summary) => summary.costSummary)
+        .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
+      const unknownCostCount = codingCostSummaries.filter(
+        (summary) => runtimeCostSummaryToTokenUsage(summary) === null,
+      ).length
       const gateOverrides = gateOverrideRows.map(mapGateOverride)
       const runtimeBudgetPolicies = runtimeBudgetPolicyRows.map(mapRuntimeBudgetPolicy)
       const runtimeBudgetApprovals = runtimeBudgetApprovalRows.map(mapRuntimeBudgetApproval)
@@ -2257,9 +2369,17 @@ export function createPostgresTeamRepository(
         projects: projectRows.map(mapProject),
         members: memberRows.map(mapMember),
         runs: runsBundle.runs,
-        projectCost: rollupTokenUsage(allTokenUsage, 'projectId'),
-        memberCost: rollupTokenUsage(allTokenUsage, 'userId'),
-        totalCost: formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
+        projectCost: annotateUnknownRuntimeCosts(
+          rollupTokenUsage(allTokenUsage, 'projectId'),
+          codingCostSummaries,
+          'projectId',
+        ),
+        memberCost: annotateUnknownRuntimeCosts(
+          rollupTokenUsage(allTokenUsage, 'userId'),
+          codingCostSummaries,
+          'userId',
+        ),
+        totalCost: `${formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0))}${unknownCostCount > 0 ? ' + unknown' : ''}`,
         testEvidenceSummaries,
         agentReviews,
         agentTraces: agentTraceRows.map(mapAgentTrace),
@@ -2858,9 +2978,10 @@ export function createPostgresTeamRepository(
             cost_cache_read_tokens,
             cost_usd,
             cost_source,
+            cost_details,
             redacted
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22::jsonb, $23)
           ON CONFLICT (id) DO UPDATE
           SET node_id = excluded.node_id,
               project_id = excluded.project_id,
@@ -2880,6 +3001,7 @@ export function createPostgresTeamRepository(
               cost_cache_read_tokens = excluded.cost_cache_read_tokens,
               cost_usd = excluded.cost_usd,
               cost_source = excluded.cost_source,
+              cost_details = excluded.cost_details,
               redacted = excluded.redacted
           WHERE coding_agent_summaries.organization_id = excluded.organization_id
             AND coding_agent_summaries.run_id = excluded.run_id
@@ -2909,6 +3031,7 @@ export function createPostgresTeamRepository(
           summary.costSummary?.cacheReadTokens ?? null,
           summary.costSummary?.costUsd ?? null,
           summary.costSummary?.source ?? null,
+          summary.costSummary ? JSON.stringify(codingCostDetails(summary.costSummary)) : null,
           summary.redacted,
         ],
       )

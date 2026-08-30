@@ -1089,4 +1089,44 @@ describe('workflow command core', () => {
     expect(decision.allowed).toBe(false)
     expect(decision.blockers.map((item) => item.code)).toEqual(['pr_artifact_missing'])
   })
+
+  it('fails closed when the requirement Gate still points at an older clarification revision', () => {
+    const fixture = currentClarificationGate()
+    const v1 = fixture.evidence.artifacts.find((artifact) => artifact.kind === 'clarification')!
+    const executor = {
+      version: 1 as const, kind: 'direct-provider' as const, executorId: 'fake', executorVersion: '1',
+      capabilityProfile: 'repository-read-only-v1' as const, model: 'fake', startedAt: now,
+      completedAt: now, durationMs: 1, terminalReason: 'success' as const, contextDigest: 'b'.repeat(64),
+    }
+    const trackedV1: Artifact = {
+      ...v1,
+      clarificationRevision: {
+        version: 1, revision: 1, status: 'superseded', revisionDigest: 'a'.repeat(64),
+        rawRequestArtifactId: fixture.evidence.artifacts.find((artifact) => artifact.kind === 'raw_request')!.id,
+        feedbackArtifactIds: [], goals: ['Goal'], acceptanceCriteria: ['Acceptance'], nonGoals: ['Non-goal'],
+        assumptions: [], risks: [], openQuestions: [], executor, generatedAt: now,
+      },
+    }
+    const v2: Artifact = {
+      ...trackedV1,
+      id: `${trackedV1.id}-v2`,
+      updatedAt: '2026-07-31T12:01:00.000Z',
+      clarificationRevision: {
+        ...trackedV1.clarificationRevision!, revision: 2, status: 'review_requested',
+        revisionDigest: 'c'.repeat(64), previousRevisionArtifactId: trackedV1.id,
+      },
+    }
+    const decision = evaluateWorkflowCommand({
+      run: fixture.run,
+      command: { type: 'approve_gate', nodeId: fixture.gateId },
+      evidence: {
+        ...fixture.evidence,
+        artifacts: fixture.evidence.artifacts.map((artifact) => artifact.id === v1.id ? trackedV1 : artifact).concat(v2),
+      },
+    })
+    expect(decision).toMatchObject({
+      allowed: false,
+      blockers: [{ code: 'clarification_revision_stale' }],
+    })
+  })
 })

@@ -13,6 +13,7 @@ import {
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import {
+  buildClarificationReviewBundle,
   formatUsd,
   projectKnowledgeReferencesForNode,
   resolveKnowledgeReferenceSemantics,
@@ -41,10 +42,12 @@ import {
   type TokenUsageRollup,
   type WorkflowNode,
   type WorkflowRun,
+  type StageAgentExecutorKind,
 } from '@ai-devflow/shared'
 import { GateEnforcementPanel, GateRemediationPanel } from '../GateEnforcementPanel'
 import { GitHubDeliveryPanel } from '../GitHubDeliveryPanel'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
+import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
 import {
   buildWorkflowNodePresentation,
   buildWorkflowBoard,
@@ -248,6 +251,9 @@ export function Inspector({
   canSaveOverride,
   onApprove,
   onCompleteAgentNode,
+  onRequestClarificationChanges = () => undefined,
+  stageAgentExecutorKind = 'direct-provider',
+  onStageAgentExecutorKindChange = () => undefined,
   onSaveGateOverride,
   onStartRemediationRetry,
   pairingState,
@@ -257,6 +263,7 @@ export function Inspector({
   onOpenKnowledgeReview,
   onOpenKnowledgeReference,
   onRunCodingAgent,
+  onOpenCodingAgent,
   onCreatePrDraft,
   onPrepareGitHubDelivery,
   onReviseGitHubDelivery,
@@ -277,6 +284,7 @@ export function Inspector({
   codingReadiness,
   codingReadinessError,
   onOpenCodingConfiguration,
+  codingActionProjection,
 }: {
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
@@ -299,6 +307,9 @@ export function Inspector({
   canSaveOverride: boolean
   onApprove: () => void
   onCompleteAgentNode: () => void
+  onRequestClarificationChanges?: (reason: string) => void
+  stageAgentExecutorKind?: StageAgentExecutorKind
+  onStageAgentExecutorKindChange?: (kind: StageAgentExecutorKind) => void
   onSaveGateOverride: (reason: string) => void
   onStartRemediationRetry: (candidateId: string) => void
   pairingState: 'unpaired' | 'paired' | 'sync_failed'
@@ -308,6 +319,7 @@ export function Inspector({
   onOpenKnowledgeReview: () => void
   onOpenKnowledgeReference: (referenceId: string, documentId?: string) => void
   onRunCodingAgent: () => void
+  onOpenCodingAgent?: () => void
   onCreatePrDraft: () => void
   onPrepareGitHubDelivery: () => void
   onReviseGitHubDelivery: () => void
@@ -328,8 +340,10 @@ export function Inspector({
   codingReadiness: CodingRuntimeReadiness | null
   codingReadinessError: string
   onOpenCodingConfiguration: () => void
+  codingActionProjection?: CodingRuntimeActionProjection
 }) {
   const [requestedTab, setRequestedTab] = useState('状态')
+  const [clarificationFeedbackDraft, setClarificationFeedbackDraft] = useState('')
 
   useEffect(() => {
     if (
@@ -374,6 +388,7 @@ export function Inspector({
     canApprove,
     hasTeamProjectBinding: hasDeliveryProjectBinding,
     canVerifyGitHubDeliveryRevocation,
+    ...(codingActionProjection ? { codingActionProjection } : {}),
     ...(selectedGitHubDeliveryIntent
       ? { githubDeliveryIntent: selectedGitHubDeliveryIntent }
       : {}),
@@ -384,6 +399,14 @@ export function Inspector({
   const gateImpact = selectedRun
     ? buildWorkflowGateImpact({ run: selectedRun, node: selectedNode, artifacts: workflowArtifacts })
     : { state: 'none' as const, summary: '当前节点不影响后续 Gate。' }
+  const clarificationReview =
+    selectedRun && selectedNode.kind === 'gate' && selectedNode.stage === 'clarify'
+      ? buildClarificationReviewBundle({
+          run: selectedRun,
+          gateNode: selectedNode,
+          artifacts: workflowArtifacts,
+        })
+      : undefined
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&
     supportContext.runId === selectedRun?.id &&
@@ -402,6 +425,7 @@ export function Inspector({
     completeAgent: onCompleteAgentNode,
     approveGate: onApprove,
     runCodingAgent: onRunCodingAgent,
+    openCodingAgent: onOpenCodingAgent ?? onOpenCodingConfiguration,
     createPrDraft: onCreatePrDraft,
     prepareGitHubDelivery: onPrepareGitHubDelivery,
     reviseGitHubDelivery: onReviseGitHubDelivery,
@@ -522,6 +546,7 @@ export function Inspector({
       case 'approveGate':
         return <CheckCircle2 size={16} />
       case 'runCodingAgent':
+      case 'openCodingAgent':
         return <Code2 size={16} />
       case 'createPrDraft':
         return <GitPullRequest size={16} />
@@ -562,7 +587,8 @@ export function Inspector({
     ? buildCodingReadinessDisplay(codingReadiness)
     : null
   const exposesCodingAction = primaryNextAction?.id === 'runCodingAgent' ||
-    secondaryNextActions.some((action) => action.id === 'runCodingAgent')
+    primaryNextAction?.id === 'openCodingAgent' ||
+    secondaryNextActions.some((action) => action.id === 'runCodingAgent' || action.id === 'openCodingAgent')
 
   const retrievalStrategyLabel = (reference: KnowledgeReference) => ({
     heuristic: '启发式检索',
@@ -1046,6 +1072,82 @@ export function Inspector({
     />
   )
 
+  const renderClarificationReview = () => clarificationReview ? (
+    <section className="clarification-review" data-testid="clarification-review">
+      <span className="panel-label">Requirement Gate · 版本化澄清审查</span>
+      <p className={`empty-note ${clarificationReview.state === 'ready' ? '' : 'bad'}`}>
+        {clarificationReview.message}
+      </p>
+      <div className="clarification-review__comparison">
+        <article className="artifact-card" data-testid="clarification-raw-request">
+          <div className="compact-row"><strong>Raw Request</strong><span className="pill soft">immutable</span></div>
+          <p>{clarificationReview.rawRequest?.content ?? 'Raw Request 不可用'}</p>
+          {clarificationReview.rawRequest ? <code>{clarificationReview.rawRequest.id}</code> : null}
+        </article>
+        <article className="artifact-card" data-testid="clarification-repository-findings">
+          <div className="compact-row"><strong>Repository Findings</strong><span className="pill soft">read-only evidence</span></div>
+          {clarificationReview.repositoryFindings ? (
+            <>
+              {clarificationReview.repositoryFindings.verifiedFacts.map((fact) => (
+                <p key={fact.id}>{fact.statement}</p>
+              ))}
+              {clarificationReview.repositoryFindings.citations.map((citation) => (
+                <code key={citation.id}>{citation.path} · {citation.contentDigest}</code>
+              ))}
+              {clarificationReview.repositoryFindings.uncheckedScopes.length ? (
+                <p>未核验：{clarificationReview.repositoryFindings.uncheckedScopes.join('、')}</p>
+              ) : null}
+            </>
+          ) : <p>尚未进行代码核验。</p>}
+        </article>
+        <article className="artifact-card" data-testid="clarification-current-revision">
+          <div className="compact-row">
+            <strong>Clarification Revision</strong>
+            <span className="pill soft">
+              v{clarificationReview.activeRevision?.clarificationRevision?.revision ?? 'legacy'} · {clarificationReview.activeRevision?.clarificationRevision?.status ?? 'untracked'}
+            </span>
+          </div>
+          <p>{clarificationReview.activeRevision?.content ?? '当前版本不可用'}</p>
+          {clarificationReview.activeRevision ? <code>{clarificationReview.activeRevision.id}</code> : null}
+        </article>
+      </div>
+      {clarificationReview.revisions.length > 1 || clarificationReview.feedback.length ? (
+        <details data-testid="clarification-revision-history">
+          <summary>版本与修订意见历史</summary>
+          {clarificationReview.revisions.map((revision) => (
+            <p key={revision.id}>v{revision.clarificationRevision?.revision ?? 1} · {revision.clarificationRevision?.status ?? 'legacy'} · {revision.updatedAt}</p>
+          ))}
+          {clarificationReview.feedback.map((feedback) => (
+            <p key={feedback.id}>{feedback.clarificationFeedback?.actorName ?? 'Reviewer'} · {feedback.updatedAt} · {feedback.content}</p>
+          ))}
+        </details>
+      ) : null}
+      {clarificationReview.state === 'ready' && clarificationReview.activeRevision?.clarificationRevision ? (
+        <div className="clarification-review__feedback">
+          <label htmlFor="clarification-feedback">结构化修订意见</label>
+          <textarea
+            id="clarification-feedback"
+            value={clarificationFeedbackDraft}
+            maxLength={4000}
+            onChange={(event) => setClarificationFeedbackDraft(event.target.value)}
+            placeholder="说明需要修订的边界、验收条件或未解决问题"
+          />
+          <button
+            className="ghost-button"
+            type="button"
+            disabled={!clarificationFeedbackDraft.trim() || hasInspectorWriteLock}
+            onClick={() => {
+              onRequestClarificationChanges(clarificationFeedbackDraft)
+              setClarificationFeedbackDraft('')
+            }}
+          >
+            请求修订当前版本
+          </button>
+        </div>
+      ) : null}
+    </section>
+  ) : null
+
   const renderRemediationActions = () => (
     <GateRemediationPanel
       decision={gateEnforcementDecision}
@@ -1100,6 +1202,70 @@ export function Inspector({
         <p className="section-title">Next best action</p>
         <h3>{viewModel.nextAction.title}</h3>
         <p className="meta">{viewModel.nextAction.copy}</p>
+        {selectedNode.kind === 'agent' && selectedNode.stage === 'clarify' ? (
+          <label className="stage-agent-executor" htmlFor="stage-agent-executor">
+            澄清执行器
+            <select
+              id="stage-agent-executor"
+              value={stageAgentExecutorKind}
+              disabled={hasInspectorWriteLock}
+              onChange={(event) => onStageAgentExecutorKindChange(event.target.value as StageAgentExecutorKind)}
+            >
+              <option value="direct-provider">Direct Provider</option>
+              <option value="local-agent">Read-only Local Agent (OpenCode)</option>
+            </select>
+            <small>{stageAgentExecutorKind === 'local-agent' ? '只读检索；不可写仓库、推进 Gate 或自动回退。' : '兼容现有 Provider 路径。'}</small>
+          </label>
+        ) : null}
+        {codingActionProjection?.action.id === 'review-permission' && codingActionProjection.permission ? (
+          <div className="coding-permission-summary" data-testid="workbench-coding-permission-summary">
+            <strong>{codingActionProjection.permission.request.title}</strong>
+            <span>{codingActionProjection.permission.changedPaths.length} 个文件</span>
+            {codingActionProjection.permission.changeSetDigest ? (
+              <code>{codingActionProjection.permission.changeSetDigest}</code>
+            ) : null}
+            <span>
+              {codingActionProjection.permission.expired
+                ? '已过期'
+                : `剩余 ${Math.ceil(codingActionProjection.permission.remainingMs / 1_000)} 秒`}
+            </span>
+          </div>
+        ) : null}
+        {codingActionProjection?.terminal ? (
+          <section className="workbench-coding-terminal" data-testid="workbench-coding-terminal" aria-label="Coding Run terminal evidence">
+            <div className="coding-permission-summary">
+              <strong>{codingActionProjection.latestRun?.id ?? 'Coding Run'} · {codingActionProjection.phase}</strong>
+              <span>Provider {codingActionProjection.terminal.providerId}</span>
+              <span>Tokens {codingActionProjection.terminal.totalTokens ?? 'unknown'}</span>
+              <span>Cost {typeof codingActionProjection.terminal.costUsd === 'number' ? formatUsd(codingActionProjection.terminal.costUsd) : 'unknown'}</span>
+              <span>Tests {codingActionProjection.terminal.testStatus ?? 'not archived'}</span>
+              <span>Cleanup {codingActionProjection.terminal.workspaceCleanupStatus}</span>
+            </div>
+            <p><strong>终态原因：</strong>{codingActionProjection.terminal.reason}</p>
+            {codingActionProjection.terminal.changedPaths.length > 0 ? (
+              <div className="knowledge-reference-meta" aria-label="Changed paths">
+                {codingActionProjection.terminal.changedPaths.map((path) => <code key={path}>{path}</code>)}
+              </div>
+            ) : null}
+            {codingActionProjection.terminal.testSummary ? <p>{codingActionProjection.terminal.testSummary}</p> : null}
+            {codingActionProjection.terminal.diffPatch ? (
+              <details open>
+                <summary>Diff Artifact</summary>
+                <pre className="diff-preview" tabIndex={0}>{codingActionProjection.terminal.diffPatch}</pre>
+              </details>
+            ) : null}
+            {codingActionProjection.terminal.trace.length > 0 ? (
+              <details open>
+                <summary>Trace · {codingActionProjection.terminal.trace.length}</summary>
+                <ol aria-label="Coding Run terminal trace">
+                  {codingActionProjection.terminal.trace.map((event) => (
+                    <li key={event.id}><span>{event.kind}</span> · {event.message}</li>
+                  ))}
+                </ol>
+              </details>
+            ) : null}
+          </section>
+        ) : null}
         {primaryNextAction || secondaryNextActions.length ? (
           <div className="inspector-next-actions">
             {primaryNextAction ? renderActionButton(primaryNextAction, 'primary') : null}
@@ -1110,7 +1276,7 @@ export function Inspector({
             ) : null}
           </div>
         ) : null}
-        {exposesCodingAction && codingReadinessDisplay?.status !== 'ready' ? (
+        {exposesCodingAction && codingActionProjection?.action.id === 'configure' && codingReadinessDisplay?.status !== 'ready' ? (
           <div className="coding-readiness-summary" data-testid="workbench-coding-readiness">
             <strong>Coding Runtime：{codingReadinessDisplay?.statusLabel ?? '正在检查'}</strong>
             <p>{codingReadinessDisplay?.items.find((item) => item.state === 'blocked')?.detail ?? codingReadinessError ?? '读取启动前检查后才可执行；此时不会创建 worktree 或修改代码。'}</p>
@@ -1120,6 +1286,7 @@ export function Inspector({
           </div>
         ) : null}
       </div>
+      {renderClarificationReview()}
       <div className="tabbar" role="tablist" aria-label={`${viewModel.visualKind} inspector tabs`}>
         {viewModel.tabs.map((tab) => (
           <button
@@ -1257,7 +1424,7 @@ export function TeamOverview({
                         : '无当前 Gate 数据'}
                     </td>
                     <td>{memberSummary}</td>
-                    <td>{rollup ? `${rollup.totalTokens.toLocaleString()} · ${formatUsd(rollup.costUsd)}` : `0 · ${totalCost}`}</td>
+                    <td>{rollup ? `${rollup.totalTokens.toLocaleString()} · ${formatUsd(rollup.costUsd)}${rollup.unknownCostCount ? ` · ${rollup.unknownCostCount} unknown` : ''}` : `0 · ${totalCost}`}</td>
                     <td><span className={`pill ${isSelectedProject ? 'accent' : 'soft'}`}>{isSelectedProject ? snapshotSource : dataOrigin}</span></td>
                   </tr>
                 )

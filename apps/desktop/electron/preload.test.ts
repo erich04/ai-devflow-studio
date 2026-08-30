@@ -20,6 +20,7 @@ vi.mock('electron', () => ({
 await import('./preload')
 
 type ExposedDesktopApi = {
+  loadDataProfileDiagnostics: () => Promise<unknown>
   startAgentRuntime: (input: {
     runId: string
     nodeId: string
@@ -147,6 +148,19 @@ type ExposedDesktopApi = {
 const exposedApi = electron.exposeInMainWorld.mock.calls[0]?.[1] as ExposedDesktopApi
 
 describe('Electron preload remote sync operator surface', () => {
+  it('exposes the local-only data profile diagnostics channel without renderer input', async () => {
+    const diagnostics = {
+      name: 'local-development',
+      pathFingerprint: '0123456789abcdef',
+      schemaVersion: 34,
+      runCount: 2,
+    }
+    electron.invoke.mockResolvedValueOnce(diagnostics)
+
+    await expect(exposedApi.loadDataProfileDiagnostics()).resolves.toBe(diagnostics)
+    expect(electron.invoke).toHaveBeenLastCalledWith(ipcChannels.loadDataProfileDiagnostics)
+  })
+
   it('exposes identifier-only Agent Runtime commands and the exact update subscription', async () => {
     const snapshot = { runtime: { id: 'agent-runtime-1', status: 'checkpointed' } }
     electron.invoke.mockResolvedValue(snapshot)

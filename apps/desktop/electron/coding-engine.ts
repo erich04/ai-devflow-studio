@@ -70,6 +70,11 @@ export type CodingEngineApprovePermissionInput = {
   project: LocalProject
   request: CodingPermissionRequest
   now: string
+  reportPhase?: (input: {
+    status: Extract<CodingAgentRun['status'], 'applying' | 'testing'>
+    summary: string
+    timestamp: string
+  }) => Promise<void>
 }
 
 export type CodingEngineApprovePermissionCompletedResult = {

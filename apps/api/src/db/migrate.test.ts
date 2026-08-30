@@ -160,6 +160,11 @@ describe('team database migration runner', () => {
         name: '0024_agent_review_subject_manifest',
         fileName: '0024_agent_review_subject_manifest.sql',
       },
+      {
+        version: 25,
+        name: '0025_runtime_cost_settlement',
+        fileName: '0025_runtime_cost_settlement.sql',
+      },
     ])
 
     const [
@@ -181,6 +186,7 @@ describe('team database migration runner', () => {
       agentProviderIdentity,
       secureDesktopPairing,
       agentReviewSubjectManifest,
+      runtimeCostSettlement,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -284,6 +290,11 @@ describe('team database migration runner', () => {
       name: '0024_agent_review_subject_manifest',
     })
     expect(agentReviewSubjectManifest?.sql).toContain('ADD COLUMN IF NOT EXISTS context_manifest jsonb')
+    expect(runtimeCostSettlement).toMatchObject({
+      version: 25,
+      name: '0025_runtime_cost_settlement',
+    })
+    expect(runtimeCostSettlement?.sql).toContain('ADD COLUMN IF NOT EXISTS cost_details jsonb')
     expect(localDevelopmentAuth?.sql).toContain("'local-development'")
     expect(localDevelopmentAuth?.sql).toContain('auth_accounts_provider_check')
   })

@@ -81,6 +81,37 @@ Cancellation is idempotent and propagates through the executor handle. A late ev
 after cancellation or a terminal result. Permission defaults to deny on expiry. Cleanup outcome is
 part of the terminal result, not a swallowed finally-block detail.
 
+### One Runtime Action And Approval Projection
+
+Workbench and Agents render one pure, non-persisted Coding Runtime action projection. Its inputs are
+the exact Run, Node and Local Project scope, persisted run/permission/workspace/Evidence history, the
+main-owned readiness result, an explicitly supplied clock, and—when applicable—the verified Change
+Set preview. The projection selects active history before terminal history, detects a conflicting
+active run in the same Local Project, and maps every runtime state to one of start, progress,
+permission review, result, retry, or configuration. A completed run is evidence-only. A failed,
+timed-out, interrupted, or cancelled run can only be retried by explicitly creating a new Coding Run;
+the UI states that this may invoke the Provider and incur new token usage and cost.
+
+### Provider-reported cost settlement
+
+Preflight budget evaluation and provider settlement are different records. Preflight reserves a
+bounded worst-case envelope before any paid call. Settlement then validates the provider's exact
+usage partition and prices it with an immutable provider/model/time snapshot. Cache-hit input is a
+subset of prompt input, so it is never added again to total tokens.
+
+For DeepSeek, hit plus miss must equal prompt tokens. Missing splits remain incomplete/unknown;
+conflicting splits fail closed. Unknown models and legacy records are never automatically repriced.
+Budget, Trace, Agents cost detail, persistence, and Team sync consume the same canonical settlement.
+The source-controlled catalog and effective versions live in
+`docs/engineering/runtime-pricing-catalog.md`.
+
+Workbench never duplicates permission approval. It shows a bounded summary and navigates to the
+same Agents approval surface. Exact Change Set approval is full-width, separated by file, horizontally
+scrollable without line wrapping, and keeps approve/reject actions visible. Approval fails closed
+unless request, Coding Run, Workflow node, Change Set ID, digest, preview, and TTL still agree. Electron
+main repeats the TTL/digest/current-state checks, so renderer state is never execution authority.
+Deleted or cleaned worktrees are evidence only and cannot be opened.
+
 ### Migration
 
 The existing OpenCode implementation is wrapped first without rewriting its tested transport. The

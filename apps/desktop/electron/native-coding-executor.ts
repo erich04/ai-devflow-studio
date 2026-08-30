@@ -181,7 +181,7 @@ export function createAgentProviderNativeCodingDecisionProvider(
       return {
         decision: completed.value,
         usage: {
-          tokens: inputTokens + outputTokens + cacheReadTokens,
+          tokens: inputTokens + outputTokens,
           costUsd: estimateOpenAiCompatibleUsageCost({ inputTokens, outputTokens }),
         },
       }

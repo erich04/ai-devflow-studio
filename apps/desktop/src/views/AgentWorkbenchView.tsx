@@ -1,5 +1,5 @@
 import { ArrowLeft, Bot, CheckCircle2, Code2, FolderOpen, Save, Settings2, TestTube2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   formatUsd,
   type AgentProviderConfig,
@@ -8,7 +8,6 @@ import {
   type AgentTrace,
   type CodingAgentEvent,
   type CodingAgentRun,
-  type CodingChangeSetPreview,
   type CodingDiffArtifact,
   type CodingPermissionDecision,
   type CodingPermissionRequest,
@@ -35,6 +34,8 @@ import { codingRuntimeLabel, codingTerminalLabel, type SupportContext } from '..
 import type { DevFlowDesktopApi } from '../desktop-api'
 import type { PendingInspectorAction } from '../app/node-inspector-view-model'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
+import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
+import { CodingChangeSetReview } from './CodingChangeSetReview'
 
 export function AgentWorkbenchView({
   desktopApi,
@@ -74,6 +75,8 @@ export function AgentWorkbenchView({
   runtimeBudgetApprovalId,
   onRuntimeBudgetApprovalIdChange,
   codingRuns,
+  codingHistoryEvents,
+  codingHistoryPermissionRequests,
   retryAttempts,
   latestCodingRun,
   codingEvents,
@@ -88,6 +91,7 @@ export function AgentWorkbenchView({
   codingReadiness,
   codingReadinessError,
   onRefreshCodingReadiness,
+  codingActionProjection,
 }: {
   desktopApi: DevFlowDesktopApi | null
   localProjectId: string | undefined
@@ -117,7 +121,7 @@ export function AgentWorkbenchView({
   latestTrace: AgentTrace | undefined
   latestUsage: AgentTokenUsage | undefined
   onRunCodingAgent: () => void
-  onReplyCodingPermission: (decision: CodingPermissionDecision['decision']) => void
+  onReplyCodingPermission: (decision: CodingPermissionDecision['decision']) => void | Promise<void>
   onCancelCodingRun: () => void
   onOpenCodingWorktree: () => void
   onDeleteCodingWorktree: () => void
@@ -126,6 +130,8 @@ export function AgentWorkbenchView({
   runtimeBudgetApprovalId: string
   onRuntimeBudgetApprovalIdChange: (value: string) => void
   codingRuns: CodingAgentRun[]
+  codingHistoryEvents: CodingAgentEvent[]
+  codingHistoryPermissionRequests: CodingPermissionRequest[]
   retryAttempts: RetryAttempt[]
   latestCodingRun: CodingAgentRun | undefined
   codingEvents: CodingAgentEvent[]
@@ -140,6 +146,7 @@ export function AgentWorkbenchView({
   codingReadiness: CodingRuntimeReadiness | null
   codingReadinessError: string
   onRefreshCodingReadiness: (approvalId?: string) => Promise<CodingRuntimeReadiness | null>
+  codingActionProjection?: CodingRuntimeActionProjection
 }) {
   const [codingConfiguration, setCodingConfiguration] = useState<CodingRuntimeConfiguration | null>(null)
   const [codingExecutor, setCodingExecutor] = useState<'native-model' | 'opencode-http'>('native-model')
@@ -147,12 +154,17 @@ export function AgentWorkbenchView({
   const [codingDiscovery, setCodingDiscovery] = useState<CodingRuntimeDiscovery | null>(null)
   const [opencodeProviderId, setOpencodeProviderId] = useState('openai')
   const [opencodeModelId, setOpencodeModelId] = useState('gpt-4.1-mini')
-  const [pendingChangeSetPreview, setPendingChangeSetPreview] = useState<CodingChangeSetPreview | null>(null)
   const [budgetPolicy, setBudgetPolicy] = useState<RuntimeBudgetPolicy | null>(null)
   const [monthlyLimitUsd, setMonthlyLimitUsd] = useState('0.20')
   const [warningThresholdUsd, setWarningThresholdUsd] = useState('0.10')
   const [codingConfigurationStatus, setCodingConfigurationStatus] = useState('')
   const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
+  const [isReplyingPermission, setIsReplyingPermission] = useState(false)
+  const [showRetryConfirmation, setShowRetryConfirmation] = useState(false)
+  const [selectedAuditCodingRunId, setSelectedAuditCodingRunId] = useState('')
+  const codingFocusRef = useRef<HTMLElement>(null)
+  const evidenceRef = useRef<HTMLElement>(null)
+  const runtimeSettingsRef = useRef<HTMLDetailsElement>(null)
   const codingConfigurationProviderName = codingConfiguration
     ? providers.find((provider) => provider.id === codingConfiguration.providerId)?.name ?? '旧版 Provider'
     : undefined
@@ -197,27 +209,17 @@ export function AgentWorkbenchView({
   }, [codingProviderId, selectedProviderId])
 
   useEffect(() => {
-    if (!desktopApi || !pendingCodingPermission?.changeSetId) {
-      setPendingChangeSetPreview(null)
-      return
-    }
-    let active = true
-    void desktopApi.getCodingChangeSetPreview({
-      changeSetId: pendingCodingPermission.changeSetId,
-      codingRunId: pendingCodingPermission.codingRunId,
-    }).then((preview) => {
-      if (active) setPendingChangeSetPreview(preview)
-    }).catch((error) => {
-      if (!active) return
-      setPendingChangeSetPreview(null)
-      setCodingConfigurationStatus(
-        error instanceof Error ? error.message : '无法读取待审批 Change Set',
-      )
-    })
-    return () => {
-      active = false
-    }
-  }, [desktopApi, pendingCodingPermission?.changeSetId, pendingCodingPermission?.codingRunId])
+    if (supportContext?.focusTarget !== 'coding-agent') return
+    const target = codingActionProjection?.action.target === 'agents-evidence'
+      ? evidenceRef.current
+      : codingFocusRef.current
+    target?.focus()
+    target?.scrollIntoView?.({ block: 'start' })
+  }, [codingActionProjection?.action.target, supportContext])
+
+  useEffect(() => {
+    setSelectedAuditCodingRunId(latestCodingRun?.id ?? '')
+  }, [latestCodingRun?.id])
 
   async function saveCodingConfiguration() {
     if (!desktopApi || !localProjectId) return
@@ -323,12 +325,6 @@ export function AgentWorkbenchView({
     }
   }
 
-  const pendingPermissionPaths = useMemo(
-    () => pendingChangeSetPreview?.changedPaths ?? (pendingCodingPermission?.diffPreview
-      ? [...pendingCodingPermission.diffPreview.matchAll(/^diff --git a\/(.+?) b\/.+$/gmu)].map((match) => match[1]!)
-      : pendingCodingPermission?.filePath ? [pendingCodingPermission.filePath] : []),
-    [pendingChangeSetPreview, pendingCodingPermission],
-  )
   const viewModel = buildAgentConsoleViewModel({
     providers,
     selectedProviderId,
@@ -353,6 +349,7 @@ export function AgentWorkbenchView({
     diff,
     bootstrapEvidence,
     testEvidence,
+    ...(codingActionProjection ? { codingActionProjection } : {}),
   })
   const cleanupStatus = workspace?.cleanupStatus ?? (workspace?.deletedAt ? 'deleted' : workspace ? 'active' : 'none')
   const cleanupSummary =
@@ -367,6 +364,33 @@ export function AgentWorkbenchView({
   const codingReadinessDisplay = codingReadiness
     ? buildCodingReadinessDisplay(codingReadiness)
     : null
+  const exactChangeSetPermission = codingActionProjection?.permission?.kind === 'change-set'
+    ? codingActionProjection.permission
+    : undefined
+  const canOpenManagedWorkspace = codingActionProjection?.terminal
+    ? codingActionProjection.terminal.canOpenWorkspace
+    : Boolean(workspace && !workspace.deletedAt && (workspace.cleanupStatus ?? 'active') === 'active')
+  const selectedAuditCodingRun = codingRuns.find((run) => run.id === selectedAuditCodingRunId) ?? latestCodingRun
+  const selectedAuditEvents = selectedAuditCodingRun
+    ? codingHistoryEvents
+        .filter((event) => event.codingRunId === selectedAuditCodingRun.id)
+        .sort((left, right) => left.sequence - right.sequence)
+    : []
+  const selectedAuditPermissions = selectedAuditCodingRun
+    ? codingHistoryPermissionRequests
+        .filter((request) => request.codingRunId === selectedAuditCodingRun.id)
+        .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
+    : []
+
+  async function replyPermission(decision: CodingPermissionDecision['decision']) {
+    if (isReplyingPermission) return
+    setIsReplyingPermission(true)
+    try {
+      await onReplyCodingPermission(decision)
+    } finally {
+      setIsReplyingPermission(false)
+    }
+  }
 
   function runPrimaryAction(action: AgentConsoleAction) {
     if (action.disabled) {
@@ -384,7 +408,24 @@ export function AgentWorkbenchView({
     }
 
     if (action.id === 'run-coding') {
+      if (codingActionProjection?.action.id === 'retry') {
+        setShowRetryConfirmation(true)
+        return
+      }
       onRunCodingAgent()
+      return
+    }
+
+    if (action.id === 'view-coding') {
+      evidenceRef.current?.focus()
+      evidenceRef.current?.scrollIntoView?.({ block: 'start' })
+      return
+    }
+
+    if (action.id === 'configure-coding') {
+      if (runtimeSettingsRef.current) runtimeSettingsRef.current.open = true
+      runtimeSettingsRef.current?.focus()
+      runtimeSettingsRef.current?.scrollIntoView?.({ block: 'start' })
       return
     }
 
@@ -422,7 +463,12 @@ export function AgentWorkbenchView({
           </div>
         ) : null}
 
-        <article className={`agent-current-task agent-current-task--${viewModel.primaryAction.tone}`} data-testid="agent-current-task">
+        <article
+          className={`agent-current-task agent-current-task--${viewModel.primaryAction.tone} ${exactChangeSetPermission ? 'agent-current-task--change-set' : ''}`}
+          data-testid="agent-current-task"
+          ref={codingFocusRef}
+          tabIndex={-1}
+        >
           <div className="agent-current-task__body">
             <span className="panel-label">Current Task</span>
             <strong>{viewModel.currentTarget.nodeTitle}</strong>
@@ -438,7 +484,18 @@ export function AgentWorkbenchView({
             <strong>{viewModel.advisory.detail}</strong>
           </div>
           <p className="agent-current-task__summary">{viewModel.advisory.summary}</p>
-          <div className="agent-current-task__action">
+          {exactChangeSetPermission && latestCodingRun ? (
+            <div className="agent-current-task__review">
+              <CodingChangeSetReview
+                permission={exactChangeSetPermission}
+                run={latestCodingRun}
+                workspace={workspace}
+                isReplying={isReplyingPermission}
+                onDecision={replyPermission}
+              />
+            </div>
+          ) : (
+            <div className="agent-current-task__action">
             {viewModel.pendingPermission ? (
               <div className="permission-action-panel">
                 <span className="panel-label">Permission Relay</span>
@@ -449,30 +506,24 @@ export function AgentWorkbenchView({
                   <span>{viewModel.pendingPermission.risk}</span>
                   {viewModel.pendingPermission.filePath ? <code>{viewModel.pendingPermission.filePath}</code> : null}
                 </div>
-                {pendingCodingPermission?.changeSetDigest ? (
-                  <div className="agent-advisory agent-advisory--warn">
-                    <span>精确 Change Set</span>
-                    <strong>{pendingPermissionPaths.length} 个文件 · 仅写入 managed worktree</strong>
-                    <div className="knowledge-reference-meta">
-                      {pendingPermissionPaths.map((filePath) => <code key={filePath}>{filePath}</code>)}
-                    </div>
-                    <code>{pendingChangeSetPreview?.changeSetDigest ?? pendingCodingPermission.changeSetDigest}</code>
-                    <p>
-                      审批剩余：{formatApprovalTimeRemaining(pendingChangeSetPreview?.expiresAt ?? pendingCodingPermission.expiresAt)}
-                      {' · '}
-                      截止 {new Date(pendingChangeSetPreview?.expiresAt ?? pendingCodingPermission.expiresAt).toLocaleString()}
-                    </p>
-                    {pendingChangeSetPreview?.unifiedDiff ? (
-                      <pre className="diff-preview">{pendingChangeSetPreview.unifiedDiff}</pre>
-                    ) : null}
-                  </div>
-                ) : null}
                 <div className="inspector-actions">
-                  <button className="primary-button" onClick={() => onReplyCodingPermission('approved')}>
+                  <button
+                    className="primary-button"
+                    disabled={codingActionProjection?.permission
+                      ? !codingActionProjection.permission.canApprove || isReplyingPermission
+                      : isReplyingPermission}
+                    onClick={() => void replyPermission('approved')}
+                  >
                     <CheckCircle2 size={16} />
                     Approve once
                   </button>
-                  <button className="ghost-button" onClick={() => onReplyCodingPermission('rejected')}>
+                  <button
+                    className="ghost-button"
+                    disabled={isReplyingPermission || Boolean(
+                      codingActionProjection?.permission?.expired || codingActionProjection?.permission?.staleReason,
+                    )}
+                    onClick={() => void replyPermission('rejected')}
+                  >
                     Reject
                   </button>
                 </div>
@@ -494,9 +545,40 @@ export function AgentWorkbenchView({
                   : viewModel.primaryAction.disabledReason ?? viewModel.primaryAction.summary}</p>
               </>
             )}
-          </div>
+            </div>
+          )}
         </article>
 
+        {showRetryConfirmation ? (
+          <div className="coding-retry-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="coding-retry-title">
+            <div>
+              <span className="panel-label">Explicit retry</span>
+              <h2 id="coding-retry-title">新建 Coding Run 重试？</h2>
+              <p>这不会恢复或复用上一次 Run。它会创建新的 Run ID，并可能再次调用 Provider、消耗 token 和产生费用。</p>
+              <dl className="change-set-review__facts">
+                <div><dt>Provider</dt><dd>{latestCodingProviderName ?? selectedProviderId ?? '未配置'}</dd></div>
+                <div><dt>上次 tokens</dt><dd>{latestCodingRun?.runtimeCostSummary?.totalTokens ?? (latestCodingRun?.runtimeCostSummary ? latestCodingRun.runtimeCostSummary.inputTokens + latestCodingRun.runtimeCostSummary.outputTokens : 'unknown')}</dd></div>
+                <div><dt>上次费用</dt><dd>{typeof latestCodingRun?.runtimeCostSummary?.costUsd === 'number' ? formatUsd(latestCodingRun.runtimeCostSummary.costUsd) : 'unknown'}</dd></div>
+                <div><dt>新 Run 计费</dt><dd>新的 token 与费用单独结算</dd></div>
+                {runtimeBudgetApprovalId ? <div className="change-set-review__fact-wide"><dt>预算批准</dt><dd><code>{runtimeBudgetApprovalId}</code></dd></div> : null}
+              </dl>
+              <div className="inspector-actions">
+                <button
+                  className="primary-button"
+                  onClick={() => {
+                    setShowRetryConfirmation(false)
+                    onRunCodingAgent()
+                  }}
+                >
+                  新建 Run 并重试
+                </button>
+                <button className="ghost-button" onClick={() => setShowRetryConfirmation(false)}>取消</button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {exactChangeSetPermission ? <details className="agent-secondary-context"><summary>辅助运行信息</summary>
         <section className="agent-path-grid" aria-label="Agent execution paths">
           {viewModel.pathStatuses.map((section) => (
             <article
@@ -520,10 +602,22 @@ export function AgentWorkbenchView({
               {section.disabledReason ? <p className="empty-note">{section.disabledReason}</p> : null}
             </article>
           ))}
-        </section>
+        </section></details> : <section className="agent-path-grid" aria-label="Agent execution paths">
+          {viewModel.pathStatuses.map((section) => (
+            <article
+              className={`agent-path-card agent-path-card--${section.emphasis} agent-path-card--${section.tone}`}
+              data-testid={section.id === 'review' ? 'gate-review-path' : undefined}
+              key={section.id}
+            >
+              <div><span className="panel-label">{section.label}</span><strong>{section.title}</strong><p>{section.summary}</p></div>
+              <div className="agent-fact-grid">{section.facts.map((fact) => <div className="compact-row" key={fact.label}><span>{fact.label}</span><strong>{fact.value}</strong></div>)}</div>
+              {section.disabledReason ? <p className="empty-note">{section.disabledReason}</p> : null}
+            </article>
+          ))}
+        </section>}
 
         {latestCodingRun ? (
-          <article className="agent-evidence-card">
+          <article className="agent-evidence-card" ref={evidenceRef} tabIndex={-1}>
             <div className="section-heading">
               <span>Coding Run Evidence</span>
               <strong>{latestCodingRun.branchName}</strong>
@@ -554,6 +648,72 @@ export function AgentWorkbenchView({
                 <strong>{testEvidence?.status ?? 'pending'}</strong>
               </div>
             </div>
+            {codingActionProjection?.terminal ? (
+              <div className="coding-terminal-summary" data-testid="coding-terminal-summary">
+                <div className="agent-fact-grid agent-fact-grid--three">
+                  <div className="compact-row"><span>Provider</span><strong>{codingActionProjection.terminal.providerId}</strong></div>
+                  <div className="compact-row"><span>Input / output tokens</span><strong>{codingActionProjection.terminal.inputTokens ?? 'unknown'} / {codingActionProjection.terminal.outputTokens ?? 'unknown'}</strong></div>
+                  <div className="compact-row"><span>Cache hit / miss</span><strong>{codingActionProjection.terminal.cacheReadTokens ?? 'unknown'} / {codingActionProjection.terminal.cacheMissTokens ?? 'unknown'}</strong></div>
+                  <div className="compact-row"><span>Cache hit rate</span><strong>{typeof codingActionProjection.terminal.cacheHitRate === 'number' ? `${(codingActionProjection.terminal.cacheHitRate * 100).toFixed(1)}%` : 'unknown'}</strong></div>
+                  <div className="compact-row"><span>Total tokens</span><strong>{codingActionProjection.terminal.totalTokens ?? 'unknown'}</strong></div>
+                  <div className="compact-row"><span>Cost phase</span><strong>{runtimeCostPhaseLabel(codingActionProjection.terminal.costPhase)}</strong></div>
+                  <div className="compact-row"><span>Settled cost</span><strong>{typeof codingActionProjection.terminal.costUsd === 'number' ? formatRuntimeUsd(codingActionProjection.terminal.costUsd) : 'unknown'}</strong></div>
+                  <div className="compact-row"><span>Cost status</span><strong>{codingActionProjection.terminal.costStatus ?? 'legacy_unverified'}</strong></div>
+                  <div className="compact-row"><span>Pricing tier</span><strong>{codingActionProjection.terminal.pricingTier ?? 'unknown'}</strong></div>
+                  <div className="compact-row"><span>Tests</span><strong>{codingActionProjection.terminal.testStatus ?? 'not archived'}</strong></div>
+                  <div className="compact-row"><span>Workspace</span><strong>{codingActionProjection.terminal.workspaceCleanupStatus}</strong></div>
+                  <div className="compact-row"><span>Changed paths</span><strong>{codingActionProjection.terminal.changedPaths.length}</strong></div>
+                </div>
+                {codingActionProjection.terminal.costBreakdown ? (
+                  <p>
+                    <strong>Cost breakdown:</strong>{' '}
+                    hit {formatRuntimeUsd(codingActionProjection.terminal.costBreakdown.cacheHitInputUsd)} · miss {formatRuntimeUsd(codingActionProjection.terminal.costBreakdown.cacheMissInputUsd)} · output {formatRuntimeUsd(codingActionProjection.terminal.costBreakdown.outputUsd)} · total {formatRuntimeUsd(codingActionProjection.terminal.costBreakdown.totalUsd)}
+                  </p>
+                ) : (
+                  <p><strong>Cost breakdown:</strong> unavailable because usage or pricing is incomplete.</p>
+                )}
+                {codingActionProjection.terminal.pricingSnapshot ? (
+                  <p>
+                    <strong>Unit prices:</strong>{' '}
+                    hit {formatRuntimeUsd(codingActionProjection.terminal.pricingSnapshot.cacheHitInputUsdPerMillion)} / 1M · miss {formatRuntimeUsd(codingActionProjection.terminal.pricingSnapshot.cacheMissInputUsdPerMillion)} / 1M · output {formatRuntimeUsd(codingActionProjection.terminal.pricingSnapshot.outputUsdPerMillion)} / 1M
+                  </p>
+                ) : (
+                  <p><strong>Unit prices:</strong> see the per-call settlements below, or unknown for legacy evidence.</p>
+                )}
+                {codingActionProjection.terminal.providerCallSettlements?.length ? (
+                  <div className="trace-list" data-testid="coding-provider-call-settlements">
+                    {codingActionProjection.terminal.providerCallSettlements.map((settlement) => (
+                      <div className="trace-step" key={`${settlement.requestPhase}-${settlement.timestamp}`}>
+                        <span>{settlement.requestPhase} · {settlement.pricingSnapshot?.tier ?? 'unknown tier'}</span>
+                        <strong>{settlement.inputTokens} input · {settlement.cacheReadTokens ?? 'unknown'} hit · {settlement.cacheMissTokens ?? 'unknown'} miss · {settlement.outputTokens} output</strong>
+                        <p>
+                          hit rate {typeof settlement.cacheHitRate === 'number' ? `${(settlement.cacheHitRate * 100).toFixed(1)}%` : 'unknown'} · total {settlement.costUsd === null ? 'unknown' : formatRuntimeUsd(settlement.costUsd)}
+                        </p>
+                        {settlement.pricingSnapshot ? (
+                          <p>
+                            hit {formatRuntimeUsd(settlement.pricingSnapshot.cacheHitInputUsdPerMillion)} / 1M · miss {formatRuntimeUsd(settlement.pricingSnapshot.cacheMissInputUsdPerMillion)} / 1M · output {formatRuntimeUsd(settlement.pricingSnapshot.outputUsdPerMillion)} / 1M
+                          </p>
+                        ) : null}
+                        {settlement.breakdown ? (
+                          <p>
+                            hit {formatRuntimeUsd(settlement.breakdown.cacheHitInputUsd)} · miss {formatRuntimeUsd(settlement.breakdown.cacheMissInputUsd)} · output {formatRuntimeUsd(settlement.breakdown.outputUsd)} · total {formatRuntimeUsd(settlement.breakdown.totalUsd)}
+                          </p>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {codingActionProjection.terminal.pricingSourceVersion ? <code>{codingActionProjection.terminal.pricingSourceVersion}</code> : null}
+                <p><strong>Terminal reason:</strong> {codingActionProjection.terminal.reason}</p>
+                {codingActionProjection.terminal.testCommand ? <code>{codingActionProjection.terminal.testCommand}</code> : null}
+                {codingActionProjection.terminal.testSummary ? <p>{codingActionProjection.terminal.testSummary}</p> : null}
+                {codingActionProjection.terminal.changedPaths.length > 0 ? (
+                  <div className="knowledge-reference-meta">
+                    {codingActionProjection.terminal.changedPaths.map((path) => <code key={path}>{path}</code>)}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {budgetDecision ? (
               <div className="agent-advisory agent-advisory--warn">
                 <span>Runtime Budget</span>
@@ -581,10 +741,10 @@ export function AgentWorkbenchView({
                     <button
                       className="primary-button"
                       disabled={!runtimeBudgetApprovalId.trim() || isStartingCodingAgent}
-                      onClick={onRunCodingAgent}
+                      onClick={() => setShowRetryConfirmation(true)}
                     >
                       <Code2 size={16} />
-                      Retry with approval
+                      使用预算批准重新运行
                     </button>
                   </div>
                 ) : null}
@@ -615,12 +775,46 @@ export function AgentWorkbenchView({
             ) : (
               <p className="empty-note">批准权限后会生成 Coding Diff Artifact。</p>
             )}
+            {codingRuns.length > 1 ? (
+              <label className="coding-run-history-picker">
+                历史 Coding Run
+                <select
+                  aria-label="Coding Run history"
+                  value={selectedAuditCodingRun?.id ?? ''}
+                  onChange={(event) => setSelectedAuditCodingRunId(event.target.value)}
+                >
+                  {codingRuns.map((run) => (
+                    <option key={run.id} value={run.id}>{run.id} · {run.status} · {run.startedAt}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {selectedAuditCodingRun ? (
+              <section className="coding-run-audit" data-testid="coding-run-audit">
+                <div className="compact-row"><span>Audit Run</span><code>{selectedAuditCodingRun.id}</code></div>
+                <div className="compact-row"><span>Status / Provider</span><strong>{selectedAuditCodingRun.status} · {selectedAuditCodingRun.providerId}</strong></div>
+                <div className="compact-row"><span>Tokens / Cost</span><strong>{selectedAuditCodingRun.runtimeCostSummary?.totalTokens ?? (selectedAuditCodingRun.runtimeCostSummary ? selectedAuditCodingRun.runtimeCostSummary.inputTokens + selectedAuditCodingRun.runtimeCostSummary.outputTokens : 'unknown')} · {typeof selectedAuditCodingRun.runtimeCostSummary?.costUsd === 'number' ? formatUsd(selectedAuditCodingRun.runtimeCostSummary.costUsd) : 'unknown'}</strong></div>
+                <p>{selectedAuditCodingRun.summary}</p>
+                {selectedAuditPermissions.length > 0 ? (
+                  <ul aria-label="Coding Run permission history">
+                    {selectedAuditPermissions.map((request) => <li key={request.id}><code>{request.id}</code> · {request.status} · {request.title}</li>)}
+                  </ul>
+                ) : <p className="empty-note">该 Run 没有 Permission 记录。</p>}
+                {selectedAuditEvents.length > 0 ? (
+                  <ol aria-label="Coding Run trace history">
+                    {selectedAuditEvents.map((event) => <li key={event.id}><span>{event.kind}</span> · {event.message}</li>)}
+                  </ol>
+                ) : <p className="empty-note">该 Run 没有 Trace 记录。</p>}
+              </section>
+            ) : null}
             <div className="inspector-actions">
-              <button className="ghost-button" disabled={!workspace} onClick={onOpenCodingWorktree}>
-                <FolderOpen size={16} />
-                Open worktree
-              </button>
-              <button className="ghost-button" onClick={onCancelCodingRun}>
+              {canOpenManagedWorkspace ? (
+                <button className="ghost-button" onClick={onOpenCodingWorktree}>
+                  <FolderOpen size={16} />
+                  Open worktree
+                </button>
+              ) : null}
+              <button className="ghost-button" disabled={!codingActionProjection?.activeRun} onClick={onCancelCodingRun}>
                 Cancel
               </button>
               <button className="ghost-button" disabled={!workspace || Boolean(workspace.deletedAt)} onClick={onDeleteCodingWorktree}>
@@ -669,7 +863,7 @@ export function AgentWorkbenchView({
           )}
         </section>
 
-        <details className="runtime-settings" open={codingReadiness?.status !== 'ready'}>
+        <details className="runtime-settings" open={codingReadiness?.status !== 'ready'} ref={runtimeSettingsRef} tabIndex={-1}>
           <summary>
             <span><Code2 size={16} />Coding Agent 执行配置</span>
             <strong>{codingReadiness?.status === 'ready' ? '已就绪' : '需要配置'}</strong>
@@ -913,21 +1107,13 @@ function primaryActionIcon(actionId: AgentConsoleAction['id']) {
   if (actionId === 'run-review' || actionId === 'complete-agent-node') {
     return <Bot size={16} />
   }
-  if (actionId === 'run-coding') {
+  if (actionId === 'run-coding' || actionId === 'view-coding' || actionId === 'configure-coding') {
     return <Code2 size={16} />
   }
   if (actionId === 'go-tests') {
     return <TestTube2 size={16} />
   }
   return <ArrowLeft size={16} />
-}
-
-function formatApprovalTimeRemaining(expiresAt: string): string {
-  const remainingMs = Date.parse(expiresAt) - Date.now()
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return '已过期'
-  const remainingSeconds = Math.ceil(remainingMs / 1_000)
-  if (remainingSeconds < 60) return `${remainingSeconds} 秒`
-  return `${Math.ceil(remainingSeconds / 60)} 分钟`
 }
 
 function toneClass(tone: AgentConsoleAction['tone']): string {
@@ -944,4 +1130,16 @@ function toneClass(tone: AgentConsoleAction['tone']): string {
     return 'accent'
   }
   return 'soft'
+}
+
+function runtimeCostPhaseLabel(
+  phase: NonNullable<CodingAgentRun['runtimeCostSummary']>['phase'],
+): string {
+  if (phase === 'preflight_estimate') return 'Preflight worst-case estimate'
+  if (phase === 'provider_settlement') return 'Actual provider settlement'
+  return 'Legacy unverified cost'
+}
+
+function formatRuntimeUsd(value: number): string {
+  return `$${value.toFixed(9).replace(/\.?0+$/u, '')}`
 }

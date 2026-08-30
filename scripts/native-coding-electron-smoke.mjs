@@ -258,9 +258,20 @@ async function completePreBuildWorkflow(page, run, projectId) {
         providerId: 'fake-knowledge-review',
       })
     }, { runId: current.id, nodeId: gateNode.id, projectId })
+    const expectedClarificationRevision = completed.artifact.clarificationRevision
+      ? {
+          artifactId: completed.artifact.id,
+          revision: completed.artifact.clarificationRevision.revision,
+          revisionDigest: completed.artifact.clarificationRevision.revisionDigest,
+        }
+      : undefined
     const approved = await page.evaluate(async (input) => {
       return window.aiDevFlowDesktop.approveGate(input)
-    }, { runId: current.id, nodeId: gateNode.id })
+    }, {
+      runId: current.id,
+      nodeId: gateNode.id,
+      ...(expectedClarificationRevision ? { expectedClarificationRevision } : {}),
+    })
     current = approved.run
   }
   expect(current.currentNodeId).toBe(nodes.build.id)
@@ -319,6 +330,7 @@ try {
     env: {
       ...process.env,
       DEVFLOW_USER_DATA_DIR: userDataDir,
+      DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userDataDir, 'data-profiles.json'),
       DEVFLOW_API_BASE_URL: apiUrl,
       DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
       DEVFLOW_CODING_ENGINE: '',

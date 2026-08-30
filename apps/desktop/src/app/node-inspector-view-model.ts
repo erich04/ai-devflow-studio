@@ -20,6 +20,7 @@ import {
   type WorkflowNodePresentation,
   workflowNodeStatusLabels,
 } from './workflow-node-presentation'
+import type { CodingRuntimeActionProjection } from './coding-runtime-action-projection'
 
 export type { BoardNodeKind, WorkflowNodePresentation } from './workflow-node-presentation'
 
@@ -44,6 +45,7 @@ export type InspectorActionId =
   | 'completeAgent'
   | 'approveGate'
   | 'runCodingAgent'
+  | 'openCodingAgent'
   | 'createPrDraft'
   | 'prepareGitHubDelivery'
   | 'reviseGitHubDelivery'
@@ -850,6 +852,7 @@ export function buildGateRequirementMatrix(input: {
 function buildActionCatalog(
   node: WorkflowNode,
   hasTeamProjectBinding: boolean,
+  codingActionProjection?: CodingRuntimeActionProjection,
 ): Record<InspectorActionId, InspectorAction> {
   return {
     openKnowledgeReview: {
@@ -879,9 +882,17 @@ function buildActionCatalog(
     },
     runCodingAgent: {
       id: 'runCodingAgent',
-      label: 'Coding Agent',
+      label: codingActionProjection?.action.id === 'start'
+        ? codingActionProjection.action.label
+        : '启动 Coding Agent',
       variant: 'ghost',
       disabledReasons: ['starting_coding_agent'],
+    },
+    openCodingAgent: {
+      id: 'openCodingAgent',
+      label: codingActionProjection?.action.label ?? '打开 Coding Agent',
+      variant: 'primary',
+      disabledReasons: [],
     },
     createPrDraft: {
       id: 'createPrDraft',
@@ -986,6 +997,7 @@ function buildNextAction(input: {
   canApprove: boolean
   hasTeamProjectBinding: boolean
   canVerifyGitHubDeliveryRevocation: boolean
+  codingActionProjection?: CodingRuntimeActionProjection
 }): InspectorNextAction {
   const { node } = input
 
@@ -1069,6 +1081,23 @@ function buildNextAction(input: {
   }
 
   if (canRunCodingAgentOnNode(node)) {
+    if (input.codingActionProjection) {
+      const projected = input.codingActionProjection.action
+      if (projected.id === 'start') {
+        return {
+          title: projected.label,
+          copy: projected.summary,
+          primaryActionId: 'runCodingAgent',
+          secondaryActionIds: [],
+        }
+      }
+      return {
+        title: projected.label,
+        copy: projected.disabledReason ?? projected.summary,
+        ...(projected.id !== 'none' ? { primaryActionId: 'openCodingAgent' as const } : {}),
+        secondaryActionIds: [],
+      }
+    }
     return {
       title: '启动 Coding Agent',
       copy: '把当前实现任务交给本地 Coding Agent，生成受控 diff 并回写执行轨迹。',
@@ -1238,13 +1267,14 @@ export function buildNodeInspectorViewModel(input: {
   canVerifyGitHubDeliveryRevocation: boolean
   knowledgeReferenceCount?: number
   testEvidenceCount?: number
+  codingActionProjection?: CodingRuntimeActionProjection
 }): NodeInspectorViewModel {
   const presentation = buildWorkflowNodePresentation(input.node)
   const visualKind = presentation.nodeKind
   const nodeType = getInspectorNodeType(input.node)
   const tabs = inspectorTabPlansByNodeType[nodeType]
   const activeTab = tabs.find((tab) => tab.tabId === input.requestedTab || tab.label === input.requestedTab) ?? tabs[0]!
-  const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding)
+  const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding, input.codingActionProjection)
   const nextAction = buildNextAction(input)
   const actionIds: InspectorActionId[] = []
   const addAction = (actionId: InspectorActionId) => {
@@ -1254,7 +1284,10 @@ export function buildNodeInspectorViewModel(input: {
     actionIds.push(actionId)
   }
 
-  if (canRunCodingAgentOnNode(input.node)) {
+  if (
+    canRunCodingAgentOnNode(input.node) &&
+    (!input.codingActionProjection || input.codingActionProjection.action.id === 'start')
+  ) {
     addAction('runCodingAgent')
   }
   if (input.node.kind === 'pr') {

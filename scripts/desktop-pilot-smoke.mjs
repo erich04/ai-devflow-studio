@@ -27,11 +27,129 @@ const runtimeProjectDirectory = path.join(temporaryDirectory, 'runtime-project')
 const diagnostics = []
 let hostileDevelopmentServerRequests = 0
 let electronApp
+let runtimeBudgetPolicy = null
+const packagedOrganizationPolicy = {
+  id: 'enforcement-policy-org-packaged-smoke',
+  organizationId: 'org-packaged-smoke',
+  name: 'Packaged smoke policy',
+  version: 1,
+  rules: [],
+  updatedAt: '2026-08-30T00:00:00.000Z',
+}
+const packagedEffectivePolicy = {
+  id: 'effective-enforcement-policy-p-packaged-smoke',
+  organizationId: 'org-packaged-smoke',
+  projectId: 'p-packaged-smoke',
+  version: 1,
+  rules: [],
+  updatedAt: '2026-08-30T00:00:00.000Z',
+}
+const packagedTeamProject = {
+  id: 'p-packaged-smoke',
+  name: 'Packaged Smoke Project',
+  slug: 'packaged-smoke-project',
+  description: 'Controlled local packaged smoke project.',
+  repository: 'https://example.invalid/packaged-smoke.git',
+  defaultBranch: 'main',
+  health: 'on_track',
+  knowledgeBasePath: 'docs/knowledge',
+  testCommand: 'npm test',
+}
 
 const hostileDevelopmentServer = createServer((_request, response) => {
   hostileDevelopmentServerRequests += 1
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
   response.end('<title>Hostile development server</title><main>wrong renderer</main>')
+})
+
+const controlPlaneServer = createServer(async (request, response) => {
+  const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+  const sendJson = (status, body) => {
+    response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+    response.end(JSON.stringify(body))
+  }
+  const readBody = async () => {
+    let raw = ''
+    for await (const chunk of request) raw += chunk.toString()
+    return raw ? JSON.parse(raw) : {}
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/desktop/pairing/exchange') {
+    sendJson(201, {
+      token: 'devflow-desktop-token-packaged-smoke',
+      tokenId: 'desktop-token-packaged-smoke',
+      organizationId: 'org-packaged-smoke',
+      projectId: 'p-packaged-smoke',
+      userId: 'packaged-smoke-user',
+      role: 'lead',
+      issuedRole: 'lead',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+      userName: 'Packaged Smoke User',
+      projectName: 'Packaged Smoke Project',
+      authAccountId: 'acct-packaged-smoke',
+      projectMemberships: [{
+        projectId: 'p-packaged-smoke',
+        userId: 'packaged-smoke-user',
+        role: 'lead',
+      }],
+      createdAt: '2026-08-30T00:00:00.000Z',
+    })
+    return
+  }
+  if (request.method === 'PUT' && url.pathname === '/api/runtime/budget-policy') {
+    const body = await readBody()
+    runtimeBudgetPolicy = {
+      projectId: body.projectId,
+      enabled: body.enabled,
+      monthlyLimitUsd: body.monthlyLimitUsd,
+      warningThresholdUsd: body.warningThresholdUsd,
+      currency: 'USD',
+      updatedAt: new Date().toISOString(),
+    }
+    sendJson(200, runtimeBudgetPolicy)
+    return
+  }
+  if (request.method === 'GET' && url.pathname === '/api/runtime/budget-policy') {
+    sendJson(200, { policy: runtimeBudgetPolicy })
+    return
+  }
+  if (request.method === 'POST' && url.pathname === '/api/runtime/budget/evaluate') {
+    const body = await readBody()
+    sendJson(200, {
+      status: 'allowed',
+      blocksRun: false,
+      currentSpendUsd: 0,
+      projectedCostUsd: body.projectedCostUsd,
+      reason: 'Packaged smoke budget policy allows this bounded run.',
+    })
+    return
+  }
+  if (request.method === 'GET' && url.pathname === '/api/team/overview') {
+    sendJson(200, {
+      projects: [packagedTeamProject],
+      members: [],
+      runs: [],
+      projectCost: [],
+      memberCost: [],
+      totalCost: '$0.00',
+      enforcementPolicies: {
+        organizationPolicy: packagedOrganizationPolicy,
+        projectOverrides: [],
+        effectivePolicies: [packagedEffectivePolicy],
+        gateOverrides: [],
+      },
+    })
+    return
+  }
+  if (request.method === 'GET' && url.pathname === '/api/runs') {
+    sendJson(200, { runs: [], artifacts: [], events: [] })
+    return
+  }
+  if (request.method === 'GET' && url.pathname.endsWith('/work-requests')) {
+    sendJson(200, { workRequests: [] })
+    return
+  }
+  sendJson(404, { error: 'not_found', message: 'Packaged smoke endpoint is not implemented.' })
 })
 
 await new Promise((resolve, reject) => {
@@ -44,6 +162,16 @@ if (!address || typeof address === 'string') {
 }
 const hostileDevelopmentServerUrl = `http://127.0.0.1:${address.port}/must-not-load`
 
+await new Promise((resolve, reject) => {
+  controlPlaneServer.once('error', reject)
+  controlPlaneServer.listen(0, '127.0.0.1', resolve)
+})
+const controlPlaneAddress = controlPlaneServer.address()
+if (!controlPlaneAddress || typeof controlPlaneAddress === 'string') {
+  throw new Error('Unable to allocate the packaged smoke control-plane port.')
+}
+const controlPlaneUrl = `http://127.0.0.1:${controlPlaneAddress.port}`
+
 async function launchPackagedDesktop() {
   const app = await electron.launch({
     executablePath,
@@ -51,7 +179,8 @@ async function launchPackagedDesktop() {
     env: {
       ...process.env,
       DEVFLOW_USER_DATA_DIR: userDataDirectory,
-      DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9',
+      DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userDataDirectory, 'data-profiles.json'),
+      DEVFLOW_API_BASE_URL: controlPlaneUrl,
       DEVFLOW_CODING_ENGINE: 'fake',
       DEVFLOW_CODING_EXECUTOR: 'native-deterministic',
       DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
@@ -145,6 +274,16 @@ try {
   const runtimeBeforeRestart = await page.evaluate(async () => {
     const project = await window.aiDevFlowDesktop.selectLocalProject()
     if (!project) throw new Error('Packaged Runtime smoke project was not selected')
+    await window.aiDevFlowDesktop.pairDesktop({
+      localProjectId: project.id,
+      code: 'pair-packaged-smoke.copy-once-secret',
+    })
+    await window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({
+      projectId: project.id,
+      enabled: true,
+      monthlyLimitUsd: 1,
+      warningThresholdUsd: 0.5,
+    })
     const run = await window.aiDevFlowDesktop.createRun({
       title: 'Packaged Agent Runtime smoke',
       request: 'Complete one bounded no-side-effect observation.',
@@ -286,18 +425,30 @@ try {
     if (!node || node.kind !== 'agent' || node.stage !== 'clarify') {
       throw new Error('Packaged Native Coding Workflow did not start at Clarify')
     }
-    run = (await window.aiDevFlowDesktop.completeWorkflowAgentNode({
+    const clarification = await window.aiDevFlowDesktop.completeWorkflowAgentNode({
       runId: run.id,
       nodeId: node.id,
       userId: 'packaged-smoke-user',
       userName: 'Packaged Smoke User',
       providerId: 'fake-knowledge-review',
-    })).run
+    })
+    run = clarification.run
     node = currentNode()
     if (!node || node.kind !== 'gate' || node.stage !== 'clarify') {
       throw new Error('Packaged Native Coding Workflow did not reach Clarify Gate')
     }
-    run = (await window.aiDevFlowDesktop.approveGate({ runId: run.id, nodeId: node.id })).run
+    if (!clarification.artifact.clarificationRevision) {
+      throw new Error('Packaged Native Coding clarification revision metadata was not persisted')
+    }
+    run = (await window.aiDevFlowDesktop.approveGate({
+      runId: run.id,
+      nodeId: node.id,
+      expectedClarificationRevision: {
+        artifactId: clarification.artifact.id,
+        revision: clarification.artifact.clarificationRevision.revision,
+        revisionDigest: clarification.artifact.clarificationRevision.revisionDigest,
+      },
+    })).run
     node = currentNode()
     if (!node || node.kind !== 'agent' || node.stage !== 'design') {
       throw new Error('Packaged Native Coding Workflow did not reach Design')
@@ -625,5 +776,6 @@ try {
     await electronApp.close()
   }
   await new Promise((resolve) => hostileDevelopmentServer.close(resolve))
+  await new Promise((resolve) => controlPlaneServer.close(resolve))
   await rm(temporaryDirectory, { recursive: true, force: true })
 }

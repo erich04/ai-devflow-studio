@@ -32,6 +32,7 @@ import type {
   TestEvidence,
   WorkRequest,
   WorkflowRun,
+  StageAgentExecutorKind,
 } from '@ai-devflow/shared'
 import type {
   AgentRuntimeCommandInput,
@@ -73,7 +74,10 @@ import type {
   VerifyGitHubDeliveryRevocationInput,
   VerifyGitHubDeliveryRevocationResult,
   RetryRemoteSyncOperationInput,
+  DesktopDataProfileDiagnostics,
 } from '../electron/ipc-contract'
+
+export type { DesktopDataProfileDiagnostics } from '../electron/ipc-contract'
 
 export type SaveProjectTestCommandInput = {
   projectId: string
@@ -100,6 +104,7 @@ export type RunProjectTestsResult = {
 export type ApproveGateInput = {
   runId: string
   nodeId: string
+  expectedClarificationRevision?: ClarificationRevisionIdentity
 }
 
 export type ApproveGateResult = {
@@ -114,6 +119,27 @@ export type CompleteWorkflowAgentNodeInput = {
   userId: string
   userName: string
   providerId?: string
+  executor?: StageAgentExecutorKind
+}
+
+export type ClarificationRevisionIdentity = {
+  artifactId: string
+  revision: number
+  revisionDigest: string
+}
+
+export type RequestClarificationChangesInput = ClarificationRevisionIdentity & {
+  runId: string
+  nodeId: string
+  reason: string
+}
+
+export type RequestClarificationChangesResult = {
+  run: WorkflowRun
+  revision: Artifact
+  feedback: Artifact
+  event: AgentEvent
+  state: LocalExecutionState
 }
 
 export type CompleteWorkflowAgentNodeResult = {
@@ -224,6 +250,7 @@ export type PairDesktopResult = {
 export type DevFlowDesktopApi = {
   platform: string
   loadState: () => Promise<LocalExecutionState>
+  loadDataProfileDiagnostics: () => Promise<DesktopDataProfileDiagnostics>
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
@@ -287,6 +314,7 @@ export type DevFlowDesktopApi = {
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
+  requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
     input: PrepareGitHubDeliveryInput,

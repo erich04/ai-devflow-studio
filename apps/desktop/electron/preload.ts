@@ -10,6 +10,8 @@ function onIpcPayload<T>(channel: string, listener: (payload: T) => void) {
 const desktopApi: DevFlowDesktopApi = {
   platform: process.platform,
   loadState: () => ipcRenderer.invoke(ipcChannels.loadState),
+  loadDataProfileDiagnostics: () =>
+    ipcRenderer.invoke(ipcChannels.loadDataProfileDiagnostics),
   loadDesktopPairing: () => ipcRenderer.invoke(ipcChannels.loadDesktopPairing),
   pairDesktop: (input) => ipcRenderer.invoke(ipcChannels.pairDesktop, input),
   loadRemoteSnapshot: (input) => ipcRenderer.invoke(ipcChannels.loadRemoteSnapshot, input),
@@ -62,6 +64,8 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.deleteAgentMemory, input),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
+  requestClarificationChanges: (input) =>
+    ipcRenderer.invoke(ipcChannels.requestClarificationChanges, input),
   createPrDraft: (input) => ipcRenderer.invoke(ipcChannels.createPrDraft, input),
   prepareGitHubDelivery: (input) =>
     ipcRenderer.invoke(ipcChannels.prepareGitHubDelivery, input),

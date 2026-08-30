@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import type { AgentProvider } from './agent-review'
 import { createFakeAgentProvider } from './agent-review'
 import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workflow'
-import { runWorkflowStageAgent } from './workflow-agent'
+import {
+  runWorkflowStageAgent,
+  type StageAgentExecutor,
+} from './workflow-agent'
 
 const created = createWorkflowRunFromRequest({
   runId: 'run-live-stage-agent',
@@ -65,6 +68,13 @@ describe('runWorkflowStageAgent', () => {
     })
     expect(result.artifact.content).toContain('Source: model generated · Provider: doubao-review · Model: ark-code-latest')
     expect(result.artifact.content).toContain('Show that no local project is selected.')
+    expect(result.artifact.clarificationRevision).toMatchObject({
+      revision: 1,
+      status: 'review_requested',
+      rawRequestArtifactId: 'artifact-run-live-stage-agent-raw-request',
+      executor: { kind: 'direct-provider', terminalReason: 'success' },
+    })
+    expect(result.trace.executorProvenance).toMatchObject({ kind: 'direct-provider' })
     expect(provider.generateWorkflowArtifact).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({ stage: 'clarify', providerId: 'doubao-review' }),
       prompt: expect.stringContaining('Generate a requirements clarification artifact.'),
@@ -175,5 +185,109 @@ describe('runWorkflowStageAgent', () => {
 
     expect(result.source).toBe('fake_template')
     expect(result.artifact.content).toContain('Source: fake/template · Provider: fake-knowledge-review · Model: fake')
+  })
+
+  it('uses the same contract for a read-only local Agent and records verified repository evidence', async () => {
+    const digest = 'a'.repeat(64)
+    const executor: StageAgentExecutor = {
+      kind: 'local-agent',
+      id: 'fake-read-only-cli',
+      version: '1.2.3',
+      providerId: 'local-provider',
+      model: 'local-model',
+      execute: vi.fn().mockResolvedValue({
+        terminalReason: 'success',
+        toolCalls: 4,
+        durationMs: 12,
+        value: {
+          model: 'local-model',
+          title: 'Repository-grounded clarification',
+          summary: 'Verified the project entrypoint.',
+          goals: ['Keep the workflow authoritative.'],
+          acceptanceCriteria: ['Citations are repo-relative and digest bound.'],
+          nonGoals: ['Do not change repository files.'],
+          openQuestions: [],
+          assumptions: [],
+          risks: [],
+          repositoryFindings: {
+            version: 1,
+            repositoryDigest: digest,
+            verifiedFacts: [{ id: 'fact-1', statement: 'The app has an entrypoint.', citationIds: ['citation-1'] }],
+            citations: [{ id: 'citation-1', path: 'src/index.ts', contentDigest: digest, lineStart: 1 }],
+            assumptions: [],
+            openQuestions: [],
+            uncheckedScopes: ['generated output'],
+          },
+        },
+      }),
+    }
+
+    const result = await runWorkflowStageAgent({
+      run: created.run,
+      node: clarifyNode(),
+      artifacts: created.artifacts,
+      executor,
+      requestedBy: 'u-ling',
+      runtime: 'electron',
+      now: () => '2026-06-28T14:05:00.000Z',
+    })
+
+    expect(result.source).toBe('local_agent')
+    expect(result.artifact.redacted).toBe(true)
+    expect(result.artifact.content).toContain('src/index.ts#')
+    expect(result.artifact.clarificationRevision?.repositoryFindings?.verifiedFacts).toHaveLength(1)
+    expect(result.tokenUsage).toBeUndefined()
+    expect(result.trace.steps.map((step) => step.summary).join('\n')).not.toContain('/Users/')
+  })
+
+  it('fails closed when a local Agent omits repository citations', async () => {
+    const executor: StageAgentExecutor = {
+      kind: 'local-agent',
+      id: 'fake-read-only-cli',
+      version: '1',
+      model: 'local-model',
+      execute: vi.fn().mockResolvedValue({
+        terminalReason: 'success',
+        toolCalls: 1,
+        value: {
+          model: 'local-model',
+          title: 'Unverified clarification',
+          summary: 'No citations.',
+          goals: ['Goal'],
+          acceptanceCriteria: ['Acceptance'],
+          nonGoals: ['Non-goal'],
+          openQuestions: [],
+          assumptions: [],
+          risks: [],
+        },
+      }),
+    }
+
+    await expect(runWorkflowStageAgent({
+      run: created.run,
+      node: clarifyNode(),
+      artifacts: created.artifacts,
+      executor,
+      requestedBy: 'u-ling',
+      runtime: 'electron',
+    })).rejects.toThrow('returned no repository citations')
+  })
+
+  it('redacts secrets and absolute paths before either executor receives context', async () => {
+    const generateWorkflowArtifact = vi.fn().mockResolvedValue({
+      model: 'safe-model', title: 'Safe', summary: 'Safe summary', goals: ['Goal'],
+      acceptanceCriteria: ['Acceptance'], nonGoals: ['Non-goal'], openQuestions: [], assumptions: [], risks: [],
+    })
+    const provider: AgentProvider = {
+      id: 'safe-provider', name: 'Safe', model: 'safe-model', reviewKnowledge: vi.fn(), generateWorkflowArtifact,
+    }
+    await runWorkflowStageAgent({
+      run: { ...created.run, request: 'Use API_KEY=sk-supersecret123456789 in /Users/alice/private/repo' },
+      node: clarifyNode(), artifacts: created.artifacts, provider, requestedBy: 'u-ling', runtime: 'electron',
+    })
+    const call = generateWorkflowArtifact.mock.calls[0]![0]
+    expect(JSON.stringify(call)).not.toContain('sk-supersecret123456789')
+    expect(JSON.stringify(call)).not.toContain('/Users/alice/private/repo')
+    expect(JSON.stringify(call)).toContain('[REDACTED:')
   })
 })

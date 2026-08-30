@@ -80,12 +80,14 @@ export function estimateNativeCodingWorstCaseCost(input: {
   requestedBy: string
   providerId: string
   model: string
+  billingProvider?: 'deepseek' | 'openai_compatible'
   timestamp: string
 }) {
   return estimateCodingRuntimeCost({
     engine: 'native',
     providerId: input.providerId,
     model: input.model,
+    ...(input.billingProvider ? { billingProvider: input.billingProvider } : {}),
     prompt: 'x'.repeat(NATIVE_CODING_MAX_PROMPT_CHARS),
     runId: input.runId,
     nodeId: input.nodeId,
@@ -294,6 +296,9 @@ export async function evaluateCodingRuntimeReadiness(input: {
           requestedBy: input.requestedBy,
           providerId,
           model: input.executor?.modelId ?? providerMetadata?.model ?? providerId,
+          ...(input.executor?.billingProvider
+            ? { billingProvider: input.executor.billingProvider }
+            : {}),
           timestamp: evaluatedAt,
         })
         budgetDecision = await input.evaluateBudget({

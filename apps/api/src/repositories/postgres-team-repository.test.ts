@@ -27,6 +27,7 @@ function gateCommandMarker(sql: string): string | null {
 class FakeTeamDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
   readonly acceptedChildSummaryWrites = new Map<string, unknown[]>()
+  codingAgentSummaryRows: unknown[] | null = null
   checkoutCount = 0
   releaseCount = 0
   agentMemorySourceRuntimeExists = true
@@ -407,6 +408,9 @@ class FakeTeamDbClient implements TeamDbRepositoryClient {
     }
 
     if (sql.includes('FROM coding_agent_summaries')) {
+      if (this.codingAgentSummaryRows) {
+        return this.codingAgentSummaryRows as T[]
+      }
       return [
         {
           id: 'coding-run-remote-1',
@@ -1564,7 +1568,7 @@ describe('Postgres team repository', () => {
         inputTokens: 1000,
         outputTokens: 300,
         cacheReadTokens: 200,
-        totalTokens: 1500,
+        totalTokens: 1300,
         costUsd: 0.109,
       },
     ])
@@ -3307,8 +3311,190 @@ describe('Postgres team repository', () => {
       0,
       0.018,
       'estimated',
+      '{"cacheReadTokens":null,"cacheMissTokens":null,"totalTokens":200,"cacheHitRate":null,"usageStatus":"legacy_unknown","costStatus":"legacy_unverified","costUsd":0.018,"pricingSnapshot":null,"breakdown":null}',
       true,
     ])
+  })
+
+  it('round-trips active provider-call settlements without repricing their snapshots', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const peakSnapshot = {
+      providerId: 'deepseek',
+      model: 'deepseek-v4-flash',
+      tier: 'peak' as const,
+      effectiveAt: '2026-08-16T16:00:00.000Z',
+      source: 'https://api-docs.deepseek.com/quick_start/pricing/',
+      sourceVersion: 'deepseek-pricing-snapshot-2026-08-30',
+      currency: 'USD' as const,
+      unit: 'per_1m_tokens' as const,
+      cacheHitInputUsdPerMillion: 0.014,
+      cacheMissInputUsdPerMillion: 0.44,
+      outputUsdPerMillion: 1.32,
+    }
+    const offPeakSnapshot = {
+      ...peakSnapshot,
+      tier: 'off_peak' as const,
+      cacheHitInputUsdPerMillion: 0.007,
+      cacheMissInputUsdPerMillion: 0.22,
+      outputUsdPerMillion: 0.66,
+    }
+    const providerCallSettlements = [
+      {
+        requestPhase: 'analysis' as const,
+        providerId: 'deepseek',
+        model: 'deepseek-v4-flash',
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheMissTokens: 1,
+        totalTokens: 1,
+        cacheHitRate: 0,
+        usageStatus: 'complete' as const,
+        costStatus: 'settled' as const,
+        costUsd: 0.00000044,
+        pricingSnapshot: peakSnapshot,
+        breakdown: {
+          cacheHitInputUsd: 0,
+          cacheMissInputUsd: 0.00000044,
+          outputUsd: 0,
+          totalUsd: 0.00000044,
+        },
+        timestamp: '2026-08-31T09:59:59.999Z',
+        source: 'provider_reported' as const,
+        redacted: true as const,
+      },
+      {
+        requestPhase: 'initial' as const,
+        providerId: 'deepseek',
+        model: 'deepseek-v4-flash',
+        inputTokens: 1,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheMissTokens: 1,
+        totalTokens: 1,
+        cacheHitRate: 0,
+        usageStatus: 'complete' as const,
+        costStatus: 'settled' as const,
+        costUsd: 0.00000022,
+        pricingSnapshot: offPeakSnapshot,
+        breakdown: {
+          cacheHitInputUsd: 0,
+          cacheMissInputUsd: 0.00000022,
+          outputUsd: 0,
+          totalUsd: 0.00000022,
+        },
+        timestamp: '2026-08-31T10:00:00.000Z',
+        source: 'provider_reported' as const,
+        redacted: true as const,
+      },
+    ]
+
+    await repository.uploadCodingAgentSummary(
+      {
+        id: 'coding-active-cost',
+        runId: 'run-synced',
+        nodeId: 'n-build',
+        projectId: 'p-payments',
+        requestedBy: 'u-ling',
+        providerId: 'deepseek',
+        engine: 'native',
+        status: 'waiting_permission',
+        branchName: 'devflow/active-cost',
+        summary: 'Waiting for permission after provider settlement.',
+        changedPaths: [],
+        startedAt: '2026-08-31T09:59:59.000Z',
+        costSummary: {
+          id: 'coding-runtime-cost-run-synced-n-build',
+          runId: 'run-synced',
+          nodeId: 'n-build',
+          projectId: 'p-payments',
+          userId: 'u-ling',
+          provider: 'openai',
+          providerId: 'deepseek',
+          model: 'deepseek-v4-flash',
+          inputTokens: 2,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheMissTokens: 2,
+          totalTokens: 2,
+          cacheHitRate: 0,
+          usageStatus: 'complete',
+          costStatus: 'settled',
+          phase: 'provider_settlement',
+          costUsd: 0.00000066,
+          pricingSnapshot: null,
+          breakdown: {
+            cacheHitInputUsd: 0,
+            cacheMissInputUsd: 0.00000066,
+            outputUsd: 0,
+            totalUsd: 0.00000066,
+          },
+          providerCallSettlements,
+          timestamp: '2026-08-31T10:00:00.000Z',
+          source: 'provider_reported',
+          redacted: true,
+        },
+        redacted: true,
+      },
+      { organizationId: 'org-demo', userId: 'u-ling' },
+    )
+
+    const write = db.queries.find((query) =>
+      query.sql.includes('INSERT INTO coding_agent_summaries'),
+    )
+    const persistedDetails = JSON.parse(String(write?.params?.[21])) as Record<string, unknown>
+    expect(persistedDetails).toMatchObject({
+      timestamp: '2026-08-31T10:00:00.000Z',
+      costStatus: 'settled',
+      pricingSnapshot: null,
+      providerCallSettlements: [
+        { requestPhase: 'analysis', costUsd: 0.00000044, pricingSnapshot: { tier: 'peak' } },
+        { requestPhase: 'initial', costUsd: 0.00000022, pricingSnapshot: { tier: 'off_peak' } },
+      ],
+    })
+
+    db.codingAgentSummaryRows = [
+      {
+        id: 'coding-active-cost',
+        run_id: 'run-remote-1',
+        node_id: 'n-build',
+        project_id: 'p-payments',
+        requested_by: 'u-ling',
+        provider_id: 'deepseek',
+        engine: 'native',
+        status: 'waiting_permission',
+        branch_name: 'devflow/active-cost',
+        summary: 'Waiting for permission after provider settlement.',
+        changed_paths: [],
+        started_at: '2026-08-31T09:59:59.000Z',
+        completed_at: null,
+        cost_provider: 'openai',
+        cost_model: 'deepseek-v4-flash',
+        cost_input_tokens: 2,
+        cost_output_tokens: 0,
+        cost_cache_read_tokens: 0,
+        cost_usd: 0.00000066,
+        cost_source: 'provider_reported',
+        cost_details: persistedDetails,
+        redacted: true,
+      },
+    ]
+
+    const overview = await repository.getTeamOverview(readContext)
+    expect(overview.codingAgentSummaries[0]).toMatchObject({
+      id: 'coding-active-cost',
+      status: 'waiting_permission',
+      costSummary: {
+        costUsd: 0.00000066,
+        timestamp: '2026-08-31T10:00:00.000Z',
+        pricingSnapshot: null,
+        providerCallSettlements: [
+          { requestPhase: 'analysis', costUsd: 0.00000044, pricingSnapshot: { tier: 'peak' } },
+          { requestPhase: 'initial', costUsd: 0.00000022, pricingSnapshot: { tier: 'off_peak' } },
+        ],
+      },
+    })
   })
 
   it('redacts Coding Summary display text again before writing it to Postgres', async () => {

@@ -11,6 +11,7 @@ import type {
 } from './domain'
 import type { GitHubDeliveryIntent } from './github-delivery'
 import type { GateEnforcementDecision } from './enforcement'
+import { buildClarificationReviewBundle } from './clarification'
 
 export type WorkflowCommand =
   | { type: 'complete_agent'; nodeId: string; artifactId: string }
@@ -57,6 +58,7 @@ export type WorkflowBlockerCode =
   | 'budget_decision_missing'
   | 'budget_blocked'
   | 'clarification_artifact_missing'
+  | 'clarification_revision_stale'
   | 'design_artifact_missing'
   | 'coding_run_missing'
   | 'coding_run_not_completed'
@@ -361,6 +363,49 @@ export function evaluateWorkflowCommand(input: EvaluateWorkflowCommandInput): Wo
         : 'design_artifact_missing',
       `The ${requiredArtifactKind} artifact required by this gate is missing`,
     )
+  }
+
+  if (node.stage === 'clarify') {
+    const hasTrackedClarification = input.evidence.artifacts.some(
+      (artifact) => artifact.runId === input.run.id && Boolean(artifact.clarificationRevision),
+    )
+    if (!hasTrackedClarification) {
+      const nextBlocker = evaluateNextNode(input.run, node)
+      return nextBlocker ? { allowed: false, blockers: [nextBlocker] } : { allowed: true, blockers: [] }
+    }
+    const bundle = buildClarificationReviewBundle({
+      run: input.run,
+      gateNode: node,
+      artifacts: input.evidence.artifacts,
+    })
+    if (bundle.state !== 'ready' || !bundle.activeRevision) {
+      return blocked('clarification_revision_stale', bundle.message)
+    }
+    const metadata = bundle.activeRevision.clarificationRevision
+    if (metadata && metadata.status !== 'review_requested' && metadata.status !== 'approved') {
+      return blocked(
+        'clarification_revision_stale',
+        'Only the current review-requested clarification revision can be approved',
+      )
+    }
+    const latestReview = input.evidence.agentReviews
+      .filter((review) => review.runId === input.run.id && review.nodeId === node.id)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+    if (latestReview?.contextManifest) {
+      const subject = latestReview.contextManifest.subjectArtifacts.find(
+        (artifact) => artifact.kind === 'clarification',
+      )
+      if (
+        !subject ||
+        subject.id !== bundle.activeRevision.id ||
+        subject.updatedAt !== bundle.activeRevision.updatedAt
+      ) {
+        return blocked(
+          'clarification_revision_stale',
+          'The requirement review does not target the current clarification revision',
+        )
+      }
+    }
   }
 
   const nextBlocker = evaluateNextNode(input.run, node)

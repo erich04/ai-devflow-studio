@@ -69,6 +69,7 @@ export type WorkflowContextProjection = {
 export type ArtifactKind =
   | 'raw_request'
   | 'clarification'
+  | 'clarification_feedback'
   | 'design'
   | 'diff'
   | 'test_report'
@@ -234,6 +235,130 @@ export type WorkflowEdge = {
   kind: 'normal' | 'gate' | 'retry' | 'failure'
 }
 
+export type StageAgentExecutorKind = 'direct-provider' | 'local-agent'
+
+export type StageAgentTerminalReason =
+  | 'success'
+  | 'cancelled'
+  | 'timeout'
+  | 'cli_unavailable'
+  | 'schema_invalid'
+  | 'evidence_invalid'
+  | 'permission_denied'
+  | 'input_limit'
+  | 'output_limit'
+  | 'tool_limit'
+  | 'repository_unavailable'
+  | 'repository_changed'
+  | 'failed'
+
+export type StageAgentReadTool = 'read' | 'glob' | 'grep' | 'list'
+
+export type StageAgentCapabilityGrant = {
+  version: 1
+  profile: 'repository-read-only-v1'
+  repositoryRead: true
+  repositoryWrite: false
+  shell: false
+  network: false
+  workflowMutation: false
+  allowedTools: StageAgentReadTool[]
+}
+
+export type StageAgentExecutionBounds = {
+  timeoutMs: number
+  maxInputBytes: number
+  maxOutputBytes: number
+  maxToolCalls: number
+  maxCitations: number
+}
+
+export type RepositoryCitation = {
+  id: string
+  path: string
+  contentDigest: string
+  lineStart?: number
+  lineEnd?: number
+}
+
+export type RepositoryVerifiedFact = {
+  id: string
+  statement: string
+  citationIds: string[]
+}
+
+export type ClarificationRepositoryFindings = {
+  version: 1
+  repositoryDigest: string
+  verifiedFacts: RepositoryVerifiedFact[]
+  citations: RepositoryCitation[]
+  assumptions: string[]
+  openQuestions: string[]
+  uncheckedScopes: string[]
+}
+
+export type StageAgentExecutorProvenance = {
+  version: 1
+  kind: StageAgentExecutorKind
+  executorId: string
+  executorVersion: string
+  capabilityProfile: StageAgentCapabilityGrant['profile']
+  providerId?: string
+  model: string
+  startedAt: string
+  completedAt: string
+  durationMs: number
+  terminalReason: StageAgentTerminalReason
+  contextDigest: string
+}
+
+export type ClarificationRevisionStatus =
+  | 'draft'
+  | 'review_requested'
+  | 'revision_requested'
+  | 'approved'
+  | 'superseded'
+
+export type ClarificationRevisionMetadata = {
+  version: 1
+  revision: number
+  status: ClarificationRevisionStatus
+  revisionDigest: string
+  rawRequestArtifactId: string
+  previousRevisionArtifactId?: string
+  feedbackArtifactIds: string[]
+  goals: string[]
+  acceptanceCriteria: string[]
+  nonGoals: string[]
+  assumptions: string[]
+  risks: string[]
+  openQuestions: string[]
+  repositoryFindings?: ClarificationRepositoryFindings
+  executor: StageAgentExecutorProvenance
+  generatedAt: string
+}
+
+export type ClarificationFeedbackMetadata = {
+  version: 1
+  targetArtifactId: string
+  targetRevision: number
+  targetRevisionDigest: string
+  actorId: string
+  actorName: string
+  reasonDigest: string
+  createdAt: string
+}
+
+export type ClarificationAuditRecord = {
+  version: 1
+  action: 'revision_generated' | 'changes_requested' | 'approved'
+  artifactId: string
+  revision: number
+  revisionDigest: string
+  actorId: string
+  feedbackArtifactId?: string
+}
+
 export type Artifact = {
   id: string
   runId: string
@@ -244,6 +369,8 @@ export type Artifact = {
   content: string
   redacted: boolean
   updatedAt: string
+  clarificationRevision?: ClarificationRevisionMetadata
+  clarificationFeedback?: ClarificationFeedbackMetadata
   githubDeliverySource?: GitHubDeliveryPackageSource
 }
 
@@ -265,6 +392,7 @@ export type AgentEvent = {
   kind: AgentEventKind
   message: string
   timestamp: string
+  clarificationAudit?: ClarificationAuditRecord
 }
 
 export type GateDecision = {
@@ -298,10 +426,86 @@ export type AgentTokenUsage = TokenUsage & {
   source: TokenUsageSource
 }
 
-export type CodingRuntimeCostSummary = TokenUsage & {
+export type RuntimeUsageStatus = 'estimated' | 'complete' | 'incomplete' | 'legacy_unknown'
+
+export type RuntimeCostStatus = 'estimated' | 'settled' | 'unknown' | 'legacy_unverified'
+
+export type RuntimePricingTier = 'peak' | 'off_peak' | 'legacy_estimate'
+
+export type RuntimePricingSnapshot = {
+  providerId: string
+  model: string
+  tier: RuntimePricingTier
+  effectiveAt: string
+  source: string
+  sourceVersion: string
+  currency: 'USD'
+  unit: 'per_1m_tokens'
+  cacheHitInputUsdPerMillion: number
+  cacheMissInputUsdPerMillion: number
+  outputUsdPerMillion: number
+}
+
+export type RuntimeCostBreakdown = {
+  cacheHitInputUsd: number
+  cacheMissInputUsd: number
+  outputUsd: number
+  totalUsd: number
+}
+
+export type RuntimeProviderRequestPhase = 'analysis' | 'initial' | 'repair'
+
+export type RuntimeProviderCallSettlement = {
+  requestPhase: RuntimeProviderRequestPhase
+  providerId: string
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number | null
+  cacheMissTokens: number | null
+  totalTokens: number
+  cacheHitRate: number | null
+  usageStatus: RuntimeUsageStatus
+  costStatus: RuntimeCostStatus
+  costUsd: number | null
+  pricingSnapshot: RuntimePricingSnapshot | null
+  breakdown: RuntimeCostBreakdown | null
+  timestamp: string
+  source: TokenUsageSource
+  redacted: true
+}
+
+/**
+ * A coding cost record is intentionally separate from the generic TokenUsage row.
+ * Provider settlements may have an unknown cache split or price, represented by
+ * null instead of inventing a zero-value cache hit or exact cost.
+ */
+export type CodingRuntimeCostSummary = Omit<TokenUsage, 'cacheReadTokens' | 'costUsd'> & {
   providerId: string
   source: TokenUsageSource
   redacted: true
+  cacheReadTokens: number | null
+  cacheMissTokens?: number | null
+  totalTokens?: number
+  cacheHitRate?: number | null
+  usageStatus?: RuntimeUsageStatus
+  costStatus?: RuntimeCostStatus
+  phase?: 'preflight_estimate' | 'provider_settlement'
+  costUsd: number | null
+  pricingSnapshot?: RuntimePricingSnapshot | null
+  breakdown?: RuntimeCostBreakdown | null
+  providerCallSettlements?: RuntimeProviderCallSettlement[]
+}
+
+export type CodingRuntimeCostEstimate = CodingRuntimeCostSummary & {
+  cacheReadTokens: number
+  cacheMissTokens: number
+  costUsd: number
+  usageStatus: 'estimated'
+  costStatus: 'estimated'
+  phase: 'preflight_estimate'
+  pricingSnapshot: RuntimePricingSnapshot | null
+  breakdown: RuntimeCostBreakdown
 }
 
 export type RuntimeBudgetPolicy = {
@@ -365,6 +569,10 @@ export type AgentProviderUsage = {
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number
+  cacheMissTokens?: number
+  totalTokens?: number
+  cacheStatus?: 'complete' | 'unknown'
+  billingProvider?: 'deepseek' | 'openai_compatible'
 }
 
 export type AgentReviewRuntime = 'electron' | 'api'
@@ -539,6 +747,8 @@ export type AgentTrace = {
   runtime: AgentReviewRuntime
   steps: AgentTraceStep[]
   createdAt: string
+  executorProvenance?: StageAgentExecutorProvenance
+  terminalReason?: StageAgentTerminalReason
 }
 
 export type AgentReviewArtifact = Artifact & {
@@ -966,6 +1176,7 @@ export type CodingAgentRunStatus =
   | 'waiting_permission'
   | 'bootstrapping'
   | 'running'
+  | 'applying'
   | 'testing'
   | 'completed'
   | 'failed'

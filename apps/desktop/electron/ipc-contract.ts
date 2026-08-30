@@ -45,6 +45,7 @@ import type {
   AgentReviewRuntime,
   WorkRequest,
   WorkflowRun,
+  StageAgentExecutorKind,
 } from '@ai-devflow/shared'
 
 export type CreateRunInput = {
@@ -160,8 +161,26 @@ export type LoadRepositoryKnowledgeInput = {
 
 export type RefreshRepositoryKnowledgeInput = LoadRepositoryKnowledgeInput
 
+export type DesktopDataProfileDiagnostics = {
+  id: string
+  name: string
+  mode: 'development' | 'packaged'
+  source:
+    | 'explicit_env'
+    | 'saved_profile'
+    | 'discovered_existing'
+    | 'development_default'
+    | 'product_default'
+  pathFingerprint: string
+  schemaVersion: number
+  projectCount: number
+  runCount: number
+  latestRunUpdatedAt: string | null
+}
+
 export const ipcChannels = {
   loadState: 'devflow:local-state:load',
+  loadDataProfileDiagnostics: 'devflow:data-profile:diagnostics:load',
   selectProject: 'devflow:local-project:select',
   getProjectGitStatus: 'devflow:local-project:git-status:get',
   watchProjectGitStatus: 'devflow:local-project:git-status:watch',
@@ -190,6 +209,7 @@ export const ipcChannels = {
   reviseAgentMemory: 'devflow:agent-memory:revise',
   deleteAgentMemory: 'devflow:agent-memory:delete',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
+  requestClarificationChanges: 'devflow:clarification:changes:request',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
   reviseGitHubDelivery: 'devflow:github-delivery:revise',
@@ -265,6 +285,7 @@ export type RunProjectTestsResult = {
 export type ApproveGateInput = {
   runId: string
   nodeId: string
+  expectedClarificationRevision?: ClarificationRevisionIdentity
 }
 
 export type ApproveGateResult = {
@@ -279,6 +300,27 @@ export type CompleteWorkflowAgentNodeInput = {
   userId: string
   userName: string
   providerId?: string
+  executor?: StageAgentExecutorKind
+}
+
+export type ClarificationRevisionIdentity = {
+  artifactId: string
+  revision: number
+  revisionDigest: string
+}
+
+export type RequestClarificationChangesInput = ClarificationRevisionIdentity & {
+  runId: string
+  nodeId: string
+  reason: string
+}
+
+export type RequestClarificationChangesResult = {
+  run: WorkflowRun
+  revision: Artifact
+  feedback: Artifact
+  event: AgentEvent
+  state: LocalExecutionState
 }
 
 export type CompleteWorkflowAgentNodeResult = {
@@ -563,6 +605,7 @@ export type PairDesktopResult = {
 export type DevFlowDesktopApi = {
   platform: string
   loadState: () => Promise<LocalExecutionState>
+  loadDataProfileDiagnostics: () => Promise<DesktopDataProfileDiagnostics>
   loadDesktopPairing: () => Promise<DesktopPairingCredential | null>
   pairDesktop: (input: PairDesktopInput) => Promise<PairDesktopResult>
   loadRemoteSnapshot: (input?: LoadRemoteSnapshotInput) => Promise<RemoteTeamSnapshot>
@@ -626,6 +669,7 @@ export type DevFlowDesktopApi = {
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
+  requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
   prepareGitHubDelivery: (
     input: PrepareGitHubDeliveryInput,
@@ -1246,6 +1290,26 @@ export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWor
     ...(typeof value['providerId'] === 'string' && value['providerId'].trim()
       ? { providerId: value['providerId'].trim() }
       : {}),
+    ...(value['executor'] === 'direct-provider' || value['executor'] === 'local-agent'
+      ? { executor: value['executor'] }
+      : {}),
+  }
+}
+
+export function parseRequestClarificationChangesInput(value: unknown): RequestClarificationChangesInput {
+  if (!isRecord(value)) throw new Error('Invalid request clarification changes payload')
+  rejectUnexpectedFields(
+    value,
+    ['runId', 'nodeId', 'artifactId', 'revision', 'revisionDigest', 'reason'],
+    'request clarification changes payload',
+  )
+  return {
+    runId: readRequiredString(value, 'runId'),
+    nodeId: readRequiredString(value, 'nodeId'),
+    artifactId: readRequiredString(value, 'artifactId'),
+    revision: readExactPositiveVersion(value, 'revision'),
+    revisionDigest: readExactRequiredDigest(value, 'revisionDigest'),
+    reason: readRequiredString(value, 'reason'),
   }
 }
 
@@ -1375,11 +1439,25 @@ export function parseApproveGateInput(value: unknown): ApproveGateInput {
     throw new Error('Invalid approve gate payload')
   }
 
-  rejectUnexpectedFields(value, ['runId', 'nodeId'], 'approve gate payload')
+  rejectUnexpectedFields(value, ['runId', 'nodeId', 'expectedClarificationRevision'], 'approve gate payload')
+
+  const expected = value['expectedClarificationRevision']
+  if (expected !== undefined && !isRecord(expected)) {
+    throw new Error('Invalid expected clarification revision')
+  }
 
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
+    ...(expected
+      ? {
+          expectedClarificationRevision: {
+            artifactId: readExactRequiredIdentifier(expected, 'artifactId'),
+            revision: readExactPositiveVersion(expected, 'revision'),
+            revisionDigest: readExactRequiredDigest(expected, 'revisionDigest'),
+          },
+        }
+      : {}),
   }
 }
 

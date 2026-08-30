@@ -13,13 +13,17 @@ import {
   createAgentMemoryCandidate,
   createCoordinationSessionState,
   createAgentRuntime,
+  buildClarificationReviewBundle,
+  completeWorkflowAgentNode,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   createRemoteSyncOperation,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
   parseCurrentKnowledgeCitation,
+  markClarificationRevisionsSuperseded,
   redactTestEvidenceForStorage,
+  requestClarificationChanges,
   requestAgentAction,
   recordCoordinationTaskResult,
   resumeAgentRuntime,
@@ -6987,6 +6991,128 @@ describe('createLocalStore', () => {
     reopened.close()
   })
 
+  it('enqueues actual provider settlement while the Coding Agent waits for permission', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(run)
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const preparing: CodingAgentRun = {
+      ...activeFields,
+      status: 'preparing',
+      summary: 'Preparing the provider request.',
+    }
+    await expect(store.reserveCodingAgentRun(preparing)).resolves.toMatchObject({ reserved: true })
+    expect((await store.listRemoteSyncOperations()).some(
+      (operation) => operation.kind === 'coding-agent-summary',
+    )).toBe(false)
+
+    const waiting: CodingAgentRun = {
+      ...preparing,
+      status: 'waiting_permission',
+      summary: 'Provider usage is settled; waiting for permission.',
+      runtimeCostSummary: {
+        id: `coding-runtime-cost-${preparing.runId}-${preparing.nodeId}`,
+        runId: preparing.runId,
+        nodeId: preparing.nodeId,
+        userId: preparing.requestedBy,
+        projectId: preparing.projectId,
+        provider: 'openai',
+        providerId: preparing.providerId,
+        model: 'deepseek-v4-flash',
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheReadTokens: null,
+        cacheMissTokens: null,
+        totalTokens: 120,
+        cacheHitRate: null,
+        usageStatus: 'incomplete',
+        costStatus: 'unknown',
+        phase: 'provider_settlement',
+        costUsd: null,
+        pricingSnapshot: null,
+        breakdown: null,
+        timestamp: '2026-08-31T00:30:00.000Z',
+        source: 'provider_reported',
+        redacted: true,
+      },
+    }
+    await expect(store.commitCodingAgentMutation({
+      expectedRun: preparing,
+      expectedPendingPermissionRequestIds: [],
+      run: waiting,
+    })).resolves.toMatchObject({ committed: true, run: waiting })
+
+    expect(await store.listRemoteSyncOperations()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'coding-agent-summary',
+        localProjectId: project.id,
+        runId: waiting.runId,
+        entityId: waiting.id,
+      }),
+    ]))
+    store.close()
+  })
+
+  it('round-trips an immutable runtime pricing snapshot without prompt or credential material', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const costSummary = {
+      id: 'coding-runtime-cost-run-1-node-build',
+      runId: codingRun.runId,
+      nodeId: codingRun.nodeId,
+      userId: codingRun.requestedBy,
+      projectId: codingRun.projectId,
+      provider: 'openai' as const,
+      providerId: 'deepseek-production',
+      model: 'deepseek-v4-flash',
+      inputTokens: 100,
+      outputTokens: 20,
+      cacheReadTokens: 40,
+      cacheMissTokens: 60,
+      totalTokens: 120,
+      cacheHitRate: 0.4,
+      usageStatus: 'complete' as const,
+      costStatus: 'settled' as const,
+      phase: 'provider_settlement' as const,
+      costUsd: 0.00002668,
+      pricingSnapshot: {
+        providerId: 'deepseek-production',
+        model: 'deepseek-v4-flash',
+        tier: 'off_peak' as const,
+        effectiveAt: '2026-08-16T16:00:00.000Z',
+        source: 'https://api-docs.deepseek.com/quick_start/pricing/',
+        sourceVersion: 'deepseek-pricing-snapshot-2026-08-30',
+        currency: 'USD' as const,
+        unit: 'per_1m_tokens' as const,
+        cacheHitInputUsdPerMillion: 0.007,
+        cacheMissInputUsdPerMillion: 0.22,
+        outputUsdPerMillion: 0.66,
+      },
+      breakdown: {
+        cacheHitInputUsd: 0.00000028,
+        cacheMissInputUsd: 0.0000132,
+        outputUsd: 0.0000132,
+        totalUsd: 0.00002668,
+      },
+      timestamp: '2026-08-30T00:30:00.000Z',
+      source: 'provider_reported' as const,
+      redacted: true as const,
+    }
+    await store.saveCodingAgentRun({ ...codingRun, runtimeCostSummary: costSummary })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    expect((await reopened.listCodingAgentRuns(codingRun.runId))[0]?.runtimeCostSummary).toEqual(costSummary)
+    reopened.close()
+    const bytes = (await readFile(dbPath)).toString()
+    expect(bytes).not.toContain('prompt_cache_secret')
+    expect(bytes).not.toContain('api-key-secret')
+  })
+
   it('atomically preserves the first terminal Coding Agent transition', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
@@ -10033,6 +10159,209 @@ describe('createLocalStore', () => {
       agentTraces: [agentTrace],
       agentTokenUsage: [agentTokenUsage],
     })
+    second.close()
+  })
+
+  it('recovers clarification revisions, feedback, the active Gate, and failure Trace after a cold reopen', async () => {
+    const dbPath = await tempDbPath()
+    const createdAt = '2026-08-30T12:00:00.000Z'
+    const v1At = '2026-08-30T12:01:00.000Z'
+    const feedbackAt = '2026-08-30T12:02:00.000Z'
+    const v2At = '2026-08-30T12:03:00.000Z'
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-clarification-cold-reopen',
+      title: 'Clarify retry behavior',
+      request: 'Document the repository-backed retry boundary.',
+      projectId: 'project-1',
+      creatorId: 'user-1',
+      branchName: 'codex/clarification-cold-reopen',
+      now: createdAt,
+    })
+    const clarificationNode = created.run.nodes.find(
+      (node) => node.kind === 'agent' && node.stage === 'clarify',
+    )!
+    const executor = {
+      version: 1 as const,
+      kind: 'local-agent' as const,
+      executorId: 'opencode-http-read-only',
+      executorVersion: '1.0.0',
+      capabilityProfile: 'repository-read-only-v1' as const,
+      model: 'fixture-model',
+      startedAt: v1At,
+      completedAt: v1At,
+      durationMs: 1,
+      terminalReason: 'success' as const,
+      contextDigest: 'b'.repeat(64),
+    }
+    const v1: Artifact = {
+      id: 'artifact-run-clarification-cold-reopen-clarification',
+      runId: created.run.id,
+      nodeId: clarificationNode.id,
+      kind: 'clarification',
+      title: 'Clarification v1',
+      summary: 'Initial retry boundary.',
+      content: 'Retry once after a transient response.',
+      redacted: true,
+      updatedAt: v1At,
+      clarificationRevision: {
+        version: 1,
+        revision: 1,
+        status: 'review_requested',
+        revisionDigest: 'a'.repeat(64),
+        rawRequestArtifactId: created.artifacts[0]!.id,
+        feedbackArtifactIds: [],
+        goals: ['Define retry behavior'],
+        acceptanceCriteria: ['Retry boundary is explicit'],
+        nonGoals: ['Change runtime code'],
+        assumptions: [],
+        risks: [],
+        openQuestions: [],
+        executor,
+        generatedAt: v1At,
+      },
+    }
+    const firstCompletion = completeWorkflowAgentNode({
+      run: created.run,
+      nodeId: clarificationNode.id,
+      artifacts: created.artifacts,
+      generatedArtifact: v1,
+      existingEvents: created.events,
+      actorName: 'Stage Agent',
+      now: v1At,
+    })
+    const requested = await requestClarificationChanges({
+      run: firstCompletion.run,
+      gateNodeId: firstCompletion.nextNode.id,
+      artifacts: firstCompletion.artifacts,
+      existingEvents: [...created.events, firstCompletion.event],
+      actor: { id: 'reviewer-1', name: 'Repository Reviewer' },
+      reason: 'State the retry boundary explicitly.',
+      expectedArtifactId: v1.id,
+      expectedRevision: 1,
+      expectedRevisionDigest: 'a'.repeat(64),
+      now: feedbackAt,
+    })
+    const v2: Artifact = {
+      ...v1,
+      id: `${v1.id}-v2`,
+      title: 'Clarification v2',
+      summary: 'Revised retry boundary.',
+      content: 'Retry once only for HTTP 503, then surface the terminal error.',
+      updatedAt: v2At,
+      clarificationRevision: {
+        ...v1.clarificationRevision!,
+        revision: 2,
+        status: 'review_requested',
+        revisionDigest: 'c'.repeat(64),
+        feedbackArtifactIds: [requested.feedbackArtifact.id],
+        generatedAt: v2At,
+        executor: { ...executor, startedAt: v2At, completedAt: v2At },
+      },
+    }
+    const revisionArtifacts = markClarificationRevisionsSuperseded(
+      [created.artifacts[0]!, requested.updatedRevision, requested.feedbackArtifact],
+      v2.id,
+    )
+    const secondCompletion = completeWorkflowAgentNode({
+      run: requested.run,
+      nodeId: clarificationNode.id,
+      artifacts: revisionArtifacts,
+      generatedArtifact: v2,
+      existingEvents: [...created.events, firstCompletion.event, requested.event],
+      actorName: 'Stage Agent',
+      now: v2At,
+    })
+    const supersededV1 = secondCompletion.artifacts.find(
+      (candidate) => candidate.id === v1.id,
+    )!
+    const failureTrace: AgentTrace = {
+      id: 'agent-trace-clarification-failure',
+      runId: created.run.id,
+      nodeId: clarificationNode.id,
+      reviewId: 'stage-agent-failure-schema',
+      runtime: 'electron',
+      terminalReason: 'schema_invalid',
+      createdAt: '2026-08-30T12:04:00.000Z',
+      steps: [{
+        id: 'agent-trace-clarification-failure-terminal',
+        kind: 'provider_call',
+        label: 'Run local-agent',
+        summary: 'Stage Agent failed closed; no artifact was created.',
+        timestamp: '2026-08-30T12:04:00.000Z',
+      }],
+    }
+    const failureEvent: AgentEvent = {
+      id: 'event-stage-agent-failure-schema',
+      runId: created.run.id,
+      nodeId: clarificationNode.id,
+      sequence: 5,
+      kind: 'tool_result',
+      message: 'Stage Agent failed closed (schema_invalid).',
+      timestamp: failureTrace.createdAt,
+    }
+
+    const first = await createLocalStore({ dbPath })
+    await first.saveRun(created.run)
+    await first.saveArtifact(created.artifacts[0]!)
+    await first.saveEvent(created.events[0]!)
+    await expect(first.commitWorkflowMutation({
+      expectedRun: created.run,
+      run: firstCompletion.run,
+      artifacts: [v1],
+      events: [firstCompletion.event],
+    })).resolves.toEqual({ committed: true })
+    await expect(first.commitWorkflowMutation({
+      expectedRun: firstCompletion.run,
+      run: requested.run,
+      artifacts: [requested.updatedRevision, requested.feedbackArtifact],
+      events: [requested.event],
+    })).resolves.toEqual({ committed: true })
+    await expect(first.commitWorkflowMutation({
+      expectedRun: requested.run,
+      run: secondCompletion.run,
+      artifacts: [supersededV1, v2],
+      events: [secondCompletion.event],
+    })).resolves.toEqual({ committed: true })
+    await expect(first.commitWorkflowMutation({
+      expectedRun: secondCompletion.run,
+      run: secondCompletion.run,
+      events: [failureEvent],
+      agentTraces: [failureTrace],
+    })).resolves.toEqual({ committed: true })
+    first.close()
+
+    const second = await createLocalStore({ dbPath })
+    const recoveredRun = await second.getRun(created.run.id)
+    const recoveredArtifacts = await second.listArtifacts(created.run.id)
+    expect(recoveredRun?.currentNodeId).toBe(firstCompletion.nextNode.id)
+    expect(recoveredRun?.nodes.find((node) => node.id === firstCompletion.nextNode.id)?.status)
+      .toBe('running')
+    expect(recoveredArtifacts.filter((candidate) => candidate.kind === 'clarification'))
+      .toMatchObject([
+        { id: v1.id, clarificationRevision: { revision: 1, status: 'superseded' } },
+        { id: v2.id, clarificationRevision: { revision: 2, status: 'review_requested' } },
+      ])
+    expect(recoveredArtifacts.find((candidate) => candidate.kind === 'clarification_feedback'))
+      .toMatchObject({
+        content: 'State the retry boundary explicitly.',
+        clarificationFeedback: {
+          actorId: 'reviewer-1',
+          actorName: 'Repository Reviewer',
+          createdAt: feedbackAt,
+          targetArtifactId: v1.id,
+          targetRevision: 1,
+        },
+      })
+    expect(buildClarificationReviewBundle({
+      run: recoveredRun!,
+      gateNode: recoveredRun!.nodes.find((node) => node.id === recoveredRun!.currentNodeId)!,
+      artifacts: recoveredArtifacts,
+    })).toMatchObject({
+      state: 'ready',
+      activeRevision: { id: v2.id },
+    })
+    expect(await second.listAgentTraces(created.run.id)).toContainEqual(failureTrace)
+    expect(await second.listEvents(created.run.id)).toContainEqual(failureEvent)
     second.close()
   })
 

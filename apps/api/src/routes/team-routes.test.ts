@@ -2530,6 +2530,53 @@ describe('team API route resolver', () => {
     })
   })
 
+  it('fails closed when actual project spend contains an unknown provider settlement', async () => {
+    const repository = createRepository()
+    await resolveTeamRoute('PUT', '/api/runtime/budget-policy', repository, {
+      body: {
+        projectId: 'p-payments',
+        enabled: true,
+        monthlyLimitUsd: 10,
+        warningThresholdUsd: 8,
+      },
+      session: leadSession,
+    })
+    const overview = await repository.getTeamOverview(memberSession)
+    repository.getTeamOverview = vi.fn(async () => ({
+      ...overview,
+      projectCost: [
+        ...overview.projectCost.filter((rollup) => rollup.key !== 'p-payments'),
+        {
+          key: 'p-payments',
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          totalTokens: 0,
+          costUsd: 0,
+          unknownCostCount: 1,
+        },
+      ],
+    }))
+
+    const result = await resolveTeamRoute('POST', '/api/runtime/budget/evaluate', repository, {
+      body: {
+        projectId: 'p-payments',
+        providerId: 'deepseek',
+        projectedCostUsd: 0.01,
+      },
+      session: memberSession,
+    })
+
+    expect(result?.status).toBe(200)
+    expect(result?.body).toEqual({
+      status: 'unavailable',
+      blocksRun: true,
+      currentSpendUsd: 0,
+      projectedCostUsd: 0.01,
+      reason: 'Runtime budget cannot be evaluated while actual provider cost is unknown.',
+    })
+  })
+
   it('rejects gate override for owners and conflicted leads', async () => {
     const repository = createRepository()
     const body = {

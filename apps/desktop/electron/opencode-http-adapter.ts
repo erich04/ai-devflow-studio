@@ -138,6 +138,17 @@ export function createReleaseSmokeOpencodePermissionRules(): OpencodePermissionR
   ]
 }
 
+export function createReadOnlyStageAgentPermissionRules(): OpencodePermissionRule[] {
+  return [
+    { permission: '*', pattern: '*', action: 'deny' },
+    ...['read', 'glob', 'grep', 'list'].map((permission) => ({
+      permission,
+      pattern: '*',
+      action: 'allow' as const,
+    })),
+  ]
+}
+
 export function buildOpencodeServeArgs(input: {
   hostname: string
   port: number
@@ -169,12 +180,13 @@ export async function createOpencodeSession(input: {
   model: OpencodeSessionModel
   permissionRules?: OpencodePermissionRule[]
   fetcher?: Fetcher
+  signal?: AbortSignal
 }): Promise<OpencodeSession> {
   return postJson<OpencodeSession>(input.fetcher, input.baseUrl, withDirectory('/session', input.directory), {
     title: input.title,
     model: input.model,
     permission: input.permissionRules ?? createDefaultOpencodePermissionRules(),
-  })
+  }, input.signal)
 }
 
 export async function sendOpencodeMessage(input: {
@@ -184,6 +196,7 @@ export async function sendOpencodeMessage(input: {
   model: OpencodeMessageModel
   text: string
   fetcher?: Fetcher
+  signal?: AbortSignal
 }): Promise<unknown> {
   const response = await postJson<unknown>(
     input.fetcher,
@@ -193,6 +206,7 @@ export async function sendOpencodeMessage(input: {
       model: input.model,
       parts: [{ type: 'text', text: input.text }],
     },
+    input.signal,
   )
   const terminalError = opencodeMessageTerminalError(response)
   if (terminalError) {
@@ -298,11 +312,13 @@ export async function listOpencodeDiff(input: {
   sessionId: string
   directory: string
   fetcher?: Fetcher
+  signal?: AbortSignal
 }): Promise<OpencodeDiffFile[]> {
   return getJson<OpencodeDiffFile[]>(
     input.fetcher,
     input.baseUrl,
     withDirectory(`/session/${input.sessionId}/diff`, input.directory),
+    input.signal,
   )
 }
 

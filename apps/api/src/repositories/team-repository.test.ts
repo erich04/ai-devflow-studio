@@ -851,7 +851,8 @@ describe('seed team repository', () => {
       syncContext,
     )
 
-    const stored = (await repository.getTeamOverview(syncContext)).codingAgentSummaries.find(
+    const overview = await repository.getTeamOverview(syncContext)
+    const stored = overview.codingAgentSummaries.find(
       (summary) => summary.id === 'coding-hostile-metadata',
     )
     expect(JSON.stringify(stored)).not.toContain('branch-secret')
@@ -864,6 +865,8 @@ describe('seed team repository', () => {
     expect(JSON.stringify(stored)).not.toMatch(/C:[\\/]Users[\\/]Alice/)
     expect(stored?.costSummary).not.toHaveProperty('apiKey')
     expect(stored?.budgetDecision).not.toHaveProperty('token')
+    expect(overview.projectCost.find((rollup) => rollup.key === 'project-1')?.unknownCostCount).toBe(1)
+    expect(overview.totalCost).toContain('+ unknown')
   })
 
   it('returns workflow runs with their artifacts and events', async () => {

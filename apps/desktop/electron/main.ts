@@ -24,6 +24,10 @@ import {
   createAcceptanceEvidenceBundleArtifact,
   createPrDraftArtifact,
   createWorkflowRunFromRequest,
+  approveClarificationRevision,
+  buildClarificationReviewBundle,
+  markClarificationRevisionsSuperseded,
+  requestClarificationChanges,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   redactLocalAbsolutePaths,
@@ -33,7 +37,9 @@ import {
   redactSecrets,
   resolveEffectivePolicy,
   runWorkflowStageAgent,
+  StageAgentExecutionError,
   type AgentEvent,
+  type AgentTrace,
   type GateCommand,
   type GateEnforcementDecision,
   type GateOverrideDecision,
@@ -53,7 +59,18 @@ import {
   resolveDevFlowRuntimeFlags,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
-import { createLocalStore, type LocalStore } from './local-store.js'
+import {
+  CURRENT_SCHEMA_VERSION,
+  createLocalStore,
+  type LocalStore,
+} from './local-store.js'
+import {
+  buildDesktopDataProfileDiagnostics,
+  classifyDesktopDataProfileOpenError,
+  persistDesktopDataProfileSelection,
+  resolveDesktopDataProfile,
+  safeDesktopDataProfileSummary,
+} from './desktop-data-profile.js'
 import { createDesktopAgentRuntime, type DesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { createAgentRuntimeRendererAccess } from './agent-runtime-renderer-access.js'
 import { createAgentCoordinationRendererAccess } from './agent-coordination-renderer-access.js'
@@ -99,6 +116,7 @@ import {
   parseCreateRunInput,
   parseAdvanceAgentRuntimeInput,
   parseCompleteWorkflowAgentNodeInput,
+  parseRequestClarificationChangesInput,
   parseListAgentReviewsInput,
   parseListAgentRuntimesInput,
   parseGetAgentRuntimeInput,
@@ -193,6 +211,7 @@ import { createGitHubOutboundContentScanner } from './github-outbound-content-sc
 import { createManagedWorkspaceCleanupService } from './managed-workspace-cleanup.js'
 import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
+import { createReadOnlyLocalStageAgentExecutor } from './stage-agent-executor.js'
 import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine.js'
 import { detectCodingRuntimeEngines } from './opencode-discovery.js'
 import { stopOpencodeWithRetry } from './opencode-shutdown.js'
@@ -241,9 +260,17 @@ import {
 import { resolveDesktopRendererEntry } from './renderer-entry.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const configuredUserDataDirectory = process.env['DEVFLOW_USER_DATA_DIR']?.trim()
-if (configuredUserDataDirectory) {
-  app.setPath('userData', path.resolve(configuredUserDataDirectory))
+const dataProfileResolution = resolveDesktopDataProfile({
+  mode: app.isPackaged ? 'packaged' : 'development',
+  defaultUserDataDirectory: app.getPath('userData'),
+  productDataRoot: path.join(app.getPath('appData'), 'AI DevFlow Studio'),
+  env: process.env,
+})
+const selectedDataProfile = dataProfileResolution.status === 'selected'
+  ? dataProfileResolution.profile
+  : null
+if (selectedDataProfile) {
+  app.setPath('userData', selectedDataProfile.directory)
 }
 const DEFAULT_TEST_TIMEOUT_MS = 120_000
 const GATE_COMMAND_CYCLE_TIMEOUT_MS = 30_000
@@ -324,9 +351,18 @@ if (!hasSingleInstanceLock) {
 }
 
 function getStore() {
-  const userDataPath = app.getPath('userData')
+  if (!selectedDataProfile || dataProfileResolution.status !== 'selected') {
+    throw new Error('Desktop data profile selection is blocked; LocalStore was not opened')
+  }
   storePromise ??= createLocalStore({
-    dbPath: path.join(userDataPath, 'devflow.sqlite'),
+    dbPath: selectedDataProfile.databasePath,
+  }).then((store) => {
+    persistDesktopDataProfileSelection({
+      registryPath: dataProfileResolution.registryPath,
+      profile: selectedDataProfile,
+    })
+    console.info('[desktop-data-profile]', safeDesktopDataProfileSummary(selectedDataProfile))
+    return store
   })
   return storePromise
 }
@@ -1958,6 +1994,19 @@ function registerIpcHandlers() {
     return store.loadState()
   })
 
+  ipcMain.handle(ipcChannels.loadDataProfileDiagnostics, async () => {
+    if (!selectedDataProfile) {
+      throw new Error('Desktop data profile selection is unavailable')
+    }
+    const state = await (await getStore()).loadState()
+    return buildDesktopDataProfileDiagnostics({
+      profile: selectedDataProfile,
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      projectCount: state.projects.length,
+      runs: state.runs,
+    })
+  })
+
   ipcMain.handle(ipcChannels.loadRepositoryKnowledge, async (_, payload: unknown) => {
     const input = parseLoadRepositoryKnowledgeInput(payload)
     return loadTrustedRepositoryKnowledge(input.projectId)
@@ -2459,30 +2508,128 @@ function registerIpcHandlers() {
       store.listArtifacts(run.id),
       store.listEvents(run.id),
     ])
-    const providerId = input.providerId
-    if (!providerId) {
-      throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
-    }
-    const provider = await resolveAgentProvider(store, providerId)
-    const completedAt = new Date().toISOString()
-    const generated = await runWorkflowStageAgent({
+    const executorKind = input.executor ?? 'direct-provider'
+    const actor = resolveTrustedWorkflowActor(
       run,
-      node,
-      artifacts,
-      provider,
-      requestedBy: input.userId,
-      runtime: 'electron',
-      now: () => completedAt,
-    })
+      await store.getDesktopPairingCredential(),
+    )
+    let provider: Awaited<ReturnType<typeof resolveAgentProvider>> | undefined
+    let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
+    if (executorKind === 'direct-provider') {
+      if (!input.providerId) {
+        throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
+      }
+      provider = await resolveAgentProvider(store, input.providerId)
+    } else {
+      if (node.stage !== 'clarify') {
+        throw new Error('Read-only local Agent is authorized only for requirement clarification')
+      }
+      const [project, configuration] = await Promise.all([
+        store.listProjects().then((projects) => projects.find((candidate) => candidate.id === run.projectId)),
+        store.getCodingRuntimeConfiguration(run.projectId),
+      ])
+      if (!project || !configuration || configuration.executor !== 'opencode-http') {
+        throw new Error('Read-only local Agent requires a selected repository and an available managed OpenCode runtime')
+      }
+      executor = createReadOnlyLocalStageAgentExecutor({
+        projectId: project.id,
+        projectPath: project.path,
+        binaryPath: configuration.binaryPath,
+        providerId: configuration.providerId,
+        modelId: configuration.modelId,
+        detectedVersion: configuration.detectedVersion,
+        processManager: opencodeProcessManager,
+        runtimeEnv: process.env,
+      })
+    }
+    const completedAt = new Date().toISOString()
+    let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>>
+    try {
+      generated = await runWorkflowStageAgent({
+        run,
+        node,
+        artifacts,
+        ...(provider ? { provider } : {}),
+        ...(executor ? { executor } : {}),
+        requestedBy: actor.userId,
+        runtime: 'electron',
+        now: () => completedAt,
+      })
+    } catch (error) {
+      const terminalReason = error instanceof StageAgentExecutionError
+        ? error.terminalReason
+        : 'failed'
+      const failureId = `stage-agent-failure-${randomUUID()}`
+      const failureTrace: AgentTrace = {
+        id: `agent-trace-${failureId}`,
+        runId: run.id,
+        nodeId: node.id,
+        reviewId: failureId,
+        runtime: 'electron',
+        terminalReason,
+        createdAt: completedAt,
+        steps: [{
+          id: `agent-trace-${failureId}-terminal`,
+          kind: 'provider_call',
+          label: `Run ${executorKind}`,
+          summary: `Stage Agent failed closed; terminal=${terminalReason}. No artifact was created and Workflow did not advance.`,
+          timestamp: completedAt,
+        }],
+      }
+      const failureEvent: AgentEvent = {
+        id: `event-${failureId}`,
+        runId: run.id,
+        nodeId: node.id,
+        sequence: events.length + 1,
+        kind: 'tool_result',
+        message: `Stage Agent failed closed (${terminalReason}); Workflow remains on ${node.title}.`,
+        timestamp: completedAt,
+      }
+      let failureAudit
+      try {
+        failureAudit = await store.commitWorkflowMutation({
+          expectedRun: run,
+          run,
+          events: [failureEvent],
+          agentTraces: [failureTrace],
+        })
+      } catch {
+        throw new Error(
+          `Stage Agent failed closed: ${terminalReason}; failure audit could not be persisted`,
+        )
+      }
+      if (!failureAudit.committed) {
+        throw new Error(
+          `Stage Agent failed closed: ${terminalReason}; failure audit was rejected (${failureAudit.reason})`,
+        )
+      }
+      throw new Error(`Stage Agent failed closed: ${terminalReason}`)
+    }
     const event: AgentEvent = {
       id: `event-${generated.artifact.id}`,
       runId: run.id,
       nodeId: node.id,
       sequence: events.length + 1,
       kind: 'thinking',
-      message: `${input.userName} generated ${generated.artifact.title}. Source: ${generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
+      message: `${actor.userName} generated ${generated.artifact.title}. Source: ${generated.source === 'local_agent' ? 'read-only local Agent' : generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
       timestamp: completedAt,
+      ...(generated.artifact.clarificationRevision
+        ? {
+            clarificationAudit: {
+              version: 1 as const,
+              action: 'revision_generated' as const,
+              artifactId: generated.artifact.id,
+              revision: generated.artifact.clarificationRevision.revision,
+              revisionDigest: generated.artifact.clarificationRevision.revisionDigest,
+              actorId: actor.userId,
+            },
+          }
+        : {}),
     }
+    const superseded = generated.artifact.kind === 'clarification'
+      ? markClarificationRevisionsSuperseded(artifacts, generated.artifact.id)
+          .filter((artifact, index) => artifact !== artifacts[index])
+      : []
     const completed = await executeWorkflowCommandOrThrow(store, {
       runId: run.id,
       expectedRunUpdatedAt: run.updatedAt,
@@ -2492,8 +2639,10 @@ function registerIpcHandlers() {
         artifactId: generated.artifact.id,
       },
       candidates: {
-        artifacts: [generated.artifact],
+        artifacts: [...superseded, generated.artifact],
         events: [event],
+        agentTraces: [generated.trace],
+        ...(generated.tokenUsage ? { agentTokenUsage: [generated.tokenUsage] } : {}),
       },
       now: completedAt,
     })
@@ -2503,6 +2652,52 @@ function registerIpcHandlers() {
       run: completed.run,
       artifact: generated.artifact,
       event,
+      state: await store.loadState(),
+    }
+  })
+
+  ipcMain.handle(ipcChannels.requestClarificationChanges, async (_, payload: unknown) => {
+    const input = parseRequestClarificationChangesInput(payload)
+    const store = await getStore()
+    const run = await store.getRun(input.runId)
+    if (!run) throw new Error(`Run not found: ${input.runId}`)
+    const actor = resolveTrustedWorkflowActor(
+      run,
+      await store.getDesktopPairingCredential(),
+    )
+    const [artifacts, events] = await Promise.all([
+      store.listArtifacts(run.id),
+      store.listEvents(run.id),
+    ])
+    const revision = await requestClarificationChanges({
+      run,
+      gateNodeId: input.nodeId,
+      artifacts,
+      existingEvents: events,
+      actor: { id: actor.userId, name: actor.userName },
+      reason: input.reason,
+      expectedArtifactId: input.artifactId,
+      expectedRevision: input.revision,
+      expectedRevisionDigest: input.revisionDigest,
+      now: new Date().toISOString(),
+    })
+    const committed = await store.commitWorkflowMutation({
+      expectedRun: run,
+      run: revision.run,
+      artifacts: [revision.updatedRevision, revision.feedbackArtifact],
+      events: [revision.event],
+    })
+    if (!committed.committed) {
+      throw new Error(committed.reason === 'stale_run'
+        ? 'The clarification changed before feedback could be committed'
+        : `Run not found: ${run.id}`)
+    }
+    wakeRemoteSyncOutbox()
+    return {
+      run: revision.run,
+      revision: revision.updatedRevision,
+      feedback: revision.feedbackArtifact,
+      event: revision.event,
       state: await store.loadState(),
     }
   })
@@ -2824,11 +3019,33 @@ function registerIpcHandlers() {
     }
 
     const timestamp = new Date().toISOString()
-    const [existingEvents, codingRuns] = await Promise.all([
+    const [existingEvents, codingRuns, artifacts] = await Promise.all([
       store.listEvents(run.id),
       node.kind === 'acceptance' ? store.listCodingAgentRuns(run.id) : Promise.resolve([]),
+      node.kind === 'gate' && node.stage === 'clarify' ? store.listArtifacts(run.id) : Promise.resolve([]),
     ])
-    const event: AgentEvent = {
+    let approvedClarification: ReturnType<typeof approveClarificationRevision> | undefined
+    if (node.kind === 'gate' && node.stage === 'clarify') {
+      const bundle = buildClarificationReviewBundle({ run, gateNode: node, artifacts })
+      const expected = input.expectedClarificationRevision
+      const metadata = bundle.activeRevision?.clarificationRevision
+      if (
+        bundle.state !== 'ready' || !bundle.activeRevision || !metadata || !expected ||
+        expected.artifactId !== bundle.activeRevision.id ||
+        expected.revision !== metadata.revision ||
+        expected.revisionDigest !== metadata.revisionDigest
+      ) {
+        throw new Error('Gate approval rejected: clarification revision is missing, stale, or no longer current')
+      }
+      approvedClarification = approveClarificationRevision({
+        artifact: bundle.activeRevision,
+        actorId: actor.userId,
+        now: timestamp,
+        sequence: existingEvents.length + 1,
+        gateNodeId: node.id,
+      })
+    }
+    const event: AgentEvent = approvedClarification?.event ?? {
       id: `event-approval-${randomUUID()}`,
       runId: run.id,
       nodeId: node.id,
@@ -2847,7 +3064,10 @@ function registerIpcHandlers() {
         type: node.kind === 'acceptance' ? 'approve_acceptance' : 'approve_gate',
         nodeId: node.id,
       },
-      candidates: { events: [event] },
+      candidates: {
+        events: [event],
+        ...(approvedClarification ? { artifacts: [approvedClarification.artifact] } : {}),
+      },
       approval: {
         roleAllowed: true,
         policy: { blocksApproval: false },
@@ -2987,17 +3207,35 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.getCodingChangeSetPreview, async (_, payload: unknown) => {
     const input = parseGetCodingChangeSetPreviewInput(payload)
     const store = await getStore()
-    const [changeSet, codingRun] = await Promise.all([
+    const [changeSet, codingRun, permissionRequests] = await Promise.all([
       store.getCodingChangeSet(input.changeSetId),
       store.listCodingAgentRuns().then((runs) =>
         runs.find((candidate) => candidate.id === input.codingRunId),
       ),
+      store.listCodingPermissionRequests(input.codingRunId),
     ])
+    const pendingPermission = permissionRequests.find((request) => (
+      request.status === 'pending' &&
+      request.changeSetId === input.changeSetId &&
+      request.codingRunId === input.codingRunId
+    ))
+    const currentTime = Date.now()
+    const permissionExpiry = pendingPermission ? Date.parse(pendingPermission.expiresAt) : Number.NaN
+    const changeSetExpiry = changeSet ? Date.parse(changeSet.expiresAt) : Number.NaN
     if (
       !changeSet ||
       !codingRun ||
+      !pendingPermission ||
+      codingRun.status !== 'waiting_permission' ||
+      pendingPermission.runId !== codingRun.runId ||
+      pendingPermission.nodeId !== codingRun.nodeId ||
       changeSet.codingRunId !== codingRun.id ||
-      codingRun.changeSetId !== changeSet.id
+      codingRun.changeSetId !== changeSet.id ||
+      pendingPermission.changeSetDigest !== changeSet.changeSetDigest ||
+      !Number.isFinite(permissionExpiry) ||
+      !Number.isFinite(changeSetExpiry) ||
+      permissionExpiry <= currentTime ||
+      changeSetExpiry <= currentTime
     ) {
       throw new Error('Coding Change Set preview is unavailable or stale')
     }
@@ -3136,6 +3374,9 @@ function registerIpcHandlers() {
     const input = parseOpenManagedWorktreeInput(payload)
     const runtime = await createCodingRuntimeForRequest()
     const workspace = await runtime.findManagedWorktree(input)
+    if (workspace.deletedAt || (workspace.cleanupStatus && workspace.cleanupStatus !== 'active')) {
+      throw new Error('Managed worktree is no longer available')
+    }
     const error = await shell.openPath(workspace.worktreePath)
     if (error) {
       throw new Error(error)
@@ -3216,7 +3457,27 @@ if (hasSingleInstanceLock) {
     }
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    if (dataProfileResolution.status === 'blocked') {
+      const candidateSummary = dataProfileResolution.candidates
+        .map((candidate) => `${candidate.name} (${candidate.pathFingerprint})`)
+        .join(', ')
+      dialog.showErrorBox(
+        'Desktop data profile selection required',
+        `${dataProfileResolution.message}${candidateSummary ? `\n\nDetected profiles: ${candidateSummary}` : ''}`,
+      )
+      app.quit()
+      return
+    }
+    try {
+      await getStore()
+    } catch (error) {
+      const failure = classifyDesktopDataProfileOpenError(error)
+      console.error('[desktop-data-profile]', { code: failure.code })
+      dialog.showErrorBox(failure.title, failure.message)
+      app.quit()
+      return
+    }
     const defaultSession = session.defaultSession
     defaultSession.setSpellCheckerLanguages([])
     defaultSession.setSpellCheckerEnabled(false)

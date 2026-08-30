@@ -1,5 +1,6 @@
 import { useRef, type FormEvent } from 'react'
 import {
+  buildClarificationReviewBundle,
   canRunCodingAgentOnNode,
   canApproveGate,
   createWorkflowRunFromRequest,
@@ -15,6 +16,7 @@ import {
   type ThemePreference,
   type WorkflowNode,
   type WorkflowRun,
+  type StageAgentExecutorKind,
 } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
 import {
@@ -104,6 +106,7 @@ export function useDesktopActions(input: {
   selectedGitHubDeliveryIntent?: GitHubDeliveryIntent
   canVerifyGitHubDeliveryRevocation?: boolean
   gateEnforcementDecision: GateEnforcementDecision | null
+  stageAgentExecutorKind?: StageAgentExecutorKind
   applyLocalExecutionState: (state: import('@ai-devflow/shared').LocalExecutionState) => void
 }) {
   const {
@@ -119,6 +122,7 @@ export function useDesktopActions(input: {
     selectedManagedWorkspace,
     selectedGitHubDeliveryIntent,
     canVerifyGitHubDeliveryRevocation = false,
+    stageAgentExecutorKind = 'direct-provider',
     applyLocalExecutionState,
   } = input
   const {
@@ -386,9 +390,27 @@ export function useDesktopActions(input: {
 
     const pending = startPendingInspectorAction('approveGate', selectedRun, selectedNode, '正在通过 Gate...')
     try {
+      const clarificationBundle =
+        selectedNode.kind === 'gate' && selectedNode.stage === 'clarify'
+          ? buildClarificationReviewBundle({
+              run: selectedRun,
+              gateNode: selectedNode,
+              artifacts,
+            })
+          : undefined
+      const clarificationMetadata = clarificationBundle?.activeRevision?.clarificationRevision
       const result = await desktopApi.approveGate({
         runId: selectedRun.id,
         nodeId: selectedNode.id,
+        ...(clarificationBundle?.state === 'ready' && clarificationBundle.activeRevision && clarificationMetadata
+          ? {
+              expectedClarificationRevision: {
+                artifactId: clarificationBundle.activeRevision.id,
+                revision: clarificationMetadata.revision,
+                revisionDigest: clarificationMetadata.revisionDigest,
+              },
+            }
+          : {}),
       })
       applyLocalExecutionState(result.state)
       const nextNode = result.run.nodes.find((node) => node.id === result.run.currentNodeId)
@@ -428,7 +450,7 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    if (!selectedAgentProviderId) {
+    if (stageAgentExecutorKind === 'direct-provider' && !selectedAgentProviderId) {
       setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider Name、Base URL、Model 和 API Key')
       return
     }
@@ -447,7 +469,10 @@ export function useDesktopActions(input: {
         nodeId: selectedNode.id,
         userId: currentUser.id,
         userName: currentUser.name,
-        providerId: selectedAgentProviderId,
+        executor: stageAgentExecutorKind,
+        ...(stageAgentExecutorKind === 'direct-provider'
+          ? { providerId: selectedAgentProviderId }
+          : {}),
       })
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.run.id)
@@ -456,6 +481,50 @@ export function useDesktopActions(input: {
       setToast(successToast)
     } catch (error) {
       setToast(error instanceof Error ? error.message : '生成阶段产物失败')
+    } finally {
+      clearPendingInspectorAction(pending)
+    }
+  }
+
+  async function requestSelectedClarificationChanges(reason: string) {
+    if (
+      !desktopApi?.requestClarificationChanges || !selectedRun || !selectedNode ||
+      selectedNode.kind !== 'gate' || selectedNode.stage !== 'clarify'
+    ) {
+      return
+    }
+    const bundle = buildClarificationReviewBundle({
+      run: selectedRun,
+      gateNode: selectedNode,
+      artifacts,
+    })
+    const metadata = bundle.activeRevision?.clarificationRevision
+    if (bundle.state !== 'ready' || !bundle.activeRevision || !metadata) {
+      setToast(bundle.message)
+      return
+    }
+    if (blockIfInspectorWriteInFlight()) return
+    const pending = startPendingInspectorAction(
+      'approveGate',
+      selectedRun,
+      selectedNode,
+      '正在提交澄清修订意见...',
+    )
+    try {
+      const result = await desktopApi.requestClarificationChanges({
+        runId: selectedRun.id,
+        nodeId: selectedNode.id,
+        artifactId: bundle.activeRevision.id,
+        revision: metadata.revision,
+        revisionDigest: metadata.revisionDigest,
+        reason,
+      })
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
+      setToast(`已请求修订 Clarification v${metadata.revision}，流程返回需求澄清`)
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '提交澄清修订意见失败')
     } finally {
       clearPendingInspectorAction(pending)
     }
@@ -1355,6 +1424,7 @@ export function useDesktopActions(input: {
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
+    requestSelectedClarificationChanges,
     selectLocalProject,
     saveTestCommand,
     executeTestPlan,

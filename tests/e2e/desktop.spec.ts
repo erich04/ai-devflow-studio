@@ -1,9 +1,19 @@
 import { expect, test } from '@playwright/test'
 
-async function installDesktopApi(page: import('@playwright/test').Page) {
-  await page.addInitScript(() => {
+async function installDesktopApi(
+  page: import('@playwright/test').Page,
+  scenario: 'empty' | 'coding-permission' | 'coding-lifecycle' | 'clarification-revision' = 'empty',
+) {
+  await page.addInitScript((initialScenario) => {
+    let clarificationFeedbackRequested = initialScenario === 'clarification-revision'
+    const clarificationRequests: unknown[] = []
+    const clarificationApprovals: unknown[] = []
+    ;(window as unknown as { __clarificationRequests: unknown[] }).__clarificationRequests = clarificationRequests
+    ;(window as unknown as { __clarificationApprovals: unknown[] }).__clarificationApprovals = clarificationApprovals
     const codingConfigurationSaves: unknown[] = []
     ;(window as unknown as { __codingConfigurationSaves: unknown[] }).__codingConfigurationSaves = codingConfigurationSaves
+    const codingPermissionReplies: unknown[] = []
+    ;(window as unknown as { __codingPermissionReplies: unknown[] }).__codingPermissionReplies = codingPermissionReplies
     const localProject = {
       id: 'local-project-1',
       name: 'fixture-project',
@@ -14,10 +24,139 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
       createdAt: '2026-06-15T00:00:00.000Z',
       updatedAt: '2026-06-15T00:00:00.000Z',
     }
+    let codingLifecycleStarted = initialScenario !== 'coding-lifecycle'
+    let codingPermissionApproved = false
+    const codingScenarioState = () => {
+      const buildNode = {
+        id: 'node-build-review', stage: 'build', title: 'Implement locally', subtitle: 'Run Coding Agent in a managed worktree',
+        kind: 'task', status: codingPermissionApproved ? 'success' : 'running', ownerId: 'u-ling', retryCount: 0, artifactIds: [],
+      }
+      const testNode = {
+        id: 'node-test-review', stage: 'test', title: 'Verify the approved change', subtitle: 'Run the saved test evidence',
+        kind: 'test', status: codingPermissionApproved ? 'running' : 'pending', ownerId: 'u-ling', retryCount: 0, artifactIds: [],
+      }
+      const codingRun = {
+        id: 'coding-run-review', runId: 'run-coding-review', nodeId: 'node-build-review', projectId: localProject.id,
+        requestedBy: 'u-ling', providerId: 'doubao-review', engine: 'native',
+        status: codingPermissionApproved ? 'completed' : 'waiting_permission',
+        managedWorkspaceId: 'workspace-review', changeSetId: 'change-set-review', branchName: 'devflow/coding-review-1',
+        userInstruction: 'Apply the exact patch.', prompt: 'local redacted prompt',
+        summary: codingPermissionApproved ? 'Applied two approved files and the saved test passed.' : 'Waiting for exact Change Set approval.',
+        changedPaths: codingPermissionApproved ? ['src/a.ts', 'src/b.ts'] : [],
+        startedAt: '2026-08-30T12:00:00.000Z',
+        ...(codingPermissionApproved ? {
+          completedAt: '2026-08-30T12:02:00.000Z', diffArtifactId: 'diff-review', testEvidenceId: 'test-review',
+          runtimeCostSummary: {
+            id: 'cost-review', runId: 'run-coding-review', nodeId: 'node-build-review', userId: 'u-ling', projectId: localProject.id,
+            provider: 'openai', providerId: 'doubao-review', model: 'review-model', inputTokens: 120, outputTokens: 30,
+            cacheReadTokens: 20, cacheMissTokens: 100, totalTokens: 150, cacheHitRate: 1 / 6,
+            usageStatus: 'complete', costStatus: 'settled', phase: 'provider_settlement', costUsd: 0.012,
+            timestamp: '2026-08-30T12:02:00.000Z', source: 'provider_reported', redacted: true,
+          },
+        } : {}),
+        redacted: true,
+      }
+      const permission = {
+        id: 'permission-review', codingRunId: codingRun.id, runId: 'run-coding-review', nodeId: 'node-build-review',
+        origin: 'coding_executor', permission: 'patch', title: 'Apply exact Change Set', changeSetId: 'change-set-review',
+        changeSetDigest: 'c'.repeat(64), risk: 'warn', reasons: ['Review the exact two-file diff.'],
+        status: codingPermissionApproved ? 'approved' : 'pending', requestedAt: '2026-08-30T12:00:00.000Z',
+        expiresAt: '2099-08-30T12:05:00.000Z',
+      }
+      return {
+        projects: [localProject],
+        runs: [{
+          id: 'run-coding-review', version: codingPermissionApproved ? 2 : 1, title: 'Review a governed coding change', request: 'Apply the exact patch.',
+          projectId: localProject.id, creatorId: 'u-ling', status: codingPermissionApproved ? 'testing' : 'building',
+          currentNodeId: codingPermissionApproved ? testNode.id : buildNode.id,
+          branchName: 'devflow/coding-review', createdAt: '2026-08-30T12:00:00.000Z', updatedAt: codingPermissionApproved ? '2026-08-30T12:02:00.000Z' : '2026-08-30T12:00:00.000Z',
+          nodes: [buildNode, testNode], edges: [{ id: 'edge-build-test-review', source: buildNode.id, target: testNode.id, kind: 'sequence' }],
+        }],
+        artifacts: [], events: [],
+        testEvidence: codingPermissionApproved ? [{
+          id: 'test-review', runId: 'run-coding-review', nodeId: buildNode.id, projectId: localProject.id,
+          command: 'pnpm test', cwd: '<workspace>', status: 'passed', exitCode: 0, durationMs: 42,
+          stdout: '2 passed', stderr: '', summary: 'Saved worktree test passed.', redacted: true,
+          createdAt: '2026-08-30T12:02:00.000Z',
+        }] : [],
+        settings: { themePreference: 'system' }, mcpServers: [], agentReviews: [], agentTraces: [], agentTokenUsage: [],
+        codingRuns: codingLifecycleStarted ? [codingRun] : [],
+        codingEvents: codingPermissionApproved ? [
+          { id: 'event-apply', codingRunId: codingRun.id, runId: codingRun.runId, nodeId: buildNode.id, sequence: 1, kind: 'tool_result', message: 'Applied the exact approved Change Set.', timestamp: '2026-08-30T12:01:00.000Z', redacted: true },
+          { id: 'event-test', codingRunId: codingRun.id, runId: codingRun.runId, nodeId: buildNode.id, sequence: 2, kind: 'test', message: 'Saved worktree test passed.', timestamp: '2026-08-30T12:02:00.000Z', redacted: true },
+        ] : [],
+        codingPermissionRequests: codingLifecycleStarted ? [permission] : [],
+        codingPermissionDecisions: codingPermissionApproved ? [{ id: 'decision-review', requestId: permission.id, codingRunId: codingRun.id, decidedBy: 'u-ling', decision: 'approved', comment: 'Approved once.', decidedAt: '2026-08-30T12:01:00.000Z' }] : [],
+        managedCodingWorkspaces: codingLifecycleStarted ? [{
+          id: 'workspace-review', projectId: localProject.id, codingRunId: codingRun.id, sourcePath: localProject.path,
+          worktreePath: '/tmp/devflow-review', branchName: 'devflow/coding-review-1', baseBranch: 'main',
+          createdAt: '2026-08-30T12:00:00.000Z', cleanupStatus: 'active',
+        }] : [],
+        dependencyBootstrapEvidence: [],
+        codingDiffArtifacts: codingPermissionApproved ? [{
+          id: 'diff-review', runId: 'run-coding-review', nodeId: buildNode.id, projectId: localProject.id,
+          changedPaths: ['src/a.ts', 'src/b.ts'], patch: 'diff --git a/src/a.ts b/src/a.ts\n+new\ndiff --git a/src/b.ts b/src/b.ts\n+second',
+          truncated: false, redacted: true, createdAt: '2026-08-30T12:02:00.000Z',
+        }] : [],
+      }
+    }
 
     ;(window as unknown as { aiDevFlowDesktop: unknown }).aiDevFlowDesktop = {
       platform: 'e2e',
-      loadState: async () => ({
+      loadState: async () => initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle'
+        ? codingScenarioState()
+        : initialScenario === 'clarification-revision' ? (() => {
+        const runId = 'run-clarification-e2e'
+        const agentId = `${runId}-clarify`
+        const gateId = `${runId}-clarify-gate`
+        const raw = {
+          id: `artifact-${runId}-raw-request`, runId, nodeId: agentId, kind: 'raw_request',
+          title: 'Raw request', summary: 'Clarify retry behavior.',
+          content: 'Clarify webhook retry boundaries before implementation.', redacted: false,
+          updatedAt: '2026-08-30T12:00:00.000Z',
+        }
+        const clarification = {
+          id: `artifact-${runId}-clarification`, runId, nodeId: agentId, kind: 'clarification',
+          title: 'Clarification v1', summary: 'First reviewable revision.',
+          content: '# Clarification v1\n\nRetry boundaries and acceptance criteria.', redacted: true,
+          updatedAt: '2026-08-30T12:01:00.000Z',
+          clarificationRevision: {
+            version: 1, revision: 1, status: 'review_requested', revisionDigest: 'a'.repeat(64),
+            rawRequestArtifactId: raw.id, feedbackArtifactIds: [], goals: ['Bound retries'],
+            acceptanceCriteria: ['Retry boundary is explicit'], nonGoals: ['No implementation'],
+            assumptions: [], risks: [], openQuestions: [],
+            repositoryFindings: {
+              version: 1, repositoryDigest: 'b'.repeat(64),
+              verifiedFacts: [{ id: 'fact-1', statement: 'Retry handler exists.', citationIds: ['citation-1'] }],
+              citations: [{ id: 'citation-1', path: 'src/retry.ts', contentDigest: 'c'.repeat(64) }],
+              assumptions: [], openQuestions: [], uncheckedScopes: ['generated files'],
+            },
+            executor: {
+              version: 1, kind: 'local-agent', executorId: 'fake-local', executorVersion: '1',
+              capabilityProfile: 'repository-read-only-v1', model: 'fake',
+              startedAt: '2026-08-30T12:01:00.000Z', completedAt: '2026-08-30T12:01:00.000Z',
+              durationMs: 10, terminalReason: 'success', contextDigest: 'd'.repeat(64),
+            }, generatedAt: '2026-08-30T12:01:00.000Z',
+          },
+        }
+        const run = {
+          id: runId, version: 2, title: 'Clarification revision E2E', request: raw.content,
+          projectId: localProject.id, creatorId: 'u-ling', status: 'paused_at_gate', currentNodeId: gateId,
+          branchName: 'ai/clarification-e2e', createdAt: raw.updatedAt, updatedAt: clarification.updatedAt,
+          nodes: [
+            { id: agentId, stage: 'clarify', title: '需求澄清', subtitle: '补齐验收口径与非目标', kind: 'agent', status: 'success', ownerId: 'u-ling', retryCount: 0, artifactIds: [raw.id, clarification.id] },
+            { id: gateId, stage: 'clarify', title: '需求确认 Gate', subtitle: '确认当前澄清版本', kind: 'gate', status: 'running', ownerId: 'u-ling', requiredRole: 'member', retryCount: 0, artifactIds: [clarification.id] },
+          ],
+          edges: [{ id: `${runId}-edge`, source: agentId, target: gateId, kind: 'gate' }],
+        }
+        return {
+          projects: [localProject], runs: [run], artifacts: [raw, clarification], events: [], testEvidence: [],
+          settings: { themePreference: 'system' }, mcpServers: [], agentReviews: [], agentTraces: [],
+          agentTokenUsage: [], codingRuns: [], codingEvents: [], codingPermissionRequests: [],
+          codingPermissionDecisions: [], managedCodingWorkspaces: [], dependencyBootstrapEvidence: [],
+          codingDiffArtifacts: [],
+        }
+      })() : ({
         projects: [localProject],
         runs: [],
         artifacts: [],
@@ -221,7 +360,8 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         nodeId: string
         userName: string
       }) => {
-        const timestamp = '2026-06-21T16:05:00.000Z'
+        const revision = clarificationFeedbackRequested ? 2 : 1
+        const timestamp = revision === 2 ? '2026-08-30T12:06:00.000Z' : '2026-06-21T16:05:00.000Z'
         const clarifyGateId = `${input.runId}-clarify-gate`
         const rawRequestArtifact = {
           id: `artifact-${input.runId}-raw-request`,
@@ -234,8 +374,32 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           redacted: false,
           updatedAt: '2026-06-21T16:00:00.000Z',
         }
+        const priorArtifact = revision === 2 ? {
+          id: `artifact-${input.runId}-clarification`, runId: input.runId, nodeId: input.nodeId,
+          kind: 'clarification', title: 'Clarification v1', summary: 'First reviewable revision.',
+          content: '# Clarification v1\n\nRetry boundaries and acceptance criteria.', redacted: true,
+          updatedAt: '2026-08-30T12:01:00.000Z',
+          clarificationRevision: {
+            version: 1, revision: 1, status: 'superseded', revisionDigest: 'a'.repeat(64),
+            rawRequestArtifactId: rawRequestArtifact.id,
+            feedbackArtifactIds: [`artifact-${input.runId}-clarification-feedback-r1`],
+            goals: ['Bound retries'], acceptanceCriteria: ['Retry boundary is explicit'],
+            nonGoals: ['No implementation'], assumptions: [], risks: [], openQuestions: [],
+            executor: { version: 1, kind: 'local-agent', executorId: 'fake-local', executorVersion: '1', capabilityProfile: 'repository-read-only-v1', model: 'fake', startedAt: timestamp, completedAt: timestamp, durationMs: 10, terminalReason: 'success', contextDigest: 'd'.repeat(64) },
+            generatedAt: '2026-08-30T12:01:00.000Z',
+          },
+        } : null
+        const feedbackArtifact = revision === 2 ? {
+          id: `artifact-${input.runId}-clarification-feedback-r1`, runId: input.runId,
+          nodeId: clarifyGateId, kind: 'clarification_feedback', title: 'Clarification revision 1 feedback',
+          summary: 'Changes requested for clarification revision 1.',
+          content: 'State the retry boundary explicitly.', redacted: true, updatedAt: '2026-08-30T12:05:00.000Z',
+          clarificationFeedback: { version: 1, targetArtifactId: priorArtifact!.id, targetRevision: 1, targetRevisionDigest: 'a'.repeat(64), actorId: 'u-ling', actorName: 'Ling', reasonDigest: 'e'.repeat(64), createdAt: '2026-08-30T12:05:00.000Z' },
+        } : null
         const artifact = {
-          id: `artifact-${input.runId}-clarification`,
+          id: revision === 1
+            ? `artifact-${input.runId}-clarification`
+            : `artifact-${input.runId}-clarification-v2`,
           runId: input.runId,
           nodeId: input.nodeId,
           kind: 'clarification',
@@ -244,6 +408,17 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           content: '# 需求澄清结果\n\n## Acceptance Criteria\n- The request is ready for 方案评审 Gate review.',
           redacted: false,
           updatedAt: timestamp,
+          clarificationRevision: {
+            version: 1, revision, status: 'review_requested',
+            revisionDigest: revision === 1 ? 'a'.repeat(64) : 'f'.repeat(64),
+            rawRequestArtifactId: rawRequestArtifact.id,
+            ...(priorArtifact ? { previousRevisionArtifactId: priorArtifact.id } : {}),
+            feedbackArtifactIds: feedbackArtifact ? [feedbackArtifact.id] : [],
+            goals: ['Bound retries'], acceptanceCriteria: ['Retry boundary is explicit'],
+            nonGoals: ['No implementation'], assumptions: [], risks: [], openQuestions: [],
+            executor: { version: 1, kind: 'direct-provider', executorId: 'fake-provider', executorVersion: '1', capabilityProfile: 'repository-read-only-v1', model: 'fake', startedAt: timestamp, completedAt: timestamp, durationMs: 10, terminalReason: 'success', contextDigest: '1'.repeat(64) },
+            generatedAt: timestamp,
+          },
         }
         const event = {
           id: `event-${artifact.id}`,
@@ -275,7 +450,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
               status: 'success',
               ownerId: 'u-ling',
               retryCount: 0,
-              artifactIds: [rawRequestArtifact.id, artifact.id],
+              artifactIds: [rawRequestArtifact.id, ...(priorArtifact ? [priorArtifact.id] : []), artifact.id],
             },
             {
               id: clarifyGateId,
@@ -305,7 +480,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           state: {
             projects: [localProject],
             runs: [run],
-            artifacts: [rawRequestArtifact, artifact],
+            artifacts: [rawRequestArtifact, ...(priorArtifact ? [priorArtifact] : []), ...(feedbackArtifact ? [feedbackArtifact] : []), artifact],
             events: [event],
             testEvidence: [],
             settings: { themePreference: 'system' },
@@ -323,15 +498,77 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
           },
         }
       },
-      saveRun: async (run: unknown) => run,
-      saveArtifact: async (artifact: unknown) => artifact,
-      approveGate: async ({
-        runId,
-        nodeId,
-      }: {
+      requestClarificationChanges: async (input: {
         runId: string
         nodeId: string
+        artifactId: string
+        revision: number
+        revisionDigest: string
+        reason: string
       }) => {
+        clarificationRequests.push(input)
+        if (input.revision !== 1 || input.revisionDigest !== 'a'.repeat(64)) {
+          throw new Error('stale clarification revision')
+        }
+        clarificationFeedbackRequested = true
+        const agentId = `${input.runId}-clarify`
+        const raw = {
+          id: `artifact-${input.runId}-raw-request`, runId: input.runId, nodeId: agentId,
+          kind: 'raw_request', title: 'Raw request', summary: 'Clarify retry behavior.',
+          content: 'Clarify webhook retry boundaries before implementation.', redacted: false,
+          updatedAt: '2026-08-30T12:00:00.000Z',
+        }
+        const revision = {
+          id: input.artifactId, runId: input.runId, nodeId: agentId, kind: 'clarification',
+          title: 'Clarification v1', summary: 'First reviewable revision.',
+          content: '# Clarification v1\n\nRetry boundaries and acceptance criteria.', redacted: true,
+          updatedAt: '2026-08-30T12:01:00.000Z',
+          clarificationRevision: {
+            version: 1, revision: 1, status: 'revision_requested', revisionDigest: input.revisionDigest,
+            rawRequestArtifactId: raw.id, feedbackArtifactIds: [`artifact-${input.runId}-clarification-feedback-r1`],
+            goals: ['Bound retries'], acceptanceCriteria: ['Retry boundary is explicit'], nonGoals: ['No implementation'],
+            assumptions: [], risks: [], openQuestions: [],
+            executor: { version: 1, kind: 'local-agent', executorId: 'fake-local', executorVersion: '1', capabilityProfile: 'repository-read-only-v1', model: 'fake', startedAt: '2026-08-30T12:01:00.000Z', completedAt: '2026-08-30T12:01:00.000Z', durationMs: 10, terminalReason: 'success', contextDigest: 'd'.repeat(64) },
+            generatedAt: '2026-08-30T12:01:00.000Z',
+          },
+        }
+        const feedback = {
+          id: `artifact-${input.runId}-clarification-feedback-r1`, runId: input.runId, nodeId: input.nodeId,
+          kind: 'clarification_feedback', title: 'Clarification revision 1 feedback',
+          summary: 'Changes requested for clarification revision 1.', content: input.reason, redacted: true,
+          updatedAt: '2026-08-30T12:05:00.000Z',
+          clarificationFeedback: { version: 1, targetArtifactId: input.artifactId, targetRevision: 1, targetRevisionDigest: input.revisionDigest, actorId: 'u-ling', actorName: 'Ling', reasonDigest: 'e'.repeat(64), createdAt: '2026-08-30T12:05:00.000Z' },
+        }
+        const run = {
+          id: input.runId, version: 3, title: 'Clarification revision E2E', request: raw.content,
+          projectId: localProject.id, creatorId: 'u-ling', status: 'clarifying', currentNodeId: agentId,
+          branchName: 'ai/clarification-e2e', createdAt: raw.updatedAt, updatedAt: feedback.updatedAt,
+          nodes: [
+            { id: agentId, stage: 'clarify', title: '需求澄清', subtitle: '补齐验收口径与非目标', kind: 'agent', status: 'running', ownerId: 'u-ling', retryCount: 0, artifactIds: [raw.id, revision.id] },
+            { id: input.nodeId, stage: 'clarify', title: '需求确认 Gate', subtitle: '确认当前澄清版本', kind: 'gate', status: 'pending', ownerId: 'u-ling', requiredRole: 'member', retryCount: 0, artifactIds: [] },
+          ],
+          edges: [{ id: `${input.runId}-edge`, source: agentId, target: input.nodeId, kind: 'gate' }],
+        }
+        const state = {
+          projects: [localProject], runs: [run], artifacts: [raw, revision, feedback], events: [], testEvidence: [],
+          settings: { themePreference: 'system' }, mcpServers: [], agentReviews: [], agentTraces: [], agentTokenUsage: [],
+          codingRuns: [], codingEvents: [], codingPermissionRequests: [], codingPermissionDecisions: [],
+          managedCodingWorkspaces: [], dependencyBootstrapEvidence: [], codingDiffArtifacts: [],
+        }
+        return { run, revision, feedback, event: { id: 'event-feedback', runId: input.runId, nodeId: input.nodeId, sequence: 1, kind: 'approval', message: 'Changes requested.', timestamp: feedback.updatedAt }, state }
+      },
+      saveRun: async (run: unknown) => run,
+      saveArtifact: async (artifact: unknown) => artifact,
+      approveGate: async (approvalInput: {
+        runId: string
+        nodeId: string
+        expectedClarificationRevision?: { artifactId: string; revision: number; revisionDigest: string }
+      }) => {
+        const { runId, nodeId } = approvalInput
+        clarificationApprovals.push(approvalInput)
+        if (nodeId.endsWith('-clarify-gate') && approvalInput.expectedClarificationRevision?.revision !== 2) {
+          throw new Error('Only current clarification revision v2 can be approved')
+        }
         const timestamp = '2026-06-15T00:01:00.000Z'
         const run = {
           id: runId,
@@ -707,8 +944,10 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         id: changeSetId,
         codingRunId,
         phase: 'initial',
-        changedPaths: ['devflow-fake-change.txt'],
-        unifiedDiff: 'diff --git a/devflow-fake-change.txt b/devflow-fake-change.txt\n+fake change',
+        changedPaths: initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle' ? ['src/a.ts', 'src/b.ts'] : ['devflow-fake-change.txt'],
+        unifiedDiff: initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle'
+          ? `diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,60 +1,60 @@\n${Array.from({ length: 60 }, (_, index) => `-old a ${index}\n+new a ${index}`).join('\n')}\ndiff --git a/src/b.ts b/src/b.ts\n--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1,60 +1,60 @@\n${Array.from({ length: 60 }, (_, index) => `-old b ${index}\n+new b ${index}`).join('\n')}`
+          : 'diff --git a/devflow-fake-change.txt b/devflow-fake-change.txt\n+fake change',
         changeSetDigest: 'c'.repeat(64),
         createdAt: '2026-06-15T00:05:00.000Z',
         expiresAt: '2099-06-15T00:20:00.000Z',
@@ -748,6 +987,11 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         userInstruction: string
       }) => {
         const startedAt = '2026-06-15T00:05:00.000Z'
+        if (initialScenario === 'coding-lifecycle') {
+          codingLifecycleStarted = true
+          const state = codingScenarioState()
+          return { codingRun: state.codingRuns[0], state }
+        }
         const codingRun = {
           id: 'coding-run-1',
           runId,
@@ -813,11 +1057,20 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
         requestId: string
         codingRunId: string
         decision: string
-      }) => ({
-        id: requestId,
-        codingRunId,
-        status: decision === 'approved' ? 'approved' : 'rejected',
-      }),
+      }) => {
+        codingPermissionReplies.push({ requestId, codingRunId, decision })
+        if (
+          (initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle') &&
+          decision === 'approved'
+        ) {
+          codingPermissionApproved = true
+        }
+        return {
+          id: requestId,
+          codingRunId,
+          status: decision === 'approved' ? 'approved' : 'rejected',
+        }
+      },
       subscribeCodingRun: async () => ({
         projects: [localProject],
         runs: [],
@@ -880,7 +1133,7 @@ async function installDesktopApi(page: import('@playwright/test').Page) {
       onAgentRuntimeUpdated: () => () => undefined,
       onLocalStateUpdated: () => () => undefined,
     }
-  })
+  }, scenario)
 }
 
 async function createFixtureRun(page: import('@playwright/test').Page) {
@@ -897,6 +1150,40 @@ async function createFixtureRun(page: import('@playwright/test').Page) {
 }
 
 test.describe('AI DevFlow desktop workbench', () => {
+  test('compares requirement inputs, requests changes, generates v2, and approves only v2', async ({ page }) => {
+    await installDesktopApi(page, 'clarification-revision')
+    await page.goto('/')
+
+    const inspector = page.getByTestId('node-inspector')
+    await expect(page.getByTestId('clarification-review')).toBeVisible()
+    await expect(page.getByTestId('clarification-raw-request')).toContainText('Clarify webhook retry boundaries')
+    await expect(page.getByTestId('clarification-repository-findings')).toContainText('Retry handler exists')
+    await expect(page.getByTestId('clarification-current-revision')).toContainText('v1 · review_requested')
+
+    await inspector.getByLabel('结构化修订意见').fill('State the retry boundary explicitly.')
+    await inspector.getByRole('button', { name: '请求修订当前版本' }).click()
+    await expect(page.getByTestId('toast')).toContainText('流程返回需求澄清')
+    await expect(inspector).toContainText('需求澄清')
+
+    await inspector.getByRole('button', { name: /生成需求澄清/ }).click()
+    await expect(page.getByTestId('toast')).toContainText('需求澄清已生成')
+    await expect(page.getByTestId('clarification-current-revision')).toContainText('v2 · review_requested')
+    await expect(page.getByTestId('clarification-revision-history')).toContainText('v1 · superseded')
+    await expect(page.getByTestId('clarification-revision-history')).toContainText('State the retry boundary explicitly.')
+
+    await inspector.getByRole('button', { name: /通过 Gate/ }).click()
+    const requests = await page.evaluate(() => (window as unknown as { __clarificationRequests: unknown[] }).__clarificationRequests)
+    const approvals = await page.evaluate(() => (window as unknown as { __clarificationApprovals: unknown[] }).__clarificationApprovals)
+    expect(requests).toHaveLength(1)
+    expect(approvals).toContainEqual(expect.objectContaining({
+      expectedClarificationRevision: expect.objectContaining({
+        artifactId: 'artifact-run-clarification-e2e-clarification-v2',
+        revision: 2,
+        revisionDigest: 'f'.repeat(64),
+      }),
+    }))
+  })
+
   test('loads the workbench and supports core developer interactions', async ({ page }) => {
     await installDesktopApi(page)
     await page.goto('/')
@@ -986,14 +1273,18 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('button', { name: /工作台/ }).click()
     const reviewedGateInspector = page.getByTestId('node-inspector')
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
-    await reviewedGateInspector.getByRole('tab', { name: '引用来源' }).click()
+    const referencesTab = reviewedGateInspector.getByRole('tab', { name: '引用来源' })
+    await referencesTab.focus()
+    await referencesTab.press('Enter')
     await expect(page.getByTestId('knowledge-reference-sources')).toContainText(
       '当前 Gate 尚无节点作用域内的 Knowledge 引用',
     )
     await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
       'Knowledge review completed for this node.',
     )
-    await reviewedGateInspector.getByRole('tab', { name: 'Evidence' }).click()
+    const evidenceTab = reviewedGateInspector.getByRole('tab', { name: 'Evidence' })
+    await evidenceTab.focus()
+    await evidenceTab.press('Enter')
     await expect(page.getByTestId('review-evidence-results')).toContainText(
       'Knowledge review completed for this node.',
     )
@@ -1076,5 +1367,81 @@ test.describe('AI DevFlow desktop workbench', () => {
       binaryPath: '/opt/devflow/bin/opencode',
       detectedVersion: '1.2.3',
     })
+  })
+
+  test('reviews one exact multi-file Change Set through the shared Agents approval surface', async ({ page }) => {
+    const pageErrors: string[] = []
+    page.on('pageerror', (error) => pageErrors.push(error.message))
+    await installDesktopApi(page, 'coding-permission')
+    await page.setViewportSize({ width: 1280, height: 720 })
+    await page.goto('/')
+    await page.waitForTimeout(250)
+    expect(pageErrors).toEqual([])
+
+    const inspector = page.getByTestId('node-inspector')
+    await expect(inspector.getByTestId('workbench-coding-permission-summary')).toContainText('2 个文件')
+    await expect(inspector.getByRole('button', { name: /Approve exact/ })).toHaveCount(0)
+    await inspector.getByRole('button', { name: '审查并批准修改' }).click()
+
+    const review = page.getByTestId('coding-change-set-review')
+    await expect(review).toBeVisible()
+    await expect(review.getByLabel('src/a.ts diff')).toBeVisible()
+    await expect(review.getByLabel('src/b.ts diff')).toBeVisible()
+    await expect(review).toContainText('c'.repeat(64))
+    const diffStyle = await review.getByLabel('src/a.ts diff').evaluate((element) => ({
+      whiteSpace: getComputedStyle(element).whiteSpace,
+      overflowX: getComputedStyle(element).overflowX,
+    }))
+    expect(diffStyle.whiteSpace).toBe('pre')
+    expect(['auto', 'scroll']).toContain(diffStyle.overflowX)
+    const reviewBox = await review.boundingBox()
+    expect(reviewBox?.width ?? 0).toBeGreaterThan(900)
+    await page.evaluate(() => {
+      document.documentElement.style.zoom = '1.25'
+    })
+    await review.getByRole('button', { name: 'Approve exact Change Set' }).scrollIntoViewIfNeeded()
+    await expect(review.getByRole('button', { name: 'Approve exact Change Set' })).toBeVisible()
+    await expect(review.getByRole('button', { name: 'Reject' })).toBeVisible()
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await expect(review).toBeVisible()
+    await page.emulateMedia({ colorScheme: 'light' })
+    await expect(review).toBeVisible()
+
+    await review.getByRole('button', { name: 'Approve exact Change Set' }).click()
+    await expect.poll(() => page.evaluate(() => (
+      window as unknown as { __codingPermissionReplies: unknown[] }
+    ).__codingPermissionReplies)).toEqual([{
+      requestId: 'permission-review',
+      codingRunId: 'coding-run-review',
+      decision: 'approved',
+    }])
+    await expect(review).toHaveCount(0)
+    await expect(page.locator('.agent-current-task--change-set')).toHaveCount(0)
+    await page.getByRole('button', { name: /工作台/ }).click()
+    await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
+    expect(pageErrors).toEqual([])
+  })
+
+  test('runs Coding from idle through approval, persisted evidence, and the next workflow node', async ({ page }) => {
+    await installDesktopApi(page, 'coding-lifecycle')
+    await page.goto('/')
+
+    const inspector = page.getByTestId('node-inspector')
+    await inspector.getByRole('button', { name: '启动 Coding Agent' }).click()
+    const review = page.getByTestId('coding-change-set-review')
+    await expect(review.getByLabel('src/a.ts diff')).toContainText('new a 59')
+    await expect(review.getByLabel('src/b.ts diff')).toContainText('new b 59')
+    await review.getByRole('button', { name: 'Approve exact Change Set' }).click()
+
+    await page.getByRole('button', { name: /工作台/ }).click()
+    await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
+    await page.getByTestId('flow-node-node-build-review').click()
+    const terminal = page.getByTestId('workbench-coding-terminal')
+    await expect(terminal).toContainText('150')
+    await expect(terminal).toContainText('$0.012')
+    await expect(terminal).toContainText('Saved worktree test passed.')
+    await expect(terminal).toContainText('+new')
+    await expect(terminal.getByRole('list', { name: 'Coding Run terminal trace' })).toContainText('Applied the exact approved Change Set.')
+    await expect(inspector.getByRole('button', { name: /启动|重新运行/ })).toHaveCount(0)
   })
 })

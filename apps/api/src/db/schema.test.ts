@@ -17,20 +17,22 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('reserves Team schema v24 for persisted Agent Review subject provenance', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(24)
+  it('reserves Team schema v25 for immutable runtime cost settlements', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(25)
     expect(teamMigrationCatalog.at(-1)).toEqual({
-      version: 24,
-      name: '0024_agent_review_subject_manifest',
-      fileName: '0024_agent_review_subject_manifest.sql',
+      version: 25,
+      name: '0025_runtime_cost_settlement',
+      fileName: '0025_runtime_cost_settlement.sql',
     })
 
     const migrations = await readTeamMigrationCatalog()
     const providerIdentityMigration = migrations.find((candidate) => candidate.version === 22)
     const reviewManifestMigration = migrations.find((candidate) => candidate.version === 24)
+    const runtimeCostMigration = migrations.find((candidate) => candidate.version === 25)
     expect(providerIdentityMigration?.sql).toContain('ADD COLUMN IF NOT EXISTS provider_name text')
     expect(providerIdentityMigration?.sql).toContain('ALTER COLUMN provider_name SET NOT NULL')
     expect(reviewManifestMigration?.sql).toContain('ADD COLUMN IF NOT EXISTS context_manifest jsonb')
+    expect(runtimeCostMigration?.sql).toContain('ADD COLUMN IF NOT EXISTS cost_details jsonb')
     expect(
       teamTableDefinitions
         .find((table) => table.name === 'agent_provider_credentials')
@@ -104,7 +106,7 @@ describe('team database schema', () => {
   })
 
   it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(24)
+    expect(TEAM_SCHEMA_VERSION).toBe(25)
     expect(teamMigrationCatalog.find((migration) => migration.version === 18)).toEqual({
       version: 18,
       name: '0018_agent_memory_projection_quality_version',
@@ -167,7 +169,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(24)
+    expect(TEAM_SCHEMA_VERSION).toBe(25)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -205,7 +207,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(24)
+    expect(TEAM_SCHEMA_VERSION).toBe(25)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -487,6 +489,11 @@ describe('team database schema', () => {
         version: 24,
         name: '0024_agent_review_subject_manifest',
         fileName: '0024_agent_review_subject_manifest.sql',
+      },
+      {
+        version: 25,
+        name: '0025_runtime_cost_settlement',
+        fileName: '0025_runtime_cost_settlement.sql',
       },
     ])
 

@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 24
+export const TEAM_SCHEMA_VERSION = 25
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -436,6 +436,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('cost_cache_read_tokens', 'integer', { nullable: true }),
       column('cost_usd', 'numeric(12,6)', { nullable: true }),
       column('cost_source', 'text', { nullable: true }),
+      column('cost_details', 'jsonb', { nullable: true }),
       column('redacted', 'boolean'),
     ],
   },

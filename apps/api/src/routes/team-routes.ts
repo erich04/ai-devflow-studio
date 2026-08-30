@@ -11,6 +11,7 @@ import {
   deriveWorkflowContextPolicyRequirements,
   evaluateRuntimeBudgetGuard,
   type AgentProvider,
+  type BudgetGuardDecision,
   type GateOverrideDecision,
   formatUsd,
   type KnowledgeChunk,
@@ -1201,8 +1202,20 @@ export async function resolveTeamRoute(
       repository.getRuntimeBudgetPolicy(input.projectId, options.session),
       repository.listRuntimeBudgetApprovals({ projectId: input.projectId }, options.session),
     ])
-    const currentSpendUsd =
-      overview.projectCost.find((rollup) => rollup.key === input.projectId)?.costUsd ?? 0
+    const projectCost = overview.projectCost.find((rollup) => rollup.key === input.projectId)
+    const currentSpendUsd = projectCost?.costUsd ?? 0
+    if ((projectCost?.unknownCostCount ?? 0) > 0) {
+      return {
+        status: 200,
+        body: {
+          status: 'unavailable',
+          blocksRun: true,
+          currentSpendUsd,
+          projectedCostUsd: input.projectedCostUsd,
+          reason: 'Runtime budget cannot be evaluated while actual provider cost is unknown.',
+        } satisfies BudgetGuardDecision,
+      }
+    }
     const approval = input.approvalId
       ? approvals.find((candidate) => candidate.id === input.approvalId) ?? null
       : null

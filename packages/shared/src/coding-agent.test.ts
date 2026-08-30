@@ -657,7 +657,33 @@ describe('createRemoteCodingAgentSummary', () => {
         inputTokens: 12,
         outputTokens: 3,
         cacheReadTokens: 1,
+        cacheMissTokens: 11,
+        totalTokens: 15,
+        cacheHitRate: 1 / 12,
+        usageStatus: 'complete',
+        costStatus: 'settled',
+        phase: 'provider_settlement',
         costUsd: 0.02,
+        pricingSnapshot: {
+          providerId: 'fake-coding-engine',
+          model: 'model from /Users/Alice/private API_TOKEN=model-secret',
+          tier: 'off_peak',
+          effectiveAt: '2026-06-17T00:00:00.000Z',
+          source: 'https://pricing.example.test/API_TOKEN=source-secret',
+          sourceVersion: 'pricing-v1',
+          currency: 'USD',
+          unit: 'per_1m_tokens',
+          cacheHitInputUsdPerMillion: 1,
+          cacheMissInputUsdPerMillion: 2,
+          outputUsdPerMillion: 3,
+          apiKey: 'nested-pricing-api-key-secret',
+        },
+        breakdown: {
+          cacheHitInputUsd: 0.001,
+          cacheMissInputUsd: 0.004,
+          outputUsd: 0.015,
+          totalUsd: 0.02,
+        },
         timestamp: '2026-06-17T00:07:00.000Z',
         source: 'estimated',
         redacted: true,
@@ -689,7 +715,32 @@ describe('createRemoteCodingAgentSummary', () => {
       inputTokens: 12,
       outputTokens: 3,
       cacheReadTokens: 1,
+      cacheMissTokens: 11,
+      totalTokens: 15,
+      cacheHitRate: 1 / 12,
+      usageStatus: 'complete',
+      costStatus: 'settled',
+      phase: 'provider_settlement',
       costUsd: 0.02,
+      pricingSnapshot: {
+        providerId: 'fake-coding-engine',
+        model: 'model from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
+        tier: 'off_peak',
+        effectiveAt: '2026-06-17T00:00:00.000Z',
+        source: 'https://pricing.example.test/[REDACTED:env_secret_assignment]',
+        sourceVersion: 'pricing-v1',
+        currency: 'USD',
+        unit: 'per_1m_tokens',
+        cacheHitInputUsdPerMillion: 1,
+        cacheMissInputUsdPerMillion: 2,
+        outputUsdPerMillion: 3,
+      },
+      breakdown: {
+        cacheHitInputUsd: 0.001,
+        cacheMissInputUsd: 0.004,
+        outputUsd: 0.015,
+        totalUsd: 0.02,
+      },
       timestamp: '2026-06-17T00:07:00.000Z',
       source: 'estimated',
       redacted: true,
@@ -705,8 +756,10 @@ describe('createRemoteCodingAgentSummary', () => {
       reason: 'Approved from [REDACTED:local_absolute_path] [REDACTED:env_secret_assignment]',
     })
     expect(JSON.stringify(summary)).not.toContain('nested-api-key-secret')
+    expect(JSON.stringify(summary)).not.toContain('nested-pricing-api-key-secret')
     expect(JSON.stringify(summary)).not.toContain('nested-budget-token-secret')
     expect(JSON.stringify(summary)).not.toContain('model-secret')
+    expect(JSON.stringify(summary)).not.toContain('source-secret')
     expect(JSON.stringify(summary)).not.toContain('budget-secret')
     expect(() =>
       redactRemoteCodingAgentSummaryForSync({
@@ -723,6 +776,107 @@ describe('createRemoteCodingAgentSummary', () => {
         },
       }),
     ).toThrow('Remote coding cost scope must match its coding summary.')
+    expect(() =>
+      parseRemoteCodingAgentSummary({
+        ...summary,
+        costSummary: {
+          ...summary.costSummary!,
+          cacheMissTokens: 10,
+        },
+      }),
+    ).toThrow('Invalid remote coding agent summary payload')
+  })
+
+  it('round-trips mixed-tier provider-call settlements without requiring one false aggregate rate', () => {
+    const snapshot = (tier: 'peak' | 'off_peak', missRate: number) => ({
+      providerId: 'deepseek',
+      model: 'deepseek-v4-flash',
+      tier,
+      effectiveAt: '2026-08-16T16:00:00.000Z',
+      source: 'https://api-docs.deepseek.com/quick_start/pricing/',
+      sourceVersion: 'deepseek-pricing-snapshot-2026-08-30',
+      currency: 'USD' as const,
+      unit: 'per_1m_tokens' as const,
+      cacheHitInputUsdPerMillion: tier === 'peak' ? 0.014 : 0.007,
+      cacheMissInputUsdPerMillion: missRate,
+      outputUsdPerMillion: tier === 'peak' ? 1.32 : 0.66,
+    })
+    const summary = redactRemoteCodingAgentSummaryForSync({
+      id: 'coding-run-mixed-tier',
+      runId: run.id,
+      nodeId: buildNode.id,
+      projectId: run.projectId,
+      requestedBy: 'user-1',
+      providerId: 'deepseek',
+      engine: 'native',
+      status: 'completed',
+      branchName: 'devflow/mixed-tier',
+      summary: 'Completed across a pricing boundary.',
+      changedPaths: [],
+      startedAt: '2026-08-31T09:59:59.999Z',
+      completedAt: '2026-08-31T10:00:00.000Z',
+      costSummary: {
+        id: 'coding-runtime-cost-run-1-node-build',
+        runId: run.id,
+        nodeId: buildNode.id,
+        userId: 'user-1',
+        projectId: run.projectId,
+        provider: 'openai',
+        providerId: 'deepseek',
+        model: 'deepseek-v4-flash',
+        inputTokens: 2,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheMissTokens: 2,
+        totalTokens: 2,
+        cacheHitRate: 0,
+        usageStatus: 'complete',
+        costStatus: 'settled',
+        phase: 'provider_settlement',
+        costUsd: 0.00000066,
+        pricingSnapshot: null,
+        breakdown: {
+          cacheHitInputUsd: 0,
+          cacheMissInputUsd: 0.00000066,
+          outputUsd: 0,
+          totalUsd: 0.00000066,
+        },
+        providerCallSettlements: [
+          {
+            requestPhase: 'analysis',
+            providerId: 'deepseek', model: 'deepseek-v4-flash',
+            inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 1,
+            totalTokens: 1, cacheHitRate: 0, usageStatus: 'complete', costStatus: 'settled',
+            costUsd: 0.00000044, pricingSnapshot: snapshot('peak', 0.44),
+            breakdown: { cacheHitInputUsd: 0, cacheMissInputUsd: 0.00000044, outputUsd: 0, totalUsd: 0.00000044 },
+            timestamp: '2026-08-31T09:59:59.999Z', source: 'provider_reported', redacted: true,
+          },
+          {
+            requestPhase: 'initial',
+            providerId: 'deepseek', model: 'deepseek-v4-flash',
+            inputTokens: 1, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 1,
+            totalTokens: 1, cacheHitRate: 0, usageStatus: 'complete', costStatus: 'settled',
+            costUsd: 0.00000022, pricingSnapshot: snapshot('off_peak', 0.22),
+            breakdown: { cacheHitInputUsd: 0, cacheMissInputUsd: 0.00000022, outputUsd: 0, totalUsd: 0.00000022 },
+            timestamp: '2026-08-31T10:00:00.000Z', source: 'provider_reported', redacted: true,
+          },
+        ],
+        timestamp: '2026-08-31T10:00:00.000Z',
+        source: 'provider_reported',
+        redacted: true,
+      },
+      redacted: true,
+    })
+
+    expect(parseRemoteCodingAgentSummary(summary).costSummary).toMatchObject({
+      costStatus: 'settled',
+      costUsd: 0.00000066,
+      pricingSnapshot: null,
+      providerCallSettlements: [
+        { requestPhase: 'analysis', pricingSnapshot: { tier: 'peak' }, costUsd: 0.00000044 },
+        { requestPhase: 'initial', pricingSnapshot: { tier: 'off_peak' }, costUsd: 0.00000022 },
+      ],
+    })
   })
 })
 

@@ -823,7 +823,7 @@ describe('CodingRuntime', () => {
     ])
   })
 
-  it.each(['preparing', 'bootstrapping', 'testing'] as const)(
+  it.each(['preparing', 'bootstrapping', 'applying', 'testing'] as const)(
     'fails an interrupted native %s settlement closed on startup without repeating work',
     async (status) => {
       const interrupted = codingRun({
@@ -2303,6 +2303,92 @@ describe('CodingRuntime', () => {
     )
   })
 
+  it('fails closed when an approval arrives at or after the permission expiry', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const approvePermission = vi.spyOn(engine, 'approvePermission')
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-expired-approval', 'decision-expired-approval', 'event-expired-approval'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    store.permissionRequests[0] = {
+      ...store.permissionRequests[0]!,
+      expiresAt: '2026-06-17T00:01:00.000Z',
+    }
+
+    const settled = await runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'approved',
+      comment: 'Too late.',
+    })
+
+    expect(settled.status).toBe('expired')
+    expect(store.permissionDecisions.at(-1)?.decision).toBe('expired')
+    expect(store.codingRuns.at(-1)?.status).toBe('timed_out')
+    expect(approvePermission).not.toHaveBeenCalled()
+  })
+
+  it('settles a rejection arriving at permission expiry as expired and timed out', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)],
+      runs: [buildRun()],
+    })
+    const engine = createFakeCodingEngineAdapter()
+    const cancel = vi.spyOn(engine, 'cancel')
+    const runtime = createCodingRuntime({
+      store,
+      engine,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      idGenerator: fixedIds('coding-run-expired-rejection', 'decision-expired-rejection', 'event-expired-rejection'),
+      now: sequenceNow('2026-06-17T00:00:00.000Z', '2026-06-17T00:01:00.000Z'),
+    })
+
+    const started = await runtime.runCodingAgent({
+      runId: 'run-1',
+      nodeId: 'node-build',
+      projectId: 'project-1',
+      requestedBy: 'user-1',
+      providerId: 'fake-coding-engine',
+      userInstruction: 'Add the marker file.',
+    })
+    store.permissionRequests[0] = {
+      ...store.permissionRequests[0]!,
+      expiresAt: '2026-06-17T00:01:00.000Z',
+    }
+
+    const settled = await runtime.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id,
+      codingRunId: started.codingRun.id,
+      decidedBy: 'user-1',
+      decision: 'rejected',
+      comment: 'Too late to decide.',
+    })
+
+    expect(settled.status).toBe('expired')
+    expect(store.permissionDecisions.at(-1)?.decision).toBe('expired')
+    expect(store.codingRuns.at(-1)?.status).toBe('timed_out')
+    expect(cancel).toHaveBeenCalledWith({ codingRun: started.codingRun })
+  })
+
   it('times out an active coding run through the run timeout scheduler', async () => {
     const repo = await gitRepo()
     const workspace = managedWorkspace({ sourcePath: repo, worktreePath: '/tmp/worktree' })
@@ -2793,7 +2879,9 @@ describe('CodingRuntime', () => {
       comment: 'Approved from test.',
     })).rejects.toBe(providerFailure)
 
-    expect(cancel).toHaveBeenCalledWith({ codingRun: started.codingRun })
+    expect(cancel).toHaveBeenCalledWith({
+      codingRun: expect.objectContaining({ id: started.codingRun.id, status: 'applying' }),
+    })
     expect(store.permissionRequests[0]?.status).toBe('approved')
     expect(store.permissionDecisions).toHaveLength(1)
     expect(store.codingRuns.at(-1)).toMatchObject({
@@ -2849,7 +2937,7 @@ describe('CodingRuntime', () => {
 
     await expect(failure).rejects.toBeInstanceOf(CodingEngineContinuationCleanupError)
     expect(deleteWorkspace).not.toHaveBeenCalled()
-    expect(store.codingRuns.at(-1)?.status).toBe('waiting_permission')
+    expect(store.codingRuns.at(-1)?.status).toBe('applying')
     expect(store.workspaces.at(-1)?.cleanupStatus).toBe('active')
     expect(store.codingEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -2887,11 +2975,7 @@ describe('CodingRuntime', () => {
       deleteWorkspace,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1', 'decision-1', 'cancel-cleanup-event-1', 'cancel-status-event-1'),
-      now: sequenceNow(
-        '2026-06-17T00:00:00.000Z',
-        '2026-06-17T00:01:00.000Z',
-        '2026-06-17T00:02:00.000Z',
-      ),
+      now: fixedNow('2026-06-17T00:00:30.000Z'),
     })
     const started = await runtime.runCodingAgent({
       runId: 'run-1',
@@ -2960,11 +3044,7 @@ describe('CodingRuntime', () => {
       completeWorkflowBuild,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-1', 'decision-1', 'cancel-cleanup-event-1', 'cancel-status-event-1'),
-      now: sequenceNow(
-        '2026-06-17T00:00:00.000Z',
-        '2026-06-17T00:01:00.000Z',
-        '2026-06-17T00:02:00.000Z',
-      ),
+      now: fixedNow('2026-06-17T00:00:30.000Z'),
     })
     const started = await runtime.runCodingAgent({
       runId: 'run-1',
@@ -3046,11 +3126,7 @@ describe('CodingRuntime', () => {
         'timeout-tool-event-1',
         'timeout-status-event-1',
       ),
-      now: sequenceNow(
-        '2026-06-17T00:00:00.000Z',
-        '2026-06-17T00:01:00.000Z',
-        '2026-06-17T00:02:00.000Z',
-      ),
+      now: fixedNow('2026-06-17T00:00:30.000Z'),
     })
     const started = await runtime.runCodingAgent({
       runId: 'run-1',
@@ -3601,7 +3677,7 @@ class MemoryCodingStore {
     const active = this.codingRuns.find(
       (candidate) =>
         candidate.projectId === run.projectId &&
-        ['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'testing'].includes(candidate.status),
+        ['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'applying', 'testing'].includes(candidate.status),
     )
     if (active) {
       return { reserved: false, reason: 'active_run_exists', run: active }
@@ -3625,7 +3701,7 @@ class MemoryCodingStore {
     }
     if (
       mutation.run &&
-      !['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'testing'].includes(currentRun.status) &&
+      !['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'applying', 'testing'].includes(currentRun.status) &&
       JSON.stringify(mutation.run) !== JSON.stringify(currentRun)
     ) {
       return { committed: false, reason: 'terminal_run', run: currentRun }

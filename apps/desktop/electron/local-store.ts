@@ -224,6 +224,8 @@ export type WorkflowMutation = {
   artifacts?: readonly Artifact[]
   events?: readonly AgentEvent[]
   testEvidence?: readonly TestEvidence[]
+  agentTraces?: readonly AgentTrace[]
+  agentTokenUsage?: readonly AgentTokenUsage[]
 }
 
 export type GitHubDeliveryPreparationMutation = {
@@ -2973,6 +2975,20 @@ const REMOTE_SYNC_OPERATION_KINDS: readonly RemoteSyncOperation['kind'][] = [
   'agent-coordination-summary',
 ]
 
+function shouldEnqueueCodingAgentSummary(run: CodingAgentRun): boolean {
+  return !isActiveCodingAgentRunStatus(run.status) || (
+    run.runtimeCostSummary?.source === 'provider_reported' &&
+    run.runtimeCostSummary.phase === 'provider_settlement'
+  )
+}
+
+function codingAgentSummaryUpdatedAt(run: CodingAgentRun): string {
+  return run.runtimeCostSummary?.source === 'provider_reported' &&
+    run.runtimeCostSummary.phase === 'provider_settlement'
+    ? run.runtimeCostSummary.timestamp
+    : run.completedAt ?? run.startedAt
+}
+
 function isNonEmptyIdentifier(value: unknown): value is string {
   if (typeof value !== 'string' || value.length === 0 || value.trim() !== value) {
     return false
@@ -3586,9 +3602,54 @@ function assertWorkflowMutationScope(mutation: WorkflowMutation): void {
   if (
     mutation.artifacts?.some((artifact) => artifact.runId !== runId) ||
     mutation.events?.some((event) => event.runId !== runId) ||
-    mutation.testEvidence?.some((evidence) => evidence.runId !== runId)
+    mutation.testEvidence?.some((evidence) => evidence.runId !== runId) ||
+    mutation.agentTraces?.some((trace) => trace.runId !== runId) ||
+    mutation.agentTokenUsage?.some((usage) => usage.runId !== runId)
   ) {
     throw new Error('Workflow mutation candidates must belong to the mutated run')
+  }
+}
+
+function assertImmutableWorkflowArtifactWrite(db: Database, artifact: Artifact): void {
+  const existing = selectJson<Artifact>(
+    db,
+    'select json from artifacts where id = ? limit 1',
+    [artifact.id],
+  )[0]
+  if (!existing) return
+  if (
+    existing.runId !== artifact.runId ||
+    existing.nodeId !== artifact.nodeId ||
+    existing.kind !== artifact.kind
+  ) {
+    throw new Error('Artifact identity and scope are immutable')
+  }
+  if (artifact.kind === 'raw_request' || artifact.kind === 'clarification_feedback') {
+    if (!isDeepStrictEqual(existing, artifact)) {
+      throw new Error(`${artifact.kind} Artifact is immutable`)
+    }
+    return
+  }
+  if (artifact.kind === 'clarification') {
+    const existingMetadata = existing.clarificationRevision
+    const nextMetadata = artifact.clarificationRevision
+    if (!existingMetadata || !nextMetadata) {
+      if (!isDeepStrictEqual(existing, artifact)) {
+        throw new Error('Legacy clarification Artifact cannot be rewritten')
+      }
+      return
+    }
+    const { status: _existingStatus, feedbackArtifactIds: _existingFeedback, ...existingIdentity } = existingMetadata
+    const { status: _nextStatus, feedbackArtifactIds: _nextFeedback, ...nextIdentity } = nextMetadata
+    if (
+      existing.title !== artifact.title ||
+      existing.summary !== artifact.summary ||
+      existing.content !== artifact.content ||
+      existing.updatedAt !== artifact.updatedAt ||
+      !isDeepStrictEqual(existingIdentity, nextIdentity)
+    ) {
+      throw new Error('Clarification revision content and provenance are immutable')
+    }
   }
 }
 
@@ -11002,6 +11063,7 @@ class SqlJsLocalStore implements LocalStore {
         runId: nextRun.id, entityId: nextRun.id, createdAt: nextRun.updatedAt,
       })
       for (const artifact of mutation.artifacts ?? []) {
+        assertImmutableWorkflowArtifactWrite(this.db, artifact)
         writeArtifact(this.db, artifact)
       }
       for (const event of mutation.events ?? []) {
@@ -11013,6 +11075,22 @@ class SqlJsLocalStore implements LocalStore {
           kind: 'test-evidence-summary', localProjectId: evidence.projectId,
           runId: evidence.runId, entityId: evidence.id, createdAt: evidence.createdAt,
         })
+      }
+      for (const trace of mutation.agentTraces ?? []) {
+        this.db.run(
+          `insert into agent_traces (id, run_id, node_id, review_id, json, created_at)
+           values (?, ?, ?, ?, ?, ?)
+           on conflict(id) do update set json = excluded.json, created_at = excluded.created_at`,
+          [trace.id, trace.runId, trace.nodeId, trace.reviewId, JSON.stringify(trace), trace.createdAt],
+        )
+      }
+      for (const usage of mutation.agentTokenUsage ?? []) {
+        this.db.run(
+          `insert into agent_token_usage (id, run_id, node_id, json, timestamp)
+           values (?, ?, ?, ?, ?)
+           on conflict(id) do update set json = excluded.json, timestamp = excluded.timestamp`,
+          [usage.id, usage.runId, usage.nodeId, JSON.stringify(usage), usage.timestamp],
+        )
       }
       this.db.run('commit')
       transactionOpen = false
@@ -12169,6 +12247,7 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveArtifact(artifact: Artifact): Promise<void> {
+    assertImmutableWorkflowArtifactWrite(this.db, artifact)
     writeArtifact(this.db, artifact)
     await this.persist()
   }
@@ -12329,11 +12408,11 @@ class SqlJsLocalStore implements LocalStore {
     this.db.run('begin transaction')
     try {
       writeCodingAgentRun(this.db, run)
-      if (!isActiveCodingAgentRunStatus(run.status)) {
+      if (shouldEnqueueCodingAgentSummary(run)) {
         this.enqueueCanonicalRemoteSyncOperation({
           kind: 'coding-agent-summary', localProjectId: run.projectId,
           runId: run.runId, entityId: run.id,
-          createdAt: run.completedAt ?? run.startedAt,
+          createdAt: codingAgentSummaryUpdatedAt(run),
         })
       }
       this.db.run('commit')
@@ -12674,14 +12753,11 @@ class SqlJsLocalStore implements LocalStore {
     try {
       if (mutation.run) {
         writeCodingAgentRun(this.db, mutation.run)
-        if (
-          isActiveCodingAgentRunStatus(currentRun.status) &&
-          !isActiveCodingAgentRunStatus(mutation.run.status)
-        ) {
+        if (shouldEnqueueCodingAgentSummary(mutation.run)) {
           this.enqueueCanonicalRemoteSyncOperation({
             kind: 'coding-agent-summary', localProjectId: mutation.run.projectId,
             runId: mutation.run.runId, entityId: mutation.run.id,
-            createdAt: mutation.run.completedAt ?? mutation.run.startedAt,
+            createdAt: codingAgentSummaryUpdatedAt(mutation.run),
           })
         }
       }

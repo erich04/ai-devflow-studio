@@ -281,7 +281,7 @@ export default async function Page() {
                 <article className="cost-row" key={rollup.key}>
                   <span>{rollup.key}</span>
                   <progress value={rollup.costUsd} max={0.2} />
-                  <strong>{formatUsd(rollup.costUsd)}</strong>
+                  <strong>{formatUsd(rollup.costUsd)}{rollup.unknownCostCount ? ` + ${rollup.unknownCostCount} unknown` : ''}</strong>
                 </article>
               ))
             ) : (

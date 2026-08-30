@@ -19,6 +19,7 @@ import {
   parseCreateRunInput,
   parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
+  parseRequestClarificationChangesInput,
   parsePairDesktopInput,
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
@@ -115,6 +116,21 @@ describe('IPC contract parsers', () => {
         role: 'owner',
       }),
     ).toThrow(/unexpected field/i)
+  })
+
+  it('accepts an exact clarification revision identity and rejects forged actor fields', () => {
+    const digest = 'a'.repeat(64)
+    expect(parseRequestClarificationChangesInput({
+      runId: 'run-1', nodeId: 'node-gate', artifactId: 'artifact-clarification-v1',
+      revision: 1, revisionDigest: digest, reason: 'Clarify the boundary.',
+    })).toEqual({
+      runId: 'run-1', nodeId: 'node-gate', artifactId: 'artifact-clarification-v1',
+      revision: 1, revisionDigest: digest, reason: 'Clarify the boundary.',
+    })
+    expect(() => parseRequestClarificationChangesInput({
+      runId: 'run-1', nodeId: 'node-gate', artifactId: 'artifact-clarification-v1',
+      revision: 1, revisionDigest: digest, reason: 'Clarify.', actorId: 'forged-owner',
+    })).toThrow(/unexpected field/i)
   })
 
   it('binds Agent Runtime commands to the selected project, Run, and exact checkpoint', () => {
@@ -490,6 +506,7 @@ describe('IPC contract parsers', () => {
         userId: 'u-ling',
         userName: 'Ling',
         providerId: 'doubao-review',
+        executor: 'direct-provider',
       }),
     ).toEqual({
       runId: 'run-1',
@@ -497,6 +514,7 @@ describe('IPC contract parsers', () => {
       userId: 'u-ling',
       userName: 'Ling',
       providerId: 'doubao-review',
+      executor: 'direct-provider',
     })
   })
 

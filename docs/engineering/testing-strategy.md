@@ -121,7 +121,11 @@ retroactive TDD rewrites unless it is touched.
   the original single-Agent comparison.
 - Coding Executor contract tests must prove capability denial before provider/workspace side effects,
   a path-free main-owned request, ordered bounded permission turns, repeated-permission rejection,
-  no-permission completion, and uniform success/failure/cancel/timeout cleanup-aware terminal results.
+  approval-at-expiry rejection, no-permission completion, and uniform success/failure/cancel/timeout
+  cleanup-aware terminal results. Renderer projection/component/E2E tests cover idle, every active and
+  terminal status, exact Run/Node/Project scoping, conflicting history, stale/TTL/digest failure,
+  multi-file unwrapped review, Workbench-to-Agents focus, new-Run retry disclosure, and deleted
+  workspace refusal.
 
 ## Test Layers
 

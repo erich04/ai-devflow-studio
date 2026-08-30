@@ -1,5 +1,6 @@
 import {
   formatUsd,
+  annotateUnknownRuntimeCosts,
   redactSensitiveText,
   rollupTokenUsage,
   runtimeCostSummaryToTokenUsage,
@@ -50,6 +51,7 @@ import {
   type SkillDefinition,
   type TeamMember,
   type TeamSession,
+  type TokenUsage,
   type TokenUsageRollup,
   type WorkflowRun,
 } from '@ai-devflow/shared'
@@ -1041,10 +1043,17 @@ export function createSeedTeamRepository(): TeamRepository {
             Boolean(summary),
         )
         .map(runtimeCostSummaryToTokenUsage)
+        .filter((usage): usage is TokenUsage => usage !== null)
       const allTokenUsage = [
         ...tokenUsage.filter((usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId)),
         ...codingTokenUsage,
       ]
+      const codingCostSummaries = scopedCodingAgentSummaries
+        .map((summary) => summary.costSummary)
+        .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
+      const unknownCostCount = codingCostSummaries.filter(
+        (summary) => runtimeCostSummaryToTokenUsage(summary) === null,
+      ).length
       const scopedOrganizationPolicy =
         organizationPolicy.organizationId === context.organizationId
           ? organizationPolicy
@@ -1060,9 +1069,17 @@ export function createSeedTeamRepository(): TeamRepository {
         projects: scopedProjects,
         members: context.organizationId === DEMO_ORGANIZATION_ID ? members : [],
         runs: scopedRuns,
-        projectCost: rollupTokenUsage(allTokenUsage, 'projectId'),
-        memberCost: rollupTokenUsage(allTokenUsage, 'userId'),
-        totalCost: formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0)),
+        projectCost: annotateUnknownRuntimeCosts(
+          rollupTokenUsage(allTokenUsage, 'projectId'),
+          codingCostSummaries,
+          'projectId',
+        ),
+        memberCost: annotateUnknownRuntimeCosts(
+          rollupTokenUsage(allTokenUsage, 'userId'),
+          codingCostSummaries,
+          'userId',
+        ),
+        totalCost: `${formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0))}${unknownCostCount > 0 ? ' + unknown' : ''}`,
         testEvidenceSummaries: scopedTestEvidence,
         agentReviews: scopedAgentReviews,
         agentTraces: scopedAgentTraces,
