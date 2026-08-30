@@ -499,7 +499,7 @@ export function parseRemoteCodingAgentSummary(value: unknown): RemoteCodingAgent
     typeof value['projectId'] === 'string' &&
     typeof value['requestedBy'] === 'string' &&
     typeof value['providerId'] === 'string' &&
-    (value['engine'] === 'fake' || value['engine'] === 'opencode-http' || value['engine'] === 'opencode-acp') &&
+    (value['engine'] === 'fake' || value['engine'] === 'native' || value['engine'] === 'opencode-http' || value['engine'] === 'opencode-acp') &&
     validStatus &&
     typeof value['branchName'] === 'string' &&
     typeof value['summary'] === 'string' &&

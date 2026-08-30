@@ -11,7 +11,15 @@ import {
 } from './server-request'
 import { readBoundedJsonBody, RequestBodyTooLargeError } from './http-json-body'
 
-const { devAuthEnabled, host, port, secureCookies, sessionSecret, webAppUrl } =
+const {
+  devAuthEnabled,
+  host,
+  localAuthEnabled,
+  port,
+  secureCookies,
+  sessionSecret,
+  webAppUrl,
+} =
   resolveServerRuntimeConfig()
 const repositoryRuntime = await createTeamRepositoryRuntime()
 const repository = repositoryRuntime.repository
@@ -116,6 +124,7 @@ const server = createServer(async (request, response) => {
         repository,
         sessionSecret,
         devAuthEnabled,
+        localAuthEnabled,
         postAuthRedirectUrl: webAppUrl,
         secureCookies,
         ...(githubOAuth ? { githubOAuth } : {}),

@@ -135,6 +135,16 @@ describe('team database migration runner', () => {
         name: '0019_agent_coordination_team_projection',
         fileName: '0019_agent_coordination_team_projection.sql',
       },
+      {
+        version: 20,
+        name: '0020_local_development_auth',
+        fileName: '0020_local_development_auth.sql',
+      },
+      {
+        version: 21,
+        name: '0021_native_coding_agent_engine',
+        fileName: '0021_native_coding_agent_engine.sql',
+      },
     ])
 
     const [
@@ -150,6 +160,9 @@ describe('team database migration runner', () => {
       agentRuntimeTeamProjection,
       agentMemoryTeamProjection,
       agentMemoryProjectionQualityVersion,
+      agentCoordinationTeamProjection,
+      localDevelopmentAuth,
+      nativeCodingAgentEngine,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -225,6 +238,20 @@ describe('team database migration runner', () => {
     expect(agentMemoryProjectionQualityVersion?.sql).toContain(
       'PRIMARY KEY (memory_id, head_version, quality_version)',
     )
+    expect(agentCoordinationTeamProjection).toMatchObject({
+      version: 19,
+      name: '0019_agent_coordination_team_projection',
+    })
+    expect(localDevelopmentAuth).toMatchObject({
+      version: 20,
+      name: '0020_local_development_auth',
+    })
+    expect(nativeCodingAgentEngine).toMatchObject({
+      version: 21,
+      name: '0021_native_coding_agent_engine',
+    })
+    expect(localDevelopmentAuth?.sql).toContain("'local-development'")
+    expect(localDevelopmentAuth?.sql).toContain('auth_accounts_provider_check')
   })
 
   it('orders the v10 Gate backfill before validation and keeps its SQL function atomic', async () => {

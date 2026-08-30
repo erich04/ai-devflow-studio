@@ -6,6 +6,7 @@ import {
 } from '@ai-devflow/shared'
 import {
   fetchTeamOverview,
+  fetchAuthSession,
   createDesktopPairingCode,
   createTeamProject,
   createRuntimeBudgetApproval,
@@ -503,6 +504,57 @@ describe('DevFlow web API client', () => {
         accept: 'application/json',
       },
     })
+  })
+
+  it('loads and validates the browser authentication session', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      user: {
+        id: 'u-local-owner',
+        name: 'Local Developer',
+        role: 'owner',
+      },
+      authentication: { provider: 'local-development' },
+    }), { status: 200 }))
+
+    await expect(fetchAuthSession({
+      apiBaseUrl: 'http://api.local',
+      fetcher,
+      cookieHeader: 'devflow_session=signed-session-1',
+    })).resolves.toEqual({
+      user: {
+        id: 'u-local-owner',
+        name: 'Local Developer',
+        role: 'owner',
+      },
+      authentication: { provider: 'local-development' },
+    })
+    expect(fetcher).toHaveBeenCalledWith('http://api.local/api/auth/session', {
+      cache: 'no-store',
+      headers: {
+        accept: 'application/json',
+        cookie: 'devflow_session=signed-session-1',
+      },
+    })
+  })
+
+  it('rejects unavailable or malformed browser authentication sessions', async () => {
+    const unavailableFetcher = vi.fn(async () => new Response(null, { status: 401 }))
+    await expect(fetchAuthSession({
+      apiBaseUrl: 'http://api.local',
+      fetcher: unavailableFetcher,
+    })).rejects.toMatchObject({
+      endpoint: '/api/auth/session',
+      status: 401,
+    })
+
+    const malformedFetcher = vi.fn(async () => new Response(JSON.stringify({
+      user: { id: 'u-local-owner', name: 'Local Developer', role: 'owner' },
+      authentication: { provider: 'unknown-provider' },
+    }), { status: 200 }))
+    await expect(fetchAuthSession({
+      apiBaseUrl: 'http://api.local',
+      fetcher: malformedFetcher,
+    })).rejects.toThrow('DevFlow API /api/auth/session returned an invalid session')
   })
 
   it('fails closed when an Agent Runtime projection adds local-only fields', async () => {

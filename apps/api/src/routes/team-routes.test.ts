@@ -214,6 +214,29 @@ const githubIdentity: AuthenticatedIdentity = {
   projectMemberships: [],
 }
 
+const localDevelopmentIdentity: AuthenticatedIdentity = {
+  user: {
+    id: 'u-local-owner',
+    organizationId: 'org-local',
+    name: 'Local Developer',
+    role: 'owner',
+    avatarInitials: 'LD',
+    focus: 'Local development owner',
+    createdAt: '2026-06-20T00:00:00.000Z',
+    updatedAt: '2026-06-20T00:00:00.000Z',
+  },
+  authAccount: {
+    id: 'acct-local-owner',
+    userId: 'u-local-owner',
+    provider: 'local-development',
+    providerAccountId: 'local-owner',
+    username: 'local-owner',
+    createdAt: '2026-06-20T00:00:00.000Z',
+    updatedAt: '2026-06-20T00:00:00.000Z',
+  },
+  projectMemberships: [],
+}
+
 function createRepository(): TeamRepository & GateCommandRepository {
   const runsBundle: RunsBundle = {
     runs: [
@@ -428,8 +451,13 @@ function createRepository(): TeamRepository & GateCommandRepository {
   return {
     ...createSeedTeamRepository(),
     getAuthenticatedIdentity: vi.fn(async () => null),
+    getAuthenticatedIdentityByAuthAccountId: vi.fn(async () => null),
     resolveBrowserSession: vi.fn(async () => null),
     resolveOrBootstrapGitHubIdentity: vi.fn(async () => ({
+      status: 'blocked',
+      reason: 'organization_exists',
+    } as const)),
+    resolveOrBootstrapLocalDevelopmentIdentity: vi.fn(async () => ({
       status: 'blocked',
       reason: 'organization_exists',
     } as const)),
@@ -658,6 +686,213 @@ describe('team API route resolver', () => {
         authentication: { kind: 'session_cookie', tokenRecordId: null },
       }),
     )
+  })
+
+  it('creates a local development browser session and redirects to the fixed legacy shell', async () => {
+    const repository = createRepository()
+    vi.mocked(
+      repository.resolveOrBootstrapLocalDevelopmentIdentity,
+    ).mockResolvedValueOnce({
+      status: 'created',
+      identity: localDevelopmentIdentity,
+    })
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/auth/local/start',
+      repository,
+      {
+        auth: { sessionSecret: 'test-secret' },
+        localAuth: {
+          enabled: true,
+          requestContentType: 'application/x-www-form-urlencoded',
+          requestHost: '127.0.0.1:4310',
+          requestOrigin: 'http://127.0.0.1:4311',
+          webAppUrl: 'http://127.0.0.1:4311/',
+        },
+      },
+    )
+
+    expect(result?.status).toBe(303)
+    expect(result?.headers?.location).toBe('http://127.0.0.1:4311/legacy-shell')
+    expect(result?.body).toEqual({
+      redirectTo: 'http://127.0.0.1:4311/legacy-shell',
+    })
+    const sessionCookie = String(result?.headers?.['set-cookie'])
+    const encodedPayload = sessionCookie.split('=')[1]!.split('.')[0]!
+    const claims = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'))
+    expect(Object.keys(claims).sort()).toEqual(['authAccountId', 'expiresAt', 'v'])
+    expect(claims).toMatchObject({
+      v: 1,
+      authAccountId: 'acct-local-owner',
+    })
+  })
+
+  it('leaves the local auth route absent when the feature is disabled', async () => {
+    const repository = createRepository()
+
+    await expect(
+      resolveTeamRoute('POST', '/api/auth/local/start', repository, {
+        auth: { sessionSecret: 'test-secret' },
+        localAuth: {
+          enabled: false,
+          requestContentType: 'application/x-www-form-urlencoded',
+          requestHost: '127.0.0.1:4310',
+          requestOrigin: 'http://127.0.0.1:4311',
+          webAppUrl: 'http://127.0.0.1:4311/',
+        },
+      }),
+    ).resolves.toBeNull()
+  })
+
+  it.each([
+    ['missing Origin', undefined, '127.0.0.1:4310'],
+    ['mismatched Origin', 'http://localhost:4311', '127.0.0.1:4310'],
+    ['non-loopback Host', 'http://127.0.0.1:4311', 'devflow.example:4310'],
+    ['mismatched Host', 'http://127.0.0.1:4311', 'localhost:4310'],
+  ] as const)('rejects local sign-in with %s', async (_label, requestOrigin, requestHost) => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/auth/local/start',
+      repository,
+      {
+        auth: { sessionSecret: 'test-secret' },
+        localAuth: {
+          enabled: true,
+          requestContentType: 'application/x-www-form-urlencoded',
+          requestHost,
+          webAppUrl: 'http://127.0.0.1:4311/',
+          ...(requestOrigin ? { requestOrigin } : {}),
+        },
+      },
+    )
+
+    expect(result?.status).toBe(403)
+    expect(repository.resolveOrBootstrapLocalDevelopmentIdentity).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-empty local sign-in body before bootstrapping identity', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/auth/local/start',
+      repository,
+      {
+        auth: { sessionSecret: 'test-secret' },
+        body: {},
+        localAuth: {
+          enabled: true,
+          requestContentType: 'application/x-www-form-urlencoded',
+          requestHost: '127.0.0.1:4310',
+          requestOrigin: 'http://127.0.0.1:4311',
+          webAppUrl: 'http://127.0.0.1:4311/',
+        },
+      },
+    )
+
+    expect(result?.status).toBe(400)
+    expect(repository.resolveOrBootstrapLocalDevelopmentIdentity).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, 'application/json'])(
+    'rejects local sign-in with non-form content type %s',
+    async (requestContentType) => {
+      const repository = createRepository()
+      const result = await resolveTeamRoute(
+        'POST',
+        '/api/auth/local/start',
+        repository,
+        {
+          auth: { sessionSecret: 'test-secret' },
+          localAuth: {
+            enabled: true,
+            requestHost: '127.0.0.1:4310',
+            requestOrigin: 'http://127.0.0.1:4311',
+            webAppUrl: 'http://127.0.0.1:4311/',
+            ...(requestContentType ? { requestContentType } : {}),
+          },
+        },
+      )
+
+      expect(result?.status).toBe(403)
+      expect(repository.resolveOrBootstrapLocalDevelopmentIdentity).not.toHaveBeenCalled()
+    },
+  )
+
+  it('reports an existing-organization conflict without creating a session', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute(
+      'POST',
+      '/api/auth/local/start',
+      repository,
+      {
+        auth: { sessionSecret: 'test-secret' },
+        localAuth: {
+          enabled: true,
+          requestContentType: 'application/x-www-form-urlencoded',
+          requestHost: '127.0.0.1:4310',
+          requestOrigin: 'http://127.0.0.1:4311',
+          webAppUrl: 'http://127.0.0.1:4311/',
+        },
+      },
+    )
+
+    expect(result?.status).toBe(409)
+    expect(result?.body).toEqual({
+      error: 'organization_exists',
+      message: 'Local development identity cannot bootstrap into an existing organization',
+    })
+    expect(result?.headers).toBeUndefined()
+  })
+
+  it('returns the provider and minimal user fields for a signed browser session', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.getAuthenticatedIdentityByAuthAccountId).mockResolvedValueOnce(
+      localDevelopmentIdentity,
+    )
+
+    const result = await resolveTeamRoute('GET', '/api/auth/session', repository, {
+      principal: {
+        session: {
+          ...ownerSession,
+          organizationId: 'org-local',
+          userId: 'u-local-owner',
+          authAccountId: 'acct-local-owner',
+        },
+        authentication: { kind: 'session_cookie', tokenRecordId: null },
+      },
+    })
+
+    expect(result).toEqual({
+      status: 200,
+      body: {
+        user: { id: 'u-local-owner', name: 'Local Developer', role: 'owner' },
+        authentication: { provider: 'local-development' },
+      },
+    })
+    expect(repository.getAuthenticatedIdentityByAuthAccountId).toHaveBeenCalledWith(
+      'acct-local-owner',
+    )
+  })
+
+  it('requires a signed browser cookie for the auth session endpoint', async () => {
+    const repository = createRepository()
+
+    await expect(
+      resolveTeamRoute('GET', '/api/auth/session', repository),
+    ).resolves.toMatchObject({ status: 401 })
+    await expect(
+      resolveTeamRoute('GET', '/api/auth/session', repository, {
+        principal: {
+          session: ownerSession,
+          authentication: { kind: 'development_header', tokenRecordId: null },
+        },
+      }),
+    ).resolves.toMatchObject({ status: 403 })
   })
 
   it('starts GitHub OAuth by setting a state cookie and redirecting to GitHub', async () => {

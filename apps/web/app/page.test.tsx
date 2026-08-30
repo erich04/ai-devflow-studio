@@ -5,6 +5,8 @@ import { createWarnOnlyDefaultPolicy, resolveEffectivePolicy } from '@ai-devflow
 import Page from './page'
 import {
   evaluateGateCommandSnapshot,
+  DevFlowApiError,
+  fetchAuthSession,
   fetchGateCommands,
   fetchGitHubDeliveryRequests,
   fetchGitHubRepositoryBinding,
@@ -13,19 +15,24 @@ import {
 } from './lib/devflow-api'
 import type { TeamOverviewResponse } from './lib/devflow-api'
 
-vi.mock('./lib/devflow-api', () => ({
-  createTeamProject: vi.fn(),
-  fetchTeamOverview: vi.fn(),
-  fetchWorkRequests: vi.fn(),
-  fetchGateCommands: vi.fn(),
-  fetchGitHubDeliveryRequests: vi.fn(),
-  fetchGitHubRepositoryBinding: vi.fn(),
-  evaluateGateCommandSnapshot: vi.fn(),
-  resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
-  resolveDevFlowPublicApiBaseUrl: vi.fn(() => 'http://api.local'),
-  runKnowledgeReview: vi.fn(),
-  saveEnforcementPolicy: vi.fn(),
-}))
+vi.mock('./lib/devflow-api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/devflow-api')>()
+  return {
+    ...actual,
+    createTeamProject: vi.fn(),
+    fetchAuthSession: vi.fn(),
+    fetchTeamOverview: vi.fn(),
+    fetchWorkRequests: vi.fn(),
+    fetchGateCommands: vi.fn(),
+    fetchGitHubDeliveryRequests: vi.fn(),
+    fetchGitHubRepositoryBinding: vi.fn(),
+    evaluateGateCommandSnapshot: vi.fn(),
+    resolveDevFlowApiBaseUrl: vi.fn(() => 'http://api.local'),
+    resolveDevFlowPublicApiBaseUrl: vi.fn(() => 'http://api.local'),
+    runKnowledgeReview: vi.fn(),
+    saveEnforcementPolicy: vi.fn(),
+  }
+})
 
 vi.mock('next/headers', () => ({
   cookies: vi.fn(async () => ({
@@ -36,6 +43,7 @@ vi.mock('next/headers', () => ({
 }))
 
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
+const mockedFetchAuthSession = vi.mocked(fetchAuthSession)
 const mockedCookies = vi.mocked(cookies)
 const mockedFetchWorkRequests = vi.mocked(fetchWorkRequests)
 const mockedFetchGateCommands = vi.mocked(fetchGateCommands)
@@ -347,6 +355,11 @@ const overview: TeamOverviewResponse = {
 }
 
 beforeEach(() => {
+  delete process.env['DEVFLOW_LOCAL_AUTH_ENABLED']
+  mockedFetchAuthSession.mockResolvedValue({
+    user: { id: 'u-session', name: 'Session User', role: 'owner' },
+    authentication: { provider: 'github' },
+  })
   mockedFetchWorkRequests.mockResolvedValue([])
   mockedFetchGateCommands.mockResolvedValue([])
   mockedFetchGitHubBinding.mockResolvedValue(null)
@@ -665,10 +678,8 @@ describe('web product shell page', () => {
     expect(screen.getByText('3 tasks · 2 handoffs · 1500 ms · 0 interventions')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /start coordination|cancel coordination|resume coordination|retry coordination/iu })).not.toBeInTheDocument()
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
-      'href',
-      'http://api.local/api/auth/github/start',
-    )
+    expect(screen.getByText('Session User · GitHub')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '退出登录' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /备份壳/ })).toHaveAttribute('href', '/legacy-shell')
     expect(screen.getByText(/1 blocking · 2 warnings/)).toBeInTheDocument()
     expect(screen.getByText(/1 retries · 1 overrides/)).toBeInTheDocument()
@@ -810,19 +821,34 @@ describe('web product shell page', () => {
   it('offers the normal GitHub sign-in route when an unauthenticated overview request fails', async () => {
     mockedCookies.mockResolvedValueOnce({ get: vi.fn(() => undefined) } as never)
     mockedFetchTeamOverview.mockRejectedValue(
-      new Error('DevFlow API /api/team/overview failed with 401 internal-api.private API_TOKEN=private-value'),
+      new DevFlowApiError('/api/team/overview', 401),
     )
 
     render(await Page({}))
 
-    expect(screen.getByText('团队数据暂时不可用')).toBeInTheDocument()
-    expect(screen.getByText('无法加载团队数据，请稍后重试。')).toBeInTheDocument()
+    expect(screen.getByText('需要登录')).toBeInTheDocument()
+    expect(screen.getByText('请先建立浏览器身份，再进入团队工作台。')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
       'href',
       'http://api.local/api/auth/github/start',
     )
     expect(mockedFetchTeamOverview).toHaveBeenCalledWith({})
-    expect(document.body).not.toHaveTextContent('internal-api.private')
-    expect(document.body).not.toHaveTextContent('private-value')
+    expect(screen.queryByRole('button', { name: '使用本地开发身份' })).not.toBeInTheDocument()
+  })
+
+  it('offers an empty direct POST form when local development auth is enabled', async () => {
+    process.env['DEVFLOW_LOCAL_AUTH_ENABLED'] = 'true'
+    mockedCookies.mockResolvedValueOnce({ get: vi.fn(() => undefined) } as never)
+    mockedFetchTeamOverview.mockRejectedValue(
+      new DevFlowApiError('/api/team/overview', 401),
+    )
+
+    render(await Page({}))
+
+    const button = screen.getByRole('button', { name: '使用本地开发身份' })
+    const form = button.closest('form')
+    expect(form).toHaveAttribute('method', 'post')
+    expect(form).toHaveAttribute('action', 'http://api.local/api/auth/local/start')
+    expect(form?.querySelectorAll('input')).toHaveLength(0)
   })
 })

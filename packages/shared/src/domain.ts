@@ -72,7 +72,7 @@ export type Organization = {
   slug: string
 }
 
-export type AuthProvider = 'github'
+export type AuthProvider = 'github' | 'local-development'
 
 export type User = {
   id: string
@@ -682,7 +682,87 @@ export type TestEvidence = {
   createdAt: string
 }
 
-export type CodingAgentEngine = 'fake' | 'opencode-http' | 'opencode-acp'
+export type CodingAgentEngine = 'fake' | 'native' | 'opencode-http' | 'opencode-acp'
+
+export type CodingRuntimeConfiguration = {
+  projectId: string
+  executor: 'native-model'
+  providerId: string
+  version: number
+  updatedAt: string
+}
+
+export type CodingRuntimeReadinessCode =
+  | 'wrong_workflow_node'
+  | 'git_unavailable'
+  | 'test_command_missing'
+  | 'executor_unconfigured'
+  | 'provider_unavailable'
+  | 'team_project_unpaired'
+  | 'budget_policy_missing'
+  | 'budget_blocked'
+  | 'active_run'
+  | 'permission_pending'
+
+export type CodingRuntimeReadinessCheck = {
+  code: CodingRuntimeReadinessCode
+  status: 'ready' | 'blocked'
+  message: string
+}
+
+export type CodingRuntimeReadiness = {
+  projectId: string
+  runId?: string
+  nodeId?: string
+  status: 'ready' | 'blocked'
+  engine: CodingAgentEngine | 'unconfigured'
+  providerId?: string
+  configVersion?: number
+  budgetPolicy?: RuntimeBudgetPolicy | null
+  budgetDecision?: BudgetGuardDecision
+  checks: CodingRuntimeReadinessCheck[]
+  evaluatedAt: string
+}
+
+export type CodingChangeSetReplacement = {
+  oldText: string
+  newText: string
+}
+
+export type CodingChangeSetChange = {
+  path: string
+  expectedFileDigest: string
+  replacements: CodingChangeSetReplacement[]
+}
+
+export type CodingChangeSet = {
+  id: string
+  stateVersion: 2
+  codingRunId: string
+  projectId: string
+  workspaceId: string
+  phase: 'initial' | 'repair'
+  executorVersion: 2
+  configVersion: number
+  providerId: string
+  createdAt: string
+  expiresAt: string
+  changes: CodingChangeSetChange[]
+  unifiedDiff: string
+  changeSetDigest: string
+}
+
+export type CodingChangeSetPreview = {
+  stateVersion: 2
+  id: string
+  codingRunId: string
+  phase: CodingChangeSet['phase']
+  changedPaths: string[]
+  unifiedDiff: string
+  changeSetDigest: string
+  createdAt: string
+  expiresAt: string
+}
 
 export type CodingAgentRunStatus =
   | 'queued'
@@ -705,6 +785,8 @@ export type CodingAgentRun = {
   requestedBy: string
   providerId: string
   engine: CodingAgentEngine
+  configVersion?: number
+  changeSetId?: string
   status: CodingAgentRunStatus
   managedWorkspaceId?: string
   branchName: string
@@ -762,6 +844,8 @@ export type CodingPermissionRequest = {
   command?: string
   filePath?: string
   diffPreview?: string
+  changeSetId?: string
+  changeSetDigest?: string
   risk: CommandRiskLevel
   reasons: string[]
   status: CodingPermissionRequestStatus

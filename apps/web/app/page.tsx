@@ -40,10 +40,13 @@ import {
   fetchGitHubDeliveryRequests,
   fetchGitHubRepositoryBinding,
   evaluateGateCommandSnapshot,
+  DevFlowApiError,
+  fetchAuthSession,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
   saveEnforcementPolicy,
   type TeamOverviewResponse,
+  type BrowserAuthSessionResponse,
   type GateCommandEvaluationSnapshot,
   type GitHubDeliveryRequestView,
 } from './lib/devflow-api'
@@ -119,6 +122,9 @@ export default async function Page({ searchParams }: PageProps) {
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
   const sessionHeaders = cookieHeader ? undefined : getDemoSessionHeadersIfEnabled()
+  const localAuthEnabled = resolveDevFlowRuntimeFlags({
+    DEVFLOW_LOCAL_AUTH_ENABLED: process.env.DEVFLOW_LOCAL_AUTH_ENABLED,
+  }).localDevelopmentAuthEnabled
 
   let overview: TeamOverviewResponse
   try {
@@ -126,13 +132,25 @@ export default async function Page({ searchParams }: PageProps) {
       ...(cookieHeader ? { cookieHeader } : {}),
       ...(sessionHeaders ? { sessionHeaders } : {}),
     })
-  } catch {
+  } catch (error) {
+    const authenticationRequired =
+      error instanceof DevFlowApiError && error.status === 401
     return (
       <ErrorShell
-        message="无法加载团队数据，请稍后重试。"
-        signInHref={`${apiBaseUrl}/api/auth/github/start`}
+        apiBaseUrl={apiBaseUrl}
+        authenticationRequired={authenticationRequired}
+        localAuthEnabled={localAuthEnabled}
       />
     )
+  }
+
+  let browserSession: BrowserAuthSessionResponse | null = null
+  if (cookieHeader) {
+    try {
+      browserSession = await fetchAuthSession({ cookieHeader })
+    } catch {
+      browserSession = null
+    }
   }
 
   const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(
@@ -329,10 +347,11 @@ export default async function Page({ searchParams }: PageProps) {
             </p>
           </div>
           <div className="studio-top-actions">
-            <a className="studio-secondary-link" href={`${apiBaseUrl}/api/auth/github/start`}>
-              <Github size={16} />
-              Sign in with GitHub
-            </a>
+            <BrowserSessionControls
+              apiBaseUrl={apiBaseUrl}
+              hasSessionCookie={Boolean(cookieHeader)}
+              session={browserSession}
+            />
             <a className="studio-secondary-link" href="/legacy-shell">
               备份壳
             </a>
@@ -342,18 +361,24 @@ export default async function Page({ searchParams }: PageProps) {
         <section className="studio-selection" aria-label="Project and Run selection">
           <div>
             <span>Project</span>
-            <nav aria-label="Select project">
-              {overview.projects.map((project) => (
-                <a
-                  aria-current={project.id === activeProject?.id ? 'page' : undefined}
-                  href={`/?projectId=${encodeURIComponent(project.id)}`}
-                  key={project.id}
-                >
-                  <strong>{project.name}</strong>
-                  <small>{project.repository}</small>
-                </a>
-              ))}
-            </nav>
+            {overview.projects.length > 0 ? (
+              <nav aria-label="Select project">
+                {overview.projects.map((project) => (
+                  <a
+                    aria-current={project.id === activeProject?.id ? 'page' : undefined}
+                    href={`/?projectId=${encodeURIComponent(project.id)}`}
+                    key={project.id}
+                  >
+                    <strong>{project.name}</strong>
+                    <small>{project.repository}</small>
+                  </a>
+                ))}
+              </nav>
+            ) : (
+              <a className="studio-secondary-link" href="/legacy-shell#projects">
+                创建团队项目
+              </a>
+            )}
           </div>
           <div>
             <span>Run</span>
@@ -667,18 +692,70 @@ export default async function Page({ searchParams }: PageProps) {
   )
 }
 
-function ErrorShell({ message, signInHref }: { message: string; signInHref: string }) {
+function ErrorShell({
+  apiBaseUrl,
+  authenticationRequired,
+  localAuthEnabled,
+}: {
+  apiBaseUrl: string
+  authenticationRequired: boolean
+  localAuthEnabled: boolean
+}) {
   return (
     <main className="studio-shell studio-shell--error">
       <section className="studio-error-panel">
         <AlertTriangle size={28} />
         <span>DevFlow API</span>
-        <h1>团队数据暂时不可用</h1>
-        <p>{message}</p>
-        <a href={signInHref}>Sign in with GitHub</a>
+        <h1>{authenticationRequired ? '需要登录' : '团队数据暂时不可用'}</h1>
+        <p>
+          {authenticationRequired
+            ? '请先建立浏览器身份，再进入团队工作台。'
+            : '无法连接 DevFlow API，请确认本地服务与数据库已经启动。'}
+        </p>
+        {authenticationRequired && localAuthEnabled ? (
+          <form action={`${apiBaseUrl}/api/auth/local/start`} method="post">
+            <button type="submit">使用本地开发身份</button>
+          </form>
+        ) : null}
+        {authenticationRequired ? (
+          <a href={`${apiBaseUrl}/api/auth/github/start`}>Sign in with GitHub</a>
+        ) : null}
         <a href="/legacy-shell">打开旧壳备份</a>
       </section>
     </main>
+  )
+}
+
+function BrowserSessionControls({
+  apiBaseUrl,
+  hasSessionCookie,
+  session,
+}: {
+  apiBaseUrl: string
+  hasSessionCookie: boolean
+  session: BrowserAuthSessionResponse | null
+}) {
+  if (!hasSessionCookie) {
+    return (
+      <a className="studio-secondary-link" href={`${apiBaseUrl}/api/auth/github/start`}>
+        <Github size={16} />
+        Sign in with GitHub
+      </a>
+    )
+  }
+
+  const label = session
+    ? session.authentication.provider === 'local-development'
+      ? '本地开发身份 · 仅本机'
+      : `${session.user.name} · GitHub`
+    : '会话信息暂时不可用'
+  return (
+    <>
+      <span className="studio-secondary-link">{label}</span>
+      <form action="/api/auth/logout" method="post">
+        <button type="submit">退出登录</button>
+      </form>
+    </>
   )
 }
 

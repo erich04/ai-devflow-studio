@@ -29,6 +29,7 @@ export type ApiRouteRequestOptions = {
   devAuthEnabled?: boolean
   githubOAuth?: GitHubOAuthClient
   githubDeliveryService?: GitHubDeliveryService
+  localAuthEnabled?: boolean
   postAuthRedirectUrl?: string
   secureCookies?: boolean
 }
@@ -171,6 +172,23 @@ export async function resolveApiRouteRequest(
     ...(options.githubOAuth ? { githubOAuth: options.githubOAuth } : {}),
     ...(options.postAuthRedirectUrl
       ? { postAuthRedirectUrl: options.postAuthRedirectUrl }
+      : {}),
+    ...(options.postAuthRedirectUrl
+      ? {
+          localAuth: {
+            enabled: options.localAuthEnabled === true,
+            webAppUrl: options.postAuthRedirectUrl,
+            ...(typeof request.headers['content-type'] === 'string'
+              ? { requestContentType: request.headers['content-type'] }
+              : {}),
+            ...(typeof request.headers.host === 'string'
+              ? { requestHost: request.headers.host }
+              : {}),
+            ...(typeof request.headers.origin === 'string'
+              ? { requestOrigin: request.headers.origin }
+              : {}),
+          },
+        }
       : {}),
   })
 }

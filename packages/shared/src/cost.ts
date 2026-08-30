@@ -349,7 +349,7 @@ function isValidRuntimeBudgetApproval(
   return Boolean(
     approval &&
       approval.status === 'approved' &&
-      approval.role === 'lead' &&
+      (approval.role === 'owner' || approval.role === 'lead') &&
       approval.projectId === input.projectId &&
       approval.providerId === input.providerId &&
       approval.requestedBy === input.requestedBy &&

@@ -1,9 +1,15 @@
 import { Activity, Bot, CircleDollarSign, GitPullRequest, Users } from 'lucide-react'
 import { cookies } from 'next/headers'
-import { createRecommendedEnforcementPreset, formatUsd } from '@ai-devflow/shared'
+import {
+  createRecommendedEnforcementPreset,
+  formatUsd,
+  resolveDevFlowRuntimeFlags,
+} from '@ai-devflow/shared'
 import {
   createRuntimeBudgetApproval,
   createTeamProject,
+  DevFlowApiError,
+  fetchAuthSession,
   fetchTeamOverview,
   resolveDevFlowApiBaseUrl,
   resolveDevFlowPublicApiBaseUrl,
@@ -11,6 +17,7 @@ import {
   saveEnforcementPolicy,
   saveRuntimeBudgetPolicy,
   type TeamOverviewResponse,
+  type BrowserAuthSessionResponse,
 } from '../lib/devflow-api'
 import { PairingCodePanel } from '../PairingCodePanel'
 
@@ -134,26 +141,51 @@ export default async function Page() {
   let overview: TeamOverviewResponse
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
+  const localAuthEnabled = resolveDevFlowRuntimeFlags({
+    DEVFLOW_LOCAL_AUTH_ENABLED: process.env.DEVFLOW_LOCAL_AUTH_ENABLED,
+  }).localDevelopmentAuthEnabled
 
   try {
     overview = await fetchTeamOverview({
       ...(cookieHeader ? { cookieHeader } : {}),
     })
-  } catch {
+  } catch (error) {
+    const authenticationRequired =
+      error instanceof DevFlowApiError && error.status === 401
     return (
       <WebShell>
         <section className="web-panel web-panel--wide">
           <div className="panel-title">
             <span>Team Overview</span>
-            <strong>团队数据暂时不可用</strong>
+            <strong>{authenticationRequired ? '需要登录' : '团队数据暂时不可用'}</strong>
           </div>
-          <p>无法加载团队数据，请稍后重试。</p>
-          <a className="button-link" href={`${apiBaseUrl}/api/auth/github/start`}>
-            Sign in with GitHub
-          </a>
+          <p>
+            {authenticationRequired
+              ? '请先建立浏览器身份，再进入团队控制台。'
+              : '无法连接 DevFlow API，请确认本地服务与数据库已经启动。'}
+          </p>
+          {authenticationRequired && localAuthEnabled ? (
+            <form action={`${apiBaseUrl}/api/auth/local/start`} method="post">
+              <button type="submit">使用本地开发身份</button>
+            </form>
+          ) : null}
+          {authenticationRequired ? (
+            <a className="button-link" href={`${apiBaseUrl}/api/auth/github/start`}>
+              Sign in with GitHub
+            </a>
+          ) : null}
         </section>
       </WebShell>
     )
+  }
+
+  let browserSession: BrowserAuthSessionResponse | null = null
+  if (cookieHeader) {
+    try {
+      browserSession = await fetchAuthSession({ cookieHeader })
+    } catch {
+      browserSession = null
+    }
   }
 
   const hasProjects = overview.projects.length > 0
@@ -195,9 +227,11 @@ export default async function Page() {
             <h1>项目交付健康</h1>
           </div>
           <div className="web-header-actions">
-            <a className="button-link" href={`${apiBaseUrl}/api/auth/github/start`}>
-              Sign in with GitHub
-            </a>
+            <BrowserSessionControls
+              apiBaseUrl={apiBaseUrl}
+              hasSessionCookie={Boolean(cookieHeader)}
+              session={browserSession}
+            />
             <button>跟随系统</button>
           </div>
         </header>
@@ -549,6 +583,38 @@ export default async function Page() {
         </section>
       </section>
     </WebShell>
+  )
+}
+
+function BrowserSessionControls({
+  apiBaseUrl,
+  hasSessionCookie,
+  session,
+}: {
+  apiBaseUrl: string
+  hasSessionCookie: boolean
+  session: BrowserAuthSessionResponse | null
+}) {
+  if (!hasSessionCookie) {
+    return (
+      <a className="button-link" href={`${apiBaseUrl}/api/auth/github/start`}>
+        Sign in with GitHub
+      </a>
+    )
+  }
+
+  const label = session
+    ? session.authentication.provider === 'local-development'
+      ? '本地开发身份 · 仅本机'
+      : `${session.user.name} · GitHub`
+    : '会话信息暂时不可用'
+  return (
+    <>
+      <span className="button-link">{label}</span>
+      <form action="/api/auth/logout" method="post">
+        <button type="submit">退出登录</button>
+      </form>
+    </>
   )
 }
 

@@ -11,6 +11,7 @@ describe('DevFlow runtime flags', () => {
     expect(resolveDevFlowRuntimeFlags({})).toEqual({
       demoDataEnabled: false,
       fakeRuntimeEnabled: false,
+      localDevelopmentAuthEnabled: false,
       localMcpFixtureEnabled: false,
       requireAuth: false,
     })
@@ -40,14 +41,16 @@ describe('DevFlow runtime flags', () => {
     })
   })
 
-  it('parses demo, fake runtime, and auth flags independently', () => {
+  it('parses demo, fake runtime, local auth, and auth flags independently', () => {
     expect(resolveDevFlowRuntimeFlags({
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
       DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
+      DEVFLOW_LOCAL_AUTH_ENABLED: 'true',
       DEVFLOW_REQUIRE_AUTH: 'true',
     })).toEqual({
       demoDataEnabled: true,
       fakeRuntimeEnabled: true,
+      localDevelopmentAuthEnabled: true,
       localMcpFixtureEnabled: false,
       requireAuth: true,
     })

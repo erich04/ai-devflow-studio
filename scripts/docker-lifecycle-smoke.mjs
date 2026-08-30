@@ -535,6 +535,69 @@ async function assertAgentCoordinationProjectionAfterV19(database) {
   )
 }
 
+async function assertLocalDevelopmentAuthAfterV20(
+  database,
+  { expectRetainedGitHubAccount = false } = {},
+) {
+  const migrationHistory = await psql(
+    database,
+    `SELECT count(*) FROM team_schema_migrations
+     WHERE version = 20 AND name = '0020_local_development_auth';\n`,
+  )
+  expect(
+    migrationHistory.stdout.trim() === '1',
+    `${database} did not record the exact V20 local-development auth migration.`,
+  )
+  const providerConstraint = await psql(
+    database,
+    `SELECT pg_get_constraintdef(oid)
+     FROM pg_constraint
+     WHERE conrelid = 'auth_accounts'::regclass
+       AND conname = 'auth_accounts_provider_check';\n`,
+  )
+  expect(
+    providerConstraint.stdout.includes('github') &&
+      providerConstraint.stdout.includes('local-development') &&
+      !providerConstraint.stdout.includes('unknown-provider'),
+    `${database} did not install the bounded V20 auth provider constraint.`,
+  )
+  if (expectRetainedGitHubAccount) {
+    const retainedAccounts = await psql(
+      database,
+      "SELECT count(*) FROM auth_accounts WHERE provider = 'github';\n",
+    )
+    expect(
+      Number(retainedAccounts.stdout.trim()) > 0,
+      `${database} did not retain its GitHub auth account through V20.`,
+    )
+  }
+}
+
+async function assertNativeCodingEngineAfterV21(database) {
+  const migrationHistory = await psql(
+    database,
+    `SELECT count(*) FROM team_schema_migrations
+     WHERE version = 21 AND name = '0021_native_coding_agent_engine';\n`,
+  )
+  expect(
+    migrationHistory.stdout.trim() === '1',
+    `${database} did not record the exact V21 native Coding engine migration.`,
+  )
+  const engineConstraint = await psql(
+    database,
+    `SELECT pg_get_constraintdef(oid)
+     FROM pg_constraint
+     WHERE conrelid = 'coding_agent_summaries'::regclass
+       AND conname = 'coding_agent_summaries_engine_check';\n`,
+  )
+  expect(
+    ['fake', 'native', 'opencode-http', 'opencode-acp'].every((engine) =>
+      engineConstraint.stdout.includes(engine),
+    ),
+    `${database} did not install the bounded V21 native Coding engine constraint.`,
+  )
+}
+
 async function expectColumnMissing(database, table, column) {
   const result = await psql(
     database,
@@ -988,7 +1051,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v19; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v21; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -1190,11 +1253,13 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 19)
+  await expectSchemaVersion(FRESH_DATABASE, 21)
   await assertAgentRuntimeProjectionAfterV16(FRESH_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FRESH_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(FRESH_DATABASE)
   await assertAgentCoordinationProjectionAfterV19(FRESH_DATABASE)
+  await assertLocalDevelopmentAuthAfterV20(FRESH_DATABASE)
+  await assertNativeCodingEngineAfterV21(FRESH_DATABASE)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -1213,11 +1278,15 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 19)
+  await expectSchemaVersion(UPGRADE_DATABASE, 21)
   await assertAgentRuntimeProjectionAfterV16(UPGRADE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(UPGRADE_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(UPGRADE_DATABASE)
   await assertAgentCoordinationProjectionAfterV19(UPGRADE_DATABASE)
+  await assertLocalDevelopmentAuthAfterV20(UPGRADE_DATABASE, {
+    expectRetainedGitHubAccount: true,
+  })
+  await assertNativeCodingEngineAfterV21(UPGRADE_DATABASE)
   const snapshotAfterV15Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
     snapshotAfterV15Upgrade === snapshotBeforeV10Upgrade,
@@ -1296,11 +1365,13 @@ try {
   await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
   const retainedV14Fixture = await prepareV12LegacyIssuedCredentialFixture()
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 19)
+  await expectSchemaVersion(FAILURE_DATABASE, 21)
   await assertAgentRuntimeProjectionAfterV16(FAILURE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FAILURE_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(FAILURE_DATABASE)
   await assertAgentCoordinationProjectionAfterV19(FAILURE_DATABASE)
+  await assertLocalDevelopmentAuthAfterV20(FAILURE_DATABASE)
+  await assertNativeCodingEngineAfterV21(FAILURE_DATABASE)
   await assertLegacyIssuedCredentialAfterV13(retainedV14Fixture.snapshotBeforeV13)
   await assertLegacyPublicationAfterV15(retainedV14Fixture.snapshotBeforeV15)
   await startCurrentApiAgainstDatabase(FAILURE_DATABASE)
@@ -1327,6 +1398,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v19, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, v18-to-v19 metadata-only Agent Coordination projection, and bounded V1.4 backup/restore rollback.',
+    'Docker lifecycle smoke passed: fresh v21, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, v18-to-v19 metadata-only Agent Coordination projection, v19-to-v20 bounded local-development auth provider constraint, v20-to-v21 native Coding summary engine constraint, and bounded V1.4 backup/restore rollback.',
   )
 }

@@ -160,6 +160,42 @@ describe('API HTTP authentication boundary', () => {
     expect(JSON.stringify(headers)).not.toContain('x-devflow-')
   })
 
+  it('forwards the browser Origin and Host into the local sign-in boundary', async () => {
+    const repository = createSeedTeamRepository()
+    const identity = await repository.getAuthenticatedIdentity({
+      provider: 'github',
+      providerAccountId: 'demo:u-erich',
+    })
+    if (!identity) throw new Error('missing seed identity')
+    vi.spyOn(repository, 'resolveOrBootstrapLocalDevelopmentIdentity').mockResolvedValueOnce({
+      status: 'created',
+      identity,
+    })
+
+    const result = await resolveApiRouteRequest(
+      {
+        method: 'POST',
+        pathname: '/api/auth/local/start',
+        headers: {
+          'content-type': 'application/x-www-form-urlencoded',
+          host: '127.0.0.1:4310',
+          origin: 'http://127.0.0.1:4311',
+        },
+      },
+      {
+        repository,
+        sessionSecret: 'server-request-test-secret',
+        localAuthEnabled: true,
+        postAuthRedirectUrl: 'http://127.0.0.1:4311/',
+      },
+    )
+
+    expect(result).toMatchObject({
+      status: 303,
+      headers: { location: 'http://127.0.0.1:4311/legacy-shell' },
+    })
+  })
+
   it('rejects a direct run-summary POST that forges unsigned identity headers from an Origin', async () => {
     const repository = createSeedTeamRepository()
     const uploadRunSummary = vi.spyOn(repository, 'uploadRunSummary')

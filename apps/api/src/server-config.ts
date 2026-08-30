@@ -9,6 +9,7 @@ export type ServerListenConfig = {
 export type ServerRuntimeConfig = ServerListenConfig & {
   deploymentProfile: 'development' | 'pilot'
   devAuthEnabled: boolean
+  localAuthEnabled: boolean
   requireAuth: boolean
   secureCookies: boolean
   sessionSecret: string
@@ -30,6 +31,7 @@ export const PILOT_API_ENV_ALLOWLIST = Object.freeze([
   'DEVFLOW_ENABLE_FAKE_RUNTIME',
   'DEVFLOW_GITHUB_APP_ID',
   'DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64',
+  'DEVFLOW_LOCAL_AUTH_ENABLED',
   'DEVFLOW_REQUIRE_AUTH',
   'DEVFLOW_SESSION_SECRET',
   'DEVFLOW_WEB_APP_URL',
@@ -81,6 +83,7 @@ function isPostgresUrl(value: string | undefined): boolean {
 function resolveBoolean(
   name:
     | 'DEV_AUTH_ENABLED'
+    | 'DEVFLOW_LOCAL_AUTH_ENABLED'
     | 'DEVFLOW_REQUIRE_AUTH'
     | 'DEVFLOW_ENABLE_DEMO_DATA'
     | 'DEVFLOW_ENABLE_FAKE_RUNTIME',
@@ -114,7 +117,7 @@ function isHttpUrl(value: string): boolean {
   }
 }
 
-function isLoopbackHost(host: string): boolean {
+export function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase()
   return (
     normalized === 'localhost' ||
@@ -122,6 +125,13 @@ function isLoopbackHost(host: string): boolean {
     normalized === '[::1]' ||
     /^127(?:\.\d{1,3}){3}$/.test(normalized)
   )
+}
+
+function normalizeHostname(host: string): string {
+  const normalized = host.trim().toLowerCase()
+  return normalized.startsWith('[') && normalized.endsWith(']')
+    ? normalized.slice(1, -1)
+    : normalized
 }
 
 function resolveDeploymentProfile(
@@ -163,6 +173,11 @@ export function resolveServerRuntimeConfig(
     env['DEV_AUTH_ENABLED'],
     strictBooleans,
   )
+  const localAuthEnabled = resolveBoolean(
+    'DEVFLOW_LOCAL_AUTH_ENABLED',
+    env['DEVFLOW_LOCAL_AUTH_ENABLED'],
+    strictBooleans,
+  )
   const requireAuth = resolveBoolean(
     'DEVFLOW_REQUIRE_AUTH',
     env['DEVFLOW_REQUIRE_AUTH'],
@@ -187,6 +202,12 @@ export function resolveServerRuntimeConfig(
   if (deploymentProfile === 'pilot' && devAuthEnabled) {
     throw new Error(
       'DEV_AUTH_ENABLED=true is forbidden for DEVFLOW_DEPLOYMENT_PROFILE=pilot.',
+    )
+  }
+
+  if (deploymentProfile === 'pilot' && localAuthEnabled) {
+    throw new Error(
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true is forbidden for DEVFLOW_DEPLOYMENT_PROFILE=pilot.',
     )
   }
 
@@ -297,10 +318,53 @@ export function resolveServerRuntimeConfig(
     )
   }
 
+  if (localAuthEnabled) {
+    if (!isLoopbackHost(listen.host)) {
+      throw new Error(
+        'DEVFLOW_LOCAL_AUTH_ENABLED=true requires the API to listen on a loopback host.',
+      )
+    }
+    if (!isPostgresUrl(databaseUrl)) {
+      throw new Error(
+        'DEVFLOW_LOCAL_AUTH_ENABLED=true requires a postgres:// or postgresql:// DEVFLOW_DATABASE_URL (or DATABASE_URL).',
+      )
+    }
+    if (demoDataEnabled) {
+      throw new Error(
+        'DEVFLOW_LOCAL_AUTH_ENABLED=true requires DEVFLOW_ENABLE_DEMO_DATA=false.',
+      )
+    }
+
+    let parsedWebAppUrl: URL
+    try {
+      parsedWebAppUrl = new URL(webAppUrl)
+    } catch {
+      throw new Error(
+        'DEVFLOW_LOCAL_AUTH_ENABLED=true requires DEVFLOW_WEB_APP_URL to be an http loopback URL.',
+      )
+    }
+    if (
+      parsedWebAppUrl.protocol !== 'http:' ||
+      !isLoopbackHost(parsedWebAppUrl.hostname)
+    ) {
+      throw new Error(
+        'DEVFLOW_LOCAL_AUTH_ENABLED=true requires DEVFLOW_WEB_APP_URL to be an http loopback URL.',
+      )
+    }
+    if (
+      normalizeHostname(parsedWebAppUrl.hostname) !== normalizeHostname(listen.host)
+    ) {
+      throw new Error(
+        'DEVFLOW_LOCAL_AUTH_ENABLED=true requires the API and DEVFLOW_WEB_APP_URL to use the same hostname.',
+      )
+    }
+  }
+
   return {
     ...listen,
     deploymentProfile,
     devAuthEnabled,
+    localAuthEnabled,
     requireAuth,
     secureCookies,
     sessionSecret,

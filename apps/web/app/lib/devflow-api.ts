@@ -6,6 +6,7 @@ import type {
   AgentReviewResult,
   AgentTokenUsage,
   AgentTrace,
+  AuthProvider,
   EffectiveEnforcementPolicy,
   GateCommand,
   GateEnforcementDecision,
@@ -77,6 +78,17 @@ export type FetchTeamOverviewOptions = {
   cookieHeader?: string
   fetcher?: typeof fetch
   sessionHeaders?: DevFlowSessionHeaders
+}
+
+export type BrowserAuthSessionResponse = {
+  user: {
+    id: string
+    name: string
+    role: 'owner' | 'lead' | 'member'
+  }
+  authentication: {
+    provider: AuthProvider
+  }
 }
 
 export class DevFlowApiError extends Error {
@@ -155,7 +167,7 @@ export async function fetchTeamOverview(
   })
 
   if (!response.ok) {
-    throw new Error(`DevFlow API /api/team/overview failed with ${response.status}`)
+    throw new DevFlowApiError('/api/team/overview', response.status)
   }
 
   const value = await response.json() as TeamOverviewResponse
@@ -188,6 +200,32 @@ export async function fetchTeamOverview(
     )
   } catch {
     throw new Error('DevFlow API /api/team/overview returned an invalid Agent Coordination projection')
+  }
+  return value
+}
+
+export async function fetchAuthSession(
+  options: FetchTeamOverviewOptions = {},
+): Promise<BrowserAuthSessionResponse> {
+  const apiBaseUrl = options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()
+  const fetcher = options.fetcher ?? fetch
+  const response = await fetcher(`${apiBaseUrl}/api/auth/session`, {
+    cache: 'no-store',
+    headers: createApiHeaders({ accept: 'application/json' }, options),
+  })
+  if (!response.ok) {
+    throw new DevFlowApiError('/api/auth/session', response.status)
+  }
+
+  const value = await response.json() as BrowserAuthSessionResponse
+  if (
+    !value ||
+    typeof value.user?.id !== 'string' ||
+    typeof value.user?.name !== 'string' ||
+    !['owner', 'lead', 'member'].includes(value.user?.role) ||
+    !['github', 'local-development'].includes(value.authentication?.provider)
+  ) {
+    throw new Error('DevFlow API /api/auth/session returned an invalid session')
   }
   return value
 }

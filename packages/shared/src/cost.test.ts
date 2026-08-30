@@ -261,38 +261,41 @@ describe('evaluateRuntimeBudgetGuard', () => {
     })
   })
 
-  it('accepts a non-expired lead approval that covers the projected additional cost', () => {
-    const approval: RuntimeBudgetApproval = {
-      id: 'budget-approval-1',
-      projectId: 'project-1',
-      requestedBy: 'user-1',
-      approvedBy: 'lead-1',
-      role: 'lead',
-      providerId: 'double',
-      maxAdditionalCostUsd: 0.25,
-      reason: 'Release smoke is approved.',
-      status: 'approved',
-      createdAt: '2026-06-20T00:00:00.000Z',
-      expiresAt: '2026-06-20T01:00:00.000Z',
-    }
+  it.each(['owner', 'lead'] as const)(
+    'accepts a non-expired %s approval that covers the projected additional cost',
+    (role) => {
+      const approval: RuntimeBudgetApproval = {
+        id: 'budget-approval-1',
+        projectId: 'project-1',
+        requestedBy: 'user-1',
+        approvedBy: `${role}-1`,
+        role,
+        providerId: 'double',
+        maxAdditionalCostUsd: 0.25,
+        reason: 'Release smoke is approved.',
+        status: 'approved',
+        createdAt: '2026-06-20T00:00:00.000Z',
+        expiresAt: '2026-06-20T01:00:00.000Z',
+      }
 
-    const decision = evaluateRuntimeBudgetGuard({
-      projectId: 'project-1',
-      providerId: 'double',
-      policy,
-      currentSpendUsd: 0.95,
-      projectedCostUsd: 0.2,
-      requestedBy: 'user-1',
-      approval,
-      now: '2026-06-20T00:30:00.000Z',
-    })
+      const decision = evaluateRuntimeBudgetGuard({
+        projectId: 'project-1',
+        providerId: 'double',
+        policy,
+        currentSpendUsd: 0.95,
+        projectedCostUsd: 0.2,
+        requestedBy: 'user-1',
+        approval,
+        now: '2026-06-20T00:30:00.000Z',
+      })
 
-    expect(decision).toMatchObject({
-      status: 'approved_over_budget',
-      blocksRun: false,
-      approvalId: 'budget-approval-1',
-    })
-  })
+      expect(decision).toMatchObject({
+        status: 'approved_over_budget',
+        blocksRun: false,
+        approvalId: 'budget-approval-1',
+      })
+    },
+  )
 
   it('rejects a lead approval issued for a different project', () => {
     const approval: RuntimeBudgetApproval = {

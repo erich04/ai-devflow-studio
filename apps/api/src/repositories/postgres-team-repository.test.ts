@@ -829,6 +829,55 @@ class EmptyBootstrapDbClient implements TeamDbRepositoryClient {
   }
 }
 
+class StatefulLocalBootstrapDbClient extends EmptyBootstrapDbClient {
+  private localIdentityCreated = false
+
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('INSERT INTO auth_accounts')) {
+      this.localIdentityCreated = true
+    }
+
+    if (sql.includes('FROM auth_accounts') && this.localIdentityCreated) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      return [
+        {
+          auth_account_id: 'acct-local-owner',
+          auth_account_user_id: 'u-local-owner',
+          provider: 'local-development',
+          provider_account_id: 'local-owner',
+          username: 'local-owner',
+          auth_account_email: null,
+          auth_account_created_at: '2026-08-28T00:00:00.000Z',
+          auth_account_updated_at: '2026-08-28T00:00:00.000Z',
+          user_id: 'u-local-owner',
+          organization_id: 'org-local',
+          name: 'Local Developer',
+          role: 'owner',
+          email: null,
+          avatar_url: null,
+          avatar_initials: 'LD',
+          focus: 'Local development owner',
+          user_created_at: '2026-08-28T00:00:00.000Z',
+          user_updated_at: '2026-08-28T00:00:00.000Z',
+        },
+      ] as T[]
+    }
+
+    return super.query<T>(sql, params)
+  }
+}
+
+class FailingLocalBootstrapDbClient extends EmptyBootstrapDbClient {
+  override async query<T>(sql: string, params?: unknown[]): Promise<T[]> {
+    if (sql.includes('INSERT INTO auth_accounts')) {
+      this.queries.push(params === undefined ? { sql } : { sql, params })
+      throw new Error('simulated auth account insert failure')
+    }
+
+    return super.query<T>(sql, params)
+  }
+}
+
 class ExistingOrganizationNoAccountDbClient implements TeamDbRepositoryClient {
   readonly queries: Array<{ sql: string; params?: unknown[] }> = []
 
@@ -1650,6 +1699,127 @@ describe('Postgres team repository', () => {
     expect(db.queries.some((query) => query.sql.includes('INSERT INTO auth_accounts'))).toBe(true)
   })
 
+  it('bootstraps the deterministic local development owner inside the first-owner lock', async () => {
+    const db = new EmptyBootstrapDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.resolveOrBootstrapLocalDevelopmentIdentity(),
+    ).resolves.toMatchObject({
+      status: 'created',
+      identity: {
+        user: {
+          id: 'u-local-owner',
+          organizationId: 'org-local',
+          name: 'Local Developer',
+          role: 'owner',
+          focus: 'Local development owner',
+        },
+        authAccount: {
+          id: 'acct-local-owner',
+          userId: 'u-local-owner',
+          provider: 'local-development',
+          providerAccountId: 'local-owner',
+          username: 'local-owner',
+        },
+        projectMemberships: [],
+      },
+    })
+
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    expect(statements).toContain('BEGIN')
+    expect(
+      db.queries.some(
+        ({ sql, params }) =>
+          sql.includes('pg_advisory_xact_lock') &&
+          params?.[0] === 'auth:first-owner',
+      ),
+    ).toBe(true)
+    expect(
+      db.queries.find(({ sql }) => sql.includes('INSERT INTO organizations'))?.params,
+    ).toEqual([
+      'org-local',
+      'Local Team',
+      'local',
+      expect.any(String),
+    ])
+    expect(
+      db.queries.find(({ sql }) => sql.includes('INSERT INTO auth_accounts'))?.params,
+    ).toEqual([
+      'acct-local-owner',
+      'u-local-owner',
+      'local-development',
+      'local-owner',
+      'local-owner',
+      null,
+      expect.any(String),
+    ])
+    expect(statements).toContain('COMMIT')
+    expect(statements).not.toContain('ROLLBACK')
+  })
+
+  it('reuses the deterministic local development identity on later logins', async () => {
+    const db = new StatefulLocalBootstrapDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.resolveOrBootstrapLocalDevelopmentIdentity(),
+    ).resolves.toMatchObject({ status: 'created' })
+    await expect(
+      repository.resolveOrBootstrapLocalDevelopmentIdentity(),
+    ).resolves.toMatchObject({
+      status: 'existing',
+      identity: {
+        user: {
+          id: 'u-local-owner',
+          organizationId: 'org-local',
+          role: 'owner',
+        },
+        authAccount: {
+          id: 'acct-local-owner',
+          provider: 'local-development',
+          providerAccountId: 'local-owner',
+        },
+      },
+    })
+
+    expect(
+      db.queries.filter(({ sql }) => sql.includes('INSERT INTO organizations')),
+    ).toHaveLength(1)
+    expect(
+      db.queries.filter(({ sql }) => sql.includes('INSERT INTO auth_accounts')),
+    ).toHaveLength(1)
+  })
+
+  it('blocks local development bootstrap when another organization already exists', async () => {
+    const db = new ExistingOrganizationNoAccountDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.resolveOrBootstrapLocalDevelopmentIdentity(),
+    ).resolves.toEqual({
+      status: 'blocked',
+      reason: 'organization_exists',
+    })
+
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO users'))).toBe(false)
+    expect(db.queries.some((query) => query.sql.includes('INSERT INTO auth_accounts'))).toBe(false)
+  })
+
+  it('rolls back local development bootstrap when identity creation fails', async () => {
+    const db = new FailingLocalBootstrapDbClient()
+    const repository = createPostgresTeamRepository(db)
+
+    await expect(
+      repository.resolveOrBootstrapLocalDevelopmentIdentity(),
+    ).rejects.toThrow('simulated auth account insert failure')
+
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    expect(statements).toContain('BEGIN')
+    expect(statements).toContain('ROLLBACK')
+    expect(statements).not.toContain('COMMIT')
+  })
+
   it('does not silently make a later unknown GitHub login an owner when an organization already exists', async () => {
     const db = new ExistingOrganizationNoAccountDbClient()
     const repository = createPostgresTeamRepository(db)
@@ -1841,7 +2011,7 @@ describe('Postgres team repository', () => {
     expect(membershipQuery?.params).toEqual(['u-ling', 'p-payments', 'org-demo'])
   })
 
-  it('downgrades organization owners to project-lead authority for desktop bearer tokens', async () => {
+  it('preserves organization-owner authority for desktop bearer budget approvals', async () => {
     const repository = createPostgresTeamRepository(new FakeTeamDbClient(true, true, 'owner'))
 
     await expect(
@@ -1849,9 +2019,9 @@ describe('Postgres team repository', () => {
     ).resolves.toMatchObject({
       tokenRecordId: 'desktop-token-p-payments',
       session: {
-        role: 'lead',
+        role: 'owner',
         projectMemberships: [
-          { projectId: 'p-payments', userId: 'u-ling', role: 'lead' },
+          { projectId: 'p-payments', userId: 'u-ling', role: 'owner' },
         ],
       },
     })

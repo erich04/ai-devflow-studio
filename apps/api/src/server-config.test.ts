@@ -15,6 +15,7 @@ const validPilotEnvironment = (
   DEV_AUTH_ENABLED: 'false',
   DEVFLOW_ENABLE_DEMO_DATA: 'false',
   DEVFLOW_ENABLE_FAKE_RUNTIME: 'false',
+  DEVFLOW_LOCAL_AUTH_ENABLED: 'false',
   DEVFLOW_SESSION_SECRET: 'pilot-session-secret-with-32-plus-random-characters',
   DEVFLOW_AGENT_CREDENTIAL_KEY:
     'pilot-agent-credential-key-with-32-plus-random-characters',
@@ -55,6 +56,7 @@ describe('server listen config', () => {
     'DEVFLOW_REQUIRE_AUTH',
     'DEVFLOW_ENABLE_DEMO_DATA',
     'DEVFLOW_ENABLE_FAKE_RUNTIME',
+    'DEVFLOW_LOCAL_AUTH_ENABLED',
   ] as const)('rejects an invalid pilot boolean for %s', (name) => {
     expect(() =>
       resolveServerRuntimeConfig(
@@ -249,6 +251,87 @@ describe('server listen config', () => {
     },
   )
 
+  it('accepts Postgres-backed local browser auth on matching loopback services', () => {
+    expect(
+      resolveServerRuntimeConfig({
+        HOST: '127.0.0.1',
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:devflow@127.0.0.1:5432/devflow',
+        DEVFLOW_ENABLE_DEMO_DATA: 'false',
+        DEVFLOW_LOCAL_AUTH_ENABLED: 'true',
+        DEVFLOW_WEB_APP_URL: 'http://127.0.0.1:4311/',
+      }),
+    ).toMatchObject({
+      deploymentProfile: 'development',
+      host: '127.0.0.1',
+      localAuthEnabled: true,
+      webAppUrl: 'http://127.0.0.1:4311/',
+    })
+  })
+
+  it.each([
+    [
+      'pilot deployment',
+      validPilotEnvironment({ DEVFLOW_LOCAL_AUTH_ENABLED: 'true' }),
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true is forbidden for DEVFLOW_DEPLOYMENT_PROFILE=pilot.',
+    ],
+    [
+      'network API host',
+      {
+        HOST: '0.0.0.0',
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:devflow@127.0.0.1:5432/devflow',
+        DEVFLOW_LOCAL_AUTH_ENABLED: 'true',
+      },
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true requires the API to listen on a loopback host.',
+    ],
+    [
+      'missing Postgres',
+      { DEVFLOW_LOCAL_AUTH_ENABLED: 'true' },
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true requires a postgres:// or postgresql:// DEVFLOW_DATABASE_URL (or DATABASE_URL).',
+    ],
+    [
+      'Demo repository',
+      {
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:devflow@127.0.0.1:5432/devflow',
+        DEVFLOW_ENABLE_DEMO_DATA: 'true',
+        DEVFLOW_LOCAL_AUTH_ENABLED: 'true',
+      },
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true requires DEVFLOW_ENABLE_DEMO_DATA=false.',
+    ],
+    [
+      'remote Web application',
+      {
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:devflow@127.0.0.1:5432/devflow',
+        DEVFLOW_LOCAL_AUTH_ENABLED: 'true',
+        DEVFLOW_WEB_APP_URL: 'http://devflow.example:4311',
+      },
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true requires DEVFLOW_WEB_APP_URL to be an http loopback URL.',
+    ],
+    [
+      'HTTPS Web application',
+      {
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:devflow@127.0.0.1:5432/devflow',
+        DEVFLOW_LOCAL_AUTH_ENABLED: 'true',
+        DEVFLOW_WEB_APP_URL: 'https://127.0.0.1:4311',
+      },
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true requires DEVFLOW_WEB_APP_URL to be an http loopback URL.',
+    ],
+    [
+      'mixed loopback hostnames',
+      {
+        HOST: '127.0.0.1',
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:devflow@127.0.0.1:5432/devflow',
+        DEVFLOW_LOCAL_AUTH_ENABLED: 'true',
+        DEVFLOW_WEB_APP_URL: 'http://localhost:4311',
+      },
+      'DEVFLOW_LOCAL_AUTH_ENABLED=true requires the API and DEVFLOW_WEB_APP_URL to use the same hostname.',
+    ],
+  ] as const)(
+    'rejects local browser auth with a %s configuration',
+    (_label, environment, message) => {
+      expect(() => resolveServerRuntimeConfig(environment)).toThrow(message)
+    },
+  )
+
   it('preserves explicit unsigned auth for non-browser loopback development', () => {
     expect(
       resolveServerRuntimeConfig({
@@ -259,6 +342,7 @@ describe('server listen config', () => {
     ).toEqual({
       deploymentProfile: 'development',
       devAuthEnabled: true,
+      localAuthEnabled: false,
       host: '127.0.0.1',
       port: 4310,
       requireAuth: false,
@@ -274,6 +358,7 @@ describe('server listen config', () => {
     ).toEqual({
       deploymentProfile: 'pilot',
       devAuthEnabled: false,
+      localAuthEnabled: false,
       host: '0.0.0.0',
       port: 4310,
       requireAuth: true,
@@ -316,6 +401,7 @@ describe('server listen config', () => {
         'DEVFLOW_DATABASE_URL',
         'DEVFLOW_GITHUB_APP_ID',
         'DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64',
+        'DEVFLOW_LOCAL_AUTH_ENABLED',
         'DEVFLOW_WEB_APP_URL',
         'GITHUB_CLIENT_ID',
         'GITHUB_CLIENT_SECRET',

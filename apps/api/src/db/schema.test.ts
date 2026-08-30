@@ -17,15 +17,23 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('reserves Team schema v19 for an empty metadata-only Coordination projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(19)
+  it('reserves Team schema v21 for Native Coding summaries while retaining local development auth', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(21)
     expect(teamMigrationCatalog.at(-1)).toEqual({
-      version: 19,
-      name: '0019_agent_coordination_team_projection',
-      fileName: '0019_agent_coordination_team_projection.sql',
+      version: 21,
+      name: '0021_native_coding_agent_engine',
+      fileName: '0021_native_coding_agent_engine.sql',
     })
 
-    const migration = (await readTeamMigrationCatalog()).find(
+    const migrations = await readTeamMigrationCatalog()
+    const nativeCodingMigration = migrations.find((candidate) => candidate.version === 21)
+    expect(nativeCodingMigration?.sql).toContain("engine IN ('fake', 'native', 'opencode-http', 'opencode-acp')")
+    const localAuthMigration = migrations.find((candidate) => candidate.version === 20)
+    expect(localAuthMigration?.sql).toContain('DROP CONSTRAINT IF EXISTS auth_accounts_provider_check')
+    expect(localAuthMigration?.sql).toContain("CHECK (provider IN ('github', 'local-development'))")
+    expect(localAuthMigration?.sql).not.toMatch(/INSERT\s+INTO\s+(?:organizations|users|auth_accounts)/iu)
+
+    const migration = migrations.find(
       (candidate) => candidate.version === 19,
     )
     expect(migration?.sql).toContain('CREATE TABLE agent_coordination_summaries')
@@ -81,7 +89,7 @@ describe('team database schema', () => {
   })
 
   it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(19)
+    expect(TEAM_SCHEMA_VERSION).toBe(21)
     expect(teamMigrationCatalog.find((migration) => migration.version === 18)).toEqual({
       version: 18,
       name: '0018_agent_memory_projection_quality_version',
@@ -144,7 +152,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(19)
+    expect(TEAM_SCHEMA_VERSION).toBe(21)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -182,7 +190,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(19)
+    expect(TEAM_SCHEMA_VERSION).toBe(21)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -435,6 +443,16 @@ describe('team database schema', () => {
         version: 19,
         name: '0019_agent_coordination_team_projection',
         fileName: '0019_agent_coordination_team_projection.sql',
+      },
+      {
+        version: 20,
+        name: '0020_local_development_auth',
+        fileName: '0020_local_development_auth.sql',
+      },
+      {
+        version: 21,
+        name: '0021_native_coding_agent_engine',
+        fileName: '0021_native_coding_agent_engine.sql',
       },
     ])
 

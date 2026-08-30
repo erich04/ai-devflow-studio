@@ -74,6 +74,7 @@ import type {
   AgentReviewBundle,
   GitHubIdentityBootstrapResult,
   GitHubIdentityProfile,
+  IdentityBootstrapResult,
   ResolvedDesktopTokenSession,
   RunsBundle,
   TeamOverviewPayload,
@@ -1281,8 +1282,8 @@ export function createPostgresTeamRepository(
   async function loadAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
-  }): Promise<AuthenticatedIdentity | null> {
-    const [identityRow] = await db.query<AuthenticatedIdentityRow>(
+  }, queryClient: Pick<TeamDbClient, 'query'> = db): Promise<AuthenticatedIdentity | null> {
+    const [identityRow] = await queryClient.query<AuthenticatedIdentityRow>(
       `
         SELECT
           auth_accounts.id AS auth_account_id,
@@ -1317,7 +1318,7 @@ export function createPostgresTeamRepository(
     }
 
     const identity = mapAuthenticatedIdentityRow(identityRow)
-    const membershipRows = await db.query<ProjectMembershipRow>(
+    const membershipRows = await queryClient.query<ProjectMembershipRow>(
       `
         SELECT project_id, user_id, role
         FROM project_members
@@ -1333,8 +1334,11 @@ export function createPostgresTeamRepository(
     }
   }
 
-  async function loadBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null> {
-    const [identityRow] = await db.query<AuthenticatedIdentityRow>(
+  async function loadAuthenticatedIdentityByAuthAccountId(
+    authAccountId: string,
+    queryClient: Pick<TeamDbClient, 'query'> = db,
+  ): Promise<AuthenticatedIdentity | null> {
+    const [identityRow] = await queryClient.query<AuthenticatedIdentityRow>(
       `
         SELECT
           auth_accounts.id AS auth_account_id,
@@ -1368,7 +1372,7 @@ export function createPostgresTeamRepository(
     }
 
     const identity = mapAuthenticatedIdentityRow(identityRow)
-    const membershipRows = await db.query<ProjectMembershipRow>(
+    const membershipRows = await queryClient.query<ProjectMembershipRow>(
       `
         SELECT project_members.project_id, project_members.user_id, project_members.role
         FROM project_members
@@ -1381,124 +1385,196 @@ export function createPostgresTeamRepository(
     )
 
     return {
+      ...identity,
+      projectMemberships: membershipRows.map(mapProjectMembership),
+    }
+  }
+
+  async function loadBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null> {
+    const identity = await loadAuthenticatedIdentityByAuthAccountId(authAccountId)
+    if (!identity) return null
+
+    return {
       source: 'authenticated',
       organizationId: identity.user.organizationId,
       userId: identity.user.id,
       role: identity.user.role,
       authAccountId: identity.authAccount.id,
-      projectMemberships: membershipRows.map(mapProjectMembership),
+      projectMemberships: identity.projectMemberships,
     }
   }
 
-  async function createFirstGitHubOwner(
+  type FirstOwnerIdentityInput = {
+    accountId: string
+    avatarUrl?: string
+    displayName: string
+    email?: string
+    focus: string
+    organizationId: string
+    organizationName: string
+    organizationSlug: string
+    provider: AuthProvider
+    providerAccountId: string
+    userId: string
+    username?: string
+  }
+
+  async function resolveOrCreateFirstOwner(
+    input: FirstOwnerIdentityInput,
+  ): Promise<IdentityBootstrapResult> {
+    return withTeamDbTransaction(db, async (tx) => {
+      await tx.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        ['auth:first-owner'],
+      )
+
+      const existing = await loadAuthenticatedIdentity(
+        {
+          provider: input.provider,
+          providerAccountId: input.providerAccountId,
+        },
+        tx,
+      )
+      if (existing) {
+        return { status: 'existing', identity: existing }
+      }
+
+      const [existingOrganization] = await tx.query<OrganizationRow>(
+        'SELECT id, name, slug FROM organizations ORDER BY created_at ASC LIMIT 1',
+      )
+      if (existingOrganization) {
+        return {
+          status: 'blocked',
+          reason: 'organization_exists',
+        }
+      }
+
+      const now = new Date().toISOString()
+      await tx.query(
+        `
+          INSERT INTO organizations (id, name, slug, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $4)
+        `,
+        [input.organizationId, input.organizationName, input.organizationSlug, now],
+      )
+      await tx.query(
+        `
+          INSERT INTO users (
+            id,
+            organization_id,
+            name,
+            email,
+            avatar_url,
+            role,
+            avatar_initials,
+            focus,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
+        `,
+        [
+          input.userId,
+          input.organizationId,
+          input.displayName,
+          input.email ?? null,
+          input.avatarUrl ?? null,
+          'owner',
+          initialsForName(input.displayName),
+          input.focus,
+          now,
+        ],
+      )
+      await tx.query(
+        `
+          INSERT INTO auth_accounts (
+            id,
+            user_id,
+            provider,
+            provider_account_id,
+            username,
+            email,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+        `,
+        [
+          input.accountId,
+          input.userId,
+          input.provider,
+          input.providerAccountId,
+          input.username ?? null,
+          input.email ?? null,
+          now,
+        ],
+      )
+
+      return {
+        status: 'created',
+        identity: {
+          user: {
+            id: input.userId,
+            organizationId: input.organizationId,
+            name: input.displayName,
+            role: 'owner',
+            ...(input.email ? { email: input.email } : {}),
+            ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
+            avatarInitials: initialsForName(input.displayName),
+            focus: input.focus,
+            createdAt: now,
+            updatedAt: now,
+          },
+          authAccount: {
+            id: input.accountId,
+            userId: input.userId,
+            provider: input.provider,
+            providerAccountId: input.providerAccountId,
+            ...(input.username ? { username: input.username } : {}),
+            ...(input.email ? { email: input.email } : {}),
+            createdAt: now,
+            updatedAt: now,
+          },
+          projectMemberships: [],
+        },
+      }
+    })
+  }
+
+  function createFirstGitHubOwner(
     input: GitHubIdentityProfile,
   ): Promise<GitHubIdentityBootstrapResult> {
-    const [existingOrganization] = await db.query<OrganizationRow>(
-      'SELECT id, name, slug FROM organizations ORDER BY created_at ASC LIMIT 1',
-    )
-
-    if (existingOrganization) {
-      return {
-        status: 'blocked',
-        reason: 'organization_exists',
-      }
-    }
-
     const idSegment = safeIdSegment(input.providerAccountId)
-    const now = new Date().toISOString()
-    const organizationId = 'org-default'
-    const userId = `u-github-${idSegment}`
-    const accountId = `acct-github-${idSegment}`
     const displayName = input.name.trim() || input.username?.trim() || 'GitHub User'
+    return resolveOrCreateFirstOwner({
+      accountId: `acct-github-${idSegment}`,
+      displayName,
+      focus: 'Team pilot owner',
+      organizationId: 'org-default',
+      organizationName: 'Default Team',
+      organizationSlug: 'default',
+      provider: 'github',
+      providerAccountId: input.providerAccountId,
+      userId: `u-github-${idSegment}`,
+      ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
+      ...(input.email ? { email: input.email } : {}),
+      ...(input.username ? { username: input.username } : {}),
+    })
+  }
 
-    await db.query(
-      `
-        INSERT INTO organizations (id, name, slug, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $4)
-      `,
-      [organizationId, 'Default Team', 'default', now],
-    )
-    await db.query(
-      `
-        INSERT INTO users (
-          id,
-          organization_id,
-          name,
-          email,
-          avatar_url,
-          role,
-          avatar_initials,
-          focus,
-          created_at,
-          updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
-      `,
-      [
-        userId,
-        organizationId,
-        displayName,
-        input.email ?? null,
-        input.avatarUrl ?? null,
-        'owner',
-        initialsForName(displayName),
-        'Team pilot owner',
-        now,
-      ],
-    )
-    await db.query(
-      `
-        INSERT INTO auth_accounts (
-          id,
-          user_id,
-          provider,
-          provider_account_id,
-          username,
-          email,
-          created_at,
-          updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
-      `,
-      [
-        accountId,
-        userId,
-        'github',
-        input.providerAccountId,
-        input.username ?? null,
-        input.email ?? null,
-        now,
-      ],
-    )
-
-    return {
-      status: 'created',
-      identity: {
-        user: {
-          id: userId,
-          organizationId,
-          name: displayName,
-          role: 'owner',
-          ...(input.email ? { email: input.email } : {}),
-          ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
-          avatarInitials: initialsForName(displayName),
-          focus: 'Team pilot owner',
-          createdAt: now,
-          updatedAt: now,
-        },
-        authAccount: {
-          id: accountId,
-          userId,
-          provider: 'github',
-          providerAccountId: input.providerAccountId,
-          ...(input.username ? { username: input.username } : {}),
-          ...(input.email ? { email: input.email } : {}),
-          createdAt: now,
-          updatedAt: now,
-        },
-        projectMemberships: [],
-      },
-    }
+  function createFirstLocalDevelopmentOwner(): Promise<IdentityBootstrapResult> {
+    return resolveOrCreateFirstOwner({
+      accountId: 'acct-local-owner',
+      displayName: 'Local Developer',
+      focus: 'Local development owner',
+      organizationId: 'org-local',
+      organizationName: 'Local Team',
+      organizationSlug: 'local',
+      provider: 'local-development',
+      providerAccountId: 'local-owner',
+      userId: 'u-local-owner',
+      username: 'local-owner',
+    })
   }
 
   async function loadRunsBundle(context: TeamRepositoryReadContext): Promise<RunsBundle> {
@@ -1634,17 +1710,15 @@ export function createPostgresTeamRepository(
       [tokenRow.token_id, new Date().toISOString()],
     )
 
-    const tokenRole = projectMembership.role === 'owner' ? 'lead' : projectMembership.role
-
     return {
       tokenRecordId: tokenRow.token_id,
       session: {
         source: 'authenticated',
         organizationId: tokenRow.organization_id,
         userId: tokenRow.user_id,
-        role: tokenRole,
+        role: projectMembership.role,
         authAccountId: tokenRow.auth_account_id,
-        projectMemberships: [{ ...mapProjectMembership(projectMembership), role: tokenRole }],
+        projectMemberships: [mapProjectMembership(projectMembership)],
       },
     }
   }
@@ -1657,21 +1731,20 @@ export function createPostgresTeamRepository(
       return loadAuthenticatedIdentity(input)
     },
 
+    async getAuthenticatedIdentityByAuthAccountId(authAccountId) {
+      return loadAuthenticatedIdentityByAuthAccountId(authAccountId)
+    },
+
     async resolveBrowserSession(authAccountId) {
       return loadBrowserSession(authAccountId)
     },
 
     async resolveOrBootstrapGitHubIdentity(input) {
-      const existing = await loadAuthenticatedIdentity({
-        provider: 'github',
-        providerAccountId: input.providerAccountId,
-      })
-
-      if (existing) {
-        return { status: 'existing', identity: existing }
-      }
-
       return createFirstGitHubOwner(input)
+    },
+
+    async resolveOrBootstrapLocalDevelopmentIdentity() {
+      return createFirstLocalDevelopmentOwner()
     },
 
     async createProject(input, context) {

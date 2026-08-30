@@ -62,6 +62,7 @@ import { clearSessionCookie, createSessionCookie } from '../auth/session-cookie'
 import { resolveWorkRequestRoute } from './work-request-routes'
 import { resolveGateCommandRoute } from './gate-command-routes'
 import { evaluateTeamGateEnforcement } from '../repositories/team-gate-enforcement'
+import { isLoopbackHost } from '../server-config'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
@@ -87,6 +88,13 @@ export type ResolveTeamRouteOptions = {
   body?: unknown
   cookies?: Record<string, string | undefined>
   githubOAuth?: GitHubOAuthClient
+  localAuth?: {
+    enabled: boolean
+    requestContentType?: string
+    requestHost?: string
+    requestOrigin?: string
+    webAppUrl: string
+  }
   postAuthRedirectUrl?: string
   principal?: RequestPrincipal | null
   session?: TeamSession | null
@@ -416,6 +424,35 @@ function conflict(message: string): ApiRouteResult {
   }
 }
 
+function serviceUnavailable(message: string): ApiRouteResult {
+  return {
+    status: 503,
+    body: {
+      error: 'service_unavailable',
+      message,
+    },
+  }
+}
+
+function parseRequestHostname(hostHeader: string | undefined): string | null {
+  if (!hostHeader) return null
+  try {
+    const parsed = new URL(`http://${hostHeader}`)
+    if (
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== '/' ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return null
+    }
+    return parsed.hostname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
 async function acceptCanonicalRunEvidence<T>(upload: () => Promise<T>): Promise<ApiRouteResult> {
   try {
     return {
@@ -546,6 +583,64 @@ export async function resolveTeamRoute(
   repository: TeamRepository,
   options: ResolveTeamRouteOptions = {},
 ): Promise<ApiRouteResult | null> {
+  if (
+    method === 'POST' &&
+    pathname === '/api/auth/local/start' &&
+    options.localAuth?.enabled === true
+  ) {
+    if (!options.auth) {
+      return serviceUnavailable('Local development authentication is unavailable')
+    }
+    if (options.body !== undefined) {
+      return badRequest('Local development sign-in requires an empty request body')
+    }
+
+    const webOrigin = new URL(options.localAuth.webAppUrl).origin
+    const webHostname = new URL(webOrigin).hostname.toLowerCase()
+    const requestHostname = parseRequestHostname(options.localAuth.requestHost)
+    const requestContentType = options.localAuth.requestContentType
+      ?.split(';', 1)[0]
+      ?.trim()
+      .toLowerCase()
+    if (
+      !options.localAuth.requestOrigin ||
+      options.localAuth.requestOrigin !== webOrigin ||
+      requestContentType !== 'application/x-www-form-urlencoded' ||
+      !requestHostname ||
+      !isLoopbackHost(requestHostname) ||
+      requestHostname !== webHostname
+    ) {
+      return forbidden(
+        'Local development sign-in requires an empty form from the configured loopback Web origin',
+      )
+    }
+
+    const result = await repository.resolveOrBootstrapLocalDevelopmentIdentity()
+    if (result.status === 'blocked') {
+      return {
+        status: 409,
+        body: {
+          error: 'organization_exists',
+          message: 'Local development identity cannot bootstrap into an existing organization',
+        },
+      }
+    }
+
+    const redirectTo = new URL('/legacy-shell', webOrigin).toString()
+    return {
+      status: 303,
+      headers: {
+        location: redirectTo,
+        'set-cookie': createSessionCookie(
+          { authAccountId: result.identity.authAccount.id },
+          options.auth.sessionSecret,
+          { secure: options.auth.secureCookies === true },
+        ),
+      },
+      body: { redirectTo },
+    }
+  }
+
   if (method === 'GET' && pathname === '/api/auth/github/start') {
     if (!options.githubOAuth || !options.auth) {
       return badRequest('GitHub OAuth is not configured')
@@ -612,6 +707,40 @@ export async function resolveTeamRoute(
         }),
       },
       body: null,
+    }
+  }
+
+  if (method === 'GET' && pathname === '/api/auth/session') {
+    if (!options.principal) {
+      return unauthorized()
+    }
+    if (options.principal.authentication.kind !== 'session_cookie') {
+      return forbidden('A browser session is required')
+    }
+
+    const { session } = options.principal
+    if (!('authAccountId' in session)) {
+      return unauthorized()
+    }
+    const identity = await repository.getAuthenticatedIdentityByAuthAccountId(
+      session.authAccountId,
+    )
+    if (!identity) {
+      return unauthorized()
+    }
+
+    return {
+      status: 200,
+      body: {
+        user: {
+          id: identity.user.id,
+          name: identity.user.name,
+          role: identity.user.role,
+        },
+        authentication: {
+          provider: identity.authAccount.provider,
+        },
+      },
     }
   }
 

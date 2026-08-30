@@ -168,7 +168,7 @@ export type GitHubIdentityProfile = {
   avatarUrl?: string
 }
 
-export type GitHubIdentityBootstrapResult =
+export type IdentityBootstrapResult =
   | {
       status: 'existing' | 'created'
       identity: AuthenticatedIdentity
@@ -177,6 +177,9 @@ export type GitHubIdentityBootstrapResult =
       status: 'blocked'
       reason: 'organization_exists'
     }
+
+export type GitHubIdentityBootstrapResult = IdentityBootstrapResult
+export type LocalDevelopmentIdentityBootstrapResult = IdentityBootstrapResult
 
 export type TeamProjectCreateInput = {
   name: string
@@ -195,10 +198,14 @@ export type TeamRepository = WorkRequestRepository &
     provider: AuthProvider
     providerAccountId: string
   }): Promise<AuthenticatedIdentity | null>
+  getAuthenticatedIdentityByAuthAccountId(
+    authAccountId: string,
+  ): Promise<AuthenticatedIdentity | null>
   resolveBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null>
   resolveOrBootstrapGitHubIdentity(
     input: GitHubIdentityProfile,
   ): Promise<GitHubIdentityBootstrapResult>
+  resolveOrBootstrapLocalDevelopmentIdentity(): Promise<LocalDevelopmentIdentityBootstrapResult>
   createProject(
     input: TeamProjectCreateInput,
     context: TeamRepositorySyncContext,
@@ -738,6 +745,18 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
+    async getAuthenticatedIdentityByAuthAccountId(authAccountId) {
+      if (!authAccountId.startsWith('acct-demo-')) {
+        return null
+      }
+
+      const memberId = authAccountId.slice('acct-demo-'.length)
+      return this.getAuthenticatedIdentity({
+        provider: 'github',
+        providerAccountId: `demo:${memberId}`,
+      })
+    },
+
     async resolveOrBootstrapGitHubIdentity(input) {
       const existing = await this.getAuthenticatedIdentity({
         provider: 'github',
@@ -748,6 +767,13 @@ export function createSeedTeamRepository(): TeamRepository {
         return { status: 'existing', identity: existing }
       }
 
+      return {
+        status: 'blocked',
+        reason: 'organization_exists',
+      }
+    },
+
+    async resolveOrBootstrapLocalDevelopmentIdentity() {
       return {
         status: 'blocked',
         reason: 'organization_exists',

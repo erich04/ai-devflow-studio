@@ -563,6 +563,17 @@ async function prepareRetainedV12CredentialFixture() {
       [createdAt],
     )
     await connection.query(
+      `INSERT INTO auth_accounts (
+         id, user_id, provider, provider_account_id, username, email,
+         created_at, updated_at
+       ) VALUES (
+         'auth-retained-v11', 'user-retained-v11', 'github',
+         'retained-v11', 'retained-v11', 'retained-v11@example.invalid',
+         $1, $1
+       )`,
+      [createdAt],
+    )
+    await connection.query(
       `INSERT INTO projects (
          id, organization_id, name, slug, description, repository,
          default_branch, health, knowledge_base_path, test_command,
@@ -850,7 +861,7 @@ async function prepareRetainedV12CredentialFixture() {
 async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v19-assertion',
+    application_name: 'ai-devflow-postgres-smoke-v21-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -860,8 +871,8 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '19',
-      'Team database did not migrate the retained fixture to schema v19.',
+      schemaVersion.rows[0]?.value === '21',
+      'Team database did not migrate the retained fixture to schema v21.',
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -1072,6 +1083,94 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       coordinationMigration.rows[0]?.count === 1,
       'V19 Agent Coordination projection migration history was missing.',
     )
+
+    const localAuthMigration = await connection.query(
+      `SELECT count(*)::integer AS count
+       FROM team_schema_migrations
+       WHERE version = 20
+         AND name = '0020_local_development_auth'`,
+    )
+    expect(
+      localAuthMigration.rows[0]?.count === 1,
+      'V20 local-development auth migration history was missing.',
+    )
+    const nativeCodingMigration = await connection.query(
+      `SELECT count(*)::integer AS count
+       FROM team_schema_migrations
+       WHERE version = 21
+         AND name = '0021_native_coding_agent_engine'`,
+    )
+    expect(
+      nativeCodingMigration.rows[0]?.count === 1,
+      'V21 native Coding engine migration history was missing.',
+    )
+    const nativeCodingConstraint = await connection.query(
+      `SELECT pg_get_constraintdef(oid) AS definition
+       FROM pg_constraint
+       WHERE conrelid = 'coding_agent_summaries'::regclass
+         AND conname = 'coding_agent_summaries_engine_check'`,
+    )
+    expect(
+      ['fake', 'native', 'opencode-http', 'opencode-acp'].every((engine) =>
+        nativeCodingConstraint.rows[0]?.definition?.includes(engine),
+      ),
+      'V21 did not install the bounded native Coding engine constraint.',
+    )
+    const retainedGitHubAccount = await connection.query(
+      `SELECT provider, provider_account_id
+       FROM auth_accounts
+       WHERE id = 'auth-retained-v11'`,
+    )
+    expect(
+      stableJson(retainedGitHubAccount.rows[0]) === stableJson({
+        provider: 'github',
+        provider_account_id: 'retained-v11',
+      }),
+      'V20 did not preserve the retained GitHub auth account.',
+    )
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    await connection.query(
+      `INSERT INTO auth_accounts (
+         id, user_id, provider, provider_account_id, username
+       ) VALUES (
+         'auth-local-v20-smoke', 'user-retained-v11',
+         'local-development', 'local-v20-smoke', 'local-v20-smoke'
+       )`,
+    )
+    const localAuthAccount = await connection.query(
+      `SELECT provider FROM auth_accounts WHERE id = 'auth-local-v20-smoke'`,
+    )
+    expect(
+      localAuthAccount.rows[0]?.provider === 'local-development',
+      'V20 did not accept the local-development auth provider.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
+
+    await connection.query('BEGIN')
+    transactionOpen = true
+    let unknownProviderError
+    try {
+      await connection.query(
+        `INSERT INTO auth_accounts (
+           id, user_id, provider, provider_account_id, username
+         ) VALUES (
+           'auth-unknown-v20-smoke', 'user-retained-v11',
+           'unknown-provider', 'unknown-v20-smoke', 'unknown-v20-smoke'
+         )`,
+      )
+    } catch (error) {
+      unknownProviderError = error
+    }
+    expect(
+      unknownProviderError?.code === '23514' &&
+        unknownProviderError?.constraint === 'auth_accounts_provider_check',
+      'V20 accepted an unknown auth provider.',
+    )
+    await connection.query('ROLLBACK')
+    transactionOpen = false
 
     await connection.query('BEGIN')
     transactionOpen = true
