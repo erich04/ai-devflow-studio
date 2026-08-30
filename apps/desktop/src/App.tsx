@@ -46,6 +46,7 @@ import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
 import { WorkRequestInbox } from './WorkRequestInbox'
+import { WorkbenchSplitter } from './WorkbenchSplitter'
 import {
   AgentWorkbenchView,
   Inspector,
@@ -125,7 +126,7 @@ export function App() {
     githubRepositoryBindings,
     retryAttempts,
     remoteSyncOperations,
-    providerIdDraft,
+    providerNameDraft,
     providerBaseUrlDraft,
     providerModelDraft,
     providerKeyDraft,
@@ -179,7 +180,7 @@ export function App() {
     setDependencyBootstrapEvidence,
     setCodingDiffArtifacts,
     setRetryAttempts,
-    setProviderIdDraft,
+    setProviderNameDraft,
     setProviderBaseUrlDraft,
     setProviderModelDraft,
     setProviderKeyDraft,
@@ -1186,6 +1187,8 @@ export function App() {
                   onSelectNode={setSelectedNodeId}
                 />
 
+                <WorkbenchSplitter />
+
                 <Inspector
                   selectedRun={selectedRun}
                   selectedNode={selectedNode}
@@ -1254,6 +1257,7 @@ export function App() {
                     当前本地仓库没有已保存的 Run。创建 Run 或同步团队后，这里才会展示真实工作流。
                   </p>
                 </section>
+                <WorkbenchSplitter />
                 <aside className="inspector" data-testid="node-inspector-empty">
                   <div className="panel-head panel-head--compact">
                     <span className="panel-title">Inspector</span>
@@ -1319,8 +1323,8 @@ export function App() {
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}
             onProviderChange={setSelectedAgentProviderId}
-            providerIdDraft={providerIdDraft}
-            onProviderIdDraftChange={setProviderIdDraft}
+            providerNameDraft={providerNameDraft}
+            onProviderNameDraftChange={setProviderNameDraft}
             providerBaseUrlDraft={providerBaseUrlDraft}
             onProviderBaseUrlDraftChange={setProviderBaseUrlDraft}
             providerModelDraft={providerModelDraft}

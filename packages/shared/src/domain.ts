@@ -297,6 +297,8 @@ export type AgentProviderConfig = {
 
 export type ProviderCredentialMetadata = {
   providerId: string
+  /** User-facing label. Legacy records may omit it and fall back to providerId. */
+  name?: string
   model: string
   baseUrl?: string
   maskedCredential: string

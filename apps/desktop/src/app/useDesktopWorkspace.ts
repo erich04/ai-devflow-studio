@@ -115,7 +115,7 @@ export type DesktopWorkspaceState = {
   githubRepositoryBindings: GitHubRepositoryBinding[]
   retryAttempts: RetryAttempt[]
   remoteSyncOperations: RemoteSyncOperation[]
-  providerIdDraft: string
+  providerNameDraft: string
   providerBaseUrlDraft: string
   providerModelDraft: string
   providerKeyDraft: string
@@ -179,7 +179,7 @@ export type DesktopWorkspaceSetters = {
   >
   setGitHubRepositoryBindings: Dispatch<SetStateAction<GitHubRepositoryBinding[]>>
   setRetryAttempts: Dispatch<SetStateAction<RetryAttempt[]>>
-  setProviderIdDraft: Dispatch<SetStateAction<string>>
+  setProviderNameDraft: Dispatch<SetStateAction<string>>
   setProviderBaseUrlDraft: Dispatch<SetStateAction<string>>
   setProviderModelDraft: Dispatch<SetStateAction<string>>
   setProviderKeyDraft: Dispatch<SetStateAction<string>>
@@ -196,7 +196,7 @@ export type DesktopWorkspaceSetters = {
 }
 
 export function useDesktopWorkspace(input: {
-  defaultReviewProviderDraft: { providerId: string; baseUrl: string; model: string }
+  defaultReviewProviderDraft: { name: string; baseUrl: string; model: string }
   reviewProviderFromMetadata: (metadata: import('@ai-devflow/shared').ProviderCredentialMetadata) => AgentProviderConfig
 }): {
   desktopApi: DevFlowDesktopApi | null
@@ -262,7 +262,7 @@ export function useDesktopWorkspace(input: {
     useState<GitHubRepositoryBinding[]>([])
   const [retryAttempts, setRetryAttempts] = useState<RetryAttempt[]>([])
   const [remoteSyncOperations, setRemoteSyncOperations] = useState<RemoteSyncOperation[]>([])
-  const [providerIdDraft, setProviderIdDraft] = useState(input.defaultReviewProviderDraft.providerId)
+  const [providerNameDraft, setProviderNameDraft] = useState(input.defaultReviewProviderDraft.name)
   const [providerBaseUrlDraft, setProviderBaseUrlDraft] = useState(input.defaultReviewProviderDraft.baseUrl)
   const [providerModelDraft, setProviderModelDraft] = useState(input.defaultReviewProviderDraft.model)
   const [providerKeyDraft, setProviderKeyDraft] = useState('')
@@ -634,7 +634,7 @@ export function useDesktopWorkspace(input: {
     githubRepositoryBindings,
     retryAttempts,
     remoteSyncOperations,
-    providerIdDraft,
+    providerNameDraft,
     providerBaseUrlDraft,
     providerModelDraft,
     providerKeyDraft,
@@ -694,7 +694,7 @@ export function useDesktopWorkspace(input: {
     setGitHubDeliveryRevocationChecks,
     setGitHubRepositoryBindings,
     setRetryAttempts,
-    setProviderIdDraft,
+    setProviderNameDraft,
     setProviderBaseUrlDraft,
     setProviderModelDraft,
     setProviderKeyDraft,

@@ -5,6 +5,7 @@ import {
   createWorkflowRunFromRequest,
   normalizeWorkflowRunProgress,
   redactSecrets,
+  validateAgentProviderName,
   validateTestCommandSafety,
   type CodingPermissionDecision,
   type GateEnforcementDecision,
@@ -133,7 +134,7 @@ export function useDesktopActions(input: {
     pairingCodeDraft,
     mcpServers,
     selectedAgentProviderId,
-    providerIdDraft,
+    providerNameDraft,
     providerBaseUrlDraft,
     providerModelDraft,
     providerKeyDraft,
@@ -420,7 +421,7 @@ export function useDesktopActions(input: {
       return
     }
     if (!selectedAgentProviderId) {
-      setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider ID、Base URL、Model 和 API Key')
+      setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider Name、Base URL、Model 和 API Key')
       return
     }
     if (blockIfInspectorWriteInFlight()) {
@@ -576,7 +577,7 @@ export function useDesktopActions(input: {
       return
     }
 
-    const providerId = providerIdDraft.trim()
+    const providerNameValidation = validateAgentProviderName(providerNameDraft)
     const baseUrl = providerBaseUrlDraft.trim()
     const model = providerModelDraft.trim()
 
@@ -584,8 +585,8 @@ export function useDesktopActions(input: {
       setToast('请输入 API Key')
       return
     }
-    if (!providerId) {
-      setToast('请输入 Provider ID')
+    if (!providerNameValidation.ok) {
+      setToast(providerNameValidation.message)
       return
     }
     if (!model) {
@@ -595,7 +596,7 @@ export function useDesktopActions(input: {
 
     try {
       const metadata = await desktopApi.saveAgentProviderCredential({
-        providerId,
+        name: providerNameValidation.name,
         apiKey: providerKeyDraft,
         model,
         ...(baseUrl ? { baseUrl } : {}),
@@ -604,7 +605,7 @@ export function useDesktopActions(input: {
       setAgentProviders(mergeById(providers, [reviewProviderFromMetadata(metadata)]))
       setSelectedAgentProviderId(metadata.providerId)
       setProviderKeyDraft('')
-      setToast(`Agent provider saved and selected: ${metadata.maskedCredential}`)
+      setToast(`已保存并选择 Provider：${reviewProviderFromMetadata(metadata).name} · ${metadata.maskedCredential}`)
     } catch (error) {
       setToast(error instanceof Error ? error.message : '保存 Agent Provider 失败')
     }
@@ -620,7 +621,7 @@ export function useDesktopActions(input: {
       return
     }
     if (!selectedAgentProviderId) {
-      setToast('请先在 Runtime Settings 配置 Agent Provider：Provider ID、Base URL、Model 和 API Key')
+      setToast('请先在 Runtime Settings 配置 Agent Provider：Provider Name、Base URL、Model 和 API Key')
       return
     }
 

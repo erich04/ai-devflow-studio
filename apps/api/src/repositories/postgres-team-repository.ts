@@ -7,6 +7,7 @@ import {
   parseRemoteAgentRuntimeSummary,
   parseRemoteAgentMemorySummary,
   parseRemoteAgentCoordinationSummary,
+  resolveAgentProviderDisplayName,
   type AgentEvent,
   type AgentEventKind,
   type AgentProviderConfig,
@@ -284,6 +285,7 @@ type TestEvidenceSummaryRow = {
 
 type AgentProviderCredentialRow = {
   provider_id: string
+  provider_name: string | null
   model: string
   base_url: string | null
   masked_credential: string
@@ -776,6 +778,7 @@ function readArray<T>(value: unknown): T[] {
 function mapProviderCredential(row: AgentProviderCredentialRow): AgentProviderCredentialRecord {
   const metadata: ProviderCredentialMetadata = {
     providerId: row.provider_id,
+    ...(row.provider_name ? { name: row.provider_name } : {}),
     model: row.model,
     ...(row.base_url ? { baseUrl: row.base_url } : {}),
     maskedCredential: row.masked_credential,
@@ -791,7 +794,10 @@ function mapProviderCredential(row: AgentProviderCredentialRow): AgentProviderCr
 function mapProviderConfig(row: AgentProviderCredentialRow): AgentProviderConfig {
   return {
     id: row.provider_id,
-    name: row.provider_id === 'openai-default' ? 'OpenAI Compatible' : row.provider_id,
+    name: resolveAgentProviderDisplayName({
+      providerId: row.provider_id,
+      ...(row.provider_name ? { name: row.provider_name } : {}),
+    }),
     kind: 'openai-compatible',
     ...(row.base_url ? { baseUrl: row.base_url } : {}),
     model: row.model,
@@ -3381,15 +3387,17 @@ export function createPostgresTeamRepository(
           INSERT INTO agent_provider_credentials (
             organization_id,
             provider_id,
+            provider_name,
             model,
             base_url,
             masked_credential,
             encrypted_secret,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           ON CONFLICT (organization_id, provider_id) DO UPDATE
-          SET model = excluded.model,
+          SET provider_name = excluded.provider_name,
+              model = excluded.model,
               base_url = excluded.base_url,
               masked_credential = excluded.masked_credential,
               encrypted_secret = excluded.encrypted_secret,
@@ -3398,6 +3406,7 @@ export function createPostgresTeamRepository(
         [
           context.organizationId,
           metadata.providerId,
+          resolveAgentProviderDisplayName(metadata),
           metadata.model,
           metadata.baseUrl ?? null,
           metadata.maskedCredential,

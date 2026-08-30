@@ -202,7 +202,7 @@ npm install --package-lock=false
 Agent 完成后，Agents 页面显示：
 
 - 状态：`completed`
-- Provider：`native-decision-deterministic`
+- Provider：显示可读的 Provider Name；系统生成的内部 `providerId` 不需要用户填写
 - Changed paths：1
 - Bootstrap：passed
 - Test Evidence：passed

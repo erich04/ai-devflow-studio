@@ -41,8 +41,8 @@ export function AgentWorkbenchView({
   providers,
   selectedProviderId,
   onProviderChange,
-  providerIdDraft,
-  onProviderIdDraftChange,
+  providerNameDraft,
+  onProviderNameDraftChange,
   providerBaseUrlDraft,
   onProviderBaseUrlDraftChange,
   providerModelDraft,
@@ -90,8 +90,8 @@ export function AgentWorkbenchView({
   providers: AgentProviderConfig[]
   selectedProviderId: string
   onProviderChange: (providerId: string) => void
-  providerIdDraft: string
-  onProviderIdDraftChange: (value: string) => void
+  providerNameDraft: string
+  onProviderNameDraftChange: (value: string) => void
   providerBaseUrlDraft: string
   onProviderBaseUrlDraftChange: (value: string) => void
   providerModelDraft: string
@@ -142,6 +142,12 @@ export function AgentWorkbenchView({
   const [warningThresholdUsd, setWarningThresholdUsd] = useState('0.10')
   const [codingConfigurationStatus, setCodingConfigurationStatus] = useState('')
   const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
+  const codingConfigurationProviderName = codingConfiguration
+    ? providers.find((provider) => provider.id === codingConfiguration.providerId)?.name ?? '旧版 Provider'
+    : undefined
+  const latestCodingProviderName = latestCodingRun
+    ? providers.find((provider) => provider.id === latestCodingRun.providerId)?.name ?? '旧版 Provider'
+    : undefined
 
   async function refreshCodingReadiness(approvalId = runtimeBudgetApprovalId) {
     if (!desktopApi || !localProjectId || !selectedRun || !selectedNode) {
@@ -229,7 +235,8 @@ export function AgentWorkbenchView({
         providerId: codingProviderId,
       })
       setCodingConfiguration(saved)
-      setCodingConfigurationStatus(`已保存 Native Executor · ${saved.providerId} · v${saved.version}`)
+      const savedProviderName = providers.find((provider) => provider.id === saved.providerId)?.name
+      setCodingConfigurationStatus(`已保存 Native Executor · ${savedProviderName ?? '已保存 Provider'} · v${saved.version}`)
       await refreshCodingReadiness()
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Coding Agent 配置失败')
@@ -494,7 +501,7 @@ export function AgentWorkbenchView({
               </div>
               <div className="compact-row">
                 <span>Provider</span>
-                <strong>{latestCodingRun.providerId}</strong>
+                <strong>{latestCodingProviderName}</strong>
               </div>
               <div className="compact-row">
                 <span>Changed paths</span>
@@ -646,7 +653,7 @@ export function AgentWorkbenchView({
               <button className="ghost-button" disabled={!codingProviderId || isSavingCodingConfiguration} onClick={saveCodingConfiguration}>
                 <Save size={16} />保存并用于当前项目
               </button>
-              <p className="empty-note">当前：{codingConfiguration ? `${codingConfiguration.providerId} · v${codingConfiguration.version}` : '未配置'}</p>
+              <p className="empty-note">当前：{codingConfiguration ? `${codingConfigurationProviderName} · v${codingConfiguration.version}` : '未配置'}</p>
             </article>
 
             <article className="agent-evidence-card runtime-settings-form">
@@ -744,12 +751,12 @@ export function AgentWorkbenchView({
               </div>
               <p>新增后会自动设为当前 Agent Provider；明文 key 只保存在 Electron 本地安全存储，不会回读到 renderer。</p>
               <label>
-                Provider ID
+                Provider Name
                 <input
-                  aria-label="Agent Provider ID"
-                  value={providerIdDraft}
-                  placeholder="doubao-review"
-                  onChange={(event) => onProviderIdDraftChange(event.target.value)}
+                  aria-label="Agent Provider Name"
+                  value={providerNameDraft}
+                  placeholder="OpenAI production"
+                  onChange={(event) => onProviderNameDraftChange(event.target.value)}
                 />
               </label>
               <label>

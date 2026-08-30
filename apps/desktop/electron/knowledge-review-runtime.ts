@@ -105,7 +105,7 @@ export function createKnowledgeReviewRuntime(
       }
       if (!input.providerId) {
         throw new Error(
-          '门禁审查 Provider 尚未配置。运行门禁审查前请保存 Provider ID、Base URL、Model 和 API Key。',
+          '门禁审查 Provider 尚未配置。运行门禁审查前请保存 Provider Name、Base URL、Model 和 API Key。',
         )
       }
 

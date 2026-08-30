@@ -42,4 +42,14 @@ describe('Electron single-instance persistence boundary', () => {
     expect(disableSessionSpellChecker).toBeGreaterThan(clearSessionSpellCheckerLanguages)
     expect(disableSessionSpellChecker).toBeLessThan(createFirstWindow)
   })
+
+  it('keeps the native Electron window explicitly resizable', () => {
+    const main = readFileSync('apps/desktop/electron/main.ts', 'utf8')
+    const browserWindow = main.match(/new BrowserWindow\(\{[\s\S]*?\n  \}\)/)?.[0]
+
+    expect(browserWindow).toBeDefined()
+    expect(browserWindow).toContain('resizable: true')
+    expect(browserWindow).toContain('minWidth: 1180')
+    expect(browserWindow).toContain('minHeight: 760')
+  })
 })

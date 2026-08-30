@@ -1,5 +1,7 @@
 import {
   AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES,
+  requireAgentProviderName,
+  resolveAgentProviderDisplayName,
   WORK_REQUEST_ID_MAX_LENGTH,
 } from '@ai-devflow/shared'
 import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.js'
@@ -392,7 +394,9 @@ export type ListGateOverridesInput = {
 }
 
 export type AgentProviderCredentialInput = {
-  providerId: string
+  name?: string
+  /** @deprecated Compatibility only. New providers receive a generated ID in Electron main. */
+  providerId?: string
   apiKey: string
   model: string
   baseUrl?: string
@@ -1477,18 +1481,28 @@ export function parseRefreshRepositoryKnowledgeInput(
   return { projectId: readRequiredString(value, 'projectId') }
 }
 
-export function parseAgentProviderCredentialInput(value: unknown): AgentProviderCredentialInput {
+export function parseAgentProviderCredentialInput(
+  value: unknown,
+): AgentProviderCredentialInput & { name: string } {
   if (!isRecord(value)) {
     throw new Error('Invalid agent provider credential payload')
   }
 
-  const providerId = readRequiredString(value, 'providerId')
+  const legacyProviderId = value['providerId']
+  const providerId =
+    typeof legacyProviderId === 'string' && legacyProviderId.trim()
+      ? legacyProviderId.trim()
+      : undefined
+  const name = requireAgentProviderName(
+    value['name'] ?? (providerId ? resolveAgentProviderDisplayName({ providerId }) : undefined),
+  )
   const apiKey = readRequiredString(value, 'apiKey')
   const model = readRequiredString(value, 'model')
   const baseUrl = value['baseUrl']
 
   return {
-    providerId,
+    name,
+    ...(providerId ? { providerId } : {}),
     apiKey,
     model,
     ...(typeof baseUrl === 'string' && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),

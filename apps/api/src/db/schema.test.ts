@@ -17,15 +17,23 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url))
 const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
-  it('reserves Team schema v21 for Native Coding summaries while retaining local development auth', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(21)
+  it('reserves Team schema v22 for generated Provider identities while retaining Native Coding and local auth', async () => {
+    expect(TEAM_SCHEMA_VERSION).toBe(22)
     expect(teamMigrationCatalog.at(-1)).toEqual({
-      version: 21,
-      name: '0021_native_coding_agent_engine',
-      fileName: '0021_native_coding_agent_engine.sql',
+      version: 22,
+      name: '0022_agent_provider_identity',
+      fileName: '0022_agent_provider_identity.sql',
     })
 
     const migrations = await readTeamMigrationCatalog()
+    const providerIdentityMigration = migrations.find((candidate) => candidate.version === 22)
+    expect(providerIdentityMigration?.sql).toContain('ADD COLUMN IF NOT EXISTS provider_name text')
+    expect(providerIdentityMigration?.sql).toContain('ALTER COLUMN provider_name SET NOT NULL')
+    expect(
+      teamTableDefinitions
+        .find((table) => table.name === 'agent_provider_credentials')
+        ?.columns.map((column) => column.name),
+    ).toContain('provider_name')
     const nativeCodingMigration = migrations.find((candidate) => candidate.version === 21)
     expect(nativeCodingMigration?.sql).toContain("engine IN ('fake', 'native', 'opencode-http', 'opencode-acp')")
     const localAuthMigration = migrations.find((candidate) => candidate.version === 20)
@@ -89,7 +97,7 @@ describe('team database schema', () => {
   })
 
   it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(21)
+    expect(TEAM_SCHEMA_VERSION).toBe(22)
     expect(teamMigrationCatalog.find((migration) => migration.version === 18)).toEqual({
       version: 18,
       name: '0018_agent_memory_projection_quality_version',
@@ -152,7 +160,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(21)
+    expect(TEAM_SCHEMA_VERSION).toBe(22)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -190,7 +198,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(21)
+    expect(TEAM_SCHEMA_VERSION).toBe(22)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -453,6 +461,11 @@ describe('team database schema', () => {
         version: 21,
         name: '0021_native_coding_agent_engine',
         fileName: '0021_native_coding_agent_engine.sql',
+      },
+      {
+        version: 22,
+        name: '0022_agent_provider_identity',
+        fileName: '0022_agent_provider_identity.sql',
       },
     ])
 

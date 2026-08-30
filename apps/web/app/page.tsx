@@ -264,6 +264,9 @@ export default async function Page({ searchParams }: PageProps) {
       )
     : []
   const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
+  const providerNameById = new Map(
+    overview.agentProviders.map((provider) => [provider.id, provider.name]),
+  )
   const policySummary = activeProject
     ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
     : undefined
@@ -588,7 +591,12 @@ export default async function Page({ searchParams }: PageProps) {
               ))
             ) : currentCodingRuns.length > 0 ? (
               currentCodingRuns.slice(0, 4).map((run) => (
-                <CompactRow key={run.id} title={run.providerId} meta={run.summary} value={run.status} />
+                <CompactRow
+                  key={run.id}
+                  title={providerNameById.get(run.providerId) ?? '已保存 Provider'}
+                  meta={run.summary}
+                  value={run.status}
+                />
               ))
             ) : (
               <CompactRow title="Planner / Code / Test" meta="等待 Desktop 同步真实 coding agent 运行" value="idle" />

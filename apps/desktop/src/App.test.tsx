@@ -1135,7 +1135,7 @@ function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
       pairingCodeDraft: '',
       mcpServers: [],
       selectedAgentProviderId: agentProvider.id,
-      providerIdDraft: '',
+      providerNameDraft: '',
       providerBaseUrlDraft: '',
       providerModelDraft: '',
       providerKeyDraft: '',
@@ -1202,7 +1202,7 @@ function PrDraftActionHarness({
       pairingCodeDraft: '',
       mcpServers: [],
       selectedAgentProviderId: agentProvider.id,
-      providerIdDraft: '',
+      providerNameDraft: '',
       providerBaseUrlDraft: '',
       providerModelDraft: '',
       providerKeyDraft: '',
@@ -1267,7 +1267,7 @@ function GateApprovalFallbackHarness() {
       pairingCodeDraft: '',
       mcpServers: [],
       selectedAgentProviderId: agentProvider.id,
-      providerIdDraft: '',
+      providerNameDraft: '',
       providerBaseUrlDraft: '',
       providerModelDraft: '',
       providerKeyDraft: '',
@@ -1355,7 +1355,7 @@ function BrowserDeliveryBoundaryHarness({
       pairingCodeDraft: '',
       mcpServers: [],
       selectedAgentProviderId: agentProvider.id,
-      providerIdDraft: '',
+      providerNameDraft: '',
       providerBaseUrlDraft: '',
       providerModelDraft: '',
       providerKeyDraft: '',
@@ -1428,7 +1428,7 @@ function AcceptanceApprovalHarness({ api }: { api: DevFlowDesktopApi }) {
       pairingCodeDraft: '',
       mcpServers: [],
       selectedAgentProviderId: agentProvider.id,
-      providerIdDraft: '',
+      providerNameDraft: '',
       providerBaseUrlDraft: '',
       providerModelDraft: '',
       providerKeyDraft: '',
@@ -1512,7 +1512,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
-      '未选择 Provider 请先添加 Provider ID、Base URL、模型和 API Key',
+      '未选择 Provider 请先添加 Provider Name、Base URL、模型和 API Key',
     )
 
     fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
@@ -3554,7 +3554,13 @@ describe('App', () => {
 
     const inspector = await screen.findByTestId('node-inspector')
     expect(inspector).toHaveTextContent('方案评审 Gate')
-    expect(within(inspector).getByTestId('inspector-status-matrix')).toHaveTextContent('Gate 结论')
+    const readinessSummary = within(inspector).getByTestId('gate-readiness-summary')
+    await waitFor(() => expect(readinessSummary).toHaveTextContent('可以通过'))
+    expect(readinessSummary).toHaveTextContent('已通过')
+    expect(readinessSummary).toHaveTextContent('警告')
+    expect(readinessSummary).toHaveTextContent('缺失')
+    expect(readinessSummary).toHaveTextContent('阻断')
+    expect(within(inspector).getByTestId('readiness-group-conclusion')).not.toHaveAttribute('open')
     expect(inspector).toHaveTextContent('Required Artifact')
     expect(inspector).not.toHaveTextContent('Lead 审批方案后进入实现')
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
@@ -3564,6 +3570,11 @@ describe('App', () => {
 
     clickInspectorTab(/Evidence/)
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('基于知识的门禁审查')
+    expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('Gate Enforcement · 详细结论')
+
+    clickInspectorTab(/Remediation/)
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Remediation · 处理动作')
+    expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('Gate Enforcement · 详细结论')
   })
 
   it('pairs the desktop client with a team project through the desktop API', async () => {
@@ -3680,16 +3691,23 @@ describe('App', () => {
 
     const inspector = clickInspectorTab(/Gate条件/)
     expect(inspector).toHaveTextContent('Gate Enforcement')
-    expect(inspector).toHaveTextContent('blocked')
-    expect(inspector).toHaveTextContent('remote_cache')
+    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('存在 1 项阻断')
+    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('阻断审批')
+    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('尚未运行门禁审查')
+    expect(screen.getAllByTestId('enforcement-finding')).toHaveLength(1)
+    expect(screen.getByTestId('gate-technical-details')).not.toHaveAttribute('open')
+    expect(inspector).toHaveTextContent('团队远端缓存')
     expect(inspector).toHaveTextContent('policy v1')
     expect(inspector).toHaveTextContent('此受保护 Gate 尚未运行基于知识的门禁审查。')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    const missingReviewCta = screen.getByTestId('missing-agent-review-cta')
-    expect(missingReviewCta).toHaveTextContent('Gate 前置证据不足')
-    expect(within(missingReviewCta).getByRole('button', { name: '运行门禁审查' })).not.toBeDisabled()
-    expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '运行门禁审查' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /通过 Gate/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
+
+    clickInspectorTab(/Remediation/)
+    expect(screen.getByTestId('remediation-actions')).toHaveTextContent('运行门禁审查')
+    expect(screen.queryAllByTestId('enforcement-finding')).toHaveLength(0)
+    clickInspectorTab(/Gate条件/)
 
     fireEvent.change(screen.getByLabelText('Lead override reason'), {
       target: { value: 'Reviewed the canonical blocking evidence.' },
@@ -3742,10 +3760,13 @@ describe('App', () => {
     render(<App />)
 
     const inspector = await screen.findByTestId('node-inspector')
-    await waitFor(() => expect(inspector).toHaveTextContent('blocked_policy_unavailable'))
+    await waitFor(() => expect(within(inspector).getByTestId('gate-readiness-summary')).toHaveTextContent('不能通过'))
     clickInspectorTab(/Gate条件/)
-    expect(screen.getByTestId('policy-unavailable-cta')).toHaveTextContent('同步团队')
-    expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
+    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('团队策略不可用')
+    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('同步团队策略后重新评估 Gate')
+    clickInspectorTab(/Remediation/)
+    expect(screen.getByRole('button', { name: '同步团队策略' })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: /通过 Gate/ })).not.toBeInTheDocument()
   })
 
   it('shows provisional overrides distinctly from confirmed overrides', async () => {
@@ -3794,10 +3815,11 @@ describe('App', () => {
     await waitFor(() => expect(api.listGateOverrides).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id }))
 
     const inspector = clickInspectorTab(/Gate条件/)
-    expect(inspector).toHaveTextContent('overridden')
+    expect(inspector).toHaveTextContent('阻断已由 Lead 例外放行')
+    expect(inspector).toHaveTextContent('可继续审批')
     expect(inspector).toHaveTextContent('Provisional override')
     expect(inspector).toHaveTextContent('Offline lead override pending server confirmation.')
-    expect(screen.getByRole('button', { name: /通过 Gate/ })).not.toBeDisabled()
+    expect(screen.getByRole('button', { name: '运行门禁审查' })).toBeEnabled()
   })
 
   it('shows rejected provisional overrides as blocked and actionable', async () => {
@@ -3850,7 +3872,7 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('Rejected override')
     expect(inspector).toHaveTextContent('Rejected by team policy because version 1 is stale.')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '运行门禁审查' })).toBeEnabled()
   })
 
   it('persists theme and MCP local preferences through the desktop API', async () => {
@@ -4175,6 +4197,8 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
+    const readinessBeforeReview = screen.getByTestId('gate-readiness-summary')
+    await waitFor(() => expect(readinessBeforeReview).toHaveTextContent('缺失'))
     fireEvent.click(screen.getByRole('button', { name: /运行门禁审查/ }))
 
     expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('来自 Workbench Inspector')
@@ -4195,10 +4219,16 @@ describe('App', () => {
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('estimated')
 
     fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
-    expect(await screen.findByTestId('node-inspector')).toBeInTheDocument()
+    const inspector = await screen.findByTestId('node-inspector')
+    await waitFor(() => expect(within(inspector).getByTestId('readiness-group-review-evidence')).toHaveTextContent('success'))
+    expect(within(inspector).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
+    clickInspectorTab(/Gate条件/)
+    expect(screen.getByTestId('knowledge-governance-flow')).toHaveTextContent('2 · 完成审查已完成')
     clickInspectorTab(/Evidence/)
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('基于知识的门禁审查')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('已保存 Provider')
+    expect(screen.getByTestId('node-inspector')).not.toHaveTextContent(agentProvider.id)
   })
 
   it('runs the required Gate Review from final acceptance enforcement', async () => {
@@ -4273,8 +4303,8 @@ describe('App', () => {
 
   it('saves a custom Agent Provider credential for Doubao-compatible model calls', async () => {
     const liveProvider = {
-      id: 'doubao-review',
-      name: 'doubao-review',
+      id: 'provider_123e4567e89b12d3a456426614174000',
+      name: '公司火山方舟',
       kind: 'openai-compatible' as const,
       model: 'ark-code-latest',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
@@ -4287,7 +4317,8 @@ describe('App', () => {
       .mockResolvedValueOnce([agentProvider])
       .mockResolvedValueOnce([agentProvider, liveProvider])
     const saveAgentProviderCredential = vi.fn().mockResolvedValue({
-      providerId: 'doubao-review',
+      providerId: 'provider_123e4567e89b12d3a456426614174000',
+      name: '公司火山方舟',
       model: 'ark-code-latest',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
       maskedCredential: 'e8...test',
@@ -4303,8 +4334,9 @@ describe('App', () => {
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
       '已保存 Provider 配置 实时 OpenAI 兼容服务 · 可能消耗模型 Token',
     )
-    fireEvent.change(screen.getByLabelText('Agent Provider ID'), {
-      target: { value: 'doubao-review' },
+    expect(screen.queryByLabelText('Agent Provider ID')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Agent Provider Name'), {
+      target: { value: '公司火山方舟' },
     })
     fireEvent.change(screen.getByLabelText('Agent Provider Base URL'), {
       target: { value: 'https://ark.cn-beijing.volces.com/api/coding/v3' },
@@ -4320,7 +4352,7 @@ describe('App', () => {
 
     await waitFor(() =>
       expect(saveAgentProviderCredential).toHaveBeenCalledWith({
-        providerId: 'doubao-review',
+        name: '公司火山方舟',
         baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
         model: 'ark-code-latest',
         apiKey: 'e8fa6ce2-test-key',
@@ -4330,7 +4362,7 @@ describe('App', () => {
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
       '已保存 Provider 配置 实时 OpenAI 兼容服务 · 可能消耗模型 Token',
     )
-    expect(screen.getByText('Agent provider saved and selected: e8...test')).toBeInTheDocument()
+    expect(screen.getByText('已保存并选择 Provider：公司火山方舟 · e8...test')).toBeInTheDocument()
   })
 
   it('requires an API key before saving an Agent Provider credential', async () => {
@@ -4343,6 +4375,23 @@ describe('App', () => {
 
     expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
     expect(screen.getByText('请输入 API Key')).toBeInTheDocument()
+  })
+
+  it('requires a Provider Name and never asks the user for an internal provider ID', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await screen.findByText('Add Agent Provider')
+    expect(screen.getByLabelText('Agent Provider Name')).toBeInTheDocument()
+    expect(screen.queryByLabelText('Agent Provider ID')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Agent Provider API Key'), {
+      target: { value: 'sk-test-secret' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Save and Use Provider/ }))
+
+    expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
+    expect(screen.getByText('Provider name is required.')).toBeInTheDocument()
   })
 
   it('applies main-process local state pushes to the current project sync status', async () => {

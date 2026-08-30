@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 21
+export const TEAM_SCHEMA_VERSION = 22
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -343,6 +343,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
     columns: [
       column('organization_id', 'text', { primaryKey: true, references: 'organizations.id' }),
       column('provider_id', 'text', { primaryKey: true }),
+      column('provider_name', 'text'),
       column('model', 'text'),
       column('base_url', 'text', { nullable: true }),
       column('masked_credential', 'text'),

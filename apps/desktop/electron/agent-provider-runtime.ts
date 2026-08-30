@@ -1,13 +1,15 @@
 import {
+  assertAgentProviderNameAvailable,
+  createGeneratedAgentProviderId,
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
+  resolveAgentProviderDisplayName,
   type AgentProvider,
   type AgentProviderConfig,
   type ProviderCredentialMetadata,
 } from '@ai-devflow/shared'
 
 export const FAKE_AGENT_PROVIDER_ID = 'fake-knowledge-review'
-const DEFAULT_OPENAI_PROVIDER_ID = 'openai-default'
 const DEFAULT_OPENAI_BASE_URL = 'https://api.openai.com/v1'
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini'
 
@@ -20,10 +22,36 @@ const fakeAgentProviderConfig: AgentProviderConfig = {
   updatedAt: new Date(0).toISOString(),
 }
 
+export function createElectronAgentProviderCredentialMetadata(input: {
+  name: string
+  providerId?: string
+  model: string
+  baseUrl?: string
+  maskedCredential: string
+  updatedAt: string
+  randomValue: string
+  providers: AgentProviderConfig[]
+}): ProviderCredentialMetadata {
+  const providerId = input.providerId ?? createGeneratedAgentProviderId(input.randomValue)
+  assertAgentProviderNameAvailable({
+    name: input.name,
+    providers: input.providers,
+    ...(input.providerId ? { providerId } : {}),
+  })
+  return {
+    providerId,
+    name: input.name,
+    model: input.model,
+    ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+    maskedCredential: input.maskedCredential,
+    updatedAt: input.updatedAt,
+  }
+}
+
 function providerConfigFromCredential(metadata: ProviderCredentialMetadata): AgentProviderConfig {
   return {
     id: metadata.providerId,
-    name: metadata.providerId === DEFAULT_OPENAI_PROVIDER_ID ? 'OpenAI Compatible' : metadata.providerId,
+    name: resolveAgentProviderDisplayName(metadata),
     kind: 'openai-compatible',
     model: metadata.model,
     ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
@@ -99,7 +127,7 @@ export async function resolveElectronAgentProvider(input: {
 
   return createOpenAiCompatibleAgentProvider({
     id: metadata.providerId,
-    name: metadata.providerId === DEFAULT_OPENAI_PROVIDER_ID ? 'OpenAI Compatible' : metadata.providerId,
+    name: resolveAgentProviderDisplayName(metadata),
     model: metadata.model || DEFAULT_OPENAI_MODEL,
     baseUrl: metadata.baseUrl || DEFAULT_OPENAI_BASE_URL,
     apiKey: input.decryptCredential(encryptedSecret),

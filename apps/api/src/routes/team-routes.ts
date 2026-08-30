@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
+  assertAgentProviderNameAvailable,
   canOverrideBlockedGate,
   createAgentReviewArtifacts,
   createFakeAgentProvider,
+  createGeneratedAgentProviderId,
   createWarnOnlyDefaultPolicy,
   createOpenAiCompatibleAgentProvider,
   evaluateRuntimeBudgetGuard,
@@ -40,6 +42,8 @@ import {
   type TeamSession,
   type TestEvidence,
   type WorkflowRun,
+  requireAgentProviderName,
+  resolveAgentProviderDisplayName,
 } from '@ai-devflow/shared'
 import { canAccessProject, canSyncProject, getProjectMembershipRole } from '../auth/session'
 import type { GitHubOAuthClient } from '../auth/github-oauth'
@@ -102,7 +106,8 @@ export type ResolveTeamRouteOptions = {
 }
 
 type AgentProviderCredentialInput = {
-  providerId: string
+  name: string
+  providerId?: string
   apiKey: string
   model: string
   baseUrl?: string
@@ -199,9 +204,17 @@ function parseProviderCredential(value: unknown): AgentProviderCredentialInput {
   }
 
   const baseUrl = value['baseUrl']
+  const legacyProviderId = value['providerId']
+  const providerId =
+    typeof legacyProviderId === 'string' && legacyProviderId.trim()
+      ? legacyProviderId.trim()
+      : undefined
 
   return {
-    providerId: readRequiredString(value, 'providerId'),
+    name: requireAgentProviderName(
+      value['name'] ?? (providerId ? resolveAgentProviderDisplayName({ providerId }) : undefined),
+    ),
+    ...(providerId ? { providerId } : {}),
     apiKey: readRequiredString(value, 'apiKey'),
     model: readRequiredString(value, 'model'),
     ...(typeof baseUrl === 'string' && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
@@ -1206,8 +1219,21 @@ export async function resolveTeamRoute(
       return badRequest(error instanceof Error ? error.message : 'Invalid provider credential payload')
     }
 
+    const providerId = input.providerId ?? createGeneratedAgentProviderId(randomUUID())
+    try {
+      assertAgentProviderNameAvailable({
+        name: input.name,
+        providers: await repository.listAgentProviders(options.session),
+        ...(input.providerId ? { providerId } : {}),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid provider name'
+      return message === 'Provider name already exists.' ? conflict(message) : badRequest(message)
+    }
+
     const metadata: ProviderCredentialMetadata = {
-      providerId: input.providerId,
+      providerId,
+      name: input.name,
       model: input.model,
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
       maskedCredential: maskAgentCredential(input.apiKey),

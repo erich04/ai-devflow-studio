@@ -168,12 +168,12 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
     evidenceGroups: buildEvidenceGroups(input),
     reviewHistoryCount: input.selectedReviews.length,
     runtimeSettings: {
-      summary: selectedProvider ? `Agent provider: ${selectedProvider.id}` : 'No Agent Provider selected',
+      summary: selectedProvider ? `Agent provider: ${selectedProvider.name}` : 'No Agent Provider selected',
       providerDataSource,
       selectedProvider,
       providerMode: buildProviderModeLabel(selectedProvider),
       fields: [
-        { label: 'Selected provider', value: selectedProvider?.id ?? 'none' },
+        { label: 'Selected provider', value: selectedProvider?.name ?? 'none' },
         { label: 'Total reviews', value: String(input.reviews.length) },
         { label: 'Coding runs', value: String(input.codingRuns.length) },
         { label: 'Permission requests', value: String(input.permissionRequests.length) },
@@ -269,7 +269,7 @@ function buildPrimaryAction(input: {
       pendingMatchesSelectedNode && input.pendingInspectorAction?.actionId === 'completeAgent'
     const isBlockedByWriteLock = hasInspectorWriteLock && !isCompletingCurrentAgent
     const disabledReason = providerMissing
-      ? '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。'
+      ? '请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。'
       : isCompletingCurrentAgent
         ? '阶段产物正在生成。'
         : isBlockedByWriteLock
@@ -309,7 +309,7 @@ function buildPrimaryAction(input: {
     tone: providerMissing ? 'soft' : 'accent',
     disabled: providerMissing || input.isRunningReview || Boolean(input.pendingInspectorAction),
     ...(providerMissing
-      ? { disabledReason: '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。' }
+      ? { disabledReason: '请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。' }
       : input.isRunningReview
         ? { disabledReason: '基于知识的门禁审查正在运行。' }
         : input.pendingInspectorAction
@@ -391,10 +391,10 @@ function buildPathStatuses(input: {
       tone: input.latestReview ? (input.latestReview.gateAdvisory.blocksApproval ? 'bad' : 'good') : 'soft',
       emphasis: input.primaryAction.id === 'run-review' && input.selectedProvider ? 'primary' : 'secondary',
       facts: [
-        { label: 'Provider', value: input.selectedProvider?.id ?? 'none' },
+        { label: 'Provider', value: input.selectedProvider?.name ?? 'none' },
         { label: '当前节点审查', value: String(input.selectedReviews.length) },
       ],
-      ...(!input.selectedProvider ? { disabledReason: '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。' } : {}),
+      ...(!input.selectedProvider ? { disabledReason: '请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。' } : {}),
     },
     {
       id: 'coding',
@@ -450,7 +450,7 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
         title: review.conclusion,
         body: review.summary,
         meta: [
-          review.providerId,
+          input.providers.find((provider) => provider.id === review.providerId)?.name ?? '旧版 Provider',
           review.model,
           review.gateAdvisory.level,
           `${Math.round(review.confidence * 100)}%`,
@@ -630,7 +630,7 @@ function evidenceTone(status: string): AgentConsoleTone {
 
 function buildProviderModeLabel(provider: AgentProviderConfig | undefined): string {
   if (!provider) {
-    return '请先添加 Provider ID、Base URL、模型和 API Key'
+    return '请先添加 Provider Name、Base URL、模型和 API Key'
   }
   if (provider.kind === 'fake') {
     return '确定性开发适配器 · 不产生模型费用'

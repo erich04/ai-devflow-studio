@@ -320,6 +320,14 @@ const overview: TeamOverviewResponse = {
       enabled: true,
       updatedAt: '1970-01-01T00:00:00.000Z',
     },
+    {
+      id: 'fake-coding-engine',
+      name: 'Local Coding Provider',
+      kind: 'fake',
+      model: 'fake',
+      enabled: true,
+      updatedAt: '1970-01-01T00:00:00.000Z',
+    },
   ],
   enforcementPolicies: {
     organizationPolicy,
@@ -528,6 +536,22 @@ describe('web product shell page', () => {
     expect(screen.getByText('此 Run 尚未运行基于知识的门禁审查。')).toBeInTheDocument()
     expect(screen.getByText('Active Runs').closest('article')).toHaveTextContent('1')
     expect(screen.getByText('Evidence Items').closest('article')).toHaveTextContent('3')
+  })
+
+  it('uses Provider Name instead of the internal provider identity in Web summaries', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      agentRuntimeSummaries: [],
+    })
+
+    render(
+      await Page({
+        searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }),
+      }),
+    )
+
+    expect(screen.getByText('Local Coding Provider')).toBeInTheDocument()
+    expect(screen.queryByText('fake-coding-engine')).not.toBeInTheDocument()
   })
 
   it('offers copy-once Desktop pairing only for the explicitly selected project', async () => {

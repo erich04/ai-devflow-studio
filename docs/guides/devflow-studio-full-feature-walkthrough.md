@@ -170,10 +170,10 @@ corepack pnpm dev:electron
 
 1. 打开左侧 `Agents`。
 2. 在“门禁审查模型凭证”中确认：
-   - Provider ID：`doubao-review`
+   - Provider Name：例如 `公司火山方舟`（内部 `providerId` 由系统生成并保持稳定）
    - Base URL：`https://ark.cn-beijing.volces.com/api/coding/v3`
    - Model：`ark-code-latest`
-3. 输入 API Key，点击 `Save Credential`。
+3. 输入 API Key，点击 `Save and Use Provider`。重名或空名称会被明确拒绝。
 4. 在“门禁审查模型 Provider”下拉框选择保存后的 live provider，再运行“门禁审查”。
 
 边界说明：豆包/Volcengine 只提供 OpenAI-compatible 模型 API。DevFlow 自己组装门禁审查 prompt、检索 Knowledge 作为依据、运行治理检查，并解析结构化门禁审查结果；当前 Gate、门禁条件与阶段产物或证据才是审查对象。门禁审查 Agent 不由 `opencode` 执行；`opencode` 只用于 Coding Agent。

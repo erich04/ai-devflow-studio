@@ -10031,6 +10031,26 @@ describe('createLocalStore', () => {
     second.close()
   })
 
+  it('persists Provider Name in the existing credential JSON without changing legacy SQLite keys', async () => {
+    const dbPath = await tempDbPath()
+    const metadata = {
+      providerId: 'provider_123e4567e89b12d3a456426614174000',
+      name: 'OpenAI production',
+      model: 'gpt-4.1-mini',
+      maskedCredential: 'sk-...last',
+      updatedAt: '2026-08-30T00:00:00.000Z',
+    }
+
+    const store = await createLocalStore({ dbPath })
+    await store.saveProviderCredential(metadata, 'encrypted-secret-value')
+
+    await expect(store.listProviderCredentials()).resolves.toEqual([metadata])
+    await expect(
+      store.getProviderEncryptedSecret('provider_123e4567e89b12d3a456426614174000'),
+    ).resolves.toBe('encrypted-secret-value')
+    store.close()
+  })
+
   it('persists desktop pairing metadata separately from the encrypted bearer token', async () => {
     const dbPath = await tempDbPath()
 

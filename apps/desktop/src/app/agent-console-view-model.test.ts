@@ -260,7 +260,7 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.id).toBe('run-review')
     expect(viewModel.primaryAction.disabled).toBe(true)
     expect(viewModel.primaryAction.tone).toBe('soft')
-    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。')
+    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。')
     expect(viewModel.advisory.tone).toBe('soft')
     expect(viewModel.pathStatuses.find((section) => section.id === 'review')).toMatchObject({
       title: '基于知识的门禁审查',
@@ -281,7 +281,7 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.id).toBe('complete-agent-node')
     expect(viewModel.primaryAction.label).toBe('生成需求澄清')
     expect(viewModel.primaryAction.disabled).toBe(true)
-    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。')
+    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。')
   })
 
   it('keeps PR delivery in Workbench and offers Gate Review for acceptance', () => {

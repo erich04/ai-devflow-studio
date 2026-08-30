@@ -7,6 +7,7 @@ import type {
 } from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import {
+  buildGateReadinessPresentation,
   buildNodeInspectorViewModel,
   resolveInspectorTabForSearchResult,
   selectGitHubDeliveryIntentForInspector,
@@ -241,9 +242,9 @@ describe('node inspector view model', () => {
     ])
     expect(viewModel.nextAction).toMatchObject({
       title: '通过 Gate',
-      primaryActionId: 'approveGate',
       secondaryActionIds: ['openKnowledgeReview'],
     })
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
     expect(viewModel.nextAction.copy).toContain('Gate 条件拆解')
     expect(viewModel.nextAction.copy).not.toContain('Tests')
     expect(viewModel.actions.map((action) => action.id)).toEqual([])
@@ -276,6 +277,79 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction.copy).toContain('Tests')
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toContain('test-evidence')
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toContain('Test Evidence')
+  })
+
+  it('summarizes passed, warning, missing, and blocked readiness and opens only attention groups', () => {
+    const presentation = buildGateReadinessPresentation({
+      descriptors: [
+        { id: 'gate-decision', label: '结论', state: '警告', tone: 'warn', readiness: 'warning', summary: '', nextAction: '', impact: '' },
+        { id: 'policy-snapshot', label: '策略', state: '已加载', tone: 'good', readiness: 'passed', summary: '', nextAction: '', impact: '' },
+        { id: 'approval-permission', label: '权限', state: '不可审批', tone: 'bad', readiness: 'blocked', summary: '', nextAction: '', impact: '' },
+        { id: 'knowledge-review', label: '审查', state: '缺失', tone: 'soft', readiness: 'missing', summary: '', nextAction: '', impact: '' },
+      ],
+      decision: {
+        status: 'warn',
+        blocksApproval: false,
+        blockingReasons: [],
+        warningReasons: [],
+        requiredActions: [],
+        canOverride: false,
+        overrideRoleRequired: 'lead',
+        policySource: 'built_in_default',
+        policyVersion: 1,
+        provisional: false,
+      },
+      isLoading: false,
+      canApprove: false,
+    })
+
+    expect(presentation.summary).toMatchObject({
+      canPass: false,
+      counts: { passed: 1, warning: 1, missing: 1, blocked: 1 },
+      headline: 'Gate 暂时不能通过',
+    })
+    expect(presentation.groups.find((group) => group.id === 'conclusion')).toMatchObject({
+      state: 'warning',
+      defaultOpen: true,
+    })
+    expect(presentation.groups.find((group) => group.id === 'policy-permission')).toMatchObject({
+      state: 'blocked',
+      defaultOpen: true,
+    })
+    expect(presentation.groups.find((group) => group.id === 'review-evidence')).toMatchObject({
+      state: 'missing',
+      defaultOpen: true,
+    })
+  })
+
+  it('collapses fully passed readiness groups', () => {
+    const presentation = buildGateReadinessPresentation({
+      descriptors: [
+        { id: 'gate-decision', label: '结论', state: '通过', tone: 'good', readiness: 'passed', summary: '', nextAction: '', impact: '' },
+        { id: 'policy-snapshot', label: '策略', state: '已加载', tone: 'good', readiness: 'passed', summary: '', nextAction: '', impact: '' },
+      ],
+      decision: {
+        status: 'pass',
+        blocksApproval: false,
+        blockingReasons: [],
+        warningReasons: [],
+        requiredActions: [],
+        canOverride: false,
+        overrideRoleRequired: 'lead',
+        policySource: 'remote_cache',
+        policyVersion: 3,
+        provisional: false,
+      },
+      isLoading: false,
+      canApprove: true,
+    })
+
+    expect(presentation.summary).toMatchObject({
+      canPass: true,
+      counts: { passed: 2, warning: 0, missing: 0, blocked: 0 },
+      headline: 'Gate 已准备好，可以通过',
+    })
+    expect(presentation.groups.every((group) => group.defaultOpen === false)).toBe(true)
   })
 
   it('maps build, test, PR, and acceptance nodes to their true primary actions', () => {

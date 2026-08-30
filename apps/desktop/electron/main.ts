@@ -195,6 +195,7 @@ import { createOpencodeProcessManager } from './opencode-process.js'
 import { stopOpencodeWithRetry } from './opencode-shutdown.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
+  createElectronAgentProviderCredentialMetadata,
   listElectronAgentProviderConfigs,
   resolveElectronAgentProvider,
   resolveElectronAgentProviderMetadata,
@@ -2413,7 +2414,7 @@ function registerIpcHandlers() {
     ])
     const providerId = input.providerId
     if (!providerId) {
-      throw new Error('Agent provider is not configured. Save Provider ID, Base URL, Model, and API Key before running this agent.')
+      throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
     }
     const provider = await resolveAgentProvider(store, providerId)
     const completedAt = new Date().toISOString()
@@ -2839,13 +2840,20 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.saveAgentProviderCredential, async (_, payload: unknown) => {
     const input = parseAgentProviderCredentialInput(payload)
     const store = await getStore()
-    const metadata: ProviderCredentialMetadata = {
-      providerId: input.providerId,
+    const providers = listElectronAgentProviderConfigs({
+      credentials: await store.listProviderCredentials(),
+      fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
+    })
+    const metadata = createElectronAgentProviderCredentialMetadata({
+      name: input.name,
+      providers,
+      ...(input.providerId ? { providerId: input.providerId } : {}),
       model: input.model,
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
       maskedCredential: maskCredential(input.apiKey),
       updatedAt: new Date().toISOString(),
-    }
+      randomValue: randomUUID(),
+    })
 
     return store.saveProviderCredential(metadata, encryptCredential(input.apiKey))
   })
@@ -3090,6 +3098,7 @@ function createWindow() {
     height: 920,
     minWidth: 1180,
     minHeight: 760,
+    resizable: true,
     title: 'AI DevFlow Studio',
     backgroundColor: initialBackgroundColor,
     webPreferences: {

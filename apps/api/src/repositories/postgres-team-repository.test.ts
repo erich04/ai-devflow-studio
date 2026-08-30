@@ -966,6 +966,7 @@ class OrganizationScopedReadDbClient implements TeamDbRepositoryClient {
         : [{
             organization_id: 'org-demo',
             provider_id: 'private-provider',
+            provider_name: 'Private Provider',
             model: 'private-model',
             base_url: 'https://private.example.invalid',
             masked_credential: 'private...secret',
@@ -1563,6 +1564,45 @@ describe('Postgres team repository', () => {
       userId: 'u-ling',
     })).resolves.toEqual([
       expect.objectContaining({ id: 'fake-knowledge-review', kind: 'fake' }),
+    ])
+  })
+
+  it('persists and reads Provider Name separately from the internal provider identity', async () => {
+    const scopedDb = new OrganizationScopedReadDbClient()
+    const scopedRepository = createPostgresTeamRepository(scopedDb)
+    await expect(scopedRepository.listAgentProviders({
+      organizationId: 'org-demo',
+      userId: 'u-demo',
+    })).resolves.toEqual([
+      expect.objectContaining({ id: 'private-provider', name: 'Private Provider' }),
+    ])
+
+    const writeDb = new FakeTeamDbClient()
+    const writeRepository = createPostgresTeamRepository(writeDb)
+    await writeRepository.saveAgentProviderCredential({
+      providerId: 'provider_internal',
+      name: 'OpenAI production',
+      model: 'gpt-4.1-mini',
+      maskedCredential: 'sk-...last',
+      updatedAt: '2026-08-30T00:00:00.000Z',
+    }, 'encrypted-secret', {
+      organizationId: 'org-demo',
+      userId: 'u-owner',
+    })
+
+    const insert = writeDb.queries.find((query) =>
+      query.sql.includes('INSERT INTO agent_provider_credentials'),
+    )
+    expect(insert?.sql).toContain('provider_name')
+    expect(insert?.params).toEqual([
+      'org-demo',
+      'provider_internal',
+      'OpenAI production',
+      'gpt-4.1-mini',
+      null,
+      'sk-...last',
+      'encrypted-secret',
+      '2026-08-30T00:00:00.000Z',
     ])
   })
 

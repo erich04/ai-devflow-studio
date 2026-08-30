@@ -1486,17 +1486,78 @@ describe('team API route resolver', () => {
     expect(result?.status).toBe(201)
     expect(result?.body).toMatchObject({
       providerId: 'openai-default',
+      name: 'OpenAI Compatible',
       maskedCredential: 'sk-...cret',
     })
     expect(repository.saveAgentProviderCredential).toHaveBeenCalledWith(
       expect.objectContaining({
         providerId: 'openai-default',
+        name: 'OpenAI Compatible',
         maskedCredential: 'sk-...cret',
       }),
       expect.any(String),
       ownerSession,
     )
     expect(JSON.stringify(result?.body)).not.toContain('sk-test-provider-secret')
+  })
+
+  it('generates the provider identity from a user-facing Provider Name', async () => {
+    const repository = createRepository()
+
+    const result = await resolveTeamRoute('POST', '/api/agent/providers', repository, {
+      session: ownerSession,
+      body: {
+        name: '公司火山方舟',
+        apiKey: 'sk-generated-provider-secret',
+        model: 'ark-code-latest',
+      },
+    })
+
+    expect(result?.status).toBe(201)
+    expect(result?.body).toMatchObject({
+      providerId: expect.stringMatching(/^provider_[a-f0-9]{32}$/),
+      name: '公司火山方舟',
+      model: 'ark-code-latest',
+    })
+    expect(repository.saveAgentProviderCredential).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: expect.stringMatching(/^provider_[a-f0-9]{32}$/),
+        name: '公司火山方舟',
+      }),
+      expect.any(String),
+      ownerSession,
+    )
+    expect(JSON.stringify(result)).not.toContain('sk-generated-provider-secret')
+  })
+
+  it('rejects empty and duplicate Provider Names without persisting a credential', async () => {
+    const repository = createRepository()
+    vi.mocked(repository.listAgentProviders).mockResolvedValue([
+      {
+        id: 'provider_existing',
+        name: 'OpenAI Production',
+        kind: 'openai-compatible',
+        model: 'gpt-4.1-mini',
+        enabled: true,
+        updatedAt: '2026-08-30T00:00:00.000Z',
+      },
+    ])
+
+    const empty = await resolveTeamRoute('POST', '/api/agent/providers', repository, {
+      session: ownerSession,
+      body: { name: ' ', apiKey: 'sk-secret', model: 'gpt-4.1-mini' },
+    })
+    const duplicate = await resolveTeamRoute('POST', '/api/agent/providers', repository, {
+      session: ownerSession,
+      body: { name: ' openai   production ', apiKey: 'sk-secret', model: 'gpt-4.1-mini' },
+    })
+
+    expect(empty).toMatchObject({ status: 400, body: { message: 'Provider name is required.' } })
+    expect(duplicate).toMatchObject({
+      status: 409,
+      body: { message: 'Provider name already exists.' },
+    })
+    expect(repository.saveAgentProviderCredential).not.toHaveBeenCalled()
   })
 
   it('runs backend Knowledge Review with the deterministic fake provider', async () => {

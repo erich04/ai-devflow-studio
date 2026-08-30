@@ -38,7 +38,7 @@ import {
   type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
-import { GateEnforcementPanel } from '../GateEnforcementPanel'
+import { GateEnforcementPanel, GateRemediationPanel } from '../GateEnforcementPanel'
 import { GitHubDeliveryPanel } from '../GitHubDeliveryPanel'
 import {
   buildWorkflowBoard,
@@ -342,12 +342,6 @@ export function Inspector({
     supportContext.nodeId === selectedNode.id
       ? supportContext.eventId
       : undefined
-  const isCurrentNodeAgent = Boolean(
-    selectedRun &&
-      selectedNode.kind === 'agent' &&
-      selectedRun.currentNodeId === selectedNode.id &&
-      selectedNode.status !== 'success',
-  )
   const actionHandlers: Record<InspectorActionId, () => void> = {
     openKnowledgeReview: onOpenKnowledgeReview,
     openTests: onOpenTests,
@@ -507,6 +501,21 @@ export function Inspector({
   const renderGovernance = () => (
     <div className="governance-list">
       <span className="panel-label">Knowledge Governance</span>
+      <p className="empty-note">Knowledge 是 Gate 审查依据；Gate 条件和阶段产物才是审查对象。</p>
+      <ol className="knowledge-governance-flow" aria-label="Knowledge Governance 状态链" data-testid="knowledge-governance-flow">
+        <li className={references.length > 0 || governanceChecks.length > 0 ? 'is-complete' : 'is-pending'}>
+          <strong>1 · 找到候选</strong>
+          <span>{references.length > 0 || governanceChecks.length > 0 ? `${Math.max(references.length, governanceChecks.length)} 个` : '尚未找到'}</span>
+        </li>
+        <li className={latestAgentReview ? 'is-complete' : 'is-pending'}>
+          <strong>2 · 完成审查</strong>
+          <span>{latestAgentReview ? '已完成' : '尚未执行'}</span>
+        </li>
+        <li className={(latestAgentReview?.knowledgeReferences.length ?? 0) > 0 ? 'is-complete' : 'is-pending'}>
+          <strong>3 · 可用于 Gate</strong>
+          <span>{(latestAgentReview?.knowledgeReferences.length ?? 0) > 0 ? `${latestAgentReview!.knowledgeReferences.length} 条已确认引用` : '暂无已确认引用'}</span>
+        </li>
+      </ol>
       {governanceChecks.length === 0 ? (
         <p className="empty-note">当前节点没有关联的知识治理检查。</p>
       ) : (
@@ -522,20 +531,23 @@ export function Inspector({
             >
               <div className="compact-row">
                 <strong>{check.title}</strong>
-                <span>{check.status}</span>
+                <span>{({ satisfied: '已满足', needs_evidence: '缺少证据', violated: '不符合' } as const)[check.status]}</span>
               </div>
               <p>{check.summary}</p>
-              <div className="knowledge-reference-meta">
-                <code>{check.category}</code>
-                {supportingReference?.strategy ? <span>{supportingReference.strategy}</span> : null}
-                {typeof supportingReference?.score === 'number' ? (
-                  <span>score {supportingReference.score}</span>
-                ) : null}
-                {supportingReference?.headingPath ? (
-                  <span>{supportingReference.headingPath.join(' / ')}</span>
-                ) : null}
-                {supportingReference?.contentHash ? <code>{supportingReference.contentHash}</code> : null}
-              </div>
+              <details className="governance-technical-details">
+                <summary>查看候选详情</summary>
+                <div className="knowledge-reference-meta">
+                  <code>{check.category}</code>
+                  {supportingReference?.strategy ? <span>{supportingReference.strategy}</span> : null}
+                  {typeof supportingReference?.score === 'number' ? (
+                    <span>score {supportingReference.score}</span>
+                  ) : null}
+                  {supportingReference?.headingPath ? (
+                    <span>{supportingReference.headingPath.join(' / ')}</span>
+                  ) : null}
+                  {supportingReference?.contentHash ? <code>{supportingReference.contentHash}</code> : null}
+                </div>
+              </details>
               {supportingReference ? (
                 <button
                   className="inline-link-button"
@@ -573,6 +585,32 @@ export function Inspector({
     </div>
   )
 
+  const renderEvidenceReferences = () => (
+    <div className="artifact-list" data-testid="gate-evidence-references">
+      <span className="panel-label">Evidence · 引用与证据</span>
+      {references.length === 0 ? (
+        <p className="empty-note">当前 Gate 还没有真实 Knowledge 引用；这里不会重复 Enforcement finding。</p>
+      ) : (
+        references.map((reference) => (
+          <article className="artifact-card" key={reference.id}>
+            <div className="compact-row">
+              <strong>{reference.sourcePath ?? reference.documentId}</strong>
+              <span className="pill soft">{reference.relation}</span>
+            </div>
+            <p>{reference.reason}</p>
+            <button
+              className="inline-link-button"
+              type="button"
+              onClick={() => onOpenKnowledgeReference(reference.id, reference.documentId)}
+            >
+              查看引用来源
+            </button>
+          </article>
+        ))
+      )}
+    </div>
+  )
+
   const renderTrace = () => (
     <div className="event-list">
       <span className="panel-label">Trace</span>
@@ -596,19 +634,67 @@ export function Inspector({
   const renderStatusMatrix = () => (
     <div className="status-matrix" data-testid="inspector-status-matrix">
       <span className="panel-label">状态矩阵</span>
-      {viewModel.statusDescriptors.map((descriptor) => (
-        <article className={`status-row status-row--${descriptor.tone}`} key={descriptor.id}>
-          <div>
-            <strong>{descriptor.label}</strong>
-            <p>{descriptor.summary}</p>
-          </div>
-          <div className="status-row__detail">
-            <span className={`pill ${descriptor.tone}`}>{descriptor.state}</span>
-            <small>{descriptor.impact}</small>
-            <em>{descriptor.nextAction}</em>
-          </div>
-        </article>
-      ))}
+      {viewModel.gateReadinessSummary ? (
+        <>
+          <section
+            className={`gate-readiness-summary ${viewModel.gateReadinessSummary.canPass ? 'is-ready' : 'is-blocked'}`}
+            aria-live="polite"
+            data-testid="gate-readiness-summary"
+          >
+            <div className="compact-row">
+              <strong>{viewModel.gateReadinessSummary.canPass ? '✓' : '⛔'} {viewModel.gateReadinessSummary.headline}</strong>
+              <span>{viewModel.gateReadinessSummary.canPass ? '可以通过' : '不能通过'}</span>
+            </div>
+            <p>{viewModel.gateReadinessSummary.detail}</p>
+            <div className="gate-readiness-counts" aria-label="Gate readiness counts">
+              <span className="pill good">✓ 已通过 {viewModel.gateReadinessSummary.counts.passed}</span>
+              <span className="pill warn">⚠ 警告 {viewModel.gateReadinessSummary.counts.warning}</span>
+              <span className="pill soft">○ 缺失 {viewModel.gateReadinessSummary.counts.missing}</span>
+              <span className="pill bad">⛔ 阻断 {viewModel.gateReadinessSummary.counts.blocked}</span>
+            </div>
+          </section>
+          {viewModel.gateReadinessGroups.map((group) => (
+            <details
+              className={`status-group status-group--${group.state}`}
+              data-testid={`readiness-group-${group.id}`}
+              key={group.id}
+              open={group.defaultOpen}
+            >
+              <summary>
+                <strong>{group.label}</strong>
+                <span>{({ passed: '✓ 已通过', warning: '⚠ 有警告', missing: '○ 有缺失', blocked: '⛔ 已阻断' } as const)[group.state]}</span>
+              </summary>
+              <div className="status-group__content">
+                {group.descriptors.map((descriptor) => (
+                  <article className={`status-row status-row--${descriptor.tone}`} key={descriptor.id}>
+                    <div>
+                      <strong>{descriptor.label}</strong>
+                      <p>{descriptor.summary}</p>
+                    </div>
+                    <div className="status-row__detail">
+                      <span className={`pill ${descriptor.tone}`}>{descriptor.state}</span>
+                      <small>{descriptor.impact}</small>
+                      <em>{descriptor.nextAction}</em>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </details>
+          ))}
+        </>
+      ) : viewModel.statusDescriptors.map((descriptor) => (
+          <article className={`status-row status-row--${descriptor.tone}`} key={descriptor.id}>
+            <div>
+              <strong>{descriptor.label}</strong>
+              <p>{descriptor.summary}</p>
+            </div>
+            <div className="status-row__detail">
+              <span className={`pill ${descriptor.tone}`}>{descriptor.state}</span>
+              <small>{descriptor.impact}</small>
+              <em>{descriptor.nextAction}</em>
+            </div>
+          </article>
+        ))}
     </div>
   )
 
@@ -677,7 +763,7 @@ export function Inspector({
           <p>{latestAgentReview.gateAdvisory.summary}</p>
           <div className="knowledge-reference-meta">
             <span>{latestAgentReview.runtime}</span>
-            <span>{latestAgentReview.providerId}</span>
+            <span>已保存 Provider</span>
             <span>{latestAgentReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</span>
           </div>
         </article>
@@ -717,18 +803,25 @@ export function Inspector({
       policySnapshot={policySnapshot}
       decision={gateEnforcementDecision}
       overrides={gateOverrides}
-      remediationPlan={remediationPlan}
       isLoading={isLoadingGateEnforcement}
       canSaveOverride={canSaveOverride}
-      isStartingRetry={isStartingCodingAgent}
       onSaveOverride={onSaveGateOverride}
-      onStartRetry={onStartRemediationRetry}
-      pairingState={pairingState}
-      onSyncTeam={onSyncTeam}
-      onRunKnowledgeReview={onOpenKnowledgeReview}
-      isCurrentNodeAgent={isCurrentNodeAgent}
       isSavingOverride={pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'saveGateOverride'}
       isInspectorWriteBlocked={hasInspectorWriteLock}
+    />
+  )
+
+  const renderRemediationActions = () => (
+    <GateRemediationPanel
+      decision={gateEnforcementDecision}
+      remediationPlan={remediationPlan}
+      isLoading={isLoadingGateEnforcement}
+      pairingState={pairingState}
+      isStartingRetry={isStartingCodingAgent}
+      isInspectorWriteBlocked={hasInspectorWriteLock}
+      onSyncTeam={onSyncTeam}
+      onRunKnowledgeReview={onOpenKnowledgeReview}
+      onStartRetry={onStartRemediationRetry}
     />
   )
 
@@ -739,6 +832,8 @@ export function Inspector({
     gateRequirementMatrix: renderGateRequirementMatrix,
     gateEnforcementPanel: renderGateEnforcementPanel,
     governance: renderGovernance,
+    evidenceReferences: renderEvidenceReferences,
+    remediationActions: renderRemediationActions,
     agentReview: renderAgentReview,
     artifacts: renderArtifacts,
     trace: renderTrace,

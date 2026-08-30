@@ -145,6 +145,11 @@ describe('team database migration runner', () => {
         name: '0021_native_coding_agent_engine',
         fileName: '0021_native_coding_agent_engine.sql',
       },
+      {
+        version: 22,
+        name: '0022_agent_provider_identity',
+        fileName: '0022_agent_provider_identity.sql',
+      },
     ])
 
     const [
@@ -163,6 +168,7 @@ describe('team database migration runner', () => {
       agentCoordinationTeamProjection,
       localDevelopmentAuth,
       nativeCodingAgentEngine,
+      agentProviderIdentity,
     ] = await readTeamMigrationCatalog()
     expect(baseline).toMatchObject({ version: 7, name: '0001_initial' })
     expect(baseline?.sql).toMatch(/^BEGIN;/)
@@ -250,6 +256,11 @@ describe('team database migration runner', () => {
       version: 21,
       name: '0021_native_coding_agent_engine',
     })
+    expect(agentProviderIdentity).toMatchObject({
+      version: 22,
+      name: '0022_agent_provider_identity',
+    })
+    expect(agentProviderIdentity?.sql).toContain('SET provider_name = CASE')
     expect(localDevelopmentAuth?.sql).toContain("'local-development'")
     expect(localDevelopmentAuth?.sql).toContain('auth_accounts_provider_check')
   })

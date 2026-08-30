@@ -158,7 +158,9 @@ export type SaveGateOverrideInput = {
 }
 
 export type AgentProviderCredentialInput = {
-  providerId: string
+  name?: string
+  /** @deprecated Compatibility only. New providers receive a generated ID in Electron main. */
+  providerId?: string
   apiKey: string
   model: string
   baseUrl?: string

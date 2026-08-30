@@ -785,10 +785,23 @@ describe('IPC contract parsers', () => {
         baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
       }),
     ).toEqual({
+      name: 'doubao-review',
       providerId: 'doubao-review',
       apiKey: 'sk-test-secret',
       model: 'ark-code-latest',
       baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
+    })
+
+    expect(
+      parseAgentProviderCredentialInput({
+        name: 'OpenAI production',
+        apiKey: 'sk-test-secret',
+        model: 'gpt-4.1-mini',
+      }),
+    ).toEqual({
+      name: 'OpenAI production',
+      apiKey: 'sk-test-secret',
+      model: 'gpt-4.1-mini',
     })
 
     expect(
@@ -936,6 +949,14 @@ describe('IPC contract parsers', () => {
   })
 
   it('rejects empty provider credentials and malformed knowledge review payloads', () => {
+    expect(() =>
+      parseAgentProviderCredentialInput({
+        name: ' ',
+        apiKey: 'sk-test-secret',
+        model: 'gpt-4.1-mini',
+      }),
+    ).toThrow('Provider name is required.')
+
     expect(() =>
       parseAgentProviderCredentialInput({
         providerId: 'openai-default',

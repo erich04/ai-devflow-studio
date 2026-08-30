@@ -12,6 +12,7 @@ import {
   parseRemoteAgentCoordinationSummary,
   redactRemoteRunSummaryForSync,
   redactRemoteTestEvidenceSummaryForSync,
+  resolveAgentProviderDisplayName,
   resolveEffectivePolicy,
   type AgentEvent,
   type AgentProviderConfig,
@@ -487,10 +488,7 @@ export function createSeedTeamRepository(): TeamRepository {
         .filter(([key]) => key.startsWith(`${context.organizationId}:`))
         .map(([, { metadata }]) => ({
           id: metadata.providerId,
-          name:
-            metadata.providerId === 'openai-default'
-              ? 'OpenAI Compatible'
-              : metadata.providerId,
+          name: resolveAgentProviderDisplayName(metadata),
           kind: 'openai-compatible' as const,
           ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
           model: metadata.model,

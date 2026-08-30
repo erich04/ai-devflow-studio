@@ -14,6 +14,7 @@ import {
   type TestEvidence,
   type WorkflowNode,
   type WorkflowRun,
+  resolveAgentProviderDisplayName,
 } from '@ai-devflow/shared'
 import {
   displayNodeSubtitle,
@@ -474,7 +475,7 @@ export function currentRunPhaseCopy(run: WorkflowRun): string {
 }
 
 export const defaultReviewProviderDraft = {
-  providerId: '',
+  name: '',
   baseUrl: '',
   model: '',
 }
@@ -487,7 +488,7 @@ export function getToastDisplayDurationMs(message: string): number {
 export function reviewProviderFromMetadata(metadata: ProviderCredentialMetadata): AgentProviderConfig {
   return {
     id: metadata.providerId,
-    name: metadata.providerId,
+    name: resolveAgentProviderDisplayName(metadata),
     kind: 'openai-compatible',
     ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
     model: metadata.model,

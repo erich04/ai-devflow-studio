@@ -1,11 +1,62 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  createElectronAgentProviderCredentialMetadata,
   listElectronAgentProviderConfigs,
   resolveElectronAgentProvider,
   resolveElectronAgentProviderMetadata,
 } from './agent-provider-runtime'
 
 describe('Electron agent provider runtime', () => {
+  it('creates a system-owned provider identity from a user-facing name', () => {
+    expect(createElectronAgentProviderCredentialMetadata({
+      name: '公司火山方舟',
+      model: 'ark-code-latest',
+      baseUrl: 'https://example.test/v1',
+      maskedCredential: 'sk-...last',
+      updatedAt: '2026-08-30T00:00:00.000Z',
+      randomValue: '123e4567-e89b-12d3-a456-426614174000',
+      providers: [],
+    })).toEqual({
+      providerId: 'provider_123e4567e89b12d3a456426614174000',
+      name: '公司火山方舟',
+      model: 'ark-code-latest',
+      baseUrl: 'https://example.test/v1',
+      maskedCredential: 'sk-...last',
+      updatedAt: '2026-08-30T00:00:00.000Z',
+    })
+  })
+
+  it('rejects duplicate display names while preserving legacy identity updates', () => {
+    const providers = [{
+      id: 'legacy-provider',
+      name: 'Existing Provider',
+      kind: 'openai-compatible' as const,
+      model: 'old-model',
+      enabled: true,
+      updatedAt: '2026-08-29T00:00:00.000Z',
+    }]
+    const common = {
+      name: 'Existing Provider',
+      model: 'new-model',
+      maskedCredential: 'sk-...last',
+      updatedAt: '2026-08-30T00:00:00.000Z',
+      randomValue: '123e4567-e89b-12d3-a456-426614174000',
+      providers,
+    }
+
+    expect(() => createElectronAgentProviderCredentialMetadata(common)).toThrow(
+      'Provider name already exists.',
+    )
+    expect(createElectronAgentProviderCredentialMetadata({
+      ...common,
+      providerId: 'legacy-provider',
+    })).toMatchObject({
+      providerId: 'legacy-provider',
+      name: 'Existing Provider',
+      model: 'new-model',
+    })
+  })
+
   it('resolves paid provider metadata for cost preflight without reading or decrypting its secret', async () => {
     const credentialSource = {
       listProviderCredentials: vi.fn(async () => [{
@@ -37,6 +88,27 @@ describe('Electron agent provider runtime', () => {
     expect(credentialSource.listProviderCredentials).toHaveBeenCalledTimes(1)
     expect(credentialSource.getProviderEncryptedSecret).not.toHaveBeenCalled()
     expect(decryptCredential).not.toHaveBeenCalled()
+  })
+
+  it('uses the persisted Provider Name without exposing the internal ID as the label', async () => {
+    const credentialSource = {
+      listProviderCredentials: vi.fn(async () => [{
+        providerId: 'provider_internal',
+        name: 'OpenAI production',
+        model: 'gpt-4.1-mini',
+        maskedCredential: 'sk-***last',
+        updatedAt: '2026-07-31T00:00:00.000Z',
+      }]),
+    }
+
+    await expect(resolveElectronAgentProviderMetadata({
+      providerId: 'provider_internal',
+      fakeRuntimeEnabled: false,
+      credentialSource,
+    })).resolves.toMatchObject({
+      id: 'provider_internal',
+      name: 'OpenAI production',
+    })
   })
 
   it('exposes the built-in fake provider without a saved credential when fake runtime is enabled', () => {

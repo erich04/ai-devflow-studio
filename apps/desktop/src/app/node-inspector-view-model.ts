@@ -21,6 +21,8 @@ export type InspectorSectionId =
   | 'gateRequirementMatrix'
   | 'gateEnforcementPanel'
   | 'governance'
+  | 'evidenceReferences'
+  | 'remediationActions'
   | 'agentReview'
   | 'artifacts'
   | 'trace'
@@ -95,9 +97,31 @@ export type StatusDescriptor = {
   label: string
   state: string
   tone: StatusTone
+  readiness?: GateReadinessState
   summary: string
   nextAction: string
   impact: string
+}
+
+export type GateReadinessState = 'passed' | 'warning' | 'missing' | 'blocked'
+
+export type GateReadinessCounts = Record<GateReadinessState, number>
+
+export type GateReadinessSummary = {
+  canPass: boolean
+  isLoading: boolean
+  headline: string
+  detail: string
+  counts: GateReadinessCounts
+}
+
+export type GateReadinessGroup = {
+  id: 'conclusion' | 'policy-permission' | 'review-evidence' | 'test-evidence'
+  label: string
+  state: GateReadinessState
+  defaultOpen: boolean
+  counts: GateReadinessCounts
+  descriptors: StatusDescriptor[]
 }
 
 export function selectGitHubDeliveryIntentForInspector(input: {
@@ -173,6 +197,8 @@ export type NodeInspectorViewModel = {
   actionCatalog: Record<InspectorActionId, InspectorAction>
   actions: InspectorAction[]
   statusDescriptors: StatusDescriptor[]
+  gateReadinessSummary?: GateReadinessSummary
+  gateReadinessGroups: GateReadinessGroup[]
   gateRequirementRows: GateRequirementRow[]
 }
 
@@ -236,8 +262,8 @@ export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTab
   gate: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
     { tabId: 'Gate条件', label: 'Gate条件', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['governance', 'artifacts', 'agentReview'] },
-    { tabId: 'Remediation', label: 'Remediation', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
+    { tabId: 'Evidence', label: 'Evidence', sections: ['evidenceReferences', 'artifacts', 'agentReview'] },
+    { tabId: 'Remediation', label: 'Remediation', sections: ['remediationActions'] },
   ],
   build: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
@@ -257,9 +283,9 @@ export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTab
     { tabId: 'Handoff', label: 'Handoff', sections: ['deliveryHandoff', 'trace'] },
   ],
   acceptance: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'gateEnforcementPanel', 'deliveryHandoff'] },
+    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'deliveryHandoff'] },
     { tabId: 'Artifacts', label: 'Artifacts', sections: ['artifacts'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['governance', 'artifacts', 'agentReview'] },
+    { tabId: 'Evidence', label: 'Evidence', sections: ['evidenceReferences', 'artifacts', 'agentReview'] },
     { tabId: 'Final Gate', label: 'Final Gate', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
   ],
   task: [
@@ -436,7 +462,18 @@ export function buildStatusDescriptors(input: {
   const gateDecisionStatus = (): StatusDescriptor => ({
     id: 'gate-decision',
     label: nodeType === 'acceptance' ? '验收 Gate 结论' : 'Gate 结论',
-    state: input.isLoadingGateEnforcement ? 'loading' : (decision?.status ?? 'empty'),
+    state: input.isLoadingGateEnforcement
+      ? '评估中'
+      : decision
+        ? ({
+            pass: '通过',
+            warn: '警告',
+            blocked: '已阻断',
+            hard_blocked: '强制阻断',
+            overridden: '已例外放行',
+            blocked_policy_unavailable: '策略不可用',
+          } as const)[decision.status]
+        : '未评估',
     tone: input.isLoadingGateEnforcement
       ? 'warn'
       : decision?.status === 'blocked' || decision?.status === 'hard_blocked' || decision?.status === 'blocked_policy_unavailable'
@@ -446,24 +483,33 @@ export function buildStatusDescriptors(input: {
           : decision
             ? 'good'
             : 'soft',
+    readiness: input.isLoadingGateEnforcement
+      ? 'warning'
+      : !decision
+        ? 'missing'
+        : decision.blocksApproval
+          ? 'blocked'
+          : decision.status === 'warn' || decision.status === 'overridden'
+            ? 'warning'
+            : 'passed',
     summary: decision
       ? decision.blocksApproval
         ? '当前 Gate 评估会阻止审批。'
         : '当前 Gate 评估允许继续审批。'
       : '当前 Gate 尚未完成策略评估。',
     nextAction: decision?.blocksApproval ? '查看 Gate 条件与 Remediation。' : '确认条件后通过 Gate。',
-    impact: 'Gate decision',
+    impact: 'Gate 审批结论',
   })
   const policyStatus = (): StatusDescriptor => ({
     id: 'policy-snapshot',
     label: 'Policy snapshot',
     state: input.isLoadingGateEnforcement
-      ? 'loading'
+      ? '加载中'
       : decision?.status === 'blocked_policy_unavailable'
-        ? 'policy unavailable'
+        ? '策略不可用'
         : input.policySnapshot
-          ? 'success'
-          : 'empty',
+          ? '已加载'
+          : '未加载',
     tone: input.isLoadingGateEnforcement
       ? 'warn'
       : decision?.status === 'blocked_policy_unavailable'
@@ -471,30 +517,42 @@ export function buildStatusDescriptors(input: {
         : input.policySnapshot
           ? 'good'
           : 'soft',
+    readiness: input.isLoadingGateEnforcement
+      ? 'warning'
+      : decision?.status === 'blocked_policy_unavailable'
+        ? 'blocked'
+        : input.policySnapshot
+          ? 'passed'
+          : 'missing',
     summary: input.policySnapshot
-      ? `${input.policySnapshot.source} v${input.policySnapshot.version} · synced ${input.policySnapshot.syncedAt}`
-      : '当前环境尚未加载 Team policy snapshot。',
+      ? '团队策略已加载，可用于解释当前 Gate 条件。'
+      : '当前环境尚未加载团队策略。',
     nextAction: input.policySnapshot ? '使用该 snapshot 解释 Gate 条件。' : '先同步团队策略，再重新评估 Gate。',
-    impact: 'Team policy / Gate enforcement',
+    impact: '团队策略',
   })
   const approvalStatus = (): StatusDescriptor => ({
     id: 'approval-permission',
     label: '审批权限',
-    state: input.canApprove ? 'allowed' : 'blocked',
+    state: input.canApprove ? '允许审批' : '不可审批',
     tone: input.canApprove ? 'good' : 'warn',
+    readiness: input.canApprove ? 'passed' : 'blocked',
     summary: input.canApprove ? '当前用户与 policy 状态允许执行 Gate approval。' : '当前用户或 policy 状态暂不允许通过 Gate。',
     nextAction: input.canApprove ? '可以执行顶部 Gate 主动作。' : '查看角色、policy 或缺失证据。',
-    impact: 'Role / policy',
+    impact: '角色与策略',
   })
   const reviewStatus = (gateScoped: boolean): StatusDescriptor => {
-    const missingReview = decision?.blockingReasons.some((reason) => reason.target === 'missing_agent_review')
+    const missingReview = [...(decision?.blockingReasons ?? []), ...(decision?.warningReasons ?? [])]
+      .find((reason) => reason.target === 'missing_agent_review' && reason.id !== 'policy-unavailable')
     if (gateScoped && missingReview) {
       return {
         id: 'missing-agent-review',
         label: '门禁审查',
         state: '缺少门禁审查',
-        tone: 'bad',
-        summary: 'Gate 缺少基于知识的门禁审查结果。',
+        tone: missingReview.action === 'block' ? 'bad' : 'warn',
+        readiness: 'missing',
+        summary: missingReview.action === 'block'
+          ? 'Gate 缺少基于知识的门禁审查结果，因此当前不能审批。'
+          : 'Gate 缺少基于知识的门禁审查结果；当前策略仅警告，不阻断审批。',
         nextAction: '从 Inspector 跳到 Agents 运行门禁审查。',
         impact: 'Gate Advisory / Review Evidence',
       }
@@ -505,6 +563,7 @@ export function buildStatusDescriptors(input: {
       label: '门禁审查',
       state: input.latestAgentReview ? 'success' : 'empty',
       tone: input.latestAgentReview ? 'good' : 'soft',
+      ...(gateScoped ? { readiness: input.latestAgentReview ? 'passed' as const : 'missing' as const } : {}),
       summary: input.latestAgentReview
         ? '基于知识的门禁审查已生成 Gate Advisory。'
         : gateScoped
@@ -519,6 +578,7 @@ export function buildStatusDescriptors(input: {
     label: 'Test Evidence',
     state: hasArtifactKind('test_report') ? 'success' : 'empty',
     tone: hasArtifactKind('test_report') ? 'good' : gateScoped ? 'warn' : 'soft',
+    ...(gateScoped ? { readiness: hasArtifactKind('test_report') ? 'passed' as const : 'missing' as const } : {}),
     summary: hasArtifactKind('test_report')
       ? '当前节点已有测试报告 Artifact。'
       : gateScoped ? 'Gate 还没有可用 Test Evidence。' : '当前节点尚未归档 Test Evidence。',
@@ -541,6 +601,7 @@ export function buildStatusDescriptors(input: {
     label: 'Required Artifact',
     state: input.artifacts.length > 0 ? `${input.artifacts.length} linked` : 'missing',
     tone: input.artifacts.length > 0 ? 'good' : 'soft',
+    readiness: input.artifacts.length > 0 ? 'passed' : 'missing',
     summary: input.artifacts.length > 0 ? '当前 Gate 已关联上游 Artifact。' : '当前 Gate 还没有关联可交付 Artifact。',
     nextAction: input.artifacts.length > 0 ? '核对 Evidence 与 Gate 条件。' : '先完成上游节点产物。',
     impact: 'Gate evidence',
@@ -617,6 +678,100 @@ export function buildStatusDescriptors(input: {
   return [nodeStatus(), traceStatus()]
 }
 
+const readinessPriority: Record<GateReadinessState, number> = {
+  passed: 0,
+  warning: 1,
+  missing: 2,
+  blocked: 3,
+}
+
+function emptyGateReadinessCounts(): GateReadinessCounts {
+  return { passed: 0, warning: 0, missing: 0, blocked: 0 }
+}
+
+function countGateReadiness(descriptors: readonly StatusDescriptor[]): GateReadinessCounts {
+  return descriptors.reduce<GateReadinessCounts>((counts, descriptor) => {
+    const readiness = descriptor.readiness ?? (
+      descriptor.tone === 'good'
+        ? 'passed'
+        : descriptor.tone === 'bad'
+          ? 'blocked'
+          : 'warning'
+    )
+    counts[readiness] += 1
+    return counts
+  }, emptyGateReadinessCounts())
+}
+
+function groupReadiness(counts: GateReadinessCounts): GateReadinessState {
+  return (Object.keys(readinessPriority) as GateReadinessState[]).reduce((current, candidate) => (
+    counts[candidate] > 0 && readinessPriority[candidate] > readinessPriority[current]
+      ? candidate
+      : current
+  ), 'passed')
+}
+
+export function buildGateReadinessPresentation(input: {
+  descriptors: StatusDescriptor[]
+  decision: GateEnforcementDecision | null
+  isLoading: boolean
+  canApprove: boolean
+}): { summary: GateReadinessSummary; groups: GateReadinessGroup[] } {
+  const counts = countGateReadiness(input.descriptors)
+  const canPass = Boolean(input.decision && !input.decision.blocksApproval && input.canApprove)
+  const summary: GateReadinessSummary = {
+    canPass,
+    isLoading: input.isLoading,
+    headline: input.isLoading
+      ? '正在评估 Gate'
+      : canPass
+        ? counts.warning > 0 || counts.missing > 0
+          ? 'Gate 可以通过，但仍有待处理项'
+          : 'Gate 已准备好，可以通过'
+        : counts.blocked > 0
+          ? 'Gate 暂时不能通过'
+          : 'Gate 尚未准备完成',
+    detail: input.isLoading
+      ? '策略与证据正在加载，完成后会自动更新结论。'
+      : canPass
+        ? counts.warning > 0 || counts.missing > 0
+          ? '当前策略允许审批；建议先处理警告或补齐缺失项。'
+          : '策略、权限与所需证据均已满足。'
+        : counts.blocked > 0
+          ? '存在阻断项；请展开对应分组查看下一步。'
+          : '仍有缺失项；请展开对应分组补齐。',
+    counts,
+  }
+  const plans: Array<{
+    id: GateReadinessGroup['id']
+    label: string
+    descriptorIds: string[]
+  }> = [
+    { id: 'conclusion', label: 'Gate 结论', descriptorIds: ['gate-decision'] },
+    { id: 'policy-permission', label: '策略与权限', descriptorIds: ['policy-snapshot', 'approval-permission'] },
+    { id: 'review-evidence', label: '审查与交付证据', descriptorIds: ['knowledge-review', 'missing-agent-review', 'required-artifact'] },
+    { id: 'test-evidence', label: '测试证据', descriptorIds: ['test-evidence'] },
+  ]
+  const groups = plans.flatMap<GateReadinessGroup>((plan) => {
+    const descriptors = input.descriptors.filter((descriptor) => plan.descriptorIds.includes(descriptor.id))
+    if (descriptors.length === 0) {
+      return []
+    }
+    const groupCounts = countGateReadiness(descriptors)
+    const state = groupReadiness(groupCounts)
+    return [{
+      id: plan.id,
+      label: plan.label,
+      state,
+      defaultOpen: state !== 'passed',
+      counts: groupCounts,
+      descriptors,
+    }]
+  })
+
+  return { summary, groups }
+}
+
 export function buildGateRequirementMatrix(input: {
   node: WorkflowNode
   artifacts: Artifact[]
@@ -641,7 +796,7 @@ export function buildGateRequirementMatrix(input: {
             : 'not loaded',
       tone: input.policySnapshot ? 'good' : input.isLoadingGateEnforcement ? 'warn' : 'bad',
       summary: input.policySnapshot
-        ? `${input.policySnapshot.source} · synced ${input.policySnapshot.syncedAt}`
+        ? '团队策略已加载，可用于当前 Gate 评估。'
         : 'Team policy snapshot 未加载时，Gate 写路径保持 hard-block。',
     },
     {
@@ -825,6 +980,8 @@ function buildNextAction(input: {
   githubDeliveryIntent?: GitHubDeliveryIntent
   githubDeliveryOperatorOutcome?: GitHubDeliveryOperatorOutcome
   latestAgentReview: AgentReviewResult | undefined
+  gateEnforcementDecision: GateEnforcementDecision | null
+  isLoadingGateEnforcement: boolean
   canApprove: boolean
   hasTeamProjectBinding: boolean
   canVerifyGitHubDeliveryRevocation: boolean
@@ -867,6 +1024,35 @@ function buildNextAction(input: {
 
   if (node.kind === 'gate') {
     const isEarlyGate = isEarlyReviewGate(node)
+    const missingReview = [
+      ...(input.gateEnforcementDecision?.blockingReasons ?? []),
+      ...(input.gateEnforcementDecision?.warningReasons ?? []),
+    ].some((reason) => reason.target === 'missing_agent_review' && reason.id !== 'policy-unavailable')
+    if (input.isLoadingGateEnforcement) {
+      return {
+        title: '正在评估 Gate',
+        copy: '策略、权限和证据正在加载；结论更新后会显示唯一的主要下一步。',
+        secondaryActionIds: [],
+      }
+    }
+    if (missingReview) {
+      return {
+        title: '运行门禁审查',
+        copy: input.gateEnforcementDecision?.blocksApproval
+          ? '当前缺少基于知识的门禁审查，完成审查后才能重新评估 Gate。'
+          : '当前策略允许审批，但建议先完成基于知识的门禁审查并消除警告。',
+        primaryActionId: 'openKnowledgeReview',
+        secondaryActionIds: [],
+      }
+    }
+    if (input.gateEnforcementDecision?.blocksApproval) {
+      return {
+        title: '处理 Gate 阻断',
+        copy: input.gateEnforcementDecision.requiredActions[0]
+          ?? '打开 Gate 条件查看主原因，再到 Remediation 按顺序处理。',
+        secondaryActionIds: buildGateSecondaryActionIds(input),
+      }
+    }
     return {
       title: '通过 Gate',
       copy: input.canApprove
@@ -876,7 +1062,7 @@ function buildNextAction(input: {
         : isEarlyGate
           ? '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、门禁审查、Evidence 或 policy 条件。'
           : '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、门禁审查、Tests 或 policy 条件。',
-      primaryActionId: 'approveGate',
+      ...(input.canApprove ? { primaryActionId: 'approveGate' as const } : {}),
       secondaryActionIds: buildGateSecondaryActionIds(input),
     }
   }
@@ -996,6 +1182,18 @@ function buildNextAction(input: {
   }
 
   if (node.kind === 'acceptance') {
+    const missingReview = [
+      ...(input.gateEnforcementDecision?.blockingReasons ?? []),
+      ...(input.gateEnforcementDecision?.warningReasons ?? []),
+    ].some((reason) => reason.target === 'missing_agent_review' && reason.id !== 'policy-unavailable')
+    if (missingReview) {
+      return {
+        title: '运行门禁审查',
+        copy: '最终验收缺少基于知识的门禁审查；完成后会重新评估验收 Gate。',
+        primaryActionId: 'openKnowledgeReview',
+        secondaryActionIds: [],
+      }
+    }
     if (!hasAcceptanceArtifact(input.artifacts)) {
       return {
         title: '生成验收证据包',
@@ -1084,6 +1282,25 @@ export function buildNodeInspectorViewModel(input: {
     }
   }
   const actions = actionIds.map((actionId) => actionCatalog[actionId])
+  const statusDescriptors = buildStatusDescriptors({
+    node: input.node,
+    visualKind,
+    artifacts: input.artifacts,
+    events: input.events,
+    latestAgentReview: input.latestAgentReview,
+    policySnapshot: input.policySnapshot,
+    gateEnforcementDecision: input.gateEnforcementDecision,
+    isLoadingGateEnforcement: input.isLoadingGateEnforcement,
+    canApprove: input.canApprove,
+  })
+  const gateReadiness = nodeType === 'gate'
+    ? buildGateReadinessPresentation({
+        descriptors: statusDescriptors,
+        decision: input.gateEnforcementDecision,
+        isLoading: input.isLoadingGateEnforcement,
+        canApprove: input.canApprove,
+      })
+    : undefined
 
   return {
     header: {
@@ -1100,17 +1317,9 @@ export function buildNodeInspectorViewModel(input: {
     nextAction,
     actionCatalog,
     actions,
-    statusDescriptors: buildStatusDescriptors({
-      node: input.node,
-      visualKind,
-      artifacts: input.artifacts,
-      events: input.events,
-      latestAgentReview: input.latestAgentReview,
-      policySnapshot: input.policySnapshot,
-      gateEnforcementDecision: input.gateEnforcementDecision,
-      isLoadingGateEnforcement: input.isLoadingGateEnforcement,
-      canApprove: input.canApprove,
-    }),
+    statusDescriptors,
+    ...(gateReadiness ? { gateReadinessSummary: gateReadiness.summary } : {}),
+    gateReadinessGroups: gateReadiness?.groups ?? [],
     gateRequirementRows: buildGateRequirementMatrix({
       node: input.node,
       artifacts: input.artifacts,
