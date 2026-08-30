@@ -454,7 +454,11 @@ export function AgentWorkbenchView({
 
         <section className="agent-path-grid" aria-label="Agent execution paths">
           {viewModel.pathStatuses.map((section) => (
-            <article className={`agent-path-card agent-path-card--${section.emphasis}`} key={section.id}>
+            <article
+              className={`agent-path-card agent-path-card--${section.emphasis} agent-path-card--${section.tone}`}
+              data-testid={section.id === 'review' ? 'gate-review-path' : undefined}
+              key={section.id}
+            >
               <div>
                 <span className="panel-label">{section.label}</span>
                 <strong>{section.title}</strong>
@@ -609,7 +613,7 @@ export function AgentWorkbenchView({
           </div>
           {viewModel.evidenceGroups.length === 0 ? (
             <article className="agent-evidence-card">
-              <p className="empty-note">运行 Agent 后会在这里按 Review、Coding、Permission、Diff、Test Evidence 和 Cost 分组。</p>
+              <p className="empty-note">运行 Agent 后会在这里按门禁审查、Coding、Permission、Diff、Test Evidence 和 Cost 分组。</p>
             </article>
           ) : (
             <div className="agent-evidence-grid">
@@ -631,7 +635,7 @@ export function AgentWorkbenchView({
                 <span>项目级 Executor</span>
                 <strong>Native v2 · managed worktree</strong>
               </div>
-              <p>这里与 Knowledge Review Provider 分开配置。Renderer 只选择已保存 Provider，真正执行时由 Electron Main 重新解析项目配置。</p>
+              <p>这里与门禁审查 Provider 分开配置。Renderer 只选择已保存 Provider，真正执行时由 Electron Main 重新解析项目配置。</p>
               <label>
                 Coding Provider
                 <select aria-label="Coding Agent Provider" value={codingProviderId} onChange={(event) => setCodingProviderId(event.target.value)}>
@@ -685,7 +689,7 @@ export function AgentWorkbenchView({
           <div className="runtime-settings__body">
             <article className="agent-evidence-card">
               <div className="section-heading">
-                <span>Selected Agent Provider</span>
+                <span>门禁审查 Provider</span>
                 <strong>{viewModel.runtimeSettings.providerDataSource.status}</strong>
               </div>
               <p data-testid="review-provider-mode">

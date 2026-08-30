@@ -1508,7 +1508,7 @@ export function parsePairDesktopInput(value: unknown): PairDesktopInput {
 
 export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReviewInput {
   if (!isRecord(value)) {
-    throw new Error('Invalid knowledge review payload')
+    throw new Error('Invalid Gate Review payload')
   }
 
   const runId = readRequiredString(value, 'runId')

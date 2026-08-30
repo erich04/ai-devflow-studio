@@ -36,7 +36,7 @@ describe('KnowledgeReviewRuntime', () => {
     })
 
     await expect(runtime.run(reviewInput('team-openai'))).rejects.toThrow(
-      /Knowledge Review blocked before provider call/i,
+      /基于知识的门禁审查在调用 Provider 前被阻断/i,
     )
 
     expect(resolveProvider).not.toHaveBeenCalled()
@@ -87,7 +87,7 @@ describe('KnowledgeReviewRuntime', () => {
       runtime: 'electron',
       providerId: 'team-openai',
       runtimeBudgetApprovalId: 'approval-knowledge-1',
-    })).rejects.toThrow(/Knowledge Review blocked before provider call.*restore the authenticated Team connection/i)
+    })).rejects.toThrow(/基于知识的门禁审查在调用 Provider 前被阻断.*恢复已认证的 Team 连接/i)
 
     expect(budgetGuard).toHaveBeenCalledWith(expect.objectContaining({
       projectId: fixtureRun.projectId,

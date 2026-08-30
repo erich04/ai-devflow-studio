@@ -246,7 +246,7 @@ export function createRecommendedEnforcementPreset(
     rules: [
       rule('missing_agent_review', 'protected_gate', 'missing', 'block', updatedAt, {
         floorAction: 'block',
-        remediation: 'Run Knowledge Review Agent for this protected Gate.',
+        remediation: '在审批此受保护 Gate 前运行基于知识的门禁审查。',
       }),
       rule('governance_check', 'testing_standard', 'needs_evidence', 'block', updatedAt, {
         floorAction: 'block',
@@ -439,7 +439,7 @@ export function evaluateGateEnforcement({
   if (isProtectedGate(node) && !latestAgentReview) {
     const rule = findRule(effectivePolicy, missingAgentReviewRuleKey())
     if (rule) {
-      collect(toReason(rule, 'Knowledge Review Agent has not reviewed this protected Gate.'), rule)
+      collect(toReason(rule, '此受保护 Gate 尚未运行基于知识的门禁审查。'), rule)
     }
   }
 

@@ -9,7 +9,7 @@ AI DevFlow Studio 是一个面向小型研发团队的自托管 AI 交付工作�
 项目不只是一个流程编排器。它在一条交付流程中组织了一组职责明确的 Agent，让它们围绕同一个 Run 协作：
 
 - 阶段 Agent 负责需求澄清和方案设计。
-- Knowledge Review Agent 结合团队知识、规则和已有证据，找出风险与缺口。
+- 门禁审查 Agent 执行基于知识的门禁审查（Knowledge-Grounded Gate Review）：以团队知识、规则和已有证据为依据，审查当前 Gate、门禁条件及阶段产物，找出风险与缺口。
 - Coding Agent 通过 OpenCode CRI 接入外部编码能力，完成代码修改、测试和结果回传。
 
 这是一种简单的单组 Agent 模式。Agent 不需要自由对话，而是按 workflow 的阶段各自完成任务，并把结果放回同一条证据链。团队可以清楚地看到每一步做了什么、依据是什么、是否可以进入下一阶段。
@@ -42,4 +42,4 @@ Agent Provider 和 Coding Runtime 都通过明确的接口接入。项目保留�
 
 ## 30 秒介绍
 
-> AI DevFlow Studio 用一条 workflow 管理 AI 研发交付，并在流程中组织需求、评审和编码 Agent。它通过 OpenCode CRI 接入真实编码能力，把权限、代码 diff、测试和运行记录统一沉淀为证据，再由 Gate 和人工审批控制交付风险。代码留在本地，团队只同步经过脱敏的结果。
+> AI DevFlow Studio 用一条 workflow 管理 AI 研发交付，并在流程中组织需求、门禁审查和编码 Agent。它通过 OpenCode CRI 接入真实编码能力，把权限、代码 diff、测试和运行记录统一沉淀为证据，再由 Gate 和人工审批控制交付风险。代码留在本地，团队只同步经过脱敏的结果。

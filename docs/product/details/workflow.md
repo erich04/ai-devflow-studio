@@ -80,7 +80,7 @@ Required evidence:
 - Changed paths.
 - Latest test evidence.
 - Policy and budget status.
-- Agent Review summary.
+- Knowledge-Grounded Gate Review summary for the current Gate and stage artifacts, with Knowledge retained as grounding.
 - Metadata-only PR Delivery Package.
 - Immutable Delivery Intent bound to the expected commit, repository binding, Run/node/version,
   Test Evidence, changed paths, and package digest.
@@ -114,7 +114,7 @@ Required evidence:
 - Acceptance evidence bundle.
 - PR Delivery Package, Delivery Intent, Delivery Request approval, verified remote head, and Draft
   pull-request reference.
-- Diff/test/policy/budget/review summary.
+- Diff/test/policy/budget/Gate Review summary.
 - Final Gate decision through the normal enforcement path.
 - Acceptance may record signoff after delivery completion but must never merge, close, or otherwise
   mutate the pull request.

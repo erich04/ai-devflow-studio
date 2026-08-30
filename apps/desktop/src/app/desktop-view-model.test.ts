@@ -40,6 +40,38 @@ describe('desktop view model', () => {
       }),
     ).toMatchObject({
       status: 'local indexed',
+      label: 'indexed · no documents',
+      tone: 'soft',
+    })
+
+    expect(
+      buildKnowledgeDataSource({
+        desktopConnected: true,
+        dataOrigin: 'local',
+        isLoading: false,
+        snapshot: {
+          projectId: 'local-project-1',
+          contentHash: 'repository-hash-2',
+          documents: [{
+            id: 'document-1',
+            title: 'Architecture',
+            category: 'adr',
+            summary: 'Current architecture guidance.',
+            sourcePath: 'docs/architecture.md',
+            markdown: '# Architecture\n\nCurrent architecture guidance.',
+            tags: [],
+            updatedAt: '2026-08-01T00:00:00.000Z',
+          }],
+          chunks: [],
+          entities: [],
+          relations: [],
+          indexedAt: '2026-08-01T00:00:00.000Z',
+          truncated: false,
+          warnings: [],
+        },
+      }),
+    ).toMatchObject({
+      status: 'local indexed',
       label: 'indexed',
       tone: 'good',
     })
@@ -88,6 +120,29 @@ describe('desktop view model', () => {
     ).toMatchObject({
       status: 'local indexed',
       label: 'indexed · refresh failed',
+      tone: 'warn',
+    })
+  })
+
+  it('keeps missing knowledge neutral while reserving warning tone for real indexing errors', () => {
+    expect(
+      buildKnowledgeDataSource({
+        desktopConnected: true,
+        dataOrigin: 'local',
+      }),
+    ).toMatchObject({
+      label: 'not indexed',
+      tone: 'soft',
+    })
+
+    expect(
+      buildKnowledgeDataSource({
+        desktopConnected: true,
+        dataOrigin: 'local',
+        error: '仓库知识索引不可用',
+      }),
+    ).toMatchObject({
+      label: 'index unavailable',
       tone: 'warn',
     })
   })

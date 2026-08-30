@@ -128,7 +128,7 @@ describe('node inspector view model', () => {
       'trace',
     ])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('Policy snapshot')
-    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('Knowledge Review')
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('门禁审查')
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('Budget guard')
     expect(viewModel.nextAction).toMatchObject({
       title: '生成需求澄清',
@@ -150,7 +150,7 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { requestedTab: 'Trace' })
 
     expect(viewModel.visualKind).toBe('Review')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', 'Knowledge Review', '引用来源', 'Evidence'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '门禁审查', '引用来源', 'Evidence'])
     expect(viewModel.activeTab.label).toBe('状态')
     expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
@@ -196,7 +196,7 @@ describe('node inspector view model', () => {
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
       'Policy snapshot',
       'Role permission',
-      'Knowledge Review',
+      '门禁审查',
       'Budget',
       'Required Artifact',
     ])
@@ -250,7 +250,7 @@ describe('node inspector view model', () => {
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
       'Policy snapshot',
       'Role permission',
-      'Knowledge Review',
+      '门禁审查',
       'Budget',
       'Required Artifact',
     ])

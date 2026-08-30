@@ -39,7 +39,7 @@ Safe team summaries may include:
 - Run id, title, status, branch, and stage.
 - Changed path summaries when paths are repo-relative and safe.
 - Test command, status, duration, and redacted summary.
-- Agent Review conclusion, advisory level, missing evidence count, and risk count.
+- Knowledge-Grounded Gate Review conclusion for the current Gate and stage artifacts, including advisory level, missing evidence count, risk count, and safe Knowledge reference metadata.
 - Policy and budget rollups.
 - Gate decisions and override reasons.
 - GitHub App repository binding identity and revocation state without credentials.

@@ -3,10 +3,15 @@
 Status: Stable release procedure; no result claimed
 
 This walkthrough verifies the formal `2.2.0` candidate `C` through the normal packaged Desktop,
-Web, API, and private GitHub sandbox surfaces. It covers the workflow and the bounded Agent group:
-Workflow Stage Agent, Knowledge Review Agent, and the Coding Agent connected through the CRI
-boundary. It also checks the V2.0 runtime, V2.1 Memory, and V2.2 coordination boundaries without
-giving an Agent authority over human Gates or GitHub publication.
+Web, API, and private GitHub sandbox surfaces.
+
+It covers the workflow and bounded Agent group: Workflow Stage Agent, Knowledge-Grounded Gate Review
+Agent, and the Coding Agent connected through the CRI boundary. In Gate Review, retrieved Knowledge
+is grounding; the current Gate, its conditions, and associated stage artifacts and evidence are the
+review subject.
+
+It also checks the V2.0 runtime, V2.1 Memory, and V2.2 coordination boundaries without giving an
+Agent authority over human Gates or GitHub publication.
 
 ## Preconditions
 
@@ -26,10 +31,11 @@ giving an Agent authority over human Gates or GitHub publication.
    artifact SHA-256, authentication, and empty release state.
 2. Pair one Local Project to one Team Project, then create one Work Request and materialize exactly
    one canonical local Run.
-3. Complete Clarify and Design with the Workflow Stage Agent. Inspect the artifacts and approve each
-   required human Gate explicitly.
-4. Run Knowledge Review. Confirm citations and policy findings are evidence, not approval authority,
-   and that only redacted metadata reaches Team storage.
+3. Complete Clarify and Design with the Workflow Stage Agent. Inspect the artifacts at each required
+   human Gate.
+4. Run Gate Review before each Gate approval. Confirm that retrieved Knowledge citations and policy
+   findings are evidence rather than approval authority, and that only redacted metadata reaches Team
+   storage. Then approve the Gate explicitly.
 5. From the Agent Runtime panel, start exactly one standalone Runtime for the current Build node and
    advance its `scenario.evaluate` action to terminal success. Exercise the resulting Memory
    candidate through human-controlled promotion, revision, deletion, and purge. Separately start one

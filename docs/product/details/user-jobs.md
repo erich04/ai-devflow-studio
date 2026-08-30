@@ -18,7 +18,7 @@
 
 - Understand what changed and why.
 - Inspect whether a Gate has enough evidence to proceed.
-- Review Knowledge Review output, policy warnings, and missing evidence.
+- Inspect Knowledge-Grounded Gate Review output for the current Gate and stage artifacts, together with policy warnings and missing evidence.
 - Approve, reject, or override a Gate through guarded write paths.
 - Approve or reject one exact redacted Delivery Request through a signed Web session.
 - Check the verified remote head, Draft pull request, and Acceptance evidence before final delivery

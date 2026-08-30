@@ -74,7 +74,7 @@ Gate 是门禁判断点。它不是简单的 UI disabled 状态，而是由多�
 
 - Team policy
 - role permission
-- Knowledge Review
+- 基于知识的门禁审查（Knowledge-Grounded Gate Review）
 - Test Evidence
 - budget 状态
 - 相关 Artifact 和 Trace
@@ -113,7 +113,7 @@ Workflow Board 的主卡片只分为四类：
 |---|---|---|
 | `Task` | 需要执行的工作 | Clarification Agent、Coding Agent、Local Test Task |
 | `Gate` | 判断能否继续推进 | 需求确认 Gate、Design Gate、PR Delivery Gate、业务验收 Gate |
-| `Review` | 评审和治理动作 | Knowledge Review |
+| `Review` | 评审和治理动作 | 门禁审查 |
 | `Delivery` | 受治理的交付节点 | PR Delivery Package、Delivery Intent / Request、Draft pull request、Acceptance Bundle |
 
 Artifact / Evidence / Trace / Decision 作为主节点的关联资源出现，但卡片摘要不应该
@@ -165,7 +165,7 @@ Gate 可以有产物，例如 Gate Report 或审批记录，但在界面上应�
 
 ### Review
 
-Review 是评审治理动作。当前最重要的是 Knowledge Review。
+`Review` 是内部节点类型；用户界面将这类动作称为“门禁审查”。门禁审查以 Knowledge 为依据，审查当前 Gate、门禁条件和关联阶段产物。
 
 Review 和 Gate 容易混淆，但二者不同：
 
@@ -209,7 +209,7 @@ expected commit，并在 remote head 验证后创建或 reconcile 一个 Draft p
 - policy 插入了额外 Gate
 - 该 Run 已有完整 brief，跳过了某个 Task
 - 当前阶段折叠了已完成节点
-- 某类需求必须追加 Knowledge Review
+- 某类需求必须追加门禁审查
 
 否则用户会误以为自己少走了一步。
 
@@ -276,25 +276,25 @@ Gate 条件应该展示：
 
 - policy snapshot
 - role permission
-- Knowledge Review
+- 门禁审查
 - Test Evidence
 - budget
 - required Artifact
 
-### Review Inspector
+### Review Inspector（门禁审查）
 
 Tab：
 
 - `状态`
-- `Knowledge Review`
+- `门禁审查`
 - `引用来源`
 - `Evidence`
 
 原因：
 
 - Review 是治理动作。
-- 它的重点是引用来源、score、heading path、content hash、review history 和 advisory。
-- Review 结果作为 Gate 输入。
+- 它的重点是引用来源、score、heading path、content hash、门禁审查历史和 advisory。
+- 门禁审查结果作为 Gate 输入。
 
 ### Delivery Inspector
 
@@ -328,7 +328,7 @@ Team Project policy 不应在 Workbench、Local Project 或某个 Run 里配置�
 可配置内容包括：
 
 - 哪些阶段需要 Gate
-- 哪些 Gate 需要 Knowledge Review
+- 哪些 Gate 需要门禁审查
 - 哪些 Test Evidence 必须存在
 - budget 上限与 approval 规则
 - 哪些角色可以 approve
@@ -417,11 +417,11 @@ Workbench 左列的 Local Project 卡片只展示本地配置和执行边界。
 
 ### Workbench 到 Agents
 
-当 Gate 缺少 Knowledge Review，Inspector 应提供 `Run Knowledge Review` 动作，跳到 Agents。
+当 Gate 缺少门禁审查，Inspector 应提供“运行门禁审查”动作，跳到 Agents。
 
-Agents 完成 Review 后，应回写：
+Agents 完成门禁审查后，应回写：
 
-- Review Evidence
+- Review Evidence（内部类型，对应门禁审查证据）
 - Gate Advisory
 - Inspector 状态
 - 当前 Run 的 Gate 条件
@@ -466,17 +466,18 @@ Agents 是执行控制台，但不是主流程入口。
 
 它应从 Inspector 的当前节点动作跳入。
 
-### Knowledge Review Agent
+### 门禁审查 Agent
 
 职责：
 
-- 做交付评审和知识治理
+- 以 Knowledge 为依据，审查当前 Gate、门禁条件和阶段产物
+- 做知识治理
 - 生成 Gate Advisory
 - 记录引用、trace、token usage、cost source
 
 需要明确：
 
-- Knowledge Review 是 DevFlow 自己实现的 review agent。
+- 门禁审查是 DevFlow 自己实现的 review agent。
 - 模型 provider 只是推理后端。
 
 ### Coding Agent
@@ -491,9 +492,9 @@ Agents 是执行控制台，但不是主流程入口。
 
 需要明确：
 
-- Coding Agent 和 Knowledge Review 是两条不同链路。
+- Coding Agent 和门禁审查是两条不同链路。
 - Coding Agent 做代码修改。
-- Knowledge Review 做交付评审和知识治理。
+- 门禁审查对照 Knowledge 与规范审查当前 Gate 和阶段产物。
 
 ## 14. Tests 模块边界
 
@@ -567,7 +568,7 @@ MCP 是本机工具连接器，不是云端集成市场。
 - failed
 - success
 - policy unavailable
-- missing agent review
+- `missing agent review`（内部状态；用户文案为“缺少门禁审查”）
 - over budget approval
 
 这些状态不应只靠颜色表达。需要同时有：
@@ -633,7 +634,7 @@ Artifact / Evidence / Trace 应该作为引用或子资源挂在 WorkflowNode �
 - 点击 Run 刷新 Board 和 Inspector。
 - 点击 Workflow Node 刷新 Inspector。
 - Search result 可跳到对应 Run / Artifact / Knowledge / Event。
-- Agents 完成 Review 后提供返回 Gate Inspector。
+- Agents 完成门禁审查后提供返回 Gate Inspector。
 - Tests 完成后提供返回当前 Test Evidence 节点。
 - Team policy 同步后重新评估相关 Gate。
 
@@ -642,7 +643,7 @@ Artifact / Evidence / Trace 应该作为引用或子资源挂在 WorkflowNode �
 1. Board 展示流程主节点，不展示所有底层对象。
 2. Inspector 是当前节点行动中心。
 3. Artifact / Evidence / Trace / Decision 是节点输出、依赖或审计资源，不是主流程卡片。
-4. Gate 消费 Evidence 和 Review，并产生决策结论；它不是普通执行任务。
+4. Gate 消费 Evidence 和门禁审查结果，并产生决策结论；它不是普通执行任务。
 5. Team policy 只在 Team Settings 配置。
 6. Local Project 只表达本地执行边界。
 7. Agents / Tests / Knowledge 都应从 Inspector 的当前问题跳转进入。

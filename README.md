@@ -25,7 +25,7 @@ DevFlow keeps repository execution on the developer's machine. It turns requests
 The workflow is the backbone, but the product is more than a workflow editor. Within one Run, a focused Agent group handles three clear responsibilities:
 
 - Workflow Stage Agent turns the request into clarification and design artifacts.
-- Knowledge Review Agent checks the work against team knowledge, policy, and existing evidence.
+- Knowledge-Grounded Gate Review Agent uses retrieved team Knowledge, policy, and evidence as grounding to evaluate the current Gate, its conditions, and associated stage artifacts.
 - Coding Agent connects to OpenCode through the CRI boundary and returns code changes, tests, and runtime evidence.
 
 This is a workflow-driven, single-group Agent mode rather than open-ended multi-agent orchestration. Each Agent works at the right stage and writes its result back to the same evidence chain.
@@ -35,7 +35,7 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 | User | Primary job |
 | --- | --- |
 | Developer | Run AI-assisted work locally, review permissions and diffs, execute tests, and preserve evidence. |
-| Tech lead or reviewer | Inspect policy, knowledge, tests, and Agent Review output before approving a Gate. |
+| Tech lead or reviewer | Inspect policy, knowledge, tests, and Gate Review output before approving a Gate. |
 | Team manager or owner | See redacted delivery health, runtime cost, budget state, and project progress in the Web console. |
 
 ### Product Value
@@ -48,14 +48,15 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 ## Implemented Capabilities
 
 - A six-stage Run model covers request intake, Clarify, Design, Build, Test, PR handoff, and Acceptance.
-- A focused Agent group covers workflow-stage generation, knowledge review, and OpenCode-backed coding within the same Run.
+- A focused Agent group covers workflow-stage generation, Gate Review, and OpenCode-backed coding within the same Run.
 - Shared trusted commands enforce current-node order and required evidence across all six stages.
 - Electron selects a local Git repository, validates test commands, runs tests through controlled IPC, and persists local state in SQLite.
 - Coding Agent runs use managed worktrees, explicit permission relay, diff capture, Test Evidence, runtime trace, and cleanup state.
 - Knowledge Governance links Git-managed Markdown standards to Runs, Artifacts, Gates, and review evidence.
-- Knowledge Review produces structured findings, trace, advisory, and cost data without replacing human approval.
+- Gate Review produces structured findings, trace, advisory, and cost data without replacing human approval.
 - Gate Enforcement supports team policy, project overrides, remediation candidates, and human-approved retry paths.
-- Runtime budgets model projected provider cost and lead approval. Paid Coding and Knowledge Review runtimes fail closed before provider invocation when authoritative budget context is missing, invalid, unavailable, unauthenticated, or out of scope.
+- Runtime budgets model projected provider cost and lead approval.
+- Paid Coding and Gate Review runtimes fail closed before provider invocation when authoritative budget context is missing, invalid, unavailable, unauthenticated, or out of scope.
 - Desktop pairing explicitly binds a Local Project to its Team Project; Web Work Requests and Gate Commands preserve Desktop authority over the canonical local Run.
 - Durable redacted sync uses a persisted outbox with bounded backoff, restart recovery, immutable project scope, and operator-visible retry state.
 - GitHub Delivery binds one Delivery Intent to the managed-worktree commit, Test Evidence, Run
@@ -203,7 +204,7 @@ require explicit configuration.
 
 1. Select a small committed Git repository and save its detected test command.
 2. Create a Run from a short request, generate Clarification and Design artifacts, and inspect the six-stage canvas.
-3. Run Knowledge Review on a Gate, inspect policy and evidence, then approve the Gate as a human decision.
+3. Run Gate Review, inspect the Knowledge-grounded findings, policy, and evidence for the current Gate, then approve it as a human decision.
 4. Start the Coding Agent from the Build task, approve its permission request, and inspect the managed-worktree diff and Test Evidence.
 5. Open Agents and Tests to review the trace, command result, redaction state, and cost source.
 
@@ -222,7 +223,8 @@ Only the canonical Run Summary advances remote status/current Node. Dependent ID
 their original organization/project/Run/Node, and an independent Lead override evaluates the
 creator-owned Run without republishing it under the reviewer's identity.
 
-Test, Review, and Coding summaries use a bounded child-first sync contract: only an explicit missing
+Test, Review, and Coding summaries use a bounded child-first sync contract, where `Review` is the
+internal Gate Review summary type. Only an explicit missing
 canonical Run causes one latest-Run upload and one child retry. The V1.4 durable outbox rebuilds
 redacted summaries from canonical local state, resumes after restart, and surfaces terminal recovery
 without changing the V1.3 local-authority invariant.
@@ -241,7 +243,7 @@ For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guide
 - The PR Delivery Package is metadata, not source or publication authority. After an exact signed
   Web approval, GitHub Delivery may publish only the approved commit and create or reconcile one
   Draft pull request; it never merges or silently broadens scope.
-- Real opencode and live Knowledge Review are opt-in paths that can spend provider quota. They stay outside the default quality gate.
+- Real opencode and live Gate Review are opt-in paths that can spend provider quota. They stay outside the default quality gate.
 - Team Skills/MCP remain management metadata, while one explicitly installed local stdio MCP server
   can execute only through Electron main's verified installation, scoped grant, deadline,
   cancellation, validation, and metadata-only audit boundary. Remote MCP transports remain deferred.

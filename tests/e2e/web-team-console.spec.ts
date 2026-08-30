@@ -19,7 +19,7 @@ test.describe('AI DevFlow web team console', () => {
     const runId = `run-e2e-${suffix}`
     const runTitle = `E2E synced team run ${suffix}`
     const evidenceSummary = `E2E tests passed ${suffix}`
-    const reviewConclusion = `E2E Knowledge Review completed ${suffix}`
+    const reviewConclusion = `E2E Gate Review completed ${suffix}`
     const reviewSummary = `E2E warning-only advisory ${suffix}`
 
     const runResponse = await request.post(`${apiUrl}/api/sync/run-summary`, {

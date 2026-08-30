@@ -2621,7 +2621,7 @@ export function createPostgresTeamRepository(
             created_at,
             updated_at
           )
-          VALUES ($1, $2, 'design', 'Knowledge Review Target', $3, 'gate', $4, $5, 'lead', 0, NULL, 998, $6, $6)
+          VALUES ($1, $2, 'design', '门禁审查目标', $3, 'gate', $4, $5, 'lead', 0, NULL, 998, $6, $6)
           ON CONFLICT (id) DO UPDATE
           SET subtitle = excluded.subtitle,
               status = excluded.status,

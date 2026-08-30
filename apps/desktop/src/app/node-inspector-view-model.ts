@@ -229,7 +229,7 @@ export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTab
   ],
   designReview: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    { tabId: 'Knowledge Review', label: 'Knowledge Review', sections: ['agentReview'] },
+    { tabId: 'Knowledge Review', label: '门禁审查', sections: ['agentReview'] },
     { tabId: '引用来源', label: '引用来源', sections: ['governance', 'artifacts', 'agentReview'] },
     { tabId: 'Evidence', label: 'Evidence', sections: ['governance', 'artifacts', 'agentReview'] },
   ],
@@ -491,21 +491,25 @@ export function buildStatusDescriptors(input: {
     if (gateScoped && missingReview) {
       return {
         id: 'missing-agent-review',
-        label: 'Knowledge Review',
-        state: 'missing agent review',
+        label: '门禁审查',
+        state: '缺少门禁审查',
         tone: 'bad',
-        summary: 'Gate 缺少 Knowledge Review 结果。',
-        nextAction: '从 Inspector 跳到 Agents 运行 Knowledge Review。',
+        summary: 'Gate 缺少基于知识的门禁审查结果。',
+        nextAction: '从 Inspector 跳到 Agents 运行门禁审查。',
         impact: 'Gate Advisory / Review Evidence',
       }
     }
 
     return {
       id: 'knowledge-review',
-      label: 'Knowledge Review',
+      label: '门禁审查',
       state: input.latestAgentReview ? 'success' : 'empty',
       tone: input.latestAgentReview ? 'good' : 'soft',
-      summary: input.latestAgentReview ? '已有 Knowledge Review advisory。' : gateScoped ? 'Gate 还没有 Knowledge Review。' : '当前节点还没有 Knowledge Review。',
+      summary: input.latestAgentReview
+        ? '基于知识的门禁审查已生成 Gate Advisory。'
+        : gateScoped
+          ? '当前 Gate 尚未运行门禁审查。Knowledge 是依据，Gate 条件和阶段产物是审查对象。'
+          : '当前节点尚未运行基于知识的门禁审查。',
       nextAction: input.latestAgentReview ? '在 Inspector 中核对 advisory。' : '需要时从 Inspector 进入 Agents。',
       impact: gateScoped ? 'Review input for Gate' : 'Review / references',
     }
@@ -647,12 +651,12 @@ export function buildGateRequirementMatrix(input: {
       summary: input.canApprove ? '当前用户可执行 Gate approval。' : '当前用户无法直接 approve，需要 lead/reviewer 权限。',
     },
     {
-      label: 'Knowledge Review',
+      label: '门禁审查',
       state: input.latestAgentReview ? 'ready' : 'missing',
       tone: input.latestAgentReview ? 'good' : 'bad',
       summary: input.latestAgentReview
         ? input.latestAgentReview.gateAdvisory.summary
-        : '需要从 Agents 运行 review，生成 Gate Advisory 与引用来源。',
+        : '需要从 Agents 运行门禁审查；系统会以 Knowledge 与规范为依据，审查 Gate 条件和阶段产物。',
     },
   ]
 
@@ -694,7 +698,7 @@ function buildActionCatalog(
   return {
     openKnowledgeReview: {
       id: 'openKnowledgeReview',
-      label: '去 Agents 运行 Review',
+      label: '去 Agents 运行门禁审查',
       variant: 'ghost',
       disabledReasons: ['running_agent_review'],
     },
@@ -867,11 +871,11 @@ function buildNextAction(input: {
       title: '通过 Gate',
       copy: input.canApprove
         ? isEarlyGate
-          ? '确认 Gate 条件、Review 和 Evidence 后，通过当前 Gate 进入下一节点。'
-          : '确认 Gate 条件、Review、Tests 和 Evidence 后，通过当前 Gate 进入下一节点。'
+          ? '确认 Gate 条件、门禁审查和 Evidence 后，通过当前 Gate 进入下一节点。'
+          : '确认 Gate 条件、门禁审查、Tests 和 Evidence 后，通过当前 Gate 进入下一节点。'
         : isEarlyGate
-          ? '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、Review、Evidence 或 policy 条件。'
-          : '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、Review、Tests 或 policy 条件。',
+          ? '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、门禁审查、Evidence 或 policy 条件。'
+          : '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、门禁审查、Tests 或 policy 条件。',
       primaryActionId: 'approveGate',
       secondaryActionIds: buildGateSecondaryActionIds(input),
     }

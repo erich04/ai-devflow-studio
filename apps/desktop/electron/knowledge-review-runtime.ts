@@ -50,12 +50,12 @@ export type KnowledgeReviewRuntime = {
 
 function blockedMessage(status: string): string {
   if (status === 'requires_lead_approval') {
-    return 'Knowledge Review blocked before provider call. A valid Lead runtime budget approval is required before retrying.'
+    return '基于知识的门禁审查在调用 Provider 前被阻断。重试前需要有效的 Lead runtime budget approval。'
   }
   if (status === 'unavailable') {
-    return 'Knowledge Review blocked before provider call. Pair the project and restore the authenticated Team connection before retrying.'
+    return '基于知识的门禁审查在调用 Provider 前被阻断。请先配对项目并恢复已认证的 Team 连接。'
   }
-  return 'Knowledge Review blocked before provider call by the authoritative Team budget policy.'
+  return '基于知识的门禁审查被权威 Team budget policy 阻断，尚未调用 Provider。'
 }
 
 function failureMessage(error: unknown): string {
@@ -101,11 +101,11 @@ export function createKnowledgeReviewRuntime(
         (node.kind !== 'gate' && node.kind !== 'acceptance') ||
         (node.status !== 'running' && node.status !== 'blocked')
       ) {
-        throw new Error('Knowledge Review can only run for the current Gate or Acceptance node')
+        throw new Error('基于知识的门禁审查只能针对当前 Gate 或 Acceptance 节点运行')
       }
       if (!input.providerId) {
         throw new Error(
-          'Agent provider is not configured. Save Provider ID, Base URL, Model, and API Key before running Knowledge Review.',
+          '门禁审查 Provider 尚未配置。运行门禁审查前请保存 Provider ID、Base URL、Model 和 API Key。',
         )
       }
 
@@ -115,8 +115,8 @@ export function createKnowledgeReviewRuntime(
         providerMetadata = await deps.resolveProviderMetadata(providerId)
       } catch (error) {
         const detail = failureMessage(error)
-        await persistError(input, requestId, `Knowledge Review provider metadata is unavailable: ${detail}`)
-        throw new Error(`Knowledge Review blocked before provider call: ${detail}`)
+        await persistError(input, requestId, `门禁审查 Provider metadata 不可用：${detail}`)
+        throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
       }
 
       const [artifacts, testEvidence] = await Promise.all([
@@ -165,8 +165,8 @@ export function createKnowledgeReviewRuntime(
         })
       } catch (error) {
         const detail = failureMessage(error)
-        await persistError(input, requestId, `Knowledge Review failed before artifacts were stored: ${detail}`)
-        throw new Error(`Knowledge Review failed before artifacts were stored: ${detail}`)
+        await persistError(input, requestId, `门禁审查在产物保存前失败：${detail}`)
+        throw new Error(`基于知识的门禁审查在产物保存前失败：${detail}`)
       }
 
       if (budgetedResult.status === 'blocked') {

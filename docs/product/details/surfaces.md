@@ -56,7 +56,7 @@ Required responsibilities:
 - Desktop pairing.
 - Redacted sync ingestion.
 - Policy and budget persistence.
-- Agent Review execution against team state.
+- Knowledge-Grounded Gate Review execution against the current Gate and stage artifacts, using retrieved Knowledge as grounding.
 - GitHub App private-key authority, repository binding/revocation, and narrow credential-grant
   metadata.
 - Redacted Delivery Request persistence, signed Web approval, remote-head verification, and Draft

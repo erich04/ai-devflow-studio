@@ -1329,6 +1329,11 @@ button:disabled {
   border-left-color: var(--amber);
 }
 
+.agent-current-task--soft {
+  border-left-color: var(--border);
+  background: var(--surface-2);
+}
+
 .agent-current-task--bad {
   border-left-color: var(--danger);
 }
@@ -1427,6 +1432,23 @@ button:disabled {
 .agent-path-card--primary {
   border-left-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 5%, var(--surface-2));
+}
+
+.agent-path-card--soft {
+  border-left-color: var(--border);
+  background: var(--surface-2);
+}
+
+.agent-path-card--warn {
+  border-left-color: var(--amber);
+}
+
+.agent-path-card--bad {
+  border-left-color: var(--danger);
+}
+
+.agent-path-card--good {
+  border-left-color: var(--green);
 }
 
 .agent-fact-grid {

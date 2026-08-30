@@ -319,6 +319,281 @@ button {
   accent-color: var(--accent);
 }
 
+.runtime-budget-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(420px, 1.2fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.runtime-budget-group {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.runtime-budget-full-row {
+  grid-column: 1 / -1;
+}
+
+.runtime-budget-group-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.runtime-budget-group-heading div {
+  min-width: 0;
+}
+
+.runtime-budget-group-heading span,
+.runtime-budget-group-heading time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.runtime-budget-group-heading div > span,
+.runtime-budget-group-heading strong {
+  display: block;
+}
+
+.runtime-budget-group-heading strong {
+  margin-top: 4px;
+}
+
+.runtime-budget-group-heading time {
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.runtime-budget-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-budget-metrics span {
+  max-width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.runtime-budget-summary > p,
+.runtime-budget-feedback,
+.runtime-budget-empty p {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.runtime-budget-policy-form {
+  display: grid;
+  gap: 12px;
+}
+
+.runtime-budget-policy-heading {
+  margin-bottom: 0;
+}
+
+.runtime-budget-policy-fields {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.6fr) repeat(2, minmax(140px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.runtime-budget-policy-form label,
+.runtime-budget-approval-form label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.runtime-budget-policy-form input,
+.runtime-budget-approval-form input,
+.runtime-budget-approval-form select,
+.runtime-budget-approval-form textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-transform: none;
+}
+
+.runtime-budget-policy-form input[type='checkbox'] {
+  width: 36px;
+  accent-color: var(--accent);
+}
+
+.runtime-budget-policy-form button {
+  justify-self: start;
+}
+
+.runtime-budget-policy-form button:disabled,
+.runtime-budget-approval-form button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.runtime-budget-feedback {
+  min-height: 18px;
+  margin: 0;
+}
+
+.runtime-budget-feedback--success {
+  color: var(--accent);
+}
+
+.runtime-budget-feedback--error {
+  color: light-dark(#b42318, #ff8f88);
+}
+
+.runtime-budget-approval-list {
+  display: grid;
+  gap: 10px;
+}
+
+.runtime-budget-approval-list .runtime-budget-group-heading {
+  margin-bottom: 0;
+}
+
+.runtime-budget-approval {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.runtime-budget-approval-id {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.runtime-budget-approval p {
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.runtime-budget-approval > span {
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.runtime-budget-approval-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.runtime-budget-approval-heading {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+
+.runtime-budget-approval-form textarea {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.runtime-budget-approval-form small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-transform: none;
+}
+
+.runtime-budget-approval-reason {
+  grid-column: 1 / span 3;
+}
+
+.runtime-budget-approval-submit {
+  width: 100%;
+}
+
+@media (max-width: 1100px) {
+  .runtime-budget-approval-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .runtime-budget-approval-reason {
+    grid-column: 1 / -1;
+  }
+
+  .runtime-budget-approval-submit {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .runtime-budget-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-budget-full-row {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 720px) {
+  .runtime-budget-policy-fields,
+  .runtime-budget-approval-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-budget-approval-heading,
+  .runtime-budget-approval-reason,
+  .runtime-budget-approval-submit {
+    grid-column: 1;
+  }
+
+  .runtime-budget-group-heading,
+  .runtime-budget-approval {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .runtime-budget-group-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .runtime-budget-group-heading time {
+    white-space: normal;
+  }
+
+  .runtime-budget-approval > span {
+    white-space: normal;
+  }
+}
+
 .agent-console {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);

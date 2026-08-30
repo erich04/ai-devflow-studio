@@ -304,14 +304,14 @@ function buildPrimaryAction(input: {
 
   return {
     id: 'run-review',
-    label: input.isRunningReview ? 'Review running' : 'Run Knowledge Review',
-    summary: '生成当前节点的 Review Evidence、Gate Advisory、引用和 trace。',
-    tone: providerMissing ? 'warn' : 'accent',
+    label: input.isRunningReview ? '门禁审查中' : '运行门禁审查',
+    summary: '以检索到的 Knowledge 与规范为依据，审查当前 Gate 条件和阶段产物，生成 Gate Advisory、引用与 trace。',
+    tone: providerMissing ? 'soft' : 'accent',
     disabled: providerMissing || input.isRunningReview || Boolean(input.pendingInspectorAction),
     ...(providerMissing
       ? { disabledReason: '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。' }
       : input.isRunningReview
-        ? { disabledReason: 'Knowledge Review is already running.' }
+        ? { disabledReason: '基于知识的门禁审查正在运行。' }
         : input.pendingInspectorAction
           ? { disabledReason: writeLockReason }
         : {}),
@@ -352,16 +352,16 @@ function buildAdvisorySummary(
 
   if (selectedNode?.kind === 'gate' || selectedNode?.kind === 'acceptance') {
     return {
-      label: 'Needs Knowledge Review',
-      summary: '当前 Gate 还没有 Knowledge Review 结论。',
-      tone: 'warn',
-      detail: 'Run review before approval.',
+      label: '尚未运行门禁审查',
+      summary: '当前 Gate 尚未运行基于知识的门禁审查。Knowledge 是审查依据，Gate 条件和阶段产物是审查对象。',
+      tone: 'soft',
+      detail: '待审查',
     }
   }
 
   return {
-    label: 'No review yet',
-    summary: '当前节点还没有 Review advisory。',
+    label: '暂无 Gate Advisory',
+    summary: '当前节点还没有门禁审查结论。',
     tone: 'soft',
     detail: 'No advisory',
   }
@@ -385,14 +385,14 @@ function buildPathStatuses(input: {
   return [
     {
       id: 'review',
-      label: 'Review',
-      title: 'Knowledge Review Agent',
-      summary: input.latestReview?.summary ?? '生成 Gate Advisory、风险、缺失证据和知识引用。',
+      label: '门禁审查',
+      title: '基于知识的门禁审查',
+      summary: input.latestReview?.summary ?? '以 Knowledge 与规范为依据，审查当前 Gate 条件和阶段产物。',
       tone: input.latestReview ? (input.latestReview.gateAdvisory.blocksApproval ? 'bad' : 'good') : 'soft',
-      emphasis: input.primaryAction.id === 'run-review' ? 'primary' : 'secondary',
+      emphasis: input.primaryAction.id === 'run-review' && input.selectedProvider ? 'primary' : 'secondary',
       facts: [
         { label: 'Provider', value: input.selectedProvider?.id ?? 'none' },
-        { label: 'Current node reviews', value: String(input.selectedReviews.length) },
+        { label: '当前节点审查', value: String(input.selectedReviews.length) },
       ],
       ...(!input.selectedProvider ? { disabledReason: '请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。' } : {}),
     },
@@ -425,8 +425,8 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
   if (input.latestTrace?.steps.length) {
     groups.push({
       id: 'review-trace',
-      title: 'Review Trace',
-      summary: 'Knowledge Review context, retrieval, provider call, and artifact creation.',
+      title: '门禁审查 Trace',
+      summary: '记录 Knowledge 检索、Gate 与阶段产物上下文、Provider 调用和审查产物创建。',
       tone: 'accent',
       items: input.latestTrace.steps.map((step) => ({
         id: step.id,
@@ -441,8 +441,8 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
   if (input.selectedReviews.length > 0) {
     groups.push({
       id: 'review-history',
-      title: 'Review History',
-      summary: '当前 Run / Node 的 Knowledge Review 记录。',
+      title: '门禁审查记录',
+      summary: '当前 Run / Node 的基于知识的门禁审查记录。',
       tone: 'soft',
       items: input.selectedReviews.map((review) => ({
         id: review.id,

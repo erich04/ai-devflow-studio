@@ -190,7 +190,7 @@ describe('delivery artifacts', () => {
     expect(artifact.content).toContain('Test Evidence: passed - Tests passed.')
     expect(artifact.content).toContain('Policy: warn')
     expect(artifact.content).toContain('Budget: warning - projected $0.120000')
-    expect(artifact.content).toContain('Agent Review: No blocking risks.')
+    expect(artifact.content).toContain('Gate Review: No blocking risks.')
     expect(artifact.content).not.toContain('+ redacted patch')
   })
 
@@ -280,7 +280,7 @@ describe('delivery artifacts', () => {
     expect(artifact.content).toContain('Tests: passed - Tests passed.')
     expect(artifact.content).toContain('Policy: warn')
     expect(artifact.content).toContain('Budget: warning')
-    expect(artifact.content).toContain('Agent Review: No blocking risks.')
+    expect(artifact.content).toContain('Gate Review: No blocking risks.')
   })
 })
 

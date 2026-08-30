@@ -1211,7 +1211,7 @@ export function App() {
                   hasDeliveryProjectBinding={hasDeliveryProjectBinding}
                   onSyncTeam={syncRemoteTeamState}
                   onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
-                  onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行 Knowledge Review 并补齐 Gate Advisory')}
+                  onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行门禁审查并补齐 Gate Advisory')}
                   onOpenKnowledgeReference={openKnowledgeReference}
                   onRunCodingAgent={runCodingAgent}
                   onCreatePrDraft={generatePrDraft}

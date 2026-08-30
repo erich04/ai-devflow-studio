@@ -210,7 +210,7 @@ function parseProviderCredential(value: unknown): AgentProviderCredentialInput {
 
 function parseKnowledgeReviewInput(value: unknown): KnowledgeReviewInput {
   if (!isRecord(value)) {
-    throw new Error('Invalid knowledge review payload')
+    throw new Error('Invalid Gate Review payload')
   }
 
   const providerId = value['providerId']
@@ -1270,7 +1270,7 @@ export async function resolveTeamRoute(
     try {
       input = parseKnowledgeReviewInput(options.body)
     } catch (error) {
-      return badRequest(error instanceof Error ? error.message : 'Invalid knowledge review payload')
+      return badRequest(error instanceof Error ? error.message : 'Invalid Gate Review payload')
     }
 
     if (!canSyncProject(options.session, input.projectId, 'member')) {
@@ -1291,18 +1291,18 @@ export async function resolveTeamRoute(
       return badRequest(`Run node not found: ${input.nodeId}`)
     }
     if (node.id !== run.currentNodeId) {
-      return badRequest('Knowledge Review requires the current run node.')
+      return badRequest('Knowledge-Grounded Gate Review requires the current Run node.')
     }
     if (node.kind !== 'gate' && node.kind !== 'acceptance') {
-      return badRequest('Knowledge Review requires a Gate or Acceptance node.')
+      return badRequest('Knowledge-Grounded Gate Review requires a Gate or Acceptance node.')
     }
     if (node.status !== 'running' && node.status !== 'blocked') {
-      return badRequest('Knowledge Review requires a running or blocked node.')
+      return badRequest('Knowledge-Grounded Gate Review requires a running or blocked node.')
     }
 
     const providerId = input.providerId?.trim()
     if (!providerId) {
-      return badRequest('Review provider is not configured. Save a provider credential before running Knowledge Review.')
+      return badRequest('Gate Review provider is not configured. Save a provider credential before running Gate Review.')
     }
 
     const provider: AgentProvider | null = providerId === 'fake-knowledge-review'
@@ -1346,7 +1346,7 @@ export async function resolveTeamRoute(
         })()
     if (!provider) {
       return providerId === 'fake-knowledge-review'
-        ? badRequest('Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
+        ? badRequest('Fake Gate Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
         : badRequest(`Agent provider credential not found: ${providerId}`)
     }
     const context = buildAgentReviewContext({
@@ -1413,7 +1413,7 @@ export async function resolveTeamRoute(
         sequence: bundle.events.filter((event) => event.runId === run.id).length + 1,
         kind: 'error' as const,
         message: [
-          'Knowledge Review budget blocked.',
+          'Knowledge-Grounded Gate Review budget blocked.',
           `requestId=${request.id}`,
           `projectId=${run.projectId}`,
           `providerId=${providerId}`,

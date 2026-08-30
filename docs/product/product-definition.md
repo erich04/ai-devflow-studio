@@ -39,7 +39,7 @@ Uses the Electron desktop client to:
 Uses Desktop and Web views to:
 
 - Review Gate status.
-- Inspect Knowledge Review output.
+- Inspect Knowledge-Grounded Gate Review output.
 - Evaluate policy warnings or blockers.
 - Approve Gates or explicit overrides.
 - Approve or reject one exact redacted Delivery Request through a signed Web session.
@@ -95,7 +95,7 @@ Core responsibilities:
 - Workflow canvas and Run inspection.
 - Test command validation and execution.
 - Coding Agent runtime orchestration.
-- Knowledge Review execution.
+- Gate Review execution.
 - Gate approval and override actions through guarded write paths.
 - Commit-bound Delivery Intent preparation and explicit Revise, Resume, Retry, and Stop actions.
 - Repository-scoped GitHub publication from Electron main with an in-memory installation token.
@@ -155,11 +155,15 @@ The Workflow Stage Agent turns the current request and upstream artifacts into c
 solution-design evidence. It works only at the matching workflow stage and records provider and
 model provenance with the generated artifact.
 
-### Knowledge Review Agent
+### Knowledge-Grounded Gate Review Agent
 
-DevFlow assembles review context, retrieves knowledge references, calls a selected review model provider, and parses a structured review result.
+DevFlow treats the current Gate, its conditions, and associated stage artifacts and evidence as the
+review subject. Retrieved Knowledge is grounding, not the review subject.
 
-The model provider, such as Doubao / Volcengine Ark, supplies model inference only. DevFlow owns the review prompt, evidence selection, context redaction, and result interpretation.
+DevFlow retrieves Knowledge references, calls a selected Gate Review model provider, and parses a
+structured Gate Review result.
+
+The model provider, such as Doubao / Volcengine Ark, supplies model inference only. DevFlow owns the Gate Review prompt, Knowledge and evidence selection, context redaction, and result interpretation.
 
 ### Coding Agent
 
@@ -203,7 +207,7 @@ Important evidence types:
 - Design artifacts.
 - Coding diff artifacts.
 - Test Evidence.
-- Knowledge Review artifacts.
+- Gate Review artifacts.
 - Gate approval and override decisions.
 - Runtime cost and budget decisions.
 - PR Delivery Package and acceptance bundle artifacts.
@@ -219,7 +223,7 @@ Governance is not a single approval button. It is a combination of:
 - Workflow Gates.
 - Knowledge governance checks.
 - Configurable Gate Enforcement Policy.
-- Agent Review findings.
+- Gate Review findings.
 - Test Evidence requirements.
 - Budget guard decisions.
 - Lead-only overrides with audit trail.
@@ -264,7 +268,7 @@ The released product baseline provides:
 
 - One trusted workflow command path for Clarify, Design, Build, Test, PR, and Acceptance.
 - Main-process canonical writes and durable local persistence for Run, Artifact, Event, Test
-  Evidence, Agent Review, Coding activity, policy, budget, and sync state.
+  Evidence, Gate Review, Coding activity, policy, budget, and sync state.
 - Explicit Local Project ↔ Team Project binding, authenticated collaboration intent, Desktop-owned
   canonical Run execution, and redacted Team projections.
 - Managed Coding worktrees, explicit permission relay, diff/test evidence, cost visibility, and

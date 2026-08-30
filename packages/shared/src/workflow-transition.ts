@@ -756,9 +756,9 @@ function evaluateApprovalEvidence(
       (review) => review.createdAt,
     )
     if (!latestReview) {
-      blockers.push(blocker('review_missing', 'A matching Agent Review is required'))
+      blockers.push(blocker('review_missing', 'A matching Gate Review is required'))
     } else if (latestReview.gateAdvisory.blocksApproval) {
-      blockers.push(blocker('review_blocked', 'The latest matching Agent Review blocks approval'))
+      blockers.push(blocker('review_blocked', 'The latest matching Gate Review blocks approval'))
     }
   }
   if (approval.budget === 'required') {

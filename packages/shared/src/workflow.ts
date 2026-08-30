@@ -453,7 +453,7 @@ function buildAgentStageArtifact(input: {
         '',
         '## Acceptance Criteria',
         '- The requested behavior is represented by design, implementation, test, PR, and acceptance evidence.',
-        '- Any Gate blockers are resolved through Agent Review, policy sync, or lead override as applicable.',
+        '- Any Gate blockers are resolved through Gate Review, policy sync, or lead override as applicable.',
         '',
         '## Non-goals',
         '- Do not bypass Gate Enforcement or team policy.',
@@ -537,7 +537,7 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
   const request = redactDeliveryText(rawRequest?.content ?? input.run.request)
   const designSummary = redactDeliveryText(design?.summary ?? 'No design artifact linked.')
   const reviewSummary = redactDeliveryText(
-    input.agentReviewSummaries?.join(' | ') || 'No Agent Review summary provided.',
+    input.agentReviewSummaries?.join(' | ') || 'No Gate Review summary provided.',
   )
   const testSummary = latestTest ? redactDeliveryText(latestTest.summary) : ''
 
@@ -556,7 +556,7 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
     `Test Evidence: ${latestTest ? `${latestTest.status} - ${testSummary}` : 'missing'}`,
     `Policy: ${input.enforcement?.status ?? 'not_evaluated'}`,
     `Budget: ${input.budgetDecision ? `${input.budgetDecision.status} - projected $${input.budgetDecision.projectedCostUsd.toFixed(6)}` : 'not_evaluated'}`,
-    `Agent Review: ${reviewSummary}`,
+    `Gate Review: ${reviewSummary}`,
     '',
     '## Checklist',
     '- [ ] Diff reviewed',
@@ -593,7 +593,7 @@ export function createAcceptanceEvidenceBundleArtifact(input: CreateAcceptanceEv
   const request = redactDeliveryText(rawRequest?.content ?? input.run.request)
   const designSummary = redactDeliveryText(design?.summary ?? 'No design artifact linked.')
   const reviewSummary = redactDeliveryText(
-    input.agentReviewSummaries?.join(' | ') || 'No Agent Review summary provided.',
+    input.agentReviewSummaries?.join(' | ') || 'No Gate Review summary provided.',
   )
   const testSummary = latestTest ? redactDeliveryText(latestTest.summary) : ''
 
@@ -607,7 +607,7 @@ export function createAcceptanceEvidenceBundleArtifact(input: CreateAcceptanceEv
     `Tests: ${latestTest ? `${latestTest.status} - ${testSummary}` : 'missing'}`,
     `Policy: ${input.enforcement?.status ?? 'not_evaluated'}`,
     `Budget: ${input.budgetDecision?.status ?? 'not_evaluated'}`,
-    `Agent Review: ${reviewSummary}`,
+    `Gate Review: ${reviewSummary}`,
   ].join('\n')
 
   return {

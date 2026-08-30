@@ -49,7 +49,7 @@ flowchart TB
 
 ## DeepSeek 在哪里
 
-当前保存的 DeepSeek Provider 首先用于需求澄清、方案生成和 Knowledge Review 等模型调用。
+当前保存的 DeepSeek Provider 首先用于需求澄清、方案生成，以及基于知识的门禁审查（Knowledge-Grounded Gate Review）等模型调用。门禁审查以检索到的 Knowledge 为依据，对当前 Gate、门禁条件和阶段产物进行审查。
 
 它**不会因为被选为 Workflow Provider，就自动成为 Coding Agent 的代码执行后端**：
 

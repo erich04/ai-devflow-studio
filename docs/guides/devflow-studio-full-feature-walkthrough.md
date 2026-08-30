@@ -13,8 +13,10 @@ This historical guide does not authorize paid-provider smoke.
 
 这份指南用于体验 DevFlow Studio 已经落地的基础能力。它不是某一个版本的 release
 walkthrough，而是按 V1.3 当时的产品入口把 v0.2 到 v1.3 的核心能力串起来：本地仓库、Run/Gate、
-Knowledge、Agent Review、Coding Agent、测试证据、Team/Web、Pairing、Budget、Tool / Skill
+Knowledge、基于知识的门禁审查（Knowledge-Grounded Gate Review）、Coding Agent、测试证据、Team/Web、Pairing、Budget、Tool / Skill
 Trace、PR Draft 和 Acceptance Bundle。
+
+这里的 Knowledge 是审查依据；审查对象是当前 Gate、门禁条件和关联的阶段产物与证据。
 
 本指南列出目标体验路径，不代表任何候选已自动通过验收。v1.3.0 的实际发布状态只以
 `docs/releases/v1.3.0/` 的四份证据、`corepack pnpm release:status` 的对应模式结果和
@@ -132,7 +134,7 @@ corepack pnpm dev:electron
 通过标准：
 
 - blocked Gate 不会只靠 renderer 禁用按钮；Electron main 写路径也会拒绝。
-- `blocked_policy_unavailable` 只阻止 Gate approve，不阻止 Knowledge Review、测试、Coding 等本地工作。
+- `blocked_policy_unavailable` 只阻止 Gate approve，不阻止门禁审查、测试、Coding 等本地工作。
 - hard-block 时应显示 remediation，不显示 override 逃生口。
 - confirmed override 和 provisional/rejected override 的 UI 语义不同。
 
@@ -156,38 +158,38 @@ corepack pnpm dev:electron
 
 ![Knowledge](./screenshots/12-electron-knowledge.png)
 
-## 4. Knowledge Review Agent：审查、trace、finding
+## 4. 门禁审查 Agent：审查、trace、finding
 
-入口：Workbench Inspector 的 `Agent Review` 或左侧 `Agents`
+入口：Workbench Inspector 的“门禁审查”或左侧 `Agents`
 
 `DEVFLOW_ENABLE_FAKE_RUNTIME=true` 时会列出 `Deterministic Fake Provider`，不花模型钱；
 它适合本地 walkthrough 和 CI，但不代表真实模型审查。运行前明确选择它；关闭该 flag
 后，旧 fake provider 选择必须隐藏或被 main 拒绝。
 
-如果要让 DevFlow Review Agent 调用豆包/Volcengine Ark：
+如果要让门禁审查 Agent 调用豆包/Volcengine Ark：
 
 1. 打开左侧 `Agents`。
-2. 在 `Review Model Credential` 中确认：
+2. 在“门禁审查模型凭证”中确认：
    - Provider ID：`doubao-review`
    - Base URL：`https://ark.cn-beijing.volces.com/api/coding/v3`
    - Model：`ark-code-latest`
 3. 输入 API Key，点击 `Save Credential`。
-4. 在 `Review Model Provider` 下拉框选择保存后的 live provider，再运行 `Run Knowledge Review`。
+4. 在“门禁审查模型 Provider”下拉框选择保存后的 live provider，再运行“门禁审查”。
 
-边界说明：豆包/Volcengine 只提供 OpenAI-compatible 模型 API；DevFlow 自己负责组装 review prompt、检索 Knowledge、运行治理检查，并解析结构化 review。Knowledge Review Agent 不由 `opencode` 执行；`opencode` 只用于 Coding Agent。
+边界说明：豆包/Volcengine 只提供 OpenAI-compatible 模型 API。DevFlow 自己组装门禁审查 prompt、检索 Knowledge 作为依据、运行治理检查，并解析结构化门禁审查结果；当前 Gate、门禁条件与阶段产物或证据才是审查对象。门禁审查 Agent 不由 `opencode` 执行；`opencode` 只用于 Coding Agent。
 
 要体验：
 
 - 选中一个 Gate 或 Build 节点。
-- 点击 `Agent Review`。
-- 打开 `Agents` 查看 review history。
+- 点击“门禁审查”。
+- 打开 `Agents` 查看门禁审查历史。
 - 查看 trace、token/cost、Agent Policy Finding、warning/blocking advisory。
 
 通过标准：
 
-- Knowledge Review 生成可审计结果和 artifact。
+- 门禁审查生成可审计结果和 artifact。
 - Provider 显示能区分 fake/no-cost 与 live/may spend tokens。
-- Agent finding 默认不会 hard-block。
+- 门禁审查 finding 默认不会 hard-block。
 - Gate Advisory 是否阻断由 policy evaluation 决定，不由 Agent core 直接决定。
 
 ![Agent Workbench](./screenshots/04-agent-workbench.png)
@@ -287,15 +289,15 @@ corepack pnpm dev:electron
 
 通过标准：
 
-- PR Draft 包含 request、changed paths、Test Evidence、Policy、Budget、Agent Review、safe
+- PR Draft 包含 request、changed paths、Test Evidence、Policy、Budget、门禁审查、safe
   compare URL。
-- Acceptance Bundle 引用 Raw Request、PR Draft、diff、tests、policy、budget、review。
+- Acceptance Bundle 引用 Raw Request、PR Draft、diff、tests、policy、budget、门禁审查结果。
 - 当前 v1.3 只生成 PR handoff artifact，不创建真实 GitHub PR。
 - 系统不会自动 push、merge 或自动通过 Gate。
 - PR 只在当前 PR 节点、completed Coding Run/Diff 和最新 passing Test/report 都匹配时
   完成。
 - Acceptance Bundle 还要求已附着 PR Draft；final Acceptance 再要求 bundle、授权角色、
-  非阻断 policy、匹配的非阻断 review 和非阻断 budget decision。
+  非阻断 policy、匹配且非阻断的门禁审查和非阻断 budget decision。
 - 被拒绝的可信命令不会留下孤立的 delivery artifact/event。
 
 ## 10. Team Overview：团队视角与 redacted sync
@@ -307,7 +309,7 @@ corepack pnpm dev:electron
 - Desktop Team Overview。
 - Web Team Console。
 - 点击 Desktop 的 `同步团队`。
-- 查看 Web 是否出现 redacted Run/Test/Review/Coding/Cost summary。
+- 查看 Web 是否出现 redacted Run/Test/Review/Coding/Cost summary；内部 `Review` 类型在界面显示为“门禁审查”。
 
 通过标准：
 
@@ -315,7 +317,7 @@ corepack pnpm dev:electron
 - Team Overview 能展示项目、成员、成本、风险、delivery summary。
 - API seed mode 可以用于本地 demo；Postgres/Docker 是独立显式路径。
 - Pairing credential 必须绑定当前 `localProjectId` 与一个 Team Project。
-- 远端 Test/Review/Coding Evidence 写入前必须先有同项目 canonical Run；cross-project、
+- 远端 Test/Review/Coding Evidence 写入前必须先有同项目 canonical Run；其中内部 `Review` 对应门禁审查。cross-project、
   stale 或缺 Run 的写入会被拒绝。
 - 同 id 的本地 Run/Artifact/Event 优先于远端 summary，远端只补充 remote-only 数据。
 
@@ -393,7 +395,7 @@ corepack pnpm dev:electron
 
 这一步会产生真实模型调用，不属于默认体验。
 
-Knowledge Review 的真实模型 smoke 走 OpenAI-compatible provider：
+门禁审查的真实模型 smoke 走 OpenAI-compatible provider：
 
 ```bash
 DEVFLOW_AGENT_OPENAI_API_KEY=... \
@@ -402,7 +404,7 @@ DEVFLOW_AGENT_OPENAI_MODEL=ark-code-latest \
 corepack pnpm test:agent-live
 ```
 
-这条 smoke 验证 DevFlow Review Agent 能用真实豆包/Volcengine 模型返回结构化 review。它不验证 `opencode`。
+这条 smoke 验证门禁审查 Agent 能用真实豆包/Volcengine 模型返回结构化门禁审查结果。它不验证 `opencode`。
 
 先检查本机 runtime：
 
@@ -449,7 +451,7 @@ unset DEVFLOW_OPENCODE_PROVIDER_ID DEVFLOW_OPENCODE_MODEL_ID DEVFLOW_OPENCODE_AP
 | Local project | 工作台 | 仓库选择/测试命令 | command safety 阻断危险命令 |
 | Gate Enforcement | Inspector | policy/reason/remediation | 写路径不能绕过 blocking |
 | Knowledge | Knowledge | docs/graph/reference/check | retrieval 不等于 evidence |
-| Agent Review | Inspector/Agents | review artifact/trace/finding | finding 不 hard-block |
+| 门禁审查 | Inspector/Agents | 门禁审查 artifact/trace/finding | finding 不 hard-block |
 | Coding Agent | Build task/Agents | permission/diff/worktree | fake path 可重复、主仓不改 |
 | Tool / Skill Timeline | Agents | tool_call/tool_result/source | skill 缺失时显示 unknown/inferred |
 | Tests | 测试 | Test Evidence | redacted status/command/duration |

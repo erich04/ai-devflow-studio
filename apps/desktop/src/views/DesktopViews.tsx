@@ -438,7 +438,7 @@ export function Inspector({
       }
     }
     if (action.id === 'openKnowledgeReview' && isRunningAgentReview) {
-      return '审查中'
+      return '门禁审查中'
     }
     if (action.id === 'openTests' && isRunningTests) {
       return '测试中'
@@ -450,7 +450,7 @@ export function Inspector({
   }
   const actionAriaLabel = (action: InspectorAction) => {
     if (action.id === 'openKnowledgeReview') {
-      return 'Agent Review'
+      return '运行门禁审查'
     }
     if (action.id === 'openTests') {
       return '执行测试'
@@ -667,7 +667,7 @@ export function Inspector({
 
   const renderAgentReview = () => (
     <div className="agent-advisory-list">
-      <span className="panel-label">Knowledge Review Agent</span>
+      <span className="panel-label">基于知识的门禁审查</span>
       {latestAgentReview ? (
         <article className={`agent-advisory agent-advisory--${latestAgentReview.gateAdvisory.level}`}>
           <div className="compact-row">
@@ -682,7 +682,7 @@ export function Inspector({
           </div>
         </article>
       ) : (
-        <p className="empty-note">还没有 Agent Review。运行后会生成可审计 trace 与 token cost。</p>
+        <p className="empty-note">尚未运行门禁审查。系统会以 Knowledge 与规范为依据，审查当前 Gate 条件和阶段产物。</p>
       )}
     </div>
   )

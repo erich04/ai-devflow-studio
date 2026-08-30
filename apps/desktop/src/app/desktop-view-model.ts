@@ -292,11 +292,16 @@ export function buildKnowledgeDataSource(input: {
   }
 
   if (input.snapshot) {
+    const hasDocuments = input.snapshot.documents.length > 0
     return {
       status: 'local indexed',
-      label: input.snapshot.truncated ? 'indexed · truncated' : 'indexed',
+      label: input.snapshot.truncated
+        ? 'indexed · truncated'
+        : hasDocuments
+          ? 'indexed'
+          : 'indexed · no documents',
       detail: `${input.snapshot.documents.length} Git Markdown documents indexed at ${input.snapshot.indexedAt}.`,
-      tone: input.snapshot.truncated ? 'warn' : 'good',
+      tone: input.snapshot.truncated ? 'warn' : hasDocuments ? 'good' : 'soft',
     }
   }
 
@@ -304,7 +309,7 @@ export function buildKnowledgeDataSource(input: {
     status: 'missing contract',
     label: 'not indexed',
     detail: 'Current Electron path has not indexed the selected local repository yet.',
-    tone: 'warn',
+    tone: 'soft',
   }
 }
 
@@ -313,7 +318,7 @@ export function buildAgentProviderDataSource(provider: AgentProviderConfig | und
     return {
       status: '未配置',
       label: '未选择 Provider',
-      detail: 'Knowledge Review 尚未选择 Agent Provider。',
+      detail: '基于知识的门禁审查尚未选择 Agent Provider。',
       tone: 'soft',
     }
   }
@@ -322,7 +327,7 @@ export function buildAgentProviderDataSource(provider: AgentProviderConfig | und
     return {
       status: '开发适配器',
       label: '开发 Provider',
-      detail: '已选择本地保存的开发 Provider；Review 结果固定，不消耗 Provider Token。',
+      detail: '已选择本地保存的开发 Provider；门禁审查结果固定，不消耗 Provider Token。',
       tone: 'warn',
     }
   }

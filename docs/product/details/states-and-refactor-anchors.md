@@ -32,7 +32,7 @@ The UI should:
 - Show required role.
 - Show enforcement decision.
 - Show missing evidence.
-- Show Knowledge Review and policy findings.
+- Show Knowledge-Grounded Gate Review and policy findings for the current Gate and stage artifacts; Knowledge is the grounding, not the review subject.
 - Offer approve, reject, or override only when the write path allows it.
 
 ### Completed
@@ -91,7 +91,7 @@ These are product gaps, not necessarily immediate implementation tasks:
 - Clearer stage-completion controls for clarify and design.
 - Deeper PR draft editing and handoff.
 - Acceptance bundle preview and final signoff polish.
-- Review provider setup flow.
+- Gate Review provider setup flow.
 - Runtime budget administration UX.
 - Team collaboration and conflict visibility.
 - Deeper GitHub Delivery conflict visibility and operator ergonomics after the governed Draft path

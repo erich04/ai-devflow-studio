@@ -1519,6 +1519,39 @@ describe('App', () => {
     expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('not indexed')
   })
 
+  it('keeps unconfigured Gate Review surfaces neutral in light and dark themes', async () => {
+    const api = installDesktopApi({
+      listAgentProviders: vi.fn().mockResolvedValue([]),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+
+    expect(document.documentElement).toHaveAttribute('data-theme', 'light')
+    expect(screen.getByTestId('agent-current-task')).toHaveClass('agent-current-task--soft')
+    expect(screen.getByTestId('agent-current-task')).not.toHaveClass(
+      'agent-current-task--warn',
+      'agent-current-task--bad',
+    )
+    expect(screen.getByTestId('gate-review-path')).toHaveClass(
+      'agent-path-card--secondary',
+      'agent-path-card--soft',
+    )
+    expect(screen.getByTestId('gate-review-path')).not.toHaveClass(
+      'agent-path-card--primary',
+      'agent-path-card--warn',
+      'agent-path-card--bad',
+    )
+
+    fireEvent.click(screen.getByTestId('theme-toggle'))
+    fireEvent.click(screen.getByTestId('theme-toggle'))
+    await waitFor(() => expect(document.documentElement).toHaveAttribute('data-theme', 'dark'))
+
+    expect(screen.getByTestId('agent-current-task')).toHaveClass('agent-current-task--soft')
+    expect(screen.getByTestId('gate-review-path')).toHaveClass('agent-path-card--soft')
+  })
+
   it('mounts single and Multi-Agent observability for the exact selected Run and local project', async () => {
     const listAgentRuntimes = vi.fn().mockResolvedValue([])
     const listCoordinationSessions = vi.fn().mockResolvedValue([])
@@ -1989,7 +2022,7 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('需求澄清已生成，进入需求确认 Gate')
   })
 
-  it('completes the current clarify agent from Agents without running Knowledge Review', async () => {
+  it('completes the current clarify agent from Agents without running Gate Review', async () => {
     const api = installDesktopApi()
     render(<App />)
 
@@ -2001,7 +2034,7 @@ describe('App', () => {
 
     const agentWorkbench = await screen.findByTestId('agent-workbench')
     expect(agentWorkbench).toHaveTextContent('生成需求澄清')
-    expect(within(agentWorkbench).queryByRole('button', { name: /Run Knowledge Review/ })).not.toBeInTheDocument()
+    expect(within(agentWorkbench).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
 
     fireEvent.click(within(agentWorkbench).getByRole('button', { name: /生成需求澄清/ }))
 
@@ -3354,7 +3387,7 @@ describe('App', () => {
 
     const inspector = screen.getByTestId('node-inspector')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Policy snapshot')
-    expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Knowledge Review')
+    expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('门禁审查')
     expect(inspector).toHaveTextContent('Next best action')
     expect(inspector).toHaveTextContent('通过 Gate')
   })
@@ -3530,7 +3563,7 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Gate Enforcement')
 
     clickInspectorTab(/Evidence/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Review Agent')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('基于知识的门禁审查')
   })
 
   it('pairs the desktop client with a team project through the desktop API', async () => {
@@ -3620,12 +3653,12 @@ describe('App', () => {
             target: 'missing_agent_review',
             ruleKey: 'missing_agent_review:protected_gate:missing',
             action: 'block',
-            summary: 'Knowledge Review Agent has not reviewed this protected Gate.',
-            remediation: 'Run Knowledge Review Agent for this protected Gate.',
+            summary: '此受保护 Gate 尚未运行基于知识的门禁审查。',
+            remediation: '在审批此受保护 Gate 前运行基于知识的门禁审查。',
           },
         ],
         warningReasons: [],
-        requiredActions: ['Run Knowledge Review Agent for this protected Gate.'],
+        requiredActions: ['在审批此受保护 Gate 前运行基于知识的门禁审查。'],
         canOverride: true,
         overrideRoleRequired: 'lead',
         policySource: 'remote_cache',
@@ -3650,12 +3683,12 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('blocked')
     expect(inspector).toHaveTextContent('remote_cache')
     expect(inspector).toHaveTextContent('policy v1')
-    expect(inspector).toHaveTextContent('Knowledge Review Agent has not reviewed this protected Gate.')
-    expect(inspector).toHaveTextContent('Run Knowledge Review Agent for this protected Gate.')
-    expect(screen.getByTestId('missing-agent-review-cta')).toHaveTextContent('Gate 前置证据不足')
-    expect(screen.getByRole('button', { name: /运行 Agent Review/ })).not.toBeDisabled()
+    expect(inspector).toHaveTextContent('此受保护 Gate 尚未运行基于知识的门禁审查。')
+    expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
+    const missingReviewCta = screen.getByTestId('missing-agent-review-cta')
+    expect(missingReviewCta).toHaveTextContent('Gate 前置证据不足')
+    expect(within(missingReviewCta).getByRole('button', { name: '运行门禁审查' })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Agent Review' })).not.toBeDisabled()
     expect(screen.queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
 
     fireEvent.change(screen.getByLabelText('Lead override reason'), {
@@ -3727,7 +3760,7 @@ describe('App', () => {
             target: 'missing_agent_review',
             ruleKey: 'missing_agent_review:protected_gate:missing',
             action: 'block',
-            summary: 'Knowledge Review Agent has not reviewed this protected Gate.',
+            summary: '此受保护 Gate 尚未运行基于知识的门禁审查。',
           },
         ],
         warningReasons: [],
@@ -3779,12 +3812,12 @@ describe('App', () => {
             target: 'missing_agent_review',
             ruleKey: 'missing_agent_review:protected_gate:missing',
             action: 'block',
-            summary: 'Knowledge Review Agent has not reviewed this protected Gate.',
-            remediation: 'Run Knowledge Review Agent for this protected Gate.',
+            summary: '此受保护 Gate 尚未运行基于知识的门禁审查。',
+            remediation: '在审批此受保护 Gate 前运行基于知识的门禁审查。',
           },
         ],
         warningReasons: [],
-        requiredActions: ['Run Knowledge Review Agent for this protected Gate.'],
+        requiredActions: ['在审批此受保护 Gate 前运行基于知识的门禁审查。'],
         canOverride: true,
         overrideRoleRequired: 'lead',
         policySource: 'remote_cache',
@@ -3816,7 +3849,7 @@ describe('App', () => {
     const inspector = clickInspectorTab(/Gate条件/)
     expect(inspector).toHaveTextContent('Rejected override')
     expect(inspector).toHaveTextContent('Rejected by team policy because version 1 is stale.')
-    expect(inspector).toHaveTextContent('Run Knowledge Review Agent for this protected Gate.')
+    expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
     expect(screen.getByRole('button', { name: /通过 Gate/ })).toBeDisabled()
   })
 
@@ -4137,18 +4170,18 @@ describe('App', () => {
     expect(screen.getByTestId('focused-event')).toHaveTextContent('degraded 状态定义')
   })
 
-  it('opens Agents from the inspector, runs Knowledge Review, and returns to the current inspector', async () => {
+  it('opens Agents from the inspector, runs Gate Review, and returns to the current inspector', async () => {
     const api = installDesktopApi()
     render(<App />)
 
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /Agent Review/ }))
+    fireEvent.click(screen.getByRole('button', { name: /运行门禁审查/ }))
 
     expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('来自 Workbench Inspector')
-    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('运行 Knowledge Review 并补齐 Gate Advisory')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('运行门禁审查并补齐 Gate Advisory')
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: /Run Knowledge Review/ }))
+    fireEvent.click(screen.getByRole('button', { name: /运行门禁审查/ }))
 
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
       runId: fixtureRuns[0]!.id,
@@ -4156,7 +4189,7 @@ describe('App', () => {
       runtime: 'electron',
       providerId: agentProvider.id,
     })))
-    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Knowledge Review Agent')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('基于知识的门禁审查')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('warning-only')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Build redacted context')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('estimated')
@@ -4164,11 +4197,11 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
     expect(await screen.findByTestId('node-inspector')).toBeInTheDocument()
     clickInspectorTab(/Evidence/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Review Agent')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('基于知识的门禁审查')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
   })
 
-  it('runs the required Knowledge Review from final acceptance enforcement', async () => {
+  it('runs the required Gate Review from final acceptance enforcement', async () => {
     const recommended = createRecommendedEnforcementPreset({
       organizationId: 'org-demo',
       updatedAt: '2026-06-18T00:00:00.000Z',
@@ -4199,11 +4232,11 @@ describe('App', () => {
           target: 'missing_agent_review',
           ruleKey: 'missing_agent_review:protected_gate:missing',
           action: 'block',
-          summary: 'Knowledge Review Agent has not reviewed final acceptance.',
-          remediation: 'Run Knowledge Review Agent for final acceptance.',
+          summary: '最终验收尚未运行基于知识的门禁审查。',
+          remediation: '为最终验收运行基于知识的门禁审查。',
         }],
         warningReasons: [],
-        requiredActions: ['Run Knowledge Review Agent for final acceptance.'],
+        requiredActions: ['为最终验收运行基于知识的门禁审查。'],
         canOverride: false,
         overrideRoleRequired: 'lead',
         policySource: 'remote_cache',
@@ -4220,11 +4253,11 @@ describe('App', () => {
       projectId: acceptanceRun.projectId,
     }))
     const inspector = screen.getByTestId('node-inspector')
-    fireEvent.click(within(inspector).getByRole('button', { name: /运行 Agent Review/ }))
+    fireEvent.click(within(inspector).getByRole('button', { name: /运行门禁审查/ }))
 
     const agentWorkbench = await screen.findByTestId('agent-workbench')
     expect(agentWorkbench).toHaveTextContent('业务验收')
-    const runReview = within(agentWorkbench).getByRole('button', { name: /Run Knowledge Review/ })
+    const runReview = within(agentWorkbench).getByRole('button', { name: /运行门禁审查/ })
     expect(runReview).toBeEnabled()
     fireEvent.click(runReview)
 

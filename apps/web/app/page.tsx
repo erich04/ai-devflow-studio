@@ -532,11 +532,11 @@ export default async function Page({ searchParams }: PageProps) {
             </dl>
 
             <div className="studio-advisory">
-              <strong>{gateReview?.gateAdvisory.summary ?? '此 Run 尚无 Review 结论。'}</strong>
+              <strong>{gateReview?.gateAdvisory.summary ?? '此 Run 尚未运行基于知识的门禁审查。'}</strong>
               <p>
                 {gateReview
                   ? `${gateReview.policyFindings.length} policy findings · ${gateReview.missingEvidence.length} missing evidence`
-                  : '触发后端审查后，这里会显示模型、知识引用、缺失证据和建议测试。'}
+                  : '运行后会以 Knowledge 与规范为依据，审查当前 Gate 条件和阶段产物，并显示引用、缺失证据和建议测试。'}
               </p>
             </div>
 
@@ -547,7 +547,7 @@ export default async function Page({ searchParams }: PageProps) {
               <input type="hidden" name="providerId" value={knowledgeReviewProviderId} />
               <button type="submit" disabled={!activeRun || !gateNode}>
                 <Bot size={16} />
-                触发后端审查
+                运行门禁审查
               </button>
             </form>
 

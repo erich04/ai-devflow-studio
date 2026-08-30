@@ -20,7 +20,7 @@ Storage and contracts can stay uniform, but UI language should change by Node ty
 | Term | Product Meaning | Typical Examples |
 |---|---|---|
 | Artifact | A durable work product or report produced by work on a Run or Node. | Raw Request, Clarification Brief, Design Brief, Coding Diff, PR Draft, Acceptance Bundle, Gate Report |
-| Evidence | Durable proof used to support a Gate or delivery decision. | Passing test evidence, Knowledge Review result, policy check, budget approval, redacted team summary |
+| Evidence | Durable proof used to support a Gate or delivery decision. | Passing test evidence, Knowledge-Grounded Gate Review result, policy check, budget approval, redacted team summary |
 | Trace | Time-ordered execution or audit history explaining how something happened. | Agent events, tool calls, permission relay, runtime steps, cleanup events |
 | Decision | A formal outcome that changes whether the Run may continue. | Gate approved, Gate blocked, override accepted, override rejected, budget approved |
 
@@ -84,7 +84,7 @@ Inspector tabs should follow Node semantics rather than a single universal layou
 |---|---|
 | Task | Status, produced Artifacts, Trace, Gate impact |
 | Gate | Status, Gate conditions, Evidence, Decision, Remediation |
-| Review | Status, Knowledge Review, References, Evidence, Trace |
+| Review | Status, Gate Review, References, Evidence, Trace |
 | Runtime Build | Status, Coding Agent state, Diff, Test Evidence, Trace |
 | Test | Status, test command, Test Evidence, failure details, rerun action |
 | PR Delivery | Status, PR Delivery Package, Delivery Intent/Request, approval, recovery action, verified remote head, Draft pull request |

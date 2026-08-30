@@ -1818,7 +1818,7 @@ describe('team API route resolver', () => {
       status: 400,
       body: {
         error: 'bad_request',
-        message: 'Knowledge Review requires the current run node.',
+        message: 'Knowledge-Grounded Gate Review requires the current Run node.',
       },
     })
     expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
@@ -1848,7 +1848,7 @@ describe('team API route resolver', () => {
       status: 400,
       body: {
         error: 'bad_request',
-        message: 'Knowledge Review requires a Gate or Acceptance node.',
+        message: 'Knowledge-Grounded Gate Review requires a Gate or Acceptance node.',
       },
     })
     expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
@@ -1878,7 +1878,7 @@ describe('team API route resolver', () => {
       status: 400,
       body: {
         error: 'bad_request',
-        message: 'Knowledge Review requires a running or blocked node.',
+        message: 'Knowledge-Grounded Gate Review requires a running or blocked node.',
       },
     })
     expect(repository.getAgentProviderCredential).not.toHaveBeenCalled()
@@ -1952,7 +1952,7 @@ describe('team API route resolver', () => {
       status: 400,
       body: {
         error: 'bad_request',
-        message: 'Fake Knowledge Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.',
+        message: 'Fake Gate Review requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.',
       },
     })
   })

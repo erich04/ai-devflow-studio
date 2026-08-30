@@ -30,7 +30,7 @@ Web 人工审批 → 发布分支并创建 Draft PR
 Agent 能力嵌在这条 Workflow 里，而不是绕开 Workflow 单独工作：
 
 - Workflow Stage Agent 生成澄清和设计产物。
-- Knowledge Review Agent 查找知识、指出风险和缺失证据。
+- 门禁审查 Agent 执行基于知识的门禁审查（Knowledge-Grounded Gate Review）：以检索到的知识和规范为依据，审查当前 Gate、门禁条件及阶段产物，指出风险和缺失证据。
 - Coding Agent 通过 CRI 接入本地执行器或 OpenCode，在 managed worktree 中产生受控 diff。
 - Agent 可以给建议、请求权限和生成证据，但不能替人通过 Gate，也不能自行批准 GitHub 发布。
 
@@ -44,7 +44,7 @@ V2.2 还支持有边界的单组 Agent / Multi-Agent Coordination。本手册只
 | --- | --- |
 | 教学任务 | `新手演练：验证本地工作流` |
 | Workflow | Clarify、Design、Build、Test 已完成 |
-| Knowledge Review | 两个 Gate 前各运行一次，均为 warning-only |
+| 门禁审查 | 两个 Gate 前各运行一次，均为 warning-only |
 | Coding Agent | 完成 1 个受控文件修改 |
 | 测试命令 | `npm test` |
 | 测试结果 | 通过，证据已归档 |
@@ -139,18 +139,18 @@ V2.2 还支持有边界的单组 Agent / Multi-Agent Coordination。本手册只
 
 完成后流程不会直接进入设计，而是停在“需求确认 Gate”。
 
-### 第 7 步：运行 Knowledge Review，再通过需求 Gate
+### 第 7 步：运行门禁审查，再通过需求 Gate
 
-在 Gate 的 Inspector 中点击“去 Agents 运行 Review”，然后点击 `Run Knowledge Review`。
+在 Gate 的 Inspector 中点击“去 Agents 运行门禁审查”，然后点击“运行门禁审查”。
 
-![需求 Gate 的 Knowledge Review](./screenshots/v2.2-beginner-manual/11-knowledge-review.jpg)
+![需求 Gate 的门禁审查](./screenshots/v2.2-beginner-manual/11-knowledge-review.jpg)
 
-本次 Review 读取了 4 个知识引用，给出 `warn`、82% 置信度，并指出还需要测试证据。这个 warning 不会自动批准或拒绝 Gate。
+本次门禁审查以 4 个知识引用为依据，对当前需求 Gate 和澄清产物进行检查，给出 `warn`、82% 置信度，并指出仍缺少测试证据。该建议不会自动批准或拒绝 Gate。
 
 返回 Inspector，确认以下内容后点击“通过 Gate”：
 
 - 上游澄清产物已关联。
-- Knowledge Review advisory 已存在。
+- 门禁审查建议（Gate Advisory）已存在。
 - Policy snapshot 允许当前用户审批。
 
 ![需求 Gate 可以审批](./screenshots/v2.2-beginner-manual/12-clarification-gate-ready.jpg)
@@ -161,9 +161,9 @@ V2.2 还支持有边界的单组 Agent / Multi-Agent Coordination。本手册只
 
 ![方案设计已生成](./screenshots/v2.2-beginner-manual/13-design-generated.jpg)
 
-方案完成后再次进入 Gate。按相同方式运行 Knowledge Review，确认风险和缺失证据，再通过“方案评审 Gate”。
+方案完成后再次进入 Gate。按相同方式运行门禁审查，以知识和规范为依据检查当前方案 Gate 及设计产物，再通过“方案评审 Gate”。
 
-![方案 Knowledge Review](./screenshots/v2.2-beginner-manual/14-design-knowledge-review.jpg)
+![方案 Gate 的门禁审查](./screenshots/v2.2-beginner-manual/14-design-knowledge-review.jpg)
 
 两个 Gate 都通过后，开发实现节点才成为当前步骤。
 
@@ -234,7 +234,7 @@ Coding Agent 已经运行过保存的测试，但 Workflow 仍要求在“测试
 - 精确 coding source 和 commit
 - changed paths 与 diff digest
 - 测试证据版本与 digest
-- policy、budget 和 Review 摘要
+- policy、budget 和门禁审查摘要
 
 ![PR Delivery Package 已生成](./screenshots/v2.2-beginner-manual/20-pr-delivery-package.jpg)
 
@@ -330,7 +330,7 @@ Coding Agent 的 saved test 证明它自己的改动通过；测试节点的执�
 | Run | 一条 Work Request 的本地 Workflow 实例 |
 | Node | Workflow 中的一个步骤 |
 | Artifact | 澄清、设计、diff、报告、交付包等产物 |
-| Evidence | 测试、Review、权限和执行结果等证据 |
+| Evidence | 测试、门禁审查、权限和执行结果等证据 |
 | Trace | Agent 或 Workflow 的执行过程记录 |
 | Gate | 必须由人核对并批准的流程关口 |
 | managed worktree | Coding Agent 使用的隔离 Git 工作目录 |

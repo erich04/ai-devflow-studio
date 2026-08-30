@@ -877,7 +877,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('agent-workbench')).toContainText('Agent 执行台')
     await expect(page.getByTestId('agent-workbench')).toContainText('doubao-review')
     await expect(
-      page.getByRole('button', { name: /Run Knowledge Review/ }),
+      page.getByRole('button', { name: /运行门禁审查/ }),
     ).toHaveCount(0)
     await page.getByRole('button', { name: /生成需求澄清/ }).click()
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成，进入需求确认 Gate')
@@ -886,9 +886,9 @@ test.describe('AI DevFlow desktop workbench', () => {
       .click()
     await page.getByRole('button', { name: /^Agents$/ }).click()
     await expect(page.getByTestId('agent-workbench')).toContainText('需求确认 Gate')
-    await expect(page.getByRole('button', { name: /Run Knowledge Review/ })).toBeEnabled()
-    await page.getByRole('button', { name: /Run Knowledge Review/ }).click()
-    await expect(page.getByTestId('toast')).toContainText('Knowledge Review 已归档')
+    await expect(page.getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+    await page.getByRole('button', { name: /运行门禁审查/ }).click()
+    await expect(page.getByTestId('toast')).toContainText('基于知识的门禁审查已归档')
     await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
     await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')
 
@@ -904,7 +904,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByLabel('Search runs and knowledge').fill('')
 
     await page.getByRole('button', { name: /^Agents$/ }).click()
-    await expect(page.getByTestId('agent-workbench')).toContainText('Knowledge Review Agent')
+    await expect(page.getByTestId('agent-workbench')).toContainText('基于知识的门禁审查')
     await expect(page.getByTestId('agent-workbench')).toContainText('doubao-review')
     await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
     await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')

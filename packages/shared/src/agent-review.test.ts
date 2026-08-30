@@ -504,7 +504,7 @@ describe('runKnowledgeReviewAgent', () => {
     })
 
     expect(result.review).toMatchObject({
-      conclusion: expect.stringContaining('Knowledge Review'),
+      conclusion: expect.stringContaining('Gate Review'),
       confidence: expect.any(Number),
       gateAdvisory: {
         level: 'warn',

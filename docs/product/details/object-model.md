@@ -54,7 +54,7 @@ raw request, clarification, design, coding diff, PR draft, and acceptance eviden
 ## Evidence
 
 Any durable proof that supports a Gate or delivery decision. Evidence includes artifacts, test
-evidence, Knowledge Review results, policy decisions, budget decisions, runtime trace, permission
+evidence, Knowledge-Grounded Gate Review results, policy decisions, budget decisions, runtime trace, permission
 decisions, and redacted team summaries.
 
 ## Trace
@@ -67,11 +67,12 @@ events, tool calls, permission relay, runtime steps, and cleanup events.
 A formal outcome that changes whether the Run may continue. Decisions include Gate approval,
 blocking decisions, override acceptance or rejection, and budget approval.
 
-## Agent Review
+## Knowledge-Grounded Gate Review
 
-A structured review result produced from DevFlow-owned context and a model provider. It can produce
-risks, missing evidence, suggested tests, policy findings, references, token usage, trace steps, and a
-Gate Advisory.
+A structured result that uses retrieved Knowledge as grounding to evaluate the current Gate, its
+conditions, and associated stage artifacts and evidence. It can produce risks, missing evidence,
+suggested tests, policy findings, references, token usage, trace steps, and a Gate Advisory. It does
+not approve the Gate by itself.
 
 ## Coding Agent Run
 
@@ -82,7 +83,7 @@ state, and redacted summary sync. The external coding engine owns actual code ge
 ## PR Delivery Package
 
 A metadata-only handoff artifact containing request, design, changed-path, Test Evidence, policy,
-budget, and Agent Review summaries. It is not source code, repository identity, branch authority, or
+budget, and Gate Review summaries. It is not source code, repository identity, branch authority, or
 a credential container.
 
 ## Delivery Intent

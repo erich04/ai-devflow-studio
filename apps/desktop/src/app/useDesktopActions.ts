@@ -616,7 +616,7 @@ export function useDesktopActions(input: {
     }
 
     if (!desktopApi) {
-      setToast('请在 Electron 应用中运行 Knowledge Review Agent')
+      setToast('请在 Electron 应用中运行基于知识的门禁审查')
       return
     }
     if (!selectedAgentProviderId) {
@@ -625,7 +625,7 @@ export function useDesktopActions(input: {
     }
 
     setIsRunningAgentReview(true)
-    setToast('Knowledge Review Agent 正在生成审查意见...')
+    setToast('基于知识的门禁审查正在生成审查意见...')
 
     try {
       const result = await desktopApi.runKnowledgeReview({
@@ -643,9 +643,9 @@ export function useDesktopActions(input: {
       setSelectedRunId(result.review.runId)
       setSelectedNodeId(result.review.nodeId)
       setActiveView('agents')
-      setToast('Knowledge Review 已归档，Gate Advisory 已生成')
+      setToast('基于知识的门禁审查已归档，Gate Advisory 已生成')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : 'Knowledge Review Agent 运行失败')
+      setToast(error instanceof Error ? error.message : '基于知识的门禁审查运行失败')
     } finally {
       setIsRunningAgentReview(false)
     }

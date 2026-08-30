@@ -49,7 +49,7 @@ preserving the evidence needed for human review.
 
 - Developer: runs local AI-assisted work, manages repository context, approves local tool access,
   captures tests and diffs, and syncs redacted summaries.
-- Tech Lead / Reviewer: evaluates Gates, policy findings, Knowledge Review output, test evidence,
+- Tech Lead / Reviewer: evaluates Gates, policy findings, Knowledge-Grounded Gate Review output, test evidence,
   PR draft handoff, and acceptance readiness.
 - Team Manager / Project Owner: monitors project delivery health, active Runs, evidence coverage,
   policy state, runtime budget usage, and team workflow adoption.
@@ -86,8 +86,8 @@ preserving the evidence needed for human review.
     just a decorative UI action.
 15. As a tech lead, I want Gate approval to be enforced in write paths, so that disabled buttons are
     not the only protection.
-16. As a tech lead, I want to see Knowledge Review findings, so that risks and missing evidence are
-    surfaced before risky stages.
+16. As a tech lead, I want to see Gate Review findings grounded in retrieved Knowledge, so that risks
+    and missing evidence in the current Gate and its stage artifacts are surfaced before risky stages.
 17. As a tech lead, I want policy warnings, blockers, hard-blocks, and override paths to be explicit,
     so that governance decisions are auditable.
 18. As a tech lead, I want override decisions to require a reason and role-aware constraints, so that
@@ -112,7 +112,7 @@ preserving the evidence needed for human review.
     evidence status, so that I can decide what to do next quickly.
 28. As a developer, I want browser preview to avoid a second workflow engine and fail closed for
     execution actions, so that only the Electron main-process runtime can advance trusted state.
-29. As a lead, I want redacted Agent Review and Coding Agent summaries in the team view, so that local
+29. As a lead, I want redacted Gate Review and Coding Agent summaries in the team view, so that local
     execution is visible without exposing raw data.
 30. As a small team, I want a self-hosted deployment path, so that we can validate DevFlow without
     waiting for public SaaS readiness.
@@ -157,7 +157,8 @@ preserving the evidence needed for human review.
   external-directory details must not sync by default.
 - Renderer code cannot submit Run/Test/Coding summaries directly; Electron main derives remote
   summaries from canonical LocalStore state, and API/Repository ingestion reapplies redaction.
-- Test/Review/Coding summaries are child-first and scope-immutable. Only an explicit missing
+- Test/Review/Coding summaries are child-first and scope-immutable; `Review` remains the internal
+  Gate Review summary type. Only an explicit missing
   canonical Run may trigger one latest-Run upload and one child retry; durable outbox/backoff is a
   v1.4 reliability concern rather than a hidden v1.3 renderer retry loop.
 - Team-bound structured metadata, model/cost, and budget/reason objects use strict allowlist
@@ -177,13 +178,14 @@ preserving the evidence needed for human review.
   actor, exact Run/Node, and creator/node-owner separation of duties.
 - Knowledge Governance Checks and Agent Policy Findings inform Gate decisions but do not replace
   human review.
-- A remote Agent Review must carry the minimal redacted policy-finding details needed to reconstruct
+- A remote Gate Review summary must carry the minimal redacted policy-finding details needed to reconstruct
   exact blocker IDs; a count without those findings is not sufficient Gate evidence.
 
 ### Agent Runtime Boundaries
 
-- Knowledge Review uses DevFlow-owned context assembly, evidence selection, redaction, prompts, and
-  structured result interpretation.
+- Knowledge-Grounded Gate Review uses retrieved Knowledge as grounding and treats the current Gate,
+  its conditions, and stage artifacts and evidence as the review subject. DevFlow owns context
+  assembly, evidence selection, redaction, prompts, and structured result interpretation.
 - Coding Agent work uses a managed runtime adapter. DevFlow owns context assembly, permission relay,
   worktree management, evidence capture, tests, traces, cleanup state, and redacted summaries.
 - External model or coding providers own inference and code generation only.
@@ -210,7 +212,7 @@ preserving the evidence needed for human review.
 ### Team Console And Self-Hosted Pilot
 
 - Web Team Console shows redacted delivery health, active Runs, Gate status, evidence coverage,
-  Agent Review summaries, Test Evidence, policy state, budget state, and Desktop pairing.
+  Gate Review summaries, Test Evidence, policy state, budget state, and Desktop pairing.
 - API backend owns authenticated team state, project membership, policy persistence, budget
   persistence, pairing, GitHub repository bindings, Delivery Requests, signed approvals, and
   redacted sync ingestion.
@@ -228,13 +230,13 @@ preserving the evidence needed for human review.
 ### PR Delivery And Acceptance
 
 - PR stage creates a metadata-only PR Delivery Package from request, design, changed paths, tests,
-  policy, budget, and Agent Review evidence.
+  policy, budget, and Gate Review evidence.
 - Desktop prepares an immutable Delivery Intent, and Team creates a redacted Delivery Request for
   separate signed Web approval before any GitHub write.
 - After approval, Desktop publishes only the expected commit and API creates or reconciles one Draft
   pull request after independently verifying the remote head.
 - Acceptance stage creates an evidence bundle that references the original request, PR draft, diff,
-  tests, policy, budget, review summaries, Delivery Intent, exact remote head, and Draft URL.
+  tests, policy, budget, Gate Review summaries, Delivery Intent, exact remote head, and Draft URL.
 - Acceptance rejects a handoff-only PR artifact when GitHub Delivery is enabled. Acceptance never
   merges, closes, or mutates the pull request.
 
@@ -251,7 +253,7 @@ preserving the evidence needed for human review.
   path.
 - Keep the PR Delivery Package separate from source/repository authority and require the governed
   GitHub Delivery state machine for a real Draft pull request.
-- Keep policy, tests, Knowledge Review, budget, and Agent traces visible around the delivery
+- Keep policy, tests, Gate Review, budget, and Agent traces visible around the delivery
   workflow instead of hiding them in separate admin-only screens.
 - Keep deterministic fake runtime paths available for CI and local verification.
 
@@ -290,7 +292,7 @@ preserving the evidence needed for human review.
 - Team-visible sync excludes raw local paths, prompts, stdout, stderr, patches, and secrets.
 - Remote Run state has one active current Node; dependent summary IDs cannot be rebound or used to
   advance, synthesize, or reactivate a Run.
-- A reviewer can inspect Knowledge Review, policy, test, budget, and evidence state before approval.
+- A reviewer can inspect Gate Review, policy, test, budget, and evidence state before approval.
 - A lead can approve, reject, or override Gates only through guarded paths.
 - Web Team Console can show redacted project and Run delivery health.
 - Runtime budget policy and approval state are visible where paid provider usage is relevant.

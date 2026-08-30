@@ -118,12 +118,12 @@ function trace(run: WorkflowRun): AgentTrace {
 }
 
 describe('agent console view model', () => {
-  it('uses Knowledge Review as the primary action for Gate and Review-like nodes', () => {
+  it('uses the knowledge-grounded Gate Review as the primary action for Gate and Review-like nodes', () => {
     const viewModel = buildAgentConsoleViewModel(baseInput())
 
     expect(viewModel.title).toBe('Agent 执行台')
     expect(viewModel.primaryAction.id).toBe('run-review')
-    expect(viewModel.primaryAction.label).toBe('Run Knowledge Review')
+    expect(viewModel.primaryAction.label).toBe('运行门禁审查')
     expect(viewModel.pathStatuses.find((section) => section.id === 'review')?.emphasis).toBe('primary')
   })
 
@@ -259,7 +259,14 @@ describe('agent console view model', () => {
 
     expect(viewModel.primaryAction.id).toBe('run-review')
     expect(viewModel.primaryAction.disabled).toBe(true)
+    expect(viewModel.primaryAction.tone).toBe('soft')
     expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。')
+    expect(viewModel.advisory.tone).toBe('soft')
+    expect(viewModel.pathStatuses.find((section) => section.id === 'review')).toMatchObject({
+      title: '基于知识的门禁审查',
+      tone: 'soft',
+      emphasis: 'secondary',
+    })
   })
 
   it('keeps workflow agent actions disabled with Agent Provider copy when provider is missing', () => {
@@ -277,7 +284,7 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider ID、Base URL、Model 和 API Key。')
   })
 
-  it('keeps PR delivery in Workbench and offers Knowledge Review for acceptance', () => {
+  it('keeps PR delivery in Workbench and offers Gate Review for acceptance', () => {
     const prRun = runWithCurrentNode('n-pr')
     const prViewModel = buildAgentConsoleViewModel(baseInput({
       selectedRun: prRun,
@@ -292,7 +299,7 @@ describe('agent console view model', () => {
     expect(prViewModel.primaryAction.id).toBe('return-workbench')
     expect(acceptanceViewModel.primaryAction).toMatchObject({
       id: 'run-review',
-      label: 'Run Knowledge Review',
+      label: '运行门禁审查',
       disabled: false,
     })
   })

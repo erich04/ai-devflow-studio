@@ -476,7 +476,7 @@ export function buildAgentReviewContext({
 
 export function createKnowledgeReviewPrompt(context: AgentReviewContext): string {
   return [
-    'You are DevFlow Knowledge Review Agent.',
+    'You are DevFlow Knowledge-Grounded Gate Review Agent.',
     'Review the selected workflow node using only the provided redacted context.',
     'Return structured review JSON with conclusion, risks, missingEvidence, suggestedTests, confidence.',
     `Run: ${context.run.title}`,
@@ -536,7 +536,7 @@ export async function runBudgetedKnowledgeReviewAgent({
       blocksRun: false,
       currentSpendUsd: 0,
       projectedCostUsd: 0,
-      reason: 'Trusted fake Knowledge Review provider is explicitly no-cost.',
+      reason: 'Trusted fake Gate Review provider is explicitly no-cost.',
     }
     const execution = await runKnowledgeReviewAgent({
       request,
@@ -587,7 +587,7 @@ export async function runBudgetedKnowledgeReviewAgent({
     blocksRun: true,
     currentSpendUsd: 0,
     projectedCostUsd: preflight.projectedCostUsd,
-    reason: 'Runtime budget guard is unavailable for this Knowledge Review.',
+    reason: 'Runtime budget guard is unavailable for this Knowledge-Grounded Gate Review.',
   }
 
   return {
@@ -619,7 +619,7 @@ export function createFakeAgentProvider(): AgentProvider {
 
       return {
         model: 'fake',
-        conclusion: `Knowledge Review ready for ${input.context.node.title}.`,
+        conclusion: `Gate Review ready for ${input.context.node.title}.`,
         summary: `Reviewed ${input.context.knowledgeReferences.length} knowledge references: ${readableReferenceList(input.context)}.`,
         risks,
         missingEvidence,
@@ -938,7 +938,7 @@ export function createAgentReviewArtifacts(result: AgentReviewExecutionResult): 
     runId: result.review.runId,
     nodeId: result.review.nodeId,
     kind: 'agent_review',
-    title: 'Knowledge Review Agent report',
+    title: 'Knowledge-Grounded Gate Review report',
     summary: result.review.summary,
     content: [
       result.review.conclusion,

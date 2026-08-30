@@ -111,10 +111,10 @@ export function GateEnforcementPanel({
           ) : null}
           {hasMissingAgentReview ? (
             <div className="enforcement-cta" data-testid="missing-agent-review-cta">
-              <p>Gate 前置证据不足。先运行 Agent Review，再重新评估 Gate。</p>
+              <p>Gate 前置证据不足。先运行基于知识的门禁审查，再重新评估 Gate。</p>
               {onRunKnowledgeReview ? (
                 <button className="ghost-button" onClick={onRunKnowledgeReview}>
-                  运行 Agent Review
+                  运行门禁审查
                 </button>
               ) : null}
             </div>
