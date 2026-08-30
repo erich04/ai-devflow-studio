@@ -171,6 +171,96 @@ describe('buildCodingRuntimeActionProjection', () => {
     }
   })
 
+  it('requires exact final Diff, canonical Test Evidence, and worktree bindings for Change Acceptance', () => {
+    const digest = 'a'.repeat(64)
+    const run = codingRun('waiting_permission', {
+      engine: 'opencode-http',
+      managedWorkspaceId: 'workspace-acceptance',
+      diffArtifactId: 'diff-acceptance',
+      testEvidenceId: 'test-acceptance',
+      changedPaths: ['src/a.ts'],
+    })
+    const request = permission({
+      origin: 'change_acceptance',
+      title: 'Accept the final OpenCode changes',
+      diffArtifactId: 'diff-acceptance',
+      diffSourceDigest: digest,
+      testEvidenceId: 'test-acceptance',
+      managedWorkspaceId: 'workspace-acceptance',
+      diffPreview: 'diff --git a/src/a.ts b/src/a.ts\n+accepted',
+    })
+    delete request.changeSetId
+    delete request.changeSetDigest
+    const workspace: ManagedCodingWorkspace = {
+      id: 'workspace-acceptance',
+      projectId: 'project-1',
+      codingRunId: run.id,
+      sourcePath: '/repo',
+      worktreePath: '/worktree',
+      branchName: run.branchName,
+      baseBranch: 'main',
+      createdAt: now,
+      cleanupStatus: 'active',
+    }
+    const evidence = {
+      id: 'test-acceptance',
+      runId: run.runId,
+      nodeId: run.nodeId,
+      projectId: run.projectId,
+      command: 'pnpm test',
+      cwd: '<workspace>',
+      status: 'passed' as const,
+      exitCode: 0,
+      durationMs: 12,
+      stdout: 'passed',
+      stderr: '',
+      summary: 'Canonical test passed.',
+      redacted: true,
+      createdAt: now,
+    }
+    const diff = {
+      id: 'diff-acceptance',
+      runId: run.runId,
+      nodeId: run.nodeId,
+      projectId: run.projectId,
+      changedPaths: ['src/a.ts'],
+      patch: request.diffPreview!,
+      sourceDigest: digest,
+      truncated: false,
+      redacted: false,
+      createdAt: now,
+    }
+
+    const verified = project({
+      codingRuns: [run],
+      permissionRequests: [request],
+      workspaces: [workspace],
+      diffArtifacts: [diff],
+      testEvidence: [evidence],
+    })
+    expect(verified.action.label).toBe('审查并接收最终修改')
+    expect(verified.permission).toMatchObject({
+      kind: 'change-acceptance',
+      canApprove: true,
+      previewVerified: true,
+      changedPaths: ['src/a.ts'],
+      diffArtifact: { id: 'diff-acceptance' },
+      testEvidence: { status: 'passed' },
+    })
+
+    const stale = project({
+      codingRuns: [run],
+      permissionRequests: [request],
+      workspaces: [workspace],
+      diffArtifacts: [{ ...diff, sourceDigest: 'b'.repeat(64) }],
+      testEvidence: [evidence],
+    })
+    expect(stale.permission).toMatchObject({
+      canApprove: false,
+      staleReason: '最终 Diff、权威测试或 managed worktree 已变化，不能接收。',
+    })
+  })
+
   it('selects by run, node and project and blocks a conflicting active project run', () => {
     const result = project({
       codingRuns: [
@@ -269,6 +359,29 @@ describe('buildCodingRuntimeActionProjection', () => {
     expect(result.terminal?.trace).toEqual([
       expect.objectContaining({ id: 'event-1', message: 'Saved test failed.' }),
     ])
+  })
+
+  it('hides legacy-unverified cost instead of presenting the saved number as settled', () => {
+    const result = project({
+      codingRuns: [codingRun('failed', {
+        runtimeCostSummary: {
+          id: 'legacy-cost', runId: 'run-1', nodeId: node.id, userId: 'user-1', projectId: 'project-1',
+          provider: 'openai', providerId: 'provider-1', model: 'legacy-model', inputTokens: 90,
+          outputTokens: 10, cacheReadTokens: null, cacheMissTokens: null, totalTokens: 100,
+          cacheHitRate: null, usageStatus: 'legacy_unknown', costStatus: 'legacy_unverified',
+          costUsd: 0.01, pricingSnapshot: null, breakdown: null, timestamp: now,
+          source: 'provider_reported', redacted: true,
+        },
+      })],
+    })
+
+    expect(result.terminal).toMatchObject({
+      usageStatus: 'legacy_unknown',
+      costStatus: 'legacy_unverified',
+      cacheReadTokens: null,
+      cacheMissTokens: null,
+      costUsd: null,
+    })
   })
 
   it('keeps completed history read-only and removes start/retry', () => {

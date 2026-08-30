@@ -124,7 +124,14 @@ describe('agent console view model', () => {
     expect(viewModel.title).toBe('Agent 执行台')
     expect(viewModel.primaryAction.id).toBe('run-review')
     expect(viewModel.primaryAction.label).toBe('运行门禁审查')
-    expect(viewModel.pathStatuses.find((section) => section.id === 'review')?.emphasis).toBe('primary')
+    expect(viewModel.pathStatuses.find((section) => section.id === 'review')?.emphasis).toBe('secondary')
+    expect(viewModel.primaryActionImpact).toEqual({
+      object: `${viewModel.currentTarget.runTitle} · ${viewModel.currentTarget.nodeTitle}`,
+      result: '生成基于知识的门禁审查结论、引用和 Trace（执行轨迹）。',
+      providerAndCost: '调用 doubao-review / ark-code-latest；会记录 token，并可能产生 Provider 费用。',
+      repository: '只读使用已索引 Knowledge（知识）与阶段证据，不修改仓库文件。',
+      workflow: '只提供 Gate 建议，不会批准 Gate，也不会推进 Workflow（工作流）。',
+    })
   })
 
   it('uses the workflow stage agent as the primary action for clarify nodes', () => {
@@ -186,10 +193,17 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.id).toBe('complete-agent-node')
     expect(viewModel.primaryAction.label).toBe('生成设计方案')
     expect(viewModel.primaryAction.summary).toContain('运行当前设计 Agent')
-    expect(viewModel.currentTarget.nodeKind).toBe('Task')
+    expect(viewModel.currentTarget.nodeKind).toBe('Task（任务）')
     expect(viewModel.currentTarget.nodeStatus).toBe('已完成')
     expect(viewModel.pathStatuses.map((section) => section.id)).not.toContain('review')
     expect(viewModel.pathStatuses.map((section) => section.id)).not.toContain('coding')
+    expect(viewModel.primaryActionImpact).toEqual({
+      object: `${run.title} · 方案设计`,
+      result: '生成设计方案 Artifact（阶段产物）和测试策略。',
+      providerAndCost: '调用 doubao-review / ark-code-latest；会记录 token，并可能产生 Provider 费用。',
+      repository: '只读检查仓库上下文，不修改仓库文件。',
+      workflow: '成功后完成当前设计节点，并推进到方案评审 Gate；不会自动批准 Gate。',
+    })
   })
 
   it('uses Coding Agent as the primary action for build task nodes', () => {
@@ -200,8 +214,13 @@ describe('agent console view model', () => {
     }))
 
     expect(viewModel.primaryAction.id).toBe('run-coding')
-    expect(viewModel.primaryAction.label).toBe('Run Coding Agent')
-    expect(viewModel.pathStatuses.find((section) => section.id === 'coding')?.emphasis).toBe('primary')
+    expect(viewModel.primaryAction.label).toBe('启动 Coding Agent')
+    expect(viewModel.pathStatuses.find((section) => section.id === 'coding')?.emphasis).toBe('secondary')
+    expect(viewModel.primaryActionImpact).toMatchObject({
+      providerAndCost: expect.stringContaining('Coding Executor / Provider'),
+      repository: expect.stringContaining('受管 worktree（工作树）'),
+      workflow: expect.stringContaining('不会自动批准后续 Gate'),
+    })
   })
 
   it('keeps Tests as the primary action for test nodes', () => {
@@ -212,7 +231,8 @@ describe('agent console view model', () => {
     }))
 
     expect(viewModel.primaryAction.id).toBe('go-tests')
-    expect(viewModel.primaryAction.label).toBe('Go to Tests')
+    expect(viewModel.primaryAction.label).toBe('前往测试')
+    expect(viewModel.primaryActionImpact.providerAndCost).toBe('不调用模型 Provider，不产生模型 token 费用。')
   })
 
   it('promotes pending permission to the current task', () => {
@@ -240,7 +260,8 @@ describe('agent console view model', () => {
     }))
 
     expect(viewModel.primaryAction.id).toBe('resolve-permission')
-    expect(viewModel.advisory.label).toBe('Permission required')
+    expect(viewModel.advisory.label).toBe('需要权限')
+    expect(viewModel.primaryActionImpact.repository).toContain('批准只允许请求中列明的受管工作区副作用')
     expect(viewModel.evidenceGroups.find((group) => group.id === 'permission')?.items[0]?.title).toBe('Apply managed diff')
   })
 
@@ -252,7 +273,7 @@ describe('agent console view model', () => {
 
     expect(viewModel.primaryAction.id).toBe('return-workbench')
     expect(viewModel.primaryAction.summary).toContain('先从 Workbench 选择')
-    expect(viewModel.currentTarget.nodeTitle).toBe('No selected node')
+    expect(viewModel.currentTarget.nodeTitle).toBe('尚未选择节点')
   })
 
   it('keeps Review action visible but disabled when provider is missing', () => {
@@ -477,6 +498,46 @@ describe('agent console view model', () => {
         },
         redacted: true,
       },
+      {
+        id: 'coding-event-provider-failure',
+        codingRunId: codingRun.id,
+        runId: run.id,
+        nodeId: 'n-build',
+        sequence: 3,
+        kind: 'error',
+        message: 'DeepSeek · initial · provider_timeout（30 秒） · 费用状态未知 · 可以手动重试。',
+        timestamp: '2026-06-17T00:01:31.000Z',
+        metadata: {
+          providerCall: {
+            stateVersion: 1,
+            requestId: 'provider-call-1',
+            codingRunId: codingRun.id,
+            phase: 'initial',
+            attempt: 1,
+            providerId: 'deepseek',
+            model: 'deepseek-v4-flash',
+            targetHost: 'api.deepseek.com',
+            status: 'failed',
+            startedAt: '2026-06-17T00:01:01.000Z',
+            completedAt: '2026-06-17T00:01:31.000Z',
+            durationMs: 30_000,
+            timeoutMs: 30_000,
+            promptChars: 12_000,
+            promptBytes: 12_400,
+            promptDigest: 'a'.repeat(64),
+            manifestPathCount: 24,
+            excerptCount: 6,
+            maxOutputTokens: 4_096,
+            deliveryState: 'possibly_delivered',
+            billingState: 'unknown',
+            retryable: true,
+            errorCode: 'provider_timeout',
+            sanitizedCause: 'request_deadline_exceeded',
+            redacted: true,
+          },
+        },
+        redacted: true,
+      },
     ]
     const diff: CodingDiffArtifact = {
       id: 'diff-1',
@@ -529,6 +590,7 @@ describe('agent console view model', () => {
       'review-trace',
       'review-history',
       'permission',
+      'provider-call',
       'tool-skill',
       'coding-trace',
       'diff',
@@ -552,5 +614,21 @@ describe('agent console view model', () => {
     expect(costTrace?.meta).toContain('analysis · 40 input · 10 hit · 30 miss · 5 output · 45 total · hit rate 25.0%')
     expect(costTrace?.meta).toContain('analysis rates · hit $0.007 / 1M · miss $0.22 / 1M · output $0.66 / 1M')
     expect(costTrace?.meta).toContain('analysis cost · hit $0.00000007 · miss $0.0000066 · output $0.0000033 · total $0.00000997')
+    const providerCall = viewModel.evidenceGroups.find((group) => group.id === 'provider-call')
+      ?.items[0]
+    expect(providerCall).toMatchObject({
+      eyebrow: 'initial · failed',
+      title: 'deepseek · deepseek-v4-flash',
+      body: 'DeepSeek · initial · provider_timeout（30 秒） · 费用状态未知 · 可以手动重试。',
+    })
+    expect(providerCall?.meta).toEqual(expect.arrayContaining([
+      'duration 30000ms · timeout 30000ms',
+      'provider_timeout · request_deadline_exceeded',
+      'delivery possibly_delivered · billing unknown',
+      'manual retry available',
+      '24 manifest paths · 6 excerpts',
+      '12000 chars · 12400 bytes · max output 4096',
+      'api.deepseek.com',
+    ]))
   })
 })

@@ -243,6 +243,14 @@ describe('Native Coding Executor v2 runtime', () => {
       pricingTier: 'off_peak',
       pricingSourceVersion: 'deepseek-pricing-snapshot-2026-08-30',
     })
+    const providerTrace = (await store.listCodingAgentEvents(completed!.id))
+      .flatMap((event) => event.metadata?.providerCall ? [event.metadata.providerCall] : [])
+    expect(providerTrace).toMatchObject([
+      { phase: 'analysis', status: 'started', deliveryState: 'not_sent', billingState: 'not_incurred' },
+      { phase: 'analysis', status: 'succeeded', deliveryState: 'response_received', billingState: 'confirmed' },
+      { phase: 'initial', status: 'started', deliveryState: 'not_sent', billingState: 'not_incurred' },
+      { phase: 'initial', status: 'succeeded', deliveryState: 'response_received', billingState: 'confirmed' },
+    ])
     store.close()
   }, 20_000)
 })

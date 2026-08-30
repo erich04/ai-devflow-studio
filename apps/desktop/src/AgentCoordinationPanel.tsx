@@ -12,10 +12,25 @@ type AgentCoordinationPanelProps = {
   nodeId?: string | undefined
   expectedRunVersion?: number | undefined
   localProjectId: string | undefined
+  isTeamPaired: boolean
 }
 
-function plural(count: number, singular: string, pluralForm = `${singular}s`) {
-  return `${count} ${count === 1 ? singular : pluralForm}`
+function countLabel(count: number, label: string) {
+  return `${count} 个${label}`
+}
+
+function coordinationStatusLabel(status: string) {
+  return {
+    requested: '已创建',
+    running: '运行中',
+    checkpointed: '已保存检查点',
+    waiting_permission: '等待权限',
+    terminal: '已结束',
+    cancelled: '已取消',
+    failed: '失败',
+    succeeded: '已完成',
+    ready: '可启动',
+  }[status] ?? '未知状态'
 }
 
 function parseSelectedSnapshot(
@@ -38,6 +53,7 @@ export function AgentCoordinationPanel({
   nodeId,
   expectedRunVersion,
   localProjectId,
+  isTeamPaired,
 }: AgentCoordinationPanelProps) {
   const [sessions, setSessions] = useState<CoordinationRendererSnapshot[]>([])
   const [detail, setDetail] = useState<CoordinationRendererSnapshot | null>(null)
@@ -46,7 +62,7 @@ export function AgentCoordinationPanel({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!desktopApi || !runId || !localProjectId) {
+    if (!desktopApi || !runId || !localProjectId || !isTeamPaired) {
       setSessions([])
       setDetail(null)
       setIsLoading(false)
@@ -79,7 +95,7 @@ export function AgentCoordinationPanel({
         if (!disposed) {
           setSessions([])
           setDetail(null)
-          setError('Multi-Agent Coordination state could not be loaded safely.')
+          setError('无法安全读取多 Agent 验收会话状态。')
         }
       })
       .finally(() => {
@@ -89,7 +105,7 @@ export function AgentCoordinationPanel({
     return () => {
       disposed = true
     }
-  }, [desktopApi, localProjectId, runId])
+  }, [desktopApi, isTeamPaired, localProjectId, runId])
 
   async function selectSession(coordinationId: string) {
     if (!desktopApi || !runId || !localProjectId || isLoading || isActing) return
@@ -104,7 +120,7 @@ export function AgentCoordinationPanel({
       setSessions((current) => current.map((snapshot) =>
         snapshot.session.coordinationId === coordinationId ? parsed : snapshot))
     } catch {
-      setError('Multi-Agent Coordination detail could not be loaded safely.')
+      setError('无法安全读取所选多 Agent 会话详情。')
     } finally {
       setIsLoading(false)
     }
@@ -116,6 +132,7 @@ export function AgentCoordinationPanel({
       !runId ||
       !nodeId ||
       !localProjectId ||
+      !isTeamPaired ||
       expectedRunVersion === undefined ||
       isLoading ||
       isActing
@@ -134,7 +151,7 @@ export function AgentCoordinationPanel({
       setDetail(parsed)
       setSessions([parsed])
     } catch {
-      setError('Multi-Agent Coordination plan start was rejected safely.')
+      setError('固定多 Agent 验收会话创建请求已被安全拒绝。')
     } finally {
       setIsActing(false)
     }
@@ -162,7 +179,7 @@ export function AgentCoordinationPanel({
         expectedSessionVersion: detail.session.version,
       }), selection)
     } catch {
-      setError('Multi-Agent Coordination resume was rejected safely.')
+      setError('多 Agent 会话恢复请求已被安全拒绝。')
     } finally {
       setIsActing(false)
     }
@@ -182,7 +199,7 @@ export function AgentCoordinationPanel({
         expectedTaskVersion,
       }), selection)
     } catch {
-      setError('Specialist start was rejected safely.')
+      setError('Specialist（专用 Agent）启动请求已被安全拒绝。')
     } finally {
       setIsActing(false)
     }
@@ -190,7 +207,7 @@ export function AgentCoordinationPanel({
 
   async function cancelSession() {
     if (!desktopApi || !runId || !localProjectId || !detail || isActing) return
-    if (!window.confirm('Cancel this bounded Multi-Agent Coordination session?')) return
+    if (!window.confirm('取消当前有界多 Agent 验收会话？')) return
     const selection = { runId, localProjectId }
     setIsActing(true)
     setError(null)
@@ -202,7 +219,7 @@ export function AgentCoordinationPanel({
         confirmation: 'cancel-coordination',
       }), selection)
     } catch {
-      setError('Multi-Agent Coordination cancellation was rejected safely.')
+      setError('多 Agent 会话取消请求已被安全拒绝。')
     } finally {
       setIsActing(false)
     }
@@ -211,40 +228,60 @@ export function AgentCoordinationPanel({
   const session = detail?.session
 
   return (
-    <section className="agent-console-section" aria-label="Multi-Agent Coordination">
+    <section className="agent-console-section" aria-label="固定多 Agent 验收会话">
       <div className="section-heading section-heading--inline">
-        <span>Multi-Agent Coordination</span>
-        <strong>Bounded graph and execution tenancy</strong>
+        <span title="Multi-Agent Coordination：多个受限 Specialist 按固定依赖图协作。">固定多 Agent 验收会话</span>
+        <strong>固定任务图、权限边界与资源租约</strong>
       </div>
+
+      <article className="advanced-operation-boundary" id="coordination-boundary">
+        <p>
+          面向当前 Run / 节点创建固定 <code>bounded-repair-v1</code> 验收图，不会根据当前设计任务动态规划。
+          首次创建只保存 Supervisor、任务图和检查点；之后需手动启动 Specialist（专用 Agent）。
+        </p>
+        <div className="advanced-boundary-grid">
+          <span>用途</span><strong>验证固定有界任务图、交接与资源租约，不替代当前业务 Agent</strong>
+          <span>结果</span><strong>首次保存 Supervisor、任务图和检查点；Specialist 需人工逐项启动</strong>
+          <span>前置条件</span><strong>{isTeamPaired ? '当前 Local Project 已配对 Team' : '必须先将当前 Local Project 配对到 Team Project'}</strong>
+          <span>Provider / 费用</span><strong>首次创建不调用当前 Stage Provider；后续 Specialist 可能在上限内消耗 token 和费用</strong>
+          <span>仓库</span><strong>分析角色只读；后续 bounded-implementer 可能只在受管工作区写入</strong>
+          <span>Workflow</span><strong>不生成当前设计 Artifact、不推进工作流、不审批 Gate</strong>
+        </div>
+      </article>
 
       {!desktopApi || !runId || !localProjectId ? (
         <article className="agent-evidence-card">
           <p className="empty-note">
-            Select a local project and Run to inspect Multi-Agent Coordination.
+            请先选择本地项目和 Run，再查看多 Agent 验收会话。
           </p>
         </article>
       ) : null}
 
       {isLoading && sessions.length === 0 ? (
-        <p className="empty-note">Loading Multi-Agent Coordination…</p>
+        <p className="empty-note">正在读取多 Agent 验收会话…</p>
       ) : null}
       {error ? <p className="error-note" role="alert">{error}</p> : null}
 
       {!isLoading && !error && desktopApi && runId && localProjectId && sessions.length === 0 ? (
         <article className="agent-evidence-card">
           <p className="empty-note">
-            No Multi-Agent Coordination has been recorded for this Run.
+            当前 Run 尚未创建多 Agent 验收会话；这是可选高级功能。
           </p>
           {nodeId && expectedRunVersion !== undefined ? (
-            <button
-              className="primary-button"
-              type="button"
-              aria-label="Start bounded coordination"
-              disabled={isActing}
-              onClick={() => void startPlan()}
-            >
-              Start bounded coordination
-            </button>
+            <>
+              {!isTeamPaired ? <p className="error-note" id="coordination-pairing-required">不可用：请先在页面顶部绑定当前 Local Project 与 Team Project。</p> : null}
+              <button
+                className="ghost-button"
+                type="button"
+                aria-describedby={isTeamPaired ? 'coordination-boundary' : 'coordination-pairing-required coordination-boundary'}
+                disabled={isActing || !isTeamPaired}
+                onClick={() => void startPlan()}
+              >
+                {isTeamPaired
+                  ? '创建固定多 Agent 验收会话（高级）'
+                  : '创建固定多 Agent 验收会话（需先配对 Team）'}
+              </button>
+            </>
           ) : null}
         </article>
       ) : null}
@@ -254,7 +291,7 @@ export function AgentCoordinationPanel({
           <div className="agent-path-grid">
             <article className="agent-evidence-card">
               <div className="section-heading">
-                <span>Coordination sessions</span>
+                <span>多 Agent 会话记录</span>
                 <strong>{sessions.length}</strong>
               </div>
               <div className="trace-list">
@@ -267,7 +304,7 @@ export function AgentCoordinationPanel({
                     onClick={() => void selectSession(snapshot.session.coordinationId)}
                   >
                     <Network size={15} />
-                    {snapshot.session.coordinationId} · {snapshot.session.status}
+                    {snapshot.session.coordinationId} · {coordinationStatusLabel(snapshot.session.status)}
                   </button>
                 ))}
               </div>
@@ -275,65 +312,65 @@ export function AgentCoordinationPanel({
 
             <article className="agent-evidence-card">
               <div className="section-heading">
-                <span>Current coordination</span>
+                <span>当前会话</span>
                 <strong>{session.coordinationId}</strong>
               </div>
               <div className="agent-fact-grid agent-fact-grid--three">
                 <div className="compact-row">
-                  <span>Status</span>
-                  <strong>{session.status}</strong>
+                  <span>状态</span>
+                  <strong>{coordinationStatusLabel(session.status)}</strong>
                 </div>
                 <div className="compact-row">
-                  <span>Graph</span>
+                  <span>任务图</span>
                   <strong>
-                    {plural(session.taskCount, 'task')} · {plural(session.edgeCount, 'dependency', 'dependencies')}
+                    {countLabel(session.taskCount, '任务')} · {countLabel(session.edgeCount, '依赖')}
                   </strong>
                 </div>
                 <div className="compact-row">
-                  <span>Ready</span>
+                  <span>可启动任务</span>
                   <strong>{detail.readyTaskIds.length}</strong>
                 </div>
                 <div className="compact-row">
-                  <span>Specialists</span>
+                  <span>Specialist</span>
                   <strong>
-                    {session.counters.activeSpecialists} active · {session.counters.specialistStarts} started
+                    {session.counters.activeSpecialists} 个运行中 · 累计启动 {session.counters.specialistStarts} 次
                   </strong>
                 </div>
                 <div className="compact-row">
-                  <span>Steps</span>
-                  <strong>{session.counters.steps} / {session.bounds.maxSteps} steps</strong>
+                  <span>步骤</span>
+                  <strong>{session.counters.steps} / {session.bounds.maxSteps}</strong>
                 </div>
                 <div className="compact-row">
-                  <span>Tool calls</span>
+                  <span>工具调用</span>
                   <strong>{session.counters.toolCalls} / {session.bounds.maxToolCalls}</strong>
                 </div>
                 <div className="compact-row">
-                  <span>Tokens</span>
-                  <strong>{session.counters.tokens} / {session.bounds.maxTokens} tokens</strong>
+                  <span>Token 用量</span>
+                  <strong>{session.counters.tokens} / {session.bounds.maxTokens}</strong>
                 </div>
                 <div className="compact-row">
-                  <span>Cost</span>
+                  <span>费用</span>
                   <strong>
                     ${session.counters.costUsd.toFixed(4)} / ${session.bounds.maxCostUsd.toFixed(2)}
                   </strong>
                 </div>
                 <div className="compact-row">
-                  <span>Handoffs</span>
+                  <span>交接</span>
                   <strong>
                     {session.acceptedHandoffCount} / {session.bounds.maxAcceptedHandoffs}
                   </strong>
                 </div>
                 <div className="compact-row">
-                  <span>Retries</span>
+                  <span>重试</span>
                   <strong>{session.counters.retries} / {session.bounds.maxSpecialistRetries}</strong>
                 </div>
                 <div className="compact-row">
-                  <span>Session version</span>
+                  <span>会话版本</span>
                   <strong>v{session.version}</strong>
                 </div>
                 <div className="compact-row">
-                  <span>Stop reason</span>
-                  <strong>{session.stopReason ?? 'none'}</strong>
+                  <span>结束原因</span>
+                  <strong>{session.stopReason ?? '尚未结束'}</strong>
                 </div>
               </div>
               {session.status === 'running' ? (
@@ -341,20 +378,20 @@ export function AgentCoordinationPanel({
                   <button
                     className="ghost-button"
                     type="button"
-                    aria-label={`Resume ${session.coordinationId}`}
+                    aria-label={`恢复多 Agent 会话 ${session.coordinationId}`}
                     disabled={isActing || isLoading}
                     onClick={() => void resumeSession()}
                   >
-                    Resume
+                    恢复会话
                   </button>
                   <button
                     className="danger-button"
                     type="button"
-                    aria-label={`Cancel ${session.coordinationId}`}
+                    aria-label={`取消多 Agent 会话 ${session.coordinationId}`}
                     disabled={isActing || isLoading}
                     onClick={() => void cancelSession()}
                   >
-                    Cancel
+                    取消会话
                   </button>
                 </div>
               ) : null}
@@ -362,38 +399,38 @@ export function AgentCoordinationPanel({
           </div>
 
           <div className="section-heading section-heading--inline">
-            <span>Specialist task graph</span>
-            <strong>{plural(detail.tasks.length, 'task')}</strong>
+            <span>Specialist 任务图</span>
+            <strong>{countLabel(detail.tasks.length, '任务')}</strong>
           </div>
           <div className="agent-evidence-grid">
             {detail.tasks.map((task) => (
               <article className="agent-evidence-card" key={task.taskId}>
                 <div className="section-heading">
-                  <span>{task.status}</span>
+                  <span>{coordinationStatusLabel(task.status)}</span>
                   <strong>{task.taskId} · {task.roleId}</strong>
                 </div>
                 {detail.readyTaskIds.includes(task.taskId) ? (
                   <>
                     <div className="agent-advisory">
-                      <span>Dependency readiness</span>
-                      <strong>Ready now</strong>
+                      <span>依赖状态</span>
+                      <strong>现在可启动</strong>
                     </div>
                     <button
-                      className="primary-button"
+                      className="ghost-button"
                       type="button"
-                      aria-label={`Start ${task.taskId}`}
+                      aria-label={`启动 Specialist 任务 ${task.taskId}`}
                       disabled={isActing || isLoading || session.status !== 'running'}
                       onClick={() => void startTask(task.taskId, task.version)}
                     >
-                      Start specialist
+                      启动 Specialist
                     </button>
                   </>
                 ) : null}
                 <div className="knowledge-reference-meta">
                   <span>
                     {task.dependencyTaskIds.length === 0
-                      ? 'no dependencies'
-                      : `depends on ${task.dependencyTaskIds.join(', ')}`}
+                      ? '无依赖'
+                      : `依赖 ${task.dependencyTaskIds.join(', ')}`}
                   </span>
                   <span>{task.capabilityIds.join(', ')}</span>
                   <span>task v{task.version}</span>
@@ -423,11 +460,11 @@ export function AgentCoordinationPanel({
           <div className="agent-path-grid">
             <article className="agent-evidence-card">
               <div className="section-heading">
-                <span>Accepted handoffs</span>
+                  <span>已接受交接</span>
                 <strong>{detail.handoffs.length}</strong>
               </div>
               {detail.handoffs.length === 0 ? (
-                <p className="empty-note">No accepted handoffs.</p>
+                <p className="empty-note">暂无已接受交接。</p>
               ) : (
                 <div className="trace-list">
                   {detail.handoffs.map((handoff) => (
@@ -443,11 +480,11 @@ export function AgentCoordinationPanel({
 
             <article className="agent-evidence-card">
               <div className="section-heading">
-                <span>Resource leases</span>
+                  <span>资源租约</span>
                 <strong>{detail.leases.length}</strong>
               </div>
               {detail.leases.length === 0 ? (
-                <p className="empty-note">No resource leases.</p>
+                <p className="empty-note">暂无资源租约。</p>
               ) : (
                 <div className="trace-list">
                   {detail.leases.map((lease) => (
@@ -463,7 +500,7 @@ export function AgentCoordinationPanel({
           </div>
 
           {isLoading ? (
-            <p className="empty-note"><Activity size={14} /> Loading exact coordination detail…</p>
+            <p className="empty-note"><Activity size={14} /> 正在读取精确会话详情…</p>
           ) : null}
         </>
       ) : null}

@@ -20,22 +20,32 @@ import {
   abortOpencodeSession,
   getOpencodeSessionStatus,
   listOpencodeDiff,
+  listOpencodeMessages,
   listOpencodePermissions,
   replyOpencodePermission,
   sendOpencodeMessage,
   OpencodeMessageResponseError,
   type Fetcher,
   type OpencodePermission,
+  type OpencodeMessage,
   type OpencodePermissionRule,
 } from './opencode-http-adapter.js'
 import { captureWorktreeDiff, type CapturedWorktreeDiff } from './coding-runner.js'
 import { createOpencodeProcessManager, type ManagedOpencodeServer } from './opencode-process.js'
+import { classifyOpenCodePermission } from './opencode-permission-policy.js'
+import {
+  assertOpenCodeGitBoundary,
+  captureOpenCodeGitBoundary,
+  validateAuthoritativeOpenCodeDiff,
+  type OpenCodeGitBoundarySnapshot,
+} from './opencode-result-validation.js'
 
 export type OpencodeHttpProcessManager = {
   ensure(input: {
     projectId: string
     binaryPath: string
     env: NodeJS.ProcessEnv
+    configurationFingerprint?: string
   }): Promise<Pick<ManagedOpencodeServer, 'baseUrl' | 'child' | 'projectId'>>
 }
 
@@ -47,8 +57,13 @@ export type OpencodeHttpCodingEngineConfig = {
   processManager?: OpencodeHttpProcessManager
   fetcher?: Fetcher
   runtimeEnv?: NodeJS.ProcessEnv
+  configurationFingerprint?: string
+  requireExecutionAuthorization?: boolean
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
+  maxToolTurns?: number
+  maxWallClockMs?: number
+  nowMs?: () => number
   permissionRules?: OpencodePermissionRule[]
   startupCleanupTimeoutMs?: number
   resolveManagedDirectory?: (directory: string) => string
@@ -64,9 +79,12 @@ type OpencodeRuntimeSession = {
   baseUrl: string
   cleanupPromise?: Promise<void>
   directory: string
+  deadlineAtMs: number
   handledPermissionIds: Set<string>
+  gitBoundary?: OpenCodeGitBoundarySnapshot
   messagePromise: OpencodeMessagePromise
   nextEventSequence: number
+  observedToolCallKeys: Set<string>
   projectPath: string
   sessionId: string
 }
@@ -82,6 +100,66 @@ export function createOpencodeHttpCodingEngineAdapter(
   const processManager = config.processManager ?? createOpencodeProcessManager()
   const sessions = new Map<string, OpencodeRuntimeSession>()
   const pendingSessions = new Map<string, PendingOpencodeSession>()
+  const authorizedRunIds = new Set<string>()
+  const nowMs = config.nowMs ?? Date.now
+  const maxToolTurns = positiveInteger(config.maxToolTurns, 24)
+  const maxWallClockMs = positiveInteger(config.maxWallClockMs, 15 * 60_000)
+  const processConfigurationFingerprint = config.configurationFingerprint ?? createHash('sha256')
+    .update(JSON.stringify({
+      providerID: config.providerID,
+      modelID: config.modelID,
+      apiKeyEnvName: config.apiKeyEnvName ?? '',
+      requireExecutionAuthorization: config.requireExecutionAuthorization ?? false,
+      permissionRules: config.permissionRules ?? createDefaultOpencodePermissionRules(),
+      maxToolTurns,
+      maxWallClockMs,
+    }))
+    .digest('hex')
+
+  function remainingSessionMs(session: OpencodeRuntimeSession): number {
+    const remaining = session.deadlineAtMs - nowMs()
+    if (remaining <= 0) {
+      throw new Error('opencode_wall_clock_limit_exceeded')
+    }
+    return remaining
+  }
+
+  function permissionWaitTimeout(session: OpencodeRuntimeSession): number {
+    return Math.min(config.permissionDiscoveryTimeoutMs ?? 60_000, remainingSessionMs(session))
+  }
+
+  function assertToolTurnLimit(session: OpencodeRuntimeSession): void {
+    remainingSessionMs(session)
+    if (session.observedToolCallKeys.size > maxToolTurns) {
+      throw new Error('opencode_tool_turn_limit_exceeded')
+    }
+  }
+
+  function registerPermissionToolTurn(
+    session: OpencodeRuntimeSession,
+    permission: OpencodePermission,
+  ): void {
+    const toolKey = permission.tool
+      ? `${permission.tool.messageID}:${permission.tool.callID}`
+      : `permission:${permission.id}`
+    session.observedToolCallKeys.add(toolKey)
+    assertToolTurnLimit(session)
+  }
+
+  async function refreshObservedToolTurns(
+    session: OpencodeRuntimeSession,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const messages = await listOpencodeMessages({
+      baseUrl: session.baseUrl,
+      sessionId: session.sessionId,
+      directory: session.directory,
+      ...fetcherOption(config.fetcher),
+      ...(signal ? { signal } : {}),
+    })
+    registerObservedToolTurns(session, messages)
+    assertToolTurnLimit(session)
+  }
 
   function cleanupRegisteredSession(
     codingRunId: string,
@@ -127,17 +205,120 @@ export function createOpencodeHttpCodingEngineAdapter(
     throw new Error('opencode session was cancelled during permission continuation')
   }
 
-  return {
+  async function finishSession(input: {
+    session: OpencodeRuntimeSession
+    codingRun: CodingAgentRun
+    projectId: string
+    now: string
+    messageResult: Awaited<OpencodeMessagePromise>
+    approvedRequest?: CodingPermissionRequest
+  }) {
+    remainingSessionMs(input.session)
+    if (!input.messageResult.ok && input.messageResult.error instanceof OpencodeMessageResponseError) {
+      throw input.messageResult.error
+    }
+    await refreshObservedToolTurns(input.session)
+    if (input.session.gitBoundary) {
+      await assertOpenCodeGitBoundary({
+        sourcePath: input.session.projectPath,
+        worktreePath: input.session.directory,
+        snapshot: input.session.gitBoundary,
+      })
+    }
+    const diffSource = await readOpencodeDiffSource({
+      baseUrl: input.session.baseUrl,
+      sessionId: input.session.sessionId,
+      worktreePath: input.session.directory,
+      captureDiff: config.captureWorktreeDiff ?? captureWorktreeDiff,
+      ...fetcherOption(config.fetcher),
+    })
+    remainingSessionMs(input.session)
+    if (!input.messageResult.ok) {
+      const hasNoCapturedDiff =
+        diffSource.changedPaths.length === 0 && diffSource.patch.trim().length === 0
+      if (hasNoCapturedDiff) throw input.messageResult.error
+    }
+    const diff = sanitizeCodingDiffArtifact({
+      id: `coding-diff-${input.codingRun.id}`,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      projectId: input.projectId,
+      changedPaths: diffSource.changedPaths,
+      patch: diffSource.patch,
+      sourceDigest: createHash('sha256').update(diffSource.patch, 'utf8').digest('hex'),
+      createdAt: input.now,
+    })
+    const codingRun: CodingAgentRun = {
+      ...input.codingRun,
+      status: 'completed',
+      summary: 'opencode completed the managed coding run and DevFlow captured the authoritative Git diff.',
+      changedPaths: diff.changedPaths,
+      completedAt: input.now,
+      diffArtifactId: diff.id,
+      redacted: true,
+    }
+    const sequence = input.session.nextEventSequence
+    const events: CodingAgentEvent[] = [
+      ...(input.approvedRequest
+        ? [createToolResultEvent({
+            codingRun: input.codingRun,
+            request: input.approvedRequest,
+            now: input.now,
+            sequence,
+            status: 'completed',
+            outputSummary: `DevFlow relay approved ${input.approvedRequest.permission} permission; opencode completed after the tool action.`,
+          })]
+        : [{
+            id: `coding-event-${input.codingRun.id}-brief`,
+            codingRunId: input.codingRun.id,
+            runId: input.codingRun.runId,
+            nodeId: input.codingRun.nodeId,
+            sequence,
+            kind: 'brief' as const,
+            message: `DevFlow coding brief sent to opencode HTTP session ${input.session.sessionId}.`,
+            timestamp: input.now,
+            redacted: true,
+          }]),
+      {
+        id: `coding-event-${input.codingRun.id}-diff`,
+        codingRunId: codingRun.id,
+        runId: codingRun.runId,
+        nodeId: codingRun.nodeId,
+        sequence: sequence + 1,
+        kind: 'diff',
+        message: 'opencode completed and DevFlow captured the managed-worktree Git diff.',
+        timestamp: input.now,
+        metadata: {
+          diffArtifactId: diff.id,
+          diffSource: 'managed_worktree_git',
+          opencodeDiffStatus: diffSource.opencodeDiffStatus,
+        },
+        redacted: true,
+      },
+    ]
+    const cleanupPromise = input.session.cleanupPromise
+    if (cleanupPromise) await failForSessionCleanup(cleanupPromise)
+    if (sessions.get(input.codingRun.id) !== input.session) {
+      throw new Error('opencode session ownership changed while assembling the terminal result')
+    }
+    sessions.delete(input.codingRun.id)
+    return { codingRun, events, diff }
+  }
+
+  const adapter: CodingEngineAdapter = {
     engine: 'opencode-http',
     providerId: config.providerID,
     modelId: config.modelID,
 
     async ensure(input) {
-      await processManager.ensure({
-        projectId: input.project.id,
-        binaryPath: config.binaryPath,
-        env: config.runtimeEnv ?? process.env,
-      })
+      if (!config.requireExecutionAuthorization) {
+        await processManager.ensure({
+          projectId: input.project.id,
+          binaryPath: config.binaryPath,
+          env: config.runtimeEnv ?? process.env,
+          configurationFingerprint: processConfigurationFingerprint,
+        })
+      }
       return {
         projectId: input.project.id,
         engine: 'opencode-http',
@@ -146,6 +327,9 @@ export function createOpencodeHttpCodingEngineAdapter(
     },
 
     async start(input) {
+      if (config.requireExecutionAuthorization && !authorizedRunIds.delete(input.id)) {
+        return createExecutionAuthorizationResult(input)
+      }
       const resolveManagedDirectory = config.resolveManagedDirectory ?? resolveManagedOpencodeDirectory
       const directory = resolveManagedDirectory(input.workspace.worktreePath)
       if (sessions.has(input.id) || pendingSessions.has(input.id)) {
@@ -165,10 +349,19 @@ export function createOpencodeHttpCodingEngineAdapter(
       pendingSessions.set(input.id, pendingSessionState)
       let runtimeSession: OpencodeRuntimeSession | undefined
       try {
+        const gitBoundary = input.workspace.baseCommitSha
+          ? await captureOpenCodeGitBoundary({
+              sourcePath: input.project.path,
+              worktreePath: directory,
+              baseCommitSha: input.workspace.baseCommitSha,
+              branchName: input.workspace.branchName,
+            })
+          : undefined
         const server = await processManager.ensure({
           projectId: input.project.id,
           binaryPath: config.binaryPath,
           env: config.runtimeEnv ?? process.env,
+          configurationFingerprint: processConfigurationFingerprint,
         })
         if (pendingSessionState.cancelRequested) {
           throw new Error('opencode startup was cancelled before session creation')
@@ -184,10 +377,13 @@ export function createOpencodeHttpCodingEngineAdapter(
         })
         runtimeSession = {
           baseUrl: server.baseUrl,
+          deadlineAtMs: nowMs() + maxWallClockMs,
           directory,
+          ...(gitBoundary ? { gitBoundary } : {}),
           handledPermissionIds: new Set(),
           messagePromise: Promise.resolve({ ok: true as const }),
           nextEventSequence: 1,
+          observedToolCallKeys: new Set(),
           projectPath: input.project.path,
           sessionId: session.id,
         }
@@ -220,16 +416,42 @@ export function createOpencodeHttpCodingEngineAdapter(
             (error: unknown) => ({ ok: false as const, error }),
           )
           runtimeSession.messagePromise = messagePromise
-          const permission = await waitForPermission({
-            baseUrl: server.baseUrl,
-            directory,
-            messagePromise,
-            pollMs: config.permissionPollMs ?? 1_000,
-            sessionId: session.id,
-            timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
-            ...fetcherOption(config.fetcher),
-          })
+          const firstOutcome = config.requireExecutionAuthorization
+            ? await waitForNextPermissionOrMessage({
+                baseUrl: server.baseUrl,
+                directory,
+                handledPermissionIds: runtimeSession.handledPermissionIds,
+                messagePromise,
+                observeToolTurns: (signal) => refreshObservedToolTurns(runtimeSession!, signal),
+                pollMs: config.permissionPollMs ?? 1_000,
+                sessionId: session.id,
+                timeoutMs: permissionWaitTimeout(runtimeSession),
+                ...fetcherOption(config.fetcher),
+              })
+            : undefined
+          if (firstOutcome?.kind === 'message') {
+            return await finishSession({
+              session: runtimeSession,
+              codingRun: createRunningOpencodeRun(input),
+              projectId: input.project.id,
+              now: input.now,
+              messageResult: firstOutcome.result,
+            })
+          }
+          const permission = firstOutcome?.kind === 'permission'
+            ? firstOutcome.permission
+            : await waitForPermission({
+                baseUrl: server.baseUrl,
+                directory,
+                messagePromise,
+                observeToolTurns: (signal) => refreshObservedToolTurns(runtimeSession!, signal),
+                pollMs: config.permissionPollMs ?? 1_000,
+                sessionId: session.id,
+                timeoutMs: permissionWaitTimeout(runtimeSession),
+                ...fetcherOption(config.fetcher),
+              })
           const result = createStartResult(input, brief.prompt, session.id, permission, directory)
+          registerPermissionToolTurn(runtimeSession, permission)
           const cleanupPromise = runtimeSession.cleanupPromise
           if (cleanupPromise) {
             await failForSessionCleanup(cleanupPromise)
@@ -261,7 +483,41 @@ export function createOpencodeHttpCodingEngineAdapter(
     },
 
     async approvePermission(input) {
+      if (input.request.origin === 'execution_authorization') {
+        if (!input.authorizedStart || input.authorizedStart.id !== input.codingRun.id) {
+          throw new Error('OpenCode Execution Authorization cannot resume without its persisted run context')
+        }
+        authorizedRunIds.add(input.codingRun.id)
+        try {
+          return await adapter.start(input.authorizedStart)
+        } catch (error) {
+          authorizedRunIds.delete(input.codingRun.id)
+          throw error
+        }
+      }
       const session = findSession(sessions, input.codingRun.id)
+      try {
+        remainingSessionMs(session)
+      } catch (error) {
+        try {
+          await cleanupRegisteredSession(input.codingRun.id, session, 'continuation')
+        } catch (cleanupError) {
+          throw new CodingEngineContinuationCleanupError([error, cleanupError])
+        }
+        throw error
+      }
+      const policyDecision = classifyOpenCodePermission(input.request)
+      if (policyDecision.status === 'denied') {
+        const policyError = new Error(
+          `OpenCode permission denied by DevFlow policy (${policyDecision.code}): ${policyDecision.reason}`,
+        )
+        try {
+          await cleanupRegisteredSession(input.codingRun.id, session, 'continuation')
+        } catch (cleanupError) {
+          throw new CodingEngineContinuationCleanupError([policyError, cleanupError])
+        }
+        throw policyError
+      }
       const replied = await replyOpencodePermission({
         baseUrl: session.baseUrl,
         requestId: input.request.id,
@@ -280,12 +536,14 @@ export function createOpencodeHttpCodingEngineAdapter(
           directory: session.directory,
           handledPermissionIds: session.handledPermissionIds,
           messagePromise: session.messagePromise,
+          observeToolTurns: (signal) => refreshObservedToolTurns(session, signal),
           pollMs: config.permissionPollMs ?? 1_000,
           sessionId: session.sessionId,
-          timeoutMs: config.permissionDiscoveryTimeoutMs ?? 60_000,
+          timeoutMs: permissionWaitTimeout(session),
           ...fetcherOption(config.fetcher),
         })
         if (continuation.kind === 'permission') {
+          registerPermissionToolTurn(session, continuation.permission)
           const eventSequence = session.nextEventSequence
           const result = createContinuationResult(
             input.codingRun,
@@ -305,78 +563,14 @@ export function createOpencodeHttpCodingEngineAdapter(
           return result
         }
         const messageResult = continuation.result
-        if (!messageResult.ok && messageResult.error instanceof OpencodeMessageResponseError) {
-          throw messageResult.error
-        }
-        const diffSource = await readOpencodeDiffSource({
-          baseUrl: session.baseUrl,
-          sessionId: session.sessionId,
-          worktreePath: session.directory,
-          captureDiff: config.captureWorktreeDiff ?? captureWorktreeDiff,
-          ...fetcherOption(config.fetcher),
-        })
-        if (!messageResult.ok) {
-          const hasNoCapturedDiff =
-            diffSource.changedPaths.length === 0 && diffSource.patch.trim().length === 0
-          if (hasNoCapturedDiff) {
-            throw messageResult.error
-          }
-        }
-        const diff = sanitizeCodingDiffArtifact({
-          id: `coding-diff-${input.codingRun.id}`,
-          runId: input.codingRun.runId,
-          nodeId: input.codingRun.nodeId,
+        return await finishSession({
+          session,
+          codingRun: input.codingRun,
           projectId: input.project.id,
-          changedPaths: diffSource.changedPaths,
-          patch: diffSource.patch,
-          sourceDigest: createHash('sha256').update(diffSource.patch, 'utf8').digest('hex'),
-          createdAt: input.now,
+          now: input.now,
+          messageResult,
+          approvedRequest: input.request,
         })
-        const codingRun: CodingAgentRun = {
-          ...input.codingRun,
-          status: 'completed',
-          summary: 'opencode completed the managed coding run and produced a redacted diff artifact.',
-          changedPaths: diff.changedPaths,
-          completedAt: input.now,
-          diffArtifactId: diff.id,
-          redacted: true,
-        }
-        const events: CodingAgentEvent[] = [
-          createToolResultEvent({
-            codingRun: input.codingRun,
-            request: input.request,
-            now: input.now,
-            sequence: session.nextEventSequence,
-            status: 'completed',
-            outputSummary: `DevFlow relay approved ${input.request.permission} permission; opencode completed after the tool action.`,
-          }),
-          {
-            id: `coding-event-${input.codingRun.id}-diff`,
-            codingRunId: codingRun.id,
-            runId: codingRun.runId,
-            nodeId: codingRun.nodeId,
-            sequence: session.nextEventSequence + 1,
-            kind: 'diff',
-            message: 'opencode completed and DevFlow captured a redacted worktree diff.',
-            timestamp: input.now,
-            metadata: { diffArtifactId: diff.id },
-            redacted: true,
-          },
-        ]
-        const result = {
-          codingRun,
-          events,
-          diff,
-        }
-        const cleanupPromise = session.cleanupPromise
-        if (cleanupPromise) {
-          await failForSessionCleanup(cleanupPromise)
-        }
-        if (sessions.get(input.codingRun.id) !== session) {
-          throw new Error('opencode session ownership changed during permission continuation')
-        }
-        sessions.delete(input.codingRun.id)
-        return result
       } catch (error) {
         if (error instanceof CodingEngineContinuationCleanupError) {
           throw error
@@ -391,6 +585,7 @@ export function createOpencodeHttpCodingEngineAdapter(
     },
 
     async cancel(input) {
+      authorizedRunIds.delete(input.codingRun.id)
       let session = sessions.get(input.codingRun.id)
       if (!session) {
         const pendingSessionState = pendingSessions.get(input.codingRun.id)
@@ -409,6 +604,125 @@ export function createOpencodeHttpCodingEngineAdapter(
       }
       await cleanupRegisteredSession(input.codingRun.id, session, 'cancellation')
     },
+  }
+  return adapter
+}
+
+function createExecutionAuthorizationResult(input: CodingEngineStartInput) {
+  const expiresAt = new Date(Date.parse(input.now) + 5 * 60_000).toISOString()
+  const codingRun: CodingAgentRun = {
+    id: input.id,
+    runId: input.run.id,
+    nodeId: input.node.id,
+    projectId: input.project.id,
+    requestedBy: input.requestedBy,
+    providerId: input.providerId,
+    engine: 'opencode-http',
+    status: 'waiting_permission',
+    managedWorkspaceId: input.workspace.id,
+    branchName: input.workspace.branchName,
+    userInstruction: input.userInstruction,
+    prompt: input.brief.prompt,
+    summary: 'OpenCode is waiting for Execution Authorization in the disposable managed worktree.',
+    changedPaths: [],
+    startedAt: input.now,
+    redacted: true,
+  }
+  const permissionRequest: CodingPermissionRequest = {
+    id: `execution-authorization-${input.id}`,
+    codingRunId: input.id,
+    runId: input.run.id,
+    nodeId: input.node.id,
+    origin: 'execution_authorization',
+    permission: 'write',
+    title: '授权 OpenCode 在隔离工作区执行',
+    risk: 'warn',
+    reasons: [
+      '仅允许 OpenCode 在本次 disposable managed worktree 中读取、搜索和修改文件。',
+      '此授权不接受最终修改，也不允许 commit、push、发布、合并、fetch 或修改原始 checkout。',
+      'Shell、安装、网络和范围扩大仍需单独审批或会被拒绝。',
+      'OpenCode/Provider 的 token 与美元费用不可核对时会显示为 opaque/unknown，不会伪装成 $0。',
+    ],
+    status: 'pending',
+    requestedAt: input.now,
+    expiresAt,
+  }
+  return {
+    codingRun,
+    events: [
+      {
+        id: `coding-event-${input.id}-execution-authorization`,
+        codingRunId: input.id,
+        runId: input.run.id,
+        nodeId: input.node.id,
+        sequence: 1,
+        kind: 'permission' as const,
+        message: 'OpenCode requires Execution Authorization before its process or Provider is started.',
+        timestamp: input.now,
+        metadata: {
+          requestId: permissionRequest.id,
+          origin: permissionRequest.origin,
+          managedWorkspaceId: input.workspace.id,
+        },
+        redacted: true,
+      },
+    ],
+    permissionRequest,
+  }
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : fallback
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function registerObservedToolTurns(
+  session: OpencodeRuntimeSession,
+  messages: OpencodeMessage[],
+): void {
+  if (!Array.isArray(messages)) {
+    throw new Error('opencode_tool_history_invalid')
+  }
+  for (const message of messages) {
+    if (!isRecord(message) || !isRecord(message.info) || !Array.isArray(message.parts)) {
+      throw new Error('opencode_tool_history_invalid')
+    }
+    for (const part of message.parts) {
+      if (!isRecord(part) || part.type !== 'tool') continue
+      if (
+        typeof part.messageID !== 'string' ||
+        !part.messageID.trim() ||
+        typeof part.callID !== 'string' ||
+        !part.callID.trim()
+      ) {
+        throw new Error('opencode_tool_history_invalid')
+      }
+      session.observedToolCallKeys.add(`${part.messageID}:${part.callID}`)
+    }
+  }
+}
+
+function createRunningOpencodeRun(input: CodingEngineStartInput): CodingAgentRun {
+  return {
+    id: input.id,
+    runId: input.run.id,
+    nodeId: input.node.id,
+    projectId: input.project.id,
+    requestedBy: input.requestedBy,
+    providerId: input.providerId,
+    engine: 'opencode-http',
+    status: 'running',
+    managedWorkspaceId: input.workspace.id,
+    branchName: input.workspace.branchName,
+    userInstruction: input.userInstruction,
+    prompt: input.brief.prompt,
+    summary: 'OpenCode is executing inside the authorized managed worktree.',
+    changedPaths: [],
+    startedAt: input.now,
+    redacted: true,
   }
 }
 
@@ -600,6 +914,7 @@ async function waitForNextPermissionOrMessage(input: {
   fetcher?: Fetcher
   handledPermissionIds: Set<string>
   messagePromise: OpencodeRuntimeSession['messagePromise']
+  observeToolTurns: (signal: AbortSignal) => Promise<void>
   pollMs: number
   sessionId: string
   timeoutMs: number
@@ -614,15 +929,26 @@ async function waitForNextPermissionOrMessage(input: {
   })
 
   while (Date.now() <= expiresAt) {
+    await runBeforePermissionDeadline({
+      expiresAt,
+      operation: input.observeToolTurns,
+    })
     const firstPermission = await runBeforePermissionDeadline({
       expiresAt,
       operation: (signal) => findUnhandledPermission({ ...input, signal }),
     })
-    await Promise.resolve()
+    await Promise.race([
+      input.messagePromise.then(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, 0)),
+    ])
     if (settledMessage) {
       return { kind: 'message', result: settledMessage }
     }
     if (firstPermission) {
+      await runBeforePermissionDeadline({
+        expiresAt,
+        operation: input.observeToolTurns,
+      })
       return { kind: 'permission', permission: firstPermission }
     }
 
@@ -636,7 +962,10 @@ async function waitForNextPermissionOrMessage(input: {
         signal,
       }),
     })
-    await Promise.resolve()
+    await Promise.race([
+      input.messagePromise.then(() => undefined),
+      new Promise<void>((resolve) => setTimeout(resolve, 0)),
+    ])
     if (settledMessage) {
       return { kind: 'message', result: settledMessage }
     }
@@ -682,7 +1011,14 @@ async function readOpencodeDiffSource(input: {
   fetcher?: Fetcher
   sessionId: string
   worktreePath: string
-}): Promise<CapturedWorktreeDiff> {
+}): Promise<CapturedWorktreeDiff & {
+  opencodeDiffStatus: 'matched' | 'mismatch' | 'unavailable'
+}> {
+  const authoritative = await validateAuthoritativeOpenCodeDiff({
+    worktreePath: input.worktreePath,
+    canonicalWorktreePath: input.worktreePath,
+    diff: await input.captureDiff({ worktreePath: input.worktreePath }),
+  })
   try {
     const opencodeDiff = await listOpencodeDiff({
       baseUrl: input.baseUrl,
@@ -690,18 +1026,22 @@ async function readOpencodeDiffSource(input: {
       directory: input.worktreePath,
       ...fetcherOption(input.fetcher),
     })
-    if (opencodeDiff.length) {
-      return {
-        changedPaths: opencodeDiff.map((file) => file.file),
-        patch: opencodeDiff.map((file) => file.patch).join('\n'),
-      }
+    const reportedPaths = [...new Set(opencodeDiff.map((file) => file.file))]
+      .sort((left, right) => left.localeCompare(right))
+    const reportedPatch = opencodeDiff.map((file) => file.patch).join('\n')
+    const matched =
+      reportedPaths.length === authoritative.changedPaths.length &&
+      reportedPaths.every((changedPath, index) => changedPath === authoritative.changedPaths[index]) &&
+      reportedPatch === authoritative.patch
+    return {
+      ...authoritative,
+      opencodeDiffStatus: matched ? 'matched' : 'mismatch',
     }
   } catch {
     // opencode 1.17.x may close the HTTP session before diff retrieval.
     // The managed worktree remains DevFlow's durable source of truth.
+    return { ...authoritative, opencodeDiffStatus: 'unavailable' }
   }
-
-  return input.captureDiff({ worktreePath: input.worktreePath })
 }
 
 async function waitForPermission(input: {
@@ -709,6 +1049,7 @@ async function waitForPermission(input: {
   directory: string
   fetcher?: Fetcher
   messagePromise: OpencodeRuntimeSession['messagePromise']
+  observeToolTurns: (signal: AbortSignal) => Promise<void>
   pollMs: number
   sessionId: string
   timeoutMs: number
@@ -726,6 +1067,10 @@ async function waitForPermission(input: {
     return settlement
   })
   while (Date.now() <= expiresAt) {
+    await runBeforePermissionDeadline({
+      expiresAt,
+      operation: input.observeToolTurns,
+    })
     const permissions = await runBeforePermissionDeadline({
       expiresAt,
       operation: (signal) => listOpencodePermissions({
@@ -739,6 +1084,10 @@ async function waitForPermission(input: {
     throwIfMessageSettled(settledMessage)
     const permission = permissions.find((candidate) => candidate.sessionID === input.sessionId)
     if (permission) {
+      await runBeforePermissionDeadline({
+        expiresAt,
+        operation: input.observeToolTurns,
+      })
       return permission
     }
 

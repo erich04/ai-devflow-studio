@@ -60,6 +60,7 @@ export function annotateUnknownRuntimeCosts(
 ): TokenUsageRollup[] {
   const byKey = new Map(rollups.map((rollup) => [rollup.key, { ...rollup }]))
   for (const summary of summaries) {
+    if (summary.phase === 'preflight_estimate') continue
     if (runtimeCostSummaryToTokenUsage(summary) !== null) continue
     const key = summary[dimension]
     const rollup = byKey.get(key) ?? {

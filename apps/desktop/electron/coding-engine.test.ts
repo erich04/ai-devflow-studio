@@ -43,7 +43,7 @@ describe('coding engine selection', () => {
     expect(engine.providerId).toBe('openai')
   })
 
-  it('uses the injected shared process manager for opencode-http', async () => {
+  it('does not start the injected OpenCode process manager before execution authorization', async () => {
     const ensure = vi.fn(async ({ projectId }: { projectId: string }) => ({
       projectId,
       baseUrl: 'http://127.0.0.1:4097',
@@ -70,8 +70,7 @@ describe('coding engine selection', () => {
       },
     })
 
-    expect(ensure).toHaveBeenCalledTimes(1)
-    expect(ensure).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'local-1' }))
+    expect(ensure).not.toHaveBeenCalled()
   })
 
   it('rejects unknown real engine values instead of silently falling back', () => {
@@ -82,12 +81,39 @@ describe('coding engine selection', () => {
 
   it('maps runtime provider secrets into process env without writing opencode auth', () => {
     const env = buildOpencodeRuntimeEnv({
-      baseEnv: { PATH: '/usr/bin' },
+      baseEnv: {
+        PATH: '/usr/bin',
+        HOME: '/Users/operator',
+        LANG: 'en_US.UTF-8',
+        GH_TOKEN: 'github-secret',
+        GIT_ASKPASS: '/tmp/credential-helper',
+        AWS_SECRET_ACCESS_KEY: 'deploy-secret',
+        UNRELATED_SECRET: 'private',
+      },
       apiKeyEnvName: 'OPENAI_API_KEY',
       apiKey: 'sk-runtime-only',
     })
 
-    expect(env['OPENAI_API_KEY']).toBe('sk-runtime-only')
+    expect(env).toEqual({
+      PATH: '/usr/bin',
+      HOME: '/Users/operator',
+      LANG: 'en_US.UTF-8',
+      OPENAI_API_KEY: 'sk-runtime-only',
+    })
     expect(JSON.stringify(env)).not.toContain('auth.json')
+    expect(JSON.stringify(env)).not.toContain('github-secret')
+    expect(JSON.stringify(env)).not.toContain('credential-helper')
+    expect(JSON.stringify(env)).not.toContain('deploy-secret')
+    expect(JSON.stringify(env)).not.toContain('private')
+  })
+
+  it('rejects source-control and deployment credentials as selected Provider credentials', () => {
+    for (const apiKeyEnvName of ['GITHUB_API_KEY', 'GIT_ASKPASS', 'VERCEL_AUTH_TOKEN']) {
+      expect(() => buildOpencodeRuntimeEnv({
+        baseEnv: {},
+        apiKeyEnvName,
+        apiKey: 'must-not-be-forwarded',
+      })).toThrow('OpenCode Provider credential environment name is not allowed')
+    }
   })
 })

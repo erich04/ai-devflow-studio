@@ -1760,7 +1760,7 @@ describe('App', () => {
     expect(screen.getByTestId('gate-review-path')).toHaveClass('agent-path-card--soft')
   })
 
-  it('mounts single and Multi-Agent observability for the exact selected Run and local project', async () => {
+  it('keeps Runtime, Coordination, and Memory in one default-collapsed advanced area', async () => {
     const listAgentRuntimes = vi.fn().mockResolvedValue([])
     const listCoordinationSessions = vi.fn().mockResolvedValue([])
     const api = installDesktopApi({ listAgentRuntimes, listCoordinationSessions })
@@ -1769,21 +1769,67 @@ describe('App', () => {
     await waitFor(() => expect(api.loadState).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
-    expect(await screen.findByRole('region', { name: 'Agent Runtime observability' })).toBeInTheDocument()
+    const workbench = await screen.findByTestId('agent-workbench')
+    const advanced = within(workbench).getByTestId('agent-advanced-tools')
+    expect(advanced).not.toHaveAttribute('open')
+    expect(within(workbench).getAllByRole('button').filter((button) => button.classList.contains('primary-button'))).toHaveLength(1)
+    expect(within(workbench).getByRole('region', { name: '独立 Runtime 验收与诊断' })).not.toBeVisible()
+    expect(within(workbench).getByText('scenario.evaluate')).not.toBeVisible()
+
+    fireEvent.click(within(advanced).getByText('高级验收与诊断'))
+    expect(advanced).toHaveAttribute('open')
+    expect(await within(workbench).findByRole('region', { name: '独立 Runtime 验收与诊断' })).toBeInTheDocument()
     await waitFor(() => expect(listAgentRuntimes).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
       localProjectId: localProject.id,
     }))
-    expect(screen.getByText('No Agent Runtime has been recorded for this Run.')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /Start Agent Runtime/ })).not.toBeInTheDocument()
-    expect(await screen.findByRole('region', { name: 'Multi-Agent Coordination' }))
+    expect(screen.getByText('当前 Run 尚未创建独立 Runtime；这不是完成当前 Workflow 的必需步骤。')).toBeInTheDocument()
+    expect(await screen.findByRole('region', { name: '固定多 Agent 验收会话' }))
       .toBeInTheDocument()
     await waitFor(() => expect(listCoordinationSessions).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
       localProjectId: localProject.id,
     }))
-    expect(screen.getByText('No Multi-Agent Coordination has been recorded for this Run.'))
+    expect(screen.getByText('当前 Run 尚未创建多 Agent 验收会话；这是可选高级功能。'))
       .toBeInTheDocument()
+  })
+
+  it('keeps the design Stage Agent as the only primary action and explains unpaired advanced limits before use', async () => {
+    const listCoordinationSessions = vi.fn().mockResolvedValue([])
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: [fixtureRunAtCurrentNode('n-design')],
+        desktopPairingCredential: null,
+      })),
+      listCoordinationSessions,
+    })
+    render(<App />)
+
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+
+    const workbench = await screen.findByTestId('agent-workbench')
+    const currentTask = within(workbench).getByTestId('agent-current-task')
+    const primaryActions = within(workbench).getAllByRole('button')
+      .filter((button) => button.classList.contains('primary-button'))
+    expect(primaryActions).toHaveLength(1)
+    expect(primaryActions[0]).toHaveAccessibleName('生成设计方案')
+    expect(within(currentTask).getByRole('list', { name: '当前主操作的对象、结果和影响' })).toHaveTextContent(
+      '调用 doubao-review / ark-code-latest',
+    )
+    expect(currentTask).toHaveTextContent('只读检查仓库上下文，不修改仓库文件')
+    expect(currentTask).toHaveTextContent('推进到方案评审 Gate；不会自动批准 Gate')
+
+    const advanced = within(workbench).getByTestId('agent-advanced-tools')
+    expect(advanced).toHaveTextContent('本地未配对 · 多 Agent 入口不可用')
+    fireEvent.click(within(advanced).getByText('高级验收与诊断'))
+    const coordination = within(advanced).getByRole('button', {
+      name: '创建固定多 Agent 验收会话（需先配对 Team）',
+    })
+    expect(coordination).toBeDisabled()
+    expect(coordination).toHaveAccessibleDescription(/不可用：请先在页面顶部绑定.*必须先将当前 Local Project 配对到 Team Project/u)
+    expect(listCoordinationSessions).not.toHaveBeenCalled()
   })
 
   it('labels Electron local state as empty when no persisted runs exist', async () => {
@@ -2700,7 +2746,10 @@ describe('App', () => {
     expect(audit).toHaveTextContent('Old provider failure.')
     expect(audit).toHaveTextContent('permission-old · rejected')
     expect(audit).toHaveTextContent('Old terminal trace.')
-    expect(audit).toHaveTextContent('100 · $0.01')
+    expect(audit).toHaveTextContent('100 · unknown')
+    expect(audit).not.toHaveTextContent('$0.01')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Legacy unverified cost')
+    expect(screen.getByTestId('agent-workbench')).not.toHaveTextContent('$0.01')
   })
 
   it('fails closed in Workbench when no Coding Engine is available and opens the shared configuration', async () => {
@@ -4973,7 +5022,7 @@ describe('App', () => {
       providerId: agentProvider.id,
     })))
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('基于知识的门禁审查')
-    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('warning-only')
+    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('仅警告')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Build redacted context')
     expect(screen.getByTestId('agent-workbench')).toHaveTextContent('estimated')
 
@@ -5088,7 +5137,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
-    expect(await screen.findByText('Add Agent Provider')).toBeInTheDocument()
+    expect(await screen.findByText('新增 Agent Provider')).toBeInTheDocument()
     expect(screen.getByLabelText('Saved Agent Provider')).toBeInTheDocument()
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
       '已保存 Provider 配置 实时 OpenAI 兼容服务 · 可能消耗模型 Token',
@@ -5107,7 +5156,7 @@ describe('App', () => {
     fireEvent.change(screen.getByLabelText('Agent Provider API Key'), {
       target: { value: 'e8fa6ce2-test-key' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /Save and Use Provider/ }))
+    fireEvent.click(screen.getByRole('button', { name: /保存并使用 Provider/ }))
 
     await waitFor(() =>
       expect(saveAgentProviderCredential).toHaveBeenCalledWith({
@@ -5129,8 +5178,8 @@ describe('App', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await screen.findByText('Add Agent Provider')
-    fireEvent.click(screen.getByRole('button', { name: /Save and Use Provider/ }))
+    await screen.findByText('新增 Agent Provider')
+    fireEvent.click(screen.getByRole('button', { name: /保存并使用 Provider/ }))
 
     expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
     expect(screen.getByText('请输入 API Key')).toBeInTheDocument()
@@ -5141,16 +5190,16 @@ describe('App', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await screen.findByText('Add Agent Provider')
+    await screen.findByText('新增 Agent Provider')
     expect(screen.getByLabelText('Agent Provider Name')).toBeInTheDocument()
     expect(screen.queryByLabelText('Agent Provider ID')).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Agent Provider API Key'), {
       target: { value: 'sk-test-secret' },
     })
-    fireEvent.click(screen.getByRole('button', { name: /Save and Use Provider/ }))
+    fireEvent.click(screen.getByRole('button', { name: /保存并使用 Provider/ }))
 
     expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
-    expect(screen.getByText('Provider name is required.')).toBeInTheDocument()
+    expect(screen.getByText('请输入 Provider 名称')).toBeInTheDocument()
   })
 
   it('applies main-process local state pushes to the current project sync status', async () => {
@@ -5752,15 +5801,15 @@ describe('App', () => {
 
     const workbench = await screen.findByTestId('agent-workbench')
     expect(workbench).toHaveTextContent('real opencode')
-    expect(workbench).toHaveTextContent('Terminal state')
+    expect(workbench).toHaveTextContent('终态')
     expect(workbench).toHaveTextContent('completed')
-    expect(workbench).toHaveTextContent('Cleanup')
+    expect(workbench).toHaveTextContent('工作区清理')
     expect(workbench).toHaveTextContent('deleted')
-    expect(workbench).toHaveTextContent('Test Evidence')
+    expect(workbench).toHaveTextContent('测试证据')
     expect(workbench).toHaveTextContent('opencode smoke tests passed')
-    expect(workbench).toHaveTextContent('Permission Timeline')
+    expect(workbench).toHaveTextContent('权限时间线')
     expect(workbench).toHaveTextContent('approved')
-    expect(workbench).toHaveTextContent('Tool / Skill Timeline')
+    expect(workbench).toHaveTextContent('工具 / Skill 时间线')
     expect(workbench).toHaveTextContent('shell-runner')
     expect(workbench).toHaveTextContent('bash')
     expect(workbench).toHaveTextContent('opencode metadata')

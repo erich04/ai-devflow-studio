@@ -1022,6 +1022,8 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
         redirect = init?.redirect
         return new Response(JSON.stringify({
+          id: 'response-safe-id',
+          system_fingerprint: 'fingerprint-safe-id',
           choices: [{ message: { content: '{"stateVersion":1,"ok":true}' } }],
           usage: { prompt_tokens: 21, completion_tokens: 8, cached_tokens: 3 },
         }), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -1042,6 +1044,11 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         cacheMissTokens: 18,
         cacheStatus: 'complete',
         billingProvider: 'openai_compatible',
+      },
+      responseMetadata: {
+        httpStatus: 200,
+        responseId: 'response-safe-id',
+        systemFingerprint: 'fingerprint-safe-id',
       },
     })
     expect(requestBody).toMatchObject({
@@ -1112,7 +1119,13 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       })
       await expect(invalid.completeStructuredJson?.({
         systemPrompt: 'Return JSON.', userPrompt: 'Plan.', maxOutputTokens: 100,
-      })).rejects.toThrow('Agent provider structured output is invalid')
+      })).rejects.toMatchObject({
+        code: 'invalid_model_output',
+        deliveryState: 'response_received',
+        billingState: 'unknown',
+        retryable: true,
+        httpStatus: 200,
+      })
     }
   })
 
@@ -1480,5 +1493,43 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         prompt: 'Return a review.',
       }),
     ).rejects.not.toThrow(/sk-secret|6363516a/u)
+  })
+
+  it('bounds a chunked Knowledge Review response without trusting Content-Length', async () => {
+    let pulls = 0
+    let cancelled = false
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1
+        controller.enqueue(new Uint8Array(16 * 1_024).fill(120))
+        if (pulls === 8) controller.close()
+      },
+      cancel() {
+        cancelled = true
+      },
+    }), { status: 200 })
+    const json = vi.spyOn(response, 'json')
+    const provider = createOpenAiCompatibleAgentProvider({
+      model: 'ark-code-latest', apiKey: 'secret-key', fetcher: async () => response,
+    })
+
+    const failure = await provider.reviewKnowledge({
+      request: {
+        id: 'review-request-bounded-response',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context: await buildAgentReviewContext({
+        run, node, artifacts, testEvidence: [], knowledgeDocuments, knowledgeChunks,
+      }),
+      prompt: 'Return a review.',
+    }).catch((error: unknown) => error)
+
+    expect(failure).toMatchObject({ code: 'response_too_large', httpStatus: 200 })
+    expect(json).not.toHaveBeenCalled()
+    expect(cancelled).toBe(true)
   })
 })

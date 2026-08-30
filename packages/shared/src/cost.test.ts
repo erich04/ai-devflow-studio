@@ -418,12 +418,14 @@ describe('runtimeCostSummaryToTokenUsage', () => {
       userId: 'user-1',
       timestamp: '2026-06-20T00:00:00.000Z',
     }
-    expect(runtimeCostSummaryToTokenUsage({
+    const preflight = {
       ...base,
       usageStatus: 'estimated',
       costStatus: 'estimated',
       phase: 'preflight_estimate',
-    })).toBeNull()
+    } as const
+    expect(runtimeCostSummaryToTokenUsage(preflight)).toBeNull()
+    expect(annotateUnknownRuntimeCosts([], [preflight], 'projectId')).toEqual([])
     expect(runtimeCostSummaryToTokenUsage({
       ...base,
       cacheReadTokens: null,

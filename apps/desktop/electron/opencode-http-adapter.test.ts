@@ -7,23 +7,31 @@ import {
   createOpencodeSession,
   getOpencodeSessionStatus,
   listOpencodeDiff,
+  listOpencodeMessages,
   listOpencodePermissions,
   replyOpencodePermission,
   sendOpencodeMessage,
   type Fetcher,
+  MAX_OPENCODE_HTTP_RESPONSE_BYTES,
   OpencodeHttpRequestError,
   OpencodeMessageResponseError,
 } from './opencode-http-adapter'
 
 describe('opencode HTTP adapter', () => {
-  it('denies unsupported interactive and child-session tools while preserving managed asks', () => {
+  it('allows the authorized worktree edit envelope while relaying shell and denying everything else', () => {
     expect(createDefaultOpencodePermissionRules()).toEqual([
+      { permission: '*', pattern: '*', action: 'deny' },
       { permission: 'question', pattern: '*', action: 'deny' },
       { permission: 'task', pattern: '*', action: 'deny' },
-      { permission: 'edit', pattern: '*', action: 'ask' },
+      { permission: 'read', pattern: '*', action: 'allow' },
+      { permission: 'glob', pattern: '*', action: 'allow' },
+      { permission: 'grep', pattern: '*', action: 'allow' },
+      { permission: 'list', pattern: '*', action: 'allow' },
+      { permission: 'edit', pattern: '*', action: 'allow' },
+      { permission: 'write', pattern: '*', action: 'allow' },
+      { permission: 'patch', pattern: '*', action: 'allow' },
       { permission: 'bash', pattern: '*', action: 'ask' },
-      { permission: 'write', pattern: '*', action: 'ask' },
-      { permission: 'patch', pattern: '*', action: 'ask' },
+      { permission: 'install', pattern: '*', action: 'ask' },
     ])
   })
 
@@ -107,6 +115,31 @@ describe('opencode HTTP adapter', () => {
       'http://127.0.0.1:4097/session/ses_1/diff?directory=%2Ftmp%2Frepo',
     ])
     expect(JSON.parse(String(fetcher.calls[1]?.[1]?.body))).not.toHaveProperty('directory')
+  })
+
+  it('reads observable session message parts from the stable OpenCode message-history endpoint', async () => {
+    const messages = [{
+      info: { id: 'msg-assistant-1', role: 'assistant' },
+      parts: [{
+        id: 'prt-tool-1',
+        messageID: 'msg-assistant-1',
+        type: 'tool',
+        callID: 'call-read-1',
+        tool: 'read',
+      }],
+    }]
+    const fetcher = jsonFetcher(messages)
+
+    await expect(listOpencodeMessages({
+      baseUrl: 'http://127.0.0.1:4097',
+      sessionId: 'ses_1',
+      directory: '/tmp/repo',
+      fetcher,
+    })).resolves.toEqual(messages)
+    expect(String(fetcher.calls[0]?.[0])).toBe(
+      'http://127.0.0.1:4097/session/ses_1/message?directory=%2Ftmp%2Frepo',
+    )
+    expect(fetcher.calls[0]?.[1]?.method).toBeUndefined()
   })
 
   it('reads only the target session status and permanently discards retry details', async () => {
@@ -245,6 +278,67 @@ describe('opencode HTTP adapter', () => {
     expect((error as Error).message).not.toContain('RAW_SECRET_SENTINEL')
     expect((error as Error).message).not.toContain('/private/tmp/secret-worktree')
     expect((error as Error).message).not.toContain('%2Fprivate%2Ftmp%2Fsecret-worktree')
+  })
+
+  it('rejects oversized OpenCode responses before parsing or retaining their body', async () => {
+    const oversized = JSON.stringify({ value: 'x'.repeat(MAX_OPENCODE_HTTP_RESPONSE_BYTES) })
+    const fetcher = vi.fn(async () => new Response(oversized, { status: 200 })) as unknown as Fetcher
+
+    const error = await listOpencodePermissions({
+      baseUrl: 'http://127.0.0.1:4097',
+      fetcher,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({
+      code: 'response_too_large',
+      statusCode: 200,
+      message: 'opencode request failed',
+    })
+    expect(JSON.stringify(error)).not.toContain('xxxxxxxxxxxxxxxx')
+  })
+
+  it('stops reading a chunked response as soon as the byte limit is exceeded', async () => {
+    let pulls = 0
+    let cancelled = false
+    const response = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1
+        controller.enqueue(new Uint8Array(128 * 1_024).fill(120))
+        if (pulls === 24) controller.close()
+      },
+      cancel() {
+        cancelled = true
+      },
+    }), { status: 200 })
+    const text = vi.spyOn(response, 'text')
+    const fetcher = vi.fn(async () => response) as unknown as Fetcher
+
+    const error = await listOpencodePermissions({
+      baseUrl: 'http://127.0.0.1:4097',
+      fetcher,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'response_too_large', statusCode: 200 })
+    expect(text).not.toHaveBeenCalled()
+    expect(cancelled).toBe(true)
+    expect(pulls).toBeLessThan(24)
+  })
+
+  it('does not trust a forged smaller Content-Length for the response bound', async () => {
+    const response = new Response(
+      JSON.stringify({ value: 'x'.repeat(MAX_OPENCODE_HTTP_RESPONSE_BYTES) }),
+      { status: 200, headers: { 'content-length': '1' } },
+    )
+    const text = vi.spyOn(response, 'text')
+    const fetcher = vi.fn(async () => response) as unknown as Fetcher
+
+    const error = await listOpencodePermissions({
+      baseUrl: 'http://127.0.0.1:4097',
+      fetcher,
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toMatchObject({ code: 'response_too_large', statusCode: 200 })
+    expect(text).not.toHaveBeenCalled()
   })
 
   it('classifies response-body transport failures without exposing their cause', async () => {

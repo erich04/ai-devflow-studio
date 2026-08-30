@@ -1097,6 +1097,11 @@ export type CodingRuntimeReadinessCode =
   | 'git_unavailable'
   | 'test_command_missing'
   | 'executor_unconfigured'
+  | 'binary_missing'
+  | 'version_incompatible'
+  | 'auth_unavailable'
+  | 'profile_unavailable'
+  | 'model_unavailable'
   | 'engine_unavailable'
   | 'capability_unavailable'
   | 'provider_unavailable'
@@ -1209,6 +1214,7 @@ export type CodingAgentRun = {
   diffArtifactId?: string
   bootstrapEvidenceId?: string
   testEvidenceId?: string
+  changeAcceptanceDecisionId?: string
   redacted: boolean
 }
 
@@ -1245,7 +1251,11 @@ export type CodingPermissionRequest = {
   codingRunId: string
   runId: string
   nodeId: string
-  origin?: 'coding_executor' | 'dependency_bootstrap'
+  origin?:
+    | 'coding_executor'
+    | 'dependency_bootstrap'
+    | 'execution_authorization'
+    | 'change_acceptance'
   permission: 'bash' | 'edit' | 'write' | 'patch' | 'install' | 'external_directory'
   title: string
   command?: string
@@ -1253,6 +1263,10 @@ export type CodingPermissionRequest = {
   diffPreview?: string
   changeSetId?: string
   changeSetDigest?: string
+  diffArtifactId?: string
+  diffSourceDigest?: string
+  testEvidenceId?: string
+  managedWorkspaceId?: string
   risk: CommandRiskLevel
   reasons: string[]
   status: CodingPermissionRequestStatus

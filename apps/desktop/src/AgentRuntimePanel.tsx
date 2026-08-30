@@ -34,6 +34,16 @@ function mergeSnapshot(
   return mergeAgentRuntimeConsoleSnapshot({ state: current, snapshot }).state
 }
 
+function runtimeStatusLabel(status: string) {
+  return {
+    requested: '已创建',
+    checkpointed: '已保存检查点',
+    running: '运行中',
+    waiting_permission: '等待权限',
+    terminal: '已结束',
+  }[status] ?? '未知状态'
+}
+
 export function AgentRuntimePanel({
   desktopApi,
   runId,
@@ -71,7 +81,7 @@ export function AgentRuntimePanel({
         try {
           return mergeSnapshot(current, snapshot)
         } catch {
-          setError('Agent Runtime update was rejected by the renderer contract.')
+          setError('独立 Runtime 更新未通过安全校验，已保留上一次可信状态。')
           return current
         }
       })
@@ -95,7 +105,7 @@ export function AgentRuntimePanel({
       })
       .catch(() => {
         if (!disposed) {
-          setError('Agent Runtime state could not be loaded safely.')
+          setError('无法安全读取独立 Runtime 状态。')
         }
       })
       .finally(() => {
@@ -116,8 +126,8 @@ export function AgentRuntimePanel({
   )
   const canCancel = Boolean(detail && detail.runtime.status !== 'terminal')
   const actionLabel = detail?.runtime.status === 'checkpointed'
-    ? 'Resume Runtime'
-    : 'Continue Runtime'
+    ? '从检查点恢复 Runtime'
+    : '继续 Runtime 验证'
   const runtimeEvents = detail?.events ?? []
   const activeAction = detail?.runtime.activeAction ?? null
   const selectedItem = useMemo(
@@ -135,7 +145,7 @@ export function AgentRuntimePanel({
       const snapshot = await desktopApi.getAgentRuntime({ runtimeId, runId, localProjectId })
       setState((current) => current ? mergeSnapshot(current, snapshot) : current)
     } catch {
-      setError('Agent Runtime detail could not be loaded safely.')
+      setError('无法安全读取所选 Runtime 详情。')
     } finally {
       setIsLoading(false)
     }
@@ -149,7 +159,7 @@ export function AgentRuntimePanel({
       const snapshot = await desktopApi.startAgentRuntime({ runId, nodeId, localProjectId })
       setState((current) => current ? mergeSnapshot(current, snapshot) : current)
     } catch {
-      setError('Agent Runtime start was rejected or became stale. Reload the current Run.')
+      setError('独立 Runtime 创建请求已被安全拒绝或当前 Run 已变化，请重新加载后再试。')
     } finally {
       setIsActing(false)
     }
@@ -165,40 +175,56 @@ export function AgentRuntimePanel({
         : await desktopApi.cancelAgentRuntime(commandFor(detail))
       setState((current) => current ? mergeSnapshot(current, snapshot) : current)
     } catch {
-      setError('Agent Runtime command was rejected or became stale. Reload the current Runtime.')
+      setError('Runtime 操作已被安全拒绝或状态已变化，请重新加载当前 Runtime。')
     } finally {
       setIsActing(false)
     }
   }
 
   return (
-    <section className="agent-console-section" aria-label="Agent Runtime observability">
+    <section className="agent-console-section" aria-label="独立 Runtime 验收与诊断">
       <div className="section-heading section-heading--inline">
-        <span>Agent Runtime</span>
-        <strong>Bounded execution and recovery</strong>
+        <span title="Runtime：独立于当前 Workflow 的有界执行状态机。">独立 Runtime 验收与诊断</span>
+        <strong>有界执行、检查点恢复与审计</strong>
       </div>
+
+      <article className="advanced-operation-boundary" id="standalone-runtime-boundary">
+        <p>
+          面向当前 Run / 节点创建独立验证实例，固定执行无业务副作用的内部场景 <code>scenario.evaluate</code>，
+          结果是检查点、执行轨迹、评估和可选 Memory 候选。
+        </p>
+        <div className="advanced-boundary-grid">
+          <span>用途</span><strong>为当前 Run / 节点验证 Runtime 状态机，不执行当前业务任务</strong>
+          <span>结果</span><strong>保存检查点、执行轨迹、评估与可选 Memory 候选</strong>
+          <span>前置条件</span><strong>已选择 Local Project（本地项目）和 Run；无需 Team 配对</strong>
+          <span>Provider / 费用</span><strong>不调用当前 Stage Provider，不产生模型 token 费用</strong>
+          <span>仓库</span><strong>不读取或修改仓库文件</strong>
+          <span>Workflow</span><strong>不生成阶段 Artifact、不推进工作流、不审批 Gate</strong>
+        </div>
+      </article>
 
       {!desktopApi || !runId || !localProjectId ? (
         <article className="agent-evidence-card">
-          <p className="empty-note">Select a local project and Run to inspect Agent Runtime state.</p>
+          <p className="empty-note">请先选择本地项目和 Run，再查看独立 Runtime 状态。</p>
         </article>
       ) : null}
 
-      {isLoading && !state ? <p className="empty-note">Loading Agent Runtime state…</p> : null}
+      {isLoading && !state ? <p className="empty-note">正在读取独立 Runtime 状态…</p> : null}
       {error ? <p className="error-note" role="alert">{error}</p> : null}
 
       {state && state.items.length === 0 ? (
         <article className="agent-evidence-card">
-          <p className="empty-note">No Agent Runtime has been recorded for this Run.</p>
+          <p className="empty-note">当前 Run 尚未创建独立 Runtime；这不是完成当前 Workflow 的必需步骤。</p>
           <div className="inspector-actions">
             <button
-              className="primary-button"
+              className="ghost-button"
               type="button"
+              aria-describedby="standalone-runtime-boundary"
               disabled={!nodeId || isActing}
               onClick={() => void startRuntime()}
             >
               <Activity size={15} />
-              Start Runtime
+              创建独立 Runtime 验证实例（高级）
             </button>
           </div>
         </article>
@@ -208,7 +234,7 @@ export function AgentRuntimePanel({
         <div className="agent-path-grid">
           <article className="agent-evidence-card">
             <div className="section-heading">
-              <span>Runtime list</span>
+              <span>Runtime 记录</span>
               <strong>{state.items.length}</strong>
             </div>
             <div className="trace-list">
@@ -221,7 +247,7 @@ export function AgentRuntimePanel({
                   onClick={() => void selectRuntime(item.runtime.runtimeId)}
                 >
                   <Activity size={15} />
-                  {item.runtime.runtimeId} · {item.runtime.status}
+                  {item.runtime.runtimeId} · {runtimeStatusLabel(item.runtime.status)}
                 </button>
               ))}
             </div>
@@ -229,65 +255,69 @@ export function AgentRuntimePanel({
 
           <article className="agent-evidence-card">
             <div className="section-heading">
-              <span>Current state</span>
-              <strong>{detail?.runtime.status ?? selectedItem?.runtime.status ?? 'loading'}</strong>
+              <span>当前状态</span>
+              <strong>{detail?.runtime.status
+                ? runtimeStatusLabel(detail.runtime.status)
+                : selectedItem?.runtime.status
+                  ? runtimeStatusLabel(selectedItem.runtime.status)
+                  : '读取中'}</strong>
             </div>
             {detail ? (
               <>
                 <div className="agent-fact-grid agent-fact-grid--three">
                   <div className="compact-row">
-                    <span>Steps</span>
-                    <strong>{detail.runtime.counters.steps} / {detail.runtime.bounds.maxSteps} steps</strong>
+                    <span>步骤</span>
+                    <strong>{detail.runtime.counters.steps} / {detail.runtime.bounds.maxSteps}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Tool calls</span>
+                    <span>工具调用</span>
                     <strong>{detail.runtime.counters.toolCalls} / {detail.runtime.bounds.maxToolCalls}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Tokens</span>
+                    <span title="Token：模型用量计数；此固定场景不会调用当前 Provider。">Token 用量</span>
                     <strong>{detail.runtime.counters.tokens} / {detail.runtime.bounds.maxTokens}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Cost</span>
+                    <span>费用</span>
                     <strong>${detail.runtime.counters.costUsd.toFixed(4)} / ${detail.runtime.bounds.maxCostUsd.toFixed(2)}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Checkpoint</span>
+                    <span title="Checkpoint：可恢复的执行检查点。">检查点</span>
                     <strong>v{detail.runtime.checkpointVersion}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Accepted actions</span>
+                    <span>已接受操作</span>
                     <strong>{detail.runtime.acceptedActionCount}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Trajectory</span>
-                    <strong>{runtimeEvents.length} trajectory events</strong>
+                    <span title="Trajectory：Runtime 的可审计执行轨迹。">执行轨迹</span>
+                    <strong>{runtimeEvents.length} 条事件</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Stop reason</span>
-                    <strong>{detail.runtime.stopReason ?? 'none'}</strong>
+                    <span>结束原因</span>
+                    <strong>{detail.runtime.stopReason ?? '尚未结束'}</strong>
                   </div>
                 </div>
 
                 {activeAction ? (
                   <div className="agent-advisory">
-                    <span>Active capability</span>
+                    <span>当前能力</span>
                     <strong>{activeAction.kind} · {activeAction.capabilityId} v{activeAction.capabilityVersion}</strong>
-                    <p>Request digest {activeAction.requestDigest}</p>
+                    <p>请求摘要 {activeAction.requestDigest}</p>
                   </div>
                 ) : null}
 
                 {detail.runtime.status === 'waiting_permission' || activeAction?.requiresPermission ? (
                   <div className="agent-advisory agent-advisory--warn">
-                    <span>Permission</span>
-                    <strong>Waiting for an existing permission authority</strong>
-                    <p>This view cannot issue a capability or inject a Tool result.</p>
+                    <span>权限</span>
+                    <strong>等待已有权限授权方处理</strong>
+                    <p>此视图不能签发能力，也不能注入工具结果。</p>
                   </div>
                 ) : null}
 
                 <div className="inspector-actions">
                   <button
-                    className="primary-button"
+                    className="ghost-button"
                     type="button"
                     disabled={!canAdvance || isActing}
                     onClick={() => void executeAction('advance')}
@@ -302,11 +332,11 @@ export function AgentRuntimePanel({
                     onClick={() => void executeAction('cancel')}
                   >
                     <Ban size={15} />
-                    Cancel Runtime
+                    取消 Runtime
                   </button>
                 </div>
               </>
-            ) : <p className="empty-note">Loading the selected Runtime detail…</p>}
+            ) : <p className="empty-note">正在读取所选 Runtime 详情…</p>}
           </article>
         </div>
       ) : null}
@@ -315,13 +345,13 @@ export function AgentRuntimePanel({
         <div className="agent-path-grid">
           <article className="agent-evidence-card">
             <div className="section-heading">
-              <span>Trajectory</span>
+              <span>执行轨迹</span>
               <strong>{runtimeEvents.length}</strong>
             </div>
             <div className="trace-list">
               {runtimeEvents.map((event) => (
                 <div className="trace-step" key={`${event.runtimeId}-${event.sequence}`}>
-                  <span>#{event.sequence} · checkpoint {event.checkpointVersion}</span>
+                  <span>#{event.sequence} · 检查点 {event.checkpointVersion}</span>
                   <strong>{event.type}</strong>
                   <p>{event.createdAt}</p>
                 </div>
@@ -331,77 +361,75 @@ export function AgentRuntimePanel({
 
           <article className="agent-evidence-card">
             <div className="section-heading">
-              <span>Runtime Evidence</span>
-              <strong><CheckCircle2 size={15} /> redacted</strong>
+              <span>Runtime 证据</span>
+              <strong><CheckCircle2 size={15} /> 已脱敏</strong>
             </div>
             <div className="compact-row">
-              <span>Context digest</span>
+              <span>上下文摘要</span>
               <code>{detail.runtime.contextDigest}</code>
             </div>
             <div className="compact-row">
-              <span>Capability set digest</span>
+              <span>能力集合摘要</span>
               <code>{detail.runtime.capabilitySetDigest}</code>
             </div>
             <div className="compact-row">
-              <span>Last observation</span>
+              <span>最近观察摘要</span>
               <code>{detail.runtime.lastObservationDigest}</code>
             </div>
             <div className="compact-row">
-              <span>Last result</span>
-              <code>{detail.runtime.lastResultDigest ?? 'none'}</code>
+              <span>最近结果摘要</span>
+              <code>{detail.runtime.lastResultDigest ?? '暂无'}</code>
             </div>
             {detail.latestEvaluation ? (
               <div className="agent-advisory">
-                <span>Latest evaluation</span>
+                <span>最近评估</span>
                 <strong>{detail.latestEvaluation.evaluation}</strong>
                 <p>{detail.latestEvaluation.summary}</p>
               </div>
             ) : null}
             <p className="empty-note">
-              Source, local paths, raw Tool output, scope sessions, and complete checkpoints remain in Electron main.
+              源内容、本地路径、工具原始输出、作用域会话和完整检查点仅保留在 Electron Main。
             </p>
           </article>
 
           <article className="agent-evidence-card">
             <div className="section-heading">
-              <span>Runtime Context</span>
-              <strong><CheckCircle2 size={15} /> redacted provenance</strong>
+              <span>Runtime 上下文</span>
+              <strong><CheckCircle2 size={15} /> 已脱敏来源</strong>
             </div>
             {detail.context ? (
               <>
                 <div className="compact-row">
-                  <span>Knowledge</span>
+                  <span title="Knowledge：当前项目已索引的知识来源。">Knowledge（知识）</span>
                   <strong>
-                    {detail.context.knowledgeCitationCount} Knowledge Citation
-                    {detail.context.knowledgeCitationCount === 1 ? '' : 's'}
+                    {detail.context.knowledgeCitationCount} 条知识引用
                   </strong>
                 </div>
                 <div className="compact-row">
-                  <span>Durable Memory</span>
+                  <span>持久 Memory</span>
                   <strong>
-                    {detail.context.memoryRevisionCount} Durable Memory revision
-                    {detail.context.memoryRevisionCount === 1 ? '' : 's'}
+                    {detail.context.memoryRevisionCount} 个持久记忆版本
                   </strong>
                 </div>
                 <div className="compact-row">
-                  <span>Attachment ID</span>
+                  <span>附件 ID</span>
                   <code>{detail.context.attachmentId}</code>
                 </div>
                 <div className="compact-row">
-                  <span>Knowledge identity digest</span>
+                  <span>Knowledge 身份摘要</span>
                   <code>{detail.context.knowledgeIdentityDigest}</code>
                 </div>
                 <div className="compact-row">
-                  <span>Memory identity digest</span>
+                  <span>Memory 身份摘要</span>
                   <code>{detail.context.memoryIdentityDigest}</code>
                 </div>
                 <p className="empty-note">
-                  Citation and Memory bodies remain available only to Electron main.
+                  引用和 Memory 正文仅在 Electron Main 中可用。
                 </p>
               </>
             ) : (
               <p className="empty-note">
-                This retained Runtime predates durable Context attachment metadata.
+                这条历史 Runtime 早于持久上下文附件元数据，无法补造来源信息。
               </p>
             )}
           </article>

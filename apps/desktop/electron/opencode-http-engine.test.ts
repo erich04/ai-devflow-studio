@@ -87,13 +87,17 @@ describe('opencode HTTP coding engine', () => {
       const project = localProject(projects[0]!)
       const workspace = { ...managedWorkspace(project.id, run.id, node.id), worktreePath: alias }
 
-      const result = await engine.start(startInput({ run, node, project, workspace }))
+      const result = expectPermissionResult(
+        await engine.start(startInput({ run, node, project, workspace })),
+      )
       const directoryQuery = `directory=${encodeURIComponent(canonical)}`
 
       expect(fetcher.urls).toEqual([
         `http://127.0.0.1:4097/session?${directoryQuery}`,
         `http://127.0.0.1:4097/session/ses-1/message?${directoryQuery}`,
+        `http://127.0.0.1:4097/session/ses-1/message?${directoryQuery}`,
         `http://127.0.0.1:4097/permission?${directoryQuery}`,
+        `http://127.0.0.1:4097/session/ses-1/message?${directoryQuery}`,
       ])
       expect(result.permissionRequest.filePath).toBe('src/app.ts')
     } finally {
@@ -127,7 +131,7 @@ describe('opencode HTTP coding engine', () => {
       ...input.brief,
       prompt: `${input.brief.prompt}\nUNIQUE_KNOWLEDGE_CONTENT source=docs/standards/api-health.md`,
     }
-    const result = await engine.start(input)
+    const result = expectPermissionResult(await engine.start(input))
 
     expect(result.codingRun.engine).toBe('opencode-http')
     expect(result.codingRun.status).toBe('waiting_permission')
@@ -140,7 +144,9 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.urls).toEqual([
       'http://127.0.0.1:4097/session?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/session/ses-1/message?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/session/ses-1/message?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/session/ses-1/message?directory=%2Ftmp%2Fworktree',
     ])
     expect(fetcher.bodies.join('\n')).toContain('Implement the build node.')
     expect(fetcher.bodies.join('\n')).toContain('DevFlow Coding Brief')
@@ -148,6 +154,105 @@ describe('opencode HTTP coding engine', () => {
     expect(result.codingRun.prompt).toBe(input.brief.prompt)
     const messageBody = JSON.parse(fetcher.bodies[1]!) as { parts: Array<{ text: string }> }
     expect(messageBody.parts[0]?.text).toBe(input.brief.prompt)
+  })
+
+  it('does not start OpenCode or contact its Provider until Execution Authorization is approved', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      deferredOpencodeMessage(successfulOpencodeMessage()),
+      [{ id: 'perm-bash', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'npm test' } }],
+    ])
+    const ensure = vi.fn(async ({ projectId }: { projectId: string }) => ({
+      baseUrl: 'http://127.0.0.1:4097',
+      child: {} as never,
+      projectId,
+    }))
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: { ensure },
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+      requireExecutionAuthorization: true,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const authorizedStart = startInput({ run, node, project, workspace })
+
+    await engine.ensure({ project })
+    const authorization = expectPermissionResult(await engine.start(authorizedStart))
+
+    expect(authorization.permissionRequest).toMatchObject({
+      origin: 'execution_authorization',
+      permission: 'write',
+      status: 'pending',
+    })
+    expect(ensure).not.toHaveBeenCalled()
+    expect(fetcher.urls).toEqual([])
+
+    const started = await engine.approvePermission({
+      codingRun: authorization.codingRun,
+      workspace,
+      project,
+      request: authorization.permissionRequest,
+      authorizedStart,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    expect(ensure).toHaveBeenCalledOnce()
+    expect(fetcher.urls.some((url) => url.includes('/session?'))).toBe(true)
+    expect(started).toMatchObject({
+      codingRun: { status: 'waiting_permission' },
+      permissionRequest: { id: 'perm-bash', permission: 'bash' },
+    })
+  })
+
+  it('can finish an authorized OpenCode run without inventing a tool permission', async () => {
+    const patch = 'diff --git a/src/app.ts b/src/app.ts\n+export const ready = true\n'
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      immediateSuccessfulOpencodeMessage(),
+      [],
+      { 'ses-1': { type: 'idle' } },
+      [{ file: 'src/app.ts', patch }],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      captureWorktreeDiff: async () => ({ changedPaths: ['src/app.ts'], patch }),
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+      requireExecutionAuthorization: true,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const authorizedStart = startInput({ run, node, project, workspace })
+    const authorization = expectPermissionResult(await engine.start(authorizedStart))
+
+    const completed = await engine.approvePermission({
+      codingRun: authorization.codingRun,
+      workspace,
+      project,
+      request: authorization.permissionRequest,
+      authorizedStart,
+      now: '2026-06-17T00:00:01.000Z',
+    })
+
+    const result = expectCompletedResult(completed)
+    expect(result.codingRun).toMatchObject({ status: 'completed', changedPaths: ['src/app.ts'] })
+    expect(result.events.some((event) => event.kind === 'permission')).toBe(false)
+    expect(result.diff.patch).toBe(patch)
   })
 
   it('fails closed before sending a message when opencode resolves the session outside the managed worktree', async () => {
@@ -314,7 +419,9 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const result = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
     const toolCall = result.events.find((event) => event.kind === 'tool_call')
 
     expect(result.permissionRequest.filePath).toBe('src/app.ts')
@@ -369,7 +476,9 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const result = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
     const toolCall = result.events.find((event) => event.kind === 'tool_call')
     const metadataBlob = JSON.stringify(toolCall?.metadata)
 
@@ -408,7 +517,9 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const result = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
     const toolCall = result.events.find((event) => event.kind === 'tool_call')
 
     expect(toolCall?.metadata).toMatchObject({
@@ -442,7 +553,9 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const result = await engine.start(startInput({ run, node, project, workspace }))
+    const result = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
     const toolCall = result.events.find((event) => event.kind === 'tool_call')
 
     expect(result.permissionRequest.filePath).toBe('src/app.ts')
@@ -573,6 +686,7 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.urls).toEqual([
       'http://127.0.0.1:4097/session?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/session/ses-1/message?directory=%2Ftmp%2Fworktree',
+      'http://127.0.0.1:4097/session/ses-1/message?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
       'http://127.0.0.1:4097/permission?directory=%2Ftmp%2Fworktree',
@@ -588,8 +702,9 @@ describe('opencode HTTP coding engine', () => {
     })
     let abortCount = 0
     let statusCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return pendingMessage
       }
@@ -649,8 +764,9 @@ describe('opencode HTTP coding engine', () => {
   it('continues through a busy target status and ignores an unrelated session retry', async () => {
     let permissionPollCount = 0
     let statusPollCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return new Promise<Response>(() => undefined)
       }
@@ -692,7 +808,9 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     expect(started.permissionRequest).toMatchObject({ id: 'perm-1', permission: 'bash' })
     expect(permissionPollCount).toBe(3)
@@ -701,8 +819,9 @@ describe('opencode HTTP coding engine', () => {
 
   it('times out a pending provider message and completes bounded startup cleanup', async () => {
     let abortCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         await new Promise<void>((resolve) => setTimeout(resolve, 20))
         return new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 })
@@ -746,8 +865,9 @@ describe('opencode HTTP coding engine', () => {
     })
     let aborted = false
     let abortCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return pendingMessage
       }
@@ -799,6 +919,7 @@ describe('opencode HTTP coding engine', () => {
     let statusSignal: AbortSignal | undefined
     const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return pendingMessage
       }
@@ -891,9 +1012,10 @@ describe('opencode HTTP coding engine', () => {
 
   it('retains startup cleanup ownership when an aborted provider message never settles', async () => {
     const urls: string[] = []
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
       urls.push(requestUrl)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return new Promise<Response>(() => undefined)
       }
@@ -936,8 +1058,9 @@ describe('opencode HTTP coding engine', () => {
 
   it('bounds cleanup when the abort request ignores cancellation', async () => {
     let abortCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return new Promise<Response>(() => undefined)
       }
@@ -987,8 +1110,9 @@ describe('opencode HTTP coding engine', () => {
       markPermissionPollStarted = resolve
     })
     let abortCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return pendingMessage
       }
@@ -1057,7 +1181,7 @@ describe('opencode HTTP coding engine', () => {
       markSessionRequestStarted = resolve
     })
     const urls: string[] = []
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
       urls.push(requestUrl)
       if (requestUrl.endsWith('/session?directory=%2Ftmp%2Fworktree')) {
@@ -1070,6 +1194,7 @@ describe('opencode HTTP coding engine', () => {
       if (requestUrl.includes('/permission?')) {
         return new Response('[]', { status: 200 })
       }
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return new Response(JSON.stringify(successfulOpencodeMessage()), { status: 200 })
       }
@@ -1123,7 +1248,7 @@ describe('opencode HTTP coding engine', () => {
     expect(urls.filter((url) => url.includes('/abort?'))).toHaveLength(1)
   })
 
-  it('replies to approved permissions and captures a redacted opencode diff', async () => {
+  it('replies to approved permissions and uses the managed Git diff as authority', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
       successfulOpencodeMessage(),
@@ -1133,7 +1258,7 @@ describe('opencode HTTP coding engine', () => {
       [
         {
           file: 'src/app.ts',
-          patch: "diff --git a/src/app.ts b/src/app.ts\n+const key = 'sk-live-secret'\n",
+          patch: 'diff --git a/src/app.ts b/src/app.ts\n+export const ready = true\n',
         },
       ],
     ])
@@ -1144,6 +1269,10 @@ describe('opencode HTTP coding engine', () => {
       processManager: readyServer(),
       resolveManagedDirectory: identityManagedDirectory,
       fetcher,
+      captureWorktreeDiff: async () => ({
+        changedPaths: ['src/app.ts'],
+        patch: 'diff --git a/src/app.ts b/src/app.ts\n+export const ready = true\n',
+      }),
       permissionPollMs: 1,
       permissionDiscoveryTimeoutMs: 50,
     })
@@ -1151,7 +1280,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const completed = await engine.approvePermission({
       codingRun: started.codingRun,
@@ -1174,7 +1305,16 @@ describe('opencode HTTP coding engine', () => {
     )
     expect(completedResult.codingRun.status).toBe('completed')
     expect(completedResult.diff.changedPaths).toEqual(['src/app.ts'])
-    expect(completedResult.diff.patch).not.toContain('sk-live-secret')
+    expect(completedResult.diff.patch).toContain('export const ready = true')
+    expect(completedResult.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'diff',
+        metadata: expect.objectContaining({
+          diffSource: 'managed_worktree_git',
+          opencodeDiffStatus: 'matched',
+        }),
+      }),
+    ]))
     expect(completedResult.bootstrapEvidence).toBeUndefined()
     expect(completedResult.events).toEqual(
       expect.arrayContaining([
@@ -1191,6 +1331,177 @@ describe('opencode HTTP coding engine', () => {
           }),
         }),
       ]),
+    )
+  })
+
+  it('fails closed and rejects the OpenCode session before relaying a dangerous command', async () => {
+    const permission = {
+      id: 'perm-dangerous',
+      sessionID: 'ses-1',
+      permission: 'bash',
+      metadata: { command: 'git push origin main' },
+    }
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      successfulOpencodeMessage(),
+      [permission],
+      true,
+      [permission],
+      true,
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode',
+      providerID: 'openai',
+      modelID: 'gpt-4.1-mini',
+      processManager: readyServer(),
+      resolveManagedDirectory: identityManagedDirectory,
+      fetcher,
+      permissionPollMs: 1,
+      permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
+
+    await expect(engine.approvePermission({
+      codingRun: started.codingRun,
+      workspace,
+      project,
+      request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })).rejects.toThrow('git_write_disabled')
+
+    expect(fetcher.bodies.some((body) => body.includes('"reply":"once"'))).toBe(false)
+    expect(fetcher.bodies.some((body) => body.includes('"reply":"reject"'))).toBe(true)
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+    )
+  })
+
+  it('aborts the session when the configured OpenCode tool-turn limit is exceeded', async () => {
+    const firstPermission = {
+      id: 'perm-turn-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' },
+    }
+    const secondPermission = {
+      id: 'perm-turn-2', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pnpm test' },
+    }
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      successfulOpencodeMessage(),
+      [firstPermission],
+      true,
+      [secondPermission],
+      true,
+      [secondPermission],
+      true,
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'openai', modelID: 'gpt-4.1-mini',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+      fetcher, maxToolTurns: 1, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = expectPermissionResult(await engine.start(startInput({ run, node, project, workspace })))
+
+    await expect(engine.approvePermission({
+      codingRun: started.codingRun, workspace, project, request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })).rejects.toThrow('opencode_tool_turn_limit_exceeded')
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+    )
+  })
+
+  it('counts auto-allowed OpenCode tool parts and aborts before they can bypass the tool-turn limit', async () => {
+    const autoAllowedTools = ['read', 'glob', 'grep', 'list', 'edit', 'write', 'patch']
+    const fetcher = sequenceFetcher(
+      [
+        managedOpencodeSession(),
+        successfulOpencodeMessage(),
+        true,
+        [],
+        [],
+        [],
+      ],
+      [{
+        info: { id: 'msg-assistant-1', role: 'assistant' },
+        parts: autoAllowedTools.map((tool, index) => ({
+            id: `prt-${tool}-1`,
+            sessionID: 'ses-1',
+            messageID: 'msg-assistant-1',
+            type: 'tool',
+            callID: `call-${tool}-${index + 1}`,
+            tool,
+            state: { status: 'completed' },
+          })),
+      }],
+    )
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'openai', modelID: 'gpt-4.1-mini',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+      fetcher, maxToolTurns: 6, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+
+    await expect(engine.start(startInput({ run, node, project, workspace })))
+      .rejects.toThrow('opencode_tool_turn_limit_exceeded')
+
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/session/ses-1/message?directory=%2Ftmp%2Fworktree',
+    )
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
+    )
+  })
+
+  it('aborts the session when the OpenCode wall-clock limit expires', async () => {
+    let clock = 1_000
+    const permission = {
+      id: 'perm-wall-clock', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' },
+    }
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(),
+      successfulOpencodeMessage(),
+      [permission],
+      true,
+      [permission],
+      true,
+      [],
+      [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'openai', modelID: 'gpt-4.1-mini',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+      fetcher, maxWallClockMs: 10, nowMs: () => clock,
+      permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const started = expectPermissionResult(await engine.start(startInput({ run, node, project, workspace })))
+    clock = 1_011
+
+    await expect(engine.approvePermission({
+      codingRun: started.codingRun, workspace, project, request: started.permissionRequest,
+      now: '2026-06-17T00:00:01.000Z',
+    })).rejects.toThrow('opencode_wall_clock_limit_exceeded')
+    expect(fetcher.urls).toContain(
+      'http://127.0.0.1:4097/session/ses-1/abort?directory=%2Ftmp%2Fworktree',
     )
   })
 
@@ -1221,7 +1532,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const completed = await engine.approvePermission({
       codingRun: started.codingRun,
@@ -1234,6 +1547,15 @@ describe('opencode HTTP coding engine', () => {
 
     expect(completedResult.diff.changedPaths).toEqual(['new-file.txt'])
     expect(completedResult.diff.patch).toContain('+hello')
+    expect(completedResult.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'diff',
+        metadata: expect.objectContaining({
+          diffSource: 'managed_worktree_git',
+          opencodeDiffStatus: 'mismatch',
+        }),
+      }),
+    ]))
   })
 
   it('aborts a continuation on the first provider retry without reading a diff', async () => {
@@ -1244,8 +1566,9 @@ describe('opencode HTTP coding engine', () => {
     let permissionPollCount = 0
     let abortCount = 0
     let diffCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return pendingMessage
       }
@@ -1294,7 +1617,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const failure = engine.approvePermission({
       codingRun: started.codingRun,
@@ -1330,8 +1655,9 @@ describe('opencode HTTP coding engine', () => {
     let abortCount = 0
     let diffCount = 0
     let residualRejectCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return pendingMessage
       }
@@ -1378,7 +1704,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const failure = engine.approvePermission({
       codingRun: started.codingRun,
@@ -1401,8 +1729,9 @@ describe('opencode HTTP coding engine', () => {
     })
     let permissionPollCount = 0
     let abortCount = 0
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return pendingMessage
       }
@@ -1412,7 +1741,7 @@ describe('opencode HTTP coding engine', () => {
       if (requestUrl.includes('/permission?')) {
         permissionPollCount += 1
         return new Response(JSON.stringify(permissionPollCount === 1
-          ? [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }]
+          ? [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }]
           : []), { status: 200 })
       }
       if (requestUrl.includes('/session/status?')) {
@@ -1447,7 +1776,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const failure = engine.approvePermission({
       codingRun: started.codingRun,
@@ -1488,7 +1819,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const completed = await engine.approvePermission({
       codingRun: started.codingRun,
@@ -1546,7 +1879,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const failure = engine.approvePermission({
       codingRun: started.codingRun,
@@ -1576,7 +1911,7 @@ describe('opencode HTTP coding engine', () => {
         },
         parts: [],
       }),
-      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit' }],
+      [{ id: 'perm-1', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
       true,
       [],
       false,
@@ -1599,7 +1934,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const failure = engine.approvePermission({
       codingRun: started.codingRun,
@@ -1650,7 +1987,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     await expect(engine.cancel({ codingRun: started.codingRun })).rejects.toThrow(
       'opencode session permission rejection was not acknowledged',
@@ -1675,8 +2014,9 @@ describe('opencode HTTP coding engine', () => {
     let abortCount = 0
     let replyCount = 0
     let resolveMessage: ((response: Response) => void) | undefined
-    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0]) => {
+    const fetcher = vi.fn(async (input: Parameters<Fetcher>[0], init?: Parameters<Fetcher>[1]) => {
       const requestUrl = String(input)
+      if (requestUrl.includes('/message?') && init?.method !== 'POST') return new Response('[]')
       if (requestUrl.includes('/message?')) {
         return await new Promise<Response>((resolve) => {
           resolveMessage = resolve
@@ -1713,7 +2053,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     await expect(Promise.all([
       engine.cancel({ codingRun: started.codingRun }),
@@ -1739,7 +2081,7 @@ describe('opencode HTTP coding engine', () => {
       [],
     ])
     let cancellation: Promise<void> | undefined
-    let startedRun: Awaited<ReturnType<CodingEngineAdapter['start']>> | undefined
+    let startedRun: ReturnType<typeof expectPermissionResult> | undefined
     let engine: ReturnType<typeof createOpencodeHttpCodingEngineAdapter>
     engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode',
@@ -1769,7 +2111,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    startedRun = await engine.start(startInput({ run, node, project, workspace }))
+    startedRun = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     await expect(engine.approvePermission({
       codingRun: startedRun.codingRun,
@@ -1809,7 +2153,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     const continued = await engine.approvePermission({
       codingRun: started.codingRun,
@@ -1855,7 +2201,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     await engine.cancel({ codingRun: started.codingRun })
 
@@ -1891,7 +2239,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     await expect(engine.cancel({ codingRun: started.codingRun })).rejects.toThrow(
       'opencode session abort was not acknowledged',
@@ -1927,7 +2277,9 @@ describe('opencode HTTP coding engine', () => {
     const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
-    const started = await engine.start(startInput({ run, node, project, workspace }))
+    const started = expectPermissionResult(
+      await engine.start(startInput({ run, node, project, workspace })),
+    )
 
     await expect(engine.approvePermission({
       codingRun: started.codingRun,
@@ -1951,6 +2303,15 @@ function expectCompletedResult(result: CodingEngineApprovePermissionResult) {
   return result
 }
 
+function expectPermissionResult(
+  result: Awaited<ReturnType<CodingEngineAdapter['start']>>,
+) {
+  if (!('permissionRequest' in result)) {
+    throw new Error('Expected a permission result, got a completed result')
+  }
+  return result
+}
+
 function readyServer(): OpencodeHttpProcessManager {
   return {
     ensure: vi.fn(async () => ({
@@ -1961,7 +2322,10 @@ function readyServer(): OpencodeHttpProcessManager {
   }
 }
 
-function sequenceFetcher(responses: unknown[]): Fetcher & { urls: string[]; bodies: string[] } {
+function sequenceFetcher(
+  responses: unknown[],
+  messageHistory: unknown[] = [],
+): Fetcher & { urls: string[]; bodies: string[] } {
   const queue = [...responses]
   const urls: string[] = []
   const bodies: string[] = []
@@ -1977,6 +2341,9 @@ function sequenceFetcher(responses: unknown[]): Fetcher & { urls: string[]; bodi
     urls.push(requestUrl)
     if (init?.body) {
       bodies.push(String(init.body))
+    }
+    if (requestUrl.includes('/message?') && init?.method !== 'POST') {
+      return new Response(JSON.stringify(messageHistory), { status: 200 })
     }
     const body = queue.shift()
     if (requestUrl.includes('/message?') && isDeferredOpencodeMessage(body)) {

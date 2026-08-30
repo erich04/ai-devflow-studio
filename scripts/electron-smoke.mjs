@@ -1,10 +1,11 @@
-import { spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import net from 'node:net'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { promisify } from 'node:util'
 import { _electron as electron, chromium, expect } from '@playwright/test'
 import { resolveE2eRuntime } from './e2e-runtime.mjs'
 
@@ -24,6 +25,8 @@ const sessionSecret = 'electron-smoke-session-secret-non-production-32-plus'
 const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-electron-smoke-'))
 const repoDir = path.join(tempRoot, 'fixture-repo')
 const userDataDir = path.join(tempRoot, 'user-data')
+const controlledOpencodePath = path.join(tempRoot, 'controlled-opencode')
+const controlledOpencodeLogPath = path.join(tempRoot, 'controlled-opencode-events.ndjson')
 const electronDiagnostics = []
 const blockedCommand = 'powershell Remove-Item -Recurse -Force C:\\devflow'
 const demoSessionHeaders = {
@@ -32,6 +35,31 @@ const demoSessionHeaders = {
   'x-devflow-user-id': 'u-erich',
   'x-devflow-user-role': 'owner',
   'x-devflow-project-roles': 'p-payments:owner,p-admin:owner',
+}
+const execFileAsync = promisify(execFile)
+
+async function readOptionalUtf8(filePath) {
+  try {
+    return await readFile(filePath, 'utf8')
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return undefined
+    throw error
+  }
+}
+
+async function captureCheckoutAuthority(repositoryPath) {
+  const [{ stdout: head }, { stdout: status }, message, value] = await Promise.all([
+    execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repositoryPath }),
+    execFileAsync('git', ['status', '--porcelain=v1', '--untracked-files=all'], { cwd: repositoryPath }),
+    readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8'),
+    readFile(path.join(repositoryPath, 'src/value.ts'), 'utf8'),
+  ])
+  return {
+    head: head.trim(),
+    status,
+    message,
+    value,
+  }
 }
 function createBrowserSessionHeaders(authAccountId) {
   const claims = {
@@ -171,21 +199,28 @@ async function assertSmokePortsAvailable() {
   }
 }
 
-async function launchApp() {
+async function launchApp({ useProjectCodingRuntime = false } = {}) {
+  const electronEnv = {
+    ...process.env,
+    DEVFLOW_USER_DATA_DIR: userDataDir,
+    DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userDataDir, 'data-profiles.json'),
+    DEVFLOW_API_BASE_URL: apiServerUrl,
+    DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
+    DEVFLOW_OPENCODE_BIN: controlledOpencodePath,
+    DEVFLOW_INITIAL_THEME: 'dark',
+    ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+    VITE_DEV_SERVER_URL: devServerUrl,
+  }
+  if (useProjectCodingRuntime) {
+    delete electronEnv.DEVFLOW_CODING_ENGINE
+    delete electronEnv.DEVFLOW_CODING_EXECUTOR
+  } else {
+    electronEnv.DEVFLOW_CODING_ENGINE = 'fake'
+  }
   const app = await electron.launch({
     args: ['.'],
     cwd: desktopDir,
-    env: {
-      ...process.env,
-      DEVFLOW_USER_DATA_DIR: userDataDir,
-      DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userDataDir, 'data-profiles.json'),
-      DEVFLOW_API_BASE_URL: apiServerUrl,
-      DEVFLOW_CODING_ENGINE: 'fake',
-      DEVFLOW_ENABLE_FAKE_RUNTIME: 'true',
-      DEVFLOW_INITIAL_THEME: 'dark',
-      ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
-      VITE_DEV_SERVER_URL: devServerUrl,
-    },
+    env: electronEnv,
   })
   app.process().stderr?.on('data', (chunk) => {
     electronDiagnostics.push(chunk.toString())
@@ -441,22 +476,31 @@ async function runCodingAgentViaDesktopApi(
       runId: input.runId,
       nodeId: input.nodeId,
       projectId: input.projectId,
-      requestedBy: 'u-erich',
+      requestedBy: 'renderer-spoofed-coding-user',
       userInstruction: 'Electron smoke should archive a fake implementation diff.',
     })
     if (result.codingRun.nodeId !== input.nodeId) {
       throw new Error(`Coding run started for unexpected node: ${result.codingRun.nodeId}`)
     }
-    return { id: result.codingRun.id, status: result.codingRun.status }
+    return {
+      id: result.codingRun.id,
+      status: result.codingRun.status,
+      requestedBy: result.codingRun.requestedBy,
+      permissionRequestId: result.state.codingPermissionRequests.find(
+        (request) => request.codingRunId === result.codingRun.id && request.status === 'pending',
+      )?.id,
+    }
   }, { runId, nodeId, projectId })
 
   expect(codingRun.status).toBe('waiting_permission')
+  expect(typeof codingRun.permissionRequestId).toBe('string')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
   await page.getByRole('button', { name: /^Agents$/ }).click()
+  return codingRun
 }
 
 async function startRetryAttemptViaDesktopApi(
@@ -526,6 +570,93 @@ async function runProjectTestsViaDesktopApi(
   return execution
 }
 
+async function prepareOpenCodeWorkflowAtBuild(page, { projectId, creatorId }) {
+  const prepared = await page.evaluate(async (input) => {
+    const run = await window.aiDevFlowDesktop.createRun({
+      title: 'Controlled OpenCode Main lifecycle',
+      request: 'Change both source modules in the managed worktree and verify the canonical test.',
+      projectId: input.projectId,
+      creatorId: input.creatorId,
+      branchName: 'devflow/controlled-opencode-main',
+    })
+    const findNode = (stage, kind) => {
+      const node = run.nodes.find((candidate) => candidate.stage === stage && candidate.kind === kind)
+      if (!node) throw new Error(`Controlled OpenCode workflow omitted ${stage}/${kind}`)
+      return node
+    }
+    const nodes = {
+      clarifyAgent: findNode('clarify', 'agent'),
+      clarifyGate: findNode('clarify', 'gate'),
+      designAgent: findNode('design', 'agent'),
+      designGate: findNode('design', 'gate'),
+      build: findNode('build', 'task'),
+      test: findNode('test', 'test'),
+    }
+
+    const clarified = await window.aiDevFlowDesktop.completeWorkflowAgentNode({
+      runId: run.id,
+      nodeId: nodes.clarifyAgent.id,
+      userId: input.creatorId,
+      userName: 'Electron Smoke Owner',
+      providerId: input.reviewProviderId,
+    })
+    await window.aiDevFlowDesktop.runKnowledgeReview({
+      runId: run.id,
+      nodeId: nodes.clarifyGate.id,
+      projectId: input.projectId,
+      requestedBy: input.creatorId,
+      runtime: 'electron',
+      providerId: input.reviewProviderId,
+    })
+    const clarificationRevision = clarified.artifact.clarificationRevision
+    if (!clarificationRevision) throw new Error('Controlled OpenCode clarification revision is missing')
+    const afterClarify = await window.aiDevFlowDesktop.approveGate({
+      runId: run.id,
+      nodeId: nodes.clarifyGate.id,
+      expectedClarificationRevision: {
+        artifactId: clarified.artifact.id,
+        revision: clarificationRevision.revision,
+        revisionDigest: clarificationRevision.revisionDigest,
+      },
+    })
+    if (afterClarify.run.currentNodeId !== nodes.designAgent.id) {
+      throw new Error('Controlled OpenCode workflow did not advance to design')
+    }
+
+    await window.aiDevFlowDesktop.completeWorkflowAgentNode({
+      runId: run.id,
+      nodeId: nodes.designAgent.id,
+      userId: input.creatorId,
+      userName: 'Electron Smoke Owner',
+      providerId: input.reviewProviderId,
+    })
+    await window.aiDevFlowDesktop.runKnowledgeReview({
+      runId: run.id,
+      nodeId: nodes.designGate.id,
+      projectId: input.projectId,
+      requestedBy: input.creatorId,
+      runtime: 'electron',
+      providerId: input.reviewProviderId,
+    })
+    const afterDesign = await window.aiDevFlowDesktop.approveGate({
+      runId: run.id,
+      nodeId: nodes.designGate.id,
+    })
+    return {
+      run: afterDesign.run,
+      nodes: Object.fromEntries(Object.entries(nodes).map(([key, node]) => [key, node.id])),
+    }
+  }, {
+    projectId,
+    creatorId,
+    reviewProviderId: smokeReviewProviderId,
+  })
+
+  expect(prepared.run.currentNodeId).toBe(prepared.nodes.build)
+  expect(prepared.run.status).toBe('building')
+  return prepared
+}
+
 let vite
 let api
 let web
@@ -538,12 +669,124 @@ try {
     path.join(repoDir, 'package.json'),
     JSON.stringify({
       name: 'electron-smoke-fixture',
+      version: '1.0.0',
       scripts: {
         test: 'node test.js',
       },
     }),
   )
-  await writeFile(path.join(repoDir, 'test.js'), "console.log('smoke passed');\n")
+  await writeFile(
+    path.join(repoDir, 'package-lock.json'),
+    JSON.stringify({
+      name: 'electron-smoke-fixture',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'electron-smoke-fixture',
+          version: '1.0.0',
+        },
+      },
+    }),
+  )
+  await mkdir(path.join(repoDir, 'src'))
+  await writeFile(path.join(repoDir, 'src/message.ts'), 'export const message = "old"\n')
+  await writeFile(path.join(repoDir, 'src/value.ts'), 'export const value = 1\n')
+  await writeFile(
+    path.join(repoDir, 'test.js'),
+    [
+      "const { readFileSync } = require('node:fs')",
+      "const message = readFileSync('src/message.ts', 'utf8')",
+      "const value = readFileSync('src/value.ts', 'utf8')",
+      "const baseline = message === 'export const message = \"old\"\\n' && value === 'export const value = 1\\n'",
+      "const changed = message === 'export const message = \"new\"\\n' && value === 'export const value = 2\\n'",
+      "if (!baseline && !changed) process.exit(1)",
+      "console.log(changed ? 'controlled OpenCode canonical test passed' : 'smoke passed')",
+      '',
+    ].join('\n'),
+  )
+  await writeFile(
+    controlledOpencodePath,
+    [
+      '#!/usr/bin/env node',
+      "const { appendFileSync, mkdirSync, writeFileSync } = require('node:fs')",
+      "const { createServer } = require('node:http')",
+      "const { join } = require('node:path')",
+      "const args = process.argv.slice(2)",
+      `const eventLogPath = ${JSON.stringify(controlledOpencodeLogPath)}`,
+      "const record = (event) => appendFileSync(eventLogPath, JSON.stringify(event) + '\\n')",
+      "const sendJson = (response, value, statusCode = 200) => {",
+      "  const body = JSON.stringify(value)",
+      "  response.writeHead(statusCode, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })",
+      "  response.end(body)",
+      "}",
+      "const readJson = (request) => new Promise((resolve, reject) => {",
+      "  const chunks = []",
+      "  request.on('data', (chunk) => chunks.push(chunk))",
+      "  request.on('end', () => {",
+      "    try {",
+      "      const body = Buffer.concat(chunks).toString('utf8')",
+      "      resolve(body ? JSON.parse(body) : {})",
+      "    } catch (error) { reject(error) }",
+      "  })",
+      "  request.on('error', reject)",
+      "})",
+      "if (args.length === 1 && args[0] === '--version') console.log('1.18.15')",
+      "else if (args.join(' ') === 'auth list --pure') console.log('\\u250c  Credentials /controlled/auth.json\\n\\u2502\\n\\u25cf  OpenAI api\\n\\u2502\\n\\u2514  1 credential')",
+      "else if (args.join(' ') === 'models openai --pure') console.log('openai/gpt-4.1-mini')",
+      "else if (args[0] === 'serve') {",
+      "  const hostname = args[args.indexOf('--hostname') + 1]",
+      "  const port = Number(args[args.indexOf('--port') + 1])",
+      "  if (!hostname || !Number.isSafeInteger(port) || port <= 0) {",
+      "    console.error('controlled opencode received invalid serve arguments')",
+      "    process.exit(64)",
+      "  }",
+      "  const sessionId = 'controlled-main-session'",
+      "  const server = createServer(async (request, response) => {",
+      "    try {",
+      "      const url = new URL(request.url || '/', `http://${hostname}:${port}`)",
+      "      const directory = url.searchParams.get('directory')",
+      "      if (request.method === 'GET' && url.pathname === '/permission') return sendJson(response, [])",
+      "      if (request.method === 'POST' && url.pathname === '/session') {",
+      "        const body = await readJson(request)",
+      "        if (!directory) return sendJson(response, { error: 'directory_required' }, 400)",
+      "        return sendJson(response, { id: sessionId, directory, permission: body.permission })",
+      "      }",
+      "      if (request.method === 'POST' && url.pathname === `/session/${sessionId}/message`) {",
+      "        await readJson(request)",
+      "        if (!directory) return sendJson(response, { error: 'directory_required' }, 400)",
+      "        mkdirSync(join(directory, 'src'), { recursive: true })",
+      "        writeFileSync(join(directory, 'src/message.ts'), 'export const message = \"new\"\\n')",
+      "        writeFileSync(join(directory, 'src/value.ts'), 'export const value = 2\\n')",
+      "        record({ event: 'message', directory, changedPaths: ['src/message.ts', 'src/value.ts'] })",
+      "        return sendJson(response, { info: {}, parts: [] })",
+      "      }",
+      "      if (request.method === 'GET' && url.pathname === `/session/${sessionId}/message`) return sendJson(response, [])",
+      "      if (request.method === 'GET' && url.pathname === '/session/status') return sendJson(response, { [sessionId]: { type: 'idle' } })",
+      "      if (request.method === 'GET' && url.pathname === `/session/${sessionId}/diff`) {",
+      "        return sendJson(response, [{ file: 'src/message.ts', patch: 'diff --git a/src/message.ts b/src/message.ts\\n+untrusted OpenCode summary\\n' }])",
+      "      }",
+      "      if (request.method === 'POST' && url.pathname === `/session/${sessionId}/abort`) return sendJson(response, true)",
+      "      return sendJson(response, { error: 'not_found' }, 404)",
+      "    } catch (error) {",
+      "      record({ event: 'request_error', name: error instanceof Error ? error.name : 'UnknownError' })",
+      "      return sendJson(response, { error: 'controlled_request_failed' }, 500)",
+      "    }",
+      "  })",
+      "  server.listen(port, hostname, () => record({ event: 'serve', hostname, port }))",
+      "  const shutdown = () => {",
+      "    server.closeAllConnections?.()",
+      "    server.close(() => process.exit(0))",
+      "  }",
+      "  process.on('SIGTERM', shutdown)",
+      "  process.on('SIGINT', shutdown)",
+      "}",
+      "else { console.error('controlled opencode received an unexpected command'); process.exitCode = 64 }",
+      '',
+    ].join('\n'),
+    { mode: 0o755 },
+  )
   await run('git', ['init'], { cwd: repoDir })
   await run('git', ['config', 'user.email', 'devflow@example.com'], { cwd: repoDir })
   await run('git', ['config', 'user.name', 'DevFlow Smoke'], { cwd: repoDir })
@@ -649,6 +892,12 @@ try {
       localProjectId: projectId,
     })
   }, { code: pairingCode, projectId: localProjectId })
+  const trustedPairingUserId = await first.page.evaluate(async () => {
+    const pairing = await window.aiDevFlowDesktop.loadDesktopPairing()
+    if (!pairing) throw new Error('Electron smoke pairing was not persisted')
+    return pairing.userId
+  })
+  expect(trustedPairingUserId).not.toBe('renderer-spoofed-coding-user')
   await first.page.evaluate(async (projectId) => {
     await window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({
       projectId,
@@ -841,22 +1090,37 @@ try {
   expect(approvedDesign.run.currentNodeId).toBe(localNodes.build.id)
   localRun = approvedDesign.run
 
-  await runCodingAgentViaDesktopApi(first.page, {
+  const codingAuthority = await runCodingAgentViaDesktopApi(first.page, {
     runId: localRun.id,
     nodeId: localNodes.build.id,
     projectId: localProjectId,
     runTitle: '重构 GitHub webhook 重试策略',
     nodeTitle: localNodes.build.title,
   })
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Permission Relay')
+  expect(codingAuthority.requestedBy).toBe(trustedPairingUserId)
+  await expect(first.page.getByTestId('agent-workbench')).toContainText('权限转发')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Apply fake coding diff')
-  await first.page.getByRole('button', { name: /Approve once/ }).click()
+  await first.page.getByRole('button', { name: /仅批准本次/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已完成 diff 归档', {
     timeout: 30_000,
   })
   await expect(first.page.getByTestId('agent-workbench')).toContainText('completed')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('Test evidence passed')
   await expect(first.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
+  const permissionAuthority = await first.page.evaluate(async ({ codingRunId, requestId }) => {
+    const state = await window.aiDevFlowDesktop.loadState()
+    const decision = state.codingPermissionDecisions.find(
+      (candidate) => candidate.codingRunId === codingRunId && candidate.requestId === requestId,
+    )
+    return decision ? { decidedBy: decision.decidedBy, decision: decision.decision } : null
+  }, {
+    codingRunId: codingAuthority.id,
+    requestId: codingAuthority.permissionRequestId,
+  })
+  expect(permissionAuthority).toEqual({
+    decidedBy: trustedPairingUserId,
+    decision: 'approved',
+  })
   await expect
     .poll(async () =>
       first.page.evaluate(async (runId) => {
@@ -1013,6 +1277,58 @@ try {
   await expect(first.page.getByTestId('tests-view').getByText(/^blocked$/i)).toBeVisible()
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')
+  const opencodeMainAuthority = await first.page.evaluate(async ({ projectId, runId, nodeId }) => {
+    const discovery = await window.aiDevFlowDesktop.detectCodingRuntimeEngines({ projectId })
+    const candidate = discovery.candidates.find((item) => item.executor === 'opencode-http')
+    if (!candidate?.binaryPath || !candidate.version || candidate.status !== 'available') {
+      throw new Error('Controlled OpenCode candidate was not discovered by Electron Main')
+    }
+    let staleConfirmationError = ''
+    try {
+      await window.aiDevFlowDesktop.saveCodingRuntimeConfiguration({
+        projectId,
+        executor: 'opencode-http',
+        providerId: 'openai',
+        binaryPath: '/renderer/forged/opencode',
+        modelId: 'gpt-4.1-mini',
+        detectedVersion: candidate.version,
+      })
+    } catch (error) {
+      staleConfirmationError = error instanceof Error ? error.message : String(error)
+    }
+    const configuration = await window.aiDevFlowDesktop.saveCodingRuntimeConfiguration({
+      projectId,
+      executor: 'opencode-http',
+      providerId: 'openai',
+      binaryPath: candidate.binaryPath,
+      modelId: 'gpt-4.1-mini',
+      detectedVersion: candidate.version,
+    })
+    return { candidate, configuration, staleConfirmationError }
+  }, {
+    projectId: localProjectId,
+    runId: localRun.id,
+    nodeId: localNodes.pr.id,
+  })
+  expect(opencodeMainAuthority.staleConfirmationError).toMatch(/confirmation is stale/i)
+  expect(opencodeMainAuthority.configuration).toMatchObject({
+    executor: 'opencode-http',
+    providerId: 'openai',
+    binaryPath: opencodeMainAuthority.candidate.binaryPath,
+    detectedVersion: opencodeMainAuthority.candidate.version,
+    modelId: 'gpt-4.1-mini',
+  })
+  const controlledOpenCodeWorkflow = await prepareOpenCodeWorkflowAtBuild(first.page, {
+    projectId: localProjectId,
+    creatorId: trustedPairingUserId,
+  })
+  const sourceCheckoutAuthority = await captureCheckoutAuthority(repoDir)
+  expect(sourceCheckoutAuthority).toMatchObject({
+    status: '',
+    message: 'export const message = "old"\n',
+    value: 'export const value = 1\n',
+  })
+  expect(await readOptionalUtf8(controlledOpencodeLogPath)).toBeUndefined()
   await persistThemePreference(first.page, 'dark')
   const durableIdentityBeforeRestart = await first.page.evaluate(async (runId) => {
     const [state, profile, pairing, providers] = await Promise.all([
@@ -1050,7 +1366,7 @@ try {
   expect(durableIdentityBeforeRestart.pairing?.localProjectId).toBe(localProjectId)
   await first.app.close()
 
-  const second = await launchApp()
+  const second = await launchApp({ useProjectCodingRuntime: true })
   await expect
     .poll(async () =>
       second.page.evaluate(async () => {
@@ -1062,6 +1378,222 @@ try {
   await expect(second.page.locator('html')).toHaveAttribute('data-theme-preference', 'dark', {
     timeout: 20_000,
   })
+  const opencodeReadinessAuthority = await second.page.evaluate(async ({ projectId, runId, nodeId }) => {
+    return window.aiDevFlowDesktop.getCodingRuntimeReadiness({
+      projectId,
+      runId,
+      nodeId,
+      requestedBy: 'renderer-spoofed-readiness-user',
+    })
+  }, {
+    projectId: localProjectId,
+    runId: localRun.id,
+    nodeId: localNodes.pr.id,
+  })
+  expect(opencodeReadinessAuthority).toMatchObject({
+    engine: 'opencode-http',
+    executor: 'opencode-http',
+    providerId: 'openai',
+  })
+  for (const code of [
+    'binary_missing',
+    'version_incompatible',
+    'auth_unavailable',
+    'profile_unavailable',
+    'model_unavailable',
+  ]) {
+    expect(opencodeReadinessAuthority.checks.find((check) => check.code === code)?.status).toBe('ready')
+  }
+
+  const controlledOpenCodeStart = await second.page.evaluate(async (input) => {
+    const result = await window.aiDevFlowDesktop.runCodingAgent({
+      runId: input.runId,
+      nodeId: input.buildNodeId,
+      projectId: input.projectId,
+      requestedBy: 'renderer-spoofed-opencode-user',
+      userInstruction: 'Change src/message.ts to new and src/value.ts to 2, then run the saved canonical test.',
+    })
+    const permission = result.state.codingPermissionRequests.find(
+      (candidate) => candidate.codingRunId === result.codingRun.id && candidate.status === 'pending',
+    )
+    const workspace = result.state.managedCodingWorkspaces.find(
+      (candidate) => candidate.id === result.codingRun.managedWorkspaceId,
+    )
+    return { codingRun: result.codingRun, permission, workspace }
+  }, {
+    runId: controlledOpenCodeWorkflow.run.id,
+    buildNodeId: controlledOpenCodeWorkflow.nodes.build,
+    projectId: localProjectId,
+  })
+  expect(controlledOpenCodeStart.codingRun).toMatchObject({
+    engine: 'opencode-http',
+    status: 'waiting_permission',
+    requestedBy: trustedPairingUserId,
+  })
+  expect(controlledOpenCodeStart.permission).toMatchObject({
+    origin: 'execution_authorization',
+    permission: 'write',
+    status: 'pending',
+  })
+  expect(controlledOpenCodeStart.workspace?.worktreePath).toBeTruthy()
+  expect(await readOptionalUtf8(controlledOpencodeLogPath)).toBeUndefined()
+  const preAuthorizationWorktree = await captureCheckoutAuthority(
+    controlledOpenCodeStart.workspace.worktreePath,
+  )
+  expect(preAuthorizationWorktree).toEqual(sourceCheckoutAuthority)
+  expect(await captureCheckoutAuthority(repoDir)).toEqual(sourceCheckoutAuthority)
+
+  const controlledOpenCodeExecution = await second.page.evaluate(async (input) => {
+    await window.aiDevFlowDesktop.replyCodingPermission({
+      requestId: input.executionAuthorizationId,
+      codingRunId: input.codingRunId,
+      decidedBy: 'renderer-spoofed-opencode-approver',
+      decision: 'approved',
+      comment: 'Authorize the controlled OpenCode process only in the managed worktree.',
+    })
+    const state = await window.aiDevFlowDesktop.loadState()
+    const codingRun = state.codingRuns.find((candidate) => candidate.id === input.codingRunId)
+    const workflowRun = state.runs.find((candidate) => candidate.id === input.runId)
+    const workspace = state.managedCodingWorkspaces.find(
+      (candidate) => candidate.id === codingRun?.managedWorkspaceId,
+    )
+    const diff = state.codingDiffArtifacts.find((candidate) => candidate.id === codingRun?.diffArtifactId)
+    const changeAcceptance = state.codingPermissionRequests.find(
+      (candidate) =>
+        candidate.codingRunId === input.codingRunId &&
+        candidate.origin === 'change_acceptance' &&
+        candidate.status === 'pending',
+    )
+    const evidence = state.testEvidence.find(
+      (candidate) => candidate.id === (changeAcceptance?.testEvidenceId ?? codingRun?.testEvidenceId),
+    )
+    const executionDecision = state.codingPermissionDecisions.find(
+      (candidate) => candidate.requestId === input.executionAuthorizationId,
+    )
+    const events = state.codingEvents.filter((candidate) => candidate.codingRunId === input.codingRunId)
+    return {
+      codingRun,
+      workflowRun,
+      workspace,
+      diff,
+      evidence,
+      changeAcceptance,
+      executionDecision,
+      events,
+    }
+  }, {
+    runId: controlledOpenCodeWorkflow.run.id,
+    codingRunId: controlledOpenCodeStart.codingRun.id,
+    executionAuthorizationId: controlledOpenCodeStart.permission.id,
+  })
+  expect(controlledOpenCodeExecution.executionDecision).toMatchObject({
+    decidedBy: trustedPairingUserId,
+    decision: 'approved',
+  })
+  expect(controlledOpenCodeExecution.codingRun).toMatchObject({
+    status: 'waiting_permission',
+    changedPaths: ['src/message.ts', 'src/value.ts'],
+  })
+  expect(controlledOpenCodeExecution.workspace?.worktreePath).toBe(
+    controlledOpenCodeStart.workspace.worktreePath,
+  )
+  expect(controlledOpenCodeExecution.diff).toMatchObject({
+    changedPaths: ['src/message.ts', 'src/value.ts'],
+    truncated: false,
+  })
+  expect(controlledOpenCodeExecution.diff.patch).toContain('diff --git a/src/message.ts b/src/message.ts')
+  expect(controlledOpenCodeExecution.diff.patch).toContain('diff --git a/src/value.ts b/src/value.ts')
+  expect(controlledOpenCodeExecution.diff.patch).not.toContain('untrusted OpenCode summary')
+  expect(controlledOpenCodeExecution.evidence).toMatchObject({
+    command: 'npm test',
+    cwd: '<workspace>',
+    status: 'passed',
+  })
+  expect(controlledOpenCodeExecution.changeAcceptance).toMatchObject({
+    origin: 'change_acceptance',
+    permission: 'patch',
+    status: 'pending',
+    diffArtifactId: controlledOpenCodeExecution.diff.id,
+    testEvidenceId: controlledOpenCodeExecution.evidence.id,
+    managedWorkspaceId: controlledOpenCodeExecution.workspace.id,
+  })
+  expect(controlledOpenCodeExecution.events).toEqual(expect.arrayContaining([
+    expect.objectContaining({
+      kind: 'diff',
+      metadata: expect.objectContaining({
+        diffSource: 'managed_worktree_git',
+        opencodeDiffStatus: 'mismatch',
+      }),
+    }),
+  ]))
+  expect(controlledOpenCodeExecution.workflowRun).toMatchObject({
+    currentNodeId: controlledOpenCodeWorkflow.nodes.build,
+    status: 'building',
+  })
+  const modifiedManagedWorktree = await captureCheckoutAuthority(
+    controlledOpenCodeExecution.workspace.worktreePath,
+  )
+  expect(modifiedManagedWorktree).toMatchObject({
+    head: sourceCheckoutAuthority.head,
+    message: 'export const message = "new"\n',
+    value: 'export const value = 2\n',
+  })
+  expect(modifiedManagedWorktree.status).toContain('src/message.ts')
+  expect(modifiedManagedWorktree.status).toContain('src/value.ts')
+  expect(await captureCheckoutAuthority(repoDir)).toEqual(sourceCheckoutAuthority)
+  const controlledOpenCodeEvents = (await readFile(controlledOpencodeLogPath, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
+  expect(controlledOpenCodeEvents).toEqual(expect.arrayContaining([
+    expect.objectContaining({ event: 'serve' }),
+  ]))
+  const controlledMessageEvent = controlledOpenCodeEvents.find((event) => event.event === 'message')
+  expect(controlledMessageEvent).toMatchObject({
+    changedPaths: ['src/message.ts', 'src/value.ts'],
+  })
+  expect(await realpath(controlledMessageEvent.directory)).toBe(
+    await realpath(controlledOpenCodeExecution.workspace.worktreePath),
+  )
+
+  const controlledOpenCodeAccepted = await second.page.evaluate(async (input) => {
+    await window.aiDevFlowDesktop.replyCodingPermission({
+      requestId: input.changeAcceptanceId,
+      codingRunId: input.codingRunId,
+      decidedBy: 'renderer-spoofed-change-approver',
+      decision: 'approved',
+      comment: 'Accept the exact authoritative Git diff and passed canonical test.',
+    })
+    const state = await window.aiDevFlowDesktop.loadState()
+    return {
+      codingRun: state.codingRuns.find((candidate) => candidate.id === input.codingRunId),
+      workflowRun: state.runs.find((candidate) => candidate.id === input.runId),
+      decision: state.codingPermissionDecisions.find(
+        (candidate) => candidate.requestId === input.changeAcceptanceId,
+      ),
+    }
+  }, {
+    runId: controlledOpenCodeWorkflow.run.id,
+    codingRunId: controlledOpenCodeStart.codingRun.id,
+    changeAcceptanceId: controlledOpenCodeExecution.changeAcceptance.id,
+  })
+  expect(controlledOpenCodeAccepted.decision).toMatchObject({
+    decidedBy: trustedPairingUserId,
+    decision: 'approved',
+  })
+  expect(controlledOpenCodeAccepted.codingRun).toMatchObject({
+    status: 'completed',
+    changedPaths: ['src/message.ts', 'src/value.ts'],
+  })
+  expect(controlledOpenCodeAccepted.workflowRun).toMatchObject({
+    status: 'testing',
+    currentNodeId: controlledOpenCodeWorkflow.nodes.test,
+    nodes: expect.arrayContaining([
+      expect.objectContaining({ id: controlledOpenCodeWorkflow.nodes.build, status: 'success' }),
+      expect.objectContaining({ id: controlledOpenCodeWorkflow.nodes.test, status: 'running' }),
+    ]),
+  })
+  expect(await captureCheckoutAuthority(repoDir)).toEqual(sourceCheckoutAuthority)
   const durableIdentityAfterRestart = await second.page.evaluate(async (runId) => {
     const [state, profile, pairing, providers] = await Promise.all([
       window.aiDevFlowDesktop.loadState(),
@@ -1092,7 +1624,21 @@ try {
       })),
     }
   }, localRun.id)
-  expect(durableIdentityAfterRestart).toEqual(durableIdentityBeforeRestart)
+  const {
+    latestRunUpdatedAt: latestRunUpdatedAtBeforeRestart,
+    ...profileBeforeRestart
+  } = durableIdentityBeforeRestart.profile
+  const {
+    latestRunUpdatedAt: latestRunUpdatedAtAfterRestart,
+    ...profileAfterRestart
+  } = durableIdentityAfterRestart.profile
+  expect({ ...durableIdentityAfterRestart, profile: profileAfterRestart }).toEqual({
+    ...durableIdentityBeforeRestart,
+    profile: profileBeforeRestart,
+  })
+  expect(Date.parse(latestRunUpdatedAtAfterRestart)).toBeGreaterThanOrEqual(
+    Date.parse(latestRunUpdatedAtBeforeRestart),
+  )
   await expect(
     second.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true }),
   ).toBeVisible()
@@ -1138,7 +1684,7 @@ try {
   await expect(second.page.getByTestId('agent-workbench')).toContainText('暂无 Gate Advisory')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('completed')
   await expect(second.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
-  await expect(second.page.getByTestId('agent-workbench')).toContainText('Total reviews2')
+  await expect(second.page.getByTestId('agent-workbench')).toContainText('审查总数4')
   await second.page.getByRole('button', { name: /^MCP$/ }).click()
   const secondEnableMcpButton = second.page.getByRole('button', { name: /Enable/ }).first()
   if ((await secondEnableMcpButton.count()) > 0) {

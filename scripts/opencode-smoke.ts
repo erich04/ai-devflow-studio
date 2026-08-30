@@ -20,6 +20,7 @@ import {
   assertCleanCandidateStatus,
   assertCleanFixtureStatus,
   assertOpencodeSmokeChangedPaths,
+  assertOpencodeSmokeOpaqueBilling,
   assertOpencodeSmokePermission,
   buildIsolatedOpencodeSmokeRuntimeEnv,
   combineOpencodeSmokeFailures,
@@ -116,6 +117,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
   let primaryError: unknown
   let successChangedPaths: string[] | undefined
   let successfulProviderEgress: OpencodeProviderEgressGateSnapshot | undefined
+  let successfulBillingObservation: { usage: 'unknown'; cost: 'opaque' } | undefined
   const setupRepository = async () => {
     await execFileAsync('git', ['init', repoDir])
     await execFileAsync('git', ['config', 'user.email', 'devflow@example.com'], { cwd: repoDir })
@@ -252,6 +254,9 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       ...briefContext,
       brief,
     })
+    if (!('permissionRequest' in started)) {
+      throw new Error('opencode smoke completed without the required permission relay')
+    }
     activeStage = 'permission_relay'
     let codingRun = started.codingRun
     let permissionRequest = started.permissionRequest
@@ -286,6 +291,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       throw new Error('opencode smoke exceeded the permission approval limit.')
     }
     providerEgressGate?.assertPassingState()
+    successfulBillingObservation = assertOpencodeSmokeOpaqueBilling(completed.codingRun)
 
     activeStage = 'diff_validation'
     assertOpencodeSmokeChangedPaths(completed.diff.changedPaths)
@@ -420,6 +426,9 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
   if (!successChangedPaths) {
     throw new Error('opencode smoke finished without a result')
   }
+  if (!successfulBillingObservation) {
+    throw new Error('opencode smoke finished without honest usage/cost evidence')
+  }
   if (preflight.releaseProfile === 'v1.4') {
     if (!successfulProviderEgress) {
       throw new Error('opencode smoke finished without provider egress evidence')
@@ -438,6 +447,9 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
       ].join('; '),
     )
   }
+  console.log(
+    `opencode billing evidence passed; usage=${successfulBillingObservation.usage}; cost=${successfulBillingObservation.cost}`,
+  )
   console.log(`opencode smoke passed; changed paths: ${successChangedPaths.join(', ')}`)
 }
 

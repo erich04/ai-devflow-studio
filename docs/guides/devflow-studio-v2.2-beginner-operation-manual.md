@@ -34,7 +34,21 @@ Agent 能力嵌在这条 Workflow 里，而不是绕开 Workflow 单独工作：
 - Coding Agent 通过 CRI 接入本地执行器或 OpenCode，在 managed worktree 中产生受控 diff。
 - Agent 可以给建议、请求权限和生成证据，但不能替人通过 Gate，也不能自行批准 GitHub 发布。
 
-V2.2 还支持有边界的单组 Agent / Multi-Agent Coordination。本手册只走最容易理解的主路径，没有展开独立 Agent Runtime、Memory 生命周期和多 Agent 协调操作。
+V2.2 还支持有边界的独立 Agent Runtime、Memory 生命周期和 Multi-Agent Coordination（多 Agent 协调）。它们默认收在 Agents 页的“高级验收与诊断”折叠区，不是完成当前 Workflow 的必经步骤。
+
+### Agent 执行台的能力边界
+
+进入 Agents 页后，先看顶部“当前任务”。页面只把当前 Run / 节点投影出的动作显示为主操作，例如“生成设计方案”；对象、结果、Provider 与费用、仓库影响、工作流影响会在按钮前明确列出。其余入口是可选或高级信息：
+
+| 能力 | 操作对象与结果 | Provider / 成本 | 仓库副作用 | Workflow 影响 | 前置条件 |
+| --- | --- | --- | --- | --- | --- |
+| Workflow Stage Agent | 当前澄清或设计节点；生成阶段 Artifact（产物） | 调用所选 Stage Provider，记录 token，可能产生费用 | 只读仓库上下文 | 完成当前节点并推进到对应 Gate；不自动批准 Gate | 已选 Run、当前节点、已配置 Provider |
+| Knowledge-Grounded Gate Review（基于知识的门禁审查） | 当前 Gate 与上游阶段产物；生成 Advisory（建议）、引用和 Trace（轨迹） | 调用所选 Review Provider，记录 token，可能产生费用 | 只读 Knowledge 与证据 | 只提供建议；不批准 Gate，不推进 Workflow | 当前节点可审查、已配置 Provider |
+| Coding Agent | 当前开发实现 Task；生成受控 Coding Run、diff 与测试证据 | 调用项目级 Coding Executor / Provider，按调用结算 token 与费用 | 仅在 managed worktree（受管工作树）读写，不直接修改当前 checkout | 按现有规则完成开发实现证据；不自动批准后续 Gate | 当前开发实现节点、Executor / Provider / 预算就绪，必要权限经人工批准 |
+| 独立 Agent Runtime | 当前 Run / 节点的独立验收实例；固定执行内部无业务副作用场景 `scenario.evaluate`，生成检查点、轨迹与评估 | 不调用当前 Stage Provider，模型 token / 费用为 0 | 不读写仓库 | 不生成当前阶段 Artifact，不推进 Workflow，不审批 Gate | 已选本地项目和 Run；不要求 Team 配对 |
+| Multi-Agent Coordination（多 Agent 协调） | 当前 Run / 节点的固定 `bounded-repair-v1` 验收图；首次只创建 Supervisor、任务图和检查点 | 首次创建不调用 Stage Provider；后续手动启动的 Specialist 可能在上限内消耗 token / 费用 | 分析角色只读；后续 bounded implementer 可能只写受管工作区 | 不生成当前阶段 Artifact，不推进 Workflow，不审批 Gate | Local Project 必须已配对 Team Project；未配对时入口禁用并显示原因 |
+
+“高级验收与诊断”默认折叠；键盘聚焦其标题后可按 Enter 或 Space 展开。默认用户不会看到 `scenario.evaluate`，也不应把它误认为当前设计或开发任务。展开前先读边界说明，再决定是否创建独立 Runtime 或固定多 Agent 验收会话。
 
 ## 2. 本次演练环境和结果
 
@@ -183,11 +197,11 @@ V2.2 还支持有边界的单组 Agent / Multi-Agent Coordination。本手册只
 npm install --package-lock=false
 ```
 
-只在命令和仓库符合预期时点击 `Approve once`。这个授权只对当前请求生效。
+只在命令和仓库符合预期时点击“仅批准本次”。这个授权只对当前请求生效。
 
 ![依赖安装权限](./screenshots/v2.2-beginner-manual/16-bootstrap-permission.jpg)
 
-如果不应安装依赖，点击 `Reject`，不要为了推进 Workflow 盲目批准。
+如果不应安装依赖，点击“拒绝”，不要为了推进 Workflow 盲目批准。
 
 ### 第 11 步：处理受控文件修改权限
 
@@ -195,7 +209,7 @@ npm install --package-lock=false
 
 ![受控文件修改权限](./screenshots/v2.2-beginner-manual/17-edit-permission.jpg)
 
-确认目标文件和任务一致后点击 `Approve once`。Agent 随后执行修改、运行保存的测试命令，并归档 diff、Trace 和 Test Evidence。
+确认目标文件和任务一致后点击“仅批准本次”。Agent 随后执行修改、运行保存的测试命令，并归档 diff、Trace 和 Test Evidence。
 
 ### 第 12 步：检查 Coding Agent 结果
 

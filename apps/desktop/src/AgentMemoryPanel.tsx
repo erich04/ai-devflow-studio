@@ -16,8 +16,21 @@ type AgentMemoryPanelProps = {
 
 function scopeLabel(scope: AgentMemoryRendererScope) {
   return scope.kind === 'team'
-    ? `team ${scope.organizationId}/${scope.projectId} · user ${scope.userId}`
-    : `local ${scope.localProjectId} · user ${scope.userId}`
+    ? `Team ${scope.organizationId}/${scope.projectId} · 用户 ${scope.userId}`
+    : `本地 ${scope.localProjectId} · 用户 ${scope.userId}`
+}
+
+function memoryStatusLabel(status: string) {
+  return {
+    pending: '待确认',
+    promoted: '已提升',
+    rejected: '已拒绝',
+    active: '有效',
+    conflict: '冲突',
+    purge_pending: '等待清除',
+    deleted: '已删除',
+    expired: '已过期',
+  }[status] ?? status
 }
 
 export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMemoryPanelProps) {
@@ -99,7 +112,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       }
     })()
       .catch(() => {
-        if (!disposed) setError('Agent Memory lifecycle could not be loaded safely.')
+        if (!disposed) setError('无法安全读取 Agent Memory 生命周期。')
       })
       .finally(() => {
         if (!disposed) setIsLoading(false)
@@ -135,7 +148,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       setSnapshot(parsed)
     } catch {
       if (operationVersion === selectionVersion.current) {
-        setError('Agent Memory promotion was rejected safely. Refresh and review the Candidate again.')
+        setError('Agent Memory 候选提升请求已被安全拒绝；请刷新后重新检查。')
       }
     } finally {
       if (operationVersion === selectionVersion.current) setIsPromoting(false)
@@ -178,7 +191,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       setRevisionStatement('')
     } catch {
       if (operationVersion === selectionVersion.current) {
-        setError('Agent Memory revision was rejected safely. Refresh and review the current version again.')
+        setError('Agent Memory 修订请求已被安全拒绝；请刷新后重新检查当前版本。')
       }
     } finally {
       if (operationVersion === selectionVersion.current) setIsRevising(false)
@@ -223,7 +236,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       setDeletingMemoryId(null)
     } catch {
       if (operationVersion === selectionVersion.current) {
-        setError('Agent Memory deletion or purge was rejected safely. Refresh and review the current version again.')
+        setError('Agent Memory 删除或清除请求已被安全拒绝；请刷新后重新检查当前版本。')
       }
     } finally {
       if (operationVersion === selectionVersion.current) setIsDeleting(false)
@@ -231,22 +244,22 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
   }
 
   return (
-    <section className="agent-console-section" aria-label="Agent Memory lifecycle">
+    <section className="agent-console-section" aria-label="Agent Memory 生命周期">
       <div className="section-heading section-heading--inline">
-        <span>Agent Memory</span>
-        <strong><BrainCircuit size={15} /> scoped lifecycle</strong>
+        <span title="Memory：独立 Runtime 生成、经人工提升后持久保存的记忆。">Agent Memory（记忆）</span>
+        <strong><BrainCircuit size={15} /> 按作用域管理生命周期</strong>
       </div>
 
       {!desktopApi || !runId || !localProjectId ? (
         <article className="agent-evidence-card">
-          <p className="empty-note">Select a Local Project and Run to inspect Agent Memory.</p>
+          <p className="empty-note">请先选择 Local Project（本地项目）和 Run，再检查 Agent Memory。</p>
         </article>
       ) : null}
-      {isLoading ? <p className="empty-note">Loading Agent Memory lifecycle…</p> : null}
+      {isLoading ? <p className="empty-note">正在读取 Agent Memory 生命周期…</p> : null}
       {error ? <p className="error-note" role="alert">{error}</p> : null}
       {!isLoading && !error && !hasRuntimeScope ? (
         <article className="agent-evidence-card">
-          <p className="empty-note">No exact Agent Runtime is available for Memory scope.</p>
+          <p className="empty-note">当前 Run 尚无可用于 Memory 作用域的精确独立 Runtime。</p>
         </article>
       ) : null}
 
@@ -254,28 +267,27 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
         <>
           <div className="agent-fact-grid agent-fact-grid--three">
             <div className="compact-row">
-              <span>Working Memory</span>
-              <strong>Runtime checkpoint only</strong>
+              <span>工作记忆</span>
+              <strong>仅保存在 Runtime 检查点</strong>
             </div>
             <div className="compact-row">
-              <span>Candidate</span>
+              <span>记忆候选</span>
               <strong>
-                {snapshot.candidateCount} Memory Candidate
-                {snapshot.candidateCount === 1 ? '' : 's'}
+                {snapshot.candidateCount} 个 Memory Candidate（记忆候选）
               </strong>
             </div>
             <div className="compact-row">
-              <span>Durable Memory</span>
+              <span>持久记忆</span>
               <strong>
-                {snapshot.memoryCount} Durable {snapshot.memoryCount === 1 ? 'Memory' : 'Memories'}
+                {snapshot.memoryCount} 个 Durable Memory（持久记忆）
               </strong>
             </div>
           </div>
 
           {snapshot.truncated ? (
             <div className="agent-advisory agent-advisory--warn">
-              <span>Bounded projection</span>
-              <strong><ShieldAlert size={15} /> Additional lifecycle rows remain main-only</strong>
+              <span>有界投影</span>
+              <strong><ShieldAlert size={15} /> 其余生命周期记录仅保留在 Electron Main</strong>
             </div>
           ) : null}
 
@@ -284,19 +296,19 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
               {snapshot.candidates.map((candidate) => (
                 <article className="agent-evidence-card" key={candidate.id}>
                   <div className="section-heading">
-                    <span>Memory Candidate</span>
-                    <strong>{candidate.lifecycleStatus}</strong>
+                    <span>Memory Candidate（记忆候选）</span>
+                    <strong>{memoryStatusLabel(candidate.lifecycleStatus)}</strong>
                   </div>
                   <p>{candidate.statement}</p>
                   <div className="compact-row">
-                    <span>Candidate ID</span>
+                    <span>候选 ID</span>
                     <code>{candidate.id}</code>
                   </div>
                   <div className="compact-row">
-                    <span>Provenance</span>
+                    <span>来源</span>
                     <strong>
-                      {candidate.provenance.runtimeId} · checkpoint v
-                      {candidate.provenance.checkpointVersion} · sequence {candidate.provenance.sequence}
+                      {candidate.provenance.runtimeId} · 检查点 v
+                      {candidate.provenance.checkpointVersion} · 序号 {candidate.provenance.sequence}
                     </strong>
                   </div>
                   <p className="empty-note">{scopeLabel(candidate.scope)}</p>
@@ -307,7 +319,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                       disabled={isPromoting}
                       onClick={() => { void promoteCandidate(candidate) }}
                     >
-                      {isPromoting ? 'Promoting Memory…' : 'Promote private user-project Memory'}
+                      {isPromoting ? '正在提升 Memory…' : '提升为用户项目私有 Memory'}
                     </button>
                   ) : null}
                 </article>
@@ -315,7 +327,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
             </div>
           ) : (
             <article className="agent-evidence-card">
-              <p className="empty-note">No inert Memory Candidate is available for this project.</p>
+              <p className="empty-note">当前项目暂无待人工确认的 Memory Candidate；这是可选高级信息。</p>
             </article>
           )}
 
@@ -333,31 +345,31 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                   key={memory.memoryId}
                 >
                   <div className="section-heading">
-                    <span>Durable Memory</span>
-                    <strong>{memory.lifecycleStatus}</strong>
+                    <span>Durable Memory（持久记忆）</span>
+                    <strong>{memoryStatusLabel(memory.lifecycleStatus)}</strong>
                   </div>
-                  <p>{memory.statement ?? 'Content unavailable after deletion.'}</p>
+                  <p>{memory.statement ?? '删除后内容不可用。'}</p>
                   <div className="compact-row">
-                    <span>Version</span>
-                    <strong>revision {memory.currentRevision} · head v{memory.headVersion}</strong>
+                    <span>版本</span>
+                    <strong>修订 {memory.currentRevision} · 当前头版本 v{memory.headVersion}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Authority</span>
+                    <span>权限边界</span>
                     <strong>
                       {memory.visibility} · {memory.sensitivity} · {memory.retentionClass}
                     </strong>
                   </div>
                   <div className="compact-row">
-                    <span>Expiry</span>
-                    <strong>{memory.expiresAt ?? 'until deleted'}</strong>
+                    <span>过期时间</span>
+                    <strong>{memory.expiresAt ?? '直至删除'}</strong>
                   </div>
                   <div className="compact-row">
-                    <span>Source Candidate</span>
+                    <span>来源候选</span>
                     <code>{memory.sourceCandidateId}</code>
                   </div>
                   {memory.tombstone ? (
                     <div className="agent-advisory">
-                      <span>Deletion</span>
+                      <span>删除状态</span>
                       <strong>
                         purge {memory.tombstone.purgeStatus} · deletion v
                         {memory.tombstone.deletionVersion}
@@ -370,9 +382,9 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                     editingMemoryId === memory.memoryId ? (
                       <div className="form-stack">
                         <label>
-                          Revised Memory statement
+                          修订后的 Memory 内容
                           <textarea
-                            aria-label={`Revised Memory statement for ${memory.memoryId}`}
+                            aria-label={`修订 Memory 内容 ${memory.memoryId}`}
                             value={revisionStatement}
                             disabled={isRevising}
                             onChange={(event) => setRevisionStatement(event.target.value)}
@@ -381,7 +393,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                         <div className="button-row">
                           <button
                             type="button"
-                            className="primary-button"
+                            className="ghost-button"
                             disabled={
                               isRevising ||
                               revisionStatement.length === 0 ||
@@ -390,7 +402,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                             }
                             onClick={() => { void reviseMemory(memory) }}
                           >
-                            {isRevising ? 'Saving exact revision…' : 'Save exact revision'}
+                            {isRevising ? '正在保存精确修订…' : '保存精确修订'}
                           </button>
                           <button
                             type="button"
@@ -401,7 +413,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                               setRevisionStatement('')
                             }}
                           >
-                            Cancel
+                            取消
                           </button>
                         </div>
                       </div>
@@ -415,7 +427,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                           setRevisionStatement(memory.statement ?? '')
                         }}
                       >
-                        Revise exact Memory
+                        修订此 Memory
                       </button>
                     )
                   ) : null}
@@ -423,15 +435,15 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                   memory.revisionStatus === 'active' ? (
                     deletingMemoryId === memory.memoryId ? (
                       <div className="agent-advisory">
-                        <span>This tombstones the exact current Memory before derived-state purge.</span>
+                        <span>确认后会先为当前精确 Memory 写入墓碑，再清除派生状态。</span>
                         <div className="button-row">
                           <button
                             type="button"
-                            className="primary-button"
+                            className="ghost-button"
                             disabled={isDeleting}
                             onClick={() => { void deleteMemory(memory) }}
                           >
-                            {isDeleting ? 'Deleting exact Memory…' : 'Confirm exact deletion'}
+                            {isDeleting ? '正在删除精确 Memory…' : '确认删除此 Memory'}
                           </button>
                           <button
                             type="button"
@@ -439,7 +451,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                             disabled={isDeleting}
                             onClick={() => setDeletingMemoryId(null)}
                           >
-                            Cancel deletion
+                            取消删除
                           </button>
                         </div>
                       </div>
@@ -450,7 +462,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                         disabled={isPromoting || isRevising || isDeleting || editingMemoryId !== null}
                         onClick={() => setDeletingMemoryId(memory.memoryId)}
                       >
-                        Delete exact Memory
+                        删除此 Memory
                       </button>
                     )
                   ) : null}
@@ -461,11 +473,11 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                   memory.tombstone.lastRevision === memory.currentRevision ? (
                     <button
                       type="button"
-                      className="primary-button"
+                      className="ghost-button"
                       disabled={isDeleting}
                       onClick={() => { void deleteMemory(memory) }}
                     >
-                      {isDeleting ? 'Completing exact purge…' : 'Complete exact purge'}
+                      {isDeleting ? '正在完成精确清除…' : '完成精确清除'}
                     </button>
                   ) : null}
                   <p className="empty-note">{scopeLabel(memory.scope)}</p>
@@ -474,11 +486,11 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
             </div>
           ) : (
             <article className="agent-evidence-card">
-              <p className="empty-note">No Durable Memory revision exists for this project.</p>
+              <p className="empty-note">当前项目暂无 Durable Memory（持久记忆）修订。</p>
             </article>
           )}
           <p className="empty-note">
-            Scope sessions, authority digests, opaque capabilities, raw Tool output, and local paths remain in Electron main.
+            作用域会话、权限摘要、不透明能力、Tool 原始输出和本地路径仅保留在 Electron Main。
           </p>
         </>
       ) : null}

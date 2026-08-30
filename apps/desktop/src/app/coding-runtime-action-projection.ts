@@ -44,7 +44,7 @@ export type CodingRuntimeAction = {
 
 export type CodingPermissionProjection = {
   request: CodingPermissionRequest
-  kind: 'change-set' | 'dependency-bootstrap' | 'legacy'
+  kind: 'change-set' | 'change-acceptance' | 'execution-authorization' | 'dependency-bootstrap' | 'legacy'
   remainingMs: number
   expired: boolean
   staleReason?: string
@@ -53,6 +53,8 @@ export type CodingPermissionProjection = {
   changedPaths: string[]
   changeSetDigest?: string
   preview?: CodingChangeSetPreview
+  diffArtifact?: CodingDiffArtifact
+  testEvidence?: TestEvidence
 }
 
 export type CodingRuntimeTerminalSummary = {
@@ -155,27 +157,52 @@ function buildPermissionProjection(input: {
   request: CodingPermissionRequest
   run: CodingAgentRun
   preview?: CodingChangeSetPreview | null
+  diffArtifact?: CodingDiffArtifact
+  testEvidence?: TestEvidence
+  workspace?: ManagedCodingWorkspace
   nowMs: number
 }): CodingPermissionProjection {
-  const { request, run, preview, nowMs } = input
+  const { request, run, preview, diffArtifact, testEvidence, workspace, nowMs } = input
   const requestExpiryMs = Date.parse(request.expiresAt)
   const remainingMs = Number.isFinite(requestExpiryMs) && Number.isFinite(nowMs)
     ? Math.max(0, requestExpiryMs - nowMs)
     : 0
   const expired = remainingMs <= 0
-  const kind = request.origin === 'dependency_bootstrap'
+  const kind = request.origin === 'change_acceptance'
+    ? 'change-acceptance'
+    : request.origin === 'execution_authorization'
+      ? 'execution-authorization'
+      : request.origin === 'dependency_bootstrap'
     ? 'dependency-bootstrap'
     : request.changeSetId
       ? 'change-set'
       : 'legacy'
   let staleReason: string | undefined
-  const previewVerified = kind === 'change-set' && Boolean(
-    preview &&
-    preview.id === request.changeSetId &&
-    preview.codingRunId === request.codingRunId &&
-    request.changeSetDigest &&
-    preview.changeSetDigest === request.changeSetDigest,
-  )
+  const previewVerified = kind === 'change-set'
+    ? Boolean(
+        preview &&
+        preview.id === request.changeSetId &&
+        preview.codingRunId === request.codingRunId &&
+        request.changeSetDigest &&
+        preview.changeSetDigest === request.changeSetDigest,
+      )
+    : kind === 'change-acceptance'
+      ? Boolean(
+          diffArtifact &&
+          testEvidence &&
+          workspace &&
+          request.diffArtifactId === diffArtifact.id &&
+          request.diffSourceDigest === diffArtifact.sourceDigest &&
+          request.diffPreview === diffArtifact.patch &&
+          request.testEvidenceId === testEvidence.id &&
+          request.managedWorkspaceId === workspace.id &&
+          run.diffArtifactId === diffArtifact.id &&
+          run.testEvidenceId === testEvidence.id &&
+          run.managedWorkspaceId === workspace.id &&
+          testEvidence.status === 'passed' &&
+          !diffArtifact.truncated,
+        )
+      : false
 
   if (request.codingRunId !== run.id || request.runId !== run.runId || request.nodeId !== run.nodeId) {
     staleReason = 'Permission 不属于当前 Coding Run / Workflow 节点。'
@@ -185,6 +212,8 @@ function buildPermissionProjection(input: {
     staleReason = 'Permission 已经处理，不能再次审批。'
   } else if (expired) {
     staleReason = 'Permission 已过期，不能审批。'
+  } else if (kind === 'change-acceptance' && !previewVerified) {
+    staleReason = '最终 Diff、权威测试或 managed worktree 已变化，不能接收。'
   } else if (kind === 'change-set') {
     if (!preview) {
       staleReason = '精确 Change Set 尚未完成校验。'
@@ -200,8 +229,10 @@ function buildPermissionProjection(input: {
     }
   }
 
-  const changedPaths = previewVerified
-    ? preview!.changedPaths
+  const changedPaths = kind === 'change-acceptance' && previewVerified
+    ? diffArtifact!.changedPaths
+    : previewVerified
+      ? preview!.changedPaths
     : request.filePath
       ? [request.filePath]
       : []
@@ -216,6 +247,8 @@ function buildPermissionProjection(input: {
     changedPaths,
     ...(request.changeSetDigest ? { changeSetDigest: request.changeSetDigest } : {}),
     ...(preview ? { preview } : {}),
+    ...(diffArtifact ? { diffArtifact } : {}),
+    ...(testEvidence ? { testEvidence } : {}),
   }
 }
 
@@ -231,7 +264,12 @@ function buildTerminalSummary(input: BuildCodingRuntimeActionProjectionInput, ru
     .sort((left, right) => left.sequence - right.sequence)
   const cleanupStatus = workspace?.cleanupStatus ?? (workspace?.deletedAt ? 'deleted' : workspace ? 'active' : 'none')
   const changedPaths = run.changedPaths.length > 0 ? run.changedPaths : (diff?.changedPaths ?? [])
-  const legacyRuntimeCost = Boolean(run.runtimeCostSummary && !run.runtimeCostSummary.usageStatus)
+  const legacyRuntimeCost = Boolean(run.runtimeCostSummary && (
+    !run.runtimeCostSummary.usageStatus ||
+    run.runtimeCostSummary.usageStatus === 'legacy_unknown' ||
+    !run.runtimeCostSummary.costStatus ||
+    run.runtimeCostSummary.costStatus === 'legacy_unverified'
+  ))
 
   return {
     providerId: run.providerId,
@@ -240,8 +278,8 @@ function buildTerminalSummary(input: BuildCodingRuntimeActionProjectionInput, ru
       inputTokens: run.runtimeCostSummary.inputTokens,
       outputTokens: run.runtimeCostSummary.outputTokens,
       cacheReadTokens: legacyRuntimeCost ? null : run.runtimeCostSummary.cacheReadTokens,
-      ...(run.runtimeCostSummary.cacheMissTokens !== undefined
-        ? { cacheMissTokens: run.runtimeCostSummary.cacheMissTokens }
+      ...(run.runtimeCostSummary.cacheMissTokens !== undefined || legacyRuntimeCost
+        ? { cacheMissTokens: legacyRuntimeCost ? null : run.runtimeCostSummary.cacheMissTokens }
         : {}),
       ...(run.runtimeCostSummary.totalTokens !== undefined
         ? { totalTokens: run.runtimeCostSummary.totalTokens }
@@ -326,11 +364,23 @@ export function buildCodingRuntimeActionProjection(
       .filter((request) => request.codingRunId === activeRun.id && request.status === 'pending')
       .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt) || right.id.localeCompare(left.id))[0]
     if (activeRun.status === 'waiting_permission' && pendingRequest) {
+      const pendingDiffArtifact = pendingRequest.diffArtifactId
+        ? input.diffArtifacts.find((candidate) => candidate.id === pendingRequest.diffArtifactId)
+        : undefined
+      const pendingTestEvidence = pendingRequest.testEvidenceId
+        ? input.testEvidence.find((candidate) => candidate.id === pendingRequest.testEvidenceId)
+        : undefined
+      const pendingWorkspace = pendingRequest.managedWorkspaceId
+        ? input.workspaces.find((candidate) => candidate.id === pendingRequest.managedWorkspaceId)
+        : undefined
       const permission = buildPermissionProjection({
         request: pendingRequest,
         run: activeRun,
         nowMs: Date.parse(input.now),
         ...(input.changeSetPreview !== undefined ? { preview: input.changeSetPreview } : {}),
+        ...(pendingDiffArtifact ? { diffArtifact: pendingDiffArtifact } : {}),
+        ...(pendingTestEvidence ? { testEvidence: pendingTestEvidence } : {}),
+        ...(pendingWorkspace ? { workspace: pendingWorkspace } : {}),
       })
       return {
         ...base,
@@ -339,7 +389,13 @@ export function buildCodingRuntimeActionProjection(
         action: {
           id: 'review-permission',
           target: 'agents-permission',
-          label: permission.kind === 'change-set' ? '审查并批准修改' : '处理 Coding Permission',
+          label: permission.kind === 'change-set'
+            ? '审查并批准修改'
+            : permission.kind === 'change-acceptance'
+              ? '审查并接收最终修改'
+              : permission.kind === 'execution-authorization'
+                ? '授权 OpenCode 开始执行'
+                : '处理 Coding Permission',
           summary: permission.staleReason ?? `${pendingRequest.title}；审批只作用于当前 Coding Run。`,
           disabled: false,
           createsNewRun: false,

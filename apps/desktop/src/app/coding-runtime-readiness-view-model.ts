@@ -24,6 +24,21 @@ const readinessCopy: Record<CodingRuntimeReadinessCode, ReadinessCopy> = {
   executor_unconfigured: {
     label: 'Coding Executor', ready: '已配置', blocked: '未配置', remediation: '选择 OpenCode 或 Native Coding Executor。',
   },
+  binary_missing: {
+    label: 'OpenCode 可执行文件', ready: '已解析', blocked: '未找到', remediation: '重新检测并确认由 Electron Main 解析出的 OpenCode。',
+  },
+  version_incompatible: {
+    label: 'OpenCode 版本', ready: '合同兼容', blocked: '不兼容', remediation: '安装当前发布已验证的 OpenCode 版本。',
+  },
+  auth_unavailable: {
+    label: 'OpenCode 认证', ready: '本地认证目录可用', blocked: '不可用', remediation: '在 OpenCode 中完成登录，并确认本地 auth profile 可访问。',
+  },
+  profile_unavailable: {
+    label: 'OpenCode Profile', ready: '已选择', blocked: '未选择', remediation: '选择本项目使用的 OpenCode Provider/profile。',
+  },
+  model_unavailable: {
+    label: 'OpenCode Model', ready: '已选择', blocked: '未选择', remediation: '选择本项目使用的 OpenCode model。',
+  },
   engine_unavailable: {
     label: 'Coding Engine', ready: '可用', blocked: '不可用', remediation: '重新检测本机 OpenCode，或改用 Native Executor。',
   },

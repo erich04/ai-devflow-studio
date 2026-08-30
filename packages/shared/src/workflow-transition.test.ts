@@ -632,6 +632,40 @@ describe('workflow command core', () => {
     expect(result.run.nodes.find((node) => node.id === 'run-build-transition-test')?.status).toBe('running')
   })
 
+  it('advances an OpenCode build only after the exact Change Acceptance decision is persisted', () => {
+    const { run, evidence, buildId, codingRun, diff } = currentBuild()
+    const command = {
+      type: 'complete_build' as const,
+      nodeId: buildId,
+      codingRunId: codingRun.id,
+      diffId: diff.id,
+    }
+    const applyingWithoutAcceptance: CodingAgentRun = {
+      ...codingRun,
+      engine: 'opencode-http',
+      status: 'applying',
+    }
+    delete applyingWithoutAcceptance.completedAt
+    expect(evaluateWorkflowCommand({
+      run,
+      command,
+      evidence: { ...evidence, codingRuns: [applyingWithoutAcceptance] },
+    })).toMatchObject({
+      allowed: false,
+      blockers: [{ code: 'coding_run_not_completed' }],
+    })
+
+    const accepted: CodingAgentRun = {
+      ...applyingWithoutAcceptance,
+      changeAcceptanceDecisionId: 'decision-change-acceptance-1',
+    }
+    expect(evaluateWorkflowCommand({
+      run,
+      command,
+      evidence: { ...evidence, codingRuns: [accepted] },
+    })).toEqual({ allowed: true, blockers: [] })
+  })
+
   it('rejects a command when a downstream workflow node is already non-pending', () => {
     const { run, evidence, buildId, codingRun, diff } = currentBuild()
     const inconsistentRun = {

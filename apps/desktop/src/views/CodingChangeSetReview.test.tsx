@@ -89,4 +89,42 @@ describe('CodingChangeSetReview', () => {
     expect(screen.queryByLabelText('src/a.ts diff')).not.toBeInTheDocument()
     expect(screen.getByText('精确预览尚未通过 ID、Run、digest 与 TTL 校验。')).toBeInTheDocument()
   })
+
+  it('presents final Change Acceptance as Workflow acceptance rather than another write permission', () => {
+    const onDecision = vi.fn()
+    render(<CodingChangeSetReview
+      permission={projection({
+        request: {
+          id: 'acceptance-1', codingRunId: run.id, runId: run.runId, nodeId: run.nodeId,
+          origin: 'change_acceptance', permission: 'patch', title: 'Accept the final OpenCode changes',
+          diffArtifactId: 'diff-1', diffSourceDigest: 'a'.repeat(64), testEvidenceId: 'test-1',
+          managedWorkspaceId: 'workspace-1', diffPreview: diff, risk: 'warn', reasons: ['Exact final review'],
+          status: 'pending', requestedAt: '2026-08-30T12:00:00.000Z', expiresAt: '2026-08-30T12:05:00.000Z',
+        },
+        kind: 'change-acceptance',
+        changedPaths: ['src/a.ts', 'src/b.ts'],
+        diffArtifact: {
+          id: 'diff-1', runId: run.runId, nodeId: run.nodeId, projectId: run.projectId,
+          changedPaths: ['src/a.ts', 'src/b.ts'], patch: diff, sourceDigest: 'a'.repeat(64),
+          truncated: false, redacted: false, createdAt: '2026-08-30T12:00:00.000Z',
+        },
+        testEvidence: {
+          id: 'test-1', runId: run.runId, nodeId: run.nodeId, projectId: run.projectId,
+          command: 'pnpm test', cwd: '<workspace>', status: 'passed', exitCode: 0, durationMs: 10,
+          stdout: 'passed', stderr: '', summary: 'Canonical test passed.', redacted: true,
+          createdAt: '2026-08-30T12:00:00.000Z',
+        },
+      })}
+      run={{ ...run, engine: 'opencode-http' }}
+      workspace={undefined}
+      isReplying={false}
+      onDecision={onDecision}
+    />)
+
+    expect(screen.getByText('最终变更接收（Change Acceptance）')).toBeInTheDocument()
+    expect(screen.getByText('passed')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '接收最终修改' }))
+    expect(onDecision).toHaveBeenCalledWith('approved')
+    expect(screen.getByRole('button', { name: '拒绝并保留 worktree' })).toBeEnabled()
+  })
 })

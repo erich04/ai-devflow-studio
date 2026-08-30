@@ -133,13 +133,13 @@ describe('AgentRuntimePanel', () => {
       />,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Start Runtime' }))
+    fireEvent.click(await screen.findByRole('button', { name: '创建独立 Runtime 验证实例（高级）' }))
     await waitFor(() => expect(startAgentRuntime).toHaveBeenCalledWith({
       runId: 'run-1',
       nodeId: 'run-1-build',
       localProjectId: 'project-1',
     }))
-    expect(await screen.findAllByText('checkpointed')).toHaveLength(2)
+    expect(await screen.findAllByText('已保存检查点')).toHaveLength(1)
   })
 
   it('shows metadata-only Knowledge and Durable Memory provenance', async () => {
@@ -166,9 +166,9 @@ describe('AgentRuntimePanel', () => {
       />,
     )
 
-    expect(await screen.findByText('Runtime Context')).toBeInTheDocument()
-    expect(screen.getByText('2 Knowledge Citations')).toBeInTheDocument()
-    expect(screen.getByText('1 Durable Memory revision')).toBeInTheDocument()
+    expect(await screen.findByText('Runtime 上下文')).toBeInTheDocument()
+    expect(screen.getByText('2 条知识引用')).toBeInTheDocument()
+    expect(screen.getByText('1 个持久记忆版本')).toBeInTheDocument()
     expect(screen.getByText('runtime-context-panel-1')).toBeInTheDocument()
     expect(screen.getByText(digest('e'))).toBeInTheDocument()
     expect(screen.getByText(digest('f'))).toBeInTheDocument()
@@ -209,12 +209,12 @@ describe('AgentRuntimePanel', () => {
       />,
     )
 
-    expect(await screen.findAllByText('checkpointed')).toHaveLength(2)
-    expect(screen.getByText('3 trajectory events')).toBeInTheDocument()
-    expect(screen.getByText('0 / 4 steps')).toBeInTheDocument()
+    expect(await screen.findAllByText('已保存检查点')).toHaveLength(1)
+    expect(screen.getByText('3 条事件')).toBeInTheDocument()
+    expect(screen.getByText('0 / 4')).toBeInTheDocument()
     expect(screen.getAllByText(digest('a'))).toHaveLength(2)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Resume Runtime' }))
+    fireEvent.click(screen.getByRole('button', { name: '从检查点恢复 Runtime' }))
     await waitFor(() => expect(advanceAgentRuntime).toHaveBeenCalledWith({
       runtimeId: 'agent-runtime-panel-1',
       runId: 'run-1',
@@ -222,8 +222,8 @@ describe('AgentRuntimePanel', () => {
       expectedVersion: 1,
       expectedCheckpointVersion: 1,
     }))
-    expect(await screen.findByText('running')).toBeInTheDocument()
-    expect(screen.getByText('5 trajectory events')).toBeInTheDocument()
+    expect(await screen.findByText('运行中')).toBeInTheDocument()
+    expect(screen.getByText('5 条事件')).toBeInTheDocument()
   })
 
   it('shows the latest redacted evaluation without exposing raw event metadata', async () => {
@@ -250,7 +250,7 @@ describe('AgentRuntimePanel', () => {
       />,
     )
 
-    expect(await screen.findByText('Latest evaluation')).toBeInTheDocument()
+    expect(await screen.findByText('最近评估')).toBeInTheDocument()
     expect(screen.getByText('continue')).toBeInTheDocument()
     expect(screen.getByText('One bounded repair step remains.')).toBeInTheDocument()
     expect(screen.queryByText(/resultBytes|metadata|rawOutput/)).not.toBeInTheDocument()

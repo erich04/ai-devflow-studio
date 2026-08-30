@@ -3,6 +3,7 @@ import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import {
   aggregateCodingRuntimeCostSettlements,
+  AgentProviderRequestError,
   parseCodingExecutorDescriptor,
   parseCodingExecutorRequest,
   parseCodingExecutorTurn,
@@ -14,6 +15,7 @@ import {
   selectCodingExecutor,
   settleCodingRuntimeCost,
   type AgentProvider,
+  type AgentProviderResponseMetadata,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingChangeSet,
@@ -22,7 +24,11 @@ import {
   type RuntimeProviderCallSettlement,
   type TestEvidence,
 } from '@ai-devflow/shared'
-import type { CodingEngineStartInput } from './coding-engine.js'
+import type {
+  CodingEngineStartInput,
+  CodingProviderCallReporter,
+  CodingProviderCallTrace,
+} from './coding-engine.js'
 import type { CodingExecutor } from './coding-executor.js'
 import {
   applyCodingChangeSetAtomically,
@@ -60,6 +66,7 @@ type ProviderUsage = {
 type NativeV2ModelResult = {
   value: Record<string, unknown>
   usage: ProviderUsage
+  responseMetadata?: AgentProviderResponseMetadata
 }
 
 export type NativeCodingV2DecisionProvider = {
@@ -68,6 +75,8 @@ export type NativeCodingV2DecisionProvider = {
   modelId: string
   billing: 'metered'
   billingProvider?: ProviderUsage['billingProvider']
+  targetHost?: string
+  timeoutMs?: number
   complete(input: {
     phase: 'analysis' | 'initial' | 'repair'
     systemPrompt: string
@@ -603,6 +612,8 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
     modelId: provider.model,
     billing: 'metered',
     ...(provider.billingProvider ? { billingProvider: provider.billingProvider } : {}),
+    ...(provider.targetHost ? { targetHost: provider.targetHost } : {}),
+    ...(provider.requestTimeoutMs ? { timeoutMs: provider.requestTimeoutMs } : {}),
     async complete(input) {
       if (input.userPrompt.length > MAX_PROMPT_CHARS) {
         throw new Error('Native Coding v2 provider prompt exceeds the hard limit')
@@ -619,12 +630,17 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
         !Number.isSafeInteger(usage.outputTokens) ||
         (usage.cacheReadTokens !== undefined && !Number.isSafeInteger(usage.cacheReadTokens)) ||
         (usage.cacheMissTokens !== undefined && !Number.isSafeInteger(usage.cacheMissTokens)) ||
+        (usage.totalTokens !== undefined && !Number.isSafeInteger(usage.totalTokens)) ||
         Number(usage.inputTokens) < 0 ||
         Number(usage.outputTokens) < 0 ||
         Number(usage.cacheReadTokens ?? 0) < 0 ||
-        Number(usage.cacheMissTokens ?? 0) < 0
+        Number(usage.cacheMissTokens ?? 0) < 0 ||
+        Number(usage.totalTokens ?? 0) < 0
       ) {
-        throw new Error('Configured Coding Provider did not return exact integer token usage')
+        throw invalidProviderUsageError(
+          completed.responseMetadata,
+          'provider_usage_missing_or_invalid',
+        )
       }
       const inputTokens = Number(usage.inputTokens)
       const outputTokens = Number(usage.outputTokens)
@@ -635,7 +651,19 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
           usage.cacheMissTokens === undefined ||
           usage.cacheReadTokens + usage.cacheMissTokens !== inputTokens)
       ) {
-        throw new Error('invalid_usage: cache hit + miss must equal input tokens')
+        throw invalidProviderUsageError(
+          completed.responseMetadata,
+          'provider_cache_usage_inconsistent',
+        )
+      }
+      if (
+        usage.totalTokens !== undefined &&
+        usage.totalTokens !== inputTokens + outputTokens
+      ) {
+        throw invalidProviderUsageError(
+          completed.responseMetadata,
+          'provider_total_usage_inconsistent',
+        )
       }
       return {
         value: completed.value,
@@ -654,9 +682,27 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
             ? { billingProvider: usage.billingProvider }
             : {}),
         },
+        ...(completed.responseMetadata
+          ? { responseMetadata: completed.responseMetadata }
+          : {}),
       }
     },
   }
+}
+
+function invalidProviderUsageError(
+  responseMetadata: AgentProviderResponseMetadata | undefined,
+  sanitizedCause: string,
+): AgentProviderRequestError {
+  return new AgentProviderRequestError({
+    code: 'invalid_usage',
+    deliveryState: 'response_received',
+    billingState: 'unknown',
+    retryable: false,
+    ...(responseMetadata ? { httpStatus: responseMetadata.httpStatus } : {}),
+    ...(responseMetadata ? { responseMetadata } : {}),
+    sanitizedCause,
+  })
 }
 
 export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2Input): CodingExecutor {
@@ -678,6 +724,125 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       'workspace_read',
     ],
   })
+
+  async function runProviderCall<T>(call: {
+    codingRunId: string
+    reportProviderCall?: CodingProviderCallReporter
+    phase: CodingProviderCallTrace['phase']
+    systemPrompt: string
+    userPrompt: string
+    maxOutputTokens: number
+    manifestPathCount: number
+    excerptCount: number
+    parse: (value: Record<string, unknown>) => T
+  }): Promise<{ value: T; usage: ProviderUsage; requestedAt: string }> {
+    const requestId = createId('provider-call')
+    const requestedAt = canonicalNow(clock)
+    const timeoutMs = input.decisionProvider.timeoutMs ?? 30_000
+    const targetHost = safeProviderTraceLabel(input.decisionProvider.targetHost, 255)
+    const baseTrace = {
+      stateVersion: 1 as const,
+      requestId,
+      codingRunId: call.codingRunId,
+      phase: call.phase,
+      attempt: 1,
+      providerId: input.decisionProvider.id,
+      model: input.decisionProvider.modelId,
+      ...(targetHost
+        ? { targetHost }
+        : {}),
+      startedAt: requestedAt,
+      timeoutMs,
+      promptChars: call.systemPrompt.length + call.userPrompt.length,
+      promptBytes:
+        Buffer.byteLength(call.systemPrompt, 'utf8') +
+        Buffer.byteLength(call.userPrompt, 'utf8'),
+      promptDigest: sha256(JSON.stringify([call.systemPrompt, call.userPrompt])),
+      manifestPathCount: call.manifestPathCount,
+      excerptCount: call.excerptCount,
+      maxOutputTokens: call.maxOutputTokens,
+      redacted: true as const,
+    }
+    await call.reportProviderCall?.({
+      ...baseTrace,
+      status: 'started',
+      deliveryState: 'not_sent',
+      billingState: 'not_incurred',
+      retryable: false,
+    })
+
+    let completed: NativeV2ModelResult | undefined
+    try {
+      completed = await input.decisionProvider.complete({
+        phase: call.phase,
+        systemPrompt: call.systemPrompt,
+        userPrompt: call.userPrompt,
+        maxOutputTokens: call.maxOutputTokens,
+      })
+      let value: T
+      try {
+        value = call.parse(completed.value)
+      } catch (error) {
+        throw new AgentProviderRequestError({
+          code: 'invalid_model_output',
+          deliveryState: 'response_received',
+          billingState: 'confirmed',
+          retryable: false,
+          ...(completed.responseMetadata
+            ? { httpStatus: completed.responseMetadata.httpStatus }
+            : {}),
+          sanitizedCause: 'native_v2_output_validation_failed',
+          cause: error,
+        })
+      }
+      const completedAt = canonicalNow(clock)
+      await call.reportProviderCall?.({
+        ...baseTrace,
+        status: 'succeeded',
+        completedAt,
+        durationMs: elapsedMs(requestedAt, completedAt),
+        deliveryState: 'response_received',
+        billingState: 'confirmed',
+        retryable: false,
+        ...(completed.responseMetadata
+          ? providerResponseTrace(completed.responseMetadata)
+          : {}),
+        usage: providerUsageTrace(completed.usage),
+      })
+      return { value, usage: completed.usage, requestedAt }
+    } catch (error) {
+      const failure = error instanceof AgentProviderRequestError
+        ? error
+        : new AgentProviderRequestError({
+            code: 'unknown_provider_failure',
+            deliveryState: completed ? 'response_received' : 'possibly_delivered',
+            billingState: completed ? 'confirmed' : 'unknown',
+            retryable: !completed,
+            sanitizedCause: 'unclassified_provider_failure',
+            cause: error,
+          })
+      const completedAt = canonicalNow(clock)
+      await call.reportProviderCall?.({
+        ...baseTrace,
+        status: 'failed',
+        completedAt,
+        durationMs: elapsedMs(requestedAt, completedAt),
+        deliveryState: failure.deliveryState,
+        billingState: failure.billingState,
+        retryable: failure.retryable,
+        ...(failure.httpStatus !== null ? { httpStatus: failure.httpStatus } : {}),
+        ...(completed?.responseMetadata
+          ? providerResponseTrace(completed.responseMetadata)
+          : failure.responseMetadata
+            ? providerResponseTrace(failure.responseMetadata)
+            : {}),
+        ...(completed ? { usage: providerUsageTrace(completed.usage) } : {}),
+        errorCode: failure.code,
+        sanitizedCause: failure.sanitizedCause,
+      })
+      throw failure
+    }
+  }
 
   async function findChangeSetForPermission(
     codingRun: CodingAgentRun,
@@ -775,18 +940,25 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         repositoryManifest: manifest,
         limits: { maxFiles: 8, maxSearches: 8, literalSearchOnly: true },
       })
-      const analysisRequestedAt = canonicalNow(clock)
-      const analysis = await input.decisionProvider.complete({
+      const analysisSystemPrompt = [
+        'Return only JSON with exact keys stateVersion, files, searches, summary.',
+        'stateVersion is 2. Select only paths from repositoryManifest.',
+        'searches contain literal query and optional path. Do not propose edits yet.',
+      ].join(' ')
+      const analysis = await runProviderCall({
+        codingRunId: request.id,
+        ...(context.reportProviderCall
+          ? { reportProviderCall: context.reportProviderCall }
+          : {}),
         phase: 'analysis',
-        systemPrompt: [
-          'Return only JSON with exact keys stateVersion, files, searches, summary.',
-          'stateVersion is 2. Select only paths from repositoryManifest.',
-          'searches contain literal query and optional path. Do not propose edits yet.',
-        ].join(' '),
+        systemPrompt: analysisSystemPrompt,
         userPrompt: analysisPrompt,
         maxOutputTokens: Math.min(2_048, MAX_OUTPUT_TOKENS),
+        manifestPathCount: manifest.length,
+        excerptCount: 0,
+        parse: (value) => parseSearchPlan(value, manifest),
       })
-      const plan = parseSearchPlan(analysis.value, manifest)
+      const plan = analysis.value
       const excerpts = await collectExcerpts({
         worktreePath: context.workspace.worktreePath,
         manifest,
@@ -801,22 +973,29 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         excerpts,
         limits: { existingUtf8Files: true, maxFiles: 6, maxReplacements: 12 },
       })
-      const initialRequestedAt = canonicalNow(clock)
-      const initialResult = await input.decisionProvider.complete({
+      const initialSystemPrompt = [
+        'Return only JSON with exact keys stateVersion, changes, summary.',
+        'stateVersion is 2. Each change has exact keys path and replacements.',
+        'Each replacement has exact oldText and newText. oldText must occur exactly once.',
+        'Use only supplied excerpt paths. Do not create, delete, rename, or edit binary files.',
+      ].join(' ')
+      const initialResult = await runProviderCall({
+        codingRunId: request.id,
+        ...(context.reportProviderCall
+          ? { reportProviderCall: context.reportProviderCall }
+          : {}),
         phase: 'initial',
-        systemPrompt: [
-          'Return only JSON with exact keys stateVersion, changes, summary.',
-          'stateVersion is 2. Each change has exact keys path and replacements.',
-          'Each replacement has exact oldText and newText. oldText must occur exactly once.',
-          'Use only supplied excerpt paths. Do not create, delete, rename, or edit binary files.',
-        ].join(' '),
+        systemPrompt: initialSystemPrompt,
         userPrompt: initialPrompt,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
+        manifestPathCount: manifest.length,
+        excerptCount: excerpts.length,
+        parse: (value) => parseChangeProposal(
+          value,
+          new Set(excerpts.map((excerpt) => excerpt.path)),
+        ),
       })
-      const proposal = parseChangeProposal(
-        initialResult.value,
-        new Set(excerpts.map((excerpt) => excerpt.path)),
-      )
+      const proposal = initialResult.value
       const requestedAt = canonicalNow(clock)
       const expiresAt = permissionExpiry(requestedAt, request.deadline)
       const changeSet = await prepareCodingChangeSet({
@@ -855,7 +1034,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             providerId: input.decisionProvider.id,
             model: input.decisionProvider.modelId,
             usage: analysis.usage,
-            timestamp: analysisRequestedAt,
+            timestamp: analysis.requestedAt,
           }),
         },
         {
@@ -865,7 +1044,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             providerId: input.decisionProvider.id,
             model: input.decisionProvider.modelId,
             usage: initialResult.usage,
-            timestamp: initialRequestedAt,
+            timestamp: initialResult.requestedAt,
           }),
         },
       ])
@@ -990,18 +1169,25 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           excerpts,
           limits: { existingPreviouslyChangedFilesOnly: true, maxFiles: 6, maxReplacements: 12 },
         })
-        const repairRequestedAt = canonicalNow(clock)
-        const repairResult = await input.decisionProvider.complete({
+        const repairSystemPrompt = [
+          'Return only JSON with exact keys stateVersion, changes, summary.',
+          'stateVersion is 2. Repair only supplied files using exact oldText/newText replacements.',
+          'Do not create, delete, rename, or touch any path outside the initial Change Set.',
+        ].join(' ')
+        const repairResult = await runProviderCall({
+          codingRunId: codingRun.id,
+          ...(context.reportProviderCall
+            ? { reportProviderCall: context.reportProviderCall }
+            : {}),
           phase: 'repair',
-          systemPrompt: [
-            'Return only JSON with exact keys stateVersion, changes, summary.',
-            'stateVersion is 2. Repair only supplied files using exact oldText/newText replacements.',
-            'Do not create, delete, rename, or touch any path outside the initial Change Set.',
-          ].join(' '),
+          systemPrompt: repairSystemPrompt,
           userPrompt: repairPrompt,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
+          manifestPathCount: 0,
+          excerptCount: excerpts.length,
+          parse: (value) => parseChangeProposal(value, initialPaths),
         })
-        const repairProposal = parseChangeProposal(repairResult.value, initialPaths)
+        const repairProposal = repairResult.value
         const requestedAt = canonicalNow(clock)
         // The initial permission was already capped by the executor request deadline.
         // A repair approval may use the remaining window, but must never extend it.
@@ -1034,7 +1220,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
               providerId: input.decisionProvider.id,
               model: input.decisionProvider.modelId,
               usage: repairResult.usage,
-              timestamp: repairRequestedAt,
+              timestamp: repairResult.requestedAt,
             }),
           },
         ])
@@ -1195,5 +1381,44 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     async cancel() {
       return undefined
     },
+  }
+}
+
+function elapsedMs(startedAt: string, completedAt: string): number {
+  return Math.max(0, Date.parse(completedAt) - Date.parse(startedAt))
+}
+
+function providerResponseTrace(
+  metadata: AgentProviderResponseMetadata,
+): Pick<CodingProviderCallTrace, 'httpStatus' | 'providerResponseId' | 'systemFingerprint'> {
+  const providerResponseId = safeProviderTraceLabel(metadata.responseId, 128)
+  const systemFingerprint = safeProviderTraceLabel(metadata.systemFingerprint, 128)
+  return {
+    httpStatus: metadata.httpStatus,
+    ...(providerResponseId ? { providerResponseId } : {}),
+    ...(systemFingerprint
+      ? { systemFingerprint }
+      : {}),
+  }
+}
+
+function safeProviderTraceLabel(value: string | undefined, maxLength: number): string | undefined {
+  return value && value.length <= maxLength && /^[A-Za-z0-9._:[\]-]+$/u.test(value)
+    ? value
+    : undefined
+}
+
+function providerUsageTrace(usage: ProviderUsage): NonNullable<CodingProviderCallTrace['usage']> {
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    ...(usage.cacheReadTokens !== undefined
+      ? { cacheReadTokens: usage.cacheReadTokens }
+      : {}),
+    ...(usage.cacheMissTokens !== undefined
+      ? { cacheMissTokens: usage.cacheMissTokens }
+      : {}),
+    totalTokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+    cacheStatus: usage.cacheStatus ?? 'unknown',
   }
 }

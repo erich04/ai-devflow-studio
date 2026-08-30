@@ -191,17 +191,17 @@ describe('AgentMemoryPanel', () => {
       localProjectId="local-project-1"
     />)
 
-    expect(await screen.findByText('Working Memory')).toBeInTheDocument()
-    expect(screen.getByText('Agent Memory')).toBeInTheDocument()
-    expect(screen.getByText('Runtime checkpoint only')).toBeInTheDocument()
-    expect(screen.getByText('2 Memory Candidates')).toBeInTheDocument()
-    expect(screen.getByText('3 Durable Memories')).toBeInTheDocument()
-    expect(screen.getByText('pending')).toBeInTheDocument()
-    expect(screen.getByText('promoted')).toBeInTheDocument()
-    expect(screen.getByText('conflict')).toBeInTheDocument()
-    expect(screen.getByText('expired')).toBeInTheDocument()
-    expect(screen.getByText('deleted')).toBeInTheDocument()
-    expect(screen.getByText('revision 2 · head v4')).toBeInTheDocument()
+    expect(await screen.findByText('工作记忆')).toBeInTheDocument()
+    expect(screen.getByText('Agent Memory（记忆）')).toBeInTheDocument()
+    expect(screen.getByText('仅保存在 Runtime 检查点')).toBeInTheDocument()
+    expect(screen.getByText('2 个 Memory Candidate（记忆候选）')).toBeInTheDocument()
+    expect(screen.getByText('3 个 Durable Memory（持久记忆）')).toBeInTheDocument()
+    expect(screen.getByText('待确认')).toBeInTheDocument()
+    expect(screen.getByText('已提升')).toBeInTheDocument()
+    expect(screen.getByText('冲突')).toBeInTheDocument()
+    expect(screen.getByText('已过期')).toBeInTheDocument()
+    expect(screen.getByText('已删除')).toBeInTheDocument()
+    expect(screen.getByText('修订 2 · 当前头版本 v4')).toBeInTheDocument()
     expect(screen.getByText('purge completed · deletion v3')).toBeInTheDocument()
     expect(screen.getByText(snapshot.candidates[0]!.statement)).toBeInTheDocument()
     expect(screen.getByText(snapshot.memories[0]!.statement!)).toBeInTheDocument()
@@ -231,7 +231,7 @@ describe('AgentMemoryPanel', () => {
     />)
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Agent Memory lifecycle could not be loaded safely.',
+      '无法安全读取 Agent Memory 生命周期。',
     )
     expect(screen.queryByText(snapshot.candidates[0]!.statement)).not.toBeInTheDocument()
   })
@@ -249,7 +249,7 @@ describe('AgentMemoryPanel', () => {
       localProjectId="local-project-1"
     />)
 
-    expect(await screen.findByText('No exact Agent Runtime is available for Memory scope.'))
+    expect(await screen.findByText('当前 Run 尚无可用于 Memory 作用域的精确独立 Runtime。'))
       .toBeInTheDocument()
     expect(listAgentMemoryLifecycle).not.toHaveBeenCalled()
   })
@@ -275,7 +275,7 @@ describe('AgentMemoryPanel', () => {
     />)
 
     const button = await screen.findByRole('button', {
-      name: 'Promote private user-project Memory',
+      name: '提升为用户项目私有 Memory',
     })
     fireEvent.click(button)
 
@@ -288,7 +288,7 @@ describe('AgentMemoryPanel', () => {
       expectedProvenanceDigest: snapshot.candidates[0]!.provenanceDigest,
     }))
     await waitFor(() => expect(screen.queryByRole('button', {
-      name: 'Promote private user-project Memory',
+      name: '提升为用户项目私有 Memory',
     })).not.toBeInTheDocument())
     expect(JSON.stringify(promoteAgentMemoryCandidate.mock.calls)).not.toMatch(
       /authority|policy|actor|memoryId|sessionId|capability|statement/,
@@ -332,11 +332,11 @@ describe('AgentMemoryPanel', () => {
       localProjectId="local-project-1"
     />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Revise exact Memory' }))
+    fireEvent.click(await screen.findByRole('button', { name: '修订此 Memory' }))
     fireEvent.change(screen.getByLabelText(
-      `Revised Memory statement for ${activeMemory.memoryId}`,
+      `修订 Memory 内容 ${activeMemory.memoryId}`,
     ), { target: { value: revisedStatement } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save exact revision' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存精确修订' }))
 
     await waitFor(() => expect(reviseAgentMemory).toHaveBeenCalledWith({
       runtimeId: runtime.id,
@@ -350,7 +350,7 @@ describe('AgentMemoryPanel', () => {
       statement: revisedStatement,
     }))
     expect(await screen.findByText(revisedStatement)).toBeInTheDocument()
-    expect(screen.getByText('revision 3 · head v5')).toBeInTheDocument()
+    expect(screen.getByText('修订 3 · 当前头版本 v5')).toBeInTheDocument()
     expect(JSON.stringify(reviseAgentMemory.mock.calls)).not.toMatch(
       /"(?:authorityDigest|policyId|policyVersion|actorId|actorKind|sessionId|capability|retentionClass|sensitivity|visibility)"/,
     )
@@ -398,9 +398,9 @@ describe('AgentMemoryPanel', () => {
       localProjectId="local-project-1"
     />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Delete exact Memory' }))
+    fireEvent.click(await screen.findByRole('button', { name: '删除此 Memory' }))
     expect(deleteAgentMemory).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm exact deletion' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认删除此 Memory' }))
 
     await waitFor(() => expect(deleteAgentMemory).toHaveBeenCalledWith({
       runtimeId: runtime.id,
@@ -412,7 +412,7 @@ describe('AgentMemoryPanel', () => {
       expectedContentDigest: activeMemory.contentDigest,
       expectedProvenanceDigest: activeMemory.provenanceDigest,
     }))
-    expect(await screen.findAllByText('Content unavailable after deletion.')).toHaveLength(2)
+    expect(await screen.findAllByText('删除后内容不可用。')).toHaveLength(2)
     expect(screen.getByText('purge completed · deletion v5')).toBeInTheDocument()
     expect(JSON.stringify(deleteAgentMemory.mock.calls)).not.toMatch(
       /"(?:authorityDigest|policyId|policyVersion|actorId|actorKind|sessionId|capability|purgedAt)"/,
@@ -467,7 +467,7 @@ describe('AgentMemoryPanel', () => {
       localProjectId="local-project-1"
     />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Complete exact purge' }))
+    fireEvent.click(await screen.findByRole('button', { name: '完成精确清除' }))
 
     await waitFor(() => expect(deleteAgentMemory).toHaveBeenCalledWith({
       runtimeId: runtime.id,

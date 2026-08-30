@@ -57,7 +57,7 @@ export type CodingExecutor = {
   providerId: string
   modelId?: string
   billingProvider?: AgentProviderUsage['billingProvider']
-  billing?: 'no_cost' | 'metered'
+  billing?: 'no_cost' | 'metered' | 'opaque' | 'subscription'
   ensure(input: CodingEngineEnsureInput): Promise<CodingEngineEnsureResult>
   start(input: CodingExecutorStartInput): Promise<CodingExecutorStartResult>
   continuePermission(
@@ -193,24 +193,31 @@ export function createCodingExecutorCompatibilityAdapter(
     descriptor,
     engine: engine.engine,
     providerId: engine.providerId,
-    billing: engine.engine === 'fake' ? 'no_cost' : 'metered',
+    billing:
+      engine.engine === 'fake'
+        ? 'no_cost'
+        : engine.engine === 'opencode-http'
+          ? 'opaque'
+          : 'metered',
     ...(engine.modelId ? { modelId: engine.modelId } : {}),
     ensure: (input) => engine.ensure(input),
     async start(input) {
       const result = await engine.start(input.runtimeContext)
-      return {
-        kind: 'waiting_permission',
-        ...result,
-        turn: permissionTurn({
-          descriptor,
-          requestId: input.request.id,
-          startedAt: input.request.requestedAt,
-          previousCheckpointVersion: 0,
-          previousSequence: 0,
-          settledPermissionRequestIds: [],
-          result,
-        }),
-      }
+      return 'permissionRequest' in result
+        ? {
+            kind: 'waiting_permission',
+            ...result,
+            turn: permissionTurn({
+              descriptor,
+              requestId: input.request.id,
+              startedAt: input.request.requestedAt,
+              previousCheckpointVersion: 0,
+              previousSequence: 0,
+              settledPermissionRequestIds: [],
+              result,
+            }),
+          }
+        : { kind: 'engine_completed', ...result }
     },
     async continuePermission(input) {
       const result = await engine.approvePermission(input.runtimeContext)

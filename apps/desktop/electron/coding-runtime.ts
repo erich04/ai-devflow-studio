@@ -8,6 +8,7 @@ import {
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
   estimateCodingRuntimeCost,
+  hasSupportedCodingDiffSanitization,
   redactCodingAgentEventForStorage,
   redactLocalAbsolutePaths,
   redactSensitiveText,
@@ -44,12 +45,15 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import {
+  captureWorktreeDiff,
   createManagedCodingWorkspace,
   deleteManagedCodingWorkspace,
   findActiveCodingRun,
 } from './coding-runner.js'
 import type {
   CodingEngineAdapter,
+  CodingEngineStartInput,
+  CodingProviderCallTrace,
 } from './coding-engine.js'
 import {
   createCodingExecutorCompatibilityAdapter,
@@ -79,6 +83,30 @@ const pendingBootstrapPermissions = new Map<
   string,
   (decision: CodingPermissionDecision['decision']) => void
 >()
+
+function providerCallTraceMessage(trace: CodingProviderCallTrace): string {
+  const provider = trace.providerId.toLowerCase() === 'deepseek'
+    ? 'DeepSeek'
+    : trace.providerId
+  if (trace.status === 'started') {
+    return `${provider} · ${trace.phase} · Provider 调用已开始。`
+  }
+  const duration = trace.durationMs === undefined
+    ? '耗时未知'
+    : trace.durationMs >= 1_000
+      ? `${(trace.durationMs / 1_000).toFixed(trace.durationMs % 1_000 === 0 ? 0 : 1)} 秒`
+      : `${trace.durationMs} 毫秒`
+  const billing = trace.billingState === 'confirmed'
+    ? '费用已确认'
+    : trace.billingState === 'not_incurred'
+      ? '未产生 Provider 费用'
+      : '费用状态未知'
+  if (trace.status === 'succeeded') {
+    return `${provider} · ${trace.phase} · Provider 调用成功（${duration}） · ${billing}。`
+  }
+  const retry = trace.retryable ? '可以手动重试' : '不建议直接重试'
+  return `${provider} · ${trace.phase} · ${trace.errorCode ?? 'unknown_provider_failure'}（${duration}） · ${billing} · ${retry}。`
+}
 
 function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecutorCapability[] {
   return executor.descriptor.kind === 'opencode'
@@ -257,6 +285,7 @@ export type CodingRuntimeDeps = {
   budgetGuard?: CodingRuntimeBudgetGuard
   completeWorkflowBuild?: CodingRuntimeCompleteWorkflowBuild
   testTimeoutMs?: number
+  maxOpaqueOpenCodeRunsPerWorkflowNode?: number
   worktreeRoot?: string
   idGenerator?: (prefix?: string) => string
   now?: () => string
@@ -268,6 +297,7 @@ export type CodingRuntimeDeps = {
     workspaceId: string
     projectId?: string
   }) => Promise<ManagedCodingWorkspace>
+  captureWorkspaceDiff?: typeof captureWorktreeDiff
 }
 
 export type CodingRuntime = {
@@ -301,6 +331,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   const knowledgeChunks = deps.knowledgeChunks ?? defaultKnowledgeChunks
   const createWorkspace = deps.createWorkspace ?? createManagedCodingWorkspace
   const deleteWorkspace = deps.deleteWorkspace ?? deleteManagedCodingWorkspace
+  const maxOpaqueOpenCodeRunsPerWorkflowNode =
+    Number.isSafeInteger(deps.maxOpaqueOpenCodeRunsPerWorkflowNode) &&
+    Number(deps.maxOpaqueOpenCodeRunsPerWorkflowNode) > 0
+      ? Number(deps.maxOpaqueOpenCodeRunsPerWorkflowNode)
+      : 3
   const activeCodingStatuses = new Set<CodingAgentRun['status']>([
     'queued',
     'preparing',
@@ -466,6 +501,97 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return (await deps.store.listCodingAgentEvents(codingRunId)).length + 1
   }
 
+  async function persistProviderCallTrace(
+    codingRun: Pick<CodingAgentRun, 'id' | 'runId' | 'nodeId'>,
+    trace: CodingProviderCallTrace,
+  ): Promise<void> {
+    if (trace.codingRunId !== codingRun.id) {
+      throw new Error('Provider call Trace belongs to another Coding Agent run.')
+    }
+    const timestamp = trace.status === 'started' ? trace.startedAt : trace.completedAt
+    if (!timestamp) {
+      throw new Error('Terminal Provider call Trace is missing its completion timestamp.')
+    }
+    await saveEvents([{
+      id: idGenerator('coding-event'),
+      codingRunId: codingRun.id,
+      runId: codingRun.runId,
+      nodeId: codingRun.nodeId,
+      sequence: await nextSequence(codingRun.id),
+      kind: trace.status === 'started'
+        ? 'tool_call'
+        : trace.status === 'succeeded'
+          ? 'tool_result'
+          : 'error',
+      message: providerCallTraceMessage(trace),
+      timestamp,
+      metadata: { providerCall: trace },
+      redacted: true,
+    }])
+  }
+
+  async function latestProviderFailureSummary(
+    codingRunId: string,
+    fallback: string,
+  ): Promise<string> {
+    const events = await deps.store.listCodingAgentEvents(codingRunId)
+    for (let index = events.length - 1; index >= 0; index -= 1) {
+      const event = events[index]
+      const providerCall = event?.metadata?.providerCall
+      if (
+        event?.kind === 'error' &&
+        typeof providerCall === 'object' &&
+        providerCall !== null &&
+        !Array.isArray(providerCall) &&
+        (providerCall as Record<string, unknown>).status === 'failed'
+      ) {
+        return event.message
+      }
+    }
+    return fallback
+  }
+
+  async function settleInterruptedProviderCalls(
+    codingRun: Pick<CodingAgentRun, 'id' | 'runId' | 'nodeId'>,
+    timestamp: string,
+  ): Promise<void> {
+    const events = await deps.store.listCodingAgentEvents(codingRun.id)
+    const terminalRequestIds = new Set<string>()
+    for (const event of events) {
+      const trace = event.metadata?.providerCall as Partial<CodingProviderCallTrace> | undefined
+      if (
+        trace &&
+        typeof trace.requestId === 'string' &&
+        (trace.status === 'succeeded' || trace.status === 'failed')
+      ) {
+        terminalRequestIds.add(trace.requestId)
+      }
+    }
+    for (const event of events) {
+      const trace = event.metadata?.providerCall as CodingProviderCallTrace | undefined
+      if (
+        !trace ||
+        trace.status !== 'started' ||
+        terminalRequestIds.has(trace.requestId) ||
+        trace.codingRunId !== codingRun.id
+      ) {
+        continue
+      }
+      await persistProviderCallTrace(codingRun, {
+        ...trace,
+        status: 'failed',
+        completedAt: timestamp,
+        durationMs: Math.max(0, Date.parse(timestamp) - Date.parse(trace.startedAt)),
+        deliveryState: 'possibly_delivered',
+        billingState: 'unknown',
+        retryable: true,
+        errorCode: 'unknown_provider_failure',
+        sanitizedCause: 'runtime_restarted_before_terminal_observation',
+      })
+      terminalRequestIds.add(trace.requestId)
+    }
+  }
+
   async function mapObservableExecutorEvents(
     requestId: string,
     events: CodingAgentEvent[],
@@ -564,6 +690,46 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       governanceChecks,
       gateDecisions: events.flatMap((event) => gateDecisionFromEvent(event)),
       testEvidence,
+    }
+  }
+
+  async function buildAuthorizedOpenCodeStart(input: {
+    codingRun: CodingAgentRun
+    project: LocalProject
+    workspace: ManagedCodingWorkspace
+    timestamp: string
+  }): Promise<CodingEngineStartInput> {
+    const run = await findRun(input.codingRun.runId)
+    const node = run.nodes.find((candidate) => candidate.id === input.codingRun.nodeId)
+    if (!node || run.currentNodeId !== node.id) {
+      throw new Error('OpenCode Execution Authorization is stale for the current Workflow node')
+    }
+    const context = await loadCodingBriefContext(run, node)
+    return {
+      id: input.codingRun.id,
+      run,
+      node,
+      project: input.project,
+      workspace: input.workspace,
+      requestedBy: input.codingRun.requestedBy,
+      providerId: input.codingRun.providerId,
+      userInstruction: input.codingRun.userInstruction,
+      now: input.timestamp,
+      upstreamArtifacts: context.upstreamArtifacts,
+      knowledgeReferences: context.knowledgeReferences,
+      governanceChecks: context.governanceChecks,
+      gateDecisions: context.gateDecisions,
+      testEvidence: context.testEvidence,
+      brief: {
+        runId: run.id,
+        nodeId: node.id,
+        projectId: input.project.id,
+        testCommand: input.project.testCommand,
+        branchName: input.workspace.branchName,
+        worktreePath: input.workspace.worktreePath,
+        userInstruction: input.codingRun.userInstruction,
+        prompt: input.codingRun.prompt,
+      },
     }
   }
 
@@ -802,6 +968,47 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       status: 'pending',
       requestedAt: input.timestamp,
       expiresAt: new Date(Date.parse(input.timestamp) + 5 * 60_000).toISOString(),
+    }
+  }
+
+  function createChangeAcceptanceRequest(input: {
+    codingRun: CodingAgentRun
+    diff: CodingDiffArtifact
+    evidence: TestEvidence
+    workspace: ManagedCodingWorkspace
+    timestamp: string
+  }): CodingPermissionRequest {
+    if (
+      !input.diff.sourceDigest ||
+      !/^[a-f0-9]{64}$/u.test(input.diff.sourceDigest) ||
+      input.diff.truncated ||
+      !hasSupportedCodingDiffSanitization(input.diff) ||
+      input.evidence.status !== 'passed'
+    ) {
+      throw new Error('OpenCode Change Acceptance requires an exact safe diff and passed canonical Test Evidence.')
+    }
+    return {
+      id: idGenerator('coding-permission'),
+      codingRunId: input.codingRun.id,
+      runId: input.codingRun.runId,
+      nodeId: input.codingRun.nodeId,
+      origin: 'change_acceptance',
+      permission: 'patch',
+      title: 'Accept the final OpenCode changes',
+      diffPreview: input.diff.patch,
+      diffArtifactId: input.diff.id,
+      diffSourceDigest: input.diff.sourceDigest,
+      testEvidenceId: input.evidence.id,
+      managedWorkspaceId: input.workspace.id,
+      risk: 'warn',
+      reasons: [
+        'DevFlow captured this exact diff from the managed worktree and reran the saved canonical test.',
+        'Approval accepts only these final changes and allows the current Workflow build node to advance.',
+        'Approval does not commit, push, publish, merge, or modify the original checkout.',
+      ],
+      status: 'pending',
+      requestedAt: input.timestamp,
+      expiresAt: new Date(Date.parse(input.timestamp) + 15 * 60_000).toISOString(),
     }
   }
 
@@ -1180,18 +1387,91 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!testingStarted.committed) {
       return false
     }
-    const tested = input.completed.testEvidence
-      ? await persistExecutorTestEvidence({
-          codingRun: testingRun,
-          project: input.project,
-          evidence: input.completed.testEvidence,
-        })
-      : await runCodingTests({
+    const tested = executor.descriptor.kind === 'opencode'
+      ? await runCodingTests({
           codingRun: testingRun,
           workspace: input.workspace,
           project: input.project,
           timestamp: input.timestamp,
         })
+      : input.completed.testEvidence
+        ? await persistExecutorTestEvidence({
+            codingRun: testingRun,
+            project: input.project,
+            evidence: input.completed.testEvidence,
+          })
+        : await runCodingTests({
+            codingRun: testingRun,
+            workspace: input.workspace,
+            project: input.project,
+            timestamp: input.timestamp,
+          })
+    if (executor.descriptor.kind === 'opencode') {
+      if (!tested.evidence || tested.evidence.status !== 'passed') {
+        const failedRun: CodingAgentRun = {
+          ...tested.codingRun,
+          status: 'failed',
+          summary: tested.evidence
+            ? `Canonical test ${tested.evidence.status}; final OpenCode changes were not offered for acceptance.`
+            : 'Canonical test command is unavailable; final OpenCode changes were not offered for acceptance.',
+          completedAt: input.timestamp,
+        }
+        const terminalEvent = await buildCodingExecutorTerminalEvent({
+          codingRun: failedRun,
+          stopReason: 'failure',
+          cleanup: {
+            status: 'not_required',
+            reasonCode: 'workspace_retained_for_recovery',
+          },
+          timestamp: input.timestamp,
+        })
+        const failed = await commitCodingAgentMutation({
+          expectedRun: testingRun,
+          expectedPendingPermissionRequestIds: [],
+          run: failedRun,
+          events: [terminalEvent],
+        })
+        return failed.committed
+      }
+
+      const acceptance = createChangeAcceptanceRequest({
+        codingRun: tested.codingRun,
+        diff: input.completed.diff,
+        evidence: tested.evidence,
+        workspace: input.workspace,
+        timestamp: input.timestamp,
+      })
+      const waitingRun: CodingAgentRun = {
+        ...tested.codingRun,
+        status: 'waiting_permission',
+        summary: 'Canonical test passed; waiting for final Change Acceptance before advancing the Workflow.',
+      }
+      const acceptanceEvent: CodingAgentEvent = {
+        id: idGenerator('coding-event'),
+        codingRunId: waitingRun.id,
+        runId: waitingRun.runId,
+        nodeId: waitingRun.nodeId,
+        sequence: await nextSequence(waitingRun.id),
+        kind: 'permission',
+        message: 'DevFlow requested Change Acceptance for the exact Git diff and passed canonical Test Evidence.',
+        timestamp: input.timestamp,
+        metadata: {
+          requestId: acceptance.id,
+          origin: acceptance.origin,
+          diffArtifactId: input.completed.diff.id,
+          testEvidenceId: tested.evidence.id,
+        },
+        redacted: true,
+      }
+      const waiting = await commitCodingAgentMutation({
+        expectedRun: testingRun,
+        expectedPendingPermissionRequestIds: [],
+        run: waitingRun,
+        permissionRequests: [acceptance],
+        events: [acceptanceEvent],
+      })
+      return waiting.committed
+    }
     const terminalCompletedAt = engineCompletedAt ?? input.timestamp
     const completedRun: CodingAgentRun = {
       ...tested.codingRun,
@@ -1371,6 +1651,266 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       return updatedRequest
     }
+    if (
+      request.origin === 'execution_authorization' &&
+      codingRun.engine === 'opencode-http' &&
+      input.decision !== 'approved'
+    ) {
+      if (codingRun.status !== 'waiting_permission' || request.status !== 'pending') {
+        return request
+      }
+      const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
+      const terminalRun: CodingAgentRun = {
+        ...codingRun,
+        status: terminalStatus,
+        summary: input.decision === 'expired'
+          ? 'Execution Authorization expired; OpenCode was not started and the managed worktree was retained.'
+          : 'Execution Authorization was rejected; OpenCode was not started and the managed worktree was retained.',
+        completedAt: timestamp,
+      }
+      const permissionEvent: CodingAgentEvent = {
+        id: idGenerator('coding-event'),
+        codingRunId: terminalRun.id,
+        runId: terminalRun.runId,
+        nodeId: terminalRun.nodeId,
+        sequence: await nextSequence(terminalRun.id),
+        kind: 'permission',
+        message: terminalRun.summary,
+        timestamp,
+        metadata: {
+          requestId: request.id,
+          origin: request.origin,
+          workspaceDisposition: 'retained',
+        },
+        redacted: true,
+      }
+      const committed = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [request.id],
+        expectedPermissionRequests: [request],
+        run: terminalRun,
+        permissionRequests: [updatedRequest],
+        permissionDecisions: [decision],
+        events: [permissionEvent],
+      })
+      if (!committed.committed) {
+        return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
+          (candidate) => candidate.id === input.requestId,
+        ) ?? request
+      }
+      await saveEvents([
+        await buildCodingExecutorTerminalEvent({
+          codingRun: terminalRun,
+          stopReason: input.decision === 'expired' ? 'timeout' : 'cancelled',
+          cleanup: {
+            status: 'not_required',
+            reasonCode: 'workspace_retained_for_recovery',
+          },
+          timestamp,
+        }),
+      ])
+      return updatedRequest
+    }
+    if (request.origin === 'change_acceptance') {
+      if (
+        codingRun.engine !== 'opencode-http' ||
+        codingRun.status !== 'waiting_permission' ||
+        request.status !== 'pending'
+      ) {
+        return request
+      }
+
+      if (input.decision === 'approved') {
+        const [project, workflowRun, state] = await Promise.all([
+          findProject(codingRun.projectId),
+          findRun(codingRun.runId),
+          deps.store.loadState(),
+        ])
+        validateCodingWorkflowContext(workflowRun, {
+          nodeId: codingRun.nodeId,
+          projectId: codingRun.projectId,
+        })
+        const diff = state.codingDiffArtifacts.find((candidate) => candidate.id === request.diffArtifactId)
+        const evidence = state.testEvidence.find((candidate) => candidate.id === request.testEvidenceId)
+        const workspace = state.managedCodingWorkspaces.find(
+          (candidate) => candidate.id === request.managedWorkspaceId,
+        )
+        let liveDiff: Awaited<ReturnType<typeof captureWorktreeDiff>> | undefined
+        if (workspace) {
+          try {
+            liveDiff = await (deps.captureWorkspaceDiff ?? captureWorktreeDiff)({
+              worktreePath: workspace.worktreePath,
+            })
+          } catch (error) {
+            throw new Error(
+              'OpenCode Change Acceptance could not recapture the current managed-worktree diff.',
+              { cause: error },
+            )
+          }
+        }
+        const liveDiffMatches = Boolean(
+          liveDiff &&
+          (
+            diff &&
+            createHash('sha256').update(liveDiff.patch, 'utf8').digest('hex') === diff.sourceDigest &&
+            liveDiff.patch === diff.patch &&
+            JSON.stringify([...liveDiff.changedPaths].sort()) ===
+              JSON.stringify([...diff.changedPaths].sort())
+          ),
+        )
+        const exactAuthority = Boolean(
+          diff &&
+          evidence &&
+          workspace &&
+          request.permission === 'patch' &&
+          codingRun.diffArtifactId === diff.id &&
+          codingRun.testEvidenceId === evidence.id &&
+          codingRun.managedWorkspaceId === workspace.id &&
+          diff.runId === codingRun.runId &&
+          diff.nodeId === codingRun.nodeId &&
+          diff.projectId === codingRun.projectId &&
+          diff.sourceDigest === request.diffSourceDigest &&
+          request.diffPreview === diff.patch &&
+          !diff.truncated &&
+          hasSupportedCodingDiffSanitization(diff) &&
+          evidence.runId === codingRun.runId &&
+          evidence.nodeId === codingRun.nodeId &&
+          evidence.projectId === codingRun.projectId &&
+          evidence.id === request.testEvidenceId &&
+          evidence.status === 'passed' &&
+          evidence.command === project.testCommand.trim() &&
+          workspace.codingRunId === codingRun.id &&
+          workspace.projectId === codingRun.projectId &&
+          !workspace.deletedAt &&
+          workspace.cleanupStatus !== 'deleted' &&
+          liveDiffMatches &&
+          JSON.stringify(diff.changedPaths) === JSON.stringify(codingRun.changedPaths)
+        )
+        if (!exactAuthority) {
+          throw new Error('OpenCode Change Acceptance authority is stale or incomplete.')
+        }
+
+        const acceptingRun: CodingAgentRun = {
+          ...codingRun,
+          status: 'applying',
+          changeAcceptanceDecisionId: decision.id,
+          summary: 'Final OpenCode changes accepted; advancing the exact Workflow build once.',
+        }
+        const claimed = await commitCodingAgentMutation({
+          expectedRun: codingRun,
+          expectedPendingPermissionRequestIds: [request.id],
+          expectedPermissionRequests: [request],
+          run: acceptingRun,
+          permissionRequests: [updatedRequest],
+          permissionDecisions: [decision],
+        })
+        if (!claimed.committed) {
+          return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
+            (candidate) => candidate.id === input.requestId,
+          ) ?? request
+        }
+
+        try {
+          if (!deps.completeWorkflowBuild) {
+            throw new Error('Workflow build completion is unavailable')
+          }
+          await deps.completeWorkflowBuild({
+            runId: acceptingRun.runId,
+            nodeId: acceptingRun.nodeId,
+            codingRunId: acceptingRun.id,
+            diffId: diff!.id,
+            now: timestamp,
+          })
+        } catch (error) {
+          const detail = error instanceof Error && error.message.trim()
+            ? error.message
+            : 'Unknown workflow runtime error'
+          await failActiveCodingRun(
+            acceptingRun,
+            `Workflow build completion failed after Change Acceptance: ${detail}`,
+            timestamp,
+            { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
+          )
+          throw new Error(`Workflow build completion failed: ${detail}`, { cause: error })
+        }
+
+        const completedRun: CodingAgentRun = {
+          ...acceptingRun,
+          status: 'completed',
+          summary: 'Final OpenCode changes accepted; canonical tests passed and the Workflow build advanced.',
+          completedAt: timestamp,
+        }
+        const terminalEvent = await buildCodingExecutorTerminalEvent({
+          codingRun: completedRun,
+          stopReason: 'success',
+          cleanup: {
+            status: 'not_required',
+            reasonCode: 'workspace_retained_for_delivery',
+          },
+          timestamp,
+        })
+        const completed = await commitCodingAgentMutation({
+          expectedRun: acceptingRun,
+          expectedPendingPermissionRequestIds: [],
+          run: completedRun,
+          events: [terminalEvent],
+        })
+        if (!completed.committed) {
+          throw new Error('Accepted OpenCode run could not persist its terminal state safely.')
+        }
+        return updatedRequest
+      }
+
+      const terminalStatus = input.decision === 'expired' ? 'timed_out' : 'interrupted'
+      const rejectedRun: CodingAgentRun = {
+        ...codingRun,
+        status: terminalStatus,
+        summary: input.decision === 'expired'
+          ? 'Change Acceptance expired; Workflow did not advance and the managed worktree was retained.'
+          : 'Final OpenCode changes were rejected; Workflow did not advance and the managed worktree was retained.',
+        completedAt: timestamp,
+      }
+      const permissionEvent: CodingAgentEvent = {
+        id: idGenerator('coding-event'),
+        codingRunId: rejectedRun.id,
+        runId: rejectedRun.runId,
+        nodeId: rejectedRun.nodeId,
+        sequence: await nextSequence(rejectedRun.id),
+        kind: 'permission',
+        message: rejectedRun.summary,
+        timestamp,
+        metadata: {
+          requestId: request.id,
+          origin: request.origin,
+          workspaceDisposition: 'retained',
+        },
+        redacted: true,
+      }
+      const terminalEvent = await buildCodingExecutorTerminalEvent({
+        codingRun: rejectedRun,
+        stopReason: input.decision === 'expired' ? 'timeout' : 'cancelled',
+        cleanup: {
+          status: 'not_required',
+          reasonCode: 'workspace_retained_for_recovery',
+        },
+        timestamp,
+      })
+      const rejected = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [request.id],
+        expectedPermissionRequests: [request],
+        run: rejectedRun,
+        permissionRequests: [updatedRequest],
+        permissionDecisions: [decision],
+        events: [permissionEvent, terminalEvent],
+      })
+      if (!rejected.committed) {
+        return (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
+          (candidate) => candidate.id === input.requestId,
+        ) ?? request
+      }
+      return updatedRequest
+    }
     const nativeApprovedRecovery =
       recoveryDecisionAt !== undefined &&
       executor.descriptor.id === 'coding-executor-native' &&
@@ -1423,6 +1963,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
       const project = await findProject(codingRun.projectId)
       const continuationState = await loadExecutorContinuationState(codingRun.id)
+      const authorizedStart = request.origin === 'execution_authorization'
+        ? await buildAuthorizedOpenCodeStart({
+            codingRun,
+            project,
+            workspace,
+            timestamp,
+          })
+        : undefined
       let completed
       try {
         completed = await executor.continuePermission({
@@ -1434,6 +1982,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             workspace,
             project,
             now: timestamp,
+            ...(authorizedStart ? { authorizedStart } : {}),
+            reportProviderCall: (trace) => persistProviderCallTrace(codingRun, trace),
             reportPhase: async (phase) => {
               const currentRun = await findCodingRun(codingRun.id)
               if (!activeCodingStatuses.has(currentRun.status)) {
@@ -1491,11 +2041,16 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           throw new CodingEngineContinuationCleanupError([error, cleanupError])
         }
 
+        const failureTimestamp = now()
+        const failureSummary = await latestProviderFailureSummary(
+          currentRun.id,
+          'Coding engine failed after permission approval.',
+        )
         const failedRun: CodingAgentRun = {
           ...currentRun,
           status: 'failed',
-          summary: 'Coding engine failed after permission approval.',
-          completedAt: timestamp,
+          summary: failureSummary,
+          completedAt: failureTimestamp,
         }
         const failedEvent: CodingAgentEvent = {
           id: idGenerator('coding-event'),
@@ -1505,7 +2060,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           sequence: await nextSequence(failedRun.id),
           kind: 'error',
           message: failedRun.summary,
-          timestamp,
+          timestamp: failureTimestamp,
           redacted: true,
         }
         const committed = await commitCodingAgentMutation({
@@ -1515,13 +2070,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           events: [failedEvent],
         })
         if (committed.committed) {
-          const cleanup = await cleanupWorkspaceForRun(failedRun, timestamp)
+          const cleanup = await cleanupWorkspaceForRun(failedRun, failureTimestamp)
           await saveEvents([
             await buildCodingExecutorTerminalEvent({
               codingRun: failedRun,
               stopReason: 'failure',
               cleanup,
-              timestamp,
+              timestamp: failureTimestamp,
             }),
           ])
         }
@@ -1709,6 +2264,87 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return committed
   }
 
+  async function failInterruptedOpenCodeRun(
+    expectedRun: CodingAgentRun,
+    timestamp: string,
+  ): Promise<CodingAgentMutationResult> {
+    await settleInterruptedProviderCalls(expectedRun, timestamp)
+    const pendingRequests = (await deps.store.listCodingPermissionRequests(expectedRun.id))
+      .filter((request) => request.status === 'pending')
+    const summary =
+      'OpenCode execution was interrupted by desktop restart; its process and session cannot be resumed, and the managed worktree was retained for inspection.'
+    const failedRun: CodingAgentRun = {
+      ...expectedRun,
+      status: 'failed',
+      summary,
+      completedAt: timestamp,
+    }
+    const updatedRequests = pendingRequests.map((request): CodingPermissionRequest => ({
+      ...request,
+      status: 'rejected',
+    }))
+    const decisions = pendingRequests.map((request): CodingPermissionDecision => ({
+      id: idGenerator('coding-permission-decision'),
+      requestId: request.id,
+      codingRunId: expectedRun.id,
+      decidedBy: 'devflow-recovery',
+      decision: 'rejected',
+      comment: 'OpenCode permission cannot be resumed after desktop restart.',
+      decidedAt: timestamp,
+    }))
+    let sequence = await nextSequence(expectedRun.id)
+    const errorEvent: CodingAgentEvent = {
+      id: idGenerator('coding-event'),
+      codingRunId: failedRun.id,
+      runId: failedRun.runId,
+      nodeId: failedRun.nodeId,
+      sequence: sequence++,
+      kind: 'error',
+      message: summary,
+      timestamp,
+      metadata: {
+        recoveryStatus: 'failed_with_preserved_worktree',
+        workspaceDisposition: 'retained',
+      },
+      redacted: true,
+    }
+    const permissionEvents = pendingRequests.map((request) =>
+      createRelayToolResultEvent({
+        codingRun: failedRun,
+        request,
+        timestamp,
+        sequence: sequence++,
+        decision: 'rejected',
+        status: 'rejected',
+        outputSummary:
+          'DevFlow rejected the stale OpenCode permission because its original process and session cannot be resumed.',
+      }),
+    )
+    const committed = await commitCodingAgentMutation({
+      expectedRun,
+      expectedPendingPermissionRequestIds: pendingRequests.map((request) => request.id),
+      expectedPermissionRequests: pendingRequests,
+      run: failedRun,
+      ...(updatedRequests.length ? { permissionRequests: updatedRequests } : {}),
+      ...(decisions.length ? { permissionDecisions: decisions } : {}),
+      events: [errorEvent, ...permissionEvents],
+    })
+    if (committed.committed) {
+      await saveEvents([
+        await buildCodingExecutorTerminalEvent({
+          codingRun: committed.run,
+          stopReason: 'failure',
+          cleanup: {
+            status: 'not_required',
+            reasonCode: 'workspace_retained_for_recovery',
+          },
+          timestamp,
+        }),
+      ])
+    }
+    return committed
+  }
+
   async function recordActiveCleanupFailure(
     expectedRun: CodingAgentRun,
     timestamp: string,
@@ -1744,15 +2380,21 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     },
 
     async recoverCodingAgentRuns() {
-      if (
-        executor.descriptor.id !== 'coding-executor-native' ||
-        !deps.store.listCodingPermissionDecisions
-      ) {
+      if (!deps.store.listCodingPermissionDecisions) {
         return []
       }
+      const recoverNative = executor.descriptor.id === 'coding-executor-native'
+      const recoverOpenCode =
+        executor.descriptor.kind === 'opencode' && executor.engine === 'opencode-http'
+      if (!recoverNative && !recoverOpenCode) return []
+
       const recovered: CodingAgentRun[] = []
       const codingRuns = await deps.store.listCodingAgentRuns()
       for (const codingRun of codingRuns) {
+        const isOpenCodeRun = recoverOpenCode && codingRun.engine === 'opencode-http'
+        const isNativeRun = recoverNative && codingRun.engine !== 'opencode-http'
+        if (!isOpenCodeRun && !isNativeRun) continue
+
         if (
           codingRun.status === 'preparing' ||
           codingRun.status === 'running' ||
@@ -1761,6 +2403,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           codingRun.status === 'testing'
         ) {
           const timestamp = now()
+          if (isOpenCodeRun) {
+            await failInterruptedOpenCodeRun(codingRun, timestamp)
+            recovered.push(await findCodingRun(codingRun.id))
+            continue
+          }
+          await settleInterruptedProviderCalls(codingRun, timestamp)
           if (codingRun.status === 'preparing') {
             try {
               await executor.cancel({ codingRun })
@@ -1782,8 +2430,45 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           continue
         }
         if (codingRun.status !== 'waiting_permission') continue
-        const [requests, decisions, continuation] = await Promise.all([
-          deps.store.listCodingPermissionRequests(codingRun.id),
+        const requests = await deps.store.listCodingPermissionRequests(codingRun.id)
+        if (isOpenCodeRun) {
+          const pendingRequests = requests.filter((request) => request.status === 'pending')
+          const controlRequest = pendingRequests.length === 1 && (
+            pendingRequests[0]?.origin === 'execution_authorization' ||
+            pendingRequests[0]?.origin === 'change_acceptance'
+          )
+            ? pendingRequests[0]
+            : undefined
+          if (!controlRequest) {
+            await failInterruptedOpenCodeRun(codingRun, now())
+            recovered.push(await findCodingRun(codingRun.id))
+            continue
+          }
+
+          const timestamp = now()
+          const expiresAt = Date.parse(controlRequest.expiresAt)
+          const recoveryTime = Date.parse(timestamp)
+          if (
+            !Number.isFinite(expiresAt) ||
+            !Number.isFinite(recoveryTime) ||
+            expiresAt <= recoveryTime
+          ) {
+            await replyCodingPermission({
+              requestId: controlRequest.id,
+              codingRunId: codingRun.id,
+              decidedBy: 'devflow-recovery',
+              decision: 'expired',
+              comment: 'Permission request expired while the desktop runtime was stopped.',
+            }, timestamp)
+            recovered.push(await findCodingRun(codingRun.id))
+          } else {
+            publishPermissionRequest(controlRequest)
+            recovered.push(codingRun)
+          }
+          continue
+        }
+
+        const [decisions, continuation] = await Promise.all([
           deps.store.listCodingPermissionDecisions(codingRun.id),
           loadExecutorContinuationState(codingRun.id),
         ])
@@ -1855,7 +2540,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         executorVersion: executor.descriptor.version,
         requiredCapabilities,
       })
-      const active = findActiveCodingRun(await deps.store.listCodingAgentRuns(), input.projectId)
+      const existingCodingRuns = await deps.store.listCodingAgentRuns()
+      const active = findActiveCodingRun(existingCodingRuns, input.projectId)
       if (active) {
         throw new Error(`Coding Agent run already active for this project: ${active.id}`)
       }
@@ -1865,7 +2551,24 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error('Coding Agent engine did not report a configured runtime after ensure.')
       }
       const configuredEngine = executor.engine
-      const metered = executor.billing === 'metered' || configuredEngine !== 'fake'
+      const billingMode = executor.billing ?? (configuredEngine === 'fake' ? 'no_cost' : 'opaque')
+      const metered = billingMode === 'metered'
+      const opaqueBilling = billingMode === 'opaque' || billingMode === 'subscription'
+      if (configuredEngine === 'opencode-http' && opaqueBilling) {
+        const scopedRunCount = existingCodingRuns.filter(
+          (codingRun) =>
+            codingRun.engine === 'opencode-http' &&
+            codingRun.runId === run.id &&
+            codingRun.nodeId === node.id &&
+            codingRun.projectId === project.id,
+        ).length
+        if (scopedRunCount >= maxOpaqueOpenCodeRunsPerWorkflowNode) {
+          throw new Error(
+            `OpenCode ${billingMode} run limit reached for this Workflow Run and node ` +
+            `(${scopedRunCount}/${maxOpaqueOpenCodeRunsPerWorkflowNode}); no worktree or Provider call was started.`,
+          )
+        }
+      }
       const providerId = executor.providerId
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
@@ -1909,7 +2612,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             timestamp: now(),
             noCost: !metered,
           })
-      const budgetDecision = deps.budgetGuard
+      const budgetDecision = opaqueBilling
+        ? {
+            status: 'disabled',
+            blocksRun: false,
+            currentSpendUsd: 0,
+            projectedCostUsd: 0,
+            reason: `OpenCode billing is ${billingMode}; token and dollar usage remain unknown, so DevFlow enforces non-dollar runtime limits instead.`,
+          } satisfies BudgetGuardDecision
+        : deps.budgetGuard
         ? await deps.budgetGuard({
             codingRunId,
             engine: configuredEngine,
@@ -1968,7 +2679,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           changedPaths: [],
           startedAt: timestamp,
           completedAt: timestamp,
-          runtimeCostSummary: estimatedCost,
+          ...(!opaqueBilling ? { runtimeCostSummary: estimatedCost } : {}),
           budgetDecision: safeBudgetDecision,
           redacted: true,
         }
@@ -2023,7 +2734,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         summary: 'Preparing a managed Coding Agent run.',
         changedPaths: [],
         startedAt: reservationTimestamp,
-        runtimeCostSummary: estimatedCost,
+        ...(!opaqueBilling ? { runtimeCostSummary: estimatedCost } : {}),
         budgetDecision,
         redacted: true,
       }
@@ -2522,6 +3233,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             brief: canonicalBrief,
             ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
             ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
+            reportProviderCall: (trace) => persistProviderCallTrace(executorReadyRun, trace),
           },
         })
       } catch (error) {
@@ -2539,6 +3251,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           throw error
         }
 
+        const failureTimestamp = now()
+        const failureSummary = await latestProviderFailureSummary(
+          executorReadyRun.id,
+          'Coding engine failed to start.',
+        )
         let cleaned: ManagedCodingWorkspace
         try {
           cleaned = await deleteWorkspace(workspace)
@@ -2556,7 +3273,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         if ((cleaned.cleanupStatus ?? (cleaned.deletedAt ? 'deleted' : 'active')) !== 'deleted') {
           await recordActiveCleanupFailure(
             executorReadyRun,
-            reservationTimestamp,
+            failureTimestamp,
             'Coding engine failed to start and workspace cleanup did not complete.',
           )
           throw new AggregateError(
@@ -2566,8 +3283,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         await failActiveCodingRun(
           executorReadyRun,
-          'Coding engine failed to start.',
-          reservationTimestamp,
+          failureSummary,
+          failureTimestamp,
           { status: 'completed', reasonCode: null },
         )
         throw error
@@ -2575,7 +3292,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       if (bundle.kind === 'engine_completed') {
         const providerReportedCost = bundle.codingRun.runtimeCostSummary?.source === 'provider_reported'
           ? bundle.codingRun.runtimeCostSummary
-          : estimatedCost
+          : undefined
+        const runtimeCostSummary = providerReportedCost ?? (!opaqueBilling ? estimatedCost : undefined)
         const completed: CodingExecutorCompletedResult = {
           ...bundle,
           codingRun: {
@@ -2583,7 +3301,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             ...(executorReadyRun.bootstrapEvidenceId
               ? { bootstrapEvidenceId: executorReadyRun.bootstrapEvidenceId }
               : {}),
-            runtimeCostSummary: providerReportedCost,
+            ...(runtimeCostSummary ? { runtimeCostSummary } : {}),
             budgetDecision,
           },
         }
@@ -2630,13 +3348,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         )
         const providerReportedCost = bundle.codingRun.runtimeCostSummary?.source === 'provider_reported'
           ? bundle.codingRun.runtimeCostSummary
-          : estimatedCost
+          : undefined
+        const runtimeCostSummary = providerReportedCost ?? (!opaqueBilling ? estimatedCost : undefined)
         startupRun = {
           ...bundle.codingRun,
           ...(executorReadyRun.bootstrapEvidenceId
             ? { bootstrapEvidenceId: executorReadyRun.bootstrapEvidenceId }
             : {}),
-          runtimeCostSummary: providerReportedCost,
+          ...(runtimeCostSummary ? { runtimeCostSummary } : {}),
           budgetDecision,
         }
         bundleCommitted = await commitCodingAgentMutation({

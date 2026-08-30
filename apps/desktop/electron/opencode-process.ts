@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -41,8 +42,21 @@ export type OpencodeProcessManagerDeps = {
   killProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean
 }
 
+export type EnsureManagedOpencodeServerInput = {
+  projectId: string
+  binaryPath: string
+  env: NodeJS.ProcessEnv
+  /**
+   * A non-secret digest or version that represents the saved project-level
+   * OpenCode configuration. The manager combines it with the binary and
+   * environment before caching a process.
+   */
+  configurationFingerprint?: string
+}
+
 export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = {}) {
   type InternalManagedOpencodeServer = ManagedOpencodeServer & {
+    fingerprint: string
     ready: boolean
     runtimeRoot: string
     runtimeRootCleanup?: Promise<void>
@@ -50,8 +64,11 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   }
 
   const servers = new Map<string, InternalManagedOpencodeServer>()
-  const pendingServers = new Map<string, Promise<InternalManagedOpencodeServer>>()
-  const startupCancellations = new Set<() => void>()
+  const pendingServers = new Map<string, {
+    fingerprint: string
+    promise: Promise<InternalManagedOpencodeServer>
+  }>()
+  const startupCancellations = new Map<string, Set<() => void>>()
   const runtimeRootCleanups = new Set<Promise<void>>()
   const failedRuntimeRootServers = new Set<InternalManagedOpencodeServer>()
   const runtimeRootCleanupFailures = new Map<InternalManagedOpencodeServer, unknown>()
@@ -104,43 +121,52 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     }
   }
 
-  async function ensure(input: {
-    projectId: string
-    binaryPath: string
-    env: NodeJS.ProcessEnv
-  }): Promise<ManagedOpencodeServer> {
+  async function ensure(input: EnsureManagedOpencodeServerInput): Promise<ManagedOpencodeServer> {
     if (stopping) {
       throw stoppingError
     }
+    const fingerprint = createOpencodeProcessFingerprint(input)
     const pending = pendingServers.get(input.projectId)
     if (pending) {
-      return pending
+      if (pending.fingerprint === fingerprint) {
+        return pending.promise
+      }
+      try {
+        await pending.promise
+      } catch {
+        // Startup owns its own teardown. Re-evaluate the requested configuration
+        // after it reaches a terminal state rather than reusing its failure.
+      }
+      return ensure(input)
     }
 
     const existing = servers.get(input.projectId)
     if (existing) {
       if (existing.ready && existing.child.exitCode === null) {
-        return existing
+        if (existing.fingerprint === fingerprint) {
+          return existing
+        }
+        await shutdownServer(existing)
+        return ensure(input)
       }
       throw new Error('opencode process is not ready and could not be replaced')
     }
 
-    const startup = startServer(input)
-    pendingServers.set(input.projectId, startup)
+    const startup = startServer(input, fingerprint)
+    pendingServers.set(input.projectId, { fingerprint, promise: startup })
     try {
       return await startup
     } finally {
-      if (pendingServers.get(input.projectId) === startup) {
+      if (pendingServers.get(input.projectId)?.promise === startup) {
         pendingServers.delete(input.projectId)
       }
     }
   }
 
-  async function startServer(input: {
-    projectId: string
-    binaryPath: string
-    env: NodeJS.ProcessEnv
-  }): Promise<InternalManagedOpencodeServer> {
+  async function startServer(
+    input: EnsureManagedOpencodeServerInput,
+    fingerprint: string,
+  ): Promise<InternalManagedOpencodeServer> {
     const port = await findPort()
     if (stopping) {
       throw stoppingError
@@ -182,6 +208,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       projectId: input.projectId,
       baseUrl,
       child,
+      fingerprint,
       ready: false,
       runtimeRoot,
     }
@@ -195,7 +222,9 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       rejectStartup = reject
     })
     const cancelStartup = () => rejectStartup(stoppingError)
-    startupCancellations.add(cancelStartup)
+    const projectCancellations = startupCancellations.get(input.projectId) ?? new Set()
+    projectCancellations.add(cancelStartup)
+    startupCancellations.set(input.projectId, projectCancellations)
     const handleTerminal = () => {
       if (terminal) {
         return
@@ -256,9 +285,43 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       }
       throw error
     } finally {
-      startupCancellations.delete(cancelStartup)
+      projectCancellations.delete(cancelStartup)
+      if (projectCancellations.size === 0) {
+        startupCancellations.delete(input.projectId)
+      }
     }
     return server
+  }
+
+  async function stopProject(projectId: string): Promise<void> {
+    for (const cancelStartup of startupCancellations.get(projectId) ?? []) {
+      cancelStartup()
+    }
+    const pending = pendingServers.get(projectId)
+    if (pending) {
+      await pending.promise.catch(() => undefined)
+    }
+
+    const failures: unknown[] = []
+    const server = servers.get(projectId)
+    if (server) {
+      try {
+        await shutdownServer(server)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    for (const failedServer of failedRuntimeRootServers) {
+      if (failedServer.projectId !== projectId || failedServer === server) continue
+      try {
+        await awaitRuntimeRootCleanup(failedServer)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, `opencode process cleanup failed for project ${projectId}`)
+    }
   }
 
   function shutdownServer(server: InternalManagedOpencodeServer): Promise<void> {
@@ -311,12 +374,14 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
         launchShutdown(server, initialShutdowns)
       }
     }
-    for (const cancelStartup of startupCancellations) {
-      cancelStartup()
+    for (const projectCancellations of startupCancellations.values()) {
+      for (const cancelStartup of projectCancellations) {
+        cancelStartup()
+      }
     }
 
     const [pendingShutdowns, initialShutdownResults, cleanupRetryResults] = await Promise.all([
-      Promise.allSettled(pendingEntries.map(([, startup]) => startup)),
+      Promise.allSettled(pendingEntries.map(([, startup]) => startup.promise)),
       Promise.allSettled(initialShutdowns),
       Promise.allSettled(cleanupRetryServers.map((server) => awaitRuntimeRootCleanup(server))),
     ])
@@ -367,7 +432,20 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     return trackedStop
   }
 
-  return { ensure, stopAll }
+  return { ensure, stopAll, stopProject }
+}
+
+function createOpencodeProcessFingerprint(input: EnsureManagedOpencodeServerInput): string {
+  const environment = Object.entries(input.env)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
+    .sort(([left], [right]) => left.localeCompare(right))
+  return createHash('sha256')
+    .update(JSON.stringify({
+      binaryPath: input.binaryPath,
+      configurationFingerprint: input.configurationFingerprint ?? '',
+      environment,
+    }))
+    .digest('hex')
 }
 
 async function createOpencodeRuntimeRoot(): Promise<string> {

@@ -1,4 +1,4 @@
-import type { CodingPermissionRequest } from '../packages/shared/src/domain.ts'
+import type { CodingAgentRun, CodingPermissionRequest } from '../packages/shared/src/domain.ts'
 import { redactSensitiveText } from '../packages/shared/src/redaction.ts'
 import type { CodingEnginePermissionDiscoveryError } from '../apps/desktop/electron/coding-engine-lifecycle.ts'
 import type {
@@ -354,6 +354,15 @@ export function assertOpencodeSmokeChangedPaths(changedPaths: string[]): void {
   if (changedPaths.length !== 1 || changedPaths[0] !== OPENCODE_SMOKE_MARKER) {
     throw new Error('opencode smoke produced an unexpected changed path')
   }
+}
+
+export function assertOpencodeSmokeOpaqueBilling(
+  codingRun: Pick<CodingAgentRun, 'tokenUsageId' | 'runtimeCostSummary'>,
+): { usage: 'unknown'; cost: 'opaque' } {
+  if (codingRun.tokenUsageId !== undefined || codingRun.runtimeCostSummary !== undefined) {
+    throw new Error('opencode smoke must not fabricate token usage or dollar cost evidence')
+  }
+  return { usage: 'unknown', cost: 'opaque' }
 }
 
 export function assertCleanCandidateStatus(status: string): void {

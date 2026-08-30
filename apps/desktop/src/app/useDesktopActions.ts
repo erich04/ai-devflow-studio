@@ -663,7 +663,11 @@ export function useDesktopActions(input: {
       return
     }
     if (!providerNameValidation.ok) {
-      setToast(providerNameValidation.message)
+      setToast(providerNameValidation.code === 'empty'
+        ? '请输入 Provider 名称'
+        : providerNameValidation.code === 'too_long'
+          ? 'Provider 名称不能超过 100 个字符'
+          : 'Provider 名称不能包含控制字符')
       return
     }
     if (!model) {

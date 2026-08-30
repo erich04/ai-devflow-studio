@@ -66,6 +66,122 @@ describe('opencode process manager', () => {
     expect(kill).toHaveBeenCalled()
   })
 
+  it.each([
+    {
+      name: 'binary',
+      replacement: {
+        projectId: 'local-1',
+        binaryPath: '/opt/opencode-v2',
+        env: { PATH: '/usr/bin' },
+        configurationFingerprint: 'config-v1',
+      },
+    },
+    {
+      name: 'environment',
+      replacement: {
+        projectId: 'local-1',
+        binaryPath: '/opt/opencode-v1',
+        env: { PATH: '/custom/bin' },
+        configurationFingerprint: 'config-v1',
+      },
+    },
+    {
+      name: 'saved configuration',
+      replacement: {
+        projectId: 'local-1',
+        binaryPath: '/opt/opencode-v1',
+        env: { PATH: '/usr/bin' },
+        configurationFingerprint: 'config-v2',
+      },
+    },
+  ])('restarts a cached project process when its $name fingerprint changes', async ({ replacement }) => {
+    const children = [fakeChild({ exitOnKill: true }), fakeChild({ exitOnKill: true })]
+    const spawnProcess = vi.fn(() => children.shift()!)
+    let runtimeRoot = 0
+    const manager = createOpencodeProcessManager({
+      spawnProcess,
+      findPort: async () => 4097 + spawnProcess.mock.calls.length,
+      waitUntilReady: async () => undefined,
+      createRuntimeRoot: async () => `/tmp/devflow-opencode-fingerprint-${runtimeRoot += 1}`,
+      removeRuntimeRoot: async () => undefined,
+    })
+    const originalInput = {
+      projectId: 'local-1',
+      binaryPath: '/opt/opencode-v1',
+      env: { PATH: '/usr/bin' },
+      configurationFingerprint: 'config-v1',
+    }
+
+    const original = await manager.ensure(originalInput)
+    const replacementServer = await manager.ensure(replacement)
+
+    expect(replacementServer).not.toBe(original)
+    expect(original.child.kill).toHaveBeenCalled()
+    expect(spawnProcess).toHaveBeenCalledTimes(2)
+    await manager.stopAll()
+  })
+
+  it('stops only the selected project and permits a clean restart', async () => {
+    const children = [
+      fakeChild({ exitOnKill: true }),
+      fakeChild({ exitOnKill: true }),
+      fakeChild({ exitOnKill: true }),
+    ]
+    const spawnProcess = vi.fn(() => children.shift()!)
+    let port = 4097
+    const manager = createOpencodeProcessManager({
+      spawnProcess,
+      findPort: async () => port++,
+      waitUntilReady: async () => undefined,
+      createRuntimeRoot: async () => `/tmp/devflow-opencode-project-${port}`,
+      removeRuntimeRoot: async () => undefined,
+    })
+    const sharedInput = {
+      binaryPath: '/opt/opencode',
+      env: { PATH: '/usr/bin' },
+      configurationFingerprint: 'config-v1',
+    }
+    const first = await manager.ensure({ projectId: 'local-1', ...sharedInput })
+    const other = await manager.ensure({ projectId: 'local-2', ...sharedInput })
+
+    await manager.stopProject('local-1')
+    await manager.stopProject('local-1')
+    const restarted = await manager.ensure({ projectId: 'local-1', ...sharedInput })
+    const reusedOther = await manager.ensure({ projectId: 'local-2', ...sharedInput })
+
+    expect(first.child.kill).toHaveBeenCalledTimes(1)
+    expect(restarted).not.toBe(first)
+    expect(reusedOther).toBe(other)
+    expect(other.child.kill).not.toHaveBeenCalled()
+    await manager.stopAll()
+  })
+
+  it('cancels an in-flight project startup before stopProject resolves', async () => {
+    const child = fakeChild({ exitOnKill: true })
+    const spawnProcess = vi.fn(() => child)
+    const removeRuntimeRoot = vi.fn(async () => undefined)
+    const manager = createOpencodeProcessManager({
+      spawnProcess,
+      findPort: async () => 4097,
+      waitUntilReady: async () => new Promise<void>(() => undefined),
+      createRuntimeRoot: async () => '/tmp/devflow-opencode-project-startup',
+      removeRuntimeRoot,
+    })
+    const startup = manager.ensure({
+      projectId: 'local-1',
+      binaryPath: '/opt/opencode',
+      env: { PATH: '/usr/bin' },
+      configurationFingerprint: 'config-v1',
+    })
+    await vi.waitFor(() => expect(spawnProcess).toHaveBeenCalledTimes(1))
+
+    await manager.stopProject('local-1')
+
+    await expect(startup).rejects.toThrow('opencode process manager is stopping')
+    expect(child.kill).toHaveBeenCalledTimes(1)
+    expect(removeRuntimeRoot).toHaveBeenCalledWith('/tmp/devflow-opencode-project-startup')
+  })
+
   it('terminates the child and removes its isolated runtime root when readiness fails', async () => {
     const child = fakeChild({ exitOnKill: true })
     const removeRuntimeRoot = vi.fn(async () => undefined)

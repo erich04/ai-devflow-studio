@@ -41,6 +41,7 @@ type ManagedOpencodeProcessManager = {
     projectId: string
     binaryPath: string
     env: NodeJS.ProcessEnv
+    configurationFingerprint?: string
   }): Promise<ManagedOpencodeServer>
 }
 
@@ -156,6 +157,7 @@ function createManagedOpencodeRunner(input: {
         projectId: input.projectId,
         binaryPath: input.binaryPath,
         env: input.runtimeEnv,
+        configurationFingerprint: readOnlyStageAgentConfigurationFingerprint(input),
       })
       const session = await createOpencodeSession({
         baseUrl: server.baseUrl,
@@ -191,6 +193,7 @@ function createManagedOpencodeRunner(input: {
             projectId: input.projectId,
             binaryPath: input.binaryPath,
             env: input.runtimeEnv,
+            configurationFingerprint: readOnlyStageAgentConfigurationFingerprint(input),
           })
           await abortOpencodeSession({ baseUrl: server.baseUrl, sessionId, directory })
         } catch {
@@ -200,6 +203,19 @@ function createManagedOpencodeRunner(input: {
       throw error
     }
   }
+}
+
+function readOnlyStageAgentConfigurationFingerprint(input: {
+  providerId: string
+  modelId: string
+}): string {
+  return createHash('sha256')
+    .update(JSON.stringify({
+      purpose: 'read-only-stage-agent',
+      providerId: input.providerId,
+      modelId: input.modelId,
+    }))
+    .digest('hex')
 }
 
 function parseStructuredOpencodeOutput(response: unknown): WorkflowArtifactProviderOutput {

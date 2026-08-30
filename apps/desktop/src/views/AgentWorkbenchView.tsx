@@ -40,6 +40,7 @@ import { CodingChangeSetReview } from './CodingChangeSetReview'
 export function AgentWorkbenchView({
   desktopApi,
   localProjectId,
+  isTeamPaired,
   requestedBy,
   providers,
   selectedProviderId,
@@ -95,6 +96,7 @@ export function AgentWorkbenchView({
 }: {
   desktopApi: DevFlowDesktopApi | null
   localProjectId: string | undefined
+  isTeamPaired: boolean
   requestedBy: string
   providers: AgentProviderConfig[]
   selectedProviderId: string
@@ -364,9 +366,11 @@ export function AgentWorkbenchView({
   const codingReadinessDisplay = codingReadiness
     ? buildCodingReadinessDisplay(codingReadiness)
     : null
-  const exactChangeSetPermission = codingActionProjection?.permission?.kind === 'change-set'
-    ? codingActionProjection.permission
-    : undefined
+  const exactChangeSetPermission =
+    codingActionProjection?.permission?.kind === 'change-set' ||
+    codingActionProjection?.permission?.kind === 'change-acceptance'
+      ? codingActionProjection.permission
+      : undefined
   const canOpenManagedWorkspace = codingActionProjection?.terminal
     ? codingActionProjection.terminal.canOpenWorkspace
     : Boolean(workspace && !workspace.deletedAt && (workspace.cleanupStatus ?? 'active') === 'active')
@@ -443,14 +447,14 @@ export function AgentWorkbenchView({
     <section className="agent-console" data-testid="agent-workbench">
       <div className="agent-console-main">
         <div className="section-heading">
-          <span>Agent Workbench</span>
+          <span>当前工作流</span>
           <strong>{viewModel.title}</strong>
         </div>
 
         {supportContext && (supportContext.focusTarget === 'knowledge-review' || supportContext.focusTarget === 'coding-agent') ? (
           <div className="support-context-banner" data-testid="support-context-banner">
             <div>
-              <span className="panel-label">来自 Workbench Inspector</span>
+              <span className="panel-label">来自 Workbench Inspector（检查器）</span>
               <strong>{supportContext.label}</strong>
               <p>
                 当前目标：{viewModel.currentTarget.runTitle} · {viewModel.currentTarget.nodeTitle}
@@ -470,7 +474,7 @@ export function AgentWorkbenchView({
           tabIndex={-1}
         >
           <div className="agent-current-task__body">
-            <span className="panel-label">Current Task</span>
+            <span className="panel-label">当前任务</span>
             <strong>{viewModel.currentTarget.nodeTitle}</strong>
             <p>{viewModel.currentTarget.runTitle}</p>
             <div className="knowledge-reference-meta">
@@ -484,6 +488,13 @@ export function AgentWorkbenchView({
             <strong>{viewModel.advisory.detail}</strong>
           </div>
           <p className="agent-current-task__summary">{viewModel.advisory.summary}</p>
+          <dl className="primary-action-impact" role="list" aria-label="当前主操作的对象、结果和影响">
+            <div><dt>操作对象</dt><dd>{viewModel.primaryActionImpact.object}</dd></div>
+            <div><dt>预期结果</dt><dd>{viewModel.primaryActionImpact.result}</dd></div>
+            <div><dt>Provider 与费用</dt><dd>{viewModel.primaryActionImpact.providerAndCost}</dd></div>
+            <div><dt>仓库影响</dt><dd>{viewModel.primaryActionImpact.repository}</dd></div>
+            <div><dt>工作流影响</dt><dd>{viewModel.primaryActionImpact.workflow}</dd></div>
+          </dl>
           {exactChangeSetPermission && latestCodingRun ? (
             <div className="agent-current-task__review">
               <CodingChangeSetReview
@@ -498,7 +509,7 @@ export function AgentWorkbenchView({
             <div className="agent-current-task__action">
             {viewModel.pendingPermission ? (
               <div className="permission-action-panel">
-                <span className="panel-label">Permission Relay</span>
+                <span className="panel-label">权限转发</span>
                 <strong>{viewModel.pendingPermission.title}</strong>
                 <p>{viewModel.pendingPermission.reasons.join(' ')}</p>
                 <div className="knowledge-reference-meta">
@@ -515,7 +526,7 @@ export function AgentWorkbenchView({
                     onClick={() => void replyPermission('approved')}
                   >
                     <CheckCircle2 size={16} />
-                    Approve once
+                    仅批准本次
                   </button>
                   <button
                     className="ghost-button"
@@ -524,7 +535,7 @@ export function AgentWorkbenchView({
                     )}
                     onClick={() => void replyPermission('rejected')}
                   >
-                    Reject
+                    拒绝
                   </button>
                 </div>
               </div>
@@ -552,13 +563,13 @@ export function AgentWorkbenchView({
         {showRetryConfirmation ? (
           <div className="coding-retry-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="coding-retry-title">
             <div>
-              <span className="panel-label">Explicit retry</span>
+              <span className="panel-label">明确重试</span>
               <h2 id="coding-retry-title">新建 Coding Run 重试？</h2>
               <p>这不会恢复或复用上一次 Run。它会创建新的 Run ID，并可能再次调用 Provider、消耗 token 和产生费用。</p>
               <dl className="change-set-review__facts">
                 <div><dt>Provider</dt><dd>{latestCodingProviderName ?? selectedProviderId ?? '未配置'}</dd></div>
-                <div><dt>上次 tokens</dt><dd>{latestCodingRun?.runtimeCostSummary?.totalTokens ?? (latestCodingRun?.runtimeCostSummary ? latestCodingRun.runtimeCostSummary.inputTokens + latestCodingRun.runtimeCostSummary.outputTokens : 'unknown')}</dd></div>
-                <div><dt>上次费用</dt><dd>{typeof latestCodingRun?.runtimeCostSummary?.costUsd === 'number' ? formatUsd(latestCodingRun.runtimeCostSummary.costUsd) : 'unknown'}</dd></div>
+                <div><dt>上次 Token</dt><dd>{latestCodingRun?.runtimeCostSummary?.totalTokens ?? (latestCodingRun?.runtimeCostSummary ? latestCodingRun.runtimeCostSummary.inputTokens + latestCodingRun.runtimeCostSummary.outputTokens : '未知')}</dd></div>
+                <div><dt>上次费用</dt><dd>{displayRuntimeCost(latestCodingRun?.runtimeCostSummary)}</dd></div>
                 <div><dt>新 Run 计费</dt><dd>新的 token 与费用单独结算</dd></div>
                 {runtimeBudgetApprovalId ? <div className="change-set-review__fact-wide"><dt>预算批准</dt><dd><code>{runtimeBudgetApprovalId}</code></dd></div> : null}
               </dl>
@@ -579,7 +590,7 @@ export function AgentWorkbenchView({
         ) : null}
 
         {exactChangeSetPermission ? <details className="agent-secondary-context"><summary>辅助运行信息</summary>
-        <section className="agent-path-grid" aria-label="Agent execution paths">
+        <section className="agent-path-grid" aria-label="当前节点相关 Agent 能力">
           {viewModel.pathStatuses.map((section) => (
             <article
               className={`agent-path-card agent-path-card--${section.emphasis} agent-path-card--${section.tone}`}
@@ -602,7 +613,7 @@ export function AgentWorkbenchView({
               {section.disabledReason ? <p className="empty-note">{section.disabledReason}</p> : null}
             </article>
           ))}
-        </section></details> : <section className="agent-path-grid" aria-label="Agent execution paths">
+        </section></details> : <section className="agent-path-grid" aria-label="当前节点相关 Agent 能力">
           {viewModel.pathStatuses.map((section) => (
             <article
               className={`agent-path-card agent-path-card--${section.emphasis} agent-path-card--${section.tone}`}
@@ -619,16 +630,16 @@ export function AgentWorkbenchView({
         {latestCodingRun ? (
           <article className="agent-evidence-card" ref={evidenceRef} tabIndex={-1}>
             <div className="section-heading">
-              <span>Coding Run Evidence</span>
+              <span>Coding Run 证据</span>
               <strong>{latestCodingRun.branchName}</strong>
             </div>
             <div className="agent-fact-grid agent-fact-grid--three">
               <div className="compact-row">
-                <span>Runtime</span>
+                <span title="Runtime：受控代码执行运行时。">Runtime（运行时）</span>
                 <strong>{codingRuntimeLabel(latestCodingRun.engine)}</strong>
               </div>
               <div className="compact-row">
-                <span>Terminal state</span>
+                <span>终态</span>
                 <strong>{codingTerminalLabel(latestCodingRun.status)}</strong>
               </div>
               <div className="compact-row">
@@ -636,15 +647,15 @@ export function AgentWorkbenchView({
                 <strong>{latestCodingProviderName}</strong>
               </div>
               <div className="compact-row">
-                <span>Changed paths</span>
+                <span>变更路径数</span>
                 <strong>{latestCodingRun.changedPaths.length}</strong>
               </div>
               <div className="compact-row">
-                <span>Bootstrap</span>
+                <span>依赖准备</span>
                 <strong>{bootstrapEvidence?.status ?? 'pending'}</strong>
               </div>
               <div className="compact-row">
-                <span>Test Evidence</span>
+                <span>测试证据</span>
                 <strong>{testEvidence?.status ?? 'pending'}</strong>
               </div>
             </div>
@@ -657,7 +668,7 @@ export function AgentWorkbenchView({
                   <div className="compact-row"><span>Cache hit rate</span><strong>{typeof codingActionProjection.terminal.cacheHitRate === 'number' ? `${(codingActionProjection.terminal.cacheHitRate * 100).toFixed(1)}%` : 'unknown'}</strong></div>
                   <div className="compact-row"><span>Total tokens</span><strong>{codingActionProjection.terminal.totalTokens ?? 'unknown'}</strong></div>
                   <div className="compact-row"><span>Cost phase</span><strong>{runtimeCostPhaseLabel(codingActionProjection.terminal.costPhase)}</strong></div>
-                  <div className="compact-row"><span>Settled cost</span><strong>{typeof codingActionProjection.terminal.costUsd === 'number' ? formatRuntimeUsd(codingActionProjection.terminal.costUsd) : 'unknown'}</strong></div>
+                  <div className="compact-row"><span>{codingActionProjection.terminal.costStatus === 'settled' ? 'Settled cost' : codingActionProjection.terminal.costPhase === 'preflight_estimate' ? 'Estimated cost' : 'Cost'}</span><strong>{typeof codingActionProjection.terminal.costUsd === 'number' ? formatRuntimeUsd(codingActionProjection.terminal.costUsd) : 'unknown'}</strong></div>
                   <div className="compact-row"><span>Cost status</span><strong>{codingActionProjection.terminal.costStatus ?? 'legacy_unverified'}</strong></div>
                   <div className="compact-row"><span>Pricing tier</span><strong>{codingActionProjection.terminal.pricingTier ?? 'unknown'}</strong></div>
                   <div className="compact-row"><span>Tests</span><strong>{codingActionProjection.terminal.testStatus ?? 'not archived'}</strong></div>
@@ -751,7 +762,7 @@ export function AgentWorkbenchView({
               </div>
             ) : null}
             <div className="compact-row">
-              <span>Cleanup</span>
+              <span>工作区清理</span>
               <strong>{cleanupStatus}</strong>
             </div>
             <p className="empty-note">{cleanupSummary}</p>
@@ -793,7 +804,7 @@ export function AgentWorkbenchView({
               <section className="coding-run-audit" data-testid="coding-run-audit">
                 <div className="compact-row"><span>Audit Run</span><code>{selectedAuditCodingRun.id}</code></div>
                 <div className="compact-row"><span>Status / Provider</span><strong>{selectedAuditCodingRun.status} · {selectedAuditCodingRun.providerId}</strong></div>
-                <div className="compact-row"><span>Tokens / Cost</span><strong>{selectedAuditCodingRun.runtimeCostSummary?.totalTokens ?? (selectedAuditCodingRun.runtimeCostSummary ? selectedAuditCodingRun.runtimeCostSummary.inputTokens + selectedAuditCodingRun.runtimeCostSummary.outputTokens : 'unknown')} · {typeof selectedAuditCodingRun.runtimeCostSummary?.costUsd === 'number' ? formatUsd(selectedAuditCodingRun.runtimeCostSummary.costUsd) : 'unknown'}</strong></div>
+                <div className="compact-row"><span>Tokens / Cost</span><strong>{selectedAuditCodingRun.runtimeCostSummary?.totalTokens ?? (selectedAuditCodingRun.runtimeCostSummary ? selectedAuditCodingRun.runtimeCostSummary.inputTokens + selectedAuditCodingRun.runtimeCostSummary.outputTokens : 'unknown')} · {displayRuntimeCost(selectedAuditCodingRun.runtimeCostSummary)}</strong></div>
                 <p>{selectedAuditCodingRun.summary}</p>
                 {selectedAuditPermissions.length > 0 ? (
                   <ul aria-label="Coding Run permission history">
@@ -811,48 +822,27 @@ export function AgentWorkbenchView({
               {canOpenManagedWorkspace ? (
                 <button className="ghost-button" onClick={onOpenCodingWorktree}>
                   <FolderOpen size={16} />
-                  Open worktree
+                  打开受管工作树
                 </button>
               ) : null}
               <button className="ghost-button" disabled={!codingActionProjection?.activeRun} onClick={onCancelCodingRun}>
-                Cancel
+                取消当前 Run
               </button>
               <button className="ghost-button" disabled={!workspace || Boolean(workspace.deletedAt)} onClick={onDeleteCodingWorktree}>
-                Delete worktree
+                删除受管工作树
               </button>
             </div>
           </article>
         ) : null}
 
-        <AgentRuntimePanel
-          desktopApi={desktopApi}
-          runId={selectedRun?.id}
-          nodeId={selectedRun?.currentNodeId}
-          localProjectId={localProjectId}
-        />
-
-        <AgentCoordinationPanel
-          desktopApi={desktopApi}
-          runId={selectedRun?.id}
-          nodeId={selectedRun?.currentNodeId}
-          expectedRunVersion={selectedRun?.version}
-          localProjectId={localProjectId}
-        />
-
-        <AgentMemoryPanel
-          desktopApi={desktopApi}
-          runId={selectedRun?.id}
-          localProjectId={localProjectId}
-        />
-
-        <section className="agent-console-section" aria-label="Evidence and Trace">
+        <section className="agent-console-section" aria-label="当前节点证据与执行轨迹">
           <div className="section-heading section-heading--inline">
-            <span>Evidence & Trace</span>
+            <span title="Evidence 是可审计证据；Trace 是执行轨迹。">证据与执行轨迹</span>
             <strong>当前节点执行证据</strong>
           </div>
           {viewModel.evidenceGroups.length === 0 ? (
             <article className="agent-evidence-card">
-              <p className="empty-note">运行 Agent 后会在这里按门禁审查、Coding、Permission、Diff、Test Evidence 和 Cost 分组。</p>
+              <p className="empty-note">当前节点暂无必须处理的执行证据。完成上方主操作后，这里会按门禁审查、Coding、权限、Diff、测试证据和费用分组。</p>
             </article>
           ) : (
             <div className="agent-evidence-grid">
@@ -863,6 +853,42 @@ export function AgentWorkbenchView({
           )}
         </section>
 
+        <details className="agent-advanced-tools" data-testid="agent-advanced-tools">
+          <summary aria-describedby="agent-advanced-tools-description">
+            <span>高级验收与诊断</span>
+            <strong id="agent-advanced-tools-description">
+              独立 Runtime、多 Agent 与 Memory；不参与当前 Workflow（工作流）主任务
+            </strong>
+            <em>{isTeamPaired ? 'Team 已配对 · 多 Agent 入口可用' : '本地未配对 · 多 Agent 入口不可用'}</em>
+          </summary>
+          <div className="agent-advanced-tools__body">
+            <p className="agent-advanced-tools__intro">
+              以下能力用于平台验收、恢复和诊断。它们不会代替上方主操作，也不会自动生成当前阶段产物、批准 Gate 或推进工作流。
+            </p>
+            <AgentRuntimePanel
+              desktopApi={desktopApi}
+              runId={selectedRun?.id}
+              nodeId={selectedRun?.currentNodeId}
+              localProjectId={localProjectId}
+            />
+
+            <AgentCoordinationPanel
+              desktopApi={desktopApi}
+              runId={selectedRun?.id}
+              nodeId={selectedRun?.currentNodeId}
+              expectedRunVersion={selectedRun?.version}
+              localProjectId={localProjectId}
+              isTeamPaired={isTeamPaired}
+            />
+
+            <AgentMemoryPanel
+              desktopApi={desktopApi}
+              runId={selectedRun?.id}
+              localProjectId={localProjectId}
+            />
+          </div>
+        </details>
+
         <details className="runtime-settings" open={codingReadiness?.status !== 'ready'} ref={runtimeSettingsRef} tabIndex={-1}>
           <summary>
             <span><Code2 size={16} />Coding Agent 执行配置</span>
@@ -871,12 +897,12 @@ export function AgentWorkbenchView({
           <div className="runtime-settings__body">
             <article className="agent-evidence-card runtime-settings-form">
               <div className="section-heading">
-                <span>Coding Engine / Executor</span>
+                <span>Coding Engine / Executor（执行器）</span>
                 <strong>{codingExecutor === 'native-model' ? 'DevFlow Native v2' : 'OpenCode'}</strong>
               </div>
               <p>Stage/Review Provider、Coding Engine 和 Coding Executor 是三项独立配置。真正执行时由 Electron Main 重新验证当前项目配置。</p>
               <label>
-                Coding Executor
+                Coding Executor（执行器）
                 <select aria-label="Coding Executor" value={codingExecutor} onChange={(event) => setCodingExecutor(event.target.value as 'native-model' | 'opencode-http')}>
                   <option value="native-model">DevFlow Native · 使用本地安全保存的 Provider</option>
                   <option value="opencode-http">OpenCode · 使用 OpenCode Provider</option>
@@ -884,7 +910,7 @@ export function AgentWorkbenchView({
               </label>
               {codingExecutor === 'native-model' ? (
                 <label>
-                  Native Executor Provider
+                  Native Executor 使用的 Provider
                   <select aria-label="Coding Agent Provider" value={codingProviderId} onChange={(event) => setCodingProviderId(event.target.value)}>
                     <option value="">请选择已保存 Provider</option>
                     {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
@@ -931,14 +957,14 @@ export function AgentWorkbenchView({
 
             <article className="agent-evidence-card runtime-settings-form">
               <div className="section-heading">
-                <span>Runtime Budget</span>
+                <span>Runtime 预算</span>
                 <strong>{budgetPolicy ? `${formatUsd(budgetPolicy.monthlyLimitUsd)} / 月` : '必须显式保存'}</strong>
               </div>
               <label>月上限（USD）<input aria-label="Coding monthly budget" inputMode="decimal" value={monthlyLimitUsd} onChange={(event) => setMonthlyLimitUsd(event.target.value)} /></label>
               <label>预警阈值（USD）<input aria-label="Coding warning budget" inputMode="decimal" value={warningThresholdUsd} onChange={(event) => setWarningThresholdUsd(event.target.value)} /></label>
               <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={saveBudgetPolicy}><Save size={16} />保存预算策略</button>
               {codingReadiness?.budgetDecision?.status === 'requires_lead_approval' ? (
-                <button className="primary-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
+                <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
               ) : null}
             </article>
 
@@ -965,7 +991,7 @@ export function AgentWorkbenchView({
           <summary>
             <span>
               <Settings2 size={16} />
-              Runtime Settings
+              Agent Provider 配置
             </span>
             <strong>{viewModel.runtimeSettings.summary}</strong>
           </summary>
@@ -992,11 +1018,11 @@ export function AgentWorkbenchView({
                   </code>
                 </div>
               ) : (
-                <p className="empty-note">当前没有选中的 Agent Provider。请在右侧新增并保存一个 provider。</p>
+                <p className="empty-note">当前没有选中的 Agent Provider。请在右侧新增并保存一个 Provider。</p>
               )}
               {providers.length > 0 ? (
                 <label className="runtime-provider-picker">
-                  Use saved provider
+                  使用已保存 Provider
                   <select
                     aria-label="Saved Agent Provider"
                     value={selectedProviderId}
@@ -1022,12 +1048,12 @@ export function AgentWorkbenchView({
 
             <article className="agent-evidence-card runtime-settings-form">
               <div className="section-heading">
-                <span>Add Agent Provider</span>
-                <strong>OpenAI-compatible credential</strong>
+                <span>新增 Agent Provider</span>
+                <strong>OpenAI 兼容凭据</strong>
               </div>
               <p>新增后会自动设为当前 Agent Provider；明文 key 只保存在 Electron 本地安全存储，不会回读到 renderer。</p>
               <label>
-                Provider Name
+                Provider 名称
                 <input
                   aria-label="Agent Provider Name"
                   value={providerNameDraft}
@@ -1045,7 +1071,7 @@ export function AgentWorkbenchView({
                 />
               </label>
               <label>
-                Model
+                模型（Model）
                 <input
                   aria-label="Agent Provider Model"
                   value={providerModelDraft}
@@ -1065,7 +1091,7 @@ export function AgentWorkbenchView({
               </label>
               <button className="ghost-button" onClick={onSaveProviderCredential}>
                 <Save size={16} />
-                Save and Use Provider
+                保存并使用 Provider
               </button>
             </article>
           </div>
@@ -1130,6 +1156,20 @@ function toneClass(tone: AgentConsoleAction['tone']): string {
     return 'accent'
   }
   return 'soft'
+}
+
+function displayRuntimeCost(summary: CodingAgentRun['runtimeCostSummary'] | undefined): string {
+  if (
+    !summary ||
+    !summary.usageStatus ||
+    summary.usageStatus === 'legacy_unknown' ||
+    !summary.costStatus ||
+    summary.costStatus === 'legacy_unverified' ||
+    typeof summary.costUsd !== 'number'
+  ) {
+    return 'unknown'
+  }
+  return formatUsd(summary.costUsd)
 }
 
 function runtimeCostPhaseLabel(

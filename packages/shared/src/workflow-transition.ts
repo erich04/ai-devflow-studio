@@ -170,8 +170,15 @@ export function evaluateWorkflowCommand(input: EvaluateWorkflowCommandInput): Wo
     ) {
       return blocked('evidence_scope_mismatch', 'Coding run does not belong to the current workflow node')
     }
-    if (codingRun.status !== 'completed') {
-      return blocked('coding_run_not_completed', 'Coding run must be completed before the build can advance')
+    const acceptedOpenCodeResult =
+      codingRun.engine === 'opencode-http' &&
+      codingRun.status === 'applying' &&
+      Boolean(codingRun.changeAcceptanceDecisionId)
+    if (codingRun.status !== 'completed' && !acceptedOpenCodeResult) {
+      return blocked(
+        'coding_run_not_completed',
+        'Coding run must be completed, or have an accepted OpenCode result, before the build can advance',
+      )
     }
 
     const diff = input.evidence.codingDiffs.find((candidate) => candidate.id === command.diffId)

@@ -166,7 +166,7 @@ import {
 } from './remote-sync.js'
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
-import { createCodingEngineAdapterFromEnv } from './coding-engine.js'
+import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import {
   createCodingExecutorCompatibilityAdapter,
   type CodingExecutor,
@@ -213,8 +213,14 @@ import { createWorkspaceOperationCoordinator } from './workspace-operation-coord
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { createReadOnlyLocalStageAgentExecutor } from './stage-agent-executor.js'
 import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine.js'
-import { detectCodingRuntimeEngines } from './opencode-discovery.js'
+import {
+  detectCodingRuntimeEngines,
+  inspectOpencodeRuntimeProfile,
+  isSupportedOpencodeVersion,
+} from './opencode-discovery.js'
 import { stopOpencodeWithRetry } from './opencode-shutdown.js'
+import { resolveTrustedCodingPermissionReply } from './coding-permission-authority.js'
+import { resolveTrustedCodingRequest } from './coding-request-authority.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import {
   createElectronAgentProviderCredentialMetadata,
@@ -392,7 +398,12 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             providerID: configuration.providerId,
             modelID: configuration.modelId,
             processManager: opencodeProcessManager,
-            runtimeEnv: process.env,
+            configurationFingerprint: `coding-runtime-configuration:${configuration.version}`,
+            requireExecutionAuthorization: true,
+            runtimeEnv: buildOpencodeRuntimeEnv({
+              baseEnv: process.env,
+              apiKeyEnvName: 'OPENCODE_API_KEY',
+            }),
           }),
         )
       }
@@ -426,7 +437,10 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
 async function getCodingExecutor(projectId?: string): Promise<CodingExecutor> {
   if (!projectId) return compatibilityCodingExecutor
   const resolved = await resolveCodingExecutorForProject(projectId)
-  return resolved.executor ?? compatibilityCodingExecutor
+  if (!resolved.executor) {
+    throw new Error('Project Coding Executor is not configured; no fallback executor was started')
+  }
+  return resolved.executor
 }
 
 function getGitHubDeliveryRuntime() {
@@ -1450,6 +1464,7 @@ async function getCodingReadiness(input: {
   }
   let executor: CodingExecutor | null = null
   let engineAvailable: boolean | undefined
+  let opencodeReadiness: Parameters<typeof evaluateCodingRuntimeReadiness>[0]['opencodeReadiness']
   try {
     const resolved = await resolveCodingExecutorForProject(input.projectId)
     selection = resolved.selection
@@ -1459,19 +1474,28 @@ async function getCodingReadiness(input: {
       if (configuration.executor !== 'opencode-http') {
         throw new Error('Project Coding Runtime configuration does not match the selected executor')
       }
-      const discovery = await detectCodingRuntimeEngines({
-        projectId: input.projectId,
-        env: {
-          ...process.env,
-          DEVFLOW_OPENCODE_BIN: configuration.binaryPath,
-        },
-      })
+      const discovery = await detectCodingRuntimeEngines({ projectId: input.projectId })
       const candidate = discovery.candidates[0]
-      engineAvailable = Boolean(
-        candidate?.status === 'available' &&
-          candidate.binaryPath === configuration.binaryPath &&
-          candidate.version === configuration.detectedVersion,
+      const binaryAvailable = Boolean(candidate?.binaryPath === configuration.binaryPath)
+      const versionCompatible = Boolean(
+        candidate?.version === configuration.detectedVersion &&
+        isSupportedOpencodeVersion(configuration.detectedVersion),
       )
+      engineAvailable = binaryAvailable && versionCompatible && candidate?.status === 'available'
+      const runtimeProfile = engineAvailable && candidate?.binaryPath
+        ? await inspectOpencodeRuntimeProfile({
+            binaryPath: candidate.binaryPath,
+            providerId: configuration.providerId,
+            modelId: configuration.modelId,
+          })
+        : { authAvailable: false, profileAvailable: false, modelAvailable: false }
+      opencodeReadiness = {
+        binaryAvailable,
+        versionCompatible,
+        authAvailable: runtimeProfile.authAvailable,
+        profileAvailable: runtimeProfile.profileAvailable,
+        modelAvailable: runtimeProfile.modelAvailable,
+      }
     }
   } catch {
     selection = await resolveCodingRuntimeSelection({
@@ -1485,10 +1509,22 @@ async function getCodingReadiness(input: {
     selection,
     executor,
     ...(engineAvailable === undefined ? {} : { engineAvailable }),
+    ...(opencodeReadiness ? { opencodeReadiness } : {}),
     ...input,
     getBudgetPolicy: (projectId) => remoteSync.getRuntimeBudgetPolicy(projectId),
     evaluateBudget: (budgetInput) => remoteSync.evaluateRuntimeBudget(budgetInput),
   })
+}
+
+async function resolveTrustedCodingRequestForMain<
+  T extends { runId: string; projectId: string; requestedBy: string },
+>(input: T): Promise<T & { requestedBy: string }> {
+  const store = await getStore()
+  const [run, pairing] = await Promise.all([
+    store.getRun(input.runId),
+    store.getDesktopPairingCredential(),
+  ])
+  return resolveTrustedCodingRequest({ input, run, pairing })
 }
 
 async function createKnowledgeReviewRuntimeForRequest(
@@ -2539,7 +2575,10 @@ function registerIpcHandlers() {
         modelId: configuration.modelId,
         detectedVersion: configuration.detectedVersion,
         processManager: opencodeProcessManager,
-        runtimeEnv: process.env,
+        runtimeEnv: buildOpencodeRuntimeEnv({
+          baseEnv: process.env,
+          apiKeyEnvName: 'OPENCODE_API_KEY',
+        }),
       })
     }
     const completedAt = new Date().toISOString()
@@ -3147,6 +3186,7 @@ function registerIpcHandlers() {
     const store = await getStore()
     await findProject(input.projectId)
     const current = await store.getCodingRuntimeConfiguration(input.projectId)
+    let trustedOpencodeCandidate: { binaryPath: string; version: string } | undefined
     if (input.executor === 'native-model') {
       const [metadata, encryptedSecret] = await Promise.all([
         store.listProviderCredentials().then((credentials) =>
@@ -3158,10 +3198,7 @@ function registerIpcHandlers() {
         throw new Error(`Coding Provider credential is unavailable: ${input.providerId}`)
       }
     } else {
-      const discovery = await detectCodingRuntimeEngines({
-        projectId: input.projectId,
-        env: { ...process.env, DEVFLOW_OPENCODE_BIN: input.binaryPath },
-      })
+      const discovery = await detectCodingRuntimeEngines({ projectId: input.projectId })
       const candidate = discovery.candidates[0]
       if (
         candidate?.status !== 'available' ||
@@ -3170,7 +3207,12 @@ function registerIpcHandlers() {
       ) {
         throw new Error('OpenCode confirmation is stale; detect the local engine again')
       }
+      trustedOpencodeCandidate = {
+        binaryPath: candidate.binaryPath,
+        version: candidate.version,
+      }
     }
+    await opencodeProcessManager.stopProject(input.projectId)
     const commonConfiguration = {
       projectId: input.projectId,
       providerId: input.providerId,
@@ -3183,9 +3225,9 @@ function registerIpcHandlers() {
         : {
             ...commonConfiguration,
             executor: 'opencode-http',
-            binaryPath: input.binaryPath,
+            binaryPath: trustedOpencodeCandidate!.binaryPath,
             modelId: input.modelId,
-            detectedVersion: input.detectedVersion,
+            detectedVersion: trustedOpencodeCandidate!.version,
           },
     )
     for (const key of codingExecutorPromises.keys()) {
@@ -3201,7 +3243,10 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle(ipcChannels.getCodingRuntimeReadiness, async (_, payload: unknown) => {
-    return getCodingReadiness(parseGetCodingRuntimeReadinessInput(payload))
+    const input = await resolveTrustedCodingRequestForMain(
+      parseGetCodingRuntimeReadinessInput(payload),
+    )
+    return getCodingReadiness(input)
   })
 
   ipcMain.handle(ipcChannels.getCodingChangeSetPreview, async (_, payload: unknown) => {
@@ -3290,7 +3335,7 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle(ipcChannels.runCodingAgent, async (_, payload: unknown) => {
-    const input = parseRunCodingAgentInput(payload)
+    const input = await resolveTrustedCodingRequestForMain(parseRunCodingAgentInput(payload))
     const readiness = await getCodingReadiness(input)
     if (readiness.status !== 'ready') {
       const blockers = readiness.checks
@@ -3305,7 +3350,7 @@ function registerIpcHandlers() {
   })
 
   ipcMain.handle(ipcChannels.startRetryAttempt, async (_, payload: unknown) => {
-    const input = parseStartRetryAttemptInput(payload)
+    const input = await resolveTrustedCodingRequestForMain(parseStartRetryAttemptInput(payload))
     const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
     const readiness = await getCodingReadiness(input)
     if (readiness.status !== 'ready') {
@@ -3360,8 +3405,16 @@ function registerIpcHandlers() {
     const codingRun = (await store.listCodingAgentRuns()).find(
       (candidate) => candidate.id === input.codingRunId,
     )
-    const runtime = await createCodingRuntimeForRequest(undefined, codingRun?.projectId)
-    return runtime.replyCodingPermission(input)
+    if (!codingRun) {
+      throw new Error('Coding Agent run is unavailable')
+    }
+    const trustedInput = resolveTrustedCodingPermissionReply({
+      input,
+      projectId: codingRun.projectId,
+      pairing: await store.getDesktopPairingCredential(),
+    })
+    const runtime = await createCodingRuntimeForRequest(undefined, codingRun.projectId)
+    return runtime.replyCodingPermission(trustedInput)
   })
 
   ipcMain.handle(ipcChannels.subscribeCodingRun, async (_, payload: unknown) => {

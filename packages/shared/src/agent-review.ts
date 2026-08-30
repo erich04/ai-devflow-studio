@@ -91,10 +91,90 @@ export type WorkflowArtifactProviderOutput = {
   usage?: AgentProviderUsage
 }
 
+export type AgentProviderErrorCode =
+  | 'provider_timeout'
+  | 'dns_failure'
+  | 'tls_failure'
+  | 'connection_reset'
+  | 'proxy_failure'
+  | 'http_429'
+  | 'http_4xx'
+  | 'http_5xx'
+  | 'invalid_response_json'
+  | 'invalid_model_output'
+  | 'invalid_usage'
+  | 'response_too_large'
+  | 'cancelled_by_user'
+  | 'unknown_provider_failure'
+
+export type AgentProviderDeliveryState =
+  | 'not_sent'
+  | 'possibly_delivered'
+  | 'response_received'
+
+export type AgentProviderBillingState = 'confirmed' | 'not_incurred' | 'unknown'
+
+export type AgentProviderResponseMetadata = {
+  httpStatus: number
+  responseId?: string
+  systemFingerprint?: string
+}
+
+export class AgentProviderRequestError extends Error {
+  readonly code: AgentProviderErrorCode
+  readonly deliveryState: AgentProviderDeliveryState
+  readonly billingState: AgentProviderBillingState
+  readonly retryable: boolean
+  readonly httpStatus: number | null
+  readonly sanitizedCause: string
+  readonly responseMetadata?: AgentProviderResponseMetadata
+
+  constructor(input: {
+    code: AgentProviderErrorCode
+    deliveryState: AgentProviderDeliveryState
+    billingState: AgentProviderBillingState
+    retryable: boolean
+    httpStatus?: number | null
+    sanitizedCause: string
+    responseMetadata?: AgentProviderResponseMetadata
+    cause?: unknown
+  }) {
+    super(providerErrorMessage(input.code, input.httpStatus ?? null), { cause: input.cause })
+    this.name = 'AgentProviderRequestError'
+    this.code = input.code
+    this.deliveryState = input.deliveryState
+    this.billingState = input.billingState
+    this.retryable = input.retryable
+    this.httpStatus = input.httpStatus ?? null
+    this.sanitizedCause = /^[a-z0-9_.:-]{1,96}$/u.test(input.sanitizedCause)
+      ? input.sanitizedCause
+      : 'redacted_provider_failure'
+    if (input.responseMetadata) {
+      const responseId = safeProviderResponseIdentifier(input.responseMetadata.responseId)
+      const systemFingerprint = safeProviderResponseIdentifier(
+        input.responseMetadata.systemFingerprint,
+      )
+      this.responseMetadata = {
+        httpStatus: input.responseMetadata.httpStatus,
+        ...(responseId ? { responseId } : {}),
+        ...(systemFingerprint ? { systemFingerprint } : {}),
+      }
+    }
+  }
+}
+
+function providerErrorMessage(code: AgentProviderErrorCode, httpStatus: number | null): string {
+  return httpStatus === null
+    ? `Agent provider request failed (${code}).`
+    : `Agent provider request failed (${code}, HTTP ${httpStatus}).`
+}
+
 export type AgentProvider = {
   id: string
   name: string
   model: string
+  targetHost?: string
+  requestTimeoutMs?: number
   billingProvider?: AgentProviderUsage['billingProvider']
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
@@ -102,7 +182,12 @@ export type AgentProvider = {
     systemPrompt: string
     userPrompt: string
     maxOutputTokens: number
-  }) => Promise<{ value: Record<string, unknown>; usage?: AgentProviderUsage }>
+    signal?: AbortSignal
+  }) => Promise<{
+    value: Record<string, unknown>
+    usage?: AgentProviderUsage
+    responseMetadata?: AgentProviderResponseMetadata
+  }>
 }
 
 function parseStructuredProviderOutput(raw: string): Record<string, unknown> {
@@ -496,12 +581,93 @@ function redactProviderErrorBody(value: string): string {
     .slice(0, 800)
 }
 
+const MAX_PROVIDER_HTTP_RESPONSE_BYTES = 64 * 1_024
+
+class BoundedProviderResponseError extends Error {
+  constructor(readonly code: 'response_too_large' | 'body_read_failed') {
+    super(code)
+    this.name = 'BoundedProviderResponseError'
+  }
+}
+
+async function readBoundedProviderResponseText(
+  response: Response,
+  maxBytes = MAX_PROVIDER_HTTP_RESPONSE_BYTES,
+): Promise<string> {
+  const declaredLength = response.headers?.get?.('content-length')
+  if (declaredLength && /^\d+$/u.test(declaredLength.trim())) {
+    const parsedLength = Number(declaredLength)
+    if (!Number.isSafeInteger(parsedLength) || parsedLength > maxBytes) {
+      await response.body?.cancel().catch(() => undefined)
+      throw new BoundedProviderResponseError('response_too_large')
+    }
+  }
+  if (!('body' in response)) {
+    throw new BoundedProviderResponseError('body_read_failed')
+  }
+  if (response.body === null) return ''
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const chunks: string[] = []
+  let bytesRead = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) {
+        throw new BoundedProviderResponseError('body_read_failed')
+      }
+      if (bytesRead + value.byteLength > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw new BoundedProviderResponseError('response_too_large')
+      }
+      bytesRead += value.byteLength
+      chunks.push(decoder.decode(value, { stream: true }))
+    }
+    chunks.push(decoder.decode())
+    return chunks.join('')
+  } catch (error) {
+    if (!(error instanceof BoundedProviderResponseError && error.code === 'response_too_large')) {
+      await reader.cancel().catch(() => undefined)
+    }
+    if (error instanceof BoundedProviderResponseError) throw error
+    throw new BoundedProviderResponseError('body_read_failed')
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 async function buildProviderFailureMessage(response: Response): Promise<string> {
-  const body = await response.text().catch(() => '')
+  let body = ''
+  try {
+    body = await readBoundedProviderResponseText(response)
+  } catch (error) {
+    if (error instanceof BoundedProviderResponseError && error.code === 'response_too_large') {
+      throw providerResponseError('response_too_large', false, { httpStatus: response.status })
+    }
+  }
   const redactedBody = redactProviderErrorBody(body).trim()
   return redactedBody
     ? `Agent provider failed with ${response.status}: ${redactedBody}`
     : `Agent provider failed with ${response.status}`
+}
+
+async function readProviderJsonResponse(response: Response): Promise<unknown> {
+  let raw: string
+  try {
+    raw = await readBoundedProviderResponseText(response)
+  } catch (error) {
+    if (error instanceof BoundedProviderResponseError && error.code === 'response_too_large') {
+      throw providerResponseError('response_too_large', false, { httpStatus: response.status })
+    }
+    throw new Error('Agent provider response body could not be read')
+  }
+  try {
+    return JSON.parse(raw) as unknown
+  } catch {
+    throw new Error('Agent provider returned an invalid JSON response')
+  }
 }
 
 function parseProviderJson<T>(raw: string, outputKind: string): Partial<T> {
@@ -1531,6 +1697,7 @@ export function createOpenAiCompatibleAgentProvider({
   model,
   apiKey,
   baseUrl = 'https://api.openai.com/v1',
+  structuredRequestTimeoutMs = 30_000,
   fetcher = fetch,
 }: {
   id?: string
@@ -1538,12 +1705,23 @@ export function createOpenAiCompatibleAgentProvider({
   model: string
   apiKey: string
   baseUrl?: string
+  structuredRequestTimeoutMs?: number
   fetcher?: typeof fetch
 }): AgentProvider {
+  if (
+    !Number.isSafeInteger(structuredRequestTimeoutMs) ||
+    structuredRequestTimeoutMs < 1 ||
+    structuredRequestTimeoutMs > 300_000
+  ) {
+    throw new Error('Agent provider structured request timeout is invalid')
+  }
+  const targetHost = providerTargetHost(baseUrl)
   return {
     id,
     name,
     model,
+    targetHost,
+    requestTimeoutMs: structuredRequestTimeoutMs,
     billingProvider: isDeepSeekUsageContext({ providerId: id, baseUrl })
       ? 'deepseek'
       : 'openai_compatible',
@@ -1572,7 +1750,7 @@ export function createOpenAiCompatibleAgentProvider({
         throw new Error(await buildProviderFailureMessage(response))
       }
 
-      const body = (await response.json()) as {
+      const body = (await readProviderJsonResponse(response)) as {
         choices?: Array<{ message?: { content?: string } }>
         usage?: unknown
       }
@@ -1614,7 +1792,18 @@ export function createOpenAiCompatibleAgentProvider({
         throw new Error('Agent provider structured request is invalid')
       }
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 30_000)
+      let timedOut = false
+      let cancelledByUser = input.signal?.aborted ?? false
+      const cancel = () => {
+        cancelledByUser = true
+        controller.abort()
+      }
+      input.signal?.addEventListener('abort', cancel, { once: true })
+      if (cancelledByUser) controller.abort()
+      const timeout = setTimeout(() => {
+        timedOut = true
+        controller.abort()
+      }, structuredRequestTimeoutMs)
       try {
         const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
           method: 'POST',
@@ -1634,18 +1823,50 @@ export function createOpenAiCompatibleAgentProvider({
           redirect: 'error',
           signal: controller.signal,
         })
-        if (response.status !== 200) {
-          throw new Error(`Agent provider structured request failed with status ${response.status}`)
+        if (!response.ok) {
+          throw providerHttpError(response.status)
         }
-        const responseText = await response.text()
-        if (new TextEncoder().encode(responseText).byteLength > 64 * 1_024) {
-          throw new Error('Agent provider structured response is too large')
+        let responseText: string
+        try {
+          responseText = await readBoundedProviderResponseText(response)
+        } catch (error) {
+          if (error instanceof BoundedProviderResponseError) {
+            if (error.code === 'response_too_large') {
+              throw providerResponseError('response_too_large', false, {
+                httpStatus: response.status,
+              })
+            }
+            throw providerResponseError(
+              'invalid_response_json',
+              true,
+              { httpStatus: response.status },
+              error,
+            )
+          }
+          throw error
         }
-        const body = JSON.parse(responseText) as unknown
+        let body: unknown
+        try {
+          body = JSON.parse(responseText) as unknown
+        } catch (error) {
+          throw providerResponseError(
+            'invalid_response_json',
+            true,
+            { httpStatus: response.status },
+            error,
+          )
+        }
         if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-          throw new Error('Agent provider structured response is invalid')
+          throw providerResponseError('invalid_response_json', true, { httpStatus: response.status })
         }
         const record = body as Record<string, unknown>
+        const responseId = safeProviderResponseIdentifier(record.id)
+        const systemFingerprint = safeProviderResponseIdentifier(record.system_fingerprint)
+        const responseMetadata: AgentProviderResponseMetadata = {
+          httpStatus: response.status,
+          ...(responseId ? { responseId } : {}),
+          ...(systemFingerprint ? { systemFingerprint } : {}),
+        }
         const choices = record.choices
         const usageValue = record.usage
         const raw =
@@ -1658,10 +1879,18 @@ export function createOpenAiCompatibleAgentProvider({
           (choices[0] as { message?: unknown }).message !== null
             ? ((choices[0] as { message: { content?: unknown } }).message.content)
             : undefined
-        if (typeof raw !== 'string' || new TextEncoder().encode(raw).byteLength > 32 * 1_024) {
-          throw new Error('Agent provider structured response is invalid')
+        if (typeof raw !== 'string') {
+          throw providerResponseError('invalid_model_output', true, responseMetadata)
         }
-        const value = parseStructuredProviderOutput(raw)
+        if (new TextEncoder().encode(raw).byteLength > 32 * 1_024) {
+          throw providerResponseError('response_too_large', false, responseMetadata)
+        }
+        let value: Record<string, unknown>
+        try {
+          value = parseStructuredProviderOutput(raw)
+        } catch (error) {
+          throw providerResponseError('invalid_model_output', true, responseMetadata, error)
+        }
         let usage: AgentProviderUsage | undefined
         try {
           usage = parseOpenAiCompatibleProviderUsage(usageValue, {
@@ -1669,25 +1898,40 @@ export function createOpenAiCompatibleAgentProvider({
             model,
             baseUrl,
           })
-        } catch {
-          throw new Error('Agent provider structured usage is invalid')
+        } catch (error) {
+          throw providerResponseError('invalid_usage', false, responseMetadata, error)
         }
-        return { value, ...(usage ? { usage } : {}) }
+        return {
+          value,
+          ...(usage ? { usage } : {}),
+          responseMetadata,
+        }
       } catch (error) {
-        if (
-          error instanceof Error &&
-          (error.message === 'Agent provider structured request is invalid' ||
-            error.message.startsWith('Agent provider structured request failed with status ') ||
-            error.message === 'Agent provider structured response is too large' ||
-            error.message === 'Agent provider structured response is invalid' ||
-            error.message === 'Agent provider structured output is invalid' ||
-            error.message === 'Agent provider structured usage is invalid')
-        ) {
-          throw error
+        if (timedOut) {
+          throw new AgentProviderRequestError({
+            code: 'provider_timeout',
+            deliveryState: 'possibly_delivered',
+            billingState: 'unknown',
+            retryable: true,
+            sanitizedCause: 'request_deadline_exceeded',
+            cause: error,
+          })
         }
-        throw new Error('Agent provider structured request failed')
+        if (cancelledByUser) {
+          throw new AgentProviderRequestError({
+            code: 'cancelled_by_user',
+            deliveryState: 'possibly_delivered',
+            billingState: 'unknown',
+            retryable: true,
+            sanitizedCause: 'caller_abort_signal',
+            cause: error,
+          })
+        }
+        if (error instanceof AgentProviderRequestError) throw error
+        throw classifyProviderTransportError(error)
       } finally {
         clearTimeout(timeout)
+        input.signal?.removeEventListener('abort', cancel)
       }
     },
     async generateWorkflowArtifact({ request, prompt }) {
@@ -1715,7 +1959,7 @@ export function createOpenAiCompatibleAgentProvider({
         throw new Error(await buildProviderFailureMessage(response))
       }
 
-      const body = (await response.json()) as {
+      const body = (await readProviderJsonResponse(response)) as {
         choices?: Array<{ message?: { content?: string } }>
         usage?: unknown
       }
@@ -1743,5 +1987,142 @@ export function createOpenAiCompatibleAgentProvider({
         ...(usage ? { usage } : {}),
       }
     },
+  }
+}
+
+function providerHttpError(status: number): AgentProviderRequestError {
+  if (status === 407) {
+    return new AgentProviderRequestError({
+      code: 'proxy_failure',
+      deliveryState: 'response_received',
+      billingState: 'not_incurred',
+      retryable: true,
+      httpStatus: status,
+      sanitizedCause: 'proxy_authentication_required',
+    })
+  }
+  if (status === 429) {
+    return new AgentProviderRequestError({
+      code: 'http_429',
+      deliveryState: 'response_received',
+      billingState: 'not_incurred',
+      retryable: true,
+      httpStatus: status,
+      sanitizedCause: 'provider_rate_limited',
+    })
+  }
+  if (status >= 400 && status < 500) {
+    return new AgentProviderRequestError({
+      code: 'http_4xx',
+      deliveryState: 'response_received',
+      billingState: 'not_incurred',
+      retryable: false,
+      httpStatus: status,
+      sanitizedCause: 'provider_rejected_request',
+    })
+  }
+  return new AgentProviderRequestError({
+    code: 'http_5xx',
+    deliveryState: 'response_received',
+    billingState: 'unknown',
+    retryable: true,
+    httpStatus: status,
+    sanitizedCause: 'provider_server_failure',
+  })
+}
+
+function providerResponseError(
+  code: Extract<
+    AgentProviderErrorCode,
+    'invalid_response_json' | 'invalid_model_output' | 'invalid_usage' | 'response_too_large'
+  >,
+  retryable: boolean,
+  responseMetadata: AgentProviderResponseMetadata,
+  cause?: unknown,
+): AgentProviderRequestError {
+  return new AgentProviderRequestError({
+    code,
+    deliveryState: 'response_received',
+    billingState: 'unknown',
+    retryable,
+    httpStatus: responseMetadata.httpStatus,
+    responseMetadata,
+    sanitizedCause: code,
+    ...(cause !== undefined ? { cause } : {}),
+  })
+}
+
+function classifyProviderTransportError(error: unknown): AgentProviderRequestError {
+  const causeCode = providerTransportCauseCode(error)
+  if (causeCode && ['ENOTFOUND', 'EAI_AGAIN', 'EAI_FAIL'].includes(causeCode)) {
+    return new AgentProviderRequestError({
+      code: 'dns_failure', deliveryState: 'not_sent', billingState: 'not_incurred',
+      retryable: true, sanitizedCause: causeCode, cause: error,
+    })
+  }
+  if (
+    causeCode &&
+    (causeCode.startsWith('ERR_TLS_') || causeCode.startsWith('CERT_') || [
+      'DEPTH_ZERO_SELF_SIGNED_CERT',
+      'SELF_SIGNED_CERT_IN_CHAIN',
+      'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    ].includes(causeCode))
+  ) {
+    return new AgentProviderRequestError({
+      code: 'tls_failure', deliveryState: 'not_sent', billingState: 'not_incurred',
+      retryable: false, sanitizedCause: causeCode, cause: error,
+    })
+  }
+  if (
+    causeCode &&
+    (causeCode.startsWith('ERR_PROXY_') || causeCode === 'EPROXY' || causeCode === 'UND_ERR_PROXY')
+  ) {
+    return new AgentProviderRequestError({
+      code: 'proxy_failure', deliveryState: 'not_sent', billingState: 'not_incurred',
+      retryable: true, sanitizedCause: causeCode, cause: error,
+    })
+  }
+  if (causeCode && ['ECONNRESET', 'EPIPE', 'UND_ERR_SOCKET'].includes(causeCode)) {
+    return new AgentProviderRequestError({
+      code: 'connection_reset', deliveryState: 'possibly_delivered', billingState: 'unknown',
+      retryable: true, sanitizedCause: causeCode, cause: error,
+    })
+  }
+  return new AgentProviderRequestError({
+    code: 'unknown_provider_failure',
+    deliveryState: 'possibly_delivered',
+    billingState: 'unknown',
+    retryable: false,
+    sanitizedCause: causeCode ?? 'unclassified_transport_failure',
+    cause: error,
+  })
+}
+
+function providerTransportCauseCode(error: unknown): string | undefined {
+  let current = error
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== 'object' || current === null) return undefined
+    const record = current as { code?: unknown; cause?: unknown }
+    if (
+      typeof record.code === 'string' &&
+      /^[A-Z][A-Z0-9_]{0,79}$/u.test(record.code)
+    ) {
+      return record.code
+    }
+    current = record.cause
+  }
+  return undefined
+}
+
+function safeProviderResponseIdentifier(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined
+  return redactSensitiveText(value.trim()).value.slice(0, 200)
+}
+
+function providerTargetHost(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase()
+  } catch {
+    return 'invalid-provider-host'
   }
 }

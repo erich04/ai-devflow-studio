@@ -13,6 +13,7 @@ import {
   assertCleanFixtureStatus,
   assertCandidateIdentity,
   assertOpencodeSmokeChangedPaths,
+  assertOpencodeSmokeOpaqueBilling,
   assertOpencodeSmokePermission,
   buildIsolatedOpencodeSmokeRuntimeEnv,
   buildOpencodeSmokeRuntimeEnv,
@@ -109,6 +110,35 @@ describe('opencode smoke safety policy', () => {
         'opencode smoke produced an unexpected changed path',
       )
     }
+  })
+
+  it('reports unavailable OpenCode usage as unknown/opaque instead of fabricated zeroes', () => {
+    expect(assertOpencodeSmokeOpaqueBilling({})).toEqual({
+      usage: 'unknown',
+      cost: 'opaque',
+    })
+    expect(() => assertOpencodeSmokeOpaqueBilling({
+      tokenUsageId: 'fabricated-zero-token-usage',
+    })).toThrow('must not fabricate token usage or dollar cost evidence')
+    expect(() => assertOpencodeSmokeOpaqueBilling({
+      runtimeCostSummary: {
+        id: 'fabricated-zero-cost',
+        runId: 'run-1',
+        nodeId: 'node-1',
+        userId: 'user-1',
+        projectId: 'project-1',
+        provider: 'openai',
+        providerId: 'openai',
+        model: 'gpt-4.1-mini',
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: null,
+        costUsd: 0,
+        timestamp: '2026-08-30T00:00:00.000Z',
+        source: 'estimated',
+        redacted: true,
+      },
+    })).toThrow('must not fabricate token usage or dollar cost evidence')
   })
 
   it('requires the candidate worktree to remain clean', () => {

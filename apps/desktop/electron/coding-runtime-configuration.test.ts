@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalProject, WorkflowRun } from '@ai-devflow/shared'
 import type { CodingExecutor } from './coding-executor.js'
 import {
@@ -26,6 +26,152 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   const directory = await mkdtemp(path.join(os.tmpdir(), `${prefix}-`))
   temporaryDirectories.push(directory)
   return directory
+}
+
+const openCodeReadinessDefaults = {
+  binaryAvailable: true,
+  versionCompatible: true,
+  authAvailable: true,
+  profileAvailable: true,
+  modelAvailable: true,
+}
+
+async function createOpenCodeReadinessFixture() {
+  const repositoryPath = await temporaryDirectory('devflow-opencode-readiness-repository')
+  const storeDirectory = await temporaryDirectory('devflow-opencode-readiness-store')
+  await execFileAsync('git', ['-C', repositoryPath, 'init', '-b', 'main'])
+
+  const project: LocalProject = {
+    id: 'opencode-readiness-project',
+    name: 'opencode-readiness-project',
+    path: repositoryPath,
+    packageManager: 'pnpm',
+    detectedTestCommand: 'pnpm test',
+    testCommand: 'pnpm test',
+    createdAt: '2026-08-30T18:00:00.000Z',
+    updatedAt: '2026-08-30T18:00:00.000Z',
+  }
+  const run: WorkflowRun = {
+    id: 'opencode-readiness-run',
+    version: 1,
+    title: 'OpenCode readiness',
+    request: 'Implement the approved design with OpenCode.',
+    projectId: project.id,
+    creatorId: 'u-local-owner',
+    status: 'building',
+    currentNodeId: 'opencode-readiness-build',
+    branchName: 'devflow/opencode-readiness',
+    createdAt: '2026-08-30T18:00:00.000Z',
+    updatedAt: '2026-08-30T18:00:00.000Z',
+    nodes: [{
+      id: 'opencode-readiness-build',
+      stage: 'build',
+      title: 'Implement locally',
+      subtitle: 'Run OpenCode in a managed worktree.',
+      kind: 'task',
+      status: 'running',
+      ownerId: 'u-local-owner',
+      retryCount: 0,
+      artifactIds: [],
+    }],
+    edges: [],
+  }
+  const configuration = {
+    projectId: project.id,
+    executor: 'opencode-http' as const,
+    providerId: 'openai',
+    modelId: 'gpt-4.1-mini',
+    binaryPath: '/opt/devflow/bin/opencode',
+    detectedVersion: '1.2.3',
+    version: 1,
+    updatedAt: '2026-08-30T18:00:00.000Z',
+  }
+  const store = await createLocalStore({
+    dbPath: path.join(storeDirectory, 'devflow.sqlite'),
+  })
+  await store.upsertProject(project)
+  await store.saveRun(run)
+  await store.saveDesktopPairingCredential({
+    tokenId: 'opencode-pairing-token',
+    organizationId: 'org-local',
+    projectId: 'team-project-opencode',
+    userId: run.creatorId,
+    role: 'owner',
+    authAccountId: 'acct-local-owner',
+    projectMemberships: [{
+      projectId: 'team-project-opencode',
+      userId: run.creatorId,
+      role: 'owner',
+    }],
+    createdAt: '2026-08-30T18:00:00.000Z',
+    localProjectId: project.id,
+  }, 'encrypted-pairing-token')
+  await store.saveCodingRuntimeConfiguration(configuration)
+
+  const selection = await resolveCodingRuntimeSelection({
+    store,
+    projectId: project.id,
+    env: {},
+  })
+  const executor = {
+    descriptor: {
+      stateVersion: 1,
+      id: 'coding-executor-opencode-http',
+      version: 1,
+      kind: 'opencode',
+      availability: { status: 'available', reasonCode: null },
+      capabilities: [
+        'cancellation',
+        'permission_relay',
+        'structured_diff',
+        'workspace_edit',
+        'workspace_read',
+      ],
+    },
+    engine: 'opencode-http',
+    providerId: configuration.providerId,
+    modelId: configuration.modelId,
+    billing: 'opaque',
+  } as CodingExecutor
+  const evaluateBudget = vi.fn(async () => ({
+    status: 'allowed' as const,
+    blocksRun: false,
+    currentSpendUsd: 8,
+    projectedCostUsd: 1,
+    limitUsd: 20,
+    reason: 'A metered provider is within budget.',
+  }))
+
+  return {
+    store,
+    project,
+    run,
+    selection,
+    executor,
+    evaluateBudget,
+    evaluate: (opencodeReadiness: typeof openCodeReadinessDefaults) =>
+      evaluateCodingRuntimeReadiness({
+        store,
+        selection,
+        executor,
+        opencodeReadiness,
+        engineAvailable: true,
+        projectId: project.id,
+        runId: run.id,
+        nodeId: run.currentNodeId,
+        requestedBy: run.creatorId,
+        getBudgetPolicy: async () => ({
+          projectId: project.id,
+          enabled: true,
+          monthlyLimitUsd: 20,
+          warningThresholdUsd: 15,
+          currency: 'USD',
+          updatedAt: '2026-08-30T18:00:00.000Z',
+        }),
+        evaluateBudget,
+        now: () => '2026-08-30T18:01:00.000Z',
+      }),
+  }
 }
 
 describe('project Coding Runtime configuration', () => {
@@ -222,5 +368,83 @@ describe('project Coding Runtime configuration', () => {
       configVersion: 3,
       configuration,
     })
+  })
+
+  it.each([
+    ['binary_missing', 'binaryAvailable'],
+    ['version_incompatible', 'versionCompatible'],
+    ['auth_unavailable', 'authAvailable'],
+    ['profile_unavailable', 'profileAvailable'],
+    ['model_unavailable', 'modelAvailable'],
+  ] as const)('distinguishes the OpenCode %s readiness blocker', async (blockedCode, readinessField) => {
+    const fixture = await createOpenCodeReadinessFixture()
+    try {
+      const readiness = await fixture.evaluate({
+        ...openCodeReadinessDefaults,
+        [readinessField]: false,
+      })
+      const openCodeChecks = new Map(
+        readiness.checks
+          .filter((candidate) => [
+            'binary_missing',
+            'version_incompatible',
+            'auth_unavailable',
+            'profile_unavailable',
+            'model_unavailable',
+          ].includes(candidate.code))
+          .map((candidate) => [candidate.code, candidate.status]),
+      )
+
+      expect(readiness.status).toBe('blocked')
+      expect(openCodeChecks.get(blockedCode)).toBe('blocked')
+      expect([...openCodeChecks.entries()].filter(([, status]) => status === 'blocked'))
+        .toEqual([[blockedCode, 'blocked']])
+    } finally {
+      fixture.store.close()
+    }
+  })
+
+  it('becomes ready when every OpenCode prerequisite is available without inventing metered USD budget data', async () => {
+    const fixture = await createOpenCodeReadinessFixture()
+    try {
+      expect(fixture.selection).toMatchObject({
+        source: 'project',
+        executor: 'opencode-http',
+        providerId: 'openai',
+        configVersion: 1,
+      })
+
+      const readiness = await fixture.evaluate(openCodeReadinessDefaults)
+      const categoryChecks = readiness.checks.filter((candidate) => [
+        'binary_missing',
+        'version_incompatible',
+        'auth_unavailable',
+        'profile_unavailable',
+        'model_unavailable',
+      ].includes(candidate.code))
+
+      expect(readiness).toMatchObject({
+        status: 'ready',
+        engine: 'opencode-http',
+        executor: 'opencode-http',
+        availability: 'available',
+        providerRequirement: 'opencode-provider',
+        providerId: 'openai',
+        configVersion: 1,
+        budgetDecision: {
+          status: 'disabled',
+          blocksRun: false,
+          reason: 'OpenCode usage is subscription/opaque; dollar cost is unknown and non-dollar runtime limits apply.',
+        },
+      })
+      expect(categoryChecks).toHaveLength(5)
+      expect(categoryChecks.every((candidate) => candidate.status === 'ready')).toBe(true)
+      expect(readiness.checks.every((candidate) => candidate.status === 'ready')).toBe(true)
+      expect(fixture.evaluateBudget).not.toHaveBeenCalled()
+      expect(readiness.budgetDecision?.status).not.toBe('allowed')
+      expect(readiness.budgetDecision?.reason).toContain('dollar cost is unknown')
+    } finally {
+      fixture.store.close()
+    }
   })
 })

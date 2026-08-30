@@ -1509,6 +1509,7 @@ export function App() {
           <AgentWorkbenchView
             desktopApi={desktopApi}
             localProjectId={selectedLocalProject?.id}
+            isTeamPaired={hasSelectedLocalProjectBinding}
             requestedBy={currentUser?.id ?? 'local-user'}
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}

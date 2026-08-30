@@ -142,7 +142,7 @@ describe('RuntimeBudgetPanel', () => {
 
     expect(await screen.findByText('Budget enabled')).toBeInTheDocument()
     expect(screen.getByText('monthly $0.40')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Team 已保存')
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Team 已保存'))
     expect(screen.getByRole('status')).toHaveTextContent('Electron 是否已同步无法从 Web 确认')
     expect(screen.getByRole('button', { name: '已保存' })).toBeDisabled()
     expect(screen.getByLabelText('Monthly limit USD')).toHaveValue(0.4)

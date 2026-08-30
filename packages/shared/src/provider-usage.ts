@@ -22,14 +22,14 @@ function optionalNonNegativeInteger(
 }
 
 export function isDeepSeekUsageContext(context: OpenAiCompatibleUsageContext): boolean {
-  const providerId = context.providerId?.toLowerCase() ?? ''
-  if (providerId.includes('deepseek')) return true
-  if (!context.baseUrl) return false
-  try {
-    return new URL(context.baseUrl).hostname.toLowerCase() === 'api.deepseek.com'
-  } catch {
-    return false
+  if (context.baseUrl) {
+    try {
+      return new URL(context.baseUrl).hostname.toLowerCase() === 'api.deepseek.com'
+    } catch {
+      return false
+    }
   }
+  return (context.providerId?.toLowerCase() ?? '').includes('deepseek')
 }
 
 /**

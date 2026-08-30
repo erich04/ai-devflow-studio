@@ -28,6 +28,15 @@ export type OpencodePermission = {
   permission: string
   metadata?: Record<string, unknown>
   patterns?: string[]
+  tool?: {
+    messageID: string
+    callID: string
+  }
+}
+
+export type OpencodeMessage = {
+  info: Record<string, unknown>
+  parts: unknown[]
 }
 
 export type OpencodeSessionStatus =
@@ -66,6 +75,7 @@ export type OpencodeHttpRequestErrorCode =
   | 'transport_error'
   | 'http_status_error'
   | 'invalid_json_response'
+  | 'response_too_large'
 
 export class OpencodeHttpRequestError extends Error {
   readonly code: OpencodeHttpRequestErrorCode
@@ -93,6 +103,15 @@ const OPENCODE_MESSAGE_ERROR_CODES: Readonly<Record<string, OpencodeMessageRespo
   ContentFilterError: 'content_filter',
 }
 
+export const MAX_OPENCODE_HTTP_RESPONSE_BYTES = 2 * 1_024 * 1_024
+
+class BoundedResponseBodyError extends Error {
+  constructor(readonly code: 'response_too_large' | 'transport_error') {
+    super(code)
+    this.name = 'BoundedResponseBodyError'
+  }
+}
+
 export class OpencodeMessageResponseError extends Error {
   readonly code: OpencodeMessageResponseErrorCode
   readonly statusCode: number | undefined
@@ -117,9 +136,15 @@ export class OpencodeMessageResponseError extends Error {
 
 export function createDefaultOpencodePermissionRules(): OpencodePermissionRule[] {
   return [
+    { permission: '*', pattern: '*', action: 'deny' },
     { permission: 'question', pattern: '*', action: 'deny' },
     { permission: 'task', pattern: '*', action: 'deny' },
-    ...['edit', 'bash', 'write', 'patch'].map((permission) => ({
+    ...['read', 'glob', 'grep', 'list', 'edit', 'write', 'patch'].map((permission) => ({
+      permission,
+      pattern: '*',
+      action: 'allow' as const,
+    })),
+    ...['bash', 'install'].map((permission) => ({
       permission,
       pattern: '*',
       action: 'ask' as const,
@@ -213,6 +238,21 @@ export async function sendOpencodeMessage(input: {
     throw terminalError
   }
   return response
+}
+
+export async function listOpencodeMessages(input: {
+  baseUrl: string
+  sessionId: string
+  directory: string
+  fetcher?: Fetcher
+  signal?: AbortSignal
+}): Promise<OpencodeMessage[]> {
+  return getJson<OpencodeMessage[]>(
+    input.fetcher,
+    input.baseUrl,
+    withDirectory(`/session/${input.sessionId}/message`, input.directory),
+    input.signal,
+  )
 }
 
 export async function listOpencodePermissions(input: {
@@ -408,10 +448,13 @@ async function readJson<T>(response: Response): Promise<T> {
   }
   let text: string
   try {
-    text = await response.text()
-  } catch {
+    text = await readBoundedResponseText(response, MAX_OPENCODE_HTTP_RESPONSE_BYTES)
+  } catch (error) {
     throw new OpencodeHttpRequestError({
-      code: 'transport_error',
+      code:
+        error instanceof BoundedResponseBodyError && error.code === 'response_too_large'
+          ? 'response_too_large'
+          : 'transport_error',
       statusCode: response.status,
     })
   }
@@ -422,6 +465,51 @@ async function readJson<T>(response: Response): Promise<T> {
       code: 'invalid_json_response',
       statusCode: response.status,
     })
+  }
+}
+
+async function readBoundedResponseText(response: Response, maxBytes: number): Promise<string> {
+  const declaredLength = response.headers?.get?.('content-length')
+  if (declaredLength && /^\d+$/u.test(declaredLength.trim())) {
+    const parsedLength = Number(declaredLength)
+    if (!Number.isSafeInteger(parsedLength) || parsedLength > maxBytes) {
+      await response.body?.cancel().catch(() => undefined)
+      throw new BoundedResponseBodyError('response_too_large')
+    }
+  }
+  if (!('body' in response)) {
+    throw new BoundedResponseBodyError('transport_error')
+  }
+  if (response.body === null) return ''
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const chunks: string[] = []
+  let bytesRead = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value === undefined) {
+        throw new BoundedResponseBodyError('transport_error')
+      }
+      if (bytesRead + value.byteLength > maxBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw new BoundedResponseBodyError('response_too_large')
+      }
+      bytesRead += value.byteLength
+      chunks.push(decoder.decode(value, { stream: true }))
+    }
+    chunks.push(decoder.decode())
+    return chunks.join('')
+  } catch (error) {
+    if (!(error instanceof BoundedResponseBodyError && error.code === 'response_too_large')) {
+      await reader.cancel().catch(() => undefined)
+    }
+    if (error instanceof BoundedResponseBodyError) throw error
+    throw new BoundedResponseBodyError('transport_error')
+  } finally {
+    reader.releaseLock()
   }
 }
 

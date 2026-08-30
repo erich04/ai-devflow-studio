@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentProvider } from '@ai-devflow/shared'
+import { AgentProviderRequestError, type AgentProvider } from '@ai-devflow/shared'
 import { createAgentProviderNativeCodingV2DecisionProvider } from './native-coding-executor-v2.js'
 
 describe('Agent Provider Native Coding v2 boundary', () => {
@@ -32,15 +32,37 @@ describe('Agent Provider Native Coding v2 boundary', () => {
       id: 'deepseek',
       name: 'DeepSeek',
       model: 'deepseek-v4-flash',
-      completeStructuredJson: vi.fn(async () => ({ value: { stateVersion: 2 }, usage })),
+      completeStructuredJson: vi.fn(async () => ({
+        value: { stateVersion: 2 },
+        usage,
+        responseMetadata: {
+          httpStatus: 200,
+          responseId: 'response-invalid-usage',
+          systemFingerprint: 'fingerprint-invalid-usage',
+        },
+      })),
     } as unknown as AgentProvider)
 
-    await expect(decisionProvider.complete({
+    const failure = await decisionProvider.complete({
       phase: 'analysis',
       systemPrompt: 'Return JSON.',
       userPrompt: '{}',
       maxOutputTokens: 1_024,
-    })).rejects.toThrow('exact integer token usage')
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(AgentProviderRequestError)
+    expect(failure).toMatchObject({
+      code: 'invalid_usage',
+      deliveryState: 'response_received',
+      billingState: 'unknown',
+      retryable: false,
+      sanitizedCause: 'provider_usage_missing_or_invalid',
+      responseMetadata: {
+        httpStatus: 200,
+        responseId: 'response-invalid-usage',
+        systemFingerprint: 'fingerprint-invalid-usage',
+      },
+    })
   })
 
   it('normalizes exact provider token usage into a metered result', async () => {
@@ -48,6 +70,8 @@ describe('Agent Provider Native Coding v2 boundary', () => {
       id: 'deepseek',
       name: 'DeepSeek',
       model: 'deepseek-v4-flash',
+      targetHost: 'api.deepseek.com',
+      requestTimeoutMs: 30_000,
       completeStructuredJson: vi.fn(async () => ({
         value: { stateVersion: 2 },
         usage: {
@@ -57,6 +81,11 @@ describe('Agent Provider Native Coding v2 boundary', () => {
           cacheMissTokens: 110,
           cacheStatus: 'complete',
           billingProvider: 'deepseek',
+        },
+        responseMetadata: {
+          httpStatus: 200,
+          responseId: 'response-safe-1',
+          systemFingerprint: 'fingerprint-safe-1',
         },
       })),
     } as unknown as AgentProvider)
@@ -76,6 +105,15 @@ describe('Agent Provider Native Coding v2 boundary', () => {
         cacheStatus: 'complete',
         billingProvider: 'deepseek',
       },
+      responseMetadata: {
+        httpStatus: 200,
+        responseId: 'response-safe-1',
+        systemFingerprint: 'fingerprint-safe-1',
+      },
+    })
+    expect(decisionProvider).toMatchObject({
+      targetHost: 'api.deepseek.com',
+      timeoutMs: 30_000,
     })
   })
 })

@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 async function installDesktopApi(
   page: import('@playwright/test').Page,
-  scenario: 'empty' | 'coding-permission' | 'coding-lifecycle' | 'clarification-revision' = 'empty',
+  scenario: 'empty' | 'coding-permission' | 'coding-lifecycle' | 'clarification-revision' | 'agent-ux-unpaired' | 'agent-ux-paired' = 'empty',
 ) {
   await page.addInitScript((initialScenario) => {
     let clarificationFeedbackRequested = initialScenario === 'clarification-revision'
@@ -101,9 +101,46 @@ async function installDesktopApi(
       }
     }
 
+    const agentUxState = (paired: boolean) => {
+      const designNode = {
+        id: 'node-agent-ux-design', stage: 'design', title: '方案设计', subtitle: '生成方案与测试策略',
+        kind: 'agent', status: 'running', ownerId: 'u-ling', retryCount: 0, artifactIds: [],
+      }
+      const designGate = {
+        id: 'node-agent-ux-design-gate', stage: 'design', title: '方案评审 Gate', subtitle: '人工确认设计方案',
+        kind: 'gate', status: 'pending', ownerId: 'u-ling', requiredRole: 'member', retryCount: 0, artifactIds: [],
+      }
+      return {
+        projects: [localProject],
+        runs: [{
+          id: 'run-agent-ux', version: 3, title: '设计 Agent 体验验收', request: '生成清晰的设计方案。',
+          projectId: localProject.id, creatorId: 'u-ling', status: 'designing', currentNodeId: designNode.id,
+          branchName: 'devflow/agent-ux', createdAt: '2026-08-30T12:00:00.000Z', updatedAt: '2026-08-30T12:00:00.000Z',
+          nodes: [designNode, designGate],
+          edges: [{ id: 'edge-agent-ux-design', source: designNode.id, target: designGate.id, kind: 'gate' }],
+        }],
+        artifacts: [], events: [], testEvidence: [], settings: { themePreference: 'system' }, mcpServers: [],
+        agentReviews: [], agentTraces: [], agentTokenUsage: [], codingRuns: [], codingEvents: [],
+        codingPermissionRequests: [], codingPermissionDecisions: [], managedCodingWorkspaces: [],
+        dependencyBootstrapEvidence: [], codingDiffArtifacts: [],
+        ...(paired ? {
+          desktopPairingCredential: {
+            tokenId: 'desktop-agent-ux-token', organizationId: 'org-agent-ux', projectId: 'team-agent-ux',
+            localProjectId: localProject.id, userId: 'u-ling', role: 'lead', issuedRole: 'lead',
+            expiresAt: '2999-01-01T00:00:00.000Z', userName: 'Ling', projectName: 'Agent UX Team',
+            authAccountId: 'acct-ling',
+            projectMemberships: [{ projectId: 'team-agent-ux', userId: 'u-ling', role: 'lead' }],
+            createdAt: '2026-08-30T12:00:00.000Z',
+          },
+        } : {}),
+      }
+    }
+
     ;(window as unknown as { aiDevFlowDesktop: unknown }).aiDevFlowDesktop = {
       platform: 'e2e',
-      loadState: async () => initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle'
+      loadState: async () => initialScenario === 'agent-ux-unpaired' || initialScenario === 'agent-ux-paired'
+        ? agentUxState(initialScenario === 'agent-ux-paired')
+        : initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle'
         ? codingScenarioState()
         : initialScenario === 'clarification-revision' ? (() => {
         const runId = 'run-clarification-e2e'
@@ -1150,6 +1187,102 @@ async function createFixtureRun(page: import('@playwright/test').Page) {
 }
 
 test.describe('AI DevFlow desktop workbench', () => {
+  test('keeps the unpaired design flow focused on one explained primary action', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.setViewportSize({ width: 1180, height: 760 })
+    await installDesktopApi(page, 'agent-ux-unpaired')
+    await page.goto('/')
+    await page.getByRole('button', { name: /^Agents$/ }).click()
+
+    const workbench = page.getByTestId('agent-workbench')
+    const currentTask = page.getByTestId('agent-current-task')
+    await expect(currentTask).toContainText('方案设计')
+    await expect(currentTask.getByRole('list', { name: '当前主操作的对象、结果和影响' })).toContainText('Provider 与费用')
+    await expect(currentTask).toContainText('只读检查仓库上下文，不修改仓库文件')
+    await expect(currentTask).toContainText('推进到方案评审 Gate；不会自动批准 Gate')
+    await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
+    await expect(workbench.locator('.primary-button:visible')).toHaveText(/生成设计方案/u)
+
+    const advanced = page.getByTestId('agent-advanced-tools')
+    const summary = advanced.locator('summary')
+    await expect(advanced).not.toHaveAttribute('open', '')
+    await expect(workbench.getByText('scenario.evaluate', { exact: true })).not.toBeVisible()
+    await expect(summary).toContainText('本地未配对 · 多 Agent 入口不可用')
+    await summary.focus()
+    await summary.press('Enter')
+    await expect(advanced).toHaveAttribute('open', '')
+
+    const coordinationAction = workbench.getByRole('button', { name: '创建固定多 Agent 验收会话（需先配对 Team）' })
+    await expect(coordinationAction).toBeDisabled()
+    await expect(coordinationAction).toHaveAccessibleDescription(/不可用：请先在页面顶部绑定.*必须先将当前 Local Project 配对到 Team Project/u)
+    await expect(workbench.getByRole('button', { name: '创建独立 Runtime 验证实例（高级）' })).toBeEnabled()
+    await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
+
+    const darkContrast = await page.evaluate(() => {
+      const styles = getComputedStyle(document.documentElement)
+      const luminance = (value: string) => {
+        const hex = value.trim().replace('#', '')
+        const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
+          .map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+        return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722
+      }
+      const foreground = luminance(styles.getPropertyValue('--text'))
+      const background = luminance(styles.getPropertyValue('--surface-2'))
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
+    })
+    expect(darkContrast).toBeGreaterThan(4.5)
+
+    await page.getByTestId('theme-toggle').click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+    const lightContrast = await page.evaluate(() => {
+      const styles = getComputedStyle(document.documentElement)
+      const luminance = (value: string) => {
+        const hex = value.trim().replace('#', '')
+        const channels = [0, 2, 4].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255)
+          .map((channel) => channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4)
+        return channels[0]! * 0.2126 + channels[1]! * 0.7152 + channels[2]! * 0.0722
+      }
+      const foreground = luminance(styles.getPropertyValue('--text'))
+      const background = luminance(styles.getPropertyValue('--surface-2'))
+      return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
+    })
+    expect(lightContrast).toBeGreaterThan(4.5)
+    await expect(currentTask.getByRole('button', { name: '生成设计方案' })).toBeVisible()
+  })
+
+  test('exposes paired Runtime and Coordination only through the keyboard-accessible advanced area', async ({ page }) => {
+    await installDesktopApi(page, 'agent-ux-paired')
+    await page.goto('/')
+    await page.getByRole('button', { name: /^Agents$/ }).click()
+
+    const workbench = page.getByTestId('agent-workbench')
+    const advanced = page.getByTestId('agent-advanced-tools')
+    const summary = advanced.locator('summary')
+    await expect(summary).toContainText('Team 已配对 · 多 Agent 入口可用')
+    await expect(workbench.getByRole('region', { name: '独立 Runtime 验收与诊断' })).not.toBeVisible()
+    await summary.focus()
+    await summary.press('Space')
+    await expect(advanced).toHaveAttribute('open', '')
+
+    await expect(workbench.getByRole('region', { name: '独立 Runtime 验收与诊断' })).toBeVisible()
+    await expect(workbench.getByRole('region', { name: '固定多 Agent 验收会话' })).toBeVisible()
+    await expect(workbench.getByTitle('Runtime：独立于当前 Workflow 的有界执行状态机。')).toBeVisible()
+    await expect(workbench.getByTitle('Multi-Agent Coordination：多个受限 Specialist 按固定依赖图协作。')).toBeVisible()
+    await expect(workbench.getByText('scenario.evaluate', { exact: true })).toBeVisible()
+    await expect(workbench).toContainText('首次创建不调用当前 Stage Provider')
+    await expect(workbench).toContainText('后续 bounded-implementer 可能只在受管工作区写入')
+    await expect(workbench).toContainText('不生成当前设计 Artifact、不推进工作流、不审批 Gate')
+
+    const runtimeAction = workbench.getByRole('button', { name: '创建独立 Runtime 验证实例（高级）' })
+    const coordinationAction = workbench.getByRole('button', { name: '创建固定多 Agent 验收会话（高级）' })
+    await expect(runtimeAction).toBeEnabled()
+    await expect(coordinationAction).toBeEnabled()
+    await expect(runtimeAction).toHaveClass(/ghost-button/u)
+    await expect(coordinationAction).toHaveClass(/ghost-button/u)
+    await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
+    await expect(workbench.locator('.primary-button:visible')).toHaveText(/生成设计方案/u)
+  })
+
   test('compares requirement inputs, requests changes, generates v2, and approves only v2', async ({ page }) => {
     await installDesktopApi(page, 'clarification-revision')
     await page.goto('/')

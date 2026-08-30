@@ -169,10 +169,11 @@ describe('AgentCoordinationPanel', () => {
         nodeId="run-1-build"
         expectedRunVersion={3}
         localProjectId="project-1"
+        isTeamPaired
       />,
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Start bounded coordination' }))
+    fireEvent.click(await screen.findByRole('button', { name: '创建固定多 Agent 验收会话（高级）' }))
     await waitFor(() => expect(api.startCoordinationPlan).toHaveBeenCalledWith({
       planId: 'bounded-repair-v1',
       runId: 'run-1',
@@ -185,9 +186,9 @@ describe('AgentCoordinationPanel', () => {
 
   it('preserves an unobtrusive empty state when the selected Run has no coordination session', async () => {
     const api = apiWith([])
-    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" isTeamPaired />)
 
-    expect(await screen.findByText('No Multi-Agent Coordination has been recorded for this Run.'))
+    expect(await screen.findByText('当前 Run 尚未创建多 Agent 验收会话；这是可选高级功能。'))
       .toBeInTheDocument()
     expect(api.listCoordinationSessions).toHaveBeenCalledWith({
       runId: 'run-1',
@@ -198,16 +199,16 @@ describe('AgentCoordinationPanel', () => {
 
   it('shows bounded graph, roles, dependencies, failure attribution, handoffs, and leases', async () => {
     const api = apiWith([coordinationSnapshot()])
-    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" isTeamPaired />)
 
     expect(await screen.findByText('coordination-ui-1')).toBeInTheDocument()
-    expect(screen.getByText('2 tasks · 1 dependency')).toBeInTheDocument()
-    expect(screen.getByText('2 / 8 steps')).toBeInTheDocument()
-    expect(screen.getByText('320 / 4000 tokens')).toBeInTheDocument()
+    expect(screen.getByText('2 个任务 · 1 个依赖')).toBeInTheDocument()
+    expect(screen.getByText('2 / 8')).toBeInTheDocument()
+    expect(screen.getByText('320 / 4000')).toBeInTheDocument()
     expect(screen.getByText('task-contract · contract-analyst')).toBeInTheDocument()
     expect(screen.getByText('task-test · test-analyst')).toBeInTheDocument()
-    expect(screen.getByText('Ready now')).toBeInTheDocument()
-    expect(screen.getByText('depends on task-contract')).toBeInTheDocument()
+    expect(screen.getByText('现在可启动')).toBeInTheDocument()
+    expect(screen.getByText('依赖 task-contract')).toBeInTheDocument()
     expect(screen.getByText('tool_error · repository_read_failed')).toBeInTheDocument()
     expect(screen.getByText('task-contract → task-test')).toBeInTheDocument()
     expect(screen.getByText('project-1 · read · released')).toBeInTheDocument()
@@ -219,7 +220,7 @@ describe('AgentCoordinationPanel', () => {
     const second = coordinationSnapshot('coordination-ui-2', '2026-08-13T15:00:04.000Z')
     const api = apiWith([second, first])
     const { rerender } = render(
-      <AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />,
+      <AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" isTeamPaired />,
     )
 
     expect(await screen.findByText('coordination-ui-2')).toBeInTheDocument()
@@ -234,10 +235,10 @@ describe('AgentCoordinationPanel', () => {
     const unsafe = { ...coordinationSnapshot(), summary: 'secret reasoning' }
     const unsafeApi = apiWith([unsafe])
     rerender(
-      <AgentCoordinationPanel desktopApi={unsafeApi} runId="run-2" localProjectId="project-2" />,
+      <AgentCoordinationPanel desktopApi={unsafeApi} runId="run-2" localProjectId="project-2" isTeamPaired />,
     )
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Multi-Agent Coordination state could not be loaded safely.',
+      '无法安全读取多 Agent 验收会话状态。',
     )
     expect(screen.queryByText('secret reasoning')).not.toBeInTheDocument()
   })
@@ -245,9 +246,9 @@ describe('AgentCoordinationPanel', () => {
   it('resumes and starts only the exact versioned session and ready task', async () => {
     const snapshot = coordinationSnapshot()
     const api = apiWith([snapshot])
-    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" isTeamPaired />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Resume coordination-ui-1' }))
+    fireEvent.click(await screen.findByRole('button', { name: '恢复多 Agent 会话 coordination-ui-1' }))
     await waitFor(() => expect(api.resumeCoordinationSession).toHaveBeenCalledWith({
       coordinationId: 'coordination-ui-1',
       runId: 'run-1',
@@ -255,7 +256,7 @@ describe('AgentCoordinationPanel', () => {
       expectedSessionVersion: 4,
     }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start task-test' }))
+    fireEvent.click(screen.getByRole('button', { name: '启动 Specialist 任务 task-test' }))
     await waitFor(() => expect(api.startCoordinationTask).toHaveBeenCalledWith({
       coordinationId: 'coordination-ui-1',
       runId: 'run-1',
@@ -272,9 +273,9 @@ describe('AgentCoordinationPanel', () => {
     const confirm = vi.spyOn(window, 'confirm')
       .mockReturnValueOnce(false)
       .mockReturnValueOnce(true)
-    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" />)
+    render(<AgentCoordinationPanel desktopApi={api} runId="run-1" localProjectId="project-1" isTeamPaired />)
 
-    const cancel = await screen.findByRole('button', { name: 'Cancel coordination-ui-1' })
+    const cancel = await screen.findByRole('button', { name: '取消多 Agent 会话 coordination-ui-1' })
     fireEvent.click(cancel)
     expect(api.cancelCoordinationSession).not.toHaveBeenCalled()
 

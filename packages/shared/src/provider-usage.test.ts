@@ -96,7 +96,7 @@ describe('parseOpenAiCompatibleProviderUsage', () => {
           total_tokens: 125,
         },
         {
-          providerId: 'compatible-gateway',
+          providerId: 'deepseek-via-compatible-gateway',
           model: 'deepseek-v4-flash',
           baseUrl: 'https://gateway.example.com/v1',
         },

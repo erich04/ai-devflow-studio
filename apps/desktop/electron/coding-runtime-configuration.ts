@@ -113,6 +113,13 @@ export async function evaluateCodingRuntimeReadiness(input: {
   selection: ResolvedCodingRuntimeSelection
   executor: CodingExecutor | null
   engineAvailable?: boolean
+  opencodeReadiness?: {
+    binaryAvailable: boolean
+    versionCompatible: boolean
+    authAvailable: boolean
+    profileAvailable: boolean
+    modelAvailable: boolean
+  }
   projectId: string
   runId: string
   nodeId: string
@@ -178,12 +185,33 @@ export async function evaluateCodingRuntimeReadiness(input: {
   )
 
   const configured = input.selection.executor !== 'unconfigured' && input.executor !== null
+  const usesOpenCodeProvider = input.selection.executor === 'opencode-http' ||
+    input.executor?.descriptor.kind === 'opencode'
   check(
     checks,
     'executor_unconfigured',
     configured,
     configured ? '项目已选择 Coding Agent Executor。' : '请先配置项目级 Coding Agent Executor。',
   )
+
+  if (usesOpenCodeProvider) {
+    const binaryAvailable = input.opencodeReadiness?.binaryAvailable ?? input.engineAvailable !== false
+    const versionCompatible = input.opencodeReadiness?.versionCompatible ?? input.engineAvailable !== false
+    check(
+      checks,
+      'binary_missing',
+      binaryAvailable,
+      binaryAvailable ? '已由 Electron Main 解析 OpenCode 可执行文件。' : 'Electron Main 未找到已确认的 OpenCode 可执行文件。',
+    )
+    check(
+      checks,
+      'version_incompatible',
+      versionCompatible,
+      versionCompatible
+        ? 'OpenCode 版本已通过当前 HTTP contract 验证。'
+        : 'OpenCode 版本与当前 DevFlow HTTP contract 不兼容。',
+    )
+  }
 
   const engineReady = Boolean(
     configured &&
@@ -226,12 +254,37 @@ export async function evaluateCodingRuntimeReadiness(input: {
   const providerSecret = providerId
     ? await input.store.getProviderEncryptedSecret(providerId)
     : null
-  const usesOpenCodeProvider = input.selection.executor === 'opencode-http' ||
-    input.executor?.descriptor.kind === 'opencode'
+  const opencodeProfileReady = input.opencodeReadiness?.profileAvailable ?? Boolean(providerId)
+  const opencodeModelReady = input.opencodeReadiness?.modelAvailable ?? Boolean(input.executor?.modelId)
+  const opencodeAuthReady = input.opencodeReadiness?.authAvailable ?? !usesOpenCodeProvider
+  if (usesOpenCodeProvider) {
+    check(
+      checks,
+      'auth_unavailable',
+      opencodeAuthReady,
+      opencodeAuthReady
+        ? 'OpenCode 本地认证目录可用；credential 仍由 OpenCode 管理。'
+        : 'OpenCode 本地认证目录不可用；不会启动 Provider 调用。',
+    )
+    check(
+      checks,
+      'profile_unavailable',
+      opencodeProfileReady,
+      opencodeProfileReady
+        ? '项目已明确选择 OpenCode Provider/profile。'
+        : '项目尚未选择 OpenCode Provider/profile。',
+    )
+    check(
+      checks,
+      'model_unavailable',
+      opencodeModelReady,
+      opencodeModelReady ? '项目已明确选择 OpenCode model。' : '项目尚未选择 OpenCode model。',
+    )
+  }
   const providerReady = Boolean(
     input.selection.executor === 'native-deterministic' ||
       input.selection.executor === 'compatibility' ||
-      (usesOpenCodeProvider && providerId && input.executor?.modelId) ||
+      (usesOpenCodeProvider && providerId && opencodeProfileReady && opencodeModelReady && opencodeAuthReady) ||
       (providerMetadata && providerSecret),
   )
   check(
@@ -289,26 +342,36 @@ export async function evaluateCodingRuntimeReadiness(input: {
           : '请先确认并保存项目 Runtime Budget Policy。',
       )
       if (budgetPolicy) {
-        const estimated = estimateNativeCodingWorstCaseCost({
-          runId: input.runId,
-          nodeId: input.nodeId,
-          projectId: input.projectId,
-          requestedBy: input.requestedBy,
-          providerId,
-          model: input.executor?.modelId ?? providerMetadata?.model ?? providerId,
-          ...(input.executor?.billingProvider
-            ? { billingProvider: input.executor.billingProvider }
-            : {}),
-          timestamp: evaluatedAt,
-        })
-        budgetDecision = await input.evaluateBudget({
-          projectId: project.id,
-          providerId,
-          projectedCostUsd: estimated.costUsd,
-          ...(input.runtimeBudgetApprovalId
-            ? { approvalId: input.runtimeBudgetApprovalId }
-            : {}),
-        })
+        if (usesOpenCodeProvider && input.executor?.billing !== 'metered') {
+          budgetDecision = {
+            status: 'disabled',
+            blocksRun: false,
+            currentSpendUsd: 0,
+            projectedCostUsd: 0,
+            reason: 'OpenCode usage is subscription/opaque; dollar cost is unknown and non-dollar runtime limits apply.',
+          }
+        } else {
+          const estimated = estimateNativeCodingWorstCaseCost({
+            runId: input.runId,
+            nodeId: input.nodeId,
+            projectId: input.projectId,
+            requestedBy: input.requestedBy,
+            providerId,
+            model: input.executor?.modelId ?? providerMetadata?.model ?? providerId,
+            ...(input.executor?.billingProvider
+              ? { billingProvider: input.executor.billingProvider }
+              : {}),
+            timestamp: evaluatedAt,
+          })
+          budgetDecision = await input.evaluateBudget({
+            projectId: project.id,
+            providerId,
+            projectedCostUsd: estimated.costUsd,
+            ...(input.runtimeBudgetApprovalId
+              ? { approvalId: input.runtimeBudgetApprovalId }
+              : {}),
+          })
+        }
         check(
           checks,
           'budget_blocked',
