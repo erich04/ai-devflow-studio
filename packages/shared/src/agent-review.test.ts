@@ -80,7 +80,7 @@ describe('Knowledge Review cost preflight', () => {
       providerId: 'team-openai',
       model: 'gpt-4.1-mini',
       prompt: createKnowledgeReviewPrompt(context),
-      maxOutputTokens: 1_024,
+      maxOutputTokens: 2_048,
       noCost: false,
     })
     expect(preflight.inputTokens).toBeGreaterThan(0)
@@ -1093,6 +1093,33 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
   })
 
+  it('requests non-thinking JSON output for DeepSeek structured decisions', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    const provider = createOpenAiCompatibleAgentProvider({
+      id: 'deepseek-production',
+      model: 'deepseek-v4-flash',
+      baseUrl: 'https://api.deepseek.com',
+      apiKey: 'secret-key',
+      fetcher: async (_, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return new Response(JSON.stringify({
+          choices: [{ message: { content: '{"stateVersion":2,"ok":true}' } }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    })
+
+    await provider.completeStructuredJson?.({
+      systemPrompt: 'Return JSON.',
+      userPrompt: 'Choose one bounded action.',
+      maxOutputTokens: 100,
+    })
+
+    expect(requestBody).toMatchObject({
+      thinking: { type: 'disabled' },
+      response_format: { type: 'json_object' },
+    })
+  })
+
   it('accepts one json Markdown fence but rejects prose or nested fences', async () => {
     const responseFor = (content: string) => new Response(JSON.stringify({
       choices: [{ message: { content } }],
@@ -1183,9 +1210,64 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       prompt: createKnowledgeReviewPrompt(context),
     })
 
-    expect(requestBody).toMatchObject({ max_tokens: 1_024 })
+    expect(requestBody).toMatchObject({ max_tokens: 2_048 })
     expect(JSON.stringify(requestBody)).toContain('REQUEST_PROVIDER_CANARY')
     expect(JSON.stringify(requestBody)).toContain('PROVIDER_BODY_ONLY_CANARY')
+  })
+
+  it('requests non-thinking JSON output for DeepSeek knowledge reviews', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    const provider = createOpenAiCompatibleAgentProvider({
+      id: 'deepseek-production',
+      model: 'deepseek-v4-flash',
+      apiKey: 'secret-key',
+      baseUrl: 'https://api.deepseek.com',
+      fetcher: async (_, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return new Response(
+          JSON.stringify({
+            choices: [{
+              message: {
+                content: JSON.stringify({
+                  conclusion: 'ok',
+                  summary: 'deepseek structured review',
+                  risks: [],
+                  missingEvidence: [],
+                  suggestedTests: [],
+                  confidence: 0.9,
+                }),
+              },
+            }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      },
+    })
+
+    await provider.reviewKnowledge({
+      request: {
+        id: 'review-request-deepseek-json',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'api',
+      },
+      context: await buildAgentReviewContext({
+        run,
+        node,
+        artifacts,
+        testEvidence: [],
+        knowledgeDocuments,
+        knowledgeChunks,
+      }),
+      prompt: 'Return a review as JSON.',
+    })
+
+    expect(requestBody).toMatchObject({
+      thinking: { type: 'disabled' },
+      response_format: { type: 'json_object' },
+    })
   })
 
   it('sends a plain chat-completions request without provider-specific JSON mode', async () => {
@@ -1363,6 +1445,66 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       summary: 'live clarification',
       goals: ['clarify scope'],
       usage: { inputTokens: 20, outputTokens: 10 },
+    })
+  })
+
+  it('requests non-thinking JSON output for DeepSeek workflow artifacts', async () => {
+    let requestBody: Record<string, unknown> | undefined
+    const provider = createOpenAiCompatibleAgentProvider({
+      id: 'deepseek-production',
+      model: 'deepseek-v4-flash',
+      apiKey: 'secret-key',
+      baseUrl: 'https://api.deepseek.com',
+      fetcher: async (_, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                title: '方案设计',
+                summary: 'deepseek workflow artifact',
+                goals: [],
+                acceptanceCriteria: [],
+                nonGoals: [],
+                openQuestions: [],
+                assumptions: [],
+                risks: [],
+              }),
+            },
+          }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    })
+
+    await provider.generateWorkflowArtifact?.({
+      request: {
+        id: 'workflow-request-deepseek-json',
+        runId: run.id,
+        nodeId: node.id,
+        projectId: run.projectId,
+        requestedBy: 'u-ling',
+        runtime: 'electron',
+        stage: 'design',
+        providerId: 'deepseek-production',
+      },
+      context: {
+        run: {
+          id: run.id,
+          title: run.title,
+          request: run.request,
+          projectId: run.projectId,
+          status: run.status,
+          branchName: run.branchName,
+        },
+        node,
+        artifacts,
+      },
+      prompt: 'Return a design as JSON.',
+    })
+
+    expect(requestBody).toMatchObject({
+      thinking: { type: 'disabled' },
+      response_format: { type: 'json_object' },
     })
   })
 

@@ -306,7 +306,7 @@ const MODEL_PRICES_PER_1K: Record<string, { input: number; output: number }> = {
 
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID = 'fake-knowledge-review'
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL = 'fake'
-export const KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS = 1_024
+export const KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS = 2_048
 export const KNOWLEDGE_REVIEW_MAX_CHUNKS = 8
 export const KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS = 4_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS = 24_000
@@ -1716,13 +1716,14 @@ export function createOpenAiCompatibleAgentProvider({
     throw new Error('Agent provider structured request timeout is invalid')
   }
   const targetHost = providerTargetHost(baseUrl)
+  const deepSeek = isDeepSeekUsageContext({ providerId: id, baseUrl })
   return {
     id,
     name,
     model,
     targetHost,
     requestTimeoutMs: structuredRequestTimeoutMs,
-    billingProvider: isDeepSeekUsageContext({ providerId: id, baseUrl })
+    billingProvider: deepSeek
       ? 'deepseek'
       : 'openai_compatible',
     async reviewKnowledge({ prompt }) {
@@ -1736,6 +1737,12 @@ export function createOpenAiCompatibleAgentProvider({
           model,
           temperature: 0.2,
           max_tokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
+          ...(deepSeek
+            ? {
+                thinking: { type: 'disabled' },
+                response_format: { type: 'json_object' },
+              }
+            : {}),
           messages: [
             {
               role: 'system',
@@ -1815,6 +1822,12 @@ export function createOpenAiCompatibleAgentProvider({
             model,
             temperature: 0,
             max_tokens: input.maxOutputTokens,
+            ...(deepSeek
+              ? {
+                  thinking: { type: 'disabled' },
+                  response_format: { type: 'json_object' },
+                }
+              : {}),
             messages: [
               { role: 'system', content: input.systemPrompt },
               { role: 'user', content: input.userPrompt },
@@ -1944,6 +1957,12 @@ export function createOpenAiCompatibleAgentProvider({
         body: JSON.stringify({
           model,
           temperature: 0.2,
+          ...(deepSeek
+            ? {
+                thinking: { type: 'disabled' },
+                response_format: { type: 'json_object' },
+              }
+            : {}),
           messages: [
             {
               role: 'system',

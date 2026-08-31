@@ -9,6 +9,7 @@ import { createCodingRuntime } from './coding-runtime.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import { createLocalStore } from './local-store.js'
 import {
+  createNativeCodingV2RepairSystemPrompt,
   createNativeCodingExecutorV2,
   type NativeCodingV2DecisionProvider,
 } from './native-coding-executor-v2.js'
@@ -31,6 +32,23 @@ async function temporaryDirectory(prefix: string): Promise<string> {
 }
 
 describe('Native Coding Executor v2 runtime', () => {
+  it('binds repair output to the exact previously approved paths and JSON schema', () => {
+    const prompt = createNativeCodingV2RepairSystemPrompt([
+      'src/agent/contracts.ts',
+      'src/web/App.tsx',
+    ])
+
+    expect(prompt).toContain('"path":"one/exact/allowed/path"')
+    expect(prompt).toContain('The top-level keys are exactly stateVersion, changes, summary')
+    expect(prompt).toContain('src/agent/contracts.ts')
+    expect(prompt).toContain('src/web/App.tsx')
+    expect(prompt).toContain('Do not use any other path')
+    expect(prompt).toContain('changes must contain between 1 and 6 file entries')
+    expect(prompt).toContain('fix the public contract from an allowed file')
+    expect(prompt).toContain('Respect ownership boundaries named in the brief')
+    expect(prompt).toContain('Generate each value exactly once at its named owning boundary')
+  })
+
   it('proposes, approves, applies, tests, and archives an exact multi-file-safe Change Set', async () => {
     const repositoryPath = await temporaryDirectory('devflow-native-v2-repository')
     const worktreeRoot = await temporaryDirectory('devflow-native-v2-worktrees')
@@ -82,9 +100,13 @@ describe('Native Coding Executor v2 runtime', () => {
       }],
       edges: [],
     }
+    let analysisSystemPrompt = ''
+    let initialSystemPrompt = ''
     const provider: NativeCodingV2DecisionProvider = {
       id: 'deepseek', version: 2, modelId: 'deepseek-v4-flash', billing: 'metered',
       async complete(input) {
+        if (input.phase === 'analysis') analysisSystemPrompt = input.systemPrompt
+        if (input.phase === 'initial') initialSystemPrompt = input.systemPrompt
         return input.phase === 'analysis'
           ? {
               value: {
@@ -107,9 +129,13 @@ describe('Native Coding Executor v2 runtime', () => {
                 stateVersion: 2,
                 changes: [{
                   path: 'src/message.ts',
-                  replacements: [{ oldText: 'message = "old"', newText: 'message = "new"' }],
+                  replacements: [
+                    { oldText: 'message = "old"', newText: 'message = "new"' },
+                    { oldText: 'export const', newText: 'export const' },
+                  ],
                 }],
                 summary: 'Replace only the requested message.',
+                explanation: 'This ignored metadata must not expand workspace authority.',
               },
               usage: {
                 inputTokens: 30,
@@ -177,6 +203,14 @@ describe('Native Coding Executor v2 runtime', () => {
       requestedBy: run.creatorId,
       userInstruction: 'Change the message from old to new.',
     })
+    expect(analysisSystemPrompt).toContain('"path/from/repositoryManifest"')
+    expect(analysisSystemPrompt).toContain('Do not add extra keys')
+    expect(initialSystemPrompt).toContain('"oldText":"exact existing text"')
+    expect(initialSystemPrompt).toContain('Do not add extra keys')
+    expect(initialSystemPrompt).toContain('oldText must be a non-empty string')
+    expect(initialSystemPrompt).toContain('oldText and newText must not be identical')
+    expect(initialSystemPrompt).toContain('Respect ownership boundaries named in the brief')
+    expect(initialSystemPrompt).toContain('Generate each value exactly once at its named owning boundary')
     expect(waiting.codingRun).toMatchObject({
       status: 'waiting_permission', engine: 'native', providerId: 'deepseek',
       configVersion: 1, runtimeCostSummary: { source: 'provider_reported' },

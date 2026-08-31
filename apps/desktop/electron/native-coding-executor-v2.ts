@@ -129,6 +129,10 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return actual.length === expected.length && actual.every((key, index) => key === expected[index])
 }
 
+function hasRequiredKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return keys.every((key) => Object.hasOwn(value, key))
+}
+
 function isCanonicalRelativePath(value: unknown): value is string {
   return (
     typeof value === 'string' &&
@@ -335,21 +339,33 @@ function parseSearchPlan(value: unknown, manifest: readonly string[]): SearchPla
 }
 
 function parseChangeProposal(value: unknown, allowedPaths: ReadonlySet<string>): ChangeProposal {
+  if (!isPlainRecord(value)) {
+    throw new Error('Native Coding v2 Change Set proposal is not an object')
+  }
+  if (!hasRequiredKeys(value, ['stateVersion', 'changes', 'summary'])) {
+    throw new Error('Native Coding v2 Change Set proposal keys are invalid')
+  }
+  if (value.stateVersion !== 2) {
+    throw new Error('Native Coding v2 Change Set proposal version is invalid')
+  }
+  if (!Array.isArray(value.changes)) {
+    throw new Error('Native Coding v2 Change Set proposal changes are invalid')
+  }
+  if (value.changes.length < 1) {
+    throw new Error('Native Coding v2 Change Set proposal is empty')
+  }
+  if (value.changes.length > 6) {
+    throw new Error('Native Coding v2 Change Set proposal has too many files')
+  }
   if (
-    !isPlainRecord(value) ||
-    !hasExactKeys(value, ['stateVersion', 'changes', 'summary']) ||
-    value.stateVersion !== 2 ||
-    !Array.isArray(value.changes) ||
-    value.changes.length < 1 ||
-    value.changes.length > 6 ||
     typeof value.summary !== 'string' ||
     value.summary.length < 1 ||
     value.summary.length > 1_000
   ) {
-    throw new Error('Native Coding v2 Change Set proposal is invalid')
+    throw new Error('Native Coding v2 Change Set proposal summary is invalid')
   }
   let replacements = 0
-  const changes = value.changes.map((entry) => {
+  const changes = value.changes.flatMap((entry) => {
     if (
       !isPlainRecord(entry) ||
       !hasExactKeys(entry, ['path', 'replacements']) ||
@@ -360,26 +376,53 @@ function parseChangeProposal(value: unknown, allowedPaths: ReadonlySet<string>):
     ) {
       throw new Error('Native Coding v2 Change Set path is invalid')
     }
-    const parsed = entry.replacements.map((replacement) => {
-      if (
-        !isPlainRecord(replacement) ||
-        !hasExactKeys(replacement, ['oldText', 'newText']) ||
-        typeof replacement.oldText !== 'string' ||
-        typeof replacement.newText !== 'string' ||
-        replacement.oldText.length < 1 ||
-        replacement.oldText === replacement.newText
-      ) {
-        throw new Error('Native Coding v2 exact replacement is invalid')
+    const parsed = entry.replacements.flatMap((replacement) => {
+      if (!isPlainRecord(replacement)) {
+        throw new Error('Native Coding v2 exact replacement is not an object')
+      }
+      if (!hasExactKeys(replacement, ['oldText', 'newText'])) {
+        throw new Error('Native Coding v2 exact replacement keys are invalid')
+      }
+      if (typeof replacement.oldText !== 'string' || replacement.oldText.length < 1) {
+        throw new Error('Native Coding v2 exact replacement oldText is invalid')
+      }
+      if (typeof replacement.newText !== 'string') {
+        throw new Error('Native Coding v2 exact replacement newText is invalid')
+      }
+      if (replacement.oldText === replacement.newText) {
+        return []
       }
       replacements += 1
-      return { oldText: replacement.oldText, newText: replacement.newText }
+      return [{ oldText: replacement.oldText, newText: replacement.newText }]
     })
-    return { path: entry.path, replacements: parsed }
+    return parsed.length > 0 ? [{ path: entry.path, replacements: parsed }] : []
   })
+  if (changes.length < 1) {
+    throw new Error('Native Coding v2 Change Set proposal has no effective replacements')
+  }
   if (replacements > 12 || new Set(changes.map((change) => change.path)).size !== changes.length) {
     throw new Error('Native Coding v2 Change Set bounds are invalid')
   }
   return { stateVersion: 2, changes, summary: safeText(value.summary) }
+}
+
+export function createNativeCodingV2RepairSystemPrompt(
+  allowedPaths: readonly string[],
+): string {
+  return [
+    'Return one JSON object only, without Markdown or prose.',
+    'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"one/exact/allowed/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded repair"}.',
+    'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
+    'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
+    'changes must contain between 1 and 6 file entries; never return an empty changes array.',
+    `Every path must exactly equal one entry in this allowed path list: ${JSON.stringify(allowedPaths)}. Do not use any other path.`,
+    'If a TypeScript error appears in a file outside the allowed list, fix the public contract from an allowed file instead of editing the outside file.',
+    'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
+    'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
+    'oldText must be a non-empty string. newText must be a string. oldText and newText must not be identical. Do not include unchanged or placeholder replacements.',
+    'oldText must be copied verbatim from the supplied excerpt for that same path and occur exactly once.',
+    'Repair only supplied files. Do not create, delete, rename, or touch any path outside the initial Change Set.',
+  ].join(' ')
 }
 
 async function buildRepositoryManifest(worktreePath: string): Promise<string[]> {
@@ -941,9 +984,11 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         limits: { maxFiles: 8, maxSearches: 8, literalSearchOnly: true },
       })
       const analysisSystemPrompt = [
-        'Return only JSON with exact keys stateVersion, files, searches, summary.',
-        'stateVersion is 2. Select only paths from repositoryManifest.',
-        'searches contain literal query and optional path. Do not propose edits yet.',
+        'Return one JSON object only, without Markdown or prose.',
+        'Use exactly this shape: {"stateVersion":2,"files":["path/from/repositoryManifest"],"searches":[{"query":"literal text","path":"path/from/repositoryManifest"}],"summary":"bounded repository analysis"}.',
+        'The top-level keys are exactly stateVersion, files, searches, summary. Do not add extra keys.',
+        'stateVersion must be the number 2. Every files item and optional searches.path must exactly equal one file path from repositoryManifest; do not use directories or globs.',
+        'Each searches item has only query and optional path. searches may be empty. Do not propose edits yet.',
       ].join(' ')
       const analysis = await runProviderCall({
         codingRunId: request.id,
@@ -971,12 +1016,18 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         brief: safeText(context.brief.prompt).slice(0, 10_000),
         analysisSummary: plan.summary,
         excerpts,
+        allowedPaths: excerpts.map((excerpt) => excerpt.path),
         limits: { existingUtf8Files: true, maxFiles: 6, maxReplacements: 12 },
       })
       const initialSystemPrompt = [
-        'Return only JSON with exact keys stateVersion, changes, summary.',
-        'stateVersion is 2. Each change has exact keys path and replacements.',
-        'Each replacement has exact oldText and newText. oldText must occur exactly once.',
+        'Return one JSON object only, without Markdown or prose.',
+        'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"supplied/excerpt/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded implementation"}.',
+        'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
+        'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
+        'oldText must be a non-empty string. newText must be a string. oldText and newText must not be identical. Do not include unchanged or placeholder replacements.',
+        'oldText must be copied verbatim from a supplied excerpt and occur exactly once.',
+        'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
+        'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
         'Use only supplied excerpt paths. Do not create, delete, rename, or edit binary files.',
       ].join(' ')
       const initialResult = await runProviderCall({
@@ -1167,13 +1218,10 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             stderr: safeText(tested.result.stderr).slice(-4_000),
           },
           excerpts,
+          allowedPaths: [...initialPaths],
           limits: { existingPreviouslyChangedFilesOnly: true, maxFiles: 6, maxReplacements: 12 },
         })
-        const repairSystemPrompt = [
-          'Return only JSON with exact keys stateVersion, changes, summary.',
-          'stateVersion is 2. Repair only supplied files using exact oldText/newText replacements.',
-          'Do not create, delete, rename, or touch any path outside the initial Change Set.',
-        ].join(' ')
+        const repairSystemPrompt = createNativeCodingV2RepairSystemPrompt([...initialPaths])
         const repairResult = await runProviderCall({
           codingRunId: codingRun.id,
           ...(context.reportProviderCall
