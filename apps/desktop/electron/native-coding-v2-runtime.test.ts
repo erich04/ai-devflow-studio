@@ -43,13 +43,15 @@ describe('Native Coding Executor v2 runtime', () => {
     expect(prompt).toContain('src/agent/contracts.ts')
     expect(prompt).toContain('src/web/App.tsx')
     expect(prompt).toContain('Do not use any other path')
-    expect(prompt).toContain('changes must contain between 1 and 6 file entries')
+    expect(prompt).toContain('return an empty changes array')
+    expect(prompt).toContain('Do not undo correct requested behavior')
     expect(prompt).toContain('fix the public contract from an allowed file')
     expect(prompt).toContain('Respect ownership boundaries named in the brief')
     expect(prompt).toContain('Generate each value exactly once at its named owning boundary')
   })
 
-  it('proposes, approves, applies, tests, and archives an exact multi-file-safe Change Set', async () => {
+  it.each(['success', 'unrepairable', 'invalid_repair'] as const)(
+    'preserves exact changes and executed evidence for %s', async (scenario) => {
     const repositoryPath = await temporaryDirectory('devflow-native-v2-repository')
     const worktreeRoot = await temporaryDirectory('devflow-native-v2-worktrees')
     const storeDirectory = await temporaryDirectory('devflow-native-v2-store')
@@ -58,7 +60,9 @@ describe('Native Coding Executor v2 runtime', () => {
     await writeFile(path.join(repositoryPath, 'src/message.ts'), 'export const message = "old"\n', 'utf8')
     await writeFile(
       path.join(repositoryPath, 'test.mjs'),
-      "import { readFile } from 'node:fs/promises'\nif ((await readFile('src/message.ts', 'utf8')) !== 'export const message = \\\"new\\\"\\n') process.exit(1)\n",
+      scenario === 'success'
+        ? "import { readFile } from 'node:fs/promises'\nif ((await readFile('src/message.ts', 'utf8')) !== 'export const message = \\\"new\\\"\\n') process.exit(1)\n"
+        : "import './node_modules/missing-tool/lib/check.js'\n",
       'utf8',
     )
     await writeFile(
@@ -107,6 +111,14 @@ describe('Native Coding Executor v2 runtime', () => {
       async complete(input) {
         if (input.phase === 'analysis') analysisSystemPrompt = input.systemPrompt
         if (input.phase === 'initial') initialSystemPrompt = input.systemPrompt
+        if (input.phase === 'repair') {
+          return {
+            value: scenario === 'unrepairable'
+              ? { stateVersion: 2, changes: [], summary: 'Missing dependency cannot be repaired by changing the requested message.' }
+              : { stateVersion: 2, changes: 'invalid', summary: 'Invalid repair response.' },
+            usage: { inputTokens: 40, outputTokens: 20 },
+          }
+        }
         return input.phase === 'analysis'
           ? {
               value: {
@@ -228,13 +240,37 @@ describe('Native Coding Executor v2 runtime', () => {
     expect(permission).not.toHaveProperty('filePath')
     expect(changeSet!.unifiedDiff).toContain('diff --git a/src/message.ts b/src/message.ts')
 
-    await runtime.replyCodingPermission({
+    const approval = runtime.replyCodingPermission({
       requestId: permission.id,
       codingRunId: permission.codingRunId,
       decidedBy: run.creatorId,
       decision: 'approved',
       comment: 'Approve the exact persisted Change Set once.',
     })
+
+    if (scenario !== 'success') {
+      await expect(approval).rejects.toThrow(scenario === 'unrepairable' ? 'no safe repair' : 'invalid_model_output')
+      const [failed] = await store.listCodingAgentRuns(run.id)
+      expect(failed?.status).toBe('failed')
+      expect((await store.getRun(run.id))?.currentNodeId).toBe(run.currentNodeId)
+      expect(await store.listCodingChangeSets(waiting.codingRun.id)).toHaveLength(1)
+      expect((await store.listCodingPermissionRequests(waiting.codingRun.id)).filter((entry) => entry.status === 'pending')).toEqual([])
+      const [failureEvidence] = await store.listTestEvidence(run.id)
+      expect(failureEvidence).toMatchObject({ status: 'failed', exitCode: 1, cwd: '<workspace>', redacted: true })
+      expect(failureEvidence?.stderr).toContain('ERR_MODULE_NOT_FOUND')
+      const providerTraces = (await store.listCodingAgentEvents(waiting.codingRun.id))
+        .map((event) => event.metadata?.providerCall)
+      expect(providerTraces).toEqual(expect.arrayContaining([expect.objectContaining({
+        phase: 'repair',
+        status: scenario === 'unrepairable' ? 'succeeded' : 'failed',
+        billingState: 'confirmed',
+        usage: expect.objectContaining({ inputTokens: 40, outputTokens: 20 }),
+      })]))
+      await expect(readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8')).resolves.toBe('export const message = "old"\n')
+      store.close()
+      return
+    }
+    await approval
 
     const [completed] = await store.listCodingAgentRuns(run.id)
     expect(completed).toMatchObject({
