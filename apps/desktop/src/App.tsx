@@ -48,6 +48,7 @@ import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
 import { useCodingRuntimeReadiness } from './app/useCodingRuntimeReadiness'
+import { useProjectRuntimeBudget } from './app/useProjectRuntimeBudget'
 import { buildCodingRuntimeActionProjection } from './app/coding-runtime-action-projection'
 import type { DesktopDataProfileDiagnostics } from './desktop-api'
 import { WorkRequestInbox } from './WorkRequestInbox'
@@ -697,6 +698,13 @@ export function App() {
   const selectedCodingTestEvidence = latestCodingRun
     ? scopedTestEvidence.find((evidence) => evidence.id === latestCodingRun.testEvidenceId)
     : undefined
+  const projectRuntimeBudget = useProjectRuntimeBudget({
+    desktopApi,
+    projectId: selectedLocalProject?.id,
+    bindingKey: hasSelectedLocalProjectBinding
+      ? `${selectedTeamProjectId}:${desktopPairing?.tokenId ?? ''}:${selectedLocalProject?.updatedAt ?? ''}`
+      : '',
+  })
   const codingRuntime = useCodingRuntimeReadiness({
     desktopApi,
     projectId: selectedLocalProject?.id,
@@ -765,7 +773,7 @@ export function App() {
   )
   const today = new Date().toISOString().slice(0, 10)
   const testsTodayCount = scopedTestEvidence.filter((evidence) => evidence.createdAt.slice(0, 10) === today).length
-  const budgetStatus = latestCodingRun?.budgetDecision?.status ?? (runtimeBudgetApprovalId ? 'approval entered' : 'not loaded')
+  const budgetStatus = latestCodingRun?.budgetDecision?.status ?? (runtimeBudgetApprovalId ? 'approval entered' : '尚未执行')
   const budgetTone =
     budgetStatus === 'allowed' || budgetStatus === 'approved_over_budget'
       ? 'good'
@@ -1224,7 +1232,8 @@ export function App() {
           <span className="stat">Policy Snapshot <strong>{policyVersion ? `v${policyVersion}` : 'not loaded'}</strong></span>
           <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
           <span className="stat" data-testid="runtime-budget-status">
-            预算状态 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong>
+            预算策略 <strong className={`pill ${projectRuntimeBudget.status === 'unavailable' ? 'bad' : projectRuntimeBudget.policy?.enabled ? 'good' : 'soft'}`}>{projectRuntimeBudget.label}</strong>
+            预算评估 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong>
             {budgetRecoveryCopy ? <em>{budgetRecoveryCopy}</em> : null}
           </span>
         </section>
@@ -1507,6 +1516,8 @@ export function App() {
 
         {activeView === 'agents' && (
           <AgentWorkbenchView
+            key={`${selectedLocalProject?.id ?? ''}:${desktopPairing?.tokenId ?? ''}`}
+            projectRuntimeBudget={projectRuntimeBudget}
             desktopApi={desktopApi}
             localProjectId={selectedLocalProject?.id}
             isTeamPaired={hasSelectedLocalProjectBinding}

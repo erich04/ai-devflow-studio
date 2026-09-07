@@ -5137,7 +5137,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
-    expect(await screen.findByText('新增 Agent Provider')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('新增 Agent Provider')).toBeInTheDocument())
     expect(screen.getByLabelText('Saved Agent Provider')).toBeInTheDocument()
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
       '已保存 Provider 配置 实时 OpenAI 兼容服务 · 可能消耗模型 Token',
@@ -5975,6 +5975,28 @@ describe('App', () => {
     await screen.findByTestId('agent-workbench')
     expect(screen.queryByLabelText('Runtime budget approval ID')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '使用预算批准重新运行' })).not.toBeInTheDocument()
+  })
+
+  it('updates the global Team budget after saving before any Coding Run and restores it on reload', async () => {
+    const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue({
+      ...localStateAtCurrentNode('n-design-gate'), codingRuns: [],
+    }) })
+    const view = render(<App />)
+    const status = await screen.findByTestId('runtime-budget-status')
+    await waitFor(() => expect(status).toHaveTextContent('未配置'))
+    expect(status).toHaveTextContent('尚未执行')
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    fireEvent.change(await screen.findByLabelText('Coding monthly budget'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('Coding warning budget'), { target: { value: '0.5' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存预算策略' }))
+    await waitFor(() => expect(status).toHaveTextContent('已配置 · $1.00'))
+    expect(status).not.toHaveTextContent('not loaded')
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    const saved = await vi.mocked(api.saveCodingRuntimeBudgetPolicy).mock.results[0]!.value
+    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(saved)
+    view.unmount()
+    render(<App />)
+    await waitFor(() => expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {
