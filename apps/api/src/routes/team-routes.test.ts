@@ -1238,6 +1238,19 @@ describe('team API route resolver', () => {
     expect(repository.createProject).not.toHaveBeenCalled()
   })
 
+  it('rejects an expired browser session before writing a new project', async () => {
+    const repository = createRepository()
+    const result = await resolveTeamRoute('POST', '/api/team/projects', repository, {
+      body: {
+        name: 'Agent Platform', slug: 'agent-platform',
+        description: 'Pilot project.', repository: 'erich/agent-platform',
+      },
+    })
+
+    expect(result?.status).toBe(401)
+    expect(repository.createProject).not.toHaveBeenCalled()
+  })
+
   it('creates a desktop pairing code for a project lead', async () => {
     const repository = createRepository()
 

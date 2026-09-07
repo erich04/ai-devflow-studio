@@ -389,6 +389,17 @@ afterEach(() => {
 })
 
 describe('web product shell page', () => {
+  it('links budget configuration to the selected second project even before a Run exists', async () => {
+    mockedFetchTeamOverview.mockResolvedValue({
+      ...overview,
+      projects: [...overview.projects, { ...overview.projects[0]!, id: 'p-new', name: 'New Project' }],
+    })
+    render(await Page({ searchParams: Promise.resolve({ projectId: 'p-new' }) }))
+    expect(screen.getByRole('link', { name: '预算详情' })).toHaveAttribute(
+      'href', '/legacy-shell?projectId=p-new#runtime-budget',
+    )
+  })
+
   it('requires an explicit project selection instead of choosing the global latest run', async () => {
     mockedFetchTeamOverview.mockResolvedValue(overview)
 

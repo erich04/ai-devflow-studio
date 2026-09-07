@@ -1021,6 +1021,19 @@ describe('DevFlow web API client', () => {
     })
   })
 
+  it.each([400, 401, 403, 409, 503])('preserves project creation HTTP status %s for recoverable feedback', async (status) => {
+    const result = createTeamProject({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () => new Response(null, { status })),
+      name: 'Agent Platform',
+      slug: 'agent-platform',
+      description: 'Pilot project.',
+      repository: 'erich/agent-platform',
+    })
+
+    await expect(result).rejects.toMatchObject({ status })
+  })
+
   it('creates a copy-once desktop pairing code through the API boundary', async () => {
     const fetcher = vi.fn(async () =>
       new Response(
