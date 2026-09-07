@@ -36,10 +36,15 @@ import {
   type NativeToolCapabilityGrantRecord,
   type NativeToolAuditRecord,
 } from './native-tool-registry.js'
+import type { LocalMcpInstallation } from './local-mcp-installation.js'
 import {
-  parseLocalMcpInstallation,
-  type LocalMcpInstallation,
-} from './local-mcp-installation.js'
+  commitLocalMcpInstallation as commitLocalMcpInstallationInDatabase,
+  deleteLocalMcpInstallation as deleteLocalMcpInstallationInDatabase,
+  getLocalMcpInstallation as readLocalMcpInstallation,
+  listLocalMcpInstallations as readLocalMcpInstallations,
+  type CommitLocalMcpInstallationResult,
+  type DeleteLocalMcpInstallationResult,
+} from './local-mcp-store'
 import {
   digestSpecialistCapabilitySet,
   deriveSpecialistRecoveryEntityId,
@@ -781,13 +786,10 @@ export type AuthorizeCoordinationSessionRecoveryResult =
       reason: 'invalid_input' | 'authority_mismatch' | 'not_found' | 'stale_state'
     }
 
-export type CommitLocalMcpInstallationResult =
-  | { committed: true; installation: LocalMcpInstallation }
-  | { committed: false; reason: 'invalid_installation' | 'version_conflict' }
-
-export type DeleteLocalMcpInstallationResult =
-  | { deleted: true }
-  | { deleted: false; reason: 'invalid_installation' | 'version_conflict' }
+export type {
+  CommitLocalMcpInstallationResult,
+  DeleteLocalMcpInstallationResult,
+} from './local-mcp-store'
 
 export type LocalStore = {
   getSpecialistTaskAuthorityStoreIdentity(): object
@@ -13354,124 +13356,28 @@ class SqlJsLocalStore implements LocalStore {
     return settings ?? DEFAULT_LOCAL_SETTINGS
   }
 
-  async commitLocalMcpInstallation({
-    expectedInstallation,
-    installation,
-  }: {
-    expectedInstallation: LocalMcpInstallation | null
-    installation: LocalMcpInstallation
-  }): Promise<CommitLocalMcpInstallationResult> {
-    let next: LocalMcpInstallation
-    let expected: LocalMcpInstallation | null
-    try {
-      next = parseLocalMcpInstallation(installation)
-      expected = expectedInstallation === null
-        ? null
-        : parseLocalMcpInstallation(expectedInstallation)
-    } catch {
-      return { committed: false, reason: 'invalid_installation' }
-    }
-
-    const serialized = JSON.stringify(next)
-    if (expected === null) {
-      if (next.version !== 1 || next.createdAt !== next.updatedAt) {
-        return { committed: false, reason: 'invalid_installation' }
-      }
-      this.db.run(
-        `
-        insert into local_mcp_installations (
-          id, version, enabled, transport, executable_sha256,
-          state_version, json, created_at, updated_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        on conflict(id) do nothing
-        `,
-        [
-          next.id,
-          next.version,
-          next.enabled ? 1 : 0,
-          next.transport,
-          next.executableSha256,
-          next.stateVersion,
-          serialized,
-          next.createdAt,
-          next.updatedAt,
-        ],
-      )
-    } else {
-      if (
-        next.id !== expected.id ||
-        next.version !== expected.version + 1 ||
-        next.createdAt !== expected.createdAt ||
-        next.updatedAt <= expected.updatedAt
-      ) {
-        return { committed: false, reason: 'invalid_installation' }
-      }
-      this.db.run(
-        `
-        update local_mcp_installations
-        set version = ?, enabled = ?, transport = ?, executable_sha256 = ?,
-            state_version = ?, json = ?, updated_at = ?
-        where id = ? and version = ? and json = ?
-        `,
-        [
-          next.version,
-          next.enabled ? 1 : 0,
-          next.transport,
-          next.executableSha256,
-          next.stateVersion,
-          serialized,
-          next.updatedAt,
-          expected.id,
-          expected.version,
-          JSON.stringify(expected),
-        ],
-      )
-    }
-
-    if (this.db.getRowsModified() !== 1) {
-      return { committed: false, reason: 'version_conflict' }
-    }
-    await this.persist()
-    return { committed: true, installation: next }
+  async commitLocalMcpInstallation(
+    input: Parameters<typeof commitLocalMcpInstallationInDatabase>[1],
+  ): Promise<CommitLocalMcpInstallationResult> {
+    const result = commitLocalMcpInstallationInDatabase(this.db, input)
+    if (result.committed) await this.persist()
+    return result
   }
 
   async getLocalMcpInstallation(installationId: string): Promise<LocalMcpInstallation | null> {
-    if (!isNonEmptyIdentifier(installationId) || installationId.length > 200) {
-      throw new Error('Invalid Local MCP installation id')
-    }
-    const [value] = selectJson<unknown>(
-      this.db,
-      'select json from local_mcp_installations where id = ?',
-      [installationId],
-    )
-    return value === undefined ? null : parseLocalMcpInstallation(value)
+    return readLocalMcpInstallation(this.db, installationId)
   }
 
   async deleteLocalMcpInstallation(
     expectedInstallation: LocalMcpInstallation,
   ): Promise<DeleteLocalMcpInstallationResult> {
-    let expected: LocalMcpInstallation
-    try {
-      expected = parseLocalMcpInstallation(expectedInstallation)
-    } catch {
-      return { deleted: false, reason: 'invalid_installation' }
-    }
-    this.db.run(
-      'delete from local_mcp_installations where id = ? and version = ? and json = ?',
-      [expected.id, expected.version, JSON.stringify(expected)],
-    )
-    if (this.db.getRowsModified() !== 1) {
-      return { deleted: false, reason: 'version_conflict' }
-    }
-    await this.persist()
-    return { deleted: true }
+    const result = deleteLocalMcpInstallationInDatabase(this.db, expectedInstallation)
+    if (result.deleted) await this.persist()
+    return result
   }
 
   async listLocalMcpInstallations(): Promise<LocalMcpInstallation[]> {
-    return selectJson<unknown>(
-      this.db,
-      'select json from local_mcp_installations order by id asc',
-    ).map(parseLocalMcpInstallation)
+    return readLocalMcpInstallations(this.db)
   }
 
   async saveMcpServers(servers: McpServerDefinition[]): Promise<McpServerDefinition[]> {
@@ -13614,82 +13520,163 @@ class SqlJsLocalStore implements LocalStore {
   }
 }
 
-const MUTATING_LOCAL_STORE_METHODS = new Set<keyof LocalStore>([
-  'upsertProject',
-  'activateKnowledgeIndexSnapshot',
-  'rebuildKnowledgeIndexSnapshot',
-  'saveAgentMemoryCandidate',
-  'commitAgentMemoryPromotion',
-  'commitAgentMemoryRevision',
-  'commitAgentMemoryDeletion',
-  'purgeAgentMemoryDerivedState',
-  'retrieveAgentMemoryRevisions',
-  'saveRun',
-  'deleteRun',
-  'enqueueRemoteSyncOperation',
-  'claimNextRemoteSyncOperation',
-  'bindRemoteSyncOperationScope',
-  'settleRemoteSyncOperation',
-  'retryRemoteSyncOperation',
-  'recoverInterruptedRemoteSyncOperations',
-  'commitAgentRuntimeTransition',
-  'createCoordinationSession',
-  'commitSpecialistRuntimeStart',
-  'commitSpecialistRuntimeCompletion',
-  'commitSpecialistRuntimeRecovery',
-  'commitCoordinationSessionCancellation',
-  'acquireCoordinationResourceLease',
-  'settleCoordinationResourceLease',
-  'commitCoordinationTaskStart',
-  'commitCoordinationTaskResult',
-  'commitCoordinationHandoff',
-  'reserveAgentRuntimeCapabilityGrant',
-  'beginAgentRuntimeToolExecution',
-  'appendAgentRuntimeToolAudit',
-  'createWorkflow',
-  'materializeClaimedWorkRequest',
-  'markWorkRequestMaterializationAcknowledged',
-  'recordGateCommandReceiptObservation',
-  'commitGateCommandExecution',
-  'recordGateCommandAcknowledgement',
-  'terminalizeGateCommandAcknowledgement',
-  'commitWorkflowMutation',
-  'commitGitHubDeliveryPreparation',
-  'commitGitHubDeliveryReplacement',
-  'commitGitHubDeliveryIntentStatus',
-  'commitGitHubDeliveryIntentCompletion',
-  'commitGitHubDeliveryContentScan',
-  'commitGitHubDeliveryRevocationCheck',
-  'stopGitHubDeliveryIntent',
-  'commitGitHubRepositoryBindingObservation',
-  'saveGitHubRepositoryBinding',
-  'saveArtifact',
-  'saveEvent',
-  'saveTestEvidence',
-  'saveAgentReview',
-  'saveAgentTrace',
-  'saveAgentTokenUsage',
-  'saveCodingAgentRun',
-  'saveCodingRuntimeConfiguration',
-  'saveCodingChangeSet',
-  'reserveCodingAgentRun',
-  'commitCodingAgentMutation',
-  'saveCodingAgentEvent',
-  'saveCodingPermissionRequest',
-  'saveCodingPermissionDecision',
-  'saveManagedCodingWorkspace',
-  'commitManagedCodingWorkspaceHead',
-  'commitManagedCodingWorkspaceCleanup',
-  'saveDependencyBootstrapEvidence',
-  'saveCodingDiffArtifact',
-  'saveProviderCredential',
-  'saveDesktopPairingCredential',
-  'savePolicySnapshot',
-  'saveGateOverride',
-  'saveRetryAttempt',
-  'saveSettings',
-  'saveMcpServers',
-])
+// Every LocalStore method must explicitly choose its execution policy. Durable
+// mutations share one queue and restore their snapshot if persistence fails.
+// Direct methods access state or handle in-memory authority/lifecycle; Memory retrieval is
+// durable because it also records expiry and retrieval audit state.
+const LOCAL_STORE_METHOD_EXECUTION = {
+  getSpecialistTaskAuthorityStoreIdentity: 'direct',
+  upsertProject: 'durable',
+  listProjects: 'direct',
+  activateKnowledgeIndexSnapshot: 'durable',
+  getCurrentKnowledgeIndexSnapshot: 'direct',
+  getCurrentKnowledgeSnapshotIdentitySet: 'direct',
+  rebuildKnowledgeIndexSnapshot: 'durable',
+  saveAgentMemoryCandidate: 'durable',
+  listAgentMemoryCandidates: 'direct',
+  authorizeAgentMemoryPromotion: 'direct',
+  commitAgentMemoryPromotion: 'durable',
+  listAgentMemoryRevisions: 'direct',
+  listAgentMemoryHeads: 'direct',
+  getAgentMemoryHead: 'direct',
+  getAgentMemoryTeamProjectionInput: 'direct',
+  retrieveAgentMemoryRevisions: 'durable',
+  authorizeAgentMemoryRevision: 'direct',
+  commitAgentMemoryRevision: 'durable',
+  authorizeAgentMemoryDeletion: 'direct',
+  commitAgentMemoryDeletion: 'durable',
+  getAgentMemoryTombstone: 'direct',
+  purgeAgentMemoryDerivedState: 'durable',
+  saveRun: 'durable',
+  deleteRun: 'durable',
+  getRun: 'direct',
+  listRuns: 'direct',
+  enqueueRemoteSyncOperation: 'durable',
+  listRemoteSyncOperations: 'direct',
+  claimNextRemoteSyncOperation: 'durable',
+  bindRemoteSyncOperationScope: 'durable',
+  settleRemoteSyncOperation: 'durable',
+  retryRemoteSyncOperation: 'durable',
+  recoverInterruptedRemoteSyncOperations: 'durable',
+  commitAgentRuntimeTransition: 'durable',
+  createCoordinationSession: 'durable',
+  commitSpecialistRuntimeStart: 'durable',
+  commitSpecialistRuntimeCompletion: 'durable',
+  commitSpecialistRuntimeRecovery: 'durable',
+  commitCoordinationSessionCancellation: 'durable',
+  acquireCoordinationResourceLease: 'durable',
+  settleCoordinationResourceLease: 'durable',
+  commitCoordinationTaskStart: 'durable',
+  commitCoordinationTaskResult: 'durable',
+  commitCoordinationHandoff: 'durable',
+  getCoordinationSession: 'direct',
+  getCoordinationRecoverySnapshot: 'direct',
+  getAgentCoordinationTeamProjectionInput: 'direct',
+  listCoordinationRecoverySnapshots: 'direct',
+  authorizeCoordinationSessionRecovery: 'direct',
+  getAgentRuntimeContextAttachment: 'direct',
+  isAgentRuntimeContextCurrent: 'direct',
+  getAgentRuntime: 'direct',
+  listAgentRuntimes: 'direct',
+  listRecoverableAgentRuntimes: 'direct',
+  listAgentRuntimeEvents: 'direct',
+  listAgentRuntimeCheckpoints: 'direct',
+  getAgentRuntimeTerminalSummary: 'direct',
+  reserveAgentRuntimeCapabilityGrant: 'durable',
+  beginAgentRuntimeToolExecution: 'durable',
+  appendAgentRuntimeToolAudit: 'durable',
+  listAgentRuntimeToolAudits: 'direct',
+  listAgentRuntimeCapabilityGrants: 'direct',
+  commitLocalMcpInstallation: 'durable',
+  deleteLocalMcpInstallation: 'durable',
+  getLocalMcpInstallation: 'direct',
+  listLocalMcpInstallations: 'direct',
+  createWorkflow: 'durable',
+  materializeClaimedWorkRequest: 'durable',
+  markWorkRequestMaterializationAcknowledged: 'durable',
+  getWorkRequestMaterializationByWorkRequestId: 'direct',
+  getWorkRequestMaterializationByRunId: 'direct',
+  recordGateCommandReceiptObservation: 'durable',
+  getGateCommandReceiptObservation: 'direct',
+  commitGateCommandExecution: 'durable',
+  getGateCommandExecution: 'direct',
+  getGateCommandAcknowledgement: 'direct',
+  listPendingGateCommandAcknowledgements: 'direct',
+  recordGateCommandAcknowledgement: 'durable',
+  terminalizeGateCommandAcknowledgement: 'durable',
+  commitWorkflowMutation: 'durable',
+  commitGitHubDeliveryPreparation: 'durable',
+  commitGitHubDeliveryReplacement: 'durable',
+  commitGitHubDeliveryIntentStatus: 'durable',
+  commitGitHubDeliveryIntentCompletion: 'durable',
+  listGitHubDeliveryIntents: 'direct',
+  commitGitHubDeliveryContentScan: 'durable',
+  listGitHubDeliveryContentScans: 'direct',
+  listGitHubDeliveryOperatorOutcomes: 'direct',
+  stopGitHubDeliveryIntent: 'durable',
+  commitGitHubDeliveryRevocationCheck: 'durable',
+  listGitHubDeliveryRevocationChecks: 'direct',
+  commitGitHubRepositoryBindingObservation: 'durable',
+  saveGitHubRepositoryBinding: 'durable',
+  getGitHubRepositoryBinding: 'direct',
+  listGitHubRepositoryBindings: 'direct',
+  saveArtifact: 'durable',
+  listArtifacts: 'direct',
+  saveEvent: 'durable',
+  listEvents: 'direct',
+  saveTestEvidence: 'durable',
+  listTestEvidence: 'direct',
+  saveAgentReview: 'durable',
+  listAgentReviews: 'direct',
+  saveAgentTrace: 'durable',
+  listAgentTraces: 'direct',
+  saveAgentTokenUsage: 'durable',
+  listAgentTokenUsage: 'direct',
+  saveCodingAgentRun: 'durable',
+  saveCodingRuntimeConfiguration: 'durable',
+  getCodingRuntimeConfiguration: 'direct',
+  listCodingRuntimeConfigurations: 'direct',
+  saveCodingChangeSet: 'durable',
+  getCodingChangeSet: 'direct',
+  listCodingChangeSets: 'direct',
+  reserveCodingAgentRun: 'durable',
+  commitCodingAgentMutation: 'durable',
+  listCodingAgentRuns: 'direct',
+  saveCodingAgentEvent: 'durable',
+  listCodingAgentEvents: 'direct',
+  saveCodingPermissionRequest: 'durable',
+  listCodingPermissionRequests: 'direct',
+  saveCodingPermissionDecision: 'durable',
+  listCodingPermissionDecisions: 'direct',
+  saveManagedCodingWorkspace: 'durable',
+  commitManagedCodingWorkspaceHead: 'durable',
+  commitManagedCodingWorkspaceCleanup: 'durable',
+  listManagedCodingWorkspaces: 'direct',
+  saveDependencyBootstrapEvidence: 'durable',
+  listDependencyBootstrapEvidence: 'direct',
+  saveCodingDiffArtifact: 'durable',
+  listCodingDiffArtifacts: 'direct',
+  saveProviderCredential: 'durable',
+  listProviderCredentials: 'direct',
+  getProviderEncryptedSecret: 'direct',
+  saveDesktopPairingCredential: 'durable',
+  getDesktopPairingCredential: 'direct',
+  getDesktopPairingEncryptedToken: 'direct',
+  getDesktopPairingCredentialBundle: 'direct',
+  savePolicySnapshot: 'durable',
+  getPolicySnapshot: 'direct',
+  saveGateOverride: 'durable',
+  listGateOverrides: 'direct',
+  saveRetryAttempt: 'durable',
+  listRetryAttempts: 'direct',
+  saveSettings: 'durable',
+  getSettings: 'direct',
+  saveMcpServers: 'durable',
+  listMcpServers: 'direct',
+  getSchemaVersion: 'direct',
+  loadState: 'direct',
+  close: 'direct',
+} satisfies Record<keyof LocalStore, 'direct' | 'durable'>
 
 function serializeLocalStoreMutations(store: SqlJsLocalStore): LocalStore {
   let mutationQueue: Promise<void> = Promise.resolve()
@@ -13698,7 +13685,7 @@ function serializeLocalStoreMutations(store: SqlJsLocalStore): LocalStore {
     get(target, property) {
       const value = Reflect.get(target, property)
       if (typeof value !== 'function') return value
-      if (!MUTATING_LOCAL_STORE_METHODS.has(property as keyof LocalStore)) {
+      if (LOCAL_STORE_METHOD_EXECUTION[property as keyof LocalStore] !== 'durable') {
         return value.bind(target)
       }
 
@@ -13713,7 +13700,7 @@ function serializeLocalStoreMutations(store: SqlJsLocalStore): LocalStore {
         return invocation
       }
     },
-  }) as unknown as LocalStore
+  })
 }
 
 export async function createLocalStore(options: LocalStoreOptions): Promise<LocalStore> {
