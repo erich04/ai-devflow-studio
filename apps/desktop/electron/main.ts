@@ -1539,6 +1539,8 @@ async function createKnowledgeReviewRuntimeForRequest(
     store,
     knowledgeDocuments: knowledgeSnapshot.documents,
     knowledgeChunks: knowledgeSnapshot.chunks,
+    loadPolicySnapshot: async (projectId) =>
+      loadPolicySnapshotForProject(await resolvePolicyProjectId(projectId)),
     resolveProviderMetadata: (providerId) =>
       resolveElectronAgentProviderMetadata({
         providerId,
@@ -2900,6 +2902,8 @@ function registerIpcHandlers() {
       codingRuns,
       existingEvents,
       enforcement,
+      deliveries,
+      stageTraces,
     ] = await Promise.all([
       store.listArtifacts(run.id),
       store.listCodingDiffArtifacts(run.id),
@@ -2908,10 +2912,14 @@ function registerIpcHandlers() {
       store.listCodingAgentRuns(run.id),
       store.listEvents(run.id),
       evaluateLocalGateEnforcement({ runId: run.id, nodeId: node.id }),
+      store.listGitHubDeliveryIntents(run.id),
+      store.listAgentTraces(run.id),
     ])
     const latestCodingRun = [...codingRuns].sort((left, right) =>
       (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt),
     )[0]
+    const delivery = deliveries.find((candidate) => candidate.status === 'completed' &&
+      candidate.completion?.pullRequestUrl === run.pullRequestUrl)
     const timestamp = new Date().toISOString()
     const artifact = createAcceptanceEvidenceBundleArtifact({
       run,
@@ -2919,6 +2927,13 @@ function registerIpcHandlers() {
       codingDiffs,
       testEvidence,
       agentReviewSummaries: agentReviews.map((review) => review.summary),
+      agentExecutionSummaries: [
+        ...stageTraces.filter((trace) => trace.executorProvenance?.terminalReason === 'success')
+          .map((trace) => `- ${trace.nodeId}: ${trace.executorProvenance!.kind}; ${trace.executorProvenance!.providerId ?? trace.executorProvenance!.executorId}; ${trace.executorProvenance!.model}; completed ${trace.createdAt}; trace=${trace.id}`),
+        ...codingRuns.map((coding) => `- ${coding.nodeId}: Coding ${coding.engine}; ${coding.providerId}; ${coding.status}; ${coding.completedAt ?? coding.startedAt}; run=${coding.id}`),
+        ...agentReviews.map((review) => `- ${review.nodeId}: Gate Review ${review.providerId}/${review.model}; ${review.createdAt}; review=${review.id}`),
+      ],
+      ...(delivery ? { delivery } : {}),
       enforcement: enforcement.decision,
       ...(latestCodingRun?.budgetDecision
         ? { budgetDecision: latestCodingRun.budgetDecision }

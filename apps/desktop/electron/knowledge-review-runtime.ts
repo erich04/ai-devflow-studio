@@ -45,6 +45,7 @@ export type KnowledgeReviewRuntimeDependencies = {
   budgetGuard?: KnowledgeReviewBudgetGuard
   now?: () => string
   createRequestId?: () => string
+  loadPolicySnapshot?: (localProjectId: string) => Promise<PolicySnapshot | null>
 }
 
 export type KnowledgeReviewRuntime = {
@@ -125,7 +126,9 @@ export function createKnowledgeReviewRuntime(
       const [artifacts, testEvidence, policySnapshot] = await Promise.all([
         deps.store.listArtifacts(input.runId),
         deps.store.listTestEvidence(input.runId),
-        deps.store.getPolicySnapshot?.(input.projectId) ?? Promise.resolve(null),
+        deps.loadPolicySnapshot
+          ? deps.loadPolicySnapshot(input.projectId)
+          : deps.store.getPolicySnapshot?.(input.projectId) ?? Promise.resolve(null),
       ])
       let context
       try {
@@ -136,6 +139,7 @@ export function createKnowledgeReviewRuntime(
           testEvidence,
           knowledgeDocuments: deps.knowledgeDocuments,
           knowledgeChunks: deps.knowledgeChunks,
+          policySnapshot,
           requiredContextFields: deriveWorkflowContextPolicyRequirements(
             policySnapshot?.effectivePolicy,
           ),

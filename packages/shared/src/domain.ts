@@ -654,13 +654,15 @@ export type AgentReviewContextManifest = {
 }
 
 export type AgentReviewContext = {
-  run: Pick<WorkflowRun, 'id' | 'title' | 'request' | 'projectId' | 'status' | 'branchName'>
+  run: Pick<WorkflowRun, 'id' | 'title' | 'request' | 'projectId' | 'status' | 'branchName' | 'pullRequestUrl'>
   node: Pick<WorkflowNode, 'id' | 'stage' | 'title' | 'subtitle' | 'kind' | 'status' | 'requiredRole'>
   artifacts: Array<Pick<Artifact, 'id' | 'kind' | 'title' | 'summary' | 'content' | 'redacted'>>
   subjectArtifacts: AgentReviewSubjectArtifact[]
   testEvidence: Array<
-    Pick<TestEvidence, 'id' | 'command' | 'status' | 'exitCode' | 'durationMs' | 'summary' | 'redacted'>
+    Pick<TestEvidence, 'id' | 'command' | 'status' | 'exitCode' | 'durationMs' | 'summary' | 'redacted'> &
+    Partial<Pick<TestEvidence, 'nodeId' | 'createdAt' | 'sourceCommitSha'>>
   >
+  policy?: { version: number; source: 'remote_cache' | 'built_in_default' | 'api'; effectivePolicy: string }
   knowledgeReferences: KnowledgeReference[]
   knowledgeChunks: Array<
     Pick<KnowledgeChunk, 'id' | 'documentId' | 'sourcePath' | 'headingPath' | 'contentHash' | 'content'>

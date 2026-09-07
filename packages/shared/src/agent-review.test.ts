@@ -21,6 +21,30 @@ import {
   type KnowledgeReviewBudgetGuardInput,
 } from './agent-review'
 import type { Artifact, TestEvidence } from './domain'
+import { createRecommendedEnforcementPreset, resolveEffectivePolicy } from './enforcement'
+
+it('reviews an existing acceptance bundle under the effective policy with final-delivery instructions', async () => {
+  const acceptanceNode = { ...node, id: 'acceptance', stage: 'accept' as const, kind: 'acceptance' as const, artifactIds: ['acceptance-bundle'] }
+  const policy = createRecommendedEnforcementPreset({ organizationId: 'org', updatedAt: '2026-09-07T08:00:00.000Z' })
+  const context = await buildAgentReviewContext({
+    run, node: acceptanceNode,
+    artifacts: [{ id: 'acceptance-bundle', runId: run.id, nodeId: acceptanceNode.id,
+      kind: 'acceptance', title: 'Acceptance', summary: 'Delivery evidence',
+      content: 'Recorded final delivery evidence.', updatedAt: '2026-09-07T08:00:00.000Z', redacted: true }],
+    testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [],
+    policySnapshot: { projectId: 'team-project', source: 'remote_cache', version: 1,
+      organizationPolicy: policy, projectOverride: null, effectivePolicy: resolveEffectivePolicy(policy, null),
+      updatedAt: policy.updatedAt, syncedAt: policy.updatedAt },
+  })
+  expect(context.fieldProjection?.fields).toEqual(expect.arrayContaining([
+    expect.objectContaining({ field: 'acceptance_evidence', state: 'available', includeInProviderPrompt: true }),
+    expect.objectContaining({ field: 'policy', state: 'available', includeInProviderPrompt: true }),
+  ]))
+  const prompt = createKnowledgeReviewPrompt(context)
+  expect(prompt).toContain('final implementation and recorded delivery')
+  expect(prompt).toContain('effectivePolicy')
+  expect(prompt).not.toContain('whether the clarification fully represents')
+})
 
 const run = runs[0]!
 const node = run.nodes.find((item) => item.id === 'n-design-gate')!
@@ -1443,6 +1467,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     expect(JSON.stringify(requestBody)).toContain('Return only valid JSON with title')
     if (stage === 'design') {
       expect(JSON.stringify(requestBody)).toContain('required non-empty content string')
+      expect(JSON.stringify(requestBody)).toContain('Return only valid JSON with title, summary, content, goals')
       expect(output?.content).toContain('# Implementation')
     }
     expect(output).toMatchObject({

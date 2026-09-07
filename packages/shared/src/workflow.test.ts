@@ -282,6 +282,42 @@ describe('delivery artifacts', () => {
     expect(artifact.content).toContain('Budget: warning')
     expect(artifact.content).toContain('Gate Review: No blocking risks.')
   })
+
+  it('binds acceptance to the delivered commit and keeps earlier failures as history', () => {
+    const sha = 'a'.repeat(40)
+    const digest = 'b'.repeat(64)
+    const deliveredTest = { ...testEvidence, id: 'delivered-test', nodeId: codingDiff.nodeId, sourceCommitSha: sha }
+    const input: Parameters<typeof createAcceptanceEvidenceBundleArtifact>[0] = {
+      run: created.run, artifacts: created.artifacts,
+      codingDiffs: [{ ...codingDiff, sourceDigest: digest }, { ...codingDiff, id: 'foreign', runId: 'other', patch: 'FOREIGN_PATCH' }],
+      testEvidence: [{ ...testEvidence, id: 'old-failure', status: 'failed', exitCode: 2 }, deliveredTest],
+      delivery: {
+        runId: created.run.id, localProjectId: created.run.projectId, status: 'completed',
+        repository: 'erich/payments-api', baseBranch: 'main', headBranch: 'devflow/actual-branch',
+        expectedCommitSha: sha, diffArtifactId: codingDiff.id, diffSourceDigest: digest,
+        testEvidenceId: deliveredTest.id,
+        completion: { stateVersion: 1, remoteRequestId: 'request', publicationId: 'publication',
+          pullRequestOutcomeId: 'outcome', pullRequestId: 'pr', pullRequestNumber: 1,
+          pullRequestUrl: 'https://github.com/erich/payments-api/pull/1', draft: true,
+          recordedAt: testEvidence.createdAt, providerCreatedAt: testEvidence.createdAt, redacted: true },
+      },
+      now: '2026-09-07T08:00:00.000Z',
+    }
+    const artifact = createAcceptanceEvidenceBundleArtifact(input)
+    expect(artifact.content).toContain('https://github.com/erich/payments-api/pull/1')
+    expect(artifact.content).toContain(sha)
+    expect(artifact.content).toContain('devflow/actual-branch')
+    expect(artifact.content).toContain('delivered-test')
+    expect(artifact.content).toContain('old-failure')
+    expect(artifact.content).toContain('+ redacted patch')
+    expect(artifact.content).not.toContain('FOREIGN_PATCH')
+    expect(() => createAcceptanceEvidenceBundleArtifact({
+      ...input, testEvidence: [{ ...deliveredTest, sourceCommitSha: 'c'.repeat(40) }],
+    })).toThrow(/exact completed diff and commit-bound passing test/)
+    expect(() => createAcceptanceEvidenceBundleArtifact({
+      ...input, delivery: { ...input.delivery!, runId: 'foreign-run' },
+    })).toThrow(/exact completed diff and commit-bound passing test/)
+  })
 })
 
 describe('completeWorkflowAgentNode', () => {

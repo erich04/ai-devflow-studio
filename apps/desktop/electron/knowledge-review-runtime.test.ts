@@ -154,8 +154,8 @@ describe('KnowledgeReviewRuntime', () => {
       organizationId: 'org-demo',
       updatedAt: '2026-07-31T12:01:10.000Z',
     })
-    const store = new MemoryKnowledgeReviewStore(artifacts, {
-      projectId: fixtureRun.projectId,
+    const snapshot: PolicySnapshot = {
+      projectId: 'paired-team-project',
       organizationPolicy,
       projectOverride: null,
       effectivePolicy: resolveEffectivePolicy(organizationPolicy, null),
@@ -163,11 +163,15 @@ describe('KnowledgeReviewRuntime', () => {
       updatedAt: organizationPolicy.updatedAt,
       syncedAt: organizationPolicy.updatedAt,
       source: 'remote_cache',
-    })
+    }
+    const store = new MemoryKnowledgeReviewStore()
+    const loadPolicySnapshot = vi.fn(async () => snapshot)
+    const rawPolicyLookup = vi.spyOn(store, 'getPolicySnapshot')
     const provider = createFakeAgentProvider()
     const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
     const runtime = createKnowledgeReviewRuntime({
       store,
+      loadPolicySnapshot,
       knowledgeDocuments,
       knowledgeChunks,
       resolveProviderMetadata: vi.fn(async () => ({
@@ -183,6 +187,10 @@ describe('KnowledgeReviewRuntime', () => {
     const result = await runtime.run(reviewInput(provider.id))
     const providerInput = reviewKnowledge.mock.calls[0]![0]
 
+    expect(loadPolicySnapshot).toHaveBeenCalledWith(fixtureRun.projectId)
+    expect(rawPolicyLookup).not.toHaveBeenCalled()
+    expect(providerInput.context.policy).toMatchObject({ version: snapshot.version, source: 'remote_cache' })
+    expect(providerInput.prompt).toContain('effectivePolicy')
     expect(providerInput.context.testEvidence).toEqual([])
     expect(providerInput.context.manifest.fieldProjection?.fields).toEqual(
       expect.arrayContaining([

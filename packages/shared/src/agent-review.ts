@@ -24,6 +24,7 @@ import type {
 import { buildKnowledgeReferences, projectKnowledgeReferencesForNode } from './knowledge'
 import { isDeepSeekUsageContext, parseOpenAiCompatibleProviderUsage } from './provider-usage'
 import { redactSecrets, redactSensitiveText } from './redaction'
+import type { PolicySnapshot } from './enforcement'
 import {
   projectWorkflowContext,
   workflowContextField,
@@ -241,6 +242,7 @@ export type BuildAgentReviewContextInput = {
   knowledgeDocuments: KnowledgeDocument[]
   knowledgeChunks: KnowledgeChunk[]
   requiredContextFields?: WorkflowContextPolicyRequirements
+  policySnapshot?: PolicySnapshot | (Pick<PolicySnapshot, 'effectivePolicy' | 'version'> & { source: 'api' }) | null
 }
 
 export type RunKnowledgeReviewAgentInput = {
@@ -801,11 +803,19 @@ export async function buildAgentReviewContext({
   knowledgeDocuments,
   knowledgeChunks,
   requiredContextFields,
+  policySnapshot,
 }: BuildAgentReviewContextInput): Promise<AgentReviewContext> {
   const runArtifacts = artifacts.filter((artifact) => artifact.runId === run.id)
   const selectedArtifacts = selectReviewSubjectArtifacts(run, node, runArtifacts)
   const subjectArtifacts = await buildSubjectArtifacts(selectedArtifacts)
   const runTestEvidence = testEvidence.filter((evidence) => evidence.runId === run.id)
+  const policy = policySnapshot?.effectivePolicy && policySnapshot.source !== 'unavailable'
+    ? { version: policySnapshot.version, source: policySnapshot.source,
+        effectivePolicy: redactSensitiveText(JSON.stringify(policySnapshot.effectivePolicy)).value }
+    : undefined
+  if (policy && policy.effectivePolicy.length > 16_000) {
+    throw new Error('Gate Review effective policy exceeds the bounded context limit')
+  }
   const preliminaryProjection = projectWorkflowContext({
     node,
     availability: {
@@ -897,6 +907,9 @@ export async function buildAgentReviewContext({
       artifacts: subjectArtifacts.length,
       knowledge_references: references.length,
       test_evidence: projectedTestEvidence.length,
+      acceptance_evidence: subjectArtifacts.filter((artifact) => artifact.kind === 'acceptance').length,
+      policy: Boolean(policy),
+      github_delivery: Boolean(run.pullRequestUrl),
     },
     ...(requiredContextFields ? { requiredByPolicy: requiredContextFields } : {}),
   })
@@ -956,6 +969,7 @@ export async function buildAgentReviewContext({
       projectId: redactSensitiveText(run.projectId).value,
       status: run.status,
       branchName: redactSensitiveText(run.branchName).value,
+      ...(run.pullRequestUrl ? { pullRequestUrl: redactSensitiveText(run.pullRequestUrl).value } : {}),
     },
     node: {
       id: redactSensitiveText(node.id).value,
@@ -983,11 +997,15 @@ export async function buildAgentReviewContext({
         exitCode: evidence.exitCode,
         durationMs: evidence.durationMs,
         summary: redactSensitiveText(providerValueToString(evidence.summary)).value,
+        nodeId: evidence.nodeId,
+        createdAt: evidence.createdAt,
+        ...(evidence.sourceCommitSha ? { sourceCommitSha: evidence.sourceCommitSha } : {}),
         redacted: true,
       })),
     knowledgeReferences: references,
     knowledgeChunks: boundedKnowledgeChunks,
     fieldProjection,
+    ...(policy ? { policy } : {}),
     manifest,
   }
 }
@@ -1009,7 +1027,15 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         openQuestions: 'List unresolved design questions and missing evidence.',
         recommendedChanges: 'List concrete changes before human Gate approval.',
       }
-    : {
+    : context.node.stage === 'accept'
+      ? {
+          requirementCoverage: 'Compare the final implementation and recorded delivery with the original acceptance criteria.',
+          deliveryEvidence: 'Verify the actual diff, recorded Draft PR URL and commit SHA, and the test bound to that exact commit.',
+          verificationHistory: 'Distinguish historical failures from subsequent successful verification of the same node or the delivered commit. Preserve failures as history; do not claim an earlier failure is the final result.',
+          provenance: 'Check recorded Provider execution evidence. Treat earlier design review warnings as historical and assess whether implementation and delivery evidence resolve them.',
+          gateState: 'A bundle may record a blocked Gate before this review existed. That snapshot is not the current review conclusion or proof of a missing effective policy.',
+        }
+      : {
         requirementCoverage: 'Explain whether the clarification fully represents the original request.',
         acceptanceGaps: 'Identify missing acceptance criteria, assumptions, risks, and open questions.',
       }
@@ -1026,6 +1052,7 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
     JSON.stringify({
       REVIEW_SUBJECT: {
         runRequest: context.run.request,
+        ...(context.run.pullRequestUrl ? { recordedPullRequestUrl: context.run.pullRequestUrl } : {}),
         artifacts: context.subjectArtifacts.map((artifact) => ({
           manifest: {
             id: artifact.id,
@@ -1062,6 +1089,7 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         knowledgeCoverage: context.manifest.criteriaCoverage,
         knowledgeReferences: context.manifest.knowledgeCriteria,
         knowledgeChunks: context.knowledgeChunks,
+        ...(context.policy ? { policy: context.policy } : {}),
       },
       REVIEW_OUTPUT: {
         required: ['conclusion', 'summary', 'risks', 'missingEvidence', 'suggestedTests', 'confidence'],

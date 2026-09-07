@@ -133,6 +133,8 @@ const providerPromptFields = new Set<WorkflowContextFieldId>([
   'knowledge_references',
   'test_evidence',
   'policy',
+  'github_delivery',
+  'acceptance_evidence',
 ])
 
 export function projectWorkflowContext(input: {
