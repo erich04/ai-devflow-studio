@@ -1374,7 +1374,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     expect(output.summary).toBe('wrapped')
   })
 
-  it('generates workflow artifacts with the OpenAI-compatible chat endpoint', async () => {
+  it.each(['clarify', 'design'] as const)('generates %s artifacts with the OpenAI-compatible chat endpoint', async (stage) => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
       id: 'doubao-review',
@@ -1391,6 +1391,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
                   content: JSON.stringify({
                     title: '需求澄清结果',
                     summary: 'live clarification',
+                    ...(stage === 'design' ? { content: '# Implementation\n\nEdit the label, verify the empty state, and deliver a Draft PR.' } : {}),
                     goals: ['clarify scope'],
                     acceptanceCriteria: ['approval criteria captured'],
                     nonGoals: ['no unrelated changes'],
@@ -1416,7 +1417,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         projectId: run.projectId,
         requestedBy: 'u-ling',
         runtime: 'electron',
-        stage: 'clarify',
+        stage,
         providerId: 'doubao-review',
       },
       context: {
@@ -1440,6 +1441,10 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
     expect(requestBody).not.toHaveProperty('response_format')
     expect(JSON.stringify(requestBody)).toContain('Return only valid JSON with title')
+    if (stage === 'design') {
+      expect(JSON.stringify(requestBody)).toContain('required non-empty content string')
+      expect(output?.content).toContain('# Implementation')
+    }
     expect(output).toMatchObject({
       model: 'ark-code-latest',
       summary: 'live clarification',

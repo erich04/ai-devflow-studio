@@ -117,6 +117,7 @@ describe('runWorkflowStageAgent', () => {
         model: 'ark-code-latest',
         title: '方案设计',
         summary: 'Design uses the clarification artifact.',
+        content: '# Implementation plan\n\nUpdate the local-project empty-state label in Desktop.\n\n## Verification\n\nCheck empty and selected project states.\n\n## Delivery\n\nAttach the diff and test evidence to the Draft PR.',
         goals: ['Update the Desktop workbench copy.'],
         acceptanceCriteria: ['Unit tests cover the selected local project text.'],
         nonGoals: ['Do not modify policy evaluator.'],
@@ -149,7 +150,30 @@ describe('runWorkflowStageAgent', () => {
       }),
       prompt: expect.stringContaining('Generate a design artifact based on the clarified request.'),
     }))
-    expect(result.artifact.content).toContain('Design uses the clarification artifact.')
+    expect(result.artifact.content).toContain('# Implementation plan')
+    expect(result.artifact.content).toContain('Check empty and selected project states.')
+    expect(result.artifact.content).not.toContain('## Goals')
+    expect(result.prompt).toContain('required non-empty content string')
+  })
+
+  it.each([undefined, '', '   '])('rejects design without implementation content: %s', async (content) => {
+    const provider = createFakeAgentProvider()
+    const generate = provider.generateWorkflowArtifact!
+    provider.generateWorkflowArtifact = async (input) => {
+      const output = await generate(input)
+      delete output.content
+      if (content !== undefined) output.content = content
+      return output
+    }
+
+    await expect(runWorkflowStageAgent({
+      run: created.run,
+      node: designNode(),
+      artifacts: created.artifacts,
+      provider,
+      requestedBy: 'u-ling',
+      runtime: 'electron',
+    })).rejects.toMatchObject({ terminalReason: 'schema_invalid' })
   })
 
   it('does not create an artifact when the provider fails', async () => {

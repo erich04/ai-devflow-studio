@@ -91,6 +91,18 @@ export type WorkflowArtifactProviderOutput = {
   usage?: AgentProviderUsage
 }
 
+export function workflowArtifactOutputInstructions(stage: WorkflowArtifactProviderRequest['stage']): string {
+  return [
+    'Return only valid JSON with title, summary, goals, acceptanceCriteria, nonGoals, openQuestions, assumptions, risks. Do not wrap the JSON in Markdown.',
+    'All list fields must be arrays of strings.',
+    ...(stage === 'design' ? [
+      'For design, also return a required non-empty content string containing the complete Markdown design.',
+      'The design must explain concrete implementation steps, affected files and scope, verification commands and expected results, delivery and rollback, and remaining risks.',
+      'Do not merely repeat clarification goals. For unknown repository facts, specify how the implementation Agent will verify them before editing; do not invent verified evidence.',
+    ] : []),
+  ].join(' ')
+}
+
 export type AgentProviderErrorCode =
   | 'provider_timeout'
   | 'dns_failure'
@@ -1297,6 +1309,17 @@ export function createFakeAgentProvider(): AgentProvider {
         model: 'fake',
         title: isClarify ? '需求澄清结果' : '方案设计',
         summary,
+        ...(!isClarify ? { content: [
+          '# Template design',
+          `Use clarification ${upstreamClarification?.id ?? '(not available)'}.`,
+          '## Implementation plan',
+          'Inspect the target repository and make the smallest change that satisfies the approved request.',
+          '## Verification',
+          'Review the diff against the acceptance criteria and run the configured local tests.',
+          '## Delivery and rollback',
+          'Prepare a Draft PR with test evidence. Keep approval and merge under workflow authority.',
+          'This is fake/template output and is not evidence of repository inspection or implementation.',
+        ].join('\n\n') } : {}),
         goals: isClarify
           ? [
               `Clarify the requested change for ${input.context.run.title}.`,
@@ -1966,8 +1989,7 @@ export function createOpenAiCompatibleAgentProvider({
           messages: [
             {
               role: 'system',
-              content:
-                'Return only valid JSON with title, summary, goals, acceptanceCriteria, nonGoals, openQuestions, assumptions, risks. Do not wrap it in Markdown.',
+              content: workflowArtifactOutputInstructions(request.stage),
             },
             { role: 'user', content: prompt },
           ],

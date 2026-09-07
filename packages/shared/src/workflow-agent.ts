@@ -1,5 +1,6 @@
 import {
   estimateAgentTokenUsage,
+  workflowArtifactOutputInstructions,
   type AgentProvider,
   type WorkflowArtifactProviderContext,
   type WorkflowArtifactProviderRequest,
@@ -246,7 +247,7 @@ function createWorkflowArtifactPrompt(input: {
     'You are DevFlow Workflow Stage Agent. Workflow remains the sole authority.',
     ...stageInstruction,
     ...repositoryInstruction,
-    'Return JSON only. Required fields: title, summary, goals, acceptanceCriteria, nonGoals, openQuestions, assumptions, risks.',
+    workflowArtifactOutputInstructions(input.request.stage),
     '',
     'RAW_REQUEST',
     input.context.run.request,
@@ -466,7 +467,9 @@ function validateExecutorOutput(input: {
     model: safeString(input.output.model, 'model', 256),
     title: safeString(input.output.title ?? defaultTitleForStage(input.stage), 'title', 256),
     summary: safeString(input.output.summary, 'summary', 4_000),
-    ...(input.output.content === undefined
+    ...(input.stage === 'design'
+      ? { content: safeString(input.output.content, 'design.content', input.bounds.maxOutputBytes) }
+      : input.output.content === undefined
       ? {}
       : { content: safeString(input.output.content, 'content', input.bounds.maxOutputBytes, false) }),
     goals: safeStringList(input.output.goals, 'goals', { required: true }),
