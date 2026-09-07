@@ -37,7 +37,6 @@ import {
   redactSecrets,
   resolveEffectivePolicy,
   runWorkflowStageAgent,
-  StageAgentExecutionError,
   type AgentEvent,
   type AgentTrace,
   type GateCommand,
@@ -167,6 +166,7 @@ import {
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { runWorkflowTestCommand } from './workflow-test-command.js'
+import { recordStageAgentFailure } from './stage-agent-failure.js'
 import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import {
   createCodingExecutorCompatibilityAdapter,
@@ -2577,54 +2577,10 @@ function registerIpcHandlers() {
         now: () => completedAt,
       })
     } catch (error) {
-      const terminalReason = error instanceof StageAgentExecutionError
-        ? error.terminalReason
-        : 'failed'
-      const failureId = `stage-agent-failure-${randomUUID()}`
-      const failureTrace: AgentTrace = {
-        id: `agent-trace-${failureId}`,
-        runId: run.id,
-        nodeId: node.id,
-        reviewId: failureId,
-        runtime: 'electron',
-        terminalReason,
-        createdAt: completedAt,
-        steps: [{
-          id: `agent-trace-${failureId}-terminal`,
-          kind: 'provider_call',
-          label: `Run ${executorKind}`,
-          summary: `Stage Agent failed closed; terminal=${terminalReason}. No artifact was created and Workflow did not advance.`,
-          timestamp: completedAt,
-        }],
-      }
-      const failureEvent: AgentEvent = {
-        id: `event-${failureId}`,
-        runId: run.id,
-        nodeId: node.id,
-        sequence: events.length + 1,
-        kind: 'tool_result',
-        message: `Stage Agent failed closed (${terminalReason}); Workflow remains on ${node.title}.`,
-        timestamp: completedAt,
-      }
-      let failureAudit
-      try {
-        failureAudit = await store.commitWorkflowMutation({
-          expectedRun: run,
-          run,
-          events: [failureEvent],
-          agentTraces: [failureTrace],
-        })
-      } catch {
-        throw new Error(
-          `Stage Agent failed closed: ${terminalReason}; failure audit could not be persisted`,
-        )
-      }
-      if (!failureAudit.committed) {
-        throw new Error(
-          `Stage Agent failed closed: ${terminalReason}; failure audit was rejected (${failureAudit.reason})`,
-        )
-      }
-      throw new Error(`Stage Agent failed closed: ${terminalReason}`)
+      return recordStageAgentFailure({
+        store, run, nodeId: node.id, executorKind, completedAt,
+        sequence: events.length + 1, error,
+      })
     }
     const event: AgentEvent = {
       id: `event-${generated.artifact.id}`,

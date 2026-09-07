@@ -79,8 +79,9 @@ export class StageAgentExecutionError extends Error {
   constructor(
     readonly terminalReason: Exclude<StageAgentTerminalReason, 'success'>,
     message: string,
+    readonly tokenUsage?: AgentTokenUsage,
   ) {
-    super(redactSensitiveText(message).value)
+    super(redactSensitiveText(message).value.slice(0, 512))
   }
 }
 
@@ -491,6 +492,21 @@ function tokenProvider(executor: StageAgentExecutor): AgentTokenUsage['provider'
   return 'openai'
 }
 
+function reportedFailureUsage(value: AgentProviderUsage | undefined): AgentProviderUsage | undefined {
+  if (
+    !value || !Number.isSafeInteger(value.inputTokens) || value.inputTokens! < 0 ||
+    !Number.isSafeInteger(value.outputTokens) || value.outputTokens! < 0 ||
+    (value.cacheReadTokens !== undefined && (
+      !Number.isSafeInteger(value.cacheReadTokens) || value.cacheReadTokens < 0 ||
+      value.cacheReadTokens > value.inputTokens!
+    ))
+  ) return undefined
+  return {
+    inputTokens: value.inputTokens!, outputTokens: value.outputTokens!,
+    cacheReadTokens: value.cacheReadTokens ?? 0,
+  }
+}
+
 export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): Promise<RunWorkflowStageAgentResult> {
   if (input.provider && input.executor) {
     throw new Error('Choose exactly one workflow stage Agent executor')
@@ -553,13 +569,28 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     clearTimeout(timeout)
     input.signal?.removeEventListener('abort', cancelExecution)
   }
-  const output = validateExecutorOutput({
-    output: execution.value,
-    executorKind: executor.kind,
-    stage,
-    bounds,
-    toolCalls: execution.toolCalls,
-  })
+  let output: WorkflowArtifactProviderOutput
+  try {
+    output = validateExecutorOutput({
+      output: execution.value,
+      executorKind: executor.kind,
+      stage,
+      bounds,
+      toolCalls: execution.toolCalls,
+    })
+  } catch (error) {
+    const usage = reportedFailureUsage(execution.value?.usage)
+    if (error instanceof StageAgentExecutionError && executor.kind === 'direct-provider' && usage) {
+      throw new StageAgentExecutionError(error.terminalReason, error.message, estimateAgentTokenUsage({
+        id: `agent-token-usage-${request.id}-failed`,
+        runId: input.run.id, nodeId: input.node.id, userId: input.requestedBy,
+        projectId: input.run.projectId, provider: tokenProvider(executor),
+        model: redactSensitiveText(executor.model).value.slice(0, 256),
+        prompt: '', completion: '', timestamp: generatedAt, providerUsage: usage,
+      }))
+    }
+    throw error
+  }
   const providerId = executor.providerId ?? executor.id
   const model = output.model || executor.model
   const source: WorkflowStageAgentSource = executor.kind === 'local-agent'
