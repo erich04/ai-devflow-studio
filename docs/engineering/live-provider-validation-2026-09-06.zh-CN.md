@@ -1,6 +1,6 @@
 # 真实 Provider 流程验证记录 · 2026-09-06 / 07
 
-状态：**进行中，尚未完成端到端交付验收。** 真实流程已执行到方案审查；发现设计输出契约问题后已修复代码，但重启 Desktop 时系统报告 Mac 已锁定，等待手动解锁。本文不将单元测试中的假 Provider 或受控 smoke fixture 计入真实流程结果。
+状态：**进行中，尚未完成端到端交付验收。** 初轮在方案审查发现设计输出契约问题并修复。9 月 7 日恢复验证后，新 Run 已完成真实澄清及审查，Desktop 预算重启恢复已验证；随后 Mac 再次自动锁定。GitHub App 在线核验确认新仓库尚未纳入当前安装。本文不将单元测试中的假 Provider 或受控 smoke fixture 计入真实流程结果。
 
 ## 范围与环境
 
@@ -48,12 +48,32 @@ Run：`run-work-request-80b23c151926198ef4747666971cafb9`。
 | [#66](https://github.com/erich04/ai-devflow-studio/issues/66) | 会话过期创建项目触发整页异常。提取返回结构化结果的 Server Action 和表单，保留输入并提供新窗口登录入口。 | 真实过期会话、GitHub 重新登录、相同 slug 成功创建一次均已验证；API 未登录写入拒绝及客户端重试测试通过。 |
 | [#67](https://github.com/erich04/ai-devflow-studio/issues/67) | 创建成功无反馈、列表不刷新。增加显式提交状态及结果，使用 Server Action revalidation，移除重复 refresh；生产 A/B 进一步确认移除根级 loading 边界后列表才正确更新。 | `Project Creation Final Refresh QA` 创建成功后，无手动刷新即出现项目、配对按钮与预算项目入口。保留正常页面及按钮反馈，根级加载占位移除。 |
 | [#68](https://github.com/erich04/ai-devflow-studio/issues/68) | 第二个 Team Project 无预算配置入口。预算详情携带所选 projectId，配置页提供项目选择，并按项目重置面板。 | 真实新项目未沿用第一项目金额；保存 $1.00 / $0.50，生产构建中两次调整预警值后按钮均恢复“已保存”。 |
-| [#62](https://github.com/erich04/ai-devflow-studio/issues/62) | Desktop 已保存预算但顶部 not loaded。将项目预算读写提升为共享 hook，区分策略加载/缺失/禁用/不可用与单次 Coding 预算决策，隔离项目和绑定的异步结果。 | 单元及 App 集成回归通过；已构建新版，真实 Desktop 复测待解锁。 |
+| [#62](https://github.com/erich04/ai-devflow-studio/issues/62) | Desktop 已保存预算但顶部 not loaded。将项目预算读写提升为共享 hook，区分策略加载/缺失/禁用/不可用与单次 Coding 预算决策，隔离项目和绑定的异步结果。 | 单元及 App 集成回归通过；9 月 7 日真实重启后，顶部显示“预算策略 已配置 · $1.00 / 月 · 预警 $0.50，预算评估 尚未执行”。新 Run 与 Agents 面板保持一致。 |
 | [#69](https://github.com/erich04/ai-devflow-studio/issues/69) | 设计阶段只有澄清字段，导致模型重复需求。统一生成器与 Provider adapter 的阶段输出指令，设计必须返回实际 Markdown 正文，缺失或空正文报 schema_invalid。 | 真实失败证据已保存；输出契约、HTTP adapter 和缺失正文测试通过，真实重新生成与审查待解锁。 |
 
 预算保存按钮持续 pending 与已关闭的 [#40](https://github.com/erich04/ai-devflow-studio/issues/40) 有关。本轮生产环境确认保存本身成功，而客户端 transition 未结束；以显式请求状态和 Server Action revalidation 修复并完成真实回归。
 
 一次配对 401 来自测试操作重复使用已消费的一次性配对码，首次交换实际成功，后续同步正常。这不是产品缺陷，不计入 Issue。
+
+## 9 月 7 日恢复验证
+
+保留初轮 Run，重新通过 Team Web 提交 `README workflow note - verified design`，并从 Desktop Inbox 创建本地 Run：
+
+- Work Request：`work-request-010522fc-b32a-4a5e-b8cf-4671316a9410`。
+- Run：`run-work-request-09b489a2902d1c7581979830d63c9210`。
+- 当前节点：需求确认 Gate。
+- 工作流分支标识：`ai/work-request-09b489a2902d`。
+- 在原精确文字要求之外，提供当前 README 摘要原文、verify 包含 typecheck / Vitest / Vite build、依赖准备命令和 main 基线；要求编码 Agent 在修改前独立检查这些事实。
+
+| 调用 | UTC 时间 | 输入 token | 输出 token | 结果 |
+| --- | --- | ---: | ---: | --- |
+| 新 Run 需求澄清 | 2026-09-07 06:54:52 | 547 | 803 | 真实 DeepSeek 生成澄清 |
+| 需求审查 | 2026-09-07 06:58:16 | 4937 | 359 | 澄清充分，warn，未阻断 |
+| 同一需求再次审查 | 2026-09-07 06:58:55 | 4937 | 368 | warn，未阻断；UI 操作反馈延迟时重复触发，计入全部调用，不计作额外阶段完成 |
+
+恢复 Web 时发现上一轮手工复制的验证运行副本缺少静态资源。重新生产构建并将 standalone 与相同构建的 static 一起复制后恢复，所有页面引用的资源返回 200。新独立运行副本位于 `out/live-provider-20260907/web-runtime`，仍使用 4313 端口并连接真实 Team API。此处属于验证环境准备错误，不归为产品缺陷。
+
+仓库绑定表单实际提交 installation `153168718` 与 repository `1359740566` 后，在线验证失败。使用同一现有 App 身份只读核验：原 `erich04/devflow-mini-agent` 返回 200、安装 `153168718`、Contents/Pull requests write；新 `erich04/devflow-mini-agent-live-20260906` 返回 404。当前安装为 selected repositories，因此需把新仓库加入现有安装。未改变任何 GitHub App 权限，也未创建安装凭据或绕过发布授权。隔离 checkout 的 origin 已确认为新仓库，main 基线为 `8491ff3f20918cd4f26390fa34373b7d224aecf4`。
 
 ## 代码验证
 
@@ -67,9 +87,9 @@ Run：`run-work-request-80b23c151926198ef4747666971cafb9`。
 
 ## 下一步与外部依赖
 
-1. 手动解锁 Mac，连接重启后的 Desktop，验证预算顶部已配置状态。
-2. 保留原 Run 的不合格设计和审查记录，从新 Work Request 重新开始，以修复后的契约执行真实澄清、设计与审查。
+1. 手动解锁并在验证期间保持 Mac 解锁；Desktop 已持久保存新 Run 的澄清和审查结果。
+2. 返回新 Run 的 Inspector，通过已审查的需求 Gate，再以修复后的契约执行真实设计和方案审查。
 3. Native Coding 在 managed worktree 提交实际 README 修改建议，审核精确 diff，经产品批准后应用；运行完整 verify 并归档证据。
-4. 为新测试仓库完成现有 GitHub App 的仓库访问配置。当前 GitHub Settings 停在 Confirm access，需账号持有人完成身份验证。随后通过产品绑定项目仓库、准备 Delivery、Team 审批准确 commit SHA、创建 Draft PR、执行最终验收。
+4. 在 GitHub Settings 完成 Confirm access，并把新测试仓库加入现有 App 安装 `153168718` 的仓库访问列表。随后通过产品绑定项目仓库、准备 Delivery、Team 审批准确 commit SHA、创建 Draft PR、执行最终验收。
 
 目前没有新的 README 修改、测试产物、交付 commit、Draft PR 或最终验收结果；不能据此宣布从需求到云端完整跑通。
