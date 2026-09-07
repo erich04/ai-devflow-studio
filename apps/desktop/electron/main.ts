@@ -166,6 +166,7 @@ import {
 } from './remote-sync.js'
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
+import { runWorkflowTestCommand } from './workflow-test-command.js'
 import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import {
   createCodingExecutorCompatibilityAdapter,
@@ -2212,79 +2213,60 @@ function registerIpcHandlers() {
     if (!run) {
       throw new Error(`Run not found: ${input.runId}`)
     }
-    if (run.projectId !== project.id) {
-      throw new Error('The selected local project does not own this workflow run')
-    }
-    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
-    if (
-      !node ||
-      run.currentNodeId !== node.id ||
-      node.kind !== 'test' ||
-      node.stage !== 'test' ||
-      (node.status !== 'running' && node.status !== 'failed')
-    ) {
-      throw new Error('Only the current workflow Test node can execute the project test command')
-    }
-    const command = project.testCommand.trim()
-
-    if (!command) {
-      throw new Error('Local project has no test command')
-    }
-
-    const safety = validateTestCommandSafety(command)
-    if (safety.level === 'blocked') {
-      throw new Error(`Test command blocked: ${safety.reasons.join(' ')}`)
-    }
-
-    const result = await runLocalTestCommand({
-      command: safety.normalizedCommand,
-      cwd: project.path,
-      timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
-    })
-    const createdAt = new Date().toISOString()
-    const evidence: TestEvidence = redactTestEvidenceForStorage({
-      id: `evidence-${randomUUID()}`,
-      runId: input.runId,
+    return runWorkflowTestCommand({
+      project,
+      run,
       nodeId: input.nodeId,
-      projectId: project.id,
-      command: safety.normalizedCommand,
-      cwd: project.path,
-      status: result.status,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      summary: result.summary,
-      redacted: result.redacted,
-      createdAt,
-    })
-    const artifact = createTestEvidenceArtifact(evidence)
-    const event = createTestEvidenceEvent(
-      evidence,
-      (await store.listEvents(input.runId)).length + 1,
-    )
-    await executeWorkflowCommandOrThrow(store, {
-      runId: run.id,
-      expectedRunUpdatedAt: run.updatedAt,
-      command: {
-        type: 'record_test_result',
-        nodeId: node.id,
-        evidenceId: evidence.id,
-        artifactId: artifact.id,
-      },
-      candidates: {
-        artifacts: [artifact],
-        events: [event],
-        testEvidence: [evidence],
-      },
-      now: createdAt,
-    })
-    wakeRemoteSyncOutbox()
+      store,
+      workspaceCoordinator: workspaceOperationCoordinator,
+      timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
+      complete: async ({ command, cwd, result }) => {
+        const createdAt = new Date().toISOString()
+        const evidence: TestEvidence = redactTestEvidenceForStorage({
+          id: `evidence-${randomUUID()}`,
+          runId: input.runId,
+          nodeId: input.nodeId,
+          projectId: project.id,
+          command,
+          cwd,
+          status: result.status,
+          exitCode: result.exitCode,
+          durationMs: result.durationMs,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          summary: result.summary,
+          redacted: result.redacted,
+          createdAt,
+        })
+        const artifact = createTestEvidenceArtifact(evidence)
+        const event = createTestEvidenceEvent(
+          evidence,
+          (await store.listEvents(input.runId)).length + 1,
+        )
+        await executeWorkflowCommandOrThrow(store, {
+          runId: run.id,
+          expectedRunUpdatedAt: run.updatedAt,
+          command: {
+            type: 'record_test_result',
+            nodeId: input.nodeId,
+            evidenceId: evidence.id,
+            artifactId: artifact.id,
+          },
+          candidates: {
+            artifacts: [artifact],
+            events: [event],
+            testEvidence: [evidence],
+          },
+          now: createdAt,
+        })
+        wakeRemoteSyncOutbox()
 
-    return {
-      evidence,
-      state: await store.loadState(),
-    }
+        return {
+          evidence,
+          state: await store.loadState(),
+        }
+      },
+    })
   })
 
   ipcMain.handle(ipcChannels.loadEnforcementPolicy, async (_, payload: unknown) => {
