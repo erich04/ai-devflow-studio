@@ -1378,6 +1378,8 @@ async function createCodingRuntimeForRequest(
   return createCodingRuntime({
     store,
     executor,
+    // Managed worktrees survive approval waits and restarts within the selected data profile.
+    worktreeRoot: path.join(app.getPath('userData'), 'coding-worktrees'),
     ...(knowledgeSnapshot
       ? {
           knowledgeDocuments: knowledgeSnapshot.documents,

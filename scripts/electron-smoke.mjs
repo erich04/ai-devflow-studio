@@ -1436,6 +1436,9 @@ try {
     status: 'pending',
   })
   expect(controlledOpenCodeStart.workspace?.worktreePath).toBeTruthy()
+  expect(path.dirname(controlledOpenCodeStart.workspace.worktreePath)).toBe(
+    path.join(userDataDir, 'coding-worktrees'),
+  )
   expect(await readOptionalUtf8(controlledOpencodeLogPath)).toBeUndefined()
   const preAuthorizationWorktree = await captureCheckoutAuthority(
     controlledOpenCodeStart.workspace.worktreePath,
