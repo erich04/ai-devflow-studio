@@ -58,4 +58,11 @@
 
 此次变更不涉及数据库 schema、迁移、IPC 契约、团队权限或远程发布；它不会修复既往失败写入可能已经留下的状态。测试结果属于本次局部重构验证，不替代 Roadmap 规定的正式发布证据。
 
-后续用户要求以真实 Provider 验证完整流程，发现并修复了项目创建反馈、预算项目选择、预算状态来源和设计输出契约的问题。具体环境、真实调用证据和未完成步骤另见[真实 Provider 流程记录](live-provider-validation-2026-09-06.zh-CN.md)，上述微重构检查不能替代该流程的最终验收。
+**真实流程驱动的后续微重构**
+
+- 从 main 提取 [workflow-test-command.ts](../../apps/desktop/electron/workflow-test-command.ts)，让“执行当前 Test”负责选择当前 Build 的最新 Coding worktree、核实仓库身份与 HEAD、持有工作区锁直至证据提交。入口继续装配原有原子 Workflow 命令。它修复了实际测试错误使用源 checkout 的问题。
+- 从 main 提取 [stage-agent-failure.ts](../../apps/desktop/electron/stage-agent-failure.ts)，集中处理失败诊断、Trace/Event 和可信 Provider usage 的原子审计。模型输出不合法仍不推进流程，但不会丢失已经返回的用量。
+- 验收 bundle 将实际 Delivery、精确 commit 测试、diff 和执行来源绑定在一起；Review Context 使用正确的 Local/Team policy 映射，并区分历史失败与最终交付状态。
+- Native repair 增加“无法在原范围内安全修复”的出口，先保存失败测试再调用 repair；生产 worktree 根目录由 main 装配到当前 profile 的持久目录。原工作区按记录继续读取，没有批量迁移历史路径。
+
+这些边界均由真实流程暴露的问题确定，没有继续按文件行数扩大拆分。具体环境、真实调用、Draft PR、失败样本和验证结果见[真实 Provider 流程记录](live-provider-validation-2026-09-06.zh-CN.md)。
