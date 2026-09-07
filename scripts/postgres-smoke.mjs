@@ -859,9 +859,12 @@ async function prepareRetainedV12CredentialFixture() {
 }
 
 async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
+  const schemaSource = await readFile(new URL('../apps/api/src/db/schema.ts', import.meta.url), 'utf8')
+  const expectedVersion = /^export const TEAM_SCHEMA_VERSION = (\d+)$/mu.exec(schemaSource)?.[1]
+  expect(expectedVersion, 'Current Team schema version could not be read from the canonical schema.')
   const pool = new Pool({
     connectionString: databaseUrl,
-    application_name: 'ai-devflow-postgres-smoke-v21-assertion',
+    application_name: 'ai-devflow-postgres-smoke-current-schema-assertion',
     statement_timeout: 10_000,
   })
   const connection = await pool.connect()
@@ -871,8 +874,8 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       "SELECT value FROM schema_meta WHERE key = 'schema_version'",
     )
     expect(
-      schemaVersion.rows[0]?.value === '21',
-      'Team database did not migrate the retained fixture to schema v21.',
+      schemaVersion.rows[0]?.value === expectedVersion,
+      `Team database did not migrate the retained fixture to schema v${expectedVersion}.`,
     )
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
@@ -1974,7 +1977,11 @@ function canonicalLocalNodeId(runId, storedNodeId) {
 }
 
 function expectNoLocalOnlyFields(value, label) {
-  const serialized = JSON.stringify(value).toLowerCase()
+  // This manifest flag describes field availability; it never contains prompt text.
+  // Keep checking all other keys and values, including malformed non-boolean flags.
+  const serialized = JSON.stringify(value, (key, entry) =>
+    key === 'includeInProviderPrompt' && typeof entry === 'boolean' ? undefined : entry,
+  ).toLowerCase()
   const blockedFragments = [
     'cwd',
     'stdout',
@@ -3433,6 +3440,37 @@ try {
     updatedAt: completedTimestamp,
   })
 
+  // Seeded Task artifacts do not persist the fixture's in-memory Gate references.
+  // Give this API review explicit, complete Gate subjects in the disposable smoke database.
+  const reviewSubjectIds = ['postgres-smoke-design-subject', 'postgres-smoke-clarification-subject']
+  const reviewFixturePool = new Pool({ connectionString: databaseUrl, statement_timeout: 10_000 })
+  try {
+    const subjects = await reviewFixturePool.query(`
+      INSERT INTO artifacts (id, run_id, node_id, kind, title, summary, content, redacted, updated_at)
+      SELECT fixture.id, artifact.run_id, fixture.node_id, artifact.kind,
+             artifact.title, artifact.summary, artifact.content, artifact.redacted, artifact.updated_at
+      FROM (VALUES
+        ($1::text, 'art-design', $3::text),
+        ($2::text, 'art-clarify', $4::text)
+      ) AS fixture(id, source_id, node_id)
+      JOIN artifacts AS artifact ON artifact.id = fixture.source_id AND artifact.run_id = $5
+      RETURNING id
+    `, [...reviewSubjectIds, seededRun.currentNodeId, `${seededRun.id}:n-clarify-gate`, seededRun.id])
+    expect(subjects.rowCount === 2, 'API review smoke requires both seeded subject artifacts.')
+  } finally {
+    await reviewFixturePool.end()
+  }
+  const reviewFixtureOverview = await fetchOverview('/api/team/overview after review fixture setup')
+  const reviewFixtureRun = reviewFixtureOverview.runs?.find((run) => run.id === seededRun.id)
+  for (const [index, nodeId] of [seededRun.currentNodeId, `${seededRun.id}:n-clarify-gate`].entries()) {
+    const gate = reviewFixtureRun?.nodes?.find((node) => node.id === nodeId)
+    expect(
+      gate?.artifactIds?.length === 1 && gate.artifactIds[0] === reviewSubjectIds[index],
+      `API review smoke Gate ${nodeId} must expose exactly its subject artifact.`,
+    )
+    if (index === 1) expect(gate.status === 'success', 'Approved clarification Gate must remain successful.')
+  }
+
   const backendReview = await postJson('/api/agent/knowledge-review', {
     runId: seededRun.id,
     nodeId: seededRun.currentNodeId,
@@ -3440,6 +3478,13 @@ try {
     providerId: 'fake-knowledge-review',
   })
   expect(backendReview.review?.runtime === 'api', 'Backend Knowledge Review did not run in API runtime.')
+  const reviewManifest = backendReview.review?.contextManifest
+  expect(
+    reviewManifest?.stage === 'design' && reviewManifest.coverage === 'complete' &&
+      reviewManifest.subjectArtifacts?.length === 2 &&
+      reviewSubjectIds.every((id) => reviewManifest.subjectArtifacts.some((artifact) => artifact.id === id)),
+    'Backend Knowledge Review must bind the complete design and approved clarification subjects.',
+  )
   expect(
     backendReview.review?.providerId === 'fake-knowledge-review',
     'Backend Knowledge Review did not use the deterministic fake provider.',
