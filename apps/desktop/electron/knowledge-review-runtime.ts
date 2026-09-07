@@ -142,6 +142,7 @@ export function createKnowledgeReviewRuntime(
           policySnapshot,
           requiredContextFields: deriveWorkflowContextPolicyRequirements(
             policySnapshot?.effectivePolicy,
+            node,
           ),
         })
       } catch (error) {

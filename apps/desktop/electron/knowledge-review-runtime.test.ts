@@ -149,7 +149,7 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.tokenUsage).toHaveLength(1)
   })
 
-  it('projects policy-required missing Test Evidence into the same Electron provider contract', async () => {
+  it('projects global testing policy as supplemental evidence during design review', async () => {
     const organizationPolicy = createRecommendedEnforcementPreset({
       organizationId: 'org-demo',
       updatedAt: '2026-07-31T12:01:10.000Z',
@@ -196,15 +196,14 @@ describe('KnowledgeReviewRuntime', () => {
       expect.arrayContaining([
         expect.objectContaining({
           field: 'test_evidence',
-          applicability: 'required',
-          state: 'missing_required',
-          includeInProviderPrompt: true,
+          applicability: 'optional',
+          state: 'optional',
+          includeInProviderPrompt: false,
         }),
       ]),
     )
-    expect(providerInput.prompt).toContain('missing_required')
     expect(providerInput.prompt).not.toContain('supplementalTestEvidence')
-    expect(result.review.missingEvidence).toContain(
+    expect(result.review.missingEvidence).not.toContain(
       'Attach passing local test evidence required for this workflow stage before final approval.',
     )
   })
@@ -342,7 +341,7 @@ describe('KnowledgeReviewRuntime', () => {
         }),
         expect.objectContaining({
           field: 'agent_review',
-          applicability: 'optional',
+          applicability: 'not_applicable',
         }),
       ]),
     )

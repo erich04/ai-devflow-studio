@@ -141,12 +141,20 @@ export function projectWorkflowContext(input: {
   node: WorkflowNode
   availability?: WorkflowContextAvailability
   requiredByPolicy?: WorkflowContextPolicyRequirements
+  purpose?: 'inspector' | 'review_input'
 }): WorkflowContextProjection {
   return {
     version: 1,
     stage: input.node.stage,
     nodeKind: input.node.kind,
     fields: WORKFLOW_CONTEXT_FIELD_IDS.map((field): WorkflowContextFieldProjection => {
+      if (input.purpose === 'review_input' && field === 'agent_review') {
+        return {
+          field, applicability: 'not_applicable', state: 'not_applicable', visible: false,
+          includeInProviderPrompt: false, role: 'primary',
+          reason: 'The current Agent Review is the output being generated, not an input prerequisite. Human Gate approval still requires its result.',
+        }
+      }
       const base = defaultRule(input.node, field)
       const policyRequired = input.requiredByPolicy?.[field] === true
       const applicability = policyRequired ? 'required' : base.applicability
@@ -187,10 +195,11 @@ export function workflowContextField(
 
 export function deriveWorkflowContextPolicyRequirements(
   policy: EffectiveEnforcementPolicy | null | undefined,
+  node?: Pick<WorkflowNode, 'stage'>,
 ): WorkflowContextPolicyRequirements {
   if (!policy) return {}
 
-  const requiresTestEvidence = policy.rules.some((rule) =>
+  const requiresTestEvidence = node?.stage !== 'clarify' && node?.stage !== 'design' && policy.rules.some((rule) =>
     rule.target === 'governance_check' &&
     rule.category === 'testing_standard' &&
     rule.statusOrSeverity === 'needs_evidence' &&

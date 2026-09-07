@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { KnowledgeReference, NodeKind, NodeStage, WorkflowNode } from './domain'
 import {
   canRunKnowledgeReviewOnNode,
+  deriveWorkflowContextPolicyRequirements,
   projectWorkflowContext,
   resolveKnowledgeReferenceSemantics,
   workflowContextField,
 } from './workflow-context-projection'
+import { createRecommendedEnforcementPreset, resolveEffectivePolicy } from './enforcement'
 
 function node(stage: NodeStage, kind: NodeKind): WorkflowNode {
   return {
@@ -22,6 +24,16 @@ function node(stage: NodeStage, kind: NodeKind): WorkflowNode {
 }
 
 describe('projectWorkflowContext', () => {
+  it('does not turn a global testing rule into an early-stage executed-test prerequisite', () => {
+    const policy = resolveEffectivePolicy(createRecommendedEnforcementPreset({
+      organizationId: 'org-test', updatedAt: '2026-09-07T12:00:00.000Z',
+    }), null)
+    for (const stage of ['clarify', 'design'] as const) {
+      expect(deriveWorkflowContextPolicyRequirements(policy, node(stage, 'gate'))).not.toHaveProperty('test_evidence')
+    }
+    expect(deriveWorkflowContextPolicyRequirements(policy, node('accept', 'acceptance'))).toMatchObject({ test_evidence: true })
+  })
+
   it.each([
     ['clarify', 'agent', 'generation_references', 'optional', 'agent_review', 'not_applicable'],
     ['clarify', 'gate', 'knowledge_references', 'optional', 'test_evidence', 'not_applicable'],

@@ -818,6 +818,7 @@ export async function buildAgentReviewContext({
   }
   const preliminaryProjection = projectWorkflowContext({
     node,
+    purpose: 'review_input',
     availability: {
       raw_request: Boolean(run.request.trim()),
       artifacts: subjectArtifacts.length,
@@ -902,6 +903,7 @@ export async function buildAgentReviewContext({
   }))
   const fieldProjection = projectWorkflowContext({
     node,
+    purpose: 'review_input',
     availability: {
       raw_request: Boolean(run.request.trim()),
       artifacts: subjectArtifacts.length,
@@ -1024,6 +1026,7 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         boundaryAndDataFlowGaps: 'Identify missing component boundaries or data flows.',
         compatibilitySecurityMigrationRisks: 'Identify API, compatibility, security, and migration risks.',
         testingGaps: 'Identify gaps in the design test strategy.',
+        verificationTiming: 'Assess the planned verification in the design. Executed implementation tests are produced after design approval; absent later-stage results alone are not a missing design test strategy. Preserve any explicitly required baseline evidence gaps.',
         openQuestions: 'List unresolved design questions and missing evidence.',
         recommendedChanges: 'List concrete changes before human Gate approval.',
       }

@@ -49,6 +49,18 @@ it('reviews an existing acceptance bundle under the effective policy with final-
 const run = runs[0]!
 const node = run.nodes.find((item) => item.id === 'n-design-gate')!
 
+it('treats the review being generated as output rather than a missing input prerequisite', async () => {
+  const context = await buildAgentReviewContext({
+    run, node, artifacts, testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [],
+    requiredContextFields: { agent_review: true },
+  })
+  expect(context.fieldProjection?.fields.find((field) => field.field === 'agent_review')).toMatchObject({
+    state: 'not_applicable', includeInProviderPrompt: false,
+  })
+  expect(context.manifest.fieldProjection).toEqual(context.fieldProjection)
+  expect(createKnowledgeReviewPrompt(context)).toContain('Assess the planned verification')
+})
+
 describe('Knowledge Review cost preflight', () => {
   it('trusts only the exact built-in fake provider as no-cost', async () => {
     expect(

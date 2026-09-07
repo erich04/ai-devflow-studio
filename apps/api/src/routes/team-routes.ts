@@ -1472,6 +1472,7 @@ export async function resolveTeamRoute(
         },
         requiredContextFields: deriveWorkflowContextPolicyRequirements(
           enforcementPolicy.effectivePolicy,
+          node,
         ),
       })
     } catch (error) {

@@ -6045,7 +6045,7 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /工作台/ }))
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('测试报告已归档')
-    expect(inspector).toHaveTextContent('当前节点已有测试报告 Artifact。')
+    expect(inspector).toHaveTextContent('当前节点测试：Tests passed in 900ms')
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
     fireEvent.click(within(inspector).getByRole('tab', { name: /Test Evidence/ }))
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local test evidence')
