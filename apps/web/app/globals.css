@@ -1989,3 +1989,47 @@ button {
     justify-items: start;
   }
 }
+
+/* Studio project creation and shared management views. */
+.studio-nav a[aria-current='page'], .studio-settings-tabs a[aria-current='page'] { background: var(--surface-2); color: var(--accent); }
+.studio-management { width: min(100%, 1320px); min-width: 0; margin: 24px auto; }
+.studio-management-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.studio-management-panel { min-width: 0; padding: 24px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); }
+.studio-management-panel h2 { margin: 0 0 16px; font-size: 19px; }
+.studio-management-panel p { color: var(--muted); line-height: 1.6; overflow-wrap: anywhere; }
+.studio-management-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.studio-management-row > a, .studio-management-row > div { min-width: 0; flex: 1 1 180px; }
+.studio-management-row > span { font-size: 13px; color: var(--muted); }
+.studio-management-actions, .studio-settings-tabs { display: flex; flex-wrap: wrap; gap: 12px; }
+.studio-settings-tabs { margin-bottom: 16px; }
+.studio-settings-tabs a { padding: 10px 20px; border: 1px solid var(--border); border-radius: 9px; text-decoration: none; }
+.studio-project-dialog { width: min(600px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 24px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface); color: var(--text); overflow-y: auto; }
+.studio-project-dialog::backdrop { background: rgb(0 0 0 / 50%); }
+.studio-project-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.studio-project-dialog h2 { margin: 0; font-size: 20px; }
+.studio-project-dialog .project-create-form { grid-template-columns: 1fr; }
+.team-policy-editor { display: grid; gap: 16px; min-width: 0; }
+.team-policy-editor p { margin: 0; }
+.team-policy-editor > label { display: grid; gap: 8px; }
+.team-policy-editor input:not([type=checkbox]), .team-policy-editor textarea, .team-policy-editor select { padding: 9px; width: 100%; min-width: 0; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 13px; }
+.team-policy-editor textarea { min-height: 90px; resize: vertical; }
+.team-policy-editor button { justify-self: start; cursor: pointer; }
+.team-policy-editor button:disabled { opacity: .6; cursor: default; }
+.team-policy-editor [role=alert] { color: var(--danger); }
+.team-policy-editor [role=status] { color: var(--accent); }
+.team-policy-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 0; padding: 16px; background: var(--surface-2); border-radius: 10px; }
+.team-policy-summary dt { font-size: 12px; color: var(--muted); }
+.team-policy-summary dd { margin: 4px 0 0; overflow-wrap: anywhere; }
+.team-policy-table-wrap { min-width: 0; overflow-x: auto; }
+.team-policy-table { border-collapse: collapse; width: 100%; min-width: 850px; font-size: 13px; }
+.team-policy-table th, .team-policy-table td { padding: 12px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.team-policy-table th:first-child { width: 26%; }
+.team-policy-table td:nth-child(5) { width: 24%; }
+.team-policy-table code { overflow-wrap: anywhere; }
+.team-policy-table small { display: block; margin-top: 8px; font-weight: 400; color: var(--muted); line-height: 1.5; }
+.team-policy-preview { border: 1px solid var(--accent); background: var(--surface-2); padding: 18px; border-radius: 10px; overflow-wrap: anywhere; }
+.team-policy-preview li { margin-bottom: 12px; line-height: 1.6; }
+@media (max-width: 760px) {
+  .studio-management-grid, .team-policy-summary { grid-template-columns: 1fr; }
+  .studio-management-panel, .studio-project-dialog { padding: 16px; }
+}

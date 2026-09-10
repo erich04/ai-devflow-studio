@@ -6,9 +6,11 @@ import type { CreateProjectResult } from './project-actions'
 export function ProjectCreateForm({
   createAction,
   signInUrl,
+  onCreated,
 }: {
   createAction: (formData: FormData) => Promise<CreateProjectResult>
   signInUrl: string
+  onCreated?: (projectId: string) => void
 }) {
   const [result, setResult] = useState<CreateProjectResult | null>(null)
   const [isPending, setIsPending] = useState(false)
@@ -25,7 +27,10 @@ export function ProjectCreateForm({
     try {
       const response = await createAction(formData)
       setResult(response)
-      if (response.ok) form.reset()
+      if (response.ok) {
+        form.reset()
+        onCreated?.(response.projectId)
+      }
     } catch {
       setResult({ ok: false, error: '项目创建结果暂时无法确认。请先刷新项目列表检查，再决定是否重试。' })
     } finally {

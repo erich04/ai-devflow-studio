@@ -192,7 +192,7 @@ describe('API HTTP authentication boundary', () => {
 
     expect(result).toMatchObject({
       status: 303,
-      headers: { location: 'http://127.0.0.1:4311/legacy-shell' },
+      headers: { location: 'http://127.0.0.1:4311/' },
     })
   })
 

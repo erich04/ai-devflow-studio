@@ -1,3 +1,4 @@
+import { assertPolicyRevision, EnforcementPolicyConflictError } from './enforcement-policy-write'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   formatUsd,
@@ -2397,6 +2398,7 @@ export function createPostgresTeamRepository(
           updatedAt: new Date().toISOString(),
         }),
         enforcementPolicies: {
+          organizationPolicySource: enforcementPolicyRows.some((row) => row.project_id === null) ? 'persisted' : 'default',
           organizationPolicy,
           projectOverrides,
           effectivePolicies: projectRows.map((project) => ({
@@ -4026,36 +4028,48 @@ export function createPostgresTeamRepository(
       }
     },
 
-    async saveEnforcementPolicy(policy, context) {
-      await db.query(
-        `
-          INSERT INTO enforcement_policies (
-            id,
-            organization_id,
-            project_id,
-            name,
-            version,
-            policy,
-            updated_at
-          )
-          VALUES ($1, $2, NULL, $3, $4, $5::jsonb, $6)
-          ON CONFLICT (id) DO UPDATE
-          SET name = excluded.name,
-              version = excluded.version,
-              policy = excluded.policy,
-              updated_at = excluded.updated_at
-        `,
-        [
-          policy.id,
-          context.organizationId,
-          policy.name,
-          policy.version,
-          JSON.stringify(policy),
-          policy.updatedAt,
-        ],
-      )
+    async saveEnforcementPolicy(policy, context, expected) {
+      return withTeamDbTransaction(db, async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`enforcement-policy:${context.organizationId}`])
+        const rows = await tx.query<EnforcementPolicyRow>(
+          'SELECT * FROM enforcement_policies WHERE organization_id = $1 AND project_id IS NULL ORDER BY updated_at DESC',
+          [context.organizationId],
+        )
+        assertPolicyRevision(mapOrganizationPolicy(rows[0], context.organizationId), expected)
+        const accepted = await tx.query<{ id: string }>(
+          `
+            INSERT INTO enforcement_policies (
+              id,
+              organization_id,
+              project_id,
+              name,
+              version,
+              policy,
+              updated_at
+            )
+            VALUES ($1, $2, NULL, $3, $4, $5::jsonb, $6)
+            ON CONFLICT (id) DO UPDATE
+            SET name = excluded.name,
+                version = excluded.version,
+                policy = excluded.policy,
+                updated_at = excluded.updated_at
+            WHERE enforcement_policies.organization_id = excluded.organization_id
+              AND enforcement_policies.project_id IS NULL
+            RETURNING id
+          `,
+          [
+            policy.id,
+            context.organizationId,
+            policy.name,
+            policy.version,
+            JSON.stringify(policy),
+            policy.updatedAt,
+          ],
+        )
 
-      return policy
+        if (!accepted.length) throw new EnforcementPolicyConflictError()
+        return policy
+      })
     },
 
     async saveGateOverride(decision, context) {

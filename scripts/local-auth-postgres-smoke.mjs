@@ -163,8 +163,8 @@ async function localLogin(apiUrl) {
   })
   expect(response.status === 303, `Local sign-in returned ${response.status}, expected 303.`)
   expect(
-    response.headers.get('location') === `${webOrigin}/legacy-shell`,
-    'Local sign-in did not use the fixed legacy-shell redirect.',
+    response.headers.get('location') === `${webOrigin}/`,
+    'Local sign-in did not use the fixed Studio redirect.',
   )
   const cookie = response.headers.get('set-cookie')?.split(';', 1)[0]
   expect(cookie?.startsWith('devflow_session='), 'Local sign-in did not set a session cookie.')

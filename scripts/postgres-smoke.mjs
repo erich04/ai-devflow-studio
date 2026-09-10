@@ -2170,7 +2170,8 @@ try {
   )
 
   expect(
-    initialOverview.enforcementPolicies?.organizationPolicy?.name === 'Warn-only default enforcement policy',
+    initialOverview.enforcementPolicies?.organizationPolicy?.name === 'Warn-only default enforcement policy' &&
+      initialOverview.enforcementPolicies?.organizationPolicySource === 'default',
     'Postgres overview did not start with the warn-only default enforcement policy.',
   )
 
@@ -3555,7 +3556,8 @@ try {
     'Postgres overview did not include the synced Electron Agent Review summary.',
   )
   expect(
-    syncedOverview.enforcementPolicies?.organizationPolicy?.version === 2,
+    syncedOverview.enforcementPolicies?.organizationPolicy?.version === 2 &&
+      syncedOverview.enforcementPolicies?.organizationPolicySource === 'persisted',
     'Postgres overview did not include the latest saved enforcement policy version.',
   )
   expect(

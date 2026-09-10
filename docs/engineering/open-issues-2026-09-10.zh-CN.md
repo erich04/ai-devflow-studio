@@ -8,18 +8,18 @@
 | Issue | 范围 | 当前状态 |
 | --- | --- | --- |
 | #51 | Web 深色模式 | 已按确认方案增加三态主题和首屏恢复；含退出登录同源修复，六尺寸浏览器回归通过，PR #84 已合并，Issue 已关闭 |
-| #52 | 新 Studio 完整主流程 | 已盘点项目创建、预算、团队总览仍由旧页面承载；导航方案确认待答 |
+| #52 | 新 Studio 完整主流程 | 交互已确认，正在迁入新 Studio 并补齐回归 |
 | #53 | Work Request 宽屏布局 | 已统一主卡宽度，空状态置于表单下；空/有请求 × 六尺寸 × 双主题回归通过，PR #84 已合并，Issue 已关闭 |
 | #54 | pairing code 布局 | 已拆为配对码整行、复制/撤销下一行；六尺寸受控配对码视觉回归通过，PR #84 已合并，Issue 已关闭 |
-| #55 | Provider 删除入口 | 按已确认方案实现；引用、并发、持久化、键盘及真实删除/重启回归通过，待本批云端交付 |
+| #55 | Provider 删除入口 | PR #85 已合并；引用、并发、持久化、键盘及真实删除/重启回归通过，Issue 已关闭 |
 | #56 | 真实 OpenCode 需求澄清 | 已接通保存的 DeepSeek 凭据并完成真实只读澄清验收；PR #83 已合并，Issue 已关闭 |
-| #57 | Policy 配置 | 待交互确认 |
+| #57 | Policy 配置 | 交互已确认，正在实现完整规则编辑、预览和同步验证 |
 | #58 | 应用 Policy 的反馈 | 已统一反馈、保存后权威重读和两页刷新；真实 Server Action 到隔离 API 回归通过，PR #84 已合并，Issue 已关闭 |
 | #59 | Policy 自引用链接 | 已移除自引用操作链接，保留实际提交按钮；组件和浏览器回归通过，PR #84 已合并，Issue 已关闭 |
 | #60 | Desktop 同步按钮、项目 Policy | 已修复；真实同步、Task 策略、状态推送保留及自动化回归通过（PR #80） |
 | #61 | Team 页面滚动 | 已修复；多尺寸/主题自动化与真实底部滚动通过（PR #80） |
 | #63 | Gate Inspector 滚动 | 已修复；多尺寸/主题自动化、真实长内容滚动及 Evidence 访问通过（PR #80） |
-| #64 | 卡片计数与证据入口 | 实际 Gate 显示产物 1 / 证据 0，报告位于 Evidence、没有产物标签；命名方案确认待答 |
+| #64 | 卡片计数与证据入口 | 实际 Gate 显示产物 1 / 证据 0，报告位于 Evidence、没有产物标签；已确认统一产物 / 测试证据 / 轨迹，等待本批实施 |
 | #65 | 重复审查与费用 | 已修复；真实 DeepSeek 确认重审及并发/重放/失败重试回归通过（PR #80） |
 | #76 | 模型把非缺口计作缺失证据 | 3 次真实复验通过；PR #79 已合并，Issue 已关闭 |
 
@@ -194,3 +194,35 @@ CUA 曾出现 `noWindowsAvailable` 和截图旧帧，旧测试进程也未真正
 本批次是 Provider 管理定向验收，不作为一次新的需求到 PR 全流程。剩余 #52/#57 的导航与设置布局、#64 的计数命名、#81 的未知费用展示已分别提出具体确认问题，未收到答复前不实施这些交互。
 
 云端首轮 Windows 回归中，Provider 写盘失败回滚用例因对完整 SQLite Buffer 做递归对象比较而超过 5 秒（7200ms）。改用 `Buffer.equals` 做完整字节比较，保留同一断言强度，本地用例从约 1435ms 降为 55ms；5 个存储回归全部通过。产品代码未因此修改，云端对新提交重新执行全部检查。
+
+### Provider 批次云端交付
+
+PR #85 于 2026-09-10 13:23 UTC 合并，main `7b587e234a10ece7edf6e8862d471e4c4b015e1d`。源提交 `c1baec3486e5c8befb3a596b0fd41e7492a0b4ba` 的五项 CI（run `34481063201`）全部通过，#55 已关闭。
+
+## Studio 和 Policy 批次：#52、#57（进行中）
+
+用户已确认三项剩余交互。分支 `codex/studio-policy-52-57` 起点为 PR #85 合并后的 main。新增的三个页面回归用例首先全部失败，分别证明正常流程仍跳旧页面、缺少完整 Policy 设置、缺少团队总览。随后实现统一入口、在 Studio 创建和选择项目、预算配置及完整 Policy 编辑；服务端新增明确的默认回退 / 已保存来源标记。验证记录待本批完成后补充。
+
+### Studio / Policy 原因、实现与本地证据
+
+- 新 Studio 提供工作台 / 团队总览 / 设置；项目创建表单、预算操作迁出 legacy 目录并复用，成功返回真实 Project ID 后自动选择。旧 Route 只保留兼容重定向，旧表单和旧快捷 Policy 写入口已移除。首次本地登录直接进入 Studio。
+- Policy 编辑展示全部十条规则、来源、名称、版本、更新时间和生效动作；Owner 预览后保存，Lead / Member 只读。API 和 Web 复用 shared 校验。新写入保持现有策略 ID、提升版本，并以同一事务内的组织锁和预期修订检查拒绝旧预览。保存后权威重读；未知结果只能重新读取后继续。
+- API 的组织过滤层需同时传递策略来源，不能靠名称或 ID 推断是否持久化。初次浏览器验证发现过滤漏传，修复后 12 项浏览器回归通过。
+- 冷启动时 SSR 已显示按钮但事件尚未就绪，快速点击预设可能无效；新增交互在挂载就绪后启用。截图工具的默认 caret 隐藏会在 React 初始化期间修改输入框 style，造成测试自身的 hydration 警告；独立 smoke 改用原始 caret 并等待入口就绪，最终浏览器 console / page errors 为空。
+- 新增 #86：同一数据库 public 已迁移而新的 search_path schema 为空时，迁移检测误查 public，随后读取当前 schema 报 relation schema_meta does not exist。真实首轮失败已记录；检测改为遵循当前 search_path，与后续读写保持一致。迁移单元回归 15 项通过，已有 public + 全新 schema 的真实初始化随后通过。
+
+可重复命令：`DEVFLOW_DATABASE_URL=<专用测试数据库> corepack pnpm test:studio-onboarding-postgres-smoke`。运行前准备 Desktop production build 和 Chromium；脚本创建并清理独立 schema、临时 Git 仓库与独立 Electron profile，不访问真实模型凭据。
+
+该集成链路真实执行：空库首次登录 → Web 弹窗创建并选中新 Project → 创建一句话 Work Request → Web 配对码 → Electron Main 配对 / 本地持久化 → Inbox 领取并创建本地 Run → 默认 Policy v1 / warn → Web 预览并保存 Recommended v2 → 真实 Postgres 的同版本并发修改得到 200 / 409 → Electron 同步 remote_cache v3，同一 Gate 变为 blocked。Provider 调用为 0，本项是初始化和策略集成回归，不冒充真实模型全流程。
+
+旧壳迁移清单：项目创建、配对、预算配置/审批、Policy 编辑、Review 操作均有 Studio 正式入口；成员/成本/最近 Run / 测试摘要迁入团队总览；Evidence Chain / Agent / Policy 交付摘要保留工作台。旧页面所有写操作已移除，无需保留诊断 Route；既有书签重定向 Studio，手册及截图已更新。
+
+### 本批完整回归
+
+- `corepack pnpm verify`：类型检查、269 测试文件 / 3747 用例、跨平台检查全部通过。
+- `corepack pnpm test:e2e`：33/33 通过。含三尺寸 Studio 项目创建 / 自动选中 / 提交需求、双主题 Policy、Member 只读，以及既有 Desktop / Web 回归。
+- `corepack pnpm test:electron-smoke`：完整通过（退出码 0），保留既有真实 Main / preload / SQLite、Workflow 与凭据管理回归。
+- `corepack pnpm test:postgres-smoke`：专用 Postgres 实例完整通过；确认组织策略来源、版本及现有权限 / Gate / Delivery 行为。
+- `corepack pnpm test:studio-onboarding-postgres-smoke`：已有 public 表 + 新空 schema 的完整初始化和 Web → Electron 同步回归通过，浏览器错误为 0；独立 schema、Electron profile 和临时仓库由脚本清理，截图保留在手册目录。
+
+待云端 PR / CI 完成后，关闭 #52、#57 及本批发现并修复的 #86。后续按已确认计划处理 #64 和 #81。

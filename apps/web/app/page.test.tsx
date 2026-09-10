@@ -42,6 +42,9 @@ vi.mock('next/headers', () => ({
   })),
 }))
 
+vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }) }))
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
+
 const mockedFetchTeamOverview = vi.mocked(fetchTeamOverview)
 const mockedFetchAuthSession = vi.mocked(fetchAuthSession)
 const mockedCookies = vi.mocked(cookies)
@@ -52,13 +55,42 @@ const mockedFetchGitHubBinding = vi.mocked(fetchGitHubRepositoryBinding)
 const mockedEvaluateGateCommandSnapshot = vi.mocked(evaluateGateCommandSnapshot)
 const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 
+it('keeps project creation in Studio and removes normal legacy navigation', async () => {
+  mockedFetchTeamOverview.mockResolvedValue({ ...overview, projects: [], runs: [] })
+  mockedFetchAuthSession.mockResolvedValue({ user: { id: 'owner', name: 'Owner', role: 'owner' }, authentication: { provider: 'github' }, projectMemberships: [] })
+  const { container } = render(await Page({}))
+  expect(container.querySelector('a[href^="/legacy-shell"]')).toBeNull()
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  fireEvent.click(screen.getByRole('button', { name: '创建团队项目' }))
+  expect(screen.getByRole('dialog', { name: '创建团队项目' })).toBeInTheDocument()
+})
+
+it('shows all policy rules in settings and gives members read-only access', async () => {
+  mockedFetchTeamOverview.mockResolvedValue(overview)
+  mockedFetchAuthSession.mockResolvedValue({ user: { id: 'member', name: 'Member', role: 'member' }, authentication: { provider: 'github' }, projectMemberships: [] })
+  render(await Page({ searchParams: Promise.resolve({ view: 'settings', section: 'policy' }) }))
+  expect(screen.getByRole('heading', { name: 'Team Policy' })).toBeInTheDocument()
+  expect(screen.getByRole('table', { name: 'Team Policy 规则' }).querySelectorAll('tbody tr')).toHaveLength(10)
+  expect(screen.queryByRole('button', { name: '预览变更' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '创建团队项目' })).not.toBeInTheDocument()
+})
+
+it('provides team-wide members, cost and recent runs under the same navigation', async () => {
+  mockedFetchTeamOverview.mockResolvedValue(overview)
+  render(await Page({ searchParams: Promise.resolve({ view: 'team', projectId: 'p-remote' }) }))
+  expect(screen.getByRole('heading', { name: '团队总览' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: '工作台', exact: true })).toHaveAttribute('href', '/?projectId=p-remote')
+  expect(screen.getByRole('heading', { name: '团队成员' })).toBeInTheDocument()
+  expect(screen.getByRole('heading', { name: '项目费用' })).toBeInTheDocument()
+})
+
 it('shows the authoritative policy and one actionable policy control', async () => {
   mockedFetchTeamOverview.mockResolvedValue(overview)
   const { container } = render(await Page({ searchParams: Promise.resolve({ projectId: 'p-remote' }) }))
   const policy = container.querySelector('#policy')!
   expect(policy.textContent).toContain(organizationPolicy.name)
   expect(policy.querySelector('a[href="#policy"]')).toBeNull()
-  expect(screen.getByRole('button', { name: 'Apply recommended enforcement' })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: '查看 Team Policy 设置' })).toHaveAttribute('href', '/?projectId=p-remote&view=settings&section=policy')
 })
 
 it('offers the saved system, light, and dark theme preference', async () => {
@@ -411,7 +443,7 @@ describe('web product shell page', () => {
     })
     render(await Page({ searchParams: Promise.resolve({ projectId: 'p-new' }) }))
     expect(screen.getByRole('link', { name: '预算详情' })).toHaveAttribute(
-      'href', '/legacy-shell?projectId=p-new#runtime-budget',
+      'href', '/?projectId=p-new&view=settings&section=budget',
     )
   })
 
@@ -715,7 +747,7 @@ describe('web product shell page', () => {
     expect(screen.getByText('Ship from API data.')).toBeInTheDocument()
     expect(screen.getAllByText('Evidence Chain').length).toBeGreaterThanOrEqual(1)
     expect(screen.getAllByText('Human Gate').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('旧壳备份')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '团队总览' })).toBeInTheDocument()
     expect(screen.getAllByText('Architecture Gate').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText('Lead review')).toBeInTheDocument()
     expect(screen.getByText('Remote tests passed.')).toBeInTheDocument()
@@ -734,10 +766,10 @@ describe('web product shell page', () => {
     expect(screen.getByText('No blocking knowledge gaps found.')).toBeInTheDocument()
     expect(screen.getByText('Session User · GitHub')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '退出登录' })).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /备份壳/ })).toHaveAttribute('href', '/legacy-shell')
+    expect(screen.queryByRole('link', { name: /备份壳/ })).not.toBeInTheDocument()
     expect(screen.getByText(/1 blocking · 2 warnings/)).toBeInTheDocument()
     expect(screen.getByText(/1 retries · 1 overrides/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Apply recommended enforcement/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '查看 Team Policy 设置' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /运行门禁审查/ })).toBeInTheDocument()
     expect(screen.getByText('Budget Used')).toBeInTheDocument()
     expect(screen.getByText('Runtime Budget')).toBeInTheDocument()

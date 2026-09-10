@@ -1,13 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { cookies } from 'next/headers'
 import { revalidatePath } from 'next/cache'
-import { createTeamProject, DevFlowApiError } from '../lib/devflow-api'
+import { createTeamProject, DevFlowApiError } from './lib/devflow-api'
 import { createProjectAction } from './project-actions'
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }))
 vi.mock('next/headers', () => ({ cookies: vi.fn() }))
-vi.mock('../lib/devflow-api', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../lib/devflow-api')>(),
+vi.mock('./lib/devflow-api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./lib/devflow-api')>(),
   createTeamProject: vi.fn(),
 }))
 
@@ -26,8 +26,8 @@ beforeEach(() => {
 
 describe('createProjectAction', () => {
   it('returns the created project and refreshes both project entry points', async () => {
-    vi.mocked(createTeamProject).mockResolvedValue({ name: 'Mini Agent' } as never)
-    await expect(createProjectAction(input())).resolves.toEqual({ ok: true, projectName: 'Mini Agent' })
+    vi.mocked(createTeamProject).mockResolvedValue({ name: 'Mini Agent', id: 'p-mini-agent' } as never)
+    await expect(createProjectAction(input())).resolves.toEqual({ ok: true, projectName: 'Mini Agent', projectId: 'p-mini-agent' })
     expect(createTeamProject).toHaveBeenCalledWith({
       name: 'Mini Agent', slug: 'mini-agent', description: 'Small pilot.', repository: 'erich/mini-agent',
       cookieHeader: 'devflow_session=test-session',

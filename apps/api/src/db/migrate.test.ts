@@ -23,7 +23,7 @@ class FakeConnection {
     if (sql === this.state.failOnSql) {
       throw new Error(`forced migration failure: ${sql}`)
     }
-    if (sql.includes("to_regclass('public.schema_meta')")) {
+    if (sql.includes("to_regclass('schema_meta')")) {
       return [{
         schema_meta_table: this.state.schemaVersion === undefined ? null : 'schema_meta',
         migration_history_table: this.state.historyExists ? 'team_schema_migrations' : null,

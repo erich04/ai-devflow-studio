@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createRecommendedEnforcementPreset,
+  createWarnOnlyDefaultPolicy,
   type GateOverrideDecision,
 } from '@ai-devflow/shared'
 import type { RequestPrincipal } from '../auth/request-auth'
@@ -1666,4 +1667,26 @@ describe('seed team repository', () => {
       nodes: [expect.objectContaining({ ownerId: syncContext.userId })],
     })
   })
+})
+
+it('distinguishes the default fallback from the same rules explicitly saved by the owner', async () => {
+  const repository = createSeedTeamRepository()
+  const context = githubOwnerPrincipal.session
+  expect((await repository.getTeamOverview(context)).enforcementPolicies.organizationPolicySource).toBe('default')
+  await repository.saveEnforcementPolicy(createWarnOnlyDefaultPolicy({ organizationId: context.organizationId }), context)
+  expect((await repository.getTeamOverview(context)).enforcementPolicies.organizationPolicySource).toBe('persisted')
+})
+
+it('allows one policy write for an expected revision and rejects the concurrent stale preview', async () => {
+  const repository = createSeedTeamRepository()
+  const context = githubOwnerPrincipal.session
+  const initial = (await repository.getTeamOverview(context)).enforcementPolicies.organizationPolicy
+  const expected = { id: initial.id, version: initial.version, updatedAt: initial.updatedAt }
+  const next = { ...initial, name: 'Edited policy', version: 2, updatedAt: '2026-09-10T15:00:00.000Z' }
+  const results = await Promise.allSettled([
+    repository.saveEnforcementPolicy(next, context, expected),
+    repository.saveEnforcementPolicy({ ...next, name: 'Stale editor' }, context, expected),
+  ])
+  expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected'])
+  expect((await repository.getTeamOverview(context)).enforcementPolicies.organizationPolicy.name).toBe('Edited policy')
 })

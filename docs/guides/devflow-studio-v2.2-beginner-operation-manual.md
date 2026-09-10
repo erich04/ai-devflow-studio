@@ -8,7 +8,7 @@
 
 DevFlow Studio 主要有两个操作界面：
 
-- **Web Team Console**：管理 Team Project、Work Request、团队策略、预算、证据链和 GitHub Delivery 审批。
+- **Web Studio**：管理 Team Project、Work Request、团队策略、预算、证据链和 GitHub Delivery 审批。
 - **Desktop**：连接本地代码仓库，运行 Workflow、Agent、测试和受控 Git 操作。原始代码、工作目录和完整 diff 主要留在本地。
 
 后面还有 API 和 Postgres，仓库中也包含 Worker，它们负责团队数据、任务同步和后台处理。新手日常操作主要在 Web 和 Desktop 之间来回切换。
@@ -108,15 +108,25 @@ V2.2 还支持有边界的独立 Agent Runtime、Memory 生命周期和 Multi-Ag
 
 本次操作是重新打开当前仓库的选择器，因此没有切换到其他目录。
 
-### 第 3 步：从旧壳进入当前 Web 工作区
+### 第 3 步：在 Studio 创建和选择团队项目
 
-`/legacy-shell` 是旧版管理壳，仍保留 Team、预算、策略和历史数据视图。
+进入 Web 根地址 `/`。首次登录且没有项目时，Owner 点击“创建团队项目”，在弹窗中填写 Name、Slug、已有 Repository 和 Description。Slug 使用小写字母、数字和单个连字符。
 
-![旧版 Team Console](./screenshots/v2.2-beginner-manual/04-web-team-project.jpg)
+![空项目的 Studio 入口](./screenshots/studio-management-20260910/01-empty-studio.png)
 
-新手主线使用 Web 根地址 `/`。进入后先选择 Team Project；页面不会擅自从其他项目选择一个 Run。
+创建成功后会留在 Studio，并自动选中新项目，显示 Work Request、Desktop pairing 和 GitHub Delivery。已有项目通过项目选择区切换；页面不会擅自选择其他项目的 Run。成员没有创建项目权限，重复 Slug、登录过期或保存结果不确定时按表单提示处理。
 
-![Web 选择 Team Project](./screenshots/v2.2-beginner-manual/05-web-project-selected.jpg)
+![创建项目后自动选中并提交需求](./screenshots/studio-management-20260910/02-project-request.png)
+
+左侧“工作台”承载需求、配对和交付；“团队总览”查看成员、项目费用、最近 Run 与测试摘要；“设置”分为预算和 Policy。旧 `/legacy-shell` 地址仅重定向到 Studio，正常操作不再进入旧界面。
+
+在“设置 → Policy”中区分默认回退和 Team 已保存状态，并查看所有规则、最低要求、例外条件和当前项目的生效动作。Owner 可选择预设或编辑规则，先点“预览变更”，核对 warn / block 等变化后“确认保存”；Lead 和 Member 只读。默认回退不会因为名称相同而被标成已保存。
+
+![Team Policy 保存前预览](./screenshots/studio-management-20260910/03-policy-preview.png)
+
+保存后应在 Desktop 点击“同步团队”，检查策略版本。Web 显示的是云端版本，不能据此断言 Desktop 已同步。并发修改冲突或保存结果不确定时，先重新读取云端策略，再决定是否继续编辑。项目覆盖策略当前仅显示，不提供编辑入口。
+
+上述三张截图来自 2026-09-10 的独立 Postgres schema、真实 Web / API / Electron 初始化回归；没有调用模型。后续 Workflow 的真实 Provider 验收另行记录。
 
 ### 第 4 步：在 Web 创建 Work Request
 

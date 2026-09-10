@@ -2,10 +2,10 @@
 
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
-import { createTeamProject, DevFlowApiError } from '../lib/devflow-api'
+import { createTeamProject, DevFlowApiError } from './lib/devflow-api'
 
 export type CreateProjectResult =
-  | { ok: true; projectName: string }
+  | { ok: true; projectName: string; projectId: string }
   | { ok: false; error: string; authenticationRequired?: boolean }
 
 export async function createProjectAction(formData: FormData): Promise<CreateProjectResult> {
@@ -16,6 +16,10 @@ export async function createProjectAction(formData: FormData): Promise<CreatePro
 
   if (!name || !slug || !description || !repository) {
     return { ok: false, error: '请完整填写项目名称、Slug、仓库和描述。' }
+  }
+
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    return { ok: false, error: 'Slug 只能使用小写字母、数字和单个连字符。' }
   }
 
   try {
@@ -30,7 +34,7 @@ export async function createProjectAction(formData: FormData): Promise<CreatePro
     })
     revalidatePath('/legacy-shell')
     revalidatePath('/')
-    return { ok: true, projectName: project.name }
+    return { ok: true, projectName: project.name, projectId: project.id }
   } catch (error) {
     if (error instanceof DevFlowApiError) {
       if (error.status === 401) {

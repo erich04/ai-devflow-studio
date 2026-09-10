@@ -6,7 +6,7 @@ import type { RuntimeBudgetPolicy } from '@ai-devflow/shared'
 import {
   createRuntimeBudgetApproval,
   saveRuntimeBudgetPolicy,
-} from '../lib/devflow-api'
+} from './lib/devflow-api'
 
 export type RuntimeBudgetPolicySaveResult =
   | { ok: true; policy: RuntimeBudgetPolicy }
