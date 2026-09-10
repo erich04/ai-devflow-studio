@@ -21,6 +21,56 @@ import {
 } from './knowledge-review-runtime'
 
 describe('KnowledgeReviewRuntime', () => {
+  it('calls the provider and persists a review only once for concurrent requests for the same Gate', async () => {
+    const store = new MemoryKnowledgeReviewStore()
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    let requestSequence = 0
+    const runtime = createKnowledgeReviewRuntime({
+      store,
+      knowledgeDocuments,
+      knowledgeChunks,
+      resolveProviderMetadata: async () => ({ id: provider.id, name: provider.name, model: provider.model }),
+      resolveProvider: async () => provider,
+      createRequestId: () => `concurrent-review-${++requestSequence}`,
+    })
+
+    const results = await Promise.allSettled([
+      runtime.run(reviewInput(provider.id)),
+      runtime.run(reviewInput(provider.id)),
+    ])
+
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+    expect(store.reviews).toHaveLength(1)
+    expect(store.savedArtifacts).toHaveLength(1)
+    expect(store.tokenUsage).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+  })
+
+  it('releases the current-Gate execution guard after provider failure so a retry can succeed', async () => {
+    const store = new MemoryKnowledgeReviewStore()
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge').mockRejectedValueOnce(new Error('Provider unavailable'))
+    let requestSequence = 0
+    const runtime = createKnowledgeReviewRuntime({
+      store,
+      knowledgeDocuments,
+      knowledgeChunks,
+      resolveProviderMetadata: async () => ({ id: provider.id, name: provider.name, model: provider.model }),
+      resolveProvider: async () => provider,
+      createRequestId: () => `retry-review-${++requestSequence}`,
+    })
+
+    await expect(runtime.run(reviewInput(provider.id))).rejects.toThrow('Provider unavailable')
+    await expect(runtime.run(reviewInput(provider.id))).resolves.toMatchObject({ review: { providerId: provider.id } })
+
+    expect(reviewKnowledge).toHaveBeenCalledTimes(2)
+    expect(store.reviews).toHaveLength(1)
+    expect(store.events.filter((event) => event.kind === 'error')).toHaveLength(1)
+    expect(store.events.filter((event) => event.kind === 'agent_review')).toHaveLength(1)
+  })
+
   it('fails closed for a paid provider when no budget guard is configured', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const resolveProvider = vi.fn()
