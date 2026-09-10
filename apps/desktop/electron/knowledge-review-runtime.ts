@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
   createAgentReviewArtifacts,
@@ -71,7 +72,8 @@ export function createKnowledgeReviewRuntime(
   deps: KnowledgeReviewRuntimeDependencies,
 ): KnowledgeReviewRuntime {
   const now = deps.now ?? (() => new Date().toISOString())
-  const createRequestId = deps.createRequestId ?? (() => `review-request-${Date.now()}`)
+  const createRequestId = deps.createRequestId ?? (() => `review-request-${randomUUID()}`)
+  const pendingReviews = new Set<string>()
 
   async function persistError(input: RunKnowledgeReviewInput, requestId: string, message: string) {
     const redactedMessage = redactSensitiveText(message).value
@@ -87,132 +89,145 @@ export function createKnowledgeReviewRuntime(
     await deps.store.saveEvent(event)
   }
 
+  async function executeReview(input: RunKnowledgeReviewInput): Promise<RunKnowledgeReviewResult> {
+    const requestId = createRequestId()
+    const runs = await deps.store.listRuns()
+    const run = runs.find((candidate) => candidate.id === input.runId)
+    if (!run) {
+      throw new Error(`Run not found: ${input.runId}`)
+    }
+    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+    if (!node) {
+      throw new Error(`Run node not found: ${input.nodeId}`)
+    }
+    if (
+      run.projectId !== input.projectId ||
+      run.currentNodeId !== node.id ||
+      (node.kind !== 'gate' && node.kind !== 'acceptance') ||
+      (node.status !== 'running' && node.status !== 'blocked')
+    ) {
+      throw new Error('基于知识的门禁审查只能针对当前 Gate 或 Acceptance 节点运行')
+    }
+    if (!input.providerId) {
+      throw new Error(
+        '门禁审查 Provider 尚未配置。运行门禁审查前请保存 Provider Name、Base URL、Model 和 API Key。',
+      )
+    }
+
+    const providerId = input.providerId
+    let providerMetadata: KnowledgeReviewProviderMetadata
+    try {
+      providerMetadata = await deps.resolveProviderMetadata(providerId)
+    } catch (error) {
+      const detail = failureMessage(error)
+      await persistError(input, requestId, `门禁审查 Provider metadata 不可用：${detail}`)
+      throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
+    }
+
+    const [artifacts, testEvidence, policySnapshot] = await Promise.all([
+      deps.store.listArtifacts(input.runId),
+      deps.store.listTestEvidence(input.runId),
+      deps.loadPolicySnapshot
+        ? deps.loadPolicySnapshot(input.projectId)
+        : deps.store.getPolicySnapshot?.(input.projectId) ?? Promise.resolve(null),
+    ])
+    let context
+    try {
+      context = await buildAgentReviewContext({
+        run,
+        node,
+        artifacts,
+        testEvidence,
+        knowledgeDocuments: deps.knowledgeDocuments,
+        knowledgeChunks: deps.knowledgeChunks,
+        policySnapshot,
+        requiredContextFields: deriveWorkflowContextPolicyRequirements(
+          policySnapshot?.effectivePolicy,
+          node,
+        ),
+      })
+    } catch (error) {
+      const detail = failureMessage(error)
+      await persistError(input, requestId, `门禁审查对象不完整：${detail}`)
+      throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
+    }
+
+    const lazyProvider: AgentProvider = {
+      ...providerMetadata,
+      reviewKnowledge: async (providerInput) => {
+        const provider = await deps.resolveProvider(providerId)
+        if (provider.id !== providerMetadata.id || provider.model !== providerMetadata.model) {
+          throw new Error('Agent provider configuration changed after budget authorization. Retry the review.')
+        }
+        return provider.reviewKnowledge(providerInput)
+      },
+    }
+
+    let budgetedResult
+    try {
+      budgetedResult = await runBudgetedKnowledgeReviewAgent({
+        request: {
+          id: requestId,
+          runId: input.runId,
+          nodeId: input.nodeId,
+          projectId: input.projectId,
+          requestedBy: input.requestedBy,
+          runtime: 'electron',
+          providerId,
+        },
+        context,
+        provider: lazyProvider,
+        ...(deps.budgetGuard ? { budgetGuard: deps.budgetGuard } : {}),
+        ...(input.runtimeBudgetApprovalId
+          ? { approvalId: input.runtimeBudgetApprovalId }
+          : {}),
+        now,
+      })
+    } catch (error) {
+      const detail = failureMessage(error)
+      await persistError(input, requestId, `门禁审查在产物保存前失败：${detail}`)
+      throw new Error(`基于知识的门禁审查在产物保存前失败：${detail}`)
+    }
+
+    if (budgetedResult.status === 'blocked') {
+      const message = blockedMessage(budgetedResult.budgetDecision.status)
+      await persistError(
+        input,
+        requestId,
+        `${message} ${budgetedResult.evidence.reason}`,
+      )
+      throw new Error(message)
+    }
+
+    const result = budgetedResult.execution
+    const output = createAgentReviewArtifacts(result)
+    const event: AgentEvent = {
+      ...output.event,
+      sequence: (await deps.store.listEvents(input.runId)).length + 1,
+    }
+
+    await deps.store.saveArtifact(output.artifact)
+    await deps.store.saveEvent(event)
+    await deps.store.saveAgentReview(result.review)
+    await deps.store.saveAgentTrace(result.trace)
+    await deps.store.saveAgentTokenUsage(result.tokenUsage)
+    return {
+      ...result,
+      state: await deps.store.loadState(),
+    }
+  }
+
   return {
     async run(input) {
-      const requestId = createRequestId()
-      const runs = await deps.store.listRuns()
-      const run = runs.find((candidate) => candidate.id === input.runId)
-      if (!run) {
-        throw new Error(`Run not found: ${input.runId}`)
+      const key = JSON.stringify([input.projectId, input.runId, input.nodeId])
+      if (pendingReviews.has(key)) {
+        throw new Error('当前 Gate 的门禁审查正在运行，请等待完成后再操作。')
       }
-      const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
-      if (!node) {
-        throw new Error(`Run node not found: ${input.nodeId}`)
-      }
-      if (
-        run.projectId !== input.projectId ||
-        run.currentNodeId !== node.id ||
-        (node.kind !== 'gate' && node.kind !== 'acceptance') ||
-        (node.status !== 'running' && node.status !== 'blocked')
-      ) {
-        throw new Error('基于知识的门禁审查只能针对当前 Gate 或 Acceptance 节点运行')
-      }
-      if (!input.providerId) {
-        throw new Error(
-          '门禁审查 Provider 尚未配置。运行门禁审查前请保存 Provider Name、Base URL、Model 和 API Key。',
-        )
-      }
-
-      const providerId = input.providerId
-      let providerMetadata: KnowledgeReviewProviderMetadata
+      pendingReviews.add(key)
       try {
-        providerMetadata = await deps.resolveProviderMetadata(providerId)
-      } catch (error) {
-        const detail = failureMessage(error)
-        await persistError(input, requestId, `门禁审查 Provider metadata 不可用：${detail}`)
-        throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
-      }
-
-      const [artifacts, testEvidence, policySnapshot] = await Promise.all([
-        deps.store.listArtifacts(input.runId),
-        deps.store.listTestEvidence(input.runId),
-        deps.loadPolicySnapshot
-          ? deps.loadPolicySnapshot(input.projectId)
-          : deps.store.getPolicySnapshot?.(input.projectId) ?? Promise.resolve(null),
-      ])
-      let context
-      try {
-        context = await buildAgentReviewContext({
-          run,
-          node,
-          artifacts,
-          testEvidence,
-          knowledgeDocuments: deps.knowledgeDocuments,
-          knowledgeChunks: deps.knowledgeChunks,
-          policySnapshot,
-          requiredContextFields: deriveWorkflowContextPolicyRequirements(
-            policySnapshot?.effectivePolicy,
-            node,
-          ),
-        })
-      } catch (error) {
-        const detail = failureMessage(error)
-        await persistError(input, requestId, `门禁审查对象不完整：${detail}`)
-        throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
-      }
-
-      const lazyProvider: AgentProvider = {
-        ...providerMetadata,
-        reviewKnowledge: async (providerInput) => {
-          const provider = await deps.resolveProvider(providerId)
-          if (provider.id !== providerMetadata.id || provider.model !== providerMetadata.model) {
-            throw new Error('Agent provider configuration changed after budget authorization. Retry the review.')
-          }
-          return provider.reviewKnowledge(providerInput)
-        },
-      }
-
-      let budgetedResult
-      try {
-        budgetedResult = await runBudgetedKnowledgeReviewAgent({
-          request: {
-            id: requestId,
-            runId: input.runId,
-            nodeId: input.nodeId,
-            projectId: input.projectId,
-            requestedBy: input.requestedBy,
-            runtime: 'electron',
-            providerId,
-          },
-          context,
-          provider: lazyProvider,
-          ...(deps.budgetGuard ? { budgetGuard: deps.budgetGuard } : {}),
-          ...(input.runtimeBudgetApprovalId
-            ? { approvalId: input.runtimeBudgetApprovalId }
-            : {}),
-          now,
-        })
-      } catch (error) {
-        const detail = failureMessage(error)
-        await persistError(input, requestId, `门禁审查在产物保存前失败：${detail}`)
-        throw new Error(`基于知识的门禁审查在产物保存前失败：${detail}`)
-      }
-
-      if (budgetedResult.status === 'blocked') {
-        const message = blockedMessage(budgetedResult.budgetDecision.status)
-        await persistError(
-          input,
-          requestId,
-          `${message} ${budgetedResult.evidence.reason}`,
-        )
-        throw new Error(message)
-      }
-
-      const result = budgetedResult.execution
-      const output = createAgentReviewArtifacts(result)
-      const event: AgentEvent = {
-        ...output.event,
-        sequence: (await deps.store.listEvents(input.runId)).length + 1,
-      }
-
-      await deps.store.saveArtifact(output.artifact)
-      await deps.store.saveEvent(event)
-      await deps.store.saveAgentReview(result.review)
-      await deps.store.saveAgentTrace(result.trace)
-      await deps.store.saveAgentTokenUsage(result.tokenUsage)
-      return {
-        ...result,
-        state: await deps.store.loadState(),
+        return await executeReview(input)
+      } finally {
+        pendingReviews.delete(key)
       }
     },
   }
