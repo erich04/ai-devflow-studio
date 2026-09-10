@@ -16,11 +16,11 @@
 | #57 | Policy 配置 | 待交互确认 |
 | #58 | 应用 Policy 的反馈 | 已确认 action 不返回可展示结果，界面缺少策略版本反馈；隔离写入复现待做，交互确认待答 |
 | #59 | Policy 自引用链接 | 实际点击仅变更 #policy 锚点，未执行应用动作；交互确认待答 |
-| #60 | Desktop 同步按钮、项目 Policy | 已获交互确认并修复；自动化与真实同步通过，完整真实回归进行中 |
-| #61 | Team 页面滚动 | 已获交互确认并修复；多尺寸/主题自动化与实际底部滚动通过 |
-| #63 | Gate Inspector 滚动 | 已获交互确认并修复；多尺寸/主题自动化通过，真实窗口复验待恢复控制通道 |
+| #60 | Desktop 同步按钮、项目 Policy | 已修复；真实同步、Task 策略、状态推送保留及自动化回归通过（PR #80） |
+| #61 | Team 页面滚动 | 已修复；多尺寸/主题自动化与真实底部滚动通过（PR #80） |
+| #63 | Gate Inspector 滚动 | 已修复；多尺寸/主题自动化、真实长内容滚动及 Evidence 访问通过（PR #80） |
 | #64 | 卡片计数与证据入口 | 实际 Gate 显示产物 1 / 证据 0，报告位于 Evidence、没有产物标签；命名方案确认待答 |
-| #65 | 重复审查与费用 | 已获交互确认并修复；查看/确认/并发/重放/失败重试回归通过，真实 Provider 复验待完成 |
+| #65 | 重复审查与费用 | 已修复；真实 DeepSeek 确认重审及并发/重放/失败重试回归通过（PR #80） |
 | #76 | 模型把非缺口计作缺失证据 | 3 次真实复验通过；PR #79 已合并，Issue 已关闭 |
 
 ## 复现与回归
@@ -89,11 +89,24 @@
 - 完整 Desktop Playwright 受控接口回归：16/16 通过；其中滚动覆盖 1180×760、1834×768 与浅色/深色的四种组合。
 - Desktop production build 通过。受控接口/Provider 测试不计为真实 Provider 验收。
 
-### 真实验证进度
+### 真实验证结果
 
-本次运行隔离工作分支的 Desktop 构建，复用只读 QA Run `run-work-request-d31f23324f30654ed290208e35f85802`。验证前为 `paused_at_gate / v4`，共 7 份 Review（方案 Gate 6 份、需求 Gate 1 份），9 份用量记录，Coding Run 和 Test Evidence 均为 0。
+本次运行隔离工作分支的 Desktop production 构建，复用只读 QA Run `run-work-request-d31f23324f30654ed290208e35f85802`。验证前为 `paused_at_gate / v4`，共 7 份 Review（方案 Gate 6 份、需求 Gate 1 份），9 份用量记录，Coding Run 和 Test Evidence 均为 0。
 
-- Team 实际滚动到最后一条规则、Budget Guard 和同步按钮；真实同步结果为 `remote_cache v1 / 2026-09-10T09:45:44.020Z`，原位保留 Team 页面并展示所绑定的 Team Project。
-- 选中已完成的设计 Task 后，顶部仍显示 Policy v1 / loaded 与已配置的预算。
-- 后续 CUA 滚轮返回 `noWindowsAvailable`，截图停留旧帧。已尝试重连与 Raise，并请求用户恢复窗口；不把旧截图认作新的真实验证证据。
-- 真实 Gate 滚动与确认重审的 Provider 调用次数验收仍在继续。未完成前不关闭对应 Issue，也不将这次定向修复称为重新跑完整需求交付流程。
+CUA 曾出现 `noWindowsAvailable` 和截图旧帧，旧测试进程也未真正退出。用户恢复可操作窗口后，彻底重启验证实例，确认新 PID 与构建路径，再重新完成以下验收；旧画面不计为通过证据。
+
+| 验证 | 真实结果 |
+| --- | --- |
+| #60 Team 同步 | 原位显示 `remote_cache v1 / 2026-09-10T09:57:30.304Z` 和绑定的 Team Project，保持 Team 页面 |
+| #60 Task 项目策略 | 选中已完成的设计 Task 后，Policy v1 / loaded 与预算仍显示；没有执行 Task Gate 评估 |
+| #60 本地状态推送 | 真实重审结束后的状态更新及 outbox 推送后，Team 项目、成员、成本与同步反馈仍保留 |
+| #61 页面滚动 | 实际滚轮到达第 10 条规则、Budget Guard、保存和同步按钮 |
+| #63 长澄清滚动 | 实际滚轮越过澄清内容，点击 Evidence 标签，再滚动到已有 Review 报告 |
+| #65 查看 / 取消 | 查看结果、Esc 取消、按钮取消后，仍为 7 份 Review / 9 份用量记录 |
+| #65 确认重审 | 点击一次确认，运行中按钮禁用；完成后恢复查看结果主动作，新增且仅新增 1 份 Review、1 份用量、1 份对应 Artifact 和 Trace |
+
+真实 Provider 为 DeepSeek `deepseek-v4-flash`；新 Review `agent-review-review-request-9af9e8c9-09bb-45dd-8ef7-801a0d35b761-electron`，时间 `2026-09-10T09:57:51.069Z`。归档用量为 4966 input / 814 output / 4736 cache read；系统记录成本 `$0.0032888`。
+
+重审后总计 8 份 Review（方案 Gate 7 份）、10 份用量。审查对象 manifest 保持一致，Run 仍为 `paused_at_gate / v4`，Coding Run 和 Test Evidence 仍为 0。重复请求与旧确认重放使用受控 Provider 做边界回归；不通过额外重复的付费调用制造验收数据。
+
+上述为这四项 Issue 的定向真实回归，不等同于重新执行从需求到交付的完整流程。[PR #80](https://github.com/erich04/ai-devflow-studio/pull/80) 汇总修复与回归；Issue 在云端检查通过并合并后关闭。其余 10 项继续按交互确认 / OpenCode 配置依赖处理。
