@@ -72,6 +72,19 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).not.toContain('{ ...gitBoundary.metrics }')
   })
 
+  it('binds clarification Gate approval to the exact generated revision', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+
+    expect(smoke).toContain("const clarification = await callDesktop(page, 'completeWorkflowAgentNode'")
+    expect(smoke).toContain('const clarificationRevision = clarification.artifact?.clarificationRevision')
+    expect(smoke).toContain('expectedClarificationRevision: {')
+    expect(smoke).toContain('artifactId: clarification.artifact.id')
+    expect(smoke).toContain('revisionDigest: clarificationRevision.revisionDigest')
+  })
+
   it('cold-restarts one partial coordination graph without duplicating specialist effects', () => {
     const smoke = readFileSync(
       'scripts/v15-github-delivery-packaged-smoke.mjs',

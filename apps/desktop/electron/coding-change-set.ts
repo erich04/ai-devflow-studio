@@ -368,7 +368,9 @@ export async function writeCodingChangeSetExecutionPhase(input: {
 }
 
 async function fsyncPath(filePath: string): Promise<void> {
-  const handle = await open(filePath, 'r')
+  // Windows requires a writable handle for FlushFileBuffers; opening the same
+  // transaction file read-only makes fsync fail with EPERM in production and CI.
+  const handle = await open(filePath, process.platform === 'win32' ? 'r+' : 'r')
   try {
     await handle.sync()
   } finally {

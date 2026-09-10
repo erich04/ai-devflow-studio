@@ -801,18 +801,27 @@ async function advanceToPr(page, materialized, localProjectId, userId) {
   let run = materialized.run
   let node = currentNode(run)
   assert(node.kind === 'agent' && node.stage === 'clarify', 'Workflow did not start at Clarify.')
-  run = (
-    await callDesktop(page, 'completeWorkflowAgentNode', {
-      runId: run.id,
-      nodeId: node.id,
-      userId,
-      userName: 'Packaged Smoke Owner',
-      providerId: 'fake-knowledge-review',
-    })
-  ).run
+  const clarification = await callDesktop(page, 'completeWorkflowAgentNode', {
+    runId: run.id,
+    nodeId: node.id,
+    userId,
+    userName: 'Packaged Smoke Owner',
+    providerId: 'fake-knowledge-review',
+  })
+  run = clarification.run
   node = currentNode(run)
   assert(node.kind === 'gate', 'Clarify completion did not reach its Gate.')
-  run = (await callDesktop(page, 'approveGate', { runId: run.id, nodeId: node.id })).run
+  const clarificationRevision = clarification.artifact?.clarificationRevision
+  assert(clarificationRevision, 'Clarification completion did not return revision identity.')
+  run = (await callDesktop(page, 'approveGate', {
+    runId: run.id,
+    nodeId: node.id,
+    expectedClarificationRevision: {
+      artifactId: clarification.artifact.id,
+      revision: clarificationRevision.revision,
+      revisionDigest: clarificationRevision.revisionDigest,
+    },
+  })).run
   node = currentNode(run)
   assert(node.kind === 'agent' && node.stage === 'design', 'Workflow did not reach Design.')
   run = (
