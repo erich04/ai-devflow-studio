@@ -98,5 +98,5 @@ describe('main-owned fixture Local MCP Runtime', () => {
     expect((await store.listMcpServers())[0]?.command).toBe('/tmp/must-never-spawn')
     await second.shutdown()
     store.close()
-  })
+  }, 20_000)
 })

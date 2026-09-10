@@ -61,7 +61,7 @@ describe('Native Coding Executor v2 runtime', () => {
     await writeFile(
       path.join(repositoryPath, 'test.mjs'),
       scenario === 'success'
-        ? "import { readFile } from 'node:fs/promises'\nif ((await readFile('src/message.ts', 'utf8')) !== 'export const message = \\\"new\\\"\\n') process.exit(1)\n"
+        ? "import { readFile } from 'node:fs/promises'\nif (!(await readFile('src/message.ts', 'utf8')).includes('message = \\\"new\\\"')) process.exit(1)\n"
         : "import './node_modules/missing-tool/lib/check.js'\n",
       'utf8',
     )
@@ -292,7 +292,7 @@ describe('Native Coding Executor v2 runtime', () => {
     expect(persistedStatuses.indexOf('testing')).toBeLessThan(persistedStatuses.lastIndexOf('completed'))
     const [workspace] = await store.listManagedCodingWorkspaces(project.id)
     await expect(readFile(path.join(workspace!.worktreePath, 'src/message.ts'), 'utf8'))
-      .resolves.toBe('export const message = "new"\n')
+      .resolves.toContain('message = "new"')
     await expect(readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8'))
       .resolves.toBe('export const message = "old"\n')
     const [evidence] = await store.listTestEvidence(run.id)

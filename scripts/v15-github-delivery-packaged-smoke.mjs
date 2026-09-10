@@ -779,9 +779,15 @@ async function launchPackagedDesktop(input) {
     return { electronApp, page }
   } catch (error) {
     await electronApp.close().catch(() => undefined)
-    throw new Error('Packaged Desktop failed to launch.', {
-      cause: diagnostics.length > 0 ? new Error('Electron emitted diagnostics.') : error,
-    })
+    throw new AggregateError(
+      [
+        error,
+        ...(diagnostics.length > 0
+          ? [new Error('Electron also emitted bounded stderr diagnostics.')]
+          : []),
+      ],
+      'Packaged Desktop failed to launch.',
+    )
   }
 }
 

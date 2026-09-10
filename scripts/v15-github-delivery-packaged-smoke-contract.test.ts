@@ -85,6 +85,17 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).toContain('revisionDigest: clarificationRevision.revisionDigest')
   })
 
+  it('retains the original packaged launch failure when Electron also writes stderr', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+
+    expect(smoke).toContain("'Packaged Desktop failed to launch.'")
+    expect(smoke).toContain("[new Error('Electron also emitted bounded stderr diagnostics.')]")
+    expect(smoke).not.toContain("cause: diagnostics.length > 0 ? new Error('Electron emitted diagnostics.') : error")
+  })
+
   it('cold-restarts one partial coordination graph without duplicating specialist effects', () => {
     const smoke = readFileSync(
       'scripts/v15-github-delivery-packaged-smoke.mjs',
