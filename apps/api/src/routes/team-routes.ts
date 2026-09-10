@@ -1,3 +1,5 @@
+import { EnforcementPolicyConflictError } from '../repositories/enforcement-policy-write'
+import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
@@ -570,6 +572,8 @@ function filterOverviewForSession(
         projectIds.has(summary.projectId) && (!summary.runId || runIds.has(summary.runId)),
     ),
     enforcementPolicies: {
+      organizationPolicySource: overview.enforcementPolicies.organizationPolicy.organizationId === session.organizationId
+        ? overview.enforcementPolicies.organizationPolicySource : 'default',
       organizationPolicy,
       projectOverrides,
       effectivePolicies: projects.map((project) => ({
@@ -641,7 +645,7 @@ export async function resolveTeamRoute(
       }
     }
 
-    const redirectTo = new URL('/legacy-shell', webOrigin).toString()
+    const redirectTo = new URL('/', webOrigin).toString()
     return {
       status: 303,
       headers: {
@@ -1045,9 +1049,22 @@ export async function resolveTeamRoute(
       return forbidden('Organization policy must match the authenticated organization')
     }
 
-    return {
-      status: 200,
-      body: await repository.saveEnforcementPolicy(policy, options.session),
+    let expected: EnforcementPolicyRevision | undefined
+    if (isRecord(options.body) && options.body['expectedPolicy'] !== undefined) {
+      const value = options.body['expectedPolicy']
+      if (!isRecord(value) || typeof value['id'] !== 'string' || !value['id'] ||
+        !Number.isSafeInteger(value['version']) || Number(value['version']) < 1 || typeof value['updatedAt'] !== 'string') {
+        return badRequest('Invalid expected policy revision')
+      }
+      expected = { id: value['id'], version: Number(value['version']), updatedAt: value['updatedAt'] }
+    }
+    try {
+      return { status: 200, body: expected
+        ? await repository.saveEnforcementPolicy(policy, options.session, expected)
+        : await repository.saveEnforcementPolicy(policy, options.session) }
+    } catch (error) {
+      if (error instanceof EnforcementPolicyConflictError) return conflict(error.message)
+      throw error
     }
   }
 

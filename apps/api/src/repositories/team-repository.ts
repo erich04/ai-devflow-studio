@@ -1,3 +1,5 @@
+import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
+import { assertPolicyRevision } from './enforcement-policy-write'
 import {
   formatUsd,
   annotateUnknownRuntimeCosts,
@@ -111,6 +113,7 @@ export type TeamOverviewPayload = {
   agentCoordinationSummaries: RemoteAgentCoordinationSummary[]
   policyAwareDeliverySummaries: PolicyAwareDeliverySummary[]
   enforcementPolicies: {
+    organizationPolicySource?: 'default' | 'persisted' | undefined
     organizationPolicy: OrganizationEnforcementPolicy
     projectOverrides: ProjectEnforcementPolicyOverride[]
     effectivePolicies: EffectiveEnforcementPolicy[]
@@ -298,6 +301,7 @@ export type TeamRepository = WorkRequestRepository &
   saveEnforcementPolicy(
     policy: OrganizationEnforcementPolicy,
     context: TeamRepositorySyncContext,
+    expected?: EnforcementPolicyRevision,
   ): Promise<OrganizationEnforcementPolicy>
   saveGateOverride(
     decision: GateOverrideDecision,
@@ -394,6 +398,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const agentRuntimeSummaries: RemoteAgentRuntimeSummary[] = []
   const agentMemorySummaries: RemoteAgentMemorySummary[] = []
   const agentCoordinationSummaries: RemoteAgentCoordinationSummary[] = []
+  let organizationPolicyPersisted = false
   let organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: DEMO_ORGANIZATION_ID })
   const projectOverrides: ProjectEnforcementPolicyOverride[] = []
   const gateOverrides: GateOverrideDecision[] = []
@@ -1098,6 +1103,7 @@ export function createSeedTeamRepository(): TeamRepository {
           updatedAt: new Date().toISOString(),
         }),
         enforcementPolicies: {
+          organizationPolicySource: organizationPolicyPersisted && organizationPolicy.organizationId === context.organizationId ? 'persisted' : 'default',
           organizationPolicy: scopedOrganizationPolicy,
           projectOverrides: scopedProjectOverrides,
           effectivePolicies: scopedProjects.map((project) => ({
@@ -1633,7 +1639,9 @@ export function createSeedTeamRepository(): TeamRepository {
       }
     },
 
-    async saveEnforcementPolicy(policy) {
+    async saveEnforcementPolicy(policy, context, expected) {
+      assertPolicyRevision(organizationPolicy.organizationId === context.organizationId ? organizationPolicy : createWarnOnlyDefaultPolicy({ organizationId: context.organizationId }), expected)
+      organizationPolicyPersisted = true
       organizationPolicy = policy
       return organizationPolicy
     },

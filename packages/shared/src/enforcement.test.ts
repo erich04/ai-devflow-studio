@@ -630,3 +630,15 @@ describe('canApproveGateNow', () => {
     }).allowed).toBe(false)
   })
 })
+
+describe('policy editor structural validation', () => {
+  it.each(['invalid-action', 'invalid-floor', 'duplicate-key', 'missing-name', 'missing-rules'])('rejects %s before saving', (scenario) => {
+    const policy = createWarnOnlyDefaultPolicy({ organizationId: 'org-test' })
+    if (scenario === 'invalid-action') policy.rules[0]!.defaultAction = 'allow' as never
+    if (scenario === 'invalid-floor') policy.rules[0]!.floorAction = 'allow' as never
+    if (scenario === 'duplicate-key') policy.rules.push({ ...policy.rules[0]! })
+    if (scenario === 'missing-name') policy.name = ' '
+    if (scenario === 'missing-rules') policy.rules = undefined as never
+    expect(() => validateEnforcementPolicy(policy)).toThrow(/Invalid/)
+  })
+})

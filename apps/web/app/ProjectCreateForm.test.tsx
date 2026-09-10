@@ -18,7 +18,7 @@ describe('ProjectCreateForm', () => {
   it('keeps a loaded form recoverable when its session expires and allows retry after sign-in', async () => {
     const createAction = vi.fn<(data: FormData) => Promise<CreateProjectResult>>()
       .mockResolvedValueOnce({ ok: false, error: '登录已过期', authenticationRequired: true })
-      .mockResolvedValueOnce({ ok: true, projectName: 'Mini Agent' })
+      .mockResolvedValueOnce({ ok: true, projectName: 'Mini Agent', projectId: 'p-mini-agent' })
     const { form } = setup(createAction)
     fireEvent.submit(form)
     expect(await screen.findByRole('alert')).toHaveTextContent('登录已过期')
@@ -46,7 +46,7 @@ describe('ProjectCreateForm', () => {
     fireEvent.submit(form)
     expect(createAction).toHaveBeenCalledOnce()
     expect(screen.getByRole('button', { name: '创建中…' })).toBeDisabled()
-    await act(async () => finish({ ok: true, projectName: 'Mini Agent' }))
+    await act(async () => finish({ ok: true, projectName: 'Mini Agent', projectId: 'p-mini-agent' }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'Create project' })).toBeEnabled())
   })
 

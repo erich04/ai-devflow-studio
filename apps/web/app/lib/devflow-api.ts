@@ -1,3 +1,4 @@
+import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import type {
   DevFlowSessionHeaders,
   DesktopPairingCode,
@@ -67,6 +68,7 @@ export type TeamOverviewResponse = {
   runtimeBudgetPolicies: RuntimeBudgetPolicy[]
   runtimeBudgetApprovals: RuntimeBudgetApproval[]
   enforcementPolicies: {
+    organizationPolicySource?: 'default' | 'persisted'
     organizationPolicy: OrganizationEnforcementPolicy
     projectOverrides: ProjectEnforcementPolicyOverride[]
     effectivePolicies: EffectiveEnforcementPolicy[]
@@ -281,6 +283,7 @@ export async function runKnowledgeReview(
 
 export type SaveEnforcementPolicyOptions = FetchTeamOverviewOptions & {
   policy: OrganizationEnforcementPolicy
+  expectedPolicy?: EnforcementPolicyRevision
 }
 
 export async function saveEnforcementPolicy(
@@ -298,7 +301,7 @@ export async function saveEnforcementPolicy(
       },
       options,
     ),
-    body: JSON.stringify({ organizationPolicy: options.policy }),
+    body: JSON.stringify({ organizationPolicy: options.policy, ...(options.expectedPolicy ? { expectedPolicy: options.expectedPolicy } : {}) }),
   })
 
   if (!response.ok) {

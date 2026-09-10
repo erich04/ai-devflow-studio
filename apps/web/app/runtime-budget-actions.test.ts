@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
-import { saveRuntimeBudgetPolicy } from '../lib/devflow-api'
+import { saveRuntimeBudgetPolicy } from './lib/devflow-api'
 import { saveRuntimeBudgetPolicyAction } from './runtime-budget-actions'
 
 vi.mock('next/cache', () => ({
@@ -12,7 +12,7 @@ vi.mock('next/headers', () => ({
   cookies: vi.fn(),
 }))
 
-vi.mock('../lib/devflow-api', () => ({
+vi.mock('./lib/devflow-api', () => ({
   createRuntimeBudgetApproval: vi.fn(),
   saveRuntimeBudgetPolicy: vi.fn(),
 }))

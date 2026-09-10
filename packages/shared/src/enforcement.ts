@@ -39,6 +39,8 @@ export type OrganizationEnforcementPolicy = {
   updatedAt: string
 }
 
+export type EnforcementPolicyRevision = Pick<OrganizationEnforcementPolicy, 'id' | 'version' | 'updatedAt'>
+
 export type ProjectEnforcementOverrideRule = {
   ruleKey: string
   desiredAction: EnforcementAction
@@ -271,7 +273,22 @@ export function createRecommendedEnforcementPreset(
 }
 
 export function validateEnforcementPolicy(policy: OrganizationEnforcementPolicy): void {
+  if (!policy || typeof policy.id !== 'string' || !policy.id.trim() ||
+    typeof policy.organizationId !== 'string' || !policy.organizationId.trim() ||
+    typeof policy.name !== 'string' || !policy.name.trim() ||
+    !Number.isSafeInteger(policy.version) || policy.version < 1 || !Array.isArray(policy.rules)) {
+    throw new Error('Invalid enforcement policy identity, name, version or rules')
+  }
+  const keys = new Set<string>()
   for (const item of policy.rules) {
+    if (!item || typeof item.ruleKey !== 'string' || !item.ruleKey.trim() || keys.has(item.ruleKey) ||
+      !['governance_check', 'agent_finding', 'missing_agent_review'].includes(item.target) ||
+      !['ignore', 'warn', 'block'].includes(item.defaultAction) || !['ignore', 'warn', 'block'].includes(item.floorAction) ||
+      typeof item.category !== 'string' || !item.category.trim() || typeof item.statusOrSeverity !== 'string' || !item.statusOrSeverity.trim() ||
+      typeof item.overridable !== 'boolean' || (item.remediation !== undefined && typeof item.remediation !== 'string')) {
+      throw new Error(`Invalid or duplicate enforcement rule: ${item?.ruleKey ?? 'unknown'}`)
+    }
+    keys.add(item.ruleKey)
     if (item.target === 'agent_finding' && !item.overridable) {
       throw new Error(`Agent findings cannot be hard-block: ${item.ruleKey}`)
     }

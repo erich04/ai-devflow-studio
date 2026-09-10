@@ -54,8 +54,9 @@ import { GateCommandPanel } from './GateCommandPanel'
 import { GitHubDeliveryPanel } from './GitHubDeliveryPanel'
 import { selectGateCommandTarget } from './gate-command-view-model'
 import { ThemePreferenceControl } from './ThemePreferenceControl'
-import { EnforcementPolicyPanel } from './EnforcementPolicyPanel'
-import { updateEnforcementPolicyAction } from './enforcement-policy-actions'
+import { StudioManagement } from './StudioManagement'
+import { ProjectCreateDialog } from './ProjectCreateDialog'
+import { studioHref, type StudioView } from './studio-navigation'
 
 type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
 
@@ -136,17 +137,17 @@ export default async function Page({ searchParams }: PageProps) {
     }
   }
 
-  const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(
-    overview,
-    await searchParams,
-  )
+  const params = await searchParams
+  const view: StudioView = params?.view === 'team' || params?.view === 'settings' ? params.view : 'workbench'
+  const section = params?.section === 'policy' ? 'policy' : 'budget'
+  const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(overview, params)
   let workRequests: WorkRequest[] = []
   let workRequestLoadFailed = false
   let gateCommands: GateCommand[] = []
   let githubBinding: GitHubRepositoryBinding | null = null
   let githubDeliveries: GitHubDeliveryRequestView[] = []
   let githubDeliveryLoadFailed = false
-  if (activeProject) {
+  if (activeProject && view === 'workbench') {
     try {
       workRequests = await fetchWorkRequests({
         projectId: activeProject.id,
@@ -283,12 +284,17 @@ export default async function Page({ searchParams }: PageProps) {
           </div>
         </div>
 
-        <a className="studio-primary-action" href="#work-request">
+        <a className="studio-primary-action" href={`${studioHref(activeProject?.id)}#work-request`}>
           <Play size={15} />
           新建工作请求
         </a>
 
         <nav className="studio-nav">
+          <a href={studioHref(activeProject?.id)} aria-current={view === 'workbench' ? 'page' : undefined}><CircleDot size={16} />工作台</a>
+          <a href={studioHref(activeProject?.id, 'team')} aria-current={view === 'team' ? 'page' : undefined}><FileText size={16} />团队总览</a>
+          <a href={studioHref(activeProject?.id, 'settings')} aria-current={view === 'settings' ? 'page' : undefined}><Gauge size={16} />设置</a>
+          {view === 'workbench' ? <>
+
           <a href="#evidence-chain">
             <CircleDot size={16} />
             Evidence Chain
@@ -305,10 +311,7 @@ export default async function Page({ searchParams }: PageProps) {
             <Gauge size={16} />
             Runtime
           </a>
-          <a href="/legacy-shell">
-            <FileText size={16} />
-            旧壳备份
-          </a>
+          </> : null}
         </nav>
 
         <div className="studio-rail-footer">
@@ -326,10 +329,9 @@ export default async function Page({ searchParams }: PageProps) {
                 {activeRun ? runStatusLabel(activeRun.status) : '等待真实数据'}
               </StatusPill>
             </div>
-            <h1>{activeRun?.title ?? '把 Agent 执行、证据链和人评 Gate 收束到一个产品路径'}</h1>
+            <h1>{view === 'team' ? '团队总览' : view === 'settings' ? '团队设置' : activeRun?.title ?? '从一个需求开始项目交付'}</h1>
             <p>
-              {activeRun?.request ??
-                '当前没有团队 run。新壳保留真实 API 接入，同时用明确的空状态解释下一步该创建工作请求。'}
+              {view === 'team' ? '查看团队成员、各项目费用与最近交付进度。' : view === 'settings' ? '配置预算和团队策略，Desktop 同步后使用最新设置。' : activeRun?.request ?? '先创建或选择团队项目，再提交需求并配对 Desktop。'}
             </p>
           </div>
           <div className="studio-top-actions">
@@ -339,9 +341,7 @@ export default async function Page({ searchParams }: PageProps) {
               hasSessionCookie={Boolean(cookieHeader)}
               session={browserSession}
             />
-            <a className="studio-secondary-link" href="/legacy-shell">
-              备份壳
-            </a>
+
           </div>
         </header>
 
@@ -353,7 +353,7 @@ export default async function Page({ searchParams }: PageProps) {
                 {overview.projects.map((project) => (
                   <a
                     aria-current={project.id === activeProject?.id ? 'page' : undefined}
-                    href={`/?projectId=${encodeURIComponent(project.id)}`}
+                    href={studioHref(project.id, view, section)}
                     key={project.id}
                   >
                     <strong>{project.name}</strong>
@@ -362,12 +362,11 @@ export default async function Page({ searchParams }: PageProps) {
                 ))}
               </nav>
             ) : (
-              <a className="studio-secondary-link" href="/legacy-shell#projects">
-                创建团队项目
-              </a>
+<p>还没有团队项目。</p>
             )}
+            {browserSession?.user.role === 'owner' ? <ProjectCreateDialog signInUrl={`${apiBaseUrl}/api/auth/github/start`} /> : <small>项目创建需要组织 Owner。</small>}
           </div>
-          <div>
+          {view === 'workbench' ? <div>
             <span>Run</span>
             {activeProject ? (
               projectRuns.length > 0 ? (
@@ -389,8 +388,8 @@ export default async function Page({ searchParams }: PageProps) {
             ) : (
               <small>先选择一个项目。</small>
             )}
-          </div>
-          {activeProject ? (
+          </div> : null}
+          {activeProject && view === 'workbench' ? (
             <section aria-label={`Desktop pairing for ${activeProject.name}`}>
               <span>Desktop</span>
               <strong>Pair this project</strong>
@@ -415,6 +414,7 @@ export default async function Page({ searchParams }: PageProps) {
           ) : null}
         </section>
 
+        {view !== 'workbench' ? <StudioManagement overview={overview} session={browserSession} project={activeProject} view={view} section={section} /> : <>
         {activeProject ? (
           workRequestLoadFailed ? (
             <section className="work-request-panel" id="work-request" aria-label="Work Requests">
@@ -661,9 +661,7 @@ export default async function Page({ searchParams }: PageProps) {
             icon={<Gauge size={17} />}
             title="Runtime Budget"
             action="预算详情"
-            actionHref={activeProject
-              ? `/legacy-shell?projectId=${encodeURIComponent(activeProject.id)}#runtime-budget`
-              : '/legacy-shell#runtime-budget'}
+            actionHref={studioHref(activeProject?.id, 'settings', 'budget')}
           >
             <div className="studio-budget-ring" style={{ '--budget-percent': `${Math.min(budgetPercent, 100)}%` } as CSSProperties}>
               <strong>{budgetPercent}%</strong>
@@ -683,11 +681,9 @@ export default async function Page({ searchParams }: PageProps) {
                   meta={`${policySummary?.retryAttemptCount ?? 0} retries · ${policySummary?.overrideCount ?? 0} overrides`}
                   value=""
                 />
-                <EnforcementPolicyPanel
-                  key={overview.enforcementPolicies.organizationPolicy.organizationId}
-                  initialPolicy={overview.enforcementPolicies.organizationPolicy}
-                  updateAction={updateEnforcementPolicyAction}
-                />
+                <strong>{overview.enforcementPolicies.organizationPolicy.name}</strong>
+                <p>云端策略 v{overview.enforcementPolicies.organizationPolicy.version} · Desktop 同步后生效</p>
+                <a href={studioHref(activeProject.id, 'settings', 'policy')}>查看 Team Policy 设置</a>
               </>
             ) : (
               <CompactRow
@@ -698,6 +694,7 @@ export default async function Page({ searchParams }: PageProps) {
             )}
           </SupportPanel>
         </section>
+        </>}
       </section>
     </main>
   )
@@ -732,7 +729,7 @@ function ErrorShell({
         {authenticationRequired ? (
           <a href={`${apiBaseUrl}/api/auth/github/start`}>Sign in with GitHub</a>
         ) : null}
-        <a href="/legacy-shell">打开旧壳备份</a>
+        <a href="/">重新加载工作台</a>
       </section>
     </main>
   )

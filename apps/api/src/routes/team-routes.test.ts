@@ -761,9 +761,9 @@ describe('team API route resolver', () => {
     )
 
     expect(result?.status).toBe(303)
-    expect(result?.headers?.location).toBe('http://127.0.0.1:4311/legacy-shell')
+    expect(result?.headers?.location).toBe('http://127.0.0.1:4311/')
     expect(result?.body).toEqual({
-      redirectTo: 'http://127.0.0.1:4311/legacy-shell',
+      redirectTo: 'http://127.0.0.1:4311/',
     })
     const sessionCookie = String(result?.headers?.['set-cookie'])
     const encodedPayload = sessionCookie.split('=')[1]!.split('.')[0]!
