@@ -744,7 +744,6 @@ async function launchPackagedDesktop(input) {
       await app.whenReady()
       return {
         available: safeStorage.isEncryptionAvailable(),
-        spellCheckerLanguages: session.defaultSession.getSpellCheckerLanguages(),
         spellCheckerEnabled: session.defaultSession.isSpellCheckerEnabled(),
         backend:
           typeof safeStorage.getSelectedStorageBackend === 'function'
@@ -756,12 +755,6 @@ async function launchPackagedDesktop(input) {
       credentialStorage.available,
       'Packaged Desktop credential encryption is unavailable.',
     )
-    if (process.platform !== 'darwin') {
-      assert(
-        credentialStorage.spellCheckerLanguages.length === 0,
-        'Packaged Desktop spell checker languages remained configured.',
-      )
-    }
     assert(
       !credentialStorage.spellCheckerEnabled,
       'Packaged Desktop spell checker remained enabled.',

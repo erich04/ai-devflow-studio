@@ -32,11 +32,9 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).not.toContain("args: ['--password-store=basic'")
     expect(smoke).toContain('safeStorage.isEncryptionAvailable()')
     expect(smoke).toContain("credentialStorage.backend === 'gnome_libsecret'")
-    expect(smoke).toContain('session.defaultSession.getSpellCheckerLanguages()')
-    expect(smoke).toContain("process.platform !== 'darwin'")
-    expect(smoke).toContain('credentialStorage.spellCheckerLanguages.length === 0')
     expect(smoke).toContain('session.defaultSession.isSpellCheckerEnabled()')
     expect(smoke).toContain('!credentialStorage.spellCheckerEnabled')
+    expect(smoke).not.toContain('credentialStorage.spellCheckerLanguages.length === 0')
     expect(smoke).toContain('await app.whenReady()')
   })
 

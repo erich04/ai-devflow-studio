@@ -3466,6 +3466,8 @@ if (hasSingleInstanceLock) {
   })
 
   app.whenReady().then(async () => {
+    const defaultSession = session.defaultSession
+    defaultSession.setSpellCheckerEnabled(false)
     if (dataProfileResolution.status === 'blocked') {
       const candidateSummary = dataProfileResolution.candidates
         .map((candidate) => `${candidate.name} (${candidate.pathFingerprint})`)
@@ -3486,9 +3488,6 @@ if (hasSingleInstanceLock) {
       app.quit()
       return
     }
-    const defaultSession = session.defaultSession
-    defaultSession.setSpellCheckerLanguages([])
-    defaultSession.setSpellCheckerEnabled(false)
     registerIpcHandlers()
     createWindow()
     void getRemoteSyncOutboxScheduler()

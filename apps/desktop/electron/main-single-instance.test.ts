@@ -56,26 +56,24 @@ describe('Electron single-instance persistence boundary', () => {
     expect(gateScheduler).toBeGreaterThan(registerHandlers)
   })
 
-  it('disables the packaged Chromium dictionary downloader', () => {
+  it('disables the packaged Chromium spell checker before opening persistent state', () => {
     const main = readFileSync('apps/desktop/electron/main.ts', 'utf8')
     const normalizedMain = main.replace(/\r\n/g, '\n')
     const browserWindow = main.match(/new BrowserWindow\(\{[\s\S]*?\n  \}\)/)?.[0]
-    const resolveDefaultSession = main.indexOf('const defaultSession = session.defaultSession')
-    const clearSessionSpellCheckerLanguages = main.indexOf(
-      'defaultSession.setSpellCheckerLanguages([])',
-    )
+    const ready = main.indexOf('app.whenReady().then')
+    const openStore = main.indexOf('await getStore()', ready)
     const disableSessionSpellChecker = main.indexOf('defaultSession.setSpellCheckerEnabled(false)')
-    const createFirstWindow = main.indexOf('createWindow()', main.indexOf('app.whenReady().then'))
+    const createFirstWindow = main.indexOf('createWindow()', ready)
 
     expect(browserWindow).toBeDefined()
     expect(browserWindow).toContain('spellcheck: false')
     expect(main).toMatch(/import \{[\s\S]*?session[\s\S]*?\} from 'electron'/)
     expect(normalizedMain).toMatch(
-      /app\.whenReady\(\)\.then\(async \(\) => \{[\s\S]*?await getStore\(\)[\s\S]*?const defaultSession = session\.defaultSession\n\s+defaultSession\.setSpellCheckerLanguages\(\[\]\)\n\s+defaultSession\.setSpellCheckerEnabled\(false\)\n\s+registerIpcHandlers\(\)\n\s+createWindow\(\)/,
+      /app\.whenReady\(\)\.then\(async \(\) => \{\n\s+const defaultSession = session\.defaultSession\n\s+defaultSession\.setSpellCheckerEnabled\(false\)[\s\S]*?await getStore\(\)[\s\S]*?registerIpcHandlers\(\)\n\s+createWindow\(\)/,
     )
-    expect(resolveDefaultSession).toBeGreaterThan(-1)
-    expect(clearSessionSpellCheckerLanguages).toBeGreaterThan(resolveDefaultSession)
-    expect(disableSessionSpellChecker).toBeGreaterThan(clearSessionSpellCheckerLanguages)
+    expect(main).not.toContain('defaultSession.setSpellCheckerLanguages([])')
+    expect(disableSessionSpellChecker).toBeGreaterThan(ready)
+    expect(disableSessionSpellChecker).toBeLessThan(openStore)
     expect(disableSessionSpellChecker).toBeLessThan(createFirstWindow)
   })
 
