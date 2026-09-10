@@ -259,3 +259,11 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 补充改动后全量 `pnpm verify` 再次通过：271 文件 / 3761 用例、类型及跨平台检查。当前真实链路的逐步证据、独立仓库/项目/请求 ID 和待处理事项见 [本轮全流程验证](final-live-e2e-2026-09-10.zh-CN.md)；在完成前 PR #90 保持 Draft，#81、#89 不提前关闭。新增 #91 是仓库绑定冲突反馈，界面文案正在等待确认。
 
 最终构建再次通过 Desktop pilot smoke 和 v15 GitHub Delivery packaged smoke：真实安装包 Main + 新建临时 Postgres，离线模拟 GitHub，精确分支发布、一次 Draft PR、重启无重复效果、Acceptance completed、撤销阻断、持久化秘密泄漏计数 0。该项是受控交付回归，不作为真实 GitHub/Provider 全流程证据。
+
+### 后续真实验证发现并修复的同步问题
+
+- Gate Review 原先信任 Renderer 的 requestedBy，实际 pairing 用户不同时会使费用上传被拒。Main 改用持久化 Run / pairing 推导身份；新的 Electron smoke 伪造请求用户并校验记账用户。修复前真实 Main smoke 本地失败，修复后整条通过，Desktop typecheck 与 27 项身份/工作流/CI 契约检查通过。
+- #93：真实 DeepSeek Review 暴露 Postgres child summary 会覆盖当前 Workflow 节点状态；同版本 Run 及新消费重传因此 409。去除 Review/Test evidence 对已有节点状态的覆盖。新 Postgres smoke 在修复前稳定失败，修复后整条通过，并保留同版本状态篡改、同 ID 消费篡改的拒绝检查。Seed 路径没有此覆盖，解释了此前 Electron smoke 未覆盖到该缺陷。
+- #92：云端 run `34500726984` 的 Windows 全量测试在 Git/SQLite/文件系统夹具中出现 22 项超时，macOS 同组用例通过；此前 #88 也有类似 Windows 抖动。Verify / Release 的 Windows 全量套件统一限制 `maxWorkers=2`，不删除断言、不放大产品超时。必须等待新 Windows CI 实证后才关闭。
+
+真实新 Run 已完成 OpenCode 澄清和 Direct DeepSeek 需求门禁审查，两次消费均归档；继续验证需要 Mac 解锁及新仓库的 GitHub App 授权。#81/#89/#92/#93 在最终验证前保持打开，#91 的界面文案仍待确认。
