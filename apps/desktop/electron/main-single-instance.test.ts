@@ -62,6 +62,9 @@ describe('Electron single-instance persistence boundary', () => {
     const browserWindow = main.match(/new BrowserWindow\(\{[\s\S]*?\n  \}\)/)?.[0]
     const ready = main.indexOf('app.whenReady().then')
     const openStore = main.indexOf('await getStore()', ready)
+    const isolateSessionSpellChecker = main.indexOf(
+      "defaultSession.setSpellCheckerDictionaryDownloadURL('data:,')",
+    )
     const disableSessionSpellChecker = main.indexOf('defaultSession.setSpellCheckerEnabled(false)')
     const createFirstWindow = main.indexOf('createWindow()', ready)
 
@@ -69,9 +72,11 @@ describe('Electron single-instance persistence boundary', () => {
     expect(browserWindow).toContain('spellcheck: false')
     expect(main).toMatch(/import \{[\s\S]*?session[\s\S]*?\} from 'electron'/)
     expect(normalizedMain).toMatch(
-      /app\.whenReady\(\)\.then\(async \(\) => \{\n\s+const defaultSession = session\.defaultSession\n\s+defaultSession\.setSpellCheckerEnabled\(false\)[\s\S]*?await getStore\(\)[\s\S]*?registerIpcHandlers\(\)\n\s+createWindow\(\)/,
+      /app\.whenReady\(\)\.then\(async \(\) => \{\n\s+const defaultSession = session\.defaultSession\n\s+defaultSession\.setSpellCheckerDictionaryDownloadURL\('data:,'\)\n\s+defaultSession\.setSpellCheckerEnabled\(false\)[\s\S]*?await getStore\(\)[\s\S]*?registerIpcHandlers\(\)\n\s+createWindow\(\)/,
     )
     expect(main).not.toContain('defaultSession.setSpellCheckerLanguages([])')
+    expect(isolateSessionSpellChecker).toBeGreaterThan(ready)
+    expect(isolateSessionSpellChecker).toBeLessThan(disableSessionSpellChecker)
     expect(disableSessionSpellChecker).toBeGreaterThan(ready)
     expect(disableSessionSpellChecker).toBeLessThan(openStore)
     expect(disableSessionSpellChecker).toBeLessThan(createFirstWindow)

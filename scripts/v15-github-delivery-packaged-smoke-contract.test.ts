@@ -29,7 +29,6 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).toContain('restartSnapshot')
     expect(smoke).toContain("'--password-store=gnome-libsecret'")
     expect(smoke).toContain("'--disable-background-networking'")
-    expect(smoke).toContain("'--disable-component-update'")
     expect(smoke).not.toContain("args: ['--password-store=basic'")
     expect(smoke).toContain('safeStorage.isEncryptionAvailable()')
     expect(smoke).toContain("credentialStorage.backend === 'gnome_libsecret'")

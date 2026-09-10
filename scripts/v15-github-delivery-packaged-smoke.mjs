@@ -727,13 +727,11 @@ async function launchPackagedDesktop(input) {
       process.platform === 'linux'
         ? [
             '--disable-background-networking',
-            '--disable-component-update',
             '--password-store=gnome-libsecret',
             '--no-sandbox',
           ]
         : [
             '--disable-background-networking',
-            '--disable-component-update',
             '--password-store=basic',
           ],
     env: input.env,

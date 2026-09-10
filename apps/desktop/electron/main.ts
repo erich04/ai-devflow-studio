@@ -3467,6 +3467,7 @@ if (hasSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     const defaultSession = session.defaultSession
+    defaultSession.setSpellCheckerDictionaryDownloadURL('data:,')
     defaultSession.setSpellCheckerEnabled(false)
     if (dataProfileResolution.status === 'blocked') {
       const candidateSummary = dataProfileResolution.candidates
