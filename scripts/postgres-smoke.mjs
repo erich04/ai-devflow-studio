@@ -3628,6 +3628,41 @@ try {
     expect(stored.rows[0].stage_agent_usage[consumed.id].inputTokens === 15268, 'Postgres accounting changed after rejected replay')
   } finally { await accountingPool.end() }
 
+  // Child evidence cannot change the authoritative node projection or break cost retries.
+  const gateAccountingRun = `${runId}-gate-accounting`
+  const gateAccountingSummary = { ...accountingSummary, runId: gateAccountingRun,
+    status: 'paused_at_gate', currentNodeId: 'clarify-gate',
+    currentNode: { id: 'clarify-gate', stage: 'clarify', kind: 'gate', status: 'running', requiredRole: 'lead' } }
+  await postJson('/api/sync/run-summary', gateAccountingSummary)
+  await postJson('/api/sync/agent-review-summary', {
+    id: `${gateAccountingRun}-review`, runId: gateAccountingRun, nodeId: 'clarify-gate',
+    projectId: 'p-payments', runtime: 'electron', providerId: 'fake-knowledge-review', model: 'fake',
+    conclusion: 'Only advisory evidence', summary: 'Does not approve or block the Workflow node.',
+    riskCount: 0, missingEvidenceCount: 0, advisoryLevel: 'warn', blocksApproval: false,
+    confidence: 1, redacted: true, createdAt: timestamp,
+  })
+  const gateConsumed = { ...consumed, id: `${gateAccountingRun}-usage`, runId: gateAccountingRun,
+    nodeId: 'clarify-gate', executorKind: 'direct-provider' }
+  await postJson('/api/sync/run-summary', { ...gateAccountingSummary, stageAgentUsage: [gateConsumed] })
+  await postJson('/api/sync/run-summary', { ...gateAccountingSummary, stageAgentUsage: [gateConsumed] })
+  const alteredGateProjection = await postJsonResult('/api/sync/run-summary', {
+    ...gateAccountingSummary, currentNode: { ...gateAccountingSummary.currentNode, status: 'blocked' },
+  }, ownerSessionHeaders)
+  expect(alteredGateProjection.status === 409, 'Same-version canonical node changes must remain conflicts')
+
+  const testProjectionRun = `${runId}-test-projection`
+  const testProjectionSummary = { ...accountingSummary, runId: testProjectionRun,
+    status: 'testing', currentNodeId: 'test',
+    currentNode: { id: 'test', stage: 'test', kind: 'test', status: 'running' } }
+  await postJson('/api/sync/run-summary', testProjectionSummary)
+  await postJson('/api/sync/test-evidence-summary', {
+    id: `${testProjectionRun}-evidence`, runId: testProjectionRun, nodeId: 'test',
+    projectId: 'p-payments', command: 'npm test', status: 'passed', exitCode: 0,
+    durationMs: 10, summary: 'Execution evidence does not advance the Workflow.', redacted: true,
+    createdAt: timestamp,
+  })
+  await postJson('/api/sync/run-summary', testProjectionSummary)
+
   console.log('Postgres integration smoke passed.')
 } finally {
   await stop(api)

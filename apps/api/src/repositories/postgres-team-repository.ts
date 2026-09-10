@@ -2749,9 +2749,9 @@ export function createPostgresTeamRepository(
             updated_at
           )
           VALUES ($1, $2, 'test', 'Test Evidence', $3, 'test', $4, $5, NULL, 0, NULL, 999, $6, $6)
+          -- Existing node status belongs to the versioned Run summary.
           ON CONFLICT (id) DO UPDATE
           SET subtitle = excluded.subtitle,
-              status = excluded.status,
               updated_at = excluded.updated_at
         `,
         [
@@ -2865,9 +2865,9 @@ export function createPostgresTeamRepository(
             updated_at
           )
           VALUES ($1, $2, 'design', '门禁审查目标', $3, 'gate', $4, $5, 'lead', 0, NULL, 998, $6, $6)
+          -- Review advice must not mutate the canonical Workflow status.
           ON CONFLICT (id) DO UPDATE
           SET subtitle = excluded.subtitle,
-              status = excluded.status,
               updated_at = excluded.updated_at
         `,
         [
