@@ -82,6 +82,7 @@ describe('durable Provider removal', () => {
     await expect(store.removeProviderCredential(metadata.providerId, metadata.updatedAt)).rejects.toThrow('fixture disk failure')
     expect(await store.getProviderEncryptedSecret(metadata.providerId)).not.toBeNull()
     expect(await store.getSettings()).toMatchObject({ selectedAgentProviderId: metadata.providerId })
-    expect(await readFile(dbPath)).toEqual(before)
+    // Compare the complete snapshot as bytes without Vitest recursively visiting every Buffer entry.
+    expect((await readFile(dbPath)).equals(before)).toBe(true)
   })
 })
