@@ -27,6 +27,24 @@ function designNode() {
 }
 
 describe('runWorkflowStageAgent', () => {
+  it('timestamps the artifact and terminal provenance after the provider has completed', async () => {
+    let now = '2026-09-10T10:00:00.000Z'
+    const provider = createFakeAgentProvider()
+    const generate = provider.generateWorkflowArtifact!
+    provider.generateWorkflowArtifact = async (input) => {
+      now = '2026-09-10T10:00:10.000Z'
+      return generate(input)
+    }
+    const result = await runWorkflowStageAgent({
+      run: created.run, node: clarifyNode(), artifacts: created.artifacts, provider,
+      requestedBy: 'u-ling', runtime: 'electron', now: () => now,
+    })
+    expect(result.provenance.startedAt).toBe('2026-09-10T10:00:00.000Z')
+    expect(result.provenance.completedAt).toBe('2026-09-10T10:00:10.000Z')
+    expect(result.artifact.updatedAt).toBe(result.provenance.completedAt)
+    expect(result.trace.createdAt).toBe(result.provenance.completedAt)
+  })
+
   it('retains reported usage and a bounded field diagnostic when the design is rejected', async () => {
     const provider = createFakeAgentProvider()
     const generate = provider.generateWorkflowArtifact!
@@ -308,6 +326,11 @@ describe('runWorkflowStageAgent', () => {
     expect(result.artifact.clarificationRevision?.repositoryFindings?.verifiedFacts).toHaveLength(1)
     expect(result.tokenUsage).toBeUndefined()
     expect(result.trace.steps.map((step) => step.summary).join('\n')).not.toContain('/Users/')
+    const prompt = vi.mocked(executor.execute).mock.calls[0]![0].prompt
+    expect(prompt).toContain('arrays of OBJECTS, not strings')
+    expect(prompt).toContain('"citationIds":["citation-1"]')
+    expect(prompt).toContain('"path":"<repo-relative-file>"')
+    expect(prompt).not.toContain('All list fields must be arrays of strings')
   })
 
   it('fails closed when a local Agent omits repository citations', async () => {

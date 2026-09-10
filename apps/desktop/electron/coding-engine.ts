@@ -22,6 +22,7 @@ import type {
   AgentProviderErrorCode,
 } from '@ai-devflow/shared'
 import { resolveDevFlowCodingEngineSelection } from '@ai-devflow/shared'
+import { opencodeProviderBindingEnv, type OpencodeProviderBinding } from './opencode-provider-binding.js'
 import {
   completeFakeCodingRun,
   createFakeCodingRunBundle,
@@ -211,6 +212,7 @@ export function buildOpencodeRuntimeEnv(input: {
   baseEnv: NodeJS.ProcessEnv
   apiKeyEnvName: string
   apiKey?: string | undefined
+  providerBinding?: OpencodeProviderBinding | undefined
 }): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {}
   for (const name of OPENCODE_RUNTIME_ENV_ALLOWLIST) {
@@ -222,7 +224,7 @@ export function buildOpencodeRuntimeEnv(input: {
     assertSafeProviderCredentialEnvName(input.apiKeyEnvName)
     env[input.apiKeyEnvName] = input.apiKey
   }
-  return env
+  return { ...env, ...opencodeProviderBindingEnv(input.providerBinding) }
 }
 
 const OPENCODE_RUNTIME_ENV_ALLOWLIST = [

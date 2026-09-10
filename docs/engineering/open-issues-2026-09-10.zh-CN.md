@@ -12,7 +12,7 @@
 | #53 | Work Request 宽屏布局 | 1600px 视口下空状态独占约 508px 列；布局方案确认待答 |
 | #54 | pairing code 布局 | 真实临时配对码被压至约 95px 宽、161px 高，已撤销；布局方案确认待答 |
 | #55 | Provider 删除入口 | 待交互确认及引用检查回归 |
-| #56 | 真实 OpenCode 需求澄清 | 已确认本机 1.18.15、0 credentials；等待可用 Provider/Model 配置 |
+| #56 | 真实 OpenCode 需求澄清 | 已接通 DevFlow 保存的 DeepSeek 凭据；真实只读澄清、引用校验、入库及进入需求 Gate 通过，待云端交付 |
 | #57 | Policy 配置 | 待交互确认 |
 | #58 | 应用 Policy 的反馈 | 已确认 action 不返回可展示结果，界面缺少策略版本反馈；隔离写入复现待做，交互确认待答 |
 | #59 | Policy 自引用链接 | 实际点击仅变更 #policy 锚点，未执行应用动作；交互确认待答 |
@@ -110,3 +110,41 @@ CUA 曾出现 `noWindowsAvailable` 和截图旧帧，旧测试进程也未真正
 重审后总计 8 份 Review（方案 Gate 7 份）、10 份用量。审查对象 manifest 保持一致，Run 仍为 `paused_at_gate / v4`，Coding Run 和 Test Evidence 仍为 0。重复请求与旧确认重放使用受控 Provider 做边界回归；不通过额外重复的付费调用制造验收数据。
 
 上述为这四项 Issue 的定向真实回归，不等同于重新执行从需求到交付的完整流程。[PR #80](https://github.com/erich04/ai-devflow-studio/pull/80) 汇总修复与回归；Issue 在云端检查通过并合并后关闭。其余 10 项继续按交互确认 / OpenCode 配置依赖处理。
+
+## #56：复用已保存 DeepSeek 凭据的真实 OpenCode 验收
+
+用户确认使用 `deepseek / deepseek-v4-flash` 并复用 DevFlow 已保存 Key。历史“0 credentials”仅指 OpenCode 自有凭据库，不能说明 DevFlow 没有保存 Key。原生 Provider 配置的实际 ID 是 `deepseek`，可精确绑定，不按显示名称猜测，也不需要用户再次输入凭据。
+
+### 复现与修复
+
+- 原 Main 的 OpenCode 启动路径只传递环境白名单，未读取 DevFlow 的已保存凭据；`opencode models deepseek --pure` 返回 Provider not found。
+- Main 现在按项目确认的 Provider ID 精确解析已保存凭据和端点，用专用子进程环境变量及引用变量的 inline config 接通 OpenCode。凭据不进入 Renderer、不复制到 OpenCode auth 文件；解密失败不回退，凭据轮换改变缓存身份。预检、Coding 和只读 Stage Agent 共用绑定。
+- 第一轮真实调用已完成 5 个 DeepSeek assistant 回合、9 次只读工具调用，但返回的 citations 是字符串列表，被严格校验拒绝。提示词原先笼统要求“所有列表都是字符串”，与引用对象契约冲突。已明确 top-level 字符串列表和 Repository Findings 的对象结构；引用路径和内容 digest 校验保持严格。
+- 适配器从 OpenCode 执行记录取得模型身份、汇总整个会话的工具和 token，用于 Trace；不信任模型自行填写的 model/usage，不把最后一条文本回复视为全部工具调用。
+
+### 真实链路证据
+
+通过测试 Desktop 的正常界面新建 Run `OpenCode live clarification #56`，输入一句需求：修改 mini Agent README 主标题为 `Mini Agent - Ready for OpenCode`，其余内容不变。配置项目 OpenCode `1.18.15 / deepseek/deepseek-v4-flash / v2`，选择 `Read-only Local Agent (OpenCode)` 并执行。
+
+| 项目 | 结果 |
+| --- | --- |
+| Run | `run-949c6feb-03cc-4a60-9802-4edc30983830` |
+| OpenCode Session | `ses_f751dd02dffemtaQy5kh64C1UG` |
+| Provider/Model | `deepseek/deepseek-v4-flash`，运行中的 OpenCode `/provider` 确认 connected，模型可枚举 |
+| 真实执行 | 3 个 assistant 回合、4 次已完成工具调用（2 glob、2 read），没有写入/权限扩张 |
+| 用量 | OpenCode 报告 input 15268、output 1444（含 reasoning）、cache read 12416，已归档到 Trace |
+| 产物 | `artifact-run-949c6feb-03cc-4a60-9802-4edc30983830-clarification`，澄清 v1 |
+| 仓库证据 | 4 条事实、3 条引用；README.md 与 package.json 的内容 digest 逐一与真实文件比对通过 |
+| 仓库不变 | 24 个受跟踪/未忽略文件的 SHA-256、Git HEAD 和 status 与运行前完全相同 |
+| Workflow | 成功入库后 `v1 / clarifying` → `v2 / paused_at_gate`；当前为需求确认 Gate |
+| 界面 | Gate 正常显示 Raw Request、Repository Findings、Clarification Revision 三者绑定；Gate 要求后续审查，未自动批准 |
+| 失败保留 | 第一轮 `evidence_invalid` Trace 保留；失败时没有澄清产物，也没有推进 Workflow |
+
+该验收覆盖 #56 的 UI → Main → OpenCode → 真实 DeepSeek → 只读仓库取证 → 校验 → Artifact/Trace 入库 → 需求 Gate。它不等同于再次执行本需求的开发、测试和 PR 交付；README 未被修改。
+
+### 回归及新增问题
+
+- 最终 `corepack pnpm verify`：262 个测试文件 / 3702 个用例、typecheck、跨平台检查全部通过；Desktop production build 通过。受控用例覆盖凭据过滤、精确绑定、轮换、解密失败、模型 provenance、完整工具/用量统计、错误引用结构及既有 Stage/Gate 行为。
+- [#81](https://github.com/erich04/ai-devflow-studio/issues/81)：OpenCode 真实 token 还未进入费用汇总，未知金额可能显示为零；不阻塞本次澄清，费用交互已向用户提问，保持打开。Trace 中明确标注金额未由 DevFlow 结算。
+- [#82](https://github.com/erich04/ai-devflow-studio/issues/82)：真实 provenance 的开始/完成时间相同但 duration 为 9861ms。已修复 Main 过早固定完成时间和 shared 复用开始时间的问题；可控时钟测试先失败（完成时间早 10 秒），修复后通过。历史证据不重写。
+- 原有 #60、#61、#63、#65 已随 PR #80 合并并关闭。其余未确认的交互不在本次变更内。

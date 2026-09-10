@@ -31,7 +31,7 @@ const readinessCopy: Record<CodingRuntimeReadinessCode, ReadinessCopy> = {
     label: 'OpenCode 版本', ready: '合同兼容', blocked: '不兼容', remediation: '安装当前发布已验证的 OpenCode 版本。',
   },
   auth_unavailable: {
-    label: 'OpenCode 认证', ready: '本地认证目录可用', blocked: '不可用', remediation: '在 OpenCode 中完成登录，并确认本地 auth profile 可访问。',
+    label: 'OpenCode 认证', ready: 'Provider 凭据可用', blocked: '不可用', remediation: '检查相同 Provider ID 的 DevFlow 已保存凭据，或在 OpenCode 中完成登录。',
   },
   profile_unavailable: {
     label: 'OpenCode Profile', ready: '已选择', blocked: '未选择', remediation: '选择本项目使用的 OpenCode Provider/profile。',

@@ -239,6 +239,15 @@ function createWorkflowArtifactPrompt(input: {
         'Every verified fact must reference at least one repo-relative citation ID.',
         'Never return source bodies, absolute paths, secrets, commands, Gate actions, or write requests.',
         'repositoryFindings must contain version, repositoryDigest, verifiedFacts, citations, assumptions, openQuestions, and uncheckedScopes.',
+        'repositoryFindings.verifiedFacts and repositoryFindings.citations are arrays of OBJECTS, not strings. Use this exact nested shape:',
+        JSON.stringify({ repositoryFindings: {
+          version: 1, repositoryDigest: '',
+          verifiedFacts: [{ id: 'fact-1', statement: '<fact verified by a read tool>', citationIds: ['citation-1'] }],
+          citations: [{ id: 'citation-1', path: '<repo-relative-file>', contentDigest: '', lineStart: 1, lineEnd: 1 }],
+          assumptions: [], openQuestions: [], uncheckedScopes: [],
+        } }),
+        'Replace placeholders with actual findings. Citation paths must be relative to the repository root, without line suffixes. Use lineStart/lineEnd for line numbers.',
+        'Leave repositoryDigest and contentDigest empty: DevFlow computes them from the repository bytes. Never invent a digest. Model identity and token usage are supplied by the runtime.',
       ]
     : [
         'Repository inspection is not available in this executor. Do not claim repository facts as verified.',
@@ -515,11 +524,12 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   if (!executor) throw new Error('Workflow stage Agent executor is not configured')
   const artifactKind = artifactKindForNode(input.node)
   const stage = input.node.stage as WorkflowArtifactProviderRequest['stage']
-  const generatedAt = input.now?.() ?? new Date().toISOString()
+  const now = input.now ?? (() => new Date().toISOString())
+  const startedAt = now()
   const bounds = input.bounds ?? DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS
   const capability = input.capability ?? READ_ONLY_STAGE_AGENT_CAPABILITY
   const request: WorkflowArtifactProviderRequest = {
-    id: `workflow-stage-request-${input.run.id}-${input.node.id}-${Date.parse(generatedAt)}`,
+    id: `workflow-stage-request-${input.run.id}-${input.node.id}-${Date.parse(startedAt)}`,
     runId: input.run.id,
     nodeId: input.node.id,
     projectId: input.run.projectId,
@@ -570,6 +580,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     input.signal?.removeEventListener('abort', cancelExecution)
   }
   let output: WorkflowArtifactProviderOutput
+  const generatedAt = now()
   try {
     output = validateExecutorOutput({
       output: execution.value,
@@ -618,7 +629,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     capabilityProfile: capability.profile,
     ...(executor.providerId ? { providerId: executor.providerId } : {}),
     model,
-    startedAt: generatedAt,
+    startedAt,
     completedAt: generatedAt,
     durationMs: execution.durationMs ?? Math.max(0, Date.now() - started),
     terminalReason: 'success',
@@ -702,7 +713,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
         id: `agent-trace-${artifact.id}-executor`,
         kind: 'provider_call',
         label: `Run ${executor.kind}`,
-        summary: `${executor.id}@${executor.version}; capability=${capability.profile}; toolCalls=${execution.toolCalls}; terminal=success.`,
+        summary: `${executor.id}@${executor.version}; capability=${capability.profile}; toolCalls=${execution.toolCalls}; terminal=success.${executor.kind === 'local-agent' && output.usage ? ` OpenCode-reported usage: input=${output.usage.inputTokens}, output=${output.usage.outputTokens}, cacheRead=${output.usage.cacheReadTokens}; dollar cost is not settled by DevFlow.` : ''}`,
         timestamp: generatedAt,
       },
       {

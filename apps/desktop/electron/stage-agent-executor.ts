@@ -14,10 +14,13 @@ import {
   createOpencodeSession,
   createReadOnlyStageAgentPermissionRules,
   listOpencodeDiff,
+  listOpencodeMessages,
   listOpencodePermissions,
   sendOpencodeMessage,
 } from './opencode-http-adapter.js'
 import type { ManagedOpencodeServer } from './opencode-process.js'
+import { opencodeProviderBindingEnv, type OpencodeProviderBinding } from './opencode-provider-binding.js'
+import { readStageAgentOpencodeOutput } from './stage-agent-opencode-output.js'
 
 const execFileAsync = promisify(execFile)
 const citationFileBytesMax = 2 * 1024 * 1024
@@ -29,11 +32,14 @@ const stageAgentEnvironmentAllowlist = new Set([
   'OPENCODE_CONFIG', 'OPENCODE_CONFIG_DIR', 'OPENCODE_DISABLE_AUTOUPDATE',
 ])
 
-export function buildReadOnlyStageAgentRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(
+export function buildReadOnlyStageAgentRuntimeEnv(
+  env: NodeJS.ProcessEnv,
+  providerBinding?: OpencodeProviderBinding,
+): NodeJS.ProcessEnv {
+  return { ...Object.fromEntries(
     Object.entries(env).filter(([key, value]) =>
       stageAgentEnvironmentAllowlist.has(key) && typeof value === 'string' && value.length <= 4_096),
-  )
+  ), ...opencodeProviderBindingEnv(providerBinding) }
 }
 
 type ManagedOpencodeProcessManager = {
@@ -67,6 +73,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
   detectedVersion: string
   processManager: ManagedOpencodeProcessManager
   runtimeEnv: NodeJS.ProcessEnv
+  providerBinding?: OpencodeProviderBinding | undefined
   runner?: ReadOnlyStageAgentRunner
 }): StageAgentExecutor {
   return {
@@ -91,7 +98,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
           providerId: input.providerId,
           modelId: input.modelId,
           processManager: input.processManager,
-          runtimeEnv: buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv),
+          runtimeEnv: buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv, input.providerBinding),
         })
         const result = await runner({
           prompt: execution.prompt,
@@ -176,13 +183,13 @@ function createManagedOpencodeRunner(input: {
         text: prompt,
         signal,
       })
-      const [permissions, diffs] = await Promise.all([
+      const [permissions, diffs, messages] = await Promise.all([
         listOpencodePermissions({ baseUrl: server.baseUrl, directory, signal }),
         listOpencodeDiff({ baseUrl: server.baseUrl, sessionId, directory, signal }),
+        listOpencodeMessages({ baseUrl: server.baseUrl, sessionId, directory, signal }),
       ])
       return {
-        value: parseStructuredOpencodeOutput(response),
-        toolCalls: countToolParts(response),
+        ...readStageAgentOpencodeOutput({ response, messages, providerId: input.providerId, modelId: input.modelId }),
         pendingPermissionCount: permissions.filter((permission) => permission.sessionID === sessionId).length,
         diffCount: diffs.length,
       }
@@ -216,30 +223,6 @@ function readOnlyStageAgentConfigurationFingerprint(input: {
       modelId: input.modelId,
     }))
     .digest('hex')
-}
-
-function parseStructuredOpencodeOutput(response: unknown): WorkflowArtifactProviderOutput {
-  if (!isRecord(response) || !Array.isArray(response.parts)) {
-    throw new StageAgentExecutionError('schema_invalid', 'Managed stage Agent returned no structured response')
-  }
-  const text = response.parts
-    .filter((part): part is { type: string; text: string } =>
-      isRecord(part) && part.type === 'text' && typeof part.text === 'string')
-    .map((part) => part.text)
-    .join('\n')
-    .trim()
-  try {
-    const parsed = JSON.parse(text) as unknown
-    if (!isRecord(parsed)) throw new Error('not an object')
-    return parsed as WorkflowArtifactProviderOutput
-  } catch {
-    throw new StageAgentExecutionError('schema_invalid', 'Managed stage Agent returned invalid JSON')
-  }
-}
-
-function countToolParts(response: unknown): number {
-  if (!isRecord(response) || !Array.isArray(response.parts)) return 0
-  return response.parts.filter((part) => isRecord(part) && part.type === 'tool').length
 }
 
 async function validateAndDigestRepositoryCitations(

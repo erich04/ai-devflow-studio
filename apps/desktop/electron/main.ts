@@ -76,6 +76,7 @@ import { createAgentCoordinationRendererAccess } from './agent-coordination-rend
 import { createAgentCoordinationCommands } from './agent-coordination-commands.js'
 import { createBoundedAgentCoordinationPlan } from './agent-coordination-plan.js'
 import { createSpecialistTaskAuthorityBroker } from './specialist-task-authority.js'
+import { resolveSavedOpencodeProviderBinding } from './opencode-provider-binding.js'
 import { createSpecialistRuntimeCoordinator } from './specialist-runtime-coordinator.js'
 import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access.js'
 import { createAgentMemoryHumanActions } from './agent-memory-human-actions.js'
@@ -384,7 +385,15 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
   if (selection.executor === 'compatibility') {
     return { selection, executor: compatibilityCodingExecutor }
   }
-  const key = `${projectId}:${selection.configVersion}:${selection.executor}:${selection.providerId ?? ''}`
+  const providerBinding = selection.executor === 'opencode-http' && selection.configuration.executor === 'opencode-http'
+    ? await resolveSavedOpencodeProviderBinding({
+        providerId: selection.configuration.providerId,
+        modelId: selection.configuration.modelId,
+        credentialSource: store,
+        decryptCredential,
+      })
+    : undefined
+  const key = `${projectId}:${selection.configVersion}:${selection.executor}:${selection.providerId ?? ''}:${providerBinding?.fingerprint ?? ''}`
   let executorPromise = codingExecutorPromises.get(key)
   if (!executorPromise) {
     executorPromise = (async () => {
@@ -404,6 +413,7 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             runtimeEnv: buildOpencodeRuntimeEnv({
               baseEnv: process.env,
               apiKeyEnvName: 'OPENCODE_API_KEY',
+              providerBinding,
             }),
           }),
         )
@@ -1490,6 +1500,12 @@ async function getCodingReadiness(input: {
             binaryPath: candidate.binaryPath,
             providerId: configuration.providerId,
             modelId: configuration.modelId,
+            providerBinding: await resolveSavedOpencodeProviderBinding({
+              providerId: configuration.providerId,
+              modelId: configuration.modelId,
+              credentialSource: store,
+              decryptCredential,
+            }),
           })
         : { authAvailable: false, profileAvailable: false, modelAvailable: false }
       opencodeReadiness = {
@@ -2561,13 +2577,18 @@ function registerIpcHandlers() {
         modelId: configuration.modelId,
         detectedVersion: configuration.detectedVersion,
         processManager: opencodeProcessManager,
+        providerBinding: await resolveSavedOpencodeProviderBinding({
+          providerId: configuration.providerId,
+          modelId: configuration.modelId,
+          credentialSource: store,
+          decryptCredential,
+        }),
         runtimeEnv: buildOpencodeRuntimeEnv({
           baseEnv: process.env,
           apiKeyEnvName: 'OPENCODE_API_KEY',
         }),
       })
     }
-    const completedAt = new Date().toISOString()
     let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>>
     try {
       generated = await runWorkflowStageAgent({
@@ -2578,14 +2599,14 @@ function registerIpcHandlers() {
         ...(executor ? { executor } : {}),
         requestedBy: actor.userId,
         runtime: 'electron',
-        now: () => completedAt,
       })
     } catch (error) {
       return recordStageAgentFailure({
-        store, run, nodeId: node.id, executorKind, completedAt,
+        store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
         sequence: events.length + 1, error,
       })
     }
+    const completedAt = generated.artifact.updatedAt
     const event: AgentEvent = {
       id: `event-${generated.artifact.id}`,
       runId: run.id,
