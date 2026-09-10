@@ -87,7 +87,7 @@
 - `corepack pnpm verify`：260 文件 / 3690 用例、typecheck、跨平台检查全部通过。
 - 随后补充“内容更新”和“确认后失败重试”的边界用例：KnowledgeReviewRuntime 共 13 用例通过（新增 2 用例，产品代码未再变化）。
 - 完整 Desktop Playwright 受控接口回归：16/16 通过；其中滚动覆盖 1180×760、1834×768 与浅色/深色的四种组合。使用真实长度的规则标识，并验证文字不越出所属列；修改前该断言失败，列内换行修复后通过。
-- Desktop production build 通过。受控接口/Provider 测试不计为真实 Provider 验收。
+- Desktop production build 通过。CI 的 Electron smoke 最初仍断言旧同步文案；现改为从 Team 内触发真实 IPC 同步、验证原位反馈与停留 Team，并回到工作台验证本地 Run 保留。隔离临时 profile 的 `corepack pnpm test:electron-smoke` 本地完整通过。受控接口/Provider 测试不计为真实 Provider 验收。
 
 ### 真实验证结果
 
