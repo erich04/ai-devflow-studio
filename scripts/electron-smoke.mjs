@@ -446,7 +446,7 @@ async function runKnowledgeReviewViaDesktopApi(
       runId: input.runId,
       nodeId: input.nodeId,
       projectId: input.projectId,
-      requestedBy: 'u-erich',
+      requestedBy: 'renderer-spoofed-review-user',
       runtime: 'electron',
       providerId: input.providerId,
     })
@@ -455,10 +455,24 @@ async function runKnowledgeReviewViaDesktopApi(
     if (!matched) {
       throw new Error(`Gate Review was not persisted for ${input.nodeId}`)
     }
-    return { id: matched.id, nodeId: matched.nodeId }
+    const pairing = await window.aiDevFlowDesktop.loadDesktopPairing()
+    const usage = result.state.agentTokenUsage.find((row) => row.id === result.tokenUsage.id)
+    return {
+      id: matched.id,
+      nodeId: matched.nodeId,
+      usage,
+      trustedUserId: pairing?.userId,
+    }
   }, { runId, nodeId, projectId, providerId: smokeReviewProviderId })
 
   expect(persistedReview.nodeId).toBe(nodeId)
+  expect(persistedReview.trustedUserId).toBeTruthy()
+  expect(persistedReview.trustedUserId).not.toBe('renderer-spoofed-review-user')
+  expect(persistedReview.usage).toMatchObject({
+    userId: persistedReview.trustedUserId,
+    executorKind: 'direct-provider',
+    providerId: smokeReviewProviderId,
+  })
   await page.reload({ waitUntil: 'domcontentloaded' })
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)

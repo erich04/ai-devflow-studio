@@ -3470,9 +3470,18 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
     const input = parseRunKnowledgeReviewInput(payload)
     return providerOperations.use(input.providerId, `Review ${input.runId}`, async () => {
+      const store = await getStore()
+      const run = await store.getRun(input.runId)
+      if (!run || run.projectId !== input.projectId) {
+        throw new Error('Review request does not match a persisted Workflow run')
+      }
+      const actor = resolveTrustedWorkflowActor(
+        run,
+        await store.getDesktopPairingCredential(),
+      )
       const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
       const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot)
-      const result = await runtime.run(input)
+      const result = await runtime.run({ ...input, requestedBy: actor.userId })
       wakeRemoteSyncOutbox()
       return result
     })
