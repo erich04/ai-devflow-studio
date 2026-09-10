@@ -22,6 +22,19 @@ describe('real OpenCode stage response contract', () => {
   it('rejects the observed string citation shape with a precise diagnostic', () => {
     const response = message('final', 'stop', [{ type: 'text', text: JSON.stringify({ repositoryFindings: { citations: ['README.md:1'] } }) }])
     expect(() => readStageAgentOpencodeOutput({ response, messages: [response], ...model })).toThrow('Repository citations must be objects')
+    try {
+      readStageAgentOpencodeOutput({ response, messages: [first, response], ...model })
+    } catch (error) {
+      expect(error).toMatchObject({ reportedUsage: { inputTokens: 280, outputTokens: 50, cacheReadTokens: 80 } })
+    }
+  })
+  it('retains all consumed tokens when the final JSON is invalid and does not double count repeated message IDs', () => {
+    const response = message('final', 'stop', [{ type: 'text', text: 'invalid JSON' }])
+    try {
+      readStageAgentOpencodeOutput({ response, messages: [first, first, response], ...model })
+    } catch (error) {
+      expect(error).toMatchObject({ terminalReason: 'schema_invalid', reportedUsage: { inputTokens: 280, outputTokens: 50 } })
+    }
   })
   it('rejects a different runtime model rather than trusting model-written provenance', () => {
     expect(() => readStageAgentOpencodeOutput({ response: { ...final, info: { ...final.info, modelID: 'different-model' } }, messages: [first, final], ...model })).toThrow('selected Provider and Model')

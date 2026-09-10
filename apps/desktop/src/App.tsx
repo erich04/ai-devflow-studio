@@ -1,3 +1,4 @@
+import { buildRunUsageSummary } from './app/run-usage-summary'
 import {
   BookOpen,
   Bot,
@@ -608,16 +609,10 @@ export function App() {
   const latestAgentTrace = latestAgentReview
     ? agentTraces.find((trace) => trace.reviewId === latestAgentReview.id)
     : undefined
-  const latestAgentUsage = latestAgentReview
-    ? agentTokenUsage
-        .filter(
-          (usage) =>
-            usage.runId === latestAgentReview.runId &&
-            usage.nodeId === latestAgentReview.nodeId &&
-            usage.timestamp <= latestAgentReview.createdAt,
-        )
-        .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
-    : undefined
+  const latestAgentUsage = agentTokenUsage
+    .filter((usage) => usage.runId === selectedRun?.id && usage.nodeId === selectedNode?.id)
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]
+  const runUsage = buildRunUsageSummary(selectedRun?.id, agentTokenUsage, codingRuns, agentTraces)
   const selectedCodingRuns = useMemo(
     () =>
       codingRuns
@@ -764,7 +759,12 @@ export function App() {
   )
   const today = new Date().toISOString().slice(0, 10)
   const testsTodayCount = scopedTestEvidence.filter((evidence) => evidence.createdAt.slice(0, 10) === today).length
-  const budgetStatus = latestCodingRun?.budgetDecision?.status ?? (runtimeBudgetApprovalId ? 'approval entered' : '尚未执行')
+  const hasUnknownProjectCost = runUsage.unknownCostCount > 0 ||
+    agentTokenUsage.some((usage) => usage.projectId === selectedLocalProject?.id && usage.costUsd === null) ||
+    teamProjectCost.some((cost) => cost.key === selectedTeamProject?.id && (cost.unknownCostCount ?? 0) > 0)
+  const budgetStatus = hasUnknownProjectCost && !latestCodingRun?.budgetDecision?.blocksRun
+    ? '数据不完整 · 有金额待确认'
+    : latestCodingRun?.budgetDecision?.status ?? (runtimeBudgetApprovalId ? 'approval entered' : '尚未执行')
   const budgetTone =
     budgetStatus === 'allowed' || budgetStatus === 'approved_over_budget'
       ? 'good'
@@ -1190,7 +1190,7 @@ export function App() {
           <span className="stat">Active Runs <strong>{scopedRuns.length}</strong></span>
           <span className="stat">Run Sources <strong>{localRunCount} local · {remoteRunCount} remote</strong></span>
           <span className="stat">Pending Gates <strong>{pendingGateCount}</strong></span>
-          <span className="stat">Token Cost <strong>{teamTotalCost}</strong></span>
+          <span className="stat" data-testid="run-token-usage">Run Tokens <strong>{runUsage.tokenLabel}</strong>费用 <strong>{runUsage.costLabel}</strong></span>
           <span className="stat">Tests Today <strong>{testsTodayCount}</strong></span>
           <span className="stat">同步状态 <strong>local + {policySource}</strong></span>
           {scopedRemoteSyncOperations.length > 0 ? (

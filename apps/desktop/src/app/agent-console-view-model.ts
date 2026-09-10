@@ -856,9 +856,9 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
       ? [{
           id: input.latestUsage.id,
           eyebrow: input.latestUsage.source,
-          title: `${input.latestUsage.provider} · ${input.latestUsage.model}`,
-          body: `${input.latestUsage.inputTokens} input · ${input.latestUsage.outputTokens} output · ${input.latestUsage.cacheReadTokens} cache read`,
-          meta: [input.latestUsage.timestamp],
+          title: `${input.latestUsage.providerId ?? input.latestUsage.provider} · ${input.latestUsage.model}`,
+          body: input.latestUsage.usageStatus === 'unknown' ? '执行器未报告用量，金额待确认' : `${input.latestUsage.inputTokens} input · ${input.latestUsage.outputTokens} output · ${input.latestUsage.cacheReadTokens} cache read${input.latestUsage.usageStatus === 'partial' ? ' · 部分回合用量缺失' : ''}`,
+          meta: [input.latestUsage.timestamp, ...(input.latestUsage.pricingSnapshot ? [`预计费用 · 峰值费率 · ${input.latestUsage.pricingSnapshot.sourceVersion}`] : [])],
         }]
       : []
     groups.push({
@@ -866,7 +866,7 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
       title: '费用 / Token',
       summary: runtimeCost
         ? `${runtimeCost.phase === 'preflight_estimate' ? 'Preflight worst-case estimate' : runtimeCostUnknown ? 'Legacy unverified cost' : 'Actual provider settlement'} · ${runtimeCost.costStatus ?? 'legacy_unverified'} · ${runtimeCostUnknown || runtimeCost.costUsd === null ? 'unknown cost' : formatRuntimeUsd(runtimeCost.costUsd)}`
-        : `${formatUsd(input.latestUsage!.costUsd)} · ${input.latestUsage!.source}`,
+        : `${input.latestUsage!.costUsd !== null ? '预计 ' : ''}${formatUsd(input.latestUsage!.costUsd)} · ${input.latestUsage!.source}`,
       tone: 'soft',
       items: [...runtimeItems, ...legacyUsageItems],
     })

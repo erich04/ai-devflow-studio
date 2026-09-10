@@ -2,6 +2,7 @@ import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import { assertPolicyRevision } from './enforcement-policy-write'
 import {
   formatUsd,
+  formatCostRollup,
   annotateUnknownRuntimeCosts,
   redactSensitiveText,
   rollupTokenUsage,
@@ -394,6 +395,7 @@ export function createSeedTeamRepository(): TeamRepository {
   const agentReviews: AgentReviewResult[] = []
   const agentTraces: AgentTrace[] = []
   const agentTokenUsage: AgentTokenUsage[] = []
+  const stageUsageByRun = new Map<string, AgentTokenUsage[]>()
   const codingAgentSummaries: RemoteCodingAgentSummary[] = []
   const agentRuntimeSummaries: RemoteAgentRuntimeSummary[] = []
   const agentMemorySummaries: RemoteAgentMemorySummary[] = []
@@ -1052,13 +1054,11 @@ export function createSeedTeamRepository(): TeamRepository {
       const allTokenUsage = [
         ...tokenUsage.filter((usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId)),
         ...codingTokenUsage,
+        ...scopedRuns.flatMap((run) => stageUsageByRun.get(run.id) ?? []),
       ]
       const codingCostSummaries = scopedCodingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
-      const unknownCostCount = codingCostSummaries.filter(
-        (summary) => runtimeCostSummaryToTokenUsage(summary) === null,
-      ).length
       const scopedOrganizationPolicy =
         organizationPolicy.organizationId === context.organizationId
           ? organizationPolicy
@@ -1084,7 +1084,7 @@ export function createSeedTeamRepository(): TeamRepository {
           codingCostSummaries,
           'userId',
         ),
-        totalCost: `${formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0))}${unknownCostCount > 0 ? ' + unknown' : ''}`,
+        totalCost: formatCostRollup(annotateUnknownRuntimeCosts(rollupTokenUsage(allTokenUsage, 'projectId'), codingCostSummaries, 'projectId')),
         testEvidenceSummaries: scopedTestEvidence,
         agentReviews: scopedAgentReviews,
         agentTraces: scopedAgentTraces,
@@ -1156,11 +1156,23 @@ export function createSeedTeamRepository(): TeamRepository {
         throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
       }
 
+      const savedUsage = stageUsageByRun.get(summary.runId) ?? []
+      const incomingUsage = summary.stageAgentUsage ?? []
+      for (const usage of incomingUsage) {
+        const previous = savedUsage.find((row) => row.id === usage.id)
+        if (usage.userId !== context.userId || (previous && JSON.stringify(previous) !== JSON.stringify(usage))) {
+          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
+      }
+      const persistUsage = () => stageUsageByRun.set(summary.runId,
+        [...new Map([...savedUsage, ...incomingUsage].map((row) => [row.id, row])).values()])
+
       if (existingRun?.version === summary.version) {
         if (!hasSameRunProjection(existingRun, summary)) {
           throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
         }
 
+        persistUsage()
         return {
           accepted: true,
           syncedAt: new Date().toISOString(),
@@ -1222,6 +1234,7 @@ export function createSeedTeamRepository(): TeamRepository {
 
       upsertSyncedRun(syncedRun)
       runOrganizationIds.set(summary.runId, context.organizationId)
+      persistUsage()
 
       return {
         accepted: true,
@@ -1255,6 +1268,7 @@ export function createSeedTeamRepository(): TeamRepository {
       removeWhere(agentReviews, (review) => review.runId === runId)
       removeWhere(agentTraces, (trace) => trace.runId === runId)
       removeWhere(agentTokenUsage, (usage) => usage.runId === runId)
+      stageUsageByRun.delete(runId)
       removeWhere(codingAgentSummaries, (summary) => summary.runId === runId)
       removeWhere(gateOverrides, (override) => override.runId === runId)
       runOrganizationIds.delete(runId)

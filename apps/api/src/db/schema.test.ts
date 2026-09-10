@@ -18,8 +18,8 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('reserves Team schema v25 for immutable runtime cost settlements', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(25)
-    expect(teamMigrationCatalog.at(-1)).toEqual({
+    expect(TEAM_SCHEMA_VERSION).toBe(26)
+    expect(teamMigrationCatalog.find((migration) => migration.version === 25)).toEqual({
       version: 25,
       name: '0025_runtime_cost_settlement',
       fileName: '0025_runtime_cost_settlement.sql',
@@ -106,7 +106,7 @@ describe('team database schema', () => {
   })
 
   it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(25)
+    expect(TEAM_SCHEMA_VERSION).toBe(26)
     expect(teamMigrationCatalog.find((migration) => migration.version === 18)).toEqual({
       version: 18,
       name: '0018_agent_memory_projection_quality_version',
@@ -169,7 +169,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(25)
+    expect(TEAM_SCHEMA_VERSION).toBe(26)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -207,7 +207,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(25)
+    expect(TEAM_SCHEMA_VERSION).toBe(26)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -495,6 +495,7 @@ describe('team database schema', () => {
         name: '0025_runtime_cost_settlement',
         fileName: '0025_runtime_cost_settlement.sql',
       },
+      { version: 26, name: '0026_stage_agent_usage', fileName: '0026_stage_agent_usage.sql' },
     ])
 
     const migrations = await readTeamMigrationCatalog()

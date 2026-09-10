@@ -1,3 +1,4 @@
+import { resolveDeepSeekPricingSnapshot } from './cost'
 import type {
   AgentEvent,
   AgentPolicyFinding,
@@ -1407,8 +1408,16 @@ export function estimateAgentTokenUsage(input: EstimateAgentTokenUsageInput): Ag
   const inputTokens = input.providerUsage?.inputTokens ?? estimateTokens(input.prompt)
   const outputTokens = input.providerUsage?.outputTokens ?? estimateTokens(input.completion)
   const cacheReadTokens = input.providerUsage?.cacheReadTokens ?? 0
-  const price = MODEL_PRICES_PER_1K[input.model] ?? MODEL_PRICES_PER_1K['gpt-4.1-mini']!
-  const costUsd = (inputTokens / 1000) * price.input + (outputTokens / 1000) * price.output
+  const pricingSnapshot = input.providerUsage?.billingProvider === 'deepseek'
+    ? resolveDeepSeekPricingSnapshot({ providerId: 'deepseek', model: input.model, timestamp: input.timestamp, worstCase: true })
+    : null
+  const price = MODEL_PRICES_PER_1K[input.model]
+  const costUsd = pricingSnapshot && input.providerUsage?.cacheStatus === 'complete'
+    ? Number(((cacheReadTokens * pricingSnapshot.cacheHitInputUsdPerMillion +
+        (inputTokens - cacheReadTokens) * pricingSnapshot.cacheMissInputUsdPerMillion +
+        outputTokens * pricingSnapshot.outputUsdPerMillion) / 1_000_000).toFixed(9))
+    : input.providerUsage?.billingProvider === 'deepseek' ? null
+      : price ? (inputTokens / 1000) * price.input + (outputTokens / 1000) * price.output : null
 
   return {
     id: input.id,
@@ -1422,6 +1431,8 @@ export function estimateAgentTokenUsage(input: EstimateAgentTokenUsageInput): Ag
     outputTokens,
     cacheReadTokens,
     costUsd,
+    costStatus: costUsd === null ? 'unknown' : 'estimated',
+    ...(pricingSnapshot ? { pricingSnapshot } : {}),
     timestamp: input.timestamp,
     source,
   }

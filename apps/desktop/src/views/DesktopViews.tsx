@@ -15,6 +15,7 @@ import type * as React from 'react'
 import {
   buildClarificationReviewBundle,
   formatUsd,
+  formatCostRollup,
   projectKnowledgeReferencesForNode,
   resolveKnowledgeReferenceSemantics,
   type AgentEvent,
@@ -1467,7 +1468,7 @@ export function TeamOverview({
                         : '无当前 Gate 数据'}
                     </td>
                     <td>{memberSummary}</td>
-                    <td>{rollup ? `${rollup.totalTokens.toLocaleString()} · ${formatUsd(rollup.costUsd)}${rollup.unknownCostCount ? ` · ${rollup.unknownCostCount} unknown` : ''}` : `0 · ${totalCost}`}</td>
+                    <td>{rollup ? `${rollup.totalTokens.toLocaleString()} · ${formatCostRollup([rollup])}` : `0 · ${totalCost}`}</td>
                     <td><span className={`pill ${isSelectedProject ? 'accent' : 'soft'}`}>{isSelectedProject ? snapshotSource : dataOrigin}</span></td>
                   </tr>
                 )

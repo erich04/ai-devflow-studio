@@ -1,3 +1,4 @@
+import { createLocalStageAgentUsage } from './stage-agent-usage'
 import {
   estimateAgentTokenUsage,
   workflowArtifactOutputInstructions,
@@ -69,6 +70,7 @@ export type StageAgentExecutor = {
   id: string
   version: string
   providerId?: string
+  billingProvider?: 'deepseek'
   model: string
   execute(input: StageAgentExecutorInput): Promise<StageAgentExecutorOutput>
 }
@@ -80,6 +82,7 @@ export class StageAgentExecutionError extends Error {
     readonly terminalReason: Exclude<StageAgentTerminalReason, 'success'>,
     message: string,
     readonly tokenUsage?: AgentTokenUsage,
+    readonly reportedUsage?: AgentProviderUsage | null,
   ) {
     super(redactSensitiveText(message).value.slice(0, 512))
   }
@@ -511,7 +514,7 @@ function reportedFailureUsage(value: AgentProviderUsage | undefined): AgentProvi
     ))
   ) return undefined
   return {
-    inputTokens: value.inputTokens!, outputTokens: value.outputTokens!,
+    ...value, inputTokens: value.inputTokens!, outputTokens: value.outputTokens!,
     cacheReadTokens: value.cacheReadTokens ?? 0,
   }
 }
@@ -562,6 +565,11 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
       timedOut ? 'Workflow stage Agent timed out' : 'Workflow stage Agent was cancelled',
     )), { once: true })
   })
+  const localUsage = (usage: AgentProviderUsage | null, id: string, timestamp: string) => createLocalStageAgentUsage({
+    id, runId: input.run.id, nodeId: input.node.id, userId: input.requestedBy, projectId: input.run.projectId,
+    providerId: executor.providerId ?? executor.id, model: executor.model, timestamp, usage,
+    ...(executor.billingProvider ? { billingProvider: executor.billingProvider } : {}),
+  })
   let execution: StageAgentExecutorOutput
   try {
     execution = await Promise.race([
@@ -575,6 +583,12 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
       }),
       aborted,
     ])
+  } catch (error) {
+    if (executor.kind === 'local-agent' && error instanceof StageAgentExecutionError && error.reportedUsage !== undefined) {
+      throw new StageAgentExecutionError(error.terminalReason, error.message,
+        localUsage(error.reportedUsage, `agent-token-usage-${request.id}-failed`, now()))
+    }
+    throw error
   } finally {
     clearTimeout(timeout)
     input.signal?.removeEventListener('abort', cancelExecution)
@@ -591,14 +605,18 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     })
   } catch (error) {
     const usage = reportedFailureUsage(execution.value?.usage)
+    if (error instanceof StageAgentExecutionError && executor.kind === 'local-agent') {
+      throw new StageAgentExecutionError(error.terminalReason, error.message,
+        localUsage(usage ?? null, `agent-token-usage-${request.id}-failed`, generatedAt))
+    }
     if (error instanceof StageAgentExecutionError && executor.kind === 'direct-provider' && usage) {
-      throw new StageAgentExecutionError(error.terminalReason, error.message, estimateAgentTokenUsage({
+      throw new StageAgentExecutionError(error.terminalReason, error.message, { ...estimateAgentTokenUsage({
         id: `agent-token-usage-${request.id}-failed`,
         runId: input.run.id, nodeId: input.node.id, userId: input.requestedBy,
         projectId: input.run.projectId, provider: tokenProvider(executor),
         model: redactSensitiveText(executor.model).value.slice(0, 256),
         prompt: '', completion: '', timestamp: generatedAt, providerUsage: usage,
-      }))
+      }), executorKind: executor.kind, providerId: executor.providerId ?? executor.id })
     }
     throw error
   }
@@ -735,7 +753,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     ],
   }
   const tokenUsage = executor.kind === 'local-agent'
-    ? undefined
+    ? localUsage(reportedFailureUsage(output.usage) ?? null, `agent-token-usage-${artifact.id}`, generatedAt)
     : estimateAgentTokenUsage({
         id: `agent-token-usage-${artifact.id}`,
         runId: input.run.id,
@@ -759,7 +777,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     completion,
     ...(output.usage ? { usage: output.usage } : {}),
     trace,
-    ...(tokenUsage ? { tokenUsage } : {}),
+    ...(tokenUsage ? { tokenUsage: { ...tokenUsage, executorKind: executor.kind, providerId } } : {}),
     provenance,
     terminalReason: 'success',
   }

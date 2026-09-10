@@ -26,10 +26,11 @@ async function fixture() {
     id: 'provider-attempt', runId: run.id, nodeId: run.currentNodeId,
     userId: 'member', projectId: run.projectId, provider: 'openai', model: 'deepseek-v4-flash',
     inputTokens: 1942, outputTokens: 1953, cacheReadTokens: 0,
-    costUsd: 0.004, source: 'provider_reported', timestamp: now,
+    costUsd: null, costStatus: 'unknown', executorKind: 'local-agent', providerId: 'deepseek',
+    source: 'provider_reported', timestamp: now,
   }
   const input = {
-    store, run, nodeId: run.currentNodeId, executorKind: 'direct-provider' as const,
+    store, run, nodeId: run.currentNodeId, executorKind: 'local-agent' as const,
     completedAt: now, sequence: 1,
     error: new StageAgentExecutionError('schema_invalid', 'design.content is outside the allowed length', usage),
   }
@@ -46,6 +47,7 @@ describe('recordStageAgentFailure', () => {
     const usages = await restored.listAgentTokenUsage(input.run.id)
     const traces = await restored.listAgentTraces(input.run.id)
     expect(usages).toHaveLength(2)
+    expect(usages.every((usage) => usage.costUsd === null && usage.executorKind === 'local-agent')).toBe(true)
     expect(new Set(usages.map((usage) => usage.id)).size).toBe(2)
     expect(usages.every((usage) => usage.inputTokens === 1942 && usage.outputTokens === 1953)).toBe(true)
     expect(traces).toHaveLength(2)

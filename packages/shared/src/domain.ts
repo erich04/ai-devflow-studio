@@ -416,14 +416,19 @@ export type TokenUsage = {
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
-  costUsd: number
+  costUsd: number | null
   timestamp: string
 }
 
-export type TokenUsageSource = 'provider_reported' | 'estimated'
+export type TokenUsageSource = 'provider_reported' | 'estimated' | 'unknown'
 
 export type AgentTokenUsage = TokenUsage & {
   source: TokenUsageSource
+  executorKind?: StageAgentExecutorKind
+  providerId?: string
+  usageStatus?: 'complete' | 'partial' | 'unknown'
+  costStatus?: 'estimated' | 'unknown'
+  pricingSnapshot?: RuntimePricingSnapshot
 }
 
 export type RuntimeUsageStatus = 'estimated' | 'complete' | 'incomplete' | 'legacy_unknown'
@@ -592,6 +597,7 @@ export type AgentProviderUsage = {
   totalTokens?: number
   cacheStatus?: 'complete' | 'unknown'
   billingProvider?: 'deepseek' | 'openai_compatible'
+  missingUsageCount?: number
 }
 
 export type AgentReviewRuntime = 'electron' | 'api'
@@ -1434,6 +1440,7 @@ export type RemoteRunNodeSummary = Pick<
 >
 
 export type RemoteRunSummary = {
+  stageAgentUsage?: AgentTokenUsage[]
   kind: RemoteRunSummaryKind
   runId: string
   version: number

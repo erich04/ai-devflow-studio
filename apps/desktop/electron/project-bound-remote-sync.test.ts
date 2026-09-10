@@ -13,7 +13,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { createAgentRuntime, resumeAgentRuntime } from '@ai-devflow/shared'
+import { createAgentRuntime, resumeAgentRuntime, createLocalStageAgentUsage } from '@ai-devflow/shared'
 import { RemoteSyncHttpError, type RemoteSyncClient } from './remote-sync'
 import {
   CanonicalRemoteSyncEntityError,
@@ -328,6 +328,32 @@ function canonicalCoordinationSnapshot(): CoordinationRendererSnapshot {
 }
 
 describe('project-bound Electron remote sync', () => {
+  it('synchronizes canonical Stage consumption before evaluating budget and fails closed if synchronization fails', async () => {
+    const calls: string[] = []
+    const upload = vi.fn(async () => { calls.push('usage'); return { accepted: true, syncedAt: runSummary.updatedAt, message: 'saved' } })
+    const evaluate = vi.fn(async () => { calls.push('budget'); return { status: 'unavailable' as const, blocksRun: true, currentSpendUsd: 0, projectedCostUsd: 1, reason: 'Unknown costs' } })
+    const usage = createLocalStageAgentUsage({ id: 'stage-usage', runId: localRun.id, nodeId: localRun.currentNodeId,
+      projectId: localRun.projectId, userId: pairingCredential.userId, providerId: 'gateway', model: 'model',
+      timestamp: runSummary.updatedAt, usage: { inputTokens: 20, outputTokens: 10, cacheReadTokens: 0 } })
+    const bound = createProjectBoundRemoteSync({
+      remoteSync: { uploadRunSummary: upload, evaluateRuntimeBudget: evaluate } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential, listRuns: async () => [localRun],
+        listAgentTokenUsage: async () => [usage], listAgentReviews: async () => [], listTestEvidence: async () => [],
+        listCodingAgentRuns: async () => [], listCodingDiffArtifacts: async () => [],
+      },
+    })
+    const request = { projectId: localRun.projectId, providerId: 'gateway', requestedBy: pairingCredential.userId, projectedCostUsd: 1 }
+    await expect(bound.evaluateRuntimeBudget(request)).resolves.toMatchObject({ blocksRun: true })
+    expect(calls).toEqual(['usage', 'budget'])
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({ projectId: pairingCredential.projectId,
+      stageAgentUsage: [expect.objectContaining({ projectId: pairingCredential.projectId, costUsd: null })] }))
+    upload.mockRejectedValueOnce(new Error('Unavailable'))
+    evaluate.mockClear()
+    await expect(bound.evaluateRuntimeBudget(request)).rejects.toThrow('Unavailable')
+    expect(evaluate).not.toHaveBeenCalled()
+  })
+
   it('exposes only canonical identifier uploads and project-bound commands', () => {
     const boundRemoteSync = createProjectBoundRemoteSync({
       remoteSync: {} as RemoteSyncClient,

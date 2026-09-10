@@ -1,3 +1,4 @@
+import { parseStageAgentUsage } from './stage-agent-usage'
 import type {
   Role,
   RemoteAgentReviewSummary,
@@ -464,7 +465,11 @@ export function redactRemoteRunSummaryForSync(
 ): RemoteRunSummary {
   assertCanonicalLocalNodeId(summary.runId, summary.currentNodeId)
   assertCanonicalLocalNodeId(summary.runId, summary.currentNode.id)
+  const stageAgentUsage = summary.stageAgentUsage === undefined ? undefined
+    : parseStageAgentUsage(summary.stageAgentUsage, summary.runId, summary.projectId)
+  stageAgentUsage?.forEach((usage) => assertCanonicalLocalNodeId(summary.runId, usage.nodeId))
   return {
+    ...(stageAgentUsage ? { stageAgentUsage } : {}),
     kind: summary.kind,
     runId: summary.runId,
     version: summary.version,

@@ -3593,6 +3593,41 @@ try {
   )
   expectNoLocalOnlyFields(syncedOverview, 'synced overview')
 
+  // Stage accounting must survive rejected output, same-version replays and a restarted DB read.
+  const accountingRun = `${runId}-accounting`
+  const accountingSummary = { kind: 'run', runId: accountingRun, version: 1, projectId: 'p-payments',
+    title: 'Stage usage accounting', status: 'clarifying', currentNodeId: 'clarify',
+    currentNode: { id: 'clarify', stage: 'clarify', kind: 'agent', status: 'running' },
+    branchName: 'codex/stage-accounting', updatedAt: timestamp }
+  const consumed = { id: `${accountingRun}-rejected`, runId: accountingRun, nodeId: 'clarify',
+    projectId: 'p-payments', userId: 'u-erich', provider: 'openai', providerId: 'unpriced-gateway',
+    model: 'deepseek-v4-flash', executorKind: 'local-agent', inputTokens: 15268, outputTokens: 1444,
+    cacheReadTokens: 12416, costUsd: null, source: 'provider_reported', usageStatus: 'complete',
+    costStatus: 'unknown', timestamp }
+  const beforeAccounting = await fetchOverview('before Stage usage')
+  await postJson('/api/sync/run-summary', { ...accountingSummary, stageAgentUsage: [consumed] })
+  await postJson('/api/sync/run-summary', { ...accountingSummary, stageAgentUsage: [consumed] })
+  const afterAccounting = await fetchOverview('after Stage usage replay')
+  const beforeCost = beforeAccounting.projectCost.find((row) => row.key === 'p-payments')
+  const afterCost = afterAccounting.projectCost.find((row) => row.key === 'p-payments')
+  expect(afterCost.totalTokens - beforeCost.totalTokens === 16712, 'Stage usage was dropped or counted twice')
+  expect(afterCost.unknownCostCount === (beforeCost.unknownCostCount ?? 0) + 1, 'Unknown Stage cost was not retained')
+  expect(afterAccounting.totalCost.includes('金额待确认'), 'Session-scoped Team overview hid unknown cost')
+  const budget = await postJson('/api/runtime/budget/evaluate', {
+    projectId: 'p-payments', providerId: 'double', projectedCostUsd: 0.001, requestedBy: 'u-erich',
+  })
+  expect(budget.blocksRun === true && budget.status === 'unavailable', 'Unknown Stage cost weakened budget enforcement')
+  const conflictingAccounting = await postJsonResult('/api/sync/run-summary', {
+    ...accountingSummary, stageAgentUsage: [{ ...consumed, inputTokens: 99999 }],
+  }, ownerSessionHeaders)
+  expect(conflictingAccounting.status === 409, 'Accounting replay must not overwrite consumed usage')
+  const accountingPool = new Pool({ connectionString: databaseUrl })
+  try {
+    const stored = await accountingPool.query('SELECT stage_agent_usage FROM workflow_runs WHERE id = $1', [accountingRun])
+    expect(stored.rows[0].stage_agent_usage[consumed.id].costUsd === null, 'Postgres converted unknown cost into zero')
+    expect(stored.rows[0].stage_agent_usage[consumed.id].inputTokens === 15268, 'Postgres accounting changed after rejected replay')
+  } finally { await accountingPool.end() }
+
   console.log('Postgres integration smoke passed.')
 } finally {
   await stop(api)

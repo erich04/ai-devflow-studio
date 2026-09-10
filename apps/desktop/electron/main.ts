@@ -2617,10 +2617,12 @@ function registerIpcHandlers() {
           runtime: 'electron',
         })
       } catch (error) {
-        return recordStageAgentFailure({
-          store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
-          sequence: events.length + 1, error,
-        })
+        try {
+          return await recordStageAgentFailure({
+            store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
+            sequence: events.length + 1, error,
+          })
+        } finally { wakeRemoteSyncOutbox() }
       }
       const completedAt = generated.artifact.updatedAt
       const event: AgentEvent = {

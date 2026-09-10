@@ -2,6 +2,7 @@ import { assertPolicyRevision, EnforcementPolicyConflictError } from './enforcem
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   formatUsd,
+  formatCostRollup,
   annotateUnknownRuntimeCosts,
   buildPolicyAwareDeliverySummaries,
   rollupTokenUsage,
@@ -249,7 +250,7 @@ type TokenUsageRow = {
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
-  cost_usd: string | number
+  cost_usd: string | number | null
   timestamp: TimestampValue
 }
 
@@ -767,7 +768,7 @@ function mapTokenUsage(row: TokenUsageRow): TokenUsage {
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
     cacheReadTokens: row.cache_read_tokens,
-    costUsd: Number(row.cost_usd),
+    costUsd: row.cost_usd === null ? null : Number(row.cost_usd),
     timestamp: timestamp(row.timestamp),
   }
 }
@@ -2355,13 +2356,14 @@ export function createPostgresTeamRepository(
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
         .map(runtimeCostSummaryToTokenUsage)
         .filter((usage): usage is TokenUsage => usage !== null)
-      const allTokenUsage = [...tokenUsage, ...codingTokenUsage]
+      const stageUsageRows = await db.query<{ stage_agent_usage: Record<string, AgentTokenUsage> }>(
+        'SELECT stage_agent_usage FROM workflow_runs WHERE organization_id = $1', [context.organizationId],
+      )
+      const stageUsage = stageUsageRows.flatMap((row) => Object.values(row.stage_agent_usage ?? {}))
+      const allTokenUsage = [...tokenUsage, ...codingTokenUsage, ...stageUsage]
       const codingCostSummaries = codingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
-      const unknownCostCount = codingCostSummaries.filter(
-        (summary) => runtimeCostSummaryToTokenUsage(summary) === null,
-      ).length
       const gateOverrides = gateOverrideRows.map(mapGateOverride)
       const runtimeBudgetPolicies = runtimeBudgetPolicyRows.map(mapRuntimeBudgetPolicy)
       const runtimeBudgetApprovals = runtimeBudgetApprovalRows.map(mapRuntimeBudgetApproval)
@@ -2380,7 +2382,7 @@ export function createPostgresTeamRepository(
           codingCostSummaries,
           'userId',
         ),
-        totalCost: `${formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0))}${unknownCostCount > 0 ? ' + unknown' : ''}`,
+        totalCost: formatCostRollup(annotateUnknownRuntimeCosts(rollupTokenUsage(allTokenUsage, 'projectId'), codingCostSummaries, 'projectId')),
         testEvidenceSummaries,
         agentReviews,
         agentTraces: agentTraceRows.map(mapAgentTrace),
@@ -2482,6 +2484,23 @@ export function createPostgresTeamRepository(
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
       summary = redactRemoteRunSummaryForSync(summary)
       return withTeamDbTransaction(db, async (tx) => {
+        const persistStageUsage = async () => {
+          if (!summary.stageAgentUsage?.length) return
+          if (summary.stageAgentUsage.some((row) => row.userId !== context.userId)) {
+            throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+          }
+          const [saved] = await tx.query<{ id: string }>(`
+            UPDATE workflow_runs SET stage_agent_usage = stage_agent_usage || $4::jsonb
+            WHERE id = $1 AND organization_id = $2 AND project_id = $3
+              AND NOT EXISTS (
+                SELECT 1 FROM jsonb_each($4::jsonb) incoming
+                WHERE stage_agent_usage ? incoming.key AND stage_agent_usage -> incoming.key IS DISTINCT FROM incoming.value
+              ) RETURNING id`,
+            [summary.runId, context.organizationId, summary.projectId,
+              JSON.stringify(Object.fromEntries(summary.stageAgentUsage.map((row) => [row.id, row])))],
+          )
+          if (!saved) throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
         await tx.query(
           `
             /* run_summary:authority-lock */
@@ -2615,6 +2634,7 @@ export function createPostgresTeamRepository(
             throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
           }
 
+          await persistStageUsage()
           return {
             accepted: true,
             syncedAt: new Date().toISOString(),
@@ -2686,6 +2706,7 @@ export function createPostgresTeamRepository(
           throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
         }
 
+        await persistStageUsage()
         return {
           accepted: true,
           syncedAt: new Date().toISOString(),

@@ -37,3 +37,5 @@ export * from './workflow-transition'
 export * from './workflow-agent'
 export * from './workflow-context-projection'
 export * from './work-authority'
+
+export * from './stage-agent-usage'

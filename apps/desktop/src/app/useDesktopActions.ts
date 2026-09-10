@@ -503,6 +503,8 @@ export function useDesktopActions(input: {
       setActiveView('workbench')
       setToast(successToast)
     } catch (error) {
+      // Failed output can still incur real usage; reload the Main-process audit before displaying it.
+      try { applyLocalExecutionState(await desktopApi.loadState()) } catch { /* Keep the original failure visible. */ }
       setToast(error instanceof Error ? error.message : '生成阶段产物失败')
     } finally {
       clearPendingInspectorAction(pending)

@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 25
+export const TEAM_SCHEMA_VERSION = 26
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -210,6 +210,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
     columns: [
       column('id', 'text', { primaryKey: true }),
       column('run_version', 'integer'),
+      column('stage_agent_usage', 'jsonb'),
       column('organization_id', 'text', { references: 'organizations.id' }),
       column('project_id', 'text', { references: 'projects.id' }),
       column('creator_id', 'text', { references: 'users.id' }),
@@ -338,7 +339,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('input_tokens', 'integer'),
       column('output_tokens', 'integer'),
       column('cache_read_tokens', 'integer'),
-      column('cost_usd', 'numeric(12,6)'),
+      column('cost_usd', 'numeric(12,6)', { nullable: true }),
       column('timestamp', 'timestamptz'),
     ],
   },
@@ -407,7 +408,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('input_tokens', 'integer'),
       column('output_tokens', 'integer'),
       column('cache_read_tokens', 'integer'),
-      column('cost_usd', 'numeric(12,6)'),
+      column('cost_usd', 'numeric(12,6)', { nullable: true }),
       column('timestamp', 'timestamptz'),
       column('source', 'text'),
     ],

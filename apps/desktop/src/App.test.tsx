@@ -5,6 +5,7 @@ import {
   advanceWorkflowAfterGateApproval,
   completeWorkflowAgentNode,
   createRecommendedEnforcementPreset,
+  createLocalStageAgentUsage,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
   indexKnowledgeSources,
@@ -4323,6 +4324,26 @@ describe('App', () => {
 
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
     expect(screen.getByTestId('toast')).toHaveTextContent('请先 Pair Team Project 后再同步团队远端状态')
+  })
+
+  it('reloads rejected Stage usage immediately and shows incomplete budget data without advancing the node', async () => {
+    const initial = localStateAtCurrentNode('n-clarify')
+    const usage = createLocalStageAgentUsage({ id: 'rejected-stage', runId: fixtureRuns[0]!.id, nodeId: 'n-clarify',
+      userId: 'u-ling', projectId: localProject.id, providerId: 'unpriced-gateway', model: 'deepseek-v4-flash',
+      timestamp: '2026-09-10T16:00:00.000Z', usage: { inputTokens: 15268, outputTokens: 1444, cacheReadTokens: 12416 } })
+    const loadState = vi.fn().mockResolvedValue(initial)
+    const api = installDesktopApi({ loadState, completeWorkflowAgentNode: vi.fn().mockRejectedValue(new Error('Citation rejected')) })
+    render(<App />)
+    await waitFor(() => expect(screen.getByTestId('complete-clarify-agent')).toBeEnabled())
+    loadState.mockResolvedValue({ ...initial, agentTokenUsage: [usage] })
+    fireEvent.click(screen.getByTestId('complete-clarify-agent'))
+    await waitFor(() => expect(screen.getByTestId('run-token-usage')).toHaveTextContent('16,712'))
+    expect(screen.getByTestId('run-token-usage')).toHaveTextContent('1 项金额待确认')
+    expect(screen.getByTestId('run-token-usage')).not.toHaveTextContent('$0.00')
+    expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('数据不完整')
+    expect(screen.getByTestId('flow-node-n-clarify')).toHaveTextContent('当前步骤')
+    expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('toast')).toHaveTextContent('Citation rejected')
   })
 
   it('opens each card attachment in its matching tab without counting another node or invoking a Provider', async () => {
