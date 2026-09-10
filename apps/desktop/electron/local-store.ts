@@ -12384,14 +12384,27 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void> {
-    this.db.run(
-      `
-      insert into agent_token_usage (id, run_id, node_id, json, timestamp)
-      values (?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, timestamp = excluded.timestamp
-      `,
-      [usage.id, usage.runId, usage.nodeId, JSON.stringify(usage), usage.timestamp],
-    )
+    this.db.run('begin transaction')
+    try {
+      this.db.run(
+        `
+        insert into agent_token_usage (id, run_id, node_id, json, timestamp)
+        values (?, ?, ?, ?, ?)
+        on conflict(id) do update set json = excluded.json, timestamp = excluded.timestamp
+        `,
+        [usage.id, usage.runId, usage.nodeId, JSON.stringify(usage), usage.timestamp],
+      )
+      if (usage.executorKind) {
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'run-summary', localProjectId: usage.projectId,
+          runId: usage.runId, entityId: usage.runId, createdAt: usage.timestamp,
+        })
+      }
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 

@@ -86,3 +86,6 @@ An allowlisted accounting projection accompanies the existing Run summary. The A
 idempotently, rejects conflicting reuse of an ID, and includes unknown amounts in project/member
 rollups. Desktop uploads pending stage usage before the next remote budget evaluation. Unknown
 amounts or failed synchronization keep the existing budget guard unavailable and blocking.
+New local Gate Review records use the same accounting projection. Saving their usage also queues
+the Run summary in the same SQLite transaction, so a successful review's consumption is not left
+only in the local display. Existing historical review records are not retagged or repriced.

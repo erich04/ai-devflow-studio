@@ -924,6 +924,8 @@ describe('runKnowledgeReviewAgent', () => {
       'artifact',
     ])
     expect(result.tokenUsage.source).toBe('provider_reported')
+    expect(result.tokenUsage.executorKind).toBe('direct-provider')
+    expect(result.tokenUsage.providerId).toBe(result.review.providerId)
     expect(result.tokenUsage.inputTokens).toBeGreaterThan(0)
     expect(result.tokenUsage.costUsd).toBeGreaterThanOrEqual(0)
   })

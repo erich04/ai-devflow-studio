@@ -1690,7 +1690,7 @@ export async function runKnowledgeReviewAgent({
     ...(providerOutput.usage ? { providerUsage: providerOutput.usage } : {}),
   })
 
-  return { review, trace, tokenUsage }
+  return { review, trace, tokenUsage: { ...tokenUsage, executorKind: 'direct-provider', providerId: provider.id } }
 }
 
 export function createAgentReviewArtifacts(result: AgentReviewExecutionResult): {

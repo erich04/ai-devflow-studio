@@ -10162,6 +10162,20 @@ describe('createLocalStore', () => {
     second.close()
   })
 
+  it('durably queues canonical Run accounting when a local Gate review records consumption', async () => {
+    const dbPath = await tempDbPath()
+    const first = await createLocalStore({ dbPath })
+    const usage: AgentTokenUsage = { ...agentTokenUsage, executorKind: 'direct-provider', providerId: 'unpriced-gateway', costUsd: null, costStatus: 'unknown' }
+    await first.saveAgentTokenUsage(usage)
+    first.close()
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listAgentTokenUsage(usage.runId)).toEqual([usage])
+    expect(await reopened.listRemoteSyncOperations(usage.runId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'run-summary', runId: usage.runId, entityId: usage.runId, localProjectId: usage.projectId }),
+    ]))
+    reopened.close()
+  })
+
   it('keeps the last persisted review first when review timestamps tie across reopen', async () => {
     const dbPath = await tempDbPath()
     const first = await createLocalStore({ dbPath })

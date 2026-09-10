@@ -28,6 +28,7 @@ const diagnostics = []
 let hostileDevelopmentServerRequests = 0
 let electronApp
 let runtimeBudgetPolicy = null
+const synchronizedStageUsage = new Map()
 const packagedOrganizationPolicy = {
   id: 'enforcement-policy-org-packaged-smoke',
   organizationId: 'org-packaged-smoke',
@@ -107,6 +108,25 @@ const controlPlaneServer = createServer(async (request, response) => {
       updatedAt: new Date().toISOString(),
     }
     sendJson(200, runtimeBudgetPolicy)
+    return
+  }
+  if (request.method === 'POST' && url.pathname === '/api/sync/run-summary') {
+    const body = await readBody()
+    if (request.headers.authorization !== 'Bearer devflow-desktop-token-packaged-smoke' ||
+        body.projectId !== packagedTeamProject.id || typeof body.runId !== 'string') {
+      sendJson(403, { error: 'invalid_scope' })
+      return
+    }
+    for (const usage of body.stageAgentUsage ?? []) {
+      if (usage.projectId !== packagedTeamProject.id || usage.runId !== body.runId ||
+          usage.userId !== 'packaged-smoke-user' || !usage.executorKind ||
+          (synchronizedStageUsage.has(usage.id) && JSON.stringify(synchronizedStageUsage.get(usage.id)) !== JSON.stringify(usage))) {
+        sendJson(409, { error: 'invalid_accounting' })
+        return
+      }
+      synchronizedStageUsage.set(usage.id, usage)
+    }
+    sendJson(200, { accepted: true, syncedAt: new Date().toISOString(), message: 'Canonical Run and stage usage accepted.' })
     return
   }
   if (request.method === 'GET' && url.pathname === '/api/runtime/budget-policy') {
@@ -532,6 +552,14 @@ try {
       acceptedActionCount: runtime.runtime.acceptedActionCount,
     }
   })
+
+  const nativeStageUsage = [...synchronizedStageUsage.values()].filter(
+    (usage) => usage.runId === nativeCodingBeforeRestart.workflowRunId,
+  )
+  if (nativeStageUsage.length !== 2 || nativeStageUsage.some((usage) =>
+    usage.executorKind !== 'direct-provider' || !Number.isFinite(usage.costUsd))) {
+    throw new Error('Packaged budget preflight did not synchronize both canonical Stage accounting records.')
+  }
 
   await electronApp.close()
   electronApp = undefined

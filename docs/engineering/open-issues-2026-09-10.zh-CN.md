@@ -251,3 +251,11 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 当前本地验证：`pnpm verify` 271 文件 / 3760 用例、类型和跨平台检查通过；浏览器 41 项通过；Electron smoke 通过。专用全新 Postgres 数据库完整 smoke 通过，真实 HTTP 验证同版本上传两次只计一次、null 费用持久化、改账 409、预算 unavailable / blocksRun。随后补充价格快照往返及总 token 溢出边界，5 项记账用例再次通过。
 
 本轮真实模型全流程与云端交付尚在进行，#81、#89 暂不关闭。
+
+首轮 CI 暴露两处旧测试契约：Docker lifecycle 对整行 JSON 的比对把新增空字段误作历史数据变化；packaged smoke 的受控 API 未实现现在预算前必需的 Run summary 上传。分别改为原字段逐字保留 + 新记账字段为空的独立检查，并补上具备身份/项目约束及去重的受控上传端点、两条 Stage 记账断言。真实 Docker lifecycle 升级/回滚验证已通过；没有放宽产品预算规则。
+
+费用链路复核补上 Gate Review：新 Review 也标记实际 direct-provider 身份，用量保存与 Run summary outbox 入队在同一 SQLite 事务中完成，防止审查消费仅留本地。历史记录不加新标签、不重写。新增重启后 null 金额和待同步操作同时保留的回归，连同 Review / 项目同步共 283 项定向用例通过。打包后的 Desktop pilot smoke 已通过。
+
+补充改动后全量 `pnpm verify` 再次通过：271 文件 / 3761 用例、类型及跨平台检查。当前真实链路的逐步证据、独立仓库/项目/请求 ID 和待处理事项见 [本轮全流程验证](final-live-e2e-2026-09-10.zh-CN.md)；在完成前 PR #90 保持 Draft，#81、#89 不提前关闭。新增 #91 是仓库绑定冲突反馈，界面文案正在等待确认。
+
+最终构建再次通过 Desktop pilot smoke 和 v15 GitHub Delivery packaged smoke：真实安装包 Main + 新建临时 Postgres，离线模拟 GitHub，精确分支发布、一次 Draft PR、重启无重复效果、Acceptance completed、撤销阻断、持久化秘密泄漏计数 0。该项是受控交付回归，不作为真实 GitHub/Provider 全流程证据。
