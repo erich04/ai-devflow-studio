@@ -3393,6 +3393,24 @@ code {
   box-shadow: 0 10px 22px rgb(255 56 92 / 16%);
 }
 
+.workflow-card-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.workflow-card-main:focus-visible,
+.artifact-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .workflow-card--good {
   border-color: color-mix(in srgb, var(--green) 40%, var(--border));
   background: color-mix(in srgb, var(--green) 5%, #fff);
@@ -3446,6 +3464,7 @@ code {
 .artifact-chip {
   justify-self: start;
   padding: 5px 8px;
+  border: 1px solid var(--border);
   border-radius: 999px;
   background: #f5f5f5;
   color: var(--text-muted);
@@ -3514,6 +3533,16 @@ code {
 .tab.active {
   background: #222;
   color: #fff;
+}
+
+.inspector > .tabbar {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.inspector > .tabbar .tab {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .inspector-scroll {

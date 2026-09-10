@@ -83,6 +83,7 @@ export type SupportFocusTarget =
   | 'coding-agent'
   | 'artifact'
   | 'event'
+  | 'inspector-tab'
 
 export type SupportContext = {
   runId: string
@@ -381,7 +382,7 @@ function buildAttachmentChips(input: {
 
   return [
     { kind: 'artifact', label: '产物', count: nodeArtifacts.length },
-    { kind: 'evidence', label: '证据', count: nodeEvidence.length },
+    { kind: 'evidence', label: '测试证据', count: nodeEvidence.length },
     { kind: 'trace', label: '轨迹', count: nodeEvents.length },
   ]
 }

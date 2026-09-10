@@ -17,7 +17,6 @@ import {
   formatUsd,
   projectKnowledgeReferencesForNode,
   resolveKnowledgeReferenceSemantics,
-  workflowContextField,
   type AgentEvent,
   type AgentReviewResult,
   type Artifact,
@@ -109,6 +108,7 @@ export function WorkflowBoard({
   testEvidence,
   selectedNodeId,
   onSelectNode,
+  onSelectAttachment,
 }: {
   run: WorkflowRun
   artifacts: Artifact[]
@@ -116,6 +116,7 @@ export function WorkflowBoard({
   testEvidence: TestEvidence[]
   selectedNodeId: string | undefined
   onSelectNode: (nodeId: string) => void
+  onSelectAttachment: (nodeId: string, tab: string) => void
 }) {
   const board = useMemo(
     () => buildWorkflowBoard({ run, artifacts, events, testEvidence }),
@@ -156,7 +157,7 @@ export function WorkflowBoard({
         <div className="board-semantics" aria-label="卡片阅读方式">
           <span className="semantic-chip"><strong>节点类型</strong>Task / Gate / Test / Delivery / Acceptance</span>
           <span className="semantic-chip"><strong>节点来源</strong>与展示方式分开标注</span>
-          <span className="semantic-chip"><strong>卡片底部</strong>显示 Artifact / Evidence / Trace 摘要</span>
+          <span className="semantic-chip"><strong>卡片底部</strong>点击产物 / 测试证据 / 轨迹计数查看当前节点内容</span>
           <span className="semantic-chip"><strong>Inspector</strong>按节点类型显示不同诊断 tab</span>
         </div>
       </div>
@@ -193,34 +194,47 @@ export function WorkflowBoard({
             <div className={`stage-progress stage-progress--${stage.completionState}`} />
             <div className="stage-cards">
               {stage.cards.map((card) => (
-                <button
+                <article
                   key={card.node.id}
                   className={`workflow-card workflow-card--${card.visualKind.toLowerCase()} workflow-card--${card.statusTone} ${
                     card.node.id === selectedNodeId ? 'is-selected' : ''
                   }`}
-                  data-testid={`flow-node-${card.node.id}`}
-                  onClick={() => onSelectNode(card.node.id)}
+                  data-testid={`workflow-card-${card.node.id}`}
                 >
-                  <div className="row">
-                    <span className="pill soft" title="节点类型">{card.presentation.nodeKindLabel}</span>
-                    <span className={`pill ${card.statusTone}`}>{card.statusLabel}</span>
-                  </div>
-                  <div className="card-provenance">
-                    <span title="节点来源">来源：{card.presentation.sourceLabel}</span>
-                    {card.presentation.displayMode === 'folded' ? (
-                      <span title="展示方式">展示：{card.presentation.displayModeLabel}</span>
-                    ) : null}
-                  </div>
-                  <strong>{displayNodeTitle(card.node)}</strong>
-                  <p>{displayNodeSubtitle(card.node)}</p>
+                  <button
+                    className="workflow-card-main"
+                    type="button"
+                    data-testid={`flow-node-${card.node.id}`}
+                    aria-pressed={card.node.id === selectedNodeId}
+                    onClick={() => onSelectNode(card.node.id)}
+                  >
+                    <div className="row">
+                      <span className="pill soft" title="节点类型">{card.presentation.nodeKindLabel}</span>
+                      <span className={`pill ${card.statusTone}`}>{card.statusLabel}</span>
+                    </div>
+                    <div className="card-provenance">
+                      <span title="节点来源">来源：{card.presentation.sourceLabel}</span>
+                      {card.presentation.displayMode === 'folded' ? (
+                        <span title="展示方式">展示：{card.presentation.displayModeLabel}</span>
+                      ) : null}
+                    </div>
+                    <strong>{displayNodeTitle(card.node)}</strong>
+                    <p>{displayNodeSubtitle(card.node)}</p>
+                  </button>
                   <div className="artifact-chip-row">
                     {card.attachmentChips.map((chip) => (
-                      <span className={`artifact-chip ${chip.count > 0 ? 'is-filled' : ''}`} key={chip.kind}>
+                      <button
+                        type="button"
+                        className={`artifact-chip ${chip.count > 0 ? 'is-filled' : ''}`}
+                        key={chip.kind}
+                        aria-label={`${displayNodeTitle(card.node)}：${chip.label} ${chip.count}`}
+                        onClick={() => onSelectAttachment(card.node.id, chip.label)}
+                      >
                         <strong>{chip.label}</strong> {chip.count}
-                      </span>
+                      </button>
                     ))}
                   </div>
-                </button>
+                </article>
               ))}
             </div>
           </section>
@@ -368,6 +382,9 @@ export function Inspector({
   const reviewSubjectArtifactIds = latestAgentReview?.contextManifest?.subjectArtifacts.map(
     (artifact) => artifact.id,
   ) ?? selectedNode.artifactIds
+  const nodeArtifacts = workflowArtifacts.filter((artifact) =>
+    artifact.runId === selectedRun?.id && artifact.nodeId === selectedNode.id,
+  )
   const scopedReferences = projectKnowledgeReferencesForNode({
     node: selectedNode,
     references: latestAgentReview?.knowledgeReferences ?? references,
@@ -692,12 +709,12 @@ export function Inspector({
   )
 
   const renderArtifacts = () => (
-    <div className="artifact-list">
-      <span className="panel-label">Artifacts</span>
-      {artifacts.length === 0 ? (
-        <p className="empty-note">当前节点还没有 Artifact。</p>
+    <div className="artifact-list" data-testid="node-artifacts">
+      <span className="panel-label">当前节点产物 · {nodeArtifacts.length}</span>
+      {nodeArtifacts.length === 0 ? (
+        <p className="empty-note">当前节点尚未归档产物。</p>
       ) : (
-        artifacts.map((artifact) => (
+        nodeArtifacts.map((artifact) => (
           <article
             key={artifact.id}
             className={`artifact-card ${artifact.id === focusedArtifactId ? 'is-focused' : ''}`}
@@ -754,27 +771,16 @@ export function Inspector({
     const subjectManifest = latestAgentReview?.contextManifest?.subjectArtifacts ?? []
     const subjectArtifacts = reviewSubjectArtifactIds.flatMap((artifactId) => {
       const artifact = workflowArtifacts.find((candidate) => candidate.id === artifactId)
-      return artifact ? [artifact] : []
+      return artifact && artifact.nodeId !== selectedNode.id ? [artifact] : []
     })
-    const testProjection = workflowContextField(viewModel.contextProjection, 'test_evidence')
-    const visibleTestEvidence = testProjection?.visible ? testEvidence : []
-    const hasEvidence = subjectArtifacts.length > 0 || Boolean(latestAgentReview) || visibleTestEvidence.length > 0
+    if (!subjectArtifacts.length && !latestAgentReview) return null
 
     return (
       <div className="artifact-list" data-testid="review-evidence-results">
-        <span className="panel-label">Evidence · 可审计结果</span>
+        <span className="panel-label">关联审查内容</span>
         <p className="empty-note">
-          这里展示被审查的 Artifact、门禁审查结果和当前阶段适用的 Test Evidence；Knowledge 引用只在“引用来源”中展示。
+          审查结论与被审查的上游产物供核对，不另计入当前节点产物数量；知识依据保留在“引用来源”。
         </p>
-        {!hasEvidence ? (
-          <p className="empty-note" data-testid="review-evidence-empty-state">
-            {testProjection?.state === 'missing_required'
-              ? `当前阶段缺少 Policy 要求的 Test Evidence。${testProjection.reason}`
-              : testProjection?.state === 'not_applicable'
-                ? '当前阶段不要求 Test Evidence，且尚未产生可审计的 Review 或 Artifact Evidence。'
-                : '当前节点尚未产生可审计 Evidence；检索候选不会在这里重复显示。'}
-          </p>
-        ) : null}
         {subjectArtifacts.map((artifact) => {
           const manifest = subjectManifest.find((candidate) => candidate.id === artifact.id)
           return (
@@ -811,32 +817,57 @@ export function Inspector({
             ))}
           </article>
         ) : null}
-        {visibleTestEvidence.map((evidence) => (
+      </div>
+    )
+  }
+
+  const renderTestEvidence = () => {
+    const nodeEvidence = testEvidence.filter((evidence) =>
+      evidence.runId === selectedRun?.id && evidence.nodeId === selectedNode.id,
+    )
+    const deliveryEvidence = selectedGitHubDeliveryIntent
+      ? testEvidence.find((evidence) => evidence.runId === selectedRun?.id &&
+          evidence.id === selectedGitHubDeliveryIntent.testEvidenceId && evidence.nodeId !== selectedNode.id)
+      : undefined
+    return (
+      <div className="artifact-list" data-testid="node-test-evidence">
+        <span className="panel-label">当前节点测试证据 · {nodeEvidence.length}</span>
+        {nodeEvidence.length === 0 ? <p className="empty-note">当前节点尚未归档测试证据。</p> : null}
+        {nodeEvidence.map((evidence) => (
           <article className="artifact-card" key={evidence.id}>
             <div className="compact-row">
-              <strong>Test Evidence</strong>
+              <strong>测试结果</strong>
               <span className={`pill ${evidence.status === 'passed' ? 'good' : evidence.status === 'running' ? 'warn' : 'bad'}`}>
                 {evidence.status}
               </span>
             </div>
             <p>{evidence.summary}</p>
             <div className="knowledge-reference-meta">
-              <code>{evidence.id}</code>
-              <code>{evidence.command}</code>
-              <span>{evidence.durationMs}ms</span>
-              <span>{testProjection?.role ?? 'primary'}</span>
+              <code>{evidence.id}</code><code>{evidence.command}</code>
+              <span>{evidence.durationMs}ms</span><span>Exit code {evidence.exitCode ?? 'unknown'}</span>
             </div>
+            <details><summary>查看测试日志</summary><pre>{evidence.stdout}{evidence.stderr}</pre></details>
           </article>
         ))}
+        {deliveryEvidence ? (
+          <section className="artifact-card" data-testid="linked-delivery-test-evidence">
+            <strong>本次交付引用的上游测试</strong>
+            <p>{deliveryEvidence.summary}</p>
+            <p className="empty-note">归档在上游节点，不计入当前节点数量。</p>
+            <button type="button" className="inline-link-button" onClick={() => onSelectWorkflowNode(deliveryEvidence.nodeId)}>
+              查看测试所属节点
+            </button>
+          </section>
+        ) : null}
       </div>
     )
   }
 
   const renderTrace = () => (
-    <div className="event-list">
-      <span className="panel-label">Trace</span>
+    <div className="event-list" data-testid="node-trace">
+      <span className="panel-label">当前节点轨迹 · {events.length}</span>
       {events.length === 0 ? (
-        <p className="empty-note">暂无 Event / Trace。</p>
+        <p className="empty-note">当前节点尚无执行轨迹。</p>
       ) : (
         events.map((event) => (
           <div
@@ -1178,6 +1209,7 @@ export function Inspector({
     governance: renderGovernance,
     knowledgeReferences: renderKnowledgeReferences,
     reviewEvidence: renderReviewEvidence,
+    testEvidence: renderTestEvidence,
     remediationActions: renderRemediationActions,
     agentReview: renderAgentReview,
     artifacts: renderArtifacts,

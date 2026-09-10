@@ -511,19 +511,10 @@ export function App() {
   )
   const selectedArtifacts = scopedArtifacts
     .filter((artifact) => selectedNode?.artifactIds.includes(artifact.id))
-    .filter((artifact) =>
-      matchesQuery(normalizedSearchQuery, [
-        artifact.title,
-        artifact.summary,
-        artifact.content,
-        artifact.kind,
-      ]),
-    )
   const selectedEvents = scopedEvents.filter(
     (event) =>
       event.runId === selectedRun?.id &&
-      (!selectedNode || event.nodeId === selectedNode.id) &&
-      matchesQuery(normalizedSearchQuery, [event.kind, event.message]),
+      (!selectedNode || event.nodeId === selectedNode.id),
   )
   const pairedUser = !desktopPairingExpired && desktopPairing
     ? {
@@ -1371,6 +1362,14 @@ export function App() {
                   testEvidence={scopedTestEvidence}
                   selectedNodeId={selectedNode?.id}
                   onSelectNode={setSelectedNodeId}
+                  onSelectAttachment={(nodeId, inspectorTab) => {
+                    setSelectedNodeId(nodeId)
+                    setSupportContext({
+                      runId: selectedRun.id, nodeId, inspectorTab,
+                      sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab',
+                      label: inspectorTab, createdAt: new Date().toISOString(),
+                    })
+                  }}
                 />
 
                 <WorkbenchSplitter />
@@ -1388,7 +1387,7 @@ export function App() {
                   latestAgentReview={latestAgentReview}
                   supportContext={supportContext}
                   onConsumeSupportContext={() => setSupportContext((current) =>
-                    current?.focusTarget === 'knowledge-reference' ? null : current)}
+                    current?.focusTarget === 'knowledge-reference' || current?.focusTarget === 'inspector-tab' ? null : current)}
                   policySnapshot={gateEnforcement.policySnapshot}
                   gateEnforcementDecision={gateEnforcement.decision}
                   gateOverrides={gateEnforcement.overrides.filter((override) => override.nodeId === selectedNode?.id)}
