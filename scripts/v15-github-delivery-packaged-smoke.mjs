@@ -1303,6 +1303,36 @@ try {
     pairing.credential?.projectId === 'p-payments',
     'Packaged preload did not bind Desktop pairing authority.',
   )
+  const savedRuntimeBudgetPolicy = await callDesktop(
+    firstLaunch.page,
+    'saveCodingRuntimeBudgetPolicy',
+    {
+      projectId: localProject.id,
+      enabled: true,
+      monthlyLimitUsd: 0.20,
+      warningThresholdUsd: 0.10,
+    },
+  )
+  assert(
+    savedRuntimeBudgetPolicy.projectId === 'p-payments' &&
+      savedRuntimeBudgetPolicy.enabled === true &&
+      savedRuntimeBudgetPolicy.monthlyLimitUsd === 0.20 &&
+      savedRuntimeBudgetPolicy.warningThresholdUsd === 0.10,
+    'Packaged preload did not persist the project-bound Runtime Budget Policy.',
+  )
+  const persistedRuntimeBudgetPolicy = await callDesktop(
+    firstLaunch.page,
+    'getCodingRuntimeBudgetPolicy',
+    { projectId: localProject.id },
+  )
+  assert(
+    persistedRuntimeBudgetPolicy?.projectId === savedRuntimeBudgetPolicy.projectId &&
+      persistedRuntimeBudgetPolicy.enabled === savedRuntimeBudgetPolicy.enabled &&
+      persistedRuntimeBudgetPolicy.monthlyLimitUsd === savedRuntimeBudgetPolicy.monthlyLimitUsd &&
+      persistedRuntimeBudgetPolicy.warningThresholdUsd ===
+        savedRuntimeBudgetPolicy.warningThresholdUsd,
+    'Packaged preload did not read back the saved Runtime Budget Policy.',
+  )
   const desktopBearer = await waitFor(
     'captured in-memory Desktop bearer authority',
     async () => apiProxy.getCapturedDesktopToken(),

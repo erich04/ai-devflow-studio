@@ -109,6 +109,24 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(codingAgentCall).not.toContain('providerId:')
   })
 
+  it('persists the paired project runtime budget before starting the packaged Coding Agent', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+    const pairingIndex = smoke.indexOf("const pairing = await callDesktop(firstLaunch.page, 'pairDesktop', {")
+    const budgetSaveIndex = smoke.indexOf("'saveCodingRuntimeBudgetPolicy'", pairingIndex)
+    const budgetReadIndex = smoke.indexOf("'getCodingRuntimeBudgetPolicy'", budgetSaveIndex)
+    const workflowIndex = smoke.indexOf('const workflow = await advanceToPr(', budgetReadIndex)
+
+    expect(pairingIndex).toBeGreaterThan(-1)
+    expect(budgetSaveIndex).toBeGreaterThan(pairingIndex)
+    expect(budgetReadIndex).toBeGreaterThan(budgetSaveIndex)
+    expect(workflowIndex).toBeGreaterThan(budgetReadIndex)
+    expect(smoke.slice(budgetSaveIndex, budgetReadIndex)).toContain('projectId: localProject.id')
+    expect(smoke.slice(budgetSaveIndex, budgetReadIndex)).toContain('enabled: true')
+  })
+
   it('cold-restarts one partial coordination graph without duplicating specialist effects', () => {
     const smoke = readFileSync(
       'scripts/v15-github-delivery-packaged-smoke.mjs',
