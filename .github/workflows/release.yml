@@ -34,7 +34,7 @@ jobs:
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm typecheck
       # Keep the same bounded Git/SQLite fixture concurrency as Verify.
-      - run: corepack pnpm test --maxWorkers=2
+      - run: corepack pnpm run test --maxWorkers=2
       - run: corepack pnpm test:cross-platform
 
   postgres-integration:

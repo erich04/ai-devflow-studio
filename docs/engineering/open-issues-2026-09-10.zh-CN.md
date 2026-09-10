@@ -267,3 +267,7 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 - #92：云端 run `34500726984` 的 Windows 全量测试在 Git/SQLite/文件系统夹具中出现 22 项超时，macOS 同组用例通过；此前 #88 也有类似 Windows 抖动。Verify / Release 的 Windows 全量套件统一限制 `maxWorkers=2`，不删除断言、不放大产品超时。必须等待新 Windows CI 实证后才关闭。
 
 真实新 Run 已完成 OpenCode 澄清和 Direct DeepSeek 需求门禁审查，两次消费均归档；继续验证需要 Mac 解锁及新仓库的 GitHub App 授权。#81/#89/#92/#93 在最终验证前保持打开，#91 的界面文案仍待确认。
+
+最新产品修复已通过全量 `pnpm verify`（271 文件 / 3761 用例）和重建安装包的离线 GitHub Delivery smoke，Acceptance completed、重启无重复发布、秘密泄漏计数 0。Windows 首轮并发参数被 `pnpm test` 的命令层拒绝，改用 `corepack pnpm run test --maxWorkers=2`；本地执行与 CI 完全相同的命令，3761 项全部通过，仍需 Windows 实机结果。
+
+新增 #94：Web 侧用只含占位 request、无本地 Artifact 的 Team 投影去比较本地 Review manifest，误判 stale 并阻断云端审批。已通过真实 Web 和数据库只读核对确认；不影响原生 Desktop 审批的结论尚待操作验证。建议仅同步脱敏摘要与版本指纹，最终保留 Desktop 完整证据复核；数据边界与交互方案已向用户提问，暂未实现。

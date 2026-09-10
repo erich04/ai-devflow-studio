@@ -42,6 +42,7 @@
 - 原生控制未恢复前的输入尝试不计为产品 pairing 失败。重启并重新选择真实窗口后，AX 输入与配对持久化均已验证。
 - #81 的 Electron 回归复现了 Gate Review 使用 Renderer 的 `requestedBy` 记账，导致与配对用户不一致，后续预算同步被 API 拒绝。Main 改为从已持久化 Run 和 pairing 推导用户；Smoke 显式伪造 Renderer 用户并断言本地 usage 采用配对身份。修复前本地复现失败，修复后整条 Electron Smoke 通过；没有放宽 API 的身份校验。
 - [#93](https://github.com/erich04/ai-devflow-studio/issues/93)：真实 Review 上传将 Postgres 当前 Gate 从 running 改为 blocked，破坏同版本 Run 重传。保留现有节点的权威状态，只更新证据说明；测试证据上传也采用同一边界。新增真实 PostgreSQL 回归在修复前稳定 409，修复后全量通过，同时确认修改同版本状态仍 409、同 ID 改账仍 409。当前真实 Run 将通过正常 Gate 推进和同步恢复，不直接改写业务数据库。
+- [#94](https://github.com/erich04/ai-devflow-studio/issues/94)：Mac 锁定期间从 Web 核对同一 Run，输入明确的验收说明后“批准并继续”仍被 Team preflight 禁用。云端保存了完整 Review manifest，但 Run request 为占位文本、Artifact 数量为 0，因此严格的 freshness 检查误把正常本地 Review 排除。未取消校验或上传本地产物；已请求用户决定云端摘要/指纹与 Desktop 最终复核的数据边界。Web 表单说明仅为未提交草稿，没有生成审批命令。
 
 ## 验收规则
 

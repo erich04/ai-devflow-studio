@@ -78,7 +78,7 @@ jobs:
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm typecheck
       # Bound concurrent Git/SQLite fixtures on the shared Windows runner.
-      - run: corepack pnpm test --maxWorkers=2
+      - run: corepack pnpm run test --maxWorkers=2
       - run: corepack pnpm test:cross-platform
 
   postgres-integration:
