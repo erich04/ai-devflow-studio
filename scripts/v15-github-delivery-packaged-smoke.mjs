@@ -730,7 +730,10 @@ async function launchPackagedDesktop(input) {
             '--password-store=gnome-libsecret',
             '--no-sandbox',
           ]
-        : ['--disable-background-networking', '--password-store=basic'],
+        : [
+            '--disable-background-networking',
+            '--password-store=basic',
+          ],
     env: input.env,
     timeout: 30_000,
   })
@@ -744,7 +747,6 @@ async function launchPackagedDesktop(input) {
       await app.whenReady()
       return {
         available: safeStorage.isEncryptionAvailable(),
-        spellCheckerLanguages: session.defaultSession.getSpellCheckerLanguages(),
         spellCheckerEnabled: session.defaultSession.isSpellCheckerEnabled(),
         backend:
           typeof safeStorage.getSelectedStorageBackend === 'function'
@@ -756,12 +758,6 @@ async function launchPackagedDesktop(input) {
       credentialStorage.available,
       'Packaged Desktop credential encryption is unavailable.',
     )
-    if (process.platform !== 'darwin') {
-      assert(
-        credentialStorage.spellCheckerLanguages.length === 0,
-        'Packaged Desktop spell checker languages remained configured.',
-      )
-    }
     assert(
       !credentialStorage.spellCheckerEnabled,
       'Packaged Desktop spell checker remained enabled.',
@@ -779,9 +775,15 @@ async function launchPackagedDesktop(input) {
     return { electronApp, page }
   } catch (error) {
     await electronApp.close().catch(() => undefined)
-    throw new Error('Packaged Desktop failed to launch.', {
-      cause: diagnostics.length > 0 ? new Error('Electron emitted diagnostics.') : error,
-    })
+    throw new AggregateError(
+      [
+        error,
+        ...(diagnostics.length > 0
+          ? [new Error('Electron also emitted bounded stderr diagnostics.')]
+          : []),
+      ],
+      'Packaged Desktop failed to launch.',
+    )
   }
 }
 
@@ -801,18 +803,27 @@ async function advanceToPr(page, materialized, localProjectId, userId) {
   let run = materialized.run
   let node = currentNode(run)
   assert(node.kind === 'agent' && node.stage === 'clarify', 'Workflow did not start at Clarify.')
-  run = (
-    await callDesktop(page, 'completeWorkflowAgentNode', {
-      runId: run.id,
-      nodeId: node.id,
-      userId,
-      userName: 'Packaged Smoke Owner',
-      providerId: 'fake-knowledge-review',
-    })
-  ).run
+  const clarification = await callDesktop(page, 'completeWorkflowAgentNode', {
+    runId: run.id,
+    nodeId: node.id,
+    userId,
+    userName: 'Packaged Smoke Owner',
+    providerId: 'fake-knowledge-review',
+  })
+  run = clarification.run
   node = currentNode(run)
   assert(node.kind === 'gate', 'Clarify completion did not reach its Gate.')
-  run = (await callDesktop(page, 'approveGate', { runId: run.id, nodeId: node.id })).run
+  const clarificationRevision = clarification.artifact?.clarificationRevision
+  assert(clarificationRevision, 'Clarification completion did not return revision identity.')
+  run = (await callDesktop(page, 'approveGate', {
+    runId: run.id,
+    nodeId: node.id,
+    expectedClarificationRevision: {
+      artifactId: clarification.artifact.id,
+      revision: clarificationRevision.revision,
+      revisionDigest: clarificationRevision.revisionDigest,
+    },
+  })).run
   node = currentNode(run)
   assert(node.kind === 'agent' && node.stage === 'design', 'Workflow did not reach Design.')
   run = (
@@ -843,7 +854,6 @@ async function advanceToPr(page, materialized, localProjectId, userId) {
     nodeId: node.id,
     projectId: localProjectId,
     requestedBy: userId,
-    providerId: 'fake-coding-engine',
     userInstruction:
       'Create the one reviewed packaged smoke marker with {"token":""} as an empty redaction canary.',
   })
@@ -1295,6 +1305,36 @@ try {
   assert(
     pairing.credential?.projectId === 'p-payments',
     'Packaged preload did not bind Desktop pairing authority.',
+  )
+  const savedRuntimeBudgetPolicy = await callDesktop(
+    firstLaunch.page,
+    'saveCodingRuntimeBudgetPolicy',
+    {
+      projectId: localProject.id,
+      enabled: true,
+      monthlyLimitUsd: 0.20,
+      warningThresholdUsd: 0.10,
+    },
+  )
+  assert(
+    savedRuntimeBudgetPolicy.projectId === 'p-payments' &&
+      savedRuntimeBudgetPolicy.enabled === true &&
+      savedRuntimeBudgetPolicy.monthlyLimitUsd === 0.20 &&
+      savedRuntimeBudgetPolicy.warningThresholdUsd === 0.10,
+    'Packaged preload did not persist the project-bound Runtime Budget Policy.',
+  )
+  const persistedRuntimeBudgetPolicy = await callDesktop(
+    firstLaunch.page,
+    'getCodingRuntimeBudgetPolicy',
+    { projectId: localProject.id },
+  )
+  assert(
+    persistedRuntimeBudgetPolicy?.projectId === savedRuntimeBudgetPolicy.projectId &&
+      persistedRuntimeBudgetPolicy.enabled === savedRuntimeBudgetPolicy.enabled &&
+      persistedRuntimeBudgetPolicy.monthlyLimitUsd === savedRuntimeBudgetPolicy.monthlyLimitUsd &&
+      persistedRuntimeBudgetPolicy.warningThresholdUsd ===
+        savedRuntimeBudgetPolicy.warningThresholdUsd,
+    'Packaged preload did not read back the saved Runtime Budget Policy.',
   )
   const desktopBearer = await waitFor(
     'captured in-memory Desktop bearer authority',

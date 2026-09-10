@@ -1,7 +1,6 @@
 'use client'
 
-import { useRef, useState, useTransition, type FormEvent } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRef, useState, type FormEvent } from 'react'
 import { formatUsd } from '@ai-devflow/shared'
 import type {
   AgentProviderConfig,
@@ -43,7 +42,6 @@ export function RuntimeBudgetPanel({
   savePolicyAction,
   createApprovalAction,
 }: RuntimeBudgetPanelProps) {
-  const router = useRouter()
   const [policy, setPolicy] = useState(initialPolicy)
   const [enabled, setEnabled] = useState(initialPolicy?.enabled ?? false)
   const [monthlyLimitUsd, setMonthlyLimitUsd] = useState(
@@ -53,7 +51,7 @@ export function RuntimeBudgetPanel({
     initialPolicy ? String(initialPolicy.warningThresholdUsd) : '',
   )
   const [feedback, setFeedback] = useState<SaveFeedback>({ kind: 'idle' })
-  const [isPending, startTransition] = useTransition()
+  const [isPending, setIsPending] = useState(false)
   const submissionInFlight = useRef(false)
   const availableProviders = providers.filter((provider) => provider.enabled)
   const selectedProvider = availableProviders[0]
@@ -66,36 +64,35 @@ export function RuntimeBudgetPanel({
     setFeedback({ kind: 'idle' })
   }
 
-  function handlePolicySubmit(event: FormEvent<HTMLFormElement>) {
+  async function handlePolicySubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (submissionInFlight.current) return
 
     submissionInFlight.current = true
+    setIsPending(true)
     setFeedback({ kind: 'idle' })
     const formData = new FormData(event.currentTarget)
-    startTransition(async () => {
-      try {
-        const result = await savePolicyAction(formData)
-        if (!result.ok) {
-          setFeedback({ kind: 'error', message: result.error })
-          return
-        }
-
-        setPolicy(result.policy)
-        setEnabled(result.policy.enabled)
-        setMonthlyLimitUsd(String(result.policy.monthlyLimitUsd))
-        setWarningThresholdUsd(String(result.policy.warningThresholdUsd))
-        setFeedback({ kind: 'success' })
-        router.refresh()
-      } catch (error) {
-        setFeedback({
-          kind: 'error',
-          message: error instanceof Error ? error.message : '预算策略保存失败，请重试。',
-        })
-      } finally {
-        submissionInFlight.current = false
+    try {
+      const result = await savePolicyAction(formData)
+      if (!result.ok) {
+        setFeedback({ kind: 'error', message: result.error })
+        return
       }
-    })
+
+      setPolicy(result.policy)
+      setEnabled(result.policy.enabled)
+      setMonthlyLimitUsd(String(result.policy.monthlyLimitUsd))
+      setWarningThresholdUsd(String(result.policy.warningThresholdUsd))
+      setFeedback({ kind: 'success' })
+    } catch (error) {
+      setFeedback({
+        kind: 'error',
+        message: error instanceof Error ? error.message : '预算策略保存失败，请重试。',
+      })
+    } finally {
+      submissionInFlight.current = false
+      setIsPending(false)
+    }
   }
 
   const feedbackMessage = feedback.kind === 'error'

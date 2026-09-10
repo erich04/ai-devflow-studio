@@ -13,6 +13,7 @@ import type {
 import type { GateEnforcementDecision } from './enforcement'
 import { nextStatusAfterApproval } from './gates'
 import { redactLocalAbsolutePaths, redactSecrets } from './redaction'
+import type { GitHubDeliveryIntent } from './github-delivery'
 
 export type CreateWorkflowRunFromRequestInput = {
   runId: string
@@ -86,6 +87,10 @@ export type CreateAcceptanceEvidenceBundleArtifactInput = {
   enforcement?: GateEnforcementDecision
   budgetDecision?: BudgetGuardDecision
   agentReviewSummaries?: string[]
+  agentExecutionSummaries?: string[]
+  delivery?: Pick<GitHubDeliveryIntent,
+    'runId' | 'localProjectId' | 'status' | 'completion' | 'repository' | 'baseBranch' |
+    'headBranch' | 'expectedCommitSha' | 'diffArtifactId' | 'diffSourceDigest' | 'testEvidenceId'>
   now: string
 }
 
@@ -587,13 +592,27 @@ export function createAcceptanceEvidenceBundleArtifact(input: CreateAcceptanceEv
     input.artifacts.filter((artifact) => artifact.kind === 'pr'),
     (artifact) => artifact.updatedAt,
   )
-  const changedPaths = unique(input.codingDiffs.flatMap((diff) => diff.changedPaths)).map(redactDeliveryText)
-  const latestTest = latestByTimestamp(input.testEvidence, (evidence) => evidence.createdAt)
+  const runDiffs = input.codingDiffs.filter((diff) => diff.runId === input.run.id && diff.projectId === input.run.projectId)
+  const runTests = input.testEvidence.filter((evidence) => evidence.runId === input.run.id && evidence.projectId === input.run.projectId)
+  const delivery = input.delivery
+  const deliveredDiff = delivery && runDiffs.find((diff) => diff.id === delivery.diffArtifactId)
+  const deliveredTest = delivery && runTests.find((test) => test.id === delivery.testEvidenceId)
+  if (delivery && (
+    delivery.runId !== input.run.id || delivery.localProjectId !== input.run.projectId ||
+    delivery.status !== 'completed' || !delivery.completion?.draft || !delivery.completion.pullRequestUrl ||
+    !deliveredDiff || deliveredDiff.sourceDigest !== delivery.diffSourceDigest || deliveredDiff.truncated ||
+    !deliveredTest || deliveredTest.nodeId !== deliveredDiff.nodeId ||
+    deliveredTest.sourceCommitSha !== delivery.expectedCommitSha || deliveredTest.status !== 'passed' || deliveredTest.exitCode !== 0
+  )) {
+    throw new Error('Acceptance delivery is missing its exact completed diff and commit-bound passing test')
+  }
+  const changedPaths = unique((deliveredDiff ? [deliveredDiff] : runDiffs).flatMap((diff) => diff.changedPaths)).map(redactDeliveryText)
+  const latestTest = deliveredTest ?? latestByTimestamp(runTests, (evidence) => evidence.createdAt)
   const title = redactDeliveryText(input.run.title)
   const request = redactDeliveryText(rawRequest?.content ?? input.run.request)
   const designSummary = redactDeliveryText(design?.summary ?? 'No design artifact linked.')
   const reviewSummary = redactDeliveryText(
-    input.agentReviewSummaries?.join(' | ') || 'No Gate Review summary provided.',
+    input.agentReviewSummaries?.slice(-10).map((summary) => summary.length > 350 ? `${summary.slice(0, 350)}… [historical summary excerpt]` : summary).join(' | ') || 'No Gate Review summary provided.',
   )
   const testSummary = latestTest ? redactDeliveryText(latestTest.summary) : ''
 
@@ -605,9 +624,30 @@ export function createAcceptanceEvidenceBundleArtifact(input: CreateAcceptanceEv
     `PR Draft: ${prDraft?.id ?? 'missing'}`,
     `Changed Paths: ${changedPaths.length ? changedPaths.join(', ') : 'none'}`,
     `Tests: ${latestTest ? `${latestTest.status} - ${testSummary}` : 'missing'}`,
-    `Policy: ${input.enforcement?.status ?? 'not_evaluated'}`,
+    `Policy: ${input.enforcement?.status ?? 'not_evaluated'} (Gate evaluation when this bundle was generated; the final review may still be pending)`,
     `Budget: ${input.budgetDecision?.status ?? 'not_evaluated'}`,
     `Gate Review: ${reviewSummary}`,
+    '',
+    '## Recorded delivery evidence',
+    ...(delivery ? [
+      `Draft PR: ${redactDeliveryText(delivery.completion!.pullRequestUrl)} (draft=true at publication)`,
+      `Repository: ${redactDeliveryText(delivery.repository)}`,
+      `Branches: ${redactDeliveryText(delivery.headBranch)} -> ${redactDeliveryText(delivery.baseBranch)}`,
+      `Delivered commit: ${delivery.expectedCommitSha}`,
+      `Exact commit test: ${deliveredTest!.id}; ${redactDeliveryText(deliveredTest!.command)}; passed; exit=0; ${deliveredTest!.createdAt}; sourceCommitSha=${deliveredTest!.sourceCommitSha}`,
+      `Diff: ${deliveredDiff!.id}; sourceDigest=${deliveredDiff!.sourceDigest}`,
+      '```diff',
+      redactDeliveryText(deliveredDiff!.patch).slice(0, 16_000),
+      ...(redactDeliveryText(deliveredDiff!.patch).length > 16_000 ? ['[Patch excerpt truncated; inspect the referenced full Coding Diff before acceptance.]'] : []),
+      '```',
+    ] : ['No completed GitHub Delivery was supplied; do not infer a published PR from a PR package.']),
+    '',
+    '## Verification history',
+    'Earlier failures remain audit history. The exact commit test above identifies verification of the delivered change.',
+    ...runTests.map((test) => `- ${test.id}; node=${test.nodeId}; ${test.status}; exit=${test.exitCode}; ${test.createdAt}; commit=${test.sourceCommitSha ?? 'not recorded'}; ${redactDeliveryText(test.summary)}`),
+    '',
+    '## Provider execution evidence',
+    ...(input.agentExecutionSummaries?.map(redactDeliveryText) ?? ['No Provider execution summary was supplied.']),
   ].join('\n')
 
   return {

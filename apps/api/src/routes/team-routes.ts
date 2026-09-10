@@ -1465,8 +1465,14 @@ export async function resolveTeamRoute(
           .map(toTestEvidence),
         knowledgeDocuments: defaultKnowledgeDocuments,
         knowledgeChunks: defaultKnowledgeChunks,
+        policySnapshot: {
+          effectivePolicy: enforcementPolicy.effectivePolicy,
+          version: enforcementPolicy.effectivePolicy.version,
+          source: 'api',
+        },
         requiredContextFields: deriveWorkflowContextPolicyRequirements(
           enforcementPolicy.effectivePolicy,
+          node,
         ),
       })
     } catch (error) {

@@ -64,6 +64,7 @@ import {
 } from '../app/desktop-view-model'
 import {
   buildNodeInspectorViewModel,
+  selectInspectorPrPackage,
   type InspectorAction,
   type InspectorActionDisabledReason,
   type InspectorActionId,
@@ -381,6 +382,7 @@ export function Inspector({
     events,
     knowledgeReferenceCount: scopedReferences.length,
     testEvidenceCount: testEvidence.length,
+    testEvidence,
     latestAgentReview,
     policySnapshot,
     gateEnforcementDecision,
@@ -930,6 +932,11 @@ export function Inspector({
     </div>
   )
 
+  const handoffPrPackage = selectInspectorPrPackage({
+    node: selectedNode,
+    artifacts: workflowArtifacts,
+    ...(selectedGitHubDeliveryIntent ? { githubDeliveryIntent: selectedGitHubDeliveryIntent } : {}),
+  })
   const renderDeliveryHandoff = () => (
     <div className="handoff-bundle" data-testid="delivery-handoff">
       <span className="panel-label">Delivery Handoff</span>
@@ -942,16 +949,12 @@ export function Inspector({
           ? { revocationCheck: selectedGitHubDeliveryRevocationCheck }
           : {})}
         surface={selectedNode.kind === 'acceptance' ? 'acceptance' : 'pr'}
-        hasExactPrPackage={artifacts.some((artifact) => (
-          artifact.kind === 'pr' &&
-          artifact.redacted === true &&
-          artifact.githubDeliverySource?.stateVersion === 1
-        ))}
+        hasExactPrPackage={handoffPrPackage?.redacted === true && handoffPrPackage.githubDeliverySource?.stateVersion === 1}
       />
       <article className="mini-card">
         <div className="compact-row">
           <strong>PR Delivery Package</strong>
-          <span className="pill soft">{artifacts.some((artifact) => artifact.kind === 'pr') ? 'ready' : 'pending'}</span>
+          <span className="pill soft">{handoffPrPackage ? 'ready' : 'pending'}</span>
         </div>
         <p className="meta">汇总 diff、tests、policy、budget、review，作为 PR Delivery Gate 的交付摘要。</p>
       </article>

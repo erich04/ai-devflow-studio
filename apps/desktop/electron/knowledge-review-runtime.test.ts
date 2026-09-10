@@ -149,13 +149,13 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.tokenUsage).toHaveLength(1)
   })
 
-  it('projects policy-required missing Test Evidence into the same Electron provider contract', async () => {
+  it('projects global testing policy as supplemental evidence during design review', async () => {
     const organizationPolicy = createRecommendedEnforcementPreset({
       organizationId: 'org-demo',
       updatedAt: '2026-07-31T12:01:10.000Z',
     })
-    const store = new MemoryKnowledgeReviewStore(artifacts, {
-      projectId: fixtureRun.projectId,
+    const snapshot: PolicySnapshot = {
+      projectId: 'paired-team-project',
       organizationPolicy,
       projectOverride: null,
       effectivePolicy: resolveEffectivePolicy(organizationPolicy, null),
@@ -163,11 +163,15 @@ describe('KnowledgeReviewRuntime', () => {
       updatedAt: organizationPolicy.updatedAt,
       syncedAt: organizationPolicy.updatedAt,
       source: 'remote_cache',
-    })
+    }
+    const store = new MemoryKnowledgeReviewStore()
+    const loadPolicySnapshot = vi.fn(async () => snapshot)
+    const rawPolicyLookup = vi.spyOn(store, 'getPolicySnapshot')
     const provider = createFakeAgentProvider()
     const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
     const runtime = createKnowledgeReviewRuntime({
       store,
+      loadPolicySnapshot,
       knowledgeDocuments,
       knowledgeChunks,
       resolveProviderMetadata: vi.fn(async () => ({
@@ -183,20 +187,23 @@ describe('KnowledgeReviewRuntime', () => {
     const result = await runtime.run(reviewInput(provider.id))
     const providerInput = reviewKnowledge.mock.calls[0]![0]
 
+    expect(loadPolicySnapshot).toHaveBeenCalledWith(fixtureRun.projectId)
+    expect(rawPolicyLookup).not.toHaveBeenCalled()
+    expect(providerInput.context.policy).toMatchObject({ version: snapshot.version, source: 'remote_cache' })
+    expect(providerInput.prompt).toContain('effectivePolicy')
     expect(providerInput.context.testEvidence).toEqual([])
     expect(providerInput.context.manifest.fieldProjection?.fields).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           field: 'test_evidence',
-          applicability: 'required',
-          state: 'missing_required',
-          includeInProviderPrompt: true,
+          applicability: 'optional',
+          state: 'optional',
+          includeInProviderPrompt: false,
         }),
       ]),
     )
-    expect(providerInput.prompt).toContain('missing_required')
     expect(providerInput.prompt).not.toContain('supplementalTestEvidence')
-    expect(result.review.missingEvidence).toContain(
+    expect(result.review.missingEvidence).not.toContain(
       'Attach passing local test evidence required for this workflow stage before final approval.',
     )
   })
@@ -334,7 +341,7 @@ describe('KnowledgeReviewRuntime', () => {
         }),
         expect.objectContaining({
           field: 'agent_review',
-          applicability: 'optional',
+          applicability: 'not_applicable',
         }),
       ]),
     )

@@ -37,7 +37,6 @@ import {
   redactSecrets,
   resolveEffectivePolicy,
   runWorkflowStageAgent,
-  StageAgentExecutionError,
   type AgentEvent,
   type AgentTrace,
   type GateCommand,
@@ -166,6 +165,8 @@ import {
 } from './remote-sync.js'
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
+import { runWorkflowTestCommand } from './workflow-test-command.js'
+import { recordStageAgentFailure } from './stage-agent-failure.js'
 import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import {
   createCodingExecutorCompatibilityAdapter,
@@ -1377,6 +1378,8 @@ async function createCodingRuntimeForRequest(
   return createCodingRuntime({
     store,
     executor,
+    // Managed worktrees survive approval waits and restarts within the selected data profile.
+    worktreeRoot: path.join(app.getPath('userData'), 'coding-worktrees'),
     ...(knowledgeSnapshot
       ? {
           knowledgeDocuments: knowledgeSnapshot.documents,
@@ -1538,6 +1541,8 @@ async function createKnowledgeReviewRuntimeForRequest(
     store,
     knowledgeDocuments: knowledgeSnapshot.documents,
     knowledgeChunks: knowledgeSnapshot.chunks,
+    loadPolicySnapshot: async (projectId) =>
+      loadPolicySnapshotForProject(await resolvePolicyProjectId(projectId)),
     resolveProviderMetadata: (providerId) =>
       resolveElectronAgentProviderMetadata({
         providerId,
@@ -2212,79 +2217,60 @@ function registerIpcHandlers() {
     if (!run) {
       throw new Error(`Run not found: ${input.runId}`)
     }
-    if (run.projectId !== project.id) {
-      throw new Error('The selected local project does not own this workflow run')
-    }
-    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
-    if (
-      !node ||
-      run.currentNodeId !== node.id ||
-      node.kind !== 'test' ||
-      node.stage !== 'test' ||
-      (node.status !== 'running' && node.status !== 'failed')
-    ) {
-      throw new Error('Only the current workflow Test node can execute the project test command')
-    }
-    const command = project.testCommand.trim()
-
-    if (!command) {
-      throw new Error('Local project has no test command')
-    }
-
-    const safety = validateTestCommandSafety(command)
-    if (safety.level === 'blocked') {
-      throw new Error(`Test command blocked: ${safety.reasons.join(' ')}`)
-    }
-
-    const result = await runLocalTestCommand({
-      command: safety.normalizedCommand,
-      cwd: project.path,
-      timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
-    })
-    const createdAt = new Date().toISOString()
-    const evidence: TestEvidence = redactTestEvidenceForStorage({
-      id: `evidence-${randomUUID()}`,
-      runId: input.runId,
+    return runWorkflowTestCommand({
+      project,
+      run,
       nodeId: input.nodeId,
-      projectId: project.id,
-      command: safety.normalizedCommand,
-      cwd: project.path,
-      status: result.status,
-      exitCode: result.exitCode,
-      durationMs: result.durationMs,
-      stdout: result.stdout,
-      stderr: result.stderr,
-      summary: result.summary,
-      redacted: result.redacted,
-      createdAt,
-    })
-    const artifact = createTestEvidenceArtifact(evidence)
-    const event = createTestEvidenceEvent(
-      evidence,
-      (await store.listEvents(input.runId)).length + 1,
-    )
-    await executeWorkflowCommandOrThrow(store, {
-      runId: run.id,
-      expectedRunUpdatedAt: run.updatedAt,
-      command: {
-        type: 'record_test_result',
-        nodeId: node.id,
-        evidenceId: evidence.id,
-        artifactId: artifact.id,
-      },
-      candidates: {
-        artifacts: [artifact],
-        events: [event],
-        testEvidence: [evidence],
-      },
-      now: createdAt,
-    })
-    wakeRemoteSyncOutbox()
+      store,
+      workspaceCoordinator: workspaceOperationCoordinator,
+      timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
+      complete: async ({ command, cwd, result }) => {
+        const createdAt = new Date().toISOString()
+        const evidence: TestEvidence = redactTestEvidenceForStorage({
+          id: `evidence-${randomUUID()}`,
+          runId: input.runId,
+          nodeId: input.nodeId,
+          projectId: project.id,
+          command,
+          cwd,
+          status: result.status,
+          exitCode: result.exitCode,
+          durationMs: result.durationMs,
+          stdout: result.stdout,
+          stderr: result.stderr,
+          summary: result.summary,
+          redacted: result.redacted,
+          createdAt,
+        })
+        const artifact = createTestEvidenceArtifact(evidence)
+        const event = createTestEvidenceEvent(
+          evidence,
+          (await store.listEvents(input.runId)).length + 1,
+        )
+        await executeWorkflowCommandOrThrow(store, {
+          runId: run.id,
+          expectedRunUpdatedAt: run.updatedAt,
+          command: {
+            type: 'record_test_result',
+            nodeId: input.nodeId,
+            evidenceId: evidence.id,
+            artifactId: artifact.id,
+          },
+          candidates: {
+            artifacts: [artifact],
+            events: [event],
+            testEvidence: [evidence],
+          },
+          now: createdAt,
+        })
+        wakeRemoteSyncOutbox()
 
-    return {
-      evidence,
-      state: await store.loadState(),
-    }
+        return {
+          evidence,
+          state: await store.loadState(),
+        }
+      },
+    })
   })
 
   ipcMain.handle(ipcChannels.loadEnforcementPolicy, async (_, payload: unknown) => {
@@ -2595,54 +2581,10 @@ function registerIpcHandlers() {
         now: () => completedAt,
       })
     } catch (error) {
-      const terminalReason = error instanceof StageAgentExecutionError
-        ? error.terminalReason
-        : 'failed'
-      const failureId = `stage-agent-failure-${randomUUID()}`
-      const failureTrace: AgentTrace = {
-        id: `agent-trace-${failureId}`,
-        runId: run.id,
-        nodeId: node.id,
-        reviewId: failureId,
-        runtime: 'electron',
-        terminalReason,
-        createdAt: completedAt,
-        steps: [{
-          id: `agent-trace-${failureId}-terminal`,
-          kind: 'provider_call',
-          label: `Run ${executorKind}`,
-          summary: `Stage Agent failed closed; terminal=${terminalReason}. No artifact was created and Workflow did not advance.`,
-          timestamp: completedAt,
-        }],
-      }
-      const failureEvent: AgentEvent = {
-        id: `event-${failureId}`,
-        runId: run.id,
-        nodeId: node.id,
-        sequence: events.length + 1,
-        kind: 'tool_result',
-        message: `Stage Agent failed closed (${terminalReason}); Workflow remains on ${node.title}.`,
-        timestamp: completedAt,
-      }
-      let failureAudit
-      try {
-        failureAudit = await store.commitWorkflowMutation({
-          expectedRun: run,
-          run,
-          events: [failureEvent],
-          agentTraces: [failureTrace],
-        })
-      } catch {
-        throw new Error(
-          `Stage Agent failed closed: ${terminalReason}; failure audit could not be persisted`,
-        )
-      }
-      if (!failureAudit.committed) {
-        throw new Error(
-          `Stage Agent failed closed: ${terminalReason}; failure audit was rejected (${failureAudit.reason})`,
-        )
-      }
-      throw new Error(`Stage Agent failed closed: ${terminalReason}`)
+      return recordStageAgentFailure({
+        store, run, nodeId: node.id, executorKind, completedAt,
+        sequence: events.length + 1, error,
+      })
     }
     const event: AgentEvent = {
       id: `event-${generated.artifact.id}`,
@@ -2962,6 +2904,8 @@ function registerIpcHandlers() {
       codingRuns,
       existingEvents,
       enforcement,
+      deliveries,
+      stageTraces,
     ] = await Promise.all([
       store.listArtifacts(run.id),
       store.listCodingDiffArtifacts(run.id),
@@ -2970,10 +2914,14 @@ function registerIpcHandlers() {
       store.listCodingAgentRuns(run.id),
       store.listEvents(run.id),
       evaluateLocalGateEnforcement({ runId: run.id, nodeId: node.id }),
+      store.listGitHubDeliveryIntents(run.id),
+      store.listAgentTraces(run.id),
     ])
     const latestCodingRun = [...codingRuns].sort((left, right) =>
       (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt),
     )[0]
+    const delivery = deliveries.find((candidate) => candidate.status === 'completed' &&
+      candidate.completion?.pullRequestUrl === run.pullRequestUrl)
     const timestamp = new Date().toISOString()
     const artifact = createAcceptanceEvidenceBundleArtifact({
       run,
@@ -2981,6 +2929,13 @@ function registerIpcHandlers() {
       codingDiffs,
       testEvidence,
       agentReviewSummaries: agentReviews.map((review) => review.summary),
+      agentExecutionSummaries: [
+        ...stageTraces.filter((trace) => trace.executorProvenance?.terminalReason === 'success')
+          .map((trace) => `- ${trace.nodeId}: ${trace.executorProvenance!.kind}; ${trace.executorProvenance!.providerId ?? trace.executorProvenance!.executorId}; ${trace.executorProvenance!.model}; completed ${trace.createdAt}; trace=${trace.id}`),
+        ...codingRuns.map((coding) => `- ${coding.nodeId}: Coding ${coding.engine}; ${coding.providerId}; ${coding.status}; ${coding.completedAt ?? coding.startedAt}; run=${coding.id}`),
+        ...agentReviews.map((review) => `- ${review.nodeId}: Gate Review ${review.providerId}/${review.model}; ${review.createdAt}; review=${review.id}`),
+      ],
+      ...(delivery ? { delivery } : {}),
       enforcement: enforcement.decision,
       ...(latestCodingRun?.budgetDecision
         ? { budgetDecision: latestCodingRun.budgetDecision }
@@ -3511,6 +3466,9 @@ if (hasSingleInstanceLock) {
   })
 
   app.whenReady().then(async () => {
+    const defaultSession = session.defaultSession
+    defaultSession.setSpellCheckerDictionaryDownloadURL('data:,')
+    defaultSession.setSpellCheckerEnabled(false)
     if (dataProfileResolution.status === 'blocked') {
       const candidateSummary = dataProfileResolution.candidates
         .map((candidate) => `${candidate.name} (${candidate.pathFingerprint})`)
@@ -3531,9 +3489,6 @@ if (hasSingleInstanceLock) {
       app.quit()
       return
     }
-    const defaultSession = session.defaultSession
-    defaultSession.setSpellCheckerLanguages([])
-    defaultSession.setSpellCheckerEnabled(false)
     registerIpcHandlers()
     createWindow()
     void getRemoteSyncOutboxScheduler()

@@ -61,7 +61,12 @@ describe('Coding Change Set v2', () => {
     })
     await expect(readFile(path.join(worktreePath, 'alpha.ts'), 'utf8')).resolves.toContain('"new"')
     await expect(readFile(path.join(worktreePath, 'beta.ts'), 'utf8')).resolves.toContain('= 2')
-    expect((await stat(path.join(worktreePath, 'alpha.ts'))).mode & 0o777).toBe(0o744)
+    const alphaStat = await stat(path.join(worktreePath, 'alpha.ts'))
+    if (process.platform === 'win32') {
+      expect(alphaStat.isFile()).toBe(true)
+    } else {
+      expect(alphaStat.mode & 0o777).toBe(0o744)
+    }
   })
 
   it('rolls back every file when a persisted applying transaction is recovered', async () => {

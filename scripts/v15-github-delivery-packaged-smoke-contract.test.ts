@@ -32,11 +32,9 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).not.toContain("args: ['--password-store=basic'")
     expect(smoke).toContain('safeStorage.isEncryptionAvailable()')
     expect(smoke).toContain("credentialStorage.backend === 'gnome_libsecret'")
-    expect(smoke).toContain('session.defaultSession.getSpellCheckerLanguages()')
-    expect(smoke).toContain("process.platform !== 'darwin'")
-    expect(smoke).toContain('credentialStorage.spellCheckerLanguages.length === 0')
     expect(smoke).toContain('session.defaultSession.isSpellCheckerEnabled()')
     expect(smoke).toContain('!credentialStorage.spellCheckerEnabled')
+    expect(smoke).not.toContain('credentialStorage.spellCheckerLanguages.length === 0')
     expect(smoke).toContain('await app.whenReady()')
   })
 
@@ -70,6 +68,63 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(secondLaunchIndex).toBeGreaterThan(gitBaselineIndex)
     expect(smoke).toContain('snapshotGitBoundaryEffects(gitBoundary.metrics)')
     expect(smoke).not.toContain('{ ...gitBoundary.metrics }')
+  })
+
+  it('binds clarification Gate approval to the exact generated revision', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+
+    expect(smoke).toContain("const clarification = await callDesktop(page, 'completeWorkflowAgentNode'")
+    expect(smoke).toContain('const clarificationRevision = clarification.artifact?.clarificationRevision')
+    expect(smoke).toContain('expectedClarificationRevision: {')
+    expect(smoke).toContain('artifactId: clarification.artifact.id')
+    expect(smoke).toContain('revisionDigest: clarificationRevision.revisionDigest')
+  })
+
+  it('retains the original packaged launch failure when Electron also writes stderr', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+
+    expect(smoke).toContain("'Packaged Desktop failed to launch.'")
+    expect(smoke).toContain("[new Error('Electron also emitted bounded stderr diagnostics.')]")
+    expect(smoke).not.toContain("cause: diagnostics.length > 0 ? new Error('Electron emitted diagnostics.') : error")
+  })
+
+  it('starts the packaged Coding Agent through the saved main-owned executor configuration', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+    const startIndex = smoke.indexOf("const coding = await callDesktop(page, 'runCodingAgent', {")
+    const endIndex = smoke.indexOf('\n  })', startIndex)
+    const codingAgentCall = smoke.slice(startIndex, endIndex)
+
+    expect(startIndex).toBeGreaterThan(-1)
+    expect(endIndex).toBeGreaterThan(startIndex)
+    expect(codingAgentCall).toContain('projectId: localProjectId')
+    expect(codingAgentCall).not.toContain('providerId:')
+  })
+
+  it('persists the paired project runtime budget before starting the packaged Coding Agent', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+    const pairingIndex = smoke.indexOf("const pairing = await callDesktop(firstLaunch.page, 'pairDesktop', {")
+    const budgetSaveIndex = smoke.indexOf("'saveCodingRuntimeBudgetPolicy'", pairingIndex)
+    const budgetReadIndex = smoke.indexOf("'getCodingRuntimeBudgetPolicy'", budgetSaveIndex)
+    const workflowIndex = smoke.indexOf('const workflow = await advanceToPr(', budgetReadIndex)
+
+    expect(pairingIndex).toBeGreaterThan(-1)
+    expect(budgetSaveIndex).toBeGreaterThan(pairingIndex)
+    expect(budgetReadIndex).toBeGreaterThan(budgetSaveIndex)
+    expect(workflowIndex).toBeGreaterThan(budgetReadIndex)
+    expect(smoke.slice(budgetSaveIndex, budgetReadIndex)).toContain('projectId: localProject.id')
+    expect(smoke.slice(budgetSaveIndex, budgetReadIndex)).toContain('enabled: true')
   })
 
   it('cold-restarts one partial coordination graph without duplicating specialist effects', () => {

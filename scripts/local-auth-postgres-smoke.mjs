@@ -221,6 +221,7 @@ try {
     JSON.stringify(sessionResult.payload) === JSON.stringify({
       user: { id: 'u-local-owner', name: 'Local Developer', role: 'owner' },
       authentication: { provider: 'local-development' },
+      projectMemberships: [],
     }),
     'Local session projection did not match the fixed development identity.',
   )

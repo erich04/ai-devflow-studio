@@ -4,6 +4,7 @@ import type {
   GitHubDeliveryIntent,
   GitHubDeliveryOperatorOutcome,
   WorkflowNode,
+  TestEvidence,
 } from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import {
@@ -12,6 +13,7 @@ import {
   inspectorTabPlansByNodeType,
   resolveInspectorTabForSearchResult,
   selectGitHubDeliveryIntentForInspector,
+  selectInspectorPrPackage,
 } from './node-inspector-view-model'
 
 const run = fixtureRuns[0]!
@@ -112,6 +114,44 @@ function viewModelFor(node: WorkflowNode, overrides: Partial<Parameters<typeof b
 }
 
 describe('node inspector view model', () => {
+  it('shows the archived Native diff even when it is not a generic workflow Artifact', () => {
+    const node = findNode((candidate) => candidate.stage === 'build')
+    const vm = viewModelFor(node, {
+      artifacts: [],
+      codingActionProjection: {
+        scope: { runId: run.id, nodeId: node.id, projectId: run.projectId },
+        phase: 'completed', history: [],
+        action: { id: 'view-result', target: 'agents-evidence', label: '查看结果', summary: '', disabled: false,
+          createsNewRun: false, mayInvokeProvider: false, requiresConfirmation: false },
+        terminal: { providerId: 'deepseek', engine: 'native', reason: 'completed', changedPaths: ['README.md'],
+          diffPatch: '-# Old\n+# New', trace: [], workspaceCleanupStatus: 'active', canOpenWorkspace: true },
+      },
+    })
+    expect(vm.statusDescriptors.find((item) => item.id === 'coding-diff')).toMatchObject({ state: 'ready', tone: 'good' })
+  })
+
+  it('shows the exact delivery test and diff instead of requiring downstream duplicate Artifacts', () => {
+    const node = findNode((candidate) => candidate.kind === 'pr')
+    const intent = githubDeliveryIntent('completed')
+    const evidence: TestEvidence = { id: intent.testEvidenceId, runId: run.id, nodeId: 'build', projectId: run.projectId,
+      command: 'pnpm test', cwd: '<workspace>', status: 'passed', exitCode: 0, durationMs: 5,
+      stdout: '', stderr: '', summary: 'Exact commit passed', redacted: true, createdAt: intent.testEvidenceCreatedAt }
+    const vm = viewModelFor(node, { artifacts: [], githubDeliveryIntent: intent, testEvidence: [evidence] })
+    expect(vm.statusDescriptors.find((item) => item.id === 'test-evidence')).toMatchObject({ state: 'passed' })
+    expect(vm.statusDescriptors.find((item) => item.id === 'handoff-evidence')).toMatchObject({ state: 'ready' })
+    const failed = viewModelFor(node, { artifacts: [], githubDeliveryIntent: intent, testEvidence: [{ ...evidence, status: 'failed' }] })
+    expect(failed.statusDescriptors.find((item) => item.id === 'test-evidence')).toMatchObject({ state: 'failed', tone: 'bad' })
+  })
+
+  it('resolves only the exact upstream PR package for Acceptance', () => {
+    const node = findNode((candidate) => candidate.kind === 'acceptance')
+    const intent = githubDeliveryIntent('completed')
+    const pkg = prDeliveryPackage(intent.nodeId)
+    expect(selectInspectorPrPackage({ node, artifacts: [pkg], githubDeliveryIntent: intent })).toEqual(pkg)
+    expect(selectInspectorPrPackage({ node, artifacts: [{ ...pkg, id: 'unrelated-package' }], githubDeliveryIntent: intent })).toBeUndefined()
+    expect(selectInspectorPrPackage({ node, artifacts: [pkg] })).toBeUndefined()
+  })
+
   it('keeps clarify agents in Task inspector tabs and exposes the clarify action', () => {
     const node: WorkflowNode = {
       ...findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'clarify'),

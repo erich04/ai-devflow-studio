@@ -42,6 +42,7 @@ export async function saveRuntimeBudgetPolicyAction(
       ...(cookieHeader ? { cookieHeader } : {}),
     })
     revalidatePath('/legacy-shell')
+    revalidatePath('/')
     return { ok: true, policy }
   } catch (error) {
     return {

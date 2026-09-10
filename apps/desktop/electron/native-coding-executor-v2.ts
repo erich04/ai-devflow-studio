@@ -338,7 +338,11 @@ function parseSearchPlan(value: unknown, manifest: readonly string[]): SearchPla
   }
 }
 
-function parseChangeProposal(value: unknown, allowedPaths: ReadonlySet<string>): ChangeProposal {
+function parseChangeProposal(
+  value: unknown,
+  allowedPaths: ReadonlySet<string>,
+  allowUnrepairable = false,
+): ChangeProposal {
   if (!isPlainRecord(value)) {
     throw new Error('Native Coding v2 Change Set proposal is not an object')
   }
@@ -351,7 +355,7 @@ function parseChangeProposal(value: unknown, allowedPaths: ReadonlySet<string>):
   if (!Array.isArray(value.changes)) {
     throw new Error('Native Coding v2 Change Set proposal changes are invalid')
   }
-  if (value.changes.length < 1) {
+  if (value.changes.length < 1 && !allowUnrepairable) {
     throw new Error('Native Coding v2 Change Set proposal is empty')
   }
   if (value.changes.length > 6) {
@@ -363,6 +367,9 @@ function parseChangeProposal(value: unknown, allowedPaths: ReadonlySet<string>):
     value.summary.length > 1_000
   ) {
     throw new Error('Native Coding v2 Change Set proposal summary is invalid')
+  }
+  if (allowUnrepairable && value.changes.length === 0) {
+    return { stateVersion: 2, changes: [], summary: safeText(value.summary) }
   }
   let replacements = 0
   const changes = value.changes.flatMap((entry) => {
@@ -414,7 +421,8 @@ export function createNativeCodingV2RepairSystemPrompt(
     'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"one/exact/allowed/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded repair"}.',
     'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
     'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
-    'changes must contain between 1 and 6 file entries; never return an empty changes array.',
+    'A safe repair contains between 1 and 6 file entries. If the failure cannot be repaired within the allowed paths while preserving the original request, return an empty changes array and explain why in summary.',
+    'Do not undo correct requested behavior to address missing dependencies, unavailable tools, or other environment failures.',
     `Every path must exactly equal one entry in this allowed path list: ${JSON.stringify(allowedPaths)}. Do not use any other path.`,
     'If a TypeScript error appears in a file outside the allowed list, fix the public contract from an allowed file instead of editing the outside file.',
     'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
@@ -1197,6 +1205,8 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       })
       const tested = await runTests({ codingRun, project, workspace, createdAt: testedAt })
       if (tested.result.status !== 'passed' && changeSet.phase === 'initial') {
+        // Preserve the actual failure even if repair planning fails or cannot propose a safe edit.
+        await input.store.saveTestEvidence(tested.evidence)
         await writeCodingChangeSetExecutionPhase({
           changeSet,
           worktreePath: workspace.worktreePath,
@@ -1233,9 +1243,12 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           manifestPathCount: 0,
           excerptCount: excerpts.length,
-          parse: (value) => parseChangeProposal(value, initialPaths),
+          parse: (value) => parseChangeProposal(value, initialPaths, true),
         })
         const repairProposal = repairResult.value
+        if (repairProposal.changes.length === 0) {
+          throw new Error(`Native Coding v2 has no safe repair: ${repairProposal.summary}`)
+        }
         const requestedAt = canonicalNow(clock)
         // The initial permission was already capped by the executor request deadline.
         // A repair approval may use the remaining window, but must never extend it.
@@ -1254,7 +1267,6 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           proposal: repairProposal.changes,
         })
         await input.store.saveCodingChangeSet(repairChangeSet)
-        await input.store.saveTestEvidence(tested.evidence)
         const permissionRequest = permissionForChangeSet({
           id: createId('coding-permission'), changeSet: repairChangeSet,
           runId: codingRun.runId, nodeId: codingRun.nodeId, requestedAt, phase: 'repair',

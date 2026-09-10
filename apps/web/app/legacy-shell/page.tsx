@@ -6,7 +6,6 @@ import {
   resolveDevFlowRuntimeFlags,
 } from '@ai-devflow/shared'
 import {
-  createTeamProject,
   DevFlowApiError,
   fetchAuthSession,
   fetchTeamOverview,
@@ -19,6 +18,8 @@ import {
 } from '../lib/devflow-api'
 import { PairingCodePanel } from '../PairingCodePanel'
 import { RuntimeBudgetPanel } from './RuntimeBudgetPanel'
+import { ProjectCreateForm } from './ProjectCreateForm'
+import { createProjectAction } from './project-actions'
 import {
   createRuntimeBudgetApprovalAction,
   saveRuntimeBudgetPolicyAction,
@@ -68,29 +69,9 @@ async function applyRecommendedPolicyAction(formData: FormData) {
   })
 }
 
-async function createProjectAction(formData: FormData) {
-  'use server'
-
-  const name = String(formData.get('name') ?? '').trim()
-  const slug = String(formData.get('slug') ?? '').trim()
-  const description = String(formData.get('description') ?? '').trim()
-  const repository = String(formData.get('repository') ?? '').trim()
-
-  if (!name || !slug || !description || !repository) {
-    return
-  }
-
-  const cookieHeader = await getDevFlowCookieHeader()
-  await createTeamProject({
-    name,
-    slug,
-    description,
-    repository,
-    ...(cookieHeader ? { cookieHeader } : {}),
-  })
-}
-
-export default async function Page() {
+export default async function Page({
+  searchParams,
+}: { searchParams?: Promise<{ projectId?: string }> }) {
   let overview: TeamOverviewResponse
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
@@ -160,7 +141,10 @@ export default async function Page() {
     (sum, policy) => sum + policy.rules.filter((rule) => rule.source === 'project_clamped').length,
     0,
   )
-  const selectedBudgetProject = overview.projects[0]
+  const requestedProjectId = (await searchParams)?.projectId
+  const selectedBudgetProject = requestedProjectId
+    ? overview.projects.find((project) => project.id === requestedProjectId)
+    : overview.projects[0]
   const selectedBudgetPolicy = selectedBudgetProject
     ? overview.runtimeBudgetPolicies.find((policy) => policy.projectId === selectedBudgetProject.id)
     : undefined
@@ -232,25 +216,10 @@ export default async function Page() {
             ) : (
               <EmptyState title="还没有团队项目" body="等待 API 同步团队项目后显示交付健康。" />
             )}
-            <form className="project-create-form" action={createProjectAction}>
-              <label>
-                Name
-                <input name="name" placeholder="Agent Platform" required />
-              </label>
-              <label>
-                Slug
-                <input name="slug" placeholder="agent-platform" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" required />
-              </label>
-              <label>
-                Repository
-                <input name="repository" placeholder="erich/agent-platform" required />
-              </label>
-              <label>
-                Description
-                <textarea name="description" placeholder="Pilot project for team delivery." required />
-              </label>
-              <button type="submit">Create project</button>
-            </form>
+            <ProjectCreateForm
+              createAction={createProjectAction}
+              signInUrl={`${apiBaseUrl}/api/auth/github/start`}
+            />
           </div>
 
           <div className="web-panel" id="members">
@@ -294,8 +263,21 @@ export default async function Page() {
               <span>Runtime Budget</span>
               <strong>{selectedBudgetProject?.name ?? 'no project selected'}</strong>
             </div>
+            <nav aria-label="Select budget project">
+              {overview.projects.map((project) => (
+                <a
+                  className="button-link"
+                  href={`/legacy-shell?projectId=${encodeURIComponent(project.id)}#runtime-budget`}
+                  aria-current={project.id === selectedBudgetProject?.id ? 'page' : undefined}
+                  key={project.id}
+                >
+                  {project.name}
+                </a>
+              ))}
+            </nav>
             {selectedBudgetProject ? (
               <RuntimeBudgetPanel
+                key={selectedBudgetProject.id}
                 approvals={selectedBudgetApprovals}
                 createApprovalAction={createRuntimeBudgetApprovalAction}
                 initialPolicy={selectedBudgetPolicy ?? null}
@@ -306,7 +288,10 @@ export default async function Page() {
                 spendUsd={selectedBudgetSpend}
               />
             ) : (
-              <EmptyState title="暂无项目预算" body="创建团队项目后可配置真实 runtime 预算。" />
+              <EmptyState
+                title={requestedProjectId ? '所选项目不可用' : '暂无项目预算'}
+                body={requestedProjectId ? '请重新选择有权限访问的项目，再配置预算。' : '创建团队项目后可配置真实 runtime 预算。'}
+              />
             )}
           </div>
 

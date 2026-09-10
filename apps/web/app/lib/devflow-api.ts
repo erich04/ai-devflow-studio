@@ -437,7 +437,7 @@ export async function createTeamProject(options: CreateTeamProjectOptions): Prom
   })
 
   if (!response.ok) {
-    throw new Error(`DevFlow API /api/team/projects failed with ${response.status}`)
+    throw new DevFlowApiError('/api/team/projects', response.status)
   }
 
   return response.json() as Promise<Project>

@@ -16,6 +16,17 @@ const FAILURE_DATABASE = 'devflow_failed_upgrade'
 const ROLLBACK_DATABASE = 'devflow_v14_rollback'
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const currentSchemaSource = await readFile(
+  path.join(repositoryRoot, 'apps', 'api', 'src', 'db', 'schema.ts'),
+  'utf8',
+)
+const currentSchemaMatch = currentSchemaSource.match(
+  /^export const TEAM_SCHEMA_VERSION = (\d+)$/mu,
+)
+if (!currentSchemaMatch) {
+  throw new Error('Could not read the canonical current Team schema version.')
+}
+const currentSchemaVersion = Number.parseInt(currentSchemaMatch[1], 10)
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'devflow-lifecycle-smoke-'))
 const uniqueSuffix = `${Date.now()}-${process.pid}-${randomBytes(4).toString('hex')}`
 const networkName = `devflow-lifecycle-network-${uniqueSuffix}`
@@ -1051,7 +1062,7 @@ async function expectV14ApiRejectsNewerSchema(database) {
     const readinessResponse = await fetch(`${apiUrl}/ready`)
     expect(
       readinessResponse.status === 503,
-      `Exact V1.4 API did not fail closed on Team schema v21; received ${readinessResponse.status}.`,
+      `Exact V1.4 API did not fail closed on Team schema v${currentSchemaVersion}; received ${readinessResponse.status}.`,
     )
   } finally {
     await runDocker(['rm', '-f', rollbackApiContainerName])
@@ -1253,7 +1264,7 @@ try {
   }
 
   await runCurrentMigration(FRESH_DATABASE)
-  await expectSchemaVersion(FRESH_DATABASE, 21)
+  await expectSchemaVersion(FRESH_DATABASE, currentSchemaVersion)
   await assertAgentRuntimeProjectionAfterV16(FRESH_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FRESH_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(FRESH_DATABASE)
@@ -1278,7 +1289,7 @@ try {
 
   await restartPostgresWithRetainedVolume()
   await runCurrentMigration(UPGRADE_DATABASE)
-  await expectSchemaVersion(UPGRADE_DATABASE, 21)
+  await expectSchemaVersion(UPGRADE_DATABASE, currentSchemaVersion)
   await assertAgentRuntimeProjectionAfterV16(UPGRADE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(UPGRADE_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(UPGRADE_DATABASE)
@@ -1365,7 +1376,7 @@ try {
   await expectMigrationHistoryMissing(FAILURE_DATABASE, 13)
   const retainedV14Fixture = await prepareV12LegacyIssuedCredentialFixture()
   await runCurrentMigration(FAILURE_DATABASE)
-  await expectSchemaVersion(FAILURE_DATABASE, 21)
+  await expectSchemaVersion(FAILURE_DATABASE, currentSchemaVersion)
   await assertAgentRuntimeProjectionAfterV16(FAILURE_DATABASE)
   await assertAgentMemoryProjectionAfterV17(FAILURE_DATABASE)
   await assertAgentMemoryProjectionQualityAfterV18(FAILURE_DATABASE)
@@ -1398,6 +1409,6 @@ if (mainError) throw mainError
 if (cleanupError) throw cleanupError
 if (completed) {
   console.log(
-    'Docker lifecycle smoke passed: fresh v21, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, v18-to-v19 metadata-only Agent Coordination projection, v19-to-v20 bounded local-development auth provider constraint, v20-to-v21 native Coding summary engine constraint, and bounded V1.4 backup/restore rollback.',
+    `Docker lifecycle smoke passed: fresh current schema v${currentSchemaVersion}, retained V1.4 schema v10 upgrade, exact populated v11-to-v12 transactional retry, fail-closed v12-to-v13 provider expiry migration, durable v13-to-v14 provider backoff, exact v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, v18-to-v19 metadata-only Agent Coordination projection, v19-to-v20 bounded local-development auth provider constraint, v20-to-v21 native Coding summary engine constraint, and bounded V1.4 backup/restore rollback.`,
   )
 }

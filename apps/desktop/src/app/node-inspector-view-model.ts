@@ -10,6 +10,7 @@ import {
   type GitHubDeliveryOperatorOutcome,
   type NodeStage,
   type PolicySnapshot,
+  type TestEvidence,
   type WorkflowNode,
   type WorkflowRun,
   type WorkflowContextProjection,
@@ -182,6 +183,22 @@ function githubDeliveryInspectorPriority(intent: GitHubDeliveryIntent): number {
   if (intent.status === 'completed') return 2
   if (intent.status === 'failed' || intent.status === 'revoked') return 1
   return 3
+}
+
+export function selectInspectorPrPackage(input: {
+  node: WorkflowNode
+  artifacts: readonly Artifact[]
+  githubDeliveryIntent?: GitHubDeliveryIntent
+}): Artifact | undefined {
+  const intent = input.githubDeliveryIntent
+  return input.artifacts.find((artifact) => {
+    if (artifact.kind !== 'pr') return false
+    if (input.node.kind === 'pr') return artifact.nodeId === input.node.id
+    return input.node.kind === 'acceptance' && intent?.status === 'completed' &&
+      artifact.runId === intent.runId && artifact.nodeId === intent.nodeId &&
+      artifact.id === intent.prPackageArtifactId && artifact.updatedAt === intent.prPackageUpdatedAt &&
+      artifact.redacted === true && artifact.githubDeliverySource?.diffSourceDigest === intent.diffSourceDigest
+  })
 }
 
 export type GateRequirementRow = {
@@ -411,6 +428,9 @@ export function buildStatusDescriptors(input: {
   gateEnforcementDecision: GateEnforcementDecision | null
   isLoadingGateEnforcement: boolean
   canApprove: boolean
+  testEvidence?: readonly TestEvidence[]
+  codingActionProjection?: CodingRuntimeActionProjection
+  githubDeliveryIntent?: GitHubDeliveryIntent
 }): StatusDescriptor[] {
   const nodeType = getInspectorNodeType(input.node)
   const earlyReviewGate = isEarlyReviewGate(input.node)
@@ -447,9 +467,10 @@ export function buildStatusDescriptors(input: {
     readySummary: string,
     nextAction: string,
     impact: string,
+    hasRuntimeEvidence = false,
   ): StatusDescriptor => {
     const artifact = artifactForKind(kind)
-    const ready = Boolean(artifact)
+    const ready = Boolean(artifact) || hasRuntimeEvidence
     const provenance = artifactProvenance(artifact)
 
     return {
@@ -577,18 +598,36 @@ export function buildStatusDescriptors(input: {
       impact: gateScoped ? 'Review input for Gate' : 'Review / references',
     }
   }
-  const testEvidenceStatus = (gateScoped: boolean): StatusDescriptor => ({
-    id: 'test-evidence',
-    label: 'Test Evidence',
-    state: hasArtifactKind('test_report') ? 'success' : 'empty',
-    tone: hasArtifactKind('test_report') ? 'good' : gateScoped ? 'warn' : 'soft',
-    ...(gateScoped ? { readiness: hasArtifactKind('test_report') ? 'passed' as const : 'missing' as const } : {}),
-    summary: hasArtifactKind('test_report')
-      ? '当前节点已有测试报告 Artifact。'
-      : gateScoped ? 'Gate 还没有可用 Test Evidence。' : '当前节点尚未归档 Test Evidence。',
-    nextAction: '从 Inspector 进入 Tests 执行或查看证据。',
-    impact: gateScoped ? 'Testing Gate / Evidence rollup' : 'Test result',
-  })
+  const testEvidenceStatus = (gateScoped: boolean): StatusDescriptor => {
+    const intent = input.githubDeliveryIntent
+    const candidates = intent
+      ? input.testEvidence?.filter((evidence) => evidence.id === intent.testEvidenceId && evidence.runId === intent.runId)
+      : input.testEvidence?.filter((evidence) => evidence.nodeId === input.node.id)
+    const latest = [...(candidates ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+    if (latest) {
+      const passed = latest.status === 'passed'
+      return {
+        id: 'test-evidence', label: 'Test Evidence', state: latest.status,
+        tone: passed ? 'good' : latest.status === 'running' ? 'warn' : 'bad',
+        ...(gateScoped ? { readiness: passed ? 'passed' as const : 'warning' as const } : {}),
+        summary: `${intent ? '交付版本测试' : '当前节点测试'}：${latest.summary}`,
+        nextAction: '从 Inspector 进入 Tests 查看命令与执行证据。',
+        impact: 'Test result',
+      }
+    }
+    return {
+      id: 'test-evidence',
+      label: 'Test Evidence',
+      state: hasArtifactKind('test_report') ? 'success' : 'empty',
+      tone: hasArtifactKind('test_report') ? 'good' : gateScoped ? 'warn' : 'soft',
+      ...(gateScoped ? { readiness: hasArtifactKind('test_report') ? 'passed' as const : 'missing' as const } : {}),
+      summary: hasArtifactKind('test_report')
+        ? '当前节点已有测试报告 Artifact。'
+        : gateScoped ? 'Gate 还没有可用 Test Evidence。' : '当前节点尚未归档 Test Evidence。',
+      nextAction: '从 Inspector 进入 Tests 执行或查看证据。',
+      impact: gateScoped ? 'Testing Gate / Evidence rollup' : 'Test result',
+    }
+  }
   const budgetStatus = (): StatusDescriptor => ({
     id: 'budget',
     label: 'Budget guard',
@@ -645,7 +684,7 @@ export function buildStatusDescriptors(input: {
   if (nodeType === 'build') {
     return [
       nodeStatus(),
-      artifactStatus('coding-diff', 'Coding diff', 'diff', '还没有实现 diff。', '实现 diff 已归档。', '点击顶部“Coding Agent”。', 'Implementation output'),
+      artifactStatus('coding-diff', 'Coding diff', 'diff', '还没有实现 diff。', '实现 diff 已归档。', '点击顶部“Coding Agent”。', 'Implementation output', Boolean(input.codingActionProjection?.terminal?.diffPatch)),
       traceStatus('Coding runtime trace'),
       budgetStatus(),
     ]
@@ -665,7 +704,7 @@ export function buildStatusDescriptors(input: {
       nodeStatus(),
       artifactStatus('pr-draft', 'PR Delivery Package', 'pr', '还没有 PR Delivery Package。', 'PR Delivery Package 已生成。', '点击顶部“生成 PR Delivery Package”。', 'Delivery package'),
       testEvidenceStatus(false),
-      artifactStatus('handoff-evidence', 'Handoff readiness', 'diff', '还没有实现 diff 可用于交付摘要。', '已有实现 diff 可汇总到 handoff。', '先完成 build/test，再生成 PR Delivery Package。', 'Delivery evidence'),
+      artifactStatus('handoff-evidence', 'Handoff readiness', 'diff', '还没有实现 diff 可用于交付摘要。', '已有实现 diff 可汇总到 handoff。', '先完成 build/test，再生成 PR Delivery Package。', 'Delivery evidence', Boolean(input.githubDeliveryIntent?.diffSourceDigest)),
     ]
   }
 
@@ -1267,6 +1306,7 @@ export function buildNodeInspectorViewModel(input: {
   canVerifyGitHubDeliveryRevocation: boolean
   knowledgeReferenceCount?: number
   testEvidenceCount?: number
+  testEvidence?: readonly TestEvidence[]
   codingActionProjection?: CodingRuntimeActionProjection
 }): NodeInspectorViewModel {
   const presentation = buildWorkflowNodePresentation(input.node)
@@ -1329,6 +1369,9 @@ export function buildNodeInspectorViewModel(input: {
     gateEnforcementDecision: input.gateEnforcementDecision,
     isLoadingGateEnforcement: input.isLoadingGateEnforcement,
     canApprove: input.canApprove,
+    ...(input.testEvidence ? { testEvidence: input.testEvidence } : {}),
+    ...(input.codingActionProjection ? { codingActionProjection: input.codingActionProjection } : {}),
+    ...(input.githubDeliveryIntent ? { githubDeliveryIntent: input.githubDeliveryIntent } : {}),
   })
   const gateReadiness = nodeType === 'gate'
     ? buildGateReadinessPresentation({
@@ -1347,7 +1390,8 @@ export function buildNodeInspectorViewModel(input: {
       agent_review: Boolean(input.latestAgentReview),
       test_evidence: input.testEvidenceCount ?? 0,
       trace: input.events.length,
-      coding_result: input.artifacts.filter((artifact) => artifact.kind === 'diff').length,
+      coding_result: input.artifacts.some((artifact) => artifact.kind === 'diff') ||
+        Boolean(input.codingActionProjection?.terminal?.diffPatch || input.githubDeliveryIntent?.diffSourceDigest),
       budget: Boolean(input.latestAgentReview),
       policy: Boolean(input.policySnapshot?.effectivePolicy),
       github_delivery: Boolean(input.githubDeliveryIntent),
@@ -1355,6 +1399,7 @@ export function buildNodeInspectorViewModel(input: {
     },
     requiredByPolicy: deriveWorkflowContextPolicyRequirements(
       input.policySnapshot?.effectivePolicy,
+      input.node,
     ),
   })
 

@@ -24,15 +24,17 @@ describe('V1.5 Docker lifecycle smoke contract', () => {
     expect(lifecycleSmoke).toContain('`--output=${archivePath}`, V14_COMMIT')
   })
 
-  it('proves fresh schema v21 and a volume-retained V1.4 schema v10 upgrade', () => {
+  it('proves the fresh current schema and a volume-retained V1.4 schema v10 upgrade', () => {
     expect(lifecycleSmoke).toContain("const FRESH_DATABASE = 'devflow_fresh'")
     expect(lifecycleSmoke).toContain("const UPGRADE_DATABASE = 'devflow_upgrade'")
-    expect(lifecycleSmoke).toContain("expectSchemaVersion(FRESH_DATABASE, 21)")
+    expect(lifecycleSmoke).toContain('const currentSchemaVersion = Number.parseInt(')
+    expect(lifecycleSmoke).toContain('TEAM_SCHEMA_VERSION')
+    expect(lifecycleSmoke).toContain('expectSchemaVersion(FRESH_DATABASE, currentSchemaVersion)')
     expect(lifecycleSmoke).toContain('startCurrentApiAgainstDatabase(FRESH_DATABASE)')
     expect(lifecycleSmoke).toContain('runV14Migration(UPGRADE_DATABASE)')
     expect(lifecycleSmoke).toContain("expectSchemaVersion(UPGRADE_DATABASE, 10)")
     expect(lifecycleSmoke).toContain('restartPostgresWithRetainedVolume()')
-    expect(lifecycleSmoke).toContain("expectSchemaVersion(UPGRADE_DATABASE, 21)")
+    expect(lifecycleSmoke).toContain('expectSchemaVersion(UPGRADE_DATABASE, currentSchemaVersion)')
     expect(lifecycleSmoke).toContain('V1.4 retained sentinel')
     expect(lifecycleSmoke).toContain('snapshotBeforeV10Upgrade')
     expect(lifecycleSmoke).toContain('snapshotAfterV15Upgrade')
@@ -72,12 +74,12 @@ describe('V1.5 Docker lifecycle smoke contract', () => {
     expect(lifecycleSmoke).toContain("expectSchemaVersion(FAILURE_DATABASE, 12)")
   })
 
-  it('migrates a legacy issued v12 credential through v21 without inventing Runtime, Memory, or Coordination proof', () => {
+  it('migrates a legacy issued v12 credential through the current schema without inventing Runtime, Memory, or Coordination proof', () => {
     expect(lifecycleSmoke).toContain('prepareV12LegacyIssuedCredentialFixture')
     expect(lifecycleSmoke).toContain('expectMigrationHistoryMissing(FAILURE_DATABASE, 13)')
     expect(lifecycleSmoke).toContain('snapshotBeforeV13')
     expect(lifecycleSmoke).toContain('assertLegacyIssuedCredentialAfterV13')
-    expect(lifecycleSmoke).toContain("expectSchemaVersion(FAILURE_DATABASE, 21)")
+    expect(lifecycleSmoke).toContain('expectSchemaVersion(FAILURE_DATABASE, currentSchemaVersion)')
     expect(lifecycleSmoke).toContain('provider_expiry_contract_version')
     expect(lifecycleSmoke).toContain('provider_credential_expires_at')
     expect(lifecycleSmoke).toContain('provider_expiry_observed_at')
@@ -121,7 +123,7 @@ describe('V1.5 Docker lifecycle smoke contract', () => {
     expect(lifecycleSmoke).toContain('0021_native_coding_agent_engine')
     expect(lifecycleSmoke).toContain('coding_agent_summaries_engine_check')
     expect(lifecycleSmoke).toContain(
-      'fresh v21, retained V1.4 schema v10 upgrade',
+      'fresh current schema v${currentSchemaVersion}, retained V1.4 schema v10 upgrade',
     )
     expect(lifecycleSmoke).toContain(
       'v18-to-v19 metadata-only Agent Coordination projection',

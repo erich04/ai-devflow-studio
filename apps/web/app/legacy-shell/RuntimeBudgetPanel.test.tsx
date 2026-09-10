@@ -7,12 +7,6 @@ import type {
 } from '@ai-devflow/shared'
 import { RuntimeBudgetPanel } from './RuntimeBudgetPanel'
 
-const routerRefresh = vi.hoisted(() => vi.fn())
-
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: routerRefresh }),
-}))
-
 const initialPolicy: RuntimeBudgetPolicy = {
   projectId: 'project-1',
   enabled: false,
@@ -146,7 +140,6 @@ describe('RuntimeBudgetPanel', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Electron 是否已同步无法从 Web 确认')
     expect(screen.getByRole('button', { name: '已保存' })).toBeDisabled()
     expect(screen.getByLabelText('Monthly limit USD')).toHaveValue(0.4)
-    expect(routerRefresh).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the previous summary visible and exposes a retry state when saving fails', async () => {
@@ -164,7 +157,6 @@ describe('RuntimeBudgetPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('预算服务暂时不可用')
     expect(screen.getByText('Budget disabled')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '保存失败，重试' })).toBeEnabled()
-    expect(routerRefresh).not.toHaveBeenCalled()
   })
 
   it('ignores a repeated submit while the first save is pending', async () => {

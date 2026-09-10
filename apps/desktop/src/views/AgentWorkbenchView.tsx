@@ -16,7 +16,6 @@ import {
   type CodingRuntimeReadiness,
   type DependencyBootstrapEvidence,
   type ManagedCodingWorkspace,
-  type RuntimeBudgetPolicy,
   type RetryAttempt,
   type TestEvidence,
   type WorkflowNode,
@@ -35,10 +34,12 @@ import type { DevFlowDesktopApi } from '../desktop-api'
 import type { PendingInspectorAction } from '../app/node-inspector-view-model'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
+import type { ProjectRuntimeBudget } from '../app/useProjectRuntimeBudget'
 import { CodingChangeSetReview } from './CodingChangeSetReview'
 
 export function AgentWorkbenchView({
   desktopApi,
+  projectRuntimeBudget,
   localProjectId,
   isTeamPaired,
   requestedBy,
@@ -95,6 +96,7 @@ export function AgentWorkbenchView({
   codingActionProjection,
 }: {
   desktopApi: DevFlowDesktopApi | null
+  projectRuntimeBudget: ProjectRuntimeBudget
   localProjectId: string | undefined
   isTeamPaired: boolean
   requestedBy: string
@@ -156,7 +158,7 @@ export function AgentWorkbenchView({
   const [codingDiscovery, setCodingDiscovery] = useState<CodingRuntimeDiscovery | null>(null)
   const [opencodeProviderId, setOpencodeProviderId] = useState('openai')
   const [opencodeModelId, setOpencodeModelId] = useState('gpt-4.1-mini')
-  const [budgetPolicy, setBudgetPolicy] = useState<RuntimeBudgetPolicy | null>(null)
+  const budgetPolicy = projectRuntimeBudget.policy
   const [monthlyLimitUsd, setMonthlyLimitUsd] = useState('0.20')
   const [warningThresholdUsd, setWarningThresholdUsd] = useState('0.10')
   const [codingConfigurationStatus, setCodingConfigurationStatus] = useState('')
@@ -177,16 +179,10 @@ export function AgentWorkbenchView({
   useEffect(() => {
     if (!desktopApi || !localProjectId) {
       setCodingConfiguration(null)
-      setBudgetPolicy(null)
       return
     }
     let active = true
-    void Promise.all([
-      desktopApi.getCodingRuntimeConfiguration({ projectId: localProjectId }),
-      Promise.resolve(
-        desktopApi.getCodingRuntimeBudgetPolicy({ projectId: localProjectId }),
-      ).catch(() => null),
-    ]).then(async ([configuration, policy]) => {
+    void Promise.resolve(desktopApi.getCodingRuntimeConfiguration({ projectId: localProjectId })).then((configuration) => {
       if (!active) return
       setCodingConfiguration(configuration)
       setCodingExecutor(configuration?.executor ?? 'native-model')
@@ -195,16 +191,18 @@ export function AgentWorkbenchView({
         setOpencodeProviderId(configuration.providerId)
         setOpencodeModelId(configuration.modelId)
       }
-      setBudgetPolicy(policy)
-      if (policy) {
-        setMonthlyLimitUsd(policy.monthlyLimitUsd.toFixed(2))
-        setWarningThresholdUsd(policy.warningThresholdUsd.toFixed(2))
-      }
+    }).catch((error) => {
+      if (active) setCodingConfigurationStatus(error instanceof Error ? error.message : '无法读取 Coding Executor 配置')
     })
     return () => {
       active = false
     }
   }, [desktopApi, localProjectId, selectedRun?.id, selectedNode?.id, requestedBy])
+
+  useEffect(() => {
+    setMonthlyLimitUsd(budgetPolicy ? String(budgetPolicy.monthlyLimitUsd) : '0.20')
+    setWarningThresholdUsd(budgetPolicy ? String(budgetPolicy.warningThresholdUsd) : '0.10')
+  }, [budgetPolicy])
 
   useEffect(() => {
     if (!codingProviderId && selectedProviderId) setCodingProviderId(selectedProviderId)
@@ -291,13 +289,11 @@ export function AgentWorkbenchView({
     setIsSavingCodingConfiguration(true)
     setCodingConfigurationStatus('正在保存项目预算…')
     try {
-      const saved = await desktopApi.saveCodingRuntimeBudgetPolicy({
-        projectId: localProjectId,
+      const saved = await projectRuntimeBudget.save({
         enabled: true,
         monthlyLimitUsd: monthly,
         warningThresholdUsd: warning,
       })
-      setBudgetPolicy(saved)
       setCodingConfigurationStatus(`预算已保存：${formatUsd(saved.monthlyLimitUsd)} / 月`)
       await onRefreshCodingReadiness()
     } catch (error) {
@@ -958,8 +954,10 @@ export function AgentWorkbenchView({
             <article className="agent-evidence-card runtime-settings-form">
               <div className="section-heading">
                 <span>Runtime 预算</span>
-                <strong>{budgetPolicy ? `${formatUsd(budgetPolicy.monthlyLimitUsd)} / 月` : '必须显式保存'}</strong>
+                <strong>{projectRuntimeBudget.label}</strong>
               </div>
+              {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
+              {projectRuntimeBudget.status === 'unavailable' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>重试读取预算</button> : null}
               <label>月上限（USD）<input aria-label="Coding monthly budget" inputMode="decimal" value={monthlyLimitUsd} onChange={(event) => setMonthlyLimitUsd(event.target.value)} /></label>
               <label>预警阈值（USD）<input aria-label="Coding warning budget" inputMode="decimal" value={warningThresholdUsd} onChange={(event) => setWarningThresholdUsd(event.target.value)} /></label>
               <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={saveBudgetPolicy}><Save size={16} />保存预算策略</button>

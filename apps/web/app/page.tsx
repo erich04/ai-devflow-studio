@@ -672,7 +672,15 @@ export default async function Page({ searchParams }: PageProps) {
             )}
           </SupportPanel>
 
-          <SupportPanel id="runtime" icon={<Gauge size={17} />} title="Runtime Budget" action="预算详情">
+          <SupportPanel
+            id="runtime"
+            icon={<Gauge size={17} />}
+            title="Runtime Budget"
+            action="预算详情"
+            actionHref={activeProject
+              ? `/legacy-shell?projectId=${encodeURIComponent(activeProject.id)}#runtime-budget`
+              : '/legacy-shell#runtime-budget'}
+          >
             <div className="studio-budget-ring" style={{ '--budget-percent': `${Math.min(budgetPercent, 100)}%` } as CSSProperties}>
               <strong>{budgetPercent}%</strong>
               <span>{budgetPolicy ? `${formatUsd(projectSpend)} / ${formatUsd(budgetPolicy.monthlyLimitUsd)}` : 'not configured'}</span>
@@ -828,12 +836,14 @@ function SupportPanel({
   icon,
   title,
   action,
+  actionHref,
   children,
 }: {
   id: string
   icon: ReactNode
   title: string
   action: string
+  actionHref?: string
   children: ReactNode
 }) {
   return (
@@ -843,7 +853,7 @@ function SupportPanel({
           {icon}
           {title}
         </span>
-        <a href={`#${id}`}>
+        <a href={actionHref ?? `#${id}`}>
           {action}
           <ArrowRight size={14} />
         </a>
