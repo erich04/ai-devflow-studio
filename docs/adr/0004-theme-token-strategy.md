@@ -11,7 +11,10 @@ The desktop app and web console must support light mode, dark mode, and followin
 ## Decision
 
 Use shared theme names and CSS variables. Components consume semantic tokens instead of hard-coded
-colors. Desktop stores theme preference locally; web stores it in user settings later.
+colors. Desktop stores theme preference locally. Web stores the system/light/dark preference in browser
+localStorage and applies it in the document head before content paints; CSS follows system changes.
+Storage failures fall back to the system and do not prevent an in-page theme change. Preferences
+remain on the same public origin across logout. Account-synced Web preferences remain future work.
 
 ## Consequences
 

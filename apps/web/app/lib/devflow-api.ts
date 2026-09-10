@@ -302,7 +302,7 @@ export async function saveEnforcementPolicy(
   })
 
   if (!response.ok) {
-    throw new Error(`DevFlow API /api/enforcement/policy failed with ${response.status}`)
+    throw new DevFlowApiError('/api/enforcement/policy', response.status)
   }
 
   return response.json() as Promise<OrganizationEnforcementPolicy>

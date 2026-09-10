@@ -167,49 +167,52 @@ export function WorkRequestPanel({
   }
 
   return (
-    <section className="work-request-panel" id="work-request" aria-label="Work Requests">
+    <section className={`work-request-panel${visibleState.workRequests.length === 0 ? ' work-request-panel--empty' : ''}`} id="work-request" aria-label="Work Requests">
       <div>
         <span>Team intake</span>
         <h2>工作请求</h2>
         <p>这里只创建团队请求；本地 Run 会在已配对的 Desktop 明确认领后生成。</p>
       </div>
-      <form onSubmit={(event) => {
-        event.preventDefault()
-        void submitWorkRequest()
-      }}>
-        <label>
-          <span>标题</span>
-          <input
-            aria-label="Work Request title"
-            maxLength={200}
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-          />
-        </label>
-        <label>
-          <span>需求说明</span>
-          <textarea
-            aria-label="Work Request details"
-            maxLength={8_000}
-            value={request}
-            onChange={(event) => setRequest(event.target.value)}
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={
-            visibleState.status === 'creating' ||
-            title.trim().length === 0 ||
-            request.trim().length === 0
-          }
-        >
-          {visibleState.status === 'creating' ? 'Creating...' : 'Create Work Request'}
-        </button>
-      </form>
-      {visibleState.message ? <small role="status">{visibleState.message}</small> : null}
-      <div className="work-request-list">
-        {visibleState.workRequests.length > 0 ? (
-          visibleState.workRequests.map((item) => (
+      <div className="work-request-intake">
+        <form onSubmit={(event) => {
+          event.preventDefault()
+          void submitWorkRequest()
+        }}>
+          <label>
+            <span>标题</span>
+            <input
+              aria-label="Work Request title"
+              maxLength={200}
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+            />
+          </label>
+          <label>
+            <span>需求说明</span>
+            <textarea
+              aria-label="Work Request details"
+              maxLength={8_000}
+              value={request}
+              onChange={(event) => setRequest(event.target.value)}
+            />
+          </label>
+          <button
+            type="submit"
+            disabled={
+              visibleState.status === 'creating' ||
+              title.trim().length === 0 ||
+              request.trim().length === 0
+            }
+          >
+            {visibleState.status === 'creating' ? 'Creating...' : 'Create Work Request'}
+          </button>
+        </form>
+        {visibleState.message ? <small role="status">{visibleState.message}</small> : null}
+        {visibleState.workRequests.length === 0 ? <p className="work-request-empty">当前项目还没有工作请求。</p> : null}
+      </div>
+      {visibleState.workRequests.length > 0 ? (
+        <div className="work-request-list">
+          {visibleState.workRequests.map((item) => (
             <article key={item.id}>
               <div>
                 <strong>{item.title}</strong>
@@ -218,11 +221,9 @@ export function WorkRequestPanel({
               <p>{item.request}</p>
               <small>v{item.version} · {item.id}</small>
             </article>
-          ))
-        ) : (
-          <p>当前项目还没有工作请求。</p>
-        )}
-      </div>
+          ))}
+        </div>
+      ) : null}
     </section>
   )
 }

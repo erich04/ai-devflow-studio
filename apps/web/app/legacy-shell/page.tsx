@@ -1,7 +1,6 @@
 import { Activity, Bot, CircleDollarSign, GitPullRequest, Users } from 'lucide-react'
 import { cookies } from 'next/headers'
 import {
-  createRecommendedEnforcementPreset,
   formatUsd,
   resolveDevFlowRuntimeFlags,
 } from '@ai-devflow/shared'
@@ -12,11 +11,13 @@ import {
   resolveDevFlowApiBaseUrl,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
-  saveEnforcementPolicy,
   type TeamOverviewResponse,
   type BrowserAuthSessionResponse,
 } from '../lib/devflow-api'
 import { PairingCodePanel } from '../PairingCodePanel'
+import { ThemePreferenceControl } from '../ThemePreferenceControl'
+import { EnforcementPolicyPanel } from '../EnforcementPolicyPanel'
+import { updateEnforcementPolicyAction } from '../enforcement-policy-actions'
 import { RuntimeBudgetPanel } from './RuntimeBudgetPanel'
 import { ProjectCreateForm } from './ProjectCreateForm'
 import { createProjectAction } from './project-actions'
@@ -49,22 +50,6 @@ async function runKnowledgeReviewAction(formData: FormData) {
     nodeId,
     projectId,
     providerId,
-    ...(cookieHeader ? { cookieHeader } : {}),
-  })
-}
-
-async function applyRecommendedPolicyAction(formData: FormData) {
-  'use server'
-
-  const organizationId = String(formData.get('organizationId') ?? '').trim()
-  if (!organizationId) return
-
-  const cookieHeader = await getDevFlowCookieHeader()
-  await saveEnforcementPolicy({
-    policy: createRecommendedEnforcementPreset({
-      organizationId,
-      updatedAt: new Date().toISOString(),
-    }),
     ...(cookieHeader ? { cookieHeader } : {}),
   })
 }
@@ -136,7 +121,6 @@ export default async function Page({
   const latestReview = overview.agentReviews[0]
   const latestUsage = overview.agentTokenUsage[0]
   const organizationPolicy = overview.enforcementPolicies.organizationPolicy
-  const blockingRuleCount = organizationPolicy.rules.filter((rule) => rule.defaultAction === 'block').length
   const clampedRuleCount = overview.enforcementPolicies.effectivePolicies.reduce(
     (sum, policy) => sum + policy.rules.filter((rule) => rule.source === 'project_clamped').length,
     0,
@@ -169,7 +153,7 @@ export default async function Page({
               hasSessionCookie={Boolean(cookieHeader)}
               session={browserSession}
             />
-            <button>跟随系统</button>
+            <ThemePreferenceControl />
           </div>
         </header>
 
@@ -318,35 +302,14 @@ export default async function Page({
           <div className="web-panel web-panel--wide" id="policy">
             <div className="panel-title">
               <span>Gate Enforcement Policy</span>
-              <strong>{organizationPolicy.name}</strong>
+              <strong>组织策略</strong>
             </div>
-            <div className="agent-console">
-              <article className="agent-review-row">
-                <div>
-                  <strong>{blockingRuleCount > 0 ? 'Recommended enforcement active' : 'Warn-only default'}</strong>
-                  <p>
-                    {blockingRuleCount > 0
-                      ? `${blockingRuleCount} deterministic rules can block protected Gate approval.`
-                      : 'No rules block approval until the team explicitly applies enforcement.'}
-                  </p>
-                </div>
-                <span>v{organizationPolicy.version}</span>
-              </article>
-              <article className="agent-review-row">
-                <div>
-                  <strong>Policy floor</strong>
-                  <p>{clampedRuleCount} project choices currently clamped by organization floor.</p>
-                </div>
-                <span>{organizationPolicy.updatedAt}</span>
-              </article>
-              <form action={applyRecommendedPolicyAction}>
-                <input type="hidden" name="organizationId" value={organizationPolicy.organizationId} />
-                <button type="submit">
-                  <GitPullRequest size={16} />
-                  Apply recommended enforcement
-                </button>
-              </form>
-            </div>
+            <EnforcementPolicyPanel
+              key={organizationPolicy.organizationId}
+              initialPolicy={organizationPolicy}
+              updateAction={updateEnforcementPolicyAction}
+            />
+            <p className="policy-floor-summary">{clampedRuleCount} project choices currently clamped by organization floor.</p>
           </div>
 
           <div className="web-panel web-panel--wide" id="policy-delivery">
