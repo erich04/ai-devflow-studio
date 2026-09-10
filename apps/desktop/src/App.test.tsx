@@ -2272,7 +2272,7 @@ describe('App', () => {
     )
     const gateInspector = await screen.findByTestId('node-inspector')
     expect(gateInspector).toHaveTextContent('需求确认 Gate')
-    clickInspectorTab(/Evidence/)
+    clickInspectorTab(/^产物$/)
     expect(await screen.findByText('需求澄清结果')).toBeInTheDocument()
     expect(screen.getByTestId('workflow-canvas')).toBeInTheDocument()
     expect(screen.getByTestId('toast')).toHaveTextContent('需求澄清已生成，进入需求确认 Gate')
@@ -2359,7 +2359,7 @@ describe('App', () => {
 
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('创建 PR')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Prepare GitHub Delivery')
-    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
+    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /^产物$/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     expect(screen.getByText(/Compare:/)).not.toBeNull()
     expect(screen.getByTestId('flow-node-n-pr')).toHaveTextContent('当前步骤')
@@ -3000,7 +3000,7 @@ describe('App', () => {
     })
 
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Prepare GitHub Delivery')
-    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
+    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /^产物$/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     expect(api.createPrDraft).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
@@ -3910,7 +3910,7 @@ describe('App', () => {
       fireEvent.click(within(inspector).getByRole('button', { name: /生成验收证据包/ }))
     })
 
-    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /Artifacts/ }))
+    fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /^产物$/ }))
     expect(await screen.findByText(/Acceptance Bundle:/)).toBeInTheDocument()
     expect(api.createAcceptanceBundle).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
@@ -4325,6 +4325,35 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('请先 Pair Team Project 后再同步团队远端状态')
   })
 
+  it('opens each card attachment in its matching tab without counting another node or invoking a Provider', async () => {
+    const state = reviewedDesignGateState()
+    const gateId = 'n-design-gate'
+    const report: Artifact = { ...fixtureArtifacts[0]!, id: 'gate-report', nodeId: gateId,
+      title: '已归档的方案审查报告', summary: 'Current Gate review', content: 'Exact review result' }
+    state.artifacts.push(report)
+    state.testEvidence = state.testEvidence.map((evidence) => ({ ...evidence, nodeId: 'n-test' }))
+    state.events = [{ ...fixtureEvents[0]!, id: 'gate-event', nodeId: gateId, message: 'Gate review was archived' }]
+    const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(state) })
+    render(<App />)
+    const card = await screen.findByTestId(`workflow-card-${gateId}`)
+    const inspector = screen.getByTestId('node-inspector')
+    fireEvent.click(within(card).getByRole('button', { name: /产物 1/ }))
+    await waitFor(() => expect(within(inspector).getByRole('tab', { name: '产物' })).toHaveAttribute('aria-selected', 'true'))
+    expect(within(inspector).getByTestId('node-artifacts')).toHaveTextContent('Exact review result')
+    expect(within(inspector).getByTestId('node-artifacts').querySelectorAll('.artifact-card')).toHaveLength(1)
+    fireEvent.click(within(card).getByRole('button', { name: /测试证据 0/ }))
+    await waitFor(() => expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('当前节点尚未归档测试证据'))
+    expect(inspector).not.toHaveTextContent('Baseline tests passed before implementation.')
+    fireEvent.click(within(card).getByRole('button', { name: /轨迹 1/ }))
+    await waitFor(() => expect(inspector).toHaveTextContent('Gate review was archived'))
+    expect(within(inspector).getByRole('tab', { name: '轨迹' })).toHaveAttribute('aria-selected', 'true')
+    const testCard = screen.getByTestId('workflow-card-n-test')
+    fireEvent.click(within(testCard).getByRole('button', { name: /测试证据 1/ }))
+    await waitFor(() => expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('Baseline tests passed before implementation.'))
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    expect(api.runProjectTests).not.toHaveBeenCalled()
+  })
+
   it('keeps the Gate status tab as a readiness overview and moves details into the matching tabs', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -4347,9 +4376,8 @@ describe('App', () => {
     clickInspectorTab(/Gate条件/)
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Gate Enforcement')
 
-    clickInspectorTab(/Evidence/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Evidence · 可审计结果')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('当前节点尚未产生可审计 Evidence')
+    clickInspectorTab(/^产物$/)
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('当前节点尚未归档产物')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('Gate Enforcement · 详细结论')
 
     clickInspectorTab(/Remediation/)
@@ -4380,13 +4408,16 @@ describe('App', () => {
     expect(sources).not.toHaveTextContent('Review Subject')
     expect(sources).not.toHaveTextContent('Baseline tests passed before implementation.')
 
-    clickInspectorTab(/^Evidence$/)
+    clickInspectorTab(/^产物$/)
     const evidence = within(inspector).getByTestId('review-evidence-results')
     expect(evidence).toHaveTextContent('方案设计')
     expect(evidence).toHaveTextContent('Review Subject')
     expect(evidence).toHaveTextContent('artifact-digest-design-1')
     expect(evidence).toHaveTextContent('The complete design Artifact satisfies the API contract criteria.')
-    expect(evidence).toHaveTextContent('Baseline tests passed before implementation.')
+    expect(evidence).not.toHaveTextContent('Baseline tests passed before implementation.')
+    clickInspectorTab(/^测试证据$/)
+    expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('Baseline tests passed before implementation.')
+    expect(inspector).not.toHaveTextContent('Review Subject')
     expect(evidence).not.toHaveTextContent('docs/standards/api-design.md')
     expect(evidence).not.toHaveTextContent('关键词匹配分')
 
@@ -5129,8 +5160,8 @@ describe('App', () => {
     expect(within(inspector).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
     clickInspectorTab(/Gate条件/)
     expect(screen.getByTestId('knowledge-governance-flow')).toHaveTextContent('2 · 完成审查已完成')
-    clickInspectorTab(/Evidence/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Evidence · 可审计结果')
+    clickInspectorTab(/^产物$/)
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('关联审查内容')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge review completed for the selected gate.')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent(agentProvider.id)
@@ -6201,8 +6232,10 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('测试报告已归档')
     expect(inspector).toHaveTextContent('当前节点测试：Tests passed in 900ms')
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
-    fireEvent.click(within(inspector).getByRole('tab', { name: /Test Evidence/ }))
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Local test evidence')
+    fireEvent.click(within(inspector).getByRole('tab', { name: /^测试证据$/ }))
+    expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('Tests passed in 900ms')
+    fireEvent.click(within(inspector).getByText('查看测试日志'))
+    expect(inspector).toHaveTextContent('8 tests passed')
   })
 
   it('shows explicit save states for the local test command', async () => {

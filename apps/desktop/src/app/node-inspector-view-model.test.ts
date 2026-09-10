@@ -160,7 +160,7 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node)
 
     expect(viewModel.visualKind).toBe('Task')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', 'Trace', 'Gate影响'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', '测试证据', '轨迹', 'Gate影响'])
     expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
     expect(viewModel.tabs.find((tab) => tab.label === 'Gate影响')?.sections).toEqual(['gateImpactSummary'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
@@ -193,7 +193,7 @@ describe('node inspector view model', () => {
       ...findNode((candidate) => candidate.kind === 'agent' && candidate.stage === 'design'),
       status: 'running',
     }
-    const viewModel = viewModelFor(node, { requestedTab: 'Trace' })
+    const viewModel = viewModelFor(node, { requestedTab: '轨迹' })
 
     expect(viewModel.visualKind).toBe('Task')
     expect(viewModel.header.presentation).toMatchObject({
@@ -201,8 +201,8 @@ describe('node inspector view model', () => {
       sourceKind: 'run_template',
       displayMode: 'standard',
     })
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', 'Trace', 'Gate影响'])
-    expect(viewModel.activeTab.label).toBe('Trace')
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', '测试证据', '轨迹', 'Gate影响'])
+    expect(viewModel.activeTab.label).toBe('轨迹')
     expect(viewModel.activeTab.sections).toEqual(['trace'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'node-status',
@@ -260,7 +260,7 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { canApprove: true })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', 'Gate条件', '引用来源', 'Evidence', 'Remediation'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', '测试证据', '轨迹', 'Gate条件', '引用来源', 'Remediation'])
     expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
     expect(viewModel.activeTab.sections).not.toContain('nodeSummary')
     expect(viewModel.activeTab.sections).not.toContain('gateEnforcementPanel')
@@ -284,10 +284,10 @@ describe('node inspector view model', () => {
       testEvidenceCount: 0,
     })
     const referencesTab = viewModel.tabs.find((tab) => tab.label === '引用来源')
-    const evidenceTab = viewModel.tabs.find((tab) => tab.label === 'Evidence')
+    const evidenceTab = viewModel.tabs.find((tab) => tab.label === '产物')
 
     expect(referencesTab?.sections).toEqual(['knowledgeReferences'])
-    expect(evidenceTab?.sections).toEqual(['reviewEvidence'])
+    expect(evidenceTab?.sections).toEqual(['artifacts', 'reviewEvidence'])
     expect(referencesTab?.sections).not.toEqual(evidenceTab?.sections)
     expect(viewModel.activeTab).toEqual(referencesTab)
     expect(viewModel.contextProjection.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
@@ -478,7 +478,7 @@ describe('node inspector view model', () => {
 
     expect(viewModelFor(prNode, { requestedTab: 'Handoff' })).toMatchObject({
       visualKind: 'Delivery',
-      activeTab: { label: 'Handoff', sections: ['deliveryHandoff', 'trace'] },
+      activeTab: { label: 'Handoff', sections: ['deliveryHandoff'] },
     })
     expect(viewModelFor(buildNode).activeTab.sections).not.toContain('gateEnforcementPanel')
     expect(viewModelFor(testNode).activeTab.sections).not.toContain('gateEnforcementPanel')
@@ -903,10 +903,10 @@ describe('node inspector view model', () => {
 
     expect(resolveInspectorTabForSearchResult(clarifyNode, 'artifact')).toBe('产物')
     expect(resolveInspectorTabForSearchResult(designNode, 'artifact')).toBe('产物')
-    expect(resolveInspectorTabForSearchResult(designNode, 'event')).toBe('Trace')
-    expect(resolveInspectorTabForSearchResult(prNode, 'artifact')).toBe('Artifacts')
-    expect(resolveInspectorTabForSearchResult(clarifyNode, 'event')).toBe('Trace')
-    expect(resolveInspectorTabForSearchResult(prNode, 'event')).toBe('Handoff')
-    expect(resolveInspectorTabForSearchResult(gateNode, 'event')).toBe('状态')
+    expect(resolveInspectorTabForSearchResult(designNode, 'event')).toBe('轨迹')
+    expect(resolveInspectorTabForSearchResult(prNode, 'artifact')).toBe('产物')
+    expect(resolveInspectorTabForSearchResult(clarifyNode, 'event')).toBe('轨迹')
+    expect(resolveInspectorTabForSearchResult(prNode, 'event')).toBe('轨迹')
+    expect(resolveInspectorTabForSearchResult(gateNode, 'event')).toBe('轨迹')
   })
 })

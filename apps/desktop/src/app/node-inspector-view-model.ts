@@ -34,6 +34,7 @@ export type InspectorSectionId =
   | 'governance'
   | 'knowledgeReferences'
   | 'reviewEvidence'
+  | 'testEvidence'
   | 'remediationActions'
   | 'agentReview'
   | 'artifacts'
@@ -277,54 +278,56 @@ export function getInspectorNodeType(node: WorkflowNode): InspectorNodeType {
   return 'task'
 }
 
+const attachmentTabs: InspectorTabPlan[] = [
+  { tabId: '产物', label: '产物', sections: ['artifacts'] },
+  { tabId: '测试证据', label: '测试证据', sections: ['testEvidence'] },
+  { tabId: '轨迹', label: '轨迹', sections: ['trace'] },
+]
+const reviewAttachmentTabs = attachmentTabs.map((tab): InspectorTabPlan =>
+  tab.tabId === '产物' ? { ...tab, sections: ['artifacts', 'reviewEvidence'] } : tab,
+)
+
 export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTabPlan[]> = {
   clarification: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    { tabId: '产物', label: '产物', sections: ['artifacts'] },
-    { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
+    ...attachmentTabs,
     { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
   ],
   designTask: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    { tabId: '产物', label: '产物', sections: ['artifacts'] },
-    { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
+    ...attachmentTabs,
     { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
   ],
   gate: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
+    ...reviewAttachmentTabs,
     { tabId: 'Gate条件', label: 'Gate条件', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
     { tabId: '引用来源', label: '引用来源', sections: ['knowledgeReferences'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['reviewEvidence'] },
     { tabId: 'Remediation', label: 'Remediation', sections: ['remediationActions'] },
   ],
   build: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    { tabId: '产物', label: '产物', sections: ['artifacts'] },
-    { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
+    ...attachmentTabs,
     { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
   ],
   test: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    { tabId: 'Test Evidence', label: 'Test Evidence', sections: ['artifacts'] },
-    { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
+    ...attachmentTabs,
   ],
   pr: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'deliveryHandoff'] },
-    { tabId: 'Artifacts', label: 'Artifacts', sections: ['artifacts'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['reviewEvidence'] },
-    { tabId: 'Handoff', label: 'Handoff', sections: ['deliveryHandoff', 'trace'] },
+    ...reviewAttachmentTabs,
+    { tabId: 'Handoff', label: 'Handoff', sections: ['deliveryHandoff'] },
   ],
   acceptance: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'deliveryHandoff'] },
-    { tabId: 'Artifacts', label: 'Artifacts', sections: ['artifacts'] },
+    ...reviewAttachmentTabs,
     { tabId: '引用来源', label: '引用来源', sections: ['knowledgeReferences'] },
-    { tabId: 'Evidence', label: 'Evidence', sections: ['reviewEvidence'] },
     { tabId: 'Final Gate', label: 'Final Gate', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
   ],
   task: [
     { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    { tabId: '产物', label: '产物', sections: ['artifacts'] },
-    { tabId: 'Trace', label: 'Trace', sections: ['trace'] },
+    ...attachmentTabs,
   ],
 }
 
@@ -408,14 +411,10 @@ export function getNodeStatusLabel(status: WorkflowNode['status']): string {
 }
 
 export function resolveInspectorTabForSearchResult(
-  node: WorkflowNode,
+  _node: WorkflowNode,
   target: 'artifact' | 'event',
 ): string {
-  const tabs = inspectorTabsByNodeType[getInspectorNodeType(node)]
-  if (target === 'artifact') {
-    return tabs.find((tab) => tab === '产物' || tab === 'Artifacts' || tab === 'Evidence') ?? tabs[0] ?? '状态'
-  }
-  return tabs.find((tab) => tab === 'Trace' || tab === 'Handoff') ?? tabs[0] ?? '状态'
+  return target === 'artifact' ? '产物' : '轨迹'
 }
 
 export function buildStatusDescriptors(input: {
@@ -456,7 +455,7 @@ export function buildStatusDescriptors(input: {
     state: hasTrace ? `${input.events.length} events` : 'empty',
     tone: hasTrace ? 'good' : 'soft',
     summary: hasTrace ? `当前节点已有 ${input.events.length} 条执行记录。` : '当前节点还没有执行 Trace。',
-    nextAction: hasTrace ? '查看 Trace tab 复核执行过程。' : '执行当前节点动作后会写入 Trace。',
+    nextAction: hasTrace ? '查看轨迹标签复核执行过程。' : '执行当前节点动作后会写入 Trace。',
     impact,
   })
   const artifactStatus = (
@@ -479,7 +478,7 @@ export function buildStatusDescriptors(input: {
       state: ready ? 'ready' : 'empty',
       tone: ready ? 'good' : 'soft',
       summary: ready ? `${readySummary}${provenance ? ` ${provenance}。` : ''}` : emptySummary,
-      nextAction: ready ? '在产物或 Evidence tab 中核对内容。' : nextAction,
+      nextAction: ready ? '在产物标签中核对内容。' : nextAction,
       impact,
     }
   }

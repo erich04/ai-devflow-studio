@@ -1285,6 +1285,54 @@ test.describe('AI DevFlow desktop workbench', () => {
         await expect.poll(() => team.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
       })
 
+      test(`opens card attachment counts with the keyboard (${viewport.width}, ${colorScheme})`, async ({ page }, testInfo) => {
+        await page.setViewportSize(viewport)
+        await page.emulateMedia({ colorScheme })
+        await installDesktopApi(page, 'agent-ux-paired')
+        await page.addInitScript(() => {
+          const api = window.aiDevFlowDesktop!
+          const load = api.loadState
+          api.loadState = async () => {
+            const state = await load()
+            const run = state.runs[0]!
+            const nodeId = run.nodes[1]!.id
+            return {
+              ...state,
+              artifacts: [{ id: 'review-owned', runId: run.id, nodeId, kind: 'design', title: '本次 Gate 审查报告',
+                summary: '已归档的审查结论', content: 'Reviewed the current requirement.', redacted: true, updatedAt: run.updatedAt }],
+              events: [{ id: 'review-event', runId: run.id, nodeId, kind: 'agent_step', sequence: 1,
+                message: 'Review archived once.', timestamp: run.updatedAt }],
+            }
+          }
+        })
+        const errors: string[] = []
+        page.on('pageerror', (error) => errors.push(error.message))
+        await page.goto('/')
+        const card = page.getByTestId('workflow-card-node-agent-ux-design-gate')
+        const inspector = page.getByTestId('node-inspector')
+        for (const [label, count, text] of [
+          ['产物', 1, 'Reviewed the current requirement.'],
+          ['测试证据', 0, '当前节点尚未归档测试证据。'],
+          ['轨迹', 1, 'Review archived once.'],
+        ] as const) {
+          const chip = card.getByRole('button', { name: `方案评审 Gate：${label} ${count}` })
+          await chip.focus()
+          await chip.press('Enter')
+          await expect(inspector.getByRole('tab', { name: label, exact: true })).toHaveAttribute('aria-selected', 'true')
+          await expect(inspector).toContainText(text)
+        }
+        await card.getByRole('button', { name: '方案评审 Gate：产物 1' }).click()
+        await expect(inspector.getByTestId('node-artifacts').locator('.artifact-card')).toHaveCount(1)
+        await expect(page.locator('button button')).toHaveCount(0)
+        for (const tab of await inspector.getByRole('tab').all()) {
+          await expect(tab).toHaveCSS('white-space', 'nowrap')
+          await expect(tab).toHaveCSS('flex-shrink', '0')
+        }
+        await expect(inspector.getByRole('tab', { name: '引用来源' })).toBeVisible()
+        await page.screenshot({ path: testInfo.outputPath('attachment-navigation.png') })
+        expect(errors).toEqual([])
+      })
+
       test(`reaches Gate tabs by scrolling past a long clarification (${viewport.width}, ${colorScheme})`, async ({ page }) => {
         await page.setViewportSize(viewport)
         await page.emulateMedia({ colorScheme })
@@ -1305,7 +1353,7 @@ test.describe('AI DevFlow desktop workbench', () => {
         await page.goto('/')
         const inspector = page.getByTestId('node-inspector')
         await expect(inspector.getByTestId('clarification-current-revision')).toContainText('Acceptance 16')
-        const evidenceTab = inspector.getByRole('tab', { name: 'Evidence', exact: true })
+        const evidenceTab = inspector.getByRole('tab', { name: '产物', exact: true })
         const box = (await inspector.boundingBox())!
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
         await expect.poll(async () => {
@@ -1552,7 +1600,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
       'Knowledge review completed for this node.',
     )
-    const evidenceTab = reviewedGateInspector.getByRole('tab', { name: 'Evidence' })
+    const evidenceTab = reviewedGateInspector.getByRole('tab', { name: '产物' })
     await evidenceTab.focus()
     await evidenceTab.press('Enter')
     await expect(page.getByTestId('review-evidence-results')).toContainText(
