@@ -6,6 +6,7 @@ import {
   parseAdvanceAgentRuntimeInput,
   parseCancelAgentRuntimeInput,
   parseAgentProviderCredentialInput,
+  parseAgentProviderRemovalInput,
   parseCancelCodingAgentRunInput,
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
@@ -695,6 +696,16 @@ describe('IPC contract parsers', () => {
   it('accepts valid settings and MCP payloads', () => {
     expect(parseSettingsInput({ themePreference: 'dark' })).toEqual({ themePreference: 'dark' })
     expect(parseMcpServersInput([mcpServer])).toEqual([mcpServer])
+  })
+
+  it('accepts only an exact provider identity and the displayed confirmation version for removal', () => {
+    expect(parseAgentProviderRemovalInput({ providerId: 'provider-one' })).toEqual({ providerId: 'provider-one' })
+    expect(parseAgentProviderRemovalInput({ providerId: 'provider-one', expectedUpdatedAt: '2026-09-10T12:00:00Z' }, true)).toEqual({ providerId: 'provider-one', expectedUpdatedAt: '2026-09-10T12:00:00Z' })
+    expect(() => parseAgentProviderRemovalInput({ providerId: 'provider-one' }, true)).toThrow()
+    expect(() => parseAgentProviderRemovalInput({ providerId: ' provider-one ' })).toThrow()
+    expect(() => parseAgentProviderRemovalInput({ providerId: 'provider-one', apiKey: 'forged' })).toThrow()
+    expect(parseSettingsInput({ selectedAgentProviderId: '' })).toEqual({ selectedAgentProviderId: '' })
+    expect(() => parseSettingsInput({ selectedAgentProviderId: ' invalid ' })).toThrow()
   })
 
   it('rejects invalid settings and MCP payloads', () => {

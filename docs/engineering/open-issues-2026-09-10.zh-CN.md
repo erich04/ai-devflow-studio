@@ -7,15 +7,15 @@
 
 | Issue | 范围 | 当前状态 |
 | --- | --- | --- |
-| #51 | Web 深色模式 | 已按确认方案增加三态主题和首屏恢复；含退出登录同源修复，六尺寸浏览器回归通过，待云端交付 |
+| #51 | Web 深色模式 | 已按确认方案增加三态主题和首屏恢复；含退出登录同源修复，六尺寸浏览器回归通过，PR #84 已合并，Issue 已关闭 |
 | #52 | 新 Studio 完整主流程 | 已盘点项目创建、预算、团队总览仍由旧页面承载；导航方案确认待答 |
-| #53 | Work Request 宽屏布局 | 已统一主卡宽度，空状态置于表单下；空/有请求 × 六尺寸 × 双主题回归通过，待云端交付 |
-| #54 | pairing code 布局 | 已拆为配对码整行、复制/撤销下一行；六尺寸受控配对码视觉回归通过，待云端交付 |
-| #55 | Provider 删除入口 | 待交互确认及引用检查回归 |
+| #53 | Work Request 宽屏布局 | 已统一主卡宽度，空状态置于表单下；空/有请求 × 六尺寸 × 双主题回归通过，PR #84 已合并，Issue 已关闭 |
+| #54 | pairing code 布局 | 已拆为配对码整行、复制/撤销下一行；六尺寸受控配对码视觉回归通过，PR #84 已合并，Issue 已关闭 |
+| #55 | Provider 删除入口 | 按已确认方案实现；引用、并发、持久化、键盘及真实删除/重启回归通过，待本批云端交付 |
 | #56 | 真实 OpenCode 需求澄清 | 已接通保存的 DeepSeek 凭据并完成真实只读澄清验收；PR #83 已合并，Issue 已关闭 |
 | #57 | Policy 配置 | 待交互确认 |
-| #58 | 应用 Policy 的反馈 | 已统一反馈、保存后权威重读和两页刷新；真实 Server Action 到隔离 API 回归通过，待云端交付 |
-| #59 | Policy 自引用链接 | 已移除自引用操作链接，保留实际提交按钮；组件和浏览器回归通过，待云端交付 |
+| #58 | 应用 Policy 的反馈 | 已统一反馈、保存后权威重读和两页刷新；真实 Server Action 到隔离 API 回归通过，PR #84 已合并，Issue 已关闭 |
+| #59 | Policy 自引用链接 | 已移除自引用操作链接，保留实际提交按钮；组件和浏览器回归通过，PR #84 已合并，Issue 已关闭 |
 | #60 | Desktop 同步按钮、项目 Policy | 已修复；真实同步、Task 策略、状态推送保留及自动化回归通过（PR #80） |
 | #61 | Team 页面滚动 | 已修复；多尺寸/主题自动化与真实底部滚动通过（PR #80） |
 | #63 | Gate Inspector 滚动 | 已修复；多尺寸/主题自动化、真实长内容滚动及 Evidence 访问通过（PR #80） |
@@ -169,3 +169,26 @@ CUA 曾出现 `noWindowsAvailable` 和截图旧帧，旧测试进程也未真正
 - 测试运行器使用独立端口与 seed API，并为该临时进程生成专用会话签名密钥。请求创建与策略应用通过真实 Next 页面 / Server Action / API；仅视觉用配对码使用受控占位串，不截图真实配对秘密。该批是 Web 功能回归，不作为新的真实 Provider 全流程验收。
 - CUA 在现有真实 Web QA 页面核对：新旧页面均显示云端 `Recommended enforcement preset / v1 / 4 条 / 2026-09-02T16:10:06.018Z`；已应用按钮禁用。请求主卡与 GitHub Delivery 均宽 1320px、左边界一致；深色偏好刷新和跨页保留。现有组织策略未被测试改写，浏览器主题及临时视口已恢复。
 - 14 项新增状态测试覆盖首屏恢复、存储异常、跨标签偏好、重复提交、已应用判定、权限失败、读回失败、并发改变策略和只读重试。最终 `corepack pnpm verify` 的 typecheck、265 文件 / 3718 用例及跨平台检查全部通过。云端检查与关闭信息在交付后补充。
+
+
+### Web 批次云端交付
+
+[PR #84](https://github.com/erich04/ai-devflow-studio/pull/84) 已于 2026-09-10 12:36 UTC 合并，main commit `d7e62f924b2bbc0f761bc4d10722147905a1db7c`。源提交 `607c3049371a3e81c5ebc73af7be361eb1e6edc4` 的 macOS verify、Windows compatibility、Postgres integration、Docker smoke、Docker lifecycle smoke 全部通过（Actions run `34476925750`）。#51、#53、#54、#58、#59 已关闭。
+
+## Provider 管理批次：#55
+
+按确认稿，在已有 Provider 选择器旁加入次级“管理”入口。确认框展示精确名称、ID、模型、遮罩凭据、相关项目名称/ID和删除影响；取消及 Esc 返回入口，确认后不自动选择其他 Provider。
+
+- Main 在确认时重新检查活动 Stage / Review / Provider 配置操作；本地 OpenCode Stage 按实际项目配置持有 Provider 使用记录，原生缓存 Provider 每次调用也重新检查凭据是否存在。
+- LocalStore 的同一持久化队列内重新读取项目配置、活动 Coding Run 和凭据版本。有引用则阻止，确认后凭据已变化则要求重新核对；删除和未选择状态一起持久化，写盘失败一起回滚。SQLite 开启 secure delete 清理已删除凭据所在页面，历史证据表保持原数据。
+- 选择偏好保存在本地设置，显式未选择状态跨重启保留；新增凭据仍按既有流程自动选中，偏好写入失败单独解释已保存结果。最后一项被删除时焦点回到新增名称字段，仍有其他项时回到已有选择器。
+
+### 本地验证
+
+- `corepack pnpm verify`：268 文件 / 3733 用例、类型检查和跨平台检查通过。最终补充项目显示名称后，13 个相关用例及 Desktop typecheck 再次通过。
+- `corepack pnpm test:e2e`：29/29 通过；新加入 1440×920、760×600 × 浅/深色，验证精确确认、Tab/Shift+Tab、Esc、焦点回收、不自动切换及无弹窗横向溢出，归档 4 张截图。
+- `corepack pnpm test:electron-smoke`：完整通过。隔离临时 profile 中通过真实表单、preload、Main、SQLite 保存临时凭据，在 `webContents.setZoomFactor(2)` 下到达确认按钮并删除，再次启动检查凭据消失、选择为空。这是受控凭据测试，不是云端模型调用。
+- CUA 对最终 production 构建真实验证：DeepSeek 的 3 个项目配置引用都被识别，确认删除禁用；取消恢复焦点。只创建测试项 `Temporary Provider QA 55`，ID `provider_d8795ddcd1934cd2ad6eacfbfc881f9e`，地址 `https://example.invalid/v1`，未调用模型。
+- 经真实界面确认删除后，提示删除完成，选择为空，审查按钮禁用；完全重启后列表只有“未选择 Provider”和原 DeepSeek，测试项消失。核验结束后通过选择器主动恢复原 DeepSeek。未删除真实 Key，未推进 QA Run、执行 Coding 或改动 mini Agent 仓库。
+
+本批次是 Provider 管理定向验收，不作为一次新的需求到 PR 全流程。剩余 #52/#57 的导航与设置布局、#64 的计数命名、#81 的未知费用展示已分别提出具体确认问题，未收到答复前不实施这些交互。

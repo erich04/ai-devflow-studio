@@ -87,6 +87,8 @@ const desktopApi: DevFlowDesktopApi = {
   saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings),
   saveMcpServers: (servers) => ipcRenderer.invoke(ipcChannels.saveMcpServers, servers),
   listAgentProviders: () => ipcRenderer.invoke(ipcChannels.listAgentProviders),
+  inspectAgentProviderRemoval: (input) => ipcRenderer.invoke(ipcChannels.inspectAgentProviderRemoval, input),
+  removeAgentProviderCredential: (input) => ipcRenderer.invoke(ipcChannels.removeAgentProviderCredential, input),
   saveAgentProviderCredential: (input) =>
     ipcRenderer.invoke(ipcChannels.saveAgentProviderCredential, input),
   runKnowledgeReview: (input) => ipcRenderer.invoke(ipcChannels.runKnowledgeReview, input),

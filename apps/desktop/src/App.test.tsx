@@ -493,6 +493,8 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   const api: DevFlowDesktopApi = {
     platform: 'test',
     loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
+    inspectAgentProviderRemoval: vi.fn().mockRejectedValue(new Error('Provider management is not configured for this test.')),
+    removeAgentProviderCredential: vi.fn().mockRejectedValue(new Error('Provider management is not configured for this test.')),
     loadDataProfileDiagnostics: vi.fn().mockResolvedValue({
       id: 'development-0123456789abcdef',
       name: 'local-development',
@@ -5202,6 +5204,40 @@ describe('App', () => {
       runtime: 'electron',
       providerId: agentProvider.id,
     })))
+  })
+
+  it('removes the confirmed Provider without silently selecting the remaining saved Provider', async () => {
+    const other = { ...agentProvider, id: 'other-provider', name: 'Other provider' }
+    const api = installDesktopApi({
+      listAgentProviders: vi.fn().mockResolvedValue([agentProvider, other]),
+      inspectAgentProviderRemoval: vi.fn().mockResolvedValue({ providerId: agentProvider.id, credential: { ...agentProvider, providerId: agentProvider.id }, references: [], historicalRecordCount: 2 }),
+      removeAgentProviderCredential: vi.fn().mockResolvedValue({ status: 'deleted', providerId: agentProvider.id }),
+    })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await waitFor(() => expect(screen.getByLabelText('Saved Agent Provider')).toHaveValue(agentProvider.id))
+    fireEvent.click(screen.getByRole('button', { name: '管理已保存 Provider' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '确认删除 Provider' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: '确认删除 Provider' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(screen.getByLabelText('Saved Agent Provider')).toHaveValue('')
+    expect(screen.getByLabelText('Saved Agent Provider')).toHaveFocus()
+    expect(within(screen.getByLabelText('Saved Agent Provider')).getByRole('option', { name: /Other provider/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: new RegExp(agentProvider.name) })).not.toBeInTheDocument()
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+  })
+
+  it('restores the deliberately empty Provider selection after restarting with other saved providers', async () => {
+    const state = persistedFixtureRunState()
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({ ...state, settings: { ...state.settings, selectedAgentProviderId: '' } }),
+      listAgentProviders: vi.fn().mockResolvedValue([agentProvider]),
+    })
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await waitFor(() => expect(screen.getByLabelText('Saved Agent Provider')).toBeInTheDocument())
+    expect(screen.getByLabelText('Saved Agent Provider')).toHaveValue('')
+    expect(screen.getByText('尚未选择 Agent Provider')).toBeInTheDocument()
   })
 
   it('saves a custom Agent Provider credential for Doubao-compatible model calls', async () => {

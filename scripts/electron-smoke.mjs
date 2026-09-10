@@ -1702,7 +1702,45 @@ try {
   await expect(second.page.getByTestId('tests-view')).toContainText('Local test evidence')
   await expect(second.page.getByTestId('tests-view')).toContainText('passed')
   expect(electronDiagnostics.join('')).not.toContain('MaxListenersExceededWarning')
+
+  // Real preload/Main/SQLite deletion in this isolated profile; never contact a cloud model.
+  await second.page.getByRole('button', { name: /^Agents$/ }).click()
+  await second.page.locator('summary').filter({ hasText: 'Agent Provider 配置' }).click()
+  await second.page.getByLabel('Agent Provider Name').fill('Temporary removal smoke')
+  await second.page.getByLabel('Agent Provider Base URL').fill('https://example.invalid/v1')
+  await second.page.getByLabel('Agent Provider Model').fill('fixture-removal')
+  await second.page.getByLabel('Agent Provider API Key').fill('fixture-only-provider-removal-key')
+  await second.page.getByRole('button', { name: /保存并使用 Provider/ }).click()
+  const removalSelector = second.page.getByLabel('Saved Agent Provider')
+  await expect(removalSelector.locator('option:checked')).toContainText('Temporary removal smoke')
+  const removalProviderId = await removalSelector.inputValue()
+  await second.app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(2)
+  })
+  await second.page.getByRole('button', { name: '管理已保存 Provider' }).click()
+  const removalDialog = second.page.getByRole('dialog', { name: '管理已保存 Provider' })
+  await expect(removalDialog).toContainText('Temporary removal smoke')
+  await expect(removalDialog).not.toContainText('fixture-only-provider-removal-key')
+  const removalConfirm = removalDialog.getByRole('button', { name: '确认删除 Provider' })
+  await removalConfirm.scrollIntoViewIfNeeded()
+  await expect(removalConfirm).toBeInViewport()
+  await removalConfirm.click()
+  await expect(removalDialog).toHaveCount(0)
+  await expect(removalSelector).toHaveValue('')
   await second.app.close()
+  const third = await launchApp({ useProjectCodingRuntime: true })
+  try {
+    const removalState = await third.page.evaluate(async (providerId) => {
+      const api = window.aiDevFlowDesktop
+      const providers = await api.listAgentProviders()
+      const state = await api.loadState()
+      return { stillExists: providers.some((provider) => provider.id === providerId), selected: state.settings.selectedAgentProviderId }
+    }, removalProviderId)
+    expect(removalState).toEqual({ stillExists: false, selected: '' })
+    await third.page.getByRole('button', { name: /^Agents$/ }).click()
+    await expect(third.page.getByLabel('Saved Agent Provider')).toHaveValue('')
+  } finally { await third.app.close() }
+
 } finally {
   await Promise.all([stopSpawnedProcess(vite), stopSpawnedProcess(web), stopSpawnedProcess(api)])
   await rm(tempRoot, { recursive: true, force: true })

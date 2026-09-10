@@ -1187,6 +1187,57 @@ async function createFixtureRun(page: import('@playwright/test').Page) {
 }
 
 test.describe('AI DevFlow desktop workbench', () => {
+  for (const viewport of [{ width: 1440, height: 920 }, { width: 760, height: 600 }]) {
+    for (const colorScheme of ['light', 'dark'] as const) {
+      test(`confirms exact Provider removal with keyboard focus and no fallback (${viewport.width}, ${colorScheme})`, async ({ page }, testInfo) => {
+        await page.setViewportSize(viewport)
+        await page.emulateMedia({ colorScheme })
+        await installDesktopApi(page)
+        await page.addInitScript(() => {
+          const api = window.aiDevFlowDesktop!
+          const list = api.listAgentProviders
+          let removed = false
+          api.listAgentProviders = async () => {
+            const original = await list()
+            const other = { ...original[0]!, id: 'other-saved-provider', name: 'Other saved provider' }
+            return removed ? [other] : [...original, other]
+          }
+          api.inspectAgentProviderRemoval = async ({ providerId }) => ({
+            providerId, credential: { providerId, name: 'Saved QA Provider with a long descriptive name', model: 'fixture-model-with-a-long-name', maskedCredential: 'qa…only', updatedAt: '2026-09-10T12:00:00.000Z' },
+            references: [], historicalRecordCount: 12,
+          })
+          api.removeAgentProviderCredential = async ({ providerId }) => {
+            removed = true
+            return { status: 'deleted', providerId }
+          }
+        })
+        await page.goto('/')
+        await page.getByRole('button', { name: /^Agents$/ }).click()
+        await page.locator('summary').filter({ hasText: 'Agent Provider 配置' }).click()
+        const manage = page.getByRole('button', { name: '管理已保存 Provider' })
+        await manage.click()
+        const dialog = page.getByRole('dialog', { name: '管理已保存 Provider' })
+        await expect(dialog.getByText('保留历史记录：12 条。')).toBeVisible()
+        await expect(dialog.getByRole('button', { name: '取消' })).toBeFocused()
+        await page.keyboard.press('Shift+Tab')
+        await expect(dialog.getByRole('button', { name: '确认删除 Provider' })).toBeFocused()
+        await page.keyboard.press('Tab')
+        await expect(dialog.getByRole('button', { name: '取消' })).toBeFocused()
+        expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
+        await dialog.screenshot({ path: testInfo.outputPath(`provider-removal-${viewport.width}-${colorScheme}.png`) })
+        await page.keyboard.press('Escape')
+        await expect(dialog).toHaveCount(0)
+        await expect(manage).toBeFocused()
+        await manage.click()
+        await dialog.getByRole('button', { name: '确认删除 Provider' }).click()
+        await expect(dialog).toHaveCount(0)
+        await expect(page.getByLabel('Saved Agent Provider')).toHaveValue('')
+        await expect(page.getByLabel('Saved Agent Provider')).toBeFocused()
+        await expect(manage).toBeDisabled()
+      })
+    }
+  }
+
   for (const viewport of [{ width: 1180, height: 760 }, { width: 1834, height: 768 }]) {
     for (const colorScheme of ['light', 'dark'] as const) {
       test(`scrolls the Team policy page to its final snapshot action (${viewport.width}, ${colorScheme})`, async ({ page }) => {

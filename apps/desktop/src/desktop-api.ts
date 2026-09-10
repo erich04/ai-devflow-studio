@@ -24,6 +24,8 @@ import type {
   PolicySnapshot,
   ProjectGitStatus,
   ProviderCredentialMetadata,
+  ProviderRemovalCheck,
+  ProviderRemovalResult,
   RepositoryKnowledgeSnapshot,
   RemoteTeamSnapshot,
   RetryAttempt,
@@ -345,6 +347,8 @@ export type DevFlowDesktopApi = {
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
+  inspectAgentProviderRemoval: (input: { providerId: string }) => Promise<ProviderRemovalCheck>
+  removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: { runId?: string }) => Promise<AgentReviewResult[]>
   ensureCodingEngine: (input: { projectId: string }) => Promise<{ projectId: string; engine: CodingAgentRun['engine']; status: 'ready' }>

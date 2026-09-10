@@ -64,6 +64,12 @@ function baseInput(overrides: Partial<BuildAgentConsoleViewModelInput> = {}): Bu
   }
 }
 
+it('keeps an explicitly empty Provider selection even when other saved providers remain', () => {
+  const view = buildAgentConsoleViewModel(baseInput({ selectedProviderId: '' }))
+  expect(view.runtimeSettings.selectedProvider).toBeUndefined()
+  expect(view.runtimeSettings.summary).toBe('尚未选择 Agent Provider')
+})
+
 function review(run: WorkflowRun): AgentReviewResult {
   return {
     id: 'review-1',

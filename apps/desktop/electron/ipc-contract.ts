@@ -35,6 +35,8 @@ import type {
   PolicySnapshot,
   ProjectGitStatus,
   ProviderCredentialMetadata,
+  ProviderRemovalCheck,
+  ProviderRemovalResult,
   RepositoryKnowledgeSnapshot,
   RemoteRunDeleteResult,
   RemoteTeamSnapshot,
@@ -234,6 +236,8 @@ export const ipcChannels = {
   pairDesktop: 'devflow:desktop-pairing:pair',
   listAgentProviders: 'devflow:agent:providers:list',
   saveAgentProviderCredential: 'devflow:agent:provider-credential:save',
+  inspectAgentProviderRemoval: 'devflow:agent:provider-credential:inspect-removal',
+  removeAgentProviderCredential: 'devflow:agent:provider-credential:remove',
   runKnowledgeReview: 'devflow:agent:knowledge-review:run',
   listAgentReviews: 'devflow:agent:reviews:list',
   ensureCodingEngine: 'devflow:coding:engine:ensure',
@@ -700,6 +704,8 @@ export type DevFlowDesktopApi = {
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
+  inspectAgentProviderRemoval: (input: { providerId: string }) => Promise<ProviderRemovalCheck>
+  removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: ListAgentReviewsInput) => Promise<AgentReviewExecutionResult['review'][]>
   ensureCodingEngine: (input: EnsureCodingEngineInput) => Promise<EnsureCodingEngineResult>
@@ -1467,6 +1473,12 @@ export function parseSettingsInput(value: unknown): Partial<LocalSettings> {
     throw new Error('Invalid settings payload')
   }
 
+  const selectedAgentProviderId = value['selectedAgentProviderId']
+  if (selectedAgentProviderId !== undefined && (
+    typeof selectedAgentProviderId !== 'string' || selectedAgentProviderId.length > 200 ||
+    selectedAgentProviderId !== selectedAgentProviderId.trim() || /[\u0000-\u001f\u007f]/u.test(selectedAgentProviderId)
+  )) throw new Error('Invalid selectedAgentProviderId')
+
   const themePreference = value['themePreference']
   if (themePreference !== undefined && !isThemePreference(themePreference)) {
     throw new Error('Invalid themePreference')
@@ -1474,6 +1486,7 @@ export function parseSettingsInput(value: unknown): Partial<LocalSettings> {
 
   return {
     ...(themePreference ? { themePreference } : {}),
+    ...(selectedAgentProviderId !== undefined ? { selectedAgentProviderId } : {}),
   }
 }
 
@@ -1572,6 +1585,16 @@ export function parseRefreshRepositoryKnowledgeInput(
   rejectUnexpectedFields(value, ['projectId'], 'refresh repository knowledge payload')
 
   return { projectId: readRequiredString(value, 'projectId') }
+}
+
+export function parseAgentProviderRemovalInput(value: unknown, confirmation = false) {
+  if (!isRecord(value)) throw new Error('Invalid provider removal payload')
+  rejectUnexpectedFields(value, confirmation ? ['providerId', 'expectedUpdatedAt'] : ['providerId'], 'provider removal payload')
+  const providerId = readRequiredString(value, 'providerId')
+  if (providerId.length > 200 || providerId !== value['providerId'] || /[\u0000-\u001f\u007f]/u.test(providerId)) {
+    throw new Error('Invalid provider ID')
+  }
+  return { providerId, ...(confirmation ? { expectedUpdatedAt: readRequiredString(value, 'expectedUpdatedAt') } : {}) }
 }
 
 export function parseAgentProviderCredentialInput(
