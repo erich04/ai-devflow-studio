@@ -3464,12 +3464,20 @@ code {
 }
 
 .inspector {
-  display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+  min-height: 0;
   min-width: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 16px;
+}
+
+.inspector > * {
+  flex-shrink: 0;
 }
 
 .next-action {
@@ -3512,13 +3520,10 @@ code {
   display: grid;
   align-content: start;
   gap: 12px;
-  min-height: 0;
+  min-height: auto;
   min-width: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
   padding-right: 4px;
-  scrollbar-gutter: stable;
 }
 
 .inspector-scroll > *,
@@ -3868,6 +3873,7 @@ code {
 
 .team-page {
   align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .table {
@@ -4528,9 +4534,6 @@ code {
     --workflow-board-min-width: 360px;
   }
 
-  .inspector {
-    display: grid;
-  }
 }
 .stage-agent-executor,
 .clarification-review__feedback {

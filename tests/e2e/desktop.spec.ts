@@ -1187,6 +1187,78 @@ async function createFixtureRun(page: import('@playwright/test').Page) {
 }
 
 test.describe('AI DevFlow desktop workbench', () => {
+  for (const viewport of [{ width: 1180, height: 760 }, { width: 1834, height: 768 }]) {
+    for (const colorScheme of ['light', 'dark'] as const) {
+      test(`scrolls the Team policy page to its final snapshot action (${viewport.width}, ${colorScheme})`, async ({ page }) => {
+        await page.setViewportSize(viewport)
+        await page.emulateMedia({ colorScheme })
+        await installDesktopApi(page, 'clarification-revision')
+        await page.addInitScript(() => {
+          const api = window.aiDevFlowDesktop!
+          const load = api.loadEnforcementPolicy
+          api.loadEnforcementPolicy = async (input) => {
+            const snapshot = await load(input)
+            return {
+              ...snapshot,
+              effectivePolicy: {
+                ...snapshot.effectivePolicy,
+                rules: Array.from({ length: 10 }, (_, index) => ({
+                  ruleKey: `testing_standard_rule_${index}`, target: 'testing_standard', action: 'warn', source: 'organization',
+                })),
+              },
+            } as typeof snapshot
+          }
+        })
+        await page.goto('/')
+        await page.getByRole('button', { name: 'Team Overview', exact: true }).click()
+        const team = page.getByTestId('team-overview')
+        await expect(team.getByText('testing_standard_rule_9', { exact: true })).toBeVisible()
+        const box = (await team.boundingBox())!
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+        await page.mouse.wheel(0, 3000)
+        await expect(team.getByRole('button', { name: '同步团队并刷新 snapshot' })).toBeInViewport()
+        await expect.poll(() => team.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+      })
+
+      test(`reaches Gate tabs by scrolling past a long clarification (${viewport.width}, ${colorScheme})`, async ({ page }) => {
+        await page.setViewportSize(viewport)
+        await page.emulateMedia({ colorScheme })
+        await installDesktopApi(page, 'clarification-revision')
+        await page.addInitScript(() => {
+          const api = window.aiDevFlowDesktop!
+          const load = api.loadState
+          api.loadState = async () => {
+            const state = await load()
+            return {
+              ...state,
+              artifacts: state.artifacts.map((artifact) => artifact.kind === 'clarification'
+                ? { ...artifact, content: Array.from({ length: 16 }, (_, index) => `## Acceptance ${index + 1}\n\nConfirm the retry boundary, preserve unrelated content, and retain auditable evidence for the current requirement.`).join('\n\n') }
+                : artifact),
+            }
+          }
+        })
+        await page.goto('/')
+        const inspector = page.getByTestId('node-inspector')
+        await expect(inspector.getByTestId('clarification-current-revision')).toContainText('Acceptance 16')
+        const evidenceTab = inspector.getByRole('tab', { name: 'Evidence', exact: true })
+        const box = (await inspector.boundingBox())!
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+        await expect.poll(async () => {
+          const reachable = await evidenceTab.evaluate((element) => {
+            const tab = element.getBoundingClientRect()
+            const parent = element.closest('.inspector')!.getBoundingClientRect()
+            return tab.top >= parent.top && tab.bottom <= parent.bottom
+          })
+          if (!reachable) await page.mouse.wheel(0, 360)
+          return reachable
+        }).toBe(true)
+        await evidenceTab.click()
+        await expect(evidenceTab).toHaveAttribute('aria-selected', 'true')
+        await expect.poll(() => inspector.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
+      })
+    }
+  }
+
   test('keeps the unpaired design flow focused on one explained primary action', async ({ page }) => {
     await page.emulateMedia({ colorScheme: 'dark' })
     await page.setViewportSize({ width: 1180, height: 760 })

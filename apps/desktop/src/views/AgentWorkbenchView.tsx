@@ -36,6 +36,7 @@ import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-vie
 import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
 import type { ProjectRuntimeBudget } from '../app/useProjectRuntimeBudget'
 import { CodingChangeSetReview } from './CodingChangeSetReview'
+import { ReviewRerunDialog } from './ReviewRerunDialog'
 
 export function AgentWorkbenchView({
   desktopApi,
@@ -113,7 +114,7 @@ export function AgentWorkbenchView({
   onProviderKeyDraftChange: (value: string) => void
   onSaveProviderCredential: () => void
   onCompleteAgentNode: () => void
-  onRunKnowledgeReview: () => void
+  onRunKnowledgeReview: (previousReviewId?: string) => void
   isRunning: boolean
   isRunningTests: boolean
   pendingInspectorAction: PendingInspectorAction | null
@@ -165,6 +166,11 @@ export function AgentWorkbenchView({
   const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
   const [isReplyingPermission, setIsReplyingPermission] = useState(false)
   const [showRetryConfirmation, setShowRetryConfirmation] = useState(false)
+  const [reviewConfirmationId, setReviewConfirmationId] = useState<string | null>(null)
+  const reviewEvidenceRef = useRef<HTMLElement>(null)
+  useEffect(() => {
+    setReviewConfirmationId(null)
+  }, [selectedRun?.id, selectedNode?.id, latestReview?.id, selectedProviderId])
   const [selectedAuditCodingRunId, setSelectedAuditCodingRunId] = useState('')
   const codingFocusRef = useRef<HTMLElement>(null)
   const evidenceRef = useRef<HTMLElement>(null)
@@ -402,6 +408,12 @@ export function AgentWorkbenchView({
       return
     }
 
+    if (action.id === 'view-review') {
+      reviewEvidenceRef.current?.focus()
+      reviewEvidenceRef.current?.scrollIntoView?.({ block: 'start' })
+      return
+    }
+
     if (action.id === 'complete-agent-node') {
       onCompleteAgentNode()
       return
@@ -547,6 +559,13 @@ export function AgentWorkbenchView({
                   {primaryActionIcon(viewModel.primaryAction.id)}
                   {viewModel.primaryAction.label}
                 </button>
+                {viewModel.primaryAction.id === 'view-review' && latestReview ? (
+                  <button
+                    className="ghost-button"
+                    disabled={!selectedProviderId || isRunning || Boolean(pendingInspectorAction)}
+                    onClick={() => setReviewConfirmationId(latestReview.id)}
+                  >重新审查</button>
+                ) : null}
                 <p>{viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready'
                   ? 'Coding Runtime 尚未就绪，请先完成下方项目执行配置。'
                   : viewModel.primaryAction.disabledReason ?? viewModel.primaryAction.summary}</p>
@@ -555,6 +574,19 @@ export function AgentWorkbenchView({
             </div>
           )}
         </article>
+
+        {reviewConfirmationId && latestReview?.id === reviewConfirmationId ? (
+          <ReviewRerunDialog
+            target={`${selectedRun?.title ?? ''} · ${selectedNode?.title ?? ''}`}
+            provider={providers.filter((provider) => provider.id === selectedProviderId).map((provider) => `${provider.name} · ${provider.model}`).join('') || selectedProviderId}
+            reviewedAt={latestReview.createdAt}
+            onCancel={() => setReviewConfirmationId(null)}
+            onConfirm={() => {
+              setReviewConfirmationId(null)
+              onRunKnowledgeReview(reviewConfirmationId)
+            }}
+          />
+        ) : null}
 
         {showRetryConfirmation ? (
           <div className="coding-retry-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="coding-retry-title">
@@ -831,7 +863,7 @@ export function AgentWorkbenchView({
           </article>
         ) : null}
 
-        <section className="agent-console-section" aria-label="当前节点证据与执行轨迹">
+        <section className="agent-console-section" aria-label="当前节点证据与执行轨迹" ref={reviewEvidenceRef} tabIndex={-1}>
           <div className="section-heading section-heading--inline">
             <span title="Evidence 是可审计证据；Trace 是执行轨迹。">证据与执行轨迹</span>
             <strong>当前节点执行证据</strong>

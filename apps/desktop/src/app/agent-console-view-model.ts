@@ -36,6 +36,7 @@ export type AgentConsoleTone = 'good' | 'warn' | 'bad' | 'soft' | 'accent' | 'ne
 export type AgentConsolePrimaryActionId =
   | 'complete-agent-node'
   | 'run-review'
+  | 'view-review'
   | 'run-coding'
   | 'view-coding'
   | 'configure-coding'
@@ -153,6 +154,7 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
   const providerDataSource = buildAgentProviderDataSource(selectedProvider)
   const currentTarget = buildCurrentTarget(input.selectedRun, input.selectedNode)
   const primaryAction = buildPrimaryAction({
+    latestReview: input.latestReview,
     selectedProvider,
     selectedRun: input.selectedRun,
     selectedNode: input.selectedNode,
@@ -239,6 +241,16 @@ function buildPrimaryActionImpact(input: {
       providerAndCost: `调用 ${provider}；会记录 token，并可能产生 Provider 费用。`,
       repository: '只读使用已索引 Knowledge（知识）与阶段证据，不修改仓库文件。',
       workflow: '只提供 Gate 建议，不会批准 Gate，也不会推进 Workflow（工作流）。',
+    }
+  }
+
+  if (input.action.id === 'view-review') {
+    return {
+      object,
+      result: '查看上次保存的审查结论、引用和执行轨迹；内容变更后可重新审查。',
+      providerAndCost: '查看已有结果不调用 Provider，不新增 token 或费用。',
+      repository: '只读查看已归档的审查证据。',
+      workflow: '不会批准 Gate，也不会推进工作流。',
     }
   }
 
@@ -334,6 +346,7 @@ function nodeKindChinese(kind: string): string {
 }
 
 function buildPrimaryAction(input: {
+  latestReview: AgentReviewResult | undefined
   selectedProvider: AgentProviderConfig | undefined
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
@@ -491,6 +504,16 @@ function buildPrimaryAction(input: {
       id: 'return-workbench',
       label: '返回工作台',
       summary: '当前节点没有可在 Agent 执行台运行的门禁审查或 Coding 动作。',
+      tone: 'soft',
+      disabled: false,
+    }
+  }
+
+  if (!input.isRunningReview && input.latestReview?.runId === input.selectedRun?.id && input.latestReview?.nodeId === input.selectedNode.id) {
+    return {
+      id: 'view-review',
+      label: '查看审查结果',
+      summary: '已保存上次审查结果。若需再次运行，请使用“重新审查”并确认费用。',
       tone: 'soft',
       disabled: false,
     }

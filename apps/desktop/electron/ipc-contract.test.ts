@@ -848,6 +848,7 @@ describe('IPC contract parsers', () => {
         runtime: 'electron',
         providerId: 'team-openai',
         runtimeBudgetApprovalId: ' approval-knowledge-1 ',
+        previousReviewId: ' prior-review-1 ',
       }),
     ).toEqual({
       runId: 'run-1',
@@ -857,6 +858,7 @@ describe('IPC contract parsers', () => {
       runtime: 'electron',
       providerId: 'team-openai',
       runtimeBudgetApprovalId: 'approval-knowledge-1',
+      previousReviewId: 'prior-review-1',
     })
   })
 

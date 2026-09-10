@@ -201,6 +201,7 @@ export type RunKnowledgeReviewInput = {
   runtime: 'electron' | 'api'
   providerId?: string
   runtimeBudgetApprovalId?: string
+  previousReviewId?: string
 }
 
 export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {

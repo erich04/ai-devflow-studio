@@ -12341,14 +12341,14 @@ class SqlJsLocalStore implements LocalStore {
     if (runId) {
       return selectJson<AgentReviewResult>(
         this.db,
-        'select json from agent_reviews where run_id = ? order by created_at desc',
+        'select json from agent_reviews where run_id = ? order by created_at desc, rowid desc',
         [runId],
       )
     }
 
     return selectJson<AgentReviewResult>(
       this.db,
-      'select json from agent_reviews order by created_at desc',
+      'select json from agent_reviews order by created_at desc, rowid desc',
     )
   }
 

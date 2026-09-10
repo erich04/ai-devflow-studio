@@ -10,18 +10,11 @@ function ruleBodies(selector: string): string[] {
 }
 
 describe('Desktop Workbench layout CSS', () => {
-  it('gives the Board its own overflow and the Inspector one vertical scroll owner', () => {
+  it('gives the Board its own horizontal overflow', () => {
     expect(ruleBodies('.stage-grid').some((body) => (
       body.includes('overflow-x: auto') && body.includes('overscroll-behavior: contain')
     ))).toBe(true)
-    expect(ruleBodies('.inspector').some((body) => (
-      body.includes('grid-template-rows:') && body.includes('overflow: hidden')
-    ))).toBe(true)
-    expect(ruleBodies('.inspector-scroll').some((body) => (
-      body.includes('overflow-x: hidden') &&
-      body.includes('overflow-y: auto') &&
-      body.includes('scrollbar-gutter: stable')
-    ))).toBe(true)
+    // Inspector reachability is covered by real wheel/viewport tests in desktop.spec.ts.
   })
 
   it('keeps long Gate enforcement identifiers and explanations readable', () => {

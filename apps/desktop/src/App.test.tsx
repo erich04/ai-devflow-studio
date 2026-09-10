@@ -2441,7 +2441,7 @@ describe('App', () => {
     const inspector = await screen.findByTestId('node-inspector')
     await waitFor(() => expect(inspector).toHaveTextContent('启动 Coding Agent'))
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
-    expect(api.loadEnforcementPolicy).not.toHaveBeenCalled()
+    await waitFor(() => expect(api.loadEnforcementPolicy).toHaveBeenCalled())
     expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
     const codingAction = within(inspector).getByRole('button', { name: /Coding Agent/ })
     await waitFor(() => expect(codingAction).toBeEnabled())
@@ -2884,7 +2884,7 @@ describe('App', () => {
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('执行本地测试')
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
-    expect(api.loadEnforcementPolicy).not.toHaveBeenCalled()
+    await waitFor(() => expect(api.loadEnforcementPolicy).toHaveBeenCalled())
     expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
     fireEvent.click(within(inspector).getByRole('button', { name: /执行测试/ }))
 
@@ -4144,6 +4144,64 @@ describe('App', () => {
     ])
   })
 
+  it('syncs the remote team from the Team Overview snapshot action', async () => {
+    const api = installDesktopApi()
+    const initialPolicy = await api.loadEnforcementPolicy({ projectId: fixtureRuns[0]!.projectId })
+    render(<App />)
+
+    await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    expect(screen.getByTestId('team-overview')).toHaveTextContent('snapshot v1')
+    vi.mocked(api.loadEnforcementPolicy).mockResolvedValue({
+      ...initialPolicy, version: 2, source: 'remote_cache', syncedAt: '2026-09-10T12:00:00.000Z',
+    })
+    vi.mocked(api.evaluateGateEnforcement).mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
+
+    await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('同步成功 · 策略 v2 · 2026-09-10T12:00:00.000Z'))
+    expect(screen.getByTestId('team-overview')).toHaveTextContent('snapshot v2')
+    expect(api.evaluateGateEnforcement).toHaveBeenCalled()
+  })
+
+  it('keeps project policy visible when selecting a Task without evaluating that Task as a Gate', async () => {
+    const api = installDesktopApi()
+    const snapshot = await api.loadEnforcementPolicy({ projectId: fixtureRuns[0]!.projectId })
+    vi.mocked(api.loadEnforcementPolicy).mockResolvedValue({ ...snapshot, projectId: 'paired-team-project', source: 'remote_cache' })
+    render(<App />)
+    await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
+    vi.mocked(api.evaluateGateEnforcement).mockClear()
+    fireEvent.click(screen.getByTestId('flow-node-n-build'))
+    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    await waitFor(() => expect(screen.getByTestId('team-overview')).toHaveTextContent('snapshot v1'))
+    expect(screen.getByLabelText('Gate policy matrix')).toHaveTextContent('testing_standard')
+    expect(screen.getByTestId('team-overview')).toHaveTextContent('remote_cache snapshot v1')
+    expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
+  })
+
+  it('disables both team sync entry points while pending and reports errors in place before retrying', async () => {
+    let rejectSync: (reason: Error) => void = () => undefined
+    const api = installDesktopApi({
+      loadRemoteSnapshot: vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectSync = reject })),
+    })
+    render(<App />)
+    await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
+    for (const button of screen.getAllByRole('button', { name: '同步中' })) {
+      expect(button).toBeDisabled()
+      fireEvent.click(button)
+    }
+    expect(api.loadRemoteSnapshot).toHaveBeenCalledTimes(1)
+    await act(async () => { rejectSync(new Error('Team API temporarily unavailable')) })
+    expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('Team API temporarily unavailable')
+    expect(screen.getByTestId('team-sync-feedback')).toHaveAttribute('role', 'alert')
+    vi.mocked(api.loadRemoteSnapshot).mockResolvedValue({ projects: [], members: [], runs: [], artifacts: [], events: [], projectCost: [], memberCost: [], totalCost: '$0.00' })
+    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('同步成功'))
+    expect(api.loadRemoteSnapshot).toHaveBeenCalledTimes(2)
+  })
+
   it('loads remote team state without mixing other project runs into the selected local project', async () => {
     const api = installDesktopApi({
       loadRemoteSnapshot: vi.fn().mockResolvedValue({
@@ -4207,7 +4265,7 @@ describe('App', () => {
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('remote snapshot + local merge')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('real IPC/API')
     expect(screen.getAllByText('local').length).toBeGreaterThan(0)
-    expect(screen.getByTestId('toast')).toHaveTextContent('团队远端状态已同步')
+    expect(screen.getByTestId('toast')).toHaveTextContent('同步成功 · 策略 v1')
 
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
     expect(screen.getAllByText('Remote Team API').length).toBeGreaterThan(0)
@@ -5000,6 +5058,43 @@ describe('App', () => {
     expect(screen.getByTestId('focused-event')).toHaveTextContent('degraded 状态定义')
   })
 
+  it('shows saved Gate review evidence first and requires explicit confirmation before a paid rerun', async () => {
+    const state = reviewedDesignGateState()
+    const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(state) })
+    render(<App />)
+    await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /^Agents$/ }))
+    fireEvent.click(screen.getByRole('button', { name: '查看审查结果' }))
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    const rerun = screen.getByRole('button', { name: '重新审查' })
+    rerun.focus()
+    fireEvent.click(rerun)
+    let dialog = screen.getByRole('dialog', { name: '确认重新审查' })
+    expect(dialog).toHaveTextContent('新增审查记录')
+    expect(dialog).toHaveTextContent('Provider 费用')
+    expect(within(dialog).getByRole('button', { name: '取消' })).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(within(dialog).getByRole('button', { name: '继续并重新审查' })).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(within(dialog).getByRole('button', { name: '取消' })).toHaveFocus()
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(rerun).toHaveFocus()
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    fireEvent.click(rerun)
+    dialog = screen.getByRole('dialog', { name: '确认重新审查' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    fireEvent.click(rerun)
+    dialog = screen.getByRole('dialog', { name: '确认重新审查' })
+    fireEvent.click(within(dialog).getByRole('button', { name: '继续并重新审查' }))
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
+    expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+      previousReviewId: state.agentReviews[0]!.id,
+      providerId: agentProvider.id,
+    }))
+  })
+
   it('opens Agents from the inspector, runs Gate Review, and returns to the current inspector', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -5248,6 +5343,29 @@ describe('App', () => {
     expect(syncStatus).toHaveTextContent('queued')
     expect(syncStatus).toHaveTextContent('sending')
     expect(syncStatus).toHaveTextContent('retry_wait')
+  })
+
+  it('preserves the synced Team snapshot on local outbox pushes and clears it after unpairing', async () => {
+    let listener: Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0] | undefined
+    const localState = persistedFixtureRunState()
+    const api = installDesktopApi({
+      onLocalStateUpdated: vi.fn((callback) => { listener = callback; return vi.fn() }),
+      loadRemoteSnapshot: vi.fn().mockResolvedValue({
+        projects: [{ id: 'p-payments', name: 'Synced Team Project', repository: 'erich/payments-api', defaultBranch: 'main', health: 'on_track', knowledgeBasePath: 'docs', testCommand: 'pnpm test' }],
+        members: [], runs: [], artifacts: [], events: [], projectCost: [], memberCost: [], totalCost: '$0.25',
+      }),
+    })
+    render(<App />)
+    await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('同步成功'))
+    expect(screen.getByTestId('team-overview')).toHaveTextContent('Synced Team Project')
+    act(() => { listener?.({ ...localState, remoteSyncOperations: [remoteSyncOperation()] }) })
+    expect(screen.getByTestId('team-overview')).toHaveTextContent('Synced Team Project')
+    expect(screen.getByTestId('team-overview')).toHaveTextContent('$0.25')
+    act(() => { listener?.({ ...localState, desktopPairingCredential: null }) })
+    expect(screen.getByTestId('team-overview')).not.toHaveTextContent('Synced Team Project')
   })
 
   it('preserves the selected Run when an outbox state push arrives', async () => {

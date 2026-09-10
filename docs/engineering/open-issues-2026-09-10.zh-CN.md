@@ -16,11 +16,11 @@
 | #57 | Policy 配置 | 待交互确认 |
 | #58 | 应用 Policy 的反馈 | 已确认 action 不返回可展示结果，界面缺少策略版本反馈；隔离写入复现待做，交互确认待答 |
 | #59 | Policy 自引用链接 | 实际点击仅变更 #policy 锚点，未执行应用动作；交互确认待答 |
-| #60 | Desktop 同步按钮、项目 Policy | 已复现：按钮点击未调用同步；交互确认待答 |
-| #61 | Team 页面滚动 | CUA 实际滚动后画面不变、下方规则被裁剪；交互确认待答 |
-| #63 | Gate Inspector 滚动 | 实际长澄清内容将标签压出可视区域，滚动不移动；交互确认待答 |
+| #60 | Desktop 同步按钮、项目 Policy | 已获交互确认并修复；自动化与真实同步通过，完整真实回归进行中 |
+| #61 | Team 页面滚动 | 已获交互确认并修复；多尺寸/主题自动化与实际底部滚动通过 |
+| #63 | Gate Inspector 滚动 | 已获交互确认并修复；多尺寸/主题自动化通过，真实窗口复验待恢复控制通道 |
 | #64 | 卡片计数与证据入口 | 实际 Gate 显示产物 1 / 证据 0，报告位于 Evidence、没有产物标签；命名方案确认待答 |
-| #65 | 重复审查与费用 | 真实同版本重审会新增记录；并发防重与失败重试回归通过，重审交互确认待答 |
+| #65 | 重复审查与费用 | 已获交互确认并修复；查看/确认/并发/重放/失败重试回归通过，真实 Provider 复验待完成 |
 | #76 | 模型把非缺口计作缺失证据 | 3 次真实复验通过；PR #79 已合并，Issue 已关闭 |
 
 ## 复现与回归
@@ -54,7 +54,7 @@
 - 本地全量 `corepack pnpm verify` 通过：260 个测试文件、3682 个用例；包含 typecheck 和跨平台检查。
 - 云端 macOS verify、Windows compatibility、Postgres integration、Docker smoke、Docker lifecycle smoke 五项全部通过。
 - [#76](https://github.com/erich04/ai-devflow-studio/issues/76) 已关闭；[#65](https://github.com/erich04/ai-devflow-studio/issues/65) 仅交付并发保护，继续保持打开。
-- 云端重新查询：起点的 15 项现剩 14 项打开。涉及交互的实现尚未获得本轮用户确认；OpenCode 真机验收仍缺可用凭据。
+- 云端重新查询：起点的 15 项现剩 14 项打开。此时涉及交互的实现尚未获得用户确认；后续第一批已获确认（见下文）。OpenCode 真机验收仍缺可用凭据。
 
 ## 剩余交互问题的实际复现
 
@@ -70,3 +70,30 @@
 - #64：实际 Gate 卡片的“产物 1 / 证据 0”与 Inspector 缺少产物入口同时出现；审查报告在 Evidence 中。后续按用户确认的计数命名及直达入口方案修复。
 
 没有在这轮复现中覆盖组织策略、创建新的 Work Request、推进已暂停的 QA Gate 或修改目标 mini Agent 仓库。上述隔离测试配对码已经清理。
+
+
+## 第二批：已确认的 Desktop 可用性修复
+
+用户随后确认先实施 #60、#61、#63、#65。其余交互方案继续等待答复。
+
+- #60：Team 内的同步按钮接入真实 IPC 同步，禁用重复点击；同步后刷新当前项目的 Policy 和当前 Gate 评估，原位显示版本/时间或错误，保留当前视图和所选节点。Policy 读取独立于 Gate 是否启用，普通 Task 也能看到团队策略。修正 Local Project / Team Project ID 的对应关系。
+- #60 的真实验证额外发现本地 outbox 状态推送清空 Team 摘要。先以失败测试复现，再改为同一项目和 pairing 下保留团队快照；切换项目或 pairing 权限变化时清空。回归包含解绑清理。
+- #61、#63：保留内容顺序，将 Team 内容行恢复自然高度，Inspector 使用连续纵向滚动，避免长澄清内容挤出下方标签。
+- #65：已有结果的主动作改为查看，重新审查为次级动作；确认框展示目标、Provider/Model、上次时间和新增记录/费用。取消、Esc 与焦点回收有回归。确认携带上次 Review ID，运行时验证它仍是最新记录，拒绝旧确认重放；每个请求单独创建 Runtime 时也共享同一 store 的并发保护。
+- #65：本地 Review 的相同时间戳按持久化顺序确定最新记录；覆盖相同内容、内容更新后重审、失败重试和新建 Runtime 的重复请求。
+
+### 自动化结果
+
+- `corepack pnpm verify`：260 文件 / 3690 用例、typecheck、跨平台检查全部通过。
+- 随后补充“内容更新”和“确认后失败重试”的边界用例：KnowledgeReviewRuntime 共 13 用例通过（新增 2 用例，产品代码未再变化）。
+- 完整 Desktop Playwright 受控接口回归：16/16 通过；其中滚动覆盖 1180×760、1834×768 与浅色/深色的四种组合。
+- Desktop production build 通过。受控接口/Provider 测试不计为真实 Provider 验收。
+
+### 真实验证进度
+
+本次运行隔离工作分支的 Desktop 构建，复用只读 QA Run `run-work-request-d31f23324f30654ed290208e35f85802`。验证前为 `paused_at_gate / v4`，共 7 份 Review（方案 Gate 6 份、需求 Gate 1 份），9 份用量记录，Coding Run 和 Test Evidence 均为 0。
+
+- Team 实际滚动到最后一条规则、Budget Guard 和同步按钮；真实同步结果为 `remote_cache v1 / 2026-09-10T09:45:44.020Z`，原位保留 Team 页面并展示所绑定的 Team Project。
+- 选中已完成的设计 Task 后，顶部仍显示 Policy v1 / loaded 与已配置的预算。
+- 后续 CUA 滚轮返回 `noWindowsAvailable`，截图停留旧帧。已尝试重连与 Raise，并请求用户恢复窗口；不把旧截图认作新的真实验证证据。
+- 真实 Gate 滚动与确认重审的 Provider 调用次数验收仍在继续。未完成前不关闭对应 Issue，也不将这次定向修复称为重新跑完整需求交付流程。
