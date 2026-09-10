@@ -364,6 +364,20 @@ export function useDesktopWorkspace(input: {
     setTeamTotalCost('$0.00')
   }
 
+  // Local execution/outbox pushes do not contain the remote Team snapshot.
+  // Retain it until the selected project or pairing authority changes.
+  useEffect(() => {
+    resetTeamSnapshot()
+  }, [
+    selectedLocalProjectId,
+    desktopPairing?.tokenId,
+    desktopPairing?.organizationId,
+    desktopPairing?.projectId,
+    desktopPairing?.localProjectId,
+    desktopPairing?.userId,
+    desktopPairing?.role,
+  ])
+
   function applyLocalExecutionState(state: LocalExecutionState) {
     setLocalProjects(state.projects)
     setThemePreference(state.settings.themePreference)
@@ -391,7 +405,6 @@ export function useDesktopWorkspace(input: {
       setArtifacts(state.artifacts)
       setEvents(state.events)
       setDataOrigin('local')
-      resetTeamSnapshot()
     } else {
       setRuns([])
       setRemoteRunIds([])
@@ -401,7 +414,6 @@ export function useDesktopWorkspace(input: {
       setArtifacts([])
       setEvents([])
       setDataOrigin('local')
-      resetTeamSnapshot()
     }
 
     setTestEvidence(state.testEvidence)

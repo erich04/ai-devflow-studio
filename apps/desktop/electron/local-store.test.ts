@@ -10162,6 +10162,19 @@ describe('createLocalStore', () => {
     second.close()
   })
 
+  it('keeps the last persisted review first when review timestamps tie across reopen', async () => {
+    const dbPath = await tempDbPath()
+    const first = await createLocalStore({ dbPath })
+    const laterReview = { ...agentReview, id: `${agentReview.id}-later`, requestId: 'later-review-request' }
+    await first.saveAgentReview(agentReview)
+    await first.saveAgentReview(laterReview)
+    first.close()
+    const reopened = await createLocalStore({ dbPath })
+    expect((await reopened.listAgentReviews(agentReview.runId)).map((review) => review.id)).toEqual([laterReview.id, agentReview.id])
+    expect((await reopened.loadState()).agentReviews.map((review) => review.id)).toEqual([laterReview.id, agentReview.id])
+    reopened.close()
+  })
+
   it('recovers clarification revisions, feedback, the active Gate, and failure Trace after a cold reopen', async () => {
     const dbPath = await tempDbPath()
     const createdAt = '2026-08-30T12:00:00.000Z'

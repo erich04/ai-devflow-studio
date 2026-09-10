@@ -1,4 +1,4 @@
-import { useRef, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   buildClarificationReviewBundle,
   canRunCodingAgentOnNode,
@@ -12,6 +12,7 @@ import {
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
   type ManagedCodingWorkspace,
+  type PolicySnapshot,
   type TeamMember,
   type ThemePreference,
   type WorkflowNode,
@@ -108,6 +109,7 @@ export function useDesktopActions(input: {
   gateEnforcementDecision: GateEnforcementDecision | null
   stageAgentExecutorKind?: StageAgentExecutorKind
   applyLocalExecutionState: (state: import('@ai-devflow/shared').LocalExecutionState) => void
+  onRemoteTeamSynced?: () => Promise<PolicySnapshot | null>
 }) {
   const {
     desktopApi,
@@ -124,6 +126,7 @@ export function useDesktopActions(input: {
     canVerifyGitHubDeliveryRevocation = false,
     stageAgentExecutorKind = 'direct-provider',
     applyLocalExecutionState,
+    onRemoteTeamSynced,
   } = input
   const {
     artifacts,
@@ -209,6 +212,12 @@ export function useDesktopActions(input: {
       Date.parse(desktopPairing.expiresAt) <= Date.now(),
   )
   const activeDesktopPairing = desktopPairingExpired ? undefined : desktopPairing
+  const syncInFlight = useRef(false)
+  const reviewInFlight = useRef(false)
+  const [teamSyncFeedback, setTeamSyncFeedback] = useState<{ status: 'success' | 'error'; message: string } | null>(null)
+  useEffect(() => {
+    setTeamSyncFeedback(null)
+  }, [selectedLocalProject?.id, activeDesktopPairing?.projectId])
 
   function samePendingInspectorAction(
     current: PendingInspectorAction | null,
@@ -267,23 +276,31 @@ export function useDesktopActions(input: {
   }
 
   async function syncRemoteTeamState() {
+    if (syncInFlight.current) return
     if (!desktopApi) {
-      setToast('请在 Electron 应用中同步团队状态')
+      const message = '请在 Electron 应用中同步团队状态'
+      setTeamSyncFeedback({ status: 'error', message })
+      setToast(message)
       return
     }
 
     if (!activeDesktopPairing?.organizationId) {
-      setToast('请先 Pair Team Project 后再同步团队远端状态')
+      const message = '请先 Pair Team Project 后再同步团队远端状态'
+      setTeamSyncFeedback({ status: 'error', message })
+      setToast(message)
       return
     }
 
+    syncInFlight.current = true
     setIsSyncingRemote(true)
+    setTeamSyncFeedback(null)
     setToast('正在同步团队远端状态...')
 
     try {
       const snapshot = await desktopApi.loadRemoteSnapshot({
         organizationId: activeDesktopPairing.organizationId,
       })
+      const policy = await onRemoteTeamSynced?.()
       const remoteRuns = snapshot.runs.map(normalizeWorkflowRunProgress)
       const mergedSnapshot = mergeLocalAndRemoteSnapshot({
         localRuns: runs.map(normalizeWorkflowRunProgress),
@@ -318,14 +335,20 @@ export function useDesktopActions(input: {
 
       if (nextRun) {
         setSelectedRunId(nextRun.id)
-        setSelectedNodeId(nextRun.currentNodeId)
-        setActiveView('workbench')
+        setSelectedNodeId((current) => nextRun.nodes.some((node) => node.id === current) ? current : nextRun.currentNodeId)
       }
 
-      setToast('团队远端状态已同步，本地 Run 已保留并重新评估 Gate')
+      const message = policy
+        ? `同步成功 · 策略 v${policy.version} · ${policy.syncedAt}`
+        : '团队远端状态已同步，本地 Run 已保留'
+      setTeamSyncFeedback({ status: 'success', message })
+      setToast(message)
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '同步团队远端状态失败')
+      const message = error instanceof Error ? error.message : '同步团队远端状态失败'
+      setTeamSyncFeedback({ status: 'error', message })
+      setToast(message)
     } finally {
+      syncInFlight.current = false
       setIsSyncingRemote(false)
     }
   }
@@ -692,7 +715,8 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function runKnowledgeReview() {
+  async function runKnowledgeReview(previousReviewId?: string) {
+    if (reviewInFlight.current || blockIfInspectorWriteInFlight()) return
     if (!selectedRun || !selectedNode || !currentUser) {
       return
     }
@@ -706,6 +730,7 @@ export function useDesktopActions(input: {
       return
     }
 
+    reviewInFlight.current = true
     setIsRunningAgentReview(true)
     setToast('基于知识的门禁审查正在生成审查意见...')
 
@@ -717,6 +742,7 @@ export function useDesktopActions(input: {
         requestedBy: currentUser.id,
         runtime: 'electron',
         providerId: selectedAgentProviderId,
+        ...(previousReviewId ? { previousReviewId } : {}),
         ...(runtimeBudgetApprovalId.trim()
           ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
           : {}),
@@ -729,6 +755,7 @@ export function useDesktopActions(input: {
     } catch (error) {
       setToast(error instanceof Error ? error.message : '基于知识的门禁审查运行失败')
     } finally {
+      reviewInFlight.current = false
       setIsRunningAgentReview(false)
     }
   }
@@ -1425,6 +1452,7 @@ export function useDesktopActions(input: {
   return {
     changeThemePreference,
     syncRemoteTeamState,
+    teamSyncFeedback,
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,

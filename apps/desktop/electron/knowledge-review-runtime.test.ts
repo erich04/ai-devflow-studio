@@ -21,6 +21,68 @@ import {
 } from './knowledge-review-runtime'
 
 describe('KnowledgeReviewRuntime', () => {
+  it('shares the Gate execution guard across per-request runtimes for the same store', async () => {
+    const store = new MemoryKnowledgeReviewStore()
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const createRuntime = () => createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks,
+      resolveProviderMetadata: async () => provider,
+      resolveProvider: async () => provider,
+    })
+    const results = await Promise.allSettled([
+      createRuntime().run(reviewInput(provider.id)),
+      createRuntime().run(reviewInput(provider.id)),
+    ])
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+    expect(store.reviews).toHaveLength(1)
+  })
+
+  it.each([false, true])('requires confirmation and rejects replay, including changed review content (%s)', async (contentChanged) => {
+    const subjectArtifacts = structuredClone(artifacts)
+    const store = new MemoryKnowledgeReviewStore(subjectArtifacts)
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const createRuntime = () => createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks,
+      resolveProviderMetadata: async () => provider,
+      resolveProvider: async () => provider,
+    })
+    const first = await createRuntime().run(reviewInput(provider.id))
+    if (contentChanged) {
+      const design = subjectArtifacts.find((artifact) => artifact.id === 'art-design')!
+      design.content += '\n\nRevised acceptance: preserve all unrelated README content.'
+    }
+    await expect(createRuntime().run(reviewInput(provider.id))).rejects.toThrow('重新审查需要确认')
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+    const confirmedInput = { ...reviewInput(provider.id), previousReviewId: first.review.id }
+    await createRuntime().run(confirmedInput)
+    expect(reviewKnowledge).toHaveBeenCalledTimes(2)
+    await expect(createRuntime().run(confirmedInput)).rejects.toThrow('审查记录已更新')
+    expect(reviewKnowledge).toHaveBeenCalledTimes(2)
+    expect(store.reviews).toHaveLength(2)
+  })
+
+  it('retains the saved result after a confirmed rerun fails and permits its confirmed retry', async () => {
+    const store = new MemoryKnowledgeReviewStore()
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const runtime = createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks,
+      resolveProviderMetadata: async () => provider,
+      resolveProvider: async () => provider,
+    })
+    const first = await runtime.run(reviewInput(provider.id))
+    const confirmedInput = { ...reviewInput(provider.id), previousReviewId: first.review.id }
+    reviewKnowledge.mockRejectedValueOnce(new Error('Provider unavailable'))
+    await expect(runtime.run(confirmedInput)).rejects.toThrow('Provider unavailable')
+    expect(store.reviews).toEqual([first.review])
+    await expect(runtime.run(confirmedInput)).resolves.toMatchObject({ review: { providerId: provider.id } })
+    expect(reviewKnowledge).toHaveBeenCalledTimes(3)
+    expect(store.reviews).toHaveLength(2)
+  })
+
   it('calls the provider and persists a review only once for concurrent requests for the same Gate', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const provider = createFakeAgentProvider()
@@ -447,6 +509,10 @@ class MemoryKnowledgeReviewStore implements KnowledgeReviewRuntimeStore {
 
   async listEvents(runId?: string): Promise<AgentEvent[]> {
     return this.events.filter((event) => !runId || event.runId === runId)
+  }
+
+  async listAgentReviews(runId?: string): Promise<AgentReviewResult[]> {
+    return this.reviews.filter((review) => !runId || review.runId === runId).reverse()
   }
 
   async getPolicySnapshot(): Promise<PolicySnapshot | null> {

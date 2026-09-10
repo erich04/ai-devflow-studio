@@ -28,6 +28,7 @@ export type KnowledgeReviewRuntimeStore = {
   listArtifacts(runId?: string): Promise<Artifact[]>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
   listEvents(runId?: string): Promise<AgentEvent[]>
+  listAgentReviews(runId?: string): Promise<AgentReviewResult[]>
   getPolicySnapshot?(projectId: string): Promise<PolicySnapshot | null>
   saveArtifact(artifact: Artifact): Promise<void>
   saveEvent(event: AgentEvent): Promise<void>
@@ -53,6 +54,9 @@ export type KnowledgeReviewRuntime = {
   run(input: RunKnowledgeReviewInput): Promise<RunKnowledgeReviewResult>
 }
 
+// IPC builds a Runtime per request; the execution lease belongs to the shared store.
+const pendingReviewsByStore = new WeakMap<KnowledgeReviewRuntimeStore, Set<string>>()
+
 function blockedMessage(status: string): string {
   if (status === 'requires_lead_approval') {
     return '基于知识的门禁审查在调用 Provider 前被阻断。重试前需要有效的 Lead runtime budget approval。'
@@ -73,7 +77,8 @@ export function createKnowledgeReviewRuntime(
 ): KnowledgeReviewRuntime {
   const now = deps.now ?? (() => new Date().toISOString())
   const createRequestId = deps.createRequestId ?? (() => `review-request-${randomUUID()}`)
-  const pendingReviews = new Set<string>()
+  const pendingReviews = pendingReviewsByStore.get(deps.store) ?? new Set<string>()
+  pendingReviewsByStore.set(deps.store, pendingReviews)
 
   async function persistError(input: RunKnowledgeReviewInput, requestId: string, message: string) {
     const redactedMessage = redactSensitiveText(message).value
@@ -112,6 +117,16 @@ export function createKnowledgeReviewRuntime(
       throw new Error(
         '门禁审查 Provider 尚未配置。运行门禁审查前请保存 Provider Name、Base URL、Model 和 API Key。',
       )
+    }
+
+    const latestReview = (await deps.store.listAgentReviews(input.runId))
+      .filter((review) => review.projectId === input.projectId && review.nodeId === input.nodeId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+    if (latestReview && !input.previousReviewId) {
+      throw new Error('该 Gate 已有审查结果；重新审查需要确认会新增记录并可能产生 Provider 费用。')
+    }
+    if (input.previousReviewId && input.previousReviewId !== latestReview?.id) {
+      throw new Error('审查记录已更新，请查看最新结果并重新确认。')
     }
 
     const providerId = input.providerId

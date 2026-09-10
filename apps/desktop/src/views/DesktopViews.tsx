@@ -1331,9 +1331,13 @@ export function TeamOverview({
   dataOrigin,
   runtimeDataSource,
   selectedRun,
+  selectedProjectId,
   policySnapshot,
   gateEnforcementDecision,
   isLoadingGateEnforcement,
+  onSyncTeam,
+  isSyncingTeam,
+  syncFeedback,
 }: {
   projects: Project[]
   members: TeamMember[]
@@ -1343,28 +1347,32 @@ export function TeamOverview({
   dataOrigin: DataOrigin
   runtimeDataSource: FieldDataSource
   selectedRun: WorkflowRun | undefined
+  selectedProjectId?: string | undefined
   policySnapshot: PolicySnapshot | null
   gateEnforcementDecision: GateEnforcementDecision | null
   isLoadingGateEnforcement: boolean
+  onSyncTeam: () => void
+  isSyncingTeam: boolean
+  syncFeedback: { status: 'success' | 'error'; message: string } | null
 }) {
   const memberSummary = members.length > 0
     ? members.map((member) => `${member.name} ${member.role}`).join(' · ')
     : '未加载团队成员'
   const projectCostById = new Map(projectRollups.map((rollup) => [rollup.key, rollup]))
-  const selectedProject = projects.find((project) => project.id === selectedRun?.projectId)
+  const selectedProject = projects.find((project) => project.id === (selectedProjectId ?? selectedRun?.projectId))
   const selectedProjectLabel = selectedProject?.name ?? '未选择 Team Project'
   const memberTokens = memberRollups.reduce((sum, rollup) => sum + rollup.totalTokens, 0)
   const snapshotSource = policySnapshot?.source ?? gateEnforcementDecision?.policySource ?? 'unavailable'
   const snapshotVersion = policySnapshot?.version ?? gateEnforcementDecision?.policyVersion
   const snapshotStatus = isLoadingGateEnforcement
     ? 'loading'
-    : gateEnforcementDecision?.status ?? 'not loaded'
+    : gateEnforcementDecision?.status ?? (policySnapshot ? 'loaded' : 'not loaded')
   const snapshotTone =
     snapshotStatus === 'pass' || snapshotStatus === 'overridden'
       ? 'good'
       : snapshotStatus === 'warn'
         ? 'warn'
-        : snapshotStatus === 'not loaded'
+        : snapshotStatus === 'not loaded' || snapshotStatus === 'loaded'
           ? 'soft'
           : 'bad'
 
@@ -1407,7 +1415,7 @@ export function TeamOverview({
                 </tr>
               ) : projects.map((project) => {
                 const rollup = projectCostById.get(project.id)
-                const isSelectedProject = project.id === selectedRun?.projectId
+                const isSelectedProject = project.id === selectedProject?.id
 
                 return (
                   <tr key={project.id}>
@@ -1519,7 +1527,14 @@ export function TeamOverview({
                 <li>写入 Event / Trace，说明本机使用了哪一版 policy。</li>
               </ul>
             </div>
-            <button className="ghost-button">同步团队并刷新 snapshot</button>
+            <button className="ghost-button" type="button" onClick={onSyncTeam} disabled={isSyncingTeam}>
+              {isSyncingTeam ? '同步中' : '同步团队并刷新 snapshot'}
+            </button>
+            {syncFeedback ? (
+              <p className="meta" data-testid="team-sync-feedback" role={syncFeedback.status === 'error' ? 'alert' : 'status'}>
+                {syncFeedback.message}
+              </p>
+            ) : null}
             <div className="compact-row">
               <span>Total cost</span>
               <strong>{totalCost}</strong>

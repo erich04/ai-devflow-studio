@@ -810,8 +810,9 @@ export function App() {
   )
   const isSelectedNodeGateLike = selectedNode?.kind === 'gate' || selectedNode?.kind === 'acceptance'
   const gateEnforcement = useGateEnforcement({
-    desktopApi,
+    desktopApi: dataOrigin !== 'seed' ? desktopApi : null,
     isEnabled: dataOrigin !== 'seed' && isSelectedNodeGateLike,
+    projectId: selectedRun?.projectId ?? selectedLocalProject?.id,
     selectedRun,
     selectedNode,
     currentUser,
@@ -829,6 +830,7 @@ export function App() {
   const {
     changeThemePreference,
     syncRemoteTeamState,
+    teamSyncFeedback,
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
@@ -872,6 +874,7 @@ export function App() {
       : {}),
     canVerifyGitHubDeliveryRevocation,
     gateEnforcementDecision: gateEnforcement.decision,
+    onRemoteTeamSynced: gateEnforcement.refresh,
     stageAgentExecutorKind,
     applyLocalExecutionState,
   })
@@ -1045,13 +1048,13 @@ export function App() {
 
   const policyStatus = gateEnforcement.isLoading
     ? 'loading'
-    : gateEnforcement.decision?.status ?? 'not loaded'
+    : gateEnforcement.decision?.status ?? (gateEnforcement.policySnapshot ? 'loaded' : 'not loaded')
   const policyTone =
     policyStatus === 'pass' || policyStatus === 'overridden'
       ? 'good'
       : policyStatus === 'warn'
         ? 'warn'
-        : policyStatus === 'not loaded'
+        : policyStatus === 'not loaded' || policyStatus === 'loaded'
           ? 'soft'
           : 'bad'
   const policySource = gateEnforcement.policySnapshot?.source ?? gateEnforcement.decision?.policySource ?? 'unavailable'
@@ -1479,9 +1482,13 @@ export function App() {
             dataOrigin={dataOrigin}
             runtimeDataSource={runtimeDataSource}
             selectedRun={selectedRun}
+            selectedProjectId={selectedTeamProjectId}
             policySnapshot={gateEnforcement.policySnapshot}
             gateEnforcementDecision={gateEnforcement.decision}
             isLoadingGateEnforcement={gateEnforcement.isLoading}
+            onSyncTeam={() => void syncRemoteTeamState()}
+            isSyncingTeam={isSyncingRemote}
+            syncFeedback={teamSyncFeedback}
           />
         )}
 

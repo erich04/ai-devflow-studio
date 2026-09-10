@@ -454,6 +454,7 @@ export type RunKnowledgeReviewInput = {
   runtime: AgentReviewRuntime
   providerId?: string
   runtimeBudgetApprovalId?: string
+  previousReviewId?: string
 }
 
 export type ListAgentReviewsInput = {
@@ -1627,6 +1628,10 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
   }
   const providerId = value['providerId']
   const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
+  const previousReviewId = value['previousReviewId']
+  if (previousReviewId !== undefined && (typeof previousReviewId !== 'string' || !previousReviewId.trim())) {
+    throw new Error('Invalid previous review confirmation')
+  }
 
   return {
     runId,
@@ -1638,6 +1643,7 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
       ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
       : {}),
+    ...(typeof previousReviewId === 'string' ? { previousReviewId: previousReviewId.trim() } : {}),
   }
 }
 

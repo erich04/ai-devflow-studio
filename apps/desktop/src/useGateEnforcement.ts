@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react'
 import {
   buildRemediationPlan,
   canApproveGate,
@@ -33,6 +33,7 @@ export type GateEnforcementState = {
   overrides: GateOverrideDecision[]
   remediationPlan: RemediationPlan | null
   isLoading: boolean
+  refresh: () => Promise<PolicySnapshot | null>
   canApprove: boolean
   canSaveOverride: boolean
   saveOverride: (reason: string) => Promise<void>
@@ -41,6 +42,7 @@ export type GateEnforcementState = {
 export function useGateEnforcement(input: {
   desktopApi: DevFlowDesktopApi | null
   isEnabled?: boolean
+  projectId?: string | undefined
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
   currentUser: TeamMember | undefined
@@ -71,69 +73,71 @@ export function useGateEnforcement(input: {
     onToast,
   } = input
   const [policySnapshot, setPolicySnapshot] = useState<PolicySnapshot | null>(null)
+  const [snapshotProjectId, setSnapshotProjectId] = useState<string | undefined>()
   const [decision, setDecision] = useState<GateEnforcementDecision | null>(null)
   const [overrides, setOverrides] = useState<GateOverrideDecision[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const projectId = input.projectId ?? selectedRun?.projectId
+  const refreshGeneration = useRef(0)
 
-  useEffect(() => {
-    if (!isEnabled || !desktopApi || !selectedRun || !selectedNode) {
+  const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current
+    setDecision(null)
+    setOverrides([])
+    if (!desktopApi || !projectId) {
       setPolicySnapshot(null)
-      setDecision(null)
-      setOverrides([])
-      return
+      setIsLoading(false)
+      return null
     }
 
-    let disposed = false
     setIsLoading(true)
-    const api = desktopApi
-    const run = selectedRun
-    const node = selectedNode
-
-    async function loadGateEnforcement() {
-      const snapshot = await api.loadEnforcementPolicy({ projectId: run.projectId })
-      const reconciledOverrides = await api.listGateOverrides({ runId: run.id })
-      const evaluated = await api.evaluateGateEnforcement({
-        runId: run.id,
-        nodeId: node.id,
-        projectId: run.projectId,
-      })
-
-      if (disposed) {
-        return
-      }
-
+    try {
+      const snapshot = await desktopApi.loadEnforcementPolicy({ projectId })
+      if (generation !== refreshGeneration.current) return null
       setPolicySnapshot(snapshot)
-      setOverrides(reconciledOverrides)
-      setDecision(evaluated)
-    }
-
-    loadGateEnforcement()
-      .catch((error: unknown) => {
-        if (!disposed) {
-          onToast(error instanceof Error ? error.message : '加载 Gate Enforcement 失败')
-        }
-      })
-      .finally(() => {
-        if (!disposed) {
-          setIsLoading(false)
-        }
-      })
-
-    return () => {
-      disposed = true
+      setSnapshotProjectId(projectId)
+      if (isEnabled && selectedRun && selectedNode) {
+        const [reconciledOverrides, evaluated] = await Promise.all([
+          desktopApi.listGateOverrides({ runId: selectedRun.id }),
+          desktopApi.evaluateGateEnforcement({
+            runId: selectedRun.id,
+            nodeId: selectedNode.id,
+            projectId: selectedRun.projectId,
+          }),
+        ])
+        if (generation !== refreshGeneration.current) return null
+        setOverrides(reconciledOverrides)
+        setDecision(evaluated)
+      }
+      return snapshot
+    } finally {
+      if (generation === refreshGeneration.current) setIsLoading(false)
     }
   }, [
     artifacts.length,
     desktopApi,
     isEnabled,
+    projectId,
     knowledgeContentHash,
     selectedNode?.id,
     selectedRun?.id,
     selectedRun?.projectId,
+    selectedRun?.version,
+    selectedNode?.status,
     agentReviews.length,
     testEvidence.length,
-    onToast,
   ])
+
+  useEffect(() => {
+    let disposed = false
+    void refresh().catch((error: unknown) => {
+      if (!disposed) onToast(error instanceof Error ? error.message : '加载 Gate Enforcement 失败')
+    })
+    return () => {
+      disposed = true
+      refreshGeneration.current += 1
+    }
+  }, [refresh, onToast])
 
   async function saveOverride(reason: string) {
     if (!desktopApi || !selectedRun || !selectedNode || !decision || !currentUser) {
@@ -220,11 +224,12 @@ export function useGateEnforcement(input: {
   }, [agentReviews, decision, governanceChecks, knowledgeReferences, selectedNode, selectedRun, testEvidence])
 
   return {
-    policySnapshot,
-    decision,
+    policySnapshot: snapshotProjectId === projectId ? policySnapshot : null,
+    decision: isEnabled ? decision : null,
     overrides,
     remediationPlan,
     isLoading,
+    refresh,
     canApprove,
     canSaveOverride,
     saveOverride,
