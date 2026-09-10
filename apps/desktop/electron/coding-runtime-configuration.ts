@@ -263,8 +263,8 @@ export async function evaluateCodingRuntimeReadiness(input: {
       'auth_unavailable',
       opencodeAuthReady,
       opencodeAuthReady
-        ? 'OpenCode 本地认证目录可用；credential 仍由 OpenCode 管理。'
-        : 'OpenCode 本地认证目录不可用；不会启动 Provider 调用。',
+        ? '所选 Provider 凭据已解析，可用于托管 OpenCode Runtime。'
+        : '所选 Provider 缺少可用凭据；不会启动 Provider 调用。',
     )
     check(
       checks,
@@ -293,7 +293,7 @@ export async function evaluateCodingRuntimeReadiness(input: {
     providerReady,
     usesOpenCodeProvider
       ? providerReady
-        ? 'OpenCode Provider 与 Model 已由用户确认；Provider credential 由 OpenCode 管理。'
+        ? 'OpenCode Provider 与 Model 已由用户确认，所选 Provider 凭据可用。'
         : '项目尚未确认 OpenCode Provider 与 Model。'
       : providerReady
         ? 'Native Coding Provider metadata 与本地加密 credential 可用。'

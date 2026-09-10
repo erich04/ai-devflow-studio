@@ -44,3 +44,17 @@ clarification bodies stay local.
 - Existing direct-provider Runs remain readable; tracked revisions add exact stale-review checks.
 - Real OpenCode smoke is opt-in. Default tests use a deterministic fake runner and never call a paid
   provider.
+
+## Saved Provider binding (2026-09-10)
+
+When a confirmed project's OpenCode Provider ID exactly matches a DevFlow saved Provider ID,
+Electron Main resolves that credential and endpoint. It supplies a dedicated credential environment
+variable and an inline OpenCode config referencing that variable to the managed child only. The
+credential is not copied to OpenCode's auth file or sent through Renderer IPC. Display names never
+select credentials, credential resolution errors fail closed, and rotation changes the runtime cache
+identity. Providers without an exact saved binding retain their existing OpenCode profile behavior.
+
+Read-only output specifies object-shaped facts and citations. DevFlow derives model identity and
+usage from OpenCode messages, counts tools across the whole session, and computes citation digests
+from local bytes. OpenCode usage is recorded in the stage Trace; monetary aggregation is tracked in
+#81 because an unknown external cost must not be treated as free or priced using an unrelated model.

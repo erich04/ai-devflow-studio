@@ -95,7 +95,7 @@ export type WorkflowArtifactProviderOutput = {
 export function workflowArtifactOutputInstructions(stage: WorkflowArtifactProviderRequest['stage']): string {
   return [
     `Return only valid JSON with title, summary, ${stage === 'design' ? 'content, ' : ''}goals, acceptanceCriteria, nonGoals, openQuestions, assumptions, risks. Do not wrap the JSON in Markdown.`,
-    'All list fields must be arrays of strings.',
+    'The top-level goals, acceptanceCriteria, nonGoals, openQuestions, assumptions and risks fields must be arrays of strings.',
     ...(stage === 'design' ? [
       'The content field is a required non-empty content string containing the complete Markdown design. It is a top-level JSON field, not a list item or a nested object.',
       'The design must explain concrete implementation steps, affected files and scope, verification commands and expected results, delivery and rollback, and remaining risks.',

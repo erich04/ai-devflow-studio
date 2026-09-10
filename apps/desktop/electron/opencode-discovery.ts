@@ -5,6 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import type { CodingRuntimeDiscovery, CodingRuntimeEngineCandidate } from '@ai-devflow/shared'
 import { buildOpencodeRuntimeEnv } from './coding-engine.js'
+import type { OpencodeProviderBinding } from './opencode-provider-binding.js'
 
 const execFileAsync = promisify(execFile)
 const MAX_VERSION_LENGTH = 160
@@ -113,6 +114,7 @@ export async function inspectOpencodeRuntimeProfile(input: {
   providerId: string
   modelId: string
   env?: NodeJS.ProcessEnv
+  providerBinding?: OpencodeProviderBinding | undefined
   deps?: OpencodeProfileProbeDeps
 }): Promise<OpencodeRuntimeProfileReadiness> {
   const providerId = input.providerId.trim()
@@ -123,6 +125,7 @@ export async function inspectOpencodeRuntimeProfile(input: {
   const env = buildOpencodeRuntimeEnv({
     baseEnv: input.env ?? process.env,
     apiKeyEnvName: 'OPENCODE_API_KEY',
+    providerBinding: input.providerBinding,
   })
   const runCommand = input.deps?.runCommand ?? runOpencodeReadinessCommand
   let authOutput = ''
@@ -153,7 +156,7 @@ export async function inspectOpencodeRuntimeProfile(input: {
   const profileAvailable = modelLines.some((line) => line.startsWith(`${providerId}/`))
   const modelAvailable = modelLines.includes(qualifiedModelId)
   const authenticatedProviders = parseAuthenticatedOpencodeProviders(authOutput)
-  const authAvailable = providerId === 'opencode' || authenticatedProviders.has(
+  const authAvailable = input.providerBinding?.providerId === providerId || providerId === 'opencode' || authenticatedProviders.has(
     normalizeProviderIdentity(providerId),
   )
   return { authAvailable, profileAvailable, modelAvailable }
