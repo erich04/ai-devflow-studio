@@ -858,7 +858,6 @@ async function advanceToPr(page, materialized, localProjectId, userId) {
     nodeId: node.id,
     projectId: localProjectId,
     requestedBy: userId,
-    providerId: 'fake-coding-engine',
     userInstruction:
       'Create the one reviewed packaged smoke marker with {"token":""} as an empty redaction canary.',
   })

@@ -96,6 +96,21 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
     expect(smoke).not.toContain("cause: diagnostics.length > 0 ? new Error('Electron emitted diagnostics.') : error")
   })
 
+  it('starts the packaged Coding Agent through the saved main-owned executor configuration', () => {
+    const smoke = readFileSync(
+      'scripts/v15-github-delivery-packaged-smoke.mjs',
+      'utf8',
+    )
+    const startIndex = smoke.indexOf("const coding = await callDesktop(page, 'runCodingAgent', {")
+    const endIndex = smoke.indexOf('\n  })', startIndex)
+    const codingAgentCall = smoke.slice(startIndex, endIndex)
+
+    expect(startIndex).toBeGreaterThan(-1)
+    expect(endIndex).toBeGreaterThan(startIndex)
+    expect(codingAgentCall).toContain('projectId: localProjectId')
+    expect(codingAgentCall).not.toContain('providerId:')
+  })
+
   it('cold-restarts one partial coordination graph without duplicating specialist effects', () => {
     const smoke = readFileSync(
       'scripts/v15-github-delivery-packaged-smoke.mjs',
