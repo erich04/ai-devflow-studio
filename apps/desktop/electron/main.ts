@@ -1,3 +1,4 @@
+import { createProviderOperationGuard, guardProviderCalls } from './provider-operation-guard.js'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import {
@@ -103,6 +104,7 @@ import {
   parseMaterializeWorkRequestInput,
   parseOpenManagedWorktreeInput,
   parseAgentProviderCredentialInput,
+  parseAgentProviderRemovalInput,
   parsePairDesktopInput,
   parseProjectGitStatusInput,
   parseCreateAcceptanceBundleInput,
@@ -337,6 +339,7 @@ const codingEngineAdapter = createCodingEngineAdapterFromEnv(process.env, {
 })
 const compatibilityCodingExecutor = createCodingExecutorCompatibilityAdapter(codingEngineAdapter)
 const codingExecutorPromises = new Map<string, Promise<CodingExecutor>>()
+const providerOperations = createProviderOperationGuard()
 let quitCleanupComplete = false
 let quitCleanupPromise: Promise<void> | undefined
 const repositoryKnowledgeService = createRepositoryKnowledgeService()
@@ -1606,11 +1609,17 @@ async function listAgentProviderConfigs() {
 }
 
 async function resolveAgentProvider(store: LocalStore, providerId: string) {
-  return resolveElectronAgentProvider({
+  const provider = await resolveElectronAgentProvider({
     providerId,
     fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
     credentialSource: store,
     decryptCredential,
+  })
+  return guardProviderCalls(provider, {
+    guard: providerOperations,
+    credentialExists: async () => providerId === 'fake-knowledge-review'
+      ? runtimeFlags.fakeRuntimeEnabled
+      : (await store.listProviderCredentials()).some((item) => item.providerId === providerId),
   })
 }
 
@@ -2530,132 +2539,140 @@ function registerIpcHandlers() {
     if (!run) {
       throw new Error(`Run not found: ${input.runId}`)
     }
-    const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
-    if (!node) {
-      throw new Error(`Run node not found: ${input.nodeId}`)
-    }
-    if (
-      run.currentNodeId !== node.id ||
-      node.kind !== 'agent' ||
-      (node.stage !== 'clarify' && node.stage !== 'design') ||
-      node.status !== 'running'
-    ) {
-      throw new Error('Only the current running clarification or design Agent node can execute')
-    }
-    const [artifacts, events] = await Promise.all([
-      store.listArtifacts(run.id),
-      store.listEvents(run.id),
-    ])
     const executorKind = input.executor ?? 'direct-provider'
-    const actor = resolveTrustedWorkflowActor(
-      run,
-      await store.getDesktopPairingCredential(),
-    )
-    let provider: Awaited<ReturnType<typeof resolveAgentProvider>> | undefined
-    let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
-    if (executorKind === 'direct-provider') {
-      if (!input.providerId) {
-        throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
+    const stageConfiguration = executorKind === 'local-agent'
+      ? await store.getCodingRuntimeConfiguration(run.projectId)
+      : null
+    return providerOperations.use(stageConfiguration?.providerId ?? input.providerId, `Stage ${input.runId}`, async () => {
+      const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+      if (!node) {
+        throw new Error(`Run node not found: ${input.nodeId}`)
       }
-      provider = await resolveAgentProvider(store, input.providerId)
-    } else {
-      if (node.stage !== 'clarify') {
-        throw new Error('Read-only local Agent is authorized only for requirement clarification')
+      if (
+        run.currentNodeId !== node.id ||
+        node.kind !== 'agent' ||
+        (node.stage !== 'clarify' && node.stage !== 'design') ||
+        node.status !== 'running'
+      ) {
+        throw new Error('Only the current running clarification or design Agent node can execute')
       }
-      const [project, configuration] = await Promise.all([
-        store.listProjects().then((projects) => projects.find((candidate) => candidate.id === run.projectId)),
-        store.getCodingRuntimeConfiguration(run.projectId),
+      const [artifacts, events] = await Promise.all([
+        store.listArtifacts(run.id),
+        store.listEvents(run.id),
       ])
-      if (!project || !configuration || configuration.executor !== 'opencode-http') {
-        throw new Error('Read-only local Agent requires a selected repository and an available managed OpenCode runtime')
-      }
-      executor = createReadOnlyLocalStageAgentExecutor({
-        projectId: project.id,
-        projectPath: project.path,
-        binaryPath: configuration.binaryPath,
-        providerId: configuration.providerId,
-        modelId: configuration.modelId,
-        detectedVersion: configuration.detectedVersion,
-        processManager: opencodeProcessManager,
-        providerBinding: await resolveSavedOpencodeProviderBinding({
+      const actor = resolveTrustedWorkflowActor(
+        run,
+        await store.getDesktopPairingCredential(),
+      )
+      let provider: Awaited<ReturnType<typeof resolveAgentProvider>> | undefined
+      let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
+      if (executorKind === 'direct-provider') {
+        if (!input.providerId) {
+          throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
+        }
+        provider = await resolveAgentProvider(store, input.providerId)
+      } else {
+        if (node.stage !== 'clarify') {
+          throw new Error('Read-only local Agent is authorized only for requirement clarification')
+        }
+        const [project, configuration] = await Promise.all([
+          store.listProjects().then((projects) => projects.find((candidate) => candidate.id === run.projectId)),
+          store.getCodingRuntimeConfiguration(run.projectId),
+        ])
+        if (configuration?.version !== stageConfiguration?.version) {
+          throw new Error('Coding 配置已变化，请重新执行澄清。')
+        }
+        if (!project || !configuration || configuration.executor !== 'opencode-http') {
+          throw new Error('Read-only local Agent requires a selected repository and an available managed OpenCode runtime')
+        }
+        executor = createReadOnlyLocalStageAgentExecutor({
+          projectId: project.id,
+          projectPath: project.path,
+          binaryPath: configuration.binaryPath,
           providerId: configuration.providerId,
           modelId: configuration.modelId,
-          credentialSource: store,
-          decryptCredential,
-        }),
-        runtimeEnv: buildOpencodeRuntimeEnv({
-          baseEnv: process.env,
-          apiKeyEnvName: 'OPENCODE_API_KEY',
-        }),
-      })
-    }
-    let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>>
-    try {
-      generated = await runWorkflowStageAgent({
-        run,
-        node,
-        artifacts,
-        ...(provider ? { provider } : {}),
-        ...(executor ? { executor } : {}),
-        requestedBy: actor.userId,
-        runtime: 'electron',
-      })
-    } catch (error) {
-      return recordStageAgentFailure({
-        store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
-        sequence: events.length + 1, error,
-      })
-    }
-    const completedAt = generated.artifact.updatedAt
-    const event: AgentEvent = {
-      id: `event-${generated.artifact.id}`,
-      runId: run.id,
-      nodeId: node.id,
-      sequence: events.length + 1,
-      kind: 'thinking',
-      message: `${actor.userName} generated ${generated.artifact.title}. Source: ${generated.source === 'local_agent' ? 'read-only local Agent' : generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
-      timestamp: completedAt,
-      ...(generated.artifact.clarificationRevision
-        ? {
-            clarificationAudit: {
-              version: 1 as const,
-              action: 'revision_generated' as const,
-              artifactId: generated.artifact.id,
-              revision: generated.artifact.clarificationRevision.revision,
-              revisionDigest: generated.artifact.clarificationRevision.revisionDigest,
-              actorId: actor.userId,
-            },
-          }
-        : {}),
-    }
-    const superseded = generated.artifact.kind === 'clarification'
-      ? markClarificationRevisionsSuperseded(artifacts, generated.artifact.id)
-          .filter((artifact, index) => artifact !== artifacts[index])
-      : []
-    const completed = await executeWorkflowCommandOrThrow(store, {
-      runId: run.id,
-      expectedRunUpdatedAt: run.updatedAt,
-      command: {
-        type: 'complete_agent',
+          detectedVersion: configuration.detectedVersion,
+          processManager: opencodeProcessManager,
+          providerBinding: await resolveSavedOpencodeProviderBinding({
+            providerId: configuration.providerId,
+            modelId: configuration.modelId,
+            credentialSource: store,
+            decryptCredential,
+          }),
+          runtimeEnv: buildOpencodeRuntimeEnv({
+            baseEnv: process.env,
+            apiKeyEnvName: 'OPENCODE_API_KEY',
+          }),
+        })
+      }
+      let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>>
+      try {
+        generated = await runWorkflowStageAgent({
+          run,
+          node,
+          artifacts,
+          ...(provider ? { provider } : {}),
+          ...(executor ? { executor } : {}),
+          requestedBy: actor.userId,
+          runtime: 'electron',
+        })
+      } catch (error) {
+        return recordStageAgentFailure({
+          store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
+          sequence: events.length + 1, error,
+        })
+      }
+      const completedAt = generated.artifact.updatedAt
+      const event: AgentEvent = {
+        id: `event-${generated.artifact.id}`,
+        runId: run.id,
         nodeId: node.id,
-        artifactId: generated.artifact.id,
-      },
-      candidates: {
-        artifacts: [...superseded, generated.artifact],
-        events: [event],
-        agentTraces: [generated.trace],
-        ...(generated.tokenUsage ? { agentTokenUsage: [generated.tokenUsage] } : {}),
-      },
-      now: completedAt,
-    })
-    wakeRemoteSyncOutbox()
+        sequence: events.length + 1,
+        kind: 'thinking',
+        message: `${actor.userName} generated ${generated.artifact.title}. Source: ${generated.source === 'local_agent' ? 'read-only local Agent' : generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
+        timestamp: completedAt,
+        ...(generated.artifact.clarificationRevision
+          ? {
+              clarificationAudit: {
+                version: 1 as const,
+                action: 'revision_generated' as const,
+                artifactId: generated.artifact.id,
+                revision: generated.artifact.clarificationRevision.revision,
+                revisionDigest: generated.artifact.clarificationRevision.revisionDigest,
+                actorId: actor.userId,
+              },
+            }
+          : {}),
+      }
+      const superseded = generated.artifact.kind === 'clarification'
+        ? markClarificationRevisionsSuperseded(artifacts, generated.artifact.id)
+            .filter((artifact, index) => artifact !== artifacts[index])
+        : []
+      const completed = await executeWorkflowCommandOrThrow(store, {
+        runId: run.id,
+        expectedRunUpdatedAt: run.updatedAt,
+        command: {
+          type: 'complete_agent',
+          nodeId: node.id,
+          artifactId: generated.artifact.id,
+        },
+        candidates: {
+          artifacts: [...superseded, generated.artifact],
+          events: [event],
+          agentTraces: [generated.trace],
+          ...(generated.tokenUsage ? { agentTokenUsage: [generated.tokenUsage] } : {}),
+        },
+        now: completedAt,
+      })
+      wakeRemoteSyncOutbox()
 
-    return {
-      run: completed.run,
-      artifact: generated.artifact,
-      event,
-      state: await store.loadState(),
-    }
+      return {
+        run: completed.run,
+        artifact: generated.artifact,
+        event,
+        state: await store.loadState(),
+      }
+    })
   })
 
   ipcMain.handle(ipcChannels.requestClarificationChanges, async (_, payload: unknown) => {
@@ -3121,23 +3138,50 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.saveAgentProviderCredential, async (_, payload: unknown) => {
     const input = parseAgentProviderCredentialInput(payload)
-    const store = await getStore()
-    const providers = listElectronAgentProviderConfigs({
-      credentials: await store.listProviderCredentials(),
-      fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
-    })
-    const metadata = createElectronAgentProviderCredentialMetadata({
-      name: input.name,
-      providers,
-      ...(input.providerId ? { providerId: input.providerId } : {}),
-      model: input.model,
-      ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
-      maskedCredential: maskCredential(input.apiKey),
-      updatedAt: new Date().toISOString(),
-      randomValue: randomUUID(),
-    })
+    return providerOperations.use(input.providerId, 'Provider configuration', async () => {
+      const store = await getStore()
+      const providers = listElectronAgentProviderConfigs({
+        credentials: await store.listProviderCredentials(),
+        fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
+      })
+      const metadata = createElectronAgentProviderCredentialMetadata({
+        name: input.name,
+        providers,
+        ...(input.providerId ? { providerId: input.providerId } : {}),
+        model: input.model,
+        ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+        maskedCredential: maskCredential(input.apiKey),
+        updatedAt: new Date().toISOString(),
+        randomValue: randomUUID(),
+      })
 
-    return store.saveProviderCredential(metadata, encryptCredential(input.apiKey))
+      return store.saveProviderCredential(metadata, encryptCredential(input.apiKey))
+    })
+  })
+
+  ipcMain.handle(ipcChannels.inspectAgentProviderRemoval, async (_, payload: unknown) => {
+    const { providerId } = parseAgentProviderRemovalInput(payload)
+    const check = await (await getStore()).inspectProviderRemoval(providerId)
+    return { ...check, references: [...check.references, ...providerOperations.references(providerId)] }
+  })
+
+  ipcMain.handle(ipcChannels.removeAgentProviderCredential, async (_, payload: unknown) => {
+    const { providerId, expectedUpdatedAt } = parseAgentProviderRemovalInput(payload, true)
+    return providerOperations.remove(providerId, async () => {
+      const store = await getStore()
+      const activeReferences = providerOperations.references(providerId)
+      if (activeReferences.length > 0) {
+        const check = await store.inspectProviderRemoval(providerId)
+        return { status: 'blocked', check: { ...check, references: [...check.references, ...activeReferences] } }
+      }
+      const result = await store.removeProviderCredential(providerId, expectedUpdatedAt!)
+      if (result.status === 'deleted') {
+        // Remove cached executors that could retain the deleted credential in memory.
+        codingExecutorPromises.clear()
+        broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState())
+      }
+      return result
+    })
   })
 
   ipcMain.handle(ipcChannels.listAgentReviews, async (_, payload: unknown) => {
@@ -3159,57 +3203,59 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.saveCodingRuntimeConfiguration, async (_, payload: unknown) => {
     const input = parseSaveCodingRuntimeConfigurationInput(payload)
-    const store = await getStore()
-    await findProject(input.projectId)
-    const current = await store.getCodingRuntimeConfiguration(input.projectId)
-    let trustedOpencodeCandidate: { binaryPath: string; version: string } | undefined
-    if (input.executor === 'native-model') {
-      const [metadata, encryptedSecret] = await Promise.all([
-        store.listProviderCredentials().then((credentials) =>
-          credentials.find((candidate) => candidate.providerId === input.providerId),
-        ),
-        store.getProviderEncryptedSecret(input.providerId),
-      ])
-      if (!metadata || !encryptedSecret) {
-        throw new Error(`Coding Provider credential is unavailable: ${input.providerId}`)
+    return providerOperations.use(input.providerId, `Coding configuration ${input.projectId}`, async () => {
+      const store = await getStore()
+      await findProject(input.projectId)
+      const current = await store.getCodingRuntimeConfiguration(input.projectId)
+      let trustedOpencodeCandidate: { binaryPath: string; version: string } | undefined
+      if (input.executor === 'native-model') {
+        const [metadata, encryptedSecret] = await Promise.all([
+          store.listProviderCredentials().then((credentials) =>
+            credentials.find((candidate) => candidate.providerId === input.providerId),
+          ),
+          store.getProviderEncryptedSecret(input.providerId),
+        ])
+        if (!metadata || !encryptedSecret) {
+          throw new Error(`Coding Provider credential is unavailable: ${input.providerId}`)
+        }
+      } else {
+        const discovery = await detectCodingRuntimeEngines({ projectId: input.projectId })
+        const candidate = discovery.candidates[0]
+        if (
+          candidate?.status !== 'available' ||
+          candidate.binaryPath !== input.binaryPath ||
+          candidate.version !== input.detectedVersion
+        ) {
+          throw new Error('OpenCode confirmation is stale; detect the local engine again')
+        }
+        trustedOpencodeCandidate = {
+          binaryPath: candidate.binaryPath,
+          version: candidate.version,
+        }
       }
-    } else {
-      const discovery = await detectCodingRuntimeEngines({ projectId: input.projectId })
-      const candidate = discovery.candidates[0]
-      if (
-        candidate?.status !== 'available' ||
-        candidate.binaryPath !== input.binaryPath ||
-        candidate.version !== input.detectedVersion
-      ) {
-        throw new Error('OpenCode confirmation is stale; detect the local engine again')
+      await opencodeProcessManager.stopProject(input.projectId)
+      const commonConfiguration = {
+        projectId: input.projectId,
+        providerId: input.providerId,
+        version: (current?.version ?? 0) + 1,
+        updatedAt: new Date().toISOString(),
       }
-      trustedOpencodeCandidate = {
-        binaryPath: candidate.binaryPath,
-        version: candidate.version,
+      const configuration = await store.saveCodingRuntimeConfiguration(
+        input.executor === 'native-model'
+          ? { ...commonConfiguration, executor: 'native-model' }
+          : {
+              ...commonConfiguration,
+              executor: 'opencode-http',
+              binaryPath: trustedOpencodeCandidate!.binaryPath,
+              modelId: input.modelId,
+              detectedVersion: trustedOpencodeCandidate!.version,
+            },
+      )
+      for (const key of codingExecutorPromises.keys()) {
+        if (key.startsWith(`${input.projectId}:`)) codingExecutorPromises.delete(key)
       }
-    }
-    await opencodeProcessManager.stopProject(input.projectId)
-    const commonConfiguration = {
-      projectId: input.projectId,
-      providerId: input.providerId,
-      version: (current?.version ?? 0) + 1,
-      updatedAt: new Date().toISOString(),
-    }
-    const configuration = await store.saveCodingRuntimeConfiguration(
-      input.executor === 'native-model'
-        ? { ...commonConfiguration, executor: 'native-model' }
-        : {
-            ...commonConfiguration,
-            executor: 'opencode-http',
-            binaryPath: trustedOpencodeCandidate!.binaryPath,
-            modelId: input.modelId,
-            detectedVersion: trustedOpencodeCandidate!.version,
-          },
-    )
-    for (const key of codingExecutorPromises.keys()) {
-      if (key.startsWith(`${input.projectId}:`)) codingExecutorPromises.delete(key)
-    }
-    return configuration
+      return configuration
+    })
   })
 
   ipcMain.handle(ipcChannels.detectCodingRuntimeEngines, async (_, payload: unknown) => {
@@ -3421,11 +3467,13 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
     const input = parseRunKnowledgeReviewInput(payload)
-    const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
-    const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot)
-    const result = await runtime.run(input)
-    wakeRemoteSyncOutbox()
-    return result
+    return providerOperations.use(input.providerId, `Review ${input.runId}`, async () => {
+      const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
+      const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot)
+      const result = await runtime.run(input)
+      wakeRemoteSyncOutbox()
+      return result
+    })
   })
 }
 

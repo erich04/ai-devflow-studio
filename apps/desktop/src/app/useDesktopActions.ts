@@ -705,10 +705,16 @@ export function useDesktopActions(input: {
         model,
         ...(baseUrl ? { baseUrl } : {}),
       })
+      setProviderKeyDraft('')
       const providers = await desktopApi.listAgentProviders()
       setAgentProviders(mergeById(providers, [reviewProviderFromMetadata(metadata)]))
       setSelectedAgentProviderId(metadata.providerId)
-      setProviderKeyDraft('')
+      try {
+        await desktopApi.saveSettings({ selectedAgentProviderId: metadata.providerId })
+      } catch {
+        setToast('Provider 已保存并在本次选中，但未能保存选择偏好；重启后请重新选择。')
+        return
+      }
       setToast(`已保存并选择 Provider：${reviewProviderFromMetadata(metadata).name} · ${metadata.maskedCredential}`)
     } catch (error) {
       setToast(error instanceof Error ? error.message : '保存 Agent Provider 失败')

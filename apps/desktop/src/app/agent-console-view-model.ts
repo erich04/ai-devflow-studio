@@ -150,7 +150,7 @@ export type BuildAgentConsoleViewModelInput = {
 }
 
 export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInput): AgentConsoleViewModel {
-  const selectedProvider = input.providers.find((provider) => provider.id === input.selectedProviderId) ?? input.providers[0]
+  const selectedProvider = input.providers.find((provider) => provider.id === input.selectedProviderId)
   const providerDataSource = buildAgentProviderDataSource(selectedProvider)
   const currentTarget = buildCurrentTarget(input.selectedRun, input.selectedNode)
   const primaryAction = buildPrimaryAction({

@@ -565,6 +565,25 @@ export type ProviderCredentialMetadata = {
   updatedAt: string
 }
 
+export type ProviderRemovalReference = {
+  kind: 'coding_configuration' | 'coding_run' | 'active_request'
+  id: string
+  label?: string
+  projectId?: string
+  remediation: string
+}
+
+export type ProviderRemovalCheck = {
+  providerId: string
+  credential: ProviderCredentialMetadata | null
+  references: ProviderRemovalReference[]
+  historicalRecordCount: number
+}
+
+export type ProviderRemovalResult =
+  | { status: 'deleted'; providerId: string }
+  | { status: 'blocked' | 'changed' | 'not_found'; check: ProviderRemovalCheck }
+
 export type AgentProviderUsage = {
   inputTokens?: number
   outputTokens?: number
@@ -1357,6 +1376,8 @@ export type DataOrigin = 'seed' | 'local' | 'remote' | 'adapter'
 
 export type LocalSettings = {
   themePreference: ThemePreference
+  /** An explicit empty value preserves the user's unselected Provider state. */
+  selectedAgentProviderId?: string
 }
 
 export type LocalExecutionState = {

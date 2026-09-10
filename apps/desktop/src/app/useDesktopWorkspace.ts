@@ -381,6 +381,9 @@ export function useDesktopWorkspace(input: {
   function applyLocalExecutionState(state: LocalExecutionState) {
     setLocalProjects(state.projects)
     setThemePreference(state.settings.themePreference)
+    if (state.settings.selectedAgentProviderId !== undefined) {
+      setSelectedAgentProviderId(state.settings.selectedAgentProviderId)
+    }
     setHasLoadedLocalState(true)
     if (state.projects[0] && !selectedLocalProjectIdRef.current) {
       setSelectedLocalProjectId(state.projects[0].id)
@@ -504,9 +507,8 @@ export function useDesktopWorkspace(input: {
 
     let disposed = false
 
-    desktopApi
-      .loadState()
-      .then((state) => {
+    const initialState = desktopApi.loadState()
+    initialState.then((state) => {
         if (disposed) {
           return
         }
@@ -518,16 +520,17 @@ export function useDesktopWorkspace(input: {
         setToast(error instanceof Error ? error.message : '加载本地状态失败')
       })
 
-    desktopApi
-      .listAgentProviders()
-      .then((providers) => {
+    Promise.all([desktopApi.listAgentProviders(), initialState])
+      .then(([providers, state]) => {
         if (disposed) {
           return
         }
 
         setAgentProviders(providers)
         setSelectedAgentProviderId((current) =>
-          providers.some((provider) => provider.id === current) ? current : (providers[0]?.id ?? ''),
+          state.settings.selectedAgentProviderId !== undefined
+            ? (providers.some((provider) => provider.id === state.settings.selectedAgentProviderId) ? state.settings.selectedAgentProviderId : '')
+            : providers.some((provider) => provider.id === current) ? current : (providers[0]?.id ?? ''),
         )
       })
       .catch((error: unknown) => {

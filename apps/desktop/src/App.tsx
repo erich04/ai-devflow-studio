@@ -1531,7 +1531,15 @@ export function App() {
             requestedBy={currentUser?.id ?? 'local-user'}
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}
-            onProviderChange={setSelectedAgentProviderId}
+            onProviderChange={(providerId) => {
+              setSelectedAgentProviderId(providerId)
+              void desktopApi?.saveSettings({ selectedAgentProviderId: providerId }).catch(() => setToast('Provider 选择保存失败，请重新选择。'))
+            }}
+            onProviderRemoved={(providerId) => {
+              setAgentProviders((providers) => providers.filter((item) => item.id !== providerId))
+              setSelectedAgentProviderId('')
+              setToast('已删除本机 Provider 配置和凭据；当前未选择 Provider。')
+            }}
             providerNameDraft={providerNameDraft}
             onProviderNameDraftChange={setProviderNameDraft}
             providerBaseUrlDraft={providerBaseUrlDraft}

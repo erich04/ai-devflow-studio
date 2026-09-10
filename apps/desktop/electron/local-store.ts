@@ -1,4 +1,6 @@
 import { existsSync } from 'node:fs'
+import { inspectStoredProviderRemoval } from './provider-credential-store'
+import type { ProviderRemovalCheck, ProviderRemovalResult } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -1070,6 +1072,8 @@ export type LocalStore = {
   ): Promise<ProviderCredentialMetadata>
   listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
   getProviderEncryptedSecret(providerId: string): Promise<string | null>
+  inspectProviderRemoval(providerId: string): Promise<ProviderRemovalCheck>
+  removeProviderCredential(providerId: string, expectedUpdatedAt: string): Promise<ProviderRemovalResult>
   saveDesktopPairingCredential(
     credential: DesktopPairingCredential,
     encryptedToken: string,
@@ -13124,6 +13128,29 @@ class SqlJsLocalStore implements LocalStore {
     return typeof value === 'string' ? value : null
   }
 
+  async inspectProviderRemoval(providerId: string): Promise<ProviderRemovalCheck> {
+    return inspectStoredProviderRemoval(this.db, providerId)
+  }
+
+  async removeProviderCredential(providerId: string, expectedUpdatedAt: string): Promise<ProviderRemovalResult> {
+    // Checked inside the durable mutation queue, immediately before deleting.
+    const check = inspectStoredProviderRemoval(this.db, providerId)
+    if (!check.credential) return { status: 'not_found', check }
+    if (check.credential.updatedAt !== expectedUpdatedAt) return { status: 'changed', check }
+    if (check.references.length > 0) return { status: 'blocked', check }
+    const settings = await this.getSettings()
+    this.db.run('pragma secure_delete = on')
+    this.db.run('delete from provider_credentials where provider_id = ?', [providerId])
+    if (!settings.selectedAgentProviderId || settings.selectedAgentProviderId === providerId) {
+      this.db.run(`insert into local_settings (key, json, updated_at) values ('settings', ?, ?)
+        on conflict(key) do update set json = excluded.json, updated_at = excluded.updated_at`, [
+        JSON.stringify({ ...settings, selectedAgentProviderId: '' }), new Date().toISOString(),
+      ])
+    }
+    await this.persist()
+    return { status: 'deleted', providerId }
+  }
+
   async saveDesktopPairingCredential(
     credential: DesktopPairingCredential,
     encryptedToken: string,
@@ -13659,6 +13686,8 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   saveProviderCredential: 'durable',
   listProviderCredentials: 'direct',
   getProviderEncryptedSecret: 'direct',
+  inspectProviderRemoval: 'direct',
+  removeProviderCredential: 'durable',
   saveDesktopPairingCredential: 'durable',
   getDesktopPairingCredential: 'direct',
   getDesktopPairingEncryptedToken: 'direct',

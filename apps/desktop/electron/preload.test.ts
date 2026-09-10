@@ -20,6 +20,8 @@ vi.mock('electron', () => ({
 await import('./preload')
 
 type ExposedDesktopApi = {
+  inspectAgentProviderRemoval: (input: { providerId: string }) => Promise<unknown>
+  removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<unknown>
   loadDataProfileDiagnostics: () => Promise<unknown>
   startAgentRuntime: (input: {
     runId: string
@@ -532,5 +534,17 @@ describe('Electron preload remote sync operator surface', () => {
     expect(JSON.stringify(input)).not.toMatch(
       /runId|teamProjectId|organizationId|title|creatorId|branchName|idempotency|pairing|token/i,
     )
+  })
+})
+
+
+describe('Provider removal preload commands', () => {
+  it('keeps inspection separate from confirmed deletion and forwards the exact provider revision', async () => {
+    const inspect = { providerId: 'qa-provider' }
+    await exposedApi.inspectAgentProviderRemoval(inspect)
+    expect(electron.invoke).toHaveBeenLastCalledWith(ipcChannels.inspectAgentProviderRemoval, inspect)
+    const remove = { ...inspect, expectedUpdatedAt: '2026-09-10T12:00:00.000Z' }
+    await exposedApi.removeAgentProviderCredential(remove)
+    expect(electron.invoke).toHaveBeenLastCalledWith(ipcChannels.removeAgentProviderCredential, remove)
   })
 })

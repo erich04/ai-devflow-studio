@@ -1,3 +1,4 @@
+import { ProviderRemovalDialog } from './ProviderRemovalDialog'
 import { ArrowLeft, Bot, CheckCircle2, Code2, FolderOpen, Save, Settings2, TestTube2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -47,6 +48,7 @@ export function AgentWorkbenchView({
   providers,
   selectedProviderId,
   onProviderChange,
+  onProviderRemoved,
   providerNameDraft,
   onProviderNameDraftChange,
   providerBaseUrlDraft,
@@ -104,6 +106,7 @@ export function AgentWorkbenchView({
   providers: AgentProviderConfig[]
   selectedProviderId: string
   onProviderChange: (providerId: string) => void
+  onProviderRemoved: (providerId: string) => void
   providerNameDraft: string
   onProviderNameDraftChange: (value: string) => void
   providerBaseUrlDraft: string
@@ -156,6 +159,7 @@ export function AgentWorkbenchView({
   const [codingConfiguration, setCodingConfiguration] = useState<CodingRuntimeConfiguration | null>(null)
   const [codingExecutor, setCodingExecutor] = useState<'native-model' | 'opencode-http'>('native-model')
   const [codingProviderId, setCodingProviderId] = useState('')
+  const [providerRemovalTarget, setProviderRemovalTarget] = useState<AgentProviderConfig | null>(null)
   const [codingDiscovery, setCodingDiscovery] = useState<CodingRuntimeDiscovery | null>(null)
   const [opencodeProviderId, setOpencodeProviderId] = useState('openai')
   const [opencodeModelId, setOpencodeModelId] = useState('gpt-4.1-mini')
@@ -1048,23 +1052,25 @@ export function AgentWorkbenchView({
                   </code>
                 </div>
               ) : (
-                <p className="empty-note">当前没有选中的 Agent Provider。请在右侧新增并保存一个 Provider。</p>
+                <p className="empty-note">当前未选择 Agent Provider。请选择已保存的 Provider，或在右侧新增。</p>
               )}
               {providers.length > 0 ? (
-                <label className="runtime-provider-picker">
-                  使用已保存 Provider
-                  <select
-                    aria-label="Saved Agent Provider"
-                    value={selectedProviderId}
-                    onChange={(event) => onProviderChange(event.target.value)}
-                  >
-                    {providers.map((provider) => (
-                      <option key={provider.id} value={provider.id}>
-                        {provider.name} · {provider.model}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                <div className="provider-picker-controls">
+                  <label className="runtime-provider-picker">
+                    使用已保存 Provider
+                    <select aria-label="Saved Agent Provider" value={selectedProviderId}
+                      onChange={(event) => onProviderChange(event.target.value)}>
+                      <option value="">未选择 Provider</option>
+                      {providers.map((provider) => (
+                        <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="ghost-button" aria-label="管理已保存 Provider" disabled={!desktopApi || !selectedProviderId}
+                    onClick={() => setProviderRemovalTarget(providers.find((item) => item.id === selectedProviderId) ?? null)}>
+                    <Settings2 size={16} />管理
+                  </button>
+                </div>
               ) : null}
               <div className="agent-fact-grid">
                 {viewModel.runtimeSettings.fields.map((field) => (
@@ -1126,6 +1132,15 @@ export function AgentWorkbenchView({
             </article>
           </div>
         </details>
+        {providerRemovalTarget && desktopApi ? <ProviderRemovalDialog
+          provider={providerRemovalTarget} api={desktopApi}
+          onCancel={() => setProviderRemovalTarget(null)}
+          onDeleted={(providerId) => {
+            onProviderRemoved(providerId)
+            if (codingProviderId === providerId) setCodingProviderId('')
+            setProviderRemovalTarget(null)
+          }}
+        /> : null}
       </div>
     </section>
   )

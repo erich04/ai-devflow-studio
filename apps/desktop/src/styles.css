@@ -4572,3 +4572,25 @@ code {
   min-height: 88px;
   resize: vertical;
 }
+
+
+.provider-picker-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+
+.provider-picker-controls .runtime-provider-picker { flex: 1 1 220px; min-width: 0; }
+.provider-picker-controls select { width: 100%; min-width: 0; }
+.provider-picker-controls > button { flex: 0 0 auto; min-height: 36px; }
+.provider-removal-modal { max-height: calc(100vh - 40px); overflow-y: auto; }
+.provider-removal-modal dl { display: grid; gap: 8px; }
+.provider-removal-modal dl > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 8px; }
+.provider-removal-modal dt { color: var(--text-muted); }
+.provider-removal-modal dd { margin: 0; overflow-wrap: anywhere; }
+.provider-removal-modal p { overflow-wrap: anywhere; }
+.provider-removal-references { padding-left: 22px; }
+.provider-removal-references code { overflow-wrap: anywhere; }
+
+.provider-removal-modal [role="alert"] { color: var(--danger); }
