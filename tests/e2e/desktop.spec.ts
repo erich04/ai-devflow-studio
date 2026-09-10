@@ -1203,7 +1203,7 @@ test.describe('AI DevFlow desktop workbench', () => {
               effectivePolicy: {
                 ...snapshot.effectivePolicy,
                 rules: Array.from({ length: 10 }, (_, index) => ({
-                  ruleKey: `testing_standard_rule_${index}`, target: 'testing_standard', action: 'warn', source: 'organization',
+                    ruleKey: `governance_check:testing_standard:needs_evidence_${index}`, target: 'governance_check', action: 'warn', source: 'organization',
                 })),
               },
             } as typeof snapshot
@@ -1212,11 +1212,25 @@ test.describe('AI DevFlow desktop workbench', () => {
         await page.goto('/')
         await page.getByRole('button', { name: 'Team Overview', exact: true }).click()
         const team = page.getByTestId('team-overview')
-        await expect(team.getByText('testing_standard_rule_9', { exact: true })).toBeVisible()
+        await expect(team.getByText('governance_check:testing_standard:needs_evidence_9', { exact: true })).toBeVisible()
+        await expect.poll(() => team.locator('.policy-row strong').evaluateAll((elements) =>
+          elements.every((element) => element.scrollWidth <= element.clientWidth),
+        )).toBe(true)
         const box = (await team.boundingBox())!
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+        const syncButton = team.getByRole('button', { name: '同步团队并刷新 snapshot' })
+        await expect.poll(async () => {
+          const reachable = await syncButton.evaluate((element) => {
+            const button = element.getBoundingClientRect()
+            const parent = element.closest('.team-page')!.getBoundingClientRect()
+            return button.top >= parent.top && button.bottom <= parent.bottom
+          })
+          if (!reachable) await page.mouse.wheel(0, 240)
+          return reachable
+        }).toBe(true)
+        await expect(syncButton).toBeInViewport()
         await page.mouse.wheel(0, 3000)
-        await expect(team.getByRole('button', { name: '同步团队并刷新 snapshot' })).toBeInViewport()
+        await expect(team.getByRole('button', { name: '保存 Team Policy 草稿' })).toBeInViewport()
         await expect.poll(() => team.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
       })
 

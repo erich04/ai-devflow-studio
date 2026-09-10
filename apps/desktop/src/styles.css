@@ -3934,6 +3934,11 @@ code {
   grid-template-columns: 130px minmax(0, 1fr) auto;
 }
 
+.policy-row > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .policy-row.header {
   min-height: 46px;
   background: #f7f7f7;
