@@ -238,8 +238,8 @@ export async function runTeamMigrations(
       migration_history_table: string | null
     }>(`
       SELECT
-        to_regclass('public.schema_meta')::text AS schema_meta_table,
-        to_regclass('public.${MIGRATION_HISTORY_TABLE}')::text AS migration_history_table
+        to_regclass('schema_meta')::text AS schema_meta_table,
+        to_regclass('${MIGRATION_HISTORY_TABLE}')::text AS migration_history_table
     `)
 
     const appliedVersions: number[] = []
