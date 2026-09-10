@@ -281,24 +281,27 @@ export function PairingCodePanel({ projectId, projectName, subject }: PairingCod
       {visibleState.pairingCode ? (
         <div className="pairing-code-result">
           <code aria-label={`Desktop pairing code for ${projectId}`}>{visibleState.pairingCode.code}</code>
-          <button
-            type="button"
-            onClick={() => void copyPairingCode()}
-            disabled={visibleCopyState.status === 'copying'}
-          >
-            {visibleCopyState.status === 'copying'
-              ? '复制中...'
-              : visibleCopyState.status === 'copied'
-                ? '已复制'
-                : '复制配对码'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void revokePairingCode()}
-            disabled={visibleState.status === 'revoking'}
-          >
-            {visibleState.status === 'revoking' ? '撤销中...' : '撤销配对码'}
-          </button>
+          <div className="pairing-code-actions">
+            <button
+              type="button"
+              onClick={() => void copyPairingCode()}
+              disabled={visibleCopyState.status === 'copying' || visibleState.status === 'revoking'}
+            >
+              {visibleCopyState.status === 'copying'
+                ? '复制中...'
+                : visibleCopyState.status === 'copied'
+                  ? '已复制'
+                  : '复制配对码'}
+            </button>
+            <button
+              type="button"
+              className="pairing-code-revoke"
+              onClick={() => void revokePairingCode()}
+              disabled={visibleState.status === 'revoking'}
+            >
+              {visibleState.status === 'revoking' ? '撤销中...' : '撤销配对码'}
+            </button>
+          </div>
         </div>
       ) : null}
       {visibleState.message ? <small>{visibleState.message}</small> : null}

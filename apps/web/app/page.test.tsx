@@ -52,6 +52,21 @@ const mockedFetchGitHubBinding = vi.mocked(fetchGitHubRepositoryBinding)
 const mockedEvaluateGateCommandSnapshot = vi.mocked(evaluateGateCommandSnapshot)
 const organizationPolicy = createWarnOnlyDefaultPolicy({ organizationId: 'org-demo' })
 
+it('shows the authoritative policy and one actionable policy control', async () => {
+  mockedFetchTeamOverview.mockResolvedValue(overview)
+  const { container } = render(await Page({ searchParams: Promise.resolve({ projectId: 'p-remote' }) }))
+  const policy = container.querySelector('#policy')!
+  expect(policy.textContent).toContain(organizationPolicy.name)
+  expect(policy.querySelector('a[href="#policy"]')).toBeNull()
+  expect(screen.getByRole('button', { name: 'Apply recommended enforcement' })).toBeInTheDocument()
+})
+
+it('offers the saved system, light, and dark theme preference', async () => {
+  mockedFetchTeamOverview.mockResolvedValue(overview)
+  render(await Page({}))
+  expect(screen.getByRole('combobox', { name: '颜色主题' })).toHaveValue('system')
+})
+
 const overview: TeamOverviewResponse = {
   projects: [
     {

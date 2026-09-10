@@ -45,7 +45,7 @@ describe('browser logout proxy', () => {
       }),
     )
     expect(response.status).toBe(303)
-    expect(response.headers.get('location')).toBe('http://web.local/')
+    expect(response.headers.get('location')).toBe('/')
     expect(response.headers.get('set-cookie')).toContain('Max-Age=0')
   })
 

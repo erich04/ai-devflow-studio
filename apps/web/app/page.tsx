@@ -22,7 +22,6 @@ import { cookies } from 'next/headers'
 import type { CSSProperties, ReactNode } from 'react'
 import {
   createDemoTeamSessionHeaders,
-  createRecommendedEnforcementPreset,
   formatUsd,
   resolveDevFlowRuntimeFlags,
   type DevFlowSessionHeaders,
@@ -44,7 +43,6 @@ import {
   fetchAuthSession,
   resolveDevFlowPublicApiBaseUrl,
   runKnowledgeReview,
-  saveEnforcementPolicy,
   type TeamOverviewResponse,
   type BrowserAuthSessionResponse,
   type GateCommandEvaluationSnapshot,
@@ -55,6 +53,9 @@ import { WorkRequestPanel } from './WorkRequestPanel'
 import { GateCommandPanel } from './GateCommandPanel'
 import { GitHubDeliveryPanel } from './GitHubDeliveryPanel'
 import { selectGateCommandTarget } from './gate-command-view-model'
+import { ThemePreferenceControl } from './ThemePreferenceControl'
+import { EnforcementPolicyPanel } from './EnforcementPolicyPanel'
+import { updateEnforcementPolicyAction } from './enforcement-policy-actions'
 
 type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
 
@@ -95,24 +96,6 @@ async function runKnowledgeReviewAction(formData: FormData) {
     nodeId,
     projectId,
     providerId,
-    ...(cookieHeader ? { cookieHeader } : {}),
-    ...(sessionHeaders ? { sessionHeaders } : {}),
-  })
-}
-
-async function applyRecommendedPolicyAction(formData: FormData) {
-  'use server'
-
-  const organizationId = String(formData.get('organizationId') ?? '').trim()
-  if (!organizationId) return
-
-  const cookieHeader = await getDevFlowCookieHeader()
-  const sessionHeaders = cookieHeader ? undefined : getDemoSessionHeadersIfEnabled()
-  await saveEnforcementPolicy({
-    policy: createRecommendedEnforcementPreset({
-      organizationId,
-      updatedAt: new Date().toISOString(),
-    }),
     ...(cookieHeader ? { cookieHeader } : {}),
     ...(sessionHeaders ? { sessionHeaders } : {}),
   })
@@ -350,6 +333,7 @@ export default async function Page({ searchParams }: PageProps) {
             </p>
           </div>
           <div className="studio-top-actions">
+            <ThemePreferenceControl />
             <BrowserSessionControls
               apiBaseUrl={apiBaseUrl}
               hasSessionCookie={Boolean(cookieHeader)}
@@ -687,28 +671,23 @@ export default async function Page({ searchParams }: PageProps) {
             </div>
           </SupportPanel>
 
-          <SupportPanel id="policy" icon={<AlertTriangle size={17} />} title="Policy / Warnings" action="应用推荐策略">
+          <SupportPanel id="policy" icon={<AlertTriangle size={17} />} title="Policy / Warnings">
             {activeProject ? (
               <>
                 <CompactRow
                   title={
                     policySummary
-                      ? `${policySummary.blockedCount} blocking · ${policySummary.warningCount} warnings`
+                      ? `交付评估：${policySummary.blockedCount} blocking · ${policySummary.warningCount} warnings`
                       : 'No policy summary for selected project'
                   }
                   meta={`${policySummary?.retryAttemptCount ?? 0} retries · ${policySummary?.overrideCount ?? 0} overrides`}
-                  value={`${overview.enforcementPolicies.organizationPolicy.version}`}
+                  value=""
                 />
-                <form action={applyRecommendedPolicyAction}>
-                  <input
-                    type="hidden"
-                    name="organizationId"
-                    value={overview.enforcementPolicies.organizationPolicy.organizationId}
-                  />
-                  <button type="submit" className="studio-small-button">
-                    Apply recommended enforcement
-                  </button>
-                </form>
+                <EnforcementPolicyPanel
+                  key={overview.enforcementPolicies.organizationPolicy.organizationId}
+                  initialPolicy={overview.enforcementPolicies.organizationPolicy}
+                  updateAction={updateEnforcementPolicyAction}
+                />
               </>
             ) : (
               <CompactRow
@@ -736,6 +715,7 @@ function ErrorShell({
   return (
     <main className="studio-shell studio-shell--error">
       <section className="studio-error-panel">
+        <ThemePreferenceControl />
         <AlertTriangle size={28} />
         <span>DevFlow API</span>
         <h1>{authenticationRequired ? '需要登录' : '团队数据暂时不可用'}</h1>
@@ -842,7 +822,7 @@ function SupportPanel({
   id: string
   icon: ReactNode
   title: string
-  action: string
+  action?: string
   actionHref?: string
   children: ReactNode
 }) {
@@ -853,10 +833,12 @@ function SupportPanel({
           {icon}
           {title}
         </span>
-        <a href={actionHref ?? `#${id}`}>
-          {action}
-          <ArrowRight size={14} />
-        </a>
+        {action ? (
+          <a href={actionHref ?? `#${id}`}>
+            {action}
+            <ArrowRight size={14} />
+          </a>
+        ) : null}
       </header>
       <div className="studio-support-body">{children}</div>
     </section>

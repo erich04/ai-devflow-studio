@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { resolveE2eRuntime } from './e2e-runtime.mjs'
 
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
+const browserSessionSecret = randomBytes(32).toString('hex')
 const {
   apiPort,
   webPort,
@@ -125,6 +127,7 @@ try {
     env: {
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
       DEV_AUTH_ENABLED: 'true',
+      DEVFLOW_SESSION_SECRET: browserSessionSecret,
       PORT: String(apiPort),
     },
   })
@@ -171,7 +174,7 @@ try {
     },
   })
 
-  await run(corepack, ['pnpm', 'exec', 'playwright', 'test'], {
+  await run(corepack, ['pnpm', 'exec', 'playwright', 'test', ...process.argv.slice(2)], {
     DEVFLOW_ENABLE_DEMO_DATA: 'true',
     PLAYWRIGHT_SKIP_WEBSERVER: '1',
     DEVFLOW_API_BASE_URL: apiUrl,
@@ -179,6 +182,7 @@ try {
     DEVFLOW_E2E_API_URL: apiUrl,
     DEVFLOW_E2E_WEB_URL: webUrl,
     DEVFLOW_E2E_DESKTOP_URL: desktopUrl,
+    DEVFLOW_E2E_SESSION_SECRET: browserSessionSecret,
   })
 } finally {
   stop(desktop)
