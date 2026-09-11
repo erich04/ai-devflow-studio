@@ -50,7 +50,7 @@ export function parseGateReviewSubjectSnapshot(value: unknown): GateReviewSubjec
   const artifacts = value.artifacts.map((artifact: unknown) => {
     if (!exact(artifact, ['id', 'nodeId', 'kind', 'updatedAt', 'contentDigest']) ||
       !identifier(artifact.id) || artifact.id <= previousId || !identifier(artifact.nodeId) ||
-      !['raw_request', 'clarification', 'clarification_feedback', 'design', 'diff', 'test_report', 'agent_review', 'log', 'pr', 'accept'].includes(artifact.kind as string) ||
+      !(['raw_request', 'clarification', 'clarification_feedback', 'design', 'diff', 'test_report', 'agent_review', 'log', 'pr', 'acceptance'] satisfies ArtifactKind[]).includes(artifact.kind as ArtifactKind) ||
       typeof artifact.updatedAt !== 'string' || !Number.isFinite(Date.parse(artifact.updatedAt)) ||
       new Date(artifact.updatedAt).toISOString() !== artifact.updatedAt || !digest(artifact.contentDigest)) return invalid()
     assertCanonicalLocalNodeId(runId, artifact.nodeId)

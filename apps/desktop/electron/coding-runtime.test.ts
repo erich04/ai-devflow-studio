@@ -242,7 +242,7 @@ describe('CodingRuntime', () => {
     },
   )
 
-  it('continues one opencode session across separate request-scoped runtimes', async () => {
+  it.each([false, true])('continues one opencode session across separate request-scoped runtimes with execution authorization=%s', async (requireExecutionAuthorization) => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
       projects: [project(repo)],
@@ -272,6 +272,7 @@ describe('CodingRuntime', () => {
       binaryPath: 'opencode',
       providerID: 'double',
       modelID: 'ark-code-latest',
+      requireExecutionAuthorization,
       processManager: {
         ensure: vi.fn(async ({ projectId }) => ({
           baseUrl: 'http://127.0.0.1:4097',
@@ -333,8 +334,22 @@ describe('CodingRuntime', () => {
       providerId: 'double',
       userInstruction: 'Add the marker file.',
     })
+    const trustedBudgetDecision = started.codingRun.budgetDecision
+    expect(trustedBudgetDecision?.reason).toContain('billing is opaque')
+    if (requireExecutionAuthorization) {
+      expect(store.permissionRequests[0]?.origin).toBe('execution_authorization')
+      await replyRequestRuntime.replyCodingPermission({
+        requestId: store.permissionRequests[0]!.id,
+        codingRunId: started.codingRun.id,
+        decidedBy: 'user-1',
+        decision: 'approved',
+        comment: 'Authorize the managed OpenCode execution.',
+      })
+      expect(store.codingRuns.at(-1)?.budgetDecision).toEqual(trustedBudgetDecision)
+    }
+    const editRequest = store.permissionRequests.find((request) => request.status === 'pending')!
     await replyRequestRuntime.replyCodingPermission({
-      requestId: store.permissionRequests[0]!.id,
+      requestId: editRequest.id,
       codingRunId: started.codingRun.id,
       decidedBy: 'user-1',
       decision: 'approved',
@@ -342,20 +357,22 @@ describe('CodingRuntime', () => {
     })
 
     expect(store.codingRuns.at(-1)?.status).toBe('waiting_permission')
-    expect(store.permissionRequests[1]).toMatchObject({ origin: 'change_acceptance' })
+    expect(store.codingRuns.at(-1)?.budgetDecision).toEqual(trustedBudgetDecision)
+    const acceptanceRequest = store.permissionRequests.find((request) => request.origin === 'change_acceptance')!
+    expect(acceptanceRequest).toMatchObject({ status: 'pending' })
     captureWorkspaceDiff.mockRejectedValueOnce(new Error('git diff unavailable'))
     await expect(replyRequestRuntime.replyCodingPermission({
-      requestId: store.permissionRequests[1]!.id,
+      requestId: acceptanceRequest.id,
       codingRunId: started.codingRun.id,
       decidedBy: 'user-1',
       decision: 'approved',
       comment: 'Accept only if the current Git diff can be recaptured.',
     })).rejects.toThrow('could not recapture the current managed-worktree diff')
     expect(completeWorkflowBuild).not.toHaveBeenCalled()
-    expect(store.permissionRequests[1]).toMatchObject({ status: 'pending' })
+    expect(store.permissionRequests.find((request) => request.id === acceptanceRequest.id)).toMatchObject({ status: 'pending' })
 
     await replyRequestRuntime.replyCodingPermission({
-      requestId: store.permissionRequests[1]!.id,
+      requestId: acceptanceRequest.id,
       codingRunId: started.codingRun.id,
       decidedBy: 'user-1',
       decision: 'approved',
@@ -363,6 +380,7 @@ describe('CodingRuntime', () => {
     })
 
     expect(store.codingRuns.at(-1)?.status).toBe('completed')
+    expect(store.codingRuns.at(-1)?.budgetDecision).toEqual(trustedBudgetDecision)
     expect(store.codingRuns.at(-1)?.runtimeCostSummary).toBeUndefined()
     expect(store.codingRuns.at(-1)?.budgetDecision?.reason).toContain('billing is opaque')
     expect(store.diffArtifacts[0]?.changedPaths).toEqual(['devflow-opencode-smoke.txt'])

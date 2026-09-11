@@ -297,3 +297,16 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 第三次 Coding 已证明 #95 修复生效：工具权限发现后有完整 60 秒有效期，批准也在有效期内。随后 OpenCode 将多条仓库检查合并为一次 shell 请求，触发既有命令限制并终止，记录为 #96。补充 OpenCode 专属执行约束到实际 Provider 简报，明确原生文件工具、逐条白名单命令与由 DevFlow 执行后续依赖准备/测试；不扩展权限或改动审批交互。传输边界回归先失败后通过，144 项 adapter/policy 用例、Desktop 类型检查和构建通过。
 
 原 Workflow 节点已累计三次 OpenCode 尝试，第 4 次被既有 opaque Run 上限拒绝，没有创建工作树或调用 Provider。保留三次失败证据，已向用户提出新建正式回归请求或在原 Run 切换 Native Coding Agent 两条后续路径；尚未绕过次数限制或将未完成的步骤记为通过。
+
+### 侧边恢复方案接入后的真实结果
+
+用户批准侧边的普通读取、无效命令反馈、审批过期恢复和单次追加授权方案，并要求主任务接入验证。
+`ebf31fa` 已接入 PR #90，672 项定向测试和五项云端 CI（`34577092303`）通过。
+原请求第 4 次明确追加授权后，真实 OpenCode / DeepSeek 在原会话中过期、重新核验、重新审批并继续完成修改。
+正式测试、精确提交测试和 [mini Agent Draft PR #1](https://github.com/erich04/devflow-mini-agent-e2e-20260910/pull/1) 均通过。
+
+- #94 的验收分支又暴露 Artifact kind `acceptance` 与 stage `accept` 混淆。失败回归确认后纠正并增加编译期约束；103 项定向测试、全量 3809 项测试通过，真实指纹补传成功。
+- 新增 #97：Web 最终审批到达 Desktop 后，因为 OpenCode 执行授权返回的 Run 丢失原预算判定，内核按 `budget_decision_missing` 拒绝验收。保留拒绝回执，没有修改历史预算数据。新的 adapter 生命周期回归证明无 Execution Authorization 的旧测试会通过、加入真实使用的授权步骤后失败。Main 改为持续保留其原始预算判定，163 项相关回归通过。
+- 首条请求保留在验收拒绝状态，PR 已真实交付。准备使用新正式 Work Request 做修复后的完整复验；PR #90 与相关 Issue 在完成前继续保持打开。
+
+逐步证据与实际覆盖范围见 [本轮全流程验证](final-live-e2e-2026-09-10.zh-CN.md)。

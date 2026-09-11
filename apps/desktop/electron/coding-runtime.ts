@@ -126,8 +126,11 @@ function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecut
 }
 
 function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun): CodingAgentRun {
+  // Budget authority belongs to Main's reservation, not an executor response.
+  const { budgetDecision: _executorBudgetDecision, ...executorRun } = run
   return {
-    ...run,
+    ...executorRun,
+    ...(previous.budgetDecision ? { budgetDecision: previous.budgetDecision } : {}),
     ...(previous.workflowRunVersion === undefined ? {} : { workflowRunVersion: previous.workflowRunVersion }),
     ...(previous.additionalAttemptAuthorization ? { additionalAttemptAuthorization: previous.additionalAttemptAuthorization } : {}),
   }

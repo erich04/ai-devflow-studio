@@ -7,6 +7,19 @@ import { createRemoteRunSummary, parseRemoteRunSummary } from './remote-sync'
 const run = { ...runs[0]!, currentNodeId: 'n-design-gate' }
 
 describe('Main-owned Gate Review subject snapshots', () => {
+  it('round-trips an Acceptance bundle through the same metadata contract used by Web approval', async () => {
+    const acceptanceRun = { ...run, currentNodeId: 'n-accept' }
+    const snapshot = await buildGateReviewSubjectSnapshot({ run: acceptanceRun, artifacts })
+    expect(snapshot.stage).toBe('accept')
+    expect(snapshot.artifacts).toMatchObject([{ id: 'art-accept', kind: 'acceptance' }])
+    expect(parseRemoteRunSummary({
+      ...createRemoteRunSummary(acceptanceRun), gateReviewSubject: snapshot,
+    }).gateReviewSubject).toEqual(snapshot)
+    expect(() => parseGateReviewSubjectSnapshot({
+      ...snapshot, artifacts: snapshot.artifacts.map((artifact) => ({ ...artifact, kind: 'accept' })),
+    })).toThrow()
+  })
+
   it('derives digests from actual persisted subjects, ignoring an attached projection, and detects body-only changes', async () => {
     const snapshot = await buildGateReviewSubjectSnapshot({ run, artifacts })
     const changed = await buildGateReviewSubjectSnapshot({

@@ -30,7 +30,8 @@
 | 设计门禁审查 | Direct DeepSeek，2026-09-11T01:54:19.909Z，Review / Trace / 消费已归档 |
 | Web 审批 → Desktop | 命令 gate-command-1fc21a6f-e2b5-49b4-b011-ff2931393549 携带服务端指纹，Desktop 完整复核并回执 applied，Run v5 / building |
 | GitHub App 仓库绑定 | 用户授权新仓库后，真实 Web / API 完成绑定，ACTIVE / v1 |
-| 开发 / 测试 / Draft PR / 验收 | 前两次 Coding 因权限到期终止；第三次已验证 #95 的完整响应窗口，随后因执行简报未说明命令限制触发 #96；修复后继续真实复验 |
+| 开发 / 测试 / Draft PR | 第四次明确追加尝试完成真实 OpenCode 修改、正式测试和精确提交交付，见下文 |
+| 最终验收 | 首个验收 Review 暴露 #94 的 Acceptance 类型遗漏，修正并复验；Web 指纹通过后，Desktop 因 #97 丢失预算证据拒绝签收，保留此失败记录 |
 
 澄清真实遥测：输入 `32,103`（其中 cache read `25,088`），输出 `2,469`，合计 `34,572`；按本次保存的官方峰值价格快照估算 `$0.005217828`。`source=provider_reported` 表示 tokens 来自 Provider，`costStatus=estimated` 表示金额为估算。界面显示“预计 $0.005”，未把估算当作账单实扣。
 
@@ -56,7 +57,32 @@ OpenCode Coding 的费用目前为 opaque / unknown，不能把上述四次 Stag
 - #95 真实复验：`coding-run-80d919f3-053e-4514-8e44-5ed80c99f729` 的首次工具权限在 `2026-09-11T03:23:05.110Z` 被发现，`03:24:05.110Z` 到期，`03:23:28.235Z` 已提交批准；Provider 等待不再扣减响应窗口。该 Run 后续失败原因是 #96，不是权限到期。
 - [#96](https://github.com/erich04/ai-devflow-studio/issues/96)：OpenCode 请求 `pwd && git status && git branch --show-current && git log --oneline -5`，触发既有限制后终止。模型收到的通用简报未说明执行器只支持逐条白名单命令，且上游设计含不可直接执行的 shell 示例。修复在实际发送简报中补充执行约束、原生文件工具使用和测试交由 DevFlow 受控执行的说明；保留原始业务简报，归档实际发送文本，不扩展命令权限。传输边界用例先失败后通过，adapter 与既有权限拒绝测试共 144 项通过；真实复验继续。
 
-三次 Coding 失败记录保留。第 4 次启动已被既有 `maxOpaqueOpenCodeRunsPerWorkflowNode = 3` 拒绝，未产生新的工作树或 Provider 调用。已向用户提出从云端新建一次正式回归请求或当前 Run 切换 Native Coding Agent 的选择；等待决定期间完成 #96 全量 3793 项测试、类型检查和构建，全部通过。#96 尚不宣称真实修复验收完成。
+侧边方案接入前，三次 Coding 失败记录保留，第 4 次曾被既有三次上限拒绝。用户随后批准侧边任务的审批恢复与追加尝试方案，并要求主任务接入真实验证，后续按明确追加授权继续，没有重置历史计数。
+
+## 2026-09-11：侧边修改接入与真实恢复
+
+接入 `ebf31fa`，672 项相关回归和 Desktop 构建通过；该提交的五项云端检查全部通过（Actions `34577092303`）。本次通过真实 Desktop 的“授权追加一次尝试”创建 `coding-run-06fb5158-58a6-4d9c-9f7e-fbd44949e6dd`，授权保存 `afterAttemptCount=3`、实际配对用户和 `2026-09-11T08:00:34.233Z`，前三次记录保留。
+
+- Execution Authorization 在 `08:00:54.744Z` 通过，真实 OpenCode / DeepSeek 会话为 `ses_f70841f4dffe3Tqg8Gnu5MZBBe`。
+- `git diff --stat` 审批于 `08:01:03.825Z` 被发现，完整有效期到 `08:02:03.825Z`。刻意等待过期后，Run 仍为 `waiting_permission`，原会话和工作区保留。
+- 在 `08:02:44.494Z` 通过“重新核验并请求审批”生成新本地审批，原审批 `per_08f7bfe130017m36I7oVJ4lRTu` 保留 expired；新请求 `coding-permission-43bcc1b2-fa7b-42c4-a337-67c40e54a6a3` 仍绑定同一个 executor request，于 `08:02:50.578Z` 批准后继续，未新建 Coding Run。
+- 实际差异只有 `src/web/App.tsx`，将 h1 后的介绍段落替换成原需求文案；原始 checkout 仍干净。依赖准备 `corepack pnpm install --frozen-lockfile` 通过，受管工作树的 `corepack pnpm verify` 通过（6 个测试及类型检查、构建，5360ms）。
+- 浏览器检查实际构建页面：文案只出现一次、位于 h1 后，原有控件和布局保留，console error 为 0；源码检查旧文案已移除。`08:04:49.294Z` 通过 Change Acceptance，Run 进入正式测试。
+- 正式测试证据 `evidence-b2e590c6-8b2c-437c-aad2-c9eb22141fd9` 通过（2656ms）。Prepare GitHub Delivery 再次执行绑定提交的测试，证据 `github-delivery-test-d5b06cd4-e8f8-4010-bcd2-e02f13f24b83` 通过（2645ms）。
+- Web 显式审批交付请求 `github-delivery-f8b77675-7ca0-43e3-b802-765e00bdd24d` 后，产品发布提交 `aabd6493c925fb7dd17e16c5c07471920881dcd7` 并创建 [Draft PR #1](https://github.com/erich04/devflow-mini-agent-e2e-20260910/pull/1)。GitHub 独立查询确认 Draft、main 基线、精确 SHA 和仅一处文件差异。没有通过 CLI 代替产品创建 PR。
+
+上述真实运行覆盖追加尝试、工具审批过期后同会话恢复、实际实现、测试与 PR。普通只读命令自动放行和不支持命令反馈分支在这一次 Coding Run 中未被模型触发，仍以受控 adapter 回归作为对应分支证据，不冒充真实命中。
+
+### 验收阶段发现的两个边界
+
+1. #94 补充：实际 Acceptance Artifact 的 kind 为 `acceptance`，指纹解析器误用了节点 stage `accept`。新增从完整验收产物构造指纹并经过 remote summary 的回归，修复前失败，修复后通过，同时继续拒绝错误 kind。补上 `ArtifactKind` 编译期约束，103 项相关回归及全量 3809 项测试通过。真实重审后，原 Run v10 的指纹正常补传，不上传本地产物正文。
+2. [#97](https://github.com/erich04/ai-devflow-studio/issues/97)：Web 验收命令 `gate-command-23b1502d-9ba2-44e1-b96c-b07617e3f5b3` 绑定正确指纹，但 Desktop 返回 `evidence_blocked`。对完整持久化证据只读执行同一 transition 校验，唯一 blocker 为 `budget_decision_missing`。定位到 Execution Authorization 后 OpenCode 返回新的 Run 对象，丢失 Main 在预留时生成的预算判定。使用真实 adapter 的受控 HTTP 生命周期用例加入 Execution Authorization 后稳定失败；Main 现在跨 start/continuation 保留其原预算判定，不接受执行器替换，不放宽验收约束。
+
+首条请求的预算历史不会补造，已发布 PR 和拒绝回执保留。修复后另起正式 Work Request 做完整复验，再决定关闭 Issue。
+
+验收 Review 使用真实 Direct DeepSeek，先后 ID 为 `agent-review-review-request-547c6bcf-fbc1-4bd7-b14e-dabb1580f67a-electron` 和 `agent-review-review-request-e707bdf2-c6cd-475b-af89-98048c6bcb2a-electron`。前者 `5839 input / 724 output / $0.002582868`，后者 `5839 input / 652 output / $0.000878292`。六条 Stage/Review 记账合计 `67057` tokens、预计 `$0.017802108`；OpenCode Coding 费用仍为 unknown，不计作零或全流程总价。
+
+原生 CUA 再次出现 `noWindowsAvailable` 后，改用 Playwright CLI 连接本机测试 Electron 的回环调试端口，通过真实按钮/键盘交互继续。仍由真实 Main、SQLite、QA API 和保存的 Provider 配置执行；未注入阶段产物或改写业务数据库。该后台路径不依赖窗口持续置前；原生窗口滚动/系统对话框的可操作性属于另一层验证。
 
 ## 验收规则
 
