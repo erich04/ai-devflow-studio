@@ -320,7 +320,7 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 | #81 | 失败及成功 Stage/Review 消费均持久化并同步；六条真实记录逐字段核对一致，未知 Coding 费用仍为 unknown |
 | #89 | 使用已核实的 DeepSeek Flash 价格快照估算，保留历史价格和 unknown 语义 |
 | #91 | 真实重复绑定返回可操作冲突说明，不解除旧绑定 |
-| #92 | Windows Git/SQLite 夹具限制并发；最新完整五项 CI 已通过 |
+| #92 | Windows Git/SQLite 夹具限制并发；跨重启集成用例采用独立 15 秒测试时限，Provider 的 25ms 超时和所有断言保留；慢 Git 场景通过 |
 | #93 | 子证据不覆盖权威 Run 状态；真实 Review、用量同步和最终 completed 状态一致 |
 | #94 | 云端摘要与指纹，Desktop 完整证据复核；真实设计和最终验收 Web 命令均 applied，含 acceptance kind 修正 |
 | #95 | 权限发现时开始完整 60 秒响应窗口，真实时间戳核实 |
@@ -334,3 +334,5 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 | #103 | Verify / Release 不再覆盖 runner 的 Ubuntu 镜像，保留原安装边界；修复反复阻止打包交付检查的依赖下载超时 |
 
 这批 14 项产品问题及 1 项 CI 环境问题的修改与证据由 [PR #90](https://github.com/erich04/ai-devflow-studio/pull/90) 统一交付。最终本地验证为 3816 项测试、类型检查、Web 构建、跨平台检查及 Desktop build。五项 CI 的最新结果见该 PR checks；实际逐步证据和验证范围见 [完整验证报告](final-live-e2e-2026-09-10.zh-CN.md)。旧失败 Run 没有删除或改写为成功。
+
+CI 收尾补充：#103 修正后的 29bd9ad 已通过完整 Postgres job（含真实 Linux packaged delivery smoke）。#92 的单个跨重启夹具另在 e608d28 的 Windows job 暴露默认 5 秒测试时限不足；慢 Git 本地复现后，仅给予该用例 15 秒，正常四用例和耗时 6873ms 的慢场景均通过。最新提交的全平台结果继续由 PR #90 checks 承载。

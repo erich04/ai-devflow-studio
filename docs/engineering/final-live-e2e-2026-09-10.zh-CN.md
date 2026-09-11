@@ -128,3 +128,6 @@ OpenCode Coding 的费用目前为 opaque / unknown，不能把上述四次 Stag
 - 最终验收 Review 审查的 kind 为 `acceptance`，内容 digest `70a9789fec1960a9caa5b8c074d4605431fc8d72513d881f377f6bc9d71d5d1d`。沿用该指纹完成 Web 签收，证明 #94、#97 和 #102 在实际交付终点共同通过。既有失败回执仍可查询。
 
 - [#103](https://github.com/erich04/ai-devflow-studio/issues/103)：最终提交 e608d28 的 CI `34584867242` 在 Ubuntu 镜像访问阶段再次退出 124；Postgres smoke、交付规则和 Desktop 打包已经通过，打包交付 Smoke 因依赖安装失败被跳过。日志显示工作流强制将 runner 镜像改到 `https://archive.ubuntu.com/ubuntu` 后持续超时。Verify / Release 恢复 runner 原镜像配置，保留安装超时和重试参数；既有工作流契约先失败后通过。该 CI 环境修复不修改应用代码、真实请求或已交付 SHA，最终云端检查以 PR #90 为准。
+
+- #92 补充：e608d28 的 Windows 全量测试仅 `native-coding-provider-trace.test.ts` 的跨重启用例超过 Vitest 默认 5 秒，并因用例提前结束产生清理 EBUSY。该用例包含多次 Git 工作树操作、SQLite 关闭重开及下一次运行。只将此集成用例的测试时限设为 15 秒；被测 Provider 请求超时仍为 25ms，所有 Trace、锁释放、持久化和脱敏断言保留。使用临时 Git 包装器加入延迟后复现旧 5 秒失败；修复后的更慢 Git 场景耗时 6873ms，通过全部断言，正常四用例也全部通过。该调整不改变产品运行时限。
+- 29bd9ad 的 CI `34585594625` 已完整通过 Postgres job，包含 Linux 钥匙串依赖安装及实际打包交付 Smoke，验证 #103 的镜像修复。后续仅追加上述 Windows 测试时限调整，应用代码与真实交付证据不变。
