@@ -473,7 +473,8 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    if (stageAgentExecutorKind === 'direct-provider' && !selectedAgentProviderId) {
+    const executor = selectedNode.stage === 'clarify' ? stageAgentExecutorKind : 'direct-provider'
+    if (executor === 'direct-provider' && !selectedAgentProviderId) {
       setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider Name、Base URL、Model 和 API Key')
       return
     }
@@ -492,8 +493,8 @@ export function useDesktopActions(input: {
         nodeId: selectedNode.id,
         userId: currentUser.id,
         userName: currentUser.name,
-        executor: stageAgentExecutorKind,
-        ...(stageAgentExecutorKind === 'direct-provider'
+        executor,
+        ...(executor === 'direct-provider'
           ? { providerId: selectedAgentProviderId }
           : {}),
       })
@@ -503,6 +504,8 @@ export function useDesktopActions(input: {
       setActiveView('workbench')
       setToast(successToast)
     } catch (error) {
+      // Failed output can still incur real usage; reload the Main-process audit before displaying it.
+      try { applyLocalExecutionState(await desktopApi.loadState()) } catch { /* Keep the original failure visible. */ }
       setToast(error instanceof Error ? error.message : '生成阶段产物失败')
     } finally {
       clearPendingInspectorAction(pending)
@@ -766,7 +769,7 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function runCodingAgent() {
+  async function runCodingAgent(additionalAttemptAfterCount?: number) {
     if (!selectedRun || !selectedNode || !currentUser) {
       return
     }
@@ -796,6 +799,7 @@ export function useDesktopActions(input: {
         projectId: selectedLocalProject.id,
         requestedBy: currentUser.id,
         userInstruction: `Implement ${displayNodeTitle(selectedNode)} with the existing DevFlow context.`,
+        ...(additionalAttemptAfterCount === undefined ? {} : { additionalAttemptAfterCount }),
         ...(runtimeBudgetApprovalId.trim() ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() } : {}),
       })
       applyLocalExecutionState(result.state)
@@ -877,6 +881,20 @@ export function useDesktopActions(input: {
       )
     } catch (error) {
       setToast(error instanceof Error ? error.message : '权限回复失败')
+    }
+  }
+
+  async function renewCodingPermission() {
+    if (!desktopApi || !latestCodingRun?.permissionPause || !currentUser) return
+    try {
+      await desktopApi.renewCodingPermission({
+        codingRunId: latestCodingRun.id, requestId: latestCodingRun.permissionPause.requestId,
+        decidedBy: currentUser.id,
+      })
+      applyLocalExecutionState(await desktopApi.loadState())
+      setToast('已重新核验，请审查新的权限请求。此操作尚未批准执行。')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '无法恢复审批，工作区仍保留')
     }
   }
 
@@ -1471,6 +1489,7 @@ export function useDesktopActions(input: {
     runCodingAgent,
     startRemediationRetry,
     replyCodingPermission,
+    renewCodingPermission,
     cancelCodingRun,
     openCodingWorktree,
     deleteCodingWorktree,

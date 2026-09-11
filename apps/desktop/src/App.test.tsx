@@ -5,6 +5,7 @@ import {
   advanceWorkflowAfterGateApproval,
   completeWorkflowAgentNode,
   createRecommendedEnforcementPreset,
+  createLocalStageAgentUsage,
   createWorkflowRunFromRequest,
   createWarnOnlyDefaultPolicy,
   indexKnowledgeSources,
@@ -1254,6 +1255,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     }),
     cancelCodingAgentRun: vi.fn(),
     replyCodingPermission: vi.fn(),
+    renewCodingPermission: vi.fn(),
     subscribeCodingRun: vi.fn().mockResolvedValue({
       projects: [],
       runs: [],
@@ -2307,6 +2309,25 @@ describe('App', () => {
     expect(await screen.findByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
   })
 
+  it('keeps the clarification-only local executor out of subsequent design requests', async () => {
+    const state = localStateAtCurrentNode('n-clarify')
+    const designRun = { ...localStateAtCurrentNode('n-design').runs[0]!, id: 'run-design-route', title: 'Design executor routing' }
+    state.runs.push(designRun)
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(state),
+      completeWorkflowAgentNode: vi.fn().mockRejectedValue(new Error('Stop after recording IPC')),
+    })
+    render(<App />)
+    const executor = await screen.findByRole('combobox', { name: /澄清执行器/ })
+    fireEvent.change(executor, { target: { value: 'local-agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /Design executor routing.*local/ }))
+    fireEvent.click(await screen.findByTestId('complete-design-agent'))
+    await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'run-design-route', nodeId: 'n-design', executor: 'direct-provider', providerId: agentProvider.id,
+    })))
+    expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps workflow execution read-only in the browser preview', async () => {
     render(<App />)
 
@@ -2457,6 +2478,7 @@ describe('App', () => {
       })),
     )
     expect(api.ensureCodingEngine).not.toHaveBeenCalled()
+    expect(vi.mocked(api.runCodingAgent).mock.calls[0]![0]).not.toHaveProperty('additionalAttemptAfterCount')
   })
 
   it('shows exact pending Change Set context in Workbench and jumps to the single Agents approval surface', async () => {
@@ -2670,6 +2692,61 @@ describe('App', () => {
     expect(api.runCodingAgent).not.toHaveBeenCalled()
     fireEvent.click(within(confirmation).getByRole('button', { name: '新建 Run 并重试' }))
     await waitFor(() => expect(api.runCodingAgent).toHaveBeenCalledTimes(1))
+  })
+
+  it('requests one extra OpenCode attempt only after confirming the displayed cumulative count', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const state = localStateAtCurrentNode('n-build')
+    const history = Array.from({ length: 3 }, (_, index) => ({
+      id: `failed-opencode-${index}`, runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+      requestedBy: 'u-ling', providerId: agentProvider.id, engine: 'opencode-http' as const,
+      status: 'failed' as const, branchName: `devflow/attempt-${index}`, userInstruction: 'Update text.',
+      prompt: 'Update text.', summary: 'Previous attempt failed.', changedPaths: [],
+      startedAt: `2026-08-30T12:0${index}:00.000Z`, completedAt: `2026-08-30T12:0${index}:30.000Z`, redacted: true,
+    }))
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({ ...state, codingRuns: history }),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue({ ...codingReadinessFixture(), engine: 'opencode-http', executor: 'opencode-http' }),
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+    const workbench = await screen.findByTestId('agent-workbench')
+    fireEvent.click(await within(workbench).findByRole('button', { name: '已达尝试上限 · 授权追加一次尝试' }))
+    const confirmation = screen.getByRole('alertdialog')
+    expect(confirmation).toHaveTextContent('已尝试 3 次')
+    expect(confirmation).toHaveTextContent('第 4 次')
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    fireEvent.click(within(confirmation).getByRole('button', { name: '授权追加一次尝试' }))
+    await waitFor(() => expect(api.runCodingAgent).toHaveBeenCalledWith(expect.objectContaining({
+      runId: buildRun.id, nodeId: 'n-build', additionalAttemptAfterCount: 3,
+    })))
+    expect(api.runCodingAgent).toHaveBeenCalledTimes(1)
+  })
+
+  it('renews a paused approval through a distinct action without approving it or starting a Run', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        ...localStateAtCurrentNode('n-build'),
+        codingRuns: [{
+          id: 'paused-opencode', runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+          requestedBy: 'u-ling', providerId: agentProvider.id, engine: 'opencode-http', status: 'waiting_permission',
+          branchName: 'devflow/paused', userInstruction: 'Update text.', prompt: 'Update text.',
+          summary: '工具审批已过期，执行已暂停。', changedPaths: [], startedAt: '2026-08-30T12:00:00.000Z',
+          permissionPause: { requestId: 'expired-request', pausedAt: '2026-08-30T12:01:00.000Z', runVersion: buildRun.version },
+          redacted: true,
+        }],
+      }),
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+    const workbench = await screen.findByTestId('agent-workbench')
+    fireEvent.click(await within(workbench).findByRole('button', { name: '重新核验并请求审批' }))
+    await waitFor(() => expect(api.renewCodingPermission).toHaveBeenCalledWith(expect.objectContaining({
+      codingRunId: 'paused-opencode', requestId: 'expired-request',
+    })))
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    expect(api.replyCodingPermission).not.toHaveBeenCalled()
   })
 
   it('keeps a completed Coding Run read-only without start or retry actions', async () => {
@@ -4323,6 +4400,26 @@ describe('App', () => {
 
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
     expect(screen.getByTestId('toast')).toHaveTextContent('请先 Pair Team Project 后再同步团队远端状态')
+  })
+
+  it('reloads rejected Stage usage immediately and shows incomplete budget data without advancing the node', async () => {
+    const initial = localStateAtCurrentNode('n-clarify')
+    const usage = createLocalStageAgentUsage({ id: 'rejected-stage', runId: fixtureRuns[0]!.id, nodeId: 'n-clarify',
+      userId: 'u-ling', projectId: localProject.id, providerId: 'unpriced-gateway', model: 'deepseek-v4-flash',
+      timestamp: '2026-09-10T16:00:00.000Z', usage: { inputTokens: 15268, outputTokens: 1444, cacheReadTokens: 12416 } })
+    const loadState = vi.fn().mockResolvedValue(initial)
+    const api = installDesktopApi({ loadState, completeWorkflowAgentNode: vi.fn().mockRejectedValue(new Error('Citation rejected')) })
+    render(<App />)
+    await waitFor(() => expect(screen.getByTestId('complete-clarify-agent')).toBeEnabled())
+    loadState.mockResolvedValue({ ...initial, agentTokenUsage: [usage] })
+    fireEvent.click(screen.getByTestId('complete-clarify-agent'))
+    await waitFor(() => expect(screen.getByTestId('run-token-usage')).toHaveTextContent('16,712'))
+    expect(screen.getByTestId('run-token-usage')).toHaveTextContent('1 项金额待确认')
+    expect(screen.getByTestId('run-token-usage')).not.toHaveTextContent('$0.00')
+    expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('数据不完整')
+    expect(screen.getByTestId('flow-node-n-clarify')).toHaveTextContent('当前步骤')
+    expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('toast')).toHaveTextContent('Citation rejected')
   })
 
   it('opens each card attachment in its matching tab without counting another node or invoking a Provider', async () => {

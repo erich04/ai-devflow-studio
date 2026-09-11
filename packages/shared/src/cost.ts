@@ -20,6 +20,7 @@ export type TokenUsageRollup = {
   totalTokens: number
   costUsd: number
   unknownCostCount?: number
+  estimatedCostCount?: number
 }
 
 export function rollupTokenUsage(
@@ -46,7 +47,12 @@ export function rollupTokenUsage(
     existing.cacheReadTokens += row.cacheReadTokens
     // Cache reads are a subset of input/prompt tokens, not additional tokens.
     existing.totalTokens += row.inputTokens + row.outputTokens
-    existing.costUsd += row.costUsd
+    if (row.costUsd === null || !Number.isFinite(row.costUsd) || row.costUsd < 0) {
+      existing.unknownCostCount = (existing.unknownCostCount ?? 0) + 1
+    } else {
+      existing.costUsd += row.costUsd
+      if ('source' in row) existing.estimatedCostCount = (existing.estimatedCostCount ?? 0) + 1
+    }
     map.set(key, existing)
   }
 
@@ -72,17 +78,33 @@ export function annotateUnknownRuntimeCosts(
       costUsd: 0,
     }
     rollup.unknownCostCount = (rollup.unknownCostCount ?? 0) + 1
+    if (summary.usageStatus !== 'legacy_unknown' &&
+      [summary.inputTokens, summary.outputTokens].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+      rollup.inputTokens += summary.inputTokens
+      rollup.outputTokens += summary.outputTokens
+      rollup.totalTokens += summary.inputTokens + summary.outputTokens
+      rollup.cacheReadTokens += summary.cacheReadTokens ?? 0
+    }
     byKey.set(key, rollup)
   }
   return [...byKey.values()].sort((left, right) => right.costUsd - left.costUsd)
 }
 
-export function formatUsd(value: number): string {
+export function formatUsd(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '金额待确认'
+  if (value > 0 && value < 0.001) return '<$0.001'
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'USD',
     maximumFractionDigits: value < 1 ? 3 : 2,
   }).format(value)
+}
+
+export function formatCostRollup(rollups: readonly TokenUsageRollup[]): string {
+  const known = rollups.reduce((sum, row) => sum + row.costUsd, 0)
+  const unknown = rollups.reduce((sum, row) => sum + (row.unknownCostCount ?? 0), 0)
+  const knownLabel = `${rollups.some((row) => row.estimatedCostCount) ? '预计 ' : ''}${formatUsd(known)}`
+  return unknown ? `${known > 0 ? `${knownLabel} + ` : ''}${unknown} 项金额待确认` : knownLabel
 }
 
 const ESTIMATED_CHARS_PER_TOKEN = 4
@@ -94,6 +116,10 @@ const DEFAULT_OPENAI_COMPATIBLE_PRICE_PER_1K = {
 export const DEEPSEEK_PRICING_SOURCE = 'https://api-docs.deepseek.com/quick_start/pricing/'
 export const DEEPSEEK_PRICING_SOURCE_VERSION = 'deepseek-pricing-snapshot-2026-08-30'
 export const DEEPSEEK_PRICING_EFFECTIVE_AT = '2026-08-16T16:00:00.000Z'
+
+export const DEEPSEEK_FLASH_PRICING_VERIFIED_AT = '2026-09-10T15:17:38.000Z'
+export const DEEPSEEK_FLASH_PRICING_SOURCE_VERSION = 'deepseek-pricing-snapshot-2026-09-10'
+const DEEPSEEK_PRO_FLASH_ROUTING_AT = '2026-09-14T04:00:00.000Z'
 
 type DeepSeekModelPrice = {
   offPeak: { hit: number; miss: number; output: number }
@@ -132,19 +158,29 @@ export function resolveDeepSeekPricingSnapshot(input: {
   timestamp: string
   worstCase?: boolean
 }): RuntimePricingSnapshot | null {
-  const price = DEEPSEEK_PRICES_PER_MILLION[input.model.toLowerCase()]
-  if (!price || Date.parse(input.timestamp) < Date.parse(DEEPSEEK_PRICING_EFFECTIVE_AT)) {
-    return null
-  }
+  const timestamp = Date.parse(input.timestamp)
+  if (!Number.isFinite(timestamp)) return null
+  const model = input.model.toLowerCase()
+  const flash = ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'].includes(model)
+  const proRoutedToFlash = model === 'deepseek-v4-pro' && timestamp >= Date.parse(DEEPSEEK_PRO_FLASH_ROUTING_AT)
+  // The release notice gives a date, not an exact Flash switch instant. Never backprice that
+  // transition window; the new snapshot is authoritative from our recorded verification time.
+  if (flash && timestamp >= Date.parse('2026-09-09T16:00:00.000Z') &&
+      timestamp < Date.parse(DEEPSEEK_FLASH_PRICING_VERIFIED_AT)) return null
+  const currentFlash = proRoutedToFlash || (flash && timestamp >= Date.parse(DEEPSEEK_FLASH_PRICING_VERIFIED_AT))
+  const price: DeepSeekModelPrice | undefined = currentFlash
+    ? { offPeak: { hit: 0.003, miss: 0.15, output: 0.6 }, peak: { hit: 0.006, miss: 0.3, output: 1.2 } }
+    : DEEPSEEK_PRICES_PER_MILLION[model]
+  if (!price || timestamp < Date.parse(DEEPSEEK_PRICING_EFFECTIVE_AT)) return null
   const tier = input.worstCase || isDeepSeekPeakTime(input.timestamp) ? 'peak' : 'off_peak'
   const selected = tier === 'peak' ? price.peak : price.offPeak
   return {
     providerId: input.providerId,
     model: input.model,
     tier,
-    effectiveAt: DEEPSEEK_PRICING_EFFECTIVE_AT,
+    effectiveAt: currentFlash ? (proRoutedToFlash ? DEEPSEEK_PRO_FLASH_ROUTING_AT : DEEPSEEK_FLASH_PRICING_VERIFIED_AT) : DEEPSEEK_PRICING_EFFECTIVE_AT,
     source: DEEPSEEK_PRICING_SOURCE,
-    sourceVersion: DEEPSEEK_PRICING_SOURCE_VERSION,
+    sourceVersion: currentFlash ? DEEPSEEK_FLASH_PRICING_SOURCE_VERSION : DEEPSEEK_PRICING_SOURCE_VERSION,
     currency: 'USD',
     unit: 'per_1m_tokens',
     cacheHitInputUsdPerMillion: selected.hit,

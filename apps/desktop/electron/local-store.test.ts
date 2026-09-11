@@ -7171,6 +7171,32 @@ describe('createLocalStore', () => {
     reopened.close()
   })
 
+  it('consumes one additional OpenCode attempt and rejects a replay after restart', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    for (let index = 0; index < 3; index++) {
+      await store.saveCodingAgentRun({ ...codingRun, id: `prior-${index}`, engine: 'opencode-http', status: 'failed' })
+    }
+    const { completedAt: _completedAt, ...activeFields } = codingRun
+    const next: CodingAgentRun = {
+      ...activeFields, id: 'extra-fourth', engine: 'opencode-http', status: 'preparing',
+      additionalAttemptAuthorization: { afterAttemptCount: 3, authorizedBy: activeFields.requestedBy, authorizedAt: activeFields.startedAt },
+    }
+    const { additionalAttemptAuthorization: _authorization, ...withoutAuthorization } = next
+    await expect(store.reserveCodingAgentRun(withoutAuthorization)).rejects.toThrow('explicit authorization')
+    expect(await store.listCodingAgentRuns()).toHaveLength(3)
+    await expect(store.reserveCodingAgentRun(next)).resolves.toMatchObject({ reserved: true })
+    await store.saveCodingAgentRun({ ...next, status: 'failed', completedAt: '2026-08-01T00:01:00.000Z' })
+    store.close()
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.reserveCodingAgentRun({ ...next, id: 'replayed-fifth' })).rejects.toThrow('stale or invalid')
+    const fifth = { ...next, id: 'authorized-fifth', additionalAttemptAuthorization: { ...next.additionalAttemptAuthorization!, afterAttemptCount: 4 } }
+    await expect(reopened.reserveCodingAgentRun(fifth)).resolves.toMatchObject({ reserved: true })
+    expect(await reopened.listCodingAgentRuns()).toHaveLength(5)
+    expect((await reopened.listCodingAgentRuns()).find((run) => run.id === next.id)?.additionalAttemptAuthorization).toEqual(next.additionalAttemptAuthorization)
+    reopened.close()
+  })
+
   it('atomically reserves only one active Coding Agent run per project', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
@@ -10160,6 +10186,20 @@ describe('createLocalStore', () => {
       agentTokenUsage: [agentTokenUsage],
     })
     second.close()
+  })
+
+  it('durably queues canonical Run accounting when a local Gate review records consumption', async () => {
+    const dbPath = await tempDbPath()
+    const first = await createLocalStore({ dbPath })
+    const usage: AgentTokenUsage = { ...agentTokenUsage, executorKind: 'direct-provider', providerId: 'unpriced-gateway', costUsd: null, costStatus: 'unknown' }
+    await first.saveAgentTokenUsage(usage)
+    first.close()
+    const reopened = await createLocalStore({ dbPath })
+    expect(await reopened.listAgentTokenUsage(usage.runId)).toEqual([usage])
+    expect(await reopened.listRemoteSyncOperations(usage.runId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'run-summary', runId: usage.runId, entityId: usage.runId, localProjectId: usage.projectId }),
+    ]))
+    reopened.close()
   })
 
   it('keeps the last persisted review first when review timestamps tie across reopen', async () => {

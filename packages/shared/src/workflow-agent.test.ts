@@ -324,13 +324,30 @@ describe('runWorkflowStageAgent', () => {
     expect(result.artifact.redacted).toBe(true)
     expect(result.artifact.content).toContain('src/index.ts#')
     expect(result.artifact.clarificationRevision?.repositoryFindings?.verifiedFacts).toHaveLength(1)
-    expect(result.tokenUsage).toBeUndefined()
+    expect(result.tokenUsage).toMatchObject({ source: 'unknown', usageStatus: 'unknown', costUsd: null })
     expect(result.trace.steps.map((step) => step.summary).join('\n')).not.toContain('/Users/')
     const prompt = vi.mocked(executor.execute).mock.calls[0]![0].prompt
     expect(prompt).toContain('arrays of OBJECTS, not strings')
     expect(prompt).toContain('"citationIds":["citation-1"]')
     expect(prompt).toContain('"path":"<repo-relative-file>"')
+    expect(prompt.match(/Return only valid JSON with [^.]+\./)?.[0]).toContain('repositoryFindings')
     expect(prompt).not.toContain('All list fields must be arrays of strings')
+  })
+
+  it('retains executor-reported consumption when output validation fails before an Artifact is returned', async () => {
+    const executor: StageAgentExecutor = {
+      kind: 'local-agent', id: 'opencode', version: '1', providerId: 'deepseek', model: 'deepseek-v4-flash',
+      execute: async () => { throw new StageAgentExecutionError('evidence_invalid', 'Citation rejected', undefined,
+        { inputTokens: 15268, outputTokens: 1444, cacheReadTokens: 12416 }) },
+    }
+    const error = await runWorkflowStageAgent({
+      run: created.run, node: clarifyNode(), artifacts: created.artifacts, executor,
+      requestedBy: 'u-ling', runtime: 'electron',
+    }).catch((failure: unknown) => failure)
+    expect(error).toMatchObject({ terminalReason: 'evidence_invalid', tokenUsage: {
+      inputTokens: 15268, outputTokens: 1444, cacheReadTokens: 12416, source: 'provider_reported',
+      executorKind: 'local-agent', providerId: 'deepseek', costUsd: null, costStatus: 'unknown',
+    } })
   })
 
   it('fails closed when a local Agent omits repository citations', async () => {

@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import {
   StageAgentExecutionError,
   type ClarificationRepositoryFindings,
+  type AgentProviderUsage,
   type StageAgentExecutor,
   type WorkflowArtifactProviderOutput,
 } from '@ai-devflow/shared'
@@ -81,6 +82,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
     id: 'managed-opencode-read-only-stage-agent',
     version: `1/${input.detectedVersion}`,
     providerId: input.providerId,
+    ...(isOfficialDeepSeekBinding(input.providerBinding) ? { billingProvider: 'deepseek' as const } : {}),
     model: input.modelId,
     async execute(execution) {
       assertReadOnlyCapability(execution.capability)
@@ -91,6 +93,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
       const abort = () => timeoutController.abort()
       execution.signal?.addEventListener('abort', abort, { once: true })
       const started = Date.now()
+      let reportedUsage: AgentProviderUsage | null | undefined
       try {
         const runner = input.runner ?? createManagedOpencodeRunner({
           projectId: input.projectId,
@@ -105,6 +108,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
           directory: root,
           signal: timeoutController.signal,
         })
+        reportedUsage = result.value.usage ?? null
         if (result.pendingPermissionCount > 0) {
           throw new StageAgentExecutionError('permission_denied', 'Read-only stage Agent requested additional permission')
         }
@@ -123,14 +127,16 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
           durationMs: Math.max(0, Date.now() - started),
         }
       } catch (error) {
-        if (error instanceof StageAgentExecutionError) throw error
+        if (error instanceof StageAgentExecutionError) {
+          throw new StageAgentExecutionError(error.terminalReason, error.message, error.tokenUsage, error.reportedUsage !== undefined ? error.reportedUsage : reportedUsage)
+        }
         if (timeoutController.signal.aborted) {
           throw new StageAgentExecutionError(
             execution.signal?.aborted ? 'cancelled' : 'timeout',
             execution.signal?.aborted ? 'Read-only stage Agent was cancelled' : 'Read-only stage Agent timed out',
           )
         }
-        throw new StageAgentExecutionError('cli_unavailable', 'Managed read-only stage Agent could not complete')
+        throw new StageAgentExecutionError('cli_unavailable', 'Managed read-only stage Agent could not complete', undefined, reportedUsage)
       } finally {
         clearTimeout(timeout)
         execution.signal?.removeEventListener('abort', abort)
@@ -299,4 +305,12 @@ async function repositoryWorkingTreeDigest(root: string): Promise<string> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isOfficialDeepSeekBinding(binding?: OpencodeProviderBinding): boolean {
+  if (!binding) return false
+  try {
+    const url = new URL(binding.baseUrl)
+    return url.protocol === 'https:' && url.hostname === 'api.deepseek.com' && !url.port && !url.username && !url.password
+  } catch { return false }
 }

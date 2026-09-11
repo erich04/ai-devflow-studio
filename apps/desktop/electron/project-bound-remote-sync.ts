@@ -5,6 +5,7 @@ import {
   createRemoteAgentReviewSummary,
   createRemoteCodingAgentSummary,
   createRemoteRunSummary,
+  buildGateReviewSubjectSnapshot,
   createRemoteTestEvidenceSummary,
   resolveTeamProjectId,
   type AgentReviewResult,
@@ -30,7 +31,9 @@ type PairingCredentialSource = {
     coordinationId: string,
   ): Promise<CoordinationRendererSnapshot | null>
   listRuns(): Promise<WorkflowRun[]>
+  listArtifacts?(runId?: string): Promise<import('@ai-devflow/shared').Artifact[]>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
+  listAgentTokenUsage?(runId?: string): Promise<import('@ai-devflow/shared').AgentTokenUsage[]>
   listAgentReviews(runId?: string): Promise<AgentReviewResult[]>
   listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]>
   listCodingDiffArtifacts(runId?: string): Promise<CodingDiffArtifact[]>
@@ -177,13 +180,23 @@ export function createProjectBoundRemoteSync(input: {
       throw new CanonicalRemoteSyncEntityError('entity_missing', 'workflow_run')
     }
 
-    const result = await input.remoteSync.uploadRunSummary(
-      bindCanonicalProjectId(
-        buildCanonicalSummary('workflow_run', () => createRemoteRunSummary(run, 'run')),
-        scope,
-        'workflow_run',
-      ),
+    const usage = (await input.credentialSource.listAgentTokenUsage?.(run.id) ?? [])
+      .filter((row) => row.runId === run.id && row.projectId === run.projectId && row.executorKind)
+      .map((row) => ({ ...row, projectId: scope.teamProjectId }))
+    const summary = bindCanonicalProjectId(
+      buildCanonicalSummary('workflow_run', () => createRemoteRunSummary(run, 'run')),
+      scope,
+      'workflow_run',
     )
+    // Missing/incomplete subjects must not block usage sync. Cloud approval will
+    // still require a current independent snapshot for a manifest-bearing Review.
+    const gateReviewSubject = input.credentialSource.listArtifacts
+      ? await buildGateReviewSubjectSnapshot({ run, artifacts: await input.credentialSource.listArtifacts(run.id) }).catch(() => undefined)
+      : undefined
+    const result = await input.remoteSync.uploadRunSummary({
+      ...(gateReviewSubject ? { gateReviewSubject } : {}),
+      ...summary, ...(usage.length ? { stageAgentUsage: usage } : {}),
+    })
     return requireAccepted(result, 'workflow_run')
   }
 
@@ -454,9 +467,14 @@ export function createProjectBoundRemoteSync(input: {
       )
     },
     async evaluateRuntimeBudget(request) {
-      return input.remoteSync.evaluateRuntimeBudget(
-        await bindProjectId(request, input.credentialSource),
-      )
+      const scope = await freezeCanonicalScope()
+      if (scope.localProjectId !== request.projectId) throw new Error('Paired Team Project is bound to a different local project.')
+      const usage = await input.credentialSource.listAgentTokenUsage?.() ?? []
+      const runIds = new Set(usage.filter((row) => row.projectId === request.projectId && row.executorKind).map((row) => row.runId))
+      // An asynchronous outbox must not let the next call outrun the previous call's consumption.
+      // Failed uploads make the existing runtime guard unavailable, never grant extra budget.
+      for (const runId of runIds) await uploadCanonicalRun(runId, scope)
+      return input.remoteSync.evaluateRuntimeBudget({ ...request, projectId: scope.teamProjectId })
     },
   }
 }

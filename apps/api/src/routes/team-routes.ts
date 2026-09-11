@@ -16,6 +16,7 @@ import {
   type BudgetGuardDecision,
   type GateOverrideDecision,
   formatUsd,
+  formatCostRollup,
   type KnowledgeChunk,
   type KnowledgeDocument,
   parseRemoteAgentReviewSummary,
@@ -543,7 +544,7 @@ function filterOverviewForSession(
     runs,
     projectCost,
     memberCost: projects.length === overview.projects.length ? overview.memberCost : [],
-    totalCost: formatUsd(projectCost.reduce((sum, rollup) => sum + rollup.costUsd, 0)),
+    totalCost: formatCostRollup(projectCost),
     testEvidenceSummaries: overview.testEvidenceSummaries.filter((evidence) =>
       projectIds.has(evidence.projectId) && runIds.has(evidence.runId),
     ),
@@ -1527,8 +1528,12 @@ export async function resolveTeamRoute(
             options.session!,
           ),
         ])
-        const currentSpendUsd =
-          overview.projectCost.find((rollup) => rollup.key === budgetInput.projectId)?.costUsd ?? 0
+        const projectCost = overview.projectCost.find((rollup) => rollup.key === budgetInput.projectId)
+        const currentSpendUsd = projectCost?.costUsd ?? 0
+        if (projectCost?.unknownCostCount) return {
+          status: 'unavailable', blocksRun: true, currentSpendUsd, projectedCostUsd: budgetInput.projectedCostUsd,
+          reason: '预算数据不完整：已有调用金额待确认。',
+        }
 
         return evaluateRuntimeBudgetGuard({
           projectId: budgetInput.projectId,

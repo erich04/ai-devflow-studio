@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
 import { inspectStoredProviderRemoval } from './provider-credential-store'
 import type { ProviderRemovalCheck, ProviderRemovalResult } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
@@ -426,6 +427,7 @@ export type ManagedCodingWorkspaceCleanupMutationResult =
 
 export type CodingAgentMutation = {
   expectedRun: CodingAgentRun
+  expectedWorkflowRun?: WorkflowRun
   expectedPendingPermissionRequestIds: readonly string[]
   run?: CodingAgentRun
   expectedPermissionRequests?: readonly CodingPermissionRequest[]
@@ -444,9 +446,11 @@ export type CodingAgentMutationResult =
     }
   | {
       committed: false
-      reason: 'stale_run' | 'terminal_run' | 'stale_permission_request' | 'stale_permission_set'
+      reason: 'stale_run' | 'terminal_run' | 'stale_permission_request' | 'stale_permission_set' | 'stale_workflow'
       run: CodingAgentRun
     }
+
+export type ReserveCodingAgentRunOptions = { maxOpenCodeAttempts: number }
 
 export type ReserveCodingAgentRunResult =
   | { reserved: true; run: CodingAgentRun }
@@ -1043,7 +1047,7 @@ export type LocalStore = {
   saveCodingChangeSet(changeSet: CodingChangeSet): Promise<CodingChangeSet>
   getCodingChangeSet(changeSetId: string): Promise<CodingChangeSet | null>
   listCodingChangeSets(codingRunId?: string): Promise<CodingChangeSet[]>
-  reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult>
+  reserveCodingAgentRun(run: CodingAgentRun, options?: ReserveCodingAgentRunOptions): Promise<ReserveCodingAgentRunResult>
   commitCodingAgentMutation(
     mutation: CodingAgentMutation,
   ): Promise<CodingAgentMutationResult>
@@ -4256,6 +4260,7 @@ export function gateCommandExecutionFingerprint(command: GateCommand): string {
     expectedRunVersion: command.expectedRunVersion,
     expectedPolicyVersion: command.expectedPolicyVersion,
     expectedBlockerIds: command.expectedBlockerIds,
+    ...(command.reviewSubject ? { reviewSubject: command.reviewSubject } : {}),
     evaluationStatus: command.evaluationStatus,
     evaluationBlockerIds: command.evaluationBlockerIds,
     serverEvaluatedAt: command.evaluatedAt,
@@ -4333,6 +4338,11 @@ function readPersistedGateEvidence(
     'select json from agent_reviews where run_id = ? order by created_at desc',
     [runId],
   )
+  const githubDeliveryIntents = selectJson<GitHubDeliveryIntent>(
+    db,
+    'select json from github_delivery_intents where run_id = ? order by created_at asc, id asc',
+    [runId],
+  )
   const latestCodingRun = [...codingRuns].sort((left, right) =>
     (right.completedAt ?? right.startedAt).localeCompare(
       left.completedAt ?? left.startedAt,
@@ -4344,6 +4354,7 @@ function readPersistedGateEvidence(
     codingDiffs,
     testEvidence,
     agentReviews,
+    githubDeliveryIntents,
     ...(latestCodingRun?.budgetDecision
       ? { budgetDecision: latestCodingRun.budgetDecision }
       : {}),
@@ -4361,6 +4372,7 @@ function canonicalPersistedGateEvidence(
     codingDiffs: byId(evidence.codingDiffs),
     testEvidence: byId(evidence.testEvidence),
     agentReviews: byId(evidence.agentReviews),
+    githubDeliveryIntents: byId(evidence.githubDeliveryIntents ?? []),
     ...(evidence.budgetDecision
       ? { budgetDecision: evidence.budgetDecision }
       : {}),
@@ -12384,14 +12396,27 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void> {
-    this.db.run(
-      `
-      insert into agent_token_usage (id, run_id, node_id, json, timestamp)
-      values (?, ?, ?, ?, ?)
-      on conflict(id) do update set json = excluded.json, timestamp = excluded.timestamp
-      `,
-      [usage.id, usage.runId, usage.nodeId, JSON.stringify(usage), usage.timestamp],
-    )
+    this.db.run('begin transaction')
+    try {
+      this.db.run(
+        `
+        insert into agent_token_usage (id, run_id, node_id, json, timestamp)
+        values (?, ?, ?, ?, ?)
+        on conflict(id) do update set json = excluded.json, timestamp = excluded.timestamp
+        `,
+        [usage.id, usage.runId, usage.nodeId, JSON.stringify(usage), usage.timestamp],
+      )
+      if (usage.executorKind) {
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'run-summary', localProjectId: usage.projectId,
+          runId: usage.runId, entityId: usage.runId, createdAt: usage.timestamp,
+        })
+      }
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 
@@ -12600,7 +12625,7 @@ class SqlJsLocalStore implements LocalStore {
         )
   }
 
-  async reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult> {
+  async reserveCodingAgentRun(run: CodingAgentRun, options?: ReserveCodingAgentRunOptions): Promise<ReserveCodingAgentRunResult> {
     if (!isActiveCodingAgentRunStatus(run.status)) {
       throw new Error('Coding Agent reservation requires an active run status')
     }
@@ -12618,6 +12643,7 @@ class SqlJsLocalStore implements LocalStore {
     if (active) {
       return { reserved: false, reason: 'active_run_exists', run: active }
     }
+    assertOpenCodeAttemptReservation(existingRuns, run, options?.maxOpenCodeAttempts)
     writeCodingAgentRun(this.db, run)
     await this.persist()
     return { reserved: true, run }
@@ -12636,6 +12662,12 @@ class SqlJsLocalStore implements LocalStore {
     }
     if (JSON.stringify(currentRun) !== JSON.stringify(mutation.expectedRun)) {
       return { committed: false, reason: 'stale_run', run: currentRun }
+    }
+    if (mutation.expectedWorkflowRun) {
+      const workflow = readWorkflowRuns(this.db).find((run) => run.id === currentRun.runId)
+      if (JSON.stringify(workflow) !== JSON.stringify(mutation.expectedWorkflowRun)) {
+        return { committed: false, reason: 'stale_workflow', run: currentRun }
+      }
     }
     if (mutation.run && mutation.run.id !== currentRun.id) {
       throw new Error('Coding Agent mutation cannot change the run identity')

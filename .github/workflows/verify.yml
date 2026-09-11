@@ -77,7 +77,8 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm typecheck
-      - run: corepack pnpm test
+      # Bound concurrent Git/SQLite fixtures on the shared Windows runner.
+      - run: corepack pnpm run test --maxWorkers=2
       - run: corepack pnpm test:cross-platform
 
   postgres-integration:
@@ -125,9 +126,7 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
           NEEDRESTART_MODE: a
         run: |
-          if [[ -f /etc/apt/apt-mirrors.txt ]]; then
-            sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
-          fi
+          # Keep the Ubuntu mirror configured for this hosted runner.
           sudo -E timeout --signal=TERM --kill-after=10s 240s apt-get update \
             -o Acquire::Retries=3 \
             -o Acquire::ForceIPv4=true \

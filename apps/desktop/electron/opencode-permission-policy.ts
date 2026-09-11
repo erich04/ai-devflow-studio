@@ -86,6 +86,30 @@ const EXTERNAL_CONFIG_ENV_PATH =
 const WORKTREE_MARKER = '[REDACTED:worktree_path]'
 const PROJECT_MARKER = '[REDACTED:project_path]'
 
+export function buildOpenCodeManagedPrompt(brief: string): string {
+  return [
+    brief,
+    '',
+    '# DevFlow OpenCode execution constraints',
+    '',
+    'These executor constraints apply to every tool call, including command examples in upstream artifacts. They do not change the requested outcome or grant permissions.',
+    '- You are already inside the disposable managed worktree. Use repository-relative paths and do not inspect the original checkout, home directory, secrets, or .git metadata.',
+    '- Use the read, glob, and grep tools to inspect source files. Do not use shell cat, ls, find, grep, sed, or inline interpreters as substitutes.',
+    '- Submit one shell command per tool call. Do not combine commands with &&, semicolons, pipes, newlines, redirection, or shell expansion.',
+    '- Supported shell checks include `pwd`, `git status --short`, `git branch --show-current`, `git diff --stat`, `git diff -- src/app.ts`, and `rg TODO src`. Other Git branch commands, log, config, remote, fetch, commit, push, and worktree commands are not supported.',
+    '- Make the minimal requested source edit with the edit/write tool, identifying one file inside the managed worktree. Wait for DevFlow permission approval; never bypass a denied capability using another tool.',
+    '- Do not install or download packages, use network commands, publish, deploy, or change repository scripts/configuration to gain command access.',
+    '- DevFlow runs dependency preparation and the configured test command after you finish the source edit. If dependencies are unavailable, report that tests were not run and let that governed phase collect the evidence; do not claim tests passed or attempt an installation.',
+    '- Finish with a concise summary of the actual changes and checks. Do not commit, push, or approve the final change yourself.',
+  ].join('\n')
+}
+
+export function isAutomaticOpenCodeRead(input: OpenCodePermissionPolicyInput): boolean {
+  if (input.permission !== 'bash' || classifyOpenCodePermission(input).status !== 'allowed') return false
+  return /^(?:pwd|git branch --show-current|git status(?: --short| --porcelain(?:=v[12])?)?)$/u
+    .test(normalizeCommand(input.command) ?? '')
+}
+
 export function classifyOpenCodePermission(
   input: OpenCodePermissionPolicyInput,
 ): OpenCodePermissionPolicyDecision {
@@ -158,7 +182,7 @@ export function classifyOpenCodePermission(
     )
   }
 
-  if (DISABLED_GIT_SUBCOMMAND.test(command) || GIT_ALTERNATE_SCOPE.test(command)) {
+  if ((DISABLED_GIT_SUBCOMMAND.test(command) && command !== 'git branch --show-current') || GIT_ALTERNATE_SCOPE.test(command)) {
     return denied(
       'git_write_disabled',
       'OpenCode Git mutation, remote access, commit, fetch, and worktree operations are disabled.',
@@ -250,7 +274,7 @@ function unwrapManagedWorktreeCommand(command: string): string | undefined {
 }
 
 function isAllowedLocalCommand(command: string): boolean {
-  if (command === 'pwd') return true
+  if (command === 'pwd' || command === 'git branch --show-current') return true
   if (SAFE_LOCAL_PACKAGE_MANAGER_INVOCATIONS.some((pattern) => pattern.test(command))) return true
   if (
     /^git status(?:\s+(?:-s|-b|--short|--branch|--porcelain(?:=(?:v1|v2))?|--untracked-files(?:=(?:no|normal|all))?|--ignored(?:=(?:traditional|matching|no))?|--|[A-Za-z0-9._/@+][A-Za-z0-9._/@+-]*))*$/iu.test(command)

@@ -1,3 +1,6 @@
+import { resolveDeepSeekPricingSnapshot } from './cost'
+import { KNOWLEDGE_REVIEW_SANITIZER_VERSION, parseGateReviewSubjectSnapshot, type GateReviewSubjectSnapshot } from './gate-review-subject'
+export { KNOWLEDGE_REVIEW_SANITIZER_VERSION } from './gate-review-subject'
 import type {
   AgentEvent,
   AgentPolicyFinding,
@@ -92,9 +95,12 @@ export type WorkflowArtifactProviderOutput = {
   usage?: AgentProviderUsage
 }
 
-export function workflowArtifactOutputInstructions(stage: WorkflowArtifactProviderRequest['stage']): string {
+export function workflowArtifactOutputInstructions(
+  stage: WorkflowArtifactProviderRequest['stage'],
+  requiresRepositoryFindings = false,
+): string {
   return [
-    `Return only valid JSON with title, summary, ${stage === 'design' ? 'content, ' : ''}goals, acceptanceCriteria, nonGoals, openQuestions, assumptions, risks. Do not wrap the JSON in Markdown.`,
+    `Return only valid JSON with title, summary, ${stage === 'design' ? 'content, ' : ''}goals, acceptanceCriteria, nonGoals, openQuestions, assumptions, risks${requiresRepositoryFindings ? ', repositoryFindings' : ''}. Do not wrap the JSON in Markdown.`,
     'The top-level goals, acceptanceCriteria, nonGoals, openQuestions, assumptions and risks fields must be arrays of strings.',
     ...(stage === 'design' ? [
       'The content field is a required non-empty content string containing the complete Markdown design. It is a top-level JSON field, not a list item or a nested object.',
@@ -340,7 +346,6 @@ export const KNOWLEDGE_REVIEW_SUBJECT_CHUNK_CHARACTERS = 4_000
 export const KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS = 48_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_SUBJECT_CHARACTERS = 64_000
 export const KNOWLEDGE_REVIEW_MAX_RUN_REQUEST_CHARACTERS = 12_000
-export const KNOWLEDGE_REVIEW_SANITIZER_VERSION = 'sensitive-text-v1'
 const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
   'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Review the Subject; use Criteria only as grounding. Do not approve the Gate. Do not wrap the response in Markdown.'
 
@@ -1110,6 +1115,27 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
   ].join('\n')
 }
 
+export async function buildGateReviewSubjectSnapshot(input: {
+  run: WorkflowRun
+  artifacts: readonly Artifact[]
+}): Promise<GateReviewSubjectSnapshot> {
+  const node = input.run.nodes.find((candidate) => candidate.id === input.run.currentNodeId)
+  if (!node || (node.kind !== 'gate' && node.kind !== 'acceptance')) {
+    throw new Error('The current node is not an approval target.')
+  }
+  const request = redactSensitiveText(providerValueToString(input.run.request)).value
+  const subjects = await buildSubjectArtifacts(selectReviewSubjectArtifacts(input.run, node, [...input.artifacts]))
+  if (!request.trim() || subjects.some((subject) => subject.coverage === 'incomplete')) {
+    throw new Error('Gate Review subjects are incomplete.')
+  }
+  return parseGateReviewSubjectSnapshot({
+    version: 1, runId: input.run.id, runVersion: input.run.version, nodeId: node.id, stage: node.stage,
+    sanitizerVersion: KNOWLEDGE_REVIEW_SANITIZER_VERSION, requestDigest: await sha256Hex(request),
+    artifacts: subjects.map(({ id, nodeId, kind, updatedAt, contentDigest }) =>
+      ({ id, nodeId, kind, updatedAt, contentDigest })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  })
+}
+
 export async function assessAgentReviewFreshness(input: {
   review: AgentReviewResult
   run: WorkflowRun
@@ -1407,8 +1433,16 @@ export function estimateAgentTokenUsage(input: EstimateAgentTokenUsageInput): Ag
   const inputTokens = input.providerUsage?.inputTokens ?? estimateTokens(input.prompt)
   const outputTokens = input.providerUsage?.outputTokens ?? estimateTokens(input.completion)
   const cacheReadTokens = input.providerUsage?.cacheReadTokens ?? 0
-  const price = MODEL_PRICES_PER_1K[input.model] ?? MODEL_PRICES_PER_1K['gpt-4.1-mini']!
-  const costUsd = (inputTokens / 1000) * price.input + (outputTokens / 1000) * price.output
+  const pricingSnapshot = input.providerUsage?.billingProvider === 'deepseek'
+    ? resolveDeepSeekPricingSnapshot({ providerId: 'deepseek', model: input.model, timestamp: input.timestamp, worstCase: true })
+    : null
+  const price = MODEL_PRICES_PER_1K[input.model]
+  const costUsd = pricingSnapshot && input.providerUsage?.cacheStatus === 'complete'
+    ? Number(((cacheReadTokens * pricingSnapshot.cacheHitInputUsdPerMillion +
+        (inputTokens - cacheReadTokens) * pricingSnapshot.cacheMissInputUsdPerMillion +
+        outputTokens * pricingSnapshot.outputUsdPerMillion) / 1_000_000).toFixed(9))
+    : input.providerUsage?.billingProvider === 'deepseek' ? null
+      : price ? (inputTokens / 1000) * price.input + (outputTokens / 1000) * price.output : null
 
   return {
     id: input.id,
@@ -1422,6 +1456,8 @@ export function estimateAgentTokenUsage(input: EstimateAgentTokenUsageInput): Ag
     outputTokens,
     cacheReadTokens,
     costUsd,
+    costStatus: costUsd === null ? 'unknown' : 'estimated',
+    ...(pricingSnapshot ? { pricingSnapshot } : {}),
     timestamp: input.timestamp,
     source,
   }
@@ -1679,7 +1715,7 @@ export async function runKnowledgeReviewAgent({
     ...(providerOutput.usage ? { providerUsage: providerOutput.usage } : {}),
   })
 
-  return { review, trace, tokenUsage }
+  return { review, trace, tokenUsage: { ...tokenUsage, executorKind: 'direct-provider', providerId: provider.id } }
 }
 
 export function createAgentReviewArtifacts(result: AgentReviewExecutionResult): {

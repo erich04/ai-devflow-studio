@@ -380,7 +380,9 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
     expect(serialized).not.toContain('CREDENTIAL_MUST_NOT_PERSIST')
     expect(serialized).not.toContain('Change the message from old to new.')
     expect(serialized).not.toContain('export const message')
-  })
+    // Git worktrees plus a persisted restart can exceed Vitest's 5s default on Windows.
+    // The exercised Provider timeout remains 25ms in createFixture.
+  }, 15_000)
 
   it('persists an initial timeout without leaving an approval request', async () => {
     let requestNumber = 0

@@ -1285,6 +1285,31 @@ test.describe('AI DevFlow desktop workbench', () => {
         await expect.poll(() => team.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
       })
 
+      test(`shows actual Run tokens with an explicitly unknown price (${viewport.width}, ${colorScheme})`, async ({ page }, testInfo) => {
+        await page.setViewportSize(viewport)
+        await page.emulateMedia({ colorScheme })
+        await installDesktopApi(page, 'agent-ux-paired')
+        await page.addInitScript(() => {
+          const api = window.aiDevFlowDesktop!
+          const load = api.loadState
+          api.loadState = async () => {
+            const state = await load()
+            const run = state.runs[0]!
+            return { ...state, agentTokenUsage: [{ id: 'opencode-consumption', runId: run.id, nodeId: run.currentNodeId,
+              projectId: run.projectId, userId: run.creatorId, provider: 'openai', providerId: 'deepseek', model: 'deepseek-v4-flash',
+              inputTokens: 15268, outputTokens: 1444, cacheReadTokens: 12416, costUsd: null,
+              source: 'provider_reported', costStatus: 'unknown', usageStatus: 'complete', executorKind: 'local-agent', timestamp: run.updatedAt }] }
+          }
+        })
+        await page.goto('/')
+        const usage = page.getByTestId('run-token-usage')
+        await expect(usage).toContainText('16,712')
+        await expect(usage).toContainText('1 项金额待确认')
+        await expect(usage).not.toContainText('$0.00')
+        await expect(page.getByTestId('runtime-budget-status')).toContainText('数据不完整')
+        await page.screenshot({ path: testInfo.outputPath('unknown-run-cost.png') })
+      })
+
       test(`opens card attachment counts with the keyboard (${viewport.width}, ${colorScheme})`, async ({ page }, testInfo) => {
         await page.setViewportSize(viewport)
         await page.emulateMedia({ colorScheme })

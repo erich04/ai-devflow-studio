@@ -2,6 +2,7 @@ import { assertPolicyRevision, EnforcementPolicyConflictError } from './enforcem
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
   formatUsd,
+  formatCostRollup,
   annotateUnknownRuntimeCosts,
   buildPolicyAwareDeliverySummaries,
   rollupTokenUsage,
@@ -160,6 +161,7 @@ type OrganizationRow = {
 }
 
 type WorkflowRunRow = {
+  gate_review_subject?: import('@ai-devflow/shared').GateReviewSubjectSnapshot | null
   id: string
   run_version: number
   title: string
@@ -249,7 +251,7 @@ type TokenUsageRow = {
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
-  cost_usd: string | number
+  cost_usd: string | number | null
   timestamp: TimestampValue
 }
 
@@ -733,6 +735,7 @@ function mapRun(
   edges: WorkflowEdge[],
 ): WorkflowRun {
   const run: WorkflowRun = {
+    ...(row.gate_review_subject ? { gateReviewSubject: row.gate_review_subject } : {}),
     id: row.id,
     version: row.run_version,
     title: row.title,
@@ -767,7 +770,7 @@ function mapTokenUsage(row: TokenUsageRow): TokenUsage {
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
     cacheReadTokens: row.cache_read_tokens,
-    costUsd: Number(row.cost_usd),
+    costUsd: row.cost_usd === null ? null : Number(row.cost_usd),
     timestamp: timestamp(row.timestamp),
   }
 }
@@ -2355,13 +2358,14 @@ export function createPostgresTeamRepository(
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
         .map(runtimeCostSummaryToTokenUsage)
         .filter((usage): usage is TokenUsage => usage !== null)
-      const allTokenUsage = [...tokenUsage, ...codingTokenUsage]
+      const stageUsageRows = await db.query<{ stage_agent_usage: Record<string, AgentTokenUsage> }>(
+        'SELECT stage_agent_usage FROM workflow_runs WHERE organization_id = $1', [context.organizationId],
+      )
+      const stageUsage = stageUsageRows.flatMap((row) => Object.values(row.stage_agent_usage ?? {}))
+      const allTokenUsage = [...tokenUsage, ...codingTokenUsage, ...stageUsage]
       const codingCostSummaries = codingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
-      const unknownCostCount = codingCostSummaries.filter(
-        (summary) => runtimeCostSummaryToTokenUsage(summary) === null,
-      ).length
       const gateOverrides = gateOverrideRows.map(mapGateOverride)
       const runtimeBudgetPolicies = runtimeBudgetPolicyRows.map(mapRuntimeBudgetPolicy)
       const runtimeBudgetApprovals = runtimeBudgetApprovalRows.map(mapRuntimeBudgetApproval)
@@ -2380,7 +2384,7 @@ export function createPostgresTeamRepository(
           codingCostSummaries,
           'userId',
         ),
-        totalCost: `${formatUsd(allTokenUsage.reduce((sum, row) => sum + row.costUsd, 0))}${unknownCostCount > 0 ? ' + unknown' : ''}`,
+        totalCost: formatCostRollup(annotateUnknownRuntimeCosts(rollupTokenUsage(allTokenUsage, 'projectId'), codingCostSummaries, 'projectId')),
         testEvidenceSummaries,
         agentReviews,
         agentTraces: agentTraceRows.map(mapAgentTrace),
@@ -2482,6 +2486,35 @@ export function createPostgresTeamRepository(
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
       summary = redactRemoteRunSummaryForSync(summary)
       return withTeamDbTransaction(db, async (tx) => {
+        const persistReviewSubject = async () => {
+          if (!summary.gateReviewSubject) return
+          const [saved] = await tx.query<{ id: string }>(`
+            /* run_summary:review-subject */
+            UPDATE workflow_runs SET gate_review_subject = $5::jsonb
+            WHERE id = $1 AND organization_id = $2 AND project_id = $3 AND run_version = $4
+              AND (gate_review_subject IS NULL OR gate_review_subject = $5::jsonb)
+            RETURNING id`,
+            [summary.runId, context.organizationId, summary.projectId, summary.version,
+              JSON.stringify(summary.gateReviewSubject)])
+          if (!saved) throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
+        const persistStageUsage = async () => {
+          if (!summary.stageAgentUsage?.length) return
+          if (summary.stageAgentUsage.some((row) => row.userId !== context.userId)) {
+            throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+          }
+          const [saved] = await tx.query<{ id: string }>(`
+            UPDATE workflow_runs SET stage_agent_usage = stage_agent_usage || $4::jsonb
+            WHERE id = $1 AND organization_id = $2 AND project_id = $3
+              AND NOT EXISTS (
+                SELECT 1 FROM jsonb_each($4::jsonb) incoming
+                WHERE stage_agent_usage ? incoming.key AND stage_agent_usage -> incoming.key IS DISTINCT FROM incoming.value
+              ) RETURNING id`,
+            [summary.runId, context.organizationId, summary.projectId,
+              JSON.stringify(Object.fromEntries(summary.stageAgentUsage.map((row) => [row.id, row])))],
+          )
+          if (!saved) throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
         await tx.query(
           `
             /* run_summary:authority-lock */
@@ -2555,6 +2588,7 @@ export function createPostgresTeamRepository(
             VALUES ($1, $2, $3, $4, $5, 'remote', $6, $7, $8, $9, $10, NULL, $11, $11)
             ON CONFLICT (id) DO UPDATE
             SET run_version = excluded.run_version,
+                gate_review_subject = NULL,
                 title = excluded.title,
                 status = excluded.status,
                 current_node_id = excluded.current_node_id,
@@ -2615,6 +2649,8 @@ export function createPostgresTeamRepository(
             throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
           }
 
+          await persistReviewSubject()
+          await persistStageUsage()
           return {
             accepted: true,
             syncedAt: new Date().toISOString(),
@@ -2686,6 +2722,8 @@ export function createPostgresTeamRepository(
           throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
         }
 
+        await persistReviewSubject()
+        await persistStageUsage()
         return {
           accepted: true,
           syncedAt: new Date().toISOString(),
@@ -2728,9 +2766,9 @@ export function createPostgresTeamRepository(
             updated_at
           )
           VALUES ($1, $2, 'test', 'Test Evidence', $3, 'test', $4, $5, NULL, 0, NULL, 999, $6, $6)
+          -- Existing node status belongs to the versioned Run summary.
           ON CONFLICT (id) DO UPDATE
           SET subtitle = excluded.subtitle,
-              status = excluded.status,
               updated_at = excluded.updated_at
         `,
         [
@@ -2844,9 +2882,9 @@ export function createPostgresTeamRepository(
             updated_at
           )
           VALUES ($1, $2, 'design', '门禁审查目标', $3, 'gate', $4, $5, 'lead', 0, NULL, 998, $6, $6)
+          -- Review advice must not mutate the canonical Workflow status.
           ON CONFLICT (id) DO UPDATE
           SET subtitle = excluded.subtitle,
-              status = excluded.status,
               updated_at = excluded.updated_at
         `,
         [

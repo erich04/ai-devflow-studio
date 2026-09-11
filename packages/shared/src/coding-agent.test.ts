@@ -208,6 +208,31 @@ describe('canRunCodingAgentOnNode', () => {
 })
 
 describe('buildCodingBrief', () => {
+  it('carries only the latest relevant failed test diagnostic into an explicit retry', () => {
+    const failed: TestEvidence = { ...testEvidence, status: 'failed', exitCode: 1,
+      summary: 'Tests failed with exit code 1',
+      stdout: 'Found multiple elements with the role "button" and name "生成计划"',
+      stderr: 'API_KEY=private-retry-key /Users/example/private/test.ts\n' + 'x'.repeat(10_000),
+    }
+    const build = (evidence: TestEvidence[]) => buildCodingBrief({
+      run, node: buildNode, project, upstreamArtifacts: [], knowledgeReferences: [],
+      governanceChecks: [], gateDecisions: [], testEvidence: evidence,
+      userInstruction: 'Retry the implementation.', worktreePath: '/tmp/managed', branchName: 'devflow/retry',
+    }).prompt
+    const prompt = build([failed,
+      { ...failed, id: 'other-run', runId: 'other-run', stdout: 'FOREIGN_DIAGNOSTIC', createdAt: '2026-06-18T00:00:00Z' },
+      { ...failed, id: 'other-project', projectId: 'other-project', stdout: 'FOREIGN_DIAGNOSTIC', createdAt: '2026-06-18T00:00:00Z' },
+      { ...failed, id: 'other-command', command: 'npm test', stdout: 'FOREIGN_DIAGNOSTIC', createdAt: '2026-06-18T00:00:00Z' },
+    ])
+    expect(prompt).toContain(JSON.stringify(failed.stdout))
+    expect(prompt).not.toContain('private-retry-key')
+    expect(prompt).not.toContain('/Users/example')
+    expect(prompt).not.toContain('FOREIGN_DIAGNOSTIC')
+    expect(prompt).not.toContain('x'.repeat(2_001))
+    expect(build([failed, { ...testEvidence, id: 'new-success', createdAt: '2026-06-18T00:00:00Z' }]))
+      .not.toContain('Found multiple elements')
+  })
+
   it('assembles a DevFlow-native coding brief from run, node, artifacts, knowledge, gates, and tests', () => {
     const brief = buildCodingBrief({
       run,

@@ -647,10 +647,10 @@ describe('DeepSeek runtime settlement', () => {
     ).toEqual([
       {
         key: 'project-1',
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        totalTokens: 0,
+        inputTokens: 200,
+        outputTokens: 20,
+        cacheReadTokens: 20,
+        totalTokens: 220,
         costUsd: 0,
         unknownCostCount: 2,
       },

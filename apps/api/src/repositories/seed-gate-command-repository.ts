@@ -34,6 +34,7 @@ type MaybePromise<T> = T | Promise<T>
 export type GateCommandPreflightResult =
   | {
       ok: true
+      reviewSubject?: GateCommand['reviewSubject']
       requestedRole: Role
       workflowCommand: GateCommandWorkflowCommand | null
       evaluationBlockerIds: string[]
@@ -377,6 +378,7 @@ export function createSeedGateCommandRepository(
     }
 
     const command = safeGateCommand({
+      ...(preflight.reviewSubject ? { reviewSubject: preflight.reviewSubject } : {}),
       id: nextId('gate-command'),
       version: 1,
       organizationId: principal.session.organizationId,

@@ -63,6 +63,7 @@ export type CodingExecutor = {
   continuePermission(
     input: CodingExecutorContinuePermissionInput,
   ): Promise<CodingExecutorStartResult>
+  refreshPermission?(input: CodingExecutorContinuePermissionInput & { newRequestId: string }): Promise<CodingExecutorWaitingPermissionResult>
   cancel(input: CodingEngineCancelInput): Promise<void>
 }
 
@@ -201,6 +202,15 @@ export function createCodingExecutorCompatibilityAdapter(
           : 'metered',
     ...(engine.modelId ? { modelId: engine.modelId } : {}),
     ensure: (input) => engine.ensure(input),
+    ...(engine.refreshPermission ? {
+      async refreshPermission(input: CodingExecutorContinuePermissionInput & { newRequestId: string }): Promise<CodingExecutorWaitingPermissionResult> {
+        const result = await engine.refreshPermission!({ ...input.runtimeContext, newRequestId: input.newRequestId })
+        return {
+          ...result, kind: 'waiting_permission',
+          turn: permissionTurn({ descriptor, ...input, result }),
+        }
+      },
+    } : {}),
     async start(input) {
       const result = await engine.start(input.runtimeContext)
       return 'permissionRequest' in result

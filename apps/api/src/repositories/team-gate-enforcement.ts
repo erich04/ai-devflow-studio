@@ -1,5 +1,6 @@
 import {
   assessAgentReviewFreshness,
+  assessProjectedAgentReviewFreshness,
   buildKnowledgeGovernanceChecks,
   evaluateGateEnforcement,
   type GateEnforcementDecision,
@@ -144,7 +145,9 @@ export async function evaluateTeamGateEnforcement(
   const reviewFreshness = await Promise.all(
     agentReviews.map(async (review) => ({
       review,
-      freshness: await assessAgentReviewFreshness({
+      freshness: run.gateReviewSubject ? assessProjectedAgentReviewFreshness({
+        review, run, node, subject: run.gateReviewSubject,
+      }) : await assessAgentReviewFreshness({
         review,
         run,
         node,
@@ -167,12 +170,7 @@ export async function evaluateTeamGateEnforcement(
     nodeId: localNodeId(override.nodeId),
   }))
 
-  return {
-    run,
-    node,
-    policyBundle,
-    overrides,
-    decision: evaluateGateEnforcement({
+  const decision = evaluateGateEnforcement({
       run,
       node,
       effectivePolicy: policyBundle.effectivePolicy,
@@ -181,6 +179,19 @@ export async function evaluateTeamGateEnforcement(
       latestAgentReview,
       overrides,
       policySource: 'remote_cache',
-    }),
+    })
+  if (localArtifacts.length === 0 && agentReviews.some((review) => review.contextManifest) &&
+    (!run.gateReviewSubject || !currentAgentReviews.some((review) => review.contextManifest))) {
+    const remediation = '请在已配对 Desktop 同步当前产物指纹；内容有变化时重新审查，再刷新此页面。'
+    decision.status = 'hard_blocked'
+    decision.blocksApproval = true
+    decision.canOverride = false
+    decision.blockingReasons.push({
+      id: 'gate-review-subject-not-current', target: 'missing_agent_review',
+      ruleKey: 'gate_review_subject:current', action: 'block',
+      summary: '云端缺少当前评审的产物指纹，或指纹与 Review 不一致。', remediation,
+    })
+    decision.requiredActions.push(remediation)
   }
+  return { run, node, policyBundle, overrides, decision }
 }

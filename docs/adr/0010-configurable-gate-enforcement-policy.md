@@ -71,3 +71,23 @@ policy.
   Agent findings blocking.
 - Future policy signatures, KMS-backed integrity, automatic remediation, MCP policy enforcement,
   and coding retry loops remain out of scope.
+
+## 2026-09-10: Review freshness across the Team projection
+
+The approved boundary keeps local Artifact bodies on Desktop. Main derives a bounded
+`GateReviewSubjectSnapshot` from its persisted Run and complete redacted subjects: Run/node
+identity and version, sanitizer version, request digest, and ordered Artifact IDs, kinds, timestamps
+and content digests. Neither Renderer input nor a Review's manifest supplies this snapshot.
+
+The Team API compares this independent snapshot with the Review manifest instead of hashing its
+placeholder request and absent local Artifacts. Missing or mismatched proof for a manifest-bearing
+local Review blocks Web approval and explains how to resync or review changed content. Old records
+without manifests retain their existing policy treatment. Same-version upload may fill missing
+proof once or replay identical proof; changed proof conflicts, and a new Run version clears old
+proof. Accounting can still sync when no complete current subject is available.
+
+Web submits the existing approval command. The server attaches its current snapshot; clients cannot
+choose it. Paired Desktop rebuilds the snapshot from full persisted subjects and runs its existing
+full-context policy, role, claim, expiry, replay and atomic evidence checks before applying the
+command and returning a receipt. Cloud preflight is not final local approval. No local request or
+Artifact body, chunk, source path or credential is added to the synchronization contract.

@@ -217,6 +217,7 @@ export type RunCodingAgentInput = {
   requestedBy: string
   userInstruction: string
   runtimeBudgetApprovalId?: string
+  additionalAttemptAfterCount?: number
 }
 
 export type RunCodingAgentResult = {
@@ -403,6 +404,7 @@ export type DevFlowDesktopApi = {
     comment: string
   }) => Promise<CodingPermissionRequest>
   subscribeCodingRun: (input: { codingRunId: string }) => Promise<LocalExecutionState>
+  renewCodingPermission: (input: { requestId: string; codingRunId: string; decidedBy: string }) => Promise<CodingPermissionRequest>
   listCodingAgentRuns: (input?: { runId?: string }) => Promise<CodingAgentRun[]>
   openManagedWorktree: (input: { workspaceId: string }) => Promise<ManagedCodingWorkspace>
   deleteManagedWorktree: (input: { workspaceId: string }) => Promise<ManagedCodingWorkspace>

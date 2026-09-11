@@ -133,6 +133,7 @@ import {
   parsePromoteAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
   parseReplyCodingPermissionInput,
+  parseRenewCodingPermissionInput,
   parseRemoteSnapshotInput,
   parseRetryRemoteSyncOperationInput,
   parseRunCodingAgentInput,
@@ -1078,6 +1079,7 @@ async function buildUnavailableGateCommandEvaluation(input: {
     codingDiffs,
     testEvidence,
     agentReviews,
+    githubDeliveryIntents,
     overrides,
   ] = await Promise.all([
     loadPolicySnapshotForProject(input.command.projectId),
@@ -1086,6 +1088,7 @@ async function buildUnavailableGateCommandEvaluation(input: {
     input.store.listCodingDiffArtifacts(input.run.id),
     input.store.listTestEvidence(input.run.id),
     input.store.listAgentReviews(input.run.id),
+    input.store.listGitHubDeliveryIntents(input.run.id),
     input.store.listGateOverrides(input.run.id),
   ])
   const unavailableAt = new Date().toISOString()
@@ -1141,6 +1144,7 @@ async function buildUnavailableGateCommandEvaluation(input: {
       codingDiffs,
       testEvidence,
       agentReviews,
+      githubDeliveryIntents,
     }),
   }
 }
@@ -1153,7 +1157,7 @@ async function evaluateGateCommandLocally(input: {
   remoteSync: RemoteSyncClient
 }): Promise<LocalGateCommandEvaluation> {
   try {
-    const [evaluation, codingRuns, codingDiffs] = await Promise.all([
+    const [evaluation, codingRuns, codingDiffs, githubDeliveryIntents] = await Promise.all([
       evaluateLocalGateEnforcement(
         {
           runId: input.run.id,
@@ -1168,6 +1172,7 @@ async function evaluateGateCommandLocally(input: {
       ),
       input.store.listCodingAgentRuns(input.run.id),
       input.store.listCodingDiffArtifacts(input.run.id),
+      input.store.listGitHubDeliveryIntents(input.run.id),
     ])
     const observedKnowledge = await loadTrustedRepositoryKnowledge(
       input.run.projectId,
@@ -1187,6 +1192,7 @@ async function evaluateGateCommandLocally(input: {
         codingDiffs,
         testEvidence: evaluation.testEvidence,
         agentReviews: evaluation.agentReviews,
+        githubDeliveryIntents,
       }),
     }
   } catch (error) {
@@ -2617,10 +2623,12 @@ function registerIpcHandlers() {
           runtime: 'electron',
         })
       } catch (error) {
-        return recordStageAgentFailure({
-          store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
-          sequence: events.length + 1, error,
-        })
+        try {
+          return await recordStageAgentFailure({
+            store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
+            sequence: events.length + 1, error,
+          })
+        } finally { wakeRemoteSyncOutbox() }
       }
       const completedAt = generated.artifact.updatedAt
       const event: AgentEvent = {
@@ -3445,6 +3453,20 @@ function registerIpcHandlers() {
     return runtime.subscribeCodingRun(input)
   })
 
+  ipcMain.handle(ipcChannels.renewCodingPermission, async (_, payload: unknown) => {
+    const input = parseRenewCodingPermissionInput(payload)
+    const store = await getStore()
+    const codingRun = (await store.listCodingAgentRuns()).find((candidate) => candidate.id === input.codingRunId)
+    if (!codingRun) throw new Error('Coding Agent run is unavailable')
+    const trusted = resolveTrustedCodingPermissionReply({
+      input: { ...input, decision: 'expired', comment: '' },
+      projectId: codingRun.projectId,
+      pairing: await store.getDesktopPairingCredential(),
+    })
+    const runtime = await createCodingRuntimeForRequest(undefined, codingRun.projectId)
+    return runtime.renewCodingPermission({ ...input, decidedBy: trusted.decidedBy })
+  })
+
   ipcMain.handle(ipcChannels.openManagedWorktree, async (_, payload: unknown) => {
     const input = parseOpenManagedWorktreeInput(payload)
     const runtime = await createCodingRuntimeForRequest()
@@ -3468,9 +3490,18 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
     const input = parseRunKnowledgeReviewInput(payload)
     return providerOperations.use(input.providerId, `Review ${input.runId}`, async () => {
+      const store = await getStore()
+      const run = await store.getRun(input.runId)
+      if (!run || run.projectId !== input.projectId) {
+        throw new Error('Review request does not match a persisted Workflow run')
+      }
+      const actor = resolveTrustedWorkflowActor(
+        run,
+        await store.getDesktopPairingCredential(),
+      )
       const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
       const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot)
-      const result = await runtime.run(input)
+      const result = await runtime.run({ ...input, requestedBy: actor.userId })
       wakeRemoteSyncOutbox()
       return result
     })

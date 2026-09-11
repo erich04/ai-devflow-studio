@@ -196,9 +196,7 @@ describe('V1.5 packaged GitHub Delivery release gate', () => {
       expect(workflow).toContain('DEVFLOW_PACKAGED_SMOKE_NETWORK_MODE: offline')
       expect(workflow).toContain('DEBIAN_FRONTEND: noninteractive')
       expect(workflow).toContain('NEEDRESTART_MODE: a')
-      expect(workflow).toContain(
-        "sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt",
-      )
+      expect(workflow).not.toMatch(/sudo[^\n]*sed[^\n]*apt-mirrors/u)
       expect(workflow).toContain(
         'sudo -E timeout --signal=TERM --kill-after=10s 240s apt-get update',
       )

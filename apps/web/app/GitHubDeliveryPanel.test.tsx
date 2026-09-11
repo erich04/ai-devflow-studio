@@ -186,6 +186,43 @@ describe('GitHubDeliveryPanel', () => {
     )).not.toBeInTheDocument()
   })
 
+  it.each([
+    [409, 'binding_conflict', true],
+    [409, 'state_conflict', false],
+    [403, 'binding_conflict', false],
+  ])('explains only a confirmed repository binding conflict (%s, %s)', async (status, code, conflict) => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      code,
+      message: '/Users/alice/private API_TOKEN=private',
+    }), { status }))
+    vi.stubGlobal('fetch', fetcher)
+    render(
+      <GitHubDeliveryPanel
+        projectId="p-payments"
+        projectName="Payments"
+        initialBinding={null}
+        initialDeliveries={[]}
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('GitHub App installation ID'), {
+      target: { value: '12345' },
+    })
+    fireEvent.change(screen.getByLabelText('GitHub repository ID'), {
+      target: { value: '98765' },
+    })
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Confirm repository binding' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Configure repository binding' }))
+
+    expect(await screen.findByText(conflict
+      ? '此仓库已绑定其他项目，请使用独立仓库。'
+      : 'GitHub repository binding could not be changed safely.',
+    )).toBeInTheDocument()
+    expect(screen.getByLabelText('GitHub repository ID')).toHaveValue('98765')
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(document.body).not.toHaveTextContent('/Users/')
+    expect(document.body).not.toHaveTextContent('API_TOKEN')
+  })
+
   it('shows owner guidance only for the typed authority failure', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
       code: 'authority_required',

@@ -3593,6 +3593,139 @@ try {
   )
   expectNoLocalOnlyFields(syncedOverview, 'synced overview')
 
+  // Stage accounting must survive rejected output, same-version replays and a restarted DB read.
+  const accountingRun = `${runId}-accounting`
+  const accountingSummary = { kind: 'run', runId: accountingRun, version: 1, projectId: 'p-payments',
+    title: 'Stage usage accounting', status: 'clarifying', currentNodeId: 'clarify',
+    currentNode: { id: 'clarify', stage: 'clarify', kind: 'agent', status: 'running' },
+    branchName: 'codex/stage-accounting', updatedAt: timestamp }
+  const consumed = { id: `${accountingRun}-rejected`, runId: accountingRun, nodeId: 'clarify',
+    projectId: 'p-payments', userId: 'u-erich', provider: 'openai', providerId: 'unpriced-gateway',
+    model: 'deepseek-v4-flash', executorKind: 'local-agent', inputTokens: 15268, outputTokens: 1444,
+    cacheReadTokens: 12416, costUsd: null, source: 'provider_reported', usageStatus: 'complete',
+    costStatus: 'unknown', timestamp }
+  const beforeAccounting = await fetchOverview('before Stage usage')
+  await postJson('/api/sync/run-summary', { ...accountingSummary, stageAgentUsage: [consumed] })
+  await postJson('/api/sync/run-summary', { ...accountingSummary, stageAgentUsage: [consumed] })
+  const afterAccounting = await fetchOverview('after Stage usage replay')
+  const beforeCost = beforeAccounting.projectCost.find((row) => row.key === 'p-payments')
+  const afterCost = afterAccounting.projectCost.find((row) => row.key === 'p-payments')
+  expect(afterCost.totalTokens - beforeCost.totalTokens === 16712, 'Stage usage was dropped or counted twice')
+  expect(afterCost.unknownCostCount === (beforeCost.unknownCostCount ?? 0) + 1, 'Unknown Stage cost was not retained')
+  expect(afterAccounting.totalCost.includes('金额待确认'), 'Session-scoped Team overview hid unknown cost')
+  const budget = await postJson('/api/runtime/budget/evaluate', {
+    projectId: 'p-payments', providerId: 'double', projectedCostUsd: 0.001, requestedBy: 'u-erich',
+  })
+  expect(budget.blocksRun === true && budget.status === 'unavailable', 'Unknown Stage cost weakened budget enforcement')
+  const conflictingAccounting = await postJsonResult('/api/sync/run-summary', {
+    ...accountingSummary, stageAgentUsage: [{ ...consumed, inputTokens: 99999 }],
+  }, ownerSessionHeaders)
+  expect(conflictingAccounting.status === 409, 'Accounting replay must not overwrite consumed usage')
+  const accountingPool = new Pool({ connectionString: databaseUrl })
+  try {
+    const stored = await accountingPool.query('SELECT stage_agent_usage FROM workflow_runs WHERE id = $1', [accountingRun])
+    expect(stored.rows[0].stage_agent_usage[consumed.id].costUsd === null, 'Postgres converted unknown cost into zero')
+    expect(stored.rows[0].stage_agent_usage[consumed.id].inputTokens === 15268, 'Postgres accounting changed after rejected replay')
+  } finally { await accountingPool.end() }
+
+  // Child evidence cannot change the authoritative node projection or break cost retries.
+  const gateAccountingRun = `${runId}-gate-accounting`
+  const gateAccountingSummary = { ...accountingSummary, runId: gateAccountingRun,
+    status: 'paused_at_gate', currentNodeId: 'clarify-gate',
+    currentNode: { id: 'clarify-gate', stage: 'clarify', kind: 'gate', status: 'running', requiredRole: 'lead' } }
+  await postJson('/api/sync/run-summary', gateAccountingSummary)
+  await postJson('/api/sync/agent-review-summary', {
+    id: `${gateAccountingRun}-review`, runId: gateAccountingRun, nodeId: 'clarify-gate',
+    projectId: 'p-payments', runtime: 'electron', providerId: 'fake-knowledge-review', model: 'fake',
+    conclusion: 'Only advisory evidence', summary: 'Does not approve or block the Workflow node.',
+    riskCount: 0, missingEvidenceCount: 0, advisoryLevel: 'warn', blocksApproval: false,
+    confidence: 1, redacted: true, createdAt: timestamp,
+  })
+  const gateConsumed = { ...consumed, id: `${gateAccountingRun}-usage`, runId: gateAccountingRun,
+    nodeId: 'clarify-gate', executorKind: 'direct-provider' }
+  await postJson('/api/sync/run-summary', { ...gateAccountingSummary, stageAgentUsage: [gateConsumed] })
+  await postJson('/api/sync/run-summary', { ...gateAccountingSummary, stageAgentUsage: [gateConsumed] })
+  const alteredGateProjection = await postJsonResult('/api/sync/run-summary', {
+    ...gateAccountingSummary, currentNode: { ...gateAccountingSummary.currentNode, status: 'blocked' },
+  }, ownerSessionHeaders)
+  expect(alteredGateProjection.status === 409, 'Same-version canonical node changes must remain conflicts')
+
+  const testProjectionRun = `${runId}-test-projection`
+  const testProjectionSummary = { ...accountingSummary, runId: testProjectionRun,
+    status: 'testing', currentNodeId: 'test',
+    currentNode: { id: 'test', stage: 'test', kind: 'test', status: 'running' } }
+  await postJson('/api/sync/run-summary', testProjectionSummary)
+  await postJson('/api/sync/test-evidence-summary', {
+    id: `${testProjectionRun}-evidence`, runId: testProjectionRun, nodeId: 'test',
+    projectId: 'p-payments', command: 'npm test', status: 'passed', exitCode: 0,
+    durationMs: 10, summary: 'Execution evidence does not advance the Workflow.', redacted: true,
+    createdAt: timestamp,
+  })
+  await postJson('/api/sync/run-summary', testProjectionSummary)
+
+  // A local manifest-bearing Review must be checked against independent Main metadata.
+  const subjectNodeId = 'clarify-projection'
+  const subjectTimestamp = new Date().toISOString()
+  const sha = (text) => createHash('sha256').update(text).digest('hex')
+  const subject = { version: 1, runId: gateRunId, runVersion: 4, nodeId: subjectNodeId,
+    stage: 'clarify', sanitizerVersion: 'sensitive-text-v1', requestDigest: sha('Local request stays local.'),
+    artifacts: [{ id: `${gateRunId}-clarification`, nodeId: 'clarify-task', kind: 'clarification',
+      updatedAt: subjectTimestamp, contentDigest: sha('Full clarification stays local.') }] }
+  const subjectSummary = { kind: 'run', runId: gateRunId, version: 4, projectId: 'p-payments',
+    title: 'Metadata-only Gate approval', status: 'paused_at_gate', currentNodeId: subjectNodeId,
+    currentNode: { id: subjectNodeId, stage: 'clarify', kind: 'gate', status: 'running', requiredRole: 'lead' },
+    branchName: 'codex/postgres-gate-smoke', updatedAt: subjectTimestamp }
+  await postJsonWithBearer('/api/sync/run-summary', subjectSummary, gateDesktopPairing.token)
+  await postJsonWithBearer('/api/sync/agent-review-summary', {
+    id: `${gateRunId}-subject-review`, runId: gateRunId, nodeId: subjectNodeId, projectId: 'p-payments',
+    runtime: 'electron', providerId: 'fake-knowledge-review', model: 'fake', conclusion: 'Ready for human review',
+    summary: 'The complete local clarification matches the request.', riskCount: 0, missingEvidenceCount: 0,
+    advisoryLevel: 'info', blocksApproval: false, confidence: 1, redacted: true, createdAt: subjectTimestamp,
+    contextManifest: { version: 1, stage: 'clarify', coverage: 'complete',
+      runRequest: { contentDigest: subject.requestDigest, sanitizerVersion: subject.sanitizerVersion, coverage: 'complete' },
+      subjectArtifacts: subject.artifacts.map((artifact) => ({ ...artifact, runId: gateRunId,
+        sanitizerVersion: subject.sanitizerVersion, coverage: 'complete',
+        chunks: [{ index: 0, start: 0, end: 31, contentDigest: artifact.contentDigest }] })),
+      knowledgeCriteria: [], criteriaCoverage: 'empty' },
+  }, gateDesktopPairing.token)
+  const evaluateSubject = () => postJson('/api/enforcement/evaluate', {
+    projectId: 'p-payments', runId: gateRunId, nodeId: subjectNodeId,
+  }, pilotSessionHeaders)
+  expect((await evaluateSubject()).blockingReasons.some((reason) => reason.id === 'gate-review-subject-not-current'),
+    'A Review must not prove its own freshness when independent subject metadata is missing')
+  await postJsonWithBearer('/api/sync/run-summary', { ...subjectSummary, gateReviewSubject: subject }, gateDesktopPairing.token)
+  await postJsonWithBearer('/api/sync/run-summary', { ...subjectSummary, gateReviewSubject: subject }, gateDesktopPairing.token)
+  const subjectEvaluation = await evaluateSubject()
+  expect(!subjectEvaluation.blocksApproval, 'Unchanged local Review was still blocked without cloud Artifact bodies')
+  const tamperedSubject = await postJsonResult('/api/sync/run-summary', {
+    ...subjectSummary, gateReviewSubject: { ...subject, requestDigest: sha('Changed request') },
+  }, { authorization: `Bearer ${gateDesktopPairing.token}` })
+  expect(tamperedSubject.status === 409, 'Same-version subject metadata must be immutable')
+  const subjectCommandInput = { projectId: 'p-payments', runId: gateRunId, nodeId: subjectNodeId,
+    action: 'approve', reason: 'Approve the exact current local subjects.', expectedRunVersion: 4,
+    expectedPolicyVersion: subjectEvaluation.policyVersion, expectedBlockerIds: [],
+    idempotencyKey: `gate-command:subject:${gateRunId}:v4` }
+  const subjectCommand = await postJson('/api/team/projects/p-payments/gate-commands', subjectCommandInput, pilotSessionHeaders)
+  const subjectReplay = await postJson('/api/team/projects/p-payments/gate-commands', subjectCommandInput, pilotSessionHeaders)
+  expect(subjectReplay.replayed && subjectReplay.command.id === subjectCommand.command.id,
+    'Subject-bound approval replay created a different command')
+  expect(subjectCommand.command.reviewSubject?.requestDigest === subject.requestDigest,
+    'The API must bind the persisted independent subject into the command')
+  const subjectReceipt = await postJsonWithBearer(`/api/desktop/gate-commands/${subjectCommand.command.id}/receipts`, {}, gateDesktopPairing.token)
+  expect(subjectReceipt.command.reviewSubject?.artifacts[0]?.contentDigest === subject.artifacts[0].contentDigest,
+    'Desktop receipt lost the immutable approval subject')
+  const subjectPool = new Pool({ connectionString: databaseUrl })
+  try {
+    const stored = await subjectPool.query(`SELECT request, gate_review_subject,
+      (SELECT count(*)::integer FROM artifacts WHERE run_id = $1) AS artifact_count FROM workflow_runs WHERE id = $1`, [gateRunId])
+    expect(stored.rows[0].request === 'Synced from DevFlow Electron.' && stored.rows[0].artifact_count === 0,
+      'Subject projection uploaded local request or Artifact bodies')
+    expect(stored.rows[0].gate_review_subject.requestDigest === subject.requestDigest,
+      'Conflicting replay replaced the persisted approval subjects')
+  } finally { await subjectPool.end() }
+  await postJsonWithBearer('/api/sync/run-summary', { ...subjectSummary, version: 5 }, gateDesktopPairing.token)
+  expect((await evaluateSubject()).blocksApproval, 'A new Run version retained an old subject snapshot')
+
   console.log('Postgres integration smoke passed.')
 } finally {
   await stop(api)

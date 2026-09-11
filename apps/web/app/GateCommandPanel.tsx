@@ -433,7 +433,9 @@ export function GateCommandPanel({
         </button>
       </div>
       {evaluation?.blocksApproval && !active ? (
-        <small>当前 Team enforcement preflight 阻止批准；可记录人工驳回。</small>
+        <small>{evaluation.expectedBlockerIds.includes('gate-review-subject-not-current')
+          ? '云端缺少当前评审的产物指纹，或指纹与 Review 不一致。请在已配对 Desktop 同步；内容有变化时重新审查，再刷新此页面。'
+          : '当前 Team enforcement preflight 阻止批准；可记录人工驳回。'}</small>
       ) : null}
       {visibleState.message ? (
         <small role="status">{visibleState.message}</small>

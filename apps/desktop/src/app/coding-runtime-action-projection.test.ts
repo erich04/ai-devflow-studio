@@ -117,6 +117,23 @@ function project(overrides: Partial<Parameters<typeof buildCodingRuntimeActionPr
 }
 
 describe('buildCodingRuntimeActionProjection', () => {
+  it('exposes a paused approval as revalidation without a new Run or Provider call', () => {
+    const result = project({ codingRuns: [codingRun('waiting_permission', {
+      engine: 'opencode-http', permissionPause: { requestId: 'expired', pausedAt: now, runVersion: 1 },
+    })] })
+    expect(result.action).toMatchObject({ id: 'renew-permission', createsNewRun: false, mayInvokeProvider: false, disabled: false })
+    expect(result.permission).toBeUndefined()
+  })
+
+  it('requires explicit additional-attempt authorization at the scope limit and preserves budget blocking', () => {
+    const history = Array.from({ length: 3 }, (_, index) => codingRun('failed', { id: `attempt-${index}`, engine: 'opencode-http' }))
+    const result = project({ codingRuns: history, readiness: { ...readiness(), engine: 'opencode-http', executor: 'opencode-http' } })
+    expect(result.additionalAttemptAfterCount).toBe(3)
+    expect(result.action).toMatchObject({ id: 'retry', requiresConfirmation: true, createsNewRun: true, disabled: false })
+    expect(result.action.label).toContain('授权追加一次尝试')
+    const blocked = project({ codingRuns: history, readiness: { ...readiness('blocked'), engine: 'opencode-http', executor: 'opencode-http' } })
+    expect(blocked.action.disabled).toBe(true)
+  })
   it('offers one new run only when the exact build scope is idle and ready', () => {
     const result = project()
     expect(result.phase).toBe('idle')

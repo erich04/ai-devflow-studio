@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createRecommendedEnforcementPreset,
+  createLocalStageAgentUsage,
   createWarnOnlyDefaultPolicy,
   type GateOverrideDecision,
 } from '@ai-devflow/shared'
@@ -91,6 +92,27 @@ async function materializeSeedGateRun(
 }
 
 describe('seed team repository', () => {
+  it('includes rejected Stage consumption once, retains unknown cost, and rejects mutated accounting on replay', async () => {
+    const repository = createSeedTeamRepository()
+    const context = gateBrowserPrincipal.session
+    const summary = { kind: 'run' as const, runId: 'run-stage-cost', version: 1, projectId: 'p-payments', title: 'Stage costs',
+      status: 'clarifying' as const, currentNodeId: 'clarify', currentNode: { id: 'clarify', stage: 'clarify' as const, kind: 'agent' as const, status: 'running' as const },
+      branchName: 'codex/stage-cost', updatedAt: '2026-09-10T16:00:00.000Z' }
+    const usage = createLocalStageAgentUsage({ id: 'usage-rejected', runId: summary.runId, nodeId: 'clarify',
+      userId: context.userId, projectId: summary.projectId, providerId: 'unknown-gateway', model: 'deepseek-v4-flash',
+      timestamp: summary.updatedAt, usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 40 } })
+    const before = await repository.getTeamOverview(context)
+    await repository.uploadRunSummary({ ...summary, stageAgentUsage: [usage] }, context)
+    await repository.uploadRunSummary({ ...summary, stageAgentUsage: [usage] }, context)
+    const after = await repository.getTeamOverview(context)
+    const cost = after.projectCost.find((row) => row.key === summary.projectId)!
+    expect(cost.totalTokens - (before.projectCost.find((row) => row.key === summary.projectId)?.totalTokens ?? 0)).toBe(120)
+    expect(cost.unknownCostCount).toBe(1)
+    expect(after.totalCost).toContain('1 项金额待确认')
+    await expect(repository.uploadRunSummary({ ...summary, stageAgentUsage: [{ ...usage, inputTokens: 999 }] }, context)).rejects.toThrow()
+    expect((await repository.getTeamOverview(context)).projectCost).toEqual(after.projectCost)
+  })
+
   const syncContext = { organizationId: 'org-demo', userId: 'u-erich' }
 
   it('stores only a monotonic metadata-only Agent Runtime Team projection', async () => {
@@ -867,7 +889,7 @@ describe('seed team repository', () => {
     expect(stored?.costSummary).not.toHaveProperty('apiKey')
     expect(stored?.budgetDecision).not.toHaveProperty('token')
     expect(overview.projectCost.find((rollup) => rollup.key === 'project-1')?.unknownCostCount).toBe(1)
-    expect(overview.totalCost).toContain('+ unknown')
+    expect(overview.totalCost).toContain('项金额待确认')
   })
 
   it('returns workflow runs with their artifacts and events', async () => {

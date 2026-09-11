@@ -1,5 +1,7 @@
 import {
   canRunCodingAgentOnNode,
+  DEFAULT_OPENCODE_ATTEMPT_LIMIT,
+  countOpenCodeAttempts,
   isActiveCodingAgentRunStatus,
   type CodingAgentEvent,
   type CodingAgentRun,
@@ -18,6 +20,7 @@ export type CodingRuntimeActionId =
   | 'start'
   | 'view-progress'
   | 'review-permission'
+  | 'renew-permission'
   | 'view-result'
   | 'retry'
   | 'configure'
@@ -98,6 +101,7 @@ export type CodingRuntimeActionProjection = {
   conflictingActiveRun?: CodingAgentRun
   permission?: CodingPermissionProjection
   terminal?: CodingRuntimeTerminalSummary
+  additionalAttemptAfterCount?: number
 }
 
 export type BuildCodingRuntimeActionProjectionInput = {
@@ -360,6 +364,19 @@ export function buildCodingRuntimeActionProjection(
   }
 
   if (activeRun) {
+    if (activeRun.status === 'waiting_permission' && activeRun.permissionPause) {
+      const canRenew = input.isSelectedCurrentNode
+      return {
+        ...base, phase: 'waiting_permission',
+        action: {
+          id: 'renew-permission', target: 'agents-permission', label: '重新核验并请求审批',
+          summary: '审批等待已暂停，工作区保留。重新核验原会话、命令和文件后请求新审批；此操作不会批准执行或新建 Run。',
+          disabled: !canRenew,
+          ...(!canRenew ? { disabledReason: '当前工作流已不在这个开发节点，无法恢复这次审批。' } : {}),
+          createsNewRun: false, mayInvokeProvider: false, requiresConfirmation: false,
+        },
+      }
+    }
     const pendingRequest = [...input.permissionRequests]
       .filter((request) => request.codingRunId === activeRun.id && request.status === 'pending')
       .sort((left, right) => right.requestedAt.localeCompare(left.requestedAt) || right.id.localeCompare(left.id))[0]
@@ -457,6 +474,8 @@ export function buildCodingRuntimeActionProjection(
       }
     }
     const canRetry = input.isSelectedCurrentNode && input.readiness?.status === 'ready' && !conflictingActiveRun
+    const attemptCount = countOpenCodeAttempts(history, scope)
+    const needsAdditionalAttempt = input.readiness?.engine === 'opencode-http' && attemptCount >= DEFAULT_OPENCODE_ATTEMPT_LIMIT
     const blockedReason = !input.isSelectedCurrentNode
       ? '当前 Workflow 已不在这个开发实现节点。'
       : conflictingActiveRun
@@ -466,16 +485,19 @@ export function buildCodingRuntimeActionProjection(
       ...base,
       phase: latestRun.status,
       terminal,
+      ...(needsAdditionalAttempt ? { additionalAttemptAfterCount: attemptCount } : {}),
       action: {
         id: 'retry',
         target: 'agents-evidence',
-        label:
+        label: needsAdditionalAttempt ? '已达尝试上限 · 授权追加一次尝试' :
           latestRun.status === 'timed_out'
             ? '上次运行超时 · 重新运行 Coding Agent'
             : latestRun.status === 'failed'
               ? '上次运行失败 · 重新运行 Coding Agent'
               : '上次运行已取消 · 重新运行 Coding Agent',
-        summary: '重试会新建 Coding Run，并可能再次调用 Provider、产生新的 token 与费用。',
+        summary: needsAdditionalAttempt
+          ? `当前需求的开发节点已尝试 ${attemptCount} 次。只有明确授权才能追加一次；保留全部历史，可能再次产生 token 与费用。`
+          : '重试会新建 Coding Run，并可能再次调用 Provider、产生新的 token 与费用。',
         disabled: !canRetry,
         ...(!canRetry ? { disabledReason: blockedReason } : {}),
         createsNewRun: true,

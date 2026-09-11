@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
   CODING_EXECUTOR_CONTRACT_VERSION,
+  DEFAULT_OPENCODE_ATTEMPT_LIMIT,
+  countOpenCodeAttempts,
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   buildCodingBrief,
@@ -54,6 +56,7 @@ import type {
   CodingEngineAdapter,
   CodingEngineStartInput,
   CodingProviderCallTrace,
+  CodingPermissionPolicyReporter,
 } from './coding-engine.js'
 import {
   createCodingExecutorCompatibilityAdapter,
@@ -63,12 +66,14 @@ import {
 import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
+  CodingEnginePermissionRevalidationError,
 } from './coding-engine-lifecycle.js'
 import { estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
 import type {
   CodingAgentMutation,
   CodingAgentMutationResult,
   ReserveCodingAgentRunResult,
+  ReserveCodingAgentRunOptions,
 } from './local-store.js'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
@@ -120,6 +125,17 @@ function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecut
     : baseCodingExecutorCapabilities
 }
 
+function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun): CodingAgentRun {
+  // Budget authority belongs to Main's reservation, not an executor response.
+  const { budgetDecision: _executorBudgetDecision, ...executorRun } = run
+  return {
+    ...executorRun,
+    ...(previous.budgetDecision ? { budgetDecision: previous.budgetDecision } : {}),
+    ...(previous.workflowRunVersion === undefined ? {} : { workflowRunVersion: previous.workflowRunVersion }),
+    ...(previous.additionalAttemptAuthorization ? { additionalAttemptAuthorization: previous.additionalAttemptAuthorization } : {}),
+  }
+}
+
 export type CodingRuntimeStore = {
   listProjects(): Promise<LocalProject[]>
   getPolicySnapshot?(projectId: string): Promise<{ version: number } | null>
@@ -132,7 +148,7 @@ export type CodingRuntimeStore = {
   saveTestEvidence(evidence: TestEvidence): Promise<void>
   listCodingAgentRuns(runId?: string): Promise<CodingAgentRun[]>
   saveCodingAgentRun(run: CodingAgentRun): Promise<void>
-  reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult>
+  reserveCodingAgentRun(run: CodingAgentRun, options?: ReserveCodingAgentRunOptions): Promise<ReserveCodingAgentRunResult>
   commitCodingAgentMutation(
     mutation: CodingAgentMutation,
   ): Promise<CodingAgentMutationResult>
@@ -231,6 +247,7 @@ export type RunCodingAgentRuntimeInput = {
   providerId?: string
   userInstruction: string
   runtimeBudgetApprovalId?: string
+  additionalAttemptAfterCount?: number
   remediationPlan?: RemediationPlan
   retryAttempt?: RetryAttempt
 }
@@ -311,6 +328,7 @@ export type CodingRuntime = {
   startRetryAttempt(input: StartRetryAttemptRuntimeInput): Promise<StartRetryAttemptRuntimeResult>
   cancelCodingAgentRun(input: CancelCodingAgentRunRuntimeInput): Promise<CodingAgentRun>
   replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest>
+  renewCodingPermission(input: Pick<ReplyCodingPermissionRuntimeInput, 'requestId' | 'codingRunId' | 'decidedBy'>): Promise<CodingPermissionRequest>
   recoverCodingAgentRuns(): Promise<CodingAgentRun[]>
   subscribeCodingRun(input: { codingRunId: string }): Promise<LocalExecutionState>
   findManagedWorktree(input: OpenManagedWorktreeRuntimeInput): Promise<ManagedCodingWorkspace>
@@ -335,7 +353,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     Number.isSafeInteger(deps.maxOpaqueOpenCodeRunsPerWorkflowNode) &&
     Number(deps.maxOpaqueOpenCodeRunsPerWorkflowNode) > 0
       ? Number(deps.maxOpaqueOpenCodeRunsPerWorkflowNode)
-      : 3
+      : DEFAULT_OPENCODE_ATTEMPT_LIMIT
   const activeCodingStatuses = new Set<CodingAgentRun['status']>([
     'queued',
     'preparing',
@@ -405,7 +423,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return codingRun
   }
 
-  async function findPermissionRequest(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest> {
+  async function findPermissionRequest(input: Pick<ReplyCodingPermissionRuntimeInput, 'requestId' | 'codingRunId'>): Promise<CodingPermissionRequest> {
     const request = (await deps.store.listCodingPermissionRequests(input.codingRunId)).find(
       (candidate) => candidate.id === input.requestId,
     )
@@ -444,6 +462,20 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   async function saveCodingRun(run: CodingAgentRun) {
     await deps.store.saveCodingAgentRun(run)
     runBestEffortNotification(() => deps.publisher?.publishRunStatus(run))
+  }
+
+  function permissionPolicyReporter(codingRun: CodingAgentRun): CodingPermissionPolicyReporter {
+    return async (decision) => {
+      await saveEvents([{
+        id: idGenerator('coding-event'), codingRunId: codingRun.id,
+        runId: codingRun.runId, nodeId: codingRun.nodeId,
+        sequence: await nextSequence(codingRun.id), kind: 'permission',
+        message: decision.decision === 'approved'
+          ? 'DevFlow automatically allowed a bounded read-only command.'
+          : 'DevFlow rejected an unsupported tool request and returned corrective feedback.',
+        timestamp: decision.timestamp, metadata: { ...decision, origin: 'permission_policy' }, redacted: true,
+      }])
+    }
   }
 
   async function commitCodingAgentMutation(
@@ -1553,6 +1585,47 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       decidedAt: timestamp,
     }
     const codingRun = await findCodingRun(input.codingRunId)
+    let renewedWorkflow: WorkflowRun | undefined
+    if (request.replacesRequestId && input.decision === 'approved' && request.status === 'pending') {
+      renewedWorkflow = await findRun(codingRun.runId)
+      validateCodingWorkflowContext(renewedWorkflow, codingRun)
+      if (renewedWorkflow.version !== codingRun.workflowRunVersion) {
+        throw new Error('Workflow changed since the original OpenCode approval; execution was not resumed.')
+      }
+    }
+    if (
+      codingRun.engine === 'opencode-http' &&
+      codingRun.status === 'waiting_permission' &&
+      request.status === 'pending' &&
+      (!request.origin || request.origin === 'coding_executor') &&
+      input.decision === 'expired'
+    ) {
+      const pausedRun: CodingAgentRun = {
+        ...codingRun,
+        permissionPause: {
+          requestId: request.id, pausedAt: timestamp,
+          ...(codingRun.workflowRunVersion === undefined ? {} : { runVersion: codingRun.workflowRunVersion }),
+        },
+        summary: '工具审批已过期，执行已暂停。工作区保留；继续前需重新核验并审批。',
+      }
+      const paused = await commitCodingAgentMutation({
+        expectedRun: codingRun,
+        expectedPendingPermissionRequestIds: [request.id],
+        expectedPermissionRequests: [request],
+        run: pausedRun,
+        permissionRequests: [updatedRequest],
+        permissionDecisions: [decision],
+        events: [{
+          id: idGenerator('coding-event'), codingRunId: codingRun.id,
+          runId: codingRun.runId, nodeId: codingRun.nodeId,
+          sequence: await nextSequence(codingRun.id), kind: 'permission',
+          message: pausedRun.summary, timestamp,
+          metadata: { requestId: request.id, workspaceDisposition: 'retained', action: 'approval_paused' },
+          redacted: true,
+        }],
+      })
+      return paused.committed ? updatedRequest : await findPermissionRequest(input)
+    }
     if (request.origin === 'dependency_bootstrap') {
       if (!activeCodingStatuses.has(codingRun.status) || request.status !== 'pending') {
         return request
@@ -1934,6 +2007,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!nativeApprovedRecovery) {
       const claimed = await commitCodingAgentMutation({
         expectedRun: codingRun,
+        ...(renewedWorkflow ? { expectedWorkflowRun: renewedWorkflow } : {}),
         expectedPendingPermissionRequestIds: [request.id],
         expectedPermissionRequests: [request],
         ...(applyingRun ? { run: applyingRun } : {}),
@@ -1984,6 +2058,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             now: timestamp,
             ...(authorizedStart ? { authorizedStart } : {}),
             reportProviderCall: (trace) => persistProviderCallTrace(codingRun, trace),
+            reportPermissionPolicyDecision: permissionPolicyReporter(codingRun),
             reportPhase: async (phase) => {
               const currentRun = await findCodingRun(codingRun.id)
               if (!activeCodingStatuses.has(currentRun.status)) {
@@ -2013,6 +2088,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             },
           },
         })
+        completed = { ...completed, codingRun: preserveCodingRunContext(completed.codingRun, codingRun) }
       } catch (error) {
         const currentRun = await findCodingRun(codingRun.id)
         if (!activeCodingStatuses.has(currentRun.status)) {
@@ -2032,6 +2108,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         if (error instanceof CodingEngineContinuationCleanupError) {
           await recordContinuationCleanupFailure(currentRun, timestamp)
+          throw error
+        }
+        if (error instanceof CodingEnginePermissionRevalidationError) {
+          await failActiveCodingRun(
+            currentRun, error.message, timestamp,
+            { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
+          )
           throw error
         }
         try {
@@ -2554,20 +2637,20 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const billingMode = executor.billing ?? (configuredEngine === 'fake' ? 'no_cost' : 'opaque')
       const metered = billingMode === 'metered'
       const opaqueBilling = billingMode === 'opaque' || billingMode === 'subscription'
-      if (configuredEngine === 'opencode-http' && opaqueBilling) {
-        const scopedRunCount = existingCodingRuns.filter(
-          (codingRun) =>
-            codingRun.engine === 'opencode-http' &&
-            codingRun.runId === run.id &&
-            codingRun.nodeId === node.id &&
-            codingRun.projectId === project.id,
-        ).length
-        if (scopedRunCount >= maxOpaqueOpenCodeRunsPerWorkflowNode) {
+      if (configuredEngine === 'opencode-http') {
+        const scopedRunCount = countOpenCodeAttempts(existingCodingRuns, { runId: run.id, nodeId: node.id, projectId: project.id })
+        if (input.additionalAttemptAfterCount !== undefined && (
+          !Number.isSafeInteger(input.additionalAttemptAfterCount) ||
+          input.additionalAttemptAfterCount !== scopedRunCount || scopedRunCount < maxOpaqueOpenCodeRunsPerWorkflowNode
+        )) throw new Error('OpenCode additional-attempt authorization is stale or invalid; refresh the attempt history.')
+        if (scopedRunCount >= maxOpaqueOpenCodeRunsPerWorkflowNode && input.additionalAttemptAfterCount === undefined) {
           throw new Error(
             `OpenCode ${billingMode} run limit reached for this Workflow Run and node ` +
             `(${scopedRunCount}/${maxOpaqueOpenCodeRunsPerWorkflowNode}); no worktree or Provider call was started.`,
           )
         }
+      } else if (input.additionalAttemptAfterCount !== undefined) {
+        throw new Error('Additional OpenCode attempt authorization cannot be used for another executor.')
       }
       const providerId = executor.providerId
       const codingRunId = idGenerator('coding-run')
@@ -2732,13 +2815,21 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         userInstruction: input.userInstruction.trim(),
         prompt: canonicalBrief.prompt,
         summary: 'Preparing a managed Coding Agent run.',
+        ...(configuredEngine === 'opencode-http' ? { workflowRunVersion: run.version } : {}),
+        ...(input.additionalAttemptAfterCount === undefined ? {} : {
+          additionalAttemptAuthorization: {
+            afterAttemptCount: input.additionalAttemptAfterCount,
+            authorizedBy: input.requestedBy,
+            authorizedAt: reservationTimestamp,
+          },
+        }),
         changedPaths: [],
         startedAt: reservationTimestamp,
         ...(!opaqueBilling ? { runtimeCostSummary: estimatedCost } : {}),
         budgetDecision,
         redacted: true,
       }
-      const reservation = await deps.store.reserveCodingAgentRun(reservationRun)
+      const reservation = await deps.store.reserveCodingAgentRun(reservationRun, { maxOpenCodeAttempts: maxOpaqueOpenCodeRunsPerWorkflowNode })
       if (!reservation.reserved) {
         throw new Error(`Coding Agent run already active for this project: ${reservation.run.id}`)
       }
@@ -3194,6 +3285,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           codingExecutorEventType: 'started',
           codingExecutorRequestId: executorRequest.id,
           codingExecutorSelection: selection,
+          ...(reservationRun.additionalAttemptAuthorization ? { additionalAttemptAuthorization: reservationRun.additionalAttemptAuthorization } : {}),
         },
         redacted: true,
       }
@@ -3234,8 +3326,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
             ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
             reportProviderCall: (trace) => persistProviderCallTrace(executorReadyRun, trace),
+            reportPermissionPolicyDecision: permissionPolicyReporter(executorReadyRun),
           },
         })
+        bundle = { ...bundle, codingRun: preserveCodingRunContext(bundle.codingRun, executorReadyRun) }
       } catch (error) {
         if (error instanceof CodingEngineStartupCleanupError) {
           await deps.store.saveManagedCodingWorkspace({
@@ -3403,6 +3497,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error('Coding Agent startup bundle lost its reservation')
       }
       runBestEffortNotification(() => {
+        // OpenCode bounds active execution in its adapter; human approval wait is not execution time.
+        if (startupRun.engine === 'opencode-http') return
         deps.scheduleRunTimeout?.(startupRun, async () => {
           await timeOutCodingRun(startupRun.id, 'Coding Agent run timed out.')
         })
@@ -3578,6 +3674,49 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     },
 
     replyCodingPermission,
+
+    async renewCodingPermission(input) {
+      const codingRun = await findCodingRun(input.codingRunId)
+      const request = await findPermissionRequest(input)
+      if (
+        codingRun.engine !== 'opencode-http' || codingRun.status !== 'waiting_permission' ||
+        codingRun.permissionPause?.requestId !== request.id || request.status !== 'expired' ||
+        !executor.refreshPermission || !codingRun.managedWorkspaceId
+      ) {
+        throw new Error('Only a paused OpenCode tool approval can be renewed.')
+      }
+      const workflow = await findRun(codingRun.runId)
+      validateCodingWorkflowContext(workflow, codingRun)
+      if (codingRun.permissionPause.runVersion === undefined) {
+        throw new Error('原运行缺少可核验的需求版本，不能直接续接；工作区已保留。')
+      }
+      if (workflow.version !== codingRun.permissionPause.runVersion) {
+        throw new Error('Workflow changed while approval was paused; renewal is blocked.')
+      }
+      const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
+      if (workspace.deletedAt || (workspace.cleanupStatus && workspace.cleanupStatus !== 'active')) {
+        throw new Error('The managed worktree is no longer active.')
+      }
+      const project = await findProject(codingRun.projectId)
+      const result = await executor.refreshPermission({
+        requestId: codingRun.id,
+        ...await loadExecutorContinuationState(codingRun.id),
+        newRequestId: idGenerator('coding-permission'),
+        runtimeContext: { codingRun, request, workspace, project, now: now() },
+      })
+      const events = (await mapObservableExecutorEvents(codingRun.id, result.events)).map((event) => ({
+        ...event,
+        metadata: { ...event.metadata, codingExecutorTurn: result.turn, renewedBy: input.decidedBy },
+      }))
+      const committed = await commitCodingAgentMutation({
+        expectedRun: codingRun, expectedPendingPermissionRequestIds: [],
+        expectedWorkflowRun: workflow,
+        expectedPermissionRequests: [request], run: result.codingRun,
+        permissionRequests: [result.permissionRequest], events,
+      })
+      if (!committed.committed) throw new Error('Paused approval changed; refresh before trying again.')
+      return result.permissionRequest
+    },
 
     async subscribeCodingRun() {
       return deps.store.loadState()

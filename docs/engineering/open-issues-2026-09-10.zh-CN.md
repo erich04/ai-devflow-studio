@@ -3,7 +3,7 @@
 起点：main `f79a970`；工作分支 `codex/open-issues-20260910`。
 
 用户要求：逐项复现、确认原因、修复、回归，推送后关闭。交互调整必须先由用户确认。
-本记录进行中，未验证完成的项目不关闭。原工作区的未提交文档和分析产物未纳入本分支。
+原 15 项已分批修复并关闭。随后真实 Provider 验证发现的问题也已完成修复与回归，统一纳入 PR #90；Issue 的最终关闭状态以该 PR 合并后的 GitHub 记录为准。原工作区的未提交文档和分析产物未纳入本分支。
 
 | Issue | 范围 | 当前状态 |
 | --- | --- | --- |
@@ -19,7 +19,7 @@
 | #60 | Desktop 同步按钮、项目 Policy | 已修复；真实同步、Task 策略、状态推送保留及自动化回归通过（PR #80） |
 | #61 | Team 页面滚动 | 已修复；多尺寸/主题自动化与真实底部滚动通过（PR #80） |
 | #63 | Gate Inspector 滚动 | 已修复；多尺寸/主题自动化、真实长内容滚动及 Evidence 访问通过（PR #80） |
-| #64 | 卡片计数与证据入口 | 实际 Gate 显示产物 1 / 证据 0，报告位于 Evidence、没有产物标签；已确认统一产物 / 测试证据 / 轨迹，本地修复和回归已完成，待云端 CI |
+| #64 | 卡片计数与证据入口 | 已统一产物 / 测试证据 / 轨迹和直达入口；本地及云端回归通过，PR #88 已合并，Issue 已关闭 |
 | #65 | 重复审查与费用 | 已修复；真实 DeepSeek 确认重审及并发/重放/失败重试回归通过（PR #80） |
 | #76 | 模型把非缺口计作缺失证据 | 3 次真实复验通过；PR #79 已合并，Issue 已关闭 |
 
@@ -235,3 +235,104 @@ PR #87 的五项云端检查（macOS、Windows、Postgres、Docker、Docker life
 修复：所有节点统一“产物 / 测试证据 / 轨迹”，卡片计数可点击、可用键盘 Enter 激活并直达对应标签。卡片主按钮与三个计数按钮互为兄弟，避免嵌套按钮。产物和测试按当前 Run + 节点归属展示；关联上游审查资料单独标注，不重复计入产物数量。测试标签只列本节点真实 TestEvidence，交付引用的上游测试明确列出来源入口。Knowledge 引用保持独立，Gate 规则评估仍使用原有上下文。新增 Gate 轨迹入口，搜索也进入统一标签。标签在窄 Inspector 中换行排列，文字不拆成竖排。
 
 本地 `pnpm verify`：269 文件 / 3748 用例、类型与跨平台检查通过。浏览器回归 37 项通过，含 1180 / 1834 × 浅深主题的计数导航、键盘激活、零结果、不重复报告与既有长内容滚动；截图验证后修正标签挤压并再次回归。此次浏览器用受控数据，不调用真实 Provider；真实模型全流程在最后一批后统一运行。
+
+PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。源提交 `c2b359a` 的五项检查全部通过（run `34494611759`）。首轮 Windows 在未修改的 Native/OpenCode 生命周期测试发生超时与 EBUSY，原提交重跑失败作业后通过；未降低断言或修改超时。
+
+## #81、#89：Stage Agent 用量与当前价格
+
+#81 的原因：OpenCode Stage 成功结果跳过 AgentTokenUsage，解析/引用校验失败时也丢失执行器已报告用量；顶部显示团队费用而非当前 Run。先以两项失败回归证明解析后失败会丢失用量，再补充独立记账、同版本云端同步与预算检查。
+
+- 成功和结果验证失败均保存执行器真实用量，重试使用独立 ID；失败不生成成功产物或推进节点。缺失/部分用量明确标注，未知金额保存为 null，不冒充免费调用。
+- 只有已验证官方 DeepSeek 绑定和完整 cache 数据使用峰值费率估算，保存价格快照；任意兼容网关上的同名模型不套用官方价格。Direct Stage / Review 未知模型也不再套用无关模型价格。
+- 现有 Run summary 仅增加受限的记账投影。API 校验 Run/项目/用户、去重并拒绝同 ID 改账；同一 Run version 可以补传失败消费。Postgres v26 保存独立 JSONB 记账字段，并允许历史费用表保存 null。客户端在下一次预算判断前先上传消费；上传失败或已有未知金额均沿用阻断语义。
+- 顶部显示当前 Run 的真实 tokens 和预计费用/金额待确认；测试证据、产物、轨迹仍遵循 #64 的节点归属。历史未记账 Trace 仅显示数据不完整，不重写、不追溯定价。
+- #89：核对 DeepSeek 官方页面发现 2026-09-10 V4.1 Flash 更新，新增版本目录并保留旧快照。新公共名 `deepseek-flash` 与原 Flash 别名兼容，不改用户配置。官方未给 Flash 精确切换时刻，因此切换当日的未确认区间不定价。明确保存本次核验时间；Pro 的 9 月 14 日路由边界按官方明确时刻处理。详见 [价格目录](runtime-pricing-catalog.md)。
+
+当前本地验证：`pnpm verify` 271 文件 / 3760 用例、类型和跨平台检查通过；浏览器 41 项通过；Electron smoke 通过。专用全新 Postgres 数据库完整 smoke 通过，真实 HTTP 验证同版本上传两次只计一次、null 费用持久化、改账 409、预算 unavailable / blocksRun。随后补充价格快照往返及总 token 溢出边界，5 项记账用例再次通过。
+
+本轮真实模型全流程与云端交付尚在进行，#81、#89 暂不关闭。
+
+首轮 CI 暴露两处旧测试契约：Docker lifecycle 对整行 JSON 的比对把新增空字段误作历史数据变化；packaged smoke 的受控 API 未实现现在预算前必需的 Run summary 上传。分别改为原字段逐字保留 + 新记账字段为空的独立检查，并补上具备身份/项目约束及去重的受控上传端点、两条 Stage 记账断言。真实 Docker lifecycle 升级/回滚验证已通过；没有放宽产品预算规则。
+
+费用链路复核补上 Gate Review：新 Review 也标记实际 direct-provider 身份，用量保存与 Run summary outbox 入队在同一 SQLite 事务中完成，防止审查消费仅留本地。历史记录不加新标签、不重写。新增重启后 null 金额和待同步操作同时保留的回归，连同 Review / 项目同步共 283 项定向用例通过。打包后的 Desktop pilot smoke 已通过。
+
+补充改动后全量 `pnpm verify` 再次通过：271 文件 / 3761 用例、类型及跨平台检查。当前真实链路的逐步证据、独立仓库/项目/请求 ID 和待处理事项见 [本轮全流程验证](final-live-e2e-2026-09-10.zh-CN.md)；在完成前 PR #90 保持 Draft，#81、#89 不提前关闭。新增 #91 是仓库绑定冲突反馈，界面文案正在等待确认。
+
+最终构建再次通过 Desktop pilot smoke 和 v15 GitHub Delivery packaged smoke：真实安装包 Main + 新建临时 Postgres，离线模拟 GitHub，精确分支发布、一次 Draft PR、重启无重复效果、Acceptance completed、撤销阻断、持久化秘密泄漏计数 0。该项是受控交付回归，不作为真实 GitHub/Provider 全流程证据。
+
+### 后续真实验证发现并修复的同步问题
+
+- Gate Review 原先信任 Renderer 的 requestedBy，实际 pairing 用户不同时会使费用上传被拒。Main 改用持久化 Run / pairing 推导身份；新的 Electron smoke 伪造请求用户并校验记账用户。修复前真实 Main smoke 本地失败，修复后整条通过，Desktop typecheck 与 27 项身份/工作流/CI 契约检查通过。
+- #93：真实 DeepSeek Review 暴露 Postgres child summary 会覆盖当前 Workflow 节点状态；同版本 Run 及新消费重传因此 409。去除 Review/Test evidence 对已有节点状态的覆盖。新 Postgres smoke 在修复前稳定失败，修复后整条通过，并保留同版本状态篡改、同 ID 消费篡改的拒绝检查。Seed 路径没有此覆盖，解释了此前 Electron smoke 未覆盖到该缺陷。
+- #92：云端 run `34500726984` 的 Windows 全量测试在 Git/SQLite/文件系统夹具中出现 22 项超时，macOS 同组用例通过；此前 #88 也有类似 Windows 抖动。Verify / Release 的 Windows 全量套件统一限制 `maxWorkers=2`，不删除断言、不放大产品超时。必须等待新 Windows CI 实证后才关闭。
+
+真实新 Run 已完成 OpenCode 澄清和 Direct DeepSeek 需求门禁审查，两次消费均归档；继续验证需要 Mac 解锁及新仓库的 GitHub App 授权。#81/#89/#92/#93 在最终验证前保持打开，#91 的界面文案仍待确认。
+
+最新产品修复已通过全量 `pnpm verify`（271 文件 / 3761 用例）和重建安装包的离线 GitHub Delivery smoke，Acceptance completed、重启无重复发布、秘密泄漏计数 0。Windows 首轮并发参数被 `pnpm test` 的命令层拒绝，改用 `corepack pnpm run test --maxWorkers=2`；本地执行与 CI 完全相同的命令，3761 项全部通过，仍需 Windows 实机结果。
+
+新增 #94：Web 侧用只含占位 request、无本地 Artifact 的 Team 投影去比较本地 Review manifest，误判 stale 并阻断云端审批。已通过真实 Web 和数据库只读核对确认；不影响原生 Desktop 审批的结论尚待操作验证。建议仅同步脱敏摘要与版本指纹，最终保留 Desktop 完整证据复核；数据边界与交互方案已向用户提问，暂未实现。
+
+### 后续六项：已修复，真实回归进行中
+
+用户已同意继续修复全部后续问题，并明确批准 #94 的“摘要与指纹”方案。
+
+- #91：保留 API 的类型化 `binding_conflict / 409`，Web 固定提示“此仓库已绑定其他项目，请使用独立仓库。”；不回显上游任意错误，不提供解绑捷径。新增回归修复前 3 项失败，修复后相关 71 项通过。
+- #94：Main 从持久化完整产物独立生成受限指纹，云端按指纹判断 Review 新鲜度；审批命令绑定服务端当前指纹，Desktop 重读完整证据并最终核验，保留既有角色、策略、重放和事务约束。Postgres schema v27，数据边界见 ADR 0010。
+- #81：真实后台同步再次复现费用缺失，原因是 outbox adapter 没有转发 `listAgentTokenUsage`。新增实际 factory 边界回归先失败，再修复，同时转发 #94 必需的 `listArtifacts`。正常后续同步自动补传既有 Review 消费，没有手工改库或历史重定价。
+- #93：新 Run 通过正常需求 Gate 推进恢复版本上传；方案和 Review 再次上传保持正确节点状态，没有再出现同版本 409。
+- #92：提交 `11f639e` 的五项 CI 全部成功（run `34504150273`），含限制并发后的 Windows 全量测试；本轮新增代码仍需新一轮 CI。
+- 最新本地回归：273 个文件 / 3792 个用例通过，类型检查、Web/Desktop/API 构建和跨平台检查通过。完整 Postgres smoke 通过，新增无正文的 Review 投影、缺失/过期指纹拒绝、同版本补传/冲突、审批命令/回执和升级清理验证。
+- 真实 DeepSeek 设计及门禁审查已完成。Web 设计审批命令 `gate-command-1fc21a6f-e2b5-49b4-b011-ff2931393549` 绑定服务端指纹，经 Desktop 完整重验收到 `applied` 回执，Run v4 进入 v5 / building。四次 Stage/Review 调用合计 54003 tokens、预计 $0.014340948，云端一致。
+
+用户已给新仓库完成 App 授权，真实 Web 绑定验证为 ACTIVE / v1；#91 的冲突提示也已通过真实页面复验。Coding、归档测试、真实 Draft PR 与验收继续执行，PR #90 保持 Draft。
+
+新增 #95：两次 OpenCode Coding 尝试在首个工具审批处超时。Adapter 使用模型调用前的 input.now 生成权限有效期，模型耗时侵占了 60 秒响应窗口；可控时钟的 45 秒延迟用例在修复前失败。首次及后续请求改用实际发现权限的时间，保留 60 秒时限、审批规则与 Run 开始时间。45 项 adapter 回归通过，完整 3793 项测试、Desktop 类型检查与构建通过；41 项浏览器回归、完整 Electron smoke 也再次通过。失败 Run、权限和清理证据保留，工作流未伪装成功。
+
+提交 a96c608 已推送至 PR #90。其 Docker lifecycle CI 暴露升级夹具对整行历史记录的比较没有区分新增 gate_review_subject 字段；夹具现在继续逐字段保留历史数据，并独立断言新 Run/Command 指纹为空。完整升级/回滚正在复验。真实后续执行还遇到原生控制工具 noWindowsAvailable，已请求用户恢复窗口；不以受控测试替代真实 Provider 交付。
+
+### 窗口恢复后的真实复验
+
+`912d81e` 的五项云端 CI 已全部通过，run `34555351121`，包括 macOS、Windows、Postgres、Docker 和完整升级/回滚。
+
+第三次 Coding 已证明 #95 修复生效：工具权限发现后有完整 60 秒有效期，批准也在有效期内。随后 OpenCode 将多条仓库检查合并为一次 shell 请求，触发既有命令限制并终止，记录为 #96。补充 OpenCode 专属执行约束到实际 Provider 简报，明确原生文件工具、逐条白名单命令与由 DevFlow 执行后续依赖准备/测试；不扩展权限或改动审批交互。传输边界回归先失败后通过，144 项 adapter/policy 用例、Desktop 类型检查和构建通过。
+
+原 Workflow 节点已累计三次 OpenCode 尝试，第 4 次被既有 opaque Run 上限拒绝，没有创建工作树或调用 Provider。保留三次失败证据，已向用户提出新建正式回归请求或在原 Run 切换 Native Coding Agent 两条后续路径；尚未绕过次数限制或将未完成的步骤记为通过。
+
+### 侧边恢复方案接入后的真实结果
+
+用户批准侧边的普通读取、无效命令反馈、审批过期恢复和单次追加授权方案，并要求主任务接入验证。
+`ebf31fa` 已接入 PR #90，672 项定向测试和五项云端 CI（`34577092303`）通过。
+原请求第 4 次明确追加授权后，真实 OpenCode / DeepSeek 在原会话中过期、重新核验、重新审批并继续完成修改。
+正式测试、精确提交测试和 [mini Agent Draft PR #1](https://github.com/erich04/devflow-mini-agent-e2e-20260910/pull/1) 均通过。
+
+- #94 的验收分支又暴露 Artifact kind `acceptance` 与 stage `accept` 混淆。失败回归确认后纠正并增加编译期约束；103 项定向测试、全量 3809 项测试通过，真实指纹补传成功。
+- 新增 #97：Web 最终审批到达 Desktop 后，因为 OpenCode 执行授权返回的 Run 丢失原预算判定，内核按 `budget_decision_missing` 拒绝验收。保留拒绝回执，没有修改历史预算数据。新的 adapter 生命周期回归证明无 Execution Authorization 的旧测试会通过、加入真实使用的授权步骤后失败。Main 改为持续保留其原始预算判定，163 项相关回归通过。
+- 首条请求保留在验收拒绝状态，PR 已真实交付。准备使用新正式 Work Request 做修复后的完整复验；PR #90 与相关 Issue 在完成前继续保持打开。
+
+逐步证据与实际覆盖范围见 [本轮全流程验证](final-live-e2e-2026-09-10.zh-CN.md)。
+
+## 最后集成批次：真实请求完成
+
+修复后的正式 Run `run-work-request-d380ec0ecede2befc8c0834f6432d636` 已于 `2026-09-11T09:31:55.131Z` 完成全部六阶段；本地与控制面均为 completed / v11。实际交付为 [mini Agent Draft PR #2](https://github.com/erich04/devflow-mini-agent-e2e-20260910/pull/2)，SHA `042c806ad9eb2c1514c88f48fec285f4a62448c4`，正式与精确提交测试均通过（7 tests / typecheck / build）。
+
+| Issue | 最终修复与验证 |
+| --- | --- |
+| #81 | 失败及成功 Stage/Review 消费均持久化并同步；六条真实记录逐字段核对一致，未知 Coding 费用仍为 unknown |
+| #89 | 使用已核实的 DeepSeek Flash 价格快照估算，保留历史价格和 unknown 语义 |
+| #91 | 真实重复绑定返回可操作冲突说明，不解除旧绑定 |
+| #92 | Windows Git/SQLite 夹具限制并发；跨重启集成用例采用独立 15 秒测试时限，Provider 的 25ms 超时和所有断言保留；慢 Git 场景通过 |
+| #93 | 子证据不覆盖权威 Run 状态；真实 Review、用量同步和最终 completed 状态一致 |
+| #94 | 云端摘要与指纹，Desktop 完整证据复核；真实设计和最终验收 Web 命令均 applied，含 acceptance kind 修正 |
+| #95 | 权限发现时开始完整 60 秒响应窗口，真实时间戳核实 |
+| #96 | 发送执行器约束；无效命令有界反馈、过期后同会话恢复、明确追加授权；真实分支命中和受控边界检查分别归档 |
+| #97 | Main 预算判定跨执行授权及后续事件保留；新请求三次 Coding 和最终签收均保留同一受信判定 |
+| #98 | 只读澄清的最终输出契约包含仓库引用；真实重试生成 7 条事实 / 7 处有效引用 |
+| #99 | 仅澄清使用只读执行器选择；真实设计明确使用 Direct DeepSeek |
+| #100 | Inspector 点击事件不再进入追加次数参数；真实首次启动成功 |
+| #101 | 同请求、项目、命令的最新失败诊断经脱敏限长后进入重试简报；真实第三次修复 DOM cleanup 并通过测试 |
+| #102 | Web 验收完整传递已完成 GitHub 交付，并纳入 SQLite 事务快照与重放；同一 Run 重提签收后 applied / v11 |
+| #103 | Verify / Release 不再覆盖 runner 的 Ubuntu 镜像，保留原安装边界；修复反复阻止打包交付检查的依赖下载超时 |
+
+这批 14 项产品问题及 1 项 CI 环境问题的修改与证据由 [PR #90](https://github.com/erich04/ai-devflow-studio/pull/90) 统一交付。最终本地验证为 3816 项测试、类型检查、Web 构建、跨平台检查及 Desktop build。五项 CI 的最新结果见该 PR checks；实际逐步证据和验证范围见 [完整验证报告](final-live-e2e-2026-09-10.zh-CN.md)。旧失败 Run 没有删除或改写为成功。
+
+CI 收尾补充：#103 修正后的 29bd9ad 已通过完整 Postgres job（含真实 Linux packaged delivery smoke）。#92 的单个跨重启夹具另在 e608d28 的 Windows job 暴露默认 5 秒测试时限不足；慢 Git 本地复现后，仅给予该用例 15 秒，正常四用例和耗时 6873ms 的慢场景均通过。最新提交的全平台结果继续由 PR #90 checks 承载。

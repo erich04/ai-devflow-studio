@@ -114,6 +114,7 @@ const desktopApi: DevFlowDesktopApi = {
   startRetryAttempt: (input) => ipcRenderer.invoke(ipcChannels.startRetryAttempt, input),
   cancelCodingAgentRun: (input) => ipcRenderer.invoke(ipcChannels.cancelCodingAgentRun, input),
   replyCodingPermission: (input) => ipcRenderer.invoke(ipcChannels.replyCodingPermission, input),
+  renewCodingPermission: (input) => ipcRenderer.invoke(ipcChannels.renewCodingPermission, input),
   subscribeCodingRun: (input) => ipcRenderer.invoke(ipcChannels.subscribeCodingRun, input),
   listCodingAgentRuns: (input) => ipcRenderer.invoke(ipcChannels.listCodingAgentRuns, input),
   openManagedWorktree: (input) => ipcRenderer.invoke(ipcChannels.openManagedWorktree, input),

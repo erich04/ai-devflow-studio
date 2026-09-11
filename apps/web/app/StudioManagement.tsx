@@ -1,4 +1,4 @@
-import { formatUsd, type Project } from '@ai-devflow/shared'
+import { formatCostRollup, type Project } from '@ai-devflow/shared'
 import type { BrowserAuthSessionResponse, TeamOverviewResponse } from './lib/devflow-api'
 import { RuntimeBudgetPanel } from './RuntimeBudgetPanel'
 import { createRuntimeBudgetApprovalAction, saveRuntimeBudgetPolicyAction } from './runtime-budget-actions'
@@ -19,7 +19,7 @@ export function StudioManagement({ overview, session, project, view, section }: 
         {overview.members.length ? overview.members.map((member) => <article className="studio-management-row" key={member.id}><strong>{member.name}</strong><span>{member.role}</span></article>) : <p>暂无成员数据。</p>}
       </section>
       <section className="studio-management-panel"><h2>项目费用</h2><p>团队合计：{overview.totalCost}</p>
-        {overview.projectCost.length ? overview.projectCost.map((cost) => <article className="studio-management-row" key={cost.key}><a href={studioHref(cost.key)}>{overview.projects.find((candidate) => candidate.id === cost.key)?.name ?? cost.key}</a><span>{formatUsd(cost.costUsd)}{cost.unknownCostCount ? ` + ${cost.unknownCostCount} 项金额待确认` : ''}</span></article>) : <p>暂无模型用量，同步后显示项目费用。</p>}
+        {overview.projectCost.length ? overview.projectCost.map((cost) => <article className="studio-management-row" key={cost.key}><a href={studioHref(cost.key)}>{overview.projects.find((candidate) => candidate.id === cost.key)?.name ?? cost.key}</a><span>{formatCostRollup([cost])}</span></article>) : <p>暂无模型用量，同步后显示项目费用。</p>}
       </section>
       <section className="studio-management-panel"><h2>最近 Run</h2>
         {overview.runs.length ? overview.runs.slice(0, 20).map((run) => <article className="studio-management-row" key={run.id}><a href={`${studioHref(run.projectId)}&runId=${encodeURIComponent(run.id)}`}>{run.title}</a><span>{run.status}</span></article>) : <p>暂无同步 Run。在工作台创建需求，Desktop 承接后同步进度。</p>}

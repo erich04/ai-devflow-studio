@@ -38,6 +38,15 @@ describe('Electron Gate Command production wiring', () => {
     )
   })
 
+  it('carries persisted GitHub deliveries through remote approval evaluation and commit binding', () => {
+    const evaluation = main.slice(main.indexOf('async function evaluateGateCommandLocally'),
+      main.indexOf('async function processAvailableGateCommands'))
+    expect(evaluation).toContain('input.store.listGitHubDeliveryIntents(input.run.id)')
+    expect(evaluation).toMatch(/evidence: withLatestBudgetDecision\(\{[\s\S]*?githubDeliveryIntents/)
+    const processor = readFileSync('apps/desktop/electron/gate-command-processor.ts', 'utf8')
+    expect(processor).toContain('githubDeliveryIntents: evaluation.evidence.githubDeliveryIntents')
+  })
+
   it('starts after Electron is ready and aborts then stops before quit', () => {
     const ready = main.slice(main.indexOf('app.whenReady()'))
     expect(ready).toMatch(

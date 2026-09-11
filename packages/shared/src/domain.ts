@@ -416,14 +416,19 @@ export type TokenUsage = {
   inputTokens: number
   outputTokens: number
   cacheReadTokens: number
-  costUsd: number
+  costUsd: number | null
   timestamp: string
 }
 
-export type TokenUsageSource = 'provider_reported' | 'estimated'
+export type TokenUsageSource = 'provider_reported' | 'estimated' | 'unknown'
 
 export type AgentTokenUsage = TokenUsage & {
   source: TokenUsageSource
+  executorKind?: StageAgentExecutorKind
+  providerId?: string
+  usageStatus?: 'complete' | 'partial' | 'unknown'
+  costStatus?: 'estimated' | 'unknown'
+  pricingSnapshot?: RuntimePricingSnapshot
 }
 
 export type RuntimeUsageStatus = 'estimated' | 'complete' | 'incomplete' | 'legacy_unknown'
@@ -592,6 +597,7 @@ export type AgentProviderUsage = {
   totalTokens?: number
   cacheStatus?: 'complete' | 'unknown'
   billingProvider?: 'deepseek' | 'openai_compatible'
+  missingUsageCount?: number
 }
 
 export type AgentReviewRuntime = 'electron' | 'api'
@@ -777,6 +783,8 @@ export type AgentReviewArtifact = Artifact & {
 }
 
 export type WorkflowRun = {
+  /** Team-only projection of the current Main-owned approval subjects. */
+  gateReviewSubject?: import('./gate-review-subject').GateReviewSubjectSnapshot
   id: string
   version: number
   title: string
@@ -1236,6 +1244,9 @@ export type CodingAgentRun = {
   bootstrapEvidenceId?: string
   testEvidenceId?: string
   changeAcceptanceDecisionId?: string
+  workflowRunVersion?: number
+  permissionPause?: { requestId: string; pausedAt: string; runVersion?: number }
+  additionalAttemptAuthorization?: { afterAttemptCount: number; authorizedBy: string; authorizedAt: string }
   redacted: boolean
 }
 
@@ -1270,6 +1281,8 @@ export type CodingPermissionRequestStatus = 'pending' | 'approved' | 'rejected' 
 export type CodingPermissionRequest = {
   id: string
   codingRunId: string
+  replacesRequestId?: string
+  executorRequestId?: string
   runId: string
   nodeId: string
   origin?:
@@ -1434,6 +1447,8 @@ export type RemoteRunNodeSummary = Pick<
 >
 
 export type RemoteRunSummary = {
+  gateReviewSubject?: import('./gate-review-subject').GateReviewSubjectSnapshot
+  stageAgentUsage?: AgentTokenUsage[]
   kind: RemoteRunSummaryKind
   runId: string
   version: number

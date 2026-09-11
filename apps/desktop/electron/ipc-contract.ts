@@ -253,6 +253,7 @@ export const ipcChannels = {
   startRetryAttempt: 'devflow:remediation:retry:start',
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
   replyCodingPermission: 'devflow:coding:permission:reply',
+  renewCodingPermission: 'devflow:coding:permission:renew',
   subscribeCodingRun: 'devflow:coding:run:subscribe',
   listCodingAgentRuns: 'devflow:coding:runs:list',
   openManagedWorktree: 'devflow:coding:worktree:open',
@@ -532,6 +533,7 @@ export type RunCodingAgentInput = {
   requestedBy: string
   userInstruction: string
   runtimeBudgetApprovalId?: string
+  additionalAttemptAfterCount?: number
 }
 
 export type RunCodingAgentResult = {
@@ -563,6 +565,8 @@ export type ReplyCodingPermissionInput = {
   decision: CodingPermissionDecision['decision']
   comment: string
 }
+
+export type RenewCodingPermissionInput = Pick<ReplyCodingPermissionInput, 'requestId' | 'codingRunId' | 'decidedBy'>
 
 export type SubscribeCodingRunInput = {
   codingRunId: string
@@ -737,6 +741,7 @@ export type DevFlowDesktopApi = {
   startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: CancelCodingAgentRunInput) => Promise<CodingAgentRun>
   replyCodingPermission: (input: ReplyCodingPermissionInput) => Promise<CodingPermissionRequest>
+  renewCodingPermission: (input: RenewCodingPermissionInput) => Promise<CodingPermissionRequest>
   subscribeCodingRun: (input: SubscribeCodingRunInput) => Promise<LocalExecutionState>
   listCodingAgentRuns: (input?: ListCodingAgentRunsInput) => Promise<CodingAgentRun[]>
   openManagedWorktree: (input: OpenManagedWorktreeInput) => Promise<ManagedCodingWorkspace>
@@ -1824,10 +1829,14 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   }
   rejectUnexpectedFields(
     value,
-    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId'],
+    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId', 'additionalAttemptAfterCount'],
     'coding agent run payload',
   )
   const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
+  const additionalAttemptAfterCount = value['additionalAttemptAfterCount']
+  if (additionalAttemptAfterCount !== undefined && (
+    typeof additionalAttemptAfterCount !== 'number' || !Number.isSafeInteger(additionalAttemptAfterCount) || additionalAttemptAfterCount < 1
+  )) throw new Error('Invalid additional OpenCode attempt count')
 
   return {
     runId: readRequiredString(value, 'runId'),
@@ -1835,6 +1844,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
     projectId: readRequiredString(value, 'projectId'),
     requestedBy: readRequiredString(value, 'requestedBy'),
     userInstruction: readRequiredString(value, 'userInstruction'),
+    ...(typeof additionalAttemptAfterCount === 'number' ? { additionalAttemptAfterCount } : {}),
     ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
       ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
       : {}),
@@ -1892,6 +1902,16 @@ export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPerm
     decidedBy: readRequiredString(value, 'decidedBy'),
     decision,
     comment: typeof value['comment'] === 'string' ? value['comment'].trim() : '',
+  }
+}
+
+export function parseRenewCodingPermissionInput(value: unknown): RenewCodingPermissionInput {
+  if (!isRecord(value)) throw new Error('Invalid coding permission renewal payload')
+  rejectUnexpectedFields(value, ['requestId', 'codingRunId', 'decidedBy'], 'coding permission renewal payload')
+  return {
+    requestId: readRequiredString(value, 'requestId'),
+    codingRunId: readRequiredString(value, 'codingRunId'),
+    decidedBy: readRequiredString(value, 'decidedBy'),
   }
 }
 

@@ -1,3 +1,5 @@
+import { parseStageAgentUsage } from './stage-agent-usage'
+import { parseGateReviewSubjectSnapshot } from './gate-review-subject'
 import type {
   Role,
   RemoteAgentReviewSummary,
@@ -464,7 +466,20 @@ export function redactRemoteRunSummaryForSync(
 ): RemoteRunSummary {
   assertCanonicalLocalNodeId(summary.runId, summary.currentNodeId)
   assertCanonicalLocalNodeId(summary.runId, summary.currentNode.id)
+  const stageAgentUsage = summary.stageAgentUsage === undefined ? undefined
+    : parseStageAgentUsage(summary.stageAgentUsage, summary.runId, summary.projectId)
+  stageAgentUsage?.forEach((usage) => assertCanonicalLocalNodeId(summary.runId, usage.nodeId))
+  const gateReviewSubject = summary.gateReviewSubject === undefined ? undefined
+    : parseGateReviewSubjectSnapshot(summary.gateReviewSubject)
+  if (gateReviewSubject && (gateReviewSubject.runId !== summary.runId ||
+    gateReviewSubject.runVersion !== summary.version || gateReviewSubject.nodeId !== summary.currentNodeId ||
+    gateReviewSubject.stage !== summary.currentNode.stage ||
+    (summary.currentNode.kind !== 'gate' && summary.currentNode.kind !== 'acceptance'))) {
+    throw new Error('Gate Review subject scope does not match its Run summary.')
+  }
   return {
+    ...(gateReviewSubject ? { gateReviewSubject } : {}),
+    ...(stageAgentUsage ? { stageAgentUsage } : {}),
     kind: summary.kind,
     runId: summary.runId,
     version: summary.version,

@@ -43,6 +43,7 @@ export type AgentConsolePrimaryActionId =
   | 'go-tests'
   | 'return-workbench'
   | 'resolve-permission'
+  | 'renew-permission'
 
 export type AgentConsoleAction = {
   id: AgentConsolePrimaryActionId
@@ -264,6 +265,14 @@ function buildPrimaryActionImpact(input: {
     }
   }
 
+  if (input.action.id === 'renew-permission') {
+    return {
+      object, result: '核验原会话和工作区，生成新的精确权限请求，等待审批。',
+      providerAndCost: '重新核验不启动 Provider；之后批准继续执行才可能产生费用。',
+      repository: '保留当前工作区。命令或文件状态发生变化时不恢复。',
+      workflow: '沿用原 Coding Run，保留过期记录；此操作不会批准执行。',
+    }
+  }
   if (input.action.id === 'resolve-permission') {
     return {
       object,
@@ -359,6 +368,13 @@ function buildPrimaryAction(input: {
 }): AgentConsoleAction {
   if (input.codingActionProjection && input.selectedNode && isBuildTask(input.selectedNode)) {
     const projected = input.codingActionProjection.action
+    if (projected.id === 'renew-permission') {
+      return {
+        id: 'renew-permission', label: projected.label, summary: projected.summary, tone: 'warn',
+        disabled: projected.disabled,
+        ...(projected.disabledReason ? { disabledReason: projected.disabledReason } : {}),
+      }
+    }
     if (projected.id === 'review-permission') {
       return {
         id: 'resolve-permission',
@@ -856,9 +872,9 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
       ? [{
           id: input.latestUsage.id,
           eyebrow: input.latestUsage.source,
-          title: `${input.latestUsage.provider} · ${input.latestUsage.model}`,
-          body: `${input.latestUsage.inputTokens} input · ${input.latestUsage.outputTokens} output · ${input.latestUsage.cacheReadTokens} cache read`,
-          meta: [input.latestUsage.timestamp],
+          title: `${input.latestUsage.providerId ?? input.latestUsage.provider} · ${input.latestUsage.model}`,
+          body: input.latestUsage.usageStatus === 'unknown' ? '执行器未报告用量，金额待确认' : `${input.latestUsage.inputTokens} input · ${input.latestUsage.outputTokens} output · ${input.latestUsage.cacheReadTokens} cache read${input.latestUsage.usageStatus === 'partial' ? ' · 部分回合用量缺失' : ''}`,
+          meta: [input.latestUsage.timestamp, ...(input.latestUsage.pricingSnapshot ? [`预计费用 · 峰值费率 · ${input.latestUsage.pricingSnapshot.sourceVersion}`] : [])],
         }]
       : []
     groups.push({
@@ -866,7 +882,7 @@ function buildEvidenceGroups(input: BuildAgentConsoleViewModelInput): AgentConso
       title: '费用 / Token',
       summary: runtimeCost
         ? `${runtimeCost.phase === 'preflight_estimate' ? 'Preflight worst-case estimate' : runtimeCostUnknown ? 'Legacy unverified cost' : 'Actual provider settlement'} · ${runtimeCost.costStatus ?? 'legacy_unverified'} · ${runtimeCostUnknown || runtimeCost.costUsd === null ? 'unknown cost' : formatRuntimeUsd(runtimeCost.costUsd)}`
-        : `${formatUsd(input.latestUsage!.costUsd)} · ${input.latestUsage!.source}`,
+        : `${input.latestUsage!.costUsd !== null ? '预计 ' : ''}${formatUsd(input.latestUsage!.costUsd)} · ${input.latestUsage!.source}`,
       tone: 'soft',
       items: [...runtimeItems, ...legacyUsageItems],
     })
