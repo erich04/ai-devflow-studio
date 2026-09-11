@@ -97,3 +97,5 @@ OpenCode Coding 的费用目前为 opaque / unknown，不能把上述四次 Stag
 - 传输契约回归修复前失败、修复后通过；68 项定向检查、全量 3810 项测试、类型检查、跨平台检查和 Desktop 构建通过。
 - 同一请求经真实 UI 重新执行 OpenCode，于 `08:49:26.900Z` 成功，7 条事实 / 7 处引用通过实际文件摘要核验；只读仓库摘要保持一致，Run 正常进入需求 Gate。
 - `70230b6` 的云端 Postgres job 在 apt-get update 安装测试环境阶段超时（退出 124），尚未执行产品测试；其余四项通过。后续以最新修复提交的完整 CI 为准。
+- [#99](https://github.com/erich04/ai-devflow-studio/issues/99)：同一 Renderer 连续从 OpenCode 澄清进入设计时，残留的澄清执行器选项被错误传给设计，Main 在调用前以“Read-only local Agent is authorized only for requirement clarification”拒绝。该失败未调用 Provider。修复将该选项仅用于澄清，设计明确使用已配置 Direct Provider；Main 权限规则不变。
+- #99 回归先确认 IPC 误传 local-agent 且缺 providerId，修复后 Desktop App 140 项和全量 3811 项测试通过，Desktop 构建通过。真实 UI 再次在已完成澄清卡片选择 OpenCode、返回同一 Run 的设计节点后发起设计，继续核验实际 Direct Provider 结果。

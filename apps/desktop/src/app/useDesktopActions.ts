@@ -473,7 +473,8 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    if (stageAgentExecutorKind === 'direct-provider' && !selectedAgentProviderId) {
+    const executor = selectedNode.stage === 'clarify' ? stageAgentExecutorKind : 'direct-provider'
+    if (executor === 'direct-provider' && !selectedAgentProviderId) {
       setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider Name、Base URL、Model 和 API Key')
       return
     }
@@ -492,8 +493,8 @@ export function useDesktopActions(input: {
         nodeId: selectedNode.id,
         userId: currentUser.id,
         userName: currentUser.name,
-        executor: stageAgentExecutorKind,
-        ...(stageAgentExecutorKind === 'direct-provider'
+        executor,
+        ...(executor === 'direct-provider'
           ? { providerId: selectedAgentProviderId }
           : {}),
       })

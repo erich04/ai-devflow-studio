@@ -2309,6 +2309,25 @@ describe('App', () => {
     expect(await screen.findByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
   })
 
+  it('keeps the clarification-only local executor out of subsequent design requests', async () => {
+    const state = localStateAtCurrentNode('n-clarify')
+    const designRun = { ...localStateAtCurrentNode('n-design').runs[0]!, id: 'run-design-route', title: 'Design executor routing' }
+    state.runs.push(designRun)
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(state),
+      completeWorkflowAgentNode: vi.fn().mockRejectedValue(new Error('Stop after recording IPC')),
+    })
+    render(<App />)
+    const executor = await screen.findByRole('combobox', { name: /澄清执行器/ })
+    fireEvent.change(executor, { target: { value: 'local-agent' } })
+    fireEvent.click(screen.getByRole('button', { name: /Design executor routing.*local/ }))
+    fireEvent.click(await screen.findByTestId('complete-design-agent'))
+    await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'run-design-route', nodeId: 'n-design', executor: 'direct-provider', providerId: agentProvider.id,
+    })))
+    expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps workflow execution read-only in the browser preview', async () => {
     render(<App />)
 
