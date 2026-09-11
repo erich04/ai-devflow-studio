@@ -331,5 +331,6 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 | #100 | Inspector 点击事件不再进入追加次数参数；真实首次启动成功 |
 | #101 | 同请求、项目、命令的最新失败诊断经脱敏限长后进入重试简报；真实第三次修复 DOM cleanup 并通过测试 |
 | #102 | Web 验收完整传递已完成 GitHub 交付，并纳入 SQLite 事务快照与重放；同一 Run 重提签收后 applied / v11 |
+| #103 | Verify / Release 不再覆盖 runner 的 Ubuntu 镜像，保留原安装边界；修复反复阻止打包交付检查的依赖下载超时 |
 
-这批 14 项的修改与证据由 [PR #90](https://github.com/erich04/ai-devflow-studio/pull/90) 统一交付。最终本地验证为 3816 项测试、类型检查、Web 构建、跨平台检查及 Desktop build。五项 CI 的最新结果见该 PR checks；实际逐步证据和验证范围见 [完整验证报告](final-live-e2e-2026-09-10.zh-CN.md)。旧失败 Run 没有删除或改写为成功。
+这批 14 项产品问题及 1 项 CI 环境问题的修改与证据由 [PR #90](https://github.com/erich04/ai-devflow-studio/pull/90) 统一交付。最终本地验证为 3816 项测试、类型检查、Web 构建、跨平台检查及 Desktop build。五项 CI 的最新结果见该 PR checks；实际逐步证据和验证范围见 [完整验证报告](final-live-e2e-2026-09-10.zh-CN.md)。旧失败 Run 没有删除或改写为成功。
