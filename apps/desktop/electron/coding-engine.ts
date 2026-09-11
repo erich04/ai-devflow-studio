@@ -85,6 +85,17 @@ export type CodingProviderCallReporter = (
   trace: CodingProviderCallTrace,
 ) => Promise<void>
 
+export type CodingPermissionPolicyReporter = (decision: {
+  requestId: string
+  permission: CodingPermissionRequest['permission']
+  commandSummary?: string
+  filePath?: string
+  decision: 'approved' | 'rejected'
+  code: string
+  reason: string
+  timestamp: string
+}) => Promise<void>
+
 export type CodingEngineStartInput = {
   id: string
   run: WorkflowRun
@@ -104,6 +115,7 @@ export type CodingEngineStartInput = {
   retryAttempt?: RetryAttempt
   brief: CodingBrief
   reportProviderCall?: CodingProviderCallReporter
+  reportPermissionPolicyDecision?: CodingPermissionPolicyReporter
 }
 
 export type CodingEngineStartResult = {
@@ -125,6 +137,7 @@ export type CodingEngineApprovePermissionInput = {
     timestamp: string
   }) => Promise<void>
   reportProviderCall?: CodingProviderCallReporter
+  reportPermissionPolicyDecision?: CodingPermissionPolicyReporter
 }
 
 export type CodingEngineApprovePermissionCompletedResult = {
@@ -148,6 +161,8 @@ export type CodingEngineCancelInput = {
   codingRun: CodingAgentRun
 }
 
+export type CodingEngineRefreshPermissionInput = CodingEngineApprovePermissionInput & { newRequestId: string }
+
 export type CodingEngineAdapter = {
   engine: CodingAgentEngine | 'not-configured'
   providerId: string
@@ -157,6 +172,7 @@ export type CodingEngineAdapter = {
     CodingEngineStartResult | CodingEngineApprovePermissionCompletedResult
   >
   approvePermission(input: CodingEngineApprovePermissionInput): Promise<CodingEngineApprovePermissionResult>
+  refreshPermission?(input: CodingEngineRefreshPermissionInput): Promise<CodingEngineApprovePermissionContinuedResult>
   cancel(input: CodingEngineCancelInput): Promise<void>
 }
 

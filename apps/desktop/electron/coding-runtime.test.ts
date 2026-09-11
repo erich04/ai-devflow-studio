@@ -24,11 +24,12 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { estimateCodingRuntimeCost } from '@ai-devflow/shared'
+import { assertOpenCodeAttemptReservation, estimateCodingRuntimeCost } from '@ai-devflow/shared'
 import {
   createFakeCodingEngineAdapter,
   createUnconfiguredCodingEngineAdapter,
   type CodingEngineAdapter,
+  type CodingEngineRefreshPermissionInput,
 } from './coding-engine'
 import {
   createCodingExecutorCompatibilityAdapter,
@@ -37,6 +38,7 @@ import {
 import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
+  CodingEnginePermissionRevalidationError,
 } from './coding-engine-lifecycle'
 import {
   createCodingRuntime,
@@ -46,6 +48,7 @@ import type {
   CodingAgentMutation,
   CodingAgentMutationResult,
   ReserveCodingAgentRunResult,
+  ReserveCodingAgentRunOptions,
 } from './local-store'
 import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine'
 import {
@@ -63,6 +66,123 @@ afterEach(async () => {
 })
 
 describe('CodingRuntime', () => {
+  it('retains the worktree when a renewed approval fails its final revalidation', async () => {
+    const run = opencodeCodingRun()
+    const workspace = managedWorkspace({ codingRunId: run.id })
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [workspace] })
+    const request = codingPermissionRequest(run, {
+      id: 'renewed-request', replacesRequestId: 'expired-request', executorRequestId: 'external-request',
+      requestedAt: '2026-06-17T02:00:00.000Z', expiresAt: '2026-06-17T02:01:00.000Z',
+    })
+    store.permissionRequests.push(request)
+    const engine = createSpyCodingEngine('opencode-http')
+    vi.mocked(engine.approvePermission).mockRejectedValue(new CodingEnginePermissionRevalidationError('Workspace changed after renewal.'))
+    const deleteWorkspace = vi.fn()
+    const runtime = createCodingRuntime({ store, engine, deleteWorkspace, now: fixedNow('2026-06-17T02:00:10.000Z') })
+    await expect(runtime.replyCodingPermission({
+      codingRunId: run.id, requestId: request.id, decidedBy: 'user-1', decision: 'approved', comment: 'Approve renewed request.',
+    })).rejects.toThrow('Workspace changed')
+    expect(store.codingRuns[0]?.status).toBe('failed')
+    expect(deleteWorkspace).not.toHaveBeenCalled()
+    expect(store.workspaces).toEqual([workspace])
+    expect(store.runs[0]?.currentNodeId).toBe('node-build')
+  })
+  it('renews a paused approval once, retaining its expired decision and blocking stale Workflow versions', async () => {
+    const interrupted = opencodeCodingRun({
+      permissionPause: { requestId: 'expired-request', pausedAt: '2026-06-17T00:01:00.000Z', runVersion: 1 },
+    })
+    const workspace = managedWorkspace({ codingRunId: interrupted.id })
+    const request = codingPermissionRequest(interrupted, { id: 'expired-request', status: 'expired' })
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun({ version: 2 })], codingRuns: [interrupted], workspaces: [workspace] })
+    store.permissionRequests.push(request)
+    store.permissionDecisions.push({
+      id: 'expired-decision', requestId: request.id, codingRunId: interrupted.id,
+      decidedBy: 'devflow-timeout', decision: 'expired', comment: 'Timed out waiting.', decidedAt: '2026-06-17T00:01:00.000Z',
+    })
+    let changeWorkflowDuringRefresh = false
+    const refreshPermission = vi.fn(async (input: CodingEngineRefreshPermissionInput) => {
+      const { permissionPause: _pause, ...previous } = input.codingRun
+      if (changeWorkflowDuringRefresh) store.runs[0] = buildRun({ version: 2 })
+      return {
+        codingRun: previous,
+        permissionRequest: { ...input.request, id: input.newRequestId, status: 'pending' as const, replacesRequestId: input.request.id, executorRequestId: input.request.id, requestedAt: input.now, expiresAt: '2026-06-17T02:01:00.000Z' },
+        events: [{ id: `event-${input.newRequestId}`, codingRunId: previous.id, runId: previous.runId, nodeId: previous.nodeId, sequence: 1, kind: 'permission' as const, message: 'Fresh approval after revalidation', timestamp: input.now, redacted: true }],
+      }
+    })
+    const engine = { ...createSpyCodingEngine('opencode-http'), refreshPermission }
+    const runtime = createCodingRuntime({ store, engine, now: fixedNow('2026-06-17T02:00:00.000Z') })
+    const input = { requestId: request.id, codingRunId: interrupted.id, decidedBy: 'user-1' }
+    await expect(runtime.renewCodingPermission(input)).rejects.toThrow('Workflow changed')
+    expect(refreshPermission).not.toHaveBeenCalled()
+    store.runs[0] = buildRun()
+    changeWorkflowDuringRefresh = true
+    await expect(runtime.renewCodingPermission(input)).rejects.toThrow('Paused approval changed')
+    expect(store.permissionRequests).toHaveLength(1)
+    expect(store.codingRuns[0]?.permissionPause).toBeDefined()
+    changeWorkflowDuringRefresh = false
+    store.runs[0] = buildRun()
+    const renewed = await runtime.renewCodingPermission(input)
+    expect(renewed).toMatchObject({ status: 'pending', replacesRequestId: request.id, executorRequestId: request.id })
+    expect(store.permissionRequests.find((value) => value.id === request.id)).toEqual(request)
+    expect(store.permissionDecisions).toHaveLength(1)
+    expect(store.codingRuns[0]?.permissionPause).toBeUndefined()
+    expect(store.codingEvents.some((event) => event.metadata?.renewedBy === 'user-1')).toBe(true)
+    await expect(runtime.renewCodingPermission(input)).rejects.toThrow('Only a paused')
+    expect(refreshPermission).toHaveBeenCalledTimes(2)
+    expect(engine.approvePermission).not.toHaveBeenCalled()
+    expect(engine.start).not.toHaveBeenCalled()
+  })
+
+  it('starts exactly one explicitly authorized extra OpenCode attempt and rejects replay before startup', async () => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({
+      projects: [project(repo)], runs: [buildRun()],
+      codingRuns: Array.from({ length: 3 }, (_, index) => opencodeCodingRun({ id: `old-${index}`, status: 'failed' })),
+    })
+    const ensureProcess = vi.fn(async () => { throw new Error('Provider process must wait for execution authorization') })
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      requireExecutionAuthorization: true, processManager: { ensure: ensureProcess },
+    })
+    const runtime = createCodingRuntime({ store, engine, budgetGuard: createAllowingBudgetGuard(), now: fixedNow('2026-06-17T02:00:00.000Z') })
+    const input = { runId: 'run-1', nodeId: 'node-build', projectId: 'project-1', requestedBy: 'user-1', userInstruction: 'Retry the same request.', additionalAttemptAfterCount: 3 }
+    const result = await runtime.runCodingAgent(input)
+    expect(result.codingRun.status).toBe('waiting_permission')
+    expect(store.codingRuns).toHaveLength(4)
+    expect(store.codingRuns.find((run) => run.id === result.codingRun.id)?.additionalAttemptAuthorization).toEqual({
+      afterAttemptCount: 3, authorizedBy: 'user-1', authorizedAt: '2026-06-17T02:00:00.000Z',
+    })
+    expect(ensureProcess).not.toHaveBeenCalled()
+    await runtime.cancelCodingAgentRun({ codingRunId: result.codingRun.id })
+    await expect(runtime.runCodingAgent(input)).rejects.toThrow('stale or invalid')
+    expect(store.codingRuns).toHaveLength(4)
+    expect(ensureProcess).not.toHaveBeenCalled()
+  })
+
+  it('pauses an expired OpenCode tool approval without cancelling the session or deleting its worktree', async () => {
+    const interrupted = opencodeCodingRun()
+    const workspace = managedWorkspace({ id: interrupted.managedWorkspaceId!, codingRunId: interrupted.id })
+    const request = codingPermissionRequest(interrupted, { requestedAt: '2026-06-17T00:00:00.000Z', expiresAt: '2026-06-17T00:01:00.000Z' })
+    const store = new MemoryCodingStore({ runs: [buildRun()], codingRuns: [interrupted], workspaces: [workspace] })
+    store.permissionRequests.push(request)
+    const engine = createSpyCodingEngine('opencode-http')
+    const deleteWorkspace = vi.fn(async () => ({ ...workspace, cleanupStatus: 'deleted' as const }))
+    const runtime = createCodingRuntime({ store, engine, deleteWorkspace, now: fixedNow('2026-06-17T00:01:00.000Z') })
+    await runtime.replyCodingPermission({
+      requestId: request.id, codingRunId: interrupted.id, decidedBy: 'devflow-timeout',
+      decision: 'expired', comment: 'Approval response window elapsed.',
+    })
+    expect(store.codingRuns.at(-1)).toMatchObject({
+      status: 'waiting_permission', permissionPause: { requestId: request.id, runVersion: buildRun().version },
+    })
+    expect(store.permissionRequests[0]?.status).toBe('expired')
+    expect(store.permissionDecisions[0]?.decision).toBe('expired')
+    expect(engine.cancel).not.toHaveBeenCalled()
+    expect(engine.approvePermission).not.toHaveBeenCalled()
+    expect(deleteWorkspace).not.toHaveBeenCalled()
+    expect(store.workspaces).toEqual([workspace])
+  })
+
   it.each([
     { label: 'default', limit: undefined, existingCount: 3 },
     { label: 'configured', limit: 2, existingCount: 2 },
@@ -254,7 +374,6 @@ describe('CodingRuntime', () => {
 
   it.each([
     { decision: 'rejected' as const, expectedStatus: 'interrupted' as const },
-    { decision: 'expired' as const, expectedStatus: 'timed_out' as const },
   ])('aborts and forgets a shared opencode session when a later request records $decision', async ({
     decision,
     expectedStatus,
@@ -4203,7 +4322,7 @@ class MemoryCodingStore {
     upsert(this.codingRuns, run)
   }
 
-  async reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult> {
+  async reserveCodingAgentRun(run: CodingAgentRun, options?: ReserveCodingAgentRunOptions): Promise<ReserveCodingAgentRunResult> {
     const sameId = this.codingRuns.find((candidate) => candidate.id === run.id)
     if (sameId) {
       return { reserved: false, reason: 'run_id_exists', run: sameId }
@@ -4216,6 +4335,7 @@ class MemoryCodingStore {
     if (active) {
       return { reserved: false, reason: 'active_run_exists', run: active }
     }
+    assertOpenCodeAttemptReservation(this.codingRuns, run, options?.maxOpenCodeAttempts)
     upsert(this.codingRuns, run)
     return { reserved: true, run }
   }
@@ -4229,6 +4349,9 @@ class MemoryCodingStore {
     }
     if (JSON.stringify(currentRun) !== JSON.stringify(mutation.expectedRun)) {
       return { committed: false, reason: 'stale_run', run: currentRun }
+    }
+    if (mutation.expectedWorkflowRun && JSON.stringify(this.runs.find((run) => run.id === currentRun.runId)) !== JSON.stringify(mutation.expectedWorkflowRun)) {
+      return { committed: false, reason: 'stale_workflow', run: currentRun }
     }
     if (mutation.run && mutation.run.id !== currentRun.id) {
       throw new Error('Coding Agent mutation cannot change the run identity')
@@ -4609,6 +4732,7 @@ function codingRun(overrides: Partial<CodingAgentRun> = {}): CodingAgentRun {
 
 function opencodeCodingRun(overrides: Partial<CodingAgentRun> = {}): CodingAgentRun {
   return codingRun({
+    workflowRunVersion: 1,
     engine: 'opencode-http',
     providerId: 'double',
     ...overrides,

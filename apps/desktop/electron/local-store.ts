@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
 import { inspectStoredProviderRemoval } from './provider-credential-store'
 import type { ProviderRemovalCheck, ProviderRemovalResult } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
@@ -426,6 +427,7 @@ export type ManagedCodingWorkspaceCleanupMutationResult =
 
 export type CodingAgentMutation = {
   expectedRun: CodingAgentRun
+  expectedWorkflowRun?: WorkflowRun
   expectedPendingPermissionRequestIds: readonly string[]
   run?: CodingAgentRun
   expectedPermissionRequests?: readonly CodingPermissionRequest[]
@@ -444,9 +446,11 @@ export type CodingAgentMutationResult =
     }
   | {
       committed: false
-      reason: 'stale_run' | 'terminal_run' | 'stale_permission_request' | 'stale_permission_set'
+      reason: 'stale_run' | 'terminal_run' | 'stale_permission_request' | 'stale_permission_set' | 'stale_workflow'
       run: CodingAgentRun
     }
+
+export type ReserveCodingAgentRunOptions = { maxOpenCodeAttempts: number }
 
 export type ReserveCodingAgentRunResult =
   | { reserved: true; run: CodingAgentRun }
@@ -1043,7 +1047,7 @@ export type LocalStore = {
   saveCodingChangeSet(changeSet: CodingChangeSet): Promise<CodingChangeSet>
   getCodingChangeSet(changeSetId: string): Promise<CodingChangeSet | null>
   listCodingChangeSets(codingRunId?: string): Promise<CodingChangeSet[]>
-  reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult>
+  reserveCodingAgentRun(run: CodingAgentRun, options?: ReserveCodingAgentRunOptions): Promise<ReserveCodingAgentRunResult>
   commitCodingAgentMutation(
     mutation: CodingAgentMutation,
   ): Promise<CodingAgentMutationResult>
@@ -12614,7 +12618,7 @@ class SqlJsLocalStore implements LocalStore {
         )
   }
 
-  async reserveCodingAgentRun(run: CodingAgentRun): Promise<ReserveCodingAgentRunResult> {
+  async reserveCodingAgentRun(run: CodingAgentRun, options?: ReserveCodingAgentRunOptions): Promise<ReserveCodingAgentRunResult> {
     if (!isActiveCodingAgentRunStatus(run.status)) {
       throw new Error('Coding Agent reservation requires an active run status')
     }
@@ -12632,6 +12636,7 @@ class SqlJsLocalStore implements LocalStore {
     if (active) {
       return { reserved: false, reason: 'active_run_exists', run: active }
     }
+    assertOpenCodeAttemptReservation(existingRuns, run, options?.maxOpenCodeAttempts)
     writeCodingAgentRun(this.db, run)
     await this.persist()
     return { reserved: true, run }
@@ -12650,6 +12655,12 @@ class SqlJsLocalStore implements LocalStore {
     }
     if (JSON.stringify(currentRun) !== JSON.stringify(mutation.expectedRun)) {
       return { committed: false, reason: 'stale_run', run: currentRun }
+    }
+    if (mutation.expectedWorkflowRun) {
+      const workflow = readWorkflowRuns(this.db).find((run) => run.id === currentRun.runId)
+      if (JSON.stringify(workflow) !== JSON.stringify(mutation.expectedWorkflowRun)) {
+        return { committed: false, reason: 'stale_workflow', run: currentRun }
+      }
     }
     if (mutation.run && mutation.run.id !== currentRun.id) {
       throw new Error('Coding Agent mutation cannot change the run identity')

@@ -72,6 +72,7 @@ export function AgentWorkbenchView({
   latestUsage,
   onRunCodingAgent,
   onReplyCodingPermission,
+  onRenewCodingPermission,
   onCancelCodingRun,
   onOpenCodingWorktree,
   onDeleteCodingWorktree,
@@ -128,8 +129,9 @@ export function AgentWorkbenchView({
   latestReview: AgentReviewResult | undefined
   latestTrace: AgentTrace | undefined
   latestUsage: AgentTokenUsage | undefined
-  onRunCodingAgent: () => void
+  onRunCodingAgent: (additionalAttemptAfterCount?: number) => void
   onReplyCodingPermission: (decision: CodingPermissionDecision['decision']) => void | Promise<void>
+  onRenewCodingPermission: () => void | Promise<void>
   onCancelCodingRun: () => void
   onOpenCodingWorktree: () => void
   onDeleteCodingWorktree: () => void
@@ -170,7 +172,12 @@ export function AgentWorkbenchView({
   const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
   const [isReplyingPermission, setIsReplyingPermission] = useState(false)
   const [showRetryConfirmation, setShowRetryConfirmation] = useState(false)
+  const [retryAuthorizationCount, setRetryAuthorizationCount] = useState<number | undefined>(undefined)
   const [reviewConfirmationId, setReviewConfirmationId] = useState<string | null>(null)
+  useEffect(() => {
+    setShowRetryConfirmation(false)
+    setRetryAuthorizationCount(undefined)
+  }, [selectedRun?.id, selectedNode?.id, localProjectId])
   const reviewEvidenceRef = useRef<HTMLElement>(null)
   useEffect(() => {
     setReviewConfirmationId(null)
@@ -402,8 +409,19 @@ export function AgentWorkbenchView({
     }
   }
 
-  function runPrimaryAction(action: AgentConsoleAction) {
+  function openRetryConfirmation() {
+    setRetryAuthorizationCount(codingActionProjection?.additionalAttemptAfterCount)
+    setShowRetryConfirmation(true)
+  }
+
+  async function runPrimaryAction(action: AgentConsoleAction) {
     if (action.disabled) {
+      return
+    }
+    if (action.id === 'renew-permission') {
+      if (isReplyingPermission) return
+      setIsReplyingPermission(true)
+      try { await onRenewCodingPermission() } finally { setIsReplyingPermission(false) }
       return
     }
 
@@ -425,7 +443,7 @@ export function AgentWorkbenchView({
 
     if (action.id === 'run-coding') {
       if (codingActionProjection?.action.id === 'retry') {
-        setShowRetryConfirmation(true)
+        openRetryConfirmation()
         return
       }
       onRunCodingAgent()
@@ -555,7 +573,7 @@ export function AgentWorkbenchView({
               <>
               <button
                 className="primary-button"
-                disabled={viewModel.primaryAction.disabled || (viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready')}
+                disabled={isReplyingPermission || viewModel.primaryAction.disabled || (viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready')}
                 aria-busy={viewModel.primaryAction.label === '生成中' || undefined}
                 title={viewModel.primaryAction.disabledReason}
                 onClick={() => runPrimaryAction(viewModel.primaryAction)}
@@ -596,8 +614,11 @@ export function AgentWorkbenchView({
           <div className="coding-retry-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="coding-retry-title">
             <div>
               <span className="panel-label">明确重试</span>
-              <h2 id="coding-retry-title">新建 Coding Run 重试？</h2>
+              <h2 id="coding-retry-title">{retryAuthorizationCount === undefined ? '新建 Coding Run 重试？' : '授权追加一次尝试？'}</h2>
               <p>这不会恢复或复用上一次 Run。它会创建新的 Run ID，并可能再次调用 Provider、消耗 token 和产生费用。</p>
+              {retryAuthorizationCount === undefined ? null : (
+                <p>本需求的开发节点已尝试 {retryAuthorizationCount} 次。这次授权只允许第 {retryAuthorizationCount + 1} 次，保留全部失败记录；命令审批、预算和执行时限继续适用。</p>
+              )}
               <dl className="change-set-review__facts">
                 <div><dt>Provider</dt><dd>{latestCodingProviderName ?? selectedProviderId ?? '未配置'}</dd></div>
                 <div><dt>上次 Token</dt><dd>{latestCodingRun?.runtimeCostSummary?.totalTokens ?? (latestCodingRun?.runtimeCostSummary ? latestCodingRun.runtimeCostSummary.inputTokens + latestCodingRun.runtimeCostSummary.outputTokens : '未知')}</dd></div>
@@ -608,12 +629,13 @@ export function AgentWorkbenchView({
               <div className="inspector-actions">
                 <button
                   className="primary-button"
+                  disabled={isStartingCodingAgent || Boolean(codingActionProjection?.action.disabled)}
                   onClick={() => {
                     setShowRetryConfirmation(false)
-                    onRunCodingAgent()
+                    onRunCodingAgent(retryAuthorizationCount)
                   }}
                 >
-                  新建 Run 并重试
+                  {retryAuthorizationCount === undefined ? '新建 Run 并重试' : '授权追加一次尝试'}
                 </button>
                 <button className="ghost-button" onClick={() => setShowRetryConfirmation(false)}>取消</button>
               </div>
@@ -784,7 +806,7 @@ export function AgentWorkbenchView({
                     <button
                       className="primary-button"
                       disabled={!runtimeBudgetApprovalId.trim() || isStartingCodingAgent}
-                      onClick={() => setShowRetryConfirmation(true)}
+                      onClick={openRetryConfirmation}
                     >
                       <Code2 size={16} />
                       使用预算批准重新运行

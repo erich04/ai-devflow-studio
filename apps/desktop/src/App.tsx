@@ -834,6 +834,7 @@ export function App() {
     runCodingAgent: runCodingAgentAction,
     startRemediationRetry,
     replyCodingPermission,
+    renewCodingPermission,
     cancelCodingRun,
     openCodingWorktree,
     deleteCodingWorktree,
@@ -870,7 +871,7 @@ export function App() {
     applyLocalExecutionState,
   })
 
-  const runCodingAgent = useCallback(() => {
+  const runCodingAgent = useCallback((additionalAttemptAfterCount?: number) => {
     if (codingRuntime.readiness?.status !== 'ready') {
       setActiveView('agents')
       setToast(
@@ -880,7 +881,7 @@ export function App() {
       )
       return
     }
-    void runCodingAgentAction()
+    void runCodingAgentAction(additionalAttemptAfterCount)
   }, [codingRuntime.error, codingRuntime.readiness, runCodingAgentAction, setActiveView, setToast])
 
   async function retryTerminalRemoteSyncOperation(operationId: string) {
@@ -1562,6 +1563,7 @@ export function App() {
             latestUsage={latestAgentUsage}
             onRunCodingAgent={runCodingAgent}
             onReplyCodingPermission={replyCodingPermission}
+            onRenewCodingPermission={renewCodingPermission}
             onCancelCodingRun={cancelCodingRun}
             onOpenCodingWorktree={openCodingWorktree}
             onDeleteCodingWorktree={deleteCodingWorktree}

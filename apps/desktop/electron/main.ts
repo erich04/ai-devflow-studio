@@ -133,6 +133,7 @@ import {
   parsePromoteAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
   parseReplyCodingPermissionInput,
+  parseRenewCodingPermissionInput,
   parseRemoteSnapshotInput,
   parseRetryRemoteSyncOperationInput,
   parseRunCodingAgentInput,
@@ -3445,6 +3446,20 @@ function registerIpcHandlers() {
     const input = parseSubscribeCodingRunInput(payload)
     const runtime = await createCodingRuntimeForRequest()
     return runtime.subscribeCodingRun(input)
+  })
+
+  ipcMain.handle(ipcChannels.renewCodingPermission, async (_, payload: unknown) => {
+    const input = parseRenewCodingPermissionInput(payload)
+    const store = await getStore()
+    const codingRun = (await store.listCodingAgentRuns()).find((candidate) => candidate.id === input.codingRunId)
+    if (!codingRun) throw new Error('Coding Agent run is unavailable')
+    const trusted = resolveTrustedCodingPermissionReply({
+      input: { ...input, decision: 'expired', comment: '' },
+      projectId: codingRun.projectId,
+      pairing: await store.getDesktopPairingCredential(),
+    })
+    const runtime = await createCodingRuntimeForRequest(undefined, codingRun.projectId)
+    return runtime.renewCodingPermission({ ...input, decidedBy: trusted.decidedBy })
   })
 
   ipcMain.handle(ipcChannels.openManagedWorktree, async (_, payload: unknown) => {

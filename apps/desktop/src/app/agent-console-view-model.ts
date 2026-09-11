@@ -43,6 +43,7 @@ export type AgentConsolePrimaryActionId =
   | 'go-tests'
   | 'return-workbench'
   | 'resolve-permission'
+  | 'renew-permission'
 
 export type AgentConsoleAction = {
   id: AgentConsolePrimaryActionId
@@ -264,6 +265,14 @@ function buildPrimaryActionImpact(input: {
     }
   }
 
+  if (input.action.id === 'renew-permission') {
+    return {
+      object, result: '核验原会话和工作区，生成新的精确权限请求，等待审批。',
+      providerAndCost: '重新核验不启动 Provider；之后批准继续执行才可能产生费用。',
+      repository: '保留当前工作区。命令或文件状态发生变化时不恢复。',
+      workflow: '沿用原 Coding Run，保留过期记录；此操作不会批准执行。',
+    }
+  }
   if (input.action.id === 'resolve-permission') {
     return {
       object,
@@ -359,6 +368,13 @@ function buildPrimaryAction(input: {
 }): AgentConsoleAction {
   if (input.codingActionProjection && input.selectedNode && isBuildTask(input.selectedNode)) {
     const projected = input.codingActionProjection.action
+    if (projected.id === 'renew-permission') {
+      return {
+        id: 'renew-permission', label: projected.label, summary: projected.summary, tone: 'warn',
+        disabled: projected.disabled,
+        ...(projected.disabledReason ? { disabledReason: projected.disabledReason } : {}),
+      }
+    }
     if (projected.id === 'review-permission') {
       return {
         id: 'resolve-permission',

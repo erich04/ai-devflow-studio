@@ -29,6 +29,137 @@ import {
 } from './opencode-http-adapter'
 
 describe('opencode HTTP coding engine', () => {
+  it('bounds policy correction feedback and never approves a repeatedly unsupported command', async () => {
+    const denied = Array.from({ length: 4 }, (_, index) => ({
+      id: `denied-${index}`, sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd && ls' },
+    }))
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(), successfulOpencodeMessage(),
+      [denied[0]], true, [denied[1]], true, [denied[2]], true, [denied[3]],
+      true, [denied[3]], true, [], [],
+    ])
+    const reportPermissionPolicyDecision = vi.fn(async () => undefined)
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+      fetcher, requireExecutionAuthorization: true, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const input = startInput({ run, node, project, workspace })
+    const authorization = expectPermissionResult(await engine.start(input))
+    await expect(engine.approvePermission({
+      codingRun: authorization.codingRun, request: authorization.permissionRequest,
+      workspace, project, authorizedStart: input, now: input.now, reportPermissionPolicyDecision,
+    })).rejects.toThrow('opencode_permission_correction_limit_exceeded')
+    expect(reportPermissionPolicyDecision).toHaveBeenCalledTimes(4)
+    expect(fetcher.bodies.some((body) => JSON.parse(body).reply === 'once')).toBe(false)
+    expect(fetcher.urls.filter((url) => url.includes('/abort?'))).toHaveLength(1)
+  })
+
+  it.each(['unchanged', 'workspace changed', 'permission changed', 'workspace changed after renewal'] as const)(
+    'revalidates a paused approval without starting another Provider session: %s', async (scenario) => {
+      let clock = Date.parse('2026-06-17T00:00:00.000Z')
+      let patch = ''
+      const permission = { id: 'original-edit', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }
+      const fetcher = sequenceFetcher([
+        managedOpencodeSession(), successfulOpencodeMessage(), [permission],
+        [{ ...permission, ...(scenario === 'permission changed' ? { metadata: { filepath: 'src/other.ts' } } : {}) }],
+        [permission],
+        true, [], [], [],
+      ])
+      const engine = createOpencodeHttpCodingEngineAdapter({
+        binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+        processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+        fetcher, requireExecutionAuthorization: true, nowMs: () => clock,
+        captureWorktreeDiff: async () => ({ changedPaths: patch ? ['src/app.ts'] : [], patch }),
+        permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+      })
+      const run = runs[0]!
+      const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+      const project = localProject(projects[0]!)
+      const workspace = managedWorkspace(project.id, run.id, node.id)
+      const input = startInput({ run, node, project, workspace })
+      const authorization = expectPermissionResult(await engine.start(input))
+      const started = expectPermissionResult(await engine.approvePermission({
+        codingRun: authorization.codingRun, request: authorization.permissionRequest,
+        workspace, project, authorizedStart: input, now: input.now,
+      }))
+      clock += 2 * 60 * 60_000
+      if (scenario === 'workspace changed') patch = 'changed after expiry'
+      const renewed = engine.refreshPermission!({
+        codingRun: { ...started.codingRun, permissionPause: { requestId: 'original-edit', pausedAt: input.now, runVersion: run.version } },
+        request: { ...started.permissionRequest, status: 'expired' }, workspace, project,
+        newRequestId: 'renewed-edit', now: new Date(clock).toISOString(),
+      })
+      if (scenario === 'workspace changed' || scenario === 'permission changed') {
+        await expect(renewed).rejects.toThrow('changed while paused')
+        expect(fetcher.urls.some((url) => url.includes('/reply?'))).toBe(false)
+      } else {
+        const result = await renewed
+        expect(result.permissionRequest).toMatchObject({
+          id: 'renewed-edit', executorRequestId: 'original-edit', replacesRequestId: 'original-edit', status: 'pending',
+        })
+        expect(result.codingRun.permissionPause).toBeUndefined()
+        expect(Date.parse(result.permissionRequest.expiresAt) - clock).toBe(60_000)
+        expect(fetcher.urls.some((url) => url.includes('/reply?'))).toBe(false)
+        if (scenario === 'workspace changed after renewal') patch = 'changed after renewed preview'
+        const approval = engine.approvePermission({
+          codingRun: result.codingRun, request: result.permissionRequest, workspace, project, now: new Date(clock).toISOString(),
+        })
+        if (scenario === 'workspace changed after renewal') {
+          await expect(approval).rejects.toThrow('changed while paused')
+          expect(fetcher.bodies.some((body) => JSON.parse(body).reply === 'once')).toBe(false)
+        } else {
+          await approval
+          expect(fetcher.urls.some((url) => url.includes('/permission/original-edit/reply?'))).toBe(true)
+        }
+        expect(fetcher.urls.some((url) => url.includes('/permission/renewed-edit/reply?'))).toBe(false)
+      }
+      expect(fetcher.bodies.filter((body) => JSON.parse(body).parts)).toHaveLength(1)
+    },
+  )
+
+  it('handles a read-only check and a denied command before exposing an actionable edit approval', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(), deferredOpencodeMessage(successfulOpencodeMessage()),
+      [{ id: 'read-branch', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'git branch --show-current' } }],
+      true,
+      [{ id: 'bad-command', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd && git status' } }],
+      true,
+      [{ id: 'edit-source', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+    ])
+    const reportPermissionPolicyDecision = vi.fn(async () => undefined)
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+      fetcher, requireExecutionAuthorization: true, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const input = startInput({ run, node, project, workspace })
+    const authorization = expectPermissionResult(await engine.start(input))
+    expect(fetcher.urls).toEqual([])
+    const result = expectPermissionResult(await engine.approvePermission({
+      codingRun: authorization.codingRun, request: authorization.permissionRequest,
+      workspace, project, authorizedStart: input, now: input.now, reportPermissionPolicyDecision,
+    }))
+    expect(result.permissionRequest.id).toBe('edit-source')
+    expect(fetcher.urls.some((url) => url.includes('/abort?'))).toBe(false)
+    expect(fetcher.bodies.map((body) => JSON.parse(body)).filter((body) => body.reply)).toEqual([
+      expect.objectContaining({ reply: 'once' }),
+      expect.objectContaining({ reply: 'reject', message: expect.stringContaining('shell_escape_disabled') }),
+    ])
+    expect(reportPermissionPolicyDecision.mock.calls).toEqual([
+      [expect.objectContaining({ requestId: 'read-branch', decision: 'approved' })],
+      [expect.objectContaining({ requestId: 'bad-command', decision: 'rejected' })],
+    ])
+  })
+
   it('gives newly discovered permissions a full response window after Provider latency', async () => {
     let clock = Date.parse('2026-06-17T00:00:00.000Z')
     const fetchSequence = sequenceFetcher([

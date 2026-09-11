@@ -1255,6 +1255,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     }),
     cancelCodingAgentRun: vi.fn(),
     replyCodingPermission: vi.fn(),
+    renewCodingPermission: vi.fn(),
     subscribeCodingRun: vi.fn().mockResolvedValue({
       projects: [],
       runs: [],
@@ -2671,6 +2672,61 @@ describe('App', () => {
     expect(api.runCodingAgent).not.toHaveBeenCalled()
     fireEvent.click(within(confirmation).getByRole('button', { name: '新建 Run 并重试' }))
     await waitFor(() => expect(api.runCodingAgent).toHaveBeenCalledTimes(1))
+  })
+
+  it('requests one extra OpenCode attempt only after confirming the displayed cumulative count', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const state = localStateAtCurrentNode('n-build')
+    const history = Array.from({ length: 3 }, (_, index) => ({
+      id: `failed-opencode-${index}`, runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+      requestedBy: 'u-ling', providerId: agentProvider.id, engine: 'opencode-http' as const,
+      status: 'failed' as const, branchName: `devflow/attempt-${index}`, userInstruction: 'Update text.',
+      prompt: 'Update text.', summary: 'Previous attempt failed.', changedPaths: [],
+      startedAt: `2026-08-30T12:0${index}:00.000Z`, completedAt: `2026-08-30T12:0${index}:30.000Z`, redacted: true,
+    }))
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({ ...state, codingRuns: history }),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue({ ...codingReadinessFixture(), engine: 'opencode-http', executor: 'opencode-http' }),
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+    const workbench = await screen.findByTestId('agent-workbench')
+    fireEvent.click(await within(workbench).findByRole('button', { name: '已达尝试上限 · 授权追加一次尝试' }))
+    const confirmation = screen.getByRole('alertdialog')
+    expect(confirmation).toHaveTextContent('已尝试 3 次')
+    expect(confirmation).toHaveTextContent('第 4 次')
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    fireEvent.click(within(confirmation).getByRole('button', { name: '授权追加一次尝试' }))
+    await waitFor(() => expect(api.runCodingAgent).toHaveBeenCalledWith(expect.objectContaining({
+      runId: buildRun.id, nodeId: 'n-build', additionalAttemptAfterCount: 3,
+    })))
+    expect(api.runCodingAgent).toHaveBeenCalledTimes(1)
+  })
+
+  it('renews a paused approval through a distinct action without approving it or starting a Run', async () => {
+    const buildRun = fixtureRunAtCurrentNode('n-build')
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        ...localStateAtCurrentNode('n-build'),
+        codingRuns: [{
+          id: 'paused-opencode', runId: buildRun.id, nodeId: 'n-build', projectId: localProject.id,
+          requestedBy: 'u-ling', providerId: agentProvider.id, engine: 'opencode-http', status: 'waiting_permission',
+          branchName: 'devflow/paused', userInstruction: 'Update text.', prompt: 'Update text.',
+          summary: '工具审批已过期，执行已暂停。', changedPaths: [], startedAt: '2026-08-30T12:00:00.000Z',
+          permissionPause: { requestId: 'expired-request', pausedAt: '2026-08-30T12:01:00.000Z', runVersion: buildRun.version },
+          redacted: true,
+        }],
+      }),
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+    const workbench = await screen.findByTestId('agent-workbench')
+    fireEvent.click(await within(workbench).findByRole('button', { name: '重新核验并请求审批' }))
+    await waitFor(() => expect(api.renewCodingPermission).toHaveBeenCalledWith(expect.objectContaining({
+      codingRunId: 'paused-opencode', requestId: 'expired-request',
+    })))
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    expect(api.replyCodingPermission).not.toHaveBeenCalled()
   })
 
   it('keeps a completed Coding Run read-only without start or retry actions', async () => {

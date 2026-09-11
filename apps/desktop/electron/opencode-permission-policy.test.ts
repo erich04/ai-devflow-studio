@@ -9,6 +9,13 @@ function bash(command?: string): OpenCodePermissionPolicyInput {
 }
 
 describe('OpenCode first-slice permission policy', () => {
+  it('recognizes the exact current-branch query without allowing branch mutation', () => {
+    expect(classifyOpenCodePermission(bash('git branch --show-current')).status).toBe('allowed')
+    for (const command of ['git branch feature', 'git branch -D main', 'git branch --show-current && git push']) {
+      expect(classifyOpenCodePermission(bash(command)).status).toBe('denied')
+    }
+  })
+
   it.each([undefined, '', '   '])(
     'rejects shell permission without usable command metadata: %s',
     (command) => {

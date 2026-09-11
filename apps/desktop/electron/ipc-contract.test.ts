@@ -25,6 +25,7 @@ import {
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
   parseReplyCodingPermissionInput,
+  parseRenewCodingPermissionInput,
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
   parseGetCoordinationSessionInput,
@@ -1006,6 +1007,13 @@ describe('IPC contract parsers', () => {
   })
 
   it('accepts only identifier-bound coding agent payloads and rejects renderer provider or prompt authority', () => {
+    const identifiers = { runId: 'run-1', nodeId: 'node-build', projectId: 'project-1', requestedBy: 'user-1', userInstruction: 'Retry.' }
+    expect(parseRunCodingAgentInput({ ...identifiers, additionalAttemptAfterCount: 3 }).additionalAttemptAfterCount).toBe(3)
+    for (const value of [true, '3', 0, -1, 3.5, Infinity]) {
+      expect(() => parseRunCodingAgentInput({ ...identifiers, additionalAttemptAfterCount: value })).toThrow('Invalid additional OpenCode attempt count')
+    }
+    expect(() => parseRenewCodingPermissionInput({ requestId: 'expired', codingRunId: 'run-1', decidedBy: 'user-1', decision: 'approved' })).toThrow()
+    expect(parseRenewCodingPermissionInput({ requestId: 'expired', codingRunId: 'run-1', decidedBy: 'user-1' })).toEqual({ requestId: 'expired', codingRunId: 'run-1', decidedBy: 'user-1' })
     expect(
       parseRunCodingAgentInput({
         runId: 'run-1',

@@ -1244,6 +1244,9 @@ export type CodingAgentRun = {
   bootstrapEvidenceId?: string
   testEvidenceId?: string
   changeAcceptanceDecisionId?: string
+  workflowRunVersion?: number
+  permissionPause?: { requestId: string; pausedAt: string; runVersion?: number }
+  additionalAttemptAuthorization?: { afterAttemptCount: number; authorizedBy: string; authorizedAt: string }
   redacted: boolean
 }
 
@@ -1278,6 +1281,8 @@ export type CodingPermissionRequestStatus = 'pending' | 'approved' | 'rejected' 
 export type CodingPermissionRequest = {
   id: string
   codingRunId: string
+  replacesRequestId?: string
+  executorRequestId?: string
   runId: string
   nodeId: string
   origin?:

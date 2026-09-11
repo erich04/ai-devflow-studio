@@ -768,7 +768,7 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function runCodingAgent() {
+  async function runCodingAgent(additionalAttemptAfterCount?: number) {
     if (!selectedRun || !selectedNode || !currentUser) {
       return
     }
@@ -798,6 +798,7 @@ export function useDesktopActions(input: {
         projectId: selectedLocalProject.id,
         requestedBy: currentUser.id,
         userInstruction: `Implement ${displayNodeTitle(selectedNode)} with the existing DevFlow context.`,
+        ...(additionalAttemptAfterCount === undefined ? {} : { additionalAttemptAfterCount }),
         ...(runtimeBudgetApprovalId.trim() ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() } : {}),
       })
       applyLocalExecutionState(result.state)
@@ -879,6 +880,20 @@ export function useDesktopActions(input: {
       )
     } catch (error) {
       setToast(error instanceof Error ? error.message : '权限回复失败')
+    }
+  }
+
+  async function renewCodingPermission() {
+    if (!desktopApi || !latestCodingRun?.permissionPause || !currentUser) return
+    try {
+      await desktopApi.renewCodingPermission({
+        codingRunId: latestCodingRun.id, requestId: latestCodingRun.permissionPause.requestId,
+        decidedBy: currentUser.id,
+      })
+      applyLocalExecutionState(await desktopApi.loadState())
+      setToast('已重新核验，请审查新的权限请求。此操作尚未批准执行。')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : '无法恢复审批，工作区仍保留')
     }
   }
 
@@ -1473,6 +1488,7 @@ export function useDesktopActions(input: {
     runCodingAgent,
     startRemediationRetry,
     replyCodingPermission,
+    renewCodingPermission,
     cancelCodingRun,
     openCodingWorktree,
     deleteCodingWorktree,

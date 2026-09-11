@@ -8,10 +8,11 @@ import {
 import { realpathSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { isAbsolute, relative, resolve } from 'node:path'
-import type { CodingEngineAdapter, CodingEngineStartInput } from './coding-engine.js'
+import type { CodingEngineAdapter, CodingEngineStartInput, CodingPermissionPolicyReporter } from './coding-engine.js'
 import {
   CodingEngineContinuationCleanupError,
   CodingEnginePermissionDiscoveryError,
+  CodingEnginePermissionRevalidationError,
   CodingEngineStartupCleanupError,
 } from './coding-engine-lifecycle.js'
 import {
@@ -32,7 +33,7 @@ import {
 } from './opencode-http-adapter.js'
 import { captureWorktreeDiff, type CapturedWorktreeDiff } from './coding-runner.js'
 import { createOpencodeProcessManager, type ManagedOpencodeServer } from './opencode-process.js'
-import { buildOpenCodeManagedPrompt, classifyOpenCodePermission } from './opencode-permission-policy.js'
+import { buildOpenCodeManagedPrompt, classifyOpenCodePermission, isAutomaticOpenCodeRead } from './opencode-permission-policy.js'
 import {
   assertOpenCodeGitBoundary,
   captureOpenCodeGitBoundary,
@@ -87,6 +88,10 @@ type OpencodeRuntimeSession = {
   observedToolCallKeys: Set<string>
   projectPath: string
   sessionId: string
+  policyRejections: number
+  reportPermissionPolicyDecision?: CodingPermissionPolicyReporter | undefined
+  awaitingApprovalSinceMs?: number
+  pendingApproval?: { requestId: string; permissionDigest: string; workspaceDigest?: string }
 }
 
 type PendingOpencodeSession = {
@@ -117,11 +122,58 @@ export function createOpencodeHttpCodingEngineAdapter(
     .digest('hex')
 
   function remainingSessionMs(session: OpencodeRuntimeSession): number {
-    const remaining = session.deadlineAtMs - nowMs()
+    const remaining = session.deadlineAtMs - (session.awaitingApprovalSinceMs ?? nowMs())
     if (remaining <= 0) {
       throw new Error('opencode_wall_clock_limit_exceeded')
     }
     return remaining
+  }
+
+  function resumeApprovalClock(session: OpencodeRuntimeSession) {
+    if (session.awaitingApprovalSinceMs !== undefined) {
+      session.deadlineAtMs += Math.max(0, nowMs() - session.awaitingApprovalSinceMs)
+      delete session.awaitingApprovalSinceMs
+    }
+  }
+
+  async function workspaceDigest(session: OpencodeRuntimeSession): Promise<string> {
+    const diff = await (config.captureWorktreeDiff ?? captureWorktreeDiff)({ worktreePath: session.directory })
+    return createHash('sha256').update(JSON.stringify({ paths: [...diff.changedPaths].sort(), patch: diff.patch })).digest('hex')
+  }
+
+  function permissionDigest(permission: OpencodePermission): string {
+    return createHash('sha256').update(JSON.stringify(permission, (_key, value: unknown) =>
+      isRecord(value) ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))) : value,
+    )).digest('hex')
+  }
+
+  async function rememberApproval(session: OpencodeRuntimeSession, permission: OpencodePermission) {
+    const digest = config.requireExecutionAuthorization && (session.gitBoundary || config.captureWorktreeDiff)
+      ? await workspaceDigest(session) : undefined
+    session.pendingApproval = {
+      requestId: permission.id, permissionDigest: permissionDigest(permission),
+      ...(digest ? { workspaceDigest: digest } : {}),
+    }
+    if (config.requireExecutionAuthorization) session.awaitingApprovalSinceMs = nowMs()
+  }
+
+  async function revalidateApproval(session: OpencodeRuntimeSession, expectedId: string) {
+    const expected = session.pendingApproval
+    if (!expected || expected.requestId !== expectedId || !expected.workspaceDigest) {
+      throw new CodingEnginePermissionRevalidationError('OpenCode approval cannot be recovered without its original session and workspace snapshot.')
+    }
+    if (session.cleanupPromise) throw new Error('OpenCode session is being stopped.')
+    remainingSessionMs(session)
+    if (session.gitBoundary) {
+      await assertOpenCodeGitBoundary({ sourcePath: session.projectPath, worktreePath: session.directory, snapshot: session.gitBoundary })
+    }
+    const pending = (await listOpencodePermissions({
+      baseUrl: session.baseUrl, directory: session.directory, ...fetcherOption(config.fetcher),
+    })).find((permission) => permission.id === expectedId && permission.sessionID === session.sessionId)
+    if (!pending || permissionDigest(pending) !== expected.permissionDigest || await workspaceDigest(session) !== expected.workspaceDigest) {
+      throw new CodingEnginePermissionRevalidationError('OpenCode permission or managed workspace changed while paused; approval cannot resume.')
+    }
+    return pending
   }
 
   function permissionWaitTimeout(session: OpencodeRuntimeSession): number {
@@ -159,6 +211,48 @@ export function createOpencodeHttpCodingEngineAdapter(
     })
     registerObservedToolTurns(session, messages)
     assertToolTurnLimit(session)
+  }
+
+  async function nextManagedOutcome(session: OpencodeRuntimeSession, codingRun: CodingAgentRun) {
+    while (true) {
+      const outcome = await waitForNextPermissionOrMessage({
+        baseUrl: session.baseUrl, directory: session.directory,
+        handledPermissionIds: session.handledPermissionIds,
+        messagePromise: session.messagePromise,
+        observeToolTurns: (signal) => refreshObservedToolTurns(session, signal),
+        pollMs: config.permissionPollMs ?? 1_000, sessionId: session.sessionId,
+        timeoutMs: permissionWaitTimeout(session), ...fetcherOption(config.fetcher),
+      })
+      if (outcome.kind !== 'permission') return outcome
+      if (session.cleanupPromise) await failForSessionCleanup(session.cleanupPromise)
+      registerPermissionToolTurn(session, outcome.permission)
+      const request = toCodingPermissionRequest(
+        codingRun, outcome.permission, new Date(nowMs()).toISOString(), session.directory, session.projectPath,
+      )
+      const policy = classifyOpenCodePermission(request)
+      if (policy.status === 'allowed' && !isAutomaticOpenCodeRead(request)) return outcome
+      const decision = policy.status === 'allowed' ? 'approved' : 'rejected'
+      await session.reportPermissionPolicyDecision?.({
+        requestId: request.id, permission: request.permission,
+        ...(request.command ? { commandSummary: request.command } : {}),
+        ...(request.filePath ? { filePath: request.filePath } : {}),
+        decision, code: policy.code, reason: policy.reason, timestamp: request.requestedAt,
+      })
+      if (decision === 'rejected' && ++session.policyRejections > 3) {
+        throw new Error('opencode_permission_correction_limit_exceeded')
+      }
+      if (session.cleanupPromise) await failForSessionCleanup(session.cleanupPromise)
+      const acknowledged = await replyOpencodePermission({
+        baseUrl: session.baseUrl, directory: session.directory, requestId: outcome.permission.id,
+        reply: decision === 'approved' ? 'once' : 'reject',
+        message: decision === 'approved'
+          ? 'DevFlow permits this bounded read-only repository check under the execution authorization.'
+          : `DevFlow denied this tool call (${policy.code}): ${policy.reason} Use native read/glob/grep tools or one supported local command. Revise the request within these capabilities; do not bypass the denied operation.`,
+        ...fetcherOption(config.fetcher),
+      })
+      if (acknowledged !== true) throw new Error('opencode policy reply was not acknowledged')
+      session.handledPermissionIds.add(outcome.permission.id)
+    }
   }
 
   function cleanupRegisteredSession(
@@ -386,6 +480,8 @@ export function createOpencodeHttpCodingEngineAdapter(
           observedToolCallKeys: new Set(),
           projectPath: input.project.path,
           sessionId: session.id,
+          policyRejections: 0,
+          reportPermissionPolicyDecision: input.reportPermissionPolicyDecision,
         }
         sessions.set(input.id, runtimeSession)
         resolvePendingSession?.(runtimeSession)
@@ -417,17 +513,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           )
           runtimeSession.messagePromise = messagePromise
           const firstOutcome = config.requireExecutionAuthorization
-            ? await waitForNextPermissionOrMessage({
-                baseUrl: server.baseUrl,
-                directory,
-                handledPermissionIds: runtimeSession.handledPermissionIds,
-                messagePromise,
-                observeToolTurns: (signal) => refreshObservedToolTurns(runtimeSession!, signal),
-                pollMs: config.permissionPollMs ?? 1_000,
-                sessionId: session.id,
-                timeoutMs: permissionWaitTimeout(runtimeSession),
-                ...fetcherOption(config.fetcher),
-              })
+            ? await nextManagedOutcome(runtimeSession, createRunningOpencodeRun(input, prompt))
             : undefined
           if (firstOutcome?.kind === 'message') {
             return await finishSession({
@@ -450,6 +536,7 @@ export function createOpencodeHttpCodingEngineAdapter(
                 timeoutMs: permissionWaitTimeout(runtimeSession),
                 ...fetcherOption(config.fetcher),
               })
+          await rememberApproval(runtimeSession, permission)
           const result = createStartResult(
             input, prompt, session.id, permission, directory, new Date(nowMs()).toISOString(),
           )
@@ -491,7 +578,10 @@ export function createOpencodeHttpCodingEngineAdapter(
         }
         authorizedRunIds.add(input.codingRun.id)
         try {
-          return await adapter.start(input.authorizedStart)
+          return await adapter.start({
+            ...input.authorizedStart,
+            ...(input.reportPermissionPolicyDecision ? { reportPermissionPolicyDecision: input.reportPermissionPolicyDecision } : {}),
+          })
         } catch (error) {
           authorizedRunIds.delete(input.codingRun.id)
           throw error
@@ -520,9 +610,23 @@ export function createOpencodeHttpCodingEngineAdapter(
         }
         throw policyError
       }
+      const executorRequestId = input.request.executorRequestId ?? input.request.id
+      if (session.pendingApproval?.requestId !== executorRequestId) {
+        throw new Error('OpenCode approval does not match the active executor permission.')
+      }
+      if (input.request.replacesRequestId) {
+        try {
+          await revalidateApproval(session, executorRequestId)
+        } catch (error) {
+          try { await cleanupRegisteredSession(input.codingRun.id, session, 'continuation') }
+          catch (cleanupError) { throw new CodingEngineContinuationCleanupError([error, cleanupError]) }
+          throw error
+        }
+      }
+      resumeApprovalClock(session)
       const replied = await replyOpencodePermission({
         baseUrl: session.baseUrl,
-        requestId: input.request.id,
+        requestId: executorRequestId,
         directory: session.directory,
         reply: 'once',
         message: 'Approved by DevFlow.',
@@ -531,9 +635,12 @@ export function createOpencodeHttpCodingEngineAdapter(
       if (replied !== true) {
         throw new Error('opencode permission reply was not acknowledged')
       }
-      session.handledPermissionIds.add(input.request.id)
+      session.handledPermissionIds.add(executorRequestId)
       try {
-        const continuation = await waitForNextPermissionOrMessage({
+        session.reportPermissionPolicyDecision = input.reportPermissionPolicyDecision ?? session.reportPermissionPolicyDecision
+        const continuation = config.requireExecutionAuthorization
+          ? await nextManagedOutcome(session, input.codingRun)
+          : await waitForNextPermissionOrMessage({
           baseUrl: session.baseUrl,
           directory: session.directory,
           handledPermissionIds: session.handledPermissionIds,
@@ -546,6 +653,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         })
         if (continuation.kind === 'permission') {
           registerPermissionToolTurn(session, continuation.permission)
+          await rememberApproval(session, continuation.permission)
           const eventSequence = session.nextEventSequence
           const result = createContinuationResult(
             input.codingRun,
@@ -583,6 +691,28 @@ export function createOpencodeHttpCodingEngineAdapter(
           throw new CodingEngineContinuationCleanupError([error, cleanupError])
         }
         throw error
+      }
+    },
+
+    async refreshPermission(input) {
+      const session = sessions.get(input.codingRun.id)
+      if (!session) throw new Error('原 OpenCode 会话已结束，无法续接；工作区保留，请先查看已有证据。')
+      const expectedId = input.request.executorRequestId ?? input.request.id
+      const pending = await revalidateApproval(session, expectedId)
+      const timestamp = new Date(nowMs()).toISOString()
+      const request = toCodingPermissionRequest(input.codingRun, pending, timestamp, session.directory, session.projectPath)
+      if (classifyOpenCodePermission(request).status !== 'allowed') throw new Error('OpenCode permission is no longer allowed by current policy.')
+      const { permissionPause: _paused, ...previousRun } = input.codingRun
+      return {
+        codingRun: { ...previousRun, status: 'waiting_permission', summary: 'OpenCode approval renewed after session and workspace revalidation.' },
+        permissionRequest: { ...request, id: input.newRequestId, replacesRequestId: input.request.id, executorRequestId: expectedId },
+        events: [{
+          id: `coding-event-${input.newRequestId}-renewed`, codingRunId: input.codingRun.id,
+          runId: input.codingRun.runId, nodeId: input.codingRun.nodeId,
+          sequence: session.nextEventSequence++, kind: 'permission', timestamp,
+          message: 'Expired OpenCode approval replaced by a fresh request after session and workspace revalidation.',
+          metadata: { requestId: input.newRequestId, replacesRequestId: input.request.id }, redacted: true,
+        }],
       }
     },
 

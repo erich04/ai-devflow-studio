@@ -35,3 +35,10 @@ export class CodingEnginePermissionDiscoveryError extends Error {
     this.code = code
   }
 }
+
+export class CodingEnginePermissionRevalidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'CodingEnginePermissionRevalidationError'
+  }
+}

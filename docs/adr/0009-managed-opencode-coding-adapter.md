@@ -45,10 +45,26 @@ workflow semantics.
 - Only one active Coding Agent Run is allowed per Local Project in the MVP.
 - Worktree dependency installation must be explicit; `node_modules` is not assumed to exist in a git
   worktree.
-- Permission timeout defaults to reject.
+- Managed OpenCode tool-approval expiry pauses the run and retains its live session and worktree.
+  Renewal revalidates the original Workflow version, pending executor permission, Git boundary, and
+  worktree diff, then creates a new local approval ID bound to the original executor request.
+  The expired decision remains in history; renewal does not approve execution or start a Provider.
+  Revalidation also runs before the renewed approval is relayed.
+  A lost session (including Desktop restart) cannot be resumed automatically; existing recovery
+  retains the worktree and requires an explicit new attempt.
 - Cancel marks the run `cancelled` and aborts the underlying session when a real engine is active.
-- Permission expiry or run wall-clock timeout marks the run `timed_out`, distinct from user cancel,
-  tool failure, and unexpected interruption.
+- Execution Authorization, Change Acceptance, and dependency-install approval retain their existing
+  expiry behavior. Actual execution timeout marks the run `timed_out`, distinct from user cancel,
+  tool failure, and unexpected interruption. Managed OpenCode's active execution deadline excludes
+  time waiting for tool approval; tool-turn and policy-correction limits remain enforced.
+- After Execution Authorization, precisely recognized local checks (`pwd`, supported plain
+  `git status` forms, and `git branch --show-current`) can be approved automatically. Other supported
+  shell operations still require approval. Unsupported requests receive policy feedback before a
+  human approval is displayed, with at most three correction opportunities within the same session.
+- Three OpenCode attempts per Workflow Run / node / project remain the default. The user may
+  explicitly authorize exactly the next additional attempt. The authorization records the trusted
+  actor and current attempt count and is checked again inside durable run reservation. Replaying a
+  consumed authorization fails; previous attempts, budget controls, and execution limits remain.
 - Starting in v0.9, managed `opencode serve` processes are launched in a POSIX process group when
   available and terminated with `SIGTERM` followed by `SIGKILL` fallback. Worktree/process cleanup is
   recorded as redacted Coding Agent events.
