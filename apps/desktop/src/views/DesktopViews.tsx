@@ -591,7 +591,7 @@ export function Inspector({
       disabled={isActionDisabled(action)}
       key={action.id}
       title={actionTitle(action)}
-      onClick={actionHandlers[action.id]}
+      onClick={() => actionHandlers[action.id]()}
     >
       {renderActionIcon(action.id)}
       {actionLabel(action)}

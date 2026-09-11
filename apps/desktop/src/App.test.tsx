@@ -2478,6 +2478,7 @@ describe('App', () => {
       })),
     )
     expect(api.ensureCodingEngine).not.toHaveBeenCalled()
+    expect(vi.mocked(api.runCodingAgent).mock.calls[0]![0]).not.toHaveProperty('additionalAttemptAfterCount')
   })
 
   it('shows exact pending Change Set context in Workbench and jumps to the single Agents approval surface', async () => {
