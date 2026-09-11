@@ -46,7 +46,7 @@
   保留工作区；不会偷偷重新调用 Provider。缺少原需求版本的旧 Run 也不能直接恢复审批。
 - Execution Authorization、最终 Change Acceptance、依赖安装审批保持原过期规则。
   本次改变的是 OpenCode 工具审批等待：等待时间不计入适配器的实际执行时限。
-- 本次没有完成真实 Provider 的整条需求、设计、实施、测试、云端交付验收。
+- 侧边交接时尚未完成真实 Provider 的整条需求、设计、实施、测试、云端交付验收。
   主任务接入本分支并构建后，应在真实 DeepSeek/OpenCode 运行中验证：
   普通读取、一次不支持命令的反馈修正、过期后恢复、同一需求的第 4 次明确授权，
   然后继续正式测试、最终验收和 Draft PR 交付。每一步应保留真实调用与交付证据。
@@ -67,3 +67,11 @@
 Execution Authorization 后丢失。前者已通过真实 Web 补传复验；后者已完成失败回归与
 证据传递修复，须使用新正式请求完成最终验收，不补造首条请求丢失的历史判定。
 完整 ID、时间、差异、测试与交付边界见 [主任务验证记录](../engineering/final-live-e2e-2026-09-10.zh-CN.md)。
+
+### 最终真实验收
+
+修复 #97 后从 Web 新建正式一句话请求，在已配对项目中重新走完整流程。真实 OpenCode 澄清、Direct DeepSeek 设计与审查、OpenCode 修改、正式测试、精确提交测试和 Draft PR #2 均通过。首次 Coding 真实触发不支持 `corepack pnpm verify` 的纠正反馈，模型随后使用允许的 Git diff 命令；正式测试仍由 DevFlow 执行。
+
+第三次 Coding 依据新的有界失败诊断修复测试隔离，7 个测试通过，最终交付 SHA 为 `042c806ad9eb2c1514c88f48fec285f4a62448c4`。补齐 #102 的 Web 验收交付证据传递后，命令 `gate-command-4f56bb6c-5831-465c-a1f4-903aa736c668` 于 `2026-09-11T09:31:55.131Z` 收到 Desktop applied 回执，Run `run-work-request-d380ec0ecede2befc8c0834f6432d636` 在本地和控制面均 completed / v11。最终本地全量 3816 tests 和 Desktop build 通过。
+
+第 4 次明确授权和同会话过期恢复使用首条请求的真实证据；新请求的完整签收证明最终证据链通过。精确只读命令自动放行仍以受控 adapter 回归验证，不声称模型在上述真实 Run 中命中了所有命令分支。OpenCode Coding 费用仍为 unknown，Stage/Review 的可核验用量不是全流程账单。

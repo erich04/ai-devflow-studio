@@ -721,6 +721,7 @@ export function createGateCommandProcessor(
                     codingDiffs: evaluation.evidence.codingDiffs,
                     testEvidence: evaluation.evidence.testEvidence,
                     agentReviews: evaluation.evidence.agentReviews,
+                    githubDeliveryIntents: evaluation.evidence.githubDeliveryIntents ?? [],
                     ...(evaluation.evidence.budgetDecision
                       ? { budgetDecision: evaluation.evidence.budgetDecision }
                       : {}),

@@ -1079,6 +1079,7 @@ async function buildUnavailableGateCommandEvaluation(input: {
     codingDiffs,
     testEvidence,
     agentReviews,
+    githubDeliveryIntents,
     overrides,
   ] = await Promise.all([
     loadPolicySnapshotForProject(input.command.projectId),
@@ -1087,6 +1088,7 @@ async function buildUnavailableGateCommandEvaluation(input: {
     input.store.listCodingDiffArtifacts(input.run.id),
     input.store.listTestEvidence(input.run.id),
     input.store.listAgentReviews(input.run.id),
+    input.store.listGitHubDeliveryIntents(input.run.id),
     input.store.listGateOverrides(input.run.id),
   ])
   const unavailableAt = new Date().toISOString()
@@ -1142,6 +1144,7 @@ async function buildUnavailableGateCommandEvaluation(input: {
       codingDiffs,
       testEvidence,
       agentReviews,
+      githubDeliveryIntents,
     }),
   }
 }
@@ -1154,7 +1157,7 @@ async function evaluateGateCommandLocally(input: {
   remoteSync: RemoteSyncClient
 }): Promise<LocalGateCommandEvaluation> {
   try {
-    const [evaluation, codingRuns, codingDiffs] = await Promise.all([
+    const [evaluation, codingRuns, codingDiffs, githubDeliveryIntents] = await Promise.all([
       evaluateLocalGateEnforcement(
         {
           runId: input.run.id,
@@ -1169,6 +1172,7 @@ async function evaluateGateCommandLocally(input: {
       ),
       input.store.listCodingAgentRuns(input.run.id),
       input.store.listCodingDiffArtifacts(input.run.id),
+      input.store.listGitHubDeliveryIntents(input.run.id),
     ])
     const observedKnowledge = await loadTrustedRepositoryKnowledge(
       input.run.projectId,
@@ -1188,6 +1192,7 @@ async function evaluateGateCommandLocally(input: {
         codingDiffs,
         testEvidence: evaluation.testEvidence,
         agentReviews: evaluation.agentReviews,
+        githubDeliveryIntents,
       }),
     }
   } catch (error) {

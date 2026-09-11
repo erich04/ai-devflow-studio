@@ -4338,6 +4338,11 @@ function readPersistedGateEvidence(
     'select json from agent_reviews where run_id = ? order by created_at desc',
     [runId],
   )
+  const githubDeliveryIntents = selectJson<GitHubDeliveryIntent>(
+    db,
+    'select json from github_delivery_intents where run_id = ? order by created_at asc, id asc',
+    [runId],
+  )
   const latestCodingRun = [...codingRuns].sort((left, right) =>
     (right.completedAt ?? right.startedAt).localeCompare(
       left.completedAt ?? left.startedAt,
@@ -4349,6 +4354,7 @@ function readPersistedGateEvidence(
     codingDiffs,
     testEvidence,
     agentReviews,
+    githubDeliveryIntents,
     ...(latestCodingRun?.budgetDecision
       ? { budgetDecision: latestCodingRun.budgetDecision }
       : {}),
@@ -4366,6 +4372,7 @@ function canonicalPersistedGateEvidence(
     codingDiffs: byId(evidence.codingDiffs),
     testEvidence: byId(evidence.testEvidence),
     agentReviews: byId(evidence.agentReviews),
+    githubDeliveryIntents: byId(evidence.githubDeliveryIntents ?? []),
     ...(evidence.budgetDecision
       ? { budgetDecision: evidence.budgetDecision }
       : {}),

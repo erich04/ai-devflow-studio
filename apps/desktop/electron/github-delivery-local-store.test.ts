@@ -4,12 +4,19 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import initSqlJs from 'sql.js'
 import {
+  applyWorkflowCommand,
   createGitHubDeliveryCompletion,
   createGitHubDeliveryIntent,
   redactTestEvidenceForStorage,
 } from '@ai-devflow/shared'
 import type {
+  AgentReviewResult,
   Artifact,
+  GateCommand,
+  GateCommandReceipt,
+  GateEnforcementDecision,
+  PolicySnapshot,
+  WorkflowEvidenceSnapshot,
   CodingAgentRun,
   CodingDiffArtifact,
   DesktopPairingCredential,
@@ -349,6 +356,137 @@ async function saveCompletedIntent(
   })
   return completed
 }
+
+describe('Web acceptance delivery evidence transaction', () => {
+  it.each(['current', 'missing', 'changed'] as const)(
+    'rechecks the completed delivery before committing acceptance: %s',
+    async (scenario) => {
+      const store = await createLocalStore({ dbPath: await tempDbPath() })
+      try {
+        const sources = createSources()
+        const budgetDecision = {
+          status: 'disabled' as const, blocksRun: false, currentSpendUsd: 0,
+          projectedCostUsd: 0, reason: 'Opaque billing uses non-dollar limits.',
+        }
+        sources.codingRun.budgetDecision = budgetDecision
+        await saveSources(store, sources)
+        const delivery = await saveCompletedIntent(store, sources)
+        const timestamp = '2026-08-11T10:40:30.000Z'
+        const test: TestEvidence = {
+          ...sources.testEvidence, id: 'acceptance-test', nodeId: 'acceptance-test-node',
+        }
+        const testReport: Artifact = {
+          id: `artifact-${test.id}`, runId: sources.run.id, nodeId: test.nodeId,
+          kind: 'test_report', title: 'Passing tests', summary: test.summary,
+          content: test.summary, redacted: true, updatedAt: test.createdAt,
+        }
+        const bundle: Artifact = {
+          ...testReport, id: 'acceptance-bundle', nodeId: 'acceptance-node',
+          kind: 'acceptance', title: 'Acceptance', content: 'Exact Draft PR and tests.',
+        }
+        const acceptance: WorkflowRun = {
+          ...sources.run, version: 10, status: 'paused_at_gate', currentNodeId: bundle.nodeId,
+          pullRequestUrl: delivery.completion.pullRequestUrl,
+          nodes: [
+            ...sources.run.nodes.map((node) => ({ ...node, status: 'success' as const })),
+            { id: test.nodeId, stage: 'test', kind: 'test', title: 'Tests', subtitle: '',
+              status: 'success', ownerId: sources.pairing.userId, retryCount: 0,
+              artifactIds: [testReport.id] },
+            { id: bundle.nodeId, stage: 'accept', kind: 'acceptance', title: 'Acceptance',
+              subtitle: '', status: 'running', ownerId: sources.pairing.userId,
+              requiredRole: 'lead', retryCount: 0, artifactIds: [bundle.id] },
+          ],
+        }
+        const review: AgentReviewResult = {
+          id: 'acceptance-review', requestId: 'review-request', runId: acceptance.id,
+          nodeId: bundle.nodeId, projectId: sources.project.id, runtime: 'electron',
+          providerId: 'fixture-provider', model: 'fixture-model', conclusion: 'Ready',
+          summary: 'Delivery is ready.', risks: [], missingEvidence: [], suggestedTests: [],
+          knowledgeReferences: [], policyFindings: [], confidence: 1, createdAt: timestamp,
+          gateAdvisory: { id: 'acceptance-advisory', runId: acceptance.id, nodeId: bundle.nodeId,
+            level: 'info', blocksApproval: false, summary: 'Ready', missingEvidence: [],
+            riskCount: 0, createdAt: timestamp },
+        }
+        const policySnapshot: PolicySnapshot = {
+          projectId: sources.pairing.projectId, organizationPolicy: null, projectOverride: null,
+          effectivePolicy: { id: 'policy', organizationId: sources.pairing.organizationId,
+            projectId: sources.pairing.projectId, version: 1, rules: [], updatedAt: timestamp },
+          version: 1, updatedAt: timestamp, syncedAt: timestamp, source: 'remote_cache',
+        }
+        const enforcement: GateEnforcementDecision = {
+          status: 'pass', blocksApproval: false, blockingReasons: [], warningReasons: [],
+          requiredActions: [], canOverride: false, overrideRoleRequired: 'lead',
+          policySource: 'remote_cache', policyVersion: 1, provisional: false,
+        }
+        await store.saveRun(acceptance)
+        await store.saveTestEvidence(test)
+        await store.saveArtifact(testReport)
+        await store.saveArtifact(bundle)
+        await store.saveAgentReview(review)
+        await store.savePolicySnapshot(policySnapshot)
+        const before = (await store.getRun(acceptance.id))!
+        const evidence: WorkflowEvidenceSnapshot = {
+          artifacts: await store.listArtifacts(before.id),
+          codingRuns: await store.listCodingAgentRuns(before.id),
+          codingDiffs: await store.listCodingDiffArtifacts(before.id),
+          testEvidence: await store.listTestEvidence(before.id),
+          agentReviews: await store.listAgentReviews(before.id),
+          githubDeliveryIntents: await store.listGitHubDeliveryIntents(before.id),
+          budgetDecision,
+        }
+        const result = applyWorkflowCommand({
+          run: before, command: { type: 'approve_acceptance', nodeId: bundle.nodeId },
+          now: timestamp, evidence: { ...evidence, approval: { roleAllowed: true,
+            policy: { blocksApproval: false }, review: 'required', budget: 'required' } },
+        })
+        expect(result.applied).toBe(true)
+        if (!result.applied) throw new Error('Acceptance fixture must be ready')
+        const command: GateCommand = {
+          id: 'acceptance-command', organizationId: sources.pairing.organizationId,
+          projectId: sources.pairing.projectId, workRequestId: null, runId: before.id,
+          nodeId: bundle.nodeId, action: 'approve', workflowCommand: 'approve_acceptance',
+          reason: 'Verified exact delivery.', requestedByUserId: sources.pairing.userId,
+          requestedRole: 'lead', idempotencyKey: 'acceptance:v10', requestFingerprint: 'a'.repeat(64),
+          expectedRunVersion: 10, expectedPolicyVersion: 1, expectedBlockerIds: [], version: 2,
+          evaluationStatus: 'allowed', evaluationBlockerIds: [], evaluatedAt: '2026-08-11T10:40:00.000Z',
+          status: 'delivering', outcomeCode: null, expiresAt: '2026-08-11T10:55:00.000Z',
+          createdAt: '2026-08-11T10:40:00.000Z', updatedAt: timestamp,
+        }
+        const receipt: GateCommandReceipt = {
+          id: 'acceptance-receipt', commandId: command.id, attempt: 1,
+          leasedAt: '2026-08-11T10:40:00.000Z', leaseExpiresAt: '2026-08-11T10:41:00.000Z',
+          acknowledgedAt: null,
+        }
+        const fingerprint = `sha256:${'b'.repeat(64)}`
+        const committed = await store.commitGateCommandExecution({
+          command, receipt, expectedPairing: { tokenId: sources.pairing.tokenId,
+            organizationId: sources.pairing.organizationId, projectId: sources.pairing.projectId,
+            localProjectId: sources.project.id },
+          outcomeCode: 'applied', evaluatedAt: timestamp, expectedRun: before, run: result.run,
+          event: { id: 'acceptance-event', runId: before.id, nodeId: bundle.nodeId,
+            sequence: 1, kind: 'approval', message: 'Approved.', timestamp },
+          evaluationBinding: {
+            policySnapshot, enforcement, overrides: [], selectedOverrideId: null,
+            repositoryKnowledge: { projectId: sources.project.id,
+              evaluatedFingerprint: fingerprint, observedFingerprint: fingerprint },
+            evidence: { ...evidence, githubDeliveryIntents: scenario === 'missing' ? []
+              : scenario === 'changed' ? [{ ...delivery, expectedCommitSha: 'f'.repeat(40) }]
+              : evidence.githubDeliveryIntents ?? [] },
+          },
+        })
+        expect(committed, JSON.stringify(committed)).toMatchObject({ committed: true, execution: {
+          outcomeCode: scenario === 'current' ? 'applied' : 'evidence_blocked',
+          afterRunVersion: scenario === 'current' ? 11 : 10,
+        } })
+        expect((await store.getRun(before.id))?.status)
+          .toBe(scenario === 'current' ? 'completed' : 'paused_at_gate')
+        expect(await store.listEvents(before.id)).toHaveLength(scenario === 'current' ? 1 : 0)
+      } finally {
+        store.close()
+      }
+    },
+  )
+})
 
 describe('GitHub repository binding observation CAS', () => {
   it('persists the first observation and replays only identical state', async () => {
