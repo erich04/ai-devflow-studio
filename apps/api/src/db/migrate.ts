@@ -117,6 +117,7 @@ export const teamMigrationCatalog = [
     fileName: '0025_runtime_cost_settlement.sql',
   },
   { version: 26, name: '0026_stage_agent_usage', fileName: '0026_stage_agent_usage.sql' },
+  { version: 27, name: '0027_gate_review_subject', fileName: '0027_gate_review_subject.sql' },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

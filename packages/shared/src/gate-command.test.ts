@@ -48,6 +48,22 @@ function validGateCommand(): Record<string, unknown> {
 }
 
 describe('Gate Command network contract', () => {
+  it('retains a server-bound subject only for its exact approval Run, node and version', () => {
+    const subject = { version: 1, runId: 'run-1', runVersion: 3, nodeId: 'gate-1', stage: 'clarify',
+      sanitizerVersion: 'sensitive-text-v1', requestDigest: 'b'.repeat(64),
+      artifacts: [{ id: 'artifact-1', nodeId: 'clarify-task', kind: 'clarification',
+        updatedAt: '2026-08-01T00:00:00.000Z', contentDigest: 'c'.repeat(64) }] }
+    expect(parseGateCommandRecord({ ...validGateCommand(), reviewSubject: subject }).reviewSubject).toEqual(subject)
+    for (const change of [{ runId: 'other-run' }, { nodeId: 'other-gate' }, { runVersion: 2 }, { content: 'private source' }]) {
+      expect(() => parseGateCommandRecord({ ...validGateCommand(), reviewSubject: { ...subject, ...change } })).toThrow()
+    }
+    expect(() => parseGateCommandCreate({
+      action: 'approve', projectId: 'project-1', runId: 'run-1', nodeId: 'gate-1', reason: 'Reviewed',
+      expectedRunVersion: 3, expectedPolicyVersion: 0, expectedBlockerIds: [],
+      idempotencyKey: 'subject-spoof', reviewSubject: subject,
+    })).toThrow()
+  })
+
   it('parses only the browser-owned create fields and redacts the reason', () => {
     const input = {
       projectId: 'project-1',

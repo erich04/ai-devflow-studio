@@ -1,4 +1,6 @@
 import { resolveDeepSeekPricingSnapshot } from './cost'
+import { KNOWLEDGE_REVIEW_SANITIZER_VERSION, parseGateReviewSubjectSnapshot, type GateReviewSubjectSnapshot } from './gate-review-subject'
+export { KNOWLEDGE_REVIEW_SANITIZER_VERSION } from './gate-review-subject'
 import type {
   AgentEvent,
   AgentPolicyFinding,
@@ -341,7 +343,6 @@ export const KNOWLEDGE_REVIEW_SUBJECT_CHUNK_CHARACTERS = 4_000
 export const KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS = 48_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_SUBJECT_CHARACTERS = 64_000
 export const KNOWLEDGE_REVIEW_MAX_RUN_REQUEST_CHARACTERS = 12_000
-export const KNOWLEDGE_REVIEW_SANITIZER_VERSION = 'sensitive-text-v1'
 const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
   'Return only valid JSON with conclusion, summary, risks, missingEvidence, suggestedTests, confidence. Review the Subject; use Criteria only as grounding. Do not approve the Gate. Do not wrap the response in Markdown.'
 
@@ -1109,6 +1110,27 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
       CONTEXT_MANIFEST: context.manifest,
     }),
   ].join('\n')
+}
+
+export async function buildGateReviewSubjectSnapshot(input: {
+  run: WorkflowRun
+  artifacts: readonly Artifact[]
+}): Promise<GateReviewSubjectSnapshot> {
+  const node = input.run.nodes.find((candidate) => candidate.id === input.run.currentNodeId)
+  if (!node || (node.kind !== 'gate' && node.kind !== 'acceptance')) {
+    throw new Error('The current node is not an approval target.')
+  }
+  const request = redactSensitiveText(providerValueToString(input.run.request)).value
+  const subjects = await buildSubjectArtifacts(selectReviewSubjectArtifacts(input.run, node, [...input.artifacts]))
+  if (!request.trim() || subjects.some((subject) => subject.coverage === 'incomplete')) {
+    throw new Error('Gate Review subjects are incomplete.')
+  }
+  return parseGateReviewSubjectSnapshot({
+    version: 1, runId: input.run.id, runVersion: input.run.version, nodeId: node.id, stage: node.stage,
+    sanitizerVersion: KNOWLEDGE_REVIEW_SANITIZER_VERSION, requestDigest: await sha256Hex(request),
+    artifacts: subjects.map(({ id, nodeId, kind, updatedAt, contentDigest }) =>
+      ({ id, nodeId, kind, updatedAt, contentDigest })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  })
 }
 
 export async function assessAgentReviewFreshness(input: {

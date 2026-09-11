@@ -5,6 +5,7 @@ import {
   createRemoteAgentReviewSummary,
   createRemoteCodingAgentSummary,
   createRemoteRunSummary,
+  buildGateReviewSubjectSnapshot,
   createRemoteTestEvidenceSummary,
   resolveTeamProjectId,
   type AgentReviewResult,
@@ -30,6 +31,7 @@ type PairingCredentialSource = {
     coordinationId: string,
   ): Promise<CoordinationRendererSnapshot | null>
   listRuns(): Promise<WorkflowRun[]>
+  listArtifacts?(runId?: string): Promise<import('@ai-devflow/shared').Artifact[]>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
   listAgentTokenUsage?(runId?: string): Promise<import('@ai-devflow/shared').AgentTokenUsage[]>
   listAgentReviews(runId?: string): Promise<AgentReviewResult[]>
@@ -186,7 +188,13 @@ export function createProjectBoundRemoteSync(input: {
       scope,
       'workflow_run',
     )
+    // Missing/incomplete subjects must not block usage sync. Cloud approval will
+    // still require a current independent snapshot for a manifest-bearing Review.
+    const gateReviewSubject = input.credentialSource.listArtifacts
+      ? await buildGateReviewSubjectSnapshot({ run, artifacts: await input.credentialSource.listArtifacts(run.id) }).catch(() => undefined)
+      : undefined
     const result = await input.remoteSync.uploadRunSummary({
+      ...(gateReviewSubject ? { gateReviewSubject } : {}),
       ...summary, ...(usage.length ? { stageAgentUsage: usage } : {}),
     })
     return requireAccepted(result, 'workflow_run')

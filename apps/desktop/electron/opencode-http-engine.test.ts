@@ -29,6 +29,48 @@ import {
 } from './opencode-http-adapter'
 
 describe('opencode HTTP coding engine', () => {
+  it('gives newly discovered permissions a full response window after Provider latency', async () => {
+    let clock = Date.parse('2026-06-17T00:00:00.000Z')
+    const fetchSequence = sequenceFetcher([
+      managedOpencodeSession(), successfulOpencodeMessage(),
+      [{ id: 'perm-first', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd' } }],
+      true,
+      [{ id: 'perm-next', sessionID: 'ses-1', permission: 'bash', metadata: { command: 'git status' } }],
+    ])
+    const fetcher: Fetcher = async (url, init) => {
+      const response = await fetchSequence(url, init)
+      if (String(url).includes('/permission?')) clock += 45_000
+      return response
+    }
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'openai', modelID: 'gpt-4.1-mini',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+      fetcher, nowMs: () => clock, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const input = startInput({ run, node, project, workspace })
+    const started = expectPermissionResult(await engine.start(input))
+    expect(started.codingRun.startedAt).toBe(input.now)
+    expect(started.permissionRequest.requestedAt).toBe(new Date(clock).toISOString())
+    expect(Date.parse(started.permissionRequest.expiresAt) - clock).toBe(60_000)
+    expect(started.events.find((event) => event.kind === 'permission')?.timestamp)
+      .toBe(started.permissionRequest.requestedAt)
+
+    clock += 5_000
+    const continued = expectPermissionResult(await engine.approvePermission({
+      codingRun: started.codingRun, workspace, project, request: started.permissionRequest,
+      now: new Date(clock).toISOString(),
+    }))
+    expect(continued.permissionRequest.id).toBe('perm-next')
+    expect(continued.permissionRequest.requestedAt).toBe(new Date(clock).toISOString())
+    expect(Date.parse(continued.permissionRequest.expiresAt) - clock).toBe(60_000)
+    expect(continued.events.find((event) => event.kind === 'permission')?.timestamp)
+      .toBe(continued.permissionRequest.requestedAt)
+  })
+
   it('pins existing managed directories to real paths and rejects invalid targets', async () => {
     const root = await mkdtemp(join(tmpdir(), 'devflow-opencode-directory-test-'))
     const worktree = join(root, 'worktree')

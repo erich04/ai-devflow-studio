@@ -3663,6 +3663,69 @@ try {
   })
   await postJson('/api/sync/run-summary', testProjectionSummary)
 
+  // A local manifest-bearing Review must be checked against independent Main metadata.
+  const subjectNodeId = 'clarify-projection'
+  const subjectTimestamp = new Date().toISOString()
+  const sha = (text) => createHash('sha256').update(text).digest('hex')
+  const subject = { version: 1, runId: gateRunId, runVersion: 4, nodeId: subjectNodeId,
+    stage: 'clarify', sanitizerVersion: 'sensitive-text-v1', requestDigest: sha('Local request stays local.'),
+    artifacts: [{ id: `${gateRunId}-clarification`, nodeId: 'clarify-task', kind: 'clarification',
+      updatedAt: subjectTimestamp, contentDigest: sha('Full clarification stays local.') }] }
+  const subjectSummary = { kind: 'run', runId: gateRunId, version: 4, projectId: 'p-payments',
+    title: 'Metadata-only Gate approval', status: 'paused_at_gate', currentNodeId: subjectNodeId,
+    currentNode: { id: subjectNodeId, stage: 'clarify', kind: 'gate', status: 'running', requiredRole: 'lead' },
+    branchName: 'codex/postgres-gate-smoke', updatedAt: subjectTimestamp }
+  await postJsonWithBearer('/api/sync/run-summary', subjectSummary, gateDesktopPairing.token)
+  await postJsonWithBearer('/api/sync/agent-review-summary', {
+    id: `${gateRunId}-subject-review`, runId: gateRunId, nodeId: subjectNodeId, projectId: 'p-payments',
+    runtime: 'electron', providerId: 'fake-knowledge-review', model: 'fake', conclusion: 'Ready for human review',
+    summary: 'The complete local clarification matches the request.', riskCount: 0, missingEvidenceCount: 0,
+    advisoryLevel: 'info', blocksApproval: false, confidence: 1, redacted: true, createdAt: subjectTimestamp,
+    contextManifest: { version: 1, stage: 'clarify', coverage: 'complete',
+      runRequest: { contentDigest: subject.requestDigest, sanitizerVersion: subject.sanitizerVersion, coverage: 'complete' },
+      subjectArtifacts: subject.artifacts.map((artifact) => ({ ...artifact, runId: gateRunId,
+        sanitizerVersion: subject.sanitizerVersion, coverage: 'complete',
+        chunks: [{ index: 0, start: 0, end: 31, contentDigest: artifact.contentDigest }] })),
+      knowledgeCriteria: [], criteriaCoverage: 'empty' },
+  }, gateDesktopPairing.token)
+  const evaluateSubject = () => postJson('/api/enforcement/evaluate', {
+    projectId: 'p-payments', runId: gateRunId, nodeId: subjectNodeId,
+  }, pilotSessionHeaders)
+  expect((await evaluateSubject()).blockingReasons.some((reason) => reason.id === 'gate-review-subject-not-current'),
+    'A Review must not prove its own freshness when independent subject metadata is missing')
+  await postJsonWithBearer('/api/sync/run-summary', { ...subjectSummary, gateReviewSubject: subject }, gateDesktopPairing.token)
+  await postJsonWithBearer('/api/sync/run-summary', { ...subjectSummary, gateReviewSubject: subject }, gateDesktopPairing.token)
+  const subjectEvaluation = await evaluateSubject()
+  expect(!subjectEvaluation.blocksApproval, 'Unchanged local Review was still blocked without cloud Artifact bodies')
+  const tamperedSubject = await postJsonResult('/api/sync/run-summary', {
+    ...subjectSummary, gateReviewSubject: { ...subject, requestDigest: sha('Changed request') },
+  }, { authorization: `Bearer ${gateDesktopPairing.token}` })
+  expect(tamperedSubject.status === 409, 'Same-version subject metadata must be immutable')
+  const subjectCommandInput = { projectId: 'p-payments', runId: gateRunId, nodeId: subjectNodeId,
+    action: 'approve', reason: 'Approve the exact current local subjects.', expectedRunVersion: 4,
+    expectedPolicyVersion: subjectEvaluation.policyVersion, expectedBlockerIds: [],
+    idempotencyKey: `gate-command:subject:${gateRunId}:v4` }
+  const subjectCommand = await postJson('/api/team/projects/p-payments/gate-commands', subjectCommandInput, pilotSessionHeaders)
+  const subjectReplay = await postJson('/api/team/projects/p-payments/gate-commands', subjectCommandInput, pilotSessionHeaders)
+  expect(subjectReplay.replayed && subjectReplay.command.id === subjectCommand.command.id,
+    'Subject-bound approval replay created a different command')
+  expect(subjectCommand.command.reviewSubject?.requestDigest === subject.requestDigest,
+    'The API must bind the persisted independent subject into the command')
+  const subjectReceipt = await postJsonWithBearer(`/api/desktop/gate-commands/${subjectCommand.command.id}/receipts`, {}, gateDesktopPairing.token)
+  expect(subjectReceipt.command.reviewSubject?.artifacts[0]?.contentDigest === subject.artifacts[0].contentDigest,
+    'Desktop receipt lost the immutable approval subject')
+  const subjectPool = new Pool({ connectionString: databaseUrl })
+  try {
+    const stored = await subjectPool.query(`SELECT request, gate_review_subject,
+      (SELECT count(*)::integer FROM artifacts WHERE run_id = $1) AS artifact_count FROM workflow_runs WHERE id = $1`, [gateRunId])
+    expect(stored.rows[0].request === 'Synced from DevFlow Electron.' && stored.rows[0].artifact_count === 0,
+      'Subject projection uploaded local request or Artifact bodies')
+    expect(stored.rows[0].gate_review_subject.requestDigest === subject.requestDigest,
+      'Conflicting replay replaced the persisted approval subjects')
+  } finally { await subjectPool.end() }
+  await postJsonWithBearer('/api/sync/run-summary', { ...subjectSummary, version: 5 }, gateDesktopPairing.token)
+  expect((await evaluateSubject()).blocksApproval, 'A new Run version retained an old subject snapshot')
+
   console.log('Postgres integration smoke passed.')
 } finally {
   await stop(api)

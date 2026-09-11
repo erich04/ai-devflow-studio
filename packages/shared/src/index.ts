@@ -1,5 +1,6 @@
 export * from './cost'
 export * from './agent-review'
+export * from './gate-review-subject'
 export * from './agent-provider-identity'
 export * from './agent-coordination'
 export * from './agent-coordination-projection'

@@ -39,6 +39,7 @@ import type { GateCommandPreflightResult } from './gate-command-preflight'
 type TimestampValue = string | Date
 
 type GateCommandRow = {
+  review_subject?: GateCommand['reviewSubject'] | null
   id: string
   version: number
   organization_id: string
@@ -188,6 +189,7 @@ const gateCommandColumns = `
   gate_commands.expected_run_version,
   gate_commands.expected_policy_version,
   gate_commands.expected_blocker_ids,
+  gate_commands.review_subject,
   gate_commands.evaluation_status,
   gate_commands.evaluation_blocker_ids,
   gate_commands.evaluated_at,
@@ -247,6 +249,7 @@ function mapCommandRow(row: GateCommandRow): GateCommand {
     requestedRole: row.requested_role,
     idempotencyKey: row.idempotency_key,
     requestFingerprint: row.request_fingerprint,
+    ...(row.review_subject ? { reviewSubject: parseJson(row.review_subject) as GateCommand['reviewSubject'] } : {}),
     expectedRunVersion: row.expected_run_version,
     expectedPolicyVersion: row.expected_policy_version,
     expectedBlockerIds: parseJson(row.expected_blocker_ids),
@@ -1270,6 +1273,7 @@ export function createPostgresGateCommandRepository(
                 expected_run_version,
                 expected_policy_version,
                 expected_blocker_ids,
+                review_subject,
                 evaluation_status,
                 evaluation_blocker_ids,
                 evaluated_at,
@@ -1282,7 +1286,7 @@ export function createPostgresGateCommandRepository(
               VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
                 'session_cookie', NULL, $12, $13, $14, $15, $16::jsonb,
-                $17, $18::jsonb, $19, 'pending', NULL, $20, $19, $19
+                $21::jsonb, $17, $18::jsonb, $19, 'pending', NULL, $20, $19, $19
               )
               RETURNING ${gateCommandColumns}
             `,
@@ -1307,6 +1311,7 @@ export function createPostgresGateCommandRepository(
               JSON.stringify(preflight.evaluationBlockerIds),
               timestamp,
               expiresAt,
+              preflight.reviewSubject ? JSON.stringify(preflight.reviewSubject) : null,
             ],
           )
           if (!row) {

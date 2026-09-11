@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { DesktopPairingCredential, WorkflowRun } from '@ai-devflow/shared'
+import { buildGateReviewSubjectSnapshot, createLocalStageAgentUsage } from '@ai-devflow/shared'
+import { runs, artifacts } from '@ai-devflow/shared/fixtures'
 import {
   createRemoteSyncOutboxClient,
   type RemoteSyncOutboxClientSource,
@@ -73,6 +75,8 @@ function makeSource(
   return {
     getDesktopPairingCredentialBundle: getBundle,
     listRuns: async () => [makeRun()],
+    listArtifacts: async () => [],
+    listAgentTokenUsage: async () => [],
     listTestEvidence: async () => [],
     listAgentReviews: async () => [],
     listCodingAgentRuns: async () => [],
@@ -84,6 +88,33 @@ function makeSource(
 }
 
 describe('remote sync outbox client factory', () => {
+  it('uploads persisted usage and independent approval subjects through the background path', async () => {
+    const canonicalRun = { ...runs[0]!, currentNodeId: 'n-design-gate', projectId: OLD_SCOPE.localProjectId }
+    const usage = createLocalStageAgentUsage({
+      id: 'usage-background', runId: canonicalRun.id, nodeId: canonicalRun.currentNodeId,
+      userId: makeCredential().userId, projectId: canonicalRun.projectId,
+      providerId: 'gateway', model: 'model', timestamp: '2026-09-10T16:31:10.293Z',
+      usage: { inputTokens: 5793, outputTokens: 738, cacheReadTokens: 128 },
+    })
+    const uploadRunSummary = vi.fn(async (_summary: unknown) => ({ accepted: true,
+      syncedAt: '2026-09-10T16:32:00.000Z', message: 'accepted' }))
+    const client = await createRemoteSyncOutboxClient({
+      source: { ...makeSource(async () => ({ credential: makeCredential(), encryptedToken: OLD_ENCRYPTED_TOKEN })),
+        listRuns: async () => [canonicalRun], listArtifacts: async () => artifacts,
+        listAgentTokenUsage: async () => [usage] },
+      expectedScope: OLD_SCOPE, signal: new AbortController().signal,
+      decryptToken: async () => 'fixture-token',
+      createClient: () => ({ uploadRunSummary }) as unknown as RemoteSyncClient,
+    })
+    await client.uploadCanonicalRunSummary(canonicalRun.id)
+    expect(uploadRunSummary).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: OLD_SCOPE.teamProjectId,
+      stageAgentUsage: [{ ...usage, projectId: OLD_SCOPE.teamProjectId }],
+      gateReviewSubject: await buildGateReviewSubjectSnapshot({ run: canonicalRun, artifacts }),
+    }))
+    expect(JSON.stringify(uploadRunSummary.mock.calls)).not.toContain(canonicalRun.request)
+  })
+
   it.each([
     ['missing bundle', null],
     [

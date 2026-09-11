@@ -783,6 +783,8 @@ export type AgentReviewArtifact = Artifact & {
 }
 
 export type WorkflowRun = {
+  /** Team-only projection of the current Main-owned approval subjects. */
+  gateReviewSubject?: import('./gate-review-subject').GateReviewSubjectSnapshot
   id: string
   version: number
   title: string
@@ -1440,6 +1442,7 @@ export type RemoteRunNodeSummary = Pick<
 >
 
 export type RemoteRunSummary = {
+  gateReviewSubject?: import('./gate-review-subject').GateReviewSubjectSnapshot
   stageAgentUsage?: AgentTokenUsage[]
   kind: RemoteRunSummaryKind
   runId: string

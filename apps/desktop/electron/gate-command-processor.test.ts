@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { buildGateReviewSubjectSnapshot } from '@ai-devflow/shared'
 import type {
   AgentEvent,
   Artifact,
@@ -367,6 +368,7 @@ function successfulReceiptObservationRecorder() {
 }
 
 function createSingleCommandHarness(input: {
+  artifacts?: Artifact[]
   inboxCommand?: GateCommand
   command?: GateCommand
   receipt?: GateCommandReceipt
@@ -438,7 +440,7 @@ function createSingleCommandHarness(input: {
     repositoryKnowledge:
       input.repositoryKnowledge ?? repositoryKnowledgeBinding,
     evidence: {
-      artifacts: [
+      artifacts: input.artifacts ?? [
         localRun?.id === designArtifact.runId
           ? designArtifact
           : { ...designArtifact, runId: localRun?.id ?? command.runId },
@@ -522,6 +524,28 @@ function createSingleCommandHarness(input: {
 }
 
 describe('Gate Command background processor', () => {
+  it.each(['current', 'changed', 'missing'])('rechecks the exact server-bound subject before local execution: %s', async (scenario) => {
+    const clarification: Artifact = { ...designArtifact, id: 'artifact-clarification',
+      kind: 'clarification', nodeId: 'clarification-gate' }
+    const completeRun: WorkflowRun = { ...run, nodes: [
+      { ...run.nodes[1]!, id: 'clarification-gate', stage: 'clarify', kind: 'gate',
+        status: 'success', artifactIds: [clarification.id] }, ...run.nodes,
+    ] }
+    const original = [clarification, designArtifact]
+    const reviewSubject = await buildGateReviewSubjectSnapshot({ run: completeRun, artifacts: original })
+    const current = scenario === 'missing' ? [] : scenario === 'changed'
+      ? original.map((artifact) => artifact.id === designArtifact.id ? { ...artifact, content: 'Changed after Web approval.' } : artifact)
+      : original
+    const harness = createSingleCommandHarness({ run: completeRun, artifacts: current,
+      inboxCommand: { ...pendingCommand, reviewSubject }, command: { ...deliveringCommand, reviewSubject } })
+    const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
+    expect(result.results[0]?.outcomeCode).toBe(scenario === 'current' ? 'applied' : 'evidence_blocked')
+    expect(harness.commitGateCommandExecution.mock.calls[0]![0].run?.version)
+      .toBe(scenario === 'current' ? 4 : undefined)
+    expect(gateCommandExecutionFingerprint({ ...deliveringCommand, reviewSubject }))
+      .not.toBe(gateCommandExecutionFingerprint(deliveringCommand))
+  })
+
   it('uses the authoritative delivering command and atomically applies then acknowledges it', async () => {
     const execution = localExecution({
       command: deliveringCommand,

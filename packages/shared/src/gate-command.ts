@@ -1,4 +1,5 @@
 import { redactSensitiveText } from './redaction'
+import { parseGateReviewSubjectSnapshot } from './gate-review-subject'
 import type { Role } from './domain'
 import { assertCanonicalLocalNodeId } from './remote-node-identity'
 
@@ -135,6 +136,7 @@ export type CreateGateCommandInput = {
 }
 
 export type GateCommand = {
+  reviewSubject?: import('./gate-review-subject').GateReviewSubjectSnapshot
   id: string
   organizationId: string
   projectId: string
@@ -397,7 +399,8 @@ function hasConsistentLifecycle(
 }
 
 export function parseGateCommandRecord(value: unknown): GateCommand {
-  if (!isRecord(value) || !hasExactKeys(value, GATE_COMMAND_RECORD_KEYS)) {
+  if (!isRecord(value) || !hasExactKeys(value, value.reviewSubject === undefined
+    ? GATE_COMMAND_RECORD_KEYS : [...GATE_COMMAND_RECORD_KEYS, 'reviewSubject'].sort())) {
     throw new Error(invalidGateCommandRecord)
   }
 
@@ -426,6 +429,11 @@ export function parseGateCommandRecord(value: unknown): GateCommand {
   )
   const runId = readIdentifier(value.runId, invalidGateCommandRecord)
   const nodeId = readIdentifier(value.nodeId, invalidGateCommandRecord)
+  const reviewSubject = value.reviewSubject === undefined ? undefined : parseGateReviewSubjectSnapshot(value.reviewSubject)
+  if (reviewSubject && (action !== 'approve' || reviewSubject.runId !== runId ||
+    reviewSubject.nodeId !== nodeId || reviewSubject.runVersion !== value.expectedRunVersion)) {
+    throw new Error(invalidGateCommandRecord)
+  }
   try {
     assertCanonicalLocalNodeId(runId, nodeId)
   } catch {
@@ -507,6 +515,7 @@ export function parseGateCommandRecord(value: unknown): GateCommand {
       0,
       invalidGateCommandRecord,
     ),
+    ...(reviewSubject ? { reviewSubject } : {}),
     expectedBlockerIds,
     version: readInteger(value.version, 1, invalidGateCommandRecord),
     evaluationStatus,

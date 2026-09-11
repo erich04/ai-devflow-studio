@@ -450,7 +450,9 @@ export function createOpencodeHttpCodingEngineAdapter(
                 timeoutMs: permissionWaitTimeout(runtimeSession),
                 ...fetcherOption(config.fetcher),
               })
-          const result = createStartResult(input, brief.prompt, session.id, permission, directory)
+          const result = createStartResult(
+            input, brief.prompt, session.id, permission, directory, new Date(nowMs()).toISOString(),
+          )
           registerPermissionToolTurn(runtimeSession, permission)
           const cleanupPromise = runtimeSession.cleanupPromise
           if (cleanupPromise) {
@@ -548,7 +550,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           const result = createContinuationResult(
             input.codingRun,
             input.request,
-            input.now,
+            new Date(nowMs()).toISOString(),
             continuation.permission,
             eventSequence,
             session.directory,
@@ -1170,6 +1172,7 @@ function createStartResult(
   sessionId: string,
   permission: OpencodePermission,
   directory: string,
+  discoveredAt: string,
 ) {
   const codingRun: CodingAgentRun = {
     id: input.id,
@@ -1210,7 +1213,7 @@ function createStartResult(
       sequence: 2,
       kind: 'permission',
       message: `opencode requested ${permission.permission} permission.`,
-      timestamp: input.now,
+      timestamp: discoveredAt,
       metadata: { requestId: permission.id },
       redacted: true,
     },
@@ -1220,7 +1223,7 @@ function createStartResult(
       worktreePath: directory,
       projectPath: input.project.path,
       sequence: 3,
-      now: input.now,
+      now: discoveredAt,
     }),
   ]
   const filePath = metadataString(permission.metadata, 'filepath') ?? metadataString(permission.metadata, 'path')
@@ -1244,8 +1247,8 @@ function createStartResult(
     risk: 'warn',
     reasons: ['opencode requested a tool permission through the managed adapter.'],
     status: 'pending',
-    requestedAt: input.now,
-    expiresAt: new Date(Date.parse(input.now) + 60_000).toISOString(),
+    requestedAt: discoveredAt,
+    expiresAt: new Date(Date.parse(discoveredAt) + 60_000).toISOString(),
   }
 
   return {

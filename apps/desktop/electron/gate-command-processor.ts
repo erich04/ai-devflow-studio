@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import {
   applyWorkflowCommand,
+  buildGateReviewSubjectSnapshot,
+  hasSameGateReviewSubject,
   assertCanonicalLocalNodeId,
   canApproveGateNow,
   type AgentEvent,
@@ -602,6 +604,11 @@ export function createGateCommandProcessor(
         const blockerIds = canonicalUniqueIds(
           evaluation.decision.blockingReasons.map((reason) => reason.id),
         )
+        const currentSubject = command.reviewSubject
+          ? await buildGateReviewSubjectSnapshot({ run: localRun, artifacts: evaluation.evidence.artifacts }).catch(() => null)
+          : null
+        const subjectIsCurrent = !command.reviewSubject || (currentSubject !== null &&
+          hasSameGateReviewSubject(command.reviewSubject, currentSubject))
         const policyIsStale =
           evaluation.policySnapshot.source !== 'remote_cache' ||
           evaluation.policySnapshot.effectivePolicy === null ||
@@ -617,6 +624,8 @@ export function createGateCommandProcessor(
           evaluation.decision.policyVersion !== command.expectedPolicyVersion
         ) {
           outcomeCode = 'stale_policy'
+        } else if (!subjectIsCurrent) {
+          outcomeCode = 'evidence_blocked'
         } else if (
           blockerIds === null ||
           !sameCanonicalIds(blockerIds, command.expectedBlockerIds)

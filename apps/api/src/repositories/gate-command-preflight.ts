@@ -34,6 +34,7 @@ export type GateCommandPreflightInput = {
 export type GateCommandPreflightResult =
   | {
       allowed: true
+      reviewSubject?: WorkflowRun['gateReviewSubject']
       workflowCommand: GateCommandWorkflowCommand | null
       evaluationStatus: 'allowed'
       evaluationBlockerIds: string[]
@@ -219,6 +220,7 @@ export function preflightGateCommand(
 
   return {
     allowed: true,
+    ...(input.run.gateReviewSubject ? { reviewSubject: input.run.gateReviewSubject } : {}),
     workflowCommand:
       input.currentNode.kind === 'acceptance'
         ? 'approve_acceptance'

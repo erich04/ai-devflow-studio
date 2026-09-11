@@ -17,6 +17,8 @@ export type RemoteSyncOutboxClientSource = Pick<
   LocalStore,
   | 'getDesktopPairingCredentialBundle'
   | 'listRuns'
+  | 'listArtifacts'
+  | 'listAgentTokenUsage'
   | 'listTestEvidence'
   | 'listAgentReviews'
   | 'listCodingAgentRuns'
@@ -107,6 +109,8 @@ export async function createRemoteSyncOutboxClient(
     credentialSource: {
       getDesktopPairingCredential: async () => credential,
       listRuns: () => input.source.listRuns(),
+      listArtifacts: (runId) => input.source.listArtifacts(runId),
+      listAgentTokenUsage: (runId) => input.source.listAgentTokenUsage(runId),
       listTestEvidence: (runId) => input.source.listTestEvidence(runId),
       listAgentReviews: (runId) => input.source.listAgentReviews(runId),
       listCodingAgentRuns: (runId) => input.source.listCodingAgentRuns(runId),

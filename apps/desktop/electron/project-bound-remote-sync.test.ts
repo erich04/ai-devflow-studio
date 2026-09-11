@@ -13,7 +13,8 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { createAgentRuntime, resumeAgentRuntime, createLocalStageAgentUsage } from '@ai-devflow/shared'
+import { createAgentRuntime, resumeAgentRuntime, createLocalStageAgentUsage, buildGateReviewSubjectSnapshot } from '@ai-devflow/shared'
+import { runs as fixtureRuns, artifacts as fixtureArtifacts } from '@ai-devflow/shared/fixtures'
 import { RemoteSyncHttpError, type RemoteSyncClient } from './remote-sync'
 import {
   CanonicalRemoteSyncEntityError,
@@ -328,6 +329,25 @@ function canonicalCoordinationSnapshot(): CoordinationRendererSnapshot {
 }
 
 describe('project-bound Electron remote sync', () => {
+  it('derives approval subjects from persisted Artifacts independently of Review or cached Run projections', async () => {
+    const canonicalRun = { ...fixtureRuns[0]!, projectId: localRun.projectId, currentNodeId: 'n-design-gate' }
+    const expected = await buildGateReviewSubjectSnapshot({ run: canonicalRun, artifacts: fixtureArtifacts })
+    const upload = vi.fn(async (_summary: RemoteRunSummary) => ({ accepted: true, syncedAt: runSummary.updatedAt, message: 'saved' }))
+    const bound = createProjectBoundRemoteSync({
+      remoteSync: { uploadRunSummary: upload } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential,
+        listRuns: async () => [{ ...canonicalRun, gateReviewSubject: { ...expected, requestDigest: '0'.repeat(64) } }],
+        listArtifacts: async () => fixtureArtifacts,
+        listAgentReviews: async () => [], listTestEvidence: async () => [],
+        listCodingAgentRuns: async () => [], listCodingDiffArtifacts: async () => [],
+      },
+    })
+    await bound.uploadCanonicalRunSummary(canonicalRun.id)
+    expect(upload.mock.calls[0]![0]).toMatchObject({ projectId: pairingCredential.projectId, gateReviewSubject: expected })
+    expect(JSON.stringify(upload.mock.calls[0]![0])).not.toContain(canonicalRun.request)
+  })
+
   it('synchronizes canonical Stage consumption before evaluating budget and fails closed if synchronization fails', async () => {
     const calls: string[] = []
     const upload = vi.fn(async () => { calls.push('usage'); return { accepted: true, syncedAt: runSummary.updatedAt, message: 'saved' } })

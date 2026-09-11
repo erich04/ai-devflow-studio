@@ -271,3 +271,17 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 最新产品修复已通过全量 `pnpm verify`（271 文件 / 3761 用例）和重建安装包的离线 GitHub Delivery smoke，Acceptance completed、重启无重复发布、秘密泄漏计数 0。Windows 首轮并发参数被 `pnpm test` 的命令层拒绝，改用 `corepack pnpm run test --maxWorkers=2`；本地执行与 CI 完全相同的命令，3761 项全部通过，仍需 Windows 实机结果。
 
 新增 #94：Web 侧用只含占位 request、无本地 Artifact 的 Team 投影去比较本地 Review manifest，误判 stale 并阻断云端审批。已通过真实 Web 和数据库只读核对确认；不影响原生 Desktop 审批的结论尚待操作验证。建议仅同步脱敏摘要与版本指纹，最终保留 Desktop 完整证据复核；数据边界与交互方案已向用户提问，暂未实现。
+
+### 后续六项：已修复，真实回归进行中
+
+用户已同意继续修复全部后续问题，并明确批准 #94 的“摘要与指纹”方案。
+
+- #91：保留 API 的类型化 `binding_conflict / 409`，Web 固定提示“此仓库已绑定其他项目，请使用独立仓库。”；不回显上游任意错误，不提供解绑捷径。新增回归修复前 3 项失败，修复后相关 71 项通过。
+- #94：Main 从持久化完整产物独立生成受限指纹，云端按指纹判断 Review 新鲜度；审批命令绑定服务端当前指纹，Desktop 重读完整证据并最终核验，保留既有角色、策略、重放和事务约束。Postgres schema v27，数据边界见 ADR 0010。
+- #81：真实后台同步再次复现费用缺失，原因是 outbox adapter 没有转发 `listAgentTokenUsage`。新增实际 factory 边界回归先失败，再修复，同时转发 #94 必需的 `listArtifacts`。正常后续同步自动补传既有 Review 消费，没有手工改库或历史重定价。
+- #93：新 Run 通过正常需求 Gate 推进恢复版本上传；方案和 Review 再次上传保持正确节点状态，没有再出现同版本 409。
+- #92：提交 `11f639e` 的五项 CI 全部成功（run `34504150273`），含限制并发后的 Windows 全量测试；本轮新增代码仍需新一轮 CI。
+- 最新本地回归：273 个文件 / 3792 个用例通过，类型检查、Web/Desktop/API 构建和跨平台检查通过。完整 Postgres smoke 通过，新增无正文的 Review 投影、缺失/过期指纹拒绝、同版本补传/冲突、审批命令/回执和升级清理验证。
+- 真实 DeepSeek 设计及门禁审查已完成。Web 设计审批命令 `gate-command-1fc21a6f-e2b5-49b4-b011-ff2931393549` 绑定服务端指纹，经 Desktop 完整重验收到 `applied` 回执，Run v4 进入 v5 / building。四次 Stage/Review 调用合计 54003 tokens、预计 $0.014340948，云端一致。
+
+Coding、归档测试、真实 Draft PR 与验收继续执行；新仓库 App 授权待用户完成。PR #90 保持 Draft，六项 issue 尚不提前关闭。

@@ -4256,6 +4256,7 @@ export function gateCommandExecutionFingerprint(command: GateCommand): string {
     expectedRunVersion: command.expectedRunVersion,
     expectedPolicyVersion: command.expectedPolicyVersion,
     expectedBlockerIds: command.expectedBlockerIds,
+    ...(command.reviewSubject ? { reviewSubject: command.reviewSubject } : {}),
     evaluationStatus: command.evaluationStatus,
     evaluationBlockerIds: command.evaluationBlockerIds,
     serverEvaluatedAt: command.evaluatedAt,

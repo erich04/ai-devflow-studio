@@ -2,6 +2,7 @@ import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import { assertPolicyRevision } from './enforcement-policy-write'
 import {
   formatUsd,
+  hasSameGateReviewSubject,
   formatCostRollup,
   annotateUnknownRuntimeCosts,
   redactSensitiveText,
@@ -621,6 +622,7 @@ export function createSeedTeamRepository(): TeamRepository {
               ok: true,
               requestedRole,
               workflowCommand: result.workflowCommand,
+              ...(result.reviewSubject ? { reviewSubject: result.reviewSubject } : {}),
               evaluationBlockerIds: result.evaluationBlockerIds,
             }
           : { ok: false, outcomeCode: result.code }
@@ -1172,6 +1174,12 @@ export function createSeedTeamRepository(): TeamRepository {
           throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
         }
 
+        if (summary.gateReviewSubject) {
+          if (existingRun.gateReviewSubject && !hasSameGateReviewSubject(existingRun.gateReviewSubject, summary.gateReviewSubject)) {
+            throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+          }
+          existingRun.gateReviewSubject = summary.gateReviewSubject
+        }
         persistUsage()
         return {
           accepted: true,
@@ -1232,6 +1240,8 @@ export function createSeedTeamRepository(): TeamRepository {
             edges: [],
           }
 
+      delete syncedRun.gateReviewSubject
+      if (summary.gateReviewSubject) syncedRun.gateReviewSubject = summary.gateReviewSubject
       upsertSyncedRun(syncedRun)
       runOrganizationIds.set(summary.runId, context.organizationId)
       persistUsage()

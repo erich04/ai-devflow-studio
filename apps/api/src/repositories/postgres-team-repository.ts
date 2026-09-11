@@ -161,6 +161,7 @@ type OrganizationRow = {
 }
 
 type WorkflowRunRow = {
+  gate_review_subject?: import('@ai-devflow/shared').GateReviewSubjectSnapshot | null
   id: string
   run_version: number
   title: string
@@ -734,6 +735,7 @@ function mapRun(
   edges: WorkflowEdge[],
 ): WorkflowRun {
   const run: WorkflowRun = {
+    ...(row.gate_review_subject ? { gateReviewSubject: row.gate_review_subject } : {}),
     id: row.id,
     version: row.run_version,
     title: row.title,
@@ -2484,6 +2486,18 @@ export function createPostgresTeamRepository(
     async uploadRunSummary(summary, context: TeamRepositorySyncContext) {
       summary = redactRemoteRunSummaryForSync(summary)
       return withTeamDbTransaction(db, async (tx) => {
+        const persistReviewSubject = async () => {
+          if (!summary.gateReviewSubject) return
+          const [saved] = await tx.query<{ id: string }>(`
+            /* run_summary:review-subject */
+            UPDATE workflow_runs SET gate_review_subject = $5::jsonb
+            WHERE id = $1 AND organization_id = $2 AND project_id = $3 AND run_version = $4
+              AND (gate_review_subject IS NULL OR gate_review_subject = $5::jsonb)
+            RETURNING id`,
+            [summary.runId, context.organizationId, summary.projectId, summary.version,
+              JSON.stringify(summary.gateReviewSubject)])
+          if (!saved) throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        }
         const persistStageUsage = async () => {
           if (!summary.stageAgentUsage?.length) return
           if (summary.stageAgentUsage.some((row) => row.userId !== context.userId)) {
@@ -2574,6 +2588,7 @@ export function createPostgresTeamRepository(
             VALUES ($1, $2, $3, $4, $5, 'remote', $6, $7, $8, $9, $10, NULL, $11, $11)
             ON CONFLICT (id) DO UPDATE
             SET run_version = excluded.run_version,
+                gate_review_subject = NULL,
                 title = excluded.title,
                 status = excluded.status,
                 current_node_id = excluded.current_node_id,
@@ -2634,6 +2649,7 @@ export function createPostgresTeamRepository(
             throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
           }
 
+          await persistReviewSubject()
           await persistStageUsage()
           return {
             accepted: true,
@@ -2706,6 +2722,7 @@ export function createPostgresTeamRepository(
           throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
         }
 
+        await persistReviewSubject()
         await persistStageUsage()
         return {
           accepted: true,
