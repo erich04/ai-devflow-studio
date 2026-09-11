@@ -652,7 +652,7 @@ async function applyHistoricalMigration(database, fileName, version, name) {
 async function readV14RunSnapshot(database) {
   const result = await psql(
     database,
-    "SELECT (to_jsonb(run) - 'stage_agent_usage')::text FROM workflow_runs AS run WHERE title = 'V1.4 retained sentinel';\n",
+    "SELECT (to_jsonb(run) - 'stage_agent_usage' - 'gate_review_subject')::text FROM workflow_runs AS run WHERE title = 'V1.4 retained sentinel';\n",
   )
   const snapshot = result.stdout.trim()
   expect(snapshot.length > 0, 'The populated V1.4 Run sentinel was missing.')
@@ -663,6 +663,12 @@ async function assertEmptyStageAccountingAfterV26(database) {
   const result = await psql(database,
     "SELECT count(*) FROM workflow_runs WHERE stage_agent_usage IS DISTINCT FROM '{}'::jsonb;\n")
   expect(result.stdout.trim() === '0', 'V26 must not invent accounting for retained historical Runs.')
+}
+
+async function assertEmptyGateReviewSubjectsAfterV27(database) {
+  const result = await psql(database,
+    "SELECT (SELECT count(*) FROM workflow_runs WHERE gate_review_subject IS NOT NULL) + (SELECT count(*) FROM gate_commands WHERE review_subject IS NOT NULL);\n")
+  expect(result.stdout.trim() === '0', 'V27 must not invent Review subjects for retained Runs or commands.')
 }
 
 async function readV11DeliverySnapshot(database) {
@@ -1278,6 +1284,7 @@ try {
   await assertLocalDevelopmentAuthAfterV20(FRESH_DATABASE)
   await assertNativeCodingEngineAfterV21(FRESH_DATABASE)
   await assertEmptyStageAccountingAfterV26(FRESH_DATABASE)
+  await assertEmptyGateReviewSubjectsAfterV27(FRESH_DATABASE)
   await startCurrentApiAgainstDatabase(FRESH_DATABASE)
 
   await runV14Migration(UPGRADE_DATABASE)
@@ -1306,6 +1313,7 @@ try {
   })
   await assertNativeCodingEngineAfterV21(UPGRADE_DATABASE)
   await assertEmptyStageAccountingAfterV26(UPGRADE_DATABASE)
+  await assertEmptyGateReviewSubjectsAfterV27(UPGRADE_DATABASE)
   const snapshotAfterV15Upgrade = await readV14RunSnapshot(UPGRADE_DATABASE)
   expect(
     snapshotAfterV15Upgrade === snapshotBeforeV10Upgrade,

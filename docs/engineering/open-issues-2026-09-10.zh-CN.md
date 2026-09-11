@@ -284,4 +284,8 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 - 最新本地回归：273 个文件 / 3792 个用例通过，类型检查、Web/Desktop/API 构建和跨平台检查通过。完整 Postgres smoke 通过，新增无正文的 Review 投影、缺失/过期指纹拒绝、同版本补传/冲突、审批命令/回执和升级清理验证。
 - 真实 DeepSeek 设计及门禁审查已完成。Web 设计审批命令 `gate-command-1fc21a6f-e2b5-49b4-b011-ff2931393549` 绑定服务端指纹，经 Desktop 完整重验收到 `applied` 回执，Run v4 进入 v5 / building。四次 Stage/Review 调用合计 54003 tokens、预计 $0.014340948，云端一致。
 
-Coding、归档测试、真实 Draft PR 与验收继续执行；新仓库 App 授权待用户完成。PR #90 保持 Draft，六项 issue 尚不提前关闭。
+用户已给新仓库完成 App 授权，真实 Web 绑定验证为 ACTIVE / v1；#91 的冲突提示也已通过真实页面复验。Coding、归档测试、真实 Draft PR 与验收继续执行，PR #90 保持 Draft。
+
+新增 #95：两次 OpenCode Coding 尝试在首个工具审批处超时。Adapter 使用模型调用前的 input.now 生成权限有效期，模型耗时侵占了 60 秒响应窗口；可控时钟的 45 秒延迟用例在修复前失败。首次及后续请求改用实际发现权限的时间，保留 60 秒时限、审批规则与 Run 开始时间。45 项 adapter 回归通过，完整 3793 项测试、Desktop 类型检查与构建通过；41 项浏览器回归、完整 Electron smoke 也再次通过。失败 Run、权限和清理证据保留，工作流未伪装成功。
+
+提交 a96c608 已推送至 PR #90。其 Docker lifecycle CI 暴露升级夹具对整行历史记录的比较没有区分新增 gate_review_subject 字段；夹具现在继续逐字段保留历史数据，并独立断言新 Run/Command 指纹为空。完整升级/回滚正在复验。真实后续执行还遇到原生控制工具 noWindowsAvailable，已请求用户恢复窗口；不以受控测试替代真实 Provider 交付。
