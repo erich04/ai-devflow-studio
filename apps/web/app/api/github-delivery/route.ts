@@ -170,6 +170,7 @@ function feedbackMessage(code: GitHubDeliveryFeedbackCode): string {
     return 'GitHub provider is unavailable. No operation was applied.'
   }
   if (code === 'authority_required') return 'Required project authority was not verified.'
+  if (code === 'binding_conflict') return '此仓库已绑定其他项目，请使用独立仓库。'
   if (code === 'state_conflict') return 'GitHub Delivery state changed. Reload before retrying.'
   if (code === 'not_found') return 'GitHub Delivery resource was not found.'
   if (code === 'expired') return 'GitHub Delivery authority has expired.'

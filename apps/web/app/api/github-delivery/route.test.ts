@@ -367,6 +367,27 @@ describe('GitHub Delivery Web proxy', () => {
     expect(JSON.stringify(payload)).not.toContain('/Users/')
   })
 
+  it('preserves safe repository binding conflict guidance', async () => {
+    mockedConfigure.mockRejectedValueOnce(new GitHubDeliveryApiError(
+      '/api/team/projects/:projectId/github-repository-binding',
+      409,
+      'binding_conflict',
+      false,
+    ))
+    const response = await PUT(request('PUT', {
+      action: 'configure',
+      projectId: 'p-payments',
+      installationId: '12345',
+      repositoryId: '98765',
+      expectedStateVersion: 0,
+    }))
+    expect(response.status).toBe(409)
+    await expect(response.json()).resolves.toEqual({
+      code: 'binding_conflict',
+      message: '此仓库已绑定其他项目，请使用独立仓库。',
+    })
+  })
+
   it('returns typed provider-unavailable feedback without reflecting upstream details', async () => {
     mockedConfigure.mockRejectedValueOnce(new GitHubDeliveryApiError(
       '/api/team/projects/:projectId/github-repository-binding',

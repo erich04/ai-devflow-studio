@@ -270,6 +270,30 @@ describe('DevFlow web API client', () => {
     }, 'p-payments')).toThrow('GitHub Delivery response was invalid.')
   })
 
+  it.each([
+    [409, { outcomeCode: 'binding_conflict' }, 'binding_conflict'],
+    [409, { outcomeCode: 'stale_binding' }, 'state_conflict'],
+    [409, { message: 'binding_conflict' }, 'state_conflict'],
+    [503, { outcomeCode: 'binding_conflict' }, 'provider_unavailable'],
+  ])('preserves only a typed repository conflict with matching status (%s, %j)', async (status, payload, feedbackCode) => {
+    const failure = await configureGitHubRepositoryBinding({
+      apiBaseUrl: 'http://api.local',
+      fetcher: vi.fn(async () => new Response(JSON.stringify({
+        ...payload,
+        internalDetail: '/Users/alice/private API_TOKEN=private',
+      }), { status })),
+      projectId: 'p-payments',
+      installationId: '12345',
+      repositoryId: '98765',
+      expectedStateVersion: 0,
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(GitHubDeliveryApiError)
+    expect(failure).toMatchObject({ status, feedbackCode })
+    expect(JSON.stringify(failure)).not.toContain('/Users/')
+    expect(JSON.stringify(failure)).not.toContain('API_TOKEN')
+  })
+
   it('returns typed provider-unavailable feedback when GitHub binding validation is unavailable', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       error: 'service_unavailable',

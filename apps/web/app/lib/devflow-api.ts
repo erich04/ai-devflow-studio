@@ -108,6 +108,7 @@ export class DevFlowApiError extends Error {
 export type GitHubDeliveryFeedbackCode =
   | 'provider_unavailable'
   | 'authority_required'
+  | 'binding_conflict'
   | 'state_conflict'
   | 'not_found'
   | 'expired'
@@ -925,7 +926,12 @@ export async function fetchGitHubDeliveryRequests(
   })
 }
 
-function githubDeliveryFeedbackCode(status: number): GitHubDeliveryFeedbackCode {
+function githubDeliveryFeedbackCode(status: number, payload: unknown): GitHubDeliveryFeedbackCode {
+  if (
+    status === 409 &&
+    typeof payload === 'object' && payload !== null && !Array.isArray(payload) &&
+    (payload as Record<string, unknown>).outcomeCode === 'binding_conflict'
+  ) return 'binding_conflict'
   if (status === 503) return 'provider_unavailable'
   if (status === 403) return 'authority_required'
   if (status === 409) return 'state_conflict'
@@ -947,7 +953,7 @@ async function throwGitHubDeliveryFailure(
   throw new GitHubDeliveryApiError(
     endpoint,
     response.status,
-    githubDeliveryFeedbackCode(response.status),
+    githubDeliveryFeedbackCode(response.status, payload),
     retryable,
   )
 }
