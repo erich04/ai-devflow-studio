@@ -32,7 +32,7 @@ import {
 } from './opencode-http-adapter.js'
 import { captureWorktreeDiff, type CapturedWorktreeDiff } from './coding-runner.js'
 import { createOpencodeProcessManager, type ManagedOpencodeServer } from './opencode-process.js'
-import { classifyOpenCodePermission } from './opencode-permission-policy.js'
+import { buildOpenCodeManagedPrompt, classifyOpenCodePermission } from './opencode-permission-policy.js'
 import {
   assertOpenCodeGitBoundary,
   captureOpenCodeGitBoundary,
@@ -366,7 +366,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         if (pendingSessionState.cancelRequested) {
           throw new Error('opencode startup was cancelled before session creation')
         }
-        const brief = input.brief
+        const prompt = buildOpenCodeManagedPrompt(input.brief.prompt)
         const session = await createOpencodeSession({
           baseUrl: server.baseUrl,
           directory,
@@ -409,7 +409,7 @@ export function createOpencodeHttpCodingEngineAdapter(
             sessionId: session.id,
             directory,
             model: { providerID: config.providerID, modelID: config.modelID },
-            text: brief.prompt,
+            text: prompt,
             ...fetcherOption(config.fetcher),
           }).then(
             () => ({ ok: true as const }),
@@ -432,7 +432,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           if (firstOutcome?.kind === 'message') {
             return await finishSession({
               session: runtimeSession,
-              codingRun: createRunningOpencodeRun(input),
+              codingRun: createRunningOpencodeRun(input, prompt),
               projectId: input.project.id,
               now: input.now,
               messageResult: firstOutcome.result,
@@ -451,7 +451,7 @@ export function createOpencodeHttpCodingEngineAdapter(
                 ...fetcherOption(config.fetcher),
               })
           const result = createStartResult(
-            input, brief.prompt, session.id, permission, directory, new Date(nowMs()).toISOString(),
+            input, prompt, session.id, permission, directory, new Date(nowMs()).toISOString(),
           )
           registerPermissionToolTurn(runtimeSession, permission)
           const cleanupPromise = runtimeSession.cleanupPromise
@@ -707,7 +707,7 @@ function registerObservedToolTurns(
   }
 }
 
-function createRunningOpencodeRun(input: CodingEngineStartInput): CodingAgentRun {
+function createRunningOpencodeRun(input: CodingEngineStartInput, prompt: string): CodingAgentRun {
   return {
     id: input.id,
     runId: input.run.id,
@@ -720,7 +720,7 @@ function createRunningOpencodeRun(input: CodingEngineStartInput): CodingAgentRun
     managedWorkspaceId: input.workspace.id,
     branchName: input.workspace.branchName,
     userInstruction: input.userInstruction,
-    prompt: input.brief.prompt,
+    prompt,
     summary: 'OpenCode is executing inside the authorized managed worktree.',
     changedPaths: [],
     startedAt: input.now,

@@ -289,3 +289,11 @@ PR #88 合并为 `2bb4268786a9764c6907078958ea59d5f11a8cd2`，#64 已关闭。�
 新增 #95：两次 OpenCode Coding 尝试在首个工具审批处超时。Adapter 使用模型调用前的 input.now 生成权限有效期，模型耗时侵占了 60 秒响应窗口；可控时钟的 45 秒延迟用例在修复前失败。首次及后续请求改用实际发现权限的时间，保留 60 秒时限、审批规则与 Run 开始时间。45 项 adapter 回归通过，完整 3793 项测试、Desktop 类型检查与构建通过；41 项浏览器回归、完整 Electron smoke 也再次通过。失败 Run、权限和清理证据保留，工作流未伪装成功。
 
 提交 a96c608 已推送至 PR #90。其 Docker lifecycle CI 暴露升级夹具对整行历史记录的比较没有区分新增 gate_review_subject 字段；夹具现在继续逐字段保留历史数据，并独立断言新 Run/Command 指纹为空。完整升级/回滚正在复验。真实后续执行还遇到原生控制工具 noWindowsAvailable，已请求用户恢复窗口；不以受控测试替代真实 Provider 交付。
+
+### 窗口恢复后的真实复验
+
+`912d81e` 的五项云端 CI 已全部通过，run `34555351121`，包括 macOS、Windows、Postgres、Docker 和完整升级/回滚。
+
+第三次 Coding 已证明 #95 修复生效：工具权限发现后有完整 60 秒有效期，批准也在有效期内。随后 OpenCode 将多条仓库检查合并为一次 shell 请求，触发既有命令限制并终止，记录为 #96。补充 OpenCode 专属执行约束到实际 Provider 简报，明确原生文件工具、逐条白名单命令与由 DevFlow 执行后续依赖准备/测试；不扩展权限或改动审批交互。传输边界回归先失败后通过，144 项 adapter/policy 用例、Desktop 类型检查和构建通过。
+
+原 Workflow 节点已累计三次 OpenCode 尝试，第 4 次被既有 opaque Run 上限拒绝，没有创建工作树或调用 Provider。保留三次失败证据，已向用户提出新建正式回归请求或在原 Run 切换 Native Coding Agent 两条后续路径；尚未绕过次数限制或将未完成的步骤记为通过。

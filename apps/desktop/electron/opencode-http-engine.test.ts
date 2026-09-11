@@ -193,9 +193,14 @@ describe('opencode HTTP coding engine', () => {
     expect(fetcher.bodies.join('\n')).toContain('Implement the build node.')
     expect(fetcher.bodies.join('\n')).toContain('DevFlow Coding Brief')
     expect(fetcher.bodies.join('\n')).toContain('UNIQUE_KNOWLEDGE_CONTENT source=docs/standards/api-health.md')
-    expect(result.codingRun.prompt).toBe(input.brief.prompt)
     const messageBody = JSON.parse(fetcher.bodies[1]!) as { parts: Array<{ text: string }> }
-    expect(messageBody.parts[0]?.text).toBe(input.brief.prompt)
+    const sentPrompt = messageBody.parts[0]?.text
+    expect(sentPrompt).toContain(input.brief.prompt)
+    expect(sentPrompt).toContain('DevFlow OpenCode execution constraints')
+    expect(sentPrompt).toContain('one shell command per tool call')
+    expect(sentPrompt).toContain('Use the read, glob, and grep tools')
+    expect(sentPrompt).toContain('DevFlow runs dependency preparation and the configured test command')
+    expect(result.codingRun.prompt).toBe(sentPrompt)
   })
 
   it('does not start OpenCode or contact its Provider until Execution Authorization is approved', async () => {

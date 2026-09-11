@@ -86,6 +86,24 @@ const EXTERNAL_CONFIG_ENV_PATH =
 const WORKTREE_MARKER = '[REDACTED:worktree_path]'
 const PROJECT_MARKER = '[REDACTED:project_path]'
 
+export function buildOpenCodeManagedPrompt(brief: string): string {
+  return [
+    brief,
+    '',
+    '# DevFlow OpenCode execution constraints',
+    '',
+    'These executor constraints apply to every tool call, including command examples in upstream artifacts. They do not change the requested outcome or grant permissions.',
+    '- You are already inside the disposable managed worktree. Use repository-relative paths and do not inspect the original checkout, home directory, secrets, or .git metadata.',
+    '- Use the read, glob, and grep tools to inspect source files. Do not use shell cat, ls, find, grep, sed, or inline interpreters as substitutes.',
+    '- Submit one shell command per tool call. Do not combine commands with &&, semicolons, pipes, newlines, redirection, or shell expansion.',
+    '- Supported shell checks include `pwd`, `git status --short`, `git diff --stat`, `git diff -- src/app.ts`, and `rg TODO src`. Git branch, log, config, remote, fetch, commit, push, and worktree commands are not supported.',
+    '- Make the minimal requested source edit with the edit/write tool, identifying one file inside the managed worktree. Wait for DevFlow permission approval; never bypass a denied capability using another tool.',
+    '- Do not install or download packages, use network commands, publish, deploy, or change repository scripts/configuration to gain command access.',
+    '- DevFlow runs dependency preparation and the configured test command after you finish the source edit. If dependencies are unavailable, report that tests were not run and let that governed phase collect the evidence; do not claim tests passed or attempt an installation.',
+    '- Finish with a concise summary of the actual changes and checks. Do not commit, push, or approve the final change yourself.',
+  ].join('\n')
+}
+
 export function classifyOpenCodePermission(
   input: OpenCodePermissionPolicyInput,
 ): OpenCodePermissionPolicyDecision {

@@ -30,7 +30,7 @@
 | 设计门禁审查 | Direct DeepSeek，2026-09-11T01:54:19.909Z，Review / Trace / 消费已归档 |
 | Web 审批 → Desktop | 命令 gate-command-1fc21a6f-e2b5-49b4-b011-ff2931393549 携带服务端指纹，Desktop 完整复核并回执 applied，Run v5 / building |
 | GitHub App 仓库绑定 | 用户授权新仓库后，真实 Web / API 完成绑定，ACTIVE / v1 |
-| 开发 / 测试 / Draft PR / 验收 | 两次 Coding 因权限到期终止，工作树清理；计时缺陷 #95 已修复，继续复验 |
+| 开发 / 测试 / Draft PR / 验收 | 前两次 Coding 因权限到期终止；第三次已验证 #95 的完整响应窗口，随后因执行简报未说明命令限制触发 #96；修复后继续真实复验 |
 
 澄清真实遥测：输入 `32,103`（其中 cache read `25,088`），输出 `2,469`，合计 `34,572`；按本次保存的官方峰值价格快照估算 `$0.005217828`。`source=provider_reported` 表示 tokens 来自 Provider，`costStatus=estimated` 表示金额为估算。界面显示“预计 $0.005”，未把估算当作账单实扣。
 
@@ -53,6 +53,10 @@ OpenCode Coding 的费用目前为 opaque / unknown，不能把上述四次 Stag
 - [#93](https://github.com/erich04/ai-devflow-studio/issues/93)：真实 Review 上传将 Postgres 当前 Gate 从 running 改为 blocked，破坏同版本 Run 重传。保留现有节点的权威状态，只更新证据说明；测试证据上传也采用同一边界。新增真实 PostgreSQL 回归在修复前稳定 409，修复后全量通过，同时确认修改同版本状态仍 409、同 ID 改账仍 409。当前真实 Run 将通过正常 Gate 推进和同步恢复，不直接改写业务数据库。
 - [#94](https://github.com/erich04/ai-devflow-studio/issues/94)：云端占位 request / 空 Artifact 投影曾误判正常 Review stale。用户已批准摘要与指纹边界；Main 独立生成指纹，云端比对后提交命令，Desktop 完整复核并回执。真实设计审批已通过，见上表；完整 Postgres 回归覆盖缺失/变化指纹拒绝与命令绑定。
 - [#95](https://github.com/erich04/ai-devflow-studio/issues/95)：真实 OpenCode 工具请求以 Provider 调用前的时间开始审批倒计时。可控时钟模拟 45 秒模型延迟，证明只剩 15 秒审批；修复前失败，修复后首次与后续权限均有完整 60 秒响应窗口，Run 原始开始时间不改。45 项 adapter 回归通过，完整 3793 项测试通过；真实复验继续。
+- #95 真实复验：`coding-run-80d919f3-053e-4514-8e44-5ed80c99f729` 的首次工具权限在 `2026-09-11T03:23:05.110Z` 被发现，`03:24:05.110Z` 到期，`03:23:28.235Z` 已提交批准；Provider 等待不再扣减响应窗口。该 Run 后续失败原因是 #96，不是权限到期。
+- [#96](https://github.com/erich04/ai-devflow-studio/issues/96)：OpenCode 请求 `pwd && git status && git branch --show-current && git log --oneline -5`，触发既有限制后终止。模型收到的通用简报未说明执行器只支持逐条白名单命令，且上游设计含不可直接执行的 shell 示例。修复在实际发送简报中补充执行约束、原生文件工具使用和测试交由 DevFlow 受控执行的说明；保留原始业务简报，归档实际发送文本，不扩展命令权限。传输边界用例先失败后通过，adapter 与既有权限拒绝测试共 144 项通过；真实复验继续。
+
+三次 Coding 失败记录保留。第 4 次启动已被既有 `maxOpaqueOpenCodeRunsPerWorkflowNode = 3` 拒绝，未产生新的工作树或 Provider 调用。已向用户提出从云端新建一次正式回归请求或当前 Run 切换 Native Coding Agent 的选择；等待决定期间完成 #96 全量 3793 项测试、类型检查和构建，全部通过。#96 尚不宣称真实修复验收完成。
 
 ## 验收规则
 
