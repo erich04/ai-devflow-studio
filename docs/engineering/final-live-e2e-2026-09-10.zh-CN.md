@@ -87,3 +87,13 @@ OpenCode Coding 的费用目前为 opaque / unknown，不能把上述四次 Stag
 ## 验收规则
 
 真实 Provider 阶段必须逐项记录 Run/节点、Provider/Model、产物、调用用量和失败重试。核对本地与云端记账一致、计数入口对应当前节点、真实工作树 Diff、归档测试及 GitHub PR。未完成的步骤、受控 Provider 自动化和历史 Run 均不能代替本轮完整验收。
+
+## 修复后新请求回归（2026-09-11，进行中）
+
+复用上述已经配对并授权的项目，Web 新建一句话请求“首页文案完整回归 20260911”，原始需求文本不变。请求 ID `work-request-840eac76-86e9-4d87-b990-c2f4e4b1e07c`，通过 Inbox 创建 Run `run-work-request-d380ec0ecede2befc8c0834f6432d636`，不补造首条请求的预算历史。
+
+- 首次只读澄清于 `08:45:18.874Z` 返回 `evidence_invalid`。实际 OpenCode 会话 `ses_f705bb41bffeJFQE3PI207JExi` 完成 9 次只读调用，但最终 JSON 没有 repositoryFindings；工作流仍为 clarifying，失败费用正常记录（26481 input / 2204 output，预计 $0.004869036）。
+- [#98](https://github.com/erich04/ai-devflow-studio/issues/98) 记录输出契约不一致：仓库指令要求引用，但后面的最终字段清单漏掉 repositoryFindings。修复使本地执行器的字段清单明确包含它，并将具体仓库字段说明置于通用格式说明之后。仅修正提示，保留引用和文件摘要校验，无自动重试或 Provider 回退。
+- 传输契约回归修复前失败、修复后通过；68 项定向检查、全量 3810 项测试、类型检查、跨平台检查和 Desktop 构建通过。
+- 同一请求经真实 UI 重新执行 OpenCode，于 `08:49:26.900Z` 成功，7 条事实 / 7 处引用通过实际文件摘要核验；只读仓库摘要保持一致，Run 正常进入需求 Gate。
+- `70230b6` 的云端 Postgres job 在 apt-get update 安装测试环境阶段超时（退出 124），尚未执行产品测试；其余四项通过。后续以最新修复提交的完整 CI 为准。

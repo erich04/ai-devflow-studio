@@ -330,6 +330,7 @@ describe('runWorkflowStageAgent', () => {
     expect(prompt).toContain('arrays of OBJECTS, not strings')
     expect(prompt).toContain('"citationIds":["citation-1"]')
     expect(prompt).toContain('"path":"<repo-relative-file>"')
+    expect(prompt.match(/Return only valid JSON with [^.]+\./)?.[0]).toContain('repositoryFindings')
     expect(prompt).not.toContain('All list fields must be arrays of strings')
   })
 

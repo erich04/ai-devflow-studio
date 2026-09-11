@@ -259,8 +259,8 @@ function createWorkflowArtifactPrompt(input: {
   return [
     'You are DevFlow Workflow Stage Agent. Workflow remains the sole authority.',
     ...stageInstruction,
+    workflowArtifactOutputInstructions(input.request.stage, input.executorKind === 'local-agent'),
     ...repositoryInstruction,
-    workflowArtifactOutputInstructions(input.request.stage),
     '',
     'RAW_REQUEST',
     input.context.run.request,
