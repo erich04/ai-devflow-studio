@@ -888,7 +888,7 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       { paths: ['../secret'], valid: false },
       { paths: ['src/../secret'], valid: false },
       { paths: ['src/./app.js'], valid: false },
-      { paths: ['/tmp/file'], valid: false },
+      { paths: ['/absolute/file'], valid: false },
       { paths: ['~/file'], valid: false },
       { paths: ['src\\app.js'], valid: false },
       { paths: [' file '], valid: false },
