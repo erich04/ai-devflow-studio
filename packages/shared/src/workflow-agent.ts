@@ -1,5 +1,6 @@
 import { createLocalStageAgentUsage } from './stage-agent-usage'
 import {
+  AgentProviderRequestError,
   estimateAgentTokenUsage,
   workflowArtifactOutputInstructions,
   type AgentProvider,
@@ -134,11 +135,21 @@ export function createDirectProviderStageAgentExecutor(provider: AgentProvider):
         throw new StageAgentExecutionError('cancelled', 'Workflow stage Agent was cancelled')
       }
       const started = Date.now()
-      const value = await provider.generateWorkflowArtifact({
-        request: input.request,
-        context: input.context,
-        prompt: input.prompt,
-      })
+      let value: WorkflowArtifactProviderOutput
+      try {
+        value = await provider.generateWorkflowArtifact({
+          request: input.request,
+          context: input.context,
+          prompt: input.prompt,
+        })
+      } catch (error) {
+        if (!(error instanceof AgentProviderRequestError)) throw error
+        // Only the provider's bounded classification crosses into persisted stage diagnostics.
+        throw new StageAgentExecutionError(
+          'failed',
+          `${error.message} delivery=${error.deliveryState}; billing=${error.billingState}; retryable=${error.retryable}; cause=${error.sanitizedCause}`,
+        )
+      }
       return {
         value,
         terminalReason: 'success',

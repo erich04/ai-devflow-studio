@@ -4281,6 +4281,24 @@ describe('App', () => {
     expect(api.loadRemoteSnapshot).toHaveBeenCalledTimes(2)
   })
 
+  it('refreshes the current project runtime budget after Team sync without reloading the app', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+    await waitFor(() => expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('未配置'))
+    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue({
+      projectId: 'p-payments', enabled: true, monthlyLimitUsd: 1, warningThresholdUsd: 0.5,
+      currency: 'USD', updatedAt: '2026-09-12T00:00:00.000Z',
+    })
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    await waitFor(() => expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00 / 月 · 预警 $0.50'))
+    expect(screen.getByTestId('flow-node-n-design-gate')).toBeInTheDocument()
+    expect(api.getCodingRuntimeBudgetPolicy).toHaveBeenLastCalledWith({ projectId: localProject.id })
+    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockRejectedValue(new Error('Budget unavailable'))
+    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    await waitFor(() => expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('不可用'))
+    expect(screen.getByTestId('runtime-budget-status')).not.toHaveTextContent('$1.00')
+  })
+
   it('loads remote team state without mixing other project runs into the selected local project', async () => {
     const api = installDesktopApi({
       loadRemoteSnapshot: vi.fn().mockResolvedValue({

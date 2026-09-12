@@ -866,7 +866,13 @@ export function App() {
       : {}),
     canVerifyGitHubDeliveryRevocation,
     gateEnforcementDecision: gateEnforcement.decision,
-    onRemoteTeamSynced: gateEnforcement.refresh,
+    onRemoteTeamSynced: async () => {
+      const [policy] = await Promise.all([
+        gateEnforcement.refresh(),
+        projectRuntimeBudget.refresh(),
+      ])
+      return policy
+    },
     stageAgentExecutorKind,
     applyLocalExecutionState,
   })
