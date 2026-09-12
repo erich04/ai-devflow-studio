@@ -386,7 +386,8 @@ function createRedactedGitHubDeliveryIntent({ binding, runId, nodeId, now }) {
     prPackageArtifactId: `package-${runId}`,
     prPackageUpdatedAt: now,
     prPackageDigest: 'e'.repeat(64),
-    changedPaths: ['apps/api/src/github-delivery-smoke.ts'],
+    changedPaths: ['.gitignore', 'index.html', 'README.md', 'src/app.js', '文档/说明.md']
+      .sort((left, right) => left.localeCompare(right)),
   }
   const intentDigest = sha256Hex(JSON.stringify(material))
   const idempotencyKey = `github-delivery:${sha256Hex(
@@ -877,6 +878,31 @@ async function assertRetainedV12CredentialAfterCurrentMigration(fixture) {
       schemaVersion.rows[0]?.value === expectedVersion,
       `Team database did not migrate the retained fixture to schema v${expectedVersion}.`,
     )
+    const pathCases = [
+      { paths: ['.gitignore', 'index.html', 'README.md', 'src/app.js', '文档/说明.md'], valid: true },
+      { paths: ['README.md', 'readme.md'], valid: true },
+      { paths: ['src/a.js', 'src/b.js', 'src/a.js'], valid: false },
+      { paths: [], valid: false },
+      { paths: {}, valid: false },
+      { paths: [42], valid: false },
+      { paths: ['../secret'], valid: false },
+      { paths: ['src/../secret'], valid: false },
+      { paths: ['src/./app.js'], valid: false },
+      { paths: ['/tmp/file'], valid: false },
+      { paths: ['~/file'], valid: false },
+      { paths: ['src\\app.js'], valid: false },
+      { paths: [' file '], valid: false },
+      { paths: ['x'.repeat(501)], valid: false },
+      { paths: Array.from({ length: 201 }, (_, index) => `file-${index}`), valid: false },
+    ]
+    for (const { paths, valid } of pathCases) {
+      const checked = await connection.query(
+        'SELECT github_delivery_changed_paths_are_bounded($1::jsonb) AS valid',
+        [JSON.stringify(paths)],
+      )
+      expect(checked.rows[0]?.valid === valid,
+        `Delivery path bounds mismatch: ${JSON.stringify(paths).slice(0, 220)}`)
+    }
     const retained = await connection.query(
       `SELECT to_jsonb(retained) AS snapshot
        FROM github_delivery_credential_grants AS retained

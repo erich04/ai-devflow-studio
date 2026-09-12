@@ -3448,14 +3448,17 @@ describe('App', () => {
     expect(toast).not.toHaveTextContent('Resume 已接受')
   })
 
-  it('shows a safe typed publisher outcome when Resume remains in recovery', async () => {
+  it.each([
+    { code: 'workspace_dirty', message: 'managed workspace' },
+    { code: 'service_unavailable', message: '交付服务暂不可用' },
+  ])('shows safe recovery guidance for $code', async ({ code, message }) => {
     const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
     const loadState = vi.fn().mockResolvedValue(prDeliveryState(recoveryIntent))
     const resumeGitHubDelivery = vi.fn().mockResolvedValue({
       intentId: recoveryIntent.id,
       remoteRequestId: 'delivery-request-1',
       disposition: 'recovery_required',
-      outcomeCode: 'workspace_dirty',
+      outcomeCode: code,
     })
     installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
@@ -3465,8 +3468,8 @@ describe('App', () => {
 
     await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
     const toast = screen.getByTestId('toast')
-    expect(toast).toHaveTextContent('workspace_dirty')
-    expect(toast).toHaveTextContent('managed workspace')
+    expect(toast).toHaveTextContent(code)
+    expect(toast).toHaveTextContent(message)
     expect(toast).not.toHaveTextContent('/Users/')
     expect(toast).not.toHaveTextContent('API_TOKEN')
   })
