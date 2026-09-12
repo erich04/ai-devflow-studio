@@ -22,6 +22,7 @@ import {
 import type { ManagedOpencodeServer } from './opencode-process.js'
 import { opencodeProviderBindingEnv, type OpencodeProviderBinding } from './opencode-provider-binding.js'
 import { readStageAgentOpencodeOutput } from './stage-agent-opencode-output.js'
+import { isGitWorkingTreeRoot } from './git-repository-boundary.js'
 
 const execFileAsync = promisify(execFile)
 const citationFileBytesMax = 2 * 1024 * 1024
@@ -87,6 +88,9 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
     async execute(execution) {
       assertReadOnlyCapability(execution.capability)
       const root = await realpath(input.projectPath)
+      if (!(await isGitWorkingTreeRoot(root))) {
+        throw new StageAgentExecutionError('evidence_invalid', 'Select a Git working-tree repository root before repository analysis')
+      }
       const before = await repositoryWorkingTreeDigest(root)
       const timeoutController = new AbortController()
       const timeout = setTimeout(() => timeoutController.abort(), execution.bounds.timeoutMs)

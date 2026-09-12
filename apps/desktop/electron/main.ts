@@ -169,6 +169,7 @@ import {
 } from './remote-sync.js'
 import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
+import { isGitWorkingTreeRoot } from './git-repository-boundary.js'
 import { runWorkflowTestCommand } from './workflow-test-command.js'
 import { recordStageAgentFailure } from './stage-agent-failure.js'
 import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine.js'
@@ -1669,21 +1670,11 @@ async function runGit(project: LocalProject, args: string[]): Promise<string> {
 async function readProjectGitStatus(project: LocalProject): Promise<ProjectGitStatus> {
   const refreshedAt = new Date().toISOString()
 
-  try {
-    const isWorkTree = await runGit(project, ['rev-parse', '--is-inside-work-tree'])
-    if (isWorkTree !== 'true') {
-      return {
-        projectId: project.id,
-        status: 'not_git',
-        message: 'not a git repo',
-        refreshedAt,
-      }
-    }
-  } catch {
+  if (!(await isGitWorkingTreeRoot(project.path))) {
     return {
       projectId: project.id,
       status: 'not_git',
-      message: 'not a git repo',
+      message: 'not a git repository root',
       refreshedAt,
     }
   }
