@@ -264,6 +264,7 @@ describe('CodingRuntime', () => {
       }],
       true,
       [],
+      ...(requireExecutionAuthorization ? [{ 'ses-cross-runtime': { type: 'idle' } }] : []),
       [{
         file: 'devflow-opencode-smoke.txt',
         patch: 'diff --git a/devflow-opencode-smoke.txt b/devflow-opencode-smoke.txt\n+ok\n',
