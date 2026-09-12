@@ -29,6 +29,67 @@ import {
 } from './opencode-http-adapter'
 
 describe('opencode HTTP coding engine', () => {
+  it.each(['slow permission', 'execution deadline', 'hung permission poll'] as const)(
+    'bounds authorized busy Provider work separately from permission discovery: %s', async (scenario) => {
+    const permission = { id: 'slow-edit', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }
+    let messageStartedAt = 0
+    let stopped = false
+    let resolveMessage!: (response: Response) => void
+    const fetcher: Fetcher = async (input, init) => {
+      const url = String(input)
+      if (url.includes('/message?') && init?.method === 'POST') {
+        messageStartedAt = Date.now()
+        return await new Promise<Response>((resolve) => { resolveMessage = resolve })
+      }
+      if (url.includes('/message?')) return new Response('[]')
+      if (url.includes('/permission?')) {
+        if (!stopped && scenario === 'hung permission poll') return await new Promise<Response>(() => undefined)
+        return new Response(JSON.stringify(
+          !stopped && scenario === 'slow permission' && Date.now() - messageStartedAt >= 40 ? [permission] : [],
+        ))
+      }
+      if (url.includes('/session/status?')) return new Response(JSON.stringify({ 'ses-1': { type: 'busy' } }))
+      if (url.includes('/abort?')) {
+        stopped = true
+        resolveMessage(new Response(JSON.stringify(successfulOpencodeMessage())))
+        return new Response('true')
+      }
+      return new Response(JSON.stringify(managedOpencodeSession()))
+    }
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
+      fetcher, requireExecutionAuthorization: true,
+      permissionPollMs: 1, permissionDiscoveryTimeoutMs: 10, maxWallClockMs: scenario === 'execution deadline' ? 35 : 200,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const input = startInput({ run, node, project, workspace })
+    const authorization = expectPermissionResult(await engine.start(input))
+    vi.useFakeTimers()
+    try {
+      const startedAt = Date.now()
+      const result = engine.approvePermission({
+        codingRun: authorization.codingRun, request: authorization.permissionRequest,
+        workspace, project, authorizedStart: input, now: input.now,
+      })
+      const settled = result.then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }))
+      await vi.advanceTimersByTimeAsync(250)
+      const outcome = await settled
+      if (scenario === 'slow permission') {
+        expect(expectPermissionResult(outcome.value!).permissionRequest).toMatchObject({ id: 'slow-edit', status: 'pending' })
+      } else {
+        expect(outcome.error).toMatchObject({ code: 'permission_discovery_timed_out' })
+        expect(Date.now() - startedAt).toBeLessThan(1_000)
+        expect(stopped).toBe(true)
+      }
+    } finally {
+      try { await engine.cancel({ codingRun: authorization.codingRun }) } finally { vi.useRealTimers() }
+    }
+  })
+
   it('bounds policy correction feedback and never approves a repeatedly unsupported command', async () => {
     const denied = Array.from({ length: 4 }, (_, index) => ({
       id: `denied-${index}`, sessionID: 'ses-1', permission: 'bash', metadata: { command: 'pwd && ls' },

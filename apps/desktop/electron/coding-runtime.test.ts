@@ -39,6 +39,7 @@ import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
   CodingEnginePermissionRevalidationError,
+  CodingEnginePermissionDiscoveryError,
 } from './coding-engine-lifecycle'
 import {
   createCodingRuntime,
@@ -3425,18 +3426,18 @@ describe('CodingRuntime', () => {
     expect(store.workspaces.at(-1)?.cleanupStatus).toBe('deleted')
   })
 
-  it('fails the run and cleans its worktree when the engine fails after an approved permission', async () => {
+  it.each([
+    { providerFailure: new OpencodeMessageResponseError({ code: 'provider_api_error', statusCode: 429, retryable: true }), summary: 'OpenCode failed (provider_api_error, HTTP 429).' },
+    { providerFailure: new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out'), summary: 'OpenCode failed (permission_discovery_timed_out).' },
+    { providerFailure: new CodingEnginePermissionDiscoveryError('provider_retry_observed'), summary: 'OpenCode failed (provider_retry_observed).' },
+    { providerFailure: new Error('RAW_PROVIDER_SECRET'), summary: 'Coding engine failed after permission approval.' },
+  ])('persists safe diagnostics and cleans the approved failed run: $summary', async ({ providerFailure, summary }) => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({
       projects: [project(repo)],
       runs: [buildRun()],
     })
     const engine = createFakeCodingEngineAdapter()
-    const providerFailure = new OpencodeMessageResponseError({
-      code: 'provider_api_error',
-      statusCode: 429,
-      retryable: true,
-    })
     vi.spyOn(engine, 'approvePermission').mockRejectedValueOnce(providerFailure)
     const cancel = vi.spyOn(engine, 'cancel')
     const runtime = createCodingRuntime({
@@ -3470,17 +3471,18 @@ describe('CodingRuntime', () => {
     expect(store.permissionDecisions).toHaveLength(1)
     expect(store.codingRuns.at(-1)).toMatchObject({
       status: 'failed',
-      summary: 'Coding engine failed after permission approval.',
+      summary,
       completedAt: '2026-06-17T00:01:00.000Z',
     })
     expect(store.workspaces.at(-1)).toMatchObject({ cleanupStatus: 'deleted' })
     expect(store.codingEvents).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'error',
-        message: 'Coding engine failed after permission approval.',
+        message: summary,
       }),
       expect.objectContaining({ kind: 'cleanup' }),
     ]))
+    expect(JSON.stringify(store.codingEvents)).not.toContain('RAW_PROVIDER_SECRET')
   })
 
   it('retains the active run and worktree when continuation cleanup is not confirmed', async () => {

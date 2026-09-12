@@ -221,7 +221,8 @@ export function createOpencodeHttpCodingEngineAdapter(
         messagePromise: session.messagePromise,
         observeToolTurns: (signal) => refreshObservedToolTurns(session, signal),
         pollMs: config.permissionPollMs ?? 1_000, sessionId: session.sessionId,
-        timeoutMs: permissionWaitTimeout(session), ...fetcherOption(config.fetcher),
+        timeoutMs: permissionWaitTimeout(session), maxWaitMs: remainingSessionMs(session),
+        ...fetcherOption(config.fetcher),
       })
       if (outcome.kind !== 'permission') return outcome
       if (session.cleanupPromise) await failForSessionCleanup(session.cleanupPromise)
@@ -1050,11 +1051,14 @@ async function waitForNextPermissionOrMessage(input: {
   pollMs: number
   sessionId: string
   timeoutMs: number
+  maxWaitMs?: number
 }): Promise<
   | { kind: 'message'; result: Awaited<OpencodeRuntimeSession['messagePromise']> }
   | { kind: 'permission'; permission: OpencodePermission }
 > {
-  const expiresAt = Date.now() + input.timeoutMs
+  const startedAt = Date.now()
+  const absoluteExpiresAt = startedAt + (input.maxWaitMs ?? input.timeoutMs)
+  let expiresAt = Math.min(absoluteExpiresAt, startedAt + input.timeoutMs)
   let settledMessage: Awaited<OpencodeRuntimeSession['messagePromise']> | undefined
   void input.messagePromise.then((result) => {
     settledMessage = result
@@ -1103,6 +1107,11 @@ async function waitForNextPermissionOrMessage(input: {
     }
     if (status?.type === 'retry') {
       throw new CodingEnginePermissionDiscoveryError('provider_retry_observed')
+    }
+    if (status?.type === 'busy') {
+      // A healthy authorized Provider may spend longer than one discovery window
+      // generating code. Its total execution deadline never moves.
+      expiresAt = Math.min(absoluteExpiresAt, Date.now() + input.timeoutMs)
     }
 
     const waitMs = Math.max(0, Math.min(input.pollMs, expiresAt - Date.now()))

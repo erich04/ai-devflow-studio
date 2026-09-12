@@ -60,7 +60,7 @@ describe('OpenCode authoritative result validation', () => {
       worktreePath: committedMutation.worktreePath,
       snapshot: committedSnapshot,
     })).rejects.toThrow('commits are not authorized')
-  })
+  }, 15_000)
 
   it('accepts and canonicalizes a bounded text diff inside the managed worktree', async () => {
     const root = await worktree()

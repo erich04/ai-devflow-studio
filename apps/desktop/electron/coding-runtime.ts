@@ -67,7 +67,9 @@ import {
   CodingEngineContinuationCleanupError,
   CodingEngineStartupCleanupError,
   CodingEnginePermissionRevalidationError,
+  CodingEnginePermissionDiscoveryError,
 } from './coding-engine-lifecycle.js'
+import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
 import { estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
 import type {
   CodingAgentMutation,
@@ -77,6 +79,16 @@ import type {
 } from './local-store.js'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
+
+function safeCodingFailureSummary(error: unknown, fallback: string): string {
+  if (error instanceof CodingEnginePermissionDiscoveryError) {
+    return `OpenCode failed (${error.code}).`
+  }
+  if (error instanceof OpencodeMessageResponseError || error instanceof OpencodeHttpRequestError) {
+    return `OpenCode failed (${error.code}${error.statusCode === undefined ? '' : `, HTTP ${error.statusCode}`}).`
+  }
+  return fallback
+}
 const defaultKnowledgeChunks: KnowledgeChunk[] = []
 const baseCodingExecutorCapabilities: CodingExecutorCapability[] = [
   'cancellation',
@@ -2127,7 +2139,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         const failureTimestamp = now()
         const failureSummary = await latestProviderFailureSummary(
           currentRun.id,
-          'Coding engine failed after permission approval.',
+          safeCodingFailureSummary(error, 'Coding engine failed after permission approval.'),
         )
         const failedRun: CodingAgentRun = {
           ...currentRun,
