@@ -1300,6 +1300,18 @@ function fillNewRunForm(title = '本地真实 Run', request = '请基于当前�
   fireEvent.change(screen.getByLabelText('一句话需求'), { target: { value: request } })
 }
 
+async function waitForLocalStateLoaded(
+  loadState: DevFlowDesktopApi['loadState'],
+  expectedCalls?: number,
+) {
+  await waitFor(() => {
+    if (expectedCalls === undefined) expect(loadState).toHaveBeenCalled()
+    else expect(loadState).toHaveBeenCalledTimes(expectedCalls)
+    // The IPC call can precede both its response and React's committed render.
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local persisted')
+  })
+}
+
 function clickInspectorTab(name: RegExp | string) {
   const inspector = screen.getByTestId('node-inspector')
   fireEvent.click(within(inspector).getByRole('tab', { name }))
@@ -1680,7 +1692,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
 
     const toast = screen.getByRole('status')
 
@@ -1770,7 +1782,7 @@ describe('App', () => {
     const api = installDesktopApi({ listAgentRuntimes, listCoordinationSessions })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
     const workbench = await screen.findByTestId('agent-workbench')
@@ -1810,7 +1822,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
     const workbench = await screen.findByTestId('agent-workbench')
@@ -1842,7 +1854,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     await waitFor(() => expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local SQLite empty'))
     expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无 Run')
 
@@ -1874,7 +1886,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
 
     const localProjectPanel = screen.getByLabelText('Local project')
     expect(within(localProjectPanel).getByText('ai-fdc')).toBeInTheDocument()
@@ -1906,7 +1918,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
 
     const projectSelector = screen.getByLabelText('Project selector')
     const localProjectPanel = screen.getByLabelText('Local project')
@@ -2036,7 +2048,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
 
     expect(screen.getByText('未配对 Team')).toBeInTheDocument()
     expect(within(screen.getByLabelText('Project selector')).getByText('未绑定')).toBeInTheDocument()
@@ -2077,7 +2089,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
 
@@ -2089,7 +2101,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     await waitFor(() => expect(screen.getByRole('button', { name: /通过 Gate/ })).not.toBeDisabled())
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
@@ -2150,7 +2162,7 @@ describe('App', () => {
     const api = installDesktopApi()
     const { container } = render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
     fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
@@ -2174,7 +2186,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: `${fixtureRuns[0]!.title} actions` }))
     fireEvent.click(screen.getByRole('menuitem', { name: /删除本地 Run/ }))
     expect(screen.getByRole('dialog', { name: 'Delete run' })).toBeInTheDocument()
@@ -2193,7 +2205,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const menuTrigger = screen.getByRole('button', { name: `${fixtureRuns[0]!.title} actions` })
     await act(async () => {
       fireEvent.click(menuTrigger)
@@ -2246,7 +2258,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
     fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
@@ -2284,7 +2296,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
     fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
@@ -2370,7 +2382,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
@@ -2439,7 +2451,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
@@ -2460,7 +2472,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = await screen.findByTestId('node-inspector')
     await waitFor(() => expect(inspector).toHaveTextContent('启动 Coding Agent'))
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
@@ -2920,7 +2932,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
     const executorPicker = await screen.findByLabelText('Coding Executor')
     await waitFor(() => expect(api.getCodingRuntimeConfiguration).toHaveBeenCalled())
@@ -2975,7 +2987,7 @@ describe('App', () => {
       getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),
     })
     render(<App />)
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
     await waitFor(() => {
       expect(screen.getByLabelText('OpenCode Provider ID')).toHaveValue('team-deepseek')
@@ -3016,7 +3028,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('执行本地测试')
     expect(inspector).not.toHaveTextContent('Gate Enforcement')
@@ -3037,7 +3049,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
     const action = within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })
 
@@ -3059,7 +3071,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
 
     expect(within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })).toBeDisabled()
@@ -3078,7 +3090,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
 
     const toast = await screen.findByTestId('toast')
@@ -3124,7 +3136,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     const inspector = screen.getByTestId('node-inspector')
@@ -3177,7 +3189,7 @@ describe('App', () => {
     } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('Prepare GitHub Delivery')
     expect(within(inspector).queryByRole('button', { name: '生成 PR Delivery Package' })).not.toBeInTheDocument()
@@ -3217,7 +3229,7 @@ describe('App', () => {
     installDesktopApi({ loadState, reviseGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const button = within(screen.getByTestId('node-inspector')).getByRole(
       'button',
       { name: 'Revise GitHub Delivery' },
@@ -3256,7 +3268,7 @@ describe('App', () => {
     installDesktopApi({ loadState, reviseGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const button = within(screen.getByTestId('node-inspector')).getByRole(
       'button',
       { name: 'Revise GitHub Delivery' },
@@ -3297,7 +3309,7 @@ describe('App', () => {
     installDesktopApi({ loadState, retryGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const button = within(screen.getByTestId('node-inspector')).getByRole(
       'button',
       { name: 'Retry GitHub Delivery' },
@@ -3336,7 +3348,7 @@ describe('App', () => {
     } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const inspector = screen.getByTestId('node-inspector')
     const resumeButton = within(inspector).getByRole('button', { name: 'Resume GitHub Delivery' })
     expect(inspector).toHaveTextContent('recovery_required')
@@ -3375,7 +3387,7 @@ describe('App', () => {
     } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const stopButton = within(screen.getByTestId('node-inspector')).getByRole(
       'button',
       { name: 'Stop GitHub Delivery' },
@@ -3410,7 +3422,7 @@ describe('App', () => {
 
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const panel = screen.getByTestId('github-delivery-panel')
     expect(panel).toHaveTextContent('operation_cancelled')
     expect(panel).not.toHaveTextContent(/token|\/Users\/|worktree|raw error/i)
@@ -3427,8 +3439,8 @@ describe('App', () => {
     installDesktopApi({ loadState, stopGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: 'Stop GitHub Delivery' }))
+    await waitForLocalStateLoaded(loadState, 1)
+    fireEvent.click(await screen.findByRole('button', { name: 'Stop GitHub Delivery' }))
 
     await waitFor(() => expect(stopGitHubDelivery).toHaveBeenCalledTimes(1))
     const toast = screen.getByTestId('toast')
@@ -3450,8 +3462,8 @@ describe('App', () => {
     installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+    await waitForLocalStateLoaded(loadState, 1)
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume GitHub Delivery' }))
 
     await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
@@ -3466,7 +3478,10 @@ describe('App', () => {
     { code: 'service_unavailable', message: '交付服务暂不可用' },
   ])('shows safe recovery guidance for $code', async ({ code, message }) => {
     const recoveryIntent = githubDeliveryIntentFixture('recovery_required')
-    const loadState = vi.fn().mockResolvedValue(prDeliveryState(recoveryIntent))
+    const loadedState = prDeliveryState(recoveryIntent)
+    let finishInitialLoad!: (state: typeof loadedState) => void
+    const initialLoad = new Promise<typeof loadedState>((resolve) => { finishInitialLoad = resolve })
+    const loadState = vi.fn().mockReturnValueOnce(initialLoad).mockResolvedValue(loadedState)
     const resumeGitHubDelivery = vi.fn().mockResolvedValue({
       intentId: recoveryIntent.id,
       remoteRequestId: 'delivery-request-1',
@@ -3477,11 +3492,15 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('loading local IPC')
+    expect(screen.queryByRole('button', { name: 'Resume GitHub Delivery' })).not.toBeInTheDocument()
+    await act(async () => { finishInitialLoad(loadedState) })
+    await waitForLocalStateLoaded(loadState, 1)
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume GitHub Delivery' }))
 
     await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
     const toast = screen.getByTestId('toast')
-    expect(toast).toHaveTextContent(code)
+    await waitFor(() => expect(toast).toHaveTextContent(code))
     expect(toast).toHaveTextContent(message)
     expect(toast).not.toHaveTextContent('/Users/')
     expect(toast).not.toHaveTextContent('API_TOKEN')
@@ -3499,8 +3518,8 @@ describe('App', () => {
     installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+    await waitForLocalStateLoaded(loadState, 1)
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume GitHub Delivery' }))
 
     await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
     const toast = screen.getByTestId('toast')
@@ -3519,8 +3538,8 @@ describe('App', () => {
     installDesktopApi({ loadState, resumeGitHubDelivery } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: 'Resume GitHub Delivery' }))
+    await waitForLocalStateLoaded(loadState, 1)
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume GitHub Delivery' }))
 
     await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
@@ -3551,7 +3570,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('Draft PR 已创建')
     expect(within(inspector).getByRole('link', { name: 'Open Draft PR #17' })).toHaveAttribute(
@@ -3600,7 +3619,7 @@ describe('App', () => {
     } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     const verifyButton = within(screen.getByTestId('node-inspector')).getByRole(
       'button',
       { name: 'Verify credential revocation' },
@@ -3640,7 +3659,7 @@ describe('App', () => {
       })
       render(<App />)
 
-      await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+      await waitForLocalStateLoaded(api.loadState)
       expect(
         within(screen.getByTestId('node-inspector')).queryByRole('button', {
           name: 'Verify credential revocation',
@@ -3669,7 +3688,7 @@ describe('App', () => {
     } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     fireEvent.click(screen.getByRole('button', {
       name: 'Verify credential revocation',
     }))
@@ -3694,7 +3713,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     expect(screen.queryByRole('button', {
       name: 'Verify credential revocation',
     })).not.toBeInTheDocument()
@@ -3718,7 +3737,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     expect(screen.queryByRole('button', {
       name: 'Verify credential revocation',
     })).not.toBeInTheDocument()
@@ -3742,7 +3761,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     expect(screen.queryByRole('button', {
       name: 'Verify credential revocation',
     })).not.toBeInTheDocument()
@@ -3763,7 +3782,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     expect(screen.queryByRole('button', {
       name: 'Verify credential revocation',
     })).not.toBeInTheDocument()
@@ -3794,7 +3813,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     expect(screen.getByRole('button', {
       name: 'Verify credential revocation',
     })).toBeInTheDocument()
@@ -3838,7 +3857,7 @@ describe('App', () => {
       } as Partial<DevFlowDesktopApi>)
       render(<App />)
 
-      await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+      await waitForLocalStateLoaded(loadState, 1)
       fireEvent.click(screen.getByRole('button', {
         name: 'Verify credential revocation',
       }))
@@ -3874,7 +3893,7 @@ describe('App', () => {
     } as Partial<DevFlowDesktopApi>)
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     fireEvent.click(screen.getByRole('button', {
       name: 'Verify credential revocation',
     }))
@@ -3931,7 +3950,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
     const panel = within(inspector).getByTestId('github-delivery-panel')
     expect(inspector).toHaveTextContent('业务验收')
@@ -4017,7 +4036,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
@@ -4033,7 +4052,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     await waitFor(() =>
       expect(api.evaluateGateEnforcement).toHaveBeenCalledWith({
         runId: fixtureRuns[0]!.id,
@@ -4059,7 +4078,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-accept'))
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /生成验收证据包/ }))
@@ -4168,7 +4187,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const board = await screen.findByTestId('workflow-canvas')
     expect(board).toHaveTextContent('Run 模板')
     expect(board).toHaveTextContent('Team Policy')
@@ -4231,7 +4250,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-clarify'))
     const inspector = clickInspectorTab('Gate影响')
     const impact = within(inspector).getByTestId('gate-impact-summary')
@@ -4412,7 +4431,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
@@ -4455,7 +4474,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
@@ -4473,7 +4492,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
 
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
@@ -4533,7 +4552,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
 
     const inspector = await screen.findByTestId('node-inspector')
     expect(inspector).toHaveTextContent('方案评审 Gate')
@@ -4566,7 +4585,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = await screen.findByTestId('node-inspector')
     expect(inspector).toHaveTextContent('方案评审 Gate')
 
@@ -4615,7 +4634,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-design'))
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('方案设计')
@@ -4628,7 +4647,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.change(screen.getByLabelText('Desktop pairing code'), {
       target: { value: 'pair-p-payments.copy-once-secret' },
     })
@@ -4659,7 +4678,7 @@ describe('App', () => {
       }),
     })
     render(<App />)
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     expect(await screen.findByTestId('desktop-pairing-identity')).toHaveTextContent(
       '配对已过期 · 请重新绑定',
     )
@@ -4675,7 +4694,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('Next best action')
     expect(within(inspector).getByRole('button', { name: /通过 Gate/ })).toBeEnabled()
@@ -4693,7 +4712,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalled())
@@ -4960,7 +4979,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('theme-toggle'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ themePreference: 'light' }))
 
@@ -4982,7 +5001,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
       target: { value: 'health endpoint' },
     })
@@ -5004,7 +5023,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     clickInspectorTab(/Gate条件/)
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('API Health Endpoint Standard')
@@ -5023,7 +5042,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     clickInspectorTab(/Gate条件/)
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
     expect(screen.queryByRole('button', { name: /查看引用来源/ })).not.toBeInTheDocument()
@@ -5035,7 +5054,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
 
     expect(screen.getByTestId('tests-view')).toHaveTextContent('来自 Workbench Inspector')
@@ -5049,7 +5068,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
       target: { value: 'API Health Endpoint Standard' },
     })
@@ -5248,7 +5267,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
       target: { value: 'healthService.check' },
     })
@@ -5889,7 +5908,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     act(() => {
       handlers.run?.(completedCodingRun)
     })
@@ -5929,7 +5948,7 @@ describe('App', () => {
     installDesktopApi({ loadState, onCodingRunStatusUpdated })
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     act(() => handlers.run?.(timedOutCodingRun))
     await waitFor(() => expect(loadState).toHaveBeenCalledTimes(2))
   })
@@ -5947,7 +5966,7 @@ describe('App', () => {
     installDesktopApi({ loadState, onCodingEventAppended })
     render(<App />)
 
-    await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
+    await waitForLocalStateLoaded(loadState, 1)
     act(() => handlers.event?.({
       id: 'coding-cleanup-event', codingRunId: 'coding-run-cleanup', runId: buildRun.id, nodeId: 'n-build',
       sequence: 5, kind: 'cleanup', message: 'Managed coding workspace cleanup completed.',
@@ -6365,7 +6384,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
@@ -6430,7 +6449,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
@@ -6478,7 +6497,7 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByText('fixture-project')
     fireEvent.click(screen.getByRole('button', { name: '测试' }))
