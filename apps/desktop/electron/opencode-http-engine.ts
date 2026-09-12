@@ -221,7 +221,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         messagePromise: session.messagePromise,
         observeToolTurns: (signal) => refreshObservedToolTurns(session, signal),
         pollMs: config.permissionPollMs ?? 1_000, sessionId: session.sessionId,
-        timeoutMs: permissionWaitTimeout(session), maxWaitMs: remainingSessionMs(session),
+        timeoutMs: permissionWaitTimeout(session), maxWaitMs: remainingSessionMs(session), requireIdle: true,
         ...fetcherOption(config.fetcher),
       })
       if (outcome.kind !== 'permission') return outcome
@@ -1052,6 +1052,7 @@ async function waitForNextPermissionOrMessage(input: {
   sessionId: string
   timeoutMs: number
   maxWaitMs?: number
+  requireIdle?: boolean
 }): Promise<
   | { kind: 'message'; result: Awaited<OpencodeRuntimeSession['messagePromise']> }
   | { kind: 'permission'; permission: OpencodePermission }
@@ -1077,7 +1078,7 @@ async function waitForNextPermissionOrMessage(input: {
       input.messagePromise.then(() => undefined),
       new Promise<void>((resolve) => setTimeout(resolve, 0)),
     ])
-    if (settledMessage) {
+    if (settledMessage && (!input.requireIdle || (!settledMessage.ok && settledMessage.error instanceof OpencodeMessageResponseError))) {
       return { kind: 'message', result: settledMessage }
     }
     if (firstPermission) {
@@ -1102,7 +1103,7 @@ async function waitForNextPermissionOrMessage(input: {
       input.messagePromise.then(() => undefined),
       new Promise<void>((resolve) => setTimeout(resolve, 0)),
     ])
-    if (settledMessage) {
+    if (settledMessage && (!input.requireIdle || status?.type === 'idle' || status === undefined)) {
       return { kind: 'message', result: settledMessage }
     }
     if (status?.type === 'retry') {
@@ -1115,6 +1116,12 @@ async function waitForNextPermissionOrMessage(input: {
     }
 
     const waitMs = Math.max(0, Math.min(input.pollMs, expiresAt - Date.now()))
+    if (input.requireIdle) {
+      // A settled transport is not proof that the OpenCode session has stopped
+      // writing. Recheck permissions and status before capturing its final diff.
+      await new Promise<void>((resolve) => setTimeout(resolve, waitMs))
+      continue
+    }
     const result = await Promise.race([
       input.messagePromise.then((messageResult) => ({ kind: 'message' as const, result: messageResult })),
       new Promise<{ kind: 'tick' }>((resolve) => setTimeout(() => resolve({ kind: 'tick' }), waitMs)),

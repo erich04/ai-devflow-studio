@@ -29,6 +29,57 @@ import {
 } from './opencode-http-adapter'
 
 describe('opencode HTTP coding engine', () => {
+  it.each(['success', 'transport failure', 'busy past deadline'] as const)('waits for the managed session to become idle before capturing a settled message diff: %s', async (scenario) => {
+    let startedAt = 0
+    let capturedAt = 0
+    const patch = 'diff --git a/src/app.ts b/src/app.ts\n+export const ready = true\n'
+    const fetcher: Fetcher = async (input, init) => {
+      const url = String(input)
+      if (url.includes('/message?') && init?.method === 'POST') {
+        startedAt = Date.now()
+        if (scenario === 'transport failure') throw new Error('transport closed before session completion')
+        return new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()))
+      }
+      if (url.includes('/message?') || url.includes('/permission?') || url.includes('/diff?')) return new Response('[]')
+      if (url.includes('/session/status?')) return new Response(JSON.stringify({
+        'ses-1': { type: scenario === 'busy past deadline' || Date.now() - startedAt < 40 ? 'busy' : 'idle' },
+      }))
+      if (url.includes('/abort?')) return new Response('true')
+      return new Response(JSON.stringify(managedOpencodeSession()))
+    }
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory, fetcher,
+      captureWorktreeDiff: async () => { capturedAt = Date.now(); return { changedPaths: ['src/app.ts'], patch } },
+      requireExecutionAuthorization: true, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 10, maxWallClockMs: 200,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    const input = startInput({ run, node, project, workspace })
+    const authorization = expectPermissionResult(await engine.start(input))
+    vi.useFakeTimers()
+    try {
+      const result = engine.approvePermission({
+        codingRun: authorization.codingRun, request: authorization.permissionRequest,
+        workspace, project, authorizedStart: input, now: input.now,
+      }).then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }))
+      await vi.advanceTimersByTimeAsync(250)
+      const outcome = await result
+      if (scenario === 'busy past deadline') {
+        expect(outcome.error).toMatchObject({ code: 'permission_discovery_timed_out' })
+        expect(capturedAt).toBe(0)
+        return
+      }
+      expect(outcome.error).toBeUndefined()
+      expect(expectCompletedResult(outcome.value!).codingRun.status).toBe('completed')
+      expect(capturedAt - startedAt).toBeGreaterThanOrEqual(40)
+    } finally {
+      try { await engine.cancel({ codingRun: authorization.codingRun }) } finally { vi.useRealTimers() }
+    }
+  })
+
   it.each(['slow permission', 'execution deadline', 'hung permission poll'] as const)(
     'bounds authorized busy Provider work separately from permission discovery: %s', async (scenario) => {
     const permission = { id: 'slow-edit', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }
@@ -129,7 +180,7 @@ describe('opencode HTTP coding engine', () => {
         managedOpencodeSession(), successfulOpencodeMessage(), [permission],
         [{ ...permission, ...(scenario === 'permission changed' ? { metadata: { filepath: 'src/other.ts' } } : {}) }],
         [permission],
-        true, [], [], [],
+        true, [], scenario === 'unchanged' ? { 'ses-1': { type: 'idle' } } : [], [],
       ])
       const engine = createOpencodeHttpCodingEngineAdapter({
         binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',

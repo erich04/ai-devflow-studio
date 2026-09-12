@@ -360,6 +360,23 @@ describe('buildCodingBrief', () => {
 })
 
 describe('selectDependencyBootstrap', () => {
+  it('skips an explicitly dependency-free standalone app without running an install', () => {
+    expect(selectDependencyBootstrap(snapshot({}))).toMatchObject({ status: 'skipped', command: '', risk: 'safe' })
+  })
+
+  it.each([
+    { dependencies: { x: '1' } }, { devDependencies: { x: '1' } },
+    { optionalDependencies: { x: '1' } }, { peerDependencies: { x: '1' } },
+    { workspaces: ['packages/*'] }, { scripts: { prepare: 'node prepare.js' } },
+    { dependencies: 'invalid' }, { gypfile: true },
+  ])('keeps install approval for dependency or lifecycle inputs: %j', (manifest) => {
+    expect(selectDependencyBootstrap(snapshot({ 'package.json': JSON.stringify(manifest) })).status).toBe('needs_approval')
+  })
+
+  it.each(['pnpm-workspace.yaml', 'binding.gyp'])('does not skip install inputs described by %s', (name) => {
+    expect(selectDependencyBootstrap(snapshot({ [name]: 'present' })).status).toBe('needs_approval')
+  })
+
   it('uses frozen install commands for package-manager lockfiles', () => {
     expect(selectDependencyBootstrap(snapshot({ 'pnpm-lock.yaml': 'lock' })).command).toBe(
       'corepack pnpm install --frozen-lockfile',
@@ -374,7 +391,7 @@ describe('selectDependencyBootstrap', () => {
   })
 
   it('requires approval for non-frozen installs when package.json exists without a lockfile', () => {
-    const decision = selectDependencyBootstrap(snapshot({}))
+    const decision = selectDependencyBootstrap(snapshot({ 'package.json': JSON.stringify({ dependencies: { x: '1' } }) }))
 
     expect(decision.status).toBe('needs_approval')
     expect(decision.risk).toBe('warn')

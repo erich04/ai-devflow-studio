@@ -1007,7 +1007,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       risk: 'warn',
       reasons: [
         'No package-manager lockfile is present.',
-        'Approve this exact dependency command and dependency snapshot once before Native Coding starts.',
+        'Approve this exact dependency command and dependency snapshot once before coding or canonical tests continue.',
       ],
       status: 'pending',
       requestedAt: input.timestamp,
@@ -1353,7 +1353,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     timestamp: string
   }): Promise<boolean> {
     const { completedAt: engineCompletedAt, ...completedRunFields } = input.completed.codingRun
-    const bootstrappingRun: CodingAgentRun = {
+    let bootstrappingRun: CodingAgentRun = {
       ...completedRunFields,
       status: 'bootstrapping',
     }
@@ -1398,6 +1398,45 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         ...(input.completed.bootstrapEvidence
           ? { engineBootstrapEvidence: input.completed.bootstrapEvidence }
           : {}),
+      })
+    }
+    if (!bootstrapped.canContinue && bootstrapped.codingRun.status === 'waiting_permission') {
+      const evidence = (await deps.store.listDependencyBootstrapEvidence(bootstrappingRun.id))
+        .find((candidate) => candidate.id === bootstrapped.codingRun.bootstrapEvidenceId)
+      if (!evidence || evidence.status !== 'needs_approval') {
+        throw new Error('Post-executor dependency approval requires its exact bootstrap evidence.')
+      }
+      const request = createBootstrapPermissionRequest({ codingRun: bootstrapped.codingRun, evidence, timestamp: now() })
+      const decision = waitForBootstrapPermission(request.id)
+      let committed: CodingAgentMutationResult
+      try {
+        committed = await commitCodingAgentMutation({
+          expectedRun: bootstrappingRun, expectedPendingPermissionRequestIds: [],
+          run: bootstrapped.codingRun, permissionRequests: [request],
+          events: [{
+            id: idGenerator('coding-event'), codingRunId: bootstrappingRun.id,
+            runId: bootstrappingRun.runId, nodeId: bootstrappingRun.nodeId,
+            sequence: await nextSequence(bootstrappingRun.id), kind: 'permission',
+            message: 'Post-executor dependency bootstrap requires one-time approval before canonical tests.',
+            timestamp: request.requestedAt,
+            metadata: { requestId: request.id, origin: request.origin }, redacted: true,
+          }],
+        })
+      } catch (error) {
+        resolveBootstrapPermission(request.id, 'rejected')
+        throw error
+      }
+      if (!committed.committed) {
+        resolveBootstrapPermission(request.id, 'rejected')
+        return false
+      }
+      const decided = await decision
+      const currentRun = await findCodingRun(bootstrappingRun.id)
+      if (decided !== 'approved' || currentRun.status !== 'bootstrapping') return true
+      bootstrappingRun = currentRun
+      bootstrapped = await runCodingBootstrap({
+        codingRun: currentRun, project: input.project, workspace: input.workspace, timestamp: now(),
+        approvedNonFrozenInstall: { command: evidence.command, dependencyHash: evidence.dependencyHash },
       })
     }
     if (!bootstrapped.canContinue) {

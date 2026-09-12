@@ -264,6 +264,7 @@ describe('CodingRuntime', () => {
       }],
       true,
       [],
+      ...(requireExecutionAuthorization ? [{ 'ses-cross-runtime': { type: 'idle' } }] : []),
       [{
         file: 'devflow-opencode-smoke.txt',
         patch: 'diff --git a/devflow-opencode-smoke.txt b/devflow-opencode-smoke.txt\n+ok\n',
@@ -3806,7 +3807,7 @@ describe('CodingRuntime', () => {
     expect(completeWorkflowBuild).not.toHaveBeenCalled()
   })
 
-  it('runs runtime-owned dependency bootstrap before tests when the engine does not return bootstrap evidence', async () => {
+  it.each(['ready', 'approved', 'rejected', 'expired', 'stale'] as const)('settles runtime-owned bootstrap before OpenCode tests: %s', async (scenario) => {
     const repo = await gitRepo()
     const projectWithAbsoluteTestCommand = {
       ...project(repo),
@@ -3838,14 +3839,14 @@ describe('CodingRuntime', () => {
         }
       },
     }
-    const runDependencyBootstrap = vi.fn(async (): Promise<DependencyBootstrapEvidence> => ({
+    const runDependencyBootstrap = vi.fn(async (input: Parameters<CodingRuntimeDependencyBootstrapRunner>[0]): Promise<DependencyBootstrapEvidence> => ({
       id: 'bootstrap-runtime-1',
       codingRunId: 'coding-run-1',
       runId: 'run-1',
       nodeId: 'node-build',
       projectId: 'project-1',
       command: 'npm ci',
-      status: 'passed',
+      status: scenario === 'ready' ? 'passed' : input.approvedNonFrozenInstall ? (scenario === 'stale' ? 'failed' : 'passed') : 'needs_approval',
       exitCode: 0,
       durationMs: 15,
       stdout: 'installed',
@@ -3885,13 +3886,40 @@ describe('CodingRuntime', () => {
       userInstruction: 'Add the marker file.',
     })
 
-    await runtime.replyCodingPermission({
+    const completion = runtime.replyCodingPermission({
       requestId: store.permissionRequests[0]!.id,
       codingRunId: started.codingRun.id,
       decidedBy: 'user-1',
       decision: 'approved',
       comment: 'Approved from test.',
     })
+
+    if (scenario !== 'ready') {
+      await vi.waitFor(() => expect(store.permissionRequests.at(-1)).toMatchObject({
+        origin: 'dependency_bootstrap', status: 'pending', command: 'npm ci',
+      }))
+      expect(runTestCommand).not.toHaveBeenCalled()
+      expect(completeWorkflowBuild).not.toHaveBeenCalled()
+      const request = store.permissionRequests.at(-1)!
+      await runtime.replyCodingPermission({
+        requestId: request.id, codingRunId: started.codingRun.id, decidedBy: 'user-1',
+        decision: scenario === 'stale' ? 'approved' : scenario,
+        comment: 'Decide this exact bootstrap snapshot.',
+      })
+    }
+    await completion
+    if (scenario === 'rejected' || scenario === 'expired' || scenario === 'stale') {
+      expect(runTestCommand).not.toHaveBeenCalled()
+      expect(completeWorkflowBuild).not.toHaveBeenCalled()
+      expect(store.permissionRequests.some((request) => request.origin === 'change_acceptance')).toBe(false)
+      expect(store.codingRuns.at(-1)?.status).toBe(scenario === 'stale' ? 'failed' : scenario === 'expired' ? 'timed_out' : 'interrupted')
+      return
+    }
+    if (scenario === 'approved') {
+      expect(runDependencyBootstrap).toHaveBeenLastCalledWith(expect.objectContaining({
+        approvedNonFrozenInstall: { command: 'npm ci', dependencyHash: 'hash-runtime' },
+      }))
+    }
 
     expect(runDependencyBootstrap).toHaveBeenCalledWith({
       codingRun: expect.objectContaining({ id: 'coding-run-1' }),
