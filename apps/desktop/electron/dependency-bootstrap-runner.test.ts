@@ -5,9 +5,24 @@ import { describe, expect, it, vi } from 'vitest'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner'
 
 describe('dependency bootstrap runner', () => {
+  it('skips a dependency-free app and never invokes an install command', async () => {
+    const repo = await mkdtemp(path.join(os.tmpdir(), 'devflow-bootstrap-'))
+    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'blank-app', scripts: { test: 'node --test' } }))
+    const runCommand = vi.fn()
+    const input = {
+      codingRunId: 'coding-run-zero', runId: 'run-1', nodeId: 'n-build', projectId: 'project-1',
+      worktreePath: repo, runCommand, timeoutMs: 120_000, now: '2026-06-17T00:00:00.000Z',
+    }
+    expect(await runDependencyBootstrap(input)).toMatchObject({ status: 'skipped', command: '' })
+    expect(runCommand).not.toHaveBeenCalled()
+    await writeFile(path.join(repo, 'binding.gyp'), '{}')
+    expect(await runDependencyBootstrap(input)).toMatchObject({ status: 'needs_approval' })
+    expect(runCommand).not.toHaveBeenCalled()
+  })
+
   it('runs frozen install when node_modules is missing and a lockfile exists', async () => {
     const repo = await mkdtemp(path.join(os.tmpdir(), 'devflow-bootstrap-'))
-    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x' }))
+    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x', dependencies: { x: '1' } }))
     await writeFile(path.join(repo, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3 }))
     const runCommand = vi.fn(async () => ({
       status: 'passed' as const,
@@ -37,7 +52,7 @@ describe('dependency bootstrap runner', () => {
 
   it('does not run non-frozen install without explicit approval', async () => {
     const repo = await mkdtemp(path.join(os.tmpdir(), 'devflow-bootstrap-'))
-    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x' }))
+    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x', dependencies: { x: '1' } }))
     const runCommand = vi.fn()
 
     const evidence = await runDependencyBootstrap({
@@ -57,7 +72,7 @@ describe('dependency bootstrap runner', () => {
 
   it('runs the exact approved non-frozen install once', async () => {
     const repo = await mkdtemp(path.join(os.tmpdir(), 'devflow-bootstrap-'))
-    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x' }))
+    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x', dependencies: { x: '1' } }))
     const runCommand = vi.fn(async () => ({
       status: 'passed' as const,
       exitCode: 0,
@@ -104,7 +119,7 @@ describe('dependency bootstrap runner', () => {
 
   it('fails closed when dependency inputs no longer match the approval', async () => {
     const repo = await mkdtemp(path.join(os.tmpdir(), 'devflow-bootstrap-'))
-    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x' }))
+    await writeFile(path.join(repo, 'package.json'), JSON.stringify({ name: 'x', dependencies: { x: '1' } }))
     const runCommand = vi.fn()
 
     const evidence = await runDependencyBootstrap({

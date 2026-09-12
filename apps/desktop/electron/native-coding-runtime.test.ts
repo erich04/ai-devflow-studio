@@ -35,7 +35,7 @@ describe('Native Coding Runtime integration', () => {
     const storeDirectory = await temporaryDirectory('devflow-native-bootstrap-store')
     await writeFile(
       path.join(repositoryPath, 'package.json'),
-      '{"name":"native-bootstrap","scripts":{"test":"node test.mjs"}}\n',
+      '{"name":"native-bootstrap","scripts":{"test":"node test.mjs","prepare":"node --version"}}\n',
       'utf8',
     )
     await writeFile(

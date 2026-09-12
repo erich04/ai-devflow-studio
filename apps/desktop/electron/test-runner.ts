@@ -16,6 +16,8 @@ import { terminateProcessTree } from './opencode-process.js'
 
 const PROJECT_FILES = [
   'package.json',
+  'pnpm-workspace.yaml',
+  'binding.gyp',
   'pnpm-lock.yaml',
   'package-lock.json',
   'npm-shrinkwrap.json',

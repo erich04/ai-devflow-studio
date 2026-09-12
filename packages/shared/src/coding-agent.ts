@@ -284,6 +284,12 @@ export function selectDependencyBootstrap(
   }
 
   const command = frozenInstallCommand(snapshot.files, packageManager)
+  if (!command && hasNoDependencyInstallWork(snapshot.files)) {
+    return {
+      status: 'skipped', packageManager, command: '', dependencyHash, risk: 'safe',
+      reason: 'Standalone package declares no dependencies or install lifecycle work.',
+    }
+  }
   if (command) {
     return {
       status: 'required',
@@ -302,6 +308,27 @@ export function selectDependencyBootstrap(
     dependencyHash,
     risk: 'warn',
     reason: 'No package-manager lockfile found; non-frozen dependency install requires human approval.',
+  }
+}
+
+function hasNoDependencyInstallWork(files: Record<string, string>): boolean {
+  if ('pnpm-workspace.yaml' in files || 'binding.gyp' in files) return false
+  try {
+    const manifest: unknown = JSON.parse(files['package.json'] ?? '')
+    if (!isRecord(manifest) || manifest['workspaces'] !== undefined || manifest['gypfile'] === true) return false
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+      const value = manifest[field]
+      if (value !== undefined && (!isRecord(value) || Object.keys(value).length > 0)) return false
+    }
+    for (const field of ['bundledDependencies', 'bundleDependencies']) {
+      if (manifest[field] !== undefined) return false
+    }
+    const scripts = manifest['scripts']
+    if (scripts !== undefined && !isRecord(scripts)) return false
+    return !['preinstall', 'install', 'postinstall', 'prepublish', 'preprepare', 'prepare', 'postprepare']
+      .some((name) => isRecord(scripts) && scripts[name] !== undefined)
+  } catch {
+    return false
   }
 }
 
