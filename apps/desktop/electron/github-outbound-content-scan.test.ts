@@ -14,7 +14,9 @@ const tempDirs: string[] = []
 const scannedAt = '2026-08-17T20:00:00.000Z'
 
 afterEach(async () => {
-  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
+  await Promise.all(tempDirs.map((dir) => rm(dir, {
+    recursive: true, force: true, maxRetries: 5, retryDelay: 100,
+  })))
   tempDirs.length = 0
 })
 

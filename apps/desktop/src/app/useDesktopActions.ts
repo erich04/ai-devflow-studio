@@ -45,6 +45,7 @@ const safePublisherOutcomeCopy = {
   publisher_cleanup_failed: 'credential cleanup failed safely',
   remote_branch_diverged: 'remote delivery branch points to another commit',
   remote_unavailable: 'remote GitHub branch is unavailable',
+  service_unavailable: '交付服务暂不可用，请在服务恢复后重新 Resume',
   repository_mismatch: 'local Git remote does not match the approved repository',
   push_result_unknown: 'exact push result requires reconciliation',
   workspace_dirty: 'managed workspace changed after approval',

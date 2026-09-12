@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 27
+export const TEAM_SCHEMA_VERSION = 28
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',

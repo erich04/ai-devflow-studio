@@ -16,9 +16,14 @@ import { runLocalTestCommand } from './test-runner.js'
 
 const execFileAsync = promisify(execFile)
 const tempDirectories: string[] = []
+// Real npm startup and Git setup can exceed 20 seconds on hosted Windows runners.
+const bootstrapCommandTimeoutMs = process.platform === 'win32' ? 60_000 : 20_000
+const bootstrapIntegrationTimeoutMs = process.platform === 'win32' ? 120_000 : 20_000
 
 afterEach(async () => {
-  await Promise.all(tempDirectories.map((directory) => rm(directory, { recursive: true, force: true })))
+  await Promise.all(tempDirectories.map((directory) => rm(directory, {
+    recursive: true, force: true, maxRetries: 5, retryDelay: 100,
+  })))
   tempDirectories.length = 0
 })
 
@@ -115,7 +120,7 @@ describe('Native Coding Runtime integration', () => {
         ...(previousDependencyHash ? { previousDependencyHash } : {}),
         ...(approvedNonFrozenInstall ? { approvedNonFrozenInstall } : {}),
         runCommand: runLocalTestCommand,
-        timeoutMs: 20_000,
+        timeoutMs: bootstrapCommandTimeoutMs,
         now: timestamp,
       }),
     })
@@ -169,7 +174,7 @@ describe('Native Coding Runtime integration', () => {
     await expect(readFile(path.join(workspace!.worktreePath, 'package-lock.json'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' })
     store.close()
-  }, 20_000)
+  }, bootstrapIntegrationTimeoutMs)
 
   it.each([
     {

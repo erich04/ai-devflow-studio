@@ -19,10 +19,15 @@ import { createWorkflowRuntime } from './workflow-runtime.js'
 
 const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
+// Keep real npm/Git coverage without imposing a workstation-speed Windows deadline.
+const bootstrapCommandTimeoutMs = process.platform === 'win32' ? 60_000 : 20_000
+const integrationTimeoutMs = process.platform === 'win32' ? 120_000 : 30_000
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
+    temporaryDirectories.map((directory) => rm(directory, {
+      recursive: true, force: true, maxRetries: 5, retryDelay: 100,
+    })),
   )
   temporaryDirectories.length = 0
 })
@@ -256,7 +261,7 @@ describe('controlled OpenCode lifecycle', () => {
           ...(previousDependencyHash ? { previousDependencyHash } : {}),
           ...(approvedNonFrozenInstall ? { approvedNonFrozenInstall } : {}),
           runCommand: runLocalTestCommand,
-          timeoutMs: 20_000,
+          timeoutMs: bootstrapCommandTimeoutMs,
           now: timestamp,
         }),
         budgetGuard: async () => ({
@@ -393,5 +398,5 @@ describe('controlled OpenCode lifecycle', () => {
     } finally {
       store.close()
     }
-  }, 30_000)
+  }, integrationTimeoutMs)
 })
