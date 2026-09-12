@@ -2875,9 +2875,13 @@ describe('App', () => {
         },
       ],
     })
+    let settleReadiness!: (value: CodingRuntimeReadiness) => void
+    const pendingReadiness = new Promise<CodingRuntimeReadiness>((resolve) => {
+      settleReadiness = resolve
+    })
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
-      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(readiness),
+      getCodingRuntimeReadiness: vi.fn().mockReturnValue(pendingReadiness),
     })
     render(<App />)
 
@@ -2886,7 +2890,14 @@ describe('App', () => {
       expect(within(inspector).getByRole('button', { name: '完成 Coding Runtime 配置' })).toBeEnabled(),
     )
     expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
-      '预算评估阻止本次运行',
+      '正在检查配置',
+    )
+    await waitFor(() => expect(api.getCodingRuntimeReadiness).toHaveBeenCalled())
+    await act(async () => { settleReadiness(readiness) })
+    await waitFor(() =>
+      expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
+        '预算评估阻止本次运行',
+      ),
     )
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))

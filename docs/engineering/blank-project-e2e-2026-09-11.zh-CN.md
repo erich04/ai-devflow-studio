@@ -80,6 +80,7 @@ GitHub 合并由操作者通过 CLI 完成。DevFlow 本次受控交付能力的
 | [#110](https://github.com/erich04/ai-devflow-studio/issues/110) | Provider 名称 deepseek 与安全保存的内部 ID 不同，手填易错。用户批准后改为默认选择已保存 Provider，展示名称/模型，自动提交真实 ID；手填保留在高级选项。实际 Electron 选择、检测、保存 v4 成功，认证可用；高级开关启用/禁用字段正常。 | [#116](https://github.com/erich04/ai-devflow-studio/pull/116) |
 | [#117](https://github.com/erich04/ai-devflow-studio/issues/117) | README.md 与小写路径在 JS 和 Postgres 排序不同，导致 Delivery INSERT 失败。增量迁移 28 验证路径界限、去重及防穿越，不对签名数组另施数据库排序；API 仍验证规范顺序与摘要。原 Intent 不改写即恢复，完成真实 push 和 PR。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
 | [#119](https://github.com/erich04/ai-devflow-studio/issues/119) | 收尾 CI 发现 pairing code 偶发不出现；进一步确定性复现首次 passive effect 会丢弃已发出的有效请求。仅在项目/账号/角色实际变化时重置，保留旧响应隔离。20 项相关测试及 41 项浏览器回归通过。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
+| [#120](https://github.com/erich04/ai-devflow-studio/issues/120) | Desktop 预算用例把加载中也可用的按钮误当成 readiness 已完成。改用受控 Promise 覆盖 pending→blocked，并等待实际预算文案；保留 Workbench/Agents 一致性断言，产品代码与时限不变。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
 
 修复按各 PR 的云端检查结果合并并关闭关联 Issue。#117 的完整 Postgres 集成先在旧函数上复现失败，再在新增迁移后通过，覆盖混合大小写、中文、非相邻重复、非法类型、数量/长度上限与越界路径；既有迁移文件未改写，保留数据迁移检查通过。3855 项全量测试通过；新增路径反例与跨平台静态规则的冲突已用等价抽象绝对路径修正，静态检查通过。
 
