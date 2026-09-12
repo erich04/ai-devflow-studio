@@ -81,7 +81,7 @@ GitHub 合并由操作者通过 CLI 完成。DevFlow 本次受控交付能力的
 | [#117](https://github.com/erich04/ai-devflow-studio/issues/117) | README.md 与小写路径在 JS 和 Postgres 排序不同，导致 Delivery INSERT 失败。增量迁移 28 验证路径界限、去重及防穿越，不对签名数组另施数据库排序；API 仍验证规范顺序与摘要。原 Intent 不改写即恢复，完成真实 push 和 PR。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
 | [#119](https://github.com/erich04/ai-devflow-studio/issues/119) | 收尾 CI 发现 pairing code 偶发不出现；进一步确定性复现首次 passive effect 会丢弃已发出的有效请求。仅在项目/账号/角色实际变化时重置，保留旧响应隔离。20 项相关测试及 41 项浏览器回归通过。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
 | [#120](https://github.com/erich04/ai-devflow-studio/issues/120) | Desktop 用例误把 IPC 已调用或加载中可用的按钮当成界面已就绪。统一 76 处初始等待，核对可见的 local persisted 状态；用受控 Promise 验证延迟加载与预算 pending→blocked，145 项 App 回归通过。产品代码与时限不变。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
-| [#121](https://github.com/erich04/ai-devflow-studio/issues/121) | Windows 真实 Git/npm 集成在测试专用 20 秒预算下超时。仅对 Windows fixture 调整 bootstrap/整体测试预算为 60/120 秒，并为临时目录增加有限清理重试；生产 Provider、审批和测试执行时限未改动。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
+| [#121](https://github.com/erich04/ai-devflow-studio/issues/121) | Windows 真实 Git/npm 集成在测试专用 20 秒预算下超时。Windows 默认测试外层预算统一为 30 秒，专门的 bootstrap/整体集成预算为 60/120 秒，并为临时目录增加有限清理重试；生产 Provider、审批及命令超时未改动。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
 
 修复按各 PR 的云端检查结果合并并关闭关联 Issue。#117 的完整 Postgres 集成先在旧函数上复现失败，再在新增迁移后通过，覆盖混合大小写、中文、非相邻重复、非法类型、数量/长度上限与越界路径；既有迁移文件未改写，保留数据迁移检查通过。3855 项全量测试通过；新增路径反例与跨平台静态规则的冲突已用等价抽象绝对路径修正，静态检查通过。
 
