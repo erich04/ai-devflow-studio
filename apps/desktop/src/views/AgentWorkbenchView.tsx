@@ -163,8 +163,13 @@ export function AgentWorkbenchView({
   const [codingProviderId, setCodingProviderId] = useState('')
   const [providerRemovalTarget, setProviderRemovalTarget] = useState<AgentProviderConfig | null>(null)
   const [codingDiscovery, setCodingDiscovery] = useState<CodingRuntimeDiscovery | null>(null)
-  const [opencodeProviderId, setOpencodeProviderId] = useState('openai')
-  const [opencodeModelId, setOpencodeModelId] = useState('gpt-4.1-mini')
+  const [opencodeProviderId, setOpencodeProviderId] = useState('')
+  const [opencodeModelId, setOpencodeModelId] = useState('')
+  const [customOpenCodeProvider, setCustomOpenCodeProvider] = useState(false)
+  const opencodeDraftEdited = useRef(false)
+  const savedOpenCodeProvider = providers.find((provider) => provider.id === opencodeProviderId)
+  const effectiveOpenCodeProviderId = customOpenCodeProvider ? opencodeProviderId.trim() : savedOpenCodeProvider?.id ?? ''
+  const effectiveOpenCodeModelId = customOpenCodeProvider ? opencodeModelId.trim() : savedOpenCodeProvider?.model ?? ''
   const budgetPolicy = projectRuntimeBudget.policy
   const [monthlyLimitUsd, setMonthlyLimitUsd] = useState('0.20')
   const [warningThresholdUsd, setWarningThresholdUsd] = useState('0.10')
@@ -201,6 +206,7 @@ export function AgentWorkbenchView({
     let active = true
     void Promise.resolve(desktopApi.getCodingRuntimeConfiguration({ projectId: localProjectId })).then((configuration) => {
       if (!active) return
+      opencodeDraftEdited.current = false
       setCodingConfiguration(configuration)
       setCodingExecutor(configuration?.executor ?? 'native-model')
       setCodingProviderId(configuration?.providerId ?? selectedProviderId)
@@ -215,6 +221,19 @@ export function AgentWorkbenchView({
       active = false
     }
   }, [desktopApi, localProjectId, selectedRun?.id, selectedNode?.id, requestedBy])
+
+  useEffect(() => {
+    if (opencodeDraftEdited.current) return
+    if (codingConfiguration?.executor === 'opencode-http') {
+      const saved = providers.find((provider) => provider.id === codingConfiguration.providerId)
+      setCustomOpenCodeProvider(!saved || saved.model !== codingConfiguration.modelId)
+    } else {
+      const saved = providers.find((provider) => provider.id === selectedProviderId) ?? providers[0]
+      setOpencodeProviderId(saved?.id ?? '')
+      setOpencodeModelId(saved?.model ?? '')
+      setCustomOpenCodeProvider(false)
+    }
+  }, [codingConfiguration, providers, selectedProviderId])
 
   useEffect(() => {
     setMonthlyLimitUsd(budgetPolicy ? String(budgetPolicy.monthlyLimitUsd) : '0.20')
@@ -246,7 +265,7 @@ export function AgentWorkbenchView({
     if (codingExecutor === 'native-model' && !codingProviderId) return
     if (
       codingExecutor === 'opencode-http' &&
-      (!opencode?.binaryPath || !opencode.version || !opencodeProviderId.trim() || !opencodeModelId.trim())
+      (!opencode?.binaryPath || !opencode.version || !effectiveOpenCodeProviderId || !effectiveOpenCodeModelId)
     ) return
     setIsSavingCodingConfiguration(true)
     setCodingConfigurationStatus('正在保存项目级 Coding Executor…')
@@ -261,8 +280,8 @@ export function AgentWorkbenchView({
           : {
               projectId: localProjectId,
               executor: 'opencode-http',
-              providerId: opencodeProviderId.trim(),
-              modelId: opencodeModelId.trim(),
+              providerId: effectiveOpenCodeProviderId,
+              modelId: effectiveOpenCodeModelId,
               binaryPath: opencode!.binaryPath!,
               detectedVersion: opencode!.version!,
             },
@@ -272,7 +291,7 @@ export function AgentWorkbenchView({
       setCodingConfigurationStatus(
         saved.executor === 'native-model'
           ? `已保存 Native Executor · ${savedProviderName ?? '已保存 Provider'} · v${saved.version}`
-          : `已确认 OpenCode · ${saved.detectedVersion} · ${saved.providerId}/${saved.modelId} · v${saved.version}`,
+          : `已确认 OpenCode · ${saved.detectedVersion} · ${savedProviderName ?? saved.providerId} / ${saved.modelId} · v${saved.version}`,
       )
       await onRefreshCodingReadiness()
     } catch (error) {
@@ -981,13 +1000,36 @@ export function AgentWorkbenchView({
                       : codingDiscovery?.candidates[0]?.reason ?? '检测不会自动选择或启动 OpenCode。'}
                   </p>
                   <label>
-                    OpenCode Provider ID
-                    <input aria-label="OpenCode Provider ID" value={opencodeProviderId} onChange={(event) => setOpencodeProviderId(event.target.value)} />
+                    OpenCode 使用的已保存 Provider
+                    <select aria-label="OpenCode 已保存 Provider" disabled={customOpenCodeProvider} value={savedOpenCodeProvider?.id ?? ''} onChange={(event) => {
+                      opencodeDraftEdited.current = true
+                      const provider = providers.find((candidate) => candidate.id === event.target.value)
+                      setOpencodeProviderId(provider?.id ?? '')
+                      setOpencodeModelId(provider?.model ?? '')
+                    }}>
+                      <option value="">请选择已保存 Provider</option>
+                      {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+                    </select>
                   </label>
-                  <label>
-                    OpenCode Model ID
-                    <input aria-label="OpenCode Model ID" value={opencodeModelId} onChange={(event) => setOpencodeModelId(event.target.value)} />
-                  </label>
+                  <p className="empty-note">选择后复用本机已保存的凭据和模型，无需再次输入 API Key。</p>
+                  <details open={customOpenCodeProvider}>
+                    <summary>高级：手动指定 OpenCode Provider / Model</summary>
+                    <label>
+                      <input type="checkbox" checked={customOpenCodeProvider} onChange={(event) => {
+                        opencodeDraftEdited.current = true
+                        setCustomOpenCodeProvider(event.target.checked)
+                      }} />手动指定 OpenCode Provider / Model
+                    </label>
+                    <p className="empty-note">用于 OpenCode 中已配置的自定义 Provider；ID 必须与实际配置一致。</p>
+                    <label>
+                      OpenCode Provider ID
+                      <input aria-label="OpenCode Provider ID" disabled={!customOpenCodeProvider} value={opencodeProviderId} onChange={(event) => { opencodeDraftEdited.current = true; setOpencodeProviderId(event.target.value) }} />
+                    </label>
+                    <label>
+                      OpenCode Model ID
+                      <input aria-label="OpenCode Model ID" disabled={!customOpenCodeProvider} value={opencodeModelId} onChange={(event) => { opencodeDraftEdited.current = true; setOpencodeModelId(event.target.value) }} />
+                    </label>
+                  </details>
                 </>
               )}
               <button
@@ -996,7 +1038,7 @@ export function AgentWorkbenchView({
                   isSavingCodingConfiguration ||
                   (codingExecutor === 'native-model'
                     ? !codingProviderId
-                    : codingDiscovery?.candidates[0]?.status !== 'available' || !opencodeProviderId.trim() || !opencodeModelId.trim())
+                    : codingDiscovery?.candidates[0]?.status !== 'available' || !effectiveOpenCodeProviderId || !effectiveOpenCodeModelId)
                 }
                 onClick={saveCodingConfiguration}
               >
@@ -1005,7 +1047,7 @@ export function AgentWorkbenchView({
               <p className="empty-note">当前：{codingConfiguration
                 ? codingConfiguration.executor === 'native-model'
                   ? `Native · ${codingConfigurationProviderName} · v${codingConfiguration.version}`
-                  : `OpenCode ${codingConfiguration.detectedVersion} · ${codingConfiguration.providerId}/${codingConfiguration.modelId} · v${codingConfiguration.version}`
+                  : `OpenCode ${codingConfiguration.detectedVersion} · ${codingConfigurationProviderName === '旧版 Provider' ? codingConfiguration.providerId : codingConfigurationProviderName} / ${codingConfiguration.modelId} · v${codingConfiguration.version}`
                 : '未配置'}</p>
             </article>
 
