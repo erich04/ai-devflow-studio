@@ -1,8 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useLayoutEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PairingCodePanel } from './PairingCodePanel'
 
 const pairingSubject = { userId: 'u-lead', userName: 'Ling', role: 'lead' as const }
+const changedScopes = [
+  { name: 'project', projectId: 'p-two', subject: pairingSubject },
+  { name: 'account', projectId: 'p-one', subject: { ...pairingSubject, userId: 'u-other' } },
+  { name: 'role', projectId: 'p-one', subject: { ...pairingSubject, role: 'member' as const } },
+]
 
 function panel(projectId: string) {
   return (
@@ -20,6 +26,32 @@ afterEach(() => {
 })
 
 describe('PairingCodePanel', () => {
+  it('retains an issuance started before the initial passive effects finish', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      id: 'pair-p-one',
+      organizationId: 'org-demo',
+      projectId: 'p-one',
+      createdByUserId: 'u-lead',
+      issuedRole: 'lead',
+      code: 'p-one.early-click-secret',
+      expiresAt: '2026-08-01T12:10:00.000Z',
+      createdAt: '2026-08-01T12:00:00.000Z',
+      attemptsRemaining: 5,
+    }), { status: 201 }))
+    vi.stubGlobal('fetch', fetcher)
+
+    function EarlyClick() {
+      useLayoutEffect(() => {
+        screen.getByRole('button', { name: 'Create desktop pairing code' }).click()
+      }, [])
+      return panel('p-one')
+    }
+
+    await act(async () => { render(<EarlyClick />) })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('p-one.early-click-secret')).toBeVisible()
+  })
+
   it('shows the signed-in subject before creation and disables anonymous issuance', () => {
     const fetcher = vi.fn()
     vi.stubGlobal('fetch', fetcher)
@@ -83,7 +115,7 @@ describe('PairingCodePanel', () => {
     }))
   })
 
-  it('clears a copy-once code as soon as the selected project changes', async () => {
+  it.each(changedScopes)('clears a copy-once code when the $name changes', async ({ projectId, subject }) => {
     const fetcher = vi.fn(async () =>
       new Response(
         JSON.stringify({
@@ -106,14 +138,14 @@ describe('PairingCodePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
     await waitFor(() => expect(screen.getByText('p-one.copy-once-secret')).toBeInTheDocument())
 
-    rerender(panel('p-two'))
+    rerender(<PairingCodePanel projectId={projectId} projectName={projectId} subject={subject} />)
 
     expect(screen.queryByText('p-one.copy-once-secret')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Desktop pairing code for p-two')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(`Desktop pairing code for ${projectId}`)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '复制配对码' })).not.toBeInTheDocument()
   })
 
-  it('ignores an old project response that arrives after selection changes', async () => {
+  it.each(changedScopes)('ignores an old response that arrives after the $name changes', async ({ projectId, subject }) => {
     let resolveResponse!: (response: Response) => void
     const fetcher = vi.fn(
       () => new Promise<Response>((resolve) => {
@@ -132,7 +164,7 @@ describe('PairingCodePanel', () => {
       },
       body: JSON.stringify({ projectId: 'p-one' }),
     })
-    rerender(panel('p-two'))
+    rerender(<PairingCodePanel projectId={projectId} projectName={projectId} subject={subject} />)
 
     await act(async () => {
       resolveResponse(

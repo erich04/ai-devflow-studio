@@ -56,11 +56,21 @@ export function PairingCodePanel({ projectId, projectName, subject }: PairingCod
   const requestVersion = useRef(0)
   const currentProjectId = useRef(projectId)
   const currentSubjectKey = useRef(subject ? `${subject.userId}:${subject.role}` : '')
+  const initializedScope = useRef({ projectId, subjectKey: currentSubjectKey.current })
   const copyFeedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   currentProjectId.current = projectId
   currentSubjectKey.current = subject ? `${subject.userId}:${subject.role}` : ''
 
   useEffect(() => {
+    const subjectKey = subject ? `${subject.userId}:${subject.role}` : ''
+    if (
+      initializedScope.current.projectId === projectId &&
+      initializedScope.current.subjectKey === subjectKey
+    ) {
+      // A hydration-time click may precede this initial passive effect.
+      return
+    }
+    initializedScope.current = { projectId, subjectKey }
     requestVersion.current += 1
     if (copyFeedbackTimer.current) {
       clearTimeout(copyFeedbackTimer.current)

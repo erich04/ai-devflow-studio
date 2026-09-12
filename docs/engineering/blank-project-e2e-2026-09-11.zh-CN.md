@@ -79,8 +79,11 @@ GitHub 合并由操作者通过 CLI 完成。DevFlow 本次受控交付能力的
 | [#114](https://github.com/erich04/ai-devflow-studio/issues/114) | 消息返回与 session idle 不一致时可能过早采集差异。最小测试先失败，再等待真实 idle 后采集最终 Git diff；本轮最终指纹独立核对一致。原第二次会话的底层传输结果不可追溯，不宣称已确定其原始成因。 | [#115](https://github.com/erich04/ai-devflow-studio/pull/115) |
 | [#110](https://github.com/erich04/ai-devflow-studio/issues/110) | Provider 名称 deepseek 与安全保存的内部 ID 不同，手填易错。用户批准后改为默认选择已保存 Provider，展示名称/模型，自动提交真实 ID；手填保留在高级选项。实际 Electron 选择、检测、保存 v4 成功，认证可用；高级开关启用/禁用字段正常。 | [#116](https://github.com/erich04/ai-devflow-studio/pull/116) |
 | [#117](https://github.com/erich04/ai-devflow-studio/issues/117) | README.md 与小写路径在 JS 和 Postgres 排序不同，导致 Delivery INSERT 失败。增量迁移 28 验证路径界限、去重及防穿越，不对签名数组另施数据库排序；API 仍验证规范顺序与摘要。原 Intent 不改写即恢复，完成真实 push 和 PR。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
+| [#119](https://github.com/erich04/ai-devflow-studio/issues/119) | 收尾 CI 发现 pairing code 偶发不出现；进一步确定性复现首次 passive effect 会丢弃已发出的有效请求。仅在项目/账号/角色实际变化时重置，保留旧响应隔离。20 项相关测试及 41 项浏览器回归通过。 | [#118](https://github.com/erich04/ai-devflow-studio/pull/118) |
 
 修复按各 PR 的云端检查结果合并并关闭关联 Issue。#117 的完整 Postgres 集成先在旧函数上复现失败，再在新增迁移后通过，覆盖混合大小写、中文、非相邻重复、非法类型、数量/长度上限与越界路径；既有迁移文件未改写，保留数据迁移检查通过。3855 项全量测试通过；新增路径反例与跨平台静态规则的冲突已用等价抽象绝对路径修正，静态检查通过。
+
+#119 的初始 CI 故障没有归档浏览器 Trace；10 次普通本地重复均通过，因此未宣称确定该次 CI 的唯一原因。独立最小测试在父组件 layout effect 内触发真实点击处理器，确认请求成功返回却被 mount effect 的版本递增丢弃；修复前失败，修复后通过。测试还覆盖已显示的码和在途响应在项目、账号或角色变化后的清理。没有添加等待时间、自动重试发码或调整既有操作界面。
 
 ## 费用与范围
 
