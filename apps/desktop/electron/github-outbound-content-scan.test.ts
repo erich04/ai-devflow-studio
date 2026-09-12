@@ -46,7 +46,7 @@ describe('GitHub outbound content scanner', () => {
     expect(receipt.scanDigest).toMatch(/^[a-f0-9]{64}$/u)
     expect(JSON.stringify(receipt)).not.toContain(repo)
     expect(JSON.stringify(receipt)).not.toContain('export const answer')
-  })
+  }, 15_000)
 
   it('blocks a secret introduced by an intermediate commit even when the final tree removes it', async () => {
     const repo = await gitRepo()

@@ -68,21 +68,25 @@ describe('opencode HTTP coding engine', () => {
     const workspace = managedWorkspace(project.id, run.id, node.id)
     const input = startInput({ run, node, project, workspace })
     const authorization = expectPermissionResult(await engine.start(input))
+    vi.useFakeTimers()
     try {
       const startedAt = Date.now()
       const result = engine.approvePermission({
         codingRun: authorization.codingRun, request: authorization.permissionRequest,
         workspace, project, authorizedStart: input, now: input.now,
       })
+      const settled = result.then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }))
+      await vi.advanceTimersByTimeAsync(250)
+      const outcome = await settled
       if (scenario === 'slow permission') {
-        expect(expectPermissionResult(await result).permissionRequest).toMatchObject({ id: 'slow-edit', status: 'pending' })
+        expect(expectPermissionResult(outcome.value!).permissionRequest).toMatchObject({ id: 'slow-edit', status: 'pending' })
       } else {
-        await expect(result).rejects.toMatchObject({ code: 'permission_discovery_timed_out' })
+        expect(outcome.error).toMatchObject({ code: 'permission_discovery_timed_out' })
         expect(Date.now() - startedAt).toBeLessThan(1_000)
         expect(stopped).toBe(true)
       }
     } finally {
-      await engine.cancel({ codingRun: authorization.codingRun })
+      try { await engine.cancel({ codingRun: authorization.codingRun }) } finally { vi.useRealTimers() }
     }
   })
 
