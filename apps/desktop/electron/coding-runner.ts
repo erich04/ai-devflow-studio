@@ -4,6 +4,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { isGitWorkingTreeRoot } from './git-repository-boundary.js'
 import {
   buildCodingBrief,
   isActiveCodingAgentRunStatus,
@@ -111,12 +112,7 @@ export function findActiveCodingRun(
 }
 
 export async function isGitRepository(repositoryPath: string): Promise<boolean> {
-  try {
-    await execGit(repositoryPath, ['rev-parse', '--is-inside-work-tree'])
-    return true
-  } catch {
-    return false
-  }
+  return isGitWorkingTreeRoot(repositoryPath)
 }
 
 export async function createManagedCodingWorkspace(

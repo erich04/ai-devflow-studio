@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -64,6 +64,20 @@ function executionInput() {
 }
 
 describe('read-only local stage Agent executor', () => {
+  it('rejects a selected subdirectory before invoking the repository Agent', async () => {
+    const parent = await repository()
+    const selected = path.join(parent, 'empty-project')
+    await mkdir(selected)
+    let invoked = false
+    const localExecutor = executor(selected, async () => {
+      invoked = true
+      throw new Error('Agent must not be invoked outside a selected repository root')
+    })
+
+    await expect(localExecutor.execute(executionInput())).rejects.toThrow(/repository root/)
+    expect(invoked).toBe(false)
+  })
+
   it('passes only the bounded runtime environment allowlist to the managed CLI', () => {
     expect(buildReadOnlyStageAgentRuntimeEnv({
       PATH: '/usr/bin', LANG: 'en_US.UTF-8', SECRET_TOKEN: 'do-not-forward',

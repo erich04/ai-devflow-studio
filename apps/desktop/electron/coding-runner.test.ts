@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
@@ -30,6 +30,24 @@ afterEach(async () => {
 })
 
 describe('coding worktree manager', () => {
+  it('rejects an empty selected directory inside another repository without creating a branch', async () => {
+    const parent = await gitRepo()
+    const selected = path.join(parent, 'empty-project')
+    await mkdir(selected)
+    const branchesBefore = (await execFileAsync('git', ['-C', parent, 'branch', '--list'])).stdout
+
+    await expect(createManagedCodingWorkspace({
+      project: project(selected),
+      codingRunId: 'coding-run-nested-empty',
+      runId: 'run-nested-empty',
+      nodeId: 'node-build',
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+    })).rejects.toThrow(/not a git repository/)
+
+    expect((await execFileAsync('git', ['-C', parent, 'branch', '--list'])).stdout).toBe(branchesBefore)
+    expect(await isGitRepository(selected)).toBe(false)
+  })
+
   it('rejects non-git repositories before creating a managed worktree', async () => {
     const repo = await tempDir('devflow-non-git-')
     expect(await isGitRepository(repo)).toBe(false)
@@ -43,6 +61,19 @@ describe('coding worktree manager', () => {
         worktreeRoot: await tempDir('devflow-worktrees-'),
       }),
     ).rejects.toThrow(/not a git repository/)
+  })
+
+  it('recognizes independent nested repositories and physical root aliases', async () => {
+    const parent = await gitRepo()
+    const nested = path.join(parent, 'nested-repository')
+    await mkdir(nested)
+    await execFileAsync('git', ['init', nested])
+    const alias = path.join(await tempDir('devflow-repository-alias-'), 'selected')
+    await symlink(nested, alias, process.platform === 'win32' ? 'junction' : 'dir')
+
+    expect(await isGitRepository(nested)).toBe(true)
+    expect(await isGitRepository(alias)).toBe(true)
+    expect(await isGitRepository(path.join(parent, '.git'))).toBe(false)
   })
 
   it('creates an isolated git worktree and branch for a coding run', async () => {
@@ -60,6 +91,7 @@ describe('coding worktree manager', () => {
     expect(workspace.sourcePath).toBe(repo)
     expect(workspace.worktreePath.startsWith(worktreeRoot)).toBe(true)
     expect(workspace.branchName).toContain('devflow/run-1-node-build')
+    expect(await isGitRepository(workspace.worktreePath)).toBe(true)
     expect(await readFile(path.join(workspace.worktreePath, 'package.json'), 'utf8')).toContain('fixture')
 
     const { stdout } = await execFileAsync('git', ['-C', workspace.worktreePath, 'branch', '--show-current'])
