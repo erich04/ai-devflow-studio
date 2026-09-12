@@ -2076,22 +2076,35 @@ export function createOpenAiCompatibleAgentProvider({
             { role: 'user', content: prompt },
           ],
         }),
-      })
+      }).catch((error: unknown) => { throw classifyProviderTransportError(error) })
 
       if (!response.ok) {
-        throw new Error(await buildProviderFailureMessage(response))
+        throw providerHttpError(response.status)
       }
 
-      const body = (await readProviderJsonResponse(response)) as {
+      const responseMetadata = { httpStatus: response.status }
+      const body = (await readProviderJsonResponse(response).catch((error: unknown) => {
+        throw providerResponseError('invalid_response_json', true, responseMetadata, error)
+      })) as {
         choices?: Array<{ message?: { content?: string } }>
         usage?: unknown
       }
-      const raw = body.choices?.[0]?.message?.content
-      if (!raw) {
-        throw new Error('Agent provider returned empty workflow artifact output')
+      const raw = body?.choices?.[0]?.message?.content
+      if (typeof raw !== 'string' || !raw) {
+        throw providerResponseError('invalid_model_output', true, responseMetadata)
       }
-      const parsed = parseProviderJson<WorkflowArtifactProviderOutput>(raw, 'workflow artifact')
-      const usage = parseOpenAiCompatibleProviderUsage(body.usage, { providerId: id, model, baseUrl })
+      let parsed: Partial<WorkflowArtifactProviderOutput>
+      try {
+        parsed = parseProviderJson<WorkflowArtifactProviderOutput>(raw, 'workflow artifact')
+      } catch (error) {
+        throw providerResponseError('invalid_model_output', true, responseMetadata, error)
+      }
+      let usage: AgentProviderUsage | undefined
+      try {
+        usage = parseOpenAiCompatibleProviderUsage(body.usage, { providerId: id, model, baseUrl })
+      } catch (error) {
+        throw providerResponseError('invalid_usage', false, responseMetadata, error)
+      }
 
       const title = providerValueToString(parsed.title, request.stage === 'clarify' ? '需求澄清结果' : '方案设计')
       const summary = providerValueToString(parsed.summary, title)

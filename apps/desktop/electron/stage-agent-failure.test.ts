@@ -1,8 +1,12 @@
 import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { createServer } from 'node:http'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createWorkflowRunFromRequest, StageAgentExecutionError, type AgentTokenUsage } from '@ai-devflow/shared'
+import {
+  createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent,
+  StageAgentExecutionError, type AgentTokenUsage,
+} from '@ai-devflow/shared'
 import { createLocalStore } from './local-store'
 import { recordStageAgentFailure } from './stage-agent-failure'
 
@@ -38,6 +42,53 @@ async function fixture() {
 }
 
 describe('recordStageAgentFailure', () => {
+  it.each([
+    { status: 401, body: '{"error":{"message":"RAW_PROVIDER_CONTENT"}}', diagnostic: 'http_4xx, HTTP 401', billing: 'not_incurred' },
+    { status: 429, body: 'RAW_PROVIDER_CONTENT', diagnostic: 'http_429, HTTP 429', billing: 'not_incurred' },
+    { status: 503, body: 'RAW_PROVIDER_CONTENT', diagnostic: 'http_5xx, HTTP 503', billing: 'unknown' },
+    { status: 200, body: 'RAW_PROVIDER_CONTENT', diagnostic: 'invalid_response_json, HTTP 200', billing: 'unknown' },
+    { status: 200, body: '{"choices":[{"message":{"content":"RAW_PROVIDER_CONTENT"}}]}', diagnostic: 'invalid_model_output, HTTP 200', billing: 'unknown' },
+    { status: 0, body: '', diagnostic: 'connection_reset', billing: 'unknown' },
+  ])('preserves safe direct Provider $diagnostic through the real stage and SQLite audit', async ({ status, body, diagnostic, billing }) => {
+    const { input, dbPath } = await fixture()
+    const server = createServer((request, response) => {
+      if (!status) {
+        request.socket.destroy()
+        return
+      }
+      response.writeHead(status, { 'content-type': 'application/json' })
+      response.end(body)
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    try {
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('Provider fixture did not bind')
+      const provider = createOpenAiCompatibleAgentProvider({
+        id: 'test-provider', model: 'test-model', apiKey: 'PRIVATE_PROVIDER_KEY',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+      })
+      const error = await runWorkflowStageAgent({
+        run: input.run, node: input.run.nodes.find((node) => node.id === input.nodeId)!,
+        artifacts: [], provider, requestedBy: 'member', runtime: 'electron',
+      }).catch((failure: unknown) => failure)
+      await expect(recordStageAgentFailure({ ...input, executorKind: 'direct-provider', error }))
+        .rejects.toThrow(diagnostic)
+      const restored = await createLocalStore({ dbPath })
+      const traces = await restored.listAgentTraces(input.run.id)
+      const events = await restored.listEvents(input.run.id)
+      expect(traces[0]?.steps[0]?.summary).toContain(diagnostic)
+      expect(traces[0]?.steps[0]?.summary).toContain(`billing=${billing}`)
+      expect(events[0]?.message).toContain(diagnostic)
+      expect(JSON.stringify({ traces, events })).not.toMatch(/RAW_PROVIDER_CONTENT|PRIVATE_PROVIDER_KEY/)
+      expect(await restored.getRun(input.run.id)).toEqual(input.run)
+      expect(await restored.listArtifacts(input.run.id)).toEqual([])
+      expect(await restored.listAgentTokenUsage(input.run.id)).toEqual([])
+    } finally {
+      server.closeAllConnections()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
+  })
+
   it('persists each rejected response usage with its failure audit, without advancing the workflow', async () => {
     const { input, dbPath } = await fixture()
     for (const sequence of [1, 2]) {
