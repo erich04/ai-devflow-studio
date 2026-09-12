@@ -1688,6 +1688,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(codingSettings).toContainText('预算评估：允许执行')
 
     await codingSettings.getByLabel('Coding Executor').selectOption('opencode-http')
+    await expect(codingSettings.getByLabel('OpenCode 已保存 Provider')).toHaveValue('doubao-review')
     await codingSettings.getByRole('button', { name: '检测本机 OpenCode' }).click()
     await expect(codingSettings.getByTestId('opencode-discovery-status')).toContainText(
       '尚未确认用于当前项目',
@@ -1705,8 +1706,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     ).__codingConfigurationSaves[0])).toEqual({
       projectId: 'local-project-1',
       executor: 'opencode-http',
-      providerId: 'openai',
-      modelId: 'gpt-4.1-mini',
+      providerId: 'doubao-review',
+      modelId: 'ark-code-latest',
       binaryPath: '/opt/devflow/bin/opencode',
       detectedVersion: '1.2.3',
     })

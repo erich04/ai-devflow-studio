@@ -2899,8 +2899,11 @@ describe('App', () => {
     expect(within(workbench).getByText('budget_blocked')).toBeInTheDocument()
   })
 
-  it('detects OpenCode as a recommendation and saves it only after explicit project confirmation', async () => {
+  it.each(['saved', 'manual', 'empty'] as const)('selects OpenCode credentials by their saved IDs with explicit confirmation: %s', async (mode) => {
+    const savedProvider = { ...agentProvider, id: 'provider_opaque_deepseek', name: 'DeepSeek', model: 'deepseek-v4-flash' }
+    const secondProvider = { ...savedProvider, id: 'provider_other_deepseek', model: 'deepseek-reasoner' }
     const api = installDesktopApi({
+      listAgentProviders: vi.fn().mockResolvedValue(mode === 'empty' ? [] : [savedProvider, secondProvider]),
       loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
       getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),
     })
@@ -2922,15 +2925,58 @@ describe('App', () => {
     expect(api.saveCodingRuntimeConfiguration).not.toHaveBeenCalled()
     expect(screen.getByTestId('opencode-discovery-status')).toHaveTextContent('尚未确认用于当前项目')
 
-    fireEvent.click(screen.getByRole('button', { name: '确认并用于当前项目' }))
+    const savedPicker = screen.getByLabelText('OpenCode 已保存 Provider')
+    const confirm = screen.getByRole('button', { name: '确认并用于当前项目' })
+    if (mode === 'empty') {
+      expect(savedPicker).toHaveValue('')
+      expect(confirm).toBeDisabled()
+      return
+    }
+    expect(savedPicker).toHaveValue(savedProvider.id)
+    expect(within(savedPicker).getByRole('option', { name: 'DeepSeek · deepseek-v4-flash' })).toHaveValue(savedProvider.id)
+    if (mode === 'manual') {
+      fireEvent.click(screen.getByText('高级：手动指定 OpenCode Provider / Model'))
+      fireEvent.click(screen.getByRole('checkbox', { name: '手动指定 OpenCode Provider / Model' }))
+      fireEvent.change(screen.getByLabelText('OpenCode Provider ID'), { target: { value: 'team-deepseek' } })
+      fireEvent.change(screen.getByLabelText('OpenCode Model ID'), { target: { value: 'custom-model' } })
+    } else {
+      fireEvent.change(savedPicker, { target: { value: secondProvider.id } })
+    }
+    fireEvent.click(confirm)
     await waitFor(() => expect(api.saveCodingRuntimeConfiguration).toHaveBeenCalledWith({
       projectId: localProject.id,
       executor: 'opencode-http',
-      providerId: 'openai',
-      modelId: 'gpt-4.1-mini',
+      providerId: mode === 'manual' ? 'team-deepseek' : secondProvider.id,
+      modelId: mode === 'manual' ? 'custom-model' : secondProvider.model,
       binaryPath: '/opt/devflow/bin/opencode',
       detectedVersion: '1.2.3',
     }))
+  })
+
+  it('retains a saved OpenCode custom profile and model until the user changes them', async () => {
+    const configuration = {
+      projectId: localProject.id, executor: 'opencode-http', providerId: 'team-deepseek', modelId: 'custom-model',
+      binaryPath: '/opt/devflow/bin/opencode', detectedVersion: '1.2.3', version: 2, updatedAt: '2026-06-15T00:03:30.000Z',
+    }
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeConfiguration: vi.fn().mockResolvedValue(configuration),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),
+    })
+    render(<App />)
+    await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await waitFor(() => {
+      expect(screen.getByLabelText('OpenCode Provider ID')).toHaveValue('team-deepseek')
+      expect(screen.getByRole('checkbox', { name: '手动指定 OpenCode Provider / Model' })).toBeChecked()
+      expect(screen.getByLabelText('OpenCode Model ID')).toHaveValue('custom-model')
+    })
+    fireEvent.click(screen.getByRole('button', { name: '检测本机 OpenCode' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: '确认并用于当前项目' })).toBeEnabled())
+    fireEvent.click(screen.getByRole('button', { name: '确认并用于当前项目' }))
+    await waitFor(() => expect(api.saveCodingRuntimeConfiguration).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'team-deepseek', modelId: 'custom-model',
+    })))
   })
 
   it('binds Native Coding to an explicitly selected locally saved Provider', async () => {
