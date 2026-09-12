@@ -13,8 +13,9 @@
 - 新本地目录 `blank-mini-agent` 的初始条目为空。通过真实 Desktop 的原生目录选择器首次接入，未写代码、未生成脚手架、未创建工作流或配对。
 - GitHub CLI 旧登录失效，用户完成 device flow 后独立查询确认当前身份 erich04；未读取或输出访问令牌。
 - 远端 DevFlow 部署地址待用户确认。目前检测到的 Web/API/Postgres 为本机 Docker 自托管 QA，不将其表述为远端云部署。
-- 用户已确认 GitHub App 安装 `153168718` 将新仓库加入 Selected repositories，待后续产品绑定时核对实际授权。以前测试仓库的授权不等于本仓库已获授权。
+- 用户已确认 GitHub App 安装 `153168718` 将新仓库加入 Selected repositories。`2026-09-12T04:08:46Z` 使用产品 GitHub App 客户端只读核验通过，返回本轮 Repository ID、仓库名称、private 状态及默认分支 main；未提前写入 Team Project 或仓库绑定记录。
 - 首次本地 Git 初始化及初始空提交 `4bda12d` 已执行。初始提交无代码、脚手架、README 或测试文件，用于现有受管 worktree / Draft PR 流程要求的 Git 基线。这是本轮操作者执行的初始化步骤，不是复用旧项目，也不是 DevFlow 自动初始化能力的证明。
+- 复用旧 DeepSeek 凭据时，macOS safeStorage 返回 `errSecAuthFailed`（-25293），没有向新档案转移凭据或执行 Provider 调用。实际 Provider 表单已填写名称、官方地址和模型，等待用户在正常界面保存 Key；不在聊天、文件或日志中输出明文凭据。
 
 ## 已发现问题
 
@@ -27,6 +28,12 @@
 修复统一检查实际路径是否就是 Git working-tree root，用于 Desktop Git 状态、Coding 就绪/工作树创建和本地只读 Agent 执行前校验。拒绝祖先继承与 `.git` 元数据目录；独立嵌套仓库、路径别名和正常 linked worktree 保持支持。
 
 回归先失败后通过，27 项相关测试通过。完整 `corepack pnpm verify` 通过：273 个测试文件 / 3819 项测试、全仓类型检查与 Web 构建、跨平台检查。Desktop build 通过。重启实际 Desktop 后，同一空目录显示 `not a git repo`，不再显示祖先分支，0 Run / 未配对状态保留。Issue 待修复提交和云端 CI 后关闭。
+
+### #106：Windows 集成测试总时限不足
+
+[Issue #106](https://github.com/erich04/ai-devflow-studio/issues/106) 来自 PR #105 的 Windows CI：验证 Native Coding 修复阶段 Provider 超时的集成测试耗时 5078 ms，超过 Vitest 默认 5000 ms；同批其余 3814 项通过，4 项按平台跳过。
+
+本地只为真实 Git 启动增加 500 ms 延迟，即可复现同一外层测试超时。将这一个场景的总时限设为与相邻持久化重启测试相同的 15 秒后，同一延迟场景耗时 6249 ms 并通过；Provider 自身的 25 ms 超时和失败轨迹、无残留审批、工作树已删除断言保持不变。去掉延迟后，相关三个文件的 22 项测试通过。诊断包装器位于验证证据目录，未进入产品或实时验证环境。PR #105 等待更新后的云端 CI，不将该测试夹具误记为真实 DeepSeek 调用。
 
 ## 尚未完成
 

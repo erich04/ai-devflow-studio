@@ -473,5 +473,7 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
     )).toEqual([])
     expect((await store.listManagedCodingWorkspaces(fixture.project.id))[0])
       .toMatchObject({ cleanupStatus: 'deleted' })
-  })
+    // Approval, persisted repair failure, and Git cleanup can exceed 5s on Windows.
+    // Only the test deadline changes; the Provider timeout remains 25ms.
+  }, 15_000)
 })
