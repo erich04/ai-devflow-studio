@@ -38,6 +38,7 @@ describe('Native Coding Runtime integration', () => {
       '{"name":"native-bootstrap","scripts":{"test":"node test.mjs","prepare":"node --version"}}\n',
       'utf8',
     )
+    await writeFile(path.join(repositoryPath, '.npmrc'), 'audit=false\nfund=false\n', 'utf8')
     await writeFile(
       path.join(repositoryPath, 'test.mjs'),
       "import { readFile } from 'node:fs/promises'\nif ((await readFile('devflow-native-change.txt', 'utf8')) !== 'DevFlow deterministic Native Coding repair.\\n') process.exit(1)\n",
@@ -131,7 +132,7 @@ describe('Native Coding Runtime integration', () => {
       expect((await store.listCodingPermissionRequests()).find(
         (candidate) => candidate.origin === 'dependency_bootstrap' && candidate.status === 'pending',
       )).toBeDefined()
-    })
+    }, { timeout: 10_000 })
     const bootstrapPermission = (await store.listCodingPermissionRequests()).find(
       (candidate) => candidate.origin === 'dependency_bootstrap' && candidate.status === 'pending',
     )!

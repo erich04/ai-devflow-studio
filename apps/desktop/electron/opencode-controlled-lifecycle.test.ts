@@ -40,6 +40,7 @@ describe('controlled OpenCode lifecycle', () => {
     const storeDirectory = await temporaryDirectory('devflow-controlled-opencode-store')
     await mkdir(path.join(repositoryPath, 'src'))
     await writeFile(path.join(repositoryPath, '.gitignore'), 'node_modules\n', 'utf8')
+    await writeFile(path.join(repositoryPath, '.npmrc'), 'audit=false\nfund=false\n', 'utf8')
     await writeFile(path.join(repositoryPath, 'src/message.ts'), 'export const message = "old"\n', 'utf8')
     await writeFile(path.join(repositoryPath, 'src/value.ts'), 'export const value = 1\n', 'utf8')
     await writeFile(
@@ -316,6 +317,8 @@ describe('controlled OpenCode lifecycle', () => {
       expect(diff!.patch).toContain('diff --git a/src/value.ts b/src/value.ts')
       expect(diff!.patch).not.toContain('untrusted OpenCode summary')
       const [evidence] = await store.listTestEvidence(run.id)
+      expect(await store.listDependencyBootstrapEvidence(waitingForExecution.codingRun.id))
+        .toEqual([expect.objectContaining({ status: 'passed', command: 'npm ci' })])
       expect(evidence).toMatchObject({ command: 'npm test', cwd: '<workspace>', status: 'passed' })
       const events = await store.listCodingAgentEvents(waitingForExecution.codingRun.id)
       expect(events).toEqual(expect.arrayContaining([
