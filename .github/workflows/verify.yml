@@ -52,7 +52,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: github.event_name == 'workflow_dispatch'
         with:
-          name: ai-devflow-studio-v22-candidate-desktop
+          name: ai-devflow-studio-candidate-desktop
           path: out/verify-candidate-desktop/
           if-no-files-found: error
           retention-days: 30

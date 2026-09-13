@@ -8,11 +8,11 @@ DevFlow turns an AI-assisted code change into a governed delivery flow with loca
 
 _A real Electron workbench showing the six-stage workflow, local repository controls, Gate Enforcement, knowledge evidence, and agent actions._
 
-> **Current release and roadmap status:** `v1.5.0` remains the published baseline. The V2.0,
-> V2.1, and V2.2 feature milestones are complete, and the repository is preparing the formal
-> `v2.2.0` release. Historical milestone evidence remains immutable; the release is complete only
-> after a new exact candidate passes the formal signoff, is tagged, and is published. See the
-> [Roadmap](docs/roadmap.md) for current truth.
+> **Current release and roadmap status:** this branch prepares `v2.3.0`, including the workflow and coding
+> improvements since the published `v2.2.0` baseline. See the [V2.3 release notes](docs/releases/v2.3.0/notes.md)
+> for scope and the [GitHub Releases page](https://github.com/erich04/ai-devflow-studio/releases)
+> for published packages. Candidate verification and formal signoff are recorded separately;
+> historical V2.0, V2.1, and V2.2 milestone evidence remains unchanged.
 
 ## Why It Exists
 

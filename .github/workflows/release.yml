@@ -205,11 +205,11 @@ jobs:
         id: recorded-verify
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node scripts/validate-release-verify-run.mjs docs/releases/v2.2.0/release-required-gates.json
+        run: node scripts/validate-release-verify-run.mjs docs/releases/v2.3.0/release-required-gates.json
 
       - uses: actions/download-artifact@v8
         with:
-          name: ai-devflow-studio-v22-candidate-desktop
+          name: ai-devflow-studio-candidate-desktop
           path: out/release-candidate-desktop
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}

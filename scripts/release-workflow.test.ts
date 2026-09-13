@@ -103,9 +103,9 @@ describe('GitHub release workflow', () => {
     expect(artifactsJob).toContain('run-id: ${{ steps.recorded-verify.outputs.run-id }}')
     expect(artifactsJob).not.toContain('fs.readFileSync')
     expect(artifactsJob).not.toContain('Resolve exact-SHA candidate Desktop artifact')
-    expect(artifactsJob).toContain('name: ai-devflow-studio-v22-candidate-desktop')
+    expect(artifactsJob).toContain('name: ai-devflow-studio-candidate-desktop')
     expect(artifactsJob).toContain(
-      'docs/releases/v2.2.0/release-required-gates.json',
+      'docs/releases/v2.3.0/release-required-gates.json',
     )
     expect(artifactsJob).toContain('path: out/release-candidate-desktop')
     expect(artifactsJob).toContain(
@@ -248,7 +248,7 @@ describe('GitHub verify workflow', () => {
     const macosJob = jobBlock(workflow, 'macos-verify')
 
     expect(macosJob).toContain('actions/upload-artifact@v7')
-    expect(macosJob).toContain('name: ai-devflow-studio-v22-candidate-desktop')
+    expect(macosJob).toContain('name: ai-devflow-studio-candidate-desktop')
     expect(macosJob).toContain(
       'desktop-artifact-trio.mjs stage out/desktop-pilot/artifact-index.json out/verify-candidate-desktop',
     )

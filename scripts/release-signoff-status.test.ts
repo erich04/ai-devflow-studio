@@ -69,16 +69,16 @@ const otherRevocationIntentId =
 const revocationCheckedAt = '2026-08-11T12:30:00.000Z'
 
 function walkthroughContent(releaseSeries: string): string {
-  const governedRelease = releaseSeries === '1.5' || releaseSeries === '2.2'
+  const governedRelease = ['1.5', '2.2', '2.3'].includes(releaseSeries)
   if (!governedRelease) {
     return `# V${releaseSeries} walkthrough\n\nStatus: Passed\n\nCandidate: ${candidateSha}\n`
   }
 
-  const targetVersion = releaseSeries === '2.2' ? '2.2.0' : '1.5.0'
-  const teamSchema = releaseSeries === '2.2' ? 19 : 15
-  const desktopSchema = releaseSeries === '2.2' ? 32 : 17
+  const targetVersion = `${releaseSeries}.0`
+  const teamSchema = releaseSeries === '2.3' ? 28 : releaseSeries === '2.2' ? 19 : 15
+  const desktopSchema = releaseSeries === '2.3' ? 34 : releaseSeries === '2.2' ? 32 : 17
   const checkedAt =
-    releaseSeries === '2.2' ? '2026-08-18T12:30:00.000Z' : revocationCheckedAt
+    releaseSeries === '2.3' ? '2026-09-13T12:30:00.000Z' : releaseSeries === '2.2' ? '2026-08-18T12:30:00.000Z' : revocationCheckedAt
 
   return `# V${releaseSeries} walkthrough result
 
@@ -119,9 +119,11 @@ function record(path: string, value: Record<string, unknown>): EvidenceRecord {
 function snapshot(overrides: Partial<ReleaseSignoffSnapshot> = {}): ReleaseSignoffSnapshot {
   const targetVersion = overrides.targetVersion ?? '1.3.0'
   const releaseSeries = targetVersion.split('.').slice(0, 2).join('.')
-  const governedRelease = releaseSeries === '1.5' || releaseSeries === '2.2'
+  const governedRelease = ['1.5', '2.2', '2.3'].includes(releaseSeries)
   const evidenceDate =
-    releaseSeries === '2.2'
+    releaseSeries === '2.3'
+      ? '2026-09-13'
+      : releaseSeries === '2.2'
       ? '2026-08-18'
       : releaseSeries === '1.5'
         ? '2026-08-11'
@@ -590,6 +592,29 @@ describe('release signoff status', () => {
       expect.objectContaining({ id: 'release-profile', state: 'ready' }),
     )
   })
+
+  it('preserves all formal release gates and exact evidence boundaries for v2.3', () => {
+    expect(releaseProfileFor('2.3.0')?.requiredGateIds).toEqual(releaseProfileFor('2.2.0')?.requiredGateIds)
+    expect(releaseEvidencePaths('2.3.0')).toEqual({
+      walkthrough: 'docs/releases/v2.3.0/release-walkthrough.json',
+      requiredGates: 'docs/releases/v2.3.0/release-required-gates.json',
+      githubSandbox: 'docs/releases/v2.3.0/release-github-sandbox.json',
+    })
+    expect(evaluateReleaseSignoffSnapshot(snapshot({ targetVersion: '2.3.0' })).every((item) => item.state === 'ready')).toBe(true)
+    expect(() => releaseEvidencePaths('2.3.0', { DEVFLOW_RELEASE_GATE_RECORD: 'package.json' })).toThrow('noncanonical_release_evidence_path')
+  })
+
+  it.each(['artifact', 'schema', 'candidate', 'extra-field', 'operator'])(
+    'rejects invalid v2.3 %s evidence', (kind) => {
+      const value = snapshot({ targetVersion: '2.3.0' })
+      if (kind === 'artifact') value.desktopArtifactEvidence.actualSha256 = '0'.repeat(64)
+      if (kind === 'schema') value.walkthroughEvidence.referencedEvidenceContent = value.walkthroughEvidence.referencedEvidenceContent!.replace('Team schema v28', 'Team schema v19')
+      if (kind === 'candidate') value.requiredGateRecord.value!.candidateSha = signoffSha
+      if (kind === 'extra-field') value.githubSandboxRecord!.value!.unexpected = true
+      if (kind === 'operator') value.githubSandboxRecord!.value!.operatorRole = 'maintainer'
+      expect(evaluateReleaseSignoffSnapshot(value).some((item) => item.state === 'attention')).toBe(true)
+    },
+  )
 
   it('collects v1.5 GitHub sandbox evidence without touching paid OpenCode configuration', () => {
     const env = {

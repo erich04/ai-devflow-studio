@@ -35,7 +35,7 @@ const releaseSignoffPlan = readFileSync(
 
 describe('v1.4 pilot trust boundary contract', () => {
   it('preserves the released v1.4 history under the current v1.5 baseline', () => {
-    expect(roadmap).toContain('`v1.5.0` is the released baseline')
+    expect(roadmap).toContain('`v2.2.0` is the released baseline')
     expect(roadmap).toContain('Released `v1.4.0`')
     expect(roadmap).toContain('docs/releases/v1.4.0/')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary-prd.md')
