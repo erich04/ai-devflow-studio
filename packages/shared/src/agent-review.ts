@@ -1574,22 +1574,6 @@ function derivePolicyFindings(
 
   const allFindings = providerFindings.length > 0 ? providerFindings : derivedFindings
 
-  if (allFindings.length === 0) {
-    return [
-      createPolicyFinding(
-        reviewId,
-        request,
-        1,
-        {
-          category: 'review_gap',
-          severity: 'low',
-          summary: 'No blocking policy finding was produced by the review.',
-        },
-        createdAt,
-      ),
-    ]
-  }
-
   return allFindings.map((finding, index) =>
     createPolicyFinding(reviewId, request, index + 1, finding, createdAt),
   )

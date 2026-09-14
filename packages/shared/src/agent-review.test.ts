@@ -21,7 +21,9 @@ import {
   type KnowledgeReviewBudgetGuardInput,
 } from './agent-review'
 import type { Artifact, TestEvidence } from './domain'
-import { createRecommendedEnforcementPreset, resolveEffectivePolicy } from './enforcement'
+import { createRecommendedEnforcementPreset, evaluateGateEnforcement, resolveEffectivePolicy } from './enforcement'
+import { buildRemediationPlan } from './remediation'
+import { createRemoteAgentReviewSummary } from './remote-sync'
 
 it('reviews an existing acceptance bundle under the effective policy with final-delivery instructions', async () => {
   const acceptanceNode = { ...node, id: 'acceptance', stage: 'accept' as const, kind: 'acceptance' as const, artifactIds: ['acceptance-bundle'] }
@@ -869,6 +871,63 @@ describe('buildAgentReviewContext', () => {
 })
 
 describe('runKnowledgeReviewAgent', () => {
+  it.each([
+    { label: 'omitted findings', findings: undefined, expectedSummaries: [] },
+    { label: 'empty findings', findings: [], expectedSummaries: [] },
+    {
+      label: 'a real low-severity finding',
+      findings: [{ category: 'review_gap', severity: 'low', summary: 'Document the compatibility note.' }],
+      expectedSummaries: ['Document the compatibility note.'],
+    },
+  ])('projects $label through review, enforcement, remediation and sync (#124)', async ({ findings, expectedSummaries }) => {
+    const context = await buildAgentReviewContext({
+      run, node, artifacts, testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [],
+    })
+    const result = await runKnowledgeReviewAgent({
+      request: {
+        id: 'review-request-no-findings', runId: run.id, nodeId: node.id,
+        projectId: run.projectId, requestedBy: 'u-ling', runtime: 'electron',
+      },
+      context,
+      provider: createOpenAiCompatibleAgentProvider({
+        model: 'test-review-model', apiKey: 'test-only-key',
+        fetcher: async () => new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            conclusion: 'ready', summary: 'No changes required.',
+            risks: [], missingEvidence: [], suggestedTests: [],
+            policyFindings: findings, confidence: 1,
+          }) } }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      }),
+    })
+
+    expect(result.review.policyFindings.map((finding) => finding.summary)).toEqual(expectedSummaries)
+    expect(result.review.policyFindings).toEqual(expectedSummaries.map((summary) => expect.objectContaining({
+      reviewId: result.review.id, category: 'review_gap', severity: 'low', summary,
+    })))
+    expect(result.trace.steps.map((step) => step.kind)).toEqual(['context', 'retrieval', 'provider_call', 'artifact'])
+    expect(createRemoteAgentReviewSummary(result.review)).toMatchObject({
+      policyFindingCount: expectedSummaries.length,
+      policyFindings: expectedSummaries.map((summary) => expect.objectContaining({ summary })),
+    })
+
+    const decision = evaluateGateEnforcement({
+      run, node,
+      effectivePolicy: resolveEffectivePolicy(createRecommendedEnforcementPreset({
+        organizationId: 'org', updatedAt: result.review.createdAt,
+      }), null),
+      governanceChecks: [], agentPolicyFindings: result.review.policyFindings,
+      latestAgentReview: result.review, overrides: [], policySource: 'remote_cache',
+    })
+    expect(decision.blocksApproval).toBe(false)
+    expect(decision.warningReasons.map((reason) => reason.summary)).toEqual(expectedSummaries)
+    const remediation = buildRemediationPlan({
+      run, node, decision, governanceChecks: [], agentPolicyFindings: result.review.policyFindings,
+      testEvidence: [], knowledgeReferences: [], createdAt: result.review.createdAt,
+    })
+    expect(remediation.candidates.map((candidate) => candidate.summary)).toEqual(expectedSummaries)
+  })
+
   it('returns deterministic structured review output with trace and provider usage', async () => {
     const context = await buildAgentReviewContext({
       run,
@@ -909,14 +968,7 @@ describe('runKnowledgeReviewAgent', () => {
         }),
       }),
     ]))
-    expect(result.review.policyFindings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          category: 'review_gap',
-          severity: 'low',
-        }),
-      ]),
-    )
+    expect(result.review.policyFindings).toEqual([])
     expect(result.trace.steps.map((step) => step.kind)).toEqual([
       'context',
       'retrieval',
