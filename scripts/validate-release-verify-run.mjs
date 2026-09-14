@@ -7,9 +7,12 @@ export const canonicalV15GateRecord =
   'docs/releases/v1.5.0/required-gates.json'
 export const canonicalV22GateRecord =
   'docs/releases/v2.2.0/release-required-gates.json'
+export const canonicalV23GateRecord =
+  'docs/releases/v2.3.0/release-required-gates.json'
 export const canonicalReleaseGateRecords = new Set([
   canonicalV15GateRecord,
   canonicalV22GateRecord,
+  canonicalV23GateRecord,
 ])
 
 export function isCanonicalReleaseGateRecord(path) {

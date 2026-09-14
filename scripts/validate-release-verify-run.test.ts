@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   canonicalV15GateRecord,
   canonicalV22GateRecord,
+  canonicalV23GateRecord,
   isCanonicalReleaseGateRecord,
   validateRecordedVerifyRun,
   writeVerifiedRunIdOutput,
@@ -54,7 +55,7 @@ function fixture() {
 }
 
 describe('release Verify run authority', () => {
-  it('binds the validator to the canonical v1.5 and v2.2 gate records', () => {
+  it('binds the validator to the canonical v1.5, v2.2, and v2.3 gate records', () => {
     expect(canonicalV15GateRecord).toBe(
       'docs/releases/v1.5.0/required-gates.json',
     )
@@ -63,6 +64,8 @@ describe('release Verify run authority', () => {
     )
     expect(isCanonicalReleaseGateRecord(canonicalV15GateRecord)).toBe(true)
     expect(isCanonicalReleaseGateRecord(canonicalV22GateRecord)).toBe(true)
+    expect(canonicalV23GateRecord).toBe('docs/releases/v2.3.0/release-required-gates.json')
+    expect(isCanonicalReleaseGateRecord(canonicalV23GateRecord)).toBe(true)
     expect(isCanonicalReleaseGateRecord('tmp/required-gates.json')).toBe(false)
   })
 

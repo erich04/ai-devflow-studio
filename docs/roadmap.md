@@ -66,7 +66,15 @@ or a separately approved future charter.
 
 ## Current Release
 
-`v1.5.0` is the released baseline. Its annotated tag resolves to signoff commit
+`v2.2.0` is the released baseline, published on 2026-08-27. Its annotated tag points to
+`b4792f45873dd0b3a29b0d08cace68c699e489e0`, with candidate
+`e7ba425c4c57e736a40d3231bdfe3e70ee33a5a9`; formal records are in
+`docs/releases/v2.2.0/release-*`. The owner explicitly requested V2.3 on 2026-09-13.
+V2.3 packages the existing native coding, onboarding, Provider, approval, and verified delivery
+improvements; it adds no new automatic Multi-Agent or hosted SaaS charter. The published
+[GitHub Releases](https://github.com/erich04/ai-devflow-studio/releases) remain authoritative.
+
+Historical V1.5 release: Its annotated tag resolves to signoff commit
 `bd7de6f82c3a60092816bd947f5590e9f148c3ae`, whose direct parent is candidate
 `f461f9d9de300b8e4a15fe31be8f518bde37b2b8`.
 
@@ -82,16 +90,16 @@ contains the signoff-bound release artifacts.
 
 | Layer | Current status |
 | --- | --- |
-| Released baseline | `v1.5.0` signed off, tagged, and published |
-| Release evidence | `docs/releases/v1.5.0/` |
+| Released baseline | `v2.2.0` signed off, tagged, and published |
+| Release evidence | `docs/releases/v2.2.0/release-*` |
 | V1.5 product contract | `docs/product/prd/v1.5-github-delivery-prd.md` |
 | V1.5 execution history | `docs/plans/v1.5-github-delivery.md` and the four immutable release evidence files |
 | Completed version line | 1.x governed self-hosted delivery |
-| Release candidate | Formal `v2.2.0` closeout in progress; no tag or publication claimed |
+| Release candidate | Owner-approved `v2.3.0` release preparation; no V2.3 publication claimed |
 | Completed 2.x milestones | V2.0 Native Agent Runtime Foundation; V2.1 Evaluated Retrieval And Memory; V2.2 Multi-Agent And Execution Tenancy |
 | Completion evidence | `docs/releases/v2.0.0/`; `docs/releases/v2.1.0/`; `docs/releases/v2.2.0/` |
-| Current 2.x state | Feature milestones complete; formal release signoff remains open |
-| Next gate | Freeze a new V2.2 release candidate, pass the formal matrix, add direct-child release evidence, then tag and publish |
+| Current 2.x state | V2.2 published; V2.3 candidate signoff in progress |
+| Next gate | Verify the V2.3 candidate, complete independent packaged signoff, then tag and publish |
 
 The finite 1.x product line is complete. Its final walkthrough proved one authenticated Work Request
 became one canonical local Run, one tested commit, one human-approved Draft pull request, a cold
@@ -165,7 +173,7 @@ The superseded implementation-period markers `### Now — Run V2.1 Evaluation An
 `| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |` remain here only
 as auditable phase vocabulary; the current table and the single `Now` heading below are authoritative.
 
-### Now — Formally Release The Completed 2.x Line
+### Now — Release V2.3 Workflow Improvements
 
 V2.0, V2.1, and V2.2 are complete, and the finite accepted 2.x line is closed. Candidate
 `c765147be5e86b5b931999c552d951a0c9002562` passed the exact ten-scenario Single-vs-Multi evaluator,
@@ -173,14 +181,14 @@ the full local/PG16/Docker/packaged matrix, first-attempt five-job Verify run `3
 exclusive Desktop artifact gate. Immutable V2.2 completion records are stored under
 `docs/releases/v2.2.0/`.
 
-That record is milestone-completion evidence, not a published `v2.2.0` release. Security,
-persistence, and documentation changes landed after the milestone candidate, so the formal release
-uses a new clean candidate and separate `release-*` evidence records. The procedure is defined in
-`docs/plans/v2.2-release-signoff.md`; the old V2.2 records remain immutable.
+Those records are milestone-completion evidence. The separately published `v2.2.0` release uses
+`docs/releases/v2.2.0/release-*` and `docs/plans/v2.2-release-signoff.md`; none of those records is rewritten.
 
-Current work is limited to maintenance, security/dependency updates, and evidence-promoted fixes.
-There is no automatic V2.3; a future feature charter must be explicitly promoted through this single
-Roadmap before product implementation begins.
+The owner-approved V2.3 release is governed by `docs/plans/v2.3-release-signoff.md` and
+`docs/guides/devflow-studio-v2.3-walkthrough.md`. It retains the exact-candidate CI, archive integrity,
+independent packaged walkthrough, human approval, restart/revocation, and redaction requirements.
+The current task is release verification and packaging of already implemented improvements.
+There is no automatic V2.3 feature expansion or new multi-Agent/public SaaS charter.
 
 The V2.2 contract set is frozen in:
 

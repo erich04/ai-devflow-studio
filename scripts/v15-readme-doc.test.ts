@@ -1,38 +1,14 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
-const hasV20CompletionEvidence = existsSync('docs/releases/v2.0.0/required-gates.json') &&
-  existsSync('docs/releases/v2.0.0/agent-runtime-evaluation.json')
-const hasV21CompletionEvidence = existsSync('docs/releases/v2.1.0/required-gates.json') &&
-  existsSync('docs/releases/v2.1.0/retrieval-memory-evaluation.json')
-const hasV22CompletionEvidence = existsSync('docs/releases/v2.2.0/required-gates.json') &&
-  existsSync('docs/releases/v2.2.0/multi-agent-evaluation.json')
-
 describe('release README truth', () => {
-  it('records the published V1.5 baseline and formal V2.2 closeout', () => {
+  it('records the published V2.2 baseline and separate V2.3 preparation', () => {
     const readme = readFileSync('README.md', 'utf8')
 
-    expect(readme).toContain('`v1.5.0` remains the published baseline')
-    if (hasV22CompletionEvidence) {
-      expect(readme).toContain('The V2.0,')
-      expect(readme).toContain('V2.1, and V2.2 feature milestones are complete')
-      expect(readme).toContain('preparing the formal')
-      expect(readme).toContain('`v2.2.0` release')
-      expect(readme).toContain('after a new exact candidate passes the formal signoff')
-    } else if (hasV21CompletionEvidence) {
-      expect(readme).toContain(
-        'V2.0 Native Agent Runtime and V2.1 Evaluated Retrieval and Memory are complete',
-      )
-      expect(readme).toContain('V2.2')
-      expect(readme).toContain('Multi-Agent and Execution Tenancy is now the active priority')
-    } else if (hasV20CompletionEvidence) {
-      expect(readme).toContain('V2.0 Native Agent Runtime is complete')
-      expect(readme).toContain('V2.1 Evaluated Retrieval and Memory is now the active priority')
-    } else {
-      expect(readme).toContain('V2.0 Native Agent Runtime implementation is now the active priority')
-      expect(readme).toContain('Slice 7 is complete')
-      expect(readme).toContain('Slice 8 evaluation and completion gate is in progress')
-    }
+    expect(readme).toContain('published `v2.2.0` baseline')
+    expect(readme).toContain('`v2.3.0`')
+    expect(readme).toContain('docs/releases/v2.3.0/notes.md')
+    expect(readme).toContain('Candidate verification and formal signoff are recorded separately')
     expect(readme).toContain('Delivery Intent')
     expect(readme).toContain('signed Web approval')
     expect(readme).toContain('GitHub App')

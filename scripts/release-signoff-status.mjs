@@ -174,6 +174,18 @@ const releaseProfiles = {
   },
 }
 
+// V2.3 keeps the candidate-bound V2.2 gates and separate release evidence.
+// Historical release profiles and their recorded schema versions stay immutable.
+releaseProfiles['2.3'] = {
+  ...releaseProfiles['2.2'],
+  requiredDocPaths: [
+    ...releaseProfiles['2.2'].requiredDocPaths,
+    'docs/plans/v2.3-release-signoff.md',
+    'docs/guides/devflow-studio-v2.3-walkthrough.md',
+    'docs/releases/v2.3.0/notes.md',
+  ],
+}
+
 function releaseSeriesFor(targetVersion) {
   if (typeof targetVersion !== 'string') {
     return null
@@ -554,7 +566,7 @@ const v15GitHubSandboxKeys = [
 
 function v15EvidenceShapeIssue(snapshot, kind, value) {
   const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
-  if (releaseSeries !== '1.5' && releaseSeries !== '2.2') {
+  if (!['1.5', '2.2', '2.3'].includes(releaseSeries)) {
     return null
   }
   const profileGateIds = releaseProfileFor(snapshot.targetVersion)?.requiredGateIds ?? []
@@ -689,7 +701,7 @@ function evaluateWalkthroughEvidence(snapshot) {
     value.evidencePath === expectedPath &&
     snapshot.walkthroughEvidence.referencedEvidenceExists === true &&
     snapshot.walkthroughEvidence.referencedEvidenceReadError === null &&
-    ((releaseSeries !== '1.5' && releaseSeries !== '2.2') ||
+    (!['1.5', '2.2', '2.3'].includes(releaseSeries) ||
       isValidV15WalkthroughContent(
         snapshot.walkthroughEvidence.referencedEvidenceContent,
         snapshot,
@@ -742,7 +754,7 @@ function evaluateRequiredGateRecord(snapshot) {
       : profileGateIds.filter((gate) => gates[gate] !== 'passed')
 
   const v15MetadataValid =
-    !['1.5', '2.2'].includes(releaseSeriesFor(snapshot.targetVersion)) ||
+    !['1.5', '2.2', '2.3'].includes(releaseSeriesFor(snapshot.targetVersion)) ||
     isValidV15GateMetadata(value, snapshot)
   return {
     id: 'required-gates',
@@ -948,9 +960,11 @@ function isValidV15WalkthroughContent(content, snapshot) {
   const walkthroughDate = snapshot.walkthroughEvidence?.value?.date
   const releaseSeries = releaseSeriesFor(snapshot.targetVersion)
   const schemaVersions =
-    releaseSeries === '2.2'
-      ? { team: 19, desktop: 32 }
-      : { team: 15, desktop: 17 }
+    releaseSeries === '2.3'
+      ? { team: 28, desktop: 34 }
+      : releaseSeries === '2.2'
+        ? { team: 19, desktop: 32 }
+        : { team: 15, desktop: 17 }
   const sameUtcEvidenceDate =
     typeof walkthroughDate === 'string' &&
     /^\d{4}-\d{2}-\d{2}$/u.test(walkthroughDate) &&

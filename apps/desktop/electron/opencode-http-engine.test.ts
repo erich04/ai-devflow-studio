@@ -49,6 +49,8 @@ describe('opencode HTTP coding engine', () => {
     }
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      // Keep the session and polling deadlines on the same virtual clock.
+      nowMs: () => Date.now(),
       processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory, fetcher,
       captureWorktreeDiff: async () => { capturedAt = Date.now(); return { changedPaths: ['src/app.ts'], patch } },
       requireExecutionAuthorization: true, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 10, maxWallClockMs: 200,
@@ -109,6 +111,8 @@ describe('opencode HTTP coding engine', () => {
     }
     const engine = createOpencodeHttpCodingEngineAdapter({
       binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      // Keep the session and polling deadlines on the same virtual clock.
+      nowMs: () => Date.now(),
       processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory,
       fetcher, requireExecutionAuthorization: true,
       permissionPollMs: 1, permissionDiscoveryTimeoutMs: 10, maxWallClockMs: scenario === 'execution deadline' ? 35 : 200,

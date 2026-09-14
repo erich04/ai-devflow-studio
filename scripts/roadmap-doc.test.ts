@@ -47,7 +47,7 @@ describe('product roadmap source of truth', () => {
     expect(currentRelease).toBeDefined()
     expect([...markdown.matchAll(/^## Current Release$/gmu)]).toHaveLength(1)
     expect([...markdown.matchAll(/^### Now —/gmu)]).toHaveLength(1)
-    expect(currentRelease).toContain('`v1.5.0` is the released baseline')
+    expect(currentRelease).toContain('`v2.2.0` is the released baseline')
     expect(currentRelease).toContain('docs/releases/v1.5.0/')
     expect(currentRelease).toContain('f461f9d9de300b8e4a15fe31be8f518bde37b2b8')
     expect(currentRelease).toContain('bd7de6f82c3a60092816bd947f5590e9f148c3ae')
@@ -98,7 +98,7 @@ describe('product roadmap source of truth', () => {
       'V1.5 and the finite 1.x line are released and complete',
     )
     if (hasV22CompletionEvidence) {
-      expect(markdown).toContain('### Now — Formally Release The Completed 2.x Line')
+      expect(markdown).toContain('### Now — Release V2.3 Workflow Improvements')
       expect(markdown).toContain('| 2.x | DevFlow-native Agent Runtime')
       expect(markdown).toContain('Completed at V2.2.')
     } else if (hasV21CompletionEvidence) {
@@ -125,14 +125,14 @@ describe('product roadmap source of truth', () => {
       /## Now \/ Next \/ Later[\s\S]*?(?=\n## Completed Milestones)/u,
     )?.[0]
 
-    expect(currentRelease).toContain('`v1.5.0` is the released baseline')
+    expect(currentRelease).toContain('`v2.2.0` is the released baseline')
     expect(currentRelease).toContain('The finite 1.x product line is complete')
     expect(currentRelease).not.toContain('release and 1.x completion gate remain pending')
     if (hasV22CompletionEvidence) {
-      expect(priorities).toContain('### Now — Formally Release The Completed 2.x Line')
+      expect(priorities).toContain('### Now — Release V2.3 Workflow Improvements')
       expect(priorities).toContain('V2.0, V2.1, and V2.2 are complete')
       expect(priorities).toContain('docs/releases/v2.2.0/')
-      expect(priorities).toContain('milestone-completion evidence, not a published `v2.2.0` release')
+      expect(priorities).toContain('separately published `v2.2.0` release')
       expect(priorities).toContain('docs/plans/v2.2-release-signoff.md')
       expect(priorities).toContain('There is no automatic V2.3')
     } else if (hasV21CompletionEvidence) {

@@ -8,6 +8,8 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
+    // Bound concurrent UI, Git, and SQLite fixtures consistently across hosts.
+    maxWorkers: 2,
     // Real Git/SQLite/filesystem fixtures need host scheduling margin on Windows.
     // Explicit per-test deadlines and application execution limits stay separate.
     testTimeout: process.platform === 'win32' ? 30_000 : 5_000,
