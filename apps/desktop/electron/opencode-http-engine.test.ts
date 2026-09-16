@@ -482,6 +482,40 @@ describe('opencode HTTP coding engine', () => {
     },
   )
 
+  it('rechecks Memory immediately before relaying an approved tool permission', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(), successfulOpencodeMessage(),
+      [{ id: 'edit-memory', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+      true, [], [], [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory, fetcher,
+      permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    let current = true
+    let deleteAfterCheck = false
+    const assertContextCurrent = async () => {
+      if (!current) throw new Error('Coding Memory changed')
+      // Emulate deletion after the approval entry check has succeeded.
+      if (deleteAfterCheck) current = false
+    }
+    const started = expectPermissionResult(await engine.start({
+      ...startInput({ run, node, project, workspace }), assertContextCurrent,
+    }))
+    deleteAfterCheck = true
+    await expect(engine.approvePermission({
+      codingRun: started.codingRun, request: started.permissionRequest, workspace, project,
+      now: '2026-06-17T00:00:01.000Z', assertContextCurrent,
+    })).rejects.toThrow('Coding Memory changed')
+    expect(fetcher.bodies.some((body) => JSON.parse(body).reply === 'once')).toBe(false)
+    expect(fetcher.urls.filter((url) => url.includes('/abort?'))).toHaveLength(1)
+  })
+
   it('does not start OpenCode or contact its Provider until Execution Authorization is approved', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),

@@ -632,6 +632,14 @@ export function createOpencodeHttpCodingEngineAdapter(
           throw error
         }
       }
+      try {
+        const assertContextCurrent = input.assertContextCurrent ?? session.assertContextCurrent
+        if (assertContextCurrent) await assertContextCurrent()
+      } catch (error) {
+        try { await cleanupRegisteredSession(input.codingRun.id, session, 'continuation') }
+        catch (cleanupError) { throw new CodingEngineContinuationCleanupError([error, cleanupError]) }
+        throw error
+      }
       resumeApprovalClock(session)
       const replied = await replyOpencodePermission({
         baseUrl: session.baseUrl,

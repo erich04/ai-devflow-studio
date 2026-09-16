@@ -251,5 +251,42 @@
       "totalTokens": 2081,
       "recordedCostUsd": 0.000258906
     }
-  ]
+  ],
+  "finalEvaluatorReadback": {
+    "passed": true,
+    "paidCalls": 0,
+    "checkedAt": "2026-09-16T05:14:56.248Z",
+    "results": [
+      {
+        "codingRunId": "coding-run-a6ac472e-8d43-4160-8317-15fe1e5ee460",
+        "evaluation": {
+          "passed": true,
+          "failures": [],
+          "evidenceDigest": "26f923c72a538bfbf68928ed82a240b76c24069b4bbd87101e04d7339a163eb1",
+          "artifactCount": 2,
+          "testEvidenceCount": 1
+        }
+      },
+      {
+        "codingRunId": "coding-run-6e0b6609-2539-4994-8df1-4040591172d7",
+        "evaluation": {
+          "passed": true,
+          "failures": [],
+          "evidenceDigest": "2241d8b49d65ef244780c2cac26a038b13f6ec3b7ca2ab407f38ee0d1f770e80",
+          "artifactCount": 2,
+          "testEvidenceCount": 1
+        }
+      },
+      {
+        "codingRunId": "coding-run-c2194607-f8df-46fd-838c-af9b673156de",
+        "evaluation": {
+          "passed": true,
+          "failures": [],
+          "evidenceDigest": "ddfdc7cfc3e647e6c4e0156fadcec1095376908111c66e8e68c16c43d5f8af32",
+          "artifactCount": 2,
+          "testEvidenceCount": 1
+        }
+      }
+    ]
+  }
 }

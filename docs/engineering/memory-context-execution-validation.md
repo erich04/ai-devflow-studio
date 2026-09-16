@@ -58,16 +58,21 @@ Its Coding Run IDs were `coding-run-a6ac472e-8d43-4160-8317-15fe1e5ee460`,
 `coding-run-6e0b6609-2539-4994-8df1-4040591172d7` and
 `coding-run-c2194607-f8df-46fd-838c-af9b673156de`.
 The sanitized [machine-readable evidence](evidence/memory-context-live-20260916.json) is checked in.
+After tightening linked-test provenance, the final evaluator reread a copy of the real-run
+database at 2026-09-16T05:14:56.248Z. All three cases passed with the exact same archived
+evidence digests; no additional paid Provider call was needed.
 
 Local verification completed:
 
-- `corepack pnpm verify`: 275 test files / 3,885 tests, type checks and cross-platform checks.
-- Three additional evaluation-provenance regressions passed together with 103 affected runtime tests.
+- Final `corepack pnpm verify`: 276 test files / 3,889 tests, type checks and cross-platform checks.
+- Focused provenance and mid-approval Memory deletion regressions also passed.
 - `corepack pnpm build`: passed.
 - `corepack pnpm test:electron-smoke`: passed with an isolated Desktop profile.
 - `corepack pnpm test:native-coding-electron-smoke`: passed with real Electron Main, controlled
   local model server, exact change approval, worktree edit, executed tests, diff and cost evidence.
 - Default `test:memory-context-live` opt-in behavior: skipped without contacting a Provider.
+- The v2.0 Runtime, v2.1 retrieval/Memory and v2.2 multi-agent offline evaluators passed against
+  clean candidate `b0ca895d544124e766c9b810b3ac7ae78373a412`.
 
 This validates Memory-dependent implementation, scoped recall, deletion, compaction and actual
 local evidence. It is not a new cloud onboarding/deployment test, an OpenCode paid-provider
@@ -105,3 +110,11 @@ Cursor was consulted read-only with `cursor-grok-4.6-high`, session
 | Defer compact to a future slice | Not adopted: the user explicitly requested working compact; implemented bounded extractive compaction |
 | Keep a fixed independent Runtime demo | Not adopted for the default runtime: user requested real inputs; fixtures remain in offline tests |
 | Expand vector retrieval or specialist Memory routing | Deferred; neither is needed to prove this execution slice |
+
+The same Cursor session then performed a focused implementation review (read-only, no test
+execution). It reported no blocking counterexample and two nonblocking risks. Both were addressed:
+OpenCode rechecks freshness immediately before an approved permission reply and aborts on a
+mid-approval Memory deletion; real evidence evaluation requires the Coding Run's own linked
+test to have passed, while a later failed saved test still makes the evaluation fail.
+The corresponding race and evidence-provenance regressions pass. In-flight OpenCode work
+already authorized before deletion cannot be retroactively undone.
