@@ -67,6 +67,8 @@ Local verification completed:
 - Final `corepack pnpm verify`: 276 test files / 3,889 tests, type checks and cross-platform checks.
 - Focused provenance and mid-approval Memory deletion regressions also passed.
 - `corepack pnpm build`: passed.
+- `corepack pnpm test:e2e`: all 41 browser tests passed, including the advanced-area
+  visibility check updated for the real `workflow.evaluate` tool.
 - `corepack pnpm test:electron-smoke`: passed with an isolated Desktop profile.
 - `corepack pnpm test:native-coding-electron-smoke`: passed with real Electron Main, controlled
   local model server, exact change approval, worktree edit, executed tests, diff and cost evidence.
@@ -78,6 +80,15 @@ This validates Memory-dependent implementation, scoped recall, deletion, compact
 local evidence. It is not a new cloud onboarding/deployment test, an OpenCode paid-provider
 acceptance, or a claim that all business requirements can be evaluated automatically.
 OpenCode brief delivery and freshness checks have deterministic HTTP-adapter coverage.
+
+The live harness keeps its build node running while it exercises the independent evaluator and
+the existing human Memory promotion/revision services; it does not install the UI's Workflow
+completion callback. Therefore this is service-level Memory lifecycle acceptance, not a claim
+that the same post-build interaction is available after the UI advances to a Test or Gate.
+Existing saved Memory is now consumed by Coding automatically, but new durable Memory still
+requires explicit human promotion/revision. Automatic post-task learning is not implemented in
+this slice. The advanced independent Runtime retains its existing running-task precondition;
+normal Coding completion records its evidence evaluation directly in the Coding trace.
 
 ## Run it again
 

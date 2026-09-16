@@ -65,6 +65,11 @@ are explicitly separate from current-task evaluation.
 This slice connects the Coding executors. Stage Agents and specialist/multi-agent Memory
 delegation are not expanded. The compactor summarizes historical brief sources; it does not
 claim a semantic long-conversation summarizer or a tokenizer-specific whole-request limit.
+This is consumption of explicitly promoted/revised Memory, not automatic learning after every
+Coding Run. The advanced independent Runtime retains its current running task/agent authority;
+it cannot be started on a completed node or a Gate. Automatic Coding evaluation records an
+evidence check without creating or promoting durable Memory. Extending post-task learning or
+the completed-node evaluation interaction needs a separate design.
 Native v2 repository excerpts retain their separate existing bounded-input rules.
 OpenCode is an external executor: DevFlow fences session creation, message submission, polling
 and permission relay, and aborts on detected staleness; it cannot intercept each internal

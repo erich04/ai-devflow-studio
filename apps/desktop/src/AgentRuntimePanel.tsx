@@ -196,7 +196,7 @@ export function AgentRuntimePanel({
         <div className="advanced-boundary-grid">
           <span>用途</span><strong>检查当前任务证据的完整性、来源和测试结果</strong>
           <span>结果</span><strong>保存检查点、执行轨迹、评估与可选 Memory 候选</strong>
-          <span>前置条件</span><strong>已选择 Local Project（本地项目）和 Run；无需 Team 配对</strong>
+          <span>前置条件</span><strong>已选择 Local Project（本地项目）和 Run，当前节点为运行中的任务；无需 Team 配对</strong>
           <span>Provider / 费用</span><strong>不调用当前 Stage Provider，不产生模型 token 费用</strong>
           <span>仓库</span><strong>不读取或修改仓库文件</strong>
           <span>Workflow</span><strong>不生成阶段 Artifact、不推进工作流、不审批 Gate</strong>

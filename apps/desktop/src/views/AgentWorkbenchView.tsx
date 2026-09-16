@@ -946,13 +946,13 @@ export function AgentWorkbenchView({
           <summary aria-describedby="agent-advanced-tools-description">
             <span>高级验收与诊断</span>
             <strong id="agent-advanced-tools-description">
-              独立 Runtime、多 Agent 与 Memory；不参与当前 Workflow（工作流）主任务
+              独立 Runtime、多 Agent 诊断与 Memory 管理
             </strong>
             <em>{isTeamPaired ? 'Team 已配对 · 多 Agent 入口可用' : '本地未配对 · 多 Agent 入口不可用'}</em>
           </summary>
           <div className="agent-advanced-tools__body">
             <p className="agent-advanced-tools__intro">
-              以下能力用于平台验收、恢复和诊断。它们不会代替上方主操作，也不会自动生成当前阶段产物、批准 Gate 或推进工作流。
+              独立 Runtime 与多 Agent 诊断不会代替上方主操作、批准 Gate 或推进工作流。经人工提升的 Memory 会作为后续 Coding Run 的背景；修订或删除会影响后续执行。
             </p>
             <AgentRuntimePanel
               desktopApi={desktopApi}
