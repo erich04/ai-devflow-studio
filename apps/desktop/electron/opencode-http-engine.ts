@@ -77,6 +77,7 @@ type OpencodeMessagePromise = Promise<
 >
 
 type OpencodeRuntimeSession = {
+  assertContextCurrent?: (() => Promise<void>) | undefined
   baseUrl: string
   cleanupPromise?: Promise<void>
   directory: string
@@ -202,6 +203,7 @@ export function createOpencodeHttpCodingEngineAdapter(
     session: OpencodeRuntimeSession,
     signal?: AbortSignal,
   ): Promise<void> {
+    if (session.assertContextCurrent) await session.assertContextCurrent()
     const messages = await listOpencodeMessages({
       baseUrl: session.baseUrl,
       sessionId: session.sessionId,
@@ -215,6 +217,7 @@ export function createOpencodeHttpCodingEngineAdapter(
 
   async function nextManagedOutcome(session: OpencodeRuntimeSession, codingRun: CodingAgentRun) {
     while (true) {
+      if (session.assertContextCurrent) await session.assertContextCurrent()
       const outcome = await waitForNextPermissionOrMessage({
         baseUrl: session.baseUrl, directory: session.directory,
         handledPermissionIds: session.handledPermissionIds,
@@ -243,6 +246,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         throw new Error('opencode_permission_correction_limit_exceeded')
       }
       if (session.cleanupPromise) await failForSessionCleanup(session.cleanupPromise)
+      if (session.assertContextCurrent) await session.assertContextCurrent()
       const acknowledged = await replyOpencodePermission({
         baseUrl: session.baseUrl, directory: session.directory, requestId: outcome.permission.id,
         reply: decision === 'approved' ? 'once' : 'reject',
@@ -462,6 +466,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           throw new Error('opencode startup was cancelled before session creation')
         }
         const prompt = buildOpenCodeManagedPrompt(input.brief.prompt)
+        if (input.assertContextCurrent) await input.assertContextCurrent()
         const session = await createOpencodeSession({
           baseUrl: server.baseUrl,
           directory,
@@ -471,6 +476,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           ...fetcherOption(config.fetcher),
         })
         runtimeSession = {
+          assertContextCurrent: input.assertContextCurrent,
           baseUrl: server.baseUrl,
           deadlineAtMs: nowMs() + maxWallClockMs,
           directory,
@@ -501,6 +507,7 @@ export function createOpencodeHttpCodingEngineAdapter(
             resolveManagedDirectory,
             config.permissionRules ?? createDefaultOpencodePermissionRules(),
           )
+          if (input.assertContextCurrent) await input.assertContextCurrent()
           const messagePromise = sendOpencodeMessage({
             baseUrl: server.baseUrl,
             sessionId: session.id,
@@ -573,6 +580,7 @@ export function createOpencodeHttpCodingEngineAdapter(
     },
 
     async approvePermission(input) {
+      if (input.assertContextCurrent) await input.assertContextCurrent()
       if (input.request.origin === 'execution_authorization') {
         if (!input.authorizedStart || input.authorizedStart.id !== input.codingRun.id) {
           throw new Error('OpenCode Execution Authorization cannot resume without its persisted run context')
@@ -623,6 +631,14 @@ export function createOpencodeHttpCodingEngineAdapter(
           catch (cleanupError) { throw new CodingEngineContinuationCleanupError([error, cleanupError]) }
           throw error
         }
+      }
+      try {
+        const assertContextCurrent = input.assertContextCurrent ?? session.assertContextCurrent
+        if (assertContextCurrent) await assertContextCurrent()
+      } catch (error) {
+        try { await cleanupRegisteredSession(input.codingRun.id, session, 'continuation') }
+        catch (cleanupError) { throw new CodingEngineContinuationCleanupError([error, cleanupError]) }
+        throw error
       }
       resumeApprovalClock(session)
       const replied = await replyOpencodePermission({

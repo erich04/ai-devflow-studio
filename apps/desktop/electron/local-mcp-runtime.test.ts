@@ -83,6 +83,7 @@ describe('main-owned fixture Local MCP Runtime', () => {
     expect(first.installation).toMatchObject({ version: 2, enabled: true })
     expect(first.nativeToolRegistry.listDefinitions()).toMatchObject([
       { id: 'scenario.evaluate', version: 2, source: 'mcp' },
+      { id: 'workflow.evaluate', version: 1, source: 'native' },
     ])
     await first.shutdown()
 
@@ -94,6 +95,7 @@ describe('main-owned fixture Local MCP Runtime', () => {
       environment: {},
     })
     expect(second.installation).toEqual(first.installation)
+    expect(second.nativeToolRegistry.capabilitySetDigest()).toBe(first.nativeToolRegistry.capabilitySetDigest())
     expect(await store.listLocalMcpInstallations()).toEqual([first.installation])
     expect((await store.listMcpServers())[0]?.command).toBe('/tmp/must-never-spawn')
     await second.shutdown()

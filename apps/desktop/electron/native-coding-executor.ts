@@ -672,6 +672,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         requestDigest: planRequestDigest,
         requiresPermission: false,
       })
+      await startInput.runtimeContext.assertContextCurrent?.()
       const plannedRead = parsePlannedRead(await input.decisionProvider.decide({
         requestId: request.id,
         objectiveDigest: request.objectiveDigest,
@@ -729,6 +730,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         },
         callLimit: 1,
       })
+      await startInput.runtimeContext.assertContextCurrent?.()
       const readResult = await registry.execute({
         grant: readGrant,
         runtime,
@@ -768,6 +770,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         requestDigest: editPlanRequestDigest,
         requiresPermission: false,
       })
+      await startInput.runtimeContext.assertContextCurrent?.()
       const pending = parsePlannedEdit(await input.decisionProvider.decide({
         requestId: request.id,
         objectiveDigest: request.objectiveDigest,
@@ -967,6 +970,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
       return { kind: 'waiting_permission', codingRun, events, permissionRequest, turn }
     },
     async continuePermission(continuationInput) {
+      await continuationInput.runtimeContext.assertContextCurrent?.()
       const context = continuationInput.runtimeContext
       const runtimeId = `${RUNTIME_PREFIX}${continuationInput.requestId}`
       let runtime = await input.store.getAgentRuntime(runtimeId)
@@ -1084,6 +1088,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           },
           callLimit: 1,
         })
+        await continuationInput.runtimeContext.assertContextCurrent?.()
         const writeResult = await registry.execute({
           grant: writeGrant,
           runtime,
@@ -1162,6 +1167,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           },
           callLimit: 1,
         })
+        await continuationInput.runtimeContext.assertContextCurrent?.()
         const testResult = await registry.execute({
           grant: testGrant,
           runtime,
@@ -1220,6 +1226,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
             content: pending.decision.edit.content,
             testSummary: redactSensitiveText(testValue!.summary).value,
           }
+          await continuationInput.runtimeContext.assertContextCurrent?.()
           const repair = parsePlannedEdit(await input.decisionProvider.decide({
             requestId: continuationInput.requestId,
             objectiveDigest: instructionDigest(context.codingRun.userInstruction),
