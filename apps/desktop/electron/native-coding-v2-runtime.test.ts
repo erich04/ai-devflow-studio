@@ -6,6 +6,7 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalProject, WorkflowRun } from '@ai-devflow/shared'
 import { createCodingRuntime } from './coding-runtime.js'
+import { createDesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import { createLocalStore } from './local-store.js'
 import {
@@ -14,6 +15,8 @@ import {
   type NativeCodingV2DecisionProvider,
 } from './native-coding-executor-v2.js'
 import { runLocalTestCommand } from './test-runner.js'
+import { assertCodingContextCurrent } from './coding-context.js'
+import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
 
 const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
@@ -50,7 +53,7 @@ describe('Native Coding Executor v2 runtime', () => {
     expect(prompt).toContain('Generate each value exactly once at its named owning boundary')
   })
 
-  it.each(['success', 'unrepairable', 'invalid_repair'] as const)(
+  it.each(['success', 'unrepairable', 'invalid_repair', 'memory_deleted', 'memory_expired', 'memory_changes_during_provider'] as const)(
     'preserves exact changes and executed evidence for %s', async (scenario) => {
     const repositoryPath = await temporaryDirectory('devflow-native-v2-repository')
     const worktreeRoot = await temporaryDirectory('devflow-native-v2-worktrees')
@@ -60,7 +63,7 @@ describe('Native Coding Executor v2 runtime', () => {
     await writeFile(path.join(repositoryPath, 'src/message.ts'), 'export const message = "old"\n', 'utf8')
     await writeFile(
       path.join(repositoryPath, 'test.mjs'),
-      scenario === 'success'
+      !['unrepairable', 'invalid_repair'].includes(scenario)
         ? "import { readFile } from 'node:fs/promises'\nif (!(await readFile('src/message.ts', 'utf8')).includes('message = \\\"new\\\"')) process.exit(1)\n"
         : "import './node_modules/missing-tool/lib/check.js'\n",
       'utf8',
@@ -106,9 +109,28 @@ describe('Native Coding Executor v2 runtime', () => {
     }
     let analysisSystemPrompt = ''
     let initialSystemPrompt = ''
+    const providerPrompts: string[] = []
     const provider: NativeCodingV2DecisionProvider = {
       id: 'deepseek', version: 2, modelId: 'deepseek-v4-flash', billing: 'metered',
       async complete(input) {
+        providerPrompts.push(input.userPrompt)
+        if (scenario === 'memory_changes_during_provider' && input.phase === 'analysis') {
+          if (!promotion.authorized) throw new Error('Expected authorized Memory promotion')
+          currentTime = '2026-08-31T00:30:00.001Z'
+          const revised = await store.authorizeAgentMemoryRevision({
+            memoryId: promotion.revision.id, expectedHeadVersion: 1,
+            statement: 'Revised rule: preserve all existing wording.',
+            authority: {
+              stateVersion: 1, decisionId: 'revise-during-provider', memoryId: promotion.revision.id,
+              expectedRevision: 1, expectedContentDigest: promotion.revision.contentDigest,
+              scope: promotion.revision.scope, actorKind: 'human', actorId: run.creatorId,
+              policyId: 'test-memory-policy', policyVersion: 1, visibility: 'user_project', sensitivity: 'internal',
+              retentionClass: 'until_deleted', expiresAt: null, authorityDigest: 'd'.repeat(64), decidedAt: clock(),
+            },
+          })
+          if (!revised.authorized) throw new Error('Expected revision authority')
+          await store.commitAgentMemoryRevision({ revision: revised.revision, recordedAt: clock() }, revised.capability)
+        }
         if (input.phase === 'analysis') analysisSystemPrompt = input.systemPrompt
         if (input.phase === 'initial') initialSystemPrompt = input.systemPrompt
         if (input.phase === 'repair') {
@@ -163,7 +185,45 @@ describe('Native Coding Executor v2 runtime', () => {
     const store = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
     await store.upsertProject(project)
     await store.saveRun(run)
-    const clock = () => '2026-08-31T00:30:00.000Z'
+    let currentTime = '2026-08-31T00:30:00.000Z'
+    const clock = () => currentTime
+    const rememberedRule = 'For message changes, preserve the existing export name and double quotes.'
+    const memoryRuntime = createDesktopAgentRuntime({
+      store, clock,
+      createId: () => 'memory-source-runtime',
+      executeFakeAction: async () => ({
+        resultDigest: 'a'.repeat(64), evaluationSummary: rememberedRule,
+      }),
+    })
+    let memorySnapshot = await memoryRuntime.start({
+      runId: run.id, nodeId: run.currentNodeId, localProjectId: project.id,
+    })
+    for (let step = 0; step < 3; step += 1) {
+      memorySnapshot = await memoryRuntime.advance({
+        runtimeId: memorySnapshot.runtime.id,
+        runId: run.id, localProjectId: project.id,
+        expectedVersion: memorySnapshot.runtime.version,
+        expectedCheckpointVersion: memorySnapshot.runtime.checkpointVersion,
+      })
+    }
+    const [candidate] = await store.listAgentMemoryCandidates(project.id)
+    if (!candidate) throw new Error('Expected accepted observation Memory candidate')
+    const promotion = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'coding-project-memory',
+      authority: {
+        stateVersion: 1, decisionId: 'promote-coding-project-memory',
+        candidateId: candidate.id, candidateContentDigest: candidate.contentDigest,
+        scope: candidate.scope, actorKind: 'human', actorId: run.creatorId,
+        policyId: 'test-memory-policy', policyVersion: 1,
+        visibility: 'user_project', sensitivity: 'internal',
+        retentionClass: scenario === 'memory_expired' ? 'session' : 'until_deleted',
+        expiresAt: scenario === 'memory_expired' ? '2026-08-31T00:30:01.000Z' : null,
+        authorityDigest: 'b'.repeat(64), decidedAt: clock(),
+      },
+    })
+    if (!promotion.authorized) throw new Error('Expected authorized Memory promotion')
+    await store.commitAgentMemoryPromotion({ revision: promotion.revision }, promotion.capability)
     let statusDuringSavedTest: string | undefined
     const executor = createNativeCodingExecutorV2({
       store,
@@ -208,13 +268,32 @@ describe('Native Coding Executor v2 runtime', () => {
       }),
     })
 
-    const waiting = await runtime.runCodingAgent({
+    const starting = runtime.runCodingAgent({
       runId: run.id,
       nodeId: run.currentNodeId,
       projectId: project.id,
       requestedBy: run.creatorId,
       userInstruction: 'Change the message from old to new.',
     })
+    if (scenario === 'memory_changes_during_provider') {
+      await expect(starting).rejects.toThrow('Coding Memory changed, expired or was deleted')
+      expect(providerPrompts).toHaveLength(1)
+      expect(await store.listCodingChangeSets()).toHaveLength(0)
+      expect(await store.listTestEvidence(run.id)).toHaveLength(0)
+      const failed = (await store.listCodingAgentRuns(run.id))[0]!
+      expect(failed.status).toBe('failed')
+      const calls = (await store.listCodingAgentEvents(failed.id))
+        .flatMap((event) => event.metadata?.providerCall ? [event.metadata.providerCall] : [])
+      expect(calls).toEqual([
+        expect.objectContaining({ status: 'started' }),
+        expect.objectContaining({ status: 'succeeded', billingState: 'confirmed', usage: expect.any(Object) }),
+      ])
+      store.close()
+      return
+    }
+    const waiting = await starting
+    expect(providerPrompts).toHaveLength(2)
+    expect(providerPrompts.every((prompt) => prompt.includes(rememberedRule))).toBe(true)
     expect(analysisSystemPrompt).toContain('"path/from/repositoryManifest"')
     expect(analysisSystemPrompt).toContain('Do not add extra keys')
     expect(initialSystemPrompt).toContain('"oldText":"exact existing text"')
@@ -240,6 +319,27 @@ describe('Native Coding Executor v2 runtime', () => {
     expect(permission).not.toHaveProperty('filePath')
     expect(changeSet!.unifiedDiff).toContain('diff --git a/src/message.ts b/src/message.ts')
 
+    if (scenario === 'memory_deleted') {
+      currentTime = '2026-08-31T00:30:00.001Z'
+      const deletion = await store.authorizeAgentMemoryDeletion({ authority: {
+        stateVersion: 1, decisionId: 'delete-coding-memory', memoryId: promotion.revision.id,
+        expectedRevision: 1, expectedHeadVersion: 1, expectedContentDigest: promotion.revision.contentDigest,
+        scope: promotion.revision.scope, actorKind: 'human', actorId: run.creatorId,
+        policyId: 'test-memory-policy', policyVersion: 1, authorityDigest: 'c'.repeat(64), decidedAt: clock(),
+      } })
+      if (!deletion.authorized) throw new Error(`Expected deletion authority: ${deletion.reason}`)
+      await store.commitAgentMemoryDeletion({ tombstone: deletion.tombstone }, deletion.capability)
+    }
+    if (scenario === 'memory_expired') currentTime = '2026-08-31T00:30:02.000Z'
+    if (scenario === 'memory_deleted' || scenario === 'memory_expired') {
+      const reopened = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
+      try {
+        const [persisted] = await reopened.listCodingAgentRuns(run.id)
+        await expect(assertCodingContextCurrent({ store: reopened, codingRun: persisted!, now: clock() }))
+          .rejects.toThrow('Coding Memory changed, expired or was deleted')
+      } finally { reopened.close() }
+    }
+
     const approval = runtime.replyCodingPermission({
       requestId: permission.id,
       codingRunId: permission.codingRunId,
@@ -247,6 +347,17 @@ describe('Native Coding Executor v2 runtime', () => {
       decision: 'approved',
       comment: 'Approve the exact persisted Change Set once.',
     })
+
+    if (scenario === 'memory_deleted' || scenario === 'memory_expired') {
+      await expect(approval).rejects.toThrow('Coding Memory changed, expired or was deleted')
+      expect(providerPrompts).toHaveLength(2)
+      expect(await store.listTestEvidence(run.id)).toHaveLength(0)
+      expect(statusDuringSavedTest).toBeUndefined()
+      expect((await store.listCodingAgentRuns(run.id))[0]?.status).toBe('failed')
+      await expect(readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8')).resolves.toBe('export const message = "old"\n')
+      store.close()
+      return
+    }
 
     if (scenario !== 'success') {
       await expect(approval).rejects.toThrow(scenario === 'unrepairable' ? 'no safe repair' : 'invalid_model_output')
@@ -258,6 +369,9 @@ describe('Native Coding Executor v2 runtime', () => {
       const [failureEvidence] = await store.listTestEvidence(run.id)
       expect(failureEvidence).toMatchObject({ status: 'failed', exitCode: 1, cwd: '<workspace>', redacted: true })
       expect(failureEvidence?.stderr).toContain('ERR_MODULE_NOT_FOUND')
+      expect(await evaluateCurrentWorkflowEvidence(store, {
+        runId: run.id, nodeId: run.currentNodeId, localProjectId: project.id, runVersion: run.version,
+      })).toMatchObject({ passed: false, failures: expect.arrayContaining(['test_failed:latest_saved_test']) })
       const providerTraces = (await store.listCodingAgentEvents(waiting.codingRun.id))
         .map((event) => event.metadata?.providerCall)
       expect(providerTraces).toEqual(expect.arrayContaining([expect.objectContaining({
@@ -272,7 +386,14 @@ describe('Native Coding Executor v2 runtime', () => {
     }
     await approval
 
+    expect(await evaluateCurrentWorkflowEvidence(store, {
+      runId: run.id, nodeId: run.currentNodeId, localProjectId: project.id, runVersion: run.version,
+    })).toMatchObject({ passed: true, failures: [], artifactCount: expect.any(Number), testEvidenceCount: 1 })
+
     const [completed] = await store.listCodingAgentRuns(run.id)
+    expect((await store.listCodingAgentEvents(completed!.id))
+      .find((event) => event.metadata?.workflowEvaluation)?.metadata?.workflowEvaluation)
+      .toMatchObject({ passed: true, failures: [], evidenceDigest: expect.any(String) })
     expect(completed).toMatchObject({
       status: 'completed', changedPaths: ['src/message.ts'],
       runtimeCostSummary: {

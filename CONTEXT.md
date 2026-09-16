@@ -231,6 +231,22 @@ A promoted, immutable, scoped Memory revision that may be recalled across later 
 records visibility, provenance digest, retention, expiry, sensitivity, and audit metadata. Agent Memory is not Workflow State,
 an Agent Checkpoint, repository Knowledge, hidden reasoning, or Governance Evidence.
 
+## Coding Context Receipt
+
+The local immutable record of the brief prepared for one Coding Run. It binds Run/Node version,
+actor/pairing scope, selected Memory revision/head/content digests, the exact SHA-256 of the brief,
+and an extractive compaction receipt. It is provenance, not permission or proof of task correctness.
+Native Coding and OpenCode recheck its sources before continuing. Historical runs without a receipt
+do not claim Memory use. See ADR 0021.
+
+## Context Compaction
+
+A deterministic reduction of historical material within a UTF-8 byte budget. The current request,
+user instruction, recalled Memory, remediation and latest test diagnostic remain indivisible.
+Artifact summaries and recognizable explicit constraint lines replace oversized source text.
+The receipt records each source's representation and sizes. If required content does not fit,
+execution stops before a Provider call. This is extractive compaction, not semantic summarization.
+
 ## Memory Revision
 
 One immutable version of Durable Agent Memory. An update requires the exact current revision and

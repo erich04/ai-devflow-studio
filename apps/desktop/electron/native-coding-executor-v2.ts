@@ -778,6 +778,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
 
   async function runProviderCall<T>(call: {
     codingRunId: string
+    assertContextCurrent?: (() => Promise<void>) | undefined
     reportProviderCall?: CodingProviderCallReporter
     phase: CodingProviderCallTrace['phase']
     systemPrompt: string
@@ -787,6 +788,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     excerptCount: number
     parse: (value: Record<string, unknown>) => T
   }): Promise<{ value: T; usage: ProviderUsage; requestedAt: string }> {
+    await call.assertContextCurrent?.()
     const requestId = createId('provider-call')
     const requestedAt = canonicalNow(clock)
     const timeoutMs = input.decisionProvider.timeoutMs ?? 30_000
@@ -823,6 +825,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     })
 
     let completed: NativeV2ModelResult | undefined
+    let result: { value: T; usage: ProviderUsage; requestedAt: string }
     try {
       completed = await input.decisionProvider.complete({
         phase: call.phase,
@@ -860,7 +863,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           : {}),
         usage: providerUsageTrace(completed.usage),
       })
-      return { value, usage: completed.usage, requestedAt }
+      result = { value, usage: completed.usage, requestedAt }
     } catch (error) {
       const failure = error instanceof AgentProviderRequestError
         ? error
@@ -893,6 +896,10 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       })
       throw failure
     }
+    // The Provider has already completed and incurred usage. A local Memory or
+    // workflow change must stop execution without misreporting a Provider error.
+    await call.assertContextCurrent?.()
+    return result
   }
 
   async function findChangeSetForPermission(
@@ -981,13 +988,14 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         input.decisionProvider.id,
       )
       const context = startInput.runtimeContext
+      await context.assertContextCurrent?.()
       const manifest = await buildRepositoryManifest(context.workspace.worktreePath)
       if (manifest.length < 1) throw new Error('Native Coding v2 repository manifest is empty')
       const analysisPrompt = boundedPrompt({
         stateVersion: 2,
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
-        brief: safeText(context.brief.prompt).slice(0, 12_000),
+        brief: safeText(context.brief.prompt),
         repositoryManifest: manifest,
         limits: { maxFiles: 8, maxSearches: 8, literalSearchOnly: true },
       })
@@ -999,6 +1007,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         'Each searches item has only query and optional path. searches may be empty. Do not propose edits yet.',
       ].join(' ')
       const analysis = await runProviderCall({
+        assertContextCurrent: context.assertContextCurrent,
         codingRunId: request.id,
         ...(context.reportProviderCall
           ? { reportProviderCall: context.reportProviderCall }
@@ -1012,6 +1021,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         parse: (value) => parseSearchPlan(value, manifest),
       })
       const plan = analysis.value
+      await context.assertContextCurrent?.()
       const excerpts = await collectExcerpts({
         worktreePath: context.workspace.worktreePath,
         manifest,
@@ -1021,7 +1031,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         stateVersion: 2,
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
-        brief: safeText(context.brief.prompt).slice(0, 10_000),
+        brief: safeText(context.brief.prompt),
         analysisSummary: plan.summary,
         excerpts,
         allowedPaths: excerpts.map((excerpt) => excerpt.path),
@@ -1039,6 +1049,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         'Use only supplied excerpt paths. Do not create, delete, rename, or edit binary files.',
       ].join(' ')
       const initialResult = await runProviderCall({
+        assertContextCurrent: context.assertContextCurrent,
         codingRunId: request.id,
         ...(context.reportProviderCall
           ? { reportProviderCall: context.reportProviderCall }
@@ -1055,6 +1066,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         ),
       })
       const proposal = initialResult.value
+      await context.assertContextCurrent?.()
       const requestedAt = canonicalNow(clock)
       const expiresAt = permissionExpiry(requestedAt, request.deadline)
       const changeSet = await prepareCodingChangeSet({
@@ -1163,6 +1175,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     },
     async continuePermission(continuationInput) {
       const context = continuationInput.runtimeContext
+      await context.assertContextCurrent?.()
       const { codingRun, request, workspace, project } = context
       if (
         request.status !== 'approved' ||
@@ -1183,6 +1196,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         summary: 'Applying the exact approved Native Coding v2 Change Set atomically.',
         timestamp: context.now,
       })
+      await context.assertContextCurrent?.()
       await applyCodingChangeSetAtomically({ changeSet, worktreePath: workspace.worktreePath, now: context.now })
       const recoveredPhase = await readCodingChangeSetExecutionPhase({
         changeSet,
@@ -1203,6 +1217,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         phase: 'testing',
         updatedAt: testedAt,
       })
+      await context.assertContextCurrent?.()
       const tested = await runTests({ codingRun, project, workspace, createdAt: testedAt })
       if (tested.result.status !== 'passed' && changeSet.phase === 'initial') {
         // Preserve the actual failure even if repair planning fails or cannot propose a safe edit.
@@ -1221,7 +1236,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         })))
         const repairPrompt = fitChangePrompt({
           stateVersion: 2,
-          brief: safeText(codingRun.prompt).slice(0, 8_000),
+          brief: safeText(codingRun.prompt),
           testFailure: {
             summary: safeText(tested.result.summary),
             stdout: safeText(tested.result.stdout).slice(-4_000),
@@ -1233,6 +1248,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         })
         const repairSystemPrompt = createNativeCodingV2RepairSystemPrompt([...initialPaths])
         const repairResult = await runProviderCall({
+          assertContextCurrent: context.assertContextCurrent,
           codingRunId: codingRun.id,
           ...(context.reportProviderCall
             ? { reportProviderCall: context.reportProviderCall }

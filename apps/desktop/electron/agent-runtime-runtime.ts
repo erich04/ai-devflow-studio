@@ -31,50 +31,11 @@ import {
   type NativeToolRegistry,
 } from './native-tool-registry.js'
 import { createAcceptedNativeToolRegistrations } from './native-tools.js'
+import { createWorkflowEvaluationRegistration, evaluateCurrentWorkflowEvidence, workflowEvaluationTarget, WORKFLOW_EVALUATION_TOOL_ID } from './workflow-evaluation.js'
 
 const DEFAULT_RUNTIME_WALL_TIME_MS = 10 * 60_000
 const CODING_OWNED_RUNTIME_PREFIX = 'agent-runtime-coding-'
-const NATIVE_RUNTIME_TOOL_ID = 'scenario.evaluate'
-const NATIVE_RUNTIME_SCENARIO_INPUT = {
-  scenarioJson: JSON.stringify({
-    stateVersion: 1,
-    id: 'desktop-native-tool-runtime',
-    version: 1,
-    name: 'Desktop Native Tool Runtime',
-    objective: 'Evaluate one bounded, isolated Native Tool action.',
-    executorKind: 'native',
-    expected: {
-      stopReason: 'success',
-      maxSteps: 1,
-      requiredEventTypes: ['runtime_started', 'runtime_stopped'],
-      evidenceKinds: ['native_tool_audit'],
-      cleanupStatus: 'completed',
-    },
-    metricDimensions: [
-      'quality',
-      'cost',
-      'latency',
-      'human_intervention',
-      'recovery',
-      'isolation',
-    ],
-  }),
-  observationJson: JSON.stringify({
-    stopReason: 'success',
-    steps: 1,
-    eventTypes: ['runtime_started', 'runtime_stopped'],
-    evidenceKinds: ['native_tool_audit'],
-    cleanupStatus: 'completed',
-    metrics: {
-      qualityPassed: true,
-      costUsd: 0,
-      latencyMs: 0,
-      humanInterventions: 0,
-      recoverySucceeded: true,
-      isolationViolations: 0,
-    },
-  }),
-}
+const NATIVE_RUNTIME_TOOL_ID = WORKFLOW_EVALUATION_TOOL_ID
 
 export type DesktopAgentRuntimeSnapshot = {
   runtime: AgentRuntimeState
@@ -147,14 +108,14 @@ export function createDesktopAgentRuntime(
   const nativeToolRegistry = executeFakeAction
     ? null
     : input.nativeToolRegistry ?? createNativeToolRegistry({
-        tools: createAcceptedNativeToolRegistrations({
+        tools: [...createAcceptedNativeToolRegistrations({
           resolveLocalProject: async (localProjectId) =>
             (await input.store.listProjects()).find((project) => project.id === localProjectId) ?? null,
           resolveManagedWorkspace: async (workspaceId) =>
             (await input.store.listManagedCodingWorkspaces()).find(
               (workspace) => workspace.id === workspaceId,
             ) ?? null,
-        }),
+        }), createWorkflowEvaluationRegistration(input.store)],
         clock,
         persistence: {
           reserveGrant: async (grant) => {
@@ -192,6 +153,9 @@ export function createDesktopAgentRuntime(
     if (!nativeToolRegistry || action?.kind !== 'tool') {
       return failureResult('invalid_native_tool_action')
     }
+    const evaluation = await evaluateCurrentWorkflowEvidence(input.store, workflowEvaluationTarget(runtime))
+    const toolInput = { evidenceDigest: evaluation.evidenceDigest }
+    if (digestNativeToolValue(toolInput) !== action.requestDigest) return failureResult('workflow_evidence_stale')
     const audits = await input.store.listAgentRuntimeToolAudits(runtime.id)
     const actionAudits = audits.filter(
       (audit) =>
@@ -202,6 +166,8 @@ export function createDesktopAgentRuntime(
     )
     const terminalAudit = actionAudits.find((audit) => audit.status !== 'started')
     if (terminalAudit?.status === 'succeeded') {
+      if (terminalAudit.resultDigest !== digestNativeToolValue(evaluation)) return failureResult('workflow_evidence_stale')
+      if (!evaluation.passed) return failureResult(evaluation.failures.join(', '))
       return {
         outcome: 'success' as const,
         resultDigest: terminalAudit.resultDigest!,
@@ -262,10 +228,10 @@ export function createDesktopAgentRuntime(
         grant,
         runtime,
         actionId: action.id,
-        input: NATIVE_RUNTIME_SCENARIO_INPUT,
+        input: toolInput,
       })
       const value = result.value as { passed?: unknown }
-      if (value.passed !== true) return failureResult('scenario_failed')
+      if (value.passed !== true) return failureResult(evaluation.failures.join(', '))
       return {
         outcome: 'success' as const,
         resultDigest: result.resultDigest,
@@ -273,7 +239,7 @@ export function createDesktopAgentRuntime(
         tokens: 0,
         costUsd: 0,
         evaluation: 'success' as const,
-        evaluationSummary: 'The deterministic Native Tool scenario satisfied every bound.',
+        evaluationSummary: 'Current task evidence checks passed. This is not business acceptance or permission to publish.',
       }
     } catch {
       return failureResult('execution_failed')
@@ -389,7 +355,7 @@ export function createDesktopAgentRuntime(
           capabilityId: nativeAction ? NATIVE_RUNTIME_TOOL_ID : 'runtime.fake.observe',
           capabilityVersion: nativeAction ? nativeRuntimeToolVersion : 1,
           requestDigest: nativeAction
-            ? digestNativeToolValue(NATIVE_RUNTIME_SCENARIO_INPUT)
+            ? digestNativeToolValue({ evidenceDigest: (await evaluateCurrentWorkflowEvidence(input.store, workflowEvaluationTarget(runtime))).evidenceDigest })
             : sha256(`${runtime.id}:${runtime.checkpointVersion}:${runtime.lastObservationDigest}`),
           requiresPermission: false,
         },

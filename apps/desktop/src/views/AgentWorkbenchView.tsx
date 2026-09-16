@@ -731,6 +731,22 @@ export function AgentWorkbenchView({
                 <span>测试证据</span>
                 <strong>{testEvidence?.status ?? 'pending'}</strong>
               </div>
+              {latestCodingRun.contextReceipt ? (
+                <>
+                  <div className="compact-row">
+                    <span>本轮选用记忆</span>
+                    <strong>{latestCodingRun.contextReceipt.memories.length} 条</strong>
+                  </div>
+                  <div className="compact-row">
+                    <span>上下文压缩</span>
+                    <strong>{latestCodingRun.contextReceipt.compaction.compacted ? '已压缩历史材料' : '无需压缩'}</strong>
+                  </div>
+                  <div className="compact-row">
+                    <span>上下文大小</span>
+                    <strong>{latestCodingRun.contextReceipt.compaction.inputBytes.toLocaleString()} → {latestCodingRun.contextReceipt.compaction.outputBytes.toLocaleString()} 字节</strong>
+                  </div>
+                </>
+              ) : null}
             </div>
             {codingActionProjection?.terminal ? (
               <div className="coding-terminal-summary" data-testid="coding-terminal-summary">

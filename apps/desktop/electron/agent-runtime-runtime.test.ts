@@ -8,6 +8,7 @@ import type { DesktopAgentRuntimeSnapshot } from './agent-runtime-runtime'
 import { createLocalStore } from './local-store'
 import { createNativeToolRegistry } from './native-tool-registry'
 import { createAcceptedNativeToolRegistrations } from './native-tools'
+import { createWorkflowEvaluationRegistration } from './workflow-evaluation'
 
 const tempDirs: string[] = []
 const runtimeProjectId = 'agent-runtime-project-1'
@@ -17,7 +18,7 @@ afterEach(async () => {
   tempDirs.length = 0
 })
 
-async function runtimeFixture() {
+async function runtimeFixture(withEvidence = true) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'devflow-agent-runtime-'))
   tempDirs.push(dir)
   const store = await createLocalStore({ dbPath: path.join(dir, 'devflow.sqlite') })
@@ -42,6 +43,12 @@ async function runtimeFixture() {
   })
   await store.upsertProject(project)
   await store.saveRun(creation.run)
+  if (withEvidence) await store.saveArtifact({
+    id: 'clarification-runtime-evidence', runId: creation.run.id, nodeId: creation.run.currentNodeId,
+    kind: 'clarification', title: 'Clarification', summary: 'Read-only observation with no repository changes.',
+    content: 'Acceptance: inspect and report the recorded task evidence; do not modify the repository.',
+    redacted: true, updatedAt: '2026-08-12T20:01:00.000Z',
+  })
   return { dir, store, project, run: creation.run }
 }
 
@@ -66,6 +73,63 @@ function runtimeCommand(snapshot: DesktopAgentRuntimeSnapshot) {
 }
 
 describe('Desktop Agent Runtime', () => {
+  it('rejects evidence changed after the evaluation action was checkpointed', async () => {
+    const { store, run } = await runtimeFixture()
+    const runtime = createDesktopAgentRuntime({ store, clock: () => '2026-08-12T20:30:00.000Z' })
+    let state = await runtime.start({ runId: run.id, nodeId: run.currentNodeId, localProjectId: runtimeProjectId })
+    state = await runtime.advance(runtimeCommand(state))
+    state = await runtime.advance(runtimeCommand(state))
+    const [artifact] = await store.listArtifacts(run.id)
+    await store.saveArtifact({ ...artifact!, id: 'additional-runtime-evidence', content: 'Evidence added after action preparation.', updatedAt: '2026-08-12T20:30:00.000Z' })
+    state = await runtime.advance(runtimeCommand(state))
+    expect(state.runtime.stopReason).toBe('failure')
+    expect(await store.listAgentRuntimeToolAudits(state.runtime.id)).toHaveLength(0)
+    expect(await store.listAgentMemoryCandidates(runtimeProjectId)).toHaveLength(0)
+    store.close()
+  })
+
+  it('does not turn a failed evaluation into success when recovering its successful tool invocation', async () => {
+    const { store, run } = await runtimeFixture(false)
+    let commits = 0
+    const first = createDesktopAgentRuntime({
+      store, clock: () => '2026-08-12T20:30:00.000Z',
+      fault: (point) => { if (point === 'before_commit' && ++commits === 4) throw new Error('crash after evaluation') },
+    })
+    let state = await first.start({ runId: run.id, nodeId: run.currentNodeId, localProjectId: runtimeProjectId })
+    state = await first.advance(runtimeCommand(state))
+    state = await first.advance(runtimeCommand(state))
+    await expect(first.advance(runtimeCommand(state))).rejects.toThrow('crash after evaluation')
+    const recovered = createDesktopAgentRuntime({ store, clock: () => '2026-08-12T20:30:01.000Z' })
+    expect((await recovered.recover())[0]?.runtime.stopReason).toBe('failure')
+    expect(await store.listAgentRuntimeToolAudits(state.runtime.id)).toHaveLength(2)
+    expect(await store.listAgentMemoryCandidates(runtimeProjectId)).toHaveLength(0)
+    store.close()
+  })
+
+  it('does not report a real task evaluation as successful when the Run has no evidence', async () => {
+    const { store, run } = await runtimeFixture(false)
+    const runtime = createDesktopAgentRuntime({
+      store,
+      clock: () => '2026-08-12T20:30:00.000Z',
+      createId: () => 'agent-runtime-missing-task-evidence',
+    })
+    try {
+      let snapshot = await runtime.start({
+        runId: run.id,
+        nodeId: run.currentNodeId,
+        localProjectId: runtimeProjectId,
+      })
+      for (let step = 0; step < 3; step += 1) {
+        snapshot = await runtime.advance(runtimeCommand(snapshot))
+      }
+      expect(snapshot.runtime.status).toBe('terminal')
+      expect(snapshot.runtime.stopReason).toBe('failure')
+      expect(await store.listAgentMemoryCandidates(runtimeProjectId)).toEqual([])
+    } finally {
+      store.close()
+    }
+  })
+
   it('rejects a renderer-selected local project that does not own the Run', async () => {
     const { store, run } = await runtimeFixture()
     const runtime = createDesktopAgentRuntime({
@@ -125,11 +189,11 @@ describe('Desktop Agent Runtime', () => {
     const { store, run, project } = await runtimeFixture()
     const capabilitySetDigest = 'c'.repeat(64)
     const nativeToolRegistry = createNativeToolRegistry({
-      tools: createAcceptedNativeToolRegistrations({
+      tools: [...createAcceptedNativeToolRegistrations({
         resolveLocalProject: async (localProjectId) =>
           localProjectId === project.id ? project : null,
         resolveManagedWorkspace: async () => null,
-      }),
+      }), createWorkflowEvaluationRegistration(store)],
       capabilitySetDigest,
     })
     const runtime = createDesktopAgentRuntime({
@@ -241,12 +305,12 @@ describe('Desktop Agent Runtime', () => {
     await store.saveDesktopPairingCredential(pairing, 'encrypted-pairing-token')
 
     const handler = vi.fn(async () => ({ passed: true, failures: [] }))
-    const registrations = createAcceptedNativeToolRegistrations({
+    const registrations = [...createAcceptedNativeToolRegistrations({
       resolveLocalProject: async (localProjectId) =>
         localProjectId === project.id ? project : null,
       resolveManagedWorkspace: async () => null,
-    }).map((registration) =>
-      registration.definition.id === 'scenario.evaluate'
+    }), createWorkflowEvaluationRegistration(store)].map((registration) =>
+      registration.definition.id === 'workflow.evaluate'
         ? { ...registration, handler }
         : registration,
     )
@@ -393,16 +457,16 @@ describe('Desktop Agent Runtime', () => {
       'runtime_stopped',
     ])
     expect(toolAudits).toMatchObject([
-      { status: 'started', toolId: 'scenario.evaluate', resultDigest: null },
-      { status: 'succeeded', toolId: 'scenario.evaluate' },
+      { status: 'started', toolId: 'workflow.evaluate', resultDigest: null },
+      { status: 'succeeded', toolId: 'workflow.evaluate' },
     ])
     expect(capabilityGrants).toMatchObject([
-      { status: 'consumed', capabilityId: 'scenario.evaluate' },
+      { status: 'consumed', capabilityId: 'workflow.evaluate' },
     ])
     await expect(store.listAgentMemoryCandidates(project.id)).resolves.toMatchObject([{
       status: 'candidate',
       scope: completed.runtime.scope,
-      statement: 'The deterministic Native Tool scenario satisfied every bound.',
+      statement: 'Current task evidence checks passed. This is not business acceptance or permission to publish.',
       provenance: {
         kind: 'agent_observation',
         runtimeId: completed.runtime.id,
@@ -776,12 +840,12 @@ describe('Desktop Agent Runtime', () => {
     const toolResult = new Promise<{ passed: boolean; failures: string[] }>((resolve) => {
       releaseTool = resolve
     })
-    const registrations = createAcceptedNativeToolRegistrations({
+    const registrations = [...createAcceptedNativeToolRegistrations({
       resolveLocalProject: async (localProjectId) =>
         localProjectId === project.id ? project : null,
       resolveManagedWorkspace: async () => null,
-    }).map((registration) =>
-      registration.definition.id === 'scenario.evaluate'
+    }), createWorkflowEvaluationRegistration(store)].map((registration) =>
+      registration.definition.id === 'workflow.evaluate'
         ? { ...registration, handler: vi.fn(async () => toolResult) }
         : registration,
     )
@@ -828,7 +892,7 @@ describe('Desktop Agent Runtime', () => {
     const lateAdvance = runtime.advance(runtimeCommand(waiting))
     await vi.waitFor(() =>
       expect(
-        registrations.find((item) => item.definition.id === 'scenario.evaluate')?.handler,
+        registrations.find((item) => item.definition.id === 'workflow.evaluate')?.handler,
       ).toHaveBeenCalledTimes(1),
     )
     const cancelled = await runtime.cancel(runtimeCommand(waiting))

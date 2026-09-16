@@ -208,6 +208,41 @@ describe('canRunCodingAgentOnNode', () => {
 })
 
 describe('buildCodingBrief', () => {
+  it('compacts long history while retaining the current instruction and design constraints', () => {
+    const instruction = 'Only update the export description; preserve the response contract.'
+    const constraint = 'Acceptance: exported records must retain their original ordering.'
+    const brief = buildCodingBrief({
+      run, node: buildNode, project,
+      upstreamArtifacts: [{ ...designArtifact, content: `${'Historical context.\n'.repeat(3_000)}${constraint}` }],
+      knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [],
+      userInstruction: instruction, worktreePath: '/tmp/managed', branchName: 'devflow/compact',
+    })
+    expect(new TextEncoder().encode(brief.prompt).byteLength).toBeLessThanOrEqual(12_000)
+    expect(brief.prompt).toContain(instruction)
+    expect(brief.prompt).toContain(constraint)
+    expect(brief.prompt).toContain('Do not read or write outside the managed worktree.')
+  })
+
+  it('retains citation identities when long multibyte Knowledge excerpts are compacted', () => {
+    const references = Array.from({ length: 8 }, (_, index) => ({
+      ...knowledgeReference, id: `reference-${index}`, chunkId: `chunk-${index}`,
+    }))
+    const brief = buildCodingBrief({
+      run, node: buildNode, project, upstreamArtifacts: [], knowledgeReferences: references,
+      knowledgeChunks: references.map((reference) => ({
+        ...knowledgeChunk, id: reference.chunkId, content: '历史材料'.repeat(600),
+      })),
+      governanceChecks: [], gateDecisions: [], testEvidence: [],
+      userInstruction: 'Update only the description.', worktreePath: '/tmp/managed', branchName: 'devflow/compact',
+    })
+    expect(brief.compaction?.sources.find((source) => source.id === 'knowledge')?.representation).toBe('summary')
+    expect(new TextEncoder().encode(brief.prompt).byteLength).toBeLessThanOrEqual(12_000)
+    for (const reference of references) {
+      expect(brief.prompt).toContain(`${reference.documentId}/${reference.chunkId}`)
+    }
+    expect(brief.prompt).toContain('hash=hash-api')
+  })
+
   it('carries only the latest relevant failed test diagnostic into an explicit retry', () => {
     const failed: TestEvidence = { ...testEvidence, status: 'failed', exitCode: 1,
       summary: 'Tests failed with exit code 1',
@@ -573,6 +608,10 @@ describe('createRemoteCodingAgentSummary', () => {
     expect(() => parseRemoteCodingAgentSummary({
       ...summary,
       prompt: 'local prompt',
+    })).toThrow('Remote coding agent summary contains local-only fields')
+    expect(() => parseRemoteCodingAgentSummary({
+      ...summary,
+      contextReceipt: { memories: [{ id: 'private-memory' }] },
     })).toThrow('Remote coding agent summary contains local-only fields')
     expect(() => parseRemoteCodingAgentSummary({
       ...summary,
