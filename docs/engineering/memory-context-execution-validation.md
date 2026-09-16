@@ -70,6 +70,11 @@ Local verification completed:
 - `corepack pnpm test:e2e`: all 41 browser tests passed, including the advanced-area
   visibility check updated for the real `workflow.evaluate` tool.
 - `corepack pnpm test:electron-smoke`: passed with an isolated Desktop profile.
+- `build:desktop-pilot` and `test:desktop-pilot-smoke`: passed. The packaged IPC check
+  rejects a new Run without evidence, archives a clarification through the Stage service,
+  requests refinement to retain running-task authority, and then checks that archived evidence.
+  It also verifies exact Memory promotion/revision/deletion and restart persistence. This is
+  clarification artifact completeness, not approval of the outstanding refinement or Gate.
 - `corepack pnpm test:native-coding-electron-smoke`: passed with real Electron Main, controlled
   local model server, exact change approval, worktree edit, executed tests, diff and cost evidence.
 - Default `test:memory-context-live` opt-in behavior: skipped without contacting a Provider.
@@ -80,6 +85,12 @@ This validates Memory-dependent implementation, scoped recall, deletion, compact
 local evidence. It is not a new cloud onboarding/deployment test, an OpenCode paid-provider
 acceptance, or a claim that all business requirements can be evaluated automatically.
 OpenCode brief delivery and freshness checks have deterministic HTTP-adapter coverage.
+
+Packaged coverage also verifies that the injected Local MCP registry contains the native
+`workflow.evaluate` registration alongside the offline MCP fixture. Their combined capability
+digest includes both the MCP installation identity and native evaluator definition. The Native
+v2 Git/npm fixture uses the existing Native v1/OpenCode Windows scheduling budgets, disables
+irrelevant fixture npm audit/funding requests and retries transient directory cleanup locks.
 
 The live harness keeps its build node running while it exercises the independent evaluator and
 the existing human Memory promotion/revision services; it does not install the UI's Workflow

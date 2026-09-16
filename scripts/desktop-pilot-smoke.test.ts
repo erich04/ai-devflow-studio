@@ -19,7 +19,7 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('hostileDevelopmentServerRequests !== 0')
   })
 
-  it('completes and reopens one durable Local MCP Tool Agent Runtime', () => {
+  it('reopens a real evidence Runtime alongside the persisted Local MCP fixture', () => {
     expect(smoke).toContain("DEVFLOW_ENABLE_LOCAL_MCP_FIXTURE: 'true'")
     expect(smoke).toContain('startAgentRuntime')
     expect(smoke).toContain('advanceAgentRuntime')
@@ -29,10 +29,13 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('acceptedActionCount !== 1')
     expect(smoke).toContain('agent_runtime_tool_audits')
     expect(smoke).toContain('local_mcp_installations')
-    expect(smoke).toContain("source !== 'mcp'")
+    expect(smoke).toContain("source !== 'native'")
     expect(smoke).toContain('installation_id')
     expect(smoke).toContain('installation_version')
-    expect(smoke).toContain("toolId !== 'scenario.evaluate'")
+    expect(smoke).toContain("toolId !== 'workflow.evaluate'")
+    expect(smoke).toContain('insufficient_evidence:missing_clarification_artifact')
+    expect(smoke).toContain('completeWorkflowAgentNode')
+    expect(smoke).toContain('requestClarificationChanges')
     expect(smoke).toContain('schemaVersion !== 34')
     expect(smoke).toMatch(
       /startAgentRuntime\(\{\s*runId: run\.id,\s*nodeId: run\.currentNodeId,\s*localProjectId: project\.id,\s*\}\)/,

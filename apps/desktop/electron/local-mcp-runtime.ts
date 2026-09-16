@@ -1,12 +1,13 @@
 import { realpath, stat } from 'node:fs/promises'
 import type { LocalStore } from './local-store.js'
-import { createLocalMcpClient, createLocalMcpToolRegistry } from './local-mcp-client.js'
+import { createLocalMcpClient, createLocalMcpToolRegistrations } from './local-mcp-client.js'
 import {
   inspectLocalMcpExecutable,
   type LocalMcpInstallation,
 } from './local-mcp-installation.js'
 import { createLocalMcpInstallationRegistry } from './local-mcp-installation-registry.js'
-import type { NativeToolRegistry } from './native-tool-registry.js'
+import { createNativeToolRegistry, digestNativeToolValue, type NativeToolRegistry } from './native-tool-registry.js'
+import { createWorkflowEvaluationRegistration } from './workflow-evaluation.js'
 
 const FIXTURE_INSTALLATION_ID = 'local-mcp-installation-runtime-fixture'
 
@@ -99,9 +100,17 @@ export async function createFixtureLocalMcpRuntime(input: {
     environment: input.environment,
     authorizeCall: (expectedInstallation) => registry.authorizeCall(expectedInstallation),
   })
+  const evaluation = createWorkflowEvaluationRegistration(input.store)
   return {
     installation,
-    nativeToolRegistry: createLocalMcpToolRegistry(client, {
+    nativeToolRegistry: createNativeToolRegistry({
+      tools: [...createLocalMcpToolRegistrations(client), evaluation],
+      // Keep the installation/executable identity as well as the native evaluator
+      // in the authority digest when the packaged fixture registry is injected.
+      capabilitySetDigest: digestNativeToolValue({
+        mcp: client.capabilitySetDigest,
+        native: evaluation.definition,
+      }),
       persistence: {
         reserveGrant: async (grant) => {
           const result = await input.store.reserveAgentRuntimeCapabilityGrant(grant)

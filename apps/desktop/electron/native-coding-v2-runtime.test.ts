@@ -20,10 +20,16 @@ import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
 
 const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
+// Match the real Git/npm fixture budgets used by Native v1 and OpenCode. The
+// enclosing test must leave time for command completion and cleanup on Windows.
+const bootstrapCommandTimeoutMs = process.platform === 'win32' ? 60_000 : 20_000
+const integrationTimeoutMs = process.platform === 'win32' ? 120_000 : 20_000
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.map((directory) => rm(directory, { recursive: true, force: true })),
+    temporaryDirectories.map((directory) => rm(directory, {
+      recursive: true, force: true, maxRetries: 5, retryDelay: 100,
+    })),
   )
   temporaryDirectories.length = 0
 })
@@ -60,6 +66,7 @@ describe('Native Coding Executor v2 runtime', () => {
     const storeDirectory = await temporaryDirectory('devflow-native-v2-store')
     await mkdir(path.join(repositoryPath, 'src'))
     await writeFile(path.join(repositoryPath, '.gitignore'), 'node_modules\n', 'utf8')
+    await writeFile(path.join(repositoryPath, '.npmrc'), 'audit=false\nfund=false\n', 'utf8')
     await writeFile(path.join(repositoryPath, 'src/message.ts'), 'export const message = "old"\n', 'utf8')
     await writeFile(
       path.join(repositoryPath, 'test.mjs'),
@@ -263,7 +270,7 @@ describe('Native Coding Executor v2 runtime', () => {
         ...(previousDependencyHash ? { previousDependencyHash } : {}),
         ...(approvedNonFrozenInstall ? { approvedNonFrozenInstall } : {}),
         runCommand: runLocalTestCommand,
-        timeoutMs: 20_000,
+        timeoutMs: bootstrapCommandTimeoutMs,
         now: timestamp,
       }),
     })
@@ -443,5 +450,5 @@ describe('Native Coding Executor v2 runtime', () => {
       { phase: 'initial', status: 'succeeded', deliveryState: 'response_received', billingState: 'confirmed' },
     ])
     store.close()
-  }, 20_000)
+  }, integrationTimeoutMs)
 })
