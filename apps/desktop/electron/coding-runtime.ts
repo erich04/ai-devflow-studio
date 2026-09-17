@@ -70,7 +70,7 @@ import {
   CodingEnginePermissionDiscoveryError,
 } from './coding-engine-lifecycle.js'
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
-import { estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
+import { CODING_BRIEF_MAX_BYTES, estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
 import { assertCodingContextCurrent, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
 import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
 import type {
@@ -2765,6 +2765,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         node,
         project,
         ...briefContext,
+        maxContextBytes: CODING_BRIEF_MAX_BYTES,
         memoryContext: recalled.revisions,
         userInstruction: input.userInstruction,
         worktreePath: '<managed-worktree-created-after-budget-approval>',

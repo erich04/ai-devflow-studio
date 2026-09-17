@@ -208,6 +208,52 @@ describe('canRunCodingAgentOnNode', () => {
 })
 
 describe('buildCodingBrief', () => {
+  it('keeps approved stage bodies intact while reducing superseded and advisory history to references', () => {
+    const clarification: Artifact = { ...designArtifact, id: 'clarification-v2', kind: 'clarification',
+      nodeId: 'clarify-task', content: '不做二次确认，不做撤销。保留未完成任务的内容、ID 和顺序。\n' + '已批准的业务规则。\n'.repeat(240) }
+    const design: Artifact = { ...designArtifact, content: '使用原生按钮的 disabled 属性。\n' + '完整实现与测试方案。\n'.repeat(240) }
+    const approvedRun: WorkflowRun = { ...run, nodes: [
+      { ...buildNode, id: 'clarify-gate', kind: 'gate', stage: 'clarify', status: 'success', artifactIds: [clarification.id] },
+      { ...buildNode, id: 'design-gate', kind: 'gate', stage: 'design', status: 'success', artifactIds: [design.id] },
+    ] }
+    const brief = buildCodingBrief({
+      run: approvedRun, node: buildNode, project, maxContextBytes: 24_000,
+      upstreamArtifacts: [clarification, design,
+        { ...clarification, id: 'clarification-v1', content: 'STALE_REQUIREMENT must request confirmation.\n'.repeat(300) },
+        { ...designArtifact, id: 'review', kind: 'agent_review', content: 'ADVISORY_BODY must inspect all files.\n'.repeat(300) },
+        { ...designArtifact, id: 'foreign', runId: 'other-run', content: 'FOREIGN_PRIVATE_BODY' },
+      ],
+      knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [],
+      userInstruction: 'Implement the approved scope.', worktreePath: '/tmp/managed', branchName: 'ai/current',
+    })
+    expect(brief.prompt).toContain(clarification.content)
+    expect(brief.prompt).toContain(design.content)
+    expect(brief.prompt).not.toContain('STALE_REQUIREMENT')
+    expect(brief.prompt).not.toContain('ADVISORY_BODY')
+    expect(brief.prompt).not.toContain('FOREIGN_PRIVATE_BODY')
+    expect(brief.prompt).toContain('clarification-v1')
+    expect(brief.compaction?.outputBytes).toBeLessThanOrEqual(24_000)
+  })
+
+  it.each(['Unabridged approved scope. ', '完整保留业务要求。'])('rejects oversized approved content without silently summarizing it: %s', (text) => {
+    expect(() => buildCodingBrief({
+      run: { ...run, nodes: [{ ...buildNode, id: 'design-gate', kind: 'gate', stage: 'design', status: 'success', artifactIds: [designArtifact.id] }] },
+      node: buildNode, project, maxContextBytes: 24_000,
+      upstreamArtifacts: [{ ...designArtifact, content: text.repeat(2_000) }],
+      knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [],
+      userInstruction: 'Implement.', worktreePath: '/tmp/managed', branchName: 'ai/current',
+    })).toThrow('Context budget')
+  })
+
+  it('rejects a missing approved artifact instead of substituting another version', () => {
+    expect(() => buildCodingBrief({
+      run: { ...run, nodes: [{ ...buildNode, id: 'design-gate', kind: 'gate', stage: 'design', status: 'success', artifactIds: ['missing-approved-version'] }] },
+      node: buildNode, project, upstreamArtifacts: [designArtifact],
+      knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [],
+      userInstruction: 'Implement.', worktreePath: '/tmp/managed', branchName: 'ai/current',
+    })).toThrow('exactly one design linked to approved Gate')
+  })
+
   it('compacts long history while retaining the current instruction and design constraints', () => {
     const instruction = 'Only update the export description; preserve the response contract.'
     const constraint = 'Acceptance: exported records must retain their original ordering.'

@@ -84,6 +84,7 @@ export type CodingBriefInput = {
   worktreePath: string
   branchName: string
   memoryContext?: { id: string; revision: number; statement: string }[]
+  maxContextBytes?: number
 }
 
 export type CodingBrief = {
@@ -117,11 +118,31 @@ export function canRunCodingAgentOnNode(node: WorkflowNode): boolean {
 
 export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
   const userInstruction = input.userInstruction.trim()
-  const artifactLines = input.upstreamArtifacts.length
-    ? input.upstreamArtifacts.map((artifact) => {
-        return `- ${artifact.title} (${artifact.kind}): ${artifact.summary}\n  ${artifact.content}`
-      })
-    : ['- No upstream artifacts are available.']
+  const runArtifacts = input.upstreamArtifacts.filter((artifact) => artifact.runId === input.run.id)
+  const approvedArtifactIds = new Set<string>()
+  for (const gate of input.run.nodes.filter((node) => node.kind === 'gate' && node.status === 'success'
+    && (node.stage === 'clarify' || node.stage === 'design'))) {
+    const kind = gate.stage === 'clarify' ? 'clarification' : 'design'
+    const matches = runArtifacts.filter((artifact) => artifact.kind === kind && gate.artifactIds.includes(artifact.id))
+    if (matches.length !== 1) throw new Error(`Coding Context requires exactly one ${kind} linked to approved Gate ${gate.id}`)
+    approvedArtifactIds.add(matches[0]!.id)
+  }
+  const artifactSources = runArtifacts.map((artifact) => {
+    const approved = approvedArtifactIds.has(artifact.id)
+    const referenceOnly = approvedArtifactIds.size > 0 && !approved
+    // Approved stage bodies are indivisible. Superseded drafts, discussions, and
+    // advisory reports remain discoverable in node details, not active requirements.
+    return {
+      id: `artifact:${artifact.id}`,
+      title: approved ? 'Approved stage artifact (complete)' : referenceOnly ? 'Historical artifact reference (not an active requirement)' : 'Upstream Artifacts',
+      content: referenceOnly
+        ? `${artifact.id} (${artifact.kind}): ${artifact.title}`
+        : `- ${artifact.title} (${artifact.kind}): ${artifact.summary}\n  ${artifact.content}`,
+      summary: referenceOnly ? `${artifact.id} (${artifact.kind})` : `${artifact.title}: ${artifact.summary}`,
+      priority: approved ? 85 : referenceOnly ? 10 : artifact.kind === 'design' ? 80 : 70,
+      required: approved,
+    }
+  })
   let remainingKnowledgeExcerptChars = MAX_CODING_KNOWLEDGE_TOTAL_EXCERPT_CHARS
   const knowledgeLines = input.knowledgeReferences.length
     ? input.knowledgeReferences.slice(0, MAX_CODING_KNOWLEDGE_REFERENCES).map((reference) => {
@@ -216,6 +237,7 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
   ].join('\n')
   const { prompt, receipt: compaction } = compactExecutionContext({
     pinned,
+    ...(input.maxContextBytes === undefined ? {} : { maxBytes: input.maxContextBytes }),
     sources: [
       ...(input.memoryContext ?? []).map((memory) => ({
         id: `memory:${memory.id}:${memory.revision}`, title: `Recalled Memory ${memory.id} revision ${memory.revision} (background only)`,
@@ -223,10 +245,7 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
       })),
       { id: 'remediation', title: 'Remediation Plan', content: remediationLines.join('\n'), summary: '', priority: 95, required: true },
       { id: 'test-failure', title: 'Latest Test Diagnostic', content: testFailureLines.join('\n'), summary: '', priority: 90, required: true },
-      ...input.upstreamArtifacts.map((artifact, index) => ({
-        id: `artifact:${artifact.id}`, title: 'Upstream Artifacts', content: artifactLines[index]!,
-        summary: `${artifact.title}: ${artifact.summary}`, priority: artifact.kind === 'design' ? 80 : 70,
-      })),
+      ...artifactSources,
       {
         id: 'knowledge', title: 'Knowledge References', content: knowledgeLines.join('\n'), priority: 60,
         summary: input.knowledgeReferences.slice(0, MAX_CODING_KNOWLEDGE_REFERENCES)
@@ -238,7 +257,7 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
         summary: input.governanceChecks.map((check) => `${check.id} [${check.status}]: ${check.title}`).join('\n'),
       },
       {
-        id: 'gates', title: 'Gate Decisions', content: gateLines.join('\n'), priority: 40,
+        id: 'gates', title: 'Gate Decisions', content: gateLines.join('\n'), priority: 90, required: true,
         summary: input.gateDecisions.map((decision) => `${decision.nodeId}: ${decision.decision}`).join('\n'),
       },
       { id: 'tests', title: 'Existing Test Evidence', content: testEvidenceLines.join('\n'), summary: 'Historical test results do not prove the current changes pass.', priority: 30 },
