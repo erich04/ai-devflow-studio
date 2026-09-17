@@ -211,6 +211,66 @@ function runInput(fixture: Awaited<ReturnType<typeof createFixture>>) {
 }
 
 describe('Native Coding v2 persistent Provider call Trace', () => {
+  it('sends the enforced file and replacement bounds as model instructions', async () => {
+    const prompts: string[] = []
+    const baseUrl = await startCompatibleServer(async (request, response) => {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      const payload = JSON.parse(body)
+      prompts.push(payload.messages[0].content)
+      sendStructuredResponse(response, prompts.length === 1 ? analysisValue : initialValue, prompts.length)
+    })
+    const fixture = await createFixture(baseUrl)
+    const { runtime } = await fixture.openRuntime()
+    expect((await runtime.runCodingAgent(runInput(fixture))).codingRun.status).toBe('waiting_permission')
+    expect(prompts[0]).toContain('at most 8 unique file paths')
+    expect(prompts[1]).toContain('at most 6 unique file paths')
+    expect(prompts[1]).toContain('at most 12 replacements in total')
+  })
+
+  it.each([
+    [{ ...analysisValue, extra: 'RAW_MODEL_CONTENT' }, 'analysis_keys_invalid'],
+    [{ ...analysisValue, files: ['RAW_PROVIDER_PATH.ts'] }, 'analysis_path_not_in_manifest'],
+    [{ ...analysisValue, files: Array(9).fill('src/message.ts') }, 'analysis_too_many_files'],
+    [{ ...analysisValue, files: ['src/message.ts', 'src/message.ts'] }, 'analysis_duplicate_paths'],
+  ])('classifies rejected analysis without logging its content (%s)', async (value, cause) => {
+    const baseUrl = await startCompatibleServer((_request, response) => {
+      sendStructuredResponse(response, value, 1)
+    })
+    const fixture = await createFixture(baseUrl)
+    const { store, runtime } = await fixture.openRuntime()
+    await expect(runtime.runCodingAgent(runInput(fixture))).rejects.toMatchObject({
+      code: 'invalid_model_output', sanitizedCause: `native_v2_${cause}`,
+    })
+    const failed = (await store.listCodingAgentRuns(fixture.run.id))[0]!
+    const events = await store.listCodingAgentEvents(failed.id)
+    expect(providerTrace(events).at(-1)).toMatchObject({ sanitizedCause: `native_v2_${cause}` })
+    expect(JSON.stringify(events)).not.toContain('RAW_MODEL_CONTENT')
+    expect(JSON.stringify(events)).not.toContain('RAW_PROVIDER_PATH')
+    expect(await store.listCodingPermissionRequests(failed.id)).toEqual([])
+  })
+
+  it('persists a precise bounded schema failure without exposing the rejected model content', async () => {
+    let requestNumber = 0
+    const baseUrl = await startCompatibleServer((_request, response) => {
+      requestNumber += 1
+      sendStructuredResponse(response, requestNumber === 1 ? analysisValue : {
+        ...initialValue, changes: [{ path: 'RAW_PROVIDER_PATH.ts', replacements: [{ oldText: 'RAW_MODEL_CONTENT', newText: 'new' }] }],
+      }, requestNumber)
+    })
+    const fixture = await createFixture(baseUrl)
+    const { store, runtime } = await fixture.openRuntime()
+    await expect(runtime.runCodingAgent(runInput(fixture))).rejects.toMatchObject({
+      code: 'invalid_model_output', sanitizedCause: 'native_v2_path_not_in_context',
+    })
+    const failed = (await store.listCodingAgentRuns(fixture.run.id))[0]!
+    const events = await store.listCodingAgentEvents(failed.id)
+    expect(providerTrace(events).at(-1)).toMatchObject({ sanitizedCause: 'native_v2_path_not_in_context' })
+    expect(JSON.stringify(events)).not.toContain('RAW_PROVIDER_PATH')
+    expect(JSON.stringify(events)).not.toContain('RAW_MODEL_CONTENT')
+    expect(await store.listCodingPermissionRequests(failed.id)).toEqual([])
+  })
+
   it('terminalizes a persisted started call when recovery observes an interrupted runtime', async () => {
     const baseUrl = await startCompatibleServer((_request, response) => {
       sendStructuredResponse(response, analysisValue, 1)

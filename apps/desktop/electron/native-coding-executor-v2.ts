@@ -294,21 +294,30 @@ function boundedPrompt(value: Record<string, unknown>): string {
 }
 
 function parseSearchPlan(value: unknown, manifest: readonly string[]): SearchPlan {
+  if (!isPlainRecord(value)) throw new Error('Native Coding v2 analysis is not an object')
+  if (!hasExactKeys(value, ['stateVersion', 'files', 'searches', 'summary'])) {
+    throw new Error('Native Coding v2 analysis keys are invalid')
+  }
+  if (value.stateVersion !== 2) throw new Error('Native Coding v2 analysis version is invalid')
+  if (!Array.isArray(value.files)) throw new Error('Native Coding v2 analysis files are invalid')
+  if (!Array.isArray(value.searches)) throw new Error('Native Coding v2 analysis searches are invalid')
   if (
-    !isPlainRecord(value) ||
-    !hasExactKeys(value, ['stateVersion', 'files', 'searches', 'summary']) ||
-    value.stateVersion !== 2 ||
-    !Array.isArray(value.files) ||
-    !Array.isArray(value.searches) ||
     typeof value.summary !== 'string' ||
     value.summary.length < 1 ||
-    value.summary.length > 1_000 ||
-    value.files.length > MAX_EXCERPTS ||
-    value.searches.length > MAX_EXCERPTS ||
-    value.files.some((entry) => !isCanonicalRelativePath(entry) || !manifest.includes(entry)) ||
-    new Set(value.files).size !== value.files.length
+    value.summary.length > 1_000
   ) {
-    throw new Error('Native Coding v2 repository analysis plan is invalid')
+    throw new Error('Native Coding v2 analysis summary is invalid')
+  }
+  if (value.files.length > MAX_EXCERPTS) throw new Error('Native Coding v2 analysis has too many files')
+  if (value.searches.length > MAX_EXCERPTS) throw new Error('Native Coding v2 analysis has too many searches')
+  if (value.files.some((entry) => !isCanonicalRelativePath(entry))) {
+    throw new Error('Native Coding v2 analysis path is invalid')
+  }
+  if (value.files.some((entry) => !manifest.includes(entry))) {
+    throw new Error('Native Coding v2 analysis path is not in manifest')
+  }
+  if (new Set(value.files).size !== value.files.length) {
+    throw new Error('Native Coding v2 analysis has duplicate paths')
   }
   const searches = value.searches.map((entry) => {
     if (
@@ -377,11 +386,13 @@ function parseChangeProposal(
       !isPlainRecord(entry) ||
       !hasExactKeys(entry, ['path', 'replacements']) ||
       !isCanonicalRelativePath(entry.path) ||
-      !allowedPaths.has(entry.path) ||
       !Array.isArray(entry.replacements) ||
       entry.replacements.length < 1
     ) {
       throw new Error('Native Coding v2 Change Set path is invalid')
+    }
+    if (!allowedPaths.has(entry.path)) {
+      throw new Error('Native Coding v2 Change Set path is not in context')
     }
     const parsed = entry.replacements.flatMap((replacement) => {
       if (!isPlainRecord(replacement)) {
@@ -407,10 +418,45 @@ function parseChangeProposal(
   if (changes.length < 1) {
     throw new Error('Native Coding v2 Change Set proposal has no effective replacements')
   }
-  if (replacements > 12 || new Set(changes.map((change) => change.path)).size !== changes.length) {
-    throw new Error('Native Coding v2 Change Set bounds are invalid')
-  }
+  if (replacements > 12) throw new Error('Native Coding v2 Change Set has too many replacements')
+  if (new Set(changes.map((change) => change.path)).size !== changes.length) throw new Error('Native Coding v2 Change Set has duplicate paths')
   return { stateVersion: 2, changes, summary: safeText(value.summary) }
+}
+
+function modelValidationCause(error: unknown): string {
+  // Only static parser classifications cross into persisted diagnostics. Never
+  // include the rejected model's values, code, paths, or arbitrary error text.
+  const causes: Record<string, string> = {
+    'Native Coding v2 analysis is not an object': 'analysis_not_object',
+    'Native Coding v2 analysis keys are invalid': 'analysis_keys_invalid',
+    'Native Coding v2 analysis version is invalid': 'analysis_version_invalid',
+    'Native Coding v2 analysis files are invalid': 'analysis_files_not_array',
+    'Native Coding v2 analysis searches are invalid': 'analysis_searches_not_array',
+    'Native Coding v2 analysis summary is invalid': 'analysis_summary_invalid',
+    'Native Coding v2 analysis has too many files': 'analysis_too_many_files',
+    'Native Coding v2 analysis has too many searches': 'analysis_too_many_searches',
+    'Native Coding v2 analysis path is invalid': 'analysis_path_invalid',
+    'Native Coding v2 analysis path is not in manifest': 'analysis_path_not_in_manifest',
+    'Native Coding v2 analysis has duplicate paths': 'analysis_duplicate_paths',
+    'Native Coding v2 bounded search request is invalid': 'search_request_invalid',
+    'Native Coding v2 Change Set proposal is not an object': 'proposal_not_object',
+    'Native Coding v2 Change Set proposal keys are invalid': 'proposal_keys_invalid',
+    'Native Coding v2 Change Set proposal version is invalid': 'proposal_version_invalid',
+    'Native Coding v2 Change Set proposal changes are invalid': 'changes_not_array',
+    'Native Coding v2 Change Set proposal is empty': 'changes_empty',
+    'Native Coding v2 Change Set proposal has too many files': 'too_many_files',
+    'Native Coding v2 Change Set proposal summary is invalid': 'summary_invalid',
+    'Native Coding v2 Change Set path is invalid': 'change_shape_or_path_invalid',
+    'Native Coding v2 Change Set path is not in context': 'path_not_in_context',
+    'Native Coding v2 exact replacement is not an object': 'replacement_not_object',
+    'Native Coding v2 exact replacement keys are invalid': 'replacement_keys_invalid',
+    'Native Coding v2 exact replacement oldText is invalid': 'old_text_invalid',
+    'Native Coding v2 exact replacement newText is invalid': 'new_text_invalid',
+    'Native Coding v2 Change Set proposal has no effective replacements': 'no_effective_replacements',
+    'Native Coding v2 Change Set has too many replacements': 'too_many_replacements',
+    'Native Coding v2 Change Set has duplicate paths': 'duplicate_paths',
+  }
+  return `native_v2_${error instanceof Error ? causes[error.message] ?? 'output_validation_failed' : 'output_validation_failed'}`
 }
 
 export function createNativeCodingV2RepairSystemPrompt(
@@ -845,7 +891,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           ...(completed.responseMetadata
             ? { httpStatus: completed.responseMetadata.httpStatus }
             : {}),
-          sanitizedCause: 'native_v2_output_validation_failed',
+          sanitizedCause: modelValidationCause(error),
           cause: error,
         })
       }
@@ -1005,6 +1051,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         'The top-level keys are exactly stateVersion, files, searches, summary. Do not add extra keys.',
         'stateVersion must be the number 2. Every files item and optional searches.path must exactly equal one file path from repositoryManifest; do not use directories or globs.',
         'Each searches item has only query and optional path. searches may be empty. Do not propose edits yet.',
+        'Hard limits: select at most 8 unique file paths and at most 8 searches. Each literal query is 1–200 characters. summary is a non-empty string of at most 1000 characters.',
       ].join(' ')
       const analysis = await runProviderCall({
         assertContextCurrent: context.assertContextCurrent,
@@ -1047,6 +1094,8 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
         'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
         'Use only supplied excerpt paths. Do not create, delete, rename, or edit binary files.',
+        'Hard limits: change at most 6 unique file paths with at most 12 replacements in total across all files. Include each path only once. summary is a non-empty string of at most 1000 characters.',
+        'Plan the smallest complete implementation within those limits, including required tests and documentation. Reuse existing structure and styling; avoid unrelated refactoring or optional cosmetic edits. Check these counts before returning JSON.',
       ].join(' ')
       const initialResult = await runProviderCall({
         assertContextCurrent: context.assertContextCurrent,
