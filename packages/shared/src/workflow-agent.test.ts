@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentProvider } from './agent-review'
-import { createFakeAgentProvider } from './agent-review'
+import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider } from './agent-review'
 import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workflow'
 import {
   runWorkflowStageAgent,
@@ -27,6 +27,71 @@ function designNode() {
 }
 
 describe('runWorkflowStageAgent', () => {
+  it.each(['clarify', 'design'] as const)('passes saved conversation decisions to the %s model prompt', async (stage) => {
+    const node = stage === 'clarify' ? clarifyNode() : designNode()
+    const proposal = {
+      id: 'conversation-proposal-confirmed-interaction', runId: created.run.id, nodeId: node.id,
+      kind: 'log' as const, title: 'Discussion proposal', summary: 'User-saved proposal; pending review.',
+      content: 'Confirmed: clear only completed tasks immediately; no confirmation dialog and no undo. Preserve remaining IDs and order.',
+      redacted: true, updatedAt: '2026-09-17T06:00:00.000Z',
+    }
+    let messages = ''
+    const provider = createOpenAiCompatibleAgentProvider({
+      id: 'deepseek-test', model: 'deepseek-flash', apiKey: 'test-key', baseUrl: 'https://api.deepseek.com',
+      fetcher: async (_, init) => {
+        messages = JSON.stringify(JSON.parse(String(init?.body)).messages)
+        return Response.json({ choices: [{ message: { content: JSON.stringify({
+          title: 'Stage output', summary: 'Saved decisions considered.', content: 'Implement the clarified requirement.',
+          goals: ['Clear completed tasks'], acceptanceCriteria: ['Preserve remaining tasks'],
+          nonGoals: ['Undo'], openQuestions: [], assumptions: [], risks: [],
+        }) } }] })
+      },
+    })
+    const result = await runWorkflowStageAgent({
+      run: created.run, node, artifacts: [...created.artifacts, proposal],
+      provider, requestedBy: 'u-ling', runtime: 'electron',
+    })
+    expect(result.prompt).toContain(proposal.content)
+    expect(messages).toContain(proposal.content)
+    expect(result.artifact.clarificationRevision?.repositoryFindings).toBeUndefined()
+  })
+
+  it('limits saved proposal input to this Run and node, redacts it, and preserves its pending authority', async () => {
+    const proposal = {
+      id: 'conversation-proposal-current', runId: created.run.id, nodeId: clarifyNode().id,
+      kind: 'log' as const, title: 'Current proposal', summary: 'Pending review.',
+      content: 'Keep task order. API_KEY=sk-supersecret123456789 in /Users/alice/private/repo',
+      redacted: false, updatedAt: '2026-09-17T06:00:00.000Z',
+    }
+    const result = await runWorkflowStageAgent({
+      run: created.run, node: clarifyNode(), provider: createFakeAgentProvider(),
+      artifacts: [...created.artifacts, proposal,
+        { ...proposal, id: 'conversation-proposal-other-run', runId: 'other-run', content: 'OTHER_RUN_PRIVATE_INPUT' },
+        { ...proposal, id: 'conversation-proposal-other-node', nodeId: designNode().id, content: 'OTHER_NODE_PROPOSAL' },
+        { ...proposal, id: 'ordinary-log', content: 'ORDINARY_LOG_BODY' },
+      ], requestedBy: 'u-ling', runtime: 'electron',
+    })
+    expect(result.prompt).toContain('Keep task order.')
+    expect(result.prompt).toContain('not Gate approval or verified repository evidence')
+    for (const excluded of ['OTHER_RUN_PRIVATE_INPUT', 'OTHER_NODE_PROPOSAL', 'ORDINARY_LOG_BODY', 'sk-supersecret123456789', '/Users/alice/private/repo']) {
+      expect(result.prompt).not.toContain(excluded)
+    }
+  })
+
+  it('rejects oversized saved proposals before calling the provider instead of truncating decisions', async () => {
+    const provider = createFakeAgentProvider()
+    const generate = vi.spyOn(provider, 'generateWorkflowArtifact')
+    await expect(runWorkflowStageAgent({
+      run: created.run, node: clarifyNode(), provider, requestedBy: 'u-ling', runtime: 'electron',
+      artifacts: [...created.artifacts, {
+        id: 'conversation-proposal-oversized', runId: created.run.id, nodeId: clarifyNode().id,
+        kind: 'log', title: 'Large proposal', summary: 'Pending', content: 'decision '.repeat(16_000),
+        redacted: true, updatedAt: '2026-09-17T06:00:00.000Z',
+      }],
+    })).rejects.toMatchObject({ terminalReason: 'input_limit' })
+    expect(generate).not.toHaveBeenCalled()
+  })
+
   it('timestamps the artifact and terminal provenance after the provider has completed', async () => {
     let now = '2026-09-10T10:00:00.000Z'
     const provider = createFakeAgentProvider()
@@ -313,7 +378,11 @@ describe('runWorkflowStageAgent', () => {
     const result = await runWorkflowStageAgent({
       run: created.run,
       node: clarifyNode(),
-      artifacts: created.artifacts,
+      artifacts: [...created.artifacts, {
+        id: 'conversation-proposal-local', runId: created.run.id, nodeId: clarifyNode().id,
+        kind: 'log', title: 'Saved decision', summary: 'Pending review',
+        content: 'Do not add a confirmation dialog.', redacted: true, updatedAt: '2026-06-28T14:00:00.000Z',
+      }],
       executor,
       requestedBy: 'u-ling',
       runtime: 'electron',
@@ -327,6 +396,7 @@ describe('runWorkflowStageAgent', () => {
     expect(result.tokenUsage).toMatchObject({ source: 'unknown', usageStatus: 'unknown', costUsd: null })
     expect(result.trace.steps.map((step) => step.summary).join('\n')).not.toContain('/Users/')
     const prompt = vi.mocked(executor.execute).mock.calls[0]![0].prompt
+    expect(prompt).toContain('Do not add a confirmation dialog.')
     expect(prompt).toContain('arrays of OBJECTS, not strings')
     expect(prompt).toContain('"citationIds":["citation-1"]')
     expect(prompt).toContain('"path":"<repo-relative-file>"')
