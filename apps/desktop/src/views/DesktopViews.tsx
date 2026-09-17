@@ -110,6 +110,7 @@ export function WorkflowBoard({
   selectedNodeId,
   onSelectNode,
   onSelectAttachment,
+  onDiscuss,
 }: {
   run: WorkflowRun
   artifacts: Artifact[]
@@ -118,7 +119,9 @@ export function WorkflowBoard({
   selectedNodeId: string | undefined
   onSelectNode: (nodeId: string) => void
   onSelectAttachment: (nodeId: string, tab: string) => void
+  onDiscuss?: (node: WorkflowNode) => void
 }) {
+  const [boardView, setBoardView] = useState<'flow' | 'list'>('flow')
   const board = useMemo(
     () => buildWorkflowBoard({ run, artifacts, events, testEvidence }),
     [artifacts, events, run, testEvidence],
@@ -132,13 +135,22 @@ export function WorkflowBoard({
         : 'current'
 
   return (
-    <section className="canvas-panel workflow-panel" data-testid="workflow-canvas">
+    <section className={`canvas-panel workflow-panel unified-workflow workflow-view--${boardView}`} data-testid="workflow-canvas">
       <div className="panel-head workflow-head">
         <div>
-          <span className="panel-title">Workflow Board</span>
+          <span className="panel-title">工作流看板</span>
           <span className="meta">当前 Run: {run.title}</span>
         </div>
+        <div className="workflow-view-switch" role="group" aria-label="看板展示方式">
+          <button aria-pressed={boardView === 'flow'} onClick={() => setBoardView('flow')}>流程视图</button>
+          <button aria-pressed={boardView === 'list'} onClick={() => setBoardView('list')}>列表视图</button>
+        </div>
       </div>
+      <nav className="workflow-stage-navigation" aria-label="六阶段导航">
+        {board.map((stage) => <button key={stage.stage} className={`stage-nav--${stage.completionState}`} aria-current={currentNode?.stage === stage.stage ? 'step' : undefined} onClick={() => document.getElementById(`workflow-stage-${stage.stage}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' })}>
+          <span>{stage.index}</span><strong>{stage.label}</strong><small>{stage.completionLabel}</small>
+        </button>)}
+      </nav>
       <div className="workflow-context">
         <div className="flow-progress" aria-label="Run 流程进度">
           <div className="sequence-note">
@@ -155,16 +167,16 @@ export function WorkflowBoard({
             <p className="meta">{currentRunPhaseCopy(run)}</p>
           </div>
         </div>
-        <div className="board-semantics" aria-label="卡片阅读方式">
+        <details className="board-semantics-help"><summary>查看卡片说明</summary><div className="board-semantics" aria-label="卡片阅读方式">
           <span className="semantic-chip"><strong>节点类型</strong>Task / Gate / Test / Delivery / Acceptance</span>
           <span className="semantic-chip"><strong>节点来源</strong>与展示方式分开标注</span>
           <span className="semantic-chip"><strong>卡片底部</strong>点击产物 / 测试证据 / 轨迹计数查看当前节点内容</span>
-          <span className="semantic-chip"><strong>Inspector</strong>按节点类型显示不同诊断 tab</span>
-        </div>
+          <span className="semantic-chip"><strong>节点详情</strong>按节点类型显示不同诊断 tab</span>
+        </div></details>
       </div>
       <div className="stage-grid" role="list" aria-label="Workflow stages">
         {board.map((stage) => (
-          <section className="stage-column" key={stage.stage} aria-label={stage.label}>
+          <section id={`workflow-stage-${stage.stage}`} className="stage-column" key={stage.stage} aria-label={stage.label}>
             <div className="stage-heading">
               <span>{stage.index}</span>
               <strong>{stage.label}</strong>
@@ -235,6 +247,7 @@ export function WorkflowBoard({
                       </button>
                     ))}
                   </div>
+                  {onDiscuss && <button className="workflow-discuss" aria-label={`讨论：${displayNodeTitle(card.node)}`} onClick={() => onDiscuss(card.node)}>讨论此问题 ↗</button>}
                 </article>
               ))}
             </div>

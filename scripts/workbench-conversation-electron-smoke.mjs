@@ -1,0 +1,183 @@
+import { execFile } from 'node:child_process'
+import { createServer } from 'node:http'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
+import { _electron as electron, expect } from '@playwright/test'
+
+const root = fileURLToPath(new URL('..', import.meta.url))
+const temp = await mkdtemp(path.join(os.tmpdir(), 'devflow-workbench-smoke-'))
+const repository = path.join(temp, 'task-list')
+const userData = path.join(temp, 'user-data')
+const output = path.join(root, 'out', 'workbench-conversation-qa')
+await mkdir(repository, { recursive: true }); await mkdir(output, { recursive: true })
+const git = (args) => promisify(execFile)('git', args, { cwd: repository })
+await writeFile(path.join(repository, 'package.json'), JSON.stringify({ name: 'task-list', version: '1.0.0', scripts: { test: 'node --test' } }))
+await writeFile(path.join(repository, 'tasks.js'), 'export function clearDone(tasks) { return tasks.filter(task => !task.done) }\n')
+await writeFile(path.join(repository, 'README.md'), '# 中文任务清单\n\n清理已完成任务，保留未完成任务。\n')
+await git(['init', '-b', 'main']); await git(['config', 'user.email', 'smoke@example.invalid']); await git(['config', 'user.name', 'DevFlow Smoke'])
+await git(['add', '.']); await git(['-c', 'commit.gpgsign=false', 'commit', '-m', 'Test fixture'])
+const before = (await git(['status', '--porcelain'])).stdout
+const requests = []
+let run
+let failureSeen = false
+const server = createServer(async (request, response) => {
+  const chunks = []; for await (const chunk of request) chunks.push(chunk)
+  const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  requests.push(body)
+  const input = JSON.parse(body.messages.find((message) => message.role === 'user').content)
+  const user = input.history.filter((message) => message.role === 'user').at(-1)?.text ?? ''
+  const observations = input.toolObservations
+  let value
+  if (user.includes('失败重试') && !failureSeen) { failureSeen = true; response.writeHead(503); response.end('{}'); return }
+  if (user.includes('停止调查')) {
+    const timer = setTimeout(() => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: '延迟响应' }) } }], usage: { prompt_tokens: 10, completion_tokens: 2 } })) }, 5000)
+    response.once('close', () => clearTimeout(timer)); return
+  }
+  if (user.includes('检查全部节点')) {
+    const index = observations.length
+    value = index < run.nodes.length
+      ? { tool: { name: 'node', args: { runId: run.id, nodeId: run.nodes[index].id } } }
+      : { text: `已检查全部 ${run.nodes.length} 个节点，覆盖需求、方案、开发、测试、交付和验收。当前在需求澄清；下游尚未开始。`, actions: run.nodes.map((node) => ({ label: `定位：${node.title}`, runId: run.id, nodeId: node.id, section: '状态' })) }
+  } else if (user.includes('调查代码')) {
+    value = observations.length === 0 ? { tool: { name: 'repo_read', args: { path: 'tasks.js' } } }
+      : observations.length === 1 ? { tool: { name: 'knowledge', args: { query: '清理' } } }
+      : { text: '代码使用 filter 保留未完成任务；项目文档要求一致。还有一个产品行为需要确认。', question: { prompt: '清理之后需要支持撤销吗？', options: ['需要撤销', '不需要撤销'] }, citationIds: ['source-1', 'source-2'] }
+  } else if (user.includes('不需要撤销')) {
+    value = { text: '已记录：不增加撤销操作。可以将这份提案保存到需求节点供后续流程使用。', draft: { runId: run.id, nodeId: run.nodes[0].id, title: '清理已完成任务', content: '清理所有已完成任务，保留未完成任务；刷新保留清理结果；没有已完成任务时按钮禁用；本次不增加撤销功能。' } }
+  } else if (user.includes('查询共享提案')) {
+    value = observations.length === 0 ? { tool: { name: 'node', args: { runId: run.id, nodeId: run.nodes[0].id } } }
+      : { text: '已查到保存的讨论提案。它仍待确认，尚未批准需求 Gate。', actions: [{ label: '查看需求产物', runId: run.id, nodeId: run.nodes[0].id, section: '产物' }] }
+  } else {
+    const node = run.nodes.find((node) => node.kind === 'test')
+    value = observations.length === 0 ? { tool: { name: 'node', args: { runId: run.id, nodeId: node.id } } }
+      : { text: '测试节点尚未执行。可以打开节点查看证据与下一步操作。', actions: [{ label: '查看测试节点', runId: run.id, nodeId: node.id, section: '测试证据' }] }
+  }
+  response.writeHead(200, { 'content-type': 'application/json' })
+  response.end(JSON.stringify({ id: 'controlled-response', choices: [{ message: { role: 'assistant', content: JSON.stringify(value) } }], usage: { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 } }))
+})
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+const modelUrl = `http://127.0.0.1:${server.address().port}/v1`
+let app
+let page
+const errors = []
+async function launch() {
+  app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9', DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
+  page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded')
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1672, 973))
+  page.on('pageerror', (error) => errors.push(error.message))
+}
+async function readyText(text) { await expect(page.getByText(text, { exact: false }).last()).toBeVisible({ timeout: 30000 }) }
+async function send(text) {
+  await page.getByRole('textbox', { name: '对话内容' }).fill(text)
+  await page.getByRole('button', { name: '发送消息', exact: true }).click()
+}
+try {
+  await launch()
+  await app.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }) }, repository)
+  const project = await page.evaluate(() => window.aiDevFlowDesktop.selectLocalProject())
+  await page.evaluate((baseUrl) => window.aiDevFlowDesktop.saveAgentProviderCredential({ name: '对话测试模型', providerId: 'workbench-smoke', model: 'controlled-conversation', apiKey: 'sk-test-workbench-only', baseUrl }), modelUrl)
+  await page.evaluate(() => window.aiDevFlowDesktop.saveSettings({ selectedAgentProviderId: 'workbench-smoke', themePreference: 'dark' }))
+  run = await page.evaluate((projectId) => window.aiDevFlowDesktop.createRun({ title: '为任务清单增加清除已完成功能', request: '清理已完成任务，保留未完成任务并保存结果。', projectId, creatorId: 'smoke-user', branchName: 'ai/clear-done' }), project.id)
+  await page.reload()
+  await expect(page.getByTestId('workflow-canvas')).toBeVisible()
+  const checked = []
+  for (const node of run.nodes) {
+    await page.getByTestId(`flow-node-${node.id}`).click()
+    await expect(page.getByRole('tab', { name: '节点详情', exact: true })).toHaveAttribute('aria-selected', 'true')
+    const inspector = page.getByTestId('node-inspector')
+    await expect(inspector).toBeVisible()
+    const tabs = await inspector.getByRole('tab').all()
+    const tabNames = []
+    for (const tab of tabs) { tabNames.push(await tab.innerText()); await tab.click(); await expect(tab).toHaveAttribute('aria-selected', 'true') }
+    for (const chip of await page.getByTestId(`workflow-card-${node.id}`).locator('.artifact-chip').all()) {
+      await chip.click(); await expect(inspector).toBeVisible()
+    }
+    checked.push({ nodeId: node.id, stage: node.stage, kind: node.kind, tabs: tabNames })
+  }
+  await page.getByTestId(`flow-node-${run.nodes[0].id}`).click()
+  await page.locator('.stage-grid').evaluate((element) => { element.scrollTop = 0; element.scrollLeft = 0 })
+  await page.getByTestId('node-inspector').getByRole('tab', { name: '状态', exact: true }).click()
+  await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
+  await page.screenshot({ scale: 'css', path: path.join(output, '01-node-details.png') })
+  await page.getByRole('button', { name: '列表视图', exact: true }).click()
+  for (const node of run.nodes) await expect(page.getByTestId(`flow-node-${node.id}`)).toBeAttached()
+  await page.getByRole('button', { name: '流程视图', exact: true }).click()
+  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await send('检查全部节点的真实进展。')
+  await readyText(`已检查全部 ${run.nodes.length} 个节点`)
+  await send('调查代码和知识后帮我澄清需求。')
+  await readyText('清理之后需要支持撤销吗？')
+  await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
+  await page.screenshot({ scale: 'css', path: path.join(output, '02-conversation-question.png') })
+  await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '02-conversation-detail.png') })
+  await page.getByRole('button', { name: '不需要撤销', exact: true }).click()
+  await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  await page.getByRole('button', { name: '保存为节点提案', exact: true }).click()
+  await readyText('已保存为节点提案')
+  await page.getByRole('button', { name: /上下文与会话记忆/ }).click()
+  await page.getByRole('textbox', { name: '仅本会话记忆' }).fill('ALPHA_PRIVATE_MEMORY')
+  await page.getByRole('textbox', { name: '仅本会话记忆' }).blur()
+  await page.getByRole('button', { name: /上下文与会话记忆/ }).click()
+  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  const secondStart = requests.length
+  await send('查询共享提案，然后告诉我测试阶段的进度。')
+  await readyText('已查到保存的讨论提案')
+  expect(JSON.stringify(requests.slice(secondStart))).not.toContain('ALPHA_PRIVATE_MEMORY')
+  const nodeResults = requests.slice(secondStart).map((request) => JSON.parse(request.messages.find((message) => message.role === 'user').content)).flatMap((input) => input.toolObservations)
+  expect(JSON.stringify(nodeResults)).toContain('讨论提案（待确认）')
+  await page.getByRole('button', { name: '查看需求产物 ↗', exact: true }).click()
+  await expect(page.getByTestId('node-inspector').getByRole('tab', { name: '产物', exact: true })).toHaveAttribute('aria-selected', 'true')
+  const secondTab = page.getByRole('tab', { name: /查询共享提案/ })
+  await secondTab.click()
+  await send('失败重试场景，请查询测试进度。')
+  await expect(page.getByRole('button', { name: '重试调查', exact: true })).toBeVisible({ timeout: 30000 })
+  await page.getByRole('button', { name: '重试调查', exact: true }).click()
+  await readyText('测试节点尚未执行')
+  await send('停止调查场景')
+  await page.getByRole('button', { name: '停止调查', exact: true }).click()
+  await readyText('已停止调查')
+  await page.getByRole('textbox', { name: '对话内容' }).fill('重启后继续输入')
+  await page.getByRole('tab', { name: '节点详情', exact: true }).click()
+  await secondTab.click()
+  const persisted = await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({ type: 'list', projectId }), project.id)
+  expect(persisted.conversations).toHaveLength(2)
+  await expect.poll(async () => (await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({ type: 'list', projectId }), project.id)).conversations.some((item) => item.inputDraft === '重启后继续输入')).toBe(true)
+  await app.close(); app = undefined
+  await launch()
+  await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
+  await page.screenshot({ scale: 'css', path: path.join(output, '03-restored-tabs.png') })
+  await page.getByRole('button', { name: /关闭会话 Tab：查询共享提案/ }).click()
+  await page.getByRole('button', { name: '会话历史', exact: true }).click()
+  await page.getByRole('button', { name: /查询共享提案.*已停止/ }).click()
+  await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
+  for (let attempt = 0; attempt < 3 && await page.locator('html').getAttribute('data-theme') !== 'light'; attempt++) await page.getByRole('button', { name: 'Toggle color theme' }).click()
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
+  await page.screenshot({ scale: 'css', path: path.join(output, '04-light-workspace.png') })
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 973))
+  await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeInViewport()
+  await expect(page.getByRole('button', { name: '新建对话', exact: true })).toBeInViewport()
+  await expect(page.getByRole('button', { name: '会话历史', exact: true })).toBeInViewport()
+  await expect(page.getByRole('button', { name: '新建 Run', exact: true })).toBeInViewport()
+  await expect.poll(async () => (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).x + (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).width).toBeLessThanOrEqual(1280)
+  await page.screenshot({ scale: 'css', path: path.join(output, '05-narrow-workspace.png') })
+  const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
+  expect(state.runs[0].currentNodeId).toBe(run.currentNodeId)
+  expect(state.artifacts.some((artifact) => artifact.title.includes('讨论提案（待确认）'))).toBe(true)
+  expect(JSON.stringify(state)).not.toContain('ALPHA_PRIVATE_MEMORY')
+  expect((await git(['status', '--porcelain'])).stdout).toBe(before)
+  expect(errors).toEqual([])
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local HTTP endpoint through the real Provider/IPC/SQLite implementation', sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
+  console.log(JSON.stringify(report, null, 2))
+} catch (error) {
+  if (page) await page.screenshot({ scale: 'css', path: path.join(output, 'failure.png') }).catch(() => undefined)
+  throw error
+} finally {
+  if (app) await app.close().catch(() => undefined)
+  server.closeAllConnections(); await new Promise((resolve) => server.close(resolve))
+  await rm(temp, { recursive: true, force: true })
+}

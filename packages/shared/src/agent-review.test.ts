@@ -1210,7 +1210,23 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
   })
 
-  it('accepts one json Markdown fence but rejects prose or nested fences', async () => {
+  it('accepts Markdown code examples inside a structured JSON answer', async () => {
+    const value = { text: 'Use this read-only example:\n```js\ntasks.filter(task => !task.done)\n```', actions: [] }
+    for (const content of [JSON.stringify(value), `\`\`\`json\n${JSON.stringify(value)}\n\`\`\``]) {
+      const provider = createOpenAiCompatibleAgentProvider({
+        model: 'deepseek-v4-flash',
+        apiKey: 'secret-key',
+        fetcher: async () => new Response(JSON.stringify({
+          choices: [{ message: { content } }],
+        }), { status: 200, headers: { 'content-type': 'application/json' } }),
+      })
+      await expect(provider.completeStructuredJson?.({
+        systemPrompt: 'Return JSON.', userPrompt: 'Explain this code.', maxOutputTokens: 500,
+      })).resolves.toMatchObject({ value })
+    }
+  })
+
+  it('accepts one json Markdown fence but rejects prose or nested fences outside JSON', async () => {
     const responseFor = (content: string) => new Response(JSON.stringify({
       choices: [{ message: { content } }],
       usage: { prompt_tokens: 1, completion_tokens: 1 },
@@ -1228,6 +1244,8 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     for (const content of [
       'Here is JSON: {"stateVersion":2}',
       '```json\n```json\n{"stateVersion":2}\n```\n```',
+      '{"stateVersion":2}\n```js\nnotJson()\n```',
+      '{"stateVersion":2}{"ok":true}',
     ]) {
       const invalid = createOpenAiCompatibleAgentProvider({
         model: 'deepseek-v4-flash',

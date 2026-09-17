@@ -1,3 +1,4 @@
+import type { WorkbenchConversation } from './workbench-conversation-contract.js'
 import { existsSync } from 'node:fs'
 import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
 import { inspectStoredProviderRemoval } from './provider-credential-store'
@@ -798,6 +799,8 @@ export type {
 } from './local-mcp-store'
 
 export type LocalStore = {
+  listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]>
+  saveWorkbenchConversation(conversation: WorkbenchConversation, expectedVersion: number, artifact?: Artifact): Promise<boolean>
   getSpecialistTaskAuthorityStoreIdentity(): object
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
@@ -4421,6 +4424,31 @@ class SqlJsLocalStore implements LocalStore {
     private db: Database,
     private readonly dbPath: string,
   ) {}
+
+  async listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]> {
+    return selectJson<WorkbenchConversation>(this.db,
+      `select json from workbench_conversations ${projectId ? 'where local_project_id = ?' : ''} order by updated_at desc, id`,
+      projectId ? [projectId] : [])
+  }
+
+  async saveWorkbenchConversation(conversation: WorkbenchConversation, expectedVersion: number, artifact?: Artifact): Promise<boolean> {
+    const previous = selectJson<WorkbenchConversation>(this.db, 'select json from workbench_conversations where id = ?', [conversation.id])[0]
+    if ((previous?.version ?? 0) !== expectedVersion) return false
+    if (conversation.version !== expectedVersion + 1 || (previous && previous.localProjectId !== conversation.localProjectId)) throw new Error('Invalid conversation revision')
+    if (!selectJson<LocalProject>(this.db, 'select json from local_projects where id = ?', [conversation.localProjectId]).length) throw new Error('Conversation project not found')
+    if (JSON.stringify(conversation).length > 2000000) throw new Error('会话已达到存储上限，请新建会话。')
+    if (artifact) {
+      const run = readWorkflowRuns(this.db).find((candidate) => candidate.id === artifact.runId)
+      if (!run || run.projectId !== conversation.localProjectId || !run.nodes.some((node) => node.id === artifact.nodeId) || artifact.kind !== 'log') throw new Error('Invalid conversation publication target')
+      assertImmutableWorkflowArtifactWrite(this.db, artifact)
+      writeArtifact(this.db, artifact)
+    }
+    this.db.run(`insert into workbench_conversations (id, local_project_id, version, updated_at, json) values (?, ?, ?, ?, ?)
+      on conflict(id) do update set version = excluded.version, updated_at = excluded.updated_at, json = excluded.json`,
+      [conversation.id, conversation.localProjectId, conversation.version, conversation.updatedAt, JSON.stringify(conversation)])
+    await this.persist()
+    return true
+  }
 
   getSpecialistTaskAuthorityStoreIdentity(): object {
     return this.specialistTaskAuthorityStoreIdentity
@@ -13584,6 +13612,8 @@ class SqlJsLocalStore implements LocalStore {
 // Direct methods access state or handle in-memory authority/lifecycle; Memory retrieval is
 // durable because it also records expiry and retrieval audit state.
 const LOCAL_STORE_METHOD_EXECUTION = {
+  listWorkbenchConversations: 'direct',
+  saveWorkbenchConversation: 'durable',
   getSpecialistTaskAuthorityStoreIdentity: 'direct',
   upsertProject: 'durable',
   listProjects: 'direct',

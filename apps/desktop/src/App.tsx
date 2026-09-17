@@ -1,3 +1,4 @@
+import { WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
 import { buildRunUsageSummary } from './app/run-usage-summary'
 import {
   BookOpen,
@@ -84,6 +85,8 @@ const remoteSyncStatusLabels = {
 } as const
 
 export function App() {
+  const [workbenchOpenRequest, setWorkbenchOpenRequest] = useState<WorkbenchOpenRequest>({ serial: 0, type: 'details' })
+  const openNodeDetails = () => setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'details' }))
   const workspace = useDesktopWorkspace({
     defaultReviewProviderDraft,
     reviewProviderFromMetadata,
@@ -923,6 +926,7 @@ export function App() {
   }
 
   function selectRunNode(runId: string | undefined, nodeId: string | undefined) {
+    openNodeDetails()
     const run = scopedRuns.find((candidate) => candidate.id === runId) ?? selectedRun
     if (!run) {
       return
@@ -1302,6 +1306,7 @@ export function App() {
                         className="run-row-main"
                         title={run.title}
                         onClick={() => {
+                          openNodeDetails()
                           setSelectedRunId(run.id)
                           setSelectedNodeId(run.currentNodeId)
                           setOpenRunMenuId(null)
@@ -1368,8 +1373,10 @@ export function App() {
                   events={scopedEvents}
                   testEvidence={scopedTestEvidence}
                   selectedNodeId={selectedNode?.id}
-                  onSelectNode={setSelectedNodeId}
+                  onSelectNode={(nodeId) => { setSelectedNodeId(nodeId); openNodeDetails() }}
+                  onDiscuss={(node) => setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'discussion', prompt: `请结合项目代码和真实流程，帮我分析 Run「${selectedRun.title}」的「${node.title}」节点。Run ID: ${selectedRun.id}；节点 ID: ${node.id}。` }))}
                   onSelectAttachment={(nodeId, inspectorTab) => {
+                    openNodeDetails()
                     setSelectedNodeId(nodeId)
                     setSupportContext({
                       runId: selectedRun.id, nodeId, inspectorTab,
@@ -1379,8 +1386,21 @@ export function App() {
                   }}
                 />
 
-                <WorkbenchSplitter />
+                <WorkbenchSplitter initialWidth={520} />
 
+                <WorkbenchWorkspace api={desktopApi}
+                  projectId={selectedLocalProject?.id}
+                  projectName={selectedLocalProject?.name}
+                  runs={scopedRuns}
+                  providerId={selectedAgentProviderId}
+                  providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
+                  request={workbenchOpenRequest}
+                  onConfigure={() => setActiveView('agents')}
+                  onNavigate={(action) => {
+                    selectRunNode(action.runId, action.nodeId)
+                    setSupportContext({ runId: action.runId, nodeId: action.nodeId, inspectorTab: action.section,
+                      sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab', label: action.section, createdAt: new Date().toISOString() })
+                  }}>
                 <Inspector
                   selectedRun={selectedRun}
                   selectedNode={selectedNode}
@@ -1450,6 +1470,7 @@ export function App() {
                   isStartingCodingAgent={isStartingCodingAgent}
                   pendingInspectorAction={pendingInspectorAction}
                 />
+                </WorkbenchWorkspace>
               </>
             ) : (
               <>
@@ -1465,7 +1486,20 @@ export function App() {
                     当前本地仓库没有已保存的 Run。创建 Run 或同步团队后，这里才会展示真实工作流。
                   </p>
                 </section>
-                <WorkbenchSplitter />
+                <WorkbenchSplitter initialWidth={520} />
+                <WorkbenchWorkspace api={desktopApi}
+                  projectId={selectedLocalProject?.id}
+                  projectName={selectedLocalProject?.name}
+                  runs={scopedRuns}
+                  providerId={selectedAgentProviderId}
+                  providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
+                  request={workbenchOpenRequest}
+                  onConfigure={() => setActiveView('agents')}
+                  onNavigate={(action) => {
+                    selectRunNode(action.runId, action.nodeId)
+                    setSupportContext({ runId: action.runId, nodeId: action.nodeId, inspectorTab: action.section,
+                      sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab', label: action.section, createdAt: new Date().toISOString() })
+                  }}>
                 <aside className="inspector" data-testid="node-inspector-empty">
                   <div className="panel-head panel-head--compact">
                     <span className="panel-title">Inspector</span>
@@ -1473,6 +1507,7 @@ export function App() {
                   </div>
                   <p className="empty-note">选择真实 Run 后显示节点、证据、Gate 和 Review。</p>
                 </aside>
+                </WorkbenchWorkspace>
               </>
             )}
           </section>

@@ -225,7 +225,9 @@ function parseStructuredProviderOutput(raw: string): Record<string, unknown> {
   const trimmed = raw.trim()
   const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
   const jsonText = fenced ? fenced[1]!.trim() : trimmed
-  if ((!fenced && jsonText.includes('```')) || !jsonText) {
+  // Markdown inside a JSON string is ordinary content. JSON.parse still rejects
+  // prose, trailing fences, and additional values outside the single object.
+  if (!jsonText) {
     throw new Error('Agent provider structured output is invalid')
   }
   let value: unknown

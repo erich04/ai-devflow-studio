@@ -1,3 +1,4 @@
+import { WorkbenchConversationService } from './workbench-conversation-service.js'
 import { createProviderOperationGuard, guardProviderCalls } from './provider-operation-guard.js'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
@@ -2051,7 +2052,34 @@ async function reconcilePendingGateOverrides(
   return reconciled
 }
 
+let workbenchConversationService: Promise<WorkbenchConversationService> | undefined
+async function getWorkbenchConversationService() {
+  workbenchConversationService ??= getStore().then(async (store) => {
+    const service = new WorkbenchConversationService({
+      store,
+      resolveProvider: (id) => resolveAgentProvider(store, id),
+      loadKnowledge: (projectId) => loadTrustedRepositoryKnowledge(projectId, { refresh: true }),
+      inspectGate: async (target) => {
+        const evaluated = await evaluateLocalGateEnforcement(target)
+        return { decision: evaluated.decision, policyVersion: evaluated.policySnapshot.version, policySource: evaluated.policySnapshot.source }
+      },
+      changed: (projectId) => broadcastToRenderers(ipcChannels.workbenchConversationUpdated, projectId),
+      published: async () => broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState()),
+    })
+    await service.recoverInterrupted()
+    return service
+  })
+  return workbenchConversationService
+}
+
 function registerIpcHandlers() {
+  ipcMain.handle(ipcChannels.workbenchConversation, async (_, payload: unknown) => {
+    try { return await (await getWorkbenchConversationService()).command(payload) }
+    catch (error) {
+      const message = error instanceof Error && /^[\u4e00-\u9fff]/u.test(error.message) ? error.message.slice(0, 240) : '会话操作未完成，请重试。'
+      return { conversations: [], error: message }
+    }
+  })
   ipcMain.handle(ipcChannels.loadState, async () => {
     const store = await getStore()
     return store.loadState()

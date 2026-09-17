@@ -98,15 +98,15 @@ type ActiveDrag = {
   startWidth: number
 }
 
-export function WorkbenchSplitter() {
+export function WorkbenchSplitter({ initialWidth = WORKBENCH_INSPECTOR_DEFAULT_WIDTH }: { initialWidth?: number } = {}) {
   const splitterRef = useRef<HTMLDivElement>(null)
-  const widthRef = useRef(WORKBENCH_INSPECTOR_DEFAULT_WIDTH)
+  const widthRef = useRef(initialWidth)
   const boundsRef = useRef({
     min: WORKBENCH_INSPECTOR_MIN_WIDTH,
     max: WORKBENCH_INSPECTOR_MAX_WIDTH,
   })
   const activeDragRef = useRef<ActiveDrag | null>(null)
-  const [inspectorWidth, setInspectorWidth] = useState(WORKBENCH_INSPECTOR_DEFAULT_WIDTH)
+  const [inspectorWidth, setInspectorWidth] = useState(initialWidth)
   const [bounds, setBounds] = useState(boundsRef.current)
   const [isDragging, setIsDragging] = useState(false)
 

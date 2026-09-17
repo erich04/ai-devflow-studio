@@ -1,3 +1,4 @@
+import type { WorkbenchConversationApi } from './workbench-conversation-contract.js'
 import {
   AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES,
   requireAgentProviderName,
@@ -181,6 +182,8 @@ export type DesktopDataProfileDiagnostics = {
 }
 
 export const ipcChannels = {
+  workbenchConversation: 'devflow:workbench-conversation',
+  workbenchConversationUpdated: 'devflow:workbench-conversation:updated',
   loadState: 'devflow:local-state:load',
   loadDataProfileDiagnostics: 'devflow:data-profile:diagnostics:load',
   selectProject: 'devflow:local-project:select',
@@ -612,6 +615,8 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  workbenchConversation?: WorkbenchConversationApi
+  onWorkbenchConversationUpdated?: (listener: (projectId: string) => void) => () => void
   platform: string
   loadState: () => Promise<LocalExecutionState>
   loadDataProfileDiagnostics: () => Promise<DesktopDataProfileDiagnostics>

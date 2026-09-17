@@ -1,3 +1,4 @@
+import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
   AgentProviderConfig,
@@ -252,6 +253,8 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  workbenchConversation?: WorkbenchConversationApi
+  onWorkbenchConversationUpdated?: (listener: (projectId: string) => void) => () => void
   platform: string
   loadState: () => Promise<LocalExecutionState>
   loadDataProfileDiagnostics: () => Promise<DesktopDataProfileDiagnostics>

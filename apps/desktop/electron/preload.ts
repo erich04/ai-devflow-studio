@@ -8,6 +8,8 @@ function onIpcPayload<T>(channel: string, listener: (payload: T) => void) {
 }
 
 const desktopApi: DevFlowDesktopApi = {
+  workbenchConversation: (input) => ipcRenderer.invoke(ipcChannels.workbenchConversation, input),
+  onWorkbenchConversationUpdated: (listener) => onIpcPayload(ipcChannels.workbenchConversationUpdated, listener),
   platform: process.platform,
   loadState: () => ipcRenderer.invoke(ipcChannels.loadState),
   loadDataProfileDiagnostics: () =>
