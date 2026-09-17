@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createFakeAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type LocalProject } from '@ai-devflow/shared'
+import { createFakeAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { WorkbenchConversationService } from './workbench-conversation-service'
 import { parseConversationCommand } from './workbench-conversation-contract'
@@ -46,6 +46,47 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
 }
 
 describe('unified conversation execution and boundaries', () => {
+  it.each(['completed', 'approval_required'] as const)('exposes actual publication facts for a %s delivery without leaking unrelated records or internal metadata', async (status) => {
+    const node = created.run.nodes.find((item) => item.kind === 'pr')!
+    const stamp = created.run.updatedAt
+    const intent: GitHubDeliveryIntent = {
+      stateVersion: 1, id: 'delivery-current', organizationId: 'org-test', teamProjectId: 'team-test',
+      localProjectId: projectId, runId: created.run.id, runVersion: created.run.version, nodeId: node.id,
+      repositoryBindingId: 'internal-binding', repositoryBindingVersion: 1, installationId: 'internal-installation', repositoryId: 'repository-1',
+      codingRunId: 'coding-1', codingRunCompletedAt: stamp, workspaceId: 'internal-workspace',
+      deliverySeriesKey: 'internal-series', deliveryAttempt: 1, repository: 'example/task-list', baseBranch: 'main', headBranch: 'devflow/task-list',
+      baseCommitSha: 'a'.repeat(40), expectedCommitSha: 'b'.repeat(40), diffArtifactId: 'diff-1', diffSourceDigest: 'c'.repeat(64),
+      testEvidenceId: 'test-1', testEvidenceCreatedAt: stamp, testEvidenceDigest: 'd'.repeat(64),
+      prPackageArtifactId: 'pr-1', prPackageUpdatedAt: stamp, prPackageDigest: 'e'.repeat(64), changedPaths: ['tasks.ts'],
+      intentDigest: 'f'.repeat(64), idempotencyKey: 'internal-idempotency-key', status, createdAt: stamp, updatedAt: stamp, redacted: true,
+      ...(status === 'completed' ? { completion: {
+        stateVersion: 1, remoteRequestId: 'internal-request', publicationId: 'internal-publication', pullRequestOutcomeId: 'internal-outcome',
+        pullRequestId: '123', pullRequestNumber: 3, pullRequestUrl: 'https://github.com/example/task-list/pull/3',
+        providerCreatedAt: stamp, recordedAt: stamp, draft: true, redacted: true,
+      } } : {}),
+    }
+    const state = await store.loadState()
+    vi.spyOn(store, 'loadState').mockResolvedValue({ ...state, githubDeliveryIntents: [
+      intent,
+      { ...intent, id: 'foreign-run-delivery', runId: 'foreign-run' },
+      { ...intent, id: 'foreign-project-delivery', localProjectId: 'foreign-project' },
+    ] })
+    let step = 0
+    const { service, calls } = harness(async () => ({ value: step++ === 0
+      ? { tool: { name: 'node', args: { runId: created.run.id, nodeId: node.id } } }
+      : { text: '已读取真实发布记录。' } }))
+    await send(service, await create(service), '请查询这个项目的实际 PR 链接和交付 commit。')
+    const delivery = JSON.parse(calls[1]!).toolObservations[0].result.execution.delivery
+    expect(delivery).toEqual([{
+      id: intent.id, nodeId: node.id, status, repository: intent.repository, baseBranch: intent.baseBranch, headBranch: intent.headBranch,
+      expectedCommitSha: intent.expectedCommitSha, updatedAt: stamp,
+      ...(status === 'completed' ? { completion: {
+        pullRequestNumber: 3, pullRequestUrl: 'https://github.com/example/task-list/pull/3', draft: true, providerCreatedAt: stamp, recordedAt: stamp,
+      } } : {}),
+    }])
+    expect(calls[1]).not.toMatch(/internal-|foreign-run-delivery|foreign-project-delivery/)
+  })
+
   it.each(created.run.nodes.map((node) => [node.id, node] as const))('reads the real %s node, including every stage and node type', async (_id, node) => {
     let step = 0
     const { service, calls, inspectGate } = harness(async () => ({ value: step++ === 0 ? { tool: { name: 'node', args: { runId: created.run.id, nodeId: node.id } } } : { text: `已查询 ${node.title}`, actions: [{ label: '定位到节点', runId: created.run.id, nodeId: node.id, section: node.kind === 'test' ? '测试证据' : '状态' }] } }))
