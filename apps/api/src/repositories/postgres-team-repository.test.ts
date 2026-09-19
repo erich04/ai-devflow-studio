@@ -3486,6 +3486,7 @@ describe('Postgres team repository', () => {
       id: 'coding-active-cost',
       status: 'waiting_permission',
       costSummary: {
+        id: 'coding-runtime-cost-coding-active-cost',
         costUsd: 0.00000066,
         timestamp: '2026-08-31T10:00:00.000Z',
         pricingSnapshot: null,
@@ -3495,6 +3496,11 @@ describe('Postgres team repository', () => {
         ],
       },
     })
+    db.codingAgentSummaryRows.push({ ...db.codingAgentSummaryRows[0]!, id: 'coding-retry-cost', status: 'failed' })
+    const retried = await repository.getTeamOverview(readContext)
+    expect(new Set(retried.codingAgentSummaries.map((item) => item.costSummary?.id)).size).toBe(2)
+    expect(retried.projectCost.find((item) => item.key === 'p-payments')?.costUsd)
+      .toBeCloseTo((overview.projectCost.find((item) => item.key === 'p-payments')?.costUsd ?? 0) + 0.00000066, 10)
   })
 
   it('redacts Coding Summary display text again before writing it to Postgres', async () => {

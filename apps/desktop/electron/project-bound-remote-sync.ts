@@ -217,6 +217,73 @@ export function createProjectBoundRemoteSync(input: {
     }
   }
 
+  async function uploadCanonicalCodingAgent(codingRunId: string, scope: ProjectBoundRemoteSyncScope) {
+    const codingRun = (await input.credentialSource.listCodingAgentRuns()).find(
+      (candidate) => candidate.id === codingRunId,
+    )
+    if (!codingRun) {
+      throw new CanonicalRemoteSyncEntityError('entity_missing', 'coding_agent_run')
+    }
+    const canonicalRun = (await input.credentialSource.listRuns()).find(
+      (candidate) => candidate.id === codingRun.runId,
+    )
+    if (!canonicalRun) {
+      throw new CanonicalRemoteSyncEntityError('entity_missing', 'workflow_run')
+    }
+    if (
+      codingRun.projectId !== canonicalRun.projectId ||
+      !canonicalRun.nodes.some((node) => node.id === codingRun.nodeId)
+    ) {
+      throw new CanonicalRemoteSyncEntityError('scope_mismatch', 'coding_agent_run')
+    }
+    const runtimeCost = codingRun.runtimeCostSummary
+    if (
+      runtimeCost &&
+      (runtimeCost.runId !== codingRun.runId ||
+        runtimeCost.nodeId !== codingRun.nodeId ||
+        runtimeCost.userId !== codingRun.requestedBy ||
+        runtimeCost.projectId !== codingRun.projectId ||
+        runtimeCost.providerId !== codingRun.providerId)
+    ) {
+      throw new CanonicalRemoteSyncEntityError('scope_mismatch', 'coding_agent_run')
+    }
+    const diff = codingRun.diffArtifactId
+      ? (await input.credentialSource.listCodingDiffArtifacts()).find(
+          (candidate) => candidate.id === codingRun.diffArtifactId,
+        )
+      : undefined
+    if (codingRun.diffArtifactId && !diff) {
+      throw new CanonicalRemoteSyncEntityError('entity_missing', 'coding_diff')
+    }
+    if (
+      diff &&
+      (diff.runId !== codingRun.runId ||
+        diff.nodeId !== codingRun.nodeId ||
+        diff.projectId !== codingRun.projectId)
+    ) {
+      throw new CanonicalRemoteSyncEntityError('scope_mismatch', 'coding_diff')
+    }
+    const boundSummary = bindCanonicalProjectId(
+      buildCanonicalSummary('coding_agent_run', () =>
+        createRemoteCodingAgentSummary(codingRun, diff),
+      ),
+      scope,
+      'coding_agent_run',
+    )
+    const summary = boundSummary.costSummary
+      ? {
+          ...boundSummary,
+          costSummary: {
+            ...boundSummary.costSummary,
+            projectId: scope.teamProjectId,
+          },
+        }
+      : boundSummary
+    return uploadDependentSummary(codingRun.runId, scope, 'coding_agent_run', () =>
+      input.remoteSync.uploadCodingAgentSummary(summary),
+    )
+  }
+
   return {
     async uploadCanonicalRunSummary(runId) {
       return uploadCanonicalRun(runId, await freezeCanonicalScope())
@@ -289,71 +356,7 @@ export function createProjectBoundRemoteSync(input: {
       )
     },
     async uploadCanonicalCodingAgentSummary(codingRunId) {
-      const scope = await freezeCanonicalScope()
-      const codingRun = (await input.credentialSource.listCodingAgentRuns()).find(
-        (candidate) => candidate.id === codingRunId,
-      )
-      if (!codingRun) {
-        throw new CanonicalRemoteSyncEntityError('entity_missing', 'coding_agent_run')
-      }
-      const canonicalRun = (await input.credentialSource.listRuns()).find(
-        (candidate) => candidate.id === codingRun.runId,
-      )
-      if (!canonicalRun) {
-        throw new CanonicalRemoteSyncEntityError('entity_missing', 'workflow_run')
-      }
-      if (
-        codingRun.projectId !== canonicalRun.projectId ||
-        !canonicalRun.nodes.some((node) => node.id === codingRun.nodeId)
-      ) {
-        throw new CanonicalRemoteSyncEntityError('scope_mismatch', 'coding_agent_run')
-      }
-      const runtimeCost = codingRun.runtimeCostSummary
-      if (
-        runtimeCost &&
-        (runtimeCost.runId !== codingRun.runId ||
-          runtimeCost.nodeId !== codingRun.nodeId ||
-          runtimeCost.userId !== codingRun.requestedBy ||
-          runtimeCost.projectId !== codingRun.projectId ||
-          runtimeCost.providerId !== codingRun.providerId)
-      ) {
-        throw new CanonicalRemoteSyncEntityError('scope_mismatch', 'coding_agent_run')
-      }
-      const diff = codingRun.diffArtifactId
-        ? (await input.credentialSource.listCodingDiffArtifacts()).find(
-            (candidate) => candidate.id === codingRun.diffArtifactId,
-          )
-        : undefined
-      if (codingRun.diffArtifactId && !diff) {
-        throw new CanonicalRemoteSyncEntityError('entity_missing', 'coding_diff')
-      }
-      if (
-        diff &&
-        (diff.runId !== codingRun.runId ||
-          diff.nodeId !== codingRun.nodeId ||
-          diff.projectId !== codingRun.projectId)
-      ) {
-        throw new CanonicalRemoteSyncEntityError('scope_mismatch', 'coding_diff')
-      }
-      const boundSummary = bindCanonicalProjectId(
-        buildCanonicalSummary('coding_agent_run', () =>
-          createRemoteCodingAgentSummary(codingRun, diff),
-        ),
-        scope,
-        'coding_agent_run',
-      )
-      const summary = boundSummary.costSummary
-        ? {
-            ...boundSummary,
-            costSummary: {
-              ...boundSummary.costSummary,
-              projectId: scope.teamProjectId,
-            },
-          }
-        : boundSummary
-      return uploadDependentSummary(codingRun.runId, scope, 'coding_agent_run', () =>
-        input.remoteSync.uploadCodingAgentSummary(summary),
-      )
+      return uploadCanonicalCodingAgent(codingRunId, await freezeCanonicalScope())
     },
     async uploadCanonicalAgentRuntimeSummary(runtimeId) {
       const scope = await freezeCanonicalScope()
@@ -474,6 +477,12 @@ export function createProjectBoundRemoteSync(input: {
       // An asynchronous outbox must not let the next call outrun the previous call's consumption.
       // Failed uploads make the existing runtime guard unavailable, never grant extra budget.
       for (const runId of runIds) await uploadCanonicalRun(runId, scope)
+      const codingRuns = await input.credentialSource.listCodingAgentRuns()
+      for (const codingRun of codingRuns) {
+        if (codingRun.projectId === scope.localProjectId && codingRun.runtimeCostSummary?.phase === 'provider_settlement') {
+          await uploadCanonicalCodingAgent(codingRun.id, scope)
+        }
+      }
       return input.remoteSync.evaluateRuntimeBudget({ ...request, projectId: scope.teamProjectId })
     },
   }

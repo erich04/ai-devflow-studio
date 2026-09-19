@@ -500,6 +500,8 @@ export type CodingRuntimeCostSummary = Omit<TokenUsage, 'cacheReadTokens' | 'cos
   pricingSnapshot?: RuntimePricingSnapshot | null
   breakdown?: RuntimeCostBreakdown | null
   providerCallSettlements?: RuntimeProviderCallSettlement[]
+  /** Exact response identities already settled for this Coding attempt. */
+  providerCallIds?: string[]
 }
 
 export type CodingRuntimeCostEstimate = CodingRuntimeCostSummary & {

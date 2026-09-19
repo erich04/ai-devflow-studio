@@ -211,6 +211,56 @@ function runInput(fixture: Awaited<ReturnType<typeof createFixture>>) {
 }
 
 describe('Native Coding v2 persistent Provider call Trace', () => {
+  it('recovers previously unaccounted failed responses once without calling the model or advancing the workflow', async () => {
+    let calls = 0
+    const baseUrl = await startCompatibleServer((_request, response) => {
+      calls += 1; sendStructuredResponse(response, analysisValue, 1)
+    })
+    const fixture = await createFixture(baseUrl)
+    const { store, runtime } = await fixture.openRuntime()
+    const historical: CodingAgentRun = {
+      id: 'historical-failed', runId: fixture.run.id, nodeId: fixture.run.currentNodeId,
+      projectId: fixture.project.id, requestedBy: fixture.run.creatorId, providerId: 'local-compatible',
+      engine: 'fake', status: 'failed', branchName: 'devflow/historical', userInstruction: 'Existing task',
+      prompt: '', summary: 'Invalid output', changedPaths: [], startedAt: '2026-09-17T00:00:00.000Z', redacted: true,
+    }
+    // Seed a pre-upgrade row whose response is present but has no expense summary.
+    await store.saveCodingAgentRun(historical)
+    await store.saveCodingAgentEvent({
+      id: 'historical-response', codingRunId: historical.id, runId: historical.runId, nodeId: historical.nodeId,
+      sequence: 1, kind: 'error', message: 'Output rejected', timestamp: historical.startedAt, redacted: true,
+      metadata: { providerCall: { requestId: 'historical-call', codingRunId: historical.id,
+        providerId: historical.providerId, model: 'local-test-model', phase: 'analysis', status: 'failed',
+        startedAt: historical.startedAt, completedAt: historical.startedAt, usage: { inputTokens: 20, outputTokens: 10 } } },
+    })
+    await store.saveCodingAgentRun({ ...historical, engine: 'native' })
+    store.close()
+    stores.delete(store)
+    const restored = await fixture.openRuntime()
+    await restored.runtime.recoverCodingAgentRuns()
+    await restored.runtime.recoverCodingAgentRuns()
+    expect((await restored.store.listCodingAgentRuns())[0]).toMatchObject({ status: 'failed', runtimeCostSummary: {
+      inputTokens: 20, outputTokens: 10, costUsd: null, providerCallIds: ['historical-call'],
+    } })
+    expect(await restored.store.listCodingAgentEvents(historical.id)).toHaveLength(1)
+    expect((await restored.store.getRun(fixture.run.id))?.currentNodeId).toBe(fixture.run.currentNodeId)
+    expect(calls).toBe(0)
+  })
+
+  it('records known tokens and unknown price even when content cannot be parsed as JSON', async () => {
+    const baseUrl = await startCompatibleServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ choices: [{ message: { content: '{"bad":' } }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } }))
+    })
+    const fixture = await createFixture(baseUrl)
+    const { store, runtime } = await fixture.openRuntime()
+    await expect(runtime.runCodingAgent(runInput(fixture))).rejects.toMatchObject({ code: 'invalid_model_output' })
+    expect((await store.listCodingAgentRuns(fixture.run.id))[0]).toMatchObject({ status: 'failed', runtimeCostSummary: {
+      source: 'provider_reported', inputTokens: 20, outputTokens: 10, costUsd: null, costStatus: 'unknown',
+    } })
+    expect((await store.getRun(fixture.run.id))?.currentNodeId).toBe(fixture.run.currentNodeId)
+  })
+
   it('sends the enforced file and replacement bounds as model instructions', async () => {
     const prompts: string[] = []
     const baseUrl = await startCompatibleServer(async (request, response) => {
@@ -245,6 +295,9 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
     const failed = (await store.listCodingAgentRuns(fixture.run.id))[0]!
     const events = await store.listCodingAgentEvents(failed.id)
     expect(providerTrace(events).at(-1)).toMatchObject({ sanitizedCause: `native_v2_${cause}` })
+    expect(failed.runtimeCostSummary).toMatchObject({
+      source: 'provider_reported', phase: 'provider_settlement', inputTokens: 20, outputTokens: 10, totalTokens: 30,
+    })
     expect(JSON.stringify(events)).not.toContain('RAW_MODEL_CONTENT')
     expect(JSON.stringify(events)).not.toContain('RAW_PROVIDER_PATH')
     expect(await store.listCodingPermissionRequests(failed.id)).toEqual([])
@@ -266,9 +319,18 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
     const failed = (await store.listCodingAgentRuns(fixture.run.id))[0]!
     const events = await store.listCodingAgentEvents(failed.id)
     expect(providerTrace(events).at(-1)).toMatchObject({ sanitizedCause: 'native_v2_path_not_in_context' })
+    expect(failed.runtimeCostSummary).toMatchObject({
+      source: 'provider_reported', inputTokens: 40, outputTokens: 20, totalTokens: 60,
+      providerCallSettlements: [{ requestPhase: 'analysis' }, { requestPhase: 'initial' }],
+    })
+    store.close()
+    stores.delete(store)
+    const restarted = await fixture.openRuntime()
+    await restarted.runtime.recoverCodingAgentRuns()
+    expect((await restarted.store.listCodingAgentRuns(fixture.run.id))[0]?.runtimeCostSummary).toEqual(failed.runtimeCostSummary)
     expect(JSON.stringify(events)).not.toContain('RAW_PROVIDER_PATH')
     expect(JSON.stringify(events)).not.toContain('RAW_MODEL_CONTENT')
-    expect(await store.listCodingPermissionRequests(failed.id)).toEqual([])
+    expect(await restarted.store.listCodingPermissionRequests(failed.id)).toEqual([])
   })
 
   it('terminalizes a persisted started call when recovery observes an interrupted runtime', async () => {

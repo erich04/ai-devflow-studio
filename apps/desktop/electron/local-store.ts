@@ -1,4 +1,6 @@
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
+import type { CodingProviderCallTrace } from './coding-engine.js'
+import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
 import { existsSync } from 'node:fs'
 import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
 import { inspectStoredProviderRemoval } from './provider-credential-store'
@@ -12464,6 +12466,8 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingAgentRun(run: CodingAgentRun): Promise<void> {
+    const [current] = selectJson<CodingAgentRun>(this.db, 'select json from coding_agent_runs where id = ?', [run.id])
+    if (current) run = retainRecordedCodingCost(run, current)
     this.db.run('begin transaction')
     try {
       writeCodingAgentRun(this.db, run)
@@ -12688,6 +12692,13 @@ class SqlJsLocalStore implements LocalStore {
     if (!currentRun) {
       return { committed: false, reason: 'run_not_found', run: null }
     }
+    // A received response can settle expenses while an executor holds an earlier snapshot.
+    // Only cost facts are reconciled; all execution, workflow and permission fences remain exact.
+    mutation = {
+      ...mutation,
+      expectedRun: retainRecordedCodingCost(mutation.expectedRun, currentRun),
+      ...(mutation.run ? { run: retainRecordedCodingCost(mutation.run, currentRun) } : {}),
+    }
     if (JSON.stringify(currentRun) !== JSON.stringify(mutation.expectedRun)) {
       return { committed: false, reason: 'stale_run', run: currentRun }
     }
@@ -12864,7 +12875,27 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingAgentEvent(event: CodingAgentEvent): Promise<void> {
-    writeCodingAgentEvent(this.db, event)
+    const trace = event.metadata?.providerCall as CodingProviderCallTrace | undefined
+    const [current] = selectJson<CodingAgentRun>(this.db, 'select json from coding_agent_runs where id = ?', [event.codingRunId])
+    if (trace && current && (current.runId !== event.runId || current.nodeId !== event.nodeId)) {
+      throw new Error('Provider call event scope mismatch')
+    }
+    const settled = trace && current?.engine === 'native' ? appendCodingCallCost(current, trace) : current
+    this.db.run('begin transaction')
+    try {
+      writeCodingAgentEvent(this.db, event)
+      if (settled && settled !== current) {
+        writeCodingAgentRun(this.db, settled)
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'coding-agent-summary', localProjectId: settled.projectId,
+          runId: settled.runId, entityId: settled.id, createdAt: codingAgentSummaryUpdatedAt(settled),
+        })
+      }
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 
@@ -13814,7 +13845,21 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
     })
     await persistDatabase(db, options.dbPath)
 
-    return serializeLocalStoreMutations(new SqlJsLocalStore(SQL, db, options.dbPath))
+    const store = serializeLocalStoreMutations(new SqlJsLocalStore(SQL, db, options.dbPath))
+    // Recover historical response expenses independently of runtime/provider availability.
+    // Completed/failed runs need no executor startup and must not re-run their business work.
+    for (const run of await store.listCodingAgentRuns()) {
+      if (run.engine !== 'native' || run.runtimeCostSummary?.source === 'provider_reported') continue
+      for (const event of await store.listCodingAgentEvents(run.id)) {
+        const trace = event.metadata?.providerCall as CodingProviderCallTrace | undefined
+        if (trace?.usage && typeof trace.requestId === 'string' && trace.requestId &&
+          trace.codingRunId === run.id && trace.providerId === run.providerId &&
+          (trace.status === 'succeeded' || trace.status === 'failed')) {
+          await store.saveCodingAgentEvent(event)
+        }
+      }
+    }
+    return store
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(

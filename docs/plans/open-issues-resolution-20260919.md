@@ -11,7 +11,7 @@ that explicitly requires a live provider or end-to-end result.
 | Batch | Issues | Scope | Status |
 | --- | --- | --- | --- |
 | 1 | #129 #131 #132 #141 #142 #143 #145 #148 | Desktop layout, accurate status, chat rendering and removal of manual memory | Implemented and locally verified; delivery pending |
-| 2 | #125 #130 #135 #139 #140 | Lifecycle, diagnostics, credentials, failed-run cost and recovery | Pending |
+| 2 | #125 #130 #135 #139 #140 | Lifecycle, diagnostics, credentials, failed-run cost and recovery | #139 implemented and locally verified; other items pending |
 | 3 | #136 #137 #138 #144 #146 | Stage context/review, delivery facts, configurable thinking across callers | Pending |
 | 4 | #133 #134 #147 | Policy/OpenCode verification and pluggable conversation execution | Pending |
 | 5 | #128 | Multi-organization onboarding, isolation and documented end-to-end proof | Pending |

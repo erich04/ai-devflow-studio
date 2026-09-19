@@ -159,6 +159,7 @@ export class AgentProviderRequestError extends Error {
   readonly httpStatus: number | null
   readonly sanitizedCause: string
   readonly responseMetadata?: AgentProviderResponseMetadata
+  readonly usage?: AgentProviderUsage
 
   constructor(input: {
     code: AgentProviderErrorCode
@@ -168,6 +169,7 @@ export class AgentProviderRequestError extends Error {
     httpStatus?: number | null
     sanitizedCause: string
     responseMetadata?: AgentProviderResponseMetadata
+    usage?: AgentProviderUsage
     cause?: unknown
   }) {
     super(providerErrorMessage(input.code, input.httpStatus ?? null), { cause: input.cause })
@@ -177,6 +179,7 @@ export class AgentProviderRequestError extends Error {
     this.billingState = input.billingState
     this.retryable = input.retryable
     this.httpStatus = input.httpStatus ?? null
+    if (input.usage) this.usage = input.usage
     this.sanitizedCause = /^[a-z0-9_.:-]{1,96}$/u.test(input.sanitizedCause)
       ? input.sanitizedCause
       : 'redacted_provider_failure'
@@ -1984,6 +1987,7 @@ export function createOpenAiCompatibleAgentProvider({
       const controller = new AbortController()
       const thinking = deepSeek && input.reasoning !== undefined
       const stream = thinking && input.reasoning?.onDelta !== undefined
+      let observedUsage: AgentProviderUsage | undefined
       let timedOut = false
       let cancelledByUser = input.signal?.aborted ?? false
       const cancel = () => {
@@ -2071,6 +2075,11 @@ export function createOpenAiCompatibleAgentProvider({
         }
         const choices = record.choices
         const usageValue = record.usage
+        try {
+          observedUsage = parseOpenAiCompatibleProviderUsage(usageValue, { providerId: id, model, baseUrl })
+        } catch (error) {
+          throw providerResponseError('invalid_usage', false, responseMetadata, error)
+        }
         const reasoningContent: unknown = thinking && Array.isArray(choices)
           ? choices[0]?.message?.reasoning_content
           : undefined
@@ -2102,16 +2111,7 @@ export function createOpenAiCompatibleAgentProvider({
         } catch (error) {
           throw providerResponseError('invalid_model_output', true, responseMetadata, error)
         }
-        let usage: AgentProviderUsage | undefined
-        try {
-          usage = parseOpenAiCompatibleProviderUsage(usageValue, {
-            providerId: id,
-            model,
-            baseUrl,
-          })
-        } catch (error) {
-          throw providerResponseError('invalid_usage', false, responseMetadata, error)
-        }
+        const usage = observedUsage
         return {
           value,
           ...(usage ? { usage } : {}),
@@ -2139,7 +2139,11 @@ export function createOpenAiCompatibleAgentProvider({
             cause: error,
           })
         }
-        if (error instanceof AgentProviderRequestError) throw error
+        if (error instanceof AgentProviderRequestError) {
+          throw observedUsage
+            ? new AgentProviderRequestError({ ...error, billingState: 'confirmed', usage: observedUsage, cause: error })
+            : error
+        }
         throw classifyProviderTransportError(error)
       } finally {
         clearTimeout(timeout)

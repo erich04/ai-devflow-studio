@@ -329,6 +329,41 @@ function canonicalCoordinationSnapshot(): CoordinationRendererSnapshot {
 }
 
 describe('project-bound Electron remote sync', () => {
+  it('uploads failed Coding expenses before the next budget decision and fails closed on a rejected upload', async () => {
+    const calls: string[] = []
+    const failed: CodingAgentRun = { ...canonicalCodingRun, engine: 'native', status: 'failed', runtimeCostSummary: {
+      id: 'expense-attempt-one', runId: canonicalCodingRun.runId, nodeId: canonicalCodingRun.nodeId,
+      projectId: canonicalCodingRun.projectId, userId: canonicalCodingRun.requestedBy,
+      providerId: canonicalCodingRun.providerId, provider: 'openai', model: 'model',
+      inputTokens: 100, outputTokens: 20, cacheReadTokens: null, costUsd: null,
+      usageStatus: 'incomplete', costStatus: 'unknown', phase: 'provider_settlement',
+      source: 'provider_reported', timestamp: canonicalCodingRun.startedAt, redacted: true,
+    } }
+    const upload = vi.fn(async (_summary: RemoteCodingAgentSummary) => {
+      calls.push('expense'); return { accepted: true, syncedAt: runSummary.updatedAt, message: 'saved' }
+    })
+    const evaluate = vi.fn(async () => {
+      calls.push('budget'); return { status: 'unavailable' as const, blocksRun: true, currentSpendUsd: 0, projectedCostUsd: 1, reason: 'Unknown costs' }
+    })
+    const bound = createProjectBoundRemoteSync({
+      remoteSync: { uploadCodingAgentSummary: upload, evaluateRuntimeBudget: evaluate } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential, listRuns: async () => [localRun],
+        listAgentReviews: async () => [], listTestEvidence: async () => [],
+        listCodingAgentRuns: async () => [failed, { ...failed, id: 'other', projectId: 'other' }],
+        listCodingDiffArtifacts: async () => [canonicalCodingDiff],
+      },
+    })
+    const request = { projectId: localRun.projectId, providerId: failed.providerId, projectedCostUsd: 1 }
+    await expect(bound.evaluateRuntimeBudget(request)).resolves.toMatchObject({ blocksRun: true })
+    expect(calls).toEqual(['expense', 'budget'])
+    expect(upload).toHaveBeenCalledWith(expect.objectContaining({ status: 'failed', costSummary: expect.objectContaining({ inputTokens: 100, costUsd: null, projectId: pairingCredential.projectId }) }))
+    upload.mockResolvedValueOnce({ accepted: false, syncedAt: runSummary.updatedAt, message: 'rejected' })
+    evaluate.mockClear()
+    await expect(bound.evaluateRuntimeBudget(request)).rejects.toThrow()
+    expect(evaluate).not.toHaveBeenCalled()
+  })
+
   it('derives approval subjects from persisted Artifacts independently of Review or cached Run projections', async () => {
     const canonicalRun = { ...fixtureRuns[0]!, projectId: localRun.projectId, currentNodeId: 'n-design-gate' }
     const expected = await buildGateReviewSubjectSnapshot({ run: canonicalRun, artifacts: fixtureArtifacts })

@@ -1257,7 +1257,8 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       })).rejects.toMatchObject({
         code: 'invalid_model_output',
         deliveryState: 'response_received',
-        billingState: 'unknown',
+        billingState: 'confirmed',
+        usage: { inputTokens: 1, outputTokens: 1 },
         retryable: true,
         httpStatus: 200,
       })

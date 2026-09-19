@@ -532,7 +532,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return result
     }
     if (mutation.run) {
-      runBestEffortNotification(() => deps.publisher?.publishRunStatus(mutation.run!))
+      runBestEffortNotification(() => deps.publisher?.publishRunStatus(result.run))
     }
     for (const event of safeEvents ?? []) {
       runBestEffortNotification(() => deps.publisher?.publishEvent(event))
@@ -602,6 +602,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       metadata: { providerCall: trace },
       redacted: true,
     }])
+    if (trace.usage) {
+      const settled = await findCodingRun(codingRun.id)
+      runBestEffortNotification(() => deps.publisher?.publishRunStatus(settled))
+    }
   }
 
   async function latestProviderFailureSummary(
@@ -3626,7 +3630,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       })
 
       return {
-        codingRun: startupRun,
+        codingRun: bundleCommitted.run,
         state: await deps.store.loadState(),
       }
     },

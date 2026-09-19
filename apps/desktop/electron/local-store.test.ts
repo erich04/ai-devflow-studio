@@ -7113,6 +7113,53 @@ describe('createLocalStore', () => {
     expect(bytes).not.toContain('api-key-secret')
   })
 
+  it('settles each response once without weakening cancellation fences or overwriting expenses with stale snapshots', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const active: CodingAgentRun = { ...codingRun, engine: 'native', providerId: 'deepseek', status: 'running' }
+    await store.saveCodingAgentRun(active)
+    const event: CodingAgentEvent = {
+      id: 'paid-response', codingRunId: active.id, runId: active.runId, nodeId: active.nodeId,
+      sequence: 1, kind: 'error', message: 'Output rejected', timestamp: '2026-09-19T00:01:00.000Z', redacted: true,
+      metadata: { providerCall: {
+        stateVersion: 1, requestId: 'call-one', codingRunId: active.id, phase: 'analysis', attempt: 1,
+        providerId: 'deepseek', model: 'deepseek-flash', status: 'failed',
+        startedAt: '2026-09-19T00:00:00.000Z', completedAt: '2026-09-19T00:01:00.000Z',
+        deliveryState: 'response_received', billingState: 'confirmed',
+        usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cacheReadTokens: 40, cacheMissTokens: 60, cacheStatus: 'complete', billingProvider: 'deepseek' },
+      } },
+    }
+    await store.saveCodingAgentEvent(event)
+    await store.saveCodingAgentEvent({ ...event, id: 'duplicate-observation' })
+    const expense = (await store.listCodingAgentRuns())[0]!.runtimeCostSummary!
+    expect(expense).toMatchObject({ source: 'provider_reported', inputTokens: 100, outputTokens: 20, costStatus: 'settled', providerCallIds: ['call-one'] })
+    expect(expense.costUsd).toBeGreaterThan(0)
+    expect((await store.listRemoteSyncOperations()).filter((item) => item.kind === 'coding-agent-summary')).toHaveLength(1)
+    const cancelled = await store.commitCodingAgentMutation({ expectedRun: active, expectedPendingPermissionRequestIds: [], run: { ...active, status: 'cancelled' } })
+    expect(cancelled).toMatchObject({ committed: true, run: { status: 'cancelled', runtimeCostSummary: expense } })
+    await expect(store.commitCodingAgentMutation({ expectedRun: active, expectedPendingPermissionRequestIds: [], run: { ...active, status: 'completed' } }))
+      .resolves.toMatchObject({ committed: false, reason: 'stale_run' })
+    const call = event.metadata!.providerCall as Record<string, unknown>
+    await store.saveCodingAgentEvent({ ...event, id: 'late-response', sequence: 3, metadata: { providerCall: { ...call, requestId: 'call-two' } } })
+    const final = (await store.listCodingAgentRuns())[0]!
+    expect(final.status).toBe('cancelled')
+    expect(final.runtimeCostSummary).toMatchObject({ inputTokens: 200, outputTokens: 40, providerCallIds: ['call-one', 'call-two'] })
+    expect(final.runtimeCostSummary!.costUsd).toBeCloseTo(expense.costUsd! * 2, 10)
+    // An incomplete or malformed usage envelope must not erase the observation or earlier expenses.
+    for (const usage of [{ inputTokens: 1 }, { inputTokens: -1, outputTokens: 1 }]) {
+      const id = `unsettled-${JSON.stringify(usage)}`
+      await store.saveCodingAgentEvent({ ...event, id, metadata: { providerCall: { ...call, requestId: id, usage } } })
+      expect((await store.listCodingAgentEvents()).some((item) => item.id === id)).toBe(true)
+      expect((await store.listCodingAgentRuns())[0]!.runtimeCostSummary).toEqual(final.runtimeCostSummary)
+    }
+    store.close()
+    const reopened = await createLocalStore({ dbPath })
+    expect((await reopened.listCodingAgentRuns())[0]).toEqual(final)
+    await reopened.saveCodingAgentRun({ ...active, status: 'cancelled' })
+    expect((await reopened.listCodingAgentRuns())[0]!.runtimeCostSummary).toEqual(final.runtimeCostSummary)
+    reopened.close()
+  })
+
   it('atomically preserves the first terminal Coding Agent transition', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })

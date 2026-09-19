@@ -1291,6 +1291,7 @@ function toneClass(tone: AgentConsoleAction['tone']): string {
 }
 
 function displayRuntimeCost(summary: CodingAgentRun['runtimeCostSummary'] | undefined): string {
+  if (summary?.phase === 'preflight_estimate') return `预估 ${formatUsd(summary.costUsd)} · 实际金额待确认`
   if (
     !summary ||
     !summary.usageStatus ||

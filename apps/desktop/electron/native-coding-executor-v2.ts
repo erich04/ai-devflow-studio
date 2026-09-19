@@ -16,6 +16,7 @@ import {
   settleCodingRuntimeCost,
   type AgentProvider,
   type AgentProviderResponseMetadata,
+  type AgentProviderUsage,
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingChangeSet,
@@ -936,7 +937,8 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           : failure.responseMetadata
             ? providerResponseTrace(failure.responseMetadata)
             : {}),
-        ...(completed ? { usage: providerUsageTrace(completed.usage) } : {}),
+        ...(completed ? { usage: providerUsageTrace(completed.usage) }
+          : failure.usage ? { usage: providerUsageTrace(failure.usage) } : {}),
         errorCode: failure.code,
         sanitizedCause: failure.sanitizedCause,
       })
@@ -1533,17 +1535,23 @@ function safeProviderTraceLabel(value: string | undefined, maxLength: number): s
     : undefined
 }
 
-function providerUsageTrace(usage: ProviderUsage): NonNullable<CodingProviderCallTrace['usage']> {
+function providerUsageTrace(usage: AgentProviderUsage): NonNullable<CodingProviderCallTrace['usage']> {
+  const totalTokens = usage.totalTokens ?? (
+    usage.inputTokens !== undefined && usage.outputTokens !== undefined
+      ? usage.inputTokens + usage.outputTokens
+      : undefined
+  )
   return {
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
+    ...(usage.inputTokens !== undefined ? { inputTokens: usage.inputTokens } : {}),
+    ...(usage.outputTokens !== undefined ? { outputTokens: usage.outputTokens } : {}),
     ...(usage.cacheReadTokens !== undefined
       ? { cacheReadTokens: usage.cacheReadTokens }
       : {}),
     ...(usage.cacheMissTokens !== undefined
       ? { cacheMissTokens: usage.cacheMissTokens }
       : {}),
-    totalTokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+    ...(totalTokens !== undefined ? { totalTokens } : {}),
     cacheStatus: usage.cacheStatus ?? 'unknown',
+    ...(usage.billingProvider ? { billingProvider: usage.billingProvider } : {}),
   }
 }

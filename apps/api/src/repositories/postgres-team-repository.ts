@@ -972,7 +972,7 @@ function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSum
       typeof details['usageStatus'] !== 'string' ||
       typeof details['costStatus'] !== 'string'
     summary.costSummary = parseCodingRuntimeCostSummary({
-      id: `coding-runtime-cost-${row.run_id}-${row.node_id}`,
+      id: `coding-runtime-cost-${row.id}`,
       runId: row.run_id,
       nodeId: row.node_id,
       userId: row.requested_by,
