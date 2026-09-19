@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createFakeAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
+import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { WorkbenchConversationService } from './workbench-conversation-service'
 import { parseConversationCommand } from './workbench-conversation-contract'
@@ -46,6 +46,118 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
 }
 
 describe('unified conversation execution and boundaries', () => {
+  it.each([
+    ['markdown', 'markdown'], ['plain_text', 'plain_text'], ['future-format', 'unsupported'],
+    [undefined, 'plain_text'], [{ wrong: true }, 'unsupported'],
+  ])('persists the declared body format with a readable fallback: %s', async (format, expected) => {
+    const { service } = harness(async () => ({ value: { text: '**完整原文**', format } }))
+    const result = await send(service, await create(service))
+    expect(result.messages.at(-1)).toMatchObject({ text: '**完整原文**', format: expected })
+    expect(result.status).toBe('idle')
+  })
+
+  it('preserves legacy notes for inspection but never sends them to the model or accepts new manual notes', async () => {
+    const { service, calls } = harness(async () => ({ value: { text: '继续当前讨论。' } }))
+    const id = await create(service)
+    const original = (await service.command({ type: 'list', projectId })).conversations[0]!
+    await store.saveWorkbenchConversation({ ...original, version: original.version + 1, memory: 'LEGACY_HIDDEN_INSTRUCTION', inputDraft: '未发送草稿' }, original.version)
+    store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    const restarted = harness(async () => ({ value: { text: '继续当前讨论。' } }))
+    const restored = (await restarted.service.command({ type: 'list', projectId })).conversations[0]!
+    expect(restored).toMatchObject({ memory: 'LEGACY_HIDDEN_INSTRUCTION', inputDraft: '未发送草稿' })
+    const result = await send(restarted.service, id, '请按正常聊天继续')
+    expect(restarted.calls[0]).not.toContain('LEGACY_HIDDEN_INSTRUCTION')
+    expect(JSON.parse(restarted.calls[0]!)).not.toHaveProperty('conversationMemory')
+    expect(result.messages.at(-1)?.text).toBe('继续当前讨论。')
+    await expect(restarted.service.command({ type: 'update', projectId, conversationId: id, memory: '新的隐藏要求' })).rejects.toThrow('无效的会话操作')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('redacts a credential split across reasoning chunks before exposing conversation records', async () => {
+    let id = ''
+    const { service, provider } = harness(async (input) => {
+      await input.reasoning!.onDelta!('检查凭据 sk-abc')
+      const first = (await service.command({ type: 'list', projectId })).conversations.find((item) => item.id === id)!
+      expect(JSON.stringify(first)).not.toContain('sk-abc')
+      await input.reasoning!.onDelta!('def1234567890。')
+      return { value: { text: '已完成检查。' }, reasoningContent: '检查凭据 sk-abcdef1234567890。' }
+    })
+    provider.billingProvider = 'deepseek'
+    id = await create(service)
+    const result = await send(service, id)
+    expect(result.status).toBe('idle')
+    expect(result.messages.find((message) => message.reasoning)?.reasoning?.text).toContain('[REDACTED:openai_api_key]')
+    expect(JSON.stringify(result)).not.toContain('abcdef1234567890')
+  })
+
+  it('retains interrupted reasoning, retries without duplicating the question, and excludes reasoning from later prompts', async () => {
+    const encoder = new TextEncoder()
+    const requests: string[] = []
+    const provider = createOpenAiCompatibleAgentProvider({ id: 'deepseek', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey: 'test-only',
+      fetcher: async (_url, init) => {
+        requests.push(String(init?.body))
+        return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'PRIVATE_REASONING 已查到初步结果。' }, finish_reason: null }] })}\n\n`))
+          if (requests.length > 1) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: '{"text":"重试完成。"}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 12, completion_tokens: 24, total_tokens: 36 } })}\n\ndata: [DONE]\n\n`))
+            controller.close()
+          }
+        } }), { headers: { 'content-type': 'text/event-stream' } })
+      },
+    })
+    const service = new WorkbenchConversationService({ store, resolveProvider: async () => provider, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    const id = await create(service)
+    await service.command({ type: 'send', projectId, conversationId: id, providerId: provider.id, text: '检查需求。' })
+    await vi.waitFor(async () => expect((await service.command({ type: 'list', projectId })).conversations[0]!.messages.some((message) => message.reasoning?.text.includes('初步结果'))).toBe(true))
+    await service.command({ type: 'cancel', projectId, conversationId: id })
+    await service.settled(id)
+    const cancelled = (await service.command({ type: 'list', projectId })).conversations[0]!
+    expect(cancelled.status).toBe('cancelled')
+    expect(cancelled.messages.find((message) => message.reasoning)?.reasoning).toMatchObject({ text: 'PRIVATE_REASONING 已查到初步结果。', status: 'interrupted' })
+    await service.command({ type: 'retry', projectId, conversationId: id, providerId: provider.id })
+    await service.settled(id)
+    const retried = (await service.command({ type: 'list', projectId })).conversations[0]!
+    expect(retried.status).toBe('idle')
+    expect(retried.messages.filter((message) => message.role === 'user')).toHaveLength(1)
+    expect(retried.messages.filter((message) => message.reasoning).map((message) => message.reasoning!.status)).toEqual(['interrupted', 'completed'])
+    expect(retried.messages.at(-1)?.text).toBe('重试完成。')
+    expect(requests[1]).not.toContain('PRIVATE_REASONING')
+  })
+
+  it('publishes live reasoning only to its own conversation and restores it separately from the answer', async () => {
+    const encoder = new TextEncoder()
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    const provider = createOpenAiCompatibleAgentProvider({ id: 'deepseek', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey: 'test-only',
+      fetcher: async () => new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        stream = controller
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: 'PRIVATE_REASONING 先核对项目状态。' }, finish_reason: null }] })}\n\n`))
+      } }), { headers: { 'content-type': 'text/event-stream' } }),
+    })
+    const service = new WorkbenchConversationService({ store, resolveProvider: async () => provider, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    const first = await create(service)
+    const second = await create(service)
+    try {
+      await service.command({ type: 'send', projectId, conversationId: first, providerId: provider.id, text: '目前进展？' })
+      await vi.waitFor(async () => {
+        const current = (await service.command({ type: 'list', projectId })).conversations.find((session) => session.id === first)!
+        expect(current.status).toBe('running')
+        expect(current.messages.find((message) => message.reasoning)?.reasoning).toMatchObject({ text: 'PRIVATE_REASONING 先核对项目状态。', status: 'streaming', effort: 'low' })
+        expect(current.messages.some((message) => message.role === 'assistant')).toBe(false)
+      })
+      expect((await service.command({ type: 'list', projectId })).conversations.find((session) => session.id === second)!.messages).toEqual([])
+      expect(JSON.stringify(await store.loadState())).not.toContain('PRIVATE_REASONING')
+      stream.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: '{"text":"当前在需求澄清阶段。"}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 } })}\n\ndata: [DONE]\n\n`))
+      stream.close()
+      await service.settled(first)
+      store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+      const restarted = new WorkbenchConversationService({ store, resolveProvider: async () => provider, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+      const saved = (await restarted.command({ type: 'list', projectId })).conversations.find((session) => session.id === first)!
+      expect(saved.status).toBe('idle')
+      expect(saved.messages.find((message) => message.reasoning)).toMatchObject({ reasoning: { status: 'completed', text: 'PRIVATE_REASONING 先核对项目状态。' }, usage: { totalTokens: 50 } })
+      expect(saved.messages.at(-1)?.text).toBe('当前在需求澄清阶段。')
+    } finally { try { stream.close() } catch { /* already closed */ } await service.settled(first) }
+  })
+
   it.each(['completed', 'approval_required'] as const)('exposes actual publication facts for a %s delivery without leaking unrelated records or internal metadata', async (status) => {
     const node = created.run.nodes.find((item) => item.kind === 'pr')!
     const stamp = created.run.updatedAt
@@ -121,6 +233,36 @@ describe('unified conversation execution and boundaries', () => {
     expect(calls[3]).toContain('需要撤销吗')
   })
 
+  it.each([
+    { prompt: '草案是否按此保存？', purpose: undefined, resolved: true },
+    { prompt: '将这份方案存到节点吗？', purpose: 'save_proposal', resolved: true },
+    { prompt: '保存前需要增加撤销功能吗？', purpose: 'clarification', resolved: false },
+  ])('resolves only the corresponding proposal confirmation after successful save: $prompt', async ({ prompt, purpose, resolved }) => {
+    let value: Record<string, unknown> = { text: '还有一项业务问题。', question: { prompt: '空列表文案是什么？', options: [] } }
+    const { service } = harness(async () => ({ value }))
+    const id = await create(service)
+    const first = await send(service, id)
+    const firstQuestionId = first.messages.at(-1)!.id
+    value = { text: '请核对草稿。', question: { prompt, purpose, options: [] }, draft: { runId: created.run.id, nodeId: created.run.currentNodeId, title: '候选需求', content: '仅删除已完成任务。' } }
+    const draft = await send(service, id, '先起草')
+    const messageId = draft.messages.at(-1)!.id
+    const save = { type: 'publish', projectId, conversationId: id, messageId }
+    vi.spyOn(store, 'saveWorkbenchConversation').mockResolvedValueOnce(false)
+    await expect(service.command(save)).rejects.toThrow('会话已经更新')
+    expect((await service.command({ type: 'list', projectId })).conversations[0]!.messages.find((message) => message.id === messageId)!.question?.answeredAt).toBeUndefined()
+    await service.command(save)
+    store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    const restarted = harness(async () => ({ value: { text: '已收到业务回答。' } }))
+    const restored = (await restarted.service.command({ type: 'list', projectId })).conversations[0]!
+    expect(restored.status).toBe('awaiting_answer')
+    expect(restored.messages.find((message) => message.id === firstQuestionId)!.question?.answeredAt).toBeUndefined()
+    const saved = restored.messages.find((message) => message.id === messageId)!
+    expect(Boolean(saved.question?.answeredAt)).toBe(resolved)
+    expect(saved.draft?.publishedArtifactId).toBeTruthy()
+    const answered = await send(restarted.service, id, '显示暂无任务', { answerToMessageId: firstQuestionId })
+    expect(answered.status).toBe(resolved ? 'idle' : 'awaiting_answer')
+  })
+
   it('keeps unanswered questions while the same chat asks about another node', async () => {
     let step = 0
     const { service } = harness(async () => ({ value: step++ === 0 ? { text: '请补充。', question: { prompt: '是否撤销？', options: [] } } : { text: '测试尚未执行。' } }))
@@ -136,7 +278,8 @@ describe('unified conversation execution and boundaries', () => {
     let value: Record<string, unknown> = { text: 'PRIVATE_A_REPLY', draft: { runId: created.run.id, nodeId: node.id, title: '共同提案', content: '仅删除已完成的任务。' } }
     const { service, calls } = harness(async () => ({ value }))
     const a = await create(service); const b = await create(service)
-    await service.command({ type: 'update', projectId, conversationId: a, memory: 'PRIVATE_A_MEMORY' })
+    const legacy = (await service.command({ type: 'list', projectId })).conversations.find((session) => session.id === a)!
+    await store.saveWorkbenchConversation({ ...legacy, version: legacy.version + 1, memory: 'PRIVATE_A_MEMORY' }, legacy.version)
     const draft = await send(service, a, 'PRIVATE_A_MESSAGE')
     value = { text: '项目目前仍在需求澄清。' }
     await send(service, b, 'PRIVATE_B_MESSAGE')
@@ -244,23 +387,23 @@ describe('unified conversation execution and boundaries', () => {
     const { service } = harness(async () => ({ value: { text: '错误引用', actions: [{ label: '打开', runId: 'foreign', nodeId: 'secret', section: '状态' }] } }))
     await store.upsertProject({ ...project, id: 'other' })
     const id = await create(service)
-    await expect(service.command({ type: 'update', projectId: 'other', conversationId: id, memory: 'leak' })).rejects.toThrow('当前项目中没有')
+    await expect(service.command({ type: 'update', projectId: 'other', conversationId: id, inputDraft: 'leak' })).rejects.toThrow('当前项目中没有')
     const result = await send(service, id)
     expect(result.status).toBe('failed')
     expect(result.messages.some((message) => message.actions?.length)).toBe(false)
     expect(() => parseConversationCommand({ type: 'send', projectId, conversationId: id, text: 'x', providerId: 'x', localPath: '/etc' })).toThrow()
   })
 
-  it('recovers tabs, input, isolated memory and unanswered questions across SQLite restarts', async () => {
+  it('recovers tabs, input and unanswered questions across SQLite restarts', async () => {
     const { service } = harness(async () => ({ value: { text: '需要回答。', question: { prompt: '要支持撤销吗？', options: [] } } }))
     const id = await create(service)
     await send(service, id)
-    await service.command({ type: 'update', projectId, conversationId: id, isOpen: false, inputDraft: '还没发出的答案', memory: '只属于本会话' })
+    await service.command({ type: 'update', projectId, conversationId: id, isOpen: false, inputDraft: '还没发出的答案' })
     store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
     const restarted = harness(async () => { throw new Error('must not call') })
     await restarted.service.recoverInterrupted()
     const session = (await restarted.service.command({ type: 'list', projectId })).conversations[0]!
-    expect(session).toMatchObject({ id, isOpen: false, inputDraft: '还没发出的答案', memory: '只属于本会话', status: 'awaiting_answer' })
+    expect(session).toMatchObject({ id, isOpen: false, inputDraft: '还没发出的答案', status: 'awaiting_answer' })
     expect(session.messages.at(-1)?.question?.prompt).toBe('要支持撤销吗？')
     expect(restarted.calls).toHaveLength(0)
     await store.saveWorkbenchConversation({ ...session, version: session.version + 1, status: 'running' }, session.version)

@@ -23,7 +23,6 @@ function fixture() {
         if (input.isOpen !== undefined) session.isOpen = input.isOpen
         if (input.inputDraft !== undefined) session.inputDraft = input.inputDraft
         if (input.title !== undefined) session.title = input.title
-        if (input.memory !== undefined) session.memory = input.memory
         session.version++
       }
       if (input.type === 'send' && session) {
@@ -42,6 +41,62 @@ function fixture() {
 }
 
 describe('workbench tabs and independent conversation interaction', () => {
+  it('renders legacy and declared Markdown while keeping plain text, unknown formats and unsafe content readable', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    f.sessions[0]!.messages.push(
+      { id: 'legacy', role: 'assistant', text: '**需求澄清**\n\n1. 核对需求\n2. 再确认', createdAt: run.createdAt },
+      { id: 'plain', role: 'assistant', format: 'plain_text', text: '**保持原样**', createdAt: run.createdAt },
+      { id: 'unknown', role: 'assistant', format: 'unsupported', text: '<custom>未知格式原文</custom>', createdAt: run.createdAt },
+      { id: 'code', role: 'assistant', format: 'markdown', text: '```json\n{"value":"**字面值**"}\n```\n\n[文档](https://example.com/docs) [危险](javascript:alert%281%29)\n\n<script>alert(1)</script>\n\n![图示](https://example.com/tracker.png)', createdAt: run.createdAt },
+    )
+    f.sessions[0]!.version++
+    await act(async () => f.push())
+    expect(screen.getByText('需求澄清').tagName).toBe('STRONG')
+    expect(screen.getByRole('list')).toHaveTextContent('核对需求')
+    expect(screen.getByText('**保持原样**')).toBeVisible()
+    expect(screen.getByText('<custom>未知格式原文</custom>')).toBeVisible()
+    expect(screen.getByText('{"value":"**字面值**"}').tagName).toBe('CODE')
+    expect(screen.getByRole('link', { name: '文档' })).toHaveAttribute('href', 'https://example.com/docs')
+    expect(screen.queryByRole('link', { name: '危险' })).toBeNull()
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(document.querySelector('.conversation-message script')).toBeNull()
+    fireEvent.click(screen.getAllByRole('button', { name: '查看原文' })[0]!)
+    expect(screen.getByText(/\*\*需求澄清\*\*/)).toBeVisible()
+  })
+
+  it('shows reasoning while the answer is pending, then keeps both independently readable in history', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    const session = f.sessions[0]!
+    session.status = 'running'; session.version++
+    session.messages.push({ id: 'thinking-1', role: 'notice', text: '模型调用 1', createdAt: run.createdAt,
+      reasoning: { text: '我会先检查当前阶段，再核对测试记录。', effort: 'low', status: 'streaming' } })
+    await act(async () => f.push())
+    const reasoning = await screen.findByRole('button', { name: /推理过程.*生成中/ })
+    expect(reasoning).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getByText('我会先检查当前阶段，再核对测试记录。')).toBeVisible()
+    session.messages[0]!.reasoning!.text += ' 当前测试尚未执行。'; session.version++
+    await act(async () => f.push())
+    expect(await screen.findByText(/我会先检查当前阶段.*当前测试尚未执行/)).toBeVisible()
+    session.status = 'idle'; session.version++
+    session.messages[0]!.reasoning!.status = 'completed'
+    session.messages.push({ id: 'answer-1', role: 'assistant', text: '现在需要完成需求澄清。', createdAt: run.createdAt })
+    await act(async () => f.push())
+    expect(await screen.findByText('现在需要完成需求澄清。')).toBeVisible()
+    const finished = screen.getByRole('button', { name: /推理过程.*已结束/ })
+    expect(finished).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(finished)
+    expect(screen.getByText(/我会先检查当前阶段.*当前测试尚未执行/)).toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    await screen.findByRole('tab', { name: '对话 2' })
+    expect(screen.queryByText(/我会先检查当前阶段/)).toBeNull()
+  })
+
   it('keeps the existing inspector mounted, with separate conversations and close/reopen history', async () => {
     const f = fixture()
     const view = render(<WorkbenchWorkspace {...f.props} />)
@@ -86,19 +141,22 @@ describe('workbench tabs and independent conversation interaction', () => {
     await waitFor(() => expect(f.commands).toContainEqual(expect.objectContaining({ type: 'send', text: '不需要', answerToMessageId: expect.stringContaining('answer-chat-1-') })))
   })
 
-  it('persists private memory and does not expose one project’s sessions after switching projects', async () => {
+  it('removes manual memory editing, explains archived notes and preserves project isolation', async () => {
     const f = fixture()
     const view = render(<WorkbenchWorkspace {...f.props} />)
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
     await screen.findByRole('tab', { name: '对话 1' })
-    fireEvent.click(screen.getByRole('button', { name: /上下文与会话记忆/ }))
-    const memory = screen.getByRole('textbox', { name: '仅本会话记忆' })
-    fireEvent.change(memory, { target: { value: '私有约束' } }); fireEvent.blur(memory)
-    await waitFor(() => expect(f.sessions[0]?.memory).toBe('私有约束'))
+    f.sessions[0]!.memory = '旧版私有备注'; f.sessions[0]!.version++
+    await act(async () => f.push())
+    fireEvent.click(screen.getByRole('button', { name: /会话信息/ }))
+    expect(screen.queryByRole('textbox', { name: '仅本会话记忆' })).toBeNull()
+    expect(screen.getByText('旧版私有备注')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('旧版会话备注（已停用）'))
+    expect(screen.getByText(/已停用，不会发送给模型/)).toBeVisible()
     view.rerender(<WorkbenchWorkspace {...f.props} projectId="other-project" projectName="另一个项目" />)
     await waitFor(() => expect(screen.queryByRole('tab', { name: '对话 1' })).toBeNull())
     fireEvent.click(screen.getByRole('button', { name: '会话历史' }))
-    expect(screen.queryByText('私有约束')).toBeNull()
+    expect(screen.queryByText('旧版私有备注')).toBeNull()
     expect(within(screen.getByRole('region', { name: '会话历史记录' })).getByText('还没有对话。点击 ＋ 开始。')).toBeVisible()
   })
 

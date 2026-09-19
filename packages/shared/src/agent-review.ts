@@ -214,10 +214,13 @@ export type AgentProvider = {
     userPrompt: string
     maxOutputTokens: number
     signal?: AbortSignal
+    /** Opt-in for conversational calls; other structured operations keep their existing mode. */
+    reasoning?: { effort: 'low'; onDelta?: (text: string) => void | Promise<void> }
   }) => Promise<{
     value: Record<string, unknown>
     usage?: AgentProviderUsage
     responseMetadata?: AgentProviderResponseMetadata
+    reasoningContent?: string
   }>
 }
 
@@ -620,6 +623,94 @@ class BoundedProviderResponseError extends Error {
   constructor(readonly code: 'response_too_large' | 'body_read_failed') {
     super(code)
     this.name = 'BoundedProviderResponseError'
+  }
+}
+
+/** Read Chat Completions SSE without exposing the incomplete structured answer as chat text. */
+async function readReasoningResponse(
+  response: Response,
+  signal: AbortSignal,
+  onDelta: (text: string) => void | Promise<void>,
+): Promise<string> {
+  if (!response.body) throw new BoundedProviderResponseError('body_read_failed')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  const encoder = new TextEncoder()
+  let buffer = ''
+  let content = ''
+  let reasoning = ''
+  let wireBytes = 0
+  let contentBytes = 0
+  let reasoningBytes = 0
+  let finished = false
+  let done = false
+  let usage: unknown
+  let id: unknown
+  let fingerprint: unknown
+  const abort = () => { void reader.cancel().catch(() => undefined) }
+  signal.addEventListener('abort', abort, { once: true })
+  const consume = async (frame: string) => {
+    const data = frame.split(/\r?\n/u).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).replace(/^ /u, '')).join('\n')
+    if (!data) return // Includes the provider's keep-alive comments.
+    if (data === '[DONE]') { done = true; return }
+    const chunk = JSON.parse(data) as Record<string, unknown>
+    if (!chunk || typeof chunk !== 'object' || Array.isArray(chunk) || chunk.error) throw new BoundedProviderResponseError('body_read_failed')
+    if (chunk.id !== undefined) id = chunk.id
+    if (chunk.system_fingerprint !== undefined) fingerprint = chunk.system_fingerprint
+    if (chunk.usage != null) usage = chunk.usage
+    if (!Array.isArray(chunk.choices) || chunk.choices.length > 1) throw new BoundedProviderResponseError('body_read_failed')
+    if (!chunk.choices.length) return // A separate usage-only terminal chunk is also accepted.
+    const choice = chunk.choices[0]
+    if (!choice || typeof choice !== 'object' || (choice.index !== undefined && choice.index !== 0)) throw new BoundedProviderResponseError('body_read_failed')
+    const delta = choice.delta
+    if (!delta || typeof delta !== 'object' || Array.isArray(delta)) throw new BoundedProviderResponseError('body_read_failed')
+    for (const field of ['reasoning_content', 'content'] as const) {
+      const text = delta[field]
+      if (text == null) continue
+      if (typeof text !== 'string') throw new BoundedProviderResponseError('body_read_failed')
+      if (field === 'reasoning_content') {
+        reasoningBytes += encoder.encode(text).byteLength
+        if (reasoningBytes > 64 * 1024) throw new BoundedProviderResponseError('response_too_large')
+        reasoning += text
+        if (text) await onDelta(text)
+      } else {
+        contentBytes += encoder.encode(text).byteLength
+        if (contentBytes > 32 * 1024) throw new BoundedProviderResponseError('response_too_large')
+        content += text
+      }
+    }
+    if (choice.finish_reason != null) {
+      if (choice.finish_reason !== 'stop') throw providerResponseError('invalid_model_output', true, { httpStatus: response.status })
+      finished = true
+    }
+  }
+  try {
+    while (!done) {
+      signal.throwIfAborted()
+      const next = await reader.read()
+      signal.throwIfAborted()
+      if (next.done) { buffer += decoder.decode(); break }
+      wireBytes += next.value.byteLength
+      // SSE envelopes can be much larger than the bounded model text.
+      if (wireBytes > 4 * 1024 * 1024) throw new BoundedProviderResponseError('response_too_large')
+      buffer += decoder.decode(next.value, { stream: true })
+      let boundary: RegExpExecArray | null
+      while (!done && (boundary = /\r?\n\r?\n/u.exec(buffer))) {
+        const frame = buffer.slice(0, boundary.index)
+        buffer = buffer.slice(boundary.index + boundary[0].length)
+        await consume(frame)
+      }
+    }
+    if (!done && buffer.trim()) await consume(buffer)
+    if (!done || !finished) throw new BoundedProviderResponseError('body_read_failed')
+    return JSON.stringify({ id, system_fingerprint: fingerprint, usage, choices: [{ message: { content, reasoning_content: reasoning } }] })
+  } catch (error) {
+    if (error instanceof BoundedProviderResponseError || error instanceof AgentProviderRequestError || signal.aborted) throw error
+    throw new BoundedProviderResponseError('body_read_failed')
+  } finally {
+    signal.removeEventListener('abort', abort)
+    await reader.cancel().catch(() => undefined)
+    reader.releaseLock()
   }
 }
 
@@ -1885,11 +1976,14 @@ export function createOpenAiCompatibleAgentProvider({
         input.userPrompt.length > 32_000 ||
         !Number.isInteger(input.maxOutputTokens) ||
         input.maxOutputTokens < 1 ||
-        input.maxOutputTokens > 4_096
+        input.maxOutputTokens > 4_096 ||
+        (input.reasoning !== undefined && input.reasoning.effort !== 'low')
       ) {
         throw new Error('Agent provider structured request is invalid')
       }
       const controller = new AbortController()
+      const thinking = deepSeek && input.reasoning !== undefined
+      const stream = thinking && input.reasoning?.onDelta !== undefined
       let timedOut = false
       let cancelledByUser = input.signal?.aborted ?? false
       const cancel = () => {
@@ -1915,7 +2009,9 @@ export function createOpenAiCompatibleAgentProvider({
             max_tokens: input.maxOutputTokens,
             ...(deepSeek
               ? {
-                  thinking: { type: 'disabled' },
+                  thinking: { type: thinking ? 'enabled' : 'disabled' },
+                  ...(thinking ? { reasoning_effort: input.reasoning!.effort } : {}),
+                  ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
                   response_format: { type: 'json_object' },
                 }
               : {}),
@@ -1932,7 +2028,9 @@ export function createOpenAiCompatibleAgentProvider({
         }
         let responseText: string
         try {
-          responseText = await readBoundedProviderResponseText(response)
+          responseText = stream && response.headers.get('content-type')?.includes('text/event-stream')
+            ? await readReasoningResponse(response, controller.signal, input.reasoning!.onDelta!)
+            : await readBoundedProviderResponseText(response)
         } catch (error) {
           if (error instanceof BoundedProviderResponseError) {
             if (error.code === 'response_too_large') {
@@ -1973,6 +2071,15 @@ export function createOpenAiCompatibleAgentProvider({
         }
         const choices = record.choices
         const usageValue = record.usage
+        const reasoningContent: unknown = thinking && Array.isArray(choices)
+          ? choices[0]?.message?.reasoning_content
+          : undefined
+        if (reasoningContent != null && typeof reasoningContent !== 'string') throw providerResponseError('invalid_model_output', true, responseMetadata)
+        // Some compatible gateways return one JSON response even when streaming was requested.
+        if (typeof reasoningContent === 'string' && !response.headers.get('content-type')?.includes('text/event-stream')) await input.reasoning?.onDelta?.(reasoningContent)
+        if (thinking && Array.isArray(choices) && choices[0]?.finish_reason != null && choices[0].finish_reason !== 'stop') {
+          throw providerResponseError('invalid_model_output', true, responseMetadata)
+        }
         const raw =
           Array.isArray(choices) &&
           choices.length === 1 &&
@@ -2009,6 +2116,7 @@ export function createOpenAiCompatibleAgentProvider({
           value,
           ...(usage ? { usage } : {}),
           responseMetadata,
+          ...(typeof reasoningContent === 'string' ? { reasoningContent } : {}),
         }
       } catch (error) {
         if (timedOut) {

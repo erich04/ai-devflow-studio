@@ -21,13 +21,17 @@ export type ConversationMessage = {
   id: string
   role: 'user' | 'assistant' | 'tool' | 'notice'
   text: string
+  /** Missing on legacy messages; unsupported formats retain their complete text. */
+  format?: 'markdown' | 'plain_text' | 'unsupported'
   createdAt: string
   actions?: ConversationAction[]
   citations?: ConversationCitation[]
-  question?: { prompt: string; options: string[]; answeredAt?: string }
+  question?: { prompt: string; options: string[]; purpose?: 'clarification' | 'save_proposal'; answeredAt?: string; resolvedBy?: 'proposal_saved' }
   draft?: ConversationDraft
   usage?: AgentProviderUsage
   provider?: { id: string; model: string }
+  /** Provider-returned reasoning, local to this conversation; never shared workflow context. */
+  reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort: 'low' }
 }
 export type WorkbenchConversation = {
   id: string
@@ -36,7 +40,8 @@ export type WorkbenchConversation = {
   title: string
   isOpen: boolean
   inputDraft: string
-  memory: string
+  /** Archived legacy note; never added to prompts or editable through commands. */
+  memory?: string
   status: 'idle' | 'running' | 'awaiting_answer' | 'failed' | 'cancelled' | 'interrupted'
   messages: ConversationMessage[]
   createdAt: string
@@ -48,7 +53,7 @@ export type WorkbenchConversation = {
 export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }
   | { type: 'create'; title?: string; inputDraft?: string }
-  | { type: 'update'; conversationId: string; title?: string; isOpen?: boolean; inputDraft?: string; memory?: string }
+  | { type: 'update'; conversationId: string; title?: string; isOpen?: boolean; inputDraft?: string }
   | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string }
   | { type: 'retry'; conversationId: string; providerId: string }
   | { type: 'cancel'; conversationId: string }
@@ -62,12 +67,12 @@ export type ConversationResponse = {
 }
 export type WorkbenchConversationApi = (command: ConversationCommand) => Promise<ConversationResponse>
 
-const limits = { projectId: 240, conversationId: 240, messageId: 240, answerToMessageId: 240, providerId: 240, title: 100, text: 12000, inputDraft: 12000, memory: 6000 }
+const limits = { projectId: 240, conversationId: 240, messageId: 240, answerToMessageId: 240, providerId: 240, title: 100, text: 12000, inputDraft: 12000 }
 export function parseConversationCommand(value: unknown): ConversationCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的会话请求。')
   const record = value as Record<string, unknown>
   const fields: Record<string, string[]> = {
-    list: [], create: ['title', 'inputDraft'], update: ['conversationId', 'title', 'isOpen', 'inputDraft', 'memory'],
+    list: [], create: ['title', 'inputDraft'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
     send: ['conversationId', 'text', 'providerId', 'answerToMessageId'], retry: ['conversationId', 'providerId'],
     cancel: ['conversationId'], publish: ['conversationId', 'messageId'],
   }

@@ -23,8 +23,24 @@ const SYSTEM = `你是 DevFlow 工作台的项目协作助手，使用中文。�
 每轮仅返回一个 JSON 对象：
 调查时 {"tool":{"name":"...","args":{...}}}。
 工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的产物、测试、轨迹、Gate 检查；artifact({runId,artifactId}) 阅读产物；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge({query}) 搜索已配置项目知识。
-结束或追问时 {"text":"答复正文","citationIds":["本轮真实来源ID"],"actions":[{"label":"定位到节点 / 查看产物 / 查看测试证据","runId":"真实ID","nodeId":"真实ID","section":"状态|产物|测试证据|轨迹|Gate影响|Gate条件|引用来源|Remediation|Handoff|Final Gate"}],"question":{"prompt":"具体问题","options":["可选答案"]},"draft":{"runId":"真实ID","nodeId":"真实ID","title":"提案标题","content":"待确认内容"}}。
+答复正文格式由 format 指定：markdown 或 plain_text。一般解释使用 markdown，代码与 JSON 示例放在围栏代码块中。format 只影响正文，不能定义交互动作。
+结束或追问时 {"text":"答复正文","format":"markdown","citationIds":["本轮真实来源ID"],"actions":[{"label":"定位到节点 / 查看产物 / 查看测试证据","runId":"真实ID","nodeId":"真实ID","section":"状态|产物|测试证据|轨迹|Gate影响|Gate条件|引用来源|Remediation|Handoff|Final Gate"}],"question":{"prompt":"具体问题","options":["可选答案"]},"draft":{"runId":"真实ID","nodeId":"真实ID","title":"提案标题","content":"待确认内容"}}。
+仅询问是否保存同条 draft 时，将 question.purpose 设为 save_proposal；业务澄清问题设为 clarification。保存提案是用户点击保存按钮的独立操作；不要让用户误以为保存就生成了正式澄清产物。
 如果最近用户已经明确回答了历史中的问题，可返回 answeredQuestionIds:[问题所属消息的真实ID]；查询其他节点的进展不算回答。question、draft、actions、citationIds 都可省略。不要虚构 ID；actions 的目标必须来自查询结果。不能将用户尚未确认的想法当成共享约定。不能访问其他会话的聊天、私有笔记或草稿。`
+
+function reconcileSavedProposalQuestions(session: WorkbenchConversation): WorkbenchConversation {
+  const messages = session.messages.map((message) => {
+    const question = message.question
+    // Narrow legacy compatibility: never infer business questions from the word “保存” alone.
+    const legacySaveConfirmation = question?.purpose === undefined && /^(?:这份|当前)?(?:草案|草稿|提案)是否(?:按此|直接)?保存[？?]?$/u.test(question?.prompt.trim() ?? '')
+    if (!message.draft?.publishedArtifactId || !question || question.answeredAt || !(question.purpose === 'save_proposal' || legacySaveConfirmation)) return message
+    return { ...message, question: { ...question, answeredAt: now(), resolvedBy: 'proposal_saved' as const } }
+  })
+  if (messages.every((message, index) => message === session.messages[index])) return session
+  return { ...session, messages, status: session.status === 'awaiting_answer' || session.status === 'idle'
+    ? messages.some((message) => message.question && !message.question.answeredAt) ? 'awaiting_answer' : 'idle'
+    : session.status }
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型返回的内容格式不正确，请重试。')
@@ -46,14 +62,22 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {}
 }
 
+function visibleReasoning(text: string, complete: boolean): string {
+  // Do not publish a trailing partial ASCII token (which may be part of a credential).
+  const bounded = complete ? text : text.replace(/[A-Za-z0-9_\-./+=]+$/u, '')
+  const privateKey = /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/u.exec(bounded)
+  const safe = privateKey && !/-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/u.test(bounded.slice(privateKey.index))
+    ? bounded.slice(0, privateKey.index) : bounded
+  return redactSensitiveText(safe).value
+}
+
 /** Keep the serialized request inside the Provider's 32,000-character contract. */
 function packConversationContext(input: {
-  memory: string; history: Array<Pick<ConversationMessage, 'id' | 'role' | 'text' | 'question' | 'draft'>>
+  history: Array<Pick<ConversationMessage, 'id' | 'role' | 'text' | 'question' | 'draft'>>
   facts: { runs: Array<{ id: string; title: string; status: string; version: number; currentNodeId: string; updatedAt: string }>; totalRuns: number; observedAt: string }
   observations: unknown[]; remainingSteps: number
 }) {
   const context = {
-    conversationMemory: input.memory,
     history: [...input.history],
     latestWorkflow: { ...input.facts, runs: [...input.facts.runs], contextSummaryOnly: false },
     toolObservations: [...input.observations], remainingSteps: input.remainingSteps,
@@ -63,7 +87,7 @@ function packConversationContext(input: {
   let limited = false
   const markLimited = () => {
     limited = true
-    context.contextNotice = '上下文受长度限制，较早消息、部分记忆或工具内容未全部附带；它们仍保存在本会话。请按需重新查询，workflow 支持 query 和 offset。'
+    context.contextNotice = '上下文受长度限制，较早消息或工具内容未全部附带；它们仍保存在本会话。请按需重新查询，workflow 支持 query 和 offset。'
   }
   if (JSON.stringify(context.latestWorkflow).length > 6000) {
     context.latestWorkflow.runs = input.facts.runs.map(({ id, title, status, version, currentNodeId, updatedAt }) => ({ id, title: title.slice(0, 120), status, version, currentNodeId, updatedAt }))
@@ -81,7 +105,6 @@ function packConversationContext(input: {
     // JSON escaping can double an excerpt; reserve half the available characters.
     context.toolObservations = [{ truncated: true, excerpt: excerpt.slice(0, Math.floor(remaining / 2)) }]
   }
-  while (serialize().length > 30000 && context.conversationMemory.length) { markLimited(); context.conversationMemory = context.conversationMemory.slice(0, Math.floor(context.conversationMemory.length / 2)) }
   while (serialize().length > 30000 && context.latestWorkflow.runs.length) { markLimited(); context.latestWorkflow.contextSummaryOnly = true; context.latestWorkflow.runs.pop() }
   const prompt = serialize()
   if (prompt.length > 32000) throw new Error('这条消息超出了模型上下文容量，请缩短后重试。')
@@ -96,7 +119,8 @@ export class WorkbenchConversationService {
 
   async recoverInterrupted(): Promise<void> {
     for (const session of await this.deps.store.listWorkbenchConversations()) {
-      if (session.status === 'running') await this.update(session.localProjectId, session.id, (current) => ({ ...current, status: 'interrupted', error: '上次调查因应用退出而中断。点击重试继续，不会自动重复请求。' }))
+      if (reconcileSavedProposalQuestions(session) !== session) await this.update(session.localProjectId, session.id, reconcileSavedProposalQuestions)
+      if (session.status === 'running') await this.update(session.localProjectId, session.id, (current) => ({ ...current, status: 'interrupted', messages: current.messages.map((message) => message.reasoning?.status === 'streaming' ? { ...message, reasoning: { ...message.reasoning, status: 'interrupted' } } : message), error: '上次调查因应用退出而中断。点击重试继续，不会自动重复请求。' }))
     }
   }
 
@@ -130,7 +154,7 @@ export class WorkbenchConversationService {
     if (input.type === 'create') {
       const created: WorkbenchConversation = {
         id: randomUUID(), localProjectId: input.projectId, version: 1, title: input.title?.trim() ?? '新对话',
-        isOpen: true, inputDraft: input.inputDraft ?? '', memory: '', status: 'idle', messages: [], createdAt: now(), updatedAt: now(),
+        isOpen: true, inputDraft: input.inputDraft ?? '', status: 'idle', messages: [], createdAt: now(), updatedAt: now(),
       }
       await this.deps.store.saveWorkbenchConversation(created, 0)
       conversationId = created.id
@@ -144,12 +168,12 @@ export class WorkbenchConversationService {
             ...current, ...(input.title !== undefined ? { title: input.title.trim() } : {}),
             ...(input.isOpen !== undefined ? { isOpen: input.isOpen } : {}),
             ...(input.inputDraft !== undefined ? { inputDraft: input.inputDraft } : {}),
-            ...(input.memory !== undefined ? { memory: input.memory } : {}),
           }))
           break
         case 'cancel':
           this.controllers.get(session.id)?.abort()
-          if (session.status === 'running') await this.update(input.projectId, session.id, (current) => ({ ...current, status: 'cancelled', error: '已停止调查。已保存的消息和依据可以继续使用。' }))
+          if (reconcileSavedProposalQuestions(session) !== session) await this.update(session.localProjectId, session.id, reconcileSavedProposalQuestions)
+      if (session.status === 'running') await this.update(input.projectId, session.id, (current) => ({ ...current, status: 'cancelled', error: '已停止调查。已保存的消息和依据可以继续使用。' }))
           break
         case 'send': case 'retry':
           await this.start(input, session)
@@ -173,14 +197,17 @@ export class WorkbenchConversationService {
   private async publish(input: Extract<ConversationCommand, { type: 'publish' }>, session: WorkbenchConversation) {
     const draft = session.messages.find((message) => message.id === input.messageId)?.draft
     if (!draft) throw new Error('没有可保存的提案。')
-    if (draft.publishedArtifactId) return
+    if (draft.publishedArtifactId) {
+      if (reconcileSavedProposalQuestions(session) !== session) await this.update(input.projectId, session.id, reconcileSavedProposalQuestions)
+      return
+    }
     await this.target(input.projectId, draft.runId, draft.nodeId)
     const artifactId = `conversation-proposal-${input.messageId}`
     const artifact: Artifact = { id: artifactId, runId: draft.runId, nodeId: draft.nodeId, kind: 'log',
       title: `讨论提案（待确认）：${draft.title}`, summary: '用户从独立会话明确保存的提案；未批准，也不代替本阶段的正式产物。',
       content: `# ${draft.title}\n\n状态：待确认的讨论提案。请在对应节点核对后形成正式阶段产物。\n\n${draft.content}`,
       redacted: true, updatedAt: now() }
-    await this.update(input.projectId, session.id, (current) => ({ ...current, messages: current.messages.map((message) => message.id === input.messageId && message.draft ? { ...message, draft: { ...message.draft, publishedArtifactId: artifactId } } : message) }), artifact)
+    await this.update(input.projectId, session.id, (current) => reconcileSavedProposalQuestions({ ...current, messages: current.messages.map((message) => message.id === input.messageId && message.draft ? { ...message, draft: { ...message.draft, publishedArtifactId: artifactId } } : message) }), artifact)
     await this.deps.published?.()
   }
 
@@ -278,6 +305,16 @@ export class WorkbenchConversationService {
 
   private async run(projectId: string, id: string, providerId: string, controller: AbortController) {
     let phase = 'resolve_provider'
+    let activeReasoning: { messageId: string; text: string; flushedAt: number } | undefined
+    const flushReasoning = async (status: 'streaming' | 'completed' | 'interrupted') => {
+      if (!activeReasoning) return
+      const { messageId, text } = activeReasoning
+      activeReasoning.flushedAt = Date.now()
+      const visible = visibleReasoning(text, status === 'completed')
+      await this.update(projectId, id, (current) => current.status !== 'running' && status === 'streaming' ? current : ({ ...current,
+        messages: current.messages.map((message) => message.id === messageId ? { ...message, reasoning: { text: visible, status, effort: 'low' } } : message),
+      }))
+    }
     const deadline = setTimeout(() => controller.abort(new Error('timeout')), 180000)
     try {
       const provider = await this.deps.resolveProvider(providerId)
@@ -298,17 +335,40 @@ export class WorkbenchConversationService {
         controller.signal.throwIfAborted()
         phase = 'read_context'
         const facts = await this.overview(projectId)
-        const packed = packConversationContext({ memory: session.memory, history, facts, observations, remainingSteps: 12 - step })
+        const packed = packConversationContext({ history, facts, observations, remainingSteps: 12 - step })
         await this.update(projectId, id, (current) => ({ ...current, contextReceipt: {
           includedMessages: packed.includedMessages,
           omittedMessages: session.messages.filter((message) => message.role !== 'tool' && message.role !== 'notice').length - packed.includedMessages,
           limited: packed.limited, observedAt: now(),
         } }))
         phase = 'provider_request'
+        const callId = randomUUID()
+        const thinking = provider.billingProvider === 'deepseek'
+        if (thinking) {
+          activeReasoning = { messageId: callId, text: '', flushedAt: 0 }
+          await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, {
+            id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), provider: { id: providerId, model: provider.model },
+            reasoning: { text: '', status: 'streaming', effort: 'low' },
+          }] }))
+        }
         const result = await provider.completeStructuredJson({ systemPrompt: SYSTEM,
-          userPrompt: packed.prompt, maxOutputTokens: 3500, signal: controller.signal })
+          userPrompt: packed.prompt, maxOutputTokens: 3500, signal: controller.signal,
+          ...(thinking ? { reasoning: { effort: 'low' as const, onDelta: async (delta: string) => {
+            controller.signal.throwIfAborted()
+            activeReasoning!.text += delta
+            if (Date.now() - activeReasoning!.flushedAt >= 300) await flushReasoning('streaming')
+          } } } : {}),
+        })
+        if (activeReasoning) {
+          if (result.reasoningContent !== undefined) activeReasoning.text = result.reasoningContent
+          await flushReasoning(controller.signal.aborted ? 'interrupted' : 'completed')
+          activeReasoning = undefined
+        }
         // Persist billed usage even if cancellation arrived while the provider was returning.
-        await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, { id: randomUUID(), role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), ...(result.usage ? { usage: result.usage } : {}), provider: { id: providerId, model: provider.model } }] }))
+        await this.update(projectId, id, (current) => ({ ...current, messages: thinking
+          ? current.messages.map((message) => message.id === callId ? { ...message, ...(result.usage ? { usage: result.usage } : {}) } : message)
+          : [...current.messages, { id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), ...(result.usage ? { usage: result.usage } : {}), provider: { id: providerId, model: provider.model } }],
+        }))
         controller.signal.throwIfAborted()
         phase = 'validate_response'
         const value = record(result.value)
@@ -339,11 +399,13 @@ export class WorkbenchConversationService {
         if (value.question !== undefined) {
           const raw = record(value.question)
           if (raw.options !== undefined && (!Array.isArray(raw.options) || raw.options.length > 6)) throw new Error('模型返回的问题选项无效。')
-          question = { prompt: textField(raw.prompt, 1500), options: (Array.isArray(raw.options) ? raw.options : []).map((option) => textField(option, 160)) }
+          if (raw.purpose !== undefined && raw.purpose !== 'clarification' && raw.purpose !== 'save_proposal') throw new Error('模型返回的问题类型无效。')
+          if (raw.purpose === 'save_proposal' && !draft) throw new Error('保存确认缺少对应提案，请重试。')
+          question = { ...(raw.purpose ? { purpose: raw.purpose } : {}), prompt: textField(raw.prompt, 1500), options: (Array.isArray(raw.options) ? raw.options : []).map((option) => textField(option, 160)) }
         }
         const citationIds = Array.isArray(value.citationIds) ? value.citationIds : []
         const cited = value.citationIds === undefined ? citations : citations.filter((item) => citationIds.includes(item.id))
-        const message: ConversationMessage = { id: randomUUID(), role: 'assistant', text: textField(value.text), createdAt: now(), actions, citations: cited, ...(draft ? { draft } : {}), ...(question ? { question } : {}) }
+        const message: ConversationMessage = { id: randomUUID(), role: 'assistant', text: textField(value.text), format: value.format === 'markdown' ? 'markdown' : value.format === undefined || value.format === 'plain_text' ? 'plain_text' : 'unsupported', createdAt: now(), actions, citations: cited, ...(draft ? { draft } : {}), ...(question ? { question } : {}) }
         await this.update(projectId, id, (current) => {
           if (current.status !== 'running') return current
           const answeredIds = Array.isArray(value.answeredQuestionIds) ? value.answeredQuestionIds : []
@@ -354,6 +416,7 @@ export class WorkbenchConversationService {
       }
       throw new Error('本次调查已达到 12 次调用上限。已保留依据，可以补充问题后继续。')
     } catch (error) {
+      await flushReasoning('interrupted')
       const failureRecord = recordOrEmpty(error)
       const rawCode = failureRecord.code ?? recordOrEmpty(failureRecord.cause).code ?? (error instanceof Error ? error.name : 'unknown')
       const code = typeof rawCode === 'string' && /^[a-zA-Z0-9_-]{1,80}$/u.test(rawCode) ? rawCode : 'unknown'

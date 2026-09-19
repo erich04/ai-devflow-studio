@@ -279,14 +279,14 @@ export function useDesktopActions(input: {
   async function syncRemoteTeamState() {
     if (syncInFlight.current) return
     if (!desktopApi) {
-      const message = '请在 Electron 应用中同步团队状态'
+      const message = '请在 Electron 应用中拉取团队数据'
       setTeamSyncFeedback({ status: 'error', message })
       setToast(message)
       return
     }
 
     if (!activeDesktopPairing?.organizationId) {
-      const message = '请先 Pair Team Project 后再同步团队远端状态'
+      const message = '请先绑定团队项目，再拉取团队数据'
       setTeamSyncFeedback({ status: 'error', message })
       setToast(message)
       return
@@ -295,7 +295,7 @@ export function useDesktopActions(input: {
     syncInFlight.current = true
     setIsSyncingRemote(true)
     setTeamSyncFeedback(null)
-    setToast('正在同步团队远端状态...')
+    setToast('正在拉取团队数据...')
 
     try {
       const snapshot = await desktopApi.loadRemoteSnapshot({
@@ -340,12 +340,12 @@ export function useDesktopActions(input: {
       }
 
       const message = policy
-        ? `同步成功 · 策略 v${policy.version} · ${policy.syncedAt}`
-        : '团队远端状态已同步，本地 Run 已保留'
+        ? `拉取成功 · 策略 v${policy.version} · ${policy.syncedAt}`
+        : '团队数据已拉取，本地 Run 已保留'
       setTeamSyncFeedback({ status: 'success', message })
       setToast(message)
     } catch (error) {
-      const message = error instanceof Error ? error.message : '同步团队远端状态失败'
+      const message = error instanceof Error ? error.message : '拉取团队数据失败'
       setTeamSyncFeedback({ status: 'error', message })
       setToast(message)
     } finally {

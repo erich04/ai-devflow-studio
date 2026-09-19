@@ -314,6 +314,7 @@ export function Inspector({
   codingReadinessError,
   onOpenCodingConfiguration,
   codingActionProjection,
+  upstreamCodingDiffReady,
 }: {
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
@@ -370,6 +371,7 @@ export function Inspector({
   codingReadinessError: string
   onOpenCodingConfiguration: () => void
   codingActionProjection?: CodingRuntimeActionProjection
+  upstreamCodingDiffReady?: boolean
 }) {
   const [requestedTab, setRequestedTab] = useState('状态')
   const [clarificationFeedbackDraft, setClarificationFeedbackDraft] = useState('')
@@ -419,6 +421,7 @@ export function Inspector({
     gateEnforcementDecision,
     isLoadingGateEnforcement,
     canApprove,
+    upstreamCodingDiffReady: upstreamCodingDiffReady ?? false,
     hasTeamProjectBinding: hasDeliveryProjectBinding,
     canVerifyGitHubDeliveryRevocation,
     ...(codingActionProjection ? { codingActionProjection } : {}),
@@ -1456,7 +1459,7 @@ export function TeamOverview({
               {projects.length === 0 ? (
                 <tr>
                   <td colSpan={10}>
-                    <p className="empty-note">未加载 Team Project。同步团队后才会展示远端项目、成员、策略和成本摘要。</p>
+                    <p className="empty-note">未加载 Team Project。拉取团队数据后才会展示远端项目、成员、策略和成本摘要。</p>
                   </td>
                 </tr>
               ) : projects.map((project) => {
@@ -1565,7 +1568,7 @@ export function TeamOverview({
               <div className="policy-source-row"><strong>Not used by</strong><span>Local Project config、test command、managed worktree 设置</span><span className="pill soft">separate</span></div>
             </div>
             <div className="mini-card soft">
-              <p className="section-title">同步团队后发生什么</p>
+              <p className="section-title">拉取团队数据后发生什么</p>
               <ul>
                 <li>拉取 Team Project policy snapshot。</li>
                 <li>刷新 Team Overview 的 policy / budget / Gate rollup。</li>
@@ -1574,7 +1577,7 @@ export function TeamOverview({
               </ul>
             </div>
             <button className="ghost-button" type="button" onClick={onSyncTeam} disabled={isSyncingTeam}>
-              {isSyncingTeam ? '同步中' : '同步团队并刷新 snapshot'}
+              {isSyncingTeam ? '拉取中' : '拉取团队数据并刷新策略'}
             </button>
             {syncFeedback ? (
               <p className="meta" data-testid="team-sync-feedback" role={syncFeedback.status === 'error' ? 'alert' : 'status'}>

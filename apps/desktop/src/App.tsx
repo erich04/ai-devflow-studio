@@ -4,6 +4,8 @@ import {
   BookOpen,
   Bot,
   ClipboardCheck,
+  CircleHelp,
+  Settings2,
   Network,
   MoreHorizontal,
   Plus,
@@ -45,6 +47,7 @@ import {
 import {
   resolveInspectorTabForSearchResult,
   selectGitHubDeliveryIntentForInspector,
+  hasArchivedUpstreamCodingDiff,
 } from './app/node-inspector-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
@@ -1064,32 +1067,16 @@ export function App() {
 
   return (
     <div className="app-shell" data-origin={dataOrigin}>
-      <aside className="sidebar rail" aria-label="Primary navigation">
-        <div className="brand mark" aria-label="DevFlow Studio">DF</div>
-
-        <nav className="nav-list">
-          <NavButton active={activeView === 'workbench'} icon={<Workflow />} label="工作台" onClick={() => setActiveView('workbench')} />
-          <NavButton active={activeView === 'team'} ariaLabel="Team Overview" icon={<Users />} label="Team" onClick={() => setActiveView('team')} />
-          <NavButton active={activeView === 'knowledge'} icon={<BookOpen />} label="Knowledge" onClick={() => setActiveView('knowledge')} />
-          <NavButton active={activeView === 'agents'} icon={<Bot />} label="Agents" onClick={() => setActiveView('agents')} />
-          <NavButton active={activeView === 'skills'} icon={<ShieldCheck />} label="Skills" onClick={() => setActiveView('skills')} />
-          <NavButton active={activeView === 'mcp'} icon={<Network />} label="MCP" onClick={() => setActiveView('mcp')} />
-          <NavButton active={activeView === 'tests'} icon={<TestTube2 />} label="测试" onClick={() => setActiveView('tests')} />
-        </nav>
-
-      </aside>
-
-      <main className="workspace main-shell">
         <header className="topbar">
           <div className="project-switcher" aria-label="Project selector">
             <div className="project-line">
               <span className="project-label">Team Project</span>
-              {teamProjectLabel ? <strong className="project-value">{teamProjectLabel}</strong> : null}
+              {teamProjectLabel ? <strong className="project-value" title={teamProjectLabel}>{teamProjectLabel}</strong> : null}
               <span className={`pill ${teamProjectSource === 'unbound' ? 'soft' : 'accent'}`}>{teamProjectSourceLabel}</span>
             </div>
             <div className="project-line">
               <span className="project-label">Local Project</span>
-              <strong className="project-value project-value--local">
+              <strong className="project-value project-value--local" title={selectedLocalProject?.path}>
                 {selectedLocalProject?.path ?? '未选择本地仓库'}
               </strong>
             </div>
@@ -1155,10 +1142,16 @@ export function App() {
                 {isPairingDesktop ? '配对中' : '绑定'}
               </button>
             </form>
-            <button className="ghost-button" onClick={syncRemoteTeamState} disabled={isSyncingRemote}>
-              <RefreshCw size={16} />
-              {isSyncingRemote ? '同步中' : '同步团队'}
-            </button>
+            <div className="team-sync-controls">
+              <button className="ghost-button" onClick={syncRemoteTeamState} disabled={isSyncingRemote}>
+                <RefreshCw size={16} />
+                {isSyncingRemote ? '拉取中' : '拉取团队数据'}
+              </button>
+              <details className="team-sync-help">
+                <summary aria-label="团队数据说明"><CircleHelp size={16} /></summary>
+                <p>从团队服务拉取你有权访问的项目、成员、运行与产物摘要，并刷新本机策略和预算。团队服务与网页使用同一份共享数据，可部署在本机或服务器上。此操作不拉取或推送 Git 代码；本地执行结果另行回传，GitHub 交付也有独立流程。</p>
+              </details>
+            </div>
             <button className="ghost-button" onClick={redactPreview} aria-label="Test redaction">
               <ShieldCheck size={16} />
               Redaction 开
@@ -1167,37 +1160,10 @@ export function App() {
               <Plus size={16} />
               新建 Run
             </button>
-            <div className="avatar" aria-label={currentUser ? `Current user ${currentUser.name}` : 'No current team user'}>
-              {currentUser?.avatarInitials ?? '--'}
-            </div>
           </div>
         </header>
 
         <section className="status-strip" aria-live="polite">
-          <span className="stat stat--source" data-testid="runtime-source-badge" title={runtimeDataSource.detail}>
-            数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
-            <em>{runtimeDataSource.status}</em>
-          </span>
-          <details className="stat data-profile-diagnostics" data-testid="data-profile-diagnostics">
-            <summary>
-              本地数据 <strong>{dataProfileDiagnostics?.name ?? '正在读取'}</strong>
-            </summary>
-            {dataProfileDiagnostics ? (
-              <dl>
-                <div><dt>来源</dt><dd>{dataProfileDiagnostics.source}</dd></div>
-                <div><dt>Schema</dt><dd>v{dataProfileDiagnostics.schemaVersion}</dd></div>
-                <div><dt>项目</dt><dd>{dataProfileDiagnostics.projectCount}</dd></div>
-                <div><dt>Run</dt><dd>{dataProfileDiagnostics.runCount}</dd></div>
-                <div>
-                  <dt>最近更新</dt>
-                  <dd>{dataProfileDiagnostics.latestRunUpdatedAt ?? '暂无 Run'}</dd>
-                </div>
-                <div><dt>指纹</dt><dd>{dataProfileDiagnostics.pathFingerprint}</dd></div>
-              </dl>
-            ) : (
-              <p>本地数据诊断暂不可用。</p>
-            )}
-          </details>
           <span className="stat">Active Runs <strong>{scopedRuns.length}</strong></span>
           <span className="stat">Run Sources <strong>{localRunCount} local · {remoteRunCount} remote</strong></span>
           <span className="stat">Pending Gates <strong>{pendingGateCount}</strong></span>
@@ -1241,6 +1207,50 @@ export function App() {
             预算评估 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong>
             {budgetRecoveryCopy ? <em>{budgetRecoveryCopy}</em> : null}
           </span>
+        </section>
+
+      <aside className="sidebar rail" aria-label="Primary navigation">
+        <nav className="nav-list">
+          <NavButton active={activeView === 'workbench'} icon={<Workflow />} label="工作台" onClick={() => setActiveView('workbench')} />
+          <NavButton active={activeView === 'team'} ariaLabel="Team Overview" icon={<Users />} label="Team" onClick={() => setActiveView('team')} />
+          <NavButton active={activeView === 'knowledge'} icon={<BookOpen />} label="Knowledge" onClick={() => setActiveView('knowledge')} />
+          <NavButton active={activeView === 'agents'} icon={<Bot />} label="Agents" onClick={() => setActiveView('agents')} />
+          <NavButton active={activeView === 'skills'} icon={<ShieldCheck />} label="Skills" onClick={() => setActiveView('skills')} />
+          <NavButton active={activeView === 'mcp'} icon={<Network />} label="MCP" onClick={() => setActiveView('mcp')} />
+          <NavButton active={activeView === 'tests'} icon={<TestTube2 />} label="测试" onClick={() => setActiveView('tests')} />
+          <NavButton active={activeView === 'diagnostics'} icon={<Settings2 />} label="诊断" onClick={() => setActiveView('diagnostics')} />
+        </nav>
+
+      </aside>
+
+      <main className="workspace main-shell">
+        <section className="diagnostics-page" hidden={activeView !== 'diagnostics'} aria-label="本地诊断">
+          <h2>本地诊断</h2>
+          <p>用于排查当前应用的数据存储；数据环境名称不是项目或团队绑定。</p>
+          <span className="stat stat--source" data-testid="runtime-source-badge" title={runtimeDataSource.detail}>
+            数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
+            <em>{runtimeDataSource.status}</em>
+          </span>
+          <details open className="data-profile-diagnostics" data-testid="data-profile-diagnostics">
+            <summary>
+              本地数据 <strong>{dataProfileDiagnostics?.name ?? '正在读取'}</strong>
+            </summary>
+            {dataProfileDiagnostics ? (
+              <dl>
+                <div><dt>来源</dt><dd>{dataProfileDiagnostics.source}</dd></div>
+                <div><dt>Schema</dt><dd>v{dataProfileDiagnostics.schemaVersion}</dd></div>
+                <div><dt>项目</dt><dd>{dataProfileDiagnostics.projectCount}</dd></div>
+                <div><dt>Run</dt><dd>{dataProfileDiagnostics.runCount}</dd></div>
+                <div>
+                  <dt>最近更新</dt>
+                  <dd>{dataProfileDiagnostics.latestRunUpdatedAt ?? '暂无 Run'}</dd>
+                </div>
+                <div><dt>指纹</dt><dd>{dataProfileDiagnostics.pathFingerprint}</dd></div>
+              </dl>
+            ) : (
+              <p>本地数据诊断暂不可用。</p>
+            )}
+          </details>
         </section>
 
         {toast && (
@@ -1441,6 +1451,7 @@ export function App() {
                   )}
                   codingReadiness={codingRuntime.readiness}
                   codingReadinessError={codingRuntime.error}
+                  upstreamCodingDiffReady={hasArchivedUpstreamCodingDiff({ run: selectedRun, node: selectedNode, codingRuns, diffs: codingDiffArtifacts })}
                   onOpenCodingConfiguration={() => openSupportContext('coding-agent', '配置 Coding Runtime')}
                   {...(codingActionProjection ? { codingActionProjection } : {})}
                   onRunCodingAgent={runCodingAgent}
@@ -1483,7 +1494,7 @@ export function App() {
                     <span className="pill soft">no run loaded</span>
                   </div>
                   <p className="empty-note">
-                    当前本地仓库没有已保存的 Run。创建 Run 或同步团队后，这里才会展示真实工作流。
+                    当前本地仓库没有已保存的 Run。创建 Run 或拉取团队数据后，这里才会展示真实工作流。
                   </p>
                 </section>
                 <WorkbenchSplitter initialWidth={520} />

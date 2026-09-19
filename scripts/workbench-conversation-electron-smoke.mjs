@@ -23,10 +23,12 @@ const before = (await git(['status', '--porcelain'])).stdout
 const requests = []
 let run
 let failureSeen = false
+let releaseReasoning
 const server = createServer(async (request, response) => {
   const chunks = []; for await (const chunk of request) chunks.push(chunk)
   const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   requests.push(body)
+  expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low', stream: true, max_tokens: 3500 })
   const input = JSON.parse(body.messages.find((message) => message.role === 'user').content)
   const user = input.history.filter((message) => message.role === 'user').at(-1)?.text ?? ''
   const observations = input.toolObservations
@@ -36,7 +38,9 @@ const server = createServer(async (request, response) => {
     const timer = setTimeout(() => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: '延迟响应' }) } }], usage: { prompt_tokens: 10, completion_tokens: 2 } })) }, 5000)
     response.once('close', () => clearTimeout(timer)); return
   }
-  if (user.includes('检查全部节点')) {
+  if (user.includes('流式推理验证')) {
+    value = { format: 'markdown', text: '**这是独立展示的最终回答。**\n\n- 依据：当前流程\n- 下一步：核对需求' }
+  } else if (user.includes('检查全部节点')) {
     const index = observations.length
     value = index < run.nodes.length
       ? { tool: { name: 'node', args: { runId: run.id, nodeId: run.nodes[index].id } } }
@@ -46,7 +50,7 @@ const server = createServer(async (request, response) => {
       : observations.length === 1 ? { tool: { name: 'knowledge', args: { query: '清理' } } }
       : { text: '代码使用 filter 保留未完成任务；项目文档要求一致。还有一个产品行为需要确认。', question: { prompt: '清理之后需要支持撤销吗？', options: ['需要撤销', '不需要撤销'] }, citationIds: ['source-1', 'source-2'] }
   } else if (user.includes('不需要撤销')) {
-    value = { text: '已记录：不增加撤销操作。可以将这份提案保存到需求节点供后续流程使用。', draft: { runId: run.id, nodeId: run.nodes[0].id, title: '清理已完成任务', content: '清理所有已完成任务，保留未完成任务；刷新保留清理结果；没有已完成任务时按钮禁用；本次不增加撤销功能。' } }
+    value = { text: '已记录：不增加撤销操作。可以将这份提案保存到需求节点供后续流程使用。', question: { purpose: 'save_proposal', prompt: '将这份草稿保存到需求节点吗？', options: ['保存', '继续讨论'] }, draft: { runId: run.id, nodeId: run.nodes[0].id, title: '清理已完成任务', content: '清理所有已完成任务，保留未完成任务；刷新保留清理结果；没有已完成任务时按钮禁用；本次不增加撤销功能。' } }
   } else if (user.includes('查询共享提案')) {
     value = observations.length === 0 ? { tool: { name: 'node', args: { runId: run.id, nodeId: run.nodes[0].id } } }
       : { text: '已查到保存的讨论提案。它仍待确认，尚未批准需求 Gate。', actions: [{ label: '查看需求产物', runId: run.id, nodeId: run.nodes[0].id, section: '产物' }] }
@@ -55,8 +59,11 @@ const server = createServer(async (request, response) => {
     value = observations.length === 0 ? { tool: { name: 'node', args: { runId: run.id, nodeId: node.id } } }
       : { text: '测试节点尚未执行。可以打开节点查看证据与下一步操作。', actions: [{ label: '查看测试节点', runId: run.id, nodeId: node.id, section: '测试证据' }] }
   }
-  response.writeHead(200, { 'content-type': 'application/json' })
-  response.end(JSON.stringify({ id: 'controlled-response', choices: [{ message: { role: 'assistant', content: JSON.stringify(value) } }], usage: { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 } }))
+  response.writeHead(200, { 'content-type': 'text/event-stream' })
+  response.write(`data: ${JSON.stringify({ id: 'controlled-response', choices: [{ index: 0, delta: { reasoning_content: '先核对当前工作流，再检查相关节点的真实状态。REASONING_LOCAL_ONLY。' }, finish_reason: null }] })}\n\n`)
+  const finish = () => response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: JSON.stringify(value) }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 } })}\n\ndata: [DONE]\n\n`)
+  if (user.includes('流式推理验证')) releaseReasoning = finish
+  else finish()
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const modelUrl = `http://127.0.0.1:${server.address().port}/v1`
@@ -65,6 +72,16 @@ let page
 const errors = []
 async function launch() {
   app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9', DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
+  // Only this isolated test process redirects the external API boundary; no real model request.
+  await app.evaluate((_, endpoint) => {
+    const original = globalThis.fetch
+    globalThis.fetch = (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+      if (url.hostname === 'api.deepseek.com') return original(`${endpoint}${url.pathname}`, init)
+      if (!['127.0.0.1', 'localhost'].includes(url.hostname)) throw new Error('Smoke test blocks external requests')
+      return original(input, init)
+    }
+  }, modelUrl)
   page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded')
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1672, 973))
   page.on('pageerror', (error) => errors.push(error.message))
@@ -78,7 +95,7 @@ try {
   await launch()
   await app.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }) }, repository)
   const project = await page.evaluate(() => window.aiDevFlowDesktop.selectLocalProject())
-  await page.evaluate((baseUrl) => window.aiDevFlowDesktop.saveAgentProviderCredential({ name: '对话测试模型', providerId: 'workbench-smoke', model: 'controlled-conversation', apiKey: 'sk-test-workbench-only', baseUrl }), modelUrl)
+  await page.evaluate(() => window.aiDevFlowDesktop.saveAgentProviderCredential({ name: 'DeepSeek 流式测试模型', providerId: 'workbench-smoke', model: 'deepseek-flash', apiKey: 'sk-test-workbench-only', baseUrl: 'https://api.deepseek.com' }))
   await page.evaluate(() => window.aiDevFlowDesktop.saveSettings({ selectedAgentProviderId: 'workbench-smoke', themePreference: 'dark' }))
   run = await page.evaluate((projectId) => window.aiDevFlowDesktop.createRun({ title: '为任务清单增加清除已完成功能', request: '清理已完成任务，保留未完成任务并保存结果。', projectId, creatorId: 'smoke-user', branchName: 'ai/clear-done' }), project.id)
   await page.reload()
@@ -106,6 +123,18 @@ try {
   for (const node of run.nodes) await expect(page.getByTestId(`flow-node-${node.id}`)).toBeAttached()
   await page.getByRole('button', { name: '流程视图', exact: true }).click()
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await send('流式推理验证')
+  await expect(page.getByRole('button', { name: /推理过程.*生成中/ })).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByText(/先核对当前工作流.*REASONING_LOCAL_ONLY/)).toBeVisible()
+  await expect(page.getByText('这是独立展示的最终回答。', { exact: true })).toHaveCount(0)
+  await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '00-live-reasoning.png') })
+  releaseReasoning()
+  await readyText('这是独立展示的最终回答。')
+  await expect(page.locator('.message-markdown strong')).toHaveText('这是独立展示的最终回答。')
+  await expect(page.locator('.message-markdown li')).toHaveCount(2)
+  await expect(page.getByRole('button', { name: /推理过程.*已结束/ })).toHaveAttribute('aria-expanded', 'false')
+  await page.getByRole('button', { name: /推理过程.*已结束/ }).click()
+  await expect(page.getByText(/先核对当前工作流.*REASONING_LOCAL_ONLY/)).toBeVisible()
   await send('检查全部节点的真实进展。')
   await readyText(`已检查全部 ${run.nodes.length} 个节点`)
   await send('调查代码和知识后帮我澄清需求。')
@@ -117,10 +146,10 @@ try {
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
   await page.getByRole('button', { name: '保存为节点提案', exact: true }).click()
   await readyText('已保存为节点提案')
-  await page.getByRole('button', { name: /上下文与会话记忆/ }).click()
-  await page.getByRole('textbox', { name: '仅本会话记忆' }).fill('ALPHA_PRIVATE_MEMORY')
-  await page.getByRole('textbox', { name: '仅本会话记忆' }).blur()
-  await page.getByRole('button', { name: /上下文与会话记忆/ }).click()
+  await expect(page.getByText('已保存提案', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: /会话信息/ }).click()
+  await expect(page.getByRole('textbox', { name: '仅本会话记忆' })).toHaveCount(0)
+  await page.getByRole('button', { name: /会话信息/ }).click()
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   const secondStart = requests.length
   await send('查询共享提案，然后告诉我测试阶段的进度。')
@@ -164,13 +193,25 @@ try {
   await expect(page.getByRole('button', { name: '新建 Run', exact: true })).toBeInViewport()
   await expect.poll(async () => (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).x + (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).width).toBeLessThanOrEqual(1280)
   await page.screenshot({ scale: 'css', path: path.join(output, '05-narrow-workspace.png') })
+  for (const width of [1366, 1920]) {
+    await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 973), width)
+    for (const name of ['拉取团队数据', '绑定', '新建 Run']) await expect(page.getByRole('button', { name, exact: true })).toBeInViewport()
+    expect(await page.locator('body').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
+    await page.screenshot({ scale: 'css', path: path.join(output, `06-header-${width}.png`) })
+  }
+  await expect(page.getByTestId('data-profile-diagnostics')).not.toBeVisible()
+  await page.getByRole('button', { name: '诊断', exact: true }).click()
+  await expect(page.getByTestId('data-profile-diagnostics')).toBeVisible()
+  await page.getByRole('button', { name: '工作台', exact: true }).click()
   const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
   expect(state.runs[0].currentNodeId).toBe(run.currentNodeId)
   expect(state.artifacts.some((artifact) => artifact.title.includes('讨论提案（待确认）'))).toBe(true)
   expect(JSON.stringify(state)).not.toContain('ALPHA_PRIVATE_MEMORY')
+  expect(JSON.stringify(state)).not.toContain('REASONING_LOCAL_ONLY')
+  expect(JSON.stringify(requests)).not.toContain('REASONING_LOCAL_ONLY')
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
-  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local HTTP endpoint through the real Provider/IPC/SQLite implementation', sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
 } catch (error) {

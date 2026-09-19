@@ -1705,8 +1705,9 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.loadDataProfileDiagnostics).toHaveBeenCalled())
+    expect(screen.queryByText('local-development')).not.toBeVisible()
+    fireEvent.click(screen.getByRole('button', { name: '诊断' }))
     const diagnostics = screen.getByTestId('data-profile-diagnostics')
-    fireEvent.click(within(diagnostics).getByText(/本地数据/))
 
     expect(diagnostics).toHaveTextContent('local-development')
     expect(diagnostics).toHaveTextContent('saved_profile')
@@ -2090,7 +2091,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
 
     expect(within(screen.getByLabelText('Project selector')).getByText('Payments API')).toBeInTheDocument()
@@ -2383,7 +2384,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
@@ -2452,7 +2453,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
@@ -2976,6 +2977,24 @@ describe('App', () => {
     }))
   })
 
+  it.each([
+    ['wrong_workflow_node', '当前是测试节点，请返回开发节点。'],
+    ['active_run', '当前项目已有正在执行的 Coding Run。'],
+    ['permission_pending', '请先处理待审批修改。'],
+  ] as const)('keeps saved Coding configuration visible when launch is blocked by %s', async (code, message) => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeConfiguration: vi.fn().mockResolvedValue({ projectId: localProject.id, executor: 'native-model', providerId: agentProvider.id, version: 1, updatedAt: '2026-09-19T07:00:00Z' }),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture({ status: 'blocked', checks: [...codingReadinessFixture().checks, { code, status: 'blocked', message }] })),
+    })
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await waitFor(() => expect(screen.getByText('Coding Agent 执行配置').closest('summary')).toHaveTextContent('已配置'))
+    expect(screen.getAllByText(message).length).toBeGreaterThan(0)
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+  })
+
   it('retains a saved OpenCode custom profile and model until the user changes them', async () => {
     const configuration = {
       projectId: localProject.id, executor: 'opencode-http', providerId: 'team-deepseek', modelId: 'custom-model',
@@ -3137,7 +3156,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('生成 PR Delivery Package')
@@ -4314,10 +4333,10 @@ describe('App', () => {
       ...initialPolicy, version: 2, source: 'remote_cache', syncedAt: '2026-09-10T12:00:00.000Z',
     })
     vi.mocked(api.evaluateGateEnforcement).mockClear()
-    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
+    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
-    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('同步成功 · 策略 v2 · 2026-09-10T12:00:00.000Z'))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('拉取成功 · 策略 v2 · 2026-09-10T12:00:00.000Z'))
     expect(screen.getByTestId('team-overview')).toHaveTextContent('snapshot v2')
     expect(api.evaluateGateEnforcement).toHaveBeenCalled()
   })
@@ -4345,8 +4364,8 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
-    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
-    for (const button of screen.getAllByRole('button', { name: '同步中' })) {
+    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
+    for (const button of screen.getAllByRole('button', { name: '拉取中' })) {
       expect(button).toBeDisabled()
       fireEvent.click(button)
     }
@@ -4355,8 +4374,8 @@ describe('App', () => {
     expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('Team API temporarily unavailable')
     expect(screen.getByTestId('team-sync-feedback')).toHaveAttribute('role', 'alert')
     vi.mocked(api.loadRemoteSnapshot).mockResolvedValue({ projects: [], members: [], runs: [], artifacts: [], events: [], projectCost: [], memberCost: [], totalCost: '$0.00' })
-    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
-    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('同步成功'))
+    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('拉取成功'))
     expect(api.loadRemoteSnapshot).toHaveBeenCalledTimes(2)
   })
 
@@ -4368,12 +4387,12 @@ describe('App', () => {
       projectId: 'p-payments', enabled: true, monthlyLimitUsd: 1, warningThresholdUsd: 0.5,
       currency: 'USD', updatedAt: '2026-09-12T00:00:00.000Z',
     })
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
     await waitFor(() => expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00 / 月 · 预警 $0.50'))
     expect(screen.getByTestId('flow-node-n-design-gate')).toBeInTheDocument()
     expect(api.getCodingRuntimeBudgetPolicy).toHaveBeenLastCalledWith({ projectId: localProject.id })
     vi.mocked(api.getCodingRuntimeBudgetPolicy).mockRejectedValue(new Error('Budget unavailable'))
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
     await waitFor(() => expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('不可用'))
     expect(screen.getByTestId('runtime-budget-status')).not.toHaveTextContent('$1.00')
   })
@@ -4432,7 +4451,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
     expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
@@ -4441,7 +4460,7 @@ describe('App', () => {
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('remote snapshot + local merge')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('real IPC/API')
     expect(screen.getAllByText('local').length).toBeGreaterThan(0)
-    expect(screen.getByTestId('toast')).toHaveTextContent('同步成功 · 策略 v1')
+    expect(screen.getByTestId('toast')).toHaveTextContent('拉取成功 · 策略 v1')
 
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
     expect(screen.getAllByText('Remote Team API').length).toBeGreaterThan(0)
@@ -4475,7 +4494,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     expect(screen.getByTestId('flow-node-n-design-gate')).toBeInTheDocument()
@@ -4493,10 +4512,10 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /同步团队/ }))
+    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
 
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
-    expect(screen.getByTestId('toast')).toHaveTextContent('请先 Pair Team Project 后再同步团队远端状态')
+    expect(screen.getByTestId('toast')).toHaveTextContent('请先绑定团队项目，再拉取团队数据')
   })
 
   it('reloads rejected Stage usage immediately and shows incomplete budget data without advancing the node', async () => {
@@ -4683,10 +4702,10 @@ describe('App', () => {
       '配对已过期 · 请重新绑定',
     )
     vi.mocked(api.loadRemoteSnapshot).mockClear()
-    fireEvent.click(screen.getByRole('button', { name: '同步团队' }))
+    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据' }))
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
     expect(screen.getByTestId('toast')).toHaveTextContent(
-      '请先 Pair Team Project 后再同步团队远端状态',
+      '请先绑定团队项目，再拉取团队数据',
     )
   })
 
@@ -5619,8 +5638,8 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
-    fireEvent.click(screen.getByRole('button', { name: '同步团队并刷新 snapshot' }))
-    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('同步成功'))
+    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('拉取成功'))
     expect(screen.getByTestId('team-overview')).toHaveTextContent('Synced Team Project')
     act(() => { listener?.({ ...localState, remoteSyncOperations: [remoteSyncOperation()] }) })
     expect(screen.getByTestId('team-overview')).toHaveTextContent('Synced Team Project')

@@ -74,7 +74,7 @@ export {
   type WorkflowNodeSourceKind,
 } from './workflow-node-presentation'
 
-export type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
+export type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests' | 'diagnostics'
 
 export type SupportFocusTarget =
   | 'knowledge-review'

@@ -73,7 +73,7 @@ export type DesktopWorkspaceState = {
   themePreference: ThemePreference
   dataOrigin: DataOrigin
   hasLoadedLocalState: boolean
-  activeView: 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
+  activeView: 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests' | 'diagnostics'
   runs: WorkflowRun[]
   remoteRunIds: string[]
   selectedRunId: string

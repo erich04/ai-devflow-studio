@@ -20,7 +20,7 @@ export function SkillView() {
         <span className="pill soft">Skills 不能绕过 Gate / policy / evidence requirements</span>
       </div>
       <div className="panel-body page-grid three">
-        <p className="empty-note">未加载真实团队 Skills。同步团队配置后再显示能力目录。</p>
+        <p className="empty-note">未加载真实团队 Skills。拉取团队配置后再显示能力目录。</p>
       </div>
     </section>
   )
