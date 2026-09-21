@@ -116,6 +116,7 @@ export type CodingEngineStartInput = {
   brief: CodingBrief
   reportProviderCall?: CodingProviderCallReporter
   reportPermissionPolicyDecision?: CodingPermissionPolicyReporter
+  assertContextCurrent?: () => Promise<void>
 }
 
 export type CodingEngineStartResult = {
@@ -131,6 +132,7 @@ export type CodingEngineApprovePermissionInput = {
   request: CodingPermissionRequest
   now: string
   authorizedStart?: CodingEngineStartInput
+  assertContextCurrent?: () => Promise<void>
   reportPhase?: (input: {
     status: Extract<CodingAgentRun['status'], 'applying' | 'testing'>
     summary: string

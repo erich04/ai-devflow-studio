@@ -304,9 +304,9 @@ try {
       monthlyLimitUsd: 1,
       warningThresholdUsd: 0.5,
     })
-    const run = await window.aiDevFlowDesktop.createRun({
+    let run = await window.aiDevFlowDesktop.createRun({
       title: 'Packaged Agent Runtime smoke',
-      request: 'Complete one bounded no-side-effect observation.',
+      request: 'Inspect archived clarification evidence without granting business acceptance.',
       projectId: project.id,
       creatorId: 'packaged-smoke-user',
       branchName: 'devflow/packaged-agent-runtime-smoke',
@@ -325,13 +325,58 @@ try {
         expectedCheckpointVersion: snapshot.runtime.checkpointVersion,
       })
     }
+    if (snapshot.runtime.status !== 'terminal' || snapshot.runtime.stopReason !== 'failure' ||
+        !snapshot.latestEvaluation?.summary.includes('insufficient_evidence:missing_clarification_artifact')) {
+      throw new Error('Packaged evidence evaluation passed without a clarification artifact.')
+    }
+    const emptyMemory = await window.aiDevFlowDesktop.listAgentMemoryLifecycle({
+      runtimeId: snapshot.runtime.runtimeId, runId: run.id, localProjectId: project.id,
+    })
+    if (emptyMemory.candidateCount !== 0) {
+      throw new Error('Missing task evidence produced a promotable Memory Candidate.')
+    }
+
+    // Archive an actual stage result through IPC. Requesting refinement keeps the
+    // task running under the existing Runtime authority contract. This evaluates
+    // artifact completeness only; neither the requested refinement nor its Gate
+    // is considered approved by a successful evidence check.
+    const clarification = await window.aiDevFlowDesktop.completeWorkflowAgentNode({
+      runId: run.id,
+      nodeId: run.currentNodeId,
+      userId: 'packaged-smoke-user',
+      userName: 'Packaged Smoke User',
+      providerId: 'fake-knowledge-review',
+    })
+    if (!clarification.artifact.clarificationRevision) {
+      throw new Error('Packaged evaluation fixture has no archived clarification revision.')
+    }
+    run = (await window.aiDevFlowDesktop.requestClarificationChanges({
+      runId: run.id,
+      nodeId: clarification.run.currentNodeId,
+      artifactId: clarification.artifact.id,
+      revision: clarification.artifact.clarificationRevision.revision,
+      revisionDigest: clarification.artifact.clarificationRevision.revisionDigest,
+      reason: 'Keep this clarification open for refinement while checking archived evidence completeness.',
+    })).run
+    snapshot = await window.aiDevFlowDesktop.startAgentRuntime({
+      runId: run.id, nodeId: run.currentNodeId, localProjectId: project.id,
+    })
+    for (let iteration = 0; iteration < 3; iteration += 1) {
+      snapshot = await window.aiDevFlowDesktop.advanceAgentRuntime({
+        runtimeId: snapshot.runtime.runtimeId,
+        runId: run.id,
+        localProjectId: project.id,
+        expectedVersion: snapshot.runtime.version,
+        expectedCheckpointVersion: snapshot.runtime.checkpointVersion,
+      })
+    }
     return snapshot
   })
   if (
     runtimeBeforeRestart.runtime.status !== 'terminal' ||
     runtimeBeforeRestart.runtime.stopReason !== 'success'
   ) {
-    throw new Error('Packaged Agent Runtime did not reach the exact success terminal state.')
+    throw new Error(`Packaged Agent Runtime did not reach the exact success terminal state: ${JSON.stringify(runtimeBeforeRestart.latestEvaluation)}`)
   }
   if (
     runtimeBeforeRestart.runtime.acceptedActionCount !== 1 ||
@@ -638,7 +683,7 @@ try {
   const schemaVersion = Number(
     database.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0],
   )
-  const localMcpAudit = database.exec(
+  const workflowEvaluationAudit = database.exec(
     `select tool_id, source, installation_id, installation_version,
             sum(case when status = 'started' then 1 else 0 end),
             sum(case when status = 'succeeded' then 1 else 0 end),
@@ -701,23 +746,23 @@ try {
     throw new Error(`Packaged Desktop did not initialize schema 34: ${schemaVersion}`)
   }
   const [toolId, source, installationId, installationVersion, started, succeeded, records, results] =
-    localMcpAudit ?? []
+    workflowEvaluationAudit ?? []
   const [persistedInstallation] = localMcpInstallations
   if (
-    toolId !== 'scenario.evaluate' ||
-    source !== 'mcp' ||
-    installationId !== 'local-mcp-installation-runtime-fixture' ||
-    Number(installationVersion) !== 2 ||
+    toolId !== 'workflow.evaluate' ||
+    source !== 'native' ||
+    installationId !== null ||
+    installationVersion !== null ||
     Number(started) !== 1 ||
     Number(succeeded) !== 1 ||
     Number(records) !== 2 ||
     Number(results) !== 1 ||
     localMcpInstallations.length !== 1 ||
-    persistedInstallation?.[0] !== installationId ||
-    Number(persistedInstallation?.[1]) !== Number(installationVersion) ||
+    persistedInstallation?.[0] !== 'local-mcp-installation-runtime-fixture' ||
+    Number(persistedInstallation?.[1]) !== 2 ||
     Number(persistedInstallation?.[2]) !== 1
   ) {
-    throw new Error('Packaged Agent Runtime did not persist one exact bounded Local MCP audit.')
+    throw new Error('Packaged Runtime did not persist its native evidence audit and Local MCP installation.')
   }
   const expectedNativeCodingAudits = [
     ['repo.read_text', 'started', 1],
@@ -764,14 +809,17 @@ try {
           stopReason: runtimeAfterRestart.runtime.stopReason,
           acceptedActionCount: runtimeAfterRestart.terminalSummary.acceptedActionCount,
           restartDuplicateEffects: 0,
-          localMcp: {
-            installationId,
-            installationVersion: Number(installationVersion),
+          workflowEvaluation: {
             toolId,
             source,
             started: Number(started),
             succeeded: Number(succeeded),
             durableRecords: Number(records),
+          },
+          localMcpInstallation: {
+            installationId: persistedInstallation[0],
+            installationVersion: Number(persistedInstallation[1]),
+            enabled: Number(persistedInstallation[2]) === 1,
           },
         },
         nativeCoding: {

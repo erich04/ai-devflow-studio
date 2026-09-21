@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "completedAt": "2026-09-16T05:04:49.501Z",
+  "provider": {
+    "kind": "real",
+    "model": "deepseek-v4-flash"
+  },
+  "passed": true,
+  "scope": "Real Native Coding Provider, local Store, managed worktrees, saved tests, Memory promotion/revision/deletion and evidence evaluation. No cloud deployment or UI acceptance claimed.",
+  "providerCalls": 6,
+  "totalTokens": 6415,
+  "recordedCostUsd": 0.000961596,
+  "cases": [
+    {
+      "label": "without-memory",
+      "runId": "memory-live-without-memory",
+      "codingRunId": "coding-run-a6ac472e-8d43-4160-8317-15fe1e5ee460",
+      "greeting": "Standard greeting",
+      "providerInputs": [
+        {
+          "phase": "analysis",
+          "containsMemory": false,
+          "containsInstruction": true,
+          "chars": 2242
+        },
+        {
+          "phase": "implementation",
+          "containsMemory": false,
+          "containsInstruction": true,
+          "chars": 3414
+        }
+      ],
+      "memoryRevisionCount": 0,
+      "briefDigest": "8d45bb2f57fd3565e844a6f77b727aaedc5365831acfc6626c9c0421e263c343",
+      "compaction": {
+        "stateVersion": 1,
+        "strategy": "extractive-v1",
+        "budgetBytes": 12000,
+        "inputBytes": 94487,
+        "outputBytes": 1872,
+        "compacted": true,
+        "sources": [
+          {
+            "id": "artifact:memory-live-without-memory-design-artifact",
+            "representation": "summary",
+            "inputBytes": 92954,
+            "outputBytes": 339
+          },
+          {
+            "id": "knowledge",
+            "representation": "full",
+            "inputBytes": 60,
+            "outputBytes": 60
+          },
+          {
+            "id": "governance",
+            "representation": "full",
+            "inputBytes": 54,
+            "outputBytes": 54
+          },
+          {
+            "id": "gates",
+            "representation": "full",
+            "inputBytes": 54,
+            "outputBytes": 54
+          },
+          {
+            "id": "tests",
+            "representation": "full",
+            "inputBytes": 60,
+            "outputBytes": 60
+          }
+        ]
+      },
+      "automaticEvaluation": {
+        "passed": true,
+        "failures": [],
+        "evidenceDigest": "26f923c72a538bfbf68928ed82a240b76c24069b4bbd87101e04d7339a163eb1",
+        "artifactCount": 2,
+        "testEvidenceCount": 1
+      },
+      "independentEvaluation": {
+        "passed": true,
+        "failures": [],
+        "evidenceDigest": "48f7e2ab670d2a6c27ce0414be6e3857d9efd349e07034a2d465386e6eb2c0fa",
+        "artifactCount": 2,
+        "testEvidenceCount": 1
+      },
+      "totalTokens": 2057,
+      "recordedCostUsd": 0.000251256
+    },
+    {
+      "label": "with-memory",
+      "runId": "memory-live-with-memory",
+      "codingRunId": "coding-run-6e0b6609-2539-4994-8df1-4040591172d7",
+      "greeting": "Welcome to the remembered workspace",
+      "providerInputs": [
+        {
+          "phase": "analysis",
+          "containsMemory": true,
+          "containsInstruction": true,
+          "chars": 2478
+        },
+        {
+          "phase": "implementation",
+          "containsMemory": true,
+          "containsInstruction": true,
+          "chars": 3820
+        }
+      ],
+      "memoryRevisionCount": 1,
+      "briefDigest": "d101faf5d083b6dfd805f4e913d8c90c052026f5f12cf6f2e22c6378f6fd297d",
+      "compaction": {
+        "stateVersion": 1,
+        "strategy": "extractive-v1",
+        "budgetBytes": 12000,
+        "inputBytes": 94721,
+        "outputBytes": 2103,
+        "compacted": true,
+        "sources": [
+          {
+            "id": "memory:agent-memory-9f1e21ed-3e97-4e2c-acdf-795b72658c5a:2",
+            "representation": "full",
+            "inputBytes": 235,
+            "outputBytes": 235
+          },
+          {
+            "id": "artifact:memory-live-with-memory-design-artifact",
+            "representation": "summary",
+            "inputBytes": 92954,
+            "outputBytes": 336
+          },
+          {
+            "id": "knowledge",
+            "representation": "full",
+            "inputBytes": 60,
+            "outputBytes": 60
+          },
+          {
+            "id": "governance",
+            "representation": "full",
+            "inputBytes": 54,
+            "outputBytes": 54
+          },
+          {
+            "id": "gates",
+            "representation": "full",
+            "inputBytes": 54,
+            "outputBytes": 54
+          },
+          {
+            "id": "tests",
+            "representation": "full",
+            "inputBytes": 60,
+            "outputBytes": 60
+          }
+        ]
+      },
+      "automaticEvaluation": {
+        "passed": true,
+        "failures": [],
+        "evidenceDigest": "2241d8b49d65ef244780c2cac26a038b13f6ec3b7ca2ab407f38ee0d1f770e80",
+        "artifactCount": 2,
+        "testEvidenceCount": 1
+      },
+      "independentEvaluation": {
+        "passed": true,
+        "failures": [],
+        "evidenceDigest": "9beeb9386aea81f458e742e70f0f45aefa442ec4aa3d04f3522969baf4e44dde",
+        "artifactCount": 2,
+        "testEvidenceCount": 1
+      },
+      "totalTokens": 2277,
+      "recordedCostUsd": 0.000451434
+    },
+    {
+      "label": "after-delete",
+      "runId": "memory-live-after-delete",
+      "codingRunId": "coding-run-c2194607-f8df-46fd-838c-af9b673156de",
+      "greeting": "Standard greeting",
+      "providerInputs": [
+        {
+          "phase": "analysis",
+          "containsMemory": false,
+          "containsInstruction": true,
+          "chars": 2238
+        },
+        {
+          "phase": "implementation",
+          "containsMemory": false,
+          "containsInstruction": true,
+          "chars": 3474
+        }
+      ],
+      "memoryRevisionCount": 0,
+      "briefDigest": "38b34d0a301e9cb39e798311ceba53d1e47bce9e9188a40b50a525b1ec99a37e",
+      "compaction": {
+        "stateVersion": 1,
+        "strategy": "extractive-v1",
+        "budgetBytes": 12000,
+        "inputBytes": 94485,
+        "outputBytes": 1868,
+        "compacted": true,
+        "sources": [
+          {
+            "id": "artifact:memory-live-after-delete-design-artifact",
+            "representation": "summary",
+            "inputBytes": 92954,
+            "outputBytes": 337
+          },
+          {
+            "id": "knowledge",
+            "representation": "full",
+            "inputBytes": 60,
+            "outputBytes": 60
+          },
+          {
+            "id": "governance",
+            "representation": "full",
+            "inputBytes": 54,
+            "outputBytes": 54
+          },
+          {
+            "id": "gates",
+            "representation": "full",
+            "inputBytes": 54,
+            "outputBytes": 54
+          },
+          {
+            "id": "tests",
+            "representation": "full",
+            "inputBytes": 60,
+            "outputBytes": 60
+          }
+        ]
+      },
+      "automaticEvaluation": {
+        "passed": true,
+        "failures": [],
+        "evidenceDigest": "ddfdc7cfc3e647e6c4e0156fadcec1095376908111c66e8e68c16c43d5f8af32",
+        "artifactCount": 2,
+        "testEvidenceCount": 1
+      },
+      "independentEvaluation": {
+        "passed": true,
+        "failures": [],
+        "evidenceDigest": "103165e388f719257f1486e17da7016e013bd6693d74b15c1dd269094b7ba794",
+        "artifactCount": 2,
+        "testEvidenceCount": 1
+      },
+      "totalTokens": 2081,
+      "recordedCostUsd": 0.000258906
+    }
+  ],
+  "finalEvaluatorReadback": {
+    "passed": true,
+    "paidCalls": 0,
+    "checkedAt": "2026-09-16T05:14:56.248Z",
+    "results": [
+      {
+        "codingRunId": "coding-run-a6ac472e-8d43-4160-8317-15fe1e5ee460",
+        "evaluation": {
+          "passed": true,
+          "failures": [],
+          "evidenceDigest": "26f923c72a538bfbf68928ed82a240b76c24069b4bbd87101e04d7339a163eb1",
+          "artifactCount": 2,
+          "testEvidenceCount": 1
+        }
+      },
+      {
+        "codingRunId": "coding-run-6e0b6609-2539-4994-8df1-4040591172d7",
+        "evaluation": {
+          "passed": true,
+          "failures": [],
+          "evidenceDigest": "2241d8b49d65ef244780c2cac26a038b13f6ec3b7ca2ab407f38ee0d1f770e80",
+          "artifactCount": 2,
+          "testEvidenceCount": 1
+        }
+      },
+      {
+        "codingRunId": "coding-run-c2194607-f8df-46fd-838c-af9b673156de",
+        "evaluation": {
+          "passed": true,
+          "failures": [],
+          "evidenceDigest": "ddfdc7cfc3e647e6c4e0156fadcec1095376908111c66e8e68c16c43d5f8af32",
+          "artifactCount": 2,
+          "testEvidenceCount": 1
+        }
+      }
+    ]
+  }
+}

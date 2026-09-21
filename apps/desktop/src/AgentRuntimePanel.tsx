@@ -190,13 +190,13 @@ export function AgentRuntimePanel({
 
       <article className="advanced-operation-boundary" id="standalone-runtime-boundary">
         <p>
-          面向当前 Run / 节点创建独立验证实例，固定执行无业务副作用的内部场景 <code>scenario.evaluate</code>，
-          结果是检查点、执行轨迹、评估和可选 Memory 候选。
+          面向当前 Run / 节点创建独立验证实例，通过 <code>workflow.evaluate</code> 只读检查已归档的真实产物和测试证据。
+          缺少证据或测试失败时不会通过；检查结果不代表业务验收。
         </p>
         <div className="advanced-boundary-grid">
-          <span>用途</span><strong>为当前 Run / 节点验证 Runtime 状态机，不执行当前业务任务</strong>
+          <span>用途</span><strong>检查当前任务证据的完整性、来源和测试结果</strong>
           <span>结果</span><strong>保存检查点、执行轨迹、评估与可选 Memory 候选</strong>
-          <span>前置条件</span><strong>已选择 Local Project（本地项目）和 Run；无需 Team 配对</strong>
+          <span>前置条件</span><strong>已选择 Local Project（本地项目）和 Run，当前节点为运行中的任务；无需 Team 配对</strong>
           <span>Provider / 费用</span><strong>不调用当前 Stage Provider，不产生模型 token 费用</strong>
           <span>仓库</span><strong>不读取或修改仓库文件</strong>
           <span>Workflow</span><strong>不生成阶段 Artifact、不推进工作流、不审批 Gate</strong>
@@ -274,7 +274,7 @@ export function AgentRuntimePanel({
                     <strong>{detail.runtime.counters.toolCalls} / {detail.runtime.bounds.maxToolCalls}</strong>
                   </div>
                   <div className="compact-row">
-                    <span title="Token：模型用量计数；此固定场景不会调用当前 Provider。">Token 用量</span>
+                    <span title="Token：模型用量计数；此证据检查不调用 Provider。">Token 用量</span>
                     <strong>{detail.runtime.counters.tokens} / {detail.runtime.bounds.maxTokens}</strong>
                   </div>
                   <div className="compact-row">

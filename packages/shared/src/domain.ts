@@ -1247,6 +1247,7 @@ export type CodingAgentRun = {
   workflowRunVersion?: number
   permissionPause?: { requestId: string; pausedAt: string; runVersion?: number }
   additionalAttemptAuthorization?: { afterAttemptCount: number; authorizedBy: string; authorizedAt: string }
+  contextReceipt?: import('./execution-context').CodingContextReceipt
   redacted: boolean
 }
 

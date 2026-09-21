@@ -1790,7 +1790,7 @@ describe('App', () => {
     expect(advanced).not.toHaveAttribute('open')
     expect(within(workbench).getAllByRole('button').filter((button) => button.classList.contains('primary-button'))).toHaveLength(1)
     expect(within(workbench).getByRole('region', { name: '独立 Runtime 验收与诊断' })).not.toBeVisible()
-    expect(within(workbench).getByText('scenario.evaluate')).not.toBeVisible()
+    expect(within(workbench).getByText('workflow.evaluate')).not.toBeVisible()
 
     fireEvent.click(within(advanced).getByText('高级验收与诊断'))
     expect(advanced).toHaveAttribute('open')

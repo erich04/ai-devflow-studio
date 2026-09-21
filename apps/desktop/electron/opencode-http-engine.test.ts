@@ -394,7 +394,7 @@ describe('opencode HTTP coding engine', () => {
     }
   })
 
-  it('creates a session, sends the DevFlow brief, and returns a relay permission request', async () => {
+  it('sends recalled Memory in the DevFlow brief and returns a relay permission request', async () => {
     const fetcher = sequenceFetcher([
       managedOpencodeSession(),
       successfulOpencodeMessage(),
@@ -415,7 +415,11 @@ describe('opencode HTTP coding engine', () => {
     const project = localProject(projects[0]!)
     const workspace = managedWorkspace(project.id, run.id, node.id)
 
-    const input = startInput({ run, node, project, workspace })
+    const rememberedRule = 'Use the project-specific greeting from durable Memory.'
+    const input = startInput({
+      run, node, project, workspace,
+      memoryContext: [{ id: 'memory-project-greeting', revision: 2, statement: rememberedRule }],
+    })
     input.brief = {
       ...input.brief,
       prompt: `${input.brief.prompt}\nUNIQUE_KNOWLEDGE_CONTENT source=docs/standards/api-health.md`,
@@ -443,11 +447,73 @@ describe('opencode HTTP coding engine', () => {
     const messageBody = JSON.parse(fetcher.bodies[1]!) as { parts: Array<{ text: string }> }
     const sentPrompt = messageBody.parts[0]?.text
     expect(sentPrompt).toContain(input.brief.prompt)
+    expect(sentPrompt).toContain(rememberedRule)
+    expect(sentPrompt).toContain('memory-project-greeting')
+    expect(sentPrompt).toContain('revision 2')
     expect(sentPrompt).toContain('DevFlow OpenCode execution constraints')
     expect(sentPrompt).toContain('one shell command per tool call')
     expect(sentPrompt).toContain('Use the read, glob, and grep tools')
     expect(sentPrompt).toContain('DevFlow runs dependency preparation and the configured test command')
     expect(result.codingRun.prompt).toBe(sentPrompt)
+  })
+
+  it.each(['before session', 'before Provider message'] as const)(
+    'rejects stale Memory %s without sending a Provider message',
+    async (phase) => {
+      const fetcher = sequenceFetcher([managedOpencodeSession(), true, [], [], []])
+      const engine = createOpencodeHttpCodingEngineAdapter({
+        binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+        processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory, fetcher,
+      })
+      const run = runs[0]!
+      const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+      const project = localProject(projects[0]!)
+      const workspace = managedWorkspace(project.id, run.id, node.id)
+      let checks = 0
+      await expect(engine.start({
+        ...startInput({ run, node, project, workspace }),
+        assertContextCurrent: async () => {
+          if (++checks === (phase === 'before session' ? 1 : 2)) throw new Error('Coding Memory changed')
+        },
+      })).rejects.toThrow('Coding Memory changed')
+      expect(fetcher.bodies.some((body) => JSON.parse(body).parts)).toBe(false)
+      if (phase === 'before session') expect(fetcher.urls).toEqual([])
+      else expect(fetcher.urls.some((url) => url.includes('/abort?'))).toBe(true)
+    },
+  )
+
+  it('rechecks Memory immediately before relaying an approved tool permission', async () => {
+    const fetcher = sequenceFetcher([
+      managedOpencodeSession(), successfulOpencodeMessage(),
+      [{ id: 'edit-memory', sessionID: 'ses-1', permission: 'edit', metadata: { filepath: 'src/app.ts' } }],
+      true, [], [], [],
+    ])
+    const engine = createOpencodeHttpCodingEngineAdapter({
+      binaryPath: 'opencode', providerID: 'deepseek', modelID: 'deepseek-v4-flash',
+      processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory, fetcher,
+      permissionPollMs: 1, permissionDiscoveryTimeoutMs: 50,
+    })
+    const run = runs[0]!
+    const node = run.nodes.find((candidate) => candidate.id === 'n-build')!
+    const project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id)
+    let current = true
+    let deleteAfterCheck = false
+    const assertContextCurrent = async () => {
+      if (!current) throw new Error('Coding Memory changed')
+      // Emulate deletion after the approval entry check has succeeded.
+      if (deleteAfterCheck) current = false
+    }
+    const started = expectPermissionResult(await engine.start({
+      ...startInput({ run, node, project, workspace }), assertContextCurrent,
+    }))
+    deleteAfterCheck = true
+    await expect(engine.approvePermission({
+      codingRun: started.codingRun, request: started.permissionRequest, workspace, project,
+      now: '2026-06-17T00:00:01.000Z', assertContextCurrent,
+    })).rejects.toThrow('Coding Memory changed')
+    expect(fetcher.bodies.some((body) => JSON.parse(body).reply === 'once')).toBe(false)
+    expect(fetcher.urls.filter((url) => url.includes('/abort?'))).toHaveLength(1)
   })
 
   it('does not start OpenCode or contact its Provider until Execution Authorization is approved', async () => {
@@ -2731,6 +2797,7 @@ function startInput(input: {
   node: typeof runs[number]['nodes'][number]
   project: ReturnType<typeof localProject>
   workspace: ManagedCodingWorkspace
+  memoryContext?: { id: string; revision: number; statement: string }[]
 }) {
   const context = {
     id: 'coding-run-1',
@@ -2762,6 +2829,7 @@ function startInput(input: {
       userInstruction: context.userInstruction,
       worktreePath: '<managed-worktree-created-after-budget-approval>',
       branchName: '<managed-branch-created-after-budget-approval>',
+      ...(input.memoryContext ? { memoryContext: input.memoryContext } : {}),
     }),
   }
 }

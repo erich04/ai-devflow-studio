@@ -71,6 +71,8 @@ import {
 } from './coding-engine-lifecycle.js'
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
 import { estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
+import { assertCodingContextCurrent, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
+import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
 import type {
   CodingAgentMutation,
   CodingAgentMutationResult,
@@ -139,16 +141,18 @@ function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecut
 
 function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun): CodingAgentRun {
   // Budget authority belongs to Main's reservation, not an executor response.
-  const { budgetDecision: _executorBudgetDecision, ...executorRun } = run
+  const { budgetDecision: _executorBudgetDecision, contextReceipt: _executorContextReceipt, ...executorRun } = run
   return {
     ...executorRun,
+    prompt: previous.prompt,
+    ...(previous.contextReceipt ? { contextReceipt: previous.contextReceipt } : {}),
     ...(previous.budgetDecision ? { budgetDecision: previous.budgetDecision } : {}),
     ...(previous.workflowRunVersion === undefined ? {} : { workflowRunVersion: previous.workflowRunVersion }),
     ...(previous.additionalAttemptAuthorization ? { additionalAttemptAuthorization: previous.additionalAttemptAuthorization } : {}),
   }
 }
 
-export type CodingRuntimeStore = {
+export type CodingRuntimeStore = CodingMemoryStore & {
   listProjects(): Promise<LocalProject[]>
   getPolicySnapshot?(projectId: string): Promise<{ version: number } | null>
   listRuns(): Promise<WorkflowRun[]>
@@ -476,6 +480,32 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     runBestEffortNotification(() => deps.publisher?.publishRunStatus(run))
   }
 
+  async function recordCodingEvaluation(codingRun: CodingAgentRun): Promise<void> {
+    if (codingRun.engine === 'fake') return
+    const workflow = await findRun(codingRun.runId)
+    const evaluation = await evaluateCurrentWorkflowEvidence({
+      getRun: findRun,
+      listProjects: () => deps.store.listProjects(),
+      listArtifacts: (runId) => deps.store.listArtifacts(runId),
+      listCodingAgentRuns: (runId) => deps.store.listCodingAgentRuns(runId),
+      listCodingDiffArtifacts: async (runId) => (await deps.store.loadState()).codingDiffArtifacts
+        .filter((diff) => runId === undefined || diff.runId === runId),
+      listTestEvidence: (runId) => deps.store.listTestEvidence(runId),
+    }, {
+      runId: workflow.id, nodeId: codingRun.nodeId,
+      localProjectId: codingRun.projectId, runVersion: workflow.version, codingRunId: codingRun.id,
+    })
+    await saveEvents([{
+      id: idGenerator('coding-event'), codingRunId: codingRun.id,
+      runId: codingRun.runId, nodeId: codingRun.nodeId,
+      sequence: await nextSequence(codingRun.id), kind: 'status', timestamp: now(),
+      message: evaluation.passed
+        ? 'Current Coding Diff and executed Test Evidence checks passed; business acceptance remains separate.'
+        : `Current task evidence checks failed: ${evaluation.failures.join(', ')}`,
+      metadata: { workflowEvaluation: evaluation }, redacted: true,
+    }])
+  }
+
   function permissionPolicyReporter(codingRun: CodingAgentRun): CodingPermissionPolicyReporter {
     return async (decision) => {
       await saveEvents([{
@@ -737,6 +767,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     }
   }
 
+  async function assertExecutionContext(codingRun: CodingAgentRun): Promise<void> {
+    const current = await findCodingRun(codingRun.id)
+    if (!activeCodingStatuses.has(current.status)) throw new Error('Coding Context belongs to a stopped run')
+    if (current.contextReceipt) {
+      const workflow = await findRun(current.runId)
+      if (workflow.version !== current.contextReceipt.runVersion || workflow.currentNodeId !== current.nodeId) {
+        throw new Error('Coding Context Workflow changed; start a new run')
+      }
+    }
+    await assertCodingContextCurrent({ store: deps.store, codingRun: current, now: now() })
+  }
+
   async function buildAuthorizedOpenCodeStart(input: {
     codingRun: CodingAgentRun
     project: LocalProject
@@ -774,6 +816,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         userInstruction: input.codingRun.userInstruction,
         prompt: input.codingRun.prompt,
       },
+      assertContextCurrent: () => assertExecutionContext(input.codingRun),
     }
   }
 
@@ -823,6 +866,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     }
     await saveEvents([startedEvent])
 
+    if (input.codingRun.contextReceipt) await assertExecutionContext(input.codingRun)
     const result = await deps.runTestCommand({
       command,
       cwd: input.workspace.worktreePath,
@@ -931,6 +975,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       dependencyHash: string
     }
   }): Promise<{ codingRun: CodingAgentRun; canContinue: boolean }> {
+    if (input.codingRun.contextReceipt) await assertExecutionContext(input.codingRun)
     const previousDependencyHash = deps.runDependencyBootstrap
       ? await latestDependencyHash(input.project.id)
       : undefined
@@ -1579,6 +1624,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!completionCommitted.committed) {
       return false
     }
+    await recordCodingEvaluation(completedRun)
     try {
       await deps.completeWorkflowBuild?.({
         runId: completedRun.runId,
@@ -1982,6 +2028,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         if (!completed.committed) {
           throw new Error('Accepted OpenCode run could not persist its terminal state safely.')
         }
+        await recordCodingEvaluation(completedRun)
         return updatedRequest
       }
 
@@ -2098,6 +2145,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         : undefined
       let completed
       try {
+        await assertExecutionContext(codingRun)
         completed = await executor.continuePermission({
           requestId: codingRun.id,
           ...continuationState,
@@ -2107,6 +2155,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             workspace,
             project,
             now: timestamp,
+            assertContextCurrent: () => assertExecutionContext(codingRun),
             ...(authorizedStart ? { authorizedStart } : {}),
             reportProviderCall: (trace) => persistProviderCallTrace(codingRun, trace),
             reportPermissionPolicyDecision: permissionPolicyReporter(codingRun),
@@ -2706,18 +2755,29 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const providerId = executor.providerId
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
+      const recalled = await recallCodingMemory({
+        store: deps.store, run, codingRunId, userId: input.requestedBy,
+        query: `${run.request}\n${input.userInstruction}`, now: now(),
+      })
       const model = executor.modelId ?? providerId
       const canonicalBrief = buildCodingBrief({
         run,
         node,
         project,
         ...briefContext,
+        memoryContext: recalled.revisions,
         userInstruction: input.userInstruction,
         worktreePath: '<managed-worktree-created-after-budget-approval>',
         branchName: '<managed-branch-created-after-budget-approval>',
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
       })
+      const contextReceipt = {
+        stateVersion: 1 as const, runId: run.id, nodeId: node.id, runVersion: run.version,
+        runtimeId: recalled.runtimeId, scope: recalled.scope,
+        promptDigest: codingPromptDigest(canonicalBrief.prompt), memories: recalled.memories,
+        omittedMemoryCount: recalled.omittedMemoryCount, compaction: canonicalBrief.compaction!,
+      }
       const estimatedCost = metered && executor.descriptor.kind === 'native'
         ? estimateNativeCodingWorstCaseCost({
             runId: run.id,
@@ -2854,6 +2914,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       const reservationTimestamp = now()
       const reservationRun: CodingAgentRun = {
+        contextReceipt,
         id: codingRunId,
         runId: run.id,
         nodeId: node.id,
@@ -2887,6 +2948,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       runBestEffortNotification(() => deps.publisher?.publishRunStatus(reservationRun))
 
       try {
+        await assertExecutionContext(reservationRun)
         await executor.ensure({ project })
       } catch (error) {
         await failActiveCodingRun(
@@ -2900,6 +2962,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
       let workspace: ManagedCodingWorkspace
       try {
+        await assertExecutionContext(reservationRun)
         workspace = await createWorkspace({
           project,
           codingRunId,
@@ -3334,6 +3397,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         timestamp: reservationTimestamp,
         metadata: {
           codingExecutorEventType: 'started',
+          executionContext: {
+            promptDigest: contextReceipt.promptDigest, memoryCount: contextReceipt.memories.length,
+            omittedMemoryCount: contextReceipt.omittedMemoryCount, compaction: contextReceipt.compaction,
+          },
           codingExecutorRequestId: executorRequest.id,
           codingExecutorSelection: selection,
           ...(reservationRun.additionalAttemptAuthorization ? { additionalAttemptAuthorization: reservationRun.additionalAttemptAuthorization } : {}),
@@ -3360,6 +3427,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       let bundle
       try {
+        await assertExecutionContext(executorReadyRun)
         bundle = await executor.start({
           request: executorRequest,
           runtimeContext: {
@@ -3374,6 +3442,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             now: reservationTimestamp,
             ...engineBriefContext,
             brief: canonicalBrief,
+            assertContextCurrent: () => assertExecutionContext(executorReadyRun),
             ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
             ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
             reportProviderCall: (trace) => persistProviderCallTrace(executorReadyRun, trace),
