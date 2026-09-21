@@ -80,3 +80,10 @@ the old sync button name. The fixture now issues a synthetic code with a relativ
 10-minute lifetime, and the scroll test selects the current user-visible label.
 The expiry behavior and viewport/scroll assertions remain unchanged. Remote CI
 will rerun these checks; the initial failed run is not counted as a pass.
+
+Second run: all 4,003 unit tests and all 41 browser E2E scenarios passed on macOS;
+Windows, Postgres, Docker and Docker lifecycle also passed. The later Electron
+smoke still selected the old Team sync label and expected its old success copy.
+Both selectors now use the same current UI wording already checked by the App
+tests. The native smoke must pass in the subsequent CI run before this batch is
+declared fully verified.
