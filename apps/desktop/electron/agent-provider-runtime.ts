@@ -4,6 +4,8 @@ import {
   createFakeAgentProvider,
   createOpenAiCompatibleAgentProvider,
   resolveAgentProviderDisplayName,
+  resolveProviderThinking,
+  type ProviderThinkingConfiguration,
   type AgentProvider,
   type AgentProviderConfig,
   type ProviderCredentialMetadata,
@@ -31,6 +33,7 @@ export function createElectronAgentProviderCredentialMetadata(input: {
   updatedAt: string
   randomValue: string
   providers: AgentProviderConfig[]
+  thinking?: ProviderThinkingConfiguration
 }): ProviderCredentialMetadata {
   const providerId = input.providerId ?? createGeneratedAgentProviderId(input.randomValue)
   assertAgentProviderNameAvailable({
@@ -38,10 +41,12 @@ export function createElectronAgentProviderCredentialMetadata(input: {
     providers: input.providers,
     ...(input.providerId ? { providerId } : {}),
   })
+  resolveProviderThinking(input)
   return {
     providerId,
     name: input.name,
     model: input.model,
+    ...(input.thinking ? { thinking: input.thinking } : {}),
     ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
     maskedCredential: input.maskedCredential,
     updatedAt: input.updatedAt,
@@ -54,6 +59,7 @@ function providerConfigFromCredential(metadata: ProviderCredentialMetadata): Age
     name: resolveAgentProviderDisplayName(metadata),
     kind: 'openai-compatible',
     model: metadata.model,
+    ...(metadata.thinking ? { thinking: metadata.thinking } : {}),
     ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
     enabled: true,
     maskedCredential: metadata.maskedCredential,
@@ -108,7 +114,7 @@ export async function resolveElectronAgentProvider(input: {
     listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
     getProviderEncryptedSecret(providerId: string): Promise<string | null>
   }
-  decryptCredential(encryptedSecret: string): string
+  decryptCredential(encryptedSecret: string): string | Promise<string>
 }): Promise<AgentProvider> {
   if (input.providerId === FAKE_AGENT_PROVIDER_ID) {
     if (!input.fakeRuntimeEnabled) {
@@ -124,12 +130,18 @@ export async function resolveElectronAgentProvider(input: {
   if (!metadata || !encryptedSecret) {
     throw new Error(`Agent provider credential not found: ${input.providerId}`)
   }
+  const apiKey = await input.decryptCredential(encryptedSecret)
+  const current = (await input.credentialSource.listProviderCredentials()).find((item) => item.providerId === input.providerId)
+  if (current?.updatedAt !== metadata.updatedAt || await input.credentialSource.getProviderEncryptedSecret(input.providerId) !== encryptedSecret) {
+    throw new Error('Provider configuration changed while waiting for system authorization. Retry the operation.')
+  }
 
   return createOpenAiCompatibleAgentProvider({
     id: metadata.providerId,
     name: resolveAgentProviderDisplayName(metadata),
     model: metadata.model || DEFAULT_OPENAI_MODEL,
     baseUrl: metadata.baseUrl || DEFAULT_OPENAI_BASE_URL,
-    apiKey: input.decryptCredential(encryptedSecret),
+    apiKey,
+    ...(metadata.thinking ? { thinking: metadata.thinking } : {}),
   })
 }

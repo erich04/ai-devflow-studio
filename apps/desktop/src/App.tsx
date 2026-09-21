@@ -56,6 +56,8 @@ import { useCodingRuntimeReadiness } from './app/useCodingRuntimeReadiness'
 import { useProjectRuntimeBudget } from './app/useProjectRuntimeBudget'
 import { buildCodingRuntimeActionProjection } from './app/coding-runtime-action-projection'
 import type { DesktopDataProfileDiagnostics } from './desktop-api'
+import { DiagnosticHistory } from './components/DiagnosticHistory'
+import { CredentialAccessStatus } from './components/CredentialAccessStatus'
 import { WorkRequestInbox } from './WorkRequestInbox'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
 import {
@@ -1224,9 +1226,12 @@ export function App() {
       </aside>
 
       <main className="workspace main-shell">
+        <CredentialAccessStatus api={desktopApi} detailed={false} />
         <section className="diagnostics-page" hidden={activeView !== 'diagnostics'} aria-label="本地诊断">
           <h2>本地诊断</h2>
           <p>用于排查当前应用的数据存储；数据环境名称不是项目或团队绑定。</p>
+          <CredentialAccessStatus api={desktopApi} detailed />
+          <DiagnosticHistory api={desktopApi} active={activeView === 'diagnostics'} />
           <span className="stat stat--source" data-testid="runtime-source-badge" title={runtimeDataSource.detail}>
             数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
             <em>{runtimeDataSource.status}</em>
@@ -1593,6 +1598,7 @@ export function App() {
               setToast('已删除本机 Provider 配置和凭据；当前未选择 Provider。')
             }}
             providerNameDraft={providerNameDraft}
+            onProviderUpdated={(metadata) => setAgentProviders((providers) => providers.map((provider) => provider.id === metadata.providerId ? reviewProviderFromMetadata(metadata) : provider))}
             onProviderNameDraftChange={setProviderNameDraft}
             providerBaseUrlDraft={providerBaseUrlDraft}
             onProviderBaseUrlDraftChange={setProviderBaseUrlDraft}

@@ -38,7 +38,7 @@ export function createCorsPreflightHeaders(): Record<string, string> {
   return {
     'access-control-allow-origin': '*',
     'access-control-allow-methods': 'GET,POST,PUT,OPTIONS',
-    'access-control-allow-headers': 'authorization,content-type',
+    'access-control-allow-headers': 'authorization,content-type,x-devflow-diagnostic-id',
   }
 }
 

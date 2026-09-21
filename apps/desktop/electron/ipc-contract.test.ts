@@ -7,6 +7,7 @@ import {
   parseCancelAgentRuntimeInput,
   parseAgentProviderCredentialInput,
   parseAgentProviderRemovalInput,
+  parseProviderThinkingInput,
   parseCancelCodingAgentRunInput,
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
@@ -707,6 +708,19 @@ describe('IPC contract parsers', () => {
     expect(() => parseAgentProviderRemovalInput({ providerId: 'provider-one', apiKey: 'forged' })).toThrow()
     expect(parseSettingsInput({ selectedAgentProviderId: '' })).toEqual({ selectedAgentProviderId: '' })
     expect(() => parseSettingsInput({ selectedAgentProviderId: ' invalid ' })).toThrow()
+  })
+
+  it('validates thinking updates through IPC independently of provider removal', () => {
+    const input = { providerId: 'provider-one', expectedUpdatedAt: '2026-09-19T00:00:00.000Z', thinking: { mode: 'disabled' } }
+    expect(parseProviderThinkingInput(input)).toEqual(input)
+    for (const invalid of [
+      { ...input, thinking: undefined },
+      { ...input, thinking: { mode: 'enabled', effort: 'medium' } },
+      { ...input, providerId: ' provider-one ' },
+      { ...input, expectedUpdatedAt: '' },
+      { ...input, apiKey: 'forged' },
+    ]) expect(() => parseProviderThinkingInput(invalid)).toThrow()
+    expect(() => parseAgentProviderRemovalInput(input, true)).toThrow()
   })
 
   it('rejects invalid settings and MCP payloads', () => {

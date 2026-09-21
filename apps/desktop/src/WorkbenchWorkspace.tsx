@@ -1,7 +1,7 @@
 import { ConversationBody } from './ConversationBody'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, BookOpen, Brain, ChevronDown, History, MessageCircle, Pin, Plus, RotateCcw, Square, X } from 'lucide-react'
-import type { WorkflowRun } from '@ai-devflow/shared'
+import { describeProviderThinking, type WorkflowRun } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
 import type { ConversationAction, ConversationCommand, ConversationMessage, WorkbenchConversation } from '../electron/workbench-conversation-contract'
 
@@ -203,6 +203,7 @@ function ConversationView({ session, runs, projectName, providerId, providerName
         <p className="meta">{session.contextReceipt ? `上次使用 ${session.contextReceipt.includedMessages} 条本会话消息；${session.contextReceipt.omittedMessages} 条较早消息未进入模型上下文，历史仍保留。` : '每次调查按需读取最新流程；不会读取其他会话的聊天。'}</p>
         {session.contextReceipt?.limited && <p className="meta">本次上下文达到容量限制，部分查询内容未全部附带。可以缩小问题范围后继续调查。</p>}
         <p className="meta">当前工具：流程查询、节点与产物、只读代码检索、项目知识检索。没有连接业务数据库。</p>
+        <details><summary>模型调用设置记录</summary>{session.messages.filter((message) => message.provider).map((message) => <p className="meta" key={message.id}>{message.createdAt} · {message.provider!.model} · {message.provider!.effectiveThinking ? describeProviderThinking(message.provider!.effectiveThinking!) : '旧记录未保存思考参数'}</p>)}</details>
       </div>}
     </header>
     <div className="conversation-messages" aria-label="当前会话消息" aria-busy={busy} onScroll={(event) => { const element = event.currentTarget; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
@@ -241,7 +242,7 @@ function ReasoningView({ message }: { message: ConversationMessage }) {
   const status = streaming ? '生成中' : reasoning.status === 'interrupted' ? '已中断' : '已结束'
   return <section className="conversation-reasoning" aria-label={`${message.text}的推理过程`}>
     <button className="reasoning-toggle" aria-expanded={open} aria-controls={`reasoning-${message.id}`} onClick={() => setExpanded(!open)}>
-      <Brain size={15} /><strong>推理过程</strong><span className="reasoning-status">{streaming && <i className="conversation-running-dot" />}{status}</span><small>低强度</small><ChevronDown size={14} className={open ? 'expanded' : ''} />
+      <Brain size={15} /><strong>推理过程</strong><span className="reasoning-status">{streaming && <i className="conversation-running-dot" />}{status}</span><small>{{ low: '低强度', high: '高强度', max: '最高强度' }[reasoning.effort]}</small><ChevronDown size={14} className={open ? 'expanded' : ''} />
     </button>
     <div id={`reasoning-${message.id}`} hidden={!open}>
       <div ref={content} className="reasoning-content" onScroll={(event) => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40 }}>

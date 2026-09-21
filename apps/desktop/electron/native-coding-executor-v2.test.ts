@@ -1,8 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import { AgentProviderRequestError, type AgentProvider } from '@ai-devflow/shared'
+import { AgentProviderRequestError, createOpenAiCompatibleAgentProvider, type AgentProvider } from '@ai-devflow/shared'
 import { createAgentProviderNativeCodingV2DecisionProvider } from './native-coding-executor-v2.js'
 
 describe('Agent Provider Native Coding v2 boundary', () => {
+  it.each([{ mode: 'disabled' as const }, { mode: 'enabled' as const, effort: 'low' as const }])('inherits saved $mode thinking in actual Native requests and trace metadata', async (thinking) => {
+    let body: Record<string, unknown> = {}
+    const provider = createOpenAiCompatibleAgentProvider({ model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com', apiKey: 'fixture', thinking,
+      fetcher: async (_url, init) => { body = JSON.parse(String(init?.body)); return Response.json({ choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }], usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 } }) },
+    })
+    const native = createAgentProviderNativeCodingV2DecisionProvider(provider)
+    await native.complete({ phase: 'analysis', systemPrompt: 'JSON', userPrompt: 'fixture', maxOutputTokens: 500 })
+    expect(body.thinking).toEqual({ type: thinking.mode })
+    expect(body.reasoning_effort).toBe(thinking.mode === 'enabled' ? 'low' : undefined)
+    expect(native.effectiveThinking?.mode).toBe(thinking.mode)
+  })
   it('rejects an oversized prompt before invoking the provider', async () => {
     const completeStructuredJson = vi.fn()
     const decisionProvider = createAgentProviderNativeCodingV2DecisionProvider({

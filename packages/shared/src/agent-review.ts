@@ -1,4 +1,5 @@
 import { resolveDeepSeekPricingSnapshot } from './cost'
+import { describeProviderThinking, resolveProviderThinking, providerThinkingRequestFields, type EffectiveProviderThinking, type ProviderThinkingConfiguration } from './provider-thinking'
 import { KNOWLEDGE_REVIEW_SANITIZER_VERSION, parseGateReviewSubjectSnapshot, type GateReviewSubjectSnapshot } from './gate-review-subject'
 export { KNOWLEDGE_REVIEW_SANITIZER_VERSION } from './gate-review-subject'
 import type {
@@ -41,6 +42,8 @@ export type KnowledgeReviewProviderInput = {
 }
 
 export type KnowledgeReviewProviderOutput = {
+  effectiveThinking?: EffectiveProviderThinking
+  reasoningContent?: string
   model: string
   conclusion: string
   summary: string
@@ -81,6 +84,8 @@ export type WorkflowArtifactProviderInput = {
 }
 
 export type WorkflowArtifactProviderOutput = {
+  effectiveThinking?: EffectiveProviderThinking
+  reasoningContent?: string
   model: string
   title?: string
   summary: string
@@ -149,6 +154,7 @@ export type AgentProviderResponseMetadata = {
   httpStatus: number
   responseId?: string
   systemFingerprint?: string
+  effectiveThinking?: EffectiveProviderThinking
 }
 
 export class AgentProviderRequestError extends Error {
@@ -192,6 +198,7 @@ export class AgentProviderRequestError extends Error {
         httpStatus: input.responseMetadata.httpStatus,
         ...(responseId ? { responseId } : {}),
         ...(systemFingerprint ? { systemFingerprint } : {}),
+        ...(input.responseMetadata.effectiveThinking ? { effectiveThinking: input.responseMetadata.effectiveThinking } : {}),
       }
     }
   }
@@ -210,6 +217,7 @@ export type AgentProvider = {
   targetHost?: string
   requestTimeoutMs?: number
   billingProvider?: AgentProviderUsage['billingProvider']
+  effectiveThinking?: EffectiveProviderThinking
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
   completeStructuredJson?: (input: {
@@ -217,8 +225,8 @@ export type AgentProvider = {
     userPrompt: string
     maxOutputTokens: number
     signal?: AbortSignal
-    /** Opt-in for conversational calls; other structured operations keep their existing mode. */
-    reasoning?: { effort: 'low'; onDelta?: (text: string) => void | Promise<void> }
+    /** Display subscription only. Provider configuration controls the model's mode. */
+    reasoning?: { onDelta?: (text: string) => void | Promise<void> }
   }) => Promise<{
     value: Record<string, unknown>
     usage?: AgentProviderUsage
@@ -1768,7 +1776,7 @@ export async function runKnowledgeReviewAgent({
         3,
         'provider_call',
         `Call ${provider.name}`,
-        `${providerOutput.model} returned structured review output.`,
+        `${providerOutput.model} returned structured review output.${provider.effectiveThinking ? ` ${describeProviderThinking(provider.effectiveThinking)}.` : ''}`,
         createdAt,
       ),
       createTraceStep(
@@ -1883,6 +1891,7 @@ export function createOpenAiCompatibleAgentProvider({
   apiKey,
   baseUrl = 'https://api.openai.com/v1',
   structuredRequestTimeoutMs = 30_000,
+  thinking: thinkingConfiguration,
   fetcher = fetch,
 }: {
   id?: string
@@ -1891,6 +1900,7 @@ export function createOpenAiCompatibleAgentProvider({
   apiKey: string
   baseUrl?: string
   structuredRequestTimeoutMs?: number
+  thinking?: ProviderThinkingConfiguration
   fetcher?: typeof fetch
 }): AgentProvider {
   if (
@@ -1902,12 +1912,15 @@ export function createOpenAiCompatibleAgentProvider({
   }
   const targetHost = providerTargetHost(baseUrl)
   const deepSeek = isDeepSeekUsageContext({ providerId: id, baseUrl })
+  const effectiveThinking = resolveProviderThinking({ baseUrl, model, thinking: thinkingConfiguration })
+  const thinkingFields = providerThinkingRequestFields(effectiveThinking)
   return {
     id,
     name,
     model,
     targetHost,
     requestTimeoutMs: structuredRequestTimeoutMs,
+    effectiveThinking,
     billingProvider: deepSeek
       ? 'deepseek'
       : 'openai_compatible',
@@ -1924,10 +1937,10 @@ export function createOpenAiCompatibleAgentProvider({
           max_tokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
           ...(deepSeek
             ? {
-                thinking: { type: 'disabled' },
                 response_format: { type: 'json_object' },
               }
             : {}),
+          ...thinkingFields,
           messages: [
             {
               role: 'system',
@@ -1943,10 +1956,11 @@ export function createOpenAiCompatibleAgentProvider({
       }
 
       const body = (await readProviderJsonResponse(response)) as {
-        choices?: Array<{ message?: { content?: string } }>
+        choices?: Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }>
         usage?: unknown
       }
       const raw = body.choices?.[0]?.message?.content
+      if (body.choices?.[0]?.finish_reason && body.choices[0].finish_reason !== 'stop') throw new Error('Agent provider review output is incomplete; no review was saved.')
       if (!raw) {
         throw new Error('Agent provider returned empty review output')
       }
@@ -1959,6 +1973,8 @@ export function createOpenAiCompatibleAgentProvider({
 
       return {
         model,
+        effectiveThinking,
+        ...(typeof body.choices?.[0]?.message?.reasoning_content === 'string' ? { reasoningContent: body.choices[0].message.reasoning_content } : {}),
         conclusion,
         summary,
         risks: providerValueToStringList(parsed.risks),
@@ -1979,13 +1995,12 @@ export function createOpenAiCompatibleAgentProvider({
         input.userPrompt.length > 32_000 ||
         !Number.isInteger(input.maxOutputTokens) ||
         input.maxOutputTokens < 1 ||
-        input.maxOutputTokens > 4_096 ||
-        (input.reasoning !== undefined && input.reasoning.effort !== 'low')
+        input.maxOutputTokens > 4_096
       ) {
         throw new Error('Agent provider structured request is invalid')
       }
       const controller = new AbortController()
-      const thinking = deepSeek && input.reasoning !== undefined
+      const thinking = effectiveThinking.mode === 'enabled'
       const stream = thinking && input.reasoning?.onDelta !== undefined
       let observedUsage: AgentProviderUsage | undefined
       let timedOut = false
@@ -2013,12 +2028,11 @@ export function createOpenAiCompatibleAgentProvider({
             max_tokens: input.maxOutputTokens,
             ...(deepSeek
               ? {
-                  thinking: { type: thinking ? 'enabled' : 'disabled' },
-                  ...(thinking ? { reasoning_effort: input.reasoning!.effort } : {}),
                   ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
                   response_format: { type: 'json_object' },
                 }
               : {}),
+            ...thinkingFields,
             messages: [
               { role: 'system', content: input.systemPrompt },
               { role: 'user', content: input.userPrompt },
@@ -2070,6 +2084,7 @@ export function createOpenAiCompatibleAgentProvider({
         const systemFingerprint = safeProviderResponseIdentifier(record.system_fingerprint)
         const responseMetadata: AgentProviderResponseMetadata = {
           httpStatus: response.status,
+          effectiveThinking,
           ...(responseId ? { responseId } : {}),
           ...(systemFingerprint ? { systemFingerprint } : {}),
         }
@@ -2162,10 +2177,10 @@ export function createOpenAiCompatibleAgentProvider({
           temperature: 0.2,
           ...(deepSeek
             ? {
-                thinking: { type: 'disabled' },
                 response_format: { type: 'json_object' },
               }
             : {}),
+          ...thinkingFields,
           messages: [
             {
               role: 'system',
@@ -2180,14 +2195,15 @@ export function createOpenAiCompatibleAgentProvider({
         throw providerHttpError(response.status)
       }
 
-      const responseMetadata = { httpStatus: response.status }
+      const responseMetadata = { httpStatus: response.status, effectiveThinking }
       const body = (await readProviderJsonResponse(response).catch((error: unknown) => {
         throw providerResponseError('invalid_response_json', true, responseMetadata, error)
       })) as {
-        choices?: Array<{ message?: { content?: string } }>
+        choices?: Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }>
         usage?: unknown
       }
       const raw = body?.choices?.[0]?.message?.content
+      if (body.choices?.[0]?.finish_reason && body.choices[0].finish_reason !== 'stop') throw providerResponseError('invalid_model_output', true, responseMetadata)
       if (typeof raw !== 'string' || !raw) {
         throw providerResponseError('invalid_model_output', true, responseMetadata)
       }
@@ -2210,6 +2226,8 @@ export function createOpenAiCompatibleAgentProvider({
       return {
         model,
         title,
+        effectiveThinking,
+        ...(typeof body.choices?.[0]?.message?.reasoning_content === 'string' ? { reasoningContent: body.choices[0].message.reasoning_content } : {}),
         summary,
         content: providerValueToString(parsed.content),
         goals: providerValueToStringList(parsed.goals),

@@ -305,14 +305,14 @@ export class WorkbenchConversationService {
 
   private async run(projectId: string, id: string, providerId: string, controller: AbortController) {
     let phase = 'resolve_provider'
-    let activeReasoning: { messageId: string; text: string; flushedAt: number } | undefined
+    let activeReasoning: { messageId: string; text: string; flushedAt: number; effort: 'low' | 'high' | 'max' } | undefined
     const flushReasoning = async (status: 'streaming' | 'completed' | 'interrupted') => {
       if (!activeReasoning) return
-      const { messageId, text } = activeReasoning
+      const { messageId, text, effort } = activeReasoning
       activeReasoning.flushedAt = Date.now()
       const visible = visibleReasoning(text, status === 'completed')
       await this.update(projectId, id, (current) => current.status !== 'running' && status === 'streaming' ? current : ({ ...current,
-        messages: current.messages.map((message) => message.id === messageId ? { ...message, reasoning: { text: visible, status, effort: 'low' } } : message),
+        messages: current.messages.map((message) => message.id === messageId ? { ...message, reasoning: { text: visible, status, effort } } : message),
       }))
     }
     const deadline = setTimeout(() => controller.abort(new Error('timeout')), 180000)
@@ -343,17 +343,19 @@ export class WorkbenchConversationService {
         } }))
         phase = 'provider_request'
         const callId = randomUUID()
-        const thinking = provider.billingProvider === 'deepseek'
+        const thinking = provider.effectiveThinking?.mode === 'enabled'
+        const effort = provider.effectiveThinking?.effort ?? 'low'
+        const providerRecord = { id: providerId, model: provider.model, ...(provider.effectiveThinking ? { effectiveThinking: provider.effectiveThinking } : {}) }
         if (thinking) {
-          activeReasoning = { messageId: callId, text: '', flushedAt: 0 }
+          activeReasoning = { messageId: callId, text: '', flushedAt: 0, effort }
           await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, {
-            id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), provider: { id: providerId, model: provider.model },
-            reasoning: { text: '', status: 'streaming', effort: 'low' },
+            id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), provider: providerRecord,
+            reasoning: { text: '', status: 'streaming', effort },
           }] }))
         }
         const result = await provider.completeStructuredJson({ systemPrompt: SYSTEM,
           userPrompt: packed.prompt, maxOutputTokens: 3500, signal: controller.signal,
-          ...(thinking ? { reasoning: { effort: 'low' as const, onDelta: async (delta: string) => {
+          ...(thinking ? { reasoning: { onDelta: async (delta: string) => {
             controller.signal.throwIfAborted()
             activeReasoning!.text += delta
             if (Date.now() - activeReasoning!.flushedAt >= 300) await flushReasoning('streaming')
@@ -367,7 +369,7 @@ export class WorkbenchConversationService {
         // Persist billed usage even if cancellation arrived while the provider was returning.
         await this.update(projectId, id, (current) => ({ ...current, messages: thinking
           ? current.messages.map((message) => message.id === callId ? { ...message, ...(result.usage ? { usage: result.usage } : {}) } : message)
-          : [...current.messages, { id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), ...(result.usage ? { usage: result.usage } : {}), provider: { id: providerId, model: provider.model } }],
+          : [...current.messages, { id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), ...(result.usage ? { usage: result.usage } : {}), provider: providerRecord }],
         }))
         controller.signal.throwIfAborted()
         phase = 'validate_response'

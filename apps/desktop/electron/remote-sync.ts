@@ -1,4 +1,10 @@
 import {
+  DIAGNOSTIC_HEADER,
+  safeDiagnosticId,
+  diagnosticReasons,
+  diagnosticUserMessage,
+  diagnosticReasonForStatus,
+  type DiagnosticReason,
   parseBudgetGuardDecision,
   parseGateCommandAcknowledgementCreate,
   parseGateCommandAcknowledgementRecord,
@@ -45,6 +51,7 @@ import {
 import type { LoadRemoteSnapshotInput } from './ipc-contract'
 
 type Fetcher = typeof fetch
+import { readSafeDiagnosticReason, RemoteDiagnosticTransportError } from './remote-diagnostics'
 
 export type RemoteSyncErrorCode = RemoteSyncFailureCode
 
@@ -53,20 +60,25 @@ export class RemoteSyncHttpError extends Error {
   readonly code: RemoteSyncErrorCode
   readonly path: string
   readonly retryable: boolean
+  readonly diagnosticId?: string
 
   constructor(input: {
     status: number | null
     code: RemoteSyncErrorCode
     path: string
     retryable: boolean
+    diagnosticId?: string
   }) {
-    const statusLabel = input.status === null ? 'unavailable' : `HTTP ${input.status}`
-    super(`Remote sync request failed (${statusLabel}, ${input.code}).`)
+    const reason: DiagnosticReason = input.code === 'remote_unavailable' ? 'network_unavailable'
+      : diagnosticReasons.includes(input.code as DiagnosticReason) ? input.code as DiagnosticReason
+        : diagnosticReasonForStatus(input.status ?? 503)
+    super(`${diagnosticUserMessage(reason)}${input.diagnosticId ? ` 诊断编号：${input.diagnosticId}` : ''}`)
     this.name = 'RemoteSyncHttpError'
     this.status = input.status
     this.code = input.code
     this.path = input.path
     this.retryable = input.retryable
+    if (input.diagnosticId) this.diagnosticId = input.diagnosticId
   }
 }
 
@@ -322,6 +334,10 @@ function isRetryableHttpStatus(status: number): boolean {
 async function readJson<T>(response: Response, path: string): Promise<T> {
   if (!response.ok) {
     let code = classifyHttpError(response.status)
+    if (response.status === 401 && path === '/api/desktop/pairing/exchange') {
+      const reason = await readSafeDiagnosticReason(response)
+      if (reason === 'pairing_code_expired' || reason === 'pairing_code_invalid') code = reason
+    }
     if (response.status === 409 && CANONICAL_RUN_RECOVERY_PATHS.has(path)) {
       try {
         const body = await response.clone().json() as { message?: unknown }
@@ -340,6 +356,7 @@ async function readJson<T>(response: Response, path: string): Promise<T> {
       code,
       path,
       retryable: isRetryableHttpStatus(response.status),
+      ...(safeDiagnosticId(response.headers.get(DIAGNOSTIC_HEADER)) ? { diagnosticId: safeDiagnosticId(response.headers.get(DIAGNOSTIC_HEADER))! } : {}),
     })
   }
 
@@ -351,6 +368,7 @@ async function readJson<T>(response: Response, path: string): Promise<T> {
       code: 'invalid_response',
       path,
       retryable: true,
+      ...(safeDiagnosticId(response.headers.get(DIAGNOSTIC_HEADER)) ? { diagnosticId: safeDiagnosticId(response.headers.get(DIAGNOSTIC_HEADER))! } : {}),
     })
   }
 }
@@ -364,12 +382,13 @@ async function fetchRemote(
 ): Promise<Response> {
   try {
     return await fetcher(url, signal ? { ...init, signal } : init)
-  } catch {
+  } catch (error) {
     throw new RemoteSyncHttpError({
       status: null,
       code: signal?.aborted ? 'request_timeout' : 'remote_unavailable',
       path,
       retryable: true,
+      ...(error instanceof RemoteDiagnosticTransportError ? { diagnosticId: error.diagnosticId } : {}),
     })
   }
 }

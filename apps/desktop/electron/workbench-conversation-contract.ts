@@ -29,9 +29,9 @@ export type ConversationMessage = {
   question?: { prompt: string; options: string[]; purpose?: 'clarification' | 'save_proposal'; answeredAt?: string; resolvedBy?: 'proposal_saved' }
   draft?: ConversationDraft
   usage?: AgentProviderUsage
-  provider?: { id: string; model: string }
+  provider?: { id: string; model: string; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
   /** Provider-returned reasoning, local to this conversation; never shared workflow context. */
-  reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort: 'low' }
+  reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort: 'low' | 'high' | 'max' }
 }
 export type WorkbenchConversation = {
   id: string

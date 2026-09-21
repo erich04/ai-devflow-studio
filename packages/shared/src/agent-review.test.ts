@@ -1136,6 +1136,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         billingProvider: 'openai_compatible',
       },
       responseMetadata: {
+        effectiveThinking: { mode: 'provider_default', source: 'provider_default' },
         httpStatus: 200,
         responseId: 'response-safe-id',
         systemFingerprint: 'fingerprint-safe-id',
@@ -1183,7 +1184,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
   })
 
-  it('requests non-thinking JSON output for DeepSeek structured decisions', async () => {
+  it('inherits enabled low-effort JSON output for DeepSeek structured decisions', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
       id: 'deepseek-production',
@@ -1205,7 +1206,8 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
 
     expect(requestBody).toMatchObject({
-      thinking: { type: 'disabled' },
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'low',
       response_format: { type: 'json_object' },
     })
   })
@@ -1324,7 +1326,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     expect(JSON.stringify(requestBody)).toContain('PROVIDER_BODY_ONLY_CANARY')
   })
 
-  it('requests non-thinking JSON output for DeepSeek knowledge reviews', async () => {
+  it('inherits enabled low-effort JSON output for DeepSeek knowledge reviews', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
       id: 'deepseek-production',
@@ -1374,7 +1376,8 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
 
     expect(requestBody).toMatchObject({
-      thinking: { type: 'disabled' },
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'low',
       response_format: { type: 'json_object' },
     })
   })
@@ -1563,7 +1566,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
   })
 
-  it('requests non-thinking JSON output for DeepSeek workflow artifacts', async () => {
+  it('inherits enabled low-effort JSON output for DeepSeek workflow artifacts', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
       id: 'deepseek-production',
@@ -1618,7 +1621,8 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
 
     expect(requestBody).toMatchObject({
-      thinking: { type: 'disabled' },
+      thinking: { type: 'enabled' },
+      reasoning_effort: 'low',
       response_format: { type: 'json_object' },
     })
   })

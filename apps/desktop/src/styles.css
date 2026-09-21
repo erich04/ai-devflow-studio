@@ -4661,3 +4661,16 @@ body { min-width: 0; }
   .topbar .project-switcher, .topbar .search-wrap { max-width: none; }
   .app-shell .sidebar.rail { overflow-y: auto; }
 }
+
+/* System authorization remains visible while the OS credential store is waiting. */
+.credential-access-notice {
+  position: fixed; z-index: 300; top: 7rem; right: 1rem; width: min(26rem, calc(100vw - 2rem));
+  display: grid; gap: 0.65rem; padding: 1rem; border-radius: 12px;
+  border: 1px solid var(--accent); background: var(--surface); color: var(--text);
+  box-shadow: 0 8px 32px #0003;
+}
+.credential-access-notice p { margin: 0; line-height: 1.6; }
+.credential-access-notice small { overflow-wrap: anywhere; }
+.credential-access-history ul { padding: 0; list-style: none; }
+.credential-access-history li { display: grid; gap: 0.3rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
+.credential-access-history code { overflow-wrap: anywhere; }

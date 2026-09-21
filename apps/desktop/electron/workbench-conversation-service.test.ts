@@ -83,6 +83,7 @@ describe('unified conversation execution and boundaries', () => {
       return { value: { text: '已完成检查。' }, reasoningContent: '检查凭据 sk-abcdef1234567890。' }
     })
     provider.billingProvider = 'deepseek'
+    provider.effectiveThinking = { mode: 'enabled', effort: 'low', source: 'application_default' }
     id = await create(service)
     const result = await send(service, id)
     expect(result.status).toBe('idle')

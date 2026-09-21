@@ -44,6 +44,7 @@ export type CodingEngineEnsureResult = {
 }
 
 export type CodingProviderCallTrace = {
+  effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking
   stateVersion: 1
   requestId: string
   codingRunId: string

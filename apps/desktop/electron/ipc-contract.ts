@@ -1,8 +1,10 @@
 import type { WorkbenchConversationApi } from './workbench-conversation-contract.js'
+import type { CredentialAccessRecord } from './credential-access.js'
 import {
   AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES,
   requireAgentProviderName,
   resolveAgentProviderDisplayName,
+  parseProviderThinking,
   WORK_REQUEST_ID_MAX_LENGTH,
 } from '@ai-devflow/shared'
 import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.js'
@@ -182,6 +184,10 @@ export type DesktopDataProfileDiagnostics = {
 }
 
 export const ipcChannels = {
+  listDiagnosticRecords: 'devflow:diagnostics:list',
+  listCredentialAccess: 'devflow:credential-access:list',
+  cancelCredentialAccess: 'devflow:credential-access:cancel',
+  credentialAccessUpdated: 'devflow:credential-access:updated',
   workbenchConversation: 'devflow:workbench-conversation',
   workbenchConversationUpdated: 'devflow:workbench-conversation:updated',
   loadState: 'devflow:local-state:load',
@@ -239,6 +245,7 @@ export const ipcChannels = {
   pairDesktop: 'devflow:desktop-pairing:pair',
   listAgentProviders: 'devflow:agent:providers:list',
   saveAgentProviderCredential: 'devflow:agent:provider-credential:save',
+  updateProviderThinking: 'devflow:agent:provider-thinking:update',
   inspectAgentProviderRemoval: 'devflow:agent:provider-credential:inspect-removal',
   removeAgentProviderCredential: 'devflow:agent:provider-credential:remove',
   runKnowledgeReview: 'devflow:agent:knowledge-review:run',
@@ -446,6 +453,7 @@ export type ListGateOverridesInput = {
 }
 
 export type AgentProviderCredentialInput = {
+  thinking?: import('@ai-devflow/shared').ProviderThinkingConfiguration
   name?: string
   /** @deprecated Compatibility only. New providers receive a generated ID in Electron main. */
   providerId?: string
@@ -615,6 +623,10 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
+  listCredentialAccess?: () => Promise<CredentialAccessRecord[]>
+  cancelCredentialAccess?: (id: string) => Promise<boolean>
+  onCredentialAccessUpdated?: (listener: (records: CredentialAccessRecord[]) => void) => () => void
   workbenchConversation?: WorkbenchConversationApi
   onWorkbenchConversationUpdated?: (listener: (projectId: string) => void) => () => void
   platform: string
@@ -713,6 +725,7 @@ export type DevFlowDesktopApi = {
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
+  updateProviderThinking?: (input: import('@ai-devflow/shared').UpdateProviderThinkingInput) => Promise<ProviderCredentialMetadata>
   inspectAgentProviderRemoval: (input: { providerId: string }) => Promise<ProviderRemovalCheck>
   removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
@@ -1628,10 +1641,22 @@ export function parseAgentProviderCredentialInput(
 
   return {
     name,
+    ...(value['thinking'] !== undefined ? { thinking: parseProviderThinking(value['thinking']) } : {}),
     ...(providerId ? { providerId } : {}),
     apiKey,
     model,
     ...(typeof baseUrl === 'string' && baseUrl.trim() ? { baseUrl: baseUrl.trim() } : {}),
+  }
+}
+
+export function parseProviderThinkingInput(value: unknown): import('@ai-devflow/shared').UpdateProviderThinkingInput {
+  if (!isRecord(value)) throw new Error('Invalid provider thinking payload')
+  rejectUnexpectedFields(value, ['providerId', 'expectedUpdatedAt', 'thinking'], 'provider thinking payload')
+  const { providerId } = parseAgentProviderRemovalInput({ providerId: value['providerId'] })
+  return {
+    providerId,
+    expectedUpdatedAt: readRequiredString(value, 'expectedUpdatedAt'),
+    thinking: parseProviderThinking(value['thinking']),
   }
 }
 

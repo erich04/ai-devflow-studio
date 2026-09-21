@@ -3,6 +3,7 @@ import type { CodingProviderCallTrace } from './coding-engine.js'
 import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
 import { existsSync } from 'node:fs'
 import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
+import { parseProviderThinking, resolveProviderThinking, type UpdateProviderThinkingInput } from '@ai-devflow/shared'
 import { inspectStoredProviderRemoval } from './provider-credential-store'
 import type { ProviderRemovalCheck, ProviderRemovalResult } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
@@ -1080,6 +1081,7 @@ export type LocalStore = {
     encryptedSecret: string,
   ): Promise<ProviderCredentialMetadata>
   listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
+  updateProviderThinking(input: UpdateProviderThinkingInput): Promise<ProviderCredentialMetadata>
   getProviderEncryptedSecret(providerId: string): Promise<string | null>
   inspectProviderRemoval(providerId: string): Promise<ProviderRemovalCheck>
   removeProviderCredential(providerId: string, expectedUpdatedAt: string): Promise<ProviderRemovalResult>
@@ -13210,6 +13212,19 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async updateProviderThinking(input: UpdateProviderThinkingInput): Promise<ProviderCredentialMetadata> {
+    // Runs inside the durable mutation queue. Never decrypts or replaces the key.
+    const current = selectJson<ProviderCredentialMetadata>(this.db, 'select json from provider_credentials where provider_id = ?', [input.providerId])[0]
+    if (!current || current.updatedAt !== input.expectedUpdatedAt) throw new Error('Provider 已变更，请重新加载后再保存。')
+    const thinking = parseProviderThinking(input.thinking)
+    resolveProviderThinking({ ...current, thinking })
+    const updatedAt = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString()
+    const metadata = { ...current, thinking, updatedAt }
+    this.db.run('update provider_credentials set json = ?, updated_at = ? where provider_id = ?', [JSON.stringify(metadata), updatedAt, input.providerId])
+    await this.persist()
+    return metadata
+  }
+
   async getProviderEncryptedSecret(providerId: string): Promise<string | null> {
     const result = this.db.exec(
       'select encrypted_secret from provider_credentials where provider_id = ?',
@@ -13777,6 +13792,7 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   saveCodingDiffArtifact: 'durable',
   listCodingDiffArtifacts: 'direct',
   saveProviderCredential: 'durable',
+  updateProviderThinking: 'durable',
   listProviderCredentials: 'direct',
   getProviderEncryptedSecret: 'direct',
   inspectProviderRemoval: 'direct',

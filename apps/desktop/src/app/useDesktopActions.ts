@@ -1,3 +1,4 @@
+import { diagnosticDisplayError } from '@ai-devflow/shared'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   buildClarificationReviewBundle,
@@ -18,6 +19,7 @@ import {
   type WorkflowNode,
   type WorkflowRun,
   type StageAgentExecutorKind,
+  type ProviderThinkingConfiguration,
 } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
 import {
@@ -345,7 +347,7 @@ export function useDesktopActions(input: {
       setTeamSyncFeedback({ status: 'success', message })
       setToast(message)
     } catch (error) {
-      const message = error instanceof Error ? error.message : '拉取团队数据失败'
+      const message = diagnosticDisplayError(error)
       setTeamSyncFeedback({ status: 'error', message })
       setToast(message)
     } finally {
@@ -387,7 +389,7 @@ export function useDesktopActions(input: {
         `已绑定 ${result.credential.userName ?? result.credential.userId} / ${result.credential.role} 到 ${result.credential.projectName ?? result.credential.projectId}`,
       )
     } catch (error) {
-      setToast(error instanceof Error ? error.message : 'Desktop 配对失败')
+      setToast(diagnosticDisplayError(error))
     } finally {
       setIsPairingDesktop(false)
     }
@@ -675,7 +677,7 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function saveAgentProviderCredential() {
+  async function saveAgentProviderCredential(thinking?: ProviderThinkingConfiguration) {
     if (!desktopApi) {
       setToast('请在 Electron 应用中保存 Review Model Credential')
       return
@@ -707,6 +709,7 @@ export function useDesktopActions(input: {
         name: providerNameValidation.name,
         apiKey: providerKeyDraft,
         model,
+        ...(thinking ? { thinking } : {}),
         ...(baseUrl ? { baseUrl } : {}),
       })
       setProviderKeyDraft('')

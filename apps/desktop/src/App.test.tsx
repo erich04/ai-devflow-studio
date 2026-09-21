@@ -4371,7 +4371,7 @@ describe('App', () => {
     }
     expect(api.loadRemoteSnapshot).toHaveBeenCalledTimes(1)
     await act(async () => { rejectSync(new Error('Team API temporarily unavailable')) })
-    expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('Team API temporarily unavailable')
+    expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('服务未能完成操作。请提供诊断编号以便排查。')
     expect(screen.getByTestId('team-sync-feedback')).toHaveAttribute('role', 'alert')
     vi.mocked(api.loadRemoteSnapshot).mockResolvedValue({ projects: [], members: [], runs: [], artifacts: [], events: [], projectCost: [], memberCost: [], totalCost: '$0.00' })
     fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
@@ -5539,6 +5539,7 @@ describe('App', () => {
         baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3',
         model: 'ark-code-latest',
         apiKey: 'e8fa6ce2-test-key',
+        thinking: { mode: 'default' },
       }),
     )
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalledTimes(2))

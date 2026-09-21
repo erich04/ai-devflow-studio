@@ -7,7 +7,8 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./fixtures": "./src/fixtures.ts"
+    "./fixtures": "./src/fixtures.ts",
+    "./node/diagnostic-log": "./src/node/diagnostic-log.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

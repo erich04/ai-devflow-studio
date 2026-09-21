@@ -8,6 +8,10 @@ function onIpcPayload<T>(channel: string, listener: (payload: T) => void) {
 }
 
 const desktopApi: DevFlowDesktopApi = {
+  listDiagnosticRecords: () => ipcRenderer.invoke(ipcChannels.listDiagnosticRecords),
+  listCredentialAccess: () => ipcRenderer.invoke(ipcChannels.listCredentialAccess),
+  cancelCredentialAccess: (id) => ipcRenderer.invoke(ipcChannels.cancelCredentialAccess, id),
+  onCredentialAccessUpdated: (listener) => onIpcPayload(ipcChannels.credentialAccessUpdated, listener),
   workbenchConversation: (input) => ipcRenderer.invoke(ipcChannels.workbenchConversation, input),
   onWorkbenchConversationUpdated: (listener) => onIpcPayload(ipcChannels.workbenchConversationUpdated, listener),
   platform: process.platform,
@@ -89,6 +93,7 @@ const desktopApi: DevFlowDesktopApi = {
   saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings),
   saveMcpServers: (servers) => ipcRenderer.invoke(ipcChannels.saveMcpServers, servers),
   listAgentProviders: () => ipcRenderer.invoke(ipcChannels.listAgentProviders),
+  updateProviderThinking: (input) => ipcRenderer.invoke(ipcChannels.updateProviderThinking, input),
   inspectAgentProviderRemoval: (input) => ipcRenderer.invoke(ipcChannels.inspectAgentProviderRemoval, input),
   removeAgentProviderCredential: (input) => ipcRenderer.invoke(ipcChannels.removeAgentProviderCredential, input),
   saveAgentProviderCredential: (input) =>

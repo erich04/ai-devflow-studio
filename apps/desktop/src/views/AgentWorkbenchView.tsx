@@ -1,9 +1,12 @@
 import { ProviderRemovalDialog } from './ProviderRemovalDialog'
+import { ProviderThinkingFields, SavedProviderThinkingSettings } from '../components/ProviderThinkingSettings'
 import { ArrowLeft, Bot, CheckCircle2, Code2, FolderOpen, Save, Settings2, TestTube2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import {
   formatUsd,
   type AgentProviderConfig,
+  type ProviderThinkingConfiguration,
+  type ProviderCredentialMetadata,
   type AgentReviewResult,
   type AgentTokenUsage,
   type AgentTrace,
@@ -49,6 +52,7 @@ export function AgentWorkbenchView({
   selectedProviderId,
   onProviderChange,
   onProviderRemoved,
+  onProviderUpdated,
   providerNameDraft,
   onProviderNameDraftChange,
   providerBaseUrlDraft,
@@ -108,6 +112,7 @@ export function AgentWorkbenchView({
   selectedProviderId: string
   onProviderChange: (providerId: string) => void
   onProviderRemoved: (providerId: string) => void
+  onProviderUpdated?: (metadata: ProviderCredentialMetadata) => void
   providerNameDraft: string
   onProviderNameDraftChange: (value: string) => void
   providerBaseUrlDraft: string
@@ -116,7 +121,7 @@ export function AgentWorkbenchView({
   onProviderModelDraftChange: (value: string) => void
   providerKeyDraft: string
   onProviderKeyDraftChange: (value: string) => void
-  onSaveProviderCredential: () => void
+  onSaveProviderCredential: (thinking?: ProviderThinkingConfiguration) => void
   onCompleteAgentNode: () => void
   onRunKnowledgeReview: (previousReviewId?: string) => void
   isRunning: boolean
@@ -162,6 +167,8 @@ export function AgentWorkbenchView({
   const [codingExecutor, setCodingExecutor] = useState<'native-model' | 'opencode-http'>('native-model')
   const [codingProviderId, setCodingProviderId] = useState('')
   const [providerRemovalTarget, setProviderRemovalTarget] = useState<AgentProviderConfig | null>(null)
+  const [newProviderThinking, setNewProviderThinking] = useState<ProviderThinkingConfiguration>({ mode: 'default' })
+  const selectedProvider = providers.find((provider) => provider.id === selectedProviderId)
   const [codingDiscovery, setCodingDiscovery] = useState<CodingRuntimeDiscovery | null>(null)
   const [opencodeProviderId, setOpencodeProviderId] = useState('')
   const [opencodeModelId, setOpencodeModelId] = useState('')
@@ -1167,6 +1174,7 @@ export function AgentWorkbenchView({
                   </div>
                 ))}
               </div>
+              {desktopApi && selectedProvider?.kind === 'openai-compatible' ? <SavedProviderThinkingSettings key={selectedProvider.id} provider={selectedProvider} api={desktopApi} onUpdated={onProviderUpdated} /> : null}
             </article>
 
             <article className="agent-evidence-card runtime-settings-form">
@@ -1212,7 +1220,8 @@ export function AgentWorkbenchView({
                   onChange={(event) => onProviderKeyDraftChange(event.target.value)}
                 />
               </label>
-              <button className="ghost-button" onClick={onSaveProviderCredential}>
+              <details><summary>高级配置</summary><ProviderThinkingFields model={providerModelDraft.trim()} baseUrl={providerBaseUrlDraft.trim()} value={newProviderThinking} onChange={setNewProviderThinking} /></details>
+              <button className="ghost-button" onClick={() => onSaveProviderCredential(newProviderThinking)}>
                 <Save size={16} />
                 保存并使用 Provider
               </button>

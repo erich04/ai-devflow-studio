@@ -5,7 +5,7 @@ import {
   type LocalProject,
   type ManagedCodingWorkspace,
 } from '@ai-devflow/shared'
-import { projects, runs } from '@ai-devflow/shared/fixtures'
+import { artifacts, projects, runs } from '@ai-devflow/shared/fixtures'
 import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -2809,7 +2809,7 @@ function startInput(input: {
     providerId: 'openai',
     userInstruction: 'Implement the build node.',
     now: '2026-06-17T00:00:00.000Z',
-    upstreamArtifacts: [],
+    upstreamArtifacts: artifacts.filter((artifact) => artifact.runId === input.run.id),
     knowledgeReferences: [],
     governanceChecks: [],
     gateDecisions: [],

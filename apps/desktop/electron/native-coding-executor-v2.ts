@@ -71,6 +71,7 @@ type NativeV2ModelResult = {
 }
 
 export type NativeCodingV2DecisionProvider = {
+  effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking
   id: string
   version: 2
   modelId: string
@@ -712,6 +713,7 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
     ...(provider.billingProvider ? { billingProvider: provider.billingProvider } : {}),
     ...(provider.targetHost ? { targetHost: provider.targetHost } : {}),
     ...(provider.requestTimeoutMs ? { timeoutMs: provider.requestTimeoutMs } : {}),
+    ...(provider.effectiveThinking ? { effectiveThinking: provider.effectiveThinking } : {}),
     async complete(input) {
       if (input.userPrompt.length > MAX_PROMPT_CHARS) {
         throw new Error('Native Coding v2 provider prompt exceeds the hard limit')
@@ -848,6 +850,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       attempt: 1,
       providerId: input.decisionProvider.id,
       model: input.decisionProvider.modelId,
+      ...(input.decisionProvider.effectiveThinking ? { effectiveThinking: input.decisionProvider.effectiveThinking } : {}),
       ...(targetHost
         ? { targetHost }
         : {}),

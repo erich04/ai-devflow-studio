@@ -1,4 +1,5 @@
 import { EnforcementPolicyConflictError } from '../repositories/enforcement-policy-write'
+import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import { randomUUID } from 'node:crypto'
 import {
@@ -981,10 +982,9 @@ export async function resolveTeamRoute(
         body: await repository.exchangeDesktopPairingCode(input),
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unable to exchange desktop pairing code'
-      return message.includes('expired') || message.includes('invalid') || message.includes('revoked')
-        ? unauthorized('Desktop pairing code is invalid or expired. Reconnect DevFlow Studio.')
-        : badRequest(message)
+      if (!(error instanceof DesktopPairingExchangeError)) throw error
+      return { status: 401, body: { error: 'unauthorized', reasonCode: error.code,
+        message: 'Desktop pairing code was rejected. Generate a new code.' } }
     }
   }
 

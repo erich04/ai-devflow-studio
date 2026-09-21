@@ -72,8 +72,8 @@ importers:
         specifier: ^12.8.5
         version: 12.11.0(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       electron:
-        specifier: ^41.10.5
-        version: 41.10.5
+        specifier: ^42.11.6
+        version: 42.11.6
       lucide-react:
         specifier: ^0.468.0
         version: 0.468.0(react@19.2.7)
@@ -1160,8 +1160,8 @@ packages:
   electron-to-chromium@1.5.425:
     resolution: {integrity: sha512-QvPtl41EUOnuT1HBvMKgxXRIaHNcagBPs50u7VULzhZXaGfqTbZyE16LQsctZ/RQHlGu+FOWeDTR4mY6YbeF1g==}
 
-  electron@41.10.5:
-    resolution: {integrity: sha512-grSJOhLddanWX1UfE8B4xA2kOOduUCfpYoOQ2D4zEYte8lSQtrd1HYbV4xErsZmm+V+1Q3yzCQLBsCxEIiw/QQ==}
+  electron@42.11.6:
+    resolution: {integrity: sha512-IgDsjQp+CYLnArfQbzzS2VmkRgHmSU1G9nGVOtSnFpkUYR8rkeAUSDO77qtqAPX1jgAGly1kgisUmwB9CbUHXw==}
     engines: {node: '>= 22.12.0'}
     hasBin: true
 
@@ -2986,7 +2986,7 @@ snapshots:
 
   electron-to-chromium@1.5.425: {}
 
-  electron@41.10.5:
+  electron@42.11.6:
     dependencies:
       '@electron-internal/extract-zip': 1.0.5
       '@electron/get': 5.1.0

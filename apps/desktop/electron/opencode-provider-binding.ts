@@ -17,7 +17,7 @@ export async function resolveSavedOpencodeProviderBinding(input: {
     listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
     getProviderEncryptedSecret(providerId: string): Promise<string | null>
   }
-  decryptCredential(encryptedSecret: string): string
+  decryptCredential(encryptedSecret: string): string | Promise<string>
 }): Promise<OpencodeProviderBinding | undefined> {
   const metadata = (await input.credentialSource.listProviderCredentials())
     .find((candidate) => candidate.providerId === input.providerId)
@@ -27,8 +27,12 @@ export async function resolveSavedOpencodeProviderBinding(input: {
   try {
     const encrypted = await input.credentialSource.getProviderEncryptedSecret(metadata.providerId)
     if (!encrypted) throw new Error('missing')
-    apiKey = input.decryptCredential(encrypted)
+    apiKey = await input.decryptCredential(encrypted)
     if (!apiKey.trim()) throw new Error('empty')
+    const current = (await input.credentialSource.listProviderCredentials()).find((item) => item.providerId === input.providerId)
+    if (current?.updatedAt !== metadata.updatedAt || await input.credentialSource.getProviderEncryptedSecret(metadata.providerId) !== encrypted) {
+      throw new Error('changed')
+    }
   } catch {
     throw new Error('Saved OpenCode Provider credential is unavailable')
   }

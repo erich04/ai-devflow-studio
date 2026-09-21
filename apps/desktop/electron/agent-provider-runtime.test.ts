@@ -7,6 +7,23 @@ import {
 } from './agent-provider-runtime'
 
 describe('Electron agent provider runtime', () => {
+  it('rejects a Provider credential rotated during asynchronous system authorization', async () => {
+    let encrypted = 'old-cipher'
+    let release!: (value: string) => void
+    const decryptCredential = vi.fn(() => new Promise<string>((resolve) => { release = resolve }))
+    const pending = resolveElectronAgentProvider({
+      providerId: 'saved', fakeRuntimeEnabled: false, decryptCredential,
+      credentialSource: {
+        listProviderCredentials: async () => [{ providerId: 'saved', model: 'model', maskedCredential: '***', updatedAt: '2026-09-19T00:00:00.000Z' }],
+        getProviderEncryptedSecret: async () => encrypted,
+      },
+    })
+    await vi.waitFor(() => expect(decryptCredential).toHaveBeenCalled())
+    encrypted = 'new-cipher'
+    release('old-secret')
+    await expect(pending).rejects.toThrow('Provider configuration changed')
+  })
+
   it('creates a system-owned provider identity from a user-facing name', () => {
     expect(createElectronAgentProviderCredentialMetadata({
       name: '公司火山方舟',

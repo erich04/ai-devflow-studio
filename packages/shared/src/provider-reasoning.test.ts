@@ -9,7 +9,7 @@ function streamedProvider(parts: Uint8Array[]) {
     fetcher: async () => new Response(new ReadableStream<Uint8Array>({ start(controller) { for (const part of parts) controller.enqueue(part); controller.close() } }), { headers: { 'content-type': 'text/event-stream' } }),
   })
 }
-const request = { systemPrompt: 'Return JSON.', userPrompt: 'Investigate.', maxOutputTokens: 3500, reasoning: { effort: 'low' as const, onDelta: () => undefined } }
+const request = { systemPrompt: 'Return JSON.', userPrompt: 'Investigate.', maxOutputTokens: 3500, reasoning: { onDelta: () => undefined } }
 
 describe('DeepSeek conversation reasoning', () => {
   it('decodes split UTF-8 and SSE boundaries, ignores heartbeats, and accepts terminal usage-only frames', async () => {
@@ -44,7 +44,7 @@ describe('DeepSeek conversation reasoning', () => {
     const provider = createOpenAiCompatibleAgentProvider({ model: 'deepseek-flash', apiKey: 'test-only', baseUrl: 'https://api.deepseek.com',
       fetcher: async () => new Response(new ReadableStream({ start(stream) { stream.enqueue(event({ choices: [{ delta: { reasoning_content: '已开始' }, finish_reason: null }] })) }, cancel() { cancelled = true } }), { headers: { 'content-type': 'text/event-stream' } }),
     })
-    await expect(provider.completeStructuredJson!({ ...request, signal: controller.signal, reasoning: { effort: 'low', onDelta: () => controller.abort() } })).rejects.toMatchObject({ code: 'cancelled_by_user' })
+    await expect(provider.completeStructuredJson!({ ...request, signal: controller.signal, reasoning: { onDelta: () => controller.abort() } })).rejects.toMatchObject({ code: 'cancelled_by_user' })
     expect(cancelled).toBe(true)
   })
 
@@ -52,7 +52,7 @@ describe('DeepSeek conversation reasoning', () => {
     const provider = createOpenAiCompatibleAgentProvider({ model: 'deepseek-flash', apiKey: 'test-only', baseUrl: 'https://api.deepseek.com',
       fetcher: async () => new Response(JSON.stringify({ choices: [{ message: { content: '{"text":"partial"}', reasoning_content: '还在推理' }, finish_reason: 'length' }] }), { headers: { 'content-type': 'application/json' } }),
     })
-    await expect(provider.completeStructuredJson!({ systemPrompt: 'Return JSON.', userPrompt: 'Investigate.', maxOutputTokens: 3500, reasoning: { effort: 'low', onDelta: () => undefined } })).rejects.toMatchObject({ code: 'invalid_model_output' })
+    await expect(provider.completeStructuredJson!({ systemPrompt: 'Return JSON.', userPrompt: 'Investigate.', maxOutputTokens: 3500, reasoning: { onDelta: () => undefined } })).rejects.toMatchObject({ code: 'invalid_model_output' })
   })
 
   it('delivers low-effort reasoning before the final JSON answer and keeps usage separate', async () => {
@@ -74,7 +74,7 @@ describe('DeepSeek conversation reasoning', () => {
     let settled = false
     const completion = provider.completeStructuredJson!({
       systemPrompt: 'Return JSON.', userPrompt: '现在到哪里了？', maxOutputTokens: 3500,
-      reasoning: { effort: 'low', onDelta: (delta) => { reasoning.push(delta); received() } },
+      reasoning: { onDelta: (delta) => { reasoning.push(delta); received() } },
     }).finally(() => { settled = true })
     try {
       await reasoningReceived

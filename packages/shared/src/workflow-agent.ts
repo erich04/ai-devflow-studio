@@ -1,4 +1,5 @@
 import { createLocalStageAgentUsage } from './stage-agent-usage'
+import { describeProviderThinking } from './provider-thinking'
 import {
   AgentProviderRequestError,
   estimateAgentTokenUsage,
@@ -67,6 +68,7 @@ export type StageAgentExecutorOutput = {
 }
 
 export type StageAgentExecutor = {
+  effectiveThinking?: import('./provider-thinking').EffectiveProviderThinking
   kind: StageAgentExecutorKind
   id: string
   version: string
@@ -123,6 +125,7 @@ export function createDirectProviderStageAgentExecutor(provider: AgentProvider):
     id: `direct-provider:${provider.id}`,
     version: '1',
     providerId: provider.id,
+    ...(provider.effectiveThinking ? { effectiveThinking: provider.effectiveThinking } : {}),
     model: provider.model,
     async execute(input) {
       if (!provider.generateWorkflowArtifact) {
@@ -759,7 +762,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
         id: `agent-trace-${artifact.id}-executor`,
         kind: 'provider_call',
         label: `Run ${executor.kind}`,
-        summary: `${executor.id}@${executor.version}; capability=${capability.profile}; toolCalls=${execution.toolCalls}; terminal=success.${executor.kind === 'local-agent' && output.usage ? ` OpenCode-reported usage: input=${output.usage.inputTokens}, output=${output.usage.outputTokens}, cacheRead=${output.usage.cacheReadTokens}; dollar cost is not settled by DevFlow.` : ''}`,
+        summary: `${executor.id}@${executor.version}; capability=${capability.profile}; toolCalls=${execution.toolCalls}; terminal=success.${executor.effectiveThinking ? ` ${describeProviderThinking(executor.effectiveThinking)}.` : ''}${executor.kind === 'local-agent' && output.usage ? ` OpenCode-reported usage: input=${output.usage.inputTokens}, output=${output.usage.outputTokens}, cacheRead=${output.usage.cacheReadTokens}; dollar cost is not settled by DevFlow.` : ''}`,
         timestamp: generatedAt,
       },
       {

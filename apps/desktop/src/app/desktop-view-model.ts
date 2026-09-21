@@ -516,6 +516,7 @@ export function reviewProviderFromMetadata(metadata: ProviderCredentialMetadata)
     kind: 'openai-compatible',
     ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
     model: metadata.model,
+    ...(metadata.thinking ? { thinking: metadata.thinking } : {}),
     enabled: true,
     maskedCredential: metadata.maskedCredential,
     updatedAt: metadata.updatedAt,
