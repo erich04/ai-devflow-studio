@@ -100,7 +100,12 @@ The first remote Windows run (`35567343984`) exposed an OpenCode test clock race
 at once could cross the synthetic 200 ms deadline while response-body completion was pending.
 The tests now advance in small increments only while the result is pending. Success, transport
 failure with a recovered diff, busy-session timeout and slow-permission cases remain checked.
-Production timeout limits are unchanged. Cross-platform CI must validate the final follow-up commit.
+Production timeout limits are unchanged. The final implementation commit `74c2a50` passes all five
+jobs in [CI run 35568113956](https://github.com/erich04/ai-devflow-studio/actions/runs/35568113956):
+macOS verify has 4,038 passed and 15 database-only skipped tests; Windows has 4,034 passed and
+19 database/platform-specific skipped tests. The separate Postgres job passes all 15 organization
+tests, the existing integration smoke and five GitHub delivery tests. Docker smoke and Docker
+lifecycle smoke also pass.
 
 ## Boundaries and remaining release work
 
@@ -111,8 +116,8 @@ for parallel organizations. Application SQL scoping is tested; database RLS and 
 execution are not claimed. Full source, conversation memory and knowledge content remain local;
 common built-in knowledge/templates remain application resources.
 
-This feature's evidence does not replace #133's Web-to-Electron policy acceptance or #135's
-Developer-ID-signed installation acceptance. Native UI continuation currently requires the user
-to unlock macOS; no signing identity was available for the signed-install check. Those issues
-remain explicitly open. Neither this document nor green integration tests represent a release
-signoff or permission to merge the PR stack.
+The separate [#133 Web-to-Electron policy acceptance](./team-policy-web-electron-20260921.md)
+now passes the actual warn→block→warn behavior comparison and confirms unchanged Run data.
+No signing identity was available for #135's Developer-ID-signed installation check, which remains
+open. Neither this document nor green integration tests represent a release signoff or permission
+to merge the PR stack.
