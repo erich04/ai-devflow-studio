@@ -42,8 +42,8 @@ an unreachable API endpoint, so no test workflow could sync to the user's backen
 The original six-condition filter requirement was submitted in that isolated Run, then
 the conversation was asked: “现在进行到哪里了，下一步做什么？”
 
-- Two real DeepSeek calls, thinking enabled, low effort; 7,776 reported tokens.
-- A request-boundary observer confirmed both calls contained the complete original body.
+- Three real DeepSeek calls, thinking enabled, low effort; 7,776 reported tokens.
+- A request-boundary observer confirmed every call contained the complete original body.
 - The answer correctly listed all six conditions, including resetting the filter while
   preserving task data. Its follow-up asked for the unspecified Chinese empty-state
   wording, instead of repeating the already specified options/persistence behavior.
