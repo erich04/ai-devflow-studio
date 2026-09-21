@@ -20,6 +20,12 @@ keeps strict validation, regenerates at most once, and explains any remaining fa
 - The macOS CI run exposed an existing Provider-removal test timing race: dialog
   removal was observed before its passive-effect focus restoration. The assertion
   now waits for focus restoration; all 150 App/removal-dialog tests pass locally.
+- A second CI failure came from the Native Coding trace fixture's 25 ms HTTP
+  deadline, which intermittently timed out before parsing the intended invalid body.
+  A 75 ms delayed response reproduced it locally. The fixture now allows 1,000 ms;
+  timeout cases deliberately leave their response open. All 12 trace tests pass,
+  including the delayed malformed response and the three persisted timeout paths.
+  Application timeouts are unchanged.
 - Workspace typecheck, Desktop/shared final typechecks, production build, source-free
   API/Web/Worker build smoke, and cross-platform checks passed.
 - Service tests cover the complete original request at a later-stage node, long-body

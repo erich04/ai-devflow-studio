@@ -25,6 +25,7 @@ const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
 const servers: Server[] = []
 const stores = new Set<LocalStore>()
+const providerFixtureTimeoutMs = 1_000
 
 afterEach(async () => {
   for (const store of stores) store.close()
@@ -168,7 +169,7 @@ async function createFixture(
         model: 'local-test-model',
         apiKey: 'CREDENTIAL_MUST_NOT_PERSIST',
         baseUrl: `${baseUrl}/v1`,
-        structuredRequestTimeoutMs: 25,
+        structuredRequestTimeoutMs: providerFixtureTimeoutMs,
       })
       const executor = createNativeCodingExecutorV2({
         store,
@@ -249,8 +250,12 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
 
   it('records known tokens and unknown price even when content cannot be parsed as JSON', async () => {
     const baseUrl = await startCompatibleServer((_request, response) => {
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ choices: [{ message: { content: '{"bad":' } }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } }))
+      // A modest scheduling delay must not turn a content-validation test into a timeout.
+      setTimeout(() => {
+        if (response.destroyed) return
+        response.writeHead(200, { 'content-type': 'application/json' })
+        response.end(JSON.stringify({ choices: [{ message: { content: '{"bad":' } }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } }))
+      }, 75)
     })
     const fixture = await createFixture(baseUrl)
     const { store, runtime } = await fixture.openRuntime()
@@ -420,9 +425,7 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
     const baseUrl = await startCompatibleServer((_request, response) => {
       requestNumber += 1
       if (requestNumber === 1) {
-        setTimeout(() => {
-          if (!response.destroyed) response.end('{}')
-        }, 150)
+        // Leave this response open so timeout, rather than a response-timer race, wins.
         return
       }
       sendStructuredResponse(
@@ -456,7 +459,7 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
         retryable: true,
       },
     ])
-    expect(failedTrace[1]?.durationMs).toBeGreaterThanOrEqual(20)
+    expect(failedTrace[1]?.durationMs).toBeGreaterThanOrEqual(providerFixtureTimeoutMs - 5)
     expect(Date.parse(String(failedTrace[1]?.completedAt))).toBeGreaterThan(
       Date.parse(String(failedTrace[0]?.startedAt)),
     )
@@ -503,7 +506,7 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
     expect(serialized).not.toContain('Change the message from old to new.')
     expect(serialized).not.toContain('export const message')
     // Git worktrees plus a persisted restart can exceed Vitest's 5s default on Windows.
-    // The exercised Provider timeout remains 25ms in createFixture.
+    // The fixture Provider timeout is separate from the overall test deadline.
   }, 15_000)
 
   it('persists an initial timeout without leaving an approval request', async () => {
@@ -514,9 +517,7 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
         sendStructuredResponse(response, analysisValue, requestNumber)
         return
       }
-      setTimeout(() => {
-        if (!response.destroyed) response.end('{}')
-      }, 150)
+      // Keep the initial response open until the Provider's timeout aborts it.
     })
     const fixture = await createFixture(baseUrl)
     const { store, runtime } = await fixture.openRuntime()
@@ -547,9 +548,7 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
         sendStructuredResponse(response, initialValue, requestNumber)
         return
       }
-      setTimeout(() => {
-        if (!response.destroyed) response.end('{}')
-      }, 150)
+      // Keep the repair response open until the Provider's timeout aborts it.
     })
     const fixture = await createFixture(baseUrl, async () => ({
       status: 'failed',
@@ -596,6 +595,6 @@ describe('Native Coding v2 persistent Provider call Trace', () => {
     expect((await store.listManagedCodingWorkspaces(fixture.project.id))[0])
       .toMatchObject({ cleanupStatus: 'deleted' })
     // Approval, persisted repair failure, and Git cleanup can exceed 5s on Windows.
-    // Only the test deadline changes; the Provider timeout remains 25ms.
+    // The fixture Provider timeout is separate from the overall test deadline.
   }, 15_000)
 })
