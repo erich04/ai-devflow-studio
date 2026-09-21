@@ -123,6 +123,7 @@ export default async function Page({ searchParams }: PageProps) {
       <ErrorShell
         apiBaseUrl={apiBaseUrl}
         authenticationRequired={authenticationRequired}
+        organizationUnavailable={error instanceof DevFlowApiError && error.status === 403}
         localAuthEnabled={localAuthEnabled}
       />
     )
@@ -335,6 +336,7 @@ export default async function Page({ searchParams }: PageProps) {
             </p>
           </div>
           <div className="studio-top-actions">
+            {browserSession ? <a href="/organizations">组织与成员</a> : null}
             <ThemePreferenceControl />
             <BrowserSessionControls
               apiBaseUrl={apiBaseUrl}
@@ -704,10 +706,12 @@ function ErrorShell({
   apiBaseUrl,
   authenticationRequired,
   localAuthEnabled,
+  organizationUnavailable = false,
 }: {
   apiBaseUrl: string
   authenticationRequired: boolean
   localAuthEnabled: boolean
+  organizationUnavailable?: boolean
 }) {
   return (
     <main className="studio-shell studio-shell--error">
@@ -715,11 +719,11 @@ function ErrorShell({
         <ThemePreferenceControl />
         <AlertTriangle size={28} />
         <span>DevFlow API</span>
-        <h1>{authenticationRequired ? '需要登录' : '团队数据暂时不可用'}</h1>
+        <h1>{authenticationRequired ? '需要登录' : organizationUnavailable ? '当前组织暂不可用' : '团队数据暂时不可用'}</h1>
         <p>
           {authenticationRequired
             ? '请先建立浏览器身份，再进入团队工作台。'
-            : '无法连接 DevFlow API，请确认本地服务与数据库已经启动。'}
+            : organizationUnavailable ? '当前组织可能已归档。可进入组织管理切换组织，或由管理员恢复。' : '无法连接 DevFlow API，请确认本地服务与数据库已经启动。'}
         </p>
         {authenticationRequired && localAuthEnabled ? (
           <form action={`${apiBaseUrl}/api/auth/local/start`} method="post">
@@ -730,6 +734,7 @@ function ErrorShell({
           <a href={`${apiBaseUrl}/api/auth/github/start`}>Sign in with GitHub</a>
         ) : null}
         <a href="/">重新加载工作台</a>
+        <a href="/organizations">组织与成员</a>
       </section>
     </main>
   )

@@ -241,6 +241,8 @@ corepack pnpm verify
 ```
 
 For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guides/devflow-studio-self-hosted-pilot.md).
+Independent organizations are opt-in; use the [multi-organization deployment guide](docs/guides/multi-organization-deployment.md)
+for migration, membership, Desktop pairing and GitHub repository assignments.
 
 ## Current Boundaries
 
@@ -274,6 +276,7 @@ V2.1, and V2.2 milestones, the completed finite 2.x line, and deferred platform 
 | V2.1 Evaluated Retrieval and Memory | [V2.1 PRD](docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md), [implementation plan](docs/plans/v2.1-evaluated-retrieval-memory.md), and [completion evidence](docs/releases/v2.1.0/) |
 | V2.2 Multi-Agent and Execution Tenancy | [V2.2 PRD](docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md), [architecture decision](docs/adr/0019-bounded-multi-agent-coordination.md), [implementation plan](docs/plans/v2.2-multi-agent-execution-tenancy.md), and [completion evidence](docs/releases/v2.2.0/) |
 | Self-hosted API/Web/Postgres pilot | [Self-Hosted Pilot](docs/guides/devflow-studio-self-hosted-pilot.md) |
+| Independent organizations and tenant boundaries | [Deployment guide](docs/guides/multi-organization-deployment.md), [ADR 0023](docs/adr/0023-independent-organizations.md), [validation](docs/validation/multi-organization-20260921.md) |
 | Windows source and ZIP validation | [Windows ZIP Smoke Guide](docs/guides/windows-zip-smoke.md) |
 | Test layers and quality gates | [Testing Strategy](docs/engineering/testing-strategy.md) |
 | Demo and smoke reproduction | [Demo and Smoke Guide](docs/engineering/demo-and-smoke.md) |

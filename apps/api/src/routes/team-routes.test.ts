@@ -919,12 +919,13 @@ describe('team API route resolver', () => {
       status: 200,
       body: {
         user: { id: 'u-local-owner', name: 'Local Developer', role: 'owner' },
-        authentication: { provider: 'local-development' },
+        authentication: { provider: 'local-development', providerAccountId: 'local-owner' },
         projectMemberships: [],
       },
     })
     expect(repository.getAuthenticatedIdentityByAuthAccountId).toHaveBeenCalledWith(
       'acct-local-owner',
+      'org-local',
     )
   })
 
@@ -1009,9 +1010,9 @@ describe('team API route resolver', () => {
     const claims = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'))
     expect(sessionCookie).toContain('Max-Age=28800')
     expect(sessionCookie).toContain('HttpOnly; Secure; SameSite=Lax')
-    expect(Object.keys(claims).sort()).toEqual(['authAccountId', 'expiresAt', 'v'])
-    expect(claims).toMatchObject({ v: 1, authAccountId: 'acct-github-123456' })
-    expect(claims).not.toHaveProperty('organizationId')
+    expect(Object.keys(claims).sort()).toEqual(['authAccountId', 'expiresAt', 'organizationId', 'v'])
+    expect(claims).toMatchObject({ v: 2, authAccountId: 'acct-github-123456' })
+    expect(claims).toHaveProperty('organizationId', githubIdentity.user.organizationId)
     expect(claims).not.toHaveProperty('role')
     expect(claims).not.toHaveProperty('projectMemberships')
     expect(repository.resolveOrBootstrapGitHubIdentity).toHaveBeenCalledWith({

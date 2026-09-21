@@ -93,6 +93,7 @@ export type BrowserAuthSessionResponse = {
   }
   authentication: {
     provider: AuthProvider
+    providerAccountId?: string
   }
   projectMemberships: ProjectMembership[]
 }
@@ -111,6 +112,7 @@ export type GitHubDeliveryFeedbackCode =
   | 'provider_unavailable'
   | 'authority_required'
   | 'binding_conflict'
+  | 'repository_not_assigned'
   | 'state_conflict'
   | 'not_found'
   | 'expired'
@@ -930,6 +932,7 @@ export async function fetchGitHubDeliveryRequests(
 }
 
 function githubDeliveryFeedbackCode(status: number, payload: unknown): GitHubDeliveryFeedbackCode {
+  if (status === 403 && typeof payload === 'object' && payload !== null && !Array.isArray(payload) && (payload as Record<string, unknown>).code === 'github_repository_not_assigned') return 'repository_not_assigned'
   if (
     status === 409 &&
     typeof payload === 'object' && payload !== null && !Array.isArray(payload) &&

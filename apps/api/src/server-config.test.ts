@@ -343,6 +343,7 @@ describe('server listen config', () => {
       deploymentProfile: 'development',
       devAuthEnabled: true,
       localAuthEnabled: false,
+      multiOrganizationEnabled: false,
       host: '127.0.0.1',
       port: 4310,
       requireAuth: false,
@@ -359,6 +360,7 @@ describe('server listen config', () => {
       deploymentProfile: 'pilot',
       devAuthEnabled: false,
       localAuthEnabled: false,
+      multiOrganizationEnabled: false,
       host: '0.0.0.0',
       port: 4310,
       requireAuth: true,
@@ -366,6 +368,14 @@ describe('server listen config', () => {
       sessionSecret: 'pilot-session-secret-with-32-plus-random-characters',
       webAppUrl: 'https://devflow.example/',
     })
+  })
+
+  it('enables multi-organization onboarding only with authenticated Postgres isolation', () => {
+    expect(resolveServerRuntimeConfig(validPilotEnvironment({ DEVFLOW_MULTI_ORGANIZATION_ENABLED: 'true' })).multiOrganizationEnabled).toBe(true)
+    const valid = { DEVFLOW_MULTI_ORGANIZATION_ENABLED: 'true', DEVFLOW_REQUIRE_AUTH: 'true', DEVFLOW_DATABASE_URL: 'postgres://test:test@localhost/test' }
+    for (const override of [{ DEVFLOW_DATABASE_URL: undefined }, { DEVFLOW_DATABASE_URL: 'sqlite://test' }, { DEVFLOW_REQUIRE_AUTH: 'false' }, { DEV_AUTH_ENABLED: 'true' }, { DEVFLOW_ENABLE_DEMO_DATA: 'true' }]) {
+      expect(() => resolveServerRuntimeConfig({ ...valid, ...override })).toThrow('Multi-organization mode requires Postgres')
+    }
   })
 
   it('accepts the explicit GitHub OAuth aliases used by the client factory', () => {

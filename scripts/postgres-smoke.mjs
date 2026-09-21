@@ -2145,6 +2145,7 @@ try {
       DEVFLOW_SESSION_SECRET: sessionSecret,
       DEVFLOW_POSTGRES_SMOKE_GITHUB_INSTALLATION_ID: githubInstallationId,
       DEVFLOW_POSTGRES_SMOKE_GITHUB_REPOSITORY_ID: githubRepositoryId,
+      DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS: JSON.stringify([{ organizationId: 'org-demo', installationId: githubInstallationId, repositoryId: githubRepositoryId }]),
       DEVFLOW_POSTGRES_SMOKE_GITHUB_REPOSITORY: githubRepository,
       DEVFLOW_POSTGRES_SMOKE_GITHUB_EXPECTED_HEAD_SHA:
         githubExpectedCommitSha,

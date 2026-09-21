@@ -777,6 +777,11 @@ separately approved future major-version charter.
 
 ## Evidence-Promoted Maintenance Backlog
 
+The owner promoted #128 during the September 2026 open-issue resolution work: add opt-in
+independent Organizations to one authenticated, self-hosted Postgres deployment. ADR 0023 and
+the multi-organization validation record define its scope and evidence. This is implementation
+work, not a released version or a public hosted-SaaS charter; the released baseline above is unchanged.
+
 These items receive a version only when pilot evidence, a release risk, or a security requirement
 promotes them. They no longer reserve automatic V1.6/V1.7 milestones:
 

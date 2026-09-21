@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 28
+export const TEAM_SCHEMA_VERSION = 29
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -6,6 +6,9 @@ export const requiredTeamTableNames = [
   'organizations',
   'users',
   'auth_accounts',
+  'organization_memberships',
+  'organization_invitations',
+  'organization_audit_events',
   'desktop_pairing_codes',
   'desktop_tokens',
   'projects',
@@ -116,6 +119,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('id', 'text', { primaryKey: true }),
       column('name', 'text'),
       column('slug', 'text'),
+      column('status', 'text'),
       column('created_at', 'timestamptz'),
       column('updated_at', 'timestamptz'),
     ],
@@ -146,6 +150,34 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('email', 'text', { nullable: true }),
       column('created_at', 'timestamptz'),
       column('updated_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'organization_memberships',
+    columns: [
+      column('auth_account_id', 'text', { primaryKey: true, references: 'auth_accounts.id' }),
+      column('organization_id', 'text', { primaryKey: true, references: 'organizations.id' }),
+      column('user_id', 'text', { references: 'users.id' }),
+      column('status', 'text'), column('created_at', 'timestamptz'), column('updated_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'organization_invitations',
+    columns: [
+      column('id', 'text', { primaryKey: true }),
+      column('organization_id', 'text', { references: 'organizations.id' }),
+      column('created_by_auth_account_id', 'text', { references: 'auth_accounts.id' }),
+      column('provider_account_id', 'text'), column('role', 'text'), column('project_access', 'jsonb'),
+      column('token_hash', 'text'), column('expires_at', 'timestamptz'),
+      column('consumed_at', 'timestamptz', { nullable: true }), column('revoked_at', 'timestamptz', { nullable: true }), column('created_at', 'timestamptz'),
+    ],
+  },
+  {
+    name: 'organization_audit_events',
+    columns: [
+      column('id', 'text', { primaryKey: true }), column('organization_id', 'text', { references: 'organizations.id' }),
+      column('actor_auth_account_id', 'text', { references: 'auth_accounts.id' }), column('action', 'text'),
+      column('subject_id', 'text'), column('detail', 'jsonb'), column('created_at', 'timestamptz'),
     ],
   },
   {

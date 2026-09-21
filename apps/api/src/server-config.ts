@@ -9,6 +9,7 @@ export type ServerListenConfig = {
 export type ServerRuntimeConfig = ServerListenConfig & {
   deploymentProfile: 'development' | 'pilot'
   devAuthEnabled: boolean
+  multiOrganizationEnabled: boolean
   localAuthEnabled: boolean
   requireAuth: boolean
   secureCookies: boolean
@@ -31,7 +32,9 @@ export const PILOT_API_ENV_ALLOWLIST = Object.freeze([
   'DEVFLOW_ENABLE_FAKE_RUNTIME',
   'DEVFLOW_GITHUB_APP_ID',
   'DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64',
+  'DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS',
   'DEVFLOW_LOCAL_AUTH_ENABLED',
+  'DEVFLOW_MULTI_ORGANIZATION_ENABLED',
   'DEVFLOW_REQUIRE_AUTH',
   'DEVFLOW_SESSION_SECRET',
   'DEVFLOW_WEB_APP_URL',
@@ -84,6 +87,7 @@ function resolveBoolean(
   name:
     | 'DEV_AUTH_ENABLED'
     | 'DEVFLOW_LOCAL_AUTH_ENABLED'
+    | 'DEVFLOW_MULTI_ORGANIZATION_ENABLED'
     | 'DEVFLOW_REQUIRE_AUTH'
     | 'DEVFLOW_ENABLE_DEMO_DATA'
     | 'DEVFLOW_ENABLE_FAKE_RUNTIME',
@@ -178,6 +182,7 @@ export function resolveServerRuntimeConfig(
     env['DEVFLOW_LOCAL_AUTH_ENABLED'],
     strictBooleans,
   )
+  const multiOrganizationEnabled = resolveBoolean('DEVFLOW_MULTI_ORGANIZATION_ENABLED', env['DEVFLOW_MULTI_ORGANIZATION_ENABLED'], true)
   const requireAuth = resolveBoolean(
     'DEVFLOW_REQUIRE_AUTH',
     env['DEVFLOW_REQUIRE_AUTH'],
@@ -198,6 +203,9 @@ export function resolveServerRuntimeConfig(
   const configuredWebAppUrl = env['DEVFLOW_WEB_APP_URL']?.trim()
   const webAppUrl = configuredWebAppUrl || DEVELOPMENT_WEB_APP_URL
   let secureCookies = false
+  if (multiOrganizationEnabled && (!isPostgresUrl(databaseUrl) || demoDataEnabled || devAuthEnabled || !requireAuth)) {
+    throw new Error('Multi-organization mode requires Postgres, DEVFLOW_REQUIRE_AUTH=true, no demo data and no development header authentication.')
+  }
 
   if (deploymentProfile === 'pilot' && devAuthEnabled) {
     throw new Error(
@@ -365,6 +373,7 @@ export function resolveServerRuntimeConfig(
     deploymentProfile,
     devAuthEnabled,
     localAuthEnabled,
+    multiOrganizationEnabled,
     requireAuth,
     secureCookies,
     sessionSecret,

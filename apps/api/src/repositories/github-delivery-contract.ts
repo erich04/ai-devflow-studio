@@ -744,6 +744,8 @@ export type GitHubRepositoryBindingMutationResult =
   | GitHubDeliveryRejectionResult
 
 export type GitHubDeliveryRepository = {
+  // Present on the Postgres repository. Synthetic/single-team adapters may omit it.
+  authorizeGitHubRepository?(input: { projectId: string; installationId: string; repositoryId: string }, principal: GitHubDeliveryReadPrincipal): Promise<boolean>
   getGitHubRepositoryBinding(
     projectId: string,
     principal: GitHubDeliveryReadPrincipal,

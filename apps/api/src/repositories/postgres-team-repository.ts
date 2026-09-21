@@ -1,3 +1,4 @@
+import { createOrganizationRepository } from './organization-repository'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import { assertPolicyRevision, EnforcementPolicyConflictError } from './enforcement-policy-write'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
@@ -129,6 +130,7 @@ type UserRow = {
 }
 
 type AuthenticatedIdentityRow = {
+  organization_status?: 'active' | 'archived'
   auth_account_id: string
   auth_account_user_id: string
   provider: AuthProvider
@@ -1312,6 +1314,8 @@ function mapEvidenceStatusToNodeStatus(status: TestEvidenceStatus): NodeStatus {
 
 export type PostgresTeamRepositoryOptions = {
   fakeRuntimeEnabled?: boolean
+  multiOrganizationEnabled?: boolean
+  githubRepositoryAssignments?: readonly import('../github-organization-access').GitHubRepositoryAssignment[]
 }
 
 function fakeAgentProviderConfigs(enabled: boolean | undefined): AgentProviderConfig[] {
@@ -1428,6 +1432,7 @@ export function createPostgresTeamRepository(
           auth_accounts.updated_at AS auth_account_updated_at,
           users.id AS user_id,
           users.organization_id,
+          organizations.status AS organization_status,
           users.name,
           users.role,
           users.email,
@@ -1437,9 +1442,12 @@ export function createPostgresTeamRepository(
           users.created_at AS user_created_at,
           users.updated_at AS user_updated_at
         FROM auth_accounts
-        JOIN users ON users.id = auth_accounts.user_id
+        JOIN organization_memberships ON organization_memberships.auth_account_id = auth_accounts.id AND organization_memberships.status = 'active'
+        JOIN users ON users.id = organization_memberships.user_id AND users.organization_id = organization_memberships.organization_id
+        JOIN organizations ON organizations.id = users.organization_id
         WHERE auth_accounts.provider = $1
           AND auth_accounts.provider_account_id = $2
+          AND users.id = auth_accounts.user_id
         LIMIT 1
       `,
       [input.provider, input.providerAccountId],
@@ -1462,6 +1470,7 @@ export function createPostgresTeamRepository(
 
     return {
       ...identity,
+      organizationStatus: identityRow.organization_status ?? 'active',
       projectMemberships: membershipRows.map(mapProjectMembership),
     }
   }
@@ -1469,6 +1478,7 @@ export function createPostgresTeamRepository(
   async function loadAuthenticatedIdentityByAuthAccountId(
     authAccountId: string,
     queryClient: Pick<TeamDbClient, 'query'> = db,
+    organizationId?: string,
   ): Promise<AuthenticatedIdentity | null> {
     const [identityRow] = await queryClient.query<AuthenticatedIdentityRow>(
       `
@@ -1483,6 +1493,7 @@ export function createPostgresTeamRepository(
           auth_accounts.updated_at AS auth_account_updated_at,
           users.id AS user_id,
           users.organization_id,
+          organizations.status AS organization_status,
           users.name,
           users.role,
           users.email,
@@ -1492,11 +1503,14 @@ export function createPostgresTeamRepository(
           users.created_at AS user_created_at,
           users.updated_at AS user_updated_at
         FROM auth_accounts
-        JOIN users ON users.id = auth_accounts.user_id
+        JOIN organization_memberships ON organization_memberships.auth_account_id = auth_accounts.id AND organization_memberships.status = 'active'
+        JOIN users ON users.id = organization_memberships.user_id AND users.organization_id = organization_memberships.organization_id
+        JOIN organizations ON organizations.id = users.organization_id
         WHERE auth_accounts.id = $1
+          AND (($2::text IS NULL AND users.id = auth_accounts.user_id) OR users.organization_id = $2)
         LIMIT 1
       `,
-      [authAccountId],
+      [authAccountId, organizationId ?? null],
     )
 
     if (!identityRow) {
@@ -1518,12 +1532,13 @@ export function createPostgresTeamRepository(
 
     return {
       ...identity,
+      organizationStatus: identityRow.organization_status ?? 'active',
       projectMemberships: membershipRows.map(mapProjectMembership),
     }
   }
 
-  async function loadBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null> {
-    const identity = await loadAuthenticatedIdentityByAuthAccountId(authAccountId)
+  async function loadBrowserSession(authAccountId: string, organizationId?: string): Promise<AuthenticatedSession | null> {
+    const identity = await loadAuthenticatedIdentityByAuthAccountId(authAccountId, db, organizationId)
     if (!identity) return null
 
     return {
@@ -1533,6 +1548,7 @@ export function createPostgresTeamRepository(
       role: identity.user.role,
       authAccountId: identity.authAccount.id,
       projectMemberships: identity.projectMemberships,
+      organizationStatus: identity.organizationStatus ?? 'active',
     }
   }
 
@@ -1571,10 +1587,20 @@ export function createPostgresTeamRepository(
         return { status: 'existing', identity: existing }
       }
 
+      // A disabled home membership must never turn a known account into a new
+      // owner. OAuth may choose another active membership; a v1 cookie cannot.
+      const [registered] = await tx.query<{ id: string }>('SELECT id FROM auth_accounts WHERE provider = $1 AND provider_account_id = $2', [input.provider, input.providerAccountId])
+      if (registered) {
+        const [membership] = await tx.query<{ organization_id: string }>(`SELECT organization_id FROM organization_memberships
+          WHERE auth_account_id = $1 AND status = 'active' ORDER BY created_at, organization_id LIMIT 1`, [registered.id])
+        const identity = membership ? await loadAuthenticatedIdentityByAuthAccountId(registered.id, tx, membership.organization_id) : null
+        return identity ? { status: 'existing', identity } : { status: 'blocked', reason: 'organization_exists' }
+      }
+
       const [existingOrganization] = await tx.query<OrganizationRow>(
         'SELECT id, name, slug FROM organizations ORDER BY created_at ASC LIMIT 1',
       )
-      if (existingOrganization) {
+      if (existingOrganization && !(options.multiOrganizationEnabled && input.provider === 'github')) {
         return {
           status: 'blocked',
           reason: 'organization_exists',
@@ -1642,6 +1668,8 @@ export function createPostgresTeamRepository(
         ],
       )
 
+      await tx.query('INSERT INTO organization_memberships (auth_account_id, organization_id, user_id) VALUES ($1, $2, $3)', [input.accountId, input.organizationId, input.userId])
+
       return {
         status: 'created',
         identity: {
@@ -1678,16 +1706,17 @@ export function createPostgresTeamRepository(
   ): Promise<GitHubIdentityBootstrapResult> {
     const idSegment = safeIdSegment(input.providerAccountId)
     const displayName = input.name.trim() || input.username?.trim() || 'GitHub User'
+    const uniqueOrganization = randomUUID()
     return resolveOrCreateFirstOwner({
       accountId: `acct-github-${idSegment}`,
       displayName,
       focus: 'Team pilot owner',
-      organizationId: 'org-default',
-      organizationName: 'Default Team',
-      organizationSlug: 'default',
+      organizationId: options.multiOrganizationEnabled ? `org-${uniqueOrganization}` : 'org-default',
+      organizationName: options.multiOrganizationEnabled ? `${displayName}'s Team` : 'Default Team',
+      organizationSlug: options.multiOrganizationEnabled ? `team-${uniqueOrganization}` : 'default',
       provider: 'github',
       providerAccountId: input.providerAccountId,
-      userId: `u-github-${idSegment}`,
+      userId: options.multiOrganizationEnabled ? `u-${randomUUID()}` : `u-github-${idSegment}`,
       ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
       ...(input.email ? { email: input.email } : {}),
       ...(input.username ? { username: input.username } : {}),
@@ -1808,7 +1837,10 @@ export function createPostgresTeamRepository(
         JOIN projects
           ON projects.id = desktop_tokens.project_id
          AND projects.organization_id = desktop_tokens.organization_id
-        JOIN auth_accounts ON auth_accounts.user_id = users.id
+        JOIN organization_memberships ON organization_memberships.user_id = users.id
+          AND organization_memberships.organization_id = users.organization_id AND organization_memberships.status = 'active'
+        JOIN auth_accounts ON auth_accounts.id = organization_memberships.auth_account_id
+        JOIN organizations ON organizations.id = users.organization_id AND organizations.status = 'active'
         WHERE desktop_tokens.id = $1
         LIMIT 1
       `,
@@ -1875,19 +1907,34 @@ export function createPostgresTeamRepository(
   }
 
   return {
+    organizations: createOrganizationRepository(db),
     ...workRequestRepository,
     ...gateCommandRepository,
     ...githubDeliveryRepository,
+    async authorizeGitHubRepository(input, principal) {
+      const organizationId = principal.session.organizationId
+      const projects = await db.query<{ id: string }>(`SELECT projects.id FROM projects JOIN organizations ON organizations.id = projects.organization_id
+        WHERE projects.id = $1 AND projects.organization_id = $2 AND organizations.status = 'active'`, [input.projectId, organizationId])
+      if (!projects.length) return false
+      const assignments = options.githubRepositoryAssignments ?? []
+      // Turning onboarding off cannot restore the old global App authority after
+      // independent organizations have been created (including archived ones).
+      if (!options.multiOrganizationEnabled && assignments.length === 0) {
+        const others = await db.query('SELECT id FROM organizations WHERE id <> $1 LIMIT 1', [organizationId])
+        if (!others.length) return true
+      }
+      return assignments.some(a => a.organizationId === organizationId && a.installationId === input.installationId && a.repositoryId === input.repositoryId)
+    },
     async getAuthenticatedIdentity(input) {
       return loadAuthenticatedIdentity(input)
     },
 
-    async getAuthenticatedIdentityByAuthAccountId(authAccountId) {
-      return loadAuthenticatedIdentityByAuthAccountId(authAccountId)
+    async getAuthenticatedIdentityByAuthAccountId(authAccountId, organizationId) {
+      return loadAuthenticatedIdentityByAuthAccountId(authAccountId, db, organizationId)
     },
 
-    async resolveBrowserSession(authAccountId) {
-      return loadBrowserSession(authAccountId)
+    async resolveBrowserSession(authAccountId, organizationId) {
+      return loadBrowserSession(authAccountId, organizationId)
     },
 
     async resolveOrBootstrapGitHubIdentity(input) {
@@ -1901,8 +1948,13 @@ export function createPostgresTeamRepository(
     async createProject(input, context) {
       const slug = safeIdSegment(input.slug)
       const now = new Date().toISOString()
+      // Closing onboarding must not restore globally colliding p-{slug} IDs
+      // after a deployment has already admitted multiple organizations.
+      const otherOrganizations = options.multiOrganizationEnabled ? [] : await db.query<{ id: string }>(
+        'SELECT id FROM organizations WHERE id <> $1 LIMIT 1', [context.organizationId],
+      )
       const project: Project = {
-        id: `p-${slug}`,
+        id: options.multiOrganizationEnabled || otherOrganizations.length ? `p-${randomUUID()}` : `p-${slug}`,
         name: input.name,
         slug,
         description: input.description,
@@ -4189,7 +4241,7 @@ export function createPostgresTeamRepository(
     },
 
     async saveRuntimeBudgetPolicy(policy, context) {
-      await db.query(
+      const accepted = await db.query(
         `
           INSERT INTO runtime_budget_policies (
             project_id,
@@ -4200,13 +4252,16 @@ export function createPostgresTeamRepository(
             currency,
             updated_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          SELECT $1, $2, $3, $4, $5, $6, $7
+          WHERE EXISTS (SELECT 1 FROM projects WHERE id = $1 AND organization_id = $2)
           ON CONFLICT (project_id) DO UPDATE
           SET enabled = excluded.enabled,
               monthly_limit_usd = excluded.monthly_limit_usd,
               warning_threshold_usd = excluded.warning_threshold_usd,
               currency = excluded.currency,
               updated_at = excluded.updated_at
+          WHERE runtime_budget_policies.organization_id = excluded.organization_id
+          RETURNING project_id
         `,
         [
           policy.projectId,
@@ -4219,11 +4274,12 @@ export function createPostgresTeamRepository(
         ],
       )
 
+      if (!accepted.length) throw new TeamProjectScopeError()
       return policy
     },
 
     async saveRuntimeBudgetApproval(approval, context) {
-      await db.query(
+      const accepted = await db.query(
         `
           INSERT INTO runtime_budget_approvals (
             id,
@@ -4239,12 +4295,18 @@ export function createPostgresTeamRepository(
             created_at,
             expires_at
           )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+          WHERE EXISTS (SELECT 1 FROM projects WHERE id = $3 AND organization_id = $2)
+            AND EXISTS (SELECT 1 FROM users WHERE id = $4 AND organization_id = $2)
+            AND EXISTS (SELECT 1 FROM users WHERE id = $5 AND organization_id = $2)
           ON CONFLICT (id) DO UPDATE
           SET max_additional_cost_usd = excluded.max_additional_cost_usd,
               reason = excluded.reason,
               status = excluded.status,
               expires_at = excluded.expires_at
+          WHERE runtime_budget_approvals.organization_id = excluded.organization_id
+            AND runtime_budget_approvals.project_id = excluded.project_id
+          RETURNING id
         `,
         [
           approval.id,
@@ -4262,6 +4324,7 @@ export function createPostgresTeamRepository(
         ],
       )
 
+      if (!accepted.length) throw new TeamProjectScopeError()
       return approval
     },
 

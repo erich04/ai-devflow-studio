@@ -38,6 +38,17 @@ import type { GateCommandPreflightResult } from './gate-command-preflight'
 
 type TimestampValue = string | Date
 
+// A queued decision loses authority when its requester is disabled or its team
+// is archived, even if the historical users.role value has not changed.
+const activeRequesterMembership = `EXISTS (
+  SELECT 1 FROM organization_memberships AS requester_membership
+  JOIN organizations AS requester_organization ON requester_organization.id = requester_membership.organization_id
+  WHERE requester_membership.user_id = requester_users.id
+    AND requester_membership.organization_id = gate_commands.organization_id
+    AND requester_membership.status = 'active' AND requester_organization.status = 'active'
+  FOR SHARE OF requester_membership, requester_organization
+)`
+
 type GateCommandRow = {
   review_subject?: GateCommand['reviewSubject'] | null
   id: string
@@ -519,7 +530,9 @@ export function createPostgresGateCommandRepository(
             FOR SHARE
           ) AS project_role
         FROM auth_accounts
-        JOIN users ON users.id = auth_accounts.user_id
+        JOIN organization_memberships ON organization_memberships.auth_account_id = auth_accounts.id AND organization_memberships.status = 'active'
+        JOIN users ON users.id = organization_memberships.user_id AND users.organization_id = organization_memberships.organization_id
+        JOIN organizations ON organizations.id = users.organization_id AND organizations.status = 'active'
         JOIN projects
           ON projects.id = $4
          AND projects.organization_id = users.organization_id
@@ -527,7 +540,7 @@ export function createPostgresGateCommandRepository(
           AND users.organization_id = $2
           AND users.id = $3
         LIMIT 1
-        FOR SHARE OF auth_accounts, users, projects
+        FOR SHARE OF auth_accounts, users, projects, organization_memberships, organizations
       `,
       [
         principal.session.authAccountId,
@@ -576,6 +589,8 @@ export function createPostgresGateCommandRepository(
         JOIN users
           ON users.id = desktop_tokens.user_id
          AND users.organization_id = desktop_tokens.organization_id
+        JOIN organization_memberships ON organization_memberships.user_id = users.id AND organization_memberships.organization_id = users.organization_id AND organization_memberships.status = 'active'
+        JOIN organizations ON organizations.id = users.organization_id AND organizations.status = 'active'
         JOIN projects
           ON projects.id = desktop_tokens.project_id
          AND projects.organization_id = desktop_tokens.organization_id
@@ -587,8 +602,9 @@ export function createPostgresGateCommandRepository(
           AND desktop_tokens.user_id = $3
           AND desktop_tokens.project_id = $4
           AND desktop_tokens.revoked_at IS NULL
+          AND desktop_tokens.expires_at > now()
         LIMIT 1
-        FOR SHARE OF desktop_tokens, users, projects, project_members
+        FOR SHARE OF desktop_tokens, users, projects, organization_memberships, organizations, project_members
       `,
       [
         principal.authentication.tokenRecordId,
@@ -760,6 +776,7 @@ export function createPostgresGateCommandRepository(
             FROM users AS requester_users
             WHERE requester_users.id = gate_commands.requested_by_user_id
               AND requester_users.organization_id = gate_commands.organization_id
+              AND ${activeRequesterMembership}
               AND (
                 CASE
                   WHEN requester_users.role = 'owner' THEN 3
@@ -1420,6 +1437,7 @@ export function createPostgresGateCommandRepository(
             AND gate_commands.project_id = $2
             AND gate_commands.status IN ('pending', 'delivering')
             AND gate_commands.expires_at > $4
+            AND ${activeRequesterMembership}
             AND (
               CASE
                 WHEN requester_users.role = 'owner' THEN 3
@@ -1506,6 +1524,7 @@ export function createPostgresGateCommandRepository(
             ${gateCommandColumns},
             work_requests.claimed_by_token_id,
             (
+              ${activeRequesterMembership} AND
               (
                 CASE
                   WHEN requester_users.role = 'owner' THEN 3

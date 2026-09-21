@@ -18,6 +18,7 @@ const {
   devAuthEnabled,
   host,
   localAuthEnabled,
+  multiOrganizationEnabled,
   port,
   secureCookies,
   sessionSecret,
@@ -111,7 +112,7 @@ const server = createServer(async (request, response) => {
         method: request.method ?? 'GET', pathname: url.pathname,
         headers: request.headers, body: requestBody, searchParams: url.searchParams,
       }, {
-        repository, sessionSecret, devAuthEnabled, localAuthEnabled,
+        repository, sessionSecret, devAuthEnabled, localAuthEnabled, multiOrganizationEnabled,
         postAuthRedirectUrl: webAppUrl, secureCookies,
         ...(githubOAuth ? { githubOAuth } : {}),
         ...(githubDeliveryService ? { githubDeliveryService } : {}),

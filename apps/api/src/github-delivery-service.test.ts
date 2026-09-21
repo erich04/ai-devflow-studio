@@ -406,6 +406,32 @@ function createHarness() {
 }
 
 describe('GitHub Delivery service', () => {
+  it('rejects an unassigned organization repository before calling GitHub or writing a binding', async () => {
+    const harness = createHarness()
+    Object.assign(harness.repository, { authorizeGitHubRepository: vi.fn(async () => false) })
+    await expect(harness.service.configureRepositoryBinding({ projectId: 'project-a', installationId: '12345', repositoryId: '98765', expectedStateVersion: 0 }, sessionPrincipal))
+      .rejects.toMatchObject({ code: 'github_repository_not_assigned', retryable: false })
+    expect(harness.client.verifyRepository).not.toHaveBeenCalled()
+    expect(harness.repository.upsertGitHubRepositoryBinding).not.toHaveBeenCalled()
+  })
+
+  it('rechecks operator assignment before credentials, publication verification, adoption and PR writes', async () => {
+    const harness = createHarness()
+    Object.assign(harness.repository, { authorizeGitHubRepository: vi.fn(async () => false) })
+    vi.mocked(harness.repository.getGitHubDeliveryRecoverySnapshot).mockResolvedValue({ request: request(), approval: null, grant: null, publication: null, pullRequest: null })
+    const common = { projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 3 }
+    for (const operation of [
+      () => harness.service.issueCredentialGrant(common, desktopPrincipal),
+      () => harness.service.verifyBranchPublication({ ...common, grantId: 'grant-1', expectedGrantVersion: 1, reportedOutcomeCode: 'pushed' }, desktopPrincipal),
+      () => harness.service.adoptVerifiedBranchPublication(common, desktopPrincipal),
+      () => harness.service.createDraftPullRequest({ ...common, publicationId: 'publication-1' }, desktopPrincipal),
+    ]) await expect(operation()).rejects.toMatchObject({ code: 'github_repository_not_assigned' })
+    expect(harness.client.issueContentsWriteToken).not.toHaveBeenCalled()
+    expect(harness.client.getBranchHead).not.toHaveBeenCalled()
+    expect(harness.client.findOrCreateDraftPullRequest).not.toHaveBeenCalled()
+    expect(harness.repository.reserveGitHubCredentialGrant).not.toHaveBeenCalled()
+  })
+
   it('resolves repository metadata from numeric GitHub authority before persisting a binding', async () => {
     const harness = createHarness()
 

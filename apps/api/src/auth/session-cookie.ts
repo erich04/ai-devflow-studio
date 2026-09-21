@@ -6,10 +6,9 @@ const SESSION_COOKIE_VALUE_MAX_LENGTH = 2_048
 const BASE64URL_SEGMENT = /^[A-Za-z0-9_-]+$/
 
 export type BrowserSessionCookieClaims = {
-  v: 1
   authAccountId: string
   expiresAt: number
-}
+} & ({ v: 1; organizationId?: never } | { v: 2; organizationId: string })
 
 type SessionCookieClockOptions = {
   nowMs?: number
@@ -33,19 +32,17 @@ function parseBrowserSessionCookieClaims(value: unknown): BrowserSessionCookieCl
     return null
   }
 
-  const keys = Object.keys(value).sort()
-  if (
-    keys.length !== 3 ||
-    keys[0] !== 'authAccountId' ||
-    keys[1] !== 'expiresAt' ||
-    keys[2] !== 'v'
-  ) {
+  const candidate = value as BrowserSessionCookieClaims
+  const expectedKeys = candidate.v === 2
+    ? ['authAccountId', 'expiresAt', 'organizationId', 'v']
+    : ['authAccountId', 'expiresAt', 'v']
+  if (Object.keys(value).sort().join(',') !== expectedKeys.join(',')) {
     return null
   }
 
-  const candidate = value as BrowserSessionCookieClaims
   if (
-    candidate.v !== 1 ||
+    (candidate.v !== 1 && candidate.v !== 2) ||
+    (candidate.v === 2 && (typeof candidate.organizationId !== 'string' || candidate.organizationId.length === 0 || candidate.organizationId.length > 200)) ||
     typeof candidate.authAccountId !== 'string' ||
     candidate.authAccountId.length === 0 ||
     candidate.authAccountId.length > 200 ||
@@ -59,13 +56,13 @@ function parseBrowserSessionCookieClaims(value: unknown): BrowserSessionCookieCl
 }
 
 export function createSessionCookie(
-  input: Pick<BrowserSessionCookieClaims, 'authAccountId'>,
+  input: { authAccountId: string; organizationId?: string },
   secret: string,
   options: SessionCookieClockOptions = {},
 ): string {
   const nowMs = options.nowMs ?? Date.now()
   const claims: BrowserSessionCookieClaims = {
-    v: 1,
+    ...(input.organizationId === undefined ? { v: 1 as const } : { v: 2 as const, organizationId: input.organizationId }),
     authAccountId: input.authAccountId,
     expiresAt: Math.floor(nowMs / 1_000) + SESSION_COOKIE_MAX_AGE_SECONDS,
   }

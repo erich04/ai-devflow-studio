@@ -1,3 +1,4 @@
+import type { OrganizationRepository } from './organization-repository'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import { assertPolicyRevision } from './enforcement-policy-write'
@@ -208,14 +209,16 @@ export type TeamProjectCreateInput = {
 export type TeamRepository = WorkRequestRepository &
   GateCommandRepository &
   GitHubDeliveryRepository & {
+  organizations?: OrganizationRepository
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
     providerAccountId: string
   }): Promise<AuthenticatedIdentity | null>
   getAuthenticatedIdentityByAuthAccountId(
     authAccountId: string,
+    organizationId?: string,
   ): Promise<AuthenticatedIdentity | null>
-  resolveBrowserSession(authAccountId: string): Promise<AuthenticatedSession | null>
+  resolveBrowserSession(authAccountId: string, organizationId?: string): Promise<AuthenticatedSession | null>
   resolveOrBootstrapGitHubIdentity(
     input: GitHubIdentityProfile,
   ): Promise<GitHubIdentityBootstrapResult>

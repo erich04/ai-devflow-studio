@@ -700,7 +700,7 @@ export async function resolveTeamRoute(
     }
 
     const sessionCookie = createSessionCookie(
-      { authAccountId: result.identity.authAccount.id },
+      { authAccountId: result.identity.authAccount.id, organizationId: result.identity.user.organizationId },
       options.auth.sessionSecret,
       { secure: options.auth.secureCookies === true },
     )
@@ -745,6 +745,7 @@ export async function resolveTeamRoute(
     }
     const identity = await repository.getAuthenticatedIdentityByAuthAccountId(
       session.authAccountId,
+      session.organizationId,
     )
     if (!identity) {
       return unauthorized()
@@ -760,6 +761,7 @@ export async function resolveTeamRoute(
         },
         authentication: {
           provider: identity.authAccount.provider,
+          providerAccountId: identity.authAccount.providerAccountId,
         },
         projectMemberships: identity.projectMemberships,
       },
@@ -1196,9 +1198,11 @@ export async function resolveTeamRoute(
       updatedAt: new Date().toISOString(),
     }
 
-    return {
-      status: 200,
-      body: await repository.saveRuntimeBudgetPolicy(policy, options.session),
+    try {
+      return { status: 200, body: await repository.saveRuntimeBudgetPolicy(policy, options.session) }
+    } catch (error) {
+      if (error instanceof TeamProjectScopeError) return forbidden(error.message)
+      throw error
     }
   }
 
@@ -1280,9 +1284,11 @@ export async function resolveTeamRoute(
       expiresAt: input.expiresAt,
     }
 
-    return {
-      status: 201,
-      body: await repository.saveRuntimeBudgetApproval(approval, options.session),
+    try {
+      return { status: 201, body: await repository.saveRuntimeBudgetApproval(approval, options.session) }
+    } catch (error) {
+      if (error instanceof TeamProjectScopeError) return forbidden(error.message)
+      throw error
     }
   }
 

@@ -1,5 +1,14 @@
 # Context
 
+## Organization and Membership
+
+An Organization is the tenant boundary for team projects, policy, budgets, identities and
+redacted projections. One verified Auth Account can have a separate User and live Membership
+in several Organizations. Roles and project access belong to that Membership, not to the account
+globally. A signed browser session selects one Organization; a Desktop credential remains bound
+to one Organization and Project until explicitly paired again. Archiving an Organization keeps
+its records but stops business access and revokes its Desktop credentials. See ADR 0023.
+
 ## Run
 
 A single AI-assisted delivery attempt that starts from a task request and moves through clarification,

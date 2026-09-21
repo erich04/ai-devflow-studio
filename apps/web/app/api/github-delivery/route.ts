@@ -166,6 +166,7 @@ function projectDelivery(
 }
 
 function feedbackMessage(code: GitHubDeliveryFeedbackCode): string {
+  if (code === 'repository_not_assigned') return '请联系部署管理员，将此 GitHub 仓库分配给当前组织后再配置。'
   if (code === 'provider_unavailable') {
     return 'GitHub provider is unavailable. No operation was applied.'
   }
