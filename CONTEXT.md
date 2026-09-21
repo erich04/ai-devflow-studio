@@ -36,6 +36,11 @@ separate, local-only conversation records; it is not an answer, shared evidence,
 Memory. It is excluded from subsequent conversation prompts and other conversations. Final answers
 and navigation actions still come from the validated structured `content` response.
 
+Conversation context includes the scoped original requirement body (not its summary), with source,
+version and explicit continuation ranges. Other artifacts remain indexed and are read on demand.
+Invalid structured model output may regenerate once per turn within the existing call/time bounds;
+both calls retain their reported usage. Recovery never publishes a proposal or advances Workflow.
+
 ## Conversation Proposal
 
 A private conversational draft that becomes a shared, pending `log` Artifact only after the user

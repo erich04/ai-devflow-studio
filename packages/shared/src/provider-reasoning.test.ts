@@ -12,6 +12,15 @@ function streamedProvider(parts: Uint8Array[]) {
 const request = { systemPrompt: 'Return JSON.', userPrompt: 'Investigate.', maxOutputTokens: 3500, reasoning: { onDelta: () => undefined } }
 
 describe('DeepSeek conversation reasoning', () => {
+  it('retains terminal usage and the specific reason when SSE finishes at the output limit', async () => {
+    const provider = streamedProvider([
+      event({ choices: [{ delta: { content: '{"text":"partial"}' }, finish_reason: 'length' }] }),
+      event({ choices: [{ delta: {}, finish_reason: 'stop' }] }),
+      event({ choices: [], usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 } }),
+      encoder.encode('data: [DONE]\n\n'),
+    ])
+    await expect(provider.completeStructuredJson!(request)).rejects.toMatchObject({ code: 'invalid_model_output', sanitizedCause: 'output_length', usage: { totalTokens: 50 } })
+  })
   it('decodes split UTF-8 and SSE boundaries, ignores heartbeats, and accepts terminal usage-only frames', async () => {
     const wire = Buffer.concat([
       encoder.encode(': keep-alive\r\n\r\n'),

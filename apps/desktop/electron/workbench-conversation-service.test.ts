@@ -47,6 +47,166 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
 }
 
 describe('unified conversation execution and boundaries', () => {
+  it('includes the complete original requirement before a first clarification question (#153)', async () => {
+    const requirement = created.run.request
+    const { service, calls } = harness(async () => ({ value: { text: '可以按已有要求生成澄清。' } }))
+    const result = await send(service, await create(service))
+    expect(calls[0]).toContain(requirement)
+    expect(result.status).toBe('idle')
+  })
+
+  it('recovers once from invalid model output without losing input, billed usage or workflow state (#154)', async () => {
+    let attempts = 0
+    const { service } = harness(async () => {
+      if (++attempts === 1) throw new AgentProviderRequestError({ code: 'invalid_model_output', httpStatus: 200,
+        deliveryState: 'response_received', billingState: 'confirmed', retryable: true, sanitizedCause: 'invalid_json',
+        usage: { inputTokens: 31, outputTokens: 9, totalTokens: 40 } })
+      return { value: { text: '更新后的讨论提案已准备好。' }, usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }
+    })
+    const before = await store.listRuns()
+    const result = await send(service, await create(service), '请结合完整原始需求更新讨论提案。')
+    expect(result.status).toBe('idle')
+    expect(attempts).toBe(2)
+    expect(result.messages.filter((m) => m.role === 'user')).toHaveLength(1)
+    expect(result.messages.at(-1)?.text).toBe('更新后的讨论提案已准备好。')
+    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(55)
+    expect(await store.listRuns()).toEqual(before)
+  })
+
+  it('provides the full six-condition request at any node and supports long-body continuation (#153)', async () => {
+    const body = '全部/未完成/已完成；默认全部并高亮；切换不改任务；勾选立即更新；无结果中文提示；刷新筛选恢复全部，任务数据保留；保留新增、删除、清除已完成、保存。'
+    const flow = createWorkflowRunFromRequest({ runId: 'filter-run', title: '筛选', request: body, projectId, creatorId: 'u-test', branchName: 'ai/filter', now: created.run.createdAt })
+    await store.saveRun(flow.run)
+    for (const artifact of flow.artifacts) await store.saveArtifact(artifact)
+    const long = { ...flow.artifacts[0]!, id: 'long-artifact', kind: 'log' as const, content: '长正文'.repeat(8000) + '最后的验收条件' }
+    await store.saveArtifact(long)
+    let step = 0
+    const { service, calls } = harness(async (input) => {
+      const context = JSON.parse(input.userPrompt)
+      if (step++ === 0) return { value: { tool: { name: 'node', args: { runId: flow.run.id, nodeId: `${flow.run.id}-design` } } } }
+      if (step === 2) {
+        expect(context.originalRequirements).toEqual([expect.objectContaining({ runId: flow.run.id, content: body, truncated: false, source: 'raw_request' })])
+        expect(context.toolObservations.at(-1).result.rawRequest.content).toBe(body)
+        return { value: { tool: { name: 'artifact', args: { runId: flow.run.id, artifactId: long.id, offset: 23000, limit: 18000 } } } }
+      }
+      const page = context.toolObservations.at(-1).result
+      expect(page.content).toContain('最后的验收条件')
+      expect(page).toMatchObject({ offset: 23000, endOffset: long.content.length, nextOffset: null, truncated: true })
+      return { value: { text: '未明确的具体空状态文案仍可确认。', question: { prompt: '中文提示用什么文案？', options: [] } } }
+    })
+    const result = await send(service, await create(service))
+    expect(result.status).toBe('awaiting_answer')
+    expect(calls[1]).not.toContain(created.run.request)
+    expect((await store.listArtifacts(flow.run.id))).toHaveLength(2)
+  })
+
+  it('loads a targeted requirement before accepting a draft even when the model skipped tools (#153)', async () => {
+    const flow = createWorkflowRunFromRequest({ runId: 'other-run', title: '另一任务', request: 'OTHER_RUN_REQUIREMENTS', projectId, creatorId: 'u-test', branchName: 'ai/other', now: created.run.createdAt })
+    await store.saveRun(flow.run)
+    for (const artifact of flow.artifacts) await store.saveArtifact(artifact)
+    let step = 0
+    const { service } = harness(async (input) => {
+      if (step++ > 0) expect(JSON.parse(input.userPrompt).originalRequirements).toEqual([expect.objectContaining({ runId: flow.run.id, content: flow.run.request })])
+      return { value: { text: '草稿待保存。', draft: { runId: flow.run.id, nodeId: flow.run.currentNodeId, title: '草稿', content: '待确认内容' } } }
+    })
+    const result = await send(service, await create(service), '帮另一任务整理草稿')
+    expect(step).toBe(2)
+    expect(result.messages.filter((m) => m.draft)).toHaveLength(1)
+    expect((await store.listArtifacts(flow.run.id))).toHaveLength(1)
+  })
+
+  it('marks long original requirements as partial and returns the final page through the scoped requirement tool (#153)', async () => {
+    const body = '原始需求正文'.repeat(2000) + '最后一条验收条件'
+    const flow = createWorkflowRunFromRequest({ runId: 'long-request-run', title: '长需求', request: body, projectId, creatorId: 'u-test', branchName: 'ai/long', now: created.run.createdAt })
+    await store.saveRun(flow.run)
+    for (const artifact of flow.artifacts) await store.saveArtifact(artifact)
+    let step = 0
+    const { service } = harness(async (input) => {
+      const context = JSON.parse(input.userPrompt)
+      if (step++ === 0) return { value: { tool: { name: 'node', args: { runId: flow.run.id, nodeId: flow.run.currentNodeId } } } }
+      if (step === 2) {
+        const first = context.originalRequirements[0]
+        expect(first).toMatchObject({ runId: flow.run.id, truncated: true, offset: 0, nextOffset: 6000, totalCharacters: body.length })
+        expect(context.toolObservations.at(-1).result.artifacts[0]).toMatchObject({ bodyIncluded: false })
+        return { value: { tool: { name: 'requirement', args: { runId: flow.run.id, offset: first.nextOffset, limit: 18000 } } } }
+      }
+      const last = context.toolObservations.at(-1).result
+      expect(last).toMatchObject({ runId: flow.run.id, offset: 6000, endOffset: body.length, nextOffset: null })
+      expect(last.content).toContain('最后一条验收条件')
+      return { value: { text: '已读到原始需求的最后一条。' } }
+    })
+    expect((await send(service, await create(service))).status).toBe('idle')
+  })
+
+  it('asks which Run to discuss instead of inventing missing business requirements without a scoped source (#153)', async () => {
+    const flow = createWorkflowRunFromRequest({ runId: 'unrelated', title: '另一任务', request: '另一需求', projectId, creatorId: 'u-test', branchName: 'ai/other', now: created.run.createdAt })
+    await store.saveRun(flow.run)
+    const { service } = harness(async () => ({ value: { text: '没有提供需求', question: { prompt: '有哪些筛选项？', options: [] } } }))
+    const result = await send(service, await create(service))
+    expect(result.messages.at(-1)?.question?.prompt).toContain('哪个 Run')
+    expect(result.messages.at(-1)?.text).not.toContain('没有提供需求')
+  })
+
+  it('keeps original requirements and the current question when older context is trimmed (#153)', async () => {
+    let step = 0
+    const { service } = harness(async (input) => {
+      const context = JSON.parse(input.userPrompt)
+      expect(context.originalRequirements[0].content).toBe(created.run.request)
+      expect(context.history.at(-1).text).toContain('当前问题')
+      expect(input.userPrompt.length).toBeLessThanOrEqual(32000)
+      if (step++ === 0) return { value: { tool: { name: 'repo_read', args: { path: 'long.md' } } } }
+      return { value: { text: '依据原始需求继续。' } }
+    })
+    await writeFile(path.join(project.path, 'long.md'), '工具返回内容'.repeat(3000))
+    const id = await create(service)
+    const original = (await store.listWorkbenchConversations(projectId))[0]!
+    await store.saveWorkbenchConversation({ ...original, version: original.version + 1, messages: Array.from({ length: 8 }, (_, i) => ({ id: `history-${i}`, role: 'assistant', createdAt: created.run.createdAt, text: '旧内容'.repeat(1800) })) }, original.version)
+    const result = await send(service, id, '当前问题：根据原始需求回答')
+    expect(result.status).toBe('idle')
+    expect(result.contextReceipt!.omittedMessages).toBeGreaterThan(0)
+  })
+
+  it('falls back to Run.request when artifact reading fails and suppresses unfounded clarification if neither is available (#153)', async () => {
+    const read = vi.spyOn(store, 'listArtifacts').mockRejectedValue(new Error('unavailable'))
+    const { service, calls } = harness(async () => ({ value: { text: '没有需求，请重新填写', question: { prompt: '要做什么？', options: [] } } }))
+    const id = await create(service)
+    const first = await send(service, id)
+    expect(JSON.parse(calls[0]!).originalRequirements[0]).toMatchObject({ source: 'run_request', content: created.run.request })
+    expect(first.status).toBe('awaiting_answer')
+    vi.spyOn(store, 'listRuns').mockResolvedValue([{ ...created.run, request: '' }])
+    const failedRead = await send(service, id)
+    expect(failedRead.messages.at(-1)?.text).toContain('原始需求正文暂时无法读取')
+    expect(failedRead.messages.at(-1)?.question).toBeUndefined()
+    read.mockRestore()
+  })
+
+  it.each(['{broken JSON PRIVATE_RESPONSE', '', '[]'])('bounds real parser recovery and persists actionable diagnostics across restart: %s (#154)', async (raw) => {
+    let requests = 0
+    const provider = createOpenAiCompatibleAgentProvider({ id: 'fixture', model: 'fixture', apiKey: 'test-only', baseUrl: 'https://example.test/v1',
+      fetcher: async () => { requests++; return Response.json({ choices: [{ message: { content: raw }, finish_reason: 'stop' }], usage: { prompt_tokens: 31, completion_tokens: 9, total_tokens: 40 } }) } })
+    const service = new WorkbenchConversationService({ store, resolveProvider: async () => provider, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    const id = await create(service)
+    const result = await send(service, id)
+    expect(requests).toBe(2)
+    expect(result.status).toBe('failed')
+    expect(result.failure).toMatchObject({ code: 'invalid_model_output', httpStatus: 200, reason: raw === '' ? 'empty_content' : raw === '[]' ? 'not_json_object' : 'invalid_json' })
+    expect(result.error).not.toMatch(/配置|网络/)
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_RESPONSE')
+    expect(result.messages.filter((m) => m.role === 'user')).toHaveLength(1)
+    expect(result.messages.filter((m) => m.role === 'assistant')).toHaveLength(0)
+    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(80)
+    const reopened = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    expect((await reopened.listWorkbenchConversations(projectId))[0]).toEqual(result)
+  })
+
+  it('does not retry network, credentials, filtered responses or cancellation as format recovery (#154)', async () => {
+    for (const [code, retryable, reason] of [['http_4xx', false, 'unauthorized'], ['connection_reset', true, 'reset'], ['invalid_model_output', false, 'content_filter'], ['cancelled_by_user', false, 'cancelled']] as const) {
+      const { service, provider } = harness(async () => { throw new AgentProviderRequestError({ code, retryable, sanitizedCause: reason, deliveryState: 'response_received', billingState: 'unknown' }) })
+      await send(service, await create(service))
+      expect(provider.completeStructuredJson).toHaveBeenCalledTimes(1)
+    }
+  })
+
   it('retains billed OpenCode usage on a failed response without inventing an answer or falling back', async () => {
     const direct = vi.fn(async () => { throw new Error('must not fall back') })
     const close = vi.fn(async () => {})

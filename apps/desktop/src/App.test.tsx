@@ -5465,7 +5465,8 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认删除 Provider' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     expect(screen.getByLabelText('Saved Agent Provider')).toHaveValue('')
-    expect(screen.getByLabelText('Saved Agent Provider')).toHaveFocus()
+    // Removing the dialog precedes its passive-effect cleanup, which restores focus.
+    await waitFor(() => expect(screen.getByLabelText('Saved Agent Provider')).toHaveFocus())
     expect(within(screen.getByLabelText('Saved Agent Provider')).getByRole('option', { name: /Other provider/ })).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: new RegExp(agentProvider.name) })).not.toBeInTheDocument()
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()

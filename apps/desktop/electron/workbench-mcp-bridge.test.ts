@@ -18,16 +18,19 @@ it('exposes only scoped read tools over authenticated loopback HTTP and rejects 
   const initialized = await (await rpc('initialize', { protocolVersion: '2025-06-18' })).json()
   expect(initialized.result.capabilities).toEqual({ tools: {} })
   const tools = (await (await rpc('tools/list')).json()).result.tools
-  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'repo_list', 'repo_read', 'repo_search', 'knowledge'])
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'requirement', 'repo_list', 'repo_read', 'repo_search', 'knowledge'])
   expect(tools.every((tool: { annotations: { readOnlyHint: boolean } }) => tool.annotations.readOnlyHint)).toBe(true)
   expect((await (await rpc('tools/call', { name: 'node', arguments: { runId: 'run-A', nodeId: 'node-A' } })).json()).result.content[0].text).toContain('project-A')
   expect(query).toHaveBeenCalledWith('node', { runId: 'run-A', nodeId: 'node-A' })
   expect((await (await rpc('tools/call', { name: 'node', arguments: { projectId: 'project-B', runId: 'run-A', nodeId: 'node-A' } })).json()).error.code).toBe(-32602)
   expect((await (await rpc('tools/call', { name: 'approve_gate', arguments: {} })).json()).error.code).toBe(-32602)
   expect(query).toHaveBeenCalledTimes(1)
+  expect((await (await rpc('tools/call', { name: 'requirement', arguments: { runId: 'run-A', offset: 6000, limit: 18000 } })).json()).result.content[0].text).toContain('project-A')
+  expect(query).toHaveBeenLastCalledWith('requirement', { runId: 'run-A', offset: 6000, limit: 18000 })
+  expect((await (await rpc('tools/call', { name: 'artifact', arguments: { runId: 'run-A', artifactId: 'raw-A', limit: 18001 } })).json()).error.code).toBe(-32602)
   controller.abort()
   expect((await (await rpc('tools/call', { name: 'workflow', arguments: {} })).json()).result.isError).toBe(true)
-  expect(query).toHaveBeenCalledTimes(1)
+  expect(query).toHaveBeenCalledTimes(2)
 })
 
 it('keeps concurrent bridges independent, bounds queries and never returns raw internal errors', async () => {

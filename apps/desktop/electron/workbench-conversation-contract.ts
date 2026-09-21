@@ -17,6 +17,7 @@ export type ConversationDraft = ConversationTarget & {
   content: string
   publishedArtifactId?: string
 }
+export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string }
 export type ConversationMessage = {
   id: string
   role: 'user' | 'assistant' | 'tool' | 'notice'
@@ -29,6 +30,8 @@ export type ConversationMessage = {
   question?: { prompt: string; options: string[]; purpose?: 'clarification' | 'save_proposal'; answeredAt?: string; resolvedBy?: 'proposal_saved' }
   draft?: ConversationDraft
   usage?: AgentProviderUsage
+  /** Bounded, non-content diagnostic for this call, including a recovered failure. */
+  failure?: ConversationFailure
   provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
   /** Provider-returned reasoning, local to this conversation; never shared workflow context. */
   reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort?: 'low' | 'high' | 'max' }
@@ -49,7 +52,7 @@ export type WorkbenchConversation = {
   createdAt: string
   updatedAt: string
   error?: string
-  failure?: { phase: string; code: string; httpStatus?: number }
+  failure?: ConversationFailure
   contextReceipt?: { includedMessages: number; omittedMessages: number; limited?: boolean; observedAt: string }
 }
 export type ConversationCommand = { projectId: string } & (
@@ -65,7 +68,7 @@ export type ConversationResponse = {
   conversations: WorkbenchConversation[]
   conversationId?: string
   error?: string
-  failure?: { phase: string; code: string; httpStatus?: number }
+  failure?: ConversationFailure
 }
 export type WorkbenchConversationApi = (command: ConversationCommand) => Promise<ConversationResponse>
 

@@ -61,6 +61,26 @@ Only real execution events, returned reasoning and reported usage are shown.
 Unknown reasoning effort/usage remains unknown. Final rich replies use the same
 validated message/action/draft contract as Direct Provider.
 
+### Original requirements and malformed responses (2026-09-21)
+
+The original requirement is baseline context when the project has one Run; explicit
+node/artifact/requirement queries and draft targets resolve it for other Runs.
+The current conversation's last explicit target can seed a later turn, without
+binding the conversation to the selected UI card. At most two scoped requirement
+bodies are retained with source, Run version, read range and continuation metadata.
+Other artifacts remain indexes with an explicit `bodyIncluded: false` marker.
+Artifact and requirement reads support bounded UTF-16 offsets through both adapters.
+If artifact access fails, the Run's stored request is a labeled fallback; if neither
+is available, the service declines to invent missing business requirements.
+
+Direct Provider malformed output can regenerate once per user turn, consuming the
+existing 12-call/180-second limits. It reuses verified context and never feeds invalid
+raw output back as a tool command. Network/authentication/filter/cancellation errors
+do not trigger this recovery. Both attempts preserve reported usage. Failure records
+retain only allowlisted reason codes, never raw failed responses. Incomplete SSE
+responses that provide a terminal usage frame retain that usage before failing.
+This does not relax structured output validation or silently retry the OpenCode harness.
+
 Chat has no formal stage, Gate or delivery write tool. Explicitly saving a
 proposal retains its existing pending-artifact behavior. Navigation buttons
 open actual nodes; replacing the harness does not grant approval authority.
