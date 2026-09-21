@@ -5,7 +5,8 @@ import { redactSensitiveText } from '@ai-devflow/shared'
 const fields: Record<string, { required: string[]; optional: string[]; description: string }> = {
   workflow: { required: [], optional: ['runId', 'query', 'offset'], description: '查询当前项目的真实流程与节点；支持分页。' },
   node: { required: ['runId', 'nodeId'], optional: [], description: '查询节点的执行状态、产物、测试、交付回执与 Gate 条件。' },
-  artifact: { required: ['runId', 'artifactId'], optional: [], description: '读取当前项目某个 Run 的正式产物。' },
+  artifact: { required: ['runId', 'artifactId'], optional: ['offset', 'limit'], description: '分页读取当前项目某个 Run 的产物正文；摘要不代表全文。' },
+  requirement: { required: ['runId'], optional: ['offset', 'limit'], description: '分页读取指定 Run 的原始需求，未读内容不等于不存在。' },
   repo_list: { required: [], optional: ['path'], description: '列出当前项目允许读取的目录；只接受仓库相对路径。' },
   repo_read: { required: ['path'], optional: [], description: '读取当前项目的普通文本文件，拒绝敏感文件与符号链接。' },
   repo_search: { required: ['query'], optional: ['path'], description: '在当前项目允许范围内搜索文本；搜索有明确边界。' },
@@ -65,7 +66,7 @@ export async function createWorkbenchMcpBridge(input: {
         result({ tools: Object.entries(fields).map(([name, definition]) => ({ name, description: definition.description,
           inputSchema: { type: 'object', additionalProperties: false, required: definition.required,
             properties: Object.fromEntries([...definition.required, ...definition.optional].map((key) => [key,
-              key === 'offset' ? { type: 'integer', minimum: 0 } : { type: 'string', maxLength: 500 }])) },
+              key === 'offset' ? { type: 'integer', minimum: 0 } : key === 'limit' ? { type: 'integer', minimum: 1, maximum: 18000 } : { type: 'string', maxLength: 500 }])) },
           annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
         })) }); return
       }
@@ -78,6 +79,7 @@ export async function createWorkbenchMcpBridge(input: {
         || definition.required.some((key) => typeof args[key] !== 'string' || !(args[key] as string).trim())
         || Object.entries(args).some(([key, value]) => key === 'offset'
           ? !Number.isSafeInteger(value) || Number(value) < 0
+          : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 18000
           : typeof value !== 'string' || value.length > 500 || value.includes('\0'))) {
         error(-32602, 'Invalid tool arguments'); return
       }

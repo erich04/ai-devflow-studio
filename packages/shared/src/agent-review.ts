@@ -237,6 +237,12 @@ export type AgentProvider = {
   }>
 }
 
+class StructuredProviderOutputError extends Error {
+  constructor(readonly reason: 'empty_content' | 'invalid_json' | 'not_json_object') {
+    super('Agent provider structured output is invalid')
+  }
+}
+
 function parseStructuredProviderOutput(raw: string): Record<string, unknown> {
   const trimmed = raw.trim()
   const fenced = /^```json[ \t]*\r?\n([\s\S]*?)\r?\n```$/iu.exec(trimmed)
@@ -244,16 +250,16 @@ function parseStructuredProviderOutput(raw: string): Record<string, unknown> {
   // Markdown inside a JSON string is ordinary content. JSON.parse still rejects
   // prose, trailing fences, and additional values outside the single object.
   if (!jsonText) {
-    throw new Error('Agent provider structured output is invalid')
+    throw new StructuredProviderOutputError('empty_content')
   }
   let value: unknown
   try {
     value = JSON.parse(jsonText) as unknown
   } catch {
-    throw new Error('Agent provider structured output is invalid')
+    throw new StructuredProviderOutputError('invalid_json')
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error('Agent provider structured output is invalid')
+    throw new StructuredProviderOutputError('not_json_object')
   }
   return value as Record<string, unknown>
 }
@@ -656,6 +662,7 @@ async function readReasoningResponse(
   let contentBytes = 0
   let reasoningBytes = 0
   let finished = false
+  let finishReason: unknown
   let done = false
   let usage: unknown
   let id: unknown
@@ -693,7 +700,8 @@ async function readReasoningResponse(
       }
     }
     if (choice.finish_reason != null) {
-      if (choice.finish_reason !== 'stop') throw providerResponseError('invalid_model_output', true, { httpStatus: response.status })
+      // A later frame cannot turn an incomplete response into a successful one.
+      if (!finished) finishReason = choice.finish_reason
       finished = true
     }
   }
@@ -716,7 +724,7 @@ async function readReasoningResponse(
     }
     if (!done && buffer.trim()) await consume(buffer)
     if (!done || !finished) throw new BoundedProviderResponseError('body_read_failed')
-    return JSON.stringify({ id, system_fingerprint: fingerprint, usage, choices: [{ message: { content, reasoning_content: reasoning } }] })
+    return JSON.stringify({ id, system_fingerprint: fingerprint, usage, choices: [{ message: { content, reasoning_content: reasoning }, finish_reason: finishReason }] })
   } catch (error) {
     if (error instanceof BoundedProviderResponseError || error instanceof AgentProviderRequestError || signal.aborted) throw error
     throw new BoundedProviderResponseError('body_read_failed')
@@ -2112,11 +2120,12 @@ export function createOpenAiCompatibleAgentProvider({
         const reasoningContent: unknown = thinking && Array.isArray(choices)
           ? choices[0]?.message?.reasoning_content
           : undefined
-        if (reasoningContent != null && typeof reasoningContent !== 'string') throw providerResponseError('invalid_model_output', true, responseMetadata)
+        if (reasoningContent != null && typeof reasoningContent !== 'string') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_reasoning')
         // Some compatible gateways return one JSON response even when streaming was requested.
         if (typeof reasoningContent === 'string' && !response.headers.get('content-type')?.includes('text/event-stream')) await input.reasoning?.onDelta?.(reasoningContent)
-        if (thinking && Array.isArray(choices) && choices[0]?.finish_reason != null && choices[0].finish_reason !== 'stop') {
-          throw providerResponseError('invalid_model_output', true, responseMetadata)
+        if (Array.isArray(choices) && choices[0]?.finish_reason != null && choices[0].finish_reason !== 'stop') {
+          const reason = choices[0].finish_reason === 'length' ? 'output_length' : choices[0].finish_reason === 'content_filter' ? 'content_filter' : 'incomplete_response'
+          throw providerResponseError('invalid_model_output', reason !== 'content_filter', responseMetadata, undefined, reason)
         }
         const raw =
           Array.isArray(choices) &&
@@ -2129,7 +2138,7 @@ export function createOpenAiCompatibleAgentProvider({
             ? ((choices[0] as { message: { content?: unknown } }).message.content)
             : undefined
         if (typeof raw !== 'string') {
-          throw providerResponseError('invalid_model_output', true, responseMetadata)
+          throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'missing_content')
         }
         if (new TextEncoder().encode(raw).byteLength > 32 * 1_024) {
           throw providerResponseError('response_too_large', false, responseMetadata)
@@ -2138,7 +2147,7 @@ export function createOpenAiCompatibleAgentProvider({
         try {
           value = parseStructuredProviderOutput(raw)
         } catch (error) {
-          throw providerResponseError('invalid_model_output', true, responseMetadata, error)
+          throw providerResponseError('invalid_model_output', true, responseMetadata, error, error instanceof StructuredProviderOutputError ? error.reason : 'invalid_model_output')
         }
         const usage = observedUsage
         return {
@@ -2305,6 +2314,7 @@ function providerResponseError(
   retryable: boolean,
   responseMetadata: AgentProviderResponseMetadata,
   cause?: unknown,
+  reason?: string,
 ): AgentProviderRequestError {
   return new AgentProviderRequestError({
     code,
@@ -2313,7 +2323,7 @@ function providerResponseError(
     retryable,
     httpStatus: responseMetadata.httpStatus,
     responseMetadata,
-    sanitizedCause: code,
+    sanitizedCause: reason ?? code,
     ...(cause !== undefined ? { cause } : {}),
   })
 }

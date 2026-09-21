@@ -195,7 +195,7 @@ function ConversationView({ session, runs, projectName, providerId, providerName
     textarea.current?.focus()
   }
   const unreportedCalls = session.messages.filter((message) => message.role === 'notice' && message.provider && !message.usage && message.reasoning?.status !== 'streaming').length
-  const visibleMessages = session.messages.filter((message) => message.role !== 'notice' || message.reasoning || !message.provider)
+  const visibleMessages = session.messages.filter((message) => message.role !== 'notice' || message.reasoning || message.failure || !message.provider)
   const usages = session.messages.flatMap((message) => message.usage ? [message.usage] : [])
   const tokenCount = usages.reduce((sum, usage) => sum + (usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)), 0)
   return <>
@@ -223,7 +223,7 @@ function ConversationView({ session, runs, projectName, providerId, providerName
       {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} onPublish={() => void command({ type: 'publish', ...scope, messageId: message.id })} />)}
       {busy && <p className="conversation-activity" role="status"><span className="conversation-running-dot" />正在调用 {providerName || 'Provider'} 调查；可以停止。</p>}
       {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />重试调查</button>}</div>}
-      {session.failure && <details className="conversation-tool"><summary>本次失败诊断</summary><p>阶段：{session.failure.phase} · 代码：{session.failure.code}{session.failure.httpStatus ? ` · HTTP ${session.failure.httpStatus}` : ''}</p></details>}
+      {session.failure && <details className="conversation-tool"><summary>本次失败诊断</summary><p>阶段：{session.failure.phase} · 代码：{session.failure.code}{session.failure.reason ? ` · 原因：${session.failure.reason}` : ''}{session.failure.httpStatus ? ` · HTTP ${session.failure.httpStatus}` : ''}</p></details>}
       <div ref={messagesEnd} />
     </div>
     <form className="conversation-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
@@ -265,7 +265,7 @@ function ReasoningView({ message }: { message: ConversationMessage }) {
 function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish }: {
   message: ConversationMessage; busy: boolean; targetLabel: string; onAnswer: (answer: string) => void; onNavigate: (action: ConversationAction) => void; onPublish: () => void
 }) {
-  if (message.reasoning) return <ReasoningView message={message} />
+  if (message.reasoning) return <>{message.failure && <p className="meta">{message.text}</p>}<ReasoningView message={message} /></>
   if (message.role === 'tool') return <details className="conversation-tool"><summary>{message.text}</summary>{message.citations?.map((source) => <pre key={source.id}>{source.excerpt}</pre>)}</details>
   return <article className={`conversation-message conversation-message--${message.role}`}>
     <span className="message-author">{message.role === 'user' ? '你' : 'DevFlow'}</span>

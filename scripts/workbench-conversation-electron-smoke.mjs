@@ -23,6 +23,7 @@ const before = (await git(['status', '--porcelain'])).stdout
 const requests = []
 let run
 let failureSeen = false
+let malformedAttempts = 0
 let releaseReasoning
 const server = createServer(async (request, response) => {
   const chunks = []; for await (const chunk of request) chunks.push(chunk)
@@ -30,15 +31,23 @@ const server = createServer(async (request, response) => {
   requests.push(body)
   expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low', stream: true, max_tokens: 3500 })
   const input = JSON.parse(body.messages.find((message) => message.role === 'user').content)
+  expect(input.originalRequirements).toContainEqual(expect.objectContaining({ runId: run.id, content: run.request, truncated: false }))
   const user = input.history.filter((message) => message.role === 'user').at(-1)?.text ?? ''
   const observations = input.toolObservations
   let value
+  if (user.includes('格式恢复') && malformedAttempts++ === 0) {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ choices: [{ message: { content: '{broken json', reasoning_content: '受控格式失败' }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 } }))
+    return
+  }
   if (user.includes('失败重试') && !failureSeen) { failureSeen = true; response.writeHead(503); response.end('{}'); return }
   if (user.includes('停止调查')) {
     const timer = setTimeout(() => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: '延迟响应' }) } }], usage: { prompt_tokens: 10, completion_tokens: 2 } })) }, 5000)
     response.once('close', () => clearTimeout(timer)); return
   }
-  if (user.includes('流式推理验证')) {
+  if (user.includes('格式恢复')) {
+    value = { format: 'markdown', text: '**格式恢复成功，原始需求仍然完整。**' }
+  } else if (user.includes('流式推理验证')) {
     value = { format: 'markdown', text: '**这是独立展示的最终回答。**\n\n- 依据：当前流程\n- 下一步：核对需求' }
   } else if (user.includes('检查全部节点')) {
     const index = observations.length
@@ -161,6 +170,13 @@ try {
   await expect(page.getByTestId('node-inspector').getByRole('tab', { name: '产物', exact: true })).toHaveAttribute('aria-selected', 'true')
   const secondTab = page.getByRole('tab', { name: /查询共享提案/ })
   await secondTab.click()
+  const recoveryStart = requests.length
+  await send('格式恢复验证')
+  await readyText('格式恢复成功，原始需求仍然完整。')
+  expect(requests.length - recoveryStart).toBe(2)
+  await expect(page.getByText(/本轮允许自动重新生成一次/)).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试调查', exact: true })).toHaveCount(0)
+  await page.screenshot({ scale: 'css', path: path.join(output, '07-format-recovery.png') })
   await send('失败重试场景，请查询测试进度。')
   await expect(page.getByRole('button', { name: '重试调查', exact: true })).toBeVisible({ timeout: 30000 })
   await page.getByRole('button', { name: '重试调查', exact: true }).click()
@@ -211,7 +227,7 @@ try {
   expect(JSON.stringify(requests)).not.toContain('REASONING_LOCAL_ONLY')
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
-  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, fullOriginalRequirement: true, boundedFormatRecovery: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
 } catch (error) {

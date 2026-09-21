@@ -4,6 +4,7 @@ import type { LocalStore } from './local-store.js'
 import { parseConversationCommand, type ConversationAction, type ConversationCitation, type ConversationCommand, type ConversationDraft, type ConversationMessage, type ConversationResponse, type WorkbenchConversation } from './workbench-conversation-contract.js'
 import { readWorkbenchRepository } from './workbench-repository.js'
 import { ConversationExecutorError, type ConversationExecutor, type OpenConversationHarness } from './conversation-executor.js'
+import { buildRequirementContext, conversationContentPage, type RequirementContext } from './workbench-requirement-context.js'
 
 type Store = Pick<LocalStore, 'listProjects' | 'listRuns' | 'listArtifacts' | 'listEvents' | 'listTestEvidence' | 'loadState' | 'listWorkbenchConversations' | 'saveWorkbenchConversation'>
 type Dependencies = {
@@ -22,9 +23,10 @@ const SYSTEM = `你是 DevFlow 工作台的项目协作助手，使用中文。�
 实际发布的 PR 链接和编号以 node 工具 execution.delivery 中已完成记录的 completion 为准；expectedCommitSha 是该次交付固定的 commit。PR 草案产物不等于已发布的 PR，没有 completion 时不要推测发布链接。
 支持需求调查、方案讨论、开发进展、测试、交付、验收、流程导航。你有只读工具；不能执行 shell、写代码、查询未配置数据库、批准 Gate、发布 PR 或改变节点状态。需要执行时通过 actions 引导进入真实节点。不要声称已完成这些操作。
 先调查再给具体结论；提及代码实现必须先读取对应文件。发现业务信息不足，用 question 提出具体问题，等待用户回答后继续。可生成 draft 供用户明确保存，draft 不算阶段完成或 Gate 通过。
+originalRequirements 和 node.rawRequest 是标明 Run 与来源的原始需求正文；产物索引的 summary 不是全文。对某个 Run 做业务澄清前，先读取该 Run 的原始需求，不能重复追问正文已经明确的条件。仍可询问真实歧义、冲突或未明确细节。truncated=true 表示当前页不是全文；offset/endOffset 标明读取范围，nextOffset 为数字时可以续读。不能把未读内容当作不存在。正文不可用时明确说明读取限制。多个 Run 时先明确讨论对象，不串用其他 Run 的需求。
 每轮仅返回一个 JSON 对象：
 __INVESTIGATION_PROTOCOL__
-工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的产物、测试、轨迹、Gate 检查；artifact({runId,artifactId}) 阅读产物；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge({query}) 搜索已配置项目知识。
+工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的原始需求、产物索引、测试、轨迹、Gate 检查；artifact({runId,artifactId,offset?,limit?}) 分页阅读产物（limit 默认 6000，最多 18000）；requirement({runId,offset?,limit?}) 分页阅读原始需求；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge({query}) 搜索已配置项目知识。
 答复正文格式由 format 指定：markdown 或 plain_text。一般解释使用 markdown，代码与 JSON 示例放在围栏代码块中。format 只影响正文，不能定义交互动作。
 结束或追问时 {"text":"答复正文","format":"markdown","citationIds":["本轮真实来源ID"],"actions":[{"label":"定位到节点 / 查看产物 / 查看测试证据","runId":"真实ID","nodeId":"真实ID","section":"状态|产物|测试证据|轨迹|Gate影响|Gate条件|引用来源|Remediation|Handoff|Final Gate"}],"question":{"prompt":"具体问题","options":["可选答案"]},"draft":{"runId":"真实ID","nodeId":"真实ID","title":"提案标题","content":"待确认内容"}}。
 仅询问是否保存同条 draft 时，将 question.purpose 设为 save_proposal；业务澄清问题设为 clarification。保存提案是用户点击保存按钮的独立操作；不要让用户误以为保存就生成了正式澄清产物。
@@ -54,6 +56,11 @@ function textField(value: unknown, max = 12000): string {
 }
 function safeError(error: unknown): string {
   const code = recordOrEmpty(error).code
+  if (code === 'invalid_model_output') {
+    const reason = recordOrEmpty(error).sanitizedCause
+    const description = reason === 'output_length' ? '模型回答达到长度上限，内容未完整生成' : reason === 'empty_content' || reason === 'missing_content' ? '模型没有返回可用的答复正文' : reason === 'content_filter' ? '模型服务未提供可用答复' : '模型返回的内容未通过格式或完整性检查'
+    return `${description}。本轮未生成新答复或提案；已保存的聊天和草稿仍然保留，可以重试。`
+  }
   if ([401, 403].includes(Number(recordOrEmpty(error).httpStatus)) || code === 'unauthorized' || code === 'authentication_error') return '模型授权失败，请到 Agents 检查 Provider 的 API Key 后重试。'
   if (code === 'http_429' || code === 'rate_limited' || code === 'rate_limit_exceeded') return '模型服务暂时限流，请稍后重试。'
   if (code === 'provider_timeout' || code === 'timeout' || (error instanceof Error && /timeout|timed out/i.test(error.message))) return '调查超时；已保留会话和查到的依据，可以重试。'
@@ -62,6 +69,16 @@ function safeError(error: unknown): string {
 }
 function recordOrEmpty(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {}
+}
+
+function conversationFailure(error: unknown, phase: string) {
+  const failure = recordOrEmpty(error)
+  const rawCode = failure.code ?? recordOrEmpty(failure.cause).code ?? (error instanceof Error ? error.name : 'unknown')
+  const code = typeof rawCode === 'string' && /^[a-zA-Z0-9_-]{1,80}$/u.test(rawCode) ? rawCode : 'unknown'
+  const httpStatus = Number(failure.httpStatus)
+  const allowedReasons = ['invalid_json', 'not_json_object', 'empty_content', 'missing_content', 'invalid_reasoning', 'output_length', 'content_filter', 'incomplete_response']
+  const reason = typeof failure.sanitizedCause === 'string' && allowedReasons.includes(failure.sanitizedCause) ? failure.sanitizedCause : undefined
+  return { phase, code, ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}), ...(reason ? { reason } : {}) }
 }
 
 function visibleReasoning(text: string, complete: boolean): string {
@@ -77,19 +94,20 @@ function visibleReasoning(text: string, complete: boolean): string {
 function packConversationContext(input: {
   history: Array<Pick<ConversationMessage, 'id' | 'role' | 'text' | 'question' | 'draft'>>
   facts: { runs: Array<{ id: string; title: string; status: string; version: number; currentNodeId: string; updatedAt: string }>; totalRuns: number; observedAt: string }
-  observations: unknown[]; remainingSteps: number
+  observations: unknown[]; remainingSteps: number; requirements: RequirementContext[]
 }) {
   const context = {
     history: [...input.history],
     latestWorkflow: { ...input.facts, runs: [...input.facts.runs], contextSummaryOnly: false },
     toolObservations: [...input.observations], remainingSteps: input.remainingSteps,
+    originalRequirements: input.requirements,
     contextNotice: '',
   }
   const serialize = () => redactSensitiveText(JSON.stringify(context)).value
   let limited = false
   const markLimited = () => {
     limited = true
-    context.contextNotice = '上下文受长度限制，较早消息或工具内容未全部附带；它们仍保存在本会话。请按需重新查询，workflow 支持 query 和 offset。'
+    context.contextNotice = '上下文受长度限制，较早消息或工具内容未全部附带；它们仍保存在本会话。原始需求标有已读范围，未读内容不等于不存在。请按需重新查询，workflow、artifact、requirement 支持 offset。'
   }
   if (JSON.stringify(context.latestWorkflow).length > 6000) {
     context.latestWorkflow.runs = input.facts.runs.map(({ id, title, status, version, currentNodeId, updatedAt }) => ({ id, title: title.slice(0, 120), status, version, currentNodeId, updatedAt }))
@@ -108,6 +126,15 @@ function packConversationContext(input: {
     context.toolObservations = [{ truncated: true, excerpt: excerpt.slice(0, Math.floor(remaining / 2)) }]
   }
   while (serialize().length > 30000 && context.latestWorkflow.runs.length) { markLimited(); context.latestWorkflow.contextSummaryOnly = true; context.latestWorkflow.runs.pop() }
+  // Preserve the latest question and requirement provenance even for escape-heavy inputs.
+  while (serialize().length > 30000 && context.originalRequirements.some((item) => item.content.length > 500)) {
+    markLimited()
+    context.originalRequirements = context.originalRequirements.map((item) => {
+      if (item.content.length <= 500) return item
+      const content = item.content.slice(0, Math.floor(item.content.length / 2))
+      return { ...item, content, endOffset: item.offset + content.length, nextOffset: item.offset + content.length, truncated: true }
+    })
+  }
   const prompt = serialize()
   if (prompt.length > 32000) throw new Error('这条消息超出了模型上下文容量，请缩短后重试。')
   return { prompt, limited, includedMessages: context.history.length }
@@ -256,8 +283,8 @@ export class WorkbenchConversationService {
       const coding = state.codingRuns.filter((item) => item.runId === run.id && item.nodeId === node!.id)
       const codingIds = new Set(coding.map((item) => item.id))
       const gate = ['gate', 'acceptance'].includes(node!.kind) && this.deps.inspectGate ? await this.deps.inspectGate({ runId: run.id, nodeId: node!.id, projectId }) : null
-      return { observedAt: now(), runVersion: run.version, node, currentNodeId: run.currentNodeId,
-        artifacts: artifacts.filter((artifact) => artifact.nodeId === node!.id).map(({ content: _content, ...artifact }) => artifact),
+      return { observedAt: now(), runVersion: run.version, node, currentNodeId: run.currentNodeId, rawRequest: buildRequirementContext(run, artifacts),
+        artifacts: artifacts.filter((artifact) => artifact.nodeId === node!.id).map(({ content: _content, ...artifact }) => ({ ...artifact, bodyIncluded: false, readWith: 'artifact' })),
         evidence: evidence.filter((item) => item.nodeId === node!.id), events: events.filter((item) => item.nodeId === node!.id).slice(-15), gate,
         execution: {
           coding: coding.map((item) => ({ id: item.id, status: item.status, summary: item.summary, engine: item.engine, startedAt: item.startedAt, completedAt: item.completedAt, testEvidenceId: item.testEvidenceId, diffArtifactId: item.diffArtifactId })),
@@ -277,7 +304,14 @@ export class WorkbenchConversationService {
       const { run } = await this.target(projectId, args.runId)
       const artifact = (await this.deps.store.listArtifacts(run.id)).find((item) => item.id === args.artifactId)
       if (!artifact) throw new Error('当前 Run 中没有这个产物。')
-      return { ...artifact, content: artifact.content.slice(0, 18000), truncated: artifact.content.length > 18000 }
+      return { ...artifact, ...conversationContentPage(artifact.content, args.offset, args.limit) }
+    }
+    if (name === 'requirement') {
+      const { run } = await this.target(projectId, args.runId)
+      const artifacts = await this.deps.store.listArtifacts(run.id)
+      const context = buildRequirementContext(run, artifacts)
+      const body = artifacts.find((item) => item.id === context.artifactId)?.content ?? run.request ?? ''
+      return { ...context, ...conversationContentPage(body, args.offset, args.limit) }
     }
     if (['repo_list', 'repo_read', 'repo_search'].includes(name)) {
       const project = await this.project(projectId)
@@ -329,11 +363,22 @@ export class WorkbenchConversationService {
       const session = await this.conversation(projectId, id)
       const observations: unknown[] = []
       const citations: ConversationCitation[] = []
+      const requirements = new Map<string, RequirementContext>()
+      const attachRequirement = async (runId: string) => {
+        const { run } = await this.target(projectId, runId)
+        let artifacts: Artifact[] | undefined
+        try { artifacts = await this.deps.store.listArtifacts(run.id) } catch { controller.signal.throwIfAborted() }
+        requirements.delete(runId)
+        requirements.set(runId, buildRequirementContext(run, artifacts))
+        // Keep the two most recently investigated Runs, each explicitly scoped.
+        while (requirements.size > 2) requirements.delete(requirements.keys().next().value!)
+      }
       const query = async (name: string, args: Record<string, unknown>) => {
         controller.signal.throwIfAborted()
         if (citations.length >= 32) throw new Error('本轮已达到 32 次查询上限。')
         let output: unknown
         try { output = await this.tool(projectId, name, args, controller.signal) } catch (error) { controller.signal.throwIfAborted(); output = { error: safeError(error) } }
+        if (!recordOrEmpty(output).error && ['node', 'artifact', 'requirement', 'workflow'].includes(name) && typeof args.runId === 'string') await attachRequirement(args.runId)
         const serialized = redactSensitiveText(JSON.stringify(output)).value
         const bounded = serialized.length > 22000 ? { truncated: true, excerpt: serialized.slice(0, 22000) } : JSON.parse(serialized)
         const citation = { id: `source-${citations.length + 1}`, label: `${name} · ${typeof args.path === 'string' ? args.path : typeof args.nodeId === 'string' ? args.nodeId : typeof args.query === 'string' ? args.query : '流程数据'}`, excerpt: JSON.stringify(bounded).slice(0, 2500), observedAt: now() }
@@ -351,6 +396,15 @@ export class WorkbenchConversationService {
           providerId, signal: controller.signal, query })
       } else provider = await this.deps.resolveProvider(providerId)
       if (!provider.completeStructuredJson) throw new Error('当前执行器不支持会话调查，请检查配置。')
+      const initial = await this.overview(projectId)
+      if (initial.totalRuns === 1) await attachRequirement(initial.runs[0]!.id)
+      else {
+        const previous = session.messages.slice().reverse().find((message) => message.role === 'assistant' && (message.draft || message.actions?.length))
+        const previousRun = previous?.draft?.runId ?? previous?.actions?.[0]?.runId
+        // Re-resolve this chat's last explicit target, never another conversation or
+        // the selected UI card. Stale targets are not silently mapped to another Run.
+        if (previousRun && (await this.deps.store.listRuns()).some((run) => run.id === previousRun && run.projectId === projectId)) await attachRequirement(previousRun)
+      }
       const history: Array<Pick<ConversationMessage, 'id' | 'role' | 'text' | 'question' | 'draft'>> = []
       let length = 0
       for (const message of session.messages.slice().reverse()) {
@@ -360,11 +414,13 @@ export class WorkbenchConversationService {
         if (length > 28000 && history.length) break
         history.unshift(entry)
       }
+      let outputRecoveryUsed = false
+      let retryingOutput = false
       for (let step = 0; step < 12; step++) {
         controller.signal.throwIfAborted()
         phase = 'read_context'
         const facts = await this.overview(projectId)
-        const packed = packConversationContext({ history, facts, observations, remainingSteps: 12 - step })
+        const packed = packConversationContext({ history, facts, observations, remainingSteps: 12 - step, requirements: [...requirements.values()] })
         await this.update(projectId, id, (current) => ({ ...current, contextReceipt: {
           includedMessages: packed.includedMessages,
           omittedMessages: session.messages.filter((message) => message.role !== 'tool' && message.role !== 'notice').length - packed.includedMessages,
@@ -386,14 +442,31 @@ export class WorkbenchConversationService {
         const systemPrompt = SYSTEM.replace('__INVESTIGATION_PROTOCOL__', session.executor === 'opencode'
           ? '调查时调用 devflow MCP 中的同名只读工具，例如 devflow_workflow、devflow_node；不要用 JSON tool 字段代替真正的工具调用。完成调查后按下述答复格式返回 JSON，不加额外说明。'
           : '调查时 {"tool":{"name":"...","args":{...}}}。')
-        const result = await provider.completeStructuredJson({ systemPrompt,
+        let result: Awaited<ReturnType<NonNullable<ConversationExecutor['completeStructuredJson']>>>
+        try {
+          result = await provider.completeStructuredJson({ systemPrompt: systemPrompt + (retryingOutput ? '\n上次响应格式或完整性校验失败。本次请简洁返回一个完整 JSON 对象，正确转义字符串；不加对象外说明。不要把正文和 draft 重复写成长篇内容。' : ''),
           userPrompt: packed.prompt, maxOutputTokens: 3500, signal: controller.signal,
           ...(thinking ? { reasoning: { onDelta: async (delta: string) => {
             controller.signal.throwIfAborted()
             activeReasoning!.text += delta
             if (Date.now() - activeReasoning!.flushedAt >= 300) await flushReasoning('streaming')
           } } } : {}),
-        })
+          })
+        } catch (error) {
+          if (error instanceof AgentProviderRequestError && error.code === 'invalid_model_output' && error.retryable &&
+            !outputRecoveryUsed && step < 11 && !controller.signal.aborted && session.executor !== 'opencode') {
+            await flushReasoning('interrupted')
+            activeReasoning = undefined
+            await this.update(projectId, id, (current) => ({ ...current, messages: current.messages.map((message) => message.id === callId
+              ? { ...message, text: '模型返回的内容未通过检查；本轮允许自动重新生成一次，结果见后续答复或错误提示。', failure: conversationFailure(error, phase), ...(error.usage ? { usage: error.usage } : {}) }
+              : message) }))
+            outputRecoveryUsed = true
+            retryingOutput = true
+            continue
+          }
+          throw error
+        }
+        retryingOutput = false
         if (activeReasoning) {
           if (result.reasoningContent !== undefined) activeReasoning.text = result.reasoningContent
           await flushReasoning(controller.signal.aborted ? 'interrupted' : 'completed')
@@ -413,6 +486,26 @@ export class WorkbenchConversationService {
           const args = record(tool.args ?? {})
           await query(name, args)
           continue
+        }
+        // A model can propose a target without first querying it. Supply its original
+        // requirement before accepting a clarification/draft, regardless of executor.
+        if (value.draft !== undefined || value.question !== undefined) {
+          const targetIds = [recordOrEmpty(value.draft).runId, ...(Array.isArray(value.actions) ? value.actions.map((action) => recordOrEmpty(action).runId) : [])]
+          const missing = [...new Set(targetIds.filter((runId): runId is string => typeof runId === 'string'))].slice(0, 2).filter((runId) => !requirements.has(runId))
+          if (missing.length) {
+            for (const runId of missing) await attachRequirement(runId)
+            continue
+          }
+          if (requirements.size && [...requirements.values()].every((item) => item.availability === 'unavailable')) {
+            value.text = '原始需求正文暂时无法读取，当前无法可靠地整理澄清提案。请先查看原始请求产物，恢复后再继续。'
+            delete value.question
+            delete value.draft
+          }
+          if (!requirements.size && initial.totalRuns > 1) {
+            value.text = '当前项目有多个 Run，需要先明确这次讨论的任务，再读取它的原始需求。'
+            value.question = { purpose: 'clarification', prompt: '这次要讨论哪个 Run？请提供任务名称。', options: [] }
+            delete value.draft
+          }
         }
         const actions = await this.actions(projectId, value.actions)
         let draft: ConversationDraft | undefined
@@ -447,11 +540,7 @@ export class WorkbenchConversationService {
         const usage = error.usage
         await this.update(projectId, id, (current) => ({ ...current, messages: current.messages.map((message) => message.id === activeCallId ? { ...message, usage } : message) }))
       }
-      const failureRecord = recordOrEmpty(error)
-      const rawCode = failureRecord.code ?? recordOrEmpty(failureRecord.cause).code ?? (error instanceof Error ? error.name : 'unknown')
-      const code = typeof rawCode === 'string' && /^[a-zA-Z0-9_-]{1,80}$/u.test(rawCode) ? rawCode : 'unknown'
-      const httpStatus = Number(failureRecord.httpStatus)
-      const failure = { phase, code, ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}) }
+      const failure = conversationFailure(error, phase)
       const timedOut = controller.signal.aborted && controller.signal.reason instanceof Error && controller.signal.reason.message === 'timeout'
       await this.update(projectId, id, (current) => ({ ...current, failure, status: controller.signal.aborted && !timedOut ? 'cancelled' : 'failed', error: timedOut ? '调查超时；已保留会话和查到的依据，可以重试。' : controller.signal.aborted ? '已停止调查。可以继续提问或重试。' : phase === 'resolve_provider' ? '无法读取当前模型的本地凭据。请到 Agents 重新保存 API Key 后重试。' : phase === 'resolve_harness' ? '无法启动 OpenCode 会话。请检查本机已安装兼容版本、Agents 中已保存所选模型的凭据，然后重试。历史仍然保留。' : safeError(error) }))
     } finally {
