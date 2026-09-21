@@ -23,6 +23,5 @@ export async function withApiDiagnostics(input: {
     durationMs: Date.now() - started, retryable: input.method === 'GET' && route.status >= 500,
   }) } catch { console.error(JSON.stringify({ event: 'diagnostic_write_failed', diagnosticId: id })) }
   return { ...route, headers: { ...route.headers, [DIAGNOSTIC_HEADER]: id, 'access-control-expose-headers': DIAGNOSTIC_HEADER },
-    ...(route.status >= 400 ? { body: { ...body, diagnosticId: id } } : {}),
   }
 }

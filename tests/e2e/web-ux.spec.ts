@@ -28,7 +28,7 @@ test.describe('Web UX in the isolated seed API', () => {
         json: route.request().method() === 'DELETE' ? { revoked: true } : {
           id: `pair-${slug}`, organizationId: 'org-demo', projectId, createdByUserId: 'u-erich', issuedRole: 'lead',
           code: `${projectId}.fixture-pairing-code-for-layout-only`, attemptsRemaining: 5,
-          createdAt: '2026-09-10T12:00:00Z', expiresAt: '2026-09-10T12:10:00Z',
+          createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
         },
       }))
       await page.setViewportSize({ width, height: 936 })

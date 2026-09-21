@@ -18,7 +18,8 @@ paths and complete request/response bodies are excluded. Unauthenticated API
 pairing records deliberately have no invented user or project ownership.
 
 Each request carries x-devflow-diagnostic-id. Web proxy, Desktop and API preserve
-that UUID. Unknown API exceptions and JSON-body parse errors are recorded with
+that UUID in response headers; existing response bodies keep their exact schema.
+Unknown API exceptions and JSON-body parse errors are recorded with
 controlled codes. A transport failure still has a local ID. Invalid response JSON
 is recorded separately from HTTP success under the same ID. Pairing POSTs do not
 automatically retry; the user generates a new code after failure.
@@ -59,3 +60,23 @@ Cursor's advisory run ffb5f9fd-720d-4dfe-b563-ffeaed341cf5 ended with a repeated
 connection failure and no final review. It is not counted as a passed review.
 Independent code review additionally fixed account-scope visibility before
 passive effects, and late revoke/copy results crossing an identity change.
+
+PR #149 CI found a protocol regression in packaged Delivery revocation proof:
+adding diagnosticId to every error body violated its intentional exact-key
+validation. The real remote client plus API diagnostics reproduced the failure.
+The correction keeps correlation in headers, preserves the original body, and
+does not weaken credential-proof validation. The HTTP pairing recovery scenario
+still passes with this compatible representation.
+
+The same CI run completed Docker lifecycle verification, then failed setup-node's
+automatic host-cache save because all dependencies had been installed in Docker.
+That job now explicitly disables automatic package-manager caching using the
+[official setup-node v5 input](https://github.com/actions/setup-node/blob/v5/action.yml).
+# PR #149 CI follow-up
+
+The first CI run exposed two stale E2E fixtures: the pairing visual fixture had
+already expired on September 10, and the Team page scroll check still selected
+the old sync button name. The fixture now issues a synthetic code with a relative
+10-minute lifetime, and the scroll test selects the current user-visible label.
+The expiry behavior and viewport/scroll assertions remain unchanged. Remote CI
+will rerun these checks; the initial failed run is not counted as a pass.

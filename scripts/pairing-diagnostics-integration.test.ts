@@ -11,8 +11,25 @@ import { createSeedTeamRepository } from '../apps/api/src/repositories/team-repo
 import { resolveTeamRoute } from '../apps/api/src/routes/team-routes'
 import { createRemoteSyncClient, RemoteSyncHttpError } from '../apps/desktop/electron/remote-sync'
 import { diagnosticFetch } from '../apps/desktop/electron/remote-diagnostics'
+import { createGitHubDeliveryRemoteClient } from '../apps/desktop/electron/github-delivery-remote-client'
 
 afterEach(() => vi.restoreAllMocks())
+
+it('preserves strict credential-revocation proof bodies while correlating diagnostics in headers', async () => {
+  const records: DiagnosticRecord[] = []
+  const client = createGitHubDeliveryRemoteClient({ apiBaseUrl: 'https://api.devflow.test', authToken: 'fixture',
+    fetcher: async () => {
+      const result = await withApiDiagnostics({ pathname: '/api/desktop/projects/project-a/github-deliveries/delivery-1/credential-grant', method: 'POST',
+        record: async (record) => { records.push(record) }, run: async () => ({ status: 409, body: {
+          error: 'conflict', message: 'The Project GitHub repository binding is not active.', outcomeCode: 'binding_inactive', replayed: false,
+        } }),
+      })
+      expect(result.headers?.[DIAGNOSTIC_HEADER]).toBe(records[0]?.id)
+      return new Response(JSON.stringify(result.body), { status: result.status, headers: result.headers })
+    },
+  })
+  await expect(client.verifyCredentialGrantBlocked({ projectId: 'project-a', requestId: 'delivery-1', expectedStateVersion: 8 })).resolves.toEqual({ status: 'blocked', outcomeCode: 'binding_inactive' })
+})
 
 it('correlates an expired code over HTTP, persists safe diagnostics, and accepts a new single-use code', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-diagnostic-'))
