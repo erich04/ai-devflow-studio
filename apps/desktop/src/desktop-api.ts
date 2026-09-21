@@ -361,6 +361,7 @@ export type DevFlowDesktopApi = {
   removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: { runId?: string }) => Promise<AgentReviewResult[]>
+  recordAgentReviewFeedback?: (input: import('@ai-devflow/shared').RecordAgentReviewFeedbackInput) => Promise<AgentReviewResult>
   ensureCodingEngine: (input: { projectId: string }) => Promise<{ projectId: string; engine: CodingAgentRun['engine']; status: 'ready' }>
   getCodingRuntimeConfiguration: (input: {
     projectId: string

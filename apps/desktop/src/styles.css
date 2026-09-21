@@ -4674,3 +4674,7 @@ body { min-width: 0; }
 .credential-access-history ul { padding: 0; list-style: none; }
 .credential-access-history li { display: grid; gap: 0.3rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
 .credential-access-history code { overflow-wrap: anywhere; }
+.review-evidence-details { display: grid; gap: 0.65rem; min-width: 0; }
+.review-evidence-details blockquote { margin: 0.6rem 0; padding-left: 0.7rem; border-left: 3px solid var(--accent); white-space: pre-wrap; }
+.review-evidence-details code { display: block; overflow-wrap: anywhere; font-size: 0.75rem; }
+.review-evidence-details textarea { display: block; width: 100%; min-height: 5rem; resize: vertical; }

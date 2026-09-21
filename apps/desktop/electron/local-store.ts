@@ -1,4 +1,7 @@
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
+import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
+import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
+import type { RecordAgentReviewFeedbackInput } from '@ai-devflow/shared'
 import type { CodingProviderCallTrace } from './coding-engine.js'
 import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
 import { existsSync } from 'node:fs'
@@ -1039,6 +1042,7 @@ export type LocalStore = {
   saveTestEvidence(evidence: TestEvidence): Promise<void>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
   saveAgentReview(review: AgentReviewResult): Promise<void>
+  recordAgentReviewFeedback(input: RecordAgentReviewFeedbackInput): Promise<AgentReviewResult>
   listAgentReviews(runId?: string): Promise<AgentReviewResult[]>
   saveAgentTrace(trace: AgentTrace): Promise<void>
   listAgentTraces(runId?: string): Promise<AgentTrace[]>
@@ -12385,6 +12389,36 @@ class SqlJsLocalStore implements LocalStore {
     await this.persist()
   }
 
+  async recordAgentReviewFeedback(payload: RecordAgentReviewFeedbackInput): Promise<AgentReviewResult> {
+    const input = parseAgentReviewFeedbackInput(payload)
+    const run = await this.getRun(input.runId)
+    const review = selectJson<AgentReviewResult>(this.db, 'select json from agent_reviews where id = ?', [input.reviewId])[0]
+    if (!run || !review || run.projectId !== input.projectId || review.projectId !== input.projectId
+      || review.runId !== run.id || !run.nodes.some((node) => node.id === review.nodeId)) {
+      throw new Error('审查记录与当前项目不匹配，请重新打开节点。')
+    }
+    if (input.missingEvidenceIndex >= review.missingEvidence.length) throw new Error('审查意见不存在。')
+    const actor = resolveTrustedWorkflowActor(run, await this.getDesktopPairingCredential())
+    const reason = redactSensitiveText(input.reason).value
+    const previous = review.feedback ?? []
+    if (previous.some((item) => item.actorId === actor.userId && item.missingEvidenceIndex === input.missingEvidenceIndex && item.reason === reason)) return review
+    if (previous.length >= 100) throw new Error('此审查的反馈记录已达上限，请发起新的审查。')
+    const feedback = { id: `review-feedback-${randomUUID()}`, missingEvidenceIndex: input.missingEvidenceIndex,
+      kind: 'false_positive' as const, reason, actorId: actor.userId, createdAt: new Date().toISOString() }
+    const updated = { ...review, feedback: [...previous, feedback] }
+    const sequence = (await this.listEvents(run.id)).length + 1
+    this.db.run('begin transaction')
+    try {
+      this.db.run('update agent_reviews set json = ? where id = ?', [JSON.stringify(updated), review.id])
+      writeAgentEvent(this.db, { id: `event-${feedback.id}`, runId: run.id, nodeId: review.nodeId,
+        kind: 'agent_review', sequence, timestamp: feedback.createdAt,
+        message: `已记录审查 ${review.id} 第 ${input.missingEvidenceIndex + 1} 条意见的人工误报反馈；原审查与 Gate 状态不变。` })
+      this.db.run('commit')
+    } catch (error) { this.db.run('rollback'); throw error }
+    await this.persist()
+    return updated
+  }
+
   async listAgentReviews(runId?: string): Promise<AgentReviewResult[]> {
     if (runId) {
       return selectJson<AgentReviewResult>(
@@ -13762,6 +13796,7 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   saveTestEvidence: 'durable',
   listTestEvidence: 'direct',
   saveAgentReview: 'durable',
+  recordAgentReviewFeedback: 'durable',
   listAgentReviews: 'direct',
   saveAgentTrace: 'durable',
   listAgentTraces: 'direct',

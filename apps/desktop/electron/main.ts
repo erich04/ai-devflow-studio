@@ -1,4 +1,5 @@
 import { WorkbenchConversationService } from './workbench-conversation-service.js'
+import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { createCredentialWriteGuard } from './credential-write-guard.js'
 import { createDiagnosticLog } from '@ai-devflow/shared/node/diagnostic-log'
 import { diagnosticFetch } from './remote-diagnostics.js'
@@ -3261,6 +3262,13 @@ function registerIpcHandlers() {
     const input = parseListAgentReviewsInput(payload)
     const store = await getStore()
     return store.listAgentReviews(input.runId)
+  })
+
+  ipcMain.handle(ipcChannels.recordAgentReviewFeedback, async (_, payload: unknown) => {
+    const store = await getStore()
+    const review = await store.recordAgentReviewFeedback(parseAgentReviewFeedbackInput(payload))
+    broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState())
+    return review
   })
 
   ipcMain.handle(ipcChannels.ensureCodingEngine, async (_, payload: unknown) => {

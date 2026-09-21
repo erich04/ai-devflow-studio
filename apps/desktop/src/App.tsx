@@ -1427,6 +1427,11 @@ export function App() {
                   governanceChecks={selectedGovernanceChecks}
                   references={knowledgeReferences}
                   latestAgentReview={latestAgentReview}
+                  onRecordAgentReviewFeedback={desktopApi?.recordAgentReviewFeedback ? async (input) => {
+                    const updated = await desktopApi.recordAgentReviewFeedback!(input)
+                    setAgentReviews((current) => current.map((review) => review.id === updated.id ? updated : review))
+                    return updated
+                  } : undefined}
                   supportContext={supportContext}
                   onConsumeSupportContext={() => setSupportContext((current) =>
                     current?.focusTarget === 'knowledge-reference' || current?.focusTarget === 'inspector-tab' ? null : current)}

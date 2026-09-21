@@ -100,6 +100,7 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.saveAgentProviderCredential, input),
   runKnowledgeReview: (input) => ipcRenderer.invoke(ipcChannels.runKnowledgeReview, input),
   listAgentReviews: (input) => ipcRenderer.invoke(ipcChannels.listAgentReviews, input),
+  recordAgentReviewFeedback: (input) => ipcRenderer.invoke(ipcChannels.recordAgentReviewFeedback, input),
   ensureCodingEngine: (input) => ipcRenderer.invoke(ipcChannels.ensureCodingEngine, input),
   getCodingRuntimeConfiguration: (input) =>
     ipcRenderer.invoke(ipcChannels.getCodingRuntimeConfiguration, input),
