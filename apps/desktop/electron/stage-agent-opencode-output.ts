@@ -50,7 +50,7 @@ export function readStageAgentOpencodeOutput(input: {
   }
 }
 
-function reportedUsage(messages: OpencodeMessage[]): AgentProviderUsage | undefined {
+export function reportedUsage(messages: OpencodeMessage[]): AgentProviderUsage | undefined {
   if (!messages.length) return undefined
   let inputTokens = 0
   let outputTokens = 0

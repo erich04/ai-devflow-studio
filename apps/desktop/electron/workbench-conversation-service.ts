@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto'
-import { redactSensitiveText, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
+import { AgentProviderRequestError, redactSensitiveText, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 import { parseConversationCommand, type ConversationAction, type ConversationCitation, type ConversationCommand, type ConversationDraft, type ConversationMessage, type ConversationResponse, type WorkbenchConversation } from './workbench-conversation-contract.js'
 import { readWorkbenchRepository } from './workbench-repository.js'
+import { ConversationExecutorError, type ConversationExecutor, type OpenConversationHarness } from './conversation-executor.js'
 
 type Store = Pick<LocalStore, 'listProjects' | 'listRuns' | 'listArtifacts' | 'listEvents' | 'listTestEvidence' | 'loadState' | 'listWorkbenchConversations' | 'saveWorkbenchConversation'>
 type Dependencies = {
   store: Store
   resolveProvider(id: string): Promise<AgentProvider>
+  openHarness?: OpenConversationHarness
   loadKnowledge(projectId: string): Promise<RepositoryKnowledgeSnapshot>
   inspectGate?(target: { runId: string; nodeId: string; projectId: string }): Promise<unknown>
   changed(projectId: string): void
@@ -21,7 +23,7 @@ const SYSTEM = `你是 DevFlow 工作台的项目协作助手，使用中文。�
 支持需求调查、方案讨论、开发进展、测试、交付、验收、流程导航。你有只读工具；不能执行 shell、写代码、查询未配置数据库、批准 Gate、发布 PR 或改变节点状态。需要执行时通过 actions 引导进入真实节点。不要声称已完成这些操作。
 先调查再给具体结论；提及代码实现必须先读取对应文件。发现业务信息不足，用 question 提出具体问题，等待用户回答后继续。可生成 draft 供用户明确保存，draft 不算阶段完成或 Gate 通过。
 每轮仅返回一个 JSON 对象：
-调查时 {"tool":{"name":"...","args":{...}}}。
+__INVESTIGATION_PROTOCOL__
 工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的产物、测试、轨迹、Gate 检查；artifact({runId,artifactId}) 阅读产物；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge({query}) 搜索已配置项目知识。
 答复正文格式由 format 指定：markdown 或 plain_text。一般解释使用 markdown，代码与 JSON 示例放在围栏代码块中。format 只影响正文，不能定义交互动作。
 结束或追问时 {"text":"答复正文","format":"markdown","citationIds":["本轮真实来源ID"],"actions":[{"label":"定位到节点 / 查看产物 / 查看测试证据","runId":"真实ID","nodeId":"真实ID","section":"状态|产物|测试证据|轨迹|Gate影响|Gate条件|引用来源|Remediation|Handoff|Final Gate"}],"question":{"prompt":"具体问题","options":["可选答案"]},"draft":{"runId":"真实ID","nodeId":"真实ID","title":"提案标题","content":"待确认内容"}}。
@@ -154,7 +156,7 @@ export class WorkbenchConversationService {
     if (input.type === 'create') {
       const created: WorkbenchConversation = {
         id: randomUUID(), localProjectId: input.projectId, version: 1, title: input.title?.trim() ?? '新对话',
-        isOpen: true, inputDraft: input.inputDraft ?? '', status: 'idle', messages: [], createdAt: now(), updatedAt: now(),
+        isOpen: true, inputDraft: input.inputDraft ?? '', executor: input.executor ?? 'direct-provider', status: 'idle', messages: [], createdAt: now(), updatedAt: now(),
       }
       await this.deps.store.saveWorkbenchConversation(created, 0)
       conversationId = created.id
@@ -233,6 +235,11 @@ export class WorkbenchConversationService {
   /** Integration tests and graceful lifecycle handling can await actual settled work. */
   async settled(id: string): Promise<void> { await this.tasks.get(id) }
 
+  async shutdown(): Promise<void> {
+    for (const controller of this.controllers.values()) controller.abort()
+    await Promise.allSettled(this.tasks.values())
+  }
+
   private async overview(projectId: string, runId?: unknown, query?: unknown, offset = 0) {
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('流程分页位置无效。')
     const search = query === undefined ? '' : textField(query, 200).toLocaleLowerCase()
@@ -305,21 +312,45 @@ export class WorkbenchConversationService {
 
   private async run(projectId: string, id: string, providerId: string, controller: AbortController) {
     let phase = 'resolve_provider'
-    let activeReasoning: { messageId: string; text: string; flushedAt: number; effort: 'low' | 'high' | 'max' } | undefined
+    let activeReasoning: { messageId: string; text: string; flushedAt: number; effort?: 'low' | 'high' | 'max' } | undefined
+    let provider: ConversationExecutor | undefined
+    let activeCallId: string | undefined
     const flushReasoning = async (status: 'streaming' | 'completed' | 'interrupted') => {
       if (!activeReasoning) return
       const { messageId, text, effort } = activeReasoning
       activeReasoning.flushedAt = Date.now()
       const visible = visibleReasoning(text, status === 'completed')
       await this.update(projectId, id, (current) => current.status !== 'running' && status === 'streaming' ? current : ({ ...current,
-        messages: current.messages.map((message) => message.id === messageId ? { ...message, reasoning: { text: visible, status, effort } } : message),
+        messages: current.messages.map((message) => message.id === messageId ? { ...message, reasoning: { text: visible, status, ...(effort ? { effort } : {}) } } : message),
       }))
     }
     const deadline = setTimeout(() => controller.abort(new Error('timeout')), 180000)
     try {
-      const provider = await this.deps.resolveProvider(providerId)
-      if (!provider.completeStructuredJson) throw new Error('当前 Provider 不支持会话调查，请选择支持 JSON 输出的模型。')
       const session = await this.conversation(projectId, id)
+      const observations: unknown[] = []
+      const citations: ConversationCitation[] = []
+      const query = async (name: string, args: Record<string, unknown>) => {
+        controller.signal.throwIfAborted()
+        if (citations.length >= 32) throw new Error('本轮已达到 32 次查询上限。')
+        let output: unknown
+        try { output = await this.tool(projectId, name, args, controller.signal) } catch (error) { controller.signal.throwIfAborted(); output = { error: safeError(error) } }
+        const serialized = redactSensitiveText(JSON.stringify(output)).value
+        const bounded = serialized.length > 22000 ? { truncated: true, excerpt: serialized.slice(0, 22000) } : JSON.parse(serialized)
+        const citation = { id: `source-${citations.length + 1}`, label: `${name} · ${typeof args.path === 'string' ? args.path : typeof args.nodeId === 'string' ? args.nodeId : typeof args.query === 'string' ? args.query : '流程数据'}`, excerpt: JSON.stringify(bounded).slice(0, 2500), observedAt: now() }
+        citations.push(citation)
+        const observation = { sourceId: citation.id, name, args, result: bounded, observedAt: citation.observedAt }
+        observations.push(observation)
+        while (JSON.stringify(observations).length > 42000 && observations.length > 1) observations.shift()
+        await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, { id: randomUUID(), role: 'tool', text: `${recordOrEmpty(output).error ? '查询未完成' : '已查询'}：${citation.label}`, createdAt: now(), citations: [citation] }] }))
+        return observation
+      }
+      if (session.executor === 'opencode') {
+        phase = 'resolve_harness'
+        if (!this.deps.openHarness) throw new Error('此版本未提供 OpenCode 会话执行器，请更新桌面端。')
+        provider = await this.deps.openHarness({ project: await this.project(projectId), conversation: session,
+          providerId, signal: controller.signal, query })
+      } else provider = await this.deps.resolveProvider(providerId)
+      if (!provider.completeStructuredJson) throw new Error('当前执行器不支持会话调查，请检查配置。')
       const history: Array<Pick<ConversationMessage, 'id' | 'role' | 'text' | 'question' | 'draft'>> = []
       let length = 0
       for (const message of session.messages.slice().reverse()) {
@@ -329,8 +360,6 @@ export class WorkbenchConversationService {
         if (length > 28000 && history.length) break
         history.unshift(entry)
       }
-      const observations: unknown[] = []
-      const citations: ConversationCitation[] = []
       for (let step = 0; step < 12; step++) {
         controller.signal.throwIfAborted()
         phase = 'read_context'
@@ -343,17 +372,21 @@ export class WorkbenchConversationService {
         } }))
         phase = 'provider_request'
         const callId = randomUUID()
-        const thinking = provider.effectiveThinking?.mode === 'enabled'
-        const effort = provider.effectiveThinking?.effort ?? 'low'
-        const providerRecord = { id: providerId, model: provider.model, ...(provider.effectiveThinking ? { effectiveThinking: provider.effectiveThinking } : {}) }
+        activeCallId = callId
+        const thinking = provider.effectiveThinking?.mode === 'enabled' || provider.supportsReasoning === true
+        const effort = provider.effectiveThinking?.effort
+        const providerRecord = { id: provider.id, model: provider.model, executor: session.executor ?? 'direct-provider', ...(provider.effectiveThinking ? { effectiveThinking: provider.effectiveThinking } : {}) }
         if (thinking) {
-          activeReasoning = { messageId: callId, text: '', flushedAt: 0, effort }
-          await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, {
-            id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), provider: providerRecord,
-            reasoning: { text: '', status: 'streaming', effort },
-          }] }))
+          activeReasoning = { messageId: callId, text: '', flushedAt: 0, ...(effort ? { effort } : {}) }
         }
-        const result = await provider.completeStructuredJson({ systemPrompt: SYSTEM,
+        await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, {
+          id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), provider: providerRecord,
+          ...(thinking ? { reasoning: { text: '', status: 'streaming' as const, ...(effort ? { effort } : {}) } } : {}),
+        }] }))
+        const systemPrompt = SYSTEM.replace('__INVESTIGATION_PROTOCOL__', session.executor === 'opencode'
+          ? '调查时调用 devflow MCP 中的同名只读工具，例如 devflow_workflow、devflow_node；不要用 JSON tool 字段代替真正的工具调用。完成调查后按下述答复格式返回 JSON，不加额外说明。'
+          : '调查时 {"tool":{"name":"...","args":{...}}}。')
+        const result = await provider.completeStructuredJson({ systemPrompt,
           userPrompt: packed.prompt, maxOutputTokens: 3500, signal: controller.signal,
           ...(thinking ? { reasoning: { onDelta: async (delta: string) => {
             controller.signal.throwIfAborted()
@@ -367,27 +400,18 @@ export class WorkbenchConversationService {
           activeReasoning = undefined
         }
         // Persist billed usage even if cancellation arrived while the provider was returning.
-        await this.update(projectId, id, (current) => ({ ...current, messages: thinking
-          ? current.messages.map((message) => message.id === callId ? { ...message, ...(result.usage ? { usage: result.usage } : {}) } : message)
-          : [...current.messages, { id: callId, role: 'notice', text: `模型调用 ${step + 1}`, createdAt: now(), ...(result.usage ? { usage: result.usage } : {}), provider: providerRecord }],
+        await this.update(projectId, id, (current) => ({ ...current, messages:
+          current.messages.map((message) => message.id === callId ? { ...message, ...(result.usage ? { usage: result.usage } : {}) } : message),
         }))
         controller.signal.throwIfAborted()
         phase = 'validate_response'
         const value = record(result.value)
         if (value.tool !== undefined) {
+          if (session.executor === 'opencode') throw new Error('会话执行器没有完成工具调查，请重试。')
           const tool = record(value.tool)
           const name = textField(tool.name, 60)
           const args = record(tool.args ?? {})
-          let output: unknown
-          try { output = await this.tool(projectId, name, args, controller.signal) } catch (error) { controller.signal.throwIfAborted(); output = { error: safeError(error) } }
-          const serialized = redactSensitiveText(JSON.stringify(output)).value
-          const bounded = serialized.length > 22000 ? { truncated: true, excerpt: serialized.slice(0, 22000) } : output
-          const citation = { id: `source-${step + 1}`, label: `${name} · ${typeof args.path === 'string' ? args.path : typeof args.nodeId === 'string' ? args.nodeId : typeof args.query === 'string' ? args.query : '流程数据'}`, excerpt: redactSensitiveText(JSON.stringify(bounded)).value.slice(0, 2500), observedAt: now() }
-          citations.push(citation)
-          observations.push({ sourceId: citation.id, name, args, result: bounded, observedAt: citation.observedAt })
-          // Keep a bounded window of real observations, with the omission explicit.
-          while (JSON.stringify(observations).length > 42000 && observations.length > 1) observations.shift()
-          await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, { id: randomUUID(), role: 'tool', text: `${recordOrEmpty(output).error ? '查询未完成' : '已查询'}：${citation.label}`, createdAt: now(), citations: [citation] }] }))
+          await query(name, args)
           continue
         }
         const actions = await this.actions(projectId, value.actions)
@@ -419,13 +443,24 @@ export class WorkbenchConversationService {
       throw new Error('本次调查已达到 12 次调用上限。已保留依据，可以补充问题后继续。')
     } catch (error) {
       await flushReasoning('interrupted')
+      if (activeCallId && (error instanceof AgentProviderRequestError || error instanceof ConversationExecutorError) && error.usage) {
+        const usage = error.usage
+        await this.update(projectId, id, (current) => ({ ...current, messages: current.messages.map((message) => message.id === activeCallId ? { ...message, usage } : message) }))
+      }
       const failureRecord = recordOrEmpty(error)
       const rawCode = failureRecord.code ?? recordOrEmpty(failureRecord.cause).code ?? (error instanceof Error ? error.name : 'unknown')
       const code = typeof rawCode === 'string' && /^[a-zA-Z0-9_-]{1,80}$/u.test(rawCode) ? rawCode : 'unknown'
       const httpStatus = Number(failureRecord.httpStatus)
       const failure = { phase, code, ...(Number.isInteger(httpStatus) && httpStatus >= 100 && httpStatus <= 599 ? { httpStatus } : {}) }
       const timedOut = controller.signal.aborted && controller.signal.reason instanceof Error && controller.signal.reason.message === 'timeout'
-      await this.update(projectId, id, (current) => ({ ...current, failure, status: controller.signal.aborted && !timedOut ? 'cancelled' : 'failed', error: timedOut ? '调查超时；已保留会话和查到的依据，可以重试。' : controller.signal.aborted ? '已停止调查。可以继续提问或重试。' : phase === 'resolve_provider' ? '无法读取当前模型的本地凭据。请到 Agents 重新保存 API Key 后重试。' : safeError(error) }))
-    } finally { clearTimeout(deadline) }
+      await this.update(projectId, id, (current) => ({ ...current, failure, status: controller.signal.aborted && !timedOut ? 'cancelled' : 'failed', error: timedOut ? '调查超时；已保留会话和查到的依据，可以重试。' : controller.signal.aborted ? '已停止调查。可以继续提问或重试。' : phase === 'resolve_provider' ? '无法读取当前模型的本地凭据。请到 Agents 重新保存 API Key 后重试。' : phase === 'resolve_harness' ? '无法启动 OpenCode 会话。请检查本机已安装兼容版本、Agents 中已保存所选模型的凭据，然后重试。历史仍然保留。' : safeError(error) }))
+    } finally {
+      clearTimeout(deadline)
+      try { await provider?.close?.() } catch {
+        await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, {
+          id: randomUUID(), role: 'notice', text: '本轮执行器清理未完成，请重启桌面端后再试。会话记录已保留。', createdAt: now(),
+        }] }))
+      }
+    }
   }
 }

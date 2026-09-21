@@ -3,11 +3,12 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
+import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { WorkbenchConversationService } from './workbench-conversation-service'
 import { parseConversationCommand } from './workbench-conversation-contract'
 import { readWorkbenchRepository } from './workbench-repository'
+import { ConversationExecutorError } from './conversation-executor'
 
 const projectId = 'local-conversations'
 const created = createWorkflowRunFromRequest({ runId: 'conversation-flow', title: '清除已完成任务', request: '清理已完成任务并持久化结果', projectId, creatorId: 'u-test', branchName: 'ai/test', now: '2026-09-16T10:00:00.000Z' })
@@ -46,6 +47,70 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
 }
 
 describe('unified conversation execution and boundaries', () => {
+  it('retains billed OpenCode usage on a failed response without inventing an answer or falling back', async () => {
+    const direct = vi.fn(async () => { throw new Error('must not fall back') })
+    const close = vi.fn(async () => {})
+    const service = new WorkbenchConversationService({ store, resolveProvider: direct,
+      openHarness: async () => ({ id: 'saved-provider', model: 'harness-model', close,
+        completeStructuredJson: async () => { throw new ConversationExecutorError('会话执行器未返回有效答复，请重试。', { inputTokens: 42, outputTokens: 8, totalTokens: 50 }) } }),
+      loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    const id = (await service.command({ type: 'create', projectId, executor: 'opencode' })).conversationId!
+    const result = await send(service, id)
+    expect(result.status).toBe('failed')
+    expect(result.messages.find((message) => message.provider)).toMatchObject({ usage: { totalTokens: 50 }, provider: { executor: 'opencode' } })
+    expect(result.messages.filter((message) => message.role === 'assistant')).toHaveLength(0)
+    expect(direct).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledTimes(1)
+  })
+  it('retains already reported usage when a provider fails after returning billed output', async () => {
+    const { service } = harness(async () => { throw new AgentProviderRequestError({ code: 'invalid_model_output',
+      deliveryState: 'response_received', billingState: 'confirmed', retryable: true, sanitizedCause: 'invalid_json',
+      usage: { inputTokens: 31, outputTokens: 9, totalTokens: 40 } }) })
+    const id = await create(service)
+    const saved = await send(service, id)
+    expect(saved.status).toBe('failed')
+    expect(saved.messages.find((message) => message.provider)?.usage?.totalTokens).toBe(40)
+    expect(saved.messages.filter((message) => message.role === 'assistant')).toHaveLength(0)
+  })
+  it('uses the selected external harness with scoped live queries and preserves that selection across restart', async () => {
+    const direct = vi.fn(async () => { throw new Error('must not fall back') })
+    const close = vi.fn(async () => {})
+    const openHarness = vi.fn(async (input: Parameters<import('./conversation-executor').OpenConversationHarness>[0]) => ({
+      id: 'saved-provider', model: 'harness-model', close,
+      completeStructuredJson: async () => {
+        const own = await input.query('node', { runId: created.run.id, nodeId: created.run.currentNodeId })
+        expect(JSON.stringify(own)).toContain(created.run.currentNodeId)
+        const denied = await input.query('node', { runId: 'foreign-run', nodeId: 'foreign-node' })
+        expect(JSON.stringify(denied)).toContain('不属于当前项目')
+        return { value: { text: '当前是需求澄清。', format: 'markdown' } }
+      },
+    }))
+    const service = new WorkbenchConversationService({ store, resolveProvider: direct, openHarness,
+      loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    const response = await service.command({ type: 'create', projectId, executor: 'opencode' })
+    const id = response.conversationId!
+    await service.command({ type: 'send', projectId, conversationId: id, providerId: 'saved-provider', text: '进展如何' })
+    await service.settled(id)
+    const saved = (await store.listWorkbenchConversations(projectId))[0]!
+    expect(saved.executor).toBe('opencode')
+    expect(saved.status).toBe('idle')
+    expect(saved.messages.filter((message) => message.role === 'tool')).toHaveLength(2)
+    expect(saved.messages.at(-1)?.text).toBe('当前是需求澄清。')
+    expect(direct).not.toHaveBeenCalled()
+    expect(close).toHaveBeenCalledTimes(1)
+    expect(() => parseConversationCommand({ type: 'update', projectId, conversationId: id, executor: 'direct-provider' })).toThrow()
+    const restarted = new WorkbenchConversationService({ store, resolveProvider: direct,
+      openHarness: async () => { throw new Error('OpenCode 未安装，请安装后重试。') }, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    await restarted.recoverInterrupted()
+    await restarted.command({ type: 'send', projectId, conversationId: id, providerId: 'saved-provider', text: '再查一次' })
+    await restarted.settled(id)
+    const failed = (await store.listWorkbenchConversations(projectId))[0]!
+    expect(failed.executor).toBe('opencode')
+    expect(failed.status).toBe('failed')
+    expect(failed.error).toContain('OpenCode')
+    expect(failed.messages.some((message) => message.text === '当前是需求澄清。')).toBe(true)
+    expect(direct).not.toHaveBeenCalled()
+  })
   it.each([
     ['markdown', 'markdown'], ['plain_text', 'plain_text'], ['future-format', 'unsupported'],
     [undefined, 'plain_text'], [{ wrong: true }, 'unsupported'],

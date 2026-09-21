@@ -40,7 +40,7 @@ export function createCredentialAccess(input: {
   }))
   const notify = () => { try { input.changed?.(list()) } catch { /* Diagnostics must not break credential access. */ } }
 
-  async function perform(operation: CredentialAccessRecord['operation'], value: string, category: CredentialCategory): Promise<string> {
+  async function perform(operation: CredentialAccessRecord['operation'], value: string, category: CredentialCategory, signal?: AbortSignal): Promise<string> {
     const record: CredentialAccessRecord = {
       id: randomUUID(), category, operation, state: 'waiting', startedAt: new Date().toISOString(), durationMs: 0,
     }
@@ -59,6 +59,7 @@ export function createCredentialAccess(input: {
         if (done) return
         done = true
         clearTimeout(timer)
+        signal?.removeEventListener('abort', abort)
         pending.delete(record.id)
         record.state = state
         record.durationMs = Math.max(0, Date.now() - starts.get(record.id)!)
@@ -68,7 +69,10 @@ export function createCredentialAccess(input: {
         else reject(new CredentialAccessError(code!, record.id))
       }
       const timer = setTimeout(() => finish('timed_out', undefined, 'credential_timeout'), input.timeoutMs ?? 120_000)
-      pending.set(record.id, () => finish('cancelled', undefined, 'credential_cancelled'))
+      const abort = () => finish('cancelled', undefined, 'credential_cancelled')
+      pending.set(record.id, abort)
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) { abort(); return }
       notify()
       void (async () => {
         if (!(await input.storage.isAsyncEncryptionAvailable())) throw new Error('unavailable')
@@ -83,8 +87,8 @@ export function createCredentialAccess(input: {
 
   return {
     list,
-    encrypt: (value: string, category: CredentialCategory) => perform('encrypt', value, category),
-    decrypt: (value: string, category: CredentialCategory) => perform('decrypt', value, category),
+    encrypt: (value: string, category: CredentialCategory, signal?: AbortSignal) => perform('encrypt', value, category, signal),
+    decrypt: (value: string, category: CredentialCategory, signal?: AbortSignal) => perform('decrypt', value, category, signal),
     cancel(id: string) { const cancel = pending.get(id); cancel?.(); return Boolean(cancel) },
     cancelAll() { for (const cancel of pending.values()) cancel() },
   }

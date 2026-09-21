@@ -220,6 +220,8 @@ export async function sendOpencodeMessage(input: {
   directory: string
   model: OpencodeMessageModel
   text: string
+  agent?: string
+  system?: string
   fetcher?: Fetcher
   signal?: AbortSignal
 }): Promise<unknown> {
@@ -229,6 +231,8 @@ export async function sendOpencodeMessage(input: {
     withDirectory(`/session/${input.sessionId}/message`, input.directory),
     {
       model: input.model,
+      ...(input.agent ? { agent: input.agent } : {}),
+      ...(input.system ? { system: input.system } : {}),
       parts: [{ type: 'text', text: input.text }],
     },
     input.signal,
