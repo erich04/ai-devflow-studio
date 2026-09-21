@@ -5,6 +5,7 @@ import {
   type TeamDbRepositoryClient,
 } from '../db/client'
 import { resolveDevFlowRuntimeFlags } from '@ai-devflow/shared'
+import { resolveGitHubRepositoryAssignments } from '../github-organization-access'
 import { createPostgresPoolClient } from '../db/postgres-client'
 import { teamMigrationCatalog } from '../db/migrate'
 import { createPostgresTeamRepository } from './postgres-team-repository'
@@ -67,6 +68,8 @@ export async function createTeamRepositoryRuntime(
     source: 'postgres',
     repository: createPostgresTeamRepository(db, {
       fakeRuntimeEnabled: flags.fakeRuntimeEnabled,
+      multiOrganizationEnabled: env['DEVFLOW_MULTI_ORGANIZATION_ENABLED']?.trim().toLowerCase() === 'true',
+      githubRepositoryAssignments: resolveGitHubRepositoryAssignments(env['DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS']),
     }),
     async checkReadiness() {
       const [row] = await db.query<{ value: string }>(

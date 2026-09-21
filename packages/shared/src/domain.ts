@@ -155,6 +155,7 @@ export type AuthenticatedIdentity = {
   user: User
   authAccount: AuthAccount
   projectMemberships: ProjectMembership[]
+  organizationStatus?: 'active' | 'archived'
 }
 
 export type TeamSessionSource = 'demo' | 'authenticated'
@@ -173,6 +174,13 @@ export type DemoSession = BaseTeamSession & {
 export type AuthenticatedSession = BaseTeamSession & {
   source: 'authenticated'
   authAccountId: string
+  organizationStatus?: 'active' | 'archived'
+}
+
+export type OrganizationAccess = Organization & {
+  status: 'active' | 'archived'
+  userId: string
+  role: Role
 }
 
 export type TeamSession = DemoSession | AuthenticatedSession

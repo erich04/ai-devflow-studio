@@ -118,6 +118,9 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:postgres-smoke
+      - run: corepack pnpm test:organization-postgres
+        env:
+          DEVFLOW_TENANCY_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devflow_ci
       - run: corepack pnpm test:v15-github-delivery
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm build:desktop-pilot

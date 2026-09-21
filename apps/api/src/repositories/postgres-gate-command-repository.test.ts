@@ -323,7 +323,7 @@ describe('Postgres Gate Command repository', () => {
       /JOIN\s+project_members[\s\S]*?project_members\.project_id\s*=\s*desktop_tokens\.project_id/,
     )
     expect(identitySql).toMatch(
-      /FOR SHARE OF desktop_tokens, users, projects, project_members/,
+      /FOR SHARE OF desktop_tokens, users, projects, organization_memberships, organizations, project_members/,
     )
     expect(db.calls.at(-1)?.sql).toBe('COMMIT')
   })

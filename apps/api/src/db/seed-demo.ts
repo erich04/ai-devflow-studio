@@ -119,6 +119,7 @@ export async function seedDemoTeamData(db: TeamDbClient): Promise<SeedDemoResult
         null,
       ],
     )
+    await db.query(`INSERT INTO organization_memberships (auth_account_id, organization_id, user_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [`acct-demo-${member.id}`, DEMO_ORGANIZATION_ID, member.id])
     result.authAccounts += 1
   }
 

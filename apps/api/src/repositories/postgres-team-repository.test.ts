@@ -1714,6 +1714,7 @@ describe('Postgres team repository', () => {
         providerAccountId: 'github:ling',
       }),
     ).resolves.toEqual({
+      organizationStatus: 'active',
       user: {
         id: 'u-ling',
         organizationId: 'org-demo',
@@ -1753,6 +1754,7 @@ describe('Postgres team repository', () => {
     const repository = createPostgresTeamRepository(db)
 
     await expect(repository.resolveBrowserSession('acct-github-ling')).resolves.toEqual({
+      organizationStatus: 'active',
       source: 'authenticated',
       organizationId: 'org-demo',
       userId: 'u-ling',
@@ -1765,7 +1767,7 @@ describe('Postgres team repository', () => {
     })
 
     expect(db.queries[0]?.sql).toContain('auth_accounts.id = $1')
-    expect(db.queries[0]?.params).toEqual(['acct-github-ling'])
+    expect(db.queries[0]?.params).toEqual(['acct-github-ling', null])
     expect(db.queries[1]?.sql).toContain('JOIN projects')
     expect(db.queries[1]?.sql).toContain('projects.organization_id = $2')
     expect(db.queries[1]?.params).toEqual(['u-ling', 'org-demo'])

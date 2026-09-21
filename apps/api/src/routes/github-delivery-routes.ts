@@ -464,7 +464,7 @@ function serviceFailureResult(
     'github_unavailable',
     'github_delivery_unavailable',
   ])
-  const status = invalidCodes.has(error.code)
+  const status = error.code === 'github_repository_not_assigned' ? 403 : invalidCodes.has(error.code)
     ? 400
     : error.code === 'github_not_found'
       ? 404
@@ -474,7 +474,7 @@ function serviceFailureResult(
           ? 503
           : 502
   const routeError =
-    status === 400
+    status === 403 ? 'forbidden' : status === 400
       ? 'bad_request'
       : status === 404
         ? 'not_found'

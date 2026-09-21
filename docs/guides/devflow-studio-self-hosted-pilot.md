@@ -3,6 +3,10 @@
 This guide runs the v1.5 pilot stack: Web, API, and Postgres. It is intended for a small,
 self-hosted evaluation behind an operator-controlled network boundary, not public SaaS deployment.
 
+Single-team onboarding remains the default. For the opt-in independent-organization mode,
+follow the [multi-organization upgrade guide](./multi-organization-deployment.md) as well;
+it covers migration 29, live membership checks and operator-assigned GitHub repositories.
+
 ## What This Stack Proves
 
 - API and Web run as non-root users from production build output, without workspace source or

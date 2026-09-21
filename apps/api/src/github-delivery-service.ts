@@ -29,8 +29,10 @@ export type GitHubDeliveryServiceErrorCode =
   | 'github_delivery_content_blocked'
   | 'github_delivery_state_conflict'
   | 'github_delivery_unavailable'
+  | 'github_repository_not_assigned'
 
 const safeMessages: Record<GitHubDeliveryServiceErrorCode, string> = {
+  github_repository_not_assigned: 'The deployment operator has not assigned this GitHub repository to the current organization.',
   github_credential_revocation_unconfirmed: 'GitHub credential revocation could not be confirmed.',
   github_authentication_failed: 'GitHub App authentication failed.',
   github_conflict: 'GitHub remote state conflicts with the approved delivery.',
@@ -190,6 +192,7 @@ export function createGitHubDeliveryService(
     principal: GitHubDeliverySessionPrincipal,
   ): Promise<GitHubRepositoryBindingMutationResult> {
     try {
+      await assertRepositoryAssignment(configureInput, principal, 'binding')
       const verified = await input.client.verifyRepository({
         installationId: configureInput.installationId,
         repositoryId: configureInput.repositoryId,
@@ -1174,11 +1177,32 @@ export function createGitHubDeliveryService(
     }
   }
 
+  async function assertRepositoryAssignment(
+    repository: { projectId: string; installationId: string; repositoryId: string },
+    principal: GitHubDeliverySessionPrincipal | GitHubDeliveryDesktopPrincipal,
+    phase: GitHubDeliveryServiceError['phase'],
+  ) {
+    if (input.repository.authorizeGitHubRepository && !await input.repository.authorizeGitHubRepository(repository, principal)) {
+      throw new GitHubDeliveryServiceError({ code: 'github_repository_not_assigned', retryable: false, phase })
+    }
+  }
+
+  async function assertDeliveryAssignment(
+    request: { projectId: string; requestId: string },
+    principal: GitHubDeliveryDesktopPrincipal,
+    phase: GitHubDeliveryServiceError['phase'],
+  ) {
+    if (!input.repository.authorizeGitHubRepository) return
+    const snapshot = await input.repository.getGitHubDeliveryRecoverySnapshot(request.projectId, request.requestId, principal)
+    if (!snapshot) throw new GitHubDeliveryServiceError({ code: 'github_not_found', retryable: false, phase })
+    await assertRepositoryAssignment({ projectId: request.projectId, installationId: snapshot.request.installationId, repositoryId: snapshot.request.repositoryId }, principal, phase)
+  }
+
   return {
     configureRepositoryBinding,
-    issueCredentialGrant,
-    verifyBranchPublication,
-    adoptVerifiedBranchPublication,
-    createDraftPullRequest,
+    async issueCredentialGrant(request, principal) { await assertDeliveryAssignment(request, principal, 'credential'); return issueCredentialGrant(request, principal) },
+    async verifyBranchPublication(request, principal) { await assertDeliveryAssignment(request, principal, 'publication'); return verifyBranchPublication(request, principal) },
+    async adoptVerifiedBranchPublication(request, principal) { await assertDeliveryAssignment(request, principal, 'publication'); return adoptVerifiedBranchPublication(request, principal) },
+    async createDraftPullRequest(request, principal) { await assertDeliveryAssignment(request, principal, 'pull_request'); return createDraftPullRequest(request, principal) },
   }
 }

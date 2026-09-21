@@ -2033,3 +2033,21 @@ button {
   .studio-management-grid, .team-policy-summary { grid-template-columns: 1fr; }
   .studio-management-panel, .studio-project-dialog { padding: 16px; }
 }
+
+.organization-page { max-width: 1080px; margin: 0 auto; padding: 32px 24px 80px; }
+.organization-manager { display: grid; gap: 24px; }
+.organization-manager section { padding: 24px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.organization-manager h2 { margin-top: 0; }
+.organization-manager p, .organization-manager small { color: var(--muted); }
+.organization-manager form { margin: 16px 0; }
+.organization-manager fieldset { border: 1px solid var(--border); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.organization-manager label { display: grid; gap: 6px; }
+.organization-manager input, .organization-manager select { width: 100%; min-width: 0; padding: 10px; }
+.organization-manager button { padding: 10px 14px; width: fit-content; margin: 6px 0; }
+.organization-manager [role="alert"] { padding: 16px; border: 1px solid var(--danger, #df4c58); border-radius: 10px; }
+.organization-manager [role="status"] { padding: 16px; border: 1px solid var(--border); background: var(--surface-2); border-radius: 10px; }
+.organization-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+.organization-cards article { border: 1px solid var(--border); border-radius: 12px; padding: 16px; display: grid; gap: 8px; }
+.organization-cards h3, .organization-cards p { margin: 0; }
+.organization-secret { display: block; overflow-wrap: anywhere; user-select: all; padding: 12px; }
+.organization-manager li { margin: 10px 0; overflow-wrap: anywhere; }

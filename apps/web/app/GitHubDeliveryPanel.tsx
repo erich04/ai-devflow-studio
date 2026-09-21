@@ -26,7 +26,7 @@ function isExactObject(value: unknown, keys: readonly string[]): value is Record
 function githubDeliveryFailureKind(
   status: number,
   payload: unknown,
-): 'provider' | 'authority' | 'binding_conflict' | 'unavailable' {
+): 'provider' | 'authority' | 'binding_conflict' | 'repository_not_assigned' | 'unavailable' {
   const code =
     typeof payload === 'object' && payload !== null && !Array.isArray(payload)
       ? (payload as { code?: unknown }).code
@@ -34,6 +34,7 @@ function githubDeliveryFailureKind(
 
   if (status === 503 && code === 'provider_unavailable') return 'provider'
   if (status === 403 && code === 'authority_required') return 'authority'
+  if (status === 403 && code === 'repository_not_assigned') return 'repository_not_assigned'
   if (status === 409 && code === 'binding_conflict') return 'binding_conflict'
   return 'unavailable'
 }
@@ -134,6 +135,8 @@ export function GitHubDeliveryPanel({
           ? 'GitHub provider is unavailable. No repository authority was changed.'
           : error instanceof Error && error.message === 'authority'
             ? 'Owner authority is required to configure this repository binding.'
+            : error instanceof Error && error.message === 'repository_not_assigned'
+              ? '请联系部署管理员，将此 GitHub 仓库分配给当前组织后再配置。'
             : error instanceof Error && error.message === 'binding_conflict'
               ? '此仓库已绑定其他项目，请使用独立仓库。'
             : 'GitHub repository binding could not be changed safely.',

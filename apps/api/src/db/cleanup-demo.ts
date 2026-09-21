@@ -115,6 +115,9 @@ export async function cleanupDemoSeedData(
     await db.query('DELETE FROM runtime_budget_policies WHERE organization_id = $1', [organizationId])
     await db.query('DELETE FROM desktop_tokens WHERE organization_id = $1', [organizationId])
     await db.query('DELETE FROM desktop_pairing_codes WHERE organization_id = $1', [organizationId])
+    for (const table of ['organization_audit_events', 'organization_invitations', 'organization_memberships']) {
+      await db.query(`DELETE FROM ${table} WHERE organization_id = $1`, [DEMO_ORGANIZATION_ID])
+    }
     await db.query('DELETE FROM auth_accounts WHERE user_id IN (SELECT id FROM users WHERE organization_id = $1)', [
       organizationId,
     ])

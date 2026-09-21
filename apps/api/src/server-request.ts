@@ -14,6 +14,7 @@ import {
 import type { TeamRepository } from './repositories/team-repository'
 import { resolveGitHubDeliveryRoute } from './routes/github-delivery-routes'
 import { resolveTeamRoute, type ApiRouteResult } from './routes/team-routes'
+import { resolveOrganizationRoute } from './routes/organization-routes'
 
 export type ApiRouteRequest = {
   method: string
@@ -32,6 +33,7 @@ export type ApiRouteRequestOptions = {
   localAuthEnabled?: boolean
   postAuthRedirectUrl?: string
   secureCookies?: boolean
+  multiOrganizationEnabled?: boolean
 }
 
 export function createCorsPreflightHeaders(): Record<string, string> {
@@ -124,8 +126,10 @@ export async function resolveApiRouteRequest(
     const claims = resolveSessionCookie(cookies[SESSION_COOKIE_NAME], options.sessionSecret)
     if (claims) {
       try {
-        const session = await options.repository.resolveBrowserSession(claims.authAccountId)
-        principal = session
+        const session = claims.v === 2
+          ? await options.repository.resolveBrowserSession(claims.authAccountId, claims.organizationId)
+          : await options.repository.resolveBrowserSession(claims.authAccountId)
+        principal = session && (claims.v === 1 || session.organizationId === claims.organizationId)
           ? {
               session,
               authentication: { kind: 'session_cookie', tokenRecordId: null },
@@ -145,6 +149,27 @@ export async function resolveApiRouteRequest(
           authentication: { kind: 'development_header', tokenRecordId: null },
         }
       : null
+  }
+
+  if ((request.pathname === '/api/organizations' || request.pathname.startsWith('/api/organizations/')) && request.method !== 'GET') {
+    const mediaType = String(request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase()
+    if (mediaType !== 'application/json') return { status: 415, body: { message: 'Organization mutations require application/json' } }
+    const origin = request.headers.origin
+    const expectedOrigin = options.postAuthRedirectUrl ? new URL(options.postAuthRedirectUrl).origin : null
+    if ((origin !== undefined && origin !== expectedOrigin) || (origin === undefined && request.headers['sec-fetch-site'] !== undefined)) {
+      return { status: 403, body: { message: 'Organization mutation origin was rejected' } }
+    }
+  }
+
+  const organizationResult = await resolveOrganizationRoute({
+    ...request, principal, repository: options.repository,
+    enabled: options.multiOrganizationEnabled === true,
+    sessionSecret: options.sessionSecret, secureCookies: options.secureCookies === true,
+  })
+  if (organizationResult) return organizationResult
+
+  if (principal?.session.source === 'authenticated' && principal.session.organizationStatus === 'archived' && !request.pathname.startsWith('/api/auth/')) {
+    return { status: 403, body: { error: 'organization_archived', message: 'This organization is archived. Restore it in organization settings.' } }
   }
 
   const githubDeliveryResult = await resolveGitHubDeliveryRoute(

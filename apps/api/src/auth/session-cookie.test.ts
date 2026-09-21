@@ -18,6 +18,24 @@ function signClaims(value: unknown, secret = 'test-secret'): string {
 }
 
 describe('session cookie boundary', () => {
+  it('signs the selected organization without caching its permissions', () => {
+    const cookie = createSessionCookie({ authAccountId, organizationId: 'org-b' }, 'test-secret', { nowMs })
+    const value = parseCookieHeader(cookie)['devflow_session']!
+    expect(resolveSessionCookie(value, 'test-secret', { nowMs })).toEqual({
+      v: 2,
+      authAccountId,
+      organizationId: 'org-b',
+      expiresAt: Math.floor(nowMs / 1_000) + SESSION_COOKIE_MAX_AGE_SECONDS,
+    })
+    const changed = value.split('.')
+    changed[0] = Buffer.from(JSON.stringify({ v: 2, authAccountId, organizationId: 'org-a', expiresAt: Math.floor(nowMs / 1_000) + 100 })).toString('base64url')
+    expect(resolveSessionCookie(changed.join('.'), 'test-secret', { nowMs })).toBeNull()
+    for (const organizationId of ['', 'x'.repeat(201), null]) {
+      expect(resolveSessionCookie(signClaims({ v: 2, authAccountId, organizationId, expiresAt: Math.floor(nowMs / 1_000) + 100 }), 'test-secret', { nowMs })).toBeNull()
+    }
+    expect(resolveSessionCookie(signClaims({ v: 2, authAccountId, organizationId: 'org-b', role: 'owner', expiresAt: Math.floor(nowMs / 1_000) + 100 }), 'test-secret', { nowMs })).toBeNull()
+  })
+
   it('stores only stable account identity and an eight-hour expiry in the signed cookie', () => {
     const cookie = createSessionCookie({ authAccountId }, 'test-secret', { nowMs })
     const cookies = parseCookieHeader(cookie)

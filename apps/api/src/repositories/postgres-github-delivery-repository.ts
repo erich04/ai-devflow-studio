@@ -817,7 +817,9 @@ export function createPostgresGitHubDeliveryRepository(
             ${lockAuthority ? 'FOR SHARE' : ''}
           ) AS project_role
         FROM auth_accounts
-        JOIN users ON users.id = auth_accounts.user_id
+        JOIN organization_memberships ON organization_memberships.auth_account_id = auth_accounts.id AND organization_memberships.status = 'active'
+        JOIN users ON users.id = organization_memberships.user_id AND users.organization_id = organization_memberships.organization_id
+        JOIN organizations ON organizations.id = users.organization_id AND organizations.status = 'active'
         JOIN projects
           ON projects.id = $4
          AND projects.organization_id = users.organization_id
@@ -825,7 +827,7 @@ export function createPostgresGitHubDeliveryRepository(
           AND users.organization_id = $2
           AND users.id = $3
         LIMIT 1
-        ${lockAuthority ? 'FOR SHARE OF auth_accounts, users, projects' : ''}
+        ${lockAuthority ? 'FOR SHARE OF auth_accounts, users, projects, organization_memberships, organizations' : ''}
       `,
       [
         principal.session.authAccountId,
@@ -883,6 +885,8 @@ export function createPostgresGitHubDeliveryRepository(
         JOIN users
           ON users.id = desktop_tokens.user_id
          AND users.organization_id = desktop_tokens.organization_id
+        JOIN organization_memberships ON organization_memberships.user_id = users.id AND organization_memberships.organization_id = users.organization_id AND organization_memberships.status = 'active'
+        JOIN organizations ON organizations.id = users.organization_id AND organizations.status = 'active'
         JOIN projects
           ON projects.id = desktop_tokens.project_id
          AND projects.organization_id = desktop_tokens.organization_id
@@ -891,8 +895,9 @@ export function createPostgresGitHubDeliveryRepository(
           AND desktop_tokens.user_id = $3
           AND desktop_tokens.project_id = $4
           AND desktop_tokens.revoked_at IS NULL
+          AND desktop_tokens.expires_at > now()
         LIMIT 1
-        ${lockAuthority ? 'FOR SHARE OF desktop_tokens, users, projects' : ''}
+        ${lockAuthority ? 'FOR SHARE OF desktop_tokens, users, projects, organization_memberships, organizations' : ''}
       `,
       [
         principal.authentication.tokenRecordId,
