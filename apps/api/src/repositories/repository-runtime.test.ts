@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { TeamDbConfig, TeamDbRepositoryClient } from '../db/client'
 import { TEAM_SCHEMA_VERSION } from '../db/schema'
 import { createTeamRepositoryRuntime } from './repository-runtime'
+import type { GitHubDeliverySessionPrincipal } from './github-delivery-contract'
 
 function createFakeDb(): TeamDbRepositoryClient {
   const query = async <T>() => [] as T[]
@@ -17,6 +18,36 @@ function createFakeDb(): TeamDbRepositoryClient {
 }
 
 describe('team repository runtime', () => {
+  it('passes operator repository assignments and multi-organization mode into the live authorization path', async () => {
+    const runtime = await createTeamRepositoryRuntime({
+      env: {
+        DEVFLOW_DATABASE_URL: 'postgres://devflow:test@localhost:5432/devflow',
+        DEVFLOW_MULTI_ORGANIZATION_ENABLED: ' TRUE ',
+        DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS: JSON.stringify([{ organizationId: 'org-a', installationId: '123', repositoryId: '456' }]),
+      },
+      logger: { info: vi.fn() },
+      createPostgresClient: () => ({ ...createFakeDb(), async query<T>() { return [{ id: 'project-a' }] as T[] } }),
+    })
+    const principal: GitHubDeliverySessionPrincipal = {
+      session: { source: 'authenticated', authAccountId: 'account-a', organizationId: 'org-a', userId: 'user-a', role: 'owner', projectMemberships: [] },
+      authentication: { kind: 'session_cookie', tokenRecordId: null },
+    }
+    const target = { projectId: 'project-a', installationId: '123', repositoryId: '456' }
+    expect(await runtime.repository.authorizeGitHubRepository!(target, principal)).toBe(true)
+    expect(await runtime.repository.authorizeGitHubRepository!({ ...target, repositoryId: '789' }, principal)).toBe(false)
+    expect(await runtime.repository.authorizeGitHubRepository!(target, { ...principal, session: { ...principal.session, organizationId: 'org-b' } })).toBe(false)
+    await runtime.close()
+  })
+
+  it('rejects invalid repository assignments before constructing a database client', async () => {
+    const createPostgresClient = vi.fn(createFakeDb)
+    await expect(createTeamRepositoryRuntime({
+      env: { DEVFLOW_DATABASE_URL: 'postgres://devflow:test@localhost:5432/devflow', DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS: 'invalid-json' },
+      logger: { info: vi.fn() }, createPostgresClient,
+    })).rejects.toThrow('DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS')
+    expect(createPostgresClient).not.toHaveBeenCalled()
+  })
+
   it('fails fast when no database URL is configured and demo data is disabled', async () => {
     await expect(createTeamRepositoryRuntime({
       env: {},

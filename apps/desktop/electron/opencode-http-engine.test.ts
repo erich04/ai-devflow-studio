@@ -63,11 +63,18 @@ describe('opencode HTTP coding engine', () => {
     const authorization = expectPermissionResult(await engine.start(input))
     vi.useFakeTimers()
     try {
+      let settled = false
       const result = engine.approvePermission({
         codingRun: authorization.codingRun, request: authorization.permissionRequest,
         workspace, project, authorizedStart: input, now: input.now,
       }).then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }))
-      await vi.advanceTimersByTimeAsync(250)
+        .finally(() => { settled = true })
+      // Response body microtasks can settle between timer turns. Do not jump past
+      // the execution deadline while a successful completion is still assembling.
+      for (let elapsed = 0; elapsed < 250 && !settled; elapsed += 1) {
+        await vi.advanceTimersByTimeAsync(1)
+      }
+      expect(settled).toBe(true)
       const outcome = await result
       if (scenario === 'busy past deadline') {
         expect(outcome.error).toMatchObject({ code: 'permission_discovery_timed_out' })
@@ -126,12 +133,17 @@ describe('opencode HTTP coding engine', () => {
     vi.useFakeTimers()
     try {
       const startedAt = Date.now()
+      let finished = false
       const result = engine.approvePermission({
         codingRun: authorization.codingRun, request: authorization.permissionRequest,
         workspace, project, authorizedStart: input, now: input.now,
       })
       const settled = result.then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }))
-      await vi.advanceTimersByTimeAsync(250)
+        .finally(() => { finished = true })
+      for (let elapsed = 0; elapsed < 250 && !finished; elapsed += 1) {
+        await vi.advanceTimersByTimeAsync(1)
+      }
+      expect(finished).toBe(true)
       const outcome = await settled
       if (scenario === 'slow permission') {
         expect(expectPermissionResult(outcome.value!).permissionRequest).toMatchObject({ id: 'slow-edit', status: 'pending' })

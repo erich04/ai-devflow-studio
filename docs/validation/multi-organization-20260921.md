@@ -18,7 +18,7 @@ are unchanged. The comparison emits counts/equality only, never credentials or c
 
 ## Automated evidence
 
-`corepack pnpm test:organization-postgres` passes **14 tests** against real Postgres. It is a
+`corepack pnpm test:organization-postgres` passes **15 tests** against real Postgres. It is a
 required CI Postgres step; the launcher rejects a missing database URL rather than silently
 reporting a skipped suite as acceptance.
 
@@ -34,6 +34,8 @@ reporting a skipped suite as acceptance.
   requests fail. Provider credentials cannot be read with another organization's identity.
 - GitHub repository access requires the operator's exact organization/installation/repository
   assignment. Other repositories or organizations fail, including after onboarding is closed.
+  A clean legacy single-team deployment still permits its original GitHub access with the flag
+  off and no assignments; explicitly enabling independent organizations requires assignments.
 - Two API-paired Desktop Agent runtimes use separate SQLite profiles. Cancelling one leaves the
   other active; the latter recovers after reopening. Retry keeps the original scope. Re-pairing
   to the other organization prevents the old pending task from executing.
@@ -55,9 +57,11 @@ records cover [To Do delivery](./real-deepseek-todo-e2e-20260917.md),
 [OpenCode stage generation](./stage-opencode-live-20260921.md) and
 [OpenCode conversations](./workbench-opencode-harness-20260920.md).
 
-`corepack pnpm verify` passes: full workspace/smoke typechecks, **4,036 tests** across 297 files,
-and the cross-platform check. Its 14 database tests are intentionally skipped without the dedicated
-URL and all pass in the separate required Postgres command above. `test:postgres-smoke` also
+The full `corepack pnpm verify` run at `844a844` passed workspace/smoke typechecks, **4,036 tests**
+across 297 files and the cross-platform check. Its then-14 database tests were intentionally skipped
+without the dedicated URL. The final Postgres command above includes the additional compatibility
+case. The subsequent 67 API tests, 60 OpenCode engine tests, API typecheck and organization-smoke
+typecheck also pass. `test:postgres-smoke` also
 passes against a separate disposable database, including migration/seed, pairing, sync, budget,
 review, runtime, memory and GitHub-delivery contracts; that database was removed afterward.
 
@@ -79,6 +83,24 @@ This found and fixed a form hydration gap: before React was ready, native submis
 form fields into a GET URL. The forms now use POST and remain disabled until their handlers are
 ready. A component regression also checks that changing one's own owner role refreshes authority
 instead of immediately attempting another now-forbidden owner read.
+
+## Advisory review and CI follow-up
+
+Cursor's separate GitHub-boundary review found no reproducible assignment bypass. The review's
+single-team compatibility and runtime-configuration gaps were accepted: real Postgres now verifies
+the legacy allow case, while the runtime tests exercise exact assignment matching through the
+actual repository authorization path and reject invalid configuration before opening a DB client.
+The deployment guide now states that archived or residual demo organizations also require explicit
+assignments. Postgres continues to implement the authorization hook; the seed adapter remains
+unavailable to independent-organization deployments. No extra presentation-only assertion was added
+for the existing 403 copy. The parallel workflow test above is complete, with its external-provider
+substitutes stated explicitly; it does not establish live two-team GitHub publication.
+
+The first remote Windows run (`35567343984`) exposed an OpenCode test clock race: advancing 250 ms
+at once could cross the synthetic 200 ms deadline while response-body completion was pending.
+The tests now advance in small increments only while the result is pending. Success, transport
+failure with a recovered diff, busy-session timeout and slow-permission cases remain checked.
+Production timeout limits are unchanged. Cross-platform CI must validate the final follow-up commit.
 
 ## Boundaries and remaining release work
 

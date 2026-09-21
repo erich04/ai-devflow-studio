@@ -76,6 +76,22 @@ describe.skipIf(!databaseUrl)('multi-organization public API with real Postgres'
     if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`); await admin.close() }
   })
 
+  it('retains legacy single-team GitHub access until the operator explicitly enables independent organizations', async () => {
+    const created = await request('POST', '/api/team/projects', ownerCookie, { name: 'Legacy authorization', slug: 'legacy-authorization', description: 'Compatibility check', repository: 'example/todo' })
+    expect(created?.status).toBe(201)
+    const projectId = (created!.body as { id: string }).id
+    try {
+      const session = (await repository.resolveBrowserSession('acct-github-1001'))!
+      const principal = { session, authentication: { kind: 'session_cookie' as const, tokenRecordId: null } }
+      const target = { projectId, installationId: '123', repositoryId: '456' }
+      expect(await createPostgresTeamRepository(db).authorizeGitHubRepository!(target, principal)).toBe(true)
+      expect(await repository.authorizeGitHubRepository!(target, principal)).toBe(false)
+      const configured = createPostgresTeamRepository(db, { githubRepositoryAssignments: [{ organizationId: 'org-legacy', installationId: '123', repositoryId: '456' }] })
+      expect(await configured.authorizeGitHubRepository!(target, principal)).toBe(true)
+      expect(await configured.authorizeGitHubRepository!({ ...target, repositoryId: '789' }, principal)).toBe(false)
+    } finally { await db.query('DELETE FROM projects WHERE id = $1', [projectId]) }
+  })
+
   it('creates and switches independent organizations while a legacy cookie keeps its original scope', async () => {
     const initial = await request('GET', '/api/organizations')
     expect(initial?.status).toBe(200)

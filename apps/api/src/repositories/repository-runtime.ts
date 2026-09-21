@@ -56,6 +56,7 @@ export async function createTeamRepositoryRuntime(
     }
   }
 
+  const githubRepositoryAssignments = resolveGitHubRepositoryAssignments(env['DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS'])
   const db = options.createPostgresClient
     ? options.createPostgresClient(config)
     : createPostgresPoolClient(config)
@@ -69,7 +70,7 @@ export async function createTeamRepositoryRuntime(
     repository: createPostgresTeamRepository(db, {
       fakeRuntimeEnabled: flags.fakeRuntimeEnabled,
       multiOrganizationEnabled: env['DEVFLOW_MULTI_ORGANIZATION_ENABLED']?.trim().toLowerCase() === 'true',
-      githubRepositoryAssignments: resolveGitHubRepositoryAssignments(env['DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS']),
+      githubRepositoryAssignments,
     }),
     async checkReadiness() {
       const [row] = await db.query<{ value: string }>(

@@ -76,7 +76,11 @@ Cursor's advisory review found no additional reproducible access path in the ear
 suggestion to retain invitations after the issuer loses authority was not adopted: explicit
 re-issuance preserves the intended revocation behavior. Its warning about owner checks relying on
 SQL target scoping is addressed by real-Postgres negative tests, not by treating owner as global.
-The later GitHub assignment changes are validated separately; the earlier review does not cover them.
+A separate review of the GitHub assignment changes also found no reproducible bypass. Its
+compatibility and configuration-wiring concerns resulted in a real-Postgres single-team allow
+case and runtime tests proving exact assignment enforcement and early rejection of invalid JSON.
+The deployment guide explicitly includes archived/demo organization rows in the assignment rule.
+Review recommendations remain advisory; live two-team GitHub publication is not claimed.
 
 See the [deployment guide](../guides/multi-organization-deployment.md) and
 [validation record](../validation/multi-organization-20260921.md). Neither integration tests nor

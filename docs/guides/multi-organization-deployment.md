@@ -60,6 +60,10 @@ operations; it does not retroactively revoke a token already minted by GitHub. U
 binding/token revocation flow for that purpose. Keep the GitHub App's selected-repository grants
 and short-lived credential policy unchanged.
 
+The presence of any second organization row, including an archived team or old demo data,
+also requires assignments. Turning the flag off does not remove that boundary. Configure the
+existing repository assignments; do not delete retained team data to bypass the check.
+
 ## Repeatable verification
 
 ```bash
