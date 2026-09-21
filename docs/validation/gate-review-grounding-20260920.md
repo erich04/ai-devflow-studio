@@ -46,6 +46,19 @@ corresponding implementation. Local logs are in
 
 ## Limits
 
+Cursor read-only consultation `2832460b-6082-42b8-b257-46a499212e6e` found no
+blocking defect. Independently accepted its concern about misleading source
+classification: a model-authored non-goal label alone is now unverified;
+duplicate quote locations are unverified, and a reported conflict is not
+overridden by the section heuristic. Added regressions failed before this fix
+and passed after it. Its proposed preference for a non-goal occurrence was
+rejected because choosing the favorable occurrence would hide ambiguity.
+The suggested forged/stale citation tests had already been added during review.
+Deferred richer actor-source metadata: this is local feedback using the existing
+trusted-actor resolver, not evidence of a separate approval or current team role.
+The UI describes the section location without declaring the business opinion
+resolved. No follow-up was needed solely to obtain another consultant verdict.
+
 The model can still misinterpret a valid quotation or omit a relevant one. Such
 opinions remain subject to human judgment; no keyword heuristic dismisses a
 finding or approves a Gate. Feedback is local audit data and is not silently used

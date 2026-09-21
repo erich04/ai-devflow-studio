@@ -16,7 +16,7 @@ const review: AgentReviewResult = {
 it('locates the captured source and records a false-positive report with a reason', async () => {
   const onFeedback = vi.fn(async () => ({ ...review, feedback: [{ id: 'feedback', missingEvidenceIndex: 0, kind: 'false_positive' as const, reason: '原文已经明确不做撤销。', actorId: 'reviewer', createdAt: review.createdAt }] }))
   render(<ReviewEvidenceDetails review={review} onFeedback={onFeedback} />)
-  expect(screen.getByText(/原文已有明确的非目标/)).toBeInTheDocument()
+  expect(screen.getByText(/引用位于非目标章节/)).toBeInTheDocument()
   fireEvent.click(screen.getByText('原文依据：需求澄清 v2'))
   expect(screen.getByText('不做撤销/回收站')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: '反馈误报' }))

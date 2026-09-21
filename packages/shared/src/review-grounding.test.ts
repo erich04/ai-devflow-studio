@@ -23,6 +23,12 @@ describe('Gate review evidence grounding', () => {
     expect(locateReviewMissingEvidence(context, ['legacy finding'], undefined)).toEqual([
       { index: 0, assessment: 'unverified', citations: [], requiresReview: true },
     ])
+    const outsideSection = { ...context, subjectArtifacts: [{ ...source, content: '这里的业务决定只是正文，不是非目标。' }] }
+    expect(locateReviewMissingEvidence(outsideSection, ['opinion'], [{ index: 0, assessment: 'explicit_non_goal',
+      citations: [{ sourceId: source.id, quote: '业务决定只是正文' }] }])[0]?.assessment).toBe('unverified')
+    const repeated = { ...context, subjectArtifacts: [{ ...source, content: '## Goals\n不提供撤销功能\n## Non-goals\n不提供撤销功能' }] }
+    expect(locateReviewMissingEvidence(repeated, ['opinion'], [{ index: 0, assessment: 'gap',
+      citations: [{ sourceId: source.id, quote: '不提供撤销功能' }] }])[0]?.assessment).toBe('unverified')
   })
 
   it('marks a missing-decision claim citing an explicit non-goal for human review, with exact current-version evidence', async () => {

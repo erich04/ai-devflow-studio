@@ -32,7 +32,7 @@ export function ReviewEvidenceDetails({ review, onFeedback }: {
     {review.missingEvidence.map((summary, index) => {
       const detail = review.missingEvidenceDetails?.find((item) => item.index === index)
       const assessment = detail?.assessment ?? 'unverified'
-      const notice = assessment === 'explicit_non_goal' ? '待复核：原文已有明确的非目标，请检查这条意见是否误报。'
+      const notice = assessment === 'explicit_non_goal' ? '待复核：引用位于非目标章节，请检查原文是否已解决这条意见。'
         : assessment === 'conflicting_decision' ? '待复核：模型发现决定之间可能矛盾，需要人工核对。'
           : assessment === 'unverified' ? '待复核：这条意见没有可验证的完整原文引用。'
             : '已定位原文；是否构成缺口仍需人工判断。'

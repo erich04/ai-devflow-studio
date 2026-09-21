@@ -36,6 +36,7 @@ export function locateReviewMissingEvidence(context: AgentReviewContext, missing
       }
       const start = source.content.indexOf(quote)
       if (start < 0) { invalidCitation = true; continue }
+      if (source.content.indexOf(quote, start + 1) >= 0) { invalidCitation = true; continue }
       nonGoal ||= citesNonGoal(source.content, start)
       citations.push({ sourceId: source.id, title: source.title, quote, start, end: start + quote.length,
         contentDigest: source.contentDigest,
@@ -43,9 +44,10 @@ export function locateReviewMissingEvidence(context: AgentReviewContext, missing
       })
     }
     const reported = detail?.assessment
-    const assessment: AgentReviewMissingEvidenceDetail['assessment'] = nonGoal ? 'explicit_non_goal'
-      : invalidCitation || !citations.length ? 'unverified'
-        : reported === 'gap' || reported === 'explicit_non_goal' || reported === 'conflicting_decision' ? reported : 'unverified'
+    const assessment: AgentReviewMissingEvidenceDetail['assessment'] = invalidCitation || !citations.length ? 'unverified'
+      : reported === 'conflicting_decision' ? 'conflicting_decision'
+        : nonGoal ? 'explicit_non_goal'
+          : reported === 'gap' ? 'gap' : 'unverified'
     return { index, assessment, citations, requiresReview: assessment !== 'gap' }
   })
 }
