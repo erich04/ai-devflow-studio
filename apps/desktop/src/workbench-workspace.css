@@ -45,6 +45,10 @@
 .unified-workflow.workflow-view--list .stage-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); align-items: start; }
 .workbench-workspace { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .workspace-tab-strip { flex: 0 0 47px; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); min-width: 0; }
+.workspace-executor-choice { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.workspace-executor-choice label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.workspace-executor-choice select { width: auto; max-width: 175px; padding: 4px 8px; }
+.workspace-executor-choice small { color: var(--muted); }
 .workspace-tabs { display: flex; min-width: 0; flex: 1; overflow-x: auto; scrollbar-width: thin; }
 .workspace-tabs [role='tab'] { display: flex; align-items: center; gap: 7px; min-width: 94px; max-width: 190px; border: 0; border-right: 1px solid var(--border); border-top: 2px solid transparent; padding: 10px 12px; color: var(--text-muted); background: transparent; cursor: pointer; white-space: nowrap; font-size: 12px; }
 .workspace-tabs [role='tab'][aria-selected='true'] { border-top-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }

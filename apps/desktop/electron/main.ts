@@ -1,4 +1,5 @@
 import { WorkbenchConversationService } from './workbench-conversation-service.js'
+import { createWorkbenchOpencodeExecutor } from './workbench-opencode-executor.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { createCredentialWriteGuard } from './credential-write-guard.js'
 import { createDiagnosticLog } from '@ai-devflow/shared/node/diagnostic-log'
@@ -2089,6 +2090,20 @@ async function getWorkbenchConversationService() {
     const service = new WorkbenchConversationService({
       store,
       resolveProvider: (id) => resolveAgentProvider(store, id),
+      openHarness: async ({ project, providerId, signal, query }) => {
+        const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === providerId)
+        if (!metadata) throw new Error('请先在 Agents 中保存所选模型的 Provider 配置。')
+        const discovery = await detectCodingRuntimeEngines({ projectId: project.id })
+        const candidate = discovery.candidates.find((item) => item.engine === 'opencode-http' && item.status === 'available')
+        if (!candidate?.binaryPath) throw new Error('未检测到兼容的本机 OpenCode，请安装后重试。')
+        signal.throwIfAborted()
+        const binding = await resolveSavedOpencodeProviderBinding({ providerId, modelId: metadata.model,
+          credentialSource: store, decryptCredential: (secret) => credentialAccess.decrypt(secret, 'provider', signal) })
+        signal.throwIfAborted()
+        if (!binding) throw new Error('所选模型的凭据已变更，请检查配置后重试。')
+        if ((await store.listProviderCredentials()).find((item) => item.providerId === providerId)?.updatedAt !== metadata.updatedAt) throw new Error('所选模型配置已变更，请重试。')
+        return createWorkbenchOpencodeExecutor({ binaryPath: candidate.binaryPath, binding, signal, query })
+      },
       loadKnowledge: (projectId) => loadTrustedRepositoryKnowledge(projectId, { refresh: true }),
       inspectGate: async (target) => {
         const evaluated = await evaluateLocalGateEnforcement(target)
@@ -3737,6 +3752,9 @@ app.on('before-quit', (event) => {
   githubDeliveryScheduler?.stop()
   githubDeliveryOperationAbortController?.abort()
   quitCleanupPromise ??= Promise.all([
+    (workbenchConversationService?.then((service) => service.shutdown()) ?? Promise.resolve()).catch(() => {
+      console.warn('[workbench] Unable to complete conversation cleanup before quit.')
+    }),
     (fixtureLocalMcpRuntime?.shutdown() ?? Promise.resolve()).catch(() => {
       console.warn('[local-mcp] Unable to complete fixture MCP cleanup before quit.')
     }),

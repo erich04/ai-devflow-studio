@@ -27,6 +27,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
+  const [newExecutor, setNewExecutor] = useState<'direct-provider' | 'opencode'>('direct-provider')
   const generation = useRef(0)
   const activeRef = useRef(active)
   activeRef.current = active
@@ -58,7 +59,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
 
   useEffect(() => {
     generation.current++
-    setSessions([]); setShowHistory(false); setError('')
+    setSessions([]); setShowHistory(false); setError(''); setNewExecutor('direct-provider')
     let restored = 'details'
     try { restored = projectId ? localStorage.getItem(`devflow-workbench-tab:${projectId}`) ?? 'details' : 'details' } catch { /* optional UI preference */ }
     setActive(restored)
@@ -78,13 +79,13 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     const previousActive = active
     setCreating(true)
     setActive('new-pending')
-    const result = await runCommand({ type: 'create', projectId, inputDraft: prompt })
+    const result = await runCommand({ type: 'create', projectId, inputDraft: prompt, executor: newExecutor })
     if (currentGeneration === generation.current) {
       if (result?.conversationId) { activate(result.conversationId); setShowHistory(false) }
       else setActive(previousActive)
     }
     setCreating(false)
-  }, [active, activate, creating, projectId, runCommand])
+  }, [active, activate, creating, projectId, runCommand, newExecutor])
 
   useEffect(() => {
     if (lastRequest.current === request.serial) return
@@ -131,6 +132,12 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       <button className="workspace-icon" aria-label="新建对话" title="新建独立对话，可以询问整个项目" disabled={!projectId || !api?.workbenchConversation || creating} onClick={() => void create()}><Plus size={19} /></button>
       <button className="workspace-icon" aria-label="会话历史" title="会话历史" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}><History size={18} /></button>
     </div>
+    <div className="workspace-executor-choice">
+      <label>新对话<select aria-label="新对话执行方式" value={newExecutor} onChange={(event) => setNewExecutor(event.target.value as 'direct-provider' | 'opencode')} disabled={creating}>
+        <option value="direct-provider">Direct Provider</option><option value="opencode">OpenCode</option>
+      </select></label>
+      <small>{newExecutor === 'opencode' ? '需本机已安装 OpenCode；点击 ＋ 新建' : '使用 Agents 中选定的模型；点击 ＋ 新建'}</small>
+    </div>
     {error && <div className="conversation-error" role="alert">{error}<button aria-label="关闭会话提示" onClick={() => setError('')}><X size={14} /></button></div>}
     {showHistory && <section className="conversation-history" aria-label="会话历史记录">
       <div className="row"><strong>会话历史</strong><button className="workspace-icon" onClick={() => setShowHistory(false)} aria-label="关闭会话历史"><X size={16} /></button></div>
@@ -140,7 +147,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
         if (!projectId) return
         const result = await runCommand({ type: 'update', projectId, conversationId: item.id, isOpen: true })
         if (result) { activate(item.id); setShowHistory(false) }
-      }}><span>{item.title}</span><small>{statusCopy[item.status]} · {new Date(item.updatedAt).toLocaleString()}</small></button>)}
+      }}><span>{item.title}</span><small>{statusCopy[item.status]} · {item.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {new Date(item.updatedAt).toLocaleString()}</small></button>)}
     </section>}
     <div id="details-panel" role="tabpanel" aria-labelledby="details-tab" hidden={active !== 'details' || showHistory} className="workspace-details">
       {children}
@@ -188,13 +195,14 @@ function ConversationView({ session, runs, projectName, providerId, providerName
     textarea.current?.focus()
   }
   const unreportedCalls = session.messages.filter((message) => message.role === 'notice' && message.provider && !message.usage && message.reasoning?.status !== 'streaming').length
-  const visibleMessages = session.messages.filter((message) => message.role !== 'notice' || message.reasoning)
+  const visibleMessages = session.messages.filter((message) => message.role !== 'notice' || message.reasoning || !message.provider)
   const usages = session.messages.flatMap((message) => message.usage ? [message.usage] : [])
   const tokenCount = usages.reduce((sum, usage) => sum + (usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)), 0)
   return <>
     <header className="conversation-head">
       <div className="row"><strong>{session.title}</strong><span className={`pill ${session.status === 'awaiting_answer' ? 'blocked' : 'soft'}`}>{statusCopy[session.status]}</span></div>
       <p>{projectName} · 可查询全部 Run 与节点</p>
+      <p>执行方式：{session.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · 模型：{providerName || '尚未选择'}</p>
       <button className="conversation-context-toggle" onClick={() => setContextOpen(!contextOpen)} aria-expanded={contextOpen}><BookOpen size={15} />会话信息<span>{contextOpen ? '收起' : '查看'}</span></button>
       {contextOpen && <div className="conversation-context">
         <label>会话名称<input aria-label="会话名称" key={session.id} defaultValue={session.title} maxLength={100} onBlur={(event) => { if (event.target.value.trim() && event.target.value !== session.title) void command({ type: 'update', ...scope, title: event.target.value }) }} /></label>
@@ -203,7 +211,8 @@ function ConversationView({ session, runs, projectName, providerId, providerName
         <p className="meta">{session.contextReceipt ? `上次使用 ${session.contextReceipt.includedMessages} 条本会话消息；${session.contextReceipt.omittedMessages} 条较早消息未进入模型上下文，历史仍保留。` : '每次调查按需读取最新流程；不会读取其他会话的聊天。'}</p>
         {session.contextReceipt?.limited && <p className="meta">本次上下文达到容量限制，部分查询内容未全部附带。可以缩小问题范围后继续调查。</p>}
         <p className="meta">当前工具：流程查询、节点与产物、只读代码检索、项目知识检索。没有连接业务数据库。</p>
-        <details><summary>模型调用设置记录</summary>{session.messages.filter((message) => message.provider).map((message) => <p className="meta" key={message.id}>{message.createdAt} · {message.provider!.model} · {message.provider!.effectiveThinking ? describeProviderThinking(message.provider!.effectiveThinking!) : '旧记录未保存思考参数'}</p>)}</details>
+        <p className="meta">执行方式保存在本会话中；切换方式请新建对话。OpenCode 通过受限查询工具调查，不会执行代码修改或批准 Gate。</p>
+        <details><summary>模型调用设置记录</summary>{session.messages.filter((message) => message.provider).map((message) => <p className="meta" key={message.id}>{message.createdAt} · {message.provider!.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {message.provider!.model} · {message.provider!.effectiveThinking ? describeProviderThinking(message.provider!.effectiveThinking!) : '未提供或未记录思考参数'}</p>)}</details>
       </div>}
     </header>
     <div className="conversation-messages" aria-label="当前会话消息" aria-busy={busy} onScroll={(event) => { const element = event.currentTarget; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
@@ -242,7 +251,7 @@ function ReasoningView({ message }: { message: ConversationMessage }) {
   const status = streaming ? '生成中' : reasoning.status === 'interrupted' ? '已中断' : '已结束'
   return <section className="conversation-reasoning" aria-label={`${message.text}的推理过程`}>
     <button className="reasoning-toggle" aria-expanded={open} aria-controls={`reasoning-${message.id}`} onClick={() => setExpanded(!open)}>
-      <Brain size={15} /><strong>推理过程</strong><span className="reasoning-status">{streaming && <i className="conversation-running-dot" />}{status}</span><small>{{ low: '低强度', high: '高强度', max: '最高强度' }[reasoning.effort]}</small><ChevronDown size={14} className={open ? 'expanded' : ''} />
+      <Brain size={15} /><strong>推理过程</strong><span className="reasoning-status">{streaming && <i className="conversation-running-dot" />}{status}</span><small>{reasoning.effort ? { low: '低强度', high: '高强度', max: '最高强度' }[reasoning.effort] : '执行器未提供强度'}</small><ChevronDown size={14} className={open ? 'expanded' : ''} />
     </button>
     <div id={`reasoning-${message.id}`} hidden={!open}>
       <div ref={content} className="reasoning-content" onScroll={(event) => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40 }}>

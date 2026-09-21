@@ -35,6 +35,7 @@
     "test:memory-context-live": "tsx scripts/memory-context-live.ts",
     "test:opencode-smoke": "tsx scripts/opencode-smoke.ts",
     "test:stage-agent-opencode-smoke": "tsx scripts/stage-agent-opencode-smoke.ts",
+    "test:workbench-opencode-contract": "tsx scripts/workbench-opencode-conversation-smoke.mts",
     "opencode:status": "node scripts/opencode-runtime-status.mjs",
     "opencode:release-preflight": "tsx scripts/opencode-release-config-preflight.ts",
     "test:e2e": "node scripts/e2e.mjs",

@@ -29,13 +29,15 @@ export type ConversationMessage = {
   question?: { prompt: string; options: string[]; purpose?: 'clarification' | 'save_proposal'; answeredAt?: string; resolvedBy?: 'proposal_saved' }
   draft?: ConversationDraft
   usage?: AgentProviderUsage
-  provider?: { id: string; model: string; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
+  provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
   /** Provider-returned reasoning, local to this conversation; never shared workflow context. */
-  reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort: 'low' | 'high' | 'max' }
+  reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort?: 'low' | 'high' | 'max' }
 }
 export type WorkbenchConversation = {
   id: string
   localProjectId: string
+  /** Immutable per conversation. Legacy records use direct-provider. */
+  executor?: 'direct-provider' | 'opencode'
   version: number
   title: string
   isOpen: boolean
@@ -52,7 +54,7 @@ export type WorkbenchConversation = {
 }
 export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }
-  | { type: 'create'; title?: string; inputDraft?: string }
+  | { type: 'create'; title?: string; inputDraft?: string; executor?: 'direct-provider' | 'opencode' }
   | { type: 'update'; conversationId: string; title?: string; isOpen?: boolean; inputDraft?: string }
   | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string }
   | { type: 'retry'; conversationId: string; providerId: string }
@@ -72,7 +74,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的会话请求。')
   const record = value as Record<string, unknown>
   const fields: Record<string, string[]> = {
-    list: [], create: ['title', 'inputDraft'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
+    list: [], create: ['title', 'inputDraft', 'executor'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
     send: ['conversationId', 'text', 'providerId', 'answerToMessageId'], retry: ['conversationId', 'providerId'],
     cancel: ['conversationId'], publish: ['conversationId', 'messageId'],
   }
@@ -83,6 +85,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
     if (record[key] !== undefined && (typeof record[key] !== 'string' || (record[key] as string).length > limit || (record[key] as string).includes('\0'))) throw new Error('会话输入过长或格式不正确。')
   }
   if (record.isOpen !== undefined && typeof record.isOpen !== 'boolean') throw new Error('无效的 Tab 状态。')
+  if (record.executor !== undefined && record.executor !== 'direct-provider' && record.executor !== 'opencode') throw new Error('不支持这个会话执行方式。')
   const required = ['projectId', ...(['list', 'create'].includes(type) ? [] : ['conversationId']), ...(['send', 'retry'].includes(type) ? ['providerId'] : []), ...(type === 'send' ? ['text'] : []), ...(type === 'publish' ? ['messageId'] : [])]
   if (required.some((key) => typeof record[key] !== 'string' || !(record[key] as string).trim())) throw new Error('会话请求缺少必要信息。')
   if (record.title !== undefined && !(record.title as string).trim()) throw new Error('请输入会话名称。')

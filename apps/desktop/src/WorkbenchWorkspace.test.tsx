@@ -15,6 +15,7 @@ function fixture() {
       commands.push(input)
       if (input.type === 'create') {
         const session: WorkbenchConversation = { id: `chat-${sessions.length + 1}`, localProjectId: input.projectId, title: input.title ?? `对话 ${sessions.length + 1}`, version: 1, isOpen: true, inputDraft: input.inputDraft ?? '', memory: '', status: 'idle', messages: [], createdAt: run.createdAt, updatedAt: run.updatedAt }
+        session.executor = input.executor ?? 'direct-provider'
         sessions.push(session)
         return { conversations: structuredClone(sessions), conversationId: session.id }
       }
@@ -41,6 +42,22 @@ function fixture() {
 }
 
 describe('workbench tabs and independent conversation interaction', () => {
+  it('chooses an executor for a new conversation and preserves each existing conversation selection', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    expect(f.sessions[0]!.executor).toBe('direct-provider')
+    fireEvent.change(screen.getByLabelText('新对话执行方式'), { target: { value: 'opencode' } })
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    await screen.findByRole('tab', { name: '对话 2' })
+    expect(f.sessions[1]!.executor).toBe('opencode')
+    expect(screen.getByText('执行方式：OpenCode · 模型：DeepSeek')).toBeVisible()
+    fireEvent.click(screen.getByRole('tab', { name: '对话 1' }))
+    expect(screen.getByText('执行方式：Direct Provider · 模型：DeepSeek')).toBeVisible()
+    expect(f.sessions[0]!.executor).toBe('direct-provider')
+    expect(f.commands.some((command) => command.type === 'send')).toBe(false)
+  })
   it('renders legacy and declared Markdown while keeping plain text, unknown formats and unsafe content readable', async () => {
     const f = fixture()
     render(<WorkbenchWorkspace {...f.props} />)

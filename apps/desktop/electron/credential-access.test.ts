@@ -54,6 +54,22 @@ describe('asynchronous credential access', () => {
     await expect(access.decrypt('ZW5jcnlwdGVk', 'provider')).resolves.toBe('fixture-secret')
   })
 
+  it('cancels only the credential wait belonging to the aborted conversation', async () => {
+    const { access, storage } = harness()
+    const controller = new AbortController()
+    let finish!: (value: { result: string; shouldReEncrypt: boolean }) => void
+    storage.decryptStringAsync.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const pending = access.decrypt('ZW5jcnlwdGVk', 'provider', controller.signal)
+    const rejection = expect(pending).rejects.toMatchObject({ code: 'credential_cancelled' })
+    await vi.waitFor(() => expect(storage.decryptStringAsync).toHaveBeenCalled())
+    controller.abort()
+    await rejection
+    await expect(access.decrypt('ZW5jcnlwdGVk', 'team')).resolves.toBe('fixture-secret')
+    finish({ result: 'discard-this-secret', shouldReEncrypt: false })
+    await Promise.resolve()
+    expect(access.list().map((record) => record.state)).toEqual(['succeeded', 'cancelled'])
+  })
+
   it('bounds an unfinished authorization wait and never falls back to plaintext or synchronous storage', async () => {
     vi.useFakeTimers()
     const { access, storage } = harness()
