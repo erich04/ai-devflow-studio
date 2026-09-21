@@ -2,6 +2,7 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import '@xyflow/react/dist/style.css'
 import './styles.css'
+import './workbench-workspace.css'
 import { App } from './App'
 
 createRoot(document.getElementById('root') as HTMLElement).render(

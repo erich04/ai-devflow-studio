@@ -140,7 +140,7 @@ describe('remote sync outbox client factory', () => {
       retryable: false,
     })
     expect(String(error)).toBe(
-      'RemoteSyncHttpError: Remote sync request failed (HTTP 401, unauthorized).',
+      'RemoteSyncHttpError: 登录或团队凭据已失效。请重新登录网页，并重新配对 Desktop。',
     )
     expect(decryptToken).not.toHaveBeenCalled()
     expect(createClient).not.toHaveBeenCalled()

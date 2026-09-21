@@ -1,10 +1,13 @@
 import {
   canRunCodingAgentOnNode,
+  isActiveCodingAgentRunStatus,
   deriveWorkflowContextPolicyRequirements,
   projectWorkflowContext,
   type AgentEvent,
   type AgentReviewResult,
   type Artifact,
+  type CodingAgentRun,
+  type CodingDiffArtifact,
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
   type GitHubDeliveryOperatorOutcome,
@@ -184,6 +187,25 @@ function githubDeliveryInspectorPriority(intent: GitHubDeliveryIntent): number {
   if (intent.status === 'completed') return 2
   if (intent.status === 'failed' || intent.status === 'revoked') return 1
   return 3
+}
+
+/** Display evidence only. Delivery commands still validate exact sources in main. */
+export function hasArchivedUpstreamCodingDiff(input: {
+  run: WorkflowRun | undefined
+  node: WorkflowNode | undefined
+  codingRuns: readonly CodingAgentRun[]
+  diffs: readonly CodingDiffArtifact[]
+}): boolean {
+  const { run, node } = input
+  if (!run || !node || node.kind !== 'pr' || !run.nodes.some((item) => item.id === node.id)) return false
+  const buildIds = new Set(run.nodes.filter(canRunCodingAgentOnNode).map((item) => item.id))
+  const latest = input.codingRuns.filter((item) => item.runId === run.id && item.projectId === run.projectId && buildIds.has(item.nodeId))
+    .sort((a, b) => Number(isActiveCodingAgentRunStatus(b.status)) - Number(isActiveCodingAgentRunStatus(a.status)) ||
+      b.startedAt.localeCompare(a.startedAt) || b.id.localeCompare(a.id))[0]
+  if (!latest || latest.status !== 'completed' || !latest.completedAt) return false
+  return input.diffs.some((diff) => diff.id === latest.diffArtifactId && diff.runId === run.id &&
+    diff.projectId === run.projectId && diff.nodeId === latest.nodeId && !diff.truncated &&
+    Boolean(diff.sourceDigest && diff.patch.trim()))
 }
 
 export function selectInspectorPrPackage(input: {
@@ -429,6 +451,7 @@ export function buildStatusDescriptors(input: {
   canApprove: boolean
   testEvidence?: readonly TestEvidence[]
   codingActionProjection?: CodingRuntimeActionProjection
+  upstreamCodingDiffReady?: boolean
   githubDeliveryIntent?: GitHubDeliveryIntent
 }): StatusDescriptor[] {
   const nodeType = getInspectorNodeType(input.node)
@@ -703,7 +726,7 @@ export function buildStatusDescriptors(input: {
       nodeStatus(),
       artifactStatus('pr-draft', 'PR Delivery Package', 'pr', '还没有 PR Delivery Package。', 'PR Delivery Package 已生成。', '点击顶部“生成 PR Delivery Package”。', 'Delivery package'),
       testEvidenceStatus(false),
-      artifactStatus('handoff-evidence', 'Handoff readiness', 'diff', '还没有实现 diff 可用于交付摘要。', '已有实现 diff 可汇总到 handoff。', '先完成 build/test，再生成 PR Delivery Package。', 'Delivery evidence', Boolean(input.githubDeliveryIntent?.diffSourceDigest)),
+      artifactStatus('handoff-evidence', '实现改动', 'diff', '还没有可用的实现改动。', '实现改动已归档，可用于生成交付摘要。', '先完成开发和测试，再生成交付包。', 'Delivery evidence', Boolean(input.githubDeliveryIntent?.diffSourceDigest || input.upstreamCodingDiffReady)),
     ]
   }
 
@@ -1307,6 +1330,7 @@ export function buildNodeInspectorViewModel(input: {
   testEvidenceCount?: number
   testEvidence?: readonly TestEvidence[]
   codingActionProjection?: CodingRuntimeActionProjection
+  upstreamCodingDiffReady?: boolean
 }): NodeInspectorViewModel {
   const presentation = buildWorkflowNodePresentation(input.node)
   const visualKind = presentation.nodeKind
@@ -1368,6 +1392,7 @@ export function buildNodeInspectorViewModel(input: {
     gateEnforcementDecision: input.gateEnforcementDecision,
     isLoadingGateEnforcement: input.isLoadingGateEnforcement,
     canApprove: input.canApprove,
+    upstreamCodingDiffReady: input.upstreamCodingDiffReady ?? false,
     ...(input.testEvidence ? { testEvidence: input.testEvidence } : {}),
     ...(input.codingActionProjection ? { codingActionProjection: input.codingActionProjection } : {}),
     ...(input.githubDeliveryIntent ? { githubDeliveryIntent: input.githubDeliveryIntent } : {}),

@@ -500,6 +500,8 @@ export type CodingRuntimeCostSummary = Omit<TokenUsage, 'cacheReadTokens' | 'cos
   pricingSnapshot?: RuntimePricingSnapshot | null
   breakdown?: RuntimeCostBreakdown | null
   providerCallSettlements?: RuntimeProviderCallSettlement[]
+  /** Exact response identities already settled for this Coding attempt. */
+  providerCallIds?: string[]
 }
 
 export type CodingRuntimeCostEstimate = CodingRuntimeCostSummary & {
@@ -555,6 +557,7 @@ export type AgentProviderConfig = {
   kind: AgentProviderKind
   baseUrl?: string
   model: string
+  thinking?: import('./provider-thinking').ProviderThinkingConfiguration
   enabled: boolean
   maskedCredential?: string
   updatedAt: string
@@ -565,6 +568,7 @@ export type ProviderCredentialMetadata = {
   /** User-facing label. Legacy records may omit it and fall back to providerId. */
   name?: string
   model: string
+  thinking?: import('./provider-thinking').ProviderThinkingConfiguration
   baseUrl?: string
   maskedCredential: string
   updatedAt: string

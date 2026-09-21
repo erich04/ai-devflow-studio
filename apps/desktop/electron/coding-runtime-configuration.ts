@@ -16,6 +16,9 @@ import type { LocalStore } from './local-store.js'
 
 export const NATIVE_CODING_MAX_PROVIDER_CALLS = 3
 export const NATIVE_CODING_MAX_PROMPT_CHARS = 30_000
+// Preserve complete approved stage artifacts, with room left for the native
+// request envelope and repository context under the final 30,000-character cap.
+export const CODING_BRIEF_MAX_BYTES = 24_000
 export const NATIVE_CODING_MAX_OUTPUT_TOKENS = 4_096
 
 export type ResolvedCodingRuntimeSelection =

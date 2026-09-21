@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useLayoutEffect } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PairingCodePanel } from './PairingCodePanel'
 
 const pairingSubject = { userId: 'u-lead', userName: 'Ling', role: 'lead' as const }
@@ -20,12 +20,46 @@ function panel(projectId: string) {
   )
 }
 
+beforeEach(() => { vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-01T12:00:00.000Z')) })
+
 afterEach(() => {
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe('PairingCodePanel', () => {
+  it('expires the displayed code, blocks copying it and allows one fresh issuance', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-01T12:00:00.000Z'))
+    const code = { id: 'pair-one', organizationId: 'org-demo', projectId: 'p-one',
+      createdByUserId: 'u-lead', issuedRole: 'lead', code: 'pair-one.old-secret',
+      createdAt: new Date().toISOString(), expiresAt: '2026-08-01T12:10:00.000Z', attemptsRemaining: 5 }
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(code), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ...code, id: 'pair-two', code: 'pair-two.new-secret', expiresAt: '2026-08-01T12:20:00.000Z' }), { status: 201 }))
+    const writeText = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    render(panel('p-one'))
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' })) })
+    expect(screen.getByText(code.code)).toBeInTheDocument()
+    await act(async () => { vi.advanceTimersByTime(600_001) })
+    expect(screen.getByText('配对码已过期')).toBeInTheDocument()
+    expect(screen.queryByText(code.code)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '复制配对码' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '复制配对码' }))
+    expect(writeText).not.toHaveBeenCalled()
+    await act(async () => {
+      const button = screen.getByRole('button', { name: '重新生成配对码' })
+      fireEvent.click(button); fireEvent.click(button)
+    })
+    expect(fetcher).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('pair-two.new-secret')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '复制配对码' })).toBeEnabled()
+    expect(screen.getByText('配对操作诊断 · 2')).toBeInTheDocument()
+  })
+
   it('retains an issuance started before the initial passive effects finish', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
       id: 'pair-p-one',
@@ -82,9 +116,7 @@ describe('PairingCodePanel', () => {
     }), { status: 201 })))
     render(panel('p-one'))
     fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
-    expect(await screen.findByText(
-      'Pairing code subject did not match the signed-in member.',
-    )).toBeInTheDocument()
+    expect(await screen.findByText(/团队服务返回了无法识别的结果.*诊断编号/, { selector: 'small' })).toBeInTheDocument()
     expect(screen.queryByText('p-one.must-not-render')).not.toBeInTheDocument()
   })
 
@@ -157,10 +189,12 @@ describe('PairingCodePanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
     expect(fetcher).toHaveBeenCalledWith('/api/pairing-code', {
+      signal: expect.any(AbortSignal),
       method: 'POST',
       headers: {
         accept: 'application/json',
         'content-type': 'application/json',
+        'x-devflow-diagnostic-id': expect.stringMatching(/^[0-9a-f-]{36}$/),
       },
       body: JSON.stringify({ projectId: 'p-one' }),
     })
@@ -209,7 +243,7 @@ describe('PairingCodePanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
 
     await waitFor(() =>
-      expect(screen.getByText('Pairing code response was invalid.')).toBeInTheDocument(),
+      expect(screen.getByText(/团队服务返回了无法识别的结果.*诊断编号/, { selector: 'small' })).toBeInTheDocument(),
     )
     expect(screen.queryByText('p-two.copy-once-secret')).not.toBeInTheDocument()
   })

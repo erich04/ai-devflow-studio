@@ -1,5 +1,9 @@
+import type { WorkbenchConversation } from './workbench-conversation-contract.js'
+import type { CodingProviderCallTrace } from './coding-engine.js'
+import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
 import { existsSync } from 'node:fs'
 import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
+import { parseProviderThinking, resolveProviderThinking, type UpdateProviderThinkingInput } from '@ai-devflow/shared'
 import { inspectStoredProviderRemoval } from './provider-credential-store'
 import type { ProviderRemovalCheck, ProviderRemovalResult } from '@ai-devflow/shared'
 import { createHash, randomUUID } from 'node:crypto'
@@ -798,6 +802,8 @@ export type {
 } from './local-mcp-store'
 
 export type LocalStore = {
+  listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]>
+  saveWorkbenchConversation(conversation: WorkbenchConversation, expectedVersion: number, artifact?: Artifact): Promise<boolean>
   getSpecialistTaskAuthorityStoreIdentity(): object
   upsertProject(project: LocalProject): Promise<void>
   listProjects(): Promise<LocalProject[]>
@@ -1075,6 +1081,7 @@ export type LocalStore = {
     encryptedSecret: string,
   ): Promise<ProviderCredentialMetadata>
   listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
+  updateProviderThinking(input: UpdateProviderThinkingInput): Promise<ProviderCredentialMetadata>
   getProviderEncryptedSecret(providerId: string): Promise<string | null>
   inspectProviderRemoval(providerId: string): Promise<ProviderRemovalCheck>
   removeProviderCredential(providerId: string, expectedUpdatedAt: string): Promise<ProviderRemovalResult>
@@ -4421,6 +4428,31 @@ class SqlJsLocalStore implements LocalStore {
     private db: Database,
     private readonly dbPath: string,
   ) {}
+
+  async listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]> {
+    return selectJson<WorkbenchConversation>(this.db,
+      `select json from workbench_conversations ${projectId ? 'where local_project_id = ?' : ''} order by updated_at desc, id`,
+      projectId ? [projectId] : [])
+  }
+
+  async saveWorkbenchConversation(conversation: WorkbenchConversation, expectedVersion: number, artifact?: Artifact): Promise<boolean> {
+    const previous = selectJson<WorkbenchConversation>(this.db, 'select json from workbench_conversations where id = ?', [conversation.id])[0]
+    if ((previous?.version ?? 0) !== expectedVersion) return false
+    if (conversation.version !== expectedVersion + 1 || (previous && previous.localProjectId !== conversation.localProjectId)) throw new Error('Invalid conversation revision')
+    if (!selectJson<LocalProject>(this.db, 'select json from local_projects where id = ?', [conversation.localProjectId]).length) throw new Error('Conversation project not found')
+    if (JSON.stringify(conversation).length > 2000000) throw new Error('会话已达到存储上限，请新建会话。')
+    if (artifact) {
+      const run = readWorkflowRuns(this.db).find((candidate) => candidate.id === artifact.runId)
+      if (!run || run.projectId !== conversation.localProjectId || !run.nodes.some((node) => node.id === artifact.nodeId) || artifact.kind !== 'log') throw new Error('Invalid conversation publication target')
+      assertImmutableWorkflowArtifactWrite(this.db, artifact)
+      writeArtifact(this.db, artifact)
+    }
+    this.db.run(`insert into workbench_conversations (id, local_project_id, version, updated_at, json) values (?, ?, ?, ?, ?)
+      on conflict(id) do update set version = excluded.version, updated_at = excluded.updated_at, json = excluded.json`,
+      [conversation.id, conversation.localProjectId, conversation.version, conversation.updatedAt, JSON.stringify(conversation)])
+    await this.persist()
+    return true
+  }
 
   getSpecialistTaskAuthorityStoreIdentity(): object {
     return this.specialistTaskAuthorityStoreIdentity
@@ -12436,6 +12468,8 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingAgentRun(run: CodingAgentRun): Promise<void> {
+    const [current] = selectJson<CodingAgentRun>(this.db, 'select json from coding_agent_runs where id = ?', [run.id])
+    if (current) run = retainRecordedCodingCost(run, current)
     this.db.run('begin transaction')
     try {
       writeCodingAgentRun(this.db, run)
@@ -12660,6 +12694,13 @@ class SqlJsLocalStore implements LocalStore {
     if (!currentRun) {
       return { committed: false, reason: 'run_not_found', run: null }
     }
+    // A received response can settle expenses while an executor holds an earlier snapshot.
+    // Only cost facts are reconciled; all execution, workflow and permission fences remain exact.
+    mutation = {
+      ...mutation,
+      expectedRun: retainRecordedCodingCost(mutation.expectedRun, currentRun),
+      ...(mutation.run ? { run: retainRecordedCodingCost(mutation.run, currentRun) } : {}),
+    }
     if (JSON.stringify(currentRun) !== JSON.stringify(mutation.expectedRun)) {
       return { committed: false, reason: 'stale_run', run: currentRun }
     }
@@ -12836,7 +12877,27 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   async saveCodingAgentEvent(event: CodingAgentEvent): Promise<void> {
-    writeCodingAgentEvent(this.db, event)
+    const trace = event.metadata?.providerCall as CodingProviderCallTrace | undefined
+    const [current] = selectJson<CodingAgentRun>(this.db, 'select json from coding_agent_runs where id = ?', [event.codingRunId])
+    if (trace && current && (current.runId !== event.runId || current.nodeId !== event.nodeId)) {
+      throw new Error('Provider call event scope mismatch')
+    }
+    const settled = trace && current?.engine === 'native' ? appendCodingCallCost(current, trace) : current
+    this.db.run('begin transaction')
+    try {
+      writeCodingAgentEvent(this.db, event)
+      if (settled && settled !== current) {
+        writeCodingAgentRun(this.db, settled)
+        this.enqueueCanonicalRemoteSyncOperation({
+          kind: 'coding-agent-summary', localProjectId: settled.projectId,
+          runId: settled.runId, entityId: settled.id, createdAt: codingAgentSummaryUpdatedAt(settled),
+        })
+      }
+      this.db.run('commit')
+    } catch (error) {
+      this.db.run('rollback')
+      throw error
+    }
     await this.persist()
   }
 
@@ -13149,6 +13210,19 @@ class SqlJsLocalStore implements LocalStore {
       this.db,
       'select json from provider_credentials order by updated_at desc',
     )
+  }
+
+  async updateProviderThinking(input: UpdateProviderThinkingInput): Promise<ProviderCredentialMetadata> {
+    // Runs inside the durable mutation queue. Never decrypts or replaces the key.
+    const current = selectJson<ProviderCredentialMetadata>(this.db, 'select json from provider_credentials where provider_id = ?', [input.providerId])[0]
+    if (!current || current.updatedAt !== input.expectedUpdatedAt) throw new Error('Provider 已变更，请重新加载后再保存。')
+    const thinking = parseProviderThinking(input.thinking)
+    resolveProviderThinking({ ...current, thinking })
+    const updatedAt = new Date(Math.max(Date.now(), Date.parse(current.updatedAt) + 1)).toISOString()
+    const metadata = { ...current, thinking, updatedAt }
+    this.db.run('update provider_credentials set json = ?, updated_at = ? where provider_id = ?', [JSON.stringify(metadata), updatedAt, input.providerId])
+    await this.persist()
+    return metadata
   }
 
   async getProviderEncryptedSecret(providerId: string): Promise<string | null> {
@@ -13584,6 +13658,8 @@ class SqlJsLocalStore implements LocalStore {
 // Direct methods access state or handle in-memory authority/lifecycle; Memory retrieval is
 // durable because it also records expiry and retrieval audit state.
 const LOCAL_STORE_METHOD_EXECUTION = {
+  listWorkbenchConversations: 'direct',
+  saveWorkbenchConversation: 'durable',
   getSpecialistTaskAuthorityStoreIdentity: 'direct',
   upsertProject: 'durable',
   listProjects: 'direct',
@@ -13716,6 +13792,7 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   saveCodingDiffArtifact: 'durable',
   listCodingDiffArtifacts: 'direct',
   saveProviderCredential: 'durable',
+  updateProviderThinking: 'durable',
   listProviderCredentials: 'direct',
   getProviderEncryptedSecret: 'direct',
   inspectProviderRemoval: 'direct',
@@ -13784,7 +13861,21 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
     })
     await persistDatabase(db, options.dbPath)
 
-    return serializeLocalStoreMutations(new SqlJsLocalStore(SQL, db, options.dbPath))
+    const store = serializeLocalStoreMutations(new SqlJsLocalStore(SQL, db, options.dbPath))
+    // Recover historical response expenses independently of runtime/provider availability.
+    // Completed/failed runs need no executor startup and must not re-run their business work.
+    for (const run of await store.listCodingAgentRuns()) {
+      if (run.engine !== 'native' || run.runtimeCostSummary?.source === 'provider_reported') continue
+      for (const event of await store.listCodingAgentEvents(run.id)) {
+        const trace = event.metadata?.providerCall as CodingProviderCallTrace | undefined
+        if (trace?.usage && typeof trace.requestId === 'string' && trace.requestId &&
+          trace.codingRunId === run.id && trace.providerId === run.providerId &&
+          (trace.status === 'succeeded' || trace.status === 'failed')) {
+          await store.saveCodingAgentEvent(event)
+        }
+      }
+    }
+    return store
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(

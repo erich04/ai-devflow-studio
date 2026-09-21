@@ -50,6 +50,7 @@ describe('pairing-code Web proxy', () => {
       projectId: 'p-remote',
       pairingCodeId: 'pair-p-remote',
       cookieHeader: 'devflow_session=signed-session-1',
+      diagnosticId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     })
   })
 
@@ -82,6 +83,7 @@ describe('pairing-code Web proxy', () => {
     expect(mockedCreateDesktopPairingCode).toHaveBeenCalledWith({
       projectId: 'p-remote',
       cookieHeader: 'devflow_session=signed-session-1',
+      diagnosticId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     })
   })
 
@@ -105,6 +107,7 @@ describe('pairing-code Web proxy', () => {
     expect(mockedCreateDesktopPairingCode).toHaveBeenCalledWith({
       projectId: 'p-remote',
       cookieHeader: 'devflow_session=signed-session-1',
+      diagnosticId: expect.stringMatching(/^[0-9a-f-]{36}$/),
     })
   })
 

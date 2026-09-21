@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+import { DIAGNOSTIC_HEADER, safeDiagnosticId } from '@ai-devflow/shared'
 import { cookies } from 'next/headers'
 import { NextRequest, NextResponse } from 'next/server'
 import {
@@ -16,23 +18,25 @@ async function getDevFlowCookieHeader(): Promise<string | undefined> {
 }
 
 export async function POST(request: NextRequest) {
+  const diagnosticId = safeDiagnosticId(request.headers.get(DIAGNOSTIC_HEADER)) ?? randomUUID()
+  const headers = { [DIAGNOSTIC_HEADER]: diagnosticId }
   const body = await request.json().catch(() => null)
   const projectId = typeof body?.projectId === 'string' ? body.projectId.trim() : ''
 
   if (!projectId) {
-    return NextResponse.json({ message: 'projectId is required' }, { status: 400 })
+    return NextResponse.json({ message: 'projectId is required' }, { status: 400, headers })
   }
 
   try {
     const cookieHeader = await getDevFlowCookieHeader()
     const pairingCode = await createDesktopPairingCode({
-      projectId,
+      projectId, diagnosticId,
       ...(cookieHeader ? { cookieHeader } : {}),
     })
 
     return NextResponse.json(
       parseDesktopPairingCodePayload(pairingCode, projectId),
-      { status: 201 },
+      { status: 201, headers },
     )
   } catch (error) {
     const status =
@@ -46,12 +50,14 @@ export async function POST(request: NextRequest) {
             ? 'Pairing code service is unavailable.'
             : 'Pairing code request was rejected.',
       },
-      { status },
+      { status, headers },
     )
   }
 }
 
 export async function DELETE(request: NextRequest) {
+  const diagnosticId = safeDiagnosticId(request.headers.get(DIAGNOSTIC_HEADER)) ?? randomUUID()
+  const headers = { [DIAGNOSTIC_HEADER]: diagnosticId }
   const body = await request.json().catch(() => null)
   const projectId = typeof body?.projectId === 'string' ? body.projectId.trim() : ''
   const pairingCodeId =
@@ -59,16 +65,16 @@ export async function DELETE(request: NextRequest) {
   if (!projectId || !pairingCodeId) {
     return NextResponse.json(
       { message: 'projectId and pairingCodeId are required' },
-      { status: 400 },
+      { status: 400, headers },
     )
   }
   try {
     const cookieHeader = await getDevFlowCookieHeader()
     if (!cookieHeader) {
-      return NextResponse.json({ message: 'Authentication required.' }, { status: 401 })
+      return NextResponse.json({ message: 'Authentication required.' }, { status: 401, headers })
     }
-    await revokeDesktopPairingCode({ projectId, pairingCodeId, cookieHeader })
-    return NextResponse.json({ revoked: true }, { status: 200 })
+    await revokeDesktopPairingCode({ projectId, pairingCodeId, cookieHeader, diagnosticId })
+    return NextResponse.json({ revoked: true }, { status: 200, headers })
   } catch (error) {
     const status =
       error instanceof DevFlowApiError && safeUpstreamStatuses.has(error.status)
@@ -76,7 +82,7 @@ export async function DELETE(request: NextRequest) {
         : 502
     return NextResponse.json(
       { message: status === 502 ? 'Pairing code service is unavailable.' : 'Revoke was rejected.' },
-      { status },
+      { status, headers },
     )
   }
 }

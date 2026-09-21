@@ -20,8 +20,19 @@ function fixture() {
 }
 
 describe('saved Provider binding for managed OpenCode', () => {
+  it('rejects a credential rotated while asynchronous decryption is waiting', async () => {
+    const input = fixture()
+    let finish!: (value: string) => void
+    const decryptCredential = vi.fn(() => new Promise<string>((resolve) => { finish = resolve }))
+    const pending = resolveSavedOpencodeProviderBinding({ ...input, decryptCredential })
+    await vi.waitFor(() => expect(decryptCredential).toHaveBeenCalledOnce())
+    input.credentialSource.getProviderEncryptedSecret.mockResolvedValue('rotated-cipher')
+    finish('old-secret')
+    await expect(pending).rejects.toThrow('Saved OpenCode Provider credential is unavailable')
+  })
+
   it('keeps the explicitly selected saved credential through both runtime environment filters', async () => {
-    const binding = await resolveSavedOpencodeProviderBinding(fixture())
+    const binding = await resolveSavedOpencodeProviderBinding({ ...fixture(), decryptCredential: async () => 'test-provider-secret' })
     const ambient = { PATH: '/usr/bin', GH_TOKEN: 'unrelated-secret', OPENAI_API_KEY: 'ambient-secret' }
     const codingEnv = buildOpencodeRuntimeEnv({ baseEnv: ambient, apiKeyEnvName: 'OPENCODE_API_KEY', providerBinding: binding })
     const stageEnv = buildReadOnlyStageAgentRuntimeEnv(codingEnv, binding)

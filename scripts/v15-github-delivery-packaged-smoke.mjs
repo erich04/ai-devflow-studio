@@ -1,3 +1,4 @@
+import { probeCompletedWorkflow } from './workbench-completed-flow-probe.mjs'
 import { execFile, spawn } from 'node:child_process'
 import { createHash, createHmac, generateKeyPairSync, randomBytes } from 'node:crypto'
 import {
@@ -1930,6 +1931,7 @@ try {
     nodeId: acceptanceNode.id,
   })
   assert(accepted.run.status === 'completed', 'Packaged Acceptance did not complete the Run.')
+  const completedConversation = await probeCompletedWorkflow({ page: secondLaunch.page, run: accepted.run, projectId: localProject.id })
 
   const revocation = await requestJson(
     internalApiUrl,
@@ -2114,6 +2116,7 @@ try {
     coordinationRestartDuplicateEffects: 0,
     coordinationCancellation: 'passed',
     acceptance: 'completed',
+    completedConversation,
     bindingRevocation: 'passed',
     typedOutcomes: {
       preparation: prepared.status,

@@ -19,7 +19,7 @@ retroactive TDD rewrites unless it is touched.
   providers, then the v20-to-v21 Coding summary constraint that accepts the `native` engine while
   preserving the existing engine values. Retained rows keep reserved quality version 0 until the first new projection converges
   them; new writes start at 1.
-- Electron/SQLite uses Desktop schema v34. Local-store tests must prove a fresh v34 database, the
+- Electron/SQLite uses Desktop schema v35. Local-store tests must prove a fresh v35 database, the
   Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
   upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
   provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
@@ -36,7 +36,8 @@ retroactive TDD rewrites unless it is touched.
   admits exact Coordination Session IDs without changing existing operations, followed by the
   29-to-30 Coding Diff sanitizer-provenance migration, the 30-to-31 content-scan/operator-outcome
   migration, the 31-to-32 indexed stored-evidence privacy provenance migration, and the 32-to-33
-  project Coding Runtime configuration plus immutable Native v2 Change Set migration. Tests also lock
+  project Coding Runtime configuration plus immutable Native v2 Change Set migration. Tests also cover
+  the 34-to-35 local-only conversation migration with no fabricated chats. Tests also lock
   every migration source digest, require all migrations to commit before privacy maintenance, keep
   a single atomic temporary-file-to-rename persistence outlet, prove rollback on migration failure,
   and refuse a newer unknown schema.
@@ -209,3 +210,14 @@ one Draft pull request, no automatic retry, and never merge.
 This strategy does not authorize paid-provider smoke. GitHub Delivery verification requires no
 paid model request, and routine test commands must not call OpenCode or another paid provider unless
 a separate, explicit, candidate-bound authorization exists.
+
+## Unified workbench coverage
+
+`test:workbench-conversation-electron-smoke` uses the actual file renderer, preload, Main, SQLite,
+and structured Provider HTTP client with an isolated model endpoint. It opens every tab of all eight
+default nodes, follows counters and conversation actions, and exercises questions, explicit proposal
+publication, private memory, independent histories, retry, cancel, restart and responsive themes.
+The packaged GitHub Delivery smoke additionally queries every node after real fixture coding,
+passing tests, approved branch publication, Draft PR reconciliation and final Acceptance. The chat
+must see completed state, Coding evidence, passing tests, delivery intents and final Gate policy
+without making another workflow mutation. See `workbench-conversations.md` for the coverage matrix.

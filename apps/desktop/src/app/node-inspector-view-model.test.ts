@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type {
   Artifact,
+  CodingAgentRun,
+  CodingDiffArtifact,
   GitHubDeliveryIntent,
   GitHubDeliveryOperatorOutcome,
   WorkflowNode,
@@ -14,6 +16,7 @@ import {
   resolveInspectorTabForSearchResult,
   selectGitHubDeliveryIntentForInspector,
   selectInspectorPrPackage,
+  hasArchivedUpstreamCodingDiff,
 } from './node-inspector-view-model'
 
 const run = fixtureRuns[0]!
@@ -114,6 +117,39 @@ function viewModelFor(node: WorkflowNode, overrides: Partial<Parameters<typeof b
 }
 
 describe('node inspector view model', () => {
+  it('shows an upstream archived diff before any delivery intent, without treating the package as generated', () => {
+    const node = findNode((candidate) => candidate.kind === 'pr')
+    const build = findNode((candidate) => candidate.stage === 'build')
+    const coding: CodingAgentRun = {
+      id: 'coding-latest', runId: run.id, nodeId: build.id, projectId: run.projectId,
+      requestedBy: 'user', providerId: 'provider', engine: 'native', status: 'completed',
+      branchName: 'feature/test', userInstruction: '', prompt: '', summary: '', changedPaths: ['README.md'],
+      startedAt: '2026-09-19T00:00:00Z', completedAt: '2026-09-19T00:01:00Z', redacted: true,
+      diffArtifactId: 'diff-latest',
+    }
+    const diff: CodingDiffArtifact = {
+      id: coding.diffArtifactId!, runId: run.id, nodeId: build.id, projectId: run.projectId,
+      changedPaths: ['README.md'], patch: '-old\n+new', sourceDigest: 'a'.repeat(64), truncated: false,
+      redacted: true, createdAt: coding.completedAt!,
+    }
+    const ready = (codingRuns = [coding], diffs = [diff]) => hasArchivedUpstreamCodingDiff({ run, node, codingRuns, diffs })
+    expect(ready()).toBe(true) // A cleaned workspace does not erase the archived diff.
+    const vm = viewModelFor(node, { artifacts: [], upstreamCodingDiffReady: ready() })
+    expect(vm.statusDescriptors.find((item) => item.id === 'handoff-evidence')).toMatchObject({ state: 'ready' })
+    expect(vm.statusDescriptors.find((item) => item.id === 'pr-draft')).toMatchObject({ state: 'empty' })
+    expect(vm.nextAction.primaryActionId).toBe('createPrDraft')
+    for (const status of ['running', 'failed', 'cancelled'] as const) {
+      expect(ready([coding, { ...coding, id: 'newer', status, startedAt: '2026-09-19T01:00:00Z' }])).toBe(false)
+    }
+    expect(ready([{ ...coding, projectId: 'foreign' }])).toBe(false)
+    expect(ready([{ ...coding, runId: 'foreign' }])).toBe(false)
+    expect(ready([{ ...coding, nodeId: node.id }])).toBe(false)
+    for (const invalid of [
+      { ...diff, runId: 'foreign' }, { ...diff, nodeId: node.id }, { ...diff, projectId: 'foreign' },
+      { ...diff, id: 'other' }, { ...diff, truncated: true }, { ...diff, sourceDigest: '' }, { ...diff, patch: '' },
+    ]) expect(ready([coding], [invalid])).toBe(false)
+  })
+
   it('shows the archived Native diff even when it is not a generic workflow Artifact', () => {
     const node = findNode((candidate) => candidate.stage === 'build')
     const vm = viewModelFor(node, {

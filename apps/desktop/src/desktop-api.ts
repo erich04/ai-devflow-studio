@@ -1,3 +1,4 @@
+import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
   AgentProviderConfig,
@@ -187,6 +188,7 @@ export type SaveGateOverrideInput = {
 }
 
 export type AgentProviderCredentialInput = {
+  thinking?: import('@ai-devflow/shared').ProviderThinkingConfiguration
   name?: string
   /** @deprecated Compatibility only. New providers receive a generated ID in Electron main. */
   providerId?: string
@@ -252,6 +254,12 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
+  listCredentialAccess?: () => Promise<import('../electron/credential-access').CredentialAccessRecord[]>
+  cancelCredentialAccess?: (id: string) => Promise<boolean>
+  onCredentialAccessUpdated?: (listener: (records: import('../electron/credential-access').CredentialAccessRecord[]) => void) => () => void
+  workbenchConversation?: WorkbenchConversationApi
+  onWorkbenchConversationUpdated?: (listener: (projectId: string) => void) => () => void
   platform: string
   loadState: () => Promise<LocalExecutionState>
   loadDataProfileDiagnostics: () => Promise<DesktopDataProfileDiagnostics>
@@ -348,6 +356,7 @@ export type DevFlowDesktopApi = {
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
+  updateProviderThinking?: (input: import('@ai-devflow/shared').UpdateProviderThinkingInput) => Promise<ProviderCredentialMetadata>
   inspectAgentProviderRemoval: (input: { providerId: string }) => Promise<ProviderRemovalCheck>
   removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>

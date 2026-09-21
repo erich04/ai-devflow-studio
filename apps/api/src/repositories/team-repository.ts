@@ -1,3 +1,4 @@
+import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import { assertPolicyRevision } from './enforcement-policy-write'
 import {
@@ -885,20 +886,20 @@ export function createSeedTeamRepository(): TeamRepository {
       if (
         !stored ||
         stored.revokedAt ||
-        stored.failedAttempts >= 5 ||
-        Date.parse(stored.createdAt) + 10 * 60 * 1000 <= Date.now()
+        stored.failedAttempts >= 5
       ) {
-        throw new Error('invalid desktop pairing code')
+        throw new DesktopPairingExchangeError('pairing_code_invalid')
       }
       if (stored.code !== input.code) {
         stored.failedAttempts += 1
-        throw new Error('invalid desktop pairing code')
+        throw new DesktopPairingExchangeError('pairing_code_invalid')
       }
+      if (Date.parse(stored.createdAt) + 10 * 60 * 1000 <= Date.now()) throw new DesktopPairingExchangeError('pairing_code_expired')
       desktopPairingCodes.delete(id)
       const projectId = stored.projectId
       const liveMember = members.find((candidate) => candidate.id === stored.userId)
       if (!liveMember || projectOrganizationIds.get(projectId) !== stored.organizationId) {
-        throw new Error('invalid desktop pairing code')
+        throw new DesktopPairingExchangeError('pairing_code_invalid')
       }
       const liveRole = liveMember.role
       const roleRank: Record<Role, number> = { member: 1, lead: 2, owner: 3 }

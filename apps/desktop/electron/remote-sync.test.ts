@@ -321,7 +321,7 @@ describe('Electron remote sync client', () => {
       path: '/api/sync/run-summary',
       retryable: false,
     })
-    expect(String(error)).toBe('RemoteSyncHttpError: Remote sync request failed (HTTP 403, forbidden).')
+    expect(String(error)).toBe('RemoteSyncHttpError: 当前账号没有此操作的权限。请联系项目负责人确认成员权限。')
     expect(String(error)).not.toMatch(
       /desktop-secret|provider-secret|server-cookie-secret|\/Users\/alice|Bearer|API_KEY/,
     )
@@ -386,7 +386,7 @@ describe('Electron remote sync client', () => {
       retryable: true,
     })
     expect(String(error)).toBe(
-      'RemoteSyncHttpError: Remote sync request failed (unavailable, remote_unavailable).',
+      'RemoteSyncHttpError: 暂时无法连接团队服务。请检查网络和服务地址后重试。',
     )
     expect(String(error)).not.toMatch(/desktop-secret|provider-secret|\/Users\/alice|Bearer|api_key/)
   })
@@ -415,7 +415,7 @@ describe('Electron remote sync client', () => {
       retryable: true,
     })
     expect(String(error)).toBe(
-      'RemoteSyncHttpError: Remote sync request failed (unavailable, request_timeout).',
+      'RemoteSyncHttpError: 请求超时。请检查服务状态后重试；当前项目和需求会保留。',
     )
     expect(String(error)).not.toMatch(/abort-secret|api\.local|private-body|desktop-secret/)
   })
@@ -862,7 +862,7 @@ describe('Electron remote sync client', () => {
       retryable: true,
     })
     expect(String(error)).toBe(
-      'RemoteSyncHttpError: Remote sync request failed (unavailable, request_timeout).',
+      'RemoteSyncHttpError: 请求超时。请检查服务状态后重试；当前项目和需求会保留。',
     )
     expect(String(error)).not.toMatch(/pair\.secret-body|api\.local|private-pairing|session-secret/)
   })

@@ -1,3 +1,4 @@
+import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import { assertPolicyRevision, EnforcementPolicyConflictError } from './enforcement-policy-write'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import {
@@ -972,7 +973,7 @@ function mapCodingAgentSummary(row: CodingAgentSummaryRow): RemoteCodingAgentSum
       typeof details['usageStatus'] !== 'string' ||
       typeof details['costStatus'] !== 'string'
     summary.costSummary = parseCodingRuntimeCostSummary({
-      id: `coding-runtime-cost-${row.run_id}-${row.node_id}`,
+      id: `coding-runtime-cost-${row.id}`,
       runId: row.run_id,
       nodeId: row.node_id,
       userId: row.requested_by,
@@ -2026,7 +2027,7 @@ export function createPostgresTeamRepository(
     async exchangeDesktopPairingCode(input) {
       const parsed = parseCopyOnceSecret(input.code)
       if (!parsed) {
-        throw new Error('invalid desktop pairing code')
+        throw new DesktopPairingExchangeError('pairing_code_invalid')
       }
 
       const exchange = await withTeamDbTransaction(db, async (tx) => {
@@ -2041,15 +2042,11 @@ export function createPostgresTeamRepository(
           [parsed.id],
         )
         if (!pairing) {
-          throw new Error('invalid desktop pairing code')
+          throw new DesktopPairingExchangeError('pairing_code_invalid')
         }
 
         if (pairing.consumed_at || pairing.revoked_at || pairing.failed_attempts >= 5) {
-          throw new Error('invalid desktop pairing code')
-        }
-
-        if (Date.parse(timestamp(pairing.expires_at)) <= Date.now()) {
-          throw new Error('expired desktop pairing code')
+          throw new DesktopPairingExchangeError('pairing_code_invalid')
         }
 
         if (pairing.code_hash !== hashSecret(parsed.secret)) {
@@ -2062,6 +2059,10 @@ export function createPostgresTeamRepository(
             [pairing.id],
           )
           return { ok: false as const }
+        }
+
+        if (Date.parse(timestamp(pairing.expires_at)) <= Date.now()) {
+          throw new DesktopPairingExchangeError('pairing_code_expired')
         }
 
         const tokenId = `desktop-token-${randomUUID()}`
@@ -2106,7 +2107,7 @@ export function createPostgresTeamRepository(
           [pairing.id, createdAt],
         )
         if (!consumedPairingCode) {
-          throw new Error('invalid desktop pairing code')
+          throw new DesktopPairingExchangeError('pairing_code_invalid')
         }
 
         const resolvedSession = await resolveDesktopTokenSessionFromToken(token, tx)
@@ -2136,7 +2137,7 @@ export function createPostgresTeamRepository(
       })
 
       if (!exchange.ok) {
-        throw new Error('invalid desktop pairing code')
+        throw new DesktopPairingExchangeError('pairing_code_invalid')
       }
       return exchange.result
     },

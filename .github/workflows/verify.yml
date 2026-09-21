@@ -177,5 +177,7 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+          # This job installs dependencies inside Docker, so no host store exists.
+          package-manager-cache: false
       - run: corepack enable
       - run: corepack pnpm test:docker-lifecycle-smoke

@@ -28,7 +28,7 @@ type Materializer = ReturnType<typeof createDesktopWorkRequestMaterializer>
 
 export type DesktopWorkRequestServiceDependencies = Readonly<{
   getStore(): Promise<DesktopWorkRequestServiceStore>
-  decryptToken(encryptedToken: string): string
+  decryptToken(encryptedToken: string): string | Promise<string>
   createClient(input: {
     authToken: string
     signal: AbortSignal
@@ -167,12 +167,17 @@ export function createDesktopWorkRequestService(
 
     let authToken: string
     try {
-      authToken = dependencies.decryptToken(bundle.encryptedToken).trim()
+      authToken = (await dependencies.decryptToken(bundle.encryptedToken)).trim()
     } catch {
       throw new DesktopWorkRequestServiceError('credential_unavailable')
     }
     if (!authToken) {
       throw new DesktopWorkRequestServiceError('credential_unavailable')
+    }
+    signal.throwIfAborted()
+    const current = await store.getDesktopPairingCredentialBundle()
+    if (current?.encryptedToken !== bundle.encryptedToken || JSON.stringify(current.credential) !== JSON.stringify(bundle.credential)) {
+      throw new DesktopWorkRequestServiceError('pairing_scope_mismatch')
     }
 
     return {

@@ -1269,7 +1269,7 @@ test.describe('AI DevFlow desktop workbench', () => {
         )).toBe(true)
         const box = (await team.boundingBox())!
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-        const syncButton = team.getByRole('button', { name: '同步团队并刷新 snapshot' })
+        const syncButton = team.getByRole('button', { name: '拉取团队数据并刷新策略' })
         await expect.poll(async () => {
           const reachable = await syncButton.evaluate((element) => {
             const button = element.getBoundingClientRect()

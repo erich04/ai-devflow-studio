@@ -89,7 +89,7 @@ export function LocalProjectPanel({
   return (
     <section className="local-project-panel" aria-label="Local project">
       <div className="panel-head panel-head--compact">
-        <span className="panel-title">Local Project + Runs</span>
+        <span className="panel-title">项目与运行</span>
         <span className="pill soft">local only</span>
       </div>
       <div className="mini-card local-project-summary">

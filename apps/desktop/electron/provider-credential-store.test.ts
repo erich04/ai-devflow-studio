@@ -1,3 +1,4 @@
+import { parseProviderThinkingInput } from './ipc-contract'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -26,6 +27,17 @@ afterEach(async () => {
 })
 
 describe('durable Provider removal', () => {
+  it('persists thinking settings across restart, preserves the cipher, and rejects stale updates', async () => {
+    const { store, dbPath } = await fixture()
+    const deepseek = { ...metadata, model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com' }
+    await store.saveProviderCredential(deepseek, 'legacy-cipher')
+    const updated = await store.updateProviderThinking(parseProviderThinkingInput({ providerId: metadata.providerId, expectedUpdatedAt: metadata.updatedAt, thinking: { mode: 'enabled', effort: 'high' } }))
+    await expect(store.updateProviderThinking(parseProviderThinkingInput({ providerId: metadata.providerId, expectedUpdatedAt: metadata.updatedAt, thinking: { mode: 'disabled' } }))).rejects.toThrow('已变更')
+    const restored = await createLocalStore({ dbPath }); stores.push(restored)
+    expect(await restored.listProviderCredentials()).toEqual([updated])
+    expect(await restored.getProviderEncryptedSecret(metadata.providerId)).toBe('legacy-cipher')
+    await expect(restored.updateProviderThinking({ providerId: 'missing', expectedUpdatedAt: updated.updatedAt, thinking: { mode: 'enabled' } })).rejects.toThrow('已变更')
+  })
   it('blocks active Coding but preserves completed history after removing an unused credential', async () => {
     const { store } = await fixture()
     const run: CodingAgentRun = {

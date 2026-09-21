@@ -34,7 +34,7 @@ describe('Electron GitHub Delivery renderer boundary', () => {
     expect(main).toContain("from './github-delivery-processor.js'")
     expect(main).toContain("from './github-delivery-scheduler.js'")
     expect(cycle).toMatch(
-      /getDesktopPairingCredentialBundle\(\)[\s\S]*?decryptCredential\(bundle\.encryptedToken\)[\s\S]*?createGitHubDeliveryRemoteClient\([\s\S]*?authToken[\s\S]*?signal/,
+      /getDesktopPairingCredentialBundle\(\)[\s\S]*?decryptTeamCredential\(bundle\.encryptedToken\)[\s\S]*?createGitHubDeliveryRemoteClient\([\s\S]*?authToken[\s\S]*?signal/,
     )
     expect(cycle).toMatch(
       /createCurrentGitHubDeliveryProcessor[\s\S]*?synchronizeGitHubRepositoryBinding\([\s\S]*?status !== 'active'[\s\S]*?createActiveGitHubDeliveryProcessor/,

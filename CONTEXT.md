@@ -15,6 +15,24 @@ test evidence, governed pull-request delivery, and business acceptance.
 An execution or review unit inside a Run. Nodes can represent agent work, human gates, tests, pull
 request creation, or acceptance steps.
 
+## Workbench Conversation
+
+A local, project-scoped conversation with independent messages, questions and input drafts. It may investigate any Run or Node within that Local Project; the currently selected
+card is not an authority or context restriction. Latest workflow state and saved artifacts are shared
+query sources. Legacy manual notes remain inspectable but are not editable or included in model
+prompts; new requirements are expressed through normal chat. Conversation content is excluded from LocalExecutionState and Team synchronization.
+
+DeepSeek conversations opt into low-effort thinking. Provider-returned reasoning is streamed into
+separate, local-only conversation records; it is not an answer, shared evidence, or durable Agent
+Memory. It is excluded from subsequent conversation prompts and other conversations. Final answers
+and navigation actions still come from the validated structured `content` response.
+
+## Conversation Proposal
+
+A private conversational draft that becomes a shared, pending `log` Artifact only after the user
+explicitly saves it to an existing node. It can inform the next formal stage generation, but cannot
+complete a node, approve a Gate, or replace an immutable stage artifact.
+
 ## Gate
 
 A human decision point that checks whether the current stage has enough evidence to move into the

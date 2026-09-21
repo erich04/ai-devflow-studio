@@ -47,6 +47,7 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 
 ## Implemented Capabilities
 
+- The workbench combines a six-stage board, preserved node details, and independent conversation Tabs. Every conversation can investigate any project Run or node using fresh workflow facts, read-only repository tools and configured knowledge; private history/memory stay local and isolated. See [workbench conversations](docs/engineering/workbench-conversations.md).
 - A six-stage Run model covers request intake, Clarify, Design, Build, Test, PR handoff, and Acceptance.
 - A focused Agent group covers workflow-stage generation, Gate Review, and OpenCode-backed coding within the same Run.
 - Shared trusted commands enforce current-node order and required evidence across all six stages.
@@ -106,6 +107,7 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 | `corepack pnpm audit:production` | The current registry advisory set contains no known production dependency vulnerability. |
 | `corepack pnpm verify` | TypeScript checks, the unit/component suite, and the cross-platform static audit. |
 | `corepack pnpm verify:demo` | The default gate plus browser E2E and a real Electron main/preload/SQLite smoke path. |
+| `corepack pnpm test:workbench-conversation-electron-smoke` | Real Electron, Provider HTTP and SQLite: every node/detail section, cross-node investigation, questions, proposal publication, isolated conversations, retry/cancel, restart/history and dark/light/narrow layouts. |
 | `corepack pnpm test:native-coding-electron-smoke` | Real Electron Main/Preload with a local OpenAI-compatible server: project configuration, budget, exact Change Set approval, managed-worktree edits, tests, Diff, Trace, Evidence, and provider-reported cost without paid tokens. |
 | `corepack pnpm test:postgres-smoke` | Migration, persistence, policy, approval, sync, and redacted team reads against Postgres. |
 | `corepack pnpm test:local-auth-postgres-smoke` | Fresh-schema local login, project, budget, Desktop pairing-code exchange, and paired Bearer read against Postgres. |
@@ -113,7 +115,7 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 | `corepack pnpm test:docker-lifecycle-smoke` | Fresh Team schema v21, retained V1.4 schema v10 upgrade, transactional populated v11-to-v12 retry, fail-closed v12-to-v13 provider-authoritative expiry migration, durable v13-to-v14 provider backoff, v14-to-v15 verified publication adoption, v15-to-v16 metadata-only Agent Runtime projection, empty v16-to-v17 metadata-only Agent Memory projection, v17-to-v18 independent Memory quality audit versioning, empty v18-to-v19 Agent Coordination projection, the v19-to-v20 bounded local-development auth-provider constraint, v20-to-v21 native Coding summary-engine constraint, and bounded V1.4 backup/restore rollback. |
 | `corepack pnpm test:v15-github-delivery` | The full offline Delivery Intent → separate approval → exact branch → Draft PR → Acceptance story, including restart and revocation. |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:desktop-pilot-smoke` | The reproducible unsigned current-host Desktop archive and packaged launch isolation; Local MCP and native Coding counts remain exact after cold restart, while one accepted Memory Candidate is promoted, revised, tombstoned, purged, and reopened with `memoryRestartDuplicateEffects: 0`. |
-| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v34 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
+| `corepack pnpm test:v15-github-delivery-packaged-smoke` | The built Desktop at Desktop schema v35 completing the offline fake-GitHub/local-bare-remote delivery path and cold-start reconciliation. |
 | `corepack pnpm test:v20-agent-runtime-evaluator` | The clean-candidate V2.0 scenario collector and strict completion evaluator; provider credentials are removed and only a path/secret-free structured record is retained. |
 | `corepack pnpm test:v21-retrieval-memory-evaluator` | The clean-candidate V2.1 evaluator; it binds the corpus and contract digests, compares lexical/hybrid and no-Memory/Memory outcomes, and requires zero paid-provider, isolation, deletion, resurrection, or redaction violations. |
 | `corepack pnpm v21:completion-status` | The V2.1 direct-child signoff validator; it requires exact evaluator, first-attempt Verify, Desktop artifact, local matrix, and immutable evidence identity. |

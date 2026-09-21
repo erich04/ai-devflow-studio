@@ -8,7 +8,7 @@ describe('Electron Gate Command production wiring', () => {
     expect(main).toContain("from './gate-command-processor.js'")
     expect(main).toContain("from './gate-command-scheduler.js'")
     expect(main).toMatch(
-      /async function processAvailableGateCommands[\s\S]*?getDesktopPairingCredentialBundle\(\)[\s\S]*?decryptCredential\(bundle\.encryptedToken\)[\s\S]*?createRemoteSyncClient\([\s\S]*?authToken[\s\S]*?createGateCommandProcessor\([\s\S]*?processAvailable\(binding\)/,
+      /async function processAvailableGateCommands[\s\S]*?getDesktopPairingCredentialBundle\(\)[\s\S]*?decryptTeamCredential\(bundle\.encryptedToken\)[\s\S]*?createRemoteSyncClient\([\s\S]*?authToken[\s\S]*?createGateCommandProcessor\([\s\S]*?processAvailable\(binding\)/,
     )
   })
 
@@ -19,7 +19,7 @@ describe('Electron Gate Command production wiring', () => {
     )
     const guard = cycle.indexOf('!bundle ||')
     const idleReturn = cycle.indexOf('return', guard)
-    const decrypt = cycle.indexOf('decryptCredential(bundle.encryptedToken)')
+    const decrypt = cycle.indexOf('decryptTeamCredential(bundle.encryptedToken)')
     expect(guard).toBeGreaterThan(-1)
     expect(idleReturn).toBeGreaterThan(guard)
     expect(idleReturn).toBeLessThan(decrypt)

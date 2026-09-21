@@ -32,6 +32,8 @@ export type RemoteSyncRecovery =
   | 'child-retried'
 
 export type RemoteSyncFailureCode =
+  | 'pairing_code_expired'
+  | 'pairing_code_invalid'
   | 'network'
   | 'request_timeout'
   | 'bad_request'

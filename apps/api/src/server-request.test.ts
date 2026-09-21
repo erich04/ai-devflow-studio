@@ -156,8 +156,8 @@ describe('API HTTP authentication boundary', () => {
   it('does not authorize unsigned identity headers in CORS preflight responses', () => {
     const headers = createCorsPreflightHeaders()
 
-    expect(headers['access-control-allow-headers']).toBe('authorization,content-type')
-    expect(JSON.stringify(headers)).not.toContain('x-devflow-')
+    expect(headers['access-control-allow-headers']).toBe('authorization,content-type,x-devflow-diagnostic-id')
+    expect(JSON.stringify(headers)).not.toMatch(/x-devflow-(user|role|organization|project)/)
   })
 
   it('forwards the browser Origin and Host into the local sign-in boundary', async () => {

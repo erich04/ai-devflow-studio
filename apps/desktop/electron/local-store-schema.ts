@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 34
+export const CURRENT_SCHEMA_VERSION = 35
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2601,6 +2601,25 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       from coding_runtime_configurations_v33;
 
     drop table coding_runtime_configurations_v33;
+      `)
+    },
+  },
+  {
+    version: 35,
+    migrate(db) {
+      db.run(`
+        create table workbench_conversations (
+          id text primary key,
+          local_project_id text not null references local_projects(id) on delete cascade,
+          version integer not null check (version > 0),
+          updated_at text not null,
+          json text not null check (json_valid(json)),
+          check (json_extract(json, '$.id') = id),
+          check (json_extract(json, '$.localProjectId') = local_project_id),
+          check (json_extract(json, '$.version') = version),
+          check (json_extract(json, '$.updatedAt') = updated_at)
+        );
+        create index workbench_conversations_project on workbench_conversations(local_project_id, updated_at);
       `)
     },
   },

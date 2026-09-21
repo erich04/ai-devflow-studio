@@ -111,7 +111,7 @@ describe('Agent Provider structured request errors', () => {
   })
 
   it.each([
-    ['broken HTTP JSON', '{broken', 'invalid_response_json', true],
+    ['broken HTTP JSON', '{broken', 'invalid_response_json', true, 'unknown'],
     [
       'invalid model JSON',
       JSON.stringify({
@@ -120,6 +120,7 @@ describe('Agent Provider structured request errors', () => {
       }),
       'invalid_model_output',
       true,
+      'confirmed',
     ],
     [
       'invalid usage',
@@ -129,13 +130,15 @@ describe('Agent Provider structured request errors', () => {
       }),
       'invalid_usage',
       false,
+      'unknown',
     ],
-    ['oversized response', 'x'.repeat(70 * 1_024), 'response_too_large', false],
+    ['oversized response', 'x'.repeat(70 * 1_024), 'response_too_large', false, 'unknown'],
   ] as const)('classifies %s from the local compatible server', async (
     _label,
     body,
     code,
     retryable,
+    billingState,
   ) => {
     const serverUrl = await startCompatibleServer((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -152,7 +155,7 @@ describe('Agent Provider structured request errors', () => {
     expect(failure).toMatchObject({
       code,
       deliveryState: 'response_received',
-      billingState: 'unknown',
+      billingState,
       retryable,
       httpStatus: 200,
     })

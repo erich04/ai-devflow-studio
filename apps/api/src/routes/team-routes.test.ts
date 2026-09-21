@@ -1,3 +1,4 @@
+import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import { describe, expect, it, vi } from 'vitest'
 import {
   createRecommendedEnforcementPreset,
@@ -1518,7 +1519,7 @@ describe('team API route resolver', () => {
   it('rejects invalid desktop pairing codes with a reconnect-safe message', async () => {
     const repository = createRepository()
     vi.mocked(repository.exchangeDesktopPairingCode).mockRejectedValueOnce(
-      new Error('invalid desktop pairing code'),
+      new DesktopPairingExchangeError('pairing_code_invalid'),
     )
 
     const result = await resolveTeamRoute('POST', '/api/desktop/pairing/exchange', repository, {
@@ -1529,15 +1530,16 @@ describe('team API route resolver', () => {
       status: 401,
       body: {
         error: 'unauthorized',
-        message: 'Desktop pairing code is invalid or expired. Reconnect DevFlow Studio.',
+        reasonCode: 'pairing_code_invalid',
+        message: 'Desktop pairing code was rejected. Generate a new code.',
       },
     })
   })
 
-  it('rejects expired desktop pairing codes with the same reconnect-safe message', async () => {
+  it('rejects expired desktop pairing codes with a controlled expiration reason', async () => {
     const repository = createRepository()
     vi.mocked(repository.exchangeDesktopPairingCode).mockRejectedValueOnce(
-      new Error('expired desktop pairing code'),
+      new DesktopPairingExchangeError('pairing_code_expired'),
     )
 
     const result = await resolveTeamRoute('POST', '/api/desktop/pairing/exchange', repository, {
@@ -1548,7 +1550,8 @@ describe('team API route resolver', () => {
       status: 401,
       body: {
         error: 'unauthorized',
-        message: 'Desktop pairing code is invalid or expired. Reconnect DevFlow Studio.',
+        reasonCode: 'pairing_code_expired',
+        message: 'Desktop pairing code was rejected. Generate a new code.',
       },
     })
   })

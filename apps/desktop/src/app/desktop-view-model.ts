@@ -74,7 +74,7 @@ export {
   type WorkflowNodeSourceKind,
 } from './workflow-node-presentation'
 
-export type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests'
+export type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests' | 'diagnostics'
 
 export type SupportFocusTarget =
   | 'knowledge-review'
@@ -516,6 +516,7 @@ export function reviewProviderFromMetadata(metadata: ProviderCredentialMetadata)
     kind: 'openai-compatible',
     ...(metadata.baseUrl ? { baseUrl: metadata.baseUrl } : {}),
     model: metadata.model,
+    ...(metadata.thinking ? { thinking: metadata.thinking } : {}),
     enabled: true,
     maskedCredential: metadata.maskedCredential,
     updatedAt: metadata.updatedAt,

@@ -20,6 +20,7 @@ import type {
   AgentProviderBillingState,
   AgentProviderDeliveryState,
   AgentProviderErrorCode,
+  AgentProviderUsage,
 } from '@ai-devflow/shared'
 import { resolveDevFlowCodingEngineSelection } from '@ai-devflow/shared'
 import { opencodeProviderBindingEnv, type OpencodeProviderBinding } from './opencode-provider-binding.js'
@@ -43,6 +44,7 @@ export type CodingEngineEnsureResult = {
 }
 
 export type CodingProviderCallTrace = {
+  effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking
   stateVersion: 1
   requestId: string
   codingRunId: string
@@ -68,14 +70,7 @@ export type CodingProviderCallTrace = {
   httpStatus?: number
   providerResponseId?: string
   systemFingerprint?: string
-  usage?: {
-    inputTokens: number
-    outputTokens: number
-    cacheReadTokens?: number
-    cacheMissTokens?: number
-    totalTokens: number
-    cacheStatus: 'complete' | 'unknown'
-  }
+  usage?: AgentProviderUsage
   errorCode?: AgentProviderErrorCode
   sanitizedCause?: string
   redacted: true

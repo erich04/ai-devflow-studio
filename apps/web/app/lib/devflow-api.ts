@@ -1,3 +1,4 @@
+import { DIAGNOSTIC_HEADER, safeDiagnosticId } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
 import type {
   DevFlowSessionHeaders,
@@ -79,6 +80,7 @@ export type TeamOverviewResponse = {
 export type FetchTeamOverviewOptions = {
   apiBaseUrl?: string
   cookieHeader?: string
+  diagnosticId?: string
   fetcher?: typeof fetch
   sessionHeaders?: DevFlowSessionHeaders
 }
@@ -462,6 +464,7 @@ export async function createDesktopPairingCode(
     cache: 'no-store',
     headers: createApiHeaders(
       {
+        ...(safeDiagnosticId(options.diagnosticId) ? { [DIAGNOSTIC_HEADER]: options.diagnosticId! } : {}),
         accept: 'application/json',
         'content-type': 'application/json',
       },
@@ -495,7 +498,7 @@ export async function revokeDesktopPairingCode(
     {
       method: 'DELETE',
       cache: 'no-store',
-      headers: createApiHeaders({ accept: 'application/json' }, options),
+      headers: createApiHeaders({ accept: 'application/json', ...(safeDiagnosticId(options.diagnosticId) ? { [DIAGNOSTIC_HEADER]: options.diagnosticId! } : {}) }, options),
     },
   )
   if (!response.ok) {

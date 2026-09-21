@@ -1,3 +1,8 @@
+import { WorkbenchConversationService } from './workbench-conversation-service.js'
+import { createCredentialWriteGuard } from './credential-write-guard.js'
+import { createDiagnosticLog } from '@ai-devflow/shared/node/diagnostic-log'
+import { diagnosticFetch } from './remote-diagnostics.js'
+import { createCredentialAccess } from './credential-access.js'
 import { createProviderOperationGuard, guardProviderCalls } from './provider-operation-guard.js'
 import { randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
@@ -105,6 +110,7 @@ import {
   parseOpenManagedWorktreeInput,
   parseAgentProviderCredentialInput,
   parseAgentProviderRemovalInput,
+  parseProviderThinkingInput,
   parsePairDesktopInput,
   parseProjectGitStatusInput,
   parseCreateAcceptanceBundleInput,
@@ -163,7 +169,7 @@ import {
   type VerifyGitHubDeliveryRevocationResult,
 } from './ipc-contract.js'
 import {
-  createRemoteSyncClient,
+  createRemoteSyncClient as createBaseRemoteSyncClient,
   resolveRemoteApiBaseUrl,
   type RemoteSyncClient,
 } from './remote-sync.js'
@@ -342,6 +348,27 @@ const codingEngineAdapter = createCodingEngineAdapterFromEnv(process.env, {
 const compatibilityCodingExecutor = createCodingExecutorCompatibilityAdapter(codingEngineAdapter)
 const codingExecutorPromises = new Map<string, Promise<CodingExecutor>>()
 const providerOperations = createProviderOperationGuard()
+const writeCredential = createCredentialWriteGuard()
+const diagnosticLog = createDiagnosticLog(path.join(app.getPath('userData'), 'diagnostics.json'))
+const persistedCredentialDiagnostics = new Set<string>()
+function createRemoteSyncClient(options: Parameters<typeof createBaseRemoteSyncClient>[0] = {}, projectId?: string) {
+  return createBaseRemoteSyncClient({ ...options, fetcher: diagnosticFetch(options.fetcher ?? fetch, diagnosticLog.append, projectId) })
+}
+const credentialAccess = createCredentialAccess({
+  storage: safeStorage,
+  changed: (records) => {
+    broadcastToRenderers(ipcChannels.credentialAccessUpdated, records)
+    for (const record of records) {
+      if (record.state === 'waiting' || persistedCredentialDiagnostics.has(record.id)) continue
+      persistedCredentialDiagnostics.add(record.id)
+      if (persistedCredentialDiagnostics.size > 1000) persistedCredentialDiagnostics.delete(persistedCredentialDiagnostics.values().next().value!)
+      void diagnosticLog.append({ id: record.id, timestamp: record.startedAt, source: 'desktop',
+        operation: record.category === 'provider' ? 'provider_credential' : 'team_credential', phase: record.operation,
+        outcome: record.state, reason: record.code ?? 'ok', durationMs: record.durationMs, retryable: false,
+      }).catch(() => {})
+    }
+  },
+})
 let quitCleanupComplete = false
 let quitCleanupPromise: Promise<void> | undefined
 const repositoryKnowledgeService = createRepositoryKnowledgeService()
@@ -354,7 +381,7 @@ const repositoryKnowledgeResolver = createRepositoryKnowledgeResolver({
 })
 const desktopWorkRequestService = createDesktopWorkRequestService({
   getStore,
-  decryptToken: decryptCredential,
+  decryptToken: decryptTeamCredential,
   createClient: createRemoteSyncClient,
 })
 const hasSingleInstanceLock = app.requestSingleInstanceLock()
@@ -499,7 +526,10 @@ async function executeWorkflowCommandOrThrow(
 async function getRemoteSyncClient() {
   const store = await getStore()
   const encryptedToken = await store.getDesktopPairingEncryptedToken()
-  const authToken = encryptedToken ? decryptCredential(encryptedToken) : undefined
+  const authToken = encryptedToken ? await decryptTeamCredential(encryptedToken) : undefined
+  if (await store.getDesktopPairingEncryptedToken() !== encryptedToken) {
+    throw new Error('团队绑定已更新，请重新执行操作。')
+  }
   const nextKey = authToken ? `token:${authToken}` : runtimeFlags.demoDataEnabled ? 'demo' : 'unauthenticated'
   if (!remoteSyncClient || remoteSyncClientKey !== nextKey) {
     remoteSyncClient = createRemoteSyncClient(
@@ -535,7 +565,7 @@ async function getRemoteSyncOutboxScheduler() {
           source: store,
           expectedScope: scope,
           signal,
-          decryptToken: decryptCredential,
+          decryptToken: decryptTeamCredential,
         }),
       onStateChanged: async () => {
         broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState())
@@ -637,7 +667,11 @@ async function createCurrentGitHubDeliveryContext(signal: AbortSignal) {
     return null
   }
 
-  const authToken = decryptCredential(bundle.encryptedToken)
+  const authToken = await decryptTeamCredential(bundle.encryptedToken)
+  signal.throwIfAborted()
+  if (await store.getDesktopPairingEncryptedToken() !== bundle.encryptedToken) {
+    throw new Error('团队绑定已更新，请重新执行操作。')
+  }
   const remote = createGitHubDeliveryRemoteClient({
     apiBaseUrl: resolveRemoteApiBaseUrl(),
     authToken,
@@ -1222,7 +1256,8 @@ async function processAvailableGateCommands(): Promise<void> {
     ...bundle.credential,
     localProjectId,
   })
-  const authToken = decryptCredential(bundle.encryptedToken)
+  const authToken = await decryptTeamCredential(bundle.encryptedToken)
+  if (await store.getDesktopPairingEncryptedToken() !== bundle.encryptedToken) return
   const cycleAbortController = new AbortController()
   gateCommandCycleAbortController = cycleAbortController
   const cycleTimeout = setTimeout(() => {
@@ -1589,20 +1624,16 @@ function maskCredential(secret: string): string {
   return `${trimmed.slice(0, 3)}...${trimmed.slice(-4)}`
 }
 
-function encryptCredential(secret: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('System credential encryption is not available')
-  }
-
-  return safeStorage.encryptString(secret).toString('base64')
+function encryptCredential(secret: string): Promise<string> {
+  return credentialAccess.encrypt(secret, 'provider')
 }
 
-function decryptCredential(secret: string): string {
-  if (!safeStorage.isEncryptionAvailable()) {
-    throw new Error('System credential encryption is not available')
-  }
+function decryptCredential(secret: string): Promise<string> {
+  return credentialAccess.decrypt(secret, 'provider')
+}
 
-  return safeStorage.decryptString(Buffer.from(secret, 'base64'))
+function decryptTeamCredential(secret: string): Promise<string> {
+  return credentialAccess.decrypt(secret, 'team')
 }
 
 async function listAgentProviderConfigs() {
@@ -2051,7 +2082,40 @@ async function reconcilePendingGateOverrides(
   return reconciled
 }
 
+let workbenchConversationService: Promise<WorkbenchConversationService> | undefined
+async function getWorkbenchConversationService() {
+  workbenchConversationService ??= getStore().then(async (store) => {
+    const service = new WorkbenchConversationService({
+      store,
+      resolveProvider: (id) => resolveAgentProvider(store, id),
+      loadKnowledge: (projectId) => loadTrustedRepositoryKnowledge(projectId, { refresh: true }),
+      inspectGate: async (target) => {
+        const evaluated = await evaluateLocalGateEnforcement(target)
+        return { decision: evaluated.decision, policyVersion: evaluated.policySnapshot.version, policySource: evaluated.policySnapshot.source }
+      },
+      changed: (projectId) => broadcastToRenderers(ipcChannels.workbenchConversationUpdated, projectId),
+      published: async () => broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState()),
+    })
+    await service.recoverInterrupted()
+    return service
+  })
+  return workbenchConversationService
+}
+
 function registerIpcHandlers() {
+  ipcMain.handle(ipcChannels.listDiagnosticRecords, () => diagnosticLog.list())
+  ipcMain.handle(ipcChannels.listCredentialAccess, () => credentialAccess.list())
+  ipcMain.handle(ipcChannels.cancelCredentialAccess, (_event, payload: unknown) => {
+    if (typeof payload !== 'string' || !/^[a-f0-9-]{36}$/u.test(payload)) throw new Error('Invalid credential operation ID')
+    return credentialAccess.cancel(payload)
+  })
+  ipcMain.handle(ipcChannels.workbenchConversation, async (_, payload: unknown) => {
+    try { return await (await getWorkbenchConversationService()).command(payload) }
+    catch (error) {
+      const message = error instanceof Error && /^[\u4e00-\u9fff]/u.test(error.message) ? error.message.slice(0, 240) : '会话操作未完成，请重试。'
+      return { conversations: [], error: message }
+    }
+  })
   ipcMain.handle(ipcChannels.loadState, async () => {
     const store = await getStore()
     return store.loadState()
@@ -2103,16 +2167,16 @@ function registerIpcHandlers() {
     return store.getDesktopPairingCredential()
   })
 
-  ipcMain.handle(ipcChannels.pairDesktop, async (_, payload: unknown) => {
+  ipcMain.handle(ipcChannels.pairDesktop, async (_, payload: unknown) => writeCredential('team', async () => {
     const input = parsePairDesktopInput(payload)
     await findProject(input.localProjectId)
-    const exchangeResult = await createRemoteSyncClient().exchangeDesktopPairingCode({ code: input.code })
+    const exchangeResult = await createRemoteSyncClient({ signal: AbortSignal.timeout(30_000) }, input.localProjectId).exchangeDesktopPairingCode({ code: input.code })
     const { token, ...credential } = exchangeResult
     const boundCredential = {
       ...credential,
       localProjectId: input.localProjectId,
     }
-    const encryptedToken = encryptCredential(token)
+    const encryptedToken = await credentialAccess.encrypt(token, 'team')
     githubDeliveryOperationAbortController?.abort()
     await runGitHubDeliveryExclusive(async () => {
       await findProject(input.localProjectId)
@@ -2136,7 +2200,7 @@ function registerIpcHandlers() {
     wakeGateCommandScheduler()
     wakeGitHubDeliveryScheduler()
     return { credential: boundCredential }
-  })
+  }))
 
   ipcMain.handle(ipcChannels.loadRemoteSnapshot, async (_, payload: unknown) => {
     const input = parseRemoteSnapshotInput(payload)
@@ -3135,7 +3199,7 @@ function registerIpcHandlers() {
     return listAgentProviderConfigs()
   })
 
-  ipcMain.handle(ipcChannels.saveAgentProviderCredential, async (_, payload: unknown) => {
+  ipcMain.handle(ipcChannels.saveAgentProviderCredential, async (_, payload: unknown) => writeCredential('provider', async () => {
     const input = parseAgentProviderCredentialInput(payload)
     return providerOperations.use(input.providerId, 'Provider configuration', async () => {
       const store = await getStore()
@@ -3148,15 +3212,16 @@ function registerIpcHandlers() {
         providers,
         ...(input.providerId ? { providerId: input.providerId } : {}),
         model: input.model,
+        ...(input.thinking ? { thinking: input.thinking } : {}),
         ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
         maskedCredential: maskCredential(input.apiKey),
         updatedAt: new Date().toISOString(),
         randomValue: randomUUID(),
       })
 
-      return store.saveProviderCredential(metadata, encryptCredential(input.apiKey))
+      return store.saveProviderCredential(metadata, await encryptCredential(input.apiKey))
     })
-  })
+  }))
 
   ipcMain.handle(ipcChannels.inspectAgentProviderRemoval, async (_, payload: unknown) => {
     const { providerId } = parseAgentProviderRemovalInput(payload)
@@ -3164,7 +3229,16 @@ function registerIpcHandlers() {
     return { ...check, references: [...check.references, ...providerOperations.references(providerId)] }
   })
 
-  ipcMain.handle(ipcChannels.removeAgentProviderCredential, async (_, payload: unknown) => {
+  ipcMain.handle(ipcChannels.updateProviderThinking, async (_, payload: unknown) => writeCredential('provider', async () => {
+    const input = parseProviderThinkingInput(payload)
+    return providerOperations.use(input.providerId, 'Provider thinking configuration', async () => {
+      const metadata = await (await getStore()).updateProviderThinking(input)
+      codingExecutorPromises.clear()
+      return metadata
+    })
+  }))
+
+  ipcMain.handle(ipcChannels.removeAgentProviderCredential, async (_, payload: unknown) => writeCredential('provider', async () => {
     const { providerId, expectedUpdatedAt } = parseAgentProviderRemovalInput(payload, true)
     return providerOperations.remove(providerId, async () => {
       const store = await getStore()
@@ -3181,7 +3255,7 @@ function registerIpcHandlers() {
       }
       return result
     })
-  })
+  }))
 
   ipcMain.handle(ipcChannels.listAgentReviews, async (_, payload: unknown) => {
     const input = parseListAgentReviewsInput(payload)
@@ -3651,6 +3725,7 @@ app.on('before-quit', (event) => {
   gateCommandCycleAbortController?.abort()
   gateCommandScheduler?.stop()
   remoteSyncOutboxScheduler?.stop()
+  credentialAccess.cancelAll()
   githubDeliveryScheduler?.stop()
   githubDeliveryOperationAbortController?.abort()
   quitCleanupPromise ??= Promise.all([
@@ -3664,10 +3739,12 @@ app.on('before-quit', (event) => {
       console.warn('[github-delivery] Unable to confirm operation cleanup before quit.')
     }),
   ])
-    .then(() => undefined)
+    .then(() => diagnosticLog.flush())
     .finally(() => {
       quitCleanupComplete = true
-      app.quit()
+      // Let the first native quit callback finish before requesting quit again.
+      // A microtask can otherwise re-enter before macOS resets its prevented-quit state.
+      setImmediate(() => app.quit())
     })
   void quitCleanupPromise
 })

@@ -73,7 +73,7 @@ const materializedWorkRequest: WorkRequest = {
 function createHarness(options: {
   bundle?: { credential: DesktopPairingCredential; encryptedToken: string } | null
   projects?: LocalProject[]
-  decryptToken?: (encryptedToken: string) => string
+  decryptToken?: (encryptedToken: string) => string | Promise<string>
   hangList?: boolean
   requestTimeoutMs?: number
 } = {}) {
@@ -152,6 +152,17 @@ function createHarness(options: {
 }
 
 describe('Desktop Work Request service', () => {
+  it('rejects changed pairing after a system authorization wait without sending a request', async () => {
+    let release!: (value: string) => void
+    const harness = createHarness({ decryptToken: () => new Promise((resolve) => { release = resolve }) })
+    const pending = harness.service.list({ localProjectId: 'local-project-1' })
+    await vi.waitFor(() => expect(harness.decryptToken).toHaveBeenCalled())
+    harness.getDesktopPairingCredentialBundle.mockResolvedValue({ credential: structuredClone(pairing), encryptedToken: 'rotated-token' })
+    release('old-auth-token')
+    await expect(pending).rejects.toMatchObject({ code: 'pairing_scope_mismatch' })
+    expect(harness.createClient).not.toHaveBeenCalled()
+  })
+
   it('lists only the Team Project frozen into the selected local-project pairing', async () => {
     const harness = createHarness()
 
@@ -159,7 +170,7 @@ describe('Desktop Work Request service', () => {
       harness.service.list({ localProjectId: 'local-project-1' }),
     ).resolves.toEqual([workRequest])
 
-    expect(harness.getDesktopPairingCredentialBundle).toHaveBeenCalledTimes(1)
+    expect(harness.getDesktopPairingCredentialBundle).toHaveBeenCalledTimes(2)
     expect(harness.listProjects).toHaveBeenCalledTimes(1)
     expect(harness.decryptToken).toHaveBeenCalledWith('encrypted-token')
     expect(harness.createClient).toHaveBeenCalledWith({
@@ -194,7 +205,7 @@ describe('Desktop Work Request service', () => {
     expect(String(outcome)).not.toMatch(/secret|transport detail/i)
   })
 
-  it('materializes through a client and pairing captured from one credential read', async () => {
+  it('materializes through a captured pairing after verifying it did not change during decryption', async () => {
     const harness = createHarness()
     const input = {
       localProjectId: 'local-project-1',
@@ -208,7 +219,7 @@ describe('Desktop Work Request service', () => {
       state,
     })
 
-    expect(harness.getDesktopPairingCredentialBundle).toHaveBeenCalledTimes(1)
+    expect(harness.getDesktopPairingCredentialBundle).toHaveBeenCalledTimes(2)
     expect(harness.createMaterializer).toHaveBeenCalledWith({
       pairing,
       client: harness.client,
@@ -260,7 +271,7 @@ describe('Desktop Work Request service', () => {
     const second = harness.service.materialize({ ...input })
     expect(first).toBe(second)
     await vi.waitFor(() => {
-      expect(harness.getDesktopPairingCredentialBundle).toHaveBeenCalledTimes(1)
+      expect(harness.getDesktopPairingCredentialBundle).toHaveBeenCalledTimes(2)
       expect(harness.materialize).toHaveBeenCalledTimes(1)
     })
 
