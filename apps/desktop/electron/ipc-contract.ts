@@ -250,6 +250,7 @@ export const ipcChannels = {
   removeAgentProviderCredential: 'devflow:agent:provider-credential:remove',
   runKnowledgeReview: 'devflow:agent:knowledge-review:run',
   listAgentReviews: 'devflow:agent:reviews:list',
+  recordAgentReviewFeedback: 'devflow:agent:reviews:feedback',
   ensureCodingEngine: 'devflow:coding:engine:ensure',
   getCodingRuntimeConfiguration: 'devflow:coding:runtime-configuration:get',
   saveCodingRuntimeConfiguration: 'devflow:coding:runtime-configuration:save',
@@ -730,6 +731,7 @@ export type DevFlowDesktopApi = {
   removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: ListAgentReviewsInput) => Promise<AgentReviewExecutionResult['review'][]>
+  recordAgentReviewFeedback: (input: import('@ai-devflow/shared').RecordAgentReviewFeedbackInput) => Promise<AgentReviewExecutionResult['review']>
   ensureCodingEngine: (input: EnsureCodingEngineInput) => Promise<EnsureCodingEngineResult>
   getCodingRuntimeConfiguration: (
     input: GetCodingRuntimeConfigurationInput,

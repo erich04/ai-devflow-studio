@@ -1,4 +1,5 @@
 import { type Node, type NodeProps } from '@xyflow/react'
+import { ReviewEvidenceDetails, type RecordReviewFeedback } from '../components/ReviewEvidenceDetails'
 import {
   ArrowLeft,
   Bot,
@@ -269,6 +270,7 @@ export function Inspector({
   governanceChecks,
   references,
   latestAgentReview,
+  onRecordAgentReviewFeedback,
   supportContext,
   onConsumeSupportContext,
   policySnapshot,
@@ -326,6 +328,7 @@ export function Inspector({
   governanceChecks: KnowledgeGovernanceCheck[]
   references: KnowledgeReference[]
   latestAgentReview: AgentReviewResult | undefined
+  onRecordAgentReviewFeedback?: RecordReviewFeedback | undefined
   supportContext: SupportContext | null
   onConsumeSupportContext?: () => void
   policySnapshot: PolicySnapshot | null
@@ -832,6 +835,7 @@ export function Inspector({
             {latestAgentReview.policyFindings.map((finding) => (
               <p key={finding.id}>{finding.severity} · {finding.category} · {finding.summary}</p>
             ))}
+            <ReviewEvidenceDetails key={latestAgentReview.id} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} />
           </article>
         ) : null}
       </div>
@@ -1031,6 +1035,7 @@ export function Inspector({
             <span>{Math.round(latestAgentReview.confidence * 100)}%</span>
           </div>
           <p>{latestAgentReview.gateAdvisory.summary}</p>
+          <ReviewEvidenceDetails key={latestAgentReview.id} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} />
           <div className="knowledge-reference-meta">
             <span>{latestAgentReview.runtime}</span>
             <span>已保存 Provider</span>

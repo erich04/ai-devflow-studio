@@ -747,6 +747,9 @@ export type AgentReviewResult = {
   summary: string
   risks: string[]
   missingEvidence: string[]
+  /** Additive: old reviews have no located evidence and remain human-reviewable. */
+  missingEvidenceDetails?: AgentReviewMissingEvidenceDetail[]
+  feedback?: AgentReviewFeedback[]
   suggestedTests: string[]
   contextManifest?: AgentReviewContextManifest
   knowledgeReferences: KnowledgeReference[]
@@ -754,6 +757,41 @@ export type AgentReviewResult = {
   confidence: number
   gateAdvisory: GateAdvisory
   createdAt: string
+}
+
+export type AgentReviewEvidenceCitation = {
+  sourceId: string
+  title: string
+  quote: string
+  contentDigest: string
+  start: number
+  end: number
+  updatedAt?: string
+}
+
+export type AgentReviewMissingEvidenceDetail = {
+  index: number
+  assessment: 'gap' | 'explicit_non_goal' | 'conflicting_decision' | 'unverified'
+  /** Valid citations locate text; they do not prove a model's interpretation. */
+  citations: AgentReviewEvidenceCitation[]
+  requiresReview: boolean
+}
+
+export type AgentReviewFeedback = {
+  id: string
+  missingEvidenceIndex: number
+  kind: 'false_positive'
+  reason: string
+  actorId: string
+  createdAt: string
+}
+
+export type RecordAgentReviewFeedbackInput = {
+  projectId: string
+  runId: string
+  reviewId: string
+  missingEvidenceIndex: number
+  reason: string
 }
 
 export type AgentReviewExecutionResult = {
