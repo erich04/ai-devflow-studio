@@ -17,6 +17,9 @@ keeps strict validation, regenerates at most once, and explains any remaining fa
 ## Automated validation
 
 - Full suite: 298 files passed, one skipped; 4,062 tests passed, 15 skipped.
+- The macOS CI run exposed an existing Provider-removal test timing race: dialog
+  removal was observed before its passive-effect focus restoration. The assertion
+  now waits for focus restoration; all 150 App/removal-dialog tests pass locally.
 - Workspace typecheck, Desktop/shared final typechecks, production build, source-free
   API/Web/Worker build smoke, and cross-platform checks passed.
 - Service tests cover the complete original request at a later-stage node, long-body
