@@ -1835,7 +1835,7 @@ describe('App', () => {
     expect(within(currentTask).getByRole('list', { name: '当前主操作的对象、结果和影响' })).toHaveTextContent(
       '调用 doubao-review / ark-code-latest',
     )
-    expect(currentTask).toHaveTextContent('只读检查仓库上下文，不修改仓库文件')
+    expect(currentTask).toHaveTextContent('根据需求和已保存阶段产物生成，不直接调查仓库。')
     expect(currentTask).toHaveTextContent('推进到方案评审 Gate；不会自动批准 Gate')
 
     const advanced = within(workbench).getByTestId('agent-advanced-tools')
@@ -2322,7 +2322,7 @@ describe('App', () => {
     expect(await screen.findByTestId('node-inspector')).toHaveTextContent('需求确认 Gate')
   })
 
-  it('keeps the clarification-only local executor out of subsequent design requests', async () => {
+  it('keeps clarification and design executor choices independent', async () => {
     const state = localStateAtCurrentNode('n-clarify')
     const designRun = { ...localStateAtCurrentNode('n-design').runs[0]!, id: 'run-design-route', title: 'Design executor routing' }
     state.runs.push(designRun)
@@ -2339,6 +2339,39 @@ describe('App', () => {
       runId: 'run-design-route', nodeId: 'n-design', executor: 'direct-provider', providerId: agentProvider.id,
     })))
     expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends an explicit design OpenCode choice and saved Provider without configuring Coding', async () => {
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-design')),
+      completeWorkflowAgentNode: vi.fn().mockRejectedValue(new Error('Stop after recording IPC')),
+    })
+    render(<App />)
+    fireEvent.change(await screen.findByRole('combobox', { name: /设计执行器/ }), { target: { value: 'local-agent' } })
+    expect(screen.getByRole('combobox', { name: '本节点使用的模型' })).toHaveValue(agentProvider.id)
+    fireEvent.click(screen.getByTestId('complete-design-agent'))
+    await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
+      nodeId: 'n-design', executor: 'local-agent', providerId: agentProvider.id,
+    })))
+    expect(api.saveCodingRuntimeConfiguration).not.toHaveBeenCalled()
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+  })
+
+  it('cancels pending design generation and keeps the current node available to retry', async () => {
+    let rejectGeneration!: (error: Error) => void
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-design')),
+      completeWorkflowAgentNode: vi.fn().mockImplementation(() => new Promise((_resolve, reject) => { rejectGeneration = reject })),
+      cancelWorkflowAgentNode: vi.fn().mockImplementation(async () => { rejectGeneration(new Error('已取消阶段生成。')); return true }),
+    })
+    render(<App />)
+    fireEvent.click(await screen.findByTestId('complete-design-agent'))
+    fireEvent.click(await screen.findByRole('button', { name: '取消生成' }))
+    await waitFor(() => expect(api.cancelWorkflowAgentNode).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id, nodeId: 'n-design' }))
+    expect(await screen.findByTestId('complete-design-agent')).toBeEnabled()
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案设计')
+    expect(api.approveGate).not.toHaveBeenCalled()
   })
 
   it('keeps workflow execution read-only in the browser preview', async () => {
@@ -2873,7 +2906,7 @@ describe('App', () => {
 
     fireEvent.click(codingAction)
     expect(await screen.findByTestId('agent-workbench')).toBeInTheDocument()
-    expect(screen.getByLabelText('Coding Executor')).toBeInTheDocument()
+    expect(screen.getByLabelText('执行工具')).toBeInTheDocument()
   })
 
   it('uses the same budget blocker in Workbench and Agents without exposing its machine code as status copy', async () => {
@@ -2935,7 +2968,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    const executorPicker = await screen.findByLabelText('Coding Executor')
+    const executorPicker = await screen.findByLabelText('执行工具')
     await waitFor(() => expect(api.getCodingRuntimeConfiguration).toHaveBeenCalled())
     await waitFor(() => expect(executorPicker).toHaveValue('native-model'))
     fireEvent.change(executorPicker, {
@@ -2990,7 +3023,7 @@ describe('App', () => {
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await waitFor(() => expect(screen.getByText('Coding Agent 执行配置').closest('summary')).toHaveTextContent('已配置'))
+    await waitFor(() => expect(screen.getByText('项目执行工具').closest('summary')).toHaveTextContent('已配置'))
     expect(screen.getAllByText(message).length).toBeGreaterThan(0)
     expect(api.runCodingAgent).not.toHaveBeenCalled()
   })
@@ -3021,7 +3054,7 @@ describe('App', () => {
     })))
   })
 
-  it('binds Native Coding to an explicitly selected locally saved Provider', async () => {
+  it('binds DevFlow Native to an explicitly selected locally saved Provider', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
       getCodingRuntimeReadiness: vi.fn().mockResolvedValue(codingReadinessFixture()),

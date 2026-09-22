@@ -1,3 +1,5 @@
+import { resolveDesignClarificationInput, StageAgentExecutionError } from '@ai-devflow/shared'
+import { StageAgentOperations } from './stage-agent-operations.js'
 import { WorkbenchConversationService } from './workbench-conversation-service.js'
 import { createWorkbenchOpencodeExecutor } from './workbench-opencode-executor.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
@@ -126,6 +128,7 @@ import {
   parseCreateRunInput,
   parseAdvanceAgentRuntimeInput,
   parseCompleteWorkflowAgentNodeInput,
+  parseCancelWorkflowAgentNodeInput,
   parseRequestClarificationChangesInput,
   parseListAgentReviewsInput,
   parseListAgentRuntimesInput,
@@ -2118,6 +2121,8 @@ async function getWorkbenchConversationService() {
   return workbenchConversationService
 }
 
+const stageAgentOperations = new StageAgentOperations()
+
 function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.listDiagnosticRecords, () => diagnosticLog.list())
   ipcMain.handle(ipcChannels.listCredentialAccess, () => credentialAccess.list())
@@ -2609,148 +2614,177 @@ function registerIpcHandlers() {
     }
   })
 
+  ipcMain.handle(ipcChannels.cancelWorkflowAgentNode, (_, payload: unknown) => {
+    const input = parseCancelWorkflowAgentNodeInput(payload)
+    return stageAgentOperations.cancel(input.runId, input.nodeId)
+  })
+
   ipcMain.handle(ipcChannels.completeWorkflowAgentNode, async (_, payload: unknown) => {
     const input = parseCompleteWorkflowAgentNodeInput(payload)
-    const store = await getStore()
-    const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
-    if (!run) {
-      throw new Error(`Run not found: ${input.runId}`)
-    }
-    const executorKind = input.executor ?? 'direct-provider'
-    const stageConfiguration = executorKind === 'local-agent'
-      ? await store.getCodingRuntimeConfiguration(run.projectId)
-      : null
-    return providerOperations.use(stageConfiguration?.providerId ?? input.providerId, `Stage ${input.runId}`, async () => {
-      const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
-      if (!node) {
-        throw new Error(`Run node not found: ${input.nodeId}`)
+    return stageAgentOperations.run(input.runId, input.nodeId, async (signal) => {
+      const store = await getStore()
+      const run = (await store.listRuns()).find((candidate) => candidate.id === input.runId)
+      if (!run) {
+        throw new Error(`Run not found: ${input.runId}`)
       }
-      if (
-        run.currentNodeId !== node.id ||
-        node.kind !== 'agent' ||
-        (node.stage !== 'clarify' && node.stage !== 'design') ||
-        node.status !== 'running'
-      ) {
-        throw new Error('Only the current running clarification or design Agent node can execute')
-      }
-      const [artifacts, events] = await Promise.all([
-        store.listArtifacts(run.id),
-        store.listEvents(run.id),
-      ])
-      const actor = resolveTrustedWorkflowActor(
-        run,
-        await store.getDesktopPairingCredential(),
-      )
-      let provider: Awaited<ReturnType<typeof resolveAgentProvider>> | undefined
-      let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
-      if (executorKind === 'direct-provider') {
-        if (!input.providerId) {
-          throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
+      const executorKind = input.executor ?? 'direct-provider'
+      const stageConfiguration = executorKind === 'local-agent' && !input.providerId
+        ? await store.getCodingRuntimeConfiguration(run.projectId)
+        : null
+      return providerOperations.use(stageConfiguration?.providerId ?? input.providerId, `Stage ${input.runId}`, async () => {
+        const node = run.nodes.find((candidate) => candidate.id === input.nodeId)
+        if (!node) {
+          throw new Error(`Run node not found: ${input.nodeId}`)
         }
-        provider = await resolveAgentProvider(store, input.providerId)
-      } else {
-        if (node.stage !== 'clarify') {
-          throw new Error('Read-only local Agent is authorized only for requirement clarification')
+        if (
+          run.currentNodeId !== node.id ||
+          node.kind !== 'agent' ||
+          (node.stage !== 'clarify' && node.stage !== 'design') ||
+          node.status !== 'running'
+        ) {
+          throw new Error('Only the current running clarification or design Agent node can execute')
         }
-        const [project, configuration] = await Promise.all([
-          store.listProjects().then((projects) => projects.find((candidate) => candidate.id === run.projectId)),
-          store.getCodingRuntimeConfiguration(run.projectId),
+        const [artifacts, events] = await Promise.all([
+          store.listArtifacts(run.id),
+          store.listEvents(run.id),
         ])
-        if (configuration?.version !== stageConfiguration?.version) {
-          throw new Error('Coding 配置已变化，请重新执行澄清。')
-        }
-        if (!project || !configuration || configuration.executor !== 'opencode-http') {
-          throw new Error('Read-only local Agent requires a selected repository and an available managed OpenCode runtime')
-        }
-        executor = createReadOnlyLocalStageAgentExecutor({
-          projectId: project.id,
-          projectPath: project.path,
-          binaryPath: configuration.binaryPath,
-          providerId: configuration.providerId,
-          modelId: configuration.modelId,
-          detectedVersion: configuration.detectedVersion,
-          processManager: opencodeProcessManager,
-          providerBinding: await resolveSavedOpencodeProviderBinding({
+        const actor = resolveTrustedWorkflowActor(
+          run,
+          await store.getDesktopPairingCredential(),
+        )
+        let provider: Awaited<ReturnType<typeof resolveAgentProvider>> | undefined
+        let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
+        if (executorKind === 'direct-provider') {
+          if (!input.providerId) {
+            throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
+          }
+          provider = await resolveAgentProvider(store, input.providerId)
+        } else {
+          const project = (await store.listProjects()).find((candidate) => candidate.id === run.projectId)
+          if (!project) throw new Error('请选择本地仓库。')
+          // New node choices explicitly bind a saved Provider independently of Coding configuration.
+          // Keep old clarification clients compatible with their previously confirmed OpenCode profile.
+          let configuration = stageConfiguration
+          if (input.providerId) {
+            const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === input.providerId)
+            if (!metadata) throw new Error('请在节点选择已保存的模型 Provider。')
+            const discovery = await detectCodingRuntimeEngines({ projectId: project.id })
+            const candidate = discovery.candidates.find((item) => item.engine === 'opencode-http' && item.status === 'available')
+            if (!candidate?.binaryPath || !candidate.version) throw new Error('未检测到兼容的本机 OpenCode，请先安装并检测。')
+            configuration = { version: 1, projectId: project.id, executor: 'opencode-http',
+              binaryPath: candidate.binaryPath, detectedVersion: candidate.version,
+              providerId: input.providerId, modelId: metadata.model, updatedAt: new Date().toISOString() }
+          } else if (node.stage !== 'clarify' || !configuration ||
+            configuration.version !== (await store.getCodingRuntimeConfiguration(run.projectId))?.version) {
+            throw new Error('请为本节点明确选择 Provider，旧配置已变化或不适用于方案设计。')
+          }
+          if (!configuration || configuration.executor !== 'opencode-http') {
+            throw new Error('请在节点选择 OpenCode 和已保存的 Provider。')
+          }
+          executor = createReadOnlyLocalStageAgentExecutor({
+            projectId: project.id,
+            projectPath: project.path,
+            binaryPath: configuration.binaryPath,
             providerId: configuration.providerId,
             modelId: configuration.modelId,
-            credentialSource: store,
-            decryptCredential,
-          }),
-          runtimeEnv: buildOpencodeRuntimeEnv({
-            baseEnv: process.env,
-            apiKeyEnvName: 'OPENCODE_API_KEY',
-          }),
-        })
-      }
-      let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>>
-      try {
-        generated = await runWorkflowStageAgent({
-          run,
-          node,
-          artifacts,
-          ...(provider ? { provider } : {}),
-          ...(executor ? { executor } : {}),
-          requestedBy: actor.userId,
-          runtime: 'electron',
-        })
-      } catch (error) {
-        try {
-          return await recordStageAgentFailure({
-            store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
-            sequence: events.length + 1, error,
+            detectedVersion: configuration.detectedVersion,
+            processManager: opencodeProcessManager,
+            providerBinding: await resolveSavedOpencodeProviderBinding({
+              providerId: configuration.providerId,
+              modelId: configuration.modelId,
+              credentialSource: store,
+              decryptCredential,
+            }),
+            runtimeEnv: buildOpencodeRuntimeEnv({
+              baseEnv: process.env,
+              apiKeyEnvName: 'OPENCODE_API_KEY',
+            }),
           })
-        } finally { wakeRemoteSyncOutbox() }
-      }
-      const completedAt = generated.artifact.updatedAt
-      const event: AgentEvent = {
-        id: `event-${generated.artifact.id}`,
-        runId: run.id,
-        nodeId: node.id,
-        sequence: events.length + 1,
-        kind: 'thinking',
-        message: `${actor.userName} generated ${generated.artifact.title}. Source: ${generated.source === 'local_agent' ? 'read-only local Agent' : generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
-        timestamp: completedAt,
-        ...(generated.artifact.clarificationRevision
-          ? {
-              clarificationAudit: {
-                version: 1 as const,
-                action: 'revision_generated' as const,
-                artifactId: generated.artifact.id,
-                revision: generated.artifact.clarificationRevision.revision,
-                revisionDigest: generated.artifact.clarificationRevision.revisionDigest,
-                actorId: actor.userId,
-              },
+        }
+        let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>> | undefined
+        try {
+          generated = await runWorkflowStageAgent({
+            run,
+            node,
+            artifacts,
+            ...(provider ? { provider } : {}),
+            ...(executor ? { executor } : {}),
+            requestedBy: actor.userId,
+            runtime: 'electron',
+            signal,
+          })
+          signal.throwIfAborted()
+          if (generated.artifact.designEvidence) {
+            const currentRun = await store.getRun(run.id)
+            if (!currentRun) throw new Error('Run 已不存在。')
+            const currentInput = await resolveDesignClarificationInput(currentRun, await store.listArtifacts(run.id))
+            if (JSON.stringify(currentInput.binding) !== JSON.stringify(generated.artifact.designEvidence.clarification)) {
+              throw new Error('需求审批依据已变化，请重新生成方案设计。')
             }
-          : {}),
-      }
-      const superseded = generated.artifact.kind === 'clarification'
-        ? markClarificationRevisionsSuperseded(artifacts, generated.artifact.id)
-            .filter((artifact, index) => artifact !== artifacts[index])
-        : []
-      const completed = await executeWorkflowCommandOrThrow(store, {
-        runId: run.id,
-        expectedRunUpdatedAt: run.updatedAt,
-        command: {
-          type: 'complete_agent',
+          }
+          stageAgentOperations.seal(run.id, node.id)
+        } catch (error) {
+          try {
+            return await recordStageAgentFailure({
+              store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
+              sequence: events.length + 1, error: generated?.tokenUsage ? new StageAgentExecutionError(
+                error instanceof StageAgentExecutionError ? error.terminalReason : 'evidence_invalid',
+                error instanceof Error ? error.message : '阶段完成校验失败。', generated.tokenUsage,
+              ) : error,
+            })
+          } finally { wakeRemoteSyncOutbox() }
+        }
+        const completedAt = generated.artifact.updatedAt
+        const event: AgentEvent = {
+          id: `event-${generated.artifact.id}`,
+          runId: run.id,
           nodeId: node.id,
-          artifactId: generated.artifact.id,
-        },
-        candidates: {
-          artifacts: [...superseded, generated.artifact],
-          events: [event],
-          agentTraces: [generated.trace],
-          ...(generated.tokenUsage ? { agentTokenUsage: [generated.tokenUsage] } : {}),
-        },
-        now: completedAt,
-      })
-      wakeRemoteSyncOutbox()
+          sequence: events.length + 1,
+          kind: 'thinking',
+          message: `${actor.userName} generated ${generated.artifact.title}. Source: ${generated.source === 'local_agent' ? 'read-only local Agent' : generated.source === 'model' ? 'model generated' : 'fake/template'} · ${generated.providerId} · ${generated.model}.`,
+          timestamp: completedAt,
+          ...(generated.artifact.clarificationRevision
+            ? {
+                clarificationAudit: {
+                  version: 1 as const,
+                  action: 'revision_generated' as const,
+                  artifactId: generated.artifact.id,
+                  revision: generated.artifact.clarificationRevision.revision,
+                  revisionDigest: generated.artifact.clarificationRevision.revisionDigest,
+                  actorId: actor.userId,
+                },
+              }
+            : {}),
+        }
+        const superseded = generated.artifact.kind === 'clarification'
+          ? markClarificationRevisionsSuperseded(artifacts, generated.artifact.id)
+              .filter((artifact, index) => artifact !== artifacts[index])
+          : []
+        const completed = await executeWorkflowCommandOrThrow(store, {
+          runId: run.id,
+          expectedRunUpdatedAt: run.updatedAt,
+          command: {
+            type: 'complete_agent',
+            nodeId: node.id,
+            artifactId: generated.artifact.id,
+          },
+          candidates: {
+            artifacts: [...superseded, generated.artifact],
+            events: [event],
+            agentTraces: [generated.trace],
+            ...(generated.tokenUsage ? { agentTokenUsage: [generated.tokenUsage] } : {}),
+          },
+          now: completedAt,
+        })
+        wakeRemoteSyncOutbox()
 
-      return {
-        run: completed.run,
-        artifact: generated.artifact,
-        event,
-        state: await store.loadState(),
-      }
+        return {
+          run: completed.run,
+          artifact: generated.artifact,
+          event,
+          state: await store.loadState(),
+        }
+      })
     })
   })
 

@@ -161,7 +161,7 @@ function canonicalNow(clock: () => string): string {
   const value = clock()
   const parsed = Date.parse(value)
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString() !== value) {
-    throw new Error('Native Coding v2 clock is invalid')
+    throw new Error('DevFlow Native v2 clock is invalid')
   }
   return value
 }
@@ -173,7 +173,7 @@ function safeText(value: string): string {
 function permissionExpiry(requestedAt: string, deadline: string): string {
   const timestamp = Math.min(Date.parse(requestedAt) + PERMISSION_WINDOW_MS, Date.parse(deadline))
   if (timestamp <= Date.parse(requestedAt)) {
-    throw new Error('Native Coding v2 permission deadline has elapsed')
+    throw new Error('DevFlow Native v2 permission deadline has elapsed')
   }
   return new Date(timestamp).toISOString()
 }
@@ -290,36 +290,36 @@ function runtimeCostTrace(summary: CodingRuntimeCostSummary): Record<string, unk
 function boundedPrompt(value: Record<string, unknown>): string {
   const serialized = JSON.stringify(value)
   if (serialized.length > MAX_PROMPT_CHARS) {
-    throw new Error('Native Coding v2 final model prompt exceeds 30,000 characters')
+    throw new Error('DevFlow Native v2 final model prompt exceeds 30,000 characters')
   }
   return serialized
 }
 
 function parseSearchPlan(value: unknown, manifest: readonly string[]): SearchPlan {
-  if (!isPlainRecord(value)) throw new Error('Native Coding v2 analysis is not an object')
+  if (!isPlainRecord(value)) throw new Error('DevFlow Native v2 analysis is not an object')
   if (!hasExactKeys(value, ['stateVersion', 'files', 'searches', 'summary'])) {
-    throw new Error('Native Coding v2 analysis keys are invalid')
+    throw new Error('DevFlow Native v2 analysis keys are invalid')
   }
-  if (value.stateVersion !== 2) throw new Error('Native Coding v2 analysis version is invalid')
-  if (!Array.isArray(value.files)) throw new Error('Native Coding v2 analysis files are invalid')
-  if (!Array.isArray(value.searches)) throw new Error('Native Coding v2 analysis searches are invalid')
+  if (value.stateVersion !== 2) throw new Error('DevFlow Native v2 analysis version is invalid')
+  if (!Array.isArray(value.files)) throw new Error('DevFlow Native v2 analysis files are invalid')
+  if (!Array.isArray(value.searches)) throw new Error('DevFlow Native v2 analysis searches are invalid')
   if (
     typeof value.summary !== 'string' ||
     value.summary.length < 1 ||
     value.summary.length > 1_000
   ) {
-    throw new Error('Native Coding v2 analysis summary is invalid')
+    throw new Error('DevFlow Native v2 analysis summary is invalid')
   }
-  if (value.files.length > MAX_EXCERPTS) throw new Error('Native Coding v2 analysis has too many files')
-  if (value.searches.length > MAX_EXCERPTS) throw new Error('Native Coding v2 analysis has too many searches')
+  if (value.files.length > MAX_EXCERPTS) throw new Error('DevFlow Native v2 analysis has too many files')
+  if (value.searches.length > MAX_EXCERPTS) throw new Error('DevFlow Native v2 analysis has too many searches')
   if (value.files.some((entry) => !isCanonicalRelativePath(entry))) {
-    throw new Error('Native Coding v2 analysis path is invalid')
+    throw new Error('DevFlow Native v2 analysis path is invalid')
   }
   if (value.files.some((entry) => !manifest.includes(entry))) {
-    throw new Error('Native Coding v2 analysis path is not in manifest')
+    throw new Error('DevFlow Native v2 analysis path is not in manifest')
   }
   if (new Set(value.files).size !== value.files.length) {
-    throw new Error('Native Coding v2 analysis has duplicate paths')
+    throw new Error('DevFlow Native v2 analysis has duplicate paths')
   }
   const searches = value.searches.map((entry) => {
     if (
@@ -335,7 +335,7 @@ function parseSearchPlan(value: unknown, manifest: readonly string[]): SearchPla
       (entry.path !== undefined &&
         (!isCanonicalRelativePath(entry.path) || !manifest.includes(entry.path)))
     ) {
-      throw new Error('Native Coding v2 bounded search request is invalid')
+      throw new Error('DevFlow Native v2 bounded search request is invalid')
     }
     return entry.path === undefined
       ? { query: entry.query }
@@ -355,29 +355,29 @@ function parseChangeProposal(
   allowUnrepairable = false,
 ): ChangeProposal {
   if (!isPlainRecord(value)) {
-    throw new Error('Native Coding v2 Change Set proposal is not an object')
+    throw new Error('DevFlow Native v2 Change Set proposal is not an object')
   }
   if (!hasRequiredKeys(value, ['stateVersion', 'changes', 'summary'])) {
-    throw new Error('Native Coding v2 Change Set proposal keys are invalid')
+    throw new Error('DevFlow Native v2 Change Set proposal keys are invalid')
   }
   if (value.stateVersion !== 2) {
-    throw new Error('Native Coding v2 Change Set proposal version is invalid')
+    throw new Error('DevFlow Native v2 Change Set proposal version is invalid')
   }
   if (!Array.isArray(value.changes)) {
-    throw new Error('Native Coding v2 Change Set proposal changes are invalid')
+    throw new Error('DevFlow Native v2 Change Set proposal changes are invalid')
   }
   if (value.changes.length < 1 && !allowUnrepairable) {
-    throw new Error('Native Coding v2 Change Set proposal is empty')
+    throw new Error('DevFlow Native v2 Change Set proposal is empty')
   }
   if (value.changes.length > 6) {
-    throw new Error('Native Coding v2 Change Set proposal has too many files')
+    throw new Error('DevFlow Native v2 Change Set proposal has too many files')
   }
   if (
     typeof value.summary !== 'string' ||
     value.summary.length < 1 ||
     value.summary.length > 1_000
   ) {
-    throw new Error('Native Coding v2 Change Set proposal summary is invalid')
+    throw new Error('DevFlow Native v2 Change Set proposal summary is invalid')
   }
   if (allowUnrepairable && value.changes.length === 0) {
     return { stateVersion: 2, changes: [], summary: safeText(value.summary) }
@@ -391,23 +391,23 @@ function parseChangeProposal(
       !Array.isArray(entry.replacements) ||
       entry.replacements.length < 1
     ) {
-      throw new Error('Native Coding v2 Change Set path is invalid')
+      throw new Error('DevFlow Native v2 Change Set path is invalid')
     }
     if (!allowedPaths.has(entry.path)) {
-      throw new Error('Native Coding v2 Change Set path is not in context')
+      throw new Error('DevFlow Native v2 Change Set path is not in context')
     }
     const parsed = entry.replacements.flatMap((replacement) => {
       if (!isPlainRecord(replacement)) {
-        throw new Error('Native Coding v2 exact replacement is not an object')
+        throw new Error('DevFlow Native v2 exact replacement is not an object')
       }
       if (!hasExactKeys(replacement, ['oldText', 'newText'])) {
-        throw new Error('Native Coding v2 exact replacement keys are invalid')
+        throw new Error('DevFlow Native v2 exact replacement keys are invalid')
       }
       if (typeof replacement.oldText !== 'string' || replacement.oldText.length < 1) {
-        throw new Error('Native Coding v2 exact replacement oldText is invalid')
+        throw new Error('DevFlow Native v2 exact replacement oldText is invalid')
       }
       if (typeof replacement.newText !== 'string') {
-        throw new Error('Native Coding v2 exact replacement newText is invalid')
+        throw new Error('DevFlow Native v2 exact replacement newText is invalid')
       }
       if (replacement.oldText === replacement.newText) {
         return []
@@ -418,10 +418,10 @@ function parseChangeProposal(
     return parsed.length > 0 ? [{ path: entry.path, replacements: parsed }] : []
   })
   if (changes.length < 1) {
-    throw new Error('Native Coding v2 Change Set proposal has no effective replacements')
+    throw new Error('DevFlow Native v2 Change Set proposal has no effective replacements')
   }
-  if (replacements > 12) throw new Error('Native Coding v2 Change Set has too many replacements')
-  if (new Set(changes.map((change) => change.path)).size !== changes.length) throw new Error('Native Coding v2 Change Set has duplicate paths')
+  if (replacements > 12) throw new Error('DevFlow Native v2 Change Set has too many replacements')
+  if (new Set(changes.map((change) => change.path)).size !== changes.length) throw new Error('DevFlow Native v2 Change Set has duplicate paths')
   return { stateVersion: 2, changes, summary: safeText(value.summary) }
 }
 
@@ -429,34 +429,34 @@ function modelValidationCause(error: unknown): string {
   // Only static parser classifications cross into persisted diagnostics. Never
   // include the rejected model's values, code, paths, or arbitrary error text.
   const causes: Record<string, string> = {
-    'Native Coding v2 analysis is not an object': 'analysis_not_object',
-    'Native Coding v2 analysis keys are invalid': 'analysis_keys_invalid',
-    'Native Coding v2 analysis version is invalid': 'analysis_version_invalid',
-    'Native Coding v2 analysis files are invalid': 'analysis_files_not_array',
-    'Native Coding v2 analysis searches are invalid': 'analysis_searches_not_array',
-    'Native Coding v2 analysis summary is invalid': 'analysis_summary_invalid',
-    'Native Coding v2 analysis has too many files': 'analysis_too_many_files',
-    'Native Coding v2 analysis has too many searches': 'analysis_too_many_searches',
-    'Native Coding v2 analysis path is invalid': 'analysis_path_invalid',
-    'Native Coding v2 analysis path is not in manifest': 'analysis_path_not_in_manifest',
-    'Native Coding v2 analysis has duplicate paths': 'analysis_duplicate_paths',
-    'Native Coding v2 bounded search request is invalid': 'search_request_invalid',
-    'Native Coding v2 Change Set proposal is not an object': 'proposal_not_object',
-    'Native Coding v2 Change Set proposal keys are invalid': 'proposal_keys_invalid',
-    'Native Coding v2 Change Set proposal version is invalid': 'proposal_version_invalid',
-    'Native Coding v2 Change Set proposal changes are invalid': 'changes_not_array',
-    'Native Coding v2 Change Set proposal is empty': 'changes_empty',
-    'Native Coding v2 Change Set proposal has too many files': 'too_many_files',
-    'Native Coding v2 Change Set proposal summary is invalid': 'summary_invalid',
-    'Native Coding v2 Change Set path is invalid': 'change_shape_or_path_invalid',
-    'Native Coding v2 Change Set path is not in context': 'path_not_in_context',
-    'Native Coding v2 exact replacement is not an object': 'replacement_not_object',
-    'Native Coding v2 exact replacement keys are invalid': 'replacement_keys_invalid',
-    'Native Coding v2 exact replacement oldText is invalid': 'old_text_invalid',
-    'Native Coding v2 exact replacement newText is invalid': 'new_text_invalid',
-    'Native Coding v2 Change Set proposal has no effective replacements': 'no_effective_replacements',
-    'Native Coding v2 Change Set has too many replacements': 'too_many_replacements',
-    'Native Coding v2 Change Set has duplicate paths': 'duplicate_paths',
+    'DevFlow Native v2 analysis is not an object': 'analysis_not_object',
+    'DevFlow Native v2 analysis keys are invalid': 'analysis_keys_invalid',
+    'DevFlow Native v2 analysis version is invalid': 'analysis_version_invalid',
+    'DevFlow Native v2 analysis files are invalid': 'analysis_files_not_array',
+    'DevFlow Native v2 analysis searches are invalid': 'analysis_searches_not_array',
+    'DevFlow Native v2 analysis summary is invalid': 'analysis_summary_invalid',
+    'DevFlow Native v2 analysis has too many files': 'analysis_too_many_files',
+    'DevFlow Native v2 analysis has too many searches': 'analysis_too_many_searches',
+    'DevFlow Native v2 analysis path is invalid': 'analysis_path_invalid',
+    'DevFlow Native v2 analysis path is not in manifest': 'analysis_path_not_in_manifest',
+    'DevFlow Native v2 analysis has duplicate paths': 'analysis_duplicate_paths',
+    'DevFlow Native v2 bounded search request is invalid': 'search_request_invalid',
+    'DevFlow Native v2 Change Set proposal is not an object': 'proposal_not_object',
+    'DevFlow Native v2 Change Set proposal keys are invalid': 'proposal_keys_invalid',
+    'DevFlow Native v2 Change Set proposal version is invalid': 'proposal_version_invalid',
+    'DevFlow Native v2 Change Set proposal changes are invalid': 'changes_not_array',
+    'DevFlow Native v2 Change Set proposal is empty': 'changes_empty',
+    'DevFlow Native v2 Change Set proposal has too many files': 'too_many_files',
+    'DevFlow Native v2 Change Set proposal summary is invalid': 'summary_invalid',
+    'DevFlow Native v2 Change Set path is invalid': 'change_shape_or_path_invalid',
+    'DevFlow Native v2 Change Set path is not in context': 'path_not_in_context',
+    'DevFlow Native v2 exact replacement is not an object': 'replacement_not_object',
+    'DevFlow Native v2 exact replacement keys are invalid': 'replacement_keys_invalid',
+    'DevFlow Native v2 exact replacement oldText is invalid': 'old_text_invalid',
+    'DevFlow Native v2 exact replacement newText is invalid': 'new_text_invalid',
+    'DevFlow Native v2 Change Set proposal has no effective replacements': 'no_effective_replacements',
+    'DevFlow Native v2 Change Set has too many replacements': 'too_many_replacements',
+    'DevFlow Native v2 Change Set has duplicate paths': 'duplicate_paths',
   }
   return `native_v2_${error instanceof Error ? causes[error.message] ?? 'output_validation_failed' : 'output_validation_failed'}`
 }
@@ -556,7 +556,7 @@ async function collectExcerpts(input: {
       if (content.includes(search.query) && await add(filePath, 'search', search.query)) break
     }
   }
-  if (excerpts.length < 1) throw new Error('Native Coding v2 analysis did not select readable code')
+  if (excerpts.length < 1) throw new Error('DevFlow Native v2 analysis did not select readable code')
   return excerpts
 }
 
@@ -574,7 +574,7 @@ function fitChangePrompt(input: Record<string, unknown> & { excerpts: Excerpt[] 
       excerpts.pop()
     }
   }
-  throw new Error('Native Coding v2 could not fit repository evidence in the 30,000 character prompt')
+  throw new Error('DevFlow Native v2 could not fit repository evidence in the 30,000 character prompt')
 }
 
 function assertStartAuthority(
@@ -598,7 +598,7 @@ function assertStartAuthority(
     request.objectiveDigest !== sha256(context.userInstruction.trim()) ||
     request.contextDigest !== sha256(context.brief.prompt)
   ) {
-    throw new Error('Native Coding v2 authority is stale')
+    throw new Error('DevFlow Native v2 authority is stale')
   }
 }
 
@@ -716,7 +716,7 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
     ...(provider.effectiveThinking ? { effectiveThinking: provider.effectiveThinking } : {}),
     async complete(input) {
       if (input.userPrompt.length > MAX_PROMPT_CHARS) {
-        throw new Error('Native Coding v2 provider prompt exceeds the hard limit')
+        throw new Error('DevFlow Native v2 provider prompt exceeds the hard limit')
       }
       const completed = await provider.completeStructuredJson!({
         systemPrompt: input.systemPrompt,
@@ -958,7 +958,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     permission: CodingPermissionRequest,
   ): Promise<CodingChangeSet> {
     if (!permission.changeSetId || !permission.changeSetDigest) {
-      throw new Error('Native Coding v2 permission is not bound to a Change Set')
+      throw new Error('DevFlow Native v2 permission is not bound to a Change Set')
     }
     const changeSet = await input.store.getCodingChangeSet(permission.changeSetId)
     if (
@@ -971,7 +971,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       changeSet.changeSetDigest !== permission.changeSetDigest ||
       codingRun.changeSetId !== changeSet.id
     ) {
-      throw new Error('Native Coding v2 Change Set authority is stale')
+      throw new Error('DevFlow Native v2 Change Set authority is stale')
     }
     verifyCodingChangeSetDigest(changeSet)
     return changeSet
@@ -1020,7 +1020,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       : {}),
     async ensure({ project }) {
       if (!project.id || !project.path || !project.testCommand.trim()) {
-        throw new Error('Native Coding v2 requires a project and saved test command')
+        throw new Error('DevFlow Native v2 requires a project and saved test command')
       }
       return { projectId: project.id, engine: 'native', status: 'ready' }
     },
@@ -1041,7 +1041,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       const context = startInput.runtimeContext
       await context.assertContextCurrent?.()
       const manifest = await buildRepositoryManifest(context.workspace.worktreePath)
-      if (manifest.length < 1) throw new Error('Native Coding v2 repository manifest is empty')
+      if (manifest.length < 1) throw new Error('DevFlow Native v2 repository manifest is empty')
       const analysisPrompt = boundedPrompt({
         stateVersion: 2,
         objectiveDigest: request.objectiveDigest,
@@ -1188,7 +1188,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         branchName: context.workspace.branchName,
         userInstruction: safeText(context.userInstruction),
         prompt: safeText(context.brief.prompt),
-        summary: `Waiting for approval of ${changeSet.changes.length} file(s) in the exact Native Coding v2 Change Set.`,
+        summary: `Waiting for approval of ${changeSet.changes.length} file(s) in the exact DevFlow Native v2 Change Set.`,
         changedPaths: [],
         startedAt: request.requestedAt,
         runtimeCostSummary: settledCost,
@@ -1198,13 +1198,13 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         {
           id: createId('coding-event'), codingRunId: request.id, runId: context.run.id,
           nodeId: context.node.id, sequence: 1, kind: 'brief',
-          message: 'Native Coding v2 built a bounded repository manifest and selected code evidence.',
+          message: 'DevFlow Native v2 built a bounded repository manifest and selected code evidence.',
           timestamp: request.requestedAt, metadata: { manifestPaths: manifest.length, excerpts: excerpts.length }, redacted: true,
         },
         {
           id: createId('coding-event'), codingRunId: request.id, runId: context.run.id,
           nodeId: context.node.id, sequence: 2, kind: 'permission',
-          message: `Native Coding v2 proposed ${changeSet.changes.length} file(s) for exact approval.`,
+          message: `DevFlow Native v2 proposed ${changeSet.changes.length} file(s) for exact approval.`,
           timestamp: requestedAt,
           metadata: {
             requestId: permissionRequest.id,
@@ -1224,7 +1224,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         settledPermissionRequestIds: [],
         startedAt: request.requestedAt,
       })
-      if (turn.status !== 'waiting_permission') throw new Error('Native Coding v2 did not stop for approval')
+      if (turn.status !== 'waiting_permission') throw new Error('DevFlow Native v2 did not stop for approval')
       return { kind: 'waiting_permission', codingRun, events, permissionRequest, turn }
     },
     async continuePermission(continuationInput) {
@@ -1242,12 +1242,12 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         workspace.projectId !== project.id ||
         workspace.cleanupStatus !== 'active'
       ) {
-        throw new Error('Native Coding v2 permission continuation is stale')
+        throw new Error('DevFlow Native v2 permission continuation is stale')
       }
       const changeSet = await findChangeSetForPermission(codingRun, request)
       await context.reportPhase?.({
         status: 'applying',
-        summary: 'Applying the exact approved Native Coding v2 Change Set atomically.',
+        summary: 'Applying the exact approved DevFlow Native v2 Change Set atomically.',
         timestamp: context.now,
       })
       await context.assertContextCurrent?.()
@@ -1257,7 +1257,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         worktreePath: workspace.worktreePath,
       })
       if (recoveredPhase) {
-        throw new Error(`Interrupted Native Coding v2 ${recoveredPhase} phase requires an explicit retry`)
+        throw new Error(`Interrupted DevFlow Native v2 ${recoveredPhase} phase requires an explicit retry`)
       }
       const testedAt = canonicalNow(clock)
       await context.reportPhase?.({
@@ -1317,7 +1317,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         })
         const repairProposal = repairResult.value
         if (repairProposal.changes.length === 0) {
-          throw new Error(`Native Coding v2 has no safe repair: ${repairProposal.summary}`)
+          throw new Error(`DevFlow Native v2 has no safe repair: ${repairProposal.summary}`)
         }
         const requestedAt = canonicalNow(clock)
         // The initial permission was already capped by the executor request deadline.
@@ -1365,13 +1365,13 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           {
             id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,
             nodeId: codingRun.nodeId, sequence: 1, kind: 'test',
-            message: 'The saved worktree test failed; Native Coding v2 generated one bounded repair proposal.',
+            message: 'The saved worktree test failed; DevFlow Native v2 generated one bounded repair proposal.',
             timestamp: testedAt, metadata: { status: tested.result.status, evidenceId: tested.evidence.id }, redacted: true,
           },
           {
             id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,
             nodeId: codingRun.nodeId, sequence: 2, kind: 'permission',
-            message: 'Native Coding v2 requested fresh approval for the repair Change Set.',
+            message: 'DevFlow Native v2 requested fresh approval for the repair Change Set.',
             timestamp: requestedAt,
             metadata: {
               requestId: permissionRequest.id,
@@ -1391,7 +1391,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           settledPermissionRequestIds: continuationInput.settledPermissionRequestIds,
           includeDecisionId: request.id,
         })
-        if (turn.status !== 'waiting_permission') throw new Error('Native Coding v2 repair did not stop for approval')
+        if (turn.status !== 'waiting_permission') throw new Error('DevFlow Native v2 repair did not stop for approval')
         await writeCodingChangeSetExecutionPhase({
           changeSet,
           worktreePath: workspace.worktreePath,
@@ -1402,7 +1402,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       }
       if (tested.result.status !== 'passed') {
         await input.store.saveTestEvidence(tested.evidence)
-        throw new Error('Native Coding v2 saved tests failed after the approved repair')
+        throw new Error('DevFlow Native v2 saved tests failed after the approved repair')
       }
       const completedAt = canonicalNow(clock)
       const captured = await captureWorktreeDiff({ worktreePath: workspace.worktreePath })
@@ -1413,7 +1413,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         captured.changedPaths.length > 6 ||
         captured.changedPaths.some((changedPath) => !approvedPaths.has(changedPath))
       ) {
-        throw new Error('Native Coding v2 worktree diff exceeds the approved Change Sets')
+        throw new Error('DevFlow Native v2 worktree diff exceeds the approved Change Sets')
       }
       const diff = sanitizeCodingDiffArtifact({
         id: createId('coding-diff'),
@@ -1425,11 +1425,11 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         sourceDigest: sha256(captured.patch),
         createdAt: completedAt,
       })
-      if (diff.truncated) throw new Error('Native Coding v2 delivery diff exceeded the safe limit')
+      if (diff.truncated) throw new Error('DevFlow Native v2 delivery diff exceeded the safe limit')
       const finalRun: CodingAgentRun = {
         ...codingRun,
         status: 'completed',
-        summary: `Native Coding v2 applied ${captured.changedPaths.length} approved file change(s) and the saved test passed.`,
+        summary: `DevFlow Native v2 applied ${captured.changedPaths.length} approved file change(s) and the saved test passed.`,
         changedPaths: captured.changedPaths,
         completedAt,
         diffArtifactId: diff.id,
@@ -1452,7 +1452,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         {
           id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,
           nodeId: codingRun.nodeId, sequence: 3, kind: 'diff',
-          message: 'Native Coding v2 captured the delivery diff.',
+          message: 'DevFlow Native v2 captured the delivery diff.',
           timestamp: completedAt, metadata: { diffArtifactId: diff.id }, redacted: true,
         },
       ]
@@ -1505,7 +1505,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         previousSequence: continuationInput.previousSequence,
         settledPermissionRequestIds: continuationInput.settledPermissionRequestIds,
       })
-      if (turn.status !== 'terminal') throw new Error('Native Coding v2 completion is not terminal')
+      if (turn.status !== 'terminal') throw new Error('DevFlow Native v2 completion is not terminal')
       return { kind: 'engine_completed', codingRun: finalRun, events, diff, testEvidence: tested.evidence, turn }
     },
     async cancel() {

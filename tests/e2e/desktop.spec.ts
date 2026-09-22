@@ -965,7 +965,7 @@ async function installDesktopApi(
         providerId: 'doubao-review',
         configVersion: 1,
         checks: [
-          { code: 'executor_unconfigured', status: 'ready', message: 'Coding Executor 已配置。' },
+          { code: 'executor_unconfigured', status: 'ready', message: '执行工具已配置。' },
           { code: 'engine_unavailable', status: 'ready', message: 'Coding Engine 可用。' },
           { code: 'capability_unavailable', status: 'ready', message: '执行能力满足要求。' },
           { code: 'provider_unavailable', status: 'ready', message: 'Provider 可用。' },
@@ -1408,7 +1408,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     const currentTask = page.getByTestId('agent-current-task')
     await expect(currentTask).toContainText('方案设计')
     await expect(currentTask.getByRole('list', { name: '当前主操作的对象、结果和影响' })).toContainText('Provider 与费用')
-    await expect(currentTask).toContainText('只读检查仓库上下文，不修改仓库文件')
+    await expect(currentTask).toContainText('根据需求和已保存阶段产物生成，不直接调查仓库')
     await expect(currentTask).toContainText('推进到方案评审 Gate；不会自动批准 Gate')
     await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
     await expect(workbench.locator('.primary-button:visible')).toHaveText(/生成设计方案/u)
@@ -1674,12 +1674,12 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     await page.getByRole('button', { name: /^Agents$/ }).click()
     const codingSettings = page.locator('details.runtime-settings').filter({
-      hasText: 'Coding Agent 执行配置',
+      hasText: '项目执行工具',
     })
     if (!(await codingSettings.getAttribute('open'))) {
       await codingSettings.locator('summary').click()
     }
-    await expect(codingSettings).toContainText('Coding Executor：已配置')
+    await expect(codingSettings).toContainText('执行工具：已配置')
     await expect(codingSettings).toContainText('Coding Engine：可用')
     await expect(codingSettings).toContainText('Provider：可用')
     await expect(codingSettings).toContainText('Team Project：已配对')
@@ -1687,7 +1687,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(codingSettings).toContainText('预算策略：已配置')
     await expect(codingSettings).toContainText('预算评估：允许执行')
 
-    await codingSettings.getByLabel('Coding Executor').selectOption('opencode-http')
+    await codingSettings.getByLabel('执行工具', { exact: true }).selectOption('opencode-http')
     await expect(codingSettings.getByLabel('OpenCode 已保存 Provider')).toHaveValue('doubao-review')
     await codingSettings.getByRole('button', { name: '检测本机 OpenCode' }).click()
     await expect(codingSettings.getByTestId('opencode-discovery-status')).toContainText(

@@ -39,22 +39,22 @@ function executor(root: string, runner: Parameters<typeof createReadOnlyLocalSta
     providerId: 'provider-1',
     modelId: 'model-1',
     detectedVersion: '1.0.0',
-    processManager: { ensure: async () => { throw new Error('not used') } },
+    processManager: { ensure: async () => { throw new Error('not used') }, stopProject: async () => {} },
     runtimeEnv: {},
     ...(runner ? { runner } : {}),
   })
 }
 
-function executionInput() {
+function executionInput(stage: 'clarify' | 'design' = 'clarify') {
   return {
     request: {
       id: 'request-1', runId: 'run-1', nodeId: 'node-1', projectId: 'project-1',
-      requestedBy: 'user-1', runtime: 'electron' as const, stage: 'clarify' as const,
+      requestedBy: 'user-1', runtime: 'electron' as const, stage,
       providerId: 'provider-1',
     },
     context: {
       run: { id: 'run-1', title: 'Run', request: 'Clarify', projectId: 'project-1', status: 'clarifying' as const, branchName: 'main' },
-      node: { id: 'node-1', stage: 'clarify' as const, title: 'Clarify', subtitle: '', kind: 'agent' as const, status: 'running' as const },
+      node: { id: 'node-1', stage, title: 'Stage', subtitle: '', kind: 'agent' as const, status: 'running' as const },
       artifacts: [],
     },
     prompt: 'Return JSON',
@@ -64,7 +64,7 @@ function executionInput() {
 }
 
 describe('read-only local stage Agent executor', () => {
-  it('rejects a selected subdirectory before invoking the repository Agent', async () => {
+  it.each(['clarify', 'design'] as const)('rejects a selected subdirectory before invoking the repository Agent (%s)', async (stage) => {
     const parent = await repository()
     const selected = path.join(parent, 'empty-project')
     await mkdir(selected)
@@ -74,7 +74,7 @@ describe('read-only local stage Agent executor', () => {
       throw new Error('Agent must not be invoked outside a selected repository root')
     })
 
-    await expect(localExecutor.execute(executionInput())).rejects.toThrow(/repository root/)
+    await expect(localExecutor.execute(executionInput(stage))).rejects.toThrow(/repository root/)
     expect(invoked).toBe(false)
   })
 
@@ -87,7 +87,7 @@ describe('read-only local stage Agent executor', () => {
     })
   })
 
-  it('binds citations to repo-relative paths and actual content digests', async () => {
+  it.each(['clarify', 'design'] as const)('binds citations to repo-relative paths and actual content digests (%s)', async (stage) => {
     const root = await repository()
     const value = await executor(root, async () => ({
       toolCalls: 2,
@@ -104,7 +104,7 @@ describe('read-only local stage Agent executor', () => {
           assumptions: [], openQuestions: [], uncheckedScopes: [],
         },
       },
-    })).execute(executionInput())
+    })).execute(executionInput(stage))
     const bytes = await readFile(path.join(root, 'package.json'))
     expect(value.value.repositoryFindings?.citations[0]).toEqual({
       id: 'c1',
@@ -114,7 +114,7 @@ describe('read-only local stage Agent executor', () => {
     expect(value.value.repositoryFindings?.repositoryDigest).toMatch(/^[a-f0-9]{64}$/)
   })
 
-  it('fails closed when the fake CLI changes the repository', async () => {
+  it.each(['clarify', 'design'] as const)('fails closed when the fake CLI changes the repository (%s)', async (stage) => {
     const root = await repository()
     const localExecutor = executor(root, async () => {
       await writeFile(path.join(root, 'package.json'), '{"name":"changed"}\n')
@@ -126,10 +126,10 @@ describe('read-only local stage Agent executor', () => {
         },
       }
     })
-    await expect(localExecutor.execute(executionInput())).rejects.toThrow('produced a repository diff')
+    await expect(localExecutor.execute(executionInput(stage))).rejects.toThrow('produced a repository diff')
   })
 
-  it('fails closed on permission escalation', async () => {
+  it.each(['clarify', 'design'] as const)('fails closed on permission escalation (%s)', async (stage) => {
     const root = await repository()
     const localExecutor = executor(root, async () => ({
       toolCalls: 1, pendingPermissionCount: 1, diffCount: 0,
@@ -138,6 +138,6 @@ describe('read-only local stage Agent executor', () => {
         acceptanceCriteria: ['Acceptance'], nonGoals: ['Non-goal'], openQuestions: [], assumptions: [], risks: [],
       },
     }))
-    await expect(localExecutor.execute(executionInput())).rejects.toThrow('requested additional permission')
+    await expect(localExecutor.execute(executionInput(stage))).rejects.toThrow('requested additional permission')
   })
 })

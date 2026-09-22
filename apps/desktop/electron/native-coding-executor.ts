@@ -113,9 +113,9 @@ export function createDeterministicNativeCodingDecisionProvider(): NativeCodingD
         stateVersion: 1,
         edit: {
           path: 'devflow-native-change.txt',
-          content: 'DevFlow deterministic Native Coding repair.\n',
+          content: 'DevFlow deterministic DevFlow Native repair.\n',
         },
-        summary: 'Apply one deterministic bounded Native Coding repair.',
+        summary: 'Apply one deterministic bounded DevFlow Native repair.',
       }
     },
   }
@@ -129,7 +129,7 @@ export function createAgentProviderNativeCodingDecisionProvider(
   }
   const id = `native-decision-${provider.id}`
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u.test(id)) {
-    throw new Error('Configured Native Coding Agent Provider id is invalid')
+    throw new Error('Configured Provider for DevFlow Native id is invalid')
   }
   return {
     id,
@@ -173,7 +173,7 @@ export function createAgentProviderNativeCodingDecisionProvider(
         Number(usage.outputTokens) < 0 ||
         Number(usage.cacheReadTokens ?? 0) < 0
       ) {
-        throw new Error('Configured Native Coding Agent Provider did not return exact token usage')
+        throw new Error('Configured Provider for DevFlow Native did not return exact token usage')
       }
       const inputTokens = Number(usage.inputTokens)
       const outputTokens = Number(usage.outputTokens)
@@ -212,7 +212,7 @@ function canonicalNow(clock: () => string): string {
   const value = clock()
   const timestamp = Date.parse(value)
   if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) {
-    throw new Error('Native Coding Executor clock is invalid')
+    throw new Error('DevFlow Native clock is invalid')
   }
   return value
 }
@@ -257,7 +257,7 @@ function definition(
   id: string,
 ): NativeToolDefinition {
   const matches = registry.listDefinitions().filter((candidate) => candidate.id === id)
-  if (matches.length !== 1) throw new Error(`Native Coding Tool is unavailable: ${id}`)
+  if (matches.length !== 1) throw new Error(`DevFlow Native Tool is unavailable: ${id}`)
   return matches[0]!
 }
 
@@ -277,16 +277,16 @@ function parseReadPlan(
     typeof value.read.maxBytes !== 'number' ||
     !isCanonicalRelativePath(value.read.path)
   ) {
-    throw new Error('Native Coding read plan is invalid')
+    throw new Error('DevFlow Native read plan is invalid')
   }
   const read = { path: value.read.path, maxBytes: value.read.maxBytes }
   const readDefinition = definition(registry, READ_TOOL_ID)
   if (!validateNativeToolValue(readDefinition.inputSchema, read)) {
-    throw new Error('Native Coding read plan does not satisfy the accepted Tool schema')
+    throw new Error('DevFlow Native read plan does not satisfy the accepted Tool schema')
   }
   const safeSummary = redactSensitiveText(value.summary)
   if (safeSummary.redacted) {
-    throw new Error('Native Coding read plan contains sensitive data')
+    throw new Error('DevFlow Native read plan contains sensitive data')
   }
   return { stateVersion: 1, read, summary: value.summary }
 }
@@ -305,17 +305,17 @@ function parseEditPlan(value: unknown, registry: NativeToolRegistry): NativeCodi
     value.edit.content.length > MAX_NATIVE_CODING_EDIT_PREVIEW_CHARS ||
     !isCanonicalRelativePath(value.edit.path)
   ) {
-    throw new Error('Native Coding edit plan is invalid')
+    throw new Error('DevFlow Native edit plan is invalid')
   }
   const edit = { path: value.edit.path, content: value.edit.content }
   const editDefinition = definition(registry, WRITE_TOOL_ID)
   if (!validateNativeToolValue(editDefinition.inputSchema, edit)) {
-    throw new Error('Native Coding edit plan does not satisfy the accepted Tool schema')
+    throw new Error('DevFlow Native edit plan does not satisfy the accepted Tool schema')
   }
   const safeContent = redactSensitiveText(edit.content)
   const safeSummary = redactSensitiveText(value.summary)
   if (safeContent.redacted || safeSummary.redacted) {
-    throw new Error('Native Coding edit plan contains sensitive data')
+    throw new Error('DevFlow Native edit plan contains sensitive data')
   }
   return { stateVersion: 1, edit, summary: value.summary }
 }
@@ -335,7 +335,7 @@ function providerValue(value: unknown): {
       !Number.isFinite(value.usage.costUsd) ||
       value.usage.costUsd < 0
     ) {
-      throw new Error('Native Coding decision usage is invalid')
+      throw new Error('DevFlow Native decision usage is invalid')
     }
     return {
       decision: value.decision,
@@ -385,7 +385,7 @@ function repositoryObservation(
     typeof value.content !== 'string' ||
     typeof value.truncated !== 'boolean'
   ) {
-    throw new Error('Native Coding repository observation is invalid')
+    throw new Error('DevFlow Native repository observation is invalid')
   }
   return {
     kind: 'repository_read',
@@ -426,7 +426,7 @@ function assertRuntimeContext(
     context.workspace.cleanupStatus !== 'active' ||
     context.now !== request.requestedAt
   ) {
-    throw new Error('Native Coding authority is stale')
+    throw new Error('DevFlow Native authority is stale')
   }
 }
 
@@ -453,7 +453,7 @@ function runtimeScope(request: ReturnType<typeof parseCodingExecutorRequest>) {
 function permissionExpiry(requestedAt: string, deadline: string): string {
   const timestamp = Math.min(Date.parse(requestedAt) + PERMISSION_WINDOW_MS, Date.parse(deadline))
   if (timestamp <= Date.parse(requestedAt)) {
-    throw new Error('Native Coding permission deadline has elapsed')
+    throw new Error('DevFlow Native permission deadline has elapsed')
   }
   return new Date(timestamp).toISOString()
 }
@@ -480,7 +480,7 @@ function recoverPendingDecisionFromPermission(
     diffPreview.length < 2 ||
     diffPreview.length > MAX_NATIVE_CODING_EDIT_PREVIEW_CHARS + 1
   ) {
-    throw new Error('Native Coding durable edit permission is invalid')
+    throw new Error('DevFlow Native durable edit permission is invalid')
   }
   const edit = { path: filePath, content: diffPreview.slice(1) }
   const writeDefinition = definition(registry, WRITE_TOOL_ID)
@@ -489,13 +489,13 @@ function recoverPendingDecisionFromPermission(
     !validateNativeToolValue(writeDefinition.inputSchema, edit) ||
     redactSensitiveText(edit.content).redacted
   ) {
-    throw new Error('Native Coding durable edit permission is invalid')
+    throw new Error('DevFlow Native durable edit permission is invalid')
   }
   const decision: NativeCodingDecision = {
     stateVersion: 1,
     read: { path: edit.path, maxBytes: 1 },
     edit,
-    summary: 'Recover the exact approved Native Coding edit from local durable state.',
+    summary: 'Recover the exact approved DevFlow Native edit from local durable state.',
   }
   return {
     decision,
@@ -570,7 +570,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
       const current = await input.store.getAgentRuntime(transition.runtime.id)
       if (current) return current
     }
-    throw new Error(`Native Coding Agent Runtime commit failed: ${result.reason}`)
+    throw new Error(`DevFlow Native runtime commit failed: ${result.reason}`)
   }
 
   async function requestAction(
@@ -603,7 +603,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
     providerId: input.decisionProvider.id,
     ...(input.decisionProvider.modelId ? { modelId: input.decisionProvider.modelId } : {}),
     async ensure({ project }) {
-      if (!project.id || !project.path) throw new Error('Native Coding project is invalid')
+      if (!project.id || !project.path) throw new Error('DevFlow Native project is invalid')
       return { projectId: project.id, engine: 'fake', status: 'ready' }
     },
     async start(startInput) {
@@ -629,7 +629,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         request.objectiveDigest !== instructionDigest(startInput.runtimeContext.userInstruction) ||
         request.contextDigest !== sha256(startInput.runtimeContext.brief.prompt)
       ) {
-        throw new Error('Native Coding request digest authority is stale')
+        throw new Error('DevFlow Native request digest authority is stale')
       }
       const runtimeId = `${RUNTIME_PREFIX}${request.id}`
       let runtime = await commit(null, createAgentRuntime({
@@ -653,7 +653,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         deadline: request.deadline,
       }))
       if (runtime.status !== 'checkpointed' || runtime.counters.steps !== 0) {
-        throw new Error('Native Coding request has already started')
+        throw new Error('DevFlow Native request has already started')
       }
 
       runtime = await resume(runtime)
@@ -696,7 +696,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           tokens: plannedRead.tokens,
           costUsd: plannedRead.costUsd,
           evaluation: 'continue',
-          evaluationSummary: 'The bounded Native Coding plan satisfies the accepted Tool schemas.',
+          evaluationSummary: 'The bounded DevFlow Native plan satisfies the accepted Tool schemas.',
         },
         now: canonicalNow(clock),
       }))
@@ -814,7 +814,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         requiresPermission: true,
       })
       if (runtime.status !== 'waiting_permission') {
-        throw new Error('Native Coding runtime did not stop at the edit permission boundary')
+        throw new Error('DevFlow Native runtime did not stop at the edit permission boundary')
       }
 
       const permissionRequestedAt = runtime.updatedAt
@@ -826,11 +826,11 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         runId: request.authority.runId,
         nodeId: request.authority.nodeId,
         permission: 'edit',
-        title: 'Apply the bounded Native Coding edit',
+        title: 'Apply the bounded DevFlow Native edit',
         filePath: pending.decision.edit.path,
         diffPreview: `+${pending.decision.edit.content}`,
         risk: 'warn',
-        reasons: ['Native Coding must receive one-time approval before writing the managed workspace.'],
+        reasons: ['DevFlow Native must receive one-time approval before writing the managed workspace.'],
         status: 'pending',
         requestedAt: permissionRequestedAt,
         expiresAt: permissionExpiry(permissionRequestedAt, request.deadline),
@@ -848,7 +848,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         branchName: startInput.runtimeContext.workspace.branchName,
         userInstruction: safeInstruction(startInput.runtimeContext.userInstruction),
         prompt: safeInstruction(startInput.runtimeContext.brief.prompt),
-        summary: 'Waiting for approval to apply one bounded Native Coding edit.',
+        summary: 'Waiting for approval to apply one bounded DevFlow Native edit.',
         changedPaths: [],
         startedAt: request.requestedAt,
         redacted: true,
@@ -861,7 +861,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           nodeId: request.authority.nodeId,
           sequence: 1,
           kind: 'brief',
-          message: 'Native Coding accepted one bounded brief under the current Run authority.',
+          message: 'DevFlow Native accepted one bounded brief under the current Run authority.',
           timestamp: request.requestedAt,
           redacted: true,
         },
@@ -872,7 +872,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           nodeId: request.authority.nodeId,
           sequence: 2,
           kind: 'tool_call',
-          message: 'Native Coding requested one bounded repository observation.',
+          message: 'DevFlow Native requested one bounded repository observation.',
           timestamp: readDecisionAt,
           metadata: { toolId: READ_TOOL_ID },
           redacted: true,
@@ -896,7 +896,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           nodeId: request.authority.nodeId,
           sequence: 4,
           kind: 'permission',
-          message: 'Native Coding requested one-time managed-workspace edit permission.',
+          message: 'DevFlow Native requested one-time managed-workspace edit permission.',
           timestamp: permissionRequestedAt,
           metadata: { requestId: permissionId },
           redacted: true,
@@ -965,7 +965,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         settledPermissionRequestIds: [],
       })
       if (turn.status !== 'waiting_permission') {
-        throw new Error('Native Coding start did not produce a permission turn')
+        throw new Error('DevFlow Native start did not produce a permission turn')
       }
       return { kind: 'waiting_permission', codingRun, events, permissionRequest, turn }
     },
@@ -995,7 +995,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           recovered.editDigest !== durableWriteDigest ||
           recovered.decision.edit.path !== context.request.filePath
         ) {
-          throw new Error('Native Coding recovered decision does not match the durable edit')
+          throw new Error('DevFlow Native recovered decision does not match the durable edit')
         }
         pending = recovered
         pendingDecisions.set(continuationInput.requestId, pending)
@@ -1050,7 +1050,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         storedWorkspace.worktreePath !== context.workspace.worktreePath ||
         storedWorkspace.cleanupStatus !== 'active'
       ) {
-        throw new Error('Native Coding permission continuation is stale')
+        throw new Error('DevFlow Native permission continuation is stale')
       }
 
       if (runtime.status === 'waiting_permission') {
@@ -1148,7 +1148,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
       ) {
         audits = await input.store.listAgentRuntimeToolAudits(runtime.id)
         if (audits.some((audit) => audit.actionId === testActionId)) {
-          throw new Error('Native Coding saved-test result is ambiguous after interruption')
+          throw new Error('DevFlow Native saved-test result is ambiguous after interruption')
         }
         const testGrant = await registry.issueGrant({
           runtime,
@@ -1269,7 +1269,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
             requiresPermission: true,
           })
           if (runtime.status !== 'waiting_permission') {
-            throw new Error('Native Coding repair did not stop at the edit permission boundary')
+            throw new Error('DevFlow Native repair did not stop at the edit permission boundary')
           }
           const repairRequestedAt = runtime.updatedAt
           const repairPermissionId = createId('coding-permission')
@@ -1279,7 +1279,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
             runId: runtime.authority.runId,
             nodeId: runtime.authority.nodeId,
             permission: 'edit',
-            title: 'Apply the bounded Native Coding repair',
+            title: 'Apply the bounded DevFlow Native repair',
             filePath: repair.decision.edit.path,
             diffPreview: `+${repair.decision.edit.content}`,
             risk: 'warn',
@@ -1319,7 +1319,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
               nodeId: repairCodingRun.nodeId,
               sequence: 6,
               kind: 'permission',
-              message: 'Native Coding requested fresh approval for one bounded repair edit.',
+              message: 'DevFlow Native requested fresh approval for one bounded repair edit.',
               timestamp: repairRequestedAt,
               metadata: { requestId: repairPermissionId, repairAttempt: 1 },
               redacted: true,
@@ -1366,7 +1366,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
             settledPermissionRequestIds: continuationInput.settledPermissionRequestIds,
           })
           if (repairTurn.status !== 'waiting_permission') {
-            throw new Error('Native Coding repair did not produce a permission turn')
+            throw new Error('DevFlow Native repair did not produce a permission turn')
           }
           return {
             kind: 'waiting_permission',
@@ -1381,7 +1381,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
       }
       if (runtime.status !== 'terminal' || runtime.stopReason !== 'success') {
         pendingDecisions.delete(continuationInput.requestId)
-        throw new Error('Native Coding saved tests did not pass')
+        throw new Error('DevFlow Native saved tests did not pass')
       }
       if (!testValue) {
         audits = await input.store.listAgentRuntimeToolAudits(runtime.id)
@@ -1389,7 +1389,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           (audit) => audit.actionId === testActionId && audit.status === 'succeeded',
         )
         if (!recoveredTestAudit || !runtime.acceptedActionIds.includes(testActionId)) {
-          throw new Error('Native Coding completed test evidence is unavailable')
+          throw new Error('DevFlow Native completed test evidence is unavailable')
         }
         testDecisionAt = recoveredTestAudit.createdAt
         completedAt = runtime.updatedAt
@@ -1419,7 +1419,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         diff.changedPaths[0] !== pending.decision.edit.path
       ) {
         pendingDecisions.delete(continuationInput.requestId)
-        throw new Error('Native Coding did not produce one delivery-safe diff')
+        throw new Error('DevFlow Native did not produce one delivery-safe diff')
       }
       const testEvidence: TestEvidence = redactTestEvidenceForStorage({
         id: `coding-test-${continuationInput.requestId}`,
@@ -1440,7 +1440,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
       const codingRun: CodingAgentRun = {
         ...context.codingRun,
         status: 'completed',
-        summary: 'Native Coding completed one approved edit and the saved worktree test passed.',
+        summary: 'DevFlow Native completed one approved edit and the saved worktree test passed.',
         changedPaths: diff.changedPaths,
         completedAt,
         diffArtifactId: diff.id,
@@ -1479,7 +1479,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           nodeId: codingRun.nodeId,
           sequence: 7,
           kind: 'tool_call',
-          message: 'Native Coding invoked the saved recognized test command.',
+          message: 'DevFlow Native invoked the saved recognized test command.',
           timestamp: testDecisionAt,
           metadata: { toolId: TEST_TOOL_ID },
           redacted: true,
@@ -1503,7 +1503,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
           nodeId: codingRun.nodeId,
           sequence: 9,
           kind: 'diff',
-          message: 'Native Coding captured one redacted structured worktree diff.',
+          message: 'DevFlow Native captured one redacted structured worktree diff.',
           timestamp: completedAt,
           metadata: { diffArtifactId: diff.id },
           redacted: true,
@@ -1605,7 +1605,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         previousSequence: continuationInput.previousSequence,
         settledPermissionRequestIds: continuationInput.settledPermissionRequestIds,
       })
-      if (turn.status !== 'terminal') throw new Error('Native Coding completion is not terminal')
+      if (turn.status !== 'terminal') throw new Error('DevFlow Native completion is not terminal')
       pendingDecisions.delete(continuationInput.requestId)
       return {
         kind: 'engine_completed',

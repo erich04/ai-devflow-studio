@@ -223,7 +223,7 @@ describe('agent console view model', () => {
     expect(viewModel.primaryAction.label).toBe('启动 Coding Agent')
     expect(viewModel.pathStatuses.find((section) => section.id === 'coding')?.emphasis).toBe('secondary')
     expect(viewModel.primaryActionImpact).toMatchObject({
-      providerAndCost: expect.stringContaining('Coding Executor / Provider'),
+      providerAndCost: expect.stringContaining('项目执行工具 / Provider'),
       repository: expect.stringContaining('受管 worktree（工作树）'),
       workflow: expect.stringContaining('不会自动批准后续 Gate'),
     })

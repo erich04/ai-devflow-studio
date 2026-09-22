@@ -31,7 +31,11 @@ Agent authority over human Gates or GitHub publication.
    artifact SHA-256, authentication, and empty release state.
 2. Pair one Local Project to one Team Project, then create one Work Request and materialize exactly
    one canonical local Run.
-3. Complete Clarify and Design with the Workflow Stage Agent. On the Workflow Board, confirm that
+3. Complete Clarify and Design with the Workflow Stage Agent. Select each node's executor and model
+   separately: Direct Provider generates from approved workflow inputs; OpenCode performs read-only
+   repository analysis. Saving the implementation tool does not switch either node or chat. Design
+   requires the Gate-approved clarification body; inspect its input identity and repository citations
+   under “设计输入与代码核验依据”. Cancellation must leave the node available for explicit retry. On the Workflow Board, confirm that
    Design is a Task that produces the unique Design Artifact, not a Review node. Stage summaries
    must keep node type, source, and any special folded-output presentation on separate lines. Inspect
    each Task's read-only Gate impact: it must select the nearest downstream Gate from workflow edges,
@@ -51,7 +55,9 @@ Agent authority over human Gates or GitHub publication.
    partial, confirm zero repeated starts or effects, then cancel the session and child Runtime before
    continuing. Do not advance a Supervisor or Specialist Runtime as the standalone Runtime check;
    their capability digest and leases are coordination-scoped.
-6. In Agents, configure the project Coding Executor before starting it. For Native, select a locally
+6. In Agents, open **项目执行工具** and configure the implementation executor before starting it.
+   **DevFlow Native（内置编码执行器）** is the standard name for Native Coding Agent / Native Executor;
+   v2 is its implementation version, not a separate product. For DevFlow Native, select a locally
    saved Provider. For OpenCode, run local detection, review the exact candidate, and explicitly
    confirm it for this project; detection alone must not save or start it. Confirm that Workbench and
    Agents show the same checks for Coding Executor, Coding Engine, capability, Provider, Team Project,

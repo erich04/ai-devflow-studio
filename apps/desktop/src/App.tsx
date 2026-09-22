@@ -232,7 +232,7 @@ export function App() {
   const [isDeletingRun, setIsDeletingRun] = useState(false)
   const [codingChangeSetPreview, setCodingChangeSetPreview] = useState<CodingChangeSetPreview | null>(null)
   const [codingRuntimeNow, setCodingRuntimeNow] = useState(() => new Date().toISOString())
-  const [stageAgentExecutorKind, setStageAgentExecutorKind] = useState<StageAgentExecutorKind>('direct-provider')
+  const [stageChoices, setStageChoices] = useState<Record<string, { executor: StageAgentExecutorKind; providerId: string }>>({})
   const [dataProfileDiagnostics, setDataProfileDiagnostics] =
     useState<DesktopDataProfileDiagnostics | null>(null)
 
@@ -398,6 +398,15 @@ export function App() {
   const selectedRun = scopedRuns.find((run) => run.id === selectedRunId) ?? scopedRuns[0]
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
+  const stageChoiceKey = `${selectedRun?.id ?? ''}:${selectedNode?.id ?? ''}`
+  const stageChoice = stageChoices[stageChoiceKey] ?? { executor: 'direct-provider' as const, providerId: selectedAgentProviderId }
+  const stageAgentExecutorKind = stageChoice.executor
+  const setStageAgentExecutorKind = (executor: StageAgentExecutorKind) => setStageChoices((current) => ({
+    ...current, [stageChoiceKey]: { ...stageChoice, executor },
+  }))
+  const setStageProviderId = (providerId: string) => setStageChoices((current) => ({
+    ...current, [stageChoiceKey]: { ...stageChoice, providerId },
+  }))
   const selectedGitHubDeliveryIntent = useMemo(
     () => selectGitHubDeliveryIntentForInspector({
       run: selectedRun,
@@ -882,6 +891,7 @@ export function App() {
       return policy
     },
     stageAgentExecutorKind,
+    stageProviderId: stageChoice.providerId,
     applyLocalExecutionState,
   })
 
@@ -1445,6 +1455,14 @@ export function App() {
                   onApprove={approveSelectedGate}
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
                   onRequestClarificationChanges={requestSelectedClarificationChanges}
+                  stageProviders={agentProviders}
+                  stageProviderId={stageChoice.providerId}
+                  onStageProviderChange={setStageProviderId}
+                  onCancelStageAgent={desktopApi?.cancelWorkflowAgentNode ? async () => {
+                    if (!pendingInspectorAction) return
+                    try { await desktopApi.cancelWorkflowAgentNode!({ runId: pendingInspectorAction.runId, nodeId: pendingInspectorAction.nodeId }) }
+                    catch (error) { setToast(error instanceof Error ? error.message : '取消失败，请重试。') }
+                  } : undefined}
                   stageAgentExecutorKind={stageAgentExecutorKind}
                   onStageAgentExecutorKindChange={setStageAgentExecutorKind}
                   onSaveGateOverride={gateEnforcement.saveOverride}
@@ -1593,6 +1611,12 @@ export function App() {
             requestedBy={currentUser?.id ?? 'local-user'}
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}
+            stageExecution={stageChoice}
+            onCancelStageAgent={desktopApi?.cancelWorkflowAgentNode ? async () => {
+              if (!pendingInspectorAction) return
+              try { await desktopApi.cancelWorkflowAgentNode!({ runId: pendingInspectorAction.runId, nodeId: pendingInspectorAction.nodeId }) }
+              catch (error) { setToast(error instanceof Error ? error.message : '取消失败，请重试。') }
+            } : undefined}
             onProviderChange={(providerId) => {
               setSelectedAgentProviderId(providerId)
               void desktopApi?.saveSettings({ selectedAgentProviderId: providerId }).catch(() => setToast('Provider 选择保存失败，请重新选择。'))

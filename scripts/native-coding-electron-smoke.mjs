@@ -187,9 +187,9 @@ async function createTeamProject() {
       ...browserSessionHeaders('acct-demo-u-erich'),
     },
     body: JSON.stringify({
-      name: 'Native Coding Electron Smoke',
+      name: 'DevFlow Native Electron Smoke',
       slug: `native-coding-${Date.now()}`,
-      description: 'Isolated no-cost Native Coding Electron acceptance project.',
+      description: 'Isolated no-cost DevFlow Native Electron acceptance project.',
       repository: 'local/native-coding-electron-smoke',
     }),
   })
@@ -226,7 +226,7 @@ function workflowNodes(run) {
     build: find('build', 'task'),
   }
   if (Object.values(result).some((node) => !node)) {
-    throw new Error('Native Coding Electron smoke workflow shape is unavailable')
+    throw new Error('DevFlow Native Electron smoke workflow shape is unavailable')
   }
   return result
 }
@@ -304,7 +304,7 @@ try {
   }, null, 2), 'utf8')
   await runCommand('git', ['init', '-b', 'main'], { cwd: repositoryPath })
   await runCommand('git', ['config', 'user.email', 'native-coding-smoke@example.invalid'], { cwd: repositoryPath })
-  await runCommand('git', ['config', 'user.name', 'Native Coding Smoke'], { cwd: repositoryPath })
+  await runCommand('git', ['config', 'user.name', 'DevFlow Native Smoke'], { cwd: repositoryPath })
   await runCommand('git', ['add', '.'], { cwd: repositoryPath })
   await runCommand('git', ['commit', '-m', 'baseline'], { cwd: repositoryPath })
 
@@ -378,7 +378,7 @@ try {
 
   const createdRun = await page.evaluate(async (projectId) => {
     return window.aiDevFlowDesktop.createRun({
-      title: 'Native Coding Electron smoke',
+      title: 'DevFlow Native Electron smoke',
       request: 'Change the bounded message from old to new and keep the saved test passing.',
       projectId,
       creatorId: 'u-erich',
@@ -468,7 +468,7 @@ try {
     .toBeGreaterThanOrEqual(4)
   expect(modelRequests).toHaveLength(2)
   expect(modelRequests.every((request) => request.model === 'deepseek-native-smoke')).toBe(true)
-  console.log('Native Coding Electron smoke passed: real Main, local model server, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
+  console.log('DevFlow Native Electron smoke passed: real Main, local model server, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
 } finally {
   if (app) await app.close().catch(() => undefined)
   await Promise.all([

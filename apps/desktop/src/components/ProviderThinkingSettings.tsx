@@ -24,7 +24,7 @@ export function ProviderThinkingFields({ model, baseUrl, value, onChange, disabl
     </select></label> : null}
     <p>保存后使用：{effective}</p>
     {!supported ? <p>此接口或模型尚未接入思考参数配置；使用模型默认行为，不发送 DeepSeek 专用参数。</p> : null}
-    <p>聊天、需求澄清、方案设计、审查和 Native Coding 共用此设置。高强度通常消耗更多时间与 token，现有输出和超时上限仍有效。</p>
+    <p>聊天、需求澄清、方案设计、审查和 DevFlow Native 共用此设置。高强度通常消耗更多时间与 token，现有输出和超时上限仍有效。</p>
     <p>展开或折叠推理只改变显示。OpenCode 等外部执行器由自身配置控制。</p>
   </div>
 }

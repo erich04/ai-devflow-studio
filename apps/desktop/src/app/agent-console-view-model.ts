@@ -126,6 +126,7 @@ export type AgentConsoleViewModel = {
 export type BuildAgentConsoleViewModelInput = {
   providers: AgentProviderConfig[]
   selectedProviderId: string
+  stageExecution?: { providerId: string; executor: 'direct-provider' | 'local-agent' } | undefined
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
   reviews: AgentReviewResult[]
@@ -152,11 +153,13 @@ export type BuildAgentConsoleViewModelInput = {
 
 export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInput): AgentConsoleViewModel {
   const selectedProvider = input.providers.find((provider) => provider.id === input.selectedProviderId)
+  const stageProvider = input.stageExecution ? input.providers.find((provider) => provider.id === input.stageExecution!.providerId) : selectedProvider
+  const isStage = input.selectedNode?.kind === 'agent' && ['clarify', 'design'].includes(input.selectedNode.stage)
   const providerDataSource = buildAgentProviderDataSource(selectedProvider)
   const currentTarget = buildCurrentTarget(input.selectedRun, input.selectedNode)
   const primaryAction = buildPrimaryAction({
     latestReview: input.latestReview,
-    selectedProvider,
+    selectedProvider: isStage ? stageProvider : selectedProvider,
     selectedRun: input.selectedRun,
     selectedNode: input.selectedNode,
     isRunningReview: input.isRunningReview,
@@ -171,9 +174,15 @@ export function buildAgentConsoleViewModel(input: BuildAgentConsoleViewModelInpu
     action: primaryAction,
     run: input.selectedRun,
     node: input.selectedNode,
-    provider: selectedProvider,
+    provider: isStage ? stageProvider : selectedProvider,
   })
 
+  if (isStage && input.stageExecution) {
+    primaryActionImpact.providerAndCost = `${input.stageExecution.executor === 'local-agent' ? 'OpenCode（只读分析）' : 'Direct Provider'} · ${primaryActionImpact.providerAndCost}`
+    primaryActionImpact.repository = input.stageExecution.executor === 'local-agent'
+      ? '只读检索本地仓库，不修改文件、不运行测试命令。'
+      : '根据需求和已保存阶段产物生成，不直接调查仓库。'
+  }
   return {
     title: 'Agent 执行台',
     currentTarget,
@@ -259,7 +268,7 @@ function buildPrimaryActionImpact(input: {
     return {
       object,
       result: '新建受控 Coding Run，归档执行轨迹、修改差异和测试证据。',
-      providerAndCost: '调用项目级 Coding Executor / Provider；按每次模型调用记录 token 和费用。',
+      providerAndCost: '调用项目执行工具 / Provider；按每次模型调用记录 token 和费用。',
       repository: '仅在受管 worktree（工作树）中读写；不会直接修改用户当前 checkout。',
       workflow: '成功后完成开发实现节点所需证据；不会自动批准后续 Gate。',
     }
@@ -306,7 +315,7 @@ function buildPrimaryActionImpact(input: {
   if (input.action.id === 'configure-coding') {
     return {
       object,
-      result: '打开当前项目的 Coding Executor、Provider 与预算配置。',
+      result: '打开当前项目的执行工具、Provider 与预算配置。',
       providerAndCost: '保存配置不调用 Provider；未来 Coding Run 才可能产生 token 和费用。',
       repository: '不读写仓库内容，只保存项目级运行配置。',
       workflow: '不改变 Workflow（工作流）状态；配置完成后才可启动 Coding Run。',

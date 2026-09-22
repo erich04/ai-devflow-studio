@@ -33,7 +33,7 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   return directory
 }
 
-describe('Native Coding Runtime integration', () => {
+describe('DevFlow Native Runtime integration', () => {
   it('keeps a non-frozen dependency bootstrap out of the approved delivery diff', async () => {
     const repositoryPath = await temporaryDirectory('devflow-native-bootstrap-repository')
     const worktreeRoot = await temporaryDirectory('devflow-native-bootstrap-worktrees')
@@ -46,7 +46,7 @@ describe('Native Coding Runtime integration', () => {
     await writeFile(path.join(repositoryPath, '.npmrc'), 'audit=false\nfund=false\n', 'utf8')
     await writeFile(
       path.join(repositoryPath, 'test.mjs'),
-      "import { readFile } from 'node:fs/promises'\nif ((await readFile('devflow-native-change.txt', 'utf8')) !== 'DevFlow deterministic Native Coding repair.\\n') process.exit(1)\n",
+      "import { readFile } from 'node:fs/promises'\nif ((await readFile('devflow-native-change.txt', 'utf8')) !== 'DevFlow deterministic DevFlow Native repair.\\n') process.exit(1)\n",
       'utf8',
     )
     await execFileAsync('git', ['-C', repositoryPath, 'init', '-b', 'main'])
@@ -81,7 +81,7 @@ describe('Native Coding Runtime integration', () => {
         id: 'native-bootstrap-build-1',
         stage: 'build',
         title: 'Apply the repair',
-        subtitle: 'Use the narrow Native Coding Executor.',
+        subtitle: 'Use the narrow DevFlow Native Executor.',
         kind: 'task',
         status: 'running',
         ownerId: 'native-bootstrap-user-1',
@@ -159,7 +159,7 @@ describe('Native Coding Runtime integration', () => {
       codingRunId: editPermission.codingRunId,
       decidedBy: run.creatorId,
       decision: 'approved',
-      comment: 'Approve the one bounded Native Coding edit once.',
+      comment: 'Approve the one bounded DevFlow Native edit once.',
     })
 
     const [completed] = await store.listCodingAgentRuns(run.id)
@@ -220,7 +220,7 @@ describe('Native Coding Runtime integration', () => {
     const run: WorkflowRun = {
       id: 'native-runtime-run-1',
       version: 1,
-      title: 'Native Coding integration',
+      title: 'DevFlow Native integration',
       request: 'Apply one bounded native repair.',
       projectId: project.id,
       creatorId: 'native-runtime-user-1',
@@ -233,7 +233,7 @@ describe('Native Coding Runtime integration', () => {
         id: 'native-runtime-build-1',
         stage: 'build',
         title: 'Apply the repair',
-        subtitle: 'Use the narrow Native Coding Executor.',
+        subtitle: 'Use the narrow DevFlow Native Executor.',
         kind: 'task',
         status: 'running',
         ownerId: 'native-runtime-user-1',

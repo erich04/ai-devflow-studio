@@ -1435,7 +1435,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         evidence.projectId !== input.project.id ||
         (evidence.status !== 'passed' && evidence.status !== 'skipped')
       ) {
-        throw new Error('Native Coding dependency bootstrap evidence is unavailable or stale.')
+        throw new Error('DevFlow Native dependency bootstrap evidence is unavailable or stale.')
       }
       bootstrapped = { codingRun: bootstrappingRun, canContinue: true }
     } else {
@@ -2204,7 +2204,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         ) {
           await failActiveCodingRun(
             currentRun,
-            'Interrupted Native Coding continuation was recovered safely; the managed workspace was retained for inspection.',
+            'Interrupted DevFlow Native continuation was recovered safely; the managed workspace was retained for inspection.',
             timestamp,
             { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
           )
@@ -2603,13 +2603,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               await recordActiveCleanupFailure(
                 codingRun,
                 timestamp,
-                'Interrupted Native Coding startup could not confirm Agent Runtime cancellation.',
+                'Interrupted DevFlow Native startup could not confirm Agent Runtime cancellation.',
               )
             }
           }
           await failActiveCodingRun(
             codingRun,
-            'Native Coding execution was interrupted; the managed workspace was retained for an explicit retry.',
+            'DevFlow Native execution was interrupted; the managed workspace was retained for an explicit retry.',
             timestamp,
             { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
           )
@@ -3167,7 +3167,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         } catch (error) {
           await failActiveCodingRun(
             workspacePreparingRun,
-            'Dependency bootstrap failed before Native Coding started.',
+            'Dependency bootstrap failed before DevFlow Native started.',
             reservationTimestamp,
             { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
           )
@@ -3242,12 +3242,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           if (bootstrapCommitted.run && activeCodingStatuses.has(bootstrapCommitted.run.status)) {
             await failActiveCodingRun(
               bootstrapCommitted.run,
-              'Native Coding dependency bootstrap could not be persisted safely.',
+              'DevFlow Native dependency bootstrap could not be persisted safely.',
               reservationTimestamp,
               cleanup,
             )
           }
-          throw new Error('Native Coding dependency bootstrap could not be persisted safely.')
+          throw new Error('DevFlow Native dependency bootstrap could not be persisted safely.')
         }
         executorReadyRun = prepared.codingRun
         if (bootstrapPermission && bootstrapEvidence && permissionDecision) {
@@ -3275,7 +3275,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           } catch (error) {
             await failActiveCodingRun(
               currentRun,
-              'Approved dependency bootstrap failed before Native Coding started.',
+              'Approved dependency bootstrap failed before DevFlow Native started.',
               approvedTimestamp,
               { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' },
             )

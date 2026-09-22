@@ -21,6 +21,7 @@ import {
   parseCreateRunInput,
   parseDeleteRunInput,
   parseCompleteWorkflowAgentNodeInput,
+  parseCancelWorkflowAgentNodeInput,
   parseRequestClarificationChangesInput,
   parsePairDesktopInput,
   parseMcpServersInput,
@@ -499,6 +500,15 @@ describe('IPC contract parsers', () => {
       creatorId: 'u-wang',
       branchName: 'ai/webhook-retry',
     })
+  })
+
+  it('accepts only exact bounded stage cancellation identifiers', () => {
+    expect(parseCancelWorkflowAgentNodeInput({ runId: 'run', nodeId: 'node' })).toEqual({ runId: 'run', nodeId: 'node' })
+    for (const payload of [null, {}, { runId: 'run' }, { runId: ' run', nodeId: 'node' },
+      { runId: '', nodeId: 'node' }, { runId: 'run', nodeId: 'x'.repeat(1024) },
+      { runId: 'run', nodeId: 'node', providerId: 'untrusted' }]) {
+      expect(() => parseCancelWorkflowAgentNodeInput(payload)).toThrow()
+    }
   })
 
   it('accepts a workflow agent node completion payload', () => {

@@ -29,6 +29,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { redactSensitiveText } from './redaction'
+import { resolveDesignClarificationInput } from './design-input'
 
 export type WorkflowStageAgentSource = 'model' | 'fake_template' | 'local_agent'
 
@@ -144,6 +145,7 @@ export function createDirectProviderStageAgentExecutor(provider: AgentProvider):
           request: input.request,
           context: input.context,
           prompt: input.prompt,
+          ...(input.signal ? { signal: input.signal } : {}),
         })
       } catch (error) {
         if (!(error instanceof AgentProviderRequestError)) throw error
@@ -197,7 +199,7 @@ function buildWorkflowArtifactContext(input: {
     run: {
       id: input.run.id,
       title: sanitize(input.run.title),
-      request: sanitize(input.run.request),
+      request: sanitize(input.artifacts.find((artifact) => artifact.runId === input.run.id && artifact.kind === 'raw_request')?.content ?? input.run.request),
       projectId: input.run.projectId,
       status: input.run.status,
       branchName: sanitize(input.run.branchName),
@@ -265,7 +267,10 @@ function createWorkflowArtifactPrompt(input: {
     ? [
         'Inspect the repository only through the granted read/glob/grep/list capabilities.',
         'Every verified fact must reference at least one repo-relative citation ID.',
-        'Never return source bodies, absolute paths, secrets, commands, Gate actions, or write requests.',
+        'Never return source bodies, absolute paths, secrets, Gate actions, or executable write requests.',
+        input.request.stage === 'design'
+          ? 'Describe proposed file changes and verification commands as a future plan only. Do not execute commands, tests, edits, or Gate actions.'
+          : 'Do not return commands or implementation instructions.',
         'repositoryFindings must contain version, repositoryDigest, verifiedFacts, citations, assumptions, openQuestions, and uncheckedScopes.',
         'repositoryFindings.verifiedFacts and repositoryFindings.citations are arrays of OBJECTS, not strings. Use this exact nested shape:',
         JSON.stringify({ repositoryFindings: {
@@ -363,6 +368,8 @@ function buildArtifactContent(input: {
       `> Source: ${sourceLabel} · Provider: ${input.providerId} · Model: ${input.model} · Generated: ${input.generatedAt}`,
       '',
       input.output.content.trim(),
+      '',
+      ...findingsSections(input.output.repositoryFindings),
     ].join('\n')).value
   }
 
@@ -501,11 +508,8 @@ function validateExecutorOutput(input: {
     throw new StageAgentExecutionError('output_limit', 'Stage Agent structured output exceeds the configured limit')
   }
   const repositoryFindings = validateRepositoryFindings(input.output.repositoryFindings, input.bounds)
-  if (input.executorKind === 'local-agent' && input.stage === 'clarify' && !repositoryFindings) {
+  if (input.executorKind === 'local-agent' && !repositoryFindings) {
     throw new StageAgentExecutionError('evidence_invalid', 'Read-only local Agent returned no repository citations')
-  }
-  if (input.executorKind === 'local-agent' && input.stage !== 'clarify') {
-    throw new StageAgentExecutionError('permission_denied', 'Local stage Agent is currently authorized only for clarification')
   }
   return {
     model: safeString(input.output.model, 'model', 256),
@@ -572,8 +576,14 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     stage,
     providerId: executor.providerId ?? executor.id,
   }
-  const context = buildWorkflowArtifactContext(input)
-  const prompt = createWorkflowArtifactPrompt({ request, context, executorKind: executor.kind })
+  const approved = stage === 'design' ? await resolveDesignClarificationInput(input.run, input.artifacts) : undefined
+  const context = buildWorkflowArtifactContext({ ...input, artifacts: input.artifacts.filter((artifact) =>
+    !approved || (artifact.kind !== 'clarification_feedback' &&
+      (artifact.kind !== 'clarification' || artifact.id === approved.artifact.id))) })
+  const prompt = [createWorkflowArtifactPrompt({ request, context, executorKind: executor.kind }),
+    ...(approved ? ['APPROVED_CLARIFICATION_INPUT', JSON.stringify(approved.binding),
+      'Use only this Gate-approved clarification. Saved proposals are pending input; identify any conflict with the approved scope.'] : []),
+  ].join('\n')
   if (encodedBytes({ request, context, prompt }) > bounds.maxInputBytes) {
     throw new StageAgentExecutionError('input_limit', 'Workflow stage Agent input exceeds the configured context limit')
   }
@@ -739,6 +749,10 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     redacted: artifactKind === 'design' || source === 'local_agent',
     updatedAt: generatedAt,
     ...(clarificationRevision ? { clarificationRevision } : {}),
+    ...(approved ? { designEvidence: {
+      version: 1 as const, clarification: approved.binding, executor: provenance,
+      ...(output.repositoryFindings ? { repositoryFindings: output.repositoryFindings } : {}),
+    } } : {}),
   }
   const completion = JSON.stringify(output)
   const trace: AgentTrace = {

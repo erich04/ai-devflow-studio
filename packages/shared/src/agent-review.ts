@@ -83,6 +83,7 @@ export type WorkflowArtifactProviderInput = {
   request: WorkflowArtifactProviderRequest
   context: WorkflowArtifactProviderContext
   prompt: string
+  signal?: AbortSignal
 }
 
 export type WorkflowArtifactProviderOutput = {
@@ -2188,9 +2189,10 @@ export function createOpenAiCompatibleAgentProvider({
         input.signal?.removeEventListener('abort', cancel)
       }
     },
-    async generateWorkflowArtifact({ request, prompt }) {
+    async generateWorkflowArtifact({ request, prompt, signal }) {
       const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
         method: 'POST',
+        ...(signal ? { signal } : {}),
         headers: {
           authorization: `Bearer ${apiKey}`,
           'content-type': 'application/json',

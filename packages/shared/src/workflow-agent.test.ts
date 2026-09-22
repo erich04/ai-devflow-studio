@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentProvider } from './agent-review'
+import type { Artifact } from './domain'
 import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider } from './agent-review'
 import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workflow'
 import {
@@ -26,6 +27,15 @@ function designNode() {
   return created.run.nodes.find((node) => node.id === 'run-live-stage-agent-design')!
 }
 
+function approvedDesignFixture() {
+  const clarification: Artifact = { ...created.artifacts[0]!, id: 'approved-clarification',
+    nodeId: clarifyNode().id, kind: 'clarification', title: 'Approved clarification',
+    content: 'Approved full requirement scope', summary: 'Approved' }
+  return { artifacts: [...created.artifacts, clarification], run: { ...created.run,
+    nodes: created.run.nodes.map((node) => node.kind === 'gate' && node.stage === 'clarify'
+      ? { ...node, status: 'success' as const, artifactIds: [clarification.id] } : node) } }
+}
+
 describe('runWorkflowStageAgent', () => {
   it.each(['clarify', 'design'] as const)('passes saved conversation decisions to the %s model prompt', async (stage) => {
     const node = stage === 'clarify' ? clarifyNode() : designNode()
@@ -48,7 +58,7 @@ describe('runWorkflowStageAgent', () => {
       },
     })
     const result = await runWorkflowStageAgent({
-      run: created.run, node, artifacts: [...created.artifacts, proposal],
+      run: stage === 'design' ? approvedDesignFixture().run : created.run, node, artifacts: [...(stage === 'design' ? approvedDesignFixture().artifacts : created.artifacts), proposal],
       provider, requestedBy: 'u-ling', runtime: 'electron',
     })
     expect(result.prompt).toContain(proposal.content)
@@ -118,7 +128,7 @@ describe('runWorkflowStageAgent', () => {
       usage: { inputTokens: 1942, outputTokens: 1953, cacheReadTokens: 0 },
     })
     const error = await runWorkflowStageAgent({
-      run: created.run, node: designNode(), artifacts: created.artifacts, provider,
+      ...approvedDesignFixture(), node: designNode(), provider,
       requestedBy: 'u-ling', runtime: 'electron',
     }).catch((failure: unknown) => failure)
     expect(error).toBeInstanceOf(StageAgentExecutionError)
@@ -140,7 +150,7 @@ describe('runWorkflowStageAgent', () => {
       return { ...output, ...(usage ? { usage } : {}) }
     }
     const error = await runWorkflowStageAgent({
-      run: created.run, node: designNode(), artifacts: created.artifacts, provider,
+      ...approvedDesignFixture(), node: designNode(), provider,
       requestedBy: 'u-ling', runtime: 'electron',
     }).catch((failure: unknown) => failure)
     expect(error).toBeInstanceOf(StageAgentExecutionError)
@@ -234,7 +244,8 @@ describe('runWorkflowStageAgent', () => {
       currentNodeId: designNode().id,
       status: 'designing' as const,
       nodes: completedClarify.run.nodes.map((node) =>
-        node.id === designNode().id ? { ...node, status: 'running' as const } : node,
+        node.id === designNode().id ? { ...node, status: 'running' as const }
+          : node.kind === 'gate' && node.stage === 'clarify' ? { ...node, status: 'success' as const } : node,
       ),
     }
     const provider: AgentProvider = {
@@ -259,7 +270,8 @@ describe('runWorkflowStageAgent', () => {
     const result = await runWorkflowStageAgent({
       run: runAtDesign,
       node: designNode(),
-      artifacts: completedClarify.artifacts,
+      artifacts: completedClarify.artifacts.map((artifact) => artifact.clarificationRevision
+        ? { ...artifact, clarificationRevision: { ...artifact.clarificationRevision, status: 'approved' as const } } : artifact),
       provider,
       requestedBy: 'u-ling',
       runtime: 'electron',
@@ -296,9 +308,8 @@ describe('runWorkflowStageAgent', () => {
     }
 
     await expect(runWorkflowStageAgent({
-      run: created.run,
+      ...approvedDesignFixture(),
       node: designNode(),
-      artifacts: created.artifacts,
       provider,
       requestedBy: 'u-ling',
       runtime: 'electron',
@@ -463,7 +474,8 @@ describe('runWorkflowStageAgent', () => {
     }
     await runWorkflowStageAgent({
       run: { ...created.run, request: 'Use API_KEY=sk-supersecret123456789 in /Users/alice/private/repo' },
-      node: clarifyNode(), artifacts: created.artifacts, provider, requestedBy: 'u-ling', runtime: 'electron',
+      node: clarifyNode(), artifacts: created.artifacts.map((artifact) => ({ ...artifact, content: 'Use API_KEY=sk-supersecret123456789 in /Users/alice/private/repo' })),
+      provider, requestedBy: 'u-ling', runtime: 'electron',
     })
     const call = generateWorkflowArtifact.mock.calls[0]![0]
     expect(JSON.stringify(call)).not.toContain('sk-supersecret123456789')

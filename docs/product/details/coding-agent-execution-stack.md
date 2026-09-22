@@ -1,6 +1,22 @@
-# Coding Agent、Engine、Executor 与 Native Coding 的关系
+# Coding Agent、Engine、Executor 与 DevFlow Native 的关系
 
 本文解释 AI DevFlow Studio 中几个容易混淆的名称。它们不处在同一层，也不是同义词。
+
+## 当前界面名称与配置范围
+
+统一产品名称是 **DevFlow Native（内置编码执行器）**，旧称 Native Coding Agent / Native Executor。
+`native-model` 是保持兼容的内部配置值，v2 是实现版本；它们不是新的产品或架构。
+
+| 入口 | 选择位置 | 使用范围 |
+| --- | --- | --- |
+| 开发实现 | Agents → 项目执行工具 | OpenCode 或 DevFlow Native；在受管 worktree 执行代码修改 |
+| 需求澄清 / 方案设计 | 节点详情 → 澄清执行器 / 设计执行器、模型 | 各节点独立选择 Direct Provider 或 OpenCode；OpenCode 只读调查仓库 |
+| 右侧聊天 | 新对话执行方式 | 独立选择 Direct Provider 或 OpenCode，不随开发实现设置切换 |
+
+Provider 是模型 API 的配置，可以由多个入口明确选择并共用；执行器选择和权限仍然独立。
+方案设计必须读取需求 Gate 已批准的澄清正文，生成产物后停在方案评审 Gate。
+以下架构图中的 `Native Coding Executor` / `Native Coding Decision Provider` 保留为技术层术语，
+面向用户时统一称 DevFlow Native。
 
 ## 一张图看懂当前结构
 

@@ -241,13 +241,13 @@ try {
       version: '1.0.0',
       private: true,
       scripts: {
-        test: 'node -e "const fs=require(\'node:fs\');const p=\'devflow-native-change.txt\';if(!fs.existsSync(p)||fs.readFileSync(p,\'utf8\')!==\'DevFlow deterministic Native Coding repair.\\n\')process.exit(1)"',
+        test: 'node -e "const fs=require(\'node:fs\');const p=\'devflow-native-change.txt\';if(!fs.existsSync(p)||fs.readFileSync(p,\'utf8\')!==\'DevFlow deterministic DevFlow Native repair.\\n\')process.exit(1)"',
       },
     }, null, 2)}\n`,
   )
   await writeFile(
     path.join(runtimeProjectDirectory, 'README.md'),
-    '# Packaged Agent Runtime smoke\n\nThis isolated repository accepts one bounded Native Coding repair.\n',
+    '# Packaged Agent Runtime smoke\n\nThis isolated repository accepts one bounded DevFlow Native repair.\n',
   )
   await writeFile(
     path.join(runtimeProjectDirectory, 'package-lock.json'),
@@ -477,9 +477,9 @@ try {
 
   const nativeCodingBeforeRestart = await page.evaluate(async () => {
     const project = await window.aiDevFlowDesktop.selectLocalProject()
-    if (!project) throw new Error('Packaged Native Coding project was not selected')
+    if (!project) throw new Error('Packaged DevFlow Native project was not selected')
     let run = await window.aiDevFlowDesktop.createRun({
-      title: 'Packaged Native Coding smoke',
+      title: 'Packaged DevFlow Native smoke',
       request: 'Apply one bounded native edit through accepted main-owned Tools.',
       projectId: project.id,
       creatorId: 'packaged-smoke-user',
@@ -488,7 +488,7 @@ try {
     const currentNode = () => run.nodes.find((node) => node.id === run.currentNodeId)
     let node = currentNode()
     if (!node || node.kind !== 'agent' || node.stage !== 'clarify') {
-      throw new Error('Packaged Native Coding Workflow did not start at Clarify')
+      throw new Error('Packaged DevFlow Native Workflow did not start at Clarify')
     }
     const clarification = await window.aiDevFlowDesktop.completeWorkflowAgentNode({
       runId: run.id,
@@ -500,10 +500,10 @@ try {
     run = clarification.run
     node = currentNode()
     if (!node || node.kind !== 'gate' || node.stage !== 'clarify') {
-      throw new Error('Packaged Native Coding Workflow did not reach Clarify Gate')
+      throw new Error('Packaged DevFlow Native Workflow did not reach Clarify Gate')
     }
     if (!clarification.artifact.clarificationRevision) {
-      throw new Error('Packaged Native Coding clarification revision metadata was not persisted')
+      throw new Error('Packaged DevFlow Native clarification revision metadata was not persisted')
     }
     run = (await window.aiDevFlowDesktop.approveGate({
       runId: run.id,
@@ -516,7 +516,7 @@ try {
     })).run
     node = currentNode()
     if (!node || node.kind !== 'agent' || node.stage !== 'design') {
-      throw new Error('Packaged Native Coding Workflow did not reach Design')
+      throw new Error('Packaged DevFlow Native Workflow did not reach Design')
     }
     run = (await window.aiDevFlowDesktop.completeWorkflowAgentNode({
       runId: run.id,
@@ -527,12 +527,12 @@ try {
     })).run
     node = currentNode()
     if (!node || node.kind !== 'gate' || node.stage !== 'design') {
-      throw new Error('Packaged Native Coding Workflow did not reach Design Gate')
+      throw new Error('Packaged DevFlow Native Workflow did not reach Design Gate')
     }
     run = (await window.aiDevFlowDesktop.approveGate({ runId: run.id, nodeId: node.id })).run
     node = currentNode()
     if (!node || node.kind !== 'task' || node.stage !== 'build') {
-      throw new Error('Packaged Native Coding Workflow did not reach Build')
+      throw new Error('Packaged DevFlow Native Workflow did not reach Build')
     }
     await window.aiDevFlowDesktop.ensureCodingEngine({ projectId: project.id })
     const started = await window.aiDevFlowDesktop.runCodingAgent({
@@ -540,20 +540,20 @@ try {
       nodeId: node.id,
       projectId: project.id,
       requestedBy: 'packaged-smoke-user',
-      userInstruction: 'Apply the exact bounded Native Coding repair.',
+      userInstruction: 'Apply the exact bounded DevFlow Native repair.',
     })
     const pending = started.state.codingPermissionRequests.find(
       (request) => request.codingRunId === started.codingRun.id && request.status === 'pending',
     )
     if (!pending || pending.permission !== 'edit') {
-      throw new Error('Packaged Native Coding did not stop at one edit permission')
+      throw new Error('Packaged DevFlow Native did not stop at one edit permission')
     }
     await window.aiDevFlowDesktop.replyCodingPermission({
       requestId: pending.id,
       codingRunId: started.codingRun.id,
       decidedBy: 'packaged-smoke-user',
       decision: 'approved',
-      comment: 'Approve one bounded packaged Native Coding edit.',
+      comment: 'Approve one bounded packaged DevFlow Native edit.',
     })
     const [completed] = await window.aiDevFlowDesktop.listCodingAgentRuns({ runId: run.id })
     const runtime = (await window.aiDevFlowDesktop.listAgentRuntimes({
@@ -576,7 +576,7 @@ try {
       runtime.runtime.stopReason !== 'success' ||
       workflowNode?.stage !== 'test'
     ) {
-      throw new Error(`Packaged Native Coding did not complete at the bounded Test boundary: ${JSON.stringify({
+      throw new Error(`Packaged DevFlow Native did not complete at the bounded Test boundary: ${JSON.stringify({
         codingStatus: completed?.status ?? null,
         changedPaths: completed?.changedPaths ?? [],
         runtimeStatus: runtime?.runtime.status ?? null,
@@ -671,7 +671,7 @@ try {
     nativeCodingAfterRestart.runtime.runtime.acceptedActionCount !==
       nativeCodingBeforeRestart.acceptedActionCount
   ) {
-    throw new Error('Packaged Native Coding was not restored exactly after restart.')
+    throw new Error('Packaged DevFlow Native was not restored exactly after restart.')
   }
   await electronApp.close()
   electronApp = undefined
@@ -776,7 +776,7 @@ try {
     JSON.stringify(nativeCodingAudits) !== JSON.stringify(expectedNativeCodingAudits) ||
     nativeCodingPermissionDecisions !== 1
   ) {
-    throw new Error('Packaged Native Coding repeated or escaped its bounded Tool/permission effects.')
+    throw new Error('Packaged DevFlow Native repeated or escaped its bounded Tool/permission effects.')
   }
   const nativeCodingRestartDuplicateEffects = 0
   const expectedMemoryAudits = [
