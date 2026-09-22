@@ -45,10 +45,22 @@
 .unified-workflow.workflow-view--list .stage-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(205px, 1fr)); align-items: start; }
 .workbench-workspace { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
 .workspace-tab-strip { flex: 0 0 47px; display: flex; align-items: stretch; border-bottom: 1px solid var(--border); min-width: 0; }
-.workspace-executor-choice { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 12px; }
-.workspace-executor-choice label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.workspace-executor-choice select { width: auto; max-width: 175px; padding: 4px 8px; }
-.workspace-executor-choice small { color: var(--muted); }
+.conversation-dialog { display: flex; flex-direction: column; width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); min-height: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.conversation-dialog-header, .conversation-dialog-actions { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding: 16px 20px; }
+.conversation-dialog-header { justify-content: space-between; border-bottom: 1px solid var(--border); }
+.conversation-dialog-header h2 { margin: 0; font-size: 18px; }
+.conversation-dialog-body { min-height: 0; overflow-y: auto; overflow-wrap: anywhere; padding: 20px; font-size: 14px; line-height: 1.7; }
+.conversation-dialog-body p { margin: 10px 0; }
+.conversation-dialog-actions { justify-content: flex-end; border-top: 1px solid var(--border); }
+.conversation-executor-field { display: grid; gap: 8px; font-weight: 600; }
+.conversation-executor-field select { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; }
+.conversation-prefill { padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.conversation-prefill p { white-space: pre-wrap; }
+.conversation-help-content section + section { margin-top: 24px; }
+.conversation-help-content h3 { font-size: 15px; margin: 0 0 10px; }
+.conversation-context-heading { display: flex; align-items: center; gap: 6px; }
+.conversation-context-heading .conversation-context-toggle { flex: 1; min-width: 0; }
+.conversation-help-button { flex: 0 0 auto; border-radius: 7px; }
 .workspace-tabs { display: flex; min-width: 0; flex: 1; overflow-x: auto; scrollbar-width: thin; }
 .workspace-tabs [role='tab'] { display: flex; align-items: center; gap: 7px; min-width: 94px; max-width: 190px; border: 0; border-right: 1px solid var(--border); border-top: 2px solid transparent; padding: 10px 12px; color: var(--text-muted); background: transparent; cursor: pointer; white-space: nowrap; font-size: 12px; }
 .workspace-tabs [role='tab'][aria-selected='true'] { border-top-color: var(--accent); color: var(--text); background: color-mix(in srgb, var(--accent) 7%, var(--surface)); }

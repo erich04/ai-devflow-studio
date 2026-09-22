@@ -6,6 +6,7 @@ import type { ConversationCommand, WorkbenchConversation } from '../electron/wor
 
 const run = createWorkflowRunFromRequest({ runId: 'run-ui', title: '清理任务', request: '实现清理', projectId: 'local-1', creatorId: 'user-1', branchName: 'ai/clear', now: '2026-09-16T10:00:00Z' }).run
 function fixture() {
+  localStorage.clear()
   let sessions: WorkbenchConversation[] = []
   const commands: ConversationCommand[] = []
   let listener: ((projectId: string) => void) | undefined
@@ -42,14 +43,100 @@ function fixture() {
 }
 
 describe('workbench tabs and independent conversation interaction', () => {
-  it('chooses an executor for a new conversation and preserves each existing conversation selection', async () => {
+  it('cancels creation without changing the active conversation, draft, executor or model calls', async () => {
     const f = fixture()
     render(<WorkbenchWorkspace {...f.props} />)
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    fireEvent.change(screen.getByRole('textbox', { name: '对话内容' }), { target: { value: '还没发出的草稿' } })
+    expect(screen.queryByLabelText('新对话执行方式')).toBeNull()
+    const trigger = screen.getByRole('button', { name: '新建对话' })
+    trigger.focus()
+    fireEvent.click(trigger)
+    fireEvent.change(screen.getByLabelText('新对话执行方式'), { target: { value: 'opencode' } })
+    fireEvent.keyDown(screen.getByRole('dialog', { name: '新建对话' }), { key: 'Escape' })
+    expect(trigger).toHaveFocus()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('tab', { name: '对话 1' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('textbox', { name: '对话内容' })).toHaveValue('还没发出的草稿')
+    expect(f.sessions).toHaveLength(1)
+    expect(f.sessions[0]!.executor).toBe('direct-provider')
+    expect(f.commands.filter((command) => command.type === 'create')).toHaveLength(1)
+    expect(f.commands.some((command) => command.type === 'send')).toBe(false)
+  })
+
+  it('preserves the project-question prefill and closes an unconfirmed dialog when the project changes', async () => {
+    const f = fixture()
+    const view = render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '向项目提问' }))
+    expect(screen.getByRole('dialog')).toHaveTextContent('当前项目进行到哪里了？为什么卡住，下一步应该做什么？')
+    fireEvent.click(screen.getByRole('button', { name: '取消' }))
+    expect(f.sessions).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: '向项目提问' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
+    await expect(screen.findByRole('textbox', { name: '对话内容' })).resolves.toHaveValue('当前项目进行到哪里了？为什么卡住，下一步应该做什么？')
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    view.rerender(<WorkbenchWorkspace {...f.props} projectId="other-project" />)
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(f.sessions).toHaveLength(1)
+    expect(f.commands.some((command) => command.type === 'send')).toBe(false)
+  })
+
+  it('keeps creation failures visible in the dialog without losing its executor or prefilled question', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '向项目提问' }))
+    fireEvent.change(screen.getByLabelText('新对话执行方式'), { target: { value: 'opencode' } })
+    f.api.workbenchConversation.mockRejectedValueOnce(new Error('暂时无法创建，请重试'))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
+    expect(await within(screen.getByRole('dialog')).findByRole('alert')).toHaveTextContent('暂时无法创建，请重试')
+    expect(screen.getByLabelText('新对话执行方式')).toHaveValue('opencode')
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    expect(f.sessions[0]).toMatchObject({ executor: 'opencode', inputDraft: '当前项目进行到哪里了？为什么卡住，下一步应该做什么？' })
+  })
+
+  it('opens help on demand with focus recovery and keeps stored context and real capacity warnings', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    const session = f.sessions[0]!
+    session.contextReceipt = { includedMessages: 7, omittedMessages: 3, limited: true, observedAt: run.updatedAt }
+    session.version++
+    await act(async () => f.push())
+    fireEvent.click(screen.getByRole('button', { name: /^会话信息/ }))
+    expect(screen.queryByText(/上次使用|较早消息未进入/)).toBeNull()
+    expect(screen.getByText(/本次上下文达到容量限制/)).toBeVisible()
+    expect(screen.getByText('模型调用设置记录')).toBeVisible()
+    expect(screen.queryByText(/A 聊天里确认/)).toBeNull()
+    const help = screen.getByRole('button', { name: '了解会话信息' })
+    help.focus(); fireEvent.click(help)
+    const dialog = screen.getByRole('dialog', { name: '会话说明' })
+    expect(dialog).toHaveTextContent('B 聊天不会自动知道')
+    expect(dialog).toHaveTextContent('保存提案不会共享整段聊天')
+    expect(dialog).toHaveTextContent('业务数据库')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(help).toHaveFocus()
+    fireEvent.click(help)
+    fireEvent.click(screen.getByRole('button', { name: '关闭说明' }))
+    expect(help).toHaveFocus()
+    expect(session.contextReceipt).toMatchObject({ includedMessages: 7, omittedMessages: 3, limited: true })
+    expect(f.commands.some((command) => command.type === 'send')).toBe(false)
+  })
+
+  it('chooses an executor for a new conversation and preserves each existing conversation selection', async () => {
+    const f = fixture()
+    const view = render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 1' })
     expect(f.sessions[0]!.executor).toBe('direct-provider')
-    fireEvent.change(screen.getByLabelText('新对话执行方式'), { target: { value: 'opencode' } })
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.change(screen.getByLabelText('新对话执行方式'), { target: { value: 'opencode' } })
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 2' })
     expect(f.sessions[1]!.executor).toBe('opencode')
     expect(screen.getByText('执行方式：OpenCode · 模型：DeepSeek')).toBeVisible()
@@ -57,11 +144,18 @@ describe('workbench tabs and independent conversation interaction', () => {
     expect(screen.getByText('执行方式：Direct Provider · 模型：DeepSeek')).toBeVisible()
     expect(f.sessions[0]!.executor).toBe('direct-provider')
     expect(f.commands.some((command) => command.type === 'send')).toBe(false)
+    view.unmount()
+    render(<WorkbenchWorkspace {...f.props} />)
+    await screen.findByRole('tab', { name: '对话 1' })
+    fireEvent.click(screen.getByRole('tab', { name: '对话 2' }))
+    expect(screen.getByText('执行方式：OpenCode · 模型：DeepSeek')).toBeVisible()
+    expect(screen.queryByLabelText('新对话执行方式')).toBeNull()
   })
   it('renders legacy and declared Markdown while keeping plain text, unknown formats and unsafe content readable', async () => {
     const f = fixture()
     render(<WorkbenchWorkspace {...f.props} />)
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 1' })
     f.sessions[0]!.messages.push(
       { id: 'legacy', role: 'assistant', text: '**需求澄清**\n\n1. 核对需求\n2. 再确认', createdAt: run.createdAt },
@@ -88,6 +182,7 @@ describe('workbench tabs and independent conversation interaction', () => {
     const f = fixture()
     render(<WorkbenchWorkspace {...f.props} />)
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 1' })
     const session = f.sessions[0]!
     session.status = 'running'; session.version++
@@ -110,6 +205,7 @@ describe('workbench tabs and independent conversation interaction', () => {
     fireEvent.click(finished)
     expect(screen.getByText(/我会先检查当前阶段.*当前测试尚未执行/)).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 2' })
     expect(screen.queryByText(/我会先检查当前阶段/)).toBeNull()
   })
@@ -119,9 +215,11 @@ describe('workbench tabs and independent conversation interaction', () => {
     const view = render(<WorkbenchWorkspace {...f.props} />)
     fireEvent.change(screen.getByLabelText('节点原有表单'), { target: { value: '尚未提交的节点编辑' } })
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 1' })
     fireEvent.change(screen.getByRole('textbox', { name: '对话内容' }), { target: { value: '仅第一条会话的输入' } })
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 2' })
     expect(screen.getByRole('textbox', { name: '对话内容' })).toHaveValue('')
     fireEvent.click(screen.getByRole('tab', { name: '对话 1' }))
@@ -142,7 +240,12 @@ describe('workbench tabs and independent conversation interaction', () => {
     const f = fixture()
     const view = render(<WorkbenchWorkspace {...f.props} />)
     view.rerender(<WorkbenchWorkspace {...f.props} request={{ serial: 1, type: 'discussion', prompt: '讨论需求节点，也可以问整个项目。' }} />)
+    expect(f.commands.some((command) => command.type === 'create')).toBe(false)
+    expect(screen.getByRole('dialog', { name: '新建对话' })).toHaveTextContent('讨论需求节点，也可以问整个项目。')
+    fireEvent.change(screen.getByLabelText('新对话执行方式'), { target: { value: 'opencode' } })
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     const composer = await screen.findByRole('textbox', { name: '对话内容' })
+    expect(f.sessions[0]?.executor).toBe('opencode')
     expect(composer).toHaveValue('讨论需求节点，也可以问整个项目。')
     expect(f.commands.some((command) => command.type === 'send')).toBe(false)
     fireEvent.change(composer, { target: { value: '测试阶段进展如何？' } })
@@ -162,10 +265,11 @@ describe('workbench tabs and independent conversation interaction', () => {
     const f = fixture()
     const view = render(<WorkbenchWorkspace {...f.props} />)
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 1' })
     f.sessions[0]!.memory = '旧版私有备注'; f.sessions[0]!.version++
     await act(async () => f.push())
-    fireEvent.click(screen.getByRole('button', { name: /会话信息/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^会话信息/ }))
     expect(screen.queryByRole('textbox', { name: '仅本会话记忆' })).toBeNull()
     expect(screen.getByText('旧版私有备注')).toBeInTheDocument()
     fireEvent.click(screen.getByText('旧版会话备注（已停用）'))
@@ -181,6 +285,7 @@ describe('workbench tabs and independent conversation interaction', () => {
     const f = fixture()
     render(<WorkbenchWorkspace {...f.props} />)
     fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 1' })
     f.sessions[0]!.status = 'running'; f.sessions[0]!.version++
     await act(async () => f.push())

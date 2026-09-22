@@ -81,6 +81,19 @@ let page
 const errors = []
 async function launch() {
   app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9', DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
+  // Keep this synthetic-credential test independent of a user's OS keychain authorization.
+  await app.evaluate(({ safeStorage }) => {
+    const secret = 'sk-test-workbench-only'
+    safeStorage.isAsyncEncryptionAvailable = async () => true
+    safeStorage.encryptStringAsync = async (value) => {
+      if (value !== secret) throw new Error('Unexpected test credential')
+      return Buffer.from(secret)
+    }
+    safeStorage.decryptStringAsync = async (bytes) => {
+      if (bytes.toString() !== secret) throw new Error('Unexpected test credential')
+      return secret
+    }
+  })
   // Only this isolated test process redirects the external API boundary; no real model request.
   await app.evaluate((_, endpoint) => {
     const original = globalThis.fetch
@@ -132,6 +145,7 @@ try {
   for (const node of run.nodes) await expect(page.getByTestId(`flow-node-${node.id}`)).toBeAttached()
   await page.getByRole('button', { name: '流程视图', exact: true }).click()
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByRole('button', { name: '创建对话', exact: true }).click()
   await send('流式推理验证')
   await expect(page.getByRole('button', { name: /推理过程.*生成中/ })).toHaveAttribute('aria-expanded', 'true')
   await expect(page.getByText(/先核对当前工作流.*REASONING_LOCAL_ONLY/)).toBeVisible()
@@ -156,10 +170,43 @@ try {
   await page.getByRole('button', { name: '保存为节点提案', exact: true }).click()
   await readyText('已保存为节点提案')
   await expect(page.getByText('已保存提案', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: /会话信息/ }).click()
+  await page.getByRole('button', { name: /^会话信息/ }).click()
   await expect(page.getByRole('textbox', { name: '仅本会话记忆' })).toHaveCount(0)
-  await page.getByRole('button', { name: /会话信息/ }).click()
+  await expect(page.getByText(/上次使用.*条本会话消息/)).toHaveCount(0)
+  const help = page.getByRole('button', { name: '了解会话信息' })
+  await help.click()
+  const helpDialog = page.getByRole('dialog', { name: '会话说明' })
+  await expect(helpDialog).toContainText('B 聊天不会自动知道')
+  await expect(helpDialog).toContainText('保存提案不会共享整段聊天')
+  await page.keyboard.press('Shift+Tab')
+  await expect(page.getByRole('button', { name: '关闭说明', exact: true })).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: '关闭会话说明', exact: true })).toBeFocused()
+  await page.screenshot({ scale: 'css', path: path.join(output, '08-conversation-help.png') })
+  await page.keyboard.press('Escape')
+  await expect(help).toBeFocused()
+  await help.click()
+  await app.evaluate(({ BrowserWindow }) => { const window = BrowserWindow.getAllWindows()[0]; window.setMinimumSize(360, 480); window.setSize(480, 600) })
+  await expect(page.getByRole('button', { name: '关闭说明', exact: true })).toBeInViewport()
+  expect(await helpDialog.locator('.conversation-dialog-body').evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  await page.screenshot({ scale: 'css', path: path.join(output, '09-conversation-help-narrow.png') })
+  await page.getByRole('button', { name: '关闭说明', exact: true }).click()
+  await expect(help).toBeFocused()
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1672, 973))
+  const beforeCancel = await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({ type: 'list', projectId }), project.id)
+  const beforeCancelCalls = requests.length
+  const activeTabBeforeCancel = await page.locator('.workspace-tabs [aria-selected="true"]').getAttribute('id')
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByLabel('新对话执行方式').selectOption('opencode')
+  await page.screenshot({ scale: 'css', path: path.join(output, '10-create-conversation.png') })
+  await page.getByRole('button', { name: '取消', exact: true }).click()
+  expect((await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({ type: 'list', projectId }), project.id)).conversations.length).toBe(beforeCancel.conversations.length)
+  expect(await page.locator('.workspace-tabs [aria-selected="true"]').getAttribute('id')).toBe(activeTabBeforeCancel)
+  expect(requests.length).toBe(beforeCancelCalls)
+  await expect(page.getByLabel('新对话执行方式')).toHaveCount(0)
+  await page.getByRole('button', { name: /^会话信息/ }).click()
+  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByRole('button', { name: '创建对话', exact: true }).click()
   const secondStart = requests.length
   await send('查询共享提案，然后告诉我测试阶段的进度。')
   await readyText('已查到保存的讨论提案')
@@ -193,6 +240,24 @@ try {
   await app.close(); app = undefined
   await launch()
   await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
+  // A real persisted OpenCode conversation can coexist and reopen without starting a model.
+  const directTabId = await page.locator('.workspace-tabs [aria-selected="true"]').getAttribute('id')
+  const callsBeforeOpenCode = requests.length
+  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByLabel('新对话执行方式').selectOption('opencode')
+  await page.getByRole('button', { name: '创建对话', exact: true }).click()
+  await expect(page.getByText('执行方式：OpenCode · 模型：DeepSeek 流式测试模型')).toBeVisible()
+  const openCodeTabId = await page.locator('.workspace-tabs [aria-selected="true"]').getAttribute('id')
+  await page.locator(`[id="${directTabId}"]`).click()
+  await expect(page.getByText('执行方式：Direct Provider · 模型：DeepSeek 流式测试模型')).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
+  await app.close(); app = undefined
+  await launch()
+  await page.locator(`[id="${openCodeTabId}"]`).click()
+  await expect(page.getByText('执行方式：OpenCode · 模型：DeepSeek 流式测试模型')).toBeVisible()
+  await page.locator(`[id="${directTabId}"]`).click()
+  await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
+  expect(requests.length).toBe(callsBeforeOpenCode)
   await page.screenshot({ scale: 'css', path: path.join(output, '03-restored-tabs.png') })
   await page.getByRole('button', { name: /关闭会话 Tab：查询共享提案/ }).click()
   await page.getByRole('button', { name: '会话历史', exact: true }).click()
@@ -227,7 +292,7 @@ try {
   expect(JSON.stringify(requests)).not.toContain('REASONING_LOCAL_ONLY')
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
-  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, fullOriginalRequirement: true, boundedFormatRecovery: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
 } catch (error) {
