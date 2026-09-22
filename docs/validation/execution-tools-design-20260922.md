@@ -23,6 +23,8 @@ Issues: #156, #157, #158. #135 remains deferred for signed macOS installation ac
 - `corepack pnpm test`: 300 test files passed, 4,081 tests passed. The 15 opt-in PostgreSQL tests
   were skipped locally; the existing CI Postgres job covers them separately.
 - `corepack pnpm build`, `test:cross-platform`, `test:build-output-smoke`: passed.
+- `corepack pnpm test:e2e`: all 41 browser scenarios passed. Updated the existing execution-tool
+  selectors and the Direct Provider repository-impact expectation to match the clarified UI.
 - Added approval-input tests cover pending/ambiguous/wrong-Run/wrong-node/unapproved/tampered
   bindings, legacy compatibility, actual HTTP request bodies and stopping at the review Gate.
 - Added tests cover explicit OpenCode design IPC routing without Coding configuration writes,
