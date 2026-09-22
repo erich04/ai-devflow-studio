@@ -1,4 +1,5 @@
 import { ConversationBody } from './ConversationBody'
+import { ConversationHelpButton, NewConversationDialog } from './ConversationDialogs'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { ArrowUp, BookOpen, Brain, ChevronDown, History, MessageCircle, Pin, Plus, RotateCcw, Square, X } from 'lucide-react'
 import { describeProviderThinking, type WorkflowRun } from '@ai-devflow/shared'
@@ -27,7 +28,8 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
-  const [newExecutor, setNewExecutor] = useState<'direct-provider' | 'opencode'>('direct-provider')
+  const [creationRequest, setCreationRequest] = useState<{ projectId: string; prompt: string } | null>(null)
+  const creatingRef = useRef(false)
   const generation = useRef(0)
   const activeRef = useRef(active)
   activeRef.current = active
@@ -59,7 +61,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
 
   useEffect(() => {
     generation.current++
-    setSessions([]); setShowHistory(false); setError(''); setNewExecutor('direct-provider')
+    setSessions([]); setShowHistory(false); setError(''); setCreationRequest(null)
     let restored = 'details'
     try { restored = projectId ? localStorage.getItem(`devflow-workbench-tab:${projectId}`) ?? 'details' : 'details' } catch { /* optional UI preference */ }
     setActive(restored)
@@ -73,26 +75,33 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     return () => { disposed = true; generation.current++; unsubscribe?.(); window.clearInterval(interval) }
   }, [api, projectId, runCommand])
 
-  const create = useCallback(async (prompt = '') => {
-    if (!projectId || creating) return
+  const beginCreate = useCallback((prompt = '') => {
+    if (!projectId || !api?.workbenchConversation || creatingRef.current) return
+    setError('')
+    setCreationRequest({ projectId, prompt })
+  }, [api, projectId])
+  const create = async (executor: 'direct-provider' | 'opencode') => {
+    if (!projectId || creationRequest?.projectId !== projectId || creatingRef.current) return
     const currentGeneration = generation.current
     const previousActive = active
+    creatingRef.current = true
     setCreating(true)
     setActive('new-pending')
-    const result = await runCommand({ type: 'create', projectId, inputDraft: prompt, executor: newExecutor })
+    const result = await runCommand({ type: 'create', projectId, inputDraft: creationRequest.prompt, executor })
     if (currentGeneration === generation.current) {
-      if (result?.conversationId) { activate(result.conversationId); setShowHistory(false) }
+      if (result?.conversationId) { setCreationRequest(null); activate(result.conversationId); setShowHistory(false) }
       else setActive(previousActive)
     }
+    creatingRef.current = false
     setCreating(false)
-  }, [active, activate, creating, projectId, runCommand, newExecutor])
+  }
 
   useEffect(() => {
     if (lastRequest.current === request.serial) return
     lastRequest.current = request.serial
-    if (request.type === 'details') { activate('details'); setShowHistory(false) }
-    else void create(request.prompt)
-  }, [activate, create, request])
+    if (request.type === 'details') { activate('details'); setShowHistory(false); setCreationRequest(null) }
+    else beginCreate(request.prompt)
+  }, [activate, beginCreate, request])
 
   useEffect(() => {
     tabbar.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
@@ -129,16 +138,11 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
           }}><X size={13} /></button>
         </div>)}
       </div>
-      <button className="workspace-icon" aria-label="新建对话" title="新建独立对话，可以询问整个项目" disabled={!projectId || !api?.workbenchConversation || creating} onClick={() => void create()}><Plus size={19} /></button>
+      <button className="workspace-icon" aria-label="新建对话" title="新建独立对话，可以询问整个项目" disabled={!projectId || !api?.workbenchConversation || creating} onClick={() => beginCreate()}><Plus size={19} /></button>
       <button className="workspace-icon" aria-label="会话历史" title="会话历史" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}><History size={18} /></button>
     </div>
-    <div className="workspace-executor-choice">
-      <label>新对话<select aria-label="新对话执行方式" value={newExecutor} onChange={(event) => setNewExecutor(event.target.value as 'direct-provider' | 'opencode')} disabled={creating}>
-        <option value="direct-provider">Direct Provider</option><option value="opencode">OpenCode</option>
-      </select></label>
-      <small>{newExecutor === 'opencode' ? '需本机已安装 OpenCode；点击 ＋ 新建' : '使用 Agents 中选定的模型；点击 ＋ 新建'}</small>
-    </div>
-    {error && <div className="conversation-error" role="alert">{error}<button aria-label="关闭会话提示" onClick={() => setError('')}><X size={14} /></button></div>}
+    {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError('') } }} onCreate={(executor) => void create(executor)} />}
+    {error && !creationRequest && <div className="conversation-error" role="alert">{error}<button aria-label="关闭会话提示" onClick={() => setError('')}><X size={14} /></button></div>}
     {showHistory && <section className="conversation-history" aria-label="会话历史记录">
       <div className="row"><strong>会话历史</strong><button className="workspace-icon" onClick={() => setShowHistory(false)} aria-label="关闭会话历史"><X size={16} /></button></div>
       <p className="meta">{projectName ?? '当前项目'} · 关闭 Tab 后仍可从这里继续。</p>
@@ -151,7 +155,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     </section>}
     <div id="details-panel" role="tabpanel" aria-labelledby="details-tab" hidden={active !== 'details' || showHistory} className="workspace-details">
       {children}
-      {api?.workbenchConversation && <div className="details-conversation-entry"><button className="ghost-button" onClick={() => void create('当前项目进行到哪里了？为什么卡住，下一步应该做什么？')}><MessageCircle size={16} />向项目提问</button></div>}
+      {api?.workbenchConversation && <div className="details-conversation-entry"><button className="ghost-button" disabled={!projectId || creating} onClick={() => beginCreate('当前项目进行到哪里了？为什么卡住，下一步应该做什么？')}><MessageCircle size={16} />向项目提问</button></div>}
     </div>
     {active !== 'details' && !session && !showHistory && <p className="conversation-loading" role="status">{creating ? '正在创建独立对话…' : '正在恢复会话…'}</p>}
     {session && <div id={`chat-panel-${session.id}`} role="tabpanel" aria-labelledby={`chat-tab-${session.id}`} hidden={showHistory} className="workspace-conversation">
@@ -203,15 +207,11 @@ function ConversationView({ session, runs, projectName, providerId, providerName
       <div className="row"><strong>{session.title}</strong><span className={`pill ${session.status === 'awaiting_answer' ? 'blocked' : 'soft'}`}>{statusCopy[session.status]}</span></div>
       <p>{projectName} · 可查询全部 Run 与节点</p>
       <p>执行方式：{session.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · 模型：{providerName || '尚未选择'}</p>
-      <button className="conversation-context-toggle" onClick={() => setContextOpen(!contextOpen)} aria-expanded={contextOpen}><BookOpen size={15} />会话信息<span>{contextOpen ? '收起' : '查看'}</span></button>
+      <div className="conversation-context-heading"><button className="conversation-context-toggle" onClick={() => setContextOpen(!contextOpen)} aria-expanded={contextOpen}><BookOpen size={15} />会话信息<span>{contextOpen ? '收起' : '查看'}</span></button><ConversationHelpButton /></div>
       {contextOpen && <div className="conversation-context">
         <label>会话名称<input aria-label="会话名称" key={session.id} defaultValue={session.title} maxLength={100} onBlur={(event) => { if (event.target.value.trim() && event.target.value !== session.title) void command({ type: 'update', ...scope, title: event.target.value }) }} /></label>
-        <p>共享：最新流程、已保存产物与证据、项目代码和知识。<br />独立：此会话的聊天、问题和草稿。</p>
         {session.memory && <details className="conversation-legacy-note"><summary>旧版会话备注（已停用）</summary><p className="meta">已停用，不会发送给模型；如需继续使用其中的要求，请在聊天中说明。</p><pre>{session.memory}</pre></details>}
-        <p className="meta">{session.contextReceipt ? `上次使用 ${session.contextReceipt.includedMessages} 条本会话消息；${session.contextReceipt.omittedMessages} 条较早消息未进入模型上下文，历史仍保留。` : '每次调查按需读取最新流程；不会读取其他会话的聊天。'}</p>
         {session.contextReceipt?.limited && <p className="meta">本次上下文达到容量限制，部分查询内容未全部附带。可以缩小问题范围后继续调查。</p>}
-        <p className="meta">当前工具：流程查询、节点与产物、只读代码检索、项目知识检索。没有连接业务数据库。</p>
-        <p className="meta">执行方式保存在本会话中；切换方式请新建对话。OpenCode 通过受限查询工具调查，不会执行代码修改或批准 Gate。</p>
         <details><summary>模型调用设置记录</summary>{session.messages.filter((message) => message.provider).map((message) => <p className="meta" key={message.id}>{message.createdAt} · {message.provider!.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {message.provider!.model} · {message.provider!.effectiveThinking ? describeProviderThinking(message.provider!.effectiveThinking!) : '未提供或未记录思考参数'}</p>)}</details>
       </div>}
     </header>
