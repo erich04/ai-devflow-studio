@@ -283,6 +283,10 @@ export function Inspector({
   onApprove,
   onCompleteAgentNode,
   onRequestClarificationChanges = () => undefined,
+  stageProviders = [],
+  stageProviderId = '',
+  onStageProviderChange = () => undefined,
+  onCancelStageAgent,
   stageAgentExecutorKind = 'direct-provider',
   onStageAgentExecutorKindChange = () => undefined,
   onSaveGateOverride,
@@ -341,6 +345,10 @@ export function Inspector({
   onApprove: () => void
   onCompleteAgentNode: () => void
   onRequestClarificationChanges?: (reason: string) => void
+  stageProviders?: Array<{ id: string; name: string; model: string }>
+  stageProviderId?: string
+  onStageProviderChange?: (providerId: string) => void
+  onCancelStageAgent?: (() => void) | undefined
   stageAgentExecutorKind?: StageAgentExecutorKind
   onStageAgentExecutorKindChange?: (kind: StageAgentExecutorKind) => void
   onSaveGateOverride: (reason: string) => void
@@ -743,6 +751,17 @@ export function Inspector({
             <strong>{artifact.title}</strong>
             <p>{artifact.summary}</p>
             <code>{artifact.content}</code>
+            {artifact.designEvidence ? <details><summary>设计输入与代码核验依据</summary>
+              <p>已批准澄清：{artifact.designEvidence.clarification.artifactId} · {artifact.designEvidence.clarification.legacy ? '旧版已审批产物' : `第 ${artifact.designEvidence.clarification.revision} 版`}</p>
+              <p>执行工具：{artifact.designEvidence.executor.kind === 'local-agent' ? 'OpenCode（只读分析）' : 'Direct Provider'} · 模型：{artifact.designEvidence.executor.model}</p>
+              <p>输入正文摘要：{artifact.designEvidence.clarification.contentDigest}</p>
+              {artifact.designEvidence.repositoryFindings ? <>
+                <p>仓库摘要：{artifact.designEvidence.repositoryFindings.repositoryDigest}</p>
+                <ul>{artifact.designEvidence.repositoryFindings.verifiedFacts.map((fact) => <li key={fact.id}>{fact.statement} · 引用 {fact.citationIds.join(', ')}</li>)}</ul>
+                <ul>{artifact.designEvidence.repositoryFindings.citations.map((citation) => <li key={citation.id}>{citation.path}{citation.lineStart ? `:${citation.lineStart}` : ''} · {citation.contentDigest}</li>)}</ul>
+                <p>未核验范围：{artifact.designEvidence.repositoryFindings.uncheckedScopes.join('；') || '执行器未报告额外范围'}</p>
+              </> : <p>本次未执行仓库代码核验。</p>}
+            </details> : null}
           </article>
         ))
       )}
@@ -1259,9 +1278,9 @@ export function Inspector({
         <p className="section-title">Next best action</p>
         <h3>{viewModel.nextAction.title}</h3>
         <p className="meta">{viewModel.nextAction.copy}</p>
-        {selectedNode.kind === 'agent' && selectedNode.stage === 'clarify' ? (
-          <label className="stage-agent-executor" htmlFor="stage-agent-executor">
-            澄清执行器
+        {selectedNode.kind === 'agent' && ['clarify', 'design'].includes(selectedNode.stage) ? (
+          <div><label className="stage-agent-executor" htmlFor="stage-agent-executor">
+            {selectedNode.stage === 'clarify' ? '澄清执行器' : '设计执行器'}
             <select
               id="stage-agent-executor"
               value={stageAgentExecutorKind}
@@ -1269,10 +1288,22 @@ export function Inspector({
               onChange={(event) => onStageAgentExecutorKindChange(event.target.value as StageAgentExecutorKind)}
             >
               <option value="direct-provider">Direct Provider</option>
-              <option value="local-agent">Read-only Local Agent (OpenCode)</option>
+              <option value="local-agent">OpenCode（只读分析）</option>
             </select>
-            <small>{stageAgentExecutorKind === 'local-agent' ? '只读检索；不可写仓库、推进 Gate 或自动回退。' : '兼容现有 Provider 路径。'}</small>
+            <small>{stageAgentExecutorKind === 'local-agent' ? '只读查看仓库，生成后交给你评审；不修改代码、不运行测试命令、不批准 Gate。' : '直接调用所选模型生成正式产物。'}</small>
           </label>
+          <label className="stage-agent-executor">本节点使用的模型
+            <select aria-label="本节点使用的模型" value={stageProviderId} disabled={hasInspectorWriteLock} onChange={(event) => onStageProviderChange(event.target.value)}>
+              <option value="">请选择已保存 Provider</option>
+              {stageProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+            </select>
+          </label>
+          <p className="empty-note">只影响本节点本次生成，不改变开发实现或已有聊天的选择。模型调用可能产生费用。</p>
+          {pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'completeAgent' ? <div role="status">
+            <p>正在生成，完成后会显示正式产物和执行记录。尚未批准任何 Gate。</p>
+            {onCancelStageAgent ? <button className="ghost-button" onClick={onCancelStageAgent}>取消生成</button> : null}
+          </div> : null}
+          </div>
         ) : null}
         {codingActionProjection?.action.id === 'review-permission' && codingActionProjection.permission ? (
           <div className="coding-permission-summary" data-testid="workbench-coding-permission-summary">

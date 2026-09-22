@@ -33,7 +33,7 @@ describe('Coding Runtime readiness presentation', () => {
 
     expect(display).toMatchObject({ status: 'ready', statusLabel: 'Ready' })
     expect(display.items.map(({ label, statusLabel }) => [label, statusLabel])).toEqual([
-      ['Coding Executor', '已配置'],
+      ['执行工具', '已配置'],
       ['Provider', '可用'],
       ['Team Project', '已配对'],
       ['测试命令', '已配置'],
@@ -52,7 +52,7 @@ describe('Coding Runtime readiness presentation', () => {
 
     expect(display.status).toBe('blocked')
     expect(display.items[0]).toMatchObject({
-      label: 'Coding Executor',
+      label: '执行工具',
       statusLabel: '未配置',
       diagnosticCode: 'executor_unconfigured',
     })

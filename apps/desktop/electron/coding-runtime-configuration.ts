@@ -194,7 +194,7 @@ export async function evaluateCodingRuntimeReadiness(input: {
     checks,
     'executor_unconfigured',
     configured,
-    configured ? '项目已选择 Coding Agent Executor。' : '请先配置项目级 Coding Agent Executor。',
+    configured ? '项目已选择 Coding Agent Executor。' : '请先配置项目执行工具。',
   )
 
   if (usesOpenCodeProvider) {
@@ -244,8 +244,8 @@ export async function evaluateCodingRuntimeReadiness(input: {
     'capability_unavailable',
     capabilityReady,
     capabilityReady
-      ? 'Coding Executor 满足当前运行所需能力。'
-      : 'Coding Executor 缺少当前运行所需能力。',
+      ? '执行工具满足当前运行所需能力。'
+      : '执行工具缺少当前运行所需能力。',
   )
 
   const providerId =
@@ -299,8 +299,8 @@ export async function evaluateCodingRuntimeReadiness(input: {
         ? 'OpenCode Provider 与 Model 已由用户确认，所选 Provider 凭据可用。'
         : '项目尚未确认 OpenCode Provider 与 Model。'
       : providerReady
-        ? 'Native Coding Provider metadata 与本地加密 credential 可用。'
-        : '项目所选 Native Coding Provider 缺少 metadata 或本地加密 credential。',
+        ? 'DevFlow Native Provider metadata 与本地加密 credential 可用。'
+        : '项目所选 DevFlow Native Provider 缺少 metadata 或本地加密 credential。',
   )
 
   const paired = Boolean(pairing && pairing.localProjectId === input.projectId)

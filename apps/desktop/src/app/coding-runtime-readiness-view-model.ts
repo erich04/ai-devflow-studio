@@ -22,7 +22,7 @@ const readinessCopy: Record<CodingRuntimeReadinessCode, ReadinessCopy> = {
     label: '测试命令', ready: '已配置', blocked: '未配置', remediation: '为当前本地项目保存安全测试命令。',
   },
   executor_unconfigured: {
-    label: 'Coding Executor', ready: '已配置', blocked: '未配置', remediation: '选择 OpenCode 或 Native Coding Executor。',
+    label: '执行工具', ready: '已配置', blocked: '未配置', remediation: '选择 OpenCode 或 DevFlow Native。',
   },
   binary_missing: {
     label: 'OpenCode 可执行文件', ready: '已解析', blocked: '未找到', remediation: '重新检测并确认由 Electron Main 解析出的 OpenCode。',
@@ -40,13 +40,13 @@ const readinessCopy: Record<CodingRuntimeReadinessCode, ReadinessCopy> = {
     label: 'OpenCode Model', ready: '已选择', blocked: '未选择', remediation: '选择本项目使用的 OpenCode model。',
   },
   engine_unavailable: {
-    label: 'Coding Engine', ready: '可用', blocked: '不可用', remediation: '重新检测本机 OpenCode，或改用 Native Executor。',
+    label: 'Coding Engine', ready: '可用', blocked: '不可用', remediation: '重新检测本机 OpenCode，或改用 DevFlow Native。',
   },
   capability_unavailable: {
     label: '执行能力', ready: '满足要求', blocked: '能力不足', remediation: '选择满足 worktree、diff、取消和权限合同的 Executor。',
   },
   provider_unavailable: {
-    label: 'Provider', ready: '可用', blocked: '不可用', remediation: '为 Native 选择已安全保存的 Provider，或配置 OpenCode Provider。',
+    label: 'Provider', ready: '可用', blocked: '不可用', remediation: '为 DevFlow Native 选择已安全保存的 Provider，或配置 OpenCode Provider。',
   },
   team_project_unpaired: {
     label: 'Team Project', ready: '已配对', blocked: '未配对', remediation: '绑定当前 Local Project 与 Team Project。',

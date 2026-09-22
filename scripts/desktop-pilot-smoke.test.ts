@@ -49,7 +49,7 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).not.toContain('.runtime.acceptedActionIds')
   })
 
-  it('completes and reopens one bounded Native Coding run without repeated Tool effects', () => {
+  it('completes and reopens one bounded DevFlow Native run without repeated Tool effects', () => {
     expect(smoke).toContain("DEVFLOW_CODING_EXECUTOR: 'native-deterministic'")
     expect(smoke).toContain('runCodingAgent')
     expect(smoke).toContain('replyCodingPermission')

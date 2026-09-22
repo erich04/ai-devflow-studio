@@ -181,7 +181,9 @@ V2.2 还支持有边界的独立 Agent Runtime、Memory 生命周期和 Multi-Ag
 
 ### 第 8 步：生成并评审方案设计
 
-选择“方案设计”卡片，点击“生成设计方案”。产物会说明实现方式和测试策略。
+选择“方案设计”卡片，在“设计执行器”选择 Direct Provider 或 OpenCode（只读分析），再选择“本节点使用的模型”，点击“生成设计方案”。Direct Provider 根据已批准需求生成；OpenCode 还会只读查看仓库。两者都会使用需求 Gate 已批准的澄清正文和本节点已保存的讨论提案。
+
+设计产物说明实现方式和测试策略；“设计输入与代码核验依据”可以查看本次使用的澄清版本、执行工具、模型和代码引用。生成时可点击“取消生成”，节点不会因取消而推进，可稍后重试。
 
 ![方案设计已生成](./screenshots/v2.2-beginner-manual/13-design-generated.jpg)
 
@@ -192,6 +194,10 @@ V2.2 还支持有边界的独立 Agent Runtime、Memory 生命周期和 Multi-Ag
 两个 Gate 都通过后，开发实现节点才成为当前步骤。
 
 ### 第 9 步：启动 Coding Agent
+
+先到 Agents 的“项目执行工具”选择开发实现使用的工具：OpenCode 或 DevFlow Native（内置编码执行器）。旧称 Native Coding Agent / Native Executor 都指 DevFlow Native；v2 是执行器版本，配置修订号是另一件事。Provider（例如 DeepSeek）提供模型，执行工具负责受控执行；已保存的 Provider 可以共用，但各入口独立选择。
+
+需求澄清、方案设计在各自节点选择执行方式；右侧聊天在“新对话执行方式”选择。项目工具设置不会自动切换这些入口。
 
 选择 `Implement locally`，点击 `Coding Agent`。Coding Agent 会创建独立的 managed worktree，不直接在主工作目录里修改文件。
 

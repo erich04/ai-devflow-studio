@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const smoke = readFileSync('scripts/native-coding-electron-smoke.mjs', 'utf8')
 
-describe('Native Coding Electron smoke contract', () => {
+describe('DevFlow Native Electron smoke contract', () => {
   it('uses the real preload/Main boundary and a local OpenAI-compatible server', () => {
     expect(smoke).toContain("import { _electron as electron, expect } from '@playwright/test'")
     expect(smoke).toContain("request.url !== '/v1/chat/completions'")

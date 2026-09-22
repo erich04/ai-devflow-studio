@@ -367,6 +367,22 @@ export type ClarificationAuditRecord = {
   feedbackArtifactId?: string
 }
 
+export type DesignClarificationInput = {
+  gateNodeId: string
+  artifactId: string
+  contentDigest: string
+  revision?: number
+  revisionDigest?: string
+  legacy: boolean
+}
+
+export type DesignEvidence = {
+  version: 1
+  clarification: DesignClarificationInput
+  executor: StageAgentExecutorProvenance
+  repositoryFindings?: ClarificationRepositoryFindings
+}
+
 export type Artifact = {
   id: string
   runId: string
@@ -379,6 +395,7 @@ export type Artifact = {
   updatedAt: string
   clarificationRevision?: ClarificationRevisionMetadata
   clarificationFeedback?: ClarificationFeedbackMetadata
+  designEvidence?: DesignEvidence
   githubDeliverySource?: GitHubDeliveryPackageSource
 }
 

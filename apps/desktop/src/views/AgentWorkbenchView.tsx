@@ -50,6 +50,8 @@ export function AgentWorkbenchView({
   requestedBy,
   providers,
   selectedProviderId,
+  stageExecution,
+  onCancelStageAgent,
   onProviderChange,
   onProviderRemoved,
   onProviderUpdated,
@@ -110,6 +112,8 @@ export function AgentWorkbenchView({
   requestedBy: string
   providers: AgentProviderConfig[]
   selectedProviderId: string
+  stageExecution?: { providerId: string; executor: 'direct-provider' | 'local-agent' } | undefined
+  onCancelStageAgent?: (() => void) | undefined
   onProviderChange: (providerId: string) => void
   onProviderRemoved: (providerId: string) => void
   onProviderUpdated?: (metadata: ProviderCredentialMetadata) => void
@@ -223,7 +227,7 @@ export function AgentWorkbenchView({
         setOpencodeModelId(configuration.modelId)
       }
     }).catch((error) => {
-      if (active) setCodingConfigurationStatus(error instanceof Error ? error.message : '无法读取 Coding Executor 配置')
+      if (active) setCodingConfigurationStatus(error instanceof Error ? error.message : '无法读取项目执行工具配置')
     })
     return () => {
       active = false
@@ -276,7 +280,7 @@ export function AgentWorkbenchView({
       (!opencode?.binaryPath || !opencode.version || !effectiveOpenCodeProviderId || !effectiveOpenCodeModelId)
     ) return
     setIsSavingCodingConfiguration(true)
-    setCodingConfigurationStatus('正在保存项目级 Coding Executor…')
+    setCodingConfigurationStatus('正在保存项目执行工具…')
     try {
       const saved = await desktopApi.saveCodingRuntimeConfiguration(
         codingExecutor === 'native-model'
@@ -298,8 +302,8 @@ export function AgentWorkbenchView({
       const savedProviderName = providers.find((provider) => provider.id === saved.providerId)?.name
       setCodingConfigurationStatus(
         saved.executor === 'native-model'
-          ? `已保存 Native Executor · ${savedProviderName ?? '已保存 Provider'} · v${saved.version}`
-          : `已确认 OpenCode · ${saved.detectedVersion} · ${savedProviderName ?? saved.providerId} / ${saved.modelId} · v${saved.version}`,
+          ? `已保存 DevFlow Native · ${savedProviderName ?? '已保存 Provider'} · 配置修订 ${saved.version}`
+          : `已确认 OpenCode · ${saved.detectedVersion} · ${savedProviderName ?? saved.providerId} / ${saved.modelId} · 配置修订 ${saved.version}`,
       )
       await onRefreshCodingReadiness()
     } catch (error) {
@@ -355,7 +359,7 @@ export function AgentWorkbenchView({
         projectId: localProjectId,
         requestedBy,
         maxAdditionalCostUsd: Math.max(0.01, codingReadiness?.budgetDecision?.projectedCostUsd ?? 0.20),
-        reason: 'One-time local owner approval for this exact Native Coding run.',
+        reason: 'One-time local owner approval for this exact DevFlow Native run.',
       })
       onRuntimeBudgetApprovalIdChange(approval.id)
       setCodingConfigurationStatus(`一次性预算批准已创建：${approval.id}`)
@@ -370,6 +374,7 @@ export function AgentWorkbenchView({
   const viewModel = buildAgentConsoleViewModel({
     providers,
     selectedProviderId,
+    stageExecution,
     selectedRun,
     selectedNode,
     reviews,
@@ -614,6 +619,9 @@ export function AgentWorkbenchView({
                   {primaryActionIcon(viewModel.primaryAction.id)}
                   {viewModel.primaryAction.label}
                 </button>
+                {pendingInspectorAction?.actionId === 'completeAgent' && onCancelStageAgent ? (
+                  <button className="ghost-button" onClick={onCancelStageAgent}>取消生成</button>
+                ) : null}
                 {viewModel.primaryAction.id === 'view-review' && latestReview ? (
                   <button
                     className="ghost-button"
@@ -994,26 +1002,27 @@ export function AgentWorkbenchView({
 
         <details className="runtime-settings" open={codingReadiness?.status !== 'ready'} ref={runtimeSettingsRef} tabIndex={-1}>
           <summary>
-            <span><Code2 size={16} />Coding Agent 执行配置</span>
+            <span><Code2 size={16} />项目执行工具</span>
             <strong>{codingConfigurationLabel}</strong>
           </summary>
           <div className="runtime-settings__body">
             <article className="agent-evidence-card runtime-settings-form">
               <div className="section-heading">
-                <span>Coding Engine / Executor（执行器）</span>
-                <strong>{codingExecutor === 'native-model' ? 'DevFlow Native v2' : 'OpenCode'}</strong>
+                <span>开发实现使用的工具</span>
+                <strong>{codingExecutor === 'native-model' ? 'DevFlow Native（内置编码执行器）' : 'OpenCode'}</strong>
               </div>
-              <p>Stage/Review Provider、Coding Engine 和 Coding Executor 是三项独立配置。真正执行时由 Electron Main 重新验证当前项目配置。</p>
+              <p>这里设置开发实现使用的工具和模型。需求澄清、方案设计可在各自节点选择 Direct Provider 或只读 OpenCode；右侧聊天单独选择，不随这里切换。</p>
+              {codingExecutor === 'native-model' ? <p className="empty-note">执行器版本：v2。旧称 Native Coding Agent / Native Executor，均指 DevFlow Native。</p> : null}
               <label>
-                Coding Executor（执行器）
-                <select aria-label="Coding Executor" value={codingExecutor} onChange={(event) => setCodingExecutor(event.target.value as 'native-model' | 'opencode-http')}>
-                  <option value="native-model">DevFlow Native · 使用本地安全保存的 Provider</option>
+                执行工具
+                <select aria-label="执行工具" value={codingExecutor} onChange={(event) => setCodingExecutor(event.target.value as 'native-model' | 'opencode-http')}>
+                  <option value="native-model">DevFlow Native · 内置编码执行器</option>
                   <option value="opencode-http">OpenCode · 使用 OpenCode Provider</option>
                 </select>
               </label>
               {codingExecutor === 'native-model' ? (
                 <label>
-                  Native Executor 使用的 Provider
+                  DevFlow Native 使用的 Provider
                   <select aria-label="Coding Agent Provider" value={codingProviderId} onChange={(event) => setCodingProviderId(event.target.value)}>
                     <option value="">请选择已保存 Provider</option>
                     {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}

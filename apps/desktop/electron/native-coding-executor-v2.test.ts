@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { AgentProviderRequestError, createOpenAiCompatibleAgentProvider, type AgentProvider } from '@ai-devflow/shared'
 import { createAgentProviderNativeCodingV2DecisionProvider } from './native-coding-executor-v2.js'
 
-describe('Agent Provider Native Coding v2 boundary', () => {
+describe('Agent Provider DevFlow Native v2 boundary', () => {
   it.each([{ mode: 'disabled' as const }, { mode: 'enabled' as const, effort: 'low' as const }])('inherits saved $mode thinking in actual Native requests and trace metadata', async (thinking) => {
     let body: Record<string, unknown> = {}
     const provider = createOpenAiCompatibleAgentProvider({ model: 'deepseek-v4-flash', baseUrl: 'https://api.deepseek.com', apiKey: 'fixture', thinking,

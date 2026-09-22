@@ -65,7 +65,7 @@ function buildRun(): WorkflowRun {
   }
 }
 
-describe('Native Coding Executor', () => {
+describe('DevFlow Native Executor', () => {
   it('adapts an explicitly configured bounded model provider with metered usage', async () => {
     const completeStructuredJson = vi.fn(async (_input: {
       systemPrompt: string
@@ -149,7 +149,7 @@ describe('Native Coding Executor', () => {
         truncated: false,
       },
       maxOutputTokens: 1_024,
-    })).rejects.toThrow('Configured Native Coding Agent Provider did not return exact token usage')
+    })).rejects.toThrow('Configured Provider for DevFlow Native did not return exact token usage')
   })
 
   it('persists one bounded read before returning a single edit permission with zero workspace writes', async () => {
@@ -168,7 +168,7 @@ describe('Native Coding Executor', () => {
     )
     await execFileAsync('git', ['-C', worktreePath, 'init', '-b', 'main'])
     await execFileAsync('git', ['-C', worktreePath, 'config', 'user.email', 'native@example.invalid'])
-    await execFileAsync('git', ['-C', worktreePath, 'config', 'user.name', 'Native Coding Test'])
+    await execFileAsync('git', ['-C', worktreePath, 'config', 'user.name', 'DevFlow Native Test'])
     await execFileAsync('git', ['-C', worktreePath, 'add', 'package.json'])
     await execFileAsync('git', ['-C', worktreePath, 'commit', '-m', 'baseline'])
     const store = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
@@ -208,7 +208,7 @@ describe('Native Coding Executor', () => {
             stateVersion: 1 as const,
             edit: {
               path: 'devflow-native-change.txt',
-              content: 'Approved Native Coding repair.\n',
+              content: 'Approved DevFlow Native repair.\n',
             },
             summary: 'Add the bounded native repair marker from the observation.',
           },
@@ -371,7 +371,7 @@ describe('Native Coding Executor', () => {
         project,
         now: '2026-08-12T21:00:05.000Z',
       },
-    })).rejects.toThrow('Native Coding permission continuation is stale')
+    })).rejects.toThrow('DevFlow Native permission continuation is stale')
     await expect(readFile(path.join(worktreePath, 'devflow-native-change.txt'), 'utf8'))
       .rejects.toMatchObject({ code: 'ENOENT' })
     const runSavedTest = vi.fn(async () => ({
@@ -501,7 +501,7 @@ describe('Native Coding Executor', () => {
       },
     })
     expect(await readFile(path.join(worktreePath, 'devflow-native-change.txt'), 'utf8')).toBe(
-      'Approved Native Coding repair.\n',
+      'Approved DevFlow Native repair.\n',
     )
     const durableAudits = (await store.listAgentRuntimeToolAudits(runtime!.id)).map((audit) => [
       audit.toolId,

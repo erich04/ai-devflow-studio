@@ -112,7 +112,7 @@ export async function runMemoryContextLiveSmoke(input: { provider: AgentProvider
     assert.ok(observations.slice(2, 4).every((entry) => entry.containsMemory))
     assert.ok(observations.slice(4).every((entry) => !entry.containsMemory))
     assert.ok(observations.every((entry) => entry.containsInstruction))
-    const report = { passed: true, provider: { id: input.provider.id, model: input.provider.model }, results, completedAt: now(), scope: 'Real Native Coding Provider, local Store, managed worktrees, saved tests, Memory promotion/revision/deletion and evidence evaluation. No cloud deployment or UI acceptance claimed.' }
+    const report = { passed: true, provider: { id: input.provider.id, model: input.provider.model }, results, completedAt: now(), scope: 'Real DevFlow Native Provider, local Store, managed worktrees, saved tests, Memory promotion/revision/deletion and evidence evaluation. No cloud deployment or UI acceptance claimed.' }
     await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
     return report
   } finally { store.close() }

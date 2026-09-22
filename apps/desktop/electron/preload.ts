@@ -68,6 +68,7 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.reviseAgentMemory, input),
   deleteAgentMemory: (input) =>
     ipcRenderer.invoke(ipcChannels.deleteAgentMemory, input),
+  cancelWorkflowAgentNode: (input) => ipcRenderer.invoke(ipcChannels.cancelWorkflowAgentNode, input),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
   requestClarificationChanges: (input) =>

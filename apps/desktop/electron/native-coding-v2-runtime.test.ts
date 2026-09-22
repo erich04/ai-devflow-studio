@@ -40,7 +40,7 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   return directory
 }
 
-describe('Native Coding Executor v2 runtime', () => {
+describe('DevFlow Native Executor v2 runtime', () => {
   it('binds repair output to the exact previously approved paths and JSON schema', () => {
     const prompt = createNativeCodingV2RepairSystemPrompt([
       'src/agent/contracts.ts',

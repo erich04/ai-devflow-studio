@@ -220,6 +220,7 @@ export const ipcChannels = {
   reviseAgentMemory: 'devflow:agent-memory:revise',
   deleteAgentMemory: 'devflow:agent-memory:delete',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
+  cancelWorkflowAgentNode: 'devflow:workflow-agent-node:cancel',
   requestClarificationChanges: 'devflow:clarification:changes:request',
   createPrDraft: 'devflow:pr-draft:create',
   prepareGitHubDelivery: 'devflow:github-delivery:prepare',
@@ -695,6 +696,7 @@ export type DevFlowDesktopApi = {
   deleteAgentMemory: (
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
+  cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
   createPrDraft: (input: CreatePrDraftInput) => Promise<CreatePrDraftResult>
@@ -1303,6 +1305,15 @@ export function parseDeleteAgentMemoryInput(value: unknown): DeleteAgentMemoryIn
     expectedHeadVersion: readExactPositiveVersion(value, 'expectedHeadVersion'),
     expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
     expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
+  }
+}
+
+export function parseCancelWorkflowAgentNodeInput(value: unknown): { runId: string; nodeId: string } {
+  if (!isRecord(value)) throw new Error('Invalid cancel workflow agent node payload')
+  rejectUnexpectedFields(value, ['runId', 'nodeId'], 'cancel workflow agent node payload')
+  return {
+    runId: readExactRequiredIdentifier(value, 'runId'),
+    nodeId: readExactRequiredIdentifier(value, 'nodeId'),
   }
 }
 

@@ -111,6 +111,7 @@ export function useDesktopActions(input: {
   canVerifyGitHubDeliveryRevocation?: boolean
   gateEnforcementDecision: GateEnforcementDecision | null
   stageAgentExecutorKind?: StageAgentExecutorKind
+  stageProviderId?: string
   applyLocalExecutionState: (state: import('@ai-devflow/shared').LocalExecutionState) => void
   onRemoteTeamSynced?: () => Promise<PolicySnapshot | null>
 }) {
@@ -476,8 +477,9 @@ export function useDesktopActions(input: {
       setToast(browserPreviewWorkflowWriteMessage)
       return
     }
-    const executor = selectedNode.stage === 'clarify' ? stageAgentExecutorKind : 'direct-provider'
-    if (executor === 'direct-provider' && !selectedAgentProviderId) {
+    const executor = stageAgentExecutorKind
+    const providerId = input.stageProviderId ?? selectedAgentProviderId
+    if (!providerId) {
       setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider Name、Base URL、Model 和 API Key')
       return
     }
@@ -497,9 +499,7 @@ export function useDesktopActions(input: {
         userId: currentUser.id,
         userName: currentUser.name,
         executor,
-        ...(executor === 'direct-provider'
-          ? { providerId: selectedAgentProviderId }
-          : {}),
+        providerId,
       })
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.run.id)

@@ -179,7 +179,7 @@ function createManagedOpencodeRunner(input: {
       const session = await createOpencodeSession({
         baseUrl: server.baseUrl,
         directory,
-        title: 'DevFlow read-only requirement clarification',
+        title: 'DevFlow read-only workflow analysis',
         model: { providerID: input.providerId, id: input.modelId },
         permissionRules: createReadOnlyStageAgentPermissionRules(),
         signal,

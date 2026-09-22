@@ -211,7 +211,7 @@ function runInput(fixture: Awaited<ReturnType<typeof createFixture>>) {
   }
 }
 
-describe('Native Coding v2 persistent Provider call Trace', () => {
+describe('DevFlow Native v2 persistent Provider call Trace', () => {
   it('recovers previously unaccounted failed responses once without calling the model or advancing the workflow', async () => {
     let calls = 0
     const baseUrl = await startCompatibleServer((_request, response) => {
