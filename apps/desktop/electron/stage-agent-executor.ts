@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { readFile, realpath } from 'node:fs/promises'
 import path from 'node:path'
@@ -45,6 +45,7 @@ export function buildReadOnlyStageAgentRuntimeEnv(
 }
 
 type ManagedOpencodeProcessManager = {
+  stopProject(projectId: string): Promise<void>
   ensure(input: {
     projectId: string
     binaryPath: string
@@ -100,7 +101,8 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
       let reportedUsage: AgentProviderUsage | null | undefined
       try {
         const runner = input.runner ?? createManagedOpencodeRunner({
-          projectId: input.projectId,
+          // A stage's model/profile must never replace a Coding or another stage's process.
+          projectId: `stage:${input.projectId}:${randomUUID()}`,
           binaryPath: input.binaryPath,
           providerId: input.providerId,
           modelId: input.modelId,
@@ -169,8 +171,9 @@ function createManagedOpencodeRunner(input: {
 }): ReadOnlyStageAgentRunner {
   return async ({ prompt, directory, signal }) => {
     let sessionId: string | undefined
+    let server: ManagedOpencodeServer | undefined
     try {
-      const server = await input.processManager.ensure({
+      server = await input.processManager.ensure({
         projectId: input.projectId,
         binaryPath: input.binaryPath,
         env: input.runtimeEnv,
@@ -204,20 +207,16 @@ function createManagedOpencodeRunner(input: {
         diffCount: diffs.length,
       }
     } catch (error) {
-      if (signal.aborted && sessionId) {
+      if (signal.aborted && sessionId && server) {
         try {
-          const server = await input.processManager.ensure({
-            projectId: input.projectId,
-            binaryPath: input.binaryPath,
-            env: input.runtimeEnv,
-            configurationFingerprint: readOnlyStageAgentConfigurationFingerprint(input),
-          })
           await abortOpencodeSession({ baseUrl: server.baseUrl, sessionId, directory })
         } catch {
           // The original terminal reason remains authoritative.
         }
       }
       throw error
+    } finally {
+      await input.processManager.stopProject(input.projectId)
     }
   }
 }

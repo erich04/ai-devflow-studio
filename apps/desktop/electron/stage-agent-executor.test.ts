@@ -39,7 +39,7 @@ function executor(root: string, runner: Parameters<typeof createReadOnlyLocalSta
     providerId: 'provider-1',
     modelId: 'model-1',
     detectedVersion: '1.0.0',
-    processManager: { ensure: async () => { throw new Error('not used') } },
+    processManager: { ensure: async () => { throw new Error('not used') }, stopProject: async () => {} },
     runtimeEnv: {},
     ...(runner ? { runner } : {}),
   })

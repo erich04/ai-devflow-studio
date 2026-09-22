@@ -66,7 +66,9 @@ that node. Choices apply to the current generation and default to Direct Provide
 node. Electron Main resolves the repository, discovers the compatible local OpenCode binary, and
 binds the selected saved Provider without saving or changing `CodingRuntimeConfiguration`. Older
 clarification clients without an explicit Provider retain their confirmed project OpenCode profile;
-design requires an explicit saved Provider. Chat remains independently configured.
+design requires an explicit saved Provider. Chat remains independently configured. Every local stage
+execution owns a separate managed process scope, released at completion/cancellation. A different
+model in another Run cannot replace its process or interrupt an implementation session.
 
 Before either design executor runs, the successful Requirement Gate must uniquely reference a
 same-Run clarification from its clarification node. Tracked revisions must be approved, bound to the

@@ -78,13 +78,14 @@ try {
     id: 'conversation-proposal-design-contract', nodeId: node.id, kind: 'log' as const, content: 'DESIGN_PROPOSAL_MARKER: no counts.' }]
   const address = server.address()
   assert(address && typeof address !== 'string')
-  const executor = createReadOnlyLocalStageAgentExecutor({ projectId: run.projectId, projectPath: repository,
-    binaryPath: process.env.DEVFLOW_OPENCODE_BIN || 'opencode', providerId: 'design-fixture', modelId: 'contract-model',
+  const makeExecutor = (modelId = 'contract-model') => createReadOnlyLocalStageAgentExecutor({ projectId: run.projectId, projectPath: repository,
+    binaryPath: process.env.DEVFLOW_OPENCODE_BIN || 'opencode', providerId: 'design-fixture', modelId,
     detectedVersion: 'contract', processManager: manager,
     runtimeEnv: { PATH: process.env.PATH, HOME: root, XDG_CONFIG_HOME: path.join(root, 'config'),
       XDG_DATA_HOME: path.join(root, 'data'), XDG_CACHE_HOME: path.join(root, 'cache'), OPENCODE_DISABLE_AUTOUPDATE: 'true' },
-    providerBinding: { providerId: 'design-fixture', modelId: 'contract-model', apiKey: 'synthetic-not-billed', fingerprint: 'design-contract', baseUrl: `http://127.0.0.1:${address.port}/v1` },
+    providerBinding: { providerId: 'design-fixture', modelId, apiKey: 'synthetic-not-billed', fingerprint: 'design-contract', baseUrl: `http://127.0.0.1:${address.port}/v1` },
   })
+  const executor = makeExecutor()
   const result = await runWorkflowStageAgent({ run, node, artifacts, executor, requestedBy: 'fixture', runtime: 'electron' })
   assert(requests.some((item) => item.tools.includes('read')))
   for (const marker of ['RAW_BODY_MARKER', 'DESIGN_PROPOSAL_MARKER', 'APPROVED_CLARIFICATION_INPUT']) {
@@ -110,6 +111,13 @@ try {
   const controller = new AbortController()
   const pending = runWorkflowStageAgent({ run, node, artifacts, executor, requestedBy: 'fixture', runtime: 'electron', signal: controller.signal })
   await Promise.race([held, new Promise((_, reject) => { const timer = setTimeout(() => reject(new Error('Cancel fixture never reached Provider')), 30_000); timer.unref() })])
+  let earlyFailure: unknown
+  void pending.catch((error: unknown) => { earlyFailure = error })
+  hold = false
+  const independent = await runWorkflowStageAgent({ run, node, artifacts, executor: makeExecutor('another-model'),
+    requestedBy: 'fixture', runtime: 'electron' })
+  assert.equal(independent.artifact.designEvidence?.executor.model, 'another-model')
+  assert.equal(earlyFailure, undefined, 'Changing another stage model interrupted the held operation')
   controller.abort()
   await assert.rejects(pending, { terminalReason: 'cancelled' })
   assert.equal((await restarted.getRun(run.id))?.currentNodeId, completed.nextNode.id)
@@ -122,7 +130,7 @@ try {
   console.log(JSON.stringify({ passed: true, realOpenCode: true, provider: 'local synthetic / no paid model',
     providerRequests: requests.length, readCitations: result.artifact.designEvidence?.repositoryFindings?.citations.length,
     repositoryUnchanged: true, restartEvidencePreserved: true, codingConfigurationUnchanged: true,
-    stoppedAtReviewGate: true, cancellation: 'cancelled without artifact or workflow transition' }, null, 2))
+    stoppedAtReviewGate: true, concurrentModelIsolation: true, cancellation: 'cancelled without artifact or workflow transition' }, null, 2))
 } finally {
   await manager.stopAll()
   server.closeAllConnections()

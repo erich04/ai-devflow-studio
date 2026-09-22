@@ -30,7 +30,8 @@ Issues: #156, #157, #158. #135 remains deferred for signed macOS installation ac
   rejection, and read-only repository/permission checks for both clarification and design.
 - `corepack pnpm test:stage-agent-design-contract`: real OpenCode 1.18.15 with a local synthetic
   OpenAI-compatible streaming service. It read `task.ts`, supplied complete approved inputs,
-  produced a digest-backed citation, left Git/file contents unchanged, and cancelled a held request.
+  produced a digest-backed citation, left Git/file contents unchanged, ran a second model concurrently
+  without interrupting the held operation, and cancelled only that held request.
 - `corepack pnpm test:stage-agent-design-electron`: isolated real Electron Main/preload/renderer,
   real OpenCode and the same synthetic service. Verified UI selection, cancellation before any design
   artifact, explicit retry, one design artifact, unchanged Coding configuration, human review still
