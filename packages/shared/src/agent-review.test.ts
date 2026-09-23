@@ -106,7 +106,7 @@ describe('Knowledge Review cost preflight', () => {
     const input = {
       request,
       context,
-      provider: { id: 'team-openai', model: 'gpt-4.1-mini' },
+      provider: { id: 'team-openai', model: 'gpt-4.1-mini', reviewOutputLimit: 4096 },
     }
 
     const preflight = estimateKnowledgeReviewCostPreflight(input)
@@ -118,7 +118,7 @@ describe('Knowledge Review cost preflight', () => {
       providerId: 'team-openai',
       model: 'gpt-4.1-mini',
       prompt: createKnowledgeReviewPrompt(context),
-      maxOutputTokens: 2_048,
+      maxOutputTokens: 4_096,
       noCost: false,
     })
     expect(preflight.inputTokens).toBeGreaterThan(0)
@@ -149,7 +149,7 @@ describe('Knowledge Review cost preflight', () => {
     })
 
     expect(preflight.noCost).toBe(false)
-    expect(preflight.projectedCostUsd).toBeGreaterThan(0)
+    expect(preflight.costEstimateStatus).toBe('unknown')
   })
 })
 
@@ -290,6 +290,7 @@ describe('runBudgetedKnowledgeReviewAgent', () => {
     expect(Object.keys(guardInput).sort()).toEqual([
       'approvalId',
       'projectId',
+      'projectedCostKnown',
       'projectedCostUsd',
       'providerId',
       'requestedBy',
@@ -892,7 +893,7 @@ describe('runKnowledgeReviewAgent', () => {
       provider: createOpenAiCompatibleAgentProvider({
         model: 'test-review-model', apiKey: 'test-only-key',
         fetcher: async () => new Response(JSON.stringify({
-          choices: [{ message: { content: JSON.stringify({
+          choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
             conclusion: 'ready', summary: 'No changes required.',
             risks: [], missingEvidence: [], suggestedTests: [],
             policyFindings: findings, confidence: 1,
@@ -1267,7 +1268,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     }
   })
 
-  it('caps Knowledge Review output tokens before calling a real compatible provider', async () => {
+  it('uses the provider default output allowance without adding max_tokens', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
       model: 'ark-code-latest',
@@ -1278,6 +1279,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           JSON.stringify({
             choices: [
               {
+                finish_reason: 'stop',
                 message: {
                   content: JSON.stringify({
                     conclusion: 'ok',
@@ -1321,7 +1323,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       prompt: createKnowledgeReviewPrompt(context),
     })
 
-    expect(requestBody).toMatchObject({ max_tokens: 2_048 })
+    expect(requestBody).not.toHaveProperty('max_tokens')
     expect(JSON.stringify(requestBody)).toContain('REQUEST_PROVIDER_CANARY')
     expect(JSON.stringify(requestBody)).toContain('PROVIDER_BODY_ONLY_CANARY')
   })
@@ -1338,6 +1340,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         return new Response(
           JSON.stringify({
             choices: [{
+              finish_reason: 'stop',
               message: {
                 content: JSON.stringify({
                   conclusion: 'ok',
@@ -1394,6 +1397,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           JSON.stringify({
             choices: [
               {
+                finish_reason: 'stop',
                 message: {
                   content: JSON.stringify({
                     conclusion: 'ok',
@@ -1452,6 +1456,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           JSON.stringify({
             choices: [
               {
+                finish_reason: 'stop',
                 message: {
                   content:
                     '```json\n{"conclusion":"ok","summary":"wrapped","risks":[],"missingEvidence":[],"suggestedTests":[],"confidence":0.7}\n```',
@@ -1499,6 +1504,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           JSON.stringify({
             choices: [
               {
+                finish_reason: 'stop',
                 message: {
                   content: JSON.stringify({
                     title: '需求澄清结果',
@@ -1577,6 +1583,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
         return new Response(JSON.stringify({
           choices: [{
+            finish_reason: 'stop',
             message: {
               content: JSON.stringify({
                 title: '方案设计',
@@ -1636,6 +1643,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
           JSON.stringify({
             choices: [
               {
+                finish_reason: 'stop',
                 message: {
                   content: JSON.stringify({
                     conclusion: { status: 'needs_changes' },
@@ -1732,7 +1740,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
         }),
         prompt: 'Return a review.',
       }),
-    ).rejects.toThrow('Agent provider failed with 400')
+    ).rejects.toThrow('HTTP 400')
     await expect(
       provider.reviewKnowledge({
         request: {
@@ -1763,7 +1771,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       pull(controller) {
         pulls += 1
         controller.enqueue(new Uint8Array(16 * 1_024).fill(120))
-        if (pulls === 8) controller.close()
+        if (pulls === 256) controller.close()
       },
       cancel() {
         cancelled = true

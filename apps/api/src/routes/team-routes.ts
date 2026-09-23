@@ -1,3 +1,4 @@
+import { parseModelCallQuote, parseModelCallSettlement, governAgentProvider } from '@ai-devflow/shared'
 import { EnforcementPolicyConflictError } from '../repositories/enforcement-policy-write'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
@@ -34,6 +35,9 @@ import {
   redactSensitiveText,
   resolveEffectivePolicy,
   runBudgetedKnowledgeReviewAgent,
+  reviewProviderCapabilities,
+  describeAgentProviderFailure,
+  AgentProviderRequestError,
   validateEnforcementPolicy,
   type ProviderCredentialMetadata,
   type RemoteAgentReviewSummary,
@@ -90,6 +94,8 @@ export type ApiRouteResult = {
 }
 
 export type ResolveTeamRouteOptions = {
+  signal?: AbortSignal
+
   auth?: {
     sessionSecret: string
     createState?: () => string
@@ -150,6 +156,7 @@ type RuntimeBudgetEvaluateInput = {
   projectId: string
   providerId: string
   projectedCostUsd: number
+  projectedCostKnown?: boolean
   approvalId?: string
 }
 
@@ -312,6 +319,7 @@ function parseRuntimeBudgetEvaluateInput(value: unknown): RuntimeBudgetEvaluateI
     projectId: readRequiredString(value, 'projectId'),
     providerId: readRequiredString(value, 'providerId'),
     projectedCostUsd: readRequiredNumber(value, 'projectedCostUsd'),
+    ...(typeof value.projectedCostKnown === 'boolean' ? { projectedCostKnown: value.projectedCostKnown } : {}),
     ...(typeof approvalId === 'string' && approvalId.trim() ? { approvalId: approvalId.trim() } : {}),
   }
 }
@@ -1206,6 +1214,30 @@ export async function resolveTeamRoute(
     }
   }
 
+  if(method==='POST' && pathname==='/api/runtime/model-calls/history') {
+    if(!options.session)return unauthorized()
+    try {
+      const body=options.body as {quote:unknown;settlement:unknown}
+      const quote=parseModelCallQuote(body.quote), settlement=parseModelCallSettlement(body.settlement)
+      if(!canSyncProject(options.session,quote.projectId,'member'))return forbidden('Project role member required')
+      if(!quote.id.startsWith('legacy-chat-') || quote.id!==settlement.id || quote.projectId!==settlement.projectId || quote.approvalId || Date.parse(quote.createdAt)>Date.now())return badRequest('Invalid historical usage')
+      await repository.importHistoricalModelCall({quote,settlement},options.session)
+      return {status:200,body:{accepted:true}}
+    }catch(error){return badRequest(error instanceof Error?error.message:'Invalid historical usage')}
+  }
+
+  if (method === 'POST' && (pathname === '/api/runtime/model-calls/reserve' || pathname === '/api/runtime/model-calls/settle')) {
+    if (!options.session) return unauthorized()
+    try {
+      const reserve=pathname.endsWith('/reserve')
+      const input=reserve ? parseModelCallQuote(options.body) : parseModelCallSettlement(options.body)
+      if (!canSyncProject(options.session,input.projectId,'member')) return forbidden('Project role member required')
+      if (reserve) return {status:200,body:await repository.reserveModelCall({...parseModelCallQuote(input),createdAt:new Date().toISOString()},options.session)}
+      await repository.settleModelCall(parseModelCallSettlement(input),options.session)
+      return {status:200,body:{accepted:true}}
+    } catch(error) { return badRequest(error instanceof Error ? error.message : 'Model call budget unavailable') }
+  }
+
   if (method === 'POST' && pathname === '/api/runtime/budget/evaluate') {
     if (!options.session) {
       return unauthorized()
@@ -1224,9 +1256,9 @@ export async function resolveTeamRoute(
       repository.getRuntimeBudgetPolicy(input.projectId, options.session),
       repository.listRuntimeBudgetApprovals({ projectId: input.projectId }, options.session),
     ])
-    const projectCost = overview.projectCost.find((rollup) => rollup.key === input.projectId)
+    const projectCost = (overview.budgetProjectCost ?? overview.projectCost).find((rollup) => rollup.key === input.projectId)
     const currentSpendUsd = projectCost?.costUsd ?? 0
-    if ((projectCost?.unknownCostCount ?? 0) > 0) {
+    if (policy?.enabled && (projectCost?.unknownCostCount ?? 0) > 0) {
       return {
         status: 200,
         body: {
@@ -1234,7 +1266,7 @@ export async function resolveTeamRoute(
           blocksRun: true,
           currentSpendUsd,
           projectedCostUsd: input.projectedCostUsd,
-          reason: 'Runtime budget cannot be evaluated while actual provider cost is unknown.',
+          reason: '有模型调用的实际费用尚未确认，请先核对用量；不能按零费用放行。',
         } satisfies BudgetGuardDecision,
       }
     }
@@ -1250,6 +1282,7 @@ export async function resolveTeamRoute(
         policy,
         currentSpendUsd,
         projectedCostUsd: input.projectedCostUsd,
+        ...(input.projectedCostKnown === undefined ? {} : { projectedCostKnown: input.projectedCostKnown }),
         requestedBy: options.session.userId,
         approval,
         now: new Date().toISOString(),
@@ -1454,22 +1487,29 @@ export async function resolveTeamRoute(
             id: configuredProvider.id,
             name: configuredProvider.name,
             model: configuredProvider.model,
+            ...reviewProviderCapabilities(configuredProvider),
             async reviewKnowledge(providerInput) {
               const credential = await repository.getAgentProviderCredential(providerId, options.session!)
               if (!credential) {
-                throw new Error(`Agent provider credential not found: ${providerId}`)
+                throw new AgentProviderRequestError({code:'unknown_provider_failure',sanitizedCause:'credential_unavailable',deliveryState:'not_sent',billingState:'not_incurred',retryable:true})
               }
               if (credential.metadata.model !== configuredProvider.model) {
-                throw new Error('Agent provider changed after the budget preflight. Retry the review.')
+                throw new AgentProviderRequestError({code:'unknown_provider_failure',sanitizedCause:'provider_configuration_changed',deliveryState:'not_sent',billingState:'not_incurred',retryable:true})
               }
 
-              return createOpenAiCompatibleAgentProvider({
+              return governAgentProvider(createOpenAiCompatibleAgentProvider({
                 id: credential.metadata.providerId,
                 name: 'OpenAI Compatible',
                 model: credential.metadata.model,
                 ...(credential.metadata.baseUrl ? { baseUrl: credential.metadata.baseUrl } : {}),
                 apiKey: decryptAgentCredential(credential.encryptedSecret),
-              }).reviewKnowledge(providerInput)
+                ...(credential.metadata.thinking ? { thinking: credential.metadata.thinking } : {}),
+              }),input.projectId,{
+                pending: (projectId) => repository.listPendingModelCallSettlements(projectId, options.session!),
+                persist: (settlement) => repository.persistModelCallSettlement(settlement, options.session!),
+                reserve: (quote) => repository.reserveModelCall(quote, options.session!),
+                settle: (settlement) => repository.settleModelCall(settlement, options.session!),
+              },input.runtimeBudgetApprovalId).reviewKnowledge(providerInput)
             },
           }
         })()
@@ -1511,7 +1551,7 @@ export async function resolveTeamRoute(
       }
     }
     const request = {
-      id: `api-review-request-${Date.now()}`,
+      id: `api-review-request-${randomUUID()}`,
       runId: run.id,
       nodeId: node.id,
       projectId: run.projectId,
@@ -1519,7 +1559,14 @@ export async function resolveTeamRoute(
       runtime: 'api' as const,
       providerId,
     }
-    const result = await runBudgetedKnowledgeReviewAgent({
+    let result
+    try {
+      for (const settlement of await repository.listPendingModelCallSettlements(input.projectId, options.session)) {
+        await repository.settleModelCall(settlement, options.session)
+      }
+      result = await runBudgetedKnowledgeReviewAgent({
+      ...(options.signal ? { signal: options.signal } : {}),
+      onAttemptUsage: (usage) => repository.saveAgentAttemptUsage(usage, options.session!),
       request,
       context,
       provider,
@@ -1534,9 +1581,9 @@ export async function resolveTeamRoute(
             options.session!,
           ),
         ])
-        const projectCost = overview.projectCost.find((rollup) => rollup.key === budgetInput.projectId)
+        const projectCost = (overview.budgetProjectCost ?? overview.projectCost).find((rollup) => rollup.key === budgetInput.projectId)
         const currentSpendUsd = projectCost?.costUsd ?? 0
-        if (projectCost?.unknownCostCount) return {
+        if (policy?.enabled && projectCost?.unknownCostCount) return {
           status: 'unavailable', blocksRun: true, currentSpendUsd, projectedCostUsd: budgetInput.projectedCostUsd,
           reason: '预算数据不完整：已有调用金额待确认。',
         }
@@ -1547,6 +1594,7 @@ export async function resolveTeamRoute(
           policy,
           currentSpendUsd,
           projectedCostUsd: budgetInput.projectedCostUsd,
+          ...(budgetInput.projectedCostKnown === undefined ? {} : { projectedCostKnown: budgetInput.projectedCostKnown }),
           requestedBy: budgetInput.requestedBy,
           approval: budgetInput.approvalId
             ? approvals.find((candidate) => candidate.id === budgetInput.approvalId) ?? null
@@ -1555,6 +1603,14 @@ export async function resolveTeamRoute(
         })
       },
     })
+    } catch (error) {
+      const message = describeAgentProviderFailure(error)
+      await repository.saveAgentEvent({ id: `event-${request.id}-error`, runId: run.id, nodeId: node.id,
+        sequence: bundle.events.filter((event) => event.runId === run.id).length + 1, kind: 'error', timestamp: new Date().toISOString(),
+        message: `${message} ${JSON.stringify({ requestId: request.id, ...(error instanceof AgentProviderRequestError ? { code: error.code, cause: error.sanitizedCause, billingState: error.billingState, ...error.responseMetadata } : {}) })}`,
+      }, options.session)
+      return { status: options.signal?.aborted ? 499 : 502, body: { error: options.signal?.aborted ? 'review_cancelled' : 'review_provider_failed', message, requestId: request.id } }
+    }
 
     if (result.status === 'blocked') {
       const budgetDecision = {
@@ -1594,6 +1650,7 @@ export async function resolveTeamRoute(
       }
     }
 
+    if (options.signal?.aborted) return { status: 499, body: { error: 'review_cancelled', message: '请求已取消；已记录发生的用量，未保存新审查。' } }
     const artifactAndEvent = createAgentReviewArtifacts(result.execution)
     const event = {
       ...artifactAndEvent.event,

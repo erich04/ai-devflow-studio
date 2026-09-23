@@ -222,6 +222,7 @@ function providerCallSettlementToSummary(
     costUsd: settlement.costUsd,
     pricingSnapshot: settlement.pricingSnapshot,
     breakdown: settlement.breakdown,
+    ...(settlement.budgetAttemptIds ? {budgetAttemptIds:settlement.budgetAttemptIds} : {}),
     timestamp: settlement.timestamp,
     source: settlement.source,
     redacted: true,

@@ -275,7 +275,7 @@ export function useDesktopActions(input: {
     }
 
     void desktopApi.saveSettings({ themePreference: nextPreference }).catch((error: unknown) => {
-      setToast(error instanceof Error ? error.message : '保存主题偏好失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存主题偏好失败')
     })
   }
 
@@ -449,7 +449,7 @@ export function useDesktopActions(input: {
             : `${displayNodeTitle(selectedNode)} 已通过，流程已推进`,
       )
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存 Gate 审批失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存 Gate 审批失败')
     } finally {
       clearPendingInspectorAction(pending)
     }
@@ -509,7 +509,7 @@ export function useDesktopActions(input: {
     } catch (error) {
       // Failed output can still incur real usage; reload the Main-process audit before displaying it.
       try { applyLocalExecutionState(await desktopApi.loadState()) } catch { /* Keep the original failure visible. */ }
-      setToast(error instanceof Error ? error.message : '生成阶段产物失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '生成阶段产物失败')
     } finally {
       clearPendingInspectorAction(pending)
     }
@@ -553,7 +553,7 @@ export function useDesktopActions(input: {
       setSelectedNodeId(result.run.currentNodeId)
       setToast(`已请求修订 Clarification v${metadata.revision}，流程返回需求澄清`)
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '提交澄清修订意见失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '提交澄清修订意见失败')
     } finally {
       clearPendingInspectorAction(pending)
     }
@@ -577,7 +577,7 @@ export function useDesktopActions(input: {
       setTestCommandDraft(project.testCommand)
       setToast(`已连接本地仓库：${project.name}`)
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '选择本地仓库失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '选择本地仓库失败')
     }
   }
 
@@ -612,7 +612,7 @@ export function useDesktopActions(input: {
       setSelectedLocalProjectId(project.id)
       setToast(safety.level === 'warn' ? '测试命令已保存，运行前请确认风险提示' : '测试命令已保存')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存测试命令失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存测试命令失败')
     } finally {
       setIsSavingTestCommand(false)
     }
@@ -671,7 +671,7 @@ export function useDesktopActions(input: {
       setActiveView('tests')
       setToast(result.evidence.status === 'passed' ? '测试通过，证据已归档' : '测试失败，证据已归档')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '本地测试执行失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '本地测试执行失败')
     } finally {
       setIsRunningTests(false)
     }
@@ -724,7 +724,7 @@ export function useDesktopActions(input: {
       }
       setToast(`已保存并选择 Provider：${reviewProviderFromMetadata(metadata).name} · ${metadata.maskedCredential}`)
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存 Agent Provider 失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存 Agent Provider 失败')
     }
   }
 
@@ -766,7 +766,7 @@ export function useDesktopActions(input: {
       setActiveView('agents')
       setToast('基于知识的门禁审查已归档，Gate Advisory 已生成')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '基于知识的门禁审查运行失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '基于知识的门禁审查运行失败')
     } finally {
       reviewInFlight.current = false
       setIsRunningAgentReview(false)
@@ -812,7 +812,7 @@ export function useDesktopActions(input: {
       setActiveView('agents')
       setToast('Coding Agent 已请求权限，请在 Agents 视图批准或拒绝')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : 'Coding Agent 启动失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'Coding Agent 启动失败')
     } finally {
       setIsStartingCodingAgent(false)
     }
@@ -853,7 +853,7 @@ export function useDesktopActions(input: {
       setActiveView('agents')
       setToast('Remediation retry 已启动，请在 Agents 视图处理权限请求')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : 'Remediation retry 启动失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'Remediation retry 启动失败')
     } finally {
       setIsStartingCodingAgent(false)
     }
@@ -884,7 +884,7 @@ export function useDesktopActions(input: {
             : 'Coding Agent 权限已拒绝',
       )
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '权限回复失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '权限回复失败')
     }
   }
 
@@ -898,7 +898,7 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(await desktopApi.loadState())
       setToast('已重新核验，请审查新的权限请求。此操作尚未批准执行。')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '无法恢复审批，工作区仍保留')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '无法恢复审批，工作区仍保留')
     }
   }
 
@@ -912,7 +912,7 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(await desktopApi.loadState())
       setToast('Coding Agent Run 已中断')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '中断 Coding Agent 失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '中断 Coding Agent 失败')
     }
   }
 
@@ -925,7 +925,7 @@ export function useDesktopActions(input: {
       await desktopApi.openManagedWorktree({ workspaceId: selectedManagedWorkspace.id })
       setToast('Managed worktree 已打开')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '打开 managed worktree 失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '打开 managed worktree 失败')
     }
   }
 
@@ -939,7 +939,7 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(await desktopApi.loadState())
       setToast('Managed worktree 已删除')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '删除 managed worktree 失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '删除 managed worktree 失败')
     }
   }
 
@@ -978,7 +978,7 @@ export function useDesktopActions(input: {
         setSelectedRunId(persistedRun.id)
         setSelectedNodeId(persistedRun.currentNodeId)
       } catch (error) {
-        setToast(error instanceof Error ? error.message : '保存新 Run 失败')
+        setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存新 Run 失败')
       }
       return
     }
@@ -1010,7 +1010,7 @@ export function useDesktopActions(input: {
       setToast(options.deleteRemote ? 'Run 已删除，远端和本地状态已刷新' : '本地 Run 已删除')
       return true
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '删除 Run 失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '删除 Run 失败')
       return false
     }
   }
@@ -1450,7 +1450,7 @@ export function useDesktopActions(input: {
       setSelectedNodeId(result.run.currentNodeId)
       setToast('验收证据包已生成')
     } catch (error) {
-      setToast(error instanceof Error ? error.message : '保存验收证据包失败')
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存验收证据包失败')
     } finally {
       clearPendingInspectorAction(pending)
     }
@@ -1464,7 +1464,7 @@ export function useDesktopActions(input: {
 
       if (desktopApi) {
         void desktopApi.saveMcpServers(updatedServers).catch((error: unknown) => {
-          setToast(error instanceof Error ? error.message : '保存 MCP 状态失败')
+          setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存 MCP 状态失败')
         })
       }
 

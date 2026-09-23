@@ -15,6 +15,7 @@ export type ConversationCitation = {
 export type ConversationDraft = ConversationTarget & {
   title: string
   content: string
+  inputReceipt?: import('./conversation-critical-context').CriticalContextReceipt
   publishedArtifactId?: string
 }
 export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string }

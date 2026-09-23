@@ -70,7 +70,7 @@ function readInspectorWidthBounds(splitter: HTMLDivElement): { min: number; max:
   const runList = layout.querySelector<HTMLElement>(':scope > .run-list')
   const runListWidth = runList?.getBoundingClientRect().width || readPixelValue(
     styles.getPropertyValue('--workbench-run-list-width'),
-    280,
+    layout.classList.contains('workspace-split') ? 0 : 280,
   )
   const splitterWidth = splitter.getBoundingClientRect().width || readPixelValue(
     styles.getPropertyValue('--workbench-splitter-width'),
@@ -177,14 +177,14 @@ export function WorkbenchSplitter({ initialWidth = WORKBENCH_INSPECTOR_DEFAULT_W
       className={`workbench-splitter ${isDragging ? 'is-dragging' : ''}`}
       data-testid="workbench-splitter"
       role="separator"
-      aria-label="调整 Workflow Board 与 Inspector 宽度"
+      aria-label="调整节点详情与会话宽度"
       aria-orientation="vertical"
       aria-valuemin={bounds.min}
       aria-valuemax={bounds.max}
       aria-valuenow={inspectorWidth}
-      aria-valuetext={`Inspector 宽度 ${inspectorWidth} 像素`}
+      aria-valuetext={`会话宽度 ${inspectorWidth} 像素`}
       tabIndex={0}
-      title="拖动调整 Inspector 宽度；也可使用左右方向键"
+      title="拖动调整会话宽度；也可使用左右方向键"
       onKeyDown={(event) => {
         const nextBounds = refreshBounds()
         if (event.key === 'ArrowLeft') {

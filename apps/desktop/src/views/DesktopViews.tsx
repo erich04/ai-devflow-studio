@@ -11,6 +11,8 @@ import {
   RefreshCw,
   Square,
 } from 'lucide-react'
+import { ArtifactBody } from '../components/ArtifactBody'
+import { GateMaterialReader } from '../components/GateMaterialReader'
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import {
@@ -122,12 +124,13 @@ export function WorkflowBoard({
   onSelectAttachment: (nodeId: string, tab: string) => void
   onDiscuss?: (node: WorkflowNode) => void
 }) {
-  const [boardView, setBoardView] = useState<'flow' | 'list'>('flow')
+  const [boardView, setBoardView] = useState<'compact' | 'flow' | 'list'>('compact')
   const board = useMemo(
     () => buildWorkflowBoard({ run, artifacts, events, testEvidence }),
     [artifacts, events, run, testEvidence],
   )
   const currentNode = run.nodes.find((node) => node.id === run.currentNodeId)
+  const browsingStage = run.nodes.find((node) => node.id === selectedNodeId)?.stage ?? currentNode?.stage
   const currentCardTone =
     currentNode?.status === 'success'
       ? 'passed'
@@ -143,16 +146,26 @@ export function WorkflowBoard({
           <span className="meta">当前 Run: {run.title}</span>
         </div>
         <div className="workflow-view-switch" role="group" aria-label="看板展示方式">
+          <button aria-pressed={boardView === 'compact'} onClick={() => setBoardView('compact')}>精简导航</button>
           <button aria-pressed={boardView === 'flow'} onClick={() => setBoardView('flow')}>流程视图</button>
           <button aria-pressed={boardView === 'list'} onClick={() => setBoardView('list')}>列表视图</button>
         </div>
       </div>
       <nav className="workflow-stage-navigation" aria-label="六阶段导航">
-        {board.map((stage) => <button key={stage.stage} className={`stage-nav--${stage.completionState}`} aria-current={currentNode?.stage === stage.stage ? 'step' : undefined} onClick={() => document.getElementById(`workflow-stage-${stage.stage}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'start' })}>
+        {board.map((stage) => <button key={stage.stage} className={`stage-nav--${stage.completionState}`} aria-current={currentNode?.stage === stage.stage ? 'step' : undefined} aria-pressed={browsingStage === stage.stage} onClick={() => {
+          const target = stage.cards.find((card) => card.node.id === run.currentNodeId) ?? stage.cards[0]
+          if (target) onSelectNode(target.node.id)
+        }}>
           <span>{stage.index}</span><strong>{stage.label}</strong><small>{stage.completionLabel}</small>
         </button>)}
       </nav>
-      <div className="workflow-context">
+      {boardView === 'compact' && <div className="workflow-node-navigation" aria-label="当前查看阶段的节点">
+        {board.find((stage) => stage.stage === browsingStage)?.cards.map((card) => <button key={card.node.id}
+          data-testid={`flow-node-${card.node.id}`} aria-pressed={card.node.id === selectedNodeId}
+          onClick={() => onSelectNode(card.node.id)}><strong>{displayNodeTitle(card.node)}</strong><span>{card.statusLabel}</span></button>)}
+        <span className="meta">{currentRunPhaseCopy(run)}</span>
+      </div>}
+      {boardView !== 'compact' && <><div className="workflow-context">
         <div className="flow-progress" aria-label="Run 流程进度">
           <div className="sequence-note">
             <strong>阶段主序列</strong>
@@ -254,12 +267,13 @@ export function WorkflowBoard({
             </div>
           </section>
         ))}
-      </div>
+      </div></>}
     </section>
   )
 }
 
 export function Inspector({
+  modelReadinessError,
   selectedRun,
   selectedNode,
   isSelectedCurrentNode,
@@ -322,6 +336,7 @@ export function Inspector({
   codingActionProjection,
   upstreamCodingDiffReady,
 }: {
+  modelReadinessError?: string | undefined
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
   isSelectedCurrentNode: boolean
@@ -385,6 +400,7 @@ export function Inspector({
   upstreamCodingDiffReady?: boolean
 }) {
   const [requestedTab, setRequestedTab] = useState('状态')
+  const [supportOpenForNode, setSupportOpenForNode] = useState<string | null>(null)
   const [clarificationFeedbackDraft, setClarificationFeedbackDraft] = useState('')
 
   useEffect(() => {
@@ -399,6 +415,7 @@ export function Inspector({
     }
 
     setRequestedTab(supportContext.inspectorTab)
+    setSupportOpenForNode(selectedNode.id)
     onConsumeSupportContext?.()
   }, [onConsumeSupportContext, selectedNode, selectedRun, supportContext])
 
@@ -615,7 +632,7 @@ export function Inspector({
       data-testid={action.testId}
       aria-label={actionAriaLabel(action)}
       aria-busy={pendingMatchesSelectedNode && pendingInspectorAction?.actionId === action.id ? true : undefined}
-      disabled={isActionDisabled(action)}
+      disabled={isActionDisabled(action) || (Boolean(modelReadinessError) && ['completeAgent','runCodingAgent'].includes(action.id))}
       key={action.id}
       title={actionTitle(action)}
       onClick={() => actionHandlers[action.id]()}
@@ -750,7 +767,7 @@ export function Inspector({
           >
             <strong>{artifact.title}</strong>
             <p>{artifact.summary}</p>
-            <code>{artifact.content}</code>
+            <ArtifactBody content={artifact.content} />
             {artifact.designEvidence ? <details><summary>设计输入与代码核验依据</summary>
               <p>已批准澄清：{artifact.designEvidence.clarification.artifactId} · {artifact.designEvidence.clarification.legacy ? '旧版已审批产物' : `第 ${artifact.designEvidence.clarification.revision} 版`}</p>
               <p>执行工具：{artifact.designEvidence.executor.kind === 'local-agent' ? 'OpenCode（只读分析）' : 'Direct Provider'} · 模型：{artifact.designEvidence.executor.model}</p>
@@ -1153,39 +1170,9 @@ export function Inspector({
       <p className={`empty-note ${clarificationReview.state === 'ready' ? '' : 'bad'}`}>
         {clarificationReview.message}
       </p>
-      <div className="clarification-review__comparison">
-        <article className="artifact-card" data-testid="clarification-raw-request">
-          <div className="compact-row"><strong>Raw Request</strong><span className="pill soft">immutable</span></div>
-          <p>{clarificationReview.rawRequest?.content ?? 'Raw Request 不可用'}</p>
-          {clarificationReview.rawRequest ? <code>{clarificationReview.rawRequest.id}</code> : null}
-        </article>
-        <article className="artifact-card" data-testid="clarification-repository-findings">
-          <div className="compact-row"><strong>Repository Findings</strong><span className="pill soft">read-only evidence</span></div>
-          {clarificationReview.repositoryFindings ? (
-            <>
-              {clarificationReview.repositoryFindings.verifiedFacts.map((fact) => (
-                <p key={fact.id}>{fact.statement}</p>
-              ))}
-              {clarificationReview.repositoryFindings.citations.map((citation) => (
-                <code key={citation.id}>{citation.path} · {citation.contentDigest}</code>
-              ))}
-              {clarificationReview.repositoryFindings.uncheckedScopes.length ? (
-                <p>未核验：{clarificationReview.repositoryFindings.uncheckedScopes.join('、')}</p>
-              ) : null}
-            </>
-          ) : <p>尚未进行代码核验。</p>}
-        </article>
-        <article className="artifact-card" data-testid="clarification-current-revision">
-          <div className="compact-row">
-            <strong>Clarification Revision</strong>
-            <span className="pill soft">
-              v{clarificationReview.activeRevision?.clarificationRevision?.revision ?? 'legacy'} · {clarificationReview.activeRevision?.clarificationRevision?.status ?? 'untracked'}
-            </span>
-          </div>
-          <p>{clarificationReview.activeRevision?.content ?? '当前版本不可用'}</p>
-          {clarificationReview.activeRevision ? <code>{clarificationReview.activeRevision.id}</code> : null}
-        </article>
-      </div>
+      <GateMaterialReader key={`${selectedNode.id}:${clarificationReview.activeRevision?.id}`} bundle={clarificationReview}
+        review={latestAgentReview} reports={nodeArtifacts} onFeedback={onRecordAgentReviewFeedback}
+        knowledge={renderKnowledgeReferences()} />
       {clarificationReview.revisions.length > 1 || clarificationReview.feedback.length ? (
         <details data-testid="clarification-revision-history">
           <summary>版本与修订意见历史</summary>
@@ -1198,7 +1185,7 @@ export function Inspector({
         </details>
       ) : null}
       {clarificationReview.state === 'ready' && clarificationReview.activeRevision?.clarificationRevision ? (
-        <div className="clarification-review__feedback">
+        <details className="clarification-review__feedback"><summary>请求修订当前版本</summary><div>
           <label htmlFor="clarification-feedback">结构化修订意见</label>
           <textarea
             id="clarification-feedback"
@@ -1216,9 +1203,9 @@ export function Inspector({
               setClarificationFeedbackDraft('')
             }}
           >
-            请求修订当前版本
+            提交修订意见
           </button>
-        </div>
+        </div></details>
       ) : null}
     </section>
   ) : null
@@ -1374,7 +1361,10 @@ export function Inspector({
           </div>
         ) : null}
       </div>
+      {modelReadinessError && primaryNextAction && ['completeAgent','runCodingAgent'].includes(primaryNextAction.id) && <p role="status">{modelReadinessError}<button className="text-button" onClick={onOpenCodingConfiguration}>打开项目基础设置</button></p>}
       {renderClarificationReview()}
+      <details className="inspector-support" open={clarificationReview ? supportOpenForNode === selectedNode.id : true} onToggle={(event) => setSupportOpenForNode(event.currentTarget.open ? selectedNode.id : null)}>
+      <summary>节点记录与策略 · 产物 {nodeArtifacts.length} · 轨迹 {events.length}</summary>
       <div className="tabbar" role="tablist" aria-label={`${viewModel.visualKind} inspector tabs`}>
         {viewModel.tabs.map((tab) => (
           <button
@@ -1403,6 +1393,7 @@ export function Inspector({
           </div>
         ) : null}
       </div>
+      </details>
     </aside>
   )
 }

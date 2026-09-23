@@ -257,6 +257,7 @@ export type DevFlowDesktopApi = {
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
   listCredentialAccess?: () => Promise<import('../electron/credential-access').CredentialAccessRecord[]>
   cancelCredentialAccess?: (id: string) => Promise<boolean>
+  onModelBudgetUpdated?: (listener: (event: { projectId: string; providerId: string; decision: import('@ai-devflow/shared').BudgetGuardDecision }) => void) => () => void
   onCredentialAccessUpdated?: (listener: (records: import('../electron/credential-access').CredentialAccessRecord[]) => void) => () => void
   workbenchConversation?: WorkbenchConversationApi
   onWorkbenchConversationUpdated?: (listener: (projectId: string) => void) => () => void
@@ -360,6 +361,7 @@ export type DevFlowDesktopApi = {
   updateProviderThinking?: (input: import('@ai-devflow/shared').UpdateProviderThinkingInput) => Promise<ProviderCredentialMetadata>
   inspectAgentProviderRemoval: (input: { providerId: string }) => Promise<ProviderRemovalCheck>
   removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
+  cancelKnowledgeReview?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: { runId?: string }) => Promise<AgentReviewResult[]>
   recordAgentReviewFeedback?: (input: import('@ai-devflow/shared').RecordAgentReviewFeedbackInput) => Promise<AgentReviewResult>
@@ -399,6 +401,7 @@ export type DevFlowDesktopApi = {
     warningThresholdUsd: number
   }) => Promise<RuntimeBudgetPolicy>
   createCodingRuntimeBudgetApproval: (input: {
+    providerId?: string
     projectId: string
     requestedBy: string
     maxAdditionalCostUsd: number

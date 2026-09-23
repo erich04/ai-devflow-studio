@@ -5,6 +5,7 @@ import {
   createOpenAiCompatibleAgentProvider,
   resolveAgentProviderDisplayName,
   resolveProviderThinking,
+  reviewProviderCapabilities,
   type ProviderThinkingConfiguration,
   type AgentProvider,
   type AgentProviderConfig,
@@ -73,7 +74,7 @@ export async function resolveElectronAgentProviderMetadata(input: {
   credentialSource: {
     listProviderCredentials(): Promise<ProviderCredentialMetadata[]>
   }
-}): Promise<Pick<AgentProvider, 'id' | 'name' | 'model'>> {
+}): Promise<Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking'>> {
   if (input.providerId === FAKE_AGENT_PROVIDER_ID) {
     if (!input.fakeRuntimeEnabled) {
       throw new Error('Fake Agent Provider requires DEVFLOW_ENABLE_FAKE_RUNTIME=true.')
@@ -92,7 +93,7 @@ export async function resolveElectronAgentProviderMetadata(input: {
   }
 
   const config = providerConfigFromCredential(metadata)
-  return { id: config.id, name: config.name, model: config.model }
+  return { id: config.id, name: config.name, model: config.model, ...reviewProviderCapabilities(config) }
 }
 
 export function listElectronAgentProviderConfigs(input: {

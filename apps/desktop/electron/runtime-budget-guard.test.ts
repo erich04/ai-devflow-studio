@@ -31,7 +31,7 @@ describe('RuntimeBudgetGuard', () => {
       blocksRun: true,
       currentSpendUsd: 0,
       projectedCostUsd: 0.02,
-      reason: 'Runtime budget decision is unavailable. Pair the project and restore the authenticated Team API connection before retrying.',
+      reason: '无法读取云端预算策略或用量，请检查 Team 连接并重试同步；未调用模型。',
     })
     expect(JSON.stringify(decision)).not.toContain('private-token')
   })
@@ -98,7 +98,7 @@ describe('RuntimeBudgetGuard', () => {
       blocksRun: true,
       currentSpendUsd: 0,
       projectedCostUsd: 0.01,
-      reason: 'Runtime budget decision is unavailable. Pair the project and restore the authenticated Team API connection before retrying.',
+      reason: '无法读取云端预算策略或用量，请检查 Team 连接并重试同步；未调用模型。',
     })
     expect(decision.reason).not.toContain('private infrastructure')
   })

@@ -186,3 +186,81 @@
 .conversation-call-records summary, .conversation-legacy-note summary { cursor: pointer; }
 .conversation-call-record { padding: 8px 0; border-bottom: 1px solid var(--border); }
 .conversation-dialog button:focus-visible, .conversation-dialog input:focus-visible, .conversation-dialog summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Review workspace: stages above documents; conversations remain project-scoped. */
+.workbench-layout.review-workbench { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); gap: 10px; padding: 14px 20px; min-width: 0; }
+.workbench-project-menu { position: relative; z-index: 5; font-size: 12px; color: var(--text-muted); }
+.workbench-project-menu > summary { cursor: pointer; padding: 4px 0; width: fit-content; max-width: 80%; overflow-wrap: anywhere; }
+.workbench-project-menu > .run-list { position: absolute; top: 100%; left: 0; width: 340px; max-height: 70vh; overflow-y: auto; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
+.review-workbench > .workflow-panel { grid-template-rows: auto auto auto; overflow: visible; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.review-workbench .workflow-head { min-height: 0; padding: 0; justify-content: flex-end; }
+.review-workbench .workflow-head > div:first-child { display: none; }
+.review-workbench .workflow-view-switch { position: absolute; top: 0; right: 0; padding: 1px; }
+.review-workbench .workflow-panel { position: relative; }
+.review-workbench .workflow-view-switch button { padding: 4px 8px; font-size: 10px; }
+.review-workbench .workflow-stage-navigation { padding: 8px 0 10px; margin-right: 210px; gap: 14px; }
+.review-workbench .workflow-stage-navigation button { grid-template-columns: 34px 1fr; justify-items: start; align-items: center; column-gap: 10px; row-gap: 3px; padding: 5px 0; }
+.review-workbench .workflow-stage-navigation button::before { display: none; }
+.review-workbench .workflow-stage-navigation button > span { grid-row: 1 / 3; }
+.review-workbench .workflow-stage-navigation small { grid-column: 2; }
+.review-workbench .workflow-stage-navigation button[aria-pressed='true'] strong { color: var(--accent); }
+.workflow-node-navigation { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 0 10px; }
+.workflow-node-navigation button { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; background: transparent; color: var(--text-muted); border: 1px solid var(--border); border-radius: 7px; cursor: pointer; }
+.workflow-node-navigation button[aria-pressed='true'] { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.workflow-node-navigation button span { font-size: 10px; }
+.workflow-node-navigation > .meta { margin-left: auto; font-size: 11px; }
+.review-workbench .workflow-view--flow .stage-grid, .review-workbench .workflow-view--list .stage-grid { max-height: 32vh; overflow: auto; }
+.workspace-split { --inspector-width: 480px; --workbench-run-list-width: 0px; --workflow-board-min-width: 420px; --workbench-splitter-width: 10px; display: grid; grid-template-columns: minmax(0, 1fr) 10px minmax(0, var(--inspector-width)); gap: 0; min-height: 0; min-width: 0; overflow: hidden; }
+.node-reader { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); scroll-padding: 20px; }
+.node-reader:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.node-reader > .inspector { display: block; height: auto; min-height: 100%; border: 0; border-radius: 0; overflow: visible; padding: 22px; }
+.node-reader .inspector-scroll { overflow: visible; min-height: 0; }
+.node-reader .inspector-node-heading .panel-title { font-size: 23px; }
+.node-reader .inspector .panel-head { padding: 0 0 16px; }
+.node-reader .inspector:has(.clarification-review) .next-action { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 16px; align-items: center; padding: 14px; }
+.node-reader .inspector:has(.clarification-review) .next-action > .section-title { display: none; }
+.node-reader .inspector:has(.clarification-review) .next-action > h3 { margin: 0; font-size: 15px; }
+.node-reader .inspector:has(.clarification-review) .next-action > .meta { grid-row: 2; margin: 0; font-size: 12px; }
+.node-reader .inspector:has(.clarification-review) .inspector-next-actions { grid-column: 2; grid-row: 1 / 3; }
+.node-reader .clarification-review { padding: 18px 0; border: 0; gap: 12px; }
+.node-reader .clarification-review > .panel-label { display: none; }
+.node-reader .clarification-review > .empty-note { margin: 0; font-size: 12px; }
+.material-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin-bottom: 18px; }
+.material-tabs button { display: grid; grid-template-columns: 18px 1fr; align-items: center; gap: 6px; padding: 12px 9px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text-muted); text-align: left; cursor: pointer; min-width: 0; }
+.material-tabs button strong { font-size: 12px; line-height: 1.5; font-weight: 600; }
+.material-tabs button small { grid-column: 1 / -1; font-size: 10px; }
+.material-tabs button[aria-selected='true'] { color: var(--accent); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.material-document { font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.material-document h2 { font-size: 21px; margin: 0 0 14px; }
+.material-document ul { padding-left: 22px; }
+.material-document li + li { margin-top: 8px; }
+.artifact-body .message-body { font-size: 14px; line-height: 1.85; }
+.artifact-body .message-markdown { max-height: none; }
+.artifact-body .message-format-toggle { float: right; }
+.material-source, .material-document details, .clarification-review__feedback, .inspector-support { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 14px; }
+.material-document summary, .clarification-review summary, .inspector-support > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; }
+.material-document details code { font-size: 11px; overflow-wrap: anywhere; }
+.clarification-review__feedback > div { display: grid; gap: 10px; padding-top: 14px; }
+.inspector-support > .tabbar { margin: 12px 0; }
+.workspace-node-shortcut { display: flex; align-items: center; gap: 7px; padding: 10px 12px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text-muted); white-space: nowrap; font-size: 12px; cursor: pointer; }
+.workspace-node-shortcut:hover { color: var(--accent); }
+@media (max-width: 1400px) {
+  .review-workbench .workflow-stage-navigation { margin-right: 160px; gap: 8px; }
+  .review-workbench .workflow-stage-navigation button { column-gap: 6px; }
+  .review-workbench .workflow-stage-navigation strong { font-size: 11px; }
+  .material-tabs { gap: 5px; }
+  .material-tabs button { grid-template-columns: 1fr; padding: 9px 6px; }
+  .material-tabs button svg { display: none; }
+  .node-reader > .inspector { padding: 18px; }
+}
+
+.artifact-body > .message-format-toggle { float: right; }
+.artifact-section { border-top: 1px solid var(--border); padding: 12px 0; }
+.artifact-section > summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+.artifact-section[open] > summary { margin-bottom: 12px; }
+.material-source pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.node-reader .text-button { color: var(--accent); background: transparent; border: 0; cursor: pointer; font: inherit; font-size: 12px; padding: 3px 0; }
+
+.material-document .compact-row { align-items: center; }
+.material-document .compact-row h2 { margin: 0; }

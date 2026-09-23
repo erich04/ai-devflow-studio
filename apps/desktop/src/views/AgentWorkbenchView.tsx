@@ -45,6 +45,7 @@ import { ReviewRerunDialog } from './ReviewRerunDialog'
 export function AgentWorkbenchView({
   desktopApi,
   projectRuntimeBudget,
+  modelBudget,
   localProjectId,
   isTeamPaired,
   requestedBy,
@@ -74,6 +75,7 @@ export function AgentWorkbenchView({
   reviews,
   selectedReviews,
   latestReview,
+  latestReviewFailure,
   latestTrace,
   latestUsage,
   onRunCodingAgent,
@@ -105,7 +107,9 @@ export function AgentWorkbenchView({
   onRefreshCodingReadiness,
   codingActionProjection,
 }: {
+  latestReviewFailure?: string | undefined
   desktopApi: DevFlowDesktopApi | null
+  modelBudget?: { providerId: string; decision: import('@ai-devflow/shared').BudgetGuardDecision } | undefined
   projectRuntimeBudget: ProjectRuntimeBudget
   localProjectId: string | undefined
   isTeamPaired: boolean
@@ -343,9 +347,9 @@ export function AgentWorkbenchView({
         warningThresholdUsd: warning,
       })
       setCodingConfigurationStatus(`预算已保存：${formatUsd(saved.monthlyLimitUsd)} / 月`)
-      await onRefreshCodingReadiness()
+      await projectRuntimeBudget.refresh()
     } catch (error) {
-      setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Runtime Budget 失败')
+      setCodingConfigurationStatus(error instanceof Error ? error.message : '保存云端预算失败')
     } finally {
       setIsSavingCodingConfiguration(false)
     }
@@ -358,12 +362,13 @@ export function AgentWorkbenchView({
       const approval = await desktopApi.createCodingRuntimeBudgetApproval({
         projectId: localProjectId,
         requestedBy,
-        maxAdditionalCostUsd: Math.max(0.01, codingReadiness?.budgetDecision?.projectedCostUsd ?? 0.20),
-        reason: 'One-time local owner approval for this exact DevFlow Native run.',
+        providerId: modelBudget?.providerId ?? selectedProviderId,
+        maxAdditionalCostUsd: Math.max(0.01, modelBudget?.decision.projectedCostUsd ?? codingReadiness?.budgetDecision?.projectedCostUsd ?? 0.20),
+        reason: 'Explicit Owner/Lead approval for model requests on this project and Provider; valid for 15 minutes.',
       })
       onRuntimeBudgetApprovalIdChange(approval.id)
       setCodingConfigurationStatus(`一次性预算批准已创建：${approval.id}`)
-      await onRefreshCodingReadiness(approval.id)
+      if (selectedNode?.kind === 'task' && selectedNode.stage === 'build') await onRefreshCodingReadiness(approval.id)
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '创建一次性预算批准失败')
     } finally {
@@ -535,6 +540,32 @@ export function AgentWorkbenchView({
           </div>
         ) : null}
 
+        <details className="runtime-settings project-policy-settings" open={projectRuntimeBudget.status !== 'loaded' || !projectRuntimeBudget.policy || modelBudget?.decision.blocksRun === true}>
+          <summary><span>项目基础设置 · 云端策略 → 本地模型 → 开始使用</span><strong>{projectRuntimeBudget.label}</strong></summary>
+          <div className="runtime-settings__body">
+            <article className="agent-evidence-card runtime-settings-form">
+              <div className="section-heading">
+                <span>云端团队预算</span>
+                <strong>{projectRuntimeBudget.label}</strong>
+              </div>
+              <p>先同步云端流程和预算 Policy，再选择本机 Provider。这里更新整个团队项目的月度美元预算，需要 Owner / Lead 权限；不会更改 API Key。</p>
+              <p>聊天、澄清、设计、审查和编码的每次模型请求都会重新检查。预估用于预警和准入，实际用量按返回记录；未知费用需核对。</p>
+              <p>策略更新时间：{projectRuntimeBudget.policy?.updatedAt ?? '尚未同步'} · 周期：UTC 自然月 · 超限：需额外批准。</p>
+              <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>同步云端预算策略</button>
+              {modelBudget && <p role="status">最近一次模型预算检查：{modelBudget.decision.reason}</p>}
+              {codingConfigurationStatus ? <p role="status">{codingConfigurationStatus}</p> : null}
+              {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
+              {projectRuntimeBudget.status === 'unavailable' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>重试读取预算</button> : null}
+              <label>月上限（USD）<input aria-label="项目月预算" inputMode="decimal" value={monthlyLimitUsd} onChange={(event) => setMonthlyLimitUsd(event.target.value)} /></label>
+              <label>预警阈值（USD）<input aria-label="项目预算预警" inputMode="decimal" value={warningThresholdUsd} onChange={(event) => setWarningThresholdUsd(event.target.value)} /></label>
+              <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={saveBudgetPolicy}><Save size={16} />保存团队项目预算</button>
+              {(modelBudget?.decision ?? codingReadiness?.budgetDecision)?.status === 'requires_lead_approval' ? (
+                <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
+              ) : null}
+            </article>
+          </div>
+        </details>
+        {latestReviewFailure ? <details className="conversation-error" open><summary>最近一次门禁审查未完成</summary><p>{latestReviewFailure.split(' {')[0]}</p><details><summary>诊断详情</summary><code>{latestReviewFailure}</code></details></details> : null}
         <article
           className={`agent-current-task agent-current-task--${viewModel.primaryAction.tone} ${exactChangeSetPermission ? 'agent-current-task--change-set' : ''}`}
           data-testid="agent-current-task"
@@ -552,7 +583,7 @@ export function AgentWorkbenchView({
             </div>
           </div>
           <div className={`agent-current-task__advisory pill ${toneClass(viewModel.advisory.tone)}`}>
-            <span>{viewModel.advisory.label}</span>
+            <span>{latestReviewFailure && !latestReview ? '审查失败，可重试' : viewModel.advisory.label}</span>
             <strong>{viewModel.advisory.detail}</strong>
           </div>
           <p className="agent-current-task__summary">{viewModel.advisory.summary}</p>
@@ -611,7 +642,7 @@ export function AgentWorkbenchView({
               <>
               <button
                 className="primary-button"
-                disabled={isReplyingPermission || viewModel.primaryAction.disabled || (viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready')}
+                disabled={isReplyingPermission || viewModel.primaryAction.disabled || (['run-review','complete-agent-node','run-coding'].includes(viewModel.primaryAction.id) && selectedProviderId !== 'fake-knowledge-review' && (projectRuntimeBudget.status !== 'loaded' || !projectRuntimeBudget.policy)) || (viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready')}
                 aria-busy={viewModel.primaryAction.label === '生成中' || undefined}
                 title={viewModel.primaryAction.disabledReason}
                 onClick={() => runPrimaryAction(viewModel.primaryAction)}
@@ -619,7 +650,8 @@ export function AgentWorkbenchView({
                   {primaryActionIcon(viewModel.primaryAction.id)}
                   {viewModel.primaryAction.label}
                 </button>
-                {pendingInspectorAction?.actionId === 'completeAgent' && onCancelStageAgent ? (
+                {isRunning && selectedRun && selectedNode && desktopApi?.cancelKnowledgeReview ? <button className="ghost-button" onClick={() => void desktopApi.cancelKnowledgeReview!({ runId: selectedRun.id, nodeId: selectedNode.id })}>停止门禁审查</button> : null}
+                {pendingInspectorAction?.actionId === 'completeAgent'  && onCancelStageAgent ? (
                   <button className="ghost-button" onClick={onCancelStageAgent}>取消生成</button>
                 ) : null}
                 {viewModel.primaryAction.id === 'view-review' && latestReview ? (
@@ -1090,20 +1122,7 @@ export function AgentWorkbenchView({
                 : '未配置'}</p>
             </article>
 
-            <article className="agent-evidence-card runtime-settings-form">
-              <div className="section-heading">
-                <span>Runtime 预算</span>
-                <strong>{projectRuntimeBudget.label}</strong>
-              </div>
-              {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
-              {projectRuntimeBudget.status === 'unavailable' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>重试读取预算</button> : null}
-              <label>月上限（USD）<input aria-label="Coding monthly budget" inputMode="decimal" value={monthlyLimitUsd} onChange={(event) => setMonthlyLimitUsd(event.target.value)} /></label>
-              <label>预警阈值（USD）<input aria-label="Coding warning budget" inputMode="decimal" value={warningThresholdUsd} onChange={(event) => setWarningThresholdUsd(event.target.value)} /></label>
-              <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={saveBudgetPolicy}><Save size={16} />保存预算策略</button>
-              {codingReadiness?.budgetDecision?.status === 'requires_lead_approval' ? (
-                <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
-              ) : null}
-            </article>
+
 
             <article className="agent-evidence-card">
               <div className="section-heading"><span>启动前检查</span><strong>{codingReadinessDisplay?.statusLabel ?? '未读取'}</strong></div>

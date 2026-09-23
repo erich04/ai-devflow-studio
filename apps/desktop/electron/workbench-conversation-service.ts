@@ -1,3 +1,4 @@
+import { buildCriticalContext, criticalContextSent, criticalReceipt, receiptIsCurrent, proposalSemanticsPass, type CriticalContext } from './conversation-critical-context.js'
 import { randomUUID } from 'node:crypto'
 import { AgentProviderRequestError, redactSensitiveText, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
@@ -9,7 +10,7 @@ import { buildRequirementContext, conversationContentPage, type RequirementConte
 type Store = Pick<LocalStore, 'listProjects' | 'listRuns' | 'listArtifacts' | 'listEvents' | 'listTestEvidence' | 'loadState' | 'listWorkbenchConversations' | 'saveWorkbenchConversation'>
 type Dependencies = {
   store: Store
-  resolveProvider(id: string): Promise<AgentProvider>
+  resolveProvider(id: string, projectId: string): Promise<AgentProvider>
   openHarness?: OpenConversationHarness
   loadKnowledge(projectId: string): Promise<RepositoryKnowledgeSnapshot>
   inspectGate?(target: { runId: string; nodeId: string; projectId: string }): Promise<unknown>
@@ -29,6 +30,7 @@ __INVESTIGATION_PROTOCOL__
 工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的原始需求、产物索引、测试、轨迹、Gate 检查；artifact({runId,artifactId,offset?,limit?}) 分页阅读产物（limit 默认 6000，最多 18000）；requirement({runId,offset?,limit?}) 分页阅读原始需求；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge({query}) 搜索已配置项目知识。
 答复正文格式由 format 指定：markdown 或 plain_text。一般解释使用 markdown，代码与 JSON 示例放在围栏代码块中。format 只影响正文，不能定义交互动作。
 结束或追问时 {"text":"答复正文","format":"markdown","citationIds":["本轮真实来源ID"],"actions":[{"label":"定位到节点 / 查看产物 / 查看测试证据","runId":"真实ID","nodeId":"真实ID","section":"状态|产物|测试证据|轨迹|Gate影响|Gate条件|引用来源|Remediation|Handoff|Final Gate"}],"question":{"prompt":"具体问题","options":["可选答案"]},"draft":{"runId":"真实ID","nodeId":"真实ID","title":"提案标题","content":"待确认内容"}}。
+完整提案必须逐项覆盖 criticalProposalInput.criteria：在 draft.coverage 中为每条返回 {criterionId,sourceQuote,proposalQuote}，sourceQuote 逐字引用该条件全文，proposalQuote 引用 draft.content 中落实该条件的原文。保留所有已确认条件；冲突或未决项应明确标注，不擅自取舍。没有 criticalProposalInput 时先提出目标即可，宿主会补齐关键正文。
 仅询问是否保存同条 draft 时，将 question.purpose 设为 save_proposal；业务澄清问题设为 clarification。保存提案是用户点击保存按钮的独立操作；不要让用户误以为保存就生成了正式澄清产物。
 如果最近用户已经明确回答了历史中的问题，可返回 answeredQuestionIds:[问题所属消息的真实ID]；查询其他节点的进展不算回答。question、draft、actions、citationIds 都可省略。不要虚构 ID；actions 的目标必须来自查询结果。不能将用户尚未确认的想法当成共享约定。不能访问其他会话的聊天、私有笔记或草稿。`
 
@@ -94,7 +96,7 @@ function visibleReasoning(text: string, complete: boolean): string {
 function packConversationContext(input: {
   history: Array<Pick<ConversationMessage, 'id' | 'role' | 'text' | 'question' | 'draft'>>
   facts: { runs: Array<{ id: string; title: string; status: string; version: number; currentNodeId: string; updatedAt: string }>; totalRuns: number; observedAt: string }
-  observations: unknown[]; remainingSteps: number; requirements: RequirementContext[]
+  observations: unknown[]; remainingSteps: number; requirements: RequirementContext[]; criticalProposalInput?: CriticalContext; proposalVerification?: { content: string }
 }) {
   const context = {
     history: [...input.history],
@@ -102,6 +104,8 @@ function packConversationContext(input: {
     toolObservations: [...input.observations], remainingSteps: input.remainingSteps,
     originalRequirements: input.requirements,
     contextNotice: '',
+    ...(input.criticalProposalInput ? { criticalProposalInput: input.criticalProposalInput } : {}),
+    ...(input.proposalVerification ? { proposalVerification: input.proposalVerification } : {}),
   }
   const serialize = () => redactSensitiveText(JSON.stringify(context)).value
   let limited = false
@@ -136,7 +140,7 @@ function packConversationContext(input: {
     })
   }
   const prompt = serialize()
-  if (prompt.length > 32000) throw new Error('这条消息超出了模型上下文容量，请缩短后重试。')
+  if (prompt.length > 32000) throw new Error(input.criticalProposalInput ? '关键正文超过本轮完整上下文容量，不能可靠生成完整提案。请缩小提案范围或拆分需求；已有正文和对话均保留。' : '这条消息超出了模型上下文容量，请缩短后重试。')
   return { prompt, limited, includedMessages: context.history.length }
 }
 
@@ -230,7 +234,10 @@ export class WorkbenchConversationService {
       if (reconcileSavedProposalQuestions(session) !== session) await this.update(input.projectId, session.id, reconcileSavedProposalQuestions)
       return
     }
-    await this.target(input.projectId, draft.runId, draft.nodeId)
+    const { run } = await this.target(input.projectId, draft.runId, draft.nodeId)
+    if (draft.inputReceipt && !receiptIsCurrent(draft.inputReceipt, buildCriticalContext(run, draft.nodeId, await this.deps.store.listArtifacts(run.id)))) {
+      throw new Error('原始需求或已保存提案已更新，请重新生成提案后再保存。旧草稿仍保留。')
+    }
     const artifactId = `conversation-proposal-${input.messageId}`
     const artifact: Artifact = { id: artifactId, runId: draft.runId, nodeId: draft.nodeId, kind: 'log',
       title: `讨论提案（待确认）：${draft.title}`, summary: '用户从独立会话明确保存的提案；未批准，也不代替本阶段的正式产物。',
@@ -394,7 +401,7 @@ export class WorkbenchConversationService {
         if (!this.deps.openHarness) throw new Error('此版本未提供 OpenCode 会话执行器，请更新桌面端。')
         provider = await this.deps.openHarness({ project: await this.project(projectId), conversation: session,
           providerId, signal: controller.signal, query })
-      } else provider = await this.deps.resolveProvider(providerId)
+      } else provider = await this.deps.resolveProvider(providerId, projectId)
       if (!provider.completeStructuredJson) throw new Error('当前执行器不支持会话调查，请检查配置。')
       const initial = await this.overview(projectId)
       if (initial.totalRuns === 1) await attachRequirement(initial.runs[0]!.id)
@@ -414,13 +421,16 @@ export class WorkbenchConversationService {
         if (length > 28000 && history.length) break
         history.unshift(entry)
       }
+      let criticalProposalInput: CriticalContext | undefined
+      let pendingProposal: Record<string, unknown> | undefined
+      let proposalRecoveries = 0
       let outputRecoveryUsed = false
       let retryingOutput = false
       for (let step = 0; step < 12; step++) {
         controller.signal.throwIfAborted()
         phase = 'read_context'
         const facts = await this.overview(projectId)
-        const packed = packConversationContext({ history, facts, observations, remainingSteps: 12 - step, requirements: [...requirements.values()] })
+        const packed = packConversationContext({ history, facts, observations, remainingSteps: 12 - step, requirements: [...requirements.values()], ...(criticalProposalInput ? { criticalProposalInput } : {}), ...(pendingProposal ? { proposalVerification: { content: String(recordOrEmpty(pendingProposal.draft).content) } } : {}) })
         await this.update(projectId, id, (current) => ({ ...current, contextReceipt: {
           includedMessages: packed.includedMessages,
           omittedMessages: session.messages.filter((message) => message.role !== 'tool' && message.role !== 'notice').length - packed.includedMessages,
@@ -442,10 +452,11 @@ export class WorkbenchConversationService {
         const systemPrompt = SYSTEM.replace('__INVESTIGATION_PROTOCOL__', session.executor === 'opencode'
           ? '调查时调用 devflow MCP 中的同名只读工具，例如 devflow_workflow、devflow_node；不要用 JSON tool 字段代替真正的工具调用。完成调查后按下述答复格式返回 JSON，不加额外说明。'
           : '调查时 {"tool":{"name":"...","args":{...}}}。')
+        const verificationPrompt = pendingProposal ? '\n本轮只做提案语义核对，不生成新提案。逐项对照 criticalProposalInput.criteria 与 proposalVerification.content，判断是否完整保留条件、是否存在矛盾或擅自改变约定。只返回 {"coverageReview":[{"criterionId":"真实ID","status":"covered|missing|contradiction","reason":"简要说明"}]}。引用过原文不等于落实了要求。每条必须判断，不得省略。' : ''
         let result: Awaited<ReturnType<NonNullable<ConversationExecutor['completeStructuredJson']>>>
         try {
-          result = await provider.completeStructuredJson({ systemPrompt: systemPrompt + (retryingOutput ? '\n上次响应格式或完整性校验失败。本次请简洁返回一个完整 JSON 对象，正确转义字符串；不加对象外说明。不要把正文和 draft 重复写成长篇内容。' : ''),
-          userPrompt: packed.prompt, maxOutputTokens: 3500, signal: controller.signal,
+          result = await provider.completeStructuredJson({ systemPrompt: systemPrompt + verificationPrompt + (retryingOutput ? '\n上次响应格式或完整性校验失败。本次请简洁返回一个完整 JSON 对象，正确转义字符串；不加对象外说明。不要把正文和 draft 重复写成长篇内容。' : ''),
+          userPrompt: packed.prompt, ...(criticalProposalInput ? { purpose: 'proposal' as const } : { maxOutputTokens: 3500 }), signal: controller.signal,
           ...(thinking ? { reasoning: { onDelta: async (delta: string) => {
             controller.signal.throwIfAborted()
             activeReasoning!.text += delta
@@ -478,7 +489,13 @@ export class WorkbenchConversationService {
         }))
         controller.signal.throwIfAborted()
         phase = 'validate_response'
-        const value = record(result.value)
+        let value = record(result.value)
+        const semanticallyVerified = Boolean(pendingProposal)
+        if (pendingProposal) {
+          if (!criticalProposalInput || !proposalSemanticsPass(criticalProposalInput, value.coverageReview)) throw new Error('提案的逐项语义核对未通过，可能遗漏或改变了要求。未生成可保存的完整提案；请补充说明后重试。')
+          value = pendingProposal
+          pendingProposal = undefined
+        }
         if (value.tool !== undefined) {
           if (session.executor === 'opencode') throw new Error('会话执行器没有完成工具调查，请重试。')
           const tool = record(value.tool)
@@ -512,7 +529,22 @@ export class WorkbenchConversationService {
         if (value.draft !== undefined) {
           const raw = record(value.draft)
           const { run, node } = await this.target(projectId, raw.runId, textField(raw.nodeId, 240))
-          draft = { runId: run.id, nodeId: node!.id, title: textField(raw.title, 120), content: textField(raw.content, 18000) }
+          const latest = buildCriticalContext(run, node!.id, await this.deps.store.listArtifacts(run.id))
+          if (session.executor === 'opencode') throw new Error('OpenCode 的内部上下文无法核验，不能把这份草稿标为完整提案。调查记录已保留；请用 Direct Provider 生成可核验的完整提案。')
+          const content = textField(raw.content, 18000)
+          const receipt = criticalContextSent(packed.prompt, latest) ? criticalReceipt(latest, content, raw.coverage) : null
+          if (!receipt) {
+            if (proposalRecoveries++ >= 2) throw new Error('关键正文完整性或逐项覆盖校验未通过，未生成可保存的完整提案。请查看原始需求并缩小讨论范围后重试。')
+            criticalProposalInput = latest
+            observations.push({ instruction: '上一份提案未通过完整性校验。请根据本轮 criticalProposalInput 全文重新生成，并逐条返回 draft.coverage；不要只读标题或摘要。' })
+            continue
+          }
+          if (!semanticallyVerified) {
+            criticalProposalInput = latest
+            pendingProposal = value
+            continue
+          }
+          draft = { runId: run.id, nodeId: node!.id, title: textField(raw.title, 120), content, inputReceipt: receipt }
         }
         let question: ConversationMessage['question']
         if (value.question !== undefined) {

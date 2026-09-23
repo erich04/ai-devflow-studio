@@ -1,3 +1,5 @@
+import { modelCallActualUsage, modelBudgetUsageWithRuntime, modelCallBudgetRollup, type HistoricalModelCall, type ModelCallAttempt, type ModelCallQuote, type ModelCallSettlement, type ModelCallAdmission } from '@ai-devflow/shared'
+import { admitModelCall, finishModelCall, queueModelCallSettlement } from './model-call-budget'
 import type { OrganizationRepository } from './organization-repository'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
@@ -103,6 +105,7 @@ export type TeamOverviewPayload = {
   projects: Project[]
   members: TeamMember[]
   runs: WorkflowRun[]
+  budgetProjectCost?: TokenUsageRollup[]
   projectCost: TokenUsageRollup[]
   memberCost: TokenUsageRollup[]
   totalCost: string
@@ -209,6 +212,11 @@ export type TeamProjectCreateInput = {
 export type TeamRepository = WorkRequestRepository &
   GateCommandRepository &
   GitHubDeliveryRepository & {
+  importHistoricalModelCall(input:HistoricalModelCall,context:TeamRepositorySyncContext):Promise<void>
+  reserveModelCall(input: ModelCallQuote, context: TeamRepositorySyncContext): Promise<ModelCallAdmission>
+  settleModelCall(input: ModelCallSettlement, context: TeamRepositorySyncContext): Promise<void>
+  persistModelCallSettlement(input: ModelCallSettlement, context: TeamRepositorySyncContext): Promise<void>
+  listPendingModelCallSettlements(projectId: string, context: TeamRepositorySyncContext): Promise<ModelCallSettlement[]>
   organizations?: OrganizationRepository
   getAuthenticatedIdentity(input: {
     provider: AuthProvider
@@ -284,6 +292,7 @@ export type TeamRepository = WorkRequestRepository &
     providerId: string,
     context: TeamRepositorySyncContext,
   ): Promise<AgentProviderCredentialRecord | null>
+  saveAgentAttemptUsage(usage: AgentTokenUsage, context: TeamRepositorySyncContext): Promise<void>
   saveAgentReviewBundle(
     bundle: AgentReviewBundle,
     context: TeamRepositorySyncContext,
@@ -386,6 +395,9 @@ export function findCurrentGateCommandOverride(input: {
 }
 
 export function createSeedTeamRepository(): TeamRepository {
+  const modelCalls = new Map<string, { organizationId:string; value:ModelCallAttempt }>()
+  let budgetTail: Promise<unknown> = Promise.resolve()
+  async function budgetLock<T>(action:()=>Promise<T>):Promise<T> { const next=budgetTail.catch(()=>undefined).then(action); budgetTail=next; return next }
   const teamProjects = [...projects]
   const projectOrganizationIds = new Map(
     teamProjects.map((project) => [project.id, DEMO_ORGANIZATION_ID]),
@@ -707,6 +719,35 @@ export function createSeedTeamRepository(): TeamRepository {
   })
 
   repository = {
+    async importHistoricalModelCall(input,context) {
+      await budgetLock(async()=>{
+        const existing = modelCalls.get(input.quote.id)
+        if (existing) {
+          if (existing.organizationId !== context.organizationId || existing.value.projectId !== input.quote.projectId) throw new Error('Model call accounting scope mismatch')
+          await finishModelCall(input.settlement, context, async () => existing.value, async () => {})
+          return
+        }
+        const overview=await this.getTeamOverview(context)
+        if(!overview.projects.some((p)=>p.id===input.quote.projectId))throw new Error('Project scope mismatch')
+        const row={...input.quote,userId:context.userId,state:'reserved' as const,projectedCostUsd:null,costUsd:null}
+        await finishModelCall(input.settlement,context,async()=>row,async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})})
+      })
+    },
+    async reserveModelCall(input, context) {
+      return budgetLock(() => admitModelCall(this,input,context, async()=>modelCalls.get(input.id)?.value??null, async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})}, [...modelCalls.values()].filter((row)=>row.organizationId===context.organizationId).map((row)=>row.value)))
+    },
+    async settleModelCall(input, context) {
+      await budgetLock(()=>finishModelCall(input,context,async()=>modelCalls.get(input.id)?.organizationId===context.organizationId ? modelCalls.get(input.id)!.value:null,async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})}))
+    },
+    async persistModelCallSettlement(input, context) {
+      await budgetLock(() => queueModelCallSettlement(input, context,
+        async () => modelCalls.get(input.id)?.organizationId === context.organizationId ? modelCalls.get(input.id)!.value : null,
+        async (value) => { modelCalls.set(value.id, { organizationId: context.organizationId, value }) }))
+    },
+    async listPendingModelCallSettlements(projectId, context) {
+      return [...modelCalls.values()].filter((row) => row.organizationId === context.organizationId && row.value.projectId === projectId && row.value.userId === context.userId && row.value.state === 'reserved')
+        .flatMap((row) => row.value.pendingSettlement ? [row.value.pendingSettlement] : [])
+    },
     ...workRequestRepository,
     ...gateCommandRepository,
     ...githubDeliveryRepository,
@@ -1057,11 +1098,11 @@ export function createSeedTeamRepository(): TeamRepository {
         )
         .map(runtimeCostSummaryToTokenUsage)
         .filter((usage): usage is TokenUsage => usage !== null)
-      const allTokenUsage = [
+      const allTokenUsage = [...new Map([
         ...tokenUsage.filter((usage) => projectIds.has(usage.projectId) && runIds.has(usage.runId)),
         ...codingTokenUsage,
         ...scopedRuns.flatMap((run) => stageUsageByRun.get(run.id) ?? []),
-      ]
+      ].map((usage) => [usage.id, usage])).values()]
       const codingCostSummaries = scopedCodingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
@@ -1076,21 +1117,17 @@ export function createSeedTeamRepository(): TeamRepository {
         (override) => projectIds.has(override.projectId) && runIds.has(override.runId),
       )
 
+      const accountingRows = modelBudgetUsageWithRuntime(allTokenUsage, codingCostSummaries)
+      const attempts = [...modelCalls.values()].filter((row)=>row.organizationId===context.organizationId && projectIds.has(row.value.projectId)).map((row)=>row.value)
+      const actualUsage = modelCallActualUsage(accountingRows, attempts)
       return {
+        budgetProjectCost: modelCallBudgetRollup(accountingRows, attempts, new Date().toISOString()),
         projects: scopedProjects,
         members: context.organizationId === DEMO_ORGANIZATION_ID ? members : [],
         runs: scopedRuns,
-        projectCost: annotateUnknownRuntimeCosts(
-          rollupTokenUsage(allTokenUsage, 'projectId'),
-          codingCostSummaries,
-          'projectId',
-        ),
-        memberCost: annotateUnknownRuntimeCosts(
-          rollupTokenUsage(allTokenUsage, 'userId'),
-          codingCostSummaries,
-          'userId',
-        ),
-        totalCost: formatCostRollup(annotateUnknownRuntimeCosts(rollupTokenUsage(allTokenUsage, 'projectId'), codingCostSummaries, 'projectId')),
+        projectCost: rollupTokenUsage(actualUsage, 'projectId'),
+        memberCost: rollupTokenUsage(actualUsage, 'userId'),
+        totalCost: formatCostRollup(rollupTokenUsage(actualUsage, 'projectId')),
         testEvidenceSummaries: scopedTestEvidence,
         agentReviews: scopedAgentReviews,
         agentTraces: scopedAgentTraces,
@@ -1627,6 +1664,11 @@ export function createSeedTeamRepository(): TeamRepository {
       return providerCredentials.get(`${context.organizationId}:${providerId}`) ?? null
     },
 
+    async saveAgentAttemptUsage(usage, context) {
+      if (!syncedRuns.some((run) => run.id === usage.runId && run.projectId === usage.projectId && runOrganizationIds.get(run.id) === context.organizationId)) throw new CanonicalRunRequiredError(usage.runId, 'unknown')
+      upsertById(agentTokenUsage, usage)
+      upsertById(tokenUsage, usage)
+    },
     async saveAgentReviewBundle(bundle) {
       upsertById(agentReviews, bundle.review)
       upsertById(agentTraces, bundle.trace)

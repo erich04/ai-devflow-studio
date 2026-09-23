@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 35
+export const CURRENT_SCHEMA_VERSION = 36
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2623,6 +2623,7 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       `)
     },
   },
+  { version: 36, migrate(db) { db.run(`create table if not exists model_call_settlements (id text primary key, project_id text not null, json text not null)`); } },
 ]
 
 export const schemaMigrationVersions = Object.freeze(

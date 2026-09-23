@@ -59,7 +59,6 @@ import type { DesktopDataProfileDiagnostics } from './desktop-api'
 import { DiagnosticHistory } from './components/DiagnosticHistory'
 import { CredentialAccessStatus } from './components/CredentialAccessStatus'
 import { WorkRequestInbox } from './WorkRequestInbox'
-import { WorkbenchSplitter } from './WorkbenchSplitter'
 import {
   AgentWorkbenchView,
   Inspector,
@@ -97,6 +96,8 @@ export function App() {
     reviewProviderFromMetadata,
   })
   const { desktopApi, applyLocalExecutionState, refreshRepositoryKnowledge } = workspace
+  const [modelBudgetEvent, setModelBudgetEvent] = useState<{ projectId: string; providerId: string; decision: import('@ai-devflow/shared').BudgetGuardDecision }>()
+  useEffect(() => desktopApi?.onModelBudgetUpdated?.(setModelBudgetEvent), [desktopApi])
   const {
     themePreference,
     dataOrigin,
@@ -708,6 +709,10 @@ export function App() {
       ? `${selectedTeamProjectId}:${desktopPairing?.tokenId ?? ''}:${selectedLocalProject?.updatedAt ?? ''}`
       : '',
   })
+  const modelReadinessError = !desktopApi || selectedAgentProviderId === 'fake-knowledge-review' ? undefined :
+    projectRuntimeBudget.status !== 'loaded' ? (projectRuntimeBudget.error || `云端预算${projectRuntimeBudget.label}，请先同步团队策略。`) :
+    !projectRuntimeBudget.policy ? '尚未配置当前项目的云端预算，请先在 Agents 的项目基础设置中保存。' : undefined
+
   const codingRuntime = useCodingRuntimeReadiness({
     desktopApi,
     projectId: selectedLocalProject?.id,
@@ -779,9 +784,11 @@ export function App() {
   const hasUnknownProjectCost = runUsage.unknownCostCount > 0 ||
     agentTokenUsage.some((usage) => usage.projectId === selectedLocalProject?.id && usage.costUsd === null) ||
     teamProjectCost.some((cost) => cost.key === selectedTeamProject?.id && (cost.unknownCostCount ?? 0) > 0)
-  const budgetStatus = hasUnknownProjectCost && !latestCodingRun?.budgetDecision?.blocksRun
+  const currentModelBudget = modelBudgetEvent?.projectId === selectedLocalProject?.id ? modelBudgetEvent : undefined
+  const effectiveBudgetDecision = currentModelBudget?.decision ?? latestCodingRun?.budgetDecision
+  const budgetStatus = hasUnknownProjectCost && !effectiveBudgetDecision?.blocksRun
     ? '数据不完整 · 有金额待确认'
-    : latestCodingRun?.budgetDecision?.status ?? (runtimeBudgetApprovalId ? 'approval entered' : '尚未执行')
+    : effectiveBudgetDecision?.status ?? (runtimeBudgetApprovalId ? 'approval entered' : '尚未执行')
   const budgetTone =
     budgetStatus === 'allowed' || budgetStatus === 'approved_over_budget'
       ? 'good'
@@ -792,7 +799,7 @@ export function App() {
           : 'soft'
   const budgetRecoveryCopy =
     budgetStatus === 'unavailable'
-      ? '已阻断付费运行；恢复 Team 项目配对、API 连接和已保存的预算策略后重试。'
+      ? effectiveBudgetDecision?.reason ?? '预算暂不可用，请在项目基础设置中同步云端策略。'
       : null
   const runtimeDataSource = useMemo(
     () =>
@@ -1216,7 +1223,7 @@ export function App() {
           <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
           <span className="stat" data-testid="runtime-budget-status">
             预算策略 <strong className={`pill ${projectRuntimeBudget.status === 'unavailable' ? 'bad' : projectRuntimeBudget.policy?.enabled ? 'good' : 'soft'}`}>{projectRuntimeBudget.label}</strong>
-            预算评估 <strong className={`pill ${budgetTone}`}>{budgetStatus}</strong>
+            预算评估 <strong title={effectiveBudgetDecision?.reason} className={`pill ${budgetTone}`}>{budgetStatus}</strong>
             {budgetRecoveryCopy ? <em>{budgetRecoveryCopy}</em> : null}
           </span>
         </section>
@@ -1281,7 +1288,9 @@ export function App() {
         )}
 
         {activeView === 'workbench' && (
-          <section className="workbench-layout">
+          <section className="workbench-layout review-workbench">
+            <details className="workbench-project-menu">
+              <summary>{selectedLocalProject?.name ?? '本地项目'} / {selectedRun?.title ?? '选择项目与 Run'}</summary>
             <div className="run-list">
               <LocalProjectPanel
                 project={selectedLocalProject}
@@ -1389,6 +1398,7 @@ export function App() {
                 })
               )}
             </div>
+            </details>
 
             {selectedRun ? (
               <>
@@ -1411,9 +1421,8 @@ export function App() {
                   }}
                 />
 
-                <WorkbenchSplitter initialWidth={520} />
 
-                <WorkbenchWorkspace api={desktopApi}
+                <WorkbenchWorkspace splitDetails modelReadinessError={modelReadinessError} api={desktopApi}
                   projectId={selectedLocalProject?.id}
                   projectName={selectedLocalProject?.name}
                   runs={scopedRuns}
@@ -1427,6 +1436,7 @@ export function App() {
                       sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab', label: action.section, createdAt: new Date().toISOString() })
                   }}>
                 <Inspector
+                  modelReadinessError={modelReadinessError}
                   selectedRun={selectedRun}
                   selectedNode={selectedNode}
                   isSelectedCurrentNode={isSelectedCurrentNode}
@@ -1525,8 +1535,7 @@ export function App() {
                     当前本地仓库没有已保存的 Run。创建 Run 或拉取团队数据后，这里才会展示真实工作流。
                   </p>
                 </section>
-                <WorkbenchSplitter initialWidth={520} />
-                <WorkbenchWorkspace api={desktopApi}
+                <WorkbenchWorkspace splitDetails modelReadinessError={modelReadinessError} api={desktopApi}
                   projectId={selectedLocalProject?.id}
                   projectName={selectedLocalProject?.name}
                   runs={scopedRuns}
@@ -1605,6 +1614,7 @@ export function App() {
           <AgentWorkbenchView
             key={`${selectedLocalProject?.id ?? ''}:${desktopPairing?.tokenId ?? ''}`}
             projectRuntimeBudget={projectRuntimeBudget}
+            modelBudget={currentModelBudget}
             desktopApi={desktopApi}
             localProjectId={selectedLocalProject?.id}
             isTeamPaired={hasSelectedLocalProjectBinding}
@@ -1645,6 +1655,7 @@ export function App() {
             selectedNode={selectedNode}
             reviews={agentReviews}
             selectedReviews={selectedAgentReviews}
+            latestReviewFailure={selectedEvents.filter((event)=>event.kind==='error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp>latestAgentReview.createdAt)).sort((a,b)=>b.timestamp.localeCompare(a.timestamp))[0]?.message}
             latestReview={latestAgentReview}
             latestTrace={latestAgentTrace}
             latestUsage={latestAgentUsage}

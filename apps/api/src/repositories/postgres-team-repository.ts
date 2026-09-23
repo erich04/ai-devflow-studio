@@ -1,3 +1,5 @@
+import { modelCallActualUsage, modelBudgetUsageWithRuntime, modelCallBudgetRollup, type HistoricalModelCall, type ModelCallAttempt } from '@ai-devflow/shared'
+import { admitModelCall, finishModelCall, queueModelCallSettlement } from './model-call-budget'
 import { createOrganizationRepository } from './organization-repository'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import { assertPolicyRevision, EnforcementPolicyConflictError } from './enforcement-policy-write'
@@ -244,6 +246,7 @@ type AgentEventRow = {
 }
 
 type TokenUsageRow = {
+  budget_attempt_ids?: string[] | null
   id: string
   run_id: string
   node_id: string
@@ -763,6 +766,7 @@ function mapRun(
 
 function mapTokenUsage(row: TokenUsageRow): TokenUsage {
   return {
+    ...(row.budget_attempt_ids ? {budgetAttemptIds:row.budget_attempt_ids} : {}),
     id: row.id,
     runId: row.run_id,
     nodeId: row.node_id,
@@ -1908,6 +1912,48 @@ export function createPostgresTeamRepository(
 
   return {
     organizations: createOrganizationRepository(db),
+    async importHistoricalModelCall(input,context) {
+      await withTeamDbTransaction(db,async(tx)=>{
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`model-budget:${context.organizationId}:${input.quote.projectId}`])
+        const existing = (await tx.query<{ organization_id: string; json: ModelCallAttempt }>('SELECT organization_id,json FROM model_call_attempts WHERE id=$1',[input.quote.id]))[0]
+        if (existing) {
+          if (existing.organization_id !== context.organizationId || existing.json.projectId !== input.quote.projectId) throw new Error('Model call accounting scope mismatch')
+          await finishModelCall(input.settlement, context, async () => existing.json, async () => {})
+          return
+        }
+        if(!(await tx.query('SELECT id FROM projects WHERE id=$1 AND organization_id=$2',[input.quote.projectId,context.organizationId])).length)throw new Error('Project scope mismatch')
+        const row={...input.quote,userId:context.userId,state:'reserved' as const,projectedCostUsd:null,costUsd:null}
+        await finishModelCall(input.settlement,context,async()=>row,async(value)=>{await tx.query('INSERT INTO model_call_attempts (id,organization_id,project_id,user_id,json,created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6)',[value.id,context.organizationId,value.projectId,context.userId,JSON.stringify(value),value.createdAt])})
+      })
+    },
+    async reserveModelCall(input, context) {
+      return withTeamDbTransaction(db, async(tx)=>{
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`model-budget:${context.organizationId}:${input.projectId}`])
+        const scopedDb:TeamDbRepositoryClient={...tx,async close(){},async checkout(){throw new Error('Nested budget transaction')}}
+        const repo=createPostgresTeamRepository(scopedDb,options)
+        return admitModelCall(repo,input,context,async()=> (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1',[input.id]))[0]?.json??null,
+          async(value)=>{await tx.query('INSERT INTO model_call_attempts (id,organization_id,project_id,user_id,json,created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6)',[value.id,context.organizationId,value.projectId,context.userId,JSON.stringify(value),value.createdAt])}, (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE organization_id=$1 AND project_id=$2',[context.organizationId,input.projectId])).map((row)=>row.json))
+      })
+    },
+    async settleModelCall(input, context) {
+      return withTeamDbTransaction(db,async(tx)=>{
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`model-budget:${context.organizationId}:${input.projectId}`])
+        return finishModelCall(input,context,async()=> (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1 AND organization_id=$2 FOR UPDATE',[input.id,context.organizationId]))[0]?.json??null,
+          async(value)=>{await tx.query('UPDATE model_call_attempts SET json=$1::jsonb WHERE id=$2 AND organization_id=$3',[JSON.stringify(value),value.id,context.organizationId])})
+      })
+    },
+    async persistModelCallSettlement(input, context) {
+      return withTeamDbTransaction(db, async (tx) => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`model-budget:${context.organizationId}:${input.projectId}`])
+        return queueModelCallSettlement(input, context,
+          async () => (await tx.query<{json: ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1 AND organization_id=$2 FOR UPDATE', [input.id, context.organizationId]))[0]?.json ?? null,
+          async (value) => { await tx.query('UPDATE model_call_attempts SET json=$1::jsonb WHERE id=$2 AND organization_id=$3', [JSON.stringify(value), value.id, context.organizationId]) })
+      })
+    },
+    async listPendingModelCallSettlements(projectId, context) {
+      const rows = await db.query<{json: ModelCallAttempt}>("SELECT json FROM model_call_attempts WHERE organization_id=$1 AND project_id=$2 AND user_id=$3 AND json->>'state'='reserved' AND json ? 'pendingSettlement'", [context.organizationId, projectId, context.userId])
+      return rows.flatMap((row) => row.json.pendingSettlement ? [row.json.pendingSettlement] : [])
+    },
     ...workRequestRepository,
     ...gateCommandRepository,
     ...githubDeliveryRepository,
@@ -2415,7 +2461,8 @@ export function createPostgresTeamRepository(
         'SELECT stage_agent_usage FROM workflow_runs WHERE organization_id = $1', [context.organizationId],
       )
       const stageUsage = stageUsageRows.flatMap((row) => Object.values(row.stage_agent_usage ?? {}))
-      const allTokenUsage = [...tokenUsage, ...codingTokenUsage, ...stageUsage]
+      const modelCalls=await db.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE organization_id=$1',[context.organizationId])
+      const allTokenUsage = [...new Map([...tokenUsage, ...codingTokenUsage, ...stageUsage].map((usage) => [usage.id, usage])).values()]
       const codingCostSummaries = codingAgentSummaries
         .map((summary) => summary.costSummary)
         .filter((summary): summary is NonNullable<RemoteCodingAgentSummary['costSummary']> => Boolean(summary))
@@ -2423,21 +2470,17 @@ export function createPostgresTeamRepository(
       const runtimeBudgetPolicies = runtimeBudgetPolicyRows.map(mapRuntimeBudgetPolicy)
       const runtimeBudgetApprovals = runtimeBudgetApprovalRows.map(mapRuntimeBudgetApproval)
 
+      const accountingRows = modelBudgetUsageWithRuntime(allTokenUsage, codingCostSummaries)
+      const attempts = modelCalls.map((row)=>row.json)
+      const actualUsage = modelCallActualUsage(accountingRows, attempts)
       return {
+        budgetProjectCost: modelCallBudgetRollup(accountingRows, attempts, new Date().toISOString()),
         projects: projectRows.map(mapProject),
         members: memberRows.map(mapMember),
         runs: runsBundle.runs,
-        projectCost: annotateUnknownRuntimeCosts(
-          rollupTokenUsage(allTokenUsage, 'projectId'),
-          codingCostSummaries,
-          'projectId',
-        ),
-        memberCost: annotateUnknownRuntimeCosts(
-          rollupTokenUsage(allTokenUsage, 'userId'),
-          codingCostSummaries,
-          'userId',
-        ),
-        totalCost: formatCostRollup(annotateUnknownRuntimeCosts(rollupTokenUsage(allTokenUsage, 'projectId'), codingCostSummaries, 'projectId')),
+        projectCost: rollupTokenUsage(actualUsage, 'projectId'),
+        memberCost: rollupTokenUsage(actualUsage, 'userId'),
+        totalCost: formatCostRollup(rollupTokenUsage(actualUsage, 'projectId')),
         testEvidenceSummaries,
         agentReviews,
         agentTraces: agentTraceRows.map(mapAgentTrace),
@@ -3745,6 +3788,96 @@ export function createPostgresTeamRepository(
       return rows[0] ? mapProviderCredential(rows[0]) : null
     },
 
+    async saveAgentAttemptUsage(usage: AgentTokenUsage, context: TeamRepositorySyncContext) {
+      const owned = await db.query<{ id: string }>('SELECT id FROM workflow_runs WHERE id = $1 AND project_id = $2 AND organization_id = $3', [usage.runId, usage.projectId, context.organizationId])
+      if (!owned.length) throw new CanonicalRunRequiredError(usage.runId, 'unknown')
+      await db.query(
+        `
+          INSERT INTO agent_token_usage (
+            id,
+            organization_id,
+            run_id,
+            node_id,
+            user_id,
+            project_id,
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cost_usd,
+            timestamp,
+            source
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          ON CONFLICT (id) DO UPDATE
+          SET input_tokens = excluded.input_tokens,
+              output_tokens = excluded.output_tokens,
+              cache_read_tokens = excluded.cache_read_tokens,
+              cost_usd = excluded.cost_usd,
+              timestamp = excluded.timestamp,
+              source = excluded.source
+        `,
+        [
+          usage.id,
+          context.organizationId,
+          usage.runId,
+          usage.nodeId,
+          usage.userId,
+          usage.projectId,
+          usage.provider,
+          usage.model,
+          usage.inputTokens,
+          usage.outputTokens,
+          usage.cacheReadTokens,
+          usage.costUsd,
+          usage.timestamp,
+          usage.source,
+        ],
+      )
+      await db.query(
+        `
+          INSERT INTO token_usage (
+            id,
+            run_id,
+            node_id,
+            user_id,
+            project_id,
+            provider,
+            model,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cost_usd,
+            timestamp
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          ON CONFLICT (id) DO UPDATE
+          SET input_tokens = excluded.input_tokens,
+              output_tokens = excluded.output_tokens,
+              cache_read_tokens = excluded.cache_read_tokens,
+              cost_usd = excluded.cost_usd,
+              timestamp = excluded.timestamp
+        `,
+        [
+          usage.id,
+          usage.runId,
+          usage.nodeId,
+          usage.userId,
+          usage.projectId,
+          usage.provider,
+          usage.model,
+          usage.inputTokens,
+          usage.outputTokens,
+          usage.cacheReadTokens,
+          usage.costUsd,
+          usage.timestamp,
+        ],
+      )
+      if (usage.budgetAttemptIds) await db.query('UPDATE token_usage SET budget_attempt_ids=$1::jsonb WHERE id=$2 AND project_id=$3', [JSON.stringify(usage.budgetAttemptIds),usage.id,usage.projectId])
+
+    },
+
     async saveAgentReviewBundle(bundle: AgentReviewBundle, context: TeamRepositorySyncContext) {
       await db.query(
         `
@@ -4022,11 +4155,14 @@ export function createPostgresTeamRepository(
         ],
       )
 
+      if (bundle.tokenUsage.budgetAttemptIds) await db.query('UPDATE token_usage SET budget_attempt_ids=$1::jsonb WHERE id=$2 AND project_id=$3', [JSON.stringify(bundle.tokenUsage.budgetAttemptIds),bundle.tokenUsage.id,bundle.tokenUsage.projectId])
+
       return {
         review: bundle.review,
         trace: bundle.trace,
         tokenUsage: bundle.tokenUsage,
       }
+
     },
 
     async saveAgentEvent(

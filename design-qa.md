@@ -1,55 +1,35 @@
-# Unified workbench visual QA
+# Gate reader and independent conversation — visual QA
 
 final result: passed
 
-## Comparison target and evidence
+## Target and comparison
 
-- Source visual truth: `/var/folders/pn/2vxnd83n1hxbtqhx6szfgcp80000gn/T/codex-clipboard-e4d0be7f-87e3-41da-b599-7d34be8624d0.png`.
-- Source: 1672 × 941 pixels, dark desktop concept, existing project and requirement with a pending question.
-- Implementation: actual Electron file renderer, real Main/preload/SQLite, isolated project and controlled model HTTP endpoint. The test project is unpaired; it does not pretend to be the user's authenticated walkthrough.
-- Full view: `out/workbench-conversation-qa/02-conversation-question.png`, 1672 × 941 pixels / CSS px.
-- Node detail: `out/workbench-conversation-qa/01-node-details.png`, 1672 × 941.
-- Focused conversation: `out/workbench-conversation-qa/02-conversation-detail.png`, 520 × 796.
-- Light view: `out/workbench-conversation-qa/04-light-workspace.png`, 1672 × 941.
-- Narrow view: `out/workbench-conversation-qa/05-narrow-workspace.png`, 1280 × 941.
-- The Electron display uses DPR 2. Final Playwright captures use `scale: 'css'` to normalize the output to the source density. Earlier 3344 × 1882 captures were compared as double-density evidence, not as larger UI controls.
+The user selected `codex-clipboard-77be0ebc-4c2f-41ae-9f6e-76147c94bce7.png`: horizontal six-stage navigation, a wide document reader, and a conversation beside it. Their second image, `codex-clipboard-38079782-61e5-4298-b51e-838d62bd8a53.png`, replaces the concept's “项目对话” title with the existing compact node/conversation/new/history header. Existing product tokens, real saved documents and functional controls take precedence over the concept's invented chat, decorative logo and image-editor toolbar.
 
-The source and implementation images were opened together in each comparison input. Full-view comparison checked the three main regions and stage/card hierarchy. Focused comparison checked the source's right-hand region against the actual 520-pixel conversation capture, including Tabs, context entry, message wrapping, pending question, options, source disclosure and composer. This was a combined image comparison, not a claim that separate windows were placed side by side.
+Compared the selected reference and the actual renderer together in the same image input. Both show the requirement Gate, the clarification material with acceptance criteria, and an open independent conversation. Reference: 1748 × 1246. Actual observed CSS viewport: 1748 × 1245 (one-pixel browser rounding). The IAB viewport override produced a padded screenshot canvas; `10-reference-normalized.png` crops the complete first viewport raster and normalizes its pixel density, without changing app content. The unmodified capture is retained as `09-match-raw.png`. Normal-window screenshots have no capture defect. Temporary viewport overrides were reset after testing.
 
-## Findings and iterations
+Local evidence lives in `out/gate-workbench-qa/` (not committed): `07-final-dark.png`, `03-light-review.png`, `09-match-raw.png`, `10-reference-normalized.png`. Evidence uses the production renderer and an isolated in-memory bridge populated from a read-only copy of the user's saved state. Mutating business operations are rejected by that bridge. This is renderer verification, not a claim of live-model or deployed Electron verification.
 
-1. **P2, right-panel legibility:** the inherited 420-pixel default left too little room for conversations. The new workspace starts at 520 pixels, retains the draggable splitter, and uses 14-pixel message text. Final focused capture shows readable wrapping and visible composer controls.
-2. **P2, answer affordance:** “输入回答” initially inherited a native gray button appearance. Added a token-based text-button style; the final focused capture shows the accent action separated from explanatory copy.
-3. **P2, card density:** nested old/new card padding pushed Gate cards below the useful viewport. Removed duplicate padding, reduced stage/context spacing, and preserved every evidence counter. The final full view shows both Task and Gate cards within the visible stage columns.
-4. **P2, laptop header overflow:** at 1280 pixels, the global New Run action was clipped; at 1672 pixels, search scope text overlapped the input. Reduced responsive project/search minimum widths and hid redundant scope copy on constrained screens. The final narrow capture and geometry assertions confirm New Run, new conversation, history and send are inside the viewport.
-5. **P3, sidebar terminology:** replaced the wrapping “Local Project + Runs” heading with “项目与运行”.
+## Findings and changes
 
-Every P2 fix was followed by a fresh actual Electron capture and another comparison. No actionable P0/P1/P2 visual finding remains within this workbench change.
+1. **P2 — working space:** permanent project and workflow columns crowded out the material reader. The default is now a compact project/Run disclosure and horizontal stage/node navigation above the two independent panes. Flow and list views remain available explicitly.
+2. **P2 — conversation coupling:** selecting a node or Run must not replace the conversation. The center reader navigates independently; the selected conversation, draft and message scroll position persist. The pinned “节点详情” control focuses the center without closing the chat. The supplied compact tabs, menus, close buttons, plus and history are retained.
+3. **P2 — document overload:** five material tabs separate clarification, original request, repository findings, team knowledge and the review report. Markdown headings, lists, tables and code are rendered through the existing safe renderer. Acceptance criteria are open; longer supporting sections and source metadata are collapsed. Review findings are shown once with their evidence available on demand.
+4. **P2 — information loss:** the full clarification is available through “查看原文”; browser inspection verified all 3,631 characters, including the final open question. Presentation labels and duplicate headings are cleaned up without changing the stored original. Internal identifiers and hashes remain in source/version disclosures.
+5. **P2 — status alignment:** material-row status badges stretched vertically. Explicit center alignment restores compact, readable badges; recaptured and compared.
 
-## Required fidelity surfaces
+No actionable P0/P1/P2 visual finding remains in the changed workbench.
 
-- **Typography:** retained the application's system sans-serif and Chinese fallback. Conversation body uses 14px with generous line height; headings, metadata and buttons have separate weights/sizes. Long conversation titles ellipsize in Tabs while the content header and history preserve access to the full title. Source mock glyphs are not treated as an authoritative downloadable font.
-- **Spacing/layout:** preserved project column, horizontally navigable stages and resizable right workspace. Fixed Tabs/context/composer remain visible while messages scroll. The real app retains additional provenance/status content, so it is denser than the concept; this is intentional preservation of existing information.
-- **Colors/tokens:** dark mode uses the existing dark/teal tokens; waiting questions use the existing amber semantics. Light mode retains the existing product's light/pink theme rather than inventing a new global theme. The source specifies only the dark view.
-- **Assets:** existing DF brand mark and icon library are retained; no new decorative raster art or substitute generated logo was introduced.
-- **Copy/content:** the mock's separate project-assistant and node-chat Tabs are intentionally replaced by the later agreed single conversation type. Scope explicitly says all project Runs/nodes. Counts and statuses come from real local state. Draft publication is visibly pending, not an approval. The existing Inspector terminology and all internal sections remain available.
+## Runtime and interaction checks
 
-## Interaction and runtime checks
+- Real saved requirement Gate, four artifacts and five conversations were used as isolated fixture data; no business approval or model request was sent.
+- Switching from stage 01 to 02 and back preserved the selected chat ID, a typed draft and its message scroll offset; the newly selected center reader starts at the top.
+- Clarification rendering, original-text toggle, material switching, report findings, source disclosures and independently scrolling panes were checked in the browser.
+- Dark and light views were inspected. Existing dark/teal and light/pink product tokens, fonts and icon library are retained.
+- Standard laptop viewport and the reference-sized viewport were checked. Main navigation, material tabs, chat tabs, new/history and composer controls remain usable. The splitter continues to support keyboard and pointer resizing.
+- Browser console error collection returned no errors.
+- Component/application tests additionally cover Run switching, hidden technical metadata, escaped Markdown, empty/missing materials and existing Gate controls.
 
-- All eight nodes and every node-specific Inspector tab opened; artifact/evidence/trace counters deep-link correctly.
-- Flow/list switching, new conversations, question choices, cross-node navigation, explicit proposal publication, independent history/memory, retry, cancel, restart, close/reopen and input recovery passed in Electron.
-- Dark, light and 1280-pixel layouts captured; persistent conversation and New Run controls checked against the viewport.
-- Electron page-error collection remained empty.
-- The packaged completed-flow probe separately verified all eight nodes after actual fixture execution through Acceptance. This does not assert an external GitHub publication or a live DeepSeek model result.
+## Intentional differences and P3 follow-up
 
-## Implementation checklist
-
-- [x] Compare full source and actual implementation together.
-- [x] Compare focused right-panel controls and text.
-- [x] Fix and recapture all P2 findings.
-- [x] Check preserved node details and responsive controls.
-- [x] Keep actual test evidence and live-provider limits separate.
-
-## Follow-up polish
-
-The surrounding legacy navigation and some workflow node titles still mix English and Chinese. A future terminology pass can align the whole application; this change preserves the existing functional labels and node records.
+The production header retains team pairing, search, budget and synchronization controls omitted by the mock. Its existing horizontally scrollable diagnostic strip remains unchanged. The conversation starts at the user's saved history rather than fictional example messages; no history is rewritten. Exact brand art, large concept typography and mixed English terminology outside this scope are not replaced. Further simplification of the global diagnostic strip is optional polish, separate from this reader redesign.

@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
+  assessAgentReviewFreshness,
+  AgentProviderRequestError,
+  describeAgentProviderFailure,
   createAgentReviewArtifacts,
   deriveWorkflowContextPolicyRequirements,
   redactSensitiveText,
@@ -21,7 +24,7 @@ import {
 } from '@ai-devflow/shared'
 import type { RunKnowledgeReviewInput, RunKnowledgeReviewResult } from './ipc-contract.js'
 
-export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model'>
+export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking'>
 
 export type KnowledgeReviewRuntimeStore = {
   listRuns(): Promise<WorkflowRun[]>
@@ -47,6 +50,8 @@ export type KnowledgeReviewRuntimeDependencies = {
   budgetGuard?: KnowledgeReviewBudgetGuard
   now?: () => string
   createRequestId?: () => string
+  signal?: AbortSignal
+  beforeCommit?: () => void
   loadPolicySnapshot?: (localProjectId: string) => Promise<PolicySnapshot | null>
 }
 
@@ -62,7 +67,7 @@ function blockedMessage(status: string): string {
     return '基于知识的门禁审查在调用 Provider 前被阻断。重试前需要有效的 Lead runtime budget approval。'
   }
   if (status === 'unavailable') {
-    return '基于知识的门禁审查在调用 Provider 前被阻断。请先配对项目并恢复已认证的 Team 连接。'
+    return '基于知识的门禁审查尚未调用模型：预算检查未就绪。'
   }
   return '基于知识的门禁审查被权威 Team budget policy 阻断，尚未调用 Provider。'
 }
@@ -170,9 +175,12 @@ export function createKnowledgeReviewRuntime(
     const lazyProvider: AgentProvider = {
       ...providerMetadata,
       reviewKnowledge: async (providerInput) => {
-        const provider = await deps.resolveProvider(providerId)
+        let provider: AgentProvider
+        try { provider = await deps.resolveProvider(providerId) } catch (error) {
+          throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'credential_unavailable', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: true, cause: error })
+        }
         if (provider.id !== providerMetadata.id || provider.model !== providerMetadata.model) {
-          throw new Error('Agent provider configuration changed after budget authorization. Retry the review.')
+          throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'provider_configuration_changed', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: true })
         }
         return provider.reviewKnowledge(providerInput)
       },
@@ -197,15 +205,18 @@ export function createKnowledgeReviewRuntime(
           ? { approvalId: input.runtimeBudgetApprovalId }
           : {}),
         now,
+        ...(deps.signal ? { signal: deps.signal } : {}),
+        onAttemptUsage: (usage) => deps.store.saveAgentTokenUsage(usage),
       })
     } catch (error) {
-      const detail = failureMessage(error)
-      await persistError(input, requestId, `门禁审查在产物保存前失败：${detail}`)
+      const detail = error instanceof AgentProviderRequestError ? describeAgentProviderFailure(error) : failureMessage(error)
+      const diagnostic = error instanceof AgentProviderRequestError ? JSON.stringify({ requestId, model: providerMetadata.model, code: error.code, cause: error.sanitizedCause, billingState: error.billingState, ...error.responseMetadata }) : ''
+      await persistError(input, requestId, `门禁审查在产物保存前失败：${detail} ${diagnostic}`)
       throw new Error(`基于知识的门禁审查在产物保存前失败：${detail}`)
     }
 
     if (budgetedResult.status === 'blocked') {
-      const message = blockedMessage(budgetedResult.budgetDecision.status)
+      const message = `${blockedMessage(budgetedResult.budgetDecision.status)} ${budgetedResult.budgetDecision.reason}`
       await persistError(
         input,
         requestId,
@@ -215,6 +226,13 @@ export function createKnowledgeReviewRuntime(
     }
 
     const result = budgetedResult.execution
+    const latestRun = (await deps.store.listRuns()).find((candidate) => candidate.id === run.id)
+    if (!latestRun || latestRun.version !== run.version || latestRun.currentNodeId !== node.id ||
+      (await assessAgentReviewFreshness({ review: result.review, run: latestRun, node, artifacts: await deps.store.listArtifacts(run.id) })).status !== 'current') {
+      throw new Error('审查期间流程或正文已更新，未保存过期报告；请重新审查。')
+    }
+    deps.signal?.throwIfAborted()
+    deps.beforeCommit?.()
     const output = createAgentReviewArtifacts(result)
     const event: AgentEvent = {
       ...output.event,
@@ -225,7 +243,6 @@ export function createKnowledgeReviewRuntime(
     await deps.store.saveEvent(event)
     await deps.store.saveAgentReview(result.review)
     await deps.store.saveAgentTrace(result.trace)
-    await deps.store.saveAgentTokenUsage(result.tokenUsage)
     return {
       ...result,
       state: await deps.store.loadState(),

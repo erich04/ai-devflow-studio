@@ -84,6 +84,9 @@ export type ProjectBoundRemoteSync = Pick<
   | 'saveRuntimeBudgetPolicy'
   | 'createRuntimeBudgetApproval'
   | 'evaluateRuntimeBudget'
+  | 'importHistoricalModelCall'
+  | 'reserveModelCall'
+  | 'settleModelCall'
 > & {
   uploadCanonicalRunSummary(runId: string): Promise<RemoteSyncUploadResult>
   uploadCanonicalTestEvidenceSummary(evidenceId: string): Promise<RemoteSyncUploadResult>
@@ -468,6 +471,15 @@ export function createProjectBoundRemoteSync(input: {
       return input.remoteSync.createRuntimeBudgetApproval(
         await bindProjectId(approval, input.credentialSource),
       )
+    },
+    async importHistoricalModelCall(request) {await input.remoteSync.importHistoricalModelCall({quote:await bindProjectId(request.quote,input.credentialSource),settlement:await bindProjectId(request.settlement,input.credentialSource)})},
+    async reserveModelCall(request) {
+      const scope=await freezeCanonicalScope()
+      if (scope.localProjectId!==request.projectId) throw new Error('Paired Team Project is bound to a different local project.')
+      return input.remoteSync.reserveModelCall({...request,projectId:scope.teamProjectId})
+    },
+    async settleModelCall(request) {
+      return input.remoteSync.settleModelCall(await bindProjectId(request,input.credentialSource))
     },
     async evaluateRuntimeBudget(request) {
       const scope = await freezeCanonicalScope()

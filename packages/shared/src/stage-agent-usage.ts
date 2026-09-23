@@ -1,3 +1,4 @@
+import { parseBudgetAttemptIds } from './model-call-budget'
 import { resolveDeepSeekPricingSnapshot } from './cost'
 import { redactSensitiveText } from './redaction'
 import type { AgentProviderUsage, AgentTokenUsage } from './domain'
@@ -27,6 +28,7 @@ export function createLocalStageAgentUsage(input: {
     (inputTokens - cacheReadTokens) * pricing.cacheMissInputUsdPerMillion +
     outputTokens * pricing.outputUsdPerMillion) / 1_000_000).toFixed(9)) : null
   return {
+    ...(input.usage?.budgetAttemptIds ? { budgetAttemptIds: input.usage.budgetAttemptIds } : {}),
     id: input.id, runId: input.runId, nodeId: input.nodeId, userId: input.userId, projectId: input.projectId,
     provider: 'openai', providerId: redactSensitiveText(input.providerId).value.slice(0, 256),
     model: redactSensitiveText(input.model).value.slice(0, 256), executorKind: 'local-agent',
@@ -64,6 +66,7 @@ export function parseStageAgentUsage(value: unknown, runId: string, projectId: s
     // Only an explicit accounting projection leaves Desktop. Prompts, credentials, local paths and
     // arbitrary executor metadata are not part of this contract.
     const usage: AgentTokenUsage = {
+      ...(row.budgetAttemptIds ? { budgetAttemptIds: parseBudgetAttemptIds(row.budgetAttemptIds) } : {}),
       id: String(row.id), runId, nodeId: String(row.nodeId), userId: String(row.userId), projectId,
       provider: row.provider as AgentTokenUsage['provider'], model: redactSensitiveText(String(row.model)).value,
       inputTokens: Number(row.inputTokens), outputTokens: Number(row.outputTokens), cacheReadTokens: Number(row.cacheReadTokens),
