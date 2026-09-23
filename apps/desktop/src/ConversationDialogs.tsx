@@ -2,23 +2,33 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { CircleHelp, X } from 'lucide-react'
 
-function ConversationDialog({ title, onClose, busy = false, children }: {
-  title: string; onClose: () => void; busy?: boolean; children: ReactNode
+export function ConversationDialog({ title, onClose, busy = false, returnFocus, children }: {
+  title: string; onClose: () => void; busy?: boolean; returnFocus?: HTMLElement; children: ReactNode
 }) {
   const titleId = useId()
   const dialog = useRef<HTMLElement>(null)
   useEffect(() => {
-    const previousFocus = document.activeElement
+    const previousFocus = returnFocus ?? document.activeElement
     dialog.current?.focus()
     return () => {
-      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus()
+      if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus({ preventScroll: true })
     }
-  }, [])
+  }, [returnFocus])
+  useEffect(() => {
+    // Disabling the focused submit button can otherwise move focus to the page.
+    if (busy) dialog.current?.focus({ preventScroll: true })
+  }, [busy])
   return createPortal(<div className="modal-backdrop">
     <section ref={dialog} className="conversation-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} aria-busy={busy} tabIndex={-1} onKeyDown={(event) => {
+      // Help can open above the details dialog; only the top dialog handles its keys.
+      if (event.target instanceof Element && event.target.closest('[role="dialog"]') !== event.currentTarget) return
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!busy) onClose() }
       if (event.key !== 'Tab') return
-      const controls = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), [href], [tabindex="0"]') ?? [])
+      const controls = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [href], [tabindex="0"]') ?? []).filter((control) => {
+        if (control.closest('[hidden]')) return false
+        const closed = control.closest('details:not([open])')
+        return !closed || closed.querySelector('summary') === control
+      })
       const first = controls[0]; const last = controls.at(-1)
       if (!first) { event.preventDefault(); dialog.current?.focus() }
       else if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last?.focus() }

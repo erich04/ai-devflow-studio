@@ -42,7 +42,106 @@ function fixture() {
   return { api, props, commands, onNavigate, get sessions() { return sessions }, push: () => listener?.(run.projectId) }
 }
 
+function openDetails(name: string) {
+  fireEvent.contextMenu(screen.getByTitle(name))
+  fireEvent.click(screen.getByRole('menuitem', { name: '会话详情' }))
+  return screen.getByRole('dialog', { name: '会话详情' })
+}
+function expectExecutor(name: string, executor: string) {
+  expect(openDetails(name)).toHaveTextContent(executor)
+  fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+}
+
 describe('workbench tabs and independent conversation interaction', () => {
+  it('opens an inactive tab’s details without remounting the active chat or changing its draft, scroll or calls', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '第一段对话' })
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '另一段对话', executor: 'opencode' })
+    const other = f.sessions[1]!
+    other.messages.push({ id: 'call', role: 'notice', text: '模型调用', createdAt: run.createdAt, provider: { id: 'old', model: 'historical-model', executor: 'opencode' }, usage: { inputTokens: 12, outputTokens: 3, totalTokens: 15 }, failure: { phase: 'provider', code: 'recovered', httpStatus: 502 } })
+    localStorage.setItem(`devflow-workbench-tab:${run.projectId}`, 'chat-1')
+    render(<WorkbenchWorkspace {...f.props} />)
+    const input = await screen.findByRole('textbox', { name: '对话内容' })
+    fireEvent.change(input, { target: { value: '当前还没发的草稿' } })
+    const messages = screen.getByLabelText('当前会话消息')
+    Object.defineProperties(messages, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 500 } })
+    messages.scrollTop = 150; fireEvent.scroll(messages)
+    expect(document.querySelector('.conversation-head')).toBeNull()
+    const target = screen.getByRole('tab', { name: '另一段对话' })
+    const dialog = openDetails('另一段对话')
+    expect(within(dialog).getByLabelText('会话名称')).toHaveValue('另一段对话')
+    expect(dialog).toHaveTextContent('OpenCode')
+    expect(dialog).toHaveTextContent('historical-model')
+    expect(dialog).toHaveTextContent('DeepSeek（Agents 当前配置）')
+    fireEvent.click(within(dialog).getByText('模型调用设置记录'))
+    expect(dialog).toHaveTextContent('总计 15 tokens')
+    expect(dialog).toHaveTextContent('HTTP 502')
+    expect(screen.getByRole('tab', { name: '第一段对话' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(target).toHaveFocus()
+    expect(screen.getByLabelText('对话内容')).toBe(input)
+    expect(input).toHaveValue('当前还没发的草稿')
+    expect(screen.getByLabelText('当前会话消息')).toBe(messages)
+    expect(messages.scrollTop).toBe(150)
+    expect(f.commands.some((command) => ['send', 'retry', 'cancel', 'publish'].includes(command.type))).toBe(false)
+  })
+
+  it('supports keyboard menus, explicit rename failure/retry and no accidental rename on close', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '键盘会话' })
+    render(<WorkbenchWorkspace {...f.props} />)
+    const tab = await screen.findByRole('tab', { name: '键盘会话' })
+    tab.focus(); fireEvent.keyDown(tab, { key: 'F10', shiftKey: true })
+    expect(screen.getByRole('menuitem', { name: '会话详情' })).toHaveFocus()
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' })
+    expect(tab).toHaveFocus()
+    fireEvent.keyDown(tab, { key: 'ContextMenu' })
+    fireEvent.click(screen.getByRole('menuitem'))
+    fireEvent.change(screen.getByLabelText('会话名称'), { target: { value: '未保存的名称' } })
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    expect(f.sessions[0]!.title).toBe('键盘会话')
+    openDetails('键盘会话')
+    fireEvent.change(screen.getByLabelText('会话名称'), { target: { value: '重命名后的会话' } })
+    f.api.workbenchConversation.mockRejectedValueOnce(new Error('临时错误'))
+    fireEvent.click(screen.getByRole('button', { name: '保存名称' }))
+    await within(screen.getByRole('dialog')).findByRole('alert')
+    expect(f.sessions[0]!.title).toBe('键盘会话')
+    const save = screen.getByRole('button', { name: '保存名称' })
+    save.focus(); fireEvent.click(save)
+    await screen.findByRole('tab', { name: '重命名后的会话' })
+    expect(screen.getByRole('dialog')).toHaveFocus()
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(f.commands.filter((command) => command.type === 'update')).toEqual([
+      { type: 'update', projectId: run.projectId, conversationId: 'chat-1', title: '重命名后的会话' },
+    ])
+  })
+
+  it('keeps a live request running through details, then preserves cancellation and retry controls', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '正在调查' })
+    f.sessions[0]!.status = 'running'
+    localStorage.setItem(`devflow-workbench-tab:${run.projectId}`, 'chat-1')
+    render(<WorkbenchWorkspace {...f.props} />)
+    await screen.findByRole('button', { name: '停止调查' })
+    openDetails('正在调查')
+    f.sessions[0]!.messages.push({ id: 'progress', role: 'notice', text: '新的查询结果', createdAt: run.createdAt })
+    f.sessions[0]!.version++
+    await act(async () => f.push())
+    expect(screen.getByRole('dialog')).toHaveTextContent('本地保留 1 条会话记录')
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    expect(screen.getByText('新的查询结果')).toBeVisible()
+    expect(f.commands.some((command) => ['send', 'retry', 'cancel'].includes(command.type))).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '停止调查' }))
+    await waitFor(() => expect(f.sessions[0]!.status).toBe('cancelled'))
+    f.sessions[0]!.status = 'failed'; f.sessions[0]!.error = '需要重试'; f.sessions[0]!.version++
+    await act(async () => f.push())
+    openDetails('正在调查')
+    fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
+    fireEvent.click(screen.getByRole('button', { name: '重试调查' }))
+    await waitFor(() => expect(f.commands.filter((command) => command.type === 'retry')).toHaveLength(1))
+  })
+
   it('cancels creation without changing the active conversation, draft, executor or model calls', async () => {
     const f = fixture()
     render(<WorkbenchWorkspace {...f.props} />)
@@ -107,7 +206,7 @@ describe('workbench tabs and independent conversation interaction', () => {
     session.contextReceipt = { includedMessages: 7, omittedMessages: 3, limited: true, observedAt: run.updatedAt }
     session.version++
     await act(async () => f.push())
-    fireEvent.click(screen.getByRole('button', { name: /^会话信息/ }))
+    openDetails('对话 1')
     expect(screen.queryByText(/上次使用|较早消息未进入/)).toBeNull()
     expect(screen.getByText(/本次上下文达到容量限制/)).toBeVisible()
     expect(screen.getByText('模型调用设置记录')).toBeVisible()
@@ -139,16 +238,16 @@ describe('workbench tabs and independent conversation interaction', () => {
     fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
     await screen.findByRole('tab', { name: '对话 2' })
     expect(f.sessions[1]!.executor).toBe('opencode')
-    expect(screen.getByText('执行方式：OpenCode · 模型：DeepSeek')).toBeVisible()
+    expectExecutor('对话 2', 'OpenCode')
     fireEvent.click(screen.getByRole('tab', { name: '对话 1' }))
-    expect(screen.getByText('执行方式：Direct Provider · 模型：DeepSeek')).toBeVisible()
+    expectExecutor('对话 1', 'Direct Provider')
     expect(f.sessions[0]!.executor).toBe('direct-provider')
     expect(f.commands.some((command) => command.type === 'send')).toBe(false)
     view.unmount()
     render(<WorkbenchWorkspace {...f.props} />)
     await screen.findByRole('tab', { name: '对话 1' })
     fireEvent.click(screen.getByRole('tab', { name: '对话 2' }))
-    expect(screen.getByText('执行方式：OpenCode · 模型：DeepSeek')).toBeVisible()
+    expectExecutor('对话 2', 'OpenCode')
     expect(screen.queryByLabelText('新对话执行方式')).toBeNull()
   })
   it('renders legacy and declared Markdown while keeping plain text, unknown formats and unsafe content readable', async () => {
@@ -269,7 +368,7 @@ describe('workbench tabs and independent conversation interaction', () => {
     await screen.findByRole('tab', { name: '对话 1' })
     f.sessions[0]!.memory = '旧版私有备注'; f.sessions[0]!.version++
     await act(async () => f.push())
-    fireEvent.click(screen.getByRole('button', { name: /^会话信息/ }))
+    openDetails('对话 1')
     expect(screen.queryByRole('textbox', { name: '仅本会话记忆' })).toBeNull()
     expect(screen.getByText('旧版私有备注')).toBeInTheDocument()
     fireEvent.click(screen.getByText('旧版会话备注（已停用）'))

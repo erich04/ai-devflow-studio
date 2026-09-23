@@ -1,8 +1,9 @@
 import { ConversationBody } from './ConversationBody'
-import { ConversationHelpButton, NewConversationDialog } from './ConversationDialogs'
+import { NewConversationDialog } from './ConversationDialogs'
+import { ConversationDetailsDialog, ConversationTabMenu, type ConversationMenuTarget, type ConversationTabTarget } from './ConversationDetails'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, BookOpen, Brain, ChevronDown, History, MessageCircle, Pin, Plus, RotateCcw, Square, X } from 'lucide-react'
-import { describeProviderThinking, type WorkflowRun } from '@ai-devflow/shared'
+import { ArrowUp, Brain, ChevronDown, History, MessageCircle, MoreHorizontal, Pin, Plus, RotateCcw, Square, X } from 'lucide-react'
+import { type WorkflowRun } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
 import type { ConversationAction, ConversationCommand, ConversationMessage, WorkbenchConversation } from '../electron/workbench-conversation-contract'
 
@@ -28,6 +29,9 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
+  const [tabMenu, setTabMenu] = useState<ConversationMenuTarget | null>(null)
+  const [detailsTarget, setDetailsTarget] = useState<ConversationTabTarget | null>(null)
+  const closeMenu = useCallback(() => setTabMenu(null), [])
   const [creationRequest, setCreationRequest] = useState<{ projectId: string; prompt: string } | null>(null)
   const creatingRef = useRef(false)
   const generation = useRef(0)
@@ -61,7 +65,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
 
   useEffect(() => {
     generation.current++
-    setSessions([]); setShowHistory(false); setError(''); setCreationRequest(null)
+    setSessions([]); setShowHistory(false); setError(''); setCreationRequest(null); setTabMenu(null); setDetailsTarget(null)
     let restored = 'details'
     try { restored = projectId ? localStorage.getItem(`devflow-workbench-tab:${projectId}`) ?? 'details' : 'details' } catch { /* optional UI preference */ }
     setActive(restored)
@@ -109,6 +113,12 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   const projectSessions = sessions.filter((session) => session.localProjectId === projectId)
   const visible = projectSessions.filter((session) => session.isOpen).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
   const session = projectSessions.find((item) => item.id === active)
+  const detailsSession = detailsTarget && detailsTarget.projectId === projectId ? visible.find((item) => item.id === detailsTarget.conversationId) : undefined
+  const menuSession = tabMenu && tabMenu.projectId === projectId ? visible.find((item) => item.id === tabMenu.conversationId) : undefined
+  function openTabMenu(item: WorkbenchConversation, trigger: HTMLElement, point?: { x: number; y: number }) {
+    const bounds = trigger.getBoundingClientRect()
+    setTabMenu({ projectId: item.localProjectId, conversationId: item.id, trigger, x: point?.x ?? bounds.left, y: point?.y ?? bounds.bottom })
+  }
   function navigate(action: ConversationAction) {
     const run = runs.find((candidate) => candidate.id === action.runId)
     if (!run?.nodes.some((node) => node.id === action.nodeId)) { setError('目标节点已不存在，或不在当前项目中。请重新查询最新流程。'); return }
@@ -128,19 +138,29 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       }}>
         <button id="details-tab" role="tab" aria-controls="details-panel" aria-selected={active === 'details'} tabIndex={active === 'details' ? 0 : -1} onClick={() => { activate('details'); setShowHistory(false) }}><Pin size={15} />节点详情</button>
         {visible.map((item) => <div className="conversation-tab" key={item.id}>
-          <button id={`chat-tab-${item.id}`} role="tab" aria-controls={`chat-panel-${item.id}`} aria-selected={active === item.id} tabIndex={active === item.id ? 0 : -1} onClick={() => { activate(item.id); setShowHistory(false) }} title={item.title}>
+          <button id={`chat-tab-${item.id}`} role="tab" aria-controls={`chat-panel-${item.id}`} aria-selected={active === item.id} tabIndex={active === item.id ? 0 : -1} onClick={() => { activate(item.id); setShowHistory(false) }} title={item.title}
+            aria-haspopup="menu" aria-expanded={menuSession?.id === item.id}
+            onContextMenu={(event) => { event.preventDefault(); openTabMenu(item, event.currentTarget, { x: event.clientX, y: event.clientY }) }}
+            onKeyDown={(event) => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); event.stopPropagation(); openTabMenu(item, event.currentTarget) } }}>
             <MessageCircle size={15} /><span>{item.title}</span>{item.status === 'awaiting_answer' && <i aria-label="待回答">•</i>}{item.status === 'running' && <i aria-label="调查中" className="conversation-running-dot" />}
           </button>
+          <button className="conversation-tab-options" aria-label={`会话菜单：${item.title}`} title="会话菜单（也可右键 Tab）" aria-haspopup="menu" aria-expanded={menuSession?.id === item.id} onClick={(event) => openTabMenu(item, event.currentTarget)}><MoreHorizontal size={14} /></button>
           <button className="close-tab" aria-label={`关闭会话 Tab：${item.title}`} onClick={async () => {
             if (!projectId) return
             const result = await runCommand({ type: 'update', projectId, conversationId: item.id, isOpen: false })
-            if (result && active === item.id) activate('details')
+            if (result) {
+              if (active === item.id) activate('details')
+              setTabMenu(null)
+              if (detailsTarget?.conversationId === item.id) setDetailsTarget(null)
+            }
           }}><X size={13} /></button>
         </div>)}
       </div>
       <button className="workspace-icon" aria-label="新建对话" title="新建独立对话，可以询问整个项目" disabled={!projectId || !api?.workbenchConversation || creating} onClick={() => beginCreate()}><Plus size={19} /></button>
       <button className="workspace-icon" aria-label="会话历史" title="会话历史" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}><History size={18} /></button>
     </div>
+    {tabMenu && menuSession && <ConversationTabMenu key={menuSession.id} target={tabMenu} onClose={closeMenu} onDetails={() => { setDetailsTarget(tabMenu); setTabMenu(null) }} />}
+    {detailsTarget && detailsSession && <ConversationDetailsDialog key={detailsSession.id} session={detailsSession} projectName={projectName ?? '当前项目'} providerName={providerName} statusLabel={statusCopy[detailsSession.status]} returnFocus={detailsTarget.trigger} onClose={() => setDetailsTarget(null)} onRename={(title) => runCommand({ type: 'update', projectId: detailsSession.localProjectId, conversationId: detailsSession.id, title })} />}
     {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError('') } }} onCreate={(executor) => void create(executor)} />}
     {error && !creationRequest && <div className="conversation-error" role="alert">{error}<button aria-label="关闭会话提示" onClick={() => setError('')}><X size={14} /></button></div>}
     {showHistory && <section className="conversation-history" aria-label="会话历史记录">
@@ -159,18 +179,17 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     </div>
     {active !== 'details' && !session && !showHistory && <p className="conversation-loading" role="status">{creating ? '正在创建独立对话…' : '正在恢复会话…'}</p>}
     {session && <div id={`chat-panel-${session.id}`} role="tabpanel" aria-labelledby={`chat-tab-${session.id}`} hidden={showHistory} className="workspace-conversation">
-      <ConversationView key={session.id} session={session} runs={runs} projectName={projectName ?? '当前项目'} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand} />
+      <ConversationView key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand} />
     </div>}
   </aside>
 }
 
-function ConversationView({ session, runs, projectName, providerId, providerName, command, onNavigate, onConfigure }: {
-  session: WorkbenchConversation; runs: WorkflowRun[]; projectName: string; providerId: string; providerName: string
+function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure }: {
+  session: WorkbenchConversation; runs: WorkflowRun[]; providerId: string; providerName: string
   command: (input: ConversationCommand) => Promise<unknown>
   onNavigate: (action: ConversationAction) => void; onConfigure: () => void
 }) {
   const [input, setInput] = useState(session.inputDraft)
-  const [contextOpen, setContextOpen] = useState(false)
   const [sending, setSending] = useState(false)
   const [answerTo, setAnswerTo] = useState<string | null>(null)
   const inputRef = useRef(input)
@@ -203,18 +222,6 @@ function ConversationView({ session, runs, projectName, providerId, providerName
   const usages = session.messages.flatMap((message) => message.usage ? [message.usage] : [])
   const tokenCount = usages.reduce((sum, usage) => sum + (usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)), 0)
   return <>
-    <header className="conversation-head">
-      <div className="row"><strong>{session.title}</strong><span className={`pill ${session.status === 'awaiting_answer' ? 'blocked' : 'soft'}`}>{statusCopy[session.status]}</span></div>
-      <p>{projectName} · 可查询全部 Run 与节点</p>
-      <p>执行方式：{session.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · 模型：{providerName || '尚未选择'}</p>
-      <div className="conversation-context-heading"><button className="conversation-context-toggle" onClick={() => setContextOpen(!contextOpen)} aria-expanded={contextOpen}><BookOpen size={15} />会话信息<span>{contextOpen ? '收起' : '查看'}</span></button><ConversationHelpButton /></div>
-      {contextOpen && <div className="conversation-context">
-        <label>会话名称<input aria-label="会话名称" key={session.id} defaultValue={session.title} maxLength={100} onBlur={(event) => { if (event.target.value.trim() && event.target.value !== session.title) void command({ type: 'update', ...scope, title: event.target.value }) }} /></label>
-        {session.memory && <details className="conversation-legacy-note"><summary>旧版会话备注（已停用）</summary><p className="meta">已停用，不会发送给模型；如需继续使用其中的要求，请在聊天中说明。</p><pre>{session.memory}</pre></details>}
-        {session.contextReceipt?.limited && <p className="meta">本次上下文达到容量限制，部分查询内容未全部附带。可以缩小问题范围后继续调查。</p>}
-        <details><summary>模型调用设置记录</summary>{session.messages.filter((message) => message.provider).map((message) => <p className="meta" key={message.id}>{message.createdAt} · {message.provider!.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {message.provider!.model} · {message.provider!.effectiveThinking ? describeProviderThinking(message.provider!.effectiveThinking!) : '未提供或未记录思考参数'}</p>)}</details>
-      </div>}
-    </header>
     <div className="conversation-messages" aria-label="当前会话消息" aria-busy={busy} onScroll={(event) => { const element = event.currentTarget; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
       {visibleMessages.length === 0 && <div className="conversation-welcome">
         <div className="conversation-avatar"><MessageCircle /></div><h3>从一个问题开始</h3><p>讨论整个项目，也可以深入任意节点。每个 Tab 保留自己的聊天历史。</p>
