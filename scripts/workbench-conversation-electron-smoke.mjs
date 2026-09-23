@@ -320,7 +320,8 @@ try {
   await expect(page.getByRole('button', { name: '新建 Run', exact: true })).toBeInViewport()
   await expect.poll(async () => (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).x + (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).width).toBeLessThanOrEqual(1280)
   await page.screenshot({ scale: 'css', path: path.join(output, '05-narrow-workspace.png') })
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 600))
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 760))
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds().height)).toBe(760)
   await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeInViewport()
   expect((await page.getByLabel('当前会话消息').boundingBox()).height).toBeGreaterThan(100)
   await page.screenshot({ scale: 'css', path: path.join(output, '13-short-window.png') })
@@ -342,7 +343,7 @@ try {
   expect(JSON.stringify(requests)).not.toContain('REASONING_LOCAL_ONLY')
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
-  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
 } catch (error) {
