@@ -17,6 +17,8 @@ The right side of the split workspace now contains only conversations. Legacy co
 - Native Electron: the updated renderer is visible under the original profile, including the selected design stage, actual requirement Gate, half-filled first connector and chat-only header.
 - Visual comparison and evidence paths: [design-qa.md](../../design-qa.md).
 
+The first Windows CI attempt passed 4,126 tests but hit the pre-existing one-second `vi.waitFor` default while creating a real Git worktree for dependency-approval testing. Cleanup then encountered the still-active directory. The approval/rejection fixture waits now allow ten seconds on Windows, within the existing thirty-second test deadline; their assertions and product execution limits are unchanged. The two dependency-approval tests are rerun locally and the final candidate is rechecked in CI.
+
 ## Original-profile recovery
 
 Before rollout, backed up the complete desktop profile, registry, installed renderer, manifest and a consistent SQLite snapshot. The 66 SQLite tables were compared by row count and stable row digest after restart. All 65 non-conversation tables are identical. The five-conversation table differs only in `version`/`updatedAt` metadata for the opened conversation; messages, drafts and remaining fields are identical. Counts remain 1 Run, 8 nodes, 4 artifacts and 5 conversations. Workflow state, budget, Provider credentials and pairing did not change.
