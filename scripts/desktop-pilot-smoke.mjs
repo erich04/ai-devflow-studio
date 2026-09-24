@@ -742,8 +742,8 @@ try {
     )[0]?.values ?? [],
   }
   database.close()
-  if (schemaVersion !== 35) {
-    throw new Error(`Packaged Desktop did not initialize schema 35: ${schemaVersion}`)
+  if (schemaVersion !== 36) {
+    throw new Error(`Packaged Desktop did not initialize schema 36: ${schemaVersion}`)
   }
   const [toolId, source, installationId, installationVersion, started, succeeded, records, results] =
     workflowEvaluationAudit ?? []

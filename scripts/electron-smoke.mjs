@@ -1310,6 +1310,14 @@ try {
   await expect(first.page.getByTestId('tests-view').getByText(/^blocked$/i)).toBeVisible()
   await first.page.getByRole('button', { name: /保存测试命令/ }).click()
   await expect(first.page.getByTestId('toast')).toContainText('测试命令已阻断')
+  // Governed OpenCode must resolve a saved project Provider, even when the
+  // controlled CLI performs no model calls. Keep its upstream loopback-only.
+  await first.page.evaluate(async () => {
+    await window.aiDevFlowDesktop.saveAgentProviderCredential({
+      providerId: 'openai', name: 'Controlled OpenCode Provider', model: 'gpt-4.1-mini',
+      apiKey: 'fixture-only-opencode-key', baseUrl: 'http://127.0.0.1:1/v1',
+    })
+  })
   const opencodeMainAuthority = await first.page.evaluate(async ({ projectId, runId, nodeId }) => {
     const discovery = await window.aiDevFlowDesktop.detectCodingRuntimeEngines({ projectId })
     const candidate = discovery.candidates.find((item) => item.executor === 'opencode-http')
