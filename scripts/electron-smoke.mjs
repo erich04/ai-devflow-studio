@@ -364,7 +364,14 @@ async function createSmokePairingCode() {
   return body.code
 }
 
+async function showProjectRuns(page) {
+  const menu = page.locator('.workbench-project-menu')
+  await expect(menu).toBeVisible()
+  if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
+}
+
 async function selectRunByTitle(page, title) {
+  await showProjectRuns(page)
   const runRow = page.locator('.run-row').filter({ hasText: title })
   await expect(runRow).toBeVisible()
   await runRow.click()
@@ -394,6 +401,7 @@ function resolveWorkflowNodes(run) {
 }
 
 async function selectWorkflowNode(page, testId, expectedTitle) {
+  await page.getByRole('button', { name: '流程视图', exact: true }).click()
   const node = page.getByTestId(testId)
   const inspector = page.getByTestId('node-inspector')
 
@@ -474,6 +482,7 @@ async function runKnowledgeReviewViaDesktopApi(
     providerId: smokeReviewProviderId,
   })
   await page.reload({ waitUntil: 'domcontentloaded' })
+  await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /工作台/ }).click()
@@ -509,6 +518,7 @@ async function runCodingAgentViaDesktopApi(
   expect(codingRun.status).toBe('waiting_permission')
   expect(typeof codingRun.permissionRequestId).toBe('string')
   await page.reload({ waitUntil: 'domcontentloaded' })
+  await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /工作台/ }).click()
@@ -544,6 +554,7 @@ async function startRetryAttemptViaDesktopApi(
   expect(retryAttempt.status).toBe('started')
   expect(typeof retryAttempt.codingRunId).toBe('string')
   await page.reload({ waitUntil: 'domcontentloaded' })
+  await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /工作台/ }).click()
@@ -578,6 +589,7 @@ async function runProjectTestsViaDesktopApi(
   expect(execution.evidence.status).toBe('passed')
   expect(execution.evidence.command).toBe('npm test')
   await page.reload({ waitUntil: 'domcontentloaded' })
+  await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /^测试$/ }).click()
@@ -884,6 +896,7 @@ try {
   await expect(first.page.getByTestId('workflow-empty-state')).toContainText('暂无 Run')
   await expect(first.page.getByTestId('node-inspector-empty')).toContainText('选择真实 Run')
 
+  await showProjectRuns(first.page)
   await first.page.getByRole('button', { name: /选择本地仓库/ }).click()
   await expect(first.page.locator('.local-project-panel').getByText('electron-smoke-fixture')).toBeVisible()
   const localProjectId = await first.page.evaluate(async (repoPath) => {
@@ -953,6 +966,7 @@ try {
   await createRunDialog.getByLabel('标题').fill('重构 GitHub webhook 重试策略')
   await createRunDialog.getByLabel('一句话需求').fill('请先澄清 webhook retry 的失败边界，再设计实现方案。')
   await createRunDialog.getByRole('button', { name: /创建并开始澄清/ }).click()
+  await showProjectRuns(first.page)
   await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
   await first.page.getByRole('button', { name: 'Team Overview', exact: true }).click()
@@ -960,6 +974,7 @@ try {
   await expect(first.page.getByTestId('team-sync-feedback')).toContainText('拉取成功 · 策略 v1', { timeout: 20_000 })
   await expect(first.page.getByTestId('team-overview')).toBeVisible()
   await first.page.getByRole('button', { name: /工作台/ }).click()
+  await showProjectRuns(first.page)
   await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await expect(first.page.getByText(/Run Sources/)).toContainText('local')
   await expect(first.page.getByTestId('runtime-source-badge')).toContainText('remote snapshot + local merge')
@@ -1659,6 +1674,7 @@ try {
   expect(Date.parse(latestRunUpdatedAtAfterRestart)).toBeGreaterThanOrEqual(
     Date.parse(latestRunUpdatedAtBeforeRestart),
   )
+  await showProjectRuns(second.page)
   await expect(
     second.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true }),
   ).toBeVisible()
