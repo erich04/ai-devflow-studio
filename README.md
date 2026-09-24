@@ -135,30 +135,129 @@ _The demo Owner saves the built-in Recommended preset as policy v2 through the a
 
 ## Architecture
 
+DevFlow is a TypeScript/pnpm monorepo built around **local execution, team governance, and shared domain rules**. Electron owns the canonical development Run and repository operations. The Team API owns collaboration authority and shared records. Both use `@ai-devflow/shared` to validate workflow transitions, evidence, policy, and versioned contracts.
+
+### System and process boundaries
+
 ```mermaid
-flowchart LR
-    Developer["Developer"] --> Desktop["Electron Desktop<br/>React + Vite"]
-    Desktop --> Local["Local Git repository<br/>managed worktrees + saved tests"]
-    Desktop --> SQLite["SQLite<br/>Runs, evidence, conversations, Memory"]
-    Desktop --> Execution["Native Coding / OpenCode<br/>configured model providers + local tools"]
-    Desktop -- "redacted summaries + durable outbox" --> API["Node.js / TypeScript API"]
-    Reviewer["Reviewer / organization owner"] --> Web["Next.js Web console"]
-    Web -- "signed session + scoped commands" --> API
-    API --> Postgres["PostgreSQL<br/>organizations, policy, budgets, team records"]
-    Desktop -- "approved exact-commit push" --> GitHub["GitHub App<br/>branch + Draft PR"]
-    API -- "verify head + reconcile Draft" --> GitHub
+flowchart TB
+    subgraph Local["Developer machine"]
+        UI["Electron renderer<br/>React + Vite workbench"]
+        Main["Electron main<br/>Workflow + execution + sync"]
+        SQLite[("SQLite / LocalStore<br/>local state and evidence")]
+        Git["Repository + Git worktrees<br/>code, Markdown, diffs, tests"]
+        UI -- "typed preload / IPC" --> Main
+        Main <--> SQLite
+        Main <--> Git
+    end
+    subgraph Team["Team services"]
+        Web["Next.js Web console<br/>requests, reviews, policy, budgets"]
+        API["Node.js Team API<br/>auth, collaboration, delivery"]
+        Postgres[("PostgreSQL<br/>team records and summaries")]
+        Web -- "signed session / HTTP" --> API
+        API <--> Postgres
+    end
+    Models["Configured model providers"]
+    GitHub["GitHub<br/>approved branch + Draft pull request"]
+    Main <-- "scoped HTTP<br/>sync, claims, polled commands" --> API
+    Main -- "selected task context" --> Models
+    API -- "server-side Gate Review" --> Models
+    Main -- "approved exact-commit push" --> GitHub
+    API -- "verify remote head / create Draft PR" --> GitHub
 ```
+
+Arrows show runtime communication or local access. The API-to-Desktop direction represents responses and polled commands, not a server-initiated remote shell. Desktop, Web, API, and Worker import `@ai-devflow/shared`; it is a library, not a deployed service.
 
 | Layer | Responsibility | Code |
 | --- | --- | --- |
-| **Desktop renderer** | Workbench, stage navigation, node reader, conversations, knowledge, and execution controls. | [`apps/desktop/src`](apps/desktop/src) |
-| **Electron main / preload** | Trusted IPC, local files and commands, executors, credentials, SQLite, Memory, and sync. | [`apps/desktop/electron`](apps/desktop/electron) |
-| **Web** | Authenticated project and organization management, review, policy, budget, and delivery approval. | [`apps/web/app`](apps/web/app) |
-| **Team API** | Authentication, scoped membership, commands, redacted persistence, GitHub integration, and migrations. | [`apps/api/src`](apps/api/src) |
-| **Shared domain core** | Workflow transitions, policy, Agent contracts, retrieval, Memory, coordination, redaction, and cost. | [`packages/shared/src`](packages/shared/src) |
-| **Worker** | A narrow asynchronous rollup placeholder; not the local Coding executor. | [`apps/worker`](apps/worker) |
+| **Desktop renderer** | Stage navigation, node reader, independent conversations, knowledge, and execution controls. Repository actions cross the typed preload bridge. | [`App.tsx`](apps/desktop/src/App.tsx), [`preload.ts`](apps/desktop/electron/preload.ts), [`ipc-contract.ts`](apps/desktop/electron/ipc-contract.ts) |
+| **Electron main** | Assemble services; validate IPC; own credentials, local commands, worktrees, SQLite, execution recovery, and synchronization. | [`main.ts`](apps/desktop/electron/main.ts), [`LocalStore`](apps/desktop/electron/local-store.ts) |
+| **Web** | Next.js pages, server actions, and API proxies for team intake, review, settings, organization management, and delivery approval. | [`apps/web/app`](apps/web/app), [`API client`](apps/web/app/lib/devflow-api.ts) |
+| **Team API** | Node HTTP request handling, signed browser/paired Desktop authentication, live membership checks, business routes, repositories, and GitHub integration. | [`server.ts`](apps/api/src/server.ts), [`server-request.ts`](apps/api/src/server-request.ts), [`repositories`](apps/api/src/repositories) |
+| **Shared domain core** | Workflow/Agent contracts, deterministic transitions, policy evaluation, retrieval, Memory, coordination, redaction, and cost rules. | [`packages/shared/src`](packages/shared/src) |
+| **Worker** | Standalone project/member cost-rollup entry point. It currently has no background job queue and is not part of the Docker Compose stack. | [`apps/worker/src/index.ts`](apps/worker/src/index.ts) |
 
-Electron owns repository access, shell execution, full local evidence, and private conversation history. The Team service receives allowlisted summaries rather than raw repository content or local paths. Configured model services can receive the selected code and context required for their task. Browser previews cannot replace Electron's trusted execution boundary.
+### Execution model
+
+**Deterministic Workflow owns progress; AI execution produces candidate results and evidence.** The [Desktop Workflow runtime](apps/desktop/electron/workflow-runtime.ts) loads the current Run and its evidence, calls [`applyWorkflowCommand`](packages/shared/src/workflow-transition.ts), and commits accepted changes through an optimistic LocalStore transaction. That transaction also queues the corresponding remote summary. A model response, conversation reply, or runtime `success` is not itself a Gate approval.
+
+| Subsystem | How it fits into the architecture | Implementation entry |
+| --- | --- | --- |
+| **Stage generation and conversations** | Clarification/design produce formal artifacts; project conversations investigate workflow, artifacts, repository files, and knowledge through bounded read tools. Direct Provider and read-only OpenCode are separate execution choices. | [`workflow-agent.ts`](packages/shared/src/workflow-agent.ts), [`workbench-conversation-service.ts`](apps/desktop/electron/workbench-conversation-service.ts) |
+| **Coding orchestration** | `coding-runtime` prepares the managed worktree and Coding Brief, checks permissions/budget, invokes the selected executor, and archives the diff, tests, usage, and outcome. Native Coding and OpenCode share a Coding Executor contract. | [`coding-runtime.ts`](apps/desktop/electron/coding-runtime.ts), [`coding-executor.ts`](apps/desktop/electron/coding-executor.ts), [`native-coding-executor-v2.ts`](apps/desktop/electron/native-coding-executor-v2.ts) |
+| **Bounded Runtime and coordination** | Iterative observe/act/evaluate/checkpoint execution has explicit limits and recovery. Supervisor/Specialist coordination adds predefined task dependencies, scoped authority, shared budgets, and workspace ownership. These are distinct from a single stage-generation or review call. | [`agent-runtime-runtime.ts`](apps/desktop/electron/agent-runtime-runtime.ts), [`specialist-runtime-coordinator.ts`](apps/desktop/electron/specialist-runtime-coordinator.ts) |
+| **Knowledge and Memory** | Repository Markdown is indexed for retrieval and citations. Versioned, scoped Memory can contribute to the Coding context after explicit promotion. Private conversation history is stored separately. | [`repository-knowledge.ts`](apps/desktop/electron/repository-knowledge.ts), [`coding-context.ts`](apps/desktop/electron/coding-context.ts), [`agent-memory-human-actions.ts`](apps/desktop/electron/agent-memory-human-actions.ts) |
+| **Tools and MCP** | Main-owned registries validate tool definitions and execution authority. Trusted local stdio MCP installations and the OpenCode conversation's temporary read-only MCP bridge have separate boundaries. | [`native-tool-registry.ts`](apps/desktop/electron/native-tool-registry.ts), [`local-mcp-client.ts`](apps/desktop/electron/local-mcp-client.ts), [`workbench-mcp-bridge.ts`](apps/desktop/electron/workbench-mcp-bridge.ts) |
+| **Model-call governance** | Governed calls reserve budget before dispatch, record the attempt, and settle reported usage or uncertain outcomes. Pending accounting is reconciled before another charge; runtime and permission limits still apply independently. | [`governed-provider.ts`](packages/shared/src/governed-provider.ts), [`model-call-budget.ts`](apps/api/src/repositories/model-call-budget.ts) |
+
+### State ownership and collaboration
+
+| Data or decision | Authoritative owner | What crosses the boundary |
+| --- | --- | --- |
+| Canonical Run, complete node graph, artifacts, execution/checkpoint state, diffs, test output, private conversations, and Memory content | **Electron / local SQLite and files** | Allowlisted Run, test, review, Coding, Runtime, Memory, and coordination summaries; conversations are excluded. |
+| Organizations, memberships, Team Projects, Work Requests, Gate Commands, policy, budgets, repository bindings, and delivery approvals | **Team API / PostgreSQL** | Project-scoped claims, commands, policy snapshots, budget decisions, and delivery grants to the paired Desktop. |
+| Team Run projection and manager overview | **API read model derived from Desktop summaries** | A versioned, redacted, lossy view for Web. It is not a replica of the complete local Run or an independent workflow authority. |
+| Published branch head and Draft PR | **GitHub**, with local/Team audit records | Desktop pushes the approved commit; API verifies GitHub's actual head and records the Draft PR result. |
+
+Electron owns repository access, shell execution, full local evidence, and private conversation history. The Team service receives allowlisted summaries rather than raw repository content or local paths. Configured model services can receive the selected code and context required for their task. Managed Git worktrees isolate changes; they are not operating-system sandboxes. Browser previews cannot replace Electron's trusted execution boundary.
+
+Local changes that require synchronization commit their sync intent alongside the state change in a **durable outbox**. The [outbox processor](apps/desktop/electron/remote-sync-outbox-processor.ts) reloads canonical records, constructs project-bound summaries, and handles bounded retries and restart recovery. Shared records are scoped by Organization and live project membership; a Desktop credential stays bound to its paired organization/project. Multi-organization onboarding is enabled separately by `DEVFLOW_MULTI_ORGANIZATION_ENABLED`.
+
+The following path shows a **Team-originated request**. A local-only Run can start directly in Desktop; governed GitHub publication additionally requires the Team binding and approval.
+
+```mermaid
+sequenceDiagram
+    participant Web as Web / reviewer
+    participant API as Team API + PostgreSQL
+    participant Desktop as Electron main
+    participant Local as LocalStore + worktree
+    participant GitHub as GitHub
+    Web->>API: Create versioned Work Request
+    Desktop->>API: Explicitly claim request with paired identity
+    API-->>Desktop: Bind request to stable local Run ID
+    Desktop->>Local: Create canonical Run atomically
+    Note over Desktop,Local: Clarify/design artifacts and review evidence
+    Desktop->>API: Upload redacted current summary
+    Web->>API: Submit version-bound Gate Command
+    Desktop->>API: Poll inbox and obtain receipt
+    Desktop->>Local: Validate evidence and apply Workflow command
+    Desktop->>API: Acknowledge and sync resulting summary
+    Note over Desktop,Local: Approved coding, managed-worktree tests, delivery package
+    Desktop->>API: Register exact-commit Delivery Request
+    Web->>API: Separately approve that Delivery Request
+    Desktop->>API: Obtain scoped, short-lived publication grant
+    Desktop->>GitHub: Push only the approved commit and branch
+    Desktop->>API: Request remote-head verification and Draft PR
+    API->>GitHub: Verify expected head and create/reconcile Draft PR
+    API-->>Desktop: Return verified delivery outcome
+    Desktop->>Local: Record delivery and prepare business acceptance
+    Note over Desktop,Local: Acceptance advances only after its own checks and human decision
+```
+
+Web approval queues intent; the owning Desktop re-evaluates it against local evidence before changing the Run. A receipt acknowledgement does not itself advance the Team projection. Browser GitHub OAuth establishes identity; a separately configured GitHub App supplies the narrow publication capability. See [Web/Desktop authority](docs/adr/0012-web-desktop-work-authority.md) and [GitHub delivery authority](docs/adr/0013-github-app-delivery-authority.md).
+
+### Deployment and code reading map
+
+The default [Docker Compose deployment](docker-compose.yml) starts PostgreSQL, a one-shot migration job, the API, and Web. Electron runs on each developer's machine. The standalone Worker is not required for this topology. API persistence uses Postgres; the in-memory seed repository is selected only by an explicit demo flag when no database is configured.
+
+```text
+apps/
+  desktop/
+    src/          React workbench, views, state and UI actions
+    electron/     Main/preload, IPC, LocalStore, execution and sync
+  web/app/        Next.js team console, server actions and API proxies
+  api/src/
+    auth/         Browser sessions, identity and Desktop authentication
+    routes/       Team, organization, collaboration and delivery endpoints
+    repositories/ Persistence contracts, Postgres and demo adapters
+    db/           Database client and versioned SQL migrations
+  worker/src/     Standalone cost aggregation
+packages/shared/ Domain types, parsers, workflow/Agent rules and projections
+docs/adr/         Architecture decisions and authority boundaries
+scripts/          Integration smoke tests, evaluations and release checks
+```
+
+For a first code-reading pass, follow **[`domain.ts`](packages/shared/src/domain.ts) → [`workflow-transition.ts`](packages/shared/src/workflow-transition.ts) → [`workflow-runtime.ts`](apps/desktop/electron/workflow-runtime.ts) → [`main.ts`](apps/desktop/electron/main.ts) → [`server-request.ts`](apps/api/src/server-request.ts)**, then inspect the relevant renderer or Web view. For design rationale, start with [data ownership](docs/adr/0003-postgres-sqlite-data-boundary.md), [bounded Runtime](docs/adr/0014-bounded-agent-runtime.md), [Memory lifecycle](docs/adr/0018-scoped-agent-memory-lifecycle.md), [multi-agent coordination](docs/adr/0019-bounded-multi-agent-coordination.md), and [organization isolation](docs/adr/0023-independent-organizations.md).
 
 ## Quick Start
 
