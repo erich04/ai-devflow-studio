@@ -1,44 +1,71 @@
 {
-  "capturedAt": "2026-09-24T08:20:56.389961+00:00",
-  "sourceCommit": "9895c34cc4512a24c2ed9947f57e3dd2b829f64b",
+  "capturedAt": "2026-09-24T08:52:27.522175+00:00",
+  "sourceCommit": "98985a50a19b1c9ae61f27b137bee58e0197444d",
+  "desktopBuildSourceCommit": "9895c34cc4512a24c2ed9947f57e3dd2b829f64b",
+  "sourceRef": "origin/main",
+  "captureWorktreeBranch": "codex/readme-current-product-20260924",
   "packageVersion": "2.3.0",
-  "method": "Playwright CLI attached to a built Electron application over CDP; Playwright Chromium browsing the running Next.js application and API. Native screenshots, with no pixel editing.",
-  "dataScope": "Disposable local Git repository and SQLite profile; deterministic fake Workflow/Gate Review provider. Web uses explicit in-memory demo data. No user project/profile, paid LLM request, real GitHub delivery, or production data.",
+  "method": "Playwright CLI attached to the built Electron application over CDP and browsing the running Next.js application. Complete application viewports; no element crops, pixel editing, DOM text changes, CSS changes, or compositing.",
+  "dataScope": "Explicit screenshot fixtures in a disposable Git repository and SQLite profile. Four local Runs, 15 artifacts, 3 reviews, 7 illustrative stage-usage records and 2 authored conversations. Three TestEvidence records contain actual sample-project test output: 14 passing checks. Desktop is unpaired; fixture outbox entries were cleared before launch. Normal API endpoints received redacted example summaries in an isolated in-memory demo repository, using its synthetic identity. No paid model calls, real GitHub delivery, existing user profile, or production data.",
+  "fixtureCounts": {
+    "localRuns": 4,
+    "artifacts": 15,
+    "reviews": 3,
+    "stageUsageRecords": 7,
+    "conversations": 2,
+    "testEvidence": 3,
+    "sampleTestsPassed": 14,
+    "webRunsIncludingBuiltInSeed": 5,
+    "webMembers": 4
+  },
   "captures": [
     {
       "file": "desktop-workbench.png",
       "surface": "Electron",
       "theme": "dark",
-      "captureArea": "main",
-      "width": 1698,
-      "height": 889,
-      "bytes": 177536,
-      "sha256": "2dced1f817c8a18879e0d7301f374337088a18711243271691b35b9a2d8cda69",
-      "state": "Disposable task-board repository; a generated clarification and pending requirement Gate; an independent conversation with an unsent draft."
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1280,
+      "bytes": 306901,
+      "sha256": "b5294955fb1f56ad8ddc035836168e2cdc6401a428a065d7a0d46edfe8d09e8f",
+      "capturedAt": "2026-09-24T08:44:33.350708+00:00",
+      "state": "showcase-health; compact navigation; three actual sample test results; populated independent conversation."
+    },
+    {
+      "file": "desktop-workflow-overview.png",
+      "surface": "Electron",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 2560,
+      "height": 1600,
+      "bytes": 427834,
+      "sha256": "5ba54e95bcfc8e1b3cf008de022a6925e02ff38f03a614e9490c6d3bc2161292",
+      "capturedAt": "2026-09-24T08:46:34.209933+00:00",
+      "state": "showcase-health; full six-stage flow view; node reader scrolled to test evidence; populated conversation."
     },
     {
       "file": "desktop-gate-review.png",
       "surface": "Electron",
-      "theme": "light",
-      "captureArea": "[aria-label=\"当前查看的节点详情\"]",
-      "width": 1168,
-      "height": 681,
-      "bytes": 79391,
-      "sha256": "d0528142b3a96fde5148b52aa2c2480e27f29e4504056ded3c2e7c502b16c67d",
-      "state": "The same pending requirement Gate and generated clarification, captured as a readable element close-up."
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1280,
+      "bytes": 304744,
+      "sha256": "e9542b261456904ed4c76e1aa1d54b8d0cefa7616b7736c7023ffd87d212ffc3",
+      "capturedAt": "2026-09-24T08:52:27.522175+00:00",
+      "state": "showcase-idempotency; unapproved design Gate; readiness counts and review/evidence checks; populated design discussion."
     },
     {
-      "file": "web-workbench.png",
+      "file": "web-team-overview.png",
       "surface": "Next.js Web",
       "theme": "dark",
       "captureArea": "viewport",
-      "width": 1600,
+      "width": 1920,
       "height": 1200,
-      "bytes": 270350,
-      "sha256": "aba0eae1022558db1afe5fa29190e3f679a5741e86726b2307a45e2a5f18b808",
-      "state": "The explicit API seed dataset, Payments API / run-health-001, scrolled to Evidence Chain."
+      "bytes": 176067,
+      "sha256": "e08e4581d46ab0aedd99955cdd8f98a658d83c8aed12cf306401845aef474ab6",
+      "capturedAt": "2026-09-24T08:44:40.013272+00:00",
+      "state": "Team overview with four members, five sample Runs, estimated cost, and three passing redacted test summaries."
     }
-  ],
-  "sourceRef": "origin/main",
-  "captureWorktreeBranch": "codex/readme-current-product-20260924"
+  ]
 }

@@ -1,67 +1,90 @@
-# README screenshots — September 24, 2026
+# Populated, full-window README screenshots — September 24, 2026
 
-These are native screenshots of the product running from source commit
-[`9895c34`](https://github.com/erich04/ai-devflow-studio/commit/9895c34cc4512a24c2ed9947f57e3dd2b829f64b).
-They replace the older image in the root README. Historical walkthrough images remain with their original guides.
+These are direct screenshots of the current application, with a populated Payments API demonstration.
+Every image includes the application's header, navigation, and content area. No image is an element
+crop, a composited mockup, or an AI-generated product design. Click the images for full resolution.
 
-The [manifest](manifest.json) records capture areas, dimensions, file hashes, source commit, and demo-data scope.
+The checkout is [`98985a5`](https://github.com/erich04/ai-devflow-studio/commit/98985a50a19b1c9ae61f27b137bee58e0197444d).
+Its application code is unchanged from [`9895c34`](https://github.com/erich04/ai-devflow-studio/commit/9895c34cc4512a24c2ed9947f57e3dd2b829f64b),
+the source used for the Desktop production build. The [manifest](manifest.json) records source
+commits, capture dimensions, hashes, and fixture scope.
 
-| File | What is visible |
-| --- | --- |
-| [Desktop workbench](desktop-workbench.png) | Current six-stage navigation, a completed clarification and pending requirement Gate, separate node reader and conversation, and an unsent chat draft. Dark theme; the actual `main` element is captured. |
-| [Gate reader](desktop-gate-review.png) | The same Gate's current clarification, source tabs, acceptance criteria, and approval control. Light theme; the node-reader element is captured. |
-| [Web workbench](web-workbench.png) | The current Web shell's evidence chain and human Gate for the built-in Payments API example. Dark theme; the viewport is scrolled to the evidence chain. |
+| Image | Full viewport | What is visible |
+| --- | --- | --- |
+| [Desktop workbench](desktop-workbench.png) | 1920 × 1280 | Four completed stages, PR delivery as the current step, three passing test-result cards, token/cost estimates, and a populated conversation with evidence links. |
+| [Workflow overview](desktop-workflow-overview.png) | 2560 × 1600 | All six stage columns, Task/Gate/Test/Delivery/Acceptance cards, completion colors, artifact/trace counts, test results, and the independent conversation pane. |
+| [Design Gate review](desktop-gate-review.png) | 1920 × 1280 | Another Run awaiting its design Gate, partial stage progress, readiness counts, policy/review checks, the explicit approval control, and a discussion of design risks. |
+| [Web team overview](web-team-overview.png) | 1920 × 1200 | Four team members, estimated project cost, several Runs in different stages, and the three redacted test summaries. |
 
-## Data and execution
+All captures use the dark theme and preserve the complete application viewport. Content can be
+scrolled within the application's existing panes; the workflow overview scrolls the node reader to
+the evidence section. The previous empty-draft Desktop crops and sparse Web capture were replaced.
 
-Desktop was built with `corepack pnpm --filter @ai-devflow/desktop build` and launched in real
-Electron 42.11.6, with a disposable Git repository and independent SQLite/data-profile registry.
-The normal preload IPC selected that repository, created a Run, generated clarification through
-`fake-knowledge-review`, and ran the deterministic Gate Review. The requirement Gate was left
-pending. A conversation was created through the UI; its draft was not sent to a model.
+## Demonstration data
 
-Web ran Next.js 15.5.24 against the API's explicit in-memory demo repository. The selected example
-is `p-payments` / `run-health-001`. The Desktop and Web screenshots demonstrate separate local
-fixtures, not an end-to-end synchronized delivery.
+The Desktop uses a disposable Git repository, separate SQLite database, and isolated data-profile
+registry. Its records were inserted through the production LocalStore API as explicit sample
+history, then read by the unmodified Electron application:
 
-No real model credentials, user workspaces, existing Desktop profiles, paid-provider requests, or
-production records were used. Displayed costs, tokens, reviews, and workflow records belong to
-these deterministic fixtures. Screenshots were captured directly; no UI text or pixels were edited.
+- **Health API:** clarification, design, implementation, and testing are illustrated as complete;
+  the current step is preparing PR delivery. Three test-evidence records contain actual output
+  from 14 passing tests in the small sample repository.
+- **Payment idempotency:** the design is ready for review; the human Gate remains unapproved.
+- **Refund audit:** the Run is at implementation.
+- **Reconciliation export:** the Run is at design.
 
-## Reproduce the views
+There are 15 artifacts, 3 review records, 7 stage-usage records, and 2 saved conversations. Workflow
+statuses, prior approvals, design/review prose, usage estimates, and assistant replies are authored
+fixtures for demonstrating existing UI. They are not evidence of live model execution, real
+spending, or completed production delivery. Conversation notices identify the example replies.
+The sample Health API tests do not establish production readiness; the conversation explicitly
+identifies the design's unimplemented timeout requirement.
 
-1. Check out the source commit above, install the pinned dependencies, and build Desktop.
-2. Create a disposable committed Git repository and use separate `DEVFLOW_USER_DATA_DIR` and
-   `DEVFLOW_DATA_PROFILE_REGISTRY_PATH` values. Enable `DEVFLOW_ENABLE_FAKE_RUNTIME=true` and
-   `DEVFLOW_CODING_ENGINE=fake` for this local demonstration.
-3. Select the repository, choose **Deterministic Fake Provider**, and create a Run requesting a
-   clear-completed-tasks button. Generate clarification and run Gate Review; leave the Gate pending.
-4. Use compact stage navigation, create a Direct Provider conversation, and leave its question as
-   an unsent draft. Capture the workbench's `main` element in dark theme. Switch to light theme
-   and capture `[aria-label="当前查看的节点详情"]` for the Gate close-up.
+The Desktop remains in local, unpaired mode, as shown in its header. Sample sync-outbox entries
+created while importing history were removed only from this disposable fixture database. There
+is no claim that this capture exercised Desktop pairing or end-to-end synchronization.
+
+Web runs the current Next.js application against the API's explicit in-memory demo repository.
+The same four sample Runs, three test summaries, and three review summaries were uploaded through
+the normal authenticated API endpoints using an isolated demo identity. The Web overview also
+includes the repository's original `run-health-001` example and its estimated usage. Its displayed
+identity belongs to the demo repository, not a real GitHub OAuth login.
+
+No existing user workspace/profile, paid-provider call, production record, or real GitHub delivery
+was used. No application source, DOM text, CSS, or screenshot pixels were changed for presentation.
+The Next.js development indicator was hidden using its own **Preferences → Hide** control.
+
+## Capture procedure
+
+1. Install the pinned dependencies and build Desktop with
+   `corepack pnpm --filter @ai-devflow/desktop build`.
+2. Use a disposable committed Git repository and separate `DEVFLOW_USER_DATA_DIR` and
+   `DEVFLOW_DATA_PROFILE_REGISTRY_PATH` paths. Import the sample history described above into
+   that profile with `createLocalStore`; create valid workflow shapes with
+   `createWorkflowRunFromRequest`. Use the LocalStore artifact, review, usage, test-evidence,
+   and conversation methods. Do not use a personal profile for demonstration seeding.
+3. Run the three sample-project test commands and preserve their stdout, exit status, and
+   duration in `TestEvidence`. Keep invented history and actually executed checks distinct.
+4. Launch the built Electron app with demo/fake runtimes enabled. Use its real stage controls,
+   conversation Tabs, reader tabs, and scroll panes to select the illustrated views.
 5. Start an isolated API with `DEVFLOW_ENABLE_DEMO_DATA=true` and `DEV_AUTH_ENABLED=true`, with
-   database connection variables unset. Start Web with the same demo flag and that API's URL.
-6. Open `/?projectId=p-payments&runId=run-health-001#evidence-chain`, choose dark theme, and capture
-   a 1600 × 1200 CSS-pixel browser viewport. Desktop was captured from an 1800 × 1100 native window;
-   its element sizes are recorded in the manifest.
+   database connection variables unset. Start Web with the same demo flag and that API URL.
+   Upload allowlisted sample summaries to `/api/sync/run-summary`,
+   `/api/sync/test-evidence-summary`, and `/api/sync/agent-review-summary`.
+6. Open `/?view=team&projectId=p-payments&runId=showcase-health` in Web. Use the product's theme
+   selector and hide the development indicator through its own preferences.
+7. Attach Playwright CLI to Electron over CDP and use its Chromium session for Web. Set the
+   viewport dimensions above and capture the viewport without an element target or clipping.
+   Inspect every PNG before replacing the documentation assets.
 
-Playwright CLI was used for navigation, theme selection, live DOM snapshots, and screenshots.
-Source analysis used `explore-codebase` / Code Review Graph against the same commit (690 parsed
-files), followed by direct inspection of the implementation, package commands, ADRs, and GitHub
-release metadata. The old September 9 domain index was not treated as current evidence.
+## Verification scope
 
-## Validation and limitations
+The Desktop production build and the previous README refresh's seven documentation/UI test files
+passed (52 tests). Four README/guide test files were rerun for this image refresh (33 tests passed). The screenshots
+were inspected at full-window dimensions; hashes and Markdown image links were checked separately.
+The 14 additional sample-project tests are demonstration evidence, not DevFlow's regression suite.
 
-- Desktop production build passed.
-- Seven existing documentation/UI test files passed: 52 tests covering README contracts,
-  historical guide links, workbench conversations, stage navigation, and the legacy URL redirect.
-- Live Electron navigation preserved the unsent conversation draft and the real current Gate
-  while viewing Design and returning to Clarify. Both desktop themes were inspected.
-- The Web workbench, team overview, and settings were opened in the current shell.
-- The pre-existing `scripts/workbench-conversation-electron-smoke.mjs` stopped at its old
-  `节点详情` Tab assertion. Current split layout deliberately has a separate reader instead of that
-  Tab (see [navigation validation](../../../validation/workflow-navigation-20260924.md)). That
-  script is not recorded as passing and was not modified by this documentation refresh.
-- No full release signoff, production deployment, live OpenCode run, or paid model acceptance is
-  claimed by these screenshots. Electron emitted its development security warning; the Web
-  development server's missing favicon returned 404.
+The existing conversation Electron smoke script still has its previously recorded obsolete
+`节点详情` Tab assertion; this screenshot refresh does not report that script as passing. See
+[navigation validation](../../../validation/workflow-navigation-20260924.md) for the current split
+reader layout. These images are not a full release signoff or a live-provider acceptance run.
