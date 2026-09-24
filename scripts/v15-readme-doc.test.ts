@@ -2,11 +2,14 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 describe('release README truth', () => {
-  it('records the published V2.2 baseline and separate V2.3 preparation', () => {
+  it('distinguishes the published V2.3 package from subsequent main-source changes', () => {
     const readme = readFileSync('README.md', 'utf8')
 
-    expect(readme).toContain('published `v2.2.0` baseline')
+    expect(readme).toContain('the latest published release is')
     expect(readme).toContain('`v2.3.0`')
+    expect(readme).toContain('releases/tag/v2.3.0')
+    expect(readme).toContain('current `main` source')
+    expect(readme).toContain('the published installer does not acquire them automatically')
     expect(readme).toContain('docs/releases/v2.3.0/notes.md')
     expect(readme).toContain('Candidate verification and formal signoff are recorded separately')
     expect(readme).toContain('Delivery Intent')
@@ -20,18 +23,18 @@ describe('release README truth', () => {
     )
   })
 
-  it('indexes the two V1.5 deterministic/package gates and current operator walkthrough', () => {
+  it('indexes delivery verification and the current product boundaries', () => {
     const readme = readFileSync('README.md', 'utf8')
 
     expect(readme).toContain('corepack pnpm test:v15-github-delivery')
     expect(readme).toContain('corepack pnpm test:v15-github-delivery-packaged-smoke')
     expect(readme).toContain('docs/guides/devflow-studio-v1.5-walkthrough.md')
-    expect(readme).toContain('Team schema v21')
-    expect(readme).toContain('Desktop schema v35')
     expect(readme).toContain('trusted local stdio MCP')
-    expect(readme).toContain('Memory Candidate is promoted, revised, tombstoned, purged, and reopened')
-    expect(readme).toContain('memoryRestartDuplicateEffects: 0')
-    expect(readme).toContain('provider-authoritative expiry')
-    expect(readme).toContain('verified publication adoption')
+    expect(readme).toContain('scope, revision, expiry, and deletion checks')
+    expect(readme).toContain('Automatic learning after every Coding Run is not implemented')
+    expect(readme).toContain('DEVFLOW_MULTI_ORGANIZATION_ENABLED=true')
+    expect(readme).toContain('Default onboarding remains single-team')
+    expect(readme).toContain('historical `/legacy-shell` URL redirects')
+    expect(readme).toContain('docs/engineering/testing-strategy.md')
   })
 })

@@ -1,0 +1,44 @@
+{
+  "capturedAt": "2026-09-24T08:20:56.389961+00:00",
+  "sourceCommit": "9895c34cc4512a24c2ed9947f57e3dd2b829f64b",
+  "packageVersion": "2.3.0",
+  "method": "Playwright CLI attached to a built Electron application over CDP; Playwright Chromium browsing the running Next.js application and API. Native screenshots, with no pixel editing.",
+  "dataScope": "Disposable local Git repository and SQLite profile; deterministic fake Workflow/Gate Review provider. Web uses explicit in-memory demo data. No user project/profile, paid LLM request, real GitHub delivery, or production data.",
+  "captures": [
+    {
+      "file": "desktop-workbench.png",
+      "surface": "Electron",
+      "theme": "dark",
+      "captureArea": "main",
+      "width": 1698,
+      "height": 889,
+      "bytes": 177536,
+      "sha256": "2dced1f817c8a18879e0d7301f374337088a18711243271691b35b9a2d8cda69",
+      "state": "Disposable task-board repository; a generated clarification and pending requirement Gate; an independent conversation with an unsent draft."
+    },
+    {
+      "file": "desktop-gate-review.png",
+      "surface": "Electron",
+      "theme": "light",
+      "captureArea": "[aria-label=\"当前查看的节点详情\"]",
+      "width": 1168,
+      "height": 681,
+      "bytes": 79391,
+      "sha256": "d0528142b3a96fde5148b52aa2c2480e27f29e4504056ded3c2e7c502b16c67d",
+      "state": "The same pending requirement Gate and generated clarification, captured as a readable element close-up."
+    },
+    {
+      "file": "web-workbench.png",
+      "surface": "Next.js Web",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1600,
+      "height": 1200,
+      "bytes": 270350,
+      "sha256": "aba0eae1022558db1afe5fa29190e3f679a5741e86726b2307a45e2a5f18b808",
+      "state": "The explicit API seed dataset, Payments API / run-health-001, scrolled to Evidence Chain."
+    }
+  ],
+  "sourceRef": "origin/main",
+  "captureWorktreeBranch": "codex/readme-current-product-20260924"
+}
