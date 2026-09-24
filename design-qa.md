@@ -11,6 +11,7 @@ Implementation evidence is in `out/workflow-navigation-qa/` (local, uncommitted)
 - `06-native-design-final.png`: installed Electron, original user profile, 1440 × 920 capture including native title bar. Stage 02 is selected, the requirement Gate is still current, and the original conversation remains visible.
 - `04-final-design-wide.png`: isolated browser preview at observed CSS viewport 1600 × 900, devicePixelRatio 1.08; screenshot output 1481 × 833.
 - `08-narrow-light-final.png`: isolated browser preview at observed CSS viewport 1265 × 833, devicePixelRatio 1.08; screenshot output 1170 × 771.
+- `10-toolbar-fixed-narrow.png` and `11-toolbar-fixed-wide.png`: final toolbar hit-area fix, CSS viewports 1180 × 800 and 1834 × 1000, devicePixelRatio 0.9; outputs 1311 × 889 and 2038 × 1111. All three view modes were clicked in both themes at both widths. The final wide capture and the source were compared together again after this fix.
 
 The screenshot API returned JPEG bytes despite the `.png` filenames. Images were opened by their content type. The browser capture rescales its output; no 1:1 pixel-fidelity claim is made. The source is a cropped panel rather than a full window, so comparison aligns the stage-navigation, selected-node strip, and reader regions, excluding native chrome and surrounding panels. The target and native implementation were opened together in the same image input. Their labels, connector thickness, selection pointer, and region borders are legible at that size; a further crop was unnecessary.
 
@@ -21,6 +22,7 @@ The screenshot API returned JPEG bytes despite the `.png` filenames. Images were
 - **P2, resolved — right-side node shortcut resembled a nonresponsive tab (#169).** The split layout contains only conversation tabs, their menus/close controls, new and history. Its empty state stays conversational; the central node reader remains available.
 - **P2, resolved during preview — hover weakened the selected-stage border.** The hover rule now excludes the pressed stage. The final native comparison shows an unambiguous selected design stage.
 - **P2, resolved during preview — changing the selection caption moved connector geometry.** Stage buttons now reserve a stable 148px width. Browser measurements before/after stage selection confirmed the first connector's position and width are unchanged. Final wide and narrow captures retain aligned tracks.
+- **P2, caught by CI and resolved — project-menu hit area intercepted view switching.** Moving the switch upward exposed an invisible full-row project-menu overlay. The menu now uses its content width and reserves 220px for the view switch. Normal, unforced clicks successfully changed compact/flow/list modes at 1180px and 1834px in both themes. Browser bounds confirm the menu and switch do not overlap; the final captures preserve the intended layout.
 
 No actionable P0/P1/P2 finding remains in the changed surfaces. These findings describe this iteration; the earlier Gate document-reader review remains available in Git history.
 

@@ -19,6 +19,8 @@ The right side of the split workspace now contains only conversations. Legacy co
 
 The first Windows CI attempt passed 4,126 tests but hit the pre-existing one-second `vi.waitFor` default while creating a real Git worktree for dependency-approval testing. Cleanup then encountered the still-active directory. The approval/rejection fixture waits now allow ten seconds on Windows, within the existing thirty-second test deadline; their assertions and product execution limits are unchanged. The two dependency-approval tests are rerun locally and the final candidate is rechecked in CI.
 
+The first macOS E2E attempt caught the project menu's transparent hit area intercepting the repositioned view switch. Its width is now bounded with explicit room for the switch. Unforced mouse clicks across compact/flow/list modes passed in the isolated browser at 1180px and 1834px in both themes; console errors remained empty. Existing E2E view-switch tests are retained to guard this regression.
+
 ## Original-profile recovery
 
 Before rollout, backed up the complete desktop profile, registry, installed renderer, manifest and a consistent SQLite snapshot. The 66 SQLite tables were compared by row count and stable row digest after restart. All 65 non-conversation tables are identical. The five-conversation table differs only in `version`/`updatedAt` metadata for the opened conversation; messages, drafts and remaining fields are identical. Counts remain 1 Run, 8 nodes, 4 artifacts and 5 conversations. Workflow state, budget, Provider credentials and pairing did not change.
