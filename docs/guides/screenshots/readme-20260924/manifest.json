@@ -1,22 +1,25 @@
 {
-  "capturedAt": "2026-09-24T08:52:27.522175+00:00",
-  "sourceCommit": "98985a50a19b1c9ae61f27b137bee58e0197444d",
+  "capturedAt": "2026-09-24T09:09:44.298Z",
+  "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
   "desktopBuildSourceCommit": "9895c34cc4512a24c2ed9947f57e3dd2b829f64b",
   "sourceRef": "origin/main",
   "captureWorktreeBranch": "codex/readme-current-product-20260924",
   "packageVersion": "2.3.0",
   "method": "Playwright CLI attached to the built Electron application over CDP and browsing the running Next.js application. Complete application viewports; no element crops, pixel editing, DOM text changes, CSS changes, or compositing.",
-  "dataScope": "Explicit screenshot fixtures in a disposable Git repository and SQLite profile. Four local Runs, 15 artifacts, 3 reviews, 7 illustrative stage-usage records and 2 authored conversations. Three TestEvidence records contain actual sample-project test output: 14 passing checks. Desktop is unpaired; fixture outbox entries were cleared before launch. Normal API endpoints received redacted example summaries in an isolated in-memory demo repository, using its synthetic identity. No paid model calls, real GitHub delivery, existing user profile, or production data.",
+  "dataScope": "Explicit screenshot fixtures in a disposable Git repository and SQLite profile. Four local Runs, 16 artifacts (15 in the first batch), 3 reviews, 7 illustrative stage-usage records and 2 authored conversations. Three TestEvidence records contain actual sample-project output: 14 passing checks. Implementation includes the actual sample Git diff; PR preview is authored and not a real Delivery Intent. Desktop is unpaired; fixture outbox entries were cleared before launch. First Web overview uses redacted API uploads. Additional Web captures seed full eight-node Run graphs and artifact summaries in the isolated API before startup, then upload test/review summaries through normal endpoints. Three Work Requests, a budget policy and two demo approvals use normal endpoints; Recommended Team Policy v2 is saved through the Web editor. Filled request, review and budget forms are unsent drafts. No paid model calls, real GitHub delivery, existing user profile or production data.",
   "fixtureCounts": {
     "localRuns": 4,
-    "artifacts": 15,
+    "artifacts": 16,
     "reviews": 3,
     "stageUsageRecords": 7,
     "conversations": 2,
     "testEvidence": 3,
     "sampleTestsPassed": 14,
     "webRunsIncludingBuiltInSeed": 5,
-    "webMembers": 4
+    "webMembers": 4,
+    "webWorkRequests": 3,
+    "webBudgetApprovals": 2,
+    "webSavedPolicyVersion": 2
   },
   "captures": [
     {
@@ -29,7 +32,8 @@
       "bytes": 306901,
       "sha256": "b5294955fb1f56ad8ddc035836168e2cdc6401a428a065d7a0d46edfe8d09e8f",
       "capturedAt": "2026-09-24T08:44:33.350708+00:00",
-      "state": "showcase-health; compact navigation; three actual sample test results; populated independent conversation."
+      "state": "showcase-health; compact navigation; three actual sample test results; populated independent conversation.",
+      "sourceCommit": "98985a50a19b1c9ae61f27b137bee58e0197444d"
     },
     {
       "file": "desktop-workflow-overview.png",
@@ -41,7 +45,8 @@
       "bytes": 427834,
       "sha256": "5ba54e95bcfc8e1b3cf008de022a6925e02ff38f03a614e9490c6d3bc2161292",
       "capturedAt": "2026-09-24T08:46:34.209933+00:00",
-      "state": "showcase-health; full six-stage flow view; node reader scrolled to test evidence; populated conversation."
+      "state": "showcase-health; full six-stage flow view; node reader scrolled to test evidence; populated conversation.",
+      "sourceCommit": "98985a50a19b1c9ae61f27b137bee58e0197444d"
     },
     {
       "file": "desktop-gate-review.png",
@@ -53,7 +58,8 @@
       "bytes": 304744,
       "sha256": "e9542b261456904ed4c76e1aa1d54b8d0cefa7616b7736c7023ffd87d212ffc3",
       "capturedAt": "2026-09-24T08:52:27.522175+00:00",
-      "state": "showcase-idempotency; unapproved design Gate; readiness counts and review/evidence checks; populated design discussion."
+      "state": "showcase-idempotency; unapproved design Gate; readiness counts and review/evidence checks; populated design discussion.",
+      "sourceCommit": "98985a50a19b1c9ae61f27b137bee58e0197444d"
     },
     {
       "file": "web-team-overview.png",
@@ -65,7 +71,112 @@
       "bytes": 176067,
       "sha256": "e08e4581d46ab0aedd99955cdd8f98a658d83c8aed12cf306401845aef474ab6",
       "capturedAt": "2026-09-24T08:44:40.013272+00:00",
-      "state": "Team overview with four members, five sample Runs, estimated cost, and three passing redacted test summaries."
+      "state": "Team overview with four members, five sample Runs, estimated cost, and three passing redacted test summaries.",
+      "sourceCommit": "98985a50a19b1c9ae61f27b137bee58e0197444d"
+    },
+    {
+      "file": "desktop-clarification.png",
+      "surface": "Electron",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1280,
+      "bytes": 345278,
+      "sha256": "f40654155281d7cc56a82bf6895d395d7e41a8d83185f4e3e9a6ad8f21c84e1c",
+      "capturedAt": "2026-09-24T09:04:14.308Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "showcase-health; completed clarification; original request, expanded goals, acceptance criteria and non-goals; populated delivery conversation."
+    },
+    {
+      "file": "desktop-design.png",
+      "surface": "Electron",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1280,
+      "bytes": 336201,
+      "sha256": "6f530dee81904bff57fa4f1eba9c0cc319e40faca05e8f4ff0970b341faeae57",
+      "capturedAt": "2026-09-24T09:07:00.318Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "showcase-idempotency; expanded design artifact, component responsibilities, tradeoffs and testing; pending design Gate; populated design conversation."
+    },
+    {
+      "file": "desktop-implementation.png",
+      "surface": "Electron",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1280,
+      "bytes": 363112,
+      "sha256": "cae95d7ee2b11854c0fdb140181e587b111822ae695d07132b100bcc9be4c75f",
+      "capturedAt": "2026-09-24T09:05:00.115Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "showcase-health; implementation artifact with changed-file table and actual sample Git patch; no live model execution."
+    },
+    {
+      "file": "desktop-pr-preparation.png",
+      "surface": "Electron",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1280,
+      "bytes": 332611,
+      "sha256": "aaa9777296ab2c6cf2d04ac404b679af3b855fedf9607520f8726d5d4b97d4a0",
+      "capturedAt": "2026-09-24T09:05:32.698Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "showcase-health; authored PR-material preview with changed files, actual sample tests and uncompleted delivery checklist; no real PR or approved Delivery Intent."
+    },
+    {
+      "file": "web-work-requests.png",
+      "surface": "Next.js Web",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 278856,
+      "sha256": "747e8914c40f5253c7a52bacb3614154d047508ddfd03e714aaa9b8bb880c43a",
+      "capturedAt": "2026-09-24T09:06:16.101Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "Three saved Work Requests and an unsent fourth draft; project/Run selection; demo Owner session."
+    },
+    {
+      "file": "web-evidence-review.png",
+      "surface": "Next.js Web",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1200,
+      "bytes": 275002,
+      "sha256": "4802dd15448da4b7a727d36d80ba0f3c84363c3d6f07ba1f9d5b8f77b43ff1d6",
+      "capturedAt": "2026-09-24T09:07:34.304Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "Complete seeded eight-node Run graph; 38 percent completion; pending design Gate; unsent review comment; page scrolled to metrics and evidence."
+    },
+    {
+      "file": "web-budget-governance.png",
+      "surface": "Next.js Web",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1200,
+      "bytes": 206261,
+      "sha256": "ce973072c57b58bf7e38ea35df5b8b9820d3ade7c5ae79d911a783b364c3fea6",
+      "capturedAt": "2026-09-24T09:08:05.507Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "Saved $200 monthly/$150 warning budget; illustrative spend; two demo approvals of $10/$5; unsent $8 approval draft."
+    },
+    {
+      "file": "web-team-policy.png",
+      "surface": "Next.js Web",
+      "theme": "dark",
+      "captureArea": "viewport",
+      "width": 1920,
+      "height": 1600,
+      "bytes": 325526,
+      "sha256": "fe02567e97c1f3d8e92b56a3441624b44e95952da06175299c48a07bc516b95c",
+      "capturedAt": "2026-09-24T09:09:44.298Z",
+      "sourceCommit": "bea4384ebe800f63d33d185f525a862ed7f6a062",
+      "state": "Built-in Recommended preset saved as demo policy v2 through the real Web editor; rule actions, minimums, guidance and project-effective policy."
     }
   ]
 }

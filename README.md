@@ -36,6 +36,35 @@ _The same example in flow view: six stages, Task/Gate/Test/Delivery cards, artif
 
 </details>
 
+<details>
+<summary>Electron stage gallery: requirements → design → code changes → PR preparation</summary>
+
+**1. Clarification — original request, acceptance criteria, and non-goals**
+
+![Full Electron window with the request and expanded clarification artifact beside the project conversation](docs/guides/screenshots/readme-20260924/desktop-clarification.png)
+
+_Browse a completed clarification node while the Run remains at PR preparation. The reader expands the goal, acceptance criteria, and scope boundaries._
+
+**2. Design — module responsibilities, tradeoffs, and review questions**
+
+![Full Electron window with the payment-idempotency design, component responsibilities and a design-review conversation](docs/guides/screenshots/readme-20260924/desktop-design.png)
+
+_The idempotency example connects the proposed modules, database consistency boundary, test plan, and release-order concern. Its design Gate is still pending._
+
+**3. Implementation — changed files and the sample repository's actual Git diff**
+
+![Full Electron window with the changed-file summary and expanded Git diff alongside test and delivery progress](docs/guides/screenshots/readme-20260924/desktop-implementation.png)
+
+_The artifact contains a real diff from the isolated sample repository, including the implementation and test files. Workflow history and the conversation remain demonstration fixtures._
+
+**5. PR preparation — scope, test evidence, and remaining delivery checks**
+
+![Full Electron window with an expanded PR preparation artifact containing changed files, passing sample tests and an unfinished delivery checklist](docs/guides/screenshots/readme-20260924/desktop-pr-preparation.png)
+
+_An authored PR-material preview illustrates the delivery reader. It explicitly records the missing timeout work and pending Team approval; this is not a published PR or completed acceptance._
+
+</details>
+
 ## Agents and Conversations
 
 | Capability | Current implementation |
@@ -74,6 +103,35 @@ The current Web shell contains the workbench, team overview, project setup, budg
 ![Full Web team overview with members, estimated project cost, multiple Runs at different stages and three passing test summaries](docs/guides/screenshots/readme-20260924/web-team-overview.png)
 
 _Current Next.js team overview with populated members, project cost, Run statuses, and test evidence. The isolated demo API receives redacted sample summaries through its normal endpoints. Full-window captures and their source commit are recorded with the [screenshots](docs/guides/screenshots/readme-20260924/README.md)._
+
+<details>
+<summary>Web control console gallery: work requests → evidence and review → budgets → team policy</summary>
+
+**1. Work requests — submit requirements and inspect the intake queue**
+
+![Full Web console with three saved work requests, a populated new-request draft and project/Run selection](docs/guides/screenshots/readme-20260924/web-work-requests.png)
+
+_Three sample requests are saved in the isolated Team API; the filled form is an unsent fourth draft. Desktop explicitly claims requests before creating local Runs._
+
+**2. Evidence and human review — inspect progress before approving the next stage**
+
+![Full Web viewport showing delivery metrics, all eight workflow nodes, 38 percent progress and a pending design Gate with a draft review comment](docs/guides/screenshots/readme-20260924/web-evidence-review.png)
+
+_The console is scrolled to Evidence Chain, with all eight nodes and the pending human decision visible. Complete Run graphs are seeded for this demonstration; the review comment has not been submitted._
+
+**3. Budget governance — limits, recorded spend, and scoped approvals**
+
+![Full Web settings screen with a saved project budget, two demo budget approvals and a populated approval draft](docs/guides/screenshots/readme-20260924/web-budget-governance.png)
+
+_A $200 monthly demo limit, $150 warning threshold, and two sample approvals illustrate the controls. The displayed spend is illustrative; no paid model was invoked._
+
+**4. Team policy — rule actions, minimum requirements, and repair guidance**
+
+![Full Web Team Policy screen with a saved Recommended preset, rule actions, minimum requirements and project-effective policy](docs/guides/screenshots/readme-20260924/web-team-policy.png)
+
+_The demo Owner saves the built-in Recommended preset as policy v2 through the actual Web editor. The page distinguishes the saved Team policy from the Desktop's last synchronized snapshot._
+
+</details>
 
 ## Architecture
 
