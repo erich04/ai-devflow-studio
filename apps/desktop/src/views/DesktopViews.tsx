@@ -5,6 +5,7 @@ import {
   Bot,
   CheckCircle2,
   ClipboardCheck,
+  ChevronDown,
   Code2,
   GitPullRequest,
   Play,
@@ -131,6 +132,7 @@ export function WorkflowBoard({
   )
   const currentNode = run.nodes.find((node) => node.id === run.currentNodeId)
   const browsingStage = run.nodes.find((node) => node.id === selectedNodeId)?.stage ?? currentNode?.stage
+  const viewedStage = board.find((stage) => stage.stage === browsingStage)
   const currentCardTone =
     currentNode?.status === 'success'
       ? 'passed'
@@ -152,18 +154,36 @@ export function WorkflowBoard({
         </div>
       </div>
       <nav className="workflow-stage-navigation" aria-label="六阶段导航">
-        {board.map((stage) => <button key={stage.stage} className={`stage-nav--${stage.completionState}`} aria-current={currentNode?.stage === stage.stage ? 'step' : undefined} aria-pressed={browsingStage === stage.stage} onClick={() => {
-          const target = stage.cards.find((card) => card.node.id === run.currentNodeId) ?? stage.cards[0]
-          if (target) onSelectNode(target.node.id)
-        }}>
-          <span>{stage.index}</span><strong>{stage.label}</strong><small>{stage.completionLabel}</small>
-        </button>)}
+        {board.map((stage, index) => <div className="workflow-stage-step" key={stage.stage}>
+          <button className={`stage-nav--${stage.completionState}`} aria-current={currentNode?.stage === stage.stage ? 'step' : undefined}
+            aria-pressed={browsingStage === stage.stage} aria-controls={`${boardView === 'compact' ? 'workflow-stage-nodes' : `workflow-stage-${stage.stage}`} workbench-node-reader`} disabled={!stage.cards.length}
+            title={`${stage.label}：${stage.completedNodeCount}/${stage.cards.length} 个节点已完成；点击查看本阶段`}
+            onClick={() => {
+              const target = stage.cards.find((card) => card.node.id === run.currentNodeId) ?? stage.cards[0]
+              if (target) onSelectNode(target.node.id)
+            }}>
+            <span className="stage-nav-index">{stage.index}</span><strong>{stage.label}</strong>
+            <small>{browsingStage === stage.stage ? '正在查看 · ' : ''}{currentNode?.stage === stage.stage && stage.completionState === 'current' ? '当前进度' : stage.completionLabel}</small>
+            {browsingStage === stage.stage && <ChevronDown className="stage-selection-pointer" size={14} aria-hidden="true" />}
+          </button>
+          {index < board.length - 1 && <div className="stage-progress-link" role="progressbar" aria-label={`${stage.label}阶段进度`}
+            aria-valuemin={0} aria-valuemax={100} aria-valuenow={stage.progressPercent}
+            aria-valuetext={`${stage.completedNodeCount}/${stage.cards.length} 个节点已完成${currentNode?.stage === stage.stage ? `，当前：${displayNodeTitle(currentNode)}` : ''}`}>
+            <span style={{ width: `${stage.progressPercent}%` }} />
+          </div>}
+        </div>)}
       </nav>
-      {boardView === 'compact' && <div className="workflow-node-navigation" aria-label="当前查看阶段的节点">
-        {board.find((stage) => stage.stage === browsingStage)?.cards.map((card) => <button key={card.node.id}
-          data-testid={`flow-node-${card.node.id}`} aria-pressed={card.node.id === selectedNodeId}
-          onClick={() => onSelectNode(card.node.id)}><strong>{displayNodeTitle(card.node)}</strong><span>{card.statusLabel}</span></button>)}
-        <span className="meta">{currentRunPhaseCopy(run)}</span>
+      {boardView === 'compact' && <div id="workflow-stage-nodes" className="workflow-node-navigation" role="region" aria-label="当前查看阶段的节点">
+        <div className="workflow-viewed-stage"><small>正在查看</small><strong>{viewedStage?.index} · {viewedStage?.label}</strong></div>
+        <div className="workflow-node-buttons">
+          {viewedStage?.cards.map((card) => <button key={card.node.id}
+            data-testid={`flow-node-${card.node.id}`} aria-pressed={card.node.id === selectedNodeId} aria-controls="workbench-node-reader"
+            onClick={() => onSelectNode(card.node.id)}><strong>{displayNodeTitle(card.node)}</strong><span>{card.statusLabel}</span></button>)}
+        </div>
+        <div className="workflow-actual-progress">
+          <span>{currentNode ? `实际进度：${stageLabels[currentNode.stage]} · ${displayNodeTitle(currentNode)}` : currentRunPhaseCopy(run)}</span>
+          {currentNode && selectedNodeId !== currentNode.id && <button onClick={() => onSelectNode(currentNode.id)}>返回当前进度</button>}
+        </div>
       </div>}
       {boardView !== 'compact' && <><div className="workflow-context">
         <div className="flow-progress" aria-label="Run 流程进度">
@@ -1249,6 +1269,7 @@ export function Inspector({
     <aside className="inspector" data-testid="node-inspector">
       <div className="panel-head panel-head--compact">
         <div className="inspector-node-heading">
+          <span className="inspector-stage-context">{String(stageOrder.indexOf(selectedNode.stage) + 1).padStart(2, '0')} · {stageLabels[selectedNode.stage]}</span>
           <span className="panel-title">{viewModel.header.title}</span>
           <span className="meta">
             类型：{viewModel.header.presentation.nodeKindLabel} · 来源：{viewModel.header.presentation.sourceLabel}

@@ -137,9 +137,9 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     onNavigate(action)
   }
 
-  const conversationPane = <aside className="workbench-workspace" data-testid="workbench-workspace" aria-label="节点详情与对话">
+  const conversationPane = <aside className="workbench-workspace" data-testid="workbench-workspace" aria-label={splitDetails ? '独立对话' : '节点详情与对话'}>
     <div className="workspace-tab-strip">
-      <div ref={tabbar} className="workspace-tabs" role="tablist" aria-label="节点详情与独立会话" onKeyDown={(event) => {
+      <div ref={tabbar} className="workspace-tabs" role="tablist" aria-label={splitDetails ? '独立会话' : '节点详情与独立会话'} onKeyDown={(event) => {
         if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
         const tabs = Array.from(tabbar.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])
         const index = tabs.indexOf(document.activeElement as HTMLButtonElement)
@@ -148,7 +148,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
         tabs[next]?.focus(); tabs[next]?.click()
       }}>
-        {splitDetails ? <button className="workspace-node-shortcut" title="聚焦中间节点详情，会话保持不变" aria-controls="workbench-node-reader" onClick={() => reader.current?.focus({ preventScroll: true })}><Pin size={15} />节点详情</button> : <button id="details-tab" role="tab" aria-controls="details-panel" aria-selected={active === 'details'} tabIndex={active === 'details' ? 0 : -1} onClick={() => { activate('details'); setShowHistory(false) }}><Pin size={15} />节点详情</button>}
+        {!splitDetails && <button id="details-tab" role="tab" aria-controls="details-panel" aria-selected={active === 'details'} tabIndex={active === 'details' ? 0 : -1} onClick={() => { activate('details'); setShowHistory(false) }}><Pin size={15} />节点详情</button>}
         {visible.map((item) => <div className="conversation-tab" key={item.id}>
           <button id={`chat-tab-${item.id}`} role="tab" aria-controls={`chat-panel-${item.id}`} aria-selected={active === item.id} tabIndex={active === item.id ? 0 : -1} onClick={() => { activate(item.id); setShowHistory(false) }} title={item.title}
             aria-haspopup="menu" aria-expanded={menuSession?.id === item.id}
@@ -185,7 +185,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
         if (result) { activate(item.id); setShowHistory(false) }
       }}><span>{item.title}</span><small>{statusCopy[item.status]} · {item.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {new Date(item.updatedAt).toLocaleString()}</small></button>)}
     </section>}
-    <div id="details-panel" role="tabpanel" aria-labelledby="details-tab" hidden={active !== 'details' || showHistory} className="workspace-details">
+    <div id={splitDetails ? 'conversation-empty' : 'details-panel'} role={splitDetails ? 'region' : 'tabpanel'} aria-label={splitDetails ? '对话空状态' : undefined} aria-labelledby={splitDetails ? undefined : 'details-tab'} hidden={active !== 'details' || showHistory} className="workspace-details">
       {splitDetails ? <p className="empty-note">点击 ＋ 新建对话，或从历史继续。浏览节点不会切换会话。</p> : children}
       {api?.workbenchConversation && <div className="details-conversation-entry"><button className="ghost-button" disabled={!projectId || creating} onClick={() => beginCreate('当前项目进行到哪里了？为什么卡住，下一步应该做什么？')}><MessageCircle size={16} />向项目提问</button></div>}
     </div>

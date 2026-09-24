@@ -853,6 +853,7 @@ describe('CodingRuntime', () => {
       userInstruction: 'Do not run before dependencies are safe.',
     })
 
+    // This includes real Git worktree creation; Windows CI can exceed waitFor's 1s default.
     await vi.waitFor(() => {
       expect(store.permissionRequests).toEqual([
         expect.objectContaining({
@@ -862,7 +863,7 @@ describe('CodingRuntime', () => {
           status: 'pending',
         }),
       ])
-    })
+    }, { timeout: process.platform === 'win32' ? 10_000 : 1_000 })
     expect(start).not.toHaveBeenCalled()
     expect(store.diffArtifacts).toHaveLength(0)
     const bootstrapRequest = store.permissionRequests[0]!
@@ -958,7 +959,9 @@ describe('CodingRuntime', () => {
       providerId: 'fake-coding-engine',
       userInstruction: 'Stop when dependency installation is rejected.',
     })
-    await vi.waitFor(() => expect(store.permissionRequests).toHaveLength(1))
+    await vi.waitFor(() => expect(store.permissionRequests).toHaveLength(1), {
+      timeout: process.platform === 'win32' ? 10_000 : 1_000,
+    })
     const request = store.permissionRequests[0]!
 
     await runtime.replyCodingPermission({

@@ -185,6 +185,8 @@ export type WorkflowBoardStage = {
   label: string
   completionState: StageCompletionState
   completionLabel: string
+  completedNodeCount: number
+  progressPercent: number
   summary: WorkflowStageSummary
   cards: WorkflowBoardCard[]
 }
@@ -478,12 +480,18 @@ export function buildWorkflowBoard(input: WorkflowRun | {
       cards,
       currentNode,
     })
+    const completedNodeCount = cards.filter((card) => card.node.status === 'success' || card.node.status === 'skipped').length
+    // Future prepared nodes cannot move the Run's progress past its current stage.
+    const isFuture = currentNode && index > stageOrder.indexOf(currentNode.stage)
+    const progressPercent = !isFuture && cards.length ? (completedNodeCount / cards.length) * 100 : 0
 
     return {
       stage,
       index: String(index + 1).padStart(2, '0'),
       label: stageLabels[stage],
       ...completion,
+      completedNodeCount,
+      progressPercent,
       summary: buildStageSummary(cards),
       cards,
     }
