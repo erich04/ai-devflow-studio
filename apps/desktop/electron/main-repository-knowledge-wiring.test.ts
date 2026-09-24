@@ -26,7 +26,7 @@ describe('Electron repository knowledge wiring', () => {
       /ipcMain\.handle\(ipcChannels\.runCodingAgent[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createCodingRuntimeForRequest\(knowledgeSnapshot, input\.projectId\)/,
     )
     expect(main).toMatch(
-      /ipcMain\.handle\(ipcChannels\.runKnowledgeReview[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createKnowledgeReviewRuntimeForRequest\(knowledgeSnapshot\)/,
+      /ipcMain\.handle\(ipcChannels\.runKnowledgeReview[\s\S]*?loadTrustedRunKnowledge[\s\S]*?createKnowledgeReviewRuntimeForRequest\(knowledgeSnapshot, signal, [\s\S]*?input\.projectId, input\.runtimeBudgetApprovalId\)/,
     )
   })
 

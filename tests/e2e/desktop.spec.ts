@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 async function installDesktopApi(
   page: import('@playwright/test').Page,
-  scenario: 'empty' | 'coding-permission' | 'coding-lifecycle' | 'clarification-revision' | 'agent-ux-unpaired' | 'agent-ux-paired' = 'empty',
+  scenario: 'empty' | 'configured' | 'coding-permission' | 'coding-lifecycle' | 'clarification-revision' | 'agent-ux-unpaired' | 'agent-ux-paired' = 'empty',
 ) {
   await page.addInitScript((initialScenario) => {
     let clarificationFeedbackRequested = initialScenario === 'clarification-revision'
@@ -23,6 +23,14 @@ async function installDesktopApi(
       testCommand: 'pnpm test',
       createdAt: '2026-06-15T00:00:00.000Z',
       updatedAt: '2026-06-15T00:00:00.000Z',
+    }
+    const governedFixture = initialScenario === 'configured' || initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle' || initialScenario === 'clarification-revision'
+    const fixturePairing = {
+      tokenId: 'desktop-e2e-token', organizationId: 'org-e2e', projectId: 'team-e2e',
+      localProjectId: localProject.id, userId: 'u-ling', role: 'lead', issuedRole: 'lead',
+      expiresAt: '2999-01-01T00:00:00.000Z', userName: 'Ling', projectName: 'E2E Team',
+      authAccountId: 'acct-ling', projectMemberships: [{ projectId: 'team-e2e', userId: 'u-ling', role: 'lead' }],
+      createdAt: '2026-08-30T12:00:00.000Z',
     }
     let codingLifecycleStarted = initialScenario !== 'coding-lifecycle'
     let codingPermissionApproved = false
@@ -64,6 +72,7 @@ async function installDesktopApi(
         expiresAt: '2099-08-30T12:05:00.000Z',
       }
       return {
+        ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
         projects: [localProject],
         runs: [{
           id: 'run-coding-review', version: codingPermissionApproved ? 2 : 1, title: 'Review a governed coding change', request: 'Apply the exact patch.',
@@ -111,6 +120,7 @@ async function installDesktopApi(
         kind: 'gate', status: 'pending', ownerId: 'u-ling', requiredRole: 'member', retryCount: 0, artifactIds: [],
       }
       return {
+        ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
         projects: [localProject],
         runs: [{
           id: 'run-agent-ux', version: 3, title: '设计 Agent 体验验收', request: '生成清晰的设计方案。',
@@ -187,6 +197,7 @@ async function installDesktopApi(
           edges: [{ id: `${runId}-edge`, source: agentId, target: gateId, kind: 'gate' }],
         }
         return {
+          ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
           projects: [localProject], runs: [run], artifacts: [raw, clarification], events: [], testEvidence: [],
           settings: { themePreference: 'system' }, mcpServers: [], agentReviews: [], agentTraces: [],
           agentTokenUsage: [], codingRuns: [], codingEvents: [], codingPermissionRequests: [],
@@ -194,6 +205,7 @@ async function installDesktopApi(
           codingDiffArtifacts: [],
         }
       })() : ({
+        ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
         projects: [localProject],
         runs: [],
         artifacts: [],
@@ -515,6 +527,7 @@ async function installDesktopApi(
           artifact,
           event,
           state: {
+            ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
             projects: [localProject],
             runs: [run],
             artifacts: [rawRequestArtifact, ...(priorArtifact ? [priorArtifact] : []), ...(feedbackArtifact ? [feedbackArtifact] : []), artifact],
@@ -587,6 +600,7 @@ async function installDesktopApi(
           edges: [{ id: `${input.runId}-edge`, source: agentId, target: input.nodeId, kind: 'gate' }],
         }
         const state = {
+          ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
           projects: [localProject], runs: [run], artifacts: [raw, revision, feedback], events: [], testEvidence: [],
           settings: { themePreference: 'system' }, mcpServers: [], agentReviews: [], agentTraces: [], agentTokenUsage: [],
           codingRuns: [], codingEvents: [], codingPermissionRequests: [], codingPermissionDecisions: [],
@@ -648,6 +662,7 @@ async function installDesktopApi(
           run,
           event,
           state: {
+            ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
             projects: [localProject],
             runs: [run],
             artifacts: [],
@@ -885,6 +900,7 @@ async function installDesktopApi(
           trace,
           tokenUsage,
           state: {
+            ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
             projects: [localProject],
             runs: [reviewedRun],
             artifacts: [],
@@ -989,7 +1005,10 @@ async function installDesktopApi(
         createdAt: '2026-06-15T00:05:00.000Z',
         expiresAt: '2099-06-15T00:20:00.000Z',
       }),
-      getCodingRuntimeBudgetPolicy: async () => null,
+      getCodingRuntimeBudgetPolicy: async () => governedFixture ? {
+        projectId: localProject.id, enabled: true, monthlyLimitUsd: 50, warningThresholdUsd: 40,
+        currency: 'USD', updatedAt: '2026-08-30T12:00:00.000Z',
+      } : null,
       saveCodingRuntimeBudgetPolicy: async ({ projectId, enabled, monthlyLimitUsd, warningThresholdUsd }: { projectId: string; enabled: boolean; monthlyLimitUsd: number; warningThresholdUsd: number }) => ({
         projectId,
         enabled,
@@ -1062,6 +1081,7 @@ async function installDesktopApi(
         return {
           codingRun,
           state: {
+            ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
             projects: [localProject],
             runs: [],
             artifacts: [],
@@ -1109,6 +1129,7 @@ async function installDesktopApi(
         }
       },
       subscribeCodingRun: async () => ({
+        ...(governedFixture ? { desktopPairingCredential: fixturePairing } : {}),
         projects: [localProject],
         runs: [],
         artifacts: [],
@@ -1173,6 +1194,17 @@ async function installDesktopApi(
   }, scenario)
 }
 
+async function showProjectRuns(page: import('@playwright/test').Page) {
+  const menu = page.locator('.workbench-project-menu')
+  await expect(menu).toBeVisible()
+  if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
+}
+
+async function showNodeRecords(page: import('@playwright/test').Page) {
+  const records = page.getByTestId('node-inspector').locator('.inspector-support')
+  if (await records.getAttribute('open') === null) await records.locator(':scope > summary').click()
+}
+
 async function createFixtureRun(page: import('@playwright/test').Page) {
   await page.getByRole('button', { name: /新建 Run/ }).click()
   const dialog = page.getByRole('dialog', { name: /Create new run/ })
@@ -1180,7 +1212,9 @@ async function createFixtureRun(page: import('@playwright/test').Page) {
   await dialog.getByLabel('标题').fill('重构 GitHub webhook 重试策略')
   await dialog.getByLabel('一句话需求').fill('请先澄清 webhook retry 的失败边界，再设计实现方案。')
   await dialog.getByRole('button', { name: /创建并开始澄清/ }).click()
+  await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
+  await page.locator('.workbench-project-menu > summary').click()
   await expect(page.getByTestId('toast')).toContainText('新 Run 已创建')
   await expect(page.getByTestId('workflow-canvas')).toContainText('需求澄清')
   await expect(page.getByTestId('node-inspector')).toContainText('需求澄清')
@@ -1334,6 +1368,7 @@ test.describe('AI DevFlow desktop workbench', () => {
         page.on('pageerror', (error) => errors.push(error.message))
         await page.goto('/')
         const card = page.getByTestId('workflow-card-node-agent-ux-design-gate')
+        await page.getByRole('button', { name: '流程视图', exact: true }).click()
         const inspector = page.getByTestId('node-inspector')
         for (const [label, count, text] of [
           ['产物', 1, 'Reviewed the current requirement.'],
@@ -1350,15 +1385,17 @@ test.describe('AI DevFlow desktop workbench', () => {
         await expect(inspector.getByTestId('node-artifacts').locator('.artifact-card')).toHaveCount(1)
         await expect(page.locator('button button')).toHaveCount(0)
         for (const tab of await inspector.getByRole('tab').all()) {
-          await expect(tab).toHaveCSS('white-space', 'nowrap')
-          await expect(tab).toHaveCSS('flex-shrink', '0')
+          await tab.focus()
+          await tab.press('Enter')
+          await expect(tab).toHaveAttribute('aria-selected', 'true')
+          await expect(tab).toBeInViewport()
         }
         await expect(inspector.getByRole('tab', { name: '引用来源' })).toBeVisible()
         await page.screenshot({ path: testInfo.outputPath('attachment-navigation.png') })
         expect(errors).toEqual([])
       })
 
-      test(`reaches Gate tabs by scrolling past a long clarification (${viewport.width}, ${colorScheme})`, async ({ page }) => {
+      test(`reads folded Markdown and reaches Gate records without expanding the entire document (${viewport.width}, ${colorScheme})`, async ({ page }) => {
         await page.setViewportSize(viewport)
         await page.emulateMedia({ colorScheme })
         await installDesktopApi(page, 'clarification-revision')
@@ -1377,22 +1414,21 @@ test.describe('AI DevFlow desktop workbench', () => {
         })
         await page.goto('/')
         const inspector = page.getByTestId('node-inspector')
-        await expect(inspector.getByTestId('clarification-current-revision')).toContainText('Acceptance 16')
+        const document = inspector.getByTestId('clarification-current-revision')
+        await expect(document.locator('.artifact-section')).toHaveCount(16)
+        await expect(document.locator('.artifact-section[open]')).toHaveCount(0)
+        const lastSection = document.locator('.artifact-section').last()
+        await lastSection.locator('summary').click()
+        await expect(lastSection.locator('p')).toContainText('Confirm the retry boundary')
+        await document.getByRole('button', { name: '查看原文', exact: true }).click()
+        await expect(document.locator('.message-plain')).toContainText('## Acceptance 16')
+        await document.getByRole('button', { name: '返回排版', exact: true }).click()
+        await showNodeRecords(page)
         const evidenceTab = inspector.getByRole('tab', { name: '产物', exact: true })
-        const box = (await inspector.boundingBox())!
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-        await expect.poll(async () => {
-          const reachable = await evidenceTab.evaluate((element) => {
-            const tab = element.getBoundingClientRect()
-            const parent = element.closest('.inspector')!.getBoundingClientRect()
-            return tab.top >= parent.top && tab.bottom <= parent.bottom
-          })
-          if (!reachable) await page.mouse.wheel(0, 360)
-          return reachable
-        }).toBe(true)
+        await evidenceTab.scrollIntoViewIfNeeded()
+        await expect(evidenceTab).toBeVisible()
         await evidenceTab.click()
         await expect(evidenceTab).toHaveAttribute('aria-selected', 'true')
-        await expect.poll(() => inspector.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
       })
     }
   }
@@ -1499,18 +1535,25 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     const inspector = page.getByTestId('node-inspector')
     await expect(page.getByTestId('clarification-review')).toBeVisible()
+    await inspector.getByRole('tab', { name: /原始需求/ }).click()
     await expect(page.getByTestId('clarification-raw-request')).toContainText('Clarify webhook retry boundaries')
+    await inspector.getByRole('tab', { name: /代码调查/ }).click()
     await expect(page.getByTestId('clarification-repository-findings')).toContainText('Retry handler exists')
-    await expect(page.getByTestId('clarification-current-revision')).toContainText('v1 · review_requested')
+    await inspector.getByRole('tab', { name: /需求澄清 v1/ }).click()
+    await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v1')
+    await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
 
+    await inspector.locator('.clarification-review__feedback > summary').click()
     await inspector.getByLabel('结构化修订意见').fill('State the retry boundary explicitly.')
-    await inspector.getByRole('button', { name: '请求修订当前版本' }).click()
+    await inspector.getByRole('button', { name: '提交修订意见' }).click()
     await expect(page.getByTestId('toast')).toContainText('流程返回需求澄清')
     await expect(inspector).toContainText('需求澄清')
 
     await inspector.getByRole('button', { name: /生成需求澄清/ }).click()
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成')
-    await expect(page.getByTestId('clarification-current-revision')).toContainText('v2 · review_requested')
+    await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v2')
+    await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
+    await page.getByTestId('clarification-revision-history').locator('summary').click()
     await expect(page.getByTestId('clarification-revision-history')).toContainText('v1 · superseded')
     await expect(page.getByTestId('clarification-revision-history')).toContainText('State the retry boundary explicitly.')
 
@@ -1533,6 +1576,7 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     await expect(page).toHaveTitle(/AI DevFlow Studio/)
     await expect(page.getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
+    await showProjectRuns(page)
     await expect(page.getByText('开发者工作台')).toBeVisible()
     await expect(page.getByTestId('workflow-empty-state')).toContainText('暂无 Run')
     await expect(page.getByTestId('node-inspector-empty')).toContainText('选择真实 Run')
@@ -1543,6 +1587,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await createFixtureRun(page)
 
     const workflow = page.getByTestId('workflow-canvas')
+    await workflow.getByRole('button', { name: '流程视图', exact: true }).click()
     await expect(page.getByTestId('stage-summary-clarify')).toContainText('节点：Task 1 · Gate 1')
     await expect(page.getByTestId('stage-summary-design')).toContainText('节点：Task 1 · Gate 1')
     await expect(page.getByTestId('stage-summary-build')).toContainText('节点：Task 1')
@@ -1568,6 +1613,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await designCard.click()
     await expect(page.getByTestId('node-inspector')).toContainText('类型：Task · 来源：Run 模板')
 
+    await showProjectRuns(page)
     await page.getByRole('button', { name: /选择本地仓库/ }).click()
     await expect(page.locator('.local-project-panel').getByText('fixture-project', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^测试$/ }).click()
@@ -1579,6 +1625,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('tests-view')).toContainText('pnpm test -- --run')
     await page.getByRole('button', { name: /工作台/ }).click()
 
+    await showProjectRuns(page)
     await page.getByLabel('Search runs and knowledge').fill('nothing matches this')
     await expect(page.getByTestId('search-results')).toContainText('没有匹配结果')
     await expect(page.getByText('没有匹配的 Run')).toBeVisible()
@@ -1590,7 +1637,7 @@ test.describe('AI DevFlow desktop workbench', () => {
   test('supports manager, knowledge, skill, MCP, and test views', async ({ page }) => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
-    await installDesktopApi(page)
+    await installDesktopApi(page, 'configured')
     await page.goto('/')
     await createFixtureRun(page)
 
@@ -1616,6 +1663,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('button', { name: /工作台/ }).click()
     const reviewedGateInspector = page.getByTestId('node-inspector')
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
+    await showNodeRecords(page)
     const referencesTab = reviewedGateInspector.getByRole('tab', { name: '引用来源' })
     await referencesTab.focus()
     await referencesTab.press('Enter')
@@ -1762,6 +1810,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(review).toHaveCount(0)
     await expect(page.locator('.agent-current-task--change-set')).toHaveCount(0)
     await page.getByRole('button', { name: /工作台/ }).click()
+    await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /测试证据/ }).click()
     await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
     expect(pageErrors).toEqual([])
   })
@@ -1778,7 +1827,9 @@ test.describe('AI DevFlow desktop workbench', () => {
     await review.getByRole('button', { name: 'Approve exact Change Set' }).click()
 
     await page.getByRole('button', { name: /工作台/ }).click()
+    await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /测试证据/ }).click()
     await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
+    await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /开发实现/ }).click()
     await page.getByTestId('flow-node-node-build-review').click()
     const terminal = page.getByTestId('workbench-coding-terminal')
     await expect(terminal).toContainText('150')

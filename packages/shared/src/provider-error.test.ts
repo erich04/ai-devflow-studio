@@ -274,7 +274,7 @@ describe('Agent Provider structured request errors', () => {
 
     expect(failure).toMatchObject({
       code: 'cancelled_by_user', deliveryState: 'possibly_delivered',
-      billingState: 'unknown', retryable: true,
+      billingState: 'unknown', retryable: false,
     })
   })
 })

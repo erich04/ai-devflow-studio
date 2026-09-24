@@ -3,12 +3,16 @@ import assert from 'node:assert/strict'
 
 /** Query a genuinely completed packaged workflow through the production conversation API. */
 export async function probeCompletedWorkflow({ page, run, projectId }) {
+  // This loopback protocol fixture uses a priced model ID so the production
+  // budget guard can admit each round. No request goes to an external model.
+  const fixtureModel = 'gpt-4.1-mini'
   const seen = new Map()
   let calls = 0
   const server = createServer(async (request, response) => {
     const chunks = []
     for await (const chunk of request) chunks.push(chunk)
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    assert.equal(body.model, fixtureModel)
     const input = JSON.parse(body.messages.find((message) => message.role === 'user').content)
     for (const observation of input.toolObservations) {
       if (observation.name === 'node' && observation.result?.node) seen.set(observation.result.node.id, observation.result)
@@ -22,9 +26,9 @@ export async function probeCompletedWorkflow({ page, run, projectId }) {
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   try {
-    const provider = await page.evaluate((baseUrl) => window.aiDevFlowDesktop.saveAgentProviderCredential({
-      name: 'Completed workflow test', model: 'controlled-flow-inspection', apiKey: 'sk-completed-flow-test-only', baseUrl,
-    }), `http://127.0.0.1:${server.address().port}/v1`)
+    const provider = await page.evaluate(({baseUrl, model}) => window.aiDevFlowDesktop.saveAgentProviderCredential({
+      name: 'Completed workflow test', model, apiKey: 'sk-completed-flow-test-only', baseUrl,
+    }), {baseUrl: `http://127.0.0.1:${server.address().port}/v1`, model: fixtureModel})
     const created = await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({ type: 'create', projectId }), projectId)
     const conversationId = created.conversationId
     const sent = await page.evaluate((input) => window.aiDevFlowDesktop.workbenchConversation(input), { type: 'send', projectId, conversationId, providerId: provider.providerId, text: '查询全部节点已经实际完成的状态、证据和审批。' })

@@ -21,13 +21,13 @@ class ReadableFallback extends Component<{ text: string; children: ReactNode }, 
 }
 
 /** Only the body is formatted. Workflow actions are validated and rendered separately. */
-export function ConversationBody({ message }: { message: ConversationMessage }) {
+export function ConversationBody({ message, showFormatToggle = true }: { message: ConversationMessage; showFormatToggle?: boolean }) {
   const [raw, setRaw] = useState(false)
   // Deterministic legacy policy: old assistant bodies use Markdown, user input stays literal.
   const format = message.role === 'assistant' ? message.format ?? 'markdown' : 'plain_text'
   const unsupported = format !== 'markdown' && format !== 'plain_text'
   return <div className="message-body">
-    {message.role === 'assistant' && format !== 'plain_text' && <button className="text-button message-format-toggle" onClick={() => setRaw(!raw)}>{raw ? '返回排版' : '查看原文'}</button>}
+    {showFormatToggle && message.role === 'assistant' && format !== 'plain_text' && <button className="text-button message-format-toggle" onClick={() => setRaw(!raw)}>{raw ? '返回排版' : '查看原文'}</button>}
     {unsupported && <p className="meta">暂不支持该内容格式，已按原文显示。</p>}
     {raw || format !== 'markdown' ? <div className="message-plain">{message.text}</div> :
       <ReadableFallback key={message.text} text={message.text}>

@@ -9,7 +9,7 @@ describe('Provider thinking configuration', () => {
     const bodies: Record<string, unknown>[] = []
     const provider = createOpenAiCompatibleAgentProvider({ ...deepseek, thinking, apiKey: 'fixture-only', fetcher: async (_url, init) => {
       bodies.push(JSON.parse(String(init?.body)))
-      return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: 'result', content: 'design', goals: ['a'], nonGoals: ['b'], acceptanceCriteria: ['c'], openQuestions: [], conclusion: 'done', risks: [], missingEvidence: [], suggestedTests: [] }), reasoning_content: thinking.mode === 'enabled' ? 'separate reasoning' : undefined }, finish_reason: 'stop' }] })
+      return Response.json({ choices: [{ message: { content: JSON.stringify({ summary: 'result', content: 'design', goals: ['a'], nonGoals: ['b'], acceptanceCriteria: ['c'], openQuestions: [], conclusion: 'done', confidence: 0.8, risks: [], missingEvidence: [], suggestedTests: [] }), reasoning_content: thinking.mode === 'enabled' ? 'separate reasoning' : undefined }, finish_reason: 'stop' }] })
     } })
     const run = runs[0]!
     const node = run.nodes.find((item) => item.id === 'n-design-gate')!

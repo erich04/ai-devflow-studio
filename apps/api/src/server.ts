@@ -61,7 +61,11 @@ function sendJson(
   response.end(JSON.stringify(body, null, 2))
 }
 
+const activeRequests = new Set<AbortController>()
 const server = createServer(async (request, response) => {
+  const controller = new AbortController()
+  activeRequests.add(controller)
+  response.once('close', () => { if (!response.writableEnded) controller.abort(); activeRequests.delete(controller) })
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`)
 
   if (request.method === 'OPTIONS') {
@@ -110,7 +114,7 @@ const server = createServer(async (request, response) => {
       }
       return resolveApiRouteRequest({
         method: request.method ?? 'GET', pathname: url.pathname,
-        headers: request.headers, body: requestBody, searchParams: url.searchParams,
+        headers: request.headers, body: requestBody, searchParams: url.searchParams, signal: controller.signal,
       }, {
         repository, sessionSecret, devAuthEnabled, localAuthEnabled, multiOrganizationEnabled,
         postAuthRedirectUrl: webAppUrl, secureCookies,
@@ -128,6 +132,7 @@ server.listen(port, host, () => {
 })
 
 process.once('SIGTERM', () => {
+  for (const controller of activeRequests) controller.abort()
   server.close(async () => {
     await diagnosticLog.flush()
     await repositoryRuntime.close()

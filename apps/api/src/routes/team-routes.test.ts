@@ -699,6 +699,12 @@ function createRepository(): TeamRepository & GateCommandRepository {
     ),
     saveAgentProviderCredential: vi.fn(async (metadata) => metadata),
     getAgentProviderCredential: vi.fn(async () => null),
+    importHistoricalModelCall:vi.fn(async()=>undefined),
+    saveAgentAttemptUsage: vi.fn(async () => undefined),
+    reserveModelCall: vi.fn(async () => ({accepted:true,decision:{status:'allowed' as const,blocksRun:false,currentSpendUsd:0,projectedCostUsd:0,reason:'Fixture admission'}})),
+    settleModelCall: vi.fn(async () => undefined),
+    persistModelCallSettlement: vi.fn(async () => undefined),
+    listPendingModelCallSettlements: vi.fn(async () => []),
     saveAgentReviewBundle: vi.fn(async (bundle) => ({
       review: bundle.review,
       trace: bundle.trace,
@@ -1785,6 +1791,21 @@ describe('team API route resolver', () => {
     expect(repository.saveAgentEvent).not.toHaveBeenCalled()
   })
 
+  it('keeps settled usage but refuses a late review after the API request is cancelled', async () => {
+    const repository = createRepository()
+    const controller = new AbortController()
+    vi.mocked(repository.saveAgentAttemptUsage).mockImplementation(async () => {
+      controller.abort()
+    })
+    const result = await withFakeRuntime(() => resolveTeamRoute('POST', '/api/agent/knowledge-review', repository, {
+      session: memberSession, signal: controller.signal,
+      body: { runId: 'run-payments', nodeId: 'node-build', projectId: 'p-payments', providerId: 'fake-knowledge-review' },
+    }))
+    expect(repository.saveAgentAttemptUsage).toHaveBeenCalledOnce()
+    expect(result).toMatchObject({ status: 499, body: { error: 'review_cancelled' } })
+    expect(repository.saveAgentReviewBundle).not.toHaveBeenCalled()
+  })
+
   it('blocks a paid Knowledge Review with a redacted audit before resolving credentials when the budget policy is missing', async () => {
     const repository = createRepository()
     const overview = await repository.getTeamOverview(ownerSession)
@@ -1819,7 +1840,7 @@ describe('team API route resolver', () => {
           budgetDecision: {
             status: 'unavailable',
             blocksRun: true,
-            reason: 'Runtime budget policy is unavailable for this project.',
+            reason: '当前项目尚未配置云端预算策略。请先同步 Policy，并由 Owner/Lead 保存项目预算。',
           },
           audit: {
             runId: 'run-payments',
@@ -1849,7 +1870,7 @@ describe('team API route resolver', () => {
       id: 'openai-default',
       name: 'OpenAI Compatible',
       kind: 'openai-compatible',
-      model: 'gpt-4.1-mini',
+      model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com/v1',
       enabled: true,
       maskedCredential: 'sk-...cret',
       updatedAt: '2026-06-16T00:00:00.000Z',
@@ -1884,8 +1905,8 @@ describe('team API route resolver', () => {
     vi.mocked(repository.getAgentProviderCredential).mockResolvedValue({
       metadata: {
         providerId: 'openai-default',
-        model: 'gpt-4.1-mini',
-        baseUrl: 'https://provider.example/v1',
+        model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com/v1',
+
         maskedCredential: 'sk-...cret',
         updatedAt: '2026-06-16T00:00:00.000Z',
       },
@@ -1896,6 +1917,7 @@ describe('team API route resolver', () => {
         JSON.stringify({
           choices: [
             {
+              finish_reason: 'stop',
               message: {
                 content: JSON.stringify({
                   conclusion: 'ready',
@@ -1979,7 +2001,7 @@ describe('team API route resolver', () => {
       id: 'openai-default',
       name: 'OpenAI Compatible',
       kind: 'openai-compatible',
-      model: 'gpt-4.1-mini',
+      model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com/v1',
       enabled: true,
       maskedCredential: 'sk-...cret',
       updatedAt: '2026-06-16T00:00:00.000Z',
@@ -2590,7 +2612,7 @@ describe('team API route resolver', () => {
       blocksRun: true,
       currentSpendUsd: 0,
       projectedCostUsd: 0.01,
-      reason: 'Runtime budget cannot be evaluated while actual provider cost is unknown.',
+      reason: '有模型调用的实际费用尚未确认，请先核对用量；不能按零费用放行。',
     })
   })
 

@@ -1,6 +1,6 @@
 import { resolveDeepSeekPricingSnapshot } from './cost'
 import { locateReviewMissingEvidence } from './review-grounding'
-import { describeProviderThinking, resolveProviderThinking, providerThinkingRequestFields, type EffectiveProviderThinking, type ProviderThinkingConfiguration } from './provider-thinking'
+import { describeProviderThinking, resolveProviderThinking, supportsProviderThinking, providerThinkingRequestFields, type EffectiveProviderThinking, type ProviderThinkingConfiguration } from './provider-thinking'
 import { KNOWLEDGE_REVIEW_SANITIZER_VERSION, parseGateReviewSubjectSnapshot, type GateReviewSubjectSnapshot } from './gate-review-subject'
 export { KNOWLEDGE_REVIEW_SANITIZER_VERSION } from './gate-review-subject'
 import type {
@@ -40,6 +40,7 @@ export type KnowledgeReviewProviderInput = {
   request: AgentReviewRequest
   context: AgentReviewContext
   prompt: string
+  signal?: AbortSignal
 }
 
 export type KnowledgeReviewProviderOutput = {
@@ -158,6 +159,12 @@ export type AgentProviderResponseMetadata = {
   responseId?: string
   systemFingerprint?: string
   effectiveThinking?: EffectiveProviderThinking
+  finishReason?: string
+  durationMs?: number
+  contentLength?: number
+  reasoningLength?: number
+  outputLimitMode?: 'provider_default' | 'explicit'
+  maxOutputTokens?: number
 }
 
 export class AgentProviderRequestError extends Error {
@@ -201,9 +208,46 @@ export class AgentProviderRequestError extends Error {
         httpStatus: input.responseMetadata.httpStatus,
         ...(responseId ? { responseId } : {}),
         ...(systemFingerprint ? { systemFingerprint } : {}),
+        ...Object.fromEntries(['durationMs', 'contentLength', 'reasoningLength', 'maxOutputTokens'].flatMap((key) => {
+          const value = input.responseMetadata![key as keyof AgentProviderResponseMetadata]
+          return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? [[key, value]] : []
+        })),
+        ...(input.responseMetadata.finishReason ? { finishReason: ['stop', 'length', 'content_filter', 'insufficient_system_resource', 'tool_calls'].includes(input.responseMetadata.finishReason) ? input.responseMetadata.finishReason : 'unknown' } : {}),
+        ...(input.responseMetadata.outputLimitMode ? { outputLimitMode: input.responseMetadata.outputLimitMode } : {}),
         ...(input.responseMetadata.effectiveThinking ? { effectiveThinking: input.responseMetadata.effectiveThinking } : {}),
       }
     }
+  }
+}
+
+export function describeAgentProviderFailure(error: unknown): string {
+  if (error instanceof AgentProviderRequestError && error.sanitizedCause === 'budget_not_ready') return error.message
+  if (!(error instanceof AgentProviderRequestError)) return '模型调用未完成，请查看执行记录后重试。'
+  const descriptions: Record<string, string> = {
+    accounting_unavailable: '本地费用记录暂不可用，尚未调用模型。请恢复存储后重试。',
+    settlement_sync_failed: '模型用量同步未完成，已保留费用记录；请恢复 Team 连接后重试。',
+    output_length: '模型输出达到额度上限，回答未完成。未保存本次报告；可检查模型额度后重试。',
+    content_filter: '模型服务拒绝返回该内容，未保存本次报告。',
+    incomplete_response: '模型未正常结束回答，未保存本次报告。',
+    insufficient_system_resource: '模型服务资源不足，提前结束了回答；可稍后重试。未保存本次报告。',
+    empty_content: '模型未返回正文，未保存本次报告。', missing_content: '模型未返回正文，未保存本次报告。',
+    invalid_json: '模型返回的正文格式不完整，未保存本次报告。',
+    invalid_review_schema: '模型返回的审查报告缺少必要字段，未保存本次报告。',
+    provider_timeout: '模型响应超时，未保存本次报告。已有报告保持不变。',
+    cancelled_by_user: '已停止本次模型调用，未保存新报告。',
+    response_too_large: '响应超过安全接收容量，未保存不完整报告。',
+    http_429: '模型服务限流，请稍后重试。',
+  }
+  return descriptions[error.sanitizedCause] ?? descriptions[error.code] ?? `模型调用失败（${error.code}${error.httpStatus ? `，HTTP ${error.httpStatus}` : ''}），未保存本次报告。`
+}
+
+export function recordedAgentAttemptUsage(input: EstimateAgentTokenUsageInput & { providerId: string }): AgentTokenUsage {
+  const usage = estimateAgentTokenUsage(input)
+  return { ...usage, executorKind: 'direct-provider', providerId: input.providerId,
+    ...(input.providerUsage?.inputTokens !== undefined && input.providerUsage.outputTokens !== undefined ? { usageStatus: 'complete' as const } : {
+      inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: null,
+      source: 'unknown' as const, usageStatus: 'unknown' as const, costStatus: 'unknown' as const,
+    }),
   }
 }
 
@@ -221,12 +265,15 @@ export type AgentProvider = {
   requestTimeoutMs?: number
   billingProvider?: AgentProviderUsage['billingProvider']
   effectiveThinking?: EffectiveProviderThinking
+  reviewOutputLimit?: number
+  defaultReviewOutputTokens?: number
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
   completeStructuredJson?: (input: {
     systemPrompt: string
     userPrompt: string
-    maxOutputTokens: number
+    maxOutputTokens?: number
+    purpose?: 'review' | 'workflow' | 'proposal'
     signal?: AbortSignal
     /** Display subscription only. Provider configuration controls the model's mode. */
     reasoning?: { onDelta?: (text: string) => void | Promise<void> }
@@ -281,6 +328,8 @@ export type RunKnowledgeReviewAgentInput = {
   context: AgentReviewContext
   provider: AgentProvider
   now?: () => string
+  signal?: AbortSignal
+  onAttemptUsage?: (usage: AgentTokenUsage) => Promise<void>
 }
 
 export type EstimateAgentTokenUsageInput = {
@@ -300,7 +349,7 @@ export type EstimateAgentTokenUsageInput = {
 export type EstimateKnowledgeReviewCostPreflightInput = {
   request: AgentReviewRequest
   context: AgentReviewContext
-  provider: Pick<AgentProvider, 'id' | 'model'>
+  provider: Pick<AgentProvider, 'id' | 'model' | 'billingProvider' | 'reviewOutputLimit' | 'defaultReviewOutputTokens'>
 }
 
 export type KnowledgeReviewBudgetGuardInput = {
@@ -308,6 +357,7 @@ export type KnowledgeReviewBudgetGuardInput = {
   providerId: string
   requestedBy: string
   projectedCostUsd: number
+  projectedCostKnown?: boolean
   approvalId?: string
 }
 
@@ -350,7 +400,9 @@ export type KnowledgeReviewCostPreflight = {
   model: string
   prompt: string
   inputTokens: number
-  maxOutputTokens: number
+  maxOutputTokens: number | null
+  outputLimitMode: 'provider_default' | 'explicit'
+  costEstimateStatus: 'estimated' | 'unknown'
   projectedCostUsd: number
   noCost: boolean
 }
@@ -363,7 +415,6 @@ const MODEL_PRICES_PER_1K: Record<string, { input: number; output: number }> = {
 
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID = 'fake-knowledge-review'
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL = 'fake'
-export const KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS = 2_048
 export const KNOWLEDGE_REVIEW_MAX_CHUNKS = 8
 export const KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS = 4_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS = 24_000
@@ -372,7 +423,7 @@ export const KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS = 48_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_SUBJECT_CHARACTERS = 64_000
 export const KNOWLEDGE_REVIEW_MAX_RUN_REQUEST_CHARACTERS = 12_000
 const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
-  'Return only valid JSON with conclusion, summary, risks, missingEvidence, missingEvidenceDetails, suggestedTests, confidence. Review the Subject; use Criteria only as grounding. Do not approve the Gate. Do not wrap the response in Markdown.'
+  'Return only valid JSON with conclusion, summary, risks, missingEvidence, missingEvidenceDetails, suggestedTests, confidence. conclusion and summary must be non-empty strings. risks, missingEvidence and suggestedTests must be arrays of strings; missingEvidenceDetails must be an array. confidence must be a JSON number between 0 and 1 inclusive (for example 0.8), never a label, percentage or quoted number. Review the Subject; use Criteria only as grounding. Do not approve the Gate. Do not wrap the response in Markdown.'
 
 export function isTrustedNoCostKnowledgeReviewProvider(
   provider: Pick<AgentProvider, 'id' | 'model'>,
@@ -1338,14 +1389,15 @@ export function estimateKnowledgeReviewCostPreflight({
   const noCost = isTrustedNoCostKnowledgeReviewProvider(provider)
   const inputTokens = estimateTokens(`${KNOWLEDGE_REVIEW_SYSTEM_PROMPT}\n${prompt}`)
   const configuredPrice = MODEL_PRICES_PER_1K[provider.model]
+  const maxOutputTokens = provider.reviewOutputLimit ?? provider.defaultReviewOutputTokens ?? null
+  const deepSeekPrice = provider.billingProvider === 'deepseek' ? resolveDeepSeekPricingSnapshot({ providerId: 'deepseek', model: provider.model, timestamp: new Date().toISOString(), worstCase: true }) : null
   const price = noCost
     ? MODEL_PRICES_PER_1K.fake!
     : configuredPrice && (configuredPrice.input > 0 || configuredPrice.output > 0)
       ? configuredPrice
-      : MODEL_PRICES_PER_1K['gpt-4.1-mini']!
-  const projectedCostUsd =
-    (inputTokens / 1000) * price.input +
-    (KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS / 1000) * price.output
+      : deepSeekPrice ? { input: deepSeekPrice.cacheMissInputUsdPerMillion / 1000, output: deepSeekPrice.outputUsdPerMillion / 1000 } : null
+  const known = noCost || (price !== null && maxOutputTokens !== null)
+  const projectedCostUsd = known && price ? (inputTokens / 1000) * price.input + ((maxOutputTokens ?? 0) / 1000) * price.output : 0
 
   return {
     request,
@@ -1355,7 +1407,9 @@ export function estimateKnowledgeReviewCostPreflight({
     model: provider.model,
     prompt,
     inputTokens,
-    maxOutputTokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
+    maxOutputTokens,
+    outputLimitMode: provider.reviewOutputLimit === undefined ? 'provider_default' : 'explicit',
+    costEstimateStatus: known ? 'estimated' : 'unknown',
     projectedCostUsd,
     noCost,
   }
@@ -1368,6 +1422,8 @@ export async function runBudgetedKnowledgeReviewAgent({
   now,
   budgetGuard,
   approvalId,
+  signal,
+  onAttemptUsage,
 }: RunBudgetedKnowledgeReviewAgentInput): Promise<BudgetedKnowledgeReviewAgentResult> {
   const preflight = estimateKnowledgeReviewCostPreflight({ request, context, provider })
   if (preflight.noCost) {
@@ -1382,6 +1438,8 @@ export async function runBudgetedKnowledgeReviewAgent({
       request,
       context,
       provider,
+      ...(signal ? { signal } : {}),
+      ...(onAttemptUsage ? { onAttemptUsage } : {}),
       ...(now ? { now } : {}),
     })
     return { status: 'completed', budgetDecision, execution }
@@ -1393,6 +1451,7 @@ export async function runBudgetedKnowledgeReviewAgent({
       providerId: provider.id,
       requestedBy: request.requestedBy,
       projectedCostUsd: preflight.projectedCostUsd,
+      projectedCostKnown: preflight.costEstimateStatus === 'estimated',
       ...(approvalId ? { approvalId } : {}),
     })
     if (budgetDecision.blocksRun) {
@@ -1417,6 +1476,8 @@ export async function runBudgetedKnowledgeReviewAgent({
       request,
       context,
       provider,
+      ...(signal ? { signal } : {}),
+      ...(onAttemptUsage ? { onAttemptUsage } : {}),
       ...(now ? { now } : {}),
     })
     return { status: 'completed', budgetDecision, execution }
@@ -1562,6 +1623,7 @@ export function estimateAgentTokenUsage(input: EstimateAgentTokenUsageInput): Ag
       : price ? (inputTokens / 1000) * price.input + (outputTokens / 1000) * price.output : null
 
   return {
+    ...(input.providerUsage?.budgetAttemptIds ? { budgetAttemptIds: input.providerUsage.budgetAttemptIds } : {}),
     id: input.id,
     runId: input.runId,
     nodeId: input.nodeId,
@@ -1726,12 +1788,27 @@ export async function runKnowledgeReviewAgent({
   context,
   provider,
   now = () => new Date().toISOString(),
+  signal,
+  onAttemptUsage,
 }: RunKnowledgeReviewAgentInput): Promise<AgentReviewExecutionResult> {
   const createdAt = now()
   const reviewId = createId('agent-review', `${request.id}-${request.runtime}`)
   const prompt = createKnowledgeReviewPrompt(context)
-  const providerOutput = await provider.reviewKnowledge({ request, context, prompt })
-  const completion = JSON.stringify(providerOutput)
+  const attemptBase = { id: createId('agent-token-usage', reviewId), runId: request.runId, nodeId: request.nodeId,
+    userId: request.requestedBy, projectId: request.projectId, provider: toProviderName(provider.id), providerId: provider.id,
+    model: provider.model, prompt: '', completion: '', timestamp: createdAt }
+  let providerOutput: KnowledgeReviewProviderOutput
+  if (signal?.aborted) throw new AgentProviderRequestError({ code: 'cancelled_by_user', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false, sanitizedCause: 'caller_abort_signal' })
+  try { providerOutput = await provider.reviewKnowledge({ request, context, prompt, ...(signal ? { signal } : {}) }) }
+  catch (error) {
+    if (!(error instanceof AgentProviderRequestError) || error.billingState !== 'not_incurred') {
+      await onAttemptUsage?.(recordedAgentAttemptUsage({ ...attemptBase, ...(error instanceof AgentProviderRequestError && error.usage ? { providerUsage: error.usage } : {}) }))
+    }
+    throw error
+  }
+  const tokenUsage = recordedAgentAttemptUsage({ ...attemptBase, model: providerOutput.model, ...(providerOutput.usage ? { providerUsage: providerOutput.usage } : {}) })
+  await onAttemptUsage?.(tokenUsage)
+  if (signal?.aborted) throw new AgentProviderRequestError({ code: 'cancelled_by_user', deliveryState: 'response_received', billingState: providerOutput.usage ? 'confirmed' : 'unknown', retryable: false, sanitizedCause: 'caller_abort_signal', ...(providerOutput.usage ? { usage: providerOutput.usage } : {}) })
   const gateAdvisory = createGateAdvisory(reviewId, request, providerOutput, createdAt)
   const policyFindings = derivePolicyFindings(reviewId, request, context, providerOutput, createdAt)
   const reviewedKnowledgeReferences = bindReviewedKnowledgeReferences(
@@ -1803,19 +1880,6 @@ export async function runKnowledgeReviewAgent({
       ),
     ],
   }
-  const tokenUsage = estimateAgentTokenUsage({
-    id: createId('agent-token-usage', reviewId),
-    runId: request.runId,
-    nodeId: request.nodeId,
-    userId: request.requestedBy,
-    projectId: request.projectId,
-    provider: toProviderName(provider.id),
-    model: providerOutput.model,
-    prompt,
-    completion,
-    timestamp: createdAt,
-    ...(providerOutput.usage ? { providerUsage: providerOutput.usage } : {}),
-  })
 
   return { review, trace, tokenUsage: { ...tokenUsage, executorKind: 'direct-provider', providerId: provider.id } }
 }
@@ -1906,13 +1970,24 @@ export function createAgentReviewArtifacts(result: AgentReviewExecutionResult): 
   return { artifact, event, gateAdvisory: result.review.gateAdvisory }
 }
 
+export function reviewProviderCapabilities(input: { id?: string; model: string; baseUrl?: string; thinking?: ProviderThinkingConfiguration | undefined }): Pick<AgentProvider, 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking'> {
+  const effectiveThinking = resolveProviderThinking(input)
+  const deepSeek = isDeepSeekUsageContext({ providerId: input.id ?? '', ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}) })
+  return { effectiveThinking, billingProvider: deepSeek ? 'deepseek' : 'openai_compatible',
+    ...(supportsProviderThinking(input) ? {
+      defaultReviewOutputTokens: effectiveThinking.mode === 'enabled' ? (effectiveThinking.effort === 'max' ? 131_072 : 65_536) : 8_192,
+    } : {}),
+  }
+}
+
 export function createOpenAiCompatibleAgentProvider({
   id = 'openai-compatible',
   name = 'OpenAI Compatible',
   model,
   apiKey,
   baseUrl = 'https://api.openai.com/v1',
-  structuredRequestTimeoutMs = 30_000,
+  structuredRequestTimeoutMs = 120_000,
+  reviewOutputLimit,
   thinking: thinkingConfiguration,
   fetcher = fetch,
 }: {
@@ -1922,6 +1997,7 @@ export function createOpenAiCompatibleAgentProvider({
   apiKey: string
   baseUrl?: string
   structuredRequestTimeoutMs?: number
+  reviewOutputLimit?: number
   thinking?: ProviderThinkingConfiguration
   fetcher?: typeof fetch
 }): AgentProvider {
@@ -1932,80 +2008,47 @@ export function createOpenAiCompatibleAgentProvider({
   ) {
     throw new Error('Agent provider structured request timeout is invalid')
   }
+  if (reviewOutputLimit !== undefined && (!Number.isSafeInteger(reviewOutputLimit) || reviewOutputLimit < 1 || reviewOutputLimit > 1_000_000)) throw new Error('Invalid explicit review output limit')
   const targetHost = providerTargetHost(baseUrl)
   const deepSeek = isDeepSeekUsageContext({ providerId: id, baseUrl })
   const effectiveThinking = resolveProviderThinking({ baseUrl, model, thinking: thinkingConfiguration })
   const thinkingFields = providerThinkingRequestFields(effectiveThinking)
-  return {
+  const provider: AgentProvider = {
     id,
     name,
     model,
     targetHost,
     requestTimeoutMs: structuredRequestTimeoutMs,
+    ...(reviewOutputLimit === undefined ? {} : { reviewOutputLimit }),
+    // Documented DeepSeek Chat API defaults, verified 2026-09-23. This is an
+    // estimate bound only; no max_tokens field is sent when using provider defaults.
+    ...(supportsProviderThinking({ baseUrl, model }) ? {
+      defaultReviewOutputTokens: effectiveThinking.mode === 'enabled' ? (effectiveThinking.effort === 'max' ? 131_072 : 65_536) : 8_192,
+    } : {}),
     effectiveThinking,
     billingProvider: deepSeek
       ? 'deepseek'
       : 'openai_compatible',
-    async reviewKnowledge({ prompt }) {
-      const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          temperature: 0.2,
-          max_tokens: KNOWLEDGE_REVIEW_MAX_OUTPUT_TOKENS,
-          ...(deepSeek
-            ? {
-                response_format: { type: 'json_object' },
-              }
-            : {}),
-          ...thinkingFields,
-          messages: [
-            {
-              role: 'system',
-              content: KNOWLEDGE_REVIEW_SYSTEM_PROMPT,
-            },
-            { role: 'user', content: prompt },
-          ],
-        }),
+    async reviewKnowledge({ prompt, signal }) {
+      const result = await provider.completeStructuredJson!({
+        purpose: 'review', systemPrompt: KNOWLEDGE_REVIEW_SYSTEM_PROMPT, userPrompt: prompt,
+        ...(reviewOutputLimit === undefined ? {} : { maxOutputTokens: reviewOutputLimit }),
+        ...(signal ? { signal } : {}),
       })
-
-      if (!response.ok) {
-        throw new Error(await buildProviderFailureMessage(response))
+      const parsed = result.value as unknown as KnowledgeReviewProviderOutput
+      if (!providerValueToString(parsed.conclusion).trim() || !providerValueToString(parsed.summary).trim() ||
+          !Array.isArray(parsed.risks) || !Array.isArray(parsed.missingEvidence) || !Array.isArray(parsed.suggestedTests) ||
+          typeof parsed.confidence !== 'number' || parsed.confidence < 0 || parsed.confidence > 1) {
+        throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_review_schema', deliveryState: 'response_received',
+          billingState: result.usage ? 'confirmed' : 'unknown', retryable: true,
+          ...(result.usage ? { usage: result.usage } : {}), ...(result.responseMetadata ? { responseMetadata: result.responseMetadata } : {}) })
       }
-
-      const body = (await readProviderJsonResponse(response)) as {
-        choices?: Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }>
-        usage?: unknown
-      }
-      const raw = body.choices?.[0]?.message?.content
-      if (body.choices?.[0]?.finish_reason && body.choices[0].finish_reason !== 'stop') throw new Error('Agent provider review output is incomplete; no review was saved.')
-      if (!raw) {
-        throw new Error('Agent provider returned empty review output')
-      }
-      const parsed = parseProviderJson<KnowledgeReviewProviderOutput>(raw, 'review')
-      const usage = parseOpenAiCompatibleProviderUsage(body.usage, { providerId: id, model, baseUrl })
-
-      const conclusion = providerValueToString(parsed.conclusion, 'Knowledge review completed.')
-      const summary = providerValueToString(parsed.summary, conclusion || 'Knowledge review completed.')
       const policyFindings = normalizeProviderPolicyFindings(parsed.policyFindings)
-
-      return {
-        model,
-        effectiveThinking,
-        ...(typeof body.choices?.[0]?.message?.reasoning_content === 'string' ? { reasoningContent: body.choices[0].message.reasoning_content } : {}),
-        conclusion,
-        summary,
-        risks: providerValueToStringList(parsed.risks),
-        missingEvidence: providerValueToStringList(parsed.missingEvidence),
-        missingEvidenceDetails: parsed.missingEvidenceDetails,
-        suggestedTests: providerValueToStringList(parsed.suggestedTests),
-        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
-        ...(policyFindings ? { policyFindings } : {}),
-        ...(usage ? { usage } : {}),
+      return { model, effectiveThinking, conclusion: providerValueToString(parsed.conclusion), summary: providerValueToString(parsed.summary),
+        risks: providerValueToStringList(parsed.risks), missingEvidence: providerValueToStringList(parsed.missingEvidence),
+        missingEvidenceDetails: parsed.missingEvidenceDetails, suggestedTests: providerValueToStringList(parsed.suggestedTests), confidence: parsed.confidence,
+        ...(policyFindings ? { policyFindings } : {}), ...(result.usage ? { usage: result.usage } : {}),
+        ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
       }
     },
     async completeStructuredJson(input) {
@@ -2015,16 +2058,17 @@ export function createOpenAiCompatibleAgentProvider({
         input.systemPrompt.length > 8_000 ||
         typeof input.userPrompt !== 'string' ||
         input.userPrompt.length < 1 ||
-        input.userPrompt.length > 32_000 ||
-        !Number.isInteger(input.maxOutputTokens) ||
-        input.maxOutputTokens < 1 ||
-        input.maxOutputTokens > 4_096
+        input.userPrompt.length > (input.purpose ? 256_000 : 32_000) ||
+        (input.maxOutputTokens !== undefined && (!Number.isInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > (input.purpose ? 1_000_000 : 4_096))) ||
+        (!input.purpose && input.maxOutputTokens === undefined)
       ) {
         throw new Error('Agent provider structured request is invalid')
       }
+      const startedAt = Date.now()
       const controller = new AbortController()
       const thinking = effectiveThinking.mode === 'enabled'
       const stream = thinking && input.reasoning?.onDelta !== undefined
+      let requestStarted = false
       let observedUsage: AgentProviderUsage | undefined
       let timedOut = false
       let cancelledByUser = input.signal?.aborted ?? false
@@ -2039,6 +2083,8 @@ export function createOpenAiCompatibleAgentProvider({
         controller.abort()
       }, structuredRequestTimeoutMs)
       try {
+        if (controller.signal.aborted) throw new Error('cancelled')
+        requestStarted = true
         const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
           method: 'POST',
           headers: {
@@ -2047,8 +2093,8 @@ export function createOpenAiCompatibleAgentProvider({
           },
           body: JSON.stringify({
             model,
-            temperature: 0,
-            max_tokens: input.maxOutputTokens,
+            temperature: input.purpose ? 0.2 : 0,
+            ...(input.maxOutputTokens === undefined ? {} : { max_tokens: input.maxOutputTokens }),
             ...(deepSeek
               ? {
                   ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
@@ -2071,7 +2117,7 @@ export function createOpenAiCompatibleAgentProvider({
         try {
           responseText = stream && response.headers.get('content-type')?.includes('text/event-stream')
             ? await readReasoningResponse(response, controller.signal, input.reasoning!.onDelta!)
-            : await readBoundedProviderResponseText(response)
+            : await readBoundedProviderResponseText(response, input.purpose ? 2 * 1024 * 1024 : undefined)
         } catch (error) {
           if (error instanceof BoundedProviderResponseError) {
             if (error.code === 'response_too_large') {
@@ -2108,10 +2154,18 @@ export function createOpenAiCompatibleAgentProvider({
         const responseMetadata: AgentProviderResponseMetadata = {
           httpStatus: response.status,
           effectiveThinking,
+          ...(input.purpose ? { durationMs: Date.now() - startedAt,
+          outputLimitMode: input.maxOutputTokens === undefined ? 'provider_default' : 'explicit',
+          ...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }), } : {}),
           ...(responseId ? { responseId } : {}),
           ...(systemFingerprint ? { systemFingerprint } : {}),
         }
         const choices = record.choices
+        if (input.purpose && Array.isArray(choices)) {
+          responseMetadata.finishReason = choices[0]?.finish_reason ?? 'unknown'
+          responseMetadata.contentLength = typeof choices[0]?.message?.content === 'string' ? choices[0].message.content.length : 0
+          responseMetadata.reasoningLength = typeof choices[0]?.message?.reasoning_content === 'string' ? choices[0].message.reasoning_content.length : 0
+        }
         const usageValue = record.usage
         try {
           observedUsage = parseOpenAiCompatibleProviderUsage(usageValue, { providerId: id, model, baseUrl })
@@ -2124,8 +2178,8 @@ export function createOpenAiCompatibleAgentProvider({
         if (reasoningContent != null && typeof reasoningContent !== 'string') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_reasoning')
         // Some compatible gateways return one JSON response even when streaming was requested.
         if (typeof reasoningContent === 'string' && !response.headers.get('content-type')?.includes('text/event-stream')) await input.reasoning?.onDelta?.(reasoningContent)
-        if (Array.isArray(choices) && choices[0]?.finish_reason != null && choices[0].finish_reason !== 'stop') {
-          const reason = choices[0].finish_reason === 'length' ? 'output_length' : choices[0].finish_reason === 'content_filter' ? 'content_filter' : 'incomplete_response'
+        if (Array.isArray(choices) && (input.purpose === 'review' || choices[0]?.finish_reason != null) && choices[0]?.finish_reason !== 'stop') {
+          const reason = choices[0].finish_reason === 'length' ? 'output_length' : choices[0].finish_reason === 'content_filter' ? 'content_filter' : choices[0].finish_reason === 'insufficient_system_resource' ? 'insufficient_system_resource' : 'incomplete_response'
           throw providerResponseError('invalid_model_output', reason !== 'content_filter', responseMetadata, undefined, reason)
         }
         const raw =
@@ -2141,15 +2195,17 @@ export function createOpenAiCompatibleAgentProvider({
         if (typeof raw !== 'string') {
           throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'missing_content')
         }
-        if (new TextEncoder().encode(raw).byteLength > 32 * 1_024) {
+        if (new TextEncoder().encode(raw).byteLength > (input.purpose ? 512 : 32) * 1_024) {
           throw providerResponseError('response_too_large', false, responseMetadata)
         }
         let value: Record<string, unknown>
         try {
-          value = parseStructuredProviderOutput(raw)
+          value = input.purpose ? parseProviderJson<Record<string, unknown>>(raw, 'review') : parseStructuredProviderOutput(raw)
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid review object')
         } catch (error) {
-          throw providerResponseError('invalid_model_output', true, responseMetadata, error, error instanceof StructuredProviderOutputError ? error.reason : 'invalid_model_output')
+          throw providerResponseError('invalid_model_output', true, responseMetadata, error, error instanceof StructuredProviderOutputError ? error.reason : 'invalid_json')
         }
+        if (controller.signal.aborted) throw new Error('cancelled')
         const usage = observedUsage
         return {
           value,
@@ -2162,7 +2218,8 @@ export function createOpenAiCompatibleAgentProvider({
           throw new AgentProviderRequestError({
             code: 'provider_timeout',
             deliveryState: 'possibly_delivered',
-            billingState: 'unknown',
+            billingState: observedUsage ? 'confirmed' : 'unknown',
+            ...(observedUsage ? { usage: observedUsage } : {}),
             retryable: true,
             sanitizedCause: 'request_deadline_exceeded',
             cause: error,
@@ -2172,8 +2229,9 @@ export function createOpenAiCompatibleAgentProvider({
           throw new AgentProviderRequestError({
             code: 'cancelled_by_user',
             deliveryState: 'possibly_delivered',
-            billingState: 'unknown',
-            retryable: true,
+            billingState: observedUsage ? 'confirmed' : (!requestStarted ? 'not_incurred' : 'unknown'),
+            ...(observedUsage ? { usage: observedUsage } : {}),
+            retryable: false,
             sanitizedCause: 'caller_abort_signal',
             cause: error,
           })
@@ -2190,61 +2248,9 @@ export function createOpenAiCompatibleAgentProvider({
       }
     },
     async generateWorkflowArtifact({ request, prompt, signal }) {
-      const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
-        method: 'POST',
-        ...(signal ? { signal } : {}),
-        headers: {
-          authorization: `Bearer ${apiKey}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          temperature: 0.2,
-          ...(deepSeek
-            ? {
-                response_format: { type: 'json_object' },
-              }
-            : {}),
-          ...thinkingFields,
-          messages: [
-            {
-              role: 'system',
-              content: workflowArtifactOutputInstructions(request.stage),
-            },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      }).catch((error: unknown) => { throw classifyProviderTransportError(error) })
-
-      if (!response.ok) {
-        throw providerHttpError(response.status)
-      }
-
-      const responseMetadata = { httpStatus: response.status, effectiveThinking }
-      const body = (await readProviderJsonResponse(response).catch((error: unknown) => {
-        throw providerResponseError('invalid_response_json', true, responseMetadata, error)
-      })) as {
-        choices?: Array<{ message?: { content?: string; reasoning_content?: string }; finish_reason?: string }>
-        usage?: unknown
-      }
-      const raw = body?.choices?.[0]?.message?.content
-      if (body.choices?.[0]?.finish_reason && body.choices[0].finish_reason !== 'stop') throw providerResponseError('invalid_model_output', true, responseMetadata)
-      if (typeof raw !== 'string' || !raw) {
-        throw providerResponseError('invalid_model_output', true, responseMetadata)
-      }
-      let parsed: Partial<WorkflowArtifactProviderOutput>
-      try {
-        parsed = parseProviderJson<WorkflowArtifactProviderOutput>(raw, 'workflow artifact')
-      } catch (error) {
-        throw providerResponseError('invalid_model_output', true, responseMetadata, error)
-      }
-      let usage: AgentProviderUsage | undefined
-      try {
-        usage = parseOpenAiCompatibleProviderUsage(body.usage, { providerId: id, model, baseUrl })
-      } catch (error) {
-        throw providerResponseError('invalid_usage', false, responseMetadata, error)
-      }
-
+      const result=await provider.completeStructuredJson!({purpose:'workflow',systemPrompt:workflowArtifactOutputInstructions(request.stage),userPrompt:prompt,...(signal?{signal}:{})})
+      const parsed=result.value as Partial<WorkflowArtifactProviderOutput>
+      const usage=result.usage
       const title = providerValueToString(parsed.title, request.stage === 'clarify' ? '需求澄清结果' : '方案设计')
       const summary = providerValueToString(parsed.summary, title)
 
@@ -2252,7 +2258,7 @@ export function createOpenAiCompatibleAgentProvider({
         model,
         title,
         effectiveThinking,
-        ...(typeof body.choices?.[0]?.message?.reasoning_content === 'string' ? { reasoningContent: body.choices[0].message.reasoning_content } : {}),
+        ...(result.reasoningContent ? {reasoningContent:result.reasoningContent} : {}),
         summary,
         content: providerValueToString(parsed.content),
         goals: providerValueToStringList(parsed.goals),
@@ -2265,6 +2271,7 @@ export function createOpenAiCompatibleAgentProvider({
       }
     },
   }
+  return provider
 }
 
 function providerHttpError(status: number): AgentProviderRequestError {

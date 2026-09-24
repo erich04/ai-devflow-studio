@@ -1,3 +1,6 @@
+import {legacyChatBudget} from './legacy-chat-budget'
+import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
+import { governAgentProvider, type ModelCallGovernance } from './governed-provider.js'
 import { resolveDesignClarificationInput, StageAgentExecutionError } from '@ai-devflow/shared'
 import { StageAgentOperations } from './stage-agent-operations.js'
 import { WorkbenchConversationService } from './workbench-conversation-service.js'
@@ -412,6 +415,8 @@ function getStore() {
   return storePromise
 }
 
+const codingBudgetProxies = new Set<Awaited<ReturnType<typeof createGovernedOpencodeProxy>>>()
+
 async function resolveCodingExecutorForProject(projectId: string): Promise<{
   selection: ResolvedCodingRuntimeSelection
   executor: CodingExecutor | null
@@ -439,6 +444,9 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
         if (configuration.executor !== 'opencode-http') {
           throw new Error('Project Coding Runtime configuration does not match the selected executor')
         }
+        if (!providerBinding) throw new Error('请先保存项目所选 OpenCode Provider；受预算治理的调用不能使用未绑定的外部凭据。')
+        const budgetProxy=await createGovernedOpencodeProxy({binding:providerBinding,projectId,governance:await modelCallGovernance(store)})
+        codingBudgetProxies.add(budgetProxy)
         return createCodingExecutorCompatibilityAdapter(
           createOpencodeHttpCodingEngineAdapter({
             binaryPath: configuration.binaryPath,
@@ -450,7 +458,7 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             runtimeEnv: buildOpencodeRuntimeEnv({
               baseEnv: process.env,
               apiKeyEnvName: 'OPENCODE_API_KEY',
-              providerBinding,
+              providerBinding:budgetProxy.binding,
             }),
           }),
         )
@@ -465,7 +473,7 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
       return createNativeCodingExecutorV2({
         store,
         decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(
-          await resolveAgentProvider(store, selection.providerId!),
+          await resolveAgentProvider(store, selection.providerId!, projectId),
         ),
         configVersion: Math.max(1, selection.configVersion),
         runSavedTest: runLocalTestCommand,
@@ -1598,12 +1606,18 @@ async function resolveTrustedCodingRequestForMain<
 
 async function createKnowledgeReviewRuntimeForRequest(
   knowledgeSnapshot: RepositoryKnowledgeSnapshot,
+  signal?: AbortSignal,
+  beforeCommit?: () => void,
+  projectId?: string,
+  approvalId?: string,
 ) {
   const [remoteSync, store] = await Promise.all([
     getProjectBoundRemoteSync(),
     getStore(),
   ])
   return createKnowledgeReviewRuntime({
+    ...(signal ? { signal } : {}),
+    ...(beforeCommit ? { beforeCommit } : {}),
     store,
     knowledgeDocuments: knowledgeSnapshot.documents,
     knowledgeChunks: knowledgeSnapshot.chunks,
@@ -1615,7 +1629,7 @@ async function createKnowledgeReviewRuntimeForRequest(
         fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
         credentialSource: store,
       }),
-    resolveProvider: (providerId) => resolveAgentProvider(store, providerId),
+    resolveProvider: (providerId) => resolveAgentProvider(store, providerId, projectId, approvalId),
     budgetGuard: createKnowledgeReviewRuntimeBudgetGuard(remoteSync),
   })
 }
@@ -1651,14 +1665,39 @@ async function listAgentProviderConfigs() {
   })
 }
 
-async function resolveAgentProvider(store: LocalStore, providerId: string) {
+const explicitModelBudgetApprovals = new Map<string, string>()
+async function modelCallGovernance(store:LocalStore):Promise<ModelCallGovernance> {
+  return {
+    pending:(projectId)=>store.listModelCallSettlements(projectId),
+    persist:(input)=>store.saveModelCallSettlement(input),
+    reserve:async(input)=>{
+      const sync=await getProjectBoundRemoteSync()
+      const policyProjectId = await resolvePolicyProjectId(input.projectId)
+      if (!await refreshRemotePolicySnapshotForProject(policyProjectId)) throw new Error('尚未调用模型：无法同步当前团队流程策略，请检查 Team 连接后重试。')
+      const snapshot=await loadPolicySnapshotForProject(policyProjectId)
+      if (snapshot.source!=='remote_cache') throw new Error('尚未调用模型：请先同步当前团队流程 Policy。')
+      for(const historical of legacyChatBudget(await store.listWorkbenchConversations(input.projectId),await listAgentProviderConfigs())) await sync.importHistoricalModelCall(historical)
+      // Flush existing stage/review/coding consumption before the atomic admission.
+      await sync.evaluateRuntimeBudget({projectId:input.projectId,providerId:input.providerId,projectedCostUsd:0})
+      const active=(await store.listCodingAgentRuns()).find((run)=>run.projectId===input.projectId && run.providerId===input.providerId && isActiveCodingAgentRunStatus(run.status))
+      const pairing = await store.getDesktopPairingCredential()
+      const approvalId = input.approvalId ?? active?.budgetDecision?.approvalId ??
+        explicitModelBudgetApprovals.get(`${pairing?.tokenId}:${input.projectId}:${input.providerId}`)
+      const admission = await sync.reserveModelCall({ ...input, ...(approvalId ? { approvalId } : {}) })
+      broadcastToRenderers(ipcChannels.modelBudgetUpdated, { projectId: input.projectId, providerId: input.providerId, decision: admission.decision })
+      return admission
+    },
+    settle:async(input)=>{await (await getProjectBoundRemoteSync()).settleModelCall(input);await store.deleteModelCallSettlement(input.id)},
+  }
+}
+async function resolveAgentProvider(store: LocalStore, providerId: string, projectId?: string, approvalId?:string) {
   const provider = await resolveElectronAgentProvider({
     providerId,
     fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
     credentialSource: store,
     decryptCredential,
   })
-  return guardProviderCalls(provider, {
+  return guardProviderCalls(projectId && providerId!=='fake-knowledge-review' ? governAgentProvider(provider,projectId,await modelCallGovernance(store),approvalId) : provider, {
     guard: providerOperations,
     credentialExists: async () => providerId === 'fake-knowledge-review'
       ? runtimeFlags.fakeRuntimeEnabled
@@ -2092,7 +2131,7 @@ async function getWorkbenchConversationService() {
   workbenchConversationService ??= getStore().then(async (store) => {
     const service = new WorkbenchConversationService({
       store,
-      resolveProvider: (id) => resolveAgentProvider(store, id),
+      resolveProvider: (id, projectId) => resolveAgentProvider(store, id, projectId),
       openHarness: async ({ project, providerId, signal, query }) => {
         const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === providerId)
         if (!metadata) throw new Error('请先在 Agents 中保存所选模型的 Provider 配置。')
@@ -2105,7 +2144,15 @@ async function getWorkbenchConversationService() {
         signal.throwIfAborted()
         if (!binding) throw new Error('所选模型的凭据已变更，请检查配置后重试。')
         if ((await store.listProviderCredentials()).find((item) => item.providerId === providerId)?.updatedAt !== metadata.updatedAt) throw new Error('所选模型配置已变更，请重试。')
-        return createWorkbenchOpencodeExecutor({ binaryPath: candidate.binaryPath, binding, signal, query })
+        const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store)})
+        try {
+          const harness=await createWorkbenchOpencodeExecutor({binaryPath:candidate.binaryPath,binding:budgetProxy.binding,signal,query})
+          return {...harness,completeStructuredJson:async(input)=>{
+            const since=new Date().toISOString()
+            const result=await harness.completeStructuredJson!(input)
+            return {...result,usage:{...result.usage,...budgetProxy.usageSince(since)}}
+          },close:async()=>{try{await harness.close?.()}finally{await budgetProxy.close()}}}
+        } catch(error){await budgetProxy.close();throw error}
       },
       loadKnowledge: (projectId) => loadTrustedRepositoryKnowledge(projectId, { refresh: true }),
       inspectGate: async (target) => {
@@ -2122,6 +2169,7 @@ async function getWorkbenchConversationService() {
 }
 
 const stageAgentOperations = new StageAgentOperations()
+const reviewOperations = new StageAgentOperations()
 
 function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.listDiagnosticRecords, () => diagnosticLog.list())
@@ -2658,7 +2706,7 @@ function registerIpcHandlers() {
           if (!input.providerId) {
             throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
           }
-          provider = await resolveAgentProvider(store, input.providerId)
+          provider = await resolveAgentProvider(store, input.providerId, run.projectId)
         } else {
           const project = (await store.listProjects()).find((candidate) => candidate.id === run.projectId)
           if (!project) throw new Error('请选择本地仓库。')
@@ -2681,7 +2729,15 @@ function registerIpcHandlers() {
           if (!configuration || configuration.executor !== 'opencode-http') {
             throw new Error('请在节点选择 OpenCode 和已保存的 Provider。')
           }
-          executor = createReadOnlyLocalStageAgentExecutor({
+          const binding=await resolveSavedOpencodeProviderBinding({
+              providerId: configuration.providerId,
+              modelId: configuration.modelId,
+              credentialSource: store,
+              decryptCredential,
+            })
+          if (!binding) throw new Error('请先保存项目所选 OpenCode Provider。')
+          const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store)})
+          const stageExecutor = createReadOnlyLocalStageAgentExecutor({
             projectId: project.id,
             projectPath: project.path,
             binaryPath: configuration.binaryPath,
@@ -2689,17 +2745,18 @@ function registerIpcHandlers() {
             modelId: configuration.modelId,
             detectedVersion: configuration.detectedVersion,
             processManager: opencodeProcessManager,
-            providerBinding: await resolveSavedOpencodeProviderBinding({
-              providerId: configuration.providerId,
-              modelId: configuration.modelId,
-              credentialSource: store,
-              decryptCredential,
-            }),
+            providerBinding:budgetProxy.binding,
             runtimeEnv: buildOpencodeRuntimeEnv({
               baseEnv: process.env,
               apiKeyEnvName: 'OPENCODE_API_KEY',
             }),
           })
+          executor={...stageExecutor,execute:async(execution)=>{
+            const since=new Date().toISOString()
+            try{const result=await stageExecutor.execute(execution);return {...result,value:{...result.value,usage:{...result.value.usage,...budgetProxy.usageSince(since)}}}}
+            catch(error){throw new StageAgentExecutionError(error instanceof StageAgentExecutionError?error.terminalReason:'failed',error instanceof Error?error.message:'模型调查未完成。',undefined,budgetProxy.usageSince(since))}
+            finally{await budgetProxy.close()}
+          }}
         }
         let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>> | undefined
         try {
@@ -3467,17 +3524,23 @@ function registerIpcHandlers() {
       store.getCodingRuntimeConfiguration(input.projectId),
       store.getDesktopPairingCredential(),
     ])
-    if (!configuration || !pairing || pairing.localProjectId !== input.projectId) {
-      throw new Error('Coding Runtime project configuration or Team pairing is unavailable')
+    const providerId = input.providerId ?? configuration?.providerId
+    if (!providerId || !pairing || pairing.localProjectId !== input.projectId) {
+      throw new Error('请先选择模型并完成当前项目的 Team 配对。')
     }
-    return (await getProjectBoundRemoteSync()).createRuntimeBudgetApproval({
+    if (!(await store.listProviderCredentials()).some((provider) => provider.providerId === providerId)) {
+      throw new Error('当前项目使用的 Provider 凭据不可用。')
+    }
+    const approval = await (await getProjectBoundRemoteSync()).createRuntimeBudgetApproval({
       projectId: input.projectId,
-      providerId: configuration.providerId,
+      providerId,
       requestedBy: pairing.userId,
       maxAdditionalCostUsd: input.maxAdditionalCostUsd,
       reason: input.reason,
       expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
     })
+    explicitModelBudgetApprovals.set(`${pairing.tokenId}:${input.projectId}:${providerId}`, approval.id)
+    return approval
   })
 
   ipcMain.handle(ipcChannels.listCodingAgentRuns, async (_, payload: unknown) => {
@@ -3609,9 +3672,14 @@ function registerIpcHandlers() {
     return runtime.deleteManagedWorktree(input)
   })
 
+  ipcMain.handle(ipcChannels.cancelKnowledgeReview, (_, payload: unknown) => {
+    const input = parseCancelWorkflowAgentNodeInput(payload)
+    return reviewOperations.cancel(input.runId, input.nodeId)
+  })
+
   ipcMain.handle(ipcChannels.runKnowledgeReview, async (_, payload: unknown) => {
     const input = parseRunKnowledgeReviewInput(payload)
-    return providerOperations.use(input.providerId, `Review ${input.runId}`, async () => {
+    return reviewOperations.run(input.runId, input.nodeId, (signal) => providerOperations.use(input.providerId, `Review ${input.runId}`, async () => {
       const store = await getStore()
       const run = await store.getRun(input.runId)
       if (!run || run.projectId !== input.projectId) {
@@ -3622,11 +3690,10 @@ function registerIpcHandlers() {
         await store.getDesktopPairingCredential(),
       )
       const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
-      const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot)
-      const result = await runtime.run({ ...input, requestedBy: actor.userId })
-      wakeRemoteSyncOutbox()
-      return result
-    })
+      const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot, signal, () => reviewOperations.seal(input.runId, input.nodeId), input.projectId, input.runtimeBudgetApprovalId)
+      try { return await runtime.run({ ...input, requestedBy: actor.userId }) }
+      finally { wakeRemoteSyncOutbox(); broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState()) }
+    }))
   })
 }
 
@@ -3783,9 +3850,14 @@ app.on('before-quit', (event) => {
   gateCommandScheduler?.stop()
   remoteSyncOutboxScheduler?.stop()
   credentialAccess.cancelAll()
+  reviewOperations.cancelAll()
+  stageAgentOperations.cancelAll()
   githubDeliveryScheduler?.stop()
   githubDeliveryOperationAbortController?.abort()
   quitCleanupPromise ??= Promise.all([
+    reviewOperations.drain(),
+    stageAgentOperations.drain(),
+    ...[...codingBudgetProxies].map((proxy)=>proxy.close()),
     (workbenchConversationService?.then((service) => service.shutdown()) ?? Promise.resolve()).catch(() => {
       console.warn('[workbench] Unable to complete conversation cleanup before quit.')
     }),

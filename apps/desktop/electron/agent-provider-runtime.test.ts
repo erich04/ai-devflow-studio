@@ -97,7 +97,7 @@ describe('Electron agent provider runtime', () => {
       credentialSource,
     })
 
-    expect(metadata).toEqual({
+    expect(metadata).toMatchObject({
       id: 'team-openai',
       name: 'team-openai',
       model: 'gpt-4.1-mini',

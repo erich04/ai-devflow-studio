@@ -52,7 +52,7 @@ describe('Gate review evidence grounding', () => {
           missingEvidenceDetails: [{ index: 0, assessment: 'gap', explanation: '需要补充决定',
             citations: [{ sourceId: subject.id, quote }] }],
           suggestedTests: [], confidence: 0.8,
-        }) } }], usage: { prompt_tokens: 100, completion_tokens: 50 } }))
+        }) }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 50 } }))
       },
     })
     const result = await runKnowledgeReviewAgent({ context, provider,

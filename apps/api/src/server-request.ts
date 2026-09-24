@@ -17,6 +17,8 @@ import { resolveTeamRoute, type ApiRouteResult } from './routes/team-routes'
 import { resolveOrganizationRoute } from './routes/organization-routes'
 
 export type ApiRouteRequest = {
+  signal?: AbortSignal
+
   method: string
   pathname: string
   headers: IncomingHttpHeaders
@@ -185,6 +187,7 @@ export async function resolveApiRouteRequest(
   if (githubDeliveryResult) return githubDeliveryResult
 
   return resolveTeamRoute(request.method, request.pathname, options.repository, {
+    ...(request.signal ? { signal: request.signal } : {}),
     auth: {
       sessionSecret: options.sessionSecret,
       secureCookies: options.secureCookies === true,

@@ -27,9 +27,19 @@ beforeEach(async () => {
 })
 afterEach(async () => { await rm(directory, { force: true, recursive: true }) })
 
-function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>) {
+function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>, criticalReplies = true) {
   const calls: string[] = []
-  const provider = { ...createFakeAgentProvider(), completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => { calls.push(input.userPrompt); return complete(input) }) }
+  const provider = { ...createFakeAgentProvider(), completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => { calls.push(input.userPrompt)
+    const context=JSON.parse(input.userPrompt)
+    // Existing interaction fixtures explicitly simulate a cooperative verifier.
+    // Adversarial coverage tests below disable this fixture behavior.
+    if (criticalReplies && context.proposalVerification) return {value:{coverageReview:context.criticalProposalInput.criteria.map((c:{id:string})=>({criterionId:c.id,status:'covered',reason:'fixture condition retained'}))}}
+    const result=await complete(input)
+    if (criticalReplies && context.criticalProposalInput && result.value.draft) {
+      const draft=result.value.draft as {content:string}
+      return {...result,value:{...result.value,draft:{...draft,coverage:context.criticalProposalInput.criteria.map((c:{id:string;text:string})=>({criterionId:c.id,sourceQuote:c.text,proposalQuote:draft.content}))}}}
+    }
+    return result }) }
   const inspectGate = vi.fn(async () => ({ canApprove: false, source: 'test policy', blockers: ['upstream'] }))
   const service = new WorkbenchConversationService({ store, resolveProvider: async () => provider,
     loadKnowledge: async (id) => ({ projectId: id, contentHash: 'knowledge-hash', indexedAt: '2026-09-16T10:00:00.000Z', truncated: false, warnings: [], documents: [], entities: [], relations: [], chunks: [{ id: 'chunk1', documentId: 'doc1', sourcePath: 'docs/product.md', headingPath: ['清理规则'], content: '清理操作只删除已完成项，保留未完成项。', contentHash: 'chunk-hash', tokenCount: 20, tags: [], updatedAt: '2026-09-16T10:00:00.000Z' }] }),
@@ -110,7 +120,7 @@ describe('unified conversation execution and boundaries', () => {
       return { value: { text: '草稿待保存。', draft: { runId: flow.run.id, nodeId: flow.run.currentNodeId, title: '草稿', content: '待确认内容' } } }
     })
     const result = await send(service, await create(service), '帮另一任务整理草稿')
-    expect(step).toBe(2)
+    expect(step).toBe(3)
     expect(result.messages.filter((m) => m.draft)).toHaveLength(1)
     expect((await store.listArtifacts(flow.run.id))).toHaveLength(1)
   })
@@ -690,4 +700,12 @@ describe('conversation read-only repository tools', () => {
     await expect(readWorkbenchRepository(project.path, { operation: 'read', path: 'link.txt' }, signal)).rejects.toThrow('符号链接')
     expect(JSON.stringify(await readWorkbenchRepository(project.path, { operation: 'list' }, signal))).not.toContain('link.txt')
   })
+})
+
+describe('host controlled critical input coverage (#164)',()=>{
+ const draft={runId:created.run.id,nodeId:created.run.currentNodeId,title:'完整澄清',content:'清理已完成任务并持久化结果'}
+ it('bounds a model that repeatedly returns an unmapped premature complete proposal',async()=>{const {service,calls}=harness(async()=>({value:{text:'完成',draft}}),false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(calls.length).toBeLessThanOrEqual(4);expect(JSON.parse(calls[1]!).criticalProposalInput.documents[0].content).toBe(created.run.request);expect(result.messages.some(m=>m.draft)).toBe(false);expect(await store.listArtifacts()).toHaveLength(created.artifacts.length)})
+ it('rejects semantic contradiction even when every source quote and destination quote exists',async()=>{const {service}=harness(async(input)=>{const ctx=JSON.parse(input.userPrompt);if(ctx.proposalVerification)return {value:{coverageReview:ctx.criticalProposalInput.criteria.map((c:{id:string})=>({criterionId:c.id,status:'contradiction',reason:'提案修改了持久化约定'}))}};return {value:{text:'草稿',draft:{...draft,...(ctx.criticalProposalInput?{coverage:ctx.criticalProposalInput.criteria.map((c:{id:string;text:string})=>({criterionId:c.id,sourceQuote:c.text,proposalQuote:draft.content}))}:{})}}}},false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(result.error).toContain('语义核对');expect(result.messages.some(m=>m.draft)).toBe(false)})
+ it('rechecks the source version at explicit save time',async()=>{const {service}=harness(async()=>({value:{text:'待保存',draft}}));const id=await create(service);const result=await send(service,id,'生成完整提案');const message=result.messages.find(m=>m.draft)!;expect(message.draft?.inputReceipt).toBeDefined();await store.saveArtifact({...created.artifacts[0]!,id:'conversation-proposal-new-input',kind:'log',nodeId:created.run.currentNodeId,content:'新增已确认条件',updatedAt:'2026-09-23T00:00:00Z'});await expect(service.command({type:'publish',projectId,conversationId:id,messageId:message.id})).rejects.toThrow();expect(await store.listArtifacts()).toHaveLength(created.artifacts.length+1)})
+ it('fails explicitly when protected original body exceeds the final request capacity',async()=>{await store.saveArtifact({...created.artifacts[0]!,id:'conversation-proposal-large-input',kind:'log',nodeId:created.run.currentNodeId,content:'完整正文。'.repeat(9000)});const {service,calls}=harness(async()=>({value:{text:'草稿',draft}}),false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(result.error).toContain('容量');expect(calls.length).toBeLessThanOrEqual(2);expect(result.messages.some(m=>m.draft)).toBe(false)})
 })

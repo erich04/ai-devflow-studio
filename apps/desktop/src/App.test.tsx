@@ -1142,7 +1142,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       createdAt: '2026-06-15T00:03:30.000Z',
       expiresAt: '2099-06-15T00:18:30.000Z',
     })),
-    getCodingRuntimeBudgetPolicy: vi.fn().mockResolvedValue(null),
+    getCodingRuntimeBudgetPolicy: vi.fn().mockResolvedValue({ projectId:localProject.id, enabled:true, monthlyLimitUsd:50, warningThresholdUsd:40, currency:'USD', updatedAt:'2026-09-23T00:00:00.000Z' }),
     saveCodingRuntimeBudgetPolicy: vi.fn().mockImplementation(async (input) => ({
       ...input,
       currency: 'USD' as const,
@@ -2415,6 +2415,7 @@ describe('App', () => {
       }),
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
@@ -2484,6 +2485,7 @@ describe('App', () => {
       }),
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
@@ -4001,6 +4003,7 @@ describe('App', () => {
       })),
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
@@ -4087,6 +4090,7 @@ describe('App', () => {
   it('does not generate a PR draft for a future workflow node', async () => {
     const api = installDesktopApi()
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
@@ -4129,6 +4133,7 @@ describe('App', () => {
   it('does not generate an acceptance bundle for a future workflow node', async () => {
     const api = installDesktopApi()
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-accept'))
@@ -4238,6 +4243,7 @@ describe('App', () => {
   it('separates workflow node type, source, display mode, and Inspector semantics', async () => {
     const api = installDesktopApi()
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     const board = await screen.findByTestId('workflow-canvas')
@@ -4301,6 +4307,7 @@ describe('App', () => {
       })),
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-clarify'))
@@ -4379,6 +4386,7 @@ describe('App', () => {
     const snapshot = await api.loadEnforcementPolicy({ projectId: fixtureRuns[0]!.projectId })
     vi.mocked(api.loadEnforcementPolicy).mockResolvedValue({ ...snapshot, projectId: 'paired-team-project', source: 'remote_cache' })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
     vi.mocked(api.evaluateGateEnforcement).mockClear()
     fireEvent.click(screen.getByTestId('flow-node-n-build'))
@@ -4413,8 +4421,9 @@ describe('App', () => {
   })
 
   it('refreshes the current project runtime budget after Team sync without reloading the app', async () => {
-    const api = installDesktopApi()
+    const api = installDesktopApi({ getCodingRuntimeBudgetPolicy:vi.fn().mockResolvedValue(null) })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
     await waitFor(() => expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('未配置'))
     vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue({
       projectId: 'p-payments', enabled: true, monthlyLimitUsd: 1, warningThresholdUsd: 0.5,
@@ -4525,6 +4534,7 @@ describe('App', () => {
       }),
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
@@ -4559,6 +4569,7 @@ describe('App', () => {
     const loadState = vi.fn().mockResolvedValue(initial)
     const api = installDesktopApi({ loadState, completeWorkflowAgentNode: vi.fn().mockRejectedValue(new Error('Citation rejected')) })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
     await waitFor(() => expect(screen.getByTestId('complete-clarify-agent')).toBeEnabled())
     loadState.mockResolvedValue({ ...initial, agentTokenUsage: [usage] })
     fireEvent.click(screen.getByTestId('complete-clarify-agent'))
@@ -4581,6 +4592,7 @@ describe('App', () => {
     state.events = [{ ...fixtureEvents[0]!, id: 'gate-event', nodeId: gateId, message: 'Gate review was archived' }]
     const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(state) })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
     const card = await screen.findByTestId(`workflow-card-${gateId}`)
     const inspector = screen.getByTestId('node-inspector')
     fireEvent.click(within(card).getByRole('button', { name: /产物 1/ }))
@@ -4685,6 +4697,7 @@ describe('App', () => {
       })),
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-design'))
@@ -5860,6 +5873,7 @@ describe('App', () => {
       onCodingPermissionUpdated,
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitFor(() => expect(onCodingRunStatusUpdated).toHaveBeenCalled())
     act(() => {
@@ -5961,6 +5975,7 @@ describe('App', () => {
       onCodingRunStatusUpdated,
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(loadState, 1)
     act(() => {
@@ -6228,6 +6243,7 @@ describe('App', () => {
       }),
     })
     render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     fireEvent.click(await screen.findByTestId('flow-node-n-build'))
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
@@ -6402,7 +6418,7 @@ describe('App', () => {
 
     const budgetStatus = await screen.findByTestId('runtime-budget-status')
     expect(within(budgetStatus).getByText('unavailable')).toHaveClass('bad')
-    expect(budgetStatus).toHaveTextContent('恢复 Team 项目配对、API 连接和已保存的预算策略后重试')
+    expect(budgetStatus).toHaveTextContent('Runtime budget authorization is unavailable.')
 
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
     await screen.findByTestId('agent-workbench')
@@ -6410,18 +6426,42 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: '使用预算批准重新运行' })).not.toBeInTheDocument()
   })
 
+  it('shows project-scoped model budget warnings and offers explicit approval outside coding', async () => {
+    let notify!: Parameters<NonNullable<DevFlowDesktopApi['onModelBudgetUpdated']>>[0]
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-design-gate')),
+      onModelBudgetUpdated: (listener) => { notify = listener; return () => {} },
+      createCodingRuntimeBudgetApproval: vi.fn().mockResolvedValue({ id: 'explicit-model-approval' }),
+    })
+    render(<App />)
+    await screen.findByTestId('node-inspector')
+    act(() => notify({ projectId: localProject.id, providerId: agentProvider.id,
+      decision: { status: 'requires_lead_approval', blocksRun: true, currentSpendUsd: 49.9,
+        projectedCostUsd: 0.25, reason: '本次模型请求预计超出月预算，需要 Owner/Lead 额外批准。' } }))
+    expect(screen.getByTestId('runtime-budget-status')).toHaveTextContent('requires_lead_approval')
+    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    expect(await screen.findByText(/最近一次模型预算检查/)).toHaveTextContent('本次模型请求预计超出月预算')
+    fireEvent.click(screen.getByRole('button', { name: '创建 Owner/Lead 一次性批准' }))
+    await waitFor(() => expect(api.createCodingRuntimeBudgetApproval).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: localProject.id, providerId: agentProvider.id, maxAdditionalCostUsd: 0.25,
+    })))
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+  })
+
   it('updates the global Team budget after saving before any Coding Run and restores it on reload', async () => {
-    const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue({
+    const api = installDesktopApi({ getCodingRuntimeBudgetPolicy:vi.fn().mockResolvedValue(null), loadState: vi.fn().mockResolvedValue({
       ...localStateAtCurrentNode('n-design-gate'), codingRuns: [],
     }) })
+    vi.mocked(api.saveCodingRuntimeBudgetPolicy).mockImplementation(async(input)=>{ const saved={...input,currency:'USD' as const,updatedAt:new Date().toISOString()};vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(saved);return saved })
     const view = render(<App />)
     const status = await screen.findByTestId('runtime-budget-status')
     await waitFor(() => expect(status).toHaveTextContent('未配置'))
     expect(status).toHaveTextContent('尚未执行')
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    fireEvent.change(await screen.findByLabelText('Coding monthly budget'), { target: { value: '1' } })
-    fireEvent.change(screen.getByLabelText('Coding warning budget'), { target: { value: '0.5' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存预算策略' }))
+    fireEvent.change(await screen.findByLabelText('项目月预算'), { target: { value: '1' } })
+    fireEvent.change(screen.getByLabelText('项目预算预警'), { target: { value: '0.5' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存团队项目预算' }))
     await waitFor(() => expect(status).toHaveTextContent('已配置 · $1.00'))
     expect(status).not.toHaveTextContent('not loaded')
     expect(api.runCodingAgent).not.toHaveBeenCalled()
@@ -6548,7 +6588,7 @@ describe('App', () => {
   })
 
   it('does not execute tests for a future workflow node', async () => {
-    const api = installDesktopApi()
+    const api = installDesktopApi({getCodingRuntimeBudgetPolicy:vi.fn().mockResolvedValue(null)})
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)

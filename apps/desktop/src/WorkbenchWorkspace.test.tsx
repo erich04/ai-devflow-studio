@@ -52,6 +52,32 @@ function expectExecutor(name: string, executor: string) {
   fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
 }
 
+describe('split document reader', () => {
+  it('keeps the active conversation, draft and scroll while browsing nodes, Runs and source links', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '保留的会话' })
+    await f.api.workbenchConversation({ type: 'send', projectId: run.projectId, conversationId: 'chat-1', providerId: 'provider', text: '查看当前进展' })
+    const { rerender } = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    const input = await screen.findByRole('textbox', { name: '对话内容' })
+    fireEvent.change(input, { target: { value: '尚未发送的补充' } })
+    const messages = screen.getByLabelText('当前会话消息')
+    Object.defineProperties(messages, { scrollHeight: { configurable: true, value: 2000 }, clientHeight: { configurable: true, value: 400 } })
+    messages.scrollTop = 160; fireEvent.scroll(messages)
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'details' }}><p>另一个节点的正文</p></WorkbenchWorkspace>)
+    expect(screen.getByText('另一个节点的正文')).toBeVisible()
+    expect(screen.getByRole('tab', { name: /保留的会话/ })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('button', { name: '查看测试节点 ↗' }))
+    expect(f.onNavigate).toHaveBeenCalledOnce()
+    expect(screen.getByLabelText('对话内容')).toBe(input)
+    expect(input).toHaveValue('尚未发送的补充')
+    expect(messages.scrollTop).toBe(160)
+    fireEvent.click(screen.getByRole('button', { name: '节点详情' }))
+    expect(screen.getByLabelText('当前查看的节点详情')).toHaveFocus()
+    expect(input).toHaveValue('尚未发送的补充')
+    expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(1)
+  })
+})
+
 describe('workbench tabs and independent conversation interaction', () => {
   it('opens an inactive tab’s details without remounting the active chat or changing its draft, scroll or calls', async () => {
     const f = fixture()

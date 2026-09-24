@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 29
+export const TEAM_SCHEMA_VERSION = 30
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -35,6 +35,7 @@ export const requiredTeamTableNames = [
   'agent_coordination_projection_audits',
   'enforcement_policies',
   'gate_override_decisions',
+  'model_call_attempts',
   'runtime_budget_policies',
   'runtime_budget_approvals',
   'agent_policy_findings',
@@ -95,6 +96,7 @@ function column(
 }
 
 export const teamTableDefinitions: TeamTableDefinition[] = [
+
   {
     name: 'team_schema_migrations',
     columns: [
@@ -361,6 +363,7 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
   {
     name: 'token_usage',
     columns: [
+      column('budget_attempt_ids', 'jsonb', { nullable: true }),
       column('id', 'text', { primaryKey: true }),
       column('run_id', 'text', { references: 'workflow_runs.id' }),
       column('node_id', 'text', { references: 'workflow_nodes.id' }),
@@ -659,6 +662,13 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
       column('created_at', 'timestamptz'),
     ],
   },
+  { name: 'model_call_attempts', columns: [
+    column('id', 'text', { primaryKey: true }),
+    column('organization_id', 'text', { references: 'organizations(id)' }),
+    column('project_id', 'text', { references: 'projects(id)' }),
+    column('user_id', 'text', { references: 'users(id)' }),
+    column('json', 'jsonb'), column('created_at', 'timestamptz'),
+  ] },
   {
     name: 'runtime_budget_policies',
     columns: [

@@ -188,6 +188,7 @@ export const ipcChannels = {
   listCredentialAccess: 'devflow:credential-access:list',
   cancelCredentialAccess: 'devflow:credential-access:cancel',
   credentialAccessUpdated: 'devflow:credential-access:updated',
+  modelBudgetUpdated: 'devflow:model-budget:updated',
   workbenchConversation: 'devflow:workbench-conversation',
   workbenchConversationUpdated: 'devflow:workbench-conversation:updated',
   loadState: 'devflow:local-state:load',
@@ -250,6 +251,7 @@ export const ipcChannels = {
   inspectAgentProviderRemoval: 'devflow:agent:provider-credential:inspect-removal',
   removeAgentProviderCredential: 'devflow:agent:provider-credential:remove',
   runKnowledgeReview: 'devflow:agent:knowledge-review:run',
+  cancelKnowledgeReview: 'devflow:agent:knowledge-review:cancel',
   listAgentReviews: 'devflow:agent:reviews:list',
   recordAgentReviewFeedback: 'devflow:agent:reviews:feedback',
   ensureCodingEngine: 'devflow:coding:engine:ensure',
@@ -533,6 +535,7 @@ export type SaveCodingRuntimeBudgetPolicyInput = {
 }
 
 export type CreateCodingRuntimeBudgetApprovalInput = {
+  providerId?: string
   projectId: string
   requestedBy: string
   maxAdditionalCostUsd: number
@@ -628,6 +631,7 @@ export type DevFlowDesktopApi = {
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
   listCredentialAccess?: () => Promise<CredentialAccessRecord[]>
   cancelCredentialAccess?: (id: string) => Promise<boolean>
+  onModelBudgetUpdated?: (listener: (event: { projectId: string; providerId: string; decision: import('@ai-devflow/shared').BudgetGuardDecision }) => void) => () => void
   onCredentialAccessUpdated?: (listener: (records: CredentialAccessRecord[]) => void) => () => void
   workbenchConversation?: WorkbenchConversationApi
   onWorkbenchConversationUpdated?: (listener: (projectId: string) => void) => () => void
@@ -731,6 +735,7 @@ export type DevFlowDesktopApi = {
   updateProviderThinking?: (input: import('@ai-devflow/shared').UpdateProviderThinkingInput) => Promise<ProviderCredentialMetadata>
   inspectAgentProviderRemoval: (input: { providerId: string }) => Promise<ProviderRemovalCheck>
   removeAgentProviderCredential: (input: { providerId: string; expectedUpdatedAt: string }) => Promise<ProviderRemovalResult>
+  cancelKnowledgeReview?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   runKnowledgeReview: (input: RunKnowledgeReviewInput) => Promise<RunKnowledgeReviewResult>
   listAgentReviews: (input?: ListAgentReviewsInput) => Promise<AgentReviewExecutionResult['review'][]>
   recordAgentReviewFeedback: (input: import('@ai-devflow/shared').RecordAgentReviewFeedbackInput) => Promise<AgentReviewExecutionResult['review']>
@@ -1847,7 +1852,7 @@ export function parseCreateCodingRuntimeBudgetApprovalInput(
   if (!isRecord(value)) throw new Error('Invalid Coding Runtime budget approval payload')
   rejectUnexpectedFields(
     value,
-    ['projectId', 'requestedBy', 'maxAdditionalCostUsd', 'reason'],
+    ['projectId', 'providerId', 'requestedBy', 'maxAdditionalCostUsd', 'reason'],
     'Coding Runtime budget approval payload',
   )
   const maxAdditionalCostUsd = value['maxAdditionalCostUsd']
@@ -1862,6 +1867,7 @@ export function parseCreateCodingRuntimeBudgetApprovalInput(
     projectId: readRequiredString(value, 'projectId'),
     requestedBy: readRequiredString(value, 'requestedBy'),
     maxAdditionalCostUsd,
+    ...(value['providerId'] !== undefined ? { providerId: readRequiredString(value, 'providerId') } : {}),
     reason: readRequiredString(value, 'reason'),
   }
 }

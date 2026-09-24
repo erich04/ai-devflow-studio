@@ -70,7 +70,7 @@ describe('DevFlow Native Executor', () => {
     const completeStructuredJson = vi.fn(async (_input: {
       systemPrompt: string
       userPrompt: string
-      maxOutputTokens: number
+      maxOutputTokens?: number
     }) => ({
       value: {
         stateVersion: 1,

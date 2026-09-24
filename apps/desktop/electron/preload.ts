@@ -11,6 +11,7 @@ const desktopApi: DevFlowDesktopApi = {
   listDiagnosticRecords: () => ipcRenderer.invoke(ipcChannels.listDiagnosticRecords),
   listCredentialAccess: () => ipcRenderer.invoke(ipcChannels.listCredentialAccess),
   cancelCredentialAccess: (id) => ipcRenderer.invoke(ipcChannels.cancelCredentialAccess, id),
+  onModelBudgetUpdated: (listener) => onIpcPayload(ipcChannels.modelBudgetUpdated, listener),
   onCredentialAccessUpdated: (listener) => onIpcPayload(ipcChannels.credentialAccessUpdated, listener),
   workbenchConversation: (input) => ipcRenderer.invoke(ipcChannels.workbenchConversation, input),
   onWorkbenchConversationUpdated: (listener) => onIpcPayload(ipcChannels.workbenchConversationUpdated, listener),
@@ -99,6 +100,7 @@ const desktopApi: DevFlowDesktopApi = {
   removeAgentProviderCredential: (input) => ipcRenderer.invoke(ipcChannels.removeAgentProviderCredential, input),
   saveAgentProviderCredential: (input) =>
     ipcRenderer.invoke(ipcChannels.saveAgentProviderCredential, input),
+  cancelKnowledgeReview: (input) => ipcRenderer.invoke(ipcChannels.cancelKnowledgeReview, input),
   runKnowledgeReview: (input) => ipcRenderer.invoke(ipcChannels.runKnowledgeReview, input),
   listAgentReviews: (input) => ipcRenderer.invoke(ipcChannels.listAgentReviews, input),
   recordAgentReviewFeedback: (input) => ipcRenderer.invoke(ipcChannels.recordAgentReviewFeedback, input),

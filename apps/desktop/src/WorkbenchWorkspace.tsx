@@ -1,3 +1,4 @@
+import { WorkbenchSplitter } from './WorkbenchSplitter'
 import { ConversationBody } from './ConversationBody'
 import { NewConversationDialog } from './ConversationDialogs'
 import { ConversationDetailsDialog, ConversationTabMenu, type ConversationMenuTarget, type ConversationTabTarget } from './ConversationDetails'
@@ -12,7 +13,7 @@ const statusCopy: Record<WorkbenchConversation['status'], string> = {
   idle: '可以继续提问', running: '正在调查', awaiting_answer: '等待你的回答', failed: '需要重试', interrupted: '上次调查已中断', cancelled: '已停止',
 }
 
-export function WorkbenchWorkspace({ api, projectId, projectName, runs, providerId, providerName, request, onNavigate, onConfigure, children }: {
+export function WorkbenchWorkspace({ api, projectId, projectName, runs, providerId, providerName, request, onNavigate, onConfigure, children, splitDetails = false, modelReadinessError }: {
   api: Pick<DevFlowDesktopApi, 'workbenchConversation' | 'onWorkbenchConversationUpdated'> | null
   projectId: string | undefined
   projectName: string | undefined
@@ -23,7 +24,10 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   onNavigate: (action: ConversationAction) => void
   onConfigure: () => void
   children: ReactNode
+  modelReadinessError?: string | undefined
+  splitDetails?: boolean
 }) {
+  const reader = useRef<HTMLElement>(null)
   const [sessions, setSessions] = useState<WorkbenchConversation[]>([])
   const [active, setActive] = useState('details')
   const [showHistory, setShowHistory] = useState(false)
@@ -52,12 +56,16 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     if (requestedGeneration !== generation.current || command.projectId !== visibleProject.current) return undefined
     if (result.error) throw new Error(result.error)
     if (command.type === 'list' && !['details', 'new-pending'].includes(activeRef.current) && !result.conversations.some((item) => item.id === activeRef.current && item.isOpen)) setActive('details')
+    if (splitDetails && activeRef.current === 'details') {
+      const lastOpen = result.conversations.filter((item) => item.isOpen).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+      if (lastOpen) setActive(lastOpen.id)
+    }
     setSessions((current) => result.conversations.map((incoming) => {
       const existing = current.find((item) => item.id === incoming.id)
       return existing && existing.version > incoming.version ? existing : incoming
     }))
     return result
-  }, [api])
+  }, [api, splitDetails])
   const runCommand = useCallback(async (command: ConversationCommand) => {
     try { setError(''); return await call(command) }
     catch (failure) { if (command.projectId === visibleProject.current) setError(failure instanceof Error ? failure.message : '会话操作未完成，请重试。'); return undefined }
@@ -103,9 +111,12 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   useEffect(() => {
     if (lastRequest.current === request.serial) return
     lastRequest.current = request.serial
-    if (request.type === 'details') { activate('details'); setShowHistory(false); setCreationRequest(null) }
+    if (request.type === 'details') {
+      if (splitDetails && reader.current) { reader.current.scrollTop = 0; reader.current.focus({ preventScroll: true }) }
+      else { activate('details'); setShowHistory(false); setCreationRequest(null) }
+    }
     else beginCreate(request.prompt)
-  }, [activate, beginCreate, request])
+  }, [activate, beginCreate, request, splitDetails])
 
   useEffect(() => {
     tabbar.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
@@ -122,10 +133,11 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   function navigate(action: ConversationAction) {
     const run = runs.find((candidate) => candidate.id === action.runId)
     if (!run?.nodes.some((node) => node.id === action.nodeId)) { setError('目标节点已不存在，或不在当前项目中。请重新查询最新流程。'); return }
-    activate('details'); setShowHistory(false); onNavigate(action)
+    if (!splitDetails) { activate('details'); setShowHistory(false) }
+    onNavigate(action)
   }
 
-  return <aside className="workbench-workspace" data-testid="workbench-workspace" aria-label="节点详情与对话">
+  const conversationPane = <aside className="workbench-workspace" data-testid="workbench-workspace" aria-label="节点详情与对话">
     <div className="workspace-tab-strip">
       <div ref={tabbar} className="workspace-tabs" role="tablist" aria-label="节点详情与独立会话" onKeyDown={(event) => {
         if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
@@ -136,7 +148,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
         tabs[next]?.focus(); tabs[next]?.click()
       }}>
-        <button id="details-tab" role="tab" aria-controls="details-panel" aria-selected={active === 'details'} tabIndex={active === 'details' ? 0 : -1} onClick={() => { activate('details'); setShowHistory(false) }}><Pin size={15} />节点详情</button>
+        {splitDetails ? <button className="workspace-node-shortcut" title="聚焦中间节点详情，会话保持不变" aria-controls="workbench-node-reader" onClick={() => reader.current?.focus({ preventScroll: true })}><Pin size={15} />节点详情</button> : <button id="details-tab" role="tab" aria-controls="details-panel" aria-selected={active === 'details'} tabIndex={active === 'details' ? 0 : -1} onClick={() => { activate('details'); setShowHistory(false) }}><Pin size={15} />节点详情</button>}
         {visible.map((item) => <div className="conversation-tab" key={item.id}>
           <button id={`chat-tab-${item.id}`} role="tab" aria-controls={`chat-panel-${item.id}`} aria-selected={active === item.id} tabIndex={active === item.id ? 0 : -1} onClick={() => { activate(item.id); setShowHistory(false) }} title={item.title}
             aria-haspopup="menu" aria-expanded={menuSession?.id === item.id}
@@ -174,17 +186,23 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       }}><span>{item.title}</span><small>{statusCopy[item.status]} · {item.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {new Date(item.updatedAt).toLocaleString()}</small></button>)}
     </section>}
     <div id="details-panel" role="tabpanel" aria-labelledby="details-tab" hidden={active !== 'details' || showHistory} className="workspace-details">
-      {children}
+      {splitDetails ? <p className="empty-note">点击 ＋ 新建对话，或从历史继续。浏览节点不会切换会话。</p> : children}
       {api?.workbenchConversation && <div className="details-conversation-entry"><button className="ghost-button" disabled={!projectId || creating} onClick={() => beginCreate('当前项目进行到哪里了？为什么卡住，下一步应该做什么？')}><MessageCircle size={16} />向项目提问</button></div>}
     </div>
     {active !== 'details' && !session && !showHistory && <p className="conversation-loading" role="status">{creating ? '正在创建独立对话…' : '正在恢复会话…'}</p>}
     {session && <div id={`chat-panel-${session.id}`} role="tabpanel" aria-labelledby={`chat-tab-${session.id}`} hidden={showHistory} className="workspace-conversation">
-      <ConversationView key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand} />
+      <ConversationView modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand} />
     </div>}
   </aside>
+  return splitDetails ? <div className="workspace-split">
+    <section ref={reader} id="workbench-node-reader" className="node-reader" tabIndex={-1} aria-label="当前查看的节点详情">{children}</section>
+    <WorkbenchSplitter initialWidth={480} />
+    {conversationPane}
+  </div> : conversationPane
 }
 
-function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure }: {
+function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError }: {
+  modelReadinessError?: string | undefined
   session: WorkbenchConversation; runs: WorkflowRun[]; providerId: string; providerName: string
   command: (input: ConversationCommand) => Promise<unknown>
   onNavigate: (action: ConversationAction) => void; onConfigure: () => void
@@ -208,7 +226,7 @@ function ConversationView({ session, runs, providerId, providerName, command, on
   useEffect(() => () => { void command({ type: 'update', projectId: session.localProjectId, conversationId: session.id, inputDraft: inputRef.current }) }, [command, session.id, session.localProjectId])
   const updateInput = (value: string) => { inputRef.current = value; setInput(value) }
   async function send(text = input) {
-    if (!text.trim() || !providerId || busy || sending) return
+    if (!text.trim() || !providerId || busy || sending || modelReadinessError) return
     setSending(true)
     // Save the exact pending input first, so a rejected send never loses the draft.
     await command({ type: 'update', ...scope, inputDraft: text })
@@ -229,7 +247,8 @@ function ConversationView({ session, runs, providerId, providerName, command, on
       </div>}
       {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} onPublish={() => void command({ type: 'publish', ...scope, messageId: message.id })} />)}
       {busy && <p className="conversation-activity" role="status"><span className="conversation-running-dot" />正在调用 {providerName || 'Provider'} 调查；可以停止。</p>}
-      {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />重试调查</button>}</div>}
+      {modelReadinessError && <div className="conversation-error" role="status">{modelReadinessError}<button className="text-button" onClick={onConfigure}>打开项目模型设置</button></div>}
+      {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending || Boolean(modelReadinessError)} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />重试调查</button>}</div>}
       {session.failure && <details className="conversation-tool"><summary>本次失败诊断</summary><p>阶段：{session.failure.phase} · 代码：{session.failure.code}{session.failure.reason ? ` · 原因：${session.failure.reason}` : ''}{session.failure.httpStatus ? ` · HTTP ${session.failure.httpStatus}` : ''}</p></details>}
       <div ref={messagesEnd} />
     </div>
@@ -239,7 +258,7 @@ function ConversationView({ session, runs, providerId, providerName, command, on
       <label className="sr-only" htmlFor={`compose-${session.id}`}>对话内容</label>
       <textarea ref={textarea} id={`compose-${session.id}`} aria-label="对话内容" value={input} maxLength={12000} onChange={(event) => updateInput(event.target.value)} placeholder="问进度、查代码、讨论需求或回答问题…" onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
       <div className="conversation-composer-footer"><span title="仅展示 Provider 实际返回的 token；未提供时不估算费用">{providerName || '未配置模型'} · {usages.length ? `${tokenCount.toLocaleString()} tokens${unreportedCalls ? '（部分调用未返回用量）' : ''}` : unreportedCalls ? '模型未返回用量' : '暂无用量记录'}</span>
-        {busy ? <button type="button" className="ghost-button" aria-label="停止调查" onClick={() => void command({ type: 'cancel', ...scope })}><Square size={15} />停止</button> : <button className="primary-button" type="submit" aria-label="发送消息" disabled={!input.trim() || !providerId || sending}><ArrowUp size={18} /></button>}
+        {busy ? <button type="button" className="ghost-button" aria-label="停止调查" onClick={() => void command({ type: 'cancel', ...scope })}><Square size={15} />停止</button> : <button className="primary-button" type="submit" aria-label="发送消息" disabled={!input.trim() || !providerId || sending || Boolean(modelReadinessError)}><ArrowUp size={18} /></button>}
       </div><small>Enter 发送 · Shift+Enter 换行 · 调用模型可能产生费用</small>
     </form>
   </>
@@ -282,6 +301,7 @@ function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavig
     </div>}
     {!!message.actions?.length && <div className="conversation-actions">{message.actions.map((action, index) => <button className="ghost-button" key={`${action.runId}-${action.nodeId}-${index}`} onClick={() => onNavigate(action)}>{action.label} ↗</button>)}</div>}
     {message.draft && <div className="conversation-proposal"><span className="pill soft">{message.draft.publishedArtifactId ? '已保存 · 待确认' : '仅本会话草稿'}</span><strong>{message.draft.title}</strong><pre>{message.draft.content}</pre><p className="meta">目标：{targetLabel}。保存后其他会话可以查询；仍需在节点形成正式产物。</p>
+      {message.draft.inputReceipt && <details><summary>正文与验收覆盖 · {message.draft.inputReceipt.coverage.length} 项</summary><p className="meta">关键正文已完整送达本次模型调用。以下是模型给出的对应关系，请核对含义是否准确。</p>{message.draft.inputReceipt.coverage.map((row) => <div key={row.criterionId}><blockquote>{row.sourceQuote}</blockquote><p>提案对应：{row.proposalQuote}</p></div>)}</details>}
       <button className="ghost-button" disabled={!!message.draft.publishedArtifactId} onClick={onPublish}>{message.draft.publishedArtifactId ? '已保存为节点提案' : '保存为节点提案'}</button>
     </div>}
     {!!message.citations?.length && <details className="conversation-sources"><summary>查询依据 · {message.citations.length}</summary>{message.citations.map((citation) => <div key={citation.id}><strong>{citation.label}</strong><small>读取于 {new Date(citation.observedAt).toLocaleString()}</small><pre>{citation.excerpt}</pre></div>)}</details>}

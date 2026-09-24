@@ -1,3 +1,5 @@
+import type {HistoricalModelCall} from '@ai-devflow/shared'
+import type { ModelCallQuote, ModelCallSettlement, ModelCallAdmission } from '@ai-devflow/shared'
 import {
   DIAGNOSTIC_HEADER,
   safeDiagnosticId,
@@ -112,6 +114,9 @@ export type RemoteTeamOverviewResponse = {
 }
 
 export type RemoteSyncClient = {
+  importHistoricalModelCall(input:HistoricalModelCall):Promise<void>
+  reserveModelCall(input: ModelCallQuote): Promise<ModelCallAdmission>
+  settleModelCall(input: ModelCallSettlement): Promise<void>
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
   loadRemoteSnapshot(input?: LoadRemoteSnapshotInput): Promise<RemoteTeamSnapshot>
   listWorkRequests(
@@ -204,6 +209,7 @@ export type RemoteRuntimeBudgetEvaluateInput = {
   projectId: string
   providerId: string
   projectedCostUsd: number
+  projectedCostKnown?: boolean
   approvalId?: string
 }
 
@@ -1256,6 +1262,13 @@ export function createRemoteSyncClient(
       )
     },
 
+    async importHistoricalModelCall(input) {await postJson(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/history'),input,'/api/runtime/model-calls/history',requirePostHeaders({authToken,sessionHeaders}),signal)},
+    async reserveModelCall(input) {
+      return postJson<ModelCallAdmission>(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/reserve'),input,'/api/runtime/model-calls/reserve',requirePostHeaders({authToken,sessionHeaders}),signal)
+    },
+    async settleModelCall(input) {
+      await postJson(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/settle'),input,'/api/runtime/model-calls/settle',requirePostHeaders({authToken,sessionHeaders}),signal)
+    },
     async evaluateRuntimeBudget(input) {
       const decision = await postJson<unknown>(
         fetcher,
@@ -1264,6 +1277,7 @@ export function createRemoteSyncClient(
           projectId: input.projectId,
           providerId: input.providerId,
           projectedCostUsd: input.projectedCostUsd,
+          ...(input.projectedCostKnown === undefined ? {} : { projectedCostKnown: input.projectedCostKnown }),
           ...(input.approvalId ? { approvalId: input.approvalId } : {}),
         },
         '/api/runtime/budget/evaluate',

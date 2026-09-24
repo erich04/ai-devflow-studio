@@ -246,6 +246,7 @@ export function settleCodingRuntimeCost(input: {
   }
 
   return {
+    ...('usage' in input && input.usage.budgetAttemptIds ? { budgetAttemptIds: input.usage.budgetAttemptIds } : {}),
     id: `coding-runtime-cost-${input.runId}-${input.nodeId}`,
     runId: input.runId,
     nodeId: input.nodeId,
@@ -348,6 +349,7 @@ export function aggregateCodingRuntimeCostSettlements(
   const providerCallSettlements: RuntimeProviderCallSettlement[] = calls.map(
     ({ requestPhase, settlement }) => ({
       requestPhase,
+      ...(settlement.budgetAttemptIds ? { budgetAttemptIds: settlement.budgetAttemptIds } : {}),
       providerId: settlement.providerId,
       model: settlement.model,
       inputTokens: settlement.inputTokens,
@@ -389,6 +391,7 @@ export function aggregateCodingRuntimeCostSettlements(
     pricingSnapshot,
     breakdown,
     providerCallSettlements,
+    ...(calls.length > 0 && calls.every(({ settlement }) => settlement.budgetAttemptIds?.length) ? { budgetAttemptIds: [...new Set(calls.flatMap(({ settlement }) => settlement.budgetAttemptIds ?? []))] } : {}),
     timestamp: calls[calls.length - 1]!.settlement.timestamp,
     source: 'provider_reported',
     redacted: true,
@@ -550,6 +553,7 @@ export type EvaluateRuntimeBudgetGuardInput = {
   policy?: RuntimeBudgetPolicy | null
   currentSpendUsd: number
   projectedCostUsd: number
+  projectedCostKnown?: boolean
   requestedBy: string
   approval?: RuntimeBudgetApproval | null
   now: string
@@ -628,7 +632,7 @@ export function evaluateRuntimeBudgetGuard(
       blocksRun: true,
       currentSpendUsd: input.currentSpendUsd,
       projectedCostUsd: input.projectedCostUsd,
-      reason: 'Runtime budget policy is unavailable for this project.',
+      reason: input.policy ? '预算策略属于其他项目，请重新同步当前项目 Policy。' : '当前项目尚未配置云端预算策略。请先同步 Policy，并由 Owner/Lead 保存项目预算。',
     }
   }
 
@@ -641,6 +645,8 @@ export function evaluateRuntimeBudgetGuard(
       reason: 'Runtime budget guard is disabled for this project.',
     }
   }
+
+  if (input.projectedCostKnown === false) return { status: 'unavailable', blocksRun: true, currentSpendUsd: input.currentSpendUsd, projectedCostUsd: input.projectedCostUsd, reason: '当前模型的费用或默认输出额度尚不可核验。请配置有可验证价格和额度的 Provider；不会按零费用放行。' }
 
   const nextSpend = input.currentSpendUsd + input.projectedCostUsd
   if (nextSpend <= input.policy.warningThresholdUsd) {
@@ -699,6 +705,7 @@ export function runtimeCostSummaryToTokenUsage(summary: CodingRuntimeCostSummary
     return null
   }
   return {
+    ...(summary.budgetAttemptIds ? { budgetAttemptIds: summary.budgetAttemptIds } : {}),
     id: summary.id ?? `coding-runtime-cost-${summary.runId}-${summary.nodeId}`,
     runId: summary.runId,
     nodeId: summary.nodeId,

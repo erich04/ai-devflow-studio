@@ -431,6 +431,7 @@ export type GateDecision = {
 }
 
 export type TokenUsage = {
+  budgetAttemptIds?: string[]
   id: string
   runId: string
   nodeId: string
@@ -486,6 +487,7 @@ export type RuntimeCostBreakdown = {
 export type RuntimeProviderRequestPhase = 'analysis' | 'initial' | 'repair'
 
 export type RuntimeProviderCallSettlement = {
+  budgetAttemptIds?: string[]
   requestPhase: RuntimeProviderRequestPhase
   providerId: string
   model: string
@@ -619,6 +621,7 @@ export type ProviderRemovalResult =
   | { status: 'blocked' | 'changed' | 'not_found'; check: ProviderRemovalCheck }
 
 export type AgentProviderUsage = {
+  budgetAttemptIds?: string[]
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number

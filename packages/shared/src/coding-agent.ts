@@ -1,3 +1,4 @@
+import { parseBudgetAttemptIds } from './model-call-budget'
 import type {
   Artifact,
   CodingAgentRun,
@@ -432,6 +433,7 @@ function redactRemoteCodingCostSummaryForSync(
   summary: NonNullable<RemoteCodingAgentSummary['costSummary']>,
 ): NonNullable<RemoteCodingAgentSummary['costSummary']> {
   return {
+    ...(summary.budgetAttemptIds ? {budgetAttemptIds:parseBudgetAttemptIds(summary.budgetAttemptIds)} : {}),
     id: summary.id,
     runId: summary.runId,
     nodeId: summary.nodeId,
@@ -487,6 +489,7 @@ function redactRemoteCodingCostSummaryForSync(
       ? {
           providerCallSettlements: summary.providerCallSettlements.map((settlement) => ({
             requestPhase: settlement.requestPhase,
+            ...(settlement.budgetAttemptIds ? {budgetAttemptIds:parseBudgetAttemptIds(settlement.budgetAttemptIds)} : {}),
             providerId: redactSensitiveText(settlement.providerId).value,
             model: redactSensitiveText(settlement.model).value,
             inputTokens: settlement.inputTokens,

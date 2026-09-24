@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { McpServerDefinition } from '@ai-devflow/shared'
 import {
   ipcChannels,
+  parseCreateCodingRuntimeBudgetApprovalInput,
   parseApproveGateInput,
   parseAdvanceAgentRuntimeInput,
   parseCancelAgentRuntimeInput,
@@ -67,6 +68,12 @@ const mcpServer: McpServerDefinition = {
 }
 
 describe('IPC contract parsers', () => {
+  it('accepts an explicit model scope for non-coding approvals and rejects an empty scope', () => {
+    const input = { projectId: 'p', requestedBy: 'u', providerId: 'saved-review', maxAdditionalCostUsd: 1, reason: 'Explicit scoped approval' }
+    expect(parseCreateCodingRuntimeBudgetApprovalInput(input)).toEqual(input)
+    expect(() => parseCreateCodingRuntimeBudgetApprovalInput({ ...input, providerId: '' })).toThrow()
+    expect(() => parseCreateCodingRuntimeBudgetApprovalInput({ ...input, apiKey: 'never accepted' })).toThrow()
+  })
   it('accepts a valid save test command payload', () => {
     expect(parseSaveProjectTestCommandInput({ projectId: 'project-1', testCommand: 'pnpm test' })).toEqual({
       projectId: 'project-1',

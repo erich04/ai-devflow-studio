@@ -18,7 +18,7 @@ const migrationPath = path.join(currentDir, 'migrations', '0001_initial.sql')
 
 describe('team database schema', () => {
   it('reserves Team schema v25 for immutable runtime cost settlements', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(29)
+    expect(TEAM_SCHEMA_VERSION).toBe(30)
     expect(teamMigrationCatalog.find((migration) => migration.version === 25)).toEqual({
       version: 25,
       name: '0025_runtime_cost_settlement',
@@ -106,7 +106,7 @@ describe('team database schema', () => {
   })
 
   it('reserves Team schema v18 for an independently versioned Memory quality projection', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(29)
+    expect(TEAM_SCHEMA_VERSION).toBe(30)
     expect(teamMigrationCatalog.find((migration) => migration.version === 18)).toEqual({
       version: 18,
       name: '0018_agent_memory_projection_quality_version',
@@ -169,7 +169,7 @@ describe('team database schema', () => {
   })
 
   it('retains Team schema v16 as a safe Agent Runtime projection authority', async () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(29)
+    expect(TEAM_SCHEMA_VERSION).toBe(30)
     expect(teamMigrationCatalog.find((migration) => migration.version === 16)).toEqual({
       version: 16,
       name: '0016_agent_runtime_team_projection',
@@ -207,7 +207,7 @@ describe('team database schema', () => {
   })
 
   it('defines the team source-of-truth tables', () => {
-    expect(TEAM_SCHEMA_VERSION).toBe(29)
+    expect(TEAM_SCHEMA_VERSION).toBe(30)
     expect(requiredTeamTableNames).toEqual([
       'team_schema_migrations',
       'schema_meta',
@@ -243,6 +243,7 @@ describe('team database schema', () => {
       'agent_coordination_projection_audits',
       'enforcement_policies',
       'gate_override_decisions',
+      'model_call_attempts',
       'runtime_budget_policies',
       'runtime_budget_approvals',
       'agent_policy_findings',
@@ -369,6 +370,7 @@ describe('team database schema', () => {
   it('keeps the V1.3 v7 baseline migration frozen', async () => {
     const sql = await readFile(migrationPath, 'utf8')
     const v14TableNames = new Set([
+      'model_call_attempts',
       'organization_memberships',
       'organization_invitations',
       'organization_audit_events',
@@ -505,6 +507,7 @@ describe('team database schema', () => {
       { version: 27, name: '0027_gate_review_subject', fileName: '0027_gate_review_subject.sql' },
       { version: 28, name: '0028_github_delivery_path_collation', fileName: '0028_github_delivery_path_collation.sql' },
       { version: 29, name: '0029_organization_memberships', fileName: '0029_organization_memberships.sql' },
+      { version: 30, name: '0030_model_call_budget', fileName: '0030_model_call_budget.sql' },
     ])
 
     const migrations = await readTeamMigrationCatalog()

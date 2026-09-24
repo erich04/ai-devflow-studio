@@ -1,3 +1,4 @@
+import type { ModelCallSettlement } from '@ai-devflow/shared'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
@@ -1046,6 +1047,9 @@ export type LocalStore = {
   listAgentReviews(runId?: string): Promise<AgentReviewResult[]>
   saveAgentTrace(trace: AgentTrace): Promise<void>
   listAgentTraces(runId?: string): Promise<AgentTrace[]>
+  deleteModelCallSettlement(id:string):Promise<void>
+  saveModelCallSettlement(value: ModelCallSettlement): Promise<void>
+  listModelCallSettlements(projectId: string): Promise<ModelCallSettlement[]>
   saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void>
   listAgentTokenUsage(runId?: string): Promise<AgentTokenUsage[]>
   saveCodingAgentRun(run: CodingAgentRun): Promise<void>
@@ -12461,6 +12465,13 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
+  async deleteModelCallSettlement(id:string):Promise<void> { this.db.run('delete from model_call_settlements where id = ?', [id]) }
+  async saveModelCallSettlement(value: ModelCallSettlement): Promise<void> {
+    this.db.run('insert into model_call_settlements (id,project_id,json) values (?,?,?) on conflict(id) do update set json=excluded.json', [value.id,value.projectId,JSON.stringify(value)])
+  }
+  async listModelCallSettlements(projectId: string): Promise<ModelCallSettlement[]> {
+    return selectJson<ModelCallSettlement>(this.db, 'select json from model_call_settlements where project_id = ?', [projectId])
+  }
   async saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void> {
     this.db.run('begin transaction')
     try {
@@ -13800,6 +13811,9 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   listAgentReviews: 'direct',
   saveAgentTrace: 'durable',
   listAgentTraces: 'direct',
+  deleteModelCallSettlement: 'durable',
+  saveModelCallSettlement: 'durable',
+  listModelCallSettlements: 'direct',
   saveAgentTokenUsage: 'durable',
   listAgentTokenUsage: 'direct',
   saveCodingAgentRun: 'durable',

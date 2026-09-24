@@ -53,6 +53,7 @@ export function opencodeProviderBindingEnv(binding?: OpencodeProviderBinding): N
   return {
     DEVFLOW_OPENCODE_PROVIDER_API_KEY: binding.apiKey,
     OPENCODE_CONFIG_CONTENT: JSON.stringify({
+      enabled_providers: [binding.providerId],
       provider: {
         [binding.providerId]: {
           npm: '@ai-sdk/openai-compatible',
