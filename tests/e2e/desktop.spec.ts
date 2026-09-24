@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test'
 
 async function installDesktopApi(
   page: import('@playwright/test').Page,
-  scenario: 'empty' | 'coding-permission' | 'coding-lifecycle' | 'clarification-revision' | 'agent-ux-unpaired' | 'agent-ux-paired' = 'empty',
+  scenario: 'empty' | 'configured' | 'coding-permission' | 'coding-lifecycle' | 'clarification-revision' | 'agent-ux-unpaired' | 'agent-ux-paired' = 'empty',
 ) {
   await page.addInitScript((initialScenario) => {
     let clarificationFeedbackRequested = initialScenario === 'clarification-revision'
@@ -24,7 +24,7 @@ async function installDesktopApi(
       createdAt: '2026-06-15T00:00:00.000Z',
       updatedAt: '2026-06-15T00:00:00.000Z',
     }
-    const governedFixture = initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle' || initialScenario === 'clarification-revision'
+    const governedFixture = initialScenario === 'configured' || initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle' || initialScenario === 'clarification-revision'
     const fixturePairing = {
       tokenId: 'desktop-e2e-token', organizationId: 'org-e2e', projectId: 'team-e2e',
       localProjectId: localProject.id, userId: 'u-ling', role: 'lead', issuedRole: 'lead',
@@ -1214,6 +1214,7 @@ async function createFixtureRun(page: import('@playwright/test').Page) {
   await dialog.getByRole('button', { name: /创建并开始澄清/ }).click()
   await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
+  await page.locator('.workbench-project-menu > summary').click()
   await expect(page.getByTestId('toast')).toContainText('新 Run 已创建')
   await expect(page.getByTestId('workflow-canvas')).toContainText('需求澄清')
   await expect(page.getByTestId('node-inspector')).toContainText('需求澄清')
@@ -1384,8 +1385,10 @@ test.describe('AI DevFlow desktop workbench', () => {
         await expect(inspector.getByTestId('node-artifacts').locator('.artifact-card')).toHaveCount(1)
         await expect(page.locator('button button')).toHaveCount(0)
         for (const tab of await inspector.getByRole('tab').all()) {
-          await expect(tab).toHaveCSS('white-space', 'nowrap')
-          await expect(tab).toHaveCSS('flex-shrink', '0')
+          await tab.focus()
+          await tab.press('Enter')
+          await expect(tab).toHaveAttribute('aria-selected', 'true')
+          await expect(tab).toBeInViewport()
         }
         await expect(inspector.getByRole('tab', { name: '引用来源' })).toBeVisible()
         await page.screenshot({ path: testInfo.outputPath('attachment-navigation.png') })
@@ -1610,6 +1613,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await designCard.click()
     await expect(page.getByTestId('node-inspector')).toContainText('类型：Task · 来源：Run 模板')
 
+    await showProjectRuns(page)
     await page.getByRole('button', { name: /选择本地仓库/ }).click()
     await expect(page.locator('.local-project-panel').getByText('fixture-project', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: /^测试$/ }).click()
@@ -1633,7 +1637,7 @@ test.describe('AI DevFlow desktop workbench', () => {
   test('supports manager, knowledge, skill, MCP, and test views', async ({ page }) => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
-    await installDesktopApi(page)
+    await installDesktopApi(page, 'configured')
     await page.goto('/')
     await createFixtureRun(page)
 

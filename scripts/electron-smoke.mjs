@@ -376,6 +376,7 @@ async function selectRunByTitle(page, title) {
   await expect(runRow).toBeVisible()
   await runRow.click()
   await expect(runRow).toHaveClass(/is-selected/)
+  await page.locator('.workbench-project-menu > summary').click()
 }
 
 function resolveWorkflowNodes(run) {
