@@ -48,7 +48,20 @@ try {
         criticalDocuments: context?.criticalProposalInput?.documents?.map((d: { id: string; content: string; digest: string }) => ({ id: d.id, characters: d.content.length, digest: d.digest, actualDigest: hash(d.content) })) ?? [],
         verification: Boolean(context?.proposalVerification),
       })
-      return fetch(url, options)
+      const response = await fetch(url, options)
+      if (phase === 'review' && response.ok && !body.stream) {
+        const envelope = await response.clone().json() as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }>; usage?: unknown }
+        const choice = envelope.choices?.[0]
+        let fields: Record<string, string> = {}
+        let confidence: unknown = null
+        try {
+          const value = JSON.parse(choice?.message?.content ?? '') as Record<string, unknown>
+          fields = Object.fromEntries(Object.entries(value).map(([name, v]) => [name, Array.isArray(v) ? 'array' : typeof v]))
+          confidence = typeof value.confidence === 'number' ? value.confidence : typeof value.confidence
+        } catch { /* Only record shape; the adapter owns validation. */ }
+        requests.at(-1)!.response = { finishReason: choice?.finish_reason, fields, confidence, usage: envelope.usage }
+      }
+      return response
     },
   })
   const run = (await store.listRuns())[0]!

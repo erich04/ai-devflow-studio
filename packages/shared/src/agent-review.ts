@@ -423,7 +423,7 @@ export const KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS = 48_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_SUBJECT_CHARACTERS = 64_000
 export const KNOWLEDGE_REVIEW_MAX_RUN_REQUEST_CHARACTERS = 12_000
 const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
-  'Return only valid JSON with conclusion, summary, risks, missingEvidence, missingEvidenceDetails, suggestedTests, confidence. Review the Subject; use Criteria only as grounding. Do not approve the Gate. Do not wrap the response in Markdown.'
+  'Return only valid JSON with conclusion, summary, risks, missingEvidence, missingEvidenceDetails, suggestedTests, confidence. conclusion and summary must be non-empty strings. risks, missingEvidence and suggestedTests must be arrays of strings; missingEvidenceDetails must be an array. confidence must be a JSON number between 0 and 1 inclusive (for example 0.8), never a label, percentage or quoted number. Review the Subject; use Criteria only as grounding. Do not approve the Gate. Do not wrap the response in Markdown.'
 
 export function isTrustedNoCostKnowledgeReviewProvider(
   provider: Pick<AgentProvider, 'id' | 'model'>,

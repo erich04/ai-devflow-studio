@@ -32,4 +32,13 @@ describe('critical proposal context', () => {
     expect(context.documents[0]!.content).toBe(content)
     expect(criticalContextSent(JSON.stringify({ criticalProposalInput: context }), context)).toBe(true)
   })
+  it('keeps heading requirements and deduplicates repeated coverage without changing source text', () => {
+    const content = '# 默认显示全部任务\n' + '这是重复的背景材料。'.repeat(500) + '\n末段：保留原有数据。'
+    const context = buildCriticalContext({ ...run, request: content }, nodeId, [])
+    expect(context.documents[0]!.content).toBe(content)
+    expect(context.criteria.map((item) => item.text)).toEqual([
+      '# 默认显示全部任务', '这是重复的背景材料。', '末段：保留原有数据。',
+    ])
+    expect(JSON.stringify({ criticalProposalInput: context }).length).toBeLessThan(32000)
+  })
 })

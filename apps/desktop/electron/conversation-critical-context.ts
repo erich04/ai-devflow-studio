@@ -30,9 +30,14 @@ export function buildCriticalContext(run: WorkflowRun, nodeId: string, artifacts
   // Clauses, including the first/middle/last of a long single line, must each be
   // linked to the proposal. This is an auditable coverage mapping, not a claim
   // that receiving text proves the model understood it.
-  const criteria = documents.flatMap((document) => document.content.split(/\n+|(?<=[。！？；])\s*/u)
-    .map((text) => text.trim()).filter((text) => text && !/^#{1,6}\s/u.test(text))
-    .map((text, index) => ({ id: `${document.id}:${index}`, documentId: document.id, text })))
+  const criteria = documents.flatMap((document) => {
+    // Repeated wording needs one coverage mapping, not hundreds of identical
+    // entries. The complete source (including repetitions) still travels above.
+    // Keep heading text too: a requirement can be written as a Markdown heading.
+    const clauses = [...new Set(document.content.split(/\n+|(?<=[。！？；])\s*/u)
+      .map((text) => text.trim()).filter(Boolean))]
+    return clauses.map((text, index) => ({ id: `${document.id}:${index}`, documentId: document.id, text }))
+  })
   return { projectId: run.projectId, runId: run.id, nodeId, documents, criteria }
 }
 

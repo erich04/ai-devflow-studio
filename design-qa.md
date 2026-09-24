@@ -29,6 +29,7 @@ No actionable P0/P1/P2 visual finding remains in the changed workbench.
 - Standard laptop viewport and the reference-sized viewport were checked. Main navigation, material tabs, chat tabs, new/history and composer controls remain usable. The splitter continues to support keyboard and pointer resizing.
 - Browser console error collection returned no errors.
 - Component/application tests additionally cover Run switching, hidden technical metadata, escaped Markdown, empty/missing materials and existing Gate controls.
+- Post-rollout native Electron was inspected using the original user profile. `12-native-installed.png` shows the actual horizontal navigation, central material reader and preserved chat. Native stage switching retained the selected conversation; the current unapproved requirement Gate and existing document contents were unchanged. This supplements the earlier isolated browser comparison.
 
 ## Intentional differences and P3 follow-up
 

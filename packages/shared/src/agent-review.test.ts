@@ -1324,6 +1324,9 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     })
 
     expect(requestBody).not.toHaveProperty('max_tokens')
+    expect(requestBody?.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'system', content: expect.stringContaining('confidence must be a JSON number between 0 and 1 inclusive') }),
+    ]))
     expect(JSON.stringify(requestBody)).toContain('REQUEST_PROVIDER_CANARY')
     expect(JSON.stringify(requestBody)).toContain('PROVIDER_BODY_ONLY_CANARY')
   })
