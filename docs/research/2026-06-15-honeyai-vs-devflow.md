@@ -1,121 +1,88 @@
-# HoneyAI vs AI DevFlow Studio
+<a id="honeyai-vs-ai-devflow-studio"></a>
 
-> **Historical research snapshot — not an active product plan.**
+# HoneyAI 与 AI DevFlow Studio 对比
+
+> **历史研究快照，不是当前产品计划。**
 >
-> Captured on 2026-06-15. [HoneyAI](https://github.com/xiaohanarch/HoneyAI) is an external project by `xiaohanarch`; it is not authored or owned by the AI DevFlow Studio maintainer.
+> 观察于 2026-06-15。[HoneyAI](https://github.com/xiaohanarch/HoneyAI) 是 xiaohanarch 的外部项目，并非 AI DevFlow Studio 维护者编写或拥有。
 >
-> The convergence and bridge sections below record hypotheses from that date. They are not current roadmap commitments. The [DevFlow roadmap](../roadmap.md) is authoritative and currently defers a HoneyAI bridge.
+> 下文整合与桥接仅记录当时假设，不是当前承诺；以 [DevFlow 路线图](../roadmap.md)为准，HoneyAI 桥接已延后。
 
-- Status: `historical-research-snapshot`
-- Observation date: 2026-06-15
-- External source: `xiaohanarch/HoneyAI`
+- 状态：historical-research-snapshot。
+- 日期：2026-06-15。
+- 外部来源：xiaohanarch/HoneyAI。
 
-## Snapshot
+<a id="snapshot"></a>
 
-Both apps are aimed at team-level AI software delivery, but they currently sit at different layers.
+## 快照
 
-- HoneyAI is strongest as a self-hosted DevPipeline execution engine: requirement IR, design IR,
-  implementation, Gates, GitHub PR, costs, SSE, database, worker, sandbox, and adapters.
-- AI DevFlow Studio is strongest as the team-facing workbench: Electron local execution, workflow
-  canvas, manager overview, knowledge graph, Skill/MCP management, tests, token visibility, and theme
-  polished interaction.
+两者都面向团队 AI 软件交付，但当时处在不同层次：HoneyAI 强项是自托管 DevPipeline 执行引擎，包含需求/设计 IR、实现、Gate、PR、费用、SSE、数据库、Worker、沙箱和适配器；DevFlow 强项是团队工作台，包含 Electron 本地执行方向、工作流画布、管理概览、知识图谱、Skill/MCP、测试、用量及主题交互。
 
-## Current Runtime Observation
+<a id="current-runtime-observation"></a>
 
-HoneyAI was started at `http://127.0.0.1:3000` and AI DevFlow Studio was already running at
-`http://127.0.0.1:5173`.
+## 当时的运行观察
 
-Observed HoneyAI pages:
+HoneyAI 启动于 http://127.0.0.1:3000，DevFlow 已运行于 http://127.0.0.1:5173。
 
-- `/t/alice/runs`: authenticated list page. It shows a minimal run list with one seeded run.
-- `/t/alice/runs/<runId>`: authenticated run detail page. It shows title, description, and status.
-- `/prototype/run-detail.html?runId=<runId>`: high-fidelity DevPipeline prototype. This is where the
-  mature visual workflow, artifact rail, review gates, PR panel, cost table, and IR evolution chain
-  are visible.
+HoneyAI 页面：
 
-Observed DevFlow Studio page:
+- /t/alice/runs：认证列表，含一条种子 Run 的最小列表。
+- /t/alice/runs/<runId>：认证详情，显示标题、描述和状态。
+- /prototype/run-detail.html?runId=<runId>：高保真 DevPipeline 原型，展示成熟流程、产物栏、审查 Gate、PR 面板、费用表和 IR 演进链。
 
-- `/`: fixture-backed desktop workbench with sidebar navigation, workflow canvas, selected-node
-  inspector, artifacts, agent events, Gate action, test action, metrics, Skill/MCP/Knowledge/Test
-  views, and light/dark/system theme control.
+DevFlow 的 / 页面是样例驱动桌面工作台，具备侧栏、画布、选中节点 Inspector、产物、事件、Gate/测试动作、指标、Skill/MCP/Knowledge/Test 页面，以及深浅/跟随系统主题。
 
-## Difference Matrix
+<a id="difference-matrix"></a>
 
-| Dimension | HoneyAI | AI DevFlow Studio | Judgment |
+## 差异矩阵
+
+| 维度 | HoneyAI | AI DevFlow Studio | 当时判断 |
 | --- | --- | --- | --- |
-| Product posture | AI DevPipeline that turns one-line requirements into GitHub PRs | Team developer platform with desktop client and manager console | Complementary, not duplicates |
-| Primary user | 5-10 person dev team, especially Tech Lead and intermediate engineer | Individual developer day-to-day plus lead/manager overview | DevFlow broadens the audience |
-| Current real UI | Minimal Next pages for run list and run detail | Rich workbench UI already implemented | DevFlow is ahead on visible product surface |
-| Prototype UI | Strong static prototype for run detail and setup | Implemented UI rather than static prototype | HoneyAI prototype should be mined for interaction patterns |
-| Workflow model | 3 stages: requirement, design, code+UT; Gate between risky stages | 6 stages: clarify, design, build, test, PR, acceptance | DevFlow better matches full team lifecycle |
-| Execution model | Worker + orchestrator + sandbox + LLM runtime adapters | Electron local execution agent planned; API/worker placeholders | HoneyAI is ahead as execution backend |
-| Data model | Postgres + Drizzle schema, artifacts, events, gates, tenants, cost events | Shared TypeScript contracts and fixtures; Postgres/SQLite boundary documented | HoneyAI has stronger persistence foundation |
-| Agent observability | SSE, events, IR chain, cost events designed and partially wired | Agent event cards and inspector visible in UI | HoneyAI has backend path; DevFlow has better operator surface |
-| Knowledge | Assets: skill/rule/command/script/hook/hint/template/context | Git Markdown KB plus lightweight Knowledge Graph | DevFlow has clearer knowledge product framing |
-| Skill/MCP | HoneyAI Assets include skills; MCP not central in current spec | Skill and MCP are first-class views | DevFlow better fits Codex/team tooling management |
-| Testing | Code+UT is part of Stage 3; prototype mentions SIT as V2 | Test evidence is a first-class stage and view | DevFlow is stronger for QA workflow |
-| Manager view | Tenant/run/cost concepts exist; no strong current management dashboard | Team Overview is already in product shell | DevFlow is stronger for team enablement |
-| Deployment | Self-hosted Next.js on k3s/ECS with Postgres/Redis/MinIO | Desktop client plus web/API/worker platform | Different operational envelope |
+| 定位 | 一句话需求到 GitHub PR 的 AI DevPipeline | 团队开发平台、桌面及管理台 | 互补 |
+| 用户 | 5–10 人团队，尤其技术负责人和中级工程师 | 开发者日常与负责人/管理者概览 | DevFlow 受众更广 |
+| 真实界面 | 最小 Next 列表/详情 | 已实现丰富工作台 | DevFlow 界面更完整 |
+| 原型 | 强静态详情/配置原型 | 已实现界面 | 可借鉴 HoneyAI 交互 |
+| 流程 | 需求、设计、编码/单测三阶段，风险阶段间有 Gate | 澄清、设计、开发、测试、PR、验收六阶段 | DevFlow 覆盖团队完整周期 |
+| 执行 | Worker、编排、沙箱、LLM 适配器 | 当时本地 Agent 计划中，API/Worker 为占位 | HoneyAI 执行后端更成熟 |
+| 数据 | Postgres/Drizzle、产物、事件、Gate、租户、费用事件 | TypeScript 契约/样例，已文档化 Postgres/SQLite 边界 | HoneyAI 持久化基础更强 |
+| 可观察性 | 已设计并部分接通 SSE、事件、IR、费用 | 界面已有事件卡与 Inspector | 各有后端与操作界面优势 |
+| 知识 | skill/rule/command/script/hook/hint/template/context 资产 | Git Markdown 知识库与轻量图谱 | DevFlow 产品概念更明确 |
+| Skill/MCP | Skill 属于资产，MCP 非当时核心 | 独立一级页面 | DevFlow 适配 Codex/团队工具管理 |
+| 测试 | 第三阶段含单测，原型将 SIT 放 V2 | 独立证据阶段和页面 | DevFlow QA 流程更明确 |
+| 管理 | 有租户/Run/费用，缺成熟管理看板 | 外壳已有团队概览 | DevFlow 更利于团队协作 |
+| 部署 | k3s/ECS 上自托管 Next.js，配 Postgres/Redis/MinIO | 桌面及 Web/API/Worker | 运维边界不同 |
 
-## Recommended Convergence (Historical Hypothesis)
+<a id="recommended-convergence-historical-hypothesis"></a>
 
-Do not merge the two projects immediately.
+## 推荐整合：历史假设
 
-Recommended split:
+当时不建议立刻合并项目，而是设想 HoneyAI 作为执行引擎与领域事实源、DevFlow 作为团队体验和桌面。桥接适配器将 HoneyAI 的 Run、Node、Gate、Artifact、Event 和费用映射进 DevFlow 画布/看板，复用后端投入并避免重写桌面。这是历史假设，不是现行架构承诺。
 
-- HoneyAI becomes the execution engine and domain source of truth.
-- AI DevFlow Studio becomes the team experience layer and desktop client.
-- The bridge should be an adapter that maps HoneyAI `Run`, `Node`, `Gate`, `Artifact`, `Event`, and
-  cost data into DevFlow Studio's workflow canvas and team dashboard.
+<a id="what-to-reuse-from-honeyai"></a>
 
-This keeps HoneyAI's backend-heavy investment useful while avoiding a rewrite of the richer desktop
-workbench.
+## 可借鉴 HoneyAI 的部分
 
-## What To Reuse From HoneyAI
+Run/Node/Gate 状态机，RequirementIR/DesignIR/ImplementationIR，产物及 blob，阶段费用事件，SSE 事件与 Run 流端点，GitHub PR 和租户隔离，以及原型中的执行栏、产物栏、审查 Gate、PR 横幅、费用表、工具轨迹和 IR 演进链。
 
-- Run/Node/Gate state machine semantics.
-- IR document model: RequirementIR, DesignIR, ImplementationIR.
-- Artifact and artifact blob model.
-- Cost event model and stage-level cost accounting.
-- SSE event shape and run stream endpoint.
-- GitHub PR creation and tenant isolation concepts.
-- Prototype run detail sections: execution rail, artifacts rail, review gates, PR banner, cost table,
-  tool trace, and IR evolution chain.
+<a id="what-to-keep-from-devflow-studio"></a>
 
-## What To Keep From DevFlow Studio
+## 保留 DevFlow 的部分
 
-- Electron developer client direction.
-- Six-stage workflow vocabulary: clarify, design, build, test, PR, acceptance.
-- Workflow canvas and selected-node inspector.
-- Team Overview for lead/manager perspective.
-- Knowledge Graph and Git Markdown knowledge source.
-- Skill/MCP management as first-class concepts.
-- Light/dark/system theme and polished operator UI.
-- Unit and Playwright functional test harness.
+Electron 开发者客户端、六阶段术语、画布/Inspector、负责人概览、知识图谱/Git Markdown、一级 Skill/MCP、深浅与系统主题、单元及 Playwright 测试框架。
 
-## Main Tension
+<a id="main-tension"></a>
 
-The word `Skill` is overloaded.
+## 主要术语冲突
 
-- In HoneyAI, Skills are one kind of broader Asset.
-- In DevFlow Studio, Skill means a reusable team process capability.
-- MCP server definitions are separate tool connectors.
+Skill 有多重含义：HoneyAI 中属于更广的 Asset；DevFlow 中是可复用团队流程能力，MCP 服务器另为工具连接器。建议术语为：
 
-Recommended vocabulary:
+- Asset（资产）：HoneyAI 中任意可复用已存内容。
+- Skill（技能）：可影响 Agent 工作流的流程能力。
+- MCP Server：带权限与审计策略的可调用工具连接器。
+- Knowledge Base（知识库）：规范、词汇、样例、决定的 Git/Markdown 事实源。
 
-- Asset: any reusable stored content from HoneyAI.
-- Skill: a process capability that can affect an agent workflow.
-- MCP Server: a callable tool connector with permissions and audit policy.
-- Knowledge Base: Git/Markdown source of truth for standards, glossary, examples, and decisions.
+<a id="next-mvp-bridge-historical-proposal"></a>
 
-## Next MVP Bridge (Historical Proposal)
+## 最小桥接：历史提案
 
-The next practical integration should be small:
-
-1. Add a HoneyAI adapter package in DevFlow Studio.
-2. Read HoneyAI demo API or database data into DevFlow's shared `WorkflowRun` shape.
-3. Render a real HoneyAI run in the DevFlow canvas.
-4. Keep Gate/test buttons disabled until real HoneyAI actions are wired.
-5. Add snapshot and Playwright tests around the adapter-fed run.
-
-That proves the two systems can compose without committing to a full migration.
+当时设想的小范围验证：增加 HoneyAI 适配包，将演示 API/数据库映射为 WorkflowRun，在画布显示真实 Run；未接真实动作前禁用 Gate/测试按钮，并增加快照及 Playwright 测试，以证明可组合而不承诺全面迁移。

@@ -1,50 +1,33 @@
-# Open issue resolution — 2026-09-19
+<a id="open-issue-resolution--2026-09-19"></a>
 
-Scope: the 22 open issues in `erich04/ai-devflow-studio` at intake. Preserve the
-existing To Do user project, pairing, Provider credentials, Run and conversations.
-User exercises the business Run personally; verification uses isolated fixtures,
-data profiles and test projects. Never substitute simulated evidence for a task
-that explicitly requires a live provider or end-to-end result.
+# Open Issue 解决计划 — 2026-09-19
 
-## Delivery batches
+范围：当时接手 `erich04/ai-devflow-studio` 的 22 个 open Issue。保留已有 To Do 用户项目、配对、服务商凭据、Run 和会话。用户亲自操作业务 Run，验证使用隔离样例、数据配置和测试项目。明确要求真实服务商或端到端结果时，绝不能用模拟证据替代。
 
-| Batch | Issues | Scope | Status |
+本文保留该批次的历史交付状态；2026-09-26 新批次见[验证记录](../validation/open-issues-workbench-20260926.md)。
+
+<a id="delivery-batches"></a>
+
+## 交付批次
+
+| 批次 | Issue | 范围 | 当时状态 |
 | --- | --- | --- | --- |
-| 1 | #129 #131 #132 #141 #142 #143 #145 #148 | Desktop layout, accurate status, chat rendering and removal of manual memory | Implemented and locally verified; delivery pending |
-| 2 | #125 #130 #135 #139 #140 | Lifecycle, diagnostics, credentials, failed-run cost and recovery | #125 #130 #139 implemented and locally verified; #135 signed-install evidence pending; #140 already has real recovery evidence in the 2026-09-17 To Do validation |
-| 3 | #136 #137 #138 #144 #146 | Stage context/review, delivery facts, configurable thinking across callers | Implemented and locally verified; #136 #138 #144 also have real 2026-09-17 acceptance evidence; PR delivery pending |
-| 4 | #133 #134 #147 | Policy/OpenCode verification and pluggable conversation execution | #133 real Web→Electron warn→block→warn acceptance passed with both QA Runs unchanged; #134 real OpenCode/DeepSeek stage UI accepted on 2026-09-21; #147 real conversation UI and CLI lifecycle verified; delivery pending |
-| 5 | #128 | Multi-organization onboarding, isolation and documented end-to-end proof | Implemented in draft PR #152; Web lifecycle acceptance, advisory review, local regression and 15 real-Postgres tests pass, including two parallel complete workflows with real Git/SQLite/local tests and deterministic external providers; final implementation CI passed on macOS, Windows, Postgres and Docker; delivery pending |
+| 1 | #129 #131 #132 #141 #142 #143 #145 #148 | 桌面布局、准确状态、聊天渲染和移除手动记忆 | 已实现并本地验证，待交付 |
+| 2 | #125 #130 #135 #139 #140 | 生命周期、诊断、凭据、失败调用费用与恢复 | #125 #130 #139 已实现并本地验证；#135 待签名安装证据；#140 已有 2026-09-17 To Do 真实恢复证据 |
+| 3 | #136 #137 #138 #144 #146 | 阶段上下文/审查、交付事实、各调用方可配置思考 | 已实现并本地验证；#136 #138 #144 另有 2026-09-17 真实验收证据；待 PR 交付 |
+| 4 | #133 #134 #147 | 策略/OpenCode 验证与可插拔会话执行 | #133 真实 Web→Electron warn→block→warn 验收通过，两条 QA Run 未变；#134 真实 OpenCode/DeepSeek 阶段界面于 2026-09-21 验收；#147 真实会话界面与 CLI 生命周期已验证；待交付 |
+| 5 | #128 | 多组织注册、隔离与端到端证据 | 已在草稿 PR #152 实现；Web 生命周期、辅助审查、本地回归及 15 项真实 Postgres 测试通过，其中两条完整并行工作流使用真实 Git/SQLite/本地测试和确定性外部服务；最终实现的 macOS、Windows、Postgres、Docker CI 通过；待交付 |
 
-Validation boundaries reuse the agreed conversation request/response, saved
-conversation lifecycle, right-side UI and all workflow stage interfaces. Extend
-existing public API integration coverage for tenancy and diagnostics. Cosmetic
-copy changes use existing UI checks; behavioral bugs receive focused regressions.
+验证沿用已约定的会话请求/响应、保存与恢复、右侧界面和全部工作流阶段接口。租户与诊断扩展已有公开 API 集成覆盖。纯文案变更使用已有界面检查，行为缺陷添加针对性回归。
 
-Baseline: `codex/unified-workbench-conversations-20260916`; pre-existing thinking
-changes are preserved. The root checkout contains unrelated changes and is not
-modified. A restricted SQLite backup was taken before this work. An issue is
-closed only after its acceptance criteria have corresponding evidence and the
-fix is delivered; remaining validation gaps stay explicit.
+基线为 `codex/unified-workbench-conversations-20260916`，保留已有思考配置变更。根目录有无关变更，不作修改。工作前创建受限访问的 SQLite 备份。只有验收标准有对应证据且修复已交付，才关闭 Issue；剩余验证缺口必须明确。
 
-## Reviewable delivery
+<a id="reviewable-delivery"></a>
 
-The draft stack is #127 → #149 → #150 → #151 → #152. PR #149 covers 16 intake issues
-(#125 #129 #130 #131 #132 #136 #138 #139 #140 #141 #142 #143 #144 #145 #146 #148),
-#150 covers #137, #151 covers #147, and #152 covers #128/#133/#134. These 21 issues have
-implementation or completed verification and linked evidence; they remain open until delivery.
-No merge or issue closure is represented by this checklist. #135 still needs a normal
-signed-install validation with an available Developer ID identity; the test-copy repair and
-real native crypto verification are complete. The remaining boundary is explicit on GitHub.
+## 可审阅交付
 
-Implementation commit `74c2a50` passes all five jobs in
-[CI run 35568113956](https://github.com/erich04/ai-devflow-studio/actions/runs/35568113956):
-macOS verify (4,038 tests), Windows compatibility (4,034 tests), Postgres integration
-(15 organization tests plus existing smoke/delivery checks), Docker smoke and Docker lifecycle.
-Database/platform-specific skips are reported separately, not counted as passed tests.
+草稿 PR 栈为 #127 → #149 → #150 → #151 → #152。#149 覆盖接手时的 16 项（#125 #129 #130 #131 #132 #136 #138 #139 #140 #141 #142 #143 #144 #145 #146 #148），#150 覆盖 #137，#151 覆盖 #147，#152 覆盖 #128/#133/#134。这 21 项已有实现或完成验证及关联证据，交付前仍保持 open。本清单不代表合并或关闭。#135 仍需可用 Developer ID 身份完成正常签名安装验证；测试副本修复和真实原生加密验证已完成，剩余边界已在 GitHub 说明。
 
-Evidence: [real To Do full workflow](../validation/real-deepseek-todo-e2e-20260917.md),
-[OpenCode stage](../validation/stage-opencode-live-20260921.md), and
-[conversation harness](../validation/workbench-opencode-harness-20260920.md), plus
-[independent organizations](../validation/multi-organization-20260921.md) and
-[Web-to-Electron policy](../validation/team-policy-web-electron-20260921.md).
+实现提交 `74c2a50` 通过 [CI 35568113956](https://github.com/erich04/ai-devflow-studio/actions/runs/35568113956) 五项任务：macOS 验证（4,038 项测试）、Windows 兼容（4,034 项）、Postgres 集成（15 项组织测试及已有冒烟/交付检查）、Docker 冒烟和生命周期。数据库与平台专用跳过项单独列出，不计入通过数量。
+
+证据：[真实 To Do 全流程](../validation/real-deepseek-todo-e2e-20260917.md)、[OpenCode 阶段](../validation/stage-opencode-live-20260921.md)、[会话执行框架](../validation/workbench-opencode-harness-20260920.md)、[独立组织](../validation/multi-organization-20260921.md)、[Web 到 Electron 策略](../validation/team-policy-web-electron-20260921.md)。

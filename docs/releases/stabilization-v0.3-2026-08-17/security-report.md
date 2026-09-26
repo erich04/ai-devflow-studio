@@ -1,45 +1,40 @@
-# Stabilization V0.3 Security Scan
+<a id="stabilization-v03-security-scan"></a>
 
-Status: **completed — no findings**
+# 稳定性 V0.3 安全扫描
 
-Scan ID: `026f692b-780a-4ba8-b726-26e8bb12c789`
+状态：**完成，未发现问题**。本记录描述当时固定候选，不代表当前源码重新完成安全审计。
 
-Target revision: `1cb0482a9afe157c4e1dcdd7ae4e8026939f2b9d`
+扫描 ID：`026f692b-780a-4ba8-b726-26e8bb12c789`。
 
-Started: 2026-08-18T04:11:13.782725Z
+目标提交：`1cb0482a9afe157c4e1dcdd7ae4e8026939f2b9d`。
 
-Completed and sealed: 2026-08-18T04:14:24.603160Z
+开始：2026-08-18T04:11:13.782725Z；完成并封存：2026-08-18T04:14:24.603160Z。
 
-Producer: `codex-security-plugin` 0.1.20
+生成工具：`codex-security-plugin` 0.1.20。
 
-## Scope and result
+<a id="scope-and-result"></a>
 
-This was a complete standard repository review of the fixed V0.3 candidate. It combined source
-review with the focused security tests already bound to the candidate. Generated dependencies and
-build output were excluded from source review and were verified independently by the package,
-container, and artifact gates.
+## 范围与结果
 
-- Reportable findings: 0
-- Coverage: complete
-- Reviewed surfaces: 8
-- Deferred surfaces: 0
-- Open questions: 0
-- Warnings: 0
+针对固定 V0.3 候选完成标准仓库审查，结合源码检查及已绑定该候选的针对性安全测试。生成的依赖和构建输出不纳入源码审查，由包、容器及产物门禁另行验证。
 
-The reviewed surfaces were authentication and browser sessions; Desktop bearer and pairing
-lifecycle; tenant/project isolation; GitHub credential issuance and revocation; outbound source and
-PR text disclosure; Electron IPC and local process execution; SQLite migration, privacy, and
-durability; and PostgreSQL/container configuration. Every surface was recorded as
-`no_issue_found`.
+- 可报告问题：0。
+- 覆盖：完整；已审查面：8。
+- 延后面：0；未决问题：0；警告：0。
 
-## Sealed artifact digests
+八个审查面为：认证与浏览器会话；桌面 bearer 与配对生命周期；租户/项目隔离；GitHub 凭据签发与撤销；出站源码与 PR 文本泄露；Electron IPC 与本地进程执行；SQLite 迁移、隐私和持久化；Postgres/容器配置。每个审查面均记录为 `no_issue_found`。
 
-| Artifact | SHA-256 |
+<a id="sealed-artifact-digests"></a>
+
+## 封存产物摘要
+
+这些摘要对应原始扫描产物，翻译本说明不改变原产物或重新计算其摘要。
+
+| 产物 | SHA-256 |
 | --- | --- |
 | `scan-manifest.json` | `8103c8f5d577cf3171452801bf2191433d76f9ae3a1a8930dbe1656a907d0786` |
 | `findings.json` | `afe5f238b35781c3d8d98b929a9207d6dc48675e6f2ab2565507238740b94793` |
 | `coverage.json` | `541aafa1e887950d682c61f859dd1913d62c35e16ad3258425513f0d1527b291` |
-| rendered `report.md` | `7b3e96cf26d7b4d32c4cb3bba13d0671e9dbf626593d55143dd1b269c89abe32` |
+| 渲染后的 `report.md` | `7b3e96cf26d7b4d32c4cb3bba13d0671e9dbf626593d55143dd1b269c89abe32` |
 
-No secrets, raw provider output, local absolute paths, or generated artifacts are stored in this
-repository record.
+本仓库记录不保存秘密、原始服务商输出、本地绝对路径或生成产物。

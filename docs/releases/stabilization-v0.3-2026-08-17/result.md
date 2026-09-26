@@ -1,70 +1,62 @@
-# Stabilization V0.3 Acceptance Result
+<a id="stabilization-v03-acceptance-result"></a>
 
-Date: 2026-08-17
+# 稳定性 V0.3 验收结果
 
-Recorded at: 2026-08-18T04:24:59Z
+日期：2026-08-17。记录时间：2026-08-18T04:24:59Z。状态：**通过**。
 
-Status: **passed**
+实现候选：`1cb0482a9afe157c4e1dcdd7ae4e8026939f2b9d`。本文保留当时的历史验收。
 
-Implementation candidate: `1cb0482a9afe157c4e1dcdd7ae4e8026939f2b9d`
+<a id="outcome"></a>
 
-## Outcome
+## 结果
 
-The Stabilization V0.3 plan is complete. The candidate closes the confirmed Coding Diff and outbound
-publication disclosure boundaries, converges the active source line, hardens pairing and tenant
-scope, and decomposes LocalStore without changing its single atomic persistence outlet. Team schema
-19 and Desktop schema 32 are the accepted durable baselines.
+稳定性 V0.3 计划完成。候选修复已确认的编码差异及出站发布泄露边界，收敛活跃源码线，加固配对和租户作用域，并拆分 LocalStore，同时保留单一原子持久化出口。验收基线为团队 schema 19、桌面 schema 32。
 
-The standard security scan completed with full coverage, eight reviewed surfaces, no deferred or
-open items, and zero reportable findings. The exact scan identity and immutable artifact digests are
-recorded in [`security-report.md`](security-report.md).
+标准安全扫描完成全部覆盖，审查八个面，无延后或未解决项，可报告问题为零。精确扫描标识与不可变产物摘要见 [security-report.md](security-report.md)。
 
-## Verification matrix
+<a id="verification-matrix"></a>
 
-Every command below completed successfully against the implementation candidate:
+## 验证矩阵
 
-| Boundary | Command | Result |
+以下命令均针对该实现候选成功完成：
+
+| 边界 | 命令 | 结果 |
 | --- | --- | --- |
-| Workspace typecheck, tests, cross-platform | `corepack pnpm verify` | 222 test files / 3108 tests passed |
-| Production packages | `corepack pnpm build` | API, Desktop, Electron, preload, Web, Worker passed |
-| V1.5 deterministic delivery | `corepack pnpm test:v15-github-delivery` | 5 / 5 passed |
-| V2.0 evaluator | `corepack pnpm test:v20-agent-runtime-evaluator` | passed |
-| V2.0 immutable completion | `corepack pnpm v20:completion-status` | passed |
-| V2.1 evaluator | `corepack pnpm test:v21-retrieval-memory-evaluator` | passed |
-| V2.1 immutable completion | `corepack pnpm v21:completion-status` | passed |
-| V2.2 evaluator | `corepack pnpm test:v22-multi-agent-evaluator` | passed |
-| V2.2 immutable completion | `corepack pnpm v22:completion-status` | passed |
-| Real PostgreSQL 16 | `corepack pnpm test:postgres-smoke` | Team schema 19; passed |
-| Production Compose stack | `corepack pnpm test:docker-smoke` | passed |
-| Migration and rollback lifecycle | `corepack pnpm test:docker-lifecycle-smoke` | v10 through v19 plus rollback passed |
-| Desktop candidate | `corepack pnpm build:desktop-pilot` | passed |
-| Desktop runtime | `corepack pnpm test:desktop-pilot-smoke` | passed; restart duplicates 0 |
-| Offline packaged GitHub Delivery | `DEVFLOW_PACKAGED_SMOKE_NETWORK_MODE=offline corepack pnpm test:v15-github-delivery-packaged-smoke` | passed |
-| Artifact integrity | `node scripts/desktop-artifact-trio.mjs verify <exclusive-index> --exclusive` | passed |
+| 工作区类型、测试、跨平台 | `corepack pnpm verify` | 222 个测试文件、3108 项通过 |
+| 生产包 | `corepack pnpm build` | API、桌面、Electron、preload、Web、Worker 通过 |
+| V1.5 确定性交付 | `corepack pnpm test:v15-github-delivery` | 5/5 通过 |
+| V2.0 评估器 | `corepack pnpm test:v20-agent-runtime-evaluator` | 通过 |
+| V2.0 不可变完成记录 | `corepack pnpm v20:completion-status` | 通过 |
+| V2.1 评估器 | `corepack pnpm test:v21-retrieval-memory-evaluator` | 通过 |
+| V2.1 不可变完成记录 | `corepack pnpm v21:completion-status` | 通过 |
+| V2.2 评估器 | `corepack pnpm test:v22-multi-agent-evaluator` | 通过 |
+| V2.2 不可变完成记录 | `corepack pnpm v22:completion-status` | 通过 |
+| 真实 PostgreSQL 16 | `corepack pnpm test:postgres-smoke` | 团队 schema 19，通过 |
+| 生产 Compose 栈 | `corepack pnpm test:docker-smoke` | 通过 |
+| 迁移/回滚生命周期 | `corepack pnpm test:docker-lifecycle-smoke` | v10 至 v19 及回滚通过 |
+| 桌面候选 | `corepack pnpm build:desktop-pilot` | 通过 |
+| 桌面运行时 | `corepack pnpm test:desktop-pilot-smoke` | 通过，重启重复 0 |
+| 离线打包 GitHub 交付 | `DEVFLOW_PACKAGED_SMOKE_NETWORK_MODE=offline corepack pnpm test:v15-github-delivery-packaged-smoke` | 通过 |
+| 产物完整性 | `node scripts/desktop-artifact-trio.mjs verify <exclusive-index> --exclusive` | 通过 |
 
-The packaged delivery gate observed exactly one non-force branch publication and one Draft pull
-request, zero restart duplicate effects, successful acceptance and binding revocation, zero durable
-secret leaks, and successful cleanup. It used a fresh disposable PostgreSQL database and an offline
-fake GitHub boundary; no paid provider or production GitHub write was used as a substitute for the
-deterministic release contract.
+打包交付门禁观察到恰好一次非强制分支发布和一个草稿 PR，重启无重复副作用，验收与绑定撤销成功，无持久秘密泄露，清理成功。使用新建临时 Postgres 和离线模拟 GitHub 边界，未用付费服务商或生产 GitHub 写入替代确定性发布契约。
 
-## Desktop artifact
+<a id="desktop-artifact"></a>
 
-- Product: AI DevFlow Studio 1.5.0
-- Platform: `darwin/arm64`
-- Electron: 33.4.11
-- Archive: `ai-devflow-studio-desktop-1.5.0-darwin-arm64.tar.gz`
-- Size: 103,961,220 bytes
-- SHA-256: `893d13f0d6b8f9ea38b38df56adefaf27b40b226e9490f5d465e692d9898d038`
-- Signed/installer: no/no
-- Exclusive trio verification: passed
+## 桌面产物
 
-## Cleanup and handoff
+- 产品：AI DevFlow Studio 1.5.0。
+- 平台：`darwin/arm64`；Electron 33.4.11。
+- 归档：`ai-devflow-studio-desktop-1.5.0-darwin-arm64.tar.gz`。
+- 大小：103,961,220 字节。
+- SHA-256：`893d13f0d6b8f9ea38b38df56adefaf27b40b226e9490f5d465e692d9898d038`。
+- 已签名/安装器：否/否。
+- 独占产物三件套校验：通过。
 
-The disposable PostgreSQL container, Docker smoke containers, networks, volumes, candidate-specific
-images, packaged-smoke database, Desktop smoke processes, and temporary exclusive artifact directory
-were removed. The implementation candidate remained clean and unchanged after all gates.
+<a id="cleanup-and-handoff"></a>
 
-The structured form of this record is [`verification.json`](verification.json). This result is an
-evidence-only direct child of the implementation candidate; no production source changed after the
-sealed security scan and full runtime matrix.
+## 清理与交接
+
+临时 Postgres 容器、Docker 冒烟容器、网络、卷、候选专用镜像、打包冒烟数据库、桌面冒烟进程和临时独占产物目录均已删除。所有门禁后实现候选仍干净且未改变。
+
+结构化记录见 [verification.json](verification.json)。本结果对应实现候选的仅证据直接子提交；封存安全扫描和完整运行时矩阵后未修改生产源码。

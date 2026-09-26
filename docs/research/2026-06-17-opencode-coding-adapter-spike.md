@@ -1,72 +1,62 @@
-# opencode Coding Adapter Spike
+<a id="opencode-coding-adapter-spike"></a>
 
-## Summary
+# OpenCode 编码适配器技术试验
 
-Decision: use `opencode serve` HTTP endpoints as the v0.6 managed coding transport.
+<a id="summary"></a>
 
-`opencode acp` remains useful as an IDE integration reference, but the first DevFlow integration
-should not speak ACP directly. ACP adds a stdin/stdout Agent Client Protocol connection and then
-delegates cancellation to the same backing session abort capability. DevFlow's Electron main process
-can use the HTTP API directly with fewer moving parts.
+## 摘要
 
-## Environment
+决定：v0.6 托管编码传输使用 `opencode serve` HTTP 端点。
 
-- opencode version: `1.14.40`
-- Spike repo: temporary local fixture repo under the OS temp directory
-- Model used for no-cost tool-flow validation: opencode built-in fake provider
-- Live configured provider was probed only enough to confirm credentials/provider errors are
-  possible and must not drive default verification.
+ACP 可作为未来 IDE 集成参考，但首版不直接使用。`opencode acp` 增加 stdin/stdout Agent Client Protocol 连接，取消仍转交同一底层会话中止能力；Electron 主进程直接使用 HTTP 所需组件更少。以下为当时试验记录。
 
-## HTTP Findings
+<a id="environment"></a>
 
-Validated with `opencode serve --hostname 127.0.0.1 --port 4097`:
+## 环境
 
-- `POST /session` creates a coding session with per-permission ask rules.
-- `POST /session/{sessionID}/message` sends a task prompt.
-- `GET /permission` exposes pending permission requests.
-- `POST /permission/{requestID}/reply` can approve or reject permission requests.
-- `GET /session/{sessionID}/diff` returns repo-relative file diffs after edits.
-- `POST /session/{sessionID}/abort` aborts an in-flight session.
+- OpenCode 版本：1.14.40。
+- 仓库：操作系统临时目录中的本地测试样例。
+- 免费工具流验证：内置模拟服务商。
+- 对已配置真实服务商仅做有限探测，确认凭据/服务商错误可能发生，不应驱动默认验证。
 
-Observed successful path:
+<a id="http-findings"></a>
 
-- DevFlow-style script created a temp repo session.
-- Agent requested edit permissions for two files and a bash permission for the test command.
-- Script approved each request programmatically.
-- opencode applied the changes, ran the test command, and the diff endpoint returned changed file
-  patches.
+## HTTP 发现
 
-Observed failure/guardrail paths:
+使用 `opencode serve --hostname 127.0.0.1 --port 4097` 验证：
 
-- If DevFlow does not answer a permission request, the request remains pending and DevFlow can
-  default-reject it by calling the permission reply endpoint.
-- A bash `sleep 30` request approved for abort testing was cancelled through
-  `POST /session/{sessionID}/abort`; opencode returned a `MessageAbortedError` and cleared pending
-  permissions.
+- `POST /session` 创建会话，按权限设置 ask。
+- `POST /session/{sessionID}/message` 发送任务。
+- `GET /permission` 读取待授权请求。
+- `POST /permission/{requestID}/reply` 批准或拒绝。
+- `GET /session/{sessionID}/diff` 编辑后返回仓库相对差异。
+- `POST /session/{sessionID}/abort` 中止执行。
 
-## ACP Findings
+成功路径：DevFlow 风格脚本创建临时仓库会话，Agent 请求两个文件编辑权限及测试命令的 bash 权限；脚本逐一批准，OpenCode 修改、运行测试，diff 端点返回补丁。
 
-Validated with `opencode acp --hostname 127.0.0.1 --port 4098 --cwd <fixture>`.
+失败/约束路径：不回答权限时请求保持 pending，可调用回复端点默认拒绝；批准用于中止测试的 bash `sleep 30` 后，通过 abort 取消，返回 MessageAbortedError 并清除待授权请求。
 
-- The command starts the normal HTTP server as a backing service.
-- The ACP control plane itself is stdin/stdout NDJSON using Agent Client Protocol.
-- ACP permission relay depends on an ACP client implementing `requestPermission`.
-- ACP cancel delegates to the backing session abort path.
+<a id="acp-findings"></a>
 
-Conclusion: ACP is a good future compatibility layer for editor-style integrations, but it is not
-the simplest v0.6 Electron-hosted runtime.
+## ACP 发现
 
-## Go / No-Go
+使用 `opencode acp --hostname 127.0.0.1 --port 4098 --cwd <fixture>` 验证：它启动普通 HTTP 后端服务，控制平面为 stdin/stdout NDJSON Agent Client Protocol；权限转交要求客户端实现 requestPermission，取消委托底层会话中止。
 
-Go for HTTP server transport.
+结论：ACP 可作未来编辑器兼容层，但不是 v0.6 Electron 托管运行时的最简首选。
 
-No-go for direct ACP as the first implementation path.
+<a id="go--no-go"></a>
 
-## Product Constraints Confirmed
+## 采用与不采用
 
-- Do not use `--dangerously-skip-permissions`.
-- Use ask-by-default permission rules for edit/bash/write/patch.
-- Treat permission timeout as a DevFlow-level reject decision.
-- Treat cancel as an interrupt that calls session abort and marks the coding run interrupted.
-- Capture diffs through opencode's diff endpoint, then redact and cap before storing/syncing.
-- Do not sync prompt text, raw trace, raw patch, cwd, stdout, stderr, or provider secrets.
+采用 HTTP 服务传输；首版不直接实现 ACP。
+
+<a id="product-constraints-confirmed"></a>
+
+## 已确认产品约束
+
+- 不使用 --dangerously-skip-permissions。
+- edit/bash/write/patch 默认 ask。
+- 权限超时视为 DevFlow 拒绝。
+- 取消调用会话 abort 并记录编码中断。
+- 通过 diff 端点捕获差异，保存/同步前脱敏并限制大小。
+- 不同步提示词、原始轨迹/补丁、cwd、stdout、stderr 或服务商秘密。
