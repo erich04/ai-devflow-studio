@@ -853,16 +853,23 @@ async function processAvailableGitHubDeliveries(): Promise<void> {
   try {
     await runGitHubDeliveryExclusive(async (signal) => {
       const intents = await store.listGitHubDeliveryIntents()
-      if (intents.length === 0) return
       const workflow = createWorkflowRuntime(store)
       await reconcileCompletedGitHubDeliveryIntents({
         store,
         workflow,
       })
 
-      // Keep local completion recovery, but do not contact GitHub or the
-      // credential store for terminal history with no pending delivery work.
-      if (intents.every((intent) => ['completed', 'failed', 'revoked'].includes(intent.status))) return
+      const hasPendingDelivery = intents.some(
+        (intent) => !['completed', 'failed', 'revoked'].includes(intent.status),
+      )
+      // A completed delivery still has live repository authority. Observe its
+      // revocation without starting a publisher; skip only truly idle scopes.
+      if (!hasPendingDelivery) {
+        const pairing = await store.getDesktopPairingCredential()
+        if (!pairing) return
+        const binding = await store.getGitHubRepositoryBinding(pairing.projectId)
+        if (binding?.status !== 'active') return
+      }
 
       const context = await createCurrentGitHubDeliveryContext(signal)
       if (!context) return
@@ -879,6 +886,7 @@ async function processAvailableGitHubDeliveries(): Promise<void> {
         expectedPairing: context.credential,
       })
       if (!binding || binding.status !== 'active') return
+      if (!hasPendingDelivery) return
 
       const processor = await createActiveGitHubDeliveryProcessor(signal, context)
       await processor.recoverAndAdvance()
