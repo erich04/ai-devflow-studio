@@ -88,4 +88,4 @@
 - 策略、审查、证据、角色、预算、同步和测试状态保持可发现。
 - 原型用于视觉与交互参考，不直接嵌入静态 HTML 源码。
 
-**后续布局依据：**2026-09-25/26 确认的 [#171](https://github.com/erich04/ai-devflow-studio/issues/171)、[#174](https://github.com/erich04/ai-devflow-studio/issues/174) 和 [#177](https://github.com/erich04/ai-devflow-studio/issues/177) 将工作台调整为左侧流程与节点工作区、右侧独立对话，并以“概览 / 内容与审查 / 产物与证据 / 执行记录”组织节点内容。新改动按实际验证和发布记录判断交付状态；本目录的历史截图不代表新布局已验收，也不要求恢复旧三分区。
+**后续布局依据**：2026-09-25/26 确认的 [#171](https://github.com/erich04/ai-devflow-studio/issues/171)、[#174](https://github.com/erich04/ai-devflow-studio/issues/174) 和 [#177](https://github.com/erich04/ai-devflow-studio/issues/177) 将工作台调整为左侧流程与节点工作区、右侧独立对话，并以“概览 / 内容与审查 / 产物与证据 / 执行记录”组织节点内容。新改动按实际验证和发布记录判断交付状态；本目录的历史截图不代表新布局已验收，也不要求恢复旧三分区。

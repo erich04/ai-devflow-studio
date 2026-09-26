@@ -29,7 +29,7 @@ Web 中切换组织只影响浏览器会话。桌面应单独配对到所选团�
 
 ## 分配 GitHub App 仓库
 
-多个组织使用受控 GitHub 交付前，部署操作者必须分配每个仓库。组织所有者不能自行获得任意 GitHub App 访问权。展开**组织标识（供部署配置使用）**取得组织 ID，然后配置 API：
+多个组织使用受控 GitHub 交付前，部署操作者必须分配每个仓库。组织所有者不能自行获得任意 GitHub App 访问权。展开 **组织标识（供部署配置使用）** 取得组织 ID，然后配置 API：
 
 ```dotenv
 DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS='[{"organizationId":"org-example","installationId":"123","repositoryId":"456"}]'

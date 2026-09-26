@@ -4,11 +4,11 @@
 
 > 历史计划执行约定：原文要求执行 Agent 使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans` 逐任务实施，并用复选框（`- [ ]`）追踪。保留该约定不代表当前任务触发这些技能。
 
-**目标：**让 v0.6.1 真实 OpenCode 路径易于本地签收，同时不削弱确定性的 CI/verify。
+**目标**：让 v0.6.1 真实 OpenCode 路径易于本地签收，同时不削弱确定性的 CI/verify。
 
-**架构：**模拟引擎保持默认自动化路径。为手工 OpenCode 冒烟增加小型、已测试的预检层，记录精确本地演示/签收命令，真实执行仍受环境开关控制。
+**架构**：模拟引擎保持默认自动化路径。为手工 OpenCode 冒烟增加小型、已测试的预检层，记录精确本地演示/签收命令，真实执行仍受环境开关控制。
 
-**技术栈：**经 `tsx` 运行的 TypeScript 脚本、Vitest、既有 `scripts/opencode-smoke.ts`、README、`corepack pnpm`。
+**技术栈**：经 `tsx` 运行的 TypeScript 脚本、Vitest、既有 `scripts/opencode-smoke.ts`、README、`corepack pnpm`。
 
 ---
 
