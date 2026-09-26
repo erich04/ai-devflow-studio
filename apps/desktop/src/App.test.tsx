@@ -4811,6 +4811,55 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过')
   })
 
+  it('explains a database failure without claiming approval or automatically retrying', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    vi.mocked(api.approveGate).mockRejectedValueOnce(new Error('memory access out of bounds'))
+    vi.mocked(api.loadState).mockRejectedValue(new Error('memory access out of bounds'))
+    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('本地数据库运行异常'))
+    expect(screen.getByTestId('toast')).toHaveTextContent('尚无法确认审批是否已保存')
+    expect(screen.getByTestId('toast')).toHaveTextContent('完全退出并重新打开应用')
+    expect(screen.getByTestId('toast')).toHaveTextContent('无需重新生成需求或重复运行审查')
+    expect(screen.getByTestId('toast')).not.toHaveTextContent('已通过')
+    expect(api.approveGate).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows an explicit retry after a failed approval and unchanged local progress', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    vi.mocked(api.approveGate).mockRejectedValueOnce(new Error('disk write failed'))
+    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('审批未完成，当前节点仍待审批'))
+    expect(api.approveGate).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('toast')).not.toHaveTextContent('已通过')
+
+    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过'))
+    expect(api.approveGate).toHaveBeenCalledTimes(2)
+  })
+
+  it('recovers an approval saved before the IPC response failed without submitting again', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    const timestamp = '2026-06-15T00:05:00.000Z'
+    const { run } = advanceWorkflowAfterGateApproval({ run: fixtureRuns[0]!, approvedNodeId: 'n-design-gate', now: timestamp })
+    vi.mocked(api.approveGate).mockRejectedValueOnce(new Error('memory access out of bounds'))
+    vi.mocked(api.loadState).mockResolvedValue(desktopState({
+      projects: [localProject], runs: [run], desktopPairingCredential: fixturePairingCredential,
+      events: [{ id: 'saved-before-response-failure', runId: run.id, nodeId: 'n-design-gate', kind: 'approval',
+        sequence: 1, message: 'Gate approved', timestamp }],
+    }))
+    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('已从本地记录核实：方案评审 Gate 已通过'))
+    expect(screen.getByTestId('toast')).toHaveTextContent('无需重复提交审批')
+    expect(api.approveGate).toHaveBeenCalledTimes(1)
+  })
+
   it('shows blocking enforcement details and keeps non-approval actions available', async () => {
     const recommended = createRecommendedEnforcementPreset({
       organizationId: 'org-demo',
