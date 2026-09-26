@@ -196,9 +196,9 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node)
 
     expect(viewModel.visualKind).toBe('Task')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', '测试证据', '轨迹', 'Gate影响'])
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
-    expect(viewModel.tabs.find((tab) => tab.label === 'Gate影响')?.sections).toEqual(['gateImpactSummary'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['概览', '内容与审查', '产物与证据', '执行记录'])
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateImpactSummary'])
+    expect(viewModel.tabs.find((tab) => tab.label === '概览')?.sections).toContain('gateImpactSummary')
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'node-status',
       'raw-request',
@@ -237,9 +237,9 @@ describe('node inspector view model', () => {
       sourceKind: 'run_template',
       displayMode: 'standard',
     })
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', '测试证据', '轨迹', 'Gate影响'])
-    expect(viewModel.activeTab.label).toBe('轨迹')
-    expect(viewModel.activeTab.sections).toEqual(['trace'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['概览', '内容与审查', '产物与证据', '执行记录'])
+    expect(viewModel.activeTab.label).toBe('执行记录')
+    expect(viewModel.activeTab.sections).toEqual(['trace', 'artifactRecords'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'node-status',
       'design-artifact',
@@ -264,7 +264,7 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { requestedTab: 'Gate条件', canApprove: true })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.activeTab.sections).toEqual(['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'])
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'gate-decision',
       'policy-snapshot',
@@ -296,10 +296,10 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { canApprove: true })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['状态', '产物', '测试证据', '轨迹', 'Gate条件', '引用来源', 'Remediation'])
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['概览', '内容与审查', '产物与证据', '执行记录'])
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
     expect(viewModel.activeTab.sections).not.toContain('nodeSummary')
-    expect(viewModel.activeTab.sections).not.toContain('gateEnforcementPanel')
+    expect(viewModel.activeTab.sections).toContain('gateEnforcementPanel')
     expect(viewModel.activeTab.sections).not.toContain('governance')
     expect(viewModel.activeTab.sections).not.toContain('agentReview')
     expect(viewModel.activeTab.sections).not.toContain('artifacts')
@@ -319,11 +319,11 @@ describe('node inspector view model', () => {
       knowledgeReferenceCount: 2,
       testEvidenceCount: 0,
     })
-    const referencesTab = viewModel.tabs.find((tab) => tab.label === '引用来源')
-    const evidenceTab = viewModel.tabs.find((tab) => tab.label === '产物')
+    const referencesTab = viewModel.tabs.find((tab) => tab.label === '产物与证据')
+    const evidenceTab = viewModel.tabs.find((tab) => tab.label === '内容与审查')
 
-    expect(referencesTab?.sections).toEqual(['knowledgeReferences'])
-    expect(evidenceTab?.sections).toEqual(['artifacts', 'reviewEvidence'])
+    expect(referencesTab?.sections).toEqual(['artifacts', 'testEvidence', 'knowledgeReferences', 'governance'])
+    expect(evidenceTab?.sections).toEqual(['workspaceContent'])
     expect(referencesTab?.sections).not.toEqual(evidenceTab?.sections)
     expect(viewModel.activeTab).toEqual(referencesTab)
     expect(viewModel.contextProjection.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
@@ -352,7 +352,7 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { requestedTab: 'Gate条件' })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.activeTab.sections).toEqual(['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'])
+    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'gate-decision',
       'policy-snapshot',
@@ -514,7 +514,7 @@ describe('node inspector view model', () => {
 
     expect(viewModelFor(prNode, { requestedTab: 'Handoff' })).toMatchObject({
       visualKind: 'Delivery',
-      activeTab: { label: 'Handoff', sections: ['deliveryHandoff'] },
+      activeTab: { label: '概览', sections: ['statusMatrix', 'gateImpactSummary', 'deliveryHandoff'] },
     })
     expect(viewModelFor(buildNode).activeTab.sections).not.toContain('gateEnforcementPanel')
     expect(viewModelFor(testNode).activeTab.sections).not.toContain('gateEnforcementPanel')
@@ -937,12 +937,12 @@ describe('node inspector view model', () => {
     const gateNode = findNode((candidate) => candidate.kind === 'gate')
     const prNode = findNode((candidate) => candidate.kind === 'pr')
 
-    expect(resolveInspectorTabForSearchResult(clarifyNode, 'artifact')).toBe('产物')
-    expect(resolveInspectorTabForSearchResult(designNode, 'artifact')).toBe('产物')
-    expect(resolveInspectorTabForSearchResult(designNode, 'event')).toBe('轨迹')
-    expect(resolveInspectorTabForSearchResult(prNode, 'artifact')).toBe('产物')
-    expect(resolveInspectorTabForSearchResult(clarifyNode, 'event')).toBe('轨迹')
-    expect(resolveInspectorTabForSearchResult(prNode, 'event')).toBe('轨迹')
-    expect(resolveInspectorTabForSearchResult(gateNode, 'event')).toBe('轨迹')
+    expect(resolveInspectorTabForSearchResult(clarifyNode, 'artifact')).toBe('产物与证据')
+    expect(resolveInspectorTabForSearchResult(designNode, 'artifact')).toBe('产物与证据')
+    expect(resolveInspectorTabForSearchResult(designNode, 'event')).toBe('执行记录')
+    expect(resolveInspectorTabForSearchResult(prNode, 'artifact')).toBe('产物与证据')
+    expect(resolveInspectorTabForSearchResult(clarifyNode, 'event')).toBe('执行记录')
+    expect(resolveInspectorTabForSearchResult(prNode, 'event')).toBe('执行记录')
+    expect(resolveInspectorTabForSearchResult(gateNode, 'event')).toBe('执行记录')
   })
 })

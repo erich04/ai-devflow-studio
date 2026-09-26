@@ -1,11 +1,13 @@
 ---
-title: Gate Governance ADR
+title: Gate 治理架构决策
 category: adr
 ownerId: u-erich
 tags: gate, approval, governance
-summary: Gates are review decisions that must cite evidence and the standards used by reviewers.
+summary: Gate 是审查决策，必须引用证据以及审查者使用的规范。
 ---
 
-# Gate Governance ADR
+<a id="gate-governance-adr"></a>
 
-Gates are review decisions that must cite evidence and the standards used by reviewers.
+# Gate 治理架构决策
+
+Gate 是审查决策，必须引用证据以及审查者使用的规范。

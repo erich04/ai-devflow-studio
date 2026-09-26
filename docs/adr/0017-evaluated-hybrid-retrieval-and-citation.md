@@ -1,86 +1,65 @@
-# ADR 0017: Evaluated Hybrid Retrieval And Citation Authority
+<a id="adr-0017-evaluated-hybrid-retrieval-and-citation-authority"></a>
 
-Status: Accepted
+# ADR 0017：经过评估的混合检索与引用权限
 
-Date: 2026-08-13
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-08-13
 
-DevFlow already indexes reviewable repository Markdown into versioned Knowledge Documents and
-Knowledge Chunks, retrieves deterministic lexical hits, and attaches Knowledge References to Runs.
-ADR 0007 makes retrieval advisory: a high-scoring result is not Governance Evidence. V2.1 must
-improve recall and explanation without turning an embedding provider, vector store, reranker, or
-model-generated citation into a new authority.
+<a id="context"></a>
 
-Repository source and full chunk text remain inside the Electron-main/local-project boundary. Team
-state may receive only allowlisted, redacted retrieval metrics and citation metadata. A provider call
-that transmits chunk text is a distinct, explicit, bounded authority decision and is never part of
-default verification.
+## 背景
 
-## Decision
+DevFlow 已将可审查的仓库 Markdown 索引为带版本的知识文档和知识片段，执行确定性的词法检索，并为 Run 附加知识引用。ADR 0007 明确检索仅提供建议：高分结果不是治理证据。V2.1 要提升召回与解释能力，同时避免把嵌入提供方、向量存储、重排器或模型生成引用变为新的权威来源。
 
-DevFlow will expose one versioned `KnowledgeRetriever` result contract for lexical, vector, hybrid,
-and reranked retrieval. A hybrid retrieval run binds the exact query scope, Knowledge snapshot hash,
-chunk content hashes, embedding model identity/version, ranking contract version, and deterministic
-tie-break order. Missing, stale, cross-scope, malformed, non-finite, or dimension-mismatched inputs
-fail closed.
+仓库源码和完整片段文本留在 Electron 主进程/本地项目边界内。Team 只可接收允许列表内的脱敏检索指标及引用元数据。向提供方传输片段文本是独立、显式、有界的授权决策，绝不属于默认验证。
 
-Lexical retrieval remains the stable no-cost baseline. Vector candidates may increase recall; a
-reranker may rerank only candidates already admitted by the exact scoped retrieval set. Neither
-operation may widen organization, project, Local Project, category, tag, or caller scope. The
-contract requires that scope and lifecycle filtering happens before embedding, ranking, reranking, or provider use.
+<a id="decision"></a>
 
-### Citation Contract
+## 决策
 
-A Knowledge Citation identifies the exact document, chunk, source-relative path, heading path,
-content hash, snapshot hash, retrieval strategy chain, and bounded rank/score provenance used by an
-answer or Agent observation. A citation is valid only while the referenced chunk hash exists in the
-bound snapshot. Stale, deleted, inaccessible, fabricated, or cross-tenant citations are rejected.
+DevFlow 为词法、向量、混合及重排检索提供统一、带版本的 `KnowledgeRetriever` 结果契约。一次混合检索绑定确切查询范围、知识快照哈希、片段内容哈希、嵌入模型身份/版本、排序契约版本及确定性的同分排序规则。输入缺失、过时、跨范围、格式错误、非有限值或维度不匹配时拒绝处理。
 
-Citation presence does not establish faithfulness. Evaluation separately checks that a bounded
-claim is supported by the cited chunk. Knowledge Citations and retrieval hits remain Context; they
-do not satisfy a Knowledge Governance Check, approve a Gate, advance Workflow, or become Test
-Evidence without the existing authoritative evidence path.
+词法检索保持为稳定、无费用的基线。向量候选可提高召回；重排器只能重排确切范围检索集合已接受的候选。两者都不能扩大组织、项目、本地项目、分类、标签或调用者范围。契约要求在嵌入、排序、重排或提供方调用前进行范围和生命周期过滤。
 
-### Evaluation Contract
+<a id="citation-contract"></a>
 
-The versioned V2.1 corpus records synthetic/reviewable documents, exact tenant/project scope,
-queries, relevant and forbidden chunk identities, expected citation behavior, and Memory preconditions.
-Default evaluation is deterministic and no-cost. It reports at least Recall@K, nDCG@K, mean
-reciprocal rank, citation precision, citation faithfulness, latency, and isolation violations for the
-lexical baseline and hybrid candidate.
+### 引用契约
 
-V2.1 may pass only when the frozen hybrid candidate improves the declared aggregate retrieval
-threshold over the lexical baseline, does not regress citation precision or faithfulness below the
-contract floor, and records zero forbidden-scope hits. A changed corpus, provider/model identity,
-ranking contract, threshold, or metric implementation creates a new corpus/contract version; it
-cannot rewrite prior evidence.
+知识引用标识回答或 Agent 观察所使用的确切文档、片段、来源相对路径、标题路径、内容哈希、快照哈希、检索策略链及有界排名/分数来源。仅当引用片段哈希存在于绑定快照中，引用才有效。过时、已删除、不可访问、伪造或跨租户引用均被拒绝。
 
-### Provider And Storage Boundary
+存在引用不等于内容忠实。评估必须独立检查有界主张是否受所引片段支持。知识引用和检索命中仍是上下文；未经既有权威证据路径，不能满足知识治理检查、批准门禁、推进工作流或成为测试证据。
 
-Default CI uses deterministic fixture embeddings and reranking. Real embedding or reranking calls
-are opt-in, separately budgeted, single-corpus, secret-safe, and evidenced outside default CI. No
-renderer request supplies a provider credential, endpoint, raw source path, or unrestricted text.
+<a id="evaluation-contract"></a>
 
-This ADR does not select a vector database. The first implementation may use a bounded local index
-behind a narrow repository interface. Storage choice cannot change citation identity, scope checks,
-evaluation, deletion, or authority semantics.
+### 评估契约
 
-## Consequences
+带版本的 V2.1 语料记录合成/可审查文档、确切租户/项目范围、查询、相关及禁止片段身份、预期引用行为和记忆前置条件。默认评估确定性且无费用。至少分别报告词法基线和混合候选的 Recall@K、nDCG@K、平均倒数排名、引用精度、引用忠实度、延迟和隔离违规。
 
-- Existing lexical retrieval stays available as the comparison and fail-safe path.
-- Retrieval and citation need versioned shared contracts before persistence or UI work.
-- Index refresh and source deletion must invalidate stale chunk/vector entries atomically enough to
-  prevent them from being returned as current.
-- Team-visible projections can explain quality and provenance without receiving repository content.
+V2.1 只有在冻结的混合候选相对词法基线达到声明的整体检索提升阈值、引用精度和忠实度不低于契约下限，且禁止范围命中为零时才能通过。语料、提供方/模型身份、排序契约、阈值或指标实现变化会产生新语料/契约版本，不能改写先前证据。
 
-## Rejected Alternatives
+<a id="provider-and-storage-boundary"></a>
 
-- **Treat top vector similarity as correctness.** Similarity is neither citation faithfulness nor
-  Governance Evidence.
-- **Let reranking search outside the admitted candidate set.** That would bypass scope and retrieval
-  audit.
-- **Upload the whole repository knowledge index by default.** That violates the local source
-  boundary and no-cost deterministic verification.
-- **Choose a vector database before freezing behavior.** Storage is replaceable; scope, provenance,
-  deletion, and evaluation are the product contract.
+### 提供方与存储边界
+
+默认 CI 使用确定性测试夹具嵌入与重排。真实嵌入/重排调用需要显式选择、独立预算、单一语料、秘密保护，并在默认 CI 之外提供证据。渲染进程请求不能提供提供方凭据、端点、原始源码路径或无限制文本。
+
+本 ADR 不选择向量数据库。首个实现可以在窄仓库接口后使用有界本地索引。存储选择不能改变引用身份、范围检查、评估、删除或授权语义。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 既有词法检索继续作为对照和安全回退路径。
+- 在持久化或 UI 工作前，检索与引用需要带版本的共享契约。
+- 索引刷新和源删除必须以足够原子的方式让过时片段/向量项失效，防止作为当前内容返回。
+- Team 可见投影可以解释质量和来源，无需接收仓库正文。
+
+<a id="rejected-alternatives"></a>
+
+## 未采用的替代方案
+
+- **将最高向量相似度视为正确性。** 相似度既不代表引用忠实度，也不是治理证据。
+- **允许重排搜索已接受候选集合之外的内容。** 会绕过范围和检索审计。
+- **默认上传整个仓库知识索引。** 违反本地源码边界和无费用确定性验证原则。
+- **先选向量数据库，再冻结行为。** 存储可替换；范围、来源、删除和评估才是产品契约。

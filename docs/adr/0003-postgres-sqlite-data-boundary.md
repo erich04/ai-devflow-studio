@@ -1,20 +1,29 @@
-# ADR 0003: Postgres And SQLite Data Boundary
+<a id="adr-0003-postgres-and-sqlite-data-boundary"></a>
 
-## Status
+# ADR 0003：Postgres 与 SQLite 的数据边界
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-Team collaboration data and local developer state have different lifecycles.
+已接受（Accepted）。
 
-## Decision
+<a id="context"></a>
 
-Use Postgres as the team source of truth and SQLite in Electron for local repository configuration,
-MCP settings, draft state, theme preference, and offline cache.
+## 背景
 
-## Consequences
+团队协作数据与开发者本地状态具有不同的生命周期。
 
-- Team dashboards are consistent and queryable.
-- Local sensitive paths and tool settings do not need to be globally stored.
-- Synchronization boundaries must be explicit.
+<a id="decision"></a>
+
+## 决策
+
+使用 Postgres 作为团队数据的权威来源，在 Electron 中使用 SQLite 保存本地仓库配置、MCP 设置、草稿状态、主题偏好和离线缓存。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 团队仪表板中的数据保持一致且可查询。
+- 敏感的本地路径和工具设置无需全局保存。
+- 同步边界必须明确。

@@ -1,21 +1,20 @@
 ---
-title: PR Review Readiness Checklist
+title: PR 审查就绪检查清单
 category: review_checklist
 ownerId: u-ling
 tags: pr, review, gate, github-delivery
-summary: PR review should bind the delivery package, exact approved commit, verified Draft, evidence, and Acceptance decision.
+summary: PR 审查应绑定交付包、精确批准的提交、核实后的草稿 PR、证据和业务验收决定。
 ---
 
-# PR Review Readiness Checklist
+<a id="pr-review-readiness-checklist"></a>
 
-Pull requests should link design, Test Evidence, reviewer decisions, and rollout notes.
+# PR 审查就绪检查清单
 
-- Confirm the metadata-only PR Delivery Package matches the reviewed coding source.
-- Confirm the Delivery Intent binds the canonical managed worktree, expected commit, repository
-  binding, Run version, evidence digests, and package digest.
-- Confirm the redacted Delivery Request has a separate signed Web approval for its exact revision.
-- Confirm the verified remote head equals the approved expected commit and the matching pull request
-  remains Draft.
-- Confirm no credential, local path, raw output, patch, or source content entered durable evidence.
-- Acceptance may cite the Draft pull request and completion evidence, but must never merge, close,
-  force-push, delete the branch, or publish a tag.
+拉取请求应关联设计、测试证据、审查决定和上线说明。
+
+- 确认仅含元数据的 PR 交付包与被审查的编码来源一致。
+- 确认交付意图绑定权威托管工作树、预期提交、仓库绑定、Run 版本、证据摘要和交付包摘要。
+- 确认脱敏交付请求的精确修订版已有独立的签名 Web 审批。
+- 确认已核实的远端分支提交等于批准的预期提交，匹配的拉取请求仍处于草稿（Draft）状态。
+- 确认凭据、本地路径、原始输出、补丁和源码内容均未进入持久化证据。
+- 业务验收可以引用草稿 PR 和完成证据，但不会合并、关闭、强制推送、删除分支或发布标签。

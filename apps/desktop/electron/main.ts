@@ -74,6 +74,7 @@ import {
 import {
   CURRENT_SCHEMA_VERSION,
   createLocalStore,
+  getLocalStoreRevision,
   type LocalStore,
 } from './local-store.js'
 import {
@@ -586,6 +587,7 @@ async function getRemoteSyncOutboxScheduler() {
     })
     remoteSyncOutboxScheduler = createRemoteSyncOutboxScheduler({
       processor,
+      pollingIntervalMs: backgroundPollInterval,
       onError: async () => {
         console.warn('[remote-sync-outbox] A delivery cycle failed; the lease will be retried.')
         try {
@@ -846,14 +848,28 @@ async function broadcastGitHubDeliveryState(): Promise<void> {
 }
 
 async function processAvailableGitHubDeliveries(): Promise<void> {
+  const store = await getStore()
+  const before = getLocalStoreRevision(store)
   try {
     await runGitHubDeliveryExclusive(async (signal) => {
-      const store = await getStore()
+      const intents = await store.listGitHubDeliveryIntents()
       const workflow = createWorkflowRuntime(store)
       await reconcileCompletedGitHubDeliveryIntents({
         store,
         workflow,
       })
+
+      const hasPendingDelivery = intents.some(
+        (intent) => !['completed', 'failed', 'revoked'].includes(intent.status),
+      )
+      // A completed delivery still has live repository authority. Observe its
+      // revocation without starting a publisher; skip only truly idle scopes.
+      if (!hasPendingDelivery) {
+        const pairing = await store.getDesktopPairingCredential()
+        if (!pairing) return
+        const binding = await store.getGitHubRepositoryBinding(pairing.projectId)
+        if (binding?.status !== 'active') return
+      }
 
       const context = await createCurrentGitHubDeliveryContext(signal)
       if (!context) return
@@ -870,12 +886,15 @@ async function processAvailableGitHubDeliveries(): Promise<void> {
         expectedPairing: context.credential,
       })
       if (!binding || binding.status !== 'active') return
+      if (!hasPendingDelivery) return
 
       const processor = await createActiveGitHubDeliveryProcessor(signal, context)
       await processor.recoverAndAdvance()
     })
   } finally {
-    await broadcastGitHubDeliveryState()
+    if (before === undefined || before !== getLocalStoreRevision(store)) {
+      await broadcastGitHubDeliveryState()
+    }
   }
 }
 
@@ -1019,6 +1038,7 @@ async function getGitHubDeliveryScheduler() {
   githubDeliverySchedulerPromise ??= Promise.resolve().then(() => {
     githubDeliveryScheduler = createGitHubDeliveryScheduler({
       recoverAndAdvance: processAvailableGitHubDeliveries,
+      pollingIntervalMs: backgroundPollInterval,
       onError: () => {
         console.warn('[github-delivery] A recovery cycle failed and will be retried.')
       },
@@ -1308,6 +1328,7 @@ async function getGateCommandScheduler() {
   gateCommandSchedulerPromise ??= Promise.resolve().then(() => {
     gateCommandScheduler = createGateCommandScheduler({
       processAvailable: processAvailableGateCommands,
+      pollingIntervalMs: backgroundPollInterval,
       onError: () => {
         console.warn('[gate-command] A processing cycle failed and will be retried.')
       },
@@ -3697,6 +3718,11 @@ function registerIpcHandlers() {
   })
 }
 
+function backgroundPollInterval(): number {
+  const visible = BrowserWindow.getAllWindows().some((window) => window.isVisible() && !window.isMinimized())
+  return visible ? 15_000 : 60_000
+}
+
 function createWindow() {
   if (INITIAL_THEME) {
     nativeTheme.themeSource = INITIAL_THEME
@@ -3724,6 +3750,12 @@ function createWindow() {
       sandbox: true,
       spellcheck: false,
     },
+  })
+
+  window.on('focus', () => {
+    wakeRemoteSyncOutbox()
+    wakeGateCommandScheduler()
+    wakeGitHubDeliveryScheduler()
   })
 
   const rendererEntry = resolveDesktopRendererEntry({

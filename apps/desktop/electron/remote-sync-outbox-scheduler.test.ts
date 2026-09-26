@@ -160,3 +160,21 @@ describe('remote sync outbox scheduler', () => {
     expect(timers.latestActive()).toBeUndefined()
   })
 })
+
+it('backs off while hidden but an explicit wake still drains immediately and restores the visible cadence', async () => {
+  const timers = new ManualTimers()
+  let visible = true
+  const recoverAndDrain = vi.fn(async () => undefined)
+  const scheduler = createRemoteSyncOutboxScheduler({ processor: { recoverAndDrain }, timers, pollingIntervalMs: () => visible ? 15_000 : 60_000, onError: vi.fn() })
+  await scheduler.start()
+  expect(timers.latestActive()?.delayMs).toBe(15_000)
+  visible = false
+  await scheduler.wake()
+  expect(recoverAndDrain).toHaveBeenCalledTimes(2)
+  expect(timers.latestActive()?.delayMs).toBe(60_000)
+  visible = true
+  await scheduler.wake()
+  expect(recoverAndDrain).toHaveBeenCalledTimes(3)
+  expect(timers.latestActive()?.delayMs).toBe(15_000)
+  scheduler.stop()
+})

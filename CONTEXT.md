@@ -1,646 +1,661 @@
-# Context
+<a id="context"></a>
 
-## Organization and Membership
+# 项目上下文与术语
 
-An Organization is the tenant boundary for team projects, policy, budgets, identities and
-redacted projections. One verified Auth Account can have a separate User and live Membership
-in several Organizations. Roles and project access belong to that Membership, not to the account
-globally. A signed browser session selects one Organization; a Desktop credential remains bound
-to one Organization and Project until explicitly paired again. Archiving an Organization keeps
-its records but stops business access and revokes its Desktop credentials. See ADR 0023.
+<a id="organization-and-membership"></a>
 
-## Run
+## 组织与成员关系（Organization and Membership）
 
-A single AI-assisted delivery attempt that starts from a task request and moves through clarification,
-design, build, test, pull request, and acceptance.
+组织是团队项目、策略、预算、身份和脱敏投影的租户边界。同一个已验证的登录账户可以在多个组织中分别拥有用户身份和有效的成员关系。角色及项目访问权属于各自的成员关系，不是账户全局属性。带签名的浏览器会话选择一个组织；桌面凭据始终绑定一个组织和项目，直到用户明确重新配对。归档组织会保留记录，同时停止业务访问并撤销其桌面凭据。参见 ADR 0023。
 
-## Delivery Workflow
+<a id="run"></a>
 
-The six-stage flow for a Run: requirement clarification, solution design, implementation,
-test evidence, governed pull-request delivery, and business acceptance.
+## 工作流实例（Run）
 
-## Node
+一次 AI 辅助交付尝试，从任务请求开始，依次经过需求澄清、方案设计、开发、测试、拉取请求和业务验收。
 
-An execution or review unit inside a Run. Nodes can represent agent work, human gates, tests, pull
-request creation, or acceptance steps.
+<a id="delivery-workflow"></a>
 
-## Workbench Conversation
+## 交付工作流（Delivery Workflow）
 
-A local, project-scoped conversation with independent messages, questions and input drafts. It may investigate any Run or Node within that Local Project; the currently selected
-card is not an authority or context restriction. Latest workflow state and saved artifacts are shared
-query sources. Legacy manual notes remain inspectable but are not editable or included in model
-prompts; new requirements are expressed through normal chat. Conversation content is excluded from LocalExecutionState and Team synchronization.
+Run 的六阶段流程：需求澄清、方案设计、开发实现、测试证据、受控的拉取请求交付，以及业务验收。
 
-DeepSeek conversations opt into low-effort thinking. Provider-returned reasoning is streamed into
-separate, local-only conversation records; it is not an answer, shared evidence, or durable Agent
-Memory. It is excluded from subsequent conversation prompts and other conversations. Final answers
-and navigation actions still come from the validated structured `content` response.
+<a id="node"></a>
 
-Conversation context includes the scoped original requirement body (not its summary), with source,
-version and explicit continuation ranges. Other artifacts remain indexed and are read on demand.
-Invalid structured model output may regenerate once per turn within the existing call/time bounds;
-both calls retain their reported usage. Recovery never publishes a proposal or advances Workflow.
+## 节点（Node）
 
-## Conversation Proposal
+Run 内的执行或审查单元，可以表示 Agent 工作、人工门禁、测试、拉取请求创建或验收步骤。
 
-A private conversational draft that becomes a shared, pending `log` Artifact only after the user
-explicitly saves it to an existing node. It can inform the next formal stage generation, but cannot
-complete a node, approve a Gate, or replace an immutable stage artifact.
+<a id="workbench-conversation"></a>
 
-## Gate
+## 工作台独立会话（Workbench Conversation）
 
-A human decision point that checks whether the current stage has enough evidence to move into the
-next risky stage.
+保存在本地、以项目为范围的会话，拥有独立的消息、问题和输入草稿。它可以调查该本地项目内任意 Run 或节点；当前选中的卡片不会限制会话的权限或上下文。最新工作流状态和已保存产物是共享查询来源。旧版手工笔记仍可查看，但不可编辑，也不会进入模型提示；新需求通过正常聊天表达。会话内容不进入 `LocalExecutionState`，也不参与团队同步。
 
-## Team Role
+DeepSeek 会话启用低强度思考。服务商返回的推理内容流式写入独立的本地会话记录；它不是最终回答、共享证据或持久 Agent 记忆，也不会加入后续会话提示或其他会话。最终回答和导航动作仍来自经过验证的结构化 `content` 响应。
 
-The exact product role vocabulary is `owner`, `lead`, and `member`; there is no implicit `viewer`
-role. A member is the least-privileged project participant and all reads remain filtered by live
-organization and project membership. Role ordering supports ordinary project access and Gate
-requirements, but it is not a universal override hierarchy: selected budget, policy, and
-separation-of-duties actions intentionally require an exact non-conflicted lead, so an owner cannot
-bypass those checks. A Desktop Bearer Token is immutable to one paired project and grants at most
-lead authority, even when its browser pairing actor is an organization owner.
+会话上下文包含作用域内的原始需求正文，而非仅有摘要，并附带来源、版本和明确的续读范围。其他产物保留索引，按需读取。模型返回无效结构时，每轮最多重新生成一次，仍受既有调用次数和时间限制；两次调用都保留实际返回的用量。恢复过程不会发布提案或推进工作流。
 
-## Clarification Gate
+<a id="conversation-proposal"></a>
 
-The Gate that reviews whether requirement clarification is complete enough to proceed into solution
-design.
+## 会话提案（Conversation Proposal）
 
-## Solution Review Gate
+私有会话中的草稿，只有在用户明确将其保存到已有节点后，才成为共享、待确认的 `log` 类型产物。它可以作为下一次正式阶段生成的参考，但不能完成节点、批准 Gate，或替代不可变的阶段产物。
 
-The Gate that reviews whether the solution design is complete enough to proceed into implementation.
+<a id="gate"></a>
 
-## Artifact
+## 门禁（Gate）
 
-A durable piece of evidence produced by a Run or Node, such as a requirement note, design document,
-code diff, test report, log, or pull request summary.
+人工决策点，用于检查当前阶段是否已有足够证据，可以进入风险更高的下一阶段。
 
-## Requirement Decomposition Artifact
+<a id="team-role"></a>
 
-A reviewable artifact produced when a user story or requirement is decomposed into domain language,
-technical references, assumptions, and follow-up work. It must pass a Gate before it can be treated
-as reusable team knowledge.
+## 团队角色（Team Role）
 
-## PR Delivery Package
+产品的角色值严格限定为 `owner`、`lead` 和 `member`，不存在隐含的 `viewer` 角色。成员是权限最低的项目参与者；所有读取仍须按有效的组织及项目成员关系过滤。角色顺序用于普通项目访问和 Gate 要求，但不构成通用的越权层级：部分预算、策略和职责分离操作明确要求无利益冲突的 `lead`，因此 `owner` 也不能绕过这些检查。桌面 Bearer Token 固定绑定一个配对项目，最多具有 `lead` 权限，即使在浏览器中发起配对的人是组织所有者。
 
-A metadata-only handoff artifact that summarizes the original request, solution design, changed
-paths, Test Evidence, policy state, and review context. GitHub Delivery may use its title, body, and
-evidence references, but the package is never the source of code, repository identity, branch
-authority, or credentials.
+<a id="clarification-gate"></a>
 
-## GitHub Repository Binding
+## 需求确认门禁（Clarification Gate）
 
-The non-secret Team Project record that binds one Project to one verified GitHub App installation,
-repository, default branch, and binding version. An owner configures or revokes it through Web. The
-API resolves repository facts from GitHub rather than trusting renderer-supplied names.
+审查需求澄清是否足够完整、能否进入方案设计的 Gate。
 
-## GitHub Delivery
+<a id="solution-review-gate"></a>
 
-The V1.5 governed path that publishes one expected commit from the canonical managed worktree to one
-approved `devflow/` branch and creates or reconciles one Draft pull request. It requires a separate
-signed Web approval and never merges, force-pushes, deletes a branch, publishes a tag, or makes
-GitHub authoritative for the local Run.
+## 方案评审门禁（Solution Review Gate）
 
-## Delivery Series
+审查设计方案是否足够完整、能否进入开发实现的 Gate。
 
-The stable identity for delivery of one Run/PR target from one managed workspace under one
-repository binding. A repository rebind creates a new series only after the prior remote request is
-proven terminal to the current pairing claimant.
+<a id="artifact"></a>
 
-## Delivery Attempt
+## 产物（Artifact）
 
-One immutable publication attempt within a Delivery Series. Retry is allowed only after the exact
-remote predecessor is proven `failed` or `revoked`; it creates the next attempt and a new request and
-idempotency key. A completed attempt never reopens.
+Run 或节点生成的持久材料，例如需求说明、设计文档、代码差异、测试报告、日志或拉取请求摘要。
 
-## Delivery Intent
+<a id="requirement-decomposition-artifact"></a>
 
-The immutable local Desktop record binding the managed workspace, expected commit, repository
-binding, Run/node/version, Test Evidence, changed paths, and PR Delivery Package digests. A
-pre-publication material change uses Revise to create a new intent revision in the same series and
-attempt and invalidates the older approval.
+## 需求拆解产物（Requirement Decomposition Artifact）
 
-## Delivery Request
+将用户故事或需求拆解为领域语言、技术引用、假设和后续工作时生成的可审查产物。必须通过 Gate，才能作为可复用的团队知识。
 
-The redacted API/Postgres projection of one Delivery Intent. It is scoped to the paired Project and
-current claimant and carries the durable approval, publication, recovery, and Draft pull-request
-state without local paths, raw output, patches, source content, or credentials.
+<a id="pr-delivery-package"></a>
 
-## Delivery Approval
+## PR 交付包（PR Delivery Package）
 
-An immutable lead/owner decision made through a signed Web session against one exact Delivery
-Request revision. Desktop Bearer authority cannot approve its own request, and changed material,
-attempt, or binding requires a new approval.
+仅含元数据的交接产物，汇总原始请求、设计方案、变更路径、测试证据、策略状态和审查上下文。GitHub 交付可以使用其标题、正文和证据引用，但交付包不提供代码、仓库身份、分支操作权限或凭据。
 
-## GitHub Delivery Recovery Action
+<a id="github-repository-binding"></a>
 
-One explicit operator action chosen from Revise, Resume, Retry, or Stop. Revise replaces changed
-pre-publication material; Resume continues the same `recovery_required` attempt; Retry creates a new
-attempt only after proven remote terminal authority; Stop parks the exact active attempt for manual
-recovery. Background scheduling cannot silently perform these decisions.
+## GitHub 仓库绑定（GitHub Repository Binding）
 
-## GitHub Delivery Completion
+团队项目中的非机密记录，将一个项目绑定到经过验证的 GitHub App 安装、仓库、默认分支和绑定版本。所有者通过 Web 配置或撤销绑定。API 从 GitHub 查询仓库事实，不信任渲染进程提供的名称。
 
-The redacted durable evidence that one expected commit is the verified remote branch head and one
-matching pull request remains Draft. Only this evidence can advance the PR node toward Acceptance;
-it never authorizes merge.
+<a id="github-delivery"></a>
 
-## Skill
+## GitHub 交付（GitHub Delivery）
 
-A reusable team capability that defines a process method, prompt strategy, knowledge-reading rule, or
-review checklist.
+V1.5 引入的受控交付路径：将规范受管工作树中的一个预期提交发布到获批的 `devflow/` 分支，并创建或核对一个草稿拉取请求。它需要独立的、带签名的 Web 审批，不会合并、强制推送、删除分支、发布标签，也不会让 GitHub 成为本地 Run 的权威状态来源。
 
-## MCP Server
+<a id="delivery-series"></a>
 
-A local or remote tool connector that an agent can call during a Run, subject to team policy and local
-developer configuration.
+## 交付系列（Delivery Series）
 
-## Knowledge Base
+在同一仓库绑定下，从同一个受管工作区交付同一 Run/PR 目标时使用的稳定身份。重新绑定仓库后，只有向当前配对认领者证明前一个远端请求已经终结，才能创建新系列。
 
-The team-maintained Git and Markdown source of reusable standards, templates, decisions, examples,
-project context, and glossary.
+<a id="delivery-attempt"></a>
 
-## Knowledge Repository
+## 交付尝试（Delivery Attempt）
 
-A Git-managed knowledge repository that links one Team Knowledge Foundation to multiple code
-repositories through standards, domain terms, relationships, and source references.
-_Avoid_: code repository manager.
+交付系列中的一次不可变发布尝试。只有证明对应的远端前序尝试已处于 `failed` 或 `revoked` 状态，才允许重试；重试会创建下一次尝试、新请求和新幂等键。已完成的尝试不会重新开启。
 
-## Code Repository
+<a id="delivery-intent"></a>
 
-A source code repository linked from a Knowledge Repository. It remains the implementation source,
-while reusable understanding extracted from it becomes Repository-Derived Knowledge.
+## 交付意图（Delivery Intent）
 
-## Repository-Derived Knowledge
+桌面的不可变本地记录，绑定受管工作区、预期提交、仓库绑定、Run/节点/版本、测试证据、变更路径和 PR 交付包摘要。发布前若材料发生实质变化，使用修订操作在同一系列和尝试内创建新的意图版本，并使旧审批失效。
 
-Reviewable system or business knowledge summarized from one or more linked Code Repositories and
-stored in the Knowledge Repository for later retrieval, review, and Gate evidence.
+<a id="delivery-request"></a>
 
-## Candidate Knowledge
+## 交付请求（Delivery Request）
 
-Repository-Derived Knowledge that has been extracted or summarized but has not yet passed review.
-It can inform analysis, but it should not be treated as authoritative Gate evidence.
+交付意图在 API/Postgres 中的脱敏投影。它受配对项目和当前认领者范围约束，持久记录审批、发布、恢复和草稿拉取请求状态，不包含本地路径、原始输出、补丁、源码或凭据。
 
-## Confirmed Knowledge
+<a id="delivery-approval"></a>
 
-Repository-Derived Knowledge that has passed review and can be used as an authoritative reference
-for requirement clarification, solution design, Knowledge Review, and Gate decisions.
+## 交付审批（Delivery Approval）
 
-## System Knowledge
+`lead`/`owner` 通过带签名的 Web 会话，针对一个明确的交付请求版本作出的不可变决定。桌面 Bearer 权限不能审批自身请求；材料、尝试或绑定改变后，需要重新审批。
 
-Repository-Derived Knowledge that explains technical structure, system boundaries, services,
-interfaces, data models, dependencies, or implementation constraints.
+<a id="github-delivery-recovery-action"></a>
 
-## Business Knowledge
+## GitHub 交付恢复操作（GitHub Delivery Recovery Action）
 
-Repository-Derived Knowledge that explains business terms, rules, user flows, domain assumptions, or
-relationships between business concepts.
+操作者明确选择的修订（Revise）、继续（Resume）、重试（Retry）或停止（Stop）动作。修订替换发布前发生变化的材料；继续恢复同一次 `recovery_required` 尝试；重试仅在远端终结状态得到权威确认后创建新尝试；停止暂停指定的活动尝试，交由人工恢复。后台调度不能悄悄代替用户作出这些决定。
 
-## Team Knowledge Foundation
+<a id="github-delivery-completion"></a>
 
-The shared knowledge layer that grounds AI-assisted delivery with team standards, domain language,
-retrievable references, and relationship context. In Chinese presentation material, use `团队知识底座`.
-_Avoid_: realtime library, knowledge frequency.
+## GitHub 交付完成（GitHub Delivery Completion）
 
-## Knowledge Domain
+持久化的脱敏证据，证明预期提交确实是远端分支头，且对应的拉取请求仍为草稿。只有这份证据可以让 PR 节点向业务验收推进；它从不授权合并。
 
-A domain-oriented view inside the Team Knowledge Foundation, such as frontend, backend, or database
-knowledge. Domains organize reusable knowledge without splitting it into isolated knowledge bases.
+<a id="skill"></a>
 
-## Knowledge Source File
+## 技能（Skill）
 
-A Markdown file in the repository that remains the reviewable source of truth for a team standard,
-checklist, ADR, contract, onboarding note, Skill rule, or MCP rule.
+可复用的团队能力，用于定义流程方法、提示策略、知识读取规则或审查清单。
 
-## Knowledge Document
+<a id="mcp-server"></a>
 
-The indexed representation of a Knowledge Source File, including title, category, summary, tags,
-owner, source path, and Markdown content.
+## MCP 服务（MCP Server）
 
-## Knowledge Chunk
+Agent 在 Run 期间可以调用的本地或远程工具连接器，受团队策略和开发者本地配置约束。
 
-A section-level slice of a Knowledge Document that can be retrieved and cited independently while
-still pointing back to the original Markdown source.
+<a id="knowledge-base"></a>
 
-## Knowledge Graph
+## 知识库（Knowledge Base）
 
-A lightweight relationship layer extracted from the Knowledge Base and Run artifacts. It links terms,
-systems, decisions, tasks, artifacts, and owners.
+由团队维护、以 Git 和 Markdown 为来源的可复用标准、模板、决策、示例、项目上下文和术语表。
 
-## Knowledge Retrieval
+<a id="knowledge-repository"></a>
 
-The process of finding relevant Knowledge Chunks for a Run, Node, Artifact, Test Evidence, or Gate
-decision. Retrieval recommends references; it does not decide whether a standard is satisfied.
+## 知识仓库（Knowledge Repository）
 
-## Knowledge Retrieval Hit
+由 Git 管理的知识仓库，通过标准、领域术语、关系和来源引用，将一个团队知识底座连接到多个代码仓库。不要将其称为“代码仓库管理器”。
 
-A scored retrieval result that explains which Knowledge Chunk matched a workflow context and why.
+<a id="code-repository"></a>
 
-## Knowledge Citation
+## 代码仓库（Code Repository）
 
-The exact, inspectable link from an Agent answer or observation to one current Knowledge Chunk. It
-binds document, chunk, source-relative path, heading, content hash, Knowledge snapshot, retrieval
-strategy, and rank provenance. A citation is Context and does not become Governance Evidence by
-itself.
+知识仓库关联的源码仓库。它仍是实现的来源；从中提炼出的可复用理解则成为仓库衍生知识。
 
-## Retrieval Evaluation Corpus
+<a id="repository-derived-knowledge"></a>
 
-A versioned, reviewable set of synthetic Knowledge, scoped queries, relevant and forbidden chunk
-identities, citation expectations, Memory fixtures, and metric thresholds. It compares the lexical
-baseline with a candidate retriever deterministically and records retrieval quality, citation
-faithfulness, latency, and isolation without paid provider calls by default.
+## 仓库衍生知识（Repository-Derived Knowledge）
 
-## Memory Candidate
+从一个或多个关联代码仓库中总结出的、可审查的系统或业务知识，存入知识仓库，用于后续检索、审查和 Gate 证据。
 
-An inert, bounded statement proposed from an accepted observable Agent result. It has exact scope
-and provenance but cannot be retrieved as durable Memory until main-owned policy and actor authority
-promote it.
+<a id="candidate-knowledge"></a>
 
-## Durable Agent Memory
+## 候选知识（Candidate Knowledge）
 
-A promoted, immutable, scoped Memory revision that may be recalled across later Agent sessions. It
-records visibility, provenance digest, retention, expiry, sensitivity, and audit metadata. Agent Memory is not Workflow State,
-an Agent Checkpoint, repository Knowledge, hidden reasoning, or Governance Evidence.
+已经提取或总结、但尚未通过审查的仓库衍生知识。它可以辅助分析，但不能作为权威 Gate 证据。
 
-## Coding Context Receipt
+<a id="confirmed-knowledge"></a>
 
-The local immutable record of the brief prepared for one Coding Run. It binds Run/Node version,
-actor/pairing scope, selected Memory revision/head/content digests, the exact SHA-256 of the brief,
-and an extractive compaction receipt. It is provenance, not permission or proof of task correctness.
-Native Coding and OpenCode recheck its sources before continuing. Historical runs without a receipt
-do not claim Memory use. See ADR 0021.
+## 已确认知识（Confirmed Knowledge）
 
-## Context Compaction
+已经通过审查的仓库衍生知识，可作为需求澄清、方案设计、知识审查和 Gate 决策的权威参考。
 
-A deterministic reduction of historical material within a UTF-8 byte budget. The current request,
-user instruction, recalled Memory, remediation and latest test diagnostic remain indivisible.
-Artifact summaries and recognizable explicit constraint lines replace oversized source text.
-The receipt records each source's representation and sizes. If required content does not fit,
-execution stops before a Provider call. This is extractive compaction, not semantic summarization.
+<a id="system-knowledge"></a>
 
-## Memory Revision
+## 系统知识（System Knowledge）
 
-One immutable version of Durable Agent Memory. An update requires the exact current revision and
-creates a new revision linked by `supersedes`; conflicting revisions remain explicit instead of using
-silent last-write-wins. For Memory visibility, scope is an intersection, never a fallback.
+解释技术结构、系统边界、服务、接口、数据模型、依赖或实现约束的仓库衍生知识。
 
-## Memory Tombstone
+<a id="business-knowledge"></a>
 
-The monotonic deletion record for one Durable Agent Memory identity. It excludes every revision from
-retrieval, drives purge of derived index entries, survives restart and stale sync replay, and cannot
-be reversed into live Memory by an older record.
+## 业务知识（Business Knowledge）
 
-## Knowledge Reference
+解释业务术语、规则、用户流程、领域假设或业务概念间关系的仓库衍生知识。
 
-A relationship between a Run, Node, Artifact, Test Evidence, or Gate decision and a Knowledge
-Document. References can cite, satisfy, require evidence for, or violate a standard.
+<a id="team-knowledge-foundation"></a>
 
-## Knowledge Governance Check
+## 团队知识底座（Team Knowledge Foundation）
 
-A reviewer-facing summary of whether the currently selected workflow node has enough evidence for
-the standards that apply to it. v0.4 displays these checks; later versions can enforce them.
+为 AI 辅助交付提供团队标准、领域语言、可检索引用和关系上下文的共享知识层。中文展示材料统一使用“团队知识底座”，避免使用“实时库”“知识频率”等误译。
 
-## Agent Review Artifact
+<a id="knowledge-domain"></a>
 
-A durable review report produced by the Knowledge Review Agent. It summarizes risks, missing
-evidence, suggested tests, referenced knowledge, model confidence, and the Gate Advisory produced
-for a selected Run/Node.
+## 知识领域（Knowledge Domain）
 
-## Knowledge Review Agent
+团队知识底座中的领域视图，例如前端、后端或数据库知识。领域用于组织可复用知识，不将其拆成彼此孤立的知识库。
 
-The DevFlow-owned review agent that evaluates a requirement or workflow node against team knowledge,
-evidence, and policy context. It reviews delivery readiness; it does not write code.
+<a id="knowledge-source-file"></a>
 
-## Agent Trace
+## 知识源文件（Knowledge Source File）
 
-An auditable step record for an Agent Review, including context preparation, retrieval attachment,
-provider call, and artifact creation. Traces explain how the review was produced without exposing
-private local paths or raw command output.
+仓库中的 Markdown 文件，是团队标准、清单、ADR、契约、入门说明、Skill 规则或 MCP 规则的可审查权威来源。
 
-## Agent Runtime
+<a id="knowledge-document"></a>
 
-The bounded DevFlow-owned observe, decide, act, validate, evaluate, checkpoint, and stop loop used
-when work depends on Tool, MCP, or Coding Executor observations. The deterministic Workflow remains authoritative
-for Run state, policy, Evidence acceptance, and human Gates. An Agent Runtime cannot
-advance a Node, approve a Gate, publish, merge, or widen its own capabilities.
+## 知识文档（Knowledge Document）
 
-## Agent Trajectory
+知识源文件的索引表示，包括标题、分类、摘要、标签、所有者、来源路径和 Markdown 正文。
 
-The ordered, auditable record of externally observable Runtime events such as Context attachment,
-observation, action request, permission decision, Tool or executor result, evaluation, checkpoint,
-and terminal outcome. It uses bounded summaries and digests and does not claim or persist hidden
-reasoning, private scratchpads, raw prompts, source, patches, stdout/stderr, credentials, or local
-absolute paths in Team-visible state.
+<a id="knowledge-chunk"></a>
 
-## Agent Checkpoint
+## 知识片段（Knowledge Chunk）
 
-A versioned, atomically persisted continuation boundary that binds one Agent Runtime to its exact
-Run/Node version, Context and capability-set digests, Local Project, accepted results, sequence,
-deadline, and consumed/remaining bounds. Resume revalidates authority and uses optimistic
-concurrency; it cannot rewind or replay an accepted side effect as a new action.
+知识文档中按章节切分的片段，可以独立检索和引用，同时仍指向原始 Markdown 来源。
 
-## Agent Stop Reason
+<a id="knowledge-graph"></a>
 
-The explicit terminal reason for a bounded Agent Runtime: success, failure, cancelled, timeout,
-step limit, budget exhausted, or policy denied. Agent success produces reviewable Evidence but is not
-itself a Workflow transition or Gate decision.
+## 知识图谱（Knowledge Graph）
 
-## Coordination Session
+从知识库和 Run 产物中提取的轻量关系层，连接术语、系统、决策、任务、产物和所有者。
 
-The bounded Electron-main-owned container for one Supervisor Agent, its fixed Agent Task Graph, and
-the small set of Specialist Agent Runtimes it may start. It binds one exact Run/Node authority,
-execution-tenancy scope, Context digest, shared bounds, accepted handoffs, and terminal outcome. A
-Coordination Session cannot advance Workflow State, approve a Gate, or publish.
+<a id="knowledge-retrieval"></a>
 
-## Supervisor Agent
+## 知识检索（Knowledge Retrieval）
 
-The only Agent in a Coordination Session allowed to assign ready task nodes to accepted Specialist
-Agents, join their bounded results, attribute failure, and stop the session. It can attenuate existing
-authority but cannot create Tool, Workflow, Gate, credential, repository, or delivery authority.
+为 Run、节点、产物、测试证据或 Gate 决策寻找相关知识片段的过程。检索推荐参考材料，不判断标准是否已经满足。
 
-## Specialist Agent
+<a id="knowledge-retrieval-hit"></a>
 
-A bounded Agent Runtime selected for one exact task node and role. Its scope, capabilities, Context,
-deadline, and budget are strict subsets of the Coordination Session. Specialist Agents cannot create
-or delegate to another Agent and cannot write outside an explicitly leased resource.
+## 知识检索命中（Knowledge Retrieval Hit）
 
-## Agent Task Graph
+带评分的检索结果，说明哪个知识片段匹配工作流上下文，以及匹配原因。
 
-A versioned directed acyclic graph of bounded task nodes and dependency edges fixed before specialist
-side effects. A node becomes ready only after every dependency has an accepted terminal result.
-Cycles, unknown dependencies, unbounded fan-out, duplicate ownership, and graph mutation by a model
-fail closed.
+<a id="knowledge-citation"></a>
 
-## Agent Handoff
+## 知识引用（Knowledge Citation）
 
-An immutable metadata-only transfer from one exact task/runtime version to another. It carries scope,
-result, Evidence, Context, and resource digests plus an allowlisted summary; it contains no hidden
-reasoning, source, patch, prompt, stdout/stderr, credential, or absolute path. The receiver rechecks
-current scope and authority before accepting it.
+从 Agent 回答或观察结果指向当前知识片段的精确、可检查链接。它绑定文档、片段、源文件相对路径、标题、内容哈希、知识快照、检索策略和排名来源。引用属于上下文，本身不会变成治理证据。
 
-## Execution Tenancy
+<a id="retrieval-evaluation-corpus"></a>
 
-The isolation contract binding every coordination, task, specialist, capability grant, resource
-lease, checkpoint, handoff, and audit to the exact organization, project, user, session, Local
-Project, Run/Node, and coordination identity that owns it. Its core rule is: scope, capabilities, and budget are intersections, never fallbacks.
-A cross-tenant identifier reveals no data or execution authority.
+## 检索评估语料（Retrieval Evaluation Corpus）
 
-## Tool Definition
+经过版本管理、可以审查的一组人工构造材料，包括知识、作用域查询、相关及禁止命中的片段身份、引用预期、记忆测试数据和指标阈值。它以确定性方式比较词法基线与候选检索器，记录检索质量、引用忠实度、延迟及隔离结果；默认不调用付费服务商。
 
-A main-owned, versioned executable capability description with strict input/output schemas,
-permission and side-effect class, deadline, cancellation, size limit, idempotency posture, and
-audit/redaction rules. A model may select only a Tool already accepted for the current Runtime.
+<a id="memory-candidate"></a>
 
-## Tool Capability Grant
+## 记忆候选（Memory Candidate）
 
-An opaque, short-lived Electron-main authority for one bounded Tool or MCP capability. It binds the
-Runtime, organization, project, user, session, Local Project, Tool identity/version, permission,
-resource scope, expiry, remaining calls, and budget. Text, renderer input, and Team metadata cannot
-forge or widen it.
+从已接受、可观察的 Agent 结果提出的有限陈述，默认不生效。它具有明确的范围和来源，只有 Electron 主进程负责的策略及操作者权限将其提升后，才能作为持久记忆检索。
 
-## Local MCP Installation
+<a id="durable-agent-memory"></a>
 
-The Desktop-local, Electron-main-owned record that authorizes one verified MCP executable with fixed
-arguments, local stdio transport, environment-name allowlist, identity, deadlines, enabled state,
-and version. Team MCP metadata is not local execution authority and cannot create, revise, enable,
-or invoke this installation.
+## 持久 Agent 记忆（Durable Agent Memory）
 
-## Coding Executor
+已提升、不可变且限定范围的记忆版本，可供之后的 Agent 会话召回。它记录可见性、来源摘要、保留规则、过期时间、敏感性和审计元数据。Agent 记忆不是工作流状态、Agent 检查点、仓库知识、隐藏推理或治理证据。
 
-The governed boundary for scoped repository reads/changes, approved commands/tests, permission
-events, cancellation, and structured diff/Test Evidence results. OpenCode is the first external
-executor; V2.0 adds one narrow DevFlow-owned Coding Agent behind the same contract. An executor does
-not own Workflow, Gate, or delivery authority.
+<a id="coding-context-receipt"></a>
 
-## Coding Executor Capability
+## 编码上下文回执（Coding Context Receipt）
 
-A versioned feature advertised before executor selection, such as managed-workspace read/edit,
-approved test execution, permission relay, cancellation, checkpoint continuation, or structured
-diff/test Evidence. Missing capability is a deterministic selection denial rather than a prompt to
-behave outside the descriptor.
+为一次 Coding Run 准备的任务简报所对应的不可变本地记录，绑定 Run/节点版本、操作者/配对范围、选中的记忆版本及其头部/内容摘要、简报准确的 SHA-256，以及抽取式压缩回执。它证明来源，不提供权限，也不能证明任务正确。Native Coding 和 OpenCode 在继续前都会重新核验来源。没有回执的历史运行不得声称使用过记忆。参见 ADR 0021。
 
-## Agent Evaluation Scenario
+<a id="context-compaction"></a>
 
-A versioned reproducible fixture that fixes starting Context, allowed capabilities, expected
-trajectory, bounds, stop reason, Evidence, cleanup, and quality/cost/latency/intervention/recovery/
-isolation measurements for comparing one Agent Runtime or Coding Executor path.
+## 上下文压缩（Context Compaction）
 
-## Tool / Skill Trace
+在 UTF-8 字节预算内，以确定性方式缩减历史材料。当前请求、用户指令、召回记忆、处理建议和最新测试诊断不可拆分。过长原文由产物摘要和可识别的显式约束行替代。回执记录每份来源的表示方式和大小。必要内容放不下时，在调用服务商之前停止执行。这是抽取式压缩，不是语义概括。
 
-A Coding Agent runtime timeline that summarizes permission-backed tool activity, the Skill metadata
-opencode exposes when available, DevFlow's permission relay decision, and redaction state. It explains
-what DevFlow observed; it does not claim to reconstruct opencode's private internal Skill call stack.
+<a id="memory-revision"></a>
 
-## Team Pilot Foundation
+## 记忆版本（Memory Revision）
 
-The v1.0 product milestone where DevFlow moves from a local-first portfolio workstation to a
-self-hosted team pilot. The minimum proof is GitHub login, project creation, Desktop pairing,
-authenticated redacted sync, and Web visibility for a small team.
+持久 Agent 记忆的一个不可变版本。更新时必须指定准确的当前版本，并创建通过 `supersedes` 关联的新版本；冲突版本明确保留，不采用静默的后写覆盖。记忆可见范围取交集，不能通过回退扩大范围。
 
-## Authenticated Session
+<a id="memory-tombstone"></a>
 
-A server-side API session resolved from a real user identity and project membership. It is distinct
-from the explicit Demo Session used by seed data, tests, and local walkthroughs.
+## 记忆删除标记（Memory Tombstone）
 
-## User
+针对一个持久记忆身份的单调删除记录。它将所有版本排除出检索，驱动衍生索引条目的清理，在重启和过期同步重放后仍有效，旧记录不能把它恢复为有效记忆。
 
-The team-side identity record for a person in an organization. User data is the source for
-membership-aware authorization and can be projected into legacy Team Member UI cards.
+<a id="knowledge-reference"></a>
 
-## Auth Account
+## 知识关联（Knowledge Reference）
 
-The external login account linked to a DevFlow User, such as a GitHub account. It stores provider
-identity metadata and must not be confused with local provider credentials used for model calls.
+Run、节点、产物、测试证据或 Gate 决策与知识文档之间的关系，可以表示引用、满足标准、需要证据或违反标准。
 
-## Desktop Pairing
+<a id="knowledge-governance-check"></a>
 
-The one-time flow that connects an Electron Desktop client to a team project. Web issues a short-lived
-pairing code, Desktop exchanges it for a scoped token, and subsequent sync uses that token instead of
-demo headers.
+## 知识治理检查（Knowledge Governance Check）
 
-## Self-Hosted Pilot
+面向审查者的摘要，说明当前选中节点是否有足够证据满足适用标准。v0.4 展示这些检查；后续版本可对其实施强制约束。
 
-The minimum deployable v1.0 stack for a small team: Web, API, and Postgres running through Docker
-Compose with explicit configuration, migration/seed setup, Desktop pairing, and authenticated
-redacted sync. It proves team connectivity without claiming public SaaS readiness, managed hosting,
-automatic HTTPS, or production release packaging.
+<a id="agent-review-artifact"></a>
 
-## Gate Advisory
+## Agent 审查产物（Agent Review Artifact）
 
-A recommendation shown to Gate reviewers after an Agent Review. In v0.5 it is warning-only. From
-v0.7 onward, Gate Advisory can feed Gate Enforcement Policy, but approval is still warning-only by
-default unless a team explicitly enables blocking policy.
+知识审查 Agent 生成的持久报告，汇总选定 Run/节点的风险、缺失证据、建议测试、知识引用、模型置信度和门禁建议。
 
-## Gate Enforcement Policy
+<a id="knowledge-review-agent"></a>
 
-The team-configurable rules that decide whether Gate approval should pass, warn, block, hard-block,
-or require a policy sync. Policy evaluation considers deterministic Knowledge Governance Checks and
-probabilistic Agent Policy Findings.
+## 知识审查 Agent（Knowledge Review Agent）
 
-## Policy-Aware Delivery
+由 DevFlow 管理的审查 Agent，根据团队知识、证据和策略上下文评估需求或工作流节点。它评审交付准备情况，不编写代码。
 
-The delivery mode where policy outcomes, knowledge standards, evidence gaps, and human Gate
-decisions shape the next recommended development action without removing human approval.
+<a id="agent-trace"></a>
 
-## Remediation Plan
+## Agent 审查轨迹（Agent Trace）
 
-A reviewer-facing set of proposed actions for resolving a warning or blocked Gate, such as running a
-Knowledge Review, adding Test Evidence, updating an API contract, or retrying a Coding Agent task.
+可审计的审查步骤记录，包括上下文准备、附加检索结果、调用服务商和创建产物。轨迹解释审查如何形成，不暴露私有本地路径或原始命令输出。
 
-## Retry Attempt
+<a id="agent-runtime"></a>
 
-A human-approved attempt to rerun or continue work using an existing Run's policy context,
-remediation plan, evidence, and prior Agent/Coding history.
+## Agent 运行时（Agent Runtime）
 
-## Policy-Aware Delivery Summary
+当工作依赖工具、MCP 或编码执行器的观察结果时，由 DevFlow 管理的有界循环：观察、决策、行动、验证、评估、保存检查点和停止。确定性工作流仍掌握 Run 状态、策略、证据接纳和人工 Gate 的权威。Agent 运行时不能推进节点、批准 Gate、发布、合并或扩大自身能力。
 
-A redacted manager-facing rollup of warning, blocking, override, remediation, retry, and evidence-gap
-counts. It never includes local paths, raw logs, prompts, patches, or provider secrets.
+<a id="agent-trajectory"></a>
 
-## Policy Floor
+## Agent 执行轨迹（Agent Trajectory）
 
-The organization-level minimum action for an enforcement rule. Project overrides can make a rule
-stricter but cannot weaken the organization floor.
+按顺序记录、可审计的运行时外部可观察事件，例如附加上下文、观察、请求动作、权限决定、工具或执行器结果、评估、检查点和终结结果。它使用有界摘要和内容摘要，不会在团队可见状态中声称或保存隐藏推理、私有草稿、原始提示、源码、补丁、stdout/stderr、凭据或本地绝对路径。
 
-## Protected Gate
+<a id="agent-checkpoint"></a>
 
-A human decision node that can require enforcement. In the current model, protected gates are
-workflow nodes whose kind is `gate` or `acceptance`.
+## Agent 检查点（Agent Checkpoint）
 
-## Agent Policy Finding
+带版本且原子持久化的续行边界，将一次 Agent 运行时绑定到准确的 Run/节点版本、上下文和能力集合摘要、本地项目、已接受结果、序号、截止时间，以及已消耗和剩余限额。恢复时重新验证权限，并使用乐观并发控制；不能倒退或把已接受的副作用作为新动作重放。
 
-A normalized finding emitted by the Knowledge Review Agent for policy evaluation. Agent findings are
-probabilistic; they may warn or block only by explicit policy and can never hard-block.
+<a id="agent-stop-reason"></a>
 
-## Gate Override Decision
+## Agent 停止原因（Agent Stop Reason）
 
-An auditable lead decision that allows a blocked Gate to proceed. Overrides require a reason, must
-not be performed by the Run creator or selected Node owner, and cannot override hard-blocks.
+有界运行时明确的终结原因：成功、失败、取消、超时、达到步骤上限、预算耗尽或策略拒绝。Agent 成功会产生可审查证据，但成功本身不是工作流状态迁移或 Gate 决策。
 
-## Policy Snapshot
+<a id="coordination-session"></a>
 
-A cached enforcement policy bundle used by Desktop. Team projects use the last authoritative cached
-snapshot when offline; pure local projects use the built-in warn-only default.
+## 协调会话（Coordination Session）
 
-## Provider Credential
+由 Electron 主进程管理的有界容器，包含一个监督 Agent、固定的任务图，以及允许启动的少量专职 Agent 运行时。它绑定准确的 Run/节点权限、执行租户范围、上下文摘要、共享限额、已接受交接和终结结果。协调会话不能推进工作流状态、批准 Gate 或发布。
 
-The secret used by an Agent Provider. Electron stores provider secrets through the desktop
-credential boundary and only returns masked metadata to the renderer. The API stores encrypted
-secrets and also only returns masked metadata.
+<a id="supervisor-agent"></a>
 
-## Agent Provider
+## 监督 Agent（Supervisor Agent）
 
-The runtime dependency that turns a redacted Agent Review context into structured review output.
-DevFlow supports a deterministic fake provider for tests and OpenAI-compatible providers for
-explicit live use.
+协调会话中唯一可以将就绪任务分配给已接受的专职 Agent、汇总其有界结果、归因失败并停止会话的 Agent。它可以收窄既有权限，不能创造工具、工作流、Gate、凭据、仓库或交付权限。
 
-## Coding Agent Adapter
+<a id="specialist-agent"></a>
 
-The DevFlow boundary that hosts an external coding engine such as opencode. DevFlow does not
-rebuild the coding agent; it owns context assembly, permission relay, worktree management, evidence
-capture, tests, and team-safe summaries. In the current workflow model, Coding Agent actions start
-only from build-stage task nodes. The fake engine is the deterministic default for automated
-verification; the real opencode HTTP engine is env-gated and manually smoke-tested until it is stable
-enough to become the default coding engine.
+## 专职 Agent（Specialist Agent）
 
-## External Coding Engine
+为一个明确任务节点和角色选定的有界 Agent 运行时。其范围、能力、上下文、截止时间和预算都是协调会话的严格子集。专职 Agent 不能创建其他 Agent 或向其委派，也不能写入明确租用资源之外的位置。
 
-An external agent runtime such as opencode or OpenCode that performs code-writing work behind a
-Coding Agent Adapter. DevFlow uses this external capability instead of implementing its own coding
-agent core.
+<a id="agent-task-graph"></a>
 
-## Coding Agent
+## Agent 任务图（Agent Task Graph）
 
-The code-writing execution path that changes source code through a managed Coding Agent Adapter,
-permission relay, and worktree. It implements approved work; it does not replace Knowledge Review.
+带版本的有向无环图，由有界任务节点和依赖边构成，在专职 Agent 产生副作用之前固定。只有所有依赖都有已接受的终结结果，节点才会就绪。遇到环、未知依赖、无界分支扩张、重复所有权或模型修改任务图时，一律拒绝继续。
 
-## Managed Coding Workspace
+<a id="agent-handoff"></a>
 
-A per-Coding Agent Run git worktree and branch created by Electron main process. It isolates edits
-from the developer's primary checkout but is not a security sandbox.
+## Agent 交接（Agent Handoff）
 
-## Dependency Bootstrap
+从一个明确的任务/运行时版本到另一个版本的不可变元数据传递，携带范围、结果、证据、上下文和资源摘要，以及允许列表内的概述；不包含隐藏推理、源码、补丁、提示、stdout/stderr、凭据或绝对路径。接收方在接受前重新检查当前范围和权限。
 
-The visible step that prepares a managed worktree before tests run. Lockfile-based installs can run
-with frozen commands; non-frozen installs require human approval.
+<a id="execution-tenancy"></a>
 
-## Permission Relay
+## 执行租户隔离（Execution Tenancy）
 
-The DevFlow-mediated path for coding engine tool requests such as edit, bash, write, patch, install,
-or external-directory access. If nobody answers before timeout, DevFlow rejects by default.
+隔离契约将每个协调、任务、专职 Agent、能力授予、资源租约、检查点、交接和审计，绑定到其所属的准确组织、项目、用户、会话、本地项目、Run/节点和协调身份。核心规则是：范围、能力和预算均取交集，绝不通过回退扩大。跨租户标识符不能泄露数据或授予执行权限。
 
-## Coding Diff Artifact
+<a id="tool-definition"></a>
 
-A local artifact containing changed repo-relative paths and a redacted, capped diff from a managed
-coding workspace. The team backend receives only a redacted summary, not the raw patch.
+## 工具定义（Tool Definition）
 
-## Token Usage
+主进程管理、带版本的可执行能力描述，包含严格的输入/输出结构、权限及副作用类别、截止时间、取消、大小限制、幂等策略和审计/脱敏规则。模型只能选择当前运行时已经接受的工具。
 
-The measured model usage for a Run, Node, member, project, or model provider.
+<a id="tool-capability-grant"></a>
 
-## Runtime Cost Summary
+## 工具能力授予（Tool Capability Grant）
 
-A redacted cost summary for a Coding Agent runtime run. It records provider, model, estimated or
-provider-reported token usage, cost, and source, without storing raw prompts, cwd, stdout/stderr,
-patch bodies, or provider secrets.
+由 Electron 主进程发放、不可解析且短期有效的授权，针对一个有界工具或 MCP 能力。它绑定运行时、组织、项目、用户、会话、本地项目、工具身份/版本、权限、资源范围、过期时间、剩余调用次数和预算。文本、渲染进程输入及团队元数据均不能伪造或扩大它。
 
-## Runtime Budget Guard
+<a id="local-mcp-installation"></a>
 
-The pre-provider-call policy check that compares projected Coding Agent runtime cost against a team
-project budget. It can allow, warn, require lead approval, or accept an existing lead approval before
-the real provider is invoked.
+## 本地 MCP 安装（Local MCP Installation）
 
-## Runtime Budget Approval
+由 Electron 主进程管理、仅存在于桌面的授权记录，批准一个已验证的 MCP 可执行文件，并固定参数、本地 stdio 传输、环境变量名称允许列表、身份、截止时间、启用状态和版本。团队 MCP 元数据不构成本地执行权限，不能创建、修改、启用或调用该安装。
 
-An auditable lead approval that permits a specific requester to run real provider work beyond the
-configured project budget for a bounded cost and time window.
+<a id="coding-executor"></a>
 
-## Local Project
+## 编码执行器（Coding Executor）
 
-A repository directory selected on a developer's machine for local execution. It carries local-only
-configuration such as the test command and detected package manager.
+对限定范围的仓库读取/修改、获批命令/测试、权限事件、取消和结构化代码差异/测试证据实施治理的边界。OpenCode 是首个外部执行器；V2.0 在相同契约后增加了一个能力范围较窄、由 DevFlow 管理的 Coding Agent。执行器不拥有工作流、Gate 或交付权限。
 
-## Local Execution
+<a id="coding-executor-capability"></a>
 
-Work performed by the desktop client on the developer's machine, such as running a project's test
-command and collecting evidence. Local Execution is separate from team-wide synchronized state.
+## 编码执行器能力（Coding Executor Capability）
 
-## Test Evidence
+选择执行器前声明的带版本功能，例如受管工作区读写、获批测试执行、权限转发、取消、检查点续行或结构化差异/测试证据。缺少能力会导致确定性的选择拒绝，不能通过提示要求执行器超出能力描述行事。
 
-The durable record of a local test execution, including command, working directory, result status,
-duration, and redacted output.
+<a id="agent-evaluation-scenario"></a>
 
-## Data Origin
+## Agent 评估场景（Agent Evaluation Scenario）
 
-The source class for data shown in the app. `seed` is fixture/demo data, `local` is Electron SQLite
-state, `remote` is authenticated API/Postgres team state, and `adapter` is an external execution
-engine projection such as an OpenCode Coding Agent result.
+带版本、可复现的测试场景，固定初始上下文、允许能力、预期轨迹、限额、停止原因、证据、清理，以及质量、成本、延迟、人工干预、恢复和隔离指标，用于比较 Agent 运行时或编码执行器路径。
 
-## Local Settings
+<a id="tool--skill-trace"></a>
 
-Developer-machine preferences stored in Electron SQLite, such as the theme preference and local MCP
-UI state. Browser preview can still fall back to localStorage when the Electron preload API is not
-available.
+## 工具与技能轨迹（Tool / Skill Trace）
 
-## Remote State
+Coding Agent 运行时间线，汇总有权限依据的工具活动、opencode 在可用时暴露的 Skill 元数据、DevFlow 权限转发决定和脱敏状态。它说明 DevFlow 实际观察到了什么，不声称重建 opencode 私有的内部 Skill 调用栈。
 
-Team-shared state owned by API/Postgres, including identity, Projects, redacted Run projections,
-policy, budget, collaboration commands, repository bindings, Delivery Requests, approvals, audit,
-and manager summaries. Remote State does not own local source execution or complete local evidence.
+<a id="team-pilot-foundation"></a>
 
-## Cross-Platform Desktop
+## 团队试点基础（Team Pilot Foundation）
 
-The requirement that the Electron client work across macOS and Windows. Windows 11 is the primary
-Windows target; Windows 10 is best-effort.
+v1.0 产品里程碑：DevFlow 从本地优先的项目展示工作台走向自托管团队试点。最低验证范围包括 GitHub 登录、项目创建、桌面配对、经身份认证的脱敏同步，以及小团队的 Web 可见性。
 
-## Windows Compatibility
+<a id="authenticated-session"></a>
 
-The product constraint that local execution, SQLite persistence, path handling, command safety, and
-smoke tests must not assume macOS-only behavior.
+## 已认证会话（Authenticated Session）
 
-## Platform-Safe Local Execution
+API 在服务端根据真实用户身份和项目成员关系解析出的会话。它不同于种子数据、测试和本地演练使用的显式演示会话。
 
-Local execution implemented with cross-platform Node/Electron APIs such as `path`, `os.tmpdir()`,
-`spawn` with explicit `cwd`/`env`, and Electron `app.getPath('userData')`, without requiring
-`bash`, `zsh`, `/tmp`, or POSIX path separators.
+<a id="user"></a>
+
+## 用户（User）
+
+组织中某个人的团队侧身份记录，是成员关系授权的数据来源，也可以投影为旧版团队成员界面卡片。
+
+<a id="auth-account"></a>
+
+## 登录账户（Auth Account）
+
+与 DevFlow 用户关联的外部登录账户，例如 GitHub 账户。它保存身份提供方的身份元数据，不能与用于模型调用的本地服务商凭据混淆。
+
+<a id="desktop-pairing"></a>
+
+## 桌面配对（Desktop Pairing）
+
+将 Electron 桌面客户端连接到团队项目的一次性流程。Web 发放短期配对码，桌面用它换取限定范围的令牌，后续同步使用该令牌，不再使用演示请求头。
+
+<a id="self-hosted-pilot"></a>
+
+## 自托管试点（Self-Hosted Pilot）
+
+面向小团队、最低限度可部署的 v1.0 技术栈：通过 Docker Compose 运行 Web、API 和 Postgres，具有明确配置、迁移/种子数据初始化、桌面配对和经认证的脱敏同步。它证明团队连接能力，不代表已具备公共 SaaS、托管服务、自动 HTTPS 或生产发布打包能力。
+
+<a id="gate-advisory"></a>
+
+## 门禁建议（Gate Advisory）
+
+Agent 审查后向 Gate 审查者展示的建议。v0.5 仅提供警告；从 v0.7 开始，建议可以进入门禁执行策略，但默认仍只警告，除非团队明确启用阻断策略。
+
+<a id="gate-enforcement-policy"></a>
+
+## 门禁执行策略（Gate Enforcement Policy）
+
+团队可配置的规则，决定 Gate 审批应通过、警告、阻断、强制阻断还是要求同步策略。策略评估同时考虑确定性的知识治理检查和概率性的 Agent 策略发现。
+
+<a id="policy-aware-delivery"></a>
+
+## 策略感知交付（Policy-Aware Delivery）
+
+根据策略结果、知识标准、证据缺口和人工 Gate 决策，确定下一步推荐开发动作的交付模式；它保留人工审批。
+
+<a id="remediation-plan"></a>
+
+## 处理建议（Remediation Plan）
+
+面向审查者的一组建议动作，用于处理警告或被阻断的 Gate，例如运行知识审查、补充测试证据、更新 API 契约或重试 Coding Agent 任务。
+
+<a id="retry-attempt"></a>
+
+## 重试尝试（Retry Attempt）
+
+经人工批准，利用已有 Run 的策略上下文、处理建议、证据和先前 Agent/Coding 历史，重新执行或继续工作的尝试。
+
+<a id="policy-aware-delivery-summary"></a>
+
+## 策略感知交付摘要（Policy-Aware Delivery Summary）
+
+面向管理者的脱敏汇总，包括警告、阻断、例外批准、处理建议、重试和证据缺口数量。不包含本地路径、原始日志、提示、补丁或服务商密钥。
+
+<a id="policy-floor"></a>
+
+## 组织策略底线（Policy Floor）
+
+组织级别为执行规则设定的最低要求。项目覆盖配置可以使规则更严格，但不能削弱组织底线。
+
+<a id="protected-gate"></a>
+
+## 受保护门禁（Protected Gate）
+
+可能要求强制策略检查的人工决策节点。当前模型中，节点 `kind` 为 `gate` 或 `acceptance` 时属于受保护门禁。
+
+<a id="agent-policy-finding"></a>
+
+## Agent 策略发现（Agent Policy Finding）
+
+知识审查 Agent 为策略评估输出的标准化发现。它具有概率性；只有明确策略才能赋予警告或阻断效果，绝不能造成强制阻断。
+
+<a id="gate-override-decision"></a>
+
+## 门禁例外决定（Gate Override Decision）
+
+允许被阻断 Gate 继续推进、可审计的 `lead` 决定。例外必须说明理由，不能由 Run 创建者或选中节点的所有者执行，也不能覆盖强制阻断。
+
+<a id="policy-snapshot"></a>
+
+## 策略快照（Policy Snapshot）
+
+桌面缓存的门禁执行策略包。团队项目离线时使用最近的权威缓存快照；纯本地项目使用内置的仅警告默认策略。
+
+<a id="provider-credential"></a>
+
+## 服务商凭据（Provider Credential）
+
+Agent 服务商使用的机密信息。Electron 通过桌面凭据边界保存密钥，只向渲染进程返回掩码元数据。API 保存加密的密钥，也只返回掩码元数据。
+
+<a id="agent-provider"></a>
+
+## Agent 服务商（Agent Provider）
+
+将脱敏审查上下文转换为结构化审查输出的运行依赖。DevFlow 支持用于测试的确定性模拟服务商，以及需要显式启用真实调用的 OpenAI 兼容服务商。
+
+<a id="coding-agent-adapter"></a>
+
+## 编码 Agent 适配器（Coding Agent Adapter）
+
+DevFlow 承载 opencode 等外部编码引擎的边界。在这条外部适配路径中，DevFlow 不重建引擎核心，而是负责上下文组装、权限转发、工作树管理、证据采集、测试和适合团队共享的摘要。当前工作流中，Coding Agent 动作只能从开发阶段的任务节点启动。模拟引擎是自动化验证的确定性默认选项；真实 opencode HTTP 引擎通过环境配置启用，在足够稳定、能够成为默认编码引擎之前，采用人工冒烟测试。V2.0 增加的原生执行器仍遵循上文的编码执行器契约。
+
+<a id="external-coding-engine"></a>
+
+## 外部编码引擎（External Coding Engine）
+
+opencode 或 OpenCode 等外部 Agent 运行时，在编码 Agent 适配器后执行代码编写工作。在这条路径中，DevFlow 使用外部能力，而非实现自己的编码引擎核心。
+
+<a id="coding-agent"></a>
+
+## 编码 Agent（Coding Agent）
+
+通过受管适配器、权限转发和工作树修改源码的执行路径。它实现已经批准的工作，不取代知识审查。
+
+<a id="managed-coding-workspace"></a>
+
+## 受管编码工作区（Managed Coding Workspace）
+
+由 Electron 主进程为每次 Coding Agent Run 创建的 Git 工作树和分支。它将修改与开发者主检出目录隔离，但不是安全沙箱。
+
+<a id="dependency-bootstrap"></a>
+
+## 依赖初始化（Dependency Bootstrap）
+
+测试前为受管工作树准备依赖的可见步骤。基于锁文件的安装可执行固定命令；未锁定依赖的安装需要人工批准。
+
+<a id="permission-relay"></a>
+
+## 权限转发（Permission Relay）
+
+DevFlow 居中处理编码引擎工具请求的路径，例如 edit、bash、write、patch、install 或外部目录访问。超时前无人回应时，DevFlow 默认拒绝。
+
+<a id="coding-diff-artifact"></a>
+
+## 编码差异产物（Coding Diff Artifact）
+
+本地产物，包含受管编码工作区内发生变化的仓库相对路径，以及经过脱敏和大小限制的代码差异。团队后端仅接收脱敏摘要，不接收原始补丁。
+
+<a id="token-usage"></a>
+
+## Token 用量（Token Usage）
+
+针对 Run、节点、成员、项目或模型服务商测得的模型用量。
+
+<a id="runtime-cost-summary"></a>
+
+## 运行成本摘要（Runtime Cost Summary）
+
+Coding Agent 运行的脱敏费用摘要，记录服务商、模型、估算或服务商返回的 Token 用量、费用和来源，不保存原始提示、cwd、stdout/stderr、补丁正文或服务商密钥。
+
+<a id="runtime-budget-guard"></a>
+
+## 运行预算检查（Runtime Budget Guard）
+
+调用服务商前，将预期 Coding Agent 运行成本与团队项目预算比较的策略检查。在调用真实服务商之前，它可以允许、警告、要求负责人审批，或接受已有的负责人审批。
+
+<a id="runtime-budget-approval"></a>
+
+## 运行预算审批（Runtime Budget Approval）
+
+可审计的 `lead` 审批，在限定费用和时间窗口内，允许指定申请者执行超过项目配置预算的真实服务商任务。
+
+<a id="local-project"></a>
+
+## 本地项目（Local Project）
+
+开发者在本机选择、用于本地执行的仓库目录，包含测试命令、检测到的包管理器等仅供本地使用的配置。
+
+<a id="local-execution"></a>
+
+## 本地执行（Local Execution）
+
+桌面客户端在开发者机器上执行的工作，例如运行项目测试命令并采集证据。本地执行与团队同步状态分开管理。
+
+<a id="test-evidence"></a>
+
+## 测试证据（Test Evidence）
+
+一次本地测试执行的持久记录，包括命令、工作目录、结果状态、耗时和脱敏输出。
+
+<a id="data-origin"></a>
+
+## 数据来源（Data Origin）
+
+应用展示数据的来源类别：`seed` 表示测试/演示数据，`local` 表示 Electron SQLite 状态，`remote` 表示经过认证的 API/Postgres 团队状态，`adapter` 表示外部执行引擎的投影，例如 OpenCode Coding Agent 结果。
+
+<a id="local-settings"></a>
+
+## 本地设置（Local Settings）
+
+开发者机器上保存在 Electron SQLite 中的偏好，例如主题和本地 MCP 界面状态。没有 Electron preload API 时，浏览器预览仍可回退到 localStorage。
+
+<a id="remote-state"></a>
+
+## 远端状态（Remote State）
+
+由 API/Postgres 管理的团队共享状态，包括身份、项目、脱敏 Run 投影、策略、预算、协作命令、仓库绑定、交付请求、审批、审计和管理摘要。远端状态不掌握本地源码执行或完整的本地证据。
+
+<a id="cross-platform-desktop"></a>
+
+## 跨平台桌面（Cross-Platform Desktop）
+
+要求 Electron 客户端同时支持 macOS 和 Windows。Windows 11 是主要 Windows 目标；Windows 10 尽力兼容。
+
+<a id="windows-compatibility"></a>
+
+## Windows 兼容性（Windows Compatibility）
+
+产品约束：本地执行、SQLite 持久化、路径处理、命令安全和冒烟测试不能只假设 macOS 行为。
+
+<a id="platform-safe-local-execution"></a>
+
+## 平台安全的本地执行（Platform-Safe Local Execution）
+
+通过跨平台 Node/Electron API 实现本地执行，例如 `path`、`os.tmpdir()`、带明确 `cwd`/`env` 的 `spawn`，以及 Electron `app.getPath('userData')`，不要求 `bash`、`zsh`、`/tmp` 或 POSIX 路径分隔符。

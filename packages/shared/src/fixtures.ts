@@ -357,156 +357,178 @@ export const knowledgeSources: KnowledgeSourceFile[] = [
     sourcePath: 'docs/knowledge/standards/api-health.md',
     updatedAt: '2026-06-16T08:00:00.000Z',
     markdown: `---
-title: API Health Endpoint Standard
+title: API 健康端点规范
 category: api_contract
 ownerId: u-ling
 tags: api, health, degraded
-summary: Health endpoints must expose ok, degraded, and down states with explicit status mapping.
+summary: 健康端点必须提供 ok、degraded、down 三种状态，并明确状态映射。
 ---
 
-# API Health Endpoint Standard
+<a id="api-health-endpoint-standard"></a>
 
-Health endpoints must expose ok, degraded, and down states with explicit status mapping.
+# API 健康端点规范
 
-- Route handlers compose service results; services own dependency checks.
-- Degraded dependencies must remain observable in test evidence.
-- Runtime, database, and cache checks must be safe to call during deploy smoke.
+健康端点必须提供 \`ok\`、\`degraded\`、\`down\` 三种状态，并明确状态映射。
+
+- 路由处理器组合服务结果；依赖检查由服务负责。
+- 依赖降级必须在测试证据中可见。
+- 运行时、数据库和缓存检查必须能够在部署冒烟测试期间安全调用。
 `,
   },
   {
     sourcePath: 'docs/knowledge/standards/testing-evidence.md',
     updatedAt: '2026-06-16T08:00:00.000Z',
     markdown: `---
-title: Local Test Evidence Standard
+title: 本地测试证据规范
 category: testing_standard
 ownerId: u-yu
 tags: test, evidence, smoke
-summary: Local test evidence needs command, exit code, duration, and redacted output.
+summary: 本地测试证据必须包含命令、退出码、耗时和脱敏输出。
 ---
 
-# Local Test Evidence Standard
+<a id="local-test-evidence-standard"></a>
 
-Local test evidence needs command, exit code, duration, and redacted output.
+# 本地测试证据规范
 
-- Store only bounded stdout and stderr.
-- Redact API keys and tokens before evidence is persisted or synchronized.
-- Failed tests must remain visible to reviewers.
+本地测试证据必须包含命令、退出码、耗时和脱敏输出。
+
+- 仅保存有长度上限的 stdout 和 stderr。
+- 在持久化或同步证据前，先对 API 密钥和令牌脱敏。
+- 测试失败必须对审查者可见。
 `,
   },
   {
     sourcePath: 'docs/knowledge/prompts/opendesign-design-prompts.md',
     updatedAt: '2026-06-23T08:00:00.000Z',
-    markdown: `# OpenDesign Design Prompts
+    markdown: `<a id="opendesign-design-prompts"></a>
 
-This file stores reusable prompts for design work with OpenDesign.
+# OpenDesign 设计提示词
 
-## Usage Rules
+本文件保存可复用的 OpenDesign 设计提示词。通用模板已提供中文版本；下方 2026-06-23 的两条已使用提示词逐字保留，便于追溯当时输入。它们描述当时的开发状态和设计意图，其中的三栏布局、右侧节点详情和发布范围不代表当前产品能力；当前层级参见[节点工作区说明](../../engineering/workbench-conversations.md)。
 
-- Keep prompts reusable and product-agnostic when possible.
-- Record the design goal, target surface, constraints, and expected output.
-- Prefer prompts that produce concrete UI states, not broad visual exploration only.
-- When a prompt works well, add the date and the result it helped produce.
+<a id="usage-rules"></a>
 
-## Prompt Entry Template
+## 使用规则
 
-\`\`\`md
-### YYYY-MM-DD - Short Prompt Name
+- 尽量使用可复用、与具体产品解耦的提示词。
+- 记录设计目标、目标界面、约束和预期输出。
+- 优先生成具体界面状态，避免只做宽泛的视觉探索。
+- 某条提示词取得良好效果后，补充使用日期及生成结果。
 
-**Use case**:
+<a id="prompt-entry-template"></a>
 
-**Prompt**:
+## 提示词条目模板
 
-\`\`\`text
-Paste the exact OpenDesign prompt here.
-\`\`\`
+\`\`\`\`md
+### YYYY-MM-DD - 提示词简称
 
-**Result / notes**:
-\`\`\`
+**使用场景**：
 
-## Core Prompt Templates
-
-### Product Surface Redesign
+**提示词**：
 
 \`\`\`text
-Design a production-grade interface for [product/surface].
-
-Audience:
-- [target users]
-
-Primary job:
-- [what the user needs to accomplish]
-
-Context:
-- [business/product context]
-
-Required UI states:
-- Default state
-- Empty state
-- Loading state
-- Error or blocked state
-- Success/completed state
-
-Constraints:
-- Keep the interface work-focused and suitable for repeated daily use.
-- Prioritize scanability, clear hierarchy, and low-friction workflows.
-- Avoid decorative landing-page composition.
-- Preserve existing product terminology unless a better label is clearly justified.
-
-Output:
-- One complete screen design.
-- Include realistic data.
-- Include key controls and navigation needed for the workflow.
+在这里粘贴实际使用的完整 OpenDesign 提示词。
 \`\`\`
 
-### Existing Screen Refactor
+**结果与说明**：
+\`\`\`\`
+
+<a id="core-prompt-templates"></a>
+
+## 通用提示词模板
+
+<a id="product-surface-redesign"></a>
+
+### 产品界面重新设计
 
 \`\`\`text
-Refactor this existing screen into a clearer and more scalable interface.
+为[产品/界面]设计一个达到生产质量的界面。
 
-Do not change:
-- Core workflow semantics
-- Domain terminology
-- Required actions
+受众：
+- [目标用户]
 
-Improve:
-- Information hierarchy
-- Navigation clarity
-- Density and scanability
-- Empty/loading/error states
-- Repeated-use ergonomics
+主要任务：
+- [用户需要完成的事情]
 
-Keep the result suitable for an operational desktop/web app, not a marketing page.
+背景：
+- [业务/产品背景]
+
+必须包含的界面状态：
+- 默认状态
+- 空状态
+- 加载状态
+- 错误或受阻状态
+- 成功/完成状态
+
+约束：
+- 界面以工作任务为中心，适合日常重复使用。
+- 优先保证便于扫读、层级清晰、流程顺畅。
+- 避免装饰性的营销落地页构图。
+- 保留既有产品术语；只有能明确解释新名称更合理时才调整。
+
+输出：
+- 一张完整的界面设计。
+- 使用贴近实际的数据。
+- 包含该工作流所需的关键控件和导航。
 \`\`\`
 
-### Design Direction Exploration
+<a id="existing-screen-refactor"></a>
+
+### 既有界面重构
 
 \`\`\`text
-Create 3 distinct visual directions for [surface/product].
+将现有界面重构得更清晰，并能够承载后续内容扩展。
 
-All directions must support:
-- [workflow 1]
-- [workflow 2]
-- [workflow 3]
+保持不变：
+- 核心工作流语义
+- 领域术语
+- 必需操作
 
-Each direction should vary:
-- Layout structure
-- Density
-- Navigation model
-- Visual tone
+改善：
+- 信息层级
+- 导航清晰度
+- 信息密度和扫读体验
+- 空状态、加载状态和错误状态
+- 重复操作的便利性
 
-Do not use decorative-only hero sections. Show real product state and realistic data.
+结果应适合日常操作的桌面/网页应用，而非营销页面。
 \`\`\`
 
-## Saved Prompts
+<a id="design-direction-exploration"></a>
 
-Add proven prompts below this line.
+### 设计方向探索
 
-### 2026-06-23 - DevFlow Studio Current Product Summary V1
+\`\`\`text
+为[界面/产品]创建 3 个不同的视觉方向。
 
-**Use case**:
-OpenDesign prompt/source context for the current DevFlow Studio Electron app state before the full-module V2 product interface prompt.
+所有方向都必须支持：
+- [工作流 1]
+- [工作流 2]
+- [工作流 3]
 
-**Prompt**:
+各方向应在以下方面体现差异：
+- 布局结构
+- 信息密度
+- 导航模型
+- 视觉风格
+
+不要使用纯装饰性的首屏大图区。展示真实产品状态和贴近实际的数据。
+\`\`\`
+
+<a id="saved-prompts"></a>
+
+## 已保存的提示词
+
+在此处添加经过实践的提示词，并保留其原始输入。
+
+<a id="2026-06-23---devflow-studio-current-product-summary-v1"></a>
+
+### 2026-06-23 - DevFlow Studio 当时产品状态总结 V1
+
+**使用场景**：
+在编写覆盖全部模块的 V2 界面提示词前，为 OpenDesign 提供当时 DevFlow Studio Electron 应用状态的背景材料。
+
+**提示词原文**：
 
 \`\`\`text
 以下是当前本地 Electron 应用的最新文字总结，按你正在体验的 \`AI DevFlow Studio\` 工作树状态来描述。注意：这是**当前开发态**，不是已正式 release 的稳定版说明。
@@ -636,15 +658,17 @@ Gate 不只是按钮审批。它会综合：
 - [desktop-api.ts](../../../apps/desktop/src/desktop-api.ts)
 \`\`\`
 
-**Result / notes**:
-First version. Captures the current development-state product model, flow, UI structure, agent/runtime boundaries, and known information-architecture issues.
+**结果与说明**：
+第一版，记录当时开发状态下的产品模型、流程、界面结构、Agent/运行时边界及已知的信息架构问题。
 
-### 2026-06-23 - DevFlow Studio Full Product Interface V2
+<a id="2026-06-23---devflow-studio-full-product-interface-v2"></a>
 
-**Use case**:
-OpenDesign prompt for a complete DevFlow Studio Electron desktop product interface covering all primary modules and cross-module delivery-flow linkage.
+### 2026-06-23 - DevFlow Studio 完整产品界面 V2
 
-**Prompt**:
+**使用场景**：
+为 OpenDesign 提供完整的 DevFlow Studio Electron 桌面产品界面提示词，覆盖所有主要模块及跨模块的交付流程联动。
+
+**提示词原文**：
 
 \`\`\`text
 请设计 DevFlow Studio Electron 桌面端完整产品界面，包含入口、工作台、Team Overview、Knowledge、Agents、Skills、MCP、Tests 七个主板块，并让它们围绕同一个 Run delivery flow 联动。
@@ -680,253 +704,222 @@ Tests：
 新建 Run 进入 Workbench；Gate 缺门禁审查结果时从 Inspector 跳到 Agents；执行测试后跳到 Tests；Knowledge Governance 引用可跳到 Knowledge；同步团队影响 Team Overview 和 Gate policy；Coding Agent 产生 diff/test/bootstrap evidence 后回写 Workbench Inspector；PR Draft 和 Acceptance Bundle 都从累积 evidence 生成。整体体验必须是“流程驱动”，不是几个孤立页面。
 \`\`\`
 
-**Result / notes**:
-Second version. Covers all primary modules and the cross-module delivery flow.
+**结果与说明**：
+第二版，覆盖全部主要模块和跨模块交付流程。
 `,
   },
   {
     sourcePath: 'docs/knowledge/checklists/pr-review.md',
     updatedAt: '2026-06-16T08:00:00.000Z',
     markdown: `---
-title: PR Review Readiness Checklist
+title: PR 审查就绪检查清单
 category: review_checklist
 ownerId: u-ling
 tags: pr, review, gate, github-delivery
-summary: PR review should bind the delivery package, exact approved commit, verified Draft, evidence, and Acceptance decision.
+summary: PR 审查应绑定交付包、精确批准的提交、核实后的草稿 PR、证据和业务验收决定。
 ---
 
-# PR Review Readiness Checklist
+<a id="pr-review-readiness-checklist"></a>
 
-Pull requests should link design, Test Evidence, reviewer decisions, and rollout notes.
+# PR 审查就绪检查清单
 
-- Confirm the metadata-only PR Delivery Package matches the reviewed coding source.
-- Confirm the Delivery Intent binds the canonical managed worktree, expected commit, repository
-  binding, Run version, evidence digests, and package digest.
-- Confirm the redacted Delivery Request has a separate signed Web approval for its exact revision.
-- Confirm the verified remote head equals the approved expected commit and the matching pull request
-  remains Draft.
-- Confirm no credential, local path, raw output, patch, or source content entered durable evidence.
-- Acceptance may cite the Draft pull request and completion evidence, but must never merge, close,
-  force-push, delete the branch, or publish a tag.
+拉取请求应关联设计、测试证据、审查决定和上线说明。
+
+- 确认仅含元数据的 PR 交付包与被审查的编码来源一致。
+- 确认交付意图绑定权威托管工作树、预期提交、仓库绑定、Run 版本、证据摘要和交付包摘要。
+- 确认脱敏交付请求的精确修订版已有独立的签名 Web 审批。
+- 确认已核实的远端分支提交等于批准的预期提交，匹配的拉取请求仍处于草稿（Draft）状态。
+- 确认凭据、本地路径、原始输出、补丁和源码内容均未进入持久化证据。
+- 业务验收可以引用草稿 PR 和完成证据，但不会合并、关闭、强制推送、删除分支或发布标签。
 `,
   },
   {
     sourcePath: 'docs/knowledge/checklists/electron-demo-readiness.md',
     updatedAt: '2026-06-20T08:00:00.000Z',
     markdown: `---
-title: Electron Demo Readiness Checklist
+title: Electron 演示就绪检查清单
 category: review_checklist
 ownerId: u-erich
 tags: electron, demo, smoke, local, github-delivery
-summary: Electron demos should prove Desktop schema v26, production boundaries, durable Agent Runtime Context and Local MCP audit recovery, governed GitHub Delivery, and credential containment.
+summary: Electron 演示应证明 Desktop schema v26、生产权限边界、持久化运行时上下文与本地 MCP 审计恢复、受控 GitHub 交付以及凭据隔离。
 ---
 
-# Electron Demo Readiness Checklist
+<a id="electron-demo-readiness-checklist"></a>
 
-Before using the desktop app for a demo or signoff, confirm the real Electron path is active.
+# Electron 演示就绪检查清单
 
-- Start the app with \`corepack pnpm dev:electron\`.
-- Confirm the window title is \`AI DevFlow Studio\` or \`ai-devflow-studio\`.
-- Confirm Electron launched \`apps/desktop\`, not \`default_app.asar\`.
-- Confirm the intended desktop renderer is listening on \`127.0.0.1:5173\`.
-- Clear stale DevFlow listeners on \`5173\` before trusting a demo run.
-- Confirm the local SQLite database reports Desktop schema v26, retains the v20 outbox across the
-  metadata-only Runtime operation upgrade, migrates v21 with zero fabricated retrieval-index rows,
-  and refuses an unknown newer schema.
-- Run the packaged pilot Runtime probe and confirm its accepted action count remains exactly one after cold restart and that it retains one started and one succeeded Local MCP Tool audit bound to the exact installation revision.
-- Open the Workbench and select a Gate node to confirm Inspector state is live.
-- Use \`corepack pnpm test:electron-smoke\` for automated signoff of preload, main process, SQLite, and local execution behavior.
-- For V1.5 GitHub Delivery, prepare the Delivery Intent from the canonical managed worktree and one
-  expected tested commit; never trust renderer-supplied source, repository, branch, or commit data.
-- Confirm a separate signed Web lead/owner approves the exact redacted Delivery Request before
-  Electron main requests a publication credential.
-- Confirm Electron main publishes without force and the canonical Run records the verified remote
-  head and one matching Draft pull request before Acceptance.
-- Verify **Revise** creates a new pre-publication revision and invalidates approval.
-- Verify **Resume** continues the same \`recovery_required\` attempt.
-- Verify **Retry** creates the next attempt only after the exact predecessor is proven terminal.
-- Verify **Stop** parks the exact active attempt without claiming remote rollback.
-- Run \`corepack pnpm test:v15-github-delivery-packaged-smoke\` to exercise the packaged
-  main/preload/renderer path, local fake API, local bare remote, crash/restart reconciliation, and
-  credential non-persistence without an external GitHub write.
-- Confirm the GitHub App private key stays in the API and the short-lived token stays only in
-  Electron main memory; it must not reach the renderer, SQLite, logs, evidence, or error payloads.
-- Confirm GitHub Delivery and Acceptance never merge, force-push, delete a branch, publish a tag, or
-  otherwise mutate the Draft pull request.
-- Treat port conflicts or a default Electron welcome page as environment failures that must be fixed before signoff.
-- This checklist does not authorize paid-provider smoke; packaged GitHub Delivery verification uses
-  no model-provider request.
+在使用桌面应用演示或验收前，先确认实际运行的是 Electron 链路。
+
+- 使用 \`corepack pnpm dev:electron\` 启动应用。
+- 确认窗口标题为 \`AI DevFlow Studio\` 或 \`ai-devflow-studio\`。
+- 确认 Electron 启动了 \`apps/desktop\`，而非 \`default_app.asar\`。
+- 确认目标桌面渲染进程监听 \`127.0.0.1:5173\`。
+- 在信任演示结果前，清理 \`5173\` 上残留的 DevFlow 监听进程。
+- 确认本地 SQLite 数据库报告 Desktop schema v26；运行时操作的纯元数据升级保留 v20 发件箱；迁移 v21 时不伪造检索索引行；拒绝未知的更新数据库结构版本。
+- 运行打包试点版运行时探针，确认冷启动后已接受动作数仍精确为一，并保留各一条 started 和 succeeded 的本地 MCP 工具审计，绑定精确的安装修订版。
+- 打开工作台并选择 Gate 节点，确认节点详情状态来自实时数据。
+- 使用 \`corepack pnpm test:electron-smoke\` 自动验证 preload、主进程、SQLite 和本地执行行为。
+- 对于 V1.5 GitHub 交付，从权威托管工作树和一个预期的已测试提交准备交付意图；绝不能信任渲染进程提交的来源、仓库、分支或提交数据。
+- 确认独立的 Web Lead/Owner 通过签名会话批准精确的脱敏交付请求后，Electron 主进程才请求发布凭据。
+- 确认 Electron 主进程不使用强制推送，且在业务验收前，权威 Run 已记录核实后的远端分支提交和一个匹配的草稿 PR。
+- 验证修订（**Revise**）创建新的发布前修订版，并使原审批失效。
+- 验证继续（**Resume**）延续同一次 \`recovery_required\` 尝试。
+- 验证重试（**Retry**）仅在精确的前次尝试已被证明处于终态后才创建下一次尝试。
+- 验证停止（**Stop**）停放精确的活动尝试，且不声称回滚了远端。
+- 运行 \`corepack pnpm test:v15-github-delivery-packaged-smoke\`，覆盖打包应用的主进程/preload/渲染进程、本地模拟 API、本地裸仓库远端、崩溃/重启对账和凭据不落盘；不向外部 GitHub 写入。
+- 确认 GitHub App 私钥留在 API，短期令牌只存在于 Electron 主进程内存中；不能进入渲染进程、SQLite、日志、证据或错误载荷。
+- 确认 GitHub 交付和业务验收绝不能合并、强制推送、删除分支、发布标签，或以其他方式修改草稿 PR。
+- 端口冲突或默认 Electron 欢迎页属于环境故障，必须在验收前解决。
+- 本清单不授权付费模型冒烟测试；打包 GitHub 交付验证不发送模型提供方请求。
 `,
   },
   {
     sourcePath: 'docs/knowledge/checklists/postgres-smoke-readiness.md',
     updatedAt: '2026-06-20T08:00:00.000Z',
     markdown: `---
-title: Postgres Smoke Readiness Checklist
+title: Postgres 冒烟测试就绪检查清单
 category: review_checklist
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
-summary: Postgres smoke should prove Team schema v21, retained migration, bounded local-development identity and native Coding summary engines, governed GitHub Delivery, Agent Runtime, Memory, and Coordination projections, policy, sync, and redaction.
+summary: Postgres 冒烟测试应证明 Team schema v21、数据保留迁移、有界本地开发身份与原生编码摘要引擎、受控 GitHub 交付、运行时/记忆/协作投影、策略、同步与脱敏。
 ---
 
-# Postgres Smoke Readiness Checklist
+<a id="postgres-smoke-readiness-checklist"></a>
 
-Use this checklist when API, repository, migration, policy, override, sync, GitHub Delivery, or
-manager-summary code changes.
+# Postgres 冒烟测试就绪检查清单
 
-- Set \`DEVFLOW_DATABASE_URL\` explicitly before running Postgres smoke.
-- Prove a disposable fresh database reaches Team schema v21.
-- Prove a populated v11-to-v12 migration retains exact repository binding, Delivery Request,
-  approval, publication, recovery, and audit data.
-- Prove a failed v11-to-v12 migration rolls back transactionally and succeeds once on explicit
-  retry without duplicating rows.
-- Prove a populated v12-to-v13 migration leaves each legacy issued credential at contract version
-  \`0\`, with \`provider_credential_expires_at\` and \`provider_expiry_observed_at\` NULL, and therefore
-  fail closed instead of fabricating provider-authoritative expiry confirmation.
-- Prove v13-to-v14 adds only a nullable bounded Draft PR provider retry not-before.
-- Prove v14-to-v15 adds nullable \`source_publication_id\`, retains every legacy grant-backed
-  publication exactly, and rejects rows that have neither or both publication authorities.
-- Prove v15-to-v16 creates empty \`agent_runtime_summaries\` and
-  \`agent_runtime_projection_audits\` tables, retains all prior rows, and rejects non-redacted,
-  incoherent-version, or invalid terminal Runtime summaries.
-- Prove v16-to-v17 creates empty \`agent_memory_summaries\` and
-  \`agent_memory_projection_audits\` tables without local content or fabricated lifecycle rows.
-- Prove v17-to-v18 adds exact independent \`quality_version\` columns and the composite
-  \`(memory_id, head_version, quality_version)\` audit identity, leaves retained rows at reserved
-  version 0 for first-sync convergence, and does not change local content rules.
-- Prove v18-to-v19 creates empty \`agent_coordination_summaries\` and
-  \`agent_coordination_projection_audits\` tables without fabricating coordination lifecycle rows.
-- Prove v19-to-v20 preserves existing GitHub auth accounts, accepts \`local-development\`, and rejects
-  every unknown auth provider.
-- Prove v20-to-v21 preserves existing Coding summaries, accepts \`native\`, and keeps rejecting every
-  unknown Coding engine.
-- Run \`DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:local-auth-postgres-smoke\` and prove
-  fixed local-owner login, empty Team Overview, Team Project and budget writes, copy-once pairing,
-  and paired Desktop Bearer reads in an isolated schema.
-- Verify seeded team data can be read through the API repository boundary.
-- Verify policy save/read and enforcement evaluation behavior.
-- Verify override rejection for owner, member, and conflicted lead cases.
-- Verify accepted lead override audit behavior.
-- Verify stale policy version rejection.
-- Verify approval-like sync summaries are rejected as a Gate enforcement bypass.
-- Verify an owner can configure and revoke one verified GitHub App repository binding, while a member
-  or mismatched Project cannot.
-- Verify one redacted Delivery Request preserves series/attempt/revision identity and rejects local
-  paths, raw output, patches, source content, and credentials.
-- Verify a signed Web approval by a lead or owner is bound to the exact request revision; paired
-  Desktop Bearer authority cannot approve its own request.
-- Verify credential grant preconditions, expiry, scope, claimant, and binding version. The GitHub App
-  private key and issued token must never become durable Postgres evidence.
-- Verify the API independently confirms the expected commit as remote head before it creates or
-  reconciles one Draft pull request.
-- Verify an approved later attempt may use verified publication adoption only from the immediately
-  prior same-series terminal Draft failure, with zero additional credential issuance or push.
-- Verify revocation blocks a new credential grant and that replay/restart paths do not duplicate the
-  request, publication, Draft pull request, or audit result.
-- Verify overview and Delivery Request responses remain redacted and do not expose local paths, raw
-  logs, prompts, patches, source content, private keys, or tokens.
-- Run \`DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:postgres-smoke\` and retain its exact
-  candidate-bound result.
-- Remember that \`corepack pnpm verify\` intentionally excludes Postgres smoke.
-- This checklist does not authorize paid-provider smoke; Postgres and GitHub Delivery persistence
-  verification requires no model-provider request.
+当 API、仓储层、迁移、策略、例外审批、同步、GitHub 交付或管理摘要代码变化时，使用本清单。
+
+- 运行 Postgres 冒烟测试前，显式设置 \`DEVFLOW_DATABASE_URL\`。
+- 证明可丢弃的新数据库达到 Team schema v21。
+- 证明包含数据的 v11-to-v12 迁移完整保留仓库绑定、交付请求、审批、发布、恢复和审计数据。
+- 证明失败的 v11-to-v12 迁移事务性回滚，显式重试后成功一次且不产生重复行。
+- 证明包含数据的 v12-to-v13 迁移将每个旧版已签发凭据的契约版本保留为 \`0\`，\`provider_credential_expires_at\` 与 \`provider_expiry_observed_at\` 均为 NULL；因此在无法确认时拒绝放行，不伪造由提供方确认的过期时间。
+- 证明 v13-to-v14 仅增加可空且有界的草稿 PR 提供方最早重试时间。
+- 证明 v14-to-v15 增加可空的 \`source_publication_id\`，精确保留所有旧版凭据授权发布记录，并拒绝既无发布权限来源或同时有两个来源的行。
+- 证明 v15-to-v16 创建空的 \`agent_runtime_summaries\` 和 \`agent_runtime_projection_audits\` 表，保留全部已有行，并拒绝未脱敏、版本不一致或终态无效的运行时摘要。
+- 证明 v16-to-v17 创建空的 \`agent_memory_summaries\` 和 \`agent_memory_projection_audits\` 表，不包含本地内容或伪造的生命周期行。
+- 证明 v17-to-v18 增加精确且独立的 \`quality_version\` 列与 \`(memory_id, head_version, quality_version)\` 复合审计标识；保留行使用预留版本 0 以便首次同步收敛，本地内容规则不变。
+- 证明 v18-to-v19 创建空的 \`agent_coordination_summaries\` 和 \`agent_coordination_projection_audits\` 表，不伪造协作生命周期行。
+- 证明 v19-to-v20 保留已有 GitHub 认证账号、接受 \`local-development\` 并拒绝所有未知认证提供方。
+- 证明 v20-to-v21 保留已有编码摘要、接受 \`native\` 并继续拒绝所有未知编码引擎。
+- 运行 \`DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:local-auth-postgres-smoke\`，在隔离的数据库结构中证明固定本地 Owner 登录、空团队概览、团队项目和预算写入、仅可复制一次的配对码，以及已配对桌面 Bearer 读取。
+- 验证预置团队数据可经 API 仓储边界读取。
+- 验证策略保存/读取和执行评估行为。
+- 验证 Owner、Member 和存在利益冲突的 Lead 的例外审批请求被拒绝。
+- 验证 Lead 例外审批接受后的审计行为。
+- 验证过期策略版本被拒绝。
+- 验证类似审批的同步摘要不能绕过 Gate 强制规则。
+- 验证 Owner 可配置和撤销已核实的 GitHub App 仓库绑定，Member 或项目不匹配时不能操作。
+- 验证脱敏交付请求保留系列/尝试/修订标识，且拒绝本地路径、原始输出、补丁、源码内容和凭据。
+- 验证 Lead 或 Owner 的签名 Web 审批绑定精确的请求修订版；已配对桌面 Bearer 不能批准自身请求。
+- 验证凭据授权的前置条件、过期时间、范围、领取者和绑定版本。GitHub App 私钥与签发令牌绝不能成为 Postgres 持久化证据。
+- 验证 API 独立确认预期提交为远端分支提交后，才创建或对账一个草稿 PR。
+- 验证已批准的后续尝试只能从同一系列紧邻的、草稿 PR 失败终态的前次尝试采用已核实发布证据，不增加凭据签发或推送。
+- 验证撤销会阻断新的凭据授权，且重放/重启路径不会重复请求、发布、草稿 PR 或审计结果。
+- 验证概览与交付请求响应保持脱敏，不暴露本地路径、原始日志、提示词、补丁、源码内容、私钥或令牌。
+- 运行 \`DEVFLOW_DATABASE_URL=postgres://... corepack pnpm test:postgres-smoke\`，保留与精确候选版本绑定的结果。
+- \`corepack pnpm verify\` 有意排除 Postgres 冒烟测试。
+- 本清单不授权付费模型冒烟测试；Postgres 与 GitHub 交付持久化验证不需要模型提供方请求。
 `,
   },
   {
     sourcePath: 'docs/knowledge/checklists/opencode-runtime-signoff.md',
     updatedAt: '2026-06-20T08:00:00.000Z',
     markdown: `---
-title: opencode Runtime Signoff Checklist
+title: OpenCode 运行时验收检查清单
 category: review_checklist
 ownerId: u-erich
 tags: opencode, coding-agent, smoke, provider
-summary: Real opencode runtime signoff must be explicit, env-gated, permission-audited, and secret-safe.
+summary: 真实 OpenCode 运行时验收必须显式启动、由环境开关控制、记录权限审计并保护密钥。
 ---
 
-# opencode Runtime Signoff Checklist
+<a id="opencode-runtime-signoff-checklist"></a>
 
-Use this checklist only when intentionally validating the real opencode coding adapter under a
-release contract that explicitly requires it and after separate candidate-bound authorization. This
-checklist does not grant provider-spend authority by itself.
+# OpenCode 运行时验收检查清单
 
-- Keep the deterministic fake engine as the default daily verification path.
-- Confirm local opencode is installed and compatible with the adapter under test.
-- Run \`corepack pnpm --silent opencode:status\` before live smoke to confirm the local binary/version, default fake-engine posture, live-smoke gate, and provider profile state without printing pnpm's working-directory banner.
-- Set \`DEVFLOW_RUN_OPENCODE_SMOKE=1\` intentionally.
-- Set \`DEVFLOW_CODING_ENGINE=opencode-http\`.
-- Set the intended provider ID and model ID explicitly.
-- For V1.4 set \`DEVFLOW_OPENCODE_RELEASE_PROFILE=v1.4\`; the exact provider/model/key triple without
-  this selector must fail before OpenCode starts.
-- Set the provider API key through the configured env var, never inline in logs or documentation.
-- For V1.4 run \`corepack pnpm --silent opencode:release-preflight\` and require its fixed no-network
-  resolved-config success summary before the paid smoke.
-- Run \`corepack pnpm --silent test:opencode-smoke\` so pnpm does not print the local candidate path.
-- Confirm the smoke starts \`opencode serve\`, creates a managed worktree, relays permissions, captures a redacted diff, runs worktree tests, and cleans up temporary smoke state.
-- Confirm permission requests are human-visible and unanswered requests reject by default.
-- Confirm smoke output does not print provider secrets.
-- Keep live opencode smoke out of \`corepack pnpm verify\` and default CI.
-- A future product release runs live provider smoke only when its own release contract explicitly
-  requires it and separate candidate-bound authorization has been recorded.
-- V1.5 does not require or authorize another paid-provider smoke. Preserve the V1.4 paid-smoke record
-  as immutable V1.4 evidence.
+仅在发布契约明确要求验证真实 OpenCode 编码适配器，且已取得与候选版本绑定的单独授权后，才使用本清单。本清单本身不授予模型调用费用授权。
+
+- 日常验证默认使用确定性模拟引擎。
+- 确认本地已安装 OpenCode，且与待测适配器兼容。
+- 在真实冒烟测试前运行 \`corepack pnpm --silent opencode:status\`，确认本地二进制/版本、默认模拟引擎状态、真实测试开关和模型配置状态，同时避免 pnpm 打印工作目录横幅。
+- 明确设置 \`DEVFLOW_RUN_OPENCODE_SMOKE=1\`。
+- 设置 \`DEVFLOW_CODING_ENGINE=opencode-http\`。
+- 显式指定目标 Provider ID 和模型 ID。
+- 对于 V1.4，设置 \`DEVFLOW_OPENCODE_RELEASE_PROFILE=v1.4\`；即使提供了正确的 Provider/模型/密钥三元组，缺少该选择器也必须在 OpenCode 启动前失败。
+- 通过配置的环境变量设置 Provider API 密钥，绝不直接写入日志或文档。
+- 对于 V1.4，运行 \`corepack pnpm --silent opencode:release-preflight\`；付费测试前必须取得其固定、无网络访问的解析配置成功摘要。
+- 运行 \`corepack pnpm --silent test:opencode-smoke\`，避免 pnpm 打印本地候选路径。
+- 确认测试启动 \`opencode serve\`、创建托管工作树、传递权限请求、记录脱敏差异、运行工作树测试，并清理临时测试状态。
+- 确认权限请求对人可见，未回答的请求默认拒绝。
+- 确认测试输出不打印 Provider 密钥。
+- 将真实 OpenCode 冒烟测试排除在 \`corepack pnpm verify\` 和默认 CI 之外。
+- 后续产品版本只有在自身发布契约明确要求，且已记录与候选版本绑定的单独授权时，才运行真实模型冒烟测试。
+- V1.5 不要求也不授权再次进行付费模型冒烟测试。V1.4 付费测试记录继续作为不可变的 V1.4 证据保留。
 `,
   },
   {
     sourcePath: 'docs/knowledge/checklists/v09-demo-readiness.md',
     updatedAt: '2026-06-20T08:00:00.000Z',
     markdown: `---
-title: v0.9 Demo Readiness Checklist
+title: v0.9 演示就绪检查清单
 category: review_checklist
 ownerId: u-erich
 tags: demo, opencode, observability, policy-aware-delivery
-summary: v0.9 demos should prove policy-aware delivery, runtime observability, and honest real-opencode boundaries.
+summary: v0.9 演示应证明策略感知交付、运行时可观测性，并如实说明真实 OpenCode 的能力边界。
 ---
 
-# v0.9 Demo Readiness Checklist
+<a id="v09-demo-readiness-checklist"></a>
 
-Use this checklist before presenting the v0.9 real runtime and observability story.
+# v0.9 演示就绪检查清单
 
-- Start from the v0.8 user guide and the v0.9 demo script.
-- Run \`corepack pnpm release:status\` and confirm only intentional release-pending items remain.
-- Run \`corepack pnpm opencode:status\` and confirm local opencode version, fake-by-default posture, live-smoke gate, and provider profile state.
-- Keep \`corepack pnpm verify\` on the deterministic fake engine.
-- If claiming real opencode behavior, run \`corepack pnpm test:opencode-smoke\` with explicit live env vars first.
-- Demonstrate Gate Enforcement, Remediation Plan, Knowledge-Grounded Gate Review, Retry Coding, Tests, and Team Overview in one coherent flow.
-- Show which evidence came from fake engine versus real opencode.
-- Confirm provider secrets, cwd, raw prompts, raw traces, raw logs, and patches are not shown in team summaries.
-- Do not claim automatic repair, MCP runtime enforcement, RAG, packaging, Windows Electron smoke, or default real-opencode verification.
+展示 v0.9 真实运行时与可观测性能力前，使用本清单。
+
+- 从 v0.8 用户指南和 v0.9 演示脚本开始。
+- 运行 \`corepack pnpm release:status\`，确认仅剩明确保留的待发布事项。
+- 运行 \`corepack pnpm opencode:status\`，确认本地 OpenCode 版本、默认模拟模式、真实测试开关和模型配置状态。
+- \`corepack pnpm verify\` 继续使用确定性模拟引擎。
+- 若要声称支持真实 OpenCode 行为，先显式设置真实调用环境变量并运行 \`corepack pnpm test:opencode-smoke\`。
+- 在连贯流程中演示 Gate 强制规则、处理建议、基于知识的门禁审查、编码重试、测试和团队概览。
+- 说明哪些证据来自模拟引擎，哪些来自真实 OpenCode。
+- 确认团队摘要不展示 Provider 密钥、cwd、原始提示词、原始轨迹、原始日志和补丁。
+- 不得声称该版本具备自动修复、MCP 运行时强制执行、RAG、打包、Windows Electron 冒烟测试或默认真实 OpenCode 验证。
 `,
   },
   {
     sourcePath: 'docs/knowledge/adr/gate-governance.md',
     updatedAt: '2026-06-16T08:00:00.000Z',
     markdown: `---
-title: Gate Governance ADR
+title: Gate 治理架构决策
 category: adr
 ownerId: u-erich
 tags: gate, approval, governance
-summary: Gates are review decisions that must cite evidence and the standards used by reviewers.
+summary: Gate 是审查决策，必须引用证据以及审查者使用的规范。
 ---
 
-# Gate Governance ADR
+<a id="gate-governance-adr"></a>
 
-Gates are review decisions that must cite evidence and the standards used by reviewers.
+# Gate 治理架构决策
+
+Gate 是审查决策，必须引用证据以及审查者使用的规范。
 `,
   },
   {
     sourcePath: 'docs/knowledge/rules/mcp-skill-usage.md',
     updatedAt: '2026-06-16T08:00:00.000Z',
     markdown: `---
-title: Skill and MCP Usage Rules
+title: Skill 与 MCP 使用规则
 category: mcp_rule
 ownerId: u-erich
 tags: skill, mcp, permission
-summary: Tool usage must show command intent, permission scope, and audit evidence.
+summary: 使用工具时必须明确命令目的、权限范围和审计证据。
 ---
 
-# Skill and MCP Usage Rules
+<a id="skill-and-mcp-usage-rules"></a>
 
-Tool usage must show command intent, permission scope, and audit evidence.
+# Skill 与 MCP 使用规则
+
+使用工具时必须明确命令目的、权限范围和审计证据。
 `,
   },
 ]

@@ -1,12 +1,12 @@
 # Apple-inspired Keynote 视觉风格参考
 
-这份文档记录一组 Apple-inspired 的高级科技视觉原则和提示词，用于 DevFlow Studio 相关的设计探索、PPT、OpenDesign 或图像生成场景。它是视觉参考，不是品牌仿制规范；实际使用时应避免 Apple logo、Apple 官方素材、仿冒官网页面或直接复制 Apple 品牌资产。
+这份文档记录一组 受 Apple 发布会启发的高级科技视觉原则和提示词，用于 DevFlow Studio 相关的设计探索、PPT、OpenDesign 或图像生成场景。英文专有名词、官方原文短语和末尾成对的中英文提示词保留用于对照，其余说明以中文呈现。它是视觉参考，不是品牌仿制规范；实际使用时应避免 Apple 标志、Apple 官方素材、仿冒官网页面或直接复制 Apple 品牌资产。
 
 ## 一句话定义
 
 苹果设计风格不是“白底 + 大标题 + 少文字”这么简单，而是：内容优先、层级清晰、视觉克制、细节精密、软硬件气质统一，并用少量高质量材质、动效和留白制造高级感。
 
-Apple 官方设计入口把 Human Interface Guidelines 定义为“为 Apple 平台创造优秀体验的最新指导与最佳实践”，并提供 Figma/Sketch 设计资源、SF Symbols、Icon Composer 等官方工具，这说明它本质上是一套系统化设计方法，而不只是某种视觉皮肤。
+Apple 官方设计入口把 《人机界面指南》（Human Interface Guidelines）定义为“为 Apple 平台创造优秀体验的最新指导与最佳实践”，并提供 Figma/Sketch 设计资源、SF Symbols、Icon Composer 等官方工具，这说明它本质上是一套系统化设计方法，而不只是某种视觉皮肤。
 
 ---
 
@@ -35,7 +35,7 @@ PPT 实用建议：
 
 | 元素 | 建议 |
 |---|---|
-| 封面标题 | 48-76 pt，字重 Semibold/Bold |
+| 封面标题 | 48-76 pt，字重中粗/粗体（Semibold/Bold） |
 | 章节标题 | 40-60 pt |
 | 正文 | 18-24 pt |
 | 注释 | 12-14 pt |
@@ -50,7 +50,7 @@ PPT 实用建议：
 
 ## 3. 留白：不是空，而是制造高级感和注意力
 
-苹果设计的留白通常非常大胆。留白的作用不是“页面没做满”，而是让观众知道哪里最重要。Apple 的 UI Design Dos and Don’ts 也强调清晰、可读、间距、对齐、对比和高分辨率图像等基础原则；比如文本不能重叠，要通过行高或字距提升可读性，并保证文字和背景之间有足够对比。
+苹果设计的留白通常非常大胆。留白的作用不是“页面没做满”，而是让观众知道哪里最重要。Apple 的 界面设计建议（UI Design Dos and Don’ts）也强调清晰、可读、间距、对齐、对比和高分辨率图像等基础原则；比如文本不能重叠，要通过行高或字距提升可读性，并保证文字和背景之间有足够对比。
 
 PPT 中可以这样执行：
 
@@ -92,7 +92,7 @@ PPT 中可以这样执行：
 
 现在谈苹果风格，不能只停留在 iOS 7 之后的纯扁平感。Apple 2025 年推出的 Liquid Glass 是一种跨平台的新材质，官方描述它会反射、折射周围环境，并根据内容或上下文动态变化；它也被用于按钮、导航、图标、小组件等界面元素。
 
-但 PPT 里不要滥用玻璃效果。Apple 的 Materials 指南也提示，clear Liquid Glass 只适合用于出现在视觉丰富背景上的组件。所以 PPT 里可以用“轻微玻璃卡片”，但不要整页都是磨砂玻璃、反光、透明叠层。
+但 PPT 里不要滥用玻璃效果。Apple 的 Materials 指南也提示，透明 Liquid Glass（clear Liquid Glass）只适合用于出现在视觉丰富背景上的组件。所以 PPT 里可以用“轻微玻璃卡片”，但不要整页都是磨砂玻璃、反光、透明叠层。
 
 适合使用 Liquid Glass 感的页面：
 
@@ -229,17 +229,17 @@ PPT 图标建议：
 为了避免 AI 把“苹果风格”做成廉价仿品，建议在每个提示词后面加：
 
 ```text
-避免：Apple logo、苹果官网截图、官方产品图片、仿冒 Apple 官网、复杂渐变、赛博朋克霓虹、卡通 3D、廉价玻璃拟态、过强阴影、密集文字、多彩贴纸、随机图标、低分辨率图片、过度装饰、花哨转场、拥挤排版、粗糙对齐、过多颜色、复杂背景纹理。
+避免：Apple 标志、苹果官网截图、官方产品图片、仿冒 Apple 官网、复杂渐变、赛博朋克霓虹、卡通 3D、廉价玻璃拟态、过强阴影、密集文字、多彩贴纸、随机图标、低分辨率图片、过度装饰、花哨转场、拥挤排版、粗糙对齐、过多颜色、复杂背景纹理。
 ```
 
-商业或公开场景要尤其注意：Apple 的品牌/渠道身份指南要求相关方不要模仿 Apple 的字体风格，且网站应有自己的 look and feel，不应复制 Apple 网站；所以 PPT 更适合写成 Apple-inspired / 苹果启发式高级科技风，不要写“仿苹果官网一模一样”。
+商业或公开场景要尤其注意：Apple 的品牌/渠道身份指南要求相关方不要模仿 Apple 的字体风格，且网站应有自己的视觉与交互风格，不应复制 Apple 网站；所以 PPT 更适合写成 Apple-inspired / 苹果启发式高级科技风，不要写“仿苹果官网一模一样”。
 
 ## 最好用的简短版提示词
 
 英文版：
 
 ```text
-Apple-inspired premium keynote PPT, content-first, ultra-clean, generous whitespace, huge concise typography, modern sans-serif font, neutral black/white/gray palette, subtle blue accent, precise alignment, high-resolution product-grade imagery, soft realistic lighting, minimal line icons, subtle Liquid Glass cards, refined shadows, calm futuristic atmosphere, no clutter, no Apple logo, no official Apple assets.
+Apple-inspired premium keynote PPT, content-first, ultra-clean, generous whitespace, huge concise typography, modern sans-serif font, neutral black/white/gray palette, subtle blue accent, precise alignment, high-resolution product-grade imagery, soft realistic lighting, minimal line icons, subtle Liquid Glass cards, refined shadows, calm futuristic atmosphere, no clutter, no Apple 标志, no official Apple assets.
 ```
 
 中文版：

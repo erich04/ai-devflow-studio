@@ -1,9 +1,11 @@
+import { DetailPopover } from './components/DetailPopover'
 import { WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
 import { buildRunUsageSummary } from './app/run-usage-summary'
 import {
   BookOpen,
   Bot,
   ClipboardCheck,
+  ChevronDown,
   CircleHelp,
   Settings2,
   Network,
@@ -1182,13 +1184,31 @@ export function App() {
           </div>
         </header>
 
-        <section className="status-strip" aria-live="polite">
-          <span className="stat">Active Runs <strong>{scopedRuns.length}</strong></span>
-          <span className="stat">Run Sources <strong>{localRunCount} local · {remoteRunCount} remote</strong></span>
-          <span className="stat">Pending Gates <strong>{pendingGateCount}</strong></span>
-          <span className="stat" data-testid="run-token-usage">Run Tokens <strong>{runUsage.tokenLabel}</strong>费用 <strong>{runUsage.costLabel}</strong></span>
-          <span className="stat">Tests Today <strong>{testsTodayCount}</strong></span>
-          <span className="stat">同步状态 <strong>local + {policySource}</strong></span>
+        <section className="status-strip grouped-status" aria-label="全局状态分组">
+          <DetailPopover className="global-status-trigger" title="当前 Run" label={<><strong>当前 Run</strong><span>{selectedRun ? `${runUsage.tokenLabel} tokens · ${runUsage.costLabel}` : '未选择'}</span><ChevronDown size={14} /></>}>
+            <p>{selectedRun?.title ?? '尚未选择 Run'}</p>
+            <div data-testid="run-token-usage"><p>Run Tokens：{runUsage.tokenLabel}</p><p>费用：{runUsage.costLabel}</p></div>
+            <p className="meta">仅当前选中 Run 的已记录用量，不包含独立会话累计用量。</p>
+          </DetailPopover>
+          <DetailPopover className="global-status-trigger" title="项目概览" label={<><strong>项目概览</strong><span>已加载 Run {scopedRuns.length}{pendingGateCount ? ` · 阻塞 Gate ${pendingGateCount}` : ''}</span><ChevronDown size={14} /></>}>
+            <p>{selectedLocalProject?.name ?? selectedTeamProject?.name ?? '当前已加载项目'}</p>
+            <dl className="detail-values"><dt>已加载 Run</dt><dd>{scopedRuns.length}</dd><dt>来源</dt><dd>{localRunCount} 本地 · {remoteRunCount} 远端</dd><dt>阻塞 Gate</dt><dd>{pendingGateCount}</dd><dt>今日测试证据（UTC）</dt><dd>{testsTodayCount}</dd></dl>
+            <p className="meta">数量属于当前项目的已加载数据；阻塞 Gate 仅统计 blocked 状态，不等于全部待审批节点。</p>
+          </DetailPopover>
+          <DetailPopover className="global-status-trigger" title="策略与预算" label={<><strong>策略与预算</strong><span className={policyTone}>{gateEnforcement.loadError ? '策略读取失败' : gateEnforcement.isLoading ? '策略加载中' : gateEnforcement.policySnapshot ? '策略已加载' : '策略未加载'}{gateEnforcement.decision && !['pass','overridden'].includes(policyStatus) ? ` · ${policyStatus}` : ''}</span><span className={budgetTone}>{projectRuntimeBudget.status === 'loading' ? '预算加载中' : projectRuntimeBudget.status === 'unpaired' ? '预算未配对' : projectRuntimeBudget.status === 'unavailable' ? '预算读取失败' : !projectRuntimeBudget.policy ? '预算未配置' : !projectRuntimeBudget.policy.enabled ? '预算已禁用' : budgetStatus}</span><ChevronDown size={14} /></>}>
+            <h3>流程策略</h3><p>Policy Snapshot：{policyVersion ? `v${policyVersion}` : '尚未加载'} · 来源 {policySource}</p>
+            <p>加载状态：{gateEnforcement.loadError ? '读取失败' : gateEnforcement.isLoading ? '正在读取' : gateEnforcement.policySnapshot ? '已加载' : '不可用'}</p>
+            {gateEnforcement.loadError && <p role="status">{gateEnforcement.loadError}<button className="text-button" onClick={() => void gateEnforcement.refresh().catch(() => {})}>重试读取策略</button></p>}
+            <h3>所查看节点的评估</h3><p>{selectedNode?.title ?? '未选择节点'} · Run v{selectedRun?.version ?? '—'}：{gateEnforcement.decision?.status ?? '未评估'}</p>
+            <p className="meta">评估反映当前已读取的策略与证据，不代表人工审批已完成。</p>
+            <div data-testid="runtime-budget-status"><h3>项目预算规则</h3><p>{projectRuntimeBudget.label}</p><h3>相关预算评估</h3><p className={budgetTone} title={effectiveBudgetDecision?.reason}>{budgetStatus}</p>
+              <p className="meta">{currentModelBudget ? `项目最近模型调用 · Provider ${currentModelBudget.providerId}；事件未提供节点和时间，不能作为当前调用的实时许可。` : latestCodingRun?.budgetDecision ? `当前 Run 的 Coding Run ${latestCodingRun.id} · ${latestCodingRun.startedAt}` : '尚无可用评估记录。'}</p>
+              {budgetRecoveryCopy ? <p role="status">{budgetRecoveryCopy}</p> : null}
+            </div>
+            <button className="ghost-button" onClick={() => setActiveView('agents')}>打开项目模型与预算设置</button>
+          </DetailPopover>
+          <DetailPopover className="global-status-trigger" title="同步" label={<><strong>同步</strong><span>{scopedRemoteSyncOperations.some((item) => item.status === 'terminal') ? '同步失败' : scopedRemoteSyncOperations.length ? `${scopedRemoteSyncOperations.length} 项待完成` : hasSelectedLocalProjectBinding ? '暂无待同步任务' : '未绑定团队项目'}</span><ChevronDown size={14} /></>}>
+            <p>当前项目同步队列；策略缓存来源不表示网络连接或同步成功。</p>
           {scopedRemoteSyncOperations.length > 0 ? (
             <div className="stat remote-sync-operations" data-testid="remote-sync-operations">
               <span>远端同步</span>
@@ -1219,13 +1239,8 @@ export function App() {
               ))}
             </div>
           ) : null}
-          <span className="stat">Policy Snapshot <strong>{policyVersion ? `v${policyVersion}` : 'not loaded'}</strong></span>
-          <span className="stat">策略状态 <strong className={`pill ${policyTone}`}>{policyStatus}</strong></span>
-          <span className="stat" data-testid="runtime-budget-status">
-            预算策略 <strong className={`pill ${projectRuntimeBudget.status === 'unavailable' ? 'bad' : projectRuntimeBudget.policy?.enabled ? 'good' : 'soft'}`}>{projectRuntimeBudget.label}</strong>
-            预算评估 <strong title={effectiveBudgetDecision?.reason} className={`pill ${budgetTone}`}>{budgetStatus}</strong>
-            {budgetRecoveryCopy ? <em>{budgetRecoveryCopy}</em> : null}
-          </span>
+            {scopedRemoteSyncOperations.length === 0 ? <p>暂无待处理同步任务。</p> : null}
+          </DetailPopover>
         </section>
 
       <aside className="sidebar rail" aria-label="Primary navigation">
@@ -1244,6 +1259,7 @@ export function App() {
 
       <main className="workspace main-shell">
         <CredentialAccessStatus api={desktopApi} detailed={false} />
+        <div className="main-shell-content">
         <section className="diagnostics-page" hidden={activeView !== 'diagnostics'} aria-label="本地诊断">
           <h2>本地诊断</h2>
           <p>用于排查当前应用的数据存储；数据环境名称不是项目或团队绑定。</p>
@@ -1289,6 +1305,20 @@ export function App() {
 
         {activeView === 'workbench' && (
           <section className="workbench-layout review-workbench">
+                <WorkbenchWorkspace splitDetails modelReadinessError={modelReadinessError} api={desktopApi}
+                  projectId={selectedLocalProject?.id}
+                  projectName={selectedLocalProject?.name}
+                  runs={scopedRuns}
+                  providerId={selectedAgentProviderId}
+                  providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
+                  request={workbenchOpenRequest}
+                  onConfigure={() => setActiveView('agents')}
+                  onNavigate={(action) => {
+                    selectRunNode(action.runId, action.nodeId)
+                    setSupportContext({ runId: action.runId, nodeId: action.nodeId, inspectorTab: action.section,
+                      sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab', label: action.section, createdAt: new Date().toISOString() })
+                  }}>
+
             <details className="workbench-project-menu">
               <summary>{selectedLocalProject?.name ?? '本地项目'} / {selectedRun?.title ?? '选择项目与 Run'}</summary>
             <div className="run-list">
@@ -1422,19 +1452,6 @@ export function App() {
                 />
 
 
-                <WorkbenchWorkspace splitDetails modelReadinessError={modelReadinessError} api={desktopApi}
-                  projectId={selectedLocalProject?.id}
-                  projectName={selectedLocalProject?.name}
-                  runs={scopedRuns}
-                  providerId={selectedAgentProviderId}
-                  providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
-                  request={workbenchOpenRequest}
-                  onConfigure={() => setActiveView('agents')}
-                  onNavigate={(action) => {
-                    selectRunNode(action.runId, action.nodeId)
-                    setSupportContext({ runId: action.runId, nodeId: action.nodeId, inspectorTab: action.section,
-                      sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab', label: action.section, createdAt: new Date().toISOString() })
-                  }}>
                 <Inspector
                   modelReadinessError={modelReadinessError}
                   selectedRun={selectedRun}
@@ -1464,7 +1481,8 @@ export function App() {
                   canSaveOverride={gateEnforcement.canSaveOverride}
                   onApprove={approveSelectedGate}
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
-                  onRequestClarificationChanges={requestSelectedClarificationChanges}
+                  onDiscussReview={(prompt) => setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'discussion', prompt }))}
+                  {...(desktopApi?.requestClarificationChanges ? { onRequestClarificationChanges: requestSelectedClarificationChanges } : {})}
                   stageProviders={agentProviders}
                   stageProviderId={stageChoice.providerId}
                   onStageProviderChange={setStageProviderId}
@@ -1519,7 +1537,6 @@ export function App() {
                   isStartingCodingAgent={isStartingCodingAgent}
                   pendingInspectorAction={pendingInspectorAction}
                 />
-                </WorkbenchWorkspace>
               </>
             ) : (
               <>
@@ -1535,19 +1552,6 @@ export function App() {
                     当前本地仓库没有已保存的 Run。创建 Run 或拉取团队数据后，这里才会展示真实工作流。
                   </p>
                 </section>
-                <WorkbenchWorkspace splitDetails modelReadinessError={modelReadinessError} api={desktopApi}
-                  projectId={selectedLocalProject?.id}
-                  projectName={selectedLocalProject?.name}
-                  runs={scopedRuns}
-                  providerId={selectedAgentProviderId}
-                  providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
-                  request={workbenchOpenRequest}
-                  onConfigure={() => setActiveView('agents')}
-                  onNavigate={(action) => {
-                    selectRunNode(action.runId, action.nodeId)
-                    setSupportContext({ runId: action.runId, nodeId: action.nodeId, inspectorTab: action.section,
-                      sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab', label: action.section, createdAt: new Date().toISOString() })
-                  }}>
                 <aside className="inspector" data-testid="node-inspector-empty">
                   <div className="panel-head panel-head--compact">
                     <span className="panel-title">Inspector</span>
@@ -1555,9 +1559,9 @@ export function App() {
                   </div>
                   <p className="empty-note">选择真实 Run 后显示节点、证据、Gate 和 Review。</p>
                 </aside>
-                </WorkbenchWorkspace>
               </>
             )}
+            </WorkbenchWorkspace>
           </section>
         )}
 
@@ -1716,6 +1720,7 @@ export function App() {
             onReturnToInspector={returnToInspector}
           />
         )}
+        </div>
       </main>
 
       {isNewRunOpen && (

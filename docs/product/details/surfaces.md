@@ -1,79 +1,85 @@
-# Product Surfaces
+<a id="product-surfaces"></a>
 
-## Desktop Workbench
+# 产品界面与各层职责
 
-Primary developer surface.
+<a id="desktop-workbench"></a>
 
-Required screen areas:
+## 桌面工作台
 
-- Navigation across Workbench, Team, Knowledge, Agents, Skills, MCP, and Tests.
-- Project selector and pairing state.
-- New Run intake.
-- Workflow canvas.
-- Selected-node inspector.
-- Local project/test command panel.
-- Gate Enforcement panel.
-- Agent Workbench and runtime timeline.
-- Tests view.
-- Team sync controls.
-- GitHub Delivery controls and status for Prepare, Revise, Resume, Retry, and Stop.
+开发者的主要操作界面。
 
-Desktop owns local execution. Electron main derives the Delivery Intent from the canonical managed
-worktree and holds the short-lived repository-scoped GitHub App installation token only during an
-active publication attempt. The renderer receives status, never credentials. Desktop can show
-private details that should not sync raw to the team, and GitHub Delivery must never merge.
+必要界面区域：
 
-## Web Team Console
+- 工作台、团队、知识、Agent 管理、Skills、MCP 和测试导航。
+- 项目选择与配对状态。
+- 新建 Run 的需求入口。
+- 工作流画布。
+- 所选节点检查器。
+- 本地项目与测试命令面板。
+- Gate 执行策略面板。
+- Agent 工作台和运行时时间线。
+- 测试视图。
+- 团队同步控件。
+- GitHub 交付的准备、修订（Revise）、继续（Resume）、重试（Retry）、停止（Stop）控件及状态。
 
-Team visibility surface.
+桌面端拥有本地执行权。Electron 主进程从权威托管工作树派生交付意图，只在活动发布尝试期间持有限定仓库的短期 GitHub App 安装令牌。渲染进程只能收到状态，绝不接收凭据。桌面端可以展示不得原样同步给团队的私有详情。GitHub 交付不会合并。
 
-Required screen areas:
+<a id="web-team-console"></a>
 
-- Delivery health summary.
-- Evidence Chain for the active or latest Run.
-- Human Gate summary.
-- Active Agents rollup.
-- Test Evidence rollup.
-- Runtime Budget summary.
-- Policy / Warnings summary.
-- Desktop pairing entry point.
-- GitHub App repository binding and revocation controls for an owner.
-- Delivery Request review and exact-revision approval for a lead or owner.
-- Draft pull-request completion and Acceptance evidence.
-- Link to legacy shell while the product shell is being refined.
+## Web 团队控制台
 
-Web should emphasize redacted delivery health, not raw local execution.
+团队了解项目状态的界面。
 
-## API Backend
+必要界面区域：
 
-Team state and policy source of truth.
+- 交付健康度摘要。
+- 活动或最新 Run 的证据链。
+- 人工 Gate 摘要。
+- 活动 Agent 汇总。
+- 测试证据汇总。
+- 运行时预算摘要。
+- 策略与警告摘要。
+- 桌面配对入口。
+- 供 Owner 使用的 GitHub App 仓库绑定与撤销控件。
+- 供 Lead/Owner 使用的交付请求审查与精确修订审批。
+- 草稿 PR 完成状态与业务验收证据。
+- 在产品外壳完善期间，保留通往旧外壳的链接。
 
-Required responsibilities:
+Web 重点展示脱敏后的交付健康度，不展示本地原始执行详情。这里描述的旧外壳链接属于对应版本的过渡安排；不据此要求新界面恢复旧入口。
 
-- Authenticated session and project membership.
-- Team overview.
-- Project creation and membership-aware project access.
-- Desktop pairing.
-- Redacted sync ingestion.
-- Policy and budget persistence.
-- Knowledge-Grounded Gate Review execution against the current Gate and stage artifacts, using retrieved Knowledge as grounding.
-- GitHub App private-key authority, repository binding/revocation, and narrow credential-grant
-  metadata.
-- Redacted Delivery Request persistence, signed Web approval, remote-head verification, and Draft
-  pull-request creation or reconciliation.
+<a id="api-backend"></a>
 
-## Shared Domain Core
+## API 后端
 
-Cross-runtime product logic.
+团队状态和策略的权威来源。
 
-Required responsibilities:
+必要职责：
 
-- Domain types.
-- Workflow creation and advancement.
-- Artifact creation helpers.
-- Gate policy evaluation.
-- Knowledge governance.
-- Budget guard logic.
-- Redaction-safe contracts.
-- Delivery series/attempt/revision validation, action transitions, and GitHub-enabled Acceptance
-  evidence requirements.
+- 认证会话和项目成员身份。
+- 团队概览。
+- 项目创建与按成员身份控制的项目访问。
+- 桌面配对。
+- 接收脱敏同步。
+- 策略和预算持久化。
+- 使用检索到的知识为依据，执行针对当前 Gate 和阶段产物的门禁审查。
+- GitHub App 私钥权限、仓库绑定/撤销，以及限定范围的凭据授权元数据。
+- 脱敏交付请求持久化、签名 Web 审批、远端提交核验、草稿 PR 创建或核对。
+
+<a id="shared-domain-core"></a>
+
+## 共享领域核心
+
+跨运行时复用的产品逻辑。
+
+必要职责：
+
+- 领域类型。
+- 工作流创建与推进。
+- 产物创建辅助函数。
+- Gate 策略评估。
+- 知识治理。
+- 预算保护逻辑。
+- 满足脱敏要求的契约。
+- 交付系列/尝试/修订校验、动作转换，以及启用 GitHub 的业务验收证据要求。
+
+GitHub 交付（GitHub Delivery）的草稿 PR（Draft）完成证据与业务验收（Acceptance）决定分别保存。

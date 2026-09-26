@@ -1,105 +1,83 @@
-# ADR 0014: Bounded Agent Runtime And Observable Trajectory
+<a id="adr-0014-bounded-agent-runtime-and-observable-trajectory"></a>
 
-Status: Accepted
+# ADR 0014：有界 Agent 运行时与可观察轨迹
 
-Date: 2026-08-12
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-08-12
 
-ADR 0008 introduced a shared Knowledge Review Agent Core, provider abstraction, durable review
-artifact, and redacted trace. That operation is intentionally one bounded provider call. V2.0 needs
-work whose next action depends on observations, Tool or MCP results, executor events, and evaluation.
-Calling every persisted model invocation an Agent Runtime would hide the difference between a
-single-call operation and an iterative system that can act, fail, resume, or exhaust a bound.
+<a id="context"></a>
 
-The runtime must fit the authority model proven by 1.x. Repository execution and complete local
-evidence stay in Electron main and SQLite. Team identity, policy, collaboration intent, and redacted
-projections stay in API/Postgres. A model may propose an action, but it cannot create authority.
+## 背景
 
-## Decision
+ADR 0008 引入共享知识审查 Agent 核心、提供方抽象、持久审查产物及脱敏轨迹，刻意将操作限定为一次有界提供方调用。V2.0 需要下一步依赖观察、工具或 MCP 结果、执行器事件及评估的工作。若把每次持久化模型调用都称为 Agent 运行时，会掩盖单次调用与能够执行、失败、恢复或耗尽限制的迭代系统之间的区别。
 
-DevFlow will add one bounded first-party Agent Runtime. The Deterministic Workflow remains the outer authority.
-An Agent Runtime is not a Workflow: it cannot advance a Node, approve a Gate, publish a
-branch, merge a pull request, widen a capability, or replace accepted Evidence.
+运行时必须符合 1.x 已验证的权限模型：仓库执行和完整本地证据留在 Electron 主进程与 SQLite；团队身份、策略、协作意图及脱敏投影留在 API/Postgres。模型可以提出操作，但不能创造权限。
 
-The runtime executes an explicit loop:
+<a id="decision"></a>
 
-1. observe the versioned Context and prior accepted results;
-2. decide on one schema-valid action from the currently granted capability set;
-3. execute that action through the Tool or Coding Executor boundary;
-4. validate and persist its bounded result;
-5. evaluate progress against the scenario and policy contract;
-6. atomically persist a checkpoint before another action; and
-7. stop with one explicit terminal reason.
+## 决策
 
-### Bounds And Stop Semantics
+DevFlow 增加一个有界的自有 Agent 运行时。确定性工作流仍是外层权威。Agent 运行时不是工作流：不能推进节点、批准门禁、发布分支、合并拉取请求、扩大能力或替换已接受证据。
 
-Every run receives immutable maximum step, wall-clock deadline, cost/token budget, Tool-call count,
-per-result size, and retry bounds. A lower authoritative policy limit wins. There is no unbounded
-background continuation and no automatic widening when a limit is reached.
+运行时执行显式循环：
 
-The stable stop reasons are `success`, `failure`, `cancelled`, `timeout`, `step_limit`,
-`budget_exhausted`, and `policy_denied`. A provider, Tool, MCP process, or Coding Executor failure is
-data for the runtime only while another action remains inside all bounds; otherwise the run stops.
-`success` still produces Evidence for the deterministic Workflow to assess and does not advance a
-Gate by itself.
+1. 观察带版本的上下文及先前接受的结果；
+2. 从当前已授权能力集合中决定一个符合模式的操作；
+3. 通过工具或代码执行器边界执行该操作；
+4. 校验并持久化有界结果；
+5. 根据场景与策略契约评估进展；
+6. 在下一操作前原子持久化检查点（checkpoint）；
+7. 以一个明确终止原因停止。
 
-### Observable Trajectory
+<a id="bounds-and-stop-semantics"></a>
 
-An Agent Trajectory is an ordered sequence of allowlisted events: Context attachment, observation,
-action request, permission decision, Tool/Executor result, evaluation, checkpoint, and terminal
-outcome. Each event has a monotonic sequence number, runtime/checkpoint version, timestamp, safe
-type-specific metadata, and content digests where full local data must remain private.
+### 限制与停止语义
 
-The trajectory records externally observable choices and fixed, bounded decision summaries. It does not persist hidden reasoning,
-chain-of-thought, private model scratchpads, raw prompts, source text,
-patch bodies, stdout/stderr, credentials, or absolute paths in Team-visible state. Provider-specific
-internal traces are not reconstructed or claimed.
+每次运行接收不可变的最大步数、实际时间截止期限、费用/token 预算、工具调用次数、单结果大小及重试限制。权威策略更低的上限优先，不允许无限后台继续，也不在达到上限后自动扩权。
 
-### Checkpoint, Resume, And Concurrency
+稳定终止原因是 `success`、`failure`、`cancelled`、`timeout`、`step_limit`、`budget_exhausted` 和 `policy_denied`。提供方、工具、MCP 进程或代码执行器的失败，只有在所有限制内仍可采取另一个操作时才作为运行时输入；否则运行停止。`success` 仍只是生成供确定性工作流评估的证据，不会自行推进门禁。
 
-Electron main commits the trajectory event, accepted result reference, counters, and Agent
-Checkpoint in one local transaction. A checkpoint binds runtime contract version, Run/Node version,
-Local Project, Context digest, capability-set digest, budgets consumed/remaining, next sequence, and
-the last accepted observation/result digests.
+<a id="observable-trajectory"></a>
 
-Resume uses optimistic concurrency against the exact checkpoint version. It revalidates current
-Workflow/Node authority, policy, capability grants, deadline, budget, Local Project binding, and
-executor availability before any new action. A stale, terminal, mismatched, expired, or superseded
-checkpoint fails closed. Resume never rewinds accepted actions and never replays a non-idempotent
-result as a new action.
+### 可观察轨迹
 
-Only one active continuation may own a checkpoint version. Cancellation is monotonic, propagates to
-an active Tool/MCP/Executor, and prevents a later continuation from committing another action.
+Agent 轨迹由有序的允许列表事件组成：上下文附加、观察、操作请求、权限决策、工具/执行器结果、评估、检查点和终态结果。每个事件有单调序号、运行时/检查点版本、时间戳、安全的分类元数据，以及在完整本地数据必须保持私有时使用的内容摘要。
 
-### Runtime Placement And Verification
+轨迹记录外部可观察选择和固定、有界决策摘要。在 Team 可见状态中不持久化隐藏推理、思维链、模型私有草稿、原始提示、源码文本、补丁正文、stdout/stderr、凭据或绝对路径，也不重建或声称了解提供方特有的内部轨迹。
 
-The first execution boundary is Electron main because it already owns local credentials, managed
-workspaces, controlled commands, SQLite, and complete local Evidence. API/Postgres may store only a
-strict redacted Agent Runtime summary and team audit metadata; it does not resume local execution.
+<a id="checkpoint-resume-and-concurrency"></a>
 
-Default verification uses a deterministic, no-cost fake runtime, fake model decisions, native fake
-Tools, and fixture MCP/Coding Executors. Explicit real-provider scenarios remain opt-in, bounded,
-and separately evidenced.
+### 检查点、恢复与并发
 
-## Consequences
+Electron 主进程在一个本地事务中提交轨迹事件、已接受结果引用、计数器及 Agent 检查点。检查点绑定运行时契约版本、Run/节点版本、本地项目、上下文摘要、能力集合摘要、已用/剩余预算、下一序号，以及最近已接受观察/结果摘要。
 
-- ADR 0008 remains the contract for single-call Knowledge Review. This ADR classifies that path as a
-  Single-Call LLM Operation rather than retroactively pretending it is iterative.
-- Runtime state, trajectory, and checkpoints need versioned shared contracts and durable Desktop
-  storage before a native coding loop is exposed.
-- UI can explain the current observation, action, permission, evaluation, bound consumption,
-  checkpoint, and stop reason without exposing hidden reasoning.
-- Deterministic scenarios can compare quality, cost, latency, intervention, and recovery across
-  executors using the same outer runtime contract.
+恢复对确切检查点版本使用乐观并发。在任何新操作前重新校验当前工作流/节点权限、策略、能力授权、截止期限、预算、本地项目绑定及执行器可用性。过时、终态、不匹配、过期或被替代的检查点均拒绝恢复。恢复绝不回退已接受操作，也不把非幂等结果作为新操作重放。
 
-## Rejected Alternatives
+一个检查点版本只能有一个活动继续过程。取消状态单调，传播到活动工具/MCP/执行器，并阻止后续继续过程提交新操作。
 
-- **Let a model own Workflow transitions.** Rejected because it would bypass deterministic Evidence
-  and human Gate authority.
-- **Treat provider chat history as the checkpoint.** Rejected because it is provider-specific,
-  difficult to validate, and likely to persist private reasoning or source content.
-- **Resume from the latest timestamp.** Rejected because timestamps do not provide ownership or
-  optimistic concurrency.
-- **Keep running until the model says it is done.** Rejected because model intent is not a resource,
-  safety, cost, or termination bound.
+<a id="runtime-placement-and-verification"></a>
+
+### 运行位置与验证
+
+首个执行边界为 Electron 主进程，因为它已拥有本地凭据、受管工作空间、受控命令、SQLite 和完整本地证据。API/Postgres 只可保存严格脱敏的 Agent 运行时摘要及团队审计元数据，不恢复本地执行。
+
+默认验证使用确定性、无费用的假运行时、假模型决策、原生假工具以及 MCP/代码执行器测试夹具。真实提供方场景仍需显式选择、有界执行并独立提供证据。
+
+<a id="consequences"></a>
+
+## 影响
+
+- ADR 0008 仍是单次知识审查契约。本 ADR 将它归类为单次 LLM 操作，不追溯性地宣称它属于迭代系统。
+- 在开放原生编码循环前，运行时状态、轨迹和检查点需要带版本共享契约及持久桌面存储。
+- UI 可以说明当前观察、操作、权限、评估、限制消耗、检查点及终止原因，无需暴露隐藏推理。
+- 确定性场景可以用相同外层运行时契约比较执行器的质量、费用、延迟、人工干预及恢复。
+
+<a id="rejected-alternatives"></a>
+
+## 未采用的替代方案
+
+- **让模型拥有工作流状态转换权限。** 会绕过确定性证据及人工门禁权限。
+- **将提供方聊天历史作为检查点。** 它依赖提供方、难校验，并可能持久化私有推理或源码。
+- **从最新时间戳恢复。** 时间戳不提供归属或乐观并发控制。
+- **一直运行到模型声明完成。** 模型意图不是资源、安全、费用或终止边界。

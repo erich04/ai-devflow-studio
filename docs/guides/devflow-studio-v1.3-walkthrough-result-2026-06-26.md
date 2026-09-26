@@ -1,113 +1,133 @@
-# DevFlow Studio v1.3 Walkthrough Result - 2026-06-26
+<a id="devflow-studio-v13-walkthrough-result---2026-06-26"></a>
 
-本报告按 `docs/guides/devflow-studio-v1.3-walkthrough.md` 和
-`docs/guides/devflow-studio-full-feature-walkthrough.md` 做真实用户路径验收。
+# DevFlow Studio v1.3 演练结果 — 2026-06-26
 
-本轮重点使用 Computer Use 操作 Electron / Web UI；终端只用于健康检查、API 证据和自动交叉检查。
-默认路径未调用真实付费 provider，Knowledge Review 与 Coding Agent 均使用 fake/no-cost 路径。
+本报告按 `docs/guides/devflow-studio-v1.3-walkthrough.md` 和 `docs/guides/devflow-studio-full-feature-walkthrough.md` 验证真实用户路径。
 
-## Environment
+本轮主要使用电脑控制操作 Electron / Web 界面；终端仅用于健康检查、API 证据和自动交叉检查。默认路径未调用真实付费服务商，知识审查与编码 Agent 均使用模拟、无模型费用的路径。
 
-| Item | Result | Evidence |
+这是历史失败记录；下列问题和修复建议保留当时状态，不能作为当前版本仍存在或已经解决的独立证据。原日志与界面逐字引文保留原文供核对。
+
+<a id="environment"></a>
+
+## 环境
+
+| 项目 | 结果 | 证据 |
 | --- | --- | --- |
-| Branch | pass | `codex/airbnb-iii-pixel-port` |
-| Existing working tree | note | 本轮开始前已有 `apps/desktop/src/App.tsx`、`apps/desktop/src/useGateEnforcement.ts`、`apps/desktop/src/App.test.tsx` 未提交改动 |
-| Docker services | pass | `postgres` healthy, `api` on `4310`, `web` on `4311` |
-| API health | pass | `GET http://127.0.0.1:4310/health` returned `status: ok` |
-| Web console | pass | `http://127.0.0.1:4311/` returned 200 and rendered in Chrome |
-| Desktop | pass | Electron window title `AI DevFlow Studio`, URL `127.0.0.1:5173/` |
-| Navigation | pass | Computer Use read Workbench, Team, Knowledge, Agents, Skills, MCP, Tests |
+| 分支 | 通过 | `codex/airbnb-iii-pixel-port` |
+| 既有工作区 | 说明 | 开始前已有 `apps/desktop/src/App.tsx`、`apps/desktop/src/useGateEnforcement.ts`、`apps/desktop/src/App.test.tsx` 未提交改动 |
+| Docker 服务 | 通过 | `postgres` 健康，`api` 使用 `4310`，`web` 使用 `4311` |
+| API 健康 | 通过 | `GET http://127.0.0.1:4310/health` 返回 `status: ok` |
+| Web 控制台 | 通过 | `http://127.0.0.1:4311/` 返回 200，并在 Chrome 渲染 |
+| 桌面 | 通过 | Electron 窗口标题 `AI DevFlow Studio`，URL 为 `127.0.0.1:5173/` |
+| 导航 | 通过 | 电脑控制读取到工作台、团队、知识、Agents、技能、MCP、测试 |
 
-## Desktop Walkthrough
+<a id="desktop-walkthrough"></a>
 
-| Step | Result | Evidence |
+## 桌面演练
+
+| 步骤 | 结果 | 证据 |
 | --- | --- | --- |
-| Initial desktop state | pass | Electron started in `seed fallback` before local repo selection |
-| Select local repository | pass | Selected `/Users/erich/File/claude/10-showcase/ai-devflow-studio`; UI showed `ai-devflow-studio`, `connected`, `package script`, `corepack pnpm test` |
-| Create QA Run | pass | Created `QA 手动验收 2026-06-26`; run entered local SQLite / local persisted mode |
-| Raw request artifact | pass | Inspector showed raw request matching the walkthrough webhook retry text |
-| Clarification | pass | `生成需求澄清` created clarification artifact; Stage 01 task became `success` |
-| Policy unavailable Gate | pass | Before sync, Demand Confirmation Gate was blocked by unavailable Team policy |
-| Team sync before approval | pass | Sync loaded `remote_cache v1`; policy snapshot appeared; local QA Run remained visible at that moment |
-| Demand Gate approval | pass | Gate approval advanced run to `designing`; old hard-coded `building` behavior was not observed for this Gate |
-| Design artifact | pass | `生成设计方案` created design artifact; design Review card ART/TRC changed from 0 to 1 |
-| Design Gate review | pass | Inspector -> Agents opened correct target `方案评审 Gate`; fake review ran with 18 knowledge refs, trace, cost `$0.00` |
-| Design Gate approval | pass | Gate approval advanced run to `building` and Build task became ready |
-| Coding Agent | pass | Build task launched fake coding engine; permission relay appeared for `devflow-fake-change.txt` |
-| Permission approval | pass | Approved once; managed worktree completed, changed paths 1, fake diff archived, coding trace recorded |
-| Tests page | pass | Inspector -> Tests opened target `Run tests`; command `corepack pnpm test` was safe and saved |
-| Local test execution | pass with issue | Tests completed with exit 0 and duration 6786ms; Evidence local runs increased from 1 to 2 |
-| PR Draft | partial | PR Draft artifact generated with compare URL, changed path, test evidence, policy, budget, agent review; no real GitHub PR was created |
-| Acceptance Bundle | partial | Acceptance bundle artifact generated with raw request, PR draft, changed path, tests, policy, budget, agent review |
-| Final Acceptance | partial | Acceptance Gate approval marked run `completed`, but board/current-node state stayed inconsistent |
+| 初始桌面状态 | 通过 | 选择本地仓库前，Electron 处于 `seed fallback`（种子数据回退） |
+| 选择本地仓库 | 通过 | 选择 `/Users/erich/File/claude/10-showcase/ai-devflow-studio`；界面显示 `ai-devflow-studio`、`connected`、`package script`、`corepack pnpm test` |
+| 创建 QA Run | 通过 | 创建 `QA 手动验收 2026-06-26`，进入本地 SQLite 持久化模式 |
+| 原始请求产物 | 通过 | 节点检查面板显示与演练 webhook 重试文本一致的请求 |
+| 需求澄清 | 通过 | `生成需求澄清` 创建产物；阶段 01 任务变为 `success` |
+| 策略不可用门禁 | 通过 | 同步前，需求确认门禁因团队策略不可用而阻断 |
+| 审批前团队同步 | 通过 | 加载 `remote_cache v1`，策略快照出现；当时本地 QA Run 仍可见 |
+| 需求门禁批准 | 通过 | Run 进入 `designing`；此门禁未出现旧版写死为 `building` 的行为 |
+| 设计产物 | 通过 | `生成设计方案` 创建产物；设计审查卡 ART/TRC 从 0 变为 1 |
+| 设计门禁审查 | 通过 | 检查面板跳转 Agents 后目标为正确的 `方案评审 Gate`；模拟审查含 18 条知识引用、轨迹及 `$0.00` 费用 |
+| 设计门禁批准 | 通过 | Run 进入 `building`，开发任务就绪 |
+| 编码 Agent | 通过 | 开发任务启动模拟引擎，出现 `devflow-fake-change.txt` 的权限转发 |
+| 批准权限 | 通过 | 批准一次后托管工作树运行完成，1 个变更路径，模拟差异归档并记录编码轨迹 |
+| 测试页面 | 通过 | 检查面板跳转测试后目标为 `Run tests`；`corepack pnpm test` 命令安全且已保存 |
+| 本地测试执行 | 通过但有问题 | 退出码 0，耗时 6786ms；本地证据数从 1 增至 2 |
+| PR 草稿 | 部分通过 | 生成草稿产物，包含比较 URL、变更路径、测试证据、策略、预算和 Agent 审查；没有创建真实 GitHub PR |
+| 验收证据包 | 部分通过 | 包含原始请求、PR 草稿、变更路径、测试、策略、预算和 Agent 审查 |
+| 最终验收 | 部分通过 | 批准门禁后 Run 标为 `completed`，但看板和当前节点状态仍不一致 |
 
-## Team / Web / Pairing
+<a id="team--web--pairing"></a>
 
-| Step | Result | Evidence |
+## 团队、Web 与配对
+
+| 步骤 | 结果 | 证据 |
 | --- | --- | --- |
-| Desktop sync after completion | fail | Sync changed status strip to `0 local · 2 remote`; QA Run became `remote`; board collapsed into remote summary nodes |
-| Remote API run presence | pass | `GET /api/runs?organizationId=org-1` included QA Run with status `completed` |
-| Remote run detail | fail | Remote QA Run only had 3 summary nodes; artifacts/events arrays were empty for that run |
-| Desktop after remote merge | fail | Electron showed `Run node not found` while evaluating Gate after sync |
-| Pairing code | pass | API created copy-once pairing code shape |
-| Desktop token exchange | pass | API exchanged pairing code for desktop token shape |
-| Token/code leakage | pass | `GET /api/team/overview` did not include pairing code or desktop token |
-| Web Console via Chrome | partial | Web loaded with Computer Use, but showed seed `为 Payments API 增加 /health 端点`; synced QA Run was not visible in the primary view |
+| 完成后桌面同步 | 失败 | 状态栏变成 `0 local · 2 remote`；QA Run 变为 `remote`，看板退化为远端摘要节点 |
+| 远端 API 中的 Run | 通过 | `GET /api/runs?organizationId=org-1` 包含状态为 `completed` 的 QA Run |
+| 远端 Run 详情 | 失败 | QA Run 只有 3 个摘要节点，产物和事件数组为空 |
+| 远端合并后桌面状态 | 失败 | 同步后的门禁评估显示 `Run node not found` |
+| 配对码 | 通过 | API 创建符合一次性复制格式的配对码 |
+| 桌面令牌交换 | 通过 | API 将配对码换取为预期格式的桌面令牌 |
+| 令牌/配对码泄露 | 通过 | `GET /api/team/overview` 不含配对码或桌面令牌 |
+| Chrome 中的 Web 控制台 | 部分通过 | 电脑控制加载了 Web，但主视图仍显示种子 Run `为 Payments API 增加 /health 端点`，同步的 QA Run 不可见 |
 
-## Boundary / Negative Checks
+<a id="boundary--negative-checks"></a>
 
-| Check | Result | Evidence |
+## 边界与反向检查
+
+| 检查 | 结果 | 证据 |
 | --- | --- | --- |
-| Dangerous command safety | pass by code/test coverage | `validateTestCommandSafety()` blocks `rm -rf`, `sudo`, `curl | sh`, recursive chmod, protected-path redirects, Windows destructive commands |
-| Real paid provider | not tested | No API key entered; fake provider only |
-| Real opencode smoke | not tested | Requires explicit approval and live provider setup |
-| Real GitHub PR | not tested | PR Draft only; no push/PR creation |
-| Real MCP execution | not tested | MCP page/shell boundary only, no real MCP execution validation |
+| 危险命令防护 | 由代码/测试覆盖证明 | `validateTestCommandSafety()` 阻断 `rm -rf`、`sudo`、`curl \| sh`、递归 chmod、受保护路径重定向及 Windows 破坏性命令 |
+| 真实付费服务商 | 未测试 | 没有输入 API 密钥，只使用模拟服务商 |
+| 真实 OpenCode 冒烟 | 未测试 | 需要明确授权和真实服务商配置 |
+| 真实 GitHub PR | 未测试 | 仅 PR 草稿产物，没有推送/创建 PR |
+| 真实 MCP 执行 | 未测试 | 只涉及 MCP 页面与外壳边界，没有真实执行验证 |
 
-## Automated Checks
+<a id="automated-checks"></a>
 
-| Command | Result | Notes |
+## 自动化检查
+
+| 命令 | 结果 | 说明 |
 | --- | --- | --- |
-| `corepack pnpm --filter @ai-devflow/desktop typecheck` | pass | `tsc --noEmit` passed |
-| `corepack pnpm test -- apps/desktop/src/App.test.tsx` | pass | 41 tests passed |
-| `corepack pnpm test:electron-smoke` | blocked | Smoke requires clean ports; current manual environment was using `4310`, `4311`, `5173` |
-| `corepack pnpm test:docker-smoke` | pass | Built isolated compose project; API/Web health, pairing, token exchange, redacted overview leak checks passed |
+| `corepack pnpm --filter @ai-devflow/desktop typecheck` | 通过 | `tsc --noEmit` 通过 |
+| `corepack pnpm test -- apps/desktop/src/App.test.tsx` | 通过 | 41 项测试通过 |
+| `corepack pnpm test:electron-smoke` | 被阻塞 | 冒烟需要可用端口；人工环境占用了 `4310`、`4311`、`5173` |
+| `corepack pnpm test:docker-smoke` | 通过 | 构建隔离 Compose 项目；API/Web 健康、配对、令牌交换与脱敏概览泄露检查通过 |
 
-## Findings
+<a id="findings"></a>
 
-### P1 - Team sync corrupts the local completed run view
+## 发现的问题
 
-After completing the QA Run and clicking `同步团队`, the desktop UI changed from local persisted state to:
+<a id="p1---team-sync-corrupts-the-local-completed-run-view"></a>
 
-- `remote snapshot + local merge`
-- `Active Runs 2`
-- `Run Sources 0 local · 2 remote`
-- QA Run source badge changed to `remote`
+### P1 — 团队同步破坏已完成 Run 的本地视图
 
-The board no longer showed the full local six-stage run. It rendered remote summary nodes instead, and Electron displayed:
+QA Run 完成后点击 `同步团队`，桌面从本地持久化状态变为以下原始界面标识：
+
+- `remote snapshot + local merge`（远端快照加本地合并）
+- `Active Runs 2`（2 个活动 Run）
+- `Run Sources 0 local · 2 remote`（0 本地、2 远端）
+- QA Run 来源标记变为 `remote`（远端）
+
+看板不再显示完整本地六阶段 Run，而渲染远端摘要节点。Electron 原始错误如下，表示门禁评估找不到对应节点：
 
 ```text
 Error invoking remote method 'devflow:enforcement:gate:evaluate':
 Error: Run node not found: run-eaaf83ba-cc08-49aa-9a91-64cb331ee488:run-eaaf83ba-cc08-49aa-9a91-64cb331ee488-test
 ```
 
-This violates the walkthrough requirement that sync must preserve local runs and not hide or destroy local workflow context.
+这违反同步必须保留本地 Run、不得隐藏或破坏本地工作流上下文的要求。
 
-### P1 - Remote summary loses artifacts/events and full workflow structure
+<a id="p1---remote-summary-loses-artifactsevents-and-full-workflow-structure"></a>
 
-The API did contain the QA Run after sync, but `/api/runs?organizationId=org-1` returned only 3 summary nodes for the QA Run and no artifacts/events:
+### P1 — 远端摘要丢失产物、事件和完整工作流结构
 
-- `Knowledge Review Target` for design Gate
-- `Knowledge Review Target` for acceptance
-- `Test Evidence`
-- `artifacts: []`
-- `events: []`
+同步后 API 确实含有 QA Run，但 `/api/runs?organizationId=org-1` 只返回 3 个摘要节点，没有产物与事件：
 
-The local run had full clarify/design/build/test/pr/accept cards, artifacts, review, coding diff, test evidence, PR draft, and acceptance bundle. That detail did not survive the remote summary round trip.
+- 设计门禁的 `Knowledge Review Target`（知识审查目标）。
+- 验收的 `Knowledge Review Target`。
+- `Test Evidence`（测试证据）。
+- `artifacts: []`。
+- `events: []`。
 
-### P1 - Test evidence output leaks full local path
+本地曾有完整的需求/设计/开发/测试/PR/验收卡、产物、审查、编码差异、测试证据、PR 草稿和验收证据包；远端摘要往返后这些细节未能保留。
 
-The Tests page recorded `corepack pnpm test` as passed, but the artifact content exposed the full local cwd and stdout path:
+<a id="p1---test-evidence-output-leaks-full-local-path"></a>
+
+### P1 — 测试证据输出泄露完整本地路径
+
+测试页记录 `corepack pnpm test` 通过，但产物内容暴露了完整工作目录与标准输出路径。以下原始输出保留用于确认历史缺陷：
 
 ```text
 CWD: /Users/erich/File/claude/10-showcase/ai-devflow-studio
@@ -115,50 +135,59 @@ CWD: /Users/erich/File/claude/10-showcase/ai-devflow-studio
 RUN v3.2.6 /Users/erich/File/claude/10-showcase/ai-devflow-studio
 ```
 
-The UI also showed `Redacted no`. This fails the guide's requirement that stdout/stderr summaries be redacted and not expose full local sensitive paths.
+界面还显示 `Redacted no`（未脱敏），不符合输出摘要应脱敏、不得暴露完整本地敏感路径的要求。
 
-### P2 - Run completion leaves board/current-node state inconsistent
+<a id="p2---run-completion-leaves-boardcurrent-node-state-inconsistent"></a>
 
-The run eventually became `completed`, and Acceptance signoff became `success`, but the board state was inconsistent:
+### P2 — Run 完成后看板与当前节点状态不一致
 
-- Summary still said `当前卡点: 测试证据 · Run tests`
-- Build card still showed `ready` after Coding Agent completed
-- PR card still showed `waiting` after PR Draft was generated
-- Final toast said `Acceptance signoff 已通过，Run 进入本地实现阶段`, which is the wrong phase copy for final acceptance
+Run 最终变为 `completed`，验收节点为 `success`，但看板仍有矛盾：
 
-This makes the workflow hard to trust even though the actions produced artifacts.
+- 摘要仍为 `当前卡点: 测试证据 · Run tests`。
+- 编码 Agent 完成后，开发卡仍为 `ready`。
+- PR 草稿生成后，PR 卡仍为 `waiting`。
+- 最终提示为 `Acceptance signoff 已通过，Run 进入本地实现阶段`，最终验收却显示错误阶段。
 
-### P2 - Web Console does not surface the synced QA Run in the primary view
+即使操作产生了产物，这些矛盾仍使工作流难以信任。
 
-Chrome/Computer Use loaded `http://127.0.0.1:4311/`, but the page still focused on the seed run:
+<a id="p2---web-console-does-not-surface-the-synced-qa-run-in-the-primary-view"></a>
+
+### P2 — Web 主视图未呈现同步后的 QA Run
+
+Chrome/电脑控制加载 `http://127.0.0.1:4311/`，但页面仍聚焦以下种子 Run：
 
 ```text
 为 Payments API 增加 /health 端点
 RUN-RUN-HEAL
 ```
 
-The API overview had two runs and included the QA Run, so the issue appears to be Web selection/display behavior rather than API absence.
+API 概览包含两个 Run，其中有 QA Run，因此问题更可能在 Web 选择/展示行为，而非 API 中没有数据。
 
-### P2 - Source labels become contradictory after sync
+<a id="p2---source-labels-become-contradictory-after-sync"></a>
 
-After sync, the left Workbench panel still visually labels `Local Project + Runs local only`, while the status strip says `0 local · 2 remote` and the QA Run badge says `remote`. This creates ambiguity about whether the user is inspecting local SQLite state or remote snapshot state.
+### P2 — 同步后来源标签相互矛盾
 
-## Recommended Fix Order
+工作台左侧仍标记 `Local Project + Runs local only`（本地项目与本地 Run），状态栏却显示 `0 local · 2 remote`，QA Run 标记也为 `remote`。用户无法明确正在查看本地 SQLite 还是远端快照。
 
-1. Fix desktop sync merge so local persisted runs remain local and visible after remote snapshot refresh.
-2. Fix remote summary contract or desktop merge adapter so full local run context is not replaced by lossy remote summary nodes.
-3. Redact test output paths and cwd before storing/displaying Test Evidence.
-4. Align node state transitions after Coding Agent, PR Draft, Acceptance Bundle, and final Gate.
-5. Fix toast phase copy for Gate approvals, especially final Acceptance.
-6. Update Web Console selection/display so the newly synced QA Run is discoverable in the primary run view.
-7. Add regression coverage for the exact completed-run sync path used in this walkthrough.
+<a id="recommended-fix-order"></a>
 
-## Not Tested
+## 建议修复顺序
 
-- Real paid Knowledge Review provider.
-- Real opencode provider smoke.
-- Real GitHub PR creation, push, merge, or publish.
-- Real MCP tool execution.
-- RAG/vector retrieval.
-- Windows full smoke.
+1. 修复桌面同步合并，使远端快照刷新后，本地持久化 Run 仍保持本地来源且可见。
+2. 修复远端摘要契约或桌面合并适配器，避免不完整摘要节点替代本地完整上下文。
+3. 在保存/展示测试证据前，对测试输出路径和工作目录脱敏。
+4. 统一编码 Agent、PR 草稿、验收证据包和最终门禁之后的节点状态迁移。
+5. 修复门禁通过后的阶段提示，尤其是最终验收。
+6. 更新 Web 选择/展示，使新同步的 QA Run 可以在主视图找到。
+7. 为本次已完成 Run 的同步路径增加回归覆盖。
 
+<a id="not-tested"></a>
+
+## 未测试范围
+
+- 真实付费知识审查服务商。
+- 真实 OpenCode 服务商冒烟。
+- 真实 GitHub PR 创建、推送、合并或发布。
+- 真实 MCP 工具执行。
+- RAG/向量检索。
+- Windows 完整冒烟。

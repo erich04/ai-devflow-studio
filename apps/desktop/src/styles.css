@@ -4632,7 +4632,8 @@ code {
 body { min-width: 0; }
 .app-shell > .topbar { grid-area: header; display: flex; flex-wrap: wrap; gap: 8px 12px; padding: 10px 16px; min-width: 0; }
 .app-shell > .status-strip { grid-area: status; min-height: 36px; min-width: 0; }
-.app-shell > .workspace.main-shell { grid-area: content; grid-template-rows: minmax(0, 1fr); min-width: 0; height: auto; }
+.app-shell > .workspace.main-shell { grid-area: content; display: flex; flex-direction: column; min-width: 0; height: auto; gap: 0; }
+.main-shell-content { flex: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .topbar .project-switcher { flex: 1 1 260px; min-width: 220px; max-width: 450px; }
 .topbar .project-label { flex: 0 0 78px; width: 78px; }
 .topbar .project-line { gap: 8px; }
@@ -4664,13 +4665,17 @@ body { min-width: 0; }
 
 /* System authorization remains visible while the OS credential store is waiting. */
 .credential-access-notice {
-  position: fixed; z-index: 300; top: 7rem; right: 1rem; width: min(26rem, calc(100vw - 2rem));
-  display: grid; gap: 0.65rem; padding: 1rem; border-radius: 12px;
+  flex: none; min-width: 0; max-height: 25dvh; overflow: auto; margin: 8px 20px 0;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px 12px;
+  padding: 8px 12px; border-radius: 8px; font-size: 12px;
   border: 1px solid var(--accent); background: var(--surface); color: var(--text);
-  box-shadow: 0 8px 32px #0003;
 }
+.credential-access-message { min-width: 0; overflow-wrap: anywhere; }
 .credential-access-notice p { margin: 0; line-height: 1.6; }
-.credential-access-notice small { overflow-wrap: anywhere; }
+.credential-access-notice small { display: block; overflow-wrap: anywhere; }
+.credential-access-details { grid-column: 1 / -1; color: var(--text-muted); }
+.credential-access-details summary { cursor: pointer; width: fit-content; }
+.credential-access-details[open] { display: grid; gap: 4px; }
 .credential-access-history ul { padding: 0; list-style: none; }
 .credential-access-history li { display: grid; gap: 0.3rem; padding: 0.6rem 0; border-bottom: 1px solid var(--border); }
 .credential-access-history code { overflow-wrap: anywhere; }

@@ -1,4 +1,6 @@
-# 工作台 DeepSeek thinking 验证记录
+<a id="工作台-deepseek-thinking-验证记录"></a>
+
+# 工作台 DeepSeek 思考模式（thinking）验证记录
 
 验证日期：2026-09-17（America/Chicago）。基线：`8cce39ada5499c158f5d84f8fc10d1ccc712679c`，本记录对应其上的未提交改动。
 
@@ -7,10 +9,10 @@
 - 工作台独立对话使用官方 DeepSeek Provider 时，发送 `thinking.type: enabled`、`reasoning_effort: low`，并以 SSE 接收返回内容。
 - `reasoning_content` 在最终答案之前实时显示；生成时默认展开，结束后默认折叠，用户可重新展开。最终 `content` 继续通过现有结构化校验后显示为回答。
 - 推理记录只持久化到当前本地会话，不进入其他会话、共享流程事实或后续请求历史。取消、断流及恢复后保留已收到的记录，并标记中断。
-- 本次启用范围为工作台对话。需求澄清、方案设计、Gate Review 和 Coding 的独立生成调用保持原请求合同，并纳入回归验证。
+- 本次启用范围为工作台对话。需求澄清、方案设计、Gate Review 和 Coding 的独立生成调用保持原请求契约，并纳入回归验证。
 - 输出 token 上限没有提高；`low` 相对更高推理强度降低计算投入，不代表比原来的关闭 thinking 模式更省 token。
 
-参数依据：[DeepSeek 思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)、[Chat Completion 参数](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/)、[JSON Output](https://api-docs.deepseek.com/zh-cn/guides/json_mode/)。
+参数依据：[DeepSeek 思考模式](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)、[Chat Completion 参数](https://api-docs.deepseek.com/zh-cn/api/create-chat-completion/)、[JSON 输出](https://api-docs.deepseek.com/zh-cn/guides/json_mode/)。
 
 ## 自动化结果
 

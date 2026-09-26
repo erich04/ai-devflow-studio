@@ -1,21 +1,31 @@
-# Unified workbench conversations
+<a id="unified-workbench-conversations"></a>
 
-## Agreed product contract
+# 统一工作台会话
 
-- Keep the six-stage workflow and existing gate/execution authority. Improve stage navigation and card hierarchy for every node, including Task, Gate, Test, Delivery and Acceptance.
-- The right workspace has one fixed node-details tab and independent conversation tabs. Preserve the existing Inspector, its node-specific sections and every existing action.
-- Selecting a card opens its details; attachment counters deep-link to their section. Selecting a card does not retarget a conversation. Starting a discussion may suggest a node, but never restricts which project nodes the conversation can query.
-- Every conversation can query the current project's complete live workflow, saved artifacts, evidence, repository and configured knowledge sources. Conversation messages, unanswered questions and private drafts remain isolated. Only explicit publication makes a draft a shared workflow artifact.
-- Persist conversations, their history, input drafts, questions and tab visibility locally. Closing a tab does not delete it or cancel work. Restart recovers interrupted work visibly; never silently repeats a provider call.
-- Run a bounded read-only investigation loop using the securely stored Provider, real tools, observable steps, citations, cancellation and recoverable errors. No fake success or fabricated workflow facts.
-- Structured messages may ask questions, show draft artifacts and expose real navigation/actions. Workflow mutations continue through the existing authoritative execution and Gate paths.
+本文记录最初会话整合方案。后续 #174/#177 已将布局更新为左侧节点工作区、右侧独立聊天；节点工作区常驻“概览 / 内容与审查 / 产物与证据 / 执行记录”四个入口。下文“右侧固定节点详情页签”仅描述历史方案，不再作为最新布局要求；其他数据与授权契约继续适用。
 
-## Verification matrix
+<a id="agreed-product-contract"></a>
 
-Cover all six stages, all five node kinds, non-current nodes, cross-node questions, actual attachment counts and empty states. Exercise navigation from board/counters/chat, preserved Inspector sections and stage actions, session isolation, two projects, shared artifact freshness, private draft boundaries, close/reopen/restart, pending question continuation, provider failure/retry/cancel, stale/deleted targets and restricted repository paths.
+## 已约定的产品契约
 
-Use service/store and renderer tests, the complete existing verification suite, browser end-to-end tests, and Electron integration with isolated data. Record exactly which external Provider/GitHub operations were exercised; never claim a live publication from a deterministic fixture.
+- 保留六阶段工作流及既有 Gate/执行权限，优化所有节点的阶段导航与卡片层级，包括 Task、Gate、Test、Delivery 和 Acceptance。
+- 原方案在右侧工作区设置固定节点详情页签与独立会话页签，保留 Inspector、各节点专属内容及全部既有动作。布局后续调整如上，功能不可因此丢失。
+- 选卡片打开详情，附件计数可直达对应区域。选卡片不改变会话目标；开始讨论可建议一个节点，但不能限制会话查询当前项目的其他节点。
+- 每个会话都可查询当前项目的完整实时工作流、已保存产物、证据、仓库及已配置知识源。消息、待回答问题和私有草稿互相隔离；只有明确发布才使草稿成为共享工作流产物。
+- 本地持久化会话、历史、输入草稿、问题和页签可见性。关闭页签不删除会话或取消工作；重启后明确显示中断状态，不静默重复服务商调用。
+- 使用安全保存的服务商配置执行有限只读调查，具备真实工具、可观察步骤、引用、取消和可恢复错误；不能伪造成功或工作流事实。
+- 结构化消息可提问、展示草稿产物和真实导航/操作。修改工作流仍走既有权威执行与 Gate 路径。
 
-## Implementation boundary
+<a id="verification-matrix"></a>
 
-Built from PR #127 commit f11246c1c6b2be94ee7f12e8a91ae48f69a00d2d in an isolated worktree. Existing walkthrough data and the main checkout are not development fixtures. Conversations are local-only and excluded from team synchronization.
+## 验证矩阵
+
+覆盖六阶段、五种节点、非当前节点、跨节点问题、真实附件数量及空态。验证看板/计数/聊天导航、保留的 Inspector 区域与阶段动作、会话隔离、两个项目、共享产物新鲜度、私有草稿边界、关闭/打开/重启、待回答问题续接、服务商失败/重试/取消、过期/已删除目标及受限仓库路径。
+
+使用服务/存储与渲染测试、完整现有验证套件、浏览器端到端和隔离数据的 Electron 集成。精确记录执行过哪些外部服务商/GitHub 操作；不能把确定性样例算成真实发布。
+
+<a id="implementation-boundary"></a>
+
+## 实现边界
+
+在隔离工作树中基于 PR #127 的 `f11246c1c6b2be94ee7f12e8a91ae48f69a00d2d` 构建。已有验收数据和主工作区不得用作开发测试样例。会话仅存本地，不纳入团队同步。

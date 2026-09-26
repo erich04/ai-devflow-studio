@@ -12,7 +12,7 @@ export type RemoteSyncOutboxSchedulerTimers = {
 export type RemoteSyncOutboxSchedulerDependencies = {
   processor: RemoteSyncOutboxSchedulerProcessor
   onError(error: unknown): void | Promise<void>
-  pollingIntervalMs?: number
+  pollingIntervalMs?: number | (() => number)
   timers?: RemoteSyncOutboxSchedulerTimers
 }
 
@@ -45,7 +45,7 @@ export function createRemoteSyncOutboxScheduler(
     timerHandle = timers.setTimeout(() => {
       timerHandle = undefined
       void requestRun(false)
-    }, pollingIntervalMs)
+    }, typeof pollingIntervalMs === 'function' ? pollingIntervalMs() : pollingIntervalMs)
   }
 
   async function reportError(error: unknown) {

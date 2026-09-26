@@ -1,125 +1,116 @@
-# ADR 0013: GitHub App Delivery Authority
+<a id="adr-0013-github-app-delivery-authority"></a>
 
-Status: Accepted
+# ADR 0013：GitHub App 交付权限
 
-Date: 2026-08-11
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-08-11
 
-DevFlow currently uses a GitHub OAuth App only to establish browser identity. It requests
-`read:user user:email`, reads the profile, and discards the access token. V1.5 needs narrowly scoped
-write authority for one repository so Desktop can publish one expected commit and the API can create
-one Draft pull request after explicit signed Web approval.
+<a id="context"></a>
 
-The alternatives are:
+## 背景
 
-1. widen and persist the existing user OAuth token;
-2. ask each Desktop operator for a personal access token;
-3. use a GitHub App installation with repository-scoped, short-lived credentials;
-4. make the API upload code through GitHub's object APIs.
+DevFlow 当前只用 GitHub OAuth App 建立浏览器身份：请求 `read:user user:email`、读取个人资料，然后丢弃访问令牌。V1.5 需要范围限定到单个仓库的写权限，使桌面可以发布一个预期提交，API 可以在明确的签名 Web 批准之后创建一个草稿拉取请求。
 
-The managed worktree and git objects live on Desktop. The API must not become a raw source-code
-upload service, while Desktop must not permanently custody a broad user token.
+备选方案包括：
 
-## Decision
+1. 扩大并持久化既有用户 OAuth 令牌；
+2. 要求每个桌面操作者提供个人访问令牌；
+3. 使用 GitHub App 安装，取得限定仓库的短期凭据；
+4. 让 API 通过 GitHub 对象 API 上传代码。
 
-Use a GitHub App installation for V1.5 delivery.
+受管工作树和 Git 对象位于桌面。API 不能成为原始源码上传服务，桌面也不能长期保管广泛授权的用户令牌。
 
-- The self-hosted API holds the GitHub App id and private key in operator configuration.
-- Postgres stores only the Project-to-installation/repository binding and redacted audit metadata.
-- The existing GitHub OAuth App remains identity-only with `read:user user:email`; its access token
-  is not persisted or reused for delivery.
-- A live lead or owner approves the exact redacted Delivery Request through a signed browser session;
-  Desktop bearer authority cannot approve its own request.
-- After that decision, paired Desktop main requests an installation access token through the
-  authenticated API.
-- The API narrows the Desktop installation access token to one repository and `Contents: write`.
-- The token lifetime is no more than one hour. Desktop main holds it only in memory for the active
-  attempt and clears it after use.
-- The renderer never receives the private key, installation access token, authorization header,
-  credential helper, or raw git command.
-- Desktop main publishes only the approved expected commit to the approved namespaced branch.
-- The API independently reads the remote branch head and, only after it matches the expected commit,
-  uses an API-held token narrowed to one repository and the exact permission pair
-  `Contents: read + Pull requests: write` to read the two refs and create only a Draft pull request.
-- DevFlow will never merge or auto-merge, never force-push, never delete a remote branch, never
-  publish a tag, and never widen permissions as part of V1.5.
+<a id="decision"></a>
 
-## Authority Model
+## 决策
 
-| Fact or action | Authority |
+V1.5 交付使用 GitHub App 安装。
+
+- 自托管 API 在运维配置中保管 GitHub App ID 和私钥。
+- Postgres 只保存项目到安装/仓库的绑定以及脱敏审计元数据。
+- 既有 GitHub OAuth App 继续只用于身份，权限保持 `read:user user:email`；访问令牌不持久化、不复用于交付。
+- 当前有效的 lead 或 owner 通过签名浏览器会话批准确切的脱敏交付请求；桌面 Bearer 权限不能批准自己的请求。
+- 此后，已配对桌面主进程通过已鉴权 API 请求安装访问令牌（installation access token）。
+- API 将桌面安装访问令牌限制为单个仓库和 `Contents: write`。
+- 令牌有效期不超过一小时。桌面主进程仅为当前尝试在内存中持有，用完清除。
+- 渲染进程（renderer）绝不接收私钥、安装访问令牌、授权头、凭据助手或原始 Git 命令。
+- 桌面主进程只将已批准的预期提交发布到已批准的命名空间分支。
+- API 独立读取远端分支头；只有它与预期提交一致时，才使用 API 持有的、限制到单个仓库和确切权限组合 `Contents: read + Pull requests: write` 的令牌，读取两个引用并仅创建草稿拉取请求。
+- V1.5 中 DevFlow 不会合并或自动合并，不会强制推送，不会删除远端分支，不会发布标签，也不会扩大权限。
+
+<a id="authority-model"></a>
+
+## 权限模型
+
+| 事实或操作 | 权威来源 |
 | --- | --- |
-| Full local Run, managed worktree, expected commit, local attempt, result | Desktop SQLite / Electron main |
-| Redacted Delivery Request, lead/owner approval, organization, membership, Project repository, GitHub App installation binding, revocation | API/Postgres |
-| App private key and installation-token minting | API process configuration |
-| Short-lived Contents token use for exact git push | Electron main memory |
-| Remote-head verification and Draft pull-request creation | API process |
-| Published branch and Draft pull request | GitHub |
-| Workflow stage advance and Acceptance | Canonical local Run after evidence checks |
+| 完整本地 Run、受管工作树、预期提交、本地尝试及结果 | 桌面 SQLite / Electron 主进程 |
+| 脱敏交付请求、lead/owner 批准、组织、成员身份、项目仓库、GitHub App 安装绑定及撤销 | API/Postgres |
+| App 私钥及安装令牌签发 | API 进程配置 |
+| 为确切 Git 推送使用短期 Contents 令牌 | Electron 主进程内存 |
+| 远端分支头核实及草稿拉取请求创建 | API 进程 |
+| 已发布分支及草稿拉取请求 | GitHub |
+| 工作流阶段推进及业务验收 | 经过证据检查的权威本地 Run |
 
-An installation access token proves GitHub capability, not human intent. Delivery Approval remains a
-separate, immutable Team decision tied to the exact redacted Delivery Request and mirrored into the
-local attempt before publication.
+安装访问令牌证明 GitHub 能力，不证明人工意图。交付批准仍是独立、不可变的 Team 决策，绑定确切的脱敏交付请求，并在发布前镜像到本地尝试。
 
-## Failure And Recovery Rules
+<a id="failure-and-recovery-rules"></a>
 
-- Missing, stale, revoked, cross-project, cross-repository, or over-broad authority fails closed.
-- No credential is issued before an approved intent exists.
-- A changed expected commit or evidence digest invalidates approval.
-- Electron main scans the exact outbound Git objects and durably records a non-secret safe receipt
-  before any GitHub credential is requested. The API separately scans the PR title and body before
-  it requests PR-write provider authority. These are distinct outbound-content boundaries; neither
-  evidence redaction nor one passing boundary substitutes for the other.
-- A high-confidence match at either boundary becomes `content_scan_blocked`.
-  The operator must not Resume or override the block.
-  The only safe continuation is a new Work Request/Run. Its implementation is rebuilt and retested
-  in a clean Coding Agent workspace. A Git-content block is pre-push; a PR-text block can occur after
-  a verified branch publication, but no further remote write may be made for the blocked intent.
-- An ambiguous push or PR response is reconciled against GitHub before another write is attempted.
-- A conflicting remote branch or pull request becomes operator-visible recovery work; DevFlow does
-  not rewrite it.
-- Revocation blocks new credential issuance. An already issued token is treated as short-lived and
-  the local attempt is stopped as soon as revocation becomes known.
+## 失败与恢复规则
 
-## Consequences
+- 权限缺失、过时、撤销、跨项目、跨仓库或过宽时拒绝执行。
+- 获得已批准交付意图之前，不签发任何凭据。
+- 预期提交或证据摘要变化会使批准失效。
+- Electron 主进程扫描确切的出站 Git 对象，并在请求任何 GitHub 凭据前持久记录不含秘密的安全回执。API 在请求 PR 写入权限前独立扫描 PR 标题和正文。这是两条独立的出站内容边界，证据脱敏或其中一条通过都不能替代另一条。
+- 任一边界高置信命中均进入 `content_scan_blocked`。操作者不得恢复（Resume）或覆盖阻断。唯一安全继续方式是新的 Work Request/Run，在干净的 Coding Agent 工作空间中重建并重新测试实现。Git 内容阻断发生在推送前；PR 文本阻断可能发生在已核实分支发布之后，但对被阻断意图不得再进行远端写入。
+- 推送或 PR 响应不明确时，必须先与 GitHub 对账，再尝试另一次写入。
+- 冲突的远端分支或拉取请求变为操作者可见的恢复事项，DevFlow 不重写它。
+- 撤销阻止新凭据签发。已签发令牌按短期凭据处理，一旦得知撤销就停止本地尝试。
 
-Positive consequences:
+<a id="consequences"></a>
 
-- Repository access can be installed and revoked independently from user identity.
-- Installation tokens are short-lived and can be narrowed to one repository and permission set.
-- Desktop keeps code publication local without persisting a long-lived write credential.
-- GitHub audit attribution identifies the App installation.
+## 影响
 
-Costs and limitations:
+收益：
 
-- Self-hosted operators must create and install a GitHub App and configure its private key.
-- The API must implement JWT signing, installation discovery/binding, token minting, and redacted
-  error handling.
-- V1.5 does not attribute the remote write to an individual GitHub user token; the signed Web
-  Delivery Approval and Team audit provide the human attribution.
-- Token revocation is not instantaneous for a token already minted, so short lifetime, single-use
-  attempt handling, and local cancellation remain important.
+- 仓库访问可以独立于用户身份安装和撤销。
+- 安装令牌有效期短，可限定单个仓库及权限集合。
+- 桌面保持本地代码发布，不持久保存长期写凭据。
+- GitHub 审计归属可以识别 App 安装。
 
-## Rejected Alternatives
+成本与限制：
 
-### Persist the current OAuth access token
+- 自托管运维者需要创建、安装 GitHub App，并配置私钥。
+- API 需要实现 JWT 签名、安装发现/绑定、令牌签发及脱敏错误处理。
+- V1.5 不把远端写入归于个人 GitHub 用户令牌；签名 Web 交付批准和 Team 审计提供人工归属。
+- 已签发令牌无法即时撤销，因此短有效期、单次尝试处理及本地取消仍很重要。
 
-Rejected because identity OAuth currently has a narrow, well-tested contract and discards the token.
-Widening it couples sign-in to repository writes, creates long-lived user credential custody, and
-makes revocation and repository scope harder to reason about.
+<a id="rejected-alternatives"></a>
 
-### Personal access token on Desktop
+## 未采用的替代方案
 
-Rejected because PAT scope and lifetime are operator-dependent, difficult to prove, and prone to
-renderer/log/persistence leakage. It also creates a second credential model outside the Team Project
-authority boundary.
+<a id="persist-the-current-oauth-access-token"></a>
 
-### API-side Git object upload
+### 持久保存当前 OAuth 访问令牌
 
-Rejected because it would require source blobs and commit objects to cross the current local-first
-boundary. Desktop already owns the canonical managed worktree and is the correct place to run git.
+现有身份 OAuth 契约范围窄、已充分测试，并会丢弃令牌。扩大权限会把登录与仓库写入耦合，产生长期用户凭据保管，并增加撤销和仓库范围判断的难度。
 
-## References
+<a id="personal-access-token-on-desktop"></a>
+
+### 桌面个人访问令牌
+
+PAT 范围与有效期取决于操作者，难以证明，容易泄露到渲染进程、日志或持久化存储；也会在团队项目权限边界之外产生第二套凭据模型。
+
+<a id="api-side-git-object-upload"></a>
+
+### API 侧上传 Git 对象
+
+这需要源文件 blob 和提交对象跨越既有本地优先边界。桌面已拥有权威受管工作树，应在桌面执行 Git。
+
+<a id="references"></a>
+
+## 参考
 
 - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app
 - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-as-a-github-app-installation

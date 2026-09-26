@@ -1,128 +1,136 @@
-# Product Object Model
+<a id="product-object-model"></a>
 
-## Organization
+# 产品对象模型
 
-The team boundary for users, projects, policy, and shared visibility.
+<a id="organization"></a>
 
-## Project
+## 组织
 
-A team-visible software project. It has a repository mapping, default branch, health state, optional
-test command, policy settings, budget settings, Desktop pairing credentials, and an optional
-verified GitHub App repository binding.
+用户、项目、策略和共享可见性的团队边界。
 
-## Local Project
+<a id="project"></a>
 
-A developer-selected local repository in Desktop. It can contain private paths, local test commands,
-and raw execution details. These details must stay local unless converted into redacted summaries.
+## 项目
+
+团队可见的软件项目，包含仓库映射、默认分支、健康状态、可选测试命令、策略设置、预算设置、桌面配对凭据，以及可选且已验证的 GitHub App 仓库绑定。
+
+<a id="local-project"></a>
+
+## 本地项目
+
+开发者在桌面端选择的本地仓库。它可以包含私有路径、本地测试命令和原始执行详情。这些详情必须留在本地，只有转换为脱敏摘要后才能共享。
+
+<a id="run"></a>
 
 ## Run
 
-A single delivery attempt for one software request. It moves through the product workflow from
-clarification to acceptance and owns Nodes, Artifacts, Agent Events, Test Evidence, Coding Agent
-Runs, and Gate decisions.
+针对一项软件需求的单次交付尝试。它从需求澄清走到业务验收，拥有节点、产物、Agent 事件、测试证据、编码 Agent 执行记录和 Gate 决策。
 
-## Node
+<a id="node"></a>
 
-A unit inside a Run. Current product stages are:
+## 节点
 
-1. `clarify`
-2. `design`
-3. `build`
-4. `test`
-5. `pr`
-6. `accept`
+Run 内的流程单元。当前产品阶段为：
 
-Node kinds are `agent`, `gate`, `task`, `test`, `pr`, and `acceptance`.
+1. `clarify`：需求澄清
+2. `design`：方案设计
+3. `build`：开发实现
+4. `test`：测试证据
+5. `pr`：PR 交付
+6. `accept`：业务验收
 
-Nodes are the main flow objects. Artifacts, Evidence, Trace, and Decisions are related resources
-attached to a Run or Node, not separate Board nodes. Node-specific UI semantics are defined in
-[`workflow-node-semantics.md`](./workflow-node-semantics.md).
+节点类型为 `agent`、`gate`、`task`、`test`、`pr`、`acceptance`。
+
+节点是主流程对象。产物、证据、轨迹和决策是关联到 Run 或节点的资源，不是独立的看板节点。各节点的界面语义见[工作流节点语义](./workflow-node-semantics.md)。
+
+<a id="gate"></a>
 
 ## Gate
 
-A human decision point. Gate approval must be enforced in write paths, not only through disabled UI.
-Protected Gates are nodes whose kind is `gate` or `acceptance`.
+人工决策点。Gate 审批必须在写入路径强制执行，不能只靠界面禁用。受保护 Gate 包括类型为 `gate` 或 `acceptance` 的节点。
 
-A Gate can produce a durable report or approval record, but the user-facing concept should be a
-Decision, conclusion, approval, block, or override rather than a generic Artifact.
+Gate 可以产生持久化报告或审批记录，但面向用户应表达为决策、结论、审批、阻断或例外审批，而不是笼统的产物。
 
-## Artifact
+<a id="artifact"></a>
 
-A durable work product or evidence item attached to a Run or Node. Product-critical artifacts include
-raw request, clarification, design, coding diff, PR draft, and acceptance evidence bundle.
+## 产物
 
-## Evidence
+关联到 Run 或节点的持久化成果或证据项。关键产物包括原始请求、需求澄清、设计、编码差异、PR 草稿和验收证据资料包。
 
-Any durable proof that supports a Gate or delivery decision. Evidence includes artifacts, test
-evidence, Knowledge-Grounded Gate Review results, policy decisions, budget decisions, runtime trace, permission
-decisions, and redacted team summaries.
+<a id="evidence"></a>
 
-## Trace
+## 证据
 
-A time-ordered execution or audit history explaining how a result was produced. Trace includes Agent
-events, tool calls, permission relay, runtime steps, and cleanup events.
+支持 Gate 或交付决定的持久化证明，包括产物、测试证据、知识门禁审查结果、策略决定、预算决定、运行时轨迹、权限决定和脱敏团队摘要。
 
-## Decision
+<a id="trace"></a>
 
-A formal outcome that changes whether the Run may continue. Decisions include Gate approval,
-blocking decisions, override acceptance or rejection, and budget approval.
+## 执行轨迹
 
-## Knowledge-Grounded Gate Review
+按时间排序、解释结果如何产生的执行或审计历史，包括 Agent 事件、工具调用、权限请求传递、运行时步骤和清理事件。
 
-A structured result that uses retrieved Knowledge as grounding to evaluate the current Gate, its
-conditions, and associated stage artifacts and evidence. It can produce risks, missing evidence,
-suggested tests, policy findings, references, token usage, trace steps, and a Gate Advisory. It does
-not approve the Gate by itself.
+<a id="decision"></a>
 
-## Coding Agent Run
+## 决策
 
-A local implementation attempt hosted by the managed coding runtime. DevFlow owns context assembly,
-permission relay, managed worktree isolation, diff capture, test evidence, runtime trace, cleanup
-state, and redacted summary sync. The external coding engine owns actual code generation.
+改变 Run 是否可以继续的正式结果，包括 Gate 批准、阻断、例外审批接受或拒绝，以及预算批准。
 
-## PR Delivery Package
+<a id="knowledge-grounded-gate-review"></a>
 
-A metadata-only handoff artifact containing request, design, changed-path, Test Evidence, policy,
-budget, and Gate Review summaries. It is not source code, repository identity, branch authority, or
-a credential container.
+## 基于知识的门禁审查
 
-## Delivery Intent
+以检索到的知识为依据，评估当前 Gate、其条件及关联阶段产物和证据的结构化结果。可包含风险、缺失证据、建议测试、策略发现、引用、Token 用量、轨迹步骤和门禁审查建议；它本身不批准 Gate。
 
-An immutable local record derived from the canonical managed worktree and bound to one expected
-commit, repository binding, Run/node/version, Test Evidence, changed paths, and PR Delivery Package
-digest. Revise creates a new pre-publication revision and invalidates prior approval.
+<a id="coding-agent-run"></a>
 
-## Delivery Request
+## 编码 Agent 执行
 
-The redacted API/Postgres projection of one Delivery Intent. It owns the signed approval,
-publication state, recovery state, and Draft pull-request result without syncing local paths, raw
-output, patches, source content, or credentials.
+由托管编码运行时承载的本地实现尝试。DevFlow 负责上下文组装、权限请求传递、托管工作树隔离、差异收集、测试证据、运行时轨迹、清理状态和脱敏摘要同步。外部编码引擎负责实际代码生成。
 
-## Delivery Attempt
+<a id="pr-delivery-package"></a>
 
-One immutable publication attempt in a stable Delivery Series. Resume continues the same attempt;
-Retry may create the next attempt only after the exact predecessor is proven terminal; Stop parks
-the active attempt. A completed attempt never reopens.
+## PR 交付包
 
-## GitHub App Repository Binding
+仅含元数据的交接产物，包含需求、设计、变更路径、测试证据、策略、预算和门禁审查摘要。它不承载源码、仓库身份、分支权限或凭据。
 
-The owner-managed, versioned relationship between one Project and one verified GitHub App
-installation/repository/default branch. Revocation blocks new credential grants. The private key
-remains in the API process, and the short-lived repository-scoped token exists only in Electron main
-memory during publication.
+<a id="delivery-intent"></a>
 
-## GitHub Delivery Completion
+## 交付意图
 
-The durable proof that the approved expected commit is the verified remote branch head and that one
-matching Draft pull request exists. It is required before GitHub-enabled Acceptance. Completion must
-never merge, close, or otherwise mutate the pull request.
+从权威托管工作树派生的不可变本地记录，绑定一个预期提交、仓库绑定、Run/节点/版本、测试证据、变更路径和 PR 交付包摘要。修订（Revise）会创建新的发布前版本，并使先前审批失效。
 
-## Policy
+<a id="delivery-request"></a>
 
-The configurable Gate Enforcement Policy that maps evidence and findings to warning, block,
-hard-block, override, or policy-sync states.
+## 交付请求
 
-## Budget
+一份交付意图在 API/Postgres 中的脱敏投影。它保存签名审批、发布状态、恢复状态和草稿 PR 结果，不同步本地路径、原始输出、补丁、源码内容或凭据。
 
-Runtime cost controls for model/provider usage. Budget decisions should explain whether work is
-allowed, warned, or blocked before expensive provider usage proceeds.
+<a id="delivery-attempt"></a>
+
+## 交付尝试
+
+稳定交付系列中的一次不可变发布尝试。继续（Resume）继续同一次尝试；重试（Retry）仅在精确的前次尝试已被证明处于终态后，才可创建下一次尝试；停止（Stop）停放活动尝试。已完成尝试绝不重新打开。
+
+<a id="github-app-repository-binding"></a>
+
+## GitHub App 仓库绑定
+
+由 Owner 管理、带版本的关系，连接一个项目与一个经过验证的 GitHub App 安装、仓库和默认分支。撤销会阻止新的凭据授权。私钥留在 API 进程，限定仓库的短期令牌只在发布期间存在于 Electron 主进程内存中。
+
+<a id="github-delivery-completion"></a>
+
+## GitHub 交付完成记录
+
+持久化证明：已批准的预期提交正是核实后的远端分支提交，且有一个匹配的草稿 PR。启用 GitHub 的业务验收必须先具备此证明。完成交付不会合并、关闭或以其他方式修改 PR。
+
+<a id="policy"></a>
+
+## 策略
+
+可配置的 Gate 执行策略，将证据与发现映射为警告、阻断、硬阻断、例外审批或策略同步状态。
+
+<a id="budget"></a>
+
+## 预算
+
+针对模型和服务提供方用量的运行时费用控制。在发生高成本调用前，预算决定应说明工作是允许、警告还是阻断。
