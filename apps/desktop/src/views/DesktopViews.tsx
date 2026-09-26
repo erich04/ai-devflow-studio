@@ -15,7 +15,7 @@ import {
 import { ArtifactReviewReader } from '../components/ArtifactReviewReader'
 import { ArtifactBody, partitionArtifact, hasSectionContent } from '../components/ArtifactBody'
 import { GateMaterialReader } from '../components/GateMaterialReader'
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type * as React from 'react'
 import {
   buildClarificationReviewBundle,
@@ -431,7 +431,8 @@ export function Inspector({
   const [revisionDrafts, setRevisionDrafts] = useState<Record<string, string>>(() => {
     try { const parsed: unknown = JSON.parse(localStorage.getItem('devflow-revision-drafts') ?? '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'string')) as Record<string, string> : {} } catch { return {} }
   })
-  useEffect(() => {
+  // Reset the node workspace before paint so a newly visible tab cannot lose its first click.
+  useLayoutEffect(() => {
     setRequestedTab(selectedNode?.status === 'success' && selectedNode.kind === 'agent' ? '内容与审查' : '概览'); setDocumentId(''); setRevisionFormOpen(false)
   }, [selectedNode?.id])
 
