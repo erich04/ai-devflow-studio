@@ -1312,6 +1312,12 @@ async function waitForLocalStateLoaded(
   })
 }
 
+async function clickGateApproval() {
+  const button = await screen.findByRole('button', { name: /通过 Gate/ })
+  await waitFor(() => expect(button).toBeEnabled())
+  fireEvent.click(button)
+}
+
 function clickInspectorTab(name: RegExp | string) {
   const inspector = screen.getByTestId('node-inspector')
   fireEvent.click(within(inspector).getByRole('tab', { name }))
@@ -2122,7 +2128,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     await waitFor(() => expect(screen.getByRole('button', { name: /通过 Gate/ })).not.toBeDisabled())
-    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await clickGateApproval()
 
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过，Run 进入本地实现阶段'))
   })
@@ -4788,8 +4794,9 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('Next best action')
-    expect(within(inspector).getByRole('button', { name: /通过 Gate/ })).toBeEnabled()
-    fireEvent.click(within(inspector).getByRole('button', { name: /通过 Gate/ }))
+    const approveButton = await within(inspector).findByRole('button', { name: /通过 Gate/ })
+    await waitFor(() => expect(approveButton).toBeEnabled())
+    fireEvent.click(approveButton)
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
@@ -4804,7 +4811,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await clickGateApproval()
 
     await waitFor(() => expect(api.approveGate).toHaveBeenCalled())
     expect(window.aiDevFlowDesktop).not.toHaveProperty('uploadRunSummary')
@@ -4817,7 +4824,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     vi.mocked(api.approveGate).mockRejectedValueOnce(new Error('memory access out of bounds'))
     vi.mocked(api.loadState).mockRejectedValue(new Error('memory access out of bounds'))
-    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await clickGateApproval()
 
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('本地数据库运行异常'))
     expect(screen.getByTestId('toast')).toHaveTextContent('尚无法确认审批是否已保存')
@@ -4832,12 +4839,12 @@ describe('App', () => {
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
     vi.mocked(api.approveGate).mockRejectedValueOnce(new Error('disk write failed'))
-    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await clickGateApproval()
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('审批未完成，当前节点仍待审批'))
     expect(api.approveGate).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('toast')).not.toHaveTextContent('已通过')
 
-    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await clickGateApproval()
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过'))
     expect(api.approveGate).toHaveBeenCalledTimes(2)
   })
@@ -4854,7 +4861,7 @@ describe('App', () => {
       events: [{ id: 'saved-before-response-failure', runId: run.id, nodeId: 'n-design-gate', kind: 'approval',
         sequence: 1, message: 'Gate approved', timestamp }],
     }))
-    fireEvent.click(screen.getByRole('button', { name: /通过 Gate/ }))
+    await clickGateApproval()
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('已从本地记录核实：方案评审 Gate 已通过'))
     expect(screen.getByTestId('toast')).toHaveTextContent('无需重复提交审批')
     expect(api.approveGate).toHaveBeenCalledTimes(1)
