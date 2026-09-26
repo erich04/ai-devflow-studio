@@ -28,6 +28,7 @@ function mergeById<T extends { id: string }>(current: T[], incoming: T[]) {
 }
 
 export type GateEnforcementState = {
+  loadError: string
   policySnapshot: PolicySnapshot | null
   decision: GateEnforcementDecision | null
   overrides: GateOverrideDecision[]
@@ -75,6 +76,9 @@ export function useGateEnforcement(input: {
   const [policySnapshot, setPolicySnapshot] = useState<PolicySnapshot | null>(null)
   const [snapshotProjectId, setSnapshotProjectId] = useState<string | undefined>()
   const [decision, setDecision] = useState<GateEnforcementDecision | null>(null)
+  const [loadError, setLoadError] = useState('')
+  const [decisionScope, setDecisionScope] = useState('')
+  const scopeKey = `${input.projectId ?? selectedRun?.projectId}:${selectedRun?.id}:${selectedRun?.version}:${selectedNode?.id}`
   const [overrides, setOverrides] = useState<GateOverrideDecision[]>([])
   const [isLoading, setIsLoading] = useState(false)
   const projectId = input.projectId ?? selectedRun?.projectId
@@ -82,6 +86,7 @@ export function useGateEnforcement(input: {
 
   const refresh = useCallback(async () => {
     const generation = ++refreshGeneration.current
+    setLoadError('')
     setDecision(null)
     setOverrides([])
     if (!desktopApi || !projectId) {
@@ -108,12 +113,17 @@ export function useGateEnforcement(input: {
         if (generation !== refreshGeneration.current) return null
         setOverrides(reconciledOverrides)
         setDecision(evaluated)
+        setDecisionScope(scopeKey)
       }
       return snapshot
+    } catch (error) {
+      if (generation === refreshGeneration.current) setLoadError(error instanceof Error ? error.message : '读取失败')
+      throw error
     } finally {
       if (generation === refreshGeneration.current) setIsLoading(false)
     }
   }, [
+    scopeKey,
     artifacts.length,
     desktopApi,
     isEnabled,
@@ -170,6 +180,7 @@ export function useGateEnforcement(input: {
         projectId: selectedRun.projectId,
       })
       setDecision(evaluated)
+      setDecisionScope(scopeKey)
       if (override.status === 'rejected') {
         onToast('Gate override 已被团队策略拒绝，请重新评估后处理')
       } else {
@@ -190,7 +201,8 @@ export function useGateEnforcement(input: {
   }
 
   const roleCanApprove = selectedNode ? canApproveGate(currentUser?.role ?? 'member', selectedNode) : false
-  const policyAllowsApproval = decision ? !decision.blocksApproval : true
+  const visibleDecision = decisionScope === scopeKey ? decision : null
+  const policyAllowsApproval = visibleDecision ? !visibleDecision.blocksApproval : true
   const canApprove = roleCanApprove && policyAllowsApproval
   const canSaveOverride = Boolean(
     selectedRun &&
@@ -225,7 +237,8 @@ export function useGateEnforcement(input: {
 
   return {
     policySnapshot: snapshotProjectId === projectId ? policySnapshot : null,
-    decision: isEnabled ? decision : null,
+    decision: isEnabled ? visibleDecision : null,
+    loadError,
     overrides,
     remediationPlan,
     isLoading,

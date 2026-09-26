@@ -29,6 +29,8 @@ import type { CodingRuntimeActionProjection } from './coding-runtime-action-proj
 export type { BoardNodeKind, WorkflowNodePresentation } from './workflow-node-presentation'
 
 export type InspectorSectionId =
+  | 'workspaceContent'
+  | 'artifactRecords'
   | 'statusMatrix'
   | 'nodeSummary'
   | 'gateImpactSummary'
@@ -300,57 +302,22 @@ export function getInspectorNodeType(node: WorkflowNode): InspectorNodeType {
   return 'task'
 }
 
-const attachmentTabs: InspectorTabPlan[] = [
-  { tabId: '产物', label: '产物', sections: ['artifacts'] },
-  { tabId: '测试证据', label: '测试证据', sections: ['testEvidence'] },
-  { tabId: '轨迹', label: '轨迹', sections: ['trace'] },
-]
-const reviewAttachmentTabs = attachmentTabs.map((tab): InspectorTabPlan =>
-  tab.tabId === '产物' ? { ...tab, sections: ['artifacts', 'reviewEvidence'] } : tab,
-)
+const workspaceTabs = (type: InspectorNodeType): InspectorTabPlan[] => {
+  const gate = type === 'gate' || type === 'acceptance'
+  return [
+    { tabId: '概览', label: '概览', sections: ['statusMatrix', ...(gate ? ['gateEnforcementPanel', 'remediationActions'] as const : ['gateImpactSummary'] as const), ...(['pr', 'acceptance'].includes(type) ? ['deliveryHandoff'] as const : [])] },
+    { tabId: '内容与审查', label: '内容与审查', sections: ['workspaceContent'] },
+    { tabId: '产物与证据', label: '产物与证据', sections: ['artifacts', 'testEvidence', 'knowledgeReferences', 'governance'] },
+    { tabId: '执行记录', label: '执行记录', sections: ['trace', 'artifactRecords'] },
+  ]
+}
+export const inspectorTabPlansByNodeType = Object.fromEntries(
+  (['clarification', 'designTask', 'gate', 'build', 'test', 'pr', 'acceptance', 'task'] as const).map((type) => [type, workspaceTabs(type)]),
+) as Record<InspectorNodeType, InspectorTabPlan[]>
 
-export const inspectorTabPlansByNodeType: Record<InspectorNodeType, InspectorTabPlan[]> = {
-  clarification: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    ...attachmentTabs,
-    { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
-  ],
-  designTask: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    ...attachmentTabs,
-    { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
-  ],
-  gate: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    ...reviewAttachmentTabs,
-    { tabId: 'Gate条件', label: 'Gate条件', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
-    { tabId: '引用来源', label: '引用来源', sections: ['knowledgeReferences'] },
-    { tabId: 'Remediation', label: 'Remediation', sections: ['remediationActions'] },
-  ],
-  build: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    ...attachmentTabs,
-    { tabId: 'Gate影响', label: 'Gate影响', sections: ['gateImpactSummary'] },
-  ],
-  test: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    ...attachmentTabs,
-  ],
-  pr: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'deliveryHandoff'] },
-    ...reviewAttachmentTabs,
-    { tabId: 'Handoff', label: 'Handoff', sections: ['deliveryHandoff'] },
-  ],
-  acceptance: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix', 'nodeSummary', 'deliveryHandoff'] },
-    ...reviewAttachmentTabs,
-    { tabId: '引用来源', label: '引用来源', sections: ['knowledgeReferences'] },
-    { tabId: 'Final Gate', label: 'Final Gate', sections: ['gateRequirementMatrix', 'gateEnforcementPanel', 'governance'] },
-  ],
-  task: [
-    { tabId: '状态', label: '状态', sections: ['statusMatrix'] },
-    ...attachmentTabs,
-  ],
+const legacyWorkspaceTabs: Record<string, string> = {
+  状态: '概览', 产物: '产物与证据', 测试证据: '产物与证据', 轨迹: '执行记录',
+  Gate影响: '概览', Gate条件: '概览', 'Final Gate': '概览', FinalGate: '概览', 引用来源: '产物与证据', Remediation: '概览', Handoff: '概览',
 }
 
 export const inspectorTabPlansByKind: Record<BoardNodeKind, InspectorTabPlan[]> = {
@@ -436,7 +403,7 @@ export function resolveInspectorTabForSearchResult(
   _node: WorkflowNode,
   target: 'artifact' | 'event',
 ): string {
-  return target === 'artifact' ? '产物' : '轨迹'
+  return target === 'artifact' ? '产物与证据' : '执行记录'
 }
 
 export function buildStatusDescriptors(input: {
@@ -1336,7 +1303,7 @@ export function buildNodeInspectorViewModel(input: {
   const visualKind = presentation.nodeKind
   const nodeType = getInspectorNodeType(input.node)
   const tabs = inspectorTabPlansByNodeType[nodeType]
-  const activeTab = tabs.find((tab) => tab.tabId === input.requestedTab || tab.label === input.requestedTab) ?? tabs[0]!
+  const activeTab = tabs.find((tab) => tab.tabId === (legacyWorkspaceTabs[input.requestedTab] ?? input.requestedTab) || tab.label === input.requestedTab) ?? tabs[0]!
   const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding, input.codingActionProjection)
   const nextAction = buildNextAction(input)
   const actionIds: InspectorActionId[] = []

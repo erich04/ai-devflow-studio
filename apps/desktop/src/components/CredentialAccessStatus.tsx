@@ -24,15 +24,20 @@ export function CredentialAccessStatus({ api, detailed }: { api: CredentialAcces
   const cancel = (id: string) => { void api?.cancelCredentialAccess?.(id).catch(() => {}) }
   return <>
     {!detailed && current ? <aside className="credential-access-notice" role="status" aria-label="系统凭据状态">
-      <strong>{current.state === 'waiting' ? '正在等待系统凭据访问' : stateLabels[current.state]}</strong>
-      <p>{current.state === 'waiting'
-        ? '如果出现 macOS 钥匙串授权窗口，请在那里选择允许或拒绝。其他页面仍可使用。'
-        : '已保存的配置会保留。处理系统授权窗口后，可重新点击刚才的保存、同步或发送按钮。'}</p>
-      <small>诊断编号：{current.id}</small>
-      {current.state === 'waiting' ? <>
-        <button type="button" onClick={() => pending.forEach((item) => cancel(item.id))}>取消本次等待</button>
-        <small>取消后不会继续原操作；系统窗口如仍打开，请自行关闭。</small>
-      </> : <button type="button" onClick={() => setDismissed(current.id)}>知道了</button>}
+      <div className="credential-access-message">
+        <strong>{current.state === 'waiting' ? '正在等待系统凭据访问' : stateLabels[current.state]}</strong>
+        <p>{current.state === 'waiting'
+          ? '如果出现 macOS 钥匙串授权窗口，请在那里选择允许或拒绝。其他页面仍可使用。'
+          : '已保存的配置会保留。处理系统授权窗口后，可重新点击刚才的保存、同步或发送按钮。'}</p>
+      </div>
+      {current.state === 'waiting'
+        ? <button type="button" onClick={() => pending.forEach((item) => cancel(item.id))}>取消本次等待</button>
+        : <button type="button" onClick={() => setDismissed(current.id)}>知道了</button>}
+      <details className="credential-access-details">
+        <summary>诊断与恢复详情</summary>
+        <small>诊断编号：{current.id}</small>
+        {current.state === 'waiting' ? <small>取消后不会继续原操作；系统窗口如仍打开，请自行关闭。</small> : null}
+      </details>
     </aside> : null}
     {detailed ? <section className="credential-access-history" aria-label="凭据访问记录">
       <h3>凭据访问记录</h3>

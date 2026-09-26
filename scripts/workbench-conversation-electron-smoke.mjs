@@ -1,4 +1,5 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { createHmac } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -6,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { _electron as electron, expect } from '@playwright/test'
+import { resolveE2eRuntime } from './e2e-runtime.mjs'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
 const temp = await mkdtemp(path.join(os.tmpdir(), 'devflow-workbench-smoke-'))
@@ -21,31 +23,69 @@ await git(['init', '-b', 'main']); await git(['config', 'user.email', 'smoke@exa
 await git(['add', '.']); await git(['-c', 'commit.gpgsign=false', 'commit', '-m', 'Test fixture'])
 const before = (await git(['status', '--porcelain'])).stdout
 const requests = []
+const modelErrors = []
+const { apiPort, apiUrl } = await resolveE2eRuntime()
+const sessionSecret = 'workbench-smoke-isolated-session-secret-32'
+let apiProcess
+let apiOutput = ''
+async function startTeamFixture() {
+  apiProcess = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], {
+    cwd: path.join(root, 'apps/api'),
+    env: { ...process.env, DATABASE_URL: '', DEVFLOW_DATABASE_URL: '', DEVFLOW_ENABLE_DEMO_DATA: 'true',
+      DEV_AUTH_ENABLED: 'true', DEVFLOW_SESSION_SECRET: sessionSecret, PORT: String(apiPort),
+      HOST: '127.0.0.1', DEVFLOW_GITHUB_APP_ID: '', DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64: '',
+      DEVFLOW_API_DIAGNOSTICS_PATH: path.join(temp, 'api-diagnostics.json') },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  for (const stream of [apiProcess.stdout, apiProcess.stderr]) stream.on('data', (chunk) => { apiOutput = (apiOutput + chunk).slice(-10000) })
+  for (let attempt = 0; attempt < 90; attempt++) {
+    if (apiProcess.exitCode !== null) throw new Error(`Isolated Team API exited: ${apiOutput}`)
+    if (await fetch(`${apiUrl}/ready`).then((response) => response.ok).catch(() => false)) return
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  throw new Error(`Isolated Team API did not become ready: ${apiOutput}`)
+}
+async function teamPost(route, body) {
+  const payload = Buffer.from(JSON.stringify({ v: 1, authAccountId: 'acct-demo-u-erich', expiresAt: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url')
+  const signature = createHmac('sha256', sessionSecret).update(payload).digest('base64url')
+  const response = await fetch(`${apiUrl}${route}`, { method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: `devflow_session=${payload}.${signature}` }, body: JSON.stringify(body) })
+  expect(response.status).toBe(201)
+  return response.json()
+}
 let run
 let failureSeen = false
 let malformedAttempts = 0
 let releaseReasoning
+const reportedUsage = (prompt = 40, completion = 12) => ({ prompt_tokens: prompt, completion_tokens: completion,
+  total_tokens: prompt + completion, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: prompt })
 const server = createServer(async (request, response) => {
+  try {
   const chunks = []; for await (const chunk of request) chunks.push(chunk)
   const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   requests.push(body)
-  expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low', stream: true, max_tokens: 3500 })
+  expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low', stream: true })
   const input = JSON.parse(body.messages.find((message) => message.role === 'user').content)
+  if (input.criticalProposalInput) expect(body).not.toHaveProperty('max_tokens')
+  else expect(body.max_tokens).toBe(3500)
   expect(input.originalRequirements).toContainEqual(expect.objectContaining({ runId: run.id, content: run.request, truncated: false }))
   const user = input.history.filter((message) => message.role === 'user').at(-1)?.text ?? ''
   const observations = input.toolObservations
   let value
   if (user.includes('格式恢复') && malformedAttempts++ === 0) {
     response.writeHead(200, { 'content-type': 'application/json' })
-    response.end(JSON.stringify({ choices: [{ message: { content: '{broken json', reasoning_content: '受控格式失败' }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 } }))
+    response.end(JSON.stringify({ choices: [{ message: { content: '{broken json', reasoning_content: '受控格式失败' }, finish_reason: 'stop' }], usage: reportedUsage() }))
     return
   }
   if (user.includes('失败重试') && !failureSeen) { failureSeen = true; response.writeHead(503); response.end('{}'); return }
   if (user.includes('停止调查')) {
-    const timer = setTimeout(() => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: '延迟响应' }) } }], usage: { prompt_tokens: 10, completion_tokens: 2 } })) }, 5000)
+    const timer = setTimeout(() => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: '延迟响应' }) } }], usage: reportedUsage(10, 2) })) }, 5000)
     response.once('close', () => clearTimeout(timer)); return
   }
-  if (user.includes('格式恢复')) {
+  if (input.proposalVerification) {
+    expect(input.proposalVerification.content).toContain('清理所有已完成任务')
+    value = { coverageReview: input.criticalProposalInput.criteria.map((criterion) => ({ criterionId: criterion.id, status: 'covered', reason: '受控提案保留原始清理范围、未完成任务和持久化要求。' })) }
+  } else if (user.includes('格式恢复')) {
     value = { format: 'markdown', text: '**格式恢复成功，原始需求仍然完整。**' }
   } else if (user.includes('流式推理验证')) {
     value = { format: 'markdown', text: '**这是独立展示的最终回答。**\n\n- 依据：当前流程\n- 下一步：核对需求' }
@@ -68,11 +108,16 @@ const server = createServer(async (request, response) => {
     value = observations.length === 0 ? { tool: { name: 'node', args: { runId: run.id, nodeId: node.id } } }
       : { text: '测试节点尚未执行。可以打开节点查看证据与下一步操作。', actions: [{ label: '查看测试节点', runId: run.id, nodeId: node.id, section: '测试证据' }] }
   }
+  if (input.criticalProposalInput && value.draft) value.draft.coverage = input.criticalProposalInput.criteria.map((criterion) => ({ criterionId: criterion.id, sourceQuote: criterion.text, proposalQuote: value.draft.content }))
   response.writeHead(200, { 'content-type': 'text/event-stream' })
   response.write(`data: ${JSON.stringify({ id: 'controlled-response', choices: [{ index: 0, delta: { reasoning_content: '先核对当前工作流，再检查相关节点的真实状态。REASONING_LOCAL_ONLY。' }, finish_reason: null }] })}\n\n`)
-  const finish = () => response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: JSON.stringify(value) }, finish_reason: 'stop' }], usage: { prompt_tokens: 40, completion_tokens: 12, total_tokens: 52 } })}\n\ndata: [DONE]\n\n`)
+  const finish = () => response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: JSON.stringify(value) }, finish_reason: 'stop' }], usage: reportedUsage() })}\n\ndata: [DONE]\n\n`)
   if (user.includes('流式推理验证')) releaseReasoning = finish
   else finish()
+  } catch (error) {
+    modelErrors.push(error.message)
+    response.writeHead(500, { 'content-type': 'application/json' }).end('{}')
+  }
 })
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const modelUrl = `http://127.0.0.1:${server.address().port}/v1`
@@ -80,18 +125,14 @@ let app
 let page
 const errors = []
 async function launch() {
-  app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9', DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
+  app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: apiUrl, DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
   // Keep this synthetic-credential test independent of a user's OS keychain authorization.
   await app.evaluate(({ safeStorage }) => {
-    const secret = 'sk-test-workbench-only'
     safeStorage.isAsyncEncryptionAvailable = async () => true
-    safeStorage.encryptStringAsync = async (value) => {
-      if (value !== secret) throw new Error('Unexpected test credential')
-      return Buffer.from(secret)
-    }
+    safeStorage.encryptStringAsync = async (value) => Buffer.from(`isolated-smoke:${value}`)
     safeStorage.decryptStringAsync = async (bytes) => {
-      if (bytes.toString() !== secret) throw new Error('Unexpected test credential')
-      return secret
+      if (!bytes.toString().startsWith('isolated-smoke:')) throw new Error('Unexpected test credential')
+      return { result: bytes.toString().slice('isolated-smoke:'.length), shouldReEncrypt: false }
     }
   })
   // Only this isolated test process redirects the external API boundary; no real model request.
@@ -124,21 +165,27 @@ async function checkExecutor(executor) {
   await page.getByRole('button', { name: '关闭详情', exact: true }).click()
 }
 try {
+  await startTeamFixture()
+  const team = await teamPost('/api/team/projects', { name: 'Workbench Conversation Smoke', slug: `workbench-smoke-${Date.now()}`, repository: 'local/workbench-smoke', description: 'Isolated no-cost conversation and persistence test.' })
+  const pairing = await teamPost(`/api/team/projects/${encodeURIComponent(team.id)}/pairing-codes`, {})
   await launch()
   await app.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }) }, repository)
   const project = await page.evaluate(() => window.aiDevFlowDesktop.selectLocalProject())
+  await page.evaluate((input) => window.aiDevFlowDesktop.pairDesktop(input), { code: pairing.code, localProjectId: project.id })
+  await page.evaluate((projectId) => window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({ projectId, enabled: true, monthlyLimitUsd: 1, warningThresholdUsd: 0.5 }), project.id)
   await page.evaluate(() => window.aiDevFlowDesktop.saveAgentProviderCredential({ name: 'DeepSeek 流式测试模型', providerId: 'workbench-smoke', model: 'deepseek-flash', apiKey: 'sk-test-workbench-only', baseUrl: 'https://api.deepseek.com' }))
   await page.evaluate(() => window.aiDevFlowDesktop.saveSettings({ selectedAgentProviderId: 'workbench-smoke', themePreference: 'dark' }))
-  run = await page.evaluate((projectId) => window.aiDevFlowDesktop.createRun({ title: '为任务清单增加清除已完成功能', request: '清理已完成任务，保留未完成任务并保存结果。', projectId, creatorId: 'smoke-user', branchName: 'ai/clear-done' }), project.id)
+  run = await page.evaluate((projectId) => window.aiDevFlowDesktop.createRun({ title: '为任务清单增加清除已完成功能', request: '清理已完成任务，保留未完成任务并保存结果。', projectId, creatorId: 'u-erich', branchName: 'ai/clear-done' }), project.id)
   await page.reload()
   await expect(page.getByTestId('workflow-canvas')).toBeVisible()
+  await page.getByRole('button', { name: '流程视图', exact: true }).click()
   const checked = []
   for (const node of run.nodes) {
     await page.getByTestId(`flow-node-${node.id}`).click()
-    await expect(page.getByRole('tab', { name: '节点详情', exact: true })).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('tab', { name: '节点详情', exact: true })).toHaveCount(0)
     const inspector = page.getByTestId('node-inspector')
     await expect(inspector).toBeVisible()
-    const tabs = await inspector.getByRole('tab').all()
+    const tabs = await inspector.locator('.workspace-primary-tabs').getByRole('tab').all()
     const tabNames = []
     for (const tab of tabs) { tabNames.push(await tab.innerText()); await tab.click(); await expect(tab).toHaveAttribute('aria-selected', 'true') }
     for (const chip of await page.getByTestId(`workflow-card-${node.id}`).locator('.artifact-chip').all()) {
@@ -148,7 +195,7 @@ try {
   }
   await page.getByTestId(`flow-node-${run.nodes[0].id}`).click()
   await page.locator('.stage-grid').evaluate((element) => { element.scrollTop = 0; element.scrollLeft = 0 })
-  await page.getByTestId('node-inspector').getByRole('tab', { name: '状态', exact: true }).click()
+  await page.getByTestId('node-inspector').getByRole('tab', { name: '概览', exact: true }).click()
   await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
   await page.screenshot({ scale: 'css', path: path.join(output, '01-node-details.png') })
   await page.getByRole('button', { name: '列表视图', exact: true }).click()
@@ -233,7 +280,7 @@ try {
   const nodeResults = requests.slice(secondStart).map((request) => JSON.parse(request.messages.find((message) => message.role === 'user').content)).flatMap((input) => input.toolObservations)
   expect(JSON.stringify(nodeResults)).toContain('讨论提案（待确认）')
   await page.getByRole('button', { name: '查看需求产物 ↗', exact: true }).click()
-  await expect(page.getByTestId('node-inspector').getByRole('tab', { name: '产物', exact: true })).toHaveAttribute('aria-selected', 'true')
+  await expect(page.getByTestId('node-inspector').getByRole('tab', { name: '产物与证据', exact: true })).toHaveAttribute('aria-selected', 'true')
   const secondTab = page.getByRole('tab', { name: /查询共享提案/ })
   await secondTab.click()
   const recoveryStart = requests.length
@@ -245,13 +292,20 @@ try {
   await page.screenshot({ scale: 'css', path: path.join(output, '07-format-recovery.png') })
   await send('失败重试场景，请查询测试进度。')
   await expect(page.getByRole('button', { name: '重试调查', exact: true })).toBeVisible({ timeout: 30000 })
+  const callsAfterFailure = requests.length
+  await page.getByRole('button', { name: '重试调查', exact: true }).click()
+  await readyText('有模型调用的实际费用尚未确认')
+  expect(requests.length).toBe(callsAfterFailure)
+  // This isolated local endpoint has no bill. Explicitly change only its test project policy
+  // to exercise retry after the real budget boundary has demonstrably refused unknown cost.
+  await page.evaluate((projectId) => window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({ projectId, enabled: false, monthlyLimitUsd: 1, warningThresholdUsd: 0.5 }), project.id)
   await page.getByRole('button', { name: '重试调查', exact: true }).click()
   await readyText('测试节点尚未执行')
   await send('停止调查场景')
   await page.getByRole('button', { name: '停止调查', exact: true }).click()
   await readyText('已停止调查')
   await page.getByRole('textbox', { name: '对话内容' }).fill('重启后继续输入')
-  await page.getByRole('tab', { name: '节点详情', exact: true }).click()
+  await page.getByTestId('node-inspector').getByRole('tab', { name: '概览', exact: true }).click()
   await secondTab.click()
   const persisted = await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({ type: 'list', projectId }), project.id)
   expect(persisted.conversations).toHaveLength(2)
@@ -343,6 +397,7 @@ try {
   expect(JSON.stringify(requests)).not.toContain('REASONING_LOCAL_ONLY')
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
+  expect(modelErrors).toEqual([])
   const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
@@ -352,5 +407,11 @@ try {
 } finally {
   if (app) await app.close().catch(() => undefined)
   server.closeAllConnections(); await new Promise((resolve) => server.close(resolve))
+  if (apiProcess && apiProcess.exitCode === null) {
+    const exited = new Promise((resolve) => apiProcess.once('exit', resolve))
+    apiProcess.kill('SIGTERM')
+    const timer = setTimeout(() => apiProcess.kill('SIGKILL'), 3000)
+    await exited; clearTimeout(timer)
+  }
   await rm(temp, { recursive: true, force: true })
 }

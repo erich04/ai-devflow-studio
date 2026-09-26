@@ -74,6 +74,7 @@ import {
 import {
   CURRENT_SCHEMA_VERSION,
   createLocalStore,
+  getLocalStoreRevision,
   type LocalStore,
 } from './local-store.js'
 import {
@@ -586,6 +587,7 @@ async function getRemoteSyncOutboxScheduler() {
     })
     remoteSyncOutboxScheduler = createRemoteSyncOutboxScheduler({
       processor,
+      pollingIntervalMs: backgroundPollInterval,
       onError: async () => {
         console.warn('[remote-sync-outbox] A delivery cycle failed; the lease will be retried.')
         try {
@@ -846,14 +848,21 @@ async function broadcastGitHubDeliveryState(): Promise<void> {
 }
 
 async function processAvailableGitHubDeliveries(): Promise<void> {
+  const store = await getStore()
+  const before = getLocalStoreRevision(store)
   try {
     await runGitHubDeliveryExclusive(async (signal) => {
-      const store = await getStore()
+      const intents = await store.listGitHubDeliveryIntents()
+      if (intents.length === 0) return
       const workflow = createWorkflowRuntime(store)
       await reconcileCompletedGitHubDeliveryIntents({
         store,
         workflow,
       })
+
+      // Keep local completion recovery, but do not contact GitHub or the
+      // credential store for terminal history with no pending delivery work.
+      if (intents.every((intent) => ['completed', 'failed', 'revoked'].includes(intent.status))) return
 
       const context = await createCurrentGitHubDeliveryContext(signal)
       if (!context) return
@@ -875,7 +884,9 @@ async function processAvailableGitHubDeliveries(): Promise<void> {
       await processor.recoverAndAdvance()
     })
   } finally {
-    await broadcastGitHubDeliveryState()
+    if (before === undefined || before !== getLocalStoreRevision(store)) {
+      await broadcastGitHubDeliveryState()
+    }
   }
 }
 
@@ -1019,6 +1030,7 @@ async function getGitHubDeliveryScheduler() {
   githubDeliverySchedulerPromise ??= Promise.resolve().then(() => {
     githubDeliveryScheduler = createGitHubDeliveryScheduler({
       recoverAndAdvance: processAvailableGitHubDeliveries,
+      pollingIntervalMs: backgroundPollInterval,
       onError: () => {
         console.warn('[github-delivery] A recovery cycle failed and will be retried.')
       },
@@ -1308,6 +1320,7 @@ async function getGateCommandScheduler() {
   gateCommandSchedulerPromise ??= Promise.resolve().then(() => {
     gateCommandScheduler = createGateCommandScheduler({
       processAvailable: processAvailableGateCommands,
+      pollingIntervalMs: backgroundPollInterval,
       onError: () => {
         console.warn('[gate-command] A processing cycle failed and will be retried.')
       },
@@ -3697,6 +3710,11 @@ function registerIpcHandlers() {
   })
 }
 
+function backgroundPollInterval(): number {
+  const visible = BrowserWindow.getAllWindows().some((window) => window.isVisible() && !window.isMinimized())
+  return visible ? 15_000 : 60_000
+}
+
 function createWindow() {
   if (INITIAL_THEME) {
     nativeTheme.themeSource = INITIAL_THEME
@@ -3724,6 +3742,12 @@ function createWindow() {
       sandbox: true,
       spellcheck: false,
     },
+  })
+
+  window.on('focus', () => {
+    wakeRemoteSyncOutbox()
+    wakeGateCommandScheduler()
+    wakeGitHubDeliveryScheduler()
   })
 
   const rendererEntry = resolveDesktopRendererEntry({
