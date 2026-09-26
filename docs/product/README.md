@@ -1,29 +1,28 @@
-# DevFlow Studio Product Definition
+# DevFlow Studio 产品定义
 
-This folder is the product-definition home for DevFlow Studio.
+本目录是 DevFlow Studio 产品定义的阅读入口。各类文档按职责分别维护：
 
-It is intentionally separate from:
+- `docs/plans/`：实现计划与里程碑执行。
+- `docs/guides/`：演练与用户操作指南。
+- `docs/adr/`：架构决策。
+- `docs/engineering/`：测试、冒烟验证和工程过程记录。
+- `docs/roadmap.md`：里程碑状态与后续规划。
 
-- `docs/plans/`: implementation plans and milestone execution.
-- `docs/guides/`: walkthroughs and user operation guides.
-- `docs/adr/`: architecture decisions.
-- `docs/engineering/`: testing, smoke, and engineering process notes.
-- `docs/roadmap.md`: milestone status and future planning.
+本目录用于回答以下产品问题：
 
-Use this folder to answer product questions:
+- 我们在构建什么产品？
+- 谁会使用它？
+- 它解决什么问题？
+- 核心业务流程是什么？
+- 哪些能力属于产品范围，哪些不属于？
+- 哪些面向用户的概念需要跨版本保持稳定？
 
-- What product are we building?
-- Who uses it?
-- What problem does it solve?
-- What is the core business workflow?
-- Which features belong to the product, and which are out of scope?
-- What user-facing concepts should stay stable across versions?
+<a id="documents"></a>
 
-## Documents
+## 文档
 
-- [`product-definition.md`](./product-definition.md): Durable product positioning, users, core workflow,
-  feature modules, and product boundaries. Current release and milestone status live in the Roadmap.
-- [`project-introduction.zh-CN.md`](./project-introduction.zh-CN.md): Concise Chinese introduction for sharing the workflow, Agent group, OpenCode CRI integration, and adoption value.
-- [`details/`](./details/README.md): Indexed product details for UX and implementation decisions, split by user jobs, object model, workflow, surfaces, evidence, and UI refactor anchors.
-- [`design-references/`](./design-references/README.md): Visual references captured from OpenDesign prototypes for frontend refactor work.
-- [`prd/`](./prd/README.md): Product Requirements Documents for the current product baseline and future scoped product changes.
+- [产品定义](./product-definition.md)：长期产品定位、用户、核心流程、功能模块与边界。当前发布及里程碑状态见路线图。
+- [项目简介](./project-introduction.zh-CN.md)：适合分享的简明介绍，涵盖流程、智能体分工、OpenCode CRI 集成及采用价值。
+- [产品细节](./details/README.md)：为体验设计和实现决策提供依据，按用户任务、对象模型、流程、各端职责、证据与界面重构要点组织。
+- [设计参考](./design-references/README.md)：前端重构所参考的 OpenDesign 原型截图。
+- [产品需求文档](./prd/README.md)：当前产品基线及后续限定范围的产品变更。

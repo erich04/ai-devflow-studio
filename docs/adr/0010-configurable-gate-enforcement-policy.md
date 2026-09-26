@@ -1,93 +1,69 @@
-# ADR 0010: Configurable Gate Enforcement Policy
+<a id="adr-0010-configurable-gate-enforcement-policy"></a>
 
-## Status
+# ADR 0010：可配置的门禁执行策略
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-ADR 0008 made Gate Advisory warning-only for v0.5 so the first Agent runtime could assist human
-reviewers without taking over approval. v0.7 adds a governance layer that can make selected checks
-blocking, while preserving the default human-controlled approval path unless a team explicitly opts
-in to enforcement.
+已接受（Accepted）。
 
-The enforcement model must avoid the failure modes identified during planning:
+<a id="context"></a>
 
-- A team project must not become less strict by going offline.
-- A project override must not weaken an organization floor.
-- A probabilistic Agent finding must never become a hard-block with no human recourse.
-- A disabled renderer button is not sufficient; approval write paths must re-check policy.
+## 背景
 
-## Decision
+ADR 0008 将 v0.5 门禁建议设为仅警告，让首个 Agent 运行时辅助人工审查，而不接管批准。v0.7 增加治理层，可让指定检查具有阻断效果；除非团队明确启用强制执行，否则保留默认的人工控制审批路径。
 
-DevFlow will model Gate Enforcement Policy in the shared package and use the same resolver and
-evaluator in API, Web, and Electron.
+执行模型必须避免规划阶段识别出的失败方式：
 
-Out-of-box policy is warn-only. Blocking is enabled only by applying the recommended preset or by
-custom organization policy. The recommended preset blocks deterministic missing-review, testing
-standard, and API-contract failures; Agent policy findings remain warnings unless explicitly
-configured otherwise.
+- 团队项目不能因为离线而降低约束。
+- 项目覆盖配置不能削弱组织底线。
+- 概率性的 Agent 发现不能成为无法人工处理的强制阻断。
+- 禁用界面按钮并不足够；审批写入路径必须重新检查策略。
 
-Policy resolution uses an ordered action model:
+<a id="decision"></a>
+
+## 决策
+
+在共享包中定义门禁执行策略，API、Web 和 Electron 使用相同的解析器与评估器。
+
+开箱即用的策略只警告。只有应用推荐预设或自定义组织策略，才启用阻断。推荐预设阻断确定性的缺少审查、测试标准和 API 契约失败；Agent 策略发现仍只警告，除非明确另行配置。
+
+策略解析使用有序动作模型：
 
 ```text
 ignore < warn < block
 effective = max(organization floor, project desired action)
 ```
 
-Organization policy is the only source of `floorAction` and `overridable`. Project overrides can
-strengthen a rule but cannot weaken a floored organization rule or define hard-block behavior.
+即：有效动作取组织底线与项目期望动作中更严格的一项。组织策略是 `floorAction` 和 `overridable` 的唯一来源。项目覆盖可以加强规则，但不能削弱设有底线的组织规则，也不能定义强制阻断行为。
 
-Hard-block is allowed only for deterministic enforcement targets and requires remediation text.
-`agent_finding + overridable:false` is invalid because Agent findings are probabilistic.
+只有确定性执行目标可以强制阻断，且必须附带处理说明。`agent_finding + overridable:false` 无效，因为 Agent 发现具有概率性。
 
-Gate approval is governed by `canApproveGateNow(...)`, which combines the existing role gate with
-the enforcement decision and any valid override. Electron main-process approval and API approval
-paths must call this shared function. Renderer state is only a mirror.
+Gate 审批由 `canApproveGateNow(...)` 管理，结合既有角色门禁、执行决定和有效例外。Electron 主进程和 API 审批路径都必须调用这一共享函数；渲染进程状态只是其映射。
 
-Overrides for blocking decisions are lead-only and require separation of duties: the lead cannot be
-the Run creator or the selected Node owner. Hard-blocks cannot be overridden.
+阻断决定的例外仅限 `lead`，并要求职责分离：该负责人不能是 Run 创建者或选中节点所有者。强制阻断不可通过例外覆盖。
 
-Team policy source of truth is API/Postgres. Desktop caches authoritative policy snapshots and must
-use the last cached policy when offline. A team project with no cached policy returns
-`blocked_policy_unavailable` for Gate approval. Pure local projects use the built-in warn-only
-policy.
+团队策略的权威来源为 API/Postgres。桌面缓存权威策略快照，离线时必须使用最后的缓存策略。没有策略缓存的团队项目，在 Gate 审批时返回 `blocked_policy_unavailable`。纯本地项目使用内置的仅警告策略。
 
-## Consequences
+<a id="consequences"></a>
 
-- ADR 0008 remains true for v0.5, but from v0.7 onward Gate Advisory can contribute to a blocking
-  decision through policy evaluation. The default remains warn-only.
-- Web/API owns policy authoring; Desktop consumes, caches, evaluates, and records local/provisional
-  decisions.
-- Desktop approval refreshes team policy on a best-effort basis before the main-process write guard.
-  If refresh fails, Desktop continues with the last authoritative cache; if no cache exists for a
-  team project, approval returns `blocked_policy_unavailable` instead of falling back to warn-only.
-- Desktop Gate override save/reconcile attempts team API confirmation first. Confirmed responses are
-  stored as accepted, network failures remain provisional, and stale or forbidden server responses
-  are stored as rejected so the Gate returns to a blocked, user-explainable state.
-- `/api/sync/run-summary` rejects `approval` summaries. Approval-like writes must be produced by
-  the Gate approval enforcement path rather than by remote summary sync.
-- Default verification stays deterministic because the default and recommended preset do not make
-  Agent findings blocking.
-- Future policy signatures, KMS-backed integrity, automatic remediation, MCP policy enforcement,
-  and coding retry loops remain out of scope.
+## 影响
 
-## 2026-09-10: Review freshness across the Team projection
+- ADR 0008 对 v0.5 仍成立；从 v0.7 开始，门禁建议可以通过策略评估参与阻断决定，但默认仍只警告。
+- Web/API 负责策略编写；桌面负责读取、缓存、评估，并记录本地/临时决定。
+- 桌面审批在主进程写入检查前尽力刷新团队策略。刷新失败时使用最近的权威缓存；团队项目没有缓存时返回 `blocked_policy_unavailable`，不能回退到仅警告。
+- 桌面保存/核对 Gate 例外时，先尝试团队 API 确认。确认成功的响应记为已接受，网络失败保留为临时状态，过期或禁止的服务端响应记为已拒绝，使 Gate 回到可向用户解释的阻断状态。
+- `/api/sync/run-summary` 拒绝 `approval` 摘要。类似审批的写入必须来自 Gate 审批执行路径，不能由远端摘要同步产生。
+- 默认验证保持确定性，因为默认策略和推荐预设都不会让 Agent 发现直接阻断。
+- 后续策略签名、KMS 完整性保护、自动处理、MCP 策略执行和编码重试循环不属于本次决策范围。
 
-The approved boundary keeps local Artifact bodies on Desktop. Main derives a bounded
-`GateReviewSubjectSnapshot` from its persisted Run and complete redacted subjects: Run/node
-identity and version, sanitizer version, request digest, and ordered Artifact IDs, kinds, timestamps
-and content digests. Neither Renderer input nor a Review's manifest supplies this snapshot.
+<a id="2026-09-10-review-freshness-across-the-team-projection"></a>
 
-The Team API compares this independent snapshot with the Review manifest instead of hashing its
-placeholder request and absent local Artifacts. Missing or mismatched proof for a manifest-bearing
-local Review blocks Web approval and explains how to resync or review changed content. Old records
-without manifests retain their existing policy treatment. Same-version upload may fill missing
-proof once or replay identical proof; changed proof conflicts, and a new Run version clears old
-proof. Accounting can still sync when no complete current subject is available.
+## 2026-09-10：团队投影中的审查版本有效性
 
-Web submits the existing approval command. The server attaches its current snapshot; clients cannot
-choose it. Paired Desktop rebuilds the snapshot from full persisted subjects and runs its existing
-full-context policy, role, claim, expiry, replay and atomic evidence checks before applying the
-command and returning a receipt. Cloud preflight is not final local approval. No local request or
-Artifact body, chunk, source path or credential is added to the synchronization contract.
+已批准的边界要求本地产物正文留在桌面。主进程根据已持久化 Run 和完整脱敏审查对象，派生有界的 `GateReviewSubjectSnapshot`：Run/节点身份和版本、脱敏器版本、请求摘要，以及有序的产物 ID、类型、时间和内容摘要。渲染进程输入和审查清单本身都不能提供该快照。
+
+团队 API 将这个独立快照与审查清单比较，而不是对占位请求和不存在的本地产物计算哈希。带清单的本地审查若缺少证明或证明不匹配，将阻断 Web 审批，并说明如何重新同步或审查变更内容。没有清单的旧记录保留既有策略处理方式。同版本上传可补齐一次缺失证明，或重放相同证明；变更证明会冲突，新 Run 版本会清除旧证明。没有完整当前审查对象时，用量记账仍可同步。
+
+Web 提交既有审批命令，服务端附上当前快照，客户端不能自行选择。已配对桌面从完整持久化审查对象重建快照，在应用命令并返回回执前，执行原有完整上下文策略、角色、认领、过期、重放和原子证据检查。云端预检不是最终本地审批。同步契约不会增加本地请求/产物正文、片段、源码路径或凭据。

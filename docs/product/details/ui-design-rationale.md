@@ -1,6 +1,10 @@
 # DevFlow Studio 桌面端界面设计决策说明
 
-本文档沉淀当前 Open Design 原型讨论中形成的产品信息架构、Workflow Board 卡片模型、Inspector 展示逻辑、模块跳转关系和后续重构注意点。
+本文档沉淀当前 Open Design 原型讨论中形成的产品信息架构、工作流看板卡片模型、节点检查器展示逻辑、模块跳转关系和后续重构注意点。
+
+版本范围：本文保留早期 OpenDesign 原型的信息架构理由，以及当时已接入的 V1.5 交付链路。第 4、8、11 节中的卡片类别、按节点变化的页签和左右位置属于该版设计，不是当前节点工作区的导航说明。2026-09-26 的候选实现已按 #171、#174、#177 改为左侧流程与节点、右侧独立对话，以及“概览 / 内容与审查 / 产物与证据 / 执行记录”四个一级页签；完整交付验收仍在进行，尚未声明正式版本已发布。历史原型和截图保留原意。
+
+文中的反引号页签名称及代码示例保留原型当时的标识，用于与历史截图、代码对照；周边说明采用中文。
 
 对应原型文件：
 
@@ -9,7 +13,7 @@
 
 ## 1. 产品定位
 
-DevFlow Studio 是一个本地优先的 AI 交付工作台，不是营销首页，也不是概念 demo。它的核心体验是把一个需求从创建 Run 到业务验收串成完整 delivery flow。
+DevFlow Studio 是一个本地优先的 AI 交付工作台，不是营销首页，也不是概念演示。它的核心体验是把一个需求从创建 Run 到业务验收串成完整交付流程。
 
 界面应该服务工程团队的日常重复使用：
 
@@ -17,131 +21,143 @@ DevFlow Studio 是一个本地优先的 AI 交付工作台，不是营销首页�
 - 流程驱动，而不是孤立页面。
 - 明确区分团队策略、本地仓库、交付实例和节点行动。
 - 关键 Gate 的阻断原因必须可解释。
-- Agents、Tests、Knowledge 都是支撑当前 Run/Node 的模块，不是独立孤岛。
+- Agent 管理、测试、知识都是支撑当前 Run/Node 的模块，不是独立孤岛。
 
 ## 2. 核心对象关系
 
-### Team Project
+<a id="team-project"></a>
+
+### 团队项目（Team Project）
 
 团队项目，决定团队级规则：
 
-- Team policy
-- Gate policy
+- 团队策略
+- 门禁策略
 - 预算规则
 - 角色权限
 - 远端同步
-- GitHub App repository binding 与 revocation
-- Delivery Request 和 signed Web approval
-- redaction / retention 等团队治理规则
+- GitHub App 仓库绑定与撤销
+- 交付请求和签名 Web 审批
+- 脱敏 / 保留期限等团队治理规则
 
-Team Project 是团队配置和治理边界。
+团队项目（Team Project）是团队配置和治理边界。
 
-### Local Project
+<a id="local-project"></a>
+
+### 本地项目（Local Project）
 
 本地代码仓库，决定本机执行边界：
 
-- 当前 repo
+- 当前仓库
 - 测试命令来源
-- command safety
-- Coding Agent worktree
-- diff
-- Test Evidence
-- 本机 runtime 和权限边界
+- 命令安全性
+- 编码 Agent 工作树
+- 差异
+- 测试证据
+- 本机运行时和权限边界
 
-Local Project 不拥有 Team policy。它只是被绑定到某个 Team Project policy snapshot 下执行。
+本地项目（Local Project）不拥有团队策略。它只是被绑定到某个团队项目策略快照下执行。
 
 ### Run
 
-一次需求交付实例。用户先选择 Run，再查看这个 Run 的 Workflow Board。
+一次需求交付实例。用户先选择 Run，再查看这个 Run 的工作流看板。
 
-Run 是主业务对象。所有 Workflow Node、Artifact、Evidence、Trace 都应该挂在某个 Run 下。
+Run 是主业务对象。所有工作流节点、产物、证据、执行轨迹都应该挂在某个 Run 下。
 
-### Workflow Node
+<a id="workflow-node"></a>
 
-Run 内的流程主节点。当前设计里，Board 上的主卡片只表示流程节点，不再把 Artifact / Evidence / Trace 当成与 Task / Gate 同级的卡片。
+### 工作流节点
 
-### Artifact / Evidence / Trace
+Run 内的流程主节点。当前设计里，看板上的主卡片只表示流程节点，不再把产物 / 证据 / 执行轨迹当成与 Task / Gate 同级的卡片。
 
-这些不是 Board 主流程卡片，而是某个 Workflow Node 的输出、依赖或过程记录：
+<a id="artifact--evidence--trace"></a>
 
-- Artifact: 做出来的产物
-- Evidence: 证明结果的证据
-- Trace: 执行过程记录
+### 产物 / 证据 / 执行轨迹
+
+这些不是看板主流程卡片，而是某个工作流节点的输出、依赖或过程记录：
+
+- 产物: 做出来的产物
+- 证据: 证明结果的证据
+- 执行轨迹: 执行过程记录
 
 ### Gate
 
-Gate 是门禁判断点。它不是简单的 UI disabled 状态，而是由多个条件共同决定：
+Gate 是门禁判断点。它不是简单的界面禁用状态，而是由多个条件共同决定：
 
-- Team policy
-- role permission
+- 团队策略
+- 角色权限
 - 基于知识的门禁审查（Knowledge-Grounded Gate Review）
-- Test Evidence
-- budget 状态
-- 相关 Artifact 和 Trace
+- 测试证据
+- 预算状态
+- 相关产物和执行轨迹
 
 ## 3. 主流程心智
 
 正确的主线是：
 
 1. 选择一个 `Run`。
-2. 查看这个 Run 的六阶段 delivery flow。
-3. 点击某个 Workflow Node。
-4. 在右侧 Inspector 处理当前节点的下一步动作、阻断原因、Evidence、Trace、Gate 条件。
-5. 必要时从 Inspector 跳转到 Agents、Tests、Knowledge 等支撑模块。
-6. 支撑模块执行后回写 Workbench Inspector 和当前 Run 状态。
+2. 查看这个 Run 的六阶段交付流程。
+3. 点击某个工作流节点。
+4. 在右侧节点检查器处理当前节点的下一步动作、阻断原因、证据、执行轨迹、Gate 条件。
+5. 必要时从节点检查器跳转到 Agent 管理、测试、知识等支撑模块。
+6. 支撑模块执行后回写工作台节点检查器和当前 Run 状态。
 
-这意味着 Workbench 是主流程中心，其他模块为当前 Run/Node 服务。
+这意味着工作台是主流程中心，其他模块为当前 Run/Node 服务。
 
-## 4. Workflow Board 为什么这样设计
+<a id="4-workflow-board-为什么这样设计"></a>
+
+## 4. 工作流看板为什么这样设计
 
 ### 旧问题
 
-早期设计把 `Task / Gate / Artifact / Evidence / Trace` 都做成 Board 上的同级卡片。这个模型有问题：
+早期设计把 `Task / Gate / Artifact / Evidence / Trace` 都做成看板上的同级卡片。这个模型有问题：
 
-- Task 会产出 Artifact、Evidence、Trace。
-- Gate 会消费 Artifact、Evidence、Trace 来判断能否通过。
-- Evidence 和 Trace 不是用户要按顺序执行的流程任务。
-- Board 卡片类型和 Inspector 里的 `状态 / Gate / Evidence / Trace` 维度重复，用户会困惑。
+- Task 会产出产物、证据、执行轨迹。
+- Gate 会消费产物、证据、执行轨迹来判断能否通过。
+- 证据和执行轨迹不是用户要按顺序执行的流程任务。
+- 看板卡片类型和节点检查器里的 `状态 / Gate / Evidence / Trace` 维度重复，用户会困惑。
 
-因此，Artifact / Evidence / Trace 不应作为 Board 主卡片类型。
+因此，产物 / 证据 / 执行轨迹不应作为看板主卡片类型。
 
 ### 当前模型
 
-Workflow Board 的主卡片只分为四类：
+工作流看板的主卡片只分为四类：
 
 | 类型 | 作用 | 典型例子 |
 |---|---|---|
-| `Task` | 需要执行的工作 | Clarification Agent、Coding Agent、Local Test Task |
-| `Gate` | 判断能否继续推进 | 需求确认 Gate、Design Gate、PR Delivery Gate、业务验收 Gate |
+| `Task` | 需要执行的工作 | 需求澄清 Agent、编码 Agent、本地测试任务 |
+| `Gate` | 判断能否继续推进 | 需求确认 Gate、方案评审 Gate、PR 交付 Gate、业务验收 Gate |
 | `Review` | 评审和治理动作 | 门禁审查 |
-| `Delivery` | 受治理的交付节点 | PR Delivery Package、Delivery Intent / Request、Draft pull request、Acceptance Bundle |
+| `Delivery` | 受治理的交付节点 | PR 交付包、交付意图 / 请求、草稿 PR、验收资料包 |
 
-Artifact / Evidence / Trace / Decision 作为主节点的关联资源出现，但卡片摘要不应该
-对所有 Node 强行使用同一组标签。Board summary 需要按 Node 类型翻译成产品语言，例如
+产物 / 证据 / 执行轨迹 / 决策作为主节点的关联资源出现，但卡片摘要不应该
+对所有节点强行使用同一组标签。看板摘要需要按节点类型翻译成产品语言，例如
 Task 可以显示 `产物 / 轨迹 / Gate影响`，Gate 应显示 `条件 / 证据 / 结论`。
 
 详细规则见 [`workflow-node-semantics.md`](./workflow-node-semantics.md)。
 
-这样 Board 只表达流程推进，Inspector 再展开诊断细节。
+这样看板只表达流程推进，节点检查器再展开诊断细节。
 
-## 5. 每类 Workflow 卡片的设计原因
+<a id="5-每类-workflow-卡片的设计原因"></a>
+
+## 5. 每类工作流卡片的设计原因
 
 ### Task
 
-Task 是要执行的动作。它通常会产生 Artifact、Evidence 或 Trace。
+Task 是要执行的动作。它通常会产生产物、证据或执行轨迹。
 
 例子：
 
-- Clarification Agent
-- Coding Agent
-- Local Test Task
+- 需求澄清 Agent
+- 编码 Agent
+- 本地测试任务
 
 Task 卡片需要展示：
 
 - 当前执行状态
 - 是否是当前节点
 - 产物数量
-- Trace 是否存在
+- 执行轨迹是否存在
 - 会影响哪个 Gate
 
 不应该把 Task 自己设计成 Gate，因为 Task 的结果会被 Gate 消费，但 Task 本身不做门禁决策。
@@ -152,24 +168,24 @@ Gate 是推进关口。它决定当前 Run 能不能进入下一阶段或完成�
 
 Gate 卡片需要突出：
 
-- passed / blocked / missing review / over budget 等状态
+- 通过、阻断、缺少审查、超预算等状态
 - 当前卡点
-- Gate 消费哪些 Evidence
+- Gate 消费哪些证据
 - Gate 的条件满足情况
-- Gate 的决策结论、审批记录或 override 状态
-- 下一步 remediation
+- Gate 的决策结论、审批记录或例外审批状态
+- 下一步处理建议
 
 Gate 的价值不是“执行”，而是解释为什么可以或不可以继续往后走。
-Gate 可以有产物，例如 Gate Report 或审批记录，但在界面上应该表达为 `结论`、`审批`、
+Gate 可以有产物，例如门禁报告或审批记录，但在界面上应该表达为 `结论`、`审批`、
 `阻断`、`Override` 或 `Gate Report`，而不是普通阶段产物。
 
 ### Review
 
-`Review` 是内部节点类型；用户界面将这类动作称为“门禁审查”。门禁审查以 Knowledge 为依据，审查当前 Gate、门禁条件和关联阶段产物。
+`Review` 是内部节点类型；用户界面将这类动作称为“门禁审查”。门禁审查以知识为依据，审查当前 Gate、门禁条件和关联阶段产物。
 
 Review 和 Gate 容易混淆，但二者不同：
 
-- Review 产生 advisory、引用、review evidence。
+- Review 产生建议意见、引用、审查证据。
 - Gate 消费 Review 的结果来决定是否通过。
 
 所以 Review 不应直接等同于 Gate。它是 Gate 判断的一项输入。
@@ -180,34 +196,35 @@ Delivery 是受治理的交付节点，不是普通 Task，也不是 Gate。
 
 例子：
 
-- PR Delivery Package、Delivery Intent、Delivery Request 和 Draft pull request
-- Acceptance Bundle
+- PR 交付包、交付意图、交付请求和草稿 PR
+- 验收资料包
 
-Delivery 先把累积的 Artifact、Evidence、Trace 组织成 metadata-only PR Delivery Package，再由
-Electron main 从 canonical managed worktree 固定 Delivery Intent。API/Postgres 持久化 redacted
-Delivery Request；lead/owner 通过 signed Web approval 批准精确 revision，随后才允许发布
-expected commit，并在 remote head 验证后创建或 reconcile 一个 Draft pull request。Acceptance
-消费该完成证据，但永不 merge。
+交付先把累积的产物、证据和执行轨迹组织成仅含元数据的 PR 交付包，再由 Electron 主进程
+从权威托管工作树固定交付意图。API/Postgres 持久化脱敏交付请求；lead/owner 通过签名 Web
+审批批准精确修订后，才允许发布预期提交。核实远端提交后，创建或核对一个草稿 PR。
+业务验收消费该完成证据，但绝不合并。
 
-## 6. Board 卡片数量由谁决定
+<a id="6-board-卡片数量由谁决定"></a>
+
+## 6. 看板卡片数量由谁决定
 
 同一个阶段下有几个卡片，不应该随意变化。合理来源是：
 
-1. `Run template`: 决定基础流程骨架。
-2. `Team Project policy`: 决定是否插入必须的 Gate / Review。
-3. `Local Project` 与 runtime 结果: 决定测试、worktree、budget 等状态是否出现。
-4. 折叠规则: 已完成或非阻断的输出可以变成摘要 chip，而不是主卡片。
+1. Run 模板（`Run template`）：决定基础流程骨架。
+2. 团队项目策略（`Team Project policy`）：决定是否插入必须的 Gate / Review。
+3. 本地项目（`Local Project`）与运行时结果: 决定测试、工作树、预算等状态是否出现。
+4. 折叠规则: 已完成或非阻断的输出可以变成摘要标签，而不是主卡片。
 
 例如“界面修改”这种 Run，需求澄清阶段更合理的是：
 
-- `Clarification Task`
+- 需求澄清任务（`Clarification Task`）
 - `需求确认 Gate`
-- Raw Request / Clarification Brief 作为上面节点的 Artifact 摘要
+- 原始请求 / 需求澄清简述作为上面节点的产物摘要
 
 如果一个 Run 的需求澄清阶段有 3 张卡，另一个只有 2 张，必须能解释：
 
-- policy 插入了额外 Gate
-- 该 Run 已有完整 brief，跳过了某个 Task
+- 策略插入了额外 Gate
+- 该 Run 已有完整需求简述，跳过了某个 Task
 - 当前阶段折叠了已完成节点
 - 某类需求必须追加门禁审查
 
@@ -215,12 +232,12 @@ expected commit，并在 remote head 验证后创建或 reconcile 一个 Draft p
 
 ## 7. 阶段推进与卡点展示
 
-Board 需要直接表达 Run 的推进位置，而不是让用户必须点 Inspector 才知道卡在哪里。
+看板需要直接表达 Run 的推进位置，而不是让用户必须点节点检查器才知道卡在哪里。
 
 当前设计应保留：
 
 - 六阶段主序列：需求澄清、方案设计、开发实现、测试证据、PR 交付、业务验收
-- Run progress 条
+- Run 进度条
 - 当前阶段标记
 - 当前卡点提示
 - 阶段状态：已通过、当前位置、卡点、等待
@@ -231,19 +248,23 @@ Board 需要直接表达 Run 的推进位置，而不是让用户必须点 Inspe
 - Gate 没过时，下游不能算完成。
 - 某些下游节点可以提前准备，但最终完成要看业务验收 Gate。
 
-## 8. Inspector 为什么按节点类型变化
+<a id="8-inspector-为什么按节点类型变化"></a>
 
-早期 Inspector 对所有卡片都显示 `状态 / Gate / Evidence / Trace` 四个 tab。这个设计太统一，导致语义重复：
+## 8. 节点检查器为什么按节点类型变化
 
-- Task 不是 Gate，但也出现 Gate tab。
-- Artifact / Evidence / Trace 曾经既是卡片类型，又是 Inspector tab。
-- 用户会误以为所有节点都有同等的 Gate / Evidence / Trace。
+早期节点检查器对所有卡片都显示 `状态 / Gate / Evidence / Trace` 四个页签。这个设计太统一，导致语义重复：
 
-当前设计改为：Inspector 根据当前节点类型动态展示。
+- Task 不是 Gate，但也出现 Gate 页签。
+- 产物 / 证据 / 执行轨迹曾经既是卡片类型，又是节点检查器页签。
+- 用户会误以为所有节点都有同等的 Gate / 证据 / 执行轨迹。
 
-### Task Inspector
+当前设计改为：节点检查器根据当前节点类型动态展示。
 
-Tab：
+<a id="task-inspector"></a>
+
+### Task 节点检查器
+
+页签：
 
 - `状态`
 - `产物`
@@ -253,12 +274,14 @@ Tab：
 原因：
 
 - Task 负责执行。
-- Task 会产生产物和 Trace。
+- Task 会产生产物和执行轨迹。
 - Task 的结果会影响后续 Gate。
 
-### Gate Inspector
+<a id="gate-inspector"></a>
 
-Tab：
+### Gate 节点检查器
+
+页签：
 
 - `状态`
 - `Gate 条件`
@@ -274,16 +297,18 @@ Tab：
 
 Gate 条件应该展示：
 
-- policy snapshot
-- role permission
+- 策略快照
+- 角色权限
 - 门禁审查
-- Test Evidence
-- budget
-- required Artifact
+- 测试证据
+- 预算
+- 必需产物
 
-### Review Inspector（门禁审查）
+<a id="review-inspector门禁审查"></a>
 
-Tab：
+### Review 节点检查器（门禁审查）
+
+页签：
 
 - `状态`
 - `门禁审查`
@@ -293,12 +318,14 @@ Tab：
 原因：
 
 - Review 是治理动作。
-- 它的重点是引用来源、score、heading path、content hash、门禁审查历史和 advisory。
+- 它的重点是引用来源、评分、标题路径、内容哈希、门禁审查历史和建议意见。
 - 门禁审查结果作为 Gate 输入。
 
-### Delivery Inspector
+<a id="delivery-inspector"></a>
 
-Tab：
+### Delivery 节点检查器
+
+页签：
 
 - `状态`
 - `PR Delivery Package`
@@ -309,15 +336,16 @@ Tab：
 
 原因：
 
-- Delivery Inspector 要解释 package、expected commit、binding、approval、remote head、Draft 和
-  Acceptance 由哪些 Artifact 与 Evidence 支撑。
-- **Revise** 创建新的 pre-publication revision 并使旧 approval 失效；**Resume** 继续同一个
-  `recovery_required` attempt；**Retry** 仅在 predecessor 被证明 terminal 后创建下一 attempt；
-  **Stop** 停放精确 active attempt。四个动作不能互换或静默执行。
+- 交付节点检查器要解释交付包、预期提交、仓库绑定、审批、远端提交、草稿 PR 和业务验收分别由哪些产物与证据支撑。
+- **修订（Revise）**创建新的发布前修订并使旧审批失效；**继续（Resume）**继续同一个
+  `recovery_required` 尝试；**重试（Retry）**仅在前一次尝试已确认处于终态后创建下一次尝试；
+  **停止（Stop）**停放指定的活动尝试。四个动作不能互换或静默执行。
 
-## 9. Team Project policy 的归属
+<a id="9-team-project-policy-的归属"></a>
 
-Team Project policy 不应在 Workbench、Local Project 或某个 Run 里配置。
+## 9. 团队项目策略的归属
+
+团队项目策略不应在工作台、本地项目（Local Project）或某个 Run 里配置。
 
 它应该在：
 
@@ -329,191 +357,208 @@ Team Project policy 不应在 Workbench、Local Project 或某个 Run 里配置�
 
 - 哪些阶段需要 Gate
 - 哪些 Gate 需要门禁审查
-- 哪些 Test Evidence 必须存在
-- budget 上限与 approval 规则
-- 哪些角色可以 approve
-- redaction / sync / retention 规则
+- 哪些测试证据必须存在
+- 预算上限与审批规则
+- 哪些角色可以审批
+- 脱敏 / 同步 / 保留期限规则
 
-Workbench 和 Inspector 只能读取 policy snapshot，并解释当前 Gate 为什么被阻断。
+工作台和节点检查器只能读取策略快照，并解释当前 Gate 为什么被阻断。
 
 ## 10. 同步团队按钮的产品含义
 
 `同步团队` 是全局按钮，因为它影响整个桌面端上下文：
 
-- Team Overview
-- Gate policy
-- Workbench Inspector
-- budget / policy 状态
-- policy snapshot 版本
+- 团队概览
+- 门禁策略
+- 工作台节点检查器
+- 预算 / 策略状态
+- 策略快照版本
 
-原 OpenDesign prototype 中，这个按钮曾经只是前端模拟：
+原 OpenDesign 原型中，这个按钮曾经只是前端模拟：
 
 - 更新同步状态
-- 更新 Inspector 的 policy 状态
-- 更新 Team Overview 的 Gate 状态
-- 展示 toast
+- 更新节点检查器的策略状态
+- 更新团队概览的 Gate 状态
+- 展示临时提示
 
-当前 production path 已接入 Electron IPC、API/Postgres 和 SQLite，并保留以下职责：
+当前生产链路已接入 Electron IPC、API/Postgres 和 SQLite，并保留以下职责：
 
 - Electron IPC
-- 远端 Team Project policy 拉取
+- 远端团队项目策略拉取
 - 本地 `policy_snapshots` 写入
-- snapshot 版本和时间戳
+- 快照版本和时间戳
 - Gate 重新评估
-- Event / Trace 记录
+- 事件 / 执行轨迹记录
 
-GitHub App repository binding 和 signed Web approval 走独立的 Web/API authority path；Delivery
-Intent 与 Revise、Resume、Retry、Stop 走专用 Electron IPC/API command path，不能降级成通用
-renderer sync payload。
+GitHub App 仓库绑定和签名 Web 审批走独立的 Web/API 授权路径；交付意图与 Revise、Resume、Retry、Stop
+走专用 Electron IPC/API 命令路径，不能降级成渲染进程的通用同步载荷。
 
-## 11. Local Project 卡片的定位
+<a id="11-local-project-卡片的定位"></a>
 
-Workbench 左列的 Local Project 卡片只展示本地配置和执行边界。
+## 11. 本地项目（Local Project）卡片的定位
+
+工作台左列的本地项目（Local Project）卡片只展示本地配置和执行边界。
 
 它回答：
 
 - 当前 Run 基于哪个本地仓库执行
 - 测试命令来自哪里
-- command safety 是什么
-- Coding Agent / Tests 会在哪个本地项目上下文运行
-- 该 Local Project 绑定到哪个 Team Project policy
+- 命令安全性是什么
+- 编码 Agent / 测试会在哪个本地项目上下文运行
+- 该本地项目（Local Project）绑定到哪个团队项目策略
 
 这里不应该放：
 
 - 保存测试命令
 - 执行测试入口
-- Gate approve
+- 通过 Gate
 - Agent 执行按钮
 
-这些动作都应出现在当前节点的 Inspector 或 Tests / Agents 模块中。
+这些动作都应出现在当前节点的节点检查器或测试 / Agent 管理模块中。
 
 ## 12. 模块跳转逻辑
 
-### 全局 Shell
+<a id="全局-shell"></a>
+
+### 全局界面框架
 
 左侧固定导航包含：
 
 - 工作台
-- Team Overview
-- Knowledge
-- Agents
+- 团队概览
+- 知识
+- Agent 管理
 - Skills
 - MCP
 - 测试
 
 顶部栏包含：
 
-- Team Project 选择
-- Local Project 提示
+- 团队项目（Team Project）选择
+- 本地项目（Local Project）提示
 - 全局搜索
 - 主题切换
-- Desktop pairing code
+- 桌面配对码
 - 同步团队
-- Redaction
+- 脱敏（Redaction）
 - 新建 Run
 - 用户头像
 
 这些是全局，因为它们影响产品上下文，而不是某个局部卡片。
 
-### Workbench 到 Agents
+<a id="workbench-到-agents"></a>
 
-当 Gate 缺少门禁审查，Inspector 应提供“运行门禁审查”动作，跳到 Agents。
+### 工作台到 Agent 管理
 
-Agents 完成门禁审查后，应回写：
+当 Gate 缺少门禁审查，节点检查器应提供“运行门禁审查”动作，跳到 Agent 管理。
 
-- Review Evidence（内部类型，对应门禁审查证据）
-- Gate Advisory
-- Inspector 状态
+Agent 管理完成门禁审查后，应回写：
+
+- 审查证据（内部类型，对应门禁审查证据）
+- 门禁审查建议
+- 节点检查器状态
 - 当前 Run 的 Gate 条件
 
-### Workbench 到 Tests
+<a id="workbench-到-tests"></a>
 
-当 Test Evidence 缺失，Inspector 应提供 `执行本地测试` 动作，跳到 Tests。
+### 工作台到测试
 
-Tests 完成后回写：
+当测试证据缺失，节点检查器应提供 `执行本地测试` 动作，跳到测试。
 
-- Test Evidence
-- command status
-- exit code
-- duration
+测试完成后回写：
+
+- 测试证据
+- 命令状态
+- 退出码
+- 耗时
 - stdout/stderr 摘要
 - Gate 状态
 
-### Workbench 到 Knowledge
+<a id="workbench-到-knowledge"></a>
 
-当 Inspector 展示 Knowledge Governance 引用时，点击引用应跳到 Knowledge 页面。
+### 工作台到知识
 
-Knowledge 页面用于查看：
+当节点检查器展示知识治理引用时，点击引用应跳到知识页面。
 
-- source path
-- category
-- tags
-- score
-- heading path
-- content hash
-- Run references
-- lightweight graph
+知识页面用于查看：
 
-### Team Overview 到 Policy Settings
+- 来源路径
+- 类别
+- 标签
+- 评分
+- 标题路径
+- 内容哈希
+- Run 引用
+- 轻量图谱
 
-Team Overview 是团队脱敏健康视图，不展示本地 raw log。
+<a id="team-overview-到-policy-settings"></a>
 
-Policy 配置入口应该在 Team 页面内的 `Team Project Settings / Policy`，而不是 Workbench。
+### 团队概览到策略设置
 
-## 13. Agents 模块边界
+团队概览是团队脱敏健康视图，不展示本地原始日志。
 
-Agents 是执行控制台，但不是主流程入口。
+策略配置入口应该在团队页面内的 `Team Project Settings / Policy`，而不是工作台。
 
-它应从 Inspector 的当前节点动作跳入。
+<a id="13-agents-模块边界"></a>
+
+## 13. Agent 管理模块边界
+
+Agent 管理是执行控制台，但不是主流程入口。
+
+它应从节点检查器的当前节点动作跳入。
 
 ### 门禁审查 Agent
 
 职责：
 
-- 以 Knowledge 为依据，审查当前 Gate、门禁条件和阶段产物
+- 以知识为依据，审查当前 Gate、门禁条件和阶段产物
 - 做知识治理
-- 生成 Gate Advisory
-- 记录引用、trace、token usage、cost source
+- 生成门禁审查建议
+- 记录引用、执行轨迹、Token 用量和费用来源
 
 需要明确：
 
-- 门禁审查是 DevFlow 自己实现的 review agent。
-- 模型 provider 只是推理后端。
+- 门禁审查是 DevFlow 自己实现的审查 Agent。
+- 模型服务提供方只是推理后端。
 
-### Coding Agent
+<a id="coding-agent"></a>
+
+### 编码 Agent
 
 职责：
 
-- 通过 runtime 修改代码
-- 管理 worktree
-- 接收 permission relay
-- 展示 tool timeline
-- 产出 diff、bootstrap evidence、test evidence
+- 通过运行时修改代码
+- 管理工作树
+- 接收权限请求传递
+- 展示工具时间线
+- 产出差异、环境准备证据、测试证据
 
 需要明确：
 
-- Coding Agent 和门禁审查是两条不同链路。
-- Coding Agent 做代码修改。
-- 门禁审查对照 Knowledge 与规范审查当前 Gate 和阶段产物。
+- 编码 Agent 和门禁审查是两条不同链路。
+- 编码 Agent 做代码修改。
+- 门禁审查对照知识与规范审查当前 Gate 和阶段产物。
 
-## 14. Tests 模块边界
+<a id="14-tests-模块边界"></a>
 
-Tests 模块负责测试计划和 Test Evidence。
+## 14. 测试模块边界
+
+测试模块负责测试计划和测试证据。
 
 应展示：
 
 - 测试包说明
 - 执行本地测试按钮
-- progress / health bar
-- Evidence 列表
-- command
-- status
-- exit code
-- duration
-- redacted yes/no
+- 进度 / 健康状态条
+- 证据列表
+- 命令
+- 状态
+- 退出码
+- 耗时
+- 是否脱敏
 - stdout/stderr 摘要
 
-失败、超时、跳过都必须保存 Evidence，并影响 Gate 状态。
+失败、超时、跳过都必须保存证据，并影响 Gate 状态。
 
 ## 15. Skills 与 MCP 边界
 
@@ -523,24 +568,24 @@ Skills 是团队能力目录。
 
 每个 Skill 展示：
 
-- name
-- description
-- stage
-- enabled / disabled
+- 名称
+- 描述
+- 所属阶段
+- 启用 / 禁用
 
-Skills 可以支持 Run，但不能绕过 Gate、policy 或 evidence requirements。
+Skills 可以支持 Run，但不能绕过 Gate、策略或证据要求。
 
 ### MCP
 
 MCP 是本机工具连接器，不是云端集成市场。
 
-每个 server 展示：
+每个服务器展示：
 
-- name
-- command
-- permission
-- enabledLocally
-- Enable / Disable
+- 名称
+- 命令
+- 权限
+- 本地启用状态（`enabledLocally`）
+- 启用 / 禁用
 
 重点是权限、本地执行边界和安全状态。
 
@@ -549,27 +594,27 @@ MCP 是本机工具连接器，不是云端集成市场。
 全局搜索必须明确说明它搜索的是当前加载的：
 
 - Run
-- Artifact
-- Knowledge
-- Event
+- 产物
+- 知识
+- 事件（Event）
 
 它不是本地文件系统全文搜索。
 
-这是为了避免用户误解搜索框会直接扫描整个本地 repo。
+这是为了避免用户误解搜索框会直接扫描整个本地仓库。
 
 ## 17. 关键状态覆盖
 
 原型和后续重构都需要覆盖：
 
-- default
-- loading
-- empty
-- blocked
-- failed
-- success
-- policy unavailable
+- 默认
+- 加载中
+- 空状态
+- 被阻断
+- 失败
+- 成功
+- 策略不可用
 - `missing agent review`（内部状态；用户文案为“缺少门禁审查”）
-- over budget approval
+- 超预算审批
 
 这些状态不应只靠颜色表达。需要同时有：
 
@@ -582,7 +627,7 @@ MCP 是本机工具连接器，不是云端集成市场。
 
 ### 数据模型建议
 
-不要把 Board 节点建模成 `Task / Gate / Artifact / Evidence / Trace` 同级枚举。
+不要把看板节点建模成 `Task / Gate / Artifact / Evidence / Trace` 同级枚举。
 
 建议：
 
@@ -605,7 +650,7 @@ type WorkflowNode = {
 };
 ```
 
-Artifact / Evidence / Trace 应该作为引用或子资源挂在 WorkflowNode 下。
+产物 / 证据 / 执行轨迹应该作为引用或子资源挂在 `WorkflowNode` 下。
 
 ### UI 组件建议
 
@@ -631,20 +676,20 @@ Artifact / Evidence / Trace 应该作为引用或子资源挂在 WorkflowNode �
 
 必须补齐：
 
-- 点击 Run 刷新 Board 和 Inspector。
-- 点击 Workflow Node 刷新 Inspector。
-- Search result 可跳到对应 Run / Artifact / Knowledge / Event。
-- Agents 完成门禁审查后提供返回 Gate Inspector。
-- Tests 完成后提供返回当前 Test Evidence 节点。
-- Team policy 同步后重新评估相关 Gate。
+- 点击 Run 刷新看板和节点检查器。
+- 点击工作流节点刷新节点检查器。
+- 搜索结果可跳到对应 Run / 产物 / 知识 / Event。
+- Agent 管理完成门禁审查后提供返回 Gate 节点检查器。
+- 测试完成后提供返回当前测试证据节点。
+- 团队策略同步后重新评估相关 Gate。
 
 ## 19. 当前最重要的设计原则
 
-1. Board 展示流程主节点，不展示所有底层对象。
-2. Inspector 是当前节点行动中心。
-3. Artifact / Evidence / Trace / Decision 是节点输出、依赖或审计资源，不是主流程卡片。
-4. Gate 消费 Evidence 和门禁审查结果，并产生决策结论；它不是普通执行任务。
-5. Team policy 只在 Team Settings 配置。
-6. Local Project 只表达本地执行边界。
-7. Agents / Tests / Knowledge 都应从 Inspector 的当前问题跳转进入。
+1. 看板展示流程主节点，不展示所有底层对象。
+2. 节点检查器是当前节点行动中心。
+3. 产物 / 证据 / 执行轨迹 / 决策是节点输出、依赖或审计资源，不是主流程卡片。
+4. Gate 消费证据和门禁审查结果，并产生决策结论；它不是普通执行任务。
+5. 团队策略只在团队设置配置。
+6. 本地项目（Local Project）只表达本地执行边界。
+7. Agent 管理 / 测试 / 知识都应从节点检查器的当前问题跳转进入。
 8. 所有阻断状态都必须解释原因和下一步。

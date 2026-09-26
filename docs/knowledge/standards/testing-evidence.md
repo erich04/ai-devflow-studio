@@ -1,15 +1,17 @@
 ---
-title: Local Test Evidence Standard
+title: 本地测试证据规范
 category: testing_standard
 ownerId: u-yu
 tags: test, evidence, smoke
-summary: Local test evidence needs command, exit code, duration, and redacted output.
+summary: 本地测试证据必须包含命令、退出码、耗时和脱敏输出。
 ---
 
-# Local Test Evidence Standard
+<a id="local-test-evidence-standard"></a>
 
-Local test evidence needs command, exit code, duration, and redacted output.
+# 本地测试证据规范
 
-- Store only bounded stdout and stderr.
-- Redact API keys and tokens before evidence is persisted or synchronized.
-- Failed tests must remain visible to reviewers.
+本地测试证据必须包含命令、退出码、耗时和脱敏输出。
+
+- 仅保存有长度上限的 stdout 和 stderr。
+- 在持久化或同步证据前，先对 API 密钥和令牌脱敏。
+- 测试失败必须对审查者可见。

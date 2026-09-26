@@ -1,25 +1,30 @@
-# ADR 0005: v0.2 Local Execution First
+<a id="adr-0005-v02-local-execution-first"></a>
 
-## Status
+# ADR 0005：v0.2 优先实现本地执行
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-AI DevFlow Studio had a polished workflow UI, but the workbench was fixture-backed. The next product
-step needed to make the desktop client perform a real developer action without expanding into the full
-team backend, authentication, or agent orchestration surface.
+已接受（Accepted）。
 
-## Decision
+<a id="context"></a>
 
-For v0.2, build the local execution slice first. The Electron client selects a local repository,
-detects and stores a test command, runs that command through controlled main-process IPC, and archives
-test evidence in local SQLite.
+## 背景
 
-## Consequences
+AI DevFlow Studio 已有较完整的工作流界面，但当时的工作台仍依赖测试数据。下一步需要让桌面客户端完成真实开发动作，同时不扩展到完整团队后端、认证或 Agent 编排。
 
-- The product gains a real local developer workflow before team synchronization exists.
-- SQLite is the source of truth for local projects, test commands, runs, artifacts, events, and test
-  evidence in this slice.
-- Team backend sync, auth, Postgres persistence, and manager-wide real data remain v0.3 concerns.
-- Renderer code must not directly access filesystem or shell APIs; it uses preload-exposed commands.
+<a id="decision"></a>
+
+## 决策
+
+v0.2 先实现本地执行这一纵向切片：Electron 客户端选择本地仓库，检测并保存测试命令，通过受控的主进程 IPC 执行命令，并将测试证据归档到本地 SQLite。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 在团队同步尚未建立前，产品先获得真实的本地开发流程。
+- 在该切片中，SQLite 是本地项目、测试命令、Run、产物、事件和测试证据的权威来源。
+- 团队后端同步、认证、Postgres 持久化和管理者视角的真实数据属于 v0.3 的范围。
+- 渲染进程不能直接访问文件系统或 shell API，必须使用 preload 暴露的命令。

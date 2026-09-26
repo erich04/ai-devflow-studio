@@ -1,101 +1,71 @@
-# ADR 0008: Knowledge Review Agent Runtime
+<a id="adr-0008-knowledge-review-agent-runtime"></a>
 
-## Status
+# ADR 0008：知识审查 Agent 运行时
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-DevFlow v0.4 introduced Knowledge Retrieval and Knowledge Governance checks, but the system still
-needed a real Agent runtime slice. The v0.5 milestone adds one focused Agent: Knowledge Review
-Agent. It reviews a selected Run/Node using a redacted review subject, Knowledge criteria, and test
-evidence, then produces a durable review artifact, trace, advisory, and token/cost usage.
+已接受（Accepted）。
 
-The product must work in both places DevFlow runs today:
+<a id="context"></a>
 
-- Electron desktop, where local SQLite owns private local execution state.
-- API/Web, where Postgres owns team-visible state.
+## 背景
 
-## Decision
+DevFlow v0.4 引入了知识检索与知识治理检查，但仍需要一个真实的 Agent 运行时切片。v0.5 增加一个职责明确的知识审查 Agent：根据脱敏审查对象、知识标准和测试证据评审选定 Run/节点，生成持久审查产物、轨迹、建议及 Token/费用记录。
 
-DevFlow will implement Knowledge Review Agent with a shared Agent Core and provider abstraction.
-The same core is used by Electron and API paths.
+产品需要支持两种运行位置：
 
-The review context has three explicit partitions:
+- Electron 桌面：本地 SQLite 管理私有的本地执行状态。
+- API/Web：Postgres 管理团队可见状态。
 
-- `REVIEW_SUBJECT` is the material being judged. It contains the original Run request and the
-  complete, exact Artifact content associated with the current Gate. A clarification Gate reviews
-  its clarification Artifact. A design Gate reviews both the approved clarification Artifact and
-  its design Artifact. Knowledge summaries never replace these Artifacts.
-- `REVIEW_CRITERIA` is the material used to judge the subject. It contains Gate metadata, policy
-  constraints, and retrieved Knowledge. Knowledge is grounding only; it is never the review
-  subject.
-- `REVIEW_OUTPUT` defines the structured findings the provider must return. Design review includes
-  requirement coverage, technical decisions, boundaries/data flow, compatibility, security,
-  migration, test strategy, and unresolved changes.
+<a id="decision"></a>
 
-The prompt also carries `CONTEXT_APPLICABILITY`, a workflow-aware projection of which fields are
-applicable, available, supplemental, not yet expected, or missing-required for the selected node.
-Empty optional/inapplicable Test Evidence is omitted rather than presented as a false gap. A policy
-can promote a field to required, in which case absence is explicit and fail-closed enforcement can
-act on it. Deterministic fake and paid providers consume this same contract.
+## 决策
 
-Knowledge criteria preserve independent `lexicalMatch`, `semanticRelevance`, and Review-use
-(`gateEvidence`) metadata. A lexical score never becomes semantic relevance, and no retrieval score
-becomes Evidence. The Inspector therefore separates Knowledge/Policy `引用来源` from auditable
-`Evidence` such as exact subject Artifacts, Reviews/findings, and applicable Test Evidence.
+通过共享 Agent Core 和服务商抽象实现知识审查 Agent；Electron 与 API 路径使用同一核心。
 
-The shared core resolves every subject Artifact by exact ID and verifies its Run and producer/Gate
-association. Missing, duplicate, wrong-Run, wrong-node, stale, empty, or oversized subject material
-fails closed instead of silently reviewing a summary or a different Artifact. Content is redacted
-before provider invocation, bounded deterministically, and split into ordered chunks without
-dropping content inside the supported limit. Budget preflight is calculated from this exact prompt.
+审查上下文明确定义三个分区：
 
-Every new review stores a context manifest containing the stage, original-request digest, exact
-subject Artifact ID, revision timestamp, content digest, sanitizer version, coverage state, and
-Knowledge-criteria identities/digests, typed relevance/use state, and field projection. Gate
-enforcement revalidates this manifest and excludes a
-review when its subject has changed. Historical reviews without a manifest remain readable as
-legacy data, but their subject freshness cannot be proven.
+- `REVIEW_SUBJECT` 是被评判的材料，包含原始 Run 请求，以及与当前 Gate 关联、完整且精确的产物正文。需求确认 Gate 审查需求澄清产物；方案评审 Gate 同时审查已批准的澄清产物和设计产物。知识摘要不能替代这些产物。
+- `REVIEW_CRITERIA` 是判断依据，包括 Gate 元数据、策略约束和检索知识。知识只提供依据，不能成为审查对象本身。
+- `REVIEW_OUTPUT` 定义服务商必须返回的结构化发现。设计审查涵盖需求覆盖、技术决策、边界/数据流、兼容性、安全、迁移、测试策略及未解决变更。
 
-The default provider for automated verification is deterministic and cost-free. It consumes the
-same context contract as OpenAI-compatible providers so tests cannot bypass subject selection,
-redaction, bounds, or budget checks. OpenAI-compatible providers are supported only when a
-credential is explicitly configured.
+提示还携带 `CONTEXT_APPLICABILITY`，根据选定工作流节点，标明哪些字段适用、可用、补充、尚不应出现或必需但缺失。空的可选/不适用测试证据会被省略，不能作为虚假缺口。策略可以把字段提升为必需，此时缺失会明确显示，拒绝放行的策略可以据此执行。确定性模拟服务商和付费服务商使用相同契约。
 
-Provider credentials are never returned to UI clients in plaintext:
+知识标准分别保留 `lexicalMatch`、`semanticRelevance` 和审查使用状态 `gateEvidence` 元数据。词法分数不能成为语义相关性，任何检索分数都不能变成证据。因此 Inspector 必须区分知识/策略“引用来源”与可审计 `Evidence`，后者包括精确的被审查产物、审查/发现和适用测试证据。
 
-- Electron stores encrypted provider secrets behind the desktop main-process boundary and returns
-  only masked metadata through preload.
-- API stores encrypted provider secrets in Postgres and returns only masked metadata.
+共享核心按准确 ID 解析每个审查对象，并验证其 Run 及生产节点/Gate 关联。材料缺失、重复、Run 错误、节点错误、过期、为空或超出大小限制时，拒绝继续，不能悄悄审查摘要或另一份产物。调用服务商前先脱敏，以确定性方式限制大小，并按顺序分片；支持范围内的正文不得丢失。预算预检以这份准确提示为计算依据。
 
-Agent output is persisted as:
+每次新审查都会保存上下文清单，包括阶段、原始请求摘要、准确产物 ID、版本时间、内容摘要、脱敏器版本、覆盖状态，以及知识标准的身份/摘要、带类型的相关性/使用状态和字段投影。Gate 强制检查会重新验证清单，排除审查对象已改变的报告。没有清单的历史报告仍可作为旧数据阅读，但无法证明被审查版本仍然有效。
+
+自动验证默认使用确定性、无费用的模拟服务商。它与 OpenAI 兼容服务商使用相同上下文契约，因此测试不能绕过审查对象选择、脱敏、限额或预算检查。只有明确配置凭据后，才支持 OpenAI 兼容服务商调用。
+
+服务商凭据绝不能以明文返回界面客户端：
+
+- Electron 在桌面主进程边界后保存加密密钥，通过 preload 仅返回掩码元数据。
+- API 在 Postgres 中保存加密密钥，也仅返回掩码元数据。
+
+Agent 输出持久化为以下记录：
 
 - `AgentReviewResult`
 - `AgentTrace`
 - `AgentTokenUsage`
-- `agent_review` Artifact
-- `agent_review` Agent Event
+- `agent_review` 类型产物
+- `agent_review` 类型 Agent 事件
 
-Gate Advisory is warning-only by default. It helps reviewers see risk and missing evidence, but it
-does not block human Gate approval in v0.5.
+门禁建议默认只警告。它帮助审查者发现风险和缺失证据，但在 v0.5 中不会阻断人工 Gate 审批。
 
-Electron local reviews are stored fully in SQLite. When a team API is available, Electron uploads
-only a redacted `RemoteAgentReviewSummary`; it does not upload subject content, prompt text, raw
-trace payloads, local cwd, raw stdout/stderr, or provider secrets. The summary may include the
-redacted context-manifest identities and digests needed to explain which subject revision was
-reviewed.
+Electron 本地审查完整保存在 SQLite。团队 API 可用时，Electron 仅上传脱敏的 `RemoteAgentReviewSummary`，不上传被审查正文、提示、原始轨迹载荷、本地 cwd、原始 stdout/stderr 或服务商密钥。摘要可以包含脱敏的上下文清单身份与摘要，以说明实际审查了哪个版本。
 
-## Consequences
+<a id="consequences"></a>
 
-- Electron and API do not fork Agent semantics.
-- Gate approval can distinguish a current review from a review of an older Artifact revision.
-- Tests and CI remain deterministic because they use the fake provider by default.
-- Future provider integrations can implement the provider abstraction without rewriting Inspector,
-  Agent Workbench, or governance rendering.
-- Future enforcement can change Gate policy from warning-only to configurable blocking without
-  changing review persistence.
-- The first Agent is intentionally narrow; multi-Agent handoff, real MCP execution, vector RAG, and
-  auto-fix flows remain out of scope.
-- ADR 0009 updates the coding-agent boundary: DevFlow still does not build its own coding agent, but
-  v0.6 can host an external opencode engine through a managed adapter.
+## 影响
+
+- Electron 与 API 不会分裂出不同的 Agent 语义。
+- Gate 审批可以区分当前审查与针对旧产物版本的审查。
+- 测试和 CI 默认使用模拟服务商，保持确定性。
+- 后续服务商集成可以实现服务商抽象，无需重写 Inspector、Agent 执行台或治理界面。
+- 后续强制执行可以将 Gate 策略从仅警告改为可配置阻断，无需改变审查持久化。
+- 首个 Agent 刻意保持较窄范围；多 Agent 交接、真实 MCP 执行、向量 RAG 和自动修复不属于本次决策范围。
+- ADR 0009 更新编码 Agent 边界：v0.6 可以通过受管适配器承载外部 opencode 引擎，而非自行构建编码 Agent。

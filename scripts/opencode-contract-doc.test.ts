@@ -64,10 +64,10 @@ describe('opencode runtime contract refresh documentation', () => {
       'utf8',
     )
 
-    expect(checklist).toContain('Keep live opencode smoke out of `corepack pnpm verify`')
-    expect(checklist).toContain('only when its own release contract explicitly')
-    expect(checklist).toContain('separate candidate-bound authorization')
-    expect(checklist).toContain('V1.5 does not require or authorize another paid-provider smoke')
+    expect(checklist).toContain('将真实 OpenCode 冒烟测试排除在 `corepack pnpm verify`')
+    expect(checklist).toContain('只有在自身发布契约明确要求')
+    expect(checklist).toContain('与候选版本绑定的单独授权')
+    expect(checklist).toContain('V1.5 不要求也不授权再次进行付费模型冒烟测试')
     expect(checklist).not.toContain('For every future product release')
     expect(checklist).toContain('corepack pnpm --silent test:opencode-smoke')
 

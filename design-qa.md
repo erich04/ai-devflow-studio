@@ -1,58 +1,72 @@
-# Workflow navigation and conversation header — visual QA
+# 流程导航与会话头部：视觉验收
 
-final result: passed
+最终结果：通过。
 
-## Target and evidence
+> 本文记录 2026-09-24 导航迭代的历史验证，不代表 #171、#172、#174、#175、#177 后续改版已完成验收。
 
-The user's annotated target is `/var/folders/pn/2vxnd83n1hxbtqhx6szfgcp80000gn/T/codex-clipboard-7c7321ea-4ec8-42c8-8c50-1b6ff2420765.png` (1047 × 591). It shows stage 02 selected while actual execution remains in stage 01. The red rectangles and bright hand-drawn line describe association and partial progress; the user explicitly delegated final colors and interaction details.
+<a id="target-and-evidence"></a>
 
-Implementation evidence is in `out/workflow-navigation-qa/` (local, uncommitted):
+## 目标与证据
 
-- `06-native-design-final.png`: installed Electron, original user profile, 1440 × 920 capture including native title bar. Stage 02 is selected, the requirement Gate is still current, and the original conversation remains visible.
-- `04-final-design-wide.png`: isolated browser preview at observed CSS viewport 1600 × 900, devicePixelRatio 1.08; screenshot output 1481 × 833.
-- `08-narrow-light-final.png`: isolated browser preview at observed CSS viewport 1265 × 833, devicePixelRatio 1.08; screenshot output 1170 × 771.
-- `10-toolbar-fixed-narrow.png` and `11-toolbar-fixed-wide.png`: final toolbar hit-area fix, CSS viewports 1180 × 800 and 1834 × 1000, devicePixelRatio 0.9; outputs 1311 × 889 and 2038 × 1111. All three view modes were clicked in both themes at both widths. The final wide capture and the source were compared together again after this fix.
+用户标注的目标图为 `/var/folders/pn/2vxnd83n1hxbtqhx6szfgcp80000gn/T/codex-clipboard-7c7321ea-4ec8-42c8-8c50-1b6ff2420765.png`（1047 × 591）。图中选中了阶段 02，而实际执行仍在阶段 01。红色矩形和明亮的手绘线条表达关联关系和部分完成进度；用户已明确授权调整最终颜色和交互细节。
 
-The screenshot API returned JPEG bytes despite the `.png` filenames. Images were opened by their content type. The browser capture rescales its output; no 1:1 pixel-fidelity claim is made. The source is a cropped panel rather than a full window, so comparison aligns the stage-navigation, selected-node strip, and reader regions, excluding native chrome and surrounding panels. The target and native implementation were opened together in the same image input. Their labels, connector thickness, selection pointer, and region borders are legible at that size; a further crop was unnecessary.
+实现证据位于 `out/workflow-navigation-qa/`，仅在本地，未提交：
 
-## Findings and comparison history
+- `06-native-design-final.png`：已安装的 Electron，使用用户原有数据配置；截图为 1440 × 920，包含原生标题栏。阶段 02 被选中，需求确认 Gate 仍是当前节点，原会话保持可见。
+- `04-final-design-wide.png`：隔离的浏览器预览，观测到的 CSS 视口为 1600 × 900，devicePixelRatio 为 1.08；截图输出为 1481 × 833。
+- `08-narrow-light-final.png`：隔离的浏览器预览，观测到的 CSS 视口为 1265 × 833，devicePixelRatio 为 1.08；截图输出为 1170 × 771。
+- `10-toolbar-fixed-narrow.png` 和 `11-toolbar-fixed-wide.png`：工具栏点击区域的最终修复，CSS 视口分别为 1180 × 800 和 1834 × 1000，devicePixelRatio 为 0.9；输出分别为 1311 × 889 和 2038 × 1111。在两种宽度、两种主题下，均实际点击了三种看板视图。修复后再次同时比较了最终宽屏截图和目标图。
 
-- **P2, resolved — no connection between selected stage and content.** Stage selection now has an accent border/background and downward pointer. The node strip names the viewed stage and uses the same accent; the reader repeats that stage above its node title. Actual execution has a separate filled stage index and explicit “实际进度” label.
-- **P2, resolved — progress and browsing looked interchangeable.** Connectors now use a 2px muted track with a 4px completed segment. Successful/skipped nodes determine completion, including Gates. A completed clarification task with its Gate still pending is 1/2; browsing design keeps that connector at 50% and future connectors empty.
-- **P2, resolved — right-side node shortcut resembled a nonresponsive tab (#169).** The split layout contains only conversation tabs, their menus/close controls, new and history. Its empty state stays conversational; the central node reader remains available.
-- **P2, resolved during preview — hover weakened the selected-stage border.** The hover rule now excludes the pressed stage. The final native comparison shows an unambiguous selected design stage.
-- **P2, resolved during preview — changing the selection caption moved connector geometry.** Stage buttons now reserve a stable 148px width. Browser measurements before/after stage selection confirmed the first connector's position and width are unchanged. Final wide and narrow captures retain aligned tracks.
-- **P2, caught by CI and resolved — project-menu hit area intercepted view switching.** Moving the switch upward exposed an invisible full-row project-menu overlay. The menu now uses its content width and reserves 220px for the view switch. Normal, unforced clicks successfully changed compact/flow/list modes at 1180px and 1834px in both themes. Browser bounds confirm the menu and switch do not overlap; the final captures preserve the intended layout.
+截图 API 虽然使用 `.png` 文件名，实际返回的却是 JPEG 字节，因此按内容类型打开图片。浏览器截图会缩放输出，本文不声称达到 1:1 像素精度。目标图是裁剪后的面板，并非完整窗口，所以比较时对齐阶段导航、选中节点条和阅读区，排除原生窗口装饰及周边面板。目标图与原生实现截图在同一次图片输入中共同检查；此尺寸下的文字、连接线粗细、选中指示箭头和区域边界已清晰可见，无需继续裁剪。
 
-No actionable P0/P1/P2 finding remains in the changed surfaces. These findings describe this iteration; the earlier Gate document-reader review remains available in Git history.
+<a id="findings-and-comparison-history"></a>
 
-## Required fidelity surfaces
+## 发现与对比记录
 
-| Surface | Result |
+- **P2，已解决：选中阶段与正文缺少关联。** 阶段选择增加主题色边框、背景和向下箭头；节点条标明正在查看的阶段，并使用相同主题色；阅读区在节点标题上方重复显示阶段。实际执行位置使用独立的实心阶段序号和明确的“实际进度”文案。
+- **P2，已解决：进度与浏览状态难以区分。** 连接线使用 2px 的弱化底轨和 4px 的已完成段。完成比例由成功或跳过的节点决定，包含 Gate。澄清任务已完成、Gate 仍待批准时为 1/2；浏览设计阶段不会改变该连接线的 50% 进度，后续连接线仍为空。
+- **P2，已解决：右侧节点快捷入口像一个无响应页签（#169）。** 分栏后的右侧仅保留会话页签、菜单/关闭、新建和历史控件；空状态也围绕会话展开，中间的节点阅读区始终可用。
+- **P2，预览时已解决：悬停样式削弱了选中阶段边框。** 悬停规则排除已选中的阶段，最终原生截图中的设计阶段选中状态清楚明确。
+- **P2，预览时已解决：选择状态文案变化会移动连接线。** 阶段按钮预留稳定的 148px 宽度。浏览器在切换阶段前后的测量确认，第一条连接线的位置和宽度不变；最终宽窄截图均保留对齐的轨道。
+- **P2，CI 发现并已解决：项目菜单点击区域拦截视图切换。** 向上移动切换器后，暴露出一个不可见、占满整行的项目菜单覆盖层。菜单改为按内容宽度布局，并为视图切换器预留 220px。两种主题下，1180px 和 1834px 宽度均通过普通点击成功切换精简/流程/列表视图，没有强制点击。浏览器边界测量确认两者不重叠；最终截图保持预期布局。
+
+本次改动范围内没有剩余的可执行 P0/P1/P2 问题。以上只描述该次迭代；更早的 Gate 文档阅读器审查记录仍可从 Git 历史查阅。
+
+<a id="required-fidelity-surfaces"></a>
+
+## 视觉一致性检查
+
+| 维度 | 结果 |
 | --- | --- |
-| Typography | Existing product font stack, 12px stage labels, 10px secondary state and 23px reader title retained. Selected/current copy is readable and does not collide at the tested widths. |
-| Layout and spacing | Horizontal stages use the available width; the view switch sits with the project/Run row. Consistent pointer, stage label and reader accent communicate association. Narrow layout keeps both panes and persistent chat controls visible. |
-| Colors and tokens | Existing dark/teal and light/pink themes retained. Completed track is thicker as well as brighter; current execution and viewed selection use distinct shapes and wording. |
-| Image and icon fidelity | No new artwork is required by this annotated UI target. Existing product assets and Lucide icons remain; the selection pointer is the library ChevronDown icon. Annotation strokes were intentionally not reproduced. |
-| Copy and content | “正在查看” names the displayed stage; “实际进度” names the real current node. “返回当前进度” selects that node only. Saved artifacts and chat content are not rewritten. |
+| 字体排版 | 保留产品现有字体栈、12px 阶段标签、10px 次要状态和 23px 阅读区标题。在验证宽度下，选中/当前文案可读且不碰撞。 |
+| 布局与间距 | 横向阶段使用可用宽度；视图切换器与项目/Run 行并列。一致的箭头、阶段标签和阅读区主题色表达关联。窄布局下两栏和常驻会话控件保持可见。 |
+| 颜色与设计变量 | 保留深色/青绿及浅色/粉色主题。已完成轨道既更粗也更亮；实际执行位置和正在查看的选择采用不同形状与文案。 |
+| 图片与图标 | 标注目标不需要新增美术素材。保留现有产品资源和 Lucide 图标，选中箭头使用库中的 ChevronDown；没有复刻手绘标注线。 |
+| 文案与内容 | “正在查看”标明展示的阶段，“实际进度”标明真实当前节点。“返回当前进度”仅选中该节点，不改写已保存产物和聊天内容。 |
 
-## Interactions and runtime
+<a id="interactions-and-runtime"></a>
 
-- In the isolated browser, design → implementation → return-to-current kept the active conversation, unsent draft and actual progress unchanged.
-- Closing the last conversation showed “对话空状态”; reopening it through history restored the same draft while the center remained on design.
-- Dark and light views were inspected. At the narrower viewport, document clientWidth equals scrollWidth (1265px). The existing top diagnostic strip has its own horizontal scroll.
-- Browser console warning/error collection returned an empty list. No live model request or Gate approval was issued.
-- Native Electron was restarted with the original data profile. New navigation, partial progress and chat-only header are visible. The requirement Gate, saved artifacts and chat history remain present.
-- Component/application tests: 169 passed; final focused rerun: 18 passed. Desktop typecheck and production build passed.
+## 交互与运行验证
 
-## Implementation checklist
+- 在隔离浏览器中，依次浏览设计、开发实现并返回当前进度，活动会话、未发送草稿和实际进度均未改变。
+- 关闭最后一个会话后显示“对话空状态”；从历史重新打开时恢复相同草稿，中间阅读区仍停留在设计阶段。
+- 检查深浅色主题。较窄视口下，文档的 clientWidth 与 scrollWidth 均为 1265px。既有顶部诊断条使用自己的横向滚动。
+- 浏览器警告/错误收集结果为空。没有发起真实模型请求或 Gate 审批。
+- 原生 Electron 使用原有数据配置重启。新导航、部分进度和仅含会话的头部均可见；需求确认 Gate、已保存产物和聊天历史仍在。
+- 组件/应用测试通过 169 项；最终针对性重跑通过 18 项。桌面类型检查和生产构建通过。
 
-- [x] Associate selected stage, node strip and central reader.
-- [x] Derive connector progress from workflow state, independent of selection.
-- [x] Preserve the independent conversation and its empty/history behavior.
-- [x] Compare the user target and final native screenshot together.
-- [x] Check a narrower window, both themes, console output and original-profile recovery.
+<a id="implementation-checklist"></a>
 
-## Residual limits
+## 实施清单
 
-The global horizontally scrolling diagnostics strip is unchanged. The line represents completed workflow nodes, not elapsed time or estimated work. Developer ID signed-install credential validation remains tracked separately in #135; this renderer update does not satisfy that prerequisite.
+- [x] 关联选中阶段、节点条和中间阅读区。
+- [x] 根据工作流状态计算连接线进度，与浏览选择分离。
+- [x] 保留独立会话及其空状态/历史行为。
+- [x] 同时比较用户目标图与最终原生截图。
+- [x] 检查窄窗口、两种主题、控制台输出和原有数据配置恢复。
+
+<a id="residual-limits"></a>
+
+## 残留限制
+
+此次迭代未修改全局横向滚动的诊断条。连接线表示已完成工作流节点，不表示耗时或预计工作量。Developer ID 签名安装的凭据验证仍由 #135 独立跟踪；渲染层更新不能满足该项前置要求。

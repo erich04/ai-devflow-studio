@@ -327,7 +327,7 @@ describe('full feature walkthrough documentation', () => {
   it('is linked from the README demo guide list', () => {
     const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
 
-    expect(readme).toContain('Full feature walkthrough')
+    expect(readme).toContain('完整功能演练')
     expect(readme).toContain('docs/guides/devflow-studio-full-feature-walkthrough.md')
   })
 })

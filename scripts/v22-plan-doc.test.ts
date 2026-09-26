@@ -39,33 +39,33 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
     const context = read('CONTEXT.md')
 
     for (const term of [
-      '## Coordination Session',
-      '## Supervisor Agent',
-      '## Specialist Agent',
-      '## Agent Task Graph',
-      '## Agent Handoff',
-      '## Execution Tenancy',
+      '## 协调会话（Coordination Session）',
+      '## 监督 Agent（Supervisor Agent）',
+      '## 专职 Agent（Specialist Agent）',
+      '## Agent 任务图（Agent Task Graph）',
+      '## Agent 交接（Agent Handoff）',
+      '## 执行租户隔离（Execution Tenancy）',
     ]) {
       expect(context).toContain(term)
     }
 
-    expect(context).toContain('cannot advance Workflow State, approve a Gate, or publish')
-    expect(context).toContain('scope, capabilities, and budget are intersections, never fallbacks')
+    expect(context).toContain('协调会话不能推进工作流状态、批准 Gate 或发布')
+    expect(context).toContain('范围、能力和预算均取交集，绝不通过回退扩大')
   })
 
   it('accepts bounded coordination and capability attenuation as the architecture', () => {
     const adr = read('docs/adr/0019-bounded-multi-agent-coordination.md')
 
-    expect(adr).toContain('Status: Accepted')
-    expect(adr).toContain('one Supervisor Agent and at most four Specialist Agents')
-    expect(adr).toContain('Specialist Agents cannot delegate')
-    expect(adr).toContain('directed acyclic Agent Task Graph')
-    expect(adr).toContain('capability and budget subset')
-    expect(adr).toContain('single-writer lease')
-    expect(adr).toContain('cancellation propagates')
-    expect(adr).toContain('never crosses an execution-tenancy boundary')
-    expect(adr).toContain('Workflow and Gate authority remain outside coordination')
-    expect(adr).toContain('does not persist hidden reasoning')
+    expect(adr).toContain('状态：已接受（Accepted）')
+    expect(adr).toContain('一个监督 Agent 和最多四个专职 Agent')
+    expect(adr).toContain('专职 Agent 不能委托')
+    expect(adr).toContain('有向无环 Agent 任务图')
+    expect(adr).toContain('能力及预算是监督 Agent 的子集')
+    expect(adr).toContain('单写者租约')
+    expect(adr).toContain('取消从协调会话传播')
+    expect(adr).toContain('绝不跨越执行租户隔离边界')
+    expect(adr).toContain('工作流与门禁权限保持在协调之外')
+    expect(adr).toContain('不在渲染进程或 Team 可见状态持久化隐藏推理')
   })
 
   it('defines measurable user outcomes and a finite V2.2 exit gate', () => {

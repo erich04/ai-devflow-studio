@@ -1,93 +1,58 @@
-# ADR 0022: Workbench conversation execution adapters
+<a id="adr-0022-workbench-conversation-execution-adapters"></a>
 
-Status: accepted for implementation; live acceptance tracked by #147.
+# ADR 0022：工作台会话执行适配器
 
-## Problem
+状态：已接受实施；实际验收由 #147 跟踪。
 
-A model Provider selects an API/model, while a harness owns an agent session and
-tool execution. The workbench currently exposes only the former. Conversation
-history must remain independent, while every conversation may query current
-project workflow facts through the same authority checks.
+<a id="problem"></a>
 
-## Capability research
+## 问题
 
-Checked the upstream interfaces on 2026-09-20:
+模型提供方选择 API/模型，执行框架则拥有 Agent 会话与工具执行。此决策时工作台仅暴露前者。会话历史必须保持独立，同时每个会话可通过相同权限检查查询当前项目工作流事实。
 
-| Candidate | Integration surface | Decision |
+<a id="capability-research"></a>
+
+## 能力调查
+
+2026-09-20 核对了上游接口：
+
+| 候选 | 集成接口 | 决策 |
 | --- | --- | --- |
-| OpenCode | HTTP server sessions, message parts, abort, permission rules and remote MCP | First adapter; reuse the existing managed-process and Provider binding infrastructure |
-| Codex | SDK thread/resume and streamed run interfaces | A later adapter requires separate approval/tool/identity mapping; do not pretend it is the OpenCode protocol |
+| OpenCode | HTTP 服务会话、消息部分、中止、权限规则和远程 MCP | 首个适配器，复用既有受管进程和提供方绑定基础设施 |
+| Codex | SDK 线程/恢复和流式运行接口 | 后续适配器需要独立的审批/工具/身份映射，不能假装使用 OpenCode 协议 |
 
-Primary references: [OpenCode server](https://opencode.ai/docs/server/),
-[permissions](https://opencode.ai/docs/permissions/),
-[remote MCP](https://opencode.ai/docs/mcp-servers/), and
-[Codex SDK](https://learn.chatgpt.com/docs/codex-sdk).
-MCP transport follows the
-[Streamable HTTP specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports).
+一手参考：[OpenCode 服务](https://opencode.ai/docs/server/)、[权限](https://opencode.ai/docs/permissions/)、[远程 MCP](https://opencode.ai/docs/mcp-servers/)及 [Codex SDK](https://learn.chatgpt.com/docs/codex-sdk)。MCP 传输遵循 [Streamable HTTP 规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。
 
-## Product decision
+<a id="product-decision"></a>
 
-Keep one conversation type. Choose Direct Provider or OpenCode when starting a
-new conversation in the right panel. The selection is persisted on that
-conversation, defaults to Direct Provider for legacy records, and is immutable
-after creation. Choosing another execution method creates an independent chat;
-it never silently replays an existing conversation into another runtime.
+## 产品决策
 
-The header distinguishes execution method from model. Both use the selected
-saved Provider/model, but OpenCode runs it through a compatible locally installed
-CLI discovered when sending. Its credential is supplied only in the managed
-process environment. A missing CLI or saved Provider produces a recoverable
-error and never falls back to Direct Provider. This does not require switching
-the project's Coding executor, and node executors remain independent.
+保留一种会话类型。在右侧面板新建会话时选择 Direct Provider 或 OpenCode；选择持久保存在该会话，旧记录默认 Direct Provider，创建后不可变。改用另一执行方式会创建独立聊天，绝不悄悄将既有会话重放到另一运行时。
 
-## Execution boundary
+会话头部区分执行方式和模型。两种方式都使用所选已保存提供方/模型；OpenCode 通过发送时发现的兼容本地 CLI 运行，只在受管进程环境提供凭据。CLI 或已保存提供方缺失会产生可恢复错误，绝不回退到 Direct Provider。不要求切换项目的代码执行器，节点执行器也保持独立。
 
-The first OpenCode chat adapter runs a fresh managed session per user turn and
-restores only that conversation's bounded persisted history. It is an
-investigation harness: OpenCode drives its agent/tool loop. An authenticated,
-loopback-only, turn-scoped MCP bridge exposes workflow, node, artifact, repository
-read/search and knowledge queries. The bridge fixes project identity in its
-closure; tools cannot supply a different project or read another chat.
+<a id="execution-boundary"></a>
 
-Built-in filesystem/shell/write/network and other MCP tools are denied. Repository
-reads pass through DevFlow's existing path, secret, symlink and size checks.
-This gives both executors the same query authority without copying a local
-database or supplying the harness with an unrestricted repository root.
+## 执行边界
 
-The bridge expires when the turn ends. Each turn owns its runtime and shutdown;
-cancelling one conversation cannot abort another. A restart preserves user
-history and marks unfinished work interrupted, awaiting an explicit retry.
-Only real execution events, returned reasoning and reported usage are shown.
-Unknown reasoning effort/usage remains unknown. Final rich replies use the same
-validated message/action/draft contract as Direct Provider.
+首个 OpenCode 聊天适配器每次用户回合都运行新的受管会话，只恢复该会话的有界持久历史。它是调查框架：OpenCode 驱动自身 Agent/工具循环。经过身份验证、仅限回环网络且限定回合的 MCP 桥接暴露工作流、节点、产物、仓库读取/搜索及知识查询。桥接在闭包中固定项目身份，工具不能提供其他项目或读取另一聊天。
 
-### Original requirements and malformed responses (2026-09-21)
+禁用内置文件系统/Shell/写入/网络及其他 MCP 工具。仓库读取经过 DevFlow 既有路径、秘密、符号链接及大小检查。两种执行器因而拥有相同查询权限，无需复制本地数据库或提供无限制仓库根目录。
 
-The original requirement is baseline context when the project has one Run; explicit
-node/artifact/requirement queries and draft targets resolve it for other Runs.
-The current conversation's last explicit target can seed a later turn, without
-binding the conversation to the selected UI card. At most two scoped requirement
-bodies are retained with source, Run version, read range and continuation metadata.
-Other artifacts remain indexes with an explicit `bodyIncluded: false` marker.
-Artifact and requirement reads support bounded UTF-16 offsets through both adapters.
-If artifact access fails, the Run's stored request is a labeled fallback; if neither
-is available, the service declines to invent missing business requirements.
+回合结束桥接即过期。每回合拥有各自运行时和关闭过程，取消一个会话不能中止另一个。重启保留用户历史，将未完成工作标为中断，等待显式重试。只展示真实执行事件、实际返回的推理和已报告用量；未知推理强度/用量保持未知。最终富文本回复使用与 Direct Provider 相同的已校验消息/操作/草稿契约。
 
-Direct Provider malformed output can regenerate once per user turn, consuming the
-existing 12-call/180-second limits. It reuses verified context and never feeds invalid
-raw output back as a tool command. Network/authentication/filter/cancellation errors
-do not trigger this recovery. Both attempts preserve reported usage. Failure records
-retain only allowlisted reason codes, never raw failed responses. Incomplete SSE
-responses that provide a terminal usage frame retain that usage before failing.
-This does not relax structured output validation or silently retry the OpenCode harness.
+<a id="original-requirements-and-malformed-responses-2026-09-21"></a>
 
-Chat has no formal stage, Gate or delivery write tool. Explicitly saving a
-proposal retains its existing pending-artifact behavior. Navigation buttons
-open actual nodes; replacing the harness does not grant approval authority.
+### 原始需求与格式错误响应（2026-09-21）
 
-## Acceptance
+项目只有一个 Run 时，原始需求作为基础上下文；多个 Run 时，通过显式节点/产物/需求查询和草稿目标解析对应原始需求。当前会话最近的显式目标可作为后续回合的初始目标，不把会话绑定到 UI 当前选择卡片。最多保留两个限定范围的需求正文及来源、Run 版本、读取范围和继续读取元数据。其他产物保持索引，明确标注 `bodyIncluded: false`。两种适配器的产物和需求读取都支持有界 UTF-16 偏移。产物访问失败时，Run 保存的请求作为带标识的回退；两者都不可用时，服务拒绝编造缺失业务需求。
 
-Cover contract migration, selection, sends, real MCP calls, cancellation, retry,
-restart, wrong project/object IDs, concurrent conversations and no fallback.
-Use isolated data for live OpenCode UI verification. Unit/mock transport tests
-do not substitute for that live acceptance. Preserve the user's existing Run.
+Direct Provider 格式错误输出每用户回合可重新生成一次，消耗既有 12 次调用/180 秒限制。复用已核实上下文，不把无效原始输出作为工具命令反馈。网络/身份验证/过滤/取消错误不触发此恢复；两次尝试均保留报告用量。失败记录只保留允许列表原因代码，绝不保存原始失败响应。若不完整 SSE 响应含终态用量帧，在报错前仍保留用量。此机制不放松结构化输出校验，也不静默重试 OpenCode 框架。
+
+聊天没有正式阶段、门禁或交付写入工具。显式保存提案保留原有待确认产物行为。导航按钮打开实际节点；替换执行框架不授予审批权限。
+
+<a id="acceptance"></a>
+
+## 验收
+
+覆盖契约迁移、选择、发送、真实 MCP 调用、取消、重试、重启、错误项目/对象 ID、并发会话和禁止回退。实际 OpenCode UI 验证使用隔离数据；单元/模拟传输测试不能替代实际验收。保留用户现有 Run。

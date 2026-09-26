@@ -1,22 +1,28 @@
-# ADR 0004: Shared Theme Token Strategy
+<a id="adr-0004-shared-theme-token-strategy"></a>
 
-## Status
+# ADR 0004：共享主题设计变量
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-The desktop app and web console must support light mode, dark mode, and following the system setting.
+已接受（Accepted）。
 
-## Decision
+<a id="context"></a>
 
-Use shared theme names and CSS variables. Components consume semantic tokens instead of hard-coded
-colors. Desktop stores theme preference locally. Web stores the system/light/dark preference in browser
-localStorage and applies it in the document head before content paints; CSS follows system changes.
-Storage failures fall back to the system and do not prevent an in-page theme change. Preferences
-remain on the same public origin across logout. Account-synced Web preferences remain future work.
+## 背景
 
-## Consequences
+桌面应用和 Web 控制台都需要支持浅色、深色以及跟随系统主题。
 
-- The same UI language works across Electron and Web.
-- Workflow canvas, logs, diffs, charts, and graphs can be tuned separately for low-glare dark mode.
+<a id="decision"></a>
+
+## 决策
+
+共享主题名称和 CSS 变量。组件使用语义化设计变量，不硬编码颜色。桌面在本地保存主题偏好；Web 在浏览器 localStorage 中保存 system/light/dark 选择，并在页面内容绘制前通过文档头部应用主题，由 CSS 跟随系统变化。存储失败时回退到系统主题，但不妨碍页面内切换。退出登录后，同一公开源上的主题偏好仍保留。按账户同步 Web 偏好属于后续工作。
+
+<a id="consequences"></a>
+
+## 影响
+
+- Electron 与 Web 采用一致的界面语言。
+- 工作流画布、日志、差异、图表和图谱可以分别调整，以适应低眩光深色主题。

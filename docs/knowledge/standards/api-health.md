@@ -1,15 +1,17 @@
 ---
-title: API Health Endpoint Standard
+title: API 健康端点规范
 category: api_contract
 ownerId: u-ling
 tags: api, health, degraded
-summary: Health endpoints must expose ok, degraded, and down states with explicit status mapping.
+summary: 健康端点必须提供 ok、degraded、down 三种状态，并明确状态映射。
 ---
 
-# API Health Endpoint Standard
+<a id="api-health-endpoint-standard"></a>
 
-Health endpoints must expose ok, degraded, and down states with explicit status mapping.
+# API 健康端点规范
 
-- Route handlers compose service results; services own dependency checks.
-- Degraded dependencies must remain observable in test evidence.
-- Runtime, database, and cache checks must be safe to call during deploy smoke.
+健康端点必须提供 `ok`、`degraded`、`down` 三种状态，并明确状态映射。
+
+- 路由处理器组合服务结果；依赖检查由服务负责。
+- 依赖降级必须在测试证据中可见。
+- 运行时、数据库和缓存检查必须能够在部署冒烟测试期间安全调用。

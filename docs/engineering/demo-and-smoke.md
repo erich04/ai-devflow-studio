@@ -1,79 +1,72 @@
-# DevFlow Studio Demo And Smoke Guide
+<a id="devflow-studio-demo-and-smoke-guide"></a>
 
-This guide describes the released V1.5 GitHub Delivery path. `v1.5.0` is the current release, the
-finite 1.x completion gate passed, and its immutable candidate-bound evidence lives under
-`docs/releases/v1.5.0/`.
+# DevFlow Studio 演示与冒烟指南
 
-## Baseline Prerequisites
+本指南说明已发布的 V1.5 GitHub 交付路径。当前发布版本为 `v1.5.0`，1.x 的有限范围完成门禁已通过；与候选版本绑定的不可变证据保存在 `docs/releases/v1.5.0/`。
 
-- Team/API/Postgres must report Team schema v21 with provider-authoritative expiry, bounded
-  provider retry, verified publication adoption, and metadata-only Agent Runtime, Memory, and
-  Coordination projection contracts.
-- Electron/SQLite must report Desktop schema v35.
-- The Web/API/Postgres walkthrough needs authenticated owner, lead, and paired Desktop identities.
-- A GitHub Delivery walkthrough needs a verified GitHub App repository binding, one tested canonical
-  managed-worktree commit, a PR Delivery Package, and an exact Delivery Intent.
-- Use fake GitHub clients and a local bare remote for routine demos. A real private GitHub sandbox is
-  a release-only environment and requires separate candidate-bound authorization.
+<a id="baseline-prerequisites"></a>
 
-## Desktop Demo
+## 基础前提
+
+- Team/API/Postgres 须报告 Team schema v21，包含服务商权威过期时间、有边界的服务商重试、已验证发布证据采用，以及仅含元数据的 Agent Runtime、Memory 和 Coordination 投影契约。
+- Electron/SQLite 须报告 Desktop schema v35。
+- Web/API/Postgres 演练需要已认证的 owner、lead 和已配对桌面身份。
+- GitHub 交付演练需要已核验的 GitHub App 仓库绑定、经过测试的权威受管工作树提交、PR 交付包和精确的交付意图（Delivery Intent）。
+- 日常演示使用模拟 GitHub 客户端和本地裸仓库。真实私有 GitHub 沙箱仅用于发布验收，须另行获得与候选版本绑定的授权。
+
+<a id="desktop-demo"></a>
+
+## 桌面演示
 
 ```bash
 corepack pnpm dev:electron
 ```
 
-Expected result: the window title is `AI DevFlow Studio`, and Electron loads `apps/desktop` rather
-than `default_app.asar`.
+预期结果：窗口标题为 `AI DevFlow Studio`，Electron 加载 `apps/desktop`，而非 `default_app.asar`。
 
-Suggested path:
+建议路径：
 
-1. Open Workbench, connect the local repository, and select the current Run.
-2. Inspect Gate Enforcement, Knowledge Review, Coding Agent trace, diff, and Test Evidence.
-3. Generate the metadata-only PR Delivery Package and prepare an immutable Delivery Intent.
-4. Sync the redacted Delivery Request, then use a separate signed Web lead/owner session to approve
-   that exact revision.
-5. Resume Desktop publication and confirm the expected commit becomes the verified remote head and
-   one matching Draft pull request is recorded.
-6. Inspect the completion evidence before Acceptance. Acceptance must never merge or mutate the pull
-   request.
+1. 打开工作台，连接本地仓库并选择当前 Run。
+2. 查看门禁策略执行、知识审查、编码 Agent 轨迹、代码差异和测试证据。
+3. 生成仅含元数据的 PR 交付包，准备不可变的交付意图。
+4. 同步脱敏交付请求，再通过独立、带签名身份的 Web lead/owner 会话批准该精确版本。
+5. 恢复桌面发布，确认预期提交成为已核验的远端分支头，并记录一个与之匹配的 Draft PR。
+6. 在业务验收前检查完成证据。业务验收绝不能合并或修改该 PR。
 
-Electron main owns the managed worktree read and publication. The GitHub App private key stays in
-the API, the short-lived repository token stays in Electron main memory, and the renderer sees only
-status.
+Electron 主进程负责读取和发布受管工作树。GitHub App 私钥保留在 API，短期仓库令牌仅保留在 Electron 主进程内存，渲染进程只看到状态。
 
-## Recovery Actions
+<a id="recovery-actions"></a>
 
-- **Revise**: create a new pre-publication intent revision after material changes and invalidate the
-  previous approval.
-- **Resume**: continue the same `recovery_required` attempt without allocating another remote
-  identity.
-- **Retry**: create the next attempt only after the current pairing claimant proves the exact remote
-  predecessor `failed` or `revoked`. If that predecessor already has a verified publication for the
-  same immutable series and failed only at Draft creation, the approved next attempt adopts that
-  evidence and proceeds directly to Draft reconciliation without another credential or push.
-- **Stop**: park the exact active attempt for manual recovery without claiming remote rollback.
+## 恢复操作
 
-None of these actions may silently reuse approval, force-push, delete a branch, publish a tag, or
-merge a pull request.
+- **修订（Revise）**：发生实质变化后，在发布前创建新的意图版本，并使旧审批失效。
+- **继续（Resume）**：继续同一个 `recovery_required` 尝试，不分配新的远端身份。
+- **重试（Retry）**：只有当前配对认领者证明精确的远端前次尝试已为 `failed` 或 `revoked`，才创建下一次尝试。如果前次尝试在同一不可变系列中已有已核验发布，仅在创建 Draft PR 时失败，则获得批准的后续尝试采用该证据，直接进行 Draft 核对，不再申请凭据或推送。
+- **停止（Stop）**：暂停精确的当前尝试，留待人工恢复，不声称已回滚远端操作。
 
-## Web/API Team Demo
+这些操作都不能静默复用审批、强制推送、删除分支、发布标签或合并 PR。
+
+<a id="webapi-team-demo"></a>
+
+## Web/API 团队演示
 
 ```bash
 corepack pnpm dev:api
 corepack pnpm dev:web
 ```
 
-Open `http://127.0.0.1:4311` and use authenticated sessions.
+打开 `http://127.0.0.1:4311`，使用已认证会话。
 
-Suggested path:
+建议路径：
 
-- As an owner, configure or revoke the verified GitHub App repository binding.
-- As a lead or owner, inspect the redacted Delivery Request and approve its exact revision.
-- Confirm Desktop Bearer authority cannot approve its own request.
-- Inspect binding version, approval, series/attempt/revision, remote-head, Draft pull-request, audit,
-  and Acceptance summaries without local paths, raw output, patches, source, or credentials.
+- 以 owner 身份配置或撤销已核验的 GitHub App 仓库绑定。
+- 以 lead 或 owner 身份检查脱敏交付请求，批准其精确版本。
+- 确认桌面 Bearer 权限不能批准自身请求。
+- 检查绑定版本、审批、系列/尝试/修订、远端分支头、Draft PR、审计和验收摘要；其中不得出现本地路径、原始输出、补丁、源码或凭据。
 
-## Smoke Commands
+<a id="smoke-commands"></a>
+
+## 冒烟命令
 
 ```bash
 corepack pnpm test:e2e
@@ -83,7 +76,7 @@ corepack pnpm test:v15-github-delivery
 corepack pnpm test:v15-github-delivery-packaged-smoke
 ```
 
-For Postgres, use a disposable clean database or an intentional populated v11 fixture:
+Postgres 使用一次性的干净数据库，或明确准备的含数据 v11 测试库：
 
 ```bash
 export DEVFLOW_DATABASE_URL='postgres://postgres:devflow@127.0.0.1:55432/devflow_v15'
@@ -91,48 +84,32 @@ corepack pnpm test:postgres-smoke
 corepack pnpm test:local-auth-postgres-smoke
 ```
 
-The Postgres smoke must prove fresh Team schema v21, populated v11-to-v12 retention, a v12-to-v13
-legacy issued credential that remains fail closed when its raw provider expiry is NULL, and the
-v13-to-v14 nullable bounded provider retry field. It must also prove v14-to-v15
-`source_publication_id` retention and the exact grant-or-adoption authority constraint. The
-v15-to-v16 migration must retain all prior state, create empty `agent_runtime_summaries` and
-`agent_runtime_projection_audits` tables, and reject non-redacted or structurally incoherent
-runtime rows. The v16-to-v17 migration must create empty `agent_memory_summaries` and
-`agent_memory_projection_audits` tables without local content or fabricated lifecycle rows.
-The v17-to-v18 migration must add an independent `quality_version` to summaries and audits and use
-`(memory_id, head_version, quality_version)` as the audit identity.
-The v18-to-v19 migration must create empty `agent_coordination_summaries` and
-`agent_coordination_projection_audits` tables without local content or fabricated lifecycle rows.
-The v19-to-v20 migration must preserve GitHub accounts, accept only `github` and
-`local-development`, and reject unknown providers. The v20-to-v21 migration must preserve existing
-Coding summaries and admit only the bounded `native` Coding engine in addition to the existing
-engine values. The separate local-auth smoke uses an isolated
-schema to prove local login, an empty overview, project creation, budget persistence, pairing-code
-exchange, and a paired Desktop Bearer read without Demo Seed or a GitHub OAuth call.
-It also proves repository binding and revocation, exact Delivery Request approval, credential
-grant, remote verification, Draft completion, recovery/audit behavior, and redaction.
+Postgres 冒烟须证明：新建数据库达到 Team schema v21；含数据的 v11→v12 迁移保留数据；v12→v13 迁移保留旧版已签发凭据，并在原始服务商过期时间为 NULL 时继续拒绝授权；v13→v14 仅新增可空且有边界的服务商重试字段。还须证明 v14→v15 保留 `source_publication_id`，并严格执行“凭据授权或采用既有发布证据”的权限约束。
 
-For the self-hosted lifecycle boundary:
+v15→v16 须保留全部已有状态，创建空的 `agent_runtime_summaries` 和 `agent_runtime_projection_audits`，拒绝未脱敏或结构不一致的运行时记录。v16→v17 须创建空的 `agent_memory_summaries` 和 `agent_memory_projection_audits`，不包含本地内容，也不编造生命周期记录。v17→v18 须为摘要和审计新增独立 `quality_version`，以 `(memory_id, head_version, quality_version)` 作为审计身份。
+
+v18→v19 须创建空的 `agent_coordination_summaries` 和 `agent_coordination_projection_audits`，不包含本地内容或编造的生命周期记录。v19→v20 须保留 GitHub 账号，仅接受 `github` 和 `local-development`，拒绝未知服务商。v20→v21 须保留已有编码摘要，在已有引擎值之外只允许受限的 `native` 编码引擎。
+
+独立的本地认证冒烟使用隔离 schema，证明本地登录、空概览、项目创建、预算持久化、配对码交换和已配对桌面 Bearer 读取均可运行，不依赖演示种子或 GitHub OAuth 调用。它还验证仓库绑定及撤销、精确交付请求审批、凭据授权、远端核验、Draft 完成、恢复/审计行为和脱敏。
+
+自托管生命周期边界使用：
 
 ```bash
 corepack pnpm test:docker-lifecycle-smoke
 ```
 
-The lifecycle smoke covers fresh schema, retained upgrade, transactional migration retry, and
-bounded backup/restore rollback. It must stop its API and containers deterministically.
+生命周期冒烟覆盖新建 schema、保留数据升级、事务迁移重试和有边界的备份/恢复回滚，必须确定性地停止其 API 与容器。
 
-## Real GitHub Sandbox Boundary
+<a id="real-github-sandbox-boundary"></a>
 
-The real private GitHub sandbox is not a routine demo command. Release signoff may run it once only
-after explicit authorization for the frozen candidate. It may authenticate the GitHub App, publish
-one approved commit without force, and create or reconcile one Draft pull request. It has no
-automatic retry and must never merge, delete a branch, or publish a tag.
+## 真实 GitHub 沙箱边界
 
-This guide does not authorize paid-provider smoke. GitHub Delivery validation uses no model provider;
-OpenCode or other paid-provider requests require their own explicit, candidate-bound authorization.
+真实私有 GitHub 沙箱不是日常演示命令。只有冻结候选版本获得明确授权后，发布验收才能运行一次。它可以认证 GitHub App、以非强制方式发布一个已批准提交，并创建或核对一个 Draft PR。不允许自动重试，也绝不能合并 PR、删除分支或发布标签。
 
-## GitHub Actions Notes
+本指南不授权付费服务商冒烟。GitHub 交付验证不使用模型服务商；OpenCode 或其他付费服务商请求需要另行获得与候选版本绑定的明确授权。
 
-If PR checks fail immediately with no job steps, inspect check-run annotations before debugging
-product code. A runner-account or spending-limit failure means no workflow step ran; local evidence
-does not convert that infrastructure failure into a passing CI gate.
+<a id="github-actions-notes"></a>
+
+## GitHub Actions 注意事项
+
+如果 PR 检查立即失败且没有任何任务步骤，先查看检查注释，再排查产品代码。Runner 账号或消费限额失败意味着工作流步骤并未执行；本地证据不能将此类基础设施失败变成通过的 CI 门禁。

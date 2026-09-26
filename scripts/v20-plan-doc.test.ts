@@ -13,49 +13,49 @@ describe('V2.0 Native Agent Runtime contract', () => {
   it('records the bounded runtime and observable trajectory decision', () => {
     const adr = read('docs/adr/0014-bounded-agent-runtime.md')
 
-    expect(adr).toContain('Status: Accepted')
+    expect(adr).toContain('状态：已接受（Accepted）')
     expect(adr).toContain('ADR 0008')
-    expect(adr).toContain('Deterministic Workflow remains the outer authority')
-    expect(adr).toContain('Agent Runtime is not a Workflow')
+    expect(adr).toContain('确定性工作流仍是外层权威')
+    expect(adr).toContain('Agent 运行时不是工作流')
     expect(adr).toContain('success')
     expect(adr).toContain('step_limit')
     expect(adr).toContain('budget_exhausted')
     expect(adr).toContain('checkpoint')
-    expect(adr).toContain('optimistic concurrency')
-    expect(adr).toContain('does not persist hidden reasoning')
-    expect(adr).toContain('deterministic, no-cost fake runtime')
+    expect(adr).toContain('乐观并发')
+    expect(adr).toContain('不持久化隐藏推理')
+    expect(adr).toContain('确定性、无费用的假运行时')
   })
 
   it('evolves the managed coding adapter into one governed executor contract', () => {
     const adr = read('docs/adr/0015-governed-coding-executor.md')
 
-    expect(adr).toContain('Status: Accepted')
+    expect(adr).toContain('状态：已接受（Accepted）')
     expect(adr).toContain('ADR 0009')
     expect(adr).toContain('Coding Executor')
-    expect(adr).toContain('capability negotiation')
+    expect(adr).toContain('能力协商')
     expect(adr).toContain('OpenCode')
-    expect(adr).toContain('DevFlow-owned Coding Agent')
-    expect(adr).toContain('same terminal result contract')
-    expect(adr).toContain('never publish, merge, approve a Gate, or widen scope')
-    expect(adr).toContain('does not claim OpenCode\'s private internal trajectory')
+    expect(adr).toContain('DevFlow 自有 Coding Agent')
+    expect(adr).toContain('相同终态结果契约')
+    expect(adr).toContain('绝不能发布、合并、批准门禁或扩大范围')
+    expect(adr).toContain('不声称了解 OpenCode 私有内部轨迹')
   })
 
   it('keeps Tool and MCP execution behind main-owned authority', () => {
     const adr = read('docs/adr/0016-tool-mcp-execution-authority.md')
 
-    expect(adr).toContain('Status: Accepted')
+    expect(adr).toContain('状态：已接受（Accepted）')
     expect(adr).toContain('McpServerDefinition')
     expect(adr).toContain('LocalMcpInstallation')
-    expect(adr).toContain('must never be used as process-spawn authority')
+    expect(adr).toContain('绝不能作为进程启动权限来源')
     expect(adr).toContain('Electron main')
     expect(adr).toContain('ToolCapabilityGrant')
-    expect(adr).toContain('strict input and output schema validation')
-    expect(adr).toContain('deadline')
-    expect(adr).toContain('cancellation')
-    expect(adr).toContain('organization, project, user, session, and Local Project')
+    expect(adr).toContain('严格校验输入和输出模式')
+    expect(adr).toContain('截止期限')
+    expect(adr).toContain('取消')
+    expect(adr).toContain('组织、项目、用户、会话和本地项目')
     expect(adr).toContain('stdio')
-    expect(adr).toContain('fixed non-secret isolation sentinel')
-    expect(adr).toContain('remote MCP transports are deferred')
+    expect(adr).toContain('固定且不含秘密的隔离哨兵')
+    expect(adr).toContain('远程 MCP 传输推迟')
   })
 
   it('defines a scoped V2.0 product contract and measurable exit gate', () => {
@@ -179,21 +179,21 @@ describe('V2.0 Native Agent Runtime contract', () => {
     const context = read('CONTEXT.md')
 
     for (const term of [
-      '## Agent Runtime',
-      '## Agent Trajectory',
-      '## Agent Checkpoint',
-      '## Agent Stop Reason',
-      '## Tool Definition',
-      '## Tool Capability Grant',
-      '## Local MCP Installation',
-      '## Coding Executor',
-      '## Coding Executor Capability',
-      '## Agent Evaluation Scenario',
+      '## Agent 运行时（Agent Runtime）',
+      '## Agent 执行轨迹（Agent Trajectory）',
+      '## Agent 检查点（Agent Checkpoint）',
+      '## Agent 停止原因（Agent Stop Reason）',
+      '## 工具定义（Tool Definition）',
+      '## 工具能力授予（Tool Capability Grant）',
+      '## 本地 MCP 安装（Local MCP Installation）',
+      '## 编码执行器（Coding Executor）',
+      '## 编码执行器能力（Coding Executor Capability）',
+      '## Agent 评估场景（Agent Evaluation Scenario）',
     ]) {
       expect(context).toContain(term)
     }
 
-    expect(context).toContain('The deterministic Workflow remains authoritative')
-    expect(context).toContain('Team MCP metadata is not local execution authority')
+    expect(context).toContain('确定性工作流仍掌握 Run 状态、策略、证据接纳和人工 Gate 的权威')
+    expect(context).toContain('团队 MCP 元数据不构成本地执行权限')
   })
 })

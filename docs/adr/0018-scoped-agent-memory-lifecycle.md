@@ -1,92 +1,73 @@
-# ADR 0018: Scoped Agent Memory Lifecycle
+<a id="adr-0018-scoped-agent-memory-lifecycle"></a>
 
-Status: Accepted
+# ADR 0018：有范围的 Agent 记忆生命周期
 
-Date: 2026-08-13
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-08-13
 
-V2.0 Agent Checkpoints already preserve bounded continuation state for one exact Runtime. That is
-not long-lived Memory. Repository Knowledge is reviewable Markdown owned in Git. Workflow State is
-authoritative delivery state. V2.1 needs useful recall across later Agent turns without silently
-converting model output into durable fact, leaking one tenant into another, or creating an undeletable
-shadow knowledge base.
+<a id="context"></a>
 
-## Decision
+## 背景
 
-Agent Memory is a separate, versioned, scoped product concept. It is not Workflow State, a
-Knowledge Source File, Governance Evidence, an Agent Checkpoint, or hidden reasoning.
+V2.0 Agent 检查点已为一个确切运行时保存有界继续执行状态，但它不是长期记忆。仓库知识是 Git 管理的可审查 Markdown，工作流状态是权威交付状态。V2.1 需要在后续 Agent 回合中有效回忆，同时避免悄悄把模型输出变成持久事实、跨租户泄露或创建无法删除的影子知识库。
 
-### Memory Kinds And Authority
+<a id="decision"></a>
 
-- Working Memory is bounded to one Agent Runtime and remains in its checkpoint contract.
-- A Memory Candidate is an allowlisted statement proposed from an accepted observable result. It is
-  inert until an authoritative promotion policy accepts it.
-- Durable Agent Memory is a promoted immutable revision with exact scope, provenance, retention,
-  sensitivity, status, and audit metadata.
+## 决策
 
-Only Electron main may promote full-fidelity local Memory derived from repository work. Team/API may
-store an explicitly allowed redacted Memory projection only: the versioned strict field set named by
-product policy contains stable scope/source
-identities, lifecycle and revision/head versions, provenance digest, bounded canonical citation IDs,
-durable accepted-Context counts, retention metadata, and timestamps. It cannot request raw local
-text or promote local Memory. A model, renderer, retrieval hit, or MCP server cannot mint promotion
-authority.
+Agent 记忆是独立、带版本、有范围的产品概念。它不是工作流状态、知识源文件、治理证据、Agent 检查点或隐藏推理。
 
-### Scope And Retrieval
+<a id="memory-kinds-and-authority"></a>
 
-Every candidate/revision binds organization, project, user, session, Local Project when applicable,
-and its declared visibility (`runtime`, `user_project`, or `project_shared`). Retrieval requires an
-exact compatible scope and caller authority. Scope is an intersection, never a fallback: a missing
-or mismatched dimension returns no item and no existence signal.
+### 记忆类型与权限
 
-Memory retrieval participates as a separately labeled Context source. It never changes Knowledge
-chunk scores, satisfies Governance Checks, advances Workflow, or expands a Tool/Executor capability.
+- 工作记忆限定于一个 Agent 运行时，留在其检查点契约内。
+- 记忆候选是从已接受的可观察结果提出的允许列表语句。在权威提升策略接受前，它不生效。
+- 持久 Agent 记忆是提升后的不可变修订，包含确切范围、来源、保留规则、敏感度、状态及审计元数据。
 
-### Revision, Conflict, Retention, And Deletion
+只有 Electron 主进程可提升由仓库工作派生的完整本地记忆。Team/API 仅可保存明确允许的脱敏记忆投影：产品策略规定的带版本严格字段集合包含稳定范围/来源身份、生命周期及修订/最新版本、来源摘要、有界规范引用 ID、持久接受的上下文计数、保留元数据和时间戳。它不能请求原始本地文本或提升本地记忆。模型、渲染进程、检索命中或 MCP 服务都不能创造提升权限。
 
-Promotion creates immutable revision 1. An update requires the exact current revision and creates a
-new immutable revision linked by `supersedes`; optimistic concurrency rejects stale writers. A
-content digest and provenance digest bind the accepted statement to its source observation without
-persisting hidden reasoning or raw private output in Team state.
+<a id="scope-and-retrieval"></a>
 
-Each revision has a fixed retention class and optional canonical `expiresAt`. Expired items are
-excluded before ranking and cannot be revived by clock rollback; changing retention requires a new
-authorized revision. The invariant is that deleted or expired Memory is unavailable before retrieval.
-Deletion creates a monotonic tombstone, removes the item from retrieval, and queues all derived local
-embeddings/index entries for purge. It prevents replay or an older sync from resurrecting it. Purge
-completion is auditable; a pending purge remains unavailable.
+### 范围与检索
 
-Conflicting active memories are not silently merged. Retrieval reports the conflict set and its
-versions or excludes it according to the caller contract; a model cannot choose a winner and write
-it back without promotion authority.
+每个候选/修订绑定组织、项目、用户、会话、适用时的本地项目，以及声明可见性（`runtime`、`user_project` 或 `project_shared`）。检索要求确切兼容范围和调用者权限。范围取交集，绝不回退：任一维度缺失或不匹配都不返回条目，也不泄露存在性信号。
 
-### Audit And Privacy
+记忆检索作为单独标识的上下文来源参与。它不改变知识片段分数、不满足治理检查、不推进工作流，也不扩大工具/执行器能力。
 
-Local audit records stable IDs, exact scope, revision, status transition, retention/expiry,
-provenance digest, actor authority, and timestamps. It excludes raw prompt, hidden reasoning,
-credentials, source, patch, stdout/stderr, and absolute paths. Team projections are metadata-only
-and redacted. Enumeration, timing, error, and count behavior must not reveal another tenant's Memory.
+<a id="revision-conflict-retention-and-deletion"></a>
 
-Default verification uses a deterministic clock, fixture memories, and no provider call. It covers
-cross-organization/project/user/session/Local Project isolation, stale revision conflict, expiry
-boundaries, delete/purge/restart, projection redaction, and no-resurrection replay.
+### 修订、冲突、保留与删除
 
-## Consequences
+提升创建不可变修订 1。更新要求确切当前修订，并创建通过 `supersedes` 关联的新不可变修订；乐观并发拒绝过时写入者。内容摘要和来源摘要将已接受语句绑定到源观察，Team 状态不保存隐藏推理或原始私有输出。
 
-- Checkpoint recovery and durable Memory remain independently understandable and testable.
-- Memory persistence starts locally; the Team projection is an explicit one-way slice with its own
-  strict allowlist, schema migration, monotonic sync, and read-only Web consumer.
-- Deletion and scope filtering happen before retrieval/reranking, not as a UI-only filter.
-- V2.2 may delegate only memories already visible to the delegated scope; delegation creates no new
-  visibility.
+每个修订有固定保留类别和可选规范 `expiresAt`。过期条目在排序前排除，不能因时钟回退复活；修改保留规则需要新的授权修订。不变量是：已删除或过期记忆在检索前就不可用。删除创建单调墓碑，从检索中移除条目，并将全部派生本地嵌入/索引项加入清除队列，防止重放或旧同步使其复活。清除完成可审计，待清除内容保持不可用。
 
-## Rejected Alternatives
+冲突的活动记忆不静默合并。检索按调用者契约报告冲突集合及版本，或排除该集合；没有提升权限时，模型不能自行选胜者并写回。
 
-- **Persist every Agent observation automatically.** This creates unreviewed, noisy, and potentially
-  sensitive shadow state.
-- **Use chat history as Memory.** It is provider-specific, unbounded, hard to delete, and may contain
-  hidden reasoning or secrets.
-- **Reuse Workflow or Knowledge tables.** Their ownership and authority semantics are different.
-- **Soft-hide deleted Memory only in UI.** Retrieval, embeddings, restart, and sync could resurrect
-  it.
+<a id="audit-and-privacy"></a>
+
+### 审计与隐私
+
+本地审计记录稳定 ID、确切范围、修订、状态转换、保留/过期、来源摘要、参与者权限和时间戳，不包含原始提示、隐藏推理、凭据、源码、补丁、stdout/stderr 或绝对路径。Team 投影仅含脱敏元数据。枚举、耗时、错误及数量行为都不能泄露其他租户的记忆。
+
+默认验证使用确定性时钟、记忆夹具，不调用提供方。覆盖跨组织/项目/用户/会话/本地项目隔离、过时修订冲突、过期边界、删除/清除/重启、投影脱敏及防复活重放。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 检查点恢复与持久记忆分别可理解、可测试。
+- 记忆先本地持久化；Team 投影是显式单向切片，拥有独立严格允许列表、模式迁移、单调同步和只读 Web 消费者。
+- 删除与范围过滤发生在检索/重排前，不只是 UI 过滤。
+- V2.2 只能委托被委托范围内已可见的记忆；委托不创造新可见性。
+
+<a id="rejected-alternatives"></a>
+
+## 未采用的替代方案
+
+- **自动持久保存每次 Agent 观察。** 会创建未经审查、噪声多且可能敏感的影子状态。
+- **用聊天历史充当记忆。** 它依赖提供方、无界、难删除，并可能包含隐藏推理或秘密。
+- **复用工作流或知识表。** 它们的归属和权限语义不同。
+- **只在 UI 软隐藏已删除记忆。** 检索、嵌入、重启和同步仍可能使其复活。

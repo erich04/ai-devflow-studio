@@ -1,26 +1,22 @@
-# Product Requirements Documents
+# 产品需求文档
 
-This folder stores PRDs for DevFlow Studio.
+本目录保存 DevFlow Studio 的产品需求文档（PRD），从用户视角定义产品必须具备的行为。相关内容分别归属于：
 
-Use these documents to define what the product must do from the user's perspective. Keep them
-separate from:
+- `../product-definition.md`：长期产品定位与边界。
+- `../details/`：支撑体验与实现决策的稳定产品概念。
+- `../../plans/`：里程碑执行计划与实现检查清单。
+- `../../roadmap.md`：已完成及计划中的里程碑与长期方向。
 
-- `../product-definition.md`: durable product positioning and boundaries.
-- `../details/`: stable product concepts used for UX and implementation decisions.
-- `../../plans/`: milestone execution plans and implementation checklists.
-- `../../roadmap.md`: completed milestones, planned milestones, and long-term direction.
+<a id="index"></a>
 
-## Index
+## 索引
 
-- [`current-product-prd.md`](./current-product-prd.md): Current product baseline PRD for DevFlow
-  Studio's self-hosted AI development workflow workbench.
-- [`v1.4-pilot-trust-boundary-prd.md`](./v1.4-pilot-trust-boundary-prd.md): Scoped V1.4 contract
-  for paid-runtime trust, durable sync, repository knowledge, Web management, and pilot lifecycle.
-- [`v1.5-github-delivery-prd.md`](./v1.5-github-delivery-prd.md): Implemented final 1.x feature contract
-  for explicit, repository-scoped, recoverable GitHub branch and Draft pull-request delivery;
-  release/signoff pending.
+- [当前产品 PRD](./current-product-prd.md)：自行部署的 AI 开发流程工作台产品基线。
+- [V1.4 试用信任边界](./v1.4-pilot-trust-boundary-prd.md)：付费运行时信任、持久化同步、仓库知识、Web 管理和试用生命周期的限定范围契约。
+- [V1.5 GitHub 交付](./v1.5-github-delivery-prd.md)：已实现的 1.x 最终功能契约，定义明确授权、限定仓库范围且可恢复的分支与草稿拉取请求交付；文档原有生命周期标记为“发布/验收待完成”，具体发布状态以路线图和发布记录为准。
 
-## Naming
+<a id="naming"></a>
 
-Use `vX.Y-topic-prd.md` for scoped product changes, for example
-`v1.5-github-delivery-prd.md`.
+## 命名
+
+限定范围的产品变更使用 `vX.Y-topic-prd.md`，例如 `v1.5-github-delivery-prd.md`。

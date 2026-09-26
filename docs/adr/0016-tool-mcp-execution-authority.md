@@ -1,97 +1,70 @@
-# ADR 0016: Tool And MCP Execution Authority
+<a id="adr-0016-tool-and-mcp-execution-authority"></a>
 
-Status: Accepted
+# ADR 0016：工具与 MCP 执行权限
 
-Date: 2026-08-12
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-08-12
 
-The 1.x domain contains a Team-visible `McpServerDefinition` with a display name, command string,
-permission label, enabled flag, and audit summary. It supports management UI and synchronized team
-metadata. That record is renderer/team writable and was never designed to authorize `spawn`.
+<a id="context"></a>
 
-V2.0 needs native Tool calls and one accepted MCP scenario without turning synchronized display data
-into local command execution, leaking the parent environment, or allowing a model to invent scope.
+## 背景
 
-## Decision
+1.x 领域模型中的 Team 可见 `McpServerDefinition` 包含显示名称、命令字符串、权限标签、启用标记和审计摘要，支持管理 UI 与团队元数据同步。该记录可由渲染进程/团队写入，从未用于授权 `spawn`。
 
-Team `McpServerDefinition` remains non-authoritative catalog/display metadata and must never be used as process-spawn authority.
-Local execution uses a separate Electron-main-owned
-`LocalMcpInstallation` registry plus a main-owned native Tool registry.
+V2.0 需要原生工具调用及一个已接受 MCP 场景，同时避免把同步展示数据变为本地命令执行、泄露父进程环境或允许模型虚构范围。
 
-### Tool Definitions And Capability Grants
+<a id="decision"></a>
 
-A Tool Definition has a stable ID/version, source (`native` or `mcp`), description, strict JSON input
-and output schemas, declared permission class, side-effect class, default deadline, result-size cap,
-and audit/redaction policy. Duplicate IDs, unsupported schema features, unknown permissions, and
-unbounded definitions fail registration.
+## 决策
 
-Before a call, Electron main issues an opaque, short-lived `ToolCapabilityGrant` bound to the exact
-Agent Runtime, organization, project, user, session, and Local Project; Tool ID/version; allowed
-permission and side-effect class; resource scope; expiry; remaining call count; and budget. The
-runtime and renderer can refer to the grant but cannot forge or widen it. Policy, Workflow version,
-Local Project binding, and grant freshness are rechecked immediately before execution.
+Team `McpServerDefinition` 保持为不具授权效力的目录/展示元数据，绝不能作为进程启动权限来源。本地执行使用独立、由 Electron 主进程（Electron main）拥有的 `LocalMcpInstallation` 注册表，以及主进程拥有的原生工具注册表。
 
-Every call uses strict input and output schema validation, a bounded result, deadline, cancellation,
-and redaction. Unknown fields are rejected. Timeout or cancellation terminates or disconnects the
-underlying operation and produces a typed result; it never assumes that an ambiguous side effect did
-not occur. Non-idempotent Tools require an idempotency or reconciliation contract before acceptance.
+<a id="tool-definitions-and-capability-grants"></a>
 
-### Trusted Local MCP Installation
+### 工具定义与能力授权
 
-`LocalMcpInstallation` is persisted only in Desktop local state. It records a stable installation ID,
-verified executable identity/path, fixed argument vector, `stdio` transport, bounded startup and
-call deadlines, allowed environment-variable names, working-directory policy, expected server/tool
-identity, enabled state, and installation version. Secret values stay in the credential boundary and
-are injected only by Electron main. The child receives a fixed non-secret isolation sentinel so an
-otherwise empty environment block cannot degrade into parent-environment inheritance on Windows;
-all other product environment values require the installation allowlist. The parent process
-environment is not inherited wholesale.
+工具定义包含稳定 ID/版本、来源（`native` 或 `mcp`）、描述、严格 JSON 输入/输出模式、声明权限类别、副作用类别、默认截止期限、结果大小上限及审计/脱敏策略。重复 ID、不支持的模式特性、未知权限和无界定义均无法注册。
 
-Installation or material revision is an explicit local developer action. Team metadata may suggest
-or describe a server, but cannot create, enable, revise, or execute an installation. Renderer input
-never supplies the executable, arguments, cwd, or secret environment values at call time.
+调用前，Electron 主进程签发不透明短期 `ToolCapabilityGrant`，绑定确切 Agent 运行时、组织、项目、用户、会话和本地项目，工具 ID/版本，允许的权限及副作用类别，资源范围、过期时间、剩余调用次数及预算。运行时和渲染进程可引用授权，但不能伪造或扩大。在执行前立即重新检查策略、工作流版本、本地项目绑定和授权时效。
 
-V2.0 accepts local `stdio` MCP only; remote MCP transports are deferred until a separate authority,
-network egress, authentication, redirect, and tenant-isolation decision exists.
+每次调用都严格校验输入和输出模式，并应用有界结果、截止期限、取消和脱敏。拒绝未知字段。超时或取消会终止/断开底层操作并产生类型化结果，不能假设不明确的副作用未发生。接受非幂等工具前必须具有幂等或对账契约。
 
-### Discovery, Lifecycle, And Audit
+<a id="trusted-local-mcp-installation"></a>
 
-Electron main starts an MCP process only after runtime and installation authority pass. It performs a
-bounded protocol handshake, validates server identity and advertised Tool schemas, snapshots a
-capability-set digest, and then permits calls covered by an exact ToolCapabilityGrant. Discovery
-does not itself authorize execution.
+### 可信本地 MCP 安装
 
-The main process owns start, health, deadline, cancellation, protocol error, and shutdown. A process
-is scoped to the accepted runtime/session policy; it cannot silently outlive cancellation or Desktop
-shutdown. Crash/restart recovery never assumes a prior non-idempotent call is safe to repeat.
-The lifecycle reports a child as closed only after Node's `close` event confirms both process exit
-and stdio-handle closure; an earlier `exit` event is not sufficient on Windows. The fixed isolation
-sentinel prevents an empty environment block from becoming wholesale inheritance. Platform runtime
-variables that Node/libuv must add on Windows, and the macOS Core Foundation text-encoding variable,
-are treated as an explicit non-secret platform baseline rather than product environment authority.
+`LocalMcpInstallation` 只持久化到桌面本地状态，记录稳定安装 ID、已核实可执行文件身份/路径、固定参数向量、`stdio` 传输、有界启动/调用截止期限、允许的环境变量名、工作目录策略、预期服务/工具身份、启用状态及安装版本。秘密值留在凭据边界，仅由 Electron 主进程注入。子进程接收固定且不含秘密的隔离哨兵，防止空环境块在 Windows 上退化成继承父进程环境；其他产品环境值都需要在安装允许列表中。不能整体继承父进程环境。
 
-Local audit records installation ID/version, runtime and Tool identity, scope IDs, permission
-decision, start/end time, bounded status, result digest/size, redaction state, and failure code. Team
-receives only an allowlisted redacted summary. No audit row contains command text from Team,
-credentials, raw source, prompt, output, patch, or absolute path.
+安装或实质修订是显式的本地开发者操作。团队元数据可以建议或描述服务，但不能创建、启用、修订或执行安装。调用时，渲染进程输入绝不提供可执行文件、参数、cwd 或秘密环境值。
 
-## Consequences
+V2.0 只接受本地 `stdio` MCP；远程 MCP 传输推迟到另行决定权限、网络出口、身份验证、重定向及租户隔离之后。
 
-- Existing MCP management UI remains useful but gains no execution authority by accident.
-- Native and MCP Tools share validation, capability, deadline, cancellation, result, and audit
-  semantics.
-- Cross-project, cross-user, expired-grant, disabled-installation, schema-tamper, and environment
-  leakage tests become release requirements.
-- V2.2 execution tenancy can build on the scoped grant without claiming hosted public multi-tenancy.
+<a id="discovery-lifecycle-and-audit"></a>
 
-## Rejected Alternatives
+### 发现、生命周期与审计
 
-- **Spawn `McpServerDefinition.command`.** Rejected because Team/renderer data is not trusted local
-  process authority.
-- **Allow arbitrary shell MCP configuration per Agent prompt.** Rejected because a model cannot
-  create executable or credential scope.
-- **Inherit the full Desktop environment.** Rejected because unrelated credentials would cross the
-  server boundary.
-- **Support remote MCP immediately.** Rejected because its authentication and network authority are
-  materially different from a local child process.
+运行时和安装权限检查通过后，Electron 主进程才启动 MCP 进程。它执行有界协议握手，校验服务身份及声明的工具模式，快照能力集合摘要，然后允许确切 ToolCapabilityGrant 覆盖的调用。发现本身不授权执行。
+
+主进程拥有启动、健康状态、截止期限、取消、协议错误和关闭。进程受已接受的运行时/会话策略约束，不能在取消或桌面退出后悄悄继续存活。崩溃/重启恢复不能假设先前非幂等调用可安全重复。
+只有 Node 的 `close` 事件确认进程退出且 stdio 句柄关闭后，生命周期才报告子进程已关闭；Windows 上更早的 `exit` 事件不足以证明。固定隔离哨兵防止空环境块变为整体继承。Windows 上 Node/libuv 必须补充的平台运行变量，以及 macOS Core Foundation 文本编码变量，属于明确、不含秘密的平台基线，而非产品环境授权。
+
+本地审计记录安装 ID/版本、运行时及工具身份、范围 ID、权限决策、开始/结束时间、有界状态、结果摘要/大小、脱敏状态和失败代码。Team 只接收允许列表内的脱敏摘要。审计行不包含 Team 命令文本、凭据、原始源码、提示、输出、补丁或绝对路径。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 既有 MCP 管理界面继续可用，不意外取得执行权限。
+- 原生工具和 MCP 工具共享校验、能力、截止期限、取消、结果及审计语义。
+- 跨项目、跨用户、过期授权、禁用安装、模式篡改和环境泄露测试成为发布要求。
+- V2.2 执行租户隔离可以基于范围授权构建，但不宣称支持托管公共多租户服务。
+
+<a id="rejected-alternatives"></a>
+
+## 未采用的替代方案
+
+- **执行 `McpServerDefinition.command`。** Team/渲染进程数据不是可信本地进程授权。
+- **允许每个 Agent 提示任意配置 Shell MCP。** 模型不能创建可执行或凭据范围。
+- **继承全部桌面环境。** 无关凭据会跨越服务边界。
+- **立即支持远程 MCP。** 其身份验证和网络权限与本地子进程有本质差异。

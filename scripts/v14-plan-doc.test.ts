@@ -53,12 +53,12 @@ describe('v1.4 pilot trust boundary contract', () => {
   })
 
   it('delegates current release and future milestone truth to the roadmap', () => {
-    expect(readme).toContain('Current release and roadmap status')
-    expect(readme).toContain('[Roadmap](docs/roadmap.md)')
-    expect(readme).not.toContain('V1.4 candidate preparation')
-    expect(readme).toContain('Paid Coding and Gate Review runtimes fail closed')
-    expect(readme).toContain('Durable redacted sync uses a persisted outbox')
-    expect(readme).not.toContain('fail-closed paid-runtime hardening remains open')
+    expect(readme).toContain('发布与路线图状态')
+    expect(readme).toContain('[路线图](docs/roadmap.md)')
+    expect(readme).not.toContain('正在准备 V1.4 候选版本')
+    expect(readme).toContain('付费 Coding 与 Gate Review 运行时在调用提供方前拒绝继续')
+    expect(readme).toContain('持久化发件箱保存脱敏同步任务')
+    expect(readme).not.toContain('付费运行时拒绝不确定请求的加固尚未完成')
 
     expect(productDefinition).toContain('Release status and future milestones live only in the')
     expect(productDefinition).toContain('[Roadmap](../roadmap.md)')

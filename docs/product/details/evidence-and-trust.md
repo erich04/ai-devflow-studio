@@ -1,52 +1,49 @@
-# Evidence And Trust
+<a id="evidence-and-trust"></a>
 
-## Evidence Chain Rules
+# 证据与信任
 
-Evidence Chain is the core product metaphor for the UI refactor.
+<a id="evidence-chain-rules"></a>
 
-1. Every meaningful workflow action should either create evidence or explain why evidence is not yet
-   available.
-2. Evidence should be attached to a Run and, when possible, to a specific Node.
-3. Local raw details stay local.
-4. Team-visible evidence must be redacted.
-5. Gate UI should show evidence state, policy state, and next action together.
-6. Missing evidence should become an actionable remediation path, not passive warning text.
-7. A reviewer should be able to answer: what was requested, what changed, what was tested, what did
-   the agents conclude, what policy applied, who approved, and what remains risky.
-8. GitHub Delivery must preserve the PR Delivery Package, immutable Delivery Intent, redacted
-   Delivery Request, exact signed approval, credential-grant metadata, verified remote head, Draft
-   pull-request completion, recovery actions, and Acceptance decision as linked evidence.
-9. Revise, Resume, Retry, and Stop must append history with distinct series/attempt/revision identity;
-   they must never overwrite prior evidence, reuse stale approval, or silently repeat a remote
-   effect.
+## 证据链规则
 
-## Trust And Redaction Boundaries
+证据链是此次界面重构的核心产品表达。
 
-Never sync these raw values to the team by default:
+1. 每个有意义的工作流动作都应产生证据，或解释证据为何尚不可用。
+2. 证据应关联 Run；能够定位时，还应关联具体节点。
+3. 本地原始详情保留在本地。
+4. 团队可见证据必须脱敏。
+5. Gate 界面应同时显示证据状态、策略状态和下一步动作。
+6. 缺失证据应对应可操作的处理路径，不能只显示警告文字。
+7. 审查者应能回答：原始请求是什么、改了什么、测了什么、Agent 得出了什么结论、应用了什么策略、谁批准了操作，以及仍有什么风险。
+8. GitHub 交付必须将 PR 交付包、不可变交付意图、脱敏交付请求、精确签名审批、凭据授权元数据、已核实远端提交、草稿 PR 完成记录、恢复动作和验收决定串成关联证据。
+9. 修订（Revise）、继续（Resume）、重试（Retry）、停止（Stop）必须以不同的交付系列、尝试和修订身份追加历史，绝不能覆盖既往证据、复用过期审批或静默重复远端操作。
 
-- Local absolute paths.
-- Raw prompts.
-- Raw stdout/stderr.
-- Patch bodies.
-- Provider secrets.
-- API keys or tokens.
-- GitHub App private keys, installation tokens, or credential payloads.
-- Unredacted local command output.
-- External-directory access details.
+<a id="trust-and-redaction-boundaries"></a>
 
-Safe team summaries may include:
+## 信任与脱敏边界
 
-- Run id, title, status, branch, and stage.
-- Changed path summaries when paths are repo-relative and safe.
-- Test command, status, duration, and redacted summary.
-- Knowledge-Grounded Gate Review conclusion for the current Gate and stage artifacts, including advisory level, missing evidence count, risk count, and safe Knowledge reference metadata.
-- Policy and budget rollups.
-- Gate decisions and override reasons.
-- GitHub App repository binding identity and revocation state without credentials.
-- Delivery Request status, approval identity, series/attempt/revision, and recovery action history.
-- Expected commit, verified remote branch head, and Draft pull-request URL when repository-relative
-  and safe.
+以下原始值默认绝不能同步给团队：
 
-GitHub Delivery evidence proves a bounded Draft handoff; it never authorizes merge. Acceptance may
-reference that completion but must never merge, close, force-push, delete a branch, publish a tag,
-or expose credentials.
+- 本地绝对路径。
+- 原始提示词。
+- 原始 stdout/stderr。
+- 补丁正文。
+- 服务提供方秘密。
+- API 密钥或令牌。
+- GitHub App 私钥、安装令牌或凭据载荷。
+- 未脱敏的本地命令输出。
+- 外部目录访问详情。
+
+安全的团队摘要可以包含：
+
+- Run ID、标题、状态、分支和阶段。
+- 安全的仓库相对路径形式的变更路径摘要。
+- 测试命令、状态、耗时和脱敏摘要。
+- 当前 Gate 及阶段产物的知识门禁审查结论，包括建议级别、缺失证据数量、风险数量和安全的知识引用元数据。
+- 策略和预算汇总。
+- Gate 决定和例外审批理由。
+- 不含凭据的 GitHub App 仓库绑定身份与撤销状态。
+- 交付请求状态、审批身份、交付系列/尝试/修订和恢复动作历史。
+- 在仓库关联信息安全的前提下，提供预期提交、已核实远端分支提交和草稿 PR 地址。
+
+GitHub 交付（GitHub Delivery）证据只能证明有界的草稿交接（Draft），不会合并，也不授予合并权限。业务验收（Acceptance）可以引用交付完成记录，但绝不能合并、关闭、强制推送、删除分支、发布标签或暴露凭据。

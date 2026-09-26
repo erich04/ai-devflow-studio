@@ -1,268 +1,158 @@
-# ADR 0012: Web/Desktop Work Authority
+<a id="adr-0012-webdesktop-work-authority"></a>
 
-## Status
+# ADR 0012：Web 与桌面端的工作权限边界
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-V1.4 adds Web work intake and Gate actions to a product whose execution authority is local. The
-current API/Postgres Run is built incrementally from redacted `RemoteRunSummary` records. It has only
-the current-node projection and selected child summaries; it does not contain the complete local
-node graph, repository context, artifacts, test output, or workflow evidence held by Electron
-LocalStore.
+已接受（Accepted）。
 
-Treating that lossy record as a writable Run would create two workflow authorities. Web could then
-advance a status without the local evidence checked by `applyWorkflowCommand(...)`, while a later
-Desktop sync could overwrite or contradict the Web result. Conversely, uploading the full local
-Run and its evidence would violate the local execution and repository privacy boundary established
-by ADR 0003 and ADR 0011.
+<a id="context"></a>
 
-V1.4 therefore needs an explicit ownership and handoff model before either Work Request or Web Gate
-write routes are implemented.
+## 背景
 
-## Decision
+V1.4 为执行权限位于本地的产品增加 Web 需求收集和门禁操作。当前 API/Postgres 中的 Run 由脱敏的 `RemoteRunSummary` 逐步构建，只包含当前节点投影和部分子记录摘要，不包含 Electron LocalStore 持有的完整节点图、仓库上下文、产物、测试输出与工作流证据。
 
-Team owns the versioned Work Request and Gate Command records. Desktop owns the canonical
-full-fidelity local Run and every workflow transition over that Run. The server may authorize and
-queue collaboration intent, but only the owning Desktop may apply that intent through the shared
-workflow domain logic and an atomic LocalStore mutation.
+若把这种有损记录当作可写 Run，会形成两个工作流权威来源。Web 可能在没有经过 `applyWorkflowCommand(...)` 本地证据检查时推进状态，后续桌面同步又可能覆盖该结果或产生冲突。反过来，上传完整本地 Run 及证据会违反 ADR 0003 和 ADR 0011 确立的本地执行与仓库隐私边界。
 
-### Authority map
+因此，V1.4 必须在实现工作请求和 Web 门禁写入路由前明确归属与交接模型。
 
-| Record or decision | Authority | Boundary |
+<a id="decision"></a>
+
+## 决策
+
+Team 拥有带版本的 Work Request 和 Gate Command 记录。Desktop 拥有权威的完整本地 Run，以及该 Run 的全部工作流状态转换。服务端可以授权并排队处理协作意图，但只有所属桌面端可以通过共享工作流领域逻辑和原子 LocalStore 变更应用该意图。
+
+<a id="authority-map"></a>
+
+### 权限归属表
+
+| 记录或决策 | 权威来源 | 边界 |
 | --- | --- | --- |
-| Work Request | Team API/Postgres | Versioned team intake; contains bounded collaboration text, project scope, lifecycle, and claim binding. |
-| Work Request claim | Team API/Postgres | A project-bound Desktop explicitly claims a version and binds one stable local Run ID. |
-| Canonical Run, full node graph, and local evidence | Desktop LocalStore | Created only after a successful claim; evaluated and mutated only through the Desktop workflow runtime. |
-| Team Run Projection | Team API/Postgres | Versioned, redacted, lossy read model derived from canonical Desktop summaries. It is never execution authority. |
-| Gate Command | Team API/Postgres | Authenticated, version-bound collaboration intent plus its server evaluation and delivery lifecycle. |
-| Gate transition | Desktop LocalStore | Re-evaluated against the full local Run, evidence, and authoritative policy, then committed atomically. |
-| Manager/Web views | Team API read models | Read Work Requests, commands, projections, and redacted evidence; never read LocalStore directly. |
+| Work Request（工作请求） | Team API/Postgres | 带版本的团队需求收集，包含有界协作文本、项目范围、生命周期和认领绑定。 |
+| 工作请求认领 | Team API/Postgres | 已绑定项目的桌面端显式认领某个版本，并绑定一个稳定的本地 Run ID。 |
+| 权威 Run、完整节点图及本地证据 | Desktop LocalStore | 只有成功认领后才创建，仅通过桌面工作流运行时评估和修改。 |
+| Team Run Projection（团队 Run 投影） | Team API/Postgres | 由权威桌面摘要生成的带版本、脱敏、有损只读模型，始终不具有执行权限。 |
+| Gate Command（门禁命令） | Team API/Postgres | 已鉴权且绑定版本的协作意图，以及服务端评估与投递生命周期。 |
+| 门禁状态转换 | Desktop LocalStore | 根据完整本地 Run、证据和权威策略重新评估，然后原子提交。 |
+| 管理者与 Web 视图 | Team API 只读模型 | 读取工作请求、命令、投影及脱敏证据，绝不直接读取 LocalStore。 |
 
-### Versioned Work Request and explicit claim
+<a id="versioned-work-request-and-explicit-claim"></a>
 
-A Work Request is not a `WorkflowRun`. It has its own stable ID, project and organization scope,
-bounded title/request fields, integer `version`, lifecycle status, creator, timestamps, and optional
-expiry. Team increments the version for every accepted lifecycle or content change.
+### 带版本的工作请求与显式认领
 
-To start execution, a paired Desktop generates the intended local Run ID and submits a claim with
-the Work Request ID, expected Work Request version, Desktop-token identity, and an idempotency key.
-The Team service atomically verifies the live project membership, request state/version, expiry,
-and absence of another claim before binding that exact Run ID and claimant. Desktop waits for that
-grant before it creates the canonical Run transactionally from the returned immutable request
-snapshot. Local creation is idempotent by Run ID, so retrying after a crash cannot create a second
-Run.
+工作请求不是 `WorkflowRun`。它具有独立稳定 ID、项目与组织范围、有界标题和请求字段、整数 `version`、生命周期状态、创建者、时间戳和可选过期时间。每次接受生命周期或内容变更，Team 都递增版本。
 
-The claim is durable rather than an automatically reassignable lease. If Desktop fails after Team
-grants the claim but before local creation, the same claimant resumes with the same claim and Run
-ID. The request is shown as `claim_pending` until Desktop acknowledges local materialization or the
-first canonical projection arrives. A lead may explicitly release a pending claim only when no
-canonical projection has ever been accepted, using the expected Work Request version; the release
-is audited. Team never fabricates a Run merely because a Work Request or claim exists.
+开始执行前，已配对桌面端生成目标本地 Run ID，并提交认领请求，包含工作请求 ID、预期工作请求版本、桌面令牌身份和幂等键（idempotency key）。Team 服务原子核实实时项目成员身份与角色、请求状态与版本、过期时间以及不存在其他认领，然后绑定这个确切 Run ID 和认领者。桌面端必须先获得授权，才能按返回的不可变请求快照事务性创建权威 Run。本地创建按 Run ID 幂等，崩溃后重试不会创建第二个 Run。
 
-Each canonical local mutation advances an integer Run version. A remote Run summary carries that
-version, and Team accepts it monotonically into the Team Run Projection. Timestamps remain display
-and audit data, not concurrency tokens.
+认领是持久绑定，不是可自动重新分配的租约。Team 授予认领后、本地创建前若桌面端失败，同一认领者使用同一认领和 Run ID 恢复。在桌面确认本地实体已创建或首个权威投影到达前，请求显示为 `claim_pending`。只有从未接受过权威投影时，lead 才能使用预期工作请求版本显式释放待完成认领，并留下审计记录。Team 不能仅因为存在工作请求或认领就虚构 Run。
 
-### One workflow state machine
+每次权威本地变更递增整数 Run 版本。远端 Run 摘要携带该版本，Team 按单调递增规则接受到团队 Run 投影中。时间戳仅用于展示与审计，不充当并发令牌。
 
-Web never directly mutates a Team Run Projection, and no API route accepts a replacement
-`WorkflowRun`, status, or current-node write from Web. The Team service does not copy the Electron
-workflow state machine. Shared pure evaluators may be used for a server preflight, but advancing the
-canonical Run still requires Desktop to call the shared transition function with its complete local
-evidence and commit through LocalStore optimistic concurrency.
+<a id="one-workflow-state-machine"></a>
 
-Remote summaries remain one-way redacted projections. They cannot replace a colliding local Run,
-reactivate an old node, satisfy missing evidence, or serve as the input to a local transition.
+### 唯一工作流状态机
 
-### Gate Command contract
+Web 绝不直接修改团队 Run 投影，API 路由也不接受 Web 提供的替代 `WorkflowRun`、状态或当前节点写入。Team 服务不复制 Electron 工作流状态机。服务端预检可以使用共享纯评估器，但推进权威 Run 仍要求桌面端携带完整本地证据调用共享转换函数，并通过 LocalStore 乐观并发提交。
 
-A Web Gate action submits a Gate Command; it does not submit a Run patch. The browser write uses a
-signed browser Session Cookie. The API resolves the authenticated identity from that cookie and
-reloads live project membership and role from Team storage instead of trusting a role embedded in
-the form, query string, or an old overview response. Pilot routes do not accept unsigned identity
-headers.
+远端摘要始终是单向脱敏投影，不能替换冲突的本地 Run、重新激活旧节点、补充缺失证据，或作为本地状态转换的输入。
 
-The bounded Gate Command record contains:
+<a id="gate-command-contract"></a>
 
-- organization ID, project ID, Work Request ID when present, Run ID, and current Node ID;
-- action (`approve` or `reject`) and a redacted, size-limited reason;
-- requesting user ID and the project role verified by the server;
-- a client-generated idempotency key and a server-computed request fingerprint;
-- integer `expectedRunVersion`, integer `expectedPolicyVersion`, and the exact expected blocker-ID
-  set used for the decision;
-- server evaluation result and timestamp, lifecycle status, creation/expiry timestamps, and only
-  safe receipt/outcome metadata.
+### 门禁命令契约
 
-The API performs a server-side preflight before persisting a pending command. In one transaction it
-rechecks organization/project/Run/Node scope, current Team Run Projection version and node, the
-fresh effective-policy version, the submitter's live project membership and role, separation of
-duties, and the current redacted enforcement inputs. It uses the shared policy evaluators; it does
-not reimplement their rules in a route. A known denial is returned immediately and audited, not
-queued for Desktop to discover. Passing server preflight authorizes only the command request, not
-the local transition, because Team does not possess all local evidence.
+Web 门禁操作提交门禁命令，而非 Run 补丁。浏览器写入使用已签名的浏览器 Session Cookie。API 从 Cookie 解析已鉴权身份，并从 Team 存储重新加载实时项目成员身份与角色，不信任表单、查询参数或旧概览响应中的角色。试点路由不接受未签名身份头。
 
-For V1.4, `approve` requests either `approve_gate` or `approve_acceptance` for the selected current
-node. `reject` records a human rejection and leaves the canonical Run paused at that Gate; it does
-not guess a rollback target. Any future rollback or changes-requested transition requires a shared
-domain command and a separate product decision rather than an API-only status rewrite.
+有界门禁命令记录包含：
 
-### Desktop inbox, receipt, apply, and acknowledgement
+- 组织 ID、项目 ID、工作请求 ID（如有）、Run ID 和当前节点 ID；
+- 操作（`approve` 或 `reject`）及经过脱敏和长度限制的理由；
+- 请求用户 ID 及服务端已核实的项目角色；
+- 客户端生成的幂等键及服务端计算的请求指纹；
+- 整数 `expectedRunVersion`、整数 `expectedPolicyVersion` 和决策所依据的确切阻断项 ID 集合；
+- 服务端评估结果与时间、生命周期状态、创建和过期时间，以及仅含安全信息的回执与结果元数据。
 
-Delivery follows `inbox → receipt → apply → acknowledgement`:
+API 在持久化待处理命令前执行服务端预检。它在一个事务内重新检查组织/项目/Run/节点范围、当前团队 Run 投影版本与节点、最新有效策略版本、提交者的实时项目成员身份与角色、职责分离和当前脱敏执行约束输入。路由调用共享策略评估器，不重新实现规则。已知拒绝立即返回并审计，不排队留给桌面发现。服务端预检通过只授权命令请求，不授权本地状态转换，因为 Team 不持有全部本地证据。
 
-1. The Desktop that owns the Work Request claim polls a project-scoped inbox with its paired
-   Desktop Bearer Token. Team resolves the token, immutable project binding, claimant token ID, and
-   current membership before returning a command.
-2. Team grants a bounded delivery receipt/lease for one command. The receipt identifies the command
-   and attempt but carries no Cookie, Bearer Token, or repository data.
-3. Desktop persists the receipt, loads the bound canonical Run and local evidence, verifies the
-   command scope and expiry, compares `expectedRunVersion`, refreshes or loads the authoritative
-   `expectedPolicyVersion`, and re-evaluates the full local evidence. For approval it invokes the
-   existing shared workflow transition and commits the Run mutation plus the command outcome in one
-   optimistic LocalStore transaction. Rejection is persisted as a human decision without advancing
-   the current node.
-4. Desktop acknowledges the exact receipt using the paired Desktop Bearer Token and reports only a
-   bounded outcome code plus before/after Run versions. Team records the acknowledgement and audit
-   result; it does not update projected workflow state from the acknowledgement.
+V1.4 中，`approve` 为选定当前节点请求 `approve_gate` 或 `approve_acceptance`；`reject` 记录人工拒绝，并使权威 Run 继续暂停在该门禁，不猜测回退目标。后续回退或请求修改的状态转换必须有共享领域命令和独立产品决策，不能仅在 API 重写状态。
 
-Only a later canonical Desktop summary advances the Team Run Projection. This preserves the
-existing child-first, monotonic, redacted sync contract and ensures an acknowledgement cannot race a
-summary into becoming an alternative Run mutation channel.
+<a id="desktop-inbox-receipt-apply-and-acknowledgement"></a>
 
-### Duplicate, concurrency, expiry, and recovery semantics
+### 桌面收件箱、回执、应用与确认
 
-Every Work Request create/claim and Gate Command write is idempotent. Retrying the same operation
-with the same idempotency key and fingerprint returns the original result, including an original
-rejection or terminal outcome. Reusing the same key with a different fingerprint is a `409 Conflict`
-and never changes the first record. Idempotency records are scoped to organization, project, actor,
-operation kind, and key; a key from one project cannot address another project.
+投递顺序为 `inbox → receipt → apply → acknowledgement`（收件箱 → 回执 → 应用 → 确认）：
 
-Work Request claim uses an expected version and an atomic conditional update. If different
-Desktops race to claim the same request version, one claimant wins and every loser receives a
-conflict before creating a local Run. A timed-out winner retries its original key and receives the
-same Run binding. An unclaimed request past its optional expiry returns `410 Gone`; a successful
-durable claim does not silently expire or move to another Desktop.
+1. 拥有工作请求认领的桌面使用配对的 Desktop Bearer Token 轮询项目范围收件箱。Team 在返回命令前解析令牌、不可变项目绑定、认领者令牌 ID 和当前成员身份。
+2. Team 为一条命令发放有界投递回执/租约。回执标识命令和尝试，不携带 Cookie、Bearer Token 或仓库数据。
+3. 桌面持久化回执，加载绑定的权威 Run 和本地证据，核实命令范围与过期时间，比较 `expectedRunVersion`，刷新或加载权威 `expectedPolicyVersion`，并重新评估完整本地证据。批准时调用既有共享工作流转换，在一个乐观 LocalStore 事务中提交 Run 变更和命令结果。拒绝作为人工决策持久化，不推进当前节点。
+4. 桌面使用配对的 Desktop Bearer Token 确认确切回执，只报告有界结果代码和前后 Run 版本。Team 记录确认及审计结果，不根据确认更新投影中的工作流状态。
 
-For a Gate, Team permits exactly one active command for a project/Run/Node/`expectedRunVersion`
-tuple. A concurrent different action or actor receives `409 Conflict` and must reload the projection
-after the active command reaches a terminal state. This prevents an approval and rejection prepared
-from the same snapshot from both reaching Desktop. A command expires after a bounded server-defined
-window (15 minutes by default). An expired command is never delivered or applied, and expiry is a
-terminal audited outcome rather than a retryable failure.
+只有之后的权威桌面摘要才能推进团队 Run 投影。这保留了既有的子记录优先、单调、脱敏同步契约，确保确认消息不会通过与摘要竞争形成另一条 Run 变更通道。
 
-Delivery receipts are leases, not transition authority. If Desktop crashes after receipt but before
-the LocalStore transaction, the receipt lease expires and Team may redeliver the same command while
-it remains unexpired. Desktop stores command ID, receipt ID, request fingerprint, and terminal local
-outcome under a unique command ID in the same transaction as any Run mutation. If the transition was
-applied before acknowledgement and Desktop or the network then fails, a redelivery reads that local
-outcome and retries the same acknowledgement; it must not apply the transition twice. Team likewise
-treats a repeated matching acknowledgement as the original terminal result.
+<a id="duplicate-concurrency-expiry-and-recovery-semantics"></a>
 
-Team terminally rejects a command before delivery when the requesting actor's membership or role
-has been revoked. Desktop rejects without mutation when the command is expired, its scope does not
-match the claiming Desktop, the current node differs, the local Run version differs (`stale_run`),
-the authoritative policy version differs or is unavailable (`stale_policy`), the blocker set
-changed, or the full local evidence blocks the transition. These are safe, terminal outcome codes
-for that command; the Web user must refresh and create a new version-bound command. A local
-mutation racing between receipt and commit becomes `stale_run` through LocalStore optimistic
-concurrency.
+### 重复、并发、过期与恢复语义
 
-If Desktop is offline, a pending command remains visible and deliverable until expiry; Team never
-advances the projection on its behalf. If an acknowledgement arrives after wall-clock expiry, Team
-accepts the recorded terminal outcome only when the matching receipt proves Desktop applied or
-rejected it before expiry. A receipt obtained before expiry does not authorize a new application
-after expiry.
+所有工作请求创建/认领和门禁命令写入均幂等。使用同一幂等键和指纹重试同一操作会返回原始结果，包括原始拒绝或终态结果。同一键配不同指纹返回 `409 Conflict`，绝不改变首条记录。幂等记录按组织、项目、参与者、操作类型和键隔离，一个项目的键不能寻址另一个项目。
 
-The acknowledgement record keeps Team's receive time as server-authored `createdAt`. A Desktop
-`evaluatedAt` may lead that receive time only while it remains inside the server-issued receipt and
-command windows, and by no more than the protocol's 60-second receipt-lease maximum. This bounded
-skew tolerance never extends either deadline; an `expired` outcome additionally requires Team's
-current server time to have reached the command expiry.
+工作请求认领使用预期版本及原子条件更新。多个桌面竞争同一请求版本时，只有一个认领者成功，其余在创建本地 Run 前收到冲突。成功者超时后以原始键重试，获得同一 Run 绑定。未认领请求超过可选过期时间返回 `410 Gone`；成功的持久认领不会悄悄过期或移到另一桌面。
 
-The API failure categories are stable and fail closed:
+对一个项目/Run/节点/`expectedRunVersion` 元组，Team 只允许一个活动命令。并发的其他操作或参与者收到 `409 Conflict`，必须在活动命令进入终态后重新加载投影，防止同一快照产生的批准和拒绝同时到达桌面。命令在服务端定义的有界窗口后过期，默认 15 分钟。过期命令绝不投递或应用；过期是需审计的终态，而非可重试失败。
 
-| Result | Meaning |
+投递回执是租约，不是状态转换授权。桌面在收到回执后、LocalStore 事务前崩溃，回执租约会过期；命令尚未过期时 Team 可重新投递同一命令。桌面在任何 Run 变更的同一事务内，以唯一命令 ID 保存命令 ID、回执 ID、请求指纹及本地终态结果。如果确认前已应用转换，随后桌面或网络失败，重新投递应读取本地结果并重试同一确认，绝不能重复应用状态转换。Team 同样将匹配的重复确认视为原终态结果。
+
+请求者的成员身份或角色被撤销时，Team 在投递前终态拒绝命令。以下情况桌面拒绝且不修改 Run：命令过期；范围与认领桌面不符；当前节点不同；本地 Run 版本不同（`stale_run`）；权威策略版本不同或无法取得（`stale_policy`）；阻断项集合变化；完整本地证据阻止转换。这些都是该命令安全且终态的结果代码；Web 用户必须刷新后创建新版本绑定命令。回执到提交之间的本地并发变更由 LocalStore 乐观并发转为 `stale_run`。
+
+桌面离线时，待处理命令在过期前保持可见和可投递，Team 不代替桌面推进投影。如果确认在实际过期后到达，只有匹配回执能证明桌面在过期前已应用或拒绝，Team 才接受所记录的终态结果。过期前取得回执不授权在过期后新应用命令。
+
+确认记录用 Team 接收时间作为服务端生成的 `createdAt`。桌面 `evaluatedAt` 只有在服务端签发的回执和命令时间窗口内，且领先幅度不超过协议的 60 秒回执租约上限时，才可晚于 Team 的接收时间。这种有界时钟偏差容忍不延长任何截止时间；`expired` 结果还要求 Team 当前服务端时间已到命令过期时间。
+
+API 失败类别稳定，且无法确认时拒绝执行：
+
+| 结果 | 含义 |
 | --- | --- |
-| `400 Bad Request` | Malformed or unsupported bounded input. |
-| `401 Unauthorized` | Missing or invalid signed Cookie/Bearer authentication. |
-| `403 Forbidden` | Organization, project membership, role, separation-of-duties, claimant, or token scope denial. |
-| `409 Conflict` | Idempotency fingerprint mismatch, stale expected version, competing claim/command, or immutable binding conflict. |
-| `410 Gone` | Unclaimed Work Request or Gate Command expired before the requested operation. |
-| `503 Service Unavailable` | Authoritative membership or policy state cannot be loaded; no command or transition is allowed. |
+| `400 Bad Request` | 有界输入格式不合法或不受支持。 |
+| `401 Unauthorized` | 缺失或无效的签名 Cookie/Bearer 身份验证。 |
+| `403 Forbidden` | 组织、项目成员身份、角色、职责分离、认领者或令牌范围拒绝。 |
+| `409 Conflict` | 幂等指纹不匹配、预期版本过时、竞争认领/命令，或不可变绑定冲突。 |
+| `410 Gone` | 未认领工作请求或门禁命令在请求操作前已过期。 |
+| `503 Service Unavailable` | 无法加载权威成员身份或策略状态，不允许命令或状态转换。 |
 
-A Gate Command lifecycle is `pending`, `delivering`, `applied`, `rejected`, or `expired`. A
-transient inbox/receipt/ack transport failure retains or returns the command to `pending` after its
-lease, subject to expiry. A deterministic authorization, scope, version, policy, blocker, or local
-evidence failure is `rejected` with a safe code and is not retried. An unexpected Team `5xx` leaves
-the previously committed state authoritative; clients retry with the same idempotency key. There is
-no ambiguous state that assumes a failed response applied a transition.
+门禁命令生命周期为 `pending`、`delivering`、`applied`、`rejected` 或 `expired`。收件箱/回执/确认的暂时传输失败，在租约结束后保留或恢复为 `pending`，但仍受过期限制。确定的授权、范围、版本、策略、阻断项或本地证据失败以安全代码进入 `rejected`，不重试。Team 意外 `5xx` 时，先前已提交状态仍具权威性；客户端使用同一幂等键重试。不存在默认把失败响应视为已应用转换的含糊状态。
 
-### Audit and data minimization
+<a id="audit-and-data-minimization"></a>
 
-Audit is append-only at both authority boundaries. After a live signed identity and project scope
-have been verified, Team audit covers every Work Request create, content/version change,
-claim/release, materialization acknowledgement, cancellation, and expiry, plus command submission,
-server preflight, receipt, acknowledgement, and expiry across every Gate command, including replay
-and conflict attempts. Each entry contains stable record IDs, organization/project scope, actor ID,
-authentication mechanism
-kind, verified project role, expected/observed versions, action, blocker IDs or hashes, safe outcome
-code, idempotency fingerprint, and timestamps. Desktop records receipt observation before local
-evidence reads, followed by evaluation, atomic outcome, and acknowledgement retry state against the
-local Run and Node.
+### 审计与数据最小化
 
-An attempt that fails before Team can verify a live actor and project is security telemetry, not a
-collaboration-domain audit row. Team must not invent an actor, role, project, or token attribution to
-satisfy audit-table foreign keys. Likewise, a transaction that rolls back because authoritative
-storage is unavailable cannot promise a durable row in that same unavailable transaction; the API
-returns its fixed safe failure while deployment telemetry records the availability incident.
+两个权威边界都采用仅追加审计。核实实时签名身份与项目范围后，Team 审计覆盖每次工作请求创建、内容/版本变化、认领/释放（claim/release）、本地创建确认、取消、过期，以及所有门禁命令的命令提交、服务端预检、回执、确认和过期，包括重放及冲突尝试。每条记录包含稳定记录 ID、组织/项目范围、参与者 ID、身份验证机制类型、已核实项目角色、预期/观察版本、操作、阻断项 ID 或哈希、安全结果代码、幂等指纹和时间戳。桌面在读取本地证据前记录已观察回执，随后针对本地 Run 和节点记录评估、原子结果和确认重试状态。
 
-Audit never stores Cookies, Bearer Tokens, API keys, or provider credentials. It stores a safe token
-record ID where attribution is necessary, never the token or token hash. User-entered titles,
-requests, and reasons pass through size limits plus path/secret redaction before Team persistence;
-error messages use fixed allowlisted codes and bounded redacted detail.
+Team 核实实时参与者与项目前失败的尝试属于安全遥测，不是协作领域审计行。不能为满足审计表外键虚构参与者、角色、项目或令牌归属。同样，因权威存储不可用而回滚的事务，无法承诺在同一个不可用事务中留下持久记录；API 返回固定安全失败，部署遥测记录可用性事件。
 
-Every network contract uses a bounded allowlist projection. Team Run Projection, Work Request, Gate
-Command, receipt, and acknowledgement parsers discard unknown fields and reject over-limit input.
-The command may refer to evidence, blocker, policy, and content hashes by stable IDs, but it cannot
-carry raw local evidence.
+审计绝不保存 Cookie、Bearer Token、API Key 或提供方凭据。需要归属时保存安全令牌记录 ID，不保存令牌本身或其哈希。用户输入的标题、请求和理由在 Team 持久化前经过大小限制及路径/秘密脱敏；错误消息使用固定允许列表代码和有界脱敏详情。
 
-In particular, raw repository Markdown, source files, prompts, stdout, stderr, patches, and absolute
-local paths never cross this boundary; local repository content is not uploaded by claim, command,
-receipt/acknowledgement, audit, or remote-summary sync. ADR 0011 continues to govern repository
-knowledge provenance; pairing a Desktop grants neither repository upload authority nor server-side
-repository access.
+所有网络契约都使用有界允许列表投影。团队 Run 投影、工作请求、门禁命令、回执和确认解析器丢弃未知字段并拒绝超限输入。命令可以通过稳定 ID 引用证据、阻断项、策略及内容哈希，但不能携带原始本地证据。
 
-## Consequences
+尤其是原始仓库 Markdown、源文件、提示、stdout、stderr、补丁和本地绝对路径不能跨越该边界；认领、命令、回执/确认、审计及远端摘要同步都不上传本地仓库内容。ADR 0011 继续约束仓库知识来源；配对桌面既不授予仓库上传权限，也不授予服务端仓库访问权限。
 
-- Team needs separate versioned Work Request, claim/idempotency, Gate Command, delivery receipt, and
-  append-only audit persistence. These are collaboration records, not new `workflow_runs` mutation
-  routes.
-- The canonical `WorkflowRun` and remote summary/projection need an explicit monotonic integer Run
-  version. LocalStore must atomically persist Gate command outcomes with transitions and dedupe by
-  command ID.
-- Web can show `pending`, `waiting for Desktop`, `applied`, `rejected`, and `expired` honestly. Gate
-  actions are asynchronous when the owning Desktop is offline.
-- Team performs an early, authoritative authorization/policy check while Desktop remains the final
-  evidence and transition authority. A server allow is therefore necessary but not sufficient.
-- Existing redacted outbox ownership remains intact: command acknowledgements do not advance Run
-  state, and lossy Team projections never write into LocalStore.
-- V1.4 intentionally does not solve automatic claim reassignment or general multi-Desktop conflict
-  resolution. A pending claim requires explicit recovery; broader collaboration hardening remains a
-  later milestone.
+<a id="consequences"></a>
 
-## Rejected alternatives
+## 影响
 
-- **Create a full Run in Web/API at intake.** Rejected because Team lacks repository context and
-  local execution evidence; it would create a second canonical workflow.
-- **Let Web update `workflow_runs.status` or `current_node_id`.** Rejected because a lossy projection
-  cannot enforce the shared evidence-backed transition invariants.
-- **Apply Gate approval only on the server.** Rejected because server preflight cannot inspect the
-  full LocalStore evidence chain and cannot atomically mutate the canonical local Run.
-- **Copy the Electron transition rules into API routes.** Rejected because duplicated rules drift;
-  shared pure evaluators may be called, but the canonical transition stays local.
-- **Use timestamps or last-write-wins instead of expected versions.** Rejected because equal clocks,
-  delayed sync, retries, and concurrent actions would make outcomes ambiguous.
-- **Upload the full local Run or repository evidence to make the server authoritative.** Rejected
-  because it violates the private local execution, redaction, and repository-provenance boundaries.
+- Team 需要分别持久化带版本工作请求、认领/幂等记录、门禁命令、投递回执及仅追加审计。这些是协作记录，不是新的 `workflow_runs` 修改路由。
+- 权威 `WorkflowRun` 和远端摘要/投影需要显式单调整数 Run 版本。LocalStore 必须把门禁命令结果与状态转换原子持久化，并按命令 ID 去重。
+- Web 可以如实显示 `pending`（待处理）、`waiting for Desktop`（等待桌面）、`applied`（已应用）、`rejected`（已拒绝）和 `expired`（已过期）。所属桌面离线时，门禁操作是异步的。
+- Team 提前执行权威授权和策略检查，桌面仍是最终证据与状态转换权威。服务端允许是必要条件，但不是充分条件。
+- 既有脱敏发件箱归属不变：命令确认不推进 Run 状态，有损团队投影绝不写入 LocalStore。
+- V1.4 不解决自动认领重新分配或通用多桌面冲突。待完成认领需要显式恢复，更广泛协作加固属于后续里程碑。
+
+<a id="rejected-alternatives"></a>
+
+## 未采用的替代方案
+
+- **收集需求时由 Web/API 创建完整 Run。** Team 缺少仓库上下文和本地执行证据，会形成第二份权威工作流。
+- **允许 Web 更新 `workflow_runs.status` 或 `current_node_id`。** 有损投影无法执行共享的证据支撑状态转换不变量。
+- **只在服务端应用门禁批准。** 服务端预检不能检查完整 LocalStore 证据链，也不能原子修改权威本地 Run。
+- **将 Electron 状态转换规则复制到 API 路由。** 重复规则会漂移；可以调用共享纯评估器，但权威转换保持在本地。
+- **使用时间戳或最后写入者获胜替代预期版本。** 相同时间、延迟同步、重试及并发操作会使结果不确定。
+- **上传完整本地 Run 或仓库证据，让服务端成为权威。** 违反私有本地执行、脱敏和仓库来源边界。
