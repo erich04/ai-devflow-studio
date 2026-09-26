@@ -1,3 +1,5 @@
+<a id="devflow-studio-product-details"></a>
+
 # DevFlow Studio 产品细节
 
 本目录按主题拆分产品细节。在重新设计界面、修改流程行为或判断某项能力是否属于产品范围之前，应先阅读对应文档。

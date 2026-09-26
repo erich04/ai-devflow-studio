@@ -19,8 +19,8 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
       expect(read(path).length).toBeGreaterThan(0)
     }
 
-    expect(roadmap).toContain('V2.1 contract set is frozen')
-    expect(roadmap).toContain('V2.1 Slice 1 is complete')
+    expect(roadmap).toContain('V2.1 契约集已冻结')
+    expect(roadmap).toContain('V2.1 切片 1 已完成')
   })
 
   it('defines stable citation, corpus, and Memory lifecycle language without changing authority', () => {
@@ -187,8 +187,8 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
     expect(roadmap).toContain('### Now — Run V2.1 Evaluation And Completion Gate')
     expect(roadmap).toContain('| Active milestone | V2.1 Slice 7 — Evaluation And Completion Gate |')
     expect(roadmap).toContain('| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |')
-    expect(roadmap).toContain('Desktop schema 27')
-    expect(roadmap).toContain('Web read-only Team Memory')
+    expect(roadmap).toContain('桌面结构 27')
+    expect(roadmap).toContain('Web 只读 Team Memory')
     expect(roadmap).toContain('memoryRestartDuplicateEffects')
     expect(testing).toContain('原子激活保留此前的当前快照')
     expect(testing).toContain('显式且有边界的重建只恢复派生索引状态')
@@ -204,11 +204,11 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
     expect(testing).toContain('qualityVersion')
     expect(readme).toContain('corepack pnpm test:v21-retrieval-memory-evaluator')
     expect(readme).toContain('corepack pnpm v21:completion-status')
-    expect(roadmap).toContain('grant reservation')
+    expect(roadmap).toContain('授权预留')
     expect(roadmap).not.toContain('### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts')
     expect(roadmap).not.toContain('### Now — Implement V2.1 Durable Local Retrieval Index')
     expect(roadmap).not.toContain('### Now — Implement V2.1 Scoped Agent Memory Lifecycle')
     expect(roadmap).not.toContain('### Now — Add V2.1 Redacted Team Projection')
-    expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
+    expect(roadmap.match(/^### 当前：/gmu)).toHaveLength(1)
   })
 })

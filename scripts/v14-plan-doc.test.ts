@@ -35,20 +35,20 @@ const releaseSignoffPlan = readFileSync(
 
 describe('v1.4 pilot trust boundary contract', () => {
   it('preserves the released v1.4 history under the current v1.5 baseline', () => {
-    expect(roadmap).toContain('`v2.2.0` is the released baseline')
-    expect(roadmap).toContain('Released `v1.4.0`')
+    expect(roadmap).toContain('`v2.3.0` 是已发布基线')
+    expect(roadmap).toContain('已发布 `v1.4.0`')
     expect(roadmap).toContain('docs/releases/v1.4.0/')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary-prd.md')
     expect(roadmap).toContain('v1.4-pilot-trust-boundary.md')
-    expect(roadmap).toContain('durable sync outbox')
+    expect(roadmap).toContain('持久同步发件箱')
     expect(roadmap).not.toContain('V1.4 scoped implementation complete at `5b64354`')
     expect(roadmap).not.toContain('Version alignment occurs during V1.4 candidate formation')
-    expect(prd).toContain('## Product Outcome')
-    expect(prd).toContain('## Release Musts')
-    expect(prd).toContain('Lifecycle: Released as `v1.4.0`')
-    expect(plan).toContain('Lifecycle: Completed and released as `v1.4.0`')
+    expect(prd).toContain('## 产品目标')
+    expect(prd).toContain('## 发布必须项')
+    expect(prd).toContain('生命周期：已作为 `v1.4.0` 发布')
+    expect(plan).toContain('生命周期：已完成并作为 `v1.4.0` 发布')
     expect(releaseSignoffPlan).toContain(
-      'Lifecycle: Completed; `v1.4.0` was signed off, tagged, and published',
+      '生命周期：已完成；`v1.4.0` 已签收、打标签并发布',
     )
   })
 
@@ -77,7 +77,7 @@ describe('v1.4 pilot trust boundary contract', () => {
       'Roadmap and release-signoff documents may carry milestone status separately',
     )
 
-    expect(roadmap).toContain('V1.4 API Review knowledge provenance remains `none`')
+    expect(roadmap).toContain('V1.4 API Review 知识来源仍为 `none`')
     expect(roadmap).not.toContain(
       'Connect repository Markdown indexing to the real Electron, API Review',
     )
@@ -98,47 +98,47 @@ describe('v1.4 pilot trust boundary contract', () => {
   })
 
   it('keeps durable sync and paid fail-closed behavior in the release contract', () => {
-    expect(prd).toContain('The durable outbox is a V1.4 release requirement')
-    expect(prd).toContain('Real paid runtime with no budget guard')
-    expect(prd).toContain('Block as `unavailable`')
-    expect(prd).toContain('explicitly saved `enabled: false` policy')
-    expect(plan).toContain('## Slice A1 — Coding Runtime Paid Budget Fail-Closed')
-    expect(plan).toContain('## Slice A2 — Knowledge Review Paid Preflight And Audit')
+    expect(prd).toContain('持久化发件箱是 V1.4 发布必须项')
+    expect(prd).toContain('真实付费运行时未配置预算守卫')
+    expect(prd).toContain('以 `unavailable` 阻止')
+    expect(prd).toContain('显式保存的 `enabled: false` 策略')
+    expect(plan).toContain('## 切片 A1：编码运行时付费预算拒绝不确定请求')
+    expect(plan).toContain('## 切片 A2：知识审查付费预检与审计')
   })
 
   it('records the completed durable outbox before repository knowledge integration', () => {
-    expect(plan).toContain('## Slice B — Durable Remote-Sync Outbox ✅')
-    expect(plan).toContain('Full unit regression passed 870/870')
-    expect(plan).toContain('Slice C integration is next')
+    expect(plan).toContain('## 切片 B：持久远端同步发件箱 ✅')
+    expect(plan).toContain('完整单元回归通过 870/870')
+    expect(plan).toContain('下一步为切片 C 集成')
   })
 
   it('records completed repository knowledge and Web collaboration authority', () => {
-    expect(plan).toContain('## Slice C — Repository Knowledge Integration ✅')
-    expect(plan).toContain('Full unit regression passed 944/944')
-    expect(plan).toContain('Web D1 completed')
-    expect(plan).toContain('The Work Request vertical slice completed')
-    expect(plan).toContain('Full unit regression passed 1162/1162')
-    expect(plan).toContain('## Slice D — Web Management Closure ✅')
+    expect(plan).toContain('## 切片 C：仓库知识集成 ✅')
+    expect(plan).toContain('完整单元回归通过 944/944')
+    expect(plan).toContain('Web D1 完成')
+    expect(plan).toContain('工作请求纵向切片完成')
+    expect(plan).toContain('完整单元回归通过 1162/1162')
+    expect(plan).toContain('## 切片 D：Web 管理闭环 ✅')
     expect(plan).toContain(
-      '[x] Add the versioned Gate Command preflight, delivery, local apply, acknowledgement, and Web flow.',
+      '[x] 增加带版本的 Gate 命令预检、投递、本地应用、确认回执及 Web 流程。',
     )
-    expect(plan).toContain('`human_rejected` plus acknowledgement')
+    expect(plan).toContain('`human_rejected` 加确认回执')
   })
 
   it('records completed reproducible lifecycle evidence without claiming release', () => {
-    expect(plan).toContain('## Slice E — Reproducible Pilot Lifecycle ✅')
-    expect(plan).toContain('Postgres migration bundle now reaches schema v10')
-    expect(plan).toContain('Desktop SQLite reaches schema v12')
-    expect(plan).toContain('retained V1.3-to-V1.4 data upgrade')
-    expect(plan).toContain('transactional failed-upgrade recovery')
-    expect(plan).toContain('bounded V1.3 API read rollback')
-    expect(plan).toContain('Desktop pilot artifact also built and passed its packaged smoke')
-    expect(plan).toContain('This plan does not claim that V1.4 is released or signed.')
+    expect(plan).toContain('## 切片 E：可复现试点生命周期 ✅')
+    expect(plan).toContain('Postgres 迁移包已到结构 v10')
+    expect(plan).toContain('桌面 SQLite 已到结构 v12')
+    expect(plan).toContain('保留 V1.3 数据升级到 V1.4')
+    expect(plan).toContain('事务性升级失败恢复')
+    expect(plan).toContain('旧 V1.3 API 对升级数据库的有限读取回退')
+    expect(plan).toContain('桌面试点产物也已构建并通过打包冒烟')
+    expect(plan).toContain('该日期的计划不宣称 V1.4 已发布或已签收。')
   })
 
   it('keeps deferred delivery and packaging work outside v1.4', () => {
-    expect(prd).toContain('Real GitHub push, pull-request creation, merge, or branch publication (V1.5)')
-    expect(prd).toContain('signed/notarized installers')
+    expect(prd).toContain('真实 GitHub 推送、PR 创建、合并或分支发布（留给 V1.5）')
+    expect(prd).toContain('签名/公证安装器')
     expect(prd).toContain('auto-update')
   })
 })

@@ -1,3 +1,5 @@
+<a id="devflow-studio-product-definition"></a>
+
 # DevFlow Studio 产品定义
 
 本目录是 DevFlow Studio 产品定义的阅读入口。各类文档按职责分别维护：

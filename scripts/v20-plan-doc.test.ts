@@ -89,18 +89,18 @@ describe('V2.0 Native Agent Runtime contract', () => {
     }
 
     if (hasV22CompletionEvidence) {
-      expect(roadmap).toContain('### Now — Release V2.3 Workflow Improvements')
-      expect(roadmap).toContain('V2.0, V2.1, and V2.2 are complete')
+      expect(roadmap).toContain('### 当前：验证并交付已报告问题的修复')
+      expect(roadmap).toContain('V2.0、V2.1 和 V2.2 均已完成')
     } else if (hasV21CompletionEvidence) {
-      expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
-      expect(roadmap).toContain('V2.0 and V2.1 are complete')
+      expect(roadmap).toMatch(/^### 当前： .*V2\.2/gmu)
+      expect(roadmap).toContain('V2.0 和 V2.1 均已完成')
     } else if (hasCompletionEvidence) {
-      expect(roadmap).toMatch(/^### Now — .*V2\.1/gmu)
-      expect(roadmap).toContain('V2.0 is complete')
+      expect(roadmap).toMatch(/^### 当前： .*V2\.1/gmu)
+      expect(roadmap).toContain('V2.0 已完成')
     } else {
-      expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
-      expect(roadmap).toContain('Slices 1–7 are complete')
-      expect(roadmap).toContain('### Next — Begin V2.1 Evaluated Retrieval And Memory After V2.0 Completion')
+      expect(roadmap).toContain('### 当前：执行 V2.0 评估与完成门禁')
+      expect(roadmap).toContain('切片 1–7 已完成')
+      expect(roadmap).toContain('### 下一步：V2.0 完成后启动 V2.1 经评估检索与记忆')
     }
   })
 
@@ -163,15 +163,15 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(plan).toContain('local_mcp_installations')
     expect(plan).toContain('协商能力摘要')
 
-    expect(roadmap).toMatch(/Slice 7\s+is complete/)
+    expect(roadmap).toMatch(/切片 7\s*已完成/)
     if (hasV22CompletionEvidence) {
-      expect(roadmap).toContain('### Now — Release V2.3 Workflow Improvements')
+      expect(roadmap).toContain('### 当前：验证并交付已报告问题的修复')
     } else if (hasV21CompletionEvidence) {
-      expect(roadmap).toMatch(/^### Now — .*V2\.2/gmu)
+      expect(roadmap).toMatch(/^### 当前： .*V2\.2/gmu)
     } else if (hasCompletionEvidence) {
-      expect(roadmap).toMatch(/^### Now — .*V2\.1/gmu)
+      expect(roadmap).toMatch(/^### 当前： .*V2\.1/gmu)
     } else {
-      expect(roadmap).toContain('### Now — Run The V2.0 Evaluation And Completion Gate')
+      expect(roadmap).toContain('### 当前：执行 V2.0 评估与完成门禁')
     }
   })
 

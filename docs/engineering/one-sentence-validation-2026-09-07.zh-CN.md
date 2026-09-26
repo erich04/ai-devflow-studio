@@ -35,6 +35,8 @@ Run `run-work-request-e4cd15efee768f98033566c237bdd90d` 在 `2026-09-07T12:20:54
 
 没有手工修改目标代码、安装执行工作区依赖、写数据库推进状态，或手工 push / gh 创建交付 PR。
 
+<a id="真实-provider-调用"></a>
+
 ## 真实模型调用
 
 模型均为 deepseek-v4-flash。初次全流程：

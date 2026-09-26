@@ -1,3 +1,5 @@
+<a id="design-references"></a>
+
 # 设计参考
 
 本目录保存 DevFlow Studio 界面设计的视觉参考，不作为运行时源码直接嵌入。

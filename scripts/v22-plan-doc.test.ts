@@ -20,19 +20,19 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
       expect(read(path).length).toBeGreaterThan(0)
     }
 
-    expect(roadmap).toContain('V2.2 contract set is frozen')
+    expect(roadmap).toContain('V2.2 契约集已冻结')
     if (hasCompletionEvidence) {
-      expect(roadmap).toContain('### Now — Release V2.3 Workflow Improvements')
-      expect(roadmap).toContain('| Current 2.x state | V2.2 published; V2.3 candidate signoff in progress |')
-      expect(roadmap).toContain('| Next gate | Verify the V2.3 candidate, complete independent packaged signoff, then tag and publish |')
+      expect(roadmap).toContain('### 当前：验证并交付已报告问题的修复')
+      expect(roadmap).toContain('| 当前 2.x 状态 | V2.3 已发布；后续修复逐项验证 |')
+      expect(roadmap).toContain('| 下一门禁 | 完成真实仓库全流程与逐项证据核验，再关闭已解决 Issue |')
       expect(roadmap).toContain('docs/plans/v2.2-release-signoff.md')
       expect(roadmap).toContain('docs/releases/v2.2.0/')
     } else {
-      expect(roadmap).toContain('### Now — Evaluate And Close V2.2')
-      expect(roadmap).toContain('| Active milestone | V2.2 Slice 7 — Evaluation And 2.x Completion Gate |')
-      expect(roadmap).toContain('| Next gate | Freeze the exact V2.2 candidate and run the full completion matrix |')
+      expect(roadmap).toContain('### 当前：评估并完成 V2.2')
+      expect(roadmap).toContain('| 活动里程碑 | V2.2 切片 7 — 评估与 2.x 完成门禁 |')
+      expect(roadmap).toContain('| 下一门禁 | 冻结精确 V2.2 候选并执行完整完成矩阵 |')
     }
-    expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
+    expect(roadmap.match(/^### 当前：/gmu)).toHaveLength(1)
   })
 
   it('defines stable coordination and tenancy language without creating new authority', () => {
