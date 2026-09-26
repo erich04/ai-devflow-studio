@@ -100,7 +100,7 @@ describe('V1.5 living documentation truth', () => {
       expect(testingStrategy).toContain(command)
     }
 
-    expect(v15Prd).toContain('Lifecycle: Implemented; release/signoff pending')
+    expect(v15Prd).toContain('生命周期：已实现；发布/签收待完成')
     expect(testingStrategy).toContain('ai-devflow-studio-v22-candidate-desktop')
 
     expect(demoAndSmoke).toContain('当前发布版本为 `v1.5.0`')

@@ -120,10 +120,10 @@
 | [docs/plans/v1.3-delivery-flow-completion.md](../../docs/plans/v1.3-delivery-flow-completion.md) | 待翻译 | 尚未验收 |
 | [docs/plans/v1.4-pilot-trust-boundary.md](../../docs/plans/v1.4-pilot-trust-boundary.md) | 待翻译 | 尚未验收 |
 | [docs/plans/v1.4-release-signoff.md](../../docs/plans/v1.4-release-signoff.md) | 待翻译 | 尚未验收 |
-| [docs/plans/v1.5-github-delivery.md](../../docs/plans/v1.5-github-delivery.md) | 待翻译 | 尚未验收 |
-| [docs/plans/v2.0-native-agent-runtime.md](../../docs/plans/v2.0-native-agent-runtime.md) | 待翻译 | 尚未验收 |
-| [docs/plans/v2.1-evaluated-retrieval-memory.md](../../docs/plans/v2.1-evaluated-retrieval-memory.md) | 待翻译 | 尚未验收 |
-| [docs/plans/v2.2-multi-agent-execution-tenancy.md](../../docs/plans/v2.2-multi-agent-execution-tenancy.md) | 待翻译 | 尚未验收 |
+| [docs/plans/v1.5-github-delivery.md](../../docs/plans/v1.5-github-delivery.md) | 已翻译并校对 | 七批交付计划全文中文化；保留签发/撤销/幂等/恢复及非维护者验收边界和旧锚点 |
+| [docs/plans/v2.0-native-agent-runtime.md](../../docs/plans/v2.0-native-agent-runtime.md) | 已翻译并校对 | 九批运行时计划逐项中文化；数值上限、模式版本、历史候选证据和权限边界保留 |
+| [docs/plans/v2.1-evaluated-retrieval-memory.md](../../docs/plans/v2.1-evaluated-retrieval-memory.md) | 已翻译并校对 | 八批计划与完整历史测试数字已中文化；来源/删除/质量版本、旧固定审计标记及锚点保留 |
+| [docs/plans/v2.2-multi-agent-execution-tenancy.md](../../docs/plans/v2.2-multi-agent-execution-tenancy.md) | 已翻译并校对 | 八批协调计划中文化；完整数值/历史验证、租约/取消/恢复边界与兼容锚点保留 |
 | [docs/plans/v2.2-release-signoff.md](../../docs/plans/v2.2-release-signoff.md) | 已翻译并校对 | 发布流程已译；仍不声称发布成功，保留精确候选/直接子提交/首次尝试/同日证据和分发限制 |
 | [docs/plans/v2.3-release-signoff.md](../../docs/plans/v2.3-release-signoff.md) | 已翻译并校对 | 发布流程已译；仍不声称发布成功，保留精确候选/直接子提交/首次尝试/同日证据和分发限制 |
 | [docs/plans/v3.x-agent-runtime-capability-roadmap.md](../../docs/plans/v3.x-agent-runtime-capability-roadmap.md) | 待翻译 | 尚未验收 |
@@ -145,10 +145,10 @@
 | [docs/product/prd/README.md](../../docs/product/prd/README.md) | 已翻译并校对 | 保留技术标识、命令及来源；兼容原有标题锚点 |
 | [docs/product/prd/current-product-prd.md](../../docs/product/prd/current-product-prd.md) | 已翻译并校对 | 保留 37 条用户故事、权限/测试/验收契约、原版本快照、范围外事项和兼容锚点 |
 | [docs/product/prd/v1.4-pilot-trust-boundary-prd.md](../../docs/product/prd/v1.4-pilot-trust-boundary-prd.md) | 待翻译 | 尚未验收 |
-| [docs/product/prd/v1.5-github-delivery-prd.md](../../docs/product/prd/v1.5-github-delivery-prd.md) | 待翻译 | 尚未验收 |
-| [docs/product/prd/v2.0-native-agent-runtime-prd.md](../../docs/product/prd/v2.0-native-agent-runtime-prd.md) | 待翻译 | 尚未验收 |
-| [docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md](../../docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md) | 待翻译 | 尚未验收 |
-| [docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md](../../docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md) | 待翻译 | 尚未验收 |
+| [docs/product/prd/v1.5-github-delivery-prd.md](../../docs/product/prd/v1.5-github-delivery-prd.md) | 已翻译并校对 | 完整保留 26 条故事、19 项实施与 13 项测试决策；权限/撤销/幂等语义和历史状态不变，保留旧锚点 |
+| [docs/product/prd/v2.0-native-agent-runtime-prd.md](../../docs/product/prd/v2.0-native-agent-runtime-prd.md) | 已翻译并校对 | 完整功能、评估、非目标与依赖已中文化；候选 SHA/历史完成证据和旧锚点不变 |
+| [docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md](../../docs/product/prd/v2.1-evaluated-retrieval-memory-prd.md) | 已翻译并校对 | 检索/引用/记忆需求全文中文化；独立版本、删除隔离、评估指标和历史证据保留 |
+| [docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md](../../docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md) | 已翻译并校对 | 有界多 Agent/租户需求全文中文化；单写者、禁止递归、只读恢复与固定评估阈值不变 |
 | [docs/product/product-definition.md](../../docs/product/product-definition.md) | 已翻译并校对 | 保留权限契约、版本快照、历史证据路径与兼容锚点；当前状态以路线图为准 |
 | [docs/product/project-introduction.zh-CN.md](../../docs/product/project-introduction.zh-CN.md) | 已翻译并校对 | 原中文简介已校对；纠正与现有 Native 执行器冲突的旧说明，保留执行/审批边界及原锚点 |
 | [docs/releases/stabilization-v0.3-2026-08-17/result.md](../../docs/releases/stabilization-v0.3-2026-08-17/result.md) | 已翻译并校对 | 历史验收已译；保持全部命令、精确摘要、离线模拟边界与未签名事实，原封存产物不变 |

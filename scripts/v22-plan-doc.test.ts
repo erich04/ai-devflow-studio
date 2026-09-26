@@ -71,52 +71,52 @@ describe('V2.2 Multi-Agent and Execution Tenancy contract', () => {
   it('defines measurable user outcomes and a finite V2.2 exit gate', () => {
     const prd = read('docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md')
 
-    expect(prd).toMatch(/Status: (Approved for implementation|Complete)/u)
-    expect(prd).toContain('measurably improves selected task outcomes over the frozen V2.0 single-Agent baseline')
-    expect(prd).toContain('quality, cost, latency, and human intervention')
-    expect(prd).toContain('zero authority, isolation, termination, or replay violations')
-    expect(prd).toContain('No specialist can create another Agent')
-    expect(prd).toContain('Public SaaS')
-    expect(prd).toContain('There is no automatic V2.3')
+    expect(prd).toMatch(/状态：(已批准实施|已完成)/u)
+    expect(prd).toContain('多 Agent 相对冻结基线')
+    expect(prd).toContain('质量、费用、延迟及人工介入')
+    expect(prd).toContain('权限、隔离、终止和重放违规为零')
+    expect(prd).toContain('子 Agent 不能再创建 Agent')
+    expect(prd).toContain('公共 SaaS')
+    expect(prd).toContain('不自动延伸出 V2.3')
   })
 
   it('provides an ordered RED to GREEN implementation plan before product code', () => {
     const plan = read('docs/plans/v2.2-multi-agent-execution-tenancy.md')
 
     for (const slice of [
-      'Slice 0 — Contract Freeze',
-      'Slice 1 — Shared Coordination Domain',
-      'Slice 2 — Durable Desktop Coordinator',
-      'Slice 3 — Specialist Runtime And Attenuated Authority',
-      'Slice 4 — Execution Tenancy And Resource Arbitration',
-      'Slice 5 — Recovery, Cancellation, And Desktop UX',
-      'Slice 6 — Redacted Team Projection',
-      'Slice 7 — Evaluation And 2.x Completion Gate',
+      '第 0 批：冻结契约',
+      '第 1 批：共享协调领域',
+      '第 2 批：持久桌面协调器',
+      '第 3 批：专职运行时与权限收窄',
+      '第 4 批：执行租户与资源仲裁',
+      '第 5 批：恢复、取消与桌面界面',
+      '第 6 批：脱敏团队投影',
+      '第 7 批：评估与 2.x 完成门禁',
     ]) {
       expect(plan).toContain(slice)
     }
 
-    expect(plan).toContain('RED → GREEN')
-    expect(plan).toContain('Desktop schema 28')
-    expect(plan).toContain('Team schema 19')
-    expect(plan).toContain('full single-Agent baseline remains executable')
-    expect(plan).toContain('clean direct child')
+    expect(plan).toContain('先失败后通过')
+    expect(plan).toContain('桌面模式 28')
+    expect(plan).toContain('团队模式 19')
+    expect(plan).toContain('完整单 Agent 基线仍可执行')
+    expect(plan).toContain('干净直接子提交')
     expect(plan).toContain(hasCompletionEvidence
-      ? 'Status: Complete'
-      : 'Status: Active — Slice 7 in progress')
-    expect(plan).toMatch(/\| Slice 1 \| Complete \|/u)
-    expect(plan).toMatch(/\| Slice 2 \| Complete \|/u)
-    expect(plan).toMatch(/\| Slice 3 \| Complete \|/u)
-    expect(plan).toMatch(/\| Slice 4 \| Complete \|/u)
-    expect(plan).toMatch(/\| Slice 5 \| Complete \|/u)
-    expect(plan).toMatch(/\| Slice 6 \| Complete \|/u)
+      ? '状态：已完成'
+      : '状态：进行中——第 7 批')
+    expect(plan).toMatch(/\| 第 1 批 \| 已完成 \|/u)
+    expect(plan).toMatch(/\| 第 2 批 \| 已完成 \|/u)
+    expect(plan).toMatch(/\| 第 3 批 \| 已完成 \|/u)
+    expect(plan).toMatch(/\| 第 4 批 \| 已完成 \|/u)
+    expect(plan).toMatch(/\| 第 5 批 \| 已完成 \|/u)
+    expect(plan).toMatch(/\| 第 6 批 \| 已完成 \|/u)
     expect(plan).toMatch(hasCompletionEvidence
-      ? /\| Slice 7 \| Complete \|/u
-      : /\| Slice 7 \| In progress \|/u)
+      ? /\| 第 7 批 \| 已完成 \|/u
+      : /\| 第 7 批 \| 进行中 \|/u)
     expect(plan).toContain('task_retried')
     expect(plan).toContain('repository_read')
     expect(plan).toContain('settleCoordinationResourceLease')
-    expect(plan).toContain('369 focused Tool, MCP, Coding, coordination, and persistence tests pass')
+    expect(plan).toContain('369 项针对性测试、完整单测、生产构建和 Electron 冒烟通过')
     expect(plan).toContain('coordinationRestartDuplicateEffects: 0')
   })
 

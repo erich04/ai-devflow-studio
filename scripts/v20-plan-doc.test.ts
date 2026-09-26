@@ -61,16 +61,16 @@ describe('V2.0 Native Agent Runtime contract', () => {
   it('defines a scoped V2.0 product contract and measurable exit gate', () => {
     const prd = read('docs/product/prd/v2.0-native-agent-runtime-prd.md')
 
-    expect(prd).toContain('Status: Approved for implementation')
-    expect(prd).toContain('bounded first-party Agent loop')
-    expect(prd).toContain('one deliberately narrow DevFlow-owned Coding Agent')
-    expect(prd).toContain('trusted local MCP installation')
-    expect(prd).toContain('checkpoint and resume')
-    expect(prd).toContain('versioned scenario dataset')
-    expect(prd).toContain('quality, cost, latency, human intervention, recovery, and isolation')
-    expect(prd).toContain('Default verification is deterministic and no-cost')
-    expect(prd).toContain('Workflow and human Gate authority remain outside the Agent loop')
-    expect(prd).toContain('Public SaaS')
+    expect(prd).toContain('状态：已批准实施')
+    expect(prd).toContain('有界的自有 Agent 循环')
+    expect(prd).toContain('一个刻意限定范围的 DevFlow 自有编码 Agent')
+    expect(prd).toContain('可信本地 MCP 安装')
+    expect(prd).toContain('检查点恢复')
+    expect(prd).toContain('版本化场景数据集')
+    expect(prd).toContain('质量、费用、延迟、人工介入、恢复和隔离')
+    expect(prd).toContain('默认验证确定且无费用')
+    expect(prd).toContain('工作流和人工 Gate 权限位于 Agent 循环之外')
+    expect(prd).toContain('公共 SaaS')
     expect(prd).toContain('V2.1')
     expect(prd).toContain('V2.2')
   })
@@ -110,35 +110,35 @@ describe('V2.0 Native Agent Runtime contract', () => {
     const packageJson = JSON.parse(read('package.json')) as { scripts?: Record<string, string> }
 
     for (const slice of [
-      'Slice 0 — Contract Freeze',
-      'Slice 1 — Runtime Domain And Deterministic Kernel',
-      'Slice 2 — Durable Desktop Runtime',
-      'Slice 3 — Native Tool Registry',
-      'Slice 4 — Trusted Local MCP',
-      'Slice 5 — Governed Coding Executor',
-      'Slice 6 — Narrow Native Coding Agent',
-      'Slice 7 — Runtime UX And Team Projection',
-      'Slice 8 — V2.0 Evaluation And Completion Gate',
+      '第 0 批：冻结契约',
+      '第 1 批：领域与确定性内核',
+      '第 2 批：持久桌面运行时',
+      '第 3 批：原生工具注册表',
+      '第 4 批：可信本地 MCP',
+      '第 5 批：受治理编码执行器',
+      '第 6 批：有限范围原生编码 Agent',
+      '第 7 批：运行时界面与团队投影',
+      '第 8 批：V2.0 评估与完成门禁',
     ]) {
       expect(plan).toContain(slice)
     }
 
-    expect(plan).toContain('RED')
-    expect(plan).toContain('GREEN')
-    expect(plan).toContain('Desktop schema 18')
-    expect(plan).toContain('Team schema 16')
-    expect(plan).toContain('no raw prompt, source, patch, stdout, stderr, credential, or absolute path')
-    expect(plan).toContain('OpenCode and native executor parity')
-    expect(plan).toContain('V2.0 completion evidence')
-    expect(plan).toContain('| Slice 2 | Complete |')
-    expect(plan).toContain('| Slice 3 | Complete |')
-    expect(plan).toContain('| Slice 4 | Complete |')
-    expect(plan).toContain('| Slice 5 | Complete |')
-    expect(plan).toContain('| Slice 6 | Complete |')
-    expect(plan).toContain('| Slice 7 | Complete |')
+    expect(plan).toContain('失败测试')
+    expect(plan).toContain('最小实现')
+    expect(plan).toContain('桌面模式 18')
+    expect(plan).toContain('团队模式 16')
+    expect(plan).toContain('不含原始提示词、源码、补丁、标准输出/错误、凭据或绝对路径')
+    expect(plan).toContain('原生/OpenCode 对等')
+    expect(plan).toContain('V2.0 证据')
+    expect(plan).toContain('| 第 2 批 | 已完成 |')
+    expect(plan).toContain('| 第 3 批 | 已完成 |')
+    expect(plan).toContain('| 第 4 批 | 已完成 |')
+    expect(plan).toContain('| 第 5 批 | 已完成 |')
+    expect(plan).toContain('| 第 6 批 | 已完成 |')
+    expect(plan).toContain('| 第 7 批 | 已完成 |')
     expect(plan).toContain(hasCompletionEvidence
-      ? '| Slice 8 | Complete |'
-      : '| Slice 8 | In progress |')
+      ? '| 第 8 批 | 已完成 |'
+      : '| 第 8 批 | 进行中 |')
     expect(plan).toContain('scripts/fixtures/v2.0-agent-runtime-scenarios.json')
     expect(plan).toContain('scripts/v20-agent-runtime-evaluator.mjs')
     expect(plan).toContain('scripts/v20-agent-runtime-evaluation-runner.mjs')
@@ -148,20 +148,20 @@ describe('V2.0 Native Agent Runtime contract', () => {
     expect(packageJson.scripts?.['v20:completion-status']).toBe(
       'node scripts/v20-completion-evidence.mjs',
     )
-    expect(plan).toContain('strict main-owned renderer projection')
-    expect(plan).toContain('exact version/checkpoint optimistic concurrency')
-    expect(plan).toContain('Desktop schema 21')
+    expect(plan).toContain('主进程严格投影')
+    expect(plan).toContain('精确版本/检查点乐观并发')
+    expect(plan).toContain('桌面模式 21')
     expect(plan).toContain('agent_runtime_summaries')
     expect(plan).toContain('agent_runtime_projection_audits')
     expect(plan).toContain('/api/sync/agent-runtime-summary')
-    expect(plan).toContain('Team cannot resume, issue capabilities, or advance Workflow')
-    expect(plan).toContain('path-free main-owned request')
-    expect(plan).toContain('no-permission completion')
-    expect(plan).toContain('uniform terminal result')
-    expect(plan).toContain('Desktop schema 19')
-    expect(plan).toContain('Desktop schema 20')
+    expect(plan).toContain('不能恢复、授权能力或推进工作流')
+    expect(plan).toContain('主进程生成的无路径请求')
+    expect(plan).toContain('无权限请求完成')
+    expect(plan).toContain('统一终态')
+    expect(plan).toContain('桌面模式 19')
+    expect(plan).toContain('桌面模式 20')
     expect(plan).toContain('local_mcp_installations')
-    expect(plan).toContain('negotiated capability-set digest')
+    expect(plan).toContain('协商能力摘要')
 
     expect(roadmap).toMatch(/Slice 7\s+is complete/)
     if (hasV22CompletionEvidence) {
