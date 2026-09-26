@@ -78,10 +78,10 @@ describe('v1.5 GitHub Delivery contract', () => {
     }
 
     expect(walkthrough).toContain('credential_revocation_pending')
-    expect(walkthrough).toMatch(/wait\s+and\s+retry\s+\*\*Verify credential revocation\*\*/u)
-    expect(walkthrough).toContain('must not bypass quarantine')
-    expect(walkthrough).toContain('does not claim that every pre-revocation credential is invalid')
-    expect(walkthrough).toContain('post-revocation new issuance')
+    expect(walkthrough).toMatch(/等待并重试\s+\*\*Verify credential revocation\*\*/u)
+    expect(walkthrough).toContain('绕过隔离')
+    expect(walkthrough).toContain('不声称撤销前的所有凭据都已失效')
+    expect(walkthrough).toContain('撤销后的新签发')
   })
 
   it('indexes the scoped contract from the existing documentation entrypoints', () => {
@@ -100,19 +100,19 @@ describe('v1.5 GitHub Delivery contract', () => {
     const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
     const guide = read('docs/guides/devflow-studio-self-hosted-pilot.md')
 
-    expect(guide).toContain('## Configure GitHub Delivery')
+    expect(guide).toContain('## 配置 GitHub 交付')
     expect(guide).toContain('DEVFLOW_GITHUB_APP_ID')
     expect(guide).toContain('DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64')
     expect(guide).toContain('Contents: write')
     expect(guide).toContain('Pull requests: write')
-    expect(guide).toContain('selected repositories')
+    expect(guide).toContain('仅允许选定仓库')
     expect(guide).toContain('approval_required')
     expect(guide).toContain('recovery_required')
     expect(guide).toContain('creating_pr')
-    expect(guide).toContain('never force-push')
-    expect(guide).toContain('never merge')
-    expect(guide).toContain('installation access token')
-    expect(guide).toContain('Desktop main memory')
+    expect(guide).toContain('绝不强制推送')
+    expect(guide).toContain('绝不合并')
+    expect(guide).toContain('安装访问令牌')
+    expect(guide).toContain('桌面主进程内存')
     for (const contract of [adr, plan, walkthrough, guide]) {
       expect(contract).toContain('Contents: read + Pull requests: write')
     }
@@ -131,8 +131,8 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(plan).toContain('persist only the derived provider retry not-before')
     expect(plan).toMatch(/reconcile by exact\s+marker first/u)
     expect(plan).toContain('block another create before that boundary')
-    expect(walkthrough).toContain('cannot create before the')
-    expect(walkthrough).toContain('provider backoff expires')
+    expect(walkthrough).toContain('不得再次创建')
+    expect(walkthrough).toContain('服务商退避期结束前')
   })
 
   it('separates both outbound-content boundaries and documents the only safe rebuild path', () => {
@@ -151,39 +151,39 @@ describe('v1.5 GitHub Delivery contract', () => {
     }
     expect(adr).toContain('在请求任何 GitHub 凭据前')
     expect(plan).toContain('durable non-secret scan receipt')
-    expect(guide).toContain('Git content block occurs before push')
-    expect(guide).toContain('PR-text block may occur after the verified branch publication')
+    expect(guide).toContain('Git 内容阻断发生在推送之前')
+    expect(guide).toContain('PR 文本阻断可能发生在分支已发布并核验之后')
   })
 
   it('defines one candidate-bound V1.5 walkthrough without reusing paid-provider authority', () => {
     const walkthrough = read('docs/guides/devflow-studio-v1.5-walkthrough.md')
 
-    expect(walkthrough).toContain('Status: Stable operator procedure; no result claimed')
-    expect(walkthrough).toContain('dedicated private GitHub sandbox repository')
-    expect(walkthrough).toContain('one canonical Run')
-    expect(walkthrough).toContain('one Draft pull request')
+    expect(walkthrough).toContain('状态：稳定的操作规程；不代表任何候选已经通过验证')
+    expect(walkthrough).toContain('专用的私有 GitHub 沙箱仓库')
+    expect(walkthrough).toContain('一个正式 Run')
+    expect(walkthrough).toContain('一个 Draft PR')
     expect(walkthrough).toContain('Revise')
     expect(walkthrough).toContain('Resume')
     expect(walkthrough).toContain('Retry')
-    expect(walkthrough).toContain('Run becomes `completed`')
-    expect(walkthrough).toContain('binding revocation')
+    expect(walkthrough).toContain('Run 变为 `completed`')
+    expect(walkthrough).toContain('撤销绑定')
     expect(walkthrough).toContain('Verify credential revocation')
-    expect(walkthrough).toMatch(/does not\s+author or modify `C`/)
-    expect(walkthrough).toContain('normal Web and packaged Desktop surfaces')
-    expect(walkthrough).toContain('does not use shell, direct HTTP, SQL, or GitHub CLI')
+    expect(walkthrough).toMatch(/不编写或修改 `C`/u)
+    expect(walkthrough).toContain('正常 Web 与打包桌面界面')
+    expect(walkthrough).toContain('不使用命令行、直接 HTTP、SQL 或 GitHub CLI')
     expect(walkthrough).toContain('credential_unexpectedly_issued')
     expect(walkthrough).toContain('docs/releases/v1.5.0/github-sandbox.json')
     expect(walkthrough).toContain('ai-devflow-studio-v15-candidate-desktop')
     expect(walkthrough).toContain('DEVFLOW_RELEASE_DESKTOP_ARTIFACT_INDEX')
     expect(walkthrough).toContain(
-      'private-sandbox walkthrough with that exact downloaded archive',
+      '使用这一精确归档执行私有沙箱演练',
     )
-    expect(walkthrough).toContain('Signoff accepts only `run_attempt: 1`')
+    expect(walkthrough).toContain('签收只接受 `run_attempt: 1`')
     expect(walkthrough).toContain('Publish GitHub Release')
-    expect(walkthrough).toContain('require exactly seven regular')
+    expect(walkthrough).toContain('要求恰好七个普通文件')
     expect(walkthrough).toContain('git/ref/tags/v1.5.0')
     expect(walkthrough).toContain('desktop-artifact-trio.mjs inspect')
-    expect(walkthrough).toContain('numeric version/count')
+    expect(walkthrough).toContain('数字版本/计数')
     expect(walkthrough).not.toContain('"evidenceExists"')
     expect(walkthrough).toContain('"desktopArtifact"')
     expect(walkthrough).toContain('"intentDigest"')
@@ -200,9 +200,9 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain(
       '`github-delivery-intent-<lowercase RFC4122 v4 UUID>`',
     )
-    expect(walkthrough).toContain('variant nibble `8`, `9`, `a`, or `b`')
-    expect(walkthrough).toContain('same UTC calendar date')
-    expect(walkthrough).toContain('exactly one `Revocation proof:` line')
+    expect(walkthrough).toContain('变体位为 `8`、`9`、`a` 或 `b`')
+    expect(walkthrough).toContain('同一 UTC 日历日期')
+    expect(walkthrough).toContain('且仅包含一行 `Revocation proof:`')
     expect(walkthrough).toContain('Revocation proof: state version 2;')
     expect(walkthrough).toContain('git rev-parse S^1')
     expect(walkthrough).toContain('git diff --name-only C..S')
@@ -210,7 +210,7 @@ describe('v1.5 GitHub Delivery contract', () => {
     expect(walkthrough).toContain('release:status -- --mode=tagged')
     expect(walkthrough).toContain('git tag -a v1.5.0 S')
     expect(walkthrough).toContain(
-      'V1.5 does not authorize or require another paid OpenCode provider smoke',
+      'V1.5 不授权或要求再次运行付费 OpenCode 服务商冒烟',
     )
   })
 })

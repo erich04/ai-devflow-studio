@@ -172,10 +172,10 @@ describe('V1.5 living documentation truth', () => {
     )
     expect(opencodeSignoff).toContain('与候选版本绑定的单独授权')
 
-    expect(historicalWalkthrough).toContain('Historical V1.3 guide')
+    expect(historicalWalkthrough).toContain('V1.3 历史指南')
     expect(historicalWalkthrough).toContain('../engineering/demo-and-smoke.md')
     expect(historicalWalkthrough).toContain('./devflow-studio-v1.5-walkthrough.md')
-    expect(historicalWalkthrough).toContain('does not authorize paid-provider smoke')
+    expect(historicalWalkthrough).toContain('不授权付费服务商冒烟')
     expect(historicalWalkthrough).not.toContain('`v1.3.0` 候选与后续产品体验基线')
   })
 

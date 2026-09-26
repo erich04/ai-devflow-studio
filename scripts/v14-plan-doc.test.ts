@@ -81,7 +81,7 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(roadmap).not.toContain(
       'Connect repository Markdown indexing to the real Electron, API Review',
     )
-    expect(pilotGuide).toContain('Release and milestone status are maintained in the Roadmap')
+    expect(pilotGuide).toContain('发布与里程碑状态由[路线图](../roadmap.md)统一维护')
     expect(pilotGuide).not.toContain('Version alignment occurs during V1.4 candidate formation')
   })
 

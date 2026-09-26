@@ -59,23 +59,23 @@
 | [docs/engineering/workbench-conversations-verification.md](../../docs/engineering/workbench-conversations-verification.md) | 原为中文，已校对并补齐术语 | 保留历史版本、测试/调用证据及原型标识；不把历史布局写成新版本已发布 |
 | [docs/engineering/workbench-conversations.md](../../docs/engineering/workbench-conversations.md) | 原为中文，已校对并补齐术语 | 原始证据/双语提示词/技术名称保留作对照；当前布局与历史验证范围分别说明 |
 | [docs/engineering/workflow-context-projection.md](../../docs/engineering/workflow-context-projection.md) | 已翻译并校对 | 保留权限契约、字段/命令、历史定价数值与来源及兼容锚点 |
-| [docs/guides/devflow-studio-full-feature-walkthrough.md](../../docs/guides/devflow-studio-full-feature-walkthrough.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/guides/devflow-studio-self-hosted-pilot.md](../../docs/guides/devflow-studio-self-hosted-pilot.md) | 待翻译 | 尚未验收 |
-| [docs/guides/devflow-studio-v0.8-user-guide.md](../../docs/guides/devflow-studio-v0.8-user-guide.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/guides/devflow-studio-v0.9-demo-script.md](../../docs/guides/devflow-studio-v0.9-demo-script.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/guides/devflow-studio-v1.0-user-guide.md](../../docs/guides/devflow-studio-v1.0-user-guide.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/guides/devflow-studio-v1.2-walkthrough-result-2026-06-21.md](../../docs/guides/devflow-studio-v1.2-walkthrough-result-2026-06-21.md) | 待翻译 | 尚未验收 |
-| [docs/guides/devflow-studio-v1.2-walkthrough.md](../../docs/guides/devflow-studio-v1.2-walkthrough.md) | 待翻译 | 尚未验收 |
-| [docs/guides/devflow-studio-v1.3-walkthrough-result-2026-06-26.md](../../docs/guides/devflow-studio-v1.3-walkthrough-result-2026-06-26.md) | 待翻译 | 尚未验收 |
-| [docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md](../../docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md](../../docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md) | 待翻译 | 尚未验收 |
-| [docs/guides/devflow-studio-v1.3-walkthrough.md](../../docs/guides/devflow-studio-v1.3-walkthrough.md) | 原含中文，待完整校对 | 尚未验收 |
+| [docs/guides/devflow-studio-full-feature-walkthrough.md](../../docs/guides/devflow-studio-full-feature-walkthrough.md) | 已翻译并校对 | 历史 V1.3 全量指南逐模块校对；保留原按钮/示例/截图和权限规则，明确不授权付费冒烟，兼容旧锚点 |
+| [docs/guides/devflow-studio-self-hosted-pilot.md](../../docs/guides/devflow-studio-self-hosted-pilot.md) | 已翻译并校对 | 部署与恢复说明全文已译；权限/迁移/回滚边界、所有命令和配置值保留，兼容旧锚点 |
+| [docs/guides/devflow-studio-v0.8-user-guide.md](../../docs/guides/devflow-studio-v0.8-user-guide.md) | 已翻译并校对 | 原中文历史指南已完整校对；补齐术语、标题与图注，保留原命令、截图、未完成验收及兼容锚点 |
+| [docs/guides/devflow-studio-v0.9-demo-script.md](../../docs/guides/devflow-studio-v0.9-demo-script.md) | 已翻译并校对 | 原中文历史指南已完整校对；补齐术语、标题与图注，保留原命令、截图、未完成验收及兼容锚点 |
+| [docs/guides/devflow-studio-v1.0-user-guide.md](../../docs/guides/devflow-studio-v1.0-user-guide.md) | 已翻译并校对 | 历史中文指南逐节校对；完整保留命令、截图与功能边界，补充现行部署/发布规则链接，兼容旧锚点 |
+| [docs/guides/devflow-studio-v1.2-walkthrough-result-2026-06-21.md](../../docs/guides/devflow-studio-v1.2-walkthrough-result-2026-06-21.md) | 已翻译并校对 | 历史演练报告全文已译；原错误输出逐字保留并解释，不将 API 测试冒充人工界面成功，保留兼容锚点 |
+| [docs/guides/devflow-studio-v1.2-walkthrough.md](../../docs/guides/devflow-studio-v1.2-walkthrough.md) | 已翻译并校对 | 历史演练指南全文校对；保留费用授权与预算字段、命令及截图，明确版本范围，兼容旧锚点 |
+| [docs/guides/devflow-studio-v1.3-walkthrough-result-2026-06-26.md](../../docs/guides/devflow-studio-v1.3-walkthrough-result-2026-06-26.md) | 已翻译并校对 | 历史失败报告全文已译；保留原始错误/界面/路径证据并补中文说明，不改写失败结果或扩大验证范围 |
+| [docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md](../../docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-25.md) | 已翻译并校对 | 历史审计逐节校对；原界面与命令引文保留，失败状态、未授权动作及本地/CI 基线差异保持，兼容旧锚点 |
+| [docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md](../../docs/guides/devflow-studio-v1.3-walkthrough-result-2026-07-31.md) | 已翻译并校对 | 历史验收全文已译；保留候选 SHA、首次失败、次数与付费授权边界、未覆盖路径及兼容锚点 |
+| [docs/guides/devflow-studio-v1.3-walkthrough.md](../../docs/guides/devflow-studio-v1.3-walkthrough.md) | 已翻译并校对 | 历史 V1.3 契约指南已校对；候选/验收提交关系、精确字段、权限与失败边界保留，兼容旧锚点 |
 | [docs/guides/devflow-studio-v1.4-walkthrough-result-2026-08-01.md](../../docs/guides/devflow-studio-v1.4-walkthrough-result-2026-08-01.md) | 已翻译并校对 | 历史验证正文已翻译；保留开发验证与正式验收差异、失败路径、未签名状态和兼容锚点 |
 | [docs/guides/devflow-studio-v1.4-walkthrough-result-2026-08-09.md](../../docs/guides/devflow-studio-v1.4-walkthrough-result-2026-08-09.md) | 已翻译并校对 | 历史候选验收正文已翻译；精确 SHA、一次真实调用、前置失败、时间/次数与发布限制保留，兼容旧锚点 |
 | [docs/guides/devflow-studio-v1.4-walkthrough.md](../../docs/guides/devflow-studio-v1.4-walkthrough.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
 | [docs/guides/devflow-studio-v1.5-walkthrough-result-2026-08-12.md](../../docs/guides/devflow-studio-v1.5-walkthrough-result-2026-08-12.md) | 已翻译并校对 | 发布程序解析的原始验收记录逐字保留；补齐中文结果、字段解释与历史范围，保留证据及兼容锚点 |
-| [docs/guides/devflow-studio-v1.5-walkthrough.md](../../docs/guides/devflow-studio-v1.5-walkthrough.md) | 待翻译 | 尚未验收 |
-| [docs/guides/devflow-studio-v2.2-beginner-operation-manual.md](../../docs/guides/devflow-studio-v2.2-beginner-operation-manual.md) | 原含中文，待完整校对 | 尚未验收 |
+| [docs/guides/devflow-studio-v1.5-walkthrough.md](../../docs/guides/devflow-studio-v1.5-walkthrough.md) | 已翻译并校对 | 发布操作规程全文中文化；保留五个精确代码/机器记录块、冻结候选与非维护者边界和兼容锚点 |
+| [docs/guides/devflow-studio-v2.2-beginner-operation-manual.md](../../docs/guides/devflow-studio-v2.2-beginner-operation-manual.md) | 已翻译并校对 | 逐段校对教学手册与术语；保留原截图/按钮/测试结果，明确历史审批停止点并补充现行四标签工作区说明 |
 | [docs/guides/devflow-studio-v2.2-walkthrough-result-2026-08-27.md](../../docs/guides/devflow-studio-v2.2-walkthrough-result-2026-08-27.md) | 已翻译并校对 | 发布程序解析的原始验收记录逐字保留；补齐中文结果、字段解释与历史范围，保留证据及兼容锚点 |
 | [docs/guides/devflow-studio-v2.2-walkthrough.md](../../docs/guides/devflow-studio-v2.2-walkthrough.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
 | [docs/guides/devflow-studio-v2.3-walkthrough-result-2026-09-14.md](../../docs/guides/devflow-studio-v2.3-walkthrough-result-2026-09-14.md) | 已翻译并校对 | 历史独立验收全文已译；固定机器解析记录逐字保留并说明理由，保留退出未通过、工具例外和真实/受控范围 |
@@ -108,7 +108,7 @@
 | [docs/plans/v0.8.1-release-signoff.md](../../docs/plans/v0.8.1-release-signoff.md) | 已翻译并校对 | 历史发布全文已译；未勾选人工验收保持原状，精确提交、失败原因、命令和标签规则保留 |
 | [docs/plans/v0.9-real-runtime-observability.md](../../docs/plans/v0.9-real-runtime-observability.md) | 已翻译并校对 | 历史运行时计划完整翻译；保留模拟/真实双路径、精确接口、日期、清理与后续范围 |
 | [docs/plans/v1.0-release-signoff.md](../../docs/plans/v1.0-release-signoff.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
-| [docs/plans/v1.0-team-pilot-foundation.md](../../docs/plans/v1.0-team-pilot-foundation.md) | 待翻译 | 尚未验收 |
+| [docs/plans/v1.0-team-pilot-foundation.md](../../docs/plans/v1.0-team-pilot-foundation.md) | 已翻译并校对 | 历史团队计划已译；区分起点与完成状态，保留授权边界、各切片验证与本地 Docker 未运行事实 |
 | [docs/plans/v1.0a-identity-foundation-signoff.md](../../docs/plans/v1.0a-identity-foundation-signoff.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
 | [docs/plans/v1.0b-oauth-project-signoff.md](../../docs/plans/v1.0b-oauth-project-signoff.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
 | [docs/plans/v1.0c-desktop-pairing-signoff.md](../../docs/plans/v1.0c-desktop-pairing-signoff.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |

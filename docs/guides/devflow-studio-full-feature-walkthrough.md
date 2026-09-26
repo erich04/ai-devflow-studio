@@ -2,49 +2,46 @@
 
 更新时间：2026-07-31
 
-Status: Historical V1.3 guide; preserved for the V1.3 product and release context only.
+状态：V1.3 历史指南，仅保留 V1.3 产品与发布语境。
 
 适用版本：仅限 `v1.3.0` 历史体验，不是当前 V1.5 操作指南。
 
-当前开发态的演示与 smoke 入口见
-[`demo-and-smoke.md`](../engineering/demo-and-smoke.md)；候选绑定的 V1.5 GitHub Delivery
-验收见 [`devflow-studio-v1.5-walkthrough.md`](./devflow-studio-v1.5-walkthrough.md)。
-This historical guide does not authorize paid-provider smoke.
+当前开发态的演示与冒烟测试入口见
+[演示与冒烟说明](../engineering/demo-and-smoke.md)；候选绑定的 V1.5 GitHub 交付
+验收见 [V1.5 GitHub 交付演练](./devflow-studio-v1.5-walkthrough.md)。
+本历史指南不授权付费服务商冒烟。
 
-这份指南用于体验 DevFlow Studio 已经落地的基础能力。它不是某一个版本的 release
-walkthrough，而是按 V1.3 当时的产品入口把 v0.2 到 v1.3 的核心能力串起来：本地仓库、Run/Gate、
-Knowledge、基于知识的门禁审查（Knowledge-Grounded Gate Review）、Coding Agent、测试证据、Team/Web、Pairing、Budget、Tool / Skill
-Trace、PR Draft 和 Acceptance Bundle。
+这份指南用于体验 DevFlow Studio 已经落地的基础能力。它不是某一个版本的发布演练，而是按 V1.3 当时的产品入口把 v0.2 到 v1.3 的核心能力串起来：本地仓库、工作流实例/门禁、
+知识、基于知识的门禁审查（Knowledge-Grounded Gate Review）、编码 Agent、测试证据、团队/Web、配对、预算、工具与技能轨迹、PR 草稿和验收证据包。
 
-这里的 Knowledge 是审查依据；审查对象是当前 Gate、门禁条件和关联的阶段产物与证据。
+这里的知识是审查依据；审查对象是当前门禁、门禁条件和关联的阶段产物与证据。
 
 本指南列出目标体验路径，不代表任何候选已自动通过验收。v1.3.0 的实际发布状态只以
 `docs/releases/v1.3.0/` 的四份证据、`corepack pnpm release:status` 的对应模式结果和
-`v1.3.0` tag 指向为准。
+`v1.3.0` 标签指向为准。
 
 ## 候选形成前历史快照（2026-07-31）
 
 2026-07-25 的失败
-Computer Use 基线见
-[devflow-studio-v1.3-walkthrough-result-2026-07-25.md](./devflow-studio-v1.3-walkthrough-result-2026-07-25.md)。
-在该快照中，收尾工作树尚未生成新的 dated result。
+电脑控制基线见
+[2026-07-25 历史演练结果](./devflow-studio-v1.3-walkthrough-result-2026-07-25.md)。
+在该快照中，收尾工作树尚未生成新的带日期的结果记录。
 
 默认路径不调用真实付费模型。真实
-`opencode` + 豆包/Volcengine provider smoke 是 release-only 验证项，放在最后单独执行。
+`opencode` + 豆包/Volcengine 模型服务商冒烟测试是仅发布时运行的验证项，放在最后单独执行。
 截至该历史快照，V1.3 收尾工作树已加入以下边界：
 
-- 共享可信命令负责 Agent/Gate/Build/Test/PR/Acceptance 的顺序和证据检查；
-- Electron main 从本地 store 重载 canonical state，并以事务提交 Run 与候选交付证据；
-- Pairing 绑定 Local Project 与 Team Project，同 id 本地状态在同步合并时保持权威；
-- `DEVFLOW_ENABLE_FAKE_RUNTIME=true` 显式提供 deterministic fake Agent provider 并允许
-  fake Coding Engine；
-- archived Test Evidence 将已知 workspace root 替换为 `<workspace>`；
-- API/Worker dist 有隔离运行 smoke，Verify/Release workflow 覆盖 build/output、E2E、
-  Electron、Windows、Postgres 和 Docker gate。
+- 共享可信命令负责 Agent/门禁/开发/测试/PR/业务验收的顺序和证据检查；
+- Electron 主进程从本地存储重载正式状态，并以事务提交工作流实例与候选交付证据；
+- 配对绑定本地项目与团队项目，同 ID 本地状态在同步合并时保持权威；
+- `DEVFLOW_ENABLE_FAKE_RUNTIME=true` 显式提供确定性模拟 Agent 服务商并允许
+  模拟编码引擎；
+- 已归档的测试证据将已知工作区根目录替换为 `<workspace>`；
+- API/Worker 构建产物有隔离运行冒烟测试，验证/发布工作流覆盖构建/产物、E2E、
+  Electron、Windows、Postgres 和 Docker 检查。
 
-这些是当时的实现边界，不是发布结论。该快照中，新的 Computer Use、完整候选 gate、
-付费 real-opencode 记录、版本对齐和 tag 尚未完成；后续是否完成必须重新检查 release
-evidence、`release:status` 和 tag。
+这些是当时的实现边界，不是发布结论。该快照中，新的电脑控制、完整候选检查、
+真实 OpenCode 付费调用记录、版本对齐和标签尚未完成；后续是否完成必须重新检查发布证据、`release:status` 和标签。
 
 ## 0. 启动环境
 
@@ -84,14 +81,16 @@ corepack pnpm dev:electron
 
 通过标准：
 
-- API health 可访问：`http://127.0.0.1:4310/health`。
-- Web Console 可访问：`http://127.0.0.1:4311`。
-- Electron 窗口标题是 `AI DevFlow Studio`，不是 Electron default app。
+- API 健康检查可访问：`http://127.0.0.1:4310/health`。
+- Web 控制台可访问：`http://127.0.0.1:4311`。
+- Electron 窗口标题是 `AI DevFlow Studio`，不是 Electron 默认应用。
 - 左侧能看到 `工作台`、`Team Overview`、`Knowledge`、`Agents`、`Skills`、`MCP`、`测试`。
 
-![Electron Workbench](./screenshots/14-electron-current-userdata-workbench.png)
+![Electron 工作台](./screenshots/14-electron-current-userdata-workbench.png)
 
-## 1. Workbench：本地仓库与六阶段 Run
+<a id="1-workbench本地仓库与六阶段-run"></a>
+
+## 1. 工作台：本地仓库与六阶段工作流实例
 
 入口：左侧 `工作台`
 
@@ -99,8 +98,8 @@ corepack pnpm dev:electron
 
 - 选择本地仓库。
 - 保存测试命令。
-- 搜索 Run / Artifact / Knowledge。
-- 新建 Run，输入真实需求。
+- 搜索工作流实例、产物与知识。
+- 新建工作流实例，输入真实需求。
 - 查看六阶段：`clarify -> design -> build -> test -> pr -> accept`。
 
 建议输入：
@@ -110,292 +109,317 @@ corepack pnpm dev:electron
 
 通过标准：
 
-- 新 Run 从 `clarifying` 开始。
-- Inspector 能看到 `Raw request` artifact。
-- Gate approval 会推进 `currentNodeId`，不会把所有 Gate 硬编码成 `building`。
-- Build task 才显示 `Coding Agent`。
+- 新工作流实例从 `clarifying` 开始。
+- 节点检查面板能看到 `Raw request` 产物。
+- 门禁批准会推进 `currentNodeId`，不会把所有门禁硬编码成 `building`。
+- 开发任务才显示 `Coding Agent`。
 - PR 节点显示 `生成 PR Draft`。
-- Acceptance 节点显示 `生成验收证据包`。
+- 业务验收节点显示 `生成验收证据包`。
 
-![Workbench Gate Enforcement](./screenshots/01-workbench-gate-enforcement.png)
+![工作台门禁策略执行](./screenshots/01-workbench-gate-enforcement.png)
 
-## 2. Gate Enforcement：策略、阻断、补救
+<a id="2-gate-enforcement策略阻断补救"></a>
 
-入口：Workbench Inspector 的 `GATE ENFORCEMENT`
+## 2. 门禁策略执行：策略、阻断、补救
+
+入口：工作台节点检查面板的 `GATE ENFORCEMENT`
 
 要体验：
 
-- 选中 Gate 节点。
-- 查看 policy source、version、syncedAt。
-- 查看 blocking/warning reason。
-- 查看 Remediation Plan。
-- 尝试在未满足策略时 approve Gate。
+- 选中门禁节点。
+- 查看策略来源、版本（`version`）与同步时间（`syncedAt`）。
+- 查看阻断或警告原因。
+- 查看处理建议计划。
+- 尝试在未满足策略时批准门禁。
 
 通过标准：
 
-- blocked Gate 不会只靠 renderer 禁用按钮；Electron main 写路径也会拒绝。
-- `blocked_policy_unavailable` 只阻止 Gate approve，不阻止门禁审查、测试、Coding 等本地工作。
-- hard-block 时应显示 remediation，不显示 override 逃生口。
-- confirmed override 和 provisional/rejected override 的 UI 语义不同。
+- 阻断门禁不会只靠渲染器禁用按钮；Electron 主进程写路径也会拒绝。
+- `blocked_policy_unavailable` 只阻止门禁批准，不阻止门禁审查、测试、编码等本地工作。
+- 强制阻断时应显示处理建议，不显示覆盖审批逃生口。
+- 已确认的覆盖审批和临时/被拒绝的覆盖审批的 UI 语义不同。
 
-## 3. Knowledge：知识治理与引用
+<a id="3-knowledge知识治理与引用"></a>
+
+## 3. 知识：知识治理与引用
 
 入口：左侧 `Knowledge`
 
 要体验：
 
-- Markdown knowledge documents。
-- Knowledge Governance checks。
-- Knowledge Graph。
-- Retrieval/reference 命中。
+- Markdown 知识文档。
+- 知识治理检查。
+- 知识图谱。
+- 检索/引用命中。
 - 搜索 `api`、`test`、`security` 等关键词。
 
 通过标准：
 
-- 能看到 standards/checklists/ADR-like knowledge。
-- Governance checks 是 evidence-driven；retrieval-only reference 不会自动满足 evidence。
-- Inspector 里能看到当前节点关联的 Knowledge Governance 状态。
+- 能看到标准、清单和 ADR 类知识。
+- 治理检查是证据驱动；仅检索得到的引用不会自动满足证据。
+- 节点检查面板里能看到当前节点关联的知识治理状态。
 
-![Knowledge](./screenshots/12-electron-knowledge.png)
+![知识](./screenshots/12-electron-knowledge.png)
 
-## 4. 门禁审查 Agent：审查、trace、finding
+<a id="4-门禁审查-agent审查tracefinding"></a>
 
-入口：Workbench Inspector 的“门禁审查”或左侧 `Agents`
+## 4. 门禁审查 Agent：审查、执行轨迹、发现项
+
+入口：工作台节点检查面板的“门禁审查”或左侧 `Agents`
 
 `DEVFLOW_ENABLE_FAKE_RUNTIME=true` 时会列出 `Deterministic Fake Provider`，不花模型钱；
-它适合本地 walkthrough 和 CI，但不代表真实模型审查。运行前明确选择它；关闭该 flag
-后，旧 fake provider 选择必须隐藏或被 main 拒绝。
+它适合本地演练和 CI，但不代表真实模型审查。运行前明确选择它；关闭该标记
+后，旧模拟服务商选择必须隐藏或被主进程拒绝。
 
 如果要让门禁审查 Agent 调用豆包/Volcengine Ark：
 
 1. 打开左侧 `Agents`。
 2. 在“门禁审查模型凭证”中确认：
-   - Provider Name：例如 `公司火山方舟`（内部 `providerId` 由系统生成并保持稳定）
-   - Base URL：`https://ark.cn-beijing.volces.com/api/coding/v3`
-   - Model：`ark-code-latest`
-3. 输入 API Key，点击 `Save and Use Provider`。重名或空名称会被明确拒绝。
-4. 在“门禁审查模型 Provider”下拉框选择保存后的 live provider，再运行“门禁审查”。
+   - 服务商名称：例如 `公司火山方舟`（内部 `providerId` 由系统生成并保持稳定）
+   - 基础 URL：`https://ark.cn-beijing.volces.com/api/coding/v3`
+   - 模型：`ark-code-latest`
+3. 输入 API 密钥，点击 `Save and Use Provider`。重名或空名称会被明确拒绝。
+4. 在“门禁审查模型 Provider”下拉框选择保存后的真实服务商，再运行“门禁审查”。
 
-边界说明：豆包/Volcengine 只提供 OpenAI-compatible 模型 API。DevFlow 自己组装门禁审查 prompt、检索 Knowledge 作为依据、运行治理检查，并解析结构化门禁审查结果；当前 Gate、门禁条件与阶段产物或证据才是审查对象。门禁审查 Agent 不由 `opencode` 执行；`opencode` 只用于 Coding Agent。
+边界说明：豆包/Volcengine 只提供 OpenAI 兼容模型 API。DevFlow 自己组装门禁审查提示词、检索知识作为依据、运行治理检查，并解析结构化门禁审查结果；当前门禁、门禁条件与阶段产物或证据才是审查对象。门禁审查 Agent 不由 `opencode` 执行；`opencode` 只用于编码 Agent。
 
 要体验：
 
-- 选中一个 Gate 或 Build 节点。
+- 选中一个门禁或开发节点。
 - 点击“门禁审查”。
 - 打开 `Agents` 查看门禁审查历史。
-- 查看 trace、token/cost、Agent Policy Finding、warning/blocking advisory。
+- 查看执行轨迹、Token 与费用、Agent 策略发现项、警告/阻断建议。
 
 通过标准：
 
-- 门禁审查生成可审计结果和 artifact。
-- Provider 显示能区分 fake/no-cost 与 live/may spend tokens。
-- 门禁审查 finding 默认不会 hard-block。
-- Gate Advisory 是否阻断由 policy evaluation 决定，不由 Agent core 直接决定。
+- 门禁审查生成可审计结果和产物。
+- 模型服务商显示能区分模拟/无费用与真实/可能产生用量费用。
+- 门禁审查发现项默认不会强制阻断。
+- 门禁建议是否阻断由策略评估决定，不由 Agent 核心逻辑直接决定。
 
-![Agent Workbench](./screenshots/04-agent-workbench.png)
+![Agent 工作台](./screenshots/04-agent-workbench.png)
 
-## 5. Coding Agent：fake 默认路径、permission relay、diff、worktree
+<a id="5-coding-agentfake-默认路径permission-relaydiffworktree"></a>
 
-入口：Build task 的 `Coding Agent`，然后左侧 `Agents`
+## 5. 编码 Agent：模拟默认路径、权限转发、代码差异、工作树
+
+入口：开发任务的 `Coding Agent`，然后左侧 `Agents`
 
 要体验：
 
-- 在 Build task 点击 `Coding Agent`。
-- 在 Agents 视图查看 permission request。
-- 点击 approve。
-- 查看 fake diff、managed worktree、bootstrap/test evidence、terminal state。
+- 在开发任务点击 `Coding Agent`。
+- 在 Agents 视图查看权限请求。
+- 点击批准。
+- 查看模拟代码差异、托管工作树、依赖准备/测试证据、终止状态。
 
 通过标准：
 
-- Coding Agent 只允许从 `stage: build` 且 `kind: task` 启动。
-- renderer 不传 prompt；coding brief 由 main/shared 从 Run、Node、Artifact、Knowledge、Policy、
-  Remediation、Test Evidence 组装。
+- 编码 Agent 只允许从 `stage: build` 且 `kind: task` 启动。
+- 渲染器不传提示词；编码任务说明由主进程与共享层从工作流实例、节点、产物、知识、策略、
+  处理建议、测试证据组装。
 - 主仓库不被直接修改。
-- diff artifact 只保存 redacted/reviewable 内容。
-- cleanup 状态可见。
-- Build 只在匹配当前节点的 Coding Run 完成且 Diff 已持久化后推进到 Test。
+- 差异产物只保存已脱敏、可供审查的内容。
+- 清理状态可见。
+- 开发只在匹配当前节点的编码运行完成且代码差异已持久化后推进到测试。
 
-![Coding Node](./screenshots/09-coding-node.png)
+![编码节点](./screenshots/09-coding-node.png)
 
-## 6. Tool / Skill Timeline：可观测性
+<a id="6-tool--skill-timeline可观测性"></a>
+
+## 6. 工具与技能时间线：可观测性
 
 入口：左侧 `Agents`
 
 要体验：
 
-- 查看 permission timeline。
+- 查看权限时间线。
 - 查看 `Tool / Skill Timeline`。
 - 查看 `tool_call` / `tool_result`。
-- 查看 source：`opencode_metadata`、`inferred` 或未来的 `opencode_event_stream`。
+- 查看来源：`opencode_metadata`、`inferred` 或未来的 `opencode_event_stream`。
 
 通过标准：
 
-- fake engine 不应被误导成真实 opencode Skill 调用。
-- 如果缺少 skillName，UI 显示 `Unknown skill` 或 inferred 标记。
-- 本地 event metadata 也必须脱敏，不保存 raw stdout/stderr、raw prompt、provider secret、
-  完整 cwd 或完整 patch body。
-- 当前不能保证还原 opencode 内部私有 Skill 调用栈。
+- 模拟引擎不应被误导成真实 OpenCode 技能调用。
+- 如果缺少 `skillName`，UI 显示 `Unknown skill` 或推断标记。
+- 本地事件元数据也必须脱敏，不保存原始标准输出/错误、原始提示词、模型服务商密钥、
+  完整工作目录或完整补丁正文。
+- 当前不能保证还原 OpenCode 内部私有技能调用栈。
 
-## 7. Tests：本地测试证据
+<a id="7-tests本地测试证据"></a>
+
+## 7. 测试：本地测试证据
 
 入口：左侧 `测试`
 
 要体验：
 
-- 查看 Local test evidence。
+- 查看本地测试证据。
 - 运行保存的测试命令。
 - 尝试保存危险命令，例如 `rm -rf /`。
 
 通过标准：
 
-- 安全命令可以执行并生成 Test Evidence。
-- 危险命令被 command safety 阻断。
-- Evidence 显示 command/status/exit code/duration。
-- stdout/stderr summary 经过 redaction。
-- 只有当前 Test 节点可以执行；失败 Test 保持当前并将 Run 标为 `failed`，通过后才进入
+- 安全命令可以执行并生成测试证据。
+- 危险命令被命令安全检查阻断。
+- 证据显示命令/状态/退出码/耗时。
+- 标准输出/错误摘要经过脱敏。
+- 只有当前测试节点可以执行；失败测试保持当前并将工作流实例标为 `failed`，通过后才进入
   PR。
-- Test report 中的已知 POSIX/Windows workspace root 显示为 `<workspace>`；上传到 Team
-  的 summary 继续省略 cwd 和原始输出。
+- 测试报告中的已知 POSIX/Windows 工作区根目录显示为 `<workspace>`；上传到团队
+  的摘要继续省略工作目录和原始输出。
 
-![Tests Evidence](./screenshots/05-tests-evidence.png)
+![测试证据](./screenshots/05-tests-evidence.png)
 
-## 8. Remediation / Retry Coding
+<a id="8-remediation--retry-coding"></a>
 
-入口：被 policy/finding 阻断的节点 Inspector
+## 8. 处理建议 / 重试编码
+
+入口：被策略/发现项阻断的节点的检查面板
 
 要体验：
 
-- 让 Gate Enforcement 或 Agent finding 产生 Remediation Plan。
-- 查看 remediation candidates。
-- 点击 retry/coding 相关 action。
-- 在 Agents 里批准新的 permission。
+- 让门禁策略执行或 Agent 发现项产生处理建议计划。
+- 查看处理建议候选项。
+- 点击重试/编码相关操作。
+- 在 Agents 里批准新的权限。
 
 通过标准：
 
-- Retry 是 human-approved，不自动绕过 Gate。
-- Retry Attempt 有记录。
-- Coding Brief 带 remediation context。
-- Team/Web 只接收 redacted delivery summary。
+- 重试是人工批准，不自动绕过门禁。
+- 每次重试都有记录。
+- 编码任务说明带修复上下文。
+- 团队/Web 只接收脱敏交付摘要。
 
-## 9. PR Draft 与 Acceptance Bundle
+<a id="9-pr-draft-与-acceptance-bundle"></a>
 
-入口：Workbench 的 PR 节点和 Acceptance 节点
+## 9. PR 草稿与验收证据包
+
+入口：工作台的 PR 节点和业务验收节点
 
 要体验：
 
 - 在 PR 节点点击 `生成 PR Draft`。
-- 在 Acceptance 节点点击 `生成验收证据包`。
-- 最后通过 Acceptance Gate。
+- 在业务验收节点点击 `生成验收证据包`。
+- 最后通过业务验收门禁。
 
 通过标准：
 
-- PR Draft 包含 request、changed paths、Test Evidence、Policy、Budget、门禁审查、safe
-  compare URL。
-- Acceptance Bundle 引用 Raw Request、PR Draft、diff、tests、policy、budget、门禁审查结果。
-- 当前 v1.3 只生成 PR handoff artifact，不创建真实 GitHub PR。
-- 系统不会自动 push、merge 或自动通过 Gate。
-- PR 只在当前 PR 节点、completed Coding Run/Diff 和最新 passing Test/report 都匹配时
+- PR 草稿包含请求、变更路径、测试证据、策略、预算、门禁审查、安全的比较 URL。
+- 验收证据包引用原始请求、PR 草稿、代码差异、测试、策略、预算、门禁审查结果。
+- 当前 v1.3 只生成 PR 交接产物，不创建真实 GitHub PR。
+- 系统不会自动推送、合并或自动通过门禁。
+- PR 只在当前 PR 节点、已完成的编码运行/代码差异和最新通过的测试/报告都匹配时
   完成。
-- Acceptance Bundle 还要求已附着 PR Draft；final Acceptance 再要求 bundle、授权角色、
-  非阻断 policy、匹配且非阻断的门禁审查和非阻断 budget decision。
-- 被拒绝的可信命令不会留下孤立的 delivery artifact/event。
+- 验收证据包还要求已附着 PR 草稿；最终验收再要求证据包、授权角色、
+  非阻断策略、匹配且非阻断的门禁审查和非阻断预算决定。
+- 被拒绝的可信命令不会留下孤立的交付产物/事件。
 
-## 10. Team Overview：团队视角与 redacted sync
+<a id="10-team-overview团队视角与-redacted-sync"></a>
+
+## 10. 团队概览：团队视角与脱敏同步
 
 入口：左侧 `Team Overview`，以及浏览器 `http://127.0.0.1:4311`
 
 要体验：
 
-- Desktop Team Overview。
-- Web Team Console。
-- 点击 Desktop 的 `同步团队`。
-- 查看 Web 是否出现 redacted Run/Test/Review/Coding/Cost summary；内部 `Review` 类型在界面显示为“门禁审查”。
+- 桌面端团队概览。
+- Web 团队控制台。
+- 点击桌面端的 `同步团队`。
+- 查看 Web 是否出现脱敏 Run/测试/审查/编码/费用摘要；内部 `Review` 类型在界面显示为“门禁审查”。
 
 通过标准：
 
-- Web 只显示 redacted summary，不显示 raw prompt、raw logs、cwd、patch、provider secret。
-- Team Overview 能展示项目、成员、成本、风险、delivery summary。
-- API seed mode 可以用于本地 demo；Postgres/Docker 是独立显式路径。
-- Pairing credential 必须绑定当前 `localProjectId` 与一个 Team Project。
-- 远端 Test/Review/Coding Evidence 写入前必须先有同项目 canonical Run；其中内部 `Review` 对应门禁审查。cross-project、
-  stale 或缺 Run 的写入会被拒绝。
-- 同 id 的本地 Run/Artifact/Event 优先于远端 summary，远端只补充 remote-only 数据。
+- Web 只显示脱敏摘要，不显示原始提示词、原始日志、工作目录、补丁、模型服务商密钥。
+- 团队概览能展示项目、成员、成本、风险、交付摘要。
+- API 种子数据模式可以用于本地演示；Postgres/Docker 是独立显式路径。
+- 配对凭据必须绑定当前 `localProjectId` 与一个团队项目。
+- 远端测试/审查/编码证据写入前必须先有同项目正式 Run；其中内部 `Review` 对应门禁审查。跨项目、
+  过期版本或缺工作流实例的写入会被拒绝。
+- 同 ID 的本地工作流实例/产物/事件优先于远端摘要，远端只补充仅远端存在的数据。
 
-![Team Overview](./screenshots/11-electron-team-overview.png)
+![团队概览](./screenshots/11-electron-team-overview.png)
 
-![Web Team Overview](./screenshots/08-team-overview.png)
+![Web 团队概览](./screenshots/08-team-overview.png)
 
-## 11. Runtime Budget：成本、策略、approval retry
+<a id="11-runtime-budget成本策略approval-retry"></a>
 
-入口：Web Team Console 的 `Runtime Budget`，以及 Desktop Agents/Inspector 的 budget trace
+## 11. 运行时预算：成本、策略、携带批准重试
+
+入口：Web 团队控制台的 `Runtime Budget`，以及桌面端 Agents/节点检查面板的预算执行轨迹
 
 要体验：
 
-- Web 查看 Runtime Budget policy。
-- Web 创建 Budget Approval。
-- Desktop 在 Coding Agent 被 budget guard 阻断时查看 projected/current/limit cost。
-- 输入 approval id 后 retry。
+- Web 查看运行时预算策略。
+- Web 创建预算批准。
+- 桌面端在编码 Agent 被预算检查器阻断时查看预计费用/当前费用/费用限额。
+- 输入批准 ID 后重试。
 
 通过标准：
 
-- paid provider 调用前先过 budget guard。
-- over-budget 且无有效 approval 时，必须在 `engine.start(...)` 前阻断。
-- Desktop 传 approval id，runtime/team boundary 解析完整 approval record。
-- fake/default path 不花模型钱。
+- 付费服务商调用前先过预算检查器。
+- 超预算且无有效批准时，必须在 `engine.start(...)` 前阻断。
+- 桌面端传批准 ID，运行时/团队边界解析完整批准记录。
+- 模拟/默认路径不花模型钱。
 
-## 12. Desktop Pairing 与 self-hosted pilot
+<a id="12-desktop-pairing-与-self-hosted-pilot"></a>
+
+## 12. 桌面配对与自托管试点
 
 入口：
 
-- 本地 API 测试前置可调用 `POST /api/team/projects/:projectId/pairing-codes` 创建一次性 code；调用者须有 lead/owner 权限。
-- Desktop 顶栏：`Desktop pairing code` + `绑定`
+- 本地 API 测试前置可调用 `POST /api/team/projects/:projectId/pairing-codes` 创建一次性配对码；调用者须有 lead/owner 权限。
+- 桌面端顶栏：`Desktop pairing code` + `绑定`
 - 自托管指南：[devflow-studio-self-hosted-pilot.md](./devflow-studio-self-hosted-pilot.md)
 
 要体验：
 
-- 可由本地 API 测试前置创建 pairing code，但不得把这记录为 Web pairing UI 通过。
-- Computer Use 在 Desktop 中亲自输入 code，点击 `绑定`，然后点击 `同步团队`。
+- 可由本地 API 测试前置创建配对码，但不得把这记录为 Web 配对 UI 通过。
+- 电脑控制在桌面端中亲自输入配对码，点击 `绑定`，然后点击 `同步团队`。
 - 关闭并以同一隔离 `userData` 重启 Electron，再次同步。
 
 通过标准：
 
-- Desktop sync 使用 Bearer token，不回退 demo headers。
-- renderer 不接收明文 bearer token。
-- pairing code 是 copy-once / short-lived。
-- 绑定持久化当前 `localProjectId` 和 Team Project，重启后仍可同步。
-- 结果文档和截图不记录 pairing code 或 token。
+- 桌面同步使用 Bearer 令牌，不回退演示请求头。
+- 渲染器不接收明文 Bearer 令牌。
+- 配对码是仅可复制一次且短期有效。
+- 绑定持久化当前 `localProjectId` 和团队项目，重启后仍可同步。
+- 结果文档和截图不记录配对码或令牌。
 - Docker Compose 路径通过 `corepack pnpm test:docker-smoke` 验证，不属于默认 `verify`。
 
-若 pairing code 由本地 API 前置创建，本次证据只能签核 Desktop 绑定、同步和重启持久化；
-除非 Computer Use 另外真实操作并记录 Web pairing UI，否则不得声称该 Web UI 已通过。
+若配对码由本地 API 前置创建，本次证据只能验收桌面端绑定、同步和重启持久化；
+除非电脑控制另外真实操作并记录 Web 配对 UI，否则不得声称该 Web UI 已通过。
 
-## 13. Skills 与 MCP
+<a id="13-skills-与-mcp"></a>
+
+## 13. 技能与 MCP
 
 入口：左侧 `Skills`、`MCP`
 
 要体验：
 
-- 查看 Skill catalog。
-- 查看 MCP server 定义。
-- enable/disable MCP server。
+- 查看技能目录。
+- 查看 MCP 服务定义。
+- 启用/禁用 MCP 服务。
 
 通过标准：
 
-- Skill/MCP 当前是管理壳和未来 runtime 扩展位置。
+- 技能/MCP 当前是管理壳和未来运行时扩展位置。
 - MCP 开关本地持久化。
 - 当前不启动真实 MCP 进程。
-- 当前不要宣称 MCP 真执行或 MCP policy enforcement 已完成。
+- 当前不要宣称 MCP 真执行或 MCP 策略执行已完成。
 
-当前实测说明：Skills 显示未加载真实团队能力，MCP 显示未加载本地连接器；这两个页面当前
-应按管理壳计，不按可用 runtime 计。
+当前实测说明：技能显示未加载真实团队能力，MCP 显示未加载本地连接器；这两个页面当前
+应按管理壳计，不按可用运行时计。
 
 ![MCP](./screenshots/07-mcp-management.png)
 
-## 14. Release-only 真实 opencode + 豆包/Volcengine
+<a id="14-release-only-真实-opencode--豆包volcengine"></a>
+
+## 14. 仅发布时运行的真实 OpenCode + 豆包/Volcengine
 
 这一步会产生真实模型调用，不属于默认体验。
 
-门禁审查的真实模型 smoke 走 OpenAI-compatible provider：
+门禁审查的真实模型冒烟测试走 OpenAI 兼容模型服务商：
 
 ```bash
 DEVFLOW_AGENT_OPENAI_API_KEY=... \
@@ -404,15 +428,15 @@ DEVFLOW_AGENT_OPENAI_MODEL=ark-code-latest \
 corepack pnpm test:agent-live
 ```
 
-这条 smoke 验证门禁审查 Agent 能用真实豆包/Volcengine 模型返回结构化门禁审查结果。它不验证 `opencode`。
+这条冒烟测试验证门禁审查 Agent 能用真实豆包/Volcengine 模型返回结构化门禁审查结果。它不验证 `opencode`。
 
-先检查本机 runtime：
+先检查本机运行时：
 
 ```bash
 corepack pnpm opencode:status
 ```
 
-确认要花真实 provider 配额后，再运行：
+确认要花真实模型服务商配额后，再运行：
 
 ```bash
 export ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"
@@ -432,39 +456,39 @@ unset DEVFLOW_OPENCODE_PROVIDER_ID DEVFLOW_OPENCODE_MODEL_ID DEVFLOW_OPENCODE_AP
 通过标准：
 
 - `opencode serve` 启动。
-- permission relay 可见。
-- diff capture 可见。
-- fixture Test Evidence 通过。
-- process/worktree cleanup 完成。
-- 不打印 provider secret。
+- 权限转发可见。
+- 差异采集可见。
+- 测试样例的测试证据通过。
+- 进程与工作树清理完成。
+- 不打印模型服务商密钥。
 
-任一 preflight、permission、diff/tool evidence、Test Evidence、cleanup 或 redaction 条件失败，
+任一前置检查、权限、差异/工具证据、测试证据、清理或脱敏条件失败，
 都不得生成 `status: "passed"` 的 `docs/releases/v1.3.0/real-opencode.json`。完整 JSON
-格式见 [release-only policy](../plans/release-only-real-opencode-smoke.md)。
+格式见 [仅发布时执行的验收规则](../plans/release-only-real-opencode-smoke.md)。
 
 ## 15. 全量体验核对表
 
 | 模块 | 入口 | 必看点 | 通过标准 |
 | --- | --- | --- | --- |
-| Desktop launch | `corepack pnpm dev:electron` | AI DevFlow Studio | 不是 Electron default app |
-| Workbench | 工作台 | 六阶段 Run | request 创建 Run，Gate 可推进 |
-| Local project | 工作台 | 仓库选择/测试命令 | command safety 阻断危险命令 |
-| Gate Enforcement | Inspector | policy/reason/remediation | 写路径不能绕过 blocking |
-| Knowledge | Knowledge | docs/graph/reference/check | retrieval 不等于 evidence |
-| 门禁审查 | Inspector/Agents | 门禁审查 artifact/trace/finding | finding 不 hard-block |
-| Coding Agent | Build task/Agents | permission/diff/worktree | fake path 可重复、主仓不改 |
-| Tool / Skill Timeline | Agents | tool_call/tool_result/source | skill 缺失时显示 unknown/inferred |
-| Tests | 测试 | Test Evidence | redacted status/command/duration |
-| Remediation Retry | Inspector/Agents | Retry Attempt | human-approved，不自动绕 Gate |
-| PR Draft | PR 节点 | PR handoff artifact | 不创建真实 GitHub PR |
-| Acceptance Bundle | Acceptance 节点 | 验收证据包 | final Gate 仍受 policy 约束 |
-| Team Overview | Desktop/Web | redacted summaries | 不上传 raw repo/log/prompt/patch |
-| Runtime Budget | Web/Desktop | policy/approval/retry | paid run 前阻断超预算 |
-| Pairing | Web/Desktop | pairing code/token sync | bearer token 不进 renderer |
-| Skills/MCP | Skills/MCP | catalog/server toggles | 不宣称真实 MCP 执行 |
-| Real opencode | Terminal | release-only smoke | 只在接受费用时执行 |
+| 桌面启动 | `corepack pnpm dev:electron` | AI DevFlow Studio | 不是 Electron 默认应用 |
+| 工作台 | 工作台 | 六阶段工作流实例 | 请求创建工作流实例，门禁可推进 |
+| 本地项目 | 工作台 | 仓库选择/测试命令 | 命令安全检查阻断危险命令 |
+| 门禁策略执行 | 节点检查面板 | 策略/原因/处理建议 | 写路径不能绕过阻断 |
+| 知识 | 知识 | 文档/图谱/引用/检查 | 检索不等于证据 |
+| 门禁审查 | 节点检查面板/Agents | 门禁审查产物/执行轨迹/发现项 | 发现项不强制阻断 |
+| 编码 Agent | 开发任务/Agents | 权限/差异/工作树 | 模拟路径可重复、主仓不改 |
+| 工具与技能时间线 | Agents | `tool_call` / `tool_result` / 来源 | 技能缺失时显示未知/推断 |
+| 测试 | 测试 | 测试证据 | 脱敏状态/命令/耗时 |
+| 修复重试 | 节点检查面板/Agents | 重试记录 | 人工批准，不自动绕门禁 |
+| PR 草稿 | PR 节点 | PR 交接产物 | 不创建真实 GitHub PR |
+| 验收证据包 | 业务验收节点 | 验收证据包 | 最终门禁仍受策略约束 |
+| 团队概览 | 桌面端/Web | 脱敏摘要 | 不上传原始仓库内容/日志/提示词/补丁 |
+| 运行时预算 | Web/桌面端 | 策略/批准/重试 | 付费运行前阻断超预算 |
+| 配对 | Web/桌面端 | 配对码/令牌同步 | Bearer 令牌不进渲染器 |
+| 技能/MCP | 技能/MCP | 目录/服务开关 | 不宣称真实 MCP 执行 |
+| 真实 OpenCode | 终端 | 仅发布时运行的冒烟测试 | 只在接受费用时执行 |
 
-Release status 必须显式区分两个阶段：
+发布状态必须显式区分两个阶段：
 
 ```bash
 # 创建 tag 前
@@ -476,20 +500,20 @@ corepack pnpm release:status -- --mode=tagged
 
 ## 版本验收的宣称边界
 
-- 只有 clean `S` 的 pre-tag 与 tagged 检查均通过、且 `v1.3.0` tag 精确指向 `S` 后，
-  才能宣称 v1.3 已完成正式签核并发布。
-- 2026-07-25 的失败结果是历史基线，不能替代绑定候选 `C` 的新 Computer Use 结果。
-- 不要说 Windows、Postgres、Docker、全部 CI 或 candidate-bound release evidence 已通过，
+- 只有干净的 `S` 的 `pre-tag`与 tagged 检查均通过、且 `v1.3.0` 标签精确指向 `S` 后，
+  才能宣称 v1.3 已完成正式验收并发布。
+- 2026-07-25 的失败结果是历史基线，不能替代绑定候选 `C` 的新电脑控制结果。
+- 不要说 Windows、Postgres、Docker、全部 CI 或绑定候选提交的发布证据已通过，
   除非它们已在同一候选 SHA 上实际运行并记录。
-- 不要说 release-only 真实 opencode 已通过，除非得到付费调用授权并完成记录。
-- 如果 pairing code 由本地 API 测试前置创建，不要说 Web pairing UI 已通过。
-- 不要在 pre-tag 签核完成前创建或宣称 v1.3 tag。
-- 不要说新 Web 壳已经闭环 intake、Gate、pairing 和 run selection。
-- 不要说真实 opencode 是默认 CI/verify 路径。
-- 不要说 fake engine 是真实 provider 行为。
-- 不要说当前能还原 opencode 内部私有 Skill 调用栈。
+- 不要说仅发布时运行的真实 OpenCode 已通过，除非得到付费调用授权并完成记录。
+- 如果配对码由本地 API 测试前置创建，不要说 Web 配对 UI 已通过。
+- 不要在 `pre-tag`验收完成前创建或宣称 v1.3 标签。
+- 不要说新 Web 壳已经闭环请求接收、门禁、配对和 Run 选择。
+- 不要说真实 OpenCode 是默认 CI/验证路径。
+- 不要说模拟引擎是真实模型服务商行为。
+- 不要说当前能还原 OpenCode 内部私有技能调用栈。
 - 不要说 v1.3 已创建真实 GitHub PR。
-- 不要说系统会自动 push、merge 或自动通过 Gate。
-- 不要说 MCP 真执行 / MCP policy enforcement 已完成。
-- 不要说 RAG/vector retrieval 已接入。
-- 不要说 Windows Electron full smoke 已完成。
+- 不要说系统会自动推送、合并或自动通过门禁。
+- 不要说 MCP 真执行 / MCP 策略执行已完成。
+- 不要说 RAG/向量检索已接入。
+- 不要说 Windows Electron 完整冒烟已完成。
