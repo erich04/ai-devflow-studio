@@ -78,7 +78,7 @@
 | [docs/guides/devflow-studio-v2.2-beginner-operation-manual.md](../../docs/guides/devflow-studio-v2.2-beginner-operation-manual.md) | 原含中文，待完整校对 | 尚未验收 |
 | [docs/guides/devflow-studio-v2.2-walkthrough-result-2026-08-27.md](../../docs/guides/devflow-studio-v2.2-walkthrough-result-2026-08-27.md) | 已翻译并校对 | 发布程序解析的原始验收记录逐字保留；补齐中文结果、字段解释与历史范围，保留证据及兼容锚点 |
 | [docs/guides/devflow-studio-v2.2-walkthrough.md](../../docs/guides/devflow-studio-v2.2-walkthrough.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
-| [docs/guides/devflow-studio-v2.3-walkthrough-result-2026-09-14.md](../../docs/guides/devflow-studio-v2.3-walkthrough-result-2026-09-14.md) | 待翻译 | 尚未验收 |
+| [docs/guides/devflow-studio-v2.3-walkthrough-result-2026-09-14.md](../../docs/guides/devflow-studio-v2.3-walkthrough-result-2026-09-14.md) | 已翻译并校对 | 历史独立验收全文已译；固定机器解析记录逐字保留并说明理由，保留退出未通过、工具例外和真实/受控范围 |
 | [docs/guides/devflow-studio-v2.3-walkthrough.md](../../docs/guides/devflow-studio-v2.3-walkthrough.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
 | [docs/guides/multi-organization-deployment.md](../../docs/guides/multi-organization-deployment.md) | 已翻译并校对 | 正文与操作说明已翻译；保留版本、命令、权限边界及兼容锚点 |
 | [docs/guides/screenshots/readme-20260924/README.md](../../docs/guides/screenshots/readme-20260924/README.md) | 已翻译并校对 | 保留技术标识、命令及来源；兼容原有标题锚点 |
@@ -160,22 +160,22 @@
 | [docs/roadmap.md](../../docs/roadmap.md) | 待翻译 | 尚未验收 |
 | [docs/superpowers/plans/2026-06-17-near-term-opencode-signoff.md](../../docs/superpowers/plans/2026-06-17-near-term-opencode-signoff.md) | 待翻译 | 尚未验收 |
 | [docs/superpowers/plans/2026-06-17-v0.6.1-real-opencode-runtime.md](../../docs/superpowers/plans/2026-06-17-v0.6.1-real-opencode-runtime.md) | 待翻译 | 尚未验收 |
-| [docs/validation/conversation-details-161-20260922.md](../../docs/validation/conversation-details-161-20260922.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/validation/conversation-help-160-20260922.md](../../docs/validation/conversation-help-160-20260922.md) | 待翻译 | 尚未验收 |
-| [docs/validation/desktop-lifecycle-credentials-thinking-20260919.md](../../docs/validation/desktop-lifecycle-credentials-thinking-20260919.md) | 待翻译 | 尚未验收 |
-| [docs/validation/execution-tools-design-20260922.md](../../docs/validation/execution-tools-design-20260922.md) | 待翻译 | 尚未验收 |
-| [docs/validation/gate-review-grounding-20260920.md](../../docs/validation/gate-review-grounding-20260920.md) | 待翻译 | 尚未验收 |
-| [docs/validation/gate-workbench-open-issues-20260923.md](../../docs/validation/gate-workbench-open-issues-20260923.md) | 待翻译 | 尚未验收 |
-| [docs/validation/multi-organization-20260921.md](../../docs/validation/multi-organization-20260921.md) | 待翻译 | 尚未验收 |
-| [docs/validation/native-coding-failed-expenses-20260919.md](../../docs/validation/native-coding-failed-expenses-20260919.md) | 待翻译 | 尚未验收 |
-| [docs/validation/open-issues-batch1-20260919.md](../../docs/validation/open-issues-batch1-20260919.md) | 待翻译 | 尚未验收 |
-| [docs/validation/opencode-permission-recovery-20260911.md](../../docs/validation/opencode-permission-recovery-20260911.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/validation/pairing-diagnostics-20260920.md](../../docs/validation/pairing-diagnostics-20260920.md) | 待翻译 | 尚未验收 |
-| [docs/validation/real-deepseek-todo-e2e-20260917.md](../../docs/validation/real-deepseek-todo-e2e-20260917.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/validation/stage-opencode-live-20260921.md](../../docs/validation/stage-opencode-live-20260921.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/validation/team-policy-web-electron-20260921.md](../../docs/validation/team-policy-web-electron-20260921.md) | 待翻译 | 尚未验收 |
-| [docs/validation/workbench-context-recovery-20260921.md](../../docs/validation/workbench-context-recovery-20260921.md) | 待翻译 | 尚未验收 |
-| [docs/validation/workbench-deepseek-reasoning-20260917.md](../../docs/validation/workbench-deepseek-reasoning-20260917.md) | 原含中文，待完整校对 | 尚未验收 |
-| [docs/validation/workbench-opencode-harness-20260920.md](../../docs/validation/workbench-opencode-harness-20260920.md) | 待翻译 | 尚未验收 |
-| [docs/validation/workflow-navigation-20260924.md](../../docs/validation/workflow-navigation-20260924.md) | 待翻译 | 尚未验收 |
+| [docs/validation/conversation-details-161-20260922.md](../../docs/validation/conversation-details-161-20260922.md) | 原为中文，已完整校对 | 保留历史界面与测试数字；明确后续改版另有验证，纠正契约术语 |
+| [docs/validation/conversation-help-160-20260922.md](../../docs/validation/conversation-help-160-20260922.md) | 已翻译并校对 | 历史验证正文已翻译；保留原测试数、隔离模型范围、用户数据保护和兼容锚点 |
+| [docs/validation/desktop-lifecycle-credentials-thinking-20260919.md](../../docs/validation/desktop-lifecycle-credentials-thinking-20260919.md) | 已翻译并校对 | 历史退出/凭据/思考验证已翻译；保留原生与注入场景差别、真实失败记录和签名验收缺口 |
+| [docs/validation/execution-tools-design-20260922.md](../../docs/validation/execution-tools-design-20260922.md) | 已翻译并校对 | 历史验证正文已翻译；保留真实 OpenCode 与模拟服务商的差别、测试结果和权限范围 |
+| [docs/validation/gate-review-grounding-20260920.md](../../docs/validation/gate-review-grounding-20260920.md) | 已翻译并校对 | 历史来源核验正文已翻译；保留误报样例、模型局限、建议非审批及未进行新真实评估的范围 |
+| [docs/validation/gate-workbench-open-issues-20260923.md](../../docs/validation/gate-workbench-open-issues-20260923.md) | 已翻译并校对 | 历史工作台验证已翻译；保留调用用量、未关闭项、数据比对范围和未签名限制 |
+| [docs/validation/multi-organization-20260921.md](../../docs/validation/multi-organization-20260921.md) | 已翻译并校对 | 历史组织验证完整翻译；保留真实运行时与模拟外部服务边界、首次失败、跨平台结果及签名缺口 |
+| [docs/validation/native-coding-failed-expenses-20260919.md](../../docs/validation/native-coding-failed-expenses-20260919.md) | 已翻译并校对 | 历史费用验证已翻译；保留失败数量、未知金额、幂等与本地模拟验证范围 |
+| [docs/validation/open-issues-batch1-20260919.md](../../docs/validation/open-issues-batch1-20260919.md) | 已翻译并校对 | 历史批次正文已翻译；保留当时未合并状态、受控模型范围、失败记录及兼容锚点 |
+| [docs/validation/opencode-permission-recovery-20260911.md](../../docs/validation/opencode-permission-recovery-20260911.md) | 原为中文，已完整校对 | 原中文记录已完整校对；保留受控与真实分支覆盖差异、失败请求、追加授权及未知费用 |
+| [docs/validation/pairing-diagnostics-20260920.md](../../docs/validation/pairing-diagnostics-20260920.md) | 已翻译并校对 | 历史诊断记录已翻译；保留协议失败、咨询失败与最后仍待 CI 复验的状态 |
+| [docs/validation/real-deepseek-todo-e2e-20260917.md](../../docs/validation/real-deepseek-todo-e2e-20260917.md) | 原为中文，已完整校对 | 保留真实模型、人工批准、未合并 Draft PR、费用缺口与当时未解决项；说明历史界面范围 |
+| [docs/validation/stage-opencode-live-20260921.md](../../docs/validation/stage-opencode-live-20260921.md) | 原为中文，已完整校对 | 原中文记录已逐行校对；保留真实调用、引用数量、未批准 Gate 与已知模型重复问题 |
+| [docs/validation/team-policy-web-electron-20260921.md](../../docs/validation/team-policy-web-electron-20260921.md) | 已翻译并校对 | 历史策略验收正文已翻译；保留两条阻断行含义、身份冲突未修复范围及数据一致性证据 |
+| [docs/validation/workbench-context-recovery-20260921.md](../../docs/validation/workbench-context-recovery-20260921.md) | 已翻译并校对 | 历史上下文恢复验证已翻译；保留无法重建旧响应的限制、真实调用次数与 #135 待验证 |
+| [docs/validation/workbench-deepseek-reasoning-20260917.md](../../docs/validation/workbench-deepseek-reasoning-20260917.md) | 原为中文，已完整校对 | 原中文记录已完整校对；保留历史低强度配置、受控模型与真实服务的区别及未通过的退出行为 |
+| [docs/validation/workbench-opencode-harness-20260920.md](../../docs/validation/workbench-opencode-harness-20260920.md) | 已翻译并校对 | 历史 OpenCode 验证正文已翻译；保留一次真实调用、模拟生命周期、费用未知与只读权限边界 |
+| [docs/validation/workflow-navigation-20260924.md](../../docs/validation/workflow-navigation-20260924.md) | 已翻译并校对 | 历史导航与恢复验证已翻译；保留实际数字、首次失败与 #135 未验收边界 |
 | [知识点总结.md](../../知识点总结.md) | 原含中文，待完整校对 | 尚未验收 |

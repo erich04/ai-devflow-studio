@@ -1,72 +1,47 @@
-# Workbench requirement context and output recovery
+<a id="workbench-requirement-context-and-output-recovery"></a>
 
-Issues: #153, #154. Baseline: `535b4e42c084ea710e9450b221e3fce602f08270`.
+# 工作台需求上下文与输出恢复
 
-## Reproduction
+涉及 #153、#154。基线：`535b4e42c084ea710e9450b221e3fce602f08270`。
 
-The original service sent only workflow metadata on the first call and removed body
-content from node artifact indexes. A deterministic service/SQLite test failed because
-the actual Provider prompt omitted the original requirement. The initial output-recovery
-test also failed: an `invalid_model_output` response immediately ended the conversation.
+<a id="reproduction"></a>
 
-The observed real failure had HTTP 200 and recorded usage, but no retained invalid
-response body. Its precise JSON/completion failure cannot be reconstructed. The fix
-does not claim otherwise: it records specific safe reason codes for future failures,
-keeps strict validation, regenerates at most once, and explains any remaining failure.
+## 复现
 
-## Automated validation
+原服务在首次调用时只发送工作流元数据，并从节点产物索引移除了正文。确定性服务/SQLite 测试失败，证明实际服务商提示词遗漏原始需求。初始输出恢复测试也失败：收到 `invalid_model_output` 后，会话立即结束。
 
-- Full suite: 298 files passed, one skipped; 4,062 tests passed, 15 skipped.
-- The macOS CI run exposed an existing Provider-removal test timing race: dialog
-  removal was observed before its passive-effect focus restoration. The assertion
-  now waits for focus restoration; all 150 App/removal-dialog tests pass locally.
-- A second CI failure came from the Native Coding trace fixture's 25 ms HTTP
-  deadline, which intermittently timed out before parsing the intended invalid body.
-  A 75 ms delayed response reproduced it locally. The fixture now allows 1,000 ms;
-  timeout cases deliberately leave their response open. All 12 trace tests pass,
-  including the delayed malformed response and the three persisted timeout paths.
-  Application timeouts are unchanged.
-- Workspace typecheck, Desktop/shared final typechecks, production build, source-free
-  API/Web/Worker build smoke, and cross-platform checks passed.
-- Service tests cover the complete original request at a later-stage node, long-body
-  continuation, escaping/limits, context trimming, explicit draft targets, ambiguous
-  Runs, failed reads, project/conversation isolation, and legacy persistence.
-- Real parser fixtures cover invalid JSON, empty content, arrays, exact safe diagnostics,
-  bounded regeneration, preserved usage/input, and reopening SQLite after failure.
-- Terminal SSE usage survives `finish_reason=length`; a later `stop` cannot override
-  the first incomplete terminal reason. Cancellation/auth/network/filter errors do not
-  trigger automatic format regeneration.
-- Electron smoke uses a controlled local SSE endpoint through the real Provider,
-  IPC, UI and SQLite implementation. All requests carry the full original requirement;
-  a malformed HTTP-200 reply recovers with exactly one additional call. Markdown,
-  reasoning, proposal saving, manual retry, cancellation, tab history and restart pass.
-  No external provider is contacted by this deterministic smoke.
+观察到的真实失败具有 HTTP 200 和用量记录，但没有保留无效响应正文，无法重建精确 JSON/完成原因。修复不声称可以还原旧失败：它为今后失败记录具体、安全的原因码，保持严格校验，最多重新生成一次，并解释仍未恢复的失败。
 
-## Real DeepSeek verification
+<a id="automated-validation"></a>
 
-A separate temporary project/profile in the packaged Electron app reused the encrypted
-saved Provider credential without exporting a plaintext key. It had no team pairing and
-an unreachable API endpoint, so no test workflow could sync to the user's backend.
+## 自动化验证
 
-The original six-condition filter requirement was submitted in that isolated Run, then
-the conversation was asked: “现在进行到哪里了，下一步做什么？”
+- 全量套件：298 个文件通过，1 个跳过；4,062 项测试通过，15 项跳过。
+- macOS CI 暴露既有服务商删除测试的时序竞态：先观察到弹窗移除，其被动副作用尚未恢复焦点。断言改为等待焦点恢复，本地全部 150 项 App/删除弹窗测试通过。
+- 第二次 CI 失败来自原生编码轨迹测试的 25ms HTTP 时限，偶尔在解析预期无效正文前超时。本地使用 75ms 延迟响应复现。该测试数据场景现允许 1,000ms；专门验证超时的场景刻意保持响应未结束。全部 12 项轨迹测试通过，包含延迟错误响应和三条持久化超时路径。产品超时没有改变。
+- 工作区类型检查、桌面/shared 最终类型检查、生产构建、无源码 API/Web/Worker 构建冒烟测试和跨平台检查通过。
+- 服务测试覆盖后续阶段节点中的完整原始需求、长正文续读、转义/限制、上下文裁剪、明确草稿目标、含糊 Run、读取失败、项目/会话隔离和旧版持久化。
+- 真实解析器测试覆盖无效 JSON、空内容、数组、精确安全诊断、有界重生成、保留用量/输入，以及失败后重开 SQLite。
+- `finish_reason=length` 时仍保留终止 SSE 用量；后续 `stop` 不能覆盖首次不完整终止原因。取消、认证、网络和内容过滤错误不会触发自动格式重生成。
+- Electron 冒烟测试通过真实 Provider、IPC、界面和 SQLite 实现访问受控本地 SSE 端点。全部请求携带完整原始需求；格式错误的 HTTP 200 回复经恰好一次额外调用恢复。Markdown、推理、提案保存、手动重试、取消、页签历史和重启均通过。该确定性测试不访问外部服务商。
 
-- Three real DeepSeek calls, thinking enabled, low effort; 7,776 reported tokens.
-- A request-boundary observer confirmed every call contained the complete original body.
-- The answer correctly listed all six conditions, including resetting the filter while
-  preserving task data. Its follow-up asked for the unspecified Chinese empty-state
-  wording, instead of repeating the already specified options/persistence behavior.
-- Run stayed at clarification with only the original request artifact; no proposal was
-  published and no Gate advanced. The temporary credential/profile copy was removed.
+<a id="real-deepseek-verification"></a>
 
-## User-data preservation
+## 真实 DeepSeek 验证
 
-Implementation and tests use a separate Git worktree and temporary databases. No schema
-migration, reset, credential rotation or data-profile change is introduced. SQLite and
-Postgres backups were taken before rollout; a fresh snapshot is taken at the restart
-boundary. The replacement app keeps the existing app identity and data directory.
-Exact before/after comparison of local project, Run/node/edge, artifact, conversation,
-Provider and pairing records is required during rollout; backend business data is reused.
+桌面安装包中的独立临时项目/档案复用已加密保存的服务商凭据，未导出明文密钥。它没有团队配对，API 地址不可达，因此测试工作流不会同步到用户后端。
 
-#135 remains open by maintainer choice. Its delivered asynchronous credential handling
-is unchanged; formal Developer ID signed-install acceptance remains outstanding.
+在该隔离 Run 中提交原有六条筛选要求，然后在会话中询问“现在进行到哪里了，下一步做什么？”。
+
+- 三次真实 DeepSeek 调用，启用低强度思考，实际报告 7,776 tokens。
+- 请求边界观察器确认每次调用均包含完整原始正文。
+- 回答正确列出全部六条要求，包括重置筛选但保留任务数据。后续问题询问尚未明确的中文空态文案，没有重复询问已明确的筛选选项和持久化行为。
+- Run 停留在需求澄清，只包含原始请求产物；没有发布提案或推进 Gate。临时凭据/档案副本已移除。
+
+<a id="user-data-preservation"></a>
+
+## 用户数据保留
+
+实现和测试使用独立 Git 工作树及临时数据库，没有引入数据库结构迁移、重置、凭据轮换或数据档案切换。本机更新前备份 SQLite/Postgres，并在重启边界生成新快照。替换应用保持原应用身份和数据目录。更新时必须精确比较本地项目、Run/节点/边、产物、会话、服务商和配对记录；复用后端业务数据。
+
+#135 按维护者决定保留 open。已交付的异步凭据处理不变，正式 Developer ID 签名安装验收仍待完成。
