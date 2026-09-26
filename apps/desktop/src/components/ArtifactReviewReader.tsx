@@ -35,11 +35,13 @@ export function ArtifactReviewReader({ artifact, review, reports = [], onFeedbac
     return () => { disposed = true }
   }, [artifact.id, artifact.content])
   const currentDigest = digest?.id === artifact.id && digest.content === artifact.content ? digest.value : undefined
-  const bound = Boolean(currentDigest && review?.contextManifest?.subjectArtifacts.some((subject) => subject.id === artifact.id && subject.contentDigest === currentDigest))
+  const bound = Boolean(currentDigest && review?.runId === artifact.runId && review.contextManifest?.subjectArtifacts.some((subject) =>
+    subject.id === artifact.id && subject.runId === artifact.runId && subject.nodeId === artifact.nodeId &&
+    subject.kind === artifact.kind && subject.updatedAt === artifact.updatedAt && subject.contentDigest === currentDigest))
   const blocks = readingBlocks(artifact.content)
   const valid = (review?.missingEvidenceDetails ?? []).flatMap((detail) => detail.citations.flatMap((citation) =>
     bound && detail.index >= 0 && detail.index < (review?.missingEvidence.length ?? 0) && Number.isInteger(citation.start) && Number.isInteger(citation.end) && citation.start >= 0 && citation.end > citation.start && citation.end <= artifact.content.length &&
-    citation.sourceId === artifact.id && citation.contentDigest === currentDigest && artifact.content.slice(citation.start, citation.end) === citation.quote &&
+    citation.sourceId === artifact.id && citation.contentDigest === currentDigest && (!citation.updatedAt || citation.updatedAt === artifact.updatedAt) && artifact.content.slice(citation.start, citation.end) === citation.quote &&
     blocks.some((block) => citation.start >= block.start && citation.end <= block.end) ? [{ index: detail.index, citation }] : []))
   const toggle = bound ? onToggleRevision : undefined
   const discuss = onDiscuss && review ? (index: number) => {

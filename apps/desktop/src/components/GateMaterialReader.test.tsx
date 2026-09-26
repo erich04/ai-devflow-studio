@@ -52,11 +52,31 @@ it('does not place old findings on changed content or treat a stale review as a 
   expect(screen.queryByRole('button', { name: '加入修订意见' })).toBeNull()
   expect(screen.queryByRole('button', { name: '审查意见 1' })).toBeNull()
 })
-it('preserves cross-block and invalid citations in the report without inventing inline locations', async () => {
+it.each([
+  { name: 'replacement revision with identical text', change: { updatedAt: '2026-09-24T00:00:00Z' } },
+  { name: 'artifact moved to another node', change: { nodeId: 'other-node' } },
+  { name: 'artifact belonging to another Run', change: { runId: 'other-run' } },
+])('keeps a $name historical and non-actionable', async ({ change }) => {
+  const review = await reviewForCurrentRevision()
+  const revision = { ...artifact, ...change }
+  render(<GateMaterialReader bundle={bundle(revision)} review={review} reports={[]} knowledge={null} onToggleRevision={vi.fn()} />)
+  await waitFor(() => expect(screen.getByText(/^正文摘要：/)).not.toHaveTextContent('正在核验'))
+  fireEvent.click(screen.getByRole('tab', { name: /待确认事项/ }))
+  expect(screen.getByText(/不能将这份报告当作当前版本已审查/)).toBeVisible()
+  expect(screen.getByText('确定提示文案')).toBeVisible()
+  expect(screen.queryByRole('button', { name: '加入修订意见' })).toBeNull()
+  fireEvent.click(screen.getByRole('tab', { name: /验收标准/ }))
+  expect(screen.queryByRole('button', { name: '审查意见 1' })).toBeNull()
+})
+it('preserves cross-block, stale and invalid citations in the report without inventing inline locations', async () => {
   const review = await reviewForCurrentRevision()
   const citation = review.missingEvidenceDetails![0]!.citations[0]!
   const end = artifact.content.lastIndexOf('使用中文提示。') + 7
-  review.missingEvidenceDetails![0]!.citations = [{ ...citation, end, quote: artifact.content.slice(citation.start, end) }, { ...citation, start: -1, end: -1, quote: '' }]
+  review.missingEvidenceDetails![0]!.citations = [
+    { ...citation, end, quote: artifact.content.slice(citation.start, end) },
+    { ...citation, start: -1, end: -1, quote: '' },
+    { ...citation, updatedAt: '2026-09-22T00:00:00Z' },
+  ]
   render(<GateMaterialReader bundle={bundle()} review={review} reports={[]} knowledge={null} />)
   await waitFor(() => expect(screen.getByText(/可在当前正文定位 0 条/)).toBeVisible())
   fireEvent.click(screen.getByRole('tab', { name: /待确认事项/ }))
