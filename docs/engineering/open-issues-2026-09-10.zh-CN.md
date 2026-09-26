@@ -1,5 +1,9 @@
 # 剩余 15 个 Issue 的逐项修复记录
 
+> 历史验证记录：以下状态、测试数量、布局和交付结论对应文中日期及提交，不表示后续候选版本已经通过相同验证。当前节点工作区与本轮验证进度请参阅[2026-09-26 验证记录](../validation/open-issues-workbench-20260926.md)。
+
+术语：工作流实例（Run）、团队项目（Team Project）、本地项目（Local Project）、工作请求（Work Request）、门禁（Gate）、节点详情（Inspector）、执行轨迹（Trace）、服务商（Provider）、配对（pairing）、草稿拉取请求（Draft PR）。代码标识、原始测试名称、命令和历史证据保留原文。
+
 起点：main `f79a970`；工作分支 `codex/open-issues-20260910`。
 
 用户要求：逐项复现、确认原因、修复、回归，推送后关闭。交互调整必须先由用户确认。

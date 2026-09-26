@@ -60,8 +60,8 @@ describe('v1.4 pilot trust boundary contract', () => {
     expect(readme).toContain('持久化发件箱保存脱敏同步任务')
     expect(readme).not.toContain('付费运行时拒绝不确定请求的加固尚未完成')
 
-    expect(productDefinition).toContain('Release status and future milestones live only in the')
-    expect(productDefinition).toContain('[Roadmap](../roadmap.md)')
+    expect(productDefinition).toContain('发布状态与后续里程碑统一记录在')
+    expect(productDefinition).toContain('[路线图](../roadmap.md)')
     expect(productDefinition).not.toContain('V1.4 scoped implementation is complete')
     expect(productDefinition).not.toContain('candidate-bound signoff is in preparation')
     expect(productDefinition).not.toContain('Production auth and paid-budget trust remain v1.4 work')
@@ -69,9 +69,9 @@ describe('v1.4 pilot trust boundary contract', () => {
       'Repository knowledge indexing, complete Web management paths',
     )
 
-    expect(currentProductPrd).toContain('Runtime Operations and Collaboration')
-    expect(currentProductPrd).toContain('remain evidence-promoted backlog items')
-    expect(currentProductPrd).toContain('Only the Roadmap owns current release and milestone status')
+    expect(currentProductPrd).toContain('运行时运维和协作')
+    expect(currentProductPrd).toContain('仍需证据推动')
+    expect(currentProductPrd).toContain('只有路线图定义当前发布和里程碑状态')
     expect(currentProductPrd).not.toContain('roadmap candidates move into implementation')
     expect(currentProductPrd).not.toContain(
       'Roadmap and release-signoff documents may carry milestone status separately',
@@ -86,15 +86,15 @@ describe('v1.4 pilot trust boundary contract', () => {
   })
 
   it('defines a stable v1.4 operator walkthrough without claiming a result', () => {
-    expect(walkthrough).toContain('Status: Stable operator procedure; no result claimed')
-    expect(walkthrough).toContain('Candidate commit `C`')
-    expect(walkthrough).toContain('Team Policy')
-    expect(walkthrough).toContain('Desktop outcome: `human_rejected`')
-    expect(walkthrough).toContain('Team command: `applied`')
-    expect(walkthrough).toContain('Receipt acknowledgement: `acknowledged`')
-    expect(walkthrough).toContain('cold-start')
-    expect(walkthrough).toContain('no raw repository content')
-    expect(walkthrough).not.toContain('Status: passed')
+    expect(walkthrough).toContain('状态：稳定的操作流程；本文件不声明验证通过。')
+    expect(walkthrough).toContain('候选提交 `C`')
+    expect(walkthrough).toContain('团队策略')
+    expect(walkthrough).toContain('桌面结果：`human_rejected`')
+    expect(walkthrough).toContain('团队命令：`applied`')
+    expect(walkthrough).toContain('回执确认：`acknowledged`')
+    expect(walkthrough).toContain('冷启动')
+    expect(walkthrough).toContain('仓库原文、提示词、补丁正文、stdout/stderr、凭据及本地绝对路径均不能越过边界')
+    expect(walkthrough).not.toMatch(/Status: passed|状态：已通过/iu)
   })
 
   it('keeps durable sync and paid fail-closed behavior in the release contract', () => {

@@ -1,89 +1,43 @@
-# DevFlow Studio V2.3 Release Walkthrough
+<a id="devflow-studio-v23-release-walkthrough"></a>
 
-Status: Stable release procedure; no result claimed
+# DevFlow Studio V2.3 发布演练
 
-This walkthrough verifies the formal `2.3.0` candidate `C` through the normal packaged Desktop,
-Web, API, and private GitHub sandbox surfaces.
+状态：稳定的发布操作流程；本文件不声明验证通过。
 
-It covers the workflow and bounded Agent group: Workflow Stage Agent, Knowledge-Grounded Gate Review
-Agent, and the Coding Agent connected through the CRI boundary. In Gate Review, retrieved Knowledge
-is grounding; the current Gate, its conditions, and associated stage artifacts and evidence are the
-review subject.
+本演练通过正常的桌面安装包、Web、API 和私有 GitHub 测试仓库，验证正式 `2.3.0` 候选提交 `C`。
 
-It also checks the V2.0 runtime, V2.1 Memory, and V2.2 coordination boundaries without giving an
-Agent authority over human Gates or GitHub publication.
+范围包括工作流及职责受限的 Agent 组：工作流阶段 Agent、基于知识的门禁审查 Agent，以及通过编码运行时接口（CRI）接入的编码 Agent。门禁审查以检索到的知识为依据；审查对象是当前 Gate、审批条件、关联阶段产物及证据。
 
-## Preconditions
+同时检查 V2.0 运行时、V2.1 记忆和 V2.2 协作边界，不赋予 Agent 人工 Gate 审批或 GitHub 发布权限。
 
-- Use a clean checkout at the full SHA of `C`, fresh Team schema v28 state, and fresh Desktop schema
-  v34 state.
-- Dispatch the `Verify` workflow against `C` and download
-  `ai-devflow-studio-candidate-desktop` from its first successful attempt. Verify the complete
-  artifact trio before launch; a local rebuild is not a substitute.
-- Use a non-sensitive fixture repository and a dedicated private GitHub sandbox with the documented
-  least-privilege App setup. Keep all credentials and local paths out of evidence.
-- Use a non-maintainer operator. After the run begins, shell, direct HTTP, SQL, GitHub CLI, source
-  edits, evidence edits, or undocumented repair disqualifies the result.
+<a id="preconditions"></a>
 
-## Operator Path
+## 前置条件
 
-1. Launch the isolated self-hosted stack and packaged Desktop. Confirm the package version, schemas,
-   artifact SHA-256, authentication, and empty release state.
-2. Pair one Local Project to one Team Project, then create one Work Request and materialize exactly
-   one canonical local Run.
-3. Complete Clarify and Design with the Workflow Stage Agent. Select each node's executor and model
-   separately: Direct Provider generates from approved workflow inputs; OpenCode performs read-only
-   repository analysis. Saving the implementation tool does not switch either node or chat. Design
-   requires the Gate-approved clarification body; inspect its input identity and repository citations
-   under “设计输入与代码核验依据”. Cancellation must leave the node available for explicit retry. On the Workflow Board, confirm that
-   Design is a Task that produces the unique Design Artifact, not a Review node. Stage summaries
-   must keep node type, source, and any special folded-output presentation on separate lines. Inspect
-   each Task's read-only Gate impact: it must select the nearest downstream Gate from workflow edges,
-   show that Gate's live status and only the Task artifacts actually associated with it, and navigate
-   to the Gate without exposing approval or Override on the Task.
-4. Run Gate Review before each Gate approval. Confirm that Gate Review is shown separately from the
-   Design Task and from the final human approval. Confirm that retrieved Knowledge citations and policy
-   findings are evidence rather than approval authority, and that only redacted metadata reaches Team
-   storage. In Remediation, confirm that only current unmet facts appear, with their source/rule,
-   severity, required role/evidence, completion standard, and a controlled Review, Tests, Policy sync,
-   or Coding retry action where one exists. Confirm that Lead Override remains a separate authorized
-   and audited path. Then approve the Gate explicitly.
-5. From the Agent Runtime panel, start exactly one standalone Runtime for the current Build node and
-   advance its `scenario.evaluate` action to terminal success. Exercise the resulting Memory
-   candidate through human-controlled promotion, revision, deletion, and purge. Separately start one
-   bounded Coordination Session and one read-only Specialist, cold-restart while that session is
-   partial, confirm zero repeated starts or effects, then cancel the session and child Runtime before
-   continuing. Do not advance a Supervisor or Specialist Runtime as the standalone Runtime check;
-   their capability digest and leases are coordination-scoped.
-6. In Agents, open **项目执行工具** and configure the implementation executor before starting it.
-   **DevFlow Native（内置编码执行器）** is the standard name for Native Coding Agent / Native Executor;
-   v2 is its implementation version, not a separate product. For DevFlow Native, select a locally
-   saved Provider. For OpenCode, run local detection, review the exact candidate, and explicitly
-   confirm it for this project; detection alone must not save or start it. Confirm that Workbench and
-   Agents show the same checks for Coding Executor, Coding Engine, capability, Provider, Team Project,
-   test command, budget policy/evaluation, concurrency, and permission, and that any unknown or blocked
-   check disables Start. Then start the Coding Agent through the CRI boundary and review its permission
-   request, bounded Tool/MCP use, managed-worktree diff, tests, runtime trace, and cost evidence.
-   Confirm cancellation and failure paths leave a safe resumable or terminal state.
-7. At the PR node, prepare one exact Delivery Intent. Approve it separately in Web as a lead or
-   owner, then publish one namespaced branch and create or reconcile exactly one Draft pull request.
-8. Cold-restart Desktop after the remote effect. Confirm there is no second credential grant, push,
-   Draft PR, Agent Tool effect, Memory lifecycle effect, or coordination replay effect.
-9. Complete Acceptance while the pull request remains Draft and unmerged. Revoke the repository
-   binding and run the packaged revocation check; only a durable `binding_inactive` result passes.
-10. Inspect Team and Desktop projections for credentials, raw patches/output, repository contents,
-    prompts, and local absolute paths. Record only bounded metadata and complete external cleanup.
+- 使用完整 SHA 为 `C` 的干净检出、全新 Team schema v28 状态，以及全新 Desktop schema v34 状态。
+- 针对 `C` 触发 `Verify` 工作流，从首次成功的运行下载 `ai-devflow-studio-candidate-desktop`。启动前验证完整的三件配套产物；本地重新构建不能替代它们。
+- 使用无敏感信息的测试仓库和专用私有 GitHub 测试仓库，按文档配置最小权限 App。凭据和本地路径不得进入证据。
+- 由非维护者操作。演练开始后，使用 shell、直接 HTTP、SQL、GitHub CLI、修改源码或证据，或进行未记录的修复，都会使结果失去验收资格。
 
-## Passing Result
+<a id="operator-path"></a>
 
-The result passes only when every observation binds to `C`, the downloaded `2.3.0` artifact, Team
-schema v28, and Desktop schema v34; every deterministic gate is passing; the Agent group remains
-inside its scoped workflow roles; restart produces zero duplicate effects; GitHub receives one
-approved branch and one unmerged Draft PR; and all evidence is redacted.
+## 操作路径
 
-Write the dated result as
-`docs/guides/devflow-studio-v2.3-walkthrough-result-YYYY-MM-DD.md`. The machine-checked release
-summary must include the exact candidate SHA, artifact version/platform/SHA-256, Verify URL, delivery
-identities, Draft PR URL, lifecycle counts, restart result, revocation proof, redaction result, and
-cleanup result. Then add the three `release-*` JSON records described in
-`docs/plans/v2.3-release-signoff.md` in the direct-child signoff commit `S`.
+1. 启动隔离的自托管服务和桌面安装包。确认包版本、数据库结构版本、产物 SHA-256、认证和空的发布初始状态。
+2. 将一个本地项目配对到一个团队项目，然后创建一个工作请求，且只生成一个规范本地 Run。
+3. 使用工作流阶段 Agent 完成澄清和设计。分别选择各节点的执行器和模型：Direct Provider 根据已批准的工作流输入生成内容；OpenCode 只读分析仓库。保存开发执行工具不会切换阶段节点或聊天的选择。设计必须使用经 Gate 批准的澄清正文；在“设计输入与代码核验依据”核对输入标识和仓库引用。取消后，节点必须允许明确重试。在工作流看板确认设计是生成唯一设计产物的任务（Task），而不是审查节点。阶段摘要应将节点类型、来源及特殊折叠产物展示分别列出。检查各任务的只读 Gate 影响：沿工作流边选择最近的下游 Gate，显示该 Gate 实时状态及确实关联的任务产物，并可跳转到 Gate；任务内不能提供审批或例外批准。
+4. 每次人工批准 Gate 前先运行门禁审查。确认门禁审查、设计任务和最终人工审批分别展示；知识引用和策略发现是证据，不是审批权限，且只有脱敏元数据进入团队存储。在“处理建议”（Remediation）中，只显示当前未满足的事实，以及对应来源/规则、严重性、所需角色/证据、完成标准；存在受控入口时，提供审查、测试、同步策略或重试编码操作。确认负责人例外批准（Lead Override）仍是独立授权、独立审计的路径，然后明确批准 Gate。
+5. 在 Agent 运行时面板，为当前开发节点启动且仅启动一个独立运行时，将其 `scenario.evaluate` 动作推进到成功终态。通过人工控制操作，对产生的候选记忆执行确认提升、修订、删除和彻底清除。另行启动一个有界协调会话和一个只读专职 Agent；在会话尚未全部完成时冷重启，确认没有重复启动或执行效果，再取消协调会话及子运行时后继续。不要用监督或专职 Agent 运行时代替独立运行时检查；它们的能力摘要和租约受协调范围约束。
+6. 在 Agents 打开**项目执行工具**，启动前配置开发执行器。**DevFlow Native（内置编码执行器）**是 Native Coding Agent / Native Executor 的统一名称；v2 是其实现版本，不是另一个产品。使用 DevFlow Native 时，选择已在本地保存的服务商。使用 OpenCode 时，先本地检测、核对具体候选，再为此项目明确确认；单独检测不能自动保存或启动。在工作台和 Agents 核对一致的检查项：编码执行器、编码引擎、能力、服务商、团队项目、测试命令、预算策略/评估、并发和权限。任何未知或阻断项都必须禁用启动。随后通过 CRI 边界启动编码 Agent，核对权限请求、有界 Tool/MCP 使用、受管工作树差异、测试、运行轨迹和费用证据。确认取消或失败会留下安全的可继续状态或终态。
+7. 在 PR 节点准备一个精确交付意图。以 lead 或 owner 身份在 Web 单独批准，再发布一个带命名空间的分支，并创建或核对且仅保留一个草稿拉取请求。
+8. 远端操作生效后冷重启桌面。确认没有第二次凭据授权、推送、草稿 PR、Agent 工具效果、记忆生命周期效果或协作重放效果。
+9. 保持拉取请求为草稿且未合并，完成业务验收。撤销仓库绑定并运行安装包撤销检查；只有持久化的 `binding_inactive` 结果才算通过。
+10. 检查团队端和桌面投影是否泄漏凭据、原始补丁/输出、仓库内容、提示词及本地绝对路径。只记录有界元数据，并完成外部清理。
+
+<a id="passing-result"></a>
+
+## 通过条件与结果记录
+
+只有每项观察都绑定同一 `C`、下载的 `2.3.0` 产物、Team schema v28 和 Desktop schema v34，且所有确定性检查通过，才算验收通过。Agent 组必须保持既定工作流职责；重启不得产生重复效果；GitHub 只能收到一个获批分支和一个未合并的草稿 PR；全部证据均须脱敏。
+
+将带日期的结果写入 `docs/guides/devflow-studio-v2.3-walkthrough-result-YYYY-MM-DD.md`。供机器检查的发布摘要必须包含精确候选 SHA、产物版本/平台/SHA-256、Verify URL、交付标识、草稿 PR URL、生命周期计数、重启结果、撤销证据、脱敏结果和清理结果。随后按 `docs/plans/v2.3-release-signoff.md`，在候选提交的直接子提交 `S` 中加入三份 `release-*` JSON 记录。

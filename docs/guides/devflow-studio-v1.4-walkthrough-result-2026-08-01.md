@@ -1,117 +1,103 @@
-# DevFlow Studio V1.4 Computer Use walkthrough result — 2026-08-01
+<a id="devflow-studio-v14-computer-use-walkthrough-result--2026-08-01"></a>
 
-## Outcome
+# DevFlow Studio V1.4 电脑操作演练结果 — 2026-08-01
 
-The V1.4 pilot trust-boundary implementation passed a development-tree walkthrough across the real
-Web UI and a packaged Electron Desktop application. The final path covered Web pairing and Work
-Request intake, Desktop claim/materialization and clarification, project-scoped Policy v1 refresh,
-a Web rejection command, and Desktop receipt processing and acknowledgement. The terminal local
-outcome was `human_rejected`; Team recorded the command as `applied` and its receipt as
-acknowledged.
+<a id="outcome"></a>
 
-This result is implementation evidence only. It is not candidate-bound and is not a formal V1.4
-release signoff.
+## 结果
 
-| Field | Result |
+V1.4 试点信任边界的实现，在开发工作树上通过了真实 Web 界面和打包 Electron 桌面应用的演练。最终路径覆盖 Web 配对及工作请求接入、桌面领取/创建 Run 和需求澄清、项目范围的 Policy v1 刷新、Web 拒绝命令，以及桌面回执处理与确认。本地终态为 `human_rejected`；团队端将命令记为 `applied`，并确认收到回执。
+
+本结果仅是实现验证证据，未绑定候选提交，不构成 V1.4 正式发布验收。
+
+| 字段 | 结果 |
 | --- | --- |
-| Target scope | V1.4 Pilot Trust Boundary implementation |
-| Source state | Development worktree; not yet a signed release candidate |
-| Package metadata | Still `1.3.0` pending V1.4 candidate formation |
-| Web/Desktop walkthrough | Passed after one defect was found, fixed, and rerun |
-| Team Project | `p-payments` (`Payments API`) |
-| Final Gate action | Reject |
-| Final Desktop outcome | `human_rejected` |
-| Team command / acknowledgement | `applied` / receipt acknowledged |
-| Paid provider call | Not run |
-| Formal V1.4 signoff | Not complete |
+| 目标范围 | V1.4 试点信任边界实现 |
+| 源码状态 | 开发工作树，尚不是已签署验收的发布候选版本 |
+| 包元数据 | 仍为 `1.3.0`，等待形成 V1.4 候选版本 |
+| Web/桌面演练 | 发现一项缺陷，修复并重新验证后通过 |
+| 团队项目 | `p-payments`（`Payments API`） |
+| 最终 Gate 操作 | 拒绝 |
+| 最终桌面结果 | `human_rejected` |
+| 团队命令/确认 | `applied` / 回执已确认 |
+| 付费服务商调用 | 未运行 |
+| V1.4 正式验收 | 未完成 |
 
-No pairing code, exchanged Bearer token, signed browser Cookie, provider credential, local absolute
-repository path, or raw Run evidence is recorded in this document.
+本文未记录配对码、交换取得的 Bearer 令牌、签名浏览器 Cookie、服务商凭据、本地仓库绝对路径或 Run 原始证据。
 
-## Environment and authority boundaries
+<a id="environment-and-authority-boundaries"></a>
 
-The walkthrough used the local API and Web services plus the built, packaged Desktop executable
-with a fresh isolated `userData` directory. All direct Web and Desktop interactions were performed
-with Computer Use. Local test authentication used a short-lived signed Session Cookie and the
-normal pairing exchange; unsigned browser identity headers were not used.
+## 环境和权限边界
 
-The test kept the intended authority split:
+演练使用本地 API、Web 服务，以及已构建的桌面可执行包，配备全新隔离 `userData` 目录。所有直接 Web 和桌面交互均使用电脑操作工具（Computer Use）。本地测试认证使用短期签名 Session Cookie 和正常配对交换，没有使用未签名的浏览器身份请求头。
 
-- Team owned the project, versioned Work Request, redacted Run Projection, Gate Command, receipt,
-  and acknowledgement record.
-- Desktop owned the canonical Run, complete evidence, Team policy snapshot, Gate evaluation, and
-  terminal local outcome.
-- Web submitted collaboration intent. It did not directly patch the Run or infer that a command
-  acknowledgement changed the projected workflow state.
+演练保持预期的权限划分：
 
-## End-to-end Computer Use path
+- 团队端负责项目、带版本的工作请求、脱敏 Run 投影、Gate 命令、回执及确认记录。
+- 桌面端负责规范 Run、完整证据、团队策略快照、Gate 评估和本地终态。
+- Web 提交协作意图，不直接修改 Run，也不把命令回执确认推断为投影工作流已变化。
 
-| Step | Observed result |
+<a id="end-to-end-computer-use-path"></a>
+
+## 端到端电脑操作路径
+
+| 步骤 | 观察结果 |
 | --- | --- |
-| Packaged Desktop launch | The built application loaded its packaged `file://` renderer with isolated local storage. |
-| Local Project selection | Computer Use selected the V1.4 development checkout as the Desktop Local Project. |
-| Web pairing | Web generated a short-lived code for `p-payments`; Desktop exchanged it and persisted the Local ↔ Team Project binding. |
-| Work Request intake | Web created a bounded V1.4 acceptance Work Request in `p-payments`. |
-| Claim and materialization | Desktop refreshed the inbox, claimed the expected Work Request version, and created the single canonical local Run before acknowledging materialization. |
-| Clarification | Desktop generated the clarification artifact and advanced the Run to its Gate. |
-| Policy and projection sync | Desktop refreshed project-scoped Team Policy v1 and synchronized the redacted Run projection. |
-| Web Gate action | Web opened that projected Run, supplied a reason, and submitted a version- and policy-bound rejection command. |
-| Receipt and local decision | The claiming Desktop acquired the command receipt, rechecked local scope and evidence, and persisted a human rejection without advancing the Gate. |
-| Acknowledgement | Desktop acknowledged the exact receipt with `human_rejected`; Team exposed the command as `applied` with its receipt acknowledged. |
+| 启动桌面安装包 | 构建出的应用使用隔离本地存储，加载打包的 `file://` 渲染页面。 |
+| 选择本地项目 | 电脑操作工具将 V1.4 开发检出目录选为桌面本地项目。 |
+| Web 配对 | Web 为 `p-payments` 生成短期配对码；桌面交换该码并持久化本地与团队项目绑定。 |
+| 接入工作请求 | Web 在 `p-payments` 创建范围明确的 V1.4 验收工作请求。 |
+| 领取并创建 Run | 桌面刷新收件箱，领取预期版本的工作请求，先创建唯一规范本地 Run，再回执确认创建完成。 |
+| 需求澄清 | 桌面生成澄清产物，将 Run 推进到 Gate。 |
+| 策略与投影同步 | 桌面刷新项目范围的 Team Policy v1，并同步脱敏 Run 投影。 |
+| Web Gate 操作 | Web 打开该投影 Run，填写理由并提交绑定版本及策略的拒绝命令。 |
+| 回执与本地决定 | 领取请求的桌面取得命令回执，重查本地范围与证据，持久化人工拒绝，未推进 Gate。 |
+| 确认 | 桌面以 `human_rejected` 确认精确回执；团队端显示命令为 `applied`，回执已确认。 |
 
-The flow did not create a paid Coding Agent run, a provider request, a GitHub pull request, or a
-release tag.
+本流程没有创建付费编码 Agent Run、服务商请求、GitHub 拉取请求或发布标签。
 
-## Defect discovered and verified fix
+<a id="defect-discovered-and-verified-fix"></a>
 
-The first Gate Command attempt failed closed with `stale_policy`. That outcome protected the local
-Run—Desktop did not apply the rejection—but it was unexpected because the current Policy v1 had
-already been synchronized.
+## 发现的缺陷与修复验证
 
-Investigation showed that Team overview projections omitted `projectId` when a project inherited
-the organization policy without an override. Desktop intentionally accepts an authoritative policy
-only when the returned policy is explicitly scoped to its paired Team Project. The unscoped
-projection therefore looked unavailable and produced the safe `stale_policy` outcome.
+首次 Gate 命令因 `stale_policy` 被拒绝。这一结果保护了本地 Run，桌面没有应用拒绝动作；但当前 Policy v1 已同步，因此这一拒绝不符合预期。
 
-The API's in-memory repository, Postgres repository, and route fallback projection were corrected
-to attach each owning `projectId` to its effective policy. Regression tests were added for all three
-paths. After the API was restarted, pairing and the Work Request/Gate path were repeated from fresh
-Team state. Desktop then refreshed the project-scoped Policy v1 and the same rejection scenario
-ended as `human_rejected` with a recorded acknowledgement.
+调查发现，项目直接继承组织策略、没有覆盖配置时，团队概览投影遗漏了 `projectId`。桌面刻意要求返回的权威策略明确限定在已配对团队项目内。缺少范围的策略投影因此被视为不可用，返回安全的 `stale_policy` 结果。
 
-This is an important positive negative-path result: the original defect caused a conservative
-denial rather than a cross-project policy fallback or unauthorized local mutation.
+API 内存仓储、Postgres 仓储及路由回退投影已修正，为各项目有效策略补充所属 `projectId`；三条路径均增加了回归测试。重启 API 后，从全新团队状态重复配对和工作请求/Gate 路径。桌面随后成功刷新项目范围的 Policy v1，同一拒绝场景以 `human_rejected` 及已记录确认结束。
 
-## Infrastructure and packaging evidence
+该失败路径验证了保护边界：原缺陷导致保守拒绝，没有回退到其他项目策略，也没有产生未经授权的本地修改。
 
-The V1.4 implementation also passed these real, no-cost checks during development:
+<a id="infrastructure-and-packaging-evidence"></a>
 
-| Check | Result |
+## 基础设施与打包证据
+
+开发过程中，V1.4 实现还通过了以下真实、无模型费用的检查：
+
+| 检查 | 结果 |
 | --- | --- |
-| Real Postgres integration smoke | Passed against PostgreSQL 16. |
-| Compose pilot smoke | Passed API/Web readiness, authenticated pairing, Work Request, Gate Command, visibility, and cleanup. |
-| Docker lifecycle smoke | Passed fresh schema v10, retained V1.3 schema v7 → V1.4 schema v10 upgrade, transactional failed-upgrade recovery, and bounded V1.3 API read rollback. |
-| Desktop pilot build | Produced the current-host packaged app, deterministic archive, manifest, and artifact index. |
-| Packaged Desktop smoke | Passed isolated-store launch, `file://` renderer loading, and rejection of an injected development-server URL. |
+| 真实 Postgres 集成冒烟测试 | 在 PostgreSQL 16 上通过。 |
+| Compose 试点冒烟测试 | API/Web 就绪、认证配对、工作请求、Gate 命令、可见性和清理均通过。 |
+| Docker 生命周期冒烟测试 | 全新 schema v10、保留数据的 V1.3 schema v7 → V1.4 schema v10 升级、升级失败事务恢复，以及有界 V1.3 API 只读回滚均通过。 |
+| 桌面试点构建 | 生成当前主机可运行的打包应用、确定性归档、清单和产物索引。 |
+| 打包桌面冒烟测试 | 隔离存储启动、`file://` 页面加载及拒绝注入开发服务器 URL 均通过。 |
 
-These checks validate the implementation and operator path, but they are not tied here to a V1.4
-candidate SHA. The Desktop artifact remains unsigned and unnotarized, is not an installer, and is
-not approved for public distribution.
+这些检查验证实现和操作路径，但本文没有将它们绑定到 V1.4 候选 SHA。桌面产物仍未签名、未公证，不是安装程序，也未获准公开分发。
 
-## Remaining release work
+<a id="remaining-release-work"></a>
 
-Before formal V1.4 signoff:
+## 当时剩余的发布工作
 
-1. form the V1.4 candidate and align package/release metadata;
-2. rerun the complete deterministic gate matrix against the exact candidate SHA;
-3. execute any separately authorized release-only paid-provider smoke without retrying merely to
-   obtain a preferred result;
-4. record candidate-bound walkthrough, CI, release, and signoff evidence; and
-5. complete the normal credential-rotation prerequisite before handling provider-backed release
-   evidence.
+正式 V1.4 验收前需要：
 
-## Verdict
+1. 形成 V1.4 候选版本并对齐包/发布元数据；
+2. 针对精确候选 SHA 重跑完整确定性检查矩阵；
+3. 执行已单独授权、仅用于发布的付费服务商冒烟测试，不能只为取得理想结果而重试；
+4. 记录与候选版本绑定的演练、CI、发布及验收证据；
+5. 处理使用真实服务商的发布证据前，完成正常凭据轮换前置要求。
 
-The scoped V1.4 Web → Desktop trust-boundary flow is implemented and has passed its real UI pilot
-walkthrough after the discovered project-policy scoping defect was fixed and retested. The correct
-current status is **implementation walkthrough passed; formal V1.4 signoff pending**.
+<a id="verdict"></a>
+
+## 结论
+
+限定范围的 V1.4 Web → 桌面信任边界流程已实现；修复项目策略范围缺陷并复验后，通过真实界面试点演练。本文对应日期的状态为：**实现演练通过；V1.4 正式验收仍待完成**。

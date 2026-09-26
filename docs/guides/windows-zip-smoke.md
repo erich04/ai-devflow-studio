@@ -1,17 +1,23 @@
-# Windows ZIP Smoke Guide
+<a id="windows-zip-smoke-guide"></a>
 
-Use this source-validation path when a Windows machine cannot reliably clone the repository from GitHub. It covers source launch, ZIP Git limitations, and validation against another local Git repository.
+# Windows ZIP 冒烟测试指南
 
-## Recommended Environment
+当 Windows 机器无法稳定从 GitHub 克隆仓库时，可以按本指南从源码 ZIP 进行验证。范围包括源码启动、ZIP 缺少 Git 元数据时的限制，以及选择另一个本地 Git 仓库进行验证。
 
-- Windows 11. Windows 10 is best-effort.
-- Node.js 24 with Corepack.
-- PowerShell.
-- Git for Windows when validating Git-backed local project behavior.
+<a id="recommended-environment"></a>
 
-## Run From a GitHub ZIP
+## 建议环境
 
-Download the `main` branch ZIP, extract it to a short path such as `C:\dev\ai-devflow-studio`, and open PowerShell in that directory.
+- Windows 11；Windows 10 尽力兼容。
+- Node.js 24 与 Corepack。
+- PowerShell。
+- 验证依赖 Git 的本地项目功能时，需要 Git for Windows。
+
+<a id="run-from-a-github-zip"></a>
+
+## 从 GitHub ZIP 启动
+
+下载 `main` 分支的 ZIP，解压到较短的路径，例如 `C:\dev\ai-devflow-studio`，然后在该目录打开 PowerShell。
 
 ```powershell
 corepack enable
@@ -20,30 +26,34 @@ corepack pnpm verify
 corepack pnpm dev:electron
 ```
 
-`dev:electron` builds the Electron main and preload bundles, starts Vite on `http://127.0.0.1:5173`, and opens the real desktop app.
+`dev:electron` 会构建 Electron 主进程和 preload 产物，在 `http://127.0.0.1:5173` 启动 Vite，并打开真实桌面应用。
 
-Local folder selection, controlled IPC, command safety checks, and SQLite persistence should be available.
+本地文件夹选择、受控 IPC、命令安全检查和 SQLite 持久化应当可用。
 
-## ZIP Git Boundary
+<a id="zip-git-boundary"></a>
 
-A GitHub ZIP does not include a `.git` directory. DevFlow itself can run, but selecting that extracted folder as the local project limits Git-backed features.
+## ZIP 的 Git 能力边界
 
-Expected limitations include branch refresh, branch watchers, managed coding worktrees, and Git diff capture. The Branch field should report that the folder is not a Git repository.
+GitHub ZIP 不包含 `.git` 目录。DevFlow 本身仍可启动，但把解压目录选为本地项目时，依赖 Git 的功能会受到限制。
 
-For a fuller validation, run DevFlow from the extracted ZIP and select another small, committed Git repository with a test script inside the app.
+预期受限的功能包括分支刷新、分支监听、受管编码工作树和 Git 差异采集。“分支”（Branch）字段应说明该文件夹不是 Git 仓库。
 
-Check that:
+要进行更完整的验证，可以从解压目录运行 DevFlow，再在应用中选择另一个已提交代码、包含测试脚本的小型 Git 仓库。
 
-- the local project card shows the selected repository;
-- the project path uses the expected Windows path;
-- Branch shows the selected repository's current branch;
-- Branch refresh reflects an external branch switch;
-- a new Run uses the selected repository instead of demo fixture data;
-- local test execution uses the detected package script.
+检查以下行为：
 
-## Optional Local Git Initialization
+- 本地项目卡显示所选仓库；
+- 项目路径符合预期的 Windows 路径；
+- “分支”显示所选仓库的当前分支；
+- 在外部切换分支后，刷新能够反映变化；
+- 新 Run 使用所选仓库，不使用演示样例数据；
+- 本地测试使用检测到的项目包脚本。
 
-If the extracted DevFlow directory must be the selected local project, initialize it first:
+<a id="optional-local-git-initialization"></a>
+
+## 可选：初始化本地 Git
+
+如果必须把解压后的 DevFlow 目录选为本地项目，请先初始化：
 
 ```powershell
 git init
@@ -52,10 +62,12 @@ git add .
 git commit -m "local windows smoke"
 ```
 
-This creates local Git state only. It does not restore the original repository history or configure a remote.
+这只会创建本地 Git 状态，不会恢复原仓库历史，也不会配置远端。
 
-## Current Support Boundary
+<a id="current-support-boundary"></a>
 
-Windows support currently covers source and development validation. CI runs type checks, unit tests, and static cross-platform audits on Windows.
+## 当前支持范围
 
-The project does not yet claim a signed Windows installer or complete Windows Electron full-smoke signoff. Record failures with the exact command, terminal output, and source method: ZIP, clone, or bundle.
+Windows 支持目前覆盖源码和开发验证。CI 在 Windows 上执行类型检查、单元测试和静态跨平台审计。
+
+项目尚未宣称提供签名的 Windows 安装程序，也未完成 Windows Electron 全量冒烟验收。记录失败时，请包含精确命令、终端输出及源码取得方式：ZIP、克隆或打包产物。

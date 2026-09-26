@@ -23,12 +23,12 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toMatch(/Draft pull request|草稿拉取请求|草稿 PR/u)
     }
 
-    expect(productDefinition).toContain('V1.5 is released as `v1.5.0`')
-    expect(productDefinition).toContain('finite 1.x product line is complete')
-    expect(currentPrd).toContain('finite 1.x completion gate passed')
-    expect(currentPrd).toContain('V2.0 Native Agent Runtime is complete')
-    expect(currentPrd).toContain('V2.1 Evaluated Retrieval and Memory is complete')
-    expect(currentPrd).toContain('V2.2 Multi-Agent and Execution Tenancy is the')
+    expect(productDefinition).toContain('V1.5 已发布为 `v1.5.0`')
+    expect(productDefinition).toContain('1.x 产品线已完成')
+    expect(currentPrd).toContain('1.x 完成门禁已通过')
+    expect(currentPrd).toContain('V2.0 原生 Agent 运行时已完成')
+    expect(currentPrd).toContain('V2.1 检索与记忆评估已完成')
+    expect(currentPrd).toContain('V2.2 多 Agent 与执行租户隔离是')
     expect(currentPrd).not.toContain(
       'Real GitHub PR creation, pushing, merging, and branch publication require a future scoped PRD',
     )
@@ -56,7 +56,7 @@ describe('V1.5 living documentation truth', () => {
       userJobs,
       nodeSemantics,
     ]) {
-      expect(markdown).toMatch(/never merge|不会合并/u)
+      expect(markdown).toMatch(/never merge|不会合并|绝不合并/u)
     }
   })
 
@@ -231,11 +231,11 @@ describe('V1.5 living documentation truth', () => {
       expect(markdown).toMatch(/signed Web approval|签名 Web\s*审批/u)
       expect(markdown).toMatch(/verified remote head|已核实的远端分支提交/u)
       expect(markdown).toMatch(/Draft pull request|草稿拉取请求|草稿 PR/u)
-      expect(markdown).toMatch(/never merge|不会合并/u)
+      expect(markdown).toMatch(/never merge|不会合并|绝不合并/u)
     }
 
     expect(keynote).not.toContain('a handoff artifact for later PR creation')
-    expect(keynote).toContain('first-party Agent Runtime')
+    expect(keynote).toContain('自有 Agent 运行时')
     expect(prdIndex).toContain('已实现的 1.x 最终功能契约')
     expect(prdIndex).toContain('发布/验收待完成')
 

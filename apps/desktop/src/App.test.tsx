@@ -5166,7 +5166,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     clickInspectorTab('产物与证据')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
-    expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('API 健康端点规范')
 
     fireEvent.click(screen.getByRole('button', { name: /Knowledge/ }))
 
@@ -5210,7 +5210,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
-      target: { value: 'API Health Endpoint Standard' },
+      target: { value: 'API 健康端点规范' },
     })
 
     expect(screen.getByTestId('search-results')).toHaveTextContent('没有匹配结果')
@@ -5233,19 +5233,19 @@ describe('App', () => {
 
     clickInspectorTab('产物与证据')
     await waitFor(() =>
-      expect(screen.getByTestId('node-inspector')).toHaveTextContent('API Health Endpoint Standard'),
+      expect(screen.getByTestId('node-inspector')).toHaveTextContent('API 健康端点规范'),
     )
 
     fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
-      target: { value: 'API Health Endpoint Standard' },
+      target: { value: 'API 健康端点规范' },
     })
-    expect(screen.getByTestId('search-results')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('search-results')).toHaveTextContent('API 健康端点规范')
 
     fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
     const knowledgeView = screen.getByTestId('knowledge-view')
     expect(knowledgeView).toHaveTextContent('indexed · truncated')
     expect(knowledgeView).toHaveTextContent('file_count_limit_exceeded')
-    expect(knowledgeView).toHaveTextContent('API Health Endpoint Standard')
+    expect(knowledgeView).toHaveTextContent('API 健康端点规范')
     expect(knowledgeView).toHaveTextContent('defines')
     expect(knowledgeView).toHaveTextContent('2026-08-01T00:00:00.000Z')
     expect(screen.getAllByTestId('knowledge-run-reference')).not.toHaveLength(0)
@@ -5302,7 +5302,7 @@ describe('App', () => {
       expect(api.refreshRepositoryKnowledge).toHaveBeenCalledWith({ projectId: localProject.id }),
     )
     await waitFor(() =>
-      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard'),
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('本地测试证据规范'),
     )
     await waitFor(() =>
       expect(vi.mocked(api.evaluateGateEnforcement).mock.calls.length).toBeGreaterThan(
@@ -5324,14 +5324,14 @@ describe('App', () => {
     await waitFor(() => expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1))
     fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
     await waitFor(() =>
-      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API Health Endpoint Standard'),
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API 健康端点规范'),
     )
     fireEvent.click(screen.getByRole('button', { name: /刷新仓库知识/ }))
 
     await waitFor(() =>
       expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('indexed · refresh failed'),
     )
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API 健康端点规范')
     expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('/Users/example')
     expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('secret.md')
   })
@@ -5389,10 +5389,10 @@ describe('App', () => {
       resolveSecond?.(secondSnapshot)
     })
     await waitFor(() =>
-      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard'),
+      expect(screen.getByTestId('knowledge-view')).toHaveTextContent('本地测试证据规范'),
     )
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Local Test Evidence Standard')
-    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('API Health Endpoint Standard')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('本地测试证据规范')
+    expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('API 健康端点规范')
   })
 
   it('deep-links Artifact and Event search results back into the inspector', async () => {
