@@ -20,15 +20,19 @@ An AI prompt can produce code, but a team still needs to know what changed, whic
 
 DevFlow keeps repository execution on the developer's machine. It turns requests, designs, diffs, tests, reviews, policy decisions, and costs into evidence that a team can inspect before delivery.
 
-### Workflow + One Agent Group
+### Workflow + Bounded Agent Collaboration
 
-The workflow is the backbone, but the product is more than a workflow editor. Within one Run, a focused Agent group handles three clear responsibilities:
+Within one Run, the workflow organizes three clear Agent responsibilities:
 
 - Workflow Stage Agent turns the request into clarification and design artifacts.
 - Knowledge-Grounded Gate Review Agent uses retrieved team Knowledge, policy, and evidence as grounding to evaluate the current Gate, its conditions, and associated stage artifacts.
-- Coding Agent connects to OpenCode through the CRI boundary and returns code changes, tests, and runtime evidence.
+- Coding Agent uses the governed Coding Executor contract to run OpenCode or the bounded DevFlow-native executor and return code changes, tests, and runtime records.
 
-This is a workflow-driven, single-group Agent mode rather than open-ended multi-agent orchestration. Each Agent works at the right stage and writes its result back to the same evidence chain.
+For tasks that need coordination, a Supervisor assigns ready tasks to Specialists through a fixed
+dependency graph and joins their results within shared budgets. Delegation depth, concurrency,
+capabilities, and workspace writes are bounded. Agent outputs become Workflow Evidence only after
+deterministic validation; workflow transitions and Gate approvals remain governed by trusted
+commands and human decisions.
 
 ### Target Users
 
@@ -48,7 +52,9 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
 ## Implemented Capabilities
 
 - A six-stage Run model covers request intake, Clarify, Design, Build, Test, PR handoff, and Acceptance.
-- A focused Agent group covers workflow-stage generation, Gate Review, and OpenCode-backed coding within the same Run.
+- Workflow Stage and Knowledge-Grounded Gate Review Agents generate stage artifacts and review findings within a Run.
+- One governed Coding Executor contract supports OpenCode and a bounded Native Coding Executor, with explicit project-scoped runtime configuration.
+- Supervisor/Specialist coordination uses fixed task dependency graphs, shared budgets, scoped authority, and single-writer workspace leases.
 - Shared trusted commands enforce current-node order and required evidence across all six stages.
 - Electron selects a local Git repository, validates test commands, runs tests through controlled IPC, and persists local state in SQLite.
 - Coding Agent runs use managed worktrees, explicit permission relay, diff capture, Test Evidence, runtime trace, and cleanup state.
@@ -86,7 +92,7 @@ This is a workflow-driven, single-group Agent mode rather than open-ended multi-
   installation authority. Electron main owns strict Tool registration, opaque scoped
   grants, executable/digest verification, negotiated discovery, cancellation fencing, and bounded
   repository read, managed-workspace edit, saved-test, deterministic-evaluation, and MCP Tool
-  execution. The governed Coding Executor keeps OpenCode and deterministic fixtures behind one
+  execution. The governed Coding Executor keeps OpenCode, the native executor, and deterministic fixtures behind one
   capability-negotiated contract, while project-scoped Native Coding Executor v2 performs bounded
   repository discovery, exact multi-file Change Set generation, human approval, transactional
   managed-worktree writes, saved tests, one approved repair, and crash recovery. It never applies
@@ -147,6 +153,10 @@ flowchart LR
 The Desktop owns local repository access, shell execution, raw runtime detail, and local evidence. Only approved redacted contracts cross into the team layer.
 
 The monorepo separates `apps/desktop`, `apps/web`, `apps/api`, `apps/worker`, and `packages/shared`. The worker remains a narrow asynchronous rollup placeholder.
+
+The [AI-native SDLC alignment](docs/engineering/anthropic-ai-native-sdlc-alignment-2026-09-10.zh-CN.md)
+maps Anthropic's lifecycle guidance to the current architecture, distinguishes Draft PR delivery and
+business acceptance from production deployment and maintenance, and proposes incremental improvements.
 
 ## Local Team Setup Without GitHub
 
@@ -246,7 +256,7 @@ For the API/Web/Postgres team path, use the [self-hosted pilot guide](docs/guide
 - The PR Delivery Package is metadata, not source or publication authority. After an exact signed
   Web approval, GitHub Delivery may publish only the approved commit and create or reconcile one
   Draft pull request; it never merges or silently broadens scope.
-- Real opencode and live Gate Review are opt-in paths that can spend provider quota. They stay outside the default quality gate.
+- Live OpenCode, Native Coding, and Gate Review runtimes require explicit configuration and can spend provider quota. Live-provider runs stay outside the default quality gate.
 - Team Skills/MCP remain management metadata, while one explicitly installed local stdio MCP server
   can execute only through Electron main's verified installation, scoped grant, deadline,
   cancellation, validation, and metadata-only audit boundary. Remote MCP transports remain deferred.

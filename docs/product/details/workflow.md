@@ -1,5 +1,11 @@
 # Core Workflow Detail
 
+The six stages are Clarify, Design, Build, Test, PR Delivery, and Acceptance. Request Intake creates
+the Run; the separate Clarify and Design Gates make eight workflow nodes. This flow ends at a verified
+Draft PR and business signoff. Production deployment, rollback, and ongoing maintenance are separate
+lifecycle responsibilities. The [AI-native SDLC alignment](../../engineering/anthropic-ai-native-sdlc-alignment-2026-09-10.zh-CN.md)
+maps the current implementation to the broader lifecycle and records proposed extensions.
+
 ## 1. Request Intake
 
 User intent:

@@ -489,23 +489,25 @@ explicit live use.
 
 ## Coding Agent Adapter
 
-The DevFlow boundary that hosts an external coding engine such as opencode. DevFlow does not
-rebuild the coding agent; it owns context assembly, permission relay, worktree management, evidence
-capture, tests, and team-safe summaries. In the current workflow model, Coding Agent actions start
-only from build-stage task nodes. The fake engine is the deterministic default for automated
-verification; the real opencode HTTP engine is env-gated and manually smoke-tested until it is stable
-enough to become the default coding engine.
+The integration boundary that hosts an external coding engine such as OpenCode behind the governed
+Coding Executor contract. DevFlow owns context assembly, permission relay, worktree management,
+evidence capture, tests, and team-safe summaries. The native executor is a separate implementation
+of the same contract. In the current workflow model, Coding Agent actions start only from
+build-stage task nodes. Automated verification can explicitly enable deterministic fixtures;
+live OpenCode and native provider use require explicit project/runtime configuration.
 
 ## External Coding Engine
 
-An external agent runtime such as opencode or OpenCode that performs code-writing work behind a
-Coding Agent Adapter. DevFlow uses this external capability instead of implementing its own coding
-agent core.
+An external agent runtime such as OpenCode that performs code-writing work behind a Coding Agent
+Adapter. DevFlow adapts this capability into the governed Coding Executor contract alongside its
+native executor.
 
 ## Coding Agent
 
-The code-writing execution path that changes source code through a managed Coding Agent Adapter,
-permission relay, and worktree. It implements approved work; it does not replace Knowledge Review.
+The code-writing execution path that performs approved work through a Coding Executor, using
+managed-workspace permissions and recorded diff/Test Evidence. Its implementation can be external
+(OpenCode) or DevFlow-native. Knowledge Review and Workflow/Gate decisions remain separate
+responsibilities.
 
 ## Managed Coding Workspace
 
