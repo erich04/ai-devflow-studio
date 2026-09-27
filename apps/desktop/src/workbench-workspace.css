@@ -16,7 +16,7 @@
 .workflow-stage-navigation strong { font-size: 12px; font-weight: 600; color: var(--text); }
 .workflow-stage-navigation small { grid-column: 2; font-size: 10px; white-space: nowrap; }
 .workflow-stage-navigation [aria-current='step'] .stage-nav-index { background: var(--accent); border-color: var(--accent); color: var(--bg); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
-.workflow-stage-navigation .stage-nav--passed .stage-nav-index { border-color: var(--accent); color: var(--accent); }
+.workflow-stage-navigation .stage-nav--passed:not([aria-current='step']) .stage-nav-index { border-color: var(--accent); color: var(--accent); }
 .workflow-stage-navigation button[aria-pressed='true'] { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); border-color: var(--accent); }
 .workflow-stage-navigation button[aria-pressed='true'] strong { color: var(--accent); }
 .stage-selection-pointer { position: absolute; left: calc(50% - 7px); bottom: -19px; color: var(--accent); }
