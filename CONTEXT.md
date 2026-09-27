@@ -544,19 +544,19 @@ Agent 服务商使用的机密信息。Electron 通过桌面凭据边界保存�
 
 ## 编码 Agent 适配器（Coding Agent Adapter）
 
-DevFlow 承载 opencode 等外部编码引擎的边界。在这条外部适配路径中，DevFlow 不重建引擎核心，而是负责上下文组装、权限转发、工作树管理、证据采集、测试和适合团队共享的摘要。当前工作流中，Coding Agent 动作只能从开发阶段的任务节点启动。模拟引擎是自动化验证的确定性默认选项；真实 opencode HTTP 引擎通过环境配置启用，在足够稳定、能够成为默认编码引擎之前，采用人工冒烟测试。V2.0 增加的原生执行器仍遵循上文的编码执行器契约。
+DevFlow 在受治理的编码执行器契约后接入 OpenCode 等外部编码引擎的集成边界。DevFlow 负责上下文组装、权限转发、工作树管理、证据采集、测试和适合团队共享的摘要；原生执行器是同一契约的另一种实现。当前工作流中，Coding Agent 动作只能从开发阶段的任务节点启动。自动化验证可以显式启用确定性测试执行器；真实 OpenCode 和原生模型调用需要明确的项目与运行时配置。
 
 <a id="external-coding-engine"></a>
 
 ## 外部编码引擎（External Coding Engine）
 
-opencode 或 OpenCode 等外部 Agent 运行时，在编码 Agent 适配器后执行代码编写工作。在这条路径中，DevFlow 使用外部能力，而非实现自己的编码引擎核心。
+OpenCode 等外部 Agent 运行时，在编码 Agent 适配器后执行代码编写工作。DevFlow 将这一外部能力接入受治理的编码执行器契约，与原生执行器并列提供受控执行路径。
 
 <a id="coding-agent"></a>
 
 ## 编码 Agent（Coding Agent）
 
-通过受管适配器、权限转发和工作树修改源码的执行路径。它实现已经批准的工作，不取代知识审查。
+通过编码执行器完成已批准工作的代码修改路径，使用受管工作区权限，并记录代码差异与测试证据。它可以由外部 OpenCode 或 DevFlow 原生执行器实现；知识审查、工作流推进与 Gate 决策仍各有独立职责。
 
 <a id="managed-coding-workspace"></a>
 

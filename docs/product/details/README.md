@@ -19,6 +19,7 @@ DevFlow Studio 将 AI 辅助软件开发组织为可评审的交付流程。开�
 - [用户任务](./user-jobs.md)：主要用户与需要完成的工作。
 - [对象模型](./object-model.md)：产品对象与稳定的领域概念。
 - [工作流](./workflow.md)：从需求到交付的流程细节。
+- [AI 原生软件生命周期对照](../../engineering/anthropic-ai-native-sdlc-alignment-2026-09-10.zh-CN.md)：记录历史代码基线上的生命周期映射、架构职责与后续建议，不替代当前路线图。
 - [节点语义](./workflow-node-semantics.md)：不同节点的产品语义、看板摘要、Gate 决策和节点工作区重点。
 - [各端职责](./surfaces.md)：桌面端、Web、API 与共享核心的职责。
 - [证据与信任](./evidence-and-trust.md)：证据链规则、脱敏和信任边界。
