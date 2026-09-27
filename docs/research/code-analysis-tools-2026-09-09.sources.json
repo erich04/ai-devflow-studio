@@ -1,0 +1,183 @@
+{
+  "retrieved_at_utc": "2026-09-09 13:41:01 UTC",
+  "local_date": "2026-09-09",
+  "method": "Read-only official GitHub REST API repository metadata. Stars belong to each whole repository; they are not individual-skill ratings or verified active-user counts.",
+  "repositories": [
+    {
+      "repo": "Egonex-AI/Understand-Anything",
+      "stars": 81878,
+      "forks": 6888,
+      "pushed_at": "2026-09-08T03:31:40Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/Egonex-AI/Understand-Anything"
+    },
+    {
+      "repo": "tirth8205/code-review-graph",
+      "stars": 31281,
+      "forks": 2847,
+      "pushed_at": "2026-08-27T10:35:01Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/tirth8205/code-review-graph"
+    },
+    {
+      "repo": "abhigyanpatwari/GitNexus",
+      "stars": 47176,
+      "forks": 5155,
+      "pushed_at": "2026-09-09T13:27:04Z",
+      "archived": false,
+      "license": "NOASSERTION",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/abhigyanpatwari/GitNexus"
+    },
+    {
+      "repo": "CodeGraphContext/CodeGraphContext",
+      "stars": 4179,
+      "forks": 825,
+      "pushed_at": "2026-09-06T15:46:37Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/CodeGraphContext/CodeGraphContext"
+    },
+    {
+      "repo": "CodeBoarding/CodeBoarding",
+      "stars": 2416,
+      "forks": 202,
+      "pushed_at": "2026-09-09T11:03:55Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/CodeBoarding/CodeBoarding"
+    },
+    {
+      "repo": "oaustegard/claude-skills",
+      "stars": 148,
+      "forks": 5,
+      "pushed_at": "2026-09-09T12:39:44Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/oaustegard/claude-skills"
+    },
+    {
+      "repo": "LerianStudio/ring",
+      "stars": 211,
+      "forks": 27,
+      "pushed_at": "2026-08-19T21:17:18Z",
+      "archived": false,
+      "license": "Apache-2.0",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/LerianStudio/ring"
+    },
+    {
+      "repo": "oraios/serena",
+      "stars": 29071,
+      "forks": 1975,
+      "pushed_at": "2026-09-08T11:26:10Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/oraios/serena"
+    },
+    {
+      "repo": "yamadashy/repomix",
+      "stars": 28263,
+      "forks": 1515,
+      "pushed_at": "2026-09-07T12:57:42Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/yamadashy/repomix"
+    },
+    {
+      "repo": "ktaletsk/learn-codebase",
+      "stars": 54,
+      "forks": 2,
+      "pushed_at": "2026-06-15T22:19:15Z",
+      "archived": false,
+      "license": "MIT",
+      "default_branch": "main",
+      "source": "https://api.github.com/repos/ktaletsk/learn-codebase"
+    },
+    {
+      "repo": "Graphify-Labs/graphify",
+      "stars": 116258,
+      "forks": 11270,
+      "pushed_at": "2026-09-07T19:57:32Z",
+      "archived": false,
+      "license": "Apache-2.0",
+      "source": "https://api.github.com/repos/Graphify-Labs/graphify"
+    },
+    {
+      "repo": "DeusData/codebase-memory-mcp",
+      "stars": 42746,
+      "forks": 3485,
+      "pushed_at": "2026-09-09T05:38:13Z",
+      "archived": false,
+      "license": "MIT",
+      "source": "https://api.github.com/repos/DeusData/codebase-memory-mcp"
+    },
+    {
+      "repo": "Synaptic-Graph/Synaptic",
+      "stars": 27,
+      "forks": 0,
+      "pushed_at": "2026-09-08T04:46:20Z",
+      "archived": false,
+      "license": "AGPL-3.0",
+      "source": "https://api.github.com/repos/Synaptic-Graph/Synaptic"
+    }
+  ],
+  "social": [
+    {
+      "platform": "Hacker News",
+      "title": "Understand Anything",
+      "url": "https://news.ycombinator.com/item?id=47977470",
+      "posted_at": "2026-05-01T17:27:03Z",
+      "points": 169,
+      "comments": 49,
+      "source": "https://hn.algolia.com/api/v1/items/47977470",
+      "interpretation": "Discussion/attention signal with mixed opinions; not an independent product benchmark."
+    },
+    {
+      "platform": "Hacker News",
+      "title": "Code-review-graph: persistent code graph that cuts Claude Code token usage",
+      "url": "https://news.ycombinator.com/item?id=47314090",
+      "posted_at": "2026-03-09T19:22:08Z",
+      "points": 12,
+      "comments": 2,
+      "interpretation": "Author launch post and historical installation feedback."
+    },
+    {
+      "platform": "V2EX",
+      "title": "10 年老项目怎么搞 vibe coding？",
+      "url": "https://www.v2ex.com/t/1224112",
+      "interpretation": "Individual user reports using /understand with additional initial token cost and later retrieval benefit; no controlled measurement."
+    },
+    {
+      "platform": "Reddit",
+      "title": "Best Graph Tool?",
+      "url": "https://www.reddit.com/r/opencodeCLI/comments/1uvuqpj/best_graph_tool/",
+      "interpretation": "Multi-tool comparison request with self-promotional author replies; no consensus ranking."
+    },
+    {
+      "platform": "Reddit",
+      "title": "Codegraph or graphify?",
+      "url": "https://www.reddit.com/r/ClaudeCode/comments/1ueobkd/codegraph_or_graphify/",
+      "interpretation": "Individual reports of agents not consistently invoking graph tools; a GitNexus user reports index rebuilds. Anecdotes, version/environment not controlled."
+    },
+    {
+      "platform": "YouTube",
+      "title": "Graphify: The Knowledge Graph That Reads Your Entire Codebase, Then Explains It Back to You",
+      "url": "https://www.youtube.com/watch?v=mIWxxwNtKUg",
+      "published_on": "2026-04-08",
+      "search_snapshot_views": 47628,
+      "search_snapshot_likes": 1200,
+      "interpretation": "Search-index snapshot of a showcase video; not a live counter or benchmark."
+    }
+  ]
+}
+

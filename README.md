@@ -81,6 +81,8 @@ _人工编写的 PR 材料预览用于展示交付阅读区，其中明确记录
 
 浏览流程时，独立对话保留在节点详情旁。新建会话时可选择执行方式，也可从历史记录重新打开会话，或通过会话页签菜单查看详情和模型调用记录。讨论可以保存为**待确认的节点提案**；保存本身不会修改代码、批准 Gate 或发布 PR。
 
+协作中的委派深度、并发、能力和工作区写入均有明确边界。Agent 输出经过相应的确定性校验后才能作为工作流证据；推进流程和批准 Gate 仍由可信命令及人工决策控制。
+
 <a id="knowledge-memory-and-evidence"></a>
 
 ## 知识、记忆与证据
@@ -276,6 +278,8 @@ scripts/          集成冒烟测试、评估与发布检查
 ```
 
 首次阅读代码，建议依次查看 **[`domain.ts`](packages/shared/src/domain.ts) → [`workflow-transition.ts`](packages/shared/src/workflow-transition.ts) → [`workflow-runtime.ts`](apps/desktop/electron/workflow-runtime.ts) → [`main.ts`](apps/desktop/electron/main.ts) → [`server-request.ts`](apps/api/src/server-request.ts)**，再查看相关桌面或 Web 视图。设计理由可从[数据归属](docs/adr/0003-postgres-sqlite-data-boundary.md)、[有界运行时](docs/adr/0014-bounded-agent-runtime.md)、[记忆生命周期](docs/adr/0018-scoped-agent-memory-lifecycle.md)、[多智能体协作](docs/adr/0019-bounded-multi-agent-coordination.md)和[组织隔离](docs/adr/0023-independent-organizations.md)开始。
+
+[AI 原生软件生命周期对照](docs/engineering/anthropic-ai-native-sdlc-alignment-2026-09-10.zh-CN.md)记录了阶段交接、配置评估与维护反馈的历史分析和增量建议。当前交付边界到经核验的 Draft PR 与业务验收；生产部署、回滚和持续维护需要独立设计与授权。其他代码阅读资料见[研究索引](docs/research/README.md)，当前能力与发布状态仍以本 README 和路线图为准。
 
 <a id="quick-start"></a>
 

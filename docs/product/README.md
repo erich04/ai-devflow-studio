@@ -24,7 +24,7 @@
 ## 文档
 
 - [产品定义](./product-definition.md)：长期产品定位、用户、核心流程、功能模块与边界。当前发布及里程碑状态见路线图。
-- [项目简介](./project-introduction.zh-CN.md)：适合分享的简明介绍，涵盖流程、智能体分工、OpenCode CRI 集成及采用价值。
+- [项目简介](./project-introduction.zh-CN.md)：适合分享的简明介绍，涵盖受治理的流程、OpenCode/原生编码执行器、有界 Agent 协作及简历表述参考。
 - [产品细节](./details/README.md)：为体验设计和实现决策提供依据，按用户任务、对象模型、流程、各端职责、证据与界面重构要点组织。
 - [设计参考](./design-references/README.md)：前端重构所参考的 OpenDesign 原型截图。
 - [产品需求文档](./prd/README.md)：当前产品基线及后续限定范围的产品变更。
