@@ -1,112 +1,129 @@
-# Product States And UI Refactor Anchors
+<a id="product-states-and-ui-refactor-anchors"></a>
 
-## Product States
+# 产品状态与界面重构原则
 
-### Empty
+<a id="product-states"></a>
 
-The user has no real Run or no synced team data.
+## 产品状态
 
-The UI should:
+<a id="empty"></a>
 
-- Explain what is missing.
-- Provide the next action.
-- Avoid pretending fixture data is real user work.
+### 空状态
 
-### Active
+用户没有真实 Run，或尚未同步团队数据。
 
-The Run is progressing through clarification, design, build, test, PR, or acceptance.
+界面应：
 
-The UI should:
+- 说明缺少什么。
+- 提供下一步动作。
+- 不把测试样例伪装成真实用户工作。
 
-- Highlight current node.
-- Show available actions for that node.
-- Show evidence already attached to the Run.
-- Show blockers and warnings near the action they affect.
+<a id="active"></a>
 
-### Paused At Gate
+### 进行中
 
-The Run is waiting for human decision.
+Run 正在经历需求澄清、设计、开发、测试、PR 交付或业务验收。
 
-The UI should:
+界面应：
 
-- Show required role.
-- Show enforcement decision.
-- Show missing evidence.
-- Show Knowledge-Grounded Gate Review and policy findings for the current Gate and stage artifacts; Knowledge is the grounding, not the review subject.
-- Offer approve, reject, or override only when the write path allows it.
+- 突出当前节点。
+- 显示该节点可用动作。
+- 显示已关联到 Run 的证据。
+- 在受影响的动作附近展示阻断项和警告。
 
-### Completed
+<a id="paused-at-gate"></a>
 
-The Run has final Acceptance. When GitHub Delivery is enabled, the canonical Run also contains the
-verified remote head and matching Draft pull-request completion; completion must never merge or
-otherwise mutate that pull request.
+### 暂停于 Gate
 
-The UI should:
+Run 等待人工决定。
 
-- Show the final evidence bundle.
-- Show final Gate decision.
-- Preserve audit trail.
-- Keep follow-up actions separate from the completed Run state.
+界面应：
 
-### Failed / Cancelled / Timed Out
+- 显示所需角色。
+- 显示执行策略决定。
+- 显示缺失证据。
+- 显示针对当前 Gate 及阶段产物的知识门禁审查和策略发现；知识是审查依据，不是被审查对象。
+- 只有写入路径允许时，才提供批准、拒绝或例外审批。
 
-The product should make terminal failures explicit.
+<a id="completed"></a>
 
-The UI should:
+### 已完成
 
-- Show where the failure occurred.
-- Preserve partial evidence.
-- Offer retry or remediation only through explicit user action.
+Run 已完成最终业务验收。启用 GitHub 交付时，权威 Run 还包含已核实的远端提交与匹配的草稿 PR 完成记录；完成状态不会合并或以其他方式修改该 PR。
 
-### GitHub Delivery Recovery
+界面应：
 
-A recoverable Delivery Request remains visible with one explicit operator action:
+- 展示最终证据资料包。
+- 展示最终 Gate 决策。
+- 保留审计轨迹。
+- 将后续动作与已完成 Run 状态分开。
 
-- Revise creates a new pre-publication Delivery Intent revision and invalidates prior approval.
-- Resume continues the same `recovery_required` attempt and remote identity.
-- Retry creates a new attempt only after the exact remote predecessor is proven `failed` or
-  `revoked` by the current pairing claimant.
-- Stop parks the exact active attempt for manual recovery without claiming remote rollback.
+<a id="failed--cancelled--timed-out"></a>
 
-These actions preserve immutable history and never merge, force-push, delete a branch, or reuse a
-stale approval.
+### 失败 / 取消 / 超时
 
-## UI Refactor Anchors
+产品应明确展示终态失败。
 
-The next UI refactor should preserve these product anchors:
+界面应：
 
-- Evidence Chain is the center of gravity.
-- Desktop is for local action and private execution.
-- Web is for team visibility and redacted oversight.
-- Gates are decision points, not decorative statuses.
-- Agents are runtime participants, not the whole product.
-- Knowledge, policy, tests, and budget should appear as evidence and constraints around delivery.
-- The user should always know the current stage, blocking reason, next action, and evidence status.
+- 显示失败位置。
+- 保留部分证据。
+- 只有用户明确操作后，才执行重试或修复。
 
-## Near-Term Product Gaps
+<a id="github-delivery-recovery"></a>
 
-These are product gaps, not necessarily immediate implementation tasks:
+### GitHub 交付恢复
 
-- Better request intake ergonomics.
-- Clearer stage-completion controls for clarify and design.
-- Deeper PR draft editing and handoff.
-- Acceptance bundle preview and final signoff polish.
-- Gate Review provider setup flow.
-- Runtime budget administration UX.
-- Team collaboration and conflict visibility.
-- Deeper GitHub Delivery conflict visibility and operator ergonomics after the governed Draft path
-  is released.
+可恢复的交付请求保持可见，并提供明确的操作者动作：
 
-## Out Of Scope For The UI Refactor
+- 修订（Revise）：创建新的发布前交付意图版本，使旧审批失效。
+- 继续（Resume）：继续同一个 `recovery_required` 尝试和远端身份。
+- 重试（Retry）：仅在当前配对领取者证明精确远端前次尝试已 `failed` 或 `revoked` 后，才创建新尝试。
+- 停止（Stop）：停放指定的活动尝试供人工恢复，不声称远端操作已回滚。
 
-Unless explicitly promoted by a future plan, the UI refactor should not introduce:
+这些动作保留不可变历史，不会合并、强制推送、删除分支或复用过期审批。
 
-- Public SaaS onboarding.
-- Billing.
-- Enterprise SSO.
-- Hosted multi-tenancy.
-- Automatic cloud deployment.
-- Signed installer or auto-update flows.
-- Real MCP process execution.
-- Full RAG/vector retrieval provider integration.
-- Autonomous publication, Delivery Request approval, pull-request merge, or deployment.
+<a id="ui-refactor-anchors"></a>
+
+## 界面重构原则
+
+下一次界面重构应保留以下产品原则：
+
+- 证据链是核心。
+- 桌面端负责本地动作与私有执行。
+- Web 负责团队可见性与脱敏监督。
+- Gate 是决策点，不是装饰性状态。
+- Agent 是运行参与者，不是整个产品。
+- 知识、策略、测试和预算应作为交付周围的证据与约束出现。
+- 用户应始终了解当前阶段、阻断原因、下一步动作和证据状态。
+
+<a id="near-term-product-gaps"></a>
+
+## 近期产品缺口
+
+以下是产品缺口，不一定都是立即实施的任务：
+
+- 改善需求录入体验。
+- 使澄清和设计阶段的完成控件更清楚。
+- 更深入的 PR 草稿编辑与交接。
+- 优化验收资料包预览与最终签署。
+- 门禁审查服务提供方配置流程。
+- 运行时预算管理体验。
+- 团队协作与冲突可见性。
+- 在受治理的草稿交付路径发布后，进一步改善 GitHub 交付冲突可见性和操作者体验。
+
+<a id="out-of-scope-for-the-ui-refactor"></a>
+
+## 界面重构范围之外
+
+除非未来计划明确纳入，本次界面重构不应引入：
+
+- 公共 SaaS 注册流程。
+- 计费。
+- 企业 SSO。
+- 托管多租户。
+- 自动云端部署。
+- 签名安装器或自动更新流程。
+- 真实 MCP 进程执行。
+- 完整 RAG/向量检索服务集成。
+- 自主发布、交付请求审批、PR 合并或部署。

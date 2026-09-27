@@ -1,123 +1,60 @@
-# Independent-organization validation — 2026-09-21
+<a id="independent-organization-validation--2026-09-21"></a>
 
-Issue #128; candidate branch `codex/multi-organization-tenancy-20260921`, based on
-`a0b574688d1e297c67b68ae8eeb48068f921ab6f`. This record distinguishes browser acceptance,
-production runtime integration and deterministic external-provider substitutes.
+# 独立组织验证 — 2026-09-21
 
-## Environment and preservation
+对应 Issue #128；候选分支 `codex/multi-organization-tenancy-20260921`，基于 `a0b574688d1e297c67b68ae8eeb48068f921ab6f`。本记录区分浏览器验收、生产运行时集成和确定性的外部服务替代。这是当时的验证结果，不替代后续版本验收。
 
-The team QA stack uses its own Postgres 16 database, API and Web ports. A restricted database
-backup preceded migration 29. The user's original To Do repository, Run, conversations,
-Provider credentials and Desktop profile were not reset or advanced. The Postgres integration
-runner creates a random schema, upgrades a populated schema-28 account, then removes only its
-schema and temporary Git/SQLite directories. No test below publishes a GitHub PR or spends LLM quota.
+<a id="environment-and-preservation"></a>
 
-A final read-only comparison with the pre-fix SQLite backup found exactly one original Run,
-one conversation, one Provider configuration and one pairing record. All four tables' rows
-are unchanged. The comparison emits counts/equality only, never credentials or conversation text.
+## 环境与数据保护
 
-## Automated evidence
+团队 QA 环境使用独立的 Postgres 16 数据库、API 和 Web 端口。在迁移 29 前已创建受限访问的数据库备份。用户原有 To Do 仓库、Run、会话、服务商凭据和桌面数据配置均未重置或推进。Postgres 集成启动器创建随机 schema，升级含已有账户数据的 schema 28，然后只删除自己的 schema 和临时 Git/SQLite 目录。以下测试均不发布 GitHub PR，也不消耗模型额度。
 
-`corepack pnpm test:organization-postgres` passes **15 tests** against real Postgres. It is a
-required CI Postgres step; the launcher rejects a missing database URL rather than silently
-reporting a skipped suite as acceptance.
+最后以只读方式对比修复前的 SQLite 备份，原有数据仍为一个 Run、一个会话、一份服务商配置和一条配对记录。四张表的行内容完全相同。比较只输出数量及是否一致，不输出凭据或聊天正文。
 
-- Schema 28 → 29 preserves the legacy user/account and v1 cookie; v2 selection isolates newly
-  created organizations, including equal project slugs and onboarding switched back off.
-- A second verified-account test adapter receives its own organization and cannot select or read
-  the first. Invitations require the exact numeric account, explicit project grants, expiry and
-  one-use acceptance. Wrong accounts, foreign projects, consumed/revoked/expired tokens fail.
-- Last-owner removal fails. Archiving stops business access and revokes existing Desktop tokens;
-  restoration keeps the project. Disabling one membership does not disable that account's other
-  organization. Pending Gate receipts/inbox entries lose authority when the requester is disabled.
-- Cross-origin/non-JSON organization writes fail. Foreign-project budget upsert and approval
-  requests fail. Provider credentials cannot be read with another organization's identity.
-- GitHub repository access requires the operator's exact organization/installation/repository
-  assignment. Other repositories or organizations fail, including after onboarding is closed.
-  A clean legacy single-team deployment still permits its original GitHub access with the flag
-  off and no assignments; explicitly enabling independent organizations requires assignments.
-- Two API-paired Desktop Agent runtimes use separate SQLite profiles. Cancelling one leaves the
-  other active; the latter recovers after reopening. Retry keeps the original scope. Re-pairing
-  to the other organization prevents the old pending task from executing.
-- Two independent accounts/projects run all eight nodes through the production workflow runtime:
-  clarification, requirement Gate, design, design Gate, build, tests, delivery and acceptance.
-  Every actual transition is uploaded through the paired API. Both end at version 11/completed.
-  Managed Git worktrees receive separate marker changes; real local Node assertions pass;
-  source checkouts remain clean. SQLite reopening retains the correct artifacts, test evidence
-  and permissions. Foreign Run/evidence reads return no data, and cross-project summary writes
-  fail. Non-empty legacy artifact rows, cost entries and review summaries are also populated:
-  each paired API view contains only its own completed Run, artifact, expense and review;
-  deleting or uploading review evidence for the other Run is rejected.
+<a id="automated-evidence"></a>
 
-The last scenario uses deterministic clarification/design content, the existing fake coding
-adapter and a synthetic GitHub delivery outcome. Git/SQLite, permission records, workflow
-transitions, local test execution, paired HTTP handlers and database queries are real. It is
-**not** evidence of two live LLM deliveries or real GitHub publication. Separate live-provider
-records cover [To Do delivery](./real-deepseek-todo-e2e-20260917.md),
-[OpenCode stage generation](./stage-opencode-live-20260921.md) and
-[OpenCode conversations](./workbench-opencode-harness-20260920.md).
+## 自动化证据
 
-The full `corepack pnpm verify` run at `844a844` passed workspace/smoke typechecks, **4,036 tests**
-across 297 files and the cross-platform check. Its then-14 database tests were intentionally skipped
-without the dedicated URL. The final Postgres command above includes the additional compatibility
-case. The subsequent 67 API tests, 60 OpenCode engine tests, API typecheck and organization-smoke
-typecheck also pass. `test:postgres-smoke` also
-passes against a separate disposable database, including migration/seed, pairing, sync, budget,
-review, runtime, memory and GitHub-delivery contracts; that database was removed afterward.
+`corepack pnpm test:organization-postgres` 在真实 Postgres 上通过 **15 项测试**。它是 CI 必跑的 Postgres 步骤；未提供数据库 URL 时启动器直接拒绝，不会把跳过测试算成验收通过。
 
-## Browser acceptance
+- schema 28 → 29 保留旧用户、账户及 v1 cookie；v2 组织选择隔离新建组织，覆盖相同项目 slug 和关闭新组织注册后的行为。
+- 第二个已验证账户测试适配器拥有独立组织，不能选择或读取第一个组织。邀请要求精确数字账户 ID、明确项目授权、有效期和一次性接受；错误账户、外部项目、已使用、已撤销或过期令牌均失败。
+- 不能移除最后一名所有者。归档组织会停止业务访问并撤销已有桌面令牌；恢复后项目仍存在。禁用某个组织的成员关系不影响该账户在其他组织的成员关系。请求者被禁用后，待处理 Gate 回执与收件箱条目失去授权效力。
+- 拒绝跨源或非 JSON 的组织写入，拒绝其他组织项目的预算更新与审批请求；不能用其他组织身份读取服务商凭据。
+- GitHub 仓库访问要求操作者的组织、安装和仓库分配完全匹配；其他仓库或组织均失败，关闭新组织注册后仍如此。干净的旧单团队部署在开关关闭且没有分配记录时保留原 GitHub 访问；明确启用独立组织后必须配置分配记录。
+- 两个通过 API 配对的桌面 Agent 运行时使用各自的 SQLite 配置。取消一个不会影响另一个；后者重新打开后可恢复。重试保留原作用域。重新配对到另一个组织后，旧的待处理任务不能执行。
+- 两个独立账户与项目均通过生产工作流运行时的八个节点：澄清、需求 Gate、设计、设计 Gate、开发、测试、交付和验收。每次实际状态转换都上传至配对 API，最终均为 v11/completed。受管 Git 工作树分别写入标记变更，真实本地 Node 断言通过，原仓库保持干净。重新打开 SQLite 后保留正确产物、测试证据和权限。跨项目 Run/证据读取返回空，跨项目摘要写入失败。同时写入非空的旧版产物、费用和审查摘要，确认各配对 API 视图仅包含本项目已完成 Run、产物、费用和审查；删除或上传另一个 Run 的审查证据被拒绝。
 
-Using the development-only local login in the isolated QA stack (production pilot still rejects
-that login mode), the real Web interface was exercised through these operations:
+最后一个场景使用确定性的澄清与设计内容、已有模拟编码适配器和合成 GitHub 交付结果。Git/SQLite、权限记录、工作流转换、本地测试执行、配对 HTTP 处理器和数据库查询均真实执行。它**不能证明两个真实模型交付或真实 GitHub 发布**。真实服务商验证另见 [To Do 交付](./real-deepseek-todo-e2e-20260917.md)、[OpenCode 阶段生成](./stage-opencode-live-20260921.md)和 [OpenCode 会话](./workbench-opencode-harness-20260920.md)。
 
-1. Preserve **Local Team / Policy QA**; create and switch to **Tenancy UI QA**. The new team shows
-   no existing projects. A duplicate slug gives a recoverable conflict and retains the form.
-2. Create **Tenancy UI Todo** with the same project slug as the original team. Create a version-1
-   request, **组织 B 的隔离验证需求**. The project has a distinct ID.
-3. Archive this organization. The business workbench displays its unavailable state and an
-   organization-management recovery link. Restore it, reopen the project and verify the same
-   request is retained.
-4. Switch back to **Local Team**. Only **Policy QA** appears in its project list.
+`844a844` 的完整 `corepack pnpm verify` 通过工作区与冒烟测试类型检查、297 个文件中的 **4,036 项测试**及跨平台检查。当时的 14 项数据库测试因未提供专用 URL 而按设计跳过。上面的最终 Postgres 命令包含后来补充的兼容场景。之后 67 项 API 测试、60 项 OpenCode 引擎测试、API 类型检查和组织冒烟测试类型检查也通过。`test:postgres-smoke` 在另一独立临时数据库通过，覆盖迁移、种子、配对、同步、预算、审查、运行时、记忆和 GitHub 交付契约；随后已删除该数据库。
 
-This found and fixed a form hydration gap: before React was ready, native submission could put
-form fields into a GET URL. The forms now use POST and remain disabled until their handlers are
-ready. A component regression also checks that changing one's own owner role refreshes authority
-instead of immediately attempting another now-forbidden owner read.
+<a id="browser-acceptance"></a>
 
-## Advisory review and CI follow-up
+## 浏览器验收
 
-Cursor's separate GitHub-boundary review found no reproducible assignment bypass. The review's
-single-team compatibility and runtime-configuration gaps were accepted: real Postgres now verifies
-the legacy allow case, while the runtime tests exercise exact assignment matching through the
-actual repository authorization path and reject invalid configuration before opening a DB client.
-The deployment guide now states that archived or residual demo organizations also require explicit
-assignments. Postgres continues to implement the authorization hook; the seed adapter remains
-unavailable to independent-organization deployments. No extra presentation-only assertion was added
-for the existing 403 copy. The parallel workflow test above is complete, with its external-provider
-substitutes stated explicitly; it does not establish live two-team GitHub publication.
+在隔离 QA 环境使用仅限开发的本地登录，实际操作 Web 界面如下；生产试用模式仍拒绝这种登录方式：
 
-The first remote Windows run (`35567343984`) exposed an OpenCode test clock race: advancing 250 ms
-at once could cross the synthetic 200 ms deadline while response-body completion was pending.
-The tests now advance in small increments only while the result is pending. Success, transport
-failure with a recovered diff, busy-session timeout and slow-permission cases remain checked.
-Production timeout limits are unchanged. The final implementation commit `74c2a50` passes all five
-jobs in [CI run 35568113956](https://github.com/erich04/ai-devflow-studio/actions/runs/35568113956):
-macOS verify has 4,038 passed and 15 database-only skipped tests; Windows has 4,034 passed and
-19 database/platform-specific skipped tests. The separate Postgres job passes all 15 organization
-tests, the existing integration smoke and five GitHub delivery tests. Docker smoke and Docker
-lifecycle smoke also pass.
+1. 保留 **Local Team / Policy QA**，新建并切换到 **Tenancy UI QA**。新团队不显示已有项目；重复 slug 返回可恢复冲突且保留表单内容。
+2. 使用与原团队相同的项目 slug 新建 **Tenancy UI Todo**，创建 v1 工作请求“组织 B 的隔离验证需求”。新项目 ID 独立。
+3. 归档该组织。业务工作台显示不可用状态及组织管理恢复入口。恢复后重新打开项目，确认原工作请求仍在。
+4. 切回 **Local Team**，项目列表只显示 **Policy QA**。
 
-## Boundaries and remaining release work
+这发现并修复了表单尚未完成 React 水合时的缺口：原生提交可能把表单字段放进 GET URL。现在表单使用 POST，并在处理器准备好之前保持禁用。组件回归同时验证：修改自己的所有者角色后会刷新权限，而不是立刻继续发起已无权进行的所有者读取。
 
-The default remains a self-hosted single-team deployment; independent organizations require an
-explicit flag and authenticated Postgres. Closing onboarding does not delete organizations or
-admit unknown invitees. One Desktop profile has one active pairing; use separate profiles/devices
-for parallel organizations. Application SQL scoping is tested; database RLS and hosted shared
-execution are not claimed. Full source, conversation memory and knowledge content remain local;
-common built-in knowledge/templates remain application resources.
+<a id="advisory-review-and-ci-follow-up"></a>
 
-The separate [#133 Web-to-Electron policy acceptance](./team-policy-web-electron-20260921.md)
-now passes the actual warn→block→warn behavior comparison and confirms unchanged Run data.
-No signing identity was available for #135's Developer-ID-signed installation check, which remains
-open. Neither this document nor green integration tests represent a release signoff or permission
-to merge the PR stack.
+## 辅助审查与 CI 跟进
+
+Cursor 的独立 GitHub 权限边界审查未发现可复现的分配绕过。审查提出的单团队兼容和运行时配置覆盖缺口已接受：真实 Postgres 验证旧部署允许访问的场景，运行时测试通过实际仓库授权路径验证精确分配，并在打开数据库客户端前拒绝无效配置。部署指南补充说明：归档或残留的演示组织也需要明确分配。授权钩子仍由 Postgres 实现，种子适配器不支持独立组织部署。未针对已有 403 文案额外增加只检查显示的断言。上面的并行工作流测试已完成，但其外部服务替代范围已明确，不代表真实双团队 GitHub 发布通过。
+
+第一次远程 Windows 运行 `35567343984` 暴露 OpenCode 测试时钟竞态：一次推进 250 ms，可能在响应正文尚未完成时越过合成的 200 ms 截止点。测试改为仅在结果未返回时小步推进时钟；仍验证成功、恢复差异后的传输失败、忙会话超时和慢权限响应。生产超时限制不变。最终实现提交 `74c2a50` 通过 [CI 35568113956](https://github.com/erich04/ai-devflow-studio/actions/runs/35568113956) 的五个任务：macOS 为 4,038 项通过、15 项数据库专用测试跳过；Windows 为 4,034 项通过、19 项数据库或平台专用测试跳过。独立 Postgres 任务通过全部 15 项组织测试、已有集成冒烟测试和五项 GitHub 交付测试；Docker 冒烟与生命周期冒烟也通过。
+
+<a id="boundaries-and-remaining-release-work"></a>
+
+## 边界与剩余发布工作
+
+默认仍是自托管单团队部署；独立组织需要显式开关和经过身份验证的 Postgres。关闭新组织注册不会删除已有组织，也不会接受未知被邀请者。一个桌面数据配置只保持一个有效配对；并行组织应使用独立配置或设备。已验证应用 SQL 的作用域约束，不宣称实现数据库 RLS 或托管共享执行。完整源码、聊天记忆和知识正文仍留在本地，通用内置知识与模板仍是应用资源。
+
+独立的 [#133 Web 到 Electron 策略验收](./team-policy-web-electron-20260921.md)已通过实际 warn→block→warn 行为对比，确认 Run 数据未变。#135 的 Developer ID 签名安装检查缺少可用签名身份，仍保持 open。本记录和绿色集成测试均不等于发布签署，也不等于批准合并 PR 栈。

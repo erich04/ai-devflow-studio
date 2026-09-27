@@ -3,9 +3,13 @@ import type { AgentReviewResult, RecordAgentReviewFeedbackInput } from '@ai-devf
 
 export type RecordReviewFeedback = (input: RecordAgentReviewFeedbackInput) => Promise<AgentReviewResult>
 
-export function ReviewEvidenceDetails({ review, onFeedback }: {
+export function ReviewEvidenceDetails({ review, onFeedback, onToggleRevision, revisionSelected = [], onlyIndex, onDiscuss }: {
+  onlyIndex?: number | undefined
+  onDiscuss?: ((index: number) => void) | undefined
   review: AgentReviewResult
   onFeedback?: RecordReviewFeedback | undefined
+  onToggleRevision?: ((index: number) => void) | undefined
+  revisionSelected?: number[] | undefined
 }) {
   const [feedback, setFeedback] = useState(review.feedback ?? [])
   const [editing, setEditing] = useState<number | null>(null)
@@ -30,6 +34,7 @@ export function ReviewEvidenceDetails({ review, onFeedback }: {
   return <section className="review-evidence-details" aria-label="审查意见与原文依据">
     <p>以下是模型意见，请结合原文核对。反馈只记录你的判断，不会自动批准 Gate 或取消策略限制。</p>
     {review.missingEvidence.map((summary, index) => {
+      if (onlyIndex !== undefined && onlyIndex !== index) return null
       const detail = review.missingEvidenceDetails?.find((item) => item.index === index)
       const assessment = detail?.assessment ?? 'unverified'
       const notice = assessment === 'explicit_non_goal' ? '待复核：引用位于非目标章节，请检查原文是否已解决这条意见。'
@@ -47,6 +52,8 @@ export function ReviewEvidenceDetails({ review, onFeedback }: {
         {feedback.filter((item) => item.missingEvidenceIndex === index).map((item) => <p key={item.id}>
           已记录人工反馈：{item.reason}<small> · {item.createdAt}</small>
         </p>)}
+        {onToggleRevision && <button type="button" onClick={() => onToggleRevision(index)} aria-pressed={revisionSelected.includes(index)}>{revisionSelected.includes(index) ? '移出修订意见' : '加入修订意见'}</button>}
+        {onDiscuss && <button type="button" onClick={() => onDiscuss(index)}>在右侧讨论</button>}
         {onFeedback && editing !== index ? <button type="button" disabled={busy} onClick={() => { setEditing(index); setReason(''); setError('') }}>反馈误报</button> : null}
         {editing === index ? <form onSubmit={(event) => { event.preventDefault(); void save(index) }}>
           <label>误报说明<textarea aria-label="误报说明" maxLength={1000} value={reason} disabled={busy} onChange={(event) => setReason(event.target.value)} placeholder="例如：哪条已确认决定与这条意见不符？" /></label>

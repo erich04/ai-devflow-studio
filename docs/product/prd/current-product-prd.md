@@ -1,342 +1,271 @@
-# DevFlow Studio Current Product PRD
+<a id="devflow-studio-current-product-prd"></a>
 
-Status: Current released baseline; V2.2 Multi-Agent and Execution Tenancy implementation active
-Last updated: 2026-08-13
+# DevFlow Studio 产品基线 PRD
 
-## Source Documents
+原文状态：当前已发布基线；V2.2 多 Agent 与执行租户隔离正在实现。
+原文最后更新：2026-08-13。
 
-- [`Product Definition`](../product-definition.md)
-- [`Product Details`](../details/README.md)
-- [`Roadmap`](../../roadmap.md)
-- [`v1.3 Delivery Flow Completion`](../../plans/v1.3-delivery-flow-completion.md)
-- [`V1.5 GitHub Delivery PRD`](./v1.5-github-delivery-prd.md)
-- [`V2.0 Native Agent Runtime PRD`](./v2.0-native-agent-runtime-prd.md)
-- [`V2.1 Evaluated Retrieval and Memory PRD`](./v2.1-evaluated-retrieval-memory-prd.md)
-- [`V2.2 Multi-Agent and Execution Tenancy PRD`](./v2.2-multi-agent-execution-tenancy-prd.md)
-- [`Bounded Agent Runtime`](../../adr/0014-bounded-agent-runtime.md)
-- [`Governed Coding Executor`](../../adr/0015-governed-coding-executor.md)
-- [`Tool And MCP Execution Authority`](../../adr/0016-tool-mcp-execution-authority.md)
-- [`GitHub App Delivery Authority`](../../adr/0013-github-app-delivery-authority.md)
-- [`Domain Context`](../../../CONTEXT.md)
+本次中文化保留上述版本快照与当时契约，当前发布进度以路线图为准；当前工作区布局以 #171、#174、#177 的最新决策为准。
 
-## Problem Statement
+<a id="source-documents"></a>
 
-Small engineering teams are adopting AI-assisted coding, but the actual delivery process often stays
-ad hoc: prompts live in chat tools, implementation happens in local terminals, test results are
-scattered, policy decisions are informal, and reviewers only see a partial result at the end.
+## 来源文档
 
-That creates three product problems:
+- [产品定义](../product-definition.md)
+- [产品详细设计](../details/README.md)
+- [路线图](../../roadmap.md)
+- [v1.3 交付流程补全](../../plans/v1.3-delivery-flow-completion.md)
+- [V1.5 GitHub 交付 PRD](./v1.5-github-delivery-prd.md)
+- [V2.0 原生 Agent 运行时 PRD](./v2.0-native-agent-runtime-prd.md)
+- [V2.1 检索与记忆评估 PRD](./v2.1-evaluated-retrieval-memory-prd.md)
+- [V2.2 多 Agent 与执行租户隔离 PRD](./v2.2-multi-agent-execution-tenancy-prd.md)
+- [有边界的 Agent 运行时](../../adr/0014-bounded-agent-runtime.md)
+- [受治理的编码执行器](../../adr/0015-governed-coding-executor.md)
+- [工具与 MCP 执行权限](../../adr/0016-tool-mcp-execution-authority.md)
+- [GitHub App 交付权限](../../adr/0013-github-app-delivery-authority.md)
+- [领域上下文](../../../CONTEXT.md)
 
-- Developers need local AI assistance without losing control over repositories, commands, secrets,
-  or provider credentials.
-- Leads need enough evidence to approve risky delivery stages without reading raw local logs or
-  trusting a generated summary blindly.
-- Team managers need delivery, cost, policy, and risk visibility without turning DevFlow into a
-  public SaaS, CI replacement, or autonomous merge bot.
+<a id="problem-statement"></a>
 
-## Solution
+## 问题描述
 
-DevFlow Studio is a self-hosted AI development workflow workbench for small engineering teams. It
-turns an AI-assisted code change from a raw request into a governed delivery flow with local
-execution, evidence capture, policy-aware Gates, cost visibility, review artifacts, and redacted team
-sync.
+小型工程团队已经使用 AI 辅助编码，但交付过程往往仍然零散：提示词保存在聊天工具，实现发生在本地终端，测试结果分散，策略决定不正式，审查者只能在最后看到部分结果。
 
-The product is not a generic chat surface. It is a workflow and evidence system. A Run should move
-from request intake through clarification, design, build, test, PR draft, and acceptance while
-preserving the evidence needed for human review.
+由此产生三个产品问题：
 
-## Target Users
+- 开发者需要本地 AI 辅助，同时保留对仓库、命令、密钥和模型凭据的控制。
+- 技术负责人需要足够证据审批高风险交付阶段，无须阅读原始本地日志，也不应盲目信任生成摘要。
+- 团队管理者需要了解交付、费用、策略和风险，同时保持产品作为自托管工作台的定位。
 
-- Developer: runs local AI-assisted work, manages repository context, approves local tool access,
-  captures tests and diffs, and syncs redacted summaries.
-- Tech Lead / Reviewer: evaluates Gates, policy findings, Knowledge-Grounded Gate Review output, test evidence,
-  PR draft handoff, and acceptance readiness.
-- Team Manager / Project Owner: monitors project delivery health, active Runs, evidence coverage,
-  policy state, runtime budget usage, and team workflow adoption.
+<a id="solution"></a>
 
-## User Stories
+## 解决方案
 
-1. As a developer, I want to create a Run from a raw software request, so that the delivery work has
-   a durable starting point.
-2. As a developer, I want DevFlow to create a standard workflow from the request, so that I can see
-   the expected path from clarification to acceptance.
-3. As a developer, I want to select a local repository, so that AI-assisted work runs against the
-   correct project.
-4. As a developer, I want local paths, raw logs, prompts, patches, and secrets to stay local, so that
-   team visibility does not leak private execution data.
-5. As a developer, I want to capture clarification output, so that the request becomes goals,
-   non-goals, acceptance criteria, and open questions.
-6. As a developer, I want to capture design output, so that implementation assumptions and testing
-   strategy are reviewable before coding starts.
-7. As a developer, I want Coding Agent work to run in a managed workspace, so that generated edits do
-   not directly mutate my primary checkout.
-8. As a developer, I want to approve or reject tool permission requests, so that local actions remain
-   under human control.
-9. As a developer, I want dependency bootstrap and tool activity to be visible, so that I can
-   understand what happened during a Coding Agent Run.
-10. As a developer, I want to run a configured test command, so that DevFlow captures durable Test
-    Evidence.
-11. As a developer, I want failed, timed-out, and passed tests to be explicit, so that I know
-    whether the Run can proceed.
-12. As a developer, I want DevFlow to create a PR draft artifact, so that delivery handoff is based
-    on request, design, diff, test, policy, budget, and review evidence.
-13. As a developer, I want DevFlow to create an acceptance evidence bundle, so that final signoff has
-    a single reviewable artifact.
-14. As a tech lead, I want Gates to show required evidence and policy state, so that approval is not
-    just a decorative UI action.
-15. As a tech lead, I want Gate approval to be enforced in write paths, so that disabled buttons are
-    not the only protection.
-16. As a tech lead, I want to see Gate Review findings grounded in retrieved Knowledge, so that risks
-    and missing evidence in the current Gate and its stage artifacts are surfaced before risky stages.
-17. As a tech lead, I want policy warnings, blockers, hard-blocks, and override paths to be explicit,
-    so that governance decisions are auditable.
-18. As a tech lead, I want override decisions to require a reason and role-aware constraints, so that
-    exceptions are deliberate.
-19. As a tech lead, I want budget guard decisions before paid provider usage, so that runtime cost
-    does not surprise the team.
-20. As a tech lead, I want retries to preserve prior evidence and remediation context, so that
-    follow-up work is traceable.
-21. As a reviewer, I want to answer what was requested, what changed, what was tested, what agents
-    concluded, what policy applied, and who approved, so that final delivery risk is clear.
-22. As a team manager, I want a Web Team Console with redacted summaries, so that I can monitor
-    delivery health without opening local developer machines.
-23. As a team manager, I want runtime budget policy administration, so that provider spending can be
-    governed per project.
-24. As a project owner, I want Desktop pairing to connect a local client to a team project, so that
-    redacted sync uses scoped credentials instead of demo state.
-25. As a project owner, I want project-level policy settings, so that Gates match the team's risk
-    tolerance.
-26. As a team member, I want DevFlow to distinguish local, remote, seed, and adapter-originated data,
-    so that I do not confuse fixtures with real work.
-27. As a reviewer, I want the active Run to show current stage, blockers, warnings, next action, and
-    evidence status, so that I can decide what to do next quickly.
-28. As a developer, I want browser preview to avoid a second workflow engine and fail closed for
-    execution actions, so that only the Electron main-process runtime can advance trusted state.
-29. As a lead, I want redacted Gate Review and Coding Agent summaries in the team view, so that local
-    execution is visible without exposing raw data.
-30. As a small team, I want a self-hosted deployment path, so that we can validate DevFlow without
-    waiting for public SaaS readiness.
-31. As a developer, I want Desktop to prepare one immutable Delivery Intent from the canonical
-    managed worktree and expected commit, so that GitHub never receives stale or unrelated code.
-32. As a lead or owner, I want to approve one exact redacted Delivery Request through a signed Web
-    session, so that Desktop bearer authority cannot approve its own remote write.
-33. As an owner, I want to configure and revoke one verified GitHub App repository binding per Team
-    Project, so that delivery authority is narrow and independently revocable.
-34. As a developer, I want one approved commit published without force to one `devflow/` branch and
-    represented by one Draft pull request, so that delivery is exact and reviewable.
-35. As a developer, I want explicit Revise, Resume, Retry, and Stop actions with distinct semantics,
-    so that recovery never silently reuses approval or creates another logical delivery.
-36. As an Acceptance reviewer, I want the exact remote head and Draft pull-request evidence in the
-    canonical Run before completion, so that a PR handoff artifact alone is insufficient.
-37. As an operator, I want restart reconciliation and revocation to avoid duplicate credentials,
-    pushes, or pull requests, so that ambiguous remote effects remain bounded.
+DevFlow Studio 是面向小型工程团队的自托管 AI 开发工作台，将原始代码修改请求转化为受治理的交付流程，包含本地执行、证据记录、策略感知 Gate、费用可见性、审查产物和脱敏团队同步。
 
-## Core Requirements
+产品核心是工作流与证据系统。一个 Run 应从请求受理依次经过澄清、设计、实现、测试、PR 草稿和验收，并保留人工审查所需的证据。
 
-### Request-To-Delivery Workflow
+<a id="target-users"></a>
 
-- A Run starts from a real request and creates a raw-request artifact.
-- Every Run uses the standard stages: clarify, design, build, test, PR, and accept.
-- Gate approval advances the workflow through defined edges rather than hard-coded status jumps.
-- Acceptance approval completes the Run and preserves the final evidence bundle.
+## 目标用户
 
-### Evidence Chain
+- 开发者：执行本地 AI 辅助任务，管理仓库上下文，审批本地工具访问，记录测试与差异，同步脱敏摘要。
+- 技术负责人/审查者：评估 Gate、策略发现、基于知识的门禁审查、测试证据、PR 草稿交接和验收就绪情况。
+- 团队管理者/项目负责人：监控项目交付健康、活动 Run、证据覆盖、策略状态、运行预算用量与团队工作流使用情况。
 
-- Every meaningful workflow action must create evidence or explain why evidence is unavailable.
-- Evidence must be attached to a Run and, when possible, to a specific Node.
-- Missing evidence must produce a next action or remediation path.
-- The Evidence Chain should let a reviewer answer: request, change, tests, agent conclusion, policy,
-  approval, and remaining risk.
+<a id="user-stories"></a>
 
-### Local Execution And Redaction
+## 用户故事
 
-- Desktop owns local execution, private repository context, local SQLite state, test commands, and
-  provider credential boundaries.
-- Team-visible data must be redacted before sync.
-- Raw local paths, prompts, stdout, stderr, patch bodies, provider secrets, API keys, tokens, and
-  external-directory details must not sync by default.
-- Renderer code cannot submit Run/Test/Coding summaries directly; Electron main derives remote
-  summaries from canonical LocalStore state, and API/Repository ingestion reapplies redaction.
-- Test/Review/Coding summaries are child-first and scope-immutable; `Review` remains the internal
-  Gate Review summary type. Only an explicit missing
-  canonical Run may trigger one latest-Run upload and one child retry; durable outbox/backoff is a
-  v1.4 reliability concern rather than a hidden v1.3 renderer retry loop.
-- Team-bound structured metadata, model/cost, and budget/reason objects use strict allowlist
-  projection; allowed values are still path/secret-redacted and unknown nested keys are discarded.
-- Opening an upgraded local database permanently normalizes legacy Test Evidence, derived/orphaned
-  Test Reports, Test Result Events, and Coding Agent event metadata before they can be rendered again.
+1. 开发者从原始软件请求创建 Run，为交付保留持久起点。
+2. 开发者由请求生成标准工作流，看清从澄清到验收的预期路径。
+3. 开发者选择本地仓库，使 AI 辅助任务针对正确项目运行。
+4. 开发者将本地路径、原始日志、提示词、补丁和密钥留在本地，防止团队视图泄漏私有执行数据。
+5. 开发者保存澄清输出，将请求转化为目标、非目标、验收标准和待确认问题。
+6. 开发者保存设计输出，在编码前审查实现假设与测试策略。
+7. 开发者让编码 Agent 在托管工作区运行，避免生成改动直接影响主检出目录。
+8. 开发者批准或拒绝工具权限请求，使本地操作始终由人控制。
+9. 开发者查看依赖准备与工具活动，了解编码执行期间发生了什么。
+10. 开发者运行配置好的测试命令，保存持久化测试证据。
+11. 开发者明确看到失败、超时与通过的测试，以判断 Run 能否继续。
+12. 开发者生成 PR 草稿产物，使交接基于需求、设计、差异、测试、策略、预算和审查证据。
+13. 开发者生成验收证据资料包，使最终验收有一个可审查的集中产物。
+14. 技术负责人在 Gate 中看到所需证据和策略状态，使审批具有实际依据。
+15. 技术负责人要求 Gate 审批在写入路径受强制约束，避免仅依赖界面禁用按钮。
+16. 技术负责人查看有知识依据的审查发现，在高风险阶段前识别当前 Gate 和阶段产物中的风险与缺失证据。
+17. 技术负责人明确区分警告、阻断、硬阻断和例外审批路径，使治理决定可审计。
+18. 技术负责人要求例外审批填写原因并受角色约束，使例外决定保持审慎。
+19. 技术负责人在付费模型使用前取得预算保护决定，避免意外费用。
+20. 技术负责人让重试保留原证据和处理建议上下文，使后续工作可追溯。
+21. 审查者能够回答需求、改动、测试、Agent 结论、适用策略及批准者，使交付风险清楚。
+22. 团队管理者通过脱敏 Web 控制台监控交付，无须打开开发者的本机。
+23. 团队管理者按项目管理运行预算，治理模型费用。
+24. 项目负责人通过桌面配对连接本地客户端与团队项目，使脱敏同步使用限定范围的凭据而非演示状态。
+25. 项目负责人配置项目策略，使 Gate 符合团队风险容忍度。
+26. 团队成员区分本地、远端、种子和适配器来源数据，避免将样例误认为真实工作。
+27. 审查者在活动 Run 中看到当前阶段、阻断、警告、下一步动作和证据状态，快速决定下一步。
+28. 开发者要求浏览器预览不引入第二套工作流引擎，执行操作在无可信运行时时拒绝放行，只有 Electron 主进程可推进可信状态。
+29. 技术负责人在团队视图看到脱敏门禁审查与编码摘要，了解本地执行且不暴露原始数据。
+30. 小团队可自行部署试点，无须等待公共 SaaS 就绪。
+31. 开发者从权威托管工作树和预期提交准备一个不可变交付意图，避免向 GitHub 发送过期或无关代码。
+32. Lead/Owner 通过签名 Web 会话批准精确脱敏交付请求，禁止桌面 Bearer 自行批准其远端写入。
+33. Owner 为每个团队项目配置和撤销一个已核实的 GitHub App 仓库绑定，使交付权限范围小且可独立撤销。
+34. 开发者将一个已批准提交以非强制方式发布到一个 `devflow/` 分支，由一个草稿 PR 表示，使交付精确且可审查。
+35. 开发者使用语义明确的 Revise、Resume、Retry、Stop 操作，防止恢复时悄然复用审批或新建另一项逻辑交付。
+36. 验收审查者要求完成前在权威 Run 中存在精确远端分支提交和草稿 PR 证据，仅有 PR 交接产物不够。
+37. 运维人员要求重启对账和撤销避免重复凭据、推送或 PR，使结果不明的远端副作用保持有界。
 
-### Gate Enforcement And Governance
+<a id="core-requirements"></a>
 
-- Protected Gates are human decision nodes that can require policy enforcement.
-- Approval and override decisions must be checked in write paths.
-- Gate Enforcement Policy can warn, block, hard-block, require policy sync, or allow approval.
-- Overrides must be auditable and cannot bypass hard-block rules.
-- An accepted override is bound to the exact current blocker-ID set and policy version; changed
-  blockers require a new decision.
-- An accepted override cannot be reused by another actor: approval rechecks the current project-lead
-  actor, exact Run/Node, and creator/node-owner separation of duties.
-- Knowledge Governance Checks and Agent Policy Findings inform Gate decisions but do not replace
-  human review.
-- A remote Gate Review summary must carry the minimal redacted policy-finding details needed to reconstruct
-  exact blocker IDs; a count without those findings is not sufficient Gate evidence.
+## 核心要求
 
-### Agent Runtime Boundaries
+<a id="request-to-delivery-workflow"></a>
 
-- Knowledge-Grounded Gate Review uses retrieved Knowledge as grounding and treats the current Gate,
-  its conditions, and stage artifacts and evidence as the review subject. DevFlow owns context
-  assembly, evidence selection, redaction, prompts, and structured result interpretation.
-- Coding Agent work uses a managed runtime adapter. DevFlow owns context assembly, permission relay,
-  worktree management, evidence capture, tests, traces, cleanup state, and redacted summaries.
-- External model or coding providers own inference and code generation only.
-- Fake engines remain available for deterministic automated verification; real provider paths remain
-  explicit and signoff-oriented.
+### 从请求到交付的工作流
 
-### Governed GitHub Delivery
+- Run 从真实请求开始，并创建原始请求产物。
+- 每个 Run 使用 `clarify`、`design`、`build`、`test`、`PR`、`accept` 标准阶段。
+- Gate 审批通过已定义的流程边推进，不能硬编码状态跳转。
+- 业务验收批准后完成 Run，并保留最终证据资料包。
 
-- Desktop derives a Delivery Intent from the canonical managed worktree, expected commit, active
-  repository binding, Run/node/version, Test Evidence, changed paths, and PR Delivery Package.
-- API/Postgres owns the redacted Delivery Request, signed lead/owner approval, GitHub App binding,
-  credential-grant metadata, remote verification, Draft pull-request result, and audit.
-- The GitHub App private key remains in the API process. A repository-scoped, short-lived Contents
-  token exists only in Electron main memory for one active publication attempt.
-- The API independently verifies the approved expected commit as the remote branch head before it
-  creates or reconciles one Draft pull request.
-- Revise creates a new pre-publication intent revision and invalidates approval. Resume continues
-  one `recovery_required` attempt. Retry creates the next attempt only after the current pairing
-  claimant proves the exact remote predecessor `failed` or `revoked`. Stop parks the exact active
-  attempt for explicit recovery.
-- DevFlow never merges, force-pushes, deletes remote branches, publishes tags, broadens GitHub App
-  scope, or treats GitHub as Workflow authority.
+<a id="evidence-chain"></a>
 
-### Team Console And Self-Hosted Pilot
+### 证据链
 
-- Web Team Console shows redacted delivery health, active Runs, Gate status, evidence coverage,
-  Gate Review summaries, Test Evidence, policy state, budget state, and Desktop pairing.
-- API backend owns authenticated team state, project membership, policy persistence, budget
-  persistence, pairing, GitHub repository bindings, Delivery Requests, signed approvals, and
-  redacted sync ingestion.
-- Unsigned identity headers are off by default and rejected for browser origins; networked Team writes
-  use signed session Cookies or paired Desktop Bearer Tokens.
-- Only a canonical Run Summary can advance remote Run status/current Node. Prior active Nodes settle,
-  and delayed Test/Review/Coding summaries cannot reactivate a non-current Node.
-- Remote child IDs remain bound to their original organization/project/Run/Node and canonical sync
-  creator. Rebinding is rejected rather than treated as an upsert.
-- An independent Lead evaluates an override against the existing creator-owned canonical Run and
-  never republishes that Run under the reviewer's identity.
-- The deployment target is a self-hosted small-team pilot with Desktop, Web, API, Postgres, and
-  Docker Compose.
+- 每个有意义的工作流动作都必须产生证据，或解释证据为何不可用。
+- 证据必须关联 Run，并尽可能关联具体节点。
+- 证据缺失时应提供下一步动作或处理路径。
+- 审查者应能从证据链回答：需求、改动、测试、Agent 结论、策略、审批和剩余风险。
 
-### PR Delivery And Acceptance
+<a id="local-execution-and-redaction"></a>
 
-- PR stage creates a metadata-only PR Delivery Package from request, design, changed paths, tests,
-  policy, budget, and Gate Review evidence.
-- Desktop prepares an immutable Delivery Intent, and Team creates a redacted Delivery Request for
-  separate signed Web approval before any GitHub write.
-- After approval, Desktop publishes only the expected commit and API creates or reconciles one Draft
-  pull request after independently verifying the remote head.
-- Acceptance stage creates an evidence bundle that references the original request, PR draft, diff,
-  tests, policy, budget, Gate Review summaries, Delivery Intent, exact remote head, and Draft URL.
-- Acceptance rejects a handoff-only PR artifact when GitHub Delivery is enabled. Acceptance never
-  merges, closes, or mutates the pull request.
+### 本地执行与脱敏
 
-## Implementation Decisions
+- 桌面端拥有本地执行、私有仓库上下文、本地 SQLite、测试命令和模型凭据边界。
+- 团队可见数据必须在同步前脱敏。
+- 默认不得同步原始本地路径、提示词、stdout、stderr、补丁正文、模型密钥、API 密钥、令牌和外部目录详情。
+- 渲染进程不能直接提交 Run/测试/编码摘要；Electron 主进程从权威 LocalStore 派生摘要，API/仓储接收时再次脱敏。
+- 测试/审查/编码摘要先同步子项，且作用域不可变；`Review` 仍是门禁审查摘要的内部类型。只有明确缺少权威 Run 时，才允许上传一次最新 Run 并重试一次子项。原 v1.3 契约将持久化发件箱/退避归于 v1.4 可靠性工作，不能用隐藏的渲染进程重试循环替代。
+- 团队结构化元数据、模型/费用与预算/原因对象使用严格白名单投影；允许值仍需路径/密钥脱敏，未知嵌套键丢弃。
+- 升级后打开本地数据库时，在再次渲染前永久规范化旧测试证据、派生/孤立测试报告、测试结果事件和编码 Agent 事件元数据。
 
-- Keep Desktop, Web, API, and Shared Domain Core as separate product surfaces with distinct
-  responsibilities.
-- Keep the six-stage workflow as the stable product model for delivery.
-- Treat Evidence as the core product primitive, not a secondary audit log.
-- Enforce Gates through shared domain logic and runtime write paths.
-- Keep local raw execution details in Desktop unless converted into a redacted summary contract.
-- Keep self-hosted team pilot as the current deployment shape.
-- Keep public SaaS, billing, enterprise SSO, and managed multi-tenancy out of the near-term product
-  path.
-- Keep the PR Delivery Package separate from source/repository authority and require the governed
-  GitHub Delivery state machine for a real Draft pull request.
-- Keep policy, tests, Gate Review, budget, and Agent traces visible around the delivery
-  workflow instead of hiding them in separate admin-only screens.
-- Keep deterministic fake runtime paths available for CI and local verification.
+<a id="gate-enforcement-and-governance"></a>
 
-## Testing Decisions
+### Gate 强制规则与治理
 
-- Test external product behavior rather than implementation details.
-- Shared workflow tests should cover Run creation, stage edges, Gate advancement, terminal
-  acceptance, PR draft creation, and acceptance bundle creation.
-- Desktop IPC tests should cover small request inputs, guarded approval paths, artifact persistence,
-  test command execution, policy snapshot handling, and redaction boundaries.
-- Desktop UI tests should cover New Run intake, active Run selection, Inspector actions, Gate
-  enforcement explanations, PR draft generation, and acceptance bundle generation.
-- API and Postgres tests should cover authenticated team state, pairing, policy persistence, budget
-  evaluation, sync ingestion, GitHub App binding/revocation, Delivery Request approval, credential
-  grants, remote verification, Draft completion, and rejection of unsafe approval-like writes.
-- Web tests should cover team overview, Evidence Chain visibility, latest active Run display,
-  policy/budget controls, and redacted summary rendering.
-- Cross-platform checks should preserve Windows compatibility for path handling and static runtime
-  boundaries, even when full Electron smoke remains macOS-local.
-- Deterministic GitHub Delivery tests should use fake GitHub clients and local bare remotes; packaged
-  Desktop smoke should prove restart reconciliation without external writes.
-- Real GitHub validation should use one explicitly authorized private sandbox, one candidate, one
-  Draft pull request, no automatic retry, and no merge.
-- Real provider and real opencode smoke should stay explicit release/signoff paths, not default CI
-  requirements.
+- 受保护 Gate 是可以要求策略强制执行的人工决策节点。
+- 审批与例外审批必须在写入路径校验。
+- Gate 策略可以警告、阻断、硬阻断、要求策略同步或允许审批。
+- 例外审批必须可审计，不能绕过硬阻断。
+- 已接受例外绑定精确的当前阻断 ID 集合和策略版本；阻断变化后必须重新决定。
+- 例外不能被另一操作者复用：批准时重新检查当前项目 Lead、精确 Run/节点，以及创建者与节点负责人之间的职责分离。
+- 知识治理检查与 Agent 策略发现辅助 Gate 决策，不能替代人工审查。
+- 远端门禁审查摘要必须携带重建精确阻断 ID 所需的最小脱敏发现详情，仅有数量不足以构成 Gate 证据。
 
-## Acceptance Criteria
+<a id="agent-runtime-boundaries"></a>
 
-- A user can create a Run from a raw request.
-- The Run has the six standard workflow stages and an initial raw-request artifact.
-- Human Gate approval advances the current node through workflow edges.
-- Protected Gates cannot be approved through a UI-only bypass.
-- A developer can run local tests and capture Test Evidence.
-- A developer can start Coding Agent work from the intended build-stage task.
-- Permission relay, runtime trace, diff summary, and cleanup state are visible for Coding Agent work.
-- Team-visible sync excludes raw local paths, prompts, stdout, stderr, patches, and secrets.
-- Remote Run state has one active current Node; dependent summary IDs cannot be rebound or used to
-  advance, synthesize, or reactivate a Run.
-- A reviewer can inspect Gate Review, policy, test, budget, and evidence state before approval.
-- A lead can approve, reject, or override Gates only through guarded paths.
-- Web Team Console can show redacted project and Run delivery health.
-- Runtime budget policy and approval state are visible where paid provider usage is relevant.
-- PR Draft and Acceptance Evidence Bundle artifacts can be generated from accumulated evidence.
-- One exact Delivery Intent can become one separately approved Delivery Request, one verified remote
-  branch head, and one Draft pull request without leaking credentials or local paths.
-- Revise, Resume, Retry, and Stop preserve immutable history and cannot reuse stale approval.
-- Revocation blocks a new credential grant, and restart reconciliation does not repeat remote
-  effects.
-- The product remains explainable as a self-hosted small-team AI delivery workbench.
+### Agent 运行时边界
 
-## Out Of Scope
+- 基于知识的门禁审查以知识为依据，以当前 Gate、条件、阶段产物和证据为对象。DevFlow 负责上下文组装、证据选择、脱敏、提示词和结构化结果解释。
+- 编码任务使用托管运行时适配器；DevFlow 负责上下文、权限传递、工作树管理、证据记录、测试、轨迹、清理状态和脱敏摘要。
+- 外部模型或编码提供方仅负责推理与代码生成。
+- 模拟引擎继续用于确定性自动验证，真实模型路径必须显式启动并面向验收。
 
-- Generic chat assistant behavior.
-- Fully autonomous code merge or deployment.
-- Pull-request merge, auto-merge, branch deletion, force-push, tag publication, issue automation,
-  or deployment through GitHub Delivery.
-- Public SaaS onboarding.
-- Billing and subscription management.
-- Enterprise SSO.
-- Hosted multi-tenancy.
-- Automatic cloud deployment.
-- Signed installer distribution and auto-update.
-- A first-class `TestEvidence.skipped` state; it requires a future shared/API/store/UI contract.
-- Replacing GitHub, CI, or issue trackers.
-- Uploading raw local logs, prompts, patches, paths, or secrets.
-- Untrusted or remote MCP process execution outside the installed main-owned Local MCP authority.
-- Full RAG/vector retrieval provider integration.
-- Large-organization concurrency, administration, and audit depth.
-- HoneyAI bridge or multi-agent orchestration.
+<a id="governed-github-delivery"></a>
 
-## Further Notes
+### 受控 GitHub 交付
 
-- V1.5 is released as `v1.5.0`, and the finite 1.x completion gate passed with immutable
-  candidate-bound evidence under `docs/releases/v1.5.0/`.
-- V2.0 Native Agent Runtime is complete with immutable evidence under `docs/releases/v2.0.0/`.
-  V2.1 Evaluated Retrieval and Memory is complete. V2.2 Multi-Agent and Execution Tenancy is the
-  active Roadmap priority. Team schema 19 now stores only strict monotonic redacted Runtime, Memory,
-  and Coordination metadata; Desktop schema 29 transports Coordination updates through a durable
-  identifier-only outbox, and Web exposes a read-only coordination lifecycle/comparison view with no
-  local execution authority.
-- Runtime Operations and Collaboration Hardening remain evidence-promoted backlog items unless the
-  Roadmap assigns milestone priority.
-- UI refactor work should preserve the Evidence Chain as the center of gravity: current stage,
-  blocking reason, next action, and evidence status must stay visible.
-- Only the Roadmap owns current release and milestone status. Release-signoff documents retain
-  historical execution and evidence, while this PRD describes the current product baseline.
+- 桌面端从权威托管工作树、预期提交、有效仓库绑定、Run/节点/版本、测试证据、变更路径和 PR 交付包派生交付意图。
+- API/Postgres 拥有脱敏交付请求、Lead/Owner 签名审批、GitHub App 绑定、凭据授权元数据、远端核验、草稿 PR 结果和审计。
+- GitHub App 私钥留在 API 进程；限定仓库范围的短期 Contents 令牌仅为一次活动发布尝试保存在 Electron 主进程内存中。
+- API 独立确认批准的预期提交是远端分支提交后，才创建或对账一个草稿 PR。
+- Revise 创建新的发布前意图修订版并使审批失效；Resume 继续同一次 `recovery_required` 尝试；Retry 仅在当前配对领取者证明精确远端前次尝试为 `failed` 或 `revoked` 后才创建下一次尝试；Stop 停放精确活动尝试，等待显式恢复。
+- DevFlow 不会合并、强制推送、删除远端分支、发布标签、扩大 GitHub App 权限范围，也不将 GitHub 当作工作流权威来源。
+
+<a id="team-console-and-self-hosted-pilot"></a>
+
+### 团队控制台与自托管试点
+
+- Web 团队控制台展示脱敏交付健康、活动 Run、Gate 状态、证据覆盖、门禁审查摘要、测试证据、策略、预算和桌面配对。
+- API 后端拥有经过认证的团队状态、项目成员、策略/预算持久化、配对、GitHub 仓库绑定、交付请求、签名审批与脱敏同步接收。
+- 未签名身份请求头默认关闭，并拒绝浏览器来源；联网团队写入使用签名会话 Cookie 或已配对桌面 Bearer 令牌。
+- 只有权威 Run 摘要可推进远端 Run 状态/当前节点。原活动节点进入稳定状态，延迟到达的测试/审查/编码摘要不能重新激活非当前节点。
+- 远端子项 ID 始终绑定原组织/项目/Run/节点和权威同步创建者；重新绑定会被拒绝，不作为更新插入处理。
+- 独立 Lead 针对现有创建者拥有的权威 Run 评估例外审批，不以审查者身份重新发布该 Run。
+- 部署目标是由桌面端、Web、API、Postgres、Docker Compose 组成的自托管小团队试点。
+
+<a id="pr-delivery-and-acceptance"></a>
+
+### PR 交付与业务验收
+
+- PR 阶段从需求、设计、变更路径、测试、策略、预算和门禁审查证据创建纯元数据 PR 交付包。
+- 桌面端准备不可变交付意图，团队端创建脱敏交付请求；任何 GitHub 写入前必须获得独立的签名 Web 审批。
+- 审批后桌面端仅发布预期提交；API 独立核实远端分支提交后创建或对账一个草稿 PR。
+- 验收阶段生成证据资料包，引用原始请求、PR 草稿、差异、测试、策略、预算、审查摘要、交付意图、精确远端分支提交与草稿 URL。
+- 启用 GitHub 交付时，验收拒绝仅有交接内容的 PR 产物；验收不会合并、关闭或修改 PR。
+
+<a id="implementation-decisions"></a>
+
+## 实现决策
+
+- 桌面端、Web、API、共享领域核心保持不同职责。
+- 六阶段工作流作为稳定交付模型。
+- 将证据视为核心产品对象。
+- 通过共享领域逻辑和运行时写入路径执行 Gate 约束。
+- 原始执行详情留在桌面端，除非转换为脱敏摘要契约。
+- 当前部署形态保持自托管团队试点。
+- 公共 SaaS、计费、企业 SSO 和托管多租户不纳入近期产品路径。
+- PR 交付包与源码/仓库权限分离，真实草稿 PR 必须经过受控 GitHub 交付状态机。
+- 在交付流程周围展示策略、测试、审查、预算和 Agent 轨迹，不将其藏在仅管理员可见的独立页面。
+- 为 CI 和本地验证保留确定性模拟运行路径。
+
+<a id="testing-decisions"></a>
+
+## 测试决策
+
+- 测试产品外部行为，而非实现细节。
+- 共享工作流测试覆盖 Run 创建、阶段边、Gate 推进、终态验收、PR 草稿和验收资料包生成。
+- 桌面 IPC 测试覆盖小请求输入、受保护审批、产物持久化、测试命令执行、策略快照和脱敏边界。
+- 桌面界面测试覆盖新建 Run、活动 Run 选择、节点操作、Gate 约束解释、PR 草稿和验收资料包生成。
+- API/Postgres 测试覆盖认证团队状态、配对、策略持久化、预算评估、同步接收、GitHub App 绑定/撤销、交付审批、凭据授权、远端核验、草稿完成，以及拒绝不安全的类似审批写入。
+- Web 测试覆盖团队概览、证据链可见性、最新活动 Run、策略/预算控制和脱敏摘要渲染。
+- 跨平台检查保证 Windows 路径处理和静态运行边界兼容；不能因完整 Electron 冒烟测试只在本地 macOS 运行而忽略它们。
+- 确定性 GitHub 交付测试使用模拟客户端和本地裸仓库远端；打包桌面测试证明重启对账，不向外部写入。
+- 真实 GitHub 验证使用一个明确授权的私有沙箱、一个候选版本和一个草稿 PR，不自动重试、不合并。
+- 真实模型与 OpenCode 冒烟测试保持为显式发布/验收路径，不作为默认 CI 要求。
+
+<a id="acceptance-criteria"></a>
+
+## 验收标准
+
+- 用户可从原始请求创建 Run。
+- Run 包含六个标准阶段和初始原始请求产物。
+- 人工 Gate 审批沿流程边推进当前节点。
+- 受保护 Gate 不能经仅修改界面的方式绕过。
+- 开发者可运行本地测试并保存测试证据。
+- 开发者可从目标开发阶段任务启动编码 Agent。
+- 编码权限传递、运行轨迹、差异摘要和清理状态可见。
+- 团队同步排除原始本地路径、提示词、stdout、stderr、补丁与密钥。
+- 远端 Run 只有一个活动当前节点；子摘要 ID 不能重新绑定，也不能推进、合成或重新激活 Run。
+- 审批前可检查门禁审查、策略、测试、预算和证据状态。
+- Lead 只能通过受保护路径批准、拒绝或例外审批 Gate。
+- Web 控制台显示脱敏项目与 Run 交付健康。
+- 涉及付费模型使用处展示运行预算策略和审批状态。
+- PR 草稿与验收证据资料包可从累积证据生成。
+- 一个精确交付意图可成为一个独立批准的交付请求、一个已核实远端分支提交和一个草稿 PR，不泄漏凭据或本地路径。
+- Revise、Resume、Retry、Stop 保留不可变历史，不复用过期审批。
+- 撤销阻止新凭据授权，重启对账不重复远端副作用。
+- 产品仍可清楚解释为自托管的小团队 AI 交付工作台。
+
+<a id="out-of-scope"></a>
+
+## 范围外
+
+以下保留原基线的范围边界；后续版本是否纳入以对应 PRD 与路线图为准：
+
+- 通用聊天助手。
+- 完全自主合并代码或部署。
+- 通过 GitHub 交付执行 PR 合并、自动合并、分支删除、强制推送、标签发布、Issue 自动化或部署。
+- 公共 SaaS 注册。
+- 计费和订阅管理。
+- 企业 SSO。
+- 托管多租户。
+- 自动云端部署。
+- 签名安装器分发和自动更新。
+- 一等 `TestEvidence.skipped` 状态；它需要未来共享层/API/存储/界面契约。
+- 替代 GitHub、CI 或 Issue 跟踪工具。
+- 上传原始本地日志、提示词、补丁、路径或密钥。
+- 已安装且由主进程控制的本地 MCP 权限之外的不可信或远端 MCP 进程执行。
+- 完整 RAG/向量检索提供方集成。
+- 大组织并发、管理和深度审计。
+- HoneyAI 桥接或多 Agent 编排。
+
+<a id="further-notes"></a>
+
+## 补充说明
+
+- V1.5 已发布为 `v1.5.0`，有限范围的 1.x 完成门禁已通过；不可变候选证据位于 `docs/releases/v1.5.0/`。
+- V2.0 原生 Agent 运行时已完成，证据位于 `docs/releases/v2.0.0/`。V2.1 检索与记忆评估已完成。原文记录时，V2.2 多 Agent 与执行租户隔离是路线图重点：Team schema 19 仅保存严格单调的脱敏运行时、记忆和协作元数据；Desktop schema 29 经仅含标识符的持久发件箱传输协作更新；Web 提供只读协作生命周期/比较视图，没有本地执行权限。
+- 运行时运维和协作加固仍需证据推动，除非路线图已赋予里程碑优先级。
+- 界面重构应以证据链为中心：当前阶段、阻断原因、下一步动作和证据状态必须可见。
+- 只有路线图定义当前发布和里程碑状态。发布验收文档保留历史执行和证据，本 PRD 定义其所记录的产品基线。

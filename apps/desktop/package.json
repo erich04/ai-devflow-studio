@@ -18,11 +18,12 @@
     "@xyflow/react": "^12.8.5",
     "electron": "^42.11.6",
     "lucide-react": "^0.468.0",
+    "mdast-util-from-markdown": "2.0.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
-    "sql.js": "^1.14.1"
+    "sql.js": "1.14.2"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",

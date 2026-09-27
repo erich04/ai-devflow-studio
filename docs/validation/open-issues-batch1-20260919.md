@@ -1,31 +1,41 @@
-# Open issues, batch 1 — 2026-09-19
+<a id="open-issues-batch-1--2026-09-19"></a>
 
-## Scope and changes
+# Open Issue 第一批 — 2026-09-19
 
-- #129: storage profile and data-source internals are available under Diagnostics, outside normal workflow chrome. Project binding remains distinct.
-- #131: pull-team-data label and accessible help explain direction, scope, deployment and separation from Git delivery.
-- #132: full-width header, removed redundant DF/avatar placeholders, fixed remaining-row height, responsive non-wrapping controls.
-- #141: saved Coding configuration is distinct from permission, workflow-stage and active-run eligibility. Execution preflight is unchanged.
-- #142: PR inspector recognizes exact archived upstream Coding diff before delivery intent creation. It does not mark the PR package generated or waive main-process delivery validation.
-- #143: successful proposal publication resolves only its save confirmation, including narrow legacy wording. Other business questions remain pending; failed publication changes nothing.
-- #145: declared Markdown/plain text and unknown-format fallback, deterministic legacy Markdown display, original-text toggle, no raw HTML or automatically loaded images, safe link schemes. Workflow actions remain separately validated.
-- #148: remove editable private memory and its prompt injection. Preserve legacy values as clearly disabled read-only notes; conversation history and drafts remain intact.
-- Preserve and deliver the existing low-effort DeepSeek reasoning stream changes in this working tree; see workbench-deepseek-reasoning-20260917.md. Provider-wide thinking configuration is tracked separately by #146.
+<a id="scope-and-changes"></a>
 
-## Verification
+## 范围与修改
 
-- 235 tests passed across App, WorkbenchWorkspace, conversation service, node-inspector view model and layout checks.
-- Desktop TypeScript and renderer/Electron builds passed.
-- Isolated Electron smoke passed all eight workflow card inspectors and their tabs, project-wide conversation queries, repository/document reads, questions, proposal publication, two-conversation isolation, failure/retry/cancel, history/restart and preserved input draft.
-- Real renderer checks covered live reasoning before the answer, collapsed completed reasoning, Markdown strong/list rendering, saved-question resolution, absence of manual memory editing, Diagnostics navigation and 1280/1366/1920 viewports in light/dark screenshots.
-- Smoke used 20 controlled local SSE responses through real Provider/IPC/SQLite paths. No external model was called; this is not a new live DeepSeek full-workflow acceptance claim.
-- Screenshots and machine-readable report: out/workbench-conversation-qa/. Commands/logs: out/issue-resolution-20260919/.
-- Read-only checks of the user profile and pre-change backup both show one workflow, one conversation and no Coding runs. The user profile was never used by smoke tests.
+- #129：存储档案及数据来源内部信息放入“诊断”，移出正常工作流框架；项目绑定仍单独展示。
+- #131：“拉取团队数据”标签和可访问的帮助说明同步方向、范围、部署方式，以及它与 Git 交付的区别。
+- #132：头部占满宽度，移除多余 DF/头像占位，修正剩余行高度，控件响应式排列且不换行。
+- #141：已保存编码配置与权限、工作流阶段及活动 Run 的可执行资格分开显示，执行前检查不变。
+- #142：创建交付意图前，PR 节点详情可以识别精确归档的上游编码差异；不会据此把 PR 包记为已生成，也不会免除主进程交付校验。
+- #143：成功发布提案只解决其保存确认，包括范围有限的旧措辞。其他业务问题仍待确认；发布失败不改变状态。
+- #145：支持声明的 Markdown/纯文本及未知格式回退，确定性展示旧版 Markdown，提供原文切换，禁止原始 HTML 和自动加载图片，限制链接协议；工作流动作仍单独校验。
+- #148：移除可编辑私有记忆及其提示词注入。旧值以明确停用的只读备注保留；会话历史与草稿不变。
+- 保留并交付该工作树已有的 DeepSeek 低强度推理流改动，见 [DeepSeek 推理记录](workbench-deepseek-reasoning-20260917.md)。服务商级思考配置由 #146 单独跟踪。
 
-## Review decisions
+<a id="verification"></a>
 
-Cursor read-only review 7f318719-fb02-4bac-93d4-172fb1fb6d01 was advisory. Accepted: display-only upstream diff selector, latest/active attempt precedence, run/node/project/diff identity checks, preservation of the delivery-intent path and unchanged delivery authority. Revised: an archived diff remains visible after workspace cleanup; workspace availability is enforced by publication commands, not by the evidence-exists label. Tests reject stale, truncated, foreign and failed-attempt evidence.
+## 验证
 
-## Limits
+- App、WorkbenchWorkspace、会话服务、节点详情视图模型和布局检查共 235 项测试通过。
+- 桌面 TypeScript 与渲染层/Electron 构建通过。
+- 隔离 Electron 冒烟测试通过全部八个工作流卡片的节点详情与页签、项目级会话查询、仓库/文档读取、提问、提案发布、双会话隔离、失败/重试/取消、历史/重启及输入草稿保留。
+- 真实渲染层检查覆盖回答前的实时推理、完成后折叠推理、Markdown 加粗/列表、保存确认状态更新、无手动记忆编辑、诊断导航，以及 1280/1366/1920 宽度的深浅主题截图。
+- 冒烟测试通过真实 Provider/IPC/SQLite 路径使用 20 次受控本地 SSE 响应，没有调用外部模型；不构成一次新的真实 DeepSeek 全流程验收。
+- 截图和机器可读报告：`out/workbench-conversation-qa/`。命令/日志：`out/issue-resolution-20260919/`。
+- 用户档案及修改前备份的只读检查均显示一个工作流、一个会话、没有编码 Run；冒烟测试从未使用用户档案。
 
-This batch is locally verified, not yet merged or deployed. Remaining issues stay open. CSS changes initially exposed a full-height content overflow; fixed before the successful Electron rerun. No user workflow or chat was reset.
+<a id="review-decisions"></a>
+
+## 审查建议处理
+
+Cursor 只读审查 `7f318719-fb02-4bac-93d4-172fb1fb6d01` 仅供参考。采纳：只读展示上游差异、最新/活动尝试优先、Run/节点/项目/差异身份检查、保留交付意图路径与既有交付权限。调整：工作区清理后，已归档差异仍可查看；是否具备可发布工作区由发布命令检查，而非由“证据存在”标签决定。测试拒绝过期、截断、其他范围及失败尝试的证据。
+
+<a id="limits"></a>
+
+## 限制
+
+本文对应批次当时仅通过本地验证，尚未合并或部署，剩余 Issue 继续保留。CSS 修改最初暴露全高内容溢出，修正后才通过 Electron 重跑。用户工作流和聊天均未重置。后续合并及部署状态应查对应 GitHub 记录，不将本历史记录当作当前状态。

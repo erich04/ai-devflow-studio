@@ -1,174 +1,56 @@
-# DevFlow Studio Testing Strategy
+<a id="devflow-studio-testing-strategy"></a>
 
-DevFlow Studio follows a TDD discipline for new behavior: write the smallest failing contract test,
-implement only enough to pass, then refactor under the same tests. Fixture-driven UI does not need
-retroactive TDD rewrites unless it is touched.
+# DevFlow Studio 测试策略
 
-## Current Persistence Baseline
+DevFlow Studio 对新增行为遵循测试驱动开发：先写最小的失败契约测试，再实现足以通过测试的行为，最后在同一组测试保护下重构。未涉及的测试数据驱动界面，无需追溯重写为 TDD。
 
-- Team/API/Postgres uses Team schema v21. Migration tests must prove a fresh v21 database, the
-  populated v11-to-v12 delivery-series upgrade, and the v12-to-v13 provider-authoritative expiry
-  contract without inventing expiry evidence for legacy issued credentials, followed by the
-  v13-to-v14 bounded provider retry boundary, the v14-to-v15 verified publication adoption
-  authority without changing legacy grant-backed publications, and the v15-to-v16 metadata-only
-  Agent Runtime projection without inventing runtime summaries or audit rows, followed by the
-  v16-to-v17 metadata-only Agent Memory projection without inventing Memory summaries or audit rows,
-  followed by v17-to-v18 independent same-head Memory quality audit versioning, then an empty
-  v18-to-v19 metadata-only Agent Coordination projection, then the v19-to-v20 bounded auth-provider
-  constraint that preserves GitHub accounts, accepts `local-development`, and rejects unknown
-  providers, then the v20-to-v21 Coding summary constraint that accepts the `native` engine while
-  preserving the existing engine values. Retained rows keep reserved quality version 0 until the first new projection converges
-  them; new writes start at 1.
-- Electron/SQLite uses Desktop schema v35. Local-store tests must prove a fresh v35 database, the
-  Desktop schema 17-to-18 retained Runtime upgrade, the 18-to-19 metadata-only Native Tool audit
-  upgrade with no invented grant or audit rows, and the 19-to-20 Local MCP installation/audit
-  provenance upgrade with no invented installation or MCP audit, and the 20-to-21 retained outbox
-  upgrade that accepts only metadata-only Agent Runtime summaries, and the 21-to-22 retrieval-index
-  migration with zero fabricated snapshot/chunk/vector/Citation rows, followed by the 22-to-23 inert
-  Memory-candidate migration with zero fabricated candidates, followed by the 23-to-24 durable
-  revision/head/tombstone/derived-index/audit migration with zero fabricated lifecycle rows, plus
-  the 24-to-25 retained migration that removes source-candidate uniqueness without losing revision,
-  head, tombstone, index, or audit history, followed by the 25-to-26 additive Runtime Context
-  migration without fabricating attachments, followed by the 26-to-27 retained metadata-only outbox
-  migration that admits exact Agent Memory summary IDs without changing existing rows, followed by
-  the 27-to-28 Coordination Session migration with zero fabricated sessions, tasks, graphs,
-  handoffs, leases, audits, or checkpoints, followed by the 28-to-29 retained outbox migration that
-  admits exact Coordination Session IDs without changing existing operations, followed by the
-  29-to-30 Coding Diff sanitizer-provenance migration, the 30-to-31 content-scan/operator-outcome
-  migration, the 31-to-32 indexed stored-evidence privacy provenance migration, and the 32-to-33
-  project Coding Runtime configuration plus immutable Native v2 Change Set migration. Tests also cover
-  the 34-to-35 local-only conversation migration with no fabricated chats. Tests also lock
-  every migration source digest, require all migrations to commit before privacy maintenance, keep
-  a single atomic temporary-file-to-rename persistence outlet, prove rollback on migration failure,
-  and refuse a newer unknown schema.
-- The completed V2.2 Slice 3 matrix proves a fixed Electron-main-owned Specialist registry, opaque
-  task authority revalidation, exact child Runtime/Context creation, atomic terminal result and
-  deterministic dependency join, fixed fail-fast attribution, and one read-only
-  `repository_read` recovery recorded as `task_retried`. Same-process and cold-restart replay do not
-  repeat a Specialist start, result, handoff, or retry; mutable and ambiguous effects remain
-  ineligible. The focused coordination/store/registry/authority matrix passes 275 tests.
-- The completed V2.2 Slice 5 matrix proves strict metadata-only Desktop projection, identifier- and
-  version-only renderer commands, main-owned fixed-plan construction, exact Specialist start/resume,
-  and confirmed monotonic cancellation. Cold restart leaves generic Agent Runtime recovery unable to
-  claim Supervisor or Specialist runtimes referenced by coordination tables. The packaged gate
-  persists one partial three-task DAG and one started read-only Specialist, reopens it with identical
-  session/task/runtime/audit/checkpoint evidence, records `coordinationRestartDuplicateEffects: 0`,
-  cancels it, and then completes the unchanged single-Agent GitHub Delivery path.
-- V2.1 retrieval-index tests prove atomic activation preserves the previous current snapshot when
-  persistence fails, source update/delete removes stale current identities, and corrupt, mismatched,
-  cross-scope, non-finite, or over-1024-chunk state fails closed. An explicit bounded rebuild restores
-  only derived index state while preserving its Local Project and Run. The completed Slice 3 matrix
-  passed 143 local-store tests and 43 shared retrieval tests; the repository verification passed 192
-  test files and 2729 tests.
-- The completed V2.1 Slice 4 Memory matrix proves accepted-result-only inert candidates, opaque
-  main-owned promotion/revision/deletion capabilities, immutable history, explicit optimistic
-  conflicts, scope/visibility/expiry filtering, tombstone-before-retrieval, persistence rollback,
-  restart-safe derived-index purge, metadata-only audit, and old-replay fencing. It passed 152
-  local-store tests and 48 shared retrieval/Memory tests; repository unit verification passed 192
-  test files and 2743 tests after the active-Slice document contracts advanced to Slice 5.
-- The completed V2.1 Slice 5 Context matrix proves schema 25-to-26 adds no fabricated attachments,
-  Runtime creation and full main-owned Context commit atomically, exact replay/cold reopen preserve
-  one attachment, refreshed Knowledge and revised/deleted/expired Memory fail the currentness fence,
-  and stale Context invokes zero external Tool work even when authority changes between the initial
-  check and durable capability grant reservation. The renderer projection v2 strictly exposes only
-  attachment/count/identity-digest provenance, with Knowledge Citation and Durable Memory counts
-  visible in Desktop while source paths, bodies, and scope sessions remain in Electron main. The
-  focused matrix passes 155 local-store, 18 Desktop Runtime, 8 shared Context, 3 renderer-projection,
-  1 renderer-access, 1 console-state, and 3 Runtime-panel tests.
-  The separate Memory lifecycle matrix passes 4 shared projection, 6 main-owned access, 6
-  main-owned human-action, and 7 panel tests. Repository unit verification passes 197 test files and
-  2790 tests after the packaged zero-repeat tracer.
-- Agent Memory lifecycle UI identifies one selected Run and exact persisted Agent Runtime through an
-  identifier-only IPC. Electron main derives the complete user/session/Local Project scope from that
-  Runtime, rechecks the canonical Run and exact current Team pairing before and after loading
-  revisions or tombstones, then
-  emits a bounded strict projection for Candidate pending/promoted and Durable
-  active/conflict/expired/purge/deleted state with exact revision/head versions. Renderer parsing
-  rejects extra keys; scope sessions, opaque capabilities, authority digests, raw output, local
-  paths, and deleted statements remain main-only. Promotion accepts only the selected Runtime/Run/
-  Local Project, Candidate ID, and renderer-observed content/provenance digests; Electron main
-  derives human policy/actor authority, consumes the opaque capability, and returns a newly read
-  strict projection. Statement revision accepts the exact Memory ID, current revision/head versions,
-  current content/provenance digests, and a bounded replacement statement; Electron main preserves
-  visibility, sensitivity, retention, expiry, and scope authority before consuming the opaque
-  revision capability. Deletion accepts the same exact identity/version/digest boundary only after
-  a second renderer confirmation, constructs deletion authority solely in Electron main, persists a
-  tombstone before purge, and lets an exact `purge_pending` projection resume derived-state cleanup
-  without recreating deletion authority.
-- The completed V2.1 Slice 6 matrix proves Team schema 18 fabricates zero Memory summaries, Desktop
-  schema 27 retains old outbox rows, exact lifecycle and accepted-Context changes coalesce one
-  identifier-only operation, Seed/Postgres independently version monotonic lifecycle and quality
-  projections, and Web
-  rejects extra local content while exposing no Memory or Runtime mutation action.
-- The V2.1 candidate-bound evaluator runs with provider and credential authority removed. It binds
-  the exact candidate SHA, frozen corpus SHA-256, and combined ADR/PRD/shared-contract SHA-256;
-  compares lexical with hybrid retrieval and no-Memory with scoped active Memory; and requires exact
-  citation floors plus zero paid-provider, lifecycle, isolation, deletion, resurrection, source,
-  raw-output, path, or secret violations. Team projection quality uses independent `qualityVersion`
-  evidence and never substitutes for the local Memory content or promotion authority. Completion
-  status accepts only the immutable two-file evidence set and truth-document updates in the clean
-  direct child of the passing candidate.
-- The packaged Desktop pilot must execute exactly one `scenario.evaluate` Local MCP Tool, persist
-  one started and one succeeded installation-bound metadata-only audit, and retain one accepted
-  action after cold restart without another grant, MCP call, or audit record. It must also complete
-  one approved deterministic native Coding repair, persist one permission decision and the exact
-  read/write/saved-test audit pairs, and cold-start without repeating a Tool effect. The same
-  packaged run must atomically receive one inert Candidate from an accepted observation, promote it,
-  revise it once, tombstone and purge it, then reopen one candidate, two revisions, one tombstone,
-  four exact Memory audits, zero derived index rows, and `memoryRestartDuplicateEffects: 0`.
-  It must additionally cold-restart one partially active V2.2 Coordination Session without another
-  accepted start or durable record, cancel its child Runtime, and return
-  `coordinationRestartDuplicateEffects: 0` plus `coordinationCancellation: passed` before continuing
-  the original single-Agent comparison.
-- Coding Executor contract tests must prove capability denial before provider/workspace side effects,
-  a path-free main-owned request, ordered bounded permission turns, repeated-permission rejection,
-  approval-at-expiry rejection, no-permission completion, and uniform success/failure/cancel/timeout
-  cleanup-aware terminal results. Renderer projection/component/E2E tests cover idle, every active and
-  terminal status, exact Run/Node/Project scoping, conflicting history, stale/TTL/digest failure,
-  multi-file unwrapped review, Workbench-to-Agents focus, new-Run retry disclosure, and deleted
-  workspace refusal.
+<a id="current-persistence-baseline"></a>
 
-## Test Layers
+## 当前持久化基线
 
-- **Shared domain logic**: Vitest unit tests in `packages/shared/src/*.test.ts` cover policy,
-  knowledge, command safety, sync, delivery state, redaction, and Acceptance contracts.
-- **Electron main/preload**: parser, local-store, runtime, IPC, and smoke tests cover filesystem,
-  shell, SQLite, credential, publication, restart reconciliation, and guarded write paths. Renderer
-  tests must prove it receives delivery status but no GitHub App credential.
-- **API/Postgres**: route and repository tests cover request validation, role/session authority,
-  repository binding, Delivery Request approval, credential grants, remote verification, Draft
-  completion, revocation, audit, and redaction.
-- **Desktop/Web UI**: component tests cover visible state and explicit user actions; browser E2E
-  covers the Workbench and Team Console paths.
-- **Deterministic GitHub Delivery**: fake GitHub clients and local bare remotes prove exact-commit,
-  no-force publication, verified publication adoption across attempts, and Draft reconciliation
-  without an external write.
-- **Packaged Desktop**: the packaged smoke exercises production main/preload/renderer boundaries,
-  local SQLite, a local fake API, a local bare remote, crash/restart reconciliation, and credential
-  non-persistence. The pilot also completes a no-side-effect Agent Runtime through the trusted
-  Local MCP fixture and proves the accepted action count remains exactly one after cold restart. It
-  also drives the native Coding path through real Workflow/Gate prerequisites, one edit approval,
-  the saved test, and exact zero-repeat recovery.
-- **Fresh systems and lifecycle**: Postgres and Docker smokes prove current migrations, real service
-  wiring, retained-volume upgrades, transactional retry, and bounded rollback.
-- **Private sandbox**: one explicitly authorized private GitHub sandbox validates real GitHub App
-  authentication and one Draft pull request for the frozen candidate only.
+- Team/API/Postgres 使用 Team schema v21。迁移测试须证明：新建 v21 数据库；含数据的 v11→v12 交付系列升级；v12→v13 服务商权威过期契约，不为旧版已签发凭据编造过期证据；v13→v14 有边界的服务商重试；v14→v15 已验证发布证据采用，保持旧凭据授权支持的发布不变；v15→v16 仅含元数据的 Agent Runtime 投影，不编造运行时摘要或审计；v16→v17 仅含元数据的 Agent Memory 投影，不编造记忆摘要或审计；v17→v18 为同一记忆生命周期版本增加独立质量审计版本；v18→v19 创建空的协调元数据投影；v19→v20 限定认证服务商，保留 GitHub 账号、接受 `local-development`、拒绝未知服务商；v20→v21 编码摘要约束接受 `native` 引擎并保留已有引擎值。保留记录沿用预留质量版本 0，直到首个新投影完成收敛；新记录从 1 开始。
+- Electron/SQLite 使用 Desktop schema v35。本地存储测试须证明：新建 v35 数据库；Desktop schema 17→18 保留运行时数据的升级；18→19 只增加原生工具元数据审计，不编造授权或审计记录；19→20 增加 Local MCP 安装/审计来源，不编造安装或 MCP 审计；20→21 保留同步队列并仅允许运行时元数据摘要；21→22 检索索引迁移不编造快照、片段、向量或引用；22→23 惰性记忆候选迁移不编造候选；23→24 持久化修订/头版本/墓碑/派生索引/审计迁移不编造生命周期记录；24→25 移除来源候选唯一约束，但不丢失修订、头版本、墓碑、索引或审计历史；25→26 增加运行上下文，不编造附件；26→27 保留元数据同步队列、允许精确的记忆摘要 ID，不改变已有记录；27→28 协调会话迁移不编造会话、任务、图、交接、租约、审计或检查点；28→29 保留队列并允许精确协调会话 ID，不改变已有操作；29→30 增加编码差异净化来源；30→31 增加内容扫描/操作者处理结果；31→32 增加可索引的已存证据隐私来源；32→33 增加项目编码运行时配置及不可变 Native v2 Change Set。测试还覆盖 34→35 本地会话迁移，不编造聊天。所有迁移源码摘要均被锁定；隐私维护必须在全部迁移提交后进行；持久化只有一条“临时文件→原子重命名”出口；迁移失败须回滚；未知的新 schema 必须拒绝打开。
+- 已完成的 V2.2 Slice 3 矩阵证明：固定且归 Electron 主进程所有的 Specialist 注册表、不透明任务权限重验、精确子运行时/上下文创建、原子提交终态结果及确定性依赖汇合、固定的快速失败归因，以及记录为 `task_retried` 的一次只读 `repository_read` 恢复。同进程与冷启动重放都不重复 Specialist 启动、结果、交接或重试；可变或有歧义的副作用仍不允许重试。协调/存储/注册表/权限专项矩阵共 275 项测试通过。
+- 已完成的 V2.2 Slice 5 矩阵证明：严格仅含元数据的桌面投影、仅带标识与版本的渲染进程命令、主进程构造固定计划、精确启动/恢复 Specialist，以及经确认的单调取消。冷启动后，通用运行时恢复无法认领协调表引用的 Supervisor 或 Specialist 运行时。安装包门禁保存一个部分执行的三任务 DAG 和一个已启动只读 Specialist，重新打开后保持完全相同的会话/任务/运行时/审计/检查点证据，记录 `coordinationRestartDuplicateEffects: 0`，取消协调，再完成未改变的单 Agent GitHub 交付路径。
+- V2.1 检索索引测试证明：持久化失败时，原子激活保留此前的当前快照；来源更新/删除清除过期的当前身份；损坏、不匹配、跨作用域、非有限数或超过 1024 片段的状态均拒绝使用。显式且有边界的重建只恢复派生索引状态，保留所属本地项目和 Run。已完成的 Slice 3 矩阵通过 143 项本地存储测试和 43 项共享检索测试；仓库验证通过 192 个测试文件、2729 项测试。
+- 已完成的 V2.1 Slice 4 记忆矩阵证明：仅从已接受结果生成惰性候选；主进程持有不透明的提升/修订/删除能力；保留不可变历史；显式报告乐观并发冲突；按作用域/可见性/过期状态过滤；先写墓碑再停止检索；持久化失败回滚；重启后安全清理派生索引；审计仅含元数据；阻止旧重放。通过 152 项本地存储测试和 48 项共享检索/记忆测试；活跃阶段文档契约推进到 Slice 5 后，仓库单元验证通过 192 个文件、2743 项测试。
+- 已完成的 V2.1 Slice 5 上下文矩阵证明：schema 25→26 不编造附件；运行时创建与完整主进程上下文原子提交；精确重放/冷启动后保持一个附件；知识刷新和记忆修订/删除/过期均无法通过当前性检查；即使初次检查与持久化能力授权预留之间权限发生变化，过期上下文也不会触发任何外部工具工作。渲染投影 v2 仅暴露附件/计数/身份摘要来源；桌面可见知识引用和持久记忆计数，来源路径、正文及作用域会话保留在主进程。专项矩阵通过：155 项本地存储、18 项桌面运行时、8 项共享上下文、3 项渲染投影、1 项渲染访问、1 项控制台状态及 3 项运行时面板测试。独立记忆生命周期矩阵通过 4 项共享投影、6 项主进程访问、6 项主进程人工操作和 7 项面板测试。安装包零重复执行验证后，仓库单元验证通过 197 个文件、2790 项测试。
+- Agent Memory 生命周期界面通过只含标识的 IPC 指定一个已选 Run 和精确的持久化运行时。Electron 主进程从该运行时派生完整用户/会话/本地项目作用域，在加载修订或墓碑前后核验权威 Run 和精确的当前团队配对，然后返回有边界的严格投影：候选 `pending/promoted`、持久记忆 `active/conflict/expired/purge/deleted` 及精确修订/头版本。渲染端解析拒绝额外字段；作用域会话、不透明能力、权限摘要、原始输出、本地路径和已删除陈述仅保留在主进程。提升只接受所选运行时/Run/本地项目、候选 ID 及渲染端观测到的内容/来源摘要；主进程派生人工策略/操作者权限、消费不透明能力并返回重新读取的严格投影。陈述修订接受精确 Memory ID、当前修订/头版本、当前内容/来源摘要和长度受限的替代陈述；主进程保留可见性、敏感性、留存、过期及作用域权限，再消费不透明修订能力。删除在渲染端第二次确认后接受相同精确身份/版本/摘要边界；删除权限仅在主进程构造，先持久化墓碑再清除；精确的 `purge_pending` 投影可恢复派生状态清理，无需重新创建删除权限。
+- 已完成的 V2.1 Slice 6 矩阵证明：Team schema 18 不编造记忆摘要；Desktop schema 27 保留旧队列记录；精确的生命周期与已接受上下文变化合并为一个仅带标识的操作；Seed/Postgres 分别对生命周期和质量投影执行单调版本校验；Web 拒绝额外本地内容，不提供记忆或运行时修改动作。
+- V2.1 候选版本绑定评估器运行时移除服务商和凭据权限。它绑定精确候选 SHA、冻结语料 SHA-256 及 ADR/PRD/共享契约组合 SHA-256；比较词法检索与混合检索，以及无记忆与作用域内有效记忆；要求达到精确引用下限，并且付费服务商调用、生命周期、隔离、删除、复活、来源、原始输出、路径或机密违规均为零。团队投影质量使用独立 `qualityVersion` 证据，不能代替本地记忆内容或提升权限。完成状态只接受不可变的双文件证据集，以及通过候选版本的干净直接子提交中的事实文档更新。
+- 桌面安装包试点必须精确执行一次 `scenario.evaluate` Local MCP 工具，持久化一条 started 和一条 succeeded、绑定安装身份的元数据审计；冷启动后保留一个已接受动作，不再授权、调用 MCP 或新增审计。还须完成一次获批的确定性原生编码修复，保存一个权限决策和精确的读取/写入/已保存测试审计对，冷启动后不重复工具副作用。同次安装包运行还须从已接受观测中原子生成一个惰性候选，提升、修订一次、写墓碑并清除，再重新打开并验证：一个候选、两个修订、一个墓碑、四条精确记忆审计、零派生索引记录、`memoryRestartDuplicateEffects: 0`。此外，部分活跃的 V2.2 协调会话冷启动后不得重复接受启动或增加持久记录；取消其子运行时，返回 `coordinationRestartDuplicateEffects: 0` 和 `coordinationCancellation: passed`，再继续原有单 Agent 对比。
+- 编码执行器契约测试须证明：能力拒绝发生在服务商/工作区副作用之前；请求归主进程所有且不含路径；权限轮次有序且有上限；重复权限和过期时审批被拒绝；无需权限的完成路径可运行；成功/失败/取消/超时统一返回体现清理状态的终态结果。渲染投影、组件和端到端测试覆盖空闲、全部活跃与终态、精确 Run/Node/Project 作用域、冲突历史、过期/TTL/摘要失败、多文件不折行审查、工作台到 Agents 的焦点转移、新 Run 重试说明，以及已删除工作区拒绝。
 
-## Required Gates By Change Type
+<a id="test-layers"></a>
 
-- Shared policy, governance, or delivery transition: failing shared unit test, `typecheck`, and
-  relevant integration test.
-- Gate approval, Delivery Request approval, or override write path: shared/unit test plus Electron or
-  API authorization coverage.
-- Desktop execution or publication: Electron runtime/unit coverage and packaged Desktop smoke.
-- Team API, migration, or Postgres persistence: route/repository coverage and Postgres smoke.
-- Compose, upgrade, backup, or rollback behavior: Docker lifecycle smoke.
-- User-visible workflow UI: component test and browser E2E when it affects the operator path.
-- Cross-platform local execution: cross-platform tests.
+## 测试层次
 
-## Verification Commands
+- **共享领域逻辑**：`packages/shared/src/*.test.ts` 中的 Vitest 单元测试覆盖策略、知识、命令安全、同步、交付状态、脱敏和验收契约。
+- **Electron 主进程与 preload**：解析器、本地存储、运行时、IPC 和冒烟测试覆盖文件系统、Shell、SQLite、凭据、发布、重启核对及受控写入路径。渲染端测试须证明其只收到交付状态，未收到 GitHub App 凭据。
+- **API/Postgres**：路由与仓储测试覆盖请求校验、角色/会话权限、仓库绑定、交付请求审批、凭据授权、远端核验、Draft 完成、撤销、审计和脱敏。
+- **桌面/Web 界面**：组件测试覆盖可见状态和明确用户操作；浏览器端到端测试覆盖工作台与团队控制台路径。
+- **确定性 GitHub 交付**：模拟 GitHub 客户端和本地裸仓库证明精确提交、非强制发布、跨尝试采用已核验发布证据及 Draft 核对，无需写入外部服务。
+- **桌面安装包**：冒烟覆盖生产主进程/preload/渲染进程边界、本地 SQLite、本地模拟 API、本地裸仓库、崩溃/重启核对和凭据不落盘。试点还经可信 Local MCP 测试环境完成一次无副作用 Agent Runtime，证明冷启动后已接受动作数仍精确为一。它还通过真实工作流/Gate 前提、一次编辑批准、已保存测试及精确的零重复执行恢复，运行原生编码路径。
+- **全新系统与生命周期**：Postgres 和 Docker 冒烟验证当前迁移、真实服务连接、保留数据卷升级、事务重试和有边界的回滚。
+- **私有沙箱**：明确授权的私有 GitHub 沙箱仅为冻结候选版本验证真实 GitHub App 认证和一个 Draft PR。
 
-The frozen V1.5 candidate must run this complete local matrix against one clean candidate SHA:
+<a id="required-gates-by-change-type"></a>
+
+## 按变更类型要求的门禁
+
+- 共享策略、治理或交付状态转换：先失败的共享单元测试、`typecheck` 和相关集成测试。
+- Gate 审批、交付请求审批或例外写入路径：共享/单元测试，加 Electron 或 API 权限覆盖。
+- 桌面执行或发布：Electron 运行时/单元覆盖，加桌面安装包冒烟。
+- 团队 API、迁移或 Postgres 持久化：路由/仓储覆盖，加 Postgres 冒烟。
+- Compose、升级、备份或回滚行为：Docker 生命周期冒烟。
+- 用户可见工作流界面：组件测试；影响操作路径时增加浏览器端到端测试。
+- 跨平台本地执行：跨平台测试。
+
+<a id="verification-commands"></a>
+
+## 验证命令
+
+冻结的 V1.5 候选版本必须基于同一个干净候选 SHA 执行完整本地矩阵：
 
 ```bash
 corepack pnpm verify
@@ -188,36 +70,22 @@ DEVFLOW_PACKAGED_SMOKE_NETWORK_MODE=offline \
   corepack pnpm test:v15-github-delivery-packaged-smoke
 ```
 
-`verify` contains type checking, the complete Vitest suite, and cross-platform static checks. It
-intentionally excludes production builds, browser/Electron runtime smoke, Postgres, Docker,
-packaged Desktop, and the real private GitHub sandbox because those require dedicated environments,
-artifacts, or credentials. Their results must be recorded separately against the same frozen
-candidate.
+`verify` 包含类型检查、完整 Vitest 套件和跨平台静态检查。有意排除生产构建、浏览器/Electron 运行时冒烟、Postgres、Docker、桌面安装包及真实私有 GitHub 沙箱，因为这些需要专门环境、产物或凭据。其结果须分别记录，并绑定同一个冻结候选版本。
 
-The exact-candidate `workflow_dispatch` is also the artifact authority. Its `macOS verify` job
-uploads `ai-devflow-studio-v22-candidate-desktop`; formal V2.2 signoff records that archive's digest, and both
-local `release:status` and the Release workflow re-read its index/manifest and hash the same archive
-bytes. The Release workflow also checks the recorded run against GitHub's run and job APIs before
-downloading it. A current-runner rebuild may be smoked, but it cannot silently replace the candidate
-artifact.
+精确候选版本的 `workflow_dispatch` 也是产物的权威来源。其 `macOS verify` 任务上传 `ai-devflow-studio-v22-candidate-desktop`；正式 V2.2 验收记录该归档摘要。本地 `release:status` 和 Release 工作流均重新读取索引/清单，并对同一归档字节计算哈希。Release 工作流还在下载前通过 GitHub Run 与 Job API 核验记录。可以对当前 Runner 重建包做冒烟，但不能静默替换候选产物。
 
-## External-Cost And Remote-Write Boundary
+<a id="external-cost-and-remote-write-boundary"></a>
 
-The deterministic and packaged GitHub Delivery gates use local fakes and local bare remotes. A real private
-GitHub sandbox run is a separately authorized release-only gate: one candidate, one approved branch,
-one Draft pull request, no automatic retry, and never merge.
+## 外部费用与远端写入边界
 
-This strategy does not authorize paid-provider smoke. GitHub Delivery verification requires no
-paid model request, and routine test commands must not call OpenCode or another paid provider unless
-a separate, explicit, candidate-bound authorization exists.
+确定性和安装包 GitHub 交付门禁使用本地模拟服务和本地裸仓库。真实私有 GitHub 沙箱是另行授权、仅用于发布的门禁：一个候选版本、一个获批分支、一个 Draft PR，不自动重试，绝不合并。
 
-## Unified workbench coverage
+本策略不授权付费服务商冒烟。GitHub 交付验证不需要付费模型请求；日常测试命令不能调用 OpenCode 或其他付费服务商，除非另有明确且与候选版本绑定的授权。
 
-`test:workbench-conversation-electron-smoke` uses the actual file renderer, preload, Main, SQLite,
-and structured Provider HTTP client with an isolated model endpoint. It opens every tab of all eight
-default nodes, follows counters and conversation actions, and exercises questions, explicit proposal
-publication, private memory, independent histories, retry, cancel, restart and responsive themes.
-The packaged GitHub Delivery smoke additionally queries every node after real fixture coding,
-passing tests, approved branch publication, Draft PR reconciliation and final Acceptance. The chat
-must see completed state, Coding evidence, passing tests, delivery intents and final Gate policy
-without making another workflow mutation. See `workbench-conversations.md` for the coverage matrix.
+<a id="unified-workbench-coverage"></a>
+
+## 统一工作台覆盖
+
+`test:workbench-conversation-electron-smoke` 使用真实文件页面、preload、主进程、SQLite 及结构化服务商 HTTP 客户端，模型端点独立隔离。它打开八个默认节点的全部页签，检查计数和会话动作，覆盖问题、明确发布提案、私有记忆、独立历史、重试、取消、重启及响应式主题。
+
+安装包 GitHub 交付冒烟还在真实测试仓库编码、测试通过、获批分支发布、Draft PR 核对和最终业务验收后查询每个节点。聊天须看到完成状态、编码证据、通过的测试、交付意图和最终 Gate 策略，不得再修改工作流。覆盖矩阵见 `workbench-conversations.md`。

@@ -139,7 +139,7 @@ const modelServer = createServer(async (request, response) => {
     const systemPrompt = body?.messages?.[0]?.content
     if (
       request.headers.authorization !== 'Bearer sk-native-electron-smoke' ||
-      body?.model !== 'deepseek-native-smoke' ||
+      body?.model !== 'deepseek-flash' ||
       typeof systemPrompt !== 'string'
     ) {
       response.writeHead(400).end()
@@ -151,7 +151,8 @@ const modelServer = createServer(async (request, response) => {
       usage: {
         prompt_tokens: 40 + modelRequests.length,
         completion_tokens: 20,
-        cached_tokens: 0,
+        prompt_cache_hit_tokens: 0,
+        prompt_cache_miss_tokens: 40 + modelRequests.length,
       },
     })
     response.writeHead(200, {
@@ -311,6 +312,9 @@ try {
   await runCommand(corepack, ['pnpm', '--filter', '@ai-devflow/desktop', 'build'])
   await listenModelServer()
   apiProcess = spawnQuiet(corepack, ['pnpm', '--filter', '@ai-devflow/api', 'dev'], {
+    DATABASE_URL: '',
+    DEVFLOW_DATABASE_URL: '',
+    DEVFLOW_API_DIAGNOSTICS_PATH: path.join(tempRoot, 'api-diagnostics.json'),
     DEVFLOW_ENABLE_DEMO_DATA: 'true',
     DEV_AUTH_ENABLED: 'true',
     DEVFLOW_SESSION_SECRET: sessionSecret,
@@ -340,6 +344,25 @@ try {
       VITE_DEV_SERVER_URL: desktopUrl,
     },
   })
+  // Only this isolated test process stores synthetic credentials; OS keychain
+  // acceptance is a separate signed-installation check, not part of this fixture.
+  await app.evaluate(({ safeStorage }) => {
+    safeStorage.isAsyncEncryptionAvailable = async () => true
+    safeStorage.encryptStringAsync = async (value) => Buffer.from(`isolated-native-smoke:${value}`)
+    safeStorage.decryptStringAsync = async (bytes) => {
+      if (!bytes.toString().startsWith('isolated-native-smoke:')) throw new Error('Unexpected test credential')
+      return { result: bytes.toString().slice('isolated-native-smoke:'.length), shouldReEncrypt: false }
+    }
+  })
+  await app.evaluate((_, endpoint) => {
+    const original = globalThis.fetch
+    globalThis.fetch = (input, init) => {
+      const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+      if (url.hostname === 'api.deepseek.com') return original(`${endpoint}${url.pathname}`, init)
+      if (!['127.0.0.1', 'localhost'].includes(url.hostname)) throw new Error('Smoke test blocks external requests')
+      return original(input, init)
+    }
+  }, modelUrl)
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   await app.evaluate(({ dialog }, selectedPath) => {
@@ -355,8 +378,8 @@ try {
   await page.evaluate(async (input) => window.aiDevFlowDesktop.saveAgentProviderCredential(input), {
     providerId: 'deepseek-native-smoke',
     apiKey: 'sk-native-electron-smoke',
-    model: 'deepseek-native-smoke',
-    baseUrl: modelUrl,
+    model: 'deepseek-flash',
+    baseUrl: 'https://api.deepseek.com',
   })
   const configuration = await page.evaluate(async (input) => {
     return window.aiDevFlowDesktop.saveCodingRuntimeConfiguration(input)
@@ -467,7 +490,7 @@ try {
   expect(completedState.codingEvents.filter((event) => event.codingRunId === codingRun.id).length)
     .toBeGreaterThanOrEqual(4)
   expect(modelRequests).toHaveLength(2)
-  expect(modelRequests.every((request) => request.model === 'deepseek-native-smoke')).toBe(true)
+  expect(modelRequests.every((request) => request.model === 'deepseek-flash')).toBe(true)
   console.log('DevFlow Native Electron smoke passed: real Main, local model server, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
 } finally {
   if (app) await app.close().catch(() => undefined)

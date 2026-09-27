@@ -436,3 +436,34 @@ describe('workbench tabs and independent conversation interaction', () => {
     expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(0)
   })
 })
+
+it('refreshes from pushes, skips hidden fallback polls and recovers immediately on focus without duplicate requests', async () => {
+  const f = fixture()
+  vi.useFakeTimers()
+  let visibility = 'visible'
+  const descriptor = Object.getOwnPropertyDescriptor(document, 'visibilityState')
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility })
+  try {
+    const rendered = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    await act(async () => {})
+    const lists = () => f.commands.filter((command) => command.type === 'list').length
+    expect(lists()).toBe(1)
+    await act(async () => { await vi.advanceTimersByTimeAsync(59_000) })
+    expect(lists()).toBe(1)
+    await act(async () => { f.push() })
+    expect(lists()).toBe(2)
+    visibility = 'hidden'
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000) })
+    expect(lists()).toBe(2)
+    visibility = 'visible'
+    await act(async () => { fireEvent.focus(window) })
+    expect(lists()).toBe(3)
+    rendered.unmount()
+    await act(async () => { await vi.advanceTimersByTimeAsync(120_000); fireEvent.focus(window); f.push() })
+    expect(lists()).toBe(3)
+  } finally {
+    if (descriptor) Object.defineProperty(document, 'visibilityState', descriptor)
+    else Reflect.deleteProperty(document, 'visibilityState')
+    vi.useRealTimers()
+  }
+})

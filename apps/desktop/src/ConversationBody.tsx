@@ -1,5 +1,5 @@
-import { Component, useState, type ReactNode } from 'react'
-import Markdown from 'react-markdown'
+import { Component, createContext, useContext, useState, type ReactNode } from 'react'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ConversationMessage } from '../electron/workbench-conversation-contract'
 
@@ -20,8 +20,28 @@ class ReadableFallback extends Component<{ text: string; children: ReactNode }, 
   }
 }
 
+const FormattingContext = createContext<{ annotateBlock?: ((start: number, end: number) => ReactNode) | undefined; headingLabel?: ((label: string) => string) | undefined }>({})
+const markdownComponents: Components = {
+  p: function Paragraph({ node, children }) {
+    const { annotateBlock } = useContext(FormattingContext)
+    return <p>{children}{annotateBlock && node?.position ? annotateBlock(node.position.start.offset ?? 0, node.position.end.offset ?? 0) : null}</p>
+  },
+  li: function ListItem({ node, children }) {
+    const { annotateBlock } = useContext(FormattingContext)
+    return <li>{children}{annotateBlock && node?.position && !node.children.some((child) => child.type === 'element' && child.tagName === 'p') ? annotateBlock(node.position.start.offset ?? 0, node.children.find((child) => child.type === 'element' && ['ul', 'ol'].includes(child.tagName))?.position?.start.offset ?? node.position.end.offset ?? 0) : null}</li>
+  },
+  table: function Table({ node, children }) { const { annotateBlock } = useContext(FormattingContext); return <><table>{children}</table>{annotateBlock && node?.position ? annotateBlock(node.position.start.offset ?? 0, node.position.end.offset ?? 0) : null}</> },
+  h1: function Heading1({ children }) { const { headingLabel } = useContext(FormattingContext); return <h1>{typeof children === 'string' && headingLabel ? headingLabel(children) : children}</h1> },
+  h2: function Heading2({ children }) { const { headingLabel } = useContext(FormattingContext); return <h2>{typeof children === 'string' && headingLabel ? headingLabel(children) : children}</h2> },
+  h3: function Heading3({ children }) { const { headingLabel } = useContext(FormattingContext); return <h3>{typeof children === 'string' && headingLabel ? headingLabel(children) : children}</h3> },
+  a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
+  img: ({ src, alt }) => typeof src === 'string' && safeLink(src)
+    ? <a href={safeLink(src)} target="_blank" rel="noopener noreferrer">图片：{alt || '查看链接'}</a>
+    : <span>{alt || '图片链接不可用'}</span>,
+}
+
 /** Only the body is formatted. Workflow actions are validated and rendered separately. */
-export function ConversationBody({ message, showFormatToggle = true }: { message: ConversationMessage; showFormatToggle?: boolean }) {
+export function ConversationBody({ message, showFormatToggle = true, annotateBlock, headingLabel }: { message: ConversationMessage; showFormatToggle?: boolean; annotateBlock?: ((start: number, end: number) => ReactNode) | undefined; headingLabel?: ((label: string) => string) | undefined }) {
   const [raw, setRaw] = useState(false)
   // Deterministic legacy policy: old assistant bodies use Markdown, user input stays literal.
   const format = message.role === 'assistant' ? message.format ?? 'markdown' : 'plain_text'
@@ -32,13 +52,7 @@ export function ConversationBody({ message, showFormatToggle = true }: { message
     {raw || format !== 'markdown' ? <div className="message-plain">{message.text}</div> :
       <ReadableFallback key={message.text} text={message.text}>
         <div className="message-markdown">
-          <Markdown remarkPlugins={[remarkGfm]} urlTransform={safeLink} components={{
-            a: ({ href, children }) => href ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
-            // Do not automatically load remote images or local files supplied by a model.
-            img: ({ src, alt }) => typeof src === 'string' && safeLink(src)
-              ? <a href={safeLink(src)} target="_blank" rel="noopener noreferrer">图片：{alt || '查看链接'}</a>
-              : <span>{alt || '图片链接不可用'}</span>,
-          }}>{message.text}</Markdown>
+          <FormattingContext.Provider value={{ annotateBlock, headingLabel }}><Markdown remarkPlugins={[remarkGfm]} urlTransform={safeLink} components={markdownComponents}>{message.text}</Markdown></FormattingContext.Provider>
         </div>
       </ReadableFallback>}
   </div>

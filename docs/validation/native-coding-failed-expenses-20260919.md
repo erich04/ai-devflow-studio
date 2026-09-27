@@ -1,60 +1,40 @@
-# Native Coding response expenses — issue #139
+<a id="native-coding-response-expenses--issue-139"></a>
 
-## Change
+# 原生编码响应费用 — Issue #139
 
-Each received Native Provider response now settles its validated usage in the
-same durable transaction as its call Trace. Rejected analysis, invalid JSON,
-invalid changes and subsequent execution failures retain those expenses. A
-response request ID is counted once, and each Coding attempt has a distinct
-expense identity locally and when read from Postgres.
+<a id="change"></a>
 
-Only the expense field is reconciled when an executor submits an older run
-snapshot. Workflow, execution status and permission comparisons remain exact.
-Cancellation cannot become completion because a later response arrives.
+## 修改
 
-Before evaluating the next project budget, Desktop synchronizes all recorded
-Coding settlements for that project. Rejected or failed uploads make the budget
-guard unavailable. A missing tariff remains `costUsd: null`, not zero. Preflight
-costs are explicitly labeled as estimates. Invalid/incomplete usage observations
-remain in Trace even when their expense cannot be settled.
+每个收到的原生模型服务商响应，都会把已校验用量与调用轨迹放在同一持久化事务中结算。分析被拒绝、JSON 无效、变更无效或后续执行失败，均保留对应费用。响应请求 ID 只计费一次；每次编码尝试在本地和 Postgres 读取时都有独立费用身份。
 
-Opening the local store replays older Native traces only where no Provider-reported summary
-exists. Repeated recovery is idempotent and does not call the model or advance
-the workflow. Historic traces without enough tariff authority retain known
-tokens and unknown monetary cost.
+执行器提交较旧 Run 快照时，只对费用字段进行对账。工作流、执行状态和权限仍进行精确比较；迟到响应不能把取消变为完成。
 
-## Evidence
+评估下次项目预算前，桌面同步该项目已记录的全部编码结算。上传被拒或失败会使预算检查不可用。缺少价格表时保留 `costUsd: null`，不能记为零；调用前费用明确标为估算。即使费用无法结算，无效或不完整的用量观察仍留在轨迹中。
 
-- Initial expense regression: five rejected-output cases exposed the previous
-  estimate-only behavior.
-- Follow-up red tests reproduced missing Coding upload before budget evaluation
-  and loss of Trace on incomplete usage.
-- Seven-file initial regression: 356 tests passed.
-- Local store, canonical sync and Postgres follow-up: 289 tests passed.
-- Final nine-file regression: 457 passed, one historical seed failed because its
-  timestamp omitted canonical milliseconds. Correcting that fixture and rerunning
-  the entire Provider trace file passed all 12 tests; no remaining failed case.
-- Startup recovery was then moved to database opening so failed runs are repaired even
-  without an active executor or Provider. All 200 store and Provider trace tests passed.
-- Desktop and API TypeScript checks passed.
-- Coverage includes cancellation/stale completion fences, duplicate observations,
-  late responses, malformed JSON, unknown prices, retry identity, team aggregation,
-  budget synchronization, restart recovery and historical expense recovery.
+打开本地存储时，仅在没有服务商实际报告摘要的情况下重放旧原生轨迹。重复恢复保持幂等，不调用模型、不推进工作流。历史轨迹缺乏足够定价依据时，保留已知 Token 和未知金额。
 
-Logs: `out/issue-resolution-20260919/expense-*.log` and
-`out/issue-resolution-20260919/batch2-typecheck.log`.
-These are deterministic integration tests with an owned local Provider server;
-they do not claim a new live DeepSeek billing reconciliation.
+<a id="evidence"></a>
 
-## Independent advisory review
+## 证据
 
-Cursor session `f5fa948c-5089-473b-8af3-588606a853f3` reviewed the implementation
-read-only. It found no blocker to the expense-only optimistic-lock reconciliation.
-Its concerns about estimate labeling, remote attempt identity, retaining invalid
-usage observations and aggregate-field leakage were independently checked and
-addressed. Further inspection found the separate pre-budget synchronization gap,
-which was fixed and regression-tested. Cursor's opinion is advisory, not approval.
+- 最初费用回归的五个拒绝输出场景暴露了先前只保存估算的行为。
+- 随后的失败回归复现预算评估前未上传编码费用，以及用量不完整时丢失轨迹的问题。
+- 最初七文件回归：356 项测试通过。
+- 本地存储、规范同步和 Postgres 后续回归：289 项通过。
+- 最终九文件回归：457 项通过，一项历史种子数据因时间戳缺少规范毫秒格式失败。修正该测试数据后，重跑整个服务商轨迹测试文件，全部 12 项通过，没有剩余失败。
+- 随后将启动恢复移到数据库打开时执行，确保没有活动执行器或服务商时也能补全失败 Run 的费用；200 项存储和服务商轨迹测试全部通过。
+- 桌面和 API TypeScript 检查通过。
+- 覆盖取消/过期完成保护、重复观察、迟到响应、格式错误 JSON、未知价格、重试身份、团队汇总、预算同步、重启和历史费用恢复。
 
-The user's active To Do Run, conversation, local repository, pairing and
-credentials were not used or changed by these tests. Delivery and issue closure
-remain pending the combined release validation.
+日志：`out/issue-resolution-20260919/expense-*.log` 和 `out/issue-resolution-20260919/batch2-typecheck.log`。
+
+这些是使用自有本地模型服务端的确定性集成测试，不代表完成了新的真实 DeepSeek 账单对账。
+
+<a id="independent-advisory-review"></a>
+
+## 独立审查建议
+
+Cursor 会话 `f5fa948c-5089-473b-8af3-588606a853f3` 只读审查实现，没有发现仅对费用字段进行乐观锁对账的阻断问题。其对估算标注、远端尝试身份、保留无效用量观察及汇总字段泄漏的担忧均经过独立核对并处理。进一步检查发现独立的预算前同步缺口，随后修复并进行回归。Cursor 意见是建议，不是审批。
+
+这些测试未使用或修改用户活动中的任务清单 Run、会话、本地仓库、配对或凭据。本文记录时，交付和 Issue 关闭仍等待统一发布验证；不将历史本地通过等同于当前交付完成。

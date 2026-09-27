@@ -1,50 +1,48 @@
-# ADR 0007: Knowledge Retrieval Is Not Governance Evidence
+<a id="adr-0007-knowledge-retrieval-is-not-governance-evidence"></a>
 
-## Status
+# ADR 0007：知识检索不等于治理证据
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-DevFlow Studio links workflow activity to team knowledge so reviewers and agents can see which
-standards, ADRs, and checklists may apply to a Run. The first v0.4 implementation used deterministic
-matching for demo-friendly Knowledge References. Future versions may add lexical, vector, hybrid, or
-RAG-based retrieval.
+已接受（Accepted）。
 
-If retrieval hits directly changed governance status, a high-scoring search result could make a Gate
-look satisfied without a durable Artifact, Test Evidence record, or human decision. That would make
-the governance layer harder to audit and harder to explain to teams.
+<a id="context"></a>
 
-## Decision
+## 背景
 
-Treat Knowledge Retrieval as a recommendation layer. Retrieval can create or explain Knowledge
-References, including source chunks, typed relevance, strategies, and content hashes.
+DevFlow Studio 将工作流活动与团队知识关联，使审查者和 Agent 能看到哪些标准、ADR 与清单可能适用于 Run。v0.4 的初始实现使用确定性匹配，提供便于演示的知识关联；后续版本可以增加词法、向量、混合或基于 RAG 的检索。
 
-The data contract keeps three meanings separate:
+如果检索命中直接改变治理状态，高分搜索结果就可能在没有持久产物、测试证据或人工决定时，让 Gate 看起来已经满足条件。这会削弱治理层的可审计性，也难以向团队解释。
 
-- `lexicalMatch` is a raw additive keyword match. It is not normalized and cannot be compared
-  across queries.
-- `semanticRelevance` exists only when a semantic retriever actually produced it.
-- `gateEvidence` records whether a completed Review used a reference; the Review or finding is the
-  auditable Evidence, not the reference itself.
+<a id="decision"></a>
 
-Historical `score` values remain readable according to their recorded retrieval strategy, but a
-lexical score is never presented as semantic relevance or Gate Evidence.
+## 决策
 
-Knowledge Governance Checks must still be driven by auditable workflow evidence:
+将知识检索视为推荐层。检索可以创建或解释知识关联，包括来源片段、带类型的相关性、检索策略和内容哈希。
 
-- Artifacts can satisfy standards when they are linked to the selected node.
-- Test Evidence can satisfy or violate testing standards.
-- Gate decisions can require evidence and record human review context.
-- Run-level retrieval citations provide context but do not satisfy or violate standards by
-  themselves.
+数据契约区分三种含义：
 
-## Consequences
+- `lexicalMatch` 是未经归一化的关键词加和匹配分数，不能跨查询比较。
+- `semanticRelevance` 只有在语义检索器实际产生结果时才存在。
+- `gateEvidence` 记录一次已完成审查是否使用某条关联；可审计证据是审查或发现本身，而非关联本身。
 
-- Future RAG implementations can improve recall and explanation without rewriting the governance UI.
-- Reviewers can inspect retrieval provenance while still asking for concrete evidence.
-- The product avoids treating model or search confidence as proof of compliance.
-- Inspector renders Knowledge provenance under `引用来源` and auditable workflow results under
-  `Evidence`; one reference is not duplicated across both meanings.
-- Enforcement work in v0.5 can reuse Knowledge Governance Checks without depending on a specific
-  retrieval provider.
+历史 `score` 仍按记录的检索策略解释，但词法分数绝不能被展示成语义相关性或 Gate 证据。
+
+知识治理检查仍必须由可审计的工作流证据驱动：
+
+- 产物关联到选中节点后，可以用于满足标准。
+- 测试证据可以证明满足或违反测试标准。
+- Gate 决策可以要求证据，并记录人工审查上下文。
+- Run 级检索引用提供上下文，但本身不能证明满足或违反标准。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 后续 RAG 可以改进召回和解释，无需重写治理界面。
+- 审查者可以检查检索来源，同时继续要求具体证据。
+- 产品避免将模型或搜索置信度当作合规证明。
+- 原决策中的 Inspector 在“引用来源”展示知识来源，在 `Evidence` 展示可审计工作流结果；同一关联不能以两种含义重复计入。后续节点工作区方案可以将这两类内容收纳到“产物与证据”，但仍须保持语义区别。
+- v0.5 的强制策略工作可以复用知识治理检查，不依赖特定检索服务商。

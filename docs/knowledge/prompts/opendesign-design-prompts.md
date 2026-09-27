@@ -1,114 +1,132 @@
-# OpenDesign Design Prompts
+<a id="opendesign-design-prompts"></a>
 
-This file stores reusable prompts for design work with OpenDesign.
+# OpenDesign 设计提示词
 
-## Usage Rules
+本文件保存可复用的 OpenDesign 设计提示词。通用模板已提供中文版本；下方 2026-06-23 的两条已使用提示词逐字保留，便于追溯当时输入。它们描述当时的开发状态和设计意图，其中的三栏布局、右侧节点详情和发布范围不代表当前产品能力；当前层级参见[节点工作区说明](../../engineering/workbench-conversations.md)。
 
-- Keep prompts reusable and product-agnostic when possible.
-- Record the design goal, target surface, constraints, and expected output.
-- Prefer prompts that produce concrete UI states, not broad visual exploration only.
-- When a prompt works well, add the date and the result it helped produce.
+<a id="usage-rules"></a>
 
-## Prompt Entry Template
+## 使用规则
 
-```md
-### YYYY-MM-DD - Short Prompt Name
+- 尽量使用可复用、与具体产品解耦的提示词。
+- 记录设计目标、目标界面、约束和预期输出。
+- 优先生成具体界面状态，避免只做宽泛的视觉探索。
+- 某条提示词取得良好效果后，补充使用日期及生成结果。
 
-**Use case**:
+<a id="prompt-entry-template"></a>
 
-**Prompt**:
+## 提示词条目模板
 
-```text
-Paste the exact OpenDesign prompt here.
-```
+````md
+### YYYY-MM-DD - 提示词简称
 
-**Result / notes**:
-```
+**使用场景**：
 
-## Core Prompt Templates
-
-### Product Surface Redesign
+**提示词**：
 
 ```text
-Design a production-grade interface for [product/surface].
-
-Audience:
-- [target users]
-
-Primary job:
-- [what the user needs to accomplish]
-
-Context:
-- [business/product context]
-
-Required UI states:
-- Default state
-- Empty state
-- Loading state
-- Error or blocked state
-- Success/completed state
-
-Constraints:
-- Keep the interface work-focused and suitable for repeated daily use.
-- Prioritize scanability, clear hierarchy, and low-friction workflows.
-- Avoid decorative landing-page composition.
-- Preserve existing product terminology unless a better label is clearly justified.
-
-Output:
-- One complete screen design.
-- Include realistic data.
-- Include key controls and navigation needed for the workflow.
+在这里粘贴实际使用的完整 OpenDesign 提示词。
 ```
 
-### Existing Screen Refactor
+**结果与说明**：
+````
+
+<a id="core-prompt-templates"></a>
+
+## 通用提示词模板
+
+<a id="product-surface-redesign"></a>
+
+### 产品界面重新设计
 
 ```text
-Refactor this existing screen into a clearer and more scalable interface.
+为[产品/界面]设计一个达到生产质量的界面。
 
-Do not change:
-- Core workflow semantics
-- Domain terminology
-- Required actions
+受众：
+- [目标用户]
 
-Improve:
-- Information hierarchy
-- Navigation clarity
-- Density and scanability
-- Empty/loading/error states
-- Repeated-use ergonomics
+主要任务：
+- [用户需要完成的事情]
 
-Keep the result suitable for an operational desktop/web app, not a marketing page.
+背景：
+- [业务/产品背景]
+
+必须包含的界面状态：
+- 默认状态
+- 空状态
+- 加载状态
+- 错误或受阻状态
+- 成功/完成状态
+
+约束：
+- 界面以工作任务为中心，适合日常重复使用。
+- 优先保证便于扫读、层级清晰、流程顺畅。
+- 避免装饰性的营销落地页构图。
+- 保留既有产品术语；只有能明确解释新名称更合理时才调整。
+
+输出：
+- 一张完整的界面设计。
+- 使用贴近实际的数据。
+- 包含该工作流所需的关键控件和导航。
 ```
 
-### Design Direction Exploration
+<a id="existing-screen-refactor"></a>
+
+### 既有界面重构
 
 ```text
-Create 3 distinct visual directions for [surface/product].
+将现有界面重构得更清晰，并能够承载后续内容扩展。
 
-All directions must support:
-- [workflow 1]
-- [workflow 2]
-- [workflow 3]
+保持不变：
+- 核心工作流语义
+- 领域术语
+- 必需操作
 
-Each direction should vary:
-- Layout structure
-- Density
-- Navigation model
-- Visual tone
+改善：
+- 信息层级
+- 导航清晰度
+- 信息密度和扫读体验
+- 空状态、加载状态和错误状态
+- 重复操作的便利性
 
-Do not use decorative-only hero sections. Show real product state and realistic data.
+结果应适合日常操作的桌面/网页应用，而非营销页面。
 ```
 
-## Saved Prompts
+<a id="design-direction-exploration"></a>
 
-Add proven prompts below this line.
+### 设计方向探索
 
-### 2026-06-23 - DevFlow Studio Current Product Summary V1
+```text
+为[界面/产品]创建 3 个不同的视觉方向。
 
-**Use case**:
-OpenDesign prompt/source context for the current DevFlow Studio Electron app state before the full-module V2 product interface prompt.
+所有方向都必须支持：
+- [工作流 1]
+- [工作流 2]
+- [工作流 3]
 
-**Prompt**:
+各方向应在以下方面体现差异：
+- 布局结构
+- 信息密度
+- 导航模型
+- 视觉风格
+
+不要使用纯装饰性的首屏大图区。展示真实产品状态和贴近实际的数据。
+```
+
+<a id="saved-prompts"></a>
+
+## 已保存的提示词
+
+在此处添加经过实践的提示词，并保留其原始输入。
+
+<a id="2026-06-23---devflow-studio-current-product-summary-v1"></a>
+
+### 2026-06-23 - DevFlow Studio 当时产品状态总结 V1
+
+**使用场景**：
+在编写覆盖全部模块的 V2 界面提示词前，为 OpenDesign 提供当时 DevFlow Studio Electron 应用状态的背景材料。
+
+**提示词原文**：
 
 ```text
 以下是当前本地 Electron 应用的最新文字总结，按你正在体验的 `AI DevFlow Studio` 工作树状态来描述。注意：这是**当前开发态**，不是已正式 release 的稳定版说明。
@@ -238,15 +256,17 @@ Gate 不只是按钮审批。它会综合：
 - [desktop-api.ts](../../../apps/desktop/src/desktop-api.ts)
 ```
 
-**Result / notes**:
-First version. Captures the current development-state product model, flow, UI structure, agent/runtime boundaries, and known information-architecture issues.
+**结果与说明**：
+第一版，记录当时开发状态下的产品模型、流程、界面结构、Agent/运行时边界及已知的信息架构问题。
 
-### 2026-06-23 - DevFlow Studio Full Product Interface V2
+<a id="2026-06-23---devflow-studio-full-product-interface-v2"></a>
 
-**Use case**:
-OpenDesign prompt for a complete DevFlow Studio Electron desktop product interface covering all primary modules and cross-module delivery-flow linkage.
+### 2026-06-23 - DevFlow Studio 完整产品界面 V2
 
-**Prompt**:
+**使用场景**：
+为 OpenDesign 提供完整的 DevFlow Studio Electron 桌面产品界面提示词，覆盖所有主要模块及跨模块的交付流程联动。
+
+**提示词原文**：
 
 ```text
 请设计 DevFlow Studio Electron 桌面端完整产品界面，包含入口、工作台、Team Overview、Knowledge、Agents、Skills、MCP、Tests 七个主板块，并让它们围绕同一个 Run delivery flow 联动。
@@ -282,5 +302,5 @@ Tests：
 新建 Run 进入 Workbench；Gate 缺门禁审查结果时从 Inspector 跳到 Agents；执行测试后跳到 Tests；Knowledge Governance 引用可跳到 Knowledge；同步团队影响 Team Overview 和 Gate policy；Coding Agent 产生 diff/test/bootstrap evidence 后回写 Workbench Inspector；PR Draft 和 Acceptance Bundle 都从累积 evidence 生成。整体体验必须是“流程驱动”，不是几个孤立页面。
 ```
 
-**Result / notes**:
-Second version. Covers all primary modules and the cross-module delivery flow.
+**结果与说明**：
+第二版，覆盖全部主要模块和跨模块交付流程。

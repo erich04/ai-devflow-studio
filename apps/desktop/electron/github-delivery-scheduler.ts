@@ -8,7 +8,7 @@ export const GITHUB_DELIVERY_POLL_INTERVAL_MS = 15_000
 export type GitHubDeliverySchedulerDependencies = {
   recoverAndAdvance(): Promise<unknown>
   onError(error: unknown): void | Promise<void>
-  pollingIntervalMs?: number
+  pollingIntervalMs?: number | (() => number)
   timers?: RemoteSyncOutboxSchedulerTimers
 }
 

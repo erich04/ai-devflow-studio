@@ -1,35 +1,33 @@
-# ADR 0011: API Knowledge Provenance
+<a id="adr-0011-api-knowledge-provenance"></a>
 
-## Status
+# ADR 0011：API 知识来源
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-V1.4 adds a bounded Electron main-process index of Git-managed repository Markdown. That content is
-private local repository data. API Review runs on the server and does not have an independently
-authorized checkout of the Desktop repository. Treating API Review as if it had used the local
-knowledge snapshot would create false provenance; implicitly uploading the raw Markdown would break
-the Desktop repository trust boundary.
+已接受（Accepted）。
 
-## Decision
+<a id="context"></a>
 
-- Desktop raw repository Markdown is not uploaded to the API, including through review prompts,
-  remote-sync summaries, or an implicit knowledge synchronization side channel.
-- V1.4 API Review knowledge provenance is `none`. API Review may use only a source that the server
-  explicitly authorizes and identifies; the current V1.4 path has no such source and must not claim
-  local repository knowledge.
-- The Desktop repository snapshot remains available only to trusted local consumers. Retrieval
-  references remain recommendations and are not Governance evidence, as established by ADR 0007.
-- A future server-side repository checkout requires a separate decision and implementation with
-  explicit project authorization, least-privilege credentials, source/revision attribution,
-  bounded indexing, retention rules, and auditable access events.
+## 背景
 
-## Consequences
+V1.4 在 Electron 主进程中增加对 Git 管理的仓库 Markdown 的有界索引。正文属于私有本地仓库数据。API 审查运行在服务端，没有经过独立授权的桌面仓库检出。若声称 API 审查使用了本地知识快照，会形成虚假来源；若隐式上传原始 Markdown，又会突破桌面仓库信任边界。
 
-- V1.4 API Review honestly reports that it has no repository-knowledge provenance.
-- Local Markdown cannot cross the Desktop/API boundary merely because a review or remote summary is
-  requested.
-- API Review may have less repository context until an authorized server source exists.
-- A future server checkout is visible, revocable, attributable, and auditable instead of being an
-  implicit extension of Desktop pairing.
+<a id="decision"></a>
+
+## 决策
+
+- 不向 API 上传桌面原始仓库 Markdown，包括通过审查提示、远端同步摘要或隐式知识同步旁路上传。
+- V1.4 API 审查的知识来源为 `none`。API 审查只能使用服务端明确授权且标识的来源；当前 V1.4 路径没有这种来源，不能声称使用了本地仓库知识。
+- 桌面仓库快照仅供可信本地消费者使用。按 ADR 0007，检索关联仍是建议，不是治理证据。
+- 后续服务端仓库检出需要独立决策和实现，明确项目授权、最小权限凭据、来源/版本归属、有界索引、保留规则和可审计访问事件。
+
+<a id="consequences"></a>
+
+## 影响
+
+- V1.4 API 审查如实报告没有仓库知识来源。
+- 不能仅因为请求审查或远端摘要，就让本地 Markdown 跨越桌面/API 边界。
+- 获得授权的服务端来源出现之前，API 审查的仓库上下文可能较少。
+- 后续服务端检出必须可见、可撤销、可追溯和可审计，不能成为桌面配对的隐式扩展。

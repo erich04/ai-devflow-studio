@@ -1,65 +1,35 @@
-# Gate review findings and human feedback — #137
+<a id="gate-review-findings-and-human-feedback--137"></a>
 
-The reported DeepSeek review at `2026-09-17T07:18:49Z` claimed that a decision
-about confirmation/undo was absent, although clarification v2 explicitly said
-“不做二次确认弹窗、不做撤销/回收站” in its non-goals. The issue records that the
-full current body and correct version were supplied; no old-version contamination
-was established. This change does not invent a model-internal explanation.
+# Gate 审查意见与人工反馈 — #137
 
-## Result
+报告中 `2026-09-17T07:18:49Z` 的 DeepSeek 审查认为缺少确认/撤销决定，但需求澄清 v2 的非目标已明确写出“不做二次确认弹窗、不做撤销/回收站”。Issue 记录表明提供了完整当前正文和正确版本，未证实混入旧版本。本修改不虚构模型内部原因。
 
-- Review instructions distinguish an explicit non-goal, an unresolved choice and
-  conflicting decisions. Every missing-evidence opinion requests exact citations.
-- The host accepts only quotations that occur in the current review subjects or
-  original request. It computes the source digest, timestamp and character
-  offsets itself. Missing, invented, stale or duplicate assignments are shown as
-  unverified. A citation in the owned non-goals section is flagged for review.
-- The Inspector and review report retain the original opinion and its source
-  check. A valid quote locates evidence; it does not prove the opinion is correct.
-- A user can record a false-positive explanation. The main process resolves the
-  actor, checks project/Run/review ownership and index, redacts sensitive text,
-  and atomically saves feedback plus an event. Duplicate submissions are
-  idempotent. Feedback does not change the original finding, policy or Gate.
-- Existing review JSON remains readable; new fields are optional. No destructive
-  database migration or user-data reset is required.
+<a id="result"></a>
 
-## Evidence
+## 结果
 
-`packages/shared/src/review-grounding.test.ts` preserves the reported Chinese
-decision/contradiction as a controlled quality sample. It captures actual Provider
-HTTP messages, checks the complete current subject and exclusion of an older
-artifact, and verifies host-generated provenance and an unchanged Gate advisory.
-This is a repeatable regression sample, **not a new live DeepSeek evaluation**.
+- 审查指令区分明确非目标、未决选择和互相冲突的决定。每项缺失证据意见都要求精确引用。
+- 宿主只接受出现在当前审查对象或原始请求中的引文，自行计算来源摘要、时间戳和字符偏移。缺失、虚构、过期或重复指定的引用显示为未核验；位于宿主识别的非目标章节中的引文会标记供人工审阅。
+- 节点详情与审查报告保留原意见和来源检查。有效引文能定位证据，但不能证明意见正确。
+- 用户可记录误报解释。主进程解析可信操作者，检查项目/Run/审查归属及意见索引，脱敏敏感文本，并原子保存反馈和事件。重复提交保持幂等。反馈不修改原意见、策略或 Gate。
+- 旧审查 JSON 仍可读取，新字段为可选项，不需要破坏性数据库迁移或重置用户数据。
 
-The focused suite passed **47 tests** across grounding, review artifact generation,
-SQLite feedback persistence and Inspector feedback rendering. The earlier
-cross-module run passed **512 tests** across review, enforcement, remote sync,
-knowledge-review runtime, local store, IPC and App. Root `pnpm typecheck` passed.
-Negative checks cover invented/foreign quotes, duplicate citation assignment,
-forged actor fields, cross-project feedback, nonexistent finding indices and
-secret redaction. Reopening SQLite preserves feedback and leaves Run state intact.
+<a id="evidence"></a>
 
-The initial failing grounding/report and feedback tests were observed before the
-corresponding implementation. Local logs are in
-`out/issue-resolution-20260919/review-grounding-*` and
-`review-report-grounding-red.log`.
+## 证据
 
-## Limits
+`packages/shared/src/review-grounding.test.ts` 将报告中的中文决定/矛盾保留为受控质量样例，捕获实际服务商 HTTP 消息，检查完整当前审查对象和排除旧产物，验证宿主生成的来源信息及 Gate 建议保持不变。这是可重复回归样例，**不是新一次真实 DeepSeek 评估**。
 
-Cursor read-only consultation `2832460b-6082-42b8-b257-46a499212e6e` found no
-blocking defect. Independently accepted its concern about misleading source
-classification: a model-authored non-goal label alone is now unverified;
-duplicate quote locations are unverified, and a reported conflict is not
-overridden by the section heuristic. Added regressions failed before this fix
-and passed after it. Its proposed preference for a non-goal occurrence was
-rejected because choosing the favorable occurrence would hide ambiguity.
-The suggested forged/stale citation tests had already been added during review.
-Deferred richer actor-source metadata: this is local feedback using the existing
-trusted-actor resolver, not evidence of a separate approval or current team role.
-The UI describes the section location without declaring the business opinion
-resolved. No follow-up was needed solely to obtain another consultant verdict.
+定向套件中，来源核验、审查产物生成、SQLite 反馈持久化及节点详情反馈展示共 **47 项**通过。此前跨模块审查、强制策略、远端同步、知识审查运行时、本地存储、IPC 和 App 共 **512 项**通过。根目录 `pnpm typecheck` 通过。负向检查覆盖虚构/其他范围引文、重复引用指定、伪造操作者字段、跨项目反馈、不存在的意见索引及机密脱敏。重开 SQLite 后反馈保留，Run 状态不变。
 
-The model can still misinterpret a valid quotation or omit a relevant one. Such
-opinions remain subject to human judgment; no keyword heuristic dismisses a
-finding or approves a Gate. Feedback is local audit data and is not silently used
-as shared memory, training data or a modification to the original review report.
+来源核验/报告及反馈测试在对应实现前已观察到失败。本地日志位于 `out/issue-resolution-20260919/review-grounding-*` 和 `review-report-grounding-red.log`。
+
+<a id="limits"></a>
+
+## 限制
+
+Cursor 只读咨询 `2832460b-6082-42b8-b257-46a499212e6e` 未发现阻断缺陷。独立采纳其对误导性来源分类的担忧：模型自行给出的非目标标签不能单独证明分类，现记为未核验；重复引文位置也记为未核验；章节启发式不能覆盖模型报告的冲突。新增回归修复前失败，修复后通过。
+
+没有采纳优先选择非目标章节出现位置的建议，因为挑选有利位置会隐藏歧义。伪造/过期引用测试在审查过程中已加入。更丰富的操作者来源元数据延后：本功能使用既有可信操作者解析器记录本地反馈，不证明独立审批或当前团队角色。界面描述章节位置，但不宣称业务意见已解决。没有仅为获得另一份咨询结论而追加调用。
+
+模型仍可能误解有效引文或遗漏相关引文，意见仍需人工判断。任何关键词启发式都不能自行驳回意见或批准 Gate。反馈是本地审计数据，不会静默成为共享记忆、训练数据或对原审查报告的修改。

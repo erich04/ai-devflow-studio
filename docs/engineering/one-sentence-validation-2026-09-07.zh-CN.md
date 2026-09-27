@@ -1,5 +1,7 @@
 # 一句原始需求的端到端补验 · 2026-09-07
 
+阅读说明：本文是当时的真实验证记录。保留原始需求引文、ID、状态枚举、命令、哈希、时间、费用及模型回执；不将历史完成状态视为新候选版本的验收。术语：Team Project 为团队项目，Work Request 为工作请求，pairing 为配对，managed worktree 为托管工作树，Draft PR 为草稿拉取请求，Acceptance 为业务验收。
+
 状态：**本轮已完成。Team Web 创建 Project / Request → Desktop pairing / 承接 → 澄清 → 设计 → Native 实施 → 测试 → GitHub Draft PR → Acceptance → Team Web 回传完成。**
 
 Run `run-work-request-e4cd15efee768f98033566c237bdd90d` 在 `2026-09-07T12:20:54.875Z` 达到 completed / version 11。Team Web 显示 100% 和全部节点 DONE。交付为 [Draft PR #3](https://github.com/erich04/devflow-mini-agent-live-20260906/pull/3)，未合并。
@@ -33,7 +35,9 @@ Run `run-work-request-e4cd15efee768f98033566c237bdd90d` 在 `2026-09-07T12:20:54
 
 没有手工修改目标代码、安装执行工作区依赖、写数据库推进状态，或手工 push / gh 创建交付 PR。
 
-## 真实 Provider 调用
+<a id="真实-provider-调用"></a>
+
+## 真实模型调用
 
 模型均为 deepseek-v4-flash。初次全流程：
 
@@ -56,7 +60,7 @@ Run `run-work-request-e4cd15efee768f98033566c237bdd90d` 在 `2026-09-07T12:20:54
 - 精确提交测试 `github-delivery-test-6fef9ce4-deab-4584-ad87-8c9a35efad23`，sourceCommitSha 与上述 SHA 一致；passed / exit 0 / 1290 ms。
 - 正式 Test `evidence-e53e8db1-04b2-481b-892b-aff8863d0181`：passed / exit 0 / 1366 ms。
 - Native Test `coding-test-81bde49f-4df4-409e-aa5c-de64856757a5`：passed / exit 0 / 2326 ms。
-- 只读 Git 核验：README 与基线仅替换该标题的字节结果完全一致；仅 README.md，1 insertion / 1 deletion；worktree clean。
+- 只读 Git 核验：README 与基线仅替换该标题的字节结果完全一致；仅 README.md，新增 1 行、删除 1 行；工作树干净。
 - GitHub 独立只读核验：OPEN + Draft，head SHA 一致，仅该 README 修改。
 - 最终审查 `agent-review-review-request-1788783598544-electron` 确认标题、其余内容不变、精确 commit 测试及 PR，并将早期警告视为历史。余下 advisory 涉及没有额外人工审查说明和 Knowledge chunk；精确修改、Web 交付审批与最终人工核验均实际执行。
 

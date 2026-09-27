@@ -1201,8 +1201,7 @@ async function showProjectRuns(page: import('@playwright/test').Page) {
 }
 
 async function showNodeRecords(page: import('@playwright/test').Page) {
-  const records = page.getByTestId('node-inspector').locator('.inspector-support')
-  if (await records.getAttribute('open') === null) await records.locator(':scope > summary').click()
+  await page.getByTestId('node-inspector').getByRole('tab', { name: '产物与证据', exact: true }).click()
 }
 
 async function createFixtureRun(page: import('@playwright/test').Page) {
@@ -1336,10 +1335,16 @@ test.describe('AI DevFlow desktop workbench', () => {
           }
         })
         await page.goto('/')
+        const runSummary = page.getByRole('button', { name: /^当前 Run/ })
+        await expect(runSummary).toContainText('16,712')
+        await expect(runSummary).toContainText('金额待确认')
+        await expect(runSummary).not.toContainText('$0.00')
+        await runSummary.click()
         const usage = page.getByTestId('run-token-usage')
         await expect(usage).toContainText('16,712')
         await expect(usage).toContainText('1 项金额待确认')
         await expect(usage).not.toContainText('$0.00')
+        await page.getByRole('button', { name: /^策略与预算/ }).click()
         await expect(page.getByTestId('runtime-budget-status')).toContainText('数据不完整')
         await page.screenshot({ path: testInfo.outputPath('unknown-run-cost.png') })
       })
@@ -1370,32 +1375,37 @@ test.describe('AI DevFlow desktop workbench', () => {
         const card = page.getByTestId('workflow-card-node-agent-ux-design-gate')
         await page.getByRole('button', { name: '流程视图', exact: true }).click()
         const inspector = page.getByTestId('node-inspector')
-        for (const [label, count, text] of [
-          ['产物', 1, 'Reviewed the current requirement.'],
-          ['测试证据', 0, '当前节点尚未归档测试证据。'],
-          ['轨迹', 1, 'Review archived once.'],
+        for (const [label, count, tab, text] of [
+          ['产物', 1, '产物与证据', '本次 Gate 审查报告'],
+          ['测试证据', 0, '产物与证据', '当前节点尚未归档测试证据。'],
+          ['轨迹', 1, '执行记录', 'Review archived once.'],
         ] as const) {
           const chip = card.getByRole('button', { name: `方案评审 Gate：${label} ${count}` })
           await chip.focus()
           await chip.press('Enter')
-          await expect(inspector.getByRole('tab', { name: label, exact: true })).toHaveAttribute('aria-selected', 'true')
+          await expect(inspector.getByRole('tab', { name: tab, exact: true })).toHaveAttribute('aria-selected', 'true')
           await expect(inspector).toContainText(text)
         }
         await card.getByRole('button', { name: '方案评审 Gate：产物 1' }).click()
         await expect(inspector.getByTestId('node-artifacts').locator('.artifact-card')).toHaveCount(1)
+        await inspector.getByTestId('node-artifacts').getByRole('button', { name: '阅读正文', exact: true }).click()
+        await expect(inspector.getByRole('tab', { name: '内容与审查', exact: true })).toHaveAttribute('aria-selected', 'true')
+        await expect(inspector).toContainText('Reviewed the current requirement.')
         await expect(page.locator('button button')).toHaveCount(0)
-        for (const tab of await inspector.getByRole('tab').all()) {
+        for (const tab of await inspector.locator('.workspace-primary-tabs').getByRole('tab').all()) {
           await tab.focus()
           await tab.press('Enter')
           await expect(tab).toHaveAttribute('aria-selected', 'true')
           await expect(tab).toBeInViewport()
         }
-        await expect(inspector.getByRole('tab', { name: '引用来源' })).toBeVisible()
+        await expect(inspector.locator('.workspace-primary-tabs').getByRole('tab')).toHaveCount(4)
+        await showNodeRecords(page)
+        await expect(inspector.getByTestId('knowledge-reference-sources')).toBeVisible()
         await page.screenshot({ path: testInfo.outputPath('attachment-navigation.png') })
         expect(errors).toEqual([])
       })
 
-      test(`reads folded Markdown and reaches Gate records without expanding the entire document (${viewport.width}, ${colorScheme})`, async ({ page }) => {
+      test(`reads complete Markdown by sections and reaches persistent Gate evidence (${viewport.width}, ${colorScheme})`, async ({ page }) => {
         await page.setViewportSize(viewport)
         await page.emulateMedia({ colorScheme })
         await installDesktopApi(page, 'clarification-revision')
@@ -1414,17 +1424,18 @@ test.describe('AI DevFlow desktop workbench', () => {
         })
         await page.goto('/')
         const inspector = page.getByTestId('node-inspector')
+        await inspector.getByRole('tab', { name: '内容与审查', exact: true }).click()
         const document = inspector.getByTestId('clarification-current-revision')
-        await expect(document.locator('.artifact-section')).toHaveCount(16)
-        await expect(document.locator('.artifact-section[open]')).toHaveCount(0)
-        const lastSection = document.locator('.artifact-section').last()
-        await lastSection.locator('summary').click()
+        await expect(document.locator('.artifact-reading-section')).toHaveCount(16)
+        await expect(document.locator('.artifact-toc a')).toHaveCount(16)
+        const lastSection = document.locator('.artifact-reading-section').last()
+        await document.locator('.artifact-toc a').last().click()
         await expect(lastSection.locator('p')).toContainText('Confirm the retry boundary')
         await document.getByRole('button', { name: '查看原文', exact: true }).click()
         await expect(document.locator('.message-plain')).toContainText('## Acceptance 16')
         await document.getByRole('button', { name: '返回排版', exact: true }).click()
         await showNodeRecords(page)
-        const evidenceTab = inspector.getByRole('tab', { name: '产物', exact: true })
+        const evidenceTab = inspector.getByRole('tab', { name: '产物与证据', exact: true })
         await evidenceTab.scrollIntoViewIfNeeded()
         await expect(evidenceTab).toBeVisible()
         await evidenceTab.click()
@@ -1534,23 +1545,24 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.goto('/')
 
     const inspector = page.getByTestId('node-inspector')
+    await inspector.getByRole('tab', { name: '内容与审查', exact: true }).click()
     await expect(page.getByTestId('clarification-review')).toBeVisible()
-    await inspector.getByRole('tab', { name: /原始需求/ }).click()
+    await inspector.getByRole('button', { name: /原始需求/ }).click()
     await expect(page.getByTestId('clarification-raw-request')).toContainText('Clarify webhook retry boundaries')
-    await inspector.getByRole('tab', { name: /代码调查/ }).click()
+    await inspector.getByRole('button', { name: /代码调查/ }).click()
     await expect(page.getByTestId('clarification-repository-findings')).toContainText('Retry handler exists')
-    await inspector.getByRole('tab', { name: /需求澄清 v1/ }).click()
     await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v1')
     await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
 
-    await inspector.locator('.clarification-review__feedback > summary').click()
+    await inspector.getByRole('button', { name: '请求修订当前版本', exact: true }).click()
     await inspector.getByLabel('结构化修订意见').fill('State the retry boundary explicitly.')
-    await inspector.getByRole('button', { name: '提交修订意见' }).click()
+    await inspector.getByRole('button', { name: '确认提交修订请求', exact: true }).click()
     await expect(page.getByTestId('toast')).toContainText('流程返回需求澄清')
     await expect(inspector).toContainText('需求澄清')
 
     await inspector.getByRole('button', { name: /生成需求澄清/ }).click()
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成')
+    await inspector.getByRole('tab', { name: '内容与审查', exact: true }).click()
     await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v2')
     await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
     await page.getByTestId('clarification-revision-history').locator('summary').click()
@@ -1598,7 +1610,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('stage-summary-build')).not.toContainText('展示：')
     const clarifyCard = workflow.getByTestId('flow-node-run-created-from-request-clarify')
     await clarifyCard.click()
-    await page.getByRole('tab', { name: 'Gate影响' }).click()
+    await page.getByRole('tab', { name: '概览', exact: true }).click()
     const gateImpact = page.getByTestId('gate-impact-summary')
     await expect(gateImpact).toContainText('直接下游 Gate')
     await expect(gateImpact).toContainText('需求确认 Gate')
@@ -1664,7 +1676,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     const reviewedGateInspector = page.getByTestId('node-inspector')
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
     await showNodeRecords(page)
-    const referencesTab = reviewedGateInspector.getByRole('tab', { name: '引用来源' })
+    const referencesTab = reviewedGateInspector.getByRole('tab', { name: '产物与证据', exact: true })
     await referencesTab.focus()
     await referencesTab.press('Enter')
     await expect(page.getByTestId('knowledge-reference-sources')).toContainText(
@@ -1673,9 +1685,11 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
       'Knowledge review completed for this node.',
     )
-    const evidenceTab = reviewedGateInspector.getByRole('tab', { name: '产物' })
+    const evidenceTab = reviewedGateInspector.getByRole('tab', { name: '产物与证据', exact: true })
     await evidenceTab.focus()
     await evidenceTab.press('Enter')
+    await expect(reviewedGateInspector.getByRole('region', { name: '已归档的审查报告' })).toContainText('Knowledge review completed for this node.')
+    await reviewedGateInspector.getByRole('button', { name: '阅读审查报告与意见' }).click()
     await expect(page.getByTestId('review-evidence-results')).toContainText(
       'Knowledge review completed for this node.',
     )
@@ -1831,12 +1845,17 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /开发实现/ }).click()
     await page.getByTestId('flow-node-node-build-review').click()
+    await inspector.getByRole('tab', { name: '概览', exact: true }).click()
     const terminal = page.getByTestId('workbench-coding-terminal')
-    await expect(terminal).toContainText('150')
-    await expect(terminal).toContainText('$0.012')
-    await expect(terminal).toContainText('Saved worktree test passed.')
-    await expect(terminal).toContainText('+new')
-    await expect(terminal.getByRole('list', { name: 'Coding Run terminal trace' })).toContainText('Applied the exact approved Change Set.')
+    await expect(terminal).toContainText('completed')
+    await terminal.getByRole('button', { name: '阅读变更与代码差异' }).click()
+    const changes = inspector.getByRole('region', { name: '开发变更与检查' })
+    await expect(changes).toContainText('Saved worktree test passed.')
+    await expect(changes).toContainText('+new')
+    await inspector.getByRole('tab', { name: '执行记录', exact: true }).click()
+    await expect(inspector).toContainText('150')
+    await expect(inspector).toContainText('$0.012')
+    await expect(inspector.getByRole('list', { name: 'Coding Run terminal trace' })).toContainText('Applied the exact approved Change Set.')
     await expect(inspector.getByRole('button', { name: /启动|重新运行/ })).toHaveCount(0)
   })
 })

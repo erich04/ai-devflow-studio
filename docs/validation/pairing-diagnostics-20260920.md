@@ -1,89 +1,46 @@
-# Pairing recovery and safe diagnostics — issue 130
+<a id="pairing-recovery-and-safe-diagnostics--issue-130"></a>
 
-## Behavior
+# 配对恢复与安全诊断 — Issue #130
 
-Desktop exchanges preserve controlled reasons for expired vs invalid/used/revoked
-pairing codes. A general 401 remains an authentication failure. The user sees a
-Chinese explanation and recovery direction, without IPC or arbitrary server text.
-On the Web, expiry hides the code and disables copying; regeneration remains
-available. Duplicate issuance/revocation clicks are rejected while pending.
-Late results are ignored when account, role or project changes.
+<a id="behavior"></a>
 
-Desktop's Diagnostics page filters and copies/exports the local operation history.
-Web's pairing section shows the current account/project's recent diagnostic
-metadata. API and Desktop keep a bounded, owner-readable JSON history of at most
-1,000 operations; credential access terminal outcomes are included on Desktop.
-Only fixed metadata fields are persisted. Tokens, pairing codes, cookies, API keys,
-paths and complete request/response bodies are excluded. Unauthenticated API
-pairing records deliberately have no invented user or project ownership.
+## 行为
 
-Each request carries x-devflow-diagnostic-id. Web proxy, Desktop and API preserve
-that UUID in response headers; existing response bodies keep their exact schema.
-Unknown API exceptions and JSON-body parse errors are recorded with
-controlled codes. A transport failure still has a local ID. Invalid response JSON
-is recorded separately from HTTP success under the same ID. Pairing POSTs do not
-automatically retry; the user generates a new code after failure.
+桌面配对交换保留受控原因，区分已过期与无效/已使用/已撤销的配对码。普通 401 仍按认证失败处理。用户看到中文解释和恢复方向，不暴露 IPC 或任意服务端文本。Web 在过期后隐藏配对码并禁用复制，仍允许重新生成；发放/撤销进行中拒绝重复点击。账户、角色或项目变化后忽略迟到结果。
 
-## Operator query
+桌面“诊断”页支持筛选、复制/导出本地操作历史。Web 配对区域显示当前账户/项目近期诊断元数据。API 和桌面维护有上限、仅所有者可读的 JSON 历史，最多 1,000 次操作；桌面还包含凭据访问终态。只持久化固定元数据字段，排除令牌、配对码、Cookie、API 密钥、路径和完整请求/响应正文。未认证的 API 配对记录刻意不伪造用户或项目归属。
 
-The API log defaults to data/api-diagnostics.json under its process working
-directory. DEVFLOW_API_DIAGNOSTICS_PATH can select an operator-managed location.
-It is not exposed through an unauthenticated API. OS file permissions govern
-operator access. Desktop history is in diagnostics.json in its selected data
-profile, separate from its business database.
+每个请求携带 `x-devflow-diagnostic-id`。Web 代理、桌面和 API 在响应头中保留该 UUID，既有响应正文结构精确不变。未知 API 异常与 JSON 正文解析错误使用受控错误码记录；传输失败仍有本地 ID。无效响应 JSON 与 HTTP 成功在同一 ID 下分别记录。配对 POST 不自动重试；失败后由用户生成新码。
+
+<a id="operator-query"></a>
+
+## 操作者查询
+
+API 日志默认位于进程工作目录下的 `data/api-diagnostics.json`。`DEVFLOW_API_DIAGNOSTICS_PATH` 可指定操作者管理的位置。日志不经未认证 API 暴露，操作者访问由系统文件权限控制。桌面历史位于所选数据档案的 `diagnostics.json`，与业务数据库分开。
 
     corepack pnpm exec tsx scripts/query-diagnostics.ts --file <log-path> --id <UUID>
     corepack pnpm exec tsx scripts/query-diagnostics.ts --file <log-path> --reason pairing_code_expired --export <new-file.json>
 
-Other filters: --from / --to (ISO timestamps), --operation, --project and --run
-when that context exists. Export refuses to overwrite an existing file and writes
-mode 0600. Web history is limited to the current mounted session, not a new server
-query privilege. Shared conversation memory and business audit are unchanged.
+其他筛选参数为 `--from` / `--to`（ISO 时间戳）、`--operation`，以及存在相应上下文时的 `--project` 和 `--run`。导出拒绝覆盖已有文件，以 0600 权限写入。Web 历史仅限当前已挂载会话，不增加新的服务端查询权限。共享会话记忆与业务审计不变。
 
-## Evidence
+<a id="evidence"></a>
 
-scripts/pairing-diagnostics-integration.test.ts starts an isolated real HTTP
-listener over the repository and route implementations, connected to the actual
-Desktop HTTP client. A controlled clock expires a valid code. The test observes
-an expiry error and matching persisted API/Desktop UUID, generates a fresh code,
-exchanges it successfully, and rejects reuse. Reopened logs contain all outcomes
-and none of either pairing code or the issued token. This is not a production
-account or live-provider test.
+## 证据
 
-Representative tests cover general 401, invalid code, 403, network failure, 503,
-malformed response JSON, unexpected exceptions, bounded/stalled error bodies,
-concurrent log writes and persistence, UI copy/export projection, Web expiry,
-duplicate clicks, and account/project/role changes. Pairing and team data errors
-retain existing selected project and demand state.
+`scripts/pairing-diagnostics-integration.test.ts` 基于真实仓储和路由实现启动隔离 HTTP 监听器，连接实际桌面 HTTP 客户端。受控时钟使有效码过期；测试观察过期错误和已持久化、匹配的 API/桌面 UUID，生成新码后成功交换，再拒绝重复使用。重开日志包含全部结果，但不含任一配对码或已签发令牌。这不是生产账户或真实服务商测试。
 
-Cursor's advisory run ffb5f9fd-720d-4dfe-b563-ffeaed341cf5 ended with a repeated
-connection failure and no final review. It is not counted as a passed review.
-Independent code review additionally fixed account-scope visibility before
-passive effects, and late revoke/copy results crossing an identity change.
+代表性测试覆盖普通 401、无效码、403、网络失败、503、格式错误响应 JSON、未知异常、有界/停滞错误正文、并发日志写入和持久化、界面复制/导出投影、Web 过期、重复点击，以及账户/项目/角色变化。配对与团队数据错误保留当前所选项目及需求状态。
 
-PR #149 CI found a protocol regression in packaged Delivery revocation proof:
-adding diagnosticId to every error body violated its intentional exact-key
-validation. The real remote client plus API diagnostics reproduced the failure.
-The correction keeps correlation in headers, preserves the original body, and
-does not weaken credential-proof validation. The HTTP pairing recovery scenario
-still passes with this compatible representation.
+Cursor 建议审查 `ffb5f9fd-720d-4dfe-b563-ffeaed341cf5` 因重复连接失败结束，没有最终审查，不计为通过。独立代码审查另修复了被动副作用执行前的账户范围可见性，以及身份变化后迟到的撤销/复制结果跨越身份边界的问题。
 
-The same CI run completed Docker lifecycle verification, then failed setup-node's
-automatic host-cache save because all dependencies had been installed in Docker.
-That job now explicitly disables automatic package-manager caching using the
-[official setup-node v5 input](https://github.com/actions/setup-node/blob/v5/action.yml).
-# PR #149 CI follow-up
+PR #149 CI 发现打包交付撤销证明的协议回归：在所有错误正文加入 diagnosticId，违反了原本刻意采用的精确键校验。真实远端客户端与 API 诊断组合复现失败；修正后只在响应头关联诊断，保留原正文，不削弱凭据证明校验。HTTP 配对恢复场景在该兼容表示下仍通过。
 
-The first CI run exposed two stale E2E fixtures: the pairing visual fixture had
-already expired on September 10, and the Team page scroll check still selected
-the old sync button name. The fixture now issues a synthetic code with a relative
-10-minute lifetime, and the scroll test selects the current user-visible label.
-The expiry behavior and viewport/scroll assertions remain unchanged. Remote CI
-will rerun these checks; the initial failed run is not counted as a pass.
+同次 CI 已完成 Docker 生命周期验证，随后 setup-node 自动保存宿主缓存失败，因为全部依赖安装在 Docker 内。该作业现按[官方 setup-node v5 参数](https://github.com/actions/setup-node/blob/v5/action.yml)显式禁用包管理器自动缓存。
 
-Second run: all 4,003 unit tests and all 41 browser E2E scenarios passed on macOS;
-Windows, Postgres, Docker and Docker lifecycle also passed. The later Electron
-smoke still selected the old Team sync label and expected its old success copy.
-Both selectors now use the same current UI wording already checked by the App
-tests. The native smoke must pass in the subsequent CI run before this batch is
-declared fully verified.
+<a id="pr-149-ci-follow-up"></a>
+
+# PR #149 CI 后续记录
+
+首次 CI 暴露两处过期端到端测试数据：配对视觉样例已于 9 月 10 日过期，团队页滚动检查仍选择旧同步按钮名称。样例现生成相对十分钟有效的模拟配对码，滚动测试使用当前用户可见标签。过期行为及视口/滚动断言不变。远端 CI 将重跑；首次失败不计为通过。
+
+第二次运行中，macOS 全部 4,003 项单元测试与 41 个浏览器场景通过，Windows、Postgres、Docker 及 Docker 生命周期也通过。之后的 Electron 冒烟测试仍选择旧团队同步标签并期待旧成功文案；两处选择器改为 App 测试已检查的当前界面措辞。本记录写入时，原生冒烟仍须在后续 CI 通过，才能宣称该批已完整验证。

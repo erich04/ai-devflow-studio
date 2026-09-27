@@ -19,57 +19,57 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
       expect(read(path).length).toBeGreaterThan(0)
     }
 
-    expect(roadmap).toContain('V2.1 contract set is frozen')
-    expect(roadmap).toContain('V2.1 Slice 1 is complete')
+    expect(roadmap).toContain('V2.1 契约集已冻结')
+    expect(roadmap).toContain('V2.1 切片 1 已完成')
   })
 
   it('defines stable citation, corpus, and Memory lifecycle language without changing authority', () => {
     const context = read('CONTEXT.md')
 
     for (const term of [
-      '## Knowledge Citation',
-      '## Retrieval Evaluation Corpus',
-      '## Memory Candidate',
-      '## Durable Agent Memory',
-      '## Memory Revision',
-      '## Memory Tombstone',
+      '## 知识引用（Knowledge Citation）',
+      '## 检索评估语料（Retrieval Evaluation Corpus）',
+      '## 记忆候选（Memory Candidate）',
+      '## 持久 Agent 记忆（Durable Agent Memory）',
+      '## 记忆版本（Memory Revision）',
+      '## 记忆删除标记（Memory Tombstone）',
     ]) {
       expect(context).toContain(term)
     }
 
-    expect(context).toContain('Agent Memory is not Workflow State')
-    expect(context).toContain('does not become Governance Evidence')
-    expect(context).toContain('scope is an intersection, never a fallback')
+    expect(context).toContain('Agent 记忆不是工作流状态')
+    expect(context).toContain('本身不会变成治理证据')
+    expect(context).toContain('记忆可见范围取交集，不能通过回退扩大范围')
   })
 
   it('keeps hybrid retrieval and citations evaluated, scoped, and advisory', () => {
     const adr = read('docs/adr/0017-evaluated-hybrid-retrieval-and-citation.md')
 
-    expect(adr).toContain('Status: Accepted')
+    expect(adr).toContain('状态：已接受（Accepted）')
     expect(adr).toContain('ADR 0007')
-    expect(adr).toContain('Lexical retrieval remains the stable no-cost baseline')
-    expect(adr).toContain('rerank only candidates already admitted')
-    expect(adr).toContain('Citation presence does not establish faithfulness')
+    expect(adr).toContain('词法检索保持为稳定、无费用的基线')
+    expect(adr).toContain('只能重排确切范围检索集合已接受的候选')
+    expect(adr).toContain('存在引用不等于内容忠实')
     expect(adr).toContain('Recall@K')
     expect(adr).toContain('nDCG@K')
-    expect(adr).toContain('zero forbidden-scope hits')
-    expect(adr).toContain('scope and lifecycle filtering happens before embedding, ranking, reranking, or provider use')
-    expect(adr).toContain('does not select a vector database')
+    expect(adr).toContain('禁止范围命中为零')
+    expect(adr).toContain('在嵌入、排序、重排或提供方调用前进行范围和生命周期过滤')
+    expect(adr).toContain('不选择向量数据库')
   })
 
   it('makes durable Agent Memory curated, versioned, isolated, and deletion-safe', () => {
     const adr = read('docs/adr/0018-scoped-agent-memory-lifecycle.md')
 
-    expect(adr).toContain('Status: Accepted')
-    expect(adr).toContain('Agent Memory is a separate, versioned, scoped product concept')
-    expect(adr).toContain('A Memory Candidate')
-    expect(adr).toContain('inert until an authoritative promotion policy accepts it')
-    expect(adr).toContain('optimistic concurrency rejects stale writers')
-    expect(adr).toContain('Conflicting active memories are not silently merged')
-    expect(adr).toContain('deleted or expired Memory is unavailable before retrieval')
-    expect(adr).toContain('prevents replay or an older sync from resurrecting it')
-    expect(adr).toMatch(/Team\/API may\s+store an explicitly allowed redacted Memory projection only/)
-    expect(adr).toContain('Default verification uses a deterministic clock')
+    expect(adr).toContain('状态：已接受（Accepted）')
+    expect(adr).toContain('Agent 记忆是独立、带版本、有范围的产品概念')
+    expect(adr).toContain('记忆候选')
+    expect(adr).toContain('在权威提升策略接受前，它不生效')
+    expect(adr).toContain('乐观并发拒绝过时写入者')
+    expect(adr).toContain('冲突的活动记忆不静默合并')
+    expect(adr).toContain('已删除或过期记忆在检索前就不可用')
+    expect(adr).toContain('防止重放或旧同步使其复活')
+    expect(adr).toContain('Team/API 仅可保存明确允许的脱敏记忆投影')
+    expect(adr).toContain('默认验证使用确定性时钟')
   })
 
   it('freezes a no-cost corpus covering retrieval, citation, Memory lifecycle, and isolation gates', () => {
@@ -125,30 +125,30 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
 
     expect(prd).toContain('Status: Approved for implementation')
     expect(prd).toContain('ADR 0007')
-    expect(prd).toContain('hybrid retrieval improves the frozen aggregate quality threshold')
-    expect(prd).toContain('citation precision and faithfulness')
-    expect(prd).toContain('Memory improves the selected task outcomes over no-Memory')
-    expect(prd).toContain('Desktop schema 22')
-    expect(prd).toContain('Team schema 18')
-    expect(prd).toContain('No provider credential is resolved before scope, budget, and text-transmission authority pass')
-    expect(prd).toContain('V2.2 Multi-Agent')
+    expect(prd).toContain('混合检索相对词法基线达到冻结的聚合质量改进阈值')
+    expect(prd).toContain('引用准确率/忠实度')
+    expect(prd).toContain('记忆在不增加人工介入下改善选定任务结果')
+    expect(prd).toContain('桌面模式 22')
+    expect(prd).toContain('团队模式 18')
+    expect(prd).toContain('范围、预算与文本传输权限通过前，不解析任何服务商凭据')
+    expect(prd).toContain('V2.2 多 Agent')
 
     for (const slice of [
-      'Slice 0 — Contract Freeze',
-      'Slice 1 — Shared Retrieval, Citation, And Evaluation Contracts',
-      'Slice 2 — Deterministic Hybrid Retrieval',
-      'Slice 3 — Durable Local Retrieval Index',
-      'Slice 4 — Scoped Agent Memory Lifecycle',
-      'Slice 5 — Agent Runtime And Desktop UX',
-      'Slice 6 — Redacted Team Projection',
-      'Slice 7 — Evaluation And Completion Gate',
+      '第 0 批：冻结契约',
+      '第 1 批：共享检索、引用和评估契约',
+      '第 2 批：确定性混合检索',
+      '第 3 批：持久本地检索索引',
+      '第 4 批：限定范围的记忆生命周期',
+      '第 5 批：Agent 运行时与桌面界面',
+      '第 6 批：脱敏团队投影',
+      '第 7 批：评估与完成门禁',
     ]) {
       expect(plan).toContain(slice)
     }
-    expect(plan).toContain('RED → GREEN')
-    expect(plan).toContain('Scope and deletion filter before embedding')
-    expect(plan).toContain('Team cannot promote/delete local Memory')
-    expect(plan).toContain('clean direct child')
+    expect(plan).toContain('先失败后通过')
+    expect(plan).toContain('向量化、排序、重排、记忆附着或模型使用前，先按范围及删除状态过滤')
+    expect(plan).toContain('团队不能接纳/删除记忆')
+    expect(plan).toContain('干净直接子提交')
   })
 
   it('advances the single active Roadmap priority to the V2.1 completion gate after Team Memory sync', () => {
@@ -158,57 +158,57 @@ describe('V2.1 Evaluated Retrieval and Memory contract', () => {
     const readme = read('README.md')
 
     expect(plan).toContain('Status: Active — Slice 7 in progress')
-    expect(plan).toContain('| Slice 1 | Complete |')
-    expect(plan).toContain('| Slice 2 | Complete |')
-    expect(plan).toContain('| Slice 3 | Complete |')
-    expect(plan).toContain('| Slice 4 | Complete |')
-    expect(plan).toContain('| Slice 5 | Complete |')
-    expect(plan).toContain('| Slice 6 | Complete |')
+    expect(plan).toContain('| 第 1 批 | 已完成 |')
+    expect(plan).toContain('| 第 2 批 | 已完成 |')
+    expect(plan).toContain('| 第 3 批 | 已完成 |')
+    expect(plan).toContain('| 第 4 批 | 已完成 |')
+    expect(plan).toContain('| 第 5 批 | 已完成 |')
+    expect(plan).toContain('| 第 6 批 | 已完成 |')
     expect(plan).toContain('| Slice 7 | In progress |')
     expect(plan).toContain('agent_memory_summaries')
     expect(plan).toContain('agent_memory_projection_audits')
-    expect(plan).toContain('fabricate zero')
-    expect(plan).toContain('Desktop schema 26')
-    expect(plan).toContain('Desktop schema 27')
+    expect(plan).toContain('不伪造记忆投影')
+    expect(plan).toContain('桌面模式 26')
+    expect(plan).toContain('桌面模式 27')
     expect(plan).toContain('acceptedContextCount')
     expect(plan).toContain('qualityVersion')
     expect(plan).toContain('(memoryId, headVersion, qualityVersion)')
-    expect(plan).toContain('metadata-only ID outbox')
-    expect(plan).toContain('Web remains read-only')
-    expect(plan).toMatch(/197 test files and 2790 tests/u)
-    expect(plan).toContain('renderer projection v2')
-    expect(plan).toContain('Knowledge Citation and Durable Memory counts')
-    expect(plan).toContain('durable capability grant reservation')
-    expect(plan).toContain('Agent Memory lifecycle access')
-    expect(plan).toContain('exact selected Runtime')
-    expect(plan).toContain('pending purge')
-    expect(plan).toMatch(/152\s+focused local-store\s+tests and 48\s+focused shared retrieval\/Memory tests/u)
-    expect(plan).toMatch(/192 test files and 2743\s+tests/u)
+    expect(plan).toContain('仅元数据 ID 的发件箱')
+    expect(plan).toContain('Web 始终只读')
+    expect(plan).toMatch(/197 文件\/2790 测试/u)
+    expect(plan).toContain('渲染器投影 v2')
+    expect(plan).toContain('知识引用与持久记忆计数')
+    expect(plan).toContain('能力授权持久预留')
+    expect(plan).toContain('记忆生命周期访问')
+    expect(plan).toContain('所选运行时')
+    expect(plan).toContain('待清除')
+    expect(plan).toMatch(/152 项本地存储、48 项共享检索\/记忆测试/u)
+    expect(plan).toMatch(/192 文件\/2743 测试/u)
     expect(roadmap).toContain('### Now — Run V2.1 Evaluation And Completion Gate')
     expect(roadmap).toContain('| Active milestone | V2.1 Slice 7 — Evaluation And Completion Gate |')
     expect(roadmap).toContain('| Next gate | Freeze the exact V2.1 candidate and run the full completion matrix |')
-    expect(roadmap).toContain('Desktop schema 27')
-    expect(roadmap).toContain('Web read-only Team Memory')
+    expect(roadmap).toContain('桌面结构 27')
+    expect(roadmap).toContain('Web 只读 Team Memory')
     expect(roadmap).toContain('memoryRestartDuplicateEffects')
-    expect(testing).toContain('atomic activation preserves the previous current snapshot')
-    expect(testing).toMatch(/explicit bounded rebuild restores\s+only derived index state/u)
-    expect(testing).toContain('143 local-store tests and 43 shared retrieval tests')
-    expect(testing).toContain('renderer projection v2')
-    expect(testing).toContain('Agent Memory lifecycle UI')
-    expect(testing).toContain('deleted statements remain main-only')
+    expect(testing).toContain('原子激活保留此前的当前快照')
+    expect(testing).toContain('显式且有边界的重建只恢复派生索引状态')
+    expect(testing).toContain('143 项本地存储测试和 43 项共享检索测试')
+    expect(testing).toContain('渲染投影 v2')
+    expect(testing).toContain('Agent Memory 生命周期界面')
+    expect(testing).toContain('已删除陈述仅保留在主进程')
     expect(plan).toContain('corepack pnpm test:v21-retrieval-memory-evaluator')
     expect(plan).toContain('docs/releases/v2.1.0/retrieval-memory-evaluation.json')
     expect(plan).toContain('docs/releases/v2.1.0/required-gates.json')
-    expect(plan).toContain('no-Memory')
-    expect(testing).toContain('V2.1 candidate-bound evaluator')
+    expect(plan).toContain('无记忆')
+    expect(testing).toContain('V2.1 候选版本绑定评估器')
     expect(testing).toContain('qualityVersion')
     expect(readme).toContain('corepack pnpm test:v21-retrieval-memory-evaluator')
     expect(readme).toContain('corepack pnpm v21:completion-status')
-    expect(roadmap).toContain('grant reservation')
+    expect(roadmap).toContain('授权预留')
     expect(roadmap).not.toContain('### Now — Implement V2.1 Shared Retrieval, Citation, And Evaluation Contracts')
     expect(roadmap).not.toContain('### Now — Implement V2.1 Durable Local Retrieval Index')
     expect(roadmap).not.toContain('### Now — Implement V2.1 Scoped Agent Memory Lifecycle')
     expect(roadmap).not.toContain('### Now — Add V2.1 Redacted Team Projection')
-    expect(roadmap.match(/^### Now —/gmu)).toHaveLength(1)
+    expect(roadmap.match(/^### 当前：/gmu)).toHaveLength(1)
   })
 })

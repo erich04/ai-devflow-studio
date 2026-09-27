@@ -1,43 +1,31 @@
-# Release-Only Real opencode Provider Smoke
+<a id="release-only-real-opencode-provider-smoke"></a>
 
-## Summary
+# 仅发布时执行的真实 OpenCode 服务商冒烟
 
-Every future DevFlow Studio product release must include one explicit real `opencode` smoke against
-the configured paid provider profile before the release tag is created.
+<a id="summary"></a>
 
-This is a release-only gate. It stays outside `corepack pnpm verify`, GitHub's default CI, and daily
-developer checks because it can spend provider quota and depends on local opencode/provider
-configuration.
+## 摘要
 
-This policy defines the gate; it does not by itself assert that v1.3 passed or failed. The v1.3
-state is determined by the release JSON files, the matching `release:status` mode, and the
-`v1.3.0` tag target.
+本文保存 V1.3/V1.4 的真实付费 OpenCode 发布契约，要求创建对应标签前针对已配置服务商显式执行一次。历史上“每次后续发布都要执行”的宽泛说法不再作为通用授权：只有当前发布契约明确要求、并取得绑定候选的单独授权时才执行。V1.5 不要求也不授权再次进行付费模型冒烟，详见[运行时签署清单](../knowledge/checklists/opencode-runtime-signoff.md)。
 
-## Policy
+该门禁排除在 `corepack pnpm verify`、默认 GitHub CI 和日常检查之外，因为会消耗额度且依赖本地配置。文档本身不代表 v1.3 已通过或失败；状态由发布 JSON、对应 release:status 模式及 v1.3.0 标签目标决定。
 
-- Default CI remains deterministic:
-  - `corepack pnpm verify`
-  - fake Coding Agent engine
-  - no paid provider call
-- Release signoff adds a manual paid-provider smoke:
-  - `corepack pnpm --silent opencode:status`
-  - `corepack pnpm --silent opencode:release-preflight`
-  - `DEVFLOW_RUN_OPENCODE_SMOKE=1 ... corepack pnpm --silent test:opencode-smoke`
-- The smoke must be run before creating the release tag.
-- For v1.3, the passing result must be written to `docs/releases/v1.3.0/real-opencode.json` and
-  bound to the candidate commit `C`.
-- For v1.4, the passing result must be written to `docs/releases/v1.4.0/real-opencode.json`, bound
-  to candidate `C`, and record exactly one candidate-bound top-level paid smoke invocation, no
-  uncredited provider request, and the owner's explicit authorization without a hard provider cost
-  cap.
-- A second top-level paid smoke invocation requires a substantive new candidate and new explicit
-  authorization.
-- Provider secrets must never be written to docs, logs, screenshots, PR descriptions, GitHub
-  releases, team summaries, or smoke artifacts.
+<a id="policy"></a>
 
-## Standard Volcengine / Doubao Command
+## 策略
 
-Use the local provider profile that has been validated for DevFlow real-runtime signoff:
+- 默认 CI 使用 `corepack pnpm verify` 和模拟编码引擎，不调用付费服务商。
+- 对应发布签署增加明确的付费冒烟：`corepack pnpm --silent opencode:status`、`corepack pnpm --silent opencode:release-preflight`、`DEVFLOW_RUN_OPENCODE_SMOKE=1 ... corepack pnpm --silent test:opencode-smoke`，须在打标签前完成。
+- V1.3 结果写入 `docs/releases/v1.3.0/real-opencode.json` 并绑定候选 C。
+- V1.4 写入 `docs/releases/v1.4.0/real-opencode.json`，绑定 C，精确记录一次顶层付费冒烟、零未获额度请求，以及所有者明确授权且未设置硬性费用上限。
+- 第二次顶层付费冒烟必须先有实质修改后的新候选及新的明确授权。
+- 凭据绝不能写入文档、日志、截图、PR、GitHub 发布、团队摘要或冒烟产物。
+
+<a id="standard-volcengine--doubao-command"></a>
+
+## 标准火山引擎/豆包命令
+
+使用已验证的本地配置。以下保留命令与英文占位符作为可识别模板；占位符表示只在 shell 设置、绝不提交的密钥，不能原样当真实凭据运行。
 
 ```bash
 export ANTHROPIC_AUTH_TOKEN="<set in shell only; never commit>"
@@ -57,62 +45,29 @@ unset DEVFLOW_OPENCODE_PROVIDER_ID DEVFLOW_OPENCODE_MODEL_ID DEVFLOW_OPENCODE_AP
 unset DEVFLOW_OPENCODE_RELEASE_PROFILE
 ```
 
-If the local `opencode` binary is not on `PATH`, include:
+若 OpenCode 不在 PATH，补充：
 
 ```bash
 export DEVFLOW_OPENCODE_BIN=/opt/homebrew/bin/opencode
 ```
 
-Set `DEVFLOW_OPENCODE_BIN` before all three commands. The v1.3 release profile is exactly
-`double/ark-code-latest`, and its key environment name is exactly `ANTHROPIC_AUTH_TOKEN`.
-Do not substitute `ARK_API_KEY` in the v1.3 release record.
+DEVFLOW_OPENCODE_BIN 须在三条命令之前设置。V1.3 精确配置为 double/ark-code-latest，密钥环境名称必须为 ANTHROPIC_AUTH_TOKEN，发布记录不能替换为 ARK_API_KEY。
 
-The V1.4 release invocation owns its exact provider configuration in candidate code. The exact
-identity is reported by `corepack pnpm --silent opencode:status`. For
-`double/ark-code-latest` with key environment name `ANTHROPIC_AUTH_TOKEN`, it replaces any ambient
-inline OpenCode configuration with the candidate-owned Responses API profile: package
-`@ai-sdk/openai`, base URL `https://ark.cn-beijing.volces.com/api/coding/v3`, and key reference
-`{env:ANTHROPIC_AUTH_TOKEN}`. The profile contains no key value and uses bounded provider transport
-timeouts. During the live invocation, candidate code replaces that base URL with a random loopback
-capability owned by a credential-owning provider egress gate. OpenCode receives only a one-run dummy
-credential; only the gate attaches the real token to a request, and it pins every forwarded request
-to the official Ark Responses endpoint.
+V1.4 的精确服务商配置由候选代码持有，opencode:status 报告其身份。double/ark-code-latest 配合 ANTHROPIC_AUTH_TOKEN 时，覆盖环境中的内联 OpenCode 配置，使用候选拥有的 Responses API 配置：包 `@ai-sdk/openai`、地址 `https://ark.cn-beijing.volces.com/api/coding/v3`、引用 `{env:ANTHROPIC_AUTH_TOKEN}`。配置不含密钥值，传输超时有界。真实调用时，候选将地址换为持有凭据的出站门禁所拥有的随机回环能力地址；OpenCode 仅收到单次假凭据，只有门禁附加真实令牌，并固定转发到官方 Ark Responses 端点。
 
-The release-only commands use pnpm's `--silent` option solely to suppress pnpm's own lifecycle
-banner, which includes the local candidate working directory. The status and smoke output remain
-visible and must still pass the absolute-path and secret redaction checks.
+pnpm --silent 只隐藏包含候选工作目录的生命周期横幅；状态与冒烟输出仍显示，仍须通过路径与秘密脱敏检查。
 
-The release preflight runs `opencode debug config --pure` with a fake credential, isolated storage,
-and the macOS network sandbox. It parses the resolved JSON only in memory, verifies the exact
-Responses package/base URL/model/timeout fields, deletes its temporary root, and prints only a fixed
-pass/fail summary. It never forwards the real provider credential.
+前置检查以假凭据、隔离存储、macOS 网络沙箱运行 `opencode debug config --pure`。仅在内存解析 JSON，校验 Responses 包、地址、模型、超时，删除临时目录，只打印固定成功/失败摘要，不转发真实凭据。
 
-The managed process forces `OPENCODE_CLIENT=server` and disables the optional question-tool override;
-the session also denies `question` and `task` permissions because those interaction and child-session
-channels are not relayed by DevFlow. DevFlow polls the exact parent session status,
-permanently discards provider retry message/action details, and fails with the static
-`provider_retry_observed` code on the first observed retry. A 240-second permission-discovery
-deadline applies separately to the initial segment and every continuation segment, and covers
-permission and status requests that ignore cancellation. It is not a 240-second end-to-end smoke
-deadline. Either condition aborts the managed session and must complete verified cleanup before the
-smoke can finish.
+托管进程强制 OPENCODE_CLIENT=server，禁用可选 question 工具覆盖；会话拒绝 question/task，因为 DevFlow 不转交这些交互/子会话通道。轮询精确父会话状态，永久丢弃服务商重试消息/动作详情，首次观察重试即以静态 `provider_retry_observed` 失败。初始段与每个续接段各有 **240 秒权限发现期限**，包括不响应取消的权限/状态请求；**不是整个冒烟限时 240 秒**。重试或超时均中止受管会话，验证清理完成后才结束。
 
-The release smoke uses a stricter tool profile: wildcard deny followed by `ask` for only
-`edit` and `bash`. The credential-owning gate enforces exactly three credited provider segments:
-bash-only, edit-only, and completion-only. Before forwarding each Responses request, it retains only
-the required tool for the first two segments, sets `tool_choice` to `required`, disables parallel
-tool calls, and removes all tools for the completion segment. The initial credit is bash-only; the
-unique approved bash permission activates edit-only, and the unique approved edit permission
-activates completion-only. Credits never accumulate. The smoke waits for the source Responses stream
-to complete before replying to its permission. An invalid approval sequence or uncredited request is
-blocked locally, revokes any outstanding credit, and permanently marks the smoke failed. A pass
-requires all three credited segments to produce one successful `response.completed` stream, with zero
-blocked uncredited requests, zero invalid requests, zero failed segments, and no active connection at
-cleanup.
+严格工具配置先通配拒绝，仅 edit/bash 为 ask。持有凭据的出站门禁精确允许三段获额度请求：仅 bash、仅 edit、仅完成。前两段仅保留所需工具，tool_choice 为 required，禁用并行工具；完成段移除全部工具。初始额度只允许 bash，唯一已批准 bash 激活 edit，唯一已批准 edit 激活完成；额度不累计。回复权限前等待来源 Responses 流结束。无效批准顺序或未获额度请求本地拦截、撤销剩余额度，并永久标记失败。通过要求三段各产生一次成功 response.completed，未获额度拦截、无效请求、失败段均为 0，清理时活跃连接为 0。
 
-## Required Evidence To Record
+<a id="required-evidence-to-record"></a>
 
-The release record is a JSON object at `docs/releases/v1.3.0/real-opencode.json`:
+## 必须记录的证据
+
+V1.3 记录位置为 `docs/releases/v1.3.0/real-opencode.json`。以下键、枚举和格式占位符保留以对应机器契约；须替换为 C 上真实观察值，不能照抄 passed：
 
 ```json
 {
@@ -133,8 +88,7 @@ The release record is a JSON object at `docs/releases/v1.3.0/real-opencode.json`
 }
 ```
 
-The V1.3 record above is historical and remains valid without retroactive fields. The V1.4 record
-at `docs/releases/v1.4.0/real-opencode.json` uses the same observed non-secret metadata and adds:
+V1.3 历史记录无需追补字段。V1.4 同路径版本目录的记录使用相同非秘密元数据，另加：
 
 ```json
 {
@@ -161,99 +115,67 @@ at `docs/releases/v1.4.0/real-opencode.json` uses the same observed non-secret m
 }
 ```
 
-These values describe the authorization boundary, not an invented billed amount. `attemptCount`
-counts the candidate-bound top-level smoke invocation. `automaticRetry: false` means the DevFlow
-launcher never repeats that invocation, the engine observes no retry status, and no uncredited
-request is forwarded to the provider. The
-engine also aborts when it first observes OpenCode enter provider retry state. Legitimate later
-model steps are separately credited only by an explicit managed permission approval. A passing run
-must observe zero locally blocked uncredited requests; otherwise it cannot record
-`automaticRetry: false`. `costCapUsd: null`
-explicitly records that this authorization does not impose a hard provider cost cap; it is not a
-missing or unknown field. Once the top-level paid smoke invocation begins, a pass, failure,
-timeout, or provider error consumes the one authorized invocation.
+这些值描述授权边界，不是编造的账单。attemptCount 计算绑定候选的顶层调用；automaticRetry=false 要求启动器不重复调用、引擎未观察重试、未转发未获额度请求。后续合法模型步骤只能由明确托管权限批准单独激活。通过时本地拦截的未获额度请求也必须为零，否则不能记录 false。costCapUsd=null 明确表示授权**不设置硬性服务商费用上限**，不是未知或缺失。顶层调用一旦开始，不论成功、失败、超时还是服务商报错，都消耗唯一授权次数。
 
-Replace every placeholder with observed data from the run against `C`. `recordedAt` must be a valid
-date-time, and `diffEvidence` must contain at least one non-empty, repository-relative changed path.
+所有占位符用 C 的真实记录替换；recordedAt 为合法时间，diffEvidence 至少一条非空仓库相对变更路径。包括嵌套对象在内，禁止 apiKey、apiKeyValue、authorization、credential、password、providerToken、secret、token 字段。可记录 keyEnvName，不可记录其值。
 
-The record must not contain a field named `apiKey`, `apiKeyValue`, `authorization`, `credential`,
-`password`, `providerToken`, `secret`, or `token`, including nested objects. `keyEnvName` is allowed;
-the corresponding value is not.
-
-The required field meanings are:
-
-| Field | Required value |
+| 字段 | 要求 |
 | --- | --- |
-| Date/time | Local date/time of the live smoke |
-| Release candidate | Full SHA of candidate commit `C` |
-| opencode version | From `corepack pnpm --silent opencode:status` |
-| Provider | `double` |
-| Model | `ark-code-latest` |
-| Key handling | `ANTHROPIC_AUTH_TOKEN` name only, never its value |
-| Result | `passed` only after every criterion succeeds |
-| Duration | Approximate runtime |
-| Permission relay | Exact V1.4 permission sequence `bash -> edit` |
-| Diff evidence | Changed path summary, repo-relative only |
-| Test evidence | passed/failed/timed_out |
-| Cleanup | managed worktree deleted or cleanup_failed |
-| Redaction check | confirms no provider key, cwd, raw stdout/stderr, raw prompt, or raw patch was printed |
+| 日期/时间 | 真实冒烟本地日期与时间 |
+| 候选 | C 的完整 SHA |
+| OpenCode 版本 | 来自 corepack pnpm --silent opencode:status |
+| 服务商/模型 | double / ark-code-latest |
+| 密钥处理 | 仅 ANTHROPIC_AUTH_TOKEN 名称，不含值 |
+| 结果 | 全部成功后才为 passed |
+| 耗时 | 近似执行时长 |
+| 权限转交 | V1.4 精确 bash → edit |
+| 差异 | 仅仓库相对路径摘要 |
+| 测试证据 | passed/failed/timed_out |
+| 清理 | 受管工作树已删除，或 cleanup_failed |
+| 脱敏 | 无密钥、cwd、原始 stdout/stderr、提示词或补丁输出 |
 
-## Candidate And Signoff Commit Binding
+<a id="candidate-and-signoff-commit-binding"></a>
 
-Run the smoke against the clean candidate commit `C`. Create the JSON only from that observed run.
-Its `candidateSha` must equal the full SHA of `C`, not the later evidence commit or tag target.
+## 候选与签署提交绑定
 
-The direct child commit `S` contains exactly this JSON, `walkthrough.json`, `required-gates.json`,
-and the dated Computer Use result. For V1.3, run pre-tag status on clean `S` while `v1.3.0` is
-absent. For V1.4, run it while `v1.4.0` is absent. Only after the matching profile passes may its
-version tag be created at that same `S` and tagged status be run.
+对干净候选 C 运行，JSON 只能来自该次观察；candidateSha 等于 C 完整 SHA，不是后续证据提交或标签目标。
 
-## Pass Criteria
+直接子提交 S 仅含该 JSON、walkthrough.json、required-gates.json 和带日期电脑验收结果。对应 V1.3/V1.4 标签尚不存在时，在干净 S 运行打标签前状态检查。匹配配置通过后，才能在同一 S 创建版本标签并运行带标签状态检查。
 
-The release-only real smoke passes only when all are true:
+<a id="pass-criteria"></a>
 
-- The preflight required an explicit `DEVFLOW_RUN_OPENCODE_SMOKE=1`.
-- The no-network resolved-config preflight passed for the candidate-owned V1.4 Responses profile.
-- The engine was explicitly `DEVFLOW_CODING_ENGINE=opencode-http`.
-- `opencode serve` started and created a managed session.
-- DevFlow relayed exactly two real permission requests in order: `bash -> edit`.
-- The credential-owning egress gate forwarded exactly the three credited bash-only, edit-only, and
-  completion-only Responses segments and observed no uncredited, invalid, failed, or active request
-  at cleanup.
-- The run produced a redacted diff.
-- The smoke ran Test Evidence successfully.
-- Managed worktree cleanup completed with a deleted workspace; any cleanup failure fails the smoke.
-- The smoke output did not print provider secrets.
+## 通过标准
 
-The JSON record is valid only when all required strings are non-empty, `diffEvidence` is non-empty,
-and `testEvidence`, `cleanup`, and `redactionCheck` are exactly `passed`.
+全部满足才通过：
 
-## Failure Handling
+- 明确 DEVFLOW_RUN_OPENCODE_SMOKE=1，候选拥有的 V1.4 Responses 无网络配置检查通过。
+- 引擎明确 DEVFLOW_CODING_ENGINE=opencode-http，opencode serve 启动并创建受管会话。
+- 精确转交两次真实权限，顺序 bash → edit。
+- 出站门禁只转发三段获额度请求；清理时未获额度、无效、失败、活跃请求均为零。
+- 生成脱敏差异，测试证据成功，工作树删除完成；任何清理失败均使冒烟失败。
+- 输出不含服务商秘密。
 
-- If provider billing/network is temporarily unavailable, do not mark the release as signed off.
-- If the failure is clearly external and urgent release work must continue, record it as a release
-  blocker or accepted risk explicitly; do not silently substitute fake-engine evidence.
-- Recorded trace/video material can support a demo, but it does not replace the final release-only
-  live smoke.
-- Missing binary, wrong engine, missing provider/model/key configuration, or a blocked preflight is
-  a failed release gate.
-- An observed provider retry (`provider_retry_observed`) is a failed release gate; do not wait for
-  or initiate a second top-level smoke invocation on the same candidate.
-- Exceeding the permission limit, producing no changed path, or missing `tool_call` / `tool_result`
-  evidence is a failed release gate.
-- Dependency bootstrap failure, Test Evidence failure, incomplete worktree cleanup, secret/path
-  leakage, or any unhandled process/provider error is a failed release gate.
-- A failed attempt may be described as a blocker, but `real-opencode.json` must not use
-  `status: "passed"` until a new candidate-bound run satisfies every pass criterion.
+必需字符串和 diffEvidence 均非空，testEvidence、cleanup、redactionCheck 必须精确为 passed，记录才有效。
 
-## Current Historical Evidence
+<a id="failure-handling"></a>
 
-- 2026-06-20: v0.9.0 post-release live smoke passed against the local Volcengine Ark profile using
-  provider `double`, model `ark-code-latest`, and `opencode` `1.17.5`. It completed in about 1m38s,
-  relayed `bash -> edit -> bash`, produced `devflow-opencode-smoke.txt`, ran fixture Test Evidence,
-  and completed managed worktree cleanup.
+## 失败处理
 
-## Applies From
+- 计费/网络暂不可用时不能标为签署通过；明确外部原因且工作紧急时，记录为阻塞或明确接受的风险，不能静默换模拟证据。
+- 轨迹/视频可辅助演示，但不能替代最终真实冒烟。
+- 缺二进制、引擎错误、配置缺失或前置阻断均是门禁失败。
+- 观察到 provider_retry_observed 即失败，不等待或发起同一候选的第二次顶层调用。
+- 权限超限、无变更路径、缺 tool_call/tool_result、依赖准备失败、测试失败、清理不完整、秘密/路径泄露、未处理进程/服务商错误均失败。
+- 失败可记阻塞；新候选绑定的执行满足全部条件前，real-opencode.json 不得写 status=passed。
 
-This release gate applies to v1.3.0 and later product releases. Historical release notes remain
-factual and are not retroactively rewritten.
+<a id="current-historical-evidence"></a>
+
+## 历史证据
+
+2026-06-20：v0.9.0 发布后的真实冒烟使用火山 Ark double/ark-code-latest、OpenCode 1.17.5，通过约 1 分 38 秒执行，转交 bash → edit → bash，生成 devflow-opencode-smoke.txt，运行样例测试并清理工作树。
+
+<a id="applies-from"></a>
+
+## 适用范围
+
+V1.3/V1.4 按自身契约使用该门禁；后续版本只有自身发布契约明确要求并获得新授权时才适用。历史发布说明保留事实，不追溯修改其结果。

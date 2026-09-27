@@ -4427,6 +4427,8 @@ function replayCanonicalGateTransition(input: {
 }
 
 class SqlJsLocalStore implements LocalStore {
+  // Changes only after a successful disk write, never after a read or failed save.
+  persistedRevision = 0
   private persistenceQueue: Promise<void> = Promise.resolve()
   private readonly agentMemoryPromotionOwner = Object.freeze(Object.create(null)) as object
   private readonly specialistTaskAuthorityStoreIdentity = Object.freeze(Object.create(null)) as object
@@ -13695,6 +13697,7 @@ class SqlJsLocalStore implements LocalStore {
     )
     this.persistenceQueue = persistence.catch(() => undefined)
     await persistence
+    this.persistedRevision++
   }
 }
 
@@ -13865,10 +13868,16 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   close: 'direct',
 } satisfies Record<keyof LocalStore, 'direct' | 'durable'>
 
+const storeRevisions = new WeakMap<LocalStore, () => number>()
+
+export function getLocalStoreRevision(store: LocalStore): number | undefined {
+  return storeRevisions.get(store)?.()
+}
+
 function serializeLocalStoreMutations(store: SqlJsLocalStore): LocalStore {
   let mutationQueue: Promise<void> = Promise.resolve()
 
-  return new Proxy(store, {
+  const serialized = new Proxy(store, {
     get(target, property) {
       const value = Reflect.get(target, property)
       if (typeof value !== 'function') return value
@@ -13888,6 +13897,8 @@ function serializeLocalStoreMutations(store: SqlJsLocalStore): LocalStore {
       }
     },
   })
+  storeRevisions.set(serialized, () => store.persistedRevision)
+  return serialized
 }
 
 export async function createLocalStore(options: LocalStoreOptions): Promise<LocalStore> {
@@ -13928,7 +13939,7 @@ export async function createLocalStore(options: LocalStoreOptions): Promise<Loca
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(
-      `DevFlow local database is unreadable at ${options.dbPath}. Back up or remove this file to rebuild local state. Cause: ${message}`,
+      `无法读取本地数据库 ${options.dbPath}。请保留数据库并查看诊断；运行时内存异常可尝试完全退出后重启，不要删除数据或重建进度。原因：${message}`,
     )
   }
 }

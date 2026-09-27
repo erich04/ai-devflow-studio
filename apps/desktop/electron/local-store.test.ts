@@ -8699,7 +8699,7 @@ describe('createLocalStore', () => {
     malformed.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /DevFlow local database is unreadable/,
+      /无法读取本地数据库/,
     )
 
     const unchanged = new SQL.Database(await readFile(dbPath))
@@ -8747,7 +8747,7 @@ describe('createLocalStore', () => {
     malformed.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /DevFlow local database is unreadable/,
+      /无法读取本地数据库/,
     )
 
     const unchanged = new SQL.Database(await readFile(dbPath))
@@ -8790,7 +8790,7 @@ describe('createLocalStore', () => {
     malformed.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /DevFlow local database is unreadable/,
+      /无法读取本地数据库/,
     )
 
     const unchanged = new SQL.Database(await readFile(dbPath))
@@ -8976,7 +8976,7 @@ describe('createLocalStore', () => {
     v7Db.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /DevFlow local database is unreadable/,
+      /无法读取本地数据库/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
@@ -9001,7 +9001,7 @@ describe('createLocalStore', () => {
     const dbPath = await tempDbPath()
     await writeFile(dbPath, 'not a sqlite database')
 
-    await expect(createLocalStore({ dbPath })).rejects.toThrow(/DevFlow local database is unreadable/)
+    await expect(createLocalStore({ dbPath })).rejects.toThrow(/无法读取本地数据库/)
   })
 
   it('persists local projects, runs, artifacts, events, and test evidence across reopen', async () => {

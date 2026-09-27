@@ -1,120 +1,127 @@
-# Core Workflow Detail
+<a id="core-workflow-detail"></a>
 
-## 1. Request Intake
+# 核心工作流详解
 
-User intent:
+<a id="1-request-intake"></a>
 
-- Capture a real software request, not a cloned fixture.
-- Preserve the raw request as a `raw_request` artifact.
-- Create a standard six-stage workflow so the user can see the delivery path immediately.
+## 1. 需求录入
 
-Required product behavior:
+用户目标：
 
-- New Run creation should accept a small renderer input: title, request, project id, creator id, and
-  branch name.
-- The trusted workflow builder should create nodes, edges, initial artifact, and initial event.
-- The UI should make the next expected action obvious.
+- 录入真实软件需求，不克隆测试样例。
+- 将原始请求保存为 `raw_request` 产物。
+- 创建标准六阶段工作流，让用户立即看到交付路径。
 
-## 2. Clarify
+必要产品行为：
 
-User intent:
+- 新建 Run 接收精简的渲染进程输入：标题、需求、项目 ID、创建者 ID 和分支名。
+- 可信工作流构建器创建节点、边、初始产物和初始事件。
+- 界面明确显示预期的下一步动作。
 
-- Convert a raw request into goals, non-goals, acceptance criteria, open questions, and risk
-  assumptions.
+<a id="2-clarify"></a>
 
-Required evidence:
+## 2. 需求澄清
 
-- Clarification artifact.
-- Agent event showing the clarification step completed.
-- Gate decision before moving into design.
+用户目标：
 
-## 3. Design
+- 将原始请求转为目标、非目标、验收标准、待确认问题和风险假设。
 
-User intent:
+必要证据：
 
-- Define implementation approach, affected systems, API/data assumptions, and testing strategy.
+- 需求澄清产物。
+- 证明澄清步骤完成的 Agent 事件。
+- 进入设计前的 Gate 决策。
 
-Required evidence:
+<a id="3-design"></a>
 
-- Design artifact.
-- Knowledge references when relevant.
-- Gate decision before implementation starts.
+## 3. 方案设计
 
-## 4. Build
+用户目标：
 
-User intent:
+- 定义实现思路、受影响系统、API/数据假设和测试策略。
 
-- Run AI-assisted implementation locally while keeping developer control.
+必要证据：
 
-Required evidence:
+- 设计产物。
+- 相关知识引用（适用时）。
+- 开始实现前的 Gate 决策。
 
-- Coding Agent Run.
-- Permission relay history.
-- Managed worktree state.
-- Coding Diff Artifact with redacted changed paths and safe summary.
-- Runtime trace that distinguishes fake engine and real opencode paths.
+<a id="4-build"></a>
 
-## 5. Test
+## 4. 开发实现
 
-User intent:
+用户目标：
 
-- Prove the change with a configured command and durable result.
+- 在本地执行 AI 辅助实现，同时保留开发者控制权。
 
-Required evidence:
+必要证据：
 
-- Test Evidence with command, status, exit code, duration, redacted output summary, and timestamp.
-- Command safety feedback before execution.
-- Clear failed, timed out, or passed state.
+- 编码 Agent 执行记录。
+- 权限请求及决定历史。
+- 托管工作树状态。
+- 包含脱敏变更路径和安全摘要的编码差异产物。
+- 能区分假引擎与真实 OpenCode 路径的运行时轨迹。
 
-## 6. PR Delivery
+<a id="5-test"></a>
 
-User intent:
+## 5. 测试
 
-- Turn one tested commit in the canonical managed worktree into one separately approved GitHub
-  Draft pull request without transferring source or repository authority into a handoff artifact.
+用户目标：
 
-Required evidence:
+- 用已配置命令和持久化结果证明改动。
 
-- Original request.
-- Design summary when available.
-- Changed paths.
-- Latest test evidence.
-- Policy and budget status.
-- Knowledge-Grounded Gate Review summary for the current Gate and stage artifacts, with Knowledge retained as grounding.
-- Metadata-only PR Delivery Package.
-- Immutable Delivery Intent bound to the expected commit, repository binding, Run/node/version,
-  Test Evidence, changed paths, and package digest.
-- Redacted Delivery Request and immutable signed Web approval for its exact revision.
-- Verified remote branch head and matching Draft pull-request completion.
+必要证据：
 
-Authority and recovery:
+- 测试证据，包括命令、状态、退出码、耗时、脱敏输出摘要和时间戳。
+- 执行前的命令安全反馈。
+- 清楚区分失败、超时、通过状态。
 
-- A verified GitHub App repository binding supplies narrow, revocable repository authority.
-- The GitHub App private key remains in the API process. Electron main holds a short-lived,
-  repository-scoped Contents token only for the active publication attempt; the renderer never
-  receives it.
-- Revise creates a new pre-publication intent revision and invalidates approval.
-- Resume continues the same `recovery_required` attempt without creating a new remote identity.
-- Retry creates a new attempt only after the current claimant proves the predecessor terminal.
-- Stop parks the exact active attempt for explicit operator recovery.
+<a id="6-pr-delivery"></a>
 
-Non-goal:
+## 6. PR 交付
 
-- GitHub Delivery never merges, force-pushes, deletes a branch, publishes a tag, or makes GitHub the
-  authority for the local Run.
+用户目标：
 
-## 7. Acceptance
+- 将权威托管工作树中的一个已测试提交，转为单独审批的 GitHub 草稿 PR，不把源码或仓库权限放入交接产物。
 
-User intent:
+必要证据：
 
-- Make final business or lead signoff based on the full evidence bundle.
+- 原始请求。
+- 已有设计摘要。
+- 变更路径。
+- 最新测试证据。
+- 策略和预算状态。
+- 针对当前 Gate 及阶段产物、保留知识依据的门禁审查摘要。
+- 仅含元数据的 PR 交付包。
+- 不可变交付意图，绑定预期提交、仓库绑定、Run/节点/版本、测试证据、变更路径和交付包摘要。
+- 脱敏交付请求，以及精确对应其修订的不可变签名 Web 审批。
+- 已核实远端分支提交与对应草稿 PR 完成记录。
 
-Required evidence:
+权限与恢复：
 
-- Acceptance evidence bundle.
-- PR Delivery Package, Delivery Intent, Delivery Request approval, verified remote head, and Draft
-  pull-request reference.
-- Diff/test/policy/budget/Gate Review summary.
-- Final Gate decision through the normal enforcement path.
-- Acceptance may record signoff after delivery completion but must never merge, close, or otherwise
-  mutate the pull request.
+- 经验证的 GitHub App 仓库绑定提供有限、可撤销的仓库权限。
+- GitHub App 私钥保留在 API 进程。Electron 主进程仅在活动发布尝试期间持有限定仓库的短期 Contents 令牌；渲染进程绝不接收它。
+- 修订（Revise）创建新的发布前意图版本，并使旧审批失效。
+- 继续（Resume）继续同一个 `recovery_required` 尝试，不创建新的远端身份。
+- 重试（Retry）仅在当前领取者证明前次尝试处于终态后，创建新尝试。
+- 停止（Stop）停放指定的活动尝试，等待操作者明确恢复。
+
+非目标：
+
+- GitHub 交付不会合并、强制推送、删除分支、发布标签，也不会让 GitHub 成为本地 Run 的权威来源。
+
+<a id="7-acceptance"></a>
+
+## 7. 业务验收
+
+用户目标：
+
+- 根据完整证据包完成最终业务或负责人验收。
+
+必要证据：
+
+- 验收证据资料包。
+- PR 交付包、交付意图、交付请求审批、已核实远端提交和草稿 PR 引用。
+- 差异、测试、策略、预算和门禁审查摘要。
+- 通过正常执行策略路径得到的最终 Gate 决策。
+- 业务验收可以在交付完成后记录签署，但绝不能合并、关闭或以其他方式修改 PR。

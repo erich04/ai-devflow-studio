@@ -1,87 +1,54 @@
-# ADR 0023: Independent organizations in a self-hosted deployment
+<a id="adr-0023-independent-organizations-in-a-self-hosted-deployment"></a>
 
-Status: accepted for implementation. Issue #128 tracks acceptance and delivery.
+# ADR 0023：自托管部署中的独立组织
 
-## Decision and scope
+状态：已接受实施。Issue #128 跟踪验收与交付。
 
-Use Organization as the tenant. Keep one shared Postgres database with explicit scoped queries
-and exact object-authority checks. Do not introduce a remote source-code executor, hosted SaaS,
-billing, enterprise SSO or an automatic public signup service. Deployment operators retain control
-of the network boundary and whether new organizations may be created.
+<a id="decision-and-scope"></a>
 
-An `auth_accounts` row identifies one verified GitHub account; its numeric provider account ID is
-the immutable login identity. A new `organization_memberships` row associates that account with
-one organization-specific `users` row. Roles and project memberships are local to that organization.
-`auth_accounts.user_id` remains the legacy home profile, not a global role or access grant.
+## 决策与范围
 
-Schema 29 backfills existing memberships without changing project IDs, Run IDs, local SQLite,
-Provider secrets or historical records. Browser cookie v2 signs the selected organization and
-account ID. Each request reloads live membership/role; the cookie contains no cached permissions.
-Legacy v1 cookies retain their home organization. They never fall back to a different team.
+以组织作为租户。保持单个共享 Postgres 数据库，使用显式范围查询和确切对象权限检查。不引入远程源码执行器、托管 SaaS、计费、企业 SSO 或自动公共注册服务。部署运维者控制网络边界及是否允许创建新组织。
 
-## Onboarding and lifecycle
+`auth_accounts` 行标识一个已核实 GitHub 账户；其数字提供方账户 ID 是不可变登录身份。新增 `organization_memberships` 行将该账户与组织专属 `users` 行关联。角色和项目成员身份属于该组织。`auth_accounts.user_id` 保留为历史所属组织档案，不是全局角色或访问授权。
 
-`DEVFLOW_MULTI_ORGANIZATION_ENABLED` defaults to false. Enabling it requires authenticated
-Postgres, no demo data and no development identity headers. Pilot still forbids local-development
-login. An unknown verified GitHub account receives its own empty organization; an existing account
-can explicitly create another or switch between its active memberships. Neither path auto-joins an
-existing organization. Closing onboarding stops new organizations and unknown account registration;
-existing memberships, selection and management continue. Project IDs remain collision-free after
-onboarding closes, while pre-existing IDs stay unchanged.
+模式 29 回填既有成员关系，不修改项目 ID、Run ID、本地 SQLite、提供方秘密或历史记录。浏览器 Cookie v2 对所选组织和账户 ID 签名；每请求重新加载实时成员身份/角色，Cookie 不缓存权限。旧 v1 Cookie 保留原所属组织，绝不回退到不同团队。
 
-Owners invite a specific numeric GitHub account with explicit organization/project roles. Tokens
-are random, stored as hashes, expire after 24 hours, and are single-use. Acceptance requires the
-matching authenticated GitHub account and an active owner issuer. An issuer losing owner authority
-invalidates its unconsumed invitation; another owner may issue a replacement. When onboarding is
-closed, invitees must already have registered on this deployment. Invitations do not bypass login
-admission. The UI and deployment guide state this boundary.
+<a id="onboarding-and-lifecycle"></a>
 
-Member updates serialize on the organization and protect the last active owner. Disabling a
-membership removes browser access and revokes its Desktop tokens/pairing codes. Pending Gate
-commands from a disabled requester cannot acquire a new receipt. Archiving preserves data but
-stops business access and revokes all organization Desktop credentials and pending invitations.
-The organization management page remains available for an owner to restore it. Restoration does
-not resurrect revoked tokens: Desktop must pair again. Mutations write organization audit records.
+## 加入与生命周期
 
-## Authority boundaries
+`DEVFLOW_MULTI_ORGANIZATION_ENABLED` 默认 false。启用要求已鉴权 Postgres、无演示数据且无开发身份头；试点仍禁止本地开发登录。未知但已核实 GitHub 账户获得自己的空组织；既有账户可显式创建其他组织或在活动成员关系之间切换，两种路径都不会自动加入既有组织。关闭新用户接纳会停止创建新组织和未知账户注册；既有成员、组织选择及管理继续可用。关闭后项目 ID 仍无冲突，已有 ID 保持不变。
 
-| Surface | Authority |
+owner 邀请确切数字 GitHub 账户，并显式指定组织/项目角色。令牌随机生成、只保存哈希、24 小时后过期且只能使用一次。接受邀请要求已鉴权 GitHub 账户匹配，签发者仍是活动 owner。签发者失去 owner 权限会使未使用邀请失效；另一 owner 可重新签发。新用户接纳关闭时，受邀者必须已在该部署注册。邀请不绕过登录准入；UI 和部署指南明确此边界。
+
+成员变更按组织串行处理，并保护最后一个活动 owner。禁用成员会移除浏览器访问并撤销其桌面令牌/配对码；被禁用请求者的待处理门禁命令不能取得新回执。归档保留数据，但停止业务访问，并撤销组织全部桌面凭据和待使用邀请；组织管理页仍可供 owner 恢复。恢复不复活已撤销令牌，桌面必须重新配对。变更写入组织审计记录。
+
+<a id="authority-boundaries"></a>
+
+## 权限边界
+
+| 界面或组件 | 权限 |
 | --- | --- |
-| Web/API | Signed account + selected organization + live user/project membership; browser mutations require JSON and reject cross-origin requests. |
-| Postgres | Queries scope objects to organization/project; writes validate the target rather than trusting an owner-supplied project ID. No claim of database RLS. |
-| Desktop | Each credential fixes organization, project, user and token/session. Switching Web organizations does not silently re-pair Desktop. Separate profiles provide separate local stores. |
-| Agent Runtime | Existing exact-scope checkpoints, tool grants, Context/Memory authority and commit checks remain authoritative; re-pairing cannot resume an old tenant's pending action. |
-| Knowledge and Memory | Full content remains local. Team synchronization stores only scoped redacted metadata. Built-in knowledge/templates remain common application resources. |
-| Budgets/cost | Policy reads, upserts and approval actors must belong to the target organization/project; aggregate reads use the selected scope. |
-| GitHub Delivery | Browser owner status does not grant use of every repository connected to the deployment's GitHub App. An operator assignment permits one exact organization/installation/repository tuple. |
-| Background processing | Processors use the original pairing/claimant scope, not whichever organization the browser last selected. |
+| Web/API | 签名账户 + 所选组织 + 实时用户/项目成员关系；浏览器变更要求 JSON，并拒绝跨源请求。 |
+| Postgres | 查询将对象限定到组织/项目；写入校验目标，不信任 owner 提交的项目 ID。不宣称数据库 RLS。 |
+| Desktop | 每个凭据固定组织、项目、用户及令牌/会话。切换 Web 组织不会静默重新配对桌面。独立数据环境提供独立本地存储。 |
+| Agent 运行时 | 既有确切范围检查点、工具授权、上下文/记忆权限和提交检查继续有效；重新配对不能恢复旧租户待处理操作。 |
+| 知识与记忆 | 完整内容留在本地，团队同步只保存限定范围脱敏元数据；内置知识/模板仍是通用应用资源。 |
+| 预算/费用 | 策略读取、插入更新及批准参与者必须属于目标组织/项目；汇总读取使用所选范围。 |
+| GitHub 交付 | 浏览器 owner 身份不授权使用部署 GitHub App 连接的所有仓库。运维分配只允许一个确切组织/安装/仓库元组。 |
+| 后台处理 | 处理器使用原始配对/认领者范围，而非浏览器最近所选组织。 |
 
-`DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS` is operator-owned JSON. It is checked before repository
-verification, credential issuance, branch verification/adoption and Draft-PR creation, including
-recovery. The same repository cannot be assigned to two organizations. Unassigned operations fail
-before a GitHub call. Existing single-team installations without assignments retain their behavior;
-once multiple organizations exist, turning onboarding off does not restore global App authority.
-Existing bindings and stored requests cannot bypass a removed assignment. Assignment changes apply
-after API restart; already issued short-lived credentials retain their provider expiry/revocation
-contract. This mechanism does not rotate the GitHub App key or widen its permissions.
+`DEVFLOW_GITHUB_REPOSITORY_ASSIGNMENTS` 是运维者拥有的 JSON。在仓库核实、凭据签发、分支核实/接纳和草稿 PR 创建前检查，包括恢复路径。同一仓库不能分配给两个组织。未分配操作在调用 GitHub 前失败。没有分配配置的既有单团队安装保留原行为；一旦存在多个组织，关闭新用户接纳不会恢复全局 App 权限。既有绑定和存储请求不能绕过已移除分配。分配变更在 API 重启后生效；已签发短期凭据仍遵循提供方过期/撤销契约。本机制不轮换 GitHub App 密钥，也不扩大权限。
 
-## Tradeoffs and review
+<a id="tradeoffs-and-review"></a>
 
-Application-scoped SQL is compatible with the current repository layer, but it requires negative
-tests at every write boundary. This work reproduced and fixed a foreign-project budget upsert and
-pending Gate receipt issuance for a disabled requester. The GitHub App boundary needs explicit
-operator assignment because single-team owner trust does not generalize to independent tenants.
+## 权衡与审查
 
-Cursor's advisory review found no additional reproducible access path in the earlier patch. Its
-suggestion to retain invitations after the issuer loses authority was not adopted: explicit
-re-issuance preserves the intended revocation behavior. Its warning about owner checks relying on
-SQL target scoping is addressed by real-Postgres negative tests, not by treating owner as global.
-A separate review of the GitHub assignment changes also found no reproducible bypass. Its
-compatibility and configuration-wiring concerns resulted in a real-Postgres single-team allow
-case and runtime tests proving exact assignment enforcement and early rejection of invalid JSON.
-The deployment guide explicitly includes archived/demo organization rows in the assignment rule.
-Review recommendations remain advisory; live two-team GitHub publication is not claimed.
+应用层限定范围的 SQL 与当前仓库层兼容，但每个写入边界都需要负向测试。此工作复现并修复了跨项目预算插入更新，以及给已禁用请求者签发待处理门禁回执的问题。GitHub App 边界需要显式运维分配，因为单团队 owner 信任不能推广到独立租户。
 
-See the [deployment guide](../guides/multi-organization-deployment.md) and
-[validation record](../validation/multi-organization-20260921.md). Neither integration tests nor
-this ADR alone constitute a release signoff or a claim of a live multi-tenant LLM delivery.
+Cursor 对较早补丁的建议性审查未发现额外可复现访问路径。签发者失去权限后保留邀请的建议未采用：显式重新签发才能保留预期撤销行为。关于 owner 检查依赖 SQL 目标范围的警告由真实 Postgres 负向测试处理，而非将 owner 视为全局权限。
+
+GitHub 分配变更的独立审查也未发现可复现绕过路径。其兼容性和配置接线疑虑促成真实 Postgres 单团队允许用例，以及证明确切分配执行和无效 JSON 提前拒绝的运行时测试。部署指南明确分配规则包含已归档/演示组织行。审查建议仍是建议，不宣称已完成实际双团队 GitHub 发布。
+
+参见[部署指南](../guides/multi-organization-deployment.md)和[验证记录](../validation/multi-organization-20260921.md)。集成测试或本 ADR 本身都不构成发布签字，也不代表已完成实际多租户 LLM 交付。

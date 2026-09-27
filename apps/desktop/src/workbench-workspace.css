@@ -194,11 +194,11 @@
 .conversation-dialog button:focus-visible, .conversation-dialog input:focus-visible, .conversation-dialog summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Review workspace: stages above documents; conversations remain project-scoped. */
-.workbench-layout.review-workbench { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr); gap: 10px; padding: 14px 20px; min-width: 0; }
+.workbench-layout.review-workbench { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 10px; padding: 14px 20px; min-width: 0; }
 .workbench-project-menu { position: relative; z-index: 5; width: fit-content; max-width: calc(100% - 220px); font-size: 12px; color: var(--text-muted); }
 .workbench-project-menu > summary { cursor: pointer; padding: 4px 0; width: fit-content; max-width: 100%; overflow-wrap: anywhere; }
 .workbench-project-menu > .run-list { position: absolute; top: 100%; left: 0; width: 340px; max-height: 70vh; overflow-y: auto; padding: 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
-.review-workbench > .workflow-panel { grid-template-rows: auto auto auto; overflow: visible; border: 0; border-radius: 0; background: transparent; }
+.review-workbench .node-reader > .workflow-panel { flex: none; grid-template-rows: auto auto auto; overflow: visible; border: 0; border-radius: 0; background: transparent; }
 .review-workbench .workflow-head { min-height: 0; padding: 0; justify-content: flex-end; }
 .review-workbench .workflow-head > div:first-child { display: none; }
 .review-workbench .workflow-view-switch { position: absolute; top: -34px; right: 0; padding: 1px; }
@@ -218,9 +218,9 @@
 .workflow-node-navigation button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .review-workbench .workflow-view--flow .stage-grid, .review-workbench .workflow-view--list .stage-grid { max-height: 32vh; overflow: auto; }
 .workspace-split { --inspector-width: 480px; --workbench-run-list-width: 0px; --workflow-board-min-width: 420px; --workbench-splitter-width: 10px; display: grid; grid-template-columns: minmax(0, 1fr) 10px minmax(0, var(--inspector-width)); gap: 0; min-height: 0; min-width: 0; overflow: hidden; }
-.node-reader { min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border)); border-top: 2px solid var(--accent); border-radius: 10px; background: var(--surface); scroll-padding: 20px; }
+.node-reader { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; overflow: hidden; overscroll-behavior: contain; background: var(--bg); scroll-padding: 20px; }
 .node-reader:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.node-reader > .inspector { display: block; height: auto; min-height: 100%; border: 0; border-radius: 0; overflow: visible; padding: 22px; }
+.node-reader > .inspector { display: flex; flex-direction: column; flex: 1; height: auto; min-height: 0; border: 1px solid var(--border); border-radius: 10px; overflow: auto; padding: 22px; }
 .node-reader .inspector-scroll { overflow: visible; min-height: 0; }
 .node-reader .inspector-node-heading .panel-title { font-size: 23px; }
 .inspector-stage-context { display: none; }
@@ -266,5 +266,84 @@
 
 .node-reader .text-button { color: var(--accent); background: transparent; border: 0; cursor: pointer; font: inherit; font-size: 12px; padding: 3px 0; }
 
+/* Always-visible summaries, with details outside clipping scroll containers. */
+.detail-popover { position: fixed; z-index: 1100; width: min(420px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow: auto; box-sizing: border-box; padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: var(--shadow); font-size: 13px; overflow-wrap: anywhere; }
+.detail-popover header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.detail-popover h3 { font-size: 13px; margin-top: 18px; }
+.detail-popover .stat { display: block; white-space: normal; border: 0; padding: 0; }
+.detail-popover .remote-sync-operation { display: flex; flex-wrap: wrap; margin: 12px 0; }
+.detail-values { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px 14px; }
+.detail-values dd { margin: 0; text-align: right; }
+.conversation-usage-button { display: flex; align-items: center; gap: 5px; flex: none; background: transparent; border: 0; border-left: 1px solid var(--border); color: var(--text-muted); cursor: pointer; padding: 8px; font: inherit; font-size: 11px; }
+.conversation-usage-button small { color: var(--accent); }
+.app-shell > .status-strip.grouped-status { display: flex; flex-wrap: wrap; align-items: stretch; gap: 4px 12px; overflow: visible; padding: 4px 20px; height: auto; min-width: 0; }
+.global-status-trigger { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; background: transparent; color: var(--text-muted); border: 0; border-radius: 5px; font: inherit; font-size: 11px; text-align: left; padding: 6px 8px; cursor: pointer; overflow-wrap: anywhere; }
+.global-status-trigger strong { color: var(--text); }
+.global-status-trigger:hover { background: var(--surface); }
+.global-status-trigger:focus-visible, .detail-popover:focus-visible, .detail-popover button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.review-workbench .workflow-stage-navigation { grid-template-columns: repeat(6, minmax(102px, 1fr)); }
+.review-workbench .workflow-stage-navigation button { grid-template-columns: 1fr; justify-items: center; text-align: center; gap: 4px; padding: 8px 4px; }
+.review-workbench .workflow-stage-navigation .stage-nav-index { grid-row: auto; width: 25px; height: 25px; }
+.review-workbench .workflow-stage-navigation small { grid-column: 1; white-space: normal; }
+@media (max-width: 1366px) { .conversation-usage-button { gap: 3px; padding: 6px; } .conversation-usage-button small { display: none; } }
+.node-reader > .inspector { overflow: hidden; gap: 8px; padding: 16px; }
+.node-reader .inspector .panel-head { flex: none; padding-bottom: 4px; }
+.node-reader .inspector-node-heading .panel-title { font-size: 19px; }
+.node-status-summary { display: flex; flex-wrap: wrap; gap: 5px 14px; flex: none; font-size: 12px; color: var(--text-muted); padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.node-status-summary strong { color: var(--text); }
+.workspace-primary-tabs { display: flex; flex: none; flex-wrap: wrap; gap: 4px; padding: 0; }
+.workspace-primary-tabs .tab { border-radius: 5px; padding: 9px 12px; }
+.inspector-document-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 8px 4px 24px; scroll-padding: 12px; }
+.node-action-footer { flex: none; border-top: 1px solid var(--border); padding-top: 10px; background: var(--surface); }
+.node-action-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.node-action-buttons .inspector-next-actions, .node-action-buttons .inspector-secondary-actions { display: contents; }
+.node-action-footer .clarification-review__feedback { max-height: 30vh; overflow: auto; margin: 0 0 10px; border: 0; padding: 0; }
+.node-action-footer textarea { min-height: 80px; width: 100%; resize: vertical; }
+.node-reader .next-action { padding: 12px 14px; margin: 0 0 18px; border: 0; background: var(--bg); }
+.node-reader .next-action h3 { font-size: 16px; margin-top: 4px; }
+.node-reader .next-action > .section-title { display: none; }
+.artifact-content-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 20px; }
+.artifact-content-tabs button { font: inherit; font-size: 13px; color: var(--text-muted); background: transparent; border: 0; border-bottom: 2px solid transparent; padding: 8px 4px; cursor: pointer; }
+.artifact-content-tabs button[aria-selected='true'] { color: var(--accent); border-bottom-color: var(--accent); }
+.artifact-content-tabs button:focus-visible { outline: 2px solid var(--accent); }
+.artifact-reading-section { margin: 14px 0 24px; scroll-margin: 12px; }
+.artifact-reading-section h1 { font-size: 18px; }
+.artifact-reading-section h2 { font-size: 16px; }
+.artifact-reading-section h3 { font-size: 14px; }
+.artifact-toc { display: flex; flex-wrap: wrap; gap: 8px 16px; padding-bottom: 12px; }
+.artifact-toc a { font-size: 12px; color: var(--accent); }
+.workspace-document > article, .inspector-document-scroll .artifact-card { border: 0; border-radius: 0; padding: 0 0 18px; border-bottom: 1px solid var(--border); background: transparent; }
+.workspace-document h2 { font-size: 18px; }
+.inspector-document-scroll .status-row { border: 0; border-radius: 0; border-bottom: 1px solid var(--border); padding: 12px 0; }
+
 .material-document .compact-row { align-items: center; }
 .material-document .compact-row h2 { margin: 0; }
+/* Fit all six stages when space allows; keep the stage scroll local on narrow splits. */
+.review-workbench .workflow-stage-navigation button { flex: 1 1 auto; min-width: 0; }
+.review-workbench .stage-progress-link { flex: 0 0 10px; min-width: 10px; margin-inline: 4px; }
+.inspector-document-scroll .status-group { border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; padding: 0; }
+.inspector-document-scroll .status-group > summary { padding: 12px 0; }
+.inspector-document-scroll .status-group__content { padding: 0; }
+.node-status-summary > .gate-readiness-counts { display: inline-flex; gap: 8px; }
+.node-status-summary > .gate-readiness-counts span { white-space: nowrap; }
+.node-status-summary strong { flex-basis: 100%; }
+
+/* Bound navigation to the available pane height, including system notices and zoom. */
+.node-reader { container: node-pane / size; }
+.workflow-navigation-scroll { max-height: 32cqh; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.workflow-navigation-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.review-workbench .workflow-view--flow .stage-grid, .review-workbench .workflow-view--list .stage-grid { max-height: none; }
+.node-action-footer:empty, .node-action-footer:not(:has(button, textarea, details, [role='alert'])) { display: none; }
+@container node-pane (max-height: 650px) {
+  .workflow-navigation-scroll { max-height: 22cqh; }
+  .review-workbench .workflow-stage-navigation { grid-template-columns: repeat(6, minmax(154px, 1fr)); padding-bottom: 16px; }
+  .review-workbench .workflow-stage-navigation button { grid-template-columns: 25px minmax(0, 1fr); justify-items: start; text-align: left; padding: 6px; gap: 2px 6px; }
+  .review-workbench .workflow-stage-navigation .stage-nav-index { grid-row: 1 / 3; }
+  .review-workbench .workflow-stage-navigation small { grid-column: 2; }
+  .review-workbench .workflow-stage-navigation strong { white-space: nowrap; }
+  .node-reader > .inspector { padding: 12px; gap: 6px; }
+  .node-reader .inspector-stage-context { display: none; }
+  .workspace-primary-tabs .tab { padding: 7px 9px; }
+  .node-status-summary { padding-bottom: 6px; gap: 3px 10px; }
+  .node-action-footer { padding-top: 6px; }
+}

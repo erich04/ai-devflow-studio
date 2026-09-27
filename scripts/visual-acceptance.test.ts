@@ -10,7 +10,7 @@ describe('Airbnb-III visual acceptance workflow', () => {
     const markdown = readFileSync(acceptancePath, 'utf8')
 
     expect(markdown).toContain('corepack pnpm visual:desktop')
-    expect(markdown).toContain('Do not claim pixel-level completion until every row below is `pass`.')
+    expect(markdown).toContain('只有下表每项都为 `pass` 后，才能声称像素级验收完成。')
     expect(markdown).toContain('airbnb-iii-workbench-reference.png')
     expect(markdown).toContain('airbnb-iii-team-policy-reference.png')
     expect(markdown).toContain('airbnb-iii-knowledge-reference.png')

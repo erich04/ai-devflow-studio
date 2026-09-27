@@ -1,32 +1,44 @@
-# Workflow stage navigation and conversation-only header
+<a id="workflow-stage-navigation-and-conversation-only-header"></a>
 
-## Scope
+# 工作流阶段导航与独立会话头部
 
-Fixes #169 and the follow-up request to connect horizontal stage selection with the node/detail region. The selected stage has a matching accent and pointer, the node strip identifies the viewed stage, and the reader repeats its stage context. The real current node remains separately labeled; “返回当前进度” navigates without executing anything.
+<a id="scope"></a>
 
-Progress connectors have a thin muted remainder and thicker accent completion. Completion counts successful/skipped nodes including Gates. The user's clarification task is complete but its requirement Gate is pending, so stage 01 has a half-filled connector. Future prepared nodes cannot move progress past the Run's current stage.
+## 范围
 
-The right side of the split workspace now contains only conversations. Legacy combined inspector layouts keep their node-details tab. Chat tabs, menus, closing, new/history, drafts and independent navigation remain supported.
+修复 #169 及将横向阶段选择与节点/详情区域联动的后续需求。选中阶段显示对应强调色和指针，节点栏标明正在查看的阶段，阅读区重复展示阶段上下文。真实当前节点单独标注；“返回当前进度”只导航，不执行动作。
 
-## Validation
+进度连接线以细、低对比线表示剩余部分，以较粗强调色表示已完成部分。完成计数包含成功/跳过的节点及 Gate。该次用户需求澄清任务已完成、需求 Gate 待处理，所以阶段 01 的连接线填充一半。未来阶段预先准备的节点不能使进度超过 Run 当前阶段。
 
-- Desktop typecheck and production build passed.
-- `WorkbenchWorkspace.test.tsx`, `WorkflowStageNavigation.test.tsx`, and `App.test.tsx`: 3 files, 169 tests passed. Final focused rerun: 2 files, 18 tests passed.
-- Tests cover current versus viewed stages, pending/blocked Gate partial completion, approved-stage completion, future prepared nodes, empty stages, return-to-current navigation, closing the last conversation, history recovery and draft preservation.
-- Isolated browser: stage changes preserved chat/draft; connector geometry remained stable; close/history recovery worked; both themes and a 1265px CSS viewport were inspected; console warnings/errors were empty.
-- Native Electron: the updated renderer is visible under the original profile, including the selected design stage, actual requirement Gate, half-filled first connector and chat-only header.
-- Visual comparison and evidence paths: [design-qa.md](../../design-qa.md).
+分栏工作区右侧只保留会话。旧版合并式节点详情布局保留其详情页签；聊天页签、菜单、关闭、新建/历史、草稿及独立导航继续可用。
 
-The first Windows CI attempt passed 4,126 tests but hit the pre-existing one-second `vi.waitFor` default while creating a real Git worktree for dependency-approval testing. Cleanup then encountered the still-active directory. The approval/rejection fixture waits now allow ten seconds on Windows, within the existing thirty-second test deadline; their assertions and product execution limits are unchanged. The two dependency-approval tests are rerun locally and the final candidate is rechecked in CI.
+<a id="validation"></a>
 
-The first macOS E2E attempt caught the project menu's transparent hit area intercepting the repositioned view switch. Its width is now bounded with explicit room for the switch. Unforced mouse clicks across compact/flow/list modes passed in the isolated browser at 1180px and 1834px in both themes; console errors remained empty. Existing E2E view-switch tests are retained to guard this regression.
+## 验证
 
-## Original-profile recovery
+以下记录对应 2026-09-24 的变更，不表示后续布局已自动验收。
 
-Before rollout, backed up the complete desktop profile, registry, installed renderer, manifest and a consistent SQLite snapshot. The 66 SQLite tables were compared by row count and stable row digest after restart. All 65 non-conversation tables are identical. The five-conversation table differs only in `version`/`updatedAt` metadata for the opened conversation; messages, drafts and remaining fields are identical. Counts remain 1 Run, 8 nodes, 4 artifacts and 5 conversations. Workflow state, budget, Provider credentials and pairing did not change.
+- 桌面类型检查和生产构建通过。
+- `WorkbenchWorkspace.test.tsx`、`WorkflowStageNavigation.test.tsx` 和 `App.test.tsx`：3 个文件、169 项测试通过。最终定向重跑：2 个文件、18 项测试通过。
+- 测试覆盖当前/正在查看阶段的区别、待处理/阻断 Gate 的部分完成、已批准阶段完成、未来已准备节点、空阶段、返回当前进度、关闭最后会话、历史恢复和草稿保留。
+- 隔离浏览器：切换阶段保留聊天/草稿，连接线几何稳定，关闭/历史恢复有效；检查深浅主题和 1265px CSS 视口，控制台无警告或错误。
+- 原生 Electron：原档案中的更新渲染层可见，包括选中的设计阶段、实际需求 Gate、填充一半的首条连接线，以及仅含会话的头部。
+- 视觉对照及证据路径：[设计验收记录](../../design-qa.md)。
 
-Only renderer files were replaced. The Electron main/preload files match the previously installed version byte-for-byte. A menu reload initially produced a blank window; normal quit and restart using the same executable, environment and data profile restored the application successfully. API and Web processes were retained and both `/ready` endpoints returned HTTP 200 using direct localhost connections. No live model request, approval, migration, data reset or test fixture was applied to the user's profile.
+首次 Windows CI 通过 4,126 项测试，但在依赖审批测试创建真实 Git 工作树时触发既有 `vi.waitFor` 默认一秒时限；清理随后遇到仍在活动的目录。审批/拒绝测试在 Windows 上改为等待十秒，仍处于既有三十秒测试总时限内；断言和产品执行限制未变。两项依赖审批测试在本地重跑，最终候选版本继续在 CI 中核验。
 
-## Remaining issue
+首次 macOS 端到端测试发现项目菜单的透明命中区挡住重新定位后的视图切换。现已限制其宽度，并为切换控件明确留出空间。在 1180px 和 1834px、两种主题的隔离浏览器中，使用非强制鼠标点击切换精简/流程/列表模式均通过，控制台错误为空。既有端到端视图切换测试保留，用于防止回归。
 
-#135 already has its asynchronous credential-handling fix merged through #149. It remains open for the previously agreed Developer ID signed-install validation. The machine reports no valid code-signing identities, so an unsigned application's successful restart is not recorded as that missing signoff.
+<a id="original-profile-recovery"></a>
+
+## 原档案恢复
+
+更新前备份完整桌面档案、注册表、已安装渲染层、清单及一致性 SQLite 快照。重启后按行数和稳定行摘要比较 66 张 SQLite 表：全部 65 张非会话表一致；含五个会话的表仅已打开会话的 `version`/`updatedAt` 元数据不同，消息、草稿及其余字段一致。数量仍为 1 个 Run、8 个节点、4 个产物及 5 个会话。工作流状态、预算、服务商凭据和配对不变。
+
+只替换渲染层文件，Electron 主进程/preload 与原安装版本逐字节一致。一次菜单重载最初产生空白窗口；正常退出，再使用同一可执行文件、环境和数据档案重启后成功恢复。保留 API/Web 进程，直接连接 localhost 时两者 `/ready` 均返回 HTTP 200。没有向用户档案应用真实模型调用、审批、迁移、数据重置或测试数据。
+
+<a id="remaining-issue"></a>
+
+## 剩余问题
+
+#135 的异步凭据处理修复已通过 #149 合并。该项仍等待此前约定的 Developer ID 签名安装验证。本机没有有效代码签名身份，因此未签名应用重启成功不能代替缺失的正式签名验收。

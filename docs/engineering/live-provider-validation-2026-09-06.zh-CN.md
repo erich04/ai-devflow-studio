@@ -1,5 +1,7 @@
 # 真实 Provider 流程验证记录 · 2026-09-06 / 07
 
+阅读说明：本文是当时的真实验证记录。保留原始需求引文、ID、状态枚举、命令、哈希、时间、费用及模型回执；不将历史完成状态视为新候选版本的验收。术语：Team Project 为团队项目，Work Request 为工作请求，pairing 为配对，managed worktree 为托管工作树，Draft PR 为草稿拉取请求，Acceptance 为业务验收。
+
 状态：**已完成从项目创建、配对到真实 Draft PR 和业务验收，修复后的第二轮也已完成。** 第一轮 Run 于 2026-09-07 08:03:02 UTC 完成，云端产物为 [Draft PR #1](https://github.com/erich04/devflow-mini-agent-live-20260906/pull/1)。第二轮于 09:04:35 UTC 完成，产物为 [Draft PR #2](https://github.com/erich04/devflow-mini-agent-live-20260906/pull/2)。所有时间均为 UTC。受控测试中的 fake Provider 不计入真实调用证据。
 
 **证据口径更正（2026-09-07）：上面的 completed 证明两次已记录的流程执行完成，不能直接等同于“只给一句原始需求即可完整接球交付”的验收通过。** 本轮曾在产品外准备仓库副本，并在设计失败后向需求/规划补充 README 摘要、测试命令组成及基线信息；修复后的复验也复用了项目和配对。准备已有测试仓库属于环境配置，不代表产品自动建仓，但额外提供实施上下文会影响对产品自行承接原始需求能力的判断。用户要求的小需求端到端验证不应被另行解释为自动建 GitHub 仓库或生成项目脚手架。按一句原始需求、先 Team Request 再 pairing 的补验见[后续记录](one-sentence-validation-2026-09-07.zh-CN.md)，该补验已完成，独立交付为 Draft PR #3；原始记录与补验记录分别保留。
@@ -17,7 +19,7 @@
 - Team Project：`p-mini-agent-isolated-live-20260906`；Local Project：`local-151324aa88ad`。
 - 源 checkout：`out/live-provider-20260906/mini-agent-isolated`；实现、依赖安装和验证均由产品在 managed worktree 执行。
 - Provider：已安全保存的 DeepSeek direct provider，模型 `deepseek-v4-flash`；编码使用 DevFlow Native v2 和同一 Provider。
-- Team 与 Desktop 预算：月限额 $1.00，预警 $0.50。Provider usage 来自实际返回，应用费用估算不等同于云端账单。
+- Team 与 Desktop 预算：月限额 $1.00，预警 $0.50。模型用量来自实际返回，应用费用估算不等同于云端账单。
 - Team 使用真实 GitHub 登录、已有 API/Postgres 服务；修复后的生产 Web 副本运行于 4313，Desktop 使用实际 Electron main/preload 与既有 local-development 配置。
 - 原 mini Agent、原 Team 绑定、历史 Run 和原 Docker 服务保留。未直接改写工作流数据库、伪造真实登录、手工 push 或使用 gh 创建交付 PR。真实界面通过 CUA 操作。
 
@@ -59,14 +61,14 @@ Run：`run-work-request-09b489a2902d1c7581979830d63c9210`，最终 completed，v
 | 修复后设计 | 07:24:52 | DeepSeek，2228 / 1192 token，完整实施 Markdown 正文 |
 | 方案审查 | 07:27:03、07:29:45 | DeepSeek，4601 / 747、4601 / 1196；warn。一次重复调用保留 |
 | 方案 Gate | 07:31:20 | UI 批准 |
-| Native Coding | 07:33:50–07:34:46 | 两次真实 Provider 调用合计 5954 / 213 token；独立 worktree 安装依赖、提议精确 diff、UI 批准、实施并执行测试 |
+| Native Coding | 07:33:50–07:34:46 | 两次真实模型调用合计 5954 / 213 token；独立 worktree 安装依赖、提议精确 diff、UI 批准、实施并执行测试 |
 | Native 内部测试 | 07:34:41 | `coding-test-61b4872f-34ec-4c42-84b0-f3e62308359f`，4955 ms，exit 0 |
 | 正式 Test 首次 | 07:36:43 | 错误使用源 checkout，exit 2；失败证据 `evidence-6c0655cf-2abc-4e7c-862d-e41a5fe7baf8` 保留，记录并修复 #71 |
 | 正式 Test 重试 | 07:52:46 | 在匹配的 managed worktree 执行 verify，6351 ms，exit 0；`evidence-aefa142c-e837-48a6-a35c-dfd79ae1e16d` |
-| PR package | 07:53:18 | 正常产品生成 |
+| PR 交付包 | 07:53:18 | 正常产品生成 |
 | 准备交付及精确 commit 测试 | 07:57:34 | 产品创建 commit 并再次 verify，2628 ms，exit 0，证据绑定交付 SHA |
 | Team Delivery 审批与发布 | 08:00:14 | 在 Web 核查仓库、commit、diff、测试后审批，产品发布 Draft PR #1 |
-| 验收 bundle | 08:01:27 | 产品生成 |
+| 验收资料包 | 08:01:27 | 产品生成 |
 | 真实最终审查 | 08:01:50 | DeepSeek，3659 / 917 token，warn；发现上下文缺失真实交付和已有 policy/bundle，记录 #72 |
 | 业务验收 | 08:03:02 | 独立核实实际代码、测试与 Draft PR 后正常 UI 通过；Run completed |
 
@@ -99,10 +101,10 @@ Native Coding Run：`coding-run-87f8f1eb-8e4e-4426-908f-29690b485946`。
 | 首次 Native Coding | 08:33:25–08:40:06 | 初始分析/变更/repair 三次真实调用合计 9084 / 409 token；依赖文件丢失导致测试失败，错误 repair 提议经 UI 拒绝，运行 interrupted |
 | 修复后 Native 重试 | 08:48:00–08:48:38 | 在持久 worktree 中正常 bootstrap，两次真实调用合计 6082 / 259 token，精确变更审批后测试通过，4384 ms |
 | 正式 Test | 08:50:57 | 最新成功 Coding worktree 中 verify 通过，2594 ms，exit 0 |
-| PR package | 08:52:07 | 产品正常生成 |
+| PR 交付包 | 08:52:07 | 产品正常生成 |
 | 精确 commit 测试 | 08:53:02 | 产品固定 `33d2431` 并 verify，2609 ms，exit 0 |
 | Team 审批与发布 | 08:59:45 | 正常 Web 审批，产品创建 Draft PR #2 |
-| 验收 bundle | 09:01:05 | 实际 commit、测试、diff、Provider 来源及历史失败完整绑定 |
+| 验收资料包 | 09:01:05 | 实际 commit、测试、diff、Provider 来源及历史失败完整绑定 |
 | 最终真实审查 | 09:02:30 | DeepSeek，5862 / 410；正确确认实现与交付，保留 3 项独立核实提示 |
 | 业务验收 | 09:04:35 | 直接核实 GitHub 后，经产品 UI 通过，Run completed |
 

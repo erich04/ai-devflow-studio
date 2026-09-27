@@ -977,7 +977,9 @@ try {
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await showProjectRuns(first.page)
   await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
-  await expect(first.page.getByText(/Run Sources/)).toContainText('local')
+  await first.page.getByRole('button', { name: '项目概览', exact: true }).click()
+  await expect(first.page.getByRole('dialog', { name: '项目概览', exact: true })).toContainText('本地')
+  await first.page.keyboard.press('Escape')
   await expect(first.page.getByTestId('runtime-source-badge')).toContainText('remote snapshot + local merge')
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
 

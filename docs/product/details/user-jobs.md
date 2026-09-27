@@ -1,36 +1,41 @@
-# User Jobs
+<a id="user-jobs"></a>
 
-## Developer
+# 用户任务
 
-- Start a Run from a concrete software request.
-- Select or pair a local repository.
-- Clarify request scope and acceptance expectations.
-- Run Coding Agent work inside a managed worktree.
-- Review permission requests before local tools run.
-- Capture diff, dependency bootstrap, test, and runtime evidence.
-- Prepare one immutable Delivery Intent from the tested canonical managed worktree.
-- Use Revise, Resume, Retry, or Stop explicitly when GitHub Delivery needs recovery.
-- Publish one approved expected commit and confirm one matching Draft pull request before
-  Acceptance.
-- Submit redacted summaries to the team view.
+<a id="developer"></a>
 
-## Tech Lead / Reviewer
+## 开发者
 
-- Understand what changed and why.
-- Inspect whether a Gate has enough evidence to proceed.
-- Inspect Knowledge-Grounded Gate Review output for the current Gate and stage artifacts, together with policy warnings and missing evidence.
-- Approve, reject, or override a Gate through guarded write paths.
-- Approve or reject one exact redacted Delivery Request through a signed Web session.
-- Check the verified remote head, Draft pull request, and Acceptance evidence before final delivery
-  signoff.
+- 从具体的软件需求启动一个 Run。
+- 选择或配对本地仓库。
+- 澄清需求范围和验收预期。
+- 在托管工作树中执行编码 Agent 工作。
+- 在本地工具运行前审查权限请求。
+- 保存代码差异、依赖准备、测试和运行时证据。
+- 从已测试的权威托管工作树准备一份不可变交付意图。
+- GitHub 交付需要恢复时，明确选择修订（Revise）、继续（Resume）、重试（Retry）或停止（Stop）。
+- 发布一次经批准的预期提交，并在业务验收前确认对应的草稿 PR。
+- 向团队视图提交脱敏摘要。
 
-## Team Manager / Project Owner
+<a id="tech-lead--reviewer"></a>
 
-- See project delivery health without reading raw local logs.
-- Track active Runs, evidence coverage, policy state, budget usage, and risk.
-- Confirm that the team is using governed AI workflow rather than ad hoc prompting.
-- Manage team-facing settings such as policy presets, budget thresholds, and Desktop pairing.
-- Configure or revoke the Project's verified GitHub App repository binding.
+## 技术负责人 / 审查者
 
-GitHub Delivery never merges, force-pushes, deletes a branch, publishes a tag, or lets Desktop
-Bearer authority approve its own Delivery Request.
+- 理解改动内容和原因。
+- 检查 Gate 是否有足够证据允许继续。
+- 检查针对当前 Gate 及阶段产物、以知识为依据的门禁审查结果，同时核对策略警告和缺失证据。
+- 通过受控写入路径批准、拒绝或例外放行 Gate。
+- 通过签名 Web 会话批准或拒绝一份精确的脱敏交付请求。
+- 在最终交付签署前，检查已核实的远端提交、草稿 PR 和业务验收证据。
+
+<a id="team-manager--project-owner"></a>
+
+## 团队管理者 / 项目所有者
+
+- 无需阅读本地原始日志，即可了解项目交付健康度。
+- 跟踪活动 Run、证据覆盖、策略状态、预算用量和风险。
+- 确认团队使用的是受治理的 AI 工作流，而非临时拼凑的提示词。
+- 管理团队策略预设、预算阈值、桌面配对等设置。
+- 配置或撤销项目经验证的 GitHub App 仓库绑定。
+
+GitHub 交付（GitHub Delivery）不会合并、强制推送、删除分支或发布标签，也不允许桌面 Bearer 权限审批自身交付请求。草稿 PR（Draft）与业务验收（Acceptance）各有独立证据。

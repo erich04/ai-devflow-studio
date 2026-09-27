@@ -1,83 +1,76 @@
-# Workflow Context Projection
+<a id="workflow-context-projection"></a>
 
-DevFlow projects one canonical context contract from the selected Workflow node. The same projection
-drives provider prompts, runtime capability checks, Inspector tabs, empty states, and persisted Review
-manifests. A field is not shown merely because data with the same Run ID exists.
+# 工作流上下文投影
 
-## Field states
+DevFlow 从选中的工作流节点投影出统一的权威上下文契约。同一投影驱动服务商提示、运行时能力检查、节点检查器页签、空状态和持久化审查清单。不能仅因某份数据具有相同 Run ID 就显示该字段。
 
-| State | Meaning |
+<a id="field-states"></a>
+
+## 字段状态
+
+| 状态 | 含义 |
 | --- | --- |
-| `not_applicable` | This node does not own or consume the field. |
-| `not_yet_expected` | A later stage will produce the field. |
-| `optional` | The field may be useful, but absence is not a gap. |
-| `required` | Policy or the node contract requires the field. This is the applicability value before availability is evaluated. |
-| `available` | Applicable data exists in the current node scope. |
-| `missing_required` | Required data is absent. UI and runtime must show an explicit gap. |
+| `not_applicable` | 当前节点不拥有、也不使用该字段。 |
+| `not_yet_expected` | 该字段由后续阶段生成。 |
+| `optional` | 该字段可能有帮助，但缺少它不构成缺口。 |
+| `required` | 策略或节点契约要求该字段。这是在评估数据可用性之前的适用性状态。 |
+| `available` | 当前节点作用域内存在适用数据。 |
+| `missing_required` | 必需数据缺失，界面与运行时必须明确显示缺口。 |
 
-Existing earlier-than-expected data is not discarded. It is projected as `available` with a
-`supplemental` or `historical` role. Empty optional or inapplicable fields are omitted from provider
-prompts and Inspector Evidence.
+早于预期阶段生成的数据不会被丢弃，而是投影为 `available`，角色标为 `supplemental`（补充）或 `historical`（历史）。服务商提示和检查器证据区省略空的可选字段及不适用字段。
 
-## Default node matrix
+<a id="default-node-matrix"></a>
 
-`R` means required, `O` optional, `N/A` not applicable, and `Later` not yet expected. Availability
-turns any populated field into `available`; a blocking policy may promote an optional field to `R`.
+## 默认节点矩阵
 
-| Node | Request | Artifacts | Knowledge refs | Generation refs | Gate Review | Test Evidence | Coding result | GitHub Delivery | Acceptance Evidence |
+`R` 表示必需，`O` 表示可选，`N/A` 表示不适用，`Later` 表示尚未到预期阶段。有数据的适用字段转为 `available`；阻断策略可以将可选字段提升为 `R`。
+
+| 节点 | 需求 | 产物 | 知识引用 | 生成依据 | 门禁审查 | 测试证据 | 编码结果 | GitHub 交付 | 验收证据 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Clarify Agent | R | O | N/A | O | N/A | N/A | Later | Later | Later |
-| Clarification Gate | R | R | O | N/A | O | N/A | Later | Later | Later |
-| Design Agent | R | O | N/A | O | N/A | N/A | Later | Later | Later |
-| Design Gate | R | R | O | N/A | O | O, supplemental | Later | Later | Later |
-| Build Task | R | O | N/A | N/A | N/A | O, supplemental | O | Later | Later |
-| Test | R | O | N/A | N/A | N/A | R | O, historical | Later | Later |
-| PR Delivery | R | O | N/A | N/A | N/A | R | O, historical | R | Later |
-| Acceptance | R | R | O | N/A | O | R | O, historical | O, historical | R |
+| 需求澄清 Agent | R | O | N/A | O | N/A | N/A | Later | Later | Later |
+| 需求确认 Gate | R | R | O | N/A | O | N/A | Later | Later | Later |
+| 方案设计 Agent | R | O | N/A | O | N/A | N/A | Later | Later | Later |
+| 方案评审 Gate | R | R | O | N/A | O | O，补充 | Later | Later | Later |
+| 开发任务 | R | O | N/A | N/A | N/A | O，补充 | O | Later | Later |
+| 测试 | R | O | N/A | N/A | N/A | R | O，历史 | Later | Later |
+| PR 交付 | R | O | N/A | N/A | N/A | R | O，历史 | R | Later |
+| 业务验收 | R | R | O | N/A | O | R | O，历史 | O，历史 | R |
 
-Knowledge Review can execute only on Gate and Acceptance nodes. Clarification and Design Agents
-generate workflow Artifacts; they do not expose a Gate Review action or Gate Review history.
+知识审查只能在 Gate 和业务验收节点执行。需求澄清与方案设计 Agent 生成工作流产物，不提供门禁审查动作或门禁审查历史。
 
-## Knowledge relevance and Evidence
+<a id="knowledge-relevance-and-evidence"></a>
 
-Knowledge retrieval has three independent meanings:
+## 知识相关性与证据
 
-| Field | Meaning | May satisfy a Gate by itself? |
+知识检索包含三个相互独立的含义：
+
+| 字段 | 含义 | 能否单独满足门禁条件？ |
 | --- | --- | --- |
-| `lexicalMatch` | Raw additive keyword match. It has no fixed maximum and cannot be compared across queries. | No |
-| `semanticRelevance` | Provider/model-defined semantic relevance. It exists only when a semantic retriever actually ran. | No |
-| `gateEvidence` | How a completed Review used the reference: candidate, reviewed, supports a finding, or rejected. | No; the auditable Review/finding is Evidence. |
+| `lexicalMatch` | 原始关键词累加匹配分数，没有固定上限，不能跨查询比较。 | 不能 |
+| `semanticRelevance` | 由服务商/模型定义的语义相关性，只有实际运行语义检索器时才存在。 | 不能 |
+| `gateEvidence` | 已完成审查如何使用该引用：候选、已审阅、支持某项意见或已排除。 | 不能；可审计的审查结果/意见才是证据。 |
 
-Legacy `score` remains readable. A lexical legacy score becomes only a legacy lexical match; a
-vector legacy score becomes only legacy semantic relevance. No legacy score is promoted to Gate
-Evidence.
+旧 `score` 字段仍可读取。旧词法分数仅解释为旧版词法匹配，旧向量分数仅解释为旧版语义相关性；任何旧分数都不会被提升为门禁证据。
 
-## Inspector contract
+<a id="inspector-contract"></a>
 
-- **引用来源** shows Knowledge/Policy provenance: document, chunk, repository-relative path,
-  heading, content hash, retrieval strategy, lexical match, semantic relevance, and Review-use state.
-- **Evidence** shows auditable results: exact subject Artifact ID/revision/digest/coverage, Review and
-  policy findings, stage-applicable Test Evidence, diff, or delivery/acceptance records.
-- A Knowledge reference is never rendered in both sections as if it were Evidence.
-- Deep links preserve the selected Gate and return to the source tab. Empty states distinguish
-  inapplicable, optional, and missing-required fields.
+## 节点检查器契约
 
-## Boundary and compatibility
+- **引用来源**显示知识/策略出处：文档、片段、仓库相对路径、标题、内容哈希、检索策略、词法匹配、语义相关性及审查使用状态。
+- **证据（Evidence）** 显示可审计结果：精确的被审产物 ID/版本/摘要/覆盖状态，审查与策略意见，适用于当前阶段的测试证据、差异或交付/验收记录。
+- 知识引用不能在这两个区域中重复显示，并被误作证据。
+- 深层链接保留已选 Gate，并能返回来源页签。空状态区分不适用、可选和必需数据缺失。
 
-`projectWorkflowContext` is the canonical helper. `projectKnowledgeReferencesForNode` prevents
-wrong-node, wrong-Artifact, wrong-Evidence, and cross-stage references from leaking into the selected
-node. New Review manifests persist the projection and typed retrieval fields. Older records without
-them remain readable, but the UI labels their unavailable semantics instead of inventing them.
+<a id="boundary-and-compatibility"></a>
 
-All provider-bound and remote-summary metadata passes the existing redaction boundary. Remote
-summaries retain only redacted identities, digests, revisions, states, and bounded explanations;
-they do not contain subject content, prompts, secrets, local absolute paths, or raw test output.
+## 边界与兼容性
 
-## Requirement clarification executor and revision boundary
+`projectWorkflowContext` 是权威投影函数。`projectKnowledgeReferencesForNode` 防止错误节点、错误产物、错误证据及跨阶段引用混入选中节点。新审查清单保存投影和有类型的检索字段；缺少这些字段的旧记录仍可读，但界面会标注语义信息不可用，不凭空补造。
 
-Requirement clarification may use either the compatible direct Provider or the explicit read-only
-local Agent executor. Both consume one redacted stage context contract. The local executor adds
-repo-relative, digest-bound Repository Findings and cannot write the repository, expand permission,
-or advance Workflow. At Requirement Gate, Raw Request, Repository Findings, and exact current
-Clarification Revision are separate review subjects. Requesting changes creates an immutable
-feedback/revision lineage; approval of a stale revision fails closed.
+所有发往服务商和远端摘要的元数据都经过既有脱敏边界。远端摘要仅保留脱敏身份、摘要、版本、状态和长度受限的说明，不包含被审内容、提示、机密、本地绝对路径或原始测试输出。
+
+<a id="requirement-clarification-executor-and-revision-boundary"></a>
+
+## 需求澄清执行器与修订边界
+
+需求澄清可以使用兼容的 Direct Provider，或明确选择的只读本地 Agent 执行器。两者使用同一份脱敏阶段上下文契约。本地执行器另外提供按仓库相对路径记录、与内容摘要绑定的代码调查结果，不能写入仓库、扩大权限或推进工作流。在需求确认 Gate 中，原始需求、代码调查记录和精确的当前澄清版本是相互独立的审查对象。请求修订会创建不可变的反馈/版本沿革；对过期版本的审批默认拒绝。

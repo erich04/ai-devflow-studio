@@ -1,14 +1,17 @@
-# Module 4: 给 Agent 装上护栏
+<a id="module-4-给-agent-装上护栏"></a>
+# 模块 4：给 Agent 装上护栏
 
-## Teaching Arc
-- **Metaphor:** 登山队出发许可。队员拿到指定路线、有效证件、氧气与时间预算，还要按检查点回报；“有能力爬山”不等于“可以走任何路线”。
-- **Opening hook:** Coding Agent 不是在你的仓库里无限自由地“自己想办法”，它运行在一个绑定 Run、Node、策略版本和受管工作区的任务合同里。
-- **Key insight:** 可靠 Agent = 明确 scope + 可核对 authority + 硬 bounds + 短时 capability + 可恢复 checkpoint，而不是更长的 prompt。
-- **Why should I care?:** 你能把“让 Agent 安全一点”改写成可实现的要求：限制资源范围、工具权限、并发、成本、超时和停止原因。
+<a id="teaching-arc"></a>
+## 教学主线
+- **比喻：** 登山队出发许可。队员拿到指定路线、有效证件、氧气与时间预算，还要按检查点回报；“有能力爬山”不等于“可以走任何路线”。
+- **开场切入：** Coding Agent 不是在你的仓库里无限自由地“自己想办法”，它运行在一个绑定 Run、Node、策略版本和受管工作区的任务合同里。
+- **核心认识：** 可靠 Agent = 明确 scope + 可核对 authority + 硬 bounds + 短时 capability + 可恢复 checkpoint，而不是更长的 prompt。
+- **与读者的关系：** 你能把“让 Agent 安全一点”改写成可实现的要求：限制资源范围、工具权限、并发、成本、超时和停止原因。
 
-## Code Snippets (pre-extracted)
+<a id="code-snippets-pre-extracted"></a>
+## 代码片段（预先摘录）
 
-File: `packages/shared/src/agent-runtime.ts` (lines 45-53)
+文件：`packages/shared/src/agent-runtime.ts`（摘录时第 45–53 行）
 ```ts
 export type AgentRuntimeBounds = {
   maxSteps: number
@@ -22,7 +25,7 @@ export type AgentRuntimeBounds = {
 }
 ```
 
-File: `apps/desktop/electron/agent-coordination-plan.ts` (lines 54-68)
+文件：`apps/desktop/electron/agent-coordination-plan.ts`（摘录时第 54–68 行）
 ```ts
 const coordinationBounds: CoordinationBounds = {
   maxSpecialists: 3,
@@ -41,7 +44,7 @@ const coordinationBounds: CoordinationBounds = {
 }
 ```
 
-File: `apps/desktop/electron/native-tool-registry.ts` (lines 48-61)
+文件：`apps/desktop/electron/native-tool-registry.ts`（摘录时第 48–61 行）
 ```ts
 export type NativeToolCapabilityGrantRecord = {
   stateVersion: 1
@@ -60,29 +63,33 @@ export type NativeToolCapabilityGrantRecord = {
 }
 ```
 
-## Interactive Elements
-- [x] **Code↔English translation:** Use `AgentRuntimeBounds` exactly. Translate each hard maximum into “how the expedition is stopped before it runs away.”
-- [x] **Quiz:** Three end scenarios: (1) a tool call targets another workspace despite remaining token budget; (2) a specialist times out waiting for permission; (3) an AI proposes recursive delegation because work is large. Answers must apply scope/deny-by-default/bounded graph principles.
-- [ ] **Group chat animation**
-- [ ] **Data flow animation**
-- [x] **Drag-and-drop:** Four chips `Scope`, `Authority`, `Bounds`, `Capability Grant` matched to route boundary, exact Run/Node/version, resource budget, and short-lived tool permission. Unique ID `dnd-module4`; buttons must call `checkDnD('dnd-module4')` and `resetDnD('dnd-module4')` with the container ID.
-- [x] **Other:** Clickable architecture diagram: Supervisor → two read specialists in parallel → one bounded implementer → checkpoint/evaluation. Permission badges for read, managed workspace edit, saved test, deterministic evaluation. Pattern cards for explicit stop reasons.
+<a id="interactive-elements"></a>
+## 交互元素
+- [x] **代码与白话对照：** 原样使用 `AgentRuntimeBounds`，解释每个硬上限如何在“探险失控前停止队伍”。
+- [x] **测验：** 三个结尾情景：（1）令牌预算还有余额，但工具调用目标属于另一个工作区；（2）专职 Agent 等待权限时超时；（3）AI 因任务较大而提出递归委派。答案必须运用作用域、默认拒绝、有限任务图的原则。
+- [ ] **群聊动画**
+- [ ] **数据流动画**
+- [x] **拖放练习：** 将四个标签“作用域（Scope）”“权限依据（Authority）”“上限（Bounds）”“能力授权（Capability Grant）”分别匹配到路线边界、精确的 Run/Node/版本、资源预算、短时工具权限。使用唯一容器 ID `dnd-module4`，按钮必须以该 ID 调用 `checkDnD('dnd-module4')` 和 `resetDnD('dnd-module4')`。
+- [x] **其他：** 可点击架构图：监督 Agent → 两个并行只读专职 Agent → 一个受限实现 Agent → 检查点/评估。为读取、受管工作区编辑、已保存测试、确定性评估提供权限徽标；用概念卡片说明明确的停止原因。
 
-## Required Screens
-1. Mountain-expedition metaphor grounded in Scope / Authority / Bounds / Capability / Checkpoint.
-2. Code↔English translation of exact bounds type.
-3. Drag-and-drop exercise matching the four guardrails to their jobs.
-4. Clickable bounded-coordination diagram and the real limits (3 specialists, 2 parallel, depth 1, one retry).
-5. Capability-grant lifecycle and explicit stop-reason cards.
-6. End-of-module scenario quiz with three questions.
+<a id="required-screens"></a>
+## 必需页面
+1. 将登山探险比喻对应到作用域、权限依据、上限、能力授权和检查点。
+2. 原样展示上限类型的代码与白话对照。
+3. 将四类护栏与职责匹配的拖放练习。
+4. 可点击的受限协调图及真实限制：3 个专职 Agent、2 个并行、委派深度 1、重试 1 次。
+5. 能力授权生命周期及明确的停止原因卡片。
+6. 模块结尾的三个情景测验。
 
-## Reference Files to Read
-- `references/interactive-elements.md` → Code ↔ English Translation Blocks; Multiple-Choice Quizzes; Drag-and-Drop Matching; Interactive Architecture Diagram; Permission/Config Badges; Pattern/Feature Cards; Glossary Tooltips.
-- `references/design-system.md` → Color Palette; Typography; Spacing & Layout; Module Structure; Responsive Breakpoints.
-- `references/content-philosophy.md` → entire file.
-- `references/gotchas.md` → entire file.
+<a id="reference-files-to-read"></a>
+## 必读参考文件
+- `references/interactive-elements.md` → 代码与白话对照块（Code ↔ English Translation Blocks）、单选测验、拖放匹配、交互式架构图、权限/配置徽标、模式/功能卡片、术语提示。
+- `references/design-system.md` → 配色、字体、间距与布局、模块结构、响应式断点。
+- `references/content-philosophy.md` → 全文。
+- `references/gotchas.md` → 全文。
 
-## Connections
-- **Previous module:** 数据的两条旅程 — it established local authority and the boundary around private evidence.
-- **Next module:** 为什么 Gate 不肯放行 — it shows that even a completed Agent cannot move the workflow without correctly scoped evidence.
-- **Tone/style notes:** Chinese, smart-friend tone. Teal accent. Module 4 uses `var(--color-bg)`. Tooltip first use of Agent runtime, scope, authority, version, bound, capability grant, digest, token, checkpoint, delegation depth, supervisor, specialist, permission. No custom styles/scripts.
+<a id="connections"></a>
+## 模块衔接
+- **上一模块：** 数据的两条旅程——建立了本地权限与私有证据的边界。
+- **下一模块：** 为什么 Gate 不肯放行——说明即使 Agent 已完成，没有作用域匹配的证据也不能推进工作流。
+- **语气与样式：** 使用中文，像懂技术的朋友一样讲解，采用青绿色强调色。本模块使用 `var(--color-bg)`。Agent 运行时、作用域、权限依据、版本、上限、能力授权、摘要指纹、令牌、检查点、委派深度、监督 Agent、专职 Agent、权限首次出现时提供术语提示。不添加自定义样式或脚本。

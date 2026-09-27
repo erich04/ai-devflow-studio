@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rename, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -18,7 +18,7 @@ import {
   type TestEvidence,
   type WorkflowApprovalEvidence,
 } from '@ai-devflow/shared'
-import { createLocalStore } from './local-store'
+import { createLocalStore, getLocalStoreRevision } from './local-store'
 import {
   createTrustedGateOverrideDraft,
   createWorkflowRuntime,
@@ -275,6 +275,68 @@ describe('workflow runtime', () => {
     expect(await store.listArtifacts(created.run.id)).toEqual([candidate.artifact])
     expect(await store.listEvents(created.run.id)).toEqual([candidate.event])
     store.close()
+  })
+
+  it('rolls back a Gate approval on disk failure and durably saves one explicit retry', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'devflow-gate-disk-failure-'))
+    tempDirs.push(dir)
+    const dbPath = path.join(dir, 'devflow.sqlite')
+    const backupPath = path.join(dir, 'saved.sqlite')
+    const store = await createLocalStore({ dbPath })
+    const created = createWorkflowRunFromRequest({
+      runId: 'run-gate-disk-failure', title: 'Recover a failed approval',
+      request: 'Preserve progress when the database cannot be written.',
+      projectId: 'project-1', creatorId: 'user-1', branchName: 'ai/gate-disk-failure', now,
+    })
+    const candidate = clarificationCandidate(created.run.id, `${created.run.id}-clarify`)
+    await store.saveRun(created.run)
+    const runtime = createWorkflowRuntime(store)
+    const ready = await executeApplied(runtime, {
+      runId: created.run.id,
+      command: { type: 'complete_agent', nodeId: candidate.artifact.nodeId!, artifactId: candidate.artifact.id },
+      candidates: { artifacts: [candidate.artifact], events: [candidate.event] },
+      now: '2026-07-31T12:01:00.000Z',
+    })
+    const approvalEvent: AgentEvent = {
+      id: 'gate-disk-failure-approval', runId: created.run.id,
+      nodeId: ready.run.currentNodeId, sequence: 2, kind: 'approval',
+      message: 'User approved this Gate.', timestamp: '2026-07-31T12:02:00.000Z',
+    }
+    const approval: ExecuteWorkflowCommandInput = {
+      runId: created.run.id, expectedRunUpdatedAt: ready.run.updatedAt,
+      command: { type: 'approve_gate', nodeId: ready.run.currentNodeId },
+      approval: allowedApproval, candidates: { events: [approvalEvent] },
+      now: approvalEvent.timestamp,
+    }
+    const previousOutbox = await store.listRemoteSyncOperations(created.run.id)
+    const previousRevision = getLocalStoreRevision(store)
+    await rename(dbPath, backupPath)
+    await mkdir(dbPath)
+    try {
+      await expect(runtime.execute(approval)).rejects.toThrow(/EISDIR|EPERM|directory|operation not permitted/i)
+      expect(await store.getRun(created.run.id)).toEqual(ready.run)
+      expect(await store.listEvents(created.run.id)).toEqual([candidate.event])
+      expect(await store.listArtifacts(created.run.id)).toEqual([candidate.artifact])
+      expect(await store.listRemoteSyncOperations(created.run.id)).toEqual(previousOutbox)
+      expect(getLocalStoreRevision(store)).toBe(previousRevision)
+    } finally {
+      await rm(dbPath, { recursive: true })
+      await rename(backupPath, dbPath)
+    }
+    const retried = await executeApplied(runtime, approval)
+    expect(retried.run).toMatchObject({ version: 3, currentNodeId: `${created.run.id}-design` })
+    store.close()
+    const reopened = await createLocalStore({ dbPath })
+    try {
+      expect(await reopened.getRun(created.run.id)).toEqual(retried.run)
+      expect((await reopened.listEvents(created.run.id)).filter((event) => event.kind === 'approval')).toEqual([approvalEvent])
+      const duplicate = await createWorkflowRuntime(reopened).execute({ ...approval, expectedRunUpdatedAt: retried.run.updatedAt })
+      expect(duplicate.applied).toBe(false)
+      expect((await reopened.listEvents(created.run.id)).filter((event) => event.kind === 'approval')).toHaveLength(1)
+      expect(await reopened.getRun(created.run.id)).toEqual(retried.run)
+    } finally {
+      reopened.close()
+    }
   })
 
   it('rejects an explicitly stale command before committing candidate evidence', async () => {

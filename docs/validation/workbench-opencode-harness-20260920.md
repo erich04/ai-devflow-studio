@@ -1,94 +1,55 @@
-# Workbench OpenCode harness validation — 2026-09-20
+<a id="workbench-opencode-harness-validation--2026-09-20"></a>
 
-Scope: #147. The original user's To Do project, Provider row, Run and conversations
-were not edited or advanced. Tests used an independent SQLite profile and local
-clone of the To Do repository. The executor design is recorded in ADR 0022.
+# 工作台 OpenCode 执行集成验证 — 2026-09-20
 
-## Real Desktop and DeepSeek
+范围：#147。未修改或推进原用户任务清单项目、服务商记录、Run 及会话。测试使用独立 SQLite 档案和任务清单仓库的本地克隆。执行器设计见 ADR 0022。
 
-The packaged Electron 42.11.6 test build exposed the new-conversation selector.
-Selecting OpenCode and creating a chat displayed `OpenCode` separately from the
-saved `DeepSeek Flash` model. Node generation retained its own Direct Provider
-selection. OpenCode 1.18.15 handled the actual agent/tool loop.
+<a id="real-desktop-and-deepseek"></a>
 
-One successful UI request used the saved `deepseek-flash` configuration at
-`https://api.deepseek.com`. It queried workflow, the test node, the current
-clarification node and README.md through the scoped MCP bridge. The answer
-correctly reported clarification in progress and tests not yet run. Four source
-records and a validated node-navigation action were saved. The navigation action
-opened the clarification details without advancing the workflow.
+## 真实桌面与 DeepSeek
 
-The persisted usage was 6,811 input and 869 output tokens, total 7,680; reported
-cache reads were 2,304 tokens. The separate reasoning record contained 1,493
-characters. No reasoning-strength value or monetary cost was invented. The
-repository remained clean, the Run remained `clarifying`, and its only artifact
-was still the raw request. A second OpenCode conversation was independently
-persisted. After installing the final build and restarting, the original answer,
-reasoning, four sources, usage and OpenCode selection remained available.
+打包 Electron 42.11.6 测试构建提供新会话执行器选择。选择 OpenCode 并创建聊天后，`OpenCode` 与已保存的 `DeepSeek Flash` 模型分别显示；节点生成仍保留独立 Direct Provider 选择。OpenCode 1.18.15 执行实际 Agent/工具循环。
 
-The second conversation's request reached a new OS credential wait. Clicking
-the UI's Stop button immediately changed both the conversation and its own
-credential operation to cancelled, with retry available and no reported model
-usage. Switching back showed the first conversation unchanged. No second paid
-call is claimed for this cancellation check.
+一次成功界面请求使用 `https://api.deepseek.com` 的已保存 `deepseek-flash` 配置，经限定范围 MCP 桥查询工作流、测试节点、当前澄清节点和 README.md。回答正确说明澄清进行中、测试尚未执行。保存四条来源记录和经验证的节点导航动作；导航打开澄清详情，没有推进工作流。
 
-Initial attempts failed before contacting the Provider. The isolated packaged
-test app used a different application name from the user's development app;
-macOS safeStorage consequently selected a different keychain namespace. Matching
-the test bootstrap to the original development application name and obtaining
-the user's OS authorization resolved the test-environment problem. Credentials
-were never printed, exported as plaintext, or rewritten in the original profile.
-These failed credential attempts are not counted as model success or model usage.
+持久化用量为输入 6,811、输出 869、总计 7,680 tokens，报告缓存读取 2,304 tokens；独立推理记录共 1,493 字符。没有虚构推理强度或金额。仓库保持干净，Run 仍为 `clarifying`，唯一产物仍是原始请求。第二个 OpenCode 会话独立保存。安装最终构建并重启后，原回答、推理、四条来源、用量和 OpenCode 选择均可用。
 
-## Real CLI protocol and lifecycle
+第二个会话请求进入新的系统凭据等待。点击界面停止按钮后，该会话及其凭据操作立即变为取消，可重试且没有报告模型用量。切回首个会话，内容不变。本取消检查不宣称完成第二次付费调用。
 
-`DEVFLOW_OPENCODE_BIN=/path/to/opencode pnpm test:workbench-opencode-contract`
-uses the real CLI with a local synthetic OpenAI-compatible streaming server.
-It does **not** use a paid LLM. With 1.18.15 it passed:
+初始尝试在联系服务商前失败。隔离测试安装包使用了不同于用户开发应用的名称，macOS safeStorage 因此选择了另一钥匙串命名空间。将测试启动名称与原开发应用一致，并取得用户系统授权后，测试环境问题解决。从未打印、明文导出凭据，也未改写原档案凭据。失败的凭据尝试不计为模型成功或模型用量。
 
-- Only the seven allowed `devflow_*` MCP tools were sent to the model; no native
-  shell, edit, task, question or unrelated MCP capability was exposed.
-- A real tool round trip returned a host source ID and a validated JSON answer.
-- Provider completion tokens that include reasoning were counted once.
-- Cancelling conversation A closed its own request while conversation B finished.
-- B's model input did not contain A's private marker. An explicit retry of A used
-  a fresh runtime and completed. All owned runtimes and bridges were closed.
+<a id="real-cli-protocol-and-lifecycle"></a>
 
-This lifecycle evidence is deliberately distinguished from the paid UI request;
-cancel/retry assertions were run against the real CLI and synthetic model server.
+## 真实 CLI 协议与生命周期
 
-## Focused regression coverage
+`DEVFLOW_OPENCODE_BIN=/path/to/opencode pnpm test:workbench-opencode-contract` 使用真实 CLI 和本地模拟 OpenAI 兼容流式服务，**不使用付费模型**。在 1.18.15 上通过：
 
-56 tests across the conversation service, MCP bridge, executor, credential access
-and workbench UI passed. Desktop and smoke-script TypeScript checks passed, and
-the production Desktop build passed. Existing Direct Provider fixtures remain
-covered alongside the external path.
+- 只向模型提供七个获准的 `devflow_*` MCP 工具；没有暴露原生 shell、edit、task、question 或无关 MCP 能力。
+- 真实工具往返返回宿主来源 ID 和校验通过的 JSON 回答。
+- 包含推理的服务商完成 Token 只计一次。
+- 取消会话 A 只关闭 A 自身请求，会话 B 继续完成。
+- B 的模型输入不包含 A 私有标记。明确重试 A 使用全新运行时并完成；全部自有运行时和桥接器均关闭。
 
-Coverage includes legacy records, immutable per-chat execution choice, project
-and object authorization, denied mutation/unknown tool arguments, secret-safe
-queries, bounded calls and output, real reasoning deltas, wrong-model rejection,
-failed-response usage, cancellation during startup, explicit retry, restart,
-history isolation and cleanup. A conversation abort now cancels only its own
-pending credential wait; late OS results cannot restart it.
+该生命周期证据与付费界面请求分开记录；取消/重试断言在真实 CLI 和模拟模型服务端上执行。
 
-## Independent review disposition
+<a id="focused-regression-coverage"></a>
 
-Cursor read-only review `7d9276c8-5399-46a6-8e91-49605c84ef65` returned
-`pass_with_risks`, with no claimed blockers. Each suggestion was checked locally:
+## 定向回归覆盖
 
-- Added startup-abort coverage and moved workspace creation inside cleanup's
-  protected scope.
-- Explicitly denied native question/task tools and repeated the real CLI protocol
-  check with the seven-tool allowlist.
-- Added an OpenCode-specific regression for already-reported billed usage on an
-  invalid response, and scoped cancellation of credential waits.
-- Completed the previously pending real DeepSeek request after user authorization.
-- Retained strict whole-object/whole-JSON-fence parsing. Extracting an arbitrary
-  object from surrounding prose can hide malformed or conflicting answers. A bad
-  final response remains a visible recoverable failure with known usage retained.
+会话服务、MCP 桥、执行器、凭据访问和工作台界面共 56 项测试通过。桌面与冒烟脚本 TypeScript 检查、桌面生产构建均通过。既有 Direct Provider 测试与外部执行路径同时保留覆盖。
 
-Limits: OpenCode is the first adapter; Codex is researched but not implemented.
-Chat is read-only investigation plus the existing explicit pending-proposal save;
-it cannot approve Gates or execute formal stages. CLI permission rules and host
-tool validation are used, not an OS security sandbox. Unknown upstream usage or
-reasoning effort stays unknown.
+范围包括旧记录、不可变的每会话执行选择、项目和对象授权、拒绝修改及未知工具参数、安全查询、有界调用和输出、真实推理增量、错误模型拒绝、失败响应用量、启动期间取消、明确重试、重启、历史隔离和清理。会话中止现在只取消自身待处理凭据等待，迟到的系统结果不能重新启动它。
+
+<a id="independent-review-disposition"></a>
+
+## 独立审查建议处理
+
+Cursor 只读审查 `7d9276c8-5399-46a6-8e91-49605c84ef65` 返回 `pass_with_risks`，没有报告阻断项。各项建议均经本地核对：
+
+- 增加启动中止覆盖，将工作区创建纳入清理保护范围。
+- 明确拒绝原生 question/task 工具，按七工具允许列表重复真实 CLI 协议检查。
+- 增加 OpenCode 无效响应已报告费用的回归，以及限定范围的凭据等待取消。
+- 用户授权后完成此前待执行的真实 DeepSeek 请求。
+- 保留严格的完整对象/完整 JSON 围栏解析。从外围文字中任意抽取对象会隐藏错误或冲突回答；无效最终响应仍显示为可恢复失败，保留已知用量。
+
+限制：本文对应实现以 OpenCode 为首个适配器；Codex 已调研但未实现。聊天只提供只读调查和既有明确保存的待确认提案，不能批准 Gate 或执行正式阶段。它使用 CLI 权限规则和宿主工具校验，不是操作系统安全沙箱。上游未报告的用量或推理强度保持未知。

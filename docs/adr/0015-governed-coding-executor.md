@@ -1,145 +1,100 @@
-# ADR 0015: Governed Coding Executor Contract
+<a id="adr-0015-governed-coding-executor-contract"></a>
 
-Status: Accepted
+# ADR 0015：受治理的代码执行器契约
 
-Date: 2026-08-12
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-08-12
 
-ADR 0009 selected `opencode serve` HTTP behind a managed Coding Agent Adapter. The resulting
-`CodingEngineAdapter` was sufficient for 1.x, but its `start` result always assumes an immediate
-permission request and its continuation shape is tied to the external engine. It cannot express a
-no-permission completion, capability negotiation, a runtime-selected executor, a checkpointed
-continuation, or one uniform terminal result across native and delegated coding.
+<a id="context"></a>
 
-V2.0 keeps OpenCode and adds one deliberately narrow DevFlow-owned Coding Agent. Two independent
-runtime contracts would create incompatible policy, cancellation, evidence, and recovery behavior.
+## 背景
 
-## Decision
+ADR 0009 在受管 Coding Agent 适配器后选择 `opencode serve` HTTP。形成的 `CodingEngineAdapter` 足以支持 1.x，但其 `start` 结果总是假设立即产生权限请求，继续执行结构也绑定外部引擎。它无法表达无需权限即可完成、能力协商、运行时选择执行器、带检查点的继续执行，或跨原生和委托编码的统一终态结果。
 
-Evolve the 1.x adapter behind one `Coding Executor` contract. ADR 0009 remains the historical
-OpenCode transport and managed-worktree decision; this ADR supersedes its external-only product
-assumption for V2.0.
+V2.0 保留 OpenCode，并增加一个范围刻意收窄的 DevFlow 自有 Coding Agent。两套独立运行时契约会使策略、取消、证据和恢复行为不兼容。
 
-### Descriptor And Capability Negotiation
+<a id="decision"></a>
 
-Each executor publishes a versioned descriptor with stable identity, kind (`opencode` or `native`),
-contract version, availability, and a bounded set of Coding Executor Capabilities. Capabilities cover
-workspace read, workspace edit, approved command/test execution, permission relay, cancellation,
-checkpoint continuation, and structured diff/test Evidence. Missing capability is a deterministic
-selection denial, not a prompt instruction asking the executor to behave differently.
+## 决策
 
-### Project Selection And Readiness
+将 1.x 适配器演进为统一的 `Coding Executor` 契约。ADR 0009 保留为 OpenCode 传输及受管工作树的历史决策；本 ADR 在 V2.0 中替代其仅支持外部执行器的产品假设。
 
-Coding configuration is explicit and project-scoped. The Desktop may detect an executable OpenCode
-candidate, but detection is advisory: it never selects, starts, or persists OpenCode until the user
-confirms that exact canonical binary and detected version for the current Local Project. Electron
-main re-probes both on save and before a run. The Native executor instead binds an existing Provider
-whose credential is already stored by the trusted local credential boundary; the renderer never
-receives the secret.
+<a id="descriptor-and-capability-negotiation"></a>
 
-`Stage/Review Provider`, `Coding Engine`, and `Coding Executor` are separate concepts. The first
-grounds workflow review, the second is an available implementation such as OpenCode or DevFlow
-Native, and the third is the governed CRI contract used to run it. Product UI must not substitute a
-transport label such as `opencode-http` for these identities.
+### 描述符与能力协商
 
-Workbench and Agents consume the same main-owned readiness result. Readiness separately reports
-executor selection, engine availability, required capabilities, Provider configuration, Team
-Project pairing, saved test command, budget policy/evaluation, active-run concurrency, and pending
-permission. Any blocked or unreadable check disables the run action. Machine codes remain in an
-explicit diagnostic detail; primary UI uses the positive product names above. Fake executors are
-available only behind explicit test configuration and never satisfy production readiness by default.
+每个执行器发布带版本描述符，包含稳定身份、类型（`opencode` 或 `native`）、契约版本、可用性及有界的代码执行器能力集合。能力覆盖工作空间读取/编辑、已批准命令/测试执行、权限转发、取消、检查点继续及结构化差异/测试证据。缺少能力时确定性拒绝选择，不靠提示词要求执行器改变行为。
 
-The Agent Runtime selects only an executor whose descriptor satisfies the immutable request and the
-current policy-approved capability set. Capability negotiation occurs before provider or workspace
-side effects and is persisted in the trajectory.
+<a id="project-selection-and-readiness"></a>
 
-### Scoped Request, Events, And Result
+### 项目选择与就绪检查
 
-A request contains stable IDs and main-owned capability references: organization/project/user,
-Run/Node/version, Local Project, managed workspace, objective and Context digests, allowed Tool and
-executor capabilities, deadline, budget, and expected checkpoint version. Renderer or Team input
-cannot supply a filesystem path, shell command, process environment, credential, or executable.
+代码执行配置显式且限定项目。桌面可以检测可执行 OpenCode 候选，但检测仅提供建议：用户针对当前本地项目确认确切的规范二进制路径及检测版本前，不选择、启动或持久保存 OpenCode。Electron 主进程在保存及每次运行前重新探测。原生执行器则绑定既有提供方，其凭据已存于可信本地凭据边界，渲染进程不接收秘密。
 
-Executors emit the same allowlisted event families: started, observation, Tool request, permission
-request/decision, Tool result, checkpoint, Evidence, and terminal. OpenCode events are mapped only
-from the adapter-observable HTTP surface; DevFlow does not claim OpenCode's private internal trajectory.
+`Stage/Review Provider`（阶段/审查模型提供方）、`Coding Engine`（编码引擎）和 `Coding Executor`（代码执行器）是独立概念。第一项为工作流审查提供基础，第二项是 OpenCode 或 DevFlow Native 等实现，第三项是运行它的受治理 CRI 契约。产品 UI 不能用 `opencode-http` 等传输标签代替这些身份。
 
-Both OpenCode and the DevFlow-owned Coding Agent return the same terminal result contract: stop
-reason, executor identity/version, final checkpoint version, changed repo-relative paths, redacted
-diff reference, Test Evidence references, bounded usage/cost, and cleanup state. Raw patch, source,
-prompt, stdout/stderr, cwd, and credentials remain local and outside Team projections.
+工作台和 Agents 使用同一个主进程拥有的就绪结果，分别报告执行器选择、引擎可用性、所需能力、提供方配置、团队项目配对、已保存测试命令、预算策略/评估、活动运行并发及待处理权限。任一检查受阻或不可读都禁用运行操作。机器代码留在显式诊断详情中，主要界面使用上述产品名称。假执行器只能通过显式测试配置使用，默认绝不满足生产就绪要求。
 
-### Authority And Lifecycle
+Agent 运行时只选择描述符符合不可变请求及当前策略已批准能力集合的执行器。能力协商发生在提供方或工作空间副作用之前，并持久化到轨迹。
 
-A Coding Executor may inspect or modify only its main-owned managed workspace and may run only
-capability-approved Tools. It can never publish, merge, approve a Gate, or widen scope. Delivery
-continues to require the separate deterministic Workflow, policy checks, Test Evidence, Delivery
-Intent, and signed human approval proven by 1.x.
+<a id="scoped-request-events-and-result"></a>
 
-Cancellation is idempotent and propagates through the executor handle. A late event cannot commit
-after cancellation or a terminal result. Permission defaults to deny on expiry. Cleanup outcome is
-part of the terminal result, not a swallowed finally-block detail.
+### 限定范围的请求、事件与结果
 
-### One Runtime Action And Approval Projection
+请求包含稳定 ID 及主进程拥有的能力引用：组织/项目/用户、Run/节点/版本、本地项目、受管工作空间、目标和上下文摘要、允许的工具与执行器能力、截止期限、预算和预期检查点版本。渲染进程或 Team 输入不能提供文件路径、Shell 命令、进程环境、凭据或可执行文件。
 
-Workbench and Agents render one pure, non-persisted Coding Runtime action projection. Its inputs are
-the exact Run, Node and Local Project scope, persisted run/permission/workspace/Evidence history, the
-main-owned readiness result, an explicitly supplied clock, and—when applicable—the verified Change
-Set preview. The projection selects active history before terminal history, detects a conflicting
-active run in the same Local Project, and maps every runtime state to one of start, progress,
-permission review, result, retry, or configuration. A completed run is evidence-only. A failed,
-timed-out, interrupted, or cancelled run can only be retried by explicitly creating a new Coding Run;
-the UI states that this may invoke the Provider and incur new token usage and cost.
+执行器发出相同允许列表事件类别：已开始、观察、工具请求、权限请求/决策、工具结果、检查点、证据及终态。OpenCode 事件只映射适配器可观察 HTTP 接口，DevFlow 不声称了解 OpenCode 私有内部轨迹。
 
-### Provider-reported cost settlement
+OpenCode 和 DevFlow 自有 Coding Agent 返回相同终态结果契约：终止原因、执行器身份/版本、最终检查点版本、变更的仓库相对路径、脱敏差异引用、测试证据引用、有界用量/费用及清理状态。原始补丁、源码、提示、stdout/stderr、cwd 和凭据留在本地，不进入 Team 投影。
 
-Preflight budget evaluation and provider settlement are different records. Preflight reserves a
-bounded worst-case envelope before any paid call. Settlement then validates the provider's exact
-usage partition and prices it with an immutable provider/model/time snapshot. Cache-hit input is a
-subset of prompt input, so it is never added again to total tokens.
+<a id="authority-and-lifecycle"></a>
 
-For DeepSeek, hit plus miss must equal prompt tokens. Missing splits remain incomplete/unknown;
-conflicting splits fail closed. Unknown models and legacy records are never automatically repriced.
-Budget, Trace, Agents cost detail, persistence, and Team sync consume the same canonical settlement.
-The source-controlled catalog and effective versions live in
-`docs/engineering/runtime-pricing-catalog.md`.
+### 权限与生命周期
 
-Workbench never duplicates permission approval. It shows a bounded summary and navigates to the
-same Agents approval surface. Exact Change Set approval is full-width, separated by file, horizontally
-scrollable without line wrapping, and keeps approve/reject actions visible. Approval fails closed
-unless request, Coding Run, Workflow node, Change Set ID, digest, preview, and TTL still agree. Electron
-main repeats the TTL/digest/current-state checks, so renderer state is never execution authority.
-Deleted or cleaned worktrees are evidence only and cannot be opened.
+代码执行器只能检查或修改主进程拥有的受管工作空间，只运行能力批准的工具。绝不能发布、合并、批准门禁或扩大范围。交付继续要求独立的确定性工作流、策略检查、测试证据、交付意图及 1.x 已验证的签名人工批准。
 
-### Migration
+取消幂等且通过执行器句柄传播。取消或终态之后，迟到事件不能提交。权限过期默认拒绝。清理结果属于终态结果，不能作为 finally 中被吞掉的细节。
 
-The existing OpenCode implementation is wrapped first without rewriting its tested transport. The
-compatibility wrapper maps current ensure/start/permission/cancel behavior to executor descriptors,
-events, and terminal results. The old adapter remains an internal implementation seam until every
-consumer uses `CodingExecutor`; it is not exposed as a second product contract.
+<a id="one-runtime-action-and-approval-projection"></a>
 
-The first DevFlow-owned Coding Agent is intentionally narrow: it may use only the accepted native
-workspace Tools, operate in a managed worktree, run the saved approved test command, perform a
-bounded repair loop, and stop deterministically. Feature parity with OpenCode is not a V2.0 claim.
+### 统一运行时操作与审批投影
 
-## Consequences
+工作台和 Agents 展示统一、纯计算且不持久化的代码运行时操作投影。输入为确切 Run、节点和本地项目范围，已持久化运行/权限/工作空间/证据历史，主进程就绪结果，显式时钟，以及适用时已核实的变更集预览。投影优先选择活动历史，再选择终态历史；检测同一本地项目的活动运行冲突，将每种运行时状态映射为开始、进度、权限审核、结果、重试或配置。已完成运行只作为证据。失败、超时、中断或取消只能通过显式创建新 Coding Run 重试；UI 必须说明这可能调用提供方并产生新的 token 用量和费用。
 
-- Runtime orchestration can compare and route native and delegated coding without duplicating Gate,
-  policy, budget, permission, cancellation, or Evidence rules.
-- Executor capability differences remain visible instead of being hidden in provider prompts.
-- Existing OpenCode test coverage remains valuable while contract-parity tests are added above it.
-- Additional CLI candidates require a separate evidence-backed decision but can target this contract.
-- Local engine discovery does not create ambient execution authority; the saved per-project choice
-  and the live readiness probe are both required.
+<a id="provider-reported-cost-settlement"></a>
 
-## Rejected Alternatives
+### 提供方报告的费用结算
 
-- **Add more optional fields to `CodingEngineAdapter.start`.** Rejected because its control flow is
-  structurally tied to an immediate permission request.
-- **Let each executor define its own terminal shape.** Rejected because Workflow Evidence and Agent
-  evaluation would fork by implementation.
-- **Call OpenCode a DevFlow sub-agent.** Rejected because only adapter-exposed events are observable;
-  internal OpenCode orchestration is outside DevFlow authority and evidence.
-- **Give the native executor direct delivery authority.** Rejected because coding and publication
-  are intentionally separate authority domains.
+预检预算评估与提供方结算是不同记录。预检在任何付费调用前预留有界最坏情况额度；结算校验提供方确切用量分区，并使用不可变的提供方/模型/时间快照计价。缓存命中输入是提示输入的子集，不能再次计入总 token。
+
+对 DeepSeek，命中加未命中必须等于提示 token。分区缺失保持不完整/未知，分区冲突时拒绝确认。未知模型及历史记录绝不自动重新计价。预算、轨迹、Agents 费用详情、持久化及 Team 同步使用同一权威结算。受版本控制的价格目录及生效版本位于 `docs/engineering/runtime-pricing-catalog.md`。
+
+工作台不重复权限审批，只显示有界摘要并导航到同一个 Agents 审批入口。确切变更集审批全宽显示、按文件分隔、支持横向滚动且不折行，批准/拒绝操作保持可见。请求、Coding Run、工作流节点、变更集 ID、摘要、预览和 TTL 必须仍一致，否则拒绝批准。Electron 主进程重复检查 TTL/摘要/当前状态，渲染进程状态永远不是执行授权。已删除或清理的工作树只保留为证据，不能打开。
+
+<a id="migration"></a>
+
+### 迁移
+
+先包装既有 OpenCode 实现，不重写已测试的传输。兼容包装将现有 ensure/start/permission/cancel 行为映射为执行器描述符、事件和终态结果。在所有消费者使用 `CodingExecutor` 前，旧适配器保留为内部实现接缝，不作为第二套产品契约暴露。
+
+首个 DevFlow 自有 Coding Agent 有意保持狭窄：只可使用已接受的原生工作空间工具、在受管工作树中操作、运行已保存且获批准的测试命令、执行有界修复循环并确定性停止。V2.0 不宣称与 OpenCode 功能完全对等。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 运行时可以比较和路由原生与委托编码，无需重复门禁、策略、预算、权限、取消或证据规则。
+- 执行器能力差异保持可见，不隐藏在提供方提示中。
+- 既有 OpenCode 测试仍有效，其上增加契约对等测试。
+- 额外 CLI 候选需要独立且有证据支撑的决策，但可面向此契约实现。
+- 本地引擎发现不产生隐式执行权限；必须同时具备已保存的项目选择和实时就绪探测。
+
+<a id="rejected-alternatives"></a>
+
+## 未采用的替代方案
+
+- **给 `CodingEngineAdapter.start` 添加更多可选字段。** 其控制流结构绑定立即产生权限请求。
+- **允许每个执行器定义各自终态结构。** 会使工作流证据和 Agent 评估按实现分叉。
+- **把 OpenCode 称为 DevFlow 子 Agent。** 只能观察适配器暴露的事件，OpenCode 内部编排不在 DevFlow 权限和证据范围。
+- **直接给原生执行器交付权限。** 编码与发布属于独立权限域。

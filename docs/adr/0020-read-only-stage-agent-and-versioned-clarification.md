@@ -1,95 +1,62 @@
-# ADR 0020: Read-only Stage Agent and versioned clarification review
+<a id="adr-0020-read-only-stage-agent-and-versioned-clarification-review"></a>
 
-- Status: Accepted
-- Date: 2026-08-30
+# ADR 0020：只读阶段 Agent 与带版本的需求澄清审查
 
-## Decision
+- 状态：已接受（Accepted）。
+- 日期：2026-08-30
 
-Requirement clarification and solution design have two explicit executors behind one `StageAgentExecutor` contract:
+<a id="decision"></a>
 
-- `direct-provider` preserves the existing provider path.
-- `local-agent` reuses the managed OpenCode process, but receives only a main-resolved repository
-  root, a fixed read/glob/grep/list capability, bounded input/output/tool/citation limits, timeout,
-  and cancellation. It has no repository-write, shell, network, Workflow, Gate, or permission-
-  escalation authority. There is no automatic fallback between executors.
+## 决策
 
-The local executor must return schema-valid stage output plus verified facts, assumptions, open
-questions, acceptance criteria, non-goals, repo-relative citations, file content digests, a
-repository digest, usage, terminal reason, and executor provenance. Pending permissions, missing or
-invalid citations, limits, CLI unavailability, or any repository change fail closed. Prompts,
-traces, and stored artifacts redact secrets and local absolute paths.
+需求澄清与方案设计在统一的 `StageAgentExecutor` 契约后提供两个显式执行器：
 
-## Requirement Gate revision model
+- `direct-provider` 保留既有提供方路径。
+- `local-agent` 复用受管 OpenCode 进程，但只接收主进程解析的仓库根目录、固定 read/glob/grep/list 能力、有界输入/输出/工具/引用限制、超时及取消能力。不具有仓库写入、Shell、网络、工作流、门禁或权限提升权。执行器之间不自动回退。
 
-The Requirement Gate compares three separate subjects on one screen:
+本地执行器必须返回符合模式的阶段输出，以及已核实事实、假设、待确认问题、验收标准、非目标、仓库相对引用、文件内容摘要、仓库摘要、用量、终止原因和执行器来源。待处理权限、缺失或无效引用、达到限制、CLI 不可用或任何仓库变化均拒绝通过。提示、轨迹和存储产物对秘密和本地绝对路径脱敏。
 
-1. the immutable Raw Request;
-2. Repository Findings (or an explicit “not verified” state);
-3. the exact active Clarification Revision.
+<a id="requirement-gate-revision-model"></a>
 
-A request for changes stores an immutable feedback Artifact with trusted actor, time, reason digest,
-and exact target identity. The current revision becomes `revision_requested`, Workflow returns to
-the clarification Agent, and the next execution creates v2 while preserving v1 and feedback.
-Approval requires the exact current artifact ID, revision, digest, and non-stale review subject.
-Missing, ambiguous, wrong-Run, wrong-node, and stale associations fail closed.
+## 需求门禁修订模型
 
-Artifact, audit Event, Agent Trace, token usage, and Workflow transition commit atomically. Team
-sync remains a redacted summary boundary: source, raw tool output, secrets, absolute paths, and full
-clarification bodies stay local.
+需求门禁在同一界面核对三个独立对象：
 
-## Consequences
+1. 不可变原始请求；
+2. 代码调查记录（或明确“未核验”状态）；
+3. 确切的当前需求澄清修订。
 
-- Workflow remains the only stage and Gate authority.
-- This adapter generates clarification or design artifacts with read-only repository evidence.
-- Existing direct-provider Runs remain readable; tracked revisions add exact stale-review checks.
-- Real OpenCode smoke is opt-in. Default tests use a deterministic fake runner and never call a paid
-  provider.
+请求修改会保存不可变反馈产物，包含可信参与者、时间、理由摘要和确切目标身份。当前修订变为 `revision_requested`，工作流返回需求澄清 Agent，下一次执行生成 v2 并保留 v1 和反馈。批准要求确切当前产物 ID、修订、摘要及未过时的审查对象。关联缺失、有歧义、错误 Run、错误节点或过时都拒绝执行。
 
-## Saved Provider binding (2026-09-10)
+产物、审计事件、Agent 轨迹、token 用量和工作流转换原子提交。Team 同步保持脱敏摘要边界：源码、原始工具输出、秘密、绝对路径和完整澄清正文留在本地。
 
-When a confirmed project's OpenCode Provider ID exactly matches a DevFlow saved Provider ID,
-Electron Main resolves that credential and endpoint. It supplies a dedicated credential environment
-variable and an inline OpenCode config referencing that variable to the managed child only. The
-credential is not copied to OpenCode's auth file or sent through Renderer IPC. Display names never
-select credentials, credential resolution errors fail closed, and rotation changes the runtime cache
-identity. Providers without an exact saved binding retain their existing OpenCode profile behavior.
+<a id="consequences"></a>
 
-Read-only output specifies object-shaped facts and citations. DevFlow derives model identity and
-usage from OpenCode messages, counts tools across the whole session, and computes citation digests
-from local bytes. OpenCode usage is recorded in the stage Trace; monetary aggregation is tracked in
-#81 because an unknown external cost must not be treated as free or priced using an unrelated model.
+## 影响
 
-## Design stage and independent node choices (2026-09-22, #156–#158)
+- 工作流仍是唯一阶段和门禁权威。
+- 此适配器生成带只读仓库证据的澄清或设计产物。
+- 既有 Direct Provider Run 仍可读；受跟踪修订增加确切的过时审查检查。
+- 真实 OpenCode 冒烟需显式选择。默认测试使用确定性假运行器，不调用付费提供方。
 
-Clarification and design now each select `direct-provider` or `local-agent` and a saved Provider in
-that node. Choices apply to the current generation and default to Direct Provider for a different
-node. Electron Main resolves the repository, discovers the compatible local OpenCode binary, and
-binds the selected saved Provider without saving or changing `CodingRuntimeConfiguration`. Older
-clarification clients without an explicit Provider retain their confirmed project OpenCode profile;
-design requires an explicit saved Provider. Chat remains independently configured. Every local stage
-execution owns a separate managed process scope, released at completion/cancellation. A different
-model in another Run cannot replace its process or interrupt an implementation session.
+<a id="saved-provider-binding-2026-09-10"></a>
 
-Before either design executor runs, the successful Requirement Gate must uniquely reference a
-same-Run clarification from its clarification node. Tracked revisions must be approved, bound to the
-Raw Request, and pass digest validation. Legacy artifacts remain usable only through an unambiguous
-successful Gate. The complete approved body and Raw Request body enter the prompt; newer unapproved
-revisions and unrelated-node proposals are excluded. Explicitly saved design-node proposals are
-pending input and may not silently override the approved scope.
+## 已保存提供方绑定（2026-09-10）
 
-A design may describe future file changes and test commands, but OpenCode receives the same fixed
-read/glob/grep/list permissions and limits as clarification. It cannot execute those commands, edit
-files, approve Gates, or fall back to another executor. Main revalidates the approved input before
-commit. Cancellation owns one Run/node operation; a late response cannot commit after accepted
-cancellation, and cancellation is rejected once atomic completion has begun. Failure audits preserve
-available reported usage while leaving artifacts and workflow position unchanged.
+已确认项目的 OpenCode Provider ID 与 DevFlow 已保存 Provider ID 完全匹配时，Electron 主进程解析对应凭据和端点，仅向受管子进程提供专用凭据环境变量及引用该变量的内联 OpenCode 配置。凭据不复制到 OpenCode 身份文件，也不通过渲染进程 IPC 传输。显示名称不能选择凭据；凭据解析出错时拒绝执行；轮换会改变运行时缓存身份。没有确切保存绑定的提供方保留原 OpenCode 配置行为。
 
-The optional `Artifact.designEvidence` binds the exact clarification identity/body digest to executor,
-Provider, model and validated repository findings. SQLite preserves it across restart; the Inspector
-shows the input, file/line citations, facts and unchecked scopes. Success uses the existing atomic
-artifact/trace/usage/workflow mutation and stops at the Design Review Gate for human approval.
+只读输出要求事实和引用为对象结构。DevFlow 从 OpenCode 消息确定模型身份与用量，对整个会话统计工具，并由本地字节计算引用摘要。OpenCode 用量记录在阶段轨迹；金额汇总由 #81 跟踪，因为不能把未知外部费用当作免费，也不能使用不相关模型计价。
 
-The UI calls the project configuration **项目执行工具**, used for implementation. **DevFlow Native**
-means the built-in coding executor (`native-model`); “Native Coding Agent” / “Native Executor” are old
-names. Implementation version v2 is separate from saved-configuration revision. Names and optional
-evidence metadata require no data migration or rewriting of existing conversations or Runs.
+<a id="design-stage-and-independent-node-choices-2026-09-22-156158"></a>
+
+## 设计阶段与独立节点选择（2026-09-22，#156–#158）
+
+澄清和设计现在分别在节点中选择 `direct-provider` 或 `local-agent` 及已保存提供方。选择只作用于当前生成，切换不同节点默认 Direct Provider。Electron 主进程解析仓库、发现兼容本地 OpenCode 二进制，并绑定所选已保存提供方，不保存或改变 `CodingRuntimeConfiguration`。未显式指定提供方的旧澄清客户端保留其已确认项目 OpenCode 配置；设计要求显式已保存提供方。聊天保持独立配置。每次本地阶段执行拥有独立受管进程范围，在完成/取消时释放。另一 Run 使用不同模型不能替换其进程或中断实现会话。
+
+任一设计执行器运行前，已成功需求门禁必须唯一引用同一 Run 的需求澄清节点产物。受跟踪修订必须已批准、绑定原始请求并通过摘要校验。旧产物只有通过无歧义的成功门禁才能继续使用。完整已批准正文及原始请求正文进入提示；更新但未批准的修订和无关节点提案被排除。显式保存到设计节点的提案属于待确认输入，不能悄悄覆盖已批准范围。
+
+设计可以描述未来文件修改和测试命令，但 OpenCode 获得与澄清相同的固定 read/glob/grep/list 权限和限制，不能执行这些命令、编辑文件、批准门禁或回退到另一执行器。主进程在提交前重新校验已批准输入。取消限定到一个 Run/节点操作；已接受取消后，迟到响应不能提交；原子完成已开始后拒绝取消。失败审计保留可获得的报告用量，产物和流程位置保持不变。
+
+可选 `Artifact.designEvidence` 将确切澄清身份/正文摘要绑定到执行器、提供方、模型和已校验仓库调查记录。SQLite 在重启后保留；Inspector 展示输入、文件/行引用、事实和未核验范围。成功沿用既有产物/轨迹/用量/工作流原子变更，并停在方案评审门禁等待人工批准。
+
+UI 将用于实现阶段的项目配置称为**项目执行工具**。**DevFlow Native** 指内置代码执行器（`native-model`）；“Native Coding Agent”与“Native Executor”是旧名称。实现版本 v2 独立于已保存配置修订。名称和可选证据元数据不要求迁移数据，也不重写既有会话或 Run。

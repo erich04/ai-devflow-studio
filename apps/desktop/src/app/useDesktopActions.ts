@@ -449,7 +449,28 @@ export function useDesktopActions(input: {
             : `${displayNodeTitle(selectedNode)} 已通过，流程已推进`,
       )
     } catch (error) {
-      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存 Gate 审批失败')
+      // The command may have committed before building its IPC response failed.
+      // Reconcile read-only; never submit a second approval on the user's behalf.
+      let stillPending = false
+      try {
+        const refreshed = await desktopApi.loadState()
+        const observedRun = refreshed.runs.find((run) => run.id === selectedRun.id && run.projectId === selectedRun.projectId)
+        const observedNode = observedRun?.nodes.find((node) => node.id === selectedNode.id)
+        applyLocalExecutionState(refreshed)
+        if (observedNode?.status === 'success' && refreshed.events.some((event) =>
+          event.runId === selectedRun.id && event.nodeId === selectedNode.id && event.kind === 'approval',
+        )) {
+          setToast(`已从本地记录核实：${displayNodeTitle(selectedNode)} 已通过，已恢复当前进度，无需重复提交审批。`)
+          return
+        }
+        stillPending = Boolean(observedNode && observedNode.status !== 'success')
+      } catch { /* An unavailable database cannot establish whether the approval was saved. */ }
+      const detail = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存 Gate 审批失败'
+      if (/memory access out of bounds/iu.test(detail)) {
+        setToast(`本地数据库运行异常；${stillPending ? '审批未完成，当前节点仍待审批' : '尚无法确认审批是否已保存'}。请完全退出并重新打开应用，先核对当前节点与审批记录，再决定是否重试。无需重新生成需求或重复运行审查。`)
+      } else {
+        setToast(`${stillPending ? '审批未完成，当前节点仍待审批' : '审批结果尚未核实，请重新打开应用后核对审批记录'}：${detail}`)
+      }
     } finally {
       clearPendingInspectorAction(pending)
     }

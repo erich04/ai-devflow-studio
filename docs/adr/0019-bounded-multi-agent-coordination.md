@@ -1,142 +1,99 @@
-# ADR 0019: Bounded Multi-Agent Coordination And Execution Tenancy
+<a id="adr-0019-bounded-multi-agent-coordination-and-execution-tenancy"></a>
 
-Status: Accepted
+# ADR 0019：有界多 Agent 协调与执行租户隔离
 
-Date: 2026-08-13
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-08-13
 
-V2.0 established one bounded Agent Runtime, native Tool/MCP authority, governed Coding Executors,
-checkpoint recovery, and an observable trajectory. V2.1 added scoped Context, exact Citations, and
-governed Memory. Neither milestone defines how DevFlow itself coordinates more than one Agent.
+<a id="context"></a>
 
-Calling an external executor's private internal workers “DevFlow Multi-Agent” would be unverifiable.
-Allowing an Agent to spawn arbitrary peers would create unbounded cost, unclear termination, confused
-deputy risks, shared-workspace races, and authority that cannot be reconciled with the deterministic
-Workflow and human Gate model.
+## 背景
 
-V2.2 therefore needs a finite coordination model that can be evaluated against the immutable V2.0
-single-Agent baseline without turning the self-hosted pilot into hosted public multi-tenancy.
+V2.0 确立了有界 Agent 运行时、原生工具/MCP 权限、受治理代码执行器、检查点恢复和可观察轨迹。V2.1 增加有范围上下文、确切引用及受治理记忆。这两个里程碑都没有定义 DevFlow 自身如何协调多个 Agent。
 
-## Decision
+把外部执行器私有内部工作单元称作“DevFlow 多 Agent”无法验证。允许 Agent 任意创建同伴，会导致无界费用、终止条件不明、混淆代理风险、共享工作空间竞争，以及无法与确定性工作流和人工门禁模型协调的权限。
 
-DevFlow will support one Supervisor Agent and at most four Specialist Agents in one bounded
-Coordination Session. The Supervisor is the only coordination authority. Specialist Agents cannot delegate,
-spawn, invite, or resume another Agent. The hard delegation depth is one, so the product
-cannot form an open-ended swarm.
+因此 V2.2 需要有限协调模型，可与不可变的 V2.0 单 Agent 基线比较评估，同时不把自托管试点变成托管公共多租户服务。
 
-Workflow and Gate authority remain outside coordination. A Supervisor or Specialist cannot advance
-a Workflow Node, approve or override a Gate, publish or merge, mint credentials, widen policy, or
-accept its own output as Governance Evidence.
+<a id="decision"></a>
 
-### Coordination Session And Task Graph
+## 决策
 
-Electron main creates a Coordination Session from one exact V2.0 Agent Runtime authority and a
-versioned directed acyclic Agent Task Graph. The graph is fixed before specialist side effects and is
-bounded to 12 task nodes, 24 dependency edges, four specialists, three concurrently running
-specialists, and 16 accepted handoffs. Node IDs and edge identities are unique. Every dependency
-targets a node in the same graph; cycles, disconnected hidden work, mutable dependencies, unknown
-roles, and excess fan-out fail closed.
+DevFlow 在一个有界协调会话中支持一个监督 Agent 和最多四个专职 Agent。监督 Agent 是唯一协调权威。专职 Agent 不能委托、创建、邀请或恢复另一个 Agent。委托深度硬上限为一层，因此产品不会形成无界 Agent 群。
 
-A task progresses monotonically through `pending`, `ready`, `running`, and one terminal state:
-`succeeded`, `failed`, `cancelled`, or `blocked`. It becomes ready only after every dependency has an
-accepted succeeded result. The Supervisor may select an accepted Specialist descriptor for a ready
-node, join completed results, attribute a failure, request bounded recovery allowed by the plan, or
-stop. It cannot rewrite a completed node or convert a failed result into success.
+工作流与门禁权限保持在协调之外。监督或专职 Agent 均不能推进工作流节点、批准或覆盖门禁、发布或合并、签发凭据、扩大策略，或将自身输出接受为治理证据。
 
-The Coordination Session has immutable shared limits for wall time, steps, Tool calls, tokens, cost,
-handoffs, retries, graph size, and concurrency. Every Specialist allocation is deducted from those
-limits. Unused sub-budget may return to the session, but no allocation may exceed the remaining
-shared budget.
+<a id="coordination-session-and-task-graph"></a>
 
-### Capability Attenuation And Execution Tenancy
+### 协调会话与任务图
 
-Each Specialist receives a new opaque main-owned authority bound to the exact coordination, task,
-role, parent Supervisor runtime/version, organization, project, user, session, Local Project,
-Run/Node/version, Context digest, capability-set digest, deadline, and sub-budget. Its scope is the
-intersection of the Supervisor authority, task declaration, current Workflow/policy state, and
-resource lease. Its capabilities form a capability and budget subset of the Supervisor; missing or
-broader authority is never inferred from prompts, task text, Team state, or another Specialist.
+Electron 主进程根据一个确切 V2.0 Agent 运行时权限和带版本的有向无环 Agent 任务图创建协调会话。任务图在专职 Agent 产生副作用前固定，限制为 12 个任务节点、24 条依赖边、四个专职 Agent、三个并发执行的专职 Agent 和 16 次已接受交接。节点 ID 和边身份唯一。每条依赖指向同一图中的节点；环、隐藏且不连通的工作、可变依赖、未知角色和超量分发均拒绝执行。
 
-This is the V2.2 execution-tenancy boundary. Every task, checkpoint, Tool grant, Coding Executor
-request, handoff, resource lease, and audit record carries the same exact tenancy identity. A
-cross-organization, cross-project, cross-user, cross-session, cross-Local-Project, cross-Run, or
-cross-coordination reference is rejected before data lookup or side effects and reveals neither
-existence nor count. An Agent Handoff never crosses an execution-tenancy boundary.
+任务按 `pending`、`ready`、`running` 单调推进，最终进入 `succeeded`、`failed`、`cancelled` 或 `blocked` 之一。只有全部依赖具有已接受成功结果时才就绪。监督 Agent 可为就绪节点选择已接受专职描述符、汇合完成结果、归因失败、请求计划允许的有界恢复，或停止；不能重写已完成节点，也不能把失败结果转为成功。
 
-Team/API remains a metadata-only projection and cannot create a Coordination Session, issue a
-Specialist authority, resume local execution, or mutate the graph.
+协调会话具有不可变共享限制：实际用时、步数、工具调用、token、费用、交接、重试、图大小及并发数。每个专职 Agent 的分配都从这些额度扣除。未用子预算可以归还会话，但分配不能超过剩余共享预算。
 
-### Handoff, Join, And Evidence
+<a id="capability-attenuation-and-execution-tenancy"></a>
 
-An Agent Handoff is immutable and versioned. It binds source and target task/runtime versions,
-coordination/tenancy identity, result digest, Evidence reference digests, Context digest, resource
-lease outcome, bounded allowlisted summary, and monotonic sequence. The receiver revalidates every
-identity and current dependency result before acceptance. Duplicate delivery is idempotent by exact
-handoff identity; conflicting replay fails closed.
+### 能力收窄与执行租户隔离
 
-The handoff and coordination trajectory record only externally observable choices and bounded
-metadata. The evidence does not persist hidden reasoning, private scratchpads, prompts, source, patches,
-stdout/stderr, credentials, or absolute paths in renderer or Team-visible state. Specialist success
-does not become Workflow Evidence until the existing deterministic Evidence boundary validates it.
+每个专职 Agent 获得新的、不透明的主进程授权，绑定确切协调会话、任务、角色、父监督运行时/版本、组织、项目、用户、会话、本地项目、Run/节点/版本、上下文摘要、能力集合摘要、截止期限和子预算。其范围是监督权限、任务声明、当前工作流/策略状态和资源租约的交集；其能力及预算是监督 Agent 的子集。不得从提示、任务文本、Team 状态或另一专职 Agent 推断缺失或更宽的授权。
 
-### Resource Arbitration And Side Effects
+这构成 V2.2 执行租户隔离边界。每项任务、检查点、工具授权、代码执行器请求、交接、资源租约及审计记录携带相同确切租户身份。跨组织、项目、用户、会话、本地项目、Run 或协调会话的引用，在查询数据或产生副作用前被拒绝，既不泄露存在性，也不泄露数量。Agent 交接绝不跨越执行租户隔离边界。
 
-Parallel read-only Specialists may use independent granted resources. Any mutable resource uses a
-main-owned single-writer lease bound to exact tenancy, task, capability, resource digest, version,
-and expiry. V2.2 never permits two Specialists to edit the same managed workspace concurrently. A
-writer cannot inherit a reader's handle, and an expired/cancelled lease cannot commit.
+Team/API 保持仅含元数据的投影，不能创建协调会话、签发专职权限、恢复本地执行或修改任务图。
 
-Non-idempotent Tool, MCP, Coding Executor, and provider effects retain their existing reconciliation
-contracts. Coordination does not make an ambiguous effect safe to repeat. A Specialist may use only
-the V2.0 Tool/Coding boundaries already accepted for its attenuated authority.
+<a id="handoff-join-and-evidence"></a>
 
-### Checkpoint, Failure, Cancellation, And Restart
+### 交接、汇合与证据
 
-Electron main atomically persists the graph state, shared counters, accepted handoff identities,
-resource leases, Specialist runtime/checkpoint references, and coordination trajectory. Resume uses
-optimistic concurrency and revalidates Workflow/Node, policy, pairing, Context, capability, resource,
-deadline, and tenancy before another action.
+Agent 交接不可变且带版本，绑定源与目标任务/运行时版本、协调/租户身份、结果摘要、证据引用摘要、上下文摘要、资源租约结果、有界允许列表摘要和单调序号。接收者在接受前重新核实全部身份和当前依赖结果。重复投递按确切交接身份幂等；冲突重放拒绝执行。
 
-Parent cancellation propagates from the Coordination Session to every ready/running Specialist, active Tool,
-MCP process, Coding Executor, pending handoff, and writer lease. It is monotonic: a late Specialist
-result cannot commit after cancellation or another terminal outcome. Specialist failure is attributed
-to the exact task/runtime and follows an explicit fail-fast or bounded-plan recovery policy; it is not
-silently reassigned.
+交接与协调轨迹只记录外部可观察选择及有界元数据。证据不在渲染进程或 Team 可见状态持久化隐藏推理、私有草稿、提示、源码、补丁、stdout/stderr、凭据或绝对路径。专职 Agent 成功必须经过既有确定性证据边界校验，才能成为工作流证据。
 
-Restart recovery reopens only the exact persisted versions. It does not recreate a Specialist,
-handoff, Tool call, or mutable effect already accepted before the crash. Unknown or ambiguous
-in-flight effects remain blocked until their existing reconciliation boundary resolves them.
+<a id="resource-arbitration-and-side-effects"></a>
 
-### Evaluation
+### 资源仲裁与副作用
 
-Default evaluation is deterministic and no-cost. A frozen V2.2 dataset executes the V2.0
-single-Agent baseline and the bounded Multi-Agent candidate on selected decomposition-friendly tasks,
-then compares quality, cost, latency, human intervention, recovery, and failure attribution. The
-Multi-Agent claim requires measurable aggregate quality improvement without exceeding frozen cost or
-latency multipliers and with zero authority, isolation, termination, replay, redaction, or paid-call
-violations.
+并行只读专职 Agent 可使用各自已授予资源。任何可变资源都使用主进程拥有的单写者租约，绑定确切租户、任务、能力、资源摘要、版本和过期时间。V2.2 绝不允许两个专职 Agent 并发编辑同一受管工作空间。写入者不能继承读取者句柄，过期或取消的租约不能提交。
 
-## Consequences
+非幂等工具、MCP、代码执行器和提供方副作用保留既有对账契约。协调不会让不明确副作用变成可安全重试。专职 Agent 只能使用其收窄授权下已接受的 V2.0 工具/编码边界。
 
-- Multi-Agent behavior is DevFlow-owned and observable rather than inferred from an external engine.
-- Specialist authority is strictly attenuated from existing main-owned authority.
-- A fixed DAG, hard agent count, shared budget, and cancellation tree make termination inspectable.
-- Single-writer leases prevent parallel specialists from racing the same mutable workspace.
-- V2.0 single-Agent execution remains a supported baseline and fallback.
-- Team visibility can remain metadata-only and read-only.
+<a id="checkpoint-failure-cancellation-and-restart"></a>
 
-## Rejected Alternatives
+### 检查点、失败、取消与重启
 
-- **Open-ended Agent swarm.** Rejected because membership, cost, termination, and authority would be
-  unbounded.
-- **Allow Specialists to delegate.** Rejected because recursive authority and termination would no
-  longer fit the frozen depth-one contract.
-- **Count OpenCode's private workers as DevFlow Multi-Agent.** Rejected because DevFlow cannot
-  observe or evidence their internal coordination.
-- **Let Specialists share one writable worktree concurrently.** Rejected because file and Git state
-  would race outside deterministic Evidence.
-- **Use Team/Postgres as the local coordinator.** Rejected because local source, credentials, Tools,
-  and complete trajectories remain Electron-main authority.
-- **Treat execution tenancy as public SaaS isolation.** Rejected because V2.2 scopes execution inside
-  the self-hosted product and makes no hosted infrastructure claim.
+Electron 主进程原子持久化任务图状态、共享计数器、已接受交接身份、资源租约、专职运行时/检查点引用及协调轨迹。恢复使用乐观并发，在下一操作前重新核实工作流/节点、策略、配对、上下文、能力、资源、截止期限和租户身份。
+
+父级取消从协调会话传播到全部就绪/运行中的专职 Agent、活动工具、MCP 进程、代码执行器、待处理交接和写入者租约。取消状态单调：取消或其他终态之后，迟到专职结果不能提交。专职失败归因到确切任务/运行时，并遵循明确的快速失败或有界计划恢复策略，不静默重新分配。
+
+重启只恢复确切持久版本，不重新创建崩溃前已接受的专职 Agent、交接、工具调用或可变副作用。未知或不明确的在途副作用保持阻断，直到既有对账边界解决。
+
+<a id="evaluation"></a>
+
+### 评估
+
+默认评估确定性且无费用。冻结的 V2.2 数据集在适合分解的选定任务上分别执行 V2.0 单 Agent 基线和有界多 Agent 候选，比较质量、费用、延迟、人工干预、恢复和失败归因。多 Agent 能力主张必须具有可衡量的整体质量提升、不超过冻结费用或延迟倍数，并且权限、隔离、终止、重放、脱敏和付费调用违规均为零。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 多 Agent 行为由 DevFlow 拥有且可观察，不从外部引擎推断。
+- 专职权限严格从既有主进程权限收窄。
+- 固定 DAG、Agent 数量硬上限、共享预算及取消树使终止可核实。
+- 单写者租约防止并行专职 Agent 竞争同一可变工作空间。
+- V2.0 单 Agent 执行继续作为受支持基线和回退。
+- Team 可见内容仍可保持仅元数据、只读。
+
+<a id="rejected-alternatives"></a>
+
+## 未采用的替代方案
+
+- **无界 Agent 群。** 成员、费用、终止和权限无界。
+- **允许专职 Agent 再委托。** 递归权限和终止不再符合冻结的一层深度契约。
+- **把 OpenCode 私有工作单元算作 DevFlow 多 Agent。** DevFlow 无法观察其内部协调或提供证据。
+- **允许专职 Agent 并发共享可写工作树。** 文件和 Git 状态会在确定性证据之外竞争。
+- **用 Team/Postgres 作为本地协调者。** 本地源码、凭据、工具和完整轨迹属于 Electron 主进程权限。
+- **将执行租户隔离视为公共 SaaS 隔离。** V2.2 限定自托管产品内部执行，不宣称托管基础设施能力。

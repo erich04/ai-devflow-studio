@@ -1,73 +1,58 @@
-# DevFlow Studio V1.4 Candidate Walkthrough
+<a id="devflow-studio-v14-candidate-walkthrough"></a>
 
-Status: Stable operator procedure; no result claimed
+# DevFlow Studio V1.4 候选版本演练
 
-This walkthrough verifies the V1.4 pilot trust boundary against one frozen Candidate commit `C`.
-It defines the repeatable operator path and acceptance criteria. A dated result is written only
-after the entire path passes; this document is not evidence that a candidate passed.
+状态：稳定的操作流程；本文件不声明验证通过。
 
-## Preconditions
+本演练针对一个冻结的候选提交 `C` 验证 V1.4 试点信任边界，定义可重复操作路径和验收标准。只有完整路径全部通过后，才编写带日期的结果记录；本文件本身不是候选版本通过的证据。
 
-- Use a clean checkout at the exact full SHA of `C` and the packaged Desktop application built from
-  that same commit.
-- Use an operator-controlled fixture repository with no secrets and a fresh, isolated Desktop
-  `userData` directory.
-- Start the self-hosted Web/API/Postgres pilot with signed-session authentication. Unsigned
-  `x-devflow-*` identity headers are forbidden.
-- Use one explicit Team Project, one matching Local Project, and a short-lived pairing code created
-  during this walkthrough.
-- Keep the default deterministic runtime. This walkthrough does not authorize or replace the
-  separate paid-provider smoke.
+<a id="preconditions"></a>
 
-## Operator Path
+## 前置条件
 
-1. Sign in to Web with the normal signed session and select the intended Team Project explicitly.
-2. Create one Desktop pairing code for that project. Treat it as a short-lived secret and do not
-   include it in screenshots, logs, or the result document.
-3. In the packaged Desktop app, select the controlled Local Project, pair it to the selected Team
-   Project, and sync Team state.
-4. Create one bounded V1.4 Work Request in Web for the same Team Project.
-5. Refresh the Desktop Work Request inbox, claim that request, and materialize exactly one canonical
-   local Run. Confirm that Team did not fabricate a Run before Desktop acknowledged materialization.
-6. Generate Clarification and advance the local workflow to the expected Gate. Preserve the
-   canonical local Run and its evidence as the transition authority.
-7. Refresh the project-scoped Team Policy in Desktop. Confirm the returned policy projection names
-   the exact selected `projectId`; an absent, wrong-scope, or unavailable policy must fail closed.
-8. Sync the redacted Run projection and confirm Web shows the selected project, Run, current Node,
-   and version without raw local evidence.
-9. In Web, submit a version- and policy-bound rejection Gate Command for the selected Run and Node.
-   The command is collaboration intent, not a direct Team Run mutation.
-10. Let Desktop acquire the exact delivery receipt, re-evaluate its full local evidence and policy,
-    and apply the human rejection through the canonical local command path.
-11. Confirm Team records the terminal command and matching receipt acknowledgement. A later redacted
-    Run summary may update the projection; acknowledgement itself must not mutate the Run.
-12. Fully stop Desktop, cold-start it with the same isolated `userData`, and confirm recovery of the
-    paired scope, canonical Run, command receipt/outcome, and durable outbox state.
-13. Confirm repository knowledge is available to the local Gate, Knowledge Review, and Coding
-    context. Team and API Review receive no raw repository content, and API knowledge provenance
-    remains `none`.
+- 使用精确完整 SHA 为 `C` 的干净检出，以及从同一提交构建的桌面安装包。
+- 使用操作者控制的无机密测试仓库，以及全新、隔离的桌面 `userData` 目录。
+- 启动采用签名会话认证的自托管 Web/API/Postgres 试点。禁止未签名的 `x-devflow-*` 身份请求头。
+- 明确使用一个团队项目、一个匹配的本地项目，以及本演练中新建的短期配对码。
+- 保持默认确定性运行时。本演练不授权、也不替代独立的付费服务商冒烟测试。
 
-## Acceptance Criteria
+<a id="operator-path"></a>
 
-The walkthrough passes only when all steps use the same `C` and the final observed states are:
+## 操作路径
 
-- Desktop outcome: `human_rejected`
-- Team command: `applied`
-- Receipt acknowledgement: `acknowledged`
-- The recovered Local Project is still bound to the original Team Project.
-- Exactly one canonical local Run exists for the Work Request.
-- The Team projection contains only bounded redacted summaries; no raw repository content, prompt,
-  patch body, stdout/stderr, credential, or local absolute path crosses the boundary.
+1. 通过正常签名会话登录 Web，明确选择目标团队项目。
+2. 为该项目创建一个桌面配对码。按短期机密处理，不写入截图、日志或结果文档。
+3. 在打包的桌面应用中选择受控本地项目，与所选团队项目配对并同步团队状态。
+4. 在 Web 为同一团队项目创建一个范围明确的 V1.4 工作请求。
+5. 刷新桌面工作请求收件箱，领取请求，并且只创建一个规范本地 Run。确认桌面回执确认创建前，团队端没有伪造 Run。
+6. 生成澄清产物，将本地工作流推进到预期 Gate。保留规范本地 Run 及其证据作为状态转换的权威来源。
+7. 在桌面刷新项目范围的团队策略。确认返回的策略投影包含精确的所选 `projectId`；策略缺失、范围错误或不可用时，必须拒绝放行。
+8. 同步脱敏 Run 投影，确认 Web 显示所选项目、Run、当前节点和版本，且不包含本地原始证据。
+9. 在 Web 为所选 Run 和节点提交绑定版本及策略的拒绝 Gate 命令。命令表达协作意图，不直接修改团队端 Run。
+10. 让桌面取得精确交付回执，重新评估完整本地证据和策略，并通过规范本地命令路径应用人工拒绝。
+11. 确认团队端记录命令终态和匹配的回执确认。后续脱敏 Run 摘要可以更新投影；回执确认本身不能修改 Run。
+12. 完全退出桌面，再使用相同隔离 `userData` 冷启动。确认配对范围、规范 Run、命令回执/结果，以及持久化发件箱状态均已恢复。
+13. 确认本地 Gate、知识审查和编码上下文可使用仓库知识。团队端及 API 审查不接收仓库原文，API 知识来源仍为 `none`。
 
-Any product, test, workflow, configuration, or ordinary-document change invalidates `C` and this
-walkthrough. Freeze a new candidate and restart the complete signoff matrix. A setup-only failure
-may be corrected without changing `C`, but the final dated result must disclose it.
+<a id="acceptance-criteria"></a>
 
-## Result Record
+## 验收标准
 
-After a complete pass, create a new
-`docs/guides/devflow-studio-v1.4-walkthrough-result-YYYY-MM-DD.md`. Record the candidate SHA,
-non-sensitive environment identity, observed step outcomes, cold-start recovery, and redaction
-checks. Do not modify or reuse the 2026-08-01 development result, and never record pairing codes,
-Cookies, Bearer tokens, provider values, raw evidence, raw repository content, or local absolute
-paths.
+所有步骤必须使用同一 `C`，最终观察到以下状态才算通过：
+
+- 桌面结果：`human_rejected`。
+- 团队命令：`applied`。
+- 回执确认：`acknowledged`。
+- 恢复后的本地项目仍绑定原团队项目。
+- 该工作请求只对应一个规范本地 Run。
+- 团队投影只包含有界的脱敏摘要；仓库原文、提示词、补丁正文、stdout/stderr、凭据及本地绝对路径均不能越过边界。
+
+任何产品、测试、工作流、配置或普通文档修改，都会使 `C` 及本轮演练失效。应冻结新的候选版本并重新执行完整验收矩阵。仅环境准备失败时，可以不修改 `C` 直接修正，但必须在最终带日期的结果中披露。
+
+<a id="result-record"></a>
+
+## 结果记录
+
+完整通过后，新建 `docs/guides/devflow-studio-v1.4-walkthrough-result-YYYY-MM-DD.md`，记录候选 SHA、非敏感环境标识、各步骤观察结果、冷启动恢复及脱敏检查。
+
+不要修改或复用 2026-08-01 的开发验证结果；不得记录配对码、Cookie、Bearer 令牌、服务商凭据值、原始证据、仓库原文或本地绝对路径。

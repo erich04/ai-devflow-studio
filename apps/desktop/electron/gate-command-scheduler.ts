@@ -8,7 +8,7 @@ export const GATE_COMMAND_POLL_INTERVAL_MS = 15_000
 export type GateCommandSchedulerDependencies = {
   processAvailable(): Promise<void>
   onError(error: unknown): void | Promise<void>
-  pollingIntervalMs?: number
+  pollingIntervalMs?: number | (() => number)
   timers?: RemoteSyncOutboxSchedulerTimers
 }
 

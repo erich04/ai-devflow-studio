@@ -1,79 +1,51 @@
-# ADR 0021: Coding Memory, Bounded Context and Real Evidence Evaluation
+<a id="adr-0021-coding-memory-bounded-context-and-real-evidence-evaluation"></a>
 
-Status: Accepted
+# ADR 0021：编码记忆、有界上下文与真实证据评估
 
-Date: 2026-09-16
+状态：已接受（Accepted）。
 
-## Context
+日期：2026-09-16
 
-Memory lifecycle and independent Runtime attachments already existed, but Native Coding and
-OpenCode briefs did not include the recalled statements. Native v2 sliced the brief at different
-character limits. Independent Runtime always sent a matching fixture to `scenario.evaluate`;
-success described that fixture, even when the selected task had no artifacts or tests.
+<a id="context"></a>
 
-## Decision
+## 背景
 
-Electron main recalls Memory before reserving a Coding Run. Existing LocalStore visibility,
-project/user/session scope, expiry, revision and tombstone rules remain authoritative. A bounded
-lexical ranking selects at most eight complete statements within 4,000 UTF-8 bytes including
-label allowance. Ineligible records never enter the ranking; oversized or lower-ranked records
-are counted as omitted. Candidate observations still require explicit promotion.
+此前已存在记忆生命周期和独立运行时附件，但 Native Coding 与 OpenCode 简报未包含召回语句；Native v2 按不同字符上限截断简报。独立运行时总是把匹配夹具交给 `scenario.evaluate`；即使选定任务没有产物或测试，所谓成功描述的也是夹具。
 
-The common Coding Brief includes those statements as low-trust background. They cannot grant
-permissions, override the current request, satisfy a Gate, or become test evidence. This one brief
-feeds Native v1, Native v2 and OpenCode. Coding `contextDigest` retains its existing meaning,
-SHA-256 of the exact brief; it is not replaced with the separate Runtime attachment digest.
+<a id="decision"></a>
 
-A local `CodingContextReceipt` binds the prepared brief to Run/Node version, actor/pairing scope
-and selected Memory revision/head/content digests. The runtime rechecks this before Provider
-calls, managed tool actions, approvals and saved tests. Native v2 also checks after a Provider
-response. A changed/deleted/expired source stops continuation; usage already incurred is retained
-as a successful Provider settlement, rather than misclassified as a Provider error. A new attempt
-must recall current sources. Recovery retains the frozen brief and existing no-replay contracts.
+## 决策
 
-The brief has a conservative 12,000 UTF-8 byte budget. Current request/instruction, Memory,
-remediation and the bounded latest test diagnostic are indivisible. Historical sources compact
-to their existing summaries plus recognizable explicit constraint lines. Sources keep stable
-identities, priority and representation/size receipts. If protected content alone is too large,
-preparation fails before a paid call. No LLM is used to invent a summary.
+Electron 主进程在预留 Coding Run 前召回记忆。既有 LocalStore 可见性、项目/用户/会话范围、过期、修订和墓碑规则继续有效。有界词法排名选择最多八条完整语句，总计不超过 4,000 UTF-8 字节（含标签预留）。不合格记录不进入排名；超大或排名较低记录计为已省略。候选观察仍需显式提升。
 
-The runtime fixture is replaced by the read-only `workflow.evaluate` tool. Electron main supplies
-an evidence digest computed from the current Run, stage artifacts, real Coding Run, sanitized
-diff, saved test command and actual Test Evidence. The handler rereads the sources before use.
-Missing evidence, failed latest tests, fake Coding Runs, wrong provenance and stale fingerprints
-cannot pass. A recovered successful tool invocation is not treated as a successful evaluation:
-the logical result is checked separately. Real Coding completion automatically records the same
-evidence check in its event trace. These checks do not grant business acceptance or publication.
+统一编码简报将这些语句作为低信任背景。它们不能授权、覆盖当前请求、满足门禁或成为测试证据。此简报同时供 Native v1、Native v2 和 OpenCode 使用。编码 `contextDigest` 保留原含义：确切简报的 SHA-256；不替换为独立运行时附件摘要。
 
-Offline scenario/retrieval/multi-agent fixtures remain reproducible regression baselines. They
-are explicitly separate from current-task evaluation.
+本地 `CodingContextReceipt` 将准备好的简报绑定到 Run/节点版本、参与者/配对范围及所选记忆修订/最新版本/内容摘要。运行时在提供方调用、受管工具操作、批准和已保存测试前重新检查；Native v2 还在提供方响应后检查。来源变化、删除或过期会停止继续执行；已发生用量保留为成功提供方结算，不误归类为提供方错误。新尝试必须召回当前来源。恢复保留冻结简报及既有禁止重放契约。
 
-## Privacy and compatibility
+简报采用保守的 12,000 UTF-8 字节预算。当前请求/指令、记忆、处理建议及有界的最新测试诊断不可拆分。历史来源压缩为既有摘要，加上可识别的显式约束行；保留稳定身份、优先级和表示方式/大小回执。如果仅受保护内容就已超限，在付费调用前准备失败。不使用 LLM 虚构摘要。
 
-- Full prompts and selected Memory remain local execution data. Team Coding summaries exclude
-  the receipt and prompt; inbound remote summaries reject local-only receipt fields.
-- Deletion excludes future recall and invalidates attached continuation. Historical local audit
-  records retain the prior execution, following the existing Memory lifecycle contract.
-- No new storage service, vector database, credential store, API endpoint or schema migration.
-- Old Coding Runs without receipts remain readable and retain their recovery behavior.
-- Existing permissions, Change Acceptance, Workflow Gates and delivery authorization remain
-  authoritative. The existing advanced Runtime controls keep their interaction; explanatory copy
-  now describes actual evidence checks.
+运行时夹具替换为只读 `workflow.evaluate` 工具。Electron 主进程根据当前 Run、阶段产物、真实 Coding Run、脱敏差异、已保存测试命令和实际测试证据计算并提供证据摘要，处理器使用前重新读取来源。证据缺失、最新测试失败、假 Coding Run、错误来源及过时指纹都不能通过。恢复后的工具调用成功不等于评估成功，逻辑结果需独立检查。真实编码完成会自动在事件轨迹记录同样证据检查；这些检查不授予业务验收或发布权限。
 
-## Limits
+离线场景/检索/多 Agent 夹具继续作为可重复回归基线，并明确区别于当前任务评估。
 
-This slice connects the Coding executors. Stage Agents and specialist/multi-agent Memory
-delegation are not expanded. The compactor summarizes historical brief sources; it does not
-claim a semantic long-conversation summarizer or a tokenizer-specific whole-request limit.
-This is consumption of explicitly promoted/revised Memory, not automatic learning after every
-Coding Run. The advanced independent Runtime retains its current running task/agent authority;
-it cannot be started on a completed node or a Gate. Automatic Coding evaluation records an
-evidence check without creating or promoting durable Memory. Extending post-task learning or
-the completed-node evaluation interaction needs a separate design.
-Native v2 repository excerpts retain their separate existing bounded-input rules.
-OpenCode is an external executor: DevFlow fences session creation, message submission, polling
-and permission relay, and aborts on detected staleness; it cannot intercept each internal
-OpenCode model call or retract a prompt already sent to a Provider.
-Memory relevance uses lexical overlap and recency, not embeddings. Evidence evaluation checks
-provenance/completeness and real test results; it cannot establish arbitrary business correctness
-without appropriate acceptance tests and human review.
+<a id="privacy-and-compatibility"></a>
+
+## 隐私与兼容性
+
+- 完整提示及所选记忆留作本地执行数据。Team 编码摘要排除回执和提示，入站远端摘要拒绝仅限本地的回执字段。
+- 删除会排除后续召回，并使已附加的继续执行失效。历史本地审计按既有记忆生命周期契约保留先前执行。
+- 不新增存储服务、向量数据库、凭据存储、API 端点或模式迁移。
+- 没有回执的旧 Coding Run 保持可读，并保留其恢复行为。
+- 既有权限、变更接受、工作流门禁和交付授权仍具权威性。既有高级运行时控件保留交互，说明文案改为描述实际证据检查。
+
+<a id="limits"></a>
+
+## 限制
+
+本切片连接代码执行器，不扩展阶段 Agent 或专职/多 Agent 记忆委托。压缩器概括历史简报来源，不宣称支持语义长会话总结或依赖特定 tokenizer 的完整请求限制。
+
+这里消费的是明确提升/修订的记忆，不是每个 Coding Run 后自动学习。高级独立运行时保留当前运行中任务/Agent 权限，不能在已完成节点或门禁启动。自动编码评估记录证据检查，不创建或提升持久记忆。扩展任务后学习或已完成节点评估交互需要独立设计。Native v2 仓库片段保留各自既有有界输入规则。
+
+OpenCode 是外部执行器：DevFlow 约束会话创建、消息提交、轮询和权限转发，检测到过时时中止；无法拦截 OpenCode 每次内部模型调用，也无法撤回已发给提供方的提示。
+
+记忆相关性使用词法重合与新近程度，不使用嵌入。证据评估检查来源/完整性及真实测试结果；没有适当验收测试和人工审查，无法证明任意业务正确性。

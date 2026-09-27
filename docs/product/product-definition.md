@@ -1,306 +1,305 @@
-# DevFlow Studio Product Definition
+<a id="devflow-studio-product-definition"></a>
 
-## One-Line Definition
+# DevFlow Studio 产品定义
 
-DevFlow Studio is a self-hosted AI development workflow workbench for small engineering teams. It turns an AI-assisted code change from an ad hoc prompt into a governed delivery flow with local execution, team policy, evidence, review, cost visibility, and human approval.
+<a id="one-line-definition"></a>
 
-## Product North Star
+## 一句话定义
 
-A small team can take a software change request from intake to delivery using DevFlow Studio:
+DevFlow Studio 是面向小型工程团队的自托管 AI 开发工作台。它将零散的 AI 辅助代码修改转化为受治理的交付流程，涵盖本地执行、团队策略、证据、审查、费用可见性和人工审批。
 
-1. Capture the request.
-2. Clarify scope and acceptance expectations.
-3. Design the solution.
-4. Run AI-assisted implementation locally.
-5. Produce test and review evidence.
-6. Assemble a PR Delivery Package and exact Delivery Intent.
-7. Approve or reject each Gate and Delivery Request with policy-aware context.
-8. Publish one approved commit as a GitHub Draft pull request.
-9. Sync redacted summaries to the team view and complete Acceptance.
+<a id="product-north-star"></a>
 
-The product should keep developers in control of local execution while giving leads and managers enough evidence to govern risk, cost, and delivery readiness.
+## 产品核心目标
 
-## Target Users
+小型团队可以使用 DevFlow Studio 将软件变更从需求推进到交付：
 
-### Developer
+1. 收集需求。
+2. 澄清范围与验收预期。
+3. 设计方案。
+4. 在本地执行 AI 辅助实现。
+5. 生成测试与审查证据。
+6. 组装 PR 交付包与精确的交付意图。
+7. 根据策略上下文批准或拒绝每个 Gate 和交付请求。
+8. 将一个已批准提交发布为 GitHub 草稿 PR。
+9. 将脱敏摘要同步至团队视图并完成业务验收。
 
-Uses the Electron desktop client to:
+开发者应始终掌握本地执行的控制权；技术负责人和管理者应有足够证据判断风险、费用和交付是否就绪。
 
-- Select a local repository.
-- Create or continue a Run.
-- Execute local tests.
-- Run Coding Agent tasks in a managed worktree.
-- Review diffs, permission requests, evidence, and runtime traces.
-- Prepare, Revise, Resume, Retry, or Stop a GitHub Delivery through explicit actions.
-- Sync redacted summaries to the team backend.
+<a id="target-users"></a>
 
-### Tech Lead / Reviewer
+## 目标用户
 
-Uses Desktop and Web views to:
+<a id="developer"></a>
 
-- Review Gate status.
-- Inspect Knowledge-Grounded Gate Review output.
-- Evaluate policy warnings or blockers.
-- Approve Gates or explicit overrides.
-- Approve or reject one exact redacted Delivery Request through a signed Web session.
-- Check delivery evidence before implementation, PR, or acceptance.
+### 开发者
 
-### Team Manager / Project Owner
+通过 Electron 桌面客户端：
 
-Uses Web Team Console to:
+- 选择本地仓库。
+- 创建或继续 Run。
+- 执行本地测试。
+- 在托管工作树中运行编码 Agent 任务。
+- 查看差异、权限请求、证据和运行轨迹。
+- 通过明确操作准备、修订（Revise）、继续（Resume）、重试（Retry）或停止（Stop）GitHub 交付。
+- 向团队后端同步脱敏摘要。
 
-- See project overview and recent Runs.
-- Track policy state, cost, evidence, and risk.
-- Manage team-facing workflow settings such as policies and budget controls.
-- Configure or revoke a Project's verified GitHub App repository binding.
+<a id="tech-lead--reviewer"></a>
 
-## Core Product Workflow
+### 技术负责人 / 审查者
 
-DevFlow Studio models delivery as a six-stage workflow:
+通过桌面和 Web 视图：
 
-1. Clarify
-   - Convert a raw request into clarified scope.
-   - Capture goals, non-goals, and acceptance signals.
+- 检查 Gate 状态。
+- 查看基于知识的门禁审查输出。
+- 评估策略警告或阻断。
+- 批准 Gate 或显式例外审批。
+- 通过签名 Web 会话批准或拒绝一份精确的脱敏交付请求。
+- 在实现、PR 或验收前检查交付证据。
 
-2. Design
-   - Produce a solution design.
-   - Identify API, data, testing, and risk assumptions.
+<a id="team-manager--project-owner"></a>
 
-3. Build
-   - Run Coding Agent work locally.
-   - Use managed worktrees and explicit permission relay.
+### 团队管理者 / 项目负责人
 
-4. Test
-   - Run local test commands.
-   - Capture Test Evidence with command, result, duration, and redacted output.
+通过团队 Web 控制台：
 
-5. PR
-   - Assemble a metadata-only PR Delivery Package and immutable Delivery Intent.
-   - Require a signed lead/owner approval for the exact redacted Delivery Request.
-   - Publish the approved expected commit and create or reconcile one Draft pull request.
+- 查看项目概览和近期 Run。
+- 跟踪策略状态、费用、证据与风险。
+- 管理团队工作流设置，例如策略和预算控制。
+- 配置或撤销项目中已核实的 GitHub App 仓库绑定。
 
-6. Accept
-   - Final human Gate for business acceptance.
-   - Require durable GitHub Delivery completion, preserve the audit trail, and never merge.
+<a id="core-product-workflow"></a>
 
-## Main Product Modules
+## 核心产品流程
 
-### Desktop Workbench
+DevFlow Studio 将交付建模为六个阶段：
 
-Primary developer surface. It owns local execution and local evidence.
+1. 需求澄清（Clarify）：将原始请求转化为明确范围，记录目标、非目标和验收信号。
+2. 方案设计（Design）：产出方案，识别 API、数据、测试及风险假设。
+3. 开发实现（Build）：在本地运行编码 Agent，使用托管工作树并显式传递权限请求。
+4. 测试证据（Test）：运行本地测试命令，保存含命令、结果、耗时和脱敏输出的测试证据。
+5. PR 交付（PR）：组装仅含元数据的 PR 交付包和不可变交付意图；要求 Lead/Owner 对精确脱敏交付请求进行签名审批；发布已批准的预期提交，并创建或对账一个草稿 PR。
+6. 业务验收（Accept）：由人工执行最终业务 Gate；要求持久化 GitHub 交付完成记录、保留审计轨迹，绝不合并 PR。
 
-Core responsibilities:
+<a id="main-product-modules"></a>
 
-- Local repository selection.
-- Workflow canvas and Run inspection.
-- Test command validation and execution.
-- Coding Agent runtime orchestration.
-- Gate Review execution.
-- Gate approval and override actions through guarded write paths.
-- Commit-bound Delivery Intent preparation and explicit Revise, Resume, Retry, and Stop actions.
-- Repository-scoped GitHub publication from Electron main with an in-memory installation token.
-- Local SQLite persistence.
-- Redacted team sync.
+## 主要产品模块
 
-### Team Web Console
+<a id="desktop-workbench"></a>
 
-Team and manager surface. It owns team visibility and administration.
+### 桌面工作台
 
-Core responsibilities:
+开发者的主要界面，负责本地执行和本地证据。
 
-- Team overview.
-- Project and Run summaries.
-- Policy, budget, and delivery status.
-- Pairing code creation for Desktop connection.
-- GitHub App repository binding/revocation and exact Delivery Request approval.
-- Redacted evidence and review summaries.
+核心职责：
 
-### API Backend
+- 选择本地仓库。
+- 工作流画布和 Run 检查。
+- 校验与执行测试命令。
+- 编排编码 Agent 运行时。
+- 执行门禁审查。
+- 通过受保护写入路径执行 Gate 审批和例外审批。
+- 准备绑定提交的交付意图，提供明确的 Revise、Resume、Retry、Stop 操作。
+- Electron 主进程使用仅存在内存中的安装令牌，在限定仓库范围内发布至 GitHub。
+- 本地 SQLite 持久化。
+- 脱敏团队同步。
 
-Team data and policy source of truth.
+<a id="team-web-console"></a>
 
-Core responsibilities:
+### 团队 Web 控制台
 
-- Team identity and sessions.
-- Project membership.
-- Pairing and authenticated sync.
-- Policy and budget persistence.
-- GitHub App authority, redacted Delivery Requests, approvals, credential-grant metadata, remote-head
-  verification, and Draft pull-request creation.
-- Postgres-backed team state.
-- Redacted overview responses.
+团队与管理者界面，负责团队可见性与管理。
 
-### Shared Domain Core
+核心职责：
 
-Cross-runtime product logic.
+- 团队概览。
+- 项目和 Run 摘要。
+- 策略、预算和交付状态。
+- 创建桌面连接配对码。
+- GitHub App 仓库绑定/撤销，以及精确交付请求审批。
+- 脱敏证据与审查摘要。
 
-Core responsibilities:
+<a id="api-backend"></a>
 
-- Workflow types and transitions.
-- Gate enforcement policy.
-- Knowledge governance rules.
-- Budget guard evaluation.
-- Remediation and delivery summaries.
-- Delivery Intent/Request validation, series/attempt/revision identity, and Acceptance evidence
-  requirements.
-- Redaction-safe data contracts.
+### API 后端
 
-## Agent Boundaries
+团队数据与策略的权威来源。
 
-DevFlow Studio contains multiple agent-related capabilities. They are intentionally different:
+核心职责：
 
-### Workflow Stage Agent
+- 团队身份和会话。
+- 项目成员关系。
+- 配对与已认证同步。
+- 策略和预算持久化。
+- GitHub App 权限、脱敏交付请求、审批、凭据授权元数据、远端分支提交核验和草稿 PR 创建。
+- 基于 Postgres 的团队状态。
+- 脱敏概览响应。
 
-The Workflow Stage Agent turns the current request and upstream artifacts into clarification or
-solution-design evidence. It works only at the matching workflow stage and records provider and
-model provenance with the generated artifact.
+<a id="shared-domain-core"></a>
 
-### Knowledge-Grounded Gate Review Agent
+### 共享领域核心
 
-DevFlow treats the current Gate, its conditions, and associated stage artifacts and evidence as the
-review subject. Retrieved Knowledge is grounding, not the review subject.
+跨运行时的产品逻辑。
 
-DevFlow retrieves Knowledge references, calls a selected Gate Review model provider, and parses a
-structured Gate Review result.
+核心职责：
 
-The model provider, such as Doubao / Volcengine Ark, supplies model inference only. DevFlow owns the Gate Review prompt, Knowledge and evidence selection, context redaction, and result interpretation.
+- 工作流类型与状态转换。
+- Gate 强制策略。
+- 知识治理规则。
+- 预算保护评估。
+- 处理建议和交付摘要。
+- 交付意图/请求校验、系列/尝试/修订标识，以及业务验收证据要求。
+- 支持安全脱敏的数据契约。
 
-### Coding Agent
+<a id="agent-boundaries"></a>
 
-Coding Agent work is executed through the managed coding runtime. Real coding execution can use `opencode`; fake execution remains available for deterministic local verification and CI.
+## Agent 权限边界
 
-Coding Agent runs must preserve:
+DevFlow Studio 包含多种 Agent 能力，其职责不同。
 
-- Explicit permission relay.
-- Managed worktree isolation.
-- Diff capture.
-- Test evidence.
-- Runtime trace.
-- Cleanup state.
+<a id="workflow-stage-agent"></a>
 
-### Skills and MCP
+### 工作流阶段 Agent
 
-Skills and MCP are team capability surfaces, not substitutes for Gate approval. They may help standardize work, but they do not bypass workflow policy or evidence requirements.
+工作流阶段 Agent 将当前请求与上游产物转化为澄清或设计证据。它只在匹配的工作流阶段执行，并随生成的产物记录 Provider 和模型来源。
 
-## GitHub Delivery Boundary
+<a id="knowledge-grounded-gate-review-agent"></a>
 
-Desktop derives an immutable Delivery Intent from the canonical managed worktree, expected commit,
-repository binding, Run version, Test Evidence, and PR Delivery Package. API/Postgres stores the
-redacted Delivery Request and a separate signed lead/owner approval. A GitHub App supplies
-repository-scoped, short-lived authority: Desktop main receives only Contents write capability for
-the exact push, while the API verifies the remote head and creates or reconciles one Draft pull
-request.
+### 基于知识的门禁审查 Agent
 
-Revise replaces changed pre-publication material and invalidates approval. Resume continues the
-same `recovery_required` attempt. Retry creates a new attempt only after the current claimant proves
-the exact remote predecessor terminal. Stop parks the exact active attempt for manual recovery.
-DevFlow never merges, force-pushes, deletes a branch, publishes a tag, or lets GitHub replace the
-canonical local Run.
+审查对象是当前 Gate、门禁条件以及关联阶段产物与证据；检索到的知识是审查依据。
 
-## Evidence Model
+DevFlow 检索知识引用，调用选定的门禁审查模型提供方，并解析结构化审查结果。
 
-DevFlow Studio treats evidence as the core product primitive.
+豆包/火山引擎 Ark 等模型提供方仅提供推理能力。审查提示词、知识与证据选择、上下文脱敏及结果解释均由 DevFlow 负责。
 
-Important evidence types:
+<a id="coding-agent"></a>
 
-- Request and clarification artifacts.
-- Design artifacts.
-- Coding diff artifacts.
-- Test Evidence.
-- Gate Review artifacts.
-- Gate approval and override decisions.
-- Runtime cost and budget decisions.
-- PR Delivery Package and acceptance bundle artifacts.
-- Delivery Intent, Delivery Request, signed approval, verified remote head, and Draft pull-request
-  completion metadata.
+### 编码 Agent
 
-Evidence shown to the team must be redacted. Local raw execution details stay local unless explicitly summarized through a safe contract.
+编码任务通过托管编码运行时执行。真实执行可以使用 `opencode`；确定性本地验证与 CI 仍可使用模拟执行。
 
-## Governance Model
+编码执行必须保留：
 
-Governance is not a single approval button. It is a combination of:
+- 显式权限请求传递。
+- 托管工作树隔离。
+- 差异记录。
+- 测试证据。
+- 运行轨迹。
+- 清理状态。
 
-- Workflow Gates.
-- Knowledge governance checks.
-- Configurable Gate Enforcement Policy.
-- Gate Review findings.
-- Test Evidence requirements.
-- Budget guard decisions.
-- Lead-only overrides with audit trail.
+<a id="skills-and-mcp"></a>
 
-The product rule is:
+### Skills 与 MCP
 
-> UI may explain or initiate actions, but approval and override decisions must be enforced in write paths, not only through disabled buttons.
+Skills 与 MCP 是团队能力入口，可以帮助标准化工作，不能代替 Gate 审批或绕过工作流策略与证据要求。
 
-## Deployment Model
+<a id="github-delivery-boundary"></a>
 
-Current product direction is self-hosted team pilot, not public SaaS.
+## GitHub 交付边界
 
-Expected deployment shape:
+桌面端从权威托管工作树、预期提交、仓库绑定、Run 版本、测试证据和 PR 交付包派生不可变交付意图。API/Postgres 保存脱敏交付请求与独立的 Lead/Owner 签名审批。GitHub App 提供限定仓库范围的短期权限：桌面主进程仅获得此次精确推送所需的 Contents 写权限，API 核验远端分支提交并创建或对账一个草稿 PR。
 
-- Electron Desktop for developers.
-- Web Team Console.
-- API backend.
-- Postgres database.
-- Docker Compose for small-team pilot deployment.
+Revise 替换已变化的发布前材料并使审批失效。Resume 继续同一次 `recovery_required` 尝试。Retry 仅在当前领取者已证明精确的远端前次尝试处于终态后，才创建新尝试。Stop 停放精确的活动尝试，等待人工恢复。
+DevFlow 绝不合并、强制推送、删除分支、发布标签，也不允许 GitHub 取代本地权威 Run。
 
-Public SaaS, billing, enterprise SSO, and large organization administration are not near-term product goals.
+<a id="evidence-model"></a>
 
-## Product Baseline Scope
+## 证据模型
 
-Release status and future milestones live only in the [Roadmap](../roadmap.md).
+证据是 DevFlow Studio 的核心产品对象。
 
-This Product Definition owns the durable product shape, users, workflow, evidence model, governance
-rules, and non-goals. The Roadmap remains authoritative for release status and sequencing.
+主要证据类型：
 
-V1.5 is released as `v1.5.0`, and the finite 1.x product line is complete. Its candidate-bound local,
-CI, packaged Desktop, Postgres, lifecycle, restart, revocation, redaction, and private GitHub sandbox
-evidence is immutable under `docs/releases/v1.5.0/`. V2.0 Native Agent Runtime is complete with
-immutable evidence under `docs/releases/v2.0.0/`; V2.1 Evaluated Retrieval and Memory is the active
-Roadmap priority, with local retrieval/Memory and Runtime Context/Desktop UX complete and the
-metadata-only Team projection in progress.
-Desktop now exposes a strict bounded Agent Memory lifecycle view; exact-version human lifecycle
-promotion and statement revision are available through main-owned exact-digest/version actions,
-and explicit deletion commits a tombstone before restart-safe derived-state purge. The packaged
-Desktop proves exact lifecycle recovery with zero repeated Runtime, Tool, provider, or Memory effects.
+- 原始需求和澄清产物。
+- 设计产物。
+- 编码差异产物。
+- 测试证据。
+- 门禁审查产物。
+- Gate 审批与例外审批决定。
+- 运行费用与预算决定。
+- PR 交付包与验收资料包产物。
+- 交付意图、交付请求、签名审批、核实后的远端分支提交，以及草稿 PR 完成元数据。
 
-The released product baseline provides:
+展示给团队的证据必须脱敏。原始本地执行详情留在本地，只有经安全契约明确汇总后才能共享。
 
-- One trusted workflow command path for Clarify, Design, Build, Test, PR, and Acceptance.
-- Main-process canonical writes and durable local persistence for Run, Artifact, Event, Test
-  Evidence, Gate Review, Coding activity, policy, budget, and sync state.
-- Explicit Local Project ↔ Team Project binding, authenticated collaboration intent, Desktop-owned
-  canonical Run execution, and redacted Team projections.
-- Managed Coding worktrees, explicit permission relay, diff/test evidence, cost visibility, and
-  bounded cleanup/recovery semantics.
-- Knowledge Governance, bounded repository Markdown context, durable sync outbox recovery, and
-  reproducible self-hosted pilot lifecycle validation.
+<a id="governance-model"></a>
 
-The released V1.5 extension adds commit-bound Delivery Intent preparation, redacted Delivery
-Requests and signed approval, GitHub App repository authority, idempotent branch/Draft publication,
-bounded recovery, and Acceptance evidence.
+## 治理模型
 
-Historical PRDs, plans, walkthroughs, release records, and candidate evidence remain immutable
-records of what was proposed or verified at that time. They do not compete with the Roadmap for
-current release or priority truth.
+治理由以下机制共同构成：
 
-## Non-Goals
+- 工作流 Gate。
+- 知识治理检查。
+- 可配置的 Gate 强制策略。
+- 门禁审查发现。
+- 测试证据要求。
+- 预算保护决定。
+- 仅限 Lead、带审计轨迹的例外审批。
 
-DevFlow Studio should not become:
+产品规则：
 
-- A generic chat assistant.
-- A fully autonomous code merge bot.
-- A public SaaS platform before the self-hosted pilot is validated.
-- A replacement for GitHub, CI, or issue trackers.
-- A raw log warehouse that uploads local prompts, stdout, stderr, patches, cwd, or provider secrets.
+> 界面可以解释或发起动作，但审批与例外审批必须在写入路径执行约束，不能只依靠禁用按钮。
 
-## Product Quality Bar
+<a id="deployment-model"></a>
 
-A feature is product-ready only when:
+## 部署模型
 
-1. The user-facing concept is clear.
-2. The write path is guarded where needed.
-3. Evidence is persisted.
-4. Redaction boundaries are preserved.
-5. The behavior is covered by the appropriate layer of tests or smoke.
-6. The walkthrough can explain what the user should do next.
+当前产品方向是自托管团队试点，不是公共 SaaS。
+
+预期部署组成：
+
+- 开发者使用 Electron 桌面端。
+- 团队 Web 控制台。
+- API 后端。
+- Postgres 数据库。
+- 用于小团队试点的 Docker Compose。
+
+公共 SaaS、计费、企业 SSO 和大规模组织管理不属于近期产品目标。
+
+<a id="product-baseline-scope"></a>
+
+## 产品基线范围
+
+发布状态与后续里程碑统一记录在[路线图](../roadmap.md)。本产品定义负责长期产品形态、用户、流程、证据、治理规则与非目标；当前发布状态与优先顺序以路线图为准。
+
+以下是原文记录的版本快照，翻译不将它改写为新的发布验收：V1.5 已发布为 `v1.5.0`，有限范围的 1.x 产品线已完成。与该候选版本绑定的本地、CI、打包桌面端、Postgres、生命周期、重启、撤销、脱敏和私有 GitHub 沙箱证据不可变地保存在 `docs/releases/v1.5.0/`。V2.0 原生 Agent 运行时已完成，证据保存在 `docs/releases/v2.0.0/`；当时 V2.1 检索与记忆评估是路线图当前重点，本地检索/记忆及运行时上下文/桌面体验已完成，纯元数据团队投影仍在进行。
+
+桌面端已提供有严格边界的 Agent 记忆生命周期视图；人工生命周期提升和内容修订通过主进程控制的精确摘要/版本动作执行。显式删除先提交墓碑，再执行支持重启恢复的派生状态清理。打包桌面端已证明生命周期精确恢复，未重复运行时、工具、模型提供方或记忆副作用。
+
+已发布的产品基线提供：
+
+- 需求澄清、方案设计、开发实现、测试、PR 与业务验收的一条可信工作流命令路径。
+- Run、产物、事件、测试证据、门禁审查、编码活动、策略、预算和同步状态的主进程权威写入与本地持久化。
+- 显式本地项目 ↔ 团队项目绑定、经过认证的协作意图、桌面端拥有的权威 Run 执行，以及脱敏团队投影。
+- 托管编码工作树、显式权限请求传递、差异/测试证据、费用可见性，以及有边界的清理/恢复语义。
+- 知识治理、有范围限制的仓库 Markdown 上下文、持久化同步发件箱恢复，以及可重复的自托管试点生命周期验证。
+
+已发布的 V1.5 扩展增加绑定提交的交付意图准备、脱敏交付请求和签名审批、GitHub App 仓库权限、幂等分支/草稿发布、有边界的恢复，以及业务验收证据。
+
+历史 PRD、计划、操作演练、发布记录和候选证据继续作为当时提案或验证结果的不可变记录保留，当前版本与优先顺序仍以路线图为准。
+
+<a id="non-goals"></a>
+
+## 非目标
+
+DevFlow Studio 不应成为：
+
+- 通用聊天助手。
+- 完全自主合并代码的机器人。
+- 自托管试点验证完成前就建设的公共 SaaS 平台。
+- GitHub、CI 或 Issue 跟踪工具的替代品。
+- 上传本地提示词、stdout、stderr、补丁、cwd 或模型密钥的原始日志仓库。
+
+<a id="product-quality-bar"></a>
+
+## 产品质量标准
+
+功能只有满足以下要求才算就绪：
+
+1. 用户概念清楚。
+2. 必要的写入路径受到保护。
+3. 证据已持久化。
+4. 脱敏边界得到保留。
+5. 对应测试层或冒烟测试覆盖其行为。
+6. 操作演练能解释用户下一步该做什么。

@@ -1,14 +1,17 @@
-# Module 3: 数据的两条旅程
+<a id="module-3-数据的两条旅程"></a>
+# 模块 3：数据的两条旅程
 
-## Teaching Arc
-- **Metaphor:** 机场海关。行李箱里的原件留在本地，只有经过检查、遮住敏感信息的申报单才能进入团队系统；如果网络断了，申报单先进入可靠的待发队列。
-- **Opening hook:** 同一个 Run 同时服务两种需求：桌面端要保留足够详细的证据，团队 Web 又只应该看到安全、可协作的摘要。
-- **Key insight:** “本地优先”不是“永不联网”，而是先明确哪份数据是本地权威，再通过脱敏和 durable outbox 有控制地同步副本。
-- **Why should I care?:** 你能要求 AI 把原始日志留在本机、把摘要同步给团队，并判断“页面没更新”究竟是存储、脱敏、排队还是远端接收的问题。
+<a id="teaching-arc"></a>
+## 教学主线
+- **比喻：** 机场海关。行李箱里的原件留在本地，只有经过检查、遮住敏感信息的申报单才能进入团队系统；如果网络断了，申报单先进入可靠的待发队列。
+- **开场切入：** 同一个 Run 同时服务两种需求：桌面端要保留足够详细的证据，团队 Web 又只应该看到安全、可协作的摘要。
+- **核心认识：** “本地优先”不是“永不联网”，而是先明确哪份数据是本地权威，再通过脱敏和 durable outbox 有控制地同步副本。
+- **与读者的关系：** 你能要求 AI 把原始日志留在本机、把摘要同步给团队，并判断“页面没更新”究竟是存储、脱敏、排队还是远端接收的问题。
 
-## Code Snippets (pre-extracted)
+<a id="code-snippets-pre-extracted"></a>
+## 代码片段（预先摘录）
 
-File: `apps/desktop/electron/local-store-workflow.ts` (lines 58-67)
+文件：`apps/desktop/electron/local-store-workflow.ts`（摘录时第 58–67 行）
 ```ts
 function writeWorkflowRunEnvelope(db: Database, run: WorkflowRun): void {
   const envelope = workflowRunEnvelope(run)
@@ -22,7 +25,7 @@ function writeWorkflowRunEnvelope(db: Database, run: WorkflowRun): void {
   )
 ```
 
-File: `packages/shared/src/redaction.ts` (lines 135-140)
+文件：`packages/shared/src/redaction.ts`（摘录时第 135–140 行）
 ```ts
   for (const { label, pattern } of secretPatterns) {
     value = value.replace(pattern, () => {
@@ -32,7 +35,7 @@ File: `packages/shared/src/redaction.ts` (lines 135-140)
     })
 ```
 
-File: `packages/shared/src/remote-sync-outbox.ts` (lines 125-132)
+文件：`packages/shared/src/remote-sync-outbox.ts`（摘录时第 125–132 行）
 ```ts
   return {
     id: input.id,
@@ -44,29 +47,33 @@ File: `packages/shared/src/remote-sync-outbox.ts` (lines 125-132)
     nextAttemptAt: input.createdAt,
 ```
 
-## Interactive Elements
-- [x] **Code↔English translation:** Use the redaction loop; six code lines must visibly match the source exactly. Translate pattern match → count → canonical marker.
-- [x] **Quiz:** Three application questions: (1) raw test log contains a token—what may sync; (2) network drops after request is accepted—why the idempotency key matters; (3) local Run exists but Web is stale—what chain to inspect in order.
-- [ ] **Group chat animation**
-- [x] **Data flow animation:** Required course flow. Actors: Local SQLite → Redaction → Outbox → API → Team Postgres/Web. Steps: store private evidence locally; create redacted summary; enqueue idempotent operation; transmit; persist team-safe record; render team view. IDs must be globally unique: `flow-module3-local`, `flow-module3-redaction`, `flow-module3-outbox`, `flow-module3-api`, `flow-module3-team`; `data-steps` uses matching suffixes without `flow-`. Avoid apostrophes/single quotes inside labels.
-- [ ] **Drag-and-drop**
-- [x] **Other:** Layer toggle contrasting “本地原件” and “团队摘要.” Wire buttons exactly as `showLayer('module3-layer-local', this)` and `showLayer('module3-layer-team', this)`; layer IDs must match. Use cards for retryable/recovery/terminal failure classes.
+<a id="interactive-elements"></a>
+## 交互元素
+- [x] **代码与白话对照：** 使用脱敏循环，六行代码的可见内容必须与源码完全一致。解释模式匹配 → 计数 → 标准脱敏标记。
+- [x] **测验：** 三个应用题：（1）原始测试日志含令牌时，哪些内容可以同步；（2）请求已被接收后网络中断，幂等键为什么重要；（3）本地 Run 已存在但 Web 显示旧数据，应按什么顺序检查。
+- [ ] **群聊动画**
+- [x] **数据流动画：** 这是课程必需的数据流演示。角色为本地 SQLite → 脱敏 → Outbox → API → 团队 Postgres/Web。步骤依次为：本地保存私有证据、生成脱敏摘要、幂等操作入队、传输、保存团队可见记录、渲染团队视图。ID 必须全局唯一：`flow-module3-local`、`flow-module3-redaction`、`flow-module3-outbox`、`flow-module3-api`、`flow-module3-team`；`data-steps` 使用去掉 `flow-` 后的对应后缀。标签内避免使用英文撇号或单引号。
+- [ ] **拖放练习**
+- [x] **其他：** 用分层切换对比“本地原件”和“团队摘要”。按钮调用必须准确使用 `showLayer('module3-layer-local', this)` 与 `showLayer('module3-layer-team', this)`，分层 ID 必须对应。用卡片说明可重试、需恢复和终态三类失败。
 
-## Required Screens
-1. Customs metaphor with side-by-side local/private and team/redacted cards.
-2. Layer toggle: what fields/evidence stay local versus what crosses the boundary.
-3. Code↔English translation of exact redaction snippet, with aggressive tooltips.
-4. Step-by-step animated data flow from SQLite to the team Web.
-5. Durable outbox explanation using the exact idempotency snippet and three failure-disposition cards.
-6. End-of-module scenario quiz with three questions.
+<a id="required-screens"></a>
+## 必需页面
+1. 海关比喻，用并排卡片对比本地私有数据与团队脱敏数据。
+2. 分层切换：哪些字段和证据留在本地，哪些会跨越边界。
+3. 原样展示脱敏代码与白话对照，充分使用术语提示。
+4. 从 SQLite 到团队 Web 的分步数据流动画。
+5. 用原始幂等代码片段和三类失败处理卡片解释持久化待发队列。
+6. 模块结尾的三个情景测验。
 
-## Reference Files to Read
-- `references/interactive-elements.md` → Code ↔ English Translation Blocks; Multiple-Choice Quizzes; Message Flow / Data Flow Animation; Layer Toggle Demo; Pattern/Feature Cards; Glossary Tooltips.
-- `references/design-system.md` → Color Palette; Typography; Spacing & Layout; Animations & Transitions; Module Structure; Responsive Breakpoints.
-- `references/content-philosophy.md` → entire file.
-- `references/gotchas.md` → entire file.
+<a id="reference-files-to-read"></a>
+## 必读参考文件
+- `references/interactive-elements.md` → 代码与白话对照块（Code ↔ English Translation Blocks）、单选测验、消息流/数据流动画、分层切换演示、模式/功能卡片、术语提示。
+- `references/design-system.md` → 配色、字体、间距与布局、动画与过渡、模块结构、响应式断点。
+- `references/content-philosophy.md` → 全文。
+- `references/gotchas.md` → 全文。
 
-## Connections
-- **Previous module:** 桌面端的五位角色 — SQLite was introduced as the local archive and Main as its owner.
-- **Next module:** 给 Agent 装上护栏 — it asks what an agent may do inside that local authority boundary.
-- **Tone/style notes:** Chinese, smart-friend tone. Teal accent. Module 3 uses `var(--color-bg-warm)`. Tooltip first use of local-first, authoritative copy, SQLite, raw evidence, redaction, secret, durable outbox, API, Postgres, idempotency key, retryable, terminal. No styles/scripts; use only existing classes.
+<a id="connections"></a>
+## 模块衔接
+- **上一模块：** 桌面端的五位角色——将 SQLite 介绍为本地档案室，Main 是负责管理它的角色。
+- **下一模块：** 给 Agent 装上护栏——讨论 Agent 在本地权限边界内可以做什么。
+- **语气与样式：** 使用中文，像懂技术的朋友一样讲解，采用青绿色强调色。本模块使用 `var(--color-bg-warm)`。本地优先、权威副本、SQLite、原始证据、脱敏、秘密信息、持久化待发队列、API、Postgres、幂等键、可重试、终态首次出现时提供术语提示。不添加样式或脚本，只用已有 CSS 类。

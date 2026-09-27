@@ -1,3 +1,4 @@
+import { ConversationUsage } from './components/ConversationUsage'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
 import { ConversationBody } from './ConversationBody'
 import { NewConversationDialog } from './ConversationDialogs'
@@ -79,12 +80,31 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     setActive(restored)
     if (!projectId || !api?.workbenchConversation) return
     let disposed = false
-    const refresh = () => { if (!disposed) void runCommand({ type: 'list', projectId }) }
+    let refreshing = false
+    let pending = false
+    const refresh = async () => {
+      if (disposed) return
+      if (refreshing) { pending = true; return }
+      refreshing = true
+      do {
+        pending = false
+        await runCommand({ type: 'list', projectId })
+      } while (pending && !disposed)
+      refreshing = false
+    }
     refresh()
     const unsubscribe = api.onWorkbenchConversationUpdated?.((changedId) => { if (changedId === projectId) refresh() })
-    // Also recover an event missed while this view was hidden or the renderer was suspended.
-    const interval = window.setInterval(refresh, 4000)
-    return () => { disposed = true; generation.current++; unsubscribe?.(); window.clearInterval(interval) }
+    // Push events are primary. Recover missed events on focus/visibility and
+    // with a low-frequency fallback; a hidden conversation needs no list poll.
+    const recover = () => { if (document.visibilityState !== 'hidden') void refresh() }
+    const interval = window.setInterval(recover, 60_000)
+    window.addEventListener('focus', recover)
+    document.addEventListener('visibilitychange', recover)
+    return () => {
+      disposed = true; generation.current++; unsubscribe?.(); window.clearInterval(interval)
+      window.removeEventListener('focus', recover)
+      document.removeEventListener('visibilitychange', recover)
+    }
   }, [api, projectId, runCommand])
 
   const beginCreate = useCallback((prompt = '') => {
@@ -168,6 +188,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
           }}><X size={13} /></button>
         </div>)}
       </div>
+      {session && <ConversationUsage key={session.id} session={session} />}
       <button className="workspace-icon" aria-label="新建对话" title="新建独立对话，可以询问整个项目" disabled={!projectId || !api?.workbenchConversation || creating} onClick={() => beginCreate()}><Plus size={19} /></button>
       <button className="workspace-icon" aria-label="会话历史" title="会话历史" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}><History size={18} /></button>
     </div>
@@ -235,10 +256,7 @@ function ConversationView({ session, runs, providerId, providerName, command, on
     setSending(false)
     textarea.current?.focus()
   }
-  const unreportedCalls = session.messages.filter((message) => message.role === 'notice' && message.provider && !message.usage && message.reasoning?.status !== 'streaming').length
   const visibleMessages = session.messages.filter((message) => message.role !== 'notice' || message.reasoning || message.failure || !message.provider)
-  const usages = session.messages.flatMap((message) => message.usage ? [message.usage] : [])
-  const tokenCount = usages.reduce((sum, usage) => sum + (usage.totalTokens ?? (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)), 0)
   return <>
     <div className="conversation-messages" aria-label="当前会话消息" aria-busy={busy} onScroll={(event) => { const element = event.currentTarget; followLatest.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80 }}>
       {visibleMessages.length === 0 && <div className="conversation-welcome">
@@ -257,9 +275,9 @@ function ConversationView({ session, runs, providerId, providerName, command, on
       <div className="conversation-answer-target" hidden={!answerTo}>回答：{session.messages.find((message) => message.id === answerTo)?.question?.prompt}<button type="button" className="text-button" onClick={() => setAnswerTo(null)}>取消关联</button></div>
       <label className="sr-only" htmlFor={`compose-${session.id}`}>对话内容</label>
       <textarea ref={textarea} id={`compose-${session.id}`} aria-label="对话内容" value={input} maxLength={12000} onChange={(event) => updateInput(event.target.value)} placeholder="问进度、查代码、讨论需求或回答问题…" onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
-      <div className="conversation-composer-footer"><span title="仅展示 Provider 实际返回的 token；未提供时不估算费用">{providerName || '未配置模型'} · {usages.length ? `${tokenCount.toLocaleString()} tokens${unreportedCalls ? '（部分调用未返回用量）' : ''}` : unreportedCalls ? '模型未返回用量' : '暂无用量记录'}</span>
-        {busy ? <button type="button" className="ghost-button" aria-label="停止调查" onClick={() => void command({ type: 'cancel', ...scope })}><Square size={15} />停止</button> : <button className="primary-button" type="submit" aria-label="发送消息" disabled={!input.trim() || !providerId || sending || Boolean(modelReadinessError)}><ArrowUp size={18} /></button>}
-      </div><small>Enter 发送 · Shift+Enter 换行 · 调用模型可能产生费用</small>
+      <div className="conversation-composer-footer"><span title="本会话所选模型；调用可能产生费用，用量可在顶栏查看">{providerName || '未配置模型'}</span>
+        {busy ? <button type="button" className="ghost-button" aria-label="停止调查" onClick={() => void command({ type: 'cancel', ...scope })}><Square size={15} />停止</button> : <button className="primary-button" type="submit" aria-label="发送消息" title="Enter 发送 · Shift+Enter 换行" aria-description="Enter 发送；Shift+Enter 换行" disabled={!input.trim() || !providerId || sending || Boolean(modelReadinessError)}><ArrowUp size={18} /></button>}
+      </div>
     </form>
   </>
 }

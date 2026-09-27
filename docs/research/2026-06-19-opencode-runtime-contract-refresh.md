@@ -1,198 +1,109 @@
-# opencode Runtime Contract Refresh
+<a id="opencode-runtime-contract-refresh"></a>
 
-Date: 2026-06-19
+# OpenCode 运行时契约复核
 
-Related plan: `docs/plans/v0.9-real-runtime-observability.md`
+日期：2026-06-19。相关计划：docs/plans/v0.9-real-runtime-observability.md；相关 ADR：docs/adr/0009-managed-opencode-coding-adapter.md。以下“当前”均指相应历史观察日期，不是今天重新探测的结论。
 
-Related ADR: `docs/adr/0009-managed-opencode-coding-adapter.md`
+<a id="summary"></a>
 
-## Summary
+## 摘要
 
-This is the v0.9.1 contract refresh entry point. It verifies the current local opencode baseline and
-records the runtime contract that v0.9.2 should harden. It does not change runtime code and does not
-claim a fresh live-provider smoke.
+v0.9.1 验证当时本地 OpenCode 基线，并记录 v0.9.2 应加固的契约；不修改运行时代码，也不声称新一轮真实服务商冒烟已完成。
 
-Current local finding:
+本地 /opt/homebrew/bin/opencode 存在，版本为 1.17.5，与 v0.6 近期待签署记录一致。`corepack pnpm opencode:status` 是真实调用前安全检查本地版本、默认模拟、真实门禁和服务商配置的入口。
 
-- `opencode` binary is available at `/opt/homebrew/bin/opencode`.
-- `opencode --version` returns `1.17.5`.
-- This matches the v0.6 live signoff notes in
-  `docs/superpowers/plans/2026-06-17-near-term-opencode-signoff.md`.
-- `corepack pnpm opencode:status` is now the provider-safe way to re-check the local binary/version,
-  default fake-engine posture, live-smoke gate, and provider profile state before any live smoke.
+2026-06-20 复查：
 
-2026-06-20 re-check:
+- opencode:status 在 PR #3 head `ec878e5` 通过。
+- 本地二进制仍报告 `1.17.5`。
+- 默认禁用真实 OpenCode 冒烟，只有明确 DEVFLOW_RUN_OPENCODE_SMOKE=1 才开启。
+- 签署 shell 有意不配置服务商，避免 verify 意外调用服务商；除非要真实冒烟，这是预期状态。
 
-- `corepack pnpm opencode:status` passed on PR #3 head `ec878e5`.
-- The local binary still reports `1.17.5`.
-- The default verification posture remains fake-engine safe: live opencode smoke is disabled unless
-  `DEVFLOW_RUN_OPENCODE_SMOKE=1` is explicitly set.
-- The provider profile is intentionally not configured in the release-signoff shell. This is expected
-  unless running the live smoke and prevents accidental provider calls during `verify`.
+同日生命周期加固：进程边界公开 pid?: number，支持时使用 POSIX detached:true 启动服务以便进程组终止；SIGTERM 后回退 SIGKILL，无 PID/不支持平台使用 child.kill()。终态区分 cancelled、timed_out、interrupted。工作树状态为 active/deleted/cleanup_failed，发出脱敏 cleanup 事件，清理失败不覆盖业务终态。成功真实冒烟增加工作树清理断言，真实执行仍要求服务商配置。
 
-2026-06-20 lifecycle hardening update:
+<a id="existing-evidence"></a>
 
-- The process seam now exposes `pid?: number` and launches `opencode serve` with POSIX
-  `detached: true` when available, enabling process-group termination.
-- The process manager now terminates the process group with `SIGTERM` followed by `SIGKILL`
-  fallback, and falls back to direct `child.kill()` when no pid is available or on unsupported
-  platforms.
-- Coding Agent terminal states now distinguish user cancel (`cancelled`) from permission/runtime
-  timeout (`timed_out`) and unexpected interruption (`interrupted`).
-- Managed workspace cleanup now records `active`, `deleted`, or `cleanup_failed` state and emits
-  redacted `cleanup` events. Cleanup failure does not overwrite the Coding Agent Run's business
-  terminal state.
-- The env-gated opencode smoke still requires live provider configuration for real execution, but
-  its successful path now asserts managed worktree cleanup.
+## 已有证据
 
-## Existing Evidence
+v0.6 记录为 OpenCode 1.17.5、火山 Ark double/ark-code-latest。真实执行明确设置 DEVFLOW_RUN_OPENCODE_SMOKE=1、DEVFLOW_CODING_ENGINE=opencode-http、DEVFLOW_OPENCODE_PROVIDER_ID=double、DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest；通过 bash → edit → bash → bash 多步权限，生成 devflow-opencode-smoke.txt，密钥未写项目文件。
 
-The v0.6 near-term opencode signoff recorded:
+这是历史证据；v0.9 声称当时运行时可演示前仍须重新真实签署。
 
-- opencode `1.17.5`.
-- Volcengine Ark provider profile: provider ID `double`, model `ark-code-latest`.
-- Real smoke passed with `DEVFLOW_RUN_OPENCODE_SMOKE=1`,
-  `DEVFLOW_CODING_ENGINE=opencode-http`, `DEVFLOW_OPENCODE_PROVIDER_ID=double`, and
-  `DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest`.
-- The successful real smoke used multi-step permission relay: `bash -> edit -> bash -> bash`.
-- The smoke produced `devflow-opencode-smoke.txt`.
-- Provider key values were not written to project files.
+<a id="current-code-contract"></a>
 
-This evidence is useful but historical. v0.9 should re-run live signoff before claiming current
-runtime demonstrability.
+## 当时代码契约
 
-## Current Code Contract
+<a id="engine-selection"></a>
 
-### Engine Selection
+### 引擎选择
 
-Source: `apps/desktop/electron/coding-engine.ts`
+来源：apps/desktop/electron/coding-engine.ts。
 
-- Default engine: `fake`.
-- Real engine switch: `DEVFLOW_CODING_ENGINE=opencode-http`.
-- Real provider inputs:
-  - `DEVFLOW_OPENCODE_BIN`
-  - `DEVFLOW_OPENCODE_PROVIDER_ID`
-  - `DEVFLOW_OPENCODE_MODEL_ID`
-  - `DEVFLOW_OPENCODE_API_KEY_ENV`
-- If `DEVFLOW_OPENCODE_API_KEY_ENV` is absent, the default key env name is `OPENAI_API_KEY`.
+默认 fake，真实开关 DEVFLOW_CODING_ENGINE=opencode-http。真实输入包括 DEVFLOW_OPENCODE_BIN、DEVFLOW_OPENCODE_PROVIDER_ID、DEVFLOW_OPENCODE_MODEL_ID、DEVFLOW_OPENCODE_API_KEY_ENV；缺少最后一项时，默认密钥环境名为 OPENAI_API_KEY。
 
-The fake engine must remain the default `corepack pnpm verify` path.
+默认 `corepack pnpm verify` 必须保持模拟。仅设真实冒烟开关不够，还必须指定真实引擎，否则 test:opencode-smoke 在联系服务商前退出。
 
-The live smoke preflight now enforces the same boundary: setting `DEVFLOW_RUN_OPENCODE_SMOKE=1` is
-not enough by itself. The operator must also set `DEVFLOW_CODING_ENGINE=opencode-http`, otherwise
-`corepack pnpm test:opencode-smoke` exits before contacting a real provider. This prevents accidental
-live-provider runs while preserving fake-engine verification as the default.
-
-For a provider-safe contract status snapshot, run:
+安全检查命令：
 
 ```bash
 corepack pnpm opencode:status
 ```
 
-This does not contact opencode's provider/model API; it only checks local binary/version and whether
-the live-smoke environment is intentionally configured.
+不联系服务商/模型 API，只检查本地工具版本和是否有意配置真实环境。
 
-### HTTP Transport
+<a id="http-transport"></a>
 
-Source: `apps/desktop/electron/opencode-http-adapter.ts`
+### HTTP 传输
 
-The current selected transport is still `opencode serve` HTTP:
+来源：apps/desktop/electron/opencode-http-adapter.ts。仍选 opencode serve HTTP：
 
-- start server with `opencode serve --hostname <host> --port <port>`
-- create session with `POST /session`
-- send message with `POST /session/:id/message`
-- poll permissions with `GET /permission`
-- reply to permission with `POST /permission/:id/reply`
-- abort session with `POST /session/:id/abort`
-- fetch diff with `GET /session/:id/diff`
+- `opencode serve --hostname <host> --port <port>` 启动。
+- POST /session 创建会话。
+- POST /session/:id/message 发消息。
+- GET /permission 轮询权限。
+- POST /permission/:id/reply 回复。
+- POST /session/:id/abort 中止。
+- GET /session/:id/diff 读取差异。
 
-ACP remains deferred by ADR 0009 unless v0.9 live contract testing proves it is now the better fit.
+ACP 按 ADR 0009 延后，除非真实契约测试证明更适合。
 
-### Permission Relay
+<a id="permission-relay"></a>
 
-Current default permission rules ask before:
+### 权限转交
 
-- `edit`
-- `bash`
-- `write`
-- `patch`
+edit、bash、write、patch 默认先询问；另归一化收到的 install、external_directory。v0.9.2 必须验证真实 Agents 界面可见、可处理，不能只依赖单元测试。
 
-The engine normalizes additional opencode permission names when received:
+<a id="cancel-and-timeout"></a>
 
-- `install`
-- `external_directory`
+### 取消与超时
 
-v0.9.2 should prove these are visible and actionable in the Desktop Agents UI for a real run, not
-only in unit tests.
+已有 CodingEngineAdapter.cancel(input)、abortOpencodeSession(...) 及 opencode-process.ts 的托管关闭。v0.9.2 须证明运行中取消、等待权限或完成时超时、取消/超时/正常完成终态分离、全部终态清理工作树与服务。
 
-### Cancel And Timeout
+代码已有终态区分、进程组回退及工作树清理状态的确定性单测，但仍需真实配置复验运行时行为。
 
-Current code has cancellation surfaces:
+<a id="diff-and-evidence"></a>
 
-- `CodingEngineAdapter.cancel(input)`
-- `abortOpencodeSession(...)`
-- managed opencode process shutdown through `opencode-process.ts`
+### 差异与证据
 
-v0.9.2 must prove the full lifecycle:
+可读取 HTTP diff；OpenCode 返回空差异或变更后关闭消息流时，已有受管 Git 工作树 diff 回退。
 
-- cancel while a run is in progress
-- timeout while waiting for permission or runtime completion
-- terminal state is distinct for cancel vs timeout vs normal completion
-- managed worktree and opencode server are cleaned up in all terminal paths
+保持模拟引擎一致结构：脱敏差异、依赖准备、本地测试、编码事件、仅脱敏远程摘要。不得向团队 API 发送原始提示词、stdout/stderr、补丁、cwd、服务商秘密或仓库外路径。
 
-Current code now has deterministic unit coverage for cancel and timeout terminal-state separation,
-process-group termination fallback, and managed worktree cleanup status. Live smoke still needs to
-reconfirm these behaviors against a configured provider/runtime.
+<a id="provider-contract-to-reconfirm"></a>
 
-### Diff And Evidence
+## 待重新确认的服务商契约
 
-Current code can fetch opencode HTTP diff and has historical fallback behavior through managed
-worktree diff capture when opencode returns empty diff or closes the message stream after changes.
+预期演示服务商为火山 Ark，但协议族（OpenAI/Anthropic 兼容）、地址、服务商/模型 ID、密钥环境名、代理及全局认证文件要求必须验证。
 
-v0.9.2 should preserve the fake-engine evidence shape:
+目标边界：凭据仅在运行时注入托管进程，DevFlow 不写全局 OpenCode 认证，日志不打印密钥。
 
-- redacted diff artifact
-- bootstrap evidence
-- local test evidence
-- coding events
-- redacted remote summary only
+<a id="provider-profile-template-no-secrets"></a>
 
-No raw prompt, raw stdout/stderr, raw patch, cwd, provider secret, or repo-external path should be
-sent to the team API.
+### 服务商配置模板：不含秘密
 
-## Provider Contract To Reconfirm
+用于 v0.9 真实验证起点，记录已知火山 Ark 自定义配置结构而不提交密钥或全局认证。2026-06-20 本地 ~/.config/opencode/opencode.json 使用 double、ark-code-latest、https://ark.cn-beijing.volces.com/api/coding/v3、@ai-sdk/openai-compatible。
 
-The likely demo provider remains Volcengine Ark, but v0.9 must verify rather than assume:
-
-- protocol family: OpenAI-compatible or Anthropic-compatible
-- base URL
-- provider ID
-- model ID
-- API key env var name
-- proxy requirements
-- whether opencode stores or expects global auth files
-
-The desired DevFlow boundary remains:
-
-- credentials are injected at runtime into the managed process environment
-- no provider secret is written to global opencode auth from DevFlow
-- logs and smoke output must not print key values
-
-### Provider Profile Template (No Secrets)
-
-Use this as the starting point for the v0.9 live provider smoke. It records the shape of the known
-Volcengine Ark / custom provider profile without committing a key value or global opencode auth.
-
-2026-06-20 update: the working local opencode profile uses the OpenAI-compatible coding endpoint in
-`~/.config/opencode/opencode.json`:
-
-- provider ID: `double`
-- model ID: `ark-code-latest`
-- base URL: `https://ark.cn-beijing.volces.com/api/coding/v3`
-- provider package: `@ai-sdk/openai-compatible`
-
-The key value remains local-only and must not be copied into repository files. The live smoke
-preflight still requires an explicit environment variable so real-provider runs remain intentional.
+密钥只留本地；冒烟前置仍要求明确环境变量。以下英文占位符表示仅在 shell 设置、绝不提交，按原命令模板保留：
 
 ```bash
 DEVFLOW_RUN_OPENCODE_SMOKE=1 \
@@ -205,71 +116,34 @@ ARK_API_KEY="<set in shell only; never commit>" \
 corepack pnpm test:opencode-smoke
 ```
 
-Notes:
+- double、ark-code-latest 来自 v0.6 历史签署。
+- ARK_API_KEY 是环境名称，不是值；本地配置保存凭据，而环境变量仍是 DevFlow 明确启动的门禁。
+- 不得将服务商密钥写入项目、截图、冒烟输出、全局 OpenCode 认证、PR 或团队摘要。
+- 2026-06-20 使用上述开关和 ARK_API_KEY 配置通过 bash → edit → bash → bash；原输出 `opencode smoke passed; changed paths: devflow-opencode-smoke.txt` 表示冒烟通过。
+- 2026-06-20 的 v0.9.0 发布后真实冒烟改用从本地配置读取、未打印的 ANTHROPIC_AUTH_TOKEN 环境，仍为 double/ark-code-latest，约 1 分 38 秒，转交 bash → edit → bash，同样生成文件、运行样例测试、清理工作树。
 
-- `double` is the current custom provider ID from the historical v0.6 signoff.
-- `ark-code-latest` is the model ID used in the historical v0.6 signoff.
-- `ARK_API_KEY` is an environment variable name, not a value. The local opencode profile holds the
-  provider key; the env var is still required by DevFlow's smoke preflight as an explicit live-run
-  gate.
-- Do not write the provider key to project files, screenshots, smoke output, global opencode auth,
-  PR descriptions, or team summaries.
-- 2026-06-20: `DEVFLOW_RUN_OPENCODE_SMOKE=1 DEVFLOW_CODING_ENGINE=opencode-http
-  DEVFLOW_OPENCODE_PROVIDER_ID=double DEVFLOW_OPENCODE_MODEL_ID=ark-code-latest
-  DEVFLOW_OPENCODE_API_KEY_ENV=ARK_API_KEY corepack pnpm test:opencode-smoke` passed with
-  `bash -> edit -> bash -> bash` permission relay and
-  `opencode smoke passed; changed paths: devflow-opencode-smoke.txt`.
-- 2026-06-20 v0.9.0 post-release live smoke: re-ran the real provider path against the local
-  Volcengine Ark profile using provider `double`, model `ark-code-latest`, and key env
-  `ANTHROPIC_AUTH_TOKEN` sourced from the local opencode config without printing the key. The run
-  took about 1m38s, relayed `bash -> edit -> bash`, produced
-  `opencode smoke passed; changed paths: devflow-opencode-smoke.txt`, ran the fixture test evidence,
-  and completed managed worktree cleanup.
+<a id="2026-08-09-v14-release-update"></a>
 
-### 2026-08-09 V1.4 release update
+### 2026-08-09 V1.4 发布更新
 
-The historical Chat profile above remains a record of the earlier passing runs. The V1.4 release
-smoke now owns a candidate-bound profile using `@ai-sdk/openai` so OpenCode uses the Responses API,
-which is the current Volcengine recommendation for Coding Plan. It keeps the same provider ID,
-model ID, coding base URL, and environment-only key boundary; ambient OpenCode config cannot
-replace the candidate profile.
+上面的 Chat 配置保留为此前成功记录。V1.4 使用候选绑定配置 `@ai-sdk/openai`，使 OpenCode 使用 Responses API；这对应当时火山 Coding Plan 推荐，不是本次重新查询官方建议。同样服务商/模型/编码地址及仅环境凭据边界，外部配置不能覆盖候选配置。
 
-The V1.4 managed process disables the question channel, and the session denies unsupported
-`question` and child-session `task` permissions. The adapter reads only the target parent entry from
-`/session/status`, discards retry `message` and `action` fields, and stops with the static
-`provider_retry_observed` classification on the first observed retry. A 240-second per-segment
-permission-discovery deadline covers both permission and status requests, even when an injected
-fetch implementation ignores cancellation; it restarts after an approved permission and is not an
-end-to-end smoke deadline. These changes distinguish a provider retry from an ordinary permission
-timeout without retaining provider text, secrets, or paths.
+托管进程禁用 question，会话拒绝不支持的 question 和子会话 task；只读取 /session/status 精确父项，丢弃重试 message/action，首次重试即 provider_retry_observed 失败。每段 240 秒权限发现期限覆盖权限及状态请求，即使注入 fetch 忽略取消也生效；批准后重置，并非全流程总期限。这区分重试和普通超时，且不留服务商正文、秘密或路径。
 
-For the release-only live run, OpenCode receives a dummy credential and a random loopback base URL.
-A candidate-owned credential egress gate is the only component that attaches the actual provider
-token to a request and pins upstream traffic to the official Ark Responses endpoint. It enforces
-exactly three segments—bash-only with required tool choice, edit-only with required tool choice, then
-completion-only with tools removed—and allows each continuation only after the exact preceding
-permission is approved. It requires a successful `response.completed` SSE terminal event for every
-segment and proves that no uncredited request reached Ark before `automaticRetry: false` can be
-recorded.
+仅发布的真实执行向 OpenCode 传假凭据和随机回环地址，由候选的出站门禁独占真实令牌并固定到官方 Ark Responses。严格三段：仅 bash 且强制工具、仅 edit 且强制工具、仅完成并移除工具；只有精确上一权限批准才放行下一段。每段须有成功 response.completed SSE 终止事件，并证明无未获额度请求抵达 Ark，才能记录 automaticRetry=false。
 
-## v0.9.2 Go Criteria
+<a id="v092-go-criteria"></a>
 
-Proceed from contract refresh to runtime hardening only when these are true:
+## v0.9.2 开始条件
 
-- The target opencode version is recorded.
-- The selected transport is recorded and still compatible with ADR 0009, or ADR 0009 is amended.
-- Provider profile is documented without secrets.
-- Permission ask/reply, cancel, timeout/default rejection, diff capture, and cleanup are each marked
-  supported, unsupported, or deferred.
-- `corepack pnpm test:opencode-smoke` remains skipped by default and live only when explicitly
-  enabled with `DEVFLOW_RUN_OPENCODE_SMOKE=1`.
+只有目标版本已记录、传输与 ADR 0009 一致或已更新、配置无秘密、权限/取消/超时/默认拒绝/diff/清理各标支持/不支持/延后，且默认跳过真实冒烟并仅由 DEVFLOW_RUN_OPENCODE_SMOKE=1 开启时，才从契约复核进入加固。
 
-## Open Questions For Live Signoff
+<a id="open-questions-for-live-signoff"></a>
 
-- Does current `opencode serve` still expose the same HTTP session/permission/diff endpoints under
-  `1.17.5` in this environment?
-- Does Volcengine Ark require OpenAI-compatible or Anthropic-compatible mode for the most stable
-  coding run?
-- Can session abort reliably stop a live run while a permission request is pending?
-- Does timeout cleanup always kill `opencode serve` and remove the managed worktree?
-- Which subset of real trace events should be promoted to the Agents UI in v0.9.3?
+## 真实签署待确认问题
+
+- 当时环境的 1.17.5 是否仍提供相同会话/权限/diff HTTP 端点？
+- 火山 Ark 哪种兼容协议更稳定？
+- 权限待回答时 abort 是否可靠停止？
+- 超时清理是否总能终止服务并删除受管工作树？
+- 哪些真实轨迹事件应进入 v0.9.3 Agents 界面？

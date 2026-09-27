@@ -1,20 +1,29 @@
-# ADR 0002: Git Markdown Knowledge Source
+<a id="adr-0002-git-markdown-knowledge-source"></a>
 
-## Status
+# ADR 0002：以 Git Markdown 作为知识来源
 
-Accepted
+<a id="status"></a>
 
-## Context
+## 状态
 
-Team knowledge should stay reviewable, portable, and close to code.
+已接受（Accepted）。
 
-## Decision
+<a id="context"></a>
 
-Use Git-managed Markdown as the source of truth for the knowledge base. The app provides indexing,
-editing, graph visualization, and retrieval on top of those files.
+## 背景
 
-## Consequences
+团队知识应当易于审查、便于迁移，并与代码保持接近。
 
-- Knowledge changes can be reviewed like code.
-- Teams can keep knowledge beside project repositories.
-- The first knowledge graph remains lightweight and does not require Neo4j.
+<a id="decision"></a>
+
+## 决策
+
+以 Git 管理的 Markdown 作为知识库的权威来源。应用在这些文件之上提供索引、编辑、图谱可视化和检索能力。
+
+<a id="consequences"></a>
+
+## 影响
+
+- 知识变更可以像代码一样接受审查。
+- 团队可以将知识保存在项目仓库附近。
+- 初期知识图谱保持轻量，不依赖 Neo4j。

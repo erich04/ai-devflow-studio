@@ -1,123 +1,69 @@
-# Populated, full-window README screenshots — September 24, 2026
+<a id="populated-full-window-readme-screenshots--september-24-2026"></a>
 
-These are direct screenshots of the current application, with a populated Payments API demonstration.
-Every image preserves the complete application viewport and navigation. Some views scroll the
-existing reader or page to its relevant content. No image is an element crop, a composited mockup,
-or an AI-generated product design. Click the images for full resolution.
+# README 完整窗口截图与示例数据——2026-09-24
 
-The first four images were captured at [`98985a5`](https://github.com/erich04/ai-devflow-studio/commit/98985a50a19b1c9ae61f27b137bee58e0197444d).
-The eight additional stage/control-console images were captured at
-[`bea4384`](https://github.com/erich04/ai-devflow-studio/commit/bea4384ebe800f63d33d185f525a862ed7f6a062).
-Both checkouts have unchanged application code from [`9895c34`](https://github.com/erich04/ai-devflow-studio/commit/9895c34cc4512a24c2ed9947f57e3dd2b829f64b),
-the source used for the Desktop production build. The [manifest](manifest.json) records source
-commits, capture dimensions, hashes, and fixture scope.
+这些图片直接截取当时的应用界面，使用包含内容的 Payments API 演示项目。每张图片保留完整应用视口与导航；部分页面仅通过现有阅读区或页面滚动到相关内容。图片没有进行元素裁剪、拼接，也不是 AI 生成的产品设计图。点击可查看原始分辨率。
 
-| Image | Full viewport | What is visible |
+前四张图采集于提交 [`98985a5`](https://github.com/erich04/ai-devflow-studio/commit/98985a50a19b1c9ae61f27b137bee58e0197444d)。新增八张阶段/控制台截图采集于 [`bea4384`](https://github.com/erich04/ai-devflow-studio/commit/bea4384ebe800f63d33d185f525a862ed7f6a062)。两份检出中的应用代码均保持为 [`9895c34`](https://github.com/erich04/ai-devflow-studio/commit/9895c34cc4512a24c2ed9947f57e3dd2b829f64b)，桌面生产构建也使用该源码。[清单](manifest.json)记录了源码提交、采集尺寸、哈希与样例范围。
+
+| 图片 | 完整视口 | 展示内容 |
 | --- | --- | --- |
-| [Desktop workbench](desktop-workbench.png) | 1920 × 1280 | Four completed stages, PR delivery as the current step, three passing test-result cards, token/cost estimates, and a populated conversation with evidence links. |
-| [Workflow overview](desktop-workflow-overview.png) | 2560 × 1600 | All six stage columns, Task/Gate/Test/Delivery/Acceptance cards, completion colors, artifact/trace counts, test results, and the independent conversation pane. |
-| [Design Gate review](desktop-gate-review.png) | 1920 × 1280 | Another Run awaiting its design Gate, partial stage progress, readiness counts, policy/review checks, the explicit approval control, and a discussion of design risks. |
-| [Clarification](desktop-clarification.png) | 1920 × 1280 | Original request, expanded goals, acceptance criteria, non-goals, completed-stage navigation, and the saved delivery conversation. |
-| [Design](desktop-design.png) | 1920 × 1280 | Idempotency design with component responsibilities, database/cache tradeoffs, test plan, and release-order questions beside the review conversation. |
-| [Implementation](desktop-implementation.png) | 1920 × 1280 | Changed-file table and the actual sample repository's Git patch, with stage progress and test/delivery discussion. |
-| [PR preparation](desktop-pr-preparation.png) | 1920 × 1280 | An authored PR-material preview: changed files, actual sample-test results, and unchecked delivery prerequisites. No real PR was published. |
-| [Web team overview](web-team-overview.png) | 1920 × 1200 | Four team members, estimated project cost, several Runs in different stages, and the three redacted test summaries. |
-| [Web work requests](web-work-requests.png) | 1920 × 1080 | Three saved requests, a filled but unsent fourth request, project/Run selection, and Desktop pairing controls. |
-| [Web evidence and review](web-evidence-review.png) | 1920 × 1200 | Delivery metrics, all eight workflow nodes, 38% completion, review summary, and an unsent human decision comment. |
-| [Web budget governance](web-budget-governance.png) | 1920 × 1200 | Saved monthly limit and warning threshold, illustrative spend, two demo approvals, and a filled approval draft. |
-| [Web team policy](web-team-policy.png) | 1920 × 1600 | Saved policy v2, built-in Recommended rule actions, minimum requirements, repair guidance, and effective project policy. |
+| [桌面工作台](desktop-workbench.png) | 1920 × 1280 | 四个已完成阶段、当前 PR 交付步骤、三张通过的测试结果卡片、Token/费用估算，以及带证据链接的对话。 |
+| [流程概览](desktop-workflow-overview.png) | 2560 × 1600 | 六列阶段、任务/门禁/测试/交付/验收卡片、完成状态颜色、产物/轨迹数量、测试结果与独立会话栏。 |
+| [方案 Gate 审查](desktop-gate-review.png) | 1920 × 1280 | 另一条等待方案 Gate 的 Run，部分完成的阶段进度、就绪计数、策略/审查检查、明确批准控件与设计风险讨论。 |
+| [需求澄清](desktop-clarification.png) | 1920 × 1280 | 原始请求、展开的目标、验收标准、非目标、已完成阶段导航与已保存交付对话。 |
+| [方案设计](desktop-design.png) | 1920 × 1280 | 幂等性设计、组件职责、数据库/缓存取舍、测试计划、发布顺序问题与评审对话。 |
+| [开发实现](desktop-implementation.png) | 1920 × 1280 | 变更文件表和示例仓库的真实 Git 补丁，以及阶段进度和测试/交付讨论。 |
+| [PR 准备](desktop-pr-preparation.png) | 1920 × 1280 | 人工编写的 PR 材料预览：变更文件、实际示例测试结果和尚未满足的交付前置条件。没有发布真实 PR。 |
+| [Web 团队概览](web-team-overview.png) | 1920 × 1200 | 四名团队成员、项目费用估算、不同阶段的多条 Run 与三条脱敏测试摘要。 |
+| [Web 工作请求](web-work-requests.png) | 1920 × 1080 | 三条已保存请求、填写但尚未提交的第四条请求、项目/Run 选择器与桌面配对控件。 |
+| [Web 证据与评审](web-evidence-review.png) | 1920 × 1200 | 交付指标、八个流程节点、38% 完成度、评审摘要和未提交的人工决策意见。 |
+| [Web 预算治理](web-budget-governance.png) | 1920 × 1200 | 已保存的月额度和预警阈值、演示用量、两条演示批准与填写中的批准草稿。 |
+| [Web 团队策略](web-team-policy.png) | 1920 × 1600 | 已保存的策略 v2、内置 Recommended 规则动作、最低要求、修复指引与项目生效策略。 |
 
-All captures use the dark theme and preserve the complete application viewport. Content can be
-scrolled within the application's existing panes; the workflow overview scrolls the node reader to
-the evidence section. The Web review capture scrolls the page to the delivery metrics and evidence
-chain while retaining the full viewport and persistent navigation. The stage gallery expands the
-artifact's existing disclosure controls. The previous empty Desktop crops and sparse Web capture
-were replaced. There are now seven Electron and five Web screenshots.
+所有截图使用深色主题，保留完整应用视口。内容在应用已有面板内滚动；流程概览将节点阅读区滚到证据部分。Web 评审截图将页面滚到交付指标与证据链，同时保留完整视口和常驻导航。阶段图集通过现有展开控件打开产物。此前的空白桌面裁剪图和内容较少的 Web 截图已替换，目前共有七张 Electron 和五张 Web 截图。
 
-## Demonstration data
+<a id="demonstration-data"></a>
 
-The Desktop uses a disposable Git repository, separate SQLite database, and isolated data-profile
-registry. Its records were inserted through the production LocalStore API as explicit sample
-history, then read by the unmodified Electron application:
+## 演示数据
 
-- **Health API:** clarification, design, implementation, and testing are illustrated as complete;
-  the current step is preparing PR delivery. Three test-evidence records contain actual output
-  from 14 passing tests in the small sample repository.
-- **Payment idempotency:** the design is ready for review; the human Gate remains unapproved.
-- **Refund audit:** the Run is at implementation.
-- **Reconciliation export:** the Run is at design.
+桌面端使用一次性 Git 仓库、独立 SQLite 数据库和隔离的数据环境注册表。记录通过生产 LocalStore API 写入，明确作为示例历史，再由未经修改的 Electron 应用读取：
 
-The first batch has 15 artifacts; the stage gallery adds a PR-material preview for a total of 16.
-There are 3 review records, 7 stage-usage records, and 2 saved conversations. Workflow
-statuses, prior approvals, design/review prose, usage estimates, and assistant replies are authored
-fixtures for demonstrating existing UI. They are not evidence of live model execution, real
-spending, or completed production delivery. Conversation notices identify the example replies.
-The sample Health API tests do not establish production readiness; the conversation explicitly
-identifies the design's unimplemented timeout requirement. The implementation image includes the
-actual `git diff --cached` of those sample files. The PR preview remains authored demonstration
-content; it has no approved Delivery Intent and is not a publishable, commit-bound delivery package.
+- **Health API**：示例将澄清、设计、实现和测试标为完成，当前步骤为准备 PR 交付。三条测试证据记录包含小型示例仓库中 14 项通过测试的真实输出。
+- **支付幂等性**：设计已准备好评审，人工 Gate 尚未批准。
+- **退款审计**：Run 位于开发实现阶段。
+- **对账导出**：Run 位于方案设计阶段。
 
-The Desktop remains in local, unpaired mode, as shown in its header. Sample sync-outbox entries
-created while importing history were removed only from this disposable fixture database. There
-is no claim that this capture exercised Desktop pairing or end-to-end synchronization.
+首批有 15 份产物；阶段图集增加一份 PR 材料预览，总计 16 份。此外还有 3 条审查记录、7 条阶段用量记录和 2 个已保存会话。流程状态、过往批准、设计/审查文字、用量估算和助手回复均为展示现有界面而编写的样例，不能证明发生过真实模型执行、真实消费或生产交付。会话提示标明示例回复的性质。
 
-Web runs the current Next.js application against the API's explicit in-memory demo repository.
-For the first overview image, the four sample Run summaries, three test summaries, and three review
-summaries were uploaded through normal authenticated API endpoints using an isolated demo identity.
-For the additional Web images, a separate launcher adds complete eight-node Run graphs, artifact
-summaries, events, and illustrative usage to the in-memory seed arrays before starting the unchanged
-API server. Test and review summaries still use the normal sync endpoints. This demonstrates the
-Web renderer with populated history; it does not establish full-history Desktop sync coverage.
+Health API 的示例测试不能证明生产就绪；对话明确指出设计中尚未实现的超时要求。实现截图包含这些示例文件的实际 `git diff --cached`。PR 预览仍是人工编写的演示内容，没有已批准的 Delivery Intent，也不是绑定提交、可直接发布的交付包。
 
-Normal API endpoints create three Work Requests, a $200 monthly/$150 warning budget policy, and
-two bounded demo approvals ($10 and $5). The Web editor then saves its built-in Recommended policy
-as v2. These records exist only in the isolated demo API; no approval funds or invokes a real model.
-The fourth request, review comment, and $8 approval form are unsent drafts. The policy screenshot is
-later than the review screenshot, which still uses the default policy. Web also includes the original
-`run-health-001` example and its estimated usage. Displayed identities belong to the demo repository,
-not real GitHub OAuth logins. The current settings shell displays `NO RUN SELECTED`/`Waiting for sync`
-because settings does not load a selected Run; the budget and policy records shown are populated.
+桌面端保持本地、未配对模式，页头对此有明确显示。导入历史时产生的示例同步发件箱记录，仅从这份一次性样例数据库中移除。本次截图采集没有验证桌面配对或端到端同步。
 
-No existing user workspace/profile, paid-provider call, production record, or real GitHub delivery
-was used. No application source, DOM text, CSS, or screenshot pixels were changed for presentation.
-The Next.js development indicator was hidden using its own **Preferences → Hide** control.
+Web 使用当时的 Next.js 应用，连接 API 明确启用的内存演示仓库。第一张概览图中，四条示例 Run 摘要、三条测试摘要和三条审查摘要通过正常的已认证 API 端点上传，身份为隔离的演示用户。新增 Web 截图使用独立启动器，在启动未经修改的 API 服务前，将完整的八节点 Run 图、产物摘要、事件和演示用量写入内存种子数组。测试与审查摘要仍走正常同步端点。因此这些图片展示的是已有历史数据下的 Web 渲染效果，不能作为桌面完整历史同步的覆盖证据。
 
-## Capture procedure
+正常 API 端点创建了三条工作请求、每月 $200/预警 $150 的预算策略，以及两条限额演示批准（$10 与 $5）。随后 Web 编辑器将内置 Recommended 策略保存为 v2。这些记录只存在于隔离演示 API 中，没有通过批准给真实模型充值或调用模型。第四条请求、评审意见和 $8 的批准表单均为未提交草稿。策略截图晚于评审截图；后者仍使用默认策略。
 
-1. Install the pinned dependencies and build Desktop with
-   `corepack pnpm --filter @ai-devflow/desktop build`.
-2. Use a disposable committed Git repository and separate `DEVFLOW_USER_DATA_DIR` and
-   `DEVFLOW_DATA_PROFILE_REGISTRY_PATH` paths. Import the sample history described above into
-   that profile with `createLocalStore`; create valid workflow shapes with
-   `createWorkflowRunFromRequest`. Use the LocalStore artifact, review, usage, test-evidence,
-   and conversation methods. Do not use a personal profile for demonstration seeding.
-3. Run the three sample-project test commands and preserve their stdout, exit status, and
-   duration in `TestEvidence`. Keep invented history and actually executed checks distinct.
-4. Launch the built Electron app with demo/fake runtimes enabled. Use its real stage controls,
-   conversation Tabs, reader tabs, and scroll panes to select the illustrated views.
-5. Start an isolated API with `DEVFLOW_ENABLE_DEMO_DATA=true` and `DEV_AUTH_ENABLED=true`, with
-   database connection variables unset. Start Web with the same demo flag and that API URL.
-   For the first overview, upload allowlisted sample Run/test/review summaries. For the stage
-   gallery, initialize complete demonstration graphs in the process's fixture arrays before server
-   startup, then upload `/api/sync/test-evidence-summary` and `/api/sync/agent-review-summary`.
-   Preserve this distinction instead of treating seeded graphs as a sync test.
-6. Populate `/api/team/projects/p-payments/work-requests`, `/api/runtime/budget-policy`, and
-   `/api/runtime/budget-approvals` with the bounded examples above. Browse the workbench, team,
-   budget, and policy views. Save Recommended policy through its preview/confirm UI. Use the
-   product's theme selector and hide the development indicator through its own preferences.
-7. Attach Playwright CLI to Electron over CDP and use its Chromium session for Web. Set the
-   viewport dimensions above and capture the viewport without an element target or clipping.
-   Inspect every PNG before replacing the documentation assets.
+Web 还包含原有的 `run-health-001` 示例与其用量估算。展示的身份属于演示仓库，不是真实 GitHub OAuth 登录。设置界面显示 `NO RUN SELECTED`（未选择 Run）/`Waiting for sync`（等待同步），原因是设置页没有加载所选 Run；图中的预算和策略记录确实存在。
 
-## Verification scope
+本次未使用既有用户工作区/数据环境、付费模型调用、生产记录或真实 GitHub 交付。没有为展示修改应用源码、DOM 文字、CSS 或截图像素。Next.js 开发指示器通过其自带的 **Preferences → Hide** 控件隐藏。
 
-The Desktop production build and the previous README refresh's seven documentation/UI test files
-passed (52 tests). Four README/guide test files were rerun for this image refresh (33 tests passed). The screenshots
-were inspected at full-window dimensions; hashes and Markdown image links were checked separately.
-GitHub Markdown rendering was also checked: all 12 images and three disclosure galleries render.
-The 14 additional sample-project tests are demonstration evidence, not DevFlow's regression suite.
+<a id="capture-procedure"></a>
 
-The existing conversation Electron smoke script still has its previously recorded obsolete
-`节点详情` Tab assertion; this screenshot refresh does not report that script as passing. See
-[navigation validation](../../../validation/workflow-navigation-20260924.md) for the current split
-reader layout. These images are not a full release signoff or a live-provider acceptance run.
+## 采集步骤
+
+1. 安装锁定版本的依赖，使用 `corepack pnpm --filter @ai-devflow/desktop build` 构建桌面端。
+2. 使用一次性、已提交的 Git 仓库，以及独立的 `DEVFLOW_USER_DATA_DIR` 和 `DEVFLOW_DATA_PROFILE_REGISTRY_PATH` 路径。通过 `createLocalStore` 将上述示例历史导入该数据环境，用 `createWorkflowRunFromRequest` 创建合法流程结构，再调用 LocalStore 的产物、审查、用量、测试证据和会话方法。演示数据预置不能使用个人数据环境。
+3. 执行三个示例项目测试命令，将标准输出、退出状态和耗时保存在 `TestEvidence` 中。明确区分编写的历史记录与实际执行的检查。
+4. 启用演示/模拟运行时，启动已构建的 Electron。通过真实的阶段控件、会话页签、阅读页签和滚动面板选择要展示的视图。
+5. 使用 `DEVFLOW_ENABLE_DEMO_DATA=true` 和 `DEV_AUTH_ENABLED=true` 启动隔离 API，取消数据库连接变量。Web 使用相同演示标志与对应 API URL。第一张概览图上传白名单中的 Run/测试/审查示例摘要；阶段图集则在服务启动前初始化进程样例数组中的完整演示图，再上传 `/api/sync/test-evidence-summary` 与 `/api/sync/agent-review-summary`。保留这一差别，不把预置流程图称为同步测试。
+6. 使用上述限额示例填充 `/api/team/projects/p-payments/work-requests`、`/api/runtime/budget-policy` 和 `/api/runtime/budget-approvals`。浏览工作台、团队、预算及策略视图，通过预览/确认界面保存 Recommended 策略。使用产品主题选择器，并通过开发指示器自身的设置隐藏指示器。
+7. 通过 CDP 将 Playwright CLI 连接到 Electron，Web 则使用其 Chromium 会话。设置表中视口尺寸，截取完整视口，不指定元素或裁剪范围。替换文档资产前检查每张 PNG。
+
+<a id="verification-scope"></a>
+
+## 验证范围
+
+当时桌面生产构建通过；上一轮 README 更新的七份文档/界面测试文件通过，共 52 项测试。本次截图更新又运行了四份 README/指南测试文件，共 33 项通过。截图按完整窗口尺寸检查，哈希与 Markdown 图片链接另行核验。GitHub Markdown 渲染也已检查：12 张图片和三个折叠图集均可显示。另有 14 项示例项目测试，属于演示证据，不计入 DevFlow 回归测试。
+
+当时已有的会话 Electron 冒烟脚本仍包含此前记录的过时 `节点详情` 页签断言，因此本次截图更新没有宣称该脚本通过。分栏阅读布局见[导航验证记录](../../../validation/workflow-navigation-20260924.md)。这些图片不能作为完整发布验收或真实提供方验收的结论。

@@ -1,332 +1,258 @@
-# DevFlow Studio Self-Hosted Pilot Guide
+<a id="devflow-studio-self-hosted-pilot-guide"></a>
 
-This guide runs the v1.5 pilot stack: Web, API, and Postgres. It is intended for a small,
-self-hosted evaluation behind an operator-controlled network boundary, not public SaaS deployment.
+# DevFlow Studio 自托管试点指南
 
-Single-team onboarding remains the default. For the opt-in independent-organization mode,
-follow the [multi-organization upgrade guide](./multi-organization-deployment.md) as well;
-it covers migration 29, live membership checks and operator-assigned GitHub repositories.
+本指南说明 V1.5 试点栈的运行方式，包括 Web、API 和 Postgres，适用于由运维人员控制网络边界的小规模自托管评估。它不代表可直接对公众提供 SaaS 服务。
 
-## What This Stack Proves
+默认采用单团队入门流程。若显式启用独立组织模式，还应阅读[多组织升级指南](./multi-organization-deployment.md)，了解迁移 29、实时成员资格检查和由运维人员分配 GitHub 仓库的方式。
 
-- API and Web run as non-root users from production build output, without workspace source or
-  development launchers.
-- A one-shot migration must finish successfully before API startup; API readiness then verifies the
-  expected Postgres schema version.
-- Web can create a Desktop pairing code for a project and Desktop can exchange it for a scoped
-  Bearer token.
-- Web can create a versioned Work Request; the paired Desktop can claim it, materialize the one
-  canonical local Run, and upload only its redacted summary.
-- Web can submit a version- and policy-bound Gate Command. The claiming Desktop receives it through
-  the durable inbox/receipt protocol, re-evaluates local evidence, persists the outcome, and
-  acknowledges the exact receipt without giving Team direct mutation authority over the Run.
-- Web can show synced project/run state without raw stdout/stderr, cwd, prompt, patch body, or a
-  provider secret.
+<a id="what-this-stack-proves"></a>
 
-The development-tree walkthrough recorded on 2026-08-01 is available in
-[the V1.4 Computer Use result](./devflow-studio-v1.4-walkthrough-result-2026-08-01.md). It is
-implementation evidence, not a formal V1.4 release signoff.
+## 这套部署可以验证什么
 
-## Prerequisites
+- API 和 Web 使用生产构建产物，以非 root 用户运行；镜像中没有工作区源码或开发启动器。
+- 一次性迁移必须成功结束，API 才能启动；API 就绪检查还会核对 Postgres 模式版本。
+- Web 为项目创建桌面配对码，桌面端用它换取限定作用域的 Bearer 令牌。
+- Web 创建带版本的工作请求（Work Request）；已配对的桌面端领取请求，生成唯一的正式本地 Run，并仅上传脱敏摘要。
+- Web 提交绑定版本和策略的门禁命令（Gate Command）。领取请求的桌面端通过持久化收件箱与回执协议接收命令，重新评估本地证据、保存结果，再确认对应回执。团队端不能直接修改 Run。
+- Web 展示同步后的项目和 Run 状态，不包含原始标准输出/错误、工作目录、提示词、补丁正文或模型服务商密钥。
 
-- Docker with Compose v2.
-- Node.js/Corepack only when running repository smoke commands on the host.
-- A GitHub OAuth app whose callback URL exactly matches `GITHUB_OAUTH_REDIRECT_URI`.
+2026-08-01 的开发目录演练见 [V1.4 电脑控制验证记录](./devflow-studio-v1.4-walkthrough-result-2026-08-01.md)。这是实现验证证据，不是 V1.4 的正式发布验收。
 
-The candidate pins its Node and Postgres base images by multi-architecture manifest digest. Update
-those digests only as an explicit reviewed dependency change, then rerun both Docker smoke commands
-before promoting a new candidate.
+<a id="prerequisites"></a>
 
-## Configure
+## 前置条件
 
-Copy the example and fill every blank value before starting the stack:
+- Docker 和 Compose v2。
+- 仅当在宿主机执行仓库冒烟命令时，才需要 Node.js/Corepack。
+- 一个 GitHub OAuth App，其回调地址必须与 `GITHUB_OAUTH_REDIRECT_URI` 完全一致。
+
+候选版通过多架构清单摘要固定 Node 和 Postgres 基础镜像。更新摘要必须作为独立依赖变更评审；提升为新候选版前，重新运行两项 Docker 冒烟命令。
+
+<a id="configure"></a>
+
+## 配置
+
+复制示例，启动前填齐所有空值：
 
 ```bash
 cp .env.example .env
 ```
 
-Required values:
+必填值：
 
-- `POSTGRES_PASSWORD`: a URL-safe random password because Compose places it in the internal
-  Postgres connection URL.
-- `DEVFLOW_SESSION_SECRET`: an independent random value of at least 32 characters.
-- `DEVFLOW_AGENT_CREDENTIAL_KEY`: another independent random value of at least 32 characters. It
-  encrypts stored provider credentials and must be retained for the lifetime of that data.
-- `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_OAUTH_REDIRECT_URI`: the complete GitHub
-  OAuth bootstrap configuration. Pilot startup rejects missing, partial, or invalid values.
-- `DEVFLOW_WEB_APP_URL`: the browser-reachable Web console URL. After a successful GitHub callback,
-  the API redirects here instead of its own non-UI root path.
+- `POSTGRES_PASSWORD`：URL 安全的随机密码，因为 Compose 会将它写入内部 Postgres 连接 URL。
+- `DEVFLOW_SESSION_SECRET`：独立生成、至少 32 个字符的随机值。
+- `DEVFLOW_AGENT_CREDENTIAL_KEY`：另一个独立生成、至少 32 个字符的随机值，用于加密保存的模型服务商凭据；必须在这些数据的整个生命周期内保留。
+- `GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`、`GITHUB_OAUTH_REDIRECT_URI`：完整的 GitHub OAuth 初始配置。试点模式拒绝缺失、部分配置或无效值。
+- `DEVFLOW_WEB_APP_URL`：浏览器可访问的 Web 控制台 URL。GitHub 回调成功后，API 重定向到此处，而非没有界面的 API 根路径。
 
-`DEVFLOW_WEB_APP_URL` and `GITHUB_OAUTH_REDIRECT_URI` must use the same scheme and hostname; their
-ports may differ. This keeps the OAuth state/session cookies on one browser trust boundary. When
-that shared scheme is HTTPS, the API marks both cookies `Secure`, so terminate TLS consistently at
-the trusted reverse proxy and do not mix HTTP and HTTPS URLs.
+`DEVFLOW_WEB_APP_URL` 与 `GITHUB_OAUTH_REDIRECT_URI` 必须使用相同协议和主机名，端口可以不同。这样 OAuth 状态与会话 Cookie 处于同一浏览器信任边界。共用协议为 HTTPS 时，API 会为两类 Cookie 设置 `Secure`；应在可信反向代理上统一终止 TLS，不要混用 HTTP 与 HTTPS URL。
 
-For example, `openssl rand -hex 32` can generate each secret. Never reuse the displayed examples,
-put real values in source control, or rotate `DEVFLOW_AGENT_CREDENTIAL_KEY` without a credential
-re-encryption procedure.
+可分别使用 `openssl rand -hex 32` 生成各项密钥。不要复用示例值、将真实密钥提交到源码仓库，或在没有凭据重新加密流程的情况下轮换 `DEVFLOW_AGENT_CREDENTIAL_KEY`。
 
-Compose fixes the API to `DEVFLOW_DEPLOYMENT_PROFILE=pilot`, `DEVFLOW_REQUIRE_AUTH=true`,
-`DEV_AUTH_ENABLED=false`, and disables demo data and fake runtime. The API refuses to start if a
-pilot attempts to weaken those invariants; in particular, `DEV_AUTH_ENABLED=true` is rejected.
-Unsigned `x-devflow-*` identity headers remain available
-only for an explicitly enabled, loopback-bound, non-browser development API.
+Compose 将 API 固定为 `DEVFLOW_DEPLOYMENT_PROFILE=pilot`、`DEVFLOW_REQUIRE_AUTH=true`、`DEV_AUTH_ENABLED=false`，并禁用演示数据和模拟运行时。试点配置若削弱这些约束，API 会拒绝启动，尤其会拒绝 `DEV_AUTH_ENABLED=true`。
+未签名的 `x-devflow-*` 身份请求头仅可用于显式启用、绑定本机回环地址且不面向浏览器的开发 API。
 
-### Allowed API environment variables
+<a id="allowed-api-environment-variables"></a>
 
-The pilot API owns this explicit configuration surface:
+### 允许的 API 环境变量
 
-- Network: `HOST`, `PORT`.
-- Database: `DEVFLOW_DATABASE_URL` (or `DATABASE_URL`),
-  `DEVFLOW_DATABASE_APPLICATION_NAME`, and `DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS`.
-- Security: `DEVFLOW_DEPLOYMENT_PROFILE`, `DEVFLOW_REQUIRE_AUTH`, `DEV_AUTH_ENABLED`,
-  `DEVFLOW_SESSION_SECRET`, `DEVFLOW_AGENT_CREDENTIAL_KEY`, and `DEVFLOW_WEB_APP_URL`.
-- Runtime gates: `DEVFLOW_ENABLE_DEMO_DATA` and `DEVFLOW_ENABLE_FAKE_RUNTIME`; both must be `false`
-  in pilot.
-- Login: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_OAUTH_REDIRECT_URI`.
-- GitHub Delivery: `DEVFLOW_GITHUB_APP_ID` and
-  `DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64`. Both may remain blank when GitHub Delivery is disabled;
-  partial configuration is rejected.
+试点 API 明确支持以下配置项：
 
-Unknown `DEVFLOW_*` or `DEV_AUTH_*` names are rejected in pilot so misspelled safety settings do
-not silently pass. Compose passes only the variables above. The Web runtime allowlist is
-`DEVFLOW_INTERNAL_API_BASE_URL`, `DEVFLOW_PUBLIC_API_BASE_URL`, `DEVFLOW_WEB_APP_URL`, `HOSTNAME`,
-and `PORT`.
+- 网络：`HOST`、`PORT`。
+- 数据库：`DEVFLOW_DATABASE_URL`（或 `DATABASE_URL`）、`DEVFLOW_DATABASE_APPLICATION_NAME`、`DEVFLOW_DATABASE_STATEMENT_TIMEOUT_MS`。
+- 安全：`DEVFLOW_DEPLOYMENT_PROFILE`、`DEVFLOW_REQUIRE_AUTH`、`DEV_AUTH_ENABLED`、`DEVFLOW_SESSION_SECRET`、`DEVFLOW_AGENT_CREDENTIAL_KEY`、`DEVFLOW_WEB_APP_URL`。
+- 运行时开关：`DEVFLOW_ENABLE_DEMO_DATA`、`DEVFLOW_ENABLE_FAKE_RUNTIME`；试点中二者必须为 `false`。
+- 登录：`GITHUB_CLIENT_ID`、`GITHUB_CLIENT_SECRET`、`GITHUB_OAUTH_REDIRECT_URI`。
+- GitHub 交付：`DEVFLOW_GITHUB_APP_ID`、`DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64`。禁用 GitHub 交付时二者可同时留空；只配置其中一项会被拒绝。
 
-## Configure GitHub Delivery
+试点模式拒绝未知的 `DEVFLOW_*` 或 `DEV_AUTH_*` 变量名，避免安全配置拼写错误却被静默忽略。Compose 只传入上述变量。Web 运行时允许的变量为 `DEVFLOW_INTERNAL_API_BASE_URL`、`DEVFLOW_PUBLIC_API_BASE_URL`、`DEVFLOW_WEB_APP_URL`、`HOSTNAME` 和 `PORT`。
 
-GitHub Delivery uses a separate GitHub App. The OAuth App above remains identity-only with
-`read:user user:email`; do not widen it, persist its access token, or substitute a personal access
-token. Create one GitHub App for the self-hosted installation, configure it for selected repositories
-only, and grant only these repository permissions:
+<a id="configure-github-delivery"></a>
 
-- Metadata: read (GitHub grants this baseline permission to installed Apps).
-- Contents: write, so Desktop can publish one approved commit to one `devflow/` branch.
-- Pull requests: write, so the API can create one Draft pull request after verifying the branch.
+## 配置 GitHub 交付
 
-No webhook is required for the V1.5 polling flow. Install the App only on repositories that may be
-bound to a DevFlow Project. Keep the App private key in the API operator boundary, encode the PEM as
-base64 without line wrapping, and set:
+GitHub 交付使用独立的 GitHub App。上面的 OAuth App 仅用于身份验证，权限保持 `read:user user:email`；不要扩大权限、持久化其访问令牌或用个人访问令牌替代。
+每个自托管安装配置一个 GitHub App，仅允许选定仓库，并仅授予以下仓库权限：
+
+- 元数据读取（`Metadata: read`）：GitHub 为安装的 App 授予的基础权限。
+- 内容写入（`Contents: write`）：桌面端可以向一个 `devflow/` 分支发布一个已批准的提交。
+- 拉取请求写入（`Pull requests: write`）：API 核验分支后，可以创建一个草稿 PR。
+
+V1.5 的轮询流程不需要 webhook。只在可绑定到 DevFlow 项目的仓库中安装 App。私钥应留在 API 运维边界内；将 PEM 编码为不换行的 base64 后配置：
 
 ```dotenv
 DEVFLOW_GITHUB_APP_ID=<numeric-app-id>
 DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64=<base64-encoded-private-key-pem>
 ```
 
-Never paste the private key or an installation access token into Web, Desktop, a database, a log,
-or source control. The API mints a repository-scoped installation access token for at most one
-hour. Its `Contents: write` copy exists only in Desktop main memory while one publication attempt is
-active. Draft lookup and creation use an API-held token narrowed to exactly
-`Contents: read + Pull requests: write`, so GitHub can read the approved base and head refs while PR
-authority stays inside the API process.
+不要将私钥或安装访问令牌粘贴到 Web、桌面端、数据库、日志或源码仓库。API 为指定仓库签发最长一小时的安装访问令牌。在单次发布尝试期间，带 `Contents: write` 权限的副本仅存在于桌面主进程内存中。
+草稿查询和创建使用由 API 持有、精确限制为 `Contents: read + Pull requests: write` 的令牌：GitHub 可以读取已批准的基础与目标引用，PR 写入权限始终留在 API 进程中。
 
-After the stack is ready:
+服务就绪后：
 
-1. Sign in with the existing GitHub OAuth identity, select the intended Team Project, and open
-   **GitHub Delivery**.
-2. Enter the numeric installation id and repository id, review the exact Project, check the
-   confirmation box, and configure the binding. The API resolves the canonical `owner/repository`
-   and default branch from GitHub; Web cannot supply those authority facts.
-3. In Desktop, create the redacted PR Delivery Package, then prepare GitHub Delivery. Desktop makes
-   or verifies one managed-worktree commit, reruns the configured Test command against that exact
-   commit, and submits a request in `approval_required`.
-4. In Web, review the exact repository, base/head branches, commit, Run/evidence versions, and PR
-   title. A live lead or owner must check the distinct confirmation and approve. Desktop bearer
-   authority cannot approve its own request.
-5. Leave Desktop running. Its scheduler obtains the short-lived token, publishes only the approved
-   SHA without force, and reports the result. The API independently verifies the remote head before
-   creating one Draft pull request. Only durable Draft evidence advances the Run to Acceptance.
-6. To disable publication, use the version-bound **Revoke repository binding** action. Revocation
-   blocks a new credential grant; it does not delete a branch, close a pull request, or rewrite
-   GitHub history.
+1. 使用现有 GitHub OAuth 身份登录，选择目标团队项目，打开 **GitHub Delivery**（GitHub 交付）。
+2. 输入数字安装 ID 和仓库 ID，核对具体项目，勾选确认框后设置绑定。API 从 GitHub 解析正式的 `owner/repository` 和默认分支，Web 不能提供这些授权依据。
+3. 在桌面端创建脱敏的 PR 交付包，再准备 GitHub 交付。桌面端在托管工作树内创建或核验一个提交，对该确切提交重新执行配置的测试命令，然后提交 `approval_required` 请求。
+4. 在 Web 核对具体仓库、基础/目标分支、提交、Run/证据版本及 PR 标题。当前有效的 lead 或 owner 必须勾选独立确认框后批准；桌面 Bearer 令牌不能批准自己的请求。
+5. 保持桌面端运行。调度器获取短期令牌，仅发布已批准的 SHA，不强制推送，并上报结果。API 独立核验远端目标提交后才创建一个草稿 PR；只有持久化的草稿证据可以将 Run 推进到业务验收。
+6. 停用发布时，使用绑定版本的 **Revoke repository binding**（撤销仓库绑定）操作。撤销会阻止新的凭据授权，不会删除分支、关闭 PR 或改写 GitHub 历史。
 
-### GitHub Delivery recovery
+<a id="github-delivery-recovery"></a>
 
-| Durable state | Meaning | Safe operator action |
+### GitHub 交付恢复
+
+| 持久化状态 | 含义 | 运维处理方式 |
 | --- | --- | --- |
-| `approval_required` | No remote write is authorized. | Review the exact request in Web and approve or reject it. |
-| `publishing_branch` | A bounded credential/push attempt is active or its result is ambiguous. | Let Desktop reconcile the exact remote SHA. If Desktop shows an explicit recovery action, use it once; do not push manually or force the branch. |
-| `branch_published` | GitHub contains the approved commit and the API verified it. | Keep Desktop/API available so Draft creation can continue. |
-| `creating_pr` | Draft creation or lookup is active or ambiguous. | Resume once; DevFlow first searches for the exact head/base/commit marker and never creates a blind duplicate. |
-| `recovery_required` | A typed conflict, timeout, revoked binding, or ambiguous external result needs attention. | Read the redacted outcome, restore provider/binding authority or resolve the named remote conflict, then use the explicit Desktop resume action. |
-| `content_scan_blocked` | A high-confidence credential match was found in the exact outbound Git objects or the PR title and body. | This intent must not Resume or override the block. Create a new Work Request/Run and use a clean Coding Agent workspace to rebuild and retest the change. |
-| `completed` | The exact branch and Draft pull request are durable evidence. | Continue Acceptance. The managed worktree can be cleaned only through the normal terminal cleanup path. |
+| `approval_required` | 尚未授权远端写入。 | 在 Web 核对确切请求，再批准或拒绝。 |
+| `publishing_branch` | 有限范围的凭据/推送尝试正在执行，或结果不确定。 | 让桌面端核对确切的远端 SHA。界面若出现明确的恢复操作，可执行一次；不要手动推送或强制改写分支。 |
+| `branch_published` | GitHub 已包含批准的提交，API 也已核验。 | 保持桌面端与 API 可用，让草稿创建继续。 |
+| `creating_pr` | 草稿创建或查询正在执行，或结果不确定。 | 恢复一次；DevFlow 会先查找确切的目标/基础/提交标记，不盲目创建重复 PR。 |
+| `recovery_required` | 已分类的冲突、超时、绑定撤销或外部结果不确定，需要处理。 | 阅读脱敏结果，恢复服务商/绑定授权，或解决指出的远端冲突，再使用桌面端明确的恢复操作。 |
+| `content_scan_blocked` | 确切的出站 Git 对象或 PR 标题和正文中发现高置信度凭据匹配。 | 此交付意图不得恢复（Resume）或覆盖阻断。创建新的 Work Request/Run，并使用干净的 Coding Agent 工作空间重新构建和测试变更。 |
+| `completed` | 确切分支与草稿 PR 已形成持久化证据。 | 继续业务验收。托管工作树只能通过正常的终态清理路径清除。 |
 
-These are two separate outbound boundaries. Electron main writes a non-secret safe receipt for the
-exact outbound Git objects before any GitHub credential is requested. The API scans the PR title and
-body before PR-write provider authority. A Git content block occurs before push.
-A PR-text block may occur after the verified branch publication. In either case
-`content_scan_blocked` permits no further remote write for that intent, and the clean rebuild path
-above is the only supported continuation.
+这里有两道独立的出站边界。在请求任何 GitHub 凭据前，Electron 主进程为确切的出站 Git 对象写入不含密钥的安全回执。API 在获取 PR 写入权限前扫描 PR 标题和正文。
+Git 内容阻断发生在推送之前；PR 文本阻断可能发生在分支已发布并核验之后。无论哪种情况，`content_scan_blocked` 都不允许该意图继续远端写入，只能走上述干净重建路径。
 
-DevFlow will never force-push, delete a remote branch, or publish a tag; it will never merge or
-auto-merge, close a pull request, or silently widen GitHub App permissions. If a remote `devflow/`
-branch contains a different SHA, treat it as a conflict: inspect it in GitHub, preserve the evidence,
-and prepare a new
-version-bound Delivery Intent after resolving the source state. Do not repair a delivery by editing
-SQLite/Postgres rows or replaying raw REST/git commands.
+DevFlow 绝不强制推送、删除远端分支或发布标签，也绝不合并、自动合并、关闭 PR，或静默扩大 GitHub App 权限。远端 `devflow/` 分支如果含有不同 SHA，应按冲突处理：在 GitHub 检查并保留证据，解决源状态后再准备新的、绑定版本的交付意图。
+不要通过编辑 SQLite/Postgres 行或重放原始 REST/git 命令修复交付。
 
-## Run The Stack
+<a id="run-the-stack"></a>
+
+## 启动服务
 
 ```bash
 docker compose up --build
 ```
 
-The migration container runs `node migrate.js` once. Only after it exits successfully does the API
-run `node server.js`; only after API readiness succeeds does the standalone Web server run
-`node apps/web/server.js`. Neither runtime image contains `tsx`, application source, or workspace
-development dependencies.
+迁移容器运行一次 `node migrate.js`。只有它成功退出后，API 才运行 `node server.js`；API 就绪后，独立 Web 服务才运行 `node apps/web/server.js`。运行时镜像均不包含 `tsx`、应用源码或工作区开发依赖。
 
-Open:
+访问地址：
 
-- Web: <http://127.0.0.1:4311>
-- API liveness: <http://127.0.0.1:4310/health>
-- API readiness: <http://127.0.0.1:4310/ready>
-- Web liveness: <http://127.0.0.1:4311/health>
-- Web readiness: <http://127.0.0.1:4311/ready>
+- Web：<http://127.0.0.1:4311>
+- API 存活检查：<http://127.0.0.1:4310/health>
+- API 就绪检查：<http://127.0.0.1:4310/ready>
+- Web 存活检查：<http://127.0.0.1:4311/health>
+- Web 就绪检查：<http://127.0.0.1:4311/ready>
 
-`/health` proves the process can answer. `/ready` proves the API can use the current database schema;
-Web readiness also depends on API readiness. Compose uses readiness for startup ordering.
+`/health` 表明进程能响应请求；`/ready` 表明 API 能使用当前数据库模式。Web 就绪也依赖 API 就绪，Compose 据此控制启动顺序。
 
-The Web service uses `DEVFLOW_INTERNAL_API_BASE_URL=http://api:4310` for server-side calls and
-`DEVFLOW_PUBLIC_API_BASE_URL` for browser-facing OAuth links. Set the latter to the URL users can
-actually reach when the pilot is behind a reverse proxy. The Web service also receives
-`DEVFLOW_WEB_APP_URL` and uses its canonical origin for browser mutation checks; it must match the
-scheme, hostname, and port that users see. The internal standalone listener address such as
-`http://0.0.0.0:4311` is never a browser trust origin.
+Web 用 `DEVFLOW_INTERNAL_API_BASE_URL=http://api:4310` 发起服务端请求，用 `DEVFLOW_PUBLIC_API_BASE_URL` 生成浏览器访问的 OAuth 链接。试点部署在反向代理后方时，后者必须设置为用户实际可访问的 URL。
+Web 还接收 `DEVFLOW_WEB_APP_URL`，使用其规范化源地址检查浏览器写操作；协议、主机名和端口必须与用户所见一致。`http://0.0.0.0:4311` 等内部监听地址绝不是浏览器的信任源。
 
-Demo seed data is never loaded during normal pilot startup. For an isolated demonstration only,
-invoke the explicit one-shot utility after the stack is ready:
+正常试点启动绝不加载演示种子数据。仅在隔离演示中，待服务就绪后显式运行一次性工具：
 
 ```bash
 docker compose run --rm seed
 ```
 
-Do not run that utility against a real team database.
+不要对真实团队数据库运行此工具。
 
-## Build And Verify The Desktop Pilot Bundle
+<a id="build-and-verify-the-desktop-pilot-bundle"></a>
 
-Build the current-host Desktop application, deterministic archive, and manifest from repository
-build output:
+## 构建并验证桌面试点包
+
+从仓库构建产物生成当前宿主平台的桌面应用、可重复生成的归档和清单：
 
 ```bash
 corepack pnpm build:desktop-pilot
 ```
 
-The command writes `out/desktop-pilot/artifact-index.json`, a current-platform app directory, a
-`.tar.gz` archive, and a `.manifest.json` file. The manifest records the packaged files and archive
-SHA-256 without embedding the source checkout path. Verify that the exact packaged executable
-starts with isolated user data, loads its built renderer over `file://`, and ignores an injected
-development-server URL:
+命令生成 `out/desktop-pilot/artifact-index.json`、当前平台的应用目录、`.tar.gz` 归档及 `.manifest.json` 清单。清单记录包内文件和归档 SHA-256，不嵌入源仓库绝对路径。
+使用以下命令验证确切的包内可执行文件：它应使用隔离用户数据启动，通过 `file://` 加载构建后的渲染器，并忽略注入的开发服务器 URL。
 
 ```bash
 corepack pnpm test:desktop-pilot-smoke
 ```
 
-This bundle is deliberately narrow:
+试点包的范围有限：
 
-- it is built only for the current host platform and architecture;
-- it is unsigned and unnotarized, and the archive is not an installer;
-- it contains the built renderer, Electron main/preload output, and the required `sql.js` runtime,
-  not workspace source or a development launcher;
-- the smoke proves launch isolation and built-renderer loading, not code signing, auto-update,
-  Windows UI behavior from a macOS host, or suitability for public distribution.
+- 只为当前宿主平台与架构构建。
+- 未签名、未公证，归档也不是安装器。
+- 包含构建后的渲染器、Electron 主进程/预加载产物和必需的 `sql.js` 运行时，不含工作区源码或开发启动器。
+- 冒烟仅证明启动隔离与构建后界面加载，不证明代码签名、自动更新、从 macOS 验证 Windows 界面，或适合公开分发。
 
-Release and milestone status are maintained in the Roadmap. The packaged artifact manifest and
-filenames must match the source version used to build them, but a version label alone is never
-release evidence.
+发布与里程碑状态由[路线图](../roadmap.md)统一维护。打包清单和文件名必须与构建所用源码版本匹配；版本标签本身不能作为发布证据。
 
-## Complete Pairing, Work Request, And Gate Walkthrough
+<a id="complete-pairing-work-request-and-gate-walkthrough"></a>
 
-1. Sign in to the Web Team Console with GitHub OAuth and select the intended Team Project.
-2. In the Projects panel, click `Create desktop pairing code`. Copy the generated code and treat it
-   as a short-lived secret.
-3. Open the Electron Desktop app, select the Local Project, paste the code into `Desktop pairing
-   code`, click `绑定`, and then click `同步团队`.
-4. In Web, create a Work Request for that same Team Project with a bounded title and request body.
-5. In Desktop, open the paired Local Project, refresh `Work Requests`, and click `创建本地 Run` for
-   the request. Desktop atomically claims the expected Work Request version, binds a deterministic
-   local Run ID, creates the canonical local Run, and acknowledges materialization. Team does not
-   fabricate a Run before this succeeds.
-6. Advance the local Run through clarification to its Gate. Click `同步团队` when prompted so
-   Desktop holds the current project-scoped Team policy snapshot and Team receives the current
-   redacted Run projection.
-7. Refresh Web, open the projected Run, choose `approve` or `reject`, enter the required reason, and
-   submit the Gate Command. Web submits collaboration intent; it never patches the local Run.
-8. Leave the claiming Desktop running. Its scheduler polls the project-scoped command inbox,
-   acquires a bounded receipt, verifies project/claim/Run/node/version/policy/blocker scope, and
-   re-evaluates the complete local evidence. Approval uses the shared transition; rejection records
-   a human decision and keeps the Run paused at the Gate.
-9. Confirm in Web that the command reaches a terminal lifecycle after Desktop acknowledges the
-   exact receipt. A later `同步团队` publishes any new redacted Run version; the acknowledgement
-   itself never mutates the Team Run Projection.
+## 完成配对、工作请求与门禁演练
 
-After pairing, Desktop sync uses an authenticated Bearer token instead of demo headers. If token
-auth fails, the client must reconnect instead of silently falling back to demo mode. A
-`stale_run`, `stale_policy`, blocker mismatch, or expired command is a safe terminal rejection: no
-local transition is assumed, and the Web user must refresh before creating a new command.
+1. 用 GitHub OAuth 登录 Web 团队控制台，选择目标团队项目。
+2. 在项目面板点击 `Create desktop pairing code`（创建桌面配对码）。复制配对码，并将其作为短期密钥保护。
+3. 打开 Electron 桌面应用，选择本地项目，将配对码粘贴到 `Desktop pairing code`，点击 `绑定`，再点击 `同步团队`。
+4. 在 Web 为同一团队项目创建工作请求，标题和正文应范围明确。
+5. 在桌面端打开已配对的本地项目，刷新 `Work Requests`，点击对应请求的 `创建本地 Run`。桌面端原子领取预期版本、绑定确定的本地 Run ID、创建唯一正式 Run，并确认已生成。成功前，团队端不伪造 Run。
+6. 将本地 Run 从需求澄清推进到门禁。按提示点击 `同步团队`，使桌面端获得当前项目作用域的团队策略快照，团队端收到最新脱敏 Run 投影。
+7. 刷新 Web，打开投影 Run，选择 `approve`（批准）或 `reject`（拒绝），填写必需原因并提交门禁命令。Web 只提交协作意图，不直接修改本地 Run。
+8. 保持领取请求的桌面端运行。调度器轮询项目作用域的命令收件箱、领取有期限的回执，核验项目/领取方/Run/节点/版本/策略/阻断项的作用域，并重新评估完整本地证据。批准使用共享状态迁移；拒绝记录人工决定，并让 Run 继续暂停在门禁。
+9. 桌面端确认确切回执后，在 Web 核对命令进入终态。后续 `同步团队` 才发布新的脱敏 Run 版本；确认回执本身不修改团队 Run 投影。
 
-## Smoke Test
+配对后，桌面同步使用经过认证的 Bearer 令牌，不再使用演示请求头。令牌认证失败时必须重新连接，不可静默回退到演示模式。
+`stale_run`、`stale_policy`、阻断项不匹配或命令过期，都会安全地终止并拒绝操作：不能假定本地状态已迁移，Web 用户必须刷新后创建新命令。
 
-Run the explicit Docker smoke from the repository:
+<a id="smoke-test"></a>
+
+## 冒烟测试
+
+在仓库中显式运行 Docker 冒烟：
 
 ```bash
 corepack pnpm test:docker-smoke
 ```
 
-The smoke starts an isolated Compose project on temporary host ports. Its harness runs the explicit
-seed utility, uses a signed authenticated session Cookie to create a pairing code, exchanges that
-code for a Desktop Bearer token, executes the Work Request and Gate Command flow, verifies Web/API
-visibility, and then removes its isolated stack and volume. It does not enable unsigned identity
-headers. `test:docker-smoke` is outside `corepack pnpm verify` because it requires Docker, though CI
-runs it in the dedicated Docker smoke step.
+测试使用临时宿主端口启动隔离的 Compose 项目。测试驱动显式运行种子数据工具，用已签名认证会话 Cookie 创建配对码，换取桌面 Bearer 令牌，执行工作请求与门禁命令流程，核验 Web/API 可见性，最后删除隔离服务与卷。它不启用未签名身份请求头。
+`test:docker-smoke` 需要 Docker，因此不包含在 `corepack pnpm verify` 中；CI 在独立 Docker 冒烟步骤运行它。
 
-### V1.5 lifecycle and rollback matrix
+<a id="v15-lifecycle-and-rollback-matrix"></a>
 
-Run the explicit lifecycle proof before forming a release candidate:
+### V1.5 生命周期与回滚矩阵
+
+形成发布候选版前，显式运行生命周期验证：
 
 ```bash
 corepack pnpm test:docker-lifecycle-smoke
 ```
 
-This command is no-cost and remains outside the default `verify` command. It builds the exact
-annotated `v1.4.0` source, pins its resolved commit, and exercises these isolated databases and
-containers:
+该命令不产生模型费用，也不包含在默认 `verify` 中。它构建附注标签 `v1.4.0` 指向的确切源码，固定解析后的提交，在隔离数据库和容器中验证：
 
-| Scenario | Automated proof | Supported operator action |
+| 场景 | 自动化证据 | 支持的运维操作 |
 | --- | --- | --- |
-| Fresh V1.5 deploy | The production migration bundle creates Team schema v15 from an empty database, including provider-authoritative expiry, bounded provider retry, and verified publication adoption contracts, and the current API reaches readiness. | Start the one-shot migrator before API/Web. |
-| Retained-data upgrade | The exact V1.4 migrator creates populated schema v10. Seeded Run data survives a Postgres container restart and the V1.5 migration to schema v15, then remains visible through an authenticated current-API read. | Back up Postgres, stop writers, run the V1.5 migrator once, then start V1.5 API/Web. |
-| Transactional v11-to-v12 retry | A populated v11 GitHub Delivery row with an incompatible series key makes v12 fail. The transaction leaves schema v11, migration history, columns, and the exact row unchanged. After the key is remediated, retry reaches v12, preserves every prior field, and adds only the documented series/attempt backfill. | Keep the failed database offline, fix the reported incompatible row, and rerun the same V1.5 migrator. Do not partially apply migration SQL by hand. |
-| Provider-expiry v12-to-v13 | A legacy issued credential reaches v13 with contract version `0` and NULL raw provider expiry/observation. The constraint rejects a fabricated `credential_provider_expiry_confirmed` outcome; only new version-`1` evidence with the required provider observation can clear it. | Treat the legacy grant as unresolved and fail closed; do not backfill provider time from local clocks or edit expiry fields by hand. |
-| Provider retry v13-to-v14 | Draft PR recovery gains nullable `provider_retry_not_before`; only bounded `recovery_required` rows may retain it. | Resume reconciles the exact marker first and must not create before the boundary. |
-| Verified publication adoption v14-to-v15 | A legacy grant-backed publication gains NULL `source_publication_id` without changing prior fields; the exact-one-authority constraint rejects publications with neither or both sources. | A later approved same-series attempt may adopt only an exact verified predecessor after terminal Draft failure; it must not mint or push again. |
-| API application rollback | The exact V1.4 API fails readiness closed against Team schema v15. The smoke restores the captured pre-upgrade schema v10 backup into a separate database, then proves an authenticated V1.4 overview read with the retained Run. | Do not point V1.4 at Team schema v15; operators must not run the V1.4 migrator against it. To roll back, stop V1.5 writers, restore the pre-upgrade backup as schema v10, and only then start the V1.4 API. |
-| Desktop application rollback | V1.5 Desktop schema v17 contains migrations unknown to V1.4 schema v12. | There is no in-place Desktop database downgrade. Before upgrading, back up the Desktop user-data directory; to return to V1.4, restore the pre-upgrade backup or use a separate V1.4 user-data directory. |
+| 全新 V1.5 部署 | 生产迁移包从空数据库创建团队模式 v15，包括以服务商为准的过期时间、有限重试及已核验发布复用契约；当前 API 达到就绪。 | 先运行一次性迁移，再启动 API/Web。 |
+| 保留数据升级 | 确切的 V1.4 迁移器生成有数据的模式 v10。种子 Run 在 Postgres 容器重启及 V1.5 迁移到模式 v15 后仍保留，并可通过当前 API 的认证读取查看。 | 备份 Postgres、停止写入方、运行一次 V1.5 迁移器，再启动 V1.5 API/Web。 |
+| v11 到 v12 的事务重试 | v11 GitHub 交付行中不兼容的系列键导致 v12 迁移失败。事务保持模式 v11、迁移历史、列和原始行不变。修正键后重试到 v12，保留原字段，仅新增文档规定的系列/尝试回填。 | 失败数据库保持离线，修正报告的不兼容行，重跑同一 V1.5 迁移器；不要手动执行部分迁移 SQL。 |
+| v12 到 v13 的服务商过期证据 | 旧版已签发凭据迁移后，契约版本为 `0`，原始服务商过期时间/观测值为 NULL。约束拒绝伪造的 `credential_provider_expiry_confirmed` 结果；只有带所需服务商观测的新版 `1` 证据才能解除。 | 将旧授权视为未解决并拒绝继续；不要用本地时钟回填服务商时间或手动改过期字段。 |
+| v13 到 v14 的服务商重试 | 草稿 PR 恢复新增可为空的 `provider_retry_not_before`；只有符合范围约束的 `recovery_required` 行可以保存它。 | 恢复时先核对确切标记，不得在指定时间之前再次创建。 |
+| v14 到 v15 的已核验发布复用 | 旧授权支持的发布新增 NULL `source_publication_id`，原字段不变；“有且仅有一个授权来源”约束拒绝零来源或双来源的发布。 | 草稿最终失败后，后续同系列已批准尝试只可复用完全匹配且已核验的前次发布；不得再签发凭据或推送。 |
+| API 应用回滚 | 确切的 V1.4 API 面对团队模式 v15 时拒绝就绪。测试将升级前模式 v10 备份恢复到独立数据库，证明 V1.4 能经认证读取保留 Run 的概览。 | 不要让 V1.4 连接团队模式 v15，也不得对其运行 V1.4 迁移器。回滚时先停止 V1.5 写入方，恢复升级前备份为模式 v10，再启动 V1.4 API。 |
+| 桌面应用回滚 | V1.5 桌面模式 v17 含有 V1.4 模式 v12 不认识的迁移。 | 不支持原地降级桌面数据库。升级前备份桌面用户数据目录；回到 V1.4 时恢复升级前备份，或使用独立的 V1.4 用户数据目录。 |
 
-The API rollback check is deliberately bounded: it proves that a V1.4 binary rejects the newer Team
-schema and can read an explicitly restored V1.4 backup. It does not claim that old binaries own V1.5
-writes, can consume Team schema v15, or can reverse migrations. Database rollback always requires the
-operator to restore the pre-upgrade Postgres backup; Desktop rollback likewise requires its separate
-pre-upgrade user-data backup.
+API 回滚验证只证明 V1.4 程序拒绝较新团队模式，并可读取明确恢复的 V1.4 备份。它不声称旧程序可以处理 V1.5 写入、读取团队模式 v15 或逆向迁移。
+数据库回滚始终要求运维人员恢复升级前 Postgres 备份；桌面回滚同样要求其独立的升级前用户数据备份。
 
-## Stop And Reset
+<a id="stop-and-reset"></a>
+
+## 停止与重置
 
 ```bash
 docker compose down
 docker compose down -v
 ```
 
-Use `down -v` only when you intentionally want to delete the pilot Postgres volume.
+只有确定要删除试点 Postgres 卷时，才使用 `down -v`。
 
-## Current Boundaries
+<a id="current-boundaries"></a>
 
-- No automatic HTTPS; terminate TLS at a trusted reverse proxy.
-- The Desktop pilot artifact is current-host, unsigned, unnotarized, and has no installer or
-  auto-update channel.
-- No Kubernetes deployment.
-- No provider-key rotation or Desktop token revoke UI.
-- No multi-Desktop concurrency guarantee beyond the documented Gate Command lease contract.
-- No public SaaS onboarding.
-- The 2026-08-01 implementation walkthrough used no paid provider call and does not constitute
-  formal V1.4 signoff.
+## 本指南版本的能力边界
+
+以下对应本指南的 V1.5 试点范围；当前发布状态以路线图为准：
+
+- 不自动配置 HTTPS；在可信反向代理处终止 TLS。
+- 桌面试点包仅适用于当前宿主平台，未签名、未公证，没有安装器或自动更新通道。
+- 不提供 Kubernetes 部署。
+- 不提供模型服务商密钥轮换或桌面令牌撤销界面。
+- 除文档规定的门禁命令租约契约外，不保证多桌面并发。
+- 不提供公开 SaaS 入门流程。
+- 2026-08-01 的实现演练没有付费模型调用，不能作为 V1.4 正式验收。

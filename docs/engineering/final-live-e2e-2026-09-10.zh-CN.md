@@ -1,5 +1,9 @@
 # 2026-09-10—11 真实 Provider 全流程验证（已完成）
 
+> 历史验证记录：以下状态、测试数量、布局和交付结论对应文中日期及提交，不表示后续候选版本已经通过相同验证。当前节点工作区与本轮验证进度请参阅[2026-09-26 验证记录](../validation/open-issues-workbench-20260926.md)。
+
+术语：工作流实例（Run）、团队项目（Team Project）、本地项目（Local Project）、工作请求（Work Request）、门禁（Gate）、节点详情（Inspector）、执行轨迹（Trace）、服务商（Provider）、配对（pairing）、草稿拉取请求（Draft PR）。代码标识、原始测试名称、命令和历史证据保留原文。
+
 本轮从新版 Studio 新建 Project 和一句话 Work Request 开始。Web/API/Postgres 是本机 Docker QA 控制面，真实外部服务为 GitHub 和模型 Provider；不把本机 QA 称为公网生产部署。交付目标为 Draft PR 与业务验收，不包含自动合并或部署生产站点。
 
 ## 最终结果

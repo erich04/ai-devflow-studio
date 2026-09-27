@@ -1,114 +1,115 @@
-# Workflow Node Semantics
+<a id="workflow-node-semantics"></a>
 
-This document defines how DevFlow Studio should describe Workflow Nodes and their related resources
-in product language and UI. It is the source of truth for Board card summaries and Inspector
-information architecture.
+# 工作流节点语义
 
-## Core Principle
+本文定义 DevFlow Studio 如何在产品语言和界面中描述工作流节点及其关联资源，是看板卡片摘要与节点检查器信息组织的依据。下文保留原设计的节点差异；2026-09-26 的候选实现将这些差异组织在“概览 / 内容与审查 / 产物与证据 / 执行记录”四个一级页签内部，完整交付验收仍在进行。
 
-A Workflow Node is the main flow object. Artifact, Evidence, Trace, and Decision are related
-resources attached to a Run or Node; they are not separate Board nodes.
+<a id="core-principle"></a>
 
-Storage and contracts can stay uniform, but UI language should change by Node type:
+## 核心原则
 
-- Data layer: keep durable resources linked by `runId` and `nodeId`.
-- Board layer: show a compact, type-aware summary for the Node.
-- Inspector layer: expand the details, actions, blockers, and evidence chain for the selected Node.
+工作流节点是主流程对象。产物、证据、执行轨迹和决策是关联到 Run 或节点的资源，不是独立的看板节点。
 
-## Related Resource Terms
+存储和契约可以统一，但界面语言应随节点类型变化：
 
-| Term | Product Meaning | Typical Examples |
-|---|---|---|
-| Artifact | A durable work product or report produced by work on a Run or Node. | Raw Request, Clarification Brief, Design Brief, Coding Diff, PR Draft, Acceptance Bundle, Gate Report |
-| Evidence | Durable proof used to support a Gate or delivery decision. | Passing test evidence, Knowledge-Grounded Gate Review result, policy check, budget approval, redacted team summary |
-| Trace | Time-ordered execution or audit history explaining how something happened. | Agent events, tool calls, permission relay, runtime steps, cleanup events |
-| Decision | A formal outcome that changes whether the Run may continue. | Gate approved, Gate blocked, override accepted, override rejected, budget approved |
+- 数据层：通过 `runId`、`nodeId` 关联持久化资源。
+- 看板层：展示紧凑且符合节点类型的摘要。
+- 检查器层：展开所选节点的详情、动作、阻断项和证据链。
 
-Evidence can reference Artifacts, Trace, and Decisions. A Gate Decision may also have a durable
-Artifact form, such as a Gate Report. In the UI, prefer the business name `结论`, `审批`, `阻断`,
-`Override`, or `Gate Report` instead of the generic label `产物` when the user is looking at a Gate.
+<a id="related-resource-terms"></a>
 
-## Board Summary Rules
+## 关联资源术语
 
-Board summaries should translate technical resources into the language of the selected Node type.
-Do not force every Node card to show the same `产物 / 证据 / 轨迹` set.
+| 术语 | 产品含义 | 典型示例 |
+| --- | --- | --- |
+| 产物（Artifact） | Run 或节点工作形成的持久化成果或报告。 | 原始请求、需求澄清简述、设计简述、编码差异、PR 草稿、验收资料包、门禁报告 |
+| 证据（Evidence） | 支持 Gate 或交付决定的持久化证明。 | 通过的测试证据、知识门禁审查结果、策略检查、预算审批、脱敏团队摘要 |
+| 执行轨迹（Trace） | 按时间排序、解释事情如何发生的执行或审计历史。 | Agent 事件、工具调用、权限请求传递、运行时步骤、清理事件 |
+| 决策（Decision） | 改变 Run 是否可以继续的正式结果。 | Gate 批准或阻断、例外审批接受或拒绝、预算批准 |
 
-| Node Product Type | Current Domain Shape | Main User Question | Preferred Card Summary |
-|---|---|---|---|
-| Clarification Task | `kind=agent`, `stage=clarify` | What did the clarification step produce? | `产物` / `轨迹` / `Gate影响` |
-| Design Review | `kind=agent`, `stage=design` when used as review | What did review find and cite? | `Review` / `引用` / `证据` |
-| Gate | `kind=gate` | Can the Run continue, and why or why not? | `条件` / `证据` / `结论` |
-| Runtime Build | `kind=task` or build-stage runtime task | What changed and how was it executed? | `Diff` / `测试` / `轨迹` |
-| Test | `kind=test` | What test result is available? | `测试结果` / `证据` / `轨迹` |
-| PR Delivery | `kind=pr` | Did one approved expected commit become one verified Draft pull request? | `Delivery Request` / `Draft` / `证据` |
-| Acceptance | `kind=acceptance` | Is the verified delivery accepted by the business flow? | `验收包` / `GitHub Delivery` / `结论` |
+证据可以引用产物、轨迹和决策。Gate 决策也可以有持久化产物形式，例如门禁报告。用户查看 Gate 时，优先使用“结论”“审批”“阻断”“例外审批”“门禁报告”等业务名称，避免笼统地标为“产物”。
 
-When a preferred summary item has no data and is not central to the Node type, the card may hide or
-de-emphasize it. When the item is central, show the empty state clearly.
+<a id="board-summary-rules"></a>
 
-Examples:
+## 看板摘要规则
 
-- A Gate with no required review should still show a `条件` state.
-- A Test node with no test evidence should show missing `测试结果` or `证据`.
-- A Runtime Build node can show `Diff 0` if no implementation artifact exists yet.
-- A Clarification Task does not need to emphasize `证据 0` unless a Gate requires it.
+看板摘要应根据节点类型，将技术资源转为产品语言。不要强迫所有节点卡片展示同一组“产物 / 证据 / 轨迹”。
 
-## Gate Semantics
+| 节点产品类型 | 当前领域形态 | 用户主要问题 | 建议卡片摘要 |
+| --- | --- | --- | --- |
+| 需求澄清任务 | `kind=agent`, `stage=clarify` | 澄清步骤产出了什么？ | 产物 / 轨迹 / Gate 影响 |
+| 设计审查 | 作为审查使用时的 `kind=agent`, `stage=design` | 审查发现和引用了什么？ | 审查 / 引用 / 证据 |
+| Gate | `kind=gate` | Run 能否继续，为什么？ | 条件 / 证据 / 结论 |
+| 运行时开发 | `kind=task` 或开发阶段运行时任务 | 改了什么，如何执行？ | 差异 / 测试 / 轨迹 |
+| 测试 | `kind=test` | 有什么测试结果？ | 测试结果 / 证据 / 轨迹 |
+| PR 交付 | `kind=pr` | 经批准的预期提交是否形成了一个已核实的草稿 PR？ | 交付请求 / 草稿 / 证据 |
+| 业务验收 | `kind=acceptance` | 已核实交付是否获得业务流程认可？ | 验收包 / GitHub 交付 / 结论 |
 
-Gate nodes are decision points, not execution tasks. A Gate can still produce an Artifact, but the
-important product object is the decision conclusion.
+上表的“设计审查”保留早期语义示例；当前方案生成节点应作为产出设计的任务展示，不能把门禁审查能力误作方案设计节点类型。
 
-Gate cards should answer:
+建议摘要项无数据且非该节点核心内容时，可以隐藏或弱化；若是核心内容，应明确显示空状态。
 
-1. What conditions are required?
-2. Which evidence supports or blocks approval?
-3. What is the current conclusion?
-4. Is there an override, and who is allowed to use it?
+例如：
 
-Recommended Gate summary labels:
+- 无需审查的 Gate 仍应展示条件状态。
+- 没有测试证据的测试节点应显示缺失测试结果或证据。
+- 尚无实现产物的开发节点可以显示“差异 0”。
+- Gate 未要求时，需求澄清任务不必突出“证据 0”。
 
-- `条件 3/4`
-- `证据 2`
-- `结论 blocked`
-- `审批 approved`
-- `Override pending`
+<a id="gate-semantics"></a>
 
-Avoid a Gate card that only says `产物 1 / 证据 2 / 轨迹 3`; that hides the most important meaning of
-the Gate. If a Gate Report exists, show it as `结论` or `Gate Report`, not as a generic work artifact.
+## Gate 语义
 
-## Inspector Rules
+Gate 是决策点，不是执行任务。Gate 仍可产生产物，但关键产品对象是决策结论。
 
-Inspector tabs should follow Node semantics rather than a single universal layout.
+Gate 卡片应回答：
 
-| Node Product Type | Recommended Inspector Focus |
-|---|---|
-| Task | Status, produced Artifacts, Trace, Gate impact |
-| Gate | Status, Gate conditions, Evidence, Decision, Remediation |
-| Review | Status, Gate Review, References, Evidence, Trace |
-| Runtime Build | Status, Coding Agent state, Diff, Test Evidence, Trace |
-| Test | Status, test command, Test Evidence, failure details, rerun action |
-| PR Delivery | Status, PR Delivery Package, Delivery Intent/Request, approval, recovery action, verified remote head, Draft pull request |
-| Acceptance | Status, Acceptance Bundle, GitHub Delivery completion, Evidence, final Decision |
+1. 需要满足哪些条件？
+2. 哪些证据支持或阻止审批？
+3. 当前结论是什么？
+4. 是否存在例外审批，谁有权使用？
 
-The Board should stay compact. Detailed blockers, policy rules, raw trace, and remediation actions
-belong in Inspector.
+建议摘要标签：
 
-The PR Delivery Inspector must keep Revise, Resume, Retry, and Stop distinct: Revise creates a new
-pre-publication intent revision and invalidates approval; Resume continues the same
-`recovery_required` attempt; Retry creates a new attempt only after the predecessor is proven
-terminal; Stop parks the exact active attempt. The GitHub App binding and signed Web approval are
-authority inputs, while the verified remote head and Draft pull request are completion evidence.
-GitHub Delivery must never merge, force-push, delete a branch, publish a tag, or let Acceptance
-mutate the pull request.
+- 条件 3/4
+- 证据 2
+- 结论：阻断
+- 审批：已批准
+- 例外审批：待处理
 
-## Implementation Boundary
+避免 Gate 卡片仅显示“产物 1 / 证据 2 / 轨迹 3”，这样会隐藏 Gate 的核心含义。已有门禁报告应以“结论”或“门禁报告”展示，而非普通工作产物。
 
-This is a product and UI semantics document. It does not require changing `WorkflowNode` itself.
+<a id="inspector-rules"></a>
 
-Preferred implementation direction:
+## 节点检查器规则
 
-- Keep `WorkflowNode` as a simple flow unit.
-- Keep related resources in separate collections or tables linked by `runId` and `nodeId`.
-- Add renderer view-model logic that maps Node type and related resources into card summaries.
-- Keep shared contracts, IPC payloads, and persistence schemas stable unless a product requirement
-cannot be expressed with the existing links.
+检查器应根据节点语义安排内容。统一一级导航可以保持稳定，各页内部的重点随节点变化。
+
+| 节点产品类型 | 建议重点 |
+| --- | --- |
+| 任务 | 状态、已产生产物、轨迹、Gate 影响 |
+| Gate | 状态、审批条件、证据、决策、处理建议 |
+| 审查 | 状态、门禁审查、引用、证据、轨迹 |
+| 运行时开发 | 状态、编码 Agent 状态、差异、测试证据、轨迹 |
+| 测试 | 状态、测试命令、测试证据、失败详情、重跑动作 |
+| PR 交付 | 状态、PR 交付包、交付意图/请求、审批、恢复动作、已核实远端提交、草稿 PR |
+| 业务验收 | 状态、验收资料包、GitHub 交付完成记录、证据、最终决策 |
+
+看板保持紧凑。详细阻断项、策略规则、原始轨迹和处理动作属于检查器。
+
+PR 交付检查器必须区分修订（Revise）、继续（Resume）、重试（Retry）和停止（Stop）：修订创建新的发布前意图版本并使旧审批失效；继续执行同一个 `recovery_required` 尝试；重试仅在前次尝试已确认处于终态后创建新尝试；停止停放指定的活动尝试。GitHub App 绑定与签名 Web 审批属于权限输入；已核实远端提交和草稿 PR 属于完成证据。
+
+GitHub 交付（GitHub Delivery）不会合并、强制推送、删除分支或发布标签，也不允许业务验收（Acceptance）修改草稿 PR（Draft）。
+
+<a id="implementation-boundary"></a>
+
+## 实现边界
+
+本文是产品与界面语义说明，不要求修改 `WorkflowNode` 本身。
+
+建议实现方向：
+
+- 保持 `WorkflowNode` 为简单的流程单元。
+- 关联资源保存在独立集合或表中，通过 `runId`、`nodeId` 关联。
+- 添加渲染进程视图模型，将节点类型和关联资源映射为卡片摘要。
+- 保持共享契约、IPC 载荷和持久化结构稳定，除非现有关联方式无法表达产品需求。

@@ -1,196 +1,185 @@
-# AI DevFlow Studio Keynote Decisions
+<a id="ai-devflow-studio-keynote-decisions"></a>
 
-This document records the presentation and product-language decisions confirmed for the AI DevFlow
-Studio keynote deck. It should guide future PPT, OpenDesign, and product-narrative work.
+# AI DevFlow Studio 发布会演示决策
 
-## Core Narrative
+本文记录已确认的 AI DevFlow Studio 演示文稿与产品表达决策，为后续 PPT、OpenDesign 和产品叙事提供依据。它保留当时的版本与原型边界；当前发布状态见路线图，当前工作区布局以 #171、#174、#177 的最新设计为准。
 
-AI DevFlow Studio is an exploration of moving AI-assisted software delivery from black-box Skill or
-CI calls into an observable, traceable, governable team delivery flow.
+<a id="core-narrative"></a>
 
-Use this concise keynote framing:
+## 核心叙事
 
-> Let AI development move from black-box invocation to evidence-driven team delivery.
+AI DevFlow Studio 探索将 AI 辅助软件交付从黑盒 Skill/CI 调用，转变为可观察、可追溯、可治理的团队交付流程。
 
-In Chinese presentation material:
+演示的简洁表达为：
 
 > 让 AI 研发从黑盒调用，走向证据驱动的团队交付。
 
-The deck should not claim the demo is a complete commercial platform. It should show that the demo
-validates a practical path.
+原英文演示用语为 “Let AI development move from black-box invocation to evidence-driven team delivery.”，保留用于双语材料对照。
 
-## Audience
+演示不应声称这是完整商业平台，而应展示 Demo 验证了一条可实践的路径。
 
-Target technical leads, architects, BA leads, QA leads, and engineering-process stakeholders who
-care about AI delivery governance. Do not optimize the deck for a pure frontend audience or a
-generic management audience.
+<a id="audience"></a>
 
-## Key Terms
+## 受众
 
-- **Team Knowledge Foundation / 团队知识底座**: the shared knowledge layer used by Runs, Agents, and Gates.
-- **Knowledge Repository / 知识仓库**: a Git-managed knowledge repository that links to multiple code repositories.
-- **Code Repository / 代码仓库**: an implementation repository linked from the knowledge repository.
-- **Repository-Derived Knowledge**: system or business knowledge summarized from linked code repositories.
-- **Candidate Knowledge**: extracted knowledge that has not passed review.
-- **Confirmed Knowledge**: reviewed knowledge that can be used as authoritative Gate evidence.
-- **System Knowledge**: technical structure, boundaries, services, interfaces, data models, dependencies, and constraints.
-- **Business Knowledge**: business terms, rules, user flows, assumptions, and relationships between business concepts.
-- **PR Delivery Package / PR 交付包**: a metadata-only input to governed GitHub Delivery. It is not
-  source code, repository authority, approval, or a credential container.
+面向关注 AI 交付治理的技术负责人、架构师、业务分析（BA）负责人、质量保证（QA）负责人和研发流程相关人员。内容不专为纯前端或泛管理受众设计。
 
-Avoid:
+<a id="key-terms"></a>
 
-- realtime library
-- knowledge frequency
-- automatic knowledge generation
-- automatic merge
-- automatic repository upload
-- code repository manager
+## 关键术语
 
-## Knowledge Repository Model
+- **团队知识底座（Team Knowledge Foundation）**：Run、Agent 和 Gate 共用的知识层。
+- **知识仓库（Knowledge Repository）**：由 Git 管理、连接多个代码仓库的知识仓库。
+- **代码仓库（Code Repository）**：与知识仓库关联的实现仓库。
+- **仓库提取知识（Repository-Derived Knowledge）**：从关联代码仓库总结的系统或业务知识。
+- **候选知识（Candidate Knowledge）**：尚未通过审查的提取知识。
+- **已确认知识（Confirmed Knowledge）**：经审查、可用作权威 Gate 证据的知识。
+- **系统知识（System Knowledge）**：技术结构、边界、服务、接口、数据模型、依赖和约束。
+- **业务知识（Business Knowledge）**：业务术语、规则、用户流程、假设和业务概念关系。
+- **PR 交付包（PR Delivery Package）**：受控 GitHub 交付的纯元数据输入，不承载源码、仓库权限、审批或凭据。
 
-The multi-repository story should be explained as:
+避免下列表述：
 
-> One knowledge repository connects multiple code repositories.
+- “实时库”（realtime library）
+- “知识频率”（knowledge frequency）
+- 自动生成知识
+- 自动合并
+- 自动上传仓库
+- 代码仓库管理器
 
-The knowledge repository contains a dedicated area for knowledge extracted from code repositories.
-That extracted knowledge is organized as system knowledge and business knowledge.
+<a id="knowledge-repository-model"></a>
 
-Extraction is tool-assisted, not automatically authoritative:
+## 知识仓库模型
 
-1. ISCQ / WeQ / isctPilot help extract and summarize knowledge from code repositories.
-2. Extracted output enters the candidate knowledge state.
-3. Review or Gate confirmation promotes it to confirmed knowledge.
-4. Confirmed knowledge can support requirement clarification, solution design, Knowledge Review,
-   Gate decisions, and Coding Agent context.
+多仓库关系应解释为：
 
-## Delivery Workflow
+> 一个知识仓库连接多个代码仓库。
 
-The Workflow Board is the complete delivery flow, not a side process:
+知识仓库中有专门区域保存从代码仓库提取的知识，按系统知识和业务知识组织。
 
-1. Requirement clarification
-2. Clarification Gate
-3. Solution design
-4. Solution Review Gate
-5. Implementation
-6. Test evidence
-7. PR Delivery Package and exact Delivery Intent
-8. Redacted Delivery Request, signed Web approval, verified remote head, and Draft pull request
-9. Business acceptance
+提取由工具辅助完成，结果不会自动成为权威依据：
 
-The short Chinese flow for slides:
+1. ISCQ / WeQ / isctPilot 帮助提取和总结代码仓库知识。
+2. 输出进入候选知识状态。
+3. 经审查或 Gate 确认后，提升为已确认知识。
+4. 已确认知识可支持需求澄清、方案设计、知识审查、Gate 决策和编码 Agent 上下文。
 
-> 需求澄清 -> Gate -> 方案设计 -> Gate -> 开发实现 -> 测试证据 -> PR 交付包/Intent -> Web 审批 -> Draft PR -> 业务验收
+<a id="delivery-workflow"></a>
 
-Gate should be explained as evidence review, not generic approval. A Gate checks whether the current
-stage has enough evidence to enter the next risky stage.
+## 交付流程
 
-V1.5 implements this governed GitHub Delivery boundary in the development line: Desktop fixes one
-Delivery Intent to the canonical managed-worktree commit, API/Postgres owns the redacted Delivery
-Request and signed Web approval, Electron main publishes without force, and the API creates or
-reconciles one Draft pull request only after the verified remote head matches. Acceptance consumes
-that evidence but must never merge or otherwise mutate the pull request. `v1.4.0` remains the current
-release until V1.5 candidate-bound signoff passes.
+工作流看板承载完整交付流程：
 
-## Agent Boundaries
+1. 需求澄清
+2. 需求确认 Gate
+3. 方案设计
+4. 方案评审 Gate
+5. 开发实现
+6. 测试证据
+7. PR 交付包与精确交付意图
+8. 脱敏交付请求、签名 Web 审批、已核实的远端分支提交与草稿 PR
+9. 业务验收
 
-Present the Agent capability as one focused Agent group around one Run:
+幻灯片可使用简版：
 
-- **Workflow Stage Agent** turns the request into clarification and solution-design artifacts.
-- **Knowledge Review Agent** reviews requirements or solution design against team knowledge,
-  evidence, and policy context. It produces risks, missing evidence, references, and Gate Advisory.
-- **Coding Agent** writes code through a managed worktree, permission relay, diff capture, and test
-  evidence path. It can connect to opencode / OpenCode through the CRI boundary.
+> 需求澄清 → Gate → 方案设计 → Gate → 开发实现 → 测试证据 → PR 交付包/交付意图 → Web 审批 → 草稿 PR → 业务验收
 
-This is a workflow-driven, single-group Agent mode. The Agents do not need open-ended conversation:
-each one works at the relevant stage and writes its output back to the same evidence chain. Do not
-describe this as general-purpose multi-agent orchestration or autonomous Agent handoff.
+Gate 应解释为证据审查：检查当前阶段是否已有足够证据进入下一风险阶段。
 
-Skill is not a third main Agent path. It is a reusable capability catalog that can support Review
-and Coding, but it cannot bypass Gate, policy, or evidence requirements.
+原演示记录中的 V1.5 开发线实现受控 GitHub 交付边界：桌面端将一份交付意图固定到权威托管工作树提交；API/Postgres 拥有脱敏交付请求和签名 Web 审批；Electron 主进程不使用强制推送；API 仅在核实远端分支提交匹配后，才创建或对账一个草稿 PR。业务验收使用这些证据，但不会合并或修改 PR。当时在 V1.5 候选版本验收通过前，当前发布版本仍为 `v1.4.0`；该句保留历史范围，不能用于判断今天的发布版本。
 
-External coding engines such as opencode / OpenCode should appear as external capability, not as
-DevFlow's own Agent core. DevFlow owns context assembly, permission relay, evidence capture, tests,
-and team-safe summaries.
+<a id="agent-boundaries"></a>
 
-## Open Design Boundary
+## Agent 权限边界
 
-Keep Open Design and opencode / OpenCode separate:
+围绕一个 Run，展示一组职责明确的 Agent：
 
-- **Open Design** belongs to the design path: generate an HTML prototype, validate information
-  architecture and interaction, then convert the prototype into React components and the Electron
-  workbench.
-- **opencode / OpenCode** belongs to the execution path: external Coding Agent capability connected
-  through the Coding Agent Adapter.
+- **工作流阶段 Agent**：将请求转化为澄清和设计产物。
+- **知识审查 Agent**：结合团队知识、证据和策略审查需求或设计，产生风险、缺失证据、引用与门禁建议。
+- **编码 Agent**：通过托管工作树、权限传递、差异记录和测试证据路径写代码，可经 CRI 边界连接 OpenCode。
 
-Do not describe OpenCode as the design tool.
+这是演示当时的工作流驱动、单组 Agent 模式：每个 Agent 在相关阶段执行，并将输出写回同一证据链，不需要开放式对话。不要将该演示描述为通用多 Agent 编排或自主任务移交。
 
-## Deck Structure
+Skill 是可复用能力目录，可支持审查与编码，不能绕过 Gate、策略或证据要求，也不应被包装为第三条主要 Agent 路径。
 
-Use a 9-slide structure:
+OpenCode 等编码引擎应作为外部能力呈现。DevFlow 拥有上下文组装、权限请求传递、证据记录、测试和可安全共享的团队摘要。
 
-1. **AI DevFlow Studio**: let AI development workflows become observable, traceable, and governable.
-2. **Problem**: invisible process, untraceable basis, unfriendly collaboration.
-3. **Core thesis**: from black-box invocation to evidence-driven team delivery.
-4. **Team knowledge foundation**: one knowledge repository connects multiple code repositories.
-5. **Delivery workflow**: requirement clarification through business acceptance, with Gates.
-6. **Design-to-engineering**: Open Design HTML prototype -> React components -> Electron Workbench.
-7. **One Agent group**: stage generation, Knowledge Review, and OpenCode-backed Coding have separate responsibilities inside one Run.
-8. **Architecture boundaries**: Electron, SQLite/Postgres, external Coding Engine, team management platform.
-9. **Closing**: this is not the endpoint, but a verifiable path.
+<a id="open-design-boundary"></a>
 
-Do not include the personal background that the demo was built after work or on weekends.
+## Open Design 边界
 
-## Visual Direction
+演示中明确区分 Open Design 和 OpenCode：
 
-Follow `apple-inspired-keynote-style.md`.
+- **Open Design** 属于界面设计路径：生成 HTML 原型、验证信息架构与交互，再转换为 React 组件和 Electron 工作台。
+- **OpenCode** 属于执行路径：经编码 Agent 适配器连接的外部能力。
 
-Use:
+不要把 OpenCode 描述为该界面原型工具。后续版本的 OpenCode 只读仓库分析属于阶段执行能力，不改变这两种工具的区别。
 
-- content-first pages
-- large concise titles
-- generous whitespace
-- modern sans-serif typography
-- neutral black / white / gray palette
-- blue as the primary accent
-- small amber or red semantic markers only for Gate or risk
-- screenshots as evidence, not as dense first-contact explanation
-- light Liquid Glass inspiration only when it supports readability
+<a id="deck-structure"></a>
 
-Avoid:
+## 演示文稿结构
 
-- Apple logo or official Apple assets
-- Apple website imitation
-- dense report-style pages
-- large red/pink theme derived from the product UI
-- decorative cyberpunk gradients
-- cluttered architecture diagrams
+使用 9 页结构：
 
-## Screenshot Usage
+1. **AI DevFlow Studio**：让 AI 研发流程可观察、可追溯、可治理。
+2. **问题**：过程不可见、依据不可追溯、协作不便。
+3. **核心观点**：从黑盒调用走向证据驱动的团队交付。
+4. **团队知识底座**：一个知识仓库连接多个代码仓库。
+5. **交付流程**：从需求澄清到业务验收，穿过多个 Gate。
+6. **设计到工程**：Open Design HTML 原型 → React 组件 → Electron 工作台。
+7. **一组 Agent**：阶段生成、知识审查、OpenCode 编码在一个 Run 中各负其责。
+8. **架构边界**：Electron、SQLite/Postgres、外部编码引擎和团队管理平台。
+9. **结语**：这不是终点，而是一条可验证的路径。
 
-Do not start with the full Workflow Board screenshot. First show a simplified flow diagram, then show
-the screenshot as proof that the flow has been implemented as an operational workbench.
+不加入 Demo 是业余或周末开发的个人背景。
 
-When using the Workflow Board screenshot, highlight:
+<a id="visual-direction"></a>
 
-- six-stage main flow
-- Gate review points
-- right-side Inspector evidence / Trace / Gate impact
+## 视觉方向
 
-## Closing Message
+遵循 [Apple 发布会风格参考](./apple-inspired-keynote-style.md)。
 
-Use this final statement:
+采用：
+
+- 内容优先的页面。
+- 大而简洁的标题。
+- 充足留白。
+- 现代无衬线字体。
+- 中性的黑、白、灰配色。
+- 蓝色作为主要强调色。
+- 仅用少量琥珀色或红色标记 Gate 与风险。
+- 截图作为证据，首次解释使用简图。
+- 只在有助于阅读时使用轻量 Liquid Glass 灵感。
+
+避免：
+
+- Apple 标志或官方素材。
+- 仿制 Apple 官网。
+- 密集报告式页面。
+- 直接沿用产品界面的大面积红/粉主题。
+- 装饰性赛博渐变。
+- 杂乱架构图。
+
+<a id="screenshot-usage"></a>
+
+## 截图使用
+
+先展示简化流程图，再展示工作流看板截图，证明流程已实现为可操作工作台。
+
+原版看板截图重点为六阶段主流程、Gate 审查点，以及当时位于右侧的节点详情中的证据、轨迹和 Gate 影响。当前候选已将节点详情放到左侧工作区，右侧保留独立会话；新演示应按实际版本标注，不能再把旧截图位置当成布局要求。
+
+<a id="closing-message"></a>
+
+## 结束语
+
+使用：
 
 > 这不是终点，而是一条可验证的路径。
 
-Supporting points:
+支持观点：
 
-- 从知识碎片到团队知识底座
-- 从黑盒调用到证据链
-- 从个人 Agent 使用到团队治理
+- 从知识碎片到团队知识底座。
+- 从黑盒调用到证据链。
+- 从个人 Agent 使用到团队治理。
 
-Mention that the 1.x artifact is a governed self-hosted delivery system. After the 1.x completion
-gate, 2.x expands into first-party Agent Runtime, native Tool/MCP execution, evaluated RAG/Memory,
-Multi-Agent orchestration, and tenant-scoped execution. Future work should keep strengthening
-runtime hardening, knowledge review flow, and team operation rather than presenting the system as
-open-ended autonomous orchestration.
+说明 1.x 产物是受治理的自托管交付系统。完成 1.x 后，2.x 扩展到自有 Agent 运行时、原生工具/MCP 执行、经过评估的 RAG/记忆、多 Agent 编排和租户范围执行。后续应持续强化运行时、知识审查流程与团队操作，不将系统描述为无边界的自主编排。
