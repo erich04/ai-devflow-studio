@@ -10,40 +10,40 @@
 
 不能只根据分支名称或 PR 状态判断是否可清理。祖先提交表示已经进入主干历史；squash 补丁一致表示分支累计差异与主干合并提交差异具有相同的 `git patch-id --stable`，且合并提交是主干祖先。
 
-| Branch | Original head | Inclusion proof |
+| 分支 | 原始分支头 | 主干包含证据 |
 | --- | --- | --- |
-| `codex/architecture-micro-refactor-20260906` | `b7903c3ebaa1` | Ancestor of main |
-| `codex/blank-bootstrap-20260912` | `d743ea3c2279` | Ancestor of main |
-| `codex/blank-project-e2e-20260911` | `019fa2f5cc94` | PR #105; exact aggregate squash patch |
-| `codex/blank-project-live-fixes-20260912` | `d83e41406e73` | PR #109; exact aggregate squash patch |
-| `codex/chat-context-recovery-20260921` | `ad063409ad4c` | PR #155; exact aggregate squash patch |
-| `codex/conversation-details-161` | `fb072a1968be` | PR #163; exact aggregate squash patch |
-| `codex/conversation-help-160` | `d5fa9af40039` | PR #162; exact aggregate squash patch |
-| `codex/delivery-path-collation-20260912` | `6699cbbe028c` | Ancestor of main |
-| `codex/execution-tools-design-20260922` | `509447c29511` | PR #159; exact aggregate squash patch |
-| `codex/fix-124-remediation-20260914` | `1c6c32ac9442` | Ancestor of main |
-| `codex/fix-completed-stage-number` | `30817316b1e4` | Ancestor of main |
-| `codex/gate-review-grounding-20260920` | `cd4bb35661f5` | Ancestor of main |
-| `codex/gate-workbench-open-issues` | `1c4c3eabf356` | PR #168; exact aggregate squash patch |
-| `codex/issue-ci-smoke-labels-20260920` | `d15b1f5c2a1d` | Ancestor of main |
-| `codex/memory-context-execution-20260915` | `f11246c1c6b2` | Ancestor of main |
-| `codex/multi-organization-tenancy-20260921` | `bec4af2549dd` | Ancestor of main |
-| `codex/open-issues-20260910` | `a4c43af9e430` | Ancestor of main |
-| `codex/opencode-blank-project-recovery-20260912` | `947fe857d936` | PR #112; exact aggregate squash patch |
-| `codex/opencode-permission-recovery-20260911` | `ebf31fa389cc` | Ancestor of stage-agent-cost-81; exact aggregate squash patch in PR #90 |
-| `codex/opencode-saved-provider-56` | `db152e153af3` | PR #83; exact aggregate squash patch |
-| `codex/provider-removal-55` | `c1baec3486e5` | PR #85; exact aggregate squash patch |
-| `codex/readme-current-product-20260924` | `658c511658da` | Ancestor of main |
-| `codex/release-v2.3.0-20260913` | `3b50144b4735` | Ancestor of main |
-| `codex/resolve-open-issues-20260926` | `aa9367bf413a` | Ancestor of main |
-| `codex/saved-opencode-provider-20260912` | `6384c5b94de0` | Ancestor of main |
-| `codex/stage-agent-cost-81` | `71d059421151` | PR #90; exact aggregate squash patch |
-| `codex/studio-policy-52-57` | `e033566d91bf` | PR #87; exact aggregate squash patch |
-| `codex/unified-workbench-conversations-20260916` | `f520e68cc87b` | Ancestor of main |
-| `codex/web-ux-batch-20260910` | `607c3049371a` | PR #84; exact aggregate squash patch |
-| `codex/workbench-opencode-harness-20260920` | `a0b574688d1e` | Ancestor of main |
-| `codex/workflow-evidence-64` | `c2b359aee71e` | PR #88; exact aggregate squash patch |
-| `codex/workflow-stage-navigation` | `0ce74e765fe4` | PR #170; exact aggregate squash patch |
+| `codex/architecture-micro-refactor-20260906` | `b7903c3ebaa1` | 提交是主干祖先 |
+| `codex/blank-bootstrap-20260912` | `d743ea3c2279` | 提交是主干祖先 |
+| `codex/blank-project-e2e-20260911` | `019fa2f5cc94` | PR #105，squash 累计补丁完全一致 |
+| `codex/blank-project-live-fixes-20260912` | `d83e41406e73` | PR #109，squash 累计补丁完全一致 |
+| `codex/chat-context-recovery-20260921` | `ad063409ad4c` | PR #155，squash 累计补丁完全一致 |
+| `codex/conversation-details-161` | `fb072a1968be` | PR #163，squash 累计补丁完全一致 |
+| `codex/conversation-help-160` | `d5fa9af40039` | PR #162，squash 累计补丁完全一致 |
+| `codex/delivery-path-collation-20260912` | `6699cbbe028c` | 提交是主干祖先 |
+| `codex/execution-tools-design-20260922` | `509447c29511` | PR #159，squash 累计补丁完全一致 |
+| `codex/fix-124-remediation-20260914` | `1c6c32ac9442` | 提交是主干祖先 |
+| `codex/fix-completed-stage-number` | `30817316b1e4` | 提交是主干祖先 |
+| `codex/gate-review-grounding-20260920` | `cd4bb35661f5` | 提交是主干祖先 |
+| `codex/gate-workbench-open-issues` | `1c4c3eabf356` | PR #168，squash 累计补丁完全一致 |
+| `codex/issue-ci-smoke-labels-20260920` | `d15b1f5c2a1d` | 提交是主干祖先 |
+| `codex/memory-context-execution-20260915` | `f11246c1c6b2` | 提交是主干祖先 |
+| `codex/multi-organization-tenancy-20260921` | `bec4af2549dd` | 提交是主干祖先 |
+| `codex/open-issues-20260910` | `a4c43af9e430` | 提交是主干祖先 |
+| `codex/opencode-blank-project-recovery-20260912` | `947fe857d936` | PR #112，squash 累计补丁完全一致 |
+| `codex/opencode-permission-recovery-20260911` | `ebf31fa389cc` | 提交已包含于 stage-agent-cost-81，squash 累计补丁完全一致（PR #90） |
+| `codex/opencode-saved-provider-56` | `db152e153af3` | PR #83，squash 累计补丁完全一致 |
+| `codex/provider-removal-55` | `c1baec3486e5` | PR #85，squash 累计补丁完全一致 |
+| `codex/readme-current-product-20260924` | `658c511658da` | 提交是主干祖先 |
+| `codex/release-v2.3.0-20260913` | `3b50144b4735` | 提交是主干祖先 |
+| `codex/resolve-open-issues-20260926` | `aa9367bf413a` | 提交是主干祖先 |
+| `codex/saved-opencode-provider-20260912` | `6384c5b94de0` | 提交是主干祖先 |
+| `codex/stage-agent-cost-81` | `71d059421151` | PR #90，squash 累计补丁完全一致 |
+| `codex/studio-policy-52-57` | `e033566d91bf` | PR #87，squash 累计补丁完全一致 |
+| `codex/unified-workbench-conversations-20260916` | `f520e68cc87b` | 提交是主干祖先 |
+| `codex/web-ux-batch-20260910` | `607c3049371a` | PR #84，squash 累计补丁完全一致 |
+| `codex/workbench-opencode-harness-20260920` | `a0b574688d1e` | 提交是主干祖先 |
+| `codex/workflow-evidence-64` | `c2b359aee71e` | PR #88，squash 累计补丁完全一致 |
+| `codex/workflow-stage-navigation` | `0ce74e765fe4` | PR #170，squash 累计补丁完全一致 |
 
 远端同名分支也按实际分支头核对；三个本地分支落后于远端的情况已纳入检查。仅有远端的 `cursor/setup-dev-environment-057b` 对应未合并 PR #20，按下节整合。
 
