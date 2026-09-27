@@ -473,7 +473,16 @@ export function buildStatusDescriptors(input: {
     }
   }
   const decision = input.gateEnforcementDecision
-  const gateDecisionStatus = (): StatusDescriptor => ({
+  const gateDecisionStatus = (): StatusDescriptor => input.node.status === 'success' ? {
+    id: 'gate-decision',
+    label: nodeType === 'acceptance' ? '验收 Gate 结论' : 'Gate 结论',
+    state: '已批准',
+    tone: 'good',
+    readiness: 'passed',
+    summary: '该节点已完成批准；历史审查与策略评估仍保留供核对。',
+    nextAction: '查看执行记录与已归档证据。',
+    impact: '已保存的节点审批',
+  } : ({
     id: 'gate-decision',
     label: nodeType === 'acceptance' ? '验收 Gate 结论' : 'Gate 结论',
     state: input.isLoadingGateEnforcement
@@ -1337,9 +1346,11 @@ export function buildNodeInspectorViewModel(input: {
     }
   }
   if (input.node.kind === 'acceptance') {
-    addAction('createAcceptanceBundle')
-    if (hasAcceptanceArtifact(input.artifacts)) {
-      addAction('approveGate')
+    if (input.node.status !== 'success') {
+      addAction('createAcceptanceBundle')
+      if (hasAcceptanceArtifact(input.artifacts)) {
+        addAction('approveGate')
+      }
     }
     if (
       input.githubDeliveryIntent?.status === 'completed' &&

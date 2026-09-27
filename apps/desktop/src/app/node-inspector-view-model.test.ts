@@ -524,6 +524,22 @@ describe('node inspector view model', () => {
     expect(viewModelFor(prNode).actions.map((action) => action.id)).not.toContain('approveGate')
   })
 
+  it('presents completed acceptance as approved while keeping read-only delivery verification available', () => {
+    const node = { ...findNode((candidate) => candidate.kind === 'acceptance'), status: 'success' as const }
+    const vm = viewModelFor(node, {
+      canApprove: true,
+      githubDeliveryIntent: githubDeliveryIntent('completed'),
+      canVerifyGitHubDeliveryRevocation: true,
+    })
+    expect(vm.nextAction.primaryActionId).toBeUndefined()
+    expect(vm.actions.map((action) => action.id)).toEqual(['verifyGitHubDeliveryRevocation'])
+    expect(vm.statusDescriptors.find((item) => item.id === 'gate-decision')).toMatchObject({
+      state: '已批准',
+      summary: '该节点已完成批准；历史审查与策略评估仍保留供核对。',
+      nextAction: '查看执行记录与已归档证据。',
+    })
+  })
+
   it('requires an explicit GitHub Delivery preparation after the exact PR package is attached', () => {
     const prNode = findNode((candidate) => candidate.kind === 'pr')
     const prPackage = prDeliveryPackage(prNode.id)

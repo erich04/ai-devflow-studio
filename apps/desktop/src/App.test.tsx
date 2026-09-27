@@ -4159,6 +4159,26 @@ describe('App', () => {
     })
   })
 
+  it('keeps a completed acceptance read-only across all inspector tabs', async () => {
+    const completed = localStateAtCurrentNode('n-accept')
+    completed.runs = completed.runs.map((run) => ({
+      ...run,
+      status: 'completed',
+      nodes: run.nodes.map((node) => ({ ...node, status: 'success' })),
+    }))
+    const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(completed) })
+    render(<App />)
+
+    await waitForLocalStateLoaded(api.loadState)
+    const inspector = screen.getByTestId('node-inspector')
+    for (const tab of ['概览', '内容与审查', '产物与证据', '执行记录']) {
+      fireEvent.click(within(inspector).getByRole('tab', { name: tab }))
+      expect(within(inspector).queryByRole('button', { name: /通过 Gate|生成验收证据包/ })).not.toBeInTheDocument()
+    }
+    expect(api.approveGate).not.toHaveBeenCalled()
+    expect(api.createAcceptanceBundle).not.toHaveBeenCalled()
+  })
+
   it('does not generate an acceptance bundle for a future workflow node', async () => {
     const api = installDesktopApi()
     render(<App />)
