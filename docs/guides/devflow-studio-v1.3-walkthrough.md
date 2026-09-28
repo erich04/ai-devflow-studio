@@ -1,8 +1,10 @@
 <a id="devflow-studio-v13-手动-walkthrough-指南"></a>
 
+> **截图更新（2026-09-28）**：下图为当前 `main`（`bf18e4aa`）重新构建后采集的界面，使用隔离的 Payments API 演示数据。正文中的历史版本、验收结果和限制仍属于原演练，不因换图而成为本次验证结论。当前节点使用“概览 / 内容与审查 / 产物与证据 / 执行记录”标签；详见[截图来源与尚未重拍项](./screenshots/current-20260928/README.md)。
+
 # DevFlow Studio v1.3 人工演练指南
 
-> 历史版本流程：本文描述 V1.3 的候选与验收契约，保留原命令、界面按钮、截图及机器字段。当前部署和界面应查看现行指南；本文不授权新的付费模型调用。
+> 历史版本流程：本文描述 V1.3 的候选与验收契约，正文保留原命令、界面按钮及机器字段，插图已更新。当前部署和界面应查看现行指南；本文不授权新的付费模型调用。
 
 更新时间：2026-07-31
 
@@ -91,7 +93,7 @@ corepack pnpm dev:electron
   `Deterministic Fake Provider`；运行需求澄清/方案设计/知识审查前明确选择
   它。关闭该标记后，旧模拟服务商选择必须隐藏或被拒绝。
 
-![Electron 工作台](./screenshots/14-electron-current-userdata-workbench.png)
+![Electron 工作台](./screenshots/current-20260928/desktop-workbench.jpg)
 
 ## 1. 选择本地仓库
 
@@ -173,7 +175,7 @@ lead/owner 权限。
 - 工作流实例状态变成 `building`。
 - 开发任务才显示 `Coding Agent` 操作。
 
-![工作台门禁策略执行](./screenshots/01-workbench-gate-enforcement.png)
+![工作台门禁策略执行](./screenshots/current-20260928/desktop-gate-review.jpg)
 
 <a id="4-coding-agent-与-test-evidence"></a>
 
@@ -197,7 +199,9 @@ lead/owner 权限。
 - 只有匹配当前开发节点的编码运行已完成且代码差异已持久化后，可信
   `complete_build` 才把当前节点推进到测试。
 
-![编码节点](./screenshots/09-coding-node.png)
+![编码节点](./screenshots/current-20260928/desktop-implementation.jpg)
+
+_当前图展示 Health API 示例的实现产物和变更文件；不表示正在运行 Coding Agent，亦不代表历史 Retry Coding 场景已重演。_
 
 选择测试节点或测试视图运行测试。
 
@@ -210,7 +214,9 @@ lead/owner 权限。
 - 产物中已知工作区根目录显示为 `<workspace>`；POSIX、Windows、文件 URL 和编码
   路径都要覆盖。
 
-![测试证据](./screenshots/05-tests-evidence.png)
+![测试证据](./screenshots/current-20260928/desktop-tests.jpg)
+
+_当前 Health API 示例已有三组实际执行的测试证据（6 + 4 + 4 项）；命令检查仍对 `node --test` 显示包管理器命令提示，原样保留。_
 
 <a id="5-生成-pr-draft"></a>
 
@@ -301,7 +307,7 @@ PR 草稿通过专用 IPC 生成；主进程会重新读取当前工作流实例
 若配对码由本地 API 前置创建，本次证据只能验收桌面端绑定、同步与重启持久化；
 除非电脑控制另外真实操作并记录 Web 配对 UI，否则不得声称该 Web UI 已通过。
 
-![Web 团队概览](./screenshots/08-team-overview.png)
+![Web 团队概览](./screenshots/current-20260928/web-team-overview.jpg)
 
 <a id="9-release-only-真实-opencode--豆包volcengine-smoke"></a>
 

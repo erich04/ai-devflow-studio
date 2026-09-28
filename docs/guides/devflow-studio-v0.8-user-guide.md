@@ -1,6 +1,8 @@
 # DevFlow Studio v0.8 使用指南与全量功能验收
 
-> 历史版本说明：本文记录 2026-06-20 的版本、界面和验收范围；当时的限制与待完成项均保留，不代表当前候选版的状态。当前节点工作区布局以 #174、#177 及现行使用说明为准。历史英文按钮名以行内代码保留，便于与截图对应。
+> **截图更新（2026-09-28）**：下图为当前 `main`（`bf18e4aa`）重新构建后采集的界面，使用隔离的 Payments API 演示数据。正文中的历史版本、验收结果和限制仍属于原演练，不因换图而成为本次验证结论。当前节点使用“概览 / 内容与审查 / 产物与证据 / 执行记录”标签；详见[截图来源与尚未重拍项](./screenshots/current-20260928/README.md)。
+
+> 历史版本说明：正文记录 2026-06-20 的版本和验收范围；当时的限制与待完成项均保留，不代表当前候选版的状态。当前节点工作区布局以 #174、#177 及现行使用说明为准。历史英文按钮名以行内代码保留；新图按钮以当前界面为准。
 
 更新时间：2026-06-20
 适用版本：`v0.8.1` 候选发布版。当前代码已完成 v0.8 策略驱动交付、PR #2 冒烟测试加固，以及 PR #3 的 v0.9 运行时计划及 OpenCode 真实冒烟的前置检查加固；包元数据仍为 `0.7.5`，将在 v0.8.1 演练通过后统一升级到 `0.8.1` 并创建标签。
@@ -12,7 +14,7 @@ DevFlow Studio 现在已经具备从 `v0.1` 到 `v0.8` 的主流程能力：团�
 本轮验收使用了三层验证：
 
 - 真实 Electron 窗口读屏：通过 Computer Use 读取 `AI DevFlow Studio` 的可访问性树，确认当前启动的是业务应用而不是 Electron 默认应用。
-- 人类式点击与截图：通过 Playwright 对同一个本地 UI 执行导航、搜索、页面切换、节点选择，并保存截图。
+- 原演练的人类式点击与截图：通过 Playwright 对同一个本地 UI 执行导航、搜索、页面切换、节点选择，并保存截图。
 - 自动化签收：`verify`、`build`、Electron 冒烟测试、Postgres 冒烟测试已在 v0.8.1 候选发布分支 `aa468cb` 上通过。
 
 此外，v0.9 的真实 OpenCode 运行时冒烟测试已经增加前置检查门禁：默认仍走模拟引擎；只有同时显式设置 `DEVFLOW_RUN_OPENCODE_SMOKE=1` 和 `DEVFLOW_CODING_ENGINE=opencode-http` 时，才会进入真实模型服务商与 OpenCode 路径。
@@ -63,7 +65,7 @@ corepack pnpm dev:electron
 
 ## 1. 工作台：查看团队开发工作流
 
-![工作台与门禁策略执行](./screenshots/14-electron-current-userdata-workbench.png)
+![工作台与门禁策略执行](./screenshots/current-20260928/desktop-workbench.jpg)
 
 工作台是开发者主界面。你可以在这里看到：
 
@@ -84,7 +86,7 @@ corepack pnpm dev:electron
 
 ## 2. 搜索：快速过滤工作流实例、产物与知识
 
-![搜索过滤](./screenshots/02-search-filter.png)
+![搜索过滤](./screenshots/current-20260928/desktop-search.jpg)
 
 顶部搜索框支持按关键词过滤当前视图。可以输入：
 
@@ -99,7 +101,7 @@ corepack pnpm dev:electron
 
 ## 3. 门禁策略执行：查看为什么门禁被拦
 
-![门禁策略执行与处理建议](./screenshots/14-electron-current-userdata-workbench.png)
+![当前方案 Gate 的就绪检查](./screenshots/current-20260928/desktop-gate-review.jpg)
 
 选中门禁节点后，节点检查面板会显示门禁策略执行状态。常见状态包括：
 
@@ -122,7 +124,9 @@ v0.8 新增的 `Remediation Plan` 会把阻断原因转成可执行建议，例�
 
 ## 4. 本地测试证据
 
-![测试证据页](./screenshots/05-tests-evidence.png)
+![测试证据页](./screenshots/current-20260928/desktop-tests.jpg)
+
+_当前 Health API 示例已有三组实际执行的测试证据（6 + 4 + 4 项）；命令检查仍对 `node --test` 显示包管理器命令提示，原样保留。_
 
 测试能力来自 Electron 主进程，不是浏览器直接执行命令行。
 
@@ -147,7 +151,7 @@ v0.8 新增的 `Remediation Plan` 会把阻断原因转成可执行建议，例�
 
 ## 5. 知识治理
 
-![知识页面](./screenshots/12-electron-knowledge.png)
+![知识页面](./screenshots/current-20260928/desktop-knowledge.jpg)
 
 知识页面用于查看 DevFlow 内置知识文档、标签、引用和治理检查。
 
@@ -164,7 +168,9 @@ v0.4.x 后，知识层已经为未来 RAG 做好边界：检索命中不等于�
 
 ## 6. 知识审查 Agent 与 Agents 页面
 
-![Agent 工作台](./screenshots/04-agent-workbench.png)
+![Agent 工作台](./screenshots/current-20260928/desktop-agents.jpg)
+
+_当前图为方案 Gate 的 Agent 执行台，运行按钮由当前节点和配置决定；历史编码权限、预算重试场景未在本次截图中执行。_
 
 在节点检查面板中点击 `Agent Review` 后，知识审查 Agent 会读取：
 
@@ -190,7 +196,9 @@ v0.4.x 后，知识层已经为未来 RAG 做好边界：检索命中不等于�
 
 ## 7. 编码 Agent 与 v0.8 重试
 
-![编码节点](./screenshots/09-coding-node.png)
+![编码节点](./screenshots/current-20260928/desktop-implementation.jpg)
+
+_当前图展示 Health API 示例的实现产物和变更文件；不表示正在运行 Coding Agent，亦不代表历史 Retry Coding 场景已重演。_
 
 选中 `本地实现` / 开发任务节点后，可以启动编码 Agent。当前设计原则是：
 
@@ -214,7 +222,9 @@ v0.8 的重试流程：
 
 ## 8. 团队概览与管理者视角
 
-![团队概览](./screenshots/11-electron-team-overview.png)
+![团队概览](./screenshots/current-20260928/desktop-team-overview.jpg)
+
+_当前桌面演示未完成团队配对，此图显示未配对边界；有成员、Run 和测试数据的团队视图见本文 Web 截图。_
 
 团队概览用于管理者看项目、成员、成本、风险和交付摘要。
 
@@ -233,9 +243,13 @@ v0.8 后，团队侧可以看到策略驱动的交付摘要，包括：
 
 ## 9. 技能与 MCP
 
-![技能](./screenshots/06-skills-management.png)
+![技能](./screenshots/current-20260928/desktop-skills.jpg)
 
-![MCP](./screenshots/07-mcp-management.png)
+_当前 Skills 页仍为占位提示，尚未加载真实团队 Skills；不能据此认定技能目录或技能执行已完成。_
+
+![MCP](./screenshots/current-20260928/desktop-mcp.jpg)
+
+_当前图为未配置 MCP 的状态，未安装或执行连接器。_
 
 技能 / MCP 当前是团队开发平台的管理壳：
 
@@ -249,7 +263,7 @@ v0.8 后，团队侧可以看到策略驱动的交付摘要，包括：
 
 ## 10. Web 团队控制台
 
-![团队概览浏览器视图](./screenshots/08-team-overview.png)
+![团队概览浏览器视图](./screenshots/current-20260928/web-team-overview.jpg)
 
 Web 控制台用于团队/管理者侧查看同步摘要和策略配置。v0.7 后策略真源在 API/Postgres，桌面端读取和缓存策略。
 

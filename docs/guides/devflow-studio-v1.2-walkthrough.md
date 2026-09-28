@@ -1,8 +1,10 @@
 <a id="devflow-studio-v12-手动-walkthrough-指南"></a>
 
+> **截图更新（2026-09-28）**：下图为当前 `main`（`bf18e4aa`）重新构建后采集的界面，使用隔离的 Payments API 演示数据。正文中的历史版本、验收结果和限制仍属于原演练，不因换图而成为本次验证结论。当前节点使用“概览 / 内容与审查 / 产物与证据 / 执行记录”标签；详见[截图来源与尚未重拍项](./screenshots/current-20260928/README.md)。
+
 # DevFlow Studio v1.2 人工演练指南
 
-> 历史操作脚本：适用于 V1.2，不是当前候选版的验收结果。保留原按钮标识和截图；当前部署应按[自托管试点指南](./devflow-studio-self-hosted-pilot.md)填写完整配置。付费冒烟仅适用于要求它的版本契约，不自动授权新增调用，V1.5 不要求额外付费冒烟。
+> 历史操作脚本：适用于 V1.2，不是当前候选版的验收结果。正文保留原按钮标识，插图已更新；当前部署应按[自托管试点指南](./devflow-studio-self-hosted-pilot.md)填写完整配置。付费冒烟仅适用于要求它的版本契约，不自动授权新增调用，V1.5 不要求额外付费冒烟。
 
 更新时间：2026-06-21  
 适用版本：`v1.2.0`
@@ -61,7 +63,7 @@ corepack pnpm dev:electron
 
 不要只打开浏览器 Vite 页面。浏览器模式没有本地文件夹选择、SQLite、受控 IPC、命令执行和 Electron 预加载 API。
 
-![Electron 工作台](./screenshots/14-electron-current-userdata-workbench.png)
+![Electron 工作台](./screenshots/current-20260928/desktop-workbench.jpg)
 
 通过标准：
 
@@ -79,7 +81,7 @@ projects/agent-engineering/ai-devflow-studio
 
 进入 `Workbench`，选择一个受保护门禁，例如方案评审门禁或验收门禁。
 
-![工作台门禁策略执行](./screenshots/01-workbench-gate-enforcement.png)
+![工作台门禁策略执行](./screenshots/current-20260928/desktop-gate-review.jpg)
 
 重点观察节点检查面板：
 
@@ -102,7 +104,7 @@ projects/agent-engineering/ai-devflow-studio
 
 打开 `Knowledge` 视图，搜索 `api`、`testing`、`gate`。
 
-![知识治理](./screenshots/12-electron-knowledge.png)
+![知识治理](./screenshots/current-20260928/desktop-knowledge.jpg)
 
 重点观察：
 
@@ -123,7 +125,9 @@ projects/agent-engineering/ai-devflow-studio
 
 回到门禁节点，点击 `Agent Review`，完成后打开 `Agents`。
 
-![Agent 工作台](./screenshots/04-agent-workbench.png)
+![Agent 工作台](./screenshots/current-20260928/desktop-agents.jpg)
+
+_当前图为方案 Gate 的 Agent 执行台，运行按钮由当前节点和配置决定；历史编码权限、预算重试场景未在本次截图中执行。_
 
 重点观察：
 
@@ -147,7 +151,9 @@ projects/agent-engineering/ai-devflow-studio
 
 打开 `Tests` 页面或从相关节点运行测试。
 
-![测试证据](./screenshots/05-tests-evidence.png)
+![测试证据](./screenshots/current-20260928/desktop-tests.jpg)
+
+_当前 Health API 示例已有三组实际执行的测试证据（6 + 4 + 4 项）；命令检查仍对 `node --test` 显示包管理器命令提示，原样保留。_
 
 重点观察：
 
@@ -169,7 +175,9 @@ projects/agent-engineering/ai-devflow-studio
 
 选中开发任务节点，或从门禁的处理建议候选项点击 `Retry Coding`。
 
-![编码节点](./screenshots/09-coding-node.png)
+![编码节点](./screenshots/current-20260928/desktop-implementation.jpg)
+
+_当前图展示 Health API 示例的实现产物和变更文件；不表示正在运行 Coding Agent，亦不代表历史 Retry Coding 场景已重演。_
 
 默认路径使用模拟编码引擎：
 
@@ -227,7 +235,7 @@ http://127.0.0.1:4311
 
 进入团队控制台的 `Runtime Budget` 区域。
 
-![Web 团队概览](./screenshots/08-team-overview.png)
+![Web 团队概览](./screenshots/current-20260928/web-team-overview.jpg)
 
 重点操作：
 
@@ -298,7 +306,9 @@ API health: http://127.0.0.1:4310/health
 4. 点击 `Pair`。
 5. 点击 `同步团队`。
 
-![Electron 团队概览](./screenshots/11-electron-team-overview.png)
+![Electron 团队概览](./screenshots/current-20260928/desktop-team-overview.jpg)
+
+_当前桌面演示未完成团队配对，此图显示未配对边界；有成员、Run 和测试数据的团队视图见本文 Web 截图。_
 
 通过标准：
 

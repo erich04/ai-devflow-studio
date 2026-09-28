@@ -1,6 +1,8 @@
 # DevFlow Studio v1.0 用户指南
 
-> 历史指南：本文适用于 V1.0，保留当时的功能边界、按钮名称和真实截图。当前界面以节点工作区的新布局为准；当前部署必须使用[自托管试点指南](./devflow-studio-self-hosted-pilot.md)的完整配置，不能照搬本节历史最小环境变量。
+> **截图更新（2026-09-28）**：下图为当前 `main`（`bf18e4aa`）重新构建后采集的界面，使用隔离的 Payments API 演示数据。正文中的历史版本、验收结果和限制仍属于原演练，不因换图而成为本次验证结论。当前节点使用“概览 / 内容与审查 / 产物与证据 / 执行记录”标签；详见[截图来源与尚未重拍项](./screenshots/current-20260928/README.md)。
+
+> 历史指南：本文适用于 V1.0，正文保留当时的功能边界与按钮名称，插图已更新。当前界面以节点工作区的新布局为准；当前部署必须使用[自托管试点指南](./devflow-studio-self-hosted-pilot.md)的完整配置，不能照搬本节历史最小环境变量。
 
 更新时间：2026-06-20  
 适用版本：`v1.0.0` / 包元数据 `1.0.0`
@@ -62,7 +64,7 @@ corepack pnpm dev:electron
 它会构建 Electron 主进程与预加载脚本，启动 Vite 渲染器，并打开真实 Electron 应用。不要只用浏览器打开
 `localhost:5173`，浏览器模式没有本地文件夹选择、SQLite、受控 IPC 和本地命令执行能力。
 
-![Electron 工作台](./screenshots/14-electron-current-userdata-workbench.png)
+![Electron 工作台](./screenshots/current-20260928/desktop-workbench.jpg)
 
 ### 1. 选择本地仓库
 
@@ -83,7 +85,7 @@ projects/agent-engineering/ai-devflow-studio
 
 在 `Workbench` 中查看六阶段流程：需求澄清、方案设计、开发实现、测试证据、PR 交付、业务验收。
 
-![工作台门禁策略执行](./screenshots/01-workbench-gate-enforcement.png)
+![工作台门禁策略执行](./screenshots/current-20260928/desktop-gate-review.jpg)
 
 建议先点这些节点：
 
@@ -95,7 +97,7 @@ projects/agent-engineering/ai-devflow-studio
 
 用搜索框过滤运行、节点、产物、知识相关信息。
 
-![搜索与过滤](./screenshots/02-search-filter.png)
+![搜索与过滤](./screenshots/current-20260928/desktop-search.jpg)
 
 通过标准：
 
@@ -116,7 +118,7 @@ projects/agent-engineering/ai-devflow-studio
 - 处理建议候选项
 - `Retry Coding` 按钮是否只对可重试的候选出现
 
-![门禁策略执行](./screenshots/13-electron-gate-enforcement.png)
+![门禁策略执行](./screenshots/current-20260928/desktop-gate-policy.jpg)
 
 通过标准：
 
@@ -130,7 +132,7 @@ projects/agent-engineering/ai-devflow-studio
 
 打开 `Knowledge` 视图，搜索 `api`、`testing`、`gate` 等关键词。
 
-![知识治理](./screenshots/12-electron-knowledge.png)
+![知识治理](./screenshots/current-20260928/desktop-knowledge.jpg)
 
 你要看：
 
@@ -151,7 +153,9 @@ projects/agent-engineering/ai-devflow-studio
 
 回到门禁节点，点击 `Agent Review`。完成后打开 `Agents`。
 
-![Agent 工作台](./screenshots/04-agent-workbench.png)
+![Agent 工作台](./screenshots/current-20260928/desktop-agents.jpg)
+
+_当前图为方案 Gate 的 Agent 执行台，运行按钮由当前节点和配置决定；历史编码权限、预算重试场景未在本次截图中执行。_
 
 你要看：
 
@@ -175,7 +179,9 @@ projects/agent-engineering/ai-devflow-studio
 
 打开 `Tests` 页面或在相关节点触发本地测试。
 
-![测试证据](./screenshots/05-tests-evidence.png)
+![测试证据](./screenshots/current-20260928/desktop-tests.jpg)
+
+_当前 Health API 示例已有三组实际执行的测试证据（6 + 4 + 4 项）；命令检查仍对 `node --test` 显示包管理器命令提示，原样保留。_
 
 通过标准：
 
@@ -189,7 +195,9 @@ projects/agent-engineering/ai-devflow-studio
 
 选中开发任务节点，或从门禁的处理建议候选项点击 `Retry Coding`。
 
-![编码节点](./screenshots/09-coding-node.png)
+![编码节点](./screenshots/current-20260928/desktop-implementation.jpg)
+
+_当前图展示 Health API 示例的实现产物和变更文件；不表示正在运行 Coding Agent，亦不代表历史 Retry Coding 场景已重演。_
 
 默认演示路径使用模拟编码引擎：
 
@@ -239,9 +247,13 @@ projects/agent-engineering/ai-devflow-studio
 
 打开 `Skills` 和 `MCP` 视图。
 
-![技能管理](./screenshots/06-skills-management.png)
+![技能管理](./screenshots/current-20260928/desktop-skills.jpg)
 
-![MCP 管理](./screenshots/07-mcp-management.png)
+_当前 Skills 页仍为占位提示，尚未加载真实团队 Skills；不能据此认定技能目录或技能执行已完成。_
+
+![MCP 管理](./screenshots/current-20260928/desktop-mcp.jpg)
+
+_当前图为未配置 MCP 的状态，未安装或执行连接器。_
 
 通过标准：
 
@@ -263,7 +275,7 @@ corepack pnpm dev:web
 http://127.0.0.1:4311
 ```
 
-![Web 团队概览](./screenshots/08-team-overview.png)
+![Web 团队概览](./screenshots/current-20260928/web-team-overview.jpg)
 
 你要看：
 
@@ -338,7 +350,9 @@ API health: http://127.0.0.1:4310/health
 3. 成功后会显示 `Paired <projectId>`。
 4. 点击 `同步团队`。
 
-![Electron 团队概览](./screenshots/11-electron-team-overview.png)
+![Electron 团队概览](./screenshots/current-20260928/desktop-team-overview.jpg)
+
+_当前桌面演示未完成团队配对，此图显示未配对边界；有成员、Run 和测试数据的团队视图见本文 Web 截图。_
 
 通过标准：
 

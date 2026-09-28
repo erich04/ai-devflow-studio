@@ -2,7 +2,7 @@
 
 这份手册记录了一次真实的 V2.2 本地演练。
 
-> 截图与结果属于当时的教学运行，不代表本轮发布已通过。当前节点工作区采用常驻标题、状态摘要和操作区，下方为“概览 / 内容与审查 / 产物与证据 / 执行记录”四个一级标签；节点记录不再整体藏入折叠区。以下旧截图用于对照流程，当前材料、审查和修订入口以“内容与审查”为准。
+> **截图更新（2026-09-28）**：可独立重拍的界面已换为当前 `main`（`bf18e4aa`）的 Payments API 演示截图。下文“本次演练”及 `approval_required` 结果仍指原 V2.2 教学运行；新图不属于同一条 Run。配对收件箱、编码权限与交付审批等未复现场景保留历史图，并逐张标注“待重拍”。当前节点使用“概览 / 内容与审查 / 产物与证据 / 执行记录”四个标签。详见[截图记录与缺口](./screenshots/current-20260928/README.md)。
 
 目标是让第一次接触项目的人看懂：从选择项目开始，一条需求如何经过工作流、Agent 执行、测试和交付准备。
 
@@ -94,7 +94,7 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 打开桌面端后，先看左上角的团队项目和本地项目。中间是工作流看板，左侧是工作台、团队、知识、Agents、Skills、MCP 和测试入口。
 
-![桌面端起始页](./screenshots/v2.2-beginner-manual/01-desktop-start.jpg)
+![当前桌面工作台：有阶段进度、产物和对话的 Health API 示例](./screenshots/current-20260928/desktop-workbench.jpg)
 
 检查点：
 
@@ -104,13 +104,13 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 ### 第 2 步：选择本地仓库
 
-在桌面端左侧的本地项目卡片里点击“选择本地仓库”，选择包含 `.git` 的仓库根目录。
+在工作台顶部的项目 / Run 选择器中点击“选择本地仓库”，选择包含 `.git` 的仓库根目录。
 
-![选择本地仓库](./screenshots/v2.2-beginner-manual/02-select-local-repository.jpg)
+![当前项目与 Run 选择器：选择本地仓库入口](./screenshots/current-20260928/desktop-project-runs.jpg)
 
 选择后，桌面端会读取仓库名称和当前分支。确认显示正确后再继续。
 
-![仓库已经加载](./screenshots/v2.2-beginner-manual/03-repository-loaded.jpg)
+![当前已加载仓库与分支；本演示尚未配对团队](./screenshots/current-20260928/desktop-project-runs.jpg)
 
 本次操作是重新打开当前仓库的选择器，因此没有切换到其他目录。
 
@@ -118,21 +118,21 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 进入 Web 根地址 `/`。首次登录且没有项目时，所有者点击“创建团队项目”，在弹窗中填写名称、短标识（Slug）、已有仓库和描述。短标识使用小写字母、数字和单个连字符。
 
-![空项目的 Studio 入口](./screenshots/studio-management-20260910/01-empty-studio.png)
+![当前创建团队项目弹窗：填写中的示例，尚未提交](./screenshots/current-20260928/web-create-project.jpg)
 
 创建成功后会留在 Studio，并自动选中新项目，显示工作请求、桌面配对和 GitHub 交付。已有项目通过项目选择区切换；页面不会擅自选择其他项目的 Run。成员没有创建项目权限，重复短标识、登录过期或保存结果不确定时按表单提示处理。
 
-![创建项目后自动选中并提交需求](./screenshots/studio-management-20260910/02-project-request.png)
+![当前已选项目的工作请求与草稿](./screenshots/current-20260928/web-work-requests.jpg)
 
 左侧“工作台”承载需求、配对和交付；“团队总览”查看成员、项目费用、最近 Run 与测试摘要；“设置”分为预算和策略。旧 `/legacy-shell` 地址仅重定向到 Studio，正常操作不再进入旧界面。
 
 在“设置 → Policy”中区分默认回退和团队已保存状态，并查看所有规则、最低要求、例外条件和当前项目的生效动作。所有者可选择预设或编辑规则，先点“预览变更”，核对警告/阻断等变化后“确认保存”；负责人和成员只读。默认回退不会因为名称相同而被标成已保存。
 
-![团队策略保存前预览](./screenshots/studio-management-20260910/03-policy-preview.png)
+![当前团队策略变更预览：未确认保存](./screenshots/current-20260928/web-policy-preview.jpg)
 
 保存后应在桌面端点击“同步团队”，检查策略版本。Web 显示的是云端版本，不能据此断言桌面端已同步。并发修改冲突或保存结果不确定时，先重新读取云端策略，再决定是否继续编辑。项目覆盖策略当前仅显示，不提供编辑入口。
 
-上述三张截图来自 2026-09-10 的独立 Postgres schema、真实 Web / API / Electron 初始化回归；没有调用模型。后续工作流的真实模型服务商验收另行记录。
+上述三张图更新于 2026-09-28，来自隔离的演示 API 和当前 Web。项目创建表单与策略预览未提交；工作请求已保存。它们不代表重新完成了原 2026-09-10 的 Postgres 初始化回归，也未调用真实模型。
 
 <a id="第-4-步在-web-创建-work-request"></a>
 
@@ -145,11 +145,11 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 - 标题：`新手演练：验证本地工作流`
 - 说明：创建一个确定性验证标记，执行保存的 `npm test`，准备 Draft PR 交付包，但不要发布 PR。
 
-![填写工作请求](./screenshots/v2.2-beginner-manual/06-create-work-request-form.jpg)
+![当前工作请求表单：第三条草稿尚未提交](./screenshots/current-20260928/web-work-requests.jpg)
 
 点击 `Create Work Request`。状态变成 `open`，表示请求已经进入团队队列，尚未被桌面端认领。
 
-![工作请求已创建](./screenshots/v2.2-beginner-manual/07-work-request-created.jpg)
+![当前工作请求列表：两条已保存的演示请求](./screenshots/current-20260928/web-work-requests.jpg)
 
 <a id="第-5-步在-desktop-认领-work-request"></a>
 
@@ -157,11 +157,15 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 回到桌面端，在 `WORK REQUESTS` 区域点击“刷新”。新任务应显示为“待领取”。
 
-![桌面端收到工作请求](./screenshots/v2.2-beginner-manual/08-desktop-work-request-inbox.jpg)
+![历史截图（待重拍）：桌面端收到工作请求](./screenshots/v2.2-beginner-manual/08-desktop-work-request-inbox.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 点击“创建本地 Run”。桌面端会认领该请求，在本地 SQLite 中生成唯一 Run，并从需求澄清阶段开始。
 
-![本地 Run 已创建](./screenshots/v2.2-beginner-manual/09-local-run-created.jpg)
+![历史截图（待重拍）：本地 Run 已创建](./screenshots/v2.2-beginner-manual/09-local-run-created.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 此时可以看到六个阶段：需求澄清、方案设计、开发实现、测试证据、PR 交付和业务验收。
 
@@ -169,7 +173,7 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 在第一个节点点击“生成需求澄清”。系统会把原始工作请求整理成可验收目标、非目标和后续门禁所需信息。
 
-![需求澄清已生成](./screenshots/v2.2-beginner-manual/10-clarification-generated.jpg)
+![当前需求澄清阅读区：Health API 演示产物](./screenshots/current-20260928/desktop-clarification.jpg)
 
 完成后流程不会直接进入设计，而是停在“需求确认 Gate”。
 
@@ -179,7 +183,9 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 在门禁的节点检查面板中点击“去 Agents 运行门禁审查”，然后点击“运行门禁审查”。
 
-![需求门禁的门禁审查](./screenshots/v2.2-beginner-manual/11-knowledge-review.jpg)
+![历史截图（待重拍）：需求门禁的门禁审查](./screenshots/v2.2-beginner-manual/11-knowledge-review.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 本次门禁审查以 4 个知识引用为依据，对当前需求门禁和澄清产物进行检查，给出 `warn`、82% 置信度，并指出仍缺少测试证据。该建议不会自动批准或拒绝门禁。
 
@@ -189,7 +195,9 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 - 门禁审查建议已存在。
 - 策略快照允许当前用户审批。
 
-![需求门禁可以审批](./screenshots/v2.2-beginner-manual/12-clarification-gate-ready.jpg)
+![历史截图（待重拍）：需求门禁可以审批](./screenshots/v2.2-beginner-manual/12-clarification-gate-ready.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 ### 第 8 步：生成并评审方案设计
 
@@ -197,11 +205,11 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 设计产物说明实现方式和测试策略；“设计输入与代码核验依据”可以查看本次使用的澄清版本、执行工具、模型和代码引用。生成时可点击“取消生成”，节点不会因取消而推进，可稍后重试。
 
-![方案设计已生成](./screenshots/v2.2-beginner-manual/13-design-generated.jpg)
+![当前方案设计阅读区：Health API 演示产物](./screenshots/current-20260928/desktop-design.jpg)
 
 方案完成后再次进入门禁。按相同方式运行门禁审查，以知识和规范为依据检查当前方案门禁及设计产物，再通过“方案评审 Gate”。
 
-![方案门禁的门禁审查](./screenshots/v2.2-beginner-manual/14-design-knowledge-review.jpg)
+![当前方案 Gate 的内容与审查标签：支付幂等性演示](./screenshots/current-20260928/desktop-review-content.jpg)
 
 两个门禁都通过后，开发实现节点才成为当前步骤。
 
@@ -213,7 +221,9 @@ V2.2 还支持有边界的独立 Agent 运行时、记忆生命周期和多 Agen
 
 选择 `Implement locally`，点击 `Coding Agent`。Coding Agent 会创建独立的受管工作树，不直接在主工作目录里修改文件。
 
-![Coding Agent 准备启动](./screenshots/v2.2-beginner-manual/15-coding-agent-ready.jpg)
+![历史截图（待重拍）：Coding Agent 准备启动](./screenshots/v2.2-beginner-manual/15-coding-agent-ready.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 本次 CRI 后面连接的是本地确定性执行器。接入真实 OpenCode 时，权限、代码差异、测试和证据流程保持相同。
 
@@ -227,7 +237,9 @@ npm install --package-lock=false
 
 只在命令和仓库符合预期时点击“仅批准本次”。这个授权只对当前请求生效。
 
-![依赖安装权限](./screenshots/v2.2-beginner-manual/16-bootstrap-permission.jpg)
+![历史截图（待重拍）：依赖安装权限](./screenshots/v2.2-beginner-manual/16-bootstrap-permission.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 如果不应安装依赖，点击“拒绝”，不要为了推进工作流盲目批准。
 
@@ -235,7 +247,9 @@ npm install --package-lock=false
 
 依赖准备完成后，Agent 请求第二次一次性授权。本次只允许写入 `devflow-native-change.txt`。
 
-![受控文件修改权限](./screenshots/v2.2-beginner-manual/17-edit-permission.jpg)
+![历史截图（待重拍）：受控文件修改权限](./screenshots/v2.2-beginner-manual/17-edit-permission.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 确认目标文件和任务一致后点击“仅批准本次”。Agent 随后执行修改、运行保存的测试命令，并归档代码差异、轨迹和测试证据。
 
@@ -250,7 +264,9 @@ Agent 完成后，Agents 页面显示：
 - 测试证据：通过
 - 清理：工作树仍保留，可供检查
 
-![Coding Agent 完成](./screenshots/v2.2-beginner-manual/18-coding-agent-completed.jpg)
+![历史截图（待重拍）：Coding Agent 完成](./screenshots/v2.2-beginner-manual/18-coding-agent-completed.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 本次代码差异只新增一行确定性标记。正式任务中应在这里仔细检查完整变更路径、代码差异、工具调用和权限时间线。
 
@@ -258,7 +274,7 @@ Agent 完成后，Agents 页面显示：
 
 Coding Agent 已经运行过保存的测试，但工作流仍要求在“测试证据”节点明确执行一次。点击“去 Tests 执行本地测试”，确认命令为 `npm test`，再点击“执行本地测试”。
 
-![本地测试通过](./screenshots/v2.2-beginner-manual/19-local-test-passed.jpg)
+![当前 Health API 的实际测试证据；命令为 node --test](./screenshots/current-20260928/desktop-tests.jpg)
 
 本次结果：
 
@@ -280,7 +296,9 @@ Coding Agent 已经运行过保存的测试，但工作流仍要求在“测试�
 - 测试证据版本与摘要
 - 策略、预算和门禁审查摘要
 
-![PR 交付包已生成](./screenshots/v2.2-beginner-manual/20-pr-delivery-package.jpg)
+![历史截图（待重拍）：PR 交付包已生成](./screenshots/v2.2-beginner-manual/20-pr-delivery-package.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 <a id="第-15-步prepare-github-delivery"></a>
 
@@ -290,7 +308,9 @@ Coding Agent 已经运行过保存的测试，但工作流仍要求在“测试�
 
 这个动作仍不会获得 Web 审批权限，也不会自行发布。
 
-![桌面端等待 Web 审批](./screenshots/v2.2-beginner-manual/21-delivery-awaiting-web-approval.jpg)
+![历史截图（待重拍）：桌面端等待 Web 审批](./screenshots/v2.2-beginner-manual/21-delivery-awaiting-web-approval.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 看到“等待 Web 审批”说明本地准备已完成。桌面端此时会保持在 PR 交付节点。
 
@@ -300,7 +320,9 @@ Coding Agent 已经运行过保存的测试，但工作流仍要求在“测试�
 
 回到 Web，重新打开团队项目。GitHub 交付区域应出现 `approval required` 请求。
 
-![Web 显示审批请求](./screenshots/v2.2-beginner-manual/22-web-delivery-approval-required.jpg)
+![历史截图（待重拍）：Web 显示审批请求](./screenshots/v2.2-beginner-manual/22-web-delivery-approval-required.jpg)
+
+_本图来自原 V2.2 演练。本次隔离桌面环境未完成配对，未重新执行该状态；不可视为当前界面或本轮验证结果。_
 
 真正批准前，lead 或 owner 必须核对：
 
@@ -317,11 +339,11 @@ Coding Agent 已经运行过保存的测试，但工作流仍要求在“测试�
 
 在 Web 的 Run 列表中选择教学 Run。状态显示“等待人评”，活动 Agent 显示 Coding Agent 已完成，测试证据显示多次通过记录。
 
-![Web 选择已同步的 Run](./screenshots/v2.2-beginner-manual/23-web-run-evidence-chain.jpg)
+![当前 Web 团队总览：示例成员、Run 与测试摘要](./screenshots/current-20260928/web-team-overview.jpg)
 
-证据链显示当前完成度 86%：澄清、设计、实现、测试已完成，PR 节点仍在运行。
+原 V2.2 教学 Run 的证据链完成度为 86%，PR 节点仍在运行。下方新图换用支付幂等性示例：四个已同步节点完成三个，显示 75%，不是原教学 Run，也不是本地八节点全流程的完成率。
 
-![Web 证据链](./screenshots/v2.2-beginner-manual/24-web-evidence-chain.jpg)
+![当前 Web 证据链：支付幂等性示例的四个同步节点](./screenshots/current-20260928/web-evidence-review.jpg)
 
 到这里，一条任务已经完成“需求 → 设计 → 实现 → 测试 → 交付准备”的完整本地路径。
 

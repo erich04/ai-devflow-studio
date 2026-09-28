@@ -1,0 +1,307 @@
+{
+  "sourceCommit": "bf18e4aa2347f34d3816239e6bd03ff3c0ad9fd6",
+  "date": "2026-09-28",
+  "captureMethod": "Computer Use: native Electron full window; Web full viewport, original JPEG bytes, no compositing or image generation",
+  "updatedImageReferences": {
+    "README.md": 12,
+    "docs/guides/devflow-studio-full-feature-walkthrough.md": 9,
+    "docs/guides/devflow-studio-v0.8-user-guide.md": 11,
+    "docs/guides/devflow-studio-v1.0-user-guide.md": 12,
+    "docs/guides/devflow-studio-v1.2-walkthrough.md": 8,
+    "docs/guides/devflow-studio-v1.3-walkthrough.md": 5,
+    "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md": 14
+  },
+  "remainingHistoricalImages": [
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/08-desktop-work-request-inbox.jpg",
+      "description": "历史截图（待重拍）：桌面端收到工作请求"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/09-local-run-created.jpg",
+      "description": "历史截图（待重拍）：本地 Run 已创建"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/11-knowledge-review.jpg",
+      "description": "历史截图（待重拍）：需求门禁的门禁审查"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/12-clarification-gate-ready.jpg",
+      "description": "历史截图（待重拍）：需求门禁可以审批"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/15-coding-agent-ready.jpg",
+      "description": "历史截图（待重拍）：Coding Agent 准备启动"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/16-bootstrap-permission.jpg",
+      "description": "历史截图（待重拍）：依赖安装权限"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/17-edit-permission.jpg",
+      "description": "历史截图（待重拍）：受控文件修改权限"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/18-coding-agent-completed.jpg",
+      "description": "历史截图（待重拍）：Coding Agent 完成"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/20-pr-delivery-package.jpg",
+      "description": "历史截图（待重拍）：PR 交付包已生成"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/21-delivery-awaiting-web-approval.jpg",
+      "description": "历史截图（待重拍）：桌面端等待 Web 审批"
+    },
+    {
+      "document": "docs/guides/devflow-studio-v2.2-beginner-operation-manual.md",
+      "image": "./screenshots/v2.2-beginner-manual/22-web-delivery-approval-required.jpg",
+      "description": "历史截图（待重拍）：Web 显示审批请求"
+    }
+  ],
+  "images": [
+    {
+      "file": "desktop-agents.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 411564,
+      "sha256": "cbafae929ca8af2f316972b2b6243651f6f32890dff779d3b9dcb1fc50d70b92",
+      "capturedAt": "2026-09-28T13:34:05.599050+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-clarification.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 576234,
+      "sha256": "14842b0c4ec6ea39f434cec1bb6703c9e69500cac86d81f0103a49fbc28a527e",
+      "capturedAt": "2026-09-28T13:23:09.308238+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-design.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 546458,
+      "sha256": "0f5219a6b2f523a809a18d2a89c3a499b5f513e25938731bcaceed850ad9a029",
+      "capturedAt": "2026-09-28T13:23:22.636602+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-gate-policy.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 530514,
+      "sha256": "a3f63e97f390a11e2af2660f76f36d1abec69d8a18f5486241b3a17316a0641d",
+      "capturedAt": "2026-09-28T13:36:00.972130+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-gate-review.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 530106,
+      "sha256": "0489e96c5e7fee8cbd711b669ae0385312e3e36c2794754b83c3d119703a402b",
+      "capturedAt": "2026-09-28T13:27:38.965118+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-implementation.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 571333,
+      "sha256": "59c9cb35d39650f3be822a2321589e0ad739c59454bddb1be6b88acabb181b88",
+      "capturedAt": "2026-09-28T13:26:42.741050+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-knowledge.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 583875,
+      "sha256": "e43bf0b9ac3182bca9ef5c82e06fd383c07630d785b6d044e1ee5b712d8ac46c",
+      "capturedAt": "2026-09-28T13:27:46.936432+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-mcp.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 257310,
+      "sha256": "f9b58a37ab24ba5c35066eeb2c6da67cd747d2d50c4f86586ba0e0e7bce7c4c2",
+      "capturedAt": "2026-09-28T13:33:37.867686+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-new-run.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 509384,
+      "sha256": "79dbe04b0da2a596f8b47a87fea63d49aa6544f4e72d64f20d560b6ccc05cc4b",
+      "capturedAt": "2026-09-28T13:37:16.397193+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-pr-preparation.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 571729,
+      "sha256": "00823bf1d8bd0e8f6f7942dfe20418773f4783fe51b6a72ff0c33aa2774ebab9",
+      "capturedAt": "2026-09-28T13:26:51.956417+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-project-runs.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 581159,
+      "sha256": "9c80e391ec3148c23ff4debb3a37a2c8b2f4b40da293723c5018ee893d6a540f",
+      "capturedAt": "2026-09-28T13:27:15.350098+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-review-content.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 537511,
+      "sha256": "6001c566d72f7d5ab7d5f48ab6257d29065fb96ac97f899c1b70c40d6c6850f9",
+      "capturedAt": "2026-09-28T13:36:02.908956+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-search.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 564028,
+      "sha256": "3c965776711c7a57e6ee8e882da70e9235dd3d7bb18f4c051a19b063762c4d34",
+      "capturedAt": "2026-09-28T13:35:43.490742+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-skills.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 238501,
+      "sha256": "23444cee2eb352fbdde37a28a9f48abf79aec1192bb7a54da95e8d46909ad1c7",
+      "capturedAt": "2026-09-28T13:33:24.262756+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-team-overview.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 668268,
+      "sha256": "8ec928f04089a03a7c5219a27eaabf6068ad2592afacc16983fbb2eea8fba438",
+      "capturedAt": "2026-09-28T13:33:49.104763+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-tests.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 505605,
+      "sha256": "2bdb0bc0ec50cb1c97a7332c780fb619ec975f3d600e43e00b9f605ac032f81c",
+      "capturedAt": "2026-09-28T13:41:58.551771+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-workbench.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 556079,
+      "sha256": "2f2fd31c27990a5a354093f3fe66b24e3e131e4ec3d2ebc21063de75f1a181bf",
+      "capturedAt": "2026-09-28T13:22:13.087870+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "desktop-workflow-overview.jpg",
+      "width": 3840,
+      "height": 1608,
+      "bytes": 607944,
+      "sha256": "f1377a093861f37f9b391e355649805f92568cd7ff381b5a5966d182f8965cde",
+      "capturedAt": "2026-09-28T13:26:59.444836+00:00",
+      "surface": "Electron"
+    },
+    {
+      "file": "web-budget-governance.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 71385,
+      "sha256": "155cdafc3f9bdacb43a65ad0f6bb77a11c1b3ddab1e67e8128f451f66bcff27f",
+      "capturedAt": "2026-09-28T13:35:25.629948+00:00",
+      "surface": "Web"
+    },
+    {
+      "file": "web-create-project.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 79619,
+      "sha256": "f187f8de697cbad1ef9df32135bc94c444bb4d662de2a8d9201b1a4f9ac686a3",
+      "capturedAt": "2026-09-28T13:34:49.220279+00:00",
+      "surface": "Web"
+    },
+    {
+      "file": "web-evidence-review.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 95641,
+      "sha256": "2f79911da051a3c16dd788969ebf4e66773d4608a2191c99e6dd94e602866512",
+      "capturedAt": "2026-09-28T13:42:07.740909+00:00",
+      "surface": "Web"
+    },
+    {
+      "file": "web-policy-preview.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 59994,
+      "sha256": "9886deba004f5f4f31a72bfd669a4f1120886d6e7eb79e074ec9303fd6d9caa1",
+      "capturedAt": "2026-09-28T13:36:49.277651+00:00",
+      "surface": "Web"
+    },
+    {
+      "file": "web-policy-rules.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 83260,
+      "sha256": "dea1a74fc07c14e5a9788d79b338b3bcb2541a538085303d4e3e4cdf18d9fa9f",
+      "capturedAt": "2026-09-28T13:41:48.049879+00:00",
+      "surface": "Web"
+    },
+    {
+      "file": "web-team-overview.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 71956,
+      "sha256": "53bb2abb44771b973f6b5c2849f195f2d15a71282e75ee155d8594d69167f94e",
+      "capturedAt": "2026-09-28T13:35:26.396104+00:00",
+      "surface": "Web"
+    },
+    {
+      "file": "web-team-policy.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 58362,
+      "sha256": "da92319c875d414d54b5384eac7b497dbc7b1b36ae31471dda652de6ffd1929c",
+      "capturedAt": "2026-09-28T13:32:08.549733+00:00",
+      "surface": "Web"
+    },
+    {
+      "file": "web-work-requests.jpg",
+      "width": 1280,
+      "height": 720,
+      "bytes": 102443,
+      "sha256": "cb8ea25a17ea9fed938a9da45a54dbc0d26f30cf2504bbc22beb046c3efdd79d",
+      "capturedAt": "2026-09-28T13:34:32.926596+00:00",
+      "surface": "Web"
+    }
+  ]
+}

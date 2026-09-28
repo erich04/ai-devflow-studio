@@ -6,9 +6,9 @@
 
 [快速开始](#quick-start) · [完整流程](#from-request-to-acceptance) · [架构](#architecture) · [文档](#documentation) · [项目简介](docs/product/project-introduction.zh-CN.md)
 
-![Electron 工作台全窗口：四个阶段已完成、三组测试通过，并显示用量与已有项目对话](docs/guides/screenshots/readme-20260924/desktop-workbench.png)
+![Electron 工作台全窗口：四个阶段已完成、三组测试通过，并显示用量与已有项目对话](docs/guides/screenshots/current-20260928/desktop-workbench.jpg)
 
-_2026 年 9 月 24 日的 Electron 全窗口截图。Payments API 示例包含四个工作流实例、阶段进度、产物、三条测试结果、用量估算和已保存的对话。流程历史、审查、用量和对话内容为演示样例；示例项目中的 14 项测试确已执行。点击图片可查看原始分辨率。[截图来源与范围](docs/guides/screenshots/readme-20260924/README.md)。_
+_2026 年 9 月 28 日的 Electron 全窗口截图。Payments API 示例包含四个工作流实例、阶段进度、产物、三条测试结果、用量估算和已保存的对话。流程历史、审查、用量和对话内容为演示样例；示例项目中的 14 项测试确已执行。点击图片可查看原始分辨率。[截图来源与范围](docs/guides/screenshots/current-20260928/README.md)。_
 
 > **发布与路线图状态**：最新已发布版本是 [`v2.3.0`](https://github.com/erich04/ai-devflow-studio/releases/tag/v2.3.0)，发布时间为 2026 年 9 月 14 日。本 README 介绍当前 `main` 源码，包括此后完成的工作台、记忆、模型治理和多组织改动。使用这些改动需要从源码构建，已发布安装包不会自动包含后续源码变化。详见 [V2.3 发布说明](docs/releases/v2.3.0/notes.md)与[路线图](docs/roadmap.md)。候选版本验证、正式验收和已发布安装包分别记录。
 
@@ -32,9 +32,9 @@ _2026 年 9 月 24 日的 Electron 全窗口截图。Payments API 示例包含�
 <details>
 <summary>查看包含阶段卡片与证据的完整流程看板</summary>
 
-![Electron 流程视图全窗口：澄清、设计、实现与测试已完成，PR 交付待处理](docs/guides/screenshots/readme-20260924/desktop-workflow-overview.png)
+![Electron 流程视图全窗口：澄清、设计、实现与测试已完成，PR 交付待处理](docs/guides/screenshots/current-20260928/desktop-workflow-overview.jpg)
 
-_同一示例的流程视图，展示六个阶段、任务/门禁/测试/交付卡片、产物与轨迹数量、测试结果和独立对话。截图保留完整的 2560 × 1600 应用视口。_
+_同一示例的流程视图，展示六阶段导航、当前可见的流程卡片、节点详情和独立对话；下方卡片通过页面内滚动查看。截图保留完整的 3840 × 1608 应用视口。_
 
 </details>
 
@@ -43,25 +43,25 @@ _同一示例的流程视图，展示六个阶段、任务/门禁/测试/交付�
 
 **1. 需求澄清：原始请求、验收标准与非目标**
 
-![Electron 全窗口：展开的需求澄清产物与原始请求，右侧保留项目对话](docs/guides/screenshots/readme-20260924/desktop-clarification.png)
+![Electron 全窗口：展开的需求澄清产物与原始请求，右侧保留项目对话](docs/guides/screenshots/current-20260928/desktop-clarification.jpg)
 
 _Run 仍停留在 PR 准备阶段，用户正在浏览已完成的澄清节点。阅读区展开了目标、验收标准与范围边界。_
 
 **2. 方案设计：模块职责、取舍与评审问题**
 
-![Electron 全窗口：支付幂等方案、组件职责与设计评审对话](docs/guides/screenshots/readme-20260924/desktop-design.png)
+![Electron 全窗口：Health API 方案、组件职责与项目讨论](docs/guides/screenshots/current-20260928/desktop-design.jpg)
 
-_幂等性示例将拟议模块、数据库一致性边界、测试计划和发布顺序问题串联起来。其方案评审 Gate 仍未通过。_
+_Health API 示例展示 HealthRoute、HealthService 与 DependencyProbe 的职责和依赖降级方案。当前浏览的是已完成的设计阶段；300 ms 超时仍是未完成的设计目标。_
 
-**3. 开发实现：变更文件与示例仓库的真实 Git 差异**
+**3. 开发实现：变更文件与验证摘要**
 
-![Electron 全窗口：变更文件摘要、展开的 Git 差异，以及测试和交付进度](docs/guides/screenshots/readme-20260924/desktop-implementation.png)
+![Electron 全窗口：变更文件表、验证摘要，以及测试和交付进度](docs/guides/screenshots/current-20260928/desktop-implementation.jpg)
 
-_产物包含隔离示例仓库的真实差异，涉及实现文件与测试文件。流程历史和对话仍为演示样例。_
+_当前可见区域列出隔离示例仓库的实现文件、测试文件和 14 项测试摘要；完整差异位于产物下方。流程历史和对话仍为演示样例。_
 
-**5. PR 准备：交付范围、测试证据与剩余检查**
+**4. PR 准备：交付范围、测试证据与剩余检查**
 
-![Electron 全窗口：展开的 PR 准备材料，包含变更文件、已通过的示例测试与未完成的交付检查清单](docs/guides/screenshots/readme-20260924/desktop-pr-preparation.png)
+![Electron 全窗口：展开的 PR 准备材料，展示交付范围与变更文件](docs/guides/screenshots/current-20260928/desktop-pr-preparation.jpg)
 
 _人工编写的 PR 材料预览用于展示交付阅读区，其中明确记录尚未实现的超时要求和待完成的团队批准。该示例没有发布 PR，也没有完成业务验收。_
 
@@ -94,7 +94,7 @@ _人工编写的 PR 材料预览用于展示交付阅读区，其中明确记录
 
 实现边界与实验记录见[记忆与上下文验证](docs/engineering/memory-context-execution-validation.md)、[记忆生命周期 ADR](docs/adr/0018-scoped-agent-memory-lifecycle.md)和[编码上下文 ADR](docs/adr/0021-coding-memory-context-and-evidence-evaluation.md)。
 
-![Electron 全窗口：待批准的方案 Gate、就绪检查、策略详情与已有设计评审对话](docs/guides/screenshots/readme-20260924/desktop-gate-review.png)
+![Electron 全窗口：待批准的方案 Gate、就绪检查、策略详情与已有设计评审对话](docs/guides/screenshots/current-20260928/desktop-gate-review.jpg)
 
 _第二个示例 Run 展示待批准的方案 Gate、就绪检查与策略详情，右侧保留关于并发、发布顺序和兼容性的讨论。设计、审查和对话均为明确标注的预置演示记录，Gate 仍未获批准。_
 
@@ -110,34 +110,34 @@ _第二个示例 Run 展示待批准的方案 Gate、就绪检查与策略详情
 - **可恢复同步**：持久化发件箱保存脱敏同步任务，支持有限次数重试与重启恢复。桌面端仍是本地 Run 和完整执行记录的权威来源。
 - **GitHub 交付（GitHub Delivery）**：交付意图（Delivery Intent）绑定精确提交、Run 版本、测试、仓库绑定和交付包。发布前必须取得独立签名的 Web 批准。遵循最小权限的 GitHub App 支持推送获准的精确分支，并通过 API 核验 Draft pull request。DevFlow 永不合并代码，也不强制推送、删除远端分支或发布标签。
 
-![Web 团队概览全窗口：成员、项目费用估算、不同阶段的 Run 与三组已通过测试摘要](docs/guides/screenshots/readme-20260924/web-team-overview.png)
+![Web 团队概览全窗口：成员、项目费用估算、不同阶段的 Run 与三组已通过测试摘要](docs/guides/screenshots/current-20260928/web-team-overview.jpg)
 
-_Next.js 团队概览展示示例成员、项目费用、Run 状态与测试证据。隔离的演示 API 通过正常端点接收脱敏示例摘要。完整截图与源码提交见[截图记录](docs/guides/screenshots/readme-20260924/README.md)。_
+_Next.js 团队概览展示示例成员、项目费用、Run 状态与测试证据。隔离的演示 API 通过正常端点接收脱敏示例摘要。完整截图与源码提交见[截图记录](docs/guides/screenshots/current-20260928/README.md)。_
 
 <details>
 <summary>Web 控制台图集：工作请求 → 证据与评审 → 预算 → 团队策略</summary>
 
 **1. 工作请求：提交需求与查看待领取队列**
 
-![Web 控制台全窗口：三条已保存请求、填写中的新请求草稿与项目/Run 选择器](docs/guides/screenshots/readme-20260924/web-work-requests.png)
+![Web 控制台全窗口：两条已保存请求、填写中的新请求草稿与项目/Run 选择器](docs/guides/screenshots/current-20260928/web-work-requests.jpg)
 
-_隔离的 Team API 保存了三条示例请求；填写中的表单是尚未提交的第四条草稿。桌面端须明确领取请求后才创建本地 Run。_
+_隔离的 Team API 保存了两条示例请求；填写中的表单是尚未提交的第三条草稿。桌面端须明确领取请求后才创建本地 Run。_
 
 **2. 证据与人工评审：核对进度，再批准下一阶段**
 
-![Web 全视口：交付指标、八个流程节点、38% 进度，以及带有评审草稿的待批准方案 Gate](docs/guides/screenshots/readme-20260924/web-evidence-review.png)
+![Web 全视口：四个已同步节点、75% 进度，以及待批准的方案 Gate](docs/guides/screenshots/current-20260928/web-evidence-review.jpg)
 
-_页面滚动到证据链，八个节点与待处理的人工决策完整可见。本演示预置了完整 Run 图；评审意见尚未提交。_
+_页面展示 API 已接收的四个节点，其中三个完成，因此显示 75%。这是当前同步摘要的进度，不是桌面端完整八节点流程的完成率；Gate 尚未批准。节点标题由当前 API 同步逻辑生成。_
 
 **3. 预算治理：额度、用量记录与限定范围的批准**
 
-![Web 设置全窗口：已保存项目预算、两条演示预算批准与填写中的批准草稿](docs/guides/screenshots/readme-20260924/web-budget-governance.png)
+![Web 设置全窗口：已保存项目预算、一条演示预算批准与新批准表单](docs/guides/screenshots/current-20260928/web-budget-governance.jpg)
 
-_示例使用每月 $200 的额度、$150 的预警阈值和两条批准记录展示控件。费用为演示值，没有调用付费模型。_
+_示例使用每月 $200 的额度、$150 的预警阈值和一条 $5 批准记录展示控件。费用为演示值，没有调用付费模型。_
 
 **4. 团队策略：规则动作、最低要求与修复指引**
 
-![Web 团队策略全窗口：已保存的 Recommended 预设、规则动作、最低要求和项目生效策略](docs/guides/screenshots/readme-20260924/web-team-policy.png)
+![Web 团队策略：已保存的 Recommended 预设、规则动作、最低要求和当前项目生效动作](docs/guides/screenshots/current-20260928/web-policy-rules.jpg)
 
 _演示 Owner 通过实际 Web 编辑器将内置 Recommended 预设保存为策略 v2。页面区分已保存的团队策略与桌面端上次同步的策略快照。_
 
@@ -393,4 +393,4 @@ corepack pnpm verify
 | 受治理的 GitHub 交付 | [V1.5 演练](docs/guides/devflow-studio-v1.5-walkthrough.md) |
 | 里程碑契约与计划 | [PRD 索引](docs/product/prd/README.md)、[路线图](docs/roadmap.md) |
 | 历史功能演示 | [完整功能演练](docs/guides/devflow-studio-full-feature-walkthrough.md)（V1.3）、[V2.2 演练](docs/guides/devflow-studio-v2.2-walkthrough.md) |
-| 本 README 的截图 | [源码提交、采集方法与演示数据范围](docs/guides/screenshots/readme-20260924/README.md) |
+| 本 README 的截图 | [源码提交、采集方法与演示数据范围](docs/guides/screenshots/current-20260928/README.md) |

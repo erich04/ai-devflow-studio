@@ -45,14 +45,14 @@ describe('v0.8 user guide documentation', () => {
     expect(imagePaths.length).toBeGreaterThanOrEqual(8)
     expect(imagePaths).toEqual(
       expect.arrayContaining([
-        './screenshots/14-electron-current-userdata-workbench.png',
-        './screenshots/02-search-filter.png',
-        './screenshots/05-tests-evidence.png',
-        './screenshots/12-electron-knowledge.png',
-        './screenshots/04-agent-workbench.png',
-        './screenshots/09-coding-node.png',
-        './screenshots/11-electron-team-overview.png',
-        './screenshots/08-team-overview.png',
+        './screenshots/current-20260928/desktop-workbench.jpg',
+        './screenshots/current-20260928/desktop-search.jpg',
+        './screenshots/current-20260928/desktop-tests.jpg',
+        './screenshots/current-20260928/desktop-knowledge.jpg',
+        './screenshots/current-20260928/desktop-agents.jpg',
+        './screenshots/current-20260928/desktop-implementation.jpg',
+        './screenshots/current-20260928/desktop-team-overview.jpg',
+        './screenshots/current-20260928/web-team-overview.jpg',
       ]),
     )
 
@@ -107,13 +107,13 @@ describe('v1.0 hands-on user guide documentation', () => {
     expect(imagePaths.length).toBeGreaterThanOrEqual(10)
     expect(imagePaths).toEqual(
       expect.arrayContaining([
-        './screenshots/14-electron-current-userdata-workbench.png',
-        './screenshots/01-workbench-gate-enforcement.png',
-        './screenshots/12-electron-knowledge.png',
-        './screenshots/04-agent-workbench.png',
-        './screenshots/09-coding-node.png',
-        './screenshots/08-team-overview.png',
-        './screenshots/11-electron-team-overview.png',
+        './screenshots/current-20260928/desktop-workbench.jpg',
+        './screenshots/current-20260928/desktop-gate-review.jpg',
+        './screenshots/current-20260928/desktop-knowledge.jpg',
+        './screenshots/current-20260928/desktop-agents.jpg',
+        './screenshots/current-20260928/desktop-implementation.jpg',
+        './screenshots/current-20260928/web-team-overview.jpg',
+        './screenshots/current-20260928/desktop-team-overview.jpg',
       ]),
     )
 
@@ -168,13 +168,13 @@ describe('v1.2 walkthrough documentation', () => {
     expect(imagePaths.length).toBeGreaterThanOrEqual(6)
     expect(imagePaths).toEqual(
       expect.arrayContaining([
-        './screenshots/14-electron-current-userdata-workbench.png',
-        './screenshots/01-workbench-gate-enforcement.png',
-        './screenshots/12-electron-knowledge.png',
-        './screenshots/04-agent-workbench.png',
-        './screenshots/09-coding-node.png',
-        './screenshots/08-team-overview.png',
-        './screenshots/11-electron-team-overview.png',
+        './screenshots/current-20260928/desktop-workbench.jpg',
+        './screenshots/current-20260928/desktop-gate-review.jpg',
+        './screenshots/current-20260928/desktop-knowledge.jpg',
+        './screenshots/current-20260928/desktop-agents.jpg',
+        './screenshots/current-20260928/desktop-implementation.jpg',
+        './screenshots/current-20260928/web-team-overview.jpg',
+        './screenshots/current-20260928/desktop-team-overview.jpg',
       ]),
     )
 
@@ -221,11 +221,11 @@ describe('v1.3 delivery walkthrough documentation', () => {
     expect(imagePaths.length).toBeGreaterThanOrEqual(5)
     expect(imagePaths).toEqual(
       expect.arrayContaining([
-        './screenshots/14-electron-current-userdata-workbench.png',
-        './screenshots/01-workbench-gate-enforcement.png',
-        './screenshots/09-coding-node.png',
-        './screenshots/05-tests-evidence.png',
-        './screenshots/08-team-overview.png',
+        './screenshots/current-20260928/desktop-workbench.jpg',
+        './screenshots/current-20260928/desktop-gate-review.jpg',
+        './screenshots/current-20260928/desktop-implementation.jpg',
+        './screenshots/current-20260928/desktop-tests.jpg',
+        './screenshots/current-20260928/web-team-overview.jpg',
       ]),
     )
 
@@ -269,15 +269,15 @@ describe('full feature walkthrough documentation', () => {
     expect(imagePaths.length).toBeGreaterThanOrEqual(7)
     expect(imagePaths).toEqual(
       expect.arrayContaining([
-        './screenshots/14-electron-current-userdata-workbench.png',
-        './screenshots/01-workbench-gate-enforcement.png',
-        './screenshots/12-electron-knowledge.png',
-        './screenshots/04-agent-workbench.png',
-        './screenshots/09-coding-node.png',
-        './screenshots/05-tests-evidence.png',
-        './screenshots/11-electron-team-overview.png',
-        './screenshots/08-team-overview.png',
-        './screenshots/07-mcp-management.png',
+        './screenshots/current-20260928/desktop-workbench.jpg',
+        './screenshots/current-20260928/desktop-gate-review.jpg',
+        './screenshots/current-20260928/desktop-knowledge.jpg',
+        './screenshots/current-20260928/desktop-agents.jpg',
+        './screenshots/current-20260928/desktop-implementation.jpg',
+        './screenshots/current-20260928/desktop-tests.jpg',
+        './screenshots/current-20260928/desktop-team-overview.jpg',
+        './screenshots/current-20260928/web-team-overview.jpg',
+        './screenshots/current-20260928/desktop-mcp.jpg',
       ]),
     )
 

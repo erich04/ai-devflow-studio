@@ -1,5 +1,7 @@
 # DevFlow Studio 全量基础功能体验指南
 
+> **截图更新（2026-09-28）**：下图为当前 `main`（`bf18e4aa`）重新构建后采集的界面，使用隔离的 Payments API 演示数据。正文中的历史版本、验收结果和限制仍属于原演练，不因换图而成为本次验证结论。当前节点使用“概览 / 内容与审查 / 产物与证据 / 执行记录”标签；详见[截图来源与尚未重拍项](./screenshots/current-20260928/README.md)。
+
 更新时间：2026-07-31
 
 状态：V1.3 历史指南，仅保留 V1.3 产品与发布语境。
@@ -86,7 +88,7 @@ corepack pnpm dev:electron
 - Electron 窗口标题是 `AI DevFlow Studio`，不是 Electron 默认应用。
 - 左侧能看到 `工作台`、`Team Overview`、`Knowledge`、`Agents`、`Skills`、`MCP`、`测试`。
 
-![Electron 工作台](./screenshots/14-electron-current-userdata-workbench.png)
+![Electron 工作台](./screenshots/current-20260928/desktop-workbench.jpg)
 
 <a id="1-workbench本地仓库与六阶段-run"></a>
 
@@ -116,7 +118,7 @@ corepack pnpm dev:electron
 - PR 节点显示 `生成 PR Draft`。
 - 业务验收节点显示 `生成验收证据包`。
 
-![工作台门禁策略执行](./screenshots/01-workbench-gate-enforcement.png)
+![工作台门禁策略执行](./screenshots/current-20260928/desktop-gate-review.jpg)
 
 <a id="2-gate-enforcement策略阻断补救"></a>
 
@@ -159,7 +161,7 @@ corepack pnpm dev:electron
 - 治理检查是证据驱动；仅检索得到的引用不会自动满足证据。
 - 节点检查面板里能看到当前节点关联的知识治理状态。
 
-![知识](./screenshots/12-electron-knowledge.png)
+![知识](./screenshots/current-20260928/desktop-knowledge.jpg)
 
 <a id="4-门禁审查-agent审查tracefinding"></a>
 
@@ -197,7 +199,9 @@ corepack pnpm dev:electron
 - 门禁审查发现项默认不会强制阻断。
 - 门禁建议是否阻断由策略评估决定，不由 Agent 核心逻辑直接决定。
 
-![Agent 工作台](./screenshots/04-agent-workbench.png)
+![Agent 工作台](./screenshots/current-20260928/desktop-agents.jpg)
+
+_当前图为方案 Gate 的 Agent 执行台，运行按钮由当前节点和配置决定；历史编码权限、预算重试场景未在本次截图中执行。_
 
 <a id="5-coding-agentfake-默认路径permission-relaydiffworktree"></a>
 
@@ -222,7 +226,9 @@ corepack pnpm dev:electron
 - 清理状态可见。
 - 开发只在匹配当前节点的编码运行完成且代码差异已持久化后推进到测试。
 
-![编码节点](./screenshots/09-coding-node.png)
+![编码节点](./screenshots/current-20260928/desktop-implementation.jpg)
+
+_当前图展示 Health API 示例的实现产物和变更文件；不表示正在运行 Coding Agent，亦不代表历史 Retry Coding 场景已重演。_
 
 <a id="6-tool--skill-timeline可观测性"></a>
 
@@ -268,7 +274,9 @@ corepack pnpm dev:electron
 - 测试报告中的已知 POSIX/Windows 工作区根目录显示为 `<workspace>`；上传到团队
   的摘要继续省略工作目录和原始输出。
 
-![测试证据](./screenshots/05-tests-evidence.png)
+![测试证据](./screenshots/current-20260928/desktop-tests.jpg)
+
+_当前 Health API 示例已有三组实际执行的测试证据（6 + 4 + 4 项）；命令检查仍对 `node --test` 显示包管理器命令提示，原样保留。_
 
 <a id="8-remediation--retry-coding"></a>
 
@@ -337,9 +345,11 @@ corepack pnpm dev:electron
   过期版本或缺工作流实例的写入会被拒绝。
 - 同 ID 的本地工作流实例/产物/事件优先于远端摘要，远端只补充仅远端存在的数据。
 
-![团队概览](./screenshots/11-electron-team-overview.png)
+![团队概览](./screenshots/current-20260928/desktop-team-overview.jpg)
 
-![Web 团队概览](./screenshots/08-team-overview.png)
+_当前桌面演示未完成团队配对，此图显示未配对边界；有成员、Run 和测试数据的团队视图见下方 Web 截图。_
+
+![Web 团队概览](./screenshots/current-20260928/web-team-overview.jpg)
 
 <a id="11-runtime-budget成本策略approval-retry"></a>
 
@@ -411,7 +421,9 @@ corepack pnpm dev:electron
 当前实测说明：技能显示未加载真实团队能力，MCP 显示未加载本地连接器；这两个页面当前
 应按管理壳计，不按可用运行时计。
 
-![MCP](./screenshots/07-mcp-management.png)
+![MCP](./screenshots/current-20260928/desktop-mcp.jpg)
+
+_当前图为未配置 MCP 的状态，未安装或执行连接器。_
 
 <a id="14-release-only-真实-opencode--豆包volcengine"></a>
 
