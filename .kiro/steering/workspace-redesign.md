@@ -5,7 +5,7 @@ fileMatchPattern: ["apps/**/*", "packages/**/*", "scripts/**/*"]
 
 # 工作区改造：执行约束
 
-适用于按 `docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md`（第 4 版，已确认）推进的各批次（S0–S6）。每个批次在 `.kiro/specs/` 下有独立的 spec。动手前先读方案中与当前批次相关的章节；spec 与方案冲突时以方案为准，并把差异记回 spec。与改造无关的改动不受本文件的批次边界限制。
+适用于按 `docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md`（已确认，当前为第 6 版）推进的各批次（S0–S6）。S0 在 `.kiro/specs/workspace-redesign-s0/` 下有 spec；从 S1 起不另建 spec，以方案第 7 节对应批次的改动清单作为任务清单，分成可评审的提交完成。动手前先读方案中与当前批次相关的章节；实施中发现的差异和范围外问题记回方案。与改造无关的改动不受本文件的批次边界限制。
 
 ## 不变的约束（方案第 3 节）
 
@@ -17,7 +17,7 @@ fileMatchPattern: ["apps/**/*", "packages/**/*", "scripts/**/*"]
 
 ## 批次边界
 
-- 只做当前批次在方案第 7 节列出的内容；范围外的问题记进方案或 spec，不顺手修。
+- 只做当前批次在方案第 7 节列出的内容；范围外的问题记进方案，不顺手修。
 - 每批独立、可回退。开发开关只影响界面，新旧界面不能同时发起同一动作。
 - 状态投影保持不依赖 React 和 Electron。是否下沉到 `packages/shared` 按实际复用情况决定，最迟在 S5 开始前定下。
 
