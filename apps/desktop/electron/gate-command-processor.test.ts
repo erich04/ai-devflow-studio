@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildGateReviewSubjectSnapshot } from '@ai-devflow/shared'
+import {
+  buildDesignRevisionIdentity,
+  buildGateReviewSubjectSnapshot,
+  completeWorkflowAgentNode,
+  createWorkflowRunFromRequest,
+} from '@ai-devflow/shared'
 import type {
   AgentEvent,
   Artifact,
@@ -85,6 +90,13 @@ const designArtifact: Artifact = {
   updatedAt: '2026-08-01T01:00:00.000Z',
 }
 
+const clarificationArtifact: Artifact = {
+  ...designArtifact,
+  id: 'artifact-clarification',
+  kind: 'clarification',
+  nodeId: 'clarification-gate',
+}
+
 const run: WorkflowRun = {
   id: materialization.runId,
   version: 3,
@@ -98,6 +110,18 @@ const run: WorkflowRun = {
   createdAt: '2026-08-01T00:03:00.000Z',
   updatedAt: '2026-08-01T01:01:00.000Z',
   nodes: [
+    {
+      id: 'clarification-gate',
+      stage: 'clarify',
+      title: 'Clarification Gate',
+      subtitle: 'Approved requirement',
+      kind: 'gate',
+      status: 'success',
+      ownerId: 'gate-owner-1',
+      requiredRole: 'lead',
+      retryCount: 0,
+      artifactIds: [clarificationArtifact.id],
+    },
     {
       id: designArtifact.nodeId,
       stage: 'design',
@@ -149,6 +173,10 @@ const run: WorkflowRun = {
   ],
 }
 
+// The server binds the subject the Web approver saw; design approvals require it (plan S5, Q8).
+const defaultArtifacts = [clarificationArtifact, designArtifact]
+const defaultReviewSubject = await buildGateReviewSubjectSnapshot({ run, artifacts: defaultArtifacts })
+
 const pendingCommand: GateCommand = {
   id: 'gate-command-1',
   organizationId: pairing.organizationId,
@@ -158,6 +186,7 @@ const pendingCommand: GateCommand = {
   nodeId: run.currentNodeId,
   action: 'approve',
   workflowCommand: 'approve_gate',
+  reviewSubject: defaultReviewSubject,
   reason: 'Server-only reason must not enter local events.',
   requestedByUserId: 'review-lead-1',
   requestedRole: 'lead',
@@ -440,11 +469,11 @@ function createSingleCommandHarness(input: {
     repositoryKnowledge:
       input.repositoryKnowledge ?? repositoryKnowledgeBinding,
     evidence: {
-      artifacts: input.artifacts ?? [
-        localRun?.id === designArtifact.runId
-          ? designArtifact
-          : { ...designArtifact, runId: localRun?.id ?? command.runId },
-      ],
+      artifacts: input.artifacts ?? defaultArtifacts.map((artifact) =>
+        localRun?.id === artifact.runId
+          ? artifact
+          : { ...artifact, runId: localRun?.id ?? command.runId },
+      ),
       codingRuns: [],
       codingDiffs: [],
       testEvidence: [],
@@ -525,25 +554,119 @@ function createSingleCommandHarness(input: {
 
 describe('Gate Command background processor', () => {
   it.each(['current', 'changed', 'missing'])('rechecks the exact server-bound subject before local execution: %s', async (scenario) => {
-    const clarification: Artifact = { ...designArtifact, id: 'artifact-clarification',
-      kind: 'clarification', nodeId: 'clarification-gate' }
-    const completeRun: WorkflowRun = { ...run, nodes: [
-      { ...run.nodes[1]!, id: 'clarification-gate', stage: 'clarify', kind: 'gate',
-        status: 'success', artifactIds: [clarification.id] }, ...run.nodes,
-    ] }
-    const original = [clarification, designArtifact]
-    const reviewSubject = await buildGateReviewSubjectSnapshot({ run: completeRun, artifacts: original })
     const current = scenario === 'missing' ? [] : scenario === 'changed'
-      ? original.map((artifact) => artifact.id === designArtifact.id ? { ...artifact, content: 'Changed after Web approval.' } : artifact)
-      : original
-    const harness = createSingleCommandHarness({ run: completeRun, artifacts: current,
-      inboxCommand: { ...pendingCommand, reviewSubject }, command: { ...deliveringCommand, reviewSubject } })
+      ? defaultArtifacts.map((artifact) => artifact.id === designArtifact.id ? { ...artifact, content: 'Changed after Web approval.' } : artifact)
+      : defaultArtifacts
+    const harness = createSingleCommandHarness({ artifacts: current })
     const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
     expect(result.results[0]?.outcomeCode).toBe(scenario === 'current' ? 'applied' : 'evidence_blocked')
     expect(harness.commitGateCommandExecution.mock.calls[0]![0].run?.version)
       .toBe(scenario === 'current' ? 4 : undefined)
-    expect(gateCommandExecutionFingerprint({ ...deliveringCommand, reviewSubject }))
-      .not.toBe(gateCommandExecutionFingerprint(deliveringCommand))
+    const { reviewSubject: _subject, ...withoutSubject } = deliveringCommand
+    expect(gateCommandExecutionFingerprint(deliveringCommand))
+      .not.toBe(gateCommandExecutionFingerprint(withoutSubject))
+  })
+
+  // Plan S5, Q8: remote approvals of requirement and design Gates fail closed and record the version.
+  it('refuses a design approval that carries no review subject', async () => {
+    const { reviewSubject: _subject, ...withoutSubject } = deliveringCommand
+    const { reviewSubject: _pending, ...pendingWithoutSubject } = pendingCommand
+    const harness = createSingleCommandHarness({ inboxCommand: pendingWithoutSubject, command: withoutSubject })
+    const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
+    expect(result.results[0]?.outcomeCode).toBe('evidence_blocked')
+    expect(harness.commitGateCommandExecution.mock.calls[0]![0].run).toBeUndefined()
+  })
+
+  it('records the approved design version in the remote approval event', async () => {
+    const harness = createSingleCommandHarness({})
+    const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
+    expect(result.results[0]?.outcomeCode).toBe('applied')
+    expect(harness.commitGateCommandExecution.mock.calls[0]![0].event?.designAudit).toEqual({
+      version: 1,
+      action: 'approved',
+      ...(await buildDesignRevisionIdentity(designArtifact)),
+      actorId: deliveringCommand.requestedByUserId,
+    })
+  })
+
+  it('refuses a design approval when the Gate links more than one design', async () => {
+    const second: Artifact = { ...designArtifact, id: 'artifact-design-2' }
+    const ambiguousRun: WorkflowRun = {
+      ...run,
+      nodes: run.nodes.map((node) => node.id === 'design-gate-1'
+        ? { ...node, artifactIds: [designArtifact.id, second.id] }
+        : node),
+    }
+    const harness = createSingleCommandHarness({ run: ambiguousRun, artifacts: [...defaultArtifacts, second] })
+    const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
+    expect(result.results[0]?.outcomeCode).toBe('evidence_blocked')
+  })
+
+  async function remoteRequirementGate(status: 'review_requested' | 'revision_requested' = 'review_requested') {
+    const created = createWorkflowRunFromRequest({
+      runId: materialization.runId, title: 'Remote clarify', request: 'Clarify the retry boundary.',
+      projectId: pairing.localProjectId!, creatorId: 'run-creator-1', branchName: 'ai/remote-clarify', now: '2026-08-01T00:10:00.000Z',
+    })
+    const agentNode = created.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')!
+    const revision: Artifact = {
+      id: `artifact-${created.run.id}-clarification`, runId: created.run.id, nodeId: agentNode.id, kind: 'clarification',
+      title: 'Clarification v1', summary: 'First revision.', content: 'Body.', redacted: true, updatedAt: '2026-08-01T00:20:00.000Z',
+      clarificationRevision: {
+        version: 1, revision: 1, status: 'review_requested', revisionDigest: 'a'.repeat(64),
+        rawRequestArtifactId: created.artifacts[0]!.id, feedbackArtifactIds: [],
+        goals: ['Goal'], acceptanceCriteria: ['Acceptance'], nonGoals: [], assumptions: [], risks: [], openQuestions: [],
+        executor: {
+          version: 1, kind: 'direct-provider', executorId: 'fake', executorVersion: '1',
+          capabilityProfile: 'repository-read-only-v1', model: 'fake', startedAt: '2026-08-01T00:19:00.000Z',
+          completedAt: '2026-08-01T00:20:00.000Z', durationMs: 1, terminalReason: 'success', contextDigest: 'b'.repeat(64),
+        },
+        generatedAt: '2026-08-01T00:20:00.000Z',
+      },
+    }
+    const completed = completeWorkflowAgentNode({
+      run: created.run, nodeId: agentNode.id, artifacts: created.artifacts, generatedArtifact: revision,
+      existingEvents: created.events, actorName: 'User', now: '2026-08-01T00:20:00.000Z',
+    })
+    const gateRun: WorkflowRun = { ...completed.run, version: 3 }
+    const reviewSubject = await buildGateReviewSubjectSnapshot({ run: gateRun, artifacts: completed.artifacts })
+    const localArtifacts = completed.artifacts.map((artifact) => artifact.id === revision.id
+      ? { ...artifact, clarificationRevision: { ...artifact.clarificationRevision!, status } }
+      : artifact)
+    const inboxCommand: GateCommand = { ...pendingCommand, nodeId: gateRun.currentNodeId, reviewSubject }
+    return {
+      revision,
+      harness: createSingleCommandHarness({
+        run: gateRun,
+        artifacts: localArtifacts,
+        inboxCommand,
+        command: { ...inboxCommand, version: 2, status: 'delivering', updatedAt: deliveringCommand.updatedAt },
+      }),
+    }
+  }
+
+  it('records the approved requirement revision in a remote approval, like a local approval', async () => {
+    const { revision, harness } = await remoteRequirementGate()
+    const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
+    expect(result.results[0]?.outcomeCode).toBe('applied')
+    expect(harness.commitGateCommandExecution.mock.calls[0]![0].event?.clarificationAudit).toEqual({
+      version: 1, action: 'approved', artifactId: revision.id, revision: 1,
+      revisionDigest: 'a'.repeat(64), actorId: deliveringCommand.requestedByUserId,
+    })
+  })
+
+  it('refuses a remote requirement approval when the local revision is no longer under review', async () => {
+    const { harness } = await remoteRequirementGate('revision_requested')
+    const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
+    expect(result.results[0]?.outcomeCode).toBe('evidence_blocked')
+    expect(harness.commitGateCommandExecution.mock.calls[0]![0].run).toBeUndefined()
+  })
+
+  it('still lets a lead reject a design Gate without a review subject', async () => {
+    const { reviewSubject: _subject, ...base } = deliveringCommand
+    const reject: GateCommand = { ...base, action: 'reject', workflowCommand: null }
+    const harness = createSingleCommandHarness({ inboxCommand: { ...reject, version: 1, status: 'pending', updatedAt: pendingCommand.updatedAt }, command: reject })
+    const result = await createGateCommandProcessor(harness.dependencies).processAvailable(binding)
+    expect(result.results[0]?.outcomeCode).toBe('human_rejected')
   })
 
   it('uses the authoritative delivering command and atomically applies then acknowledges it', async () => {
@@ -599,7 +722,7 @@ describe('Gate Command background processor', () => {
       overrides: [],
       repositoryKnowledge: repositoryKnowledgeBinding,
       evidence: {
-        artifacts: [designArtifact],
+        artifacts: defaultArtifacts,
         codingRuns: [],
         codingDiffs: [],
         testEvidence: [],
@@ -656,7 +779,7 @@ describe('Gate Command background processor', () => {
     expect(evaluateLocalEnforcement).toHaveBeenCalledWith({
       command: deliveringCommand,
       run,
-      node: run.nodes[1],
+      node: run.nodes[2],
     })
     expect(commitGateCommandExecution).toHaveBeenCalledTimes(1)
     const commitInput = commitGateCommandExecution.mock.calls[0]![0]
@@ -690,7 +813,7 @@ describe('Gate Command background processor', () => {
         selectedOverrideId: null,
         repositoryKnowledge: repositoryKnowledgeBinding,
         evidence: {
-          artifacts: [designArtifact],
+          artifacts: defaultArtifacts,
           codingRuns: [],
           codingDiffs: [],
           testEvidence: [],
@@ -1431,6 +1554,10 @@ describe('Gate Command background processor', () => {
       runId: otherMaterialization.runId,
       idempotencyKey: 'gate-command:run-2:v3',
       requestFingerprint: 'f'.repeat(64),
+      reviewSubject: await buildGateReviewSubjectSnapshot({
+        run: otherRun,
+        artifacts: defaultArtifacts.map((artifact) => ({ ...artifact, runId: otherRun.id })),
+      }),
     }
     const otherDeliveringCommand: GateCommand = {
       ...otherInboxCommand,
@@ -1522,7 +1649,7 @@ describe('Gate Command background processor', () => {
         overrides: [],
         repositoryKnowledge: repositoryKnowledgeBinding,
         evidence: {
-          artifacts: [designArtifact],
+          artifacts: defaultArtifacts,
           codingRuns: [],
           codingDiffs: [],
           testEvidence: [],

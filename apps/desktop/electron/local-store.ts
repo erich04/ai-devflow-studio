@@ -2,6 +2,7 @@ import type { ModelCallSettlement } from '@ai-devflow/shared'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
+import { resolveRemoteApprovalMaterial } from './gate-command-material.js'
 import type { RecordAgentReviewFeedbackInput } from '@ai-devflow/shared'
 import type { CodingProviderCallTrace } from './coding-engine.js'
 import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
@@ -10408,6 +10409,7 @@ class SqlJsLocalStore implements LocalStore {
     let terminalOutcomeCode = input.outcomeCode
     let nextRun: WorkflowRun | null = null
     let approvalEvent: AgentEvent | null = null
+    let approvedArtifacts: Artifact[] = []
 
     if (input.outcomeCode === 'expired') {
       terminalOutcomeCode = 'expired'
@@ -10460,8 +10462,37 @@ class SqlJsLocalStore implements LocalStore {
       } else if (JSON.stringify(currentRun) !== JSON.stringify(expectedRun)) {
         terminalOutcomeCode = 'stale_run'
       } else {
+        // Requirement and design approvals record the exact version they confirm (plan S5, Q8).
+        // The audit and the approved revision are derived here from the evaluated material; an
+        // audit on the input event must equal it. The in-transaction evidence check below proves
+        // that material is still what is persisted.
+        const gateNode = expectedRun.nodes.find((node) => node.id === command.nodeId)
+        const material = gateNode
+          ? await resolveRemoteApprovalMaterial({
+              run: expectedRun,
+              node: gateNode,
+              artifacts: input.evaluationBinding.evidence.artifacts,
+              subject: command.reviewSubject,
+              actorId: command.requestedByUserId,
+              now: input.evaluatedAt,
+              sequence: input.event.sequence,
+            })
+          : { status: 'blocked' as const }
+        const expectedClarificationAudit = material.status === 'clarification' ? material.audit : undefined
+        const expectedDesignAudit = material.status === 'design' ? material.audit : undefined
+        const expectedArtifacts = material.status === 'clarification' ? [material.artifact] : []
+        if (
+          material.status === 'blocked' ||
+          (input.event.clarificationAudit !== undefined &&
+            !stableJsonMatches(input.event.clarificationAudit, expectedClarificationAudit ?? null)) ||
+          (input.event.designAudit !== undefined &&
+            !stableJsonMatches(input.event.designAudit, expectedDesignAudit ?? null))
+        ) {
+          return { committed: false, reason: 'invalid_input' }
+        }
         afterRunVersion = candidateNextRun.version
         nextRun = candidateNextRun
+        approvedArtifacts = expectedArtifacts
         approvalEvent = {
           id: input.event.id,
           runId: input.event.runId,
@@ -10470,6 +10501,8 @@ class SqlJsLocalStore implements LocalStore {
           kind: 'approval',
           message: redactSensitiveText(input.event.message).value,
           timestamp: input.event.timestamp,
+          ...(expectedClarificationAudit ? { clarificationAudit: expectedClarificationAudit } : {}),
+          ...(expectedDesignAudit ? { designAudit: expectedDesignAudit } : {}),
         }
       }
     } else if (input.outcomeCode === 'human_rejected') {
@@ -10862,6 +10895,10 @@ class SqlJsLocalStore implements LocalStore {
       )
       if (nextRun && approvalEvent) {
         writeWorkflowRun(this.db, nextRun)
+        for (const artifact of approvedArtifacts) {
+          assertImmutableWorkflowArtifactWrite(this.db, artifact)
+          writeArtifact(this.db, artifact)
+        }
         writeAgentEvent(this.db, approvalEvent)
         this.enqueueCanonicalRemoteSyncOperation({
           kind: 'run-summary',

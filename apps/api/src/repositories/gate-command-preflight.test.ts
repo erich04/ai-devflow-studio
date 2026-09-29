@@ -23,8 +23,24 @@ function currentGate(): WorkflowNode {
   }
 }
 
-function canonicalRun(node: WorkflowNode = currentGate()): WorkflowRun {
+/** The desktop-uploaded subject a design or requirement approval is bound to (plan S5, Q8). */
+function reviewSubjectFor(node: WorkflowNode, runVersion = 3): NonNullable<WorkflowRun['gateReviewSubject']> {
   return {
+    version: 1,
+    runId: 'run-1',
+    runVersion,
+    nodeId: node.id,
+    stage: node.stage,
+    sanitizerVersion: 'sensitive-text-v1',
+    requestDigest: 'a'.repeat(64),
+    artifacts: [{ id: 'artifact-design', nodeId: 'design-node', kind: 'design', updatedAt: '2026-08-01T00:01:00.000Z', contentDigest: 'b'.repeat(64) }],
+  }
+}
+
+function canonicalRun(node: WorkflowNode = currentGate()): WorkflowRun {
+  const needsSubject = node.kind === 'gate' && (node.stage === 'design' || node.stage === 'clarify')
+  return {
+    ...(needsSubject ? { gateReviewSubject: reviewSubjectFor(node) } : {}),
     id: 'run-1',
     version: 3,
     title: 'Gate preflight',
@@ -134,11 +150,36 @@ describe('Gate Command server preflight', () => {
 
     expect(result).toEqual({
       allowed: true,
+      reviewSubject: reviewSubjectFor(node),
       workflowCommand: 'approve_gate',
       evaluationStatus: 'allowed',
       evaluationBlockerIds: [],
     })
     expect(run).toEqual(canonicalRun(node))
+  })
+
+  it('refuses a design approval without the subject for this exact step and Run version', () => {
+    const node = currentGate()
+    const { gateReviewSubject: _subject, ...withoutSubject } = canonicalRun(node)
+    const staleSubject = { ...canonicalRun(node), gateReviewSubject: reviewSubjectFor(node, 2) }
+    const otherStep = { ...canonicalRun(node), gateReviewSubject: { ...reviewSubjectFor(node), nodeId: 'gate-historical' } }
+    for (const run of [withoutSubject, staleSubject, otherStep]) {
+      expect(preflightGateCommand({
+        command: approveInput(),
+        run,
+        currentNode: node,
+        requester: { userId: 'user-review-lead', role: 'lead' },
+        enforcement: passingEnforcement(),
+      })).toEqual({ allowed: false, code: 'preflight_blocked' })
+    }
+    // A lead can still reject: rejection does not approve any material version.
+    expect(preflightGateCommand({
+      command: approveInput({ action: 'reject' }),
+      run: withoutSubject,
+      currentNode: node,
+      requester: { userId: 'user-review-lead', role: 'lead' },
+      enforcement: passingEnforcement(),
+    })).toMatchObject({ allowed: true, workflowCommand: null })
   })
 
   it('rejects a historical Gate even when its ID still exists in the Run', () => {
@@ -267,6 +308,7 @@ describe('Gate Command server preflight', () => {
       preflightGateCommand({ ...input, override: acceptedOverride() }),
     ).toEqual({
       allowed: true,
+      reviewSubject: reviewSubjectFor(node),
       workflowCommand: 'approve_gate',
       evaluationStatus: 'allowed',
       evaluationBlockerIds: ['blocker-a', 'blocker-b'],
