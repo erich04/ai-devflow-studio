@@ -10,8 +10,26 @@ export function TopbarProjectMenu({ projectName, projectPath, children }: {
   projectPath: string | undefined
   children: ReactNode
 }) {
+  const menu = useRef<HTMLDetailsElement>(null)
+  // The panel overlays the navigation, so it closes on an outside click or Escape like other popovers.
+  useEffect(() => {
+    const outside = (event: PointerEvent) => {
+      if (menu.current?.open && !menu.current.contains(event.target as Node)) menu.current.open = false
+    }
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !menu.current?.open) return
+      menu.current.open = false
+      menu.current.querySelector<HTMLElement>(':scope > summary')?.focus()
+    }
+    document.addEventListener('pointerdown', outside)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('pointerdown', outside)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [])
   return (
-    <details className="topbar-project-menu">
+    <details className="topbar-project-menu" ref={menu}>
       <summary title={projectPath ?? '尚未选择本地项目'} aria-label={`项目：${projectName ?? '尚未选择'}`}>
         <span>{projectName ?? '选择本地项目'}</span>
         <ChevronDown size={14} aria-hidden="true" />

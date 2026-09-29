@@ -1501,7 +1501,18 @@ export function buildNodeInspectorViewModel(input: {
   const tabs = inspectorTabPlansByNodeType[nodeType]
   const activeTab = tabs.find((tab) => tab.tabId === (legacyWorkspaceTabs[input.requestedTab] ?? input.requestedTab) || tab.label === input.requestedTab) ?? tabs[0]!
   const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding, input.codingActionProjection, input.approvalTarget, input.artifacts)
-  const nextAction = buildNextAction(input)
+  const baseNextAction = buildNextAction(input)
+  // After a GitHub App binding is revoked, verifying that the old delivery credential no longer
+  // works is the follow-up on a finished delivery; keep it on the first layer, not in “⋯”.
+  const canOfferRevocationCheck = input.githubDeliveryIntent?.status === 'completed' &&
+    input.canVerifyGitHubDeliveryRevocation &&
+    ((input.node.kind === 'pr' && input.node.status === 'success') || input.node.kind === 'acceptance')
+  const nextAction: InspectorNextAction = canOfferRevocationCheck &&
+    baseNextAction.primaryActionId !== 'verifyGitHubDeliveryRevocation' &&
+    !baseNextAction.secondaryActionIds.includes('verifyGitHubDeliveryRevocation') &&
+    baseNextAction.secondaryActionIds.length < 2
+    ? { ...baseNextAction, secondaryActionIds: [...baseNextAction.secondaryActionIds, 'verifyGitHubDeliveryRevocation'] }
+    : baseNextAction
   const actionIds: InspectorActionId[] = []
   const addAction = (actionId: InspectorActionId) => {
     if (

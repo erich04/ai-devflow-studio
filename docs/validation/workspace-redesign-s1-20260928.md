@@ -81,6 +81,14 @@ corepack pnpm exec tsx scripts/workspace-baseline.mts --self-check
 - 团队连接弹层对服务端拒绝的凭据仍提供「重试」，而重试必然再次失败。现在只有在拒绝发生于当前凭据签发之前（也就是已重新连接）时才提供重试。
 - 审批核对清单与状态值使用英文原值（`ready`、`empty`、`3 events`），并在策略未读取时显示“已阻断”。状态值已按 6.3 节改为中文，原值保留在悬停提示中。
 
+以下三项是 PR 的 CI 发现的，首次提交前本地没有运行对应的检查：
+
+- Playwright 端到端测试（`tests/e2e/desktop.spec.ts`）有 13 个用例仍按旧界面定位。已按新界面更新，`corepack pnpm test:e2e` 全部 41 项通过。
+- 打包交付冒烟测试找不到「Verify credential revocation」：S1 把交付完成后的这个核验动作收进了「⋯」。它是这个状态下唯一的后续动作，已改回状态行显示，并补了断言。这个冒烟测试需要 Postgres 和 Linux 打包环境，本地无法运行，以 CI 结果为准。
+- 顶栏项目菜单打开后不会自动关闭，会一直盖住左侧导航。已改为按 Escape 或点击菜单外部时关闭，焦点回到触发按钮。
+
+CI 的生产依赖审计同时失败，原因是 Electron 依赖的 `undici@7.29.0` 在 2026-09-29 出现中危公告，与本批改动无关，另开 PR 固定到 7.29.1。
+
 ## 留给后续批次
 
 - 概览页签里的审批核对清单仍有英文标签（Policy snapshot、Coding diff、Trace、Budget guard、Required Artifact），「Gate 结论」出现两次。S2 做 Gate 摘要去重，S3 处理其余文案（T1、T2）。
@@ -95,10 +103,11 @@ S0 报告写“深色主题下的数字与浅色相同（`variants/dark`）”�
 
 ## 验证
 
-- `corepack pnpm verify`：通过。类型检查通过；314 个测试文件、4204 项测试通过（1 个文件、15 项按既有配置跳过）；跨平台检查通过。
-- 桌面端单元与组件测试：143 个文件、2076 项通过。新增与改写的测试覆盖状态投影、团队连接五种上传情况与重新配对、需求版本校验、测试页空态、讨论栏收起，以及顶栏、团队连接、新建任务的新文案。
+- `corepack pnpm verify`：通过。类型检查通过；314 个测试文件、4205 项测试通过（1 个文件、15 项按既有配置跳过）；跨平台检查通过。
+- `corepack pnpm test:e2e`：41 项通过（桌面 28 项、Web 13 项）。
+- 桌面端单元与组件测试：143 个文件、2077 项通过。新增与改写的测试覆盖状态投影、团队连接五种上传情况与重新配对、需求版本校验、测试页空态、讨论栏收起，以及顶栏、团队连接、新建任务的新文案。
 - `corepack pnpm test:electron-smoke`：通过。脚本改为通过项目菜单、团队连接弹层和「新建任务」「创建任务」操作，并检查团队连接摘要不含“同步失败”。
-- `corepack pnpm test:workbench-conversation-electron-smoke`：通过，24 次受控模型调用，没有调用外部模型服务。脚本先检查空讨论栏默认收起，再从「讨论」展开。
+- `corepack pnpm test:workbench-conversation-electron-smoke`：通过，24 次受控模型调用，没有调用外部模型服务。脚本先检查空讨论栏默认收起，再从「讨论」展开。修正 CI 发现的问题后重跑时，第一次在重启后打开会话菜单那一步失败：菜单项在点击时从页面上消失。第二次运行通过。原因未确认，推测与重启后会话列表刷新的时机有关，没有放宽超时。
 - `tsx scripts/workspace-baseline.mts --self-check`：通过。
 - 全部 32 个样例、深色与 200% 缩放在隔离环境中重新制备并测量，结束后临时目录已删除。`pr-approval`、`test-read-failure` 仍只能在渲染层验证，依据同 S0。
 - 所有模型调用都是 Deterministic Fake Provider 或本机受控服务；没有真实模型调用、远端发布或推送。

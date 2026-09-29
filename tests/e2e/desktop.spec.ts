@@ -1200,21 +1200,34 @@ async function showProjectRuns(page: import('@playwright/test').Page) {
   if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
 }
 
+async function openTopbarProjectMenu(page: import('@playwright/test').Page) {
+  const menu = page.locator('.topbar-project-menu')
+  await expect(menu).toBeVisible()
+  if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
+}
+
+/** Sub-steps are folded into the stage item (plan L2); open them before clicking a node button. */
+async function clickSubStep(page: import('@playwright/test').Page, testId: string) {
+  const toggle = page.locator('.stage-substeps-toggle')
+  if (await toggle.count() && await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await page.getByTestId(testId).click()
+}
+
 async function showNodeRecords(page: import('@playwright/test').Page) {
   await page.getByTestId('node-inspector').getByRole('tab', { name: '产物与证据', exact: true }).click()
 }
 
 async function createFixtureRun(page: import('@playwright/test').Page) {
-  await page.getByRole('button', { name: /新建 Run/ }).click()
-  const dialog = page.getByRole('dialog', { name: /Create new run/ })
+  await page.getByRole('button', { name: '新建任务', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '新建任务', exact: true })
   await expect(dialog).toBeVisible()
   await dialog.getByLabel('标题').fill('重构 GitHub webhook 重试策略')
   await dialog.getByLabel('一句话需求').fill('请先澄清 webhook retry 的失败边界，再设计实现方案。')
-  await dialog.getByRole('button', { name: /创建并开始澄清/ }).click()
+  await dialog.getByRole('button', { name: '创建任务', exact: true }).click()
   await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
   await page.locator('.workbench-project-menu > summary').click()
-  await expect(page.getByTestId('toast')).toContainText('新 Run 已创建')
+  await expect(page.getByTestId('toast')).toContainText('任务已创建，尚未调用模型')
   await expect(page.getByTestId('workflow-canvas')).toContainText('需求澄清')
   await expect(page.getByTestId('node-inspector')).toContainText('需求澄清')
 }
@@ -1302,7 +1315,7 @@ test.describe('AI DevFlow desktop workbench', () => {
         )).toBe(true)
         const box = (await team.boundingBox())!
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
-        const syncButton = team.getByRole('button', { name: '拉取团队数据并刷新策略' })
+        const syncButton = team.getByRole('button', { name: '更新团队数据' })
         await expect.poll(async () => {
           const reachable = await syncButton.evaluate((element) => {
             const button = element.getBoundingClientRect()
@@ -1335,7 +1348,8 @@ test.describe('AI DevFlow desktop workbench', () => {
           }
         })
         await page.goto('/')
-        const runSummary = page.getByRole('button', { name: /^当前 Run/ })
+        // Current task usage, policy and budget share one popover in the task title row (plan L1).
+        const runSummary = page.getByRole('button', { name: /^本任务用量/ })
         await expect(runSummary).toContainText('16,712')
         await expect(runSummary).toContainText('金额待确认')
         await expect(runSummary).not.toContainText('$0.00')
@@ -1344,7 +1358,6 @@ test.describe('AI DevFlow desktop workbench', () => {
         await expect(usage).toContainText('16,712')
         await expect(usage).toContainText('1 项金额待确认')
         await expect(usage).not.toContainText('$0.00')
-        await page.getByRole('button', { name: /^策略与预算/ }).click()
         await expect(page.getByTestId('runtime-budget-status')).toContainText('数据不完整')
         await page.screenshot({ path: testInfo.outputPath('unknown-run-cost.png') })
       })
@@ -1560,7 +1573,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('toast')).toContainText('流程返回需求澄清')
     await expect(inspector).toContainText('需求澄清')
 
-    await inspector.getByRole('button', { name: /生成需求澄清/ }).click()
+    await inspector.getByRole('button', { name: '生成修订', exact: true }).click()
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成')
     await inspector.getByRole('tab', { name: '内容与审查', exact: true }).click()
     await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v2')
@@ -1569,7 +1582,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('clarification-revision-history')).toContainText('v1 · superseded')
     await expect(page.getByTestId('clarification-revision-history')).toContainText('State the retry boundary explicitly.')
 
-    await inspector.getByRole('button', { name: /通过 Gate/ }).click()
+    await inspector.getByTestId('task-status-row').getByRole('button', { name: '确认需求 v2', exact: true }).click()
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __clarificationApprovals: unknown[] }).__clarificationApprovals.length)).toBe(1)
     const requests = await page.evaluate(() => (window as unknown as { __clarificationRequests: unknown[] }).__clarificationRequests)
     const approvals = await page.evaluate(() => (window as unknown as { __clarificationApprovals: unknown[] }).__clarificationApprovals)
     expect(requests).toHaveLength(1)
@@ -1589,7 +1603,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page).toHaveTitle(/AI DevFlow Studio/)
     await expect(page.getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
     await showProjectRuns(page)
-    await expect(page.getByText('开发者工作台')).toBeVisible()
+    await expect(page.getByText('当前项目的任务')).toBeVisible()
     await expect(page.getByTestId('workflow-empty-state')).toContainText('暂无 Run')
     await expect(page.getByTestId('node-inspector-empty')).toContainText('选择真实 Run')
 
@@ -1616,18 +1630,22 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(gateImpact).toContainText('需求确认 Gate')
     await expect(gateImpact).toContainText('等待中')
     await expect(gateImpact).toContainText('当前 Task 的产物尚未关联到该 Gate')
-    await expect(gateImpact.getByRole('button', { name: /通过 Gate|Override/ })).toHaveCount(0)
+    await expect(gateImpact.getByRole('button', { name: /通过 Gate|确认需求|确认方案|Override/ })).toHaveCount(0)
     await gateImpact.getByRole('button', { name: '查看 Gate' }).click()
-    await expect(page.getByTestId('node-inspector')).toContainText('类型：Gate · 来源：Team Policy')
+    await expect(page.getByTestId('node-inspector')).toContainText('Gate · Team Policy')
     const designCard = workflow.getByTestId('flow-node-run-created-from-request-design')
     await expect(designCard).toContainText('Task')
     await expect(designCard).not.toContainText('Review')
     await designCard.click()
-    await expect(page.getByTestId('node-inspector')).toContainText('类型：Task · 来源：Run 模板')
+    await expect(page.getByTestId('node-inspector')).toContainText('Task · Run 模板')
 
-    await showProjectRuns(page)
+    await openTopbarProjectMenu(page)
     await page.getByRole('button', { name: /选择本地仓库/ }).click()
     await expect(page.locator('.local-project-panel').getByText('fixture-project', { exact: true })).toBeVisible()
+    // The project panel overlays the navigation; Escape closes it and returns focus to its trigger.
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.topbar-project-menu')).not.toHaveAttribute('open', '')
+    await expect(page.locator('.topbar-project-menu > summary')).toBeFocused()
     await page.getByRole('button', { name: /^测试$/ }).click()
     await page.getByLabel('测试命令').fill('pnpm test -- --run')
     await page.getByRole('button', { name: /保存测试命令/ }).click()
@@ -1661,9 +1679,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     ).toHaveCount(0)
     await page.getByRole('button', { name: /生成需求澄清/ }).click()
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成，进入需求确认 Gate')
-    await page
-      .getByTestId('flow-node-run-created-from-request-clarify-gate')
-      .click()
+    await clickSubStep(page, 'flow-node-run-created-from-request-clarify-gate')
     await page.getByRole('button', { name: /^Agents$/ }).click()
     await expect(page.getByTestId('agent-workbench')).toContainText('需求确认 Gate')
     await expect(page.getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
@@ -1722,8 +1738,9 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     await page.getByRole('button', { name: /^测试$/ }).click()
     await expect(page.getByTestId('tests-view')).toContainText('测试计划与证据')
-    await page.getByRole('button', { name: /执行测试/ }).click()
-    await expect(page.getByTestId('toast')).toContainText('只能执行当前运行中或失败的测试节点')
+    // Tests only run at the actual test step; the reason is shown before any click (plan D4, X6).
+    await expect(page.getByRole('button', { name: /执行测试/ })).toBeDisabled()
+    await expect(page.getByTestId('tests-run-blocked-reason')).toBeVisible()
     await expect(page.getByTestId('tests-view')).not.toContainText('Local test evidence')
     await expect(page.getByTestId('tests-view')).not.toContainText('passed')
     expect(pageErrors).toEqual([])
@@ -1844,7 +1861,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /测试证据/ }).click()
     await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /开发实现/ }).click()
-    await page.getByTestId('flow-node-node-build-review').click()
+    await clickSubStep(page, 'flow-node-node-build-review')
     await inspector.getByRole('tab', { name: '概览', exact: true }).click()
     const terminal = page.getByTestId('workbench-coding-terminal')
     await expect(terminal).toContainText('completed')

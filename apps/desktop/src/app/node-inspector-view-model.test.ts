@@ -536,7 +536,9 @@ describe('node inspector view model', () => {
       canVerifyGitHubDeliveryRevocation: true,
     })
     expect(vm.nextAction.primaryActionId).toBeUndefined()
-    expect(vm.actions.map((action) => action.id)).toEqual(['verifyGitHubDeliveryRevocation'])
+    // The follow-up check stays on the first layer, not in the “⋯” menu.
+    expect(vm.nextAction.secondaryActionIds).toEqual(['verifyGitHubDeliveryRevocation'])
+    expect(vm.actions).toEqual([])
     expect(vm.statusDescriptors.find((item) => item.id === 'gate-decision')).toMatchObject({
       state: '已批准',
       summary: '该节点已完成批准；历史审查与策略评估仍保留供核对。',
@@ -737,9 +739,8 @@ describe('node inspector view model', () => {
       canVerifyGitHubDeliveryRevocation: true,
     })
 
-    expect(viewModel.actions.map((action) => action.id)).toContain(
-      'verifyGitHubDeliveryRevocation',
-    )
+    expect(viewModel.nextAction.secondaryActionIds).toContain('verifyGitHubDeliveryRevocation')
+    expect(viewModel.actions.map((action) => action.id)).not.toContain('verifyGitHubDeliveryRevocation')
   })
 
   it('keeps credential revocation verification reachable on a completed PR node', () => {

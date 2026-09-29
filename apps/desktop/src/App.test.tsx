@@ -1764,6 +1764,23 @@ describe('App', () => {
     expect(diagnostics).not.toHaveTextContent('/Users/')
   })
 
+  it('closes the top bar project menu on Escape or an outside click', () => {
+    const { container } = render(<App />)
+    const menu = container.querySelector('.topbar-project-menu') as HTMLDetailsElement
+    const summary = menu.querySelector('summary') as HTMLElement
+
+    menu.open = true
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(menu.open).toBe(false)
+    expect(summary).toHaveFocus()
+
+    menu.open = true
+    fireEvent.pointerDown(within(menu).getByLabelText('Local project'))
+    expect(menu.open).toBe(true)
+    fireEvent.pointerDown(document.body)
+    expect(menu.open).toBe(false)
+  })
+
   it('toggles theme preference through the topbar control', () => {
     render(<App />)
 
@@ -3740,6 +3757,9 @@ describe('App', () => {
       'button',
       { name: 'Verify credential revocation' },
     )
+    // The follow-up check is on the status row, not folded into the “⋯” menu (the packaged smoke clicks it directly).
+    expect(verifyButton.closest('[data-testid="task-status-row"]')).not.toBeNull()
+    expect(verifyButton.closest('details')).toBeNull()
 
     fireEvent.click(verifyButton)
     fireEvent.click(verifyButton)
