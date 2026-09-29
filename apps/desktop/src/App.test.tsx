@@ -7,6 +7,7 @@ import {
   createRecommendedEnforcementPreset,
   createLocalStageAgentUsage,
   createWorkflowRunFromRequest,
+  createDesignRevisionDigest,
   createWarnOnlyDefaultPolicy,
   indexKnowledgeSources,
   resolveEffectivePolicy,
@@ -172,6 +173,8 @@ function persistedFixtureRunState() {
   return desktopState({
     projects: [localProject],
     runs: [fixtureRuns[0]!],
+    // The design-review Gate can only be confirmed with its linked design on screen (plan S4, Z3).
+    artifacts: fixtureArtifacts.filter((artifact) => artifact.id === 'art-design'),
     desktopPairingCredential: fixturePairingCredential,
   })
 }
@@ -4898,7 +4901,7 @@ describe('App', () => {
     expect(within(screen.getByTestId('node-inspector')).queryByTestId('gate-enforcement-summary')).not.toBeInTheDocument()
 
     clickInspectorTab(/^材料与版本$/)
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('当前节点尚未归档产物')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('当前步骤尚未归档材料')
     expect(within(screen.getByTestId('node-inspector')).queryByTestId('gate-enforcement-details')).not.toBeInTheDocument()
     expect(within(screen.getByTestId('node-inspector')).queryByTestId('inspector-status-matrix')).not.toBeInTheDocument()
 
@@ -5083,10 +5086,19 @@ describe('App', () => {
     await waitFor(() => expect(approveButton).toBeEnabled())
     fireEvent.click(approveButton)
 
+    // The design on screen is named exactly; Main compares all three fields (plan S4, Z3).
+    const design = fixtureArtifacts.find((artifact) => artifact.id === 'art-design')!
     await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith({
       runId: fixtureRuns[0]!.id,
       nodeId: 'n-design-gate',
+      expectedDesignRevision: {
+        artifactId: design.id,
+        updatedAt: design.updatedAt,
+        contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      },
     }))
+    const sent = vi.mocked(api.approveGate).mock.calls[0]![0].expectedDesignRevision!
+    expect(sent.contentDigest).toBe(await createDesignRevisionDigest(design))
     expect(api).not.toHaveProperty('uploadRunSummary')
     // The approval event is part of the step's records (plan W1).
     await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('人工审批已通过'))
@@ -5220,6 +5232,10 @@ describe('App', () => {
       fireEvent.change(screen.getByRole('combobox', { name: '阅读需求版本' }), { target: { value: v1.id } })
       expect(screen.getByText(/正在阅读历史版本 v1；确认与修订仍针对需求 v2。/)).toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /确认需求 v2/ })).toBeInTheDocument()
+      // Reading v1 never confirms v2 silently: the first click only names both (plan S4, Z6).
+      fireEvent.click(within(row).getByRole('button', { name: /确认需求 v2/ }))
+      expect(api.approveGate).not.toHaveBeenCalled()
+      expect(within(row).getByRole('alert')).toHaveTextContent('你正在阅读历史版本 v1，本次确认针对需求 v2。')
       fireEvent.click(within(row).getByRole('button', { name: /确认需求 v2/ }))
       await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({
         expectedClarificationRevision: { artifactId: v2.id, revision: 2, revisionDigest: 'c'.repeat(64) },
@@ -5245,6 +5261,114 @@ describe('App', () => {
       expect(row).toHaveTextContent('缺少 AI 审查')
       expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
       expect(within(row).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+      expect(api.approveGate).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('requirement and design versions (plan S4, Issue #181)', () => {
+    /** The real Issue #181 set: raw request, a discussion proposal, v1 superseded and v2 approved. */
+    function issue181State() {
+      const created = createWorkflowRunFromRequest({
+        runId: 'run-181', title: '任务筛选', request: '为任务清单增加按完成状态筛选的功能。', projectId: localProject.id,
+        creatorId: 'u-ling', branchName: 'ai/filter', now: '2026-09-27T10:00:00.000Z',
+      })
+      const clarify = created.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')!
+      const gate = created.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'gate')!
+      const design = created.run.nodes.find((node) => node.stage === 'design' && node.kind === 'agent')!
+      const raw = created.artifacts.find((artifact) => artifact.kind === 'raw_request')!
+      const version = (number: number, status: 'superseded' | 'approved', updatedAt: string): Artifact => ({
+        id: `artifact-run-181-clarification${number === 1 ? '' : `-v${number}`}`, runId: created.run.id, nodeId: clarify.id, kind: 'clarification',
+        title: '为任务清单增加按完成状态筛选的功能', summary: `第 ${number} 版澄清。`, content: `第 ${number} 版澄清正文。`, redacted: true, updatedAt,
+        clarificationRevision: {
+          version: 1, revision: number, status, revisionDigest: String(number).repeat(64), rawRequestArtifactId: raw.id, feedbackArtifactIds: [],
+          goals: ['Goal'], acceptanceCriteria: ['Acceptance'], nonGoals: [], assumptions: [], risks: [], openQuestions: [],
+          executor: { version: 1, kind: 'direct-provider', executorId: 'fake', executorVersion: '1', capabilityProfile: 'repository-read-only-v1',
+            model: 'fake', startedAt: updatedAt, completedAt: updatedAt, durationMs: 1, terminalReason: 'success', contextDigest: 'b'.repeat(64) },
+          generatedAt: updatedAt,
+          ...(number > 1 ? { previousRevisionArtifactId: 'artifact-run-181-clarification' } : {}),
+        },
+      })
+      const v1 = version(1, 'superseded', '2026-09-27T10:05:00.000Z')
+      const v2 = version(2, 'approved', '2026-09-27T10:20:00.000Z')
+      const proposal: Artifact = {
+        id: 'conversation-proposal-181', runId: created.run.id, nodeId: clarify.id, kind: 'log',
+        title: '讨论提案（待确认）：需求澄清结论（草稿）：按完成状态筛选', summary: '补充口径。', content: '状态：待确认的讨论提案\n\n按完成状态筛选。',
+        redacted: true, updatedAt: '2026-09-27T10:10:00.000Z',
+      }
+      const run = {
+        ...created.run,
+        currentNodeId: design.id,
+        nodes: created.run.nodes.map((node) =>
+          node.id === clarify.id ? { ...node, status: 'success' as const, artifactIds: [raw.id, v1.id, v2.id] }
+            : node.id === gate.id ? { ...node, status: 'success' as const, artifactIds: [v2.id] }
+              : node.id === design.id ? { ...node, status: 'running' as const } : node),
+      }
+      return desktopState({ projects: [localProject], runs: [run], artifacts: [raw, proposal, v1, v2], events: created.events, desktopPairingCredential: fixturePairingCredential })
+    }
+
+    it('opens the approved v2 on the clarification step and keeps the other three materials reachable and distinct', async () => {
+      const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(issue181State()) })
+      render(<App />)
+      await waitFor(() => expect(api.loadState).toHaveBeenCalled())
+      await waitFor(() => expect(screen.getAllByTestId('stage-item')[0]).toBeEnabled())
+      fireEvent.click(screen.getAllByTestId('stage-item')[0]!)
+
+      const inspector = await screen.findByTestId('node-inspector')
+      await waitFor(() => expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('需求澄清 v2'))
+      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('已确认')
+      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('第 2 版澄清正文。')
+      const options = within(within(inspector).getByRole('combobox', { name: '阅读需求版本' })).getAllByRole('option').map((option) => option.textContent)
+      expect(options).toEqual(expect.arrayContaining([
+        expect.stringContaining('需求澄清 v2 · 已确认'),
+        expect.stringContaining('需求澄清 v1 · 已被替代（历史）'),
+        expect.stringContaining('原始需求'),
+      ]))
+      // Reading v1 says what it is and how to return; nothing is confirmed on this step.
+      fireEvent.change(within(inspector).getByRole('combobox', { name: '阅读需求版本' }), { target: { value: 'artifact-run-181-clarification' } })
+      expect(within(inspector).getByText(/正在阅读需求 v1（已被替代（历史））；当前已确认的是需求 v2。/)).toBeInTheDocument()
+      fireEvent.click(within(inspector).getByRole('button', { name: '返回已确认版本' }))
+      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('需求澄清 v2')
+
+      // 材料与版本 groups every material by role, with version, status and time (plan §9.1).
+      clickInspectorTab('材料与版本')
+      const materials = within(inspector).getByTestId('node-artifacts')
+      for (const group of ['已确认依据', '原始输入与参考', '讨论提案', '历史记录']) {
+        expect(within(materials).getByRole('region', { name: group })).toBeInTheDocument()
+      }
+      expect(within(within(materials).getByRole('region', { name: '已确认依据' })).getByText('需求澄清 v2')).toBeInTheDocument()
+      expect(within(within(materials).getByRole('region', { name: '历史记录' })).getByText('需求澄清 v1')).toBeInTheDocument()
+      expect(within(within(materials).getByRole('region', { name: '讨论提案' })).getByText('讨论提案（待确认）')).toBeInTheDocument()
+      // The raw request is read in the same reader, with a clear role.
+      fireEvent.click(within(within(materials).getByRole('region', { name: '原始输入与参考' })).getByRole('button', { name: '在「当前工作」中阅读' }))
+      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('原始需求')
+      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('原始输入，不是审批对象')
+      expect(api.approveGate).not.toHaveBeenCalled()
+    })
+
+    it('explains a rejected design approval in Chinese and never claims it passed', async () => {
+      const api = installDesktopApi({
+        approveGate: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'approve-gate': Error: Gate approval rejected: design material is missing, changed, or no longer current")),
+      })
+      render(<App />)
+      await waitForLocalStateLoaded(api.loadState)
+      const row = screen.getByTestId('task-status-row')
+      await waitFor(() => expect(row).toHaveTextContent('所审方案：'))
+      await clickGateApproval()
+      await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案内容已变化，本次确认没有提交'))
+      expect(screen.getByTestId('toast')).not.toHaveTextContent('已通过')
+      expect(api.approveGate).toHaveBeenCalledTimes(1)
+    })
+
+    it('offers no design approval when the Gate does not link exactly one design', async () => {
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(desktopState({ projects: [localProject], runs: [fixtureRuns[0]!], desktopPairingCredential: fixturePairingCredential })),
+      })
+      render(<App />)
+      await waitForLocalStateLoaded(api.loadState)
+      const row = screen.getByTestId('task-status-row')
+      await waitFor(() => expect(row).toHaveAttribute('data-status-kind', 'unverified'))
+      expect(row).toHaveTextContent('方案评审 Gate 尚未关联方案产物，不能确认。')
+      expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
       expect(api.approveGate).not.toHaveBeenCalled()
     })
   })
@@ -5326,6 +5450,7 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
         runs: [overrideEligibleRun],
+        artifacts: fixtureArtifacts.filter((artifact) => artifact.id === 'art-design'),
         desktopPairingCredential: fixturePairingCredential,
       })),
       loadEnforcementPolicy: vi.fn().mockResolvedValue({

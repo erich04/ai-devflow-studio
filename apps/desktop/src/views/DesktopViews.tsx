@@ -20,6 +20,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import type * as React from 'react'
 import {
   buildClarificationReviewBundle,
+  resolveDesignGateMaterial,
   canRunCodingAgentOnNode,
   projectKnowledgeReferencesForNode,
   resolveKnowledgeReferenceSemantics,
@@ -83,6 +84,14 @@ import {
   type PendingInspectorAction,
 } from '../app/node-inspector-view-model'
 import { buildWorkflowGateImpact } from '../app/workflow-gate-impact'
+import {
+  describeMaterial,
+  groupMaterials,
+  pendingRequirementTarget,
+  selectDefaultMaterial,
+  selectRequirementReading,
+  type MaterialContext,
+} from '../app/material-catalog'
 
 
 export { LocalProjectPanel, Metric, NavButton, ThemeToggle } from './ShellControls'
@@ -394,7 +403,10 @@ export function Inspector({
   onReplyCodingPermission,
   codingRecords,
   executionEvidence,
+  runEvents,
 }: {
+  /** All events of the run: approval records decide which design was confirmed (plan S4, Z5). */
+  runEvents?: AgentEvent[] | undefined
   /** Coding Run evidence for the build step's 执行记录 (plan Y3). */
   codingRecords?: React.ReactNode
   /** Remaining execution evidence groups, folded at the end of 执行记录 (plan Y3). */
@@ -584,10 +596,21 @@ export function Inspector({
           artifacts: workflowArtifacts,
         })
       : undefined
-  const designMaterial = selectedNode.kind === 'gate' && selectedNode.stage === 'design'
-    ? workflowArtifacts
-        .filter((artifact) => selectedNode.artifactIds.includes(artifact.id) && artifact.kind === 'design')
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+  // One requirement reader for the clarify stage (plan S4, Z4): the task and the Gate read the same versions.
+  const clarifyGateNode = selectedRun?.nodes.find((node) => node.stage === 'clarify' && node.kind === 'gate')
+  const requirementReader = clarificationReview ?? (selectedRun && clarifyGateNode && selectedNode.stage === 'clarify'
+    ? buildClarificationReviewBundle({ run: selectedRun, gateNode: clarifyGateNode, artifacts: workflowArtifacts })
+    : undefined)
+  const materialContext: MaterialContext = { run: selectedRun, events: runEvents ?? events, formatTime: formatLocalTime }
+  const requirementReading = requirementReader ? selectRequirementReading(requirementReader, documentId || undefined) ?? requirementReader.rawRequest : undefined
+  const requirementTarget = clarificationReview ? pendingRequirementTarget(clarificationReview) : undefined
+  // Reading something other than the version to confirm arms a reminder before approval (plan S4, Z6).
+  const readingElsewhere = requirementTarget && requirementReading && requirementReading.id !== requirementTarget.id
+    ? requirementReading.kind === 'raw_request' ? '原始需求' : `历史版本 v${requirementReading.clarificationRevision?.revision ?? '—'}`
+    : undefined
+  // The design under review is the one design linked to the Gate, never the newest by time (plan S4, Z1).
+  const designGateMaterial = selectedRun && selectedNode.kind === 'gate' && selectedNode.stage === 'design'
+    ? resolveDesignGateMaterial({ run: selectedRun, gateNode: selectedNode, artifacts: workflowArtifacts })
     : undefined
   const approvalTarget: InspectorApprovalTarget | undefined = selectedNode.kind !== 'gate'
     ? undefined
@@ -602,11 +625,9 @@ export function Inspector({
           }
         : { kind: 'requirement', determinable: false, reason: clarificationReview?.message ?? '无法读取待确认的需求版本。' }
       : selectedNode.stage === 'design'
-        ? {
-            kind: 'design',
-            determinable: true,
-            ...(designMaterial ? { title: designMaterial.title, generatedAt: designMaterial.updatedAt } : {}),
-          }
+        ? designGateMaterial?.state === 'ready'
+          ? { kind: 'design', determinable: true, title: designGateMaterial.artifact.title, generatedAt: designGateMaterial.artifact.updatedAt }
+          : { kind: 'design', determinable: false, reason: designGateMaterial?.message ?? '无法读取待评审的方案。' }
         : { kind: 'other', determinable: true }
   const pendingMatchesSelectedNode = Boolean(
     pendingInspectorAction &&
@@ -627,6 +648,7 @@ export function Inspector({
     isRunningKnowledgeReview: isRunningKnowledgeReviewHere,
     ...(reviewProviderLabel ? { reviewProviderLabel } : {}),
     isRunningTests,
+    ...(readingElsewhere ? { readingElsewhere } : {}),
     knowledgeReferenceCount: scopedReferences.length,
     testEvidenceCount: testEvidence.length,
     testEvidence,
@@ -664,7 +686,9 @@ export function Inspector({
   const contentArtifacts = (selectedNode.kind === 'gate'
     ? [...workflowArtifacts.filter((artifact) => selectedNode.artifactIds.includes(artifact.id)), ...nodeArtifacts]
     : nodeArtifacts).filter((artifact, index, all) => all.findIndex((other) => other.id === artifact.id) === index && !isDiscussionProposal(artifact))
-  const selectedDocument = contentArtifacts.find((artifact) => artifact.id === documentId) ?? contentArtifacts[0]
+  const contentEntries = contentArtifacts.map((artifact) => describeMaterial(artifact, materialContext))
+  const selectedEntry = selectDefaultMaterial(contentEntries, documentId || undefined)
+  const selectedDocument = selectedEntry?.artifact
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&
     supportContext.runId === selectedRun?.id &&
@@ -934,8 +958,9 @@ export function Inspector({
     ? viewModel.nextAction.confirmBefore.message
     : ''
   const currentRunNode = selectedRun?.nodes.find((node) => node.id === selectedRun.currentNodeId)
+  // The approval binds this exact design (plan S4, Z3); the time is how the user tells versions apart.
   const statusTarget = approvalTarget?.kind === 'design' && approvalTarget.title
-    ? `所审材料：${approvalTarget.title}${approvalTarget.generatedAt ? ` · 生成于 ${formatLocalTime(approvalTarget.generatedAt)}` : ''}`
+    ? `所审方案：${approvalTarget.title}${approvalTarget.generatedAt ? ` · 记录于 ${formatLocalTime(approvalTarget.generatedAt)}` : ''}`
     : ''
   const renderRevisionToggle = () => (
     <button className="ghost-button" key="request-revision" disabled={!isSelectedCurrentNode || !onRequestClarificationChanges || hasInspectorWriteLock} title={!onRequestClarificationChanges ? '当前桌面版本未提供修订能力' : !isSelectedCurrentNode ? '只能修订实际当前节点' : undefined} onClick={() => setRevisionFormOpen(!revisionFormOpen)}>请求修订当前版本</button>
@@ -1056,22 +1081,34 @@ export function Inspector({
   ) : null
   // A material is read in 当前工作 when it is that step's body; anything else (review reports,
   // discussion proposals) is read here, so each text has exactly one home (plan W1).
-  const readsInCurrentWork = (artifact: Artifact) => !clarificationReview && contentArtifacts.some((other) => other.id === artifact.id)
+  // Requirement versions and the raw request are read in the one requirement reader (plan S4, Z4).
+  const readsInCurrentWork = (artifact: Artifact) => requirementReader
+    ? artifact.kind === 'clarification' || artifact.kind === 'raw_request'
+    : contentArtifacts.some((other) => other.id === artifact.id)
+  const upstreamEntries = contentEntries.filter((entry) => entry.artifact.nodeId !== selectedNode.id)
+  // Grouped by role (plan §9.1, S4 Z5): 当前待处理, 已确认依据, 本步骤材料, 原始输入与参考, 讨论提案, 历史记录.
   const renderArtifacts = () => (
     <div className="artifact-list" data-testid="node-artifacts">
-      <span className="panel-label">当前节点产物 · {nodeArtifacts.length}</span>
-      {selectedNode.kind === 'gate' && contentArtifacts.some((artifact) => artifact.nodeId !== selectedNode.id) && <section aria-label="关联的上游产物"><h3>关联的上游产物（不计入本节点数量）</h3>{contentArtifacts.filter((artifact) => artifact.nodeId !== selectedNode.id).map((artifact) => <p key={artifact.id}><button className="text-button" onClick={() => { setDocumentId(artifact.id); setRequestedTab(CURRENT_WORK_TAB) }}>{artifact.title}</button> · {artifact.updatedAt}</p>)}</section>}
+      <span className="panel-label">当前步骤的材料 · {nodeArtifacts.length}</span>
+      {selectedNode.kind === 'gate' && upstreamEntries.length > 0 && <section aria-label="关联的上游产物"><h3>关联的上游材料（不计入本步骤数量）</h3>{upstreamEntries.map((entry) => <p key={entry.artifact.id}><button className="text-button" onClick={() => { setDocumentId(entry.artifact.id); setRequestedTab(CURRENT_WORK_TAB) }}>{entry.label}</button> <span className="meta material-business-title">{entry.artifact.title}</span></p>)}</section>}
       {nodeArtifacts.length === 0 ? (
-        <p className="empty-note">当前节点尚未归档产物。</p>
+        <p className="empty-note">当前步骤尚未归档材料。</p>
       ) : (
-        nodeArtifacts.map((artifact) => (
+        groupMaterials(nodeArtifacts.map((artifact) => describeMaterial(artifact, materialContext))).map((section) => <section key={section.group} className="material-group" aria-label={section.label}>
+          <h3 className="material-group-title">{section.label} · {section.entries.length}</h3>
+          {section.entries.map(({ artifact, ...entry }) => (
           <article
             key={artifact.id}
             className={`artifact-card ${artifact.id === focusedArtifactId ? 'is-focused' : ''}`}
-            data-testid={artifact.id === focusedArtifactId ? 'focused-artifact' : undefined}
+            data-testid={artifact.id === focusedArtifactId ? 'focused-artifact' : 'material-card'}
           >
-            <div className="compact-row"><strong>{artifact.title}</strong>{renderDiscussMaterial(artifact)}</div>
-            {isDiscussionProposal(artifact) ? <span className="pill warn">讨论提案（待确认）</span> : null}
+            <div className="compact-row"><strong>{entry.typeLabel} {entry.versionLabel}</strong>{renderDiscussMaterial(artifact)}</div>
+            {/* Type, version, status and time on the first layer; the business title below (plan S4, Z5). */}
+            <p className="material-card-status">
+              {entry.group === 'proposal' ? <span className="pill warn">讨论提案（待确认）</span> : entry.statusLabel ? <span className={`pill ${entry.group === 'confirmed' ? 'good' : 'soft'}`}>{entry.statusLabel}</span> : null}
+              <span className="meta">{entry.timeLabel}</span>
+            </p>
+            <p className="meta material-business-title">{artifact.title}</p>
             <p>{artifact.summary}</p>
             {readsInCurrentWork(artifact)
               ? <button className="text-button" onClick={() => { setDocumentId(artifact.id); setRequestedTab(CURRENT_WORK_TAB) }}>在「当前工作」中阅读</button>
@@ -1089,7 +1126,8 @@ export function Inspector({
               </> : <p>本次未执行仓库代码核验。</p>}
             </details> : null}
           </article>
-        ))
+          ))}
+        </section>)
       )}
       {latestAgentReview && <section aria-label="已归档的审查报告"><h3>审查报告</h3><p className="meta">{formatLocalTime(latestAgentReview.createdAt)} · {latestAgentReview.model}。结论与意见逐条列在「当前工作」中。</p><button className="text-button" onClick={() => setRequestedTab(CURRENT_WORK_TAB)}>在「当前工作」中查看审查意见</button></section>}
     </div>
@@ -1415,17 +1453,21 @@ export function Inspector({
     /></details>
   )
 
-  const renderClarificationReview = () => clarificationReview ? (
+  // The requirement Gate and the clarification step share this reader (plan S4, Z4).
+  const renderClarificationReview = () => requirementReader ? (
     <section className="clarification-review" data-testid="clarification-review">
-      <span className="panel-label">Requirement Gate · 版本化澄清审查</span>
-      <p className={`empty-note ${clarificationReview.state === 'ready' ? '' : 'bad'}`}>
+      <span className="panel-label">{clarificationReview ? '需求确认 · 按版本审查' : '需求澄清 · 版本'}</span>
+      {clarificationReview ? <p className={`empty-note ${clarificationReview.state === 'ready' ? '' : 'bad'}`}>
         {clarificationReview.message}
-      </p>
-      <GateMaterialReader key={`${selectedNode.id}:${clarificationReview.activeRevision?.id}`} bundle={clarificationReview}
-        review={latestAgentReview} reports={[]} onFeedback={onRecordAgentReviewFeedback}
+      </p> : null}
+      <GateMaterialReader key={`${selectedNode.id}:${requirementReader.activeRevision?.id}`} bundle={requirementReader}
+        review={clarificationReview ? latestAgentReview : undefined} reports={[]} onFeedback={onRecordAgentReviewFeedback}
         onDiscuss={onDiscussMaterial}
+        readingId={documentId || undefined}
+        onReadingChange={setDocumentId}
+        materialContext={materialContext}
         revisionSelected={selectedReviewItems}
-        onToggleRevision={isSelectedCurrentNode && clarificationReview.state === 'ready' ? (index) => {
+        onToggleRevision={clarificationReview && isSelectedCurrentNode && clarificationReview.state === 'ready' ? (index) => {
           const line = revisionLine(index)
           const removing = selectedReviewItems.includes(index)
           const text = removing ? clarificationFeedbackDraft.replace(line, '').trim() : [clarificationFeedbackDraft, line].filter(Boolean).join('\n\n')
@@ -1436,15 +1478,16 @@ export function Inspector({
           团队规范引用 {scopedReferences.length} 条，完整列表与来源在「材料与版本」中；审查报告原文也在那里。
           <button className="text-button" type="button" onClick={() => setRequestedTab(MATERIALS_TAB)}>查看引用来源</button>
         </p>} />
-      {!clarificationReview.activeRevision && latestAgentReview && <><p className="empty-note">审查对象正文不可用；以下仅保留已归档报告，不能据此认定当前版本已完成审查。</p>{renderReviewEvidence()}</>}
-      {clarificationReview.revisions.length > 1 || clarificationReview.feedback.length ? (
+      {clarificationReview && !clarificationReview.activeRevision && latestAgentReview && <><p className="empty-note">审查对象正文不可用；以下仅保留已归档报告，不能据此认定当前版本已完成审查。</p>{renderReviewEvidence()}</>}
+      {/* Chinese status and local time on the first layer; the stored status stays in the title (plan S4, Z7). */}
+      {requirementReader.revisions.length > 1 || requirementReader.feedback.length ? (
         <details data-testid="clarification-revision-history">
           <summary>版本与修订意见历史</summary>
-          {clarificationReview.revisions.map((revision) => (
-            <p key={revision.id}>v{revision.clarificationRevision?.revision ?? 1} · {revision.clarificationRevision?.status ?? 'legacy'} · {revision.updatedAt}</p>
+          {requirementReader.revisions.map((revision) => (
+            <p key={revision.id} title={revision.clarificationRevision?.status ?? 'legacy'}>{describeMaterial(revision, materialContext).label}</p>
           ))}
-          {clarificationReview.feedback.map((feedback) => (
-            <p key={feedback.id}>{feedback.clarificationFeedback?.actorName ?? 'Reviewer'} · {feedback.updatedAt} · {feedback.content}</p>
+          {requirementReader.feedback.map((feedback) => (
+            <p key={feedback.id}>{feedback.clarificationFeedback?.actorName ?? '审查人'} · {formatLocalTime(feedback.updatedAt)} · {describeMaterial(feedback, materialContext).versionLabel} · {feedback.content}</p>
           ))}
         </details>
       ) : null}
@@ -1549,9 +1592,20 @@ export function Inspector({
     />
   )
 
-  const renderWorkspaceContent = () => clarificationReview ? renderClarificationReview() : <div className="workspace-document">
-    {contentArtifacts.length > 1 && <label>选择材料<select aria-label="选择材料" value={selectedDocument?.id ?? ''} onChange={(event) => setDocumentId(event.target.value)}>{contentArtifacts.map((artifact) => <option key={artifact.id} value={artifact.id}>{artifact.title}</option>)}</select></label>}
-    {selectedDocument ? <article><div className="compact-row"><h2>{selectedDocument.title}</h2>{renderDiscussMaterial(selectedDocument)}</div><p>{selectedDocument.summary}</p>
+  // The requirement stage reads versions; other steps list materials with one set of labels (plan S4, Z4–Z5).
+  const renderWorkspaceContent = () => requirementReader && requirementReader.revisions.length > 0 ? renderClarificationReview() : <div className="workspace-document">
+    {contentEntries.length > 1 && <label>选择材料<select aria-label="选择材料" value={selectedDocument?.id ?? ''} onChange={(event) => setDocumentId(event.target.value)}>
+      {groupMaterials(contentEntries).map((section) => <optgroup key={section.group} label={section.label}>
+        {section.entries.map((entry) => <option key={entry.artifact.id} value={entry.artifact.id}>{entry.label}</option>)}
+      </optgroup>)}
+    </select></label>}
+    {selectedDocument && selectedEntry ? <article><div className="compact-row"><h2>{selectedDocument.title}</h2>{renderDiscussMaterial(selectedDocument)}</div>
+      {/* The same identity as the selector: type, version or recorded time, status (plan S4, Z5). */}
+      <p className="material-identity" data-testid="material-identity">
+        <span>{selectedEntry.typeLabel} · {selectedEntry.versionLabel}</span>
+        {selectedEntry.statusLabel ? <span className={`pill ${selectedEntry.group === 'confirmed' ? 'good' : 'soft'}`}>{selectedEntry.statusLabel}</span> : null}
+      </p>
+      <p>{selectedDocument.summary}</p>
       <ArtifactReviewReader key={selectedDocument.id} artifact={selectedDocument} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} onDiscuss={onDiscussMaterial} />
     </article> : <p>当前步骤尚无可阅读的正文；请按状态行的操作继续。</p>}
     {!selectedDocument && latestAgentReview && renderReviewEvidence()}

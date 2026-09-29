@@ -1556,6 +1556,7 @@ export function App() {
                   artifacts={selectedArtifacts}
                   workflowArtifacts={scopedArtifacts}
                   events={selectedEvents}
+                  runEvents={scopedEvents.filter((event) => event.runId === selectedRun.id)}
                   testEvidence={scopedTestEvidence}
                   governanceChecks={selectedGovernanceChecks}
                   references={knowledgeReferences}

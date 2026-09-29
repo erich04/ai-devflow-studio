@@ -903,6 +903,27 @@ function approveGateLabel(node: WorkflowNode, target: InspectorApprovalTarget | 
   return '通过 Gate'
 }
 
+/**
+ * Reading something other than the approval target (a history version, the raw request) never
+ * moves the target and never confirms it silently: the first click only names both (plan S4, Z6).
+ */
+function withReadingReminder(
+  nextAction: InspectorNextAction,
+  input: { node: WorkflowNode; approvalTarget?: InspectorApprovalTarget | undefined; readingElsewhere?: string | undefined },
+): InspectorNextAction {
+  const offersApproval = nextAction.primaryActionId === 'approveGate' || nextAction.secondaryActionIds.includes('approveGate')
+  if (!input.readingElsewhere || !offersApproval || input.approvalTarget?.determinable === false) return nextAction
+  const label = approveGateLabel(input.node, input.approvalTarget)
+  const existing = nextAction.confirmBefore?.actionId === 'approveGate' ? `${nextAction.confirmBefore.message.replace(/再次点击「[^」]+」提交。$/u, '')}` : ''
+  return {
+    ...nextAction,
+    confirmBefore: {
+      actionId: 'approveGate',
+      message: `你正在阅读${input.readingElsewhere}，本次确认针对${gateApprovalSubject(input.node, input.approvalTarget)}。${existing}再次点击「${label}」提交。`,
+    },
+  }
+}
+
 function hasPriorClarification(artifacts: Artifact[]): boolean {
   return artifacts.some((artifact) => artifact.kind === 'clarification')
 }
@@ -1504,6 +1525,8 @@ export function buildNodeInspectorViewModel(input: {
   isRunningKnowledgeReview?: boolean
   reviewProviderLabel?: string
   isRunningTests?: boolean
+  /** What the user reads when it is not the approval target, e.g. “历史版本 v1” (plan S4, Z6). */
+  readingElsewhere?: string
 }): NodeInspectorViewModel {
   const presentation = buildWorkflowNodePresentation(input.node)
   const visualKind = presentation.nodeKind
@@ -1518,12 +1541,13 @@ export function buildNodeInspectorViewModel(input: {
   const canOfferRevocationCheck = input.githubDeliveryIntent?.status === 'completed' &&
     input.canVerifyGitHubDeliveryRevocation &&
     ((input.node.kind === 'pr' && input.node.status === 'success') || input.node.kind === 'acceptance')
-  const nextAction: InspectorNextAction = canOfferRevocationCheck &&
+  const revocationNextAction: InspectorNextAction = canOfferRevocationCheck &&
     baseNextAction.primaryActionId !== 'verifyGitHubDeliveryRevocation' &&
     !baseNextAction.secondaryActionIds.includes('verifyGitHubDeliveryRevocation') &&
     baseNextAction.secondaryActionIds.length < 2
     ? { ...baseNextAction, secondaryActionIds: [...baseNextAction.secondaryActionIds, 'verifyGitHubDeliveryRevocation'] }
     : baseNextAction
+  const nextAction = withReadingReminder(revocationNextAction, input)
   const actionIds: InspectorActionId[] = []
   const addAction = (actionId: InspectorActionId) => {
     if (

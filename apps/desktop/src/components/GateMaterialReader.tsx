@@ -5,8 +5,19 @@ import { ArtifactReviewReader } from './ArtifactReviewReader'
 import { type RecordReviewFeedback } from './ReviewEvidenceDetails'
 import type { DiscussionMaterial } from '../app/discussion-reference'
 import { formatLocalTime } from '../app/desktop-view-model'
+import {
+  describeMaterial,
+  groupMaterials,
+  pendingRequirementTarget,
+  selectRequirementReading,
+  type MaterialContext,
+} from '../app/material-catalog'
 
-export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedback, onToggleRevision, revisionSelected = [], onDiscuss }: {
+/**
+ * The one requirement reader for the clarification step and the requirement Gate (plan S4, Z4,
+ * Issue #181). Reading another version or the raw request never moves the approval target.
+ */
+export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedback, onToggleRevision, revisionSelected = [], onDiscuss, readingId: controlledReadingId, onReadingChange, materialContext }: {
   /** Adds a reference card to the discussion; never sends or calls a model (plan W7). */
   onDiscuss?: ((material: DiscussionMaterial) => void) | undefined
   bundle: ReturnType<typeof buildClarificationReviewBundle>
@@ -16,13 +27,32 @@ export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedb
   onFeedback?: RecordReviewFeedback | undefined
   onToggleRevision?: ((index: number) => void) | undefined
   revisionSelected?: number[] | undefined
+  /** Controlled by the task page so explicit links and the W9 return can open a version. */
+  readingId?: string | undefined
+  onReadingChange?: ((artifactId: string) => void) | undefined
+  materialContext?: MaterialContext | undefined
 }) {
   const [reference, setReference] = useState<'request' | 'repository' | 'knowledge' | null>(null)
-  const [readingId, setReadingId] = useState('')
-  const revision = bundle.revisions.find((item) => item.id === readingId) ?? bundle.activeRevision
-  const readingCurrent = revision?.id === bundle.activeRevision?.id
-  const pendingConfirmation = bundle.state === 'ready' && bundle.activeRevision?.clarificationRevision?.status === 'review_requested'
-  const toggleRevision = readingCurrent ? onToggleRevision : undefined
+  const [localReadingId, setLocalReadingId] = useState('')
+  const requestedId = controlledReadingId ?? localReadingId
+  const setReadingId = (id: string) => (onReadingChange ?? setLocalReadingId)(id)
+  const context: MaterialContext = materialContext ?? { run: undefined, events: [], formatTime: formatLocalTime }
+  const target = pendingRequirementTarget(bundle)
+  // “Current” is what a pending Gate would confirm, else the version the Gate binds or the latest.
+  const anchor = target ?? selectRequirementReading(bundle)
+  const reading = selectRequirementReading(bundle, requestedId) ?? bundle.rawRequest
+  const readingRaw = Boolean(reading && reading.kind === 'raw_request')
+  const readingCurrent = !reading || reading.id === anchor?.id || (!anchor && readingRaw)
+  const toggleRevision = reading && reading.id === bundle.activeRevision?.id ? onToggleRevision : undefined
+  const entry = reading ? describeMaterial(reading, context) : undefined
+  const anchorEntry = anchor ? describeMaterial(anchor, context) : undefined
+  const versionOf = (artifact: Artifact | undefined) => artifact?.clarificationRevision ? `v${artifact.clarificationRevision.revision}` : artifact ? `（${describeMaterial(artifact, context).versionLabel}）` : '—'
+  // The selector appears only when there is more than one version, or to leave the raw request.
+  const selectable = [
+    ...bundle.revisions,
+    ...(bundle.rawRequest && (bundle.revisions.length > 1 || readingRaw) ? [bundle.rawRequest] : []),
+  ]
+  const showSelector = bundle.revisions.length > 1 || (readingRaw && bundle.revisions.length > 0)
   // Review basis sits in the body's 阅读工具 disclosure with the TOC and 查看原文 (plan Y6).
   const reviewBasis = <>
     <div className="material-reference-links"><span>审查依据</span>
@@ -36,21 +66,41 @@ export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedb
       {reference === 'knowledge' && knowledge}
     </section>}
   </>
+  const returnLabel = target ? '返回待确认版本' : anchorEntry?.statusLabel === '已确认' ? '返回已确认版本' : '返回当前版本'
   return <div className="gate-material-reader">
-    {bundle.revisions.length > 1 && <label>阅读版本<select aria-label="阅读需求版本" value={revision?.id} onChange={(event) => setReadingId(event.target.value)}>{bundle.revisions.map((item) => <option key={item.id} value={item.id}>需求澄清 v{item.clarificationRevision?.revision ?? '—'} · {item.id === bundle.activeRevision?.id ? '当前版本' : '历史版本'}</option>)}</select></label>}
-    {/* Reading history never moves the approval target: the notice names the version being confirmed (plan V1, §6.2). */}
-    {!readingCurrent && <p role="status" className="material-history-notice">
-      正在阅读历史版本 v{revision?.clarificationRevision?.revision ?? '—'}；确认与修订仍针对需求 v{bundle.activeRevision?.clarificationRevision?.revision ?? '—'}。
-      {bundle.activeRevision ? <button type="button" className="text-button" onClick={() => setReadingId('')}>{pendingConfirmation ? '返回待确认版本' : '返回当前版本'}</button> : null}
-    </p>}
+    {showSelector && <label>阅读版本<select aria-label="阅读需求版本" value={reading?.id ?? ''} onChange={(event) => setReadingId(event.target.value)}>
+      {groupMaterials(selectable.map((artifact) => describeMaterial(artifact, context))).map((section) => (
+        <optgroup key={section.group} label={section.label}>
+          {section.entries.map((item) => <option key={item.artifact.id} value={item.artifact.id}>{item.label}</option>)}
+        </optgroup>
+      ))}
+    </select></label>}
+    {/* Reading another version never moves the approval target: the notice names it (plan V1, §6.2, Z6). */}
+    {!readingCurrent && reading ? <p role="status" className="material-history-notice">
+      {readingRaw
+        ? `正在阅读原始需求；${target ? `确认与修订仍针对需求 ${versionOf(target)}。` : '原始需求不是审批对象。'}`
+        : target
+          ? `正在阅读历史版本 ${versionOf(reading)}；确认与修订仍针对需求 ${versionOf(target)}。`
+          : `正在阅读需求 ${versionOf(reading)}（${entry?.statusLabel || '状态未记录'}）；当前${anchorEntry?.statusLabel === '已确认' ? '已确认' : '最新'}的是需求 ${versionOf(anchor)}。`}
+      {anchor ? <button type="button" className="text-button" onClick={() => setReadingId(anchor.id)}>{returnLabel}</button> : null}
+    </p> : null}
     <article className="material-document" data-testid="clarification-current-revision">
-      <div className="compact-row"><h2>需求澄清 v{revision?.clarificationRevision?.revision ?? '—'}</h2><span>{({ draft: '草稿', review_requested: '待确认', revision_requested: '待修订', approved: '已确认', superseded: '已有新版本' } as Record<string, string>)[revision?.clarificationRevision?.status ?? ''] ?? '版本不可用'}</span>
-        {revision && onDiscuss ? <button type="button" className="text-button" onClick={() => onDiscuss({
-          materialId: revision.id,
-          materialTitle: revision.title,
-          version: revision.clarificationRevision ? `需求 v${revision.clarificationRevision.revision}` : `记录于 ${formatLocalTime(revision.updatedAt)}`,
-        })}>讨论此材料</button> : null}</div>
-      {revision ? <ArtifactReviewReader artifact={revision} review={review} reports={reports} requirement onFeedback={onFeedback} onToggleRevision={toggleRevision} revisionSelected={revisionSelected} onDiscuss={onDiscuss} readingTools={reviewBasis} /> : <>{reviewBasis}<p>正文不可用，请核对源产物。</p></>}
+      <div className="compact-row">
+        <h2>{readingRaw ? '原始需求' : reading ? `需求澄清 ${versionOf(reading)}` : '需求澄清'}</h2>
+        <span>{readingRaw ? '原始输入，不是审批对象' : entry?.statusLabel || '版本不可用'}</span>
+        {reading ? <span className="meta">{entry?.timeLabel}</span> : null}
+        {reading && onDiscuss ? <button type="button" className="text-button" onClick={() => onDiscuss({
+          materialId: reading.id,
+          materialTitle: readingRaw ? '原始需求' : reading.title,
+          version: reading.clarificationRevision ? `需求 v${reading.clarificationRevision.revision}` : `记录于 ${formatLocalTime(reading.updatedAt)}`,
+        })}>讨论此材料</button> : null}
+      </div>
+      {reading && !readingRaw ? <p className="meta material-business-title">{reading.title}</p> : null}
+      {readingRaw && reading
+        ? <ArtifactBody content={reading.content} readingTools={reviewBasis} />
+        : reading
+          ? <ArtifactReviewReader artifact={reading} review={review} reports={reports} requirement onFeedback={onFeedback} onToggleRevision={toggleRevision} revisionSelected={revisionSelected} onDiscuss={onDiscuss} readingTools={reviewBasis} />
+          : <>{reviewBasis}<p>正文不可用，请核对源产物。</p></>}
     </article>
   </div>
 }
