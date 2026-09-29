@@ -1859,9 +1859,6 @@ try {
   const removalSelector = second.page.getByLabel('Saved Agent Provider')
   await expect(removalSelector.locator('option:checked')).toContainText('Temporary removal smoke')
   const removalProviderId = await removalSelector.inputValue()
-  await second.app.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(2)
-  })
   await second.page.getByRole('button', { name: '管理已保存 Provider' }).click()
   const removalDialog = second.page.getByRole('dialog', { name: '管理已保存 Provider' })
   await expect(removalDialog).toContainText('Temporary removal smoke')

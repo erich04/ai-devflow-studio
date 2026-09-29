@@ -5,7 +5,7 @@ fileMatchPattern: ["apps/**/*", "packages/**/*", "scripts/**/*"]
 
 # 工作区改造：执行约束
 
-适用于按 `docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md`（已确认，当前为第 10 版）推进的各批次（S0–S6）。S0 在 `.kiro/specs/workspace-redesign-s0/` 下有 spec；从 S1 起不另建 spec，以方案第 7 节对应批次的改动清单作为任务清单，分成可评审的提交完成。动手前先读方案中与当前批次相关的章节；实施中发现的差异和范围外问题记回方案。与改造无关的改动不受本文件的批次边界限制。
+适用于按 `docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md`（已确认，当前为第 11 版）推进的各批次（S0–S6）。S0 在 `.kiro/specs/workspace-redesign-s0/` 下有 spec；从 S1 起不另建 spec，以方案第 7 节对应批次的改动清单作为任务清单，分成可评审的提交完成。动手前先读方案中与当前批次相关的章节；实施中发现的差异和范围外问题记回方案。与改造无关的改动不受本文件的批次边界限制。
 
 ## 不变的约束（方案第 3 节）
 
@@ -26,3 +26,4 @@ fileMatchPattern: ["apps/**/*", "packages/**/*", "scripts/**/*"]
 - 按 AGENTS.md 运行 `corepack pnpm verify`。界面文案变化时，同步更新 `apps/desktop/src/App.test.tsx` 与 `scripts/electron-smoke.mjs` 的文案断言，再运行 `test:electron-smoke` 与 `test:workbench-conversation-electron-smoke`。
 - 走查、测量和冒烟测试使用隔离的用户数据目录与专用数据库，不重用已有用户数据。
 - 如实记录运行结果，分开写明哪些使用模拟模型，哪些是真实模型或远端发布。
+- 不做 200% 缩放验证（用户 2026-09-28 决定）：基线只测三档内容区尺寸与浅色、深色主题，不运行 `--zoom`；冒烟测试也不设置缩放。
