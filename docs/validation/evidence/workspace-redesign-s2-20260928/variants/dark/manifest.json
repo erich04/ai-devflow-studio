@@ -1,0 +1,65 @@
+{
+  "run": {
+    "generatedAt": "2026-09-29T11:31:04.638Z",
+    "commit": {
+      "head": "d692e27",
+      "productCodeDirty": true
+    },
+    "node": "v24.18.0",
+    "platform": "darwin-arm64",
+    "theme": "dark",
+    "zoom": 1,
+    "sizes": [
+      "1440x742"
+    ],
+    "environment": {
+      "screen": {
+        "workArea": {
+          "x": 0,
+          "y": 30,
+          "width": 1920,
+          "height": 1050
+        },
+        "size": {
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 2
+      },
+      "versions": {
+        "electron": "42.11.6",
+        "chrome": "148.0.7778.280"
+      }
+    }
+  },
+  "samples": [
+    {
+      "id": "clarify-gate-warn",
+      "title": "需求确认 Gate：策略仅警告，缺少门禁审查（主基线；同时是空讨论样例）",
+      "planRefs": [
+        "2.2",
+        "D1",
+        "D3",
+        "L1-L5",
+        "5.4 空讨论",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "本地项目未连接团队，使用内置的仅警告策略。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/clarify-gate-warn-1440x742-dark.jpg"
+      ],
+      "extraScreenshots": [
+        "shots/clarify-gate-warn-toast-1440x742-dark.jpg"
+      ],
+      "observations": {},
+      "result": "prepared"
+    }
+  ]
+}
