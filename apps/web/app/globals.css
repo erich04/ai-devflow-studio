@@ -2051,3 +2051,39 @@ button {
 .organization-cards h3, .organization-cards p { margin: 0; }
 .organization-secret { display: block; overflow-wrap: anywhere; user-select: all; padding: 12px; }
 .organization-manager li { margin: 10px 0; overflow-wrap: anywhere; }
+
+/* S5 (plan Q1–Q5): 我的待办, project tasks, task detail, delivery approval. */
+.studio-todo, .studio-task-list, .studio-task-detail { display: grid; gap: 16px; width: min(100%, 1320px); min-width: 0; margin: 0 auto; }
+/* Panels that centre themselves with auto margins elsewhere must stretch inside these columns. */
+.studio-todo > *, .studio-task-list > *, .studio-task-detail > * { min-width: 0; margin-inline: 0; }
+.studio-freshness { margin: 0; color: var(--muted); font-size: 13px; }
+.studio-notice { margin: 0; padding: 12px 14px; border: 1px solid var(--studio-amber); border-radius: 10px; background: var(--studio-amber-soft); color: var(--text); }
+.studio-todo-group, .studio-task-list__runs { display: grid; gap: 10px; min-width: 0; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.studio-todo-group h2 { margin: 0; font-size: 17px; }
+.studio-todo-list, .studio-run-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.studio-todo-row { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(0, 2.4fr) minmax(120px, auto) auto; gap: 8px 16px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 10px; overflow-wrap: anywhere; }
+.studio-todo-row.is-mine { border-color: var(--accent); }
+.studio-todo-row__main { display: grid; gap: 2px; min-width: 0; }
+.studio-todo-row__main span { color: var(--muted); font-size: 13px; }
+.studio-todo-row__facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; min-width: 0; margin: 0; }
+.studio-todo-row__facts dt, .studio-task-facts dt, .github-delivery-facts dt, .github-delivery-technical dt { color: var(--muted); font-size: 12px; }
+.studio-todo-row__facts dd, .studio-task-facts dd, .github-delivery-facts dd, .github-delivery-technical dd { min-width: 0; margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.studio-todo-row__responsibility { font-size: 13px; font-weight: 600; }
+.studio-todo-row__open { justify-self: end; padding: 6px 14px; border: 1px solid var(--border); border-radius: 8px; color: var(--accent); text-decoration: none; }
+.studio-todo-empty { margin: 0; color: var(--muted); }
+.studio-task-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.studio-run-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.studio-run-list a { display: grid; gap: 2px; min-width: 0; color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+.studio-run-list span, .studio-run-list small { color: var(--muted); font-size: 13px; }
+.studio-run-kicker a { color: var(--accent); }
+.copy-value { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; max-width: 100%; }
+.copy-value code { overflow-wrap: anywhere; }
+.copy-value__button { padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+.github-delivery-facts, .github-delivery-technical dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 16px; margin: 12px 0; }
+.github-delivery-technical summary, .studio-gate-material-details summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+.github-delivery-waiting, .gate-command-waiting { margin: 8px 0 0; font-weight: 600; }
+@media (max-width: 900px) {
+  .studio-todo-row { grid-template-columns: 1fr; }
+  .studio-todo-row__facts { grid-template-columns: 1fr 1fr; }
+  .studio-todo-row__open { justify-self: start; }
+}

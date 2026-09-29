@@ -1,35 +1,20 @@
 import {
   AlertTriangle,
-  ArrowRight,
-  Bot,
-  CheckCircle2,
   CircleDot,
-  ClipboardCheck,
-  Code2,
-  Database,
   FileText,
   Gauge,
   Github,
-  GitBranch,
-  Play,
-  ShieldCheck,
+  ListChecks,
   Sparkles,
-  TestTube2,
-  TimerReset,
-  XCircle,
 } from 'lucide-react'
 import { cookies } from 'next/headers'
-import type { CSSProperties, ReactNode } from 'react'
 import {
   createDemoTeamSessionHeaders,
-  formatUsd,
   resolveDevFlowRuntimeFlags,
   type DevFlowSessionHeaders,
   type GateCommand,
   type GitHubRepositoryBinding,
-  type NodeStatus,
   type WorkRequest,
-  type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import {
@@ -50,15 +35,19 @@ import {
 } from './lib/devflow-api'
 import { PairingCodePanel } from './PairingCodePanel'
 import { WorkRequestPanel } from './WorkRequestPanel'
-import { GateCommandPanel } from './GateCommandPanel'
-import { GitHubDeliveryPanel } from './GitHubDeliveryPanel'
+import { GitHubDeliveryApprovals, GitHubRepositoryBindingSettings } from './GitHubDeliveryPanel'
 import { selectGateCommandTarget } from './gate-command-view-model'
 import { ThemePreferenceControl } from './ThemePreferenceControl'
 import { StudioManagement } from './StudioManagement'
 import { ProjectCreateDialog } from './ProjectCreateDialog'
-import { studioHref, type StudioView } from './studio-navigation'
-
-type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
+import { LegacyAnchorRedirect } from './LegacyAnchorRedirect'
+import { WebTodoView } from './WebTodoView'
+import { WebTaskList } from './WebTaskList'
+import { WebTaskDetail } from './WebTaskDetail'
+import { EmptyProductState, StatusPill, statusTone } from './studio-ui'
+import { parseStudioLocation, studioHref, type StudioLocation, type StudioView } from './studio-navigation'
+import { buildWebTodo, type DeliveryFacts } from './web-todo-view-model'
+import { effectiveProjectRole, roleLabel, runStatusLabel, shortIdentifier } from './web-labels'
 
 type PageSearchParams = Record<string, string | string[] | undefined>
 
@@ -102,6 +91,13 @@ async function runKnowledgeReviewAction(formData: FormData) {
   })
 }
 
+const viewTitles: Record<Exclude<StudioLocation['view'], 'task'>, { title: string; body: string }> = {
+  todo: { title: '我的待办', body: '当前项目中等待你处理的审批、交付与异常。' },
+  tasks: { title: '项目任务', body: '团队请求和开发任务的进度，只读；执行在桌面端完成。' },
+  team: { title: '团队', body: '团队成员、各项目费用与最近的交付进度。' },
+  settings: { title: '团队设置', body: '预算、策略、桌面连接和 GitHub 仓库绑定。桌面端更新团队数据后使用最新设置。' },
+}
+
 export default async function Page({ searchParams }: PageProps) {
   const apiBaseUrl = resolveDevFlowPublicApiBaseUrl()
   const cookieHeader = await getDevFlowCookieHeader()
@@ -128,6 +124,8 @@ export default async function Page({ searchParams }: PageProps) {
       />
     )
   }
+  // The moment this page read the team data; shown as its freshness (plan S5, Q2).
+  const readAt = new Date().toISOString()
 
   let browserSession: BrowserAuthSessionResponse | null = null
   if (cookieHeader) {
@@ -139,16 +137,21 @@ export default async function Page({ searchParams }: PageProps) {
   }
 
   const params = await searchParams
-  const view: StudioView = params?.view === 'team' || params?.view === 'settings' ? params.view : 'workbench'
-  const section = params?.section === 'policy' ? 'policy' : 'budget'
-  const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(overview, params)
+  const location = parseStudioLocation(params)
+  const { activeProject, activeRun, projectRuns, selectionError } = resolvePageSelection(overview, params, location)
+  const navView: StudioView = location.view === 'task' ? 'tasks' : location.view
+
   let workRequests: WorkRequest[] = []
   let workRequestLoadFailed = false
   let gateCommands: GateCommand[] = []
   let githubBinding: GitHubRepositoryBinding | null = null
   let githubDeliveries: GitHubDeliveryRequestView[] = []
-  let githubDeliveryLoadFailed = false
-  if (activeProject && view === 'workbench') {
+  let deliveryFacts: DeliveryFacts = { status: 'not_loaded' }
+  let gateEvaluation: GateCommandEvaluationSnapshot | null = null
+  const needsDeliveries = location.view === 'todo' || (location.view === 'task' && Boolean(activeRun))
+  const needsBinding = needsDeliveries && location.view === 'task' || (location.view === 'settings' && location.section === 'github')
+
+  if (activeProject && location.view === 'tasks') {
     try {
       workRequests = await fetchWorkRequests({
         projectId: activeProject.id,
@@ -158,123 +161,57 @@ export default async function Page({ searchParams }: PageProps) {
     } catch {
       workRequestLoadFailed = true
     }
-    if (cookieHeader) {
+  }
+  if (activeProject && cookieHeader && (needsDeliveries || needsBinding)) {
+    try {
+      const [loadedBinding, loadedDeliveries] = await Promise.all([
+        needsBinding
+          ? fetchGitHubRepositoryBinding({ projectId: activeProject.id, cookieHeader })
+          : Promise.resolve(null),
+        needsDeliveries
+          ? fetchGitHubDeliveryRequests({ projectId: activeProject.id, cookieHeader })
+          : Promise.resolve([]),
+      ])
+      githubBinding = loadedBinding
+      githubDeliveries = loadedDeliveries
+      deliveryFacts = { status: 'loaded', items: loadedDeliveries }
+    } catch {
+      deliveryFacts = { status: 'failed' }
+    }
+  }
+  if (activeProject && activeRun && cookieHeader) {
+    try {
+      gateCommands = await fetchGateCommands({ projectId: activeProject.id, cookieHeader })
+    } catch {
+      gateCommands = []
+    }
+    const gateTarget = selectGateCommandTarget(activeRun)
+    if (
+      activeRun.status === 'paused_at_gate' &&
+      gateTarget &&
+      (gateTarget.node.status === 'running' || gateTarget.node.status === 'blocked')
+    ) {
       try {
-        gateCommands = await fetchGateCommands({
+        gateEvaluation = await evaluateGateCommandSnapshot({
           projectId: activeProject.id,
+          runId: activeRun.id,
+          nodeId: gateTarget.commandNodeId,
           cookieHeader,
         })
       } catch {
-        gateCommands = []
-      }
-      try {
-        const [loadedBinding, loadedDeliveries] = await Promise.all([
-          fetchGitHubRepositoryBinding({
-            projectId: activeProject.id,
-            cookieHeader,
-          }),
-          fetchGitHubDeliveryRequests({
-            projectId: activeProject.id,
-            cookieHeader,
-          }),
-        ])
-        githubBinding = loadedBinding
-        githubDeliveries = loadedDeliveries
-      } catch {
-        githubBinding = null
-        githubDeliveries = []
-        githubDeliveryLoadFailed = true
+        gateEvaluation = null
       }
     }
   }
-  const activeMember = activeRun
-    ? overview.members.find((member) => member.id === activeRun.creatorId)
-    : undefined
-  const currentNode = activeRun?.nodes.find((node) => node.id === activeRun.currentNodeId)
-  const gateTarget = activeRun ? selectGateCommandTarget(activeRun) : null
-  const gateNode = gateTarget?.node
-  const gateCommandNodeId = gateTarget?.commandNodeId
-  let gateEvaluation: GateCommandEvaluationSnapshot | null = null
-  if (
-    cookieHeader &&
-    activeProject &&
-    activeRun?.status === 'paused_at_gate' &&
-    gateNode &&
-    gateCommandNodeId &&
-    (gateNode.status === 'running' || gateNode.status === 'blocked')
-  ) {
-    try {
-      gateEvaluation = await evaluateGateCommandSnapshot({
-        projectId: activeProject.id,
-        runId: activeRun.id,
-        nodeId: gateCommandNodeId,
-        cookieHeader,
-      })
-    } catch {
-      gateEvaluation = null
-    }
-  }
-  const currentReviews = activeRun
-    ? overview.agentReviews.filter(
-        (review) => review.projectId === activeProject?.id && review.runId === activeRun.id,
-      )
-    : []
-  const reviewNodeId = gateNode?.id ?? currentNode?.id
-  const gateReview = reviewNodeId
-    ? currentReviews.find((review) => review.nodeId === reviewNodeId)
-    : undefined
-  const currentEvidence = activeRun
-    ? overview.testEvidenceSummaries.filter(
-        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
-      )
-    : []
-  const currentCodingRuns = activeRun
-    ? overview.codingAgentSummaries.filter(
-        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
-      )
-    : []
-  const currentAgentRuntimes = activeRun
-    ? overview.agentRuntimeSummaries.filter(
-        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
-      )
-    : []
-  const currentAgentMemories = activeRun
-    ? overview.agentMemorySummaries.filter(
-        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
-      )
-    : []
-  const currentAgentCoordinations = activeRun
-    ? overview.agentCoordinationSummaries.filter(
-        (item) => item.projectId === activeProject?.id && item.runId === activeRun.id,
-      )
-    : []
-  const knowledgeReviewProviderId = overview.agentProviders[0]?.id ?? ''
-  const providerNameById = new Map(
-    overview.agentProviders.map((provider) => [provider.id, provider.name]),
-  )
-  const policySummary = activeProject
-    ? overview.policyAwareDeliverySummaries.find((item) => item.projectId === activeProject.id)
-    : undefined
-  const budgetPolicy = activeProject
-    ? overview.runtimeBudgetPolicies.find((item) => item.projectId === activeProject.id)
-    : undefined
-  const projectSpend = activeProject
-    ? overview.projectCost.find((rollup) => rollup.key === activeProject.id)?.costUsd ?? 0
-    : 0
-  const budgetPercent =
-    budgetPolicy?.monthlyLimitUsd != null && budgetPolicy.monthlyLimitUsd > 0
-      ? Math.min(Math.round((projectSpend / budgetPolicy.monthlyLimitUsd) * 100), 999)
-      : 0
-  const activeRunCount = projectRuns.filter(
-    (run) => !['completed', 'failed', 'cancelled'].includes(run.status),
-  ).length
-  const gateCount = projectRuns.filter((run) => run.status === 'paused_at_gate').length
-  const evidenceCount = currentEvidence.length + currentReviews.length + currentCodingRuns.length + currentAgentRuntimes.length
-  const progress = activeRun ? calculateProgress(activeRun.nodes) : 0
+
+  const role = activeProject ? effectiveProjectRole(browserSession, activeProject.id) : null
+  const heading = location.view === 'task'
+    ? { title: activeRun?.title ?? '任务不可用', body: activeRun?.request ?? selectionError ?? '' }
+    : viewTitles[location.view]
 
   return (
     <main className="studio-shell">
-      <aside className="studio-rail" aria-label="AI DevFlow navigation">
+      <aside className="studio-rail" aria-label="AI DevFlow 导航">
         <div className="studio-brand">
           <span aria-hidden="true">
             <Sparkles size={19} />
@@ -285,55 +222,31 @@ export default async function Page({ searchParams }: PageProps) {
           </div>
         </div>
 
-        <a className="studio-primary-action" href={`${studioHref(activeProject?.id)}#work-request`}>
-          <Play size={15} />
-          新建工作请求
-        </a>
-
-        <nav className="studio-nav">
-          <a href={studioHref(activeProject?.id)} aria-current={view === 'workbench' ? 'page' : undefined}><CircleDot size={16} />工作台</a>
-          <a href={studioHref(activeProject?.id, 'team')} aria-current={view === 'team' ? 'page' : undefined}><FileText size={16} />团队总览</a>
-          <a href={studioHref(activeProject?.id, 'settings')} aria-current={view === 'settings' ? 'page' : undefined}><Gauge size={16} />设置</a>
-          {view === 'workbench' ? <>
-
-          <a href="#evidence-chain">
-            <CircleDot size={16} />
-            Evidence Chain
-          </a>
-          <a href="#human-gate">
-            <ShieldCheck size={16} />
-            Human Gate
-          </a>
-          <a href="#agents">
-            <Bot size={16} />
-            Agents
-          </a>
-          <a href="#runtime">
-            <Gauge size={16} />
-            Runtime
-          </a>
-          </> : null}
+        <nav className="studio-nav" aria-label="主导航">
+          <a href={studioHref(activeProject?.id, 'todo')} aria-current={navView === 'todo' ? 'page' : undefined}><ListChecks size={16} />我的待办</a>
+          <a href={studioHref(activeProject?.id, 'tasks')} aria-current={navView === 'tasks' ? 'page' : undefined}><CircleDot size={16} />项目任务</a>
+          <a href={studioHref(activeProject?.id, 'team')} aria-current={navView === 'team' ? 'page' : undefined}><FileText size={16} />团队</a>
+          <a href={studioHref(activeProject?.id, 'settings')} aria-current={navView === 'settings' ? 'page' : undefined}><Gauge size={16} />设置</a>
         </nav>
 
         <div className="studio-rail-footer">
-          <span>{activeProject?.name ?? 'No project'}</span>
-          <strong>{activeMember?.name ?? 'Waiting for sync'}</strong>
+          <span>{activeProject?.name ?? '未选择项目'}</span>
+          <strong>{browserSession ? `${browserSession.user.name}${role ? ` · ${roleLabel(role)}` : ''}` : '未建立浏览器身份'}</strong>
         </div>
       </aside>
 
       <section className="studio-workspace">
         <header className="studio-topbar">
           <div>
-            <div className="studio-run-kicker">
-              <span>{activeRun ? shortRunId(activeRun.id) : 'NO RUN SELECTED'}</span>
-              <StatusPill tone={activeRun ? statusTone(activeRun.status) : 'idle'}>
-                {activeRun ? runStatusLabel(activeRun.status) : '等待真实数据'}
-              </StatusPill>
-            </div>
-            <h1>{view === 'team' ? '团队总览' : view === 'settings' ? '团队设置' : activeRun?.title ?? '从一个需求开始项目交付'}</h1>
-            <p>
-              {view === 'team' ? '查看团队成员、各项目费用与最近交付进度。' : view === 'settings' ? '配置预算和团队策略，Desktop 同步后使用最新设置。' : activeRun?.request ?? '先创建或选择团队项目，再提交需求并配对 Desktop。'}
-            </p>
+            {location.view === 'task' ? (
+              <div className="studio-run-kicker">
+                <a href={studioHref(activeProject?.id, 'tasks')}>项目任务</a>
+                <span>{activeRun ? `任务 ${shortIdentifier(activeRun.id)}` : '任务'}</span>
+                {activeRun ? <StatusPill tone={statusTone(activeRun.status)}>{runStatusLabel(activeRun.status)}</StatusPill> : null}
+              </div>
+            ) : null}
+            <h1>{heading.title}</h1>
+            {heading.body ? <p>{heading.body}</p> : null}
           </div>
           <div className="studio-top-actions">
             {browserSession ? <a href="/organizations">组织与成员</a> : null}
@@ -343,19 +256,18 @@ export default async function Page({ searchParams }: PageProps) {
               hasSessionCookie={Boolean(cookieHeader)}
               session={browserSession}
             />
-
           </div>
         </header>
 
-        <section className="studio-selection" aria-label="Project and Run selection">
+        <section className="studio-selection" aria-label="项目选择">
           <div>
-            <span>Project</span>
+            <span>项目</span>
             {overview.projects.length > 0 ? (
-              <nav aria-label="Select project">
+              <nav aria-label="选择项目">
                 {overview.projects.map((project) => (
                   <a
                     aria-current={project.id === activeProject?.id ? 'page' : undefined}
-                    href={studioHref(project.id, view, section)}
+                    href={studioHref(project.id, navView, location.view === 'settings' ? location.section : undefined)}
                     key={project.id}
                   >
                     <strong>{project.name}</strong>
@@ -364,339 +276,135 @@ export default async function Page({ searchParams }: PageProps) {
                 ))}
               </nav>
             ) : (
-<p>还没有团队项目。</p>
+              <p>还没有团队项目。</p>
             )}
             {browserSession?.user.role === 'owner' ? <ProjectCreateDialog signInUrl={`${apiBaseUrl}/api/auth/github/start`} /> : <small>项目创建需要组织 Owner。</small>}
           </div>
-          {view === 'workbench' ? <div>
-            <span>Run</span>
-            {activeProject ? (
-              projectRuns.length > 0 ? (
-                <nav aria-label="Select Run">
-                  {projectRuns.map((run) => (
-                    <a
-                      aria-current={run.id === activeRun?.id ? 'page' : undefined}
-                      href={`/?projectId=${encodeURIComponent(activeProject.id)}&runId=${encodeURIComponent(run.id)}`}
-                      key={run.id}
-                    >
-                      <strong>{run.title}</strong>
-                      <small>{runStatusLabel(run.status)}</small>
-                    </a>
-                  ))}
-                </nav>
+        </section>
+
+        {location.view === 'team' || location.view === 'settings' ? (
+          <StudioManagement
+            overview={overview}
+            session={browserSession}
+            project={activeProject}
+            view={location.view}
+            section={location.view === 'settings' ? location.section : 'budget'}
+            {...(activeProject && browserSession ? {
+              desktopConnection: (
+                <PairingCodePanel
+                  key={activeProject.id}
+                  projectId={activeProject.id}
+                  projectName={activeProject.name}
+                  subject={(() => {
+                    const membership = browserSession.projectMemberships?.find(
+                      (candidate) => candidate.projectId === activeProject.id,
+                    )
+                    return membership
+                      ? { userId: browserSession.user.id, userName: browserSession.user.name, role: membership.role }
+                      : null
+                  })()}
+                />
+              ),
+            } : {})}
+            {...(activeProject && cookieHeader && location.view === 'settings' && location.section === 'github' ? {
+              githubRepository: deliveryFacts.status === 'failed' ? (
+                <><h2>GitHub 仓库</h2><p>无法安全读取仓库绑定；没有授予任何发布权限。请稍后刷新。</p></>
               ) : (
-                <small>所选项目还没有同步 Run。</small>
+                <GitHubRepositoryBindingSettings
+                  key={`github-binding-${activeProject.id}`}
+                  projectId={activeProject.id}
+                  projectName={activeProject.name}
+                  initialBinding={githubBinding}
+                  canManage={role === 'owner'}
+                />
+              ),
+            } : {})}
+          />
+        ) : !activeProject ? (
+          <EmptyProductState
+            title={selectionError ?? '还没有团队项目'}
+            body={overview.projects.length ? '请先在上方选择一个项目。待办、任务和设置都按项目显示，不会回退到其他项目的数据。' : '由组织 Owner 创建团队项目后，这里会显示待办与任务。'}
+          />
+        ) : location.view === 'todo' ? (
+          <>
+            <LegacyAnchorRedirect projectId={activeProject.id} />
+            <WebTodoView
+              todo={buildWebTodo({
+                project: activeProject,
+                runs: projectRuns,
+                members: overview.members,
+                session: browserSession,
+                deliveries: deliveryFacts,
+                readAt,
+              })}
+            />
+          </>
+        ) : location.view === 'tasks' ? (
+          <>
+            <LegacyAnchorRedirect projectId={activeProject.id} />
+            <WebTaskList
+              project={activeProject}
+              runs={projectRuns}
+              workRequests={workRequestLoadFailed ? (
+                <section className="work-request-panel" id="work-request" aria-label="团队请求">
+                  <div>
+                    <span>团队请求</span>
+                    <h2>团队请求暂时不可用</h2>
+                    <p>无法安全读取所选项目的团队请求，请稍后重试。</p>
+                  </div>
+                </section>
+              ) : (
+                <WorkRequestPanel
+                  key={activeProject.id}
+                  projectId={activeProject.id}
+                  initialWorkRequests={workRequests}
+                />
+              )}
+            />
+          </>
+        ) : activeRun ? (
+          <WebTaskDetail
+            project={activeProject}
+            run={activeRun}
+            overview={overview}
+            session={browserSession}
+            hasBrowserSession={Boolean(cookieHeader)}
+            gateCommands={gateCommands}
+            gateEvaluation={gateEvaluation}
+            knowledgeReviewAction={runKnowledgeReviewAction}
+            deliverySection={cookieHeader ? (
+              deliveryFacts.status === 'failed' ? (
+                <section className="github-delivery-panel" id="github-delivery" aria-label="交付审批">
+                  <div className="studio-section-heading compact">
+                    <div>
+                      <span>交付审批</span>
+                      <h2>交付请求暂时不可用</h2>
+                      <p>无法安全读取仓库绑定和交付请求；没有授予任何发布权限。</p>
+                    </div>
+                  </div>
+                </section>
+              ) : (
+                <GitHubDeliveryApprovals
+                  key={`github-delivery-${activeProject.id}-${activeRun.id}`}
+                  projectId={activeProject.id}
+                  runId={activeRun.id}
+                  binding={githubBinding}
+                  initialDeliveries={githubDeliveries}
+                  canDecide={role === 'lead' || role === 'owner'}
+                />
               )
             ) : (
-              <small>先选择一个项目。</small>
+              <section className="github-delivery-panel" id="github-delivery" aria-label="交付审批">
+                <p className="studio-notice" role="note">登录浏览器身份后才能读取交付请求。</p>
+              </section>
             )}
-          </div> : null}
-          {activeProject && view === 'workbench' ? (
-            <section aria-label={`Desktop pairing for ${activeProject.name}`}>
-              <span>Desktop</span>
-              <strong>Pair this project</strong>
-              <PairingCodePanel
-                key={activeProject.id}
-                projectId={activeProject.id}
-                projectName={activeProject.name}
-                subject={(() => {
-                  const membership = browserSession?.projectMemberships?.find(
-                    (candidate) => candidate.projectId === activeProject.id,
-                  )
-                  return browserSession && membership
-                    ? {
-                        userId: browserSession.user.id,
-                        userName: browserSession.user.name,
-                        role: membership.role,
-                      }
-                    : null
-                })()}
-              />
-            </section>
-          ) : null}
-        </section>
-
-        {view !== 'workbench' ? <StudioManagement overview={overview} session={browserSession} project={activeProject} view={view} section={section} /> : <>
-        {activeProject ? (
-          workRequestLoadFailed ? (
-            <section className="work-request-panel" id="work-request" aria-label="Work Requests">
-              <div>
-                <span>Team intake</span>
-                <h2>工作请求暂时不可用</h2>
-                <p>无法安全加载所选项目的工作请求，请稍后重试。</p>
-              </div>
-            </section>
-          ) : (
-            <WorkRequestPanel
-              key={activeProject.id}
-              projectId={activeProject.id}
-              initialWorkRequests={workRequests}
-            />
-          )
-        ) : null}
-
-        {activeProject && cookieHeader ? (
-          githubDeliveryLoadFailed ? (
-            <section
-              className="github-delivery-panel"
-              id="github-delivery"
-              aria-label="GitHub Delivery"
-            >
-              <div className="studio-section-heading compact">
-                <div>
-                  <span>Controlled publication</span>
-                  <h2>GitHub Delivery 暂时不可用</h2>
-                  <p>无法安全加载仓库绑定和发布请求；未授予任何发布权限。</p>
-                </div>
-              </div>
-            </section>
-          ) : (
-            <GitHubDeliveryPanel
-              key={`github-delivery-${activeProject.id}`}
-              projectId={activeProject.id}
-              projectName={activeProject.name}
-              initialBinding={githubBinding}
-              initialDeliveries={githubDeliveries}
-            />
-          )
-        ) : null}
-
-        <section className="studio-metrics" aria-label="Delivery metrics">
-          <MetricCard label="Active Runs" value={String(activeRunCount)} detail={`${gateCount} awaiting gate`} />
-          <MetricCard label="Evidence Items" value={String(evidenceCount)} detail="tests · reviews · coding runs" />
-          <MetricCard label="Budget Used" value={`${budgetPercent}%`} detail={budgetPolicy ? formatUsd(projectSpend) : 'not configured'} />
-          <MetricCard
-            label="Policy Signals"
-            value={String((policySummary?.warningCount ?? 0) + (policySummary?.blockedCount ?? 0))}
-            detail={`${policySummary?.remainingEvidenceGapCount ?? 0} evidence gaps`}
           />
-        </section>
-
-        <section className="studio-grid">
-          <section className="studio-chain-panel" id="evidence-chain">
-            <div className="studio-section-heading">
-              <div>
-                <span>Evidence Chain</span>
-                <h2>{activeRun ? '当前工作请求证据链' : selectionError ?? '等待第一条真实工作请求'}</h2>
-              </div>
-              <div className="studio-progress">
-                <span>{progress}%</span>
-                <div>
-                  <i style={{ width: `${progress}%` }} />
-                </div>
-              </div>
-            </div>
-
-            {activeRun ? (
-              <div className="studio-chain-list">
-                {activeRun.nodes.map((node) => (
-                  <EvidenceStep
-                    key={node.id}
-                    node={node}
-                    current={node.id === activeRun.currentNodeId}
-                    evidenceCount={evidenceCountForNode(overview, activeRun, node)}
-                  />
-                ))}
-              </div>
-            ) : (
-              <EmptyProductState
-                title={selectionError ?? '没有真实 Run'}
-                body={
-                  selectionError
-                    ? '请从所选项目的 Run 列表中重新选择；页面不会回退到其他项目的最新 Run。'
-                    : '连接 Desktop 或 API 创建工作请求后，这里会显示从澄清、设计、编码、测试到 PR 的证据链。'
-                }
-              />
-            )}
-          </section>
-
-          <aside className="studio-gate-panel" id="human-gate">
-            <div className="studio-section-heading compact">
-              <div>
-                <span>Human Gate</span>
-                <h2>{gateNode?.title ?? '暂无待审 Gate'}</h2>
-              </div>
-              <StatusPill tone={gateNode ? nodeTone(gateNode.status) : 'idle'}>
-                {gateNode ? nodeStatusLabel(gateNode.status) : 'idle'}
-              </StatusPill>
-            </div>
-
-            <dl className="studio-gate-facts">
-              <div>
-                <dt>项目</dt>
-                <dd>{activeProject?.repository ?? '等待项目同步'}</dd>
-              </div>
-              <div>
-                <dt>分支</dt>
-                <dd>{activeRun?.branchName ?? '暂无分支'}</dd>
-              </div>
-              <div>
-                <dt>审批角色</dt>
-                <dd>{gateNode?.requiredRole ?? 'lead / owner'}</dd>
-              </div>
-            </dl>
-
-            <div className="studio-advisory">
-              <strong>{gateReview?.gateAdvisory.summary ?? '此 Run 尚未运行基于知识的门禁审查。'}</strong>
-              <p>
-                {gateReview
-                  ? `${gateReview.policyFindings.length} policy findings · ${gateReview.missingEvidence.length} missing evidence`
-                  : '运行后会以 Knowledge 与规范为依据，审查当前 Gate 条件和阶段产物，并显示引用、缺失证据和建议测试。'}
-              </p>
-            </div>
-
-            <form className="studio-gate-action" action={runKnowledgeReviewAction}>
-              <input type="hidden" name="runId" value={activeRun?.id ?? ''} />
-              <input type="hidden" name="nodeId" value={gateNode?.id ?? currentNode?.id ?? ''} />
-              <input type="hidden" name="projectId" value={activeRun?.projectId ?? activeProject?.id ?? ''} />
-              <input type="hidden" name="providerId" value={knowledgeReviewProviderId} />
-              <button type="submit" disabled={!activeRun || !gateNode}>
-                <Bot size={16} />
-                运行门禁审查
-              </button>
-            </form>
-
-            {activeProject && activeRun && gateNode && gateCommandNodeId ? (
-              <GateCommandPanel
-                projectId={activeProject.id}
-                runId={activeRun.id}
-                nodeId={gateCommandNodeId}
-                expectedRunVersion={activeRun.version}
-                evaluation={gateEvaluation}
-                initialCommands={gateCommands}
-              />
-            ) : (
-              <div className="studio-gate-buttons">
-                <button type="button" disabled>
-                  <CheckCircle2 size={16} />
-                  批准并继续
-                </button>
-                <button type="button" disabled>
-                  <XCircle size={16} />
-                  驳回
-                </button>
-              </div>
-            )}
-          </aside>
-        </section>
-
-        <section className="studio-support-grid">
-      <SupportPanel id="agents" icon={<Bot size={17} />} title="Active Agents" action="查看 Agents">
-            {currentAgentRuntimes.length > 0 ? (
-              currentAgentRuntimes.slice(0, 4).map((runtime) => (
-                <CompactRow
-                  key={runtime.runtimeId}
-                  title={`Agent Runtime · ${runtime.nodeId}`}
-                  meta={`${runtime.counters.steps} steps · ${runtime.counters.toolCalls} tools · v${runtime.runtimeVersion}`}
-                  value={runtime.stopReason ?? runtime.status}
-                />
-              ))
-            ) : currentCodingRuns.length > 0 ? (
-              currentCodingRuns.slice(0, 4).map((run) => (
-                <CompactRow
-                  key={run.id}
-                  title={providerNameById.get(run.providerId) ?? '已保存 Provider'}
-                  meta={run.summary}
-                  value={run.status}
-                />
-              ))
-            ) : (
-              <CompactRow title="Planner / Code / Test" meta="等待 Desktop 同步真实 coding agent 运行" value="idle" />
-            )}
-          </SupportPanel>
-
-          <SupportPanel id="memory" icon={<Database size={17} />} title="Team Memory" action="元数据只读">
-            {currentAgentMemories.length > 0 ? (
-              currentAgentMemories.slice(0, 4).map((memory) => (
-                <CompactRow
-                  key={memory.memoryId}
-                  title={`Memory · ${memory.nodeId}`}
-                  meta={`${memory.citationIds.length} citations · ${memory.acceptedContextCount} accepted contexts · quality v${memory.qualityVersion} · revision ${memory.currentRevision}`}
-                  value={`${memory.visibility} · ${memory.sensitivity} · ${memory.retentionClass}`}
-                />
-              ))
-            ) : (
-              <CompactRow
-                title="暂无 Team Memory"
-                meta="Desktop 同步后仅显示脱敏元数据与质量计数"
-                value="read-only"
-              />
-            )}
-          </SupportPanel>
-
-          <SupportPanel
-            id="coordination"
-            icon={<Bot size={17} />}
-            title="Multi-Agent Coordination"
-            action="元数据只读"
-          >
-            {currentAgentCoordinations.length > 0 ? (
-              currentAgentCoordinations.slice(0, 4).map((coordination) => (
-                <CompactRow
-                  key={coordination.coordinationId}
-                  title={`Coordination · ${coordination.nodeId}`}
-                  meta={`${coordination.taskCount} tasks · ${coordination.acceptedHandoffCount} handoffs · ${coordination.latencyMs} ms · ${coordination.humanInterventionCount} interventions`}
-                  value={coordination.stopReason ?? coordination.status}
-                />
-              ))
-            ) : (
-              <CompactRow
-                title="暂无 Multi-Agent Coordination"
-                meta="Desktop 同步后仅显示脱敏生命周期、计数与比较指标"
-                value="read-only"
-              />
-            )}
-          </SupportPanel>
-
-          <SupportPanel id="tests" icon={<TestTube2 size={17} />} title="Test Evidence" action="查看测试报告">
-            {currentEvidence.length > 0 ? (
-              currentEvidence.slice(0, 4).map((item) => (
-                <CompactRow key={item.id} title={item.summary} meta={item.command} value={item.status} />
-              ))
-            ) : (
-              <CompactRow title="暂无测试证据" meta="运行测试后会显示命令、状态和脱敏摘要" value="empty" />
-            )}
-          </SupportPanel>
-
-          <SupportPanel
-            id="runtime"
-            icon={<Gauge size={17} />}
-            title="Runtime Budget"
-            action="预算详情"
-            actionHref={studioHref(activeProject?.id, 'settings', 'budget')}
-          >
-            <div className="studio-budget-ring" style={{ '--budget-percent': `${Math.min(budgetPercent, 100)}%` } as CSSProperties}>
-              <strong>{budgetPercent}%</strong>
-              <span>{budgetPolicy ? `${formatUsd(projectSpend)} / ${formatUsd(budgetPolicy.monthlyLimitUsd)}` : 'not configured'}</span>
-            </div>
-          </SupportPanel>
-
-          <SupportPanel id="policy" icon={<AlertTriangle size={17} />} title="Policy / Warnings">
-            {activeProject ? (
-              <>
-                <CompactRow
-                  title={
-                    policySummary
-                      ? `交付评估：${policySummary.blockedCount} blocking · ${policySummary.warningCount} warnings`
-                      : 'No policy summary for selected project'
-                  }
-                  meta={`${policySummary?.retryAttemptCount ?? 0} retries · ${policySummary?.overrideCount ?? 0} overrides`}
-                  value=""
-                />
-                <strong>{overview.enforcementPolicies.organizationPolicy.name}</strong>
-                <p>云端策略 v{overview.enforcementPolicies.organizationPolicy.version} · Desktop 同步后生效</p>
-                <a href={studioHref(activeProject.id, 'settings', 'policy')}>查看 Team Policy 设置</a>
-              </>
-            ) : (
-              <CompactRow
-                title="No project selected"
-                meta="Choose a project to inspect policy signals"
-                value="—"
-              />
-            )}
-          </SupportPanel>
-        </section>
-        </>}
+        ) : (
+          <EmptyProductState
+            title={selectionError ?? '任务不可用'}
+            body="请从项目任务中重新选择；页面不会回退到其他项目或其他任务。"
+          />
+        )}
       </section>
     </main>
   )
@@ -773,106 +481,6 @@ function BrowserSessionControls({
   )
 }
 
-function MetricCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <article className="studio-metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </article>
-  )
-}
-
-function EvidenceStep({
-  node,
-  current,
-  evidenceCount,
-}: {
-  node: WorkflowNode
-  current: boolean
-  evidenceCount: number
-}) {
-  return (
-    <article className={`studio-evidence-step is-${nodeTone(node.status)} ${current ? 'is-current' : ''}`}>
-      <div className="studio-step-marker">{nodeIcon(node)}</div>
-      <div className="studio-step-body">
-        <div className="studio-step-head">
-          <span>{node.stage}</span>
-          <StatusPill tone={nodeTone(node.status)}>{nodeStatusLabel(node.status)}</StatusPill>
-        </div>
-        <h3>{node.title}</h3>
-        <p>{node.subtitle}</p>
-        <div className="studio-step-meta">
-          <span>owner: {node.ownerId}</span>
-          <span>retry: {node.retryCount}</span>
-          <span>evidence: {evidenceCount}</span>
-        </div>
-      </div>
-      <code>{node.id}</code>
-    </article>
-  )
-}
-
-function SupportPanel({
-  id,
-  icon,
-  title,
-  action,
-  actionHref,
-  children,
-}: {
-  id: string
-  icon: ReactNode
-  title: string
-  action?: string
-  actionHref?: string
-  children: ReactNode
-}) {
-  return (
-    <section className="studio-support-panel" id={id}>
-      <header>
-        <span>
-          {icon}
-          {title}
-        </span>
-        {action ? (
-          <a href={actionHref ?? `#${id}`}>
-            {action}
-            <ArrowRight size={14} />
-          </a>
-        ) : null}
-      </header>
-      <div className="studio-support-body">{children}</div>
-    </section>
-  )
-}
-
-function CompactRow({ title, meta, value }: { title: string; meta: string; value: string }) {
-  return (
-    <article className="studio-compact-row">
-      <div>
-        <strong>{title}</strong>
-        <p>{meta}</p>
-      </div>
-      <span>{value}</span>
-    </article>
-  )
-}
-
-function EmptyProductState({ title, body }: { title: string; body: string }) {
-  return (
-    <div className="studio-empty-state">
-      <Database size={24} />
-      <strong>{title}</strong>
-      <p>{body}</p>
-    </div>
-  )
-}
-
-function StatusPill({ tone, children }: { tone: StatusTone; children: ReactNode }) {
-  return <span className={`studio-status-pill is-${tone}`}>{children}</span>
-}
-
 const byLatestUpdate = (left: WorkflowRun, right: WorkflowRun) =>
   Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
 
@@ -881,12 +489,16 @@ function readSearchParam(searchParams: PageSearchParams | undefined, key: string
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
+/**
+ * Project and task selection never falls back to another project or the latest task; a wrong
+ * or foreign identifier is reported as such.
+ */
 function resolvePageSelection(
   overview: TeamOverviewResponse,
   searchParams: PageSearchParams | undefined,
+  location: StudioLocation,
 ) {
   const requestedProjectId = readSearchParam(searchParams, 'projectId')
-  const requestedRunId = readSearchParam(searchParams, 'runId')
 
   if (overview.projects.length === 0) {
     return { activeProject: undefined, activeRun: undefined, projectRuns: [], selectionError: undefined }
@@ -897,111 +509,23 @@ function resolvePageSelection(
 
   const activeProject = overview.projects.find((project) => project.id === requestedProjectId)
   if (!activeProject) {
-    return { activeProject: undefined, activeRun: undefined, projectRuns: [], selectionError: '所选项目不存在' }
+    return { activeProject: undefined, activeRun: undefined, projectRuns: [], selectionError: '所选项目不存在或无权访问' }
   }
 
   const projectRuns = overview.runs
     .filter((run) => run.projectId === activeProject.id)
     .sort(byLatestUpdate)
-  if (!requestedRunId) {
-    return {
-      activeProject,
-      activeRun: undefined,
-      projectRuns,
-      selectionError: projectRuns.length > 0 ? '请选择 Run' : '所选项目暂无 Run',
-    }
+  if (location.view !== 'task') {
+    return { activeProject, activeRun: undefined, projectRuns, selectionError: undefined }
   }
 
-  const requestedRun = overview.runs.find((run) => run.id === requestedRunId)
+  const requestedRun = overview.runs.find((run) => run.id === location.runId)
   if (!requestedRun) {
-    return { activeProject, activeRun: undefined, projectRuns, selectionError: '所选 Run 不存在' }
+    return { activeProject, activeRun: undefined, projectRuns, selectionError: '所选任务不存在或无权访问' }
   }
   if (requestedRun.projectId !== activeProject.id) {
-    return { activeProject, activeRun: undefined, projectRuns, selectionError: 'Run 不属于所选项目' }
+    return { activeProject, activeRun: undefined, projectRuns, selectionError: '任务不属于所选项目' }
   }
 
   return { activeProject, activeRun: requestedRun, projectRuns, selectionError: undefined }
-}
-
-function calculateProgress(nodes: WorkflowNode[]) {
-  if (nodes.length === 0) return 0
-  const complete = nodes.filter((node) => node.status === 'success' || node.status === 'skipped').length
-  return Math.round((complete / nodes.length) * 100)
-}
-
-function evidenceCountForNode(overview: TeamOverviewResponse, run: WorkflowRun, node: WorkflowNode) {
-  return (
-    overview.testEvidenceSummaries.filter(
-      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
-    ).length +
-    overview.agentReviews.filter(
-      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
-    ).length +
-    overview.codingAgentSummaries.filter(
-      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
-    ).length +
-    overview.agentRuntimeSummaries.filter(
-      (item) => item.projectId === run.projectId && item.runId === run.id && item.nodeId === node.id,
-    ).length +
-    node.artifactIds.length
-  )
-}
-
-function shortRunId(id: string) {
-  return `RUN-${id.slice(0, 8).toUpperCase()}`
-}
-
-function runStatusLabel(status: WorkflowRun['status']) {
-  const labels: Record<WorkflowRun['status'], string> = {
-    created: '已创建',
-    clarifying: '澄清中',
-    designing: '设计中',
-    building: '执行中',
-    testing: '测试中',
-    paused_at_gate: '等待人评',
-    completed: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-  }
-  return labels[status]
-}
-
-function nodeStatusLabel(status: NodeStatus) {
-  const labels: Record<NodeStatus, string> = {
-    pending: 'pending',
-    running: 'running',
-    blocked: 'awaiting',
-    success: 'done',
-    failed: 'failed',
-    skipped: 'skipped',
-  }
-  return labels[status]
-}
-
-function statusTone(status: WorkflowRun['status']): StatusTone {
-  if (status === 'paused_at_gate') return 'gate'
-  if (status === 'completed') return 'done'
-  if (status === 'failed' || status === 'cancelled') return 'fail'
-  if (status === 'created') return 'idle'
-  return 'run'
-}
-
-function nodeTone(status: NodeStatus): StatusTone {
-  if (status === 'success' || status === 'skipped') return 'done'
-  if (status === 'running') return 'run'
-  if (status === 'blocked') return 'gate'
-  if (status === 'failed') return 'fail'
-  return 'idle'
-}
-
-function nodeIcon(node: WorkflowNode) {
-  if (node.status === 'success') return <CheckCircle2 size={18} />
-  if (node.status === 'failed') return <XCircle size={18} />
-  if (node.kind === 'gate') return <ShieldCheck size={18} />
-  if (node.kind === 'test') return <TestTube2 size={18} />
-  if (node.kind === 'task') return <Code2 size={18} />
-  if (node.kind === 'pr') return <GitBranch size={18} />
-  if (node.kind === 'acceptance') return <ClipboardCheck size={18} />
-  if (node.status === 'running') return <TimerReset size={18} />
-  return <CircleDot size={18} />
 }
