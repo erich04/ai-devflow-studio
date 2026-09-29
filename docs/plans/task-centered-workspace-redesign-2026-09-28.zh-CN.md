@@ -1,6 +1,6 @@
 # 以开发任务为中心的工作区改造方案
 
-日期：2026-09-28。状态：**设计方案（第 11 版），已确认；S0–S3 已完成**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S3 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)。
+日期：2026-09-28。状态：**设计方案（第 12 版），已确认；S0–S3 已完成，S4 实施中**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S3 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)。
 
 代码基线：`main` / `bf18e4a`。之后到 `0518870` 的提交只改文档与截图，`apps/`、`packages/` 没有变化。本文中的新页面、模块名称、交互和目标数值都是计划，不代表产品已提供。
 
@@ -565,7 +565,52 @@ S3 发现、留给后续批次的事项：
 - 非常规场景下视口内控件仍超过 28 个：阅读历史版本 31 个，团队连接弹层打开时 29–31 个，讨论栏展开时 39 个。
 - `test:stage-agent-design-electron` 从 #168 引入模型预算检查起就在生成前失败，与 S3 无关；S3 只更新了它的导航步骤。
 
-### 7.4 回退
+### 7.4 S4 改动清单与契约变更
+
+**状态：已确认**（2026-09-28，erich04 委托 S4–S6 连续实施，契约变更由实施者评审后执行）。实施中发现的差异记回本节末尾。
+
+S4 让“看到的版本”与“批准的版本”一致：需求阶段只有一个版本阅读器，方案评审的审批绑定用户看到的方案。起草时确定了四条前提：
+
+- 方案没有修订号，也不补。方案的版本标识是「材料标识 + 记录时间 + 内容摘要」，界面显示记录时间，不伪造 v1、v2（9.1 节）。方案的完整修订能力另行立项。
+- 契约变更只改桌面端 `approveGate`，由主进程在写入前拒绝；不改数据库结构，审批记录写入事件已有的自由 JSON 字段。
+- 讨论提案仍不作为「当前工作」的正文候选（S2 W8），只在「材料与版本」中按组列出。
+- Web 发起的审批（Gate Command）在桌面端按审查对象快照核对，快照缺失时不核对版本，需求 Gate 的远程审批也不把澄清版本标为已确认。这两处属于跨端一致性，归 S5 处理，S4 不改。
+
+**契约变更**（桌面端 IPC `approveGate`）：
+
+| 项 | 现状 | S4 |
+| --- | --- | --- |
+| 输入 | `{ runId, nodeId, expectedClarificationRevision? }` | 增加 `expectedDesignRevision?: { artifactId, updatedAt, contentDigest }`，其余不变 |
+| 方案评审 Gate | 不核对版本，只要求前序节点有方案产物 | 必须带 `expectedDesignRevision`；Gate 必须恰好关联一份来自方案步骤的方案产物，三项全部一致才写入，否则拒绝，不改 Run |
+| 其他 Gate | 忽略版本字段 | 需求 Gate 规则不变；非方案 Gate 收到 `expectedDesignRevision` 时拒绝 |
+| 审批记录 | 事件带 `clarificationAudit`（需求） | 方案审批事件带 `designAudit: { version: 1, action: 'approved', artifactId, updatedAt, contentDigest, actorId }` |
+| 拒绝信息 | 英文原文 | 主进程信息不变（供诊断）；界面按类型改为中文说明，并保留用户已填写的内容 |
+
+内容摘要 `contentDigest` 是方案产物标题、摘要与正文的 SHA-256（`packages/shared` 中的同一个函数，渲染层与主进程共用）。渲染层在点击时按当前显示的材料计算；主进程重新读取产物计算后比对。
+
+| 编号 | 改动 | 主要代码位置 |
+| --- | --- | --- |
+| Z1 | **方案版本标识**：新增 `createDesignRevisionDigest`、`resolveDesignGateMaterial`（Gate 关联的方案产物恰好一份时就绪，缺失或多份时不可审批并说明原因）与 `buildDesignRevisionIdentity` | 新增 `packages/shared/src/design-revision.ts` |
+| Z2 | **审批契约**：按上表修改类型、校验与主进程处理；新增主进程版本检查模块与回归测试，覆盖一致、缺失、换了产物、时间不同、摘要不同、关联多份、方案产物来自错误步骤 | [`ipc-contract.ts`](../../apps/desktop/electron/ipc-contract.ts)、[`desktop-api.ts`](../../apps/desktop/src/desktop-api.ts)、[`main.ts`](../../apps/desktop/electron/main.ts)；新增 `apps/desktop/electron/gate-approval-design.ts` |
+| Z3 | **渲染层发送方案版本**：方案评审 Gate 的审批目标由“最新更新时间”改为 Z1 的规则；确认时带上所显示方案的标识；状态行写明所审方案的记录时间；拒绝时的提示改为中文并说明已保留的内容 | [`useDesktopActions.ts`](../../apps/desktop/src/app/useDesktopActions.ts) 的 `approveSelectedGate`；[`DesktopViews.tsx`](../../apps/desktop/src/views/DesktopViews.tsx) |
+| Z4 | **需求阶段统一阅读器**（Issue #181）：需求澄清步骤与需求确认 Gate 都用 `GateMaterialReader`，数据都来自需求 Gate 的版本集合。<br>- 阅读位置由任务页控制，搜索结果、设置返回（W9）和「在当前工作中阅读」能定位到具体版本。<br>- 版本选项写明版本号、状态与记录时间；已被替代写“历史”；旧数据没有版本信息时写“旧版记录，状态未记录”，不写成已确认。<br>- 默认阅读：显式定位 > Gate 待确认的版本 > 已确认的版本 > 最新版本（按真实状态显示）> 没有正式材料时显示原始需求 | [`GateMaterialReader.tsx`](../../apps/desktop/src/components/GateMaterialReader.tsx)；[`clarification.ts`](../../packages/shared/src/clarification.ts)；`DesktopViews.tsx` 的 `Inspector` |
+| Z5 | **材料标签与分组**：「材料与版本」按当前待处理、已确认依据、原始输入与参考、讨论提案、历史记录分组，每项写明类型、版本或记录时间、状态；通用阅读器的选项和正文标题用同一套标签；默认选择不看数组顺序和最新时间。方案在 Gate 通过后按审批记录判断是否仍是被确认的版本 | 新增 `apps/desktop/src/app/material-catalog.ts`；`DesktopViews.tsx` 的 `renderArtifacts`、`renderWorkspaceContent` |
+| Z6 | **阅读历史时的审批提醒**：在待审 Gate 上阅读的不是审批对象时（历史需求版本、原始需求），确认按钮仍写明目标版本，首次点击先提示“你正在阅读……，本次确认针对……”，再次点击才提交；「返回待确认版本」保留 | `DesktopViews.tsx`；[`node-inspector-view-model.ts`](../../apps/desktop/src/app/node-inspector-view-model.ts) |
+| Z7 | **文案**：需求审查区的英文标题、版本历史中的状态原值与 ISO 时间改为中文与本地时间；方案步骤不支持修订的说明保留 | `DesktopViews.tsx` |
+
+**S4 不包括**：
+- 方案的修订与重新生成流程、方案版本号；
+- Web 端审批的版本核对、远程需求审批的状态同步（S5）；
+- 数据库结构、同步队列、交付撤销和会话契约；
+- X1 的上传冲突与 X6 的测试证据提交号。
+
+**验证**：
+- 共享函数与主进程检查的单元测试（Z1、Z2）；材料分组与默认选择的单元测试，覆盖无正式产物、只有提案、待审版本、已确认旧版加新待审版、缺少版本元信息（Z4、Z5）。
+- App 测试：Issue #181 的真实组合（原始需求、讨论提案、v1 已被替代、v2 已确认）默认打开 v2，其余三项都能找到并能辨认；阅读 v1 时确认的是 v2 且先提醒；方案评审发送所显示方案的标识，主进程拒绝后不显示已通过。
+- Electron 冒烟：真实主进程拒绝摘要不符与缺少标识的方案审批且 Run 不变，再用正确标识通过；其余冒烟与基线样例改为传入方案标识。
+- 基线：三档主基线的首屏指标不退化（S3 的 28 个控件等）。
+
+### 7.5 回退
 
 每个批次都是独立、可评审的变更，不要求一次性重写 `App.tsx` 或更换框架。可以用临时开发开关分批验证布局，但开关只影响界面，不切换写入路径；新旧界面不能同时发起同一动作。回退时保留既有记录与身份，恢复旧导航映射，不删除任务、不重建用户数据库。兼容入口在验证完成后，按明确的批次移除。
 
@@ -671,5 +716,7 @@ S4、S5 与技术落地的细节在对应批次开始前单独评审，这里只
 - **第 10 版**（2026-09-28）：回写 S3 结果。状态改为 S0–S3 已完成；7.3 节末尾加入实施结果、与原文的差异（证据分组的取舍、模型提供方设置不列执行统计、上传说明、搜索文案、窄窗口下设置分区列表的修正）和留给后续批次的事项。
 
 - **第 11 版**（2026-09-28）：按 erich04 的决定，验收环境不再包含 200% 缩放。5.5 节与 8.2 节 S6 的验收去掉这一项；基线只测三档内容区尺寸与浅色、深色主题，Electron 冒烟不再设置缩放。S1–S3 报告中已有的 200% 数字保留为历史记录。
+
+- **第 12 版**（2026-09-28）：新增 7.4 节 S4 改动清单与契约变更（Z1–Z7），原 7.4 节“回退”改为 7.5 节。erich04 委托 S4–S6 连续实施，契约变更由实施者评审后执行。起草时确定四条前提：方案不补修订号，版本标识为材料标识、记录时间与内容摘要；契约只改桌面端 `approveGate`，不改数据库结构；讨论提案仍不作为正文候选；Web 审批的版本核对与远程需求审批的状态同步归 S5。
 
 第 6 版随 S1 的产品改动一起提交，验证结果见 S1 实施报告；没有调用真实模型或提交远端变更。全部批次实施并验证后，再同步更新[界面设计理由](../product/details/ui-design-rationale.md)、[会话行为说明](../engineering/workbench-conversations.md)、用户指南、README 与截图。
