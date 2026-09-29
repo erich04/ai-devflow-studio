@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 
 const smokePath = 'scripts/electron-smoke.mjs'
 const smoke = readFileSync(smokePath, 'utf8').replace(/\r\n?/g, '\n')
+const rendererActions = readFileSync('apps/desktop/src/app/useDesktopActions.ts', 'utf8').replace(/\r\n?/g, '\n')
 
 function position(marker: string) {
   const index = smoke.indexOf(marker)
@@ -39,13 +40,25 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
   })
 
   it('keeps project test execution IDs-only and targets the current Test node', () => {
-    expect(smoke).toContain('await window.aiDevFlowDesktop.runProjectTests({')
+    // Since S2 the smoke runs the check from the task's test step through the real renderer
+    // (plan §7.2 W4); the renderer write path must still send IDs only.
     expect(smoke).not.toMatch(
       /window\.aiDevFlowDesktop\.runProjectTests\(\{[\s\S]{0,300}\brun\s*[,}]/,
     )
     expect(smoke).toMatch(
-      /runProjectTestsViaDesktopApi\(first\.page,\s*\{[\s\S]*?nodeId: localNodes\.test\.id,/,
+      /runProjectTestsInTask\(first\.page,\s*\{[\s\S]*?nodeId: localNodes\.test\.id,/,
     )
+    expect(smoke).toContain("getByTestId('task-status-row').getByRole('button', { name: '运行检查', exact: true })")
+    expect(rendererActions).toMatch(
+      /desktopApi\.runProjectTests\(\{\s*projectId: selectedLocalProject\.id,\s*runId: selectedRun\.id,\s*nodeId: testNode\.id,\s*\}\)/,
+    )
+  })
+
+  it('decides Gate Review and coding permissions in the task, not on the Agents page', () => {
+    expect(smoke).toContain('await runKnowledgeReviewInTask(first.page, {')
+    expect(smoke).toContain("getByRole('button', { name: '运行门禁审查', exact: true })")
+    expect(smoke).toContain("buildStatusRow.getByRole('button', { name: '批准本次', exact: true }).click()")
+    expect(smoke).not.toContain("getByRole('button', { name: /仅批准本次/ }).click()")
   })
 
   it('walks the authoritative local workflow to the governed GitHub handoff', () => {
@@ -55,11 +68,11 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
       'nodeId: localNodes.clarifyGate.id,\n    projectId: localProjectId,',
       'const approvedClarify =',
       'const completedDesign =',
-      'nodeId: localNodes.designGate.id,\n    projectId: localProjectId,',
+      'nodeId: localNodes.designGate.id,\n    nodeTitle: localNodes.designGate.title,',
       'const approvedDesign =',
       'await runCodingAgentViaDesktopApi(first.page, {',
       'expect(localRun.currentNodeId).toBe(localNodes.test.id)',
-      'await runProjectTestsViaDesktopApi(first.page, {',
+      'await runProjectTestsInTask(first.page, {',
       'const createdPrDraft =',
       "expect(createdPrDraft.run.status).toBe('paused_at_gate')",
       "expect(createdPrDraft.run.currentNodeId).toBe(localNodes.pr.id)",

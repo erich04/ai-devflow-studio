@@ -565,15 +565,14 @@ async function reviewSummary(ctx: SampleContext, runId: string, nodeId: string) 
     : null
 }
 
-/** Runs the Gate Review through the real inspector → Agents path with the fake provider. */
-async function runGateReviewViaAgents(ctx: SampleContext, gate: any) {
+/** Runs the Gate Review from the task status row with the fake provider (plan S2, W2). */
+async function runGateReviewInTask(ctx: SampleContext, gate: any) {
   const { page } = ctx.desktop
-  await page.getByTestId('node-inspector').getByRole('button', { name: /运行门禁审查/ }).last().click()
-  const workbench = page.getByTestId('agent-workbench')
-  await workbench.waitFor({ state: 'visible', timeout: 15_000 })
-  await workbench.getByRole('button', { name: '运行门禁审查', exact: true }).first().click()
-  await pollUntil('Gate Review to finish', async () => (await workbench.innerText()).includes('Gate Review ready'), 30_000)
-  await clickNav(ctx, '工作台')
+  const inspector = page.getByTestId('node-inspector')
+  await inspector.getByTestId('task-status-row').getByRole('button', { name: '运行门禁审查', exact: true }).click()
+  await pollUntil('Gate Review to finish', async () =>
+    (await inspector.getByTestId('task-review-run').count()) > 0 &&
+    (await inspector.getByTestId('task-review-run').innerText()).includes('上次审查'), 30_000)
   await selectNode(ctx, STAGE.clarify, gate)
 }
 
@@ -619,7 +618,7 @@ const clarifyGateSuggestions: Sample = {
   limits: [fakeLimit, 'Fake Provider 固定给出 1 条测试建议，风险条数取决于正文中的关键词。'],
   async prepare(ctx) {
     const { run, gate } = await prepareClarifyGate(ctx)
-    await runGateReviewViaAgents(ctx, gate)
+    await runGateReviewInTask(ctx, gate)
     ctx.observe('review', await reviewSummary(ctx, run.id, gate.id))
     await settle(ctx)
   },
@@ -637,7 +636,7 @@ const clarifyGateClean: Sample = {
   ],
   async prepare(ctx) {
     const { projectId, run, gate } = await prepareClarifyGate(ctx)
-    await runGateReviewViaAgents(ctx, gate)
+    await runGateReviewInTask(ctx, gate)
     const reviewId = (await reviewSummary(ctx, run.id, gate.id))?.id
     if (!reviewId) throw new Error('Gate Review was not stored')
     await ctx.relaunch(async () => {
@@ -723,7 +722,7 @@ const clarifyHistory: Sample = {
     await requestChangesViaUi(ctx)
     await generateClarification(ctx)
     await settle(ctx)
-    await openInspectorTab(ctx, '内容与审查')
+    await openInspectorTab(ctx, '当前工作')
     const select = ctx.desktop.page.getByLabel('阅读需求版本')
     await select.waitFor({ state: 'visible', timeout: 15_000 })
     const options = await select.locator('option').allTextContents()
@@ -926,8 +925,17 @@ async function openTestsPage(ctx: SampleContext) {
   await ctx.desktop.page.getByTestId('tests-view').waitFor({ state: 'visible' })
 }
 
+/**
+ * Since S2 the check runs at the task's test step (W4, W5); the Tests page keeps the
+ * command and history. Run it in the task, then open the Tests page that these samples measure.
+ */
 async function runTestsFromPage(ctx: SampleContext) {
-  await ctx.desktop.page.getByTestId('tests-view').getByRole('button', { name: '执行测试', exact: true }).click()
+  const { page } = ctx.desktop
+  await page.getByTestId('tests-view').getByRole('button', { name: '在任务中处理', exact: true }).click()
+  const run = page.getByTestId('node-inspector').getByTestId('task-status-row').getByRole('button', { name: '运行检查', exact: true })
+  await run.waitFor({ state: 'visible', timeout: 15_000 })
+  await run.click()
+  await openTestsPage(ctx)
 }
 
 async function testsViewText(ctx: SampleContext) {
@@ -1019,7 +1027,7 @@ async function waitForTestEvidence(ctx: SampleContext, runId: string, status: st
 const testStageLimits = [
   fakeLimit,
   ipcLimit,
-  '测试只能在任务处于测试节点时运行，且在编码生成的托管工作树中执行。样例先快进到测试节点，再改写工作树中 package.json 的 test 脚本来得到对应结果；点击「执行本地测试」走真实界面。',
+  '测试只能在任务处于测试节点时运行，且在编码生成的托管工作树中执行。样例先快进到测试节点，再改写工作树中 package.json 的 test 脚本来得到对应结果；自 S2 起在任务测试步骤点击「运行检查」走真实界面（测试页只保留命令与历史），再打开测试页测量。',
   '快进需要连接团队并保存预算，所以顶栏是已连接状态。',
 ]
 

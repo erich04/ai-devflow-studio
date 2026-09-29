@@ -494,8 +494,31 @@ async function runKnowledgeReviewViaDesktopApi(
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /工作台/ }).click()
+  // The result is read in the task, not on the Agents page (plan W2).
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
-  await page.getByRole('button', { name: /^Agents$/ }).click()
+}
+
+/** Runs the Gate Review from the task status row and verifies the persisted, trusted record (W2). */
+async function runKnowledgeReviewInTask(page, { runId, nodeId, nodeTitle }) {
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  const statusRow = page.getByTestId('node-inspector').getByTestId('task-status-row')
+  const runReview = statusRow.getByRole('button', { name: '运行门禁审查', exact: true })
+  await expect(runReview).toBeEnabled({ timeout: 20_000 })
+  await runReview.click()
+  await expect(page.getByTestId('toast')).toContainText('门禁审查已完成', { timeout: 30_000 })
+  await expect(page.getByTestId('agent-workbench')).toHaveCount(0)
+  await expect(page.getByTestId('node-inspector')).toContainText(nodeTitle)
+  const persisted = await page.evaluate(async (input) => {
+    const reviews = await window.aiDevFlowDesktop.listAgentReviews({ runId: input.runId })
+    const pairing = await window.aiDevFlowDesktop.loadDesktopPairing()
+    const state = await window.aiDevFlowDesktop.loadState()
+    const review = reviews.find((candidate) => candidate.nodeId === input.nodeId)
+    const usage = review ? state.agentTokenUsage.find((row) => row.runId === input.runId && row.nodeId === input.nodeId) : undefined
+    return { reviewCount: reviews.filter((candidate) => candidate.nodeId === input.nodeId).length, usageUserId: usage?.userId, trustedUserId: pairing?.userId }
+  }, { runId, nodeId })
+  expect(persisted.reviewCount).toBe(1)
+  expect(persisted.trustedUserId).toBeTruthy()
+  expect(persisted.usageUserId).toBe(persisted.trustedUserId)
 }
 
 async function runCodingAgentViaDesktopApi(
@@ -530,8 +553,8 @@ async function runCodingAgentViaDesktopApi(
   await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /工作台/ }).click()
+  // The permission request is handled in the task (plan W3).
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
-  await page.getByRole('button', { name: /^Agents$/ }).click()
   return codingRun
 }
 
@@ -567,40 +590,34 @@ async function startRetryAttemptViaDesktopApi(
   await selectRunByTitle(page, runTitle)
   await page.getByRole('button', { name: /工作台/ }).click()
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
-  await page.getByRole('button', { name: /^Agents$/ }).click()
 }
 
-async function runProjectTestsViaDesktopApi(
-  page,
-  { runId, nodeId, projectId, runTitle },
-) {
+/** Runs the saved test command from the task's test step (plan W4); the page stays on the task. */
+async function runProjectTestsInTask(page, { runId, nodeId, nodeTitle }) {
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  const inspector = page.getByTestId('node-inspector')
+  await expect(inspector.getByTestId('task-test-run')).toContainText('npm test')
+  const runTests = inspector.getByTestId('task-status-row').getByRole('button', { name: '运行检查', exact: true })
+  await expect(runTests).toBeEnabled({ timeout: 20_000 })
+  await runTests.click()
+  await expect(page.getByTestId('toast')).toContainText('测试通过，证据已归档', { timeout: 30_000 })
+  await expect(page.getByTestId('tests-view')).toHaveCount(0)
   const execution = await page.evaluate(async (input) => {
-    const result = await window.aiDevFlowDesktop.runProjectTests({
-      projectId: input.projectId,
-      runId: input.runId,
-      nodeId: input.nodeId,
-    })
-    const run = result.state.runs.find((candidate) => candidate.id === input.runId)
-    if (!run) {
-      throw new Error(`Run not found after test execution: ${input.runId}`)
-    }
+    const state = await window.aiDevFlowDesktop.loadState()
+    const evidence = state.testEvidence
+      .filter((candidate) => candidate.runId === input.runId && candidate.nodeId === input.nodeId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
     return {
-      evidence: {
-        id: result.evidence.id,
-        status: result.evidence.status,
-        command: result.evidence.command,
-      },
-      run,
+      evidence: evidence ? { id: evidence.id, status: evidence.status, command: evidence.command } : null,
+      run: state.runs.find((candidate) => candidate.id === input.runId),
     }
-  }, { runId, nodeId, projectId })
-
-  expect(execution.evidence.status).toBe('passed')
-  expect(execution.evidence.command).toBe('npm test')
-  await page.reload({ waitUntil: 'domcontentloaded' })
-  await showProjectRuns(page)
-  await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
-  await selectRunByTitle(page, runTitle)
-  await page.getByRole('button', { name: /^测试$/ }).click()
+  }, { runId, nodeId })
+  expect(execution.evidence?.status).toBe('passed')
+  expect(execution.evidence?.command).toBe('npm test')
+  // Results stay in the task: 当前工作 of the (now finished) test step shows them.
+  await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
+  await expect(inspector.getByTestId('node-test-evidence')).toContainText('已通过')
+  await expect(inspector.getByTestId('node-test-evidence')).toContainText('适用性无法核实')
   return execution
 }
 
@@ -1046,13 +1063,19 @@ try {
     runTitle: '重构 GitHub webhook 重试策略',
     nodeTitle: localNodes.clarifyGate.title,
   })
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('基于知识的门禁审查')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Gate Review ready')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Reviewed 1 complete subject Artifact')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('provider_reported')
-  await first.page.getByRole('button', { name: /工作台/ }).click()
+  await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成审查意见')
+  // Agents keeps read-only evidence; its only execution entry hands back to the task (plan W5).
+  await first.page.getByRole('button', { name: /^Agents$/ }).click()
+  const clarifyAgents = first.page.getByTestId('agent-workbench')
+  await expect(clarifyAgents).toContainText('基于知识的门禁审查')
+  await expect(clarifyAgents).toContainText('Gate Review ready')
+  await expect(clarifyAgents).toContainText('Reviewed 1 complete subject Artifact')
+  await expect(clarifyAgents).toContainText('provider_reported')
+  await expect(clarifyAgents.getByRole('button', { name: /^(运行门禁审查|重新审查|停止门禁审查)$/ })).toHaveCount(0)
+  await clarifyAgents.getByRole('button', { name: '在任务中处理', exact: true }).click()
+  await expect(first.page.getByTestId('agent-workbench')).toHaveCount(0)
   await selectWorkflowNode(first.page, `flow-node-${localNodes.clarifyGate.id}`, localNodes.clarifyGate.title)
-  await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成 Gate Advisory')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成审查意见')
   const clarifyGateDecision = await first.page.evaluate(async ({ runId, nodeId, projectId }) => {
     return window.aiDevFlowDesktop.evaluateGateEnforcement({
       runId,
@@ -1095,18 +1118,16 @@ try {
   expect(completedDesign.event.kind).toBe('thinking')
   localRun = completedDesign.run
 
-  await runKnowledgeReviewViaDesktopApi(first.page, {
+  // The design Gate Review runs from the task status row, through the real renderer (plan W2).
+  await first.page.reload({ waitUntil: 'domcontentloaded' })
+  await showProjectRuns(first.page)
+  await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
+  await runKnowledgeReviewInTask(first.page, {
     runId: localRun.id,
     nodeId: localNodes.designGate.id,
-    projectId: localProjectId,
-    runTitle: '重构 GitHub webhook 重试策略',
     nodeTitle: localNodes.designGate.title,
   })
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('基于知识的门禁审查')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Gate Review ready')
-  await first.page.getByRole('button', { name: /工作台/ }).click()
-  await selectWorkflowNode(first.page, `flow-node-${localNodes.designGate.id}`, localNodes.designGate.title)
-  await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成 Gate Advisory')
+  await expect(first.page.getByTestId('node-inspector')).toContainText('基于知识的门禁审查已生成审查意见')
   const designGateDecision = await first.page.evaluate(async ({ runId, nodeId, projectId }) => {
     return window.aiDevFlowDesktop.evaluateGateEnforcement({
       runId,
@@ -1154,15 +1175,25 @@ try {
     nodeTitle: localNodes.build.title,
   })
   expect(codingAuthority.requestedBy).toBe(trustedPairingUserId)
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('权限转发')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Apply fake coding diff')
-  await first.page.getByRole('button', { name: /仅批准本次/ }).click()
+  // The permission request is shown and decided in the task; reject and stop stay visible (W3, §3).
+  const buildInspector = first.page.getByTestId('node-inspector')
+  await expect(buildInspector.getByTestId('workbench-coding-permission-summary')).toContainText('Apply fake coding diff')
+  const buildStatusRow = buildInspector.getByTestId('task-status-row')
+  await expect(buildStatusRow.getByRole('button', { name: '拒绝', exact: true })).toBeVisible()
+  await expect(buildStatusRow.getByRole('button', { name: '停止执行', exact: true })).toBeVisible()
+  await buildStatusRow.getByRole('button', { name: '批准本次', exact: true }).click()
   await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已完成 diff 归档', {
     timeout: 30_000,
   })
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('completed')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('Test evidence passed')
-  await expect(first.page.getByTestId('agent-workbench')).toContainText('devflow-fake-change.txt')
+  await expect(first.page.getByTestId('agent-workbench')).toHaveCount(0)
+  // Agents keeps the read-only Coding Run evidence without any decision buttons (W5).
+  await first.page.getByRole('button', { name: /^Agents$/ }).click()
+  const codingAgents = first.page.getByTestId('agent-workbench')
+  await expect(codingAgents).toContainText('completed')
+  await expect(codingAgents).toContainText('Test evidence passed')
+  await expect(codingAgents).toContainText('devflow-fake-change.txt')
+  await expect(codingAgents.getByRole('button', { name: /^(仅批准本次|拒绝|取消当前 Run|删除受管工作树|打开受管工作树)$/ })).toHaveCount(0)
+  await first.page.getByRole('button', { name: /工作台/ }).click()
   const permissionAuthority = await first.page.evaluate(async ({ codingRunId, requestId }) => {
     const state = await window.aiDevFlowDesktop.loadState()
     const decision = state.codingPermissionDecisions.find(
@@ -1193,20 +1224,24 @@ try {
   expect(localRun.nodes.find((node) => node.id === localNodes.build.id)?.status).toBe('success')
   expect(localRun.nodes.find((node) => node.id === localNodes.test.id)?.status).toBe('running')
 
+  // The Tests page keeps command editing and history; its execution entry hands back (W5).
   await first.page.getByRole('button', { name: /^测试$/ }).click()
-  await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
-  await expect(first.page.getByTestId('tests-view')).toContainText('devflow-fake-change.txt')
-  await first.page.getByRole('button', { name: /工作台/ }).click()
+  const testsPage = first.page.getByTestId('tests-view')
+  await expect(testsPage).toContainText('Local test evidence')
+  await expect(testsPage).toContainText('devflow-fake-change.txt')
+  await expect(testsPage.getByRole('button', { name: /^(执行测试|执行本地测试)$/ })).toHaveCount(0)
+  await testsPage.getByRole('button', { name: '在任务中处理', exact: true }).click()
+  await expect(first.page.getByTestId('tests-view')).toHaveCount(0)
 
-  const completedTest = await runProjectTestsViaDesktopApi(first.page, {
+  const completedTest = await runProjectTestsInTask(first.page, {
     runId: localRun.id,
     nodeId: localNodes.test.id,
-    projectId: localProjectId,
-    runTitle: '重构 GitHub webhook 重试策略',
+    nodeTitle: localNodes.test.title,
   })
   localRun = completedTest.run
   expect(localRun.currentNodeId).toBe(localNodes.pr.id)
   expect(localRun.nodes.find((node) => node.id === localNodes.test.id)?.status).toBe('success')
+  await first.page.getByRole('button', { name: /^测试$/ }).click()
   await expect(first.page.getByTestId('tests-view')).toContainText('Local test evidence')
   await expect(first.page.getByTestId('tests-view')).toContainText('passed')
   await expect(first.page.getByTestId('tests-view')).toContainText('npm test')

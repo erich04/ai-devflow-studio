@@ -1213,8 +1213,25 @@ async function clickSubStep(page: import('@playwright/test').Page, testId: strin
   await page.getByTestId(testId).click()
 }
 
-async function showNodeRecords(page: import('@playwright/test').Page) {
-  await page.getByTestId('node-inspector').getByRole('tab', { name: '产物与证据', exact: true }).click()
+/** Inspector tabs are 当前工作 / 材料与版本 / 执行记录 (plan W1); 当前工作 is always the default. */
+const INSPECTOR_TABS = ['当前工作', '材料与版本', '执行记录'] as const
+
+function inspectorTab(page: import('@playwright/test').Page, name: typeof INSPECTOR_TABS[number]) {
+  return page.getByTestId('node-inspector').getByRole('tab', { name, exact: true })
+}
+
+/** Node artifacts, test evidence history and knowledge references live in 材料与版本. */
+async function showNodeMaterials(page: import('@playwright/test').Page) {
+  await inspectorTab(page, '材料与版本').click()
+  await expect(inspectorTab(page, '材料与版本')).toHaveAttribute('aria-selected', 'true')
+}
+
+/** Execution now happens in the task (plan W5): the Agents/Tests pages must not be open. */
+async function expectStaysOnWorkbench(page: import('@playwright/test').Page) {
+  await expect(page.getByTestId('workflow-canvas')).toBeVisible()
+  await expect(page.getByTestId('node-inspector')).toBeVisible()
+  await expect(page.getByTestId('agent-workbench')).toHaveCount(0)
+  await expect(page.getByTestId('tests-view')).toHaveCount(0)
 }
 
 async function createFixtureRun(page: import('@playwright/test').Page) {
@@ -1388,9 +1405,11 @@ test.describe('AI DevFlow desktop workbench', () => {
         const card = page.getByTestId('workflow-card-node-agent-ux-design-gate')
         await page.getByRole('button', { name: '流程视图', exact: true }).click()
         const inspector = page.getByTestId('node-inspector')
+        // Board chips keep their names; artifacts and (on a Gate) test evidence open 材料与版本,
+        // the trace opens 执行记录 (plan W1).
         for (const [label, count, tab, text] of [
-          ['产物', 1, '产物与证据', '本次 Gate 审查报告'],
-          ['测试证据', 0, '产物与证据', '当前节点尚未归档测试证据。'],
+          ['产物', 1, '材料与版本', '本次 Gate 审查报告'],
+          ['测试证据', 0, '材料与版本', '当前节点尚未归档测试证据。'],
           ['轨迹', 1, '执行记录', 'Review archived once.'],
         ] as const) {
           const chip = card.getByRole('button', { name: `方案评审 Gate：${label} ${count}` })
@@ -1401,18 +1420,21 @@ test.describe('AI DevFlow desktop workbench', () => {
         }
         await card.getByRole('button', { name: '方案评审 Gate：产物 1' }).click()
         await expect(inspector.getByTestId('node-artifacts').locator('.artifact-card')).toHaveCount(1)
-        await inspector.getByTestId('node-artifacts').getByRole('button', { name: '阅读正文', exact: true }).click()
-        await expect(inspector.getByRole('tab', { name: '内容与审查', exact: true })).toHaveAttribute('aria-selected', 'true')
+        // The Gate's own material is read in 当前工作, not duplicated in the material card.
+        await inspector.getByTestId('node-artifacts').getByRole('button', { name: '在「当前工作」中阅读', exact: true }).click()
+        await expect(inspector.getByRole('tab', { name: '当前工作', exact: true })).toHaveAttribute('aria-selected', 'true')
         await expect(inspector).toContainText('Reviewed the current requirement.')
         await expect(page.locator('button button')).toHaveCount(0)
-        for (const tab of await inspector.locator('.workspace-primary-tabs').getByRole('tab').all()) {
+        const tabs = inspector.locator('.workspace-primary-tabs').getByRole('tab')
+        await expect(tabs).toHaveText([...INSPECTOR_TABS])
+        for (const tab of await tabs.all()) {
           await tab.focus()
           await tab.press('Enter')
           await expect(tab).toHaveAttribute('aria-selected', 'true')
           await expect(tab).toBeInViewport()
         }
-        await expect(inspector.locator('.workspace-primary-tabs').getByRole('tab')).toHaveCount(4)
-        await showNodeRecords(page)
+        await expect(tabs).toHaveCount(3)
+        await showNodeMaterials(page)
         await expect(inspector.getByTestId('knowledge-reference-sources')).toBeVisible()
         await page.screenshot({ path: testInfo.outputPath('attachment-navigation.png') })
         expect(errors).toEqual([])
@@ -1437,7 +1459,8 @@ test.describe('AI DevFlow desktop workbench', () => {
         })
         await page.goto('/')
         const inspector = page.getByTestId('node-inspector')
-        await inspector.getByRole('tab', { name: '内容与审查', exact: true }).click()
+        // The Gate's body opens by default in 当前工作 (plan W1).
+        await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
         const document = inspector.getByTestId('clarification-current-revision')
         await expect(document.locator('.artifact-reading-section')).toHaveCount(16)
         await expect(document.locator('.artifact-toc a')).toHaveCount(16)
@@ -1447,8 +1470,16 @@ test.describe('AI DevFlow desktop workbench', () => {
         await document.getByRole('button', { name: '查看原文', exact: true }).click()
         await expect(document.locator('.message-plain')).toContainText('## Acceptance 16')
         await document.getByRole('button', { name: '返回排版', exact: true }).click()
-        await showNodeRecords(page)
-        const evidenceTab = inspector.getByRole('tab', { name: '产物与证据', exact: true })
+        // 团队规范 in the reader only points to the reference list kept in 材料与版本.
+        await inspector.locator('.material-reference-links').getByRole('button', { name: '团队规范', exact: true }).click()
+        const pointer = inspector.getByTestId('knowledge-reference-pointer')
+        await expect(pointer).toContainText('完整列表与来源在「材料与版本」中')
+        await expect(inspector.getByTestId('knowledge-reference-sources')).toHaveCount(0)
+        await pointer.getByRole('button', { name: '查看引用来源', exact: true }).click()
+        const evidenceTab = inspectorTab(page, '材料与版本')
+        await expect(evidenceTab).toHaveAttribute('aria-selected', 'true')
+        await expect(inspector.getByTestId('knowledge-reference-sources')).toBeVisible()
+        await inspectorTab(page, '当前工作').click()
         await evidenceTab.scrollIntoViewIfNeeded()
         await expect(evidenceTab).toBeVisible()
         await evidenceTab.click()
@@ -1470,8 +1501,11 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(currentTask.getByRole('list', { name: '当前主操作的对象、结果和影响' })).toContainText('Provider 与费用')
     await expect(currentTask).toContainText('根据需求和已保存阶段产物生成，不直接调查仓库')
     await expect(currentTask).toContainText('推进到方案评审 Gate；不会自动批准 Gate')
+    // Execution moved to the task (plan W5): the one primary action hands back to it.
     await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
-    await expect(workbench.locator('.primary-button:visible')).toHaveText(/生成设计方案/u)
+    await expect(workbench.locator('.primary-button:visible')).toHaveText(/在任务中处理/u)
+    await expect(currentTask.getByTestId('agent-handle-in-task').locator('.primary-button')).toHaveText(/在任务中处理/u)
+    await expect(workbench.getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
 
     const advanced = page.getByTestId('agent-advanced-tools')
     const summary = advanced.locator('summary')
@@ -1517,7 +1551,14 @@ test.describe('AI DevFlow desktop workbench', () => {
       return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
     })
     expect(lightContrast).toBeGreaterThan(4.5)
-    await expect(currentTask.getByRole('button', { name: '生成设计方案' })).toBeVisible()
+    const handleInTask = currentTask.getByRole('button', { name: '在任务中处理', exact: true })
+    await expect(handleInTask).toBeVisible()
+    // Handing back runs nothing; the design generation is the task status row's primary action.
+    await handleInTask.click()
+    await expectStaysOnWorkbench(page)
+    const inspector = page.getByTestId('node-inspector')
+    await expect(inspector).toContainText('方案设计')
+    await expect(inspector.getByTestId('task-status-row').getByTestId('complete-design-agent')).toBeVisible()
   })
 
   test('exposes paired Runtime and Coordination only through the keyboard-accessible advanced area', async ({ page }) => {
@@ -1549,8 +1590,10 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(coordinationAction).toBeEnabled()
     await expect(runtimeAction).toHaveClass(/ghost-button/u)
     await expect(coordinationAction).toHaveClass(/ghost-button/u)
+    // The only primary action hands back to the task; design generation is not offered here (W5).
     await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
-    await expect(workbench.locator('.primary-button:visible')).toHaveText(/生成设计方案/u)
+    await expect(workbench.locator('.primary-button:visible')).toHaveText(/在任务中处理/u)
+    await expect(workbench.getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
   })
 
   test('compares requirement inputs, requests changes, generates v2, and approves only v2', async ({ page }) => {
@@ -1558,7 +1601,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.goto('/')
 
     const inspector = page.getByTestId('node-inspector')
-    await inspector.getByRole('tab', { name: '内容与审查', exact: true }).click()
+    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByTestId('clarification-review')).toBeVisible()
     await inspector.getByRole('button', { name: /原始需求/ }).click()
     await expect(page.getByTestId('clarification-raw-request')).toContainText('Clarify webhook retry boundaries')
@@ -1575,7 +1618,8 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     await inspector.getByRole('button', { name: '生成修订', exact: true }).click()
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成')
-    await inspector.getByRole('tab', { name: '内容与审查', exact: true }).click()
+    await inspectorTab(page, '当前工作').click()
+    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v2')
     await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
     await page.getByTestId('clarification-revision-history').locator('summary').click()
@@ -1624,7 +1668,9 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('stage-summary-build')).not.toContainText('展示：')
     const clarifyCard = workflow.getByTestId('flow-node-run-created-from-request-clarify')
     await clarifyCard.click()
-    await page.getByRole('tab', { name: '概览', exact: true }).click()
+    // The downstream Gate impact of a Task is part of 当前工作 (plan W1).
+    await inspectorTab(page, '当前工作').click()
+    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
     const gateImpact = page.getByTestId('gate-impact-summary')
     await expect(gateImpact).toContainText('直接下游 Gate')
     await expect(gateImpact).toContainText('需求确认 Gate')
@@ -1672,27 +1718,38 @@ test.describe('AI DevFlow desktop workbench', () => {
     await createFixtureRun(page)
 
     await page.getByRole('button', { name: /^Agents$/ }).click()
-    await expect(page.getByTestId('agent-workbench')).toContainText('Agent 执行台')
-    await expect(page.getByTestId('agent-workbench')).toContainText('doubao-review')
-    await expect(
-      page.getByRole('button', { name: /运行门禁审查/ }),
-    ).toHaveCount(0)
-    await page.getByRole('button', { name: /生成需求澄清/ }).click()
+    const agentWorkbench = page.getByTestId('agent-workbench')
+    await expect(agentWorkbench).toContainText('Agent 执行台')
+    await expect(agentWorkbench).toContainText('doubao-review')
+    // Agents keeps configuration and read-only evidence; execution is handled in the task (plan W5).
+    await expect(agentWorkbench.getByRole('button', { name: /运行门禁审查/ })).toHaveCount(0)
+    await expect(agentWorkbench.getByRole('button', { name: /生成需求澄清/ })).toHaveCount(0)
+    await agentWorkbench.getByTestId('agent-handle-in-task').getByRole('button', { name: '在任务中处理', exact: true }).click()
+    await expectStaysOnWorkbench(page)
+    const reviewedGateInspector = page.getByTestId('node-inspector')
+    await reviewedGateInspector.getByTestId('task-status-row').getByTestId('complete-clarify-agent').click()
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成，进入需求确认 Gate')
     await clickSubStep(page, 'flow-node-run-created-from-request-clarify-gate')
-    await page.getByRole('button', { name: /^Agents$/ }).click()
-    await expect(page.getByTestId('agent-workbench')).toContainText('需求确认 Gate')
-    await expect(page.getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
-    await page.getByRole('button', { name: /运行门禁审查/ }).click()
-    await expect(page.getByTestId('toast')).toContainText('基于知识的门禁审查已归档')
-    await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
-    await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')
-
-    await page.getByRole('button', { name: /工作台/ }).click()
-    const reviewedGateInspector = page.getByTestId('node-inspector')
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
-    await showNodeRecords(page)
-    const referencesTab = reviewedGateInspector.getByRole('tab', { name: '产物与证据', exact: true })
+    // Gate Review runs in place from the task status row (plan W2).
+    const runReview = reviewedGateInspector.getByTestId('task-status-row').getByRole('button', { name: /运行门禁审查/ })
+    await expect(runReview).toBeEnabled()
+    await runReview.click()
+    await expect(page.getByTestId('toast')).toContainText('门禁审查已完成，审查意见显示在「当前工作」中')
+    await expectStaysOnWorkbench(page)
+    await expect(reviewedGateInspector).toContainText('需求确认 Gate')
+    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('review-evidence-results')).toContainText('Knowledge review completed for this node.')
+    await expect(page.getByTestId('review-evidence-results')).toContainText('warning-only')
+    // A saved review is re-run only after the existing confirmation; cancelling sends nothing.
+    await reviewedGateInspector.getByTestId('task-review-run').getByRole('button', { name: '重新审查', exact: true }).click()
+    const rerunDialog = page.getByRole('dialog', { name: '确认重新审查' })
+    await expect(rerunDialog.getByRole('button', { name: '继续并重新审查', exact: true })).toBeVisible()
+    await rerunDialog.getByRole('button', { name: '取消', exact: true }).click()
+    await expect(rerunDialog).toHaveCount(0)
+
+    await showNodeMaterials(page)
+    const referencesTab = inspectorTab(page, '材料与版本')
     await referencesTab.focus()
     await referencesTab.press('Enter')
     await expect(page.getByTestId('knowledge-reference-sources')).toContainText(
@@ -1701,11 +1758,11 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
       'Knowledge review completed for this node.',
     )
-    const evidenceTab = reviewedGateInspector.getByRole('tab', { name: '产物与证据', exact: true })
-    await evidenceTab.focus()
-    await evidenceTab.press('Enter')
-    await expect(reviewedGateInspector.getByRole('region', { name: '已归档的审查报告' })).toContainText('Knowledge review completed for this node.')
-    await reviewedGateInspector.getByRole('button', { name: '阅读审查报告与意见' }).click()
+    // 材料与版本 lists the archived report; its conclusion and opinions are read in 当前工作.
+    const archivedReport = reviewedGateInspector.getByRole('region', { name: '已归档的审查报告' })
+    await expect(archivedReport).toContainText('ark-code-latest')
+    await archivedReport.getByRole('button', { name: '在「当前工作」中查看审查意见', exact: true }).click()
+    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByTestId('review-evidence-results')).toContainText(
       'Knowledge review completed for this node.',
     )
@@ -1737,12 +1794,21 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('mcp-view')).toContainText('未加载本地 MCP 连接器')
 
     await page.getByRole('button', { name: /^测试$/ }).click()
-    await expect(page.getByTestId('tests-view')).toContainText('测试计划与证据')
+    const testsView = page.getByTestId('tests-view')
+    await expect(testsView).toContainText('测试计划与证据')
     // Tests only run at the actual test step; the reason is shown before any click (plan D4, X6).
-    await expect(page.getByRole('button', { name: /执行测试/ })).toBeDisabled()
+    // The page keeps the command and history; its one entry hands back to the task (plan W5).
+    await expect(testsView.getByRole('button', { name: /执行测试|执行本地测试/ })).toHaveCount(0)
     await expect(page.getByTestId('tests-run-blocked-reason')).toBeVisible()
-    await expect(page.getByTestId('tests-view')).not.toContainText('Local test evidence')
-    await expect(page.getByTestId('tests-view')).not.toContainText('passed')
+    await expect(testsView).not.toContainText('Local test evidence')
+    await expect(testsView).not.toContainText('passed')
+    const handleTestsInTask = testsView.getByRole('button', { name: '在任务中处理', exact: true })
+    await expect(handleTestsInTask).toBeEnabled()
+    await handleTestsInTask.click()
+    await expectStaysOnWorkbench(page)
+    // The current step is the reviewed Gate, not a test step: no check can run from here.
+    await expect(page.getByTestId('node-inspector')).toContainText('需求确认 Gate')
+    await expect(page.getByTestId('task-status-row').getByRole('button', { name: '运行检查', exact: true })).toHaveCount(0)
     expect(pageErrors).toEqual([])
   })
 
@@ -1792,7 +1858,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     })
   })
 
-  test('reviews one exact multi-file Change Set through the shared Agents approval surface', async ({ page }) => {
+  test('reviews one exact multi-file Change Set in the task before approval', async ({ page }) => {
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
     await installDesktopApi(page, 'coding-permission')
@@ -1801,12 +1867,20 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.waitForTimeout(250)
     expect(pageErrors).toEqual([])
 
+    // The exact diff review is rendered in 当前工作 (plan W3); approval exists only there.
     const inspector = page.getByTestId('node-inspector')
-    await expect(inspector.getByTestId('workbench-coding-permission-summary')).toContainText('2 个文件')
-    await expect(inspector.getByRole('button', { name: /Approve exact/ })).toHaveCount(0)
-    await inspector.getByRole('button', { name: '审查并批准修改' }).click()
+    const statusRow = inspector.getByTestId('task-status-row')
+    const changeSetPanel = inspector.getByTestId('task-coding-change-set')
+    await expect(changeSetPanel.getByTestId('coding-change-set-review')).toBeVisible()
+    await expect(statusRow.getByRole('button', { name: /Approve exact/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: 'Approve exact Change Set' })).toHaveCount(1)
+    await inspector.getByRole('tab', { name: '执行记录', exact: true }).click()
+    await statusRow.getByRole('button', { name: '审查并批准修改', exact: true }).click()
+    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
+    await expect(changeSetPanel).toBeFocused()
+    await expectStaysOnWorkbench(page)
 
-    const review = page.getByTestId('coding-change-set-review')
+    const review = changeSetPanel.getByTestId('coding-change-set-review')
     await expect(review).toBeVisible()
     await expect(review.getByLabel('src/a.ts diff')).toBeVisible()
     await expect(review.getByLabel('src/b.ts diff')).toBeVisible()
@@ -1839,8 +1913,7 @@ test.describe('AI DevFlow desktop workbench', () => {
       decision: 'approved',
     }])
     await expect(review).toHaveCount(0)
-    await expect(page.locator('.agent-current-task--change-set')).toHaveCount(0)
-    await page.getByRole('button', { name: /工作台/ }).click()
+    await expectStaysOnWorkbench(page)
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /测试证据/ }).click()
     await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
     expect(pageErrors).toEqual([])
@@ -1852,27 +1925,32 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     const inspector = page.getByTestId('node-inspector')
     await inspector.getByRole('button', { name: '启动 Coding Agent' }).click()
-    const review = page.getByTestId('coding-change-set-review')
+    // The exact diff is reviewed and approved in the task's 当前工作 (plan W3).
+    const review = inspector.getByTestId('task-coding-change-set').getByTestId('coding-change-set-review')
     await expect(review.getByLabel('src/a.ts diff')).toContainText('new a 59')
     await expect(review.getByLabel('src/b.ts diff')).toContainText('new b 59')
+    await expectStaysOnWorkbench(page)
     await review.getByRole('button', { name: 'Approve exact Change Set' }).click()
+    await expect(review).toHaveCount(0)
+    await expectStaysOnWorkbench(page)
 
-    await page.getByRole('button', { name: /工作台/ }).click()
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /测试证据/ }).click()
     await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /开发实现/ }).click()
     await clickSubStep(page, 'flow-node-node-build-review')
-    await inspector.getByRole('tab', { name: '概览', exact: true }).click()
+    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
     const terminal = page.getByTestId('workbench-coding-terminal')
-    await expect(terminal).toContainText('completed')
-    await terminal.getByRole('button', { name: '阅读变更与代码差异' }).click()
+    await expect(terminal).toContainText('已完成')
+    // Changes and the diff are part of 当前工作 once the run is terminal.
     const changes = inspector.getByRole('region', { name: '开发变更与检查' })
     await expect(changes).toContainText('Saved worktree test passed.')
     await expect(changes).toContainText('+new')
-    await inspector.getByRole('tab', { name: '执行记录', exact: true }).click()
+    await inspectorTab(page, '执行记录').click()
     await expect(inspector).toContainText('150')
     await expect(inspector).toContainText('$0.012')
     await expect(inspector.getByRole('list', { name: 'Coding Run terminal trace' })).toContainText('Applied the exact approved Change Set.')
+    // The managed worktree moved from Agents into the build step's 执行记录 (plan W3).
+    await expect(inspector.getByTestId('coding-workspace-records')).toContainText('/tmp/devflow-review')
     await expect(inspector.getByRole('button', { name: /启动|重新运行/ })).toHaveCount(0)
   })
 })
