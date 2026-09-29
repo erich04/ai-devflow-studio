@@ -178,7 +178,13 @@ try {
   run = await page.evaluate((projectId) => window.aiDevFlowDesktop.createRun({ title: '为任务清单增加清除已完成功能', request: '清理已完成任务，保留未完成任务并保存结果。', projectId, creatorId: 'u-erich', branchName: 'ai/clear-done' }), project.id)
   await page.reload()
   await expect(page.getByTestId('workflow-canvas')).toBeVisible()
-  await page.getByRole('button', { name: '流程视图', exact: true }).click()
+  const chooseBoardView = async (name) => {
+    const menu = page.locator('details.workbench-project-menu')
+    if ((await menu.getAttribute('open')) === null) await menu.locator(':scope > summary').click()
+    await page.getByTestId('task-menu-usage').getByRole('group', { name: '看板展示方式' }).getByRole('button', { name, exact: true }).click()
+    await menu.locator(':scope > summary').click()
+  }
+  await chooseBoardView('流程视图')
   const checked = []
   for (const node of run.nodes) {
     await page.getByTestId(`flow-node-${node.id}`).click()
@@ -198,9 +204,9 @@ try {
   await page.getByTestId('node-inspector').getByRole('tab', { name: '当前工作', exact: true }).click()
   await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
   await page.screenshot({ scale: 'css', path: path.join(output, '01-node-details.png') })
-  await page.getByRole('button', { name: '列表视图', exact: true }).click()
+  await chooseBoardView('列表视图')
   for (const node of run.nodes) await expect(page.getByTestId(`flow-node-${node.id}`)).toBeAttached()
-  await page.getByRole('button', { name: '流程视图', exact: true }).click()
+  await chooseBoardView('流程视图')
   // An empty discussion starts collapsed and takes no column until opened (plan L3).
   await expect(page.getByTestId('workbench-workspace')).toBeHidden()
   const discussionToggle = page.getByRole('button', { name: '讨论', exact: true })
@@ -392,8 +398,14 @@ try {
   await page.getByRole('button', { name: '会话历史', exact: true }).click()
   await page.getByRole('button', { name: /查询共享提案.*已停止/ }).click()
   await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
-  for (let attempt = 0; attempt < 3 && await page.locator('html').getAttribute('data-theme') !== 'light'; attempt++) await page.getByRole('button', { name: 'Toggle color theme' }).click()
+  // The theme is set in 设置／外观 since S3 (plan Y5); the discussion and its draft survive the trip.
+  const navigation = page.locator('aside[aria-label="Primary navigation"]')
+  await navigation.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '外观', exact: true }).click()
+  for (let attempt = 0; attempt < 3 && await page.locator('html').getAttribute('data-theme') !== 'light'; attempt++) await page.getByTestId('theme-toggle').click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await navigation.getByRole('button', { name: '任务', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
   await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
   await page.screenshot({ scale: 'css', path: path.join(output, '04-light-workspace.png') })
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 973))
@@ -410,16 +422,21 @@ try {
   await page.screenshot({ scale: 'css', path: path.join(output, '13-short-window.png') })
   for (const width of [1366, 1920]) {
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 973), width)
-    // One-row top bar (plan L1): pairing and team data updates live in the team connection popover.
-    for (const control of [page.getByRole('button', { name: /^团队连接：/ }), page.getByTestId('theme-toggle'), page.getByRole('button', { name: '新建任务', exact: true })]) await expect(control).toBeInViewport()
+    // One-row top bar with four controls (plan L1, Y5): the theme moved to 设置／外观.
+    for (const control of [page.getByRole('button', { name: /^团队连接：/ }), page.getByRole('button', { name: '新建任务', exact: true })]) await expect(control).toBeInViewport()
+    await expect(page.locator('.topbar').getByTestId('theme-toggle')).toHaveCount(0)
     expect((await page.locator('.topbar').boundingBox()).height).toBeLessThanOrEqual(56)
     expect(await page.locator('body').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
     await page.screenshot({ scale: 'css', path: path.join(output, `06-header-${width}.png`) })
   }
-  await expect(page.getByTestId('data-profile-diagnostics')).not.toBeVisible()
-  await page.getByRole('button', { name: '诊断', exact: true }).click()
+  // Diagnostics are 设置／高级 (plan Y2); four primary entries (Y1).
+  const primaryNav = page.locator('aside[aria-label="Primary navigation"]')
+  await expect(primaryNav.getByRole('button')).toHaveText(['任务', '知识', '团队', '设置'])
+  await expect(page.getByTestId('data-profile-diagnostics')).toHaveCount(0)
+  await primaryNav.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '高级', exact: true }).click()
   await expect(page.getByTestId('data-profile-diagnostics')).toBeVisible()
-  await page.getByRole('button', { name: '工作台', exact: true }).click()
+  await primaryNav.getByRole('button', { name: '任务', exact: true }).click()
   const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
   expect(state.runs[0].currentNodeId).toBe(run.currentNodeId)
   expect(state.artifacts.some((artifact) => artifact.title.includes('讨论提案（待确认）'))).toBe(true)

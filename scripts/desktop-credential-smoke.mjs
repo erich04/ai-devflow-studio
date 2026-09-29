@@ -21,7 +21,7 @@ const app = await electron.launch({ executablePath, env: {
 
 try {
   const page = await app.firstWindow()
-  await page.getByRole('button', { name: '诊断', exact: true }).waitFor()
+  await page.getByRole('button', { name: '设置', exact: true }).waitFor()
   report.runtime = await app.evaluate(async ({ app, safeStorage }) => {
     const available = await safeStorage.isAsyncEncryptionAvailable()
     if (!available) throw new Error('Native asynchronous credential storage unavailable')
@@ -52,7 +52,9 @@ try {
     name: 'Isolated Credential QA', model: 'fixture-model', baseUrl: 'https://example.invalid/v1', apiKey: 'fixture-key-not-a-real-provider-key',
   })).then(() => ({ unexpectedSuccess: true }), (error) => ({ error: String(error) }))
   await page.getByText('正在等待系统凭据访问', { exact: true }).waitFor()
-  await page.getByRole('button', { name: '诊断', exact: true }).click()
+  // Diagnostics are 设置／高级 since S3 (plan Y2).
+  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '高级', exact: true }).click()
   await page.getByRole('heading', { name: '本地诊断', exact: true }).waitFor()
   await page.screenshot({ path: path.join(output, 'authorization-wait.png') })
   report.checks.push('UI navigation remains responsive while a credential operation is pending')

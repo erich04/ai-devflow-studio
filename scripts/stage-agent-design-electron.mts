@@ -51,6 +51,12 @@ export async function verifyDesignInElectron(input: {
   try {
     let page = await launch()
     await expect(page.getByTestId('workflow-canvas')).toBeVisible()
+    // Sub-steps are folded into the browsed stage item (plan L2, Y6); open them before clicking a node.
+    const openSubSteps = async () => {
+      const toggle = page.locator('[data-testid="stage-item"][aria-expanded="false"]')
+      if ((await toggle.count()) > 0) await toggle.click()
+    }
+    await openSubSteps()
     await page.getByTestId(`flow-node-${input.run.currentNodeId}`).click()
     await expect(page.getByRole('combobox', { name: '本节点使用的模型' })).toHaveValue('design-fixture')
     await page.getByRole('combobox', { name: '设计执行器' }).selectOption('local-agent')
@@ -78,15 +84,19 @@ export async function verifyDesignInElectron(input: {
     assert.equal(completed.runs[0]!.nodes.find((node) => node.id === completed.runs[0]!.currentNodeId)?.status, 'running')
     const configuration = await page.evaluate((projectId) => window.aiDevFlowDesktop!.getCodingRuntimeConfiguration({ projectId }), input.run.projectId)
     assert.equal(configuration, null)
+    await openSubSteps()
     await page.getByTestId(`flow-node-${input.run.currentNodeId}`).click()
-    await page.getByTestId('node-inspector').getByRole('tab', { name: '产物', exact: true }).click()
+    await page.getByTestId('node-inspector').getByRole('tab', { name: '材料与版本', exact: true }).click()
     await page.getByText('设计输入与代码核验依据', { exact: true }).click()
     await page.getByTestId('node-inspector').locator('details').last().scrollIntoViewIfNeeded()
     await expect(page.getByTestId('node-inspector')).toContainText('task.ts:1')
     await page.screenshot({ path: path.join(output, '02-design-evidence.png'), scale: 'css' })
-    await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    // The execution tool is configured in 设置／模型与执行方式 since S3 (plan Y2).
+    await page.locator('aside[aria-label="Primary navigation"]').getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '模型与执行方式', exact: true }).click()
+    const executionTool = page.locator('details.runtime-settings').filter({ has: page.locator('summary', { hasText: '项目执行工具 · 本地项目' }) })
+    if ((await executionTool.getAttribute('open')) === null) await executionTool.locator(':scope > summary').click()
     await expect(page.getByText('DevFlow Native（内置编码执行器）', { exact: true })).toBeVisible()
-    await expect(page.getByText('项目执行工具', { exact: true })).toBeVisible()
     await page.getByRole('combobox', { name: '执行工具', exact: true }).scrollIntoViewIfNeeded()
     await page.screenshot({ path: path.join(output, '03-execution-tool-names.png'), scale: 'css' })
     await app!.close(); app = undefined

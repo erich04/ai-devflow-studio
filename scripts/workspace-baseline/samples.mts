@@ -219,10 +219,19 @@ async function closeProjectMenu(ctx: SampleContext) {
   await closeMenu(ctx, '.workbench-project-menu')
 }
 
-/** Opens the team connection popover (S1) when the pairing controls are not already on screen. */
+/**
+ * Opens the pairing controls when they are not already on screen: the team connection popover
+ * in S1–S2, 设置／团队连接 from S3 (plan Y7).
+ */
 async function openTeamControls(ctx: SampleContext) {
   const { page } = ctx.desktop
   if (await page.getByLabel('Desktop pairing code').isVisible().catch(() => false)) return
+  if (await hasSettingsNav(ctx)) {
+    await clickNav(ctx, '设置')
+    await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '团队连接', exact: true }).click()
+    await page.getByLabel('Desktop pairing code').waitFor({ state: 'visible', timeout: 5_000 })
+    return
+  }
   const trigger = page.getByRole('button', { name: /^团队连接(：|$)/ })
   if ((await trigger.count()) > 0) {
     await trigger.click()
@@ -233,16 +242,32 @@ async function openTeamControls(ctx: SampleContext) {
 async function closeTeamControls(ctx: SampleContext) {
   const close = ctx.desktop.page.getByRole('button', { name: '关闭团队连接', exact: true })
   if ((await close.count()) > 0) await close.click()
+  if ((await ctx.desktop.page.getByTestId('settings-view').count()) > 0) await clickNav(ctx, TASKS_NAV)
 }
 
-async function clickNav(ctx: SampleContext, name: string) {
-  await ctx.desktop.page.locator('.sidebar.rail').getByRole('button', { name, exact: true }).click()
-  await delay(500)
+async function hasSettingsNav(ctx: SampleContext) {
+  return (await ctx.desktop.page.locator('.sidebar.rail').getByRole('button', { name: '设置', exact: true }).count()) > 0
+}
+
+/** Primary entry names before and after S3 (plan Y1); the first one on screen is used. */
+const TASKS_NAV = ['任务', '工作台']
+
+async function clickNav(ctx: SampleContext, name: string | string[]) {
+  const rail = ctx.desktop.page.locator('.sidebar.rail')
+  for (const candidate of Array.isArray(name) ? name : [name]) {
+    const button = rail.getByRole('button', { name: candidate, exact: true })
+    if ((await button.count()) > 0) {
+      await button.click()
+      await delay(500)
+      return
+    }
+  }
+  throw new Error(`navigation entry not found: ${String(name)}`)
 }
 
 /** Selects a local repository through the real project menu. Returns the local project. */
 async function selectRepository(ctx: SampleContext, repoDir = ctx.workspace.repoDir): Promise<any> {
-  await clickNav(ctx, '工作台')
+  await clickNav(ctx, TASKS_NAV)
   await stubRepositoryPicker(ctx.desktop.app, repoDir)
   const menu = await projectMenuSelector(ctx)
   await openMenu(ctx, menu)
@@ -254,7 +279,7 @@ async function selectRepository(ctx: SampleContext, repoDir = ctx.workspace.repo
 }
 
 async function selectRun(ctx: SampleContext, title: string) {
-  await clickNav(ctx, '工作台')
+  await clickNav(ctx, TASKS_NAV)
   await openProjectMenu(ctx)
   await ctx.desktop.page.locator('.run-row').filter({ hasText: title }).first().click()
   await closeProjectMenu(ctx)
@@ -264,7 +289,7 @@ async function selectRun(ctx: SampleContext, title: string) {
 /** Creates a task through the real new-task dialog and selects it. */
 async function createTask(ctx: SampleContext, title = TASK_TITLE, request = TASK_REQUEST) {
   const { page } = ctx.desktop
-  await clickNav(ctx, '工作台')
+  await clickNav(ctx, TASKS_NAV)
   await page.getByRole('button', { name: /新建 Run|新建任务/ }).click()
   const dialog = page.getByRole('dialog', { name: /Create new run|新建任务/ })
   await dialog.getByLabel('标题').fill(title)
@@ -310,12 +335,19 @@ async function reloadAndSelectRun(ctx: SampleContext, title: string) {
 /** Selects a node through the compact stage navigation, as a user would. */
 async function selectNode(ctx: SampleContext, stageLabel: string, node: any) {
   const { page } = ctx.desktop
-  await page.locator('.workflow-stage-navigation .workflow-stage-step > button').filter({ hasText: stageLabel }).click()
+  const stageButton = page.locator('.workflow-stage-navigation .workflow-stage-step > button').filter({ hasText: stageLabel })
+  // From S3 the stage being browsed carries aria-expanded and a click toggles its sub-steps (Y6);
+  // only switch stages here, the sub-step list is opened below when needed.
+  if ((await stageButton.getAttribute('aria-expanded')) === null) await stageButton.click()
   await delay(300)
   const shown = page.locator('[data-testid="node-inspector"] :is(.panel-title, .task-status-step)').filter({ hasText: node.title })
   if ((await shown.count()) === 0) {
     const button = page.getByTestId(`flow-node-${node.id}`)
-    const toggle = page.locator('.stage-substeps-toggle')
+    // S1–S2 had a separate 子步骤 button; from S3 the browsed stage item toggles its sub-steps (Y6).
+    const legacyToggle = page.locator('.stage-substeps-toggle')
+    const toggle = (await legacyToggle.count()) > 0
+      ? legacyToggle
+      : page.locator('.workflow-stage-navigation .workflow-stage-step > button[aria-expanded]')
     if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
     if ((await button.count()) > 0) await button.click()
     if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-expanded')) === 'true') await toggle.click()
@@ -920,9 +952,19 @@ const acceptance: Sample = {
 
 // Test evidence (plan §6.4). These samples measure the 测试 page, where D4 was observed.
 
+/** The 测试 page before S3; 设置／本地项目 from S3 (plan Y4). */
 async function openTestsPage(ctx: SampleContext) {
-  await clickNav(ctx, '测试')
-  await ctx.desktop.page.getByTestId('tests-view').waitFor({ state: 'visible' })
+  if (await hasSettingsNav(ctx)) {
+    await clickNav(ctx, '设置')
+    await ctx.desktop.page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '本地项目', exact: true }).click()
+  } else {
+    await clickNav(ctx, '测试')
+  }
+  await testsView(ctx).waitFor({ state: 'visible' })
+}
+
+function testsView(ctx: SampleContext) {
+  return ctx.desktop.page.locator('[data-testid="tests-view"], [data-testid="settings-project"]').first()
 }
 
 /**
@@ -931,7 +973,7 @@ async function openTestsPage(ctx: SampleContext) {
  */
 async function runTestsFromPage(ctx: SampleContext) {
   const { page } = ctx.desktop
-  await page.getByTestId('tests-view').getByRole('button', { name: '在任务中处理', exact: true }).click()
+  await testsView(ctx).getByRole('button', { name: '在任务中处理', exact: true }).click()
   const run = page.getByTestId('node-inspector').getByTestId('task-status-row').getByRole('button', { name: '运行检查', exact: true })
   await run.waitFor({ state: 'visible', timeout: 15_000 })
   await run.click()
@@ -939,7 +981,7 @@ async function runTestsFromPage(ctx: SampleContext) {
 }
 
 async function testsViewText(ctx: SampleContext) {
-  return ctx.desktop.page.getByTestId('tests-view').innerText()
+  return testsView(ctx).innerText()
 }
 
 const testNoRepo: Sample = {
