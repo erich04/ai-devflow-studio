@@ -1,0 +1,1166 @@
+{
+  "run": {
+    "generatedAt": "2026-09-29T14:53:05.109Z",
+    "commit": {
+      "head": "fb96660",
+      "productCodeDirty": true
+    },
+    "node": "v24.18.0",
+    "platform": "darwin-arm64",
+    "theme": "light",
+    "zoom": 1,
+    "sizes": "per sample",
+    "environment": {
+      "screen": {
+        "workArea": {
+          "x": 0,
+          "y": 30,
+          "width": 1920,
+          "height": 1050
+        },
+        "size": {
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 2
+      },
+      "versions": {
+        "electron": "42.11.6",
+        "chrome": "148.0.7778.280"
+      }
+    }
+  },
+  "samples": [
+    {
+      "id": "clarify-gate-warn",
+      "title": "需求确认 Gate：策略仅警告，缺少门禁审查（主基线；同时是空讨论样例）",
+      "planRefs": [
+        "2.2",
+        "D1",
+        "D3",
+        "L1-L5",
+        "5.4 空讨论",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "本地项目未连接团队，使用内置的仅警告策略。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/clarify-gate-warn-1440x742.jpg",
+        "shots/clarify-gate-warn-1280x742.jpg",
+        "shots/clarify-gate-warn-1024x742.jpg"
+      ],
+      "extraScreenshots": [
+        "shots/clarify-gate-warn-toast-1440x742.jpg"
+      ],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "clarify-gate-suggestions",
+      "title": "需求确认 Gate：已有门禁审查，只剩非阻断建议",
+      "planRefs": [
+        "6.1",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "Fake Provider 固定给出 1 条测试建议，风险条数取决于正文中的关键词。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/clarify-gate-suggestions-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "review": {
+          "id": "agent-review-review-request-f465e757-e6fc-4537-977b-8ffeffeef110-electron",
+          "risks": 3,
+          "missingEvidence": 0,
+          "suggestedTests": 1,
+          "advisoryLevel": "warn",
+          "blocksApproval": false
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "clarify-gate-clean",
+      "title": "需求确认 Gate：已有门禁审查，没有建议",
+      "planRefs": [
+        "6.1",
+        "8.1"
+      ],
+      "method": "store",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "Fake Provider 总会给出测试建议，无法产生“没有建议”的审查。先走真实界面运行审查，再在应用关闭时直接改写本地库中这条审查的风险、缺失证据、测试建议和结论等级，只用于布局对比。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/clarify-gate-clean-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "review": {
+          "id": "agent-review-review-request-3f5b5e96-c956-4d02-836f-d0fbe64541e5-electron",
+          "risks": 0,
+          "missingEvidence": 0,
+          "suggestedTests": 0,
+          "advisoryLevel": "info",
+          "blocksApproval": false
+        },
+        "projectId": "present"
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "gate-enforced-block",
+      "title": "需求确认 Gate：团队策略强制阻断（缺少门禁审查）",
+      "planRefs": [
+        "6.1",
+        "8.1",
+        "D1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "阻断原因是“缺少门禁审查”。按现有投影，这时的主动作是运行门禁审查，而不是“处理 Gate 阻断”；其他阻断原因见 App.test.tsx 的强制阻断用例。",
+        "已连接到内存演示 Team API 的 p-payments 项目，团队策略由本脚本写入。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/gate-enforced-block-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "pullToast": "团队数据已更新 · 策略 v1 · 2026-09-29T14:41:17.129Z",
+        "gateDecision": {
+          "status": "blocked",
+          "blocksApproval": true,
+          "blockingReasons": [
+            "missing_agent_review:protected_gate:missing"
+          ],
+          "warningReasons": [],
+          "policySource": "remote_cache"
+        },
+        "syncOperations": [
+          {
+            "kind": "run-summary",
+            "runId": "run-ce658da1-d372-4b06-a903-30e48eff1d99",
+            "status": "terminal",
+            "lastErrorCode": "conflict",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "upstream-waiting",
+      "title": "浏览尚未开始的方案设计阶段（等待上游）",
+      "planRefs": [
+        "5.1",
+        "6.1",
+        "D5",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/upstream-waiting-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "clarify-history",
+      "title": "需求有 v1、v2 两个版本，正在阅读 v1",
+      "planRefs": [
+        "V1",
+        "6.2",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "两个版本都由 Fake Provider 按模板生成，正文相同，只有版本号不同。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/clarify-history-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "versionOptions": [
+          "需求澄清 v1 · 历史版本",
+          "需求澄清 v2 · 当前版本"
+        ],
+        "activeRevision": 2
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "design-gate",
+      "title": "方案评审 Gate：已生成方案，缺少门禁审查",
+      "planRefs": [
+        "3.1 六阶段",
+        "V2",
+        "6.2"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "需求确认 Gate 经 IPC 运行审查并批准，方案由 Fake Provider 生成。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/design-gate-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "run": {
+          "currentNode": "方案评审 Gate",
+          "status": "paused_at_gate",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:running",
+            "build/task:pending",
+            "test/test:pending",
+            "pr/pr:pending",
+            "accept/acceptance:pending"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "build-running",
+      "title": "开发实现：DevFlow Native 执行中（可停止）",
+      "planRefs": [
+        "6.1",
+        "8.1 关键操作可见"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": true,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "模型请求发往本脚本的受控服务，服务一直不响应，使执行停留在进行中；没有真实模型调用。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/build-running-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "codingRun": {
+          "status": "preparing",
+          "engine": "native",
+          "modelRequests": 1
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "build-permission",
+      "title": "开发实现：待处理的权限请求",
+      "planRefs": [
+        "3.1 六阶段",
+        "6.1",
+        "8.1 关键操作可见"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": true,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "权限请求由 fake 编码引擎在启动时发出，会超时，所以制备后立即截图。",
+        "已连接团队并保存预算策略，这是开始编码的前提。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/build-permission-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "codingRun": {
+          "status": "waiting_permission",
+          "hasPendingPermission": true
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "build-interrupted",
+      "title": "开发实现：拒绝权限请求后执行中断",
+      "planRefs": [
+        "6.1",
+        "8.1 关键操作可见"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "中断由拒绝 fake 引擎的权限请求得到；“应用重启导致中断”未单独制备。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/build-interrupted-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "codingRun": {
+          "status": "interrupted"
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "test-stage",
+      "title": "测试验证：编码完成后进入测试节点",
+      "planRefs": [
+        "3.1 六阶段"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/test-stage-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "run": {
+          "currentNode": "Run tests",
+          "status": "testing",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:success",
+            "build/task:success",
+            "test/test:running",
+            "pr/pr:pending",
+            "accept/acceptance:pending"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "pr-ready",
+      "title": "PR 交付：已生成 PR 草稿，等待准备交付",
+      "planRefs": [
+        "3.1 六阶段",
+        "5.3"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "没有 GitHub 仓库绑定，停在“准备交付”之前。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/pr-ready-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "testEvidenceStatus": "passed",
+        "run": {
+          "currentNode": "Prepare PR draft",
+          "status": "paused_at_gate",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:success",
+            "build/task:success",
+            "test/test:success",
+            "pr/pr:running",
+            "accept/acceptance:pending"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "pr-approval",
+      "title": "PR 交付：等待 Web 审批（approval_required）",
+      "planRefs": [
+        "5.3",
+        "P1"
+      ],
+      "method": "renderer",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "真实路径需要 GitHub App 与仓库绑定；离线只能用 v1.5 的 GitHub 替身和隔离 Postgres（test:v15-github-delivery-packaged-smoke），不在 S0 的桌面测量范围内。"
+      ],
+      "layoutOnly": true,
+      "alternative": "App.test.tsx 中以 prDeliveryState(githubDeliveryIntentFixture(\"approval_required\")) 渲染的用例；S1 的状态投影单元测试覆盖此分支。",
+      "screenshots": [],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "not-in-electron"
+    },
+    {
+      "id": "acceptance",
+      "title": "业务验收：交付后进入验收节点",
+      "planRefs": [
+        "3.1 六阶段"
+      ],
+      "method": "store",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "验收依赖已完成的 GitHub 交付，离线无法走到。先快进到 PR 草稿，再在应用关闭时直接改写本地库，把 PR 节点标为完成、验收节点标为进行中；页面上的交付证据仍缺失，只用于布局对比。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/acceptance-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "testEvidenceStatus": "passed",
+        "run": {
+          "currentNode": "Acceptance signoff",
+          "status": "paused_at_gate",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:success",
+            "build/task:success",
+            "test/test:success",
+            "pr/pr:success",
+            "accept/acceptance:running"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "test-no-repo",
+      "title": "测试页：未选择仓库",
+      "planRefs": [
+        "6.4",
+        "D4"
+      ],
+      "method": "ui",
+      "simulated": false,
+      "transient": false,
+      "limits": [],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/test-no-repo-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "test-no-command",
+      "title": "测试页：已选仓库，未配置测试命令",
+      "planRefs": [
+        "6.4",
+        "D4"
+      ],
+      "method": "ui",
+      "simulated": false,
+      "transient": false,
+      "limits": [
+        "示例仓库的 package.json 没有 test 脚本。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/test-no-command-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "test-not-run",
+      "title": "测试页：命令已保存，本任务尚未运行测试（D4 现象）",
+      "planRefs": [
+        "6.4",
+        "D4"
+      ],
+      "method": "ui",
+      "simulated": false,
+      "transient": false,
+      "limits": [],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/test-not-run-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "test-running",
+      "title": "测试页：测试执行中",
+      "planRefs": [
+        "6.4"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": true,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "测试只能在任务处于测试节点时运行，且在编码生成的托管工作树中执行。样例先快进到测试节点，再改写工作树中 package.json 的 test 脚本来得到对应结果；自 S2 起在任务测试步骤点击「运行检查」走真实界面（测试页只保留命令与历史），再打开测试页测量。",
+        "快进需要连接团队并保存预算，所以顶栏是已连接状态。",
+        "测试脚本只是等待 180 秒，状态稳定后立即截图。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/test-running-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "test-failed",
+      "title": "测试页：测试失败",
+      "planRefs": [
+        "6.4"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "测试只能在任务处于测试节点时运行，且在编码生成的托管工作树中执行。样例先快进到测试节点，再改写工作树中 package.json 的 test 脚本来得到对应结果；自 S2 起在任务测试步骤点击「运行检查」走真实界面（测试页只保留命令与历史），再打开测试页测量。",
+        "快进需要连接团队并保存预算，所以顶栏是已连接状态。",
+        "“被跳过”只对工作流节点成立，测试证据没有这个状态，界面上无法单独制备；由 S1 的组件测试覆盖。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/test-failed-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "test-timeout",
+      "title": "测试页：测试超时（固定 120 秒）",
+      "planRefs": [
+        "6.4"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "测试只能在任务处于测试节点时运行，且在编码生成的托管工作树中执行。样例先快进到测试节点，再改写工作树中 package.json 的 test 脚本来得到对应结果；自 S2 起在任务测试步骤点击「运行检查」走真实界面（测试页只保留命令与历史），再打开测试页测量。",
+        "快进需要连接团队并保存预算，所以顶栏是已连接状态。",
+        "桌面端的测试超时固定为 120 秒，制备需要等待约 2 分钟。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/test-timeout-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "test-stale",
+      "title": "测试页：已有通过结果，但代码随后有新提交",
+      "planRefs": [
+        "6.4"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "测试只能在任务处于测试节点时运行，且在编码生成的托管工作树中执行。样例先快进到测试节点，再改写工作树中 package.json 的 test 脚本来得到对应结果；自 S2 起在任务测试步骤点击「运行检查」走真实界面（测试页只保留命令与历史），再打开测试页测量。",
+        "快进需要连接团队并保存预算，所以顶栏是已连接状态。",
+        "通过后由脚本在托管工作树中直接提交一次改动。现有界面没有“已过期”分支，这正是改前基线要记录的。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/test-stale-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "worktreeHeadChanged": true,
+        "evidenceFields": [
+          "command",
+          "createdAt",
+          "cwd",
+          "durationMs",
+          "exitCode",
+          "id",
+          "nodeId",
+          "projectId",
+          "redacted",
+          "runId",
+          "status",
+          "stderr",
+          "stdout",
+          "summary"
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "test-read-failure",
+      "title": "测试页：证据读取失败或适用性无法核实",
+      "planRefs": [
+        "6.4"
+      ],
+      "method": "renderer",
+      "simulated": false,
+      "transient": false,
+      "limits": [
+        "现有代码没有“证据读取失败”这一事实来源，真实窗口里不注入故障就无法出现。"
+      ],
+      "layoutOnly": true,
+      "alternative": "S1 在 SupportViews 的组件测试中模拟证据读取失败，断言显示“读取失败／待核实”，而不是“未运行”或“已通过”。",
+      "screenshots": [],
+      "extraScreenshots": [],
+      "observations": {},
+      "result": "not-in-electron"
+    },
+    {
+      "id": "team-unpaired",
+      "title": "未连接团队：同步弹层（上传情况 1：尚无团队目标）",
+      "planRefs": [
+        "D3",
+        "T4",
+        "6.5 上传情况 1",
+        "待验证项 2"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/team-unpaired-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "credential": "none",
+        "syncOperations": [
+          {
+            "kind": "run-summary",
+            "runId": "run-293962f7-d92c-42cc-b229-ab09f46b509d",
+            "status": "terminal",
+            "lastErrorCode": "pairing_required",
+            "recovery": "none",
+            "hasTeamTarget": false,
+            "teamProjectId": null,
+            "attemptCount": 1
+          }
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "upload-requeued",
+      "title": "刚完成绑定：旧记录已重排，正在尝试上传（上传情况 2）",
+      "planRefs": [
+        "6.5 上传情况 2",
+        "待验证项 3"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": true,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "上传请求被本脚本在主进程中暂时挂起，使“正在上传”状态停留到截图完成；挂起不改变记录本身。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/upload-requeued-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "beforePairing": [
+          {
+            "kind": "run-summary",
+            "runId": "run-8525df52-1ecc-4cec-8bc9-54b0e5be0e26",
+            "status": "terminal",
+            "lastErrorCode": "pairing_required",
+            "recovery": "none",
+            "hasTeamTarget": false,
+            "teamProjectId": null,
+            "attemptCount": 1
+          }
+        ],
+        "afterPairing": [
+          {
+            "kind": "run-summary",
+            "runId": "run-8525df52-1ecc-4cec-8bc9-54b0e5be0e26",
+            "status": "sending",
+            "lastErrorCode": null,
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ],
+        "afterRelease": [
+          {
+            "kind": "run-summary",
+            "runId": "run-8525df52-1ecc-4cec-8bc9-54b0e5be0e26",
+            "status": "terminal",
+            "lastErrorCode": "conflict",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "team-paired",
+      "title": "已连接团队：上传完成后的同步弹层",
+      "planRefs": [
+        "6.5",
+        "T4",
+        "待验证项 1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/team-paired-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "identity": {
+          "pairingUserId": "u-ling",
+          "stageUsageUserIds": [
+            "local-user"
+          ]
+        },
+        "pullRightAfterPairing": {
+          "toast": "团队数据已更新 · 策略 v1 · 2026-09-29T14:49:42.149Z",
+          "snapshot": {
+            "counts": {
+              "projects": 1,
+              "members": 4,
+              "runs": 1,
+              "artifacts": 6,
+              "events": 3,
+              "projectCost": 1,
+              "memberCost": 0
+            },
+            "containsLocalRun": false,
+            "localRunProjectIds": []
+          },
+          "operations": [
+            {
+              "kind": "run-summary",
+              "runId": "run-010f8166-3883-4d7c-9234-1351e81d2d87",
+              "status": "terminal",
+              "lastErrorCode": "conflict",
+              "recovery": "none",
+              "hasTeamTarget": true,
+              "teamProjectId": "p-payments",
+              "attemptCount": 1
+            }
+          ]
+        },
+        "pullAfterUpload": {
+          "toast": "团队数据已更新 · 策略 v1 · 2026-09-29T14:49:51.633Z",
+          "snapshot": {
+            "counts": {
+              "projects": 1,
+              "members": 4,
+              "runs": 1,
+              "artifacts": 6,
+              "events": 3,
+              "projectCost": 1,
+              "memberCost": 0
+            },
+            "containsLocalRun": false,
+            "localRunProjectIds": []
+          },
+          "operations": [
+            {
+              "kind": "run-summary",
+              "runId": "run-010f8166-3883-4d7c-9234-1351e81d2d87",
+              "status": "terminal",
+              "lastErrorCode": "conflict",
+              "recovery": "none",
+              "hasTeamTarget": true,
+              "teamProjectId": "p-payments",
+              "attemptCount": 1
+            }
+          ]
+        },
+        "runRowsAfterPull": 1
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "policy-unavailable-after-reload",
+      "title": "已连接团队、尚未拉取团队数据时重新载入：策略不可用",
+      "planRefs": [
+        "6.1 状态待核实",
+        "6.3 warn/blocked",
+        "6.5 团队数据更新"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "重新载入的是渲染层页面（相当于刷新窗口），不是重启应用。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/policy-unavailable-after-reload-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "gateDecision": {
+          "status": "blocked_policy_unavailable",
+          "blocksApproval": true,
+          "blockingReasons": [
+            "policy-unavailable"
+          ],
+          "policySource": "unavailable"
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "team-existing-credential",
+      "title": "已有凭据：准备输入新的配对码（重新配对前）",
+      "planRefs": [
+        "P1",
+        "6.5 重新配对的确认",
+        "待验证项 5"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "截图中的配对码是占位文字，不是有效配对码。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/team-existing-credential-1440x742.jpg"
+      ],
+      "extraScreenshots": [
+        "shots/team-existing-credential-repair-confirmation-1440x742.jpg"
+      ],
+      "observations": {
+        "repairConfirmationText": [
+          "重新连接会替换现有连接",
+          "会被替换的连接",
+          "本地项目 health-api · 组织 org-demo · 团队项目 Payments API · 身份 Ling（lead）"
+        ],
+        "repairWithoutConfirmation": {
+          "confirmationDialogs": 1,
+          "changedCredentialFields": [
+            "createdAt",
+            "expiresAt"
+          ],
+          "sameTeamProject": true,
+          "sameLocalProject": true
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "upload-target-other-project",
+      "title": "记录目标是团队项目 X，当前凭据属于另一个本地项目（上传情况 3）",
+      "planRefs": [
+        "6.5 上传情况 3",
+        "D3",
+        "待验证项 2",
+        "待验证项 3"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "两个示例仓库都连接到演示项目 p-payments。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/upload-target-other-project-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "afterWriteWhileOtherProjectPaired": [
+          {
+            "kind": "run-summary",
+            "runId": "run-66a708b8-2151-411d-829a-91da952b47ef",
+            "status": "terminal",
+            "lastErrorCode": "scope_mismatch",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ],
+        "newTaskWhileOtherProjectPaired": [
+          {
+            "kind": "run-summary",
+            "runId": "run-66f5349e-c10c-4b88-86b9-aa88381e8d01",
+            "status": "terminal",
+            "lastErrorCode": "scope_mismatch",
+            "recovery": "none",
+            "hasTeamTarget": false,
+            "teamProjectId": null,
+            "attemptCount": 1
+          }
+        ],
+        "afterPairingAgain": [
+          {
+            "kind": "run-summary",
+            "runId": "run-66a708b8-2151-411d-829a-91da952b47ef",
+            "status": "terminal",
+            "lastErrorCode": "scope_mismatch",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          },
+          {
+            "kind": "run-summary",
+            "runId": "run-66f5349e-c10c-4b88-86b9-aa88381e8d01",
+            "status": "terminal",
+            "lastErrorCode": "scope_mismatch",
+            "recovery": "none",
+            "hasTeamTarget": false,
+            "teamProjectId": null,
+            "attemptCount": 1
+          }
+        ],
+        "afterNextWriteToNewTask": [
+          {
+            "kind": "run-summary",
+            "runId": "run-66a708b8-2151-411d-829a-91da952b47ef",
+            "status": "terminal",
+            "lastErrorCode": "scope_mismatch",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          },
+          {
+            "kind": "run-summary",
+            "runId": "run-66f5349e-c10c-4b88-86b9-aa88381e8d01",
+            "status": "completed",
+            "lastErrorCode": null,
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "upload-no-credential",
+      "title": "记录目标是团队项目 X，当前没有凭据（上传情况 4）",
+      "planRefs": [
+        "6.5 上传情况 4"
+      ],
+      "method": "store",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "界面没有解除连接的入口。先连接并上传，再在应用关闭时直接删除本地库中的配对凭据，只用于布局对比。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/upload-no-credential-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "credentialAfterRelaunch": "none",
+        "afterWriteWithoutCredential": [
+          {
+            "kind": "run-summary",
+            "runId": "run-842c6fcb-d269-4bbf-861b-5e75697b9c29",
+            "status": "terminal",
+            "lastErrorCode": "pairing_required",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "upload-target-unrecoverable",
+      "title": "本地项目已改连到团队项目 Y，记录仍属于 X（上传情况 5）",
+      "planRefs": [
+        "6.5 上传情况 5"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "团队项目 Y 由脚本在内存 Team API 中新建。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/upload-target-unrecoverable-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "afterWriteAfterRebinding": [
+          {
+            "kind": "run-summary",
+            "runId": "run-62c0c659-fdde-4bce-bca1-ffc5cc6fb3c8",
+            "status": "terminal",
+            "lastErrorCode": "scope_mismatch",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "upload-credential-invalid",
+      "title": "凭据在服务端失效（与过期同一路径）：上传被拒",
+      "planRefs": [
+        "6.5 凭据过期",
+        "待验证项 4"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "无法在测量期间等到令牌真正过期。改为通过 Team API 撤销该桌面令牌：API 对已撤销和已过期的令牌都返回空会话（team-repository.ts 的 resolveDesktopTokenSession），桌面端收到同样的 401。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/upload-credential-invalid-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "tokenRevocationStatus": 200,
+        "afterWriteWithRejectedToken": [
+          {
+            "kind": "run-summary",
+            "runId": "run-33949aec-965b-4ee0-84f0-4e06ecf116eb",
+            "status": "terminal",
+            "lastErrorCode": "unauthorized",
+            "recovery": "none",
+            "hasTeamTarget": true,
+            "teamProjectId": "p-payments",
+            "attemptCount": 1
+          }
+        ]
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "discussion-messages",
+      "title": "讨论栏：有一轮问答",
+      "planRefs": [
+        "5.4",
+        "L3",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "对话模型是本脚本的受控服务，固定返回一段回答；没有真实模型调用。会话需要团队连接与预算，所以顶栏是已连接状态。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/discussion-messages-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "conversation": {
+          "retries": 0,
+          "modelRequests": 1
+        }
+      },
+      "result": "prepared"
+    }
+  ]
+}

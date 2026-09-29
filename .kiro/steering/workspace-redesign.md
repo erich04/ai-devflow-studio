@@ -5,7 +5,7 @@ fileMatchPattern: ["apps/**/*", "packages/**/*", "scripts/**/*"]
 
 # 工作区改造：执行约束
 
-适用于按 `docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md`（已确认，当前为第 9 版）推进的各批次（S0–S6）。S0 在 `.kiro/specs/workspace-redesign-s0/` 下有 spec；从 S1 起不另建 spec，以方案第 7 节对应批次的改动清单作为任务清单，分成可评审的提交完成。动手前先读方案中与当前批次相关的章节；实施中发现的差异和范围外问题记回方案。与改造无关的改动不受本文件的批次边界限制。
+适用于按 `docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md`（已确认，当前为第 10 版）推进的各批次（S0–S6）。S0 在 `.kiro/specs/workspace-redesign-s0/` 下有 spec；从 S1 起不另建 spec，以方案第 7 节对应批次的改动清单作为任务清单，分成可评审的提交完成。动手前先读方案中与当前批次相关的章节；实施中发现的差异和范围外问题记回方案。与改造无关的改动不受本文件的批次边界限制。
 
 ## 不变的约束（方案第 3 节）
 

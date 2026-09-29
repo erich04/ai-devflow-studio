@@ -1,0 +1,576 @@
+{
+  "run": {
+    "generatedAt": "2026-09-29T14:53:47.907Z",
+    "commit": {
+      "head": "fb96660",
+      "productCodeDirty": true
+    },
+    "node": "v24.18.0",
+    "platform": "darwin-arm64",
+    "theme": "light",
+    "zoom": 2,
+    "sizes": [
+      "1440x742"
+    ],
+    "environment": {
+      "screen": {
+        "workArea": {
+          "x": 0,
+          "y": 30,
+          "width": 1920,
+          "height": 1050
+        },
+        "size": {
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 2
+      },
+      "versions": {
+        "electron": "42.11.6",
+        "chrome": "148.0.7778.280"
+      }
+    }
+  },
+  "records": [
+    {
+      "sample": "clarify-gate-warn",
+      "size": "1440x742",
+      "theme": "light",
+      "zoom": 2,
+      "valid": true,
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 742
+        },
+        "actual": {
+          "width": 720,
+          "height": 371
+        },
+        "valid": true,
+        "minimumSizeRelaxed": false,
+        "zoomFactor": 2
+      },
+      "screenshot": "shots/clarify-gate-warn-1440x742-zoom200.jpg",
+      "summary": {
+        "statusRowBottom": 280.8,
+        "firstBodyBlockTop": 326.8,
+        "topbarAndStripHeight": 56,
+        "topbarAndStripControls": 4,
+        "viewportControls": 23,
+        "locationPhrases": {
+          "需求确认 Gate": 1,
+          "当前步骤": 0,
+          "实际当前节点": 0,
+          "实际进度": 0
+        },
+        "fontSizes": {
+          "distinct": 3,
+          "min": 12,
+          "sizes": [
+            12,
+            14,
+            20
+          ]
+        },
+        "discussionWidth": 0,
+        "discussionShareOfMain": 0,
+        "truncatedStageLabels": [],
+        "toastVisible": false,
+        "pageOverflow": {
+          "horizontal": false,
+          "vertical": false,
+          "scrollHeight": 371
+        }
+      },
+      "measurement": {
+        "viewport": {
+          "width": 720,
+          "height": 371
+        },
+        "devicePixelRatio": 4,
+        "renderedTheme": "light",
+        "page": {
+          "scrollWidth": 720,
+          "scrollHeight": 371,
+          "horizontalOverflow": false,
+          "verticalOverflow": false,
+          "bodyOverflow": "auto/auto"
+        },
+        "controls": {
+          "count": 23,
+          "byScope": {
+            "topbar": 4,
+            "statusStrip": 0
+          },
+          "items": [
+            {
+              "tag": "summary",
+              "name": "项目：health-api",
+              "disabled": false,
+              "box": {
+                "top": 9.5,
+                "bottom": 45.5,
+                "left": 16,
+                "right": 127.14,
+                "width": 111.14,
+                "height": 36
+              }
+            },
+            {
+              "tag": "input",
+              "name": "搜索当前项目",
+              "disabled": false,
+              "box": {
+                "top": 19.5,
+                "bottom": 35.5,
+                "left": 178.79,
+                "right": 451,
+                "width": 272.21,
+                "height": 16
+              }
+            },
+            {
+              "tag": "button",
+              "name": "团队连接：本地项目",
+              "disabled": false,
+              "box": {
+                "top": 9.5,
+                "bottom": 45.5,
+                "left": 478,
+                "right": 590,
+                "width": 112,
+                "height": 36
+              }
+            },
+            {
+              "tag": "button",
+              "name": "新建任务",
+              "disabled": false,
+              "box": {
+                "top": 9.5,
+                "bottom": 45.5,
+                "left": 598,
+                "right": 704,
+                "width": 106,
+                "height": 36
+              }
+            },
+            {
+              "tag": "button",
+              "name": "任务",
+              "disabled": false,
+              "box": {
+                "top": 70,
+                "bottom": 138,
+                "left": 5.5,
+                "right": 77.5,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "知识",
+              "disabled": false,
+              "box": {
+                "top": 146,
+                "bottom": 214,
+                "left": 5.5,
+                "right": 77.5,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "团队",
+              "disabled": false,
+              "box": {
+                "top": 222,
+                "bottom": 290,
+                "left": 5.5,
+                "right": 77.5,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "设置",
+              "disabled": false,
+              "box": {
+                "top": 298,
+                "bottom": 366,
+                "left": 5.5,
+                "right": 77.5,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "summary",
+              "name": "Health API 增加依赖探测",
+              "disabled": false,
+              "box": {
+                "top": 64,
+                "bottom": 100,
+                "left": 102,
+                "right": 343.07,
+                "width": 241.07,
+                "height": 36
+              }
+            },
+            {
+              "tag": "button",
+              "name": "讨论",
+              "disabled": false,
+              "box": {
+                "top": 66,
+                "bottom": 98,
+                "left": 634,
+                "right": 704,
+                "width": 70,
+                "height": 32
+              }
+            },
+            {
+              "tag": "button",
+              "name": "01 需求澄清 1/2",
+              "disabled": false,
+              "box": {
+                "top": 111.38,
+                "bottom": 152.13,
+                "left": 102,
+                "right": 192,
+                "width": 90,
+                "height": 40.75
+              }
+            },
+            {
+              "tag": "button",
+              "name": "02 方案设计 等待",
+              "disabled": false,
+              "box": {
+                "top": 110,
+                "bottom": 153.5,
+                "left": 204.79,
+                "right": 294.79,
+                "width": 90,
+                "height": 43.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "03 开发实现 等待",
+              "disabled": false,
+              "box": {
+                "top": 110,
+                "bottom": 153.5,
+                "left": 307.57,
+                "right": 397.57,
+                "width": 90,
+                "height": 43.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "04 测试证据 等待",
+              "disabled": false,
+              "box": {
+                "top": 110,
+                "bottom": 153.5,
+                "left": 410.36,
+                "right": 500.36,
+                "width": 90,
+                "height": 43.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "05 PR 交付 等待",
+              "disabled": false,
+              "box": {
+                "top": 110,
+                "bottom": 153.5,
+                "left": 513.14,
+                "right": 598.43,
+                "width": 85.29,
+                "height": 43.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "06 业务验收 等待",
+              "disabled": false,
+              "box": {
+                "top": 110,
+                "bottom": 153.5,
+                "left": 611.21,
+                "right": 701.21,
+                "width": 90,
+                "height": 43.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "运行门禁审查",
+              "disabled": false,
+              "box": {
+                "top": 241.8,
+                "bottom": 273.8,
+                "left": 130,
+                "right": 248,
+                "width": 118,
+                "height": 32
+              }
+            },
+            {
+              "tag": "button",
+              "name": "确认需求 v1",
+              "disabled": false,
+              "box": {
+                "top": 241.8,
+                "bottom": 273.8,
+                "left": 254,
+                "right": 364.23,
+                "width": 110.23,
+                "height": 32
+              }
+            },
+            {
+              "tag": "button",
+              "name": "请求修订当前版本",
+              "disabled": false,
+              "box": {
+                "top": 241.8,
+                "bottom": 273.8,
+                "left": 370.23,
+                "right": 488.23,
+                "width": 118,
+                "height": 32
+              }
+            },
+            {
+              "tag": "summary",
+              "name": "更多操作与详情",
+              "disabled": false,
+              "box": {
+                "top": 241.8,
+                "bottom": 273.8,
+                "left": 494.23,
+                "right": 526.23,
+                "width": 32,
+                "height": 32
+              }
+            },
+            {
+              "tag": "button",
+              "role": "tab",
+              "name": "当前工作",
+              "disabled": false,
+              "box": {
+                "top": 286.8,
+                "bottom": 316.8,
+                "left": 117,
+                "right": 187,
+                "width": 70,
+                "height": 30
+              }
+            },
+            {
+              "tag": "button",
+              "role": "tab",
+              "name": "材料与版本",
+              "disabled": false,
+              "box": {
+                "top": 286.8,
+                "bottom": 316.8,
+                "left": 191,
+                "right": 273,
+                "width": 82,
+                "height": 30
+              }
+            },
+            {
+              "tag": "button",
+              "role": "tab",
+              "name": "执行记录",
+              "disabled": false,
+              "box": {
+                "top": 286.8,
+                "bottom": 316.8,
+                "left": 277,
+                "right": 347,
+                "width": 70,
+                "height": 30
+              }
+            }
+          ]
+        },
+        "fonts": {
+          "root": "main",
+          "distinct": 3,
+          "min": 12,
+          "sizes": [
+            12,
+            14,
+            20
+          ],
+          "textNodesBySize": {
+            "12": 32,
+            "14": 3,
+            "20": 1
+          }
+        },
+        "regions": {
+          "topbar": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 0,
+              "bottom": 56,
+              "left": 0,
+              "right": 720,
+              "width": 720,
+              "height": 56
+            }
+          },
+          "statusStrip": {
+            "found": false,
+            "matches": 0
+          },
+          "statusRow": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 174.5,
+              "bottom": 280.8,
+              "left": 117,
+              "right": 681.5,
+              "width": 564.5,
+              "height": 106.3
+            }
+          },
+          "nodeHeader": {
+            "found": false,
+            "matches": 0
+          },
+          "firstBodyBlock": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 326.8,
+              "bottom": 1062.53,
+              "left": 121,
+              "right": 670,
+              "width": 549,
+              "height": 735.73
+            }
+          },
+          "tabpanel": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 322.8,
+              "bottom": 352,
+              "left": 117,
+              "right": 681.5,
+              "width": 564.5,
+              "height": 29.2
+            }
+          },
+          "tabs": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 286.8,
+              "bottom": 316.8,
+              "left": 117,
+              "right": 681.5,
+              "width": 564.5,
+              "height": 30
+            }
+          },
+          "discussion": {
+            "found": false,
+            "matches": 0
+          },
+          "stageNavigation": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 106,
+              "bottom": 157.5,
+              "left": 102,
+              "right": 704,
+              "width": 602,
+              "height": 51.5
+            }
+          },
+          "toast": {
+            "found": false,
+            "matches": 0
+          },
+          "main": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 56,
+              "bottom": 371,
+              "left": 86,
+              "right": 720,
+              "width": 634,
+              "height": 315
+            }
+          }
+        },
+        "phrases": {
+          "需求确认 Gate": 1,
+          "当前步骤": 0,
+          "实际当前节点": 0,
+          "实际进度": 0
+        },
+        "truncation": [
+          {
+            "text": "01 需求澄清 1/2",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "02 方案设计 等待",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "03 开发实现 等待",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "04 测试证据 等待",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "05 PR 交付 等待",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "06 业务验收 等待",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          }
+        ]
+      }
+    }
+  ]
+}
