@@ -1,6 +1,6 @@
 # 以开发任务为中心的工作区改造方案
 
-日期：2026-09-28。状态：**设计方案（第 13 版），已确认；S0–S4 已完成，S5 待实施**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S4 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)、[S4 实施报告](../validation/workspace-redesign-s4-20260928.md)。
+日期：2026-09-28。状态：**设计方案（第 14 版），已确认；S0–S4 已完成，S5 实施中**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S4 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)、[S4 实施报告](../validation/workspace-redesign-s4-20260928.md)。
 
 代码基线：`main` / `bf18e4a`。之后到 `0518870` 的提交只改文档与截图，`apps/`、`packages/` 没有变化。本文中的新页面、模块名称、交互和目标数值都是计划，不代表产品已提供。
 
@@ -622,7 +622,55 @@ S4 发现、留给后续批次的事项：
 - 「材料与版本」的知识引用区仍有 Review Criteria、Knowledge / Policy 等英文（S6 前收尾）。
 - `desktop-pilot-smoke` 与 `v15-github-delivery-packaged-smoke` 需要打包，S4 只改了传参，没有运行。
 
-### 7.5 回退
+### 7.5 S5 改动清单与契约变更
+
+**状态：已确认**（2026-09-28，erich04 委托 S4–S6 连续实施，契约变更由实施者评审后执行）。实施中发现的差异记回本节末尾。
+
+S5 把 Web 首屏从管理表单改为“我要处理什么”，并让 Web 发起的审批与桌面端审批遵守同一条版本规则。起草时确定了五条前提：
+
+- **状态规则不下沉**（1.1 节的决定）：桌面端的状态投影依赖本机才有的事实（澄清修订、本地证据、开发执行），Web 拿不到。Web 端在 `apps/web/app` 另写纯函数的适配层，只复用 `packages/shared` 已有的领域规则（`canApproveGate`、审查对象快照）。两端文案各自维护。
+- 待办只覆盖当前选中且已授权的项目（4.2 节），不做全组织聚合。
+- Web 不新增写入接口。交付的“请求修订”仍在桌面端，Web 只说明去哪里做。
+- 桌面端没有 Web 地址配置，也不能打开指定任务，所以跨端只给位置说明，不放打不开的按钮（9.2 节）。
+- 不改数据库结构、同步队列和 Gate Command 的结果码。审批记录写入事件已有的 JSON 字段，拒绝沿用现有的 `preflight_blocked`、`evidence_blocked`。
+
+**契约变更**（Web 发起的 Gate 审批，即 Gate Command）：
+
+| 项 | 现状 | S5 |
+| --- | --- | --- |
+| API 预检，需求确认／方案评审 Gate 的批准 | 任务投影有审查对象快照时才附在命令上，没有也放行 | 必须有与当前步骤、当前版本一致的快照，否则 `preflight_blocked`；驳回不受影响 |
+| 桌面端执行，同上 | 命令不带快照时跳过核对 | 缺少快照即 `evidence_blocked`。快照与本机重新计算的一致后，再核对本机的审批对象：需求取待确认的澄清版本，方案取 Gate 关联的唯一方案（S4 的规则），两者的标识与记录时间都须与快照一致 |
+| 审批记录 | 通用事件：`Remote Gate Command approved…`，没有审计字段 | 需求审批带 `clarificationAudit`，同时把该版本标为已确认，与桌面端本地审批相同；方案审批带 `designAudit`。决定人是 Web 上的请求人 |
+| 本地写入 `commitGateCommandExecution` | 只写 Run 与一条字段固定的事件 | 写入层自己按评估时的材料推导审计记录和已确认的澄清版本，一并写入；调用方带来的审计必须与推导结果一致。已有的事务内材料核对保证材料未变 |
+| 其他 Gate、业务验收 | — | 不变 |
+
+| 编号 | 改动 | 主要代码位置 |
+| --- | --- | --- |
+| Q1 | **Web 导航与旧链接**。<br>- 一级导航改为：我的待办、项目任务、团队、设置。去掉页内锚点链接和“新建工作请求”主按钮，新建请求放在项目任务中。<br>- 只选了项目时打开我的待办；带 `projectId + runId` 时直接打开任务详情；`view=team`、`view=settings` 照旧解析，旧的 `view=workbench` 按项目任务处理。<br>- 任务详情保留 `human-gate`、`evidence-chain`、`agents`、`tests`、`runtime`、`policy`、`github-delivery` 这些锚点。<br>- 在项目页打开旧锚点时跳转：`#runtime` 到设置／预算，`#policy` 到设置／策略，`#work-request` 到项目任务 | [`studio-navigation.ts`](../../apps/web/app/studio-navigation.ts)、[`page.tsx`](../../apps/web/app/page.tsx)；新增旧锚点跳转组件 |
+| Q2 | **我的待办**：由纯函数适配层生成。<br>- 包含三类事项：待审 Gate（需求确认、方案评审、其他 Gate 按名称、业务验收）、待审交付、异常（任务失败，交付失败或需要恢复）。<br>- 每行写明任务、事项、请求方、材料版本、更新时间、是否需要我处理（“需要你审批”“等待负责人审批”，未登录浏览器身份时写“权限待核实”），并有一个「查看」。<br>- 顶部写明团队数据的读取时间。<br>- 交付或审批状态未读取、读取失败时，写明列表不完整，不显示“没有待办” | 新增 `apps/web/app/web-todo-view-model.ts` 与待办视图 |
+| Q3 | **项目任务与任务详情**。<br>- 项目任务：团队请求（含新建）和任务列表（状态、当前步骤、更新时间）。<br>- 任务详情首屏依次为：标题行（状态、当前步骤、进度），审批，本任务的交付审批，进度与材料，执行摘要，预算与策略摘要（链到设置）。<br>- 配对、仓库绑定、指标卡不再出现在任务首屏；分区标题和步骤状态改为中文 | `page.tsx` 拆出任务列表与任务详情组件 |
+| Q4 | **Web 的 Gate 审批区**。<br>- 显示事项类型、所审材料（类型、记录时间、摘要短码，完整值在技术详情中）和中文的审批角色。<br>- 按项目角色判断：无权批准的成员看到“等待负责人审批”，不显示按钮；审批前检查读取失败时说明原因，不留无说明的禁用按钮。<br>- 需求确认、方案评审缺少材料快照时，批准不可用并说明需要桌面端同步；驳回仍可用。<br>- 创建失败、执行结果（含上面的材料核对）用中文说明 | [`GateCommandPanel.tsx`](../../apps/web/app/GateCommandPanel.tsx)；`page.tsx` |
+| Q5 | **交付审批首屏**：`GitHubDeliveryPanel` 拆成交付审批与仓库绑定两部分。<br>- 审批卡首屏：目标仓库、分支（基准 ← 发布）、预期提交（短码，可复制）、改动文件、验证范围、请求修订号与请求版本、审批截止时间。所有标识与摘要的完整值放在「技术详情」，可复制。<br>- 只有 Lead 与 Owner 看到批准、驳回，其他人看到“等待负责人审批”。<br>- 请求已变化、已过期、不存在时分别说明，不笼统写服务不可用。<br>- 全部改为中文 | [`GitHubDeliveryPanel.tsx`](../../apps/web/app/GitHubDeliveryPanel.tsx) |
+| Q6 | **Web 设置**：分区为预算、策略、桌面连接（配对码）、GitHub 仓库（绑定与撤销，非 Owner 只读） | [`StudioManagement.tsx`](../../apps/web/app/StudioManagement.tsx) |
+| Q7 | **桌面端团队预算改到 Web 编辑**（4.3 节）。<br>- 设置／模型与执行方式只显示当前预算、更新时间，以及“在 Web 控制端「设置 › 预算」中修改”的说明；去掉月上限、预警阈值的输入框和保存按钮。<br>- 同步、一次性预算批准和批准编号保留；IPC 不变 | [`ModelSettings.tsx`](../../apps/desktop/src/views/ModelSettings.tsx) |
+| Q8 | **远程审批的版本核对**：按上表修改 API 预检、桌面端处理器与本地写入；补回归测试，覆盖缺少快照、快照与本机不一致、本机审批对象已变化、多份方案、审计与版本状态写入、事务内材料变化 | [`gate-command-preflight.ts`](../../apps/api/src/repositories/gate-command-preflight.ts)、[`gate-command-processor.ts`](../../apps/desktop/electron/gate-command-processor.ts)、[`local-store.ts`](../../apps/desktop/electron/local-store.ts) 的 `commitGateCommandExecution` |
+
+**S5 不包括**：
+- 全组织待办；
+- 从 Web 打开桌面上的指定任务；
+- Web 上的交付修订与原始差异；
+- 新的结果码；
+- 工作请求表单、配对码面板和预算表单内部的英文字段名（S6 前收尾）；
+- 数据库结构与同步队列。
+
+**验证**：
+- 单元测试：待办适配层（角色、数据缺失、失败与异常）、导航解析与旧锚点映射、API 预检、处理器（改用带快照的默认样例，另加需求与方案两类的专门用例）、本地写入。
+- 组件测试：Web 页面、Gate 审批区（角色、快照缺失、检查失败）、交付审批与仓库绑定；桌面端设置的预算区。
+- `corepack pnpm verify`、`corepack pnpm test:e2e`（更新 Web 用例的首屏与文案断言）、`test:electron-smoke`、`test:workbench-conversation-electron-smoke`。
+- 桌面端主基线复测（S5 不应改变任务页指标）。
+- 按 8.2 节的 S5 场景逐项验收。
+
+### 7.6 回退
 
 每个批次都是独立、可评审的变更，不要求一次性重写 `App.tsx` 或更换框架。可以用临时开发开关分批验证布局，但开关只影响界面，不切换写入路径；新旧界面不能同时发起同一动作。回退时保留既有记录与身份，恢复旧导航映射，不删除任务、不重建用户数据库。兼容入口在验证完成后，按明确的批次移除。
 
@@ -732,5 +780,14 @@ S4、S5 与技术落地的细节在对应批次开始前单独评审，这里只
 - **第 12 版**（2026-09-28）：新增 7.4 节 S4 改动清单与契约变更（Z1–Z7），原 7.4 节“回退”改为 7.5 节。erich04 委托 S4–S6 连续实施，契约变更由实施者评审后执行。起草时确定四条前提：方案不补修订号，版本标识为材料标识、记录时间与内容摘要；契约只改桌面端 `approveGate`，不改数据库结构；讨论提案仍不作为正文候选；Web 审批的版本核对与远程需求审批的状态同步归 S5。
 
 - **第 13 版**（2026-09-28）：回写 S4 结果。状态改为 S0–S4 已完成；7.4 节末尾加入实施结果、与原文的差异（版本选择器的出现条件、通用阅读器的标题行、`upload-*` 样例多 1 个控件）和留给后续批次的事项。
+
+- **第 14 版**（2026-09-28）：新增 7.5 节 S5 改动清单与契约变更（Q1–Q8），原 7.5 节“回退”改为 7.6 节。起草时确定五条前提：
+  - 状态规则不下沉到 `packages/shared`，Web 另写适配层（1.1 节的决定到此定下）；
+  - 待办只覆盖当前项目；
+  - Web 不新增写入接口；
+  - 跨端只给位置说明；
+  - 不改数据库结构与结果码。
+
+  契约变更限于 Web 发起的需求确认与方案评审审批：缺少材料快照即拒绝；桌面端执行时核对本机审批对象，并写入与本地审批相同的审计记录。
 
 第 6 版随 S1 的产品改动一起提交，验证结果见 S1 实施报告；没有调用真实模型或提交远端变更。全部批次实施并验证后，再同步更新[界面设计理由](../product/details/ui-design-rationale.md)、[会话行为说明](../engineering/workbench-conversations.md)、用户指南、README 与截图。
