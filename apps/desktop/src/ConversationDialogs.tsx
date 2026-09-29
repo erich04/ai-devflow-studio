@@ -51,7 +51,7 @@ export function NewConversationDialog({ prompt, providerName, creating, error, o
         <option value="direct-provider">Direct Provider</option><option value="opencode">OpenCode</option>
       </select></label>
       <p>{executor === 'opencode' ? '通过本机 OpenCode 查询资料和分析问题；需要已安装 OpenCode。' : '由 DevFlow 直接调用模型，查询资料和分析问题。'}</p>
-      <p>模型：{providerName || '尚未选择，请在 Agents 中配置'}。创建后，这段聊天将保持所选执行方式；需要更换时可另建对话。</p>
+      <p>模型：{providerName || '尚未选择，请在设置／模型与执行方式中配置'}。创建后，这段聊天将保持所选执行方式；需要更换时可另建对话。</p>
       {prompt && <div className="conversation-prefill"><strong>预填问题</strong><p>{prompt}</p></div>}
       <p className="meta">创建只会准备好对话和输入草稿，由你点击发送后才调用模型。已有聊天保持不变。</p>
       {error && <p className="conversation-error" role="alert">{error}</p>}

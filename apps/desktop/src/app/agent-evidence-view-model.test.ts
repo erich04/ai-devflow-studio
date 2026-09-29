@@ -12,7 +12,7 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import { runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
-import { buildAgentConsoleViewModel, type BuildAgentConsoleViewModelInput } from './agent-console-view-model'
+import { buildAgentEvidenceGroups, buildProviderSettingsView, type AgentEvidenceInput } from './agent-evidence-view-model'
 
 const provider: AgentProviderConfig = {
   id: 'doubao-review',
@@ -30,33 +30,17 @@ function runWithCurrentNode(nodeId: string): WorkflowRun {
   return { ...run, currentNodeId: nodeId }
 }
 
-function nodeFrom(run: WorkflowRun, nodeId: string) {
-  return run.nodes.find((node) => node.id === nodeId)!
-}
-
-function baseInput(overrides: Partial<BuildAgentConsoleViewModelInput> = {}): BuildAgentConsoleViewModelInput {
-  const run = runWithCurrentNode('n-design-gate')
+function baseInput(overrides: Partial<AgentEvidenceInput> = {}): AgentEvidenceInput {
   return {
     providers: [provider],
-    selectedProviderId: provider.id,
-    selectedRun: run,
-    selectedNode: nodeFrom(run, 'n-design-gate'),
-    reviews: [],
     selectedReviews: [],
-    latestReview: undefined,
     latestTrace: undefined,
     latestUsage: undefined,
-    isRunningReview: false,
-    isStartingCodingAgent: false,
-    isRunningTests: false,
-    pendingInspectorAction: null,
-    codingRuns: [],
     retryAttempts: [],
     latestCodingRun: undefined,
     codingEvents: [],
     pendingCodingPermission: undefined,
     permissionRequests: [],
-    workspace: undefined,
     diff: undefined,
     bootstrapEvidence: undefined,
     testEvidence: undefined,
@@ -65,9 +49,9 @@ function baseInput(overrides: Partial<BuildAgentConsoleViewModelInput> = {}): Bu
 }
 
 it('keeps an explicitly empty Provider selection even when other saved providers remain', () => {
-  const view = buildAgentConsoleViewModel(baseInput({ selectedProviderId: '' }))
-  expect(view.runtimeSettings.selectedProvider).toBeUndefined()
-  expect(view.runtimeSettings.summary).toBe('尚未选择 Agent Provider')
+  const view = buildProviderSettingsView({ providers: [provider], selectedProviderId: '' })
+  expect(view.selectedProvider).toBeUndefined()
+  expect(view.summary).toBe('尚未选择 Agent Provider')
 })
 
 function review(run: WorkflowRun): AgentReviewResult {
@@ -123,218 +107,8 @@ function trace(run: WorkflowRun): AgentTrace {
   }
 }
 
-describe('agent console view model', () => {
-  it('uses the knowledge-grounded Gate Review as the primary action for Gate and Review-like nodes', () => {
-    const viewModel = buildAgentConsoleViewModel(baseInput())
 
-    expect(viewModel.title).toBe('Agent 执行台')
-    expect(viewModel.primaryAction.id).toBe('run-review')
-    expect(viewModel.primaryAction.label).toBe('运行门禁审查')
-    expect(viewModel.pathStatuses.find((section) => section.id === 'review')?.emphasis).toBe('secondary')
-    expect(viewModel.primaryActionImpact).toEqual({
-      object: `${viewModel.currentTarget.runTitle} · ${viewModel.currentTarget.nodeTitle}`,
-      result: '生成基于知识的门禁审查结论、引用和 Trace（执行轨迹）。',
-      providerAndCost: '调用 doubao-review / ark-code-latest；会记录 token，并可能产生 Provider 费用。',
-      repository: '只读使用已索引 Knowledge（知识）与阶段证据，不修改仓库文件。',
-      workflow: '只提供 Gate 建议，不会批准 Gate，也不会推进 Workflow（工作流）。',
-    })
-  })
-
-  it('uses the workflow stage agent as the primary action for clarify nodes', () => {
-    const run = runWithCurrentNode('n-clarify')
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-clarify'),
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
-    expect(viewModel.primaryAction.label).toBe('生成需求澄清')
-    expect(viewModel.primaryAction.summary).toContain('运行当前澄清 Agent')
-    expect(viewModel.pathStatuses.find((section) => section.id === 'review')).toBeUndefined()
-  })
-
-  it('shows generating only when the pending workflow agent action matches the selected node', () => {
-    const run = runWithCurrentNode('n-clarify')
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-clarify'),
-      pendingInspectorAction: {
-        actionId: 'completeAgent',
-        runId: run.id,
-        nodeId: 'n-clarify',
-      },
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
-    expect(viewModel.primaryAction.label).toBe('生成中')
-    expect(viewModel.primaryAction.disabled).toBe(true)
-    expect(viewModel.primaryAction.disabledReason).toBe('阶段产物正在生成。')
-  })
-
-  it('does not inherit a loading label from another pending node but still locks writes', () => {
-    const run = runWithCurrentNode('n-clarify')
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-clarify'),
-      pendingInspectorAction: {
-        actionId: 'completeAgent',
-        runId: run.id,
-        nodeId: 'n-design',
-      },
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
-    expect(viewModel.primaryAction.label).toBe('生成需求澄清')
-    expect(viewModel.primaryAction.disabled).toBe(true)
-    expect(viewModel.primaryAction.disabledReason).toBe('其他 Inspector 操作正在进行中。')
-  })
-
-  it('uses the workflow stage agent as the primary action for design nodes', () => {
-    const run = runWithCurrentNode('n-design')
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-design'),
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
-    expect(viewModel.primaryAction.label).toBe('生成设计方案')
-    expect(viewModel.primaryAction.summary).toContain('运行当前设计 Agent')
-    expect(viewModel.currentTarget.nodeKind).toBe('Task（任务）')
-    expect(viewModel.currentTarget.nodeStatus).toBe('已完成')
-    expect(viewModel.pathStatuses.map((section) => section.id)).not.toContain('review')
-    expect(viewModel.pathStatuses.map((section) => section.id)).not.toContain('coding')
-    expect(viewModel.primaryActionImpact).toEqual({
-      object: `${run.title} · 方案设计`,
-      result: '生成设计方案 Artifact（阶段产物）和测试策略。',
-      providerAndCost: '调用 doubao-review / ark-code-latest；会记录 token，并可能产生 Provider 费用。',
-      repository: '只读检查仓库上下文，不修改仓库文件。',
-      workflow: '成功后完成当前设计节点，并推进到方案评审 Gate；不会自动批准 Gate。',
-    })
-  })
-
-  it('uses Coding Agent as the primary action for build task nodes', () => {
-    const run = runWithCurrentNode('n-build')
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-build'),
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('run-coding')
-    expect(viewModel.primaryAction.label).toBe('启动 Coding Agent')
-    expect(viewModel.pathStatuses.find((section) => section.id === 'coding')?.emphasis).toBe('secondary')
-    expect(viewModel.primaryActionImpact).toMatchObject({
-      providerAndCost: expect.stringContaining('项目执行工具 / Provider'),
-      repository: expect.stringContaining('受管 worktree（工作树）'),
-      workflow: expect.stringContaining('不会自动批准后续 Gate'),
-    })
-  })
-
-  it('keeps Tests as the primary action for test nodes', () => {
-    const run = runWithCurrentNode('n-test')
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-test'),
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('go-tests')
-    expect(viewModel.primaryAction.label).toBe('前往测试')
-    expect(viewModel.primaryActionImpact.providerAndCost).toBe('不调用模型 Provider，不产生模型 token 费用。')
-  })
-
-  it('promotes pending permission to the current task', () => {
-    const run = runWithCurrentNode('n-build')
-    const permission: CodingPermissionRequest = {
-      id: 'permission-1',
-      codingRunId: 'coding-run-1',
-      runId: run.id,
-      nodeId: 'n-build',
-      permission: 'edit',
-      title: 'Apply managed diff',
-      filePath: 'src/change.ts',
-      risk: 'warn',
-      reasons: ['Permission required before writing the diff.'],
-      status: 'pending',
-      requestedAt: '2026-06-17T00:00:00.000Z',
-      expiresAt: '2026-06-17T00:01:00.000Z',
-    }
-
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-build'),
-      pendingCodingPermission: permission,
-      permissionRequests: [permission],
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('resolve-permission')
-    expect(viewModel.advisory.label).toBe('需要权限')
-    expect(viewModel.primaryActionImpact.repository).toContain('批准只允许请求中列明的受管工作区副作用')
-    expect(viewModel.evidenceGroups.find((group) => group.id === 'permission')?.items[0]?.title).toBe('Apply managed diff')
-  })
-
-  it('explains the empty state when there is no current Run or Node', () => {
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: undefined,
-      selectedNode: undefined,
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('return-workbench')
-    expect(viewModel.primaryAction.summary).toContain('先从 Workbench 选择')
-    expect(viewModel.currentTarget.nodeTitle).toBe('尚未选择节点')
-  })
-
-  it('keeps Review action visible but disabled when provider is missing', () => {
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      providers: [],
-      selectedProviderId: '',
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('run-review')
-    expect(viewModel.primaryAction.disabled).toBe(true)
-    expect(viewModel.primaryAction.tone).toBe('soft')
-    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。')
-    expect(viewModel.advisory.tone).toBe('soft')
-    expect(viewModel.pathStatuses.find((section) => section.id === 'review')).toMatchObject({
-      title: '基于知识的门禁审查',
-      tone: 'soft',
-      emphasis: 'secondary',
-    })
-  })
-
-  it('keeps workflow agent actions disabled with Agent Provider copy when provider is missing', () => {
-    const run = runWithCurrentNode('n-clarify')
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      providers: [],
-      selectedProviderId: '',
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-clarify'),
-    }))
-
-    expect(viewModel.primaryAction.id).toBe('complete-agent-node')
-    expect(viewModel.primaryAction.label).toBe('生成需求澄清')
-    expect(viewModel.primaryAction.disabled).toBe(true)
-    expect(viewModel.primaryAction.disabledReason).toBe('请先配置真实 Agent Provider：Provider Name、Base URL、Model 和 API Key。')
-  })
-
-  it('keeps PR delivery in Workbench and offers Gate Review for acceptance', () => {
-    const prRun = runWithCurrentNode('n-pr')
-    const prViewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: prRun,
-      selectedNode: nodeFrom(prRun, 'n-pr'),
-    }))
-    const acceptanceRun = runWithCurrentNode('n-accept')
-    const acceptanceViewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: acceptanceRun,
-      selectedNode: nodeFrom(acceptanceRun, 'n-accept'),
-    }))
-
-    expect(prViewModel.primaryAction.id).toBe('return-workbench')
-    expect(acceptanceViewModel.primaryAction).toMatchObject({
-      id: 'run-review',
-      label: '运行门禁审查',
-      disabled: false,
-    })
-  })
-
+describe('agent evidence groups', () => {
   it('groups review, coding, permission, diff, test evidence, and cost outputs', () => {
     const run = runWithCurrentNode('n-build')
     const latestReview = review(run)
@@ -576,15 +350,10 @@ describe('agent console view model', () => {
       createdAt: '2026-06-17T00:03:00.000Z',
     }
 
-    const viewModel = buildAgentConsoleViewModel(baseInput({
-      selectedRun: run,
-      selectedNode: nodeFrom(run, 'n-build'),
-      reviews: [latestReview],
+    const evidenceGroups = buildAgentEvidenceGroups(baseInput({
       selectedReviews: [latestReview],
-      latestReview,
       latestTrace,
       latestUsage,
-      codingRuns: [codingRun],
       latestCodingRun: codingRun,
       codingEvents,
       permissionRequests: [permission],
@@ -592,7 +361,7 @@ describe('agent console view model', () => {
       testEvidence,
     }))
 
-    expect(viewModel.evidenceGroups.map((group) => group.id)).toEqual([
+    expect(evidenceGroups.map((group) => group.id)).toEqual([
       'review-trace',
       'review-history',
       'permission',
@@ -603,24 +372,24 @@ describe('agent console view model', () => {
       'test-evidence',
       'cost',
     ])
-    expect(viewModel.evidenceGroups.find((group) => group.id === 'diff')?.items[0]?.eyebrow).toBe(
+    expect(evidenceGroups.find((group) => group.id === 'diff')?.items[0]?.eyebrow).toBe(
       '2 secret replacements',
     )
-    const costGroup = viewModel.evidenceGroups.find((group) => group.id === 'cost')!
+    const costGroup = evidenceGroups.find((group) => group.id === 'cost')!
     expect(costGroup.summary).toContain('Actual provider settlement')
     expect(costGroup.items[0]?.body).toContain('40 cache hit · 60 cache miss · 20 output')
     expect(costGroup.items[0]?.meta).toEqual(expect.arrayContaining([
       'hit $0.007 / 1M · miss $0.22 / 1M · output $0.66 / 1M',
       'hit $0.00000028 · miss $0.0000132 · output $0.0000132 · total $0.00002668',
     ]))
-    const costTrace = viewModel.evidenceGroups.find((group) => group.id === 'coding-trace')
+    const costTrace = evidenceGroups.find((group) => group.id === 'coding-trace')
       ?.items.find((item) => item.id === 'coding-event-cost')
     expect(costTrace?.body).toContain('40 hit · 60 miss · 20 output')
     expect(costTrace?.meta).toContain('total $0.00002668')
     expect(costTrace?.meta).toContain('analysis · 40 input · 10 hit · 30 miss · 5 output · 45 total · hit rate 25.0%')
     expect(costTrace?.meta).toContain('analysis rates · hit $0.007 / 1M · miss $0.22 / 1M · output $0.66 / 1M')
     expect(costTrace?.meta).toContain('analysis cost · hit $0.00000007 · miss $0.0000066 · output $0.0000033 · total $0.00000997')
-    const providerCall = viewModel.evidenceGroups.find((group) => group.id === 'provider-call')
+    const providerCall = evidenceGroups.find((group) => group.id === 'provider-call')
       ?.items[0]
     expect(providerCall).toMatchObject({
       eyebrow: 'initial · failed',

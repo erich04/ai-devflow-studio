@@ -1194,22 +1194,110 @@ async function installDesktopApi(
   }, scenario)
 }
 
-async function showProjectRuns(page: import('@playwright/test').Page) {
-  const menu = page.locator('.workbench-project-menu')
+type Page = import('@playwright/test').Page
+type Locator = import('@playwright/test').Locator
+
+/** The task menu is the task title's disclosure (plan Y6): runs, usage, policy, budget, board view. */
+async function showProjectRuns(page: Page) {
+  const menu = page.locator('details.workbench-project-menu')
   await expect(menu).toBeVisible()
   if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
+  await expect(menu).toHaveAttribute('open', '')
+  return menu
 }
 
-async function openTopbarProjectMenu(page: import('@playwright/test').Page) {
+async function closeTaskMenu(page: Page) {
+  const menu = page.locator('details.workbench-project-menu')
+  if (await menu.getAttribute('open') !== null) await menu.locator(':scope > summary').click()
+  await expect(menu).not.toHaveAttribute('open', '')
+}
+
+/** Current task usage, policy and budget details are in the task menu (plan Y6). */
+async function openTaskUsage(page: Page) {
+  await showProjectRuns(page)
+  const usage = page.getByTestId('task-menu-usage')
+  await expect(usage).toBeVisible()
+  return usage
+}
+
+/** 精简导航／流程视图／列表视图 moved from the stage row into the task menu (plan Y6). */
+async function chooseBoardView(page: Page, name: '精简导航' | '流程视图' | '列表视图') {
+  const usage = await openTaskUsage(page)
+  const option = usage.getByRole('group', { name: '看板展示方式' }).getByRole('button', { name, exact: true })
+  await option.click()
+  await expect(option).toHaveAttribute('aria-pressed', 'true')
+  // The menu is a dropdown over the board; close it before interacting with the board.
+  await closeTaskMenu(page)
+}
+
+async function openTopbarProjectMenu(page: Page) {
   const menu = page.locator('.topbar-project-menu')
   await expect(menu).toBeVisible()
   if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
 }
 
-/** Sub-steps are folded into the stage item (plan L2); open them before clicking a node button. */
-async function clickSubStep(page: import('@playwright/test').Page, testId: string) {
-  const toggle = page.locator('.stage-substeps-toggle')
-  if (await toggle.count() && await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+/** Four primary entries (plan §4.1, Y1): 任务, 知识, 团队, 设置. */
+const PRIMARY_NAV = ['任务', '知识', '团队', '设置'] as const
+
+function primaryNavigation(page: Page) {
+  return page.locator('aside[aria-label="Primary navigation"]')
+}
+
+async function clickPrimaryNav(page: Page, name: typeof PRIMARY_NAV[number]) {
+  await primaryNavigation(page).getByRole('button', { name, exact: true }).click()
+}
+
+const SETTINGS_SECTION_IDS = {
+  本地项目: 'project',
+  模型与执行方式: 'models',
+  扩展能力: 'extensions',
+  团队连接: 'team',
+  外观: 'appearance',
+  高级: 'advanced',
+} as const
+
+/** Opens 设置 and one of its sections (plan Y2); returns the section content container. */
+async function openSettingsSection(page: Page, name: keyof typeof SETTINGS_SECTION_IDS) {
+  if (await page.getByTestId('settings-view').count() === 0) await clickPrimaryNav(page, '设置')
+  // The section list must stay reachable at every window size (plan Y2).
+  const sections = page.getByRole('navigation', { name: '设置分区' })
+  await expect(sections).toBeVisible()
+  await sections.getByRole('button', { name, exact: true }).click()
+  const section = page.getByTestId(`settings-section-${SETTINGS_SECTION_IDS[name]}`)
+  await expect(section).toBeVisible()
+  return section
+}
+
+/** Opens a folded <details> (by its summary) inside a settings section. */
+async function openSettingsDisclosure(scope: Locator, summaryText: string) {
+  const details = scope.locator('details.runtime-settings').filter({
+    has: scope.page().locator('summary', { hasText: summaryText }),
+  })
+  await expect(details).toHaveCount(1)
+  if (await details.getAttribute('open') === null) await details.locator(':scope > summary').click()
+  await expect(details).toHaveAttribute('open', '')
+  return details
+}
+
+/** TOC, review basis links and 查看原文 share one folded 阅读工具 above the body (plan Y6). */
+async function openReadingTools(scope: Locator) {
+  const tools = scope.getByTestId('artifact-reading-tools').first()
+  await expect(tools).toBeVisible()
+  if (await tools.getAttribute('open') === null) await tools.locator(':scope > summary').click()
+  await expect(tools).toHaveAttribute('open', '')
+  return tools
+}
+
+/**
+ * Sub-steps are folded into the stage item (plan §5.1, Y6): clicking the stage item that is
+ * being browsed toggles #workflow-stage-nodes; open them before clicking a node button.
+ */
+async function clickSubStep(page: Page, testId: string) {
+  const toggle = page.getByTestId('stage-navigation').locator('[data-testid="stage-item"][aria-expanded]')
+  await expect(toggle).toHaveCount(1)
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.locator('#workflow-stage-nodes')).toBeVisible()
   await page.getByTestId(testId).click()
 }
 
@@ -1226,15 +1314,14 @@ async function showNodeMaterials(page: import('@playwright/test').Page) {
   await expect(inspectorTab(page, '材料与版本')).toHaveAttribute('aria-selected', 'true')
 }
 
-/** Execution now happens in the task (plan W5): the Agents/Tests pages must not be open. */
-async function expectStaysOnWorkbench(page: import('@playwright/test').Page) {
+/** Execution happens in the task (plan W5): 设置 (which replaced the Agents/Tests pages) must not be open. */
+async function expectStaysOnWorkbench(page: Page) {
   await expect(page.getByTestId('workflow-canvas')).toBeVisible()
   await expect(page.getByTestId('node-inspector')).toBeVisible()
-  await expect(page.getByTestId('agent-workbench')).toHaveCount(0)
-  await expect(page.getByTestId('tests-view')).toHaveCount(0)
+  await expect(page.getByTestId('settings-view')).toHaveCount(0)
 }
 
-async function createFixtureRun(page: import('@playwright/test').Page) {
+async function createFixtureRun(page: Page) {
   await page.getByRole('button', { name: '新建任务', exact: true }).click()
   const dialog = page.getByRole('dialog', { name: '新建任务', exact: true })
   await expect(dialog).toBeVisible()
@@ -1243,7 +1330,7 @@ async function createFixtureRun(page: import('@playwright/test').Page) {
   await dialog.getByRole('button', { name: '创建任务', exact: true }).click()
   await showProjectRuns(page)
   await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
-  await page.locator('.workbench-project-menu > summary').click()
+  await closeTaskMenu(page)
   await expect(page.getByTestId('toast')).toContainText('任务已创建，尚未调用模型')
   await expect(page.getByTestId('workflow-canvas')).toContainText('需求澄清')
   await expect(page.getByTestId('node-inspector')).toContainText('需求澄清')
@@ -1275,9 +1362,10 @@ test.describe('AI DevFlow desktop workbench', () => {
           }
         })
         await page.goto('/')
-        await page.getByRole('button', { name: /^Agents$/ }).click()
-        await page.locator('summary').filter({ hasText: 'Agent Provider 配置' }).click()
-        const manage = page.getByRole('button', { name: '管理已保存 Provider' })
+        // Provider configuration moved from Agents to 设置／模型与执行方式 (plan Y2, Y3).
+        const models = await openSettingsSection(page, '模型与执行方式')
+        await openSettingsDisclosure(models, '模型提供方 · 本机')
+        const manage = models.getByRole('button', { name: '管理已保存 Provider' })
         await manage.click()
         const dialog = page.getByRole('dialog', { name: '管理已保存 Provider' })
         await expect(dialog.getByText('保留历史记录：12 条。')).toBeVisible()
@@ -1324,9 +1412,14 @@ test.describe('AI DevFlow desktop workbench', () => {
           }
         })
         await page.goto('/')
-        await page.getByRole('button', { name: 'Team Overview', exact: true }).click()
+        await clickPrimaryNav(page, '团队')
         const team = page.getByTestId('team-overview')
-        await expect(team.getByText('governance_check:testing_standard:needs_evidence_9', { exact: true })).toBeVisible()
+        // The first layer names the rule in Chinese; the raw rule key stays in its 详情 (plan Y9).
+        const lastRule = team.getByTestId('team-policy-rule').last()
+        await expect(team.getByTestId('team-policy-rule')).toHaveCount(10)
+        await expect(lastRule).toContainText('测试规范：待核实')
+        await expect(lastRule.locator('details > code')).toHaveText('governance_check:testing_standard:needs_evidence_9')
+        await expect(lastRule.locator('details > code')).not.toBeVisible()
         await expect.poll(() => team.locator('.policy-row strong').evaluateAll((elements) =>
           elements.every((element) => element.scrollWidth <= element.clientWidth),
         )).toBe(true)
@@ -1344,7 +1437,7 @@ test.describe('AI DevFlow desktop workbench', () => {
         }).toBe(true)
         await expect(syncButton).toBeInViewport()
         await page.mouse.wheel(0, 3000)
-        await expect(team.getByRole('button', { name: '保存 Team Policy 草稿' })).toBeInViewport()
+        await expect(team.getByRole('button', { name: '保存团队策略草稿' })).toBeInViewport()
         await expect.poll(() => team.evaluate((element) => element.scrollTop)).toBeGreaterThan(0)
       })
 
@@ -1365,17 +1458,20 @@ test.describe('AI DevFlow desktop workbench', () => {
           }
         })
         await page.goto('/')
-        // Current task usage, policy and budget share one popover in the task title row (plan L1).
-        const runSummary = page.getByRole('button', { name: /^本任务用量/ })
+        // 「本任务用量」 is plain first-layer text so the unknown cost stays visible (plan §3, Y6).
+        const runSummary = page.getByTestId('task-usage-summary')
+        await expect(runSummary).toContainText('本任务用量')
         await expect(runSummary).toContainText('16,712')
         await expect(runSummary).toContainText('金额待确认')
         await expect(runSummary).not.toContainText('$0.00')
-        await runSummary.click()
-        const usage = page.getByTestId('run-token-usage')
+        await expect(page.getByRole('button', { name: /^本任务用量/ })).toHaveCount(0)
+        // Usage, policy and budget details moved into the task menu (plan Y6).
+        const taskUsage = await openTaskUsage(page)
+        const usage = taskUsage.getByTestId('run-token-usage')
         await expect(usage).toContainText('16,712')
         await expect(usage).toContainText('1 项金额待确认')
         await expect(usage).not.toContainText('$0.00')
-        await expect(page.getByTestId('runtime-budget-status')).toContainText('数据不完整')
+        await expect(taskUsage.getByTestId('runtime-budget-status')).toContainText('数据不完整')
         await page.screenshot({ path: testInfo.outputPath('unknown-run-cost.png') })
       })
 
@@ -1403,7 +1499,7 @@ test.describe('AI DevFlow desktop workbench', () => {
         page.on('pageerror', (error) => errors.push(error.message))
         await page.goto('/')
         const card = page.getByTestId('workflow-card-node-agent-ux-design-gate')
-        await page.getByRole('button', { name: '流程视图', exact: true }).click()
+        await chooseBoardView(page, '流程视图')
         const inspector = page.getByTestId('node-inspector')
         // Board chips keep their names; artifacts and (on a Gate) test evidence open 材料与版本,
         // the trace opens 执行记录 (plan W1).
@@ -1463,15 +1559,20 @@ test.describe('AI DevFlow desktop workbench', () => {
         await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
         const document = inspector.getByTestId('clarification-current-revision')
         await expect(document.locator('.artifact-reading-section')).toHaveCount(16)
-        await expect(document.locator('.artifact-toc a')).toHaveCount(16)
+        // TOC, review basis and 查看原文 are folded into one 阅读工具 on the first screen (plan Y6).
+        await expect(document.locator('.artifact-toc')).not.toBeVisible()
+        await expect(document.locator('.material-reference-links')).not.toBeVisible()
+        const readingTools = await openReadingTools(document)
+        await expect(readingTools.locator('.artifact-toc a')).toHaveCount(16)
         const lastSection = document.locator('.artifact-reading-section').last()
-        await document.locator('.artifact-toc a').last().click()
+        await readingTools.locator('.artifact-toc a').last().click()
         await expect(lastSection.locator('p')).toContainText('Confirm the retry boundary')
-        await document.getByRole('button', { name: '查看原文', exact: true }).click()
+        await readingTools.getByRole('button', { name: '查看原文', exact: true }).click()
         await expect(document.locator('.message-plain')).toContainText('## Acceptance 16')
-        await document.getByRole('button', { name: '返回排版', exact: true }).click()
+        await readingTools.getByRole('button', { name: '返回排版', exact: true }).click()
+        await expect(document.locator('.artifact-reading-section')).toHaveCount(16)
         // 团队规范 in the reader only points to the reference list kept in 材料与版本.
-        await inspector.locator('.material-reference-links').getByRole('button', { name: '团队规范', exact: true }).click()
+        await readingTools.locator('.material-reference-links').getByRole('button', { name: '团队规范', exact: true }).click()
         const pointer = inspector.getByTestId('knowledge-reference-pointer')
         await expect(pointer).toContainText('完整列表与来源在「材料与版本」中')
         await expect(inspector.getByTestId('knowledge-reference-sources')).toHaveCount(0)
@@ -1493,34 +1594,41 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.setViewportSize({ width: 1180, height: 760 })
     await installDesktopApi(page, 'agent-ux-unpaired')
     await page.goto('/')
-    await page.getByRole('button', { name: /^Agents$/ }).click()
 
-    const workbench = page.getByTestId('agent-workbench')
-    const currentTask = page.getByTestId('agent-current-task')
-    await expect(currentTask).toContainText('方案设计')
-    await expect(currentTask.getByRole('list', { name: '当前主操作的对象、结果和影响' })).toContainText('Provider 与费用')
-    await expect(currentTask).toContainText('根据需求和已保存阶段产物生成，不直接调查仓库')
-    await expect(currentTask).toContainText('推进到方案评审 Gate；不会自动批准 Gate')
-    // Execution moved to the task (plan W5): the one primary action hands back to it.
-    await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
-    await expect(workbench.locator('.primary-button:visible')).toHaveText(/在任务中处理/u)
-    await expect(currentTask.getByTestId('agent-handle-in-task').locator('.primary-button')).toHaveText(/在任务中处理/u)
-    await expect(workbench.getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
+    // Execution happens in the task (plan W5): the status row's one primary action is the design
+    // generation and names the model before the call. The Agents "current task" card duplicated
+    // this row and was removed (plan Y3).
+    const inspector = page.getByTestId('node-inspector')
+    const statusRow = inspector.getByTestId('task-status-row')
+    await expect(inspector).toContainText('方案设计')
+    await expect(statusRow.locator('.primary-button:visible')).toHaveCount(1)
+    await expect(statusRow.getByTestId('complete-design-agent')).toHaveClass(/primary-button/u)
+    await expect(statusRow).toContainText('可以生成方案')
+    await expect(statusRow).toContainText(/doubao-review/u)
 
-    const advanced = page.getByTestId('agent-advanced-tools')
-    const summary = advanced.locator('summary')
+    // 设置 only configures (plan Y2): no generation and no primary action there.
+    const models = await openSettingsSection(page, '模型与执行方式')
+    await expect(models.getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
+    await expect(models.locator('.primary-button:visible')).toHaveCount(0)
+
+    // The independent Runtime and multi-agent tools moved from Agents to 设置／高级 (plan Y2).
+    const workbench = await openSettingsSection(page, '高级')
+    const advanced = workbench.getByTestId('agent-advanced-tools')
+    const summary = advanced.locator(':scope > summary')
     await expect(advanced).not.toHaveAttribute('open', '')
+    await expect(workbench.locator('.primary-button:visible')).toHaveCount(0)
     await expect(workbench.getByText('workflow.evaluate', { exact: true })).not.toBeVisible()
-    await expect(summary).toContainText('本地未配对 · 多 Agent 入口不可用')
+    await expect(summary).toContainText('未连接团队 · 多 Agent 入口不可用')
     await summary.focus()
     await summary.press('Enter')
     await expect(advanced).toHaveAttribute('open', '')
 
     const coordinationAction = workbench.getByRole('button', { name: '创建固定多 Agent 验收会话（需先配对 Team）' })
     await expect(coordinationAction).toBeDisabled()
-    await expect(coordinationAction).toHaveAccessibleDescription(/不可用：请先在页面顶部绑定.*必须先将当前 Local Project 配对到 Team Project/u)
+    await expect(coordinationAction).toHaveAccessibleDescription(/不可用：请先在设置／团队连接中把当前本地项目连接到团队项目。.*必须先将当前 Local Project 配对到 Team Project/u)
     await expect(workbench.getByRole('button', { name: '创建独立 Runtime 验证实例（高级）' })).toBeEnabled()
-    await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
+    await expect(workbench.locator('.primary-button:visible')).toHaveCount(0)
+    await expect(page.getByTestId('settings-view').getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
 
     const darkContrast = await page.evaluate(() => {
       const styles = getComputedStyle(document.documentElement)
@@ -1536,7 +1644,9 @@ test.describe('AI DevFlow desktop workbench', () => {
     })
     expect(darkContrast).toBeGreaterThan(4.5)
 
-    await page.getByTestId('theme-toggle').click()
+    // The theme moved from the top bar to 设置／外观 (plan Y5).
+    const appearance = await openSettingsSection(page, '外观')
+    await appearance.getByTestId('theme-toggle').click()
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
     const lightContrast = await page.evaluate(() => {
       const styles = getComputedStyle(document.documentElement)
@@ -1551,25 +1661,23 @@ test.describe('AI DevFlow desktop workbench', () => {
       return (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
     })
     expect(lightContrast).toBeGreaterThan(4.5)
-    const handleInTask = currentTask.getByRole('button', { name: '在任务中处理', exact: true })
-    await expect(handleInTask).toBeVisible()
-    // Handing back runs nothing; the design generation is the task status row's primary action.
-    await handleInTask.click()
+    // Returning to the task runs nothing; the design generation is still the status row's primary action.
+    await clickPrimaryNav(page, '任务')
     await expectStaysOnWorkbench(page)
-    const inspector = page.getByTestId('node-inspector')
     await expect(inspector).toContainText('方案设计')
-    await expect(inspector.getByTestId('task-status-row').getByTestId('complete-design-agent')).toBeVisible()
+    await expect(statusRow.getByTestId('complete-design-agent')).toBeVisible()
+    await expect(statusRow.locator('.primary-button:visible')).toHaveCount(1)
   })
 
   test('exposes paired Runtime and Coordination only through the keyboard-accessible advanced area', async ({ page }) => {
     await installDesktopApi(page, 'agent-ux-paired')
     await page.goto('/')
-    await page.getByRole('button', { name: /^Agents$/ }).click()
-
-    const workbench = page.getByTestId('agent-workbench')
-    const advanced = page.getByTestId('agent-advanced-tools')
-    const summary = advanced.locator('summary')
-    await expect(summary).toContainText('Team 已配对 · 多 Agent 入口可用')
+    // The independent Runtime and multi-agent tools moved from Agents to 设置／高级 (plan Y2).
+    const workbench = await openSettingsSection(page, '高级')
+    const advanced = workbench.getByTestId('agent-advanced-tools')
+    const summary = advanced.locator(':scope > summary')
+    await expect(advanced).not.toHaveAttribute('open', '')
+    await expect(summary).toContainText('已连接团队 · 多 Agent 入口可用')
     await expect(workbench.getByRole('region', { name: '独立 Runtime 验收与诊断' })).not.toBeVisible()
     await summary.focus()
     await summary.press('Space')
@@ -1590,10 +1698,9 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(coordinationAction).toBeEnabled()
     await expect(runtimeAction).toHaveClass(/ghost-button/u)
     await expect(coordinationAction).toHaveClass(/ghost-button/u)
-    // The only primary action hands back to the task; design generation is not offered here (W5).
-    await expect(workbench.locator('.primary-button:visible')).toHaveCount(1)
-    await expect(workbench.locator('.primary-button:visible')).toHaveText(/在任务中处理/u)
-    await expect(workbench.getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
+    // Diagnostics offer no primary action; design generation stays in the task (plan W5, Y2).
+    await expect(workbench.locator('.primary-button:visible')).toHaveCount(0)
+    await expect(page.getByTestId('settings-view').getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
   })
 
   test('compares requirement inputs, requests changes, generates v2, and approves only v2', async ({ page }) => {
@@ -1603,9 +1710,11 @@ test.describe('AI DevFlow desktop workbench', () => {
     const inspector = page.getByTestId('node-inspector')
     await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
     await expect(page.getByTestId('clarification-review')).toBeVisible()
-    await inspector.getByRole('button', { name: /原始需求/ }).click()
+    // The review basis links are folded into the body's 阅读工具 (plan Y6).
+    const readingTools = await openReadingTools(inspector.getByTestId('clarification-current-revision'))
+    await readingTools.getByRole('button', { name: /原始需求/ }).click()
     await expect(page.getByTestId('clarification-raw-request')).toContainText('Clarify webhook retry boundaries')
-    await inspector.getByRole('button', { name: /代码调查/ }).click()
+    await readingTools.getByRole('button', { name: /代码调查/ }).click()
     await expect(page.getByTestId('clarification-repository-findings')).toContainText('Retry handler exists')
     await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v1')
     await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
@@ -1645,19 +1754,32 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.goto('/')
 
     await expect(page).toHaveTitle(/AI DevFlow Studio/)
-    await expect(page.getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
+    // Four primary entries (plan Y1); the top bar has no theme toggle (plan Y5).
+    await expect(primaryNavigation(page).getByRole('button')).toHaveText([...PRIMARY_NAV])
+    await expect(page.locator('header.topbar').getByTestId('theme-toggle')).toHaveCount(0)
+    // The data source badge is part of 设置／高级 (plan Y2).
+    const advanced = await openSettingsSection(page, '高级')
+    await expect(advanced.getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
+    // The theme is chosen in 设置／外观 (plan Y5).
+    const appearance = await openSettingsSection(page, '外观')
+    const themeToggle = appearance.getByTestId('theme-toggle')
+    await expect(themeToggle).toHaveText('跟随系统')
+    await themeToggle.click()
+    await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
+    await expect(themeToggle).toHaveText('浅色')
+
+    await clickPrimaryNav(page, '任务')
     await showProjectRuns(page)
     await expect(page.getByText('当前项目的任务')).toBeVisible()
-    await expect(page.getByTestId('workflow-empty-state')).toContainText('暂无 Run')
-    await expect(page.getByTestId('node-inspector-empty')).toContainText('选择真实 Run')
-
-    await page.getByTestId('theme-toggle').click()
-    await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
+    await expect(page.getByTestId('workflow-empty-state')).toContainText('任务阶段')
+    await expect(page.getByTestId('workflow-empty-state')).toContainText('暂无任务')
+    await expect(page.getByTestId('node-inspector-empty')).toContainText('任务详情')
+    await expect(page.getByTestId('node-inspector-empty')).toContainText('选择任务后显示当前步骤、材料、执行记录与审批。')
 
     await createFixtureRun(page)
 
     const workflow = page.getByTestId('workflow-canvas')
-    await workflow.getByRole('button', { name: '流程视图', exact: true }).click()
+    await chooseBoardView(page, '流程视图')
     await expect(page.getByTestId('stage-summary-clarify')).toContainText('节点：Task 1 · Gate 1')
     await expect(page.getByTestId('stage-summary-design')).toContainText('节点：Task 1 · Gate 1')
     await expect(page.getByTestId('stage-summary-build')).toContainText('节点：Task 1')
@@ -1672,12 +1794,13 @@ test.describe('AI DevFlow desktop workbench', () => {
     await inspectorTab(page, '当前工作').click()
     await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
     const gateImpact = page.getByTestId('gate-impact-summary')
-    await expect(gateImpact).toContainText('直接下游 Gate')
+    await expect(gateImpact).toContainText('对后续 Gate 的影响')
+    await expect(gateImpact).toContainText('紧接着的 Gate')
     await expect(gateImpact).toContainText('需求确认 Gate')
     await expect(gateImpact).toContainText('等待中')
-    await expect(gateImpact).toContainText('当前 Task 的产物尚未关联到该 Gate')
+    await expect(gateImpact).toContainText('当前步骤的材料尚未关联到该 Gate')
     await expect(gateImpact.getByRole('button', { name: /通过 Gate|确认需求|确认方案|Override/ })).toHaveCount(0)
-    await gateImpact.getByRole('button', { name: '查看 Gate' }).click()
+    await gateImpact.getByRole('button', { name: '查看该 Gate' }).click()
     await expect(page.getByTestId('node-inspector')).toContainText('Gate · Team Policy')
     const designCard = workflow.getByTestId('flow-node-run-created-from-request-design')
     await expect(designCard).toContainText('Task')
@@ -1692,20 +1815,24 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.keyboard.press('Escape')
     await expect(page.locator('.topbar-project-menu')).not.toHaveAttribute('open', '')
     await expect(page.locator('.topbar-project-menu > summary')).toBeFocused()
-    await page.getByRole('button', { name: /^测试$/ }).click()
-    await page.getByLabel('测试命令').fill('pnpm test -- --run')
-    await page.getByRole('button', { name: /保存测试命令/ }).click()
+    // The test command moved from the Tests page to 设置／本地项目 (plan Y4).
+    const localProject = await openSettingsSection(page, '本地项目')
+    const testsSettings = localProject.getByTestId('settings-project')
+    await testsSettings.getByLabel('测试命令').fill('pnpm test -- --run')
+    await testsSettings.getByRole('button', { name: /保存测试命令/ }).click()
     await expect(page.getByTestId('toast')).toContainText('测试命令已保存')
 
-    await expect(page.getByTestId('tests-view')).toContainText('测试计划与证据')
-    await expect(page.getByTestId('tests-view')).toContainText('pnpm test -- --run')
-    await page.getByRole('button', { name: /工作台/ }).click()
+    await expect(testsSettings).toContainText('本项目测试记录')
+    await expect(testsSettings.getByLabel('测试命令')).toHaveValue('pnpm test -- --run')
+    await expect(testsSettings).toContainText('pnpm test -- --run')
+    await expect(testsSettings.getByTestId('test-command-status')).toContainText('已保存')
+    await clickPrimaryNav(page, '任务')
 
     await showProjectRuns(page)
-    await page.getByLabel('Search runs and knowledge').fill('nothing matches this')
+    await page.getByLabel('搜索当前项目').fill('nothing matches this')
     await expect(page.getByTestId('search-results')).toContainText('没有匹配结果')
     await expect(page.getByText('没有匹配的 Run')).toBeVisible()
-    await page.getByLabel('Search runs and knowledge').fill('重构 GitHub')
+    await page.getByLabel('搜索当前项目').fill('重构 GitHub')
     await expect(page.getByTestId('search-results')).toContainText('重构 GitHub webhook 重试策略')
     await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
   })
@@ -1717,14 +1844,14 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.goto('/')
     await createFixtureRun(page)
 
-    await page.getByRole('button', { name: /^Agents$/ }).click()
-    const agentWorkbench = page.getByTestId('agent-workbench')
-    await expect(agentWorkbench).toContainText('Agent 执行台')
-    await expect(agentWorkbench).toContainText('doubao-review')
-    // Agents keeps configuration and read-only evidence; execution is handled in the task (plan W5).
-    await expect(agentWorkbench.getByRole('button', { name: /运行门禁审查/ })).toHaveCount(0)
-    await expect(agentWorkbench.getByRole('button', { name: /生成需求澄清/ })).toHaveCount(0)
-    await agentWorkbench.getByTestId('agent-handle-in-task').getByRole('button', { name: '在任务中处理', exact: true }).click()
+    // Agents configuration moved to 设置／模型与执行方式 (plan Y2, Y3); settings only configure,
+    // execution is handled in the task (plan W5).
+    const models = await openSettingsSection(page, '模型与执行方式')
+    await expect(models.getByTestId('settings-models')).toContainText('当前 Agent Provider：doubao-review')
+    const settings = page.getByTestId('settings-view')
+    await expect(settings.getByRole('button', { name: /运行门禁审查/ })).toHaveCount(0)
+    await expect(settings.getByRole('button', { name: /生成需求澄清/ })).toHaveCount(0)
+    await clickPrimaryNav(page, '任务')
     await expectStaysOnWorkbench(page)
     const reviewedGateInspector = page.getByTestId('node-inspector')
     await reviewedGateInspector.getByTestId('task-status-row').getByTestId('complete-clarify-agent').click()
@@ -1768,38 +1895,50 @@ test.describe('AI DevFlow desktop workbench', () => {
     )
     await expect(page.getByTestId('review-evidence-results')).not.toContainText('Review Criteria')
 
-    await page.getByLabel('Search runs and knowledge').fill('missing knowledge node')
-    await page.getByRole('button', { name: /Team Overview/ }).click()
+    await page.getByLabel('搜索当前项目').fill('missing knowledge node')
+    await clickPrimaryNav(page, '团队')
     await expect(page.getByTestId('team-overview')).toContainText('项目交付健康')
-    await expect(page.getByTestId('team-overview')).toContainText('未加载 Team Project')
+    await expect(page.getByTestId('team-overview')).toContainText('尚未加载团队项目')
 
-    await page.getByRole('button', { name: /Knowledge/ }).click()
-    await expect(page.getByTestId('knowledge-view')).toContainText('Knowledge Governance')
+    await clickPrimaryNav(page, '知识')
+    await expect(page.getByTestId('knowledge-view')).toContainText('知识治理')
     await expect(page.getByTestId('knowledge-view')).toContainText('没有匹配的知识文档')
     await expect(page.getByText('没有匹配的知识节点')).toBeVisible()
-    await page.getByLabel('Search runs and knowledge').fill('')
+    // Memory management moved here from the Agents page (plan Y3).
+    await expect(page.getByTestId('knowledge-memory-section')).toBeVisible()
+    await page.getByLabel('搜索当前项目').fill('')
 
-    await page.getByRole('button', { name: /^Agents$/ }).click()
-    await expect(page.getByTestId('agent-workbench')).toContainText('基于知识的门禁审查')
-    await expect(page.getByTestId('agent-workbench')).toContainText('doubao-review')
-    await expect(page.getByTestId('agent-workbench')).toContainText('warning-only')
-    await expect(page.getByTestId('agent-workbench')).toContainText('Build redacted context')
+    // The review evidence formerly on Agents is in the Gate's 执行记录, folded (plan Y3).
+    await clickPrimaryNav(page, '任务')
+    await expectStaysOnWorkbench(page)
+    await expect(reviewedGateInspector).toContainText('需求确认 Gate')
+    await inspectorTab(page, '执行记录').click()
+    await expect(inspectorTab(page, '执行记录')).toHaveAttribute('aria-selected', 'true')
+    const evidenceGroups = reviewedGateInspector.getByTestId('agent-evidence-groups')
+    await expect(evidenceGroups).not.toHaveAttribute('open', '')
+    await evidenceGroups.locator(':scope > summary').click()
+    await expect(evidenceGroups).toHaveAttribute('open', '')
+    await expect(evidenceGroups).toContainText('基于知识的门禁审查')
+    await expect(evidenceGroups).toContainText('doubao-review')
+    await expect(evidenceGroups).toContainText('warning-only')
+    await expect(evidenceGroups.getByText('Build redacted context', { exact: true })).toBeVisible()
 
-    await page.getByRole('button', { name: /^Skills$/ }).click()
-    await expect(page.getByTestId('skill-view')).toContainText('团队能力目录')
-    await expect(page.getByTestId('skill-view')).toContainText('未加载真实团队 Skills')
+    // Skills and MCP moved to 设置／扩展能力 (plan Y2).
+    const extensions = await openSettingsSection(page, '扩展能力')
+    await expect(extensions.getByTestId('skill-view')).toContainText('团队能力目录')
+    await expect(extensions.getByTestId('skill-view')).toContainText('未加载团队 Skills')
+    await expect(extensions.getByTestId('mcp-view')).toContainText('本机工具连接器')
+    await expect(extensions.getByTestId('mcp-view')).toContainText('未加载本地 MCP 连接器')
 
-    await page.getByRole('button', { name: /^MCP$/ }).click()
-    await expect(page.getByTestId('mcp-view')).toContainText('本机工具连接器')
-    await expect(page.getByTestId('mcp-view')).toContainText('未加载本地 MCP 连接器')
-
-    await page.getByRole('button', { name: /^测试$/ }).click()
-    const testsView = page.getByTestId('tests-view')
-    await expect(testsView).toContainText('测试计划与证据')
+    // The test command and records moved to 设置／本地项目 (plan Y4).
+    const localProject = await openSettingsSection(page, '本地项目')
+    const testsView = localProject.getByTestId('settings-project')
+    await expect(testsView).toContainText('测试命令')
+    await expect(testsView).toContainText('本项目测试记录')
     // Tests only run at the actual test step; the reason is shown before any click (plan D4, X6).
-    // The page keeps the command and history; its one entry hands back to the task (plan W5).
-    await expect(testsView.getByRole('button', { name: /执行测试|执行本地测试/ })).toHaveCount(0)
-    await expect(page.getByTestId('tests-run-blocked-reason')).toBeVisible()
+    // The section keeps the command and history; its one entry hands back to the task (plan W5).
+    await expect(testsView.getByRole('button', { name: /执行测试|执行本地测试|运行检查/ })).toHaveCount(0)
+    await expect(testsView.getByTestId('tests-run-blocked-reason')).toBeVisible()
     await expect(testsView).not.toContainText('Local test evidence')
     await expect(testsView).not.toContainText('passed')
     const handleTestsInTask = testsView.getByRole('button', { name: '在任务中处理', exact: true })
@@ -1817,13 +1956,9 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.goto('/')
     await createFixtureRun(page)
 
-    await page.getByRole('button', { name: /^Agents$/ }).click()
-    const codingSettings = page.locator('details.runtime-settings').filter({
-      hasText: '项目执行工具',
-    })
-    if (!(await codingSettings.getAttribute('open'))) {
-      await codingSettings.locator('summary').click()
-    }
+    // The project execution tool moved from Agents to 设置／模型与执行方式 (plan Y2).
+    const models = await openSettingsSection(page, '模型与执行方式')
+    const codingSettings = await openSettingsDisclosure(models, '项目执行工具 · 本地项目')
     await expect(codingSettings).toContainText('执行工具：已配置')
     await expect(codingSettings).toContainText('Coding Engine：可用')
     await expect(codingSettings).toContainText('Provider：可用')
@@ -1946,9 +2081,22 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(changes).toContainText('Saved worktree test passed.')
     await expect(changes).toContainText('+new')
     await inspectorTab(page, '执行记录').click()
-    await expect(inspector).toContainText('150')
-    await expect(inspector).toContainText('$0.012')
-    await expect(inspector.getByRole('list', { name: 'Coding Run terminal trace' })).toContainText('Applied the exact approved Change Set.')
+    // Coding evidence from the Agents page replaces the old 开发执行详情 table (plan Y3).
+    await expect(inspector.getByText('开发执行详情', { exact: true })).toHaveCount(0)
+    const records = inspector.getByTestId('coding-run-records')
+    await expect(records).toBeVisible()
+    const terminalSummary = records.getByTestId('coding-terminal-summary')
+    await expect(terminalSummary).toContainText('输入 / 输出 tokens')
+    await expect(terminalSummary).toContainText('120 / 30')
+    await expect(terminalSummary).toContainText('150')
+    await expect(terminalSummary).toContainText('提供方实际结算')
+    await expect(terminalSummary).toContainText('$0.012')
+    const audit = records.getByTestId('coding-run-audit')
+    await expect(audit).toContainText('coding-run-review')
+    await expect(audit.getByRole('list', { name: 'Coding Run trace history' })).toContainText('Applied the exact approved Change Set.')
+    await expect(audit.getByRole('list', { name: 'Coding Run permission history' })).toContainText('permission-review')
+    // The remaining evidence groups are folded at the end of 执行记录 (plan Y3).
+    await expect(inspector.getByTestId('agent-evidence-groups')).not.toHaveAttribute('open', '')
     // The managed worktree moved from Agents into the build step's 执行记录 (plan W3).
     await expect(inspector.getByTestId('coding-workspace-records')).toContainText('/tmp/devflow-review')
     await expect(inspector.getByRole('button', { name: /启动|重新运行/ })).toHaveCount(0)

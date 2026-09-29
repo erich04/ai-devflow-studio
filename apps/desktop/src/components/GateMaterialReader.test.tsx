@@ -19,6 +19,9 @@ it('keeps technical IDs secondary, references available and the source complete'
   expect(screen.getByText(artifact.id)).not.toBeVisible()
   fireEvent.click(screen.getByText('来源与版本'))
   expect(screen.getByText(artifact.id)).toBeVisible()
+  // Review basis, TOC and the raw source share one first-screen disclosure (plan Y6).
+  expect(screen.getByRole('button', { name: '原始需求' })).not.toBeVisible()
+  fireEvent.click(screen.getByText('阅读工具'))
   fireEvent.click(screen.getByRole('button', { name: '原始需求' }))
   expect(screen.getByText('原始需求正文')).toBeVisible()
   fireEvent.click(screen.getByRole('button', { name: '收起参考资料' }))

@@ -1,22 +1,27 @@
-import { DetailPopover } from './components/DetailPopover'
 import { DiscussionToggle, WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
 import { TeamConnectionMenu, TopbarProjectMenu } from './views/TaskShell'
+import { TeamConnectionSettings } from './views/TeamConnectionSettings'
+import { SettingsView } from './views/SettingsView'
+import { ModelSettings } from './views/ModelSettings'
+import { LocalProjectSettings } from './views/LocalProjectSettings'
+import { AgentEvidenceGroups, CodingRunRecords } from './views/CodingRunRecords'
+import { AgentRuntimePanel } from './AgentRuntimePanel'
+import { AgentCoordinationPanel } from './AgentCoordinationPanel'
+import { AgentMemoryPanel } from './AgentMemoryPanel'
+import { buildAgentEvidenceGroups } from './app/agent-evidence-view-model'
 import { buildTeamConnectionView, deliveryIntentsRevokedByRepair } from './app/team-connection-view-model'
-import { formatLocalTime, type InspectorReadingPosition } from './app/desktop-view-model'
+import { formatLocalTime, settingsSectionForTaskTarget, type InspectorReadingPosition, type SettingsSection } from './app/desktop-view-model'
 import { buildRunUsageSummary } from './app/run-usage-summary'
 import { buildTestRunReadiness } from './app/test-run-readiness'
 import {
   BookOpen,
-  Bot,
   ClipboardCheck,
   ChevronDown,
   Settings2,
-  Network,
   MoreHorizontal,
   Plus,
   Search,
   ShieldCheck,
-  TestTube2,
   Trash2,
   Users,
   Workflow,
@@ -45,6 +50,7 @@ import {
   getRunStatusLabel,
   normalizeQuery,
   reviewProviderFromMetadata,
+  searchResultTypeLabels,
   runMatchesQuery,
   type SearchResultItem,
   matchesQuery,
@@ -68,7 +74,6 @@ import { DiagnosticHistory } from './components/DiagnosticHistory'
 import { CredentialAccessStatus } from './components/CredentialAccessStatus'
 import { WorkRequestInbox } from './WorkRequestInbox'
 import {
-  AgentWorkbenchView,
   Inspector,
   KnowledgeView,
   LocalProjectPanel,
@@ -76,9 +81,9 @@ import {
   NavButton,
   SkillView,
   TeamOverview,
-  TestsView,
   ThemeToggle,
   WorkflowBoard,
+  type WorkflowBoardView,
 } from './views/DesktopViews'
 
 export { getToastDisplayDurationMs } from './app/desktop-view-model'
@@ -228,6 +233,10 @@ export function App() {
   const openRunMenuRef = useRef<HTMLDivElement>(null)
   // Filled by the Inspector; read before a settings page opens so the return restores it (W9).
   const readingPositionRef = useRef<(() => InspectorReadingPosition | null) | null>(null)
+  // Settings section (plan Y2) and the board display mode, now chosen in the task menu (Y6).
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('project')
+  const [boardView, setBoardView] = useState<WorkflowBoardView>('compact')
+  const [settingsFocus, setSettingsFocus] = useState<'coding' | 'models' | undefined>()
   const [deleteRunTarget, setDeleteRunTarget] = useState<{
     run: WorkflowRun
     deleteRemote: boolean
@@ -690,9 +699,6 @@ export function App() {
   const selectedManagedWorkspace = latestCodingRun
     ? managedCodingWorkspaces.find((workspace) => workspace.id === latestCodingRun.managedWorkspaceId)
     : undefined
-  const selectedCodingDiff = latestCodingRun
-    ? codingDiffArtifacts.find((artifact) => artifact.id === latestCodingRun.diffArtifactId)
-    : undefined
   const selectedBootstrapEvidence = latestCodingRun
     ? dependencyBootstrapEvidence.find((evidence) => evidence.id === latestCodingRun.bootstrapEvidenceId)
     : undefined
@@ -708,7 +714,7 @@ export function App() {
   })
   const modelReadinessError = !desktopApi || selectedAgentProviderId === 'fake-knowledge-review' ? undefined :
     projectRuntimeBudget.status !== 'loaded' ? (projectRuntimeBudget.error || `云端预算${projectRuntimeBudget.label}，请先同步团队策略。`) :
-    !projectRuntimeBudget.policy ? '尚未配置当前项目的云端预算，请先在 Agents 的项目基础设置中保存。' : undefined
+    !projectRuntimeBudget.policy ? '尚未配置当前项目的云端预算，请先在设置／模型与执行方式中保存团队预算。' : undefined
 
   const codingRuntime = useCodingRuntimeReadiness({
     desktopApi,
@@ -796,7 +802,7 @@ export function App() {
           : 'soft'
   const budgetRecoveryCopy =
     budgetStatus === 'unavailable'
-      ? effectiveBudgetDecision?.reason ?? '预算暂不可用，请在项目基础设置中同步云端策略。'
+      ? effectiveBudgetDecision?.reason ?? '预算暂不可用，请在设置／模型与执行方式中同步云端策略。'
       : null
   const runtimeDataSource = useMemo(
     () =>
@@ -918,13 +924,13 @@ export function App() {
     void runCodingAgentAction(additionalAttemptAfterCount)
   }, [codingRuntime.error, codingRuntime.readiness, runCodingAgentAction, setToast])
 
-  // Gate Review in the task (plan W2): the same model, budget and failure facts the Agents page used.
+  // Gate Review in the task (plan W2): model, budget and failure facts for the status row.
   const reviewProvider = agentProviders.find((provider) => provider.id === selectedAgentProviderId)
   const reviewProviderLabel = reviewProvider ? `${reviewProvider.name} · ${reviewProvider.model}` : undefined
   const reviewRunBlockedReason = !desktopApi
     ? '请在桌面应用中运行门禁审查。'
     : !selectedAgentProviderId
-      ? '尚未选择门禁审查使用的模型，请先在执行设置中选择。'
+      ? '尚未选择门禁审查使用的模型，请先在设置／模型与执行方式中选择。'
       : modelReadinessError
   const latestReviewFailure = selectedEvents
     .filter((event) => event.kind === 'error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp > latestAgentReview.createdAt))
@@ -944,7 +950,45 @@ export function App() {
     teamProjectName: teamProjectLabel,
     teamDataReadAt: teamSyncFeedback?.status === 'success' && teamSyncFeedback.at ? formatLocalTime(teamSyncFeedback.at) : null,
     teamDataError: teamSyncFeedback?.status === 'error' ? teamSyncFeedback.message : null,
+    // The policy snapshot is reported on its own line (plan §6.5, Y7).
+    policy: gateEnforcement.isLoading
+      ? { status: 'loading' }
+      : gateEnforcement.policySnapshot
+        ? {
+            status: gateEnforcement.loadError ? 'failed' : 'loaded',
+            version: gateEnforcement.policySnapshot.version,
+            syncedAt: formatLocalTime(gateEnforcement.policySnapshot.syncedAt),
+            source: gateEnforcement.policySnapshot.source,
+            ...(gateEnforcement.loadError ? { error: gateEnforcement.loadError } : {}),
+          }
+        : gateEnforcement.loadError
+          ? { status: 'failed', error: gateEnforcement.loadError }
+          : { status: 'unavailable' },
+    formatTime: formatLocalTime,
   })
+
+  // Execution evidence in 执行记录 (plan Y3). Coding evidence belongs to the build step; the diff,
+  // test logs, permissions, coding trace and coding cost are already shown there, once (plan W1).
+  const showsCodingRecords = selectedNode?.kind === 'task' && selectedNode.stage === 'build' && Boolean(latestCodingRun)
+  const executionEvidenceGroups = buildAgentEvidenceGroups({
+    providers: agentProviders,
+    selectedReviews: selectedAgentReviews,
+    latestTrace: latestAgentTrace,
+    latestUsage: latestAgentUsage,
+    retryAttempts: showsCodingRecords ? selectedRetryAttempts : [],
+    latestCodingRun: undefined,
+    codingEvents: showsCodingRecords ? selectedCodingEvents : [],
+    pendingCodingPermission: undefined,
+    permissionRequests: [],
+    diff: undefined,
+    bootstrapEvidence: showsCodingRecords ? selectedBootstrapEvidence : undefined,
+    testEvidence: undefined,
+  }).filter((group) => group.id !== 'coding-trace')
+
+  // A credential the service rejected is not a current identity (plan X3).
+  const teamConnectionIdentity = teamConnectionView.connection === 'connected' && desktopPairing
+    ? `${desktopPairing.userName ?? desktopPairing.userId} · ${desktopPairing.role} · ${desktopPairing.projectName ?? desktopPairing.projectId}`
+    : ''
 
   async function retryTerminalRemoteSyncOperation(operationId: string) {
     if (!desktopApi) {
@@ -1002,9 +1046,11 @@ export function App() {
     target: 'coding' | 'tests' | 'models',
     position: InspectorReadingPosition | null = readingPositionRef.current?.() ?? null,
   ) {
-    const view = target === 'tests' ? 'tests' : 'agents'
+    // Old Agents/Tests targets now open a settings section (plan §4.3, Y1).
+    setSettingsSection(settingsSectionForTaskTarget(target))
+    setSettingsFocus(target === 'tests' ? undefined : target === 'coding' ? 'coding' : 'models')
     if (!selectedRun || !selectedNode || activeView !== 'workbench') {
-      setActiveView(view)
+      setActiveView('settings')
       return
     }
     setSupportContext({
@@ -1018,7 +1064,15 @@ export function App() {
       ...(position?.materialId ? { materialId: position.materialId } : {}),
       createdAt: new Date().toISOString(),
     })
-    setActiveView(view)
+    setActiveView('settings')
+  }
+
+  /** Settings from the navigation or the team connection popover: no task context to return to. */
+  function openSettings(section: SettingsSection) {
+    setSettingsSection(section)
+    setSettingsFocus(undefined)
+    setSupportContext((current) => current && (current.focusTarget === 'coding-agent' || current.focusTarget === 'local-tests') ? null : current)
+    setActiveView('settings')
   }
 
   /** A save on a settings page opened from the task: the banner then offers the way back. */
@@ -1045,7 +1099,7 @@ export function App() {
     setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'reference', reference }))
   }
 
-  /** 「在任务中处理」 on Agents and Tests: back to the task's actual step, nothing runs (W5). */
+  /** 「在任务中处理」 in settings: back to the task's actual step, nothing runs (W5). */
   function handleInTask() {
     if (supportContext && (supportContext.focusTarget === 'coding-agent' || supportContext.focusTarget === 'local-tests')) {
       returnToInspector()
@@ -1070,7 +1124,7 @@ export function App() {
       sourceView: activeView,
       returnView: 'workbench',
       focusTarget: 'knowledge-reference',
-      label: 'Knowledge Governance 引用来源',
+      label: '知识引用来源',
       referenceId,
       documentId: documentId ?? reference?.documentId,
       inspectorTab: '引用来源',
@@ -1105,7 +1159,7 @@ export function App() {
           sourceView: activeView,
           returnView: 'workbench',
           focusTarget: 'knowledge-reference',
-          label: 'Search result · Knowledge',
+          label: '搜索结果 · 知识',
           referenceId: result.referenceId,
           documentId: result.documentId,
           createdAt: new Date().toISOString(),
@@ -1129,7 +1183,7 @@ export function App() {
           sourceView: activeView,
           returnView: 'workbench',
           focusTarget: result.type,
-          label: result.type === 'artifact' ? 'Search result · Artifact' : 'Search result · Event',
+          label: result.type === 'artifact' ? '搜索结果 · 材料' : '搜索结果 · 执行记录',
           artifactId: result.artifactId,
           eventId: result.eventId,
           inspectorTab: resolveInspectorTabForSearchResult(node, result.type),
@@ -1146,104 +1200,11 @@ export function App() {
     setActiveView('workbench')
   }
 
-  const policySource = gateEnforcement.policySnapshot?.source ?? gateEnforcement.decision?.policySource ?? 'unavailable'
-  const policyVersion = gateEnforcement.policySnapshot?.version ?? gateEnforcement.decision?.policyVersion
 
-  return (
-    <div className="app-shell" data-origin={dataOrigin}>
-        <header className="topbar topbar--single-row">
-          <TopbarProjectMenu projectName={selectedLocalProject?.name} projectPath={selectedLocalProject?.path}>
-            <LocalProjectPanel
-              project={selectedLocalProject}
-              teamProjectLabel={teamProjectLabel}
-              teamProjectSource={teamProjectSource}
-              gitStatus={projectGitStatus}
-              isRefreshingGitStatus={isRefreshingGitStatus}
-              onRefreshGitStatus={refreshProjectGitStatus}
-              onSelectProject={selectLocalProject}
-              desktopConnected={Boolean(desktopApi)}
-            />
-            <section className="project-overview" aria-label="项目概览" data-testid="project-overview">
-              <h3>项目概览</h3>
-              <dl className="detail-values"><dt>已加载任务</dt><dd>{scopedRuns.length}</dd><dt>来源</dt><dd>{localRunCount} 本地 · {remoteRunCount} 远端</dd><dt>受阻 Gate</dt><dd>{pendingGateCount}</dd><dt>今日测试证据（UTC）</dt><dd>{testsTodayCount}</dd></dl>
-              <p className="meta">数量属于当前项目已加载的数据；受阻 Gate 只统计 blocked 状态，不等于全部待审批步骤。</p>
-            </section>
-          </TopbarProjectMenu>
-          <div className="search-wrap">
-            <div className="search-box">
-            <Search size={16} />
-            <input
-              aria-label="Search runs and knowledge"
-              placeholder="搜索当前加载的 Run / Artifact / Knowledge / Event"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
-            </div>
-            <span className="search-scope">不搜索本地文件系统</span>
-            {normalizedSearchQuery ? (
-              <div className="search-results" data-testid="search-results">
-                {searchResults.length === 0 ? (
-                  <p className="empty-note">没有匹配结果</p>
-                ) : (
-                  searchResults.map((result) => (
-                    <button
-                      className="search-result-row"
-                      key={result.id}
-                      type="button"
-                      onClick={() => selectSearchResult(result)}
-                    >
-                      <span>{result.type}</span>
-                      <strong>{result.title}</strong>
-                      <small>{result.subtitle}</small>
-                    </button>
-                  ))
-                )}
-              </div>
-            ) : null}
-          </div>
-
-          <TeamConnectionMenu
-            view={teamConnectionView}
-            pairing={desktopPairing ?? null}
-            // A credential the service rejected is not a current identity (plan X3).
-            identity={teamConnectionView.connection === 'connected' && desktopPairing ? `${desktopPairing.userName ?? desktopPairing.userId} · ${desktopPairing.role} · ${desktopPairing.projectName ?? desktopPairing.projectId}` : ''}
-            localProjectName={(localProjectId) => localProjectId === selectedLocalProject?.id ? selectedLocalProject?.name ?? localProjectId ?? '未知' : localProjectId ?? '未知'}
-            hasSelectedProject={Boolean(selectedLocalProject)}
-            pairingCodeDraft={pairingCodeDraft}
-            onPairingCodeDraftChange={setPairingCodeDraft}
-            isPairing={isPairingDesktop}
-            onPair={() => void pairDesktopWithTeam()}
-            pairingFeedback={pairingFeedback}
-            revokedIntents={deliveryIntentsRevokedByRepair(githubDeliveryIntents)}
-            isSyncing={isSyncingRemote}
-            onUpdateTeamData={() => void syncRemoteTeamState()}
-            onRetryUpload={(operationId) => void retryTerminalRemoteSyncOperation(operationId)}
-          />
-          <ThemeToggle compact value={themePreference} onChange={changeThemePreference} />
-          <button className="primary-button" onClick={() => { setNewRunError(''); setIsNewRunOpen(true) }}>
-            <Plus size={16} aria-hidden="true" />
-            新建任务
-          </button>
-        </header>
-
-      <aside className="sidebar rail" aria-label="Primary navigation">
-        <nav className="nav-list">
-          <NavButton active={activeView === 'workbench'} icon={<Workflow />} label="工作台" onClick={() => setActiveView('workbench')} />
-          <NavButton active={activeView === 'team'} ariaLabel="Team Overview" icon={<Users />} label="Team" onClick={() => setActiveView('team')} />
-          <NavButton active={activeView === 'knowledge'} icon={<BookOpen />} label="Knowledge" onClick={() => setActiveView('knowledge')} />
-          <NavButton active={activeView === 'agents'} icon={<Bot />} label="Agents" onClick={() => setActiveView('agents')} />
-          <NavButton active={activeView === 'skills'} icon={<ShieldCheck />} label="Skills" onClick={() => setActiveView('skills')} />
-          <NavButton active={activeView === 'mcp'} icon={<Network />} label="MCP" onClick={() => setActiveView('mcp')} />
-          <NavButton active={activeView === 'tests'} icon={<TestTube2 />} label="测试" onClick={() => setActiveView('tests')} />
-          <NavButton active={activeView === 'diagnostics'} icon={<Settings2 />} label="诊断" onClick={() => setActiveView('diagnostics')} />
-        </nav>
-
-      </aside>
-
-      <main className="workspace main-shell">
-        <CredentialAccessStatus api={desktopApi} detailed={false} />
-        <div className="main-shell-content">
-        <section className="diagnostics-page" hidden={activeView !== 'diagnostics'} aria-label="本地诊断">
+  /** 设置／高级 (plan Y2): diagnostics, then the independent Runtime and multi-agent tools. */
+  const renderAdvancedSettings = () => (
+    <>
+        <section className="diagnostics-page" aria-label="本地诊断">
           <h2>本地诊断</h2>
           <p>用于排查当前应用的数据存储；数据环境名称不是项目或团队绑定。</p>
           <section className="diagnostics-redaction" aria-label="脱敏自检">
@@ -1255,7 +1216,7 @@ export function App() {
             </button>
           </section>
           <CredentialAccessStatus api={desktopApi} detailed />
-          <DiagnosticHistory api={desktopApi} active={activeView === 'diagnostics'} />
+          <DiagnosticHistory api={desktopApi} active />
           <span className="stat stat--source" data-testid="runtime-source-badge" title={runtimeDataSource.detail}>
             数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
             <em>{runtimeDataSource.status}</em>
@@ -1281,6 +1242,120 @@ export function App() {
             )}
           </details>
         </section>
+        <details className="agent-advanced-tools" data-testid="agent-advanced-tools">
+          <summary aria-describedby="agent-advanced-tools-description">
+            <span>独立 Runtime 与多 Agent 诊断</span>
+            <strong id="agent-advanced-tools-description">针对当前任务：{selectedRun?.title ?? '尚未选择任务'}</strong>
+            <em>{hasSelectedLocalProjectBinding ? '已连接团队 · 多 Agent 入口可用' : '未连接团队 · 多 Agent 入口不可用'}</em>
+          </summary>
+          <div className="agent-advanced-tools__body">
+            <p className="agent-advanced-tools__intro">
+              这些工具用于验收与诊断，不代替任务中的操作，不批准 Gate，也不推进流程。
+            </p>
+            <AgentRuntimePanel
+              desktopApi={desktopApi}
+              runId={selectedRun?.id}
+              nodeId={selectedRun?.currentNodeId}
+              localProjectId={selectedLocalProject?.id}
+            />
+            <AgentCoordinationPanel
+              desktopApi={desktopApi}
+              runId={selectedRun?.id}
+              nodeId={selectedRun?.currentNodeId}
+              expectedRunVersion={selectedRun?.version}
+              localProjectId={selectedLocalProject?.id}
+              isTeamPaired={hasSelectedLocalProjectBinding}
+            />
+          </div>
+        </details>
+    </>
+  )
+
+  const policySource = gateEnforcement.policySnapshot?.source ?? gateEnforcement.decision?.policySource ?? 'unavailable'
+  const policyVersion = gateEnforcement.policySnapshot?.version ?? gateEnforcement.decision?.policyVersion
+
+  return (
+    <div className="app-shell" data-origin={dataOrigin} data-runtime-source={runtimeDataSource.status}>
+        <header className="topbar topbar--single-row">
+          <TopbarProjectMenu projectName={selectedLocalProject?.name} projectPath={selectedLocalProject?.path}>
+            <LocalProjectPanel
+              project={selectedLocalProject}
+              teamProjectLabel={teamProjectLabel}
+              teamProjectSource={teamProjectSource}
+              gitStatus={projectGitStatus}
+              isRefreshingGitStatus={isRefreshingGitStatus}
+              onRefreshGitStatus={refreshProjectGitStatus}
+              onSelectProject={selectLocalProject}
+              desktopConnected={Boolean(desktopApi)}
+            />
+            <section className="project-overview" aria-label="项目概览" data-testid="project-overview">
+              <h3>项目概览</h3>
+              <dl className="detail-values"><dt>已加载任务</dt><dd>{scopedRuns.length}</dd><dt>来源</dt><dd>{localRunCount} 本地 · {remoteRunCount} 远端</dd><dt>受阻 Gate</dt><dd>{pendingGateCount}</dd><dt>今日测试证据（UTC）</dt><dd>{testsTodayCount}</dd></dl>
+              <p className="meta">数量属于当前项目已加载的数据；受阻 Gate 只统计 blocked 状态，不等于全部待审批步骤。</p>
+            </section>
+          </TopbarProjectMenu>
+          <div className="search-wrap">
+            <div className="search-box">
+            <Search size={16} />
+            <input
+              aria-label="搜索当前项目"
+              placeholder="搜索当前项目的任务、材料、知识与执行记录"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+            />
+            </div>
+            <span className="search-scope">不搜索本地文件系统</span>
+            {normalizedSearchQuery ? (
+              <div className="search-results" data-testid="search-results">
+                {searchResults.length === 0 ? (
+                  <p className="empty-note">没有匹配结果</p>
+                ) : (
+                  searchResults.map((result) => (
+                    <button
+                      className="search-result-row"
+                      key={result.id}
+                      type="button"
+                      onClick={() => selectSearchResult(result)}
+                    >
+                      <span title={result.type}>{searchResultTypeLabels[result.type]}</span>
+                      <strong>{result.title}</strong>
+                      <small>{result.subtitle}</small>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+          </div>
+
+          {/* Pairing, connection details and per-record uploads live in 设置／团队连接 (plan Y7). */}
+          <TeamConnectionMenu
+            view={teamConnectionView}
+            identity={teamConnectionIdentity}
+            isSyncing={isSyncingRemote}
+            onUpdateTeamData={() => void syncRemoteTeamState()}
+            onOpenDetails={() => openSettings('team')}
+          />
+          {/* The theme moved to 设置／外观 (plan Y5): four top bar controls. */}
+          <button className="primary-button" onClick={() => { setNewRunError(''); setIsNewRunOpen(true) }}>
+            <Plus size={16} aria-hidden="true" />
+            新建任务
+          </button>
+        </header>
+
+      <aside className="sidebar rail" aria-label="Primary navigation">
+        <nav className="nav-list">
+          {/* Four primary entries (plan §4.1, Y1); Agents, Skills, MCP, tests and diagnostics are settings sections. */}
+          <NavButton active={activeView === 'workbench'} icon={<Workflow />} label="任务" onClick={() => setActiveView('workbench')} />
+          <NavButton active={activeView === 'knowledge'} icon={<BookOpen />} label="知识" onClick={() => setActiveView('knowledge')} />
+          <NavButton active={activeView === 'team'} icon={<Users />} label="团队" onClick={() => setActiveView('team')} />
+          <NavButton active={activeView === 'settings'} icon={<Settings2 />} label="设置" onClick={() => openSettings(settingsSection)} />
+        </nav>
+
+      </aside>
+
+      <main className="workspace main-shell">
+        <CredentialAccessStatus api={desktopApi} detailed={false} />
+        <div className="main-shell-content">
 
         {toast && (
           <div
@@ -1410,11 +1485,10 @@ export function App() {
                   )
                 })
               )}
-            </div>
-            </details>
-            <div className="task-title-tools">
+              {/* Moved from the title row and the stage row to keep the first screen small (plan Y6). */}
               {selectedRun ? (
-                <DetailPopover className="task-usage-trigger" title="本任务用量" triggerLabel={`本任务用量：${runUsage.tokenLabel} tokens · ${runUsage.costLabel}`} label={<><span>本任务用量</span><strong>{runUsage.tokenLabel} tokens · {runUsage.costLabel}</strong><ChevronDown size={14} aria-hidden="true" /></>}>
+                <section className="task-menu-section" aria-label="本任务用量与策略" data-testid="task-menu-usage">
+                  <div className="section-heading"><span>本任务</span><strong>用量与策略</strong></div>
                   <div data-testid="run-token-usage"><p>Tokens：{runUsage.tokenLabel}</p><p>费用：{runUsage.costLabel}</p></div>
                   <p className="meta">只包含当前任务已记录的用量，不包含独立会话的累计用量。</p>
                   <h3>流程策略</h3><p>策略版本：{policyVersion ? `v${policyVersion}` : '尚未读取'} · 来源 {policySource}</p>
@@ -1425,8 +1499,23 @@ export function App() {
                     <p className="meta">{currentModelBudget ? `项目最近模型调用 · Provider ${currentModelBudget.providerId}；事件未提供节点和时间，不能作为当前调用的实时许可。` : latestCodingRun?.budgetDecision ? `当前任务的开发执行 ${latestCodingRun.id} · ${latestCodingRun.startedAt}` : '尚无可用评估记录。'}</p>
                     {budgetRecoveryCopy ? <p role="status">{budgetRecoveryCopy}</p> : null}
                   </div>
-                  <button className="ghost-button" onClick={() => openSettingsFromTask('models')}>打开项目模型与预算设置</button>
-                </DetailPopover>
+                  <button className="ghost-button" onClick={() => openSettingsFromTask('models')}>打开模型与执行方式设置</button>
+                  <h3>看板展示方式</h3>
+                  <div className="workflow-view-switch" role="group" aria-label="看板展示方式">
+                    <button type="button" aria-pressed={boardView === 'compact'} onClick={() => setBoardView('compact')}>精简导航</button>
+                    <button type="button" aria-pressed={boardView === 'flow'} onClick={() => setBoardView('flow')}>流程视图</button>
+                    <button type="button" aria-pressed={boardView === 'list'} onClick={() => setBoardView('list')}>列表视图</button>
+                  </div>
+                </section>
+              ) : null}
+            </div>
+            </details>
+            <div className="task-title-tools">
+              {/* Plain text so the unknown cost stays on the first layer (plan §3); details are in the task menu (Y6). */}
+              {selectedRun ? (
+                <p className="task-usage-summary" data-testid="task-usage-summary" title="只包含当前任务已记录的用量；详情在任务菜单中">
+                  <span>本任务用量</span><strong>{runUsage.tokenLabel} tokens · {runUsage.costLabel}</strong>
+                </p>
               ) : null}
               <DiscussionToggle />
             </div>
@@ -1435,6 +1524,7 @@ export function App() {
             {selectedRun ? (
               <>
                 <WorkflowBoard
+                  view={boardView}
                   run={selectedRun}
                   artifacts={scopedArtifacts}
                   events={scopedEvents}
@@ -1555,6 +1645,21 @@ export function App() {
                   isRunningAgentReview={isRunningAgentReview}
                   isStartingCodingAgent={isStartingCodingAgent}
                   pendingInspectorAction={pendingInspectorAction}
+                  codingRecords={showsCodingRecords && latestCodingRun ? (
+                    <CodingRunRecords
+                      latestCodingRun={latestCodingRun}
+                      codingRuns={selectedCodingRuns}
+                      codingEvents={codingEvents}
+                      permissionRequests={codingPermissionRequests}
+                      providers={agentProviders}
+                      bootstrapEvidence={selectedBootstrapEvidence}
+                      testEvidence={selectedCodingTestEvidence}
+                      runtimeBudgetApprovalId={runtimeBudgetApprovalId}
+                      onOpenModelSettings={() => openSettingsFromTask('models')}
+                      {...(codingActionProjection ? { codingActionProjection } : {})}
+                    />
+                  ) : undefined}
+                  executionEvidence={<AgentEvidenceGroups groups={executionEvidenceGroups} />}
                 />
               </>
             ) : (
@@ -1562,10 +1667,9 @@ export function App() {
                 <section className="canvas-panel workflow-panel empty-workbench" data-testid="workflow-empty-state">
                   <div className="panel-head workflow-head">
                     <div>
-                      <span className="panel-title">Workflow Board</span>
-                      <span className="meta">暂无 Run</span>
+                      <span className="panel-title">任务阶段</span>
+                      <span className="meta">暂无任务</span>
                     </div>
-                    <span className="pill soft">no run loaded</span>
                   </div>
                   <p className="empty-note">
                     当前本地仓库还没有开发任务。新建任务或连接团队后更新团队数据，这里会显示任务流程。
@@ -1573,10 +1677,9 @@ export function App() {
                 </section>
                 <aside className="inspector" data-testid="node-inspector-empty">
                   <div className="panel-head panel-head--compact">
-                    <span className="panel-title">Inspector</span>
-                    <span className="pill soft">empty</span>
+                    <span className="panel-title">任务详情</span>
                   </div>
-                  <p className="empty-note">选择真实 Run 后显示节点、证据、Gate 和 Review。</p>
+                  <p className="empty-note">选择任务后显示当前步骤、材料、执行记录与审批。</p>
                 </aside>
               </>
             )}
@@ -1630,102 +1733,106 @@ export function App() {
             isLoading={isLoadingRepositoryKnowledge}
             onRefresh={() => void refreshRepositoryKnowledge()}
             onReturnToInspector={returnToInspector}
+            artifacts={scopedArtifacts}
+            // Memory management moved here from the Agents page (plan §4.1, Y3).
+            memoryPanel={<AgentMemoryPanel desktopApi={desktopApi} runId={selectedRun?.id} localProjectId={selectedLocalProject?.id} />}
           />
         )}
 
-        {activeView === 'agents' && (
-          <AgentWorkbenchView
-            key={`${selectedLocalProject?.id ?? ''}:${desktopPairing?.tokenId ?? ''}`}
-            projectRuntimeBudget={projectRuntimeBudget}
-            modelBudget={currentModelBudget}
-            desktopApi={desktopApi}
-            localProjectId={selectedLocalProject?.id}
-            isTeamPaired={hasSelectedLocalProjectBinding}
-            requestedBy={currentUser?.id ?? 'local-user'}
-            providers={agentProviders}
-            selectedProviderId={selectedAgentProviderId}
-            stageExecution={stageChoice}
-            onProviderChange={(providerId) => {
-              setSelectedAgentProviderId(providerId)
-              void desktopApi?.saveSettings({ selectedAgentProviderId: providerId }).catch(() => setToast('Provider 选择保存失败，请重新选择。'))
-            }}
-            onProviderRemoved={(providerId) => {
-              setAgentProviders((providers) => providers.filter((item) => item.id !== providerId))
-              setSelectedAgentProviderId('')
-              setToast('已删除本机 Provider 配置和凭据；当前未选择 Provider。')
-            }}
-            providerNameDraft={providerNameDraft}
-            onProviderUpdated={(metadata) => setAgentProviders((providers) => providers.map((provider) => provider.id === metadata.providerId ? reviewProviderFromMetadata(metadata) : provider))}
-            onProviderNameDraftChange={setProviderNameDraft}
-            providerBaseUrlDraft={providerBaseUrlDraft}
-            onProviderBaseUrlDraftChange={setProviderBaseUrlDraft}
-            providerModelDraft={providerModelDraft}
-            onProviderModelDraftChange={setProviderModelDraft}
-            providerKeyDraft={providerKeyDraft}
-            onProviderKeyDraftChange={setProviderKeyDraft}
-            onSaveProviderCredential={(thinking) => void saveAgentProviderCredential(thinking).then((saved) => { if (saved) markSettingsSaved() })}
-            onSettingsSaved={markSettingsSaved}
-            onHandleInTask={handleInTask}
-            isRunning={isRunningAgentReview}
-            isRunningTests={isRunningTests}
-            pendingInspectorAction={pendingInspectorAction}
-            selectedRun={selectedRun}
-            selectedNode={selectedNode}
-            reviews={agentReviews}
-            selectedReviews={selectedAgentReviews}
-            latestReviewFailure={latestReviewFailure}
-            latestReview={latestAgentReview}
-            latestTrace={latestAgentTrace}
-            latestUsage={latestAgentUsage}
-            isStartingCodingAgent={isStartingCodingAgent}
-            runtimeBudgetApprovalId={runtimeBudgetApprovalId}
-            onRuntimeBudgetApprovalIdChange={setRuntimeBudgetApprovalId}
-            codingRuns={selectedCodingRuns}
-            codingHistoryEvents={codingEvents}
-            codingHistoryPermissionRequests={codingPermissionRequests}
-            retryAttempts={selectedRetryAttempts}
-            latestCodingRun={latestCodingRun}
-            codingEvents={selectedCodingEvents}
-            pendingCodingPermission={pendingCodingPermission}
-            permissionRequests={selectedCodingPermissionRequests}
-            workspace={selectedManagedWorkspace}
-            diff={selectedCodingDiff}
-            bootstrapEvidence={selectedBootstrapEvidence}
-            testEvidence={selectedCodingTestEvidence}
+        {activeView === 'settings' && (
+          <SettingsView
+            section={settingsSection}
+            onSectionChange={(section) => { setSettingsSection(section); setSettingsFocus(undefined) }}
             supportContext={supportContext}
-            onReturnToInspector={returnToInspector}
-            codingReadiness={codingRuntime.readiness}
-            codingReadinessError={codingRuntime.error}
-            onRefreshCodingReadiness={codingRuntime.refresh}
-            {...(codingActionProjection ? { codingActionProjection } : {})}
-          />
-        )}
-
-        {activeView === 'skills' && (
-          <SkillView />
-        )}
-
-        {activeView === 'mcp' && (
-          <McpView servers={mcpServers} onToggle={toggleMcp} />
-        )}
-
-        {activeView === 'tests' && (
-          <TestsView
-            evidence={scopedTestEvidence}
-            onHandleInTask={handleInTask}
-            isRunningTests={isRunningTests}
-            commandDraft={testCommandDraft}
-            onCommandDraftChange={setTestCommandDraft}
-            onSaveCommand={() => void saveTestCommand().then((saved) => { if (saved) markSettingsSaved() })}
-            project={selectedLocalProject}
-            commandSafety={commandSafety}
-            isCommandDirty={isTestCommandDirty}
-            isSavingCommand={isSavingTestCommand}
-            supportContext={supportContext}
-            selectedRun={selectedRun}
-            selectedNode={selectedNode}
-            onReturnToInspector={returnToInspector}
-          />
+            run={selectedRun}
+            onReturnToTask={returnToInspector}
+          >
+            {settingsSection === 'project' ? (
+              <LocalProjectSettings
+                project={selectedLocalProject}
+                gitStatus={projectGitStatus}
+                evidence={scopedTestEvidence}
+                onHandleInTask={handleInTask}
+                isRunningTests={isRunningTests}
+                commandDraft={testCommandDraft}
+                onCommandDraftChange={setTestCommandDraft}
+                onSaveCommand={() => void saveTestCommand().then((saved) => { if (saved) markSettingsSaved() })}
+                commandSafety={commandSafety}
+                isCommandDirty={isTestCommandDirty}
+                isSavingCommand={isSavingTestCommand}
+                selectedRun={selectedRun}
+                selectedNode={selectedNode}
+              />
+            ) : settingsSection === 'models' ? (
+              <ModelSettings
+                key={`${selectedLocalProject?.id ?? ''}:${desktopPairing?.tokenId ?? ''}`}
+                desktopApi={desktopApi}
+                projectRuntimeBudget={projectRuntimeBudget}
+                modelBudget={currentModelBudget}
+                localProjectId={selectedLocalProject?.id}
+                requestedBy={currentUser?.id ?? 'local-user'}
+                providers={agentProviders}
+                selectedProviderId={selectedAgentProviderId}
+                onProviderChange={(providerId) => {
+                  setSelectedAgentProviderId(providerId)
+                  void desktopApi?.saveSettings({ selectedAgentProviderId: providerId }).catch(() => setToast('Provider 选择保存失败，请重新选择。'))
+                }}
+                onProviderRemoved={(providerId) => {
+                  setAgentProviders((providers) => providers.filter((item) => item.id !== providerId))
+                  setSelectedAgentProviderId('')
+                  setToast('已删除本机 Provider 配置和凭据；当前未选择 Provider。')
+                }}
+                onProviderUpdated={(metadata) => setAgentProviders((providers) => providers.map((provider) => provider.id === metadata.providerId ? reviewProviderFromMetadata(metadata) : provider))}
+                providerNameDraft={providerNameDraft}
+                onProviderNameDraftChange={setProviderNameDraft}
+                providerBaseUrlDraft={providerBaseUrlDraft}
+                onProviderBaseUrlDraftChange={setProviderBaseUrlDraft}
+                providerModelDraft={providerModelDraft}
+                onProviderModelDraftChange={setProviderModelDraft}
+                providerKeyDraft={providerKeyDraft}
+                onProviderKeyDraftChange={setProviderKeyDraft}
+                onSaveProviderCredential={(thinking) => void saveAgentProviderCredential(thinking).then((saved) => { if (saved) markSettingsSaved() })}
+                onSettingsSaved={markSettingsSaved}
+                selectedNode={selectedNode}
+                latestCodingRun={latestCodingRun}
+                runtimeBudgetApprovalId={runtimeBudgetApprovalId}
+                onRuntimeBudgetApprovalIdChange={setRuntimeBudgetApprovalId}
+                hasSelectedRun={Boolean(selectedRun)}
+                onHandleInTask={handleInTask}
+                codingReadiness={codingRuntime.readiness}
+                codingReadinessError={codingRuntime.error}
+                onRefreshCodingReadiness={codingRuntime.refresh}
+                focus={settingsFocus}
+              />
+            ) : settingsSection === 'extensions' ? (
+              <>
+                <SkillView />
+                <McpView servers={mcpServers} onToggle={toggleMcp} />
+              </>
+            ) : settingsSection === 'team' ? (
+              <TeamConnectionSettings
+                view={teamConnectionView}
+                pairing={desktopPairing ?? null}
+                identity={teamConnectionIdentity}
+                localProjectName={(localProjectId) => localProjectId === selectedLocalProject?.id ? selectedLocalProject?.name ?? localProjectId ?? '未知' : localProjectId ?? '未知'}
+                hasSelectedProject={Boolean(selectedLocalProject)}
+                pairingCodeDraft={pairingCodeDraft}
+                onPairingCodeDraftChange={setPairingCodeDraft}
+                isPairing={isPairingDesktop}
+                onPair={() => void pairDesktopWithTeam()}
+                pairingFeedback={pairingFeedback}
+                revokedIntents={deliveryIntentsRevokedByRepair(githubDeliveryIntents)}
+                isSyncing={isSyncingRemote}
+                onUpdateTeamData={() => void syncRemoteTeamState()}
+                onRetryUpload={(operationId) => void retryTerminalRemoteSyncOperation(operationId)}
+              />
+            ) : settingsSection === 'appearance' ? (
+              <section className="settings-appearance" aria-label="主题">
+                <p>主题偏好只保存在本机，不影响团队或项目数据。点击切换：跟随系统 → 浅色 → 深色。</p>
+                <ThemeToggle value={themePreference} onChange={changeThemePreference} />
+              </section>
+            ) : renderAdvancedSettings()}
+          </SettingsView>
         )}
         </div>
       </main>

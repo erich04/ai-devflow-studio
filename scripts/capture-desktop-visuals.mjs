@@ -11,21 +11,25 @@ const viewports = [
   { name: '1440x900', width: 1440, height: 900 },
 ]
 
+// Four primary entries since S3 (plan Y1); Agents, Skills, MCP and tests are settings sections.
 const routes = [
-  { name: 'workbench', button: '工作台' },
-  { name: 'team', button: 'Team Overview' },
-  { name: 'knowledge', button: 'Knowledge' },
-  { name: 'agents', button: 'Agents' },
-  { name: 'skills', button: 'Skills' },
-  { name: 'mcp', button: 'MCP' },
-  { name: 'tests', button: '测试' },
+  { name: 'workbench', button: '任务' },
+  { name: 'knowledge', button: '知识' },
+  { name: 'team', button: '团队' },
+  { name: 'settings-project', button: '设置', section: '本地项目' },
+  { name: 'settings-models', button: '设置', section: '模型与执行方式' },
+  { name: 'settings-extensions', button: '设置', section: '扩展能力' },
 ]
 
 async function captureRoute(page, route, viewportName) {
+  const navigation = page.locator('aside[aria-label="Primary navigation"]')
   if (route.name !== 'workbench') {
-    await page.getByRole('button', { name: route.button }).click()
+    await navigation.getByRole('button', { name: route.button, exact: true }).click()
   } else {
-    await page.getByRole('button', { name: route.button }).click().catch(() => undefined)
+    await navigation.getByRole('button', { name: route.button, exact: true }).click().catch(() => undefined)
+  }
+  if (route.section) {
+    await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: route.section, exact: true }).click()
   }
 
   await page.locator('.workspace').waitFor({ state: 'visible' })

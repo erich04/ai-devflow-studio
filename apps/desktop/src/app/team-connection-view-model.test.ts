@@ -143,3 +143,64 @@ describe('team connection view (plan §6.5)', () => {
     expect(revoked.map((item) => item.id)).toEqual(['approval_required-local-a', 'creating_pr-local-b'])
   })
 })
+
+describe('connection details in settings (plan §6.5, §8.2 S3, Y7)', () => {
+  const format = (iso: string) => `local(${iso})`
+
+  it('bound but not yet read: team data and policy are both unread, not failed', () => {
+    const view = buildTeamConnectionView({ ...base, pairing: { ...pairingFor('local-a'), expiresAt: '2026-10-28T00:00:00.000Z' }, operations: [], policy: { status: 'unavailable' }, formatTime: format })
+    expect(view).toMatchObject({
+      connection: 'connected',
+      dataLine: '本次启动还没有读取团队数据。',
+      policyLine: '尚未读取团队策略。',
+      uploadLine: '没有待上传的记录。',
+      expiryLine: '有效期至 local(2026-10-28T00:00:00.000Z)；团队服务仍可能提前撤销。',
+      detailsActionLabel: '查看连接详情',
+    })
+    expect(JSON.stringify(view)).not.toContain('失败')
+  })
+
+  it('policy loaded but team data failed: the two facts are reported separately', () => {
+    const view = buildTeamConnectionView({
+      ...base,
+      pairing: pairingFor('local-a'),
+      operations: [],
+      teamDataError: '网络不可用',
+      policy: { status: 'loaded', version: 3, syncedAt: '09-28 10:00', source: 'remote_cache' },
+    })
+    expect(view.dataLine).toBe('读取失败：网络不可用')
+    expect(view.policyLine).toBe('团队策略 v3 · 同步于 09-28 10:00。')
+  })
+
+  it('a failed policy read keeps the cached version visible', () => {
+    const view = buildTeamConnectionView({ ...base, pairing: pairingFor('local-a'), operations: [], policy: { status: 'failed', version: 2, error: '超时' } })
+    expect(view.policyLine).toBe('策略读取失败：超时；仍在使用本机缓存的 v2。')
+  })
+
+  it('data updated but uploads pending: success of one does not hide the other', () => {
+    const view = buildTeamConnectionView({
+      ...base,
+      pairing: pairingFor('local-a'),
+      teamDataReadAt: '09-28 10:05',
+      policy: { status: 'loaded', version: 1, syncedAt: '09-28 10:05', source: 'remote_cache' },
+      operations: [operation({ status: 'terminal', organizationId: 'org-1', teamProjectId: 'team-x', lastErrorCode: 'network' })],
+    })
+    expect(view.dataLine).toBe('最近成功读取：09-28 10:05')
+    expect(view.uploadLine).toBe('有 1 条记录未上传。')
+    expect(view.records[0]).toMatchObject({ statusLabel: '上传失败', canRetry: true })
+    expect(view.detailsActionLabel).toBe('查看上传详情')
+  })
+
+  it('after switching to a project without a connection, nothing of the other project carries over', () => {
+    const view = buildTeamConnectionView({ ...base, localProjectId: 'local-b', pairing: pairingFor('local-a'), operations: [], policy: { status: 'unavailable' } })
+    expect(view).toMatchObject({ connection: 'local', expiryLine: '', detailsActionLabel: '连接团队' })
+    expect(view.connectionLine).toContain('当前团队连接属于另一个本地项目')
+    expect(view.policyLine).toContain('连接团队后读取团队策略')
+  })
+
+  it('an expired binding asks to reconnect and says when it expired', () => {
+    const view = buildTeamConnectionView({ ...base, pairingExpired: true, pairing: { ...pairingFor('local-a'), expiresAt: '2026-09-27T00:00:00.000Z' }, operations: [], formatTime: format })
+    expect(view).toMatchObject({ connection: 'reconnect', detailsActionLabel: '重新连接', expiryLine: '已于 local(2026-09-27T00:00:00.000Z) 过期。' })
+    expect(view.dataLine).toBe('重新连接后可以更新团队数据。')
+  })
+})

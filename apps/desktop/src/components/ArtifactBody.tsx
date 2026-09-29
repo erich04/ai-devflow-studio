@@ -65,8 +65,10 @@ export function hasSectionContent(section: ArtifactSection): boolean {
 }
 
 /** Grouping is presentation; persisted content, versions and the raw source stay unchanged. */
-export function ArtifactBody({ content, kind, section = 'all', annotateBlock, pendingContent, annotations = [] }: {
+export function ArtifactBody({ content, kind, section = 'all', annotateBlock, pendingContent, annotations = [], readingTools }: {
   content: string; kind?: string; section?: 'all' | 'content' | 'evidence' | 'records'
+  /** Extra reading aids (e.g. review basis links) folded with the TOC and 查看原文 (plan Y6). */
+  readingTools?: ReactNode
   annotateBlock?: ((start: number, end: number) => ReactNode) | undefined
   pendingContent?: ReactNode
   annotations?: Array<{ index: number; start: number; end: number }> | undefined
@@ -88,9 +90,15 @@ export function ArtifactBody({ content, kind, section = 'all', annotateBlock, pe
     const target = design && item.group === 'questions' ? 'delivery' : requirement && item.group === 'delivery' ? 'questions' : item.group
     return target === active
   })
+  const toc = !raw && visible.length > 4
+    ? <nav className="artifact-toc" aria-label="内容目录">{visible.map((item, index) => item.title && <a key={index} href={`#${id}-section-${index}`}>{item.title}</a>)}</nav>
+    : null
+  const rawToggle = <button className="text-button message-format-toggle" onClick={() => setRaw(!raw)}>{raw ? '返回排版' : '查看原文'}</button>
+  // One control on the first screen: review basis, TOC and the raw source share a disclosure (plan Y6).
+  const hasTools = Boolean(readingTools) || visible.length > 4
   const render = (item: ArtifactSection) => <ConversationBody showFormatToggle={false} headingLabel={(label) => sectionTitles[label] ?? label} annotateBlock={annotateBlock ? (start, end) => annotateBlock(item.start + start, item.start + end) : undefined} message={{ id: 'artifact-body', role: 'assistant', text: item.markdown, format: 'markdown', createdAt: '' }} />
   return <div className="artifact-body">
-    <button className="text-button message-format-toggle" onClick={() => setRaw(!raw)}>{raw ? '返回排版' : '查看原文'}</button>
+    {hasTools ? <details className="artifact-reading-tools" data-testid="artifact-reading-tools"><summary>阅读工具</summary>{readingTools}{toc}{rawToggle}</details> : rawToggle}
     {raw ? <div className="message-plain">{content}</div> : <>
       {tabs.length > 0 && !['evidence','records'].includes(section) && <div className="artifact-content-tabs" role="tablist" aria-label={design ? '设计内容' : '需求内容'} onKeyDown={(event) => {
         if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return
@@ -101,7 +109,6 @@ export function ArtifactBody({ content, kind, section = 'all', annotateBlock, pe
       }}>{tabs.map((tab) => <button key={tab.id} id={`${id}-${tab.id}`} role="tab" aria-selected={active === tab.id} tabIndex={active === tab.id ? 0 : -1} aria-controls={`${id}-panel`} onClick={() => setSelected(tab.id)}>{tab.label}{annotations.length > 0 && <span className="meta"> · {new Set(annotations.filter((annotation) => sections.some((item) => { const target = design && item.group === 'questions' ? 'delivery' : requirement && item.group === 'delivery' ? 'questions' : item.group; return target === tab.id && annotation.start >= item.start && annotation.end <= item.start + item.markdown.length })).map((annotation) => annotation.index)).size} 条定位意见</span>}</button>)}</div>}
       <div id={`${id}-panel`} role={tabs.length && !['evidence','records'].includes(section) ? 'tabpanel' : undefined} aria-labelledby={tabs.length && !['evidence','records'].includes(section) ? `${id}-${active}` : undefined}>
         {design && active === 'verification' && !['evidence','records'].includes(section) && <p className="meta">以下是验证计划。实际执行结果在测试步骤的「当前工作」中查看，历史证据在「材料与版本」中，计划不等于测试已通过。</p>}
-        {visible.length > 4 && <nav className="artifact-toc" aria-label="内容目录">{visible.map((item, index) => item.title && <a key={index} href={`#${id}-section-${index}`}>{item.title}</a>)}</nav>}
         {visible.map((item, index) => <section className="artifact-reading-section" id={`${id}-section-${index}`} key={index}>
           {render(item)}
         </section>)}

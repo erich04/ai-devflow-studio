@@ -28,9 +28,24 @@ export type TeamConnectionView = {
   /** Short label for the top bar trigger. */
   summary: string
   connectionLine: string
+  /** Credential expiry, from the local record only (plan X3); empty without a credential. */
+  expiryLine: string
   dataLine: string
+  /** The policy snapshot is its own fact, separate from project and member data (plan §6.5). */
+  policyLine: string
   uploadLine: string
   records: UploadRecordView[]
+  /** The popover's one way into 设置／团队连接 (plan Y7), named after what needs attention. */
+  detailsActionLabel: '连接团队' | '重新连接' | '查看上传详情' | '查看连接详情'
+}
+
+/** Policy snapshot as read by the desktop (useGateEnforcement); times are already formatted. */
+export type TeamPolicyReadState = {
+  status: 'loading' | 'loaded' | 'failed' | 'unavailable'
+  version?: number | undefined
+  syncedAt?: string | undefined
+  source?: 'remote_cache' | 'built_in_default' | 'unavailable' | undefined
+  error?: string | undefined
 }
 
 export type TeamConnectionInput = {
@@ -42,6 +57,9 @@ export type TeamConnectionInput = {
   teamProjectName?: string | undefined
   teamDataReadAt?: string | null | undefined
   teamDataError?: string | null | undefined
+  policy?: TeamPolicyReadState | undefined
+  /** Formats the credential expiry; the view model stays free of locale code. */
+  formatTime?: ((iso: string) => string) | undefined
 }
 
 const kindLabels: Record<RemoteSyncOperation['kind'], string> = {
@@ -240,7 +258,33 @@ export function buildTeamConnectionView(input: TeamConnectionInput): TeamConnect
         ? input.teamDataReadAt ? 'ok' : 'neutral'
         : 'neutral'
 
-  return { connection, tone, summary, connectionLine, dataLine, uploadLine, records }
+  const formatTime = input.formatTime ?? ((iso: string) => iso)
+  // Only the credential of this project has an expiry worth showing here (plan §6.5).
+  const credential = input.pairing && input.localProjectId && input.pairing.localProjectId === input.localProjectId ? input.pairing : null
+  const expiryLine = !credential
+    ? ''
+    : !credential.expiresAt
+      ? '本机没有记录有效期；团队服务仍可能撤销凭据。'
+      : input.pairingExpired
+        ? `已于 ${formatTime(credential.expiresAt)} 过期。`
+        : `有效期至 ${formatTime(credential.expiresAt)}；团队服务仍可能提前撤销。`
+  const policySource = input.policy?.source === 'built_in_default' ? '内置默认策略' : '团队策略'
+  const policyLine = !input.policy || input.policy.status === 'unavailable'
+    ? connection === 'connected' ? '尚未读取团队策略。' : '连接团队后读取团队策略；未读取时，Gate 显示为状态待核实。'
+    : input.policy.status === 'loading'
+      ? '正在读取团队策略。'
+      : input.policy.status === 'failed'
+        ? `策略读取失败：${input.policy.error ?? '原因未知'}${input.policy.version ? `；仍在使用本机缓存的 v${input.policy.version}` : ''}。`
+        : `${policySource} v${input.policy.version ?? '—'}${input.policy.syncedAt ? ` · 同步于 ${input.policy.syncedAt}` : ''}。`
+  const detailsActionLabel: TeamConnectionView['detailsActionLabel'] = connection === 'reconnect'
+    ? '重新连接'
+    : connection === 'local'
+      ? '连接团队'
+      : failing > 0
+        ? '查看上传详情'
+        : '查看连接详情'
+
+  return { connection, tone, summary, connectionLine, expiryLine, dataLine, policyLine, uploadLine, records, detailsActionLabel }
 }
 
 /** In-flight delivery intents that replacing the credential revokes, across all projects (plan P1). */

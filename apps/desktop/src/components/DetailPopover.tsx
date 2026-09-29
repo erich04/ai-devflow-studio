@@ -4,7 +4,9 @@ import { X } from 'lucide-react'
 
 /** Read-only details anchored to a toolbar or citation, outside clipped scroll panes. */
 export function DetailPopover({ label, children, title, triggerLabel, className = '', hoverPreview = false }: {
-  label: ReactNode; title: string; children: ReactNode; className?: string; hoverPreview?: boolean
+  label: ReactNode; title: string; className?: string; hoverPreview?: boolean
+  /** A function receives `close`, so an action inside can close the popover before navigating. */
+  children: ReactNode | ((close: () => void) => ReactNode)
   /** Accessible name of the trigger when its visible text carries state beyond the title (WCAG 2.5.3). */
   triggerLabel?: string
 }) {
@@ -64,7 +66,7 @@ export function DetailPopover({ label, children, title, triggerLabel, className 
       onMouseEnter={clearTimer} onMouseLeave={leave} onFocusCapture={() => setMode('pinned')}>
       <header><strong>{title}</strong><button type="button" className="text-button" aria-label={`关闭${title}`} onClick={close}><X size={16} /></button></header>
       {hoverPreview && <p className="meta">{mode === 'preview' ? '悬停预览，点击意见标记可固定。' : '已固定，可按 Escape 关闭。'}</p>}
-      {children}
+      {typeof children === 'function' ? children(close) : children}
     </div>, document.body)}
   </>
 }

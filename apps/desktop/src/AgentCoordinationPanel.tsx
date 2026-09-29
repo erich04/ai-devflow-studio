@@ -269,7 +269,7 @@ export function AgentCoordinationPanel({
           </p>
           {nodeId && expectedRunVersion !== undefined ? (
             <>
-              {!isTeamPaired ? <p className="error-note" id="coordination-pairing-required">不可用：请先在页面顶部绑定当前 Local Project 与 Team Project。</p> : null}
+              {!isTeamPaired ? <p className="error-note" id="coordination-pairing-required">不可用：请先在设置／团队连接中把当前本地项目连接到团队项目。</p> : null}
               <button
                 className="ghost-button"
                 type="button"

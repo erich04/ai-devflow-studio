@@ -515,7 +515,7 @@ export function useDesktopActions(input: {
     const executor = stageAgentExecutorKind
     const providerId = input.stageProviderId ?? selectedAgentProviderId
     if (!providerId) {
-      setToast('请先在 Agents 的 Runtime Settings 配置 Agent Provider：Provider Name、Base URL、Model 和 API Key')
+      setToast('请先在设置／模型与执行方式中添加模型提供方：名称、Base URL、模型和 API Key')
       return
     }
     if (blockIfInspectorWriteInFlight()) {

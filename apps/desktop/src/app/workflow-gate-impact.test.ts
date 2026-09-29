@@ -67,7 +67,7 @@ describe('workflow Gate impact', () => {
       gateStatusLabel: statusLabel,
       isCurrentStep: isCurrent,
       distance: 1,
-      relationshipLabel: '直接下游 Gate',
+      relationshipLabel: '紧接着的 Gate',
       providedArtifactCount: 1,
       linkedArtifacts: [{ id: artifact.id, title: artifact.title, kind: artifact.kind }],
       unconsumedArtifactCount: 0,
@@ -96,7 +96,7 @@ describe('workflow Gate impact', () => {
       state: 'found',
       gateId: firstGate.id,
       distance: 2,
-      relationshipLabel: '最近下游 Gate · 2 步',
+      relationshipLabel: '后续 Gate · 相隔 2 步',
     })
   })
 
@@ -113,7 +113,7 @@ describe('workflow Gate impact', () => {
 
     expect(buildWorkflowGateImpact({ run: workflow, node: task, artifacts: [] })).toEqual({
       state: 'none',
-      summary: '当前节点不影响后续 Gate。',
+      summary: '当前步骤不影响后续 Gate。',
     })
   })
 })

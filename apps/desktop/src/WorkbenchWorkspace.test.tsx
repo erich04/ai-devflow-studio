@@ -158,7 +158,7 @@ describe('workbench tabs and independent conversation interaction', () => {
     expect(within(dialog).getByLabelText('会话名称')).toHaveValue('另一段对话')
     expect(dialog).toHaveTextContent('OpenCode')
     expect(dialog).toHaveTextContent('historical-model')
-    expect(dialog).toHaveTextContent('DeepSeek（Agents 当前配置）')
+    expect(dialog).toHaveTextContent('DeepSeek（设置／模型与执行方式）')
     fireEvent.click(within(dialog).getByText('模型调用设置记录'))
     expect(dialog).toHaveTextContent('总计 15 tokens')
     expect(dialog).toHaveTextContent('HTTP 502')

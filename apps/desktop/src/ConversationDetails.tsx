@@ -60,7 +60,7 @@ export function ConversationDetailsDialog({ session, projectName, providerName, 
         <dt>所属项目</dt><dd>{projectName}</dd>
         <dt>会话状态</dt><dd>{statusLabel}</dd>
         <dt>执行方式</dt><dd>{session.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'}</dd>
-        <dt>下次发送使用的模型</dt><dd>{providerName || '尚未选择'}（Agents 当前配置）</dd>
+        <dt>下次发送使用的模型</dt><dd>{providerName || '尚未选择'}（设置／模型与执行方式）</dd>
         <dt>最近记录的模型</dt><dd>{calls.at(-1)?.provider?.model ?? '尚无调用记录'}</dd>
       </dl>
       <div className="conversation-details-help"><strong>了解会话资料和权限</strong><ConversationHelpButton /></div>

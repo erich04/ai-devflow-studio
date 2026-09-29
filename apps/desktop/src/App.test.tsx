@@ -1307,9 +1307,40 @@ async function waitForLocalStateLoaded(
   await waitFor(() => {
     if (expectedCalls === undefined) expect(loadState).toHaveBeenCalled()
     else expect(loadState).toHaveBeenCalledTimes(expectedCalls)
-    // The IPC call can precede both its response and React's committed render.
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local persisted')
+    // The IPC call can precede both its response and React's committed render. The data source
+    // badge lives in 设置／高级 (plan Y2); the shell carries its status on every page.
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-runtime-source', 'local persisted')
   })
+}
+
+/** Four primary entries (plan §4.1, Y1): 任务, 知识, 团队, 设置. */
+function clickPrimaryNav(name: '任务' | '知识' | '团队' | '设置') {
+  const navigation = screen.getByRole('complementary', { name: 'Primary navigation' })
+  fireEvent.click(within(navigation).getByRole('button', { name }))
+}
+
+type SettingsSectionLabel = '本地项目' | '模型与执行方式' | '扩展能力' | '团队连接' | '外观' | '高级'
+const settingsSectionIds: Record<SettingsSectionLabel, string> = {
+  本地项目: 'project',
+  模型与执行方式: 'models',
+  扩展能力: 'extensions',
+  团队连接: 'team',
+  外观: 'appearance',
+  高级: 'advanced',
+}
+
+/** Opens 设置 and one of its sections (plan Y2); returns the section content container. */
+function openSettingsSection(name: SettingsSectionLabel) {
+  if (!screen.queryByTestId('settings-view')) clickPrimaryNav('设置')
+  const sections = screen.getByRole('navigation', { name: '设置分区' })
+  fireEvent.click(within(sections).getByRole('button', { name }))
+  return screen.getByTestId(`settings-section-${settingsSectionIds[name]}`)
+}
+
+/** The data source badge is part of 设置／高级 (plan Y2). */
+function openRuntimeSourceBadge() {
+  openSettingsSection('高级')
+  return screen.getByTestId('runtime-source-badge')
 }
 
 /** Gate approval labels name the approval subject (plan D1): 确认需求 vN, 确认方案, or 通过 Gate. */
@@ -1355,12 +1386,26 @@ function teamConnectionTrigger() {
 function clickUpdateTeamData() {
   fireEvent.click(within(openTeamConnection()).getByRole('button', { name: /更新团队数据|更新中/ }))
 }
-/** Current task usage, policy and budget share the task title row popover (plan L1). */
+/** Pairing, connection details and per-record uploads live in 设置／团队连接 (plan Y7). */
+function openTeamConnectionSettings() {
+  openSettingsSection('团队连接')
+  return screen.getByTestId('team-connection-settings')
+}
+/** The task menu (the title's disclosure) holds usage, policy, budget and the board view (plan Y6). */
+function openTaskMenu() {
+  const menu = document.querySelector('details.workbench-project-menu') as HTMLDetailsElement | null
+  if (!menu) throw new Error('task menu is not rendered')
+  if (!menu.open) fireEvent.click(menu.querySelector(':scope > summary') as HTMLElement)
+  if (!menu.open) menu.open = true
+  return menu
+}
+/** Current task usage, policy and budget are in the task menu (plan Y6). */
 function openTaskUsage() {
-  return openPopover(/^本任务用量/, '本任务用量')
+  openTaskMenu()
+  return screen.getByTestId('task-menu-usage')
 }
 async function openTaskUsageWhenReady() {
-  await screen.findByRole('button', { name: /^本任务用量/ })
+  await screen.findByTestId('task-usage-summary')
   return openTaskUsage()
 }
 
@@ -1752,11 +1797,12 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.loadDataProfileDiagnostics).toHaveBeenCalled())
-    expect(screen.queryByText('local-development')).not.toBeVisible()
-    fireEvent.click(screen.getByRole('button', { name: '诊断' }))
+    // Diagnostics are a 设置／高级 section (plan Y2), not part of the task page.
+    expect(screen.queryByText('local-development')).not.toBeInTheDocument()
+    openSettingsSection('高级')
     const diagnostics = screen.getByTestId('data-profile-diagnostics')
 
-    expect(diagnostics).toHaveTextContent('local-development')
+    await waitFor(() => expect(diagnostics).toHaveTextContent('local-development'))
     expect(diagnostics).toHaveTextContent('saved_profile')
     expect(diagnostics).toHaveTextContent('Schema')
     expect(diagnostics).toHaveTextContent('v34')
@@ -1782,10 +1828,13 @@ describe('App', () => {
     expect(menu.open).toBe(false)
   })
 
-  it('toggles theme preference through the topbar control', () => {
+  it('toggles theme preference in 设置／外观 instead of the top bar', () => {
     render(<App />)
 
-    const button = screen.getByTestId('theme-toggle')
+    // Four top bar controls (plan Y5): the theme is a settings section.
+    expect(within(screen.getByRole('banner')).queryByTestId('theme-toggle')).not.toBeInTheDocument()
+    const appearance = openSettingsSection('外观')
+    const button = within(appearance).getByTestId('theme-toggle')
     expect(button).toHaveTextContent('跟随系统')
 
     fireEvent.click(button)
@@ -1795,17 +1844,20 @@ describe('App', () => {
   it('labels browser preview, unloaded knowledge, and missing providers as empty sources', () => {
     render(<App />)
 
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('browser preview')
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('missing contract')
-    expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无 Run')
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-runtime-source', 'missing contract')
+    expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无任务')
 
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    const badge = openRuntimeSourceBadge()
+    expect(badge).toHaveTextContent('browser preview')
+    expect(badge).toHaveTextContent('missing contract')
+
+    openSettingsSection('模型与执行方式')
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
       '未选择 Provider 请先添加 Provider Name、Base URL、模型和 API Key',
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
-    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('not indexed')
+    clickPrimaryNav('知识')
+    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('尚未建立知识索引')
   })
 
   it('keeps unconfigured Gate Review surfaces neutral in light and dark themes', async () => {
@@ -1815,49 +1867,50 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await waitForLocalStateLoaded(api.loadState)
 
+    // The Agents path cards are gone (plan Y2); an unconfigured model is a neutral setting, not an error.
+    const expectNeutralUnconfiguredModels = () => {
+      const models = openSettingsSection('模型与执行方式')
+      expect(within(models).getByTestId('review-provider-mode')).toHaveTextContent('未选择 Provider')
+      expect(within(models).getByText('当前未选择模型提供方。请选择已保存的提供方，或在下方新增。'))
+        .toHaveClass('empty-note')
+      expect(within(models).queryByRole('alert')).not.toBeInTheDocument()
+      expect(within(models).queryByRole('button', { name: /门禁审查/ })).not.toBeInTheDocument()
+    }
     expect(document.documentElement).toHaveAttribute('data-theme', 'light')
-    expect(screen.getByTestId('agent-current-task')).toHaveClass('agent-current-task--soft')
-    expect(screen.getByTestId('agent-current-task')).not.toHaveClass(
-      'agent-current-task--warn',
-      'agent-current-task--bad',
-    )
-    expect(screen.getByTestId('gate-review-path')).toHaveClass(
-      'agent-path-card--secondary',
-      'agent-path-card--soft',
-    )
-    expect(screen.getByTestId('gate-review-path')).not.toHaveClass(
-      'agent-path-card--primary',
-      'agent-path-card--warn',
-      'agent-path-card--bad',
-    )
+    expectNeutralUnconfiguredModels()
 
-    fireEvent.click(screen.getByTestId('theme-toggle'))
-    fireEvent.click(screen.getByTestId('theme-toggle'))
+    const appearance = openSettingsSection('外观')
+    fireEvent.click(within(appearance).getByTestId('theme-toggle'))
+    fireEvent.click(within(appearance).getByTestId('theme-toggle'))
     await waitFor(() => expect(document.documentElement).toHaveAttribute('data-theme', 'dark'))
 
-    expect(screen.getByTestId('agent-current-task')).toHaveClass('agent-current-task--soft')
-    expect(screen.getByTestId('gate-review-path')).toHaveClass('agent-path-card--soft')
+    expectNeutralUnconfiguredModels()
   })
 
-  it('keeps Runtime, Coordination, and Memory in one default-collapsed advanced area', async () => {
+  it('keeps Runtime and Coordination in one default-collapsed 设置／高级 area and Memory on the knowledge page', async () => {
     const listAgentRuntimes = vi.fn().mockResolvedValue([])
     const listCoordinationSessions = vi.fn().mockResolvedValue([])
     const api = installDesktopApi({ listAgentRuntimes, listCoordinationSessions })
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    // Memory management moved to 知识 (plan §4.1, Y3).
+    clickPrimaryNav('知识')
+    expect(within(screen.getByTestId('knowledge-memory-section')).getByRole('region', { name: 'Agent Memory 生命周期' }))
+      .toBeInTheDocument()
 
-    const workbench = await screen.findByTestId('agent-workbench')
+    const workbench = openSettingsSection('高级')
     const advanced = within(workbench).getByTestId('agent-advanced-tools')
     expect(advanced).not.toHaveAttribute('open')
-    expect(within(workbench).getAllByRole('button').filter((button) => button.classList.contains('primary-button'))).toHaveLength(1)
+    // Diagnostics offer no primary action: nothing here replaces the task's own actions.
+    expect(within(workbench).queryAllByRole('button').filter((button) => button.classList.contains('primary-button'))).toHaveLength(0)
     expect(within(workbench).getByRole('region', { name: '独立 Runtime 验收与诊断' })).not.toBeVisible()
     expect(within(workbench).getByText('workflow.evaluate')).not.toBeVisible()
+    expect(advanced).toHaveTextContent(`针对当前任务：${fixtureRuns[0]!.title}`)
 
-    fireEvent.click(within(advanced).getByText('高级验收与诊断'))
+    fireEvent.click(within(advanced).getByText('独立 Runtime 与多 Agent 诊断'))
     expect(advanced).toHaveAttribute('open')
     expect(await within(workbench).findByRole('region', { name: '独立 Runtime 验收与诊断' })).toBeInTheDocument()
     await waitFor(() => expect(listAgentRuntimes).toHaveBeenCalledWith({
@@ -1875,7 +1928,7 @@ describe('App', () => {
       .toBeInTheDocument()
   })
 
-  it('keeps the design Stage Agent as the only primary action and explains unpaired advanced limits before use', async () => {
+  it('keeps the design Stage Agent as the task status row primary action, offers no execution in 设置, and explains unpaired advanced limits before use', async () => {
     const listCoordinationSessions = vi.fn().mockResolvedValue([])
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(desktopState({
@@ -1888,31 +1941,31 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-
-    const workbench = await screen.findByTestId('agent-workbench')
-    const currentTask = within(workbench).getByTestId('agent-current-task')
-    const primaryActions = within(workbench).getAllByRole('button')
+    // Execution happens in the task (plan W5): the status row names the model before the call.
+    const statusRow = await screen.findByTestId('task-status-row')
+    const primaryActions = within(statusRow).getAllByRole('button')
       .filter((button) => button.classList.contains('primary-button'))
     expect(primaryActions).toHaveLength(1)
-    // Execution happens in the task (plan W5): the only primary action hands back to it.
-    expect(primaryActions[0]).toHaveAccessibleName('在任务中处理')
-    expect(within(currentTask).getByTestId('agent-handle-in-task')).toContainElement(primaryActions[0]!)
-    expect(within(workbench).queryByRole('button', { name: '生成设计方案' })).not.toBeInTheDocument()
-    expect(within(currentTask).getByRole('list', { name: '当前主操作的对象、结果和影响' })).toHaveTextContent(
-      '调用 doubao-review / ark-code-latest',
-    )
-    expect(currentTask).toHaveTextContent('根据需求和已保存阶段产物生成，不直接调查仓库。')
-    expect(currentTask).toHaveTextContent('推进到方案评审 Gate；不会自动批准 Gate')
+    expect(primaryActions[0]).toBe(within(statusRow).getByTestId('complete-design-agent'))
+    expect(statusRow).toHaveTextContent('可以生成方案')
+    expect(statusRow).toHaveTextContent(/doubao-review/)
 
+    // 设置 only configures (plan Y2): no generation, review or primary action there.
+    const models = openSettingsSection('模型与执行方式')
+    expect(within(models).queryByRole('button', { name: /生成设计方案|生成方案/ })).not.toBeInTheDocument()
+    expect(within(models).queryAllByRole('button').filter((button) => button.classList.contains('primary-button')))
+      .toHaveLength(0)
+    expect(api.completeWorkflowAgentNode).not.toHaveBeenCalled()
+
+    const workbench = openSettingsSection('高级')
     const advanced = within(workbench).getByTestId('agent-advanced-tools')
-    expect(advanced).toHaveTextContent('本地未配对 · 多 Agent 入口不可用')
-    fireEvent.click(within(advanced).getByText('高级验收与诊断'))
+    expect(advanced).toHaveTextContent('未连接团队 · 多 Agent 入口不可用')
+    fireEvent.click(within(advanced).getByText('独立 Runtime 与多 Agent 诊断'))
     const coordination = within(advanced).getByRole('button', {
       name: '创建固定多 Agent 验收会话（需先配对 Team）',
     })
     expect(coordination).toBeDisabled()
-    expect(coordination).toHaveAccessibleDescription(/不可用：请先在页面顶部绑定.*必须先将当前 Local Project 配对到 Team Project/u)
+    expect(coordination).toHaveAccessibleDescription(/不可用：请先在设置／团队连接中把当前本地项目连接到团队项目。.*必须先将当前 Local Project 配对到 Team Project/u)
     expect(listCoordinationSessions).not.toHaveBeenCalled()
   })
 
@@ -1923,14 +1976,17 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    await waitFor(() => expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local SQLite empty'))
-    expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无 Run')
+    expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无任务')
+    expect(screen.getByTestId('node-inspector-empty')).toHaveTextContent('任务详情')
+    expect(screen.getByTestId('node-inspector-empty')).toHaveTextContent('选择任务后显示当前步骤、材料、执行记录与审批。')
 
     const localProjectPanel = screen.getByLabelText('Local project')
     expect(within(localProjectPanel).getByText('未选择仓库')).toBeInTheDocument()
     expect(within(localProjectPanel).getByText('not selected')).toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('Team Project')).not.toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('Branch')).not.toBeInTheDocument()
+
+    await waitFor(() => expect(openRuntimeSourceBadge()).toHaveTextContent('local SQLite empty'))
   })
 
   it('does not show a stale run project id as the selected local repository team ownership', async () => {
@@ -2368,7 +2424,7 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('需求澄清已生成，进入需求确认 Gate')
   })
 
-  it('completes the current clarify agent from Agents without running Gate Review', async () => {
+  it('hands back from 设置 to the current clarify step and completes it only from the task without running Gate Review', async () => {
     const api = installDesktopApi()
     render(<App />)
 
@@ -2376,16 +2432,18 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /新建任务/ }))
     fillNewRunForm()
     fireEvent.click(screen.getByRole('button', { name: '创建任务' }))
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    await screen.findByTestId('complete-clarify-agent')
 
-    const agentWorkbench = await screen.findByTestId('agent-workbench')
-    expect(agentWorkbench).toHaveTextContent('生成需求澄清')
-    expect(within(agentWorkbench).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
-    // Agents only hands back to the task (plan W5); generation runs from the task status row.
-    expect(within(agentWorkbench).queryByRole('button', { name: /生成需求澄清/ })).not.toBeInTheDocument()
-    fireEvent.click(within(within(agentWorkbench).getByTestId('agent-handle-in-task')).getByRole('button', { name: '在任务中处理' }))
+    // Settings only configure (plan Y2, W5): no generation or Gate Review entry there.
+    const models = openSettingsSection('模型与执行方式')
+    expect(within(models).queryByRole('button', { name: /运行门禁审查|重新审查/ })).not.toBeInTheDocument()
+    expect(within(models).queryByRole('button', { name: /生成需求/ })).not.toBeInTheDocument()
+    const project = openSettingsSection('本地项目')
+    expect(within(project).queryByRole('button', { name: /生成需求/ })).not.toBeInTheDocument()
+    fireEvent.click(within(project).getByRole('button', { name: '在任务中处理' }))
 
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
+    expect(api.completeWorkflowAgentNode).not.toHaveBeenCalled()
     const inspector = await screen.findByTestId('node-inspector')
     expect(api.completeWorkflowAgentNode).not.toHaveBeenCalled()
     fireEvent.click(within(inspector).getByTestId('complete-clarify-agent'))
@@ -2702,7 +2760,7 @@ describe('App', () => {
     fireEvent.click(within(statusRow).getByRole('button', { name: '审查并批准修改' }))
     expect(within(inspector).getByRole('tab', { name: '当前工作' })).toHaveAttribute('aria-selected', 'true')
     await waitFor(() => expect(changeSetPanel).toHaveFocus())
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(within(review).getByLabelText('src/a.ts diff')).toBeInTheDocument()
     expect(within(review).getByLabelText('src/b.ts diff')).toBeInTheDocument()
     expect(within(review).getByRole('button', { name: 'Approve exact Change Set' })).toBeEnabled()
@@ -2813,28 +2871,26 @@ describe('App', () => {
     const changes = within(inspector).getByRole('region', { name: '开发变更与检查' })
     expect(changes).toHaveTextContent('Saved test failed before timeout.')
     expect(changes).toHaveTextContent('+timed out')
+    // Coding Run cost and trace evidence is read-only in the build step's 执行记录 (plan Y3).
     clickInspectorTab('执行记录')
-    expect(within(inspector).getByRole('list', { name: 'Coding Run terminal trace' })).toHaveTextContent('Provider response exceeded the runtime deadline.')
-
-    // Agents keeps read-only cost evidence but no retry (plan W5).
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    const agents = await screen.findByTestId('agent-workbench')
-    expect(agents).toHaveTextContent('Provider response exceeded the runtime deadline.')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('140 / 20')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('10 / 130')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('7.1%')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('settled')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('pricing-v1')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('Actual provider settlement')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('hit $1 / 1M')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('miss $2 / 1M')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('output $3 / 1M')
-    expect(screen.getByTestId('coding-terminal-summary')).toHaveTextContent('total $0.02')
-    expect(screen.getByTestId('coding-provider-call-settlements')).toHaveTextContent('initial · off_peak')
-    expect(screen.getByTestId('coding-provider-call-settlements')).toHaveTextContent('140 input · 10 hit · 130 miss · 20 output')
-    expect(within(agents).queryByRole('button', { name: 'Open worktree' })).not.toBeInTheDocument()
-    expect(within(agents).queryByRole('button', { name: '上次运行超时 · 重新运行 Coding Agent' })).not.toBeInTheDocument()
-    fireEvent.click(within(agents).getByRole('button', { name: '在任务中处理' }))
+    const records = within(inspector).getByTestId('coding-run-records')
+    expect(within(records).getByRole('list', { name: 'Coding Run trace history' })).toHaveTextContent('Provider response exceeded the runtime deadline.')
+    const terminalSummary = within(records).getByTestId('coding-terminal-summary')
+    expect(terminalSummary).toHaveTextContent('140 / 20')
+    expect(terminalSummary).toHaveTextContent('10 / 130')
+    expect(terminalSummary).toHaveTextContent('7.1%')
+    expect(terminalSummary).toHaveTextContent('settled')
+    expect(terminalSummary).toHaveTextContent('pricing-v1')
+    expect(terminalSummary).toHaveTextContent('提供方实际结算')
+    expect(terminalSummary).toHaveTextContent('缓存命中 $1 / 1M')
+    expect(terminalSummary).toHaveTextContent('未命中 $2 / 1M')
+    expect(terminalSummary).toHaveTextContent('输出 $3 / 1M')
+    expect(terminalSummary).toHaveTextContent('合计 $0.02')
+    expect(within(records).getByTestId('coding-provider-call-settlements')).toHaveTextContent('initial · off_peak')
+    expect(within(records).getByTestId('coding-provider-call-settlements')).toHaveTextContent('输入 140 · 缓存命中 10 · 未命中 130 · 输出 20')
+    expect(within(records).queryByRole('button', { name: 'Open worktree' })).not.toBeInTheDocument()
+    expect(within(records).queryByRole('button', { name: '上次运行超时 · 重新运行 Coding Agent' })).not.toBeInTheDocument()
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
 
     // The retry is confirmed and started in the task status row.
     const taskInspector = await screen.findByTestId('node-inspector')
@@ -2849,7 +2905,6 @@ describe('App', () => {
     await waitFor(() => expect(api.runCodingAgent).toHaveBeenCalledTimes(1))
     expect(api.runCodingAgent).toHaveBeenCalledWith(expect.objectContaining({ runId: buildRun.id, nodeId: 'n-build' }))
     expect(vi.mocked(api.runCodingAgent).mock.calls[0]![0]).not.toHaveProperty('additionalAttemptAfterCount')
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
   })
 
@@ -2868,11 +2923,11 @@ describe('App', () => {
       getCodingRuntimeReadiness: vi.fn().mockResolvedValue({ ...codingReadinessFixture(), engine: 'opencode-http', executor: 'opencode-http' }),
     })
     render(<App />)
-    // The extra attempt is authorised in the task (plan W3); Agents only hands back (W5).
-    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
-    const workbench = await screen.findByTestId('agent-workbench')
-    expect(within(workbench).queryByRole('button', { name: '已达尝试上限 · 授权追加一次尝试' })).not.toBeInTheDocument()
-    fireEvent.click(within(workbench).getByRole('button', { name: '在任务中处理' }))
+    await waitForLocalStateLoaded(api.loadState)
+    // The extra attempt is authorised in the task (plan W3); settings have no execution buttons (Y2, W5).
+    const models = openSettingsSection('模型与执行方式')
+    expect(within(models).queryByRole('button', { name: '已达尝试上限 · 授权追加一次尝试' })).not.toBeInTheDocument()
+    clickPrimaryNav('任务')
 
     const inspector = await screen.findByTestId('node-inspector')
     const statusRow = within(inspector).getByTestId('task-status-row')
@@ -2887,7 +2942,7 @@ describe('App', () => {
       runId: buildRun.id, nodeId: 'n-build', additionalAttemptAfterCount: 3,
     })))
     expect(api.runCodingAgent).toHaveBeenCalledTimes(1)
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
   })
 
@@ -2907,11 +2962,11 @@ describe('App', () => {
       }),
     })
     render(<App />)
-    // Renewal runs in the task status row (plan W3); Agents has no execution buttons (W5).
-    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
-    const workbench = await screen.findByTestId('agent-workbench')
-    expect(within(workbench).queryByRole('button', { name: '重新核验并请求审批' })).not.toBeInTheDocument()
-    fireEvent.click(within(workbench).getByRole('button', { name: '在任务中处理' }))
+    await waitForLocalStateLoaded(api.loadState)
+    // Renewal runs in the task status row (plan W3); settings have no execution buttons (Y2, W5).
+    const models = openSettingsSection('模型与执行方式')
+    expect(within(models).queryByRole('button', { name: '重新核验并请求审批' })).not.toBeInTheDocument()
+    clickPrimaryNav('任务')
 
     const inspector = await screen.findByTestId('node-inspector')
     fireEvent.click(await within(within(inspector).getByTestId('task-status-row')).findByRole('button', { name: '重新核验并请求审批' }))
@@ -2920,7 +2975,6 @@ describe('App', () => {
     })))
     expect(api.runCodingAgent).not.toHaveBeenCalled()
     expect(api.replyCodingPermission).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
   })
 
@@ -2996,19 +3050,22 @@ describe('App', () => {
     })
     render(<App />)
 
-    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
-    const picker = await screen.findByLabelText('Coding Run history')
+    // Coding Run audit is part of the build step's 执行记录 (plan Y3).
+    const inspector = await screen.findByTestId('node-inspector')
+    clickInspectorTab('执行记录')
+    const records = await within(inspector).findByTestId('coding-run-records')
+    const picker = within(records).getByLabelText('Coding Run history')
     expect(picker).toHaveValue(latestRun.id)
     fireEvent.change(picker, { target: { value: oldRun.id } })
-    const audit = screen.getByTestId('coding-run-audit')
+    const audit = within(records).getByTestId('coding-run-audit')
     expect(audit).toHaveTextContent(oldRun.id)
     expect(audit).toHaveTextContent('Old provider failure.')
     expect(audit).toHaveTextContent('permission-old · rejected')
     expect(audit).toHaveTextContent('Old terminal trace.')
     expect(audit).toHaveTextContent('100 · unknown')
     expect(audit).not.toHaveTextContent('$0.01')
-    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Legacy unverified cost')
-    expect(screen.getByTestId('agent-workbench')).not.toHaveTextContent('$0.01')
+    expect(records).toHaveTextContent('旧记录，费用未核实')
+    expect(records).not.toHaveTextContent('$0.01')
   })
 
   it('fails closed in Workbench when no Coding Engine is available and opens the shared configuration', async () => {
@@ -3040,17 +3097,20 @@ describe('App', () => {
 
     // Configuration is the one thing that leaves the task; the banner leads back (plan W9).
     fireEvent.click(codingAction)
-    const agents = await screen.findByTestId('agent-workbench')
-    expect(screen.getByLabelText('执行工具')).toBeInTheDocument()
-    const banner = within(agents).getByTestId('support-context-banner')
+    // The execution tool is configured in 设置／模型与执行方式 (plan Y2).
+    const settings = await screen.findByTestId('settings-view')
+    const models = within(settings).getByTestId('settings-section-models')
+    expect(within(models).getByLabelText('执行工具')).toBeInTheDocument()
+    const banner = within(settings).getByTestId('support-context-banner')
     expect(banner).toHaveTextContent('来自任务')
+    expect(banner).toHaveTextContent('设置执行工具')
     fireEvent.click(within(banner).getByRole('button', { name: '返回任务' }))
     expect(await screen.findByTestId('node-inspector')).toBeInTheDocument()
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(api.runCodingAgent).not.toHaveBeenCalled()
   })
 
-  it('uses the same budget blocker in Workbench and Agents without exposing its machine code as status copy', async () => {
+  it('uses the same budget blocker in the task and 设置／模型与执行方式 without exposing its machine code as status copy', async () => {
     const readiness = codingReadinessFixture({
       status: 'blocked',
       checks: [
@@ -3088,8 +3148,7 @@ describe('App', () => {
       ),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    const workbench = await screen.findByTestId('agent-workbench')
+    const workbench = openSettingsSection('模型与执行方式')
     await waitFor(() => expect(workbench).toHaveTextContent('预算评估：阻止执行'))
     expect(workbench).toHaveTextContent('Team Project：已配对')
     expect(workbench).toHaveTextContent('测试命令：已配置')
@@ -3109,7 +3168,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
     const executorPicker = await screen.findByLabelText('执行工具')
     await waitFor(() => expect(api.getCodingRuntimeConfiguration).toHaveBeenCalled())
     await waitFor(() => expect(executorPicker).toHaveValue('native-model'))
@@ -3164,8 +3223,8 @@ describe('App', () => {
     })
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await waitFor(() => expect(screen.getByText('项目执行工具').closest('summary')).toHaveTextContent('已配置'))
+    openSettingsSection('模型与执行方式')
+    await waitFor(() => expect(screen.getByText('项目执行工具 · 本地项目').closest('summary')).toHaveTextContent('已配置'))
     expect(screen.getAllByText(message).length).toBeGreaterThan(0)
     expect(api.runCodingAgent).not.toHaveBeenCalled()
   })
@@ -3182,7 +3241,7 @@ describe('App', () => {
     })
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
     await waitFor(() => {
       expect(screen.getByLabelText('OpenCode Provider ID')).toHaveValue('team-deepseek')
       expect(screen.getByRole('checkbox', { name: '手动指定 OpenCode Provider / Model' })).toBeChecked()
@@ -3204,7 +3263,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
     const provider = await screen.findByLabelText('Coding Agent Provider')
     await waitFor(() => expect(provider).toHaveValue(agentProvider.id))
     fireEvent.click(screen.getByRole('button', { name: '保存并用于当前项目' }))
@@ -3239,7 +3298,7 @@ describe('App', () => {
       nodeId: 'n-test',
     }))
     expect(api.runProjectTests).toHaveBeenCalledTimes(1)
-    expect(screen.queryByTestId('tests-view')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
   })
 
@@ -3696,8 +3755,9 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('loading local IPC')
     expect(screen.queryByRole('button', { name: 'Resume GitHub Delivery' })).not.toBeInTheDocument()
+    expect(openRuntimeSourceBadge()).toHaveTextContent('loading local IPC')
+    clickPrimaryNav('任务')
     await act(async () => { finishInitialLoad(loadedState) })
     await waitForLocalStateLoaded(loadState, 1)
     fireEvent.click(await screen.findByRole('button', { name: 'Resume GitHub Delivery' }))
@@ -4408,10 +4468,11 @@ describe('App', () => {
     render(<App />)
 
     await screen.findAllByText('本地持久化 Run')
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local SQLite')
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local persisted')
     expect(screen.queryByText('为 Payments API 增加 /health 端点')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('healthService.check()')
+    const badge = openRuntimeSourceBadge()
+    expect(badge).toHaveTextContent('local SQLite')
+    expect(badge).toHaveTextContent('local persisted')
   })
 
   it('separates workflow node type, source, display mode, and Inspector semantics', async () => {
@@ -4490,14 +4551,15 @@ describe('App', () => {
     const inspector = clickInspectorTab('当前工作')
     const impact = within(inspector).getByTestId('gate-impact-summary')
 
-    expect(impact).toHaveTextContent('直接下游 Gate')
+    expect(impact).toHaveTextContent('对后续 Gate 的影响')
+    expect(impact).toHaveTextContent('紧接着的 Gate')
     expect(impact).toHaveTextContent('需求确认 Gate')
     expect(impact).toHaveTextContent('已完成')
     expect(impact).toHaveTextContent('需求澄清结果')
-    expect(impact).toHaveTextContent('此处只展示前向影响')
+    expect(impact).toHaveTextContent('这里只说明对后续 Gate 的影响')
     expect(within(impact).queryByRole('button', { name: /通过 Gate|确认方案|确认需求|Override/ })).not.toBeInTheDocument()
 
-    fireEvent.click(within(impact).getByRole('button', { name: '查看 Gate' }))
+    fireEvent.click(within(impact).getByRole('button', { name: '查看该 Gate' }))
     await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求确认 Gate'))
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Gate · Team Policy')
   })
@@ -4543,7 +4605,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    clickPrimaryNav('团队')
     expect(screen.getByTestId('team-overview')).toHaveTextContent('snapshot v1')
     vi.mocked(api.loadEnforcementPolicy).mockResolvedValue({
       ...initialPolicy, version: 2, source: 'remote_cache', syncedAt: '2026-09-10T12:00:00.000Z',
@@ -4566,9 +4628,9 @@ describe('App', () => {
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
     vi.mocked(api.evaluateGateEnforcement).mockClear()
     fireEvent.click(screen.getByTestId('flow-node-n-build'))
-    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    clickPrimaryNav('团队')
     await waitFor(() => expect(screen.getByTestId('team-overview')).toHaveTextContent('snapshot v1'))
-    expect(screen.getByLabelText('Gate policy matrix')).toHaveTextContent('testing_standard')
+    expect(screen.getByLabelText('团队策略规则')).toHaveTextContent('testing_standard')
     expect(screen.getByTestId('team-overview')).toHaveTextContent('remote_cache snapshot v1')
     expect(api.evaluateGateEnforcement).not.toHaveBeenCalled()
   })
@@ -4580,7 +4642,7 @@ describe('App', () => {
     })
     render(<App />)
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    clickPrimaryNav('团队')
     fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
     openTeamConnection()
     expect(screen.getAllByRole('button', { name: /更新中/ })).toHaveLength(2)
@@ -4681,12 +4743,14 @@ describe('App', () => {
     expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
     expect(screen.queryByText('远端同步 Run')).not.toBeInTheDocument()
     expect(screen.getByTestId('project-overview')).toHaveTextContent('1 本地 · 0 远端')
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('remote snapshot + local merge')
-    expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('real IPC/API')
     expect(screen.getAllByText('local').length).toBeGreaterThan(0)
     expect(screen.getByTestId('toast')).toHaveTextContent('团队数据已更新 · 策略 v1')
+    expect(document.querySelector('.app-shell')).toHaveAttribute('data-runtime-source', 'real IPC/API')
+    const badge = openRuntimeSourceBadge()
+    expect(badge).toHaveTextContent('remote snapshot + local merge')
+    expect(badge).toHaveTextContent('real IPC/API')
 
-    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    clickPrimaryNav('团队')
     expect(screen.getAllByText('Remote Team API').length).toBeGreaterThan(0)
     expect(screen.getByText('erich/remote-team-api')).toBeInTheDocument()
     expect(screen.getAllByText(/\$0\.250.*unknown/).length).toBeGreaterThan(0)
@@ -4743,7 +4807,7 @@ describe('App', () => {
     expect(teamConnection).toHaveTextContent('连接团队后可以更新团队数据。')
     expect(teamConnectionTrigger()).toHaveTextContent('本地项目')
     expect(teamConnectionTrigger()).not.toHaveTextContent('同步失败')
-    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    clickPrimaryNav('团队')
     fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
 
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
@@ -4885,8 +4949,10 @@ describe('App', () => {
 
     clickInspectorTab('材料与版本')
     fireEvent.click(within(within(inspector).getByTestId('knowledge-reference-sources')).getByRole('button', { name: /查看引用来源/ }))
-    expect(await screen.findByTestId('knowledge-view')).toHaveTextContent('来自 Workbench Inspector')
-    fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
+    expect(await screen.findByTestId('knowledge-view')).toHaveTextContent('来自任务')
+    const knowledgeBanner = screen.getByTestId('support-context-banner')
+    expect(knowledgeBanner).toHaveTextContent('知识引用来源')
+    fireEvent.click(within(knowledgeBanner).getByRole('button', { name: '返回任务' }))
     expect(await screen.findByTestId('node-inspector')).toHaveTextContent('方案评审 Gate')
     expect(screen.getByTestId('knowledge-reference-sources')).toBeInTheDocument()
   })
@@ -4917,7 +4983,14 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    const teamConnection = openTeamConnection()
+    // The popover's one details button leads to 设置／团队连接, where pairing lives (plan Y7).
+    const popover = openTeamConnection()
+    expect(within(popover).queryByLabelText('Desktop pairing code')).not.toBeInTheDocument()
+    fireEvent.click(within(popover).getByRole('button', { name: '查看连接详情' }))
+    expect(screen.queryByRole('dialog', { name: '团队连接' })).not.toBeInTheDocument()
+    expect(within(screen.getByRole('navigation', { name: '设置分区' })).getByRole('button', { name: '团队连接' }))
+      .toHaveAttribute('aria-current', 'page')
+    const teamConnection = screen.getByTestId('team-connection-settings')
     fireEvent.change(within(teamConnection).getByLabelText('Desktop pairing code'), {
       target: { value: 'pair-p-payments.copy-once-secret' },
     })
@@ -4955,7 +5028,7 @@ describe('App', () => {
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
 
-    const teamConnection = openTeamConnection()
+    const teamConnection = openTeamConnectionSettings()
     fireEvent.change(within(teamConnection).getByLabelText('Desktop pairing code'), { target: { value: 'pair-same-team.secret' } })
     fireEvent.click(within(teamConnection).getByRole('button', { name: '重新连接' }))
     const confirmation = within(teamConnection).getByRole('alertdialog', { name: '确认替换团队连接' })
@@ -4991,7 +5064,7 @@ describe('App', () => {
     expect(teamConnection).toHaveTextContent('重新连接后可以更新团队数据。')
     expect(within(teamConnection).queryByRole('button', { name: /更新团队数据/ })).not.toBeInTheDocument()
     vi.mocked(api.loadRemoteSnapshot).mockClear()
-    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    clickPrimaryNav('团队')
     fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
     expect(screen.getByTestId('toast')).toHaveTextContent(
@@ -5519,11 +5592,15 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByTestId('theme-toggle'))
+    // Theme and MCP connectors are settings sections (plan Y2, Y5).
+    fireEvent.click(within(openSettingsSection('外观')).getByTestId('theme-toggle'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ themePreference: 'light' }))
 
-    fireEvent.click(screen.getByRole('button', { name: /^MCP$/ }))
-    fireEvent.click(screen.getAllByRole('button', { name: /Disable/ })[0]!)
+    const mcp = within(openSettingsSection('扩展能力')).getByTestId('mcp-view')
+    const disable = within(mcp).getAllByRole('button', { name: /^停用 / })[0]!
+    expect(disable).toHaveAccessibleName(`停用 ${fixtureMcpServers[0]!.name}`)
+    expect(disable).toHaveTextContent('停用')
+    fireEvent.click(disable)
 
     await waitFor(() =>
       expect(api.saveMcpServers).toHaveBeenCalledWith([
@@ -5541,20 +5618,27 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+    fireEvent.change(screen.getByLabelText('搜索当前项目'), {
       target: { value: 'health endpoint' },
     })
 
     expect(screen.getByTestId('search-results')).toHaveTextContent('为 Payments API 增加 /health 端点')
     expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
+    // Result types are named in Chinese; the stored type stays in the title (plan Y9).
+    const expectedTypeLabels: Record<string, string> = { run: '任务', node: '步骤', artifact: '材料', knowledge: '知识', event: '执行记录' }
+    const typeLabels = Array.from(screen.getByTestId('search-results').querySelectorAll('.search-result-row > span[title]'))
+    expect(typeLabels.length).toBeGreaterThan(0)
+    for (const label of typeLabels) {
+      expect(label.textContent).toBe(expectedTypeLabels[label.getAttribute('title') ?? ''])
+    }
 
-    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+    fireEvent.change(screen.getByLabelText('搜索当前项目'), {
       target: { value: 'nothing matches this' },
     })
     expect(screen.getByTestId('search-results')).toHaveTextContent('没有匹配结果')
     expect(screen.getByText('没有匹配的 Run')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /Knowledge/ }))
+    clickPrimaryNav('知识')
     expect(screen.getByText('没有匹配的知识节点')).toBeInTheDocument()
   })
 
@@ -5567,12 +5651,13 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('API 健康端点规范')
 
-    fireEvent.click(screen.getByRole('button', { name: /Knowledge/ }))
+    clickPrimaryNav('知识')
 
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Knowledge Governance')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Git Markdown Index')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('indexed')
-    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('Run references')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('知识治理')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('仓库 Markdown 索引')
+    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('知识索引已更新 · 没有文档')
+    expect(screen.getByTestId('knowledge-index-details')).toHaveTextContent('indexed · no documents')
+    expect(screen.getByTestId('knowledge-view')).toHaveTextContent('当前任务的引用')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识文档')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识节点')
   })
@@ -5587,7 +5672,7 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /查看引用来源/ })).not.toBeInTheDocument()
   })
 
-  it('opens Tests from the test-node inspector and preserves the return target', async () => {
+  it('opens 设置／本地项目 from the test-node inspector and preserves the return target', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [{ ...localProject, testCommand: '' }],
@@ -5605,12 +5690,14 @@ describe('App', () => {
     expect(runTests).toHaveAttribute('title', '先保存当前项目的测试命令。')
     fireEvent.click(within(within(inspector).getByTestId('task-test-run')).getByRole('button', { name: '设置测试命令' }))
 
-    const testsView = screen.getByTestId('tests-view')
+    // The test command is a 设置／本地项目 setting (plan Y2, Y4).
+    const testsView = screen.getByTestId('settings-view')
+    expect(within(testsView).getByTestId('settings-section-project')).toContainElement(within(testsView).getByTestId('settings-project'))
     const banner = within(testsView).getByTestId('support-context-banner')
     expect(banner).toHaveTextContent('来自任务')
     expect(banner).toHaveTextContent('设置测试命令')
-    expect(banner).toHaveTextContent('返回后不会自动运行检查')
-    expect(within(testsView).queryByRole('button', { name: /执行测试|执行本地测试/ })).not.toBeInTheDocument()
+    expect(banner).toHaveTextContent('返回后不会自动执行任何操作')
+    expect(within(testsView).queryByRole('button', { name: /执行测试|执行本地测试|运行检查/ })).not.toBeInTheDocument()
     expect(within(testsView).getByRole('button', { name: '在任务中处理' })).toBeEnabled()
 
     fireEvent.change(screen.getByLabelText('测试命令'), { target: { value: 'pnpm test' } })
@@ -5621,13 +5708,13 @@ describe('App', () => {
     }))
     // Saving does not navigate or run anything; the banner offers the way back (plan W9).
     await waitFor(() => expect(within(screen.getByTestId('support-context-banner')).getByRole('status')).toHaveTextContent('已保存。可以返回任务'))
-    expect(screen.getByTestId('tests-view')).toBeInTheDocument()
+    expect(screen.getByTestId('settings-project')).toBeInTheDocument()
 
     fireEvent.click(within(screen.getByTestId('support-context-banner')).getByRole('button', { name: '返回任务' }))
     const returned = await screen.findByTestId('node-inspector')
     expect(returned).toHaveTextContent('开发自测')
     expect(within(returned).getByRole('tab', { name: '当前工作' })).toHaveAttribute('aria-selected', 'true')
-    expect(screen.queryByTestId('tests-view')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(api.runProjectTests).not.toHaveBeenCalled()
   })
 
@@ -5636,7 +5723,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+    fireEvent.change(screen.getByLabelText('搜索当前项目'), {
       target: { value: 'API 健康端点规范' },
     })
 
@@ -5663,17 +5750,20 @@ describe('App', () => {
       expect(screen.getByTestId('node-inspector')).toHaveTextContent('API 健康端点规范'),
     )
 
-    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+    fireEvent.change(screen.getByLabelText('搜索当前项目'), {
       target: { value: 'API 健康端点规范' },
     })
     expect(screen.getByTestId('search-results')).toHaveTextContent('API 健康端点规范')
 
-    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    clickPrimaryNav('知识')
     const knowledgeView = screen.getByTestId('knowledge-view')
-    expect(knowledgeView).toHaveTextContent('indexed · truncated')
+    // First-layer copy is Chinese; raw values stay in the 详情 disclosures (plan T1/T2).
+    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('知识索引已更新 · 结果不完整')
+    expect(screen.getByTestId('knowledge-index-details')).toHaveTextContent('indexed · truncated')
+    expect(screen.getByTestId('knowledge-index-warnings')).toHaveTextContent('文件数量超出上限')
     expect(knowledgeView).toHaveTextContent('file_count_limit_exceeded')
     expect(knowledgeView).toHaveTextContent('API 健康端点规范')
-    expect(knowledgeView).toHaveTextContent('defines')
+    expect(screen.getAllByTestId('knowledge-graph-relation').some((relation) => relation.textContent?.includes('定义'))).toBe(true)
     expect(knowledgeView).toHaveTextContent('2026-08-01T00:00:00.000Z')
     expect(screen.getAllByTestId('knowledge-run-reference')).not.toHaveLength(0)
     for (const reference of screen.getAllByTestId('knowledge-run-reference')) {
@@ -5696,7 +5786,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    clickPrimaryNav('知识')
     await waitFor(() => expect(screen.getAllByTestId('knowledge-graph-node')).toHaveLength(12))
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('图谱较大')
   })
@@ -5722,7 +5812,7 @@ describe('App', () => {
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
     const gateEvaluationsBeforeRefresh = vi.mocked(api.evaluateGateEnforcement).mock.calls.length
 
-    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    clickPrimaryNav('知识')
     fireEvent.click(screen.getByRole('button', { name: /刷新仓库知识/ }))
 
     await waitFor(() =>
@@ -5749,15 +5839,16 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.loadRepositoryKnowledge).toHaveBeenCalledTimes(1))
-    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    clickPrimaryNav('知识')
     await waitFor(() =>
       expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API 健康端点规范'),
     )
     fireEvent.click(screen.getByRole('button', { name: /刷新仓库知识/ }))
 
     await waitFor(() =>
-      expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('indexed · refresh failed'),
+      expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('刷新失败 · 显示上次结果'),
     )
+    expect(screen.getByTestId('knowledge-index-details')).toHaveTextContent('indexed · refresh failed')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('API 健康端点规范')
     expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('/Users/example')
     expect(screen.getByTestId('knowledge-view')).not.toHaveTextContent('secret.md')
@@ -5802,7 +5893,7 @@ describe('App', () => {
       expect(api.loadRepositoryKnowledge).toHaveBeenCalledWith({ projectId: secondProject.id }),
     )
 
-    fireEvent.click(screen.getByRole('button', { name: /^Knowledge$/ }))
+    clickPrimaryNav('知识')
     await act(async () => {
       resolveFirst?.(repositoryKnowledgeSnapshot(localProject.id))
     })
@@ -5835,7 +5926,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+    fireEvent.change(screen.getByLabelText('搜索当前项目'), {
       target: { value: 'healthService.check' },
     })
     fireEvent.click(within(screen.getByTestId('search-results')).getByRole('button', { name: /方案设计/ }))
@@ -5846,7 +5937,7 @@ describe('App', () => {
     expect(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: '当前工作' })).toHaveAttribute('aria-selected', 'true')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('healthService.check')
 
-    fireEvent.change(screen.getByLabelText('Search runs and knowledge'), {
+    fireEvent.change(screen.getByLabelText('搜索当前项目'), {
       target: { value: 'degraded 状态定义' },
     })
     fireEvent.click(within(screen.getByTestId('search-results')).getByRole('button', { name: /thinking/ }))
@@ -5860,12 +5951,17 @@ describe('App', () => {
     const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(state) })
     render(<App />)
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
-    // Agents keeps the saved evidence read-only; the re-run is confirmed in the task (plan W2, W5).
-    fireEvent.click(screen.getByRole('button', { name: /^Agents$/ }))
-    fireEvent.click(screen.getByRole('button', { name: '查看审查结果' }))
-    expect(within(screen.getByTestId('agent-workbench')).queryByRole('button', { name: '重新审查' })).not.toBeInTheDocument()
-    fireEvent.click(within(screen.getByTestId('agent-workbench')).getByRole('button', { name: '在任务中处理' }))
+    await waitForLocalStateLoaded(api.loadState)
+    // The saved review is read in the task's 执行记录; settings offer no re-run (plan W2, W5, Y3).
+    const inspectorBeforeRerun = await screen.findByTestId('node-inspector')
+    clickInspectorTab('执行记录')
+    await waitFor(() => expect(within(inspectorBeforeRerun).getByTestId('agent-evidence-groups')).toHaveTextContent(state.agentReviews[0]!.summary))
+    expect(within(within(inspectorBeforeRerun).getByTestId('agent-evidence-groups')).queryByRole('button', { name: '重新审查' })).not.toBeInTheDocument()
+    const models = openSettingsSection('模型与执行方式')
+    expect(within(models).queryByRole('button', { name: '重新审查' })).not.toBeInTheDocument()
+    clickPrimaryNav('任务')
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    clickInspectorTab('当前工作')
     const reviewRun = within(await screen.findByTestId('node-inspector')).getByTestId('task-review-run')
     expect(reviewRun).toHaveTextContent(`上次审查：${formatLocalTime(state.agentReviews[0]!.createdAt)}`)
     const rerun = within(reviewRun).getByRole('button', { name: '重新审查' })
@@ -5898,11 +5994,11 @@ describe('App', () => {
       previousReviewId: state.agentReviews[0]!.id,
       providerId: agentProvider.id,
     }))
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
   })
 
-  it('runs Gate Review in the task inspector and keeps the current inspector without opening Agents', async () => {
+  it('runs Gate Review in the task inspector and keeps the current inspector without opening settings', async () => {
     const api = installDesktopApi()
     render(<App />)
 
@@ -5923,21 +6019,20 @@ describe('App', () => {
     })))
     expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1)
     expect(vi.mocked(api.runKnowledgeReview).mock.calls[0]![0]).not.toHaveProperty('previousReviewId')
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     const inspector = await screen.findByTestId('node-inspector')
     await waitFor(() => expect(within(inspector).getByTestId('readiness-group-review-evidence')).toHaveTextContent('已完成'))
     expect(within(inspector).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
 
-    // Agents keeps the resulting evidence read-only and hands back to the task (plan W5).
-    fireEvent.click(screen.getByRole('button', { name: /^Agents$/ }))
-    const agents = await screen.findByTestId('agent-workbench')
-    expect(agents).toHaveTextContent('基于知识的门禁审查')
-    expect(agents).toHaveTextContent('仅警告')
-    expect(agents).toHaveTextContent('Build redacted context')
-    expect(agents).toHaveTextContent('estimated')
-    expect(within(agents).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
-    fireEvent.click(within(agents).getByRole('button', { name: '在任务中处理' }))
-    await screen.findByTestId('node-inspector')
+    // The resulting trace, review record and usage are read-only evidence in 执行记录 (plan Y3).
+    clickInspectorTab('执行记录')
+    const evidenceGroups = within(inspector).getByTestId('agent-evidence-groups')
+    expect(evidenceGroups).not.toHaveAttribute('open')
+    expect(within(evidenceGroups).getByText(/^更多执行证据 · \d+ 组$/)).toBeInTheDocument()
+    expect(evidenceGroups).toHaveTextContent('基于知识的门禁审查')
+    expect(evidenceGroups).toHaveTextContent('Build redacted context')
+    expect(evidenceGroups).toHaveTextContent('estimated')
+    expect(within(evidenceGroups).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
 
     clickInspectorTab('材料与版本')
     expect(screen.getByTestId('knowledge-governance-flow')).toHaveTextContent('2 · 完成审查已完成')
@@ -6006,7 +6101,7 @@ describe('App', () => {
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
 
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
       runId: acceptanceRun.id,
@@ -6026,7 +6121,7 @@ describe('App', () => {
       removeAgentProviderCredential: vi.fn().mockResolvedValue({ status: 'deleted', providerId: agentProvider.id }),
     })
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
     await waitFor(() => expect(screen.getByLabelText('Saved Agent Provider')).toHaveValue(agentProvider.id))
     fireEvent.click(screen.getByRole('button', { name: '管理已保存 Provider' }))
     await waitFor(() => expect(screen.getByRole('button', { name: '确认删除 Provider' })).toBeEnabled())
@@ -6047,7 +6142,7 @@ describe('App', () => {
       listAgentProviders: vi.fn().mockResolvedValue([agentProvider]),
     })
     render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
     await waitFor(() => expect(screen.getByLabelText('Saved Agent Provider')).toBeInTheDocument())
     expect(screen.getByLabelText('Saved Agent Provider')).toHaveValue('')
     expect(screen.getByText('尚未选择 Agent Provider')).toBeInTheDocument()
@@ -6079,9 +6174,9 @@ describe('App', () => {
     const api = installDesktopApi({ listAgentProviders, saveAgentProviderCredential })
     render(<App />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
 
-    await waitFor(() => expect(screen.getByText('新增 Agent Provider')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('新增模型提供方')).toBeInTheDocument())
     expect(screen.getByLabelText('Saved Agent Provider')).toBeInTheDocument()
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
       '已保存 Provider 配置 实时 OpenAI 兼容服务 · 可能消耗模型 Token',
@@ -6122,8 +6217,8 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await screen.findByText('新增 Agent Provider')
+    openSettingsSection('模型与执行方式')
+    await screen.findByText('新增模型提供方')
     fireEvent.click(screen.getByRole('button', { name: /保存并使用 Provider/ }))
 
     expect(api.saveAgentProviderCredential).not.toHaveBeenCalled()
@@ -6134,8 +6229,8 @@ describe('App', () => {
     const api = installDesktopApi()
     render(<App />)
 
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await screen.findByText('新增 Agent Provider')
+    openSettingsSection('模型与执行方式')
+    await screen.findByText('新增模型提供方')
     expect(screen.getByLabelText('Agent Provider Name')).toBeInTheDocument()
     expect(screen.queryByLabelText('Agent Provider ID')).not.toBeInTheDocument()
     fireEvent.change(screen.getByLabelText('Agent Provider API Key'), {
@@ -6191,7 +6286,12 @@ describe('App', () => {
     })
 
     await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('正在上传 3 项'))
-    const uploads = within(openTeamConnection()).getByTestId('remote-sync-operations')
+    // The popover summarises; per-record uploads are in 设置／团队连接 (plan Y7).
+    const popover = openTeamConnection()
+    expect(within(popover).getByRole('region', { name: '结果上传' })).toHaveTextContent('正在尝试上传 3 项。')
+    expect(popover).not.toHaveTextContent('任务摘要正在上传')
+    fireEvent.click(within(popover).getByRole('button', { name: '查看连接详情' }))
+    const uploads = within(screen.getByTestId('team-connection-settings')).getByTestId('remote-sync-operations')
     expect(uploads).toHaveTextContent('正在尝试上传 3 项。')
     expect(uploads).toHaveTextContent('任务摘要正在上传')
     expect(uploads).toHaveTextContent('测试证据正在上传')
@@ -6212,7 +6312,7 @@ describe('App', () => {
     })
     render(<App />)
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    clickPrimaryNav('团队')
     fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
     await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('团队数据已更新'))
     expect(screen.getByTestId('team-overview')).toHaveTextContent('Synced Team Project')
@@ -6279,7 +6379,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('1 条未上传'))
-    const uploads = within(openTeamConnection()).getByTestId('remote-sync-operations')
+    const uploads = within(openTeamConnectionSettings()).getByTestId('remote-sync-operations')
     expect(uploads).toHaveTextContent('任务摘要上传失败')
     expect(uploads).toHaveTextContent('团队服务上已有内容不同的同一条记录。')
     expect(uploads).toHaveTextContent('immutable_conflict')
@@ -6299,7 +6399,7 @@ describe('App', () => {
 
     await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('本地项目'))
     expect(teamConnectionTrigger()).not.toHaveTextContent(/失败|未上传/)
-    const uploads = within(openTeamConnection()).getByTestId('remote-sync-operations')
+    const uploads = within(openTeamConnectionSettings()).getByTestId('remote-sync-operations')
     expect(uploads).toHaveTextContent('当前未启用团队上传')
     expect(within(uploads).queryByRole('button', { name: /重试上传/ })).not.toBeInTheDocument()
   })
@@ -6333,7 +6433,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('1 条未上传'))
-    fireEvent.click(within(openTeamConnection()).getByRole('button', { name: '重试上传：任务摘要' }))
+    fireEvent.click(within(openTeamConnectionSettings()).getByRole('button', { name: '重试上传：任务摘要' }))
 
     await waitFor(() =>
       expect(retryRemoteSyncOperation).toHaveBeenCalledWith({
@@ -6342,9 +6442,9 @@ describe('App', () => {
     )
     expect(retryRemoteSyncOperation).toHaveBeenCalledTimes(1)
     await waitFor(() =>
-      expect(within(openTeamConnection()).getByTestId('remote-sync-operations')).toHaveTextContent('任务摘要正在上传'),
+      expect(within(openTeamConnectionSettings()).getByTestId('remote-sync-operations')).toHaveTextContent('任务摘要正在上传'),
     )
-    expect(within(openTeamConnection()).getByTestId('remote-sync-operations')).not.toHaveTextContent('上传失败')
+    expect(within(openTeamConnectionSettings()).getByTestId('remote-sync-operations')).not.toHaveTextContent('上传失败')
     expect(screen.getByTestId('toast')).toHaveTextContent('已重新排队上传；收到团队服务回执后才算已上传')
   })
 
@@ -6369,17 +6469,17 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('1 条未上传'))
-    fireEvent.click(within(openTeamConnection()).getByRole('button', { name: '重试上传：任务摘要' }))
+    fireEvent.click(within(openTeamConnectionSettings()).getByRole('button', { name: '重试上传：任务摘要' }))
 
     await waitFor(() =>
       expect(screen.getByTestId('toast')).toHaveTextContent('重新上传没有排队成功，请稍后再试'),
     )
     const toast = screen.getByTestId('toast')
     expect(toast).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
-    expect(within(openTeamConnection()).getByTestId('remote-sync-operations')).toHaveTextContent('任务摘要上传失败')
+    expect(within(openTeamConnectionSettings()).getByTestId('remote-sync-operations')).toHaveTextContent('任务摘要上传失败')
   })
 
-  it('subscribes to coding push updates and merges pushed state into the Agents view', async () => {
+  it('subscribes to coding push updates and merges pushed state into the build step records', async () => {
     const handlers: {
       run?: Parameters<NonNullable<DevFlowDesktopApi['onCodingRunStatusUpdated']>>[0]
       event?: Parameters<NonNullable<DevFlowDesktopApi['onCodingEventAppended']>>[0]
@@ -6472,11 +6572,13 @@ describe('App', () => {
       })
     })
     fireEvent.click(screen.getByTestId('flow-node-n-build'))
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    // Pushed coding state is read in the build step's 执行记录 (plan Y3).
+    clickInspectorTab('执行记录')
 
-    expect(await screen.findByTestId('agent-workbench')).toHaveTextContent('Waiting for pushed permission.')
-    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Apply pushed diff')
-    expect(screen.getByTestId('agent-workbench')).toHaveTextContent('Pushed permission event.')
+    const records = await screen.findByTestId('coding-run-records')
+    expect(records).toHaveTextContent('Waiting for pushed permission.')
+    expect(within(records).getByRole('list', { name: 'Coding Run permission history' })).toHaveTextContent('Apply pushed diff')
+    expect(within(records).getByRole('list', { name: 'Coding Run trace history' })).toHaveTextContent('Pushed permission event.')
   })
 
   it('reloads the trusted workflow state when a coding run completes', async () => {
@@ -6795,27 +6897,32 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     fireEvent.click(await screen.findByTestId('flow-node-n-build'))
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    // Runtime evidence is read in the build step's 执行记录 (plan Y3).
+    const inspector = clickInspectorTab('执行记录')
 
-    const workbench = await screen.findByTestId('agent-workbench')
-    expect(workbench).toHaveTextContent('real opencode')
-    expect(workbench).toHaveTextContent('终态')
-    expect(workbench).toHaveTextContent('completed')
-    expect(workbench).toHaveTextContent('工作区清理')
-    expect(workbench).toHaveTextContent('deleted')
-    expect(workbench).toHaveTextContent('测试证据')
-    expect(workbench).toHaveTextContent('opencode smoke tests passed')
-    expect(workbench).toHaveTextContent('权限时间线')
-    expect(workbench).toHaveTextContent('approved')
+    const workbench = within(inspector).getByTestId('node-trace')
+    const records = within(workbench).getByTestId('coding-run-records')
+    expect(records).toHaveTextContent('real opencode')
+    expect(records).toHaveTextContent('终态')
+    expect(records).toHaveTextContent('completed')
+    expect(within(records).getByTestId('coding-terminal-summary')).toHaveTextContent('工作区deleted')
+    expect(records).toHaveTextContent('测试证据')
+    expect(records).toHaveTextContent('opencode smoke tests passed')
+    expect(within(records).getByRole('list', { name: 'Coding Run permission history' })).toHaveTextContent('permission-bash · approved')
     expect(workbench).toHaveTextContent('工具 / Skill 时间线')
     expect(workbench).toHaveTextContent('shell-runner')
     expect(workbench).toHaveTextContent('bash')
     expect(workbench).toHaveTextContent('opencode metadata')
     expect(workbench).toHaveTextContent('Redacted')
     expect(workbench).toHaveTextContent('DevFlow relay approved bash permission')
-    expect(workbench).toHaveTextContent('devflow-opencode-smoke.txt')
     expect(workbench).not.toHaveTextContent('/tmp/devflow-opencode-smoke/worktrees/coding-run-real')
     expect(workbench).not.toHaveTextContent('/Users/erich/File/claude/10-showcase/ai-devflow-studio')
+
+    // The diff and changed paths stay in 当前工作, shown once (plan W1, Y3).
+    clickInspectorTab('当前工作')
+    expect(inspector).toHaveTextContent('devflow-opencode-smoke.txt')
+    expect(inspector).not.toHaveTextContent('/tmp/devflow-opencode-smoke/worktrees/coding-run-real')
+    expect(inspector).not.toHaveTextContent('/Users/erich/File/claude/10-showcase/ai-devflow-studio')
   })
 
   it('shows runtime budget approval retry controls for blocked coding runs', async () => {
@@ -6895,26 +7002,31 @@ describe('App', () => {
       }),
     })
     render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
 
-    fireEvent.click(await screen.findByRole('button', { name: /Agents/ }))
+    // The budget decision is read in the build step's 执行记录 (plan Y3).
+    const buildInspector = clickInspectorTab('执行记录')
+    const decision = within(buildInspector).getByTestId('coding-budget-decision')
+    expect(decision).toHaveTextContent('预算评估')
+    expect(decision).toHaveTextContent('requires_lead_approval')
+    expect(decision).toHaveTextContent('预计 $0.42')
+    expect(decision).toHaveTextContent('上限 $0.20')
+    fireEvent.click(within(decision).getByRole('button', { name: '打开模型与执行方式设置' }))
 
-    const workbench = await screen.findByTestId('agent-workbench')
-    expect(workbench).toHaveTextContent('Runtime Budget')
-    expect(workbench).toHaveTextContent('requires_lead_approval')
-    expect(workbench).toHaveTextContent('projected $0.42')
-    expect(workbench).toHaveTextContent('limit $0.20')
-    expect(screen.getByLabelText('Runtime budget approval ID')).toBeInTheDocument()
-    // The approval ID is configuration here; the re-run is confirmed in the task (plan W5).
+    // The approval ID is configuration in 设置／模型与执行方式; the re-run is confirmed in the task (plan W5).
+    const workbench = within(screen.getByTestId('settings-view')).getByTestId('settings-section-models')
+    expect(within(screen.getByTestId('settings-view')).getByTestId('support-context-banner')).toHaveTextContent('设置模型与预算')
+    expect(within(workbench).getByLabelText('Runtime budget approval ID')).toBeInTheDocument()
     expect(within(workbench).queryByRole('button', { name: '使用预算批准重新运行' })).not.toBeInTheDocument()
     const handBack = within(workbench).getByRole('button', { name: '在任务中重新运行' })
     expect(handBack).toBeDisabled()
-    fireEvent.change(screen.getByLabelText('Runtime budget approval ID'), {
+    fireEvent.change(within(workbench).getByLabelText('Runtime budget approval ID'), {
       target: { value: 'runtime-budget-approval-1' },
     })
     expect(handBack).toBeEnabled()
     fireEvent.click(handBack)
     expect(api.runCodingAgent).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
 
     const inspector = await screen.findByTestId('node-inspector')
     const retry = within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '上次运行失败 · 重新运行 Coding Agent' })
@@ -6933,7 +7045,7 @@ describe('App', () => {
       runtimeBudgetApprovalId: 'runtime-budget-approval-1',
     }))
     expect(vi.mocked(api.runCodingAgent).mock.calls[0]![0]).not.toHaveProperty('additionalAttemptAfterCount')
-    expect(screen.queryByTestId('agent-workbench')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
   })
 
   it('presents an unavailable runtime budget guard as a blocking recovery state without an approval retry', async () => {
@@ -6986,9 +7098,10 @@ describe('App', () => {
     expect(within(budgetStatus).getByText('unavailable')).toHaveClass('bad')
     expect(budgetStatus).toHaveTextContent('Runtime budget authorization is unavailable.')
 
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
-    await screen.findByTestId('agent-workbench')
+    openSettingsSection('模型与执行方式')
+    await screen.findByTestId('settings-models')
     expect(screen.queryByLabelText('Runtime budget approval ID')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '在任务中重新运行' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '使用预算批准重新运行' })).not.toBeInTheDocument()
   })
 
@@ -7005,7 +7118,7 @@ describe('App', () => {
       decision: { status: 'requires_lead_approval', blocksRun: true, currentSpendUsd: 49.9,
         projectedCostUsd: 0.25, reason: '本次模型请求预计超出月预算，需要 Owner/Lead 额外批准。' } }))
     expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('requires_lead_approval')
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
     expect(await screen.findByText(/最近一次模型预算检查/)).toHaveTextContent('本次模型请求预计超出月预算')
     fireEvent.click(screen.getByRole('button', { name: '创建 Owner/Lead 一次性批准' }))
     await waitFor(() => expect(api.createCodingRuntimeBudgetApproval).toHaveBeenCalledWith(expect.objectContaining({
@@ -7024,12 +7137,12 @@ describe('App', () => {
     const status = await within(await openTaskUsageWhenReady()).findByTestId('runtime-budget-status')
     await waitFor(() => expect(status).toHaveTextContent('未配置'))
     expect(status).toHaveTextContent('尚未执行')
-    fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
+    openSettingsSection('模型与执行方式')
     fireEvent.change(await screen.findByLabelText('项目月预算'), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText('项目预算预警'), { target: { value: '0.5' } })
     fireEvent.click(screen.getByRole('button', { name: '保存团队项目预算' }))
     await waitFor(() => expect(api.saveCodingRuntimeBudgetPolicy).toHaveBeenCalled())
-    fireEvent.click(screen.getByRole('button', { name: /工作台/ }))
+    clickPrimaryNav('任务')
     await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))
     expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).not.toHaveTextContent('not loaded')
     expect(api.runCodingAgent).not.toHaveBeenCalled()
@@ -7050,7 +7163,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByLabelText('项目：fixture-project')
-    fireEvent.click(screen.getByRole('button', { name: '测试' }))
+    openSettingsSection('本地项目')
 
     const commandInput = screen.getByLabelText('测试命令')
     await waitFor(() => expect(commandInput).toHaveValue('pnpm test'))
@@ -7068,11 +7181,11 @@ describe('App', () => {
     )
 
     // The Tests page keeps the command; the check runs at the task's test step (plan W4, W5).
-    const testsView = screen.getByTestId('tests-view')
+    const testsView = screen.getByTestId('settings-project')
     expect(within(testsView).queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
     expect(api.runProjectTests).not.toHaveBeenCalled()
     fireEvent.click(within(testsView).getByRole('button', { name: '在任务中处理' }))
-    expect(screen.queryByTestId('tests-view')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     const inspector = await screen.findByTestId('node-inspector')
     const runTests = within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '运行检查' })
     await waitFor(() => expect(runTests).toBeEnabled())
@@ -7104,13 +7217,14 @@ describe('App', () => {
     expect(within(taskInspector).getByRole('tab', { name: '执行记录' })).toHaveAttribute('aria-selected', 'true')
     expect(taskInspector).toHaveTextContent('8 tests passed')
 
-    // The Tests page keeps the read-only evidence history.
-    fireEvent.click(screen.getByRole('button', { name: '测试' }))
-    await screen.findByText('Local test evidence')
-    expect(screen.getByTestId('tests-view')).toHaveTextContent('8 tests passed')
-    expect(screen.getByTestId('tests-view')).toHaveTextContent('Exit code 0')
-    expect(screen.getByTestId('tests-view')).toHaveTextContent('900ms')
-    expect(screen.getByTestId('tests-view')).toHaveTextContent('Redacted no')
+    // 设置／本地项目 keeps the read-only evidence history (plan Y4).
+    openSettingsSection('本地项目')
+    await screen.findByText('本机测试证据')
+    const history = within(screen.getByTestId('settings-project')).getByRole('region', { name: '本项目测试记录' })
+    expect(history).toHaveTextContent('8 tests passed')
+    expect(history).toHaveTextContent('退出码 0')
+    expect(history).toHaveTextContent('耗时 900ms')
+    expect(history).toHaveTextContent('输出未脱敏')
   })
 
   it('shows explicit save states for the local test command', async () => {
@@ -7134,7 +7248,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByLabelText('项目：fixture-project')
-    fireEvent.click(screen.getByRole('button', { name: '测试' }))
+    openSettingsSection('本地项目')
 
     expect(screen.getByRole('button', { name: /已保存/ })).toBeDisabled()
 
@@ -7164,10 +7278,10 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByLabelText('项目：fixture-project')
-    fireEvent.click(screen.getByRole('button', { name: '测试' }))
+    openSettingsSection('本地项目')
 
     // Tests hands back to the task; the trusted run starts from the test step (plan W4, W5).
-    fireEvent.click(within(screen.getByTestId('tests-view')).getByRole('button', { name: '在任务中处理' }))
+    fireEvent.click(within(screen.getByTestId('settings-project')).getByRole('button', { name: '在任务中处理' }))
     const inspector = await screen.findByTestId('node-inspector')
     const runTests = within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '运行检查' })
     await waitFor(() => expect(runTests).toBeEnabled())
@@ -7181,7 +7295,7 @@ describe('App', () => {
     expect(window.aiDevFlowDesktop).not.toHaveProperty('uploadTestEvidenceSummary')
     await waitFor(() => expect(within(screen.getByTestId('node-inspector')).getByTestId('node-test-evidence')).toHaveTextContent('Tests passed in 900ms'))
     expect(screen.getByTestId('toast')).toHaveTextContent('测试通过，证据已归档')
-    expect(screen.queryByTestId('tests-view')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
   })
 
   it('does not execute tests for a future workflow node', async () => {
@@ -7191,10 +7305,10 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByLabelText('项目：fixture-project')
-    fireEvent.click(screen.getByRole('button', { name: '测试' }))
+    openSettingsSection('本地项目')
     // The reason is shown before the click instead of after it (plan D4, X6); Tests only hands back.
-    expect(within(screen.getByTestId('tests-view')).queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
-    const handBack = within(screen.getByTestId('tests-view')).getByRole('button', { name: '在任务中处理' })
+    expect(within(screen.getByTestId('settings-project')).queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
+    const handBack = within(screen.getByTestId('settings-project')).getByRole('button', { name: '在任务中处理' })
     expect(handBack).toHaveAccessibleDescription(/任务进入测试步骤后才能执行；当前实际步骤：/)
     expect(screen.getByTestId('tests-run-blocked-reason')).toHaveTextContent('方案评审 Gate')
     fireEvent.click(handBack)
@@ -7226,7 +7340,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
     await screen.findByLabelText('项目：fixture-project')
-    fireEvent.click(screen.getByRole('button', { name: '测试' }))
+    openSettingsSection('本地项目')
 
     const commandInput = screen.getByLabelText('测试命令')
     await waitFor(() => expect(commandInput).toHaveValue('pnpm test'))
@@ -7235,10 +7349,10 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: /保存测试命令/ }))
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('测试命令已阻断'))
     expect(api.saveProjectTestCommand).not.toHaveBeenCalled()
-    expect(within(screen.getByTestId('tests-view')).queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('settings-project')).queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
 
     // The unsaved dangerous draft never runs: the task runs and checks the saved command it shows (W4).
-    fireEvent.click(within(screen.getByTestId('tests-view')).getByRole('button', { name: '在任务中处理' }))
+    fireEvent.click(within(screen.getByTestId('settings-project')).getByRole('button', { name: '在任务中处理' }))
     const inspector = await screen.findByTestId('node-inspector')
     expect(within(inspector).getByTestId('task-test-run')).toHaveTextContent('pnpm test')
     expect(within(inspector).getByTestId('task-test-run')).not.toHaveTextContent('rm -rf')
