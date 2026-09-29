@@ -1,7 +1,6 @@
 import { type Node, type NodeProps } from '@xyflow/react'
 import { ReviewEvidenceDetails, type RecordReviewFeedback } from '../components/ReviewEvidenceDetails'
 import {
-  ArrowLeft,
   Bot,
   CheckCircle2,
   ClipboardCheck,
@@ -23,7 +22,6 @@ import {
   buildClarificationReviewBundle,
   canRunCodingAgentOnNode,
   formatUsd,
-  formatCostRollup,
   projectKnowledgeReferencesForNode,
   resolveKnowledgeReferenceSemantics,
   type AgentEvent,
@@ -32,24 +30,16 @@ import {
   type CodingAgentRun,
   type CodingRuntimeReadiness,
   type ManagedCodingWorkspace,
-  type DataOrigin,
   type GateEnforcementDecision,
   type GateOverrideDecision,
   type GitHubDeliveryIntent,
   type GitHubDeliveryOperatorOutcome,
   type GitHubDeliveryRevocationCheck,
-  type KnowledgeDocument,
-  type KnowledgeEntity,
   type KnowledgeGovernanceCheck,
   type KnowledgeReference,
-  type KnowledgeRelation,
-  type RepositoryKnowledgeWarning,
   type PolicySnapshot,
-  type Project,
   type RemediationPlan,
-  type TeamMember,
   type TestEvidence,
-  type TokenUsageRollup,
   type WorkflowNode,
   type WorkflowRun,
   type StageAgentExecutorKind,
@@ -70,11 +60,9 @@ import {
   displayNodeTitle,
   formatLocalTime,
   getNodeStatusTone,
-  matchesQuery,
   stageOrder,
   stageLabels,
   stageTone,
-  type FieldDataSource,
   type InspectorReadingPosition,
   type SupportContext,
 } from '../app/desktop-view-model'
@@ -100,6 +88,8 @@ import { buildWorkflowGateImpact } from '../app/workflow-gate-impact'
 export { AgentWorkbenchView } from './AgentWorkbenchView'
 export { LocalProjectPanel, Metric, NavButton, ThemeToggle } from './ShellControls'
 export { McpView, SkillView, TestsView } from './SupportViews'
+export { TeamOverview } from './TeamOverview'
+export { KnowledgeView } from './KnowledgeView'
 
 export function AppNode({ data, selected }: NodeProps<Node<{ workflowNode: WorkflowNode }>>) {
   const workflowNode = data.workflowNode
@@ -1708,480 +1698,5 @@ export function Inspector({
       ) : null}
       </footer>
     </aside>
-  )
-}
-
-export function TeamOverview({
-  projects,
-  members,
-  projectRollups,
-  memberRollups,
-  totalCost,
-  dataOrigin,
-  runtimeDataSource,
-  selectedRun,
-  selectedProjectId,
-  policySnapshot,
-  gateEnforcementDecision,
-  isLoadingGateEnforcement,
-  onSyncTeam,
-  isSyncingTeam,
-  syncFeedback,
-}: {
-  projects: Project[]
-  members: TeamMember[]
-  projectRollups: TokenUsageRollup[]
-  memberRollups: TokenUsageRollup[]
-  totalCost: string
-  dataOrigin: DataOrigin
-  runtimeDataSource: FieldDataSource
-  selectedRun: WorkflowRun | undefined
-  selectedProjectId?: string | undefined
-  policySnapshot: PolicySnapshot | null
-  gateEnforcementDecision: GateEnforcementDecision | null
-  isLoadingGateEnforcement: boolean
-  onSyncTeam: () => void
-  isSyncingTeam: boolean
-  syncFeedback: { status: 'success' | 'error'; message: string } | null
-}) {
-  const memberSummary = members.length > 0
-    ? members.map((member) => `${member.name} ${member.role}`).join(' · ')
-    : '未加载团队成员'
-  const projectCostById = new Map(projectRollups.map((rollup) => [rollup.key, rollup]))
-  const selectedProject = projects.find((project) => project.id === (selectedProjectId ?? selectedRun?.projectId))
-  const selectedProjectLabel = selectedProject?.name ?? '未选择 Team Project'
-  const memberTokens = memberRollups.reduce((sum, rollup) => sum + rollup.totalTokens, 0)
-  const snapshotSource = policySnapshot?.source ?? gateEnforcementDecision?.policySource ?? 'unavailable'
-  const snapshotVersion = policySnapshot?.version ?? gateEnforcementDecision?.policyVersion
-  const snapshotStatus = isLoadingGateEnforcement
-    ? 'loading'
-    : gateEnforcementDecision?.status ?? (policySnapshot ? 'loaded' : 'not loaded')
-  const snapshotTone =
-    snapshotStatus === 'pass' || snapshotStatus === 'overridden'
-      ? 'good'
-      : snapshotStatus === 'warn'
-        ? 'warn'
-        : snapshotStatus === 'not loaded' || snapshotStatus === 'loaded'
-          ? 'soft'
-          : 'bad'
-
-  return (
-    <section className="route-page team-page" data-testid="team-overview">
-      <div className="panel">
-        <div className="panel-head">
-            <span className="panel-title">Team Overview · redacted delivery health</span>
-            <div className="row">
-              <span className="pill soft">团队视图只看脱敏摘要，不展示本地 raw log</span>
-              <span className={`pill ${runtimeDataSource.tone}`} title={runtimeDataSource.detail}>
-                {runtimeDataSource.label}
-              </span>
-              <span className="pill accent">{dataOrigin}</span>
-            </div>
-          </div>
-        <div className="panel-body">
-          <strong className="sr-copy">项目交付健康</strong>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Project</th>
-                <th>Repository</th>
-                <th>Health</th>
-                <th>Test command</th>
-                <th>Active / Latest Run</th>
-                <th>Gate</th>
-                <th>Rollup</th>
-                <th>Members</th>
-                <th>Token / Cost</th>
-                <th>Source</th>
-              </tr>
-            </thead>
-            <tbody>
-              {projects.length === 0 ? (
-                <tr>
-                  <td colSpan={10}>
-                    <p className="empty-note">未加载 Team Project。更新团队数据后才会展示远端项目、成员、策略和成本摘要。</p>
-                  </td>
-                </tr>
-              ) : projects.map((project) => {
-                const rollup = projectCostById.get(project.id)
-                const isSelectedProject = project.id === selectedProject?.id
-
-                return (
-                  <tr key={project.id}>
-                    <td><strong>{project.name}</strong></td>
-                    <td className="mono">{project.repository}</td>
-                    <td><span className={`pill ${project.health === 'on_track' ? 'good' : project.health === 'blocked' ? 'bad' : 'warn'}`}>{project.health}</span></td>
-                    <td className="mono">{project.testCommand}</td>
-                    <td>{isSelectedProject ? selectedRun?.title ?? '暂无 Run' : '暂无当前 Run'}</td>
-                    <td>
-                      <span className={`pill ${isSelectedProject ? snapshotTone : 'soft'}`}>
-                        {isSelectedProject ? snapshotStatus : 'not loaded'}
-                      </span>
-                    </td>
-                    <td>
-                      {isSelectedProject
-                        ? `${gateEnforcementDecision?.blockingReasons.length ?? 0} block · ${gateEnforcementDecision?.warningReasons.length ?? 0} warn · ${gateEnforcementDecision?.requiredActions.length ?? 0} actions`
-                        : '无当前 Gate 数据'}
-                    </td>
-                    <td>{memberSummary}</td>
-                    <td>{rollup ? `${rollup.totalTokens.toLocaleString()} · ${formatCostRollup([rollup])}` : `0 · ${totalCost}`}</td>
-                    <td><span className={`pill ${isSelectedProject ? 'accent' : 'soft'}`}>{isSelectedProject ? snapshotSource : dataOrigin}</span></td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-          <div className="member-roster" aria-label="Team members">
-            {members.length === 0 ? (
-              <span className="pill soft">未加载团队成员</span>
-            ) : members.map((member) => (
-              <span className="pill soft" key={member.id}>{member.name}</span>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="page-grid two policy-layout">
-        <section className="panel">
-          <div className="panel-head">
-            <span className="panel-title">Team Project Settings / Policy</span>
-            <span className="pill accent">admin config</span>
-          </div>
-          <div className="panel-body stack">
-            <div className="policy-callout">
-              <div className="row">
-                <strong>策略归属：Team Project · {selectedProjectLabel}</strong>
-                <span className="pill warn">不是 Local Project 配置</span>
-              </div>
-              <p className="meta">这里定义 Gate policy、角色权限、预算和必需 Evidence。Workbench、Inspector、Agents、Tests 只读取 policy snapshot 并解释阻断原因，不能在 Run 内临时改规则。</p>
-            </div>
-            {policySnapshot?.effectivePolicy?.rules.length ? (
-              <div className="policy-matrix" aria-label="Gate policy matrix">
-                <div className="policy-row header"><span>Rule</span><span>Target</span><span>Action</span><span>Source</span></div>
-                {policySnapshot.effectivePolicy.rules.map((rule) => (
-                  <div className="policy-row" key={rule.ruleKey}>
-                    <strong>{rule.ruleKey}</strong>
-                    <span>{rule.target}</span>
-                    <span className={`pill ${rule.action === 'block' ? 'warn' : rule.action === 'warn' ? 'soft' : 'good'}`}>
-                      {rule.action}
-                    </span>
-                    <span>{rule.source}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="empty-note">未加载 Team policy 规则。</p>
-            )}
-            <div className="mini-card">
-              <p className="section-title">Budget Guard</p>
-              <div className="row">
-                <strong>{policySnapshot ? '远端预算策略已加载' : '预算策略未加载'}</strong>
-                <span className={`pill ${policySnapshot ? 'good' : 'soft'}`}>{policySnapshot ? snapshotSource : 'not loaded'}</span>
-              </div>
-              <p className="meta">没有 Team policy snapshot 时，Workbench 不展示预算结论。</p>
-            </div>
-            <button className="primary-button">保存 Team Policy 草稿</button>
-          </div>
-        </section>
-        <section className="panel">
-          <div className="panel-head">
-            <span className="panel-title">Policy Snapshot · desktop read path</span>
-            <span className={`pill ${snapshotTone}`}>{snapshotStatus}</span>
-          </div>
-          <div className="panel-body stack">
-            <div className="policy-source-grid">
-              <div className="policy-source-row">
-                <strong>Source</strong>
-                <span>
-                  {policySnapshot
-                    ? `${snapshotSource} snapshot v${snapshotVersion} · synced ${policySnapshot.syncedAt}`
-                    : 'policy snapshot 尚未加载，Gate 写路径会保持只读阻断'}
-                </span>
-                <span className={`pill ${snapshotTone}`}>{snapshotStatus}</span>
-              </div>
-              <div className="policy-source-row">
-                <strong>Selected Run</strong>
-                <span>{selectedRun?.title ?? 'No selected Run'} · {selectedProject?.name ?? '未绑定 Team Project'}</span>
-                <span className="pill soft">{snapshotVersion ? `policy v${snapshotVersion}` : 'not loaded'}</span>
-              </div>
-              <div className="policy-source-row"><strong>Used by</strong><span>Workbench Inspector · Agents Gate Advisory · Tests Evidence rollup</span><span className="pill soft">read only</span></div>
-              <div className="policy-source-row"><strong>Not used by</strong><span>Local Project config、test command、managed worktree 设置</span><span className="pill soft">separate</span></div>
-            </div>
-            <div className="mini-card soft">
-              <p className="section-title">更新团队数据后发生什么</p>
-              <ul>
-                <li>读取 Team Project policy snapshot；不拉取或推送代码，也不上传本地结果。</li>
-                <li>刷新 Team Overview 的 policy / budget / Gate rollup。</li>
-                <li>重新评估当前 Run 的 Gate 条件，但不会自动通过缺少 review 或 tests 的 Gate。</li>
-                <li>写入 Event / Trace，说明本机使用了哪一版 policy。</li>
-              </ul>
-            </div>
-            <button className="ghost-button" type="button" onClick={onSyncTeam} disabled={isSyncingTeam}>
-              {/* Same action and name as the team connection popover (plan T4). */}
-              {isSyncingTeam ? '更新中' : '更新团队数据'}
-            </button>
-            {syncFeedback ? (
-              <p className="meta" data-testid="team-sync-feedback" role={syncFeedback.status === 'error' ? 'alert' : 'status'}>
-                {syncFeedback.message}
-              </p>
-            ) : null}
-            <div className="compact-row">
-              <span>Total cost</span>
-              <strong>{totalCost}</strong>
-            </div>
-            <div className="compact-row">
-              <span>Member tokens</span>
-              <strong>{memberTokens.toLocaleString()}</strong>
-            </div>
-          </div>
-        </section>
-      </div>
-    </section>
-  )
-}
-
-export function KnowledgeView({
-  query,
-  documents,
-  entities,
-  relations,
-  references,
-  selectedRun,
-  supportContext,
-  focusedDocumentId,
-  focusedReferenceId,
-  dataSource,
-  indexedAt,
-  truncated,
-  warnings,
-  isLoading,
-  onRefresh,
-  onReturnToInspector,
-}: {
-  query: string
-  documents: KnowledgeDocument[]
-  entities: KnowledgeEntity[]
-  relations: KnowledgeRelation[]
-  references: KnowledgeReference[]
-  selectedRun: WorkflowRun | undefined
-  supportContext: SupportContext | null
-  focusedDocumentId: string | undefined
-  focusedReferenceId: string | undefined
-  dataSource: FieldDataSource
-  indexedAt: string | undefined
-  truncated: boolean
-  warnings: RepositoryKnowledgeWarning[]
-  isLoading: boolean
-  onRefresh: () => void
-  onReturnToInspector: () => void
-}) {
-  const maxVisibleEntities = 12
-  const maxVisibleRelations = 16
-  const documentById = new Map(documents.map((document) => [document.id, document]))
-  const entityById = new Map(entities.map((entity) => [entity.id, entity]))
-  const visibleDocuments = documents
-    .filter((document) =>
-      document.id === focusedDocumentId ||
-      matchesQuery(query, [
-        document.title,
-        document.category,
-        document.summary,
-        document.sourcePath,
-        ...document.tags,
-      ]),
-    )
-    .sort((left, right) => Number(right.id === focusedDocumentId) - Number(left.id === focusedDocumentId))
-  const directlyMatchedEntityIds = new Set(
-    entities
-      .filter((entity) => matchesQuery(query, [entity.label, entity.kind, entity.sourcePath]))
-      .map((entity) => entity.id),
-  )
-  const matchedRelations = relations.filter((relation) =>
-    matchesQuery(query, [
-      relation.label,
-      entityById.get(relation.source)?.label,
-      entityById.get(relation.target)?.label,
-    ]) ||
-    directlyMatchedEntityIds.has(relation.source) ||
-    directlyMatchedEntityIds.has(relation.target),
-  )
-  const orderedEntityIds: string[] = []
-  const candidateEntityIds = new Set<string>()
-  function addEntity(entityId: string) {
-    if (!candidateEntityIds.has(entityId) && entityById.has(entityId)) {
-      candidateEntityIds.add(entityId)
-      orderedEntityIds.push(entityId)
-    }
-  }
-  for (const relation of matchedRelations) {
-    addEntity(relation.source)
-    addEntity(relation.target)
-  }
-  for (const entityId of directlyMatchedEntityIds) addEntity(entityId)
-  const visibleEntities = orderedEntityIds
-    .slice(0, maxVisibleEntities)
-    .map((entityId) => entityById.get(entityId)!)
-  const visibleEntityIds = new Set(visibleEntities.map((entity) => entity.id))
-  const visibleRelations = matchedRelations
-    .filter((relation) =>
-      visibleEntityIds.has(relation.source) && visibleEntityIds.has(relation.target),
-    )
-    .slice(0, maxVisibleRelations)
-  const graphSelectionTruncated =
-    orderedEntityIds.length > visibleEntities.length || matchedRelations.length > visibleRelations.length
-
-  return (
-    <section className="page-grid" data-testid="knowledge-view">
-      <div className="page-main">
-        <div className="section-heading">
-          <span>Knowledge Governance</span>
-          <strong>Git Markdown Index</strong>
-          <span className={`pill ${dataSource.tone}`} data-testid="knowledge-data-source" title={dataSource.detail}>
-            {dataSource.label}
-          </span>
-        </div>
-        <p className="empty-note knowledge-source-note">{dataSource.status} · {dataSource.detail}</p>
-        <div className="compact-row" data-testid="knowledge-index-metadata">
-          <span>{indexedAt ? `indexed ${indexedAt}` : isLoading ? 'indexing repository knowledge' : 'not indexed'}</span>
-          <button
-            aria-label="刷新仓库知识"
-            className="ghost-button"
-            disabled={isLoading}
-            onClick={onRefresh}
-            type="button"
-          >
-            <RefreshCw size={16} />
-            {isLoading ? '索引中' : '刷新索引'}
-          </button>
-        </div>
-        {truncated || warnings.length > 0 ? (
-          <div className="mini-card soft" data-testid="knowledge-index-warnings">
-            <strong>{truncated ? '索引结果已截断' : '索引警告'}</strong>
-            {warnings.map((warning) => <code key={warning}>{warning}</code>)}
-          </div>
-        ) : null}
-        {supportContext?.focusTarget === 'knowledge-reference' ? (
-          <div className="support-context-banner" data-testid="support-context-banner">
-            <div>
-              <span className="panel-label">来自 Workbench Inspector</span>
-              <strong>{supportContext.label}</strong>
-              <p>查看引用来源后可返回当前 Run / Node，继续处理 Gate 条件。</p>
-            </div>
-            <button className="ghost-button" type="button" onClick={onReturnToInspector}>
-              <ArrowLeft size={16} />
-              返回当前 Inspector
-            </button>
-          </div>
-        ) : null}
-        {visibleDocuments.length === 0 ? (
-          <p className="empty-note">没有匹配的知识文档</p>
-        ) : (
-          <div className="knowledge-doc-list">
-            {visibleDocuments.map((document) => (
-              <article
-                className={`knowledge-doc-card ${document.id === focusedDocumentId ? 'is-focused' : ''}`}
-                data-testid={document.id === focusedDocumentId ? 'focused-knowledge-document' : undefined}
-                key={document.id}
-              >
-                <div>
-                  <span>{document.category}</span>
-                  <strong>{document.title}</strong>
-                </div>
-                <p>{document.summary}</p>
-                <code>{document.sourcePath}</code>
-                <div className="tag-list">
-                  {document.tags.map((tag) => (
-                    <span key={tag}>{tag}</span>
-                  ))}
-                </div>
-              </article>
-            ))}
-          </div>
-        )}
-
-        <div className="section-heading section-heading--inline">
-          <span>Knowledge Graph</span>
-          <strong>轻量知识图谱</strong>
-        </div>
-        <div className="knowledge-map">
-          {visibleEntities.length === 0 ? (
-            <p className="empty-note">没有匹配的知识节点</p>
-          ) : (
-            visibleEntities.map((entity) => (
-              <div
-                key={entity.id}
-                className={`knowledge-node knowledge-node--${entity.kind}`}
-                data-testid="knowledge-graph-node"
-              >
-                <strong>{entity.label}</strong>
-                <span>{entity.kind}</span>
-              </div>
-            ))
-          )}
-          {visibleRelations.map((relation) => (
-            <div className="relation-row" data-testid="knowledge-graph-relation" key={relation.id}>
-              {entityById.get(relation.source)?.label ?? relation.source} {relation.label}{' '}
-              {entityById.get(relation.target)?.label ?? relation.target}
-            </div>
-          ))}
-          {graphSelectionTruncated ? (
-            <p className="empty-note knowledge-graph-limit-note">
-              图谱较大，当前显示与搜索最相关的 {visibleEntities.length} 个节点。
-            </p>
-          ) : null}
-        </div>
-      </div>
-      <aside className="page-side">
-        <strong>Git + Markdown 真源</strong>
-        <p>知识库保留在项目仓库，平台只负责索引、图谱、检索和 Run 证据回链。</p>
-        <strong>Run references</strong>
-        <p>{selectedRun?.title ?? 'No selected Run'}</p>
-        {references.length === 0 ? (
-          <p className="empty-note">当前 Run 尚未匹配到知识引用。</p>
-        ) : (
-          references.slice(0, 8).map((reference) => {
-            const document = documentById.get(reference.documentId)
-            const semantics = resolveKnowledgeReferenceSemantics(reference)
-
-            return (
-              <article
-                className={`reference-row ${reference.id === focusedReferenceId ? 'is-focused' : ''}`}
-                data-testid={reference.id === focusedReferenceId
-                  ? 'focused-knowledge-reference'
-                  : 'knowledge-run-reference'}
-                key={reference.id}
-              >
-                <span>{reference.targetType}</span>
-                <strong>{reference.relation}</strong>
-                <p>{document?.title ?? reference.documentId}</p>
-                <div className="knowledge-reference-meta">
-                  {reference.strategy ? <span>检索策略：{reference.strategy}</span> : null}
-                  {semantics.lexicalMatch ? (
-                    <span title="原始关键词累加分；无固定满分，不能跨查询比较。">
-                      关键词匹配分 {semantics.lexicalMatch.rawScore}
-                    </span>
-                  ) : null}
-                  {semantics.lexicalMatch?.matchedTerms.length ? (
-                    <span>命中词：{semantics.lexicalMatch.matchedTerms.join('、')}</span>
-                  ) : null}
-                  {semantics.semanticRelevance ? (
-                    <span>语义相关性：{semantics.semanticRelevance.score}</span>
-                  ) : (
-                    <span>未进行语义相关性判断</span>
-                  )}
-                  <span>Gate 状态：{semantics.gateEvidence.status}</span>
-                  {reference.headingPath ? <span>{reference.headingPath.join(' / ')}</span> : null}
-                </div>
-                <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>
-                {reference.sourcePath ?? document?.sourcePath ? (
-                  <code>{reference.sourcePath ?? document?.sourcePath}</code>
-                ) : null}
-                {reference.contentHash ? <code>{reference.contentHash}</code> : null}
-              </article>
-            )
-          })
-        )}
-      </aside>
-    </section>
   )
 }
