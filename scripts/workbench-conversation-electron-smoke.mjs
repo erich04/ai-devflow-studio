@@ -201,6 +201,12 @@ try {
   await page.getByRole('button', { name: '列表视图', exact: true }).click()
   for (const node of run.nodes) await expect(page.getByTestId(`flow-node-${node.id}`)).toBeAttached()
   await page.getByRole('button', { name: '流程视图', exact: true }).click()
+  // An empty discussion starts collapsed and takes no column until opened (plan L3).
+  await expect(page.getByTestId('workbench-workspace')).toBeHidden()
+  const discussionToggle = page.getByRole('button', { name: '讨论', exact: true })
+  await expect(discussionToggle).toHaveAttribute('aria-expanded', 'false')
+  await discussionToggle.click()
+  await expect(page.getByTestId('workbench-workspace')).toBeVisible()
   await page.getByRole('button', { name: '新建对话', exact: true }).click()
   await page.getByRole('button', { name: '创建对话', exact: true }).click()
   await send('流式推理验证')
@@ -371,8 +377,8 @@ try {
   await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeInViewport()
   await expect(page.getByRole('button', { name: '新建对话', exact: true })).toBeInViewport()
   await expect(page.getByRole('button', { name: '会话历史', exact: true })).toBeInViewport()
-  await expect(page.getByRole('button', { name: '新建 Run', exact: true })).toBeInViewport()
-  await expect.poll(async () => (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).x + (await page.getByRole('button', { name: '新建 Run', exact: true }).boundingBox()).width).toBeLessThanOrEqual(1280)
+  await expect(page.getByRole('button', { name: '新建任务', exact: true })).toBeInViewport()
+  await expect.poll(async () => (await page.getByRole('button', { name: '新建任务', exact: true }).boundingBox()).x + (await page.getByRole('button', { name: '新建任务', exact: true }).boundingBox()).width).toBeLessThanOrEqual(1280)
   await page.screenshot({ scale: 'css', path: path.join(output, '05-narrow-workspace.png') })
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 760))
   expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getBounds().height)).toBe(760)
@@ -381,7 +387,9 @@ try {
   await page.screenshot({ scale: 'css', path: path.join(output, '13-short-window.png') })
   for (const width of [1366, 1920]) {
     await app.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 973), width)
-    for (const name of ['拉取团队数据', '绑定', '新建 Run']) await expect(page.getByRole('button', { name, exact: true })).toBeInViewport()
+    // One-row top bar (plan L1): pairing and team data updates live in the team connection popover.
+    for (const control of [page.getByRole('button', { name: /^团队连接：/ }), page.getByTestId('theme-toggle'), page.getByRole('button', { name: '新建任务', exact: true })]) await expect(control).toBeInViewport()
+    expect((await page.locator('.topbar').boundingBox()).height).toBeLessThanOrEqual(56)
     expect(await page.locator('body').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
     await page.screenshot({ scale: 'css', path: path.join(output, `06-header-${width}.png`) })
   }

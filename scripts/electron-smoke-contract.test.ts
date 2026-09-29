@@ -50,7 +50,7 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
 
   it('walks the authoritative local workflow to the governed GitHub handoff', () => {
     const markers = [
-      "getByRole('button', { name: /新建 Run/ })",
+      "getByRole('button', { name: '新建任务', exact: true })",
       'const completedClarify =',
       'nodeId: localNodes.clarifyGate.id,\n    projectId: localProjectId,',
       'const approvedClarify =',

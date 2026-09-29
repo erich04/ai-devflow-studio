@@ -83,6 +83,8 @@ export const taskPageMeasure: MeasureOptions = {
     statusRow: '[data-testid="task-status-row"], .inspector .node-status-summary',
     nodeHeader: '.inspector .panel-head',
     firstBodyBlock: { selector: '[data-testid="workspace-tabpanel"], #workspace-content', pick: 'first-visible-child' },
+    tabpanel: '[data-testid="workspace-tabpanel"], #workspace-content',
+    tabs: '.workspace-primary-tabs',
     discussion: '.workbench-workspace',
     stageNavigation: '[data-testid="stage-navigation"], .workflow-stage-navigation',
     // Global floating toast (L4); its text also counts towards the location phrases.
@@ -193,14 +195,44 @@ async function pairing(ctx: SampleContext): Promise<any> {
 // ---------------------------------------------------------------------------------------------
 // UI helpers (real user paths).
 
-async function openProjectMenu(ctx: SampleContext) {
-  const menu = ctx.desktop.page.locator('.workbench-project-menu')
+// Steps work on both layouts: before S1 the project and task lists share one menu in the
+// node reader; from S1 the project menu is in the top bar and the task menu is the title row.
+async function openMenu(ctx: SampleContext, selector: string) {
+  const menu = ctx.desktop.page.locator(selector).first()
   if ((await menu.getAttribute('open')) === null) await menu.locator(':scope > summary').click()
 }
 
+async function closeMenu(ctx: SampleContext, selector: string) {
+  const menu = ctx.desktop.page.locator(selector).first()
+  if ((await menu.count()) > 0 && (await menu.getAttribute('open')) !== null) await menu.locator(':scope > summary').click()
+}
+
+async function projectMenuSelector(ctx: SampleContext) {
+  return (await ctx.desktop.page.locator('.topbar-project-menu').count()) > 0 ? '.topbar-project-menu' : '.workbench-project-menu'
+}
+
+async function openProjectMenu(ctx: SampleContext) {
+  await openMenu(ctx, '.workbench-project-menu')
+}
+
 async function closeProjectMenu(ctx: SampleContext) {
-  const menu = ctx.desktop.page.locator('.workbench-project-menu')
-  if ((await menu.getAttribute('open')) !== null) await menu.locator(':scope > summary').click()
+  await closeMenu(ctx, '.workbench-project-menu')
+}
+
+/** Opens the team connection popover (S1) when the pairing controls are not already on screen. */
+async function openTeamControls(ctx: SampleContext) {
+  const { page } = ctx.desktop
+  if (await page.getByLabel('Desktop pairing code').isVisible().catch(() => false)) return
+  const trigger = page.getByRole('button', { name: /^团队连接(：|$)/ })
+  if ((await trigger.count()) > 0) {
+    await trigger.click()
+    await page.getByLabel('Desktop pairing code').waitFor({ state: 'visible', timeout: 5_000 })
+  }
+}
+
+async function closeTeamControls(ctx: SampleContext) {
+  const close = ctx.desktop.page.getByRole('button', { name: '关闭团队连接', exact: true })
+  if ((await close.count()) > 0) await close.click()
 }
 
 async function clickNav(ctx: SampleContext, name: string) {
@@ -212,10 +244,12 @@ async function clickNav(ctx: SampleContext, name: string) {
 async function selectRepository(ctx: SampleContext, repoDir = ctx.workspace.repoDir): Promise<any> {
   await clickNav(ctx, '工作台')
   await stubRepositoryPicker(ctx.desktop.app, repoDir)
-  await openProjectMenu(ctx)
+  const menu = await projectMenuSelector(ctx)
+  await openMenu(ctx, menu)
   await ctx.desktop.page.getByRole('button', { name: /选择本地仓库/ }).click()
   const project = await projectFor(ctx, repoDir)
   await delay(800)
+  await closeMenu(ctx, menu)
   return project
 }
 
@@ -242,7 +276,7 @@ async function createTask(ctx: SampleContext, title = TASK_TITLE, request = TASK
 
 async function inspectorTitle(ctx: SampleContext, title: string, timeoutMs = 30_000) {
   await ctx.desktop.page
-    .locator('[data-testid="node-inspector"] .panel-title')
+    .locator('[data-testid="node-inspector"] :is(.panel-title, .task-status-step)')
     .filter({ hasText: title })
     .waitFor({ state: 'visible', timeout: timeoutMs })
 }
@@ -250,7 +284,7 @@ async function inspectorTitle(ctx: SampleContext, title: string, timeoutMs = 30_
 /** Generates the clarification with the Deterministic Fake Provider (the default provider). */
 async function generateClarification(ctx: SampleContext) {
   ctx.log('generating clarification with the fake provider')
-  await ctx.desktop.page.getByRole('button', { name: /生成需求澄清|生成需求草稿/ }).first().click()
+  await ctx.desktop.page.getByRole('button', { name: /生成需求澄清|生成需求草稿|生成修订/ }).first().click()
   await inspectorTitle(ctx, '需求确认 Gate')
 }
 
@@ -278,8 +312,14 @@ async function selectNode(ctx: SampleContext, stageLabel: string, node: any) {
   const { page } = ctx.desktop
   await page.locator('.workflow-stage-navigation .workflow-stage-step > button').filter({ hasText: stageLabel }).click()
   await delay(300)
-  const button = page.getByTestId(`flow-node-${node.id}`)
-  if ((await button.count()) > 0) await button.click()
+  const shown = page.locator('[data-testid="node-inspector"] :is(.panel-title, .task-status-step)').filter({ hasText: node.title })
+  if ((await shown.count()) === 0) {
+    const button = page.getByTestId(`flow-node-${node.id}`)
+    const toggle = page.locator('.stage-substeps-toggle')
+    if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click()
+    if ((await button.count()) > 0) await button.click()
+    if ((await toggle.count()) > 0 && (await toggle.getAttribute('aria-expanded')) === 'true') await toggle.click()
+  }
   await inspectorTitle(ctx, node.title)
   await delay(500)
 }
@@ -292,13 +332,18 @@ async function openInspectorTab(ctx: SampleContext, name: string) {
 /** Pairs the selected local project through the real top-bar form. */
 async function pairViaForm(ctx: SampleContext, code: string) {
   const before = JSON.stringify((await pairing(ctx)) ?? null)
-  await ctx.desktop.page.getByLabel('Desktop pairing code').fill(code)
-  await ctx.desktop.page.locator('.topbar').getByRole('button', { name: '绑定', exact: true }).click()
+  await openTeamControls(ctx)
+  const { page } = ctx.desktop
+  await page.getByLabel('Desktop pairing code').fill(code)
+  await page.getByRole('button', { name: /^(绑定|连接|重新连接)$/ }).click()
+  const confirm = page.getByRole('button', { name: '确认替换', exact: true })
+  if (await confirm.waitFor({ state: 'visible', timeout: 1_500 }).then(() => true).catch(() => false)) await confirm.click()
   const after = await pollUntil('desktop pairing', async () => {
     const current = await pairing(ctx)
     return current && JSON.stringify(current) !== before ? current : undefined
   })
   await delay(1_000)
+  await closeTeamControls(ctx)
   return after
 }
 
@@ -311,27 +356,34 @@ function changedCredentialFields(before: any, after: any): string[] {
 /** Clicks the top-bar team pull and returns what the user was told. */
 async function pullTeamData(ctx: SampleContext) {
   const { page } = ctx.desktop
-  await page.locator('.topbar').getByRole('button', { name: /拉取团队数据/ }).click()
+  await openTeamControls(ctx)
+  await page.getByRole('button', { name: /拉取团队数据|更新团队数据/ }).first().click()
   await pollUntil('team pull to finish', async () => {
-    const text = await page.locator('.topbar').innerText()
-    return !text.includes('拉取中')
+    const text = await page.locator('body').innerText()
+    return !text.includes('拉取中') && !text.includes('更新中')
   })
   await delay(500)
-  return (await page.locator('.toast--floating').innerText().catch(() => '')).trim()
+  const toast = (await page.locator('.toast--floating').innerText().catch(() => '')).trim()
+  await closeTeamControls(ctx)
+  return toast
 }
 
 async function openSyncPopover(ctx: SampleContext) {
-  await ctx.desktop.page.locator('.status-strip').getByRole('button', { name: /^同步/ }).click()
+  const legacy = ctx.desktop.page.locator('.status-strip').getByRole('button', { name: /^同步/ })
+  if ((await legacy.count()) > 0) await legacy.click()
+  else await ctx.desktop.page.getByRole('button', { name: /^团队连接(：|$)/ }).click()
   await delay(500)
 }
 
 /** Requests a clarification revision through the inspector form; this writes the Run. */
 async function requestChangesViaUi(ctx: SampleContext, feedback = '补充依赖探测失败时的降级返回格式。') {
   const { page } = ctx.desktop
-  await page.getByTestId('node-inspector').getByRole('button', { name: '请求修订当前版本', exact: true }).click()
+  const revise = page.getByTestId('node-inspector').getByRole('button', { name: '请求修订当前版本', exact: true })
+  if (!(await revise.isVisible().catch(() => false))) await page.locator('.task-status-more > summary').click()
+  await revise.click()
   await page.locator('#clarification-feedback').fill(feedback)
   await page.getByRole('button', { name: '确认提交修订请求', exact: true }).click()
-  await page.getByRole('button', { name: /生成需求澄清|生成需求草稿/ }).first().waitFor({ state: 'visible', timeout: 30_000 })
+  await page.getByRole('button', { name: /生成需求澄清|生成需求草稿|生成修订/ }).first().waitFor({ state: 'visible', timeout: 30_000 })
   await delay(1_000)
 }
 
@@ -1169,16 +1221,24 @@ const teamExistingCredential: Sample = {
     await prepareClarifyGate(ctx)
     await pairViaForm(ctx, await createPairingCode(ctx.api))
     await settle(ctx)
+    await openTeamControls(ctx)
     await ctx.desktop.page.getByLabel('Desktop pairing code').fill('PLACEHOLDER.not-a-real-code')
     await delay(500)
   },
   async followUp(ctx) {
     // P1 baseline: submitting a second real code replaces the credential without any confirmation.
     const before = await pairing(ctx)
-    await ctx.desktop.page.getByLabel('Desktop pairing code').fill(await createPairingCode(ctx.api))
-    await ctx.desktop.page.locator('.topbar').getByRole('button', { name: '绑定', exact: true }).click()
+    await openTeamControls(ctx)
+    const { page } = ctx.desktop
+    await page.getByLabel('Desktop pairing code').fill(await createPairingCode(ctx.api))
+    await page.getByRole('button', { name: /^(绑定|连接|重新连接)$/ }).click()
     await delay(300)
-    const dialogs = await ctx.desktop.page.locator('[role="dialog"], [role="alertdialog"]').count()
+    const dialogs = await page.locator('[role="alertdialog"]').count()
+    if (dialogs > 0) {
+      ctx.observe('repairConfirmationText', (await page.locator('[role="alertdialog"]').innerText()).split('\n').slice(0, 3))
+      await ctx.capture('repair-confirmation')
+      await page.getByRole('button', { name: '确认替换', exact: true }).click()
+    }
     const after = await pollUntil('replacement credential', async () => {
       const current = await pairing(ctx)
       return current && JSON.stringify(current) !== JSON.stringify(before) ? current : undefined
@@ -1359,6 +1419,9 @@ const discussionMessages: Sample = {
     await selectNode(ctx, STAGE.clarify, gate)
     await waitForOutboxIdle(ctx, project.id)
     const { page } = ctx.desktop
+    // S1 collapses an empty discussion (L3); open it the way a user would.
+    const discussionToggle = page.getByRole('button', { name: '讨论', exact: true })
+    if (await discussionToggle.isVisible().catch(() => false)) await discussionToggle.click()
     await page.getByRole('button', { name: '新建对话', exact: true }).click()
     const create = page.getByRole('button', { name: '创建对话', exact: true })
     if ((await create.count()) > 0) await create.click()
