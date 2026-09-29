@@ -5780,7 +5780,8 @@ describe('App', () => {
 
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('知识治理')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('仓库 Markdown 索引')
-    expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('知识索引已更新 · 没有文档')
+    // The index snapshot loads after the page opens; CI runners can still show “正在索引” here.
+    await waitFor(() => expect(screen.getByTestId('knowledge-data-source')).toHaveTextContent('知识索引已更新 · 没有文档'))
     expect(screen.getByTestId('knowledge-index-details')).toHaveTextContent('indexed · no documents')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('当前任务的引用')
     expect(screen.getByTestId('knowledge-view')).toHaveTextContent('没有匹配的知识文档')
