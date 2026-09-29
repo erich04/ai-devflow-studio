@@ -10,6 +10,7 @@ import {
 import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.js'
 import type {
   AgentEvent,
+  DesignRevisionIdentity,
   AgentProviderConfig,
   AgentReviewExecutionResult,
   AgentRuntimeRendererListItem,
@@ -305,6 +306,8 @@ export type ApproveGateInput = {
   runId: string
   nodeId: string
   expectedClarificationRevision?: ClarificationRevisionIdentity
+  /** Required on the design-review Gate: the design version the approver saw (plan S4, Z2). */
+  expectedDesignRevision?: DesignRevisionIdentity
 }
 
 export type ApproveGateResult = {
@@ -818,6 +821,18 @@ function readExactRequiredDigest(
 ): string {
   const raw = value[key]
   if (typeof raw !== 'string' || !/^[a-f0-9]{64}$/u.test(raw)) {
+    throw new Error(`Invalid ${key}`)
+  }
+  return raw
+}
+
+/** An exact recorded time: parseable and unchanged, so it can be compared as a string. */
+function readExactTimestamp(
+  value: Record<string, unknown>,
+  key: string,
+): string {
+  const raw = value[key]
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > 64 || raw.trim() !== raw || !Number.isFinite(Date.parse(raw))) {
     throw new Error(`Invalid ${key}`)
   }
   return raw
@@ -1487,11 +1502,19 @@ export function parseApproveGateInput(value: unknown): ApproveGateInput {
     throw new Error('Invalid approve gate payload')
   }
 
-  rejectUnexpectedFields(value, ['runId', 'nodeId', 'expectedClarificationRevision'], 'approve gate payload')
+  rejectUnexpectedFields(value, ['runId', 'nodeId', 'expectedClarificationRevision', 'expectedDesignRevision'], 'approve gate payload')
 
   const expected = value['expectedClarificationRevision']
   if (expected !== undefined && !isRecord(expected)) {
     throw new Error('Invalid expected clarification revision')
+  }
+  // The design version the approver saw (plan S4, Z2); exact fields only.
+  const expectedDesign = value['expectedDesignRevision']
+  if (expectedDesign !== undefined && !isRecord(expectedDesign)) {
+    throw new Error('Invalid expected design revision')
+  }
+  if (expectedDesign) {
+    rejectUnexpectedFields(expectedDesign, ['artifactId', 'updatedAt', 'contentDigest'], 'expected design revision')
   }
 
   return {
@@ -1503,6 +1526,15 @@ export function parseApproveGateInput(value: unknown): ApproveGateInput {
             artifactId: readExactRequiredIdentifier(expected, 'artifactId'),
             revision: readExactPositiveVersion(expected, 'revision'),
             revisionDigest: readExactRequiredDigest(expected, 'revisionDigest'),
+          },
+        }
+      : {}),
+    ...(expectedDesign
+      ? {
+          expectedDesignRevision: {
+            artifactId: readExactRequiredIdentifier(expectedDesign, 'artifactId'),
+            updatedAt: readExactTimestamp(expectedDesign, 'updatedAt'),
+            contentDigest: readExactRequiredDigest(expectedDesign, 'contentDigest'),
           },
         }
       : {}),

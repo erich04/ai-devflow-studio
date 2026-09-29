@@ -110,6 +110,24 @@ describe('IPC contract parsers', () => {
     ).toEqual({ projectId: 'project-1', runId: 'run-1', nodeId: 'node-test' })
   })
 
+  it('accepts an exact design revision and rejects malformed ones (plan S4, Z2)', () => {
+    const expectedDesignRevision = { artifactId: 'artifact-run-1-design', updatedAt: '2026-09-28T10:00:00.000Z', contentDigest: 'b'.repeat(64) }
+    expect(parseApproveGateInput({ runId: 'run-1', nodeId: 'design-gate', expectedDesignRevision })).toEqual({
+      runId: 'run-1', nodeId: 'design-gate', expectedDesignRevision,
+    })
+    for (const invalid of [
+      'artifact-run-1-design',
+      { ...expectedDesignRevision, contentDigest: 'B'.repeat(64) },
+      { ...expectedDesignRevision, updatedAt: 'not a time' },
+      { ...expectedDesignRevision, updatedAt: ` ${expectedDesignRevision.updatedAt}` },
+      { ...expectedDesignRevision, artifactId: '' },
+      { ...expectedDesignRevision, revision: 1 },
+      { artifactId: expectedDesignRevision.artifactId, updatedAt: expectedDesignRevision.updatedAt },
+    ]) {
+      expect(() => parseApproveGateInput({ runId: 'run-1', nodeId: 'design-gate', expectedDesignRevision: invalid })).toThrow(/Invalid/)
+    }
+  })
+
   it('keeps gate approval input identifier-only', () => {
     expect(
       parseApproveGateInput({

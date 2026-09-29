@@ -1,6 +1,7 @@
 import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
+  DesignRevisionIdentity,
   AgentProviderConfig,
   AgentReviewResult,
   AgentReviewExecutionResult,
@@ -108,6 +109,8 @@ export type ApproveGateInput = {
   runId: string
   nodeId: string
   expectedClarificationRevision?: ClarificationRevisionIdentity
+  /** Required on the design-review Gate: the design version the approver saw (plan S4, Z2). */
+  expectedDesignRevision?: DesignRevisionIdentity
 }
 
 export type ApproveGateResult = {

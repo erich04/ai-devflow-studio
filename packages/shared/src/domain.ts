@@ -418,6 +418,21 @@ export type AgentEvent = {
   message: string
   timestamp: string
   clarificationAudit?: ClarificationAuditRecord
+  /** Which design version a design-review approval confirmed (plan S4, Z2). */
+  designAudit?: DesignAuditRecord
+}
+
+/** Design material identity: designs have no revision number (plan §9.1, S4 Z1). */
+export type DesignRevisionIdentity = {
+  artifactId: string
+  updatedAt: string
+  contentDigest: string
+}
+
+export type DesignAuditRecord = DesignRevisionIdentity & {
+  version: 1
+  action: 'approved'
+  actorId: string
 }
 
 export type GateDecision = {
