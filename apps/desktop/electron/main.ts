@@ -4,6 +4,7 @@ import { governAgentProvider, type ModelCallGovernance } from './governed-provid
 import { resolveDesignClarificationInput, StageAgentExecutionError } from '@ai-devflow/shared'
 import { StageAgentOperations } from './stage-agent-operations.js'
 import { requireCurrentClarificationRevision } from './gate-approval-revision.js'
+import { designApprovalEvent, isDesignReviewGate, requireCurrentDesignRevision, unexpectedDesignRevisionMessage } from './gate-approval-design.js'
 import { WorkbenchConversationService } from './workbench-conversation-service.js'
 import { createWorkbenchOpencodeExecutor } from './workbench-opencode-executor.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
@@ -3241,12 +3242,20 @@ function registerIpcHandlers() {
       throw new Error(`Gate approval rejected: ${approval.reason}`)
     }
 
+    // A design version only belongs to the design-review Gate (plan S4, Z2).
+    if (input.expectedDesignRevision && !isDesignReviewGate(node)) {
+      throw new Error(unexpectedDesignRevisionMessage)
+    }
     const timestamp = new Date().toISOString()
     const [existingEvents, codingRuns, artifacts] = await Promise.all([
       store.listEvents(run.id),
       node.kind === 'acceptance' ? store.listCodingAgentRuns(run.id) : Promise.resolve([]),
-      node.kind === 'gate' && node.stage === 'clarify' ? store.listArtifacts(run.id) : Promise.resolve([]),
+      node.kind === 'gate' && (node.stage === 'clarify' || node.stage === 'design') ? store.listArtifacts(run.id) : Promise.resolve([]),
     ])
+    // The approver must name the design still linked to the Gate; nothing is written otherwise.
+    const approvedDesign = isDesignReviewGate(node)
+      ? await requireCurrentDesignRevision({ run, gateNode: node, artifacts, expected: input.expectedDesignRevision })
+      : undefined
     let approvedClarification: ReturnType<typeof approveClarificationRevision> | undefined
     if (node.kind === 'gate' && node.stage === 'clarify') {
       const activeRevision = requireCurrentClarificationRevision({
@@ -3263,7 +3272,7 @@ function registerIpcHandlers() {
         gateNodeId: node.id,
       })
     }
-    const event: AgentEvent = approvedClarification?.event ?? {
+    const genericEvent: AgentEvent = {
       id: `event-approval-${randomUUID()}`,
       runId: run.id,
       nodeId: node.id,
@@ -3272,6 +3281,9 @@ function registerIpcHandlers() {
       message: `${actor.userName} Gate approved: ${node.title}`,
       timestamp,
     }
+    const event: AgentEvent = approvedClarification?.event ?? (approvedDesign
+      ? designApprovalEvent({ base: genericEvent, identity: approvedDesign.identity, actorId: actor.userId })
+      : genericEvent)
     const latestCodingRun = [...codingRuns].sort((left, right) =>
       (right.completedAt ?? right.startedAt).localeCompare(left.completedAt ?? left.startedAt),
     )[0]

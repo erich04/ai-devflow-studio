@@ -258,3 +258,13 @@ main :is(button, input, select, textarea) { font-size: inherit; }
   .settings-sections { position: static; grid-auto-flow: column; overflow-x: auto; min-height: max-content; justify-content: start; }
   .settings-section-button { white-space: nowrap; }
 }
+
+/* S4 (plan Z4–Z5): version, status and time sit next to the material heading; discuss stays at the end. */
+.gate-material-reader .material-document > .compact-row { justify-content: flex-start; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; }
+.gate-material-reader .material-document > .compact-row > span { color: var(--text-muted); font-size: var(--font-size-xs); }
+.gate-material-reader .material-document > .compact-row > button:last-child { margin-left: auto; }
+.material-business-title { margin: 2px 0 8px; }
+.material-identity { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 2px 0 8px; color: var(--text-muted); font-size: var(--font-size-xs); }
+.material-card-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 4px 0; }
+.material-group + .material-group { margin-top: 16px; }
+.material-group-title { margin: 12px 0 6px; font-size: var(--font-size-xs); color: var(--text-muted); font-weight: 600; }

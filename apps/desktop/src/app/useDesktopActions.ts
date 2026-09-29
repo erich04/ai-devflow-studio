@@ -2,6 +2,8 @@ import { diagnosticDisplayError } from '@ai-devflow/shared'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   buildClarificationReviewBundle,
+  buildDesignRevisionIdentity,
+  resolveDesignGateMaterial,
   canRunCodingAgentOnNode,
   canApproveGate,
   createWorkflowRunFromRequest,
@@ -440,6 +442,17 @@ export function useDesktopActions(input: {
             })
           : undefined
       const clarificationMetadata = clarificationBundle?.activeRevision?.clarificationRevision
+      // The design-review Gate names the design on screen; Main rejects any other (plan S4, Z3).
+      const designMaterial = selectedNode.kind === 'gate' && selectedNode.stage === 'design'
+        ? resolveDesignGateMaterial({ run: selectedRun, gateNode: selectedNode, artifacts })
+        : undefined
+      if (designMaterial && designMaterial.state !== 'ready') {
+        setToast(designMaterial.message)
+        return
+      }
+      const expectedDesignRevision = designMaterial?.state === 'ready'
+        ? await buildDesignRevisionIdentity(designMaterial.artifact)
+        : undefined
       const result = await desktopApi.approveGate({
         runId: selectedRun.id,
         nodeId: selectedNode.id,
@@ -452,6 +465,7 @@ export function useDesktopActions(input: {
               },
             }
           : {}),
+        ...(expectedDesignRevision ? { expectedDesignRevision } : {}),
       })
       applyLocalExecutionState(result.state)
       const nextNode = result.run.nodes.find((node) => node.id === result.run.currentNodeId)
@@ -482,6 +496,11 @@ export function useDesktopActions(input: {
       const detail = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存 Gate 审批失败'
       if (/memory access out of bounds/iu.test(detail)) {
         setToast(`本地数据库运行异常；${stillPending ? '审批未完成，当前节点仍待审批' : '尚无法确认审批是否已保存'}。请完全退出并重新打开应用，先核对当前节点与审批记录，再决定是否重试。无需重新生成需求或重复运行审查。`)
+      } else if (/clarification revision is missing, stale, or no longer current/u.test(detail)) {
+        // The version on screen was no longer the one pending; nothing was written (plan §6.1, S4 Z3).
+        setToast('需求版本已变化，本次确认没有提交。页面已刷新到最新状态，已填写的修订意见仍保留；请阅读当前待确认的版本后再确认。')
+      } else if (/design material is missing, changed, or no longer current/u.test(detail)) {
+        setToast('方案内容已变化，本次确认没有提交。页面已刷新到最新方案，请阅读后再确认。')
       } else {
         setToast(`${stillPending ? '审批未完成，当前节点仍待审批' : '审批结果尚未核实，请重新打开应用后核对审批记录'}：${detail}`)
       }
