@@ -1732,7 +1732,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v2')
     await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
     await page.getByTestId('clarification-revision-history').locator('summary').click()
-    await expect(page.getByTestId('clarification-revision-history')).toContainText('v1 · superseded')
+    await expect(page.getByTestId('clarification-revision-history')).toContainText('需求澄清 v1 · 已被替代（历史）')
     await expect(page.getByTestId('clarification-revision-history')).toContainText('State the retry boundary explicitly.')
 
     await inspector.getByTestId('task-status-row').getByRole('button', { name: '确认需求 v2', exact: true }).click()
