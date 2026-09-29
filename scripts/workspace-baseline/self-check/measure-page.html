@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>workspace-baseline measure self-check</title>
+<style>
+  html, body { margin: 0; font-family: sans-serif; font-size: 12px; }
+  button, input, select, textarea, summary, a { font: inherit; }
+  header { height: 40px; }
+  main { font-size: 12px; }
+  .scroll { height: 60px; overflow: auto; }
+  .spacer { height: 200px; }
+  .stage { width: 60px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .wide { width: 400px; }
+  .far { position: absolute; top: 2000px; }
+</style>
+</head>
+<body>
+  <header id="top"><button type="button">Header action</button></header>
+  <main>
+    <p id="first-block" style="font-size: 14px">Visible 14</p>
+    <div style="font-size: 18px">Mixed text <span style="font-size: 11px">inner 11</span> tail</div>
+    <div style="display: none; font-size: 9px">Display none 9 <button type="button">Hidden button</button></div>
+    <div style="visibility: hidden; font-size: 10px">Visibility hidden 10</div>
+    <div style="opacity: 0; font-size: 13px">Opacity zero 13</div>
+    <div class="scroll">
+      <div class="spacer"></div>
+      <p style="font-size: 15px">Clipped by scroll 15 <button type="button">Clipped button</button></p>
+    </div>
+    <p class="far" style="font-size: 17px">Below viewport 17 <button type="button">Far button</button></p>
+    <a href="#top">Link</a>
+    <a>Anchor without href</a>
+    <div role="tab" tabindex="0">Tab</div>
+    <input type="hidden" value="hidden">
+    <details><summary>Summary</summary><button type="button">Inside closed details</button></details>
+    <div class="stage" data-measure-truncation>Very long stage label text</div>
+    <div class="stage wide" data-measure-truncation>Short</div>
+    <div style="width: 120px; overflow-x: auto; white-space: nowrap">
+      <span style="display: inline-block; width: 100px">Fits</span><span style="display: inline-block; width: 100px" data-measure-truncation>Cut by scroller</span>
+    </div>
+    <p>Current step appears here. Current step again.</p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,827 @@
+{
+  "run": {
+    "generatedAt": "2026-09-29T03:36:40.735Z",
+    "commit": {
+      "head": "0518870",
+      "productCodeDirty": true
+    },
+    "node": "v24.18.0",
+    "platform": "darwin-arm64",
+    "theme": "dark",
+    "zoom": 1,
+    "sizes": [
+      "1440x742"
+    ],
+    "environment": {
+      "screen": {
+        "workArea": {
+          "x": 0,
+          "y": 30,
+          "width": 1920,
+          "height": 1050
+        },
+        "size": {
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 2
+      },
+      "versions": {
+        "electron": "42.11.6",
+        "chrome": "148.0.7778.280"
+      }
+    }
+  },
+  "records": [
+    {
+      "sample": "clarify-gate-warn",
+      "size": "1440x742",
+      "theme": "dark",
+      "zoom": 1,
+      "valid": true,
+      "sizing": {
+        "requested": {
+          "width": 1440,
+          "height": 742
+        },
+        "actual": {
+          "width": 1440,
+          "height": 742
+        },
+        "valid": true,
+        "minimumSizeRelaxed": false,
+        "zoomFactor": 1
+      },
+      "screenshot": "shots/clarify-gate-warn-1440x742-dark.jpg",
+      "summary": {
+        "statusRowBottom": 429.1,
+        "firstBodyBlockTop": 487.1,
+        "topbarAndStripHeight": 104.59,
+        "topbarAndStripControls": 12,
+        "viewportControls": 41,
+        "locationPhrases": {
+          "需求确认 Gate": 3,
+          "当前步骤": 2,
+          "实际当前节点": 1,
+          "实际进度": 1
+        },
+        "fontSizes": {
+          "distinct": 8,
+          "min": 10,
+          "sizes": [
+            10,
+            11,
+            12,
+            13,
+            14,
+            16,
+            16.38,
+            19
+          ]
+        },
+        "discussionWidth": 480,
+        "discussionShareOfMain": 35.5,
+        "truncatedStageLabels": [
+          "06 业务验收 等待 · 0/1"
+        ],
+        "toastVisible": false,
+        "pageOverflow": {
+          "horizontal": false,
+          "vertical": false,
+          "scrollHeight": 742
+        }
+      },
+      "measurement": {
+        "viewport": {
+          "width": 1440,
+          "height": 742
+        },
+        "devicePixelRatio": 2,
+        "page": {
+          "scrollWidth": 1440,
+          "scrollHeight": 742,
+          "horizontalOverflow": false,
+          "verticalOverflow": false,
+          "bodyOverflow": "hidden/hidden"
+        },
+        "controls": {
+          "count": 41,
+          "byScope": {
+            "topbar": 8,
+            "statusStrip": 4
+          },
+          "items": [
+            {
+              "tag": "input",
+              "name": "Search runs and knowledge",
+              "disabled": false,
+              "box": {
+                "top": 25.3,
+                "bottom": 42.3,
+                "left": 437.94,
+                "right": 642.34,
+                "width": 204.4,
+                "height": 17
+              }
+            },
+            {
+              "tag": "button",
+              "name": "Toggle color theme",
+              "disabled": false,
+              "box": {
+                "top": 15.8,
+                "bottom": 51.8,
+                "left": 673.34,
+                "right": 765.34,
+                "width": 92,
+                "height": 36
+              }
+            },
+            {
+              "tag": "input",
+              "name": "Desktop pairing code",
+              "disabled": false,
+              "box": {
+                "top": 15.8,
+                "bottom": 51.8,
+                "left": 866.72,
+                "right": 986.72,
+                "width": 120,
+                "height": 36
+              }
+            },
+            {
+              "tag": "button",
+              "name": "绑定",
+              "disabled": false,
+              "box": {
+                "top": 15.8,
+                "bottom": 51.8,
+                "left": 992.72,
+                "right": 1044.72,
+                "width": 52,
+                "height": 36
+              }
+            },
+            {
+              "tag": "button",
+              "name": "拉取团队数据",
+              "disabled": false,
+              "box": {
+                "top": 15.8,
+                "bottom": 51.8,
+                "left": 1050.72,
+                "right": 1166.72,
+                "width": 116,
+                "height": 36
+              }
+            },
+            {
+              "tag": "summary",
+              "name": "团队数据说明",
+              "disabled": false,
+              "box": {
+                "top": 19.8,
+                "bottom": 47.8,
+                "left": 1169.72,
+                "right": 1197.72,
+                "width": 28,
+                "height": 28
+              }
+            },
+            {
+              "tag": "button",
+              "name": "Test redaction",
+              "disabled": false,
+              "box": {
+                "top": 15.8,
+                "bottom": 51.8,
+                "left": 1203.72,
+                "right": 1323.52,
+                "width": 119.8,
+                "height": 36
+              }
+            },
+            {
+              "tag": "button",
+              "name": "新建 Run",
+              "disabled": false,
+              "box": {
+                "top": 15.8,
+                "bottom": 51.8,
+                "left": 1329.52,
+                "right": 1424,
+                "width": 94.48,
+                "height": 36
+              }
+            },
+            {
+              "tag": "button",
+              "name": "当前 Run",
+              "disabled": false,
+              "box": {
+                "top": 72.59,
+                "bottom": 99.59,
+                "left": 20,
+                "right": 233.2,
+                "width": 213.2,
+                "height": 27
+              }
+            },
+            {
+              "tag": "button",
+              "name": "项目概览",
+              "disabled": false,
+              "box": {
+                "top": 72.59,
+                "bottom": 99.59,
+                "left": 245.2,
+                "right": 395.91,
+                "width": 150.71,
+                "height": 27
+              }
+            },
+            {
+              "tag": "button",
+              "name": "策略与预算",
+              "disabled": false,
+              "box": {
+                "top": 72.59,
+                "bottom": 99.59,
+                "left": 407.91,
+                "right": 655.95,
+                "width": 248.05,
+                "height": 27
+              }
+            },
+            {
+              "tag": "button",
+              "name": "同步",
+              "disabled": false,
+              "box": {
+                "top": 72.59,
+                "bottom": 99.59,
+                "left": 667.95,
+                "right": 775.95,
+                "width": 108,
+                "height": 27
+              }
+            },
+            {
+              "tag": "button",
+              "name": "工作台",
+              "disabled": false,
+              "box": {
+                "top": 118.59,
+                "bottom": 186.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "Team Overview",
+              "disabled": false,
+              "box": {
+                "top": 194.59,
+                "bottom": 262.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "Knowledge",
+              "disabled": false,
+              "box": {
+                "top": 270.59,
+                "bottom": 338.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "Agents",
+              "disabled": false,
+              "box": {
+                "top": 346.59,
+                "bottom": 414.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "Skills",
+              "disabled": false,
+              "box": {
+                "top": 422.59,
+                "bottom": 490.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "MCP",
+              "disabled": false,
+              "box": {
+                "top": 498.59,
+                "bottom": 566.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "测试",
+              "disabled": false,
+              "box": {
+                "top": 574.59,
+                "bottom": 642.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "button",
+              "name": "诊断",
+              "disabled": false,
+              "box": {
+                "top": 650.59,
+                "bottom": 718.59,
+                "left": 10,
+                "right": 82,
+                "width": 72,
+                "height": 68
+              }
+            },
+            {
+              "tag": "summary",
+              "name": "health-api / Health API 增加依赖探测",
+              "disabled": false,
+              "box": {
+                "top": 118.59,
+                "bottom": 143.09,
+                "left": 106,
+                "right": 318.79,
+                "width": 212.79,
+                "height": 24.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "精简导航",
+              "disabled": false,
+              "box": {
+                "top": 121.09,
+                "bottom": 143.09,
+                "left": 760,
+                "right": 816,
+                "width": 56,
+                "height": 22
+              }
+            },
+            {
+              "tag": "button",
+              "name": "流程视图",
+              "disabled": false,
+              "box": {
+                "top": 121.09,
+                "bottom": 143.09,
+                "left": 816,
+                "right": 872,
+                "width": 56,
+                "height": 22
+              }
+            },
+            {
+              "tag": "button",
+              "name": "列表视图",
+              "disabled": false,
+              "box": {
+                "top": 121.09,
+                "bottom": 143.09,
+                "left": 872,
+                "right": 928,
+                "width": 56,
+                "height": 22
+              }
+            },
+            {
+              "tag": "button",
+              "name": "01 需求澄清 正在查看 · 当前进度 · 1/2",
+              "disabled": false,
+              "box": {
+                "top": 156.09,
+                "bottom": 214.09,
+                "left": 106,
+                "right": 242,
+                "width": 136,
+                "height": 58
+              }
+            },
+            {
+              "tag": "button",
+              "name": "02 方案设计 等待 · 0/2",
+              "disabled": false,
+              "box": {
+                "top": 161.84,
+                "bottom": 208.34,
+                "left": 260,
+                "right": 396,
+                "width": 136,
+                "height": 46.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "03 开发实现 等待 · 0/1",
+              "disabled": false,
+              "box": {
+                "top": 161.84,
+                "bottom": 208.34,
+                "left": 414,
+                "right": 550,
+                "width": 136,
+                "height": 46.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "04 测试证据 等待 · 0/1",
+              "disabled": false,
+              "box": {
+                "top": 161.84,
+                "bottom": 208.34,
+                "left": 568,
+                "right": 704,
+                "width": 136,
+                "height": 46.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "05 PR 交付 等待 · 0/1",
+              "disabled": false,
+              "box": {
+                "top": 161.84,
+                "bottom": 208.34,
+                "left": 722,
+                "right": 858,
+                "width": 136,
+                "height": 46.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "06 业务验收 等待 · 0/1",
+              "disabled": false,
+              "box": {
+                "top": 161.84,
+                "bottom": 208.34,
+                "left": 876,
+                "right": 1030,
+                "width": 154,
+                "height": 46.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "需求澄清 已完成",
+              "disabled": false,
+              "box": {
+                "top": 253.09,
+                "bottom": 285.59,
+                "left": 226.72,
+                "right": 338.72,
+                "width": 112,
+                "height": 32.5
+              }
+            },
+            {
+              "tag": "button",
+              "name": "需求确认 Gate 当前步骤",
+              "disabled": false,
+              "box": {
+                "top": 253.09,
+                "bottom": 285.59,
+                "left": 346.72,
+                "right": 500.08,
+                "width": 153.36,
+                "height": 32.5
+              }
+            },
+            {
+              "tag": "button",
+              "role": "tab",
+              "name": "概览",
+              "disabled": false,
+              "box": {
+                "top": 435.1,
+                "bottom": 473.1,
+                "left": 119,
+                "right": 167,
+                "width": 48,
+                "height": 38
+              }
+            },
+            {
+              "tag": "button",
+              "role": "tab",
+              "name": "内容与审查",
+              "disabled": false,
+              "box": {
+                "top": 435.1,
+                "bottom": 473.1,
+                "left": 171,
+                "right": 261,
+                "width": 90,
+                "height": 38
+              }
+            },
+            {
+              "tag": "button",
+              "role": "tab",
+              "name": "产物与证据",
+              "disabled": false,
+              "box": {
+                "top": 435.1,
+                "bottom": 473.1,
+                "left": 265,
+                "right": 355,
+                "width": 90,
+                "height": 38
+              }
+            },
+            {
+              "tag": "button",
+              "role": "tab",
+              "name": "执行记录",
+              "disabled": false,
+              "box": {
+                "top": 435.1,
+                "bottom": 473.1,
+                "left": 359,
+                "right": 435,
+                "width": 76,
+                "height": 38
+              }
+            },
+            {
+              "tag": "button",
+              "name": "请求修订当前版本",
+              "disabled": false,
+              "box": {
+                "top": 675,
+                "bottom": 715,
+                "left": 119,
+                "right": 257,
+                "width": 138,
+                "height": 40
+              }
+            },
+            {
+              "tag": "button",
+              "name": "运行门禁审查",
+              "disabled": false,
+              "box": {
+                "top": 675,
+                "bottom": 715,
+                "left": 265,
+                "right": 468.73,
+                "width": 203.73,
+                "height": 40
+              }
+            },
+            {
+              "tag": "button",
+              "name": "新建对话",
+              "disabled": false,
+              "box": {
+                "top": 119.59,
+                "bottom": 165.59,
+                "left": 1344,
+                "right": 1382,
+                "width": 38,
+                "height": 46
+              }
+            },
+            {
+              "tag": "button",
+              "name": "会话历史",
+              "disabled": false,
+              "box": {
+                "top": 119.59,
+                "bottom": 165.59,
+                "left": 1382,
+                "right": 1419,
+                "width": 37,
+                "height": 46
+              }
+            },
+            {
+              "tag": "button",
+              "name": "向项目提问",
+              "disabled": false,
+              "box": {
+                "top": 202.09,
+                "bottom": 242.09,
+                "left": 955,
+                "right": 1405,
+                "width": 450,
+                "height": 40
+              }
+            }
+          ]
+        },
+        "fonts": {
+          "root": "main",
+          "distinct": 8,
+          "min": 10,
+          "sizes": [
+            10,
+            11,
+            12,
+            13,
+            14,
+            16,
+            16.38,
+            19
+          ],
+          "textNodesBySize": {
+            "10": 33,
+            "11": 11,
+            "12": 35,
+            "13": 3,
+            "14": 6,
+            "16": 1,
+            "19": 1,
+            "16.38": 1
+          }
+        },
+        "regions": {
+          "topbar": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 0,
+              "bottom": 68.59,
+              "left": 0,
+              "right": 1440,
+              "width": 1440,
+              "height": 68.59
+            }
+          },
+          "statusStrip": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 68.59,
+              "bottom": 104.59,
+              "left": 0,
+              "right": 1440,
+              "width": 1440,
+              "height": 36
+            }
+          },
+          "statusRow": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 366.6,
+              "bottom": 429.1,
+              "left": 119,
+              "right": 902,
+              "width": 783,
+              "height": 62.5
+            }
+          },
+          "nodeHeader": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 311.16,
+              "bottom": 360.6,
+              "left": 119,
+              "right": 902,
+              "width": 783,
+              "height": 49.45
+            }
+          },
+          "firstBodyBlock": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 487.1,
+              "bottom": 588.34,
+              "left": 123,
+              "right": 883,
+              "width": 760,
+              "height": 101.24
+            }
+          },
+          "discussion": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 118.59,
+              "bottom": 728,
+              "left": 940,
+              "right": 1420,
+              "width": 480,
+              "height": 609.41
+            }
+          },
+          "stageNavigation": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 154.09,
+              "bottom": 241.09,
+              "left": 106,
+              "right": 919,
+              "width": 813,
+              "height": 87
+            }
+          },
+          "toast": {
+            "found": false,
+            "matches": 0
+          },
+          "main": {
+            "found": true,
+            "matches": 1,
+            "box": {
+              "top": 104.59,
+              "bottom": 742,
+              "left": 86,
+              "right": 1440,
+              "width": 1354,
+              "height": 637.41
+            }
+          }
+        },
+        "phrases": {
+          "需求确认 Gate": 3,
+          "当前步骤": 2,
+          "实际当前节点": 1,
+          "实际进度": 1
+        },
+        "truncation": [
+          {
+            "text": "01 需求澄清 正在查看 · 当前进度 · 1/2",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "02 方案设计 等待 · 0/2",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "03 开发实现 等待 · 0/1",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "04 测试证据 等待 · 0/1",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "05 PR 交付 等待 · 0/1",
+            "truncated": false,
+            "overflowsItself": false,
+            "clippedByAncestor": false
+          },
+          {
+            "text": "06 业务验收 等待 · 0/1",
+            "truncated": true,
+            "overflowsItself": false,
+            "clippedByAncestor": true
+          }
+        ]
+      }
+    }
+  ]
+}
