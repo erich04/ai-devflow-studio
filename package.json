@@ -49,6 +49,7 @@
     "test:desktop-pilot-smoke": "node scripts/desktop-pilot-smoke.mjs",
     "test:v15-github-delivery-packaged-smoke": "node scripts/v15-github-delivery-packaged-smoke.mjs",
     "visual:desktop": "node scripts/capture-desktop-visuals.mjs",
+    "baseline:workspace": "corepack pnpm --filter @ai-devflow/desktop build && tsx scripts/workspace-baseline.mts",
     "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform",
     "verify:demo": "corepack pnpm verify && corepack pnpm test:e2e && corepack pnpm test:electron-smoke && corepack pnpm test:native-coding-electron-smoke && corepack pnpm test:workbench-conversation-electron-smoke",
     "release:status": "node scripts/release-signoff-status.mjs",

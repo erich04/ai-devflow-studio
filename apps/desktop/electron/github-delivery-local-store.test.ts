@@ -798,6 +798,39 @@ describe('GitHub repository binding observation CAS', () => {
     reopened.close()
   })
 
+  it('revokes in-flight intents when the same local project re-pairs to the same Team Project', async () => {
+    // Observed in the S0 baseline: a fresh pairing code for the same user and Team Project
+    // returns the same token id and only new createdAt / expiresAt values.
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+    const repaired: DesktopPairingCredential = {
+      ...sources.pairing,
+      createdAt: '2026-08-11T11:00:00.000Z',
+      expiresAt: '2026-09-10T11:00:00.000Z',
+    }
+
+    await store.saveDesktopPairingCredential(repaired, 'repaired-encrypted-token')
+
+    await expect(store.getDesktopPairingCredential()).resolves.toEqual(repaired)
+    const [after] = await store.listGitHubDeliveryIntents(intent.runId)
+    expect(after).toMatchObject({ id: intent.id, status: 'revoked' })
+    store.close()
+  })
+
+  it('keeps in-flight intents when the identical credential is saved again', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const sources = createSources()
+    await saveSources(store, sources)
+    const intent = await savePreparedIntent(store, sources)
+
+    await store.saveDesktopPairingCredential({ ...sources.pairing }, 'encrypted-token')
+
+    await expect(store.listGitHubDeliveryIntents(intent.runId)).resolves.toEqual([intent])
+    store.close()
+  })
+
   it('restores the prior pairing and nonterminal intent when replacement persistence fails', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })

@@ -52,6 +52,29 @@ const checks = [
     ],
   },
   {
+    file: 'scripts/workspace-baseline/environment.mts',
+    blocked: [
+      { pattern: /\/tmp\//, reason: 'Workspace baseline must use os.tmpdir() and path.join()' },
+      { pattern: /\bbash\b|\bzsh\b/, reason: 'Workspace baseline must not depend on bash/zsh' },
+      { pattern: /\brm\s+-rf\b/, reason: 'Workspace baseline must not hard-code POSIX destructive commands' },
+    ],
+    required: [
+      { pattern: /corepack\.cmd/, reason: 'Workspace baseline should resolve corepack.cmd on Windows' },
+      { pattern: /os\.tmpdir\(\)/, reason: 'Workspace baseline should use os.tmpdir() for temporary files' },
+      { pattern: /path\.join/, reason: 'Workspace baseline should use path.join for paths' },
+    ],
+  },
+  {
+    file: 'scripts/workspace-baseline.mts',
+    blocked: [
+      { pattern: /\/tmp\//, reason: 'Workspace baseline entry must not hard-code POSIX /tmp paths' },
+      { pattern: /\bbash\b|\bzsh\b/, reason: 'Workspace baseline entry must not depend on bash/zsh' },
+    ],
+    required: [
+      { pattern: /fileURLToPath/, reason: 'Workspace baseline entry should resolve paths with fileURLToPath' },
+    ],
+  },
+  {
     file: 'scripts/postgres-smoke.mjs',
     blocked: [
       { pattern: /\/tmp\//, reason: 'Postgres smoke must not hard-code POSIX /tmp paths' },
