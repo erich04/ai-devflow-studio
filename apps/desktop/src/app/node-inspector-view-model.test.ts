@@ -12,6 +12,7 @@ import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/
 import {
   buildGateReadinessPresentation,
   buildNodeInspectorViewModel,
+  formatStatusState,
   inspectorTabPlansByNodeType,
   resolveInspectorTabForSearchResult,
   selectGitHubDeliveryIntentForInspector,
@@ -209,12 +210,13 @@ describe('node inspector view model', () => {
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('门禁审查')
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).not.toContain('Budget guard')
     expect(viewModel.nextAction).toMatchObject({
-      title: '生成需求澄清',
+      title: '可以生成需求修订',
+      kind: 'ready',
       primaryActionId: 'completeAgent',
       secondaryActionIds: [],
     })
     expect(viewModel.actionCatalog.completeAgent).toMatchObject({
-      label: '生成需求澄清',
+      label: '生成修订',
       testId: 'complete-clarify-agent',
     })
     expect(viewModel.contextProjection.fields.find((field) => field.field === 'agent_review')).toMatchObject({
@@ -246,12 +248,13 @@ describe('node inspector view model', () => {
       'trace',
     ])
     expect(viewModel.nextAction).toMatchObject({
-      title: '生成设计方案',
+      title: '可以生成方案',
+      kind: 'ready',
       primaryActionId: 'completeAgent',
       secondaryActionIds: [],
     })
     expect(viewModel.actionCatalog.completeAgent).toMatchObject({
-      label: '生成设计方案',
+      label: '生成方案',
       testId: 'complete-design-agent',
     })
   })
@@ -273,11 +276,12 @@ describe('node inspector view model', () => {
       'required-artifact',
     ])
     expect(viewModel.nextAction).toMatchObject({
-      title: '通过 Gate',
+      title: '等待你确认需求',
+      kind: 'approvable',
       primaryActionId: 'approveGate',
       secondaryActionIds: ['openKnowledgeReview'],
     })
-    expect(viewModel.nextAction.copy).not.toContain('Tests')
+    expect(viewModel.actionCatalog.approveGate.label).toBe('确认需求')
     expect(viewModel.actions.map((action) => action.id)).toEqual([])
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
       'Policy snapshot',
@@ -361,12 +365,12 @@ describe('node inspector view model', () => {
       'required-artifact',
     ])
     expect(viewModel.nextAction).toMatchObject({
-      title: '通过 Gate',
+      title: '等待有权限的成员确认方案',
+      kind: 'awaiting_role',
       secondaryActionIds: ['openKnowledgeReview'],
     })
     expect(viewModel.nextAction.primaryActionId).toBeUndefined()
-    expect(viewModel.nextAction.copy).toContain('Gate 条件拆解')
-    expect(viewModel.nextAction.copy).not.toContain('Tests')
+    expect(viewModel.nextAction.copy).toContain('没有审批权限')
     expect(viewModel.actions.map((action) => action.id)).toEqual([])
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
       'Policy snapshot',
@@ -390,11 +394,11 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(testGate, { requestedTab: 'Gate条件', canApprove: true })
 
     expect(viewModel.nextAction).toMatchObject({
-      title: '通过 Gate',
+      title: '等待你确认测试证据 Gate',
       primaryActionId: 'approveGate',
       secondaryActionIds: ['openKnowledgeReview', 'openTests'],
     })
-    expect(viewModel.nextAction.copy).toContain('Tests')
+    expect(viewModel.actionCatalog.approveGate.label).toBe('通过 Gate')
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toContain('test-evidence')
     expect(viewModel.gateRequirementRows.map((row) => row.label)).toContain('Test Evidence')
     expect(viewModel.contextProjection.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
@@ -532,7 +536,9 @@ describe('node inspector view model', () => {
       canVerifyGitHubDeliveryRevocation: true,
     })
     expect(vm.nextAction.primaryActionId).toBeUndefined()
-    expect(vm.actions.map((action) => action.id)).toEqual(['verifyGitHubDeliveryRevocation'])
+    // The follow-up check stays on the first layer, not in the “⋯” menu.
+    expect(vm.nextAction.secondaryActionIds).toEqual(['verifyGitHubDeliveryRevocation'])
+    expect(vm.actions).toEqual([])
     expect(vm.statusDescriptors.find((item) => item.id === 'gate-decision')).toMatchObject({
       state: '已批准',
       summary: '该节点已完成批准；历史审查与策略评估仍保留供核对。',
@@ -547,7 +553,7 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(prNode, { artifacts: [prPackage] })
 
     expect(viewModel.nextAction).toMatchObject({
-      title: 'Prepare GitHub Delivery',
+      title: '可以准备交付',
       primaryActionId: 'prepareGitHubDelivery',
       secondaryActionIds: [],
     })
@@ -564,7 +570,8 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction).toMatchObject({
       title: '等待 Web 审批',
       primaryActionId: 'reviseGitHubDelivery',
-      secondaryActionIds: ['stopGitHubDelivery'],
+      secondaryActionIds: [],
+      persistentActionIds: ['stopGitHubDelivery'],
     })
     expect(viewModel.nextAction.copy).toContain('lead/owner')
     expect(viewModel.nextAction.copy).toContain('新 intent revision')
@@ -583,7 +590,7 @@ describe('node inspector view model', () => {
     })
 
     expect(viewModel.nextAction).toMatchObject({
-      title: '恢复 GitHub Delivery',
+      title: '交付需要恢复',
       primaryActionId: 'resumeGitHubDelivery',
       secondaryActionIds: [],
     })
@@ -630,7 +637,8 @@ describe('node inspector view model', () => {
       githubDeliveryIntent: githubDeliveryIntent(status),
     })
 
-    expect(viewModel.nextAction.title).toBe('GitHub Delivery 自动推进中')
+    expect(viewModel.nextAction.title).toBe('正在发布交付')
+    expect(viewModel.nextAction.persistentActionIds).toEqual(['stopGitHubDelivery'])
     expect(viewModel.nextAction.copy).toContain('无需再次点击')
     expect(viewModel.nextAction.primaryActionId).toBeUndefined()
   })
@@ -643,9 +651,10 @@ describe('node inspector view model', () => {
     })
 
     expect(viewModel.nextAction).toMatchObject({
-      title: 'GitHub Delivery 已批准',
+      title: '交付已获批准，等待发布',
       primaryActionId: 'reviseGitHubDelivery',
-      secondaryActionIds: ['stopGitHubDelivery'],
+      secondaryActionIds: [],
+      persistentActionIds: ['stopGitHubDelivery'],
     })
     expect(viewModel.nextAction.copy).toContain('旧审批失效')
     expect(viewModel.actionCatalog.reviseGitHubDelivery.disabledReasons).toEqual([])
@@ -681,7 +690,7 @@ describe('node inspector view model', () => {
     })
 
     expect(viewModel.nextAction).toMatchObject({
-      title: 'Retry GitHub Delivery',
+      title: '交付授权已撤销',
       primaryActionId: 'retryGitHubDelivery',
       secondaryActionIds: [],
     })
@@ -730,9 +739,8 @@ describe('node inspector view model', () => {
       canVerifyGitHubDeliveryRevocation: true,
     })
 
-    expect(viewModel.actions.map((action) => action.id)).toContain(
-      'verifyGitHubDeliveryRevocation',
-    )
+    expect(viewModel.nextAction.secondaryActionIds).toContain('verifyGitHubDeliveryRevocation')
+    expect(viewModel.actions.map((action) => action.id)).not.toContain('verifyGitHubDeliveryRevocation')
   })
 
   it('keeps credential revocation verification reachable on a completed PR node', () => {
@@ -936,12 +944,14 @@ describe('node inspector view model', () => {
     const completedAction = viewModelFor(clarifyNode).nextAction
 
     expect(waitingAction).toMatchObject({
-      title: '等待上游节点',
+      title: '等待上游完成',
+      kind: 'waiting_upstream',
       secondaryActionIds: [],
     })
     expect(waitingAction.primaryActionId).toBeUndefined()
     expect(completedAction).toMatchObject({
-      title: '查看已完成证据',
+      title: '此步骤已完成',
+      kind: 'history',
       secondaryActionIds: [],
     })
     expect(completedAction.primaryActionId).toBeUndefined()
@@ -960,5 +970,169 @@ describe('node inspector view model', () => {
     expect(resolveInspectorTabForSearchResult(clarifyNode, 'event')).toBe('执行记录')
     expect(resolveInspectorTabForSearchResult(prNode, 'event')).toBe('执行记录')
     expect(resolveInspectorTabForSearchResult(gateNode, 'event')).toBe('执行记录')
+  })
+})
+
+describe('task status row projection (S1, plan §6.1)', () => {
+  const clarifyGate: WorkflowNode = {
+    ...findNode((candidate) => candidate.kind === 'gate' && candidate.stage === 'clarify'),
+    status: 'running',
+  }
+  const requirementV2 = { kind: 'requirement' as const, determinable: true, revision: 2 }
+  const decision = (overrides: Partial<NonNullable<Parameters<typeof buildNodeInspectorViewModel>[0]['gateEnforcementDecision']>> = {}) => ({
+    status: 'warn' as const,
+    blocksApproval: false,
+    blockingReasons: [],
+    warningReasons: [],
+    requiredActions: [],
+    canOverride: false,
+    overrideRoleRequired: 'lead' as const,
+    policySource: 'built_in_default' as const,
+    policyVersion: 1,
+    provisional: false,
+    ...overrides,
+  })
+  const missingReviewReason = {
+    id: 'missing-review', target: 'missing_agent_review' as const, ruleKey: 'missing_agent_review:protected_gate:missing',
+    action: 'warn' as const, summary: 'Gate Review missing',
+  }
+  const review = (counts: { risks: number; tests: number }) => ({
+    risks: Array.from({ length: counts.risks }, (_, index) => `risk ${index}`),
+    missingEvidence: [],
+    suggestedTests: Array.from({ length: counts.tests }, (_, index) => `test ${index}`),
+    policyFindings: [],
+    knowledgeReferences: [],
+    gateAdvisory: { level: counts.risks ? 'warn' : 'info', blocksApproval: false, summary: 'review', missingEvidence: [], riskCount: counts.risks },
+  }) as unknown as NonNullable<Parameters<typeof buildNodeInspectorViewModel>[0]['latestAgentReview']>
+
+  it('keeps approval reachable when a warn-only policy only lacks the Gate Review (D1)', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      gateEnforcementDecision: decision({ warningReasons: [missingReviewReason] }),
+    })
+    expect(viewModel.nextAction).toMatchObject({
+      kind: 'approvable',
+      title: '等待你确认需求 v2',
+      qualifier: '尚未运行 AI 审查',
+      primaryActionId: 'openKnowledgeReview',
+      secondaryActionIds: ['approveGate'],
+      confirmBefore: { actionId: 'approveGate' },
+    })
+    expect(viewModel.nextAction.confirmBefore?.message).toContain('需求 v2')
+    expect(viewModel.actionCatalog.approveGate.label).toBe('确认需求 v2')
+    expect(viewModel.actionCatalog.openKnowledgeReview.label).toBe('去 Agents 运行门禁审查')
+  })
+
+  it('confirms directly and counts review suggestions when a review exists (X5)', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      latestAgentReview: review({ risks: 3, tests: 1 }),
+      gateEnforcementDecision: decision({ status: 'pass' }),
+    })
+    expect(viewModel.nextAction).toMatchObject({
+      kind: 'approvable', title: '等待你确认需求 v2', qualifier: '有 4 条建议', primaryActionId: 'approveGate',
+    })
+    expect(viewModel.nextAction.confirmBefore).toBeUndefined()
+  })
+
+  it('shows no qualifier when the review has no suggestions', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      latestAgentReview: review({ risks: 0, tests: 0 }),
+      gateEnforcementDecision: decision({ status: 'pass' }),
+    })
+    expect(viewModel.nextAction).toMatchObject({ kind: 'approvable', primaryActionId: 'approveGate', secondaryActionIds: [] })
+    expect(viewModel.nextAction.qualifier).toBeUndefined()
+  })
+
+  it('never offers approval under an enforced block', () => {
+    const blocked = viewModelFor(clarifyGate, {
+      canApprove: false,
+      approvalTarget: requirementV2,
+      gateEnforcementDecision: decision({ status: 'blocked', blocksApproval: true, blockingReasons: [{ ...missingReviewReason, action: 'block' }] }),
+    })
+    expect(blocked.nextAction).toMatchObject({ kind: 'blocked', tone: 'blocked', primaryActionId: 'openKnowledgeReview' })
+    expect(blocked.nextAction.secondaryActionIds).not.toContain('approveGate')
+    expect(blocked.nextAction.primaryActionId).not.toBe('approveGate')
+  })
+
+  it('treats an unavailable team policy as unverified and offers a team data update (X4)', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      canApprove: false,
+      approvalTarget: requirementV2,
+      gateEnforcementDecision: decision({
+        status: 'blocked_policy_unavailable', blocksApproval: true,
+        blockingReasons: [{ id: 'policy-unavailable', target: 'missing_agent_review', ruleKey: 'policy-unavailable', action: 'block', summary: 'Sync team enforcement policy before approving this Gate.' }],
+      }),
+    })
+    expect(viewModel.nextAction).toMatchObject({ kind: 'unverified', title: '状态待核实', primaryActionId: 'syncTeam' })
+    expect(viewModel.nextAction.copy).not.toMatch(/Sync team/)
+  })
+
+  it('refuses to name an approval target it cannot determine', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: { kind: 'requirement', determinable: false, reason: '当前 Gate 关联了多个 Clarification Revision，已安全阻断审批。' },
+      gateEnforcementDecision: decision({ status: 'pass' }),
+    })
+    expect(viewModel.nextAction).toMatchObject({ kind: 'unverified' })
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+  })
+
+  it('does not tell a non-current Gate that it can pass (D5)', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      isSelectedCurrentNode: false,
+      canApprove: true,
+      gateEnforcementDecision: decision({ status: 'pass' }),
+    })
+    expect(viewModel.nextAction.title).not.toMatch(/可以|确认/)
+    expect(viewModel.gateReadinessSummary).toMatchObject({ canPass: false, headline: '尚未轮到这个 Gate' })
+  })
+
+  it('keeps stop and reject visible for running and permission states (X2)', () => {
+    const buildNode = findNode((candidate) => candidate.kind === 'task' && candidate.stage === 'build')
+    const projection = (action: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+      scope: { runId: run.id, nodeId: buildNode.id, projectId: run.projectId },
+      history: [],
+      action: { target: 'agents-progress', summary: 'summary', disabled: false, createsNewRun: false, mayInvokeProvider: false, requiresConfirmation: false, label: 'label', ...action },
+      ...extra,
+    }) as unknown as NonNullable<Parameters<typeof buildNodeInspectorViewModel>[0]['codingActionProjection']>
+    const running = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'view-progress' }, { phase: 'running' }) })
+    expect(running.nextAction).toMatchObject({ kind: 'running', persistentActionIds: ['stopCodingRun'] })
+    const permission = viewModelFor(buildNode, {
+      codingActionProjection: projection({ id: 'review-permission' }, {
+        phase: 'waiting_permission',
+        permission: { request: { title: 'Apply change' }, canApprove: true, expired: false, remainingMs: 42_000, changedPaths: ['a.ts'] },
+      }),
+    })
+    expect(permission.nextAction).toMatchObject({
+      kind: 'permission', qualifier: '剩余 42 秒', primaryActionId: 'approveCodingPermission',
+      persistentActionIds: ['rejectCodingPermission', 'stopCodingRun'],
+    })
+    // Code changes are approved only after the exact diff is shown, so the row links to that review.
+    const changeSet = viewModelFor(buildNode, {
+      codingActionProjection: projection({ id: 'review-permission', label: '审查并批准修改' }, {
+        phase: 'waiting_permission',
+        permission: { kind: 'change-set', request: { title: 'Apply change' }, canApprove: true, expired: false, remainingMs: 42_000, changedPaths: ['a.ts'] },
+      }),
+    })
+    expect(changeSet.nextAction).toMatchObject({
+      kind: 'permission', primaryActionId: 'openCodingAgent', secondaryActionIds: [],
+      persistentActionIds: ['rejectCodingPermission', 'stopCodingRun'],
+    })
+    expect(changeSet.actionCatalog.openCodingAgent.label).toBe('审查并批准修改')
+  })
+})
+
+describe('status value wording (plan §6.3, T1)', () => {
+  it('maps engineering values to first-layer copy and leaves unknown values unchanged', () => {
+    expect(formatStatusState('ready')).toBe('已记录')
+    expect(formatStatusState('empty')).toBe('尚未生成')
+    expect(formatStatusState('3 events')).toBe('有 3 条执行记录')
+    expect(formatStatusState('2 linked')).toBe('已关联 2 份材料')
+    expect(formatStatusState('待核实')).toBe('待核实')
   })
 })

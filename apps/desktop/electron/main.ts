@@ -3,6 +3,7 @@ import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
 import { governAgentProvider, type ModelCallGovernance } from './governed-provider.js'
 import { resolveDesignClarificationInput, StageAgentExecutionError } from '@ai-devflow/shared'
 import { StageAgentOperations } from './stage-agent-operations.js'
+import { requireCurrentClarificationRevision } from './gate-approval-revision.js'
 import { WorkbenchConversationService } from './workbench-conversation-service.js'
 import { createWorkbenchOpencodeExecutor } from './workbench-opencode-executor.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
@@ -38,7 +39,6 @@ import {
   createPrDraftArtifact,
   createWorkflowRunFromRequest,
   approveClarificationRevision,
-  buildClarificationReviewBundle,
   markClarificationRevisionsSuperseded,
   requestClarificationChanges,
   createTestEvidenceArtifact,
@@ -3249,19 +3249,14 @@ function registerIpcHandlers() {
     ])
     let approvedClarification: ReturnType<typeof approveClarificationRevision> | undefined
     if (node.kind === 'gate' && node.stage === 'clarify') {
-      const bundle = buildClarificationReviewBundle({ run, gateNode: node, artifacts })
-      const expected = input.expectedClarificationRevision
-      const metadata = bundle.activeRevision?.clarificationRevision
-      if (
-        bundle.state !== 'ready' || !bundle.activeRevision || !metadata || !expected ||
-        expected.artifactId !== bundle.activeRevision.id ||
-        expected.revision !== metadata.revision ||
-        expected.revisionDigest !== metadata.revisionDigest
-      ) {
-        throw new Error('Gate approval rejected: clarification revision is missing, stale, or no longer current')
-      }
+      const activeRevision = requireCurrentClarificationRevision({
+        run,
+        gateNode: node,
+        artifacts,
+        expected: input.expectedClarificationRevision,
+      })
       approvedClarification = approveClarificationRevision({
-        artifact: bundle.activeRevision,
+        artifact: activeRevision,
         actorId: actor.userId,
         now: timestamp,
         sequence: existingEvents.length + 1,

@@ -10,6 +10,7 @@ import {
 import {
   displayNodeTitle,
   type SupportContext,
+  formatLocalTime,
 } from '../app/desktop-view-model'
 
 export function SkillView() {
@@ -134,12 +135,37 @@ export function TestsView({
   const executionState = isRunningTests || latestEvidence?.status === 'running'
     ? { label: '执行中', tone: 'warn', detail: '本地测试命令正在执行。' }
     : latestEvidence?.status === 'passed'
-      ? { label: '已通过', tone: 'good', detail: latestEvidence.summary }
+      ? { label: '已通过', tone: 'good', detail: `${latestEvidence.summary} · 执行于 ${formatLocalTime(latestEvidence.createdAt)}。证据没有记录所测代码的提交，适用性无法核实。` }
       : latestEvidence?.status === 'failed'
         ? { label: '失败', tone: 'bad', detail: latestEvidence.summary }
         : latestEvidence?.status === 'timed_out'
           ? { label: '已超时', tone: 'bad', detail: latestEvidence.summary }
           : { label: '待执行', tone: 'soft', detail: '尚未产生当前 Run 的测试结果。' }
+  // Tests can only run at the actual test step (plan X6); say why before the click, not after.
+  const actualNode = selectedRun?.nodes.find((node) => node.id === selectedRun.currentNodeId)
+  const canRunAtActualStep = Boolean(
+    actualNode && actualNode.kind === 'test' && actualNode.stage === 'test' &&
+      (actualNode.status === 'running' || actualNode.status === 'failed'),
+  )
+  const savedCommand = project?.testCommand?.trim() ?? ''
+  const runBlockedReason = !project
+    ? '先选择本地仓库，再配置或执行测试。'
+    : !savedCommand
+      ? '先保存当前项目的测试命令。'
+      : !selectedRun
+        ? '先选择一个任务。'
+        : !canRunAtActualStep
+          ? `任务进入测试步骤后才能执行；当前实际步骤：${actualNode ? displayNodeTitle(actualNode) : '无'}。`
+          : ''
+  const evidenceEmptyCopy = !project
+    ? '选择本地仓库后再配置或执行测试。'
+    : !savedCommand
+      ? '配置当前项目的测试命令后，才能产生测试证据。'
+      : !latestEvidence
+        ? canRunAtActualStep
+          ? '当前任务尚未运行测试，可以点击「执行本地测试」。'
+          : '当前任务尚未运行测试。命令已保存不代表测试已完成。'
+        : ''
   const workflowState = !selectedRun
     ? { label: '未选择 Run', tone: 'soft', detail: '选择 Run 后显示 Workflow 测试节点状态。' }
     : !testNode
@@ -161,11 +187,12 @@ export function TestsView({
       <div className="page-main">
         <div className="panel-head">
           <span className="panel-title">测试计划与证据</span>
-          <button className="primary-button" aria-label="执行测试" disabled={isRunningTests} onClick={onRunTests}>
+          <button className="primary-button" aria-label="执行测试" aria-describedby={runBlockedReason ? 'tests-run-blocked-reason' : undefined} disabled={isRunningTests || Boolean(runBlockedReason)} onClick={onRunTests}>
             <Play size={16} />
             {isRunningTests ? '测试中' : '执行本地测试'}
           </button>
         </div>
+        {runBlockedReason && !isRunningTests ? <p className="meta" id="tests-run-blocked-reason" data-testid="tests-run-blocked-reason">{runBlockedReason}</p> : null}
         {supportContext?.focusTarget === 'local-tests' ? (
           <div className="support-context-banner" data-testid="support-context-banner">
             <div>
@@ -236,9 +263,8 @@ export function TestsView({
           </div>
         </article>
         <div className="evidence-list">
-          {evidence.length === 0 ? (
-            <p className="empty-note">还没有真实测试证据。选择本地仓库后执行测试。</p>
-          ) : (
+          {evidenceEmptyCopy ? <p className="empty-note" data-testid="tests-empty-state">{evidenceEmptyCopy}</p> : null}
+          {evidence.length === 0 ? null : (
             evidence.map((item) => (
               <article className={`evidence-row evidence-row--${item.status}`} key={item.id}>
                 <div>

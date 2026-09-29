@@ -370,6 +370,13 @@ async function showProjectRuns(page) {
   if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
 }
 
+// The top bar project menu holds the local project panel and the project overview (plan L1).
+async function setTopbarProjectMenuOpen(page, open) {
+  const menu = page.locator('.topbar-project-menu')
+  await expect(menu).toBeVisible()
+  if ((await menu.getAttribute('open') !== null) !== open) await menu.locator(':scope > summary').click()
+}
+
 async function selectRunByTitle(page, title) {
   await showProjectRuns(page)
   const runRow = page.locator('.run-row').filter({ hasText: title })
@@ -897,9 +904,10 @@ try {
   await expect(first.page.getByTestId('workflow-empty-state')).toContainText('暂无 Run')
   await expect(first.page.getByTestId('node-inspector-empty')).toContainText('选择真实 Run')
 
-  await showProjectRuns(first.page)
+  await setTopbarProjectMenuOpen(first.page, true)
   await first.page.getByRole('button', { name: /选择本地仓库/ }).click()
   await expect(first.page.locator('.local-project-panel').getByText('electron-smoke-fixture')).toBeVisible()
+  await setTopbarProjectMenuOpen(first.page, false)
   const localProjectId = await first.page.evaluate(async (repoPath) => {
     const state = await window.aiDevFlowDesktop.loadState()
     const project = state.projects.find((candidate) => candidate.path === repoPath)
@@ -962,24 +970,37 @@ try {
   }
 
   await first.page.getByRole('button', { name: /工作台/ }).click()
-  await first.page.getByRole('button', { name: /新建 Run/ }).click()
-  const createRunDialog = first.page.getByRole('dialog', { name: /Create new run/ })
+  await first.page.getByRole('button', { name: '新建任务', exact: true }).click()
+  const createRunDialog = first.page.getByRole('dialog', { name: '新建任务', exact: true })
   await createRunDialog.getByLabel('标题').fill('重构 GitHub webhook 重试策略')
   await createRunDialog.getByLabel('一句话需求').fill('请先澄清 webhook retry 的失败边界，再设计实现方案。')
-  await createRunDialog.getByRole('button', { name: /创建并开始澄清/ }).click()
+  await createRunDialog.getByRole('button', { name: '创建任务', exact: true }).click()
+  // D2: the dialog closes only after the task is persisted, and no model has been called yet.
+  await expect(createRunDialog).toBeHidden({ timeout: 20_000 })
+  await expect(first.page.getByTestId('toast')).toContainText('任务已创建，尚未调用模型')
   await showProjectRuns(first.page)
   await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
   await first.page.getByRole('button', { name: 'Team Overview', exact: true }).click()
-  await first.page.getByRole('button', { name: '拉取团队数据并刷新策略', exact: true }).click()
-  await expect(first.page.getByTestId('team-sync-feedback')).toContainText('拉取成功 · 策略 v1', { timeout: 20_000 })
+  await first.page.getByTestId('team-overview').getByRole('button', { name: '更新团队数据', exact: true }).click()
+  await expect(first.page.getByTestId('team-sync-feedback')).toContainText('团队数据已更新 · 策略 v1', { timeout: 20_000 })
   await expect(first.page.getByTestId('team-overview')).toBeVisible()
+  // Team connection, team data and uploads are separate facts in one popover (plan §6.5).
+  const teamConnectionTrigger = first.page.getByRole('button', { name: /^团队连接：/ })
+  await expect(teamConnectionTrigger).not.toContainText('同步失败')
+  await teamConnectionTrigger.click()
+  const teamConnection = first.page.getByRole('dialog', { name: '团队连接', exact: true })
+  await expect(teamConnection).toContainText('已连接到')
+  await expect(teamConnection).toContainText('最近成功读取：')
+  await expect(teamConnection.getByRole('button', { name: '更新团队数据', exact: true })).toBeEnabled()
+  await first.page.keyboard.press('Escape')
+  await expect(teamConnection).toBeHidden()
   await first.page.getByRole('button', { name: /工作台/ }).click()
   await showProjectRuns(first.page)
   await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
-  await first.page.getByRole('button', { name: '项目概览', exact: true }).click()
-  await expect(first.page.getByRole('dialog', { name: '项目概览', exact: true })).toContainText('本地')
-  await first.page.keyboard.press('Escape')
+  await setTopbarProjectMenuOpen(first.page, true)
+  await expect(first.page.getByTestId('project-overview')).toContainText('本地')
+  await setTopbarProjectMenuOpen(first.page, false)
   await expect(first.page.getByTestId('runtime-source-badge')).toContainText('remote snapshot + local merge')
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
 

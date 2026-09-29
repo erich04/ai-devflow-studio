@@ -167,6 +167,8 @@
   return {
     viewport,
     devicePixelRatio: window.devicePixelRatio,
+    // The theme the page actually rendered, so a requested variant can be checked.
+    renderedTheme: document.documentElement.dataset.theme ?? null,
     // Whether content beyond the viewport can be reached by scrolling the page itself.
     page: {
       scrollWidth: scroller.scrollWidth,

@@ -3,8 +3,10 @@ import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 
 /** Read-only details anchored to a toolbar or citation, outside clipped scroll panes. */
-export function DetailPopover({ label, children, title, className = '', hoverPreview = false }: {
+export function DetailPopover({ label, children, title, triggerLabel, className = '', hoverPreview = false }: {
   label: ReactNode; title: string; children: ReactNode; className?: string; hoverPreview?: boolean
+  /** Accessible name of the trigger when its visible text carries state beyond the title (WCAG 2.5.3). */
+  triggerLabel?: string
 }) {
   const id = useId()
   const trigger = useRef<HTMLButtonElement>(null)
@@ -55,7 +57,7 @@ export function DetailPopover({ label, children, title, className = '', hoverPre
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); document.removeEventListener('devflow:detail-open', anotherOpened) }
   }, [open, id])
   return <>
-    <button type="button" ref={trigger} className={className} aria-label={title} aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? id : undefined}
+    <button type="button" ref={trigger} className={className} aria-label={triggerLabel ?? title} aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? id : undefined}
       onMouseEnter={() => { clearTimer(); if (hoverPreview && mode === 'closed') timer.current = setTimeout(() => setMode('preview'), 200) }} onMouseLeave={leave}
       onClick={() => { clearTimer(); setMode(mode === 'pinned' ? 'closed' : 'pinned') }}>{label}</button>
     {open && createPortal(<div id={id} ref={panel} className="detail-popover" role="dialog" aria-label={title} tabIndex={-1} style={position}

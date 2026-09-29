@@ -9,8 +9,10 @@ import {
   Code2,
   GitPullRequest,
   Play,
+  MoreHorizontal,
   RefreshCw,
   Square,
+  X,
 } from 'lucide-react'
 import { ArtifactReviewReader } from '../components/ArtifactReviewReader'
 import { ArtifactBody, partitionArtifact, hasSectionContent } from '../components/ArtifactBody'
@@ -59,6 +61,7 @@ import {
   currentRunPhaseCopy,
   displayNodeSubtitle,
   displayNodeTitle,
+  formatLocalTime,
   getNodeStatusTone,
   matchesQuery,
   stageOrder,
@@ -69,10 +72,12 @@ import {
 } from '../app/desktop-view-model'
 import {
   buildNodeInspectorViewModel,
+  formatStatusState,
   selectInspectorPrPackage,
   type InspectorAction,
   type InspectorActionDisabledReason,
   type InspectorActionId,
+  type InspectorApprovalTarget,
   type InspectorSectionId,
   type PendingInspectorAction,
 } from '../app/node-inspector-view-model'
@@ -127,6 +132,7 @@ export function WorkflowBoard({
   onDiscuss?: (node: WorkflowNode) => void
 }) {
   const [boardView, setBoardView] = useState<'compact' | 'flow' | 'list'>('compact')
+  const [subStepsOpen, setSubStepsOpen] = useState(false)
   const board = useMemo(
     () => buildWorkflowBoard({ run, artifacts, events, testEvidence }),
     [artifacts, events, run, testEvidence],
@@ -142,31 +148,21 @@ export function WorkflowBoard({
         : 'current'
 
   return (
-    <section className={`canvas-panel workflow-panel unified-workflow workflow-view--${boardView}`} data-testid="workflow-canvas">
-      <div className="panel-head workflow-head">
-        <div>
-          <span className="panel-title">工作流看板</span>
-          <span className="meta">当前 Run: {run.title}</span>
-        </div>
-        <div className="workflow-view-switch" role="group" aria-label="看板展示方式">
-          <button aria-pressed={boardView === 'compact'} onClick={() => setBoardView('compact')}>精简导航</button>
-          <button aria-pressed={boardView === 'flow'} onClick={() => setBoardView('flow')}>流程视图</button>
-          <button aria-pressed={boardView === 'list'} onClick={() => setBoardView('list')}>列表视图</button>
-        </div>
-      </div>
+    <section className={`canvas-panel workflow-panel unified-workflow workflow-view--${boardView}`} data-testid="workflow-canvas" aria-label={`任务阶段：${run.title}`}>
+      <div className="workflow-stage-bar">
       <div className="workflow-navigation-scroll" tabIndex={0} aria-label="浏览流程导航">
-      <nav className="workflow-stage-navigation" aria-label="六阶段导航">
+      <nav className="workflow-stage-navigation" aria-label="六阶段导航" data-testid="stage-navigation">
         {board.map((stage, index) => <div className="workflow-stage-step" key={stage.stage}>
-          <button className={`stage-nav--${stage.completionState}`} aria-current={currentNode?.stage === stage.stage ? 'step' : undefined}
+          <button className={`stage-nav--${stage.completionState}`} data-testid="stage-item" aria-current={currentNode?.stage === stage.stage ? 'step' : undefined}
             aria-pressed={browsingStage === stage.stage} aria-controls={`${boardView === 'compact' ? 'workflow-stage-nodes' : `workflow-stage-${stage.stage}`} workbench-node-reader`} disabled={!stage.cards.length}
-            title={`${stage.label}：${stage.completedNodeCount}/${stage.cards.length} 个节点已完成；点击查看本阶段`}
+            title={`${stage.label}：${stage.completionLabel}，${stage.completedNodeCount}/${stage.cards.length} 个子步骤已完成；点击查看本阶段`}
             onClick={() => {
               const target = stage.cards.find((card) => card.node.id === run.currentNodeId) ?? stage.cards[0]
               if (target) onSelectNode(target.node.id)
             }}>
             <span className="stage-nav-index">{stage.index}</span><strong>{stage.label}</strong>
-            <small>{browsingStage === stage.stage ? '正在查看 · ' : ''}{currentNode?.stage === stage.stage && stage.completionState === 'current' ? '当前进度' : stage.completionLabel} · {stage.completedNodeCount}/{stage.cards.length}</small>
-            {browsingStage === stage.stage && <ChevronDown className="stage-selection-pointer" size={14} aria-hidden="true" />}
+            {/* Sub-steps are folded into the stage item (plan L2): count on the actual stage, state elsewhere. */}
+            <small>{currentNode?.stage === stage.stage && stage.completionState === 'current' ? `${stage.completedNodeCount}/${stage.cards.length}` : stage.completionLabel}</small>
           </button>
           {index < board.length - 1 && <div className="stage-progress-link" role="progressbar" aria-label={`${stage.label}阶段进度`}
             aria-valuemin={0} aria-valuemax={100} aria-valuenow={stage.progressPercent}
@@ -175,16 +171,26 @@ export function WorkflowBoard({
           </div>}
         </div>)}
       </nav>
-      {boardView === 'compact' && <div id="workflow-stage-nodes" className="workflow-node-navigation" role="region" aria-label="当前查看阶段的节点">
-        <div className="workflow-viewed-stage"><small>正在查看</small><strong>{viewedStage?.index} · {viewedStage?.label}</strong></div>
+      </div>
+      <div className="workflow-head-tools">
+        {boardView === 'compact' && (
+          <button type="button" className="stage-substeps-toggle" aria-expanded={subStepsOpen} aria-controls="workflow-stage-nodes" onClick={() => setSubStepsOpen(!subStepsOpen)}>
+            {subStepsOpen ? '收起子步骤' : '子步骤'}<ChevronDown size={14} aria-hidden="true" className={subStepsOpen ? 'expanded' : ''} />
+          </button>
+        )}
+        <div className="workflow-view-switch" role="group" aria-label="看板展示方式">
+          <button aria-pressed={boardView === 'compact'} onClick={() => setBoardView('compact')}>精简导航</button>
+          <button aria-pressed={boardView === 'flow'} onClick={() => setBoardView('flow')}>流程视图</button>
+          <button aria-pressed={boardView === 'list'} onClick={() => setBoardView('list')}>列表视图</button>
+        </div>
+      </div>
+      </div>
+      {boardView === 'compact' && <div id="workflow-stage-nodes" className="workflow-node-navigation" role="region" aria-label="当前查看阶段的节点" hidden={!subStepsOpen}>
+        <div className="workflow-viewed-stage"><small>子步骤</small><strong>{viewedStage?.index} · {viewedStage?.label}</strong></div>
         <div className="workflow-node-buttons">
           {viewedStage?.cards.map((card) => <button key={card.node.id}
             data-testid={`flow-node-${card.node.id}`} aria-pressed={card.node.id === selectedNodeId} aria-controls="workbench-node-reader"
             onClick={() => onSelectNode(card.node.id)}><strong>{displayNodeTitle(card.node)}</strong><span>{card.statusLabel}</span></button>)}
-        </div>
-        <div className="workflow-actual-progress">
-          <span>{currentNode ? `实际进度：${stageLabels[currentNode.stage]} · ${displayNodeTitle(currentNode)}` : currentRunPhaseCopy(run)}</span>
-          {currentNode && selectedNodeId !== currentNode.id && <button onClick={() => onSelectNode(currentNode.id)}>返回当前进度</button>}
         </div>
       </div>}
       {boardView !== 'compact' && <><div className="workflow-context">
@@ -290,7 +296,6 @@ export function WorkflowBoard({
           </section>
         ))}
       </div></>}
-      </div>
     </section>
   )
 }
@@ -359,7 +364,11 @@ export function Inspector({
   onOpenCodingConfiguration,
   codingActionProjection,
   upstreamCodingDiffReady,
+  onCancelCodingRun,
+  onReplyCodingPermission,
 }: {
+  onCancelCodingRun?: (() => void) | undefined
+  onReplyCodingPermission?: ((decision: 'approved' | 'rejected') => void) | undefined
   modelReadinessError?: string | undefined
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
@@ -428,12 +437,14 @@ export function Inspector({
   const [revisionDraftError, setRevisionDraftError] = useState('')
   const [documentId, setDocumentId] = useState('')
   const [revisionFormOpen, setRevisionFormOpen] = useState(false)
+  // Action armed by a first click that needs a reminder before submitting (plan §6.1).
+  const [armedActionKey, setArmedActionKey] = useState('')
   const [revisionDrafts, setRevisionDrafts] = useState<Record<string, string>>(() => {
     try { const parsed: unknown = JSON.parse(localStorage.getItem('devflow-revision-drafts') ?? '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'string')) as Record<string, string> : {} } catch { return {} }
   })
   // Reset the node workspace before paint so a newly visible tab cannot lose its first click.
   useLayoutEffect(() => {
-    setRequestedTab(selectedNode?.status === 'success' && selectedNode.kind === 'agent' ? '内容与审查' : '概览'); setDocumentId(''); setRevisionFormOpen(false)
+    setRequestedTab(selectedNode?.status === 'success' && selectedNode.kind === 'agent' ? '内容与审查' : '概览'); setDocumentId(''); setRevisionFormOpen(false); setArmedActionKey('')
   }, [selectedNode?.id])
 
   useEffect(() => {
@@ -467,12 +478,54 @@ export function Inspector({
     subjectArtifactIds: reviewSubjectArtifactIds,
     testEvidenceIds: testEvidence.map((evidence) => evidence.id),
   })
+  const clarificationReview =
+    selectedRun && selectedNode.kind === 'gate' && selectedNode.stage === 'clarify'
+      ? buildClarificationReviewBundle({
+          run: selectedRun,
+          gateNode: selectedNode,
+          artifacts: workflowArtifacts,
+        })
+      : undefined
+  const designMaterial = selectedNode.kind === 'gate' && selectedNode.stage === 'design'
+    ? workflowArtifacts
+        .filter((artifact) => selectedNode.artifactIds.includes(artifact.id) && artifact.kind === 'design')
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+    : undefined
+  const approvalTarget: InspectorApprovalTarget | undefined = selectedNode.kind !== 'gate'
+    ? undefined
+    : selectedNode.stage === 'clarify'
+      ? clarificationReview?.state === 'ready' && clarificationReview.activeRevision?.clarificationRevision
+        ? {
+            kind: 'requirement',
+            determinable: true,
+            revision: clarificationReview.activeRevision.clarificationRevision.revision,
+            title: clarificationReview.activeRevision.title,
+            generatedAt: clarificationReview.activeRevision.updatedAt,
+          }
+        : { kind: 'requirement', determinable: false, reason: clarificationReview?.message ?? '无法读取待确认的需求版本。' }
+      : selectedNode.stage === 'design'
+        ? {
+            kind: 'design',
+            determinable: true,
+            ...(designMaterial ? { title: designMaterial.title, generatedAt: designMaterial.updatedAt } : {}),
+          }
+        : { kind: 'other', determinable: true }
+  const pendingMatchesSelectedNode = Boolean(
+    pendingInspectorAction &&
+      selectedRun &&
+      pendingInspectorAction.runId === selectedRun.id &&
+      pendingInspectorAction.nodeId === selectedNode.id,
+  )
+  const stageProvider = stageProviders.find((provider) => provider.id === stageProviderId)
   const viewModel = buildNodeInspectorViewModel({
     node: selectedNode,
     requestedTab,
     isSelectedCurrentNode,
     artifacts,
     events,
+    ...(approvalTarget ? { approvalTarget } : {}),
+    isGeneratingStageAgent: pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'completeAgent',
+    ...(stageProvider ? { stageProviderLabel: `${stageProvider.name} · ${stageProvider.model}` } : {}),
     knowledgeReferenceCount: scopedReferences.length,
     testEvidenceCount: testEvidence.length,
     testEvidence,
@@ -495,14 +548,6 @@ export function Inspector({
   const gateImpact = selectedRun
     ? buildWorkflowGateImpact({ run: selectedRun, node: selectedNode, artifacts: workflowArtifacts })
     : { state: 'none' as const, summary: '当前节点不影响后续 Gate。' }
-  const clarificationReview =
-    selectedRun && selectedNode.kind === 'gate' && selectedNode.stage === 'clarify'
-      ? buildClarificationReviewBundle({
-          run: selectedRun,
-          gateNode: selectedNode,
-          artifacts: workflowArtifacts,
-        })
-      : undefined
   const revisionDraftKey = clarificationReview?.activeRevision?.id ?? ''
   const clarificationFeedbackDraft = revisionDrafts[revisionDraftKey] ?? ''
   const setClarificationFeedbackDraft = (text: string) => {
@@ -545,8 +590,21 @@ export function Inspector({
     stopGitHubDelivery: onStopGitHubDelivery,
     verifyGitHubDeliveryRevocation: onVerifyGitHubDeliveryRevocation,
     createAcceptanceBundle: onCreateAcceptanceBundle,
+    stopCodingRun: () => onCancelCodingRun?.(),
+    approveCodingPermission: () => onReplyCodingPermission?.('approved'),
+    rejectCodingPermission: () => onReplyCodingPermission?.('rejected'),
+    cancelStageAgent: () => onCancelStageAgent?.(),
+    syncTeam: onSyncTeam,
+  }
+  // Stop, cancel and reject stay usable while other writes are in flight (plan §3).
+  const actionAvailable: Partial<Record<InspectorActionId, boolean>> = {
+    stopCodingRun: Boolean(onCancelCodingRun),
+    approveCodingPermission: Boolean(onReplyCodingPermission),
+    rejectCodingPermission: Boolean(onReplyCodingPermission),
+    cancelStageAgent: Boolean(onCancelStageAgent),
   }
   const writeActionIds = new Set<InspectorActionId>([
+    'approveCodingPermission',
     'completeAgent',
     'approveGate',
     'runCodingAgent',
@@ -560,12 +618,6 @@ export function Inspector({
     'createAcceptanceBundle',
   ])
   const hasPendingInspectorAction = Boolean(pendingInspectorAction)
-  const pendingMatchesSelectedNode = Boolean(
-    pendingInspectorAction &&
-      selectedRun &&
-      pendingInspectorAction.runId === selectedRun.id &&
-      pendingInspectorAction.nodeId === selectedNode.id,
-  )
   const hasInspectorWriteLock =
     hasPendingInspectorAction ||
     isRunningAgentReview ||
@@ -591,7 +643,7 @@ export function Inspector({
       return pendingMatchesSelectedNode ? '当前节点操作正在进行中' : '其他 Inspector 操作正在进行中'
     }
     if (action.disabledReasons.includes('team_project_binding_missing') && !hasDeliveryProjectBinding) {
-      return '先绑定当前 Local Project 与 Team Project'
+      return '先把当前本地项目连接到团队项目'
     }
     if (action.id === 'runCodingAgent' && codingReadiness?.status !== 'ready') {
       return codingReadiness?.checks.find((check) => check.status === 'blocked')?.message ??
@@ -668,9 +720,17 @@ export function Inspector({
       case 'verifyGitHubDeliveryRevocation':
         return <RefreshCw size={16} />
       case 'stopGitHubDelivery':
+      case 'stopCodingRun':
+      case 'cancelStageAgent':
         return <Square size={16} />
       case 'createAcceptanceBundle':
         return <ClipboardCheck size={16} />
+      case 'approveCodingPermission':
+        return <CheckCircle2 size={16} />
+      case 'rejectCodingPermission':
+        return <X size={16} />
+      case 'syncTeam':
+        return <RefreshCw size={16} />
     }
   }
   const renderActionButton = (action: InspectorAction, variant: InspectorAction['variant'] = action.variant) => (
@@ -682,7 +742,17 @@ export function Inspector({
       disabled={isActionDisabled(action) || (Boolean(modelReadinessError) && ['completeAgent','runCodingAgent'].includes(action.id))}
       key={action.id}
       title={actionTitle(action)}
-      onClick={() => actionHandlers[action.id]()}
+      data-confirm-armed={armedActionKey === `${selectedNode.id}:${action.id}` ? 'true' : undefined}
+      onClick={() => {
+        const confirmation = viewModel.nextAction.confirmBefore
+        const key = `${selectedNode.id}:${action.id}`
+        if (confirmation?.actionId === action.id && armedActionKey !== key) {
+          setArmedActionKey(key)
+          return
+        }
+        setArmedActionKey('')
+        actionHandlers[action.id]()
+      }}
     >
       {renderActionIcon(action.id)}
       {actionLabel(action)}
@@ -697,6 +767,32 @@ export function Inspector({
   const codingReadinessDisplay = codingReadiness
     ? buildCodingReadinessDisplay(codingReadiness)
     : null
+  const persistentNextActions = viewModel.nextAction.persistentActionIds
+    .filter((actionId) => actionAvailable[actionId] !== false)
+    .map((actionId) => viewModel.actionCatalog[actionId])
+  const canRequestRevision = Boolean(
+    clarificationReview?.state === 'ready' && clarificationReview.activeRevision?.clarificationRevision,
+  )
+  const visibleSecondaryActions = secondaryNextActions.slice(0, 2)
+  const overflowActions = [
+    ...secondaryNextActions.slice(2),
+    ...viewModel.actions.filter((action) =>
+      action.id !== primaryNextAction?.id &&
+      !secondaryNextActions.some((other) => other.id === action.id) &&
+      !persistentNextActions.some((other) => other.id === action.id)),
+  ]
+  const revisionInStatusRow = canRequestRevision && visibleSecondaryActions.length < 2
+  const armedConfirmation = viewModel.nextAction.confirmBefore &&
+    armedActionKey === `${selectedNode.id}:${viewModel.nextAction.confirmBefore.actionId}`
+    ? viewModel.nextAction.confirmBefore.message
+    : ''
+  const currentRunNode = selectedRun?.nodes.find((node) => node.id === selectedRun.currentNodeId)
+  const statusTarget = approvalTarget?.kind === 'design' && approvalTarget.title
+    ? `所审材料：${approvalTarget.title}${approvalTarget.generatedAt ? ` · 生成于 ${formatLocalTime(approvalTarget.generatedAt)}` : ''}`
+    : ''
+  const renderRevisionToggle = () => (
+    <button className="ghost-button" key="request-revision" disabled={!isSelectedCurrentNode || !onRequestClarificationChanges || hasInspectorWriteLock} title={!onRequestClarificationChanges ? '当前桌面版本未提供修订能力' : !isSelectedCurrentNode ? '只能修订实际当前节点' : undefined} onClick={() => setRevisionFormOpen(!revisionFormOpen)}>请求修订当前版本</button>
+  )
   const exposesCodingAction = primaryNextAction?.id === 'runCodingAgent' ||
     primaryNextAction?.id === 'openCodingAgent' ||
     secondaryNextActions.some((action) => action.id === 'runCodingAgent' || action.id === 'openCodingAgent')
@@ -1016,7 +1112,7 @@ export function Inspector({
                       <p>{descriptor.summary}</p>
                     </div>
                     <div className="status-row__detail">
-                      <span className={`pill ${descriptor.tone}`}>{descriptor.state}</span>
+                      <span className={`pill ${descriptor.tone}`} title={descriptor.state}>{formatStatusState(descriptor.state)}</span>
                       <small>{descriptor.impact}</small>
                       <em>{descriptor.nextAction}</em>
                     </div>
@@ -1033,7 +1129,7 @@ export function Inspector({
               <p>{descriptor.summary}</p>
             </div>
             <div className="status-row__detail">
-              <span className={`pill ${descriptor.tone}`}>{descriptor.state}</span>
+              <span className={`pill ${descriptor.tone}`} title={descriptor.state}>{formatStatusState(descriptor.state)}</span>
               <small>{descriptor.impact}</small>
               <em>{descriptor.nextAction}</em>
             </div>
@@ -1298,26 +1394,63 @@ export function Inspector({
 
   return (
     <aside className="inspector" data-testid="node-inspector">
-      <div className="panel-head panel-head--compact">
-        <div className="inspector-node-heading">
-          <span className="inspector-stage-context">{String(stageOrder.indexOf(selectedNode.stage) + 1).padStart(2, '0')} · {stageLabels[selectedNode.stage]}</span>
-          <span className="panel-title">{viewModel.header.title}</span>
-          <span className="meta">
-            类型：{viewModel.header.presentation.nodeKindLabel} · 来源：{viewModel.header.presentation.sourceLabel}
-            {viewModel.header.presentation.displayMode === 'folded'
-              ? ` · 展示：${viewModel.header.presentation.displayModeLabel}`
-              : ''}
+      {!isSelectedCurrentNode && currentRunNode ? (
+        <div className="task-browsing-row" data-testid="task-browsing-row">
+          <span>
+            {viewModel.nextAction.kind === 'waiting_upstream' ? '正在查看尚未开始的步骤' : '正在查看历史步骤'}
+            {' · '}实际进度：{stageLabels[currentRunNode.stage]} · {displayNodeTitle(currentRunNode)}
           </span>
+          <button className="text-button" type="button" onClick={() => onSelectWorkflowNode(currentRunNode.id)}>返回当前工作</button>
         </div>
-        <span className={`pill ${viewModel.header.statusTone}`}>
-          {viewModel.header.statusLabel}
-        </span>
-      </div>
-      <div className="node-status-summary" role="region" aria-label="节点状态摘要" data-testid={viewModel.gateReadinessSummary ? 'gate-readiness-summary' : undefined}>
-        <span>Run v{selectedRun?.version ?? '—'} · {isSelectedCurrentNode ? '实际当前节点' : '正在查看历史/其他节点'}</span>
-        <span>产物 {nodeArtifacts.length} · 轨迹 {events.length}</span>
-        {viewModel.gateReadinessSummary && <><strong>{viewModel.gateReadinessSummary.headline}</strong><span>已通过 {viewModel.gateReadinessSummary.counts.passed} · 警告 {viewModel.gateReadinessSummary.counts.warning} · 缺失 {viewModel.gateReadinessSummary.counts.missing} · 阻断 {viewModel.gateReadinessSummary.counts.blocked}</span><span>人工审批：{selectedNode.status === 'success' ? '已通过' : '尚未通过'}</span></>}
-      </div>
+      ) : null}
+      <section
+        className={`task-status-row task-status-row--${viewModel.nextAction.tone}`}
+        data-testid="task-status-row"
+        data-status-kind={viewModel.nextAction.kind}
+        aria-label="当前状态"
+      >
+        <div className="task-status-text">
+          <p className="task-status-headline" role="status" aria-live="polite">
+            <strong>{viewModel.nextAction.title}</strong>
+            {viewModel.nextAction.qualifier ? <span className="task-status-qualifier"> · {viewModel.nextAction.qualifier}</span> : null}
+          </p>
+          <p className="task-status-detail" title={[viewModel.header.title, statusTarget, viewModel.nextAction.copy].filter(Boolean).join(' · ')}>
+            <span className="task-status-step">{viewModel.header.title}</span>
+            {statusTarget ? <span className="task-status-target">{statusTarget}</span> : null}
+            <span>{viewModel.nextAction.copy}</span>
+          </p>
+        </div>
+        <div className="task-status-actions">
+          {primaryNextAction ? renderActionButton(primaryNextAction, 'primary') : null}
+          {visibleSecondaryActions.map((action) => renderActionButton(action, 'ghost'))}
+          {revisionInStatusRow ? renderRevisionToggle() : null}
+          {persistentNextActions.map((action) => (
+            <span className="task-status-persistent" key={action.id}>{renderActionButton(action, 'ghost')}</span>
+          ))}
+          <details className="task-status-more">
+            <summary aria-label="更多操作与详情"><MoreHorizontal size={16} aria-hidden="true" /></summary>
+            <div className="task-status-more-panel">
+              {overflowActions.length || (canRequestRevision && !revisionInStatusRow) ? (
+                <div className="task-status-more-actions">
+                  {canRequestRevision && !revisionInStatusRow ? renderRevisionToggle() : null}
+                  {overflowActions.map((action) => renderActionButton(action, 'ghost'))}
+                </div>
+              ) : null}
+              <dl className="task-status-facts" data-testid={viewModel.gateReadinessSummary ? 'gate-readiness-summary' : undefined}>
+                <dt>步骤</dt><dd>{String(stageOrder.indexOf(selectedNode.stage) + 1).padStart(2, '0')} · {stageLabels[selectedNode.stage]} · {viewModel.header.title}（{viewModel.header.statusLabel}）</dd>
+                <dt>类型与来源</dt><dd>{viewModel.header.presentation.nodeKindLabel} · {viewModel.header.presentation.sourceLabel}{viewModel.header.presentation.displayMode === 'folded' ? ` · ${viewModel.header.presentation.displayModeLabel}` : ''}</dd>
+                <dt>任务版本</dt><dd>v{selectedRun?.version ?? '—'} · {isSelectedCurrentNode ? '实际当前步骤' : '正在查看其他步骤'}</dd>
+                <dt>材料与记录</dt><dd>材料 {nodeArtifacts.length} · 执行记录 {events.length}</dd>
+                {viewModel.gateReadinessSummary ? <>
+                  <dt>审批核对</dt><dd>{viewModel.gateReadinessSummary.headline} · 已通过 {viewModel.gateReadinessSummary.counts.passed} · 警告 {viewModel.gateReadinessSummary.counts.warning} · 缺失 {viewModel.gateReadinessSummary.counts.missing} · 阻断 {viewModel.gateReadinessSummary.counts.blocked}</dd>
+                  <dt>人工审批</dt><dd>{selectedNode.status === 'success' ? '已通过' : '尚未通过'}</dd>
+                </> : null}
+              </dl>
+            </div>
+          </details>
+        </div>
+        {armedConfirmation ? <p className="task-status-reminder" role="alert">{armedConfirmation}</p> : null}
+      </section>
       <div className="tabbar workspace-primary-tabs" role="tablist" aria-label={`${viewModel.visualKind} inspector tabs`} onKeyDown={(event) => {
         if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return
         event.preventDefault()
@@ -1328,13 +1461,8 @@ export function Inspector({
       }}>
         {viewModel.tabs.map((tab, index) => <button key={tab.tabId} id={`workspace-tab-${index}`} role="tab" aria-controls="workspace-content" tabIndex={tab.tabId === viewModel.activeTab.tabId ? 0 : -1} aria-selected={tab.tabId === viewModel.activeTab.tabId} className={`tab ${tab.tabId === viewModel.activeTab.tabId ? 'active' : ''}`} onClick={() => setRequestedTab(tab.tabId)}>{tab.label}</button>)}
       </div>
-      <div className="inspector-document-scroll" id="workspace-content" role="tabpanel" aria-labelledby={`workspace-tab-${viewModel.tabs.indexOf(viewModel.activeTab)}`}>
-      {viewModel.activeTab.tabId === '概览' && <div className="next-action">
-
-        <p className="section-title">Next best action</p>
-        <h3>{viewModel.nextAction.title}</h3>
-        <p className="meta">{viewModel.nextAction.copy}</p>
-        {selectedNode.kind === 'agent' && selectedNode.status !== 'success' && ['clarify', 'design'].includes(selectedNode.stage) ? (
+      <div className="inspector-document-scroll" id="workspace-content" data-testid="workspace-tabpanel" role="tabpanel" aria-labelledby={`workspace-tab-${viewModel.tabs.indexOf(viewModel.activeTab)}`}>
+      {viewModel.activeTab.tabId === '概览' && <div className="next-action">{selectedNode.kind === 'agent' && selectedNode.status !== 'success' && ['clarify', 'design'].includes(selectedNode.stage) ? (
           <div><label className="stage-agent-executor" htmlFor="stage-agent-executor">
             {selectedNode.stage === 'clarify' ? '澄清执行器' : '设计执行器'}
             <select
@@ -1355,10 +1483,6 @@ export function Inspector({
             </select>
           </label>
           <p className="empty-note">只影响本节点本次生成，不改变开发实现或已有聊天的选择。模型调用可能产生费用。</p>
-          {pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'completeAgent' ? <div role="status">
-            <p>正在生成，完成后会显示正式产物和执行记录。尚未批准任何 Gate。</p>
-            {onCancelStageAgent ? <button className="ghost-button" onClick={onCancelStageAgent}>取消生成</button> : null}
-          </div> : null}
           </div>
         ) : null}
         {codingActionProjection?.action.id === 'review-permission' && codingActionProjection.permission ? (
@@ -1415,22 +1539,6 @@ export function Inspector({
           </button>
         <button className="text-button" onClick={() => setRevisionFormOpen(false)}>收起并保留草稿</button></div></section>
       ) : null}
-        <div className="node-action-buttons">
-          {clarificationReview?.state === 'ready' && clarificationReview.activeRevision?.clarificationRevision && <button className="ghost-button" disabled={!isSelectedCurrentNode || !onRequestClarificationChanges || hasInspectorWriteLock} title={!onRequestClarificationChanges ? '当前桌面版本未提供修订能力' : !isSelectedCurrentNode ? '只能修订实际当前节点' : undefined} onClick={() => setRevisionFormOpen(!revisionFormOpen)}>请求修订当前版本</button>}
-        {primaryNextAction || secondaryNextActions.length ? (
-          <div className="inspector-next-actions">
-            {primaryNextAction ? renderActionButton(primaryNextAction, 'primary') : null}
-            {secondaryNextActions.length ? (
-              <div className="row inspector-secondary-actions">
-                {secondaryNextActions.map((action) => renderActionButton(action, 'ghost'))}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-          {onCancelStageAgent && pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'completeAgent' && viewModel.activeTab.tabId !== '概览' && <button className="ghost-button" onClick={onCancelStageAgent}>取消生成</button>}
-          {viewModel.actions.filter((action) => action.id !== primaryNextAction?.id && !secondaryNextActions.some((other) => other.id === action.id)).map((action) => renderActionButton(action, 'ghost'))}
-        </div>
       </footer>
     </aside>
   )
@@ -1524,7 +1632,7 @@ export function TeamOverview({
               {projects.length === 0 ? (
                 <tr>
                   <td colSpan={10}>
-                    <p className="empty-note">未加载 Team Project。拉取团队数据后才会展示远端项目、成员、策略和成本摘要。</p>
+                    <p className="empty-note">未加载 Team Project。更新团队数据后才会展示远端项目、成员、策略和成本摘要。</p>
                   </td>
                 </tr>
               ) : projects.map((project) => {
@@ -1633,16 +1741,17 @@ export function TeamOverview({
               <div className="policy-source-row"><strong>Not used by</strong><span>Local Project config、test command、managed worktree 设置</span><span className="pill soft">separate</span></div>
             </div>
             <div className="mini-card soft">
-              <p className="section-title">拉取团队数据后发生什么</p>
+              <p className="section-title">更新团队数据后发生什么</p>
               <ul>
-                <li>拉取 Team Project policy snapshot。</li>
+                <li>读取 Team Project policy snapshot；不拉取或推送代码，也不上传本地结果。</li>
                 <li>刷新 Team Overview 的 policy / budget / Gate rollup。</li>
                 <li>重新评估当前 Run 的 Gate 条件，但不会自动通过缺少 review 或 tests 的 Gate。</li>
                 <li>写入 Event / Trace，说明本机使用了哪一版 policy。</li>
               </ul>
             </div>
             <button className="ghost-button" type="button" onClick={onSyncTeam} disabled={isSyncingTeam}>
-              {isSyncingTeam ? '拉取中' : '拉取团队数据并刷新策略'}
+              {/* Same action and name as the team connection popover (plan T4). */}
+              {isSyncingTeam ? '更新中' : '更新团队数据'}
             </button>
             {syncFeedback ? (
               <p className="meta" data-testid="team-sync-feedback" role={syncFeedback.status === 'error' ? 'alert' : 'status'}>

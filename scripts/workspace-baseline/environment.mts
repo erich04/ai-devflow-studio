@@ -284,7 +284,9 @@ export async function launchDesktop(options: LaunchOptions): Promise<DesktopApp>
     if (value === undefined) delete env[key]
     else env[key] = value
   }
-  const app = await electron.launch({ args: ['.'], cwd: desktopDir, env })
+  // Playwright emulates `prefers-color-scheme: light` unless told otherwise, which overrides
+  // DEVFLOW_INITIAL_THEME for the default "system" preference. Emulate the requested theme.
+  const app = await electron.launch({ args: ['.'], cwd: desktopDir, env, colorScheme: options.theme ?? 'light' })
   const diagnostics: string[] = []
   app.process().stderr?.on('data', (chunk) => diagnostics.push(String(chunk)))
   // Keep synthetic credentials out of the OS keychain, as the Native and conversation smokes do.
