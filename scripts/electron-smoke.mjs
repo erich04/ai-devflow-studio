@@ -733,6 +733,16 @@ async function prepareOpenCodeWorkflowAtBuild(page, { projectId, creatorId }) {
     const afterDesign = await window.aiDevFlowDesktop.approveGate({
       runId: run.id,
       nodeId: nodes.designGate.id,
+      expectedDesignRevision: (await (async () => {
+      const state = await window.aiDevFlowDesktop.loadState()
+      const gate = state.runs.find((candidate) => candidate.id === run.id)?.nodes.find((candidate) => candidate.id === nodes.designGate.id)
+      const design = state.artifacts.find((artifact) => artifact.runId === run.id && artifact.kind === 'design' && gate?.artifactIds.includes(artifact.id))
+      if (!design) throw new Error('The design linked to the design Gate is missing')
+      // Same digest as createDesignRevisionDigest in packages/shared (plan S4, Z1).
+      const bytes = new TextEncoder().encode(JSON.stringify({ title: design.title, summary: design.summary, content: design.content }))
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+      return { artifactId: design.id, updatedAt: design.updatedAt, contentDigest: digest }
+    })()),
     })
     return {
       run: afterDesign.run,
@@ -1205,12 +1215,53 @@ try {
   }, { runId: localRun.id, nodeId: localNodes.designGate.id, projectId: localProjectId })
   expect(legacyOverridePayloadError).toMatch(/unexpected field/i)
 
+  // The real Main process rejects a design approval without the version on screen, or with a
+  // stale one, and leaves the Run unchanged (plan S4, Z2).
+  const rejectedDesign = await first.page.evaluate(async ({ runId, nodeId }) => {
+    const expected = (await (async () => {
+      const state = await window.aiDevFlowDesktop.loadState()
+      const gate = state.runs.find((candidate) => candidate.id === runId)?.nodes.find((candidate) => candidate.id === nodeId)
+      const design = state.artifacts.find((artifact) => artifact.runId === runId && artifact.kind === 'design' && gate?.artifactIds.includes(artifact.id))
+      if (!design) throw new Error('The design linked to the design Gate is missing')
+      // Same digest as createDesignRevisionDigest in packages/shared (plan S4, Z1).
+      const bytes = new TextEncoder().encode(JSON.stringify({ title: design.title, summary: design.summary, content: design.content }))
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+      return { artifactId: design.id, updatedAt: design.updatedAt, contentDigest: digest }
+    })())
+    const attempt = async (input) => {
+      try {
+        await window.aiDevFlowDesktop.approveGate(input)
+        return 'applied'
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    }
+    const missing = await attempt({ runId, nodeId })
+    const stale = await attempt({ runId, nodeId, expectedDesignRevision: { ...expected, contentDigest: '0'.repeat(64) } })
+    const run = (await window.aiDevFlowDesktop.loadState()).runs.find((candidate) => candidate.id === runId)
+    return { missing, stale, currentNodeId: run?.currentNodeId, gateStatus: run?.nodes.find((node) => node.id === nodeId)?.status }
+  }, { runId: localRun.id, nodeId: localNodes.designGate.id })
+  expect(rejectedDesign.missing).toMatch(/design material is missing, changed, or no longer current/)
+  expect(rejectedDesign.stale).toMatch(/design material is missing, changed, or no longer current/)
+  expect(rejectedDesign.currentNodeId).toBe(localNodes.designGate.id)
+  expect(rejectedDesign.gateStatus).not.toBe('success')
   const approvedDesign = await first.page.evaluate(async ({ runId, nodeId }) => {
     return window.aiDevFlowDesktop.approveGate({
       runId,
       nodeId,
+      expectedDesignRevision: (await (async () => {
+      const state = await window.aiDevFlowDesktop.loadState()
+      const gate = state.runs.find((candidate) => candidate.id === runId)?.nodes.find((candidate) => candidate.id === nodeId)
+      const design = state.artifacts.find((artifact) => artifact.runId === runId && artifact.kind === 'design' && gate?.artifactIds.includes(artifact.id))
+      if (!design) throw new Error('The design linked to the design Gate is missing')
+      // Same digest as createDesignRevisionDigest in packages/shared (plan S4, Z1).
+      const bytes = new TextEncoder().encode(JSON.stringify({ title: design.title, summary: design.summary, content: design.content }))
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+      return { artifactId: design.id, updatedAt: design.updatedAt, contentDigest: digest }
+    })()),
     })
   }, { runId: localRun.id, nodeId: localNodes.designGate.id })
+  expect(approvedDesign.event.designAudit).toMatchObject({ action: 'approved', actorId: trustedPairingUserId })
   expect(approvedDesign.event.kind).toBe('approval')
   expect(approvedDesign.run.currentNodeId).toBe(localNodes.build.id)
   localRun = approvedDesign.run

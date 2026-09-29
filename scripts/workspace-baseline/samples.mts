@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process'
 import { readFile, realpath, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { createHash } from 'node:crypto'
 import type { ServerResponse } from 'node:http'
 import type { DesktopApp, SampleRepoVariant, TeamApi, Workspace } from './environment.mts'
 import {
@@ -500,6 +501,16 @@ async function approveClarifyGate(ctx: SampleContext, run: any) {
   })
 }
 
+/** The design linked to the design Gate, digested like createDesignRevisionDigest (plan S4, Z1). */
+async function designRevisionIdentity(ctx: SampleContext, runId: string, gateNodeId: string) {
+  const state = await ipc(ctx, 'loadState')
+  const gate = state.runs.find((candidate: any) => candidate.id === runId)?.nodes.find((candidate: any) => candidate.id === gateNodeId)
+  const design = state.artifacts.find((artifact: any) => artifact.runId === runId && artifact.kind === 'design' && gate?.artifactIds.includes(artifact.id))
+  if (!design) throw new Error('The design linked to the design Gate is missing')
+  const contentDigest = createHash('sha256').update(JSON.stringify({ title: design.title, summary: design.summary, content: design.content })).digest('hex')
+  return { artifactId: design.id, updatedAt: design.updatedAt, contentDigest }
+}
+
 async function completeAgent(ctx: SampleContext, runId: string, nodeId: string) {
   return ipc(ctx, 'completeWorkflowAgentNode', { runId, nodeId, userId: 'u-erich', userName: 'Erich', providerId: FAKE_PROVIDER })
 }
@@ -518,7 +529,7 @@ async function fastForwardToBuild(ctx: SampleContext, runId: string, projectId: 
   run = (await approveClarifyGate(ctx, run)).run
   run = (await completeAgent(ctx, runId, nodes.design.id)).run
   await runGateReviewIpc(ctx, runId, nodes.designGate.id, projectId)
-  run = (await ipc(ctx, 'approveGate', { runId, nodeId: nodes.designGate.id })).run
+  run = (await ipc(ctx, 'approveGate', { runId, nodeId: nodes.designGate.id, expectedDesignRevision: await designRevisionIdentity(ctx, runId, nodes.designGate.id) })).run
   if (run.currentNodeId !== nodeOf(run, 'build', 'task').id) throw new Error('Fast-forward did not reach the build node')
   return run
 }

@@ -267,7 +267,20 @@ async function completePreBuildWorkflow(page, run, projectId) {
         }
       : undefined
     const approved = await page.evaluate(async (input) => {
-      return window.aiDevFlowDesktop.approveGate(input)
+      const runId = input.runId
+      const gateId = input.nodeId
+      const isDesignGate = (await window.aiDevFlowDesktop.loadState()).runs.find((candidate) => candidate.id === runId)
+        ?.nodes.find((candidate) => candidate.id === gateId)?.stage === 'design'
+      return window.aiDevFlowDesktop.approveGate(isDesignGate ? { ...input, expectedDesignRevision: (await (async () => {
+      const state = await window.aiDevFlowDesktop.loadState()
+      const gate = state.runs.find((candidate) => candidate.id === runId)?.nodes.find((candidate) => candidate.id === gateId)
+      const design = state.artifacts.find((artifact) => artifact.runId === runId && artifact.kind === 'design' && gate?.artifactIds.includes(artifact.id))
+      if (!design) throw new Error('The design linked to the design Gate is missing')
+      // Same digest as createDesignRevisionDigest in packages/shared (plan S4, Z1).
+      const bytes = new TextEncoder().encode(JSON.stringify({ title: design.title, summary: design.summary, content: design.content }))
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+      return { artifactId: design.id, updatedAt: design.updatedAt, contentDigest: digest }
+    })()) } : input)
     }, {
       runId: current.id,
       nodeId: gateNode.id,

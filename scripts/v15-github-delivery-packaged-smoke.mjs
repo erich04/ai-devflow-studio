@@ -702,6 +702,16 @@ async function createApiProxy(internalApiUrl) {
   }
 }
 
+/** The design linked to the design Gate, digested like createDesignRevisionDigest (plan S4, Z1). */
+async function expectedDesignRevision(page, runId, gateNodeId) {
+  const state = await callDesktop(page, 'loadState')
+  const gate = state.runs.find((candidate) => candidate.id === runId)?.nodes.find((candidate) => candidate.id === gateNodeId)
+  const design = state.artifacts.find((artifact) => artifact.runId === runId && artifact.kind === 'design' && gate?.artifactIds.includes(artifact.id))
+  assert(design, 'The design linked to the design Gate is missing.')
+  const contentDigest = createHash('sha256').update(JSON.stringify({ title: design.title, summary: design.summary, content: design.content })).digest('hex')
+  return { artifactId: design.id, updatedAt: design.updatedAt, contentDigest }
+}
+
 async function callDesktop(page, method, input) {
   return page.evaluate(
     async ({ method: methodName, input: methodInput }) => {
@@ -846,7 +856,11 @@ async function advanceToPr(page, materialized, localProjectId, userId) {
     runtime: 'electron',
     providerId: 'fake-knowledge-review',
   })
-  run = (await callDesktop(page, 'approveGate', { runId: run.id, nodeId: node.id })).run
+  run = (await callDesktop(page, 'approveGate', {
+    runId: run.id,
+    nodeId: node.id,
+    expectedDesignRevision: await expectedDesignRevision(page, run.id, node.id),
+  })).run
   node = currentNode(run)
   assert(node.kind === 'task' && node.stage === 'build', 'Workflow did not reach Build.')
   await callDesktop(page, 'ensureCodingEngine', { projectId: localProjectId })
