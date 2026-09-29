@@ -256,6 +256,30 @@ function buildPermissionProjection(input: {
   }
 }
 
+/**
+ * When a permission decision can be submitted. The exact diff review and the task status row
+ * use the same rule, so “拒绝” is never available in one place and refused in the other (W3).
+ * Approval also needs the diff on screen for code changes (`diffShown`).
+ */
+export function codingPermissionDecisionState(input: {
+  permission: CodingPermissionProjection
+  runStatus: CodingAgentRun['status'] | undefined
+  isReplying: boolean
+  diffShown?: boolean
+}): { approveDisabled: boolean; rejectDisabled: boolean } {
+  const { permission } = input
+  const needsDiff = permission.kind === 'change-set' || permission.kind === 'change-acceptance'
+  return {
+    approveDisabled: !permission.canApprove || input.isReplying || (needsDiff && input.diffShown === false),
+    rejectDisabled:
+      permission.request.status !== 'pending' ||
+      input.runStatus !== 'waiting_permission' ||
+      permission.expired ||
+      Boolean(permission.staleReason) ||
+      input.isReplying,
+  }
+}
+
 function buildTerminalSummary(input: BuildCodingRuntimeActionProjectionInput, run: CodingAgentRun): CodingRuntimeTerminalSummary {
   const workspace = input.workspaces.find((candidate) => candidate.id === run.managedWorkspaceId)
   const diff = input.diffArtifacts.find((candidate) => candidate.id === run.diffArtifactId)

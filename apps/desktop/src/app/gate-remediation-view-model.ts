@@ -102,7 +102,7 @@ function candidateDetails(kind: RemediationCandidateKind | undefined, eligibleFo
         requiredRole: '开发者或 QA',
         requiredEvidence: '由受控测试入口保存的通过 Test Evidence',
         completion: '测试证据已保存，相关测试规则重新评估为满足。',
-        cta: { kind: 'tests' as const, label: '去 Tests 处理' },
+        cta: { kind: 'tests' as const, label: '查看测试步骤' },
       }
     case 'sync_policy':
       return {
@@ -256,4 +256,29 @@ export function buildGateRemediationViewModel(input: {
       requiredRole: input.decision.overrideRoleRequired,
     },
   }
+}
+
+/**
+ * The recovery plan keeps only steps the task status row does not already offer (plan W6):
+ * a status-row “运行门禁审查” replaces the matching recovery button, for example.
+ */
+export function withoutStatusRowActions(
+  viewModel: GateRemediationViewModel,
+  hiddenCtaKinds: readonly GateRemediationCtaKind[],
+): GateRemediationViewModel {
+  if (hiddenCtaKinds.length === 0) return viewModel
+  const activeItems = viewModel.activeItems.filter((item) => !item.cta || !hiddenCtaKinds.includes(item.cta.kind))
+  return {
+    ...viewModel,
+    activeItems,
+    emptyMessage: activeItems.length === 0 && viewModel.activeItems.length > 0 ? '' : viewModel.emptyMessage,
+  }
+}
+
+/** False when nothing remains beyond an empty message; the task then omits the panel. */
+export function hasRemediationContent(viewModel: GateRemediationViewModel): boolean {
+  return viewModel.activeItems.length > 0 ||
+    viewModel.resolvedItems.length > 0 ||
+    Boolean(viewModel.override.active) ||
+    viewModel.override.canOpen
 }

@@ -169,7 +169,7 @@ describe('Gate remediation view model', () => {
   })
 
   it.each([
-    ['add_test_evidence', 'tests', '去 Tests 处理'],
+    ['add_test_evidence', 'tests', '查看测试步骤'],
     ['sync_policy', 'sync_policy', '同步团队策略'],
     ['fix_test_failure', 'retry_coding', 'Retry Coding'],
   ] as const)('maps %s to its controlled CTA', (kind, ctaKind, label) => {

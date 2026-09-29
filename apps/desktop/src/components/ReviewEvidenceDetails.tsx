@@ -53,7 +53,7 @@ export function ReviewEvidenceDetails({ review, onFeedback, onToggleRevision, re
           已记录人工反馈：{item.reason}<small> · {item.createdAt}</small>
         </p>)}
         {onToggleRevision && <button type="button" onClick={() => onToggleRevision(index)} aria-pressed={revisionSelected.includes(index)}>{revisionSelected.includes(index) ? '移出修订意见' : '加入修订意见'}</button>}
-        {onDiscuss && <button type="button" onClick={() => onDiscuss(index)}>在右侧讨论</button>}
+        {onDiscuss && <button type="button" onClick={() => onDiscuss(index)}>讨论此意见</button>}
         {onFeedback && editing !== index ? <button type="button" disabled={busy} onClick={() => { setEditing(index); setReason(''); setError('') }}>反馈误报</button> : null}
         {editing === index ? <form onSubmit={(event) => { event.preventDefault(); void save(index) }}>
           <label>误报说明<textarea aria-label="误报说明" maxLength={1000} value={reason} disabled={busy} onChange={(event) => setReason(event.target.value)} placeholder="例如：哪条已确认决定与这条意见不符？" /></label>

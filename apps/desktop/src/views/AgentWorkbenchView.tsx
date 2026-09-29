@@ -1,6 +1,6 @@
 import { ProviderRemovalDialog } from './ProviderRemovalDialog'
 import { ProviderThinkingFields, SavedProviderThinkingSettings } from '../components/ProviderThinkingSettings'
-import { ArrowLeft, Bot, CheckCircle2, Code2, FolderOpen, Save, Settings2, TestTube2 } from 'lucide-react'
+import { ArrowLeft, Bot, Code2, Save, Settings2, TestTube2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import {
   formatUsd,
@@ -13,7 +13,6 @@ import {
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingDiffArtifact,
-  type CodingPermissionDecision,
   type CodingPermissionRequest,
   type CodingRuntimeConfiguration,
   type CodingRuntimeDiscovery,
@@ -39,8 +38,6 @@ import type { PendingInspectorAction } from '../app/node-inspector-view-model'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
 import type { ProjectRuntimeBudget } from '../app/useProjectRuntimeBudget'
-import { CodingChangeSetReview } from './CodingChangeSetReview'
-import { ReviewRerunDialog } from './ReviewRerunDialog'
 
 export function AgentWorkbenchView({
   desktopApi,
@@ -52,7 +49,6 @@ export function AgentWorkbenchView({
   providers,
   selectedProviderId,
   stageExecution,
-  onCancelStageAgent,
   onProviderChange,
   onProviderRemoved,
   onProviderUpdated,
@@ -65,8 +61,8 @@ export function AgentWorkbenchView({
   providerKeyDraft,
   onProviderKeyDraftChange,
   onSaveProviderCredential,
-  onCompleteAgentNode,
-  onRunKnowledgeReview,
+  onSettingsSaved,
+  onHandleInTask,
   isRunning,
   isRunningTests,
   pendingInspectorAction,
@@ -78,13 +74,6 @@ export function AgentWorkbenchView({
   latestReviewFailure,
   latestTrace,
   latestUsage,
-  onRunCodingAgent,
-  onReplyCodingPermission,
-  onRenewCodingPermission,
-  onCancelCodingRun,
-  onOpenCodingWorktree,
-  onDeleteCodingWorktree,
-  onOpenTests,
   isStartingCodingAgent,
   runtimeBudgetApprovalId,
   onRuntimeBudgetApprovalIdChange,
@@ -117,7 +106,6 @@ export function AgentWorkbenchView({
   providers: AgentProviderConfig[]
   selectedProviderId: string
   stageExecution?: { providerId: string; executor: 'direct-provider' | 'local-agent' } | undefined
-  onCancelStageAgent?: (() => void) | undefined
   onProviderChange: (providerId: string) => void
   onProviderRemoved: (providerId: string) => void
   onProviderUpdated?: (metadata: ProviderCredentialMetadata) => void
@@ -130,8 +118,10 @@ export function AgentWorkbenchView({
   providerKeyDraft: string
   onProviderKeyDraftChange: (value: string) => void
   onSaveProviderCredential: (thinking?: ProviderThinkingConfiguration) => void
-  onCompleteAgentNode: () => void
-  onRunKnowledgeReview: (previousReviewId?: string) => void
+  /** Called after a settings save succeeds; the banner then offers 「返回任务」 (plan W9). */
+  onSettingsSaved?: () => void
+  /** Execution happens in the task (plan W5): back to the task's actual step, nothing runs. */
+  onHandleInTask: () => void
   isRunning: boolean
   isRunningTests: boolean
   pendingInspectorAction: PendingInspectorAction | null
@@ -142,13 +132,6 @@ export function AgentWorkbenchView({
   latestReview: AgentReviewResult | undefined
   latestTrace: AgentTrace | undefined
   latestUsage: AgentTokenUsage | undefined
-  onRunCodingAgent: (additionalAttemptAfterCount?: number) => void
-  onReplyCodingPermission: (decision: CodingPermissionDecision['decision']) => void | Promise<void>
-  onRenewCodingPermission: () => void | Promise<void>
-  onCancelCodingRun: () => void
-  onOpenCodingWorktree: () => void
-  onDeleteCodingWorktree: () => void
-  onOpenTests: () => void
   isStartingCodingAgent: boolean
   runtimeBudgetApprovalId: string
   onRuntimeBudgetApprovalIdChange: (value: string) => void
@@ -190,18 +173,7 @@ export function AgentWorkbenchView({
   const [warningThresholdUsd, setWarningThresholdUsd] = useState('0.10')
   const [codingConfigurationStatus, setCodingConfigurationStatus] = useState('')
   const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
-  const [isReplyingPermission, setIsReplyingPermission] = useState(false)
-  const [showRetryConfirmation, setShowRetryConfirmation] = useState(false)
-  const [retryAuthorizationCount, setRetryAuthorizationCount] = useState<number | undefined>(undefined)
-  const [reviewConfirmationId, setReviewConfirmationId] = useState<string | null>(null)
-  useEffect(() => {
-    setShowRetryConfirmation(false)
-    setRetryAuthorizationCount(undefined)
-  }, [selectedRun?.id, selectedNode?.id, localProjectId])
   const reviewEvidenceRef = useRef<HTMLElement>(null)
-  useEffect(() => {
-    setReviewConfirmationId(null)
-  }, [selectedRun?.id, selectedNode?.id, latestReview?.id, selectedProviderId])
   const [selectedAuditCodingRunId, setSelectedAuditCodingRunId] = useState('')
   const codingFocusRef = useRef<HTMLElement>(null)
   const evidenceRef = useRef<HTMLElement>(null)
@@ -309,6 +281,7 @@ export function AgentWorkbenchView({
           ? `已保存 DevFlow Native · ${savedProviderName ?? '已保存 Provider'} · 配置修订 ${saved.version}`
           : `已确认 OpenCode · ${saved.detectedVersion} · ${savedProviderName ?? saved.providerId} / ${saved.modelId} · 配置修订 ${saved.version}`,
       )
+      onSettingsSaved?.()
       await onRefreshCodingReadiness()
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Coding Agent 配置失败')
@@ -347,6 +320,7 @@ export function AgentWorkbenchView({
         warningThresholdUsd: warning,
       })
       setCodingConfigurationStatus(`预算已保存：${formatUsd(saved.monthlyLimitUsd)} / 月`)
+      onSettingsSaved?.()
       await projectRuntimeBudget.refresh()
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '保存云端预算失败')
@@ -368,6 +342,7 @@ export function AgentWorkbenchView({
       })
       onRuntimeBudgetApprovalIdChange(approval.id)
       setCodingConfigurationStatus(`一次性预算批准已创建：${approval.id}`)
+      onSettingsSaved?.()
       if (selectedNode?.kind === 'task' && selectedNode.stage === 'build') await onRefreshCodingReadiness(approval.id)
     } catch (error) {
       setCodingConfigurationStatus(error instanceof Error ? error.message : '创建一次性预算批准失败')
@@ -427,9 +402,6 @@ export function AgentWorkbenchView({
     codingActionProjection?.permission?.kind === 'change-acceptance'
       ? codingActionProjection.permission
       : undefined
-  const canOpenManagedWorkspace = codingActionProjection?.terminal
-    ? codingActionProjection.terminal.canOpenWorkspace
-    : Boolean(workspace && !workspace.deletedAt && (workspace.cleanupStatus ?? 'active') === 'active')
   const selectedAuditCodingRun = codingRuns.find((run) => run.id === selectedAuditCodingRunId) ?? latestCodingRun
   const selectedAuditEvents = selectedAuditCodingRun
     ? codingHistoryEvents
@@ -442,54 +414,18 @@ export function AgentWorkbenchView({
         .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt))
     : []
 
-  async function replyPermission(decision: CodingPermissionDecision['decision']) {
-    if (isReplyingPermission) return
-    setIsReplyingPermission(true)
-    try {
-      await onReplyCodingPermission(decision)
-    } finally {
-      setIsReplyingPermission(false)
-    }
-  }
+  // Only read-only and configuration actions stay here; execution is handled in the task (plan W5).
+  const isConfigurationAction = viewModel.primaryAction.id === 'configure-coding' ||
+    viewModel.primaryAction.id === 'view-review' ||
+    viewModel.primaryAction.id === 'view-coding'
 
-  function openRetryConfirmation() {
-    setRetryAuthorizationCount(codingActionProjection?.additionalAttemptAfterCount)
-    setShowRetryConfirmation(true)
-  }
-
-  async function runPrimaryAction(action: AgentConsoleAction) {
+  function runPrimaryAction(action: AgentConsoleAction) {
     if (action.disabled) {
       return
     }
-    if (action.id === 'renew-permission') {
-      if (isReplyingPermission) return
-      setIsReplyingPermission(true)
-      try { await onRenewCodingPermission() } finally { setIsReplyingPermission(false) }
-      return
-    }
-
-    if (action.id === 'run-review') {
-      onRunKnowledgeReview()
-      return
-    }
-
     if (action.id === 'view-review') {
       reviewEvidenceRef.current?.focus()
       reviewEvidenceRef.current?.scrollIntoView?.({ block: 'start' })
-      return
-    }
-
-    if (action.id === 'complete-agent-node') {
-      onCompleteAgentNode()
-      return
-    }
-
-    if (action.id === 'run-coding') {
-      if (codingActionProjection?.action.id === 'retry') {
-        openRetryConfirmation()
-        return
-      }
-      onRunCodingAgent()
       return
     }
 
@@ -506,11 +442,6 @@ export function AgentWorkbenchView({
       return
     }
 
-    if (action.id === 'go-tests') {
-      onOpenTests()
-      return
-    }
-
     if (action.id === 'return-workbench') {
       onReturnToInspector()
     }
@@ -524,18 +455,20 @@ export function AgentWorkbenchView({
           <strong>{viewModel.title}</strong>
         </div>
 
-        {supportContext && (supportContext.focusTarget === 'knowledge-review' || supportContext.focusTarget === 'coding-agent') ? (
+        {supportContext && supportContext.focusTarget === 'coding-agent' ? (
           <div className="support-context-banner" data-testid="support-context-banner">
             <div>
-              <span className="panel-label">来自 Workbench Inspector（检查器）</span>
+              <span className="panel-label">来自任务</span>
               <strong>{supportContext.label}</strong>
               <p>
                 当前目标：{viewModel.currentTarget.runTitle} · {viewModel.currentTarget.nodeTitle}
               </p>
+              {/* Saving never navigates or runs anything; the user returns explicitly (plan W9). */}
+              <p role="status">{supportContext.savedAt ? '已保存。可以返回任务，回到原来的阅读位置；返回后不会自动执行任何操作。' : '保存后可以返回任务；返回后不会自动执行任何操作。'}</p>
             </div>
             <button className="ghost-button" type="button" onClick={onReturnToInspector}>
               <ArrowLeft size={16} />
-              返回当前 Inspector
+              返回任务
             </button>
           </div>
         ) : null}
@@ -594,127 +527,30 @@ export function AgentWorkbenchView({
             <div><dt>仓库影响</dt><dd>{viewModel.primaryActionImpact.repository}</dd></div>
             <div><dt>工作流影响</dt><dd>{viewModel.primaryActionImpact.workflow}</dd></div>
           </dl>
-          {exactChangeSetPermission && latestCodingRun ? (
-            <div className="agent-current-task__review">
-              <CodingChangeSetReview
-                permission={exactChangeSetPermission}
-                run={latestCodingRun}
-                workspace={workspace}
-                isReplying={isReplyingPermission}
-                onDecision={replyPermission}
-              />
-            </div>
-          ) : (
-            <div className="agent-current-task__action">
-            {viewModel.pendingPermission ? (
-              <div className="permission-action-panel">
-                <span className="panel-label">权限转发</span>
-                <strong>{viewModel.pendingPermission.title}</strong>
-                <p>{viewModel.pendingPermission.reasons.join(' ')}</p>
-                <div className="knowledge-reference-meta">
-                  <span>{viewModel.pendingPermission.permission}</span>
-                  <span>{viewModel.pendingPermission.risk}</span>
-                  {viewModel.pendingPermission.filePath ? <code>{viewModel.pendingPermission.filePath}</code> : null}
-                </div>
-                <div className="inspector-actions">
-                  <button
-                    className="primary-button"
-                    disabled={codingActionProjection?.permission
-                      ? !codingActionProjection.permission.canApprove || isReplyingPermission
-                      : isReplyingPermission}
-                    onClick={() => void replyPermission('approved')}
-                  >
-                    <CheckCircle2 size={16} />
-                    仅批准本次
-                  </button>
-                  <button
-                    className="ghost-button"
-                    disabled={isReplyingPermission || Boolean(
-                      codingActionProjection?.permission?.expired || codingActionProjection?.permission?.staleReason,
-                    )}
-                    onClick={() => void replyPermission('rejected')}
-                  >
-                    拒绝
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
+          {/* One execution entry (plan W5): review, coding decisions, retries, stop and cancel run in the task. */}
+          <div className="agent-current-task__action" data-testid="agent-handle-in-task">
+            {isConfigurationAction ? (
               <button
-                className="primary-button"
-                disabled={isReplyingPermission || viewModel.primaryAction.disabled || (['run-review','complete-agent-node','run-coding'].includes(viewModel.primaryAction.id) && selectedProviderId !== 'fake-knowledge-review' && (projectRuntimeBudget.status !== 'loaded' || !projectRuntimeBudget.policy)) || (viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready')}
-                aria-busy={viewModel.primaryAction.label === '生成中' || undefined}
+                className="ghost-button"
+                disabled={viewModel.primaryAction.disabled}
                 title={viewModel.primaryAction.disabledReason}
                 onClick={() => runPrimaryAction(viewModel.primaryAction)}
               >
-                  {primaryActionIcon(viewModel.primaryAction.id)}
-                  {viewModel.primaryAction.label}
-                </button>
-                {isRunning && selectedRun && selectedNode && desktopApi?.cancelKnowledgeReview ? <button className="ghost-button" onClick={() => void desktopApi.cancelKnowledgeReview!({ runId: selectedRun.id, nodeId: selectedNode.id })}>停止门禁审查</button> : null}
-                {pendingInspectorAction?.actionId === 'completeAgent'  && onCancelStageAgent ? (
-                  <button className="ghost-button" onClick={onCancelStageAgent}>取消生成</button>
-                ) : null}
-                {viewModel.primaryAction.id === 'view-review' && latestReview ? (
-                  <button
-                    className="ghost-button"
-                    disabled={!selectedProviderId || isRunning || Boolean(pendingInspectorAction)}
-                    onClick={() => setReviewConfirmationId(latestReview.id)}
-                  >重新审查</button>
-                ) : null}
-                <p>{viewModel.primaryAction.id === 'run-coding' && codingReadiness?.status !== 'ready'
-                  ? 'Coding Runtime 尚未就绪，请先完成下方项目执行配置。'
-                  : viewModel.primaryAction.disabledReason ?? viewModel.primaryAction.summary}</p>
-              </>
-            )}
-            </div>
-          )}
-        </article>
-
-        {reviewConfirmationId && latestReview?.id === reviewConfirmationId ? (
-          <ReviewRerunDialog
-            target={`${selectedRun?.title ?? ''} · ${selectedNode?.title ?? ''}`}
-            provider={providers.filter((provider) => provider.id === selectedProviderId).map((provider) => `${provider.name} · ${provider.model}`).join('') || selectedProviderId}
-            reviewedAt={latestReview.createdAt}
-            onCancel={() => setReviewConfirmationId(null)}
-            onConfirm={() => {
-              setReviewConfirmationId(null)
-              onRunKnowledgeReview(reviewConfirmationId)
-            }}
-          />
-        ) : null}
-
-        {showRetryConfirmation ? (
-          <div className="coding-retry-confirmation" role="alertdialog" aria-modal="true" aria-labelledby="coding-retry-title">
-            <div>
-              <span className="panel-label">明确重试</span>
-              <h2 id="coding-retry-title">{retryAuthorizationCount === undefined ? '新建 Coding Run 重试？' : '授权追加一次尝试？'}</h2>
-              <p>这不会恢复或复用上一次 Run。它会创建新的 Run ID，并可能再次调用 Provider、消耗 token 和产生费用。</p>
-              {retryAuthorizationCount === undefined ? null : (
-                <p>本需求的开发节点已尝试 {retryAuthorizationCount} 次。这次授权只允许第 {retryAuthorizationCount + 1} 次，保留全部失败记录；命令审批、预算和执行时限继续适用。</p>
-              )}
-              <dl className="change-set-review__facts">
-                <div><dt>Provider</dt><dd>{latestCodingProviderName ?? selectedProviderId ?? '未配置'}</dd></div>
-                <div><dt>上次 Token</dt><dd>{latestCodingRun?.runtimeCostSummary?.totalTokens ?? (latestCodingRun?.runtimeCostSummary ? latestCodingRun.runtimeCostSummary.inputTokens + latestCodingRun.runtimeCostSummary.outputTokens : '未知')}</dd></div>
-                <div><dt>上次费用</dt><dd>{displayRuntimeCost(latestCodingRun?.runtimeCostSummary)}</dd></div>
-                <div><dt>新 Run 计费</dt><dd>新的 token 与费用单独结算</dd></div>
-                {runtimeBudgetApprovalId ? <div className="change-set-review__fact-wide"><dt>预算批准</dt><dd><code>{runtimeBudgetApprovalId}</code></dd></div> : null}
-              </dl>
-              <div className="inspector-actions">
-                <button
-                  className="primary-button"
-                  disabled={isStartingCodingAgent || Boolean(codingActionProjection?.action.disabled)}
-                  onClick={() => {
-                    setShowRetryConfirmation(false)
-                    onRunCodingAgent(retryAuthorizationCount)
-                  }}
-                >
-                  {retryAuthorizationCount === undefined ? '新建 Run 并重试' : '授权追加一次尝试'}
-                </button>
-                <button className="ghost-button" onClick={() => setShowRetryConfirmation(false)}>取消</button>
-              </div>
-            </div>
+                {primaryActionIcon(viewModel.primaryAction.id)}
+                {viewModel.primaryAction.label}
+              </button>
+            ) : null}
+            <button className="primary-button" type="button" disabled={!selectedRun} onClick={onHandleInTask}>
+              <ArrowLeft size={16} />
+              在任务中处理
+            </button>
+            <p>
+              {viewModel.pendingPermission
+                ? '有待处理的权限请求。批准、拒绝与精确差异审查都在任务的「当前工作」中进行。'
+                : '门禁审查、开发执行、重试、停止与测试都在任务页中进行；这里保留模型、执行工具、预算配置和只读证据。'}
+            </p>
           </div>
-        ) : null}
+        </article>
 
         {exactChangeSetPermission ? <details className="agent-secondary-context"><summary>辅助运行信息</summary>
         <section className="agent-path-grid" aria-label="当前节点相关 Agent 能力">
@@ -892,13 +728,14 @@ export function AgentWorkbenchView({
                         onChange={(event) => onRuntimeBudgetApprovalIdChange(event.target.value)}
                       />
                     </label>
+                    {/* The approval ID is configuration; the re-run itself is confirmed in the task (W5). */}
                     <button
                       className="primary-button"
-                      disabled={!runtimeBudgetApprovalId.trim() || isStartingCodingAgent}
-                      onClick={openRetryConfirmation}
+                      disabled={!runtimeBudgetApprovalId.trim() || !selectedRun}
+                      onClick={onHandleInTask}
                     >
                       <Code2 size={16} />
-                      使用预算批准重新运行
+                      在任务中重新运行
                     </button>
                   </div>
                 ) : null}
@@ -961,20 +798,8 @@ export function AgentWorkbenchView({
                 ) : <p className="empty-note">该 Run 没有 Trace 记录。</p>}
               </section>
             ) : null}
-            <div className="inspector-actions">
-              {canOpenManagedWorkspace ? (
-                <button className="ghost-button" onClick={onOpenCodingWorktree}>
-                  <FolderOpen size={16} />
-                  打开受管工作树
-                </button>
-              ) : null}
-              <button className="ghost-button" disabled={!codingActionProjection?.activeRun} onClick={onCancelCodingRun}>
-                取消当前 Run
-              </button>
-              <button className="ghost-button" disabled={!workspace || Boolean(workspace.deletedAt)} onClick={onDeleteCodingWorktree}>
-                删除受管工作树
-              </button>
-            </div>
+            {/* Stop, open and delete the worktree moved to the task (状态行 / 执行记录, plan W3). */}
+            <p className="empty-note">停止执行、打开或删除受管工作树在任务页中进行。</p>
           </article>
         ) : null}
 

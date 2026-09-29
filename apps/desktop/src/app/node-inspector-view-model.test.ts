@@ -197,9 +197,12 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node)
 
     expect(viewModel.visualKind).toBe('Task')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['概览', '内容与审查', '产物与证据', '执行记录'])
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateImpactSummary'])
-    expect(viewModel.tabs.find((tab) => tab.label === '概览')?.sections).toContain('gateImpactSummary')
+    // Three tabs; each section has exactly one home (plan W1).
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['当前工作', '材料与版本', '执行记录'])
+    expect(viewModel.activeTab.sections).toEqual(['workPanel', 'workspaceContent', 'gateImpactSummary'])
+    expect(viewModel.tabs.find((tab) => tab.label === '材料与版本')?.sections).toEqual(['statusMatrix', 'artifacts', 'testEvidence', 'knowledgeReferences', 'governance'])
+    const homes = viewModel.tabs.flatMap((tab) => tab.sections)
+    expect(new Set(homes).size).toBe(homes.length)
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
       'node-status',
       'raw-request',
@@ -239,7 +242,7 @@ describe('node inspector view model', () => {
       sourceKind: 'run_template',
       displayMode: 'standard',
     })
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['概览', '内容与审查', '产物与证据', '执行记录'])
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['当前工作', '材料与版本', '执行记录'])
     expect(viewModel.activeTab.label).toBe('执行记录')
     expect(viewModel.activeTab.sections).toEqual(['trace', 'artifactRecords'])
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
@@ -267,29 +270,25 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { requestedTab: 'Gate条件', canApprove: true })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
+    expect(viewModel.activeTab.sections).toEqual(['workPanel', 'workspaceContent', 'reviewRun', 'statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
+    // The status row is the one conclusion; the checklist lists conditions only (W6).
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
-      'gate-decision',
       'policy-snapshot',
       'approval-permission',
       'knowledge-review',
       'required-artifact',
     ])
+    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.label)).toEqual(['团队策略', '审批权限', '门禁审查', '所需材料'])
     expect(viewModel.nextAction).toMatchObject({
       title: '等待你确认需求',
       kind: 'approvable',
       primaryActionId: 'approveGate',
-      secondaryActionIds: ['openKnowledgeReview'],
+      secondaryActionIds: ['runKnowledgeReview'],
     })
     expect(viewModel.actionCatalog.approveGate.label).toBe('确认需求')
+    expect(viewModel.actionCatalog.runKnowledgeReview.label).toBe('运行门禁审查')
     expect(viewModel.actions.map((action) => action.id)).toEqual([])
-    expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
-      'Policy snapshot',
-      'Role permission',
-      '门禁审查',
-      'Budget',
-      'Required Artifact',
-    ])
+    expect(viewModel).not.toHaveProperty('gateRequirementRows')
   })
 
   it('keeps gate status focused on readiness without duplicate node summary details', () => {
@@ -300,20 +299,12 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { canApprove: true })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['概览', '内容与审查', '产物与证据', '执行记录'])
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
-    expect(viewModel.activeTab.sections).not.toContain('nodeSummary')
+    expect(viewModel.tabs.map((tab) => tab.label)).toEqual(['当前工作', '材料与版本', '执行记录'])
+    expect(viewModel.activeTab.label).toBe('当前工作')
     expect(viewModel.activeTab.sections).toContain('gateEnforcementPanel')
     expect(viewModel.activeTab.sections).not.toContain('governance')
-    expect(viewModel.activeTab.sections).not.toContain('agentReview')
     expect(viewModel.activeTab.sections).not.toContain('artifacts')
-    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
-      'gate-decision',
-      'policy-snapshot',
-      'approval-permission',
-      'knowledge-review',
-      'required-artifact',
-    ])
+    expect(viewModel.gateReadinessGroups.map((group) => group.id)).not.toContain('conclusion')
   })
 
   it('separates Knowledge reference sources from auditable Review Evidence for Gate nodes', () => {
@@ -323,11 +314,11 @@ describe('node inspector view model', () => {
       knowledgeReferenceCount: 2,
       testEvidenceCount: 0,
     })
-    const referencesTab = viewModel.tabs.find((tab) => tab.label === '产物与证据')
-    const evidenceTab = viewModel.tabs.find((tab) => tab.label === '内容与审查')
+    const referencesTab = viewModel.tabs.find((tab) => tab.label === '材料与版本')
+    const evidenceTab = viewModel.tabs.find((tab) => tab.label === '当前工作')
 
     expect(referencesTab?.sections).toEqual(['artifacts', 'testEvidence', 'knowledgeReferences', 'governance'])
-    expect(evidenceTab?.sections).toEqual(['workspaceContent'])
+    expect(evidenceTab?.sections).toEqual(['workPanel', 'workspaceContent', 'reviewRun', 'statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
     expect(referencesTab?.sections).not.toEqual(evidenceTab?.sections)
     expect(viewModel.activeTab).toEqual(referencesTab)
     expect(viewModel.contextProjection.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
@@ -356,9 +347,8 @@ describe('node inspector view model', () => {
     const viewModel = viewModelFor(node, { requestedTab: 'Gate条件' })
 
     expect(viewModel.visualKind).toBe('Gate')
-    expect(viewModel.activeTab.sections).toEqual(['statusMatrix', 'gateEnforcementPanel', 'remediationActions'])
+    expect(viewModel.activeTab.label).toBe('当前工作')
     expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toEqual([
-      'gate-decision',
       'policy-snapshot',
       'approval-permission',
       'knowledge-review',
@@ -367,18 +357,11 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction).toMatchObject({
       title: '等待有权限的成员确认方案',
       kind: 'awaiting_role',
-      secondaryActionIds: ['openKnowledgeReview'],
+      secondaryActionIds: ['runKnowledgeReview'],
     })
     expect(viewModel.nextAction.primaryActionId).toBeUndefined()
     expect(viewModel.nextAction.copy).toContain('没有审批权限')
     expect(viewModel.actions.map((action) => action.id)).toEqual([])
-    expect(viewModel.gateRequirementRows.map((row) => row.label)).toEqual([
-      'Policy snapshot',
-      'Role permission',
-      '门禁审查',
-      'Budget',
-      'Required Artifact',
-    ])
   })
 
   it('keeps local test actions and requirements for later gate stages', () => {
@@ -396,11 +379,12 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction).toMatchObject({
       title: '等待你确认测试证据 Gate',
       primaryActionId: 'approveGate',
-      secondaryActionIds: ['openKnowledgeReview', 'openTests'],
+      // A Gate cannot run tests itself; it points to the task's test step.
+      secondaryActionIds: ['runKnowledgeReview', 'openTestStep'],
     })
     expect(viewModel.actionCatalog.approveGate.label).toBe('通过 Gate')
-    expect(viewModel.statusDescriptors.map((descriptor) => descriptor.id)).toContain('test-evidence')
-    expect(viewModel.gateRequirementRows.map((row) => row.label)).toContain('Test Evidence')
+    expect(viewModel.actionCatalog.openTestStep.label).toBe('查看测试步骤')
+    expect(viewModel.statusDescriptors.find((descriptor) => descriptor.id === 'test-evidence')?.label).toBe('测试证据')
     expect(viewModel.contextProjection.fields.find((field) => field.field === 'test_evidence')).toMatchObject({
       state: 'missing_required',
       visible: true,
@@ -410,7 +394,7 @@ describe('node inspector view model', () => {
   it('summarizes passed, warning, missing, and blocked readiness and opens only attention groups', () => {
     const presentation = buildGateReadinessPresentation({
       descriptors: [
-        { id: 'gate-decision', label: '结论', state: '警告', tone: 'warn', readiness: 'warning', summary: '', nextAction: '', impact: '' },
+        { id: 'test-evidence', label: '测试证据', state: 'failed', tone: 'warn', readiness: 'warning', summary: '', nextAction: '', impact: '' },
         { id: 'policy-snapshot', label: '策略', state: '已加载', tone: 'good', readiness: 'passed', summary: '', nextAction: '', impact: '' },
         { id: 'approval-permission', label: '权限', state: '不可审批', tone: 'bad', readiness: 'blocked', summary: '', nextAction: '', impact: '' },
         { id: 'knowledge-review', label: '审查', state: '缺失', tone: 'soft', readiness: 'missing', summary: '', nextAction: '', impact: '' },
@@ -436,7 +420,9 @@ describe('node inspector view model', () => {
       counts: { passed: 1, warning: 1, missing: 1, blocked: 1 },
       headline: 'Gate 暂时不能通过',
     })
-    expect(presentation.groups.find((group) => group.id === 'conclusion')).toMatchObject({
+    // No own conclusion group: the status row is the one conclusion (plan W6).
+    expect(presentation.groups.map((group) => group.id)).toEqual(['policy-permission', 'review-evidence', 'test-evidence'])
+    expect(presentation.groups.find((group) => group.id === 'test-evidence')).toMatchObject({
       state: 'warning',
       defaultOpen: true,
     })
@@ -453,7 +439,7 @@ describe('node inspector view model', () => {
   it('collapses fully passed readiness groups', () => {
     const presentation = buildGateReadinessPresentation({
       descriptors: [
-        { id: 'gate-decision', label: '结论', state: '通过', tone: 'good', readiness: 'passed', summary: '', nextAction: '', impact: '' },
+        { id: 'approval-permission', label: '权限', state: '允许审批', tone: 'good', readiness: 'passed', summary: '', nextAction: '', impact: '' },
         { id: 'policy-snapshot', label: '策略', state: '已加载', tone: 'good', readiness: 'passed', summary: '', nextAction: '', impact: '' },
       ],
       decision: {
@@ -487,7 +473,7 @@ describe('node inspector view model', () => {
     const acceptanceNode = findNode((candidate) => candidate.kind === 'acceptance')
 
     expect(viewModelFor(buildNode).nextAction.primaryActionId).toBe('runCodingAgent')
-    expect(viewModelFor(testNode).nextAction.primaryActionId).toBe('openTests')
+    expect(viewModelFor(testNode).nextAction.primaryActionId).toBe('runTests')
     expect(viewModelFor(prNode).nextAction.primaryActionId).toBe('createPrDraft')
     expect(viewModelFor(acceptanceNode, { artifacts: [] }).nextAction.primaryActionId).toBe('createAcceptanceBundle')
     expect(viewModelFor(acceptanceNode).nextAction.primaryActionId).toBe('approveGate')
@@ -513,13 +499,17 @@ describe('node inspector view model', () => {
       'node-status',
       'acceptance-bundle',
       'test-evidence',
-      'gate-decision',
     ])
 
+    // The delivery handoff renders once, inside the body (W1); the old tab name still resolves.
     expect(viewModelFor(prNode, { requestedTab: 'Handoff' })).toMatchObject({
       visualKind: 'Delivery',
-      activeTab: { label: '概览', sections: ['statusMatrix', 'gateImpactSummary', 'deliveryHandoff'] },
+      activeTab: { label: '当前工作', sections: ['workPanel', 'workspaceContent', 'gateImpactSummary'] },
     })
+    expect(viewModelFor(testNode).activeTab.sections).toEqual(['workPanel', 'testEvidence', 'workspaceContent', 'gateImpactSummary'])
+    expect(viewModelFor(testNode, { requestedTab: '测试证据' }).activeTab.label).toBe('当前工作')
+    expect(viewModelFor(testNode, { requestedTab: '材料与版本' }).activeTab.sections).not.toContain('testEvidence')
+    expect(viewModelFor(buildNode, { requestedTab: '执行记录' }).activeTab.sections).toEqual(['trace', 'codingWorkspace', 'artifactRecords'])
     expect(viewModelFor(buildNode).activeTab.sections).not.toContain('gateEnforcementPanel')
     expect(viewModelFor(testNode).activeTab.sections).not.toContain('gateEnforcementPanel')
     expect(viewModelFor(prNode).activeTab.sections).not.toContain('gateEnforcementPanel')
@@ -539,11 +529,10 @@ describe('node inspector view model', () => {
     // The follow-up check stays on the first layer, not in the “⋯” menu.
     expect(vm.nextAction.secondaryActionIds).toEqual(['verifyGitHubDeliveryRevocation'])
     expect(vm.actions).toEqual([])
-    expect(vm.statusDescriptors.find((item) => item.id === 'gate-decision')).toMatchObject({
-      state: '已批准',
-      summary: '该节点已完成批准；历史审查与策略评估仍保留供核对。',
-      nextAction: '查看执行记录与已归档证据。',
-    })
+    // The approval is stated once, by the status row (plan W6).
+    expect(vm.nextAction.title).toBe('此步骤已完成')
+    expect(vm.statusDescriptors.find((item) => item.id === 'gate-decision')).toBeUndefined()
+    expect(vm.statusDescriptors.find((item) => item.id === 'node-status')).toMatchObject({ state: '已完成' })
   })
 
   it('requires an explicit GitHub Delivery preparation after the exact PR package is attached', () => {
@@ -931,8 +920,9 @@ describe('node inspector view model', () => {
 
     expect(descriptor).toMatchObject({
       state: 'preflight required',
-      summary: '真实 runtime 会在启动前完成预算与授权检查。',
-      nextAction: '在 Agents 中查看预算检查结果，并按实际阻断原因处理。',
+      label: '预算检查',
+      summary: '真实执行会在启动前完成预算与授权检查。',
+      nextAction: '启动前在状态行查看预算检查结果，并按实际阻断原因处理。',
     })
     expect(`${descriptor?.summary} ${descriptor?.nextAction}`).not.toMatch(/approval|lead/i)
   })
@@ -963,10 +953,10 @@ describe('node inspector view model', () => {
     const gateNode = findNode((candidate) => candidate.kind === 'gate')
     const prNode = findNode((candidate) => candidate.kind === 'pr')
 
-    expect(resolveInspectorTabForSearchResult(clarifyNode, 'artifact')).toBe('产物与证据')
-    expect(resolveInspectorTabForSearchResult(designNode, 'artifact')).toBe('产物与证据')
+    expect(resolveInspectorTabForSearchResult(clarifyNode, 'artifact')).toBe('材料与版本')
+    expect(resolveInspectorTabForSearchResult(designNode, 'artifact')).toBe('材料与版本')
     expect(resolveInspectorTabForSearchResult(designNode, 'event')).toBe('执行记录')
-    expect(resolveInspectorTabForSearchResult(prNode, 'artifact')).toBe('产物与证据')
+    expect(resolveInspectorTabForSearchResult(prNode, 'artifact')).toBe('材料与版本')
     expect(resolveInspectorTabForSearchResult(clarifyNode, 'event')).toBe('执行记录')
     expect(resolveInspectorTabForSearchResult(prNode, 'event')).toBe('执行记录')
     expect(resolveInspectorTabForSearchResult(gateNode, 'event')).toBe('执行记录')
@@ -1015,13 +1005,38 @@ describe('task status row projection (S1, plan §6.1)', () => {
       kind: 'approvable',
       title: '等待你确认需求 v2',
       qualifier: '尚未运行 AI 审查',
-      primaryActionId: 'openKnowledgeReview',
+      primaryActionId: 'runKnowledgeReview',
       secondaryActionIds: ['approveGate'],
       confirmBefore: { actionId: 'approveGate' },
     })
     expect(viewModel.nextAction.confirmBefore?.message).toContain('需求 v2')
     expect(viewModel.actionCatalog.approveGate.label).toBe('确认需求 v2')
-    expect(viewModel.actionCatalog.openKnowledgeReview.label).toBe('去 Agents 运行门禁审查')
+    // Runs in the task (W2); the row names the model and the possible cost before the call.
+    expect(viewModel.actionCatalog.runKnowledgeReview).toMatchObject({ label: '运行门禁审查', disabledReasons: ['running_agent_review', 'review_unavailable'] })
+    expect(viewModel.nextAction.copy).toContain('运行门禁审查前需要先选择模型')
+    const withModel = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      reviewProviderLabel: 'Review · model-a',
+      gateEnforcementDecision: decision({ warningReasons: [missingReviewReason] }),
+    })
+    // The model and cost come first so they stay visible when the row truncates.
+    expect(withModel.nextAction.copy.startsWith('审查使用 Review · model-a，可能产生费用。')).toBe(true)
+  })
+
+  it('keeps 「停止门禁审查」 in the status row while the review runs on this Gate (W2)', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      isRunningKnowledgeReview: true,
+      reviewProviderLabel: 'Review · model-a',
+      gateEnforcementDecision: decision({ status: 'blocked', blocksApproval: true, blockingReasons: [{ ...missingReviewReason, action: 'block' }] }),
+    })
+    expect(viewModel.nextAction).toMatchObject({
+      kind: 'running', title: '正在运行门禁审查', persistentActionIds: ['cancelKnowledgeReview'],
+    })
+    expect(viewModel.nextAction.primaryActionId).toBeUndefined()
+    expect(viewModel.actionCatalog.cancelKnowledgeReview.label).toBe('停止门禁审查')
   })
 
   it('confirms directly and counts review suggestions when a review exists (X5)', () => {
@@ -1054,7 +1069,7 @@ describe('task status row projection (S1, plan §6.1)', () => {
       approvalTarget: requirementV2,
       gateEnforcementDecision: decision({ status: 'blocked', blocksApproval: true, blockingReasons: [{ ...missingReviewReason, action: 'block' }] }),
     })
-    expect(blocked.nextAction).toMatchObject({ kind: 'blocked', tone: 'blocked', primaryActionId: 'openKnowledgeReview' })
+    expect(blocked.nextAction).toMatchObject({ kind: 'blocked', tone: 'blocked', primaryActionId: 'runKnowledgeReview' })
     expect(blocked.nextAction.secondaryActionIds).not.toContain('approveGate')
     expect(blocked.nextAction.primaryActionId).not.toBe('approveGate')
   })
@@ -1070,6 +1085,9 @@ describe('task status row projection (S1, plan §6.1)', () => {
     })
     expect(viewModel.nextAction).toMatchObject({ kind: 'unverified', title: '状态待核实', primaryActionId: 'syncTeam' })
     expect(viewModel.nextAction.copy).not.toMatch(/Sync team/)
+    // The checklist agrees with the status row: unverified, never 已阻断 (plan X4, W6).
+    expect(viewModel.statusDescriptors.find((item) => item.id === 'approval-permission')).toMatchObject({ state: '待核实', readiness: 'missing' })
+    expect(viewModel.gateReadinessGroups.find((group) => group.id === 'policy-permission')?.state).toBe('missing')
   })
 
   it('refuses to name an approval target it cannot determine', () => {
@@ -1100,8 +1118,11 @@ describe('task status row projection (S1, plan §6.1)', () => {
       action: { target: 'agents-progress', summary: 'summary', disabled: false, createsNewRun: false, mayInvokeProvider: false, requiresConfirmation: false, label: 'label', ...action },
       ...extra,
     }) as unknown as NonNullable<Parameters<typeof buildNodeInspectorViewModel>[0]['codingActionProjection']>
-    const running = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'view-progress' }, { phase: 'running' }) })
-    expect(running.nextAction).toMatchObject({ kind: 'running', persistentActionIds: ['stopCodingRun'] })
+    const running = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'view-progress' }, { phase: 'running', activeRun: { id: 'coding-1', status: 'running' } }) })
+    // Progress stays in the task; no link to the Agents page (W3).
+    expect(running.nextAction).toMatchObject({ kind: 'running', persistentActionIds: ['stopCodingRun'], secondaryActionIds: ['viewCodingRecords'] })
+    expect(running.nextAction.primaryActionId).toBeUndefined()
+    expect(running.nextAction.copy).not.toContain('Agents')
     const permission = viewModelFor(buildNode, {
       codingActionProjection: projection({ id: 'review-permission' }, {
         phase: 'waiting_permission',
@@ -1120,10 +1141,35 @@ describe('task status row projection (S1, plan §6.1)', () => {
       }),
     })
     expect(changeSet.nextAction).toMatchObject({
-      kind: 'permission', primaryActionId: 'openCodingAgent', secondaryActionIds: [],
+      kind: 'permission', primaryActionId: 'reviewCodingChangeSet', secondaryActionIds: [],
       persistentActionIds: ['rejectCodingPermission', 'stopCodingRun'],
     })
-    expect(changeSet.actionCatalog.openCodingAgent.label).toBe('审查并批准修改')
+    expect(changeSet.actionCatalog.reviewCodingChangeSet.label).toBe('审查并批准修改')
+    expect(permission.nextAction.secondaryActionIds).toEqual(['viewCodingPermission'])
+    expect(permission.actionCatalog.approveCodingPermission.disabledReasons).toContain('replying_coding_permission')
+    expect(permission.actionCatalog.rejectCodingPermission.disabledReasons).toContain('replying_coding_permission')
+
+    // Renewal, retry and configuration are in-task actions, not links to the Agents page (W3, W9).
+    const renew = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'renew-permission', label: '重新核验并请求审批' }, { phase: 'waiting_permission', activeRun: { id: 'coding-1', status: 'waiting_permission' } }) })
+    expect(renew.nextAction).toMatchObject({ primaryActionId: 'renewCodingPermission', persistentActionIds: ['stopCodingRun'] })
+    expect(renew.actionCatalog.renewCodingPermission.label).toBe('重新核验并请求审批')
+    const retry = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'retry', label: '上次运行失败 · 重新运行 Coding Agent', disabled: true, disabledReason: 'Coding Runtime 尚未就绪。' }, { phase: 'failed', terminal: { reason: 'boom', changedPaths: [], trace: [] } }) })
+    expect(retry.nextAction).toMatchObject({ kind: 'failed', primaryActionId: 'retryCodingRun' })
+    expect(retry.actionCatalog.retryCodingRun).toMatchObject({ label: '上次运行失败 · 重新运行 Coding Agent', disabledReasons: ['starting_coding_agent', 'coding_retry_unavailable'] })
+    const configure = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'configure' }, { phase: 'idle' }) })
+    expect(configure.nextAction.primaryActionId).toBe('configureCodingRuntime')
+    expect(configure.actionCatalog.configureCodingRuntime.label).toBe('去设置执行工具')
+  })
+
+  it('runs checks at the test step and reports a failed run in place (W4)', () => {
+    const testNode = { ...findNode((candidate) => candidate.kind === 'test'), status: 'running' as const }
+    expect(viewModelFor(testNode).nextAction).toMatchObject({ kind: 'ready', primaryActionId: 'runTests' })
+    expect(viewModelFor(testNode).actionCatalog.runTests).toMatchObject({ label: '运行检查', disabledReasons: ['running_tests', 'tests_unavailable'] })
+    expect(viewModelFor(testNode, { isRunningTests: true }).nextAction).toMatchObject({ kind: 'running', title: '正在运行检查' })
+    const failed = viewModelFor(testNode, {
+      testEvidence: [{ id: 'evidence-1', runId: run.id, nodeId: testNode.id, projectId: run.projectId, command: 'pnpm test', cwd: '/repo', status: 'failed', exitCode: 1, durationMs: 10, stdout: '', stderr: 'x', summary: '1 个测试失败。', redacted: true, createdAt: '2026-09-28T00:00:00.000Z' }] as never,
+    })
+    expect(failed.nextAction).toMatchObject({ kind: 'failed', title: '上次检查未通过', primaryActionId: 'runTests' })
   })
 })
 

@@ -92,8 +92,19 @@ it('offers discussion with the saved source and feedback beside an inline opinio
   fireEvent.click(screen.getByRole('tab', { name: /验收标准/ }))
   fireEvent.click(screen.getByRole('button', { name: '审查意见 1' }))
   expect(screen.getByRole('button', { name: '反馈误报' })).toBeVisible()
-  fireEvent.click(screen.getByRole('button', { name: '在右侧讨论' }))
-  expect(discuss).toHaveBeenCalledWith(expect.stringContaining(`产物 ID：${artifact.id}`))
-  expect(discuss).toHaveBeenCalledWith(expect.stringContaining('使用中文提示。'))
+  fireEvent.click(screen.getByRole('button', { name: '讨论此意见' }))
+  // A reference card, not a message: the material, its time and the quoted opinion (plan W7).
+  expect(discuss).toHaveBeenCalledWith(expect.objectContaining({
+    materialId: expect.stringContaining(artifact.id),
+    materialTitle: expect.stringContaining('审查意见 1'),
+    version: expect.stringMatching(/^记录于 /),
+    excerpt: expect.stringContaining('使用中文提示。'),
+  }))
   expect(feedback).not.toHaveBeenCalled()
+})
+it('adds the requirement version being read as a discussion reference', () => {
+  const discuss = vi.fn()
+  render(<GateMaterialReader bundle={bundle()} review={null} reports={[]} knowledge={null} onDiscuss={discuss} />)
+  fireEvent.click(screen.getByRole('button', { name: '讨论此材料' }))
+  expect(discuss).toHaveBeenCalledWith(expect.objectContaining({ materialId: artifact.id, version: expect.stringMatching(/^需求 v\d+$|^记录于 /) }))
 })

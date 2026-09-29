@@ -1,6 +1,6 @@
 import { CheckCircle2 } from 'lucide-react'
 import type { CodingAgentRun, CodingPermissionDecision, ManagedCodingWorkspace } from '@ai-devflow/shared'
-import type { CodingPermissionProjection } from '../app/coding-runtime-action-projection'
+import { codingPermissionDecisionState, type CodingPermissionProjection } from '../app/coding-runtime-action-projection'
 
 export type UnifiedDiffFile = { path: string; content: string }
 
@@ -35,13 +35,13 @@ export function CodingChangeSetReview({
     : preview?.unifiedDiff
   const files = unifiedDiff ? splitUnifiedDiffByFile(unifiedDiff) : []
   const remainingSeconds = Math.ceil(permission.remainingMs / 1_000)
-  const approvalDisabled = !permission.canApprove || isReplying
-  const rejectionDisabled =
-    permission.request.status !== 'pending' ||
-    run.status !== 'waiting_permission' ||
-    permission.expired ||
-    Boolean(permission.staleReason) ||
-    isReplying
+  // Approval needs the exact diff on screen (plan W3); rejection follows the shared rule.
+  const { approveDisabled: approvalDisabled, rejectDisabled: rejectionDisabled } = codingPermissionDecisionState({
+    permission,
+    runStatus: run.status,
+    isReplying,
+    diffShown: files.length > 0,
+  })
 
   return (
     <section

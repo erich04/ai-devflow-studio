@@ -36,7 +36,6 @@ import {
 } from './workflow-node-presentation'
 
 export {
-  buildGateRequirementMatrix,
   buildNodeInspectorViewModel,
   buildStatusDescriptors,
   displayNodeSubtitle,
@@ -51,7 +50,6 @@ export {
   resolveInspectorTabForSearchResult,
   stageLabels,
   type BoardNodeKind,
-  type GateRequirementRow,
   type InspectorAction,
   type InspectorActionDisabledReason,
   type InspectorActionId,
@@ -97,7 +95,21 @@ export type SupportContext = {
   artifactId?: string | undefined
   eventId?: string | undefined
   inspectorTab?: string | undefined
+  /** Reading position to restore when returning from a settings page (plan W9). */
+  materialId?: string | undefined
+  scrollTop?: number | undefined
+  /** Set after a save on the settings page; the banner then says the user can return. */
+  savedAt?: string | undefined
   createdAt: string
+}
+
+/** Where the user was reading in the task; captured before opening settings (plan W9). */
+export type InspectorReadingPosition = {
+  runId: string
+  nodeId: string
+  inspectorTab: string
+  materialId?: string | undefined
+  scrollTop: number
 }
 
 export type SearchResultItem = {

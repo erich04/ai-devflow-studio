@@ -220,6 +220,11 @@ export function useDesktopActions(input: {
   const activeDesktopPairing = desktopPairingExpired ? undefined : desktopPairing
   const syncInFlight = useRef(false)
   const reviewInFlight = useRef(false)
+  const testsInFlight = useRef(false)
+  const permissionReplyInFlight = useRef(false)
+  // The task shows “正在运行门禁审查” and its stop button only on the node being reviewed (W2).
+  const [knowledgeReviewTarget, setKnowledgeReviewTarget] = useState<{ runId: string; nodeId: string } | null>(null)
+  const [isReplyingCodingPermission, setIsReplyingCodingPermission] = useState(false)
   const [teamSyncFeedback, setTeamSyncFeedback] = useState<{ status: 'success' | 'error'; message: string; at?: string } | null>(null)
   // Pairing failures stay in the form until the next attempt (plan §5.6).
   const [pairingFeedback, setPairingFeedback] = useState<{ status: 'success' | 'error'; message: string } | null>(null)
@@ -611,14 +616,15 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function saveTestCommand() {
+  /** Resolves true only when the command was saved, so a settings page can offer “返回任务” (W9). */
+  async function saveTestCommand(): Promise<boolean> {
     if (!desktopApi || !selectedLocalProject) {
       setToast('请先选择本地仓库')
-      return
+      return false
     }
     if (!isTestCommandDirty) {
       setToast('测试命令已是最新')
-      return
+      return false
     }
 
     try {
@@ -631,7 +637,7 @@ export function useDesktopActions(input: {
       if (safety.level === 'blocked') {
         setCommandSafety(safety)
         setToast(`测试命令已阻断：${safety.reasons.join(' ')}`)
-        return
+        return false
       }
 
       const project = await desktopApi.saveProjectTestCommand({
@@ -641,8 +647,10 @@ export function useDesktopActions(input: {
       setLocalProjects((previous) => mergeById(previous, [project]))
       setSelectedLocalProjectId(project.id)
       setToast(safety.level === 'warn' ? '测试命令已保存，运行前请确认风险提示' : '测试命令已保存')
+      return true
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存测试命令失败')
+      return false
     } finally {
       setIsSavingTestCommand(false)
     }
@@ -650,6 +658,10 @@ export function useDesktopActions(input: {
 
   async function executeTestPlan() {
     if (!selectedRun) {
+      return
+    }
+    // One run at a time: a second click while the command runs is ignored (plan W4).
+    if (testsInFlight.current || blockIfInspectorWriteInFlight()) {
       return
     }
 
@@ -674,8 +686,9 @@ export function useDesktopActions(input: {
       return
     }
 
-    const commandDraft = testCommandDraft || selectedLocalProject.testCommand
-    const localSafety = validateTestCommandSafety(commandDraft)
+    // The main process runs the saved command, so check that one; an unsaved draft on the
+    // Tests page must not block or appear to change the task's 「运行检查」 (plan W4).
+    const localSafety = validateTestCommandSafety(selectedLocalProject.testCommand)
     const safety =
       commandSafety?.normalizedCommand === localSafety.normalizedCommand
         ? commandSafety
@@ -686,6 +699,7 @@ export function useDesktopActions(input: {
       return
     }
 
+    testsInFlight.current = true
     setIsRunningTests(true)
     setToast('正在执行本地测试命令...')
 
@@ -698,19 +712,20 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(result.state)
       setSelectedRunId(selectedRun.id)
       setSelectedNodeId(testNode.id)
-      setActiveView('tests')
+      // Results stay in the task (plan W4); the log is in 执行记录.
       setToast(result.evidence.status === 'passed' ? '测试通过，证据已归档' : '测试失败，证据已归档')
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '本地测试执行失败')
     } finally {
+      testsInFlight.current = false
       setIsRunningTests(false)
     }
   }
 
-  async function saveAgentProviderCredential(thinking?: ProviderThinkingConfiguration) {
+  async function saveAgentProviderCredential(thinking?: ProviderThinkingConfiguration): Promise<boolean> {
     if (!desktopApi) {
       setToast('请在 Electron 应用中保存 Review Model Credential')
-      return
+      return false
     }
 
     const providerNameValidation = validateAgentProviderName(providerNameDraft)
@@ -719,7 +734,7 @@ export function useDesktopActions(input: {
 
     if (!providerKeyDraft.trim()) {
       setToast('请输入 API Key')
-      return
+      return false
     }
     if (!providerNameValidation.ok) {
       setToast(providerNameValidation.code === 'empty'
@@ -727,11 +742,11 @@ export function useDesktopActions(input: {
         : providerNameValidation.code === 'too_long'
           ? 'Provider 名称不能超过 100 个字符'
           : 'Provider 名称不能包含控制字符')
-      return
+      return false
     }
     if (!model) {
       setToast('请输入 Model')
-      return
+      return false
     }
 
     try {
@@ -750,11 +765,13 @@ export function useDesktopActions(input: {
         await desktopApi.saveSettings({ selectedAgentProviderId: metadata.providerId })
       } catch {
         setToast('Provider 已保存并在本次选中，但未能保存选择偏好；重启后请重新选择。')
-        return
+        return true
       }
       setToast(`已保存并选择 Provider：${reviewProviderFromMetadata(metadata).name} · ${metadata.maskedCredential}`)
+      return true
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存 Agent Provider 失败')
+      return false
     }
   }
 
@@ -774,6 +791,7 @@ export function useDesktopActions(input: {
     }
 
     reviewInFlight.current = true
+    setKnowledgeReviewTarget({ runId: selectedRun.id, nodeId: selectedNode.id })
     setIsRunningAgentReview(true)
     setToast('基于知识的门禁审查正在生成审查意见...')
 
@@ -793,13 +811,26 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.review.runId)
       setSelectedNodeId(result.review.nodeId)
-      setActiveView('agents')
-      setToast('基于知识的门禁审查已归档，Gate Advisory 已生成')
+      // Stay on the task (plan W2): the review opinions appear in 当前工作.
+      setToast('门禁审查已完成，审查意见显示在「当前工作」中')
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '基于知识的门禁审查运行失败')
     } finally {
       reviewInFlight.current = false
+      setKnowledgeReviewTarget(null)
       setIsRunningAgentReview(false)
+    }
+  }
+
+  /** Stop the running Gate Review through the existing cancel IPC; always available (plan §3). */
+  async function cancelKnowledgeReview() {
+    const target = knowledgeReviewTarget
+    if (!desktopApi?.cancelKnowledgeReview || !target) return
+    try {
+      await desktopApi.cancelKnowledgeReview(target)
+      setToast('已请求停止门禁审查')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '停止门禁审查失败，请重试')
     }
   }
 
@@ -839,8 +870,7 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.codingRun.runId)
       setSelectedNodeId(result.codingRun.nodeId)
-      setActiveView('agents')
-      setToast('Coding Agent 已请求权限，请在 Agents 视图批准或拒绝')
+      setToast('开发执行已启动；权限请求会显示在任务的「当前工作」中')
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'Coding Agent 启动失败')
     } finally {
@@ -880,8 +910,7 @@ export function useDesktopActions(input: {
       setRetryAttempts((previous) => mergeById(previous, [result.retryAttempt]))
       setSelectedRunId(result.codingRun.runId)
       setSelectedNodeId(result.codingRun.nodeId)
-      setActiveView('agents')
-      setToast('Remediation retry 已启动，请在 Agents 视图处理权限请求')
+      setToast('补救重试已启动；权限请求会显示在任务的「当前工作」中')
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : 'Remediation retry 启动失败')
     } finally {
@@ -893,6 +922,10 @@ export function useDesktopActions(input: {
     if (!desktopApi || !pendingCodingPermission || !currentUser) {
       return
     }
+    // One decision per request: a second click while the reply is in flight is ignored (W3).
+    if (permissionReplyInFlight.current) return
+    permissionReplyInFlight.current = true
+    setIsReplyingCodingPermission(true)
 
     const isBootstrapPermission = pendingCodingPermission.origin === 'dependency_bootstrap'
     try {
@@ -915,11 +948,17 @@ export function useDesktopActions(input: {
       )
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '权限回复失败')
+    } finally {
+      permissionReplyInFlight.current = false
+      setIsReplyingCodingPermission(false)
     }
   }
 
   async function renewCodingPermission() {
     if (!desktopApi || !latestCodingRun?.permissionPause || !currentUser) return
+    if (permissionReplyInFlight.current) return
+    permissionReplyInFlight.current = true
+    setIsReplyingCodingPermission(true)
     try {
       await desktopApi.renewCodingPermission({
         codingRunId: latestCodingRun.id, requestId: latestCodingRun.permissionPause.requestId,
@@ -929,6 +968,9 @@ export function useDesktopActions(input: {
       setToast('已重新核验，请审查新的权限请求。此操作尚未批准执行。')
     } catch (error) {
       setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '无法恢复审批，工作区仍保留')
+    } finally {
+      permissionReplyInFlight.current = false
+      setIsReplyingCodingPermission(false)
     }
   }
 
@@ -1531,10 +1573,13 @@ export function useDesktopActions(input: {
     executeTestPlan,
     saveAgentProviderCredential,
     runKnowledgeReview,
+    cancelKnowledgeReview,
+    knowledgeReviewTarget,
     runCodingAgent,
     startRemediationRetry,
     replyCodingPermission,
     renewCodingPermission,
+    isReplyingCodingPermission,
     cancelCodingRun,
     openCodingWorktree,
     deleteCodingWorktree,

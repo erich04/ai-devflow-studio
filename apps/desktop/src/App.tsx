@@ -2,8 +2,9 @@ import { DetailPopover } from './components/DetailPopover'
 import { DiscussionToggle, WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
 import { TeamConnectionMenu, TopbarProjectMenu } from './views/TaskShell'
 import { buildTeamConnectionView, deliveryIntentsRevokedByRepair } from './app/team-connection-view-model'
-import { formatLocalTime } from './app/desktop-view-model'
+import { formatLocalTime, type InspectorReadingPosition } from './app/desktop-view-model'
 import { buildRunUsageSummary } from './app/run-usage-summary'
+import { buildTestRunReadiness } from './app/test-run-readiness'
 import {
   BookOpen,
   Bot,
@@ -31,6 +32,7 @@ import {
   type KnowledgeRelation,
   type ProjectGitStatus,
   type CodingChangeSetPreview,
+  type WorkflowNode,
   type WorkflowRun,
   type StageAgentExecutorKind,
 } from '@ai-devflow/shared'
@@ -48,10 +50,13 @@ import {
   matchesQuery,
 } from './app/desktop-view-model'
 import {
+  displayNodeTitle,
   resolveInspectorTabForSearchResult,
   selectGitHubDeliveryIntentForInspector,
   hasArchivedUpstreamCodingDiff,
+  stageLabels,
 } from './app/node-inspector-view-model'
+import { buildDiscussionReference, type DiscussionMaterial } from './app/discussion-reference'
 import { useDesktopActions } from './app/useDesktopActions'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
@@ -221,6 +226,8 @@ export function App() {
   const [isRefreshingGitStatus, setIsRefreshingGitStatus] = useState(false)
   const [openRunMenuId, setOpenRunMenuId] = useState<string | null>(null)
   const openRunMenuRef = useRef<HTMLDivElement>(null)
+  // Filled by the Inspector; read before a settings page opens so the return restores it (W9).
+  const readingPositionRef = useRef<(() => InspectorReadingPosition | null) | null>(null)
   const [deleteRunTarget, setDeleteRunTarget] = useState<{
     run: WorkflowRun
     deleteRemote: boolean
@@ -845,10 +852,13 @@ export function App() {
     executeTestPlan,
     saveAgentProviderCredential,
     runKnowledgeReview,
+    cancelKnowledgeReview,
+    knowledgeReviewTarget,
     runCodingAgent: runCodingAgentAction,
     startRemediationRetry,
     replyCodingPermission,
     renewCodingPermission,
+    isReplyingCodingPermission,
     cancelCodingRun,
     openCodingWorktree,
     deleteCodingWorktree,
@@ -895,9 +905,9 @@ export function App() {
     applyLocalExecutionState,
   })
 
+  // Not ready: stay on the task, where 当前工作 lists the blockers and offers settings (plan W3).
   const runCodingAgent = useCallback((additionalAttemptAfterCount?: number) => {
     if (codingRuntime.readiness?.status !== 'ready') {
-      setActiveView('agents')
       setToast(
         codingRuntime.readiness?.checks.find((check) => check.status === 'blocked')?.message ??
           codingRuntime.error ??
@@ -906,7 +916,25 @@ export function App() {
       return
     }
     void runCodingAgentAction(additionalAttemptAfterCount)
-  }, [codingRuntime.error, codingRuntime.readiness, runCodingAgentAction, setActiveView, setToast])
+  }, [codingRuntime.error, codingRuntime.readiness, runCodingAgentAction, setToast])
+
+  // Gate Review in the task (plan W2): the same model, budget and failure facts the Agents page used.
+  const reviewProvider = agentProviders.find((provider) => provider.id === selectedAgentProviderId)
+  const reviewProviderLabel = reviewProvider ? `${reviewProvider.name} · ${reviewProvider.model}` : undefined
+  const reviewRunBlockedReason = !desktopApi
+    ? '请在桌面应用中运行门禁审查。'
+    : !selectedAgentProviderId
+      ? '尚未选择门禁审查使用的模型，请先在执行设置中选择。'
+      : modelReadinessError
+  const latestReviewFailure = selectedEvents
+    .filter((event) => event.kind === 'error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp > latestAgentReview.createdAt))
+    .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]?.message
+  const isRunningKnowledgeReviewHere = isRunningAgentReview &&
+    knowledgeReviewTarget?.runId === selectedRun?.id && knowledgeReviewTarget?.nodeId === selectedNode?.id
+  const testRunReadiness = buildTestRunReadiness({ project: selectedLocalProject, run: selectedRun })
+  const latestCodingProviderName = latestCodingRun
+    ? agentProviders.find((provider) => provider.id === latestCodingRun.providerId)?.name ?? '旧版 Provider'
+    : reviewProvider?.name
 
   const teamConnectionView = buildTeamConnectionView({
     localProjectId: selectedLocalProject?.id,
@@ -965,24 +993,66 @@ export function App() {
     )
   }
 
-  function openSupportContext(
-    focusTarget: 'knowledge-review' | 'local-tests' | 'coding-agent',
-    label: string,
+  /**
+   * Opens a settings page from the task and remembers where the user was reading, so
+   * 「返回任务」 restores the step, tab, material and scroll position (plan W9). Settings pages
+   * never run anything on return.
+   */
+  function openSettingsFromTask(
+    target: 'coding' | 'tests' | 'models',
+    position: InspectorReadingPosition | null = readingPositionRef.current?.() ?? null,
   ) {
-    if (!selectedRun || !selectedNode) {
+    const view = target === 'tests' ? 'tests' : 'agents'
+    if (!selectedRun || !selectedNode || activeView !== 'workbench') {
+      setActiveView(view)
       return
     }
-
     setSupportContext({
-      runId: selectedRun.id,
-      nodeId: selectedNode.id,
+      runId: position?.runId ?? selectedRun.id,
+      nodeId: position?.nodeId ?? selectedNode.id,
       sourceView: activeView,
       returnView: 'workbench',
-      focusTarget,
-      label,
+      focusTarget: target === 'tests' ? 'local-tests' : 'coding-agent',
+      label: { coding: '设置执行工具', tests: '设置测试命令', models: '设置模型与预算' }[target],
+      ...(position ? { inspectorTab: position.inspectorTab, scrollTop: position.scrollTop } : {}),
+      ...(position?.materialId ? { materialId: position.materialId } : {}),
       createdAt: new Date().toISOString(),
     })
-    setActiveView(focusTarget === 'local-tests' ? 'tests' : 'agents')
+    setActiveView(view)
+  }
+
+  /** A save on a settings page opened from the task: the banner then offers the way back. */
+  function markSettingsSaved() {
+    setSupportContext((current) => current && (current.focusTarget === 'coding-agent' || current.focusTarget === 'local-tests')
+      ? { ...current, savedAt: new Date().toISOString() }
+      : current)
+  }
+
+  /**
+   * 「讨论此材料」, review opinions and board cards add a reference card to the current
+   * discussion (plan W7). This never sends a message or calls a model.
+   */
+  function discussMaterial(material: DiscussionMaterial, node: WorkflowNode | undefined = selectedNode) {
+    if (!selectedRun || !node) return
+    const reference = buildDiscussionReference({
+      ...material,
+      projectName: selectedLocalProject?.name ?? '当前项目',
+      runTitle: selectedRun.title,
+      stageLabel: stageLabels[node.stage],
+      stepTitle: displayNodeTitle(node),
+      readAt: new Date().toISOString(),
+    })
+    setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'reference', reference }))
+  }
+
+  /** 「在任务中处理」 on Agents and Tests: back to the task's actual step, nothing runs (W5). */
+  function handleInTask() {
+    if (supportContext && (supportContext.focusTarget === 'coding-agent' || supportContext.focusTarget === 'local-tests')) {
+      returnToInspector()
+      return
+    }
+    if (selectedRun) selectRunNode(selectedRun.id, selectedRun.currentNodeId)
+    setActiveView('workbench')
   }
 
   function openKnowledgeReference(referenceId: string, documentId?: string) {
@@ -1013,7 +1083,10 @@ export function App() {
   function returnToInspector() {
     if (supportContext) {
       selectRunNode(supportContext.runId, supportContext.nodeId)
-      if (supportContext.focusTarget !== 'knowledge-reference' || !supportContext.inspectorTab) {
+      if ((supportContext.focusTarget === 'coding-agent' || supportContext.focusTarget === 'local-tests') && supportContext.inspectorTab) {
+        // The Inspector restores the tab, material and scroll position, then clears this (W9).
+        setSupportContext({ ...supportContext, focusTarget: 'inspector-tab', sourceView: activeView })
+      } else if (supportContext.focusTarget !== 'knowledge-reference' || !supportContext.inspectorTab) {
         setSupportContext(null)
       }
     }
@@ -1230,7 +1303,7 @@ export function App() {
                   providerId={selectedAgentProviderId}
                   providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
                   request={workbenchOpenRequest}
-                  onConfigure={() => setActiveView('agents')}
+                  onConfigure={() => openSettingsFromTask('models')}
                   onNavigate={(action) => {
                     selectRunNode(action.runId, action.nodeId)
                     setSupportContext({ runId: action.runId, nodeId: action.nodeId, inspectorTab: action.section,
@@ -1352,7 +1425,7 @@ export function App() {
                     <p className="meta">{currentModelBudget ? `项目最近模型调用 · Provider ${currentModelBudget.providerId}；事件未提供节点和时间，不能作为当前调用的实时许可。` : latestCodingRun?.budgetDecision ? `当前任务的开发执行 ${latestCodingRun.id} · ${latestCodingRun.startedAt}` : '尚无可用评估记录。'}</p>
                     {budgetRecoveryCopy ? <p role="status">{budgetRecoveryCopy}</p> : null}
                   </div>
-                  <button className="ghost-button" onClick={() => setActiveView('agents')}>打开项目模型与预算设置</button>
+                  <button className="ghost-button" onClick={() => openSettingsFromTask('models')}>打开项目模型与预算设置</button>
                 </DetailPopover>
               ) : null}
               <DiscussionToggle />
@@ -1368,7 +1441,11 @@ export function App() {
                   testEvidence={scopedTestEvidence}
                   selectedNodeId={selectedNode?.id}
                   onSelectNode={(nodeId) => { setSelectedNodeId(nodeId); openNodeDetails() }}
-                  onDiscuss={(node) => setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'discussion', prompt: `请结合项目代码和真实流程，帮我分析 Run「${selectedRun.title}」的「${node.title}」节点。Run ID: ${selectedRun.id}；节点 ID: ${node.id}。` }))}
+                  onDiscuss={(node) => discussMaterial({
+                    materialId: `step:${node.id}`,
+                    materialTitle: `步骤：${displayNodeTitle(node)}`,
+                    version: `任务版本 v${selectedRun.version}`,
+                  }, node)}
                   onSelectAttachment={(nodeId, inspectorTab) => {
                     openNodeDetails()
                     setSelectedNodeId(nodeId)
@@ -1410,7 +1487,7 @@ export function App() {
                   canSaveOverride={gateEnforcement.canSaveOverride}
                   onApprove={approveSelectedGate}
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
-                  onDiscussReview={(prompt) => setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'discussion', prompt }))}
+                  onDiscussMaterial={(material) => discussMaterial(material)}
                   {...(desktopApi?.requestClarificationChanges ? { onRequestClarificationChanges: requestSelectedClarificationChanges } : {})}
                   stageProviders={agentProviders}
                   stageProviderId={stageChoice.providerId}
@@ -1427,20 +1504,31 @@ export function App() {
                   pairingState={hasDeliveryProjectBinding ? 'paired' : 'unpaired'}
                   hasDeliveryProjectBinding={hasDeliveryProjectBinding}
                   onSyncTeam={syncRemoteTeamState}
-                  onOpenTests={() => openSupportContext('local-tests', '执行本地测试并生成 Test Evidence')}
-                  onOpenKnowledgeReview={() => openSupportContext('knowledge-review', '运行门禁审查并补齐 Gate Advisory')}
+                  onRunKnowledgeReview={(previousReviewId) => void runKnowledgeReview(previousReviewId)}
+                  {...(desktopApi?.cancelKnowledgeReview ? { onCancelKnowledgeReview: () => void cancelKnowledgeReview() } : {})}
+                  isRunningKnowledgeReviewHere={isRunningKnowledgeReviewHere}
+                  latestReviewFailure={latestReviewFailure}
+                  reviewProviderLabel={reviewProviderLabel}
+                  reviewRunBlockedReason={reviewRunBlockedReason}
+                  onRunTests={() => void executeTestPlan()}
+                  testRunReadiness={testRunReadiness}
+                  onOpenSettings={openSettingsFromTask}
+                  readingPositionRef={readingPositionRef}
                   onOpenKnowledgeReference={openKnowledgeReference}
-                  onOpenCodingAgent={() => openSupportContext(
-                    'coding-agent',
-                    codingActionProjection?.action.label ?? '查看 Coding Agent',
-                  )}
                   codingReadiness={codingRuntime.readiness}
                   codingReadinessError={codingRuntime.error}
                   upstreamCodingDiffReady={hasArchivedUpstreamCodingDiff({ run: selectedRun, node: selectedNode, codingRuns, diffs: codingDiffArtifacts })}
-                  onOpenCodingConfiguration={() => openSupportContext('coding-agent', '配置 Coding Runtime')}
                   {...(codingActionProjection ? { codingActionProjection } : {})}
                   onCancelCodingRun={() => void cancelCodingRun()}
                   onReplyCodingPermission={(decision) => void replyCodingPermission(decision)}
+                  onRenewCodingPermission={() => void renewCodingPermission()}
+                  isReplyingCodingPermission={isReplyingCodingPermission}
+                  latestCodingRun={latestCodingRun}
+                  codingWorkspace={selectedManagedWorkspace}
+                  codingProviderName={latestCodingProviderName}
+                  runtimeBudgetApprovalId={runtimeBudgetApprovalId}
+                  onOpenCodingWorktree={() => void openCodingWorktree()}
+                  onDeleteCodingWorktree={() => void deleteCodingWorktree()}
                   onRunCodingAgent={runCodingAgent}
                   onCreatePrDraft={generatePrDraft}
                   onPrepareGitHubDelivery={prepareSelectedGitHubDelivery}
@@ -1557,11 +1645,6 @@ export function App() {
             providers={agentProviders}
             selectedProviderId={selectedAgentProviderId}
             stageExecution={stageChoice}
-            onCancelStageAgent={desktopApi?.cancelWorkflowAgentNode ? async () => {
-              if (!pendingInspectorAction) return
-              try { await desktopApi.cancelWorkflowAgentNode!({ runId: pendingInspectorAction.runId, nodeId: pendingInspectorAction.nodeId }) }
-              catch (error) { setToast(error instanceof Error ? error.message : '取消失败，请重试。') }
-            } : undefined}
             onProviderChange={(providerId) => {
               setSelectedAgentProviderId(providerId)
               void desktopApi?.saveSettings({ selectedAgentProviderId: providerId }).catch(() => setToast('Provider 选择保存失败，请重新选择。'))
@@ -1580,9 +1663,9 @@ export function App() {
             onProviderModelDraftChange={setProviderModelDraft}
             providerKeyDraft={providerKeyDraft}
             onProviderKeyDraftChange={setProviderKeyDraft}
-            onSaveProviderCredential={saveAgentProviderCredential}
-            onCompleteAgentNode={completeSelectedWorkflowAgentNode}
-            onRunKnowledgeReview={runKnowledgeReview}
+            onSaveProviderCredential={(thinking) => void saveAgentProviderCredential(thinking).then((saved) => { if (saved) markSettingsSaved() })}
+            onSettingsSaved={markSettingsSaved}
+            onHandleInTask={handleInTask}
             isRunning={isRunningAgentReview}
             isRunningTests={isRunningTests}
             pendingInspectorAction={pendingInspectorAction}
@@ -1590,17 +1673,10 @@ export function App() {
             selectedNode={selectedNode}
             reviews={agentReviews}
             selectedReviews={selectedAgentReviews}
-            latestReviewFailure={selectedEvents.filter((event)=>event.kind==='error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp>latestAgentReview.createdAt)).sort((a,b)=>b.timestamp.localeCompare(a.timestamp))[0]?.message}
+            latestReviewFailure={latestReviewFailure}
             latestReview={latestAgentReview}
             latestTrace={latestAgentTrace}
             latestUsage={latestAgentUsage}
-            onRunCodingAgent={runCodingAgent}
-            onReplyCodingPermission={replyCodingPermission}
-            onRenewCodingPermission={renewCodingPermission}
-            onCancelCodingRun={cancelCodingRun}
-            onOpenCodingWorktree={openCodingWorktree}
-            onDeleteCodingWorktree={deleteCodingWorktree}
-            onOpenTests={() => setActiveView('tests')}
             isStartingCodingAgent={isStartingCodingAgent}
             runtimeBudgetApprovalId={runtimeBudgetApprovalId}
             onRuntimeBudgetApprovalIdChange={setRuntimeBudgetApprovalId}
@@ -1636,11 +1712,11 @@ export function App() {
         {activeView === 'tests' && (
           <TestsView
             evidence={scopedTestEvidence}
-            onRunTests={executeTestPlan}
+            onHandleInTask={handleInTask}
             isRunningTests={isRunningTests}
             commandDraft={testCommandDraft}
             onCommandDraftChange={setTestCommandDraft}
-            onSaveCommand={saveTestCommand}
+            onSaveCommand={() => void saveTestCommand().then((saved) => { if (saved) markSettingsSaved() })}
             project={selectedLocalProject}
             commandSafety={commandSafety}
             isCommandDirty={isTestCommandDirty}
