@@ -72,7 +72,37 @@ export {
   type WorkflowNodeSourceKind,
 } from './workflow-node-presentation'
 
-export type ViewId = 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests' | 'diagnostics'
+/** Four primary entries (plan §4.1, Y1): 任务, 知识, 团队, 设置. */
+export type ViewId = 'workbench' | 'knowledge' | 'team' | 'settings'
+
+export type SettingsSection = 'project' | 'models' | 'extensions' | 'team' | 'appearance' | 'advanced'
+
+/** Settings sections in display order; each names who the setting applies to (plan §6.6). */
+export const settingsSections: ReadonlyArray<{ id: SettingsSection; label: string; scope: string; description: string }> = [
+  { id: 'project', label: '本地项目', scope: '本地项目', description: '当前仓库与测试命令。执行与结果在任务的测试步骤中查看。' },
+  { id: 'models', label: '模型与执行方式', scope: '本机与团队', description: '模型提供方与凭据保存在本机；项目执行工具属于本地项目；预算与一次性批准属于团队项目。' },
+  { id: 'extensions', label: '扩展能力', scope: '本机与团队', description: 'Skills 与 MCP 连接器。启用不会绕过 Gate、策略与证据要求。' },
+  { id: 'team', label: '团队连接', scope: '团队项目', description: '连接、团队数据与结果上传是三件分开的事。' },
+  { id: 'appearance', label: '外观', scope: '本机', description: '界面主题。' },
+  { id: 'advanced', label: '高级', scope: '本机', description: '诊断、脱敏自检、本地数据，以及独立 Runtime 与多 Agent 诊断。' },
+]
+
+/**
+ * Where the removed primary entries live now (plan §4.3, Y1). Old view ids were never persisted
+ * or linked from outside, so the mapping is applied at the in-app entry points.
+ */
+export const legacyViewSettingsSection: Readonly<Record<'agents' | 'skills' | 'mcp' | 'tests' | 'diagnostics', SettingsSection>> = {
+  agents: 'models',
+  skills: 'extensions',
+  mcp: 'extensions',
+  tests: 'project',
+  diagnostics: 'advanced',
+}
+
+/** 「去设置」 targets inside a task (plan W9): execution tool and models, or the test command. */
+export function settingsSectionForTaskTarget(target: 'coding' | 'models' | 'tests'): SettingsSection {
+  return target === 'tests' ? legacyViewSettingsSection.tests : legacyViewSettingsSection.agents
+}
 
 export type SupportFocusTarget =
   | 'knowledge-review'
@@ -110,6 +140,15 @@ export type InspectorReadingPosition = {
   inspectorTab: string
   materialId?: string | undefined
   scrollTop: number
+}
+
+/** First-layer names of search result types (plan §6.3, Y9); the stored type stays in a title. */
+export const searchResultTypeLabels: Record<SearchResultItem['type'], string> = {
+  run: '任务',
+  node: '步骤',
+  artifact: '材料',
+  knowledge: '知识',
+  event: '执行记录',
 }
 
 export type SearchResultItem = {

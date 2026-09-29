@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { sha256Text, type AgentReviewResult, type Artifact } from '@ai-devflow/shared'
 import { ArtifactBody, partitionArtifact } from './ArtifactBody'
@@ -20,7 +20,9 @@ function readingBlocks(content: string) {
   return blocks
 }
 
-export function ArtifactReviewReader({ artifact, review, reports = [], onFeedback, onToggleRevision, revisionSelected = [], onDiscuss, requirement = false }: {
+export function ArtifactReviewReader({ artifact, review, reports = [], onFeedback, onToggleRevision, revisionSelected = [], onDiscuss, requirement = false, readingTools }: {
+  /** Passed to the body's 阅读工具 disclosure (plan Y6). */
+  readingTools?: ReactNode
   artifact: Artifact
   review?: AgentReviewResult | null | undefined
   reports?: Artifact[]
@@ -76,7 +78,7 @@ export function ArtifactReviewReader({ artifact, review, reports = [], onFeedbac
     </DetailPopover>)}</span>
   }
   return <>
-    <ArtifactBody key={artifact.id} content={artifact.content} kind={requirement ? 'clarification' : artifact.kind} section="content" annotateBlock={annotate} annotations={valid.map((item) => ({ index: item.index, start: item.citation.start, end: item.citation.end }))} pendingContent={requirement ? report : undefined} />
+    <ArtifactBody key={artifact.id} content={artifact.content} kind={requirement ? 'clarification' : artifact.kind} section="content" annotateBlock={annotate} annotations={valid.map((item) => ({ index: item.index, start: item.citation.start, end: item.citation.end }))} pendingContent={requirement ? report : undefined} readingTools={readingTools} />
     <details className="material-source"><summary>来源与版本</summary><p>{artifact.id}</p><p>版本更新时间：{artifact.updatedAt}</p><p>正文摘要：{currentDigest ?? '正在核验'}</p></details>
     <p className="meta">审查意见 {review?.missingEvidence.length ?? 0} 条 · 可在当前正文定位 {new Set(valid.map((item) => item.index)).size} 条。{requirement ? '待确认事项中保留全部意见。' : '下方保留完整审查报告。'}</p>
     {!requirement && report}

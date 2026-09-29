@@ -74,7 +74,7 @@ export function buildWorkflowGateImpact(input: {
   if (!gate) {
     return {
       state: 'none',
-      summary: '当前节点不影响后续 Gate。',
+      summary: '当前步骤不影响后续 Gate。',
     }
   }
 
@@ -104,7 +104,7 @@ export function buildWorkflowGateImpact(input: {
     gateStatusLabel: presentation.statusLabel,
     isCurrentStep: input.run.currentNodeId === gate.id,
     distance,
-    relationshipLabel: distance === 1 ? '直接下游 Gate' : `最近下游 Gate · ${distance} 步`,
+    relationshipLabel: distance === 1 ? '紧接着的 Gate' : `后续 Gate · 相隔 ${distance} 步`,
     providedArtifactCount: sourceArtifactIds.size,
     linkedArtifacts,
     unconsumedArtifactCount: Math.max(0, sourceArtifactIds.size - linkedArtifactIds.length),

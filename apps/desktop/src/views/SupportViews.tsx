@@ -1,33 +1,21 @@
-import { ArrowLeft, Play, Save } from 'lucide-react'
-import {
-  type CommandSafetyResult,
-  type LocalProject,
-  type McpServerDefinition,
-  type TestEvidence,
-  type WorkflowNode,
-  type WorkflowRun,
-} from '@ai-devflow/shared'
-import {
-  displayNodeTitle,
-  type SupportContext,
-  formatLocalTime,
-} from '../app/desktop-view-model'
-import { buildTestRunReadiness } from '../app/test-run-readiness'
+import type { McpServerDefinition } from '@ai-devflow/shared'
 
+/** 设置／扩展能力 (plan Y2): Skills keep their Gate, policy and evidence limits. */
 export function SkillView() {
   return (
-    <section className="page-list skill-view" data-testid="skill-view">
+    <section className="page-list skill-view" data-testid="skill-view" aria-label="Skills">
       <div className="panel-head">
-        <span className="panel-title">团队能力目录</span>
-        <span className="pill soft">Skills 不能绕过 Gate / policy / evidence requirements</span>
+        <span className="panel-title">团队能力目录（Skills）</span>
+        <span className="pill soft">Skills 不能绕过 Gate、策略与证据要求</span>
       </div>
       <div className="panel-body page-grid three">
-        <p className="empty-note">未加载真实团队 Skills。拉取团队配置后再显示能力目录。</p>
+        <p className="empty-note">未加载团队 Skills。更新团队数据后再显示能力目录。</p>
       </div>
     </section>
   )
 }
 
+/** 设置／扩展能力 (plan Y2): local MCP connectors; enabling semantics are unchanged. */
 export function McpView({
   servers,
   onToggle,
@@ -36,21 +24,21 @@ export function McpView({
   onToggle: (id: string) => void
 }) {
   return (
-    <section className="page-list" data-testid="mcp-view">
+    <section className="page-list" data-testid="mcp-view" aria-label="MCP 连接器">
       <div className="panel-head">
-        <span className="panel-title">本机工具连接器 MCP</span>
-        <span className="pill soft">本地执行边界，不是云端集成市场</span>
+        <span className="panel-title">本机工具连接器（MCP）</span>
+        <span className="pill soft">只在本机执行，不是云端集成市场</span>
       </div>
       <div className="panel-body">
         <table className="table">
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Command</th>
-              <th>Permission</th>
-              <th>enabledLocally</th>
-              <th>Security state</th>
-              <th>Action</th>
+              <th>名称</th>
+              <th>命令</th>
+              <th>权限</th>
+              <th>本机启用</th>
+              <th>安全边界</th>
+              <th>操作</th>
             </tr>
           </thead>
           <tbody>
@@ -64,12 +52,16 @@ export function McpView({
               <tr key={server.id}>
                 <td><strong>{server.name}</strong></td>
                 <td className="mono">{server.command}</td>
-                <td>{server.permission}</td>
-                <td><span className={`pill ${server.enabledLocally ? 'good' : 'warn'}`}>{String(server.enabledLocally)}</span></td>
-                <td>{server.enabledLocally ? 'confined to local project' : 'requires explicit enable'}</td>
+                <td title={server.permission}>{server.permission}</td>
                 <td>
-                  <button className="ghost-button" onClick={() => onToggle(server.id)}>
-                    {server.enabledLocally ? 'Disable' : 'Enable'}
+                  <span className={`pill ${server.enabledLocally ? 'good' : 'warn'}`} title={`enabledLocally: ${String(server.enabledLocally)}`}>
+                    {server.enabledLocally ? '已启用' : '未启用'}
+                  </span>
+                </td>
+                <td>{server.enabledLocally ? '仅限当前本地项目' : '需要明确启用'}</td>
+                <td>
+                  <button className="ghost-button" aria-label={`${server.enabledLocally ? '停用' : '启用'} ${server.name}`} onClick={() => onToggle(server.id)}>
+                    {server.enabledLocally ? '停用' : '启用'}
                   </button>
                 </td>
               </tr>
@@ -77,227 +69,6 @@ export function McpView({
           </tbody>
         </table>
       </div>
-    </section>
-  )
-}
-
-export function TestsView({
-  evidence,
-  onHandleInTask,
-  isRunningTests,
-  commandDraft,
-  onCommandDraftChange,
-  onSaveCommand,
-  project,
-  commandSafety,
-  isCommandDirty,
-  isSavingCommand,
-  supportContext,
-  selectedRun,
-  selectedNode,
-  onReturnToInspector,
-}: {
-  evidence: TestEvidence[]
-  /** Checks run at the task's test step (plan W5); this page keeps the command and history. */
-  onHandleInTask: () => void
-  isRunningTests: boolean
-  commandDraft: string
-  onCommandDraftChange: (value: string) => void
-  onSaveCommand: () => void
-  project: LocalProject | undefined
-  commandSafety: CommandSafetyResult | null
-  isCommandDirty: boolean
-  isSavingCommand: boolean
-  supportContext: SupportContext | null
-  selectedRun: WorkflowRun | undefined
-  selectedNode: WorkflowNode | undefined
-  onReturnToInspector: () => void
-}) {
-  const passedEvidenceCount = evidence.filter((item) => item.status === 'passed').length
-  const failedEvidenceCount = evidence.filter((item) => item.status === 'failed').length
-  const timedOutEvidenceCount = evidence.filter((item) => item.status === 'timed_out').length
-  const testNode = selectedNode && (selectedNode.kind === 'test' || selectedNode.stage === 'test')
-    ? selectedNode
-    : selectedRun?.nodes.find((node) => node.kind === 'test' || node.stage === 'test')
-  const latestEvidence = evidence.reduce<TestEvidence | undefined>((latest, item) => {
-    if (item.runId !== selectedRun?.id || item.nodeId !== testNode?.id) {
-      return latest
-    }
-    return !latest || item.createdAt > latest.createdAt ? item : latest
-  }, undefined)
-  const commandState = !project
-    ? { label: '未选择仓库', tone: 'soft', detail: '选择本地仓库后才能保存测试命令。' }
-    : !commandDraft.trim()
-      ? { label: '未配置', tone: 'soft', detail: '当前项目还没有可执行的测试命令。' }
-      : isSavingCommand
-        ? { label: '保存中', tone: 'warn', detail: '正在把命令保存到当前本地项目。' }
-        : isCommandDirty
-          ? { label: '有未保存修改', tone: 'warn', detail: '当前输入尚未保存，不代表测试已经执行。' }
-          : { label: '已保存', tone: 'good', detail: '命令已保存到本地项目；这不代表测试已经完成。' }
-  const executionState = isRunningTests || latestEvidence?.status === 'running'
-    ? { label: '执行中', tone: 'warn', detail: '本地测试命令正在执行。' }
-    : latestEvidence?.status === 'passed'
-      ? { label: '已通过', tone: 'good', detail: `${latestEvidence.summary} · 执行于 ${formatLocalTime(latestEvidence.createdAt)}。证据没有记录所测代码的提交，适用性无法核实。` }
-      : latestEvidence?.status === 'failed'
-        ? { label: '失败', tone: 'bad', detail: latestEvidence.summary }
-        : latestEvidence?.status === 'timed_out'
-          ? { label: '已超时', tone: 'bad', detail: latestEvidence.summary }
-          : { label: '待执行', tone: 'soft', detail: '尚未产生当前 Run 的测试结果。' }
-  // Same rule as the task's 「运行检查」 (plan W4): the reason is shown before any click.
-  const { blockedReason: runBlockedReason, savedCommand } = buildTestRunReadiness({ project, run: selectedRun })
-  const evidenceEmptyCopy = !project
-    ? '选择本地仓库后再配置或执行测试。'
-    : !savedCommand
-      ? '配置当前项目的测试命令后，才能产生测试证据。'
-      : !latestEvidence
-        ? !runBlockedReason
-          ? '当前任务尚未运行测试，可以在任务的测试步骤点击「运行检查」。'
-          : '当前任务尚未运行测试。命令已保存不代表测试已完成。'
-        : ''
-  const workflowState = !selectedRun
-    ? { label: '未选择 Run', tone: 'soft', detail: '选择 Run 后显示 Workflow 测试节点状态。' }
-    : !testNode
-      ? { label: '无测试节点', tone: 'soft', detail: '当前 Workflow 没有测试节点。' }
-      : testNode.status === 'success'
-        ? { label: '测试节点已完成', tone: 'good', detail: 'Workflow 的测试节点已经完成。' }
-        : testNode.status === 'failed'
-          ? { label: '测试节点失败', tone: 'bad', detail: 'Workflow 的测试节点执行失败。' }
-          : testNode.status === 'blocked'
-            ? { label: '测试节点已阻断', tone: 'bad', detail: 'Workflow 的测试节点正在等待阻断条件解除。' }
-            : testNode.status === 'skipped'
-              ? { label: '测试节点已跳过', tone: 'soft', detail: 'Workflow 的测试节点已被跳过。' }
-              : testNode.status === 'running' || selectedRun.currentNodeId === testNode.id
-                ? { label: '当前测试节点', tone: 'warn', detail: 'Workflow 当前正在测试阶段。' }
-                : { label: '等待测试', tone: 'soft', detail: 'Workflow 尚未进入测试节点。' }
-
-  return (
-    <section className="page-grid" data-testid="tests-view">
-      <div className="page-main">
-        <div className="panel-head">
-          <span className="panel-title">测试计划与证据</span>
-          {/* One execution entry (plan W5): the check runs at the task's test step. */}
-          <button className="primary-button" aria-describedby={runBlockedReason ? 'tests-run-blocked-reason' : undefined} disabled={!selectedRun} onClick={onHandleInTask}>
-            <Play size={16} />
-            {isRunningTests ? '测试中 · 在任务中查看' : '在任务中处理'}
-          </button>
-        </div>
-        {runBlockedReason && !isRunningTests ? <p className="meta" id="tests-run-blocked-reason" data-testid="tests-run-blocked-reason">{runBlockedReason}</p> : null}
-        {supportContext?.focusTarget === 'local-tests' ? (
-          <div className="support-context-banner" data-testid="support-context-banner">
-            <div>
-              <span className="panel-label">来自任务</span>
-              <strong>{supportContext.label}</strong>
-              <p>
-                当前目标：{selectedRun?.title ?? supportContext.runId} · {selectedNode ? displayNodeTitle(selectedNode) : supportContext.nodeId}
-              </p>
-              {/* Saving never navigates or runs the tests; the user returns explicitly (plan W9). */}
-              <p role="status">{supportContext.savedAt ? '已保存。可以返回任务，回到原来的阅读位置；返回后不会自动运行检查。' : '保存测试命令后可以返回任务；返回后不会自动运行检查。'}</p>
-            </div>
-            <button className="ghost-button" type="button" onClick={onReturnToInspector}>
-              <ArrowLeft size={16} />
-              返回任务
-            </button>
-          </div>
-        ) : null}
-        <article className="test-report">
-          <div className="row">
-            <strong>Test package</strong>
-            <span className="pill soft">local execution</span>
-          </div>
-          <p>执行本地测试命令，保存 command、status、exit code、duration、redacted stdout/stderr 摘要，并回写 Workbench Inspector。失败、超时、跳过都必须成为 Gate 可读的 Evidence 状态。</p>
-          <label className="field">
-            <span>测试命令</span>
-            <input
-              aria-label="测试命令"
-              className="input mono"
-              value={commandDraft}
-              placeholder="例如 npm test"
-              onChange={(event) => onCommandDraftChange(event.target.value)}
-            />
-          </label>
-          <div className="knowledge-reference-meta">
-            <span>{project ? project.name : '未选择仓库'}</span>
-            <span>{commandSafety?.level ?? 'pending safety check'}</span>
-            {commandSafety?.normalizedCommand ? <code>{commandSafety.normalizedCommand}</code> : null}
-          </div>
-          {commandSafety && commandSafety.reasons.length > 0 ? (
-            <div className={`command-safety command-safety--${commandSafety.level}`}>
-              {commandSafety.reasons.map((reason) => (
-                <p key={reason}>{reason}</p>
-              ))}
-            </div>
-          ) : null}
-          <button
-            className="ghost-button"
-            disabled={!project || !commandDraft.trim() || !isCommandDirty || isSavingCommand}
-            onClick={onSaveCommand}
-          >
-            <Save size={16} />
-            {isSavingCommand ? '保存中...' : project && commandDraft.trim() && !isCommandDirty ? '已保存' : '保存测试命令'}
-          </button>
-          <div className="test-state-list" aria-label="测试状态">
-            <div className="test-state-row" data-testid="test-command-status">
-              <span>命令配置</span>
-              <strong className={`pill ${commandState.tone}`}>{commandState.label}</strong>
-              <small>{commandState.detail}</small>
-            </div>
-            <div className="test-state-row" data-testid="test-execution-status">
-              <span>本次执行</span>
-              <strong className={`pill ${executionState.tone}`}>{executionState.label}</strong>
-              <small>{executionState.detail}</small>
-            </div>
-            <div className="test-state-row" data-testid="test-workflow-status">
-              <span>Workflow</span>
-              <strong className={`pill ${workflowState.tone}`}>{workflowState.label}</strong>
-              <small>{workflowState.detail}</small>
-            </div>
-          </div>
-        </article>
-        <div className="evidence-list">
-          {evidenceEmptyCopy ? <p className="empty-note" data-testid="tests-empty-state">{evidenceEmptyCopy}</p> : null}
-          {evidence.length === 0 ? null : (
-            evidence.map((item) => (
-              <article className={`evidence-row evidence-row--${item.status}`} key={item.id}>
-                <div>
-                  <span className="panel-label">Local test evidence</span>
-                  <strong>{item.status}</strong>
-                  <p>{item.summary}</p>
-                  <div className="evidence-meta">
-                    <span>Exit code {item.exitCode ?? 'timeout'}</span>
-                    <span>Duration {item.durationMs}ms</span>
-                    <span>Redacted {item.redacted ? 'yes' : 'no'}</span>
-                  </div>
-                  <pre>{item.stdout || item.stderr || '(empty output)'}</pre>
-                </div>
-                <code>{item.command}</code>
-              </article>
-            ))
-          )}
-        </div>
-      </div>
-      <aside className="page-side">
-        <strong>Evidence</strong>
-        <div className="compact-row">
-          <span>Local runs</span>
-          <strong>{evidence.length}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Passed</span>
-          <strong>{passedEvidenceCount}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Failed</span>
-          <strong>{failedEvidenceCount}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Timed out</span>
-          <strong>{timedOutEvidenceCount}</strong>
-        </div>
-        <div className="compact-row">
-          <span>Coverage</span>
-          <strong>not loaded</strong>
-        </div>
-      </aside>
     </section>
   )
 }

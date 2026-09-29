@@ -41,6 +41,7 @@ import {
   getToastDisplayDurationMs,
   mergeById,
   type SupportContext,
+  type ViewId,
 } from './desktop-view-model'
 import type { PendingInspectorAction } from './node-inspector-view-model'
 
@@ -73,7 +74,7 @@ export type DesktopWorkspaceState = {
   themePreference: ThemePreference
   dataOrigin: DataOrigin
   hasLoadedLocalState: boolean
-  activeView: 'workbench' | 'team' | 'knowledge' | 'agents' | 'skills' | 'mcp' | 'tests' | 'diagnostics'
+  activeView: ViewId
   runs: WorkflowRun[]
   remoteRunIds: string[]
   selectedRunId: string

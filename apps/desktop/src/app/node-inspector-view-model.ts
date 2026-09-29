@@ -95,7 +95,7 @@ export type InspectorActionDisabledReason =
   | 'gate_permission_missing'
   | 'starting_coding_agent'
   | 'team_project_binding_missing'
-  /** No model selected or the budget policy is not loaded: same rule as the Agents page had (W2). */
+  /** No model selected or the budget policy is not loaded: same rule as settings/models (W2, Y2). */
   | 'review_unavailable'
   /** No saved test command, or the task is not at its test step (W4). */
   | 'tests_unavailable'

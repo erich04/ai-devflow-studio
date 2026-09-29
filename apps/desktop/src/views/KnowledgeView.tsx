@@ -1,14 +1,41 @@
+import { useEffect, useRef, type ReactNode } from 'react'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
-import {
-  resolveKnowledgeReferenceSemantics,
-  type KnowledgeDocument,
-  type KnowledgeEntity,
-  type KnowledgeReference,
-  type KnowledgeRelation,
-  type RepositoryKnowledgeWarning,
-  type WorkflowRun,
+import type {
+  Artifact,
+  KnowledgeDocument,
+  KnowledgeEntity,
+  KnowledgeReference,
+  KnowledgeRelation,
+  RepositoryKnowledgeWarning,
+  WorkflowRun,
 } from '@ai-devflow/shared'
 import { matchesQuery, type FieldDataSource, type SupportContext } from '../app/desktop-view-model'
+import {
+  groupKnowledgeReferences,
+  type KnowledgeCitation,
+  type KnowledgeReferenceGroup,
+} from '../app/knowledge-reference-groups'
+import {
+  describeKnowledgeIndex,
+  knowledgeCategoryLabel,
+  knowledgeEntityKindLabel,
+  knowledgeIndexWarningLabel,
+  knowledgeRelationLabel,
+  type RawDetail,
+} from '../app/knowledge-view-copy'
+
+function RawDetails({ details, testId }: { details: RawDetail[]; testId?: string }) {
+  return (
+    <details className="gate-technical-details" data-testid={testId}>
+      <summary>详情</summary>
+      <div className="knowledge-reference-meta">
+        {details.map((detail) => (
+          <code key={`${detail.label}:${detail.value}`}>{detail.label}：{detail.value}</code>
+        ))}
+      </div>
+    </details>
+  )
+}
 
 export function KnowledgeView({
   query,
@@ -17,6 +44,7 @@ export function KnowledgeView({
   relations,
   references,
   selectedRun,
+  artifacts,
   supportContext,
   focusedDocumentId,
   focusedReferenceId,
@@ -27,6 +55,7 @@ export function KnowledgeView({
   isLoading,
   onRefresh,
   onReturnToInspector,
+  memoryPanel,
 }: {
   query: string
   documents: KnowledgeDocument[]
@@ -34,6 +63,8 @@ export function KnowledgeView({
   relations: KnowledgeRelation[]
   references: KnowledgeReference[]
   selectedRun: WorkflowRun | undefined
+  /** Optional: gives citing materials their titles and revisions; without it they read “未加载的材料”. */
+  artifacts?: readonly Artifact[] | undefined
   supportContext: SupportContext | null
   focusedDocumentId: string | undefined
   focusedReferenceId: string | undefined
@@ -44,14 +75,23 @@ export function KnowledgeView({
   isLoading: boolean
   onRefresh: () => void
   onReturnToInspector: () => void
+  /** Rendered under 「记忆管理」 near the end of the page (plan §4.1). */
+  memoryPanel?: ReactNode
 }) {
   const maxVisibleEntities = 12
   const maxVisibleRelations = 16
-  const documentById = new Map(documents.map((document) => [document.id, document]))
   const entityById = new Map(entities.map((entity) => [entity.id, entity]))
+  const groups = groupKnowledgeReferences({ references, documents, run: selectedRun, artifacts })
+  const groupByDocumentId = new Map(groups.map((group) => [group.documentId, group]))
+  const focusedGroupDocumentId = focusedReferenceId
+    ? groups.find((group) => group.citations.some((citation) => citation.referenceId === focusedReferenceId))?.documentId
+    : undefined
+  const focusDocumentId = focusedDocumentId ?? focusedGroupDocumentId
+  const isFocusDocument = (documentId: string) =>
+    documentId === focusDocumentId || documentId === focusedGroupDocumentId
   const visibleDocuments = documents
     .filter((document) =>
-      document.id === focusedDocumentId ||
+      isFocusDocument(document.id) ||
       matchesQuery(query, [
         document.title,
         document.category,
@@ -60,7 +100,13 @@ export function KnowledgeView({
         ...document.tags,
       ]),
     )
-    .sort((left, right) => Number(right.id === focusedDocumentId) - Number(left.id === focusedDocumentId))
+    .sort((left, right) => Number(isFocusDocument(right.id)) - Number(isFocusDocument(left.id)))
+  // Cited documents that are not in the current index still appear once, after the indexed ones.
+  const unindexedGroups = groups.filter((group) =>
+    !group.document && (
+      isFocusDocument(group.documentId) ||
+      matchesQuery(query, [group.documentId, ...group.citations.map((citation) => citation.placeTitle)])
+    ))
   const directlyMatchedEntityIds = new Set(
     entities
       .filter((entity) => matchesQuery(query, [entity.label, entity.kind, entity.sourcePath]))
@@ -99,20 +145,72 @@ export function KnowledgeView({
     .slice(0, maxVisibleRelations)
   const graphSelectionTruncated =
     orderedEntityIds.length > visibleEntities.length || matchedRelations.length > visibleRelations.length
+  const indexCopy = describeKnowledgeIndex({ dataSource, documentCount: documents.length, indexedAt, isLoading })
+  const citedPlaceCount = groups.reduce((sum, group) => sum + group.citations.length, 0)
+
+  // Support context from the task page: the cited place is highlighted and scrolled into view.
+  const focusedReferenceRef = useRef<HTMLElement | null>(null)
+  const focusedDocumentRef = useRef<HTMLElement | null>(null)
+  useEffect(() => {
+    const target = focusedReferenceRef.current ?? focusedDocumentRef.current
+    target?.scrollIntoView?.({ block: 'nearest' })
+  }, [focusedReferenceId, focusDocumentId, focusedGroupDocumentId])
+
+  const renderCitation = (citation: KnowledgeCitation) => {
+    const isFocused = citation.referenceId === focusedReferenceId
+    return (
+      <article
+        className={`reference-row ${isFocused ? 'is-focused' : ''}`}
+        data-testid={isFocused ? 'focused-knowledge-reference' : 'knowledge-run-reference'}
+        key={citation.referenceId}
+        ref={isFocused ? focusedReferenceRef : undefined}
+      >
+        <span>{citation.placeKindLabel}</span>
+        <strong>{citation.placeTitle}</strong>
+        {citation.contextLabel || citation.otherTaskLabel ? (
+          <p>{[citation.otherTaskLabel, citation.contextLabel].filter(Boolean).join(' · ')}</p>
+        ) : null}
+        <div className="knowledge-reference-meta">
+          <span>{citation.relationLabel}</span>
+          <span>{citation.reviewStatusLabel}</span>
+          {citation.retrievalLabel ? <span>{citation.retrievalLabel}</span> : null}
+          {citation.sectionLabel ? <span>章节：{citation.sectionLabel}</span> : null}
+          <span>{citation.versionLabel}</span>
+          {citation.materialVersionLabel ? <span>{citation.materialVersionLabel}</span> : null}
+        </div>
+        <RawDetails details={citation.details} />
+      </article>
+    )
+  }
+
+  const renderCitations = (group: KnowledgeReferenceGroup | undefined) =>
+    group ? (
+      <section className="stack" aria-label={`引用「${group.title}」的位置`} data-testid="knowledge-citation-list">
+        <strong>当前任务中有 {group.citations.length} 处引用</strong>
+        {group.citations.map(renderCitation)}
+      </section>
+    ) : null
+
+  const bannerLabel = supportContext?.label ?? ''
+  const bannerSource = supportContext?.label.startsWith('搜索结果') ? '来自搜索结果' : '来自任务'
 
   return (
     <section className="page-grid" data-testid="knowledge-view">
       <div className="page-main">
         <div className="section-heading">
-          <span>Knowledge Governance</span>
-          <strong>Git Markdown Index</strong>
-          <span className={`pill ${dataSource.tone}`} data-testid="knowledge-data-source" title={dataSource.detail}>
-            {dataSource.label}
+          <span>知识治理</span>
+          <strong>仓库 Markdown 索引</strong>
+          <span
+            className={`pill ${dataSource.tone}`}
+            data-testid="knowledge-data-source"
+            title={`${dataSource.label} · ${dataSource.detail}`}
+          >
+            {indexCopy.badge}
           </span>
         </div>
-        <p className="empty-note knowledge-source-note">{dataSource.status} · {dataSource.detail}</p>
+        <p className="empty-note knowledge-source-note">{indexCopy.note}</p>
         <div className="compact-row" data-testid="knowledge-index-metadata">
-          <span>{indexedAt ? `indexed ${indexedAt}` : isLoading ? 'indexing repository knowledge' : 'not indexed'}</span>
+          <span title={indexedAt}>{indexCopy.indexedAtLabel}</span>
           <button
             aria-label="刷新仓库知识"
             className="ghost-button"
@@ -124,37 +222,44 @@ export function KnowledgeView({
             {isLoading ? '索引中' : '刷新索引'}
           </button>
         </div>
+        <RawDetails details={indexCopy.details} testId="knowledge-index-details" />
         {truncated || warnings.length > 0 ? (
           <div className="mini-card soft" data-testid="knowledge-index-warnings">
             <strong>{truncated ? '索引结果已截断' : '索引警告'}</strong>
-            {warnings.map((warning) => <code key={warning}>{warning}</code>)}
+            {warnings.map((warning) => (
+              <span key={warning} title={warning}>{knowledgeIndexWarningLabel(warning)}</span>
+            ))}
+            {warnings.length > 0 ? (
+              <RawDetails details={warnings.map((warning) => ({ label: '警告代码', value: warning }))} />
+            ) : null}
           </div>
         ) : null}
         {supportContext?.focusTarget === 'knowledge-reference' ? (
           <div className="support-context-banner" data-testid="support-context-banner">
             <div>
-              <span className="panel-label">来自 Workbench Inspector</span>
-              <strong>{supportContext.label}</strong>
-              <p>查看引用来源后可返回当前 Run / Node，继续处理 Gate 条件。</p>
+              <span className="panel-label">{bannerSource}</span>
+              <strong>{bannerLabel}</strong>
+              <p>查看引用来源后可以返回任务，继续处理当前步骤；返回不会改变任务进度。</p>
             </div>
             <button className="ghost-button" type="button" onClick={onReturnToInspector}>
               <ArrowLeft size={16} />
-              返回当前 Inspector
+              返回任务
             </button>
           </div>
         ) : null}
-        {visibleDocuments.length === 0 ? (
+        {visibleDocuments.length === 0 && unindexedGroups.length === 0 ? (
           <p className="empty-note">没有匹配的知识文档</p>
         ) : (
           <div className="knowledge-doc-list">
             {visibleDocuments.map((document) => (
               <article
-                className={`knowledge-doc-card ${document.id === focusedDocumentId ? 'is-focused' : ''}`}
-                data-testid={document.id === focusedDocumentId ? 'focused-knowledge-document' : undefined}
+                className={`knowledge-doc-card ${isFocusDocument(document.id) ? 'is-focused' : ''}`}
+                data-testid={isFocusDocument(document.id) ? 'focused-knowledge-document' : 'knowledge-document'}
                 key={document.id}
+                ref={document.id === focusDocumentId ? focusedDocumentRef : undefined}
               >
                 <div>
-                  <span>{document.category}</span>
+                  <span title={document.category}>{knowledgeCategoryLabel(document.category)}</span>
                   <strong>{document.title}</strong>
                 </div>
                 <p>{document.summary}</p>
@@ -164,14 +269,30 @@ export function KnowledgeView({
                     <span key={tag}>{tag}</span>
                   ))}
                 </div>
+                {renderCitations(groupByDocumentId.get(document.id))}
+              </article>
+            ))}
+            {unindexedGroups.map((group) => (
+              <article
+                className={`knowledge-doc-card ${isFocusDocument(group.documentId) ? 'is-focused' : ''}`}
+                data-testid={isFocusDocument(group.documentId) ? 'focused-knowledge-document' : 'knowledge-document'}
+                key={group.documentId}
+                ref={group.documentId === focusDocumentId ? focusedDocumentRef : undefined}
+              >
+                <div>
+                  <span>未索引</span>
+                  <strong>{group.title}</strong>
+                </div>
+                <p>引用记录仍然保留；刷新索引后如果文档仍存在，会显示完整信息。</p>
+                {renderCitations(group)}
               </article>
             ))}
           </div>
         )}
 
         <div className="section-heading section-heading--inline">
-          <span>Knowledge Graph</span>
-          <strong>轻量知识图谱</strong>
+          <span>知识图谱</span>
+          <strong>文档中的概念与关系</strong>
         </div>
         <div className="knowledge-map">
           {visibleEntities.length === 0 ? (
@@ -184,13 +305,14 @@ export function KnowledgeView({
                 data-testid="knowledge-graph-node"
               >
                 <strong>{entity.label}</strong>
-                <span>{entity.kind}</span>
+                <span title={entity.kind}>{knowledgeEntityKindLabel(entity.kind)}</span>
               </div>
             ))
           )}
           {visibleRelations.map((relation) => (
             <div className="relation-row" data-testid="knowledge-graph-relation" key={relation.id}>
-              {entityById.get(relation.source)?.label ?? relation.source} {relation.label}{' '}
+              {entityById.get(relation.source)?.label ?? relation.source}{' '}
+              <span title={relation.label}>{knowledgeRelationLabel(relation.label)}</span>{' '}
               {entityById.get(relation.target)?.label ?? relation.target}
             </div>
           ))}
@@ -200,56 +322,28 @@ export function KnowledgeView({
             </p>
           ) : null}
         </div>
+
+        {memoryPanel ? (
+          <section aria-labelledby="knowledge-memory-heading" data-testid="knowledge-memory-section">
+            <div className="section-heading section-heading--inline">
+              <span>记忆</span>
+              <strong id="knowledge-memory-heading">记忆管理</strong>
+            </div>
+            {memoryPanel}
+          </section>
+        ) : null}
       </div>
       <aside className="page-side">
-        <strong>Git + Markdown 真源</strong>
-        <p>知识库保留在项目仓库，平台只负责索引、图谱、检索和 Run 证据回链。</p>
-        <strong>Run references</strong>
-        <p>{selectedRun?.title ?? 'No selected Run'}</p>
+        <strong>知识来源</strong>
+        <p>知识文档保存在项目仓库的 Git Markdown 中；这里只负责索引、图谱和检索，并列出引用它们的任务位置。</p>
+        <strong>当前任务的引用</strong>
+        <p>{selectedRun?.title ?? '尚未选择任务'}</p>
         {references.length === 0 ? (
-          <p className="empty-note">当前 Run 尚未匹配到知识引用。</p>
+          <p className="empty-note">当前任务尚未匹配到知识引用。</p>
         ) : (
-          references.slice(0, 8).map((reference) => {
-            const document = documentById.get(reference.documentId)
-            const semantics = resolveKnowledgeReferenceSemantics(reference)
-
-            return (
-              <article
-                className={`reference-row ${reference.id === focusedReferenceId ? 'is-focused' : ''}`}
-                data-testid={reference.id === focusedReferenceId
-                  ? 'focused-knowledge-reference'
-                  : 'knowledge-run-reference'}
-                key={reference.id}
-              >
-                <span>{reference.targetType}</span>
-                <strong>{reference.relation}</strong>
-                <p>{document?.title ?? reference.documentId}</p>
-                <div className="knowledge-reference-meta">
-                  {reference.strategy ? <span>检索策略：{reference.strategy}</span> : null}
-                  {semantics.lexicalMatch ? (
-                    <span title="原始关键词累加分；无固定满分，不能跨查询比较。">
-                      关键词匹配分 {semantics.lexicalMatch.rawScore}
-                    </span>
-                  ) : null}
-                  {semantics.lexicalMatch?.matchedTerms.length ? (
-                    <span>命中词：{semantics.lexicalMatch.matchedTerms.join('、')}</span>
-                  ) : null}
-                  {semantics.semanticRelevance ? (
-                    <span>语义相关性：{semantics.semanticRelevance.score}</span>
-                  ) : (
-                    <span>未进行语义相关性判断</span>
-                  )}
-                  <span>Gate 状态：{semantics.gateEvidence.status}</span>
-                  {reference.headingPath ? <span>{reference.headingPath.join(' / ')}</span> : null}
-                </div>
-                <code>{reference.artifactId ?? reference.evidenceId ?? reference.nodeId ?? reference.runId}</code>
-                {reference.sourcePath ?? document?.sourcePath ? (
-                  <code>{reference.sourcePath ?? document?.sourcePath}</code>
-                ) : null}
-                {reference.contentHash ? <code>{reference.contentHash}</code> : null}
-              </article>
-            )
-          })
+          <p className="empty-note" data-testid="knowledge-reference-summary">
+            {groups.length} 份文档被引用 {citedPlaceCount} 处，引用位置列在各文档下方。
+          </p>
         )}
       </aside>
     </section>

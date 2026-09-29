@@ -21,7 +21,6 @@ import type * as React from 'react'
 import {
   buildClarificationReviewBundle,
   canRunCodingAgentOnNode,
-  formatUsd,
   projectKnowledgeReferencesForNode,
   resolveKnowledgeReferenceSemantics,
   type AgentEvent,
@@ -85,9 +84,9 @@ import {
 } from '../app/node-inspector-view-model'
 import { buildWorkflowGateImpact } from '../app/workflow-gate-impact'
 
-export { AgentWorkbenchView } from './AgentWorkbenchView'
+
 export { LocalProjectPanel, Metric, NavButton, ThemeToggle } from './ShellControls'
-export { McpView, SkillView, TestsView } from './SupportViews'
+export { McpView, SkillView } from './SupportViews'
 export { TeamOverview } from './TeamOverview'
 export { KnowledgeView } from './KnowledgeView'
 
@@ -116,7 +115,10 @@ export function AppNode({ data, selected }: NodeProps<Node<{ workflowNode: Workf
 }
 
 
+export type WorkflowBoardView = 'compact' | 'flow' | 'list'
+
 export function WorkflowBoard({
+  view: boardView = 'compact',
   run,
   artifacts,
   events,
@@ -126,6 +128,8 @@ export function WorkflowBoard({
   onSelectAttachment,
   onDiscuss,
 }: {
+  /** Chosen in the task menu (plan Y6); the stage row keeps only the six stage items. */
+  view?: WorkflowBoardView
   run: WorkflowRun
   artifacts: Artifact[]
   events: AgentEvent[]
@@ -135,7 +139,6 @@ export function WorkflowBoard({
   onSelectAttachment: (nodeId: string, tab: string) => void
   onDiscuss?: (node: WorkflowNode) => void
 }) {
-  const [boardView, setBoardView] = useState<'compact' | 'flow' | 'list'>('compact')
   const [subStepsOpen, setSubStepsOpen] = useState(false)
   const board = useMemo(
     () => buildWorkflowBoard({ run, artifacts, events, testEvidence }),
@@ -156,37 +159,37 @@ export function WorkflowBoard({
       <div className="workflow-stage-bar">
       <div className="workflow-navigation-scroll" tabIndex={0} aria-label="浏览流程导航">
       <nav className="workflow-stage-navigation" aria-label="六阶段导航" data-testid="stage-navigation">
-        {board.map((stage, index) => <div className="workflow-stage-step" key={stage.stage}>
+        {board.map((stage, index) => {
+          // The browsed stage item is also the sub-step disclosure (plan §5.1, Y6): no separate button.
+          const togglesSubSteps = boardView === 'compact' && browsingStage === stage.stage
+          return <div className="workflow-stage-step" key={stage.stage}>
           <button className={`stage-nav--${stage.completionState}`} data-testid="stage-item" aria-current={currentNode?.stage === stage.stage ? 'step' : undefined}
-            aria-pressed={browsingStage === stage.stage} aria-controls={`${boardView === 'compact' ? 'workflow-stage-nodes' : `workflow-stage-${stage.stage}`} workbench-node-reader`} disabled={!stage.cards.length}
-            title={`${stage.label}：${stage.completionLabel}，${stage.completedNodeCount}/${stage.cards.length} 个子步骤已完成；点击查看本阶段`}
+            aria-pressed={browsingStage === stage.stage} aria-expanded={togglesSubSteps ? subStepsOpen : undefined}
+            aria-controls={`${boardView === 'compact' ? 'workflow-stage-nodes' : `workflow-stage-${stage.stage}`} workbench-node-reader`} disabled={!stage.cards.length}
+            title={`${stage.label}：${stage.completionLabel}，${stage.completedNodeCount}/${stage.cards.length} 个子步骤已完成；${togglesSubSteps ? (subStepsOpen ? '点击收起子步骤' : '点击展开子步骤') : '点击查看本阶段'}`}
             onClick={() => {
+              if (togglesSubSteps) {
+                setSubStepsOpen(!subStepsOpen)
+                return
+              }
               const target = stage.cards.find((card) => card.node.id === run.currentNodeId) ?? stage.cards[0]
               if (target) onSelectNode(target.node.id)
             }}>
             <span className="stage-nav-index">{stage.index}</span><strong>{stage.label}</strong>
             {/* Sub-steps are folded into the stage item (plan L2): count on the actual stage, state elsewhere. */}
-            <small>{currentNode?.stage === stage.stage && stage.completionState === 'current' ? `${stage.completedNodeCount}/${stage.cards.length}` : stage.completionLabel}</small>
+            <small>
+              {currentNode?.stage === stage.stage && stage.completionState === 'current' ? `${stage.completedNodeCount}/${stage.cards.length}` : stage.completionLabel}
+              {togglesSubSteps ? <ChevronDown size={12} aria-hidden="true" className={`stage-substeps-chevron ${subStepsOpen ? 'expanded' : ''}`} /> : null}
+            </small>
           </button>
           {index < board.length - 1 && <div className="stage-progress-link" role="progressbar" aria-label={`${stage.label}阶段进度`}
             aria-valuemin={0} aria-valuemax={100} aria-valuenow={stage.progressPercent}
             aria-valuetext={`${stage.completedNodeCount}/${stage.cards.length} 个节点已完成${currentNode?.stage === stage.stage ? `，当前：${displayNodeTitle(currentNode)}` : ''}`}>
             <span style={{ width: `${stage.progressPercent}%` }} />
           </div>}
-        </div>)}
-      </nav>
-      </div>
-      <div className="workflow-head-tools">
-        {boardView === 'compact' && (
-          <button type="button" className="stage-substeps-toggle" aria-expanded={subStepsOpen} aria-controls="workflow-stage-nodes" onClick={() => setSubStepsOpen(!subStepsOpen)}>
-            {subStepsOpen ? '收起子步骤' : '子步骤'}<ChevronDown size={14} aria-hidden="true" className={subStepsOpen ? 'expanded' : ''} />
-          </button>
-        )}
-        <div className="workflow-view-switch" role="group" aria-label="看板展示方式">
-          <button aria-pressed={boardView === 'compact'} onClick={() => setBoardView('compact')}>精简导航</button>
-          <button aria-pressed={boardView === 'flow'} onClick={() => setBoardView('flow')}>流程视图</button>
-          <button aria-pressed={boardView === 'list'} onClick={() => setBoardView('list')}>列表视图</button>
         </div>
+        })}
+      </nav>
       </div>
       </div>
       {boardView === 'compact' && <div id="workflow-stage-nodes" className="workflow-node-navigation" role="region" aria-label="当前查看阶段的节点" hidden={!subStepsOpen}>
@@ -389,7 +392,13 @@ export function Inspector({
   upstreamCodingDiffReady,
   onCancelCodingRun,
   onReplyCodingPermission,
+  codingRecords,
+  executionEvidence,
 }: {
+  /** Coding Run evidence for the build step's 执行记录 (plan Y3). */
+  codingRecords?: React.ReactNode
+  /** Remaining execution evidence groups, folded at the end of 执行记录 (plan Y3). */
+  executionEvidence?: React.ReactNode
   onCancelCodingRun?: (() => void) | undefined
   onReplyCodingPermission?: ((decision: 'approved' | 'rejected') => void) | undefined
   modelReadinessError?: string | undefined
@@ -438,7 +447,7 @@ export function Inspector({
   reviewRunBlockedReason?: string | undefined
   onRunTests: () => void
   testRunReadiness: TestRunReadiness
-  /** Settings live on other pages until S3; the reading position is kept for the return (W9). */
+  /** Opens the matching settings section; the reading position is kept for the return (W9, Y1). */
   onOpenSettings: (target: 'coding' | 'tests' | 'models', position: InspectorReadingPosition | null) => void
   readingPositionRef?: React.MutableRefObject<(() => InspectorReadingPosition | null) | null> | undefined
   onOpenKnowledgeReference: (referenceId: string, documentId?: string) => void
@@ -1225,7 +1234,8 @@ export function Inspector({
 
   const renderTrace = () => (
     <div className="event-list" data-testid="node-trace">
-      {codingActionProjection?.terminal && <section><h3>开发执行详情</h3><p>执行器 {codingActionProjection.terminal.providerId} · 用量 {codingActionProjection.terminal.totalTokens ?? '未提供'} · 费用 {typeof codingActionProjection.terminal.costUsd === 'number' ? formatUsd(codingActionProjection.terminal.costUsd) : '未提供'} · 工作区清理 {codingActionProjection.terminal.workspaceCleanupStatus}</p><ol aria-label="Coding Run terminal trace">{codingActionProjection.terminal.trace.map((event) => <li key={event.id}><span>{event.kind}</span> · {event.message}</li>)}</ol></section>}
+      {/* Coding Run evidence moved here from the Agents page (plan Y3); the diff stays in 当前工作. */}
+      {codingRecords}
       {testEvidence.filter((evidence) => evidence.runId === selectedRun?.id && evidence.nodeId === selectedNode.id).map((evidence) => <details key={evidence.id}><summary>测试日志 · {evidence.command} · {evidence.status}</summary><p>{evidence.id} · 退出码 {evidence.exitCode ?? '未提供'}</p><h4>标准输出</h4><pre>{evidence.stdout || '未提供输出'}</pre><h4>错误输出</h4><pre>{evidence.stderr || '未提供错误输出'}</pre></details>)}
       <span className="panel-label">当前节点轨迹 · {events.length}</span>
       {events.length === 0 ? (
@@ -1242,6 +1252,7 @@ export function Inspector({
           </div>
         ))
       )}
+      {executionEvidence}
     </div>
   )
 
@@ -1302,7 +1313,7 @@ export function Inspector({
   })
   const renderDeliveryHandoff = () => (
     <div className="handoff-bundle" data-testid="delivery-handoff">
-      <span className="panel-label">Delivery Handoff</span>
+      <span className="panel-label">交付交接</span>
       <GitHubDeliveryPanel
         intent={selectedGitHubDeliveryIntent}
         {...(selectedGitHubDeliveryOperatorOutcome
@@ -1316,29 +1327,29 @@ export function Inspector({
       />
       <article className="mini-card">
         <div className="compact-row">
-          <strong>PR Delivery Package</strong>
-          <span className="pill soft">{handoffPrPackage ? 'ready' : 'pending'}</span>
+          <strong>PR 交付包</strong>
+          <span className="pill soft">{handoffPrPackage ? '已生成' : '尚未生成'}</span>
         </div>
-        <p className="meta">汇总 diff、tests、policy、budget、review，作为 PR Delivery Gate 的交付摘要。</p>
+        <p className="meta">汇总差异、测试、策略、预算与审查，作为 PR 交付 Gate 的交付摘要。</p>
       </article>
       <article className="mini-card">
         <div className="compact-row">
-          <strong>Acceptance Bundle</strong>
-          <span className="pill soft">{artifacts.some((artifact) => artifact.kind === 'acceptance') ? 'ready' : 'pending'}</span>
+          <strong>验收材料包</strong>
+          <span className="pill soft">{artifacts.some((artifact) => artifact.kind === 'acceptance') ? '已生成' : '尚未生成'}</span>
         </div>
-        <p className="meta">把 request、PR、policy、budget、review、Evidence chain 和 Trace 汇总给业务验收。</p>
+        <p className="meta">汇总需求、PR、策略、预算、审查、证据链与执行记录，供业务验收。</p>
       </article>
       <div className="handoff-counts">
-        <span><strong>{artifacts.length}</strong> artifacts</span>
-        <span><strong>{events.length}</strong> trace events</span>
-        <span><strong>{governanceChecks.length}</strong> governance checks</span>
+        <span><strong>{artifacts.length}</strong> 份材料</span>
+        <span><strong>{events.length}</strong> 条执行记录</span>
+        <span><strong>{governanceChecks.length}</strong> 项规范检查</span>
       </div>
     </div>
   )
 
   const renderGateImpactSummary = () => (
     <div className="gate-impact-summary" data-testid="gate-impact-summary">
-      <span className="panel-label">Gate 影响</span>
+      <span className="panel-label">对后续 Gate 的影响</span>
       {gateImpact.state === 'none' ? (
         <p className="empty-note">{gateImpact.summary}</p>
       ) : (
@@ -1356,7 +1367,7 @@ export function Inspector({
             </div>
           </div>
           <div className="gate-impact-artifacts">
-            <strong>已向 Gate 提供的产物</strong>
+            <strong>已提供给该 Gate 的材料</strong>
             {gateImpact.linkedArtifacts.length ? (
               <ul>
                 {gateImpact.linkedArtifacts.map((artifact) => (
@@ -1369,12 +1380,12 @@ export function Inspector({
             ) : (
               <p className="meta">
                 {gateImpact.providedArtifactCount === 0
-                  ? '当前 Task 尚未生成产物。'
-                  : '当前 Task 的产物尚未关联到该 Gate。'}
+                  ? '当前步骤尚未生成材料。'
+                  : '当前步骤的材料尚未关联到该 Gate。'}
               </p>
             )}
             {gateImpact.unconsumedArtifactCount > 0 ? (
-              <p className="meta">另有 {gateImpact.unconsumedArtifactCount} 个 Task 产物尚未被该 Gate 关联。</p>
+              <p className="meta">另有 {gateImpact.unconsumedArtifactCount} 份本步骤材料尚未关联到该 Gate。</p>
             ) : null}
           </div>
           <button
@@ -1383,9 +1394,9 @@ export function Inspector({
             data-testid="open-downstream-gate"
             onClick={() => onSelectWorkflowNode(gateImpact.gateId)}
           >
-            查看 Gate
+            查看该 Gate
           </button>
-          <p className="meta">此处只展示前向影响；审批和 Override 仍只能在 Gate Inspector 中执行。</p>
+          <p className="meta">这里只说明对后续 Gate 的影响；审批与例外处理在该 Gate 步骤中进行。</p>
         </article>
       )}
     </div>
@@ -1653,7 +1664,7 @@ export function Inspector({
         {viewModel.tabs.map((tab, index) => <button key={tab.tabId} id={`workspace-tab-${index}`} role="tab" aria-controls="workspace-content" tabIndex={tab.tabId === viewModel.activeTab.tabId ? 0 : -1} aria-selected={tab.tabId === viewModel.activeTab.tabId} className={`tab ${tab.tabId === viewModel.activeTab.tabId ? 'active' : ''}`} onClick={() => setRequestedTab(tab.tabId)}>{tab.label}</button>)}
       </div>
       <div className="inspector-document-scroll" id="workspace-content" data-testid="workspace-tabpanel" role="tabpanel" ref={tabPanelRef} aria-labelledby={`workspace-tab-${viewModel.tabs.indexOf(viewModel.activeTab)}`}>
-      {modelReadinessError && primaryNextAction && ['completeAgent','runCodingAgent'].includes(primaryNextAction.id) && <p role="status">{modelReadinessError}<button className="text-button" onClick={() => openSettings('models')}>打开项目基础设置</button></p>}
+      {modelReadinessError && primaryNextAction && ['completeAgent','runCodingAgent'].includes(primaryNextAction.id) && <p role="status">{modelReadinessError}<button className="text-button" onClick={() => openSettings('models')}>打开模型与执行方式设置</button></p>}
       {viewModel.activeTab.sections.map((sectionId) => <Fragment key={sectionId}>{sectionRenderers[sectionId]()}</Fragment>)}
       </div>
       {retryDialog && codingActionProjection?.action.id === 'retry' ? (
