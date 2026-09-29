@@ -268,3 +268,9 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 .material-card-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 4px 0; }
 .material-group + .material-group { margin-top: 16px; }
 .material-group-title { margin: 12px 0 6px; font-size: var(--font-size-xs); color: var(--text-muted); font-weight: 600; }
+
+/* S5 Q7: the Team budget is read-only on the desktop and edited on the Web. */
+.runtime-budget-summary { display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; margin: 8px 0; }
+.runtime-budget-summary div { display: contents; }
+.runtime-budget-summary dt { color: var(--text-muted); }
+.runtime-budget-summary dd { margin: 0; }

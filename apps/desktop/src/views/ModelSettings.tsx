@@ -105,8 +105,6 @@ export function ModelSettings({
   const effectiveOpenCodeProviderId = customOpenCodeProvider ? opencodeProviderId.trim() : savedOpenCodeProvider?.id ?? ''
   const effectiveOpenCodeModelId = customOpenCodeProvider ? opencodeModelId.trim() : savedOpenCodeProvider?.model ?? ''
   const budgetPolicy = projectRuntimeBudget.policy
-  const [monthlyLimitUsd, setMonthlyLimitUsd] = useState('0.20')
-  const [warningThresholdUsd, setWarningThresholdUsd] = useState('0.10')
   const [codingConfigurationStatus, setCodingConfigurationStatus] = useState('')
   const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
   const runtimeSettingsRef = useRef<HTMLDetailsElement>(null)
@@ -153,11 +151,6 @@ export function ModelSettings({
       setCustomOpenCodeProvider(false)
     }
   }, [codingConfiguration, providers, selectedProviderId])
-
-  useEffect(() => {
-    setMonthlyLimitUsd(budgetPolicy ? String(budgetPolicy.monthlyLimitUsd) : '0.20')
-    setWarningThresholdUsd(budgetPolicy ? String(budgetPolicy.warningThresholdUsd) : '0.10')
-  }, [budgetPolicy])
 
   useEffect(() => {
     if (!codingProviderId && selectedProviderId) setCodingProviderId(selectedProviderId)
@@ -234,28 +227,6 @@ export function ModelSettings({
     }
   }
 
-  async function saveBudgetPolicy() {
-    if (!desktopApi || !localProjectId) return
-    const monthly = Number(monthlyLimitUsd)
-    const warning = Number(warningThresholdUsd)
-    setIsSavingCodingConfiguration(true)
-    setCodingConfigurationStatus('正在保存项目预算…')
-    try {
-      const saved = await projectRuntimeBudget.save({
-        enabled: true,
-        monthlyLimitUsd: monthly,
-        warningThresholdUsd: warning,
-      })
-      setCodingConfigurationStatus(`预算已保存：${formatUsd(saved.monthlyLimitUsd)} / 月`)
-      onSettingsSaved?.()
-      await projectRuntimeBudget.refresh()
-    } catch (error) {
-      setCodingConfigurationStatus(error instanceof Error ? error.message : '保存云端预算失败')
-    } finally {
-      setIsSavingCodingConfiguration(false)
-    }
-  }
-
   async function approveOverBudgetOnce() {
     if (!desktopApi || !localProjectId) return
     setIsSavingCodingConfiguration(true)
@@ -300,17 +271,21 @@ export function ModelSettings({
               <span>云端团队预算</span>
               <strong>{projectRuntimeBudget.label}</strong>
             </div>
-            <p>作用于整个团队项目的月度美元预算，保存与一次性批准都需要 Owner 或 Lead 权限；不会更改 API Key。</p>
+            <p>作用于整个团队项目的月度美元预算；一次性批准需要 Owner 或 Lead 权限，不会更改 API Key。</p>
             <p>聊天、澄清、设计、审查和编码的每次模型请求都会重新检查。预估用于预警和准入，实际用量按返回记录；未知费用需核对。</p>
-            <p>策略更新时间：{projectRuntimeBudget.policy?.updatedAt ?? '尚未同步'} · 周期：UTC 自然月 · 超限：需额外批准。</p>
+            <dl className="runtime-budget-summary" data-testid="runtime-budget-summary">
+              <div><dt>月上限</dt><dd>{budgetPolicy ? `${formatUsd(budgetPolicy.monthlyLimitUsd)} / 月` : '尚未配置'}</dd></div>
+              <div><dt>预警阈值</dt><dd>{budgetPolicy ? formatUsd(budgetPolicy.warningThresholdUsd) : '尚未配置'}</dd></div>
+              <div><dt>策略更新时间</dt><dd>{budgetPolicy?.updatedAt ?? '尚未同步'}</dd></div>
+            </dl>
+            <p className="meta">周期：UTC 自然月 · 超限：需额外批准。</p>
+            {/* Team budget is a team-side setting: it is edited on the Web (plan S5, Q7; 4.3 节). */}
+            <p data-testid="runtime-budget-web-location">修改月上限与预警阈值：在 Web 控制端打开「设置 › 预算」，选择当前连接的团队项目。保存后回到这里点「同步云端预算策略」读取。</p>
             <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>同步云端预算策略</button>
             {modelBudget && <p role="status">最近一次模型预算检查：{modelBudget.decision.reason}</p>}
             {codingConfigurationStatus ? <p role="status">{codingConfigurationStatus}</p> : null}
             {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
             {projectRuntimeBudget.status === 'unavailable' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>重试读取预算</button> : null}
-            <label>月上限（USD）<input aria-label="项目月预算" inputMode="decimal" value={monthlyLimitUsd} onChange={(event) => setMonthlyLimitUsd(event.target.value)} /></label>
-            <label>预警阈值（USD）<input aria-label="项目预算预警" inputMode="decimal" value={warningThresholdUsd} onChange={(event) => setWarningThresholdUsd(event.target.value)} /></label>
-            <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={saveBudgetPolicy}><Save size={16} />保存团队项目预算</button>
             {requiresLeadApproval ? (
               <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
             ) : null}

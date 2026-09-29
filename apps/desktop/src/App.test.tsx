@@ -7254,26 +7254,29 @@ describe('App', () => {
     expect(api.runCodingAgent).not.toHaveBeenCalled()
   })
 
-  it('updates the global Team budget after saving before any Coding Run and restores it on reload', async () => {
+  it('shows the Team budget read-only, points to Web settings, and picks up a Web change after sync (plan S5, Q7)', async () => {
     const api = installDesktopApi({ getCodingRuntimeBudgetPolicy:vi.fn().mockResolvedValue(null), loadState: vi.fn().mockResolvedValue({
       ...localStateAtCurrentNode('n-design-gate'), codingRuns: [],
     }) })
-    vi.mocked(api.saveCodingRuntimeBudgetPolicy).mockImplementation(async(input)=>{ const saved={...input,currency:'USD' as const,updatedAt:new Date().toISOString()};vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(saved);return saved })
     const view = render(<App />)
     const status = await within(await openTaskUsageWhenReady()).findByTestId('runtime-budget-status')
     await waitFor(() => expect(status).toHaveTextContent('未配置'))
     expect(status).toHaveTextContent('尚未执行')
     openSettingsSection('模型与执行方式')
-    fireEvent.change(await screen.findByLabelText('项目月预算'), { target: { value: '1' } })
-    fireEvent.change(screen.getByLabelText('项目预算预警'), { target: { value: '0.5' } })
-    fireEvent.click(screen.getByRole('button', { name: '保存团队项目预算' }))
-    await waitFor(() => expect(api.saveCodingRuntimeBudgetPolicy).toHaveBeenCalled())
+    const summary = await screen.findByTestId('runtime-budget-summary')
+    expect(summary).toHaveTextContent('月上限尚未配置')
+    expect(screen.getByTestId('runtime-budget-web-location')).toHaveTextContent('在 Web 控制端打开「设置 › 预算」')
+    // The desktop no longer edits the Team budget; the old form and its write are gone.
+    expect(screen.queryByLabelText('项目月预算')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '保存团队项目预算' })).not.toBeInTheDocument()
+    const changedOnWeb = { projectId: localProject.id, enabled: true, monthlyLimitUsd: 1, warningThresholdUsd: 0.5, currency: 'USD' as const, updatedAt: '2026-09-28T12:00:00.000Z' }
+    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(changedOnWeb)
+    fireEvent.click(screen.getByRole('button', { name: '同步云端预算策略' }))
+    await waitFor(() => expect(screen.getByTestId('runtime-budget-summary')).toHaveTextContent('月上限$1.00 / 月'))
+    expect(api.saveCodingRuntimeBudgetPolicy).not.toHaveBeenCalled()
     clickPrimaryNav('任务')
     await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))
-    expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).not.toHaveTextContent('not loaded')
     expect(api.runCodingAgent).not.toHaveBeenCalled()
-    const saved = await vi.mocked(api.saveCodingRuntimeBudgetPolicy).mock.results[0]!.value
-    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(saved)
     view.unmount()
     render(<App />)
     await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))
