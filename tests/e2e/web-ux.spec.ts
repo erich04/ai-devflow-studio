@@ -32,7 +32,15 @@ test.describe('Web UX in the isolated seed API', () => {
         },
       }))
       await page.setViewportSize({ width, height: 936 })
+      // Plan S5, Q2: a selected project opens 我的待办; management is not on the first screen.
       await page.goto(`${webUrl}/?projectId=${projectId}`)
+      await expect(page.getByRole('heading', { level: 1, name: '我的待办' })).toBeVisible()
+      await expect(page.getByText(/团队数据读取于 .* UTC/)).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Create desktop pairing code' })).toHaveCount(0)
+      expect(await page.locator('html').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
+
+      // Pairing lives in settings (plan S5, Q6).
+      await page.goto(`${webUrl}/?projectId=${projectId}&view=settings&section=desktop`)
       await page.getByRole('button', { name: 'Create desktop pairing code' }).click()
       const code = page.getByLabel(`Desktop pairing code for ${projectId}`)
       await expect(code).toBeVisible()
@@ -42,23 +50,32 @@ test.describe('Web UX in the isolated seed API', () => {
       expect(codeBounds.width).toBeGreaterThanOrEqual(200)
       expect(copyBounds.y).toBeGreaterThanOrEqual(codeBounds.y + codeBounds.height)
       expect(await page.locator('html').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
+      for (const theme of ['light', 'dark']) {
+        await page.getByRole('combobox', { name: '颜色主题' }).selectOption(theme)
+        await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
+        await testInfo.attach(`${width}-${theme}-pairing`, { body: await page.locator('.pairing-code-panel').screenshot(), contentType: 'image/png' })
+      }
+      await page.getByRole('button', { name: '撤销配对码' }).click()
+      await expect(code).toHaveCount(0)
 
+      // Team requests and tasks share one column in 项目任务.
+      await page.goto(`${webUrl}/?projectId=${projectId}&view=tasks`)
       for (const theme of ['light', 'dark']) {
         await page.getByRole('combobox', { name: '颜色主题' }).selectOption(theme)
         await expect(page.locator('html')).toHaveAttribute('data-theme', theme)
         const work = page.getByRole('region', { name: 'Work Requests', exact: true })
-        const delivery = page.getByRole('region', { name: 'GitHub Delivery', exact: true })
+        const tasks = page.getByRole('region', { name: '开发任务', exact: true })
         const workBounds = (await work.boundingBox())!
-        const deliveryBounds = (await delivery.boundingBox())!
-        expect(Math.abs(workBounds.x - deliveryBounds.x)).toBeLessThan(1)
-        expect(Math.abs(workBounds.width - deliveryBounds.width)).toBeLessThan(1)
+        const taskBounds = (await tasks.boundingBox())!
+        expect(Math.abs(workBounds.x - taskBounds.x)).toBeLessThan(1)
+        expect(Math.abs(workBounds.width - taskBounds.width)).toBeLessThan(1)
         expect(workBounds.width).toBeLessThanOrEqual(1320)
         const emptyBounds = (await page.getByText('当前项目还没有工作请求。', { exact: true }).boundingBox())!
         const submitBounds = (await page.getByRole('button', { name: 'Create Work Request', exact: true }).boundingBox())!
         expect(emptyBounds.y).toBeGreaterThanOrEqual(submitBounds.y + submitBounds.height)
         expect(Math.abs(emptyBounds.x - submitBounds.x)).toBeLessThan(1)
+        expect(await page.locator('html').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
         await testInfo.attach(`${width}-${theme}-empty`, { body: await work.screenshot(), contentType: 'image/png' })
-        await testInfo.attach(`${width}-${theme}-pairing`, { body: await page.locator('.pairing-code-panel').screenshot(), contentType: 'image/png' })
       }
 
       await page.getByRole('textbox', { name: 'Work Request title' }).fill('Update the README heading')
@@ -73,8 +90,6 @@ test.describe('Web UX in the isolated seed API', () => {
         expect(await page.locator('html').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
         await testInfo.attach(`${width}-${theme}-populated`, { body: await work.screenshot(), contentType: 'image/png' })
       }
-      await page.getByRole('button', { name: '撤销配对码' }).click()
-      await expect(code).toHaveCount(0)
     })
   }
 
@@ -91,7 +106,7 @@ test.describe('Web UX in the isolated seed API', () => {
     expect(await surface()).toBe(dark)
     await page.reload()
     await expect(page.getByRole('combobox', { name: '颜色主题' })).toHaveValue('dark')
-    await page.getByRole('link', { name: '团队总览', exact: true }).click()
+    await page.getByRole('link', { name: '团队', exact: true }).click()
     await expect(page.getByRole('combobox', { name: '颜色主题' })).toHaveValue('dark')
     await page.getByRole('button', { name: '退出登录' }).click()
     await expect(page).toHaveURL(`${webUrl}/`)
@@ -114,9 +129,13 @@ test.describe('Web UX in the isolated seed API', () => {
     await page.reload()
     await expect(policy.locator('time')).toHaveAttribute('datetime', confirmed!)
     await expect(policy.getByLabel('规则 1 动作', { exact: true })).toHaveValue('block')
-    await page.getByRole('link', { name: '工作台', exact: true }).click()
-    await expect(page.locator('#policy')).toContainText('Recommended enforcement preset')
-    await expect(page.locator('#policy')).toContainText('v2')
+    // Navigating away and back reads the saved snapshot again (the task page summary is covered by page tests).
+    await page.getByRole('link', { name: '我的待办', exact: true }).click()
+    await expect(page.getByRole('heading', { level: 1, name: '我的待办' })).toBeVisible()
+    await page.getByRole('link', { name: '设置', exact: true }).click()
+    await page.getByRole('link', { name: '策略', exact: true }).click()
+    await expect(page.locator('#team-policy')).toContainText('v2')
+    await expect(page.locator('#team-policy').getByLabel('规则 1 动作', { exact: true })).toHaveValue('block')
   })
 
   for (const width of [1440, 760, 390]) {
@@ -144,15 +163,18 @@ test.describe('Web UX in the isolated seed API', () => {
       }
       await dialog.getByRole('button', { name: 'Create project', exact: true }).click()
       await expect(page).toHaveURL(`${webUrl}/?projectId=p-${slug}`)
-      await expect(page.getByRole('region', { name: `Desktop pairing for Studio ${width}` })).toBeVisible()
-      await expect(page.getByRole('region', { name: 'GitHub Delivery', exact: true })).toBeVisible()
+      await expect(page.getByRole('heading', { level: 1, name: '我的待办' })).toBeVisible()
+      await page.getByRole('link', { name: '项目任务', exact: true }).click()
+      await expect(page).toHaveURL(`${webUrl}/?projectId=p-${slug}&view=tasks`)
+      await page.waitForLoadState('load')
+      await expect(page.getByRole('heading', { level: 1, name: '项目任务' })).toBeVisible()
       await page.getByLabel('Work Request title').fill('Change the README heading')
       await page.getByLabel('Work Request details').fill('Change the README heading to Mini Agent Ready and preserve the remaining content.')
       await page.getByRole('button', { name: 'Create Work Request', exact: true }).click()
       await expect(page.getByText('Work Request created. A paired Desktop can now claim it.')).toBeVisible()
       await page.getByRole('link', { name: '设置', exact: true }).click()
       await expect(page.getByRole('heading', { name: `项目预算 · Studio ${width}` })).toBeVisible()
-      await page.getByRole('link', { name: 'Policy', exact: true }).click()
+      await page.getByRole('link', { name: '策略', exact: true }).click()
       const policy = page.locator('#team-policy')
       await expect(policy.getByRole('table').locator('tbody tr')).toHaveCount(10)
       for (const theme of ['light', 'dark']) {
@@ -160,8 +182,11 @@ test.describe('Web UX in the isolated seed API', () => {
         expect(await page.locator('html').evaluate((element) => element.scrollWidth <= window.innerWidth)).toBe(true)
         await testInfo.attach(`policy-${width}-${theme}`, { body: await policy.screenshot(), contentType: 'image/png' })
       }
+      await page.getByRole('link', { name: '桌面连接', exact: true }).click()
+      await expect(page.getByRole('heading', { name: `桌面连接 · Studio ${width}` })).toBeVisible()
+      await expect(page.getByRole('button', { name: 'Create desktop pairing code' })).toBeVisible()
       await page.reload()
-      await expect(page.getByRole('navigation', { name: 'Select project' }).getByRole('link', { name: new RegExp(`Studio ${width}`) })).toHaveAttribute('aria-current', 'page')
+      await expect(page.getByRole('navigation', { name: '选择项目' }).getByRole('link', { name: new RegExp(`Studio ${width}`) })).toHaveAttribute('aria-current', 'page')
     })
   }
 

@@ -1446,14 +1446,18 @@ try {
   const browser = await chromium.launch()
   try {
     const webPage = await browser.newPage()
+    // Plan S5, Q1: projectId + runId opens the synced task detail directly.
+    const webTaskUrl = new URL(webServerUrl)
+    webTaskUrl.searchParams.set('projectId', syncedRun.projectId)
+    webTaskUrl.searchParams.set('runId', localRun.id)
     await expect
       .poll(async () => {
-        await webPage.goto(webServerUrl)
+        await webPage.goto(webTaskUrl.toString())
         return (await webPage.locator('body').textContent()) ?? ''
       }, { timeout: 20_000 })
-      .toContain('Payments API')
-    await expect(webPage.getByText('Evidence Chain').first()).toBeVisible()
-    await expect(webPage.getByText('Human Gate').first()).toBeVisible()
+      .toContain('重构 GitHub webhook 重试策略')
+    await expect(webPage.getByRole('region', { name: '进度与材料' })).toBeVisible()
+    await expect(webPage.getByRole('region', { name: '审批', exact: true })).toBeVisible()
     await expect(webPage.locator('body')).not.toContainText(repoDir)
     await expect(webPage.locator('body')).not.toContainText('smoke passed')
   } finally {

@@ -96,6 +96,10 @@ try {
   }
   await dialog.getByRole('button', { name: 'Create project', exact: true }).click()
   await expect(page).toHaveURL(`${webUrl}/?projectId=p-studio-cold-start`)
+  // Team requests live in 项目任务, pairing in 设置 › 桌面连接 (plan S5, Q1/Q6).
+  await page.getByRole('link', { name: '项目任务', exact: true }).click()
+  await expect(page).toHaveURL(`${webUrl}/?projectId=p-studio-cold-start&view=tasks`)
+  await page.waitForLoadState('load')
   await page.getByLabel('Work Request title').fill('Update the README heading')
   await page.getByLabel('Work Request details').fill('Change the README heading to Mini Agent Ready, preserving all other content.')
   await page.getByRole('button', { name: 'Create Work Request', exact: true }).click()
@@ -105,6 +109,7 @@ try {
   expect((await db.query("SELECT id FROM projects WHERE id = 'p-studio-cold-start'")).rowCount).toBe(1)
 
   // The copy-once pairing code stays in this process and the normal Electron IPC call.
+  await page.goto(`${webUrl}/?projectId=p-studio-cold-start&view=settings&section=desktop`)
   await page.getByRole('button', { name: 'Create desktop pairing code' }).click()
   const code = await page.getByLabel('Desktop pairing code for p-studio-cold-start').innerText()
   const repo = path.join(temporary, 'mini-agent')
@@ -143,7 +148,7 @@ try {
   expect(binding.initialStatus).toBe('warn')
   // Navigate away before any more screenshots so the one-time code is never captured.
   await page.getByRole('link', { name: '设置', exact: true }).click()
-  await page.getByRole('link', { name: 'Policy', exact: true }).click()
+  await page.getByRole('link', { name: '策略', exact: true }).click()
   const policy = page.locator('#team-policy')
   await expect(policy).toContainText('默认回退 · 尚未保存到 Team')
   await policy.getByRole('button', { name: '使用 Recommended 预设' }).click()

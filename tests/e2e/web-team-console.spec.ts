@@ -85,9 +85,11 @@ test.describe('AI DevFlow web team console', () => {
     selectedRunUrl.searchParams.set('runId', runId)
     await page.goto(selectedRunUrl.toString())
 
-    await expect(page.getByText('Evidence Chain').first()).toBeVisible()
-    await expect(page.getByText('Human Gate').first()).toBeVisible()
-    await expect(page.getByText('Test Evidence')).toBeVisible()
+    // Plan S5, Q3: the task detail sections are named in Chinese.
+    await expect(page.getByRole('region', { name: '进度与材料' })).toBeVisible()
+    await expect(page.getByRole('region', { name: '审批', exact: true })).toContainText('当前没有待审批的步骤')
+    await expect(page.getByRole('region', { name: '测试证据' })).toBeVisible()
+    await expect(page.getByRole('region', { name: '门禁审查' })).toContainText(reviewSummary)
     await expect(page.getByRole('heading', { name: runTitle, exact: true })).toBeVisible()
     await expect(page.getByText(evidenceSummary)).toBeVisible()
     await expect(page.locator('body')).toContainText(reviewSummary)
