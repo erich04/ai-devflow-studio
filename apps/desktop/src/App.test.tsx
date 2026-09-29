@@ -1312,8 +1312,11 @@ async function waitForLocalStateLoaded(
   })
 }
 
+/** Gate approval labels name the approval subject (plan D1): 确认需求 vN, 确认方案, or 通过 Gate. */
+const gateApprovalName = /通过 Gate|确认方案|确认需求/
+
 async function clickGateApproval() {
-  const button = await screen.findByRole('button', { name: /通过 Gate/ })
+  const button = await screen.findByRole('button', { name: gateApprovalName })
   await waitFor(() => expect(button).toBeEnabled())
   fireEvent.click(button)
 }
@@ -1336,10 +1339,28 @@ function openRecoveryDetails() {
   if (!summary.closest('details')?.open) fireEvent.click(summary)
   return inspector
 }
-function openGlobalStatus(name: string) {
-  const trigger = screen.getByRole('button', { name })
-  if (trigger.getAttribute('aria-expanded') !== 'true') fireEvent.click(trigger)
-  return screen.getByRole('dialog', { name })
+function openPopover(trigger: RegExp, dialogName: string) {
+  const button = screen.getByRole('button', { name: trigger })
+  if (button.getAttribute('aria-expanded') !== 'true') fireEvent.click(button)
+  return screen.getByRole('dialog', { name: dialogName })
+}
+/** Team connection, team data and uploads live in one top bar popover (plan §6.5). */
+function openTeamConnection() {
+  return openPopover(/^团队连接：/, '团队连接')
+}
+function teamConnectionTrigger() {
+  return screen.getByRole('button', { name: /^团队连接：/ })
+}
+function clickUpdateTeamData() {
+  fireEvent.click(within(openTeamConnection()).getByRole('button', { name: /更新团队数据|更新中/ }))
+}
+/** Current task usage, policy and budget share the task title row popover (plan L1). */
+function openTaskUsage() {
+  return openPopover(/^本任务用量/, '本任务用量')
+}
+async function openTaskUsageWhenReady() {
+  await screen.findByRole('button', { name: /^本任务用量/ })
+  return openTaskUsage()
 }
 
 function DeliveryActionHarness({ api }: { api: DevFlowDesktopApi }) {
@@ -1718,8 +1739,9 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
 
-    const toast = screen.getByRole('status')
+    const toast = screen.getByTestId('toast')
 
+    expect(toast).toHaveAttribute('role', 'status')
     expect(toast).toHaveClass('toast--floating')
     expect(toast).toHaveAttribute('aria-live', 'polite')
   })
@@ -1918,7 +1940,7 @@ describe('App', () => {
     expect(within(localProjectPanel).queryByText('connected')).not.toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('not selected')).not.toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('未绑定 Team Project')).not.toBeInTheDocument()
-    expect(within(localProjectPanel).getByText('未绑定')).toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('未连接团队')).toBeInTheDocument()
     expect(await within(localProjectPanel).findByText('main')).toBeInTheDocument()
     const refreshBranchButton = within(localProjectPanel).getByRole('button', { name: '刷新 Git 分支' })
     expect(refreshBranchButton).toBeInTheDocument()
@@ -1945,12 +1967,14 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
 
-    const projectSelector = screen.getByLabelText('Project selector')
     const localProjectPanel = screen.getByLabelText('Local project')
-    expect(within(projectSelector).getByText('Payments API')).toBeInTheDocument()
-    expect(within(projectSelector).getByText('已绑定 · 待同步')).toBeInTheDocument()
+    // Connection and team data are separate facts; no "同步" wording (plan T4, X3).
+    expect(teamConnectionTrigger()).toHaveTextContent('已连接 · 团队数据未读取')
+    const teamConnection = openTeamConnection()
+    expect(teamConnection).toHaveTextContent('已连接到 Payments API')
+    expect(teamConnection).toHaveTextContent('本次启动还没有读取团队数据。')
     expect(within(localProjectPanel).getByText('Payments API')).toBeInTheDocument()
-    expect(within(localProjectPanel).getByText('已绑定 · 待同步')).toBeInTheDocument()
+    expect(within(localProjectPanel).getByText('已连接 · 团队数据未读取')).toBeInTheDocument()
   })
 
   it('loads the Work Request Inbox only for the selected paired local project', async () => {
@@ -2056,7 +2080,7 @@ describe('App', () => {
       'workRequestId',
     ])
     expect(await screen.findByText('ai/work-request-inbox')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Work Request 已创建本地 Run')
+    expect(screen.getByTestId('toast')).toHaveTextContent('Work Request 已创建本地 Run')
   })
 
   it('treats a credential for another local project as unbound on the current project', async () => {
@@ -2075,9 +2099,11 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
 
-    expect(screen.getByText('未配对 Team')).toBeInTheDocument()
-    expect(within(screen.getByLabelText('Project selector')).getByText('未绑定')).toBeInTheDocument()
-    expect(within(screen.getByLabelText('Local project')).getByText('未绑定')).toBeInTheDocument()
+    // A credential of another local project is not a connection here, and not a sync failure (plan D3).
+    expect(teamConnectionTrigger()).toHaveTextContent('本地项目')
+    expect(teamConnectionTrigger()).not.toHaveTextContent('同步失败')
+    expect(openTeamConnection()).toHaveTextContent('当前团队连接属于另一个本地项目')
+    expect(within(screen.getByLabelText('Local project')).getByText('未连接团队')).toBeInTheDocument()
   })
 
   it('shows the explicitly bound Team Project for a local run after sync', async () => {
@@ -2115,11 +2141,12 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
+    clickUpdateTeamData()
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
 
-    expect(within(screen.getByLabelText('Project selector')).getByText('Payments API')).toBeInTheDocument()
+    await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('已连接 · Payments API'))
     expect(within(screen.getByLabelText('Local project')).getByText('Payments API')).toBeInTheDocument()
+    expect(within(screen.getByLabelText('Local project')).getByText('已连接 · 团队数据已读取')).toBeInTheDocument()
   })
 
   it('approves the selected lead gate and updates the toast', async () => {
@@ -2127,7 +2154,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    await waitFor(() => expect(screen.getByRole('button', { name: /通过 Gate/ })).not.toBeDisabled())
+    await waitFor(() => expect(screen.getByRole('button', { name: gateApprovalName })).not.toBeDisabled())
     await clickGateApproval()
 
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案评审 Gate 已通过，Run 进入本地实现阶段'))
@@ -2175,12 +2202,12 @@ describe('App', () => {
   it('creates a new run from the modal', () => {
     render(<App />)
 
-    fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fireEvent.click(screen.getByRole('button', { name: /新建任务/ }))
     fillNewRunForm()
-    fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }))
 
     expect(screen.getAllByText('本地真实 Run').length).toBeGreaterThan(0)
-    expect(screen.getByTestId('toast')).toHaveTextContent('新 Run 已创建')
+    expect(screen.getByTestId('toast')).toHaveTextContent('任务已创建，尚未调用模型')
   })
 
   it('persists a newly created run through the desktop API and keeps it selected first', async () => {
@@ -2188,9 +2215,9 @@ describe('App', () => {
     const { container } = render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fireEvent.click(screen.getByRole('button', { name: /新建任务/ }))
     fillNewRunForm()
-    fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }))
 
     await waitFor(() => expect(api.createRun).toHaveBeenCalled())
     expect(api.createRun).toHaveBeenCalledWith(expect.objectContaining({
@@ -2284,17 +2311,20 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fireEvent.click(screen.getByRole('button', { name: /新建任务/ }))
     fillNewRunForm()
-    fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }))
 
     const inspector = await screen.findByTestId('node-inspector')
-    const completeButton = within(inspector).getByRole('button', { name: /生成需求澄清/ })
+    // D2: the first model call is named after its result, and the task was created without one.
+    expect(screen.getByTestId('toast')).toHaveTextContent('任务已创建，尚未调用模型')
+    const completeButton = within(inspector).getByRole('button', { name: /生成需求草稿/ })
     expect(completeButton).toBe(await screen.findByTestId('complete-clarify-agent'))
     fireEvent.click(completeButton)
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('正在生成需求澄清...'))
-    const pendingButton = await within(inspector).findByRole('button', { name: /生成中/ })
-    expect(pendingButton).toBeDisabled()
+    // While generating, the status row says so and keeps cancel visible (plan §3, X2).
+    await waitFor(() => expect(within(inspector).getByTestId('task-status-row')).toHaveTextContent('正在生成需求草稿'))
+    expect(within(inspector).queryByTestId('complete-clarify-agent')).not.toBeInTheDocument()
 
     await act(async () => {
       releaseCompleteWorkflowAgentNode()
@@ -2322,9 +2352,9 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fireEvent.click(screen.getByRole('button', { name: /新建任务/ }))
     fillNewRunForm()
-    fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }))
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
 
     const agentWorkbench = await screen.findByTestId('agent-workbench')
@@ -2393,7 +2423,10 @@ describe('App', () => {
     const generate = await screen.findByTestId('complete-design-agent')
     await waitFor(() => expect(generate).toBeEnabled())
     fireEvent.click(generate)
-    fireEvent.click(await screen.findByRole('button', { name: '取消生成' }))
+    // Cancel stays in the status row, never in the "⋯" menu (plan §3).
+    const cancel = await within(screen.getByTestId('task-status-row')).findByRole('button', { name: '取消生成' })
+    expect(cancel.closest('details')).toBeNull()
+    fireEvent.click(cancel)
     await waitFor(() => expect(api.cancelWorkflowAgentNode).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id, nodeId: 'n-design' }))
     expect(await screen.findByTestId('complete-design-agent')).toBeEnabled()
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案设计')
@@ -2403,9 +2436,9 @@ describe('App', () => {
   it('keeps workflow execution read-only in the browser preview', async () => {
     render(<App />)
 
-    fireEvent.click(screen.getByRole('button', { name: /新建 Run/ }))
+    fireEvent.click(screen.getByRole('button', { name: /新建任务/ }))
     fillNewRunForm()
-    fireEvent.click(screen.getByRole('button', { name: /创建并开始澄清/ }))
+    fireEvent.click(screen.getByRole('button', { name: '创建任务' }))
     fireEvent.click(await screen.findByTestId('complete-clarify-agent'))
 
     expect(await screen.findByTestId('node-inspector')).toHaveTextContent('需求澄清')
@@ -2444,7 +2477,7 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
+    clickUpdateTeamData()
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
@@ -2452,7 +2485,7 @@ describe('App', () => {
     })
 
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('创建 PR')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Prepare GitHub Delivery')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('准备 GitHub 交付')
     fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /^产物与证据$/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     fireEvent.click(within(screen.getByText(/PR Draft:/).closest('article') as HTMLElement).getByRole('button', { name: '阅读正文' }))
@@ -2515,7 +2548,7 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
+    clickUpdateTeamData()
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
@@ -3137,7 +3170,7 @@ describe('App', () => {
     const action = within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })
 
     expect(action).toBeDisabled()
-    expect(inspector).toHaveTextContent('先绑定当前 Local Project 与 Team Project')
+    expect(inspector).toHaveTextContent('先把当前本地项目连接到团队项目')
     expect(api.createPrDraft).not.toHaveBeenCalled()
   })
 
@@ -3158,7 +3191,7 @@ describe('App', () => {
     const inspector = screen.getByTestId('node-inspector')
 
     expect(within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })).toBeDisabled()
-    expect(inspector).toHaveTextContent('先绑定当前 Local Project 与 Team Project')
+    expect(inspector).toHaveTextContent('先把当前本地项目连接到团队项目')
     expect(api.createPrDraft).not.toHaveBeenCalled()
   })
 
@@ -3220,7 +3253,7 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
+    clickUpdateTeamData()
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('生成 PR Delivery Package')
@@ -3228,7 +3261,7 @@ describe('App', () => {
       fireEvent.click(within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ }))
     })
 
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Prepare GitHub Delivery')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('准备 GitHub 交付')
     fireEvent.click(within(screen.getByTestId('node-inspector')).getByRole('tab', { name: /^产物与证据$/ }))
     expect(await screen.findByText(/PR Draft:/)).toBeInTheDocument()
     expect(api.createPrDraft).toHaveBeenCalledWith({
@@ -3274,10 +3307,10 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(loadState, 1)
     const inspector = screen.getByTestId('node-inspector')
-    expect(inspector).toHaveTextContent('Prepare GitHub Delivery')
+    expect(inspector).toHaveTextContent('准备 GitHub 交付')
     expect(within(inspector).queryByRole('button', { name: '生成 PR Delivery Package' })).not.toBeInTheDocument()
 
-    const prepareButton = within(inspector).getByRole('button', { name: 'Prepare GitHub Delivery' })
+    const prepareButton = within(inspector).getByRole('button', { name: '准备 GitHub 交付' })
     expect(prepareButton).not.toBeDisabled()
     fireEvent.click(prepareButton)
 
@@ -3660,7 +3693,7 @@ describe('App', () => {
       'href',
       completedIntent.completion?.pullRequestUrl,
     )
-    expect(within(inspector).queryByRole('button', { name: 'Prepare GitHub Delivery' })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: '准备 GitHub 交付' })).not.toBeInTheDocument()
     expect(within(inspector).queryByRole('button', { name: 'Resume GitHub Delivery' })).not.toBeInTheDocument()
   })
 
@@ -4109,7 +4142,7 @@ describe('App', () => {
     expect(panel).not.toHaveTextContent(conflictingIntent.expectedCommitSha)
     expect(within(panel).queryByRole('link')).not.toBeInTheDocument()
     expect(within(screen.getByTestId('node-inspector')).queryByRole('button', {
-      name: 'Prepare GitHub Delivery',
+      name: '准备 GitHub 交付',
     })).not.toBeInTheDocument()
     expect(within(screen.getByTestId('node-inspector')).queryByRole('button', {
       name: 'Resume GitHub Delivery',
@@ -4173,7 +4206,7 @@ describe('App', () => {
     const inspector = screen.getByTestId('node-inspector')
     for (const tab of ['概览', '内容与审查', '产物与证据', '执行记录']) {
       fireEvent.click(within(inspector).getByRole('tab', { name: tab }))
-      expect(within(inspector).queryByRole('button', { name: /通过 Gate|生成验收证据包/ })).not.toBeInTheDocument()
+      expect(within(inspector).queryByRole('button', { name: /通过 Gate|确认方案|确认需求|生成验收证据包/ })).not.toBeInTheDocument()
     }
     expect(api.approveGate).not.toHaveBeenCalled()
     expect(api.createAcceptanceBundle).not.toHaveBeenCalled()
@@ -4282,7 +4315,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    await screen.findByText('本地持久化 Run')
+    await screen.findAllByText('本地持久化 Run')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local SQLite')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('local persisted')
     expect(screen.queryByText('为 Payments API 增加 /health 端点')).not.toBeInTheDocument()
@@ -4338,11 +4371,11 @@ describe('App', () => {
     expect(stageProgressSegments.some((segment) => segment.classList.contains('stage-progress--design'))).toBe(false)
 
     const inspector = screen.getByTestId('node-inspector')
-    expect(inspector).toHaveTextContent('类型：Gate · 来源：Team Policy')
+    expect(inspector).toHaveTextContent('Gate · Team Policy')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('Policy snapshot')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('门禁审查')
-    expect(inspector).toHaveTextContent('Next best action')
-    expect(inspector).toHaveTextContent('通过 Gate')
+    // Headline and buttons come from one status projection (plan D1).
+    expect(within(inspector).getByTestId('task-status-row')).toHaveTextContent('确认方案')
   })
 
   it('derives a Task Gate impact from workflow edges and navigates to the Gate read-only', async () => {
@@ -4368,11 +4401,11 @@ describe('App', () => {
     expect(impact).toHaveTextContent('已完成')
     expect(impact).toHaveTextContent('需求澄清结果')
     expect(impact).toHaveTextContent('此处只展示前向影响')
-    expect(within(impact).queryByRole('button', { name: /通过 Gate|Override/ })).not.toBeInTheDocument()
+    expect(within(impact).queryByRole('button', { name: /通过 Gate|确认方案|确认需求|Override/ })).not.toBeInTheDocument()
 
     fireEvent.click(within(impact).getByRole('button', { name: '查看 Gate' }))
     await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求确认 Gate'))
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('类型：Gate · 来源：Team Policy')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Gate · Team Policy')
   })
 
   it('derives workflow stage color from the visible cards in each stage', () => {
@@ -4422,10 +4455,10 @@ describe('App', () => {
       ...initialPolicy, version: 2, source: 'remote_cache', syncedAt: '2026-09-10T12:00:00.000Z',
     })
     vi.mocked(api.evaluateGateEnforcement).mockClear()
-    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
+    fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
-    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('拉取成功 · 策略 v2 · 2026-09-10T12:00:00.000Z'))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('团队数据已更新 · 策略 v2 · 2026-09-10T12:00:00.000Z'))
     expect(screen.getByTestId('team-overview')).toHaveTextContent('snapshot v2')
     expect(api.evaluateGateEnforcement).toHaveBeenCalled()
   })
@@ -4454,8 +4487,10 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
-    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
-    for (const button of screen.getAllByRole('button', { name: '拉取中' })) {
+    fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
+    openTeamConnection()
+    expect(screen.getAllByRole('button', { name: /更新中/ })).toHaveLength(2)
+    for (const button of screen.getAllByRole('button', { name: /更新中/ })) {
       expect(button).toBeDisabled()
       fireEvent.click(button)
     }
@@ -4463,9 +4498,13 @@ describe('App', () => {
     await act(async () => { rejectSync(new Error('Team API temporarily unavailable')) })
     expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('服务未能完成操作。请提供诊断编号以便排查。')
     expect(screen.getByTestId('team-sync-feedback')).toHaveAttribute('role', 'alert')
+    // The popover reports the read failure as a team data fact, not as a connection failure (plan §6.5).
+    expect(openTeamConnection()).toHaveTextContent('读取失败：服务未能完成操作')
+    expect(openTeamConnection()).toHaveTextContent('已连接到 Payments API')
     vi.mocked(api.loadRemoteSnapshot).mockResolvedValue({ projects: [], members: [], runs: [], artifacts: [], events: [], projectCost: [], memberCost: [], totalCost: '$0.00' })
-    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
-    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('拉取成功'))
+    clickUpdateTeamData()
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('团队数据已更新'))
+    expect(openTeamConnection()).toHaveTextContent('最近成功读取：')
     expect(api.loadRemoteSnapshot).toHaveBeenCalledTimes(2)
   })
 
@@ -4473,19 +4512,19 @@ describe('App', () => {
     const api = installDesktopApi({ getCodingRuntimeBudgetPolicy:vi.fn().mockResolvedValue(null) })
     render(<App />)
     fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
-    await waitFor(() => expect(within(openGlobalStatus('策略与预算')).getByTestId('runtime-budget-status')).toHaveTextContent('未配置'))
+    await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('未配置'))
     vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue({
       projectId: 'p-payments', enabled: true, monthlyLimitUsd: 1, warningThresholdUsd: 0.5,
       currency: 'USD', updatedAt: '2026-09-12T00:00:00.000Z',
     })
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
-    await waitFor(() => expect(within(openGlobalStatus('策略与预算')).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00 / 月 · 预警 $0.50'))
+    clickUpdateTeamData()
+    await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00 / 月 · 预警 $0.50'))
     expect(screen.getByTestId('flow-node-n-design-gate')).toBeInTheDocument()
     expect(api.getCodingRuntimeBudgetPolicy).toHaveBeenLastCalledWith({ projectId: localProject.id })
     vi.mocked(api.getCodingRuntimeBudgetPolicy).mockRejectedValue(new Error('Budget unavailable'))
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
-    await waitFor(() => expect(within(openGlobalStatus('策略与预算')).getByTestId('runtime-budget-status')).toHaveTextContent('不可用'))
-    expect(within(openGlobalStatus('策略与预算')).getByTestId('runtime-budget-status')).not.toHaveTextContent('$1.00')
+    clickUpdateTeamData()
+    await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('不可用'))
+    expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).not.toHaveTextContent('$1.00')
   })
 
   it('loads remote team state without mixing other project runs into the selected local project', async () => {
@@ -4542,16 +4581,16 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
+    clickUpdateTeamData()
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalledWith({ organizationId: 'org-demo' }))
     expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
     expect(screen.queryByText('远端同步 Run')).not.toBeInTheDocument()
-    expect(openGlobalStatus('项目概览')).toHaveTextContent('1 本地 · 0 远端')
+    expect(screen.getByTestId('project-overview')).toHaveTextContent('1 本地 · 0 远端')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('remote snapshot + local merge')
     expect(screen.getByTestId('runtime-source-badge')).toHaveTextContent('real IPC/API')
     expect(screen.getAllByText('local').length).toBeGreaterThan(0)
-    expect(screen.getByTestId('toast')).toHaveTextContent('拉取成功 · 策略 v1')
+    expect(screen.getByTestId('toast')).toHaveTextContent('团队数据已更新 · 策略 v1')
 
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
     expect(screen.getAllByText('Remote Team API').length).toBeGreaterThan(0)
@@ -4586,12 +4625,12 @@ describe('App', () => {
     fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
+    clickUpdateTeamData()
 
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     expect(screen.getByTestId('flow-node-n-design-gate')).toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案评审 Gate')
-    expect(openGlobalStatus('项目概览')).toHaveTextContent('1 本地 · 0 远端')
+    expect(screen.getByTestId('project-overview')).toHaveTextContent('1 本地 · 0 远端')
   })
 
   it('does not sync remote team state until the desktop is paired', async () => {
@@ -4604,10 +4643,17 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /拉取团队数据/ }))
+    // Unpaired: the popover explains that connecting comes first and offers no update (plan §4.3).
+    const teamConnection = openTeamConnection()
+    expect(within(teamConnection).queryByRole('button', { name: /更新团队数据/ })).not.toBeInTheDocument()
+    expect(teamConnection).toHaveTextContent('连接团队后可以更新团队数据。')
+    expect(teamConnectionTrigger()).toHaveTextContent('本地项目')
+    expect(teamConnectionTrigger()).not.toHaveTextContent('同步失败')
+    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
 
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
-    expect(screen.getByTestId('toast')).toHaveTextContent('请先绑定团队项目，再拉取团队数据')
+    expect(screen.getByTestId('toast')).toHaveTextContent('请先连接团队项目，再更新团队数据')
   })
 
   it('reloads rejected Stage usage immediately and shows incomplete budget data without advancing the node', async () => {
@@ -4622,10 +4668,10 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByTestId('complete-clarify-agent')).toBeEnabled())
     loadState.mockResolvedValue({ ...initial, agentTokenUsage: [usage] })
     fireEvent.click(screen.getByTestId('complete-clarify-agent'))
-    await waitFor(() => expect(within(openGlobalStatus('当前 Run')).getByTestId('run-token-usage')).toHaveTextContent('16,712'))
-    expect(within(openGlobalStatus('当前 Run')).getByTestId('run-token-usage')).toHaveTextContent('1 项金额待确认')
-    expect(within(openGlobalStatus('当前 Run')).getByTestId('run-token-usage')).not.toHaveTextContent('$0.00')
-    expect(within(openGlobalStatus('策略与预算')).getByTestId('runtime-budget-status')).toHaveTextContent('数据不完整')
+    await waitFor(() => expect(within(openTaskUsage()).getByTestId('run-token-usage')).toHaveTextContent('16,712'))
+    expect(within(openTaskUsage()).getByTestId('run-token-usage')).toHaveTextContent('1 项金额待确认')
+    expect(within(openTaskUsage()).getByTestId('run-token-usage')).not.toHaveTextContent('$0.00')
+    expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('数据不完整')
     expect(screen.getByTestId('flow-node-n-clarify')).toHaveTextContent('当前步骤')
     expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('toast')).toHaveTextContent('Citation rejected')
@@ -4765,10 +4811,17 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.change(screen.getByLabelText('Desktop pairing code'), {
+    const teamConnection = openTeamConnection()
+    fireEvent.change(within(teamConnection).getByLabelText('Desktop pairing code'), {
       target: { value: 'pair-p-payments.copy-once-secret' },
     })
-    fireEvent.click(screen.getByRole('button', { name: '绑定' }))
+    // The fixture already holds a credential, so replacing it needs a confirmation first (plan P1).
+    fireEvent.click(within(teamConnection).getByRole('button', { name: '重新连接' }))
+    expect(api.pairDesktop).not.toHaveBeenCalled()
+    const confirmation = within(teamConnection).getByRole('alertdialog', { name: '确认替换团队连接' })
+    expect(confirmation).toHaveTextContent('团队项目 Payments API · 身份 Ling（lead）')
+    expect(confirmation).toHaveTextContent('没有进行中的交付请求。')
+    fireEvent.click(within(confirmation).getByRole('button', { name: '确认替换' }))
 
     await waitFor(() =>
       expect(api.pairDesktop).toHaveBeenCalledWith({
@@ -4776,12 +4829,40 @@ describe('App', () => {
         localProjectId: localProject.id,
       }),
     )
-    expect(screen.getByTestId('desktop-pairing-identity')).toHaveTextContent(
+    await waitFor(() => expect(screen.getByTestId('desktop-pairing-identity')).toHaveTextContent(
       'Ling · lead · Payments API',
-    )
+    ))
     expect(screen.getByTestId('toast')).toHaveTextContent(
-      '已绑定 Ling / lead 到 Payments API',
+      '已连接 Ling / lead 到 Payments API',
     )
+  })
+
+  it('lists in-flight deliveries of every project before replacing a credential and keeps it on cancel', async () => {
+    const otherProjectIntent = { ...githubDeliveryIntentFixture('approved'), id: 'intent-other-project', localProjectId: 'local-project-other', headBranch: 'ai/other-project' }
+    const settledIntent = { ...githubDeliveryIntentFixture('approved'), id: 'intent-settled', status: 'completed' as const, headBranch: 'ai/settled' }
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({
+        ...persistedFixtureRunState(),
+        githubDeliveryIntents: [otherProjectIntent, settledIntent],
+      }),
+    })
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+
+    const teamConnection = openTeamConnection()
+    fireEvent.change(within(teamConnection).getByLabelText('Desktop pairing code'), { target: { value: 'pair-same-team.secret' } })
+    fireEvent.click(within(teamConnection).getByRole('button', { name: '重新连接' }))
+    const confirmation = within(teamConnection).getByRole('alertdialog', { name: '确认替换团队连接' })
+    expect(confirmation).toHaveTextContent('ai/other-project')
+    expect(confirmation).toHaveTextContent('本地项目 local-project-other')
+    expect(confirmation).not.toHaveTextContent('ai/settled')
+    expect(confirmation).toHaveTextContent('即使重新连接到同一个团队项目，这些交付也会被撤销')
+
+    fireEvent.click(within(confirmation).getByRole('button', { name: '取消' }))
+    expect(within(teamConnection).queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(within(teamConnection).getByLabelText('Desktop pairing code')).toHaveValue('pair-same-team.secret')
+    expect(api.pairDesktop).not.toHaveBeenCalled()
+    expect(screen.getByTestId('desktop-pairing-identity')).toHaveTextContent('Ling · lead · Payments API')
   })
 
   it('fails closed and prompts re-pairing when the persisted Desktop token has expired', async () => {
@@ -4796,14 +4877,19 @@ describe('App', () => {
     })
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
-    expect(await screen.findByTestId('desktop-pairing-identity')).toHaveTextContent(
-      '配对已过期 · 请重新绑定',
-    )
+    await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('需要重新连接'))
+    const teamConnection = openTeamConnection()
+    expect(teamConnection).toHaveTextContent('团队连接已过期，需要重新连接。本地成果不受影响。')
+    // An expired credential is not shown as the current identity (plan X3).
+    expect(screen.queryByTestId('desktop-pairing-identity')).not.toBeInTheDocument()
+    expect(teamConnection).toHaveTextContent('重新连接后可以更新团队数据。')
+    expect(within(teamConnection).queryByRole('button', { name: /更新团队数据/ })).not.toBeInTheDocument()
     vi.mocked(api.loadRemoteSnapshot).mockClear()
-    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据' }))
+    fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
+    fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
     expect(api.loadRemoteSnapshot).not.toHaveBeenCalled()
     expect(screen.getByTestId('toast')).toHaveTextContent(
-      '请先绑定团队项目，再拉取团队数据',
+      '请先连接团队项目，再更新团队数据',
     )
   })
 
@@ -4813,8 +4899,8 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
-    expect(inspector).toHaveTextContent('Next best action')
-    const approveButton = await within(inspector).findByRole('button', { name: /通过 Gate/ })
+    expect(within(inspector).getByTestId('task-status-row')).toBeInTheDocument()
+    const approveButton = await within(inspector).findByRole('button', { name: gateApprovalName })
     await waitFor(() => expect(approveButton).toBeEnabled())
     fireEvent.click(approveButton)
 
@@ -4824,6 +4910,161 @@ describe('App', () => {
     }))
     expect(api).not.toHaveProperty('uploadRunSummary')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('approval')
+  })
+
+  describe('clarification Gate status row (plan §6.1, D1, D5)', () => {
+    function clarifyGateState() {
+      const created = createWorkflowRunFromRequest({
+        runId: 'run-clarify-gate', title: 'Clarify gate', request: '澄清 webhook 重试边界。', projectId: localProject.id,
+        creatorId: 'u-ling', branchName: 'ai/clarify-gate', now: '2026-06-21T16:00:00.000Z',
+      })
+      const clarifyNode = created.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')!
+      const now = '2026-06-21T16:05:00.000Z'
+      // Same shape as the shared clarification fixture: one Raw Request and one current revision.
+      const revision: Artifact = {
+        id: `artifact-${created.run.id}-clarification`, runId: created.run.id, nodeId: clarifyNode.id, kind: 'clarification',
+        title: '需求澄清 v1', summary: 'First revision.', content: '澄清正文。', redacted: true, updatedAt: now,
+        clarificationRevision: {
+          version: 1, revision: 1, status: 'review_requested', revisionDigest: 'a'.repeat(64),
+          rawRequestArtifactId: created.artifacts[0]!.id, feedbackArtifactIds: [],
+          goals: ['Goal'], acceptanceCriteria: ['Acceptance'], nonGoals: [], assumptions: [], risks: [], openQuestions: [],
+          executor: {
+            version: 1, kind: 'direct-provider', executorId: 'fake', executorVersion: '1',
+            capabilityProfile: 'repository-read-only-v1', model: 'fake', startedAt: now,
+            completedAt: now, durationMs: 1, terminalReason: 'success', contextDigest: 'b'.repeat(64),
+          },
+          generatedAt: now,
+        },
+      }
+      const completed = completeWorkflowAgentNode({
+        run: created.run, nodeId: clarifyNode.id, artifacts: created.artifacts, generatedArtifact: revision,
+        existingEvents: created.events, actorName: 'Ling', now,
+      })
+      return desktopState({
+        projects: [localProject], runs: [completed.run], artifacts: completed.artifacts,
+        events: [...created.events, completed.event], desktopPairingCredential: fixturePairingCredential,
+      })
+    }
+    const missingReviewReason = (action: 'warn' | 'block') => ({
+      id: `missing_agent_review:clarify:${action}`, target: 'missing_agent_review' as const,
+      ruleKey: `missing_agent_review:clarify:${action}`, action, summary: '尚未运行门禁审查。',
+    })
+
+    it('arms a reminder on the first click of a warn-only Gate and submits the exact revision on the second', async () => {
+      const state = clarifyGateState()
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(state),
+        evaluateGateEnforcement: vi.fn().mockResolvedValue({
+          status: 'warn', blocksApproval: false, blockingReasons: [], warningReasons: [missingReviewReason('warn')],
+          requiredActions: [], canOverride: false, overrideRoleRequired: 'lead', policySource: 'built_in_default', policyVersion: 1, provisional: false,
+        }),
+        approveGate: vi.fn().mockRejectedValue(new Error('Stop after recording IPC')),
+      })
+      render(<App />)
+
+      const row = await screen.findByTestId('task-status-row')
+      await waitFor(() => expect(row).toHaveTextContent('等待你确认需求 v1'))
+      // Warn-only is not shown as blocked (plan §3).
+      expect(row).toHaveAttribute('data-status-kind', 'approvable')
+      expect(row).toHaveTextContent('尚未运行 AI 审查')
+      expect(row).not.toHaveTextContent(/不能|阻断审批/)
+      const approve = within(row).getByRole('button', { name: /确认需求 v1/ })
+      fireEvent.click(approve)
+      expect(api.approveGate).not.toHaveBeenCalled()
+      expect(within(row).getByRole('alert')).toHaveTextContent('尚未运行 AI 审查，本次确认针对需求 v1')
+      fireEvent.click(approve)
+
+      await waitFor(() => expect(api.approveGate).toHaveBeenCalledTimes(1))
+      const revision = state.artifacts.find((artifact) => artifact.clarificationRevision)!
+      expect(api.approveGate).toHaveBeenCalledWith({
+        runId: 'run-clarify-gate',
+        nodeId: state.runs[0]!.currentNodeId,
+        expectedClarificationRevision: {
+          artifactId: revision.id,
+          revision: revision.clarificationRevision!.revision,
+          revisionDigest: revision.clarificationRevision!.revisionDigest,
+        },
+      })
+    })
+
+    it('keeps typed revision feedback when the main process rejects a stale revision (plan V3)', async () => {
+      const state = clarifyGateState()
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(state),
+        approveGate: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'approve-gate': Error: Gate approval rejected: clarification revision is missing, stale, or no longer current")),
+        requestClarificationChanges: vi.fn().mockRejectedValue(new Error('not expected in this test')),
+      })
+      render(<App />)
+
+      const row = await screen.findByTestId('task-status-row')
+      await waitFor(() => expect(within(row).getByRole('button', { name: /确认需求 v1/ })).toBeEnabled())
+      fireEvent.click(screen.getByRole('button', { name: '请求修订当前版本' }))
+      fireEvent.change(screen.getByLabelText('结构化修订意见'), { target: { value: '补充依赖超时 300 ms 的降级边界。' } })
+      fireEvent.click(within(row).getByRole('button', { name: /确认需求 v1/ }))
+
+      await waitFor(() => expect(api.approveGate).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(screen.getByTestId('toast')).not.toHaveTextContent('已通过'))
+      expect(screen.getByLabelText('结构化修订意见')).toHaveValue('补充依赖超时 300 ms 的降级边界。')
+      expect(api.requestClarificationChanges).not.toHaveBeenCalled()
+    })
+
+    it('keeps the approval on the pending version while an older version is being read (plan V1)', async () => {
+      const base = clarifyGateState()
+      const v1 = base.artifacts.find((artifact) => artifact.clarificationRevision)!
+      const v2: Artifact = {
+        ...v1, id: `${v1.id}-v2`, title: '需求澄清 v2', content: '第二版澄清正文。', updatedAt: '2026-06-21T16:10:00.000Z',
+        clarificationRevision: { ...v1.clarificationRevision!, revision: 2, revisionDigest: 'c'.repeat(64), previousRevisionArtifactId: v1.id },
+      }
+      const run = base.runs[0]!
+      const state = {
+        ...base,
+        runs: [{ ...run, nodes: run.nodes.map((node) => node.id === run.currentNodeId ? { ...node, artifactIds: [v2.id] } : node) }],
+        artifacts: [
+          ...base.artifacts.map((artifact) => artifact.id === v1.id
+            ? { ...artifact, clarificationRevision: { ...artifact.clarificationRevision!, status: 'superseded' as const } }
+            : artifact),
+          v2,
+        ],
+      }
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(state),
+        approveGate: vi.fn().mockRejectedValue(new Error('Stop after recording IPC')),
+      })
+      render(<App />)
+
+      const row = await screen.findByTestId('task-status-row')
+      await waitFor(() => expect(within(row).getByRole('button', { name: /确认需求 v2/ })).toBeEnabled())
+      clickInspectorTab('内容与审查')
+      fireEvent.change(screen.getByRole('combobox', { name: '阅读需求版本' }), { target: { value: v1.id } })
+      expect(screen.getByText(/正在阅读历史版本 v1；确认与修订仍针对需求 v2。/)).toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /确认需求 v2/ })).toBeInTheDocument()
+      fireEvent.click(within(row).getByRole('button', { name: /确认需求 v2/ }))
+      await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({
+        expectedClarificationRevision: { artifactId: v2.id, revision: 2, revisionDigest: 'c'.repeat(64) },
+      })))
+      fireEvent.click(screen.getByRole('button', { name: '返回待确认版本' }))
+      expect(screen.getByRole('combobox', { name: '阅读需求版本' })).toHaveValue(v2.id)
+      expect(screen.queryByText(/正在阅读历史版本/)).not.toBeInTheDocument()
+    })
+
+    it('offers no approval while the policy blocks the Gate', async () => {
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(clarifyGateState()),
+        evaluateGateEnforcement: vi.fn().mockResolvedValue({
+          status: 'blocked', blocksApproval: true, blockingReasons: [missingReviewReason('block')], warningReasons: [],
+          requiredActions: [], canOverride: false, overrideRoleRequired: 'lead', policySource: 'remote_cache', policyVersion: 2, provisional: false,
+        }),
+      })
+      render(<App />)
+
+      const row = await screen.findByTestId('task-status-row')
+      await waitFor(() => expect(row).toHaveAttribute('data-status-kind', 'blocked'))
+      expect(row).toHaveTextContent('暂不能确认需求 v1')
+      expect(row).toHaveTextContent('缺少 AI 审查')
+      expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
+      expect(within(row).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+      expect(api.approveGate).not.toHaveBeenCalled()
+    })
   })
 
   it('keeps remote Run synchronization behind the trusted main-process approval path', async () => {
@@ -4960,8 +5201,8 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('policy v1')
     expect(inspector).toHaveTextContent('此受保护 Gate 尚未运行基于知识的门禁审查。')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    expect(within(screen.getByTestId('node-inspector').querySelector('.node-action-footer') as HTMLElement).getByRole('button', { name: '运行门禁审查' })).toBeEnabled()
-    expect(screen.queryByRole('button', { name: /通过 Gate/ })).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+    expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /执行测试/ })).not.toBeInTheDocument()
 
     openRecoveryDetails()
@@ -5020,13 +5261,18 @@ describe('App', () => {
     render(<App />)
 
     const inspector = await screen.findByTestId('node-inspector')
-    await waitFor(() => expect(within(inspector).getByTestId('gate-readiness-summary')).toHaveTextContent('不能通过'))
+    // Unread policy is "unverified", not a block (plan X4): approval stays unavailable without saying blocked.
+    await waitFor(() => expect(within(inspector).getByTestId('task-status-row')).toHaveAttribute('data-status-kind', 'unverified'))
+    expect(within(inspector).getByTestId('task-status-row')).toHaveTextContent('状态待核实')
+    expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('待核实')
+    expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('尚未读取团队策略，暂时无法判断能否审批。')
+    expect(screen.getByTestId('inspector-status-matrix')).not.toHaveTextContent('当前 Gate 评估会阻止审批。')
     openPolicyDetails()
     expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('团队策略不可用')
     expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('同步团队策略后重新评估 Gate')
     openRecoveryDetails()
     expect(screen.getByRole('button', { name: '同步团队策略' })).toBeEnabled()
-    expect(screen.queryByRole('button', { name: /通过 Gate/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
   })
 
   it('shows provisional overrides distinctly from confirmed overrides', async () => {
@@ -5079,7 +5325,7 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('可继续审批')
     expect(inspector).toHaveTextContent('Provisional override')
     expect(inspector).toHaveTextContent('Offline lead override pending server confirmation.')
-    expect(within(screen.getByTestId('node-inspector').querySelector('.node-action-footer') as HTMLElement).getByRole('button', { name: '运行门禁审查' })).toBeEnabled()
+    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
   })
 
   it('shows rejected provisional overrides as blocked and actionable', async () => {
@@ -5132,7 +5378,7 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('Rejected override')
     expect(inspector).toHaveTextContent('Rejected by team policy because version 1 is stale.')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    expect(within(screen.getByTestId('node-inspector').querySelector('.node-action-footer') as HTMLElement).getByRole('button', { name: '运行门禁审查' })).toBeEnabled()
+    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
   })
 
   it('persists theme and MCP local preferences through the desktop API', async () => {
@@ -5519,7 +5765,7 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /返回当前 Inspector/ }))
     const inspector = await screen.findByTestId('node-inspector')
-    await waitFor(() => expect(within(inspector).getByTestId('readiness-group-review-evidence')).toHaveTextContent('success'))
+    await waitFor(() => expect(within(inspector).getByTestId('readiness-group-review-evidence')).toHaveTextContent('已完成'))
     expect(within(inspector).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
     clickInspectorTab('产物与证据')
     expect(screen.getByTestId('knowledge-governance-flow')).toHaveTextContent('2 · 完成审查已完成')
@@ -5582,7 +5828,7 @@ describe('App', () => {
       projectId: acceptanceRun.projectId,
     }))
     const inspector = screen.getByTestId('node-inspector')
-    fireEvent.click(within(inspector.querySelector('.node-action-footer') as HTMLElement).getByRole('button', { name: /运行门禁审查/ }))
+    fireEvent.click(within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: /运行门禁审查/ }))
 
     const agentWorkbench = await screen.findByTestId('agent-workbench')
     expect(agentWorkbench).toHaveTextContent('业务验收')
@@ -5743,6 +5989,7 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
         runs: fixtureRuns,
+        desktopPairingCredential: fixturePairingCredential,
       })),
       onLocalStateUpdated,
     })
@@ -5753,6 +6000,7 @@ describe('App', () => {
       localStateListener?.(desktopState({
         projects: [localProject],
         runs: fixtureRuns,
+        desktopPairingCredential: fixturePairingCredential,
         remoteSyncOperations: [
           remoteSyncOperation(),
           remoteSyncOperation({
@@ -5770,11 +6018,14 @@ describe('App', () => {
       }))
     })
 
-    const syncStatus = await within(openGlobalStatus('同步')).findByTestId('remote-sync-operations')
-    expect(syncStatus).toHaveTextContent('run-summary')
-    expect(syncStatus).toHaveTextContent('queued')
-    expect(syncStatus).toHaveTextContent('sending')
-    expect(syncStatus).toHaveTextContent('retry_wait')
+    await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('正在上传 3 项'))
+    const uploads = within(openTeamConnection()).getByTestId('remote-sync-operations')
+    expect(uploads).toHaveTextContent('正在尝试上传 3 项。')
+    expect(uploads).toHaveTextContent('任务摘要正在上传')
+    expect(uploads).toHaveTextContent('测试证据正在上传')
+    expect(uploads).toHaveTextContent('审查结果等待重试')
+    // Only a server receipt counts as uploaded.
+    expect(within(uploads).queryByText('已上传')).not.toBeInTheDocument()
   })
 
   it('preserves the synced Team snapshot on local outbox pushes and clears it after unpairing', async () => {
@@ -5790,8 +6041,8 @@ describe('App', () => {
     render(<App />)
     await waitFor(() => expect(api.evaluateGateEnforcement).toHaveBeenCalled())
     fireEvent.click(screen.getByRole('button', { name: /Team Overview/ }))
-    fireEvent.click(screen.getByRole('button', { name: '拉取团队数据并刷新策略' }))
-    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('拉取成功'))
+    fireEvent.click(screen.getByRole('button', { name: '更新团队数据' }))
+    await waitFor(() => expect(screen.getByTestId('team-sync-feedback')).toHaveTextContent('团队数据已更新'))
     expect(screen.getByTestId('team-overview')).toHaveTextContent('Synced Team Project')
     act(() => { listener?.({ ...localState, remoteSyncOperations: [remoteSyncOperation()] }) })
     expect(screen.getByTestId('team-overview')).toHaveTextContent('Synced Team Project')
@@ -5842,6 +6093,7 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
         runs: fixtureRuns,
+        desktopPairingCredential: fixturePairingCredential,
         remoteSyncOperations: [remoteSyncOperation({
           status: 'terminal',
           attemptCount: 4,
@@ -5854,14 +6106,30 @@ describe('App', () => {
     })
     render(<App />)
 
-    const syncStatus = await within(openGlobalStatus('同步')).findByTestId('remote-sync-operations')
-    expect(syncStatus).toHaveTextContent('run-summary')
-    expect(syncStatus).toHaveTextContent('terminal')
-    expect(syncStatus).toHaveTextContent('attempt 4')
-    expect(syncStatus).toHaveTextContent('immutable_conflict')
-    expect(syncStatus).toHaveTextContent('2026-08-02T12:30:00.000Z')
-    expect(syncStatus).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
-    expect(screen.getByRole('button', { name: '重试 run-summary 同步' })).toBeEnabled()
+    await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('1 条未上传'))
+    const uploads = within(openTeamConnection()).getByTestId('remote-sync-operations')
+    expect(uploads).toHaveTextContent('任务摘要上传失败')
+    expect(uploads).toHaveTextContent('团队服务上已有内容不同的同一条记录。')
+    expect(uploads).toHaveTextContent('immutable_conflict')
+    expect(uploads).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
+    expect(within(uploads).getByRole('button', { name: '重试上传：任务摘要' })).toBeEnabled()
+  })
+
+  it('offers no upload retry while the local project is not connected (plan D3)', async () => {
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({
+        projects: [localProject],
+        runs: fixtureRuns,
+        remoteSyncOperations: [remoteSyncOperation({ status: 'terminal', lastErrorCode: 'pairing_required', organizationId: null, teamProjectId: null })],
+      })),
+    })
+    render(<App />)
+
+    await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('本地项目'))
+    expect(teamConnectionTrigger()).not.toHaveTextContent(/失败|未上传/)
+    const uploads = within(openTeamConnection()).getByTestId('remote-sync-operations')
+    expect(uploads).toHaveTextContent('当前未启用团队上传')
+    expect(within(uploads).queryByRole('button', { name: /重试上传/ })).not.toBeInTheDocument()
   })
 
   it('retries terminal sync with only the operation ID and applies the returned state', async () => {
@@ -5874,6 +6142,7 @@ describe('App', () => {
     const retryRemoteSyncOperation = vi.fn().mockResolvedValue(desktopState({
       projects: [localProject],
       runs: fixtureRuns,
+      desktopPairingCredential: fixturePairingCredential,
       remoteSyncOperations: [remoteSyncOperation({
         status: 'pending',
         attemptCount: 0,
@@ -5884,13 +6153,15 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
         runs: fixtureRuns,
+        desktopPairingCredential: fixturePairingCredential,
         remoteSyncOperations: [operation],
       })),
       retryRemoteSyncOperation,
     })
     render(<App />)
 
-    fireEvent.click(await within(openGlobalStatus('同步')).findByRole('button', { name: '重试 run-summary 同步' }))
+    await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('1 条未上传'))
+    fireEvent.click(within(openTeamConnection()).getByRole('button', { name: '重试上传：任务摘要' }))
 
     await waitFor(() =>
       expect(retryRemoteSyncOperation).toHaveBeenCalledWith({
@@ -5899,10 +6170,10 @@ describe('App', () => {
     )
     expect(retryRemoteSyncOperation).toHaveBeenCalledTimes(1)
     await waitFor(() =>
-      expect(within(openGlobalStatus('同步')).getByTestId('remote-sync-operations')).toHaveTextContent('queued'),
+      expect(within(openTeamConnection()).getByTestId('remote-sync-operations')).toHaveTextContent('任务摘要正在上传'),
     )
-    expect(within(openGlobalStatus('同步')).getByTestId('remote-sync-operations')).not.toHaveTextContent('terminal')
-    expect(screen.getByTestId('toast')).toHaveTextContent('远端同步操作已重新排队')
+    expect(within(openTeamConnection()).getByTestId('remote-sync-operations')).not.toHaveTextContent('上传失败')
+    expect(screen.getByTestId('toast')).toHaveTextContent('已重新排队上传；收到团队服务回执后才算已上传')
   })
 
   it('shows a fixed safe toast when a terminal sync retry fails', async () => {
@@ -5913,6 +6184,7 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
         runs: fixtureRuns,
+        desktopPairingCredential: fixturePairingCredential,
         remoteSyncOperations: [remoteSyncOperation({
           status: 'terminal',
           attemptCount: 4,
@@ -5924,14 +6196,15 @@ describe('App', () => {
     })
     render(<App />)
 
-    fireEvent.click(await within(openGlobalStatus('同步')).findByRole('button', { name: '重试 run-summary 同步' }))
+    await waitFor(() => expect(teamConnectionTrigger()).toHaveTextContent('1 条未上传'))
+    fireEvent.click(within(openTeamConnection()).getByRole('button', { name: '重试上传：任务摘要' }))
 
     await waitFor(() =>
-      expect(screen.getByTestId('toast')).toHaveTextContent('远端同步重试失败，请稍后再试'),
+      expect(screen.getByTestId('toast')).toHaveTextContent('重新上传没有排队成功，请稍后再试'),
     )
     const toast = screen.getByTestId('toast')
     expect(toast).not.toHaveTextContent(/secret-token|api\.internal|private|raw body/i)
-    expect(within(openGlobalStatus('同步')).getByTestId('remote-sync-operations')).toHaveTextContent('terminal')
+    expect(within(openTeamConnection()).getByTestId('remote-sync-operations')).toHaveTextContent('任务摘要上传失败')
   })
 
   it('subscribes to coding push updates and merges pushed state into the Agents view', async () => {
@@ -6520,7 +6793,7 @@ describe('App', () => {
     })
     render(<App />)
 
-    const budgetStatus = await within(openGlobalStatus('策略与预算')).findByTestId('runtime-budget-status')
+    const budgetStatus = await within(await openTaskUsageWhenReady()).findByTestId('runtime-budget-status')
     expect(within(budgetStatus).getByText('unavailable')).toHaveClass('bad')
     expect(budgetStatus).toHaveTextContent('Runtime budget authorization is unavailable.')
 
@@ -6542,7 +6815,7 @@ describe('App', () => {
     act(() => notify({ projectId: localProject.id, providerId: agentProvider.id,
       decision: { status: 'requires_lead_approval', blocksRun: true, currentSpendUsd: 49.9,
         projectedCostUsd: 0.25, reason: '本次模型请求预计超出月预算，需要 Owner/Lead 额外批准。' } }))
-    expect(within(openGlobalStatus('策略与预算')).getByTestId('runtime-budget-status')).toHaveTextContent('requires_lead_approval')
+    expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('requires_lead_approval')
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
     expect(await screen.findByText(/最近一次模型预算检查/)).toHaveTextContent('本次模型请求预计超出月预算')
     fireEvent.click(screen.getByRole('button', { name: '创建 Owner/Lead 一次性批准' }))
@@ -6559,21 +6832,23 @@ describe('App', () => {
     }) })
     vi.mocked(api.saveCodingRuntimeBudgetPolicy).mockImplementation(async(input)=>{ const saved={...input,currency:'USD' as const,updatedAt:new Date().toISOString()};vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(saved);return saved })
     const view = render(<App />)
-    const status = await within(openGlobalStatus('策略与预算')).findByTestId('runtime-budget-status')
+    const status = await within(await openTaskUsageWhenReady()).findByTestId('runtime-budget-status')
     await waitFor(() => expect(status).toHaveTextContent('未配置'))
     expect(status).toHaveTextContent('尚未执行')
     fireEvent.click(screen.getByRole('button', { name: /Agents/ }))
     fireEvent.change(await screen.findByLabelText('项目月预算'), { target: { value: '1' } })
     fireEvent.change(screen.getByLabelText('项目预算预警'), { target: { value: '0.5' } })
     fireEvent.click(screen.getByRole('button', { name: '保存团队项目预算' }))
-    await waitFor(() => expect(status).toHaveTextContent('已配置 · $1.00'))
-    expect(status).not.toHaveTextContent('not loaded')
+    await waitFor(() => expect(api.saveCodingRuntimeBudgetPolicy).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: /工作台/ }))
+    await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))
+    expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).not.toHaveTextContent('not loaded')
     expect(api.runCodingAgent).not.toHaveBeenCalled()
     const saved = await vi.mocked(api.saveCodingRuntimeBudgetPolicy).mock.results[0]!.value
     vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(saved)
     view.unmount()
     render(<App />)
-    await waitFor(() => expect(within(openGlobalStatus('策略与预算')).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))
+    await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))
   })
 
   it('selects a local project, saves an editable test command, and archives local test evidence', async () => {
@@ -6585,7 +6860,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
-    await screen.findByText('fixture-project')
+    await screen.findByLabelText('项目：fixture-project')
     fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     const commandInput = screen.getByLabelText('测试命令')
@@ -6650,7 +6925,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
-    await screen.findByText('fixture-project')
+    await screen.findByLabelText('项目：fixture-project')
     fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     expect(screen.getByRole('button', { name: /已保存/ })).toBeDisabled()
@@ -6680,7 +6955,7 @@ describe('App', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
-    await screen.findByText('fixture-project')
+    await screen.findByLabelText('项目：fixture-project')
     fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
@@ -6697,12 +6972,16 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
-    await screen.findByText('fixture-project')
+    await screen.findByLabelText('项目：fixture-project')
     fireEvent.click(screen.getByRole('button', { name: '测试' }))
-    fireEvent.click(screen.getByRole('button', { name: /执行测试/ }))
+    // The reason is shown before the click instead of after it (plan D4, X6).
+    const runTests = screen.getByRole('button', { name: /执行测试/ })
+    expect(runTests).toBeDisabled()
+    expect(runTests).toHaveAccessibleDescription(/任务进入测试步骤后才能执行；当前实际步骤：/)
+    expect(screen.getByTestId('tests-run-blocked-reason')).toHaveTextContent('方案评审 Gate')
+    fireEvent.click(runTests)
 
     expect(api.runProjectTests).not.toHaveBeenCalled()
-    expect(screen.getByTestId('toast')).toHaveTextContent('当前运行中或失败的测试节点')
   })
 
   it('shows command safety feedback and blocks dangerous test commands before execution', async () => {
@@ -6712,7 +6991,7 @@ describe('App', () => {
     render(<App />)
 
     fireEvent.click(screen.getByRole('button', { name: /选择本地仓库/ }))
-    await screen.findByText('fixture-project')
+    await screen.findByLabelText('项目：fixture-project')
     fireEvent.click(screen.getByRole('button', { name: '测试' }))
 
     const commandInput = screen.getByLabelText('测试命令')

@@ -1,0 +1,195 @@
+/*
+ * S1 task workspace layer (docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md §5).
+ * Loaded after styles.css and workbench-workspace.css so each S1 change stays in one place.
+ */
+
+/* ---- Type scale (plan L5): element defaults inside the workspace follow the variables. ---- */
+main :is(h1, h2, h3, h4, h5, h6) { font-size: var(--font-size-heading); }
+main small { font-size: var(--font-size-xs); }
+main :is(code, pre, kbd, samp) { font-size: var(--font-size-mono); }
+main :is(button, input, select, textarea) { font-size: inherit; }
+.detail-popover :is(h3, small) { font-size: var(--font-size-xs); }
+
+/* Distinct styles for primary, warning, blocking and dangerous actions (plan §5.5). */
+:root { --action-primary-bg: #222222; --action-primary-fg: #ffffff; --status-warning: #b26a00; --status-blocked: #c1331b; }
+:root[data-theme='dark'] { --action-primary-bg: #f1f1f1; --action-primary-fg: #141414; --status-warning: #f0b35a; --status-blocked: #ff8a73; }
+.primary-button { border-color: var(--action-primary-bg); background: var(--action-primary-bg); color: var(--action-primary-fg); }
+.danger-button { border: 1px solid var(--status-blocked); background: transparent; color: var(--status-blocked); border-radius: 8px; min-height: 36px; padding: 0 12px; font-weight: 600; cursor: pointer; }
+
+/* ---- One-row top bar, no status strip (plan L1). ---- */
+.app-shell { grid-template-areas: "header header" "navigation content"; grid-template-rows: auto minmax(0, 1fr); }
+.app-shell > .topbar.topbar--single-row {
+  flex-wrap: nowrap; align-items: center; gap: 8px; min-height: 56px; height: 56px; padding: 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.topbar--single-row .search-wrap { flex: 1 1 200px; min-width: 140px; max-width: 440px; }
+.topbar--single-row .search-box { min-height: 36px; }
+.topbar--single-row .primary-button, .topbar--single-row .theme-toggle { min-height: 36px; flex: none; }
+.theme-toggle--compact { width: 36px; padding: 0; justify-content: center; }
+.topbar-project-menu { position: relative; flex: 0 1 auto; min-width: 0; }
+.topbar-project-menu > summary {
+  display: flex; align-items: center; gap: 6px; max-width: 260px; min-height: 36px; padding: 0 10px;
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; list-style: none; font-weight: 600;
+}
+.topbar-project-menu > summary::-webkit-details-marker { display: none; }
+.topbar-project-menu > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar-project-panel {
+  position: absolute; z-index: 70; top: calc(100% + 6px); left: 0; width: min(380px, calc(100vw - 24px));
+  max-height: 70vh; overflow: auto; padding: 12px; border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+.project-overview { margin-top: 12px; }
+.team-connection-trigger {
+  display: inline-flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0; max-width: 240px; min-height: 36px;
+  padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; font: inherit;
+}
+.team-connection-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-connection-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: var(--text-faint); }
+.team-connection-dot--ok { background: var(--green); }
+.team-connection-dot--progress { background: var(--accent); }
+.team-connection-dot--warning { background: var(--status-warning); }
+.team-connection-section + .team-connection-section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.team-connection-section h3 { margin: 0 0 6px; color: var(--text-muted); }
+.team-connection-section p { margin: 4px 0; }
+.team-connection-pairing { display: flex; align-items: end; gap: 8px; margin-top: 8px; }
+.team-connection-pairing label { display: grid; gap: 4px; flex: 1; min-width: 0; }
+.team-connection-pairing input { min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); font: inherit; }
+.team-connection-confirm { margin-top: 10px; padding: 10px; border: 1px solid var(--status-blocked); border-radius: 8px; }
+.team-connection-confirm:focus-visible { outline: 2px solid var(--status-blocked); outline-offset: 2px; }
+.team-connection-confirm dl { display: grid; gap: 4px; margin: 8px 0; }
+.team-connection-confirm dd { margin: 0 0 6px; }
+.team-connection-confirm ul { margin: 0; padding-left: 18px; }
+.team-connection-feedback--error { color: var(--status-blocked); }
+.team-upload-records { display: grid; gap: 8px; margin: 8px 0 0; padding: 0; list-style: none; }
+.team-upload-record { padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.team-upload-record--warning { border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border)); }
+.team-upload-record .row { display: flex; align-items: center; gap: 8px; }
+.team-upload-record .row > span { color: var(--text-muted); }
+.team-upload-record .row > button { margin-left: auto; min-height: 28px; }
+.team-upload-record details summary { cursor: pointer; color: var(--text-muted); }
+.diagnostics-redaction { margin: 16px 0; }
+
+/* Toasts sit at the bottom so they never cover the status row actions (plan L4). With the
+   discussion open they move to the reader's bottom-left so the discussion input stays clear. */
+:root { --shell-nav-width: 192px; }
+@media (max-width: 2200px) { :root { --shell-nav-width: 102px; } }
+@media (max-width: 1500px) { :root { --shell-nav-width: 86px; } }
+.toast--floating { top: auto; bottom: 20px; right: 20px; left: auto; max-width: min(420px, calc(100vw - 40px)); }
+.app-shell:has(.workspace-split.is-discussion-open) .toast--floating { right: auto; left: calc(var(--shell-nav-width) + 20px); }
+
+/* ---- Task title row, stage bar, status row (plan §5.1). ---- */
+.workbench-layout.review-workbench { padding: 8px 16px; }
+.node-reader { gap: 6px; }
+.task-title-row { display: flex; align-items: center; gap: 8px; min-height: 36px; flex: none; }
+.task-title-row .workbench-project-menu { max-width: none; flex: 1 1 auto; min-width: 0; color: var(--text); }
+.task-title-row .workbench-project-menu > summary { display: flex; align-items: center; gap: 6px; max-width: 100%; list-style: none; padding: 4px 0; }
+.task-title-row .workbench-project-menu > summary::-webkit-details-marker { display: none; }
+.task-title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-title); font-weight: 600; }
+.task-title-tools { display: flex; align-items: center; gap: 6px; flex: none; }
+.task-usage-trigger { display: inline-flex; align-items: center; gap: 6px; border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: var(--font-size-xs); padding: 6px; border-radius: 6px; }
+.task-usage-trigger strong { color: var(--text); font-weight: 600; }
+.task-usage-trigger:hover { background: var(--surface); }
+.discussion-toggle { position: relative; min-height: 32px; padding: 0 10px; font-size: var(--font-size-xs); }
+.discussion-attention { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--status-warning); }
+
+.review-workbench .node-reader > .workflow-panel { flex: none; }
+.workflow-stage-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.workflow-stage-bar > .workflow-navigation-scroll { flex: 1 1 auto; min-width: 0; max-height: none; }
+.workflow-head-tools { display: flex; align-items: center; gap: 6px; flex: none; }
+.review-workbench .workflow-view-switch { position: static; padding: 2px; }
+.review-workbench .workflow-view-switch button { padding: 4px 8px; font-size: var(--font-size-xs); }
+.stage-substeps-toggle { display: inline-flex; align-items: center; gap: 4px; min-height: 30px; padding: 0 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: var(--font-size-xs); white-space: nowrap; }
+.stage-substeps-toggle .expanded { transform: rotate(180deg); }
+.stage-substeps-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.review-workbench .workflow-stage-navigation { display: flex; align-items: center; gap: 0; padding: 4px 0; overflow: visible; }
+.review-workbench .workflow-stage-step { flex: 1 1 0; min-width: 0; }
+.review-workbench .workflow-stage-navigation button {
+  display: grid; grid-template-columns: 22px auto; grid-template-rows: auto auto; align-items: center; justify-items: start;
+  column-gap: 6px; row-gap: 0; flex: 0 1 auto; min-width: 0; padding: 4px 6px; text-align: left;
+}
+.review-workbench .workflow-stage-navigation .stage-nav-index { grid-row: 1 / 3; width: 22px; height: 22px; font-size: var(--font-size-xs); }
+.review-workbench .workflow-stage-navigation strong { font-size: var(--font-size-xs); white-space: nowrap; }
+.review-workbench .workflow-stage-navigation small { grid-column: 2; font-size: var(--font-size-xs); white-space: nowrap; color: var(--text-muted); }
+.review-workbench .stage-progress-link { flex: 1 1 8px; min-width: 6px; margin-inline: 2px; }
+.workflow-node-navigation[hidden] { display: none; }
+.review-workbench .workflow-node-navigation { margin-top: 4px; padding: 6px 10px; }
+
+.node-reader > .inspector { padding: 10px 14px; gap: 6px; }
+.task-browsing-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; flex: none; padding: 4px 10px; border-left: 3px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 5%, var(--surface)); font-size: var(--font-size-xs); color: var(--text-muted); }
+.task-status-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px 12px; flex: none;
+  padding: 6px 10px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; background: var(--surface);
+}
+.task-status-row--warning { border-left-color: var(--status-warning); }
+.task-status-row--blocked { border-left-color: var(--status-blocked); }
+.task-status-row--progress { border-left-color: var(--accent); }
+.task-status-row--done { border-left-color: var(--green); }
+.task-status-text { min-width: 0; }
+.task-status-headline { margin: 0; font-size: var(--font-size-body); line-height: 1.45; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-status-headline strong { font-weight: 600; }
+.task-status-row--blocked .task-status-headline strong::before { content: '⛔ '; }
+.task-status-row--warning .task-status-headline strong::before { content: '⚠ '; }
+.task-status-qualifier { color: var(--text-muted); }
+.task-status-row--warning .task-status-qualifier { color: var(--status-warning); }
+.task-status-detail { display: flex; gap: 6px; margin: 0; overflow: hidden; color: var(--text-muted); font-size: var(--font-size-xs); line-height: 1.5; white-space: nowrap; }
+.task-status-detail > span { overflow: hidden; text-overflow: ellipsis; }
+.task-status-detail > span + span::before { content: '· '; }
+.task-status-step { flex: none; color: var(--text); }
+.task-status-target { flex: none; max-width: 45%; }
+.task-status-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; }
+.task-status-actions > button, .task-status-persistent > button { min-height: 32px; padding: 0 10px; font-size: var(--font-size-xs); }
+.task-status-persistent > button { color: var(--status-blocked); border-color: color-mix(in srgb, var(--status-blocked) 40%, var(--border)); }
+.task-status-actions [data-confirm-armed='true'] { outline: 2px solid var(--status-warning); outline-offset: 2px; }
+.task-status-reminder { grid-column: 1 / -1; margin: 0; padding: 4px 8px; border-radius: 6px; background: color-mix(in srgb, var(--status-warning) 12%, var(--surface)); color: var(--text); font-size: var(--font-size-xs); }
+.task-status-more { position: relative; }
+.task-status-more > summary { display: grid; place-items: center; width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; list-style: none; color: var(--text-muted); }
+.task-status-more > summary::-webkit-details-marker { display: none; }
+.task-status-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.task-status-more-panel {
+  position: absolute; z-index: 60; top: calc(100% + 6px); right: 0; width: min(420px, 70vw); padding: 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); font-size: var(--font-size-xs);
+}
+.task-status-more-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.task-status-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 10px; margin: 0; }
+.task-status-facts dt { color: var(--text-muted); }
+.task-status-facts dd { margin: 0; overflow-wrap: anywhere; }
+.workspace-primary-tabs .tab { min-height: 30px; padding: 0 10px; font-size: var(--font-size-xs); }
+.next-action:empty { display: none; }
+.node-reader .next-action { margin: 0 0 12px; }
+/* The first body block starts right under the tabs (plan §5.1: first body block ≤280px). */
+.node-reader .inspector-document-scroll { padding-top: 4px; }
+.node-reader .inspector-document-scroll > :first-child,
+.node-reader .inspector-document-scroll > .next-action:empty + *,
+.node-reader .inspector-document-scroll > :is(:first-child, .next-action:empty + *) > :first-child { margin-top: 0; }
+.node-action-footer:not(:has(textarea, details, [role='alert'])) { display: none; }
+
+/* ---- Discussion pane: collapsed by default when empty; overlay when space is short (plan L3, §5.4). ---- */
+.workbench-workspace[hidden] { display: none; }
+.workspace-split.is-discussion-collapsed { grid-template-columns: minmax(0, 1fr); }
+@media (max-width: 1100px) {
+  .workspace-split.is-discussion-open { grid-template-columns: minmax(0, 1fr); position: relative; }
+  .workspace-split.is-discussion-open > .workbench-splitter, .workspace-split.is-discussion-open > [role='separator'] { display: none; }
+  /* Stays below modal dialogs (.modal-backdrop is z-index 30) so dialogs opened from it remain usable. */
+  .workspace-split.is-discussion-open > .workbench-workspace {
+    position: absolute; z-index: 20; inset: 0 0 0 auto; width: min(420px, 90%); box-shadow: -8px 0 24px rgb(0 0 0 / 14%);
+  }
+}
+
+@media (max-width: 1100px) {
+  .topbar--single-row .search-wrap { flex-basis: 120px; }
+  .team-connection-trigger { max-width: 170px; }
+}
+
+/* Narrow CSS widths (small windows or 200% zoom): stage items keep their text and scroll
+   instead of overlapping, and the status row puts its conclusion above the actions so the
+   decision text is not cut off (plan §5.5 acceptance environment). */
+@media (max-width: 900px) {
+  .review-workbench .workflow-stage-step { flex: 1 0 auto; }
+  .review-workbench .workflow-stage-navigation button { flex: none; }
+  .workflow-stage-bar > .workflow-navigation-scroll { overflow-x: auto; }
+  .task-status-row { grid-template-columns: minmax(0, 1fr); }
+  .task-status-headline, .task-status-detail { white-space: normal; }
+  .task-status-detail { flex-wrap: wrap; }
+  .task-status-actions { justify-content: flex-start; }
+  .task-status-target { max-width: none; }
+}

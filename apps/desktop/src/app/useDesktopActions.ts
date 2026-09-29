@@ -203,6 +203,8 @@ export function useDesktopActions(input: {
     setIsStartingCodingAgent,
     setPendingInspectorAction,
     setIsNewRunOpen,
+    setDraftTitle,
+    setDraftRequest,
     setToast,
   } = setters
   const { selectedLocalProject, isTestCommandDirty } = derived
@@ -218,9 +220,13 @@ export function useDesktopActions(input: {
   const activeDesktopPairing = desktopPairingExpired ? undefined : desktopPairing
   const syncInFlight = useRef(false)
   const reviewInFlight = useRef(false)
-  const [teamSyncFeedback, setTeamSyncFeedback] = useState<{ status: 'success' | 'error'; message: string } | null>(null)
+  const [teamSyncFeedback, setTeamSyncFeedback] = useState<{ status: 'success' | 'error'; message: string; at?: string } | null>(null)
+  // Pairing failures stay in the form until the next attempt (plan §5.6).
+  const [pairingFeedback, setPairingFeedback] = useState<{ status: 'success' | 'error'; message: string } | null>(null)
+  const [newRunError, setNewRunError] = useState('')
   useEffect(() => {
     setTeamSyncFeedback(null)
+    setPairingFeedback(null)
   }, [selectedLocalProject?.id, activeDesktopPairing?.projectId])
 
   function samePendingInspectorAction(
@@ -282,14 +288,14 @@ export function useDesktopActions(input: {
   async function syncRemoteTeamState() {
     if (syncInFlight.current) return
     if (!desktopApi) {
-      const message = '请在 Electron 应用中拉取团队数据'
+      const message = '请在 Electron 应用中更新团队数据'
       setTeamSyncFeedback({ status: 'error', message })
       setToast(message)
       return
     }
 
     if (!activeDesktopPairing?.organizationId) {
-      const message = '请先绑定团队项目，再拉取团队数据'
+      const message = '请先连接团队项目，再更新团队数据'
       setTeamSyncFeedback({ status: 'error', message })
       setToast(message)
       return
@@ -298,7 +304,7 @@ export function useDesktopActions(input: {
     syncInFlight.current = true
     setIsSyncingRemote(true)
     setTeamSyncFeedback(null)
-    setToast('正在拉取团队数据...')
+    setToast('正在更新团队数据…')
 
     try {
       const snapshot = await desktopApi.loadRemoteSnapshot({
@@ -343,9 +349,9 @@ export function useDesktopActions(input: {
       }
 
       const message = policy
-        ? `拉取成功 · 策略 v${policy.version} · ${policy.syncedAt}`
-        : '团队数据已拉取，本地 Run 已保留'
-      setTeamSyncFeedback({ status: 'success', message })
+        ? `团队数据已更新 · 策略 v${policy.version} · ${policy.syncedAt}`
+        : '团队数据已更新，本地任务已保留'
+      setTeamSyncFeedback({ status: 'success', message, at: new Date().toISOString() })
       setToast(message)
     } catch (error) {
       const message = diagnosticDisplayError(error)
@@ -357,8 +363,8 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function pairDesktopWithTeam(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function pairDesktopWithTeam(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault()
 
     if (!desktopApi) {
       setToast('请在 Electron 应用中配对团队项目')
@@ -377,7 +383,8 @@ export function useDesktopActions(input: {
     }
 
     setIsPairingDesktop(true)
-    setToast('正在配对团队项目...')
+    setPairingFeedback(null)
+    setToast('正在连接团队项目…')
 
     try {
       const result = await desktopApi.pairDesktop({
@@ -386,11 +393,13 @@ export function useDesktopActions(input: {
       })
       setDesktopPairing(result.credential)
       setPairingCodeDraft('')
-      setToast(
-        `已绑定 ${result.credential.userName ?? result.credential.userId} / ${result.credential.role} 到 ${result.credential.projectName ?? result.credential.projectId}`,
-      )
+      const message = `已连接 ${result.credential.userName ?? result.credential.userId} / ${result.credential.role} 到 ${result.credential.projectName ?? result.credential.projectId}`
+      setPairingFeedback({ status: 'success', message })
+      setToast(message)
     } catch (error) {
-      setToast(diagnosticDisplayError(error))
+      const message = diagnosticDisplayError(error)
+      setPairingFeedback({ status: 'error', message: `连接失败：${message}。配对码已保留，可以核对后重试。` })
+      setToast(message)
     } finally {
       setIsPairingDesktop(false)
     }
@@ -983,12 +992,15 @@ export function useDesktopActions(input: {
       branchName: `ai/${slugifyBranchName(title) || 'new-run'}`,
     }
 
-    setIsNewRunOpen(false)
-    setToast('新 Run 已创建，正在进行需求澄清')
-
+    setNewRunError('')
     if (desktopApi) {
       try {
         const persistedRun = await desktopApi.createRun(createInput)
+        // Creating only persists the workflow; no model has been called yet (plan D2).
+        setIsNewRunOpen(false)
+        setDraftTitle('')
+        setDraftRequest('')
+        setToast('任务已创建，尚未调用模型')
         const nextState = await desktopApi.loadState()
         applyLocalExecutionState(nextState)
         setRuns((previousRuns) =>
@@ -999,10 +1011,15 @@ export function useDesktopActions(input: {
         setSelectedRunId(persistedRun.id)
         setSelectedNodeId(persistedRun.currentNodeId)
       } catch (error) {
-        setToast(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存新 Run 失败')
+        // Keep the dialog and the typed input so nothing is lost (plan §5.3).
+        const message = error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/u, '') : '保存新任务失败'
+        setNewRunError(`创建失败：${message}。已保留输入，可以重试。`)
+        setToast(message)
       }
       return
     }
+    setIsNewRunOpen(false)
+    setToast('任务已创建，尚未调用模型')
 
     const created = createWorkflowRunFromRequest({
       ...createInput,
@@ -1072,7 +1089,7 @@ export function useDesktopActions(input: {
       applyLocalExecutionState(result.state)
       setSelectedRunId(result.run.id)
       setSelectedNodeId(result.run.currentNodeId)
-      setToast('PR Delivery Package 已生成；请显式 Prepare GitHub Delivery')
+      setToast('交付包已生成；请点击「准备 GitHub 交付」继续')
     } catch (error) {
       setToast(prDraftFailureMessage(error))
     } finally {
@@ -1499,6 +1516,9 @@ export function useDesktopActions(input: {
   }
 
   return {
+    pairingFeedback,
+    newRunError,
+    setNewRunError,
     changeThemePreference,
     syncRemoteTeamState,
     teamSyncFeedback,

@@ -1,17 +1,18 @@
 import { DetailPopover } from './components/DetailPopover'
-import { WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
+import { DiscussionToggle, WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
+import { TeamConnectionMenu, TopbarProjectMenu } from './views/TaskShell'
+import { buildTeamConnectionView, deliveryIntentsRevokedByRepair } from './app/team-connection-view-model'
+import { formatLocalTime } from './app/desktop-view-model'
 import { buildRunUsageSummary } from './app/run-usage-summary'
 import {
   BookOpen,
   Bot,
   ClipboardCheck,
   ChevronDown,
-  CircleHelp,
   Settings2,
   Network,
   MoreHorizontal,
   Plus,
-  RefreshCw,
   Search,
   ShieldCheck,
   TestTube2,
@@ -81,14 +82,6 @@ const emptyProjectKnowledgeDocuments: KnowledgeDocument[] = []
 const emptyProjectKnowledgeChunks: KnowledgeChunk[] = []
 const emptyProjectKnowledgeEntities: KnowledgeEntity[] = []
 const emptyProjectKnowledgeRelations: KnowledgeRelation[] = []
-
-const remoteSyncStatusLabels = {
-  pending: 'queued',
-  sending: 'sending',
-  'retry-scheduled': 'retry_wait',
-  completed: 'synced',
-  terminal: 'terminal',
-} as const
 
 export function App() {
   const [workbenchOpenRequest, setWorkbenchOpenRequest] = useState<WorkbenchOpenRequest>({ serial: 0, type: 'details' })
@@ -522,11 +515,6 @@ export function App() {
     : selectedTeamProject
       ? 'bound_synced'
       : 'bound_unsynced'
-  const teamProjectSourceLabel = {
-    unbound: '未绑定',
-    bound_unsynced: '已绑定 · 待同步',
-    bound_synced: '已绑定 · 已同步',
-  }[teamProjectSource]
   const isSelectedCurrentNode = Boolean(
     selectedRun && selectedNode && selectedRun.currentNodeId === selectedNode.id,
   )
@@ -876,6 +864,9 @@ export function App() {
     generateAcceptanceBundle,
     toggleMcp,
     redactPreview,
+    pairingFeedback,
+    newRunError,
+    setNewRunError,
   } = useDesktopActions({
     desktopApi,
     state: workspace.state,
@@ -917,6 +908,16 @@ export function App() {
     void runCodingAgentAction(additionalAttemptAfterCount)
   }, [codingRuntime.error, codingRuntime.readiness, runCodingAgentAction, setActiveView, setToast])
 
+  const teamConnectionView = buildTeamConnectionView({
+    localProjectId: selectedLocalProject?.id,
+    pairing: desktopPairing ?? null,
+    pairingExpired: desktopPairingExpired,
+    operations: scopedRemoteSyncOperations,
+    teamProjectName: teamProjectLabel,
+    teamDataReadAt: teamSyncFeedback?.status === 'success' && teamSyncFeedback.at ? formatLocalTime(teamSyncFeedback.at) : null,
+    teamDataError: teamSyncFeedback?.status === 'error' ? teamSyncFeedback.message : null,
+  })
+
   async function retryTerminalRemoteSyncOperation(operationId: string) {
     if (!desktopApi) {
       setToast('请在 Electron 应用中重试远端同步')
@@ -926,9 +927,9 @@ export function App() {
     try {
       const state = await desktopApi.retryRemoteSyncOperation({ operationId })
       applyLocalExecutionState(state)
-      setToast('远端同步操作已重新排队')
+      setToast('已重新排队上传；收到团队服务回执后才算已上传')
     } catch {
-      setToast('远端同步重试失败，请稍后再试')
+      setToast('重新上传没有排队成功，请稍后再试')
     }
   }
 
@@ -1072,37 +1073,29 @@ export function App() {
     setActiveView('workbench')
   }
 
-  const policyStatus = gateEnforcement.isLoading
-    ? 'loading'
-    : gateEnforcement.decision?.status ?? (gateEnforcement.policySnapshot ? 'loaded' : 'not loaded')
-  const policyTone =
-    policyStatus === 'pass' || policyStatus === 'overridden'
-      ? 'good'
-      : policyStatus === 'warn'
-        ? 'warn'
-        : policyStatus === 'not loaded' || policyStatus === 'loaded'
-          ? 'soft'
-          : 'bad'
   const policySource = gateEnforcement.policySnapshot?.source ?? gateEnforcement.decision?.policySource ?? 'unavailable'
   const policyVersion = gateEnforcement.policySnapshot?.version ?? gateEnforcement.decision?.policyVersion
 
   return (
     <div className="app-shell" data-origin={dataOrigin}>
-        <header className="topbar">
-          <div className="project-switcher" aria-label="Project selector">
-            <div className="project-line">
-              <span className="project-label">Team Project</span>
-              {teamProjectLabel ? <strong className="project-value" title={teamProjectLabel}>{teamProjectLabel}</strong> : null}
-              <span className={`pill ${teamProjectSource === 'unbound' ? 'soft' : 'accent'}`}>{teamProjectSourceLabel}</span>
-            </div>
-            <div className="project-line">
-              <span className="project-label">Local Project</span>
-              <strong className="project-value project-value--local" title={selectedLocalProject?.path}>
-                {selectedLocalProject?.path ?? '未选择本地仓库'}
-              </strong>
-            </div>
-          </div>
-
+        <header className="topbar topbar--single-row">
+          <TopbarProjectMenu projectName={selectedLocalProject?.name} projectPath={selectedLocalProject?.path}>
+            <LocalProjectPanel
+              project={selectedLocalProject}
+              teamProjectLabel={teamProjectLabel}
+              teamProjectSource={teamProjectSource}
+              gitStatus={projectGitStatus}
+              isRefreshingGitStatus={isRefreshingGitStatus}
+              onRefreshGitStatus={refreshProjectGitStatus}
+              onSelectProject={selectLocalProject}
+              desktopConnected={Boolean(desktopApi)}
+            />
+            <section className="project-overview" aria-label="项目概览" data-testid="project-overview">
+              <h3>项目概览</h3>
+              <dl className="detail-values"><dt>已加载任务</dt><dd>{scopedRuns.length}</dd><dt>来源</dt><dd>{localRunCount} 本地 · {remoteRunCount} 远端</dd><dt>受阻 Gate</dt><dd>{pendingGateCount}</dd><dt>今日测试证据（UTC）</dt><dd>{testsTodayCount}</dd></dl>
+              <p className="meta">数量属于当前项目已加载的数据；受阻 Gate 只统计 blocked 状态，不等于全部待审批步骤。</p>
+            </section>
+          </TopbarProjectMenu>
           <div className="search-wrap">
             <div className="search-box">
             <Search size={16} />
@@ -1136,112 +1129,29 @@ export function App() {
             ) : null}
           </div>
 
-          <div className="topbar-actions">
-            <ThemeToggle value={themePreference} onChange={changeThemePreference} />
-            <form className="desktop-pairing-form" onSubmit={pairDesktopWithTeam}>
-              <span
-                data-testid="desktop-pairing-identity"
-                title={
-                  desktopPairing
-                    ? `${desktopPairing.userName ?? desktopPairing.userId} / ${desktopPairing.role} / ${desktopPairing.projectName ?? desktopPairing.projectId}`
-                    : undefined
-                }
-              >
-                {desktopPairingExpired
-                  ? '配对已过期 · 请重新绑定'
-                  : hasSelectedLocalProjectBinding && desktopPairing
-                    ? `${desktopPairing.userName ?? desktopPairing.userId} · ${desktopPairing.role} · ${desktopPairing.projectName ?? desktopPairing.projectId}`
-                    : '未配对 Team'}
-              </span>
-              <input
-                aria-label="Desktop pairing code"
-                placeholder="输入 pairing code"
-                value={pairingCodeDraft}
-                onChange={(event) => setPairingCodeDraft(event.target.value)}
-              />
-              <button type="submit" className="ghost-button" disabled={isPairingDesktop}>
-                {isPairingDesktop ? '配对中' : '绑定'}
-              </button>
-            </form>
-            <div className="team-sync-controls">
-              <button className="ghost-button" onClick={syncRemoteTeamState} disabled={isSyncingRemote}>
-                <RefreshCw size={16} />
-                {isSyncingRemote ? '拉取中' : '拉取团队数据'}
-              </button>
-              <details className="team-sync-help">
-                <summary aria-label="团队数据说明"><CircleHelp size={16} /></summary>
-                <p>从团队服务拉取你有权访问的项目、成员、运行与产物摘要，并刷新本机策略和预算。团队服务与网页使用同一份共享数据，可部署在本机或服务器上。此操作不拉取或推送 Git 代码；本地执行结果另行回传，GitHub 交付也有独立流程。</p>
-              </details>
-            </div>
-            <button className="ghost-button" onClick={redactPreview} aria-label="Test redaction">
-              <ShieldCheck size={16} />
-              Redaction 开
-            </button>
-            <button className="primary-button" onClick={() => setIsNewRunOpen(true)}>
-              <Plus size={16} />
-              新建 Run
-            </button>
-          </div>
+          <TeamConnectionMenu
+            view={teamConnectionView}
+            pairing={desktopPairing ?? null}
+            // A credential the service rejected is not a current identity (plan X3).
+            identity={teamConnectionView.connection === 'connected' && desktopPairing ? `${desktopPairing.userName ?? desktopPairing.userId} · ${desktopPairing.role} · ${desktopPairing.projectName ?? desktopPairing.projectId}` : ''}
+            localProjectName={(localProjectId) => localProjectId === selectedLocalProject?.id ? selectedLocalProject?.name ?? localProjectId ?? '未知' : localProjectId ?? '未知'}
+            hasSelectedProject={Boolean(selectedLocalProject)}
+            pairingCodeDraft={pairingCodeDraft}
+            onPairingCodeDraftChange={setPairingCodeDraft}
+            isPairing={isPairingDesktop}
+            onPair={() => void pairDesktopWithTeam()}
+            pairingFeedback={pairingFeedback}
+            revokedIntents={deliveryIntentsRevokedByRepair(githubDeliveryIntents)}
+            isSyncing={isSyncingRemote}
+            onUpdateTeamData={() => void syncRemoteTeamState()}
+            onRetryUpload={(operationId) => void retryTerminalRemoteSyncOperation(operationId)}
+          />
+          <ThemeToggle compact value={themePreference} onChange={changeThemePreference} />
+          <button className="primary-button" onClick={() => { setNewRunError(''); setIsNewRunOpen(true) }}>
+            <Plus size={16} aria-hidden="true" />
+            新建任务
+          </button>
         </header>
-
-        <section className="status-strip grouped-status" aria-label="全局状态分组">
-          <DetailPopover className="global-status-trigger" title="当前 Run" label={<><strong>当前 Run</strong><span>{selectedRun ? `${runUsage.tokenLabel} tokens · ${runUsage.costLabel}` : '未选择'}</span><ChevronDown size={14} /></>}>
-            <p>{selectedRun?.title ?? '尚未选择 Run'}</p>
-            <div data-testid="run-token-usage"><p>Run Tokens：{runUsage.tokenLabel}</p><p>费用：{runUsage.costLabel}</p></div>
-            <p className="meta">仅当前选中 Run 的已记录用量，不包含独立会话累计用量。</p>
-          </DetailPopover>
-          <DetailPopover className="global-status-trigger" title="项目概览" label={<><strong>项目概览</strong><span>已加载 Run {scopedRuns.length}{pendingGateCount ? ` · 阻塞 Gate ${pendingGateCount}` : ''}</span><ChevronDown size={14} /></>}>
-            <p>{selectedLocalProject?.name ?? selectedTeamProject?.name ?? '当前已加载项目'}</p>
-            <dl className="detail-values"><dt>已加载 Run</dt><dd>{scopedRuns.length}</dd><dt>来源</dt><dd>{localRunCount} 本地 · {remoteRunCount} 远端</dd><dt>阻塞 Gate</dt><dd>{pendingGateCount}</dd><dt>今日测试证据（UTC）</dt><dd>{testsTodayCount}</dd></dl>
-            <p className="meta">数量属于当前项目的已加载数据；阻塞 Gate 仅统计 blocked 状态，不等于全部待审批节点。</p>
-          </DetailPopover>
-          <DetailPopover className="global-status-trigger" title="策略与预算" label={<><strong>策略与预算</strong><span className={policyTone}>{gateEnforcement.loadError ? '策略读取失败' : gateEnforcement.isLoading ? '策略加载中' : gateEnforcement.policySnapshot ? '策略已加载' : '策略未加载'}{gateEnforcement.decision && !['pass','overridden'].includes(policyStatus) ? ` · ${policyStatus}` : ''}</span><span className={budgetTone}>{projectRuntimeBudget.status === 'loading' ? '预算加载中' : projectRuntimeBudget.status === 'unpaired' ? '预算未配对' : projectRuntimeBudget.status === 'unavailable' ? '预算读取失败' : !projectRuntimeBudget.policy ? '预算未配置' : !projectRuntimeBudget.policy.enabled ? '预算已禁用' : budgetStatus}</span><ChevronDown size={14} /></>}>
-            <h3>流程策略</h3><p>Policy Snapshot：{policyVersion ? `v${policyVersion}` : '尚未加载'} · 来源 {policySource}</p>
-            <p>加载状态：{gateEnforcement.loadError ? '读取失败' : gateEnforcement.isLoading ? '正在读取' : gateEnforcement.policySnapshot ? '已加载' : '不可用'}</p>
-            {gateEnforcement.loadError && <p role="status">{gateEnforcement.loadError}<button className="text-button" onClick={() => void gateEnforcement.refresh().catch(() => {})}>重试读取策略</button></p>}
-            <h3>所查看节点的评估</h3><p>{selectedNode?.title ?? '未选择节点'} · Run v{selectedRun?.version ?? '—'}：{gateEnforcement.decision?.status ?? '未评估'}</p>
-            <p className="meta">评估反映当前已读取的策略与证据，不代表人工审批已完成。</p>
-            <div data-testid="runtime-budget-status"><h3>项目预算规则</h3><p>{projectRuntimeBudget.label}</p><h3>相关预算评估</h3><p className={budgetTone} title={effectiveBudgetDecision?.reason}>{budgetStatus}</p>
-              <p className="meta">{currentModelBudget ? `项目最近模型调用 · Provider ${currentModelBudget.providerId}；事件未提供节点和时间，不能作为当前调用的实时许可。` : latestCodingRun?.budgetDecision ? `当前 Run 的 Coding Run ${latestCodingRun.id} · ${latestCodingRun.startedAt}` : '尚无可用评估记录。'}</p>
-              {budgetRecoveryCopy ? <p role="status">{budgetRecoveryCopy}</p> : null}
-            </div>
-            <button className="ghost-button" onClick={() => setActiveView('agents')}>打开项目模型与预算设置</button>
-          </DetailPopover>
-          <DetailPopover className="global-status-trigger" title="同步" label={<><strong>同步</strong><span>{scopedRemoteSyncOperations.some((item) => item.status === 'terminal') ? '同步失败' : scopedRemoteSyncOperations.length ? `${scopedRemoteSyncOperations.length} 项待完成` : hasSelectedLocalProjectBinding ? '暂无待同步任务' : '未绑定团队项目'}</span><ChevronDown size={14} /></>}>
-            <p>当前项目同步队列；策略缓存来源不表示网络连接或同步成功。</p>
-          {scopedRemoteSyncOperations.length > 0 ? (
-            <div className="stat remote-sync-operations" data-testid="remote-sync-operations">
-              <span>远端同步</span>
-              {scopedRemoteSyncOperations.map((operation) => (
-                <span
-                  className="remote-sync-operation"
-                  data-status={operation.status}
-                  key={operation.id}
-                >
-                  <span>{operation.kind}</span>
-                  <strong>{remoteSyncStatusLabels[operation.status]}</strong>
-                  <small>attempt {operation.attemptCount}</small>
-                  {operation.lastErrorCode ? <code>{operation.lastErrorCode}</code> : null}
-                  {operation.nextAttemptAt ? (
-                    <time dateTime={operation.nextAttemptAt}>{operation.nextAttemptAt}</time>
-                  ) : null}
-                  {operation.status === 'terminal' ? (
-                    <button
-                      className="ghost-button remote-sync-retry"
-                      type="button"
-                      aria-label={`重试 ${operation.kind} 同步`}
-                      onClick={() => void retryTerminalRemoteSyncOperation(operation.id)}
-                    >
-                      重试
-                    </button>
-                  ) : null}
-                </span>
-              ))}
-            </div>
-          ) : null}
-            {scopedRemoteSyncOperations.length === 0 ? <p>暂无待处理同步任务。</p> : null}
-          </DetailPopover>
-        </section>
 
       <aside className="sidebar rail" aria-label="Primary navigation">
         <nav className="nav-list">
@@ -1263,6 +1173,14 @@ export function App() {
         <section className="diagnostics-page" hidden={activeView !== 'diagnostics'} aria-label="本地诊断">
           <h2>本地诊断</h2>
           <p>用于排查当前应用的数据存储；数据环境名称不是项目或团队绑定。</p>
+          <section className="diagnostics-redaction" aria-label="脱敏自检">
+            <h3>脱敏自检</h3>
+            <p className="meta">用一段示例密钥检查脱敏规则是否生效；不读取真实凭据。</p>
+            <button className="ghost-button" onClick={redactPreview} aria-label="Test redaction">
+              <ShieldCheck size={16} aria-hidden="true" />
+              运行脱敏自检
+            </button>
+          </section>
           <CredentialAccessStatus api={desktopApi} detailed />
           <DiagnosticHistory api={desktopApi} active={activeView === 'diagnostics'} />
           <span className="stat stat--source" data-testid="runtime-source-badge" title={runtimeDataSource.detail}>
@@ -1319,19 +1237,11 @@ export function App() {
                       sourceView: 'workbench', returnView: 'workbench', focusTarget: 'inspector-tab', label: action.section, createdAt: new Date().toISOString() })
                   }}>
 
+            <div className="task-title-row">
             <details className="workbench-project-menu">
-              <summary>{selectedLocalProject?.name ?? '本地项目'} / {selectedRun?.title ?? '选择项目与 Run'}</summary>
+              <summary title={selectedRun?.title}><span className="task-title-text">{selectedRun?.title ?? (selectedLocalProject ? '选择任务' : '先选择本地项目')}</span><ChevronDown size={14} aria-hidden="true" /></summary>
             <div className="run-list">
-              <LocalProjectPanel
-                project={selectedLocalProject}
-                teamProjectLabel={teamProjectLabel}
-                teamProjectSource={teamProjectSource}
-                gitStatus={projectGitStatus}
-                isRefreshingGitStatus={isRefreshingGitStatus}
-                onRefreshGitStatus={refreshProjectGitStatus}
-                onSelectProject={selectLocalProject}
-                desktopConnected={Boolean(desktopApi)}
-              />
+              {!selectedLocalProject ? <p className="empty-note">先在顶栏的项目菜单中选择本地项目。</p> : null}
               <WorkRequestInbox
                 workRequests={workRequestInbox.workRequests}
                 isPaired={hasSelectedLocalProjectBinding}
@@ -1344,8 +1254,8 @@ export function App() {
                 }
               />
               <div className="section-heading">
-                <span>Runs</span>
-                <strong>开发者工作台</strong>
+                <span>任务</span>
+                <strong>当前项目的任务</strong>
               </div>
               {visibleRuns.length === 0 ? (
                 <p className="empty-note">没有匹配的 Run</p>
@@ -1429,6 +1339,25 @@ export function App() {
               )}
             </div>
             </details>
+            <div className="task-title-tools">
+              {selectedRun ? (
+                <DetailPopover className="task-usage-trigger" title="本任务用量" triggerLabel={`本任务用量：${runUsage.tokenLabel} tokens · ${runUsage.costLabel}`} label={<><span>本任务用量</span><strong>{runUsage.tokenLabel} tokens · {runUsage.costLabel}</strong><ChevronDown size={14} aria-hidden="true" /></>}>
+                  <div data-testid="run-token-usage"><p>Tokens：{runUsage.tokenLabel}</p><p>费用：{runUsage.costLabel}</p></div>
+                  <p className="meta">只包含当前任务已记录的用量，不包含独立会话的累计用量。</p>
+                  <h3>流程策略</h3><p>策略版本：{policyVersion ? `v${policyVersion}` : '尚未读取'} · 来源 {policySource}</p>
+                  <p>读取状态：{gateEnforcement.loadError ? '读取失败' : gateEnforcement.isLoading ? '正在读取' : gateEnforcement.policySnapshot ? '已读取' : '不可用'}</p>
+                  {gateEnforcement.loadError && <p role="status">{gateEnforcement.loadError}<button className="text-button" onClick={() => void gateEnforcement.refresh().catch(() => {})}>重试读取策略</button></p>}
+                  <p className="meta">策略结论只在影响当前决定时出现在状态行；评估不代表人工审批已完成。</p>
+                  <div data-testid="runtime-budget-status"><h3>项目预算规则</h3><p>{projectRuntimeBudget.label}</p><h3>相关预算评估</h3><p className={budgetTone} title={effectiveBudgetDecision?.reason}>{budgetStatus}</p>
+                    <p className="meta">{currentModelBudget ? `项目最近模型调用 · Provider ${currentModelBudget.providerId}；事件未提供节点和时间，不能作为当前调用的实时许可。` : latestCodingRun?.budgetDecision ? `当前任务的开发执行 ${latestCodingRun.id} · ${latestCodingRun.startedAt}` : '尚无可用评估记录。'}</p>
+                    {budgetRecoveryCopy ? <p role="status">{budgetRecoveryCopy}</p> : null}
+                  </div>
+                  <button className="ghost-button" onClick={() => setActiveView('agents')}>打开项目模型与预算设置</button>
+                </DetailPopover>
+              ) : null}
+              <DiscussionToggle />
+            </div>
+            </div>
 
             {selectedRun ? (
               <>
@@ -1510,6 +1439,8 @@ export function App() {
                   upstreamCodingDiffReady={hasArchivedUpstreamCodingDiff({ run: selectedRun, node: selectedNode, codingRuns, diffs: codingDiffArtifacts })}
                   onOpenCodingConfiguration={() => openSupportContext('coding-agent', '配置 Coding Runtime')}
                   {...(codingActionProjection ? { codingActionProjection } : {})}
+                  onCancelCodingRun={() => void cancelCodingRun()}
+                  onReplyCodingPermission={(decision) => void replyCodingPermission(decision)}
                   onRunCodingAgent={runCodingAgent}
                   onCreatePrDraft={generatePrDraft}
                   onPrepareGitHubDelivery={prepareSelectedGitHubDelivery}
@@ -1549,7 +1480,7 @@ export function App() {
                     <span className="pill soft">no run loaded</span>
                   </div>
                   <p className="empty-note">
-                    当前本地仓库没有已保存的 Run。创建 Run 或拉取团队数据后，这里才会展示真实工作流。
+                    当前本地仓库还没有开发任务。新建任务或连接团队后更新团队数据，这里会显示任务流程。
                   </p>
                 </section>
                 <aside className="inspector" data-testid="node-inspector-empty">
@@ -1725,11 +1656,12 @@ export function App() {
 
       {isNewRunOpen && (
         <div className="modal-backdrop" role="presentation">
-          <section className="modal" role="dialog" aria-modal="true" aria-label="Create new run">
+          <section className="modal" role="dialog" aria-modal="true" aria-label="新建任务">
             <div className="section-heading">
-              <span>New Run</span>
-              <strong>创建 AI 交付流</strong>
+              <span>新建任务</span>
+              <strong>描述要完成的开发任务</strong>
             </div>
+            <p className="meta">创建后不会立即调用模型；进入需求阶段后再选择模型并生成需求草稿。</p>
             <label>
               标题
               <input value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} />
@@ -1743,9 +1675,10 @@ export function App() {
                 取消
               </button>
               <button className="primary-button" onClick={createRun}>
-                创建并开始澄清
+                创建任务
               </button>
             </div>
+            {newRunError ? <p role="alert" className="modal-copy modal-copy--danger">{newRunError}</p> : null}
           </section>
         </div>
       )}

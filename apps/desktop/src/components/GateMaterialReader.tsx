@@ -18,6 +18,7 @@ export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedb
   const [readingId, setReadingId] = useState('')
   const revision = bundle.revisions.find((item) => item.id === readingId) ?? bundle.activeRevision
   const readingCurrent = revision?.id === bundle.activeRevision?.id
+  const pendingConfirmation = bundle.state === 'ready' && bundle.activeRevision?.clarificationRevision?.status === 'review_requested'
   const toggleRevision = readingCurrent ? onToggleRevision : undefined
   return <div className="gate-material-reader">
     <div className="material-reference-links"><span>审查依据</span>
@@ -31,7 +32,11 @@ export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedb
       {reference === 'knowledge' && knowledge}
     </section>}
     {bundle.revisions.length > 1 && <label>阅读版本<select aria-label="阅读需求版本" value={revision?.id} onChange={(event) => setReadingId(event.target.value)}>{bundle.revisions.map((item) => <option key={item.id} value={item.id}>需求澄清 v{item.clarificationRevision?.revision ?? '—'} · {item.id === bundle.activeRevision?.id ? '当前版本' : '历史版本'}</option>)}</select></label>}
-    {!readingCurrent && <p role="status">正在阅读历史版本；当前修订与审批仍以最新版本为准。</p>}
+    {/* Reading history never moves the approval target: the notice names the version being confirmed (plan V1, §6.2). */}
+    {!readingCurrent && <p role="status" className="material-history-notice">
+      正在阅读历史版本 v{revision?.clarificationRevision?.revision ?? '—'}；确认与修订仍针对需求 v{bundle.activeRevision?.clarificationRevision?.revision ?? '—'}。
+      {bundle.activeRevision ? <button type="button" className="text-button" onClick={() => setReadingId('')}>{pendingConfirmation ? '返回待确认版本' : '返回当前版本'}</button> : null}
+    </p>}
     <article className="material-document" data-testid="clarification-current-revision">
       <div className="compact-row"><h2>需求澄清 v{revision?.clarificationRevision?.revision ?? '—'}</h2><span>{({ draft: '草稿', review_requested: '待确认', revision_requested: '待修订', approved: '已确认', superseded: '已有新版本' } as Record<string, string>)[revision?.clarificationRevision?.status ?? ''] ?? '版本不可用'}</span></div>
       {revision ? <ArtifactReviewReader artifact={revision} review={review} reports={reports} requirement onFeedback={onFeedback} onToggleRevision={toggleRevision} revisionSelected={revisionSelected} onDiscuss={onDiscuss} /> : <p>正文不可用，请核对源产物。</p>}

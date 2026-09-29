@@ -30,22 +30,26 @@ export function NavButton({
 export function ThemeToggle({
   value,
   onChange,
+  compact = false,
 }: {
   value: ThemePreference
   onChange: (value: ThemePreference) => void
+  /** Icon-only in the one-row top bar (plan L1); the label stays available to assistive tech. */
+  compact?: boolean
 }) {
   const next = value === 'system' ? 'light' : value === 'light' ? 'dark' : 'system'
   const label = value === 'system' ? '跟随系统' : value === 'light' ? '浅色' : '深色'
 
   return (
     <button
-      className="theme-toggle"
+      className={`theme-toggle ${compact ? 'theme-toggle--compact' : ''}`}
       onClick={() => onChange(next)}
-      aria-label="Toggle color theme"
+      aria-label={`Toggle color theme · ${label}`}
+      title={`主题：${label}`}
       data-testid="theme-toggle"
     >
-      {value === 'dark' ? <Moon size={16} /> : <Sun size={16} />}
-      {label}
+      {value === 'dark' ? <Moon size={16} aria-hidden="true" /> : <Sun size={16} aria-hidden="true" />}
+      {compact ? <span className="sr-only">{label}</span> : label}
     </button>
   )
 }
@@ -80,10 +84,11 @@ export function LocalProjectPanel({
   desktopConnected: boolean
 }) {
   const branchLabel = getBranchLabel(project, gitStatus)
+  // Same wording as the team connection summary: connection and team data are separate facts (plan T4, X3).
   const teamProjectSourceLabel = {
-    unbound: '未绑定',
-    bound_unsynced: '已绑定 · 待同步',
-    bound_synced: '已绑定 · 已同步',
+    unbound: '未连接团队',
+    bound_unsynced: '已连接 · 团队数据未读取',
+    bound_synced: '已连接 · 团队数据已读取',
   }[teamProjectSource]
 
   return (

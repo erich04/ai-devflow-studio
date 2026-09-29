@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { createWorkflowRunFromRequest } from '@ai-devflow/shared'
-import { WorkbenchWorkspace } from './WorkbenchWorkspace'
+import { DiscussionToggle, WorkbenchWorkspace } from './WorkbenchWorkspace'
 import type { ConversationCommand, WorkbenchConversation } from '../electron/workbench-conversation-contract'
 
 const run = createWorkflowRunFromRequest({ runId: 'run-ui', title: '清理任务', request: '实现清理', projectId: 'local-1', creatorId: 'user-1', branchName: 'ai/clear', now: '2026-09-16T10:00:00Z' }).run
@@ -92,6 +92,49 @@ describe('split document reader', () => {
     fireEvent.click(within(screen.getByLabelText('会话历史记录')).getByRole('button', { name: /保留的会话/ }))
     expect(await screen.findByRole('textbox', { name: '对话内容' })).toHaveValue('继续之前的讨论')
     expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(0)
+  })
+})
+
+describe('discussion pane (plan L3, §5.4)', () => {
+  it('keeps an empty discussion collapsed until the user opens it and remembers the choice per project', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} splitDetails><DiscussionToggle />{f.props.children}</WorkbenchWorkspace>)
+    await waitFor(() => expect(f.api.workbenchConversation).toHaveBeenCalledWith({ type: 'list', projectId: run.projectId }))
+    const pane = screen.getByTestId('workbench-workspace')
+    expect(pane).not.toBeVisible()
+    expect(document.querySelector('.workspace-split')).toHaveClass('is-discussion-collapsed')
+    const toggle = screen.getByRole('button', { name: '讨论' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    fireEvent.click(toggle)
+    expect(pane).toBeVisible()
+    expect(toggle).toHaveAccessibleName('收起讨论')
+    expect(await screen.findByRole('region', { name: '对话空状态' })).toHaveTextContent('新建对话')
+    expect(localStorage.getItem(`devflow-workbench-discussion:${run.projectId}`)).toBe('open')
+    fireEvent.click(toggle)
+    expect(pane).not.toBeVisible()
+    expect(localStorage.getItem(`devflow-workbench-discussion:${run.projectId}`)).toBe('closed')
+  })
+
+  it('keeps the draft while collapsed and does not take focus when a background answer arrives', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '进行中的讨论' })
+    render(<WorkbenchWorkspace {...f.props} splitDetails><DiscussionToggle />{f.props.children}</WorkbenchWorkspace>)
+    const input = await screen.findByRole('textbox', { name: '对话内容' })
+    expect(screen.getByTestId('workbench-workspace')).toBeVisible()
+    fireEvent.change(input, { target: { value: '还没发送的草稿' } })
+    // The title row toggle and the pane's own collapse button do the same thing.
+    expect(screen.getAllByRole('button', { name: '收起讨论' })).toHaveLength(2)
+    fireEvent.click(within(screen.getByRole('region', { name: '当前查看的节点详情' })).getByRole('button', { name: '收起讨论' }))
+    expect(screen.getByTestId('workbench-workspace')).not.toBeVisible()
+    const inspectorInput = screen.getByLabelText('节点原有表单')
+    inspectorInput.focus()
+    f.sessions[0]!.status = 'awaiting_answer'; f.sessions[0]!.version++
+    await act(async () => { f.push() })
+    expect(inspectorInput).toHaveFocus()
+    await waitFor(() => expect(screen.getByRole('button', { name: /讨论/ })).toHaveAccessibleName('讨论 有待回答的讨论'))
+    fireEvent.click(screen.getByRole('button', { name: /讨论/ }))
+    expect(screen.getByLabelText('对话内容')).toBe(input)
+    expect(input).toHaveValue('还没发送的草稿')
   })
 })
 

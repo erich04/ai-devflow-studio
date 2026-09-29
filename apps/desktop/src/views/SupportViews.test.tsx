@@ -140,3 +140,45 @@ describe('TestsView status model', () => {
     expect(screen.getByTestId('test-workflow-status')).toHaveTextContent('测试节点已完成')
   })
 })
+
+describe('TestsView empty states and run preconditions (plan D4, X6)', () => {
+  it.each([
+    ['no local project', { project: undefined, commandDraft: '' }, '选择本地仓库后再配置或执行测试。', '先选择本地仓库，再配置或执行测试。'],
+    ['no saved command', { project: { ...project, testCommand: '' }, commandDraft: '' }, '配置当前项目的测试命令后，才能产生测试证据。', '先保存当前项目的测试命令。'],
+  ] as const)('explains %s instead of offering a run', (_label, overrides, emptyCopy, blockedReason) => {
+    render(<TestsView {...defaultProps} {...overrides} />)
+
+    expect(screen.getByTestId('tests-empty-state')).toHaveTextContent(emptyCopy)
+    const runButton = screen.getByRole('button', { name: '执行测试' })
+    expect(runButton).toBeDisabled()
+    expect(runButton).toHaveAccessibleDescription(blockedReason)
+  })
+
+  it('does not treat a saved command as a finished test', () => {
+    render(<TestsView {...defaultProps} />)
+
+    expect(screen.getByTestId('tests-empty-state')).toHaveTextContent('当前任务尚未运行测试，可以点击「执行本地测试」。')
+    expect(screen.getByRole('button', { name: '执行测试' })).toBeEnabled()
+    expect(screen.queryByTestId('tests-run-blocked-reason')).not.toBeInTheDocument()
+  })
+
+  it('names the actual step when the task has not reached testing', () => {
+    const designNode: WorkflowNode = { ...testNode, id: 'node-design', stage: 'design', kind: 'agent', title: '方案设计', status: 'running' }
+    const pendingTest = { ...testNode, status: 'pending' as const }
+    const earlyRun = { ...run, currentNodeId: designNode.id, nodes: [designNode, pendingTest] }
+    render(<TestsView {...defaultProps} selectedRun={earlyRun} selectedNode={pendingTest} />)
+
+    expect(screen.getByRole('button', { name: '执行测试' })).toBeDisabled()
+    expect(screen.getByTestId('tests-run-blocked-reason')).toHaveTextContent('任务进入测试步骤后才能执行；当前实际步骤：方案设计。')
+    expect(screen.getByTestId('tests-empty-state')).toHaveTextContent('命令已保存不代表测试已完成。')
+  })
+
+  it('shows when a passed result ran and that its applicability cannot be verified', () => {
+    render(<TestsView {...defaultProps} evidence={[evidenceWithStatus('passed')]} />)
+
+    const status = screen.getByTestId('test-execution-status')
+    expect(status).toHaveTextContent('执行于')
+    expect(status).toHaveTextContent('证据没有记录所测代码的提交，适用性无法核实')
+    expect(status).not.toHaveTextContent(/仍然有效|已过期/)
+  })
+})

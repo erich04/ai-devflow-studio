@@ -3,13 +3,27 @@ import { WorkbenchSplitter } from './WorkbenchSplitter'
 import { ConversationBody } from './ConversationBody'
 import { NewConversationDialog } from './ConversationDialogs'
 import { ConversationDetailsDialog, ConversationTabMenu, type ConversationMenuTarget, type ConversationTabTarget } from './ConversationDetails'
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { ArrowUp, Brain, ChevronDown, History, MessageCircle, MoreHorizontal, Pin, Plus, RotateCcw, Square, X } from 'lucide-react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowUp, Brain, ChevronDown, History, MessageCircle, MoreHorizontal, PanelRightClose, Pin, Plus, RotateCcw, Square, X } from 'lucide-react'
 import { type WorkflowRun } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
 import type { ConversationAction, ConversationCommand, ConversationMessage, WorkbenchConversation } from '../electron/workbench-conversation-contract'
 
 export type WorkbenchOpenRequest = { serial: number; type: 'details' | 'discussion'; prompt?: string }
+
+type DiscussionPaneState = { open: boolean; toggle: () => void; attention: boolean }
+/** Lets the task title row toggle the project discussion without owning its state (plan §5.4). */
+const DiscussionPaneContext = createContext<DiscussionPaneState | null>(null)
+
+export function DiscussionToggle() {
+  const pane = useContext(DiscussionPaneContext)
+  if (!pane) return null
+  return <button type="button" className="ghost-button discussion-toggle" aria-expanded={pane.open} aria-controls="workbench-discussion" onClick={pane.toggle}>
+    <MessageCircle size={16} aria-hidden="true" />{pane.open ? '收起讨论' : '讨论'}{pane.attention && !pane.open ? <i className="discussion-attention" aria-label="有待回答的讨论" /> : null}
+  </button>
+}
+
+const discussionPreferenceKey = (projectId: string) => `devflow-workbench-discussion:${projectId}`
 const statusCopy: Record<WorkbenchConversation['status'], string> = {
   idle: '可以继续提问', running: '正在调查', awaiting_answer: '等待你的回答', failed: '需要重试', interrupted: '上次调查已中断', cancelled: '已停止',
 }
@@ -46,6 +60,19 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   visibleProject.current = projectId
   const tabbar = useRef<HTMLDivElement>(null)
   const lastRequest = useRef(request.serial)
+  // Only a validated UI preference is stored, scoped to the project (plan §3).
+  const [discussionPreference, setDiscussionPreference] = useState<'open' | 'closed' | null>(null)
+  const [autoOpened, setAutoOpened] = useState(false)
+  useEffect(() => {
+    setAutoOpened(false)
+    let stored: string | null = null
+    try { stored = projectId ? localStorage.getItem(discussionPreferenceKey(projectId)) : null } catch { /* optional UI preference */ }
+    setDiscussionPreference(stored === 'open' || stored === 'closed' ? stored : null)
+  }, [projectId])
+  const rememberDiscussion = useCallback((next: 'open' | 'closed') => {
+    setDiscussionPreference(next)
+    if (projectId) { try { localStorage.setItem(discussionPreferenceKey(projectId), next) } catch { /* optional UI preference */ } }
+  }, [projectId])
   const activate = useCallback((id: string) => {
     setActive(id)
     if (projectId) { try { localStorage.setItem(`devflow-workbench-tab:${projectId}`, id) } catch { /* storage unavailable; durable conversation records are unaffected */ } }
@@ -135,8 +162,8 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       if (splitDetails && reader.current) { reader.current.scrollTop = 0; reader.current.focus({ preventScroll: true }) }
       else { activate('details'); setShowHistory(false); setCreationRequest(null) }
     }
-    else beginCreate(request.prompt)
-  }, [activate, beginCreate, request, splitDetails])
+    else { if (splitDetails) rememberDiscussion('open'); beginCreate(request.prompt) }
+  }, [activate, beginCreate, rememberDiscussion, request, splitDetails])
 
   useEffect(() => {
     tabbar.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
@@ -157,7 +184,14 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     onNavigate(action)
   }
 
-  const conversationPane = <aside className="workbench-workspace" data-testid="workbench-workspace" aria-label={splitDetails ? '独立对话' : '节点详情与对话'}>
+  // Empty discussion starts collapsed unless the user chose otherwise (plan L3). Once it has
+  // shown sessions, closing the last tab keeps the pane (empty state and history) until the
+  // user collapses it, so the column does not vanish under the pointer.
+  const hasOpenSessions = visible.length > 0
+  useEffect(() => { if (hasOpenSessions) setAutoOpened(true) }, [hasOpenSessions])
+  const discussionOpen = !splitDetails || (discussionPreference ? discussionPreference === 'open' : autoOpened || hasOpenSessions)
+  const discussionAttention = visible.some((item) => item.status === 'awaiting_answer')
+  const conversationPane = <aside id="workbench-discussion" className="workbench-workspace" data-testid="workbench-workspace" aria-label={splitDetails ? '独立对话' : '节点详情与对话'} hidden={!discussionOpen}>
     <div className="workspace-tab-strip">
       <div ref={tabbar} className="workspace-tabs" role="tablist" aria-label={splitDetails ? '独立会话' : '节点详情与独立会话'} onKeyDown={(event) => {
         if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) return
@@ -191,6 +225,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       {session && <ConversationUsage key={session.id} session={session} />}
       <button className="workspace-icon" aria-label="新建对话" title="新建独立对话，可以询问整个项目" disabled={!projectId || !api?.workbenchConversation || creating} onClick={() => beginCreate()}><Plus size={19} /></button>
       <button className="workspace-icon" aria-label="会话历史" title="会话历史" aria-expanded={showHistory} onClick={() => setShowHistory(!showHistory)}><History size={18} /></button>
+      {splitDetails && <button className="workspace-icon" aria-label="收起讨论" title="收起讨论；会话、草稿与阅读位置都会保留" onClick={() => rememberDiscussion('closed')}><PanelRightClose size={18} /></button>}
     </div>
     {tabMenu && menuSession && <ConversationTabMenu key={menuSession.id} target={tabMenu} onClose={closeMenu} onDetails={() => { setDetailsTarget(tabMenu); setTabMenu(null) }} />}
     {detailsTarget && detailsSession && <ConversationDetailsDialog key={detailsSession.id} session={detailsSession} projectName={projectName ?? '当前项目'} providerName={providerName} statusLabel={statusCopy[detailsSession.status]} returnFocus={detailsTarget.trigger} onClose={() => setDetailsTarget(null)} onRename={(title) => runCommand({ type: 'update', projectId: detailsSession.localProjectId, conversationId: detailsSession.id, title })} />}
@@ -215,11 +250,13 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       <ConversationView modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand} />
     </div>}
   </aside>
-  return splitDetails ? <div className="workspace-split">
-    <section ref={reader} id="workbench-node-reader" className="node-reader" tabIndex={-1} aria-label="当前查看的节点详情">{children}</section>
-    <WorkbenchSplitter initialWidth={480} />
-    {conversationPane}
-  </div> : conversationPane
+  return splitDetails ? <DiscussionPaneContext.Provider value={{ open: discussionOpen, attention: discussionAttention, toggle: () => rememberDiscussion(discussionOpen ? 'closed' : 'open') }}>
+    <div className={`workspace-split ${discussionOpen ? 'is-discussion-open' : 'is-discussion-collapsed'}`}>
+      <section ref={reader} id="workbench-node-reader" className="node-reader" tabIndex={-1} aria-label="当前查看的节点详情">{children}</section>
+      {discussionOpen && <WorkbenchSplitter initialWidth={480} />}
+      {conversationPane}
+    </div>
+  </DiscussionPaneContext.Provider> : conversationPane
 }
 
 function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError }: {

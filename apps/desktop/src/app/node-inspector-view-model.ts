@@ -9,6 +9,7 @@ import {
   type CodingAgentRun,
   type CodingDiffArtifact,
   type GateEnforcementDecision,
+  type GateEnforcementReason,
   type GitHubDeliveryIntent,
   type GitHubDeliveryOperatorOutcome,
   type NodeStage,
@@ -61,6 +62,11 @@ export type InspectorActionId =
   | 'stopGitHubDelivery'
   | 'verifyGitHubDeliveryRevocation'
   | 'createAcceptanceBundle'
+  | 'stopCodingRun'
+  | 'approveCodingPermission'
+  | 'rejectCodingPermission'
+  | 'cancelStageAgent'
+  | 'syncTeam'
 
 export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride'
 
@@ -86,11 +92,52 @@ export type InspectorAction = {
   testId?: string
 }
 
+/**
+ * The one conclusion shown in the task status row (plan §6.1). The headline, the
+ * qualifier and the buttons all come from this object, so they cannot disagree.
+ */
+export type InspectorStatusKind =
+  | 'history'
+  | 'waiting_upstream'
+  | 'loading'
+  | 'unverified'
+  | 'running'
+  | 'permission'
+  | 'failed'
+  | 'blocked'
+  | 'awaiting_role'
+  | 'approvable'
+  | 'ready'
+  | 'idle'
+
+export type InspectorStatusTone = 'neutral' | 'progress' | 'warning' | 'blocked' | 'done'
+
 export type InspectorNextAction = {
   title: string
   copy: string
+  kind: InspectorStatusKind
+  tone: InspectorStatusTone
+  /** Short second clause of the headline, e.g. “尚未运行 AI 审查”. */
+  qualifier?: string
   primaryActionId?: InspectorActionId
   secondaryActionIds: InspectorActionId[]
+  /** Stop, cancel and important rejections: always visible, never folded (plan §3). */
+  persistentActionIds: InspectorActionId[]
+  /** The first click only arms a reminder; a second click submits (plan §6.1). */
+  confirmBefore?: { actionId: InspectorActionId; message: string }
+}
+
+/**
+ * What a Gate approval would apply to. Requirement Gates carry the exact revision;
+ * design Gates only carry a title and time until S4 binds a design version (plan V2).
+ */
+export type InspectorApprovalTarget = {
+  kind: 'requirement' | 'design' | 'other'
+  determinable: boolean
+  revision?: number
+  title?: string
+  generatedAt?: string
+  reason?: string
 }
 
 export type InspectorTabPlan = {
@@ -494,12 +541,15 @@ export function buildStatusDescriptors(input: {
             blocked: '已阻断',
             hard_blocked: '强制阻断',
             overridden: '已例外放行',
-            blocked_policy_unavailable: '策略不可用',
+            // Missing policy is an unverified state, not a policy block (plan X4, §6.1).
+            blocked_policy_unavailable: '待核实',
           } as const)[decision.status]
         : '未评估',
     tone: input.isLoadingGateEnforcement
       ? 'warn'
-      : decision?.status === 'blocked' || decision?.status === 'hard_blocked' || decision?.status === 'blocked_policy_unavailable'
+      : decision?.status === 'blocked_policy_unavailable'
+        ? 'warn'
+      : decision?.status === 'blocked' || decision?.status === 'hard_blocked'
         ? 'bad'
         : decision?.status === 'warn' || decision?.status === 'overridden'
           ? 'warn'
@@ -508,7 +558,7 @@ export function buildStatusDescriptors(input: {
             : 'soft',
     readiness: input.isLoadingGateEnforcement
       ? 'warning'
-      : !decision
+      : !decision || decision.status === 'blocked_policy_unavailable'
         ? 'missing'
         : decision.blocksApproval
           ? 'blocked'
@@ -516,11 +566,15 @@ export function buildStatusDescriptors(input: {
             ? 'warning'
             : 'passed',
     summary: decision
-      ? decision.blocksApproval
-        ? '当前 Gate 评估会阻止审批。'
-        : '当前 Gate 评估允许继续审批。'
+      ? decision.status === 'blocked_policy_unavailable'
+        ? '尚未读取团队策略，暂时无法判断能否审批。'
+        : decision.blocksApproval
+          ? '当前 Gate 评估会阻止审批。'
+          : '当前 Gate 评估允许继续审批。'
       : '当前 Gate 尚未完成策略评估。',
-    nextAction: decision?.blocksApproval ? '查看 Gate 条件与 Remediation。' : '确认条件后通过 Gate。',
+    nextAction: decision?.status === 'blocked_policy_unavailable'
+      ? '更新团队数据后重新评估。'
+      : decision?.blocksApproval ? '查看 Gate 条件与 Remediation。' : '确认条件后通过 Gate。',
     impact: 'Gate 审批结论',
   })
   const policyStatus = (): StatusDescriptor => ({
@@ -529,28 +583,33 @@ export function buildStatusDescriptors(input: {
     state: input.isLoadingGateEnforcement
       ? '加载中'
       : decision?.status === 'blocked_policy_unavailable'
-        ? '策略不可用'
+        ? '尚未读取'
         : input.policySnapshot
           ? '已加载'
           : '未加载',
     tone: input.isLoadingGateEnforcement
       ? 'warn'
       : decision?.status === 'blocked_policy_unavailable'
-        ? 'bad'
+        ? 'warn'
         : input.policySnapshot
           ? 'good'
           : 'soft',
     readiness: input.isLoadingGateEnforcement
       ? 'warning'
       : decision?.status === 'blocked_policy_unavailable'
-        ? 'blocked'
+        ? 'missing'
         : input.policySnapshot
           ? 'passed'
           : 'missing',
-    summary: input.policySnapshot
-      ? '团队策略已加载，可用于解释当前 Gate 条件。'
-      : '当前环境尚未加载团队策略。',
-    nextAction: input.policySnapshot ? '使用该 snapshot 解释 Gate 条件。' : '先同步团队策略，再重新评估 Gate。',
+    // The evaluation, not a cached local snapshot, says whether the team policy is usable.
+    summary: decision?.status === 'blocked_policy_unavailable'
+      ? '本次启动还没有读取团队策略，当前 Gate 无法按团队规则评估。'
+      : input.policySnapshot
+        ? '团队策略已加载，可用于解释当前 Gate 条件。'
+        : '当前环境尚未加载团队策略。',
+    nextAction: decision?.status === 'blocked_policy_unavailable' || !input.policySnapshot
+      ? '更新团队数据后重新评估 Gate。'
+      : '使用该 snapshot 解释 Gate 条件。',
     impact: '团队策略',
   })
   const approvalStatus = (): StatusDescriptor => ({
@@ -756,13 +815,18 @@ export function buildGateReadinessPresentation(input: {
   decision: GateEnforcementDecision | null
   isLoading: boolean
   canApprove: boolean
+  /** A Gate that is not the actual current step can never “pass” (plan D5). */
+  isCurrentNode?: boolean
 }): { summary: GateReadinessSummary; groups: GateReadinessGroup[] } {
   const counts = countGateReadiness(input.descriptors)
-  const canPass = Boolean(input.decision && !input.decision.blocksApproval && input.canApprove)
+  const isCurrentNode = input.isCurrentNode ?? true
+  const canPass = Boolean(isCurrentNode && input.decision && !input.decision.blocksApproval && input.canApprove)
   const summary: GateReadinessSummary = {
     canPass,
     isLoading: input.isLoading,
-    headline: input.isLoading
+    headline: !isCurrentNode
+      ? '尚未轮到这个 Gate'
+      : input.isLoading
       ? '正在评估 Gate'
       : canPass
         ? counts.warning > 0 || counts.missing > 0
@@ -771,7 +835,9 @@ export function buildGateReadinessPresentation(input: {
         : counts.blocked > 0
           ? 'Gate 暂时不能通过'
           : 'Gate 尚未准备完成',
-    detail: input.isLoading
+    detail: !isCurrentNode
+      ? '上游步骤完成后才会评估和审批这个 Gate。'
+      : input.isLoading
       ? '策略与证据正在加载，完成后会自动更新结论。'
       : canPass
         ? counts.warning > 0 || counts.missing > 0
@@ -886,10 +952,32 @@ export function buildGateRequirementMatrix(input: {
   return rows
 }
 
+/** “需求 v2”, “方案” or the Gate’s own title: the object a confirmation applies to. */
+export function gateApprovalSubject(node: WorkflowNode, target: InspectorApprovalTarget | undefined): string {
+  if (node.stage === 'clarify' || target?.kind === 'requirement') {
+    return target?.revision ? `需求 v${target.revision}` : '需求'
+  }
+  if (node.stage === 'design' || target?.kind === 'design') return '方案'
+  return displayNodeTitle(node)
+}
+
+function approveGateLabel(node: WorkflowNode, target: InspectorApprovalTarget | undefined): string {
+  if (node.kind === 'gate' && (node.stage === 'clarify' || node.stage === 'design')) {
+    return `确认${gateApprovalSubject(node, target)}`
+  }
+  return '通过 Gate'
+}
+
+function hasPriorClarification(artifacts: Artifact[]): boolean {
+  return artifacts.some((artifact) => artifact.kind === 'clarification')
+}
+
 function buildActionCatalog(
   node: WorkflowNode,
   hasTeamProjectBinding: boolean,
   codingActionProjection?: CodingRuntimeActionProjection,
+  approvalTarget?: InspectorApprovalTarget,
+  artifacts: Artifact[] = [],
 ): Record<InspectorActionId, InspectorAction> {
   return {
     openKnowledgeReview: {
@@ -906,16 +994,48 @@ function buildActionCatalog(
     },
     completeAgent: {
       id: 'completeAgent',
-      label: node.stage === 'design' ? '生成设计方案' : '生成需求澄清',
+      label: node.stage === 'design'
+        ? '生成方案'
+        : hasPriorClarification(artifacts) ? '生成修订' : '生成需求草稿',
       variant: 'primary',
       disabledReasons: ['requires_current_node'],
       testId: node.stage === 'design' ? 'complete-design-agent' : 'complete-clarify-agent',
     },
     approveGate: {
       id: 'approveGate',
-      label: '通过 Gate',
+      label: approveGateLabel(node, approvalTarget),
       variant: 'primary',
       disabledReasons: ['gate_permission_missing'],
+    },
+    stopCodingRun: {
+      id: 'stopCodingRun',
+      label: '停止执行',
+      variant: 'ghost',
+      disabledReasons: [],
+    },
+    approveCodingPermission: {
+      id: 'approveCodingPermission',
+      label: '批准本次',
+      variant: 'primary',
+      disabledReasons: [],
+    },
+    rejectCodingPermission: {
+      id: 'rejectCodingPermission',
+      label: '拒绝',
+      variant: 'ghost',
+      disabledReasons: [],
+    },
+    cancelStageAgent: {
+      id: 'cancelStageAgent',
+      label: '取消生成',
+      variant: 'ghost',
+      disabledReasons: [],
+    },
+    syncTeam: {
+      id: 'syncTeam',
+      label: '更新团队数据',
+      variant: 'primary',
+      disabledReasons: [],
     },
     runCodingAgent: {
       id: 'runCodingAgent',
@@ -927,7 +1047,11 @@ function buildActionCatalog(
     },
     openCodingAgent: {
       id: 'openCodingAgent',
-      label: codingActionProjection?.action.label ?? '打开 Coding Agent',
+      // Approve and reject sit in the status row; this only opens the full request (plan X2, T1).
+      label: codingActionProjection?.action.id === 'review-permission' && codingActionProjection.permission &&
+        !permissionNeedsExactReview(codingActionProjection.permission)
+        ? '查看权限详情'
+        : codingActionProjection?.action.label ?? '打开 Coding Agent',
       variant: 'primary',
       disabledReasons: [],
     },
@@ -939,7 +1063,7 @@ function buildActionCatalog(
     },
     prepareGitHubDelivery: {
       id: 'prepareGitHubDelivery',
-      label: 'Prepare GitHub Delivery',
+      label: '准备 GitHub 交付',
       variant: 'primary',
       disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
     },
@@ -1005,21 +1129,138 @@ const automaticallyAdvancingDeliveryStatuses: ReadonlySet<GitHubDeliveryIntent['
   'creating_pr',
 ])
 
-function buildGateSecondaryActionIds(input: {
-  node: WorkflowNode
-  artifacts: Artifact[]
-  latestAgentReview: AgentReviewResult | undefined
-}): InspectorActionId[] {
-  const actionIds: InspectorActionId[] = []
+function statusOf(
+  kind: InspectorStatusKind,
+  tone: InspectorStatusTone,
+  title: string,
+  copy: string,
+  extra: Partial<Omit<InspectorNextAction, 'kind' | 'tone' | 'title' | 'copy'>> = {},
+): InspectorNextAction {
+  return { kind, tone, title, copy, secondaryActionIds: [], persistentActionIds: [], ...extra }
+}
 
-  if (!input.latestAgentReview) {
-    actionIds.push('openKnowledgeReview')
-  }
-  if (shouldOfferLocalTestCtaForGate(input.node) && !hasTestArtifact(input.artifacts)) {
-    actionIds.push('openTests')
-  }
+function hasMissingReviewReason(decision: GateEnforcementDecision | null): boolean {
+  return [
+    ...(decision?.blockingReasons ?? []),
+    ...(decision?.warningReasons ?? []),
+  ].some((reason) => reason.target === 'missing_agent_review' && reason.id !== 'policy-unavailable')
+}
 
-  return actionIds
+/** Non-blocking review findings (plan X5): risks, missing evidence and suggested tests. */
+export function countGateSuggestions(
+  review: AgentReviewResult | undefined,
+  decision: GateEnforcementDecision | null,
+): number {
+  const fromReview = review
+    ? review.risks.length + review.missingEvidence.length + review.suggestedTests.length
+    : 0
+  if (fromReview > 0) return fromReview
+  return (decision?.warningReasons ?? []).filter((reason) => reason.target !== 'missing_agent_review').length
+}
+
+const blockingTargetLabels: Record<GateEnforcementReason['target'], string> = {
+  governance_check: '规范检查未满足',
+  agent_finding: 'AI 审查发现需要处理的问题',
+  missing_agent_review: '缺少本阶段要求的 AI 审查',
+}
+
+const codingPhaseLabels: Partial<Record<CodingRuntimeActionProjection['phase'], string>> = {
+  starting: '正在启动',
+  queued: '排队中',
+  preparing: '正在准备工作区',
+  bootstrapping: '正在安装依赖',
+  running: '正在编码',
+  applying: '正在应用改动',
+  testing: '正在运行检查',
+  failed: '失败',
+  timed_out: '超时',
+  interrupted: '已中断',
+  cancelled: '已取消',
+}
+
+const statusStateCopy: Record<string, string> = {
+  ready: '已记录',
+  empty: '尚未生成',
+  success: '已完成',
+  missing: '缺失',
+  pending: '等待中',
+  saved: '已保存',
+  allowed: '可以审批',
+  'lead required': '需要 Lead 审批',
+  default: '默认',
+  'preflight required': '执行前需预检',
+  'approval guarded': '需要审批',
+  'not active': '未启用',
+  'not loaded': '未加载',
+  unavailable: '不可用',
+  loading: '加载中',
+}
+
+/** First-layer wording for status values (plan §6.3, T1); the raw value stays available as detail. */
+export function formatStatusState(state: string): string {
+  const counted = /^(\d+) (events|linked)$/u.exec(state)
+  if (counted) return counted[2] === 'events' ? `有 ${counted[1]} 条执行记录` : `已关联 ${counted[1]} 份材料`
+  return statusStateCopy[state] ?? state
+}
+
+function permissionNeedsExactReview(permission: NonNullable<CodingRuntimeActionProjection['permission']>): boolean {
+  return permission.kind === 'change-set' || permission.kind === 'change-acceptance'
+}
+
+function buildCodingStatus(projection: CodingRuntimeActionProjection): InspectorNextAction {
+  const projected = projection.action
+  const phaseLabel = codingPhaseLabels[projection.phase]
+  if (projected.id === 'start') {
+    return statusOf('ready', 'neutral', '可以开始开发实现', projected.summary, {
+      primaryActionId: 'runCodingAgent',
+    })
+  }
+  if (projected.id === 'review-permission' && projection.permission) {
+    const permission = projection.permission
+    const remaining = permission.expired
+      ? '已过期'
+      : `剩余 ${Math.max(0, Math.ceil(permission.remainingMs / 1_000))} 秒`
+    // Code changes are approved only on the exact Change Set review in Agents, after the diff
+    // is shown; the status row links there. Other requests can be approved in place (plan X2).
+    const needsExactReview = permissionNeedsExactReview(permission)
+    return statusOf('permission', 'warning', '等待你处理权限请求', `${permission.request.title} · ${permission.changedPaths.length} 个文件`, {
+      qualifier: remaining,
+      ...(needsExactReview
+        ? { primaryActionId: 'openCodingAgent' as const }
+        : {
+            ...(permission.canApprove && !permission.expired ? { primaryActionId: 'approveCodingPermission' as const } : {}),
+            secondaryActionIds: ['openCodingAgent'] as InspectorActionId[],
+          }),
+      persistentActionIds: ['rejectCodingPermission', 'stopCodingRun'],
+    })
+  }
+  if (projected.id === 'renew-permission') {
+    return statusOf('permission', 'warning', '权限请求已过期', projected.summary, {
+      primaryActionId: 'openCodingAgent',
+      persistentActionIds: projection.activeRun ? ['stopCodingRun'] : [],
+    })
+  }
+  if (projected.id === 'view-progress') {
+    // Task page copy (plan T1): no raw runtime status values on the first layer.
+    return statusOf('running', 'progress', '正在开发实现', '完整执行过程在 Agents 页；需要中止时可以直接停止。', {
+      ...(phaseLabel ? { qualifier: phaseLabel } : {}),
+      primaryActionId: 'openCodingAgent',
+      persistentActionIds: ['stopCodingRun'],
+    })
+  }
+  if (projected.id === 'retry') {
+    return statusOf('failed', 'blocked', `开发执行${phaseLabel ?? '未完成'}`, projection.terminal?.reason ?? projected.summary, {
+      primaryActionId: 'openCodingAgent',
+    })
+  }
+  if (projected.id === 'configure') {
+    return statusOf('blocked', 'warning', '开发前需要完成配置', projected.disabledReason ?? projected.summary, {
+      primaryActionId: 'openCodingAgent',
+    })
+  }
+  return statusOf(projected.id === 'view-result' ? 'idle' : 'idle', 'neutral', projected.label, projected.disabledReason ?? projected.summary, {
+    ...(projected.id !== 'none' ? { primaryActionId: 'openCodingAgent' as const } : {}),
+  })
 }
 
 function buildNextAction(input: {
@@ -1035,256 +1276,199 @@ function buildNextAction(input: {
   hasTeamProjectBinding: boolean
   canVerifyGitHubDeliveryRevocation: boolean
   codingActionProjection?: CodingRuntimeActionProjection
+  approvalTarget?: InspectorApprovalTarget
+  isGeneratingStageAgent?: boolean
+  stageProviderLabel?: string
 }): InspectorNextAction {
   const { node } = input
 
   if (node.status === 'success') {
-    return {
-      title: '查看已完成证据',
-      copy: '该节点已经完成，Inspector 会保留产物、证据和 Trace 供核对。',
-      secondaryActionIds: [],
-    }
+    return statusOf('history', 'done', '此步骤已完成', '可以阅读材料、审查意见和执行记录；这里的操作不会改变实际进度。')
   }
 
   if (!input.isSelectedCurrentNode) {
-    return {
-      title: '等待上游节点',
-      copy: '这个节点还不是当前 Run 的当前步骤。先完成上游节点后，再执行这里的主动作。',
-      secondaryActionIds: [],
-    }
+    return node.status === 'pending'
+      ? statusOf('waiting_upstream', 'neutral', '等待上游完成', '这个步骤还没开始。完成当前步骤后才能在这里操作。')
+      : statusOf('history', 'neutral', '历史记录', '这是之前的执行结果；这里的操作不会改变实际进度。')
   }
 
-  if (node.kind === 'agent' && node.stage === 'clarify') {
-    return {
-      title: '生成需求澄清',
-      copy: '运行当前澄清 Agent，补齐验收口径、非目标和后续 Gate 所需证据。',
-      primaryActionId: 'completeAgent',
-      secondaryActionIds: [],
+  if (node.kind === 'agent' && (node.stage === 'clarify' || node.stage === 'design')) {
+    const noun = node.stage === 'design' ? '方案' : hasPriorClarification(input.artifacts) ? '需求修订' : '需求草稿'
+    if (input.isGeneratingStageAgent) {
+      return statusOf('running', 'progress', `正在生成${noun}`, '完成后会显示正式材料和执行记录；尚未确认任何 Gate。', {
+        persistentActionIds: ['cancelStageAgent'],
+      })
     }
-  }
-
-  if (node.kind === 'agent' && node.stage === 'design') {
-    return {
-      title: '生成设计方案',
-      copy: '运行当前设计 Agent，产出方案、测试策略和进入方案评审 Gate 的依据。',
+    const model = input.stageProviderLabel ? `将使用 ${input.stageProviderLabel} 生成。` : '生成前请在下方选择模型。'
+    return statusOf('ready', 'neutral', `可以生成${noun}`, `${model}模型调用可能产生费用。`, {
       primaryActionId: 'completeAgent',
-      secondaryActionIds: [],
-    }
+    })
   }
 
   if (node.kind === 'gate') {
-    const isEarlyGate = isEarlyReviewGate(node)
-    const missingReview = [
-      ...(input.gateEnforcementDecision?.blockingReasons ?? []),
-      ...(input.gateEnforcementDecision?.warningReasons ?? []),
-    ].some((reason) => reason.target === 'missing_agent_review' && reason.id !== 'policy-unavailable')
+    const decision = input.gateEnforcementDecision
+    const target = input.approvalTarget
+    const subject = gateApprovalSubject(node, target)
+    const approveLabel = approveGateLabel(node, target)
+    const missingReview = hasMissingReviewReason(decision)
     if (input.isLoadingGateEnforcement) {
-      return {
-        title: '正在评估 Gate',
-        copy: '策略、权限和证据正在加载；结论更新后会显示唯一的主要下一步。',
-        secondaryActionIds: [],
-      }
+      return statusOf('loading', 'neutral', '正在读取审批条件', '策略、权限和证据正在加载；读取完成前不显示可以确认的结论。')
     }
+    if (decision?.status === 'blocked_policy_unavailable') {
+      return statusOf('unverified', 'warning', '状态待核实', input.hasTeamProjectBinding
+        ? '尚未读取团队策略，暂时无法判断能否确认。更新团队数据后会重新评估。'
+        : '当前无法读取适用的策略，暂时无法判断能否确认。', {
+        qualifier: '团队策略尚未读取',
+        ...(input.hasTeamProjectBinding ? { primaryActionId: 'syncTeam' as const } : {}),
+      })
+    }
+    if (target && !target.determinable) {
+      return statusOf('unverified', 'warning', '状态待核实', target.reason ?? '无法确定这次要确认的版本，请先核对材料。', {
+        qualifier: '待确认的版本无法确定',
+      })
+    }
+    if (decision?.blocksApproval) {
+      if (missingReview) {
+        return statusOf('blocked', 'blocked', `暂不能确认${subject}`, '团队策略要求先完成本阶段的 AI 审查，完成后会重新评估。', {
+          qualifier: '缺少 AI 审查',
+          primaryActionId: 'openKnowledgeReview',
+        })
+      }
+      const reason = decision.blockingReasons[0]
+      const needsTests = decision.blockingReasons.some((item) => item.target === 'governance_check' && item.ruleKey.includes('testing_standard'))
+      return statusOf('blocked', 'blocked', `暂不能确认${subject}`, decision.requiredActions[0] ?? reason?.remediation ?? reason?.summary ?? '展开审批核对清单查看原因。', {
+        qualifier: reason ? blockingTargetLabels[reason.target] : '条件未满足',
+        ...(needsTests && shouldOfferLocalTestCtaForGate(node) ? { primaryActionId: 'openTests' as const } : {}),
+      })
+    }
+    if (!input.canApprove) {
+      return statusOf('awaiting_role', 'neutral', `等待有权限的成员确认${subject}`, '当前身份没有审批权限；可以阅读材料和审查意见。', {
+        ...(missingReview || !input.latestAgentReview ? { secondaryActionIds: ['openKnowledgeReview'] as InspectorActionId[] } : {}),
+      })
+    }
+    const title = `等待你确认${subject}`
     if (missingReview) {
-      return {
-        title: '运行门禁审查',
-        copy: input.gateEnforcementDecision?.blocksApproval
-          ? '当前缺少基于知识的门禁审查，完成审查后才能重新评估 Gate。'
-          : '当前策略允许审批，但建议先完成基于知识的门禁审查并消除警告。',
+      return statusOf('approvable', 'warning', title, '当前策略只提示、不阻断：可以先运行门禁审查，也可以直接确认。', {
+        qualifier: '尚未运行 AI 审查',
         primaryActionId: 'openKnowledgeReview',
-        secondaryActionIds: [],
-      }
+        secondaryActionIds: ['approveGate'],
+        confirmBefore: {
+          actionId: 'approveGate',
+          message: `尚未运行 AI 审查，本次确认针对${subject}。再次点击「${approveLabel}」提交。`,
+        },
+      })
     }
-    if (input.gateEnforcementDecision?.blocksApproval) {
-      return {
-        title: '处理 Gate 阻断',
-        copy: input.gateEnforcementDecision.requiredActions[0]
-          ?? '打开 Gate 条件查看主原因，再到 Remediation 按顺序处理。',
-        secondaryActionIds: buildGateSecondaryActionIds(input),
-      }
+    const suggestions = countGateSuggestions(input.latestAgentReview, decision)
+    const testAction: InspectorActionId[] = [
+      ...(input.latestAgentReview ? [] : ['openKnowledgeReview' as const]),
+      ...(shouldOfferLocalTestCtaForGate(node) && !hasTestArtifact(input.artifacts) ? ['openTests' as const] : []),
+    ]
+    if (suggestions > 0) {
+      return statusOf('approvable', 'neutral', title, '审查意见不阻断确认，逐条列在「内容与审查」中。', {
+        qualifier: `有 ${suggestions} 条建议`,
+        primaryActionId: 'approveGate',
+        secondaryActionIds: testAction,
+      })
     }
-    return {
-      title: '通过 Gate',
-      copy: input.canApprove
-        ? isEarlyGate
-          ? '确认 Gate 条件、门禁审查和 Evidence 后，通过当前 Gate 进入下一节点。'
-          : '确认 Gate 条件、门禁审查、Tests 和 Evidence 后，通过当前 Gate 进入下一节点。'
-        : isEarlyGate
-          ? '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、门禁审查、Evidence 或 policy 条件。'
-          : '当前 Gate 还不能通过，请查看 Gate 条件拆解并补齐角色、门禁审查、Tests 或 policy 条件。',
-      ...(input.canApprove ? { primaryActionId: 'approveGate' as const } : {}),
-      secondaryActionIds: buildGateSecondaryActionIds(input),
-    }
+    return statusOf('approvable', 'neutral', title, '策略、权限与所需证据均已满足。', {
+      primaryActionId: 'approveGate',
+      secondaryActionIds: testAction,
+    })
   }
 
   if (canRunCodingAgentOnNode(node)) {
-    if (input.codingActionProjection) {
-      const projected = input.codingActionProjection.action
-      if (projected.id === 'start') {
-        return {
-          title: projected.label,
-          copy: projected.summary,
-          primaryActionId: 'runCodingAgent',
-          secondaryActionIds: [],
-        }
-      }
-      return {
-        title: projected.label,
-        copy: projected.disabledReason ?? projected.summary,
-        ...(projected.id !== 'none' ? { primaryActionId: 'openCodingAgent' as const } : {}),
-        secondaryActionIds: [],
-      }
-    }
-    return {
-      title: '启动 Coding Agent',
-      copy: '把当前实现任务交给本地 Coding Agent，生成受控 diff 并回写执行轨迹。',
+    if (input.codingActionProjection) return buildCodingStatus(input.codingActionProjection)
+    return statusOf('ready', 'neutral', '可以开始开发实现', '把当前实现任务交给本地 Coding Agent，生成受控 diff 并回写执行轨迹。', {
       primaryActionId: 'runCodingAgent',
-      secondaryActionIds: [],
-    }
+    })
   }
 
   if (node.kind === 'test' || node.stage === 'test') {
-    return {
-      title: '执行本地测试',
-      copy: '进入 Tests 执行项目测试命令，并把结果保存为 Test Evidence。',
+    return statusOf('ready', 'neutral', '可以运行检查', '在测试页执行项目测试命令，结果保存为测试证据。', {
       primaryActionId: 'openTests',
-      secondaryActionIds: [],
-    }
+    })
   }
 
   if (node.kind === 'pr') {
-    if (input.githubDeliveryIntent?.status === 'failed') {
-      return {
-        title: '交付已安全停止',
-        copy: '交付已安全停止且不会自动重试。请核对远端记录；只有当前 pairing claimant 能证明精确远端终态时，显式 Retry 才会创建新 attempt，否则请重新认领新的 Work Request/Run。',
+    const intent = input.githubDeliveryIntent
+    if (intent?.status === 'failed') {
+      return statusOf('failed', 'blocked', '交付已安全停止', '交付已安全停止且不会自动重试。请核对远端记录；只有当前 pairing claimant 能证明精确远端终态时，显式 Retry 才会创建新 attempt，否则请重新认领新的 Work Request/Run。', {
         primaryActionId: 'retryGitHubDelivery',
-        secondaryActionIds: [],
-      }
+      })
     }
-    if (input.githubDeliveryIntent?.status === 'revoked') {
+    if (intent?.status === 'revoked') {
       if (input.hasTeamProjectBinding) {
-        return {
-          title: 'Retry GitHub Delivery',
-          copy: '显式 Retry 只会在当前 pairing claimant 证明精确远端终态后，由 Desktop main 创建新 attempt 或 binding series；否则请重新认领新的 Work Request/Run。',
+        return statusOf('failed', 'warning', '交付授权已撤销', '显式 Retry 只会在当前 pairing claimant 证明精确远端终态后，由 Desktop main 创建新 attempt 或 binding series；否则请重新认领新的 Work Request/Run。', {
           primaryActionId: 'retryGitHubDelivery',
-          secondaryActionIds: [],
-        }
+        })
       }
-      return {
-        title: 'GitHub 授权已撤销',
-        copy: 'Desktop 不会继续远端写入。由 owner 在 Web 重新绑定 GitHub App 后，再开始新的受控交付。',
-        secondaryActionIds: [],
-      }
+      return statusOf('blocked', 'warning', 'GitHub 授权已撤销', 'Desktop 不会继续远端写入。由 owner 在 Web 重新绑定 GitHub App 后，再开始新的受控交付。')
     }
-    if (input.githubDeliveryIntent?.status === 'completed') {
-      return {
-        title: 'Draft PR 已创建',
-        copy: '精确 commit 的 Draft PR 已记录为交付证据；后台处理器会确保 Workflow 推进到 Acceptance。',
-        secondaryActionIds: input.canVerifyGitHubDeliveryRevocation
-          ? ['verifyGitHubDeliveryRevocation']
-          : [],
-      }
+    if (intent?.status === 'completed') {
+      return statusOf('idle', 'done', 'Draft PR 已创建', '精确 commit 的 Draft PR 已记录为交付证据；后台处理器会确保 Workflow 推进到 Acceptance。', {
+        secondaryActionIds: input.canVerifyGitHubDeliveryRevocation ? ['verifyGitHubDeliveryRevocation'] : [],
+      })
     }
-    if (input.githubDeliveryIntent?.status === 'approved') {
-      return {
-        title: 'GitHub Delivery 已批准',
-        copy: '发布尚未开始；如材料改变，显式 Revise 会重新提交并复验不可变 revision，使旧审批失效。否则后台处理器会继续推进。',
+    if (intent?.status === 'approved') {
+      return statusOf('awaiting_role', 'neutral', '交付已获批准，等待发布', '发布尚未开始；如材料改变，显式 Revise 会重新提交并复验不可变 revision，使旧审批失效。否则后台处理器会继续推进。', {
         primaryActionId: 'reviseGitHubDelivery',
-        secondaryActionIds: ['stopGitHubDelivery'],
-      }
+        persistentActionIds: ['stopGitHubDelivery'],
+      })
     }
-    if (
-      input.githubDeliveryIntent &&
-      automaticallyAdvancingDeliveryStatuses.has(input.githubDeliveryIntent.status)
-    ) {
-      return {
-        title: 'GitHub Delivery 自动推进中',
-        copy: '审批已经生效，受限后台处理器会继续发布精确 commit 并创建 Draft PR；无需再次点击。',
-        secondaryActionIds: ['stopGitHubDelivery'],
-      }
+    if (intent && automaticallyAdvancingDeliveryStatuses.has(intent.status)) {
+      return statusOf('running', 'progress', '正在发布交付', '审批已经生效，受限后台处理器会继续发布精确 commit 并创建 Draft PR；无需再次点击。', {
+        persistentActionIds: ['stopGitHubDelivery'],
+      })
     }
-    if (input.githubDeliveryIntent?.status === 'recovery_required') {
+    if (intent?.status === 'recovery_required') {
       if (
-        input.githubDeliveryOperatorOutcome?.intentId === input.githubDeliveryIntent.id &&
-        input.githubDeliveryOperatorOutcome.intentUpdatedAt === input.githubDeliveryIntent.updatedAt &&
+        input.githubDeliveryOperatorOutcome?.intentId === intent.id &&
+        input.githubDeliveryOperatorOutcome.intentUpdatedAt === intent.updatedAt &&
         input.githubDeliveryOperatorOutcome.outcomeCode === 'content_scan_blocked'
       ) {
-        return {
-          title: '发布内容已安全阻断',
-          copy: '这个交付意图的 Git 内容或 PR 文本含有凭据材料，不能 Resume 或绕过扫描。请在 Web 创建新的 Work Request/Run，并由 Coding Agent 从干净来源重建实现、重新测试和准备交付；旧意图不会继续执行远端写入。',
-          secondaryActionIds: [],
-        }
+        return statusOf('blocked', 'blocked', '发布内容已安全阻断', '这个交付意图的 Git 内容或 PR 文本含有凭据材料，不能 Resume 或绕过扫描。请在 Web 创建新的 Work Request/Run，并由 Coding Agent 从干净来源重建实现、重新测试和准备交付；旧意图不会继续执行远端写入。')
       }
-      return {
-        title: '恢复 GitHub Delivery',
-        copy: '自动恢复已安全停止；只有显式 Resume 才会按当前 intent 版本继续，并且不会隐式批准。',
+      return statusOf('failed', 'warning', '交付需要恢复', '自动恢复已安全停止；只有显式 Resume 才会按当前 intent 版本继续，并且不会隐式批准。', {
         primaryActionId: 'resumeGitHubDelivery',
-        secondaryActionIds: [],
-      }
+      })
     }
-    if (input.githubDeliveryIntent?.status === 'approval_required') {
-      return {
-        title: '等待 Web 审批',
-        copy: 'GitHub Delivery 已准备完成，正在等待 Web Team Console 的 lead/owner 显式批准；如材料改变，显式 Revise 会创建新 intent revision 并使旧审批失效。',
+    if (intent?.status === 'approval_required') {
+      return statusOf('awaiting_role', 'neutral', '等待 Web 审批', 'GitHub Delivery 已准备完成，正在等待 Web Team Console 的 lead/owner 显式批准；如材料改变，显式 Revise 会创建新 intent revision 并使旧审批失效。', {
         primaryActionId: 'reviseGitHubDelivery',
-        secondaryActionIds: ['stopGitHubDelivery'],
-      }
+        persistentActionIds: ['stopGitHubDelivery'],
+      })
     }
     if (hasExactPrDeliveryPackage(input.artifacts)) {
-      return {
-        title: 'Prepare GitHub Delivery',
-        copy: '交付包已经绑定到精确 coding source。显式准备会提交并复验该 commit，但不会代替 Web 审批。',
+      return statusOf('ready', 'neutral', '可以准备交付', '交付包已对应本次开发的代码改动。准备交付会提交并复核该提交，仍需在 Web 端审批。', {
         primaryActionId: 'prepareGitHubDelivery',
-        secondaryActionIds: [],
-      }
+      })
     }
-    return {
-      title: '生成 PR Delivery Package',
-      copy: input.hasTeamProjectBinding
-        ? '汇总当前 Run 的产物和证据，生成绑定到精确 coding source 的已脱敏交付包。'
-        : '先绑定当前 Local Project 与 Team Project，再生成带有正确仓库归属的交付包。',
+    return statusOf(input.hasTeamProjectBinding ? 'ready' : 'blocked', input.hasTeamProjectBinding ? 'neutral' : 'warning', '可以生成交付包', input.hasTeamProjectBinding
+      ? '汇总本任务的材料和证据，生成对应本次代码改动的已脱敏交付包。'
+      : '先把当前本地项目连接到团队项目，再生成带有正确仓库归属的交付包。', {
       primaryActionId: 'createPrDraft',
-      secondaryActionIds: [],
-    }
+    })
   }
 
   if (node.kind === 'acceptance') {
-    const missingReview = [
-      ...(input.gateEnforcementDecision?.blockingReasons ?? []),
-      ...(input.gateEnforcementDecision?.warningReasons ?? []),
-    ].some((reason) => reason.target === 'missing_agent_review' && reason.id !== 'policy-unavailable')
-    if (missingReview) {
-      return {
-        title: '运行门禁审查',
-        copy: '最终验收缺少基于知识的门禁审查；完成后会重新评估验收 Gate。',
+    if (hasMissingReviewReason(input.gateEnforcementDecision)) {
+      return statusOf('blocked', 'warning', '验收缺少 AI 审查', '最终验收缺少基于知识的门禁审查；完成后会重新评估验收 Gate。', {
         primaryActionId: 'openKnowledgeReview',
-        secondaryActionIds: [],
-      }
+      })
     }
     if (!hasAcceptanceArtifact(input.artifacts)) {
-      return {
-        title: '生成验收证据包',
-        copy: '先汇总最终交付证据，再进入业务验收审批。',
+      return statusOf('ready', 'neutral', '可以整理验收材料', '先汇总最终交付证据，再进入业务验收审批。', {
         primaryActionId: 'createAcceptanceBundle',
-        secondaryActionIds: [],
-      }
+      })
     }
-
-    return {
-      title: '通过 Gate',
-      copy: input.canApprove
-        ? '验收证据包已经生成，确认后通过业务验收 Gate。'
-        : '验收证据包已经生成，但当前用户还没有通过业务验收 Gate 的权限。',
+    return statusOf(input.canApprove ? 'approvable' : 'awaiting_role', 'neutral', input.canApprove ? '等待你确认验收' : '等待有权限的成员确认验收', input.canApprove
+      ? '验收证据包已经生成，确认后通过业务验收 Gate。'
+      : '验收证据包已经生成，但当前用户还没有通过业务验收 Gate 的权限。', {
       primaryActionId: 'approveGate',
-      secondaryActionIds: [],
-    }
+    })
   }
 
-  return {
-    title: '查看当前节点状态',
-    copy: '该节点当前没有可直接执行的主动作，请查看状态、产物和 Trace。',
-    secondaryActionIds: [],
-  }
+  return statusOf('idle', 'neutral', '查看当前节点状态', '该节点当前没有可直接执行的主动作，请查看状态、产物和 Trace。')
 }
 
 export function buildNodeInspectorViewModel(input: {
@@ -1307,17 +1491,25 @@ export function buildNodeInspectorViewModel(input: {
   testEvidence?: readonly TestEvidence[]
   codingActionProjection?: CodingRuntimeActionProjection
   upstreamCodingDiffReady?: boolean
+  approvalTarget?: InspectorApprovalTarget
+  isGeneratingStageAgent?: boolean
+  stageProviderLabel?: string
 }): NodeInspectorViewModel {
   const presentation = buildWorkflowNodePresentation(input.node)
   const visualKind = presentation.nodeKind
   const nodeType = getInspectorNodeType(input.node)
   const tabs = inspectorTabPlansByNodeType[nodeType]
   const activeTab = tabs.find((tab) => tab.tabId === (legacyWorkspaceTabs[input.requestedTab] ?? input.requestedTab) || tab.label === input.requestedTab) ?? tabs[0]!
-  const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding, input.codingActionProjection)
+  const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding, input.codingActionProjection, input.approvalTarget, input.artifacts)
   const nextAction = buildNextAction(input)
   const actionIds: InspectorActionId[] = []
   const addAction = (actionId: InspectorActionId) => {
-    if (actionId === nextAction.primaryActionId || actionIds.includes(actionId)) {
+    if (
+      actionId === nextAction.primaryActionId ||
+      nextAction.secondaryActionIds.includes(actionId) ||
+      nextAction.persistentActionIds.includes(actionId) ||
+      actionIds.includes(actionId)
+    ) {
       return
     }
     actionIds.push(actionId)
@@ -1381,6 +1573,7 @@ export function buildNodeInspectorViewModel(input: {
         decision: input.gateEnforcementDecision,
         isLoading: input.isLoadingGateEnforcement,
         canApprove: input.canApprove,
+        isCurrentNode: input.isSelectedCurrentNode,
       })
     : undefined
   const contextProjection = projectWorkflowContext({
