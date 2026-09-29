@@ -17,10 +17,11 @@ import {
 import { ArtifactReviewReader } from '../components/ArtifactReviewReader'
 import { ArtifactBody, partitionArtifact, hasSectionContent } from '../components/ArtifactBody'
 import { GateMaterialReader } from '../components/GateMaterialReader'
-import { Fragment, useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import {
   buildClarificationReviewBundle,
+  canRunCodingAgentOnNode,
   formatUsd,
   formatCostRollup,
   projectKnowledgeReferencesForNode,
@@ -28,7 +29,9 @@ import {
   type AgentEvent,
   type AgentReviewResult,
   type Artifact,
+  type CodingAgentRun,
   type CodingRuntimeReadiness,
+  type ManagedCodingWorkspace,
   type DataOrigin,
   type GateEnforcementDecision,
   type GateOverrideDecision,
@@ -54,7 +57,11 @@ import {
 import { GateEnforcementPanel, GateRemediationPanel } from '../GateEnforcementPanel'
 import { GitHubDeliveryPanel } from '../GitHubDeliveryPanel'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
-import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
+import { codingPermissionDecisionState, type CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
+import { buildGateRemediationViewModel, withoutStatusRowActions, hasRemediationContent, type GateRemediationCtaKind } from '../app/gate-remediation-view-model'
+import type { TestRunReadiness } from '../app/test-run-readiness'
+import type { DiscussionMaterial } from '../app/discussion-reference'
+import { CodingRetryDialog, CodingWorkPanel, CodingWorkspaceRecords, GateReviewRunPanel, TestRunPanel } from './TaskWorkPanel'
 import {
   buildWorkflowNodePresentation,
   buildWorkflowBoard,
@@ -68,11 +75,18 @@ import {
   stageLabels,
   stageTone,
   type FieldDataSource,
+  type InspectorReadingPosition,
   type SupportContext,
 } from '../app/desktop-view-model'
 import {
+  CURRENT_WORK_TAB,
+  MATERIALS_TAB,
+  RECORDS_TAB,
   buildNodeInspectorViewModel,
   formatStatusState,
+  getInspectorNodeType,
+  inspectorTabPlansByNodeType,
+  resolveInspectorTabName,
   selectInspectorPrPackage,
   type InspectorAction,
   type InspectorActionDisabledReason,
@@ -300,6 +314,11 @@ export function WorkflowBoard({
   )
 }
 
+/** A proposal saved from a discussion (`publish` in workbench-conversation-service); not a formal material. */
+export function isDiscussionProposal(artifact: Artifact): boolean {
+  return artifact.kind === 'log' && artifact.id.startsWith('conversation-proposal-')
+}
+
 export function Inspector({
   modelReadinessError,
   selectedRun,
@@ -313,7 +332,7 @@ export function Inspector({
   references,
   latestAgentReview,
   onRecordAgentReviewFeedback,
-  onDiscussReview,
+  onDiscussMaterial,
   supportContext,
   onConsumeSupportContext,
   policySnapshot,
@@ -337,11 +356,26 @@ export function Inspector({
   pairingState,
   hasDeliveryProjectBinding,
   onSyncTeam,
-  onOpenTests,
-  onOpenKnowledgeReview,
+  onRunKnowledgeReview,
+  onCancelKnowledgeReview,
+  isRunningKnowledgeReviewHere = false,
+  latestReviewFailure,
+  reviewProviderLabel,
+  reviewRunBlockedReason,
+  onRunTests,
+  testRunReadiness,
+  onOpenSettings,
+  readingPositionRef,
   onOpenKnowledgeReference,
   onRunCodingAgent,
-  onOpenCodingAgent,
+  onRenewCodingPermission,
+  isReplyingCodingPermission = false,
+  latestCodingRun,
+  codingWorkspace,
+  codingProviderName,
+  runtimeBudgetApprovalId = '',
+  onOpenCodingWorktree,
+  onDeleteCodingWorktree,
   onCreatePrDraft,
   onPrepareGitHubDelivery,
   onReviseGitHubDelivery,
@@ -361,7 +395,6 @@ export function Inspector({
   pendingInspectorAction,
   codingReadiness,
   codingReadinessError,
-  onOpenCodingConfiguration,
   codingActionProjection,
   upstreamCodingDiffReady,
   onCancelCodingRun,
@@ -380,7 +413,8 @@ export function Inspector({
   governanceChecks: KnowledgeGovernanceCheck[]
   references: KnowledgeReference[]
   latestAgentReview: AgentReviewResult | undefined
-  onDiscussReview?: ((prompt: string) => void) | undefined
+  /** Adds a reference card to the current discussion (plan W7); sends nothing. */
+  onDiscussMaterial?: ((material: DiscussionMaterial) => void) | undefined
   onRecordAgentReviewFeedback?: RecordReviewFeedback | undefined
   supportContext: SupportContext | null
   onConsumeSupportContext?: () => void
@@ -405,11 +439,28 @@ export function Inspector({
   pairingState: 'unpaired' | 'paired' | 'sync_failed'
   hasDeliveryProjectBinding: boolean
   onSyncTeam: () => void
-  onOpenTests: () => void
-  onOpenKnowledgeReview: () => void
+  /** Runs the existing Gate Review in place; a re-run passes the previous review (plan W2). */
+  onRunKnowledgeReview: (previousReviewId?: string) => void
+  onCancelKnowledgeReview?: (() => void) | undefined
+  isRunningKnowledgeReviewHere?: boolean
+  latestReviewFailure?: string | undefined
+  reviewProviderLabel?: string | undefined
+  reviewRunBlockedReason?: string | undefined
+  onRunTests: () => void
+  testRunReadiness: TestRunReadiness
+  /** Settings live on other pages until S3; the reading position is kept for the return (W9). */
+  onOpenSettings: (target: 'coding' | 'tests' | 'models', position: InspectorReadingPosition | null) => void
+  readingPositionRef?: React.MutableRefObject<(() => InspectorReadingPosition | null) | null> | undefined
   onOpenKnowledgeReference: (referenceId: string, documentId?: string) => void
-  onRunCodingAgent: () => void
-  onOpenCodingAgent?: () => void
+  onRunCodingAgent: (additionalAttemptAfterCount?: number) => void
+  onRenewCodingPermission?: (() => void) | undefined
+  isReplyingCodingPermission?: boolean
+  latestCodingRun?: CodingAgentRun | undefined
+  codingWorkspace?: ManagedCodingWorkspace | undefined
+  codingProviderName?: string | undefined
+  runtimeBudgetApprovalId?: string
+  onOpenCodingWorktree?: (() => void) | undefined
+  onDeleteCodingWorktree?: (() => void) | undefined
   onCreatePrDraft: () => void
   onPrepareGitHubDelivery: () => void
   onReviseGitHubDelivery: () => void
@@ -429,14 +480,19 @@ export function Inspector({
   pendingInspectorAction: PendingInspectorAction | null
   codingReadiness: CodingRuntimeReadiness | null
   codingReadinessError: string
-  onOpenCodingConfiguration: () => void
   codingActionProjection?: CodingRuntimeActionProjection
   upstreamCodingDiffReady?: boolean
 }) {
-  const [requestedTab, setRequestedTab] = useState('状态')
+  const [requestedTab, setRequestedTab] = useState(CURRENT_WORK_TAB)
   const [revisionDraftError, setRevisionDraftError] = useState('')
   const [documentId, setDocumentId] = useState('')
   const [revisionFormOpen, setRevisionFormOpen] = useState(false)
+  // Retry confirmation opened from the status row; the attempt count is fixed when it opens (W3).
+  const [retryDialog, setRetryDialog] = useState<{ additionalAttemptAfterCount: number | undefined } | null>(null)
+  const [codingFocusRequest, setCodingFocusRequest] = useState(0)
+  const codingFocusRef = useRef<HTMLDivElement | null>(null)
+  const tabPanelRef = useRef<HTMLDivElement | null>(null)
+  const pendingScrollRestore = useRef<{ tab: string; scrollTop: number } | null>(null)
   // Action armed by a first click that needs a reminder before submitting (plan §6.1).
   const [armedActionKey, setArmedActionKey] = useState('')
   const [revisionDrafts, setRevisionDrafts] = useState<Record<string, string>>(() => {
@@ -444,7 +500,7 @@ export function Inspector({
   })
   // Reset the node workspace before paint so a newly visible tab cannot lose its first click.
   useLayoutEffect(() => {
-    setRequestedTab(selectedNode?.status === 'success' && selectedNode.kind === 'agent' ? '内容与审查' : '概览'); setDocumentId(''); setRevisionFormOpen(false); setArmedActionKey('')
+    setRequestedTab(CURRENT_WORK_TAB); setDocumentId(''); setRevisionFormOpen(false); setArmedActionKey(''); setRetryDialog(null)
   }, [selectedNode?.id])
 
   useEffect(() => {
@@ -459,8 +515,51 @@ export function Inspector({
     }
 
     setRequestedTab(supportContext.inspectorTab)
+    // Returning from settings restores the material and scroll position too (plan W9).
+    if (supportContext.focusTarget === 'inspector-tab') {
+      if (supportContext.materialId) setDocumentId(supportContext.materialId)
+      if (typeof supportContext.scrollTop === 'number') {
+        pendingScrollRestore.current = { tab: supportContext.inspectorTab, scrollTop: supportContext.scrollTop }
+      }
+    }
     onConsumeSupportContext?.()
   }, [onConsumeSupportContext, selectedNode, selectedRun, supportContext])
+
+  useEffect(() => {
+    if (!codingFocusRequest) return
+    codingFocusRef.current?.focus()
+    codingFocusRef.current?.scrollIntoView?.({ block: 'start' })
+  }, [codingFocusRequest])
+
+  // Restore the scroll position once the restored tab has rendered (plan W9).
+  useEffect(() => {
+    const pending = pendingScrollRestore.current
+    if (!pending || !tabPanelRef.current || !selectedNode) return
+    if (resolveInspectorTabName(selectedNode, requestedTab) !== pending.tab) return
+    tabPanelRef.current.scrollTop = pending.scrollTop
+    pendingScrollRestore.current = null
+  })
+
+  // Lets App capture where the user was reading before it opens a settings page (plan W9).
+  useEffect(() => {
+    if (!readingPositionRef) return
+    readingPositionRef.current = () => {
+      if (!selectedRun || !selectedNode) return null
+      const tabs = inspectorTabPlansByNodeType[getInspectorNodeType(selectedNode)]
+      const resolved = resolveInspectorTabName(selectedNode, requestedTab)
+      const tab = tabs.find((candidate) => candidate.tabId === resolved || candidate.label === resolved) ?? tabs[0]!
+      return {
+        runId: selectedRun.id,
+        nodeId: selectedNode.id,
+        inspectorTab: tab.tabId,
+        ...(documentId ? { materialId: documentId } : {}),
+        scrollTop: tabPanelRef.current?.scrollTop ?? 0,
+      }
+    }
+    return () => {
+      readingPositionRef.current = null
+    }
+  }, [documentId, readingPositionRef, requestedTab, selectedNode, selectedRun])
 
   if (!selectedNode) {
     return <aside className="inspector">请选择一个节点</aside>
@@ -526,6 +625,9 @@ export function Inspector({
     ...(approvalTarget ? { approvalTarget } : {}),
     isGeneratingStageAgent: pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'completeAgent',
     ...(stageProvider ? { stageProviderLabel: `${stageProvider.name} · ${stageProvider.model}` } : {}),
+    isRunningKnowledgeReview: isRunningKnowledgeReviewHere,
+    ...(reviewProviderLabel ? { reviewProviderLabel } : {}),
+    isRunningTests,
     knowledgeReferenceCount: scopedReferences.length,
     testEvidenceCount: testEvidence.length,
     testEvidence,
@@ -559,9 +661,10 @@ export function Inspector({
   const revisionLine = (index: number) => `审查意见 ${index + 1}（${latestAgentReview?.id}）：${latestAgentReview?.missingEvidence[index] ?? ''}`
   const selectedReviewItems = latestAgentReview?.missingEvidence.flatMap((_, index) => clarificationFeedbackDraft.includes(revisionLine(index)) ? [index] : []) ?? []
   const olderDrafts = clarificationReview?.revisions.filter((revision) => revision.id !== revisionDraftKey && revisionDrafts[revision.id]?.trim()) ?? []
+  // Discussion proposals are not the step's body; they are listed in 材料与版本 (plan W8).
   const contentArtifacts = (selectedNode.kind === 'gate'
     ? [...workflowArtifacts.filter((artifact) => selectedNode.artifactIds.includes(artifact.id)), ...nodeArtifacts]
-    : nodeArtifacts).filter((artifact, index, all) => all.findIndex((other) => other.id === artifact.id) === index)
+    : nodeArtifacts).filter((artifact, index, all) => all.findIndex((other) => other.id === artifact.id) === index && !isDiscussionProposal(artifact))
   const selectedDocument = contentArtifacts.find((artifact) => artifact.id === documentId) ?? contentArtifacts[0]
   const focusedArtifactId =
     supportContext?.focusTarget === 'artifact' &&
@@ -575,13 +678,34 @@ export function Inspector({
     supportContext.nodeId === selectedNode.id
       ? supportContext.eventId
       : undefined
+  const readingPosition = (): InspectorReadingPosition | null => selectedRun ? {
+    runId: selectedRun.id,
+    nodeId: selectedNode.id,
+    inspectorTab: viewModel.activeTab.tabId,
+    ...(documentId ? { materialId: documentId } : {}),
+    scrollTop: tabPanelRef.current?.scrollTop ?? 0,
+  } : null
+  const openSettings = (target: 'coding' | 'tests' | 'models') => onOpenSettings(target, readingPosition())
+  const testStepNode = selectedRun?.nodes.find((node) => node.kind === 'test' || node.stage === 'test')
+  // Code changes are reviewed in 当前工作; focus the exact diff there (plan W3).
+  const focusCodingPanel = () => {
+    setRequestedTab(CURRENT_WORK_TAB)
+    setCodingFocusRequest((value) => value + 1)
+  }
   const actionHandlers: Record<InspectorActionId, () => void> = {
-    openKnowledgeReview: onOpenKnowledgeReview,
-    openTests: onOpenTests,
+    runKnowledgeReview: () => onRunKnowledgeReview(),
+    cancelKnowledgeReview: () => onCancelKnowledgeReview?.(),
+    runTests: onRunTests,
+    openTestStep: () => { if (testStepNode) onSelectWorkflowNode(testStepNode.id) },
     completeAgent: onCompleteAgentNode,
     approveGate: onApprove,
-    runCodingAgent: onRunCodingAgent,
-    openCodingAgent: onOpenCodingAgent ?? onOpenCodingConfiguration,
+    runCodingAgent: () => onRunCodingAgent(),
+    reviewCodingChangeSet: focusCodingPanel,
+    viewCodingPermission: focusCodingPanel,
+    renewCodingPermission: () => onRenewCodingPermission?.(),
+    retryCodingRun: () => setRetryDialog({ additionalAttemptAfterCount: codingActionProjection?.additionalAttemptAfterCount }),
+    configureCodingRuntime: () => openSettings('coding'),
+    viewCodingRecords: () => setRequestedTab(RECORDS_TAB),
     createPrDraft: onCreatePrDraft,
     prepareGitHubDelivery: onPrepareGitHubDelivery,
     reviseGitHubDelivery: onReviseGitHubDelivery,
@@ -602,9 +726,20 @@ export function Inspector({
     approveCodingPermission: Boolean(onReplyCodingPermission),
     rejectCodingPermission: Boolean(onReplyCodingPermission),
     cancelStageAgent: Boolean(onCancelStageAgent),
+    cancelKnowledgeReview: Boolean(onCancelKnowledgeReview),
+    renewCodingPermission: Boolean(onRenewCodingPermission),
+    openTestStep: Boolean(testStepNode),
   }
+  // The status row follows the exact diff review's rule for approve and reject (plan W3).
+  const pendingPermission = codingActionProjection?.action.id === 'review-permission' ? codingActionProjection.permission : undefined
+  const permissionDecision = pendingPermission
+    ? codingPermissionDecisionState({ permission: pendingPermission, runStatus: codingActionProjection?.activeRun?.status, isReplying: isReplyingCodingPermission })
+    : undefined
   const writeActionIds = new Set<InspectorActionId>([
     'approveCodingPermission',
+    'runKnowledgeReview',
+    'runTests',
+    'retryCodingRun',
     'completeAgent',
     'approveGate',
     'runCodingAgent',
@@ -631,19 +766,31 @@ export function Inspector({
       gate_permission_missing: !canApprove,
       starting_coding_agent: isStartingCodingAgent,
       team_project_binding_missing: !hasDeliveryProjectBinding,
+      review_unavailable: Boolean(reviewRunBlockedReason),
+      tests_unavailable: Boolean(testRunReadiness.blockedReason),
+      coding_retry_unavailable: codingActionProjection?.action.id === 'retry' && codingActionProjection.action.disabled,
+      replying_coding_permission: isReplyingCodingPermission,
     }[reason]
   }
   const isActionWriteLocked = (action: InspectorAction) => writeActionIds.has(action.id) && hasInspectorWriteLock
   const isActionDisabled = (action: InspectorAction) =>
     action.disabledReasons.some((reason) => isDisabledReasonActive(reason)) ||
     isActionWriteLocked(action) ||
-    (action.id === 'runCodingAgent' && codingReadiness?.status !== 'ready')
+    (action.id === 'runCodingAgent' && codingReadiness?.status !== 'ready') ||
+    (action.id === 'approveCodingPermission' && Boolean(permissionDecision?.approveDisabled)) ||
+    (action.id === 'rejectCodingPermission' && Boolean(permissionDecision?.rejectDisabled))
   const actionTitle = (action: InspectorAction) => {
     if (isActionWriteLocked(action) && !action.disabledReasons.some((reason) => isDisabledReasonActive(reason))) {
       return pendingMatchesSelectedNode ? '当前节点操作正在进行中' : '其他 Inspector 操作正在进行中'
     }
     if (action.disabledReasons.includes('team_project_binding_missing') && !hasDeliveryProjectBinding) {
       return '先把当前本地项目连接到团队项目'
+    }
+    if (action.id === 'runKnowledgeReview' && reviewRunBlockedReason) return reviewRunBlockedReason
+    if (action.id === 'runTests' && testRunReadiness.blockedReason) return testRunReadiness.blockedReason
+    if (action.id === 'retryCodingRun' && codingActionProjection?.action.disabledReason) return codingActionProjection.action.disabledReason
+    if ((action.id === 'approveCodingPermission' || action.id === 'rejectCodingPermission') && pendingPermission?.staleReason) {
+      return pendingPermission.staleReason
     }
     if (action.id === 'runCodingAgent' && codingReadiness?.status !== 'ready') {
       return codingReadiness?.checks.find((check) => check.status === 'blocked')?.message ??
@@ -679,38 +826,40 @@ export function Inspector({
         return '验证中'
       }
     }
-    if (action.id === 'openKnowledgeReview' && isRunningAgentReview) {
+    if (action.id === 'runKnowledgeReview' && isRunningAgentReview) {
       return '门禁审查中'
     }
-    if (action.id === 'openTests' && isRunningTests) {
+    if (action.id === 'runTests' && isRunningTests) {
       return '测试中'
     }
     if (action.id === 'runCodingAgent' && isStartingCodingAgent) {
       return '启动中'
     }
+    if ((action.id === 'approveCodingPermission' || action.id === 'rejectCodingPermission' || action.id === 'renewCodingPermission') && isReplyingCodingPermission) {
+      return '提交中'
+    }
     return action.label
-  }
-  const actionAriaLabel = (action: InspectorAction) => {
-    if (action.id === 'openKnowledgeReview') {
-      return '运行门禁审查'
-    }
-    if (action.id === 'openTests') {
-      return '执行测试'
-    }
-    return undefined
   }
   const renderActionIcon = (actionId: InspectorActionId) => {
     switch (actionId) {
-      case 'openKnowledgeReview':
+      case 'runKnowledgeReview':
       case 'completeAgent':
         return <Bot size={16} />
-      case 'openTests':
+      case 'runTests':
         return <Play size={16} />
+      case 'openTestStep':
+        return <ClipboardCheck size={16} />
       case 'approveGate':
         return <CheckCircle2 size={16} />
       case 'runCodingAgent':
-      case 'openCodingAgent':
+      case 'reviewCodingChangeSet':
+      case 'viewCodingPermission':
         return <Code2 size={16} />
+      case 'renewCodingPermission':
+      case 'retryCodingRun':
+        return <RefreshCw size={16} />
+      case 'cancelKnowledgeReview':
+        return <Square size={16} />
       case 'createPrDraft':
         return <GitPullRequest size={16} />
       case 'prepareGitHubDelivery':
@@ -737,7 +886,6 @@ export function Inspector({
     <button
       className={`${variant}-button`}
       data-testid={action.testId}
-      aria-label={actionAriaLabel(action)}
       aria-busy={pendingMatchesSelectedNode && pendingInspectorAction?.actionId === action.id ? true : undefined}
       disabled={isActionDisabled(action) || (Boolean(modelReadinessError) && ['completeAgent','runCodingAgent'].includes(action.id))}
       key={action.id}
@@ -793,9 +941,13 @@ export function Inspector({
   const renderRevisionToggle = () => (
     <button className="ghost-button" key="request-revision" disabled={!isSelectedCurrentNode || !onRequestClarificationChanges || hasInspectorWriteLock} title={!onRequestClarificationChanges ? '当前桌面版本未提供修订能力' : !isSelectedCurrentNode ? '只能修订实际当前节点' : undefined} onClick={() => setRevisionFormOpen(!revisionFormOpen)}>请求修订当前版本</button>
   )
-  const exposesCodingAction = primaryNextAction?.id === 'runCodingAgent' ||
-    primaryNextAction?.id === 'openCodingAgent' ||
-    secondaryNextActions.some((action) => action.id === 'runCodingAgent' || action.id === 'openCodingAgent')
+  // Recovery items the status row already offers are not repeated in the recovery plan (W6).
+  const statusRowActionIds = [primaryNextAction?.id, ...viewModel.nextAction.secondaryActionIds]
+  const hiddenRemediationCtas: GateRemediationCtaKind[] = [
+    ...(statusRowActionIds.includes('runKnowledgeReview') ? ['knowledge_review' as const] : []),
+    ...(statusRowActionIds.includes('openTestStep') ? ['tests' as const] : []),
+    ...(statusRowActionIds.includes('syncTeam') ? ['sync_policy' as const] : []),
+  ]
 
   const retrievalStrategyLabel = (reference: KnowledgeReference) => ({
     heuristic: '启发式检索',
@@ -896,10 +1048,20 @@ export function Inspector({
     </div>
   )
 
+  const renderDiscussMaterial = (artifact: Artifact) => onDiscussMaterial ? (
+    <button type="button" className="text-button" onClick={() => onDiscussMaterial({
+      materialId: artifact.id,
+      materialTitle: artifact.title,
+      version: artifact.clarificationRevision ? `需求 v${artifact.clarificationRevision.revision}` : `记录于 ${formatLocalTime(artifact.updatedAt)}`,
+    })}>讨论此材料</button>
+  ) : null
+  // A material is read in 当前工作 when it is that step's body; anything else (review reports,
+  // discussion proposals) is read here, so each text has exactly one home (plan W1).
+  const readsInCurrentWork = (artifact: Artifact) => !clarificationReview && contentArtifacts.some((other) => other.id === artifact.id)
   const renderArtifacts = () => (
     <div className="artifact-list" data-testid="node-artifacts">
       <span className="panel-label">当前节点产物 · {nodeArtifacts.length}</span>
-      {selectedNode.kind === 'gate' && contentArtifacts.some((artifact) => artifact.nodeId !== selectedNode.id) && <section aria-label="关联的上游产物"><h3>关联的上游产物（不计入本节点数量）</h3>{contentArtifacts.filter((artifact) => artifact.nodeId !== selectedNode.id).map((artifact) => <p key={artifact.id}><button className="text-button" onClick={() => { setDocumentId(artifact.id); setRequestedTab('内容与审查') }}>{artifact.title}</button> · {artifact.updatedAt}</p>)}</section>}
+      {selectedNode.kind === 'gate' && contentArtifacts.some((artifact) => artifact.nodeId !== selectedNode.id) && <section aria-label="关联的上游产物"><h3>关联的上游产物（不计入本节点数量）</h3>{contentArtifacts.filter((artifact) => artifact.nodeId !== selectedNode.id).map((artifact) => <p key={artifact.id}><button className="text-button" onClick={() => { setDocumentId(artifact.id); setRequestedTab(CURRENT_WORK_TAB) }}>{artifact.title}</button> · {artifact.updatedAt}</p>)}</section>}
       {nodeArtifacts.length === 0 ? (
         <p className="empty-note">当前节点尚未归档产物。</p>
       ) : (
@@ -909,9 +1071,12 @@ export function Inspector({
             className={`artifact-card ${artifact.id === focusedArtifactId ? 'is-focused' : ''}`}
             data-testid={artifact.id === focusedArtifactId ? 'focused-artifact' : undefined}
           >
-            <strong>{artifact.title}</strong>
+            <div className="compact-row"><strong>{artifact.title}</strong>{renderDiscussMaterial(artifact)}</div>
+            {isDiscussionProposal(artifact) ? <span className="pill warn">讨论提案（待确认）</span> : null}
             <p>{artifact.summary}</p>
-            <button className="text-button" onClick={() => { setDocumentId(artifact.id); setRequestedTab('内容与审查') }}>阅读正文</button>
+            {readsInCurrentWork(artifact)
+              ? <button className="text-button" onClick={() => { setDocumentId(artifact.id); setRequestedTab(CURRENT_WORK_TAB) }}>在「当前工作」中阅读</button>
+              : <details className="material-source"><summary>阅读原文</summary><ArtifactBody content={artifact.content} kind={artifact.kind} /></details>}
             {partitionArtifact(artifact.content).some((section) => section.group === 'evidence' && hasSectionContent(section)) && <ArtifactBody content={artifact.content} kind={artifact.kind} section="evidence" />}
             {artifact.designEvidence ? <details><summary>设计输入与代码核验依据</summary>
               <p>已批准澄清：{artifact.designEvidence.clarification.artifactId} · {artifact.designEvidence.clarification.legacy ? '旧版已审批产物' : `第 ${artifact.designEvidence.clarification.revision} 版`}</p>
@@ -927,7 +1092,7 @@ export function Inspector({
           </article>
         ))
       )}
-      {latestAgentReview && <section aria-label="已归档的审查报告"><h3>审查报告</h3><p>{latestAgentReview.conclusion}</p><p>{latestAgentReview.summary}</p><button className="text-button" onClick={() => setRequestedTab('内容与审查')}>阅读审查报告与意见</button></section>}
+      {latestAgentReview && <section aria-label="已归档的审查报告"><h3>审查报告</h3><p className="meta">{formatLocalTime(latestAgentReview.createdAt)} · {latestAgentReview.model}。结论与意见逐条列在「当前工作」中。</p><button className="text-button" onClick={() => setRequestedTab(CURRENT_WORK_TAB)}>在「当前工作」中查看审查意见</button></section>}
     </div>
   )
 
@@ -981,7 +1146,7 @@ export function Inspector({
       <div className="artifact-list" data-testid="review-evidence-results">
         <span className="panel-label">关联审查内容</span>
         <p className="empty-note">
-          审查结论与被审查的上游产物供核对，不另计入当前节点产物数量；知识依据保留在“产物与证据”。
+          审查结论与被审查的上游产物供核对，不另计入当前节点产物数量；知识依据保留在「材料与版本」。
         </p>
         {subjectArtifacts.map((artifact) => {
           const manifest = subjectManifest.find((candidate) => candidate.id === artifact.id)
@@ -1040,16 +1205,18 @@ export function Inspector({
           <article className="artifact-card" key={evidence.id}>
             <div className="compact-row">
               <strong>测试结果</strong>
-              <span className={`pill ${evidence.status === 'passed' ? 'good' : evidence.status === 'running' ? 'warn' : 'bad'}`}>
-                {evidence.status}
+              <span className={`pill ${evidence.status === 'passed' ? 'good' : evidence.status === 'running' ? 'warn' : 'bad'}`} title={evidence.status}>
+                {formatStatusState(evidence.status)}
               </span>
             </div>
             <p>{evidence.summary}</p>
+            {/* Evidence does not record the tested commit (plan §6.4, X6): never shown as still valid. */}
+            {evidence.status === 'passed' ? <p className="meta">执行于 {formatLocalTime(evidence.createdAt)}。证据没有记录所测代码的提交，适用性无法核实。</p> : null}
             <div className="knowledge-reference-meta">
               <code>{evidence.id}</code><code>{evidence.command}</code>
-              <span>{evidence.durationMs}ms</span><span>Exit code {evidence.exitCode ?? 'unknown'}</span>
+              <span>{evidence.durationMs}ms</span><span>退出码 {evidence.exitCode ?? '未知'}</span>
             </div>
-            <button className="text-button" onClick={() => setRequestedTab('执行记录')}>查看测试日志</button>
+            <button className="text-button" onClick={() => setRequestedTab(RECORDS_TAB)}>查看测试日志</button>
           </article>
         ))}
         {deliveryEvidence ? (
@@ -1138,19 +1305,6 @@ export function Inspector({
     </div>
   )
 
-  const renderGateRequirementMatrix = () => (
-    <div className="gate-requirement-matrix" data-testid="gate-requirement-matrix">
-      <span className="panel-label">Gate 条件拆解</span>
-      {viewModel.gateRequirementRows.map((row) => (
-        <div className="gate-requirement-row" key={row.label}>
-          <strong>{row.label}</strong>
-          <span className={`pill ${row.tone}`}>{row.state}</span>
-          <p>{row.summary}</p>
-        </div>
-      ))}
-    </div>
-  )
-
   const handoffPrPackage = selectInspectorPrPackage({
     node: selectedNode,
     artifacts: workflowArtifacts,
@@ -1189,41 +1343,6 @@ export function Inspector({
         <span><strong>{events.length}</strong> trace events</span>
         <span><strong>{governanceChecks.length}</strong> governance checks</span>
       </div>
-    </div>
-  )
-
-  const renderAgentReview = () => (
-    <div className="agent-advisory-list">
-      <span className="panel-label">基于知识的门禁审查</span>
-      {latestAgentReview ? (
-        <article className={`agent-advisory agent-advisory--${latestAgentReview.gateAdvisory.level}`}>
-          <div className="compact-row">
-            <strong>{latestAgentReview.model}</strong>
-            <span>{Math.round(latestAgentReview.confidence * 100)}%</span>
-          </div>
-          <p>{latestAgentReview.gateAdvisory.summary}</p>
-          <ReviewEvidenceDetails key={latestAgentReview.id} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} />
-          <div className="knowledge-reference-meta">
-            <span>{latestAgentReview.runtime}</span>
-            <span>已保存 Provider</span>
-            <span>{latestAgentReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</span>
-          </div>
-        </article>
-      ) : (
-        <p className="empty-note">尚未运行门禁审查。系统会以 Knowledge 与规范为依据，审查当前 Gate 条件和阶段产物。</p>
-      )}
-    </div>
-  )
-
-  const renderNodeSummary = () => (
-    <div className="node-summary mini-card">
-      <span>{viewModel.header.stageLabel}</span>
-      <strong>类型：{viewModel.header.presentation.nodeKindLabel}</strong>
-      <span>来源：{viewModel.header.presentation.sourceLabel}</span>
-      {viewModel.header.presentation.displayMode === 'folded' ? (
-        <span>展示：{viewModel.header.presentation.displayModeLabel}</span>
-      ) : null}
-      <p>{viewModel.header.subtitle}</p>
     </div>
   )
 
@@ -1302,8 +1421,8 @@ export function Inspector({
         {clarificationReview.message}
       </p>
       <GateMaterialReader key={`${selectedNode.id}:${clarificationReview.activeRevision?.id}`} bundle={clarificationReview}
-        review={latestAgentReview} reports={nodeArtifacts} onFeedback={onRecordAgentReviewFeedback}
-        onDiscuss={onDiscussReview}
+        review={latestAgentReview} reports={[]} onFeedback={onRecordAgentReviewFeedback}
+        onDiscuss={onDiscussMaterial}
         revisionSelected={selectedReviewItems}
         onToggleRevision={isSelectedCurrentNode && clarificationReview.state === 'ready' ? (index) => {
           const line = revisionLine(index)
@@ -1312,7 +1431,10 @@ export function Inspector({
           if (text.length > 4000) { setRevisionFormOpen(true); setRevisionDraftError('加入后将超过 4000 字，请先整理草稿再添加。原草稿已保留。'); return }
           setClarificationFeedbackDraft(text)
         } : undefined}
-        knowledge={renderKnowledgeReferences()} />
+        knowledge={<p className="meta" data-testid="knowledge-reference-pointer">
+          团队规范引用 {scopedReferences.length} 条，完整列表与来源在「材料与版本」中；审查报告原文也在那里。
+          <button className="text-button" type="button" onClick={() => setRequestedTab(MATERIALS_TAB)}>查看引用来源</button>
+        </p>} />
       {!clarificationReview.activeRevision && latestAgentReview && <><p className="empty-note">审查对象正文不可用；以下仅保留已归档报告，不能据此认定当前版本已完成审查。</p>{renderReviewEvidence()}</>}
       {clarificationReview.revisions.length > 1 || clarificationReview.feedback.length ? (
         <details data-testid="clarification-revision-history">
@@ -1329,7 +1451,15 @@ export function Inspector({
     </section>
   ) : null
 
-  const renderRemediationActions = () => (
+  const remediationViewModel = withoutStatusRowActions(buildGateRemediationViewModel({
+    decision: gateEnforcementDecision,
+    remediationPlan,
+    overrides: gateOverrides,
+    canSaveOverride,
+    isStartingRetry: isStartingCodingAgent,
+  }), hiddenRemediationCtas)
+  // Only recovery steps the status row does not already offer; nothing left means no panel (W6).
+  const renderRemediationActions = () => isLoadingGateEnforcement || !hasRemediationContent(remediationViewModel) ? null : (
     <details className="secondary-policy-details"><summary>查看恢复计划</summary><GateRemediationPanel
       decision={gateEnforcementDecision}
       remediationPlan={remediationPlan}
@@ -1339,21 +1469,91 @@ export function Inspector({
       pairingState={pairingState}
       isStartingRetry={isStartingCodingAgent}
       isInspectorWriteBlocked={hasInspectorWriteLock}
+      hiddenCtaKinds={hiddenRemediationCtas}
       onSyncTeam={onSyncTeam}
-      onOpenTests={onOpenTests}
-      onOpenOverride={() => setRequestedTab('Gate条件')}
-      onRunKnowledgeReview={onOpenKnowledgeReview}
+      onOpenTests={() => { if (testStepNode) onSelectWorkflowNode(testStepNode.id) }}
+      onOpenOverride={() => setRequestedTab(CURRENT_WORK_TAB)}
+      onRunKnowledgeReview={() => onRunKnowledgeReview()}
       onStartRetry={onStartRemediationRetry}
     /></details>
   )
 
+  const renderWorkPanel = () => {
+    const isStageAgent = selectedNode.kind === 'agent' && ['clarify', 'design'].includes(selectedNode.stage)
+    const isTestStep = selectedNode.kind === 'test' || selectedNode.stage === 'test'
+    return <>
+      {/* Executor and model only for the actual current step (plan W1). */}
+      {isStageAgent && isSelectedCurrentNode && selectedNode.status !== 'success' ? (
+        <div className="next-action task-work-panel"><label className="stage-agent-executor" htmlFor="stage-agent-executor">
+          {selectedNode.stage === 'clarify' ? '澄清执行器' : '设计执行器'}
+          <select
+            id="stage-agent-executor"
+            value={stageAgentExecutorKind}
+            disabled={hasInspectorWriteLock}
+            onChange={(event) => onStageAgentExecutorKindChange(event.target.value as StageAgentExecutorKind)}
+          >
+            <option value="direct-provider">Direct Provider</option>
+            <option value="local-agent">OpenCode（只读分析）</option>
+          </select>
+          <small>{stageAgentExecutorKind === 'local-agent' ? '只读查看仓库，生成后交给你评审；不修改代码、不运行测试命令、不批准 Gate。' : '直接调用所选模型生成正式产物。'}</small>
+        </label>
+        <label className="stage-agent-executor">本节点使用的模型
+          <select aria-label="本节点使用的模型" value={stageProviderId} disabled={hasInspectorWriteLock} onChange={(event) => onStageProviderChange(event.target.value)}>
+            <option value="">请选择已保存 Provider</option>
+            {stageProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
+          </select>
+        </label>
+        <p className="empty-note">只影响本节点本次生成，不改变开发实现或已有聊天的选择。模型调用可能产生费用。</p>
+        </div>
+      ) : null}
+      {canRunCodingAgentOnNode(selectedNode) ? (
+        <CodingWorkPanel
+          projection={codingActionProjection}
+          readinessDisplay={codingReadinessDisplay}
+          readinessError={codingReadinessError}
+          latestCodingRun={latestCodingRun}
+          workspace={codingWorkspace}
+          isReplying={isReplyingCodingPermission}
+          onDecision={(decision) => { if (decision === 'approved' || decision === 'rejected') onReplyCodingPermission?.(decision) }}
+          focusRef={codingFocusRef}
+        />
+      ) : null}
+      {isTestStep && isSelectedCurrentNode && selectedNode.status !== 'success' ? (
+        <TestRunPanel readiness={testRunReadiness} isRunning={isRunningTests} onOpenTestSettings={() => openSettings('tests')} />
+      ) : null}
+    </>
+  }
+
+  const renderReviewRun = () => isSelectedCurrentNode && selectedNode.status !== 'success' ? (
+    <GateReviewRunPanel
+      latestReview={latestAgentReview}
+      failure={latestReviewFailure}
+      isRunning={isRunningKnowledgeReviewHere}
+      providerLabel={reviewProviderLabel}
+      blockedReason={reviewRunBlockedReason}
+      isWriteLocked={hasInspectorWriteLock}
+      target={`${selectedRun?.title ?? ''} · ${viewModel.header.title}`}
+      onRun={onRunKnowledgeReview}
+    />
+  ) : null
+
+  const renderCodingWorkspace = () => (
+    <CodingWorkspaceRecords
+      workspace={codingWorkspace}
+      canOpen={codingActionProjection?.terminal
+        ? codingActionProjection.terminal.canOpenWorkspace
+        : Boolean(codingWorkspace && !codingWorkspace.deletedAt && (codingWorkspace.cleanupStatus ?? 'active') === 'active')}
+      onOpen={onOpenCodingWorktree}
+      onDelete={onDeleteCodingWorktree}
+    />
+  )
+
   const renderWorkspaceContent = () => clarificationReview ? renderClarificationReview() : <div className="workspace-document">
     {contentArtifacts.length > 1 && <label>选择材料<select aria-label="选择材料" value={selectedDocument?.id ?? ''} onChange={(event) => setDocumentId(event.target.value)}>{contentArtifacts.map((artifact) => <option key={artifact.id} value={artifact.id}>{artifact.title}</option>)}</select></label>}
-    {selectedDocument ? <article><h2>{selectedDocument.title}</h2><p>{selectedDocument.summary}</p>
-      <ArtifactReviewReader key={selectedDocument.id} artifact={selectedDocument} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} onDiscuss={onDiscussReview} />
-    </article> : <p>当前节点尚无可阅读的正文；请按概览中的动作继续。</p>}
+    {selectedDocument ? <article><div className="compact-row"><h2>{selectedDocument.title}</h2>{renderDiscussMaterial(selectedDocument)}</div><p>{selectedDocument.summary}</p>
+      <ArtifactReviewReader key={selectedDocument.id} artifact={selectedDocument} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} onDiscuss={onDiscussMaterial} />
+    </article> : <p>当前步骤尚无可阅读的正文；请按状态行的操作继续。</p>}
     {!selectedDocument && latestAgentReview && renderReviewEvidence()}
-    {selectedNode.kind === 'test' && renderTestEvidence()}
     {codingActionProjection?.terminal && <section aria-label="开发变更与检查"><h3>开发变更与检查</h3>
             {codingActionProjection.terminal.changedPaths.length > 0 ? (
               <div className="knowledge-reference-meta" aria-label="Changed paths">
@@ -1368,28 +1568,28 @@ export function Inspector({
               </details>
             ) : null}
 </section>}
-    {['pr', 'acceptance'].includes(selectedNode.stage) && renderDeliveryHandoff()}
+    {/* The stage value is `accept`, not `acceptance`; the handoff shows once on both steps (plan W1). */}
+    {['pr', 'accept'].includes(selectedNode.stage) && renderDeliveryHandoff()}
     {selectedNode.stage === 'design' && <p className="meta">当前设计节点尚不支持直接提交修订；如需修改，应先保留具体意见并核对当前流程，不会通过此阅读页面自动重新生成或批准。</p>}
 
   </div>
   const renderArtifactRecords = () => <div>{contentArtifacts.filter((artifact) => partitionArtifact(artifact.content).some((section) => section.group === 'records' && hasSectionContent(section))).map((artifact) => <article key={artifact.id}><h3>{artifact.title} · 生成详情</h3><p className="meta">{artifact.updatedAt}</p><ArtifactBody content={artifact.content} kind={artifact.kind} section="records" /></article>)}</div>
   const sectionRenderers: Record<InspectorSectionId, () => React.ReactNode> = {
+    workPanel: renderWorkPanel,
     workspaceContent: renderWorkspaceContent,
+    reviewRun: renderReviewRun,
     artifactRecords: renderArtifactRecords,
     statusMatrix: renderStatusMatrix,
-    nodeSummary: renderNodeSummary,
     gateImpactSummary: renderGateImpactSummary,
-    gateRequirementMatrix: renderGateRequirementMatrix,
     gateEnforcementPanel: renderGateEnforcementPanel,
     governance: renderGovernance,
     knowledgeReferences: renderKnowledgeReferences,
     reviewEvidence: renderReviewEvidence,
     testEvidence: renderTestEvidence,
     remediationActions: renderRemediationActions,
-    agentReview: renderAgentReview,
     artifacts: renderArtifacts,
     trace: renderTrace,
-    deliveryHandoff: renderDeliveryHandoff,
+    codingWorkspace: renderCodingWorkspace,
   }
 
   return (
@@ -1441,8 +1641,9 @@ export function Inspector({
                 <dt>类型与来源</dt><dd>{viewModel.header.presentation.nodeKindLabel} · {viewModel.header.presentation.sourceLabel}{viewModel.header.presentation.displayMode === 'folded' ? ` · ${viewModel.header.presentation.displayModeLabel}` : ''}</dd>
                 <dt>任务版本</dt><dd>v{selectedRun?.version ?? '—'} · {isSelectedCurrentNode ? '实际当前步骤' : '正在查看其他步骤'}</dd>
                 <dt>材料与记录</dt><dd>材料 {nodeArtifacts.length} · 执行记录 {events.length}</dd>
+                {/* Counts only: the status row is the one conclusion (plan W6). */}
                 {viewModel.gateReadinessSummary ? <>
-                  <dt>审批核对</dt><dd>{viewModel.gateReadinessSummary.headline} · 已通过 {viewModel.gateReadinessSummary.counts.passed} · 警告 {viewModel.gateReadinessSummary.counts.warning} · 缺失 {viewModel.gateReadinessSummary.counts.missing} · 阻断 {viewModel.gateReadinessSummary.counts.blocked}</dd>
+                  <dt>审批核对</dt><dd>已通过 {viewModel.gateReadinessSummary.counts.passed} · 警告 {viewModel.gateReadinessSummary.counts.warning} · 缺失 {viewModel.gateReadinessSummary.counts.missing} · 阻断 {viewModel.gateReadinessSummary.counts.blocked}</dd>
                   <dt>人工审批</dt><dd>{selectedNode.status === 'success' ? '已通过' : '尚未通过'}</dd>
                 </> : null}
               </dl>
@@ -1461,59 +1662,25 @@ export function Inspector({
       }}>
         {viewModel.tabs.map((tab, index) => <button key={tab.tabId} id={`workspace-tab-${index}`} role="tab" aria-controls="workspace-content" tabIndex={tab.tabId === viewModel.activeTab.tabId ? 0 : -1} aria-selected={tab.tabId === viewModel.activeTab.tabId} className={`tab ${tab.tabId === viewModel.activeTab.tabId ? 'active' : ''}`} onClick={() => setRequestedTab(tab.tabId)}>{tab.label}</button>)}
       </div>
-      <div className="inspector-document-scroll" id="workspace-content" data-testid="workspace-tabpanel" role="tabpanel" aria-labelledby={`workspace-tab-${viewModel.tabs.indexOf(viewModel.activeTab)}`}>
-      {viewModel.activeTab.tabId === '概览' && <div className="next-action">{selectedNode.kind === 'agent' && selectedNode.status !== 'success' && ['clarify', 'design'].includes(selectedNode.stage) ? (
-          <div><label className="stage-agent-executor" htmlFor="stage-agent-executor">
-            {selectedNode.stage === 'clarify' ? '澄清执行器' : '设计执行器'}
-            <select
-              id="stage-agent-executor"
-              value={stageAgentExecutorKind}
-              disabled={hasInspectorWriteLock}
-              onChange={(event) => onStageAgentExecutorKindChange(event.target.value as StageAgentExecutorKind)}
-            >
-              <option value="direct-provider">Direct Provider</option>
-              <option value="local-agent">OpenCode（只读分析）</option>
-            </select>
-            <small>{stageAgentExecutorKind === 'local-agent' ? '只读查看仓库，生成后交给你评审；不修改代码、不运行测试命令、不批准 Gate。' : '直接调用所选模型生成正式产物。'}</small>
-          </label>
-          <label className="stage-agent-executor">本节点使用的模型
-            <select aria-label="本节点使用的模型" value={stageProviderId} disabled={hasInspectorWriteLock} onChange={(event) => onStageProviderChange(event.target.value)}>
-              <option value="">请选择已保存 Provider</option>
-              {stageProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
-            </select>
-          </label>
-          <p className="empty-note">只影响本节点本次生成，不改变开发实现或已有聊天的选择。模型调用可能产生费用。</p>
-          </div>
-        ) : null}
-        {codingActionProjection?.action.id === 'review-permission' && codingActionProjection.permission ? (
-          <div className="coding-permission-summary" data-testid="workbench-coding-permission-summary">
-            <strong>{codingActionProjection.permission.request.title}</strong>
-            <span>{codingActionProjection.permission.changedPaths.length} 个文件</span>
-            {codingActionProjection.permission.changeSetDigest ? (
-              <code>{codingActionProjection.permission.changeSetDigest}</code>
-            ) : null}
-            <span>
-              {codingActionProjection.permission.expired
-                ? '已过期'
-                : `剩余 ${Math.ceil(codingActionProjection.permission.remainingMs / 1_000)} 秒`}
-            </span>
-          </div>
-        ) : null}
-        {codingActionProjection?.terminal && <section className="workbench-coding-terminal" data-testid="workbench-coding-terminal"><strong>开发执行：{codingActionProjection.phase}</strong><p>{codingActionProjection.terminal.reason}</p><p>变更文件 {codingActionProjection.terminal.changedPaths.length} · 测试 {codingActionProjection.terminal.testStatus ?? '尚未归档'}</p><button className="text-button" onClick={() => setRequestedTab('内容与审查')}>阅读变更与代码差异</button><button className="text-button" onClick={() => setRequestedTab('执行记录')}>查看执行轨迹</button></section>}
-        {exposesCodingAction && codingActionProjection?.action.id === 'configure' && codingReadinessDisplay?.status !== 'ready' ? (
-          <div className="coding-readiness-summary" data-testid="workbench-coding-readiness">
-            <strong>Coding Runtime：{codingReadinessDisplay?.statusLabel ?? '正在检查'}</strong>
-            <p>{codingReadinessDisplay?.items.find((item) => item.state === 'blocked')?.detail ?? codingReadinessError ?? '读取启动前检查后才可执行；此时不会创建 worktree 或修改代码。'}</p>
-            <button className="ghost-button" type="button" onClick={onOpenCodingConfiguration}>
-              配置 Coding Engine / Executor
-            </button>
-          </div>
-        ) : null}
-      </div>}
-      {modelReadinessError && primaryNextAction && ['completeAgent','runCodingAgent'].includes(primaryNextAction.id) && <p role="status">{modelReadinessError}<button className="text-button" onClick={onOpenCodingConfiguration}>打开项目基础设置</button></p>}
-      {viewModel.activeTab.tabId === '概览' && contentArtifacts.some((artifact) => partitionArtifact(artifact.content).some((section) => hasSectionContent(section) && (section.group === 'questions' || /实施前.*核实/u.test(section.title)))) && <section className="overview-open-questions"><h3>正文中的待核对事项</h3><p className="meta">以下为产物原文中的问题或实施检查，不代表新增阻断。实际审批限制以策略评估为准。</p>{contentArtifacts.flatMap((artifact) => partitionArtifact(artifact.content).filter((section) => hasSectionContent(section) && (section.group === 'questions' || /实施前.*核实/u.test(section.title))).map((section) => <div key={`${artifact.id}:${section.start}`}><ArtifactBody content={section.markdown} section="content" /><button className="text-button" onClick={() => { setDocumentId(artifact.id); setRequestedTab('内容与审查') }}>查看相关正文</button></div>))}</section>}
+      <div className="inspector-document-scroll" id="workspace-content" data-testid="workspace-tabpanel" role="tabpanel" ref={tabPanelRef} aria-labelledby={`workspace-tab-${viewModel.tabs.indexOf(viewModel.activeTab)}`}>
+      {modelReadinessError && primaryNextAction && ['completeAgent','runCodingAgent'].includes(primaryNextAction.id) && <p role="status">{modelReadinessError}<button className="text-button" onClick={() => openSettings('models')}>打开项目基础设置</button></p>}
       {viewModel.activeTab.sections.map((sectionId) => <Fragment key={sectionId}>{sectionRenderers[sectionId]()}</Fragment>)}
       </div>
+      {retryDialog && codingActionProjection?.action.id === 'retry' ? (
+        <CodingRetryDialog
+          additionalAttemptAfterCount={retryDialog.additionalAttemptAfterCount}
+          providerName={codingProviderName}
+          lastRun={latestCodingRun}
+          runtimeBudgetApprovalId={runtimeBudgetApprovalId}
+          disabled={isStartingCodingAgent || codingActionProjection.action.disabled}
+          onCancel={() => setRetryDialog(null)}
+          onConfirm={() => {
+            const count = retryDialog.additionalAttemptAfterCount
+            setRetryDialog(null)
+            onRunCodingAgent(count)
+          }}
+        />
+      ) : null}
       <footer className="node-action-footer">
       {revisionDraftError && <p role="alert">{revisionDraftError}</p>}
       {olderDrafts.length > 0 && <details><summary>其他版本有 {olderDrafts.length} 份未清除的修订草稿</summary><p>当前版本已改变；旧草稿不会自动提交到新版本，请核对后自行复制适用内容。</p>{olderDrafts.map((revision) => <div key={revision.id}><strong>需求澄清 v{revision.clarificationRevision?.revision ?? '—'}</strong><pre>{revisionDrafts[revision.id]}</pre></div>)}</details>}

@@ -195,7 +195,7 @@ try {
   }
   await page.getByTestId(`flow-node-${run.nodes[0].id}`).click()
   await page.locator('.stage-grid').evaluate((element) => { element.scrollTop = 0; element.scrollLeft = 0 })
-  await page.getByTestId('node-inspector').getByRole('tab', { name: '概览', exact: true }).click()
+  await page.getByTestId('node-inspector').getByRole('tab', { name: '当前工作', exact: true }).click()
   await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
   await page.screenshot({ scale: 'css', path: path.join(output, '01-node-details.png') })
   await page.getByRole('button', { name: '列表视图', exact: true }).click()
@@ -236,9 +236,29 @@ try {
   await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '02-conversation-detail.png') })
   await page.getByRole('button', { name: '不需要撤销', exact: true }).click()
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  // Saving a proposal first previews the target and content; nothing is saved until confirmed (W8).
   await page.getByRole('button', { name: '保存为节点提案', exact: true }).click()
-  await readyText('已保存为节点提案')
+  const proposalPreview = page.getByTestId('proposal-publish-preview')
+  await expect(proposalPreview).toContainText('将保存到：')
+  await expect(proposalPreview).toContainText('不会更新正式需求，也不会推进流程')
+  await page.screenshot({ scale: 'css', path: path.join(output, '13-proposal-preview.png') })
+  // Count model calls only once the conversation is idle, so earlier verification calls are excluded.
+  await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeVisible({ timeout: 30000 })
+  const callsBeforeProposal = requests.length
+  await proposalPreview.getByRole('button', { name: '确认保存提案', exact: true }).click()
+  await readyText('提案已保存，尚未更新正式需求')
+  expect(requests.length).toBe(callsBeforeProposal)
   await expect(page.getByText('已保存提案', { exact: true })).toBeVisible()
+  // 「讨论此材料」 adds a reference card to this conversation without sending or calling a model (W7).
+  const callsBeforeReference = requests.length
+  await page.getByTestId('node-inspector').getByRole('button', { name: '讨论此材料' }).first().click()
+  const referenceCard = page.getByTestId('conversation-reference-card')
+  await expect(referenceCard).toHaveCount(1)
+  await expect(referenceCard).toContainText('读取于')
+  expect(requests.length).toBe(callsBeforeReference)
+  await page.screenshot({ scale: 'css', path: path.join(output, '14-discussion-reference.png') })
+  await referenceCard.getByRole('button', { name: /^移除引用：/ }).click()
+  await expect(page.getByTestId('conversation-reference-card')).toHaveCount(0)
   await openDetails()
   await expect(page.getByRole('textbox', { name: '仅本会话记忆' })).toHaveCount(0)
   await expect(page.getByText(/上次使用.*条本会话消息/)).toHaveCount(0)
@@ -286,7 +306,10 @@ try {
   const nodeResults = requests.slice(secondStart).map((request) => JSON.parse(request.messages.find((message) => message.role === 'user').content)).flatMap((input) => input.toolObservations)
   expect(JSON.stringify(nodeResults)).toContain('讨论提案（待确认）')
   await page.getByRole('button', { name: '查看需求产物 ↗', exact: true }).click()
-  await expect(page.getByTestId('node-inspector').getByRole('tab', { name: '产物与证据', exact: true })).toHaveAttribute('aria-selected', 'true')
+  // The conversation's legacy section name resolves to the new tab (plan W1).
+  await expect(page.getByTestId('node-inspector').getByRole('tab', { name: '材料与版本', exact: true })).toHaveAttribute('aria-selected', 'true')
+  // The saved proposal is listed there once, marked as pending confirmation (plan W8).
+  await expect(page.getByTestId('node-artifacts')).toContainText('讨论提案（待确认）')
   const secondTab = page.getByRole('tab', { name: /查询共享提案/ })
   await secondTab.click()
   const recoveryStart = requests.length
@@ -311,7 +334,7 @@ try {
   await page.getByRole('button', { name: '停止调查', exact: true }).click()
   await readyText('已停止调查')
   await page.getByRole('textbox', { name: '对话内容' }).fill('重启后继续输入')
-  await page.getByTestId('node-inspector').getByRole('tab', { name: '概览', exact: true }).click()
+  await page.getByTestId('node-inspector').getByRole('tab', { name: '当前工作', exact: true }).click()
   await secondTab.click()
   const persisted = await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({ type: 'list', projectId }), project.id)
   expect(persisted.conversations).toHaveLength(2)

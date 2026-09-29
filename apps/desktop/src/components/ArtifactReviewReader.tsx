@@ -4,6 +4,8 @@ import { sha256Text, type AgentReviewResult, type Artifact } from '@ai-devflow/s
 import { ArtifactBody, partitionArtifact } from './ArtifactBody'
 import { DetailPopover } from './DetailPopover'
 import { ReviewEvidenceDetails, type RecordReviewFeedback } from './ReviewEvidenceDetails'
+import type { DiscussionMaterial } from '../app/discussion-reference'
+import { formatLocalTime } from '../app/desktop-view-model'
 
 /** Match only blocks the Markdown renderer can annotate. Cross-block quotes use the report fallback. */
 function readingBlocks(content: string) {
@@ -25,7 +27,7 @@ export function ArtifactReviewReader({ artifact, review, reports = [], onFeedbac
   onFeedback?: RecordReviewFeedback | undefined
   onToggleRevision?: ((index: number) => void) | undefined
   revisionSelected?: number[] | undefined
-  onDiscuss?: ((prompt: string) => void) | undefined
+  onDiscuss?: ((material: DiscussionMaterial) => void) | undefined
   requirement?: boolean
 }) {
   const [digest, setDigest] = useState<{ id: string; content: string; value: string } | null>(null)
@@ -44,9 +46,15 @@ export function ArtifactReviewReader({ artifact, review, reports = [], onFeedbac
     citation.sourceId === artifact.id && citation.contentDigest === currentDigest && (!citation.updatedAt || citation.updatedAt === artifact.updatedAt) && artifact.content.slice(citation.start, citation.end) === citation.quote &&
     blocks.some((block) => citation.start >= block.start && citation.end <= block.end) ? [{ index: detail.index, citation }] : []))
   const toggle = bound ? onToggleRevision : undefined
+  // A review opinion becomes a reference card in the discussion; nothing is sent yet (plan W7).
   const discuss = onDiscuss && review ? (index: number) => {
     const quotes = review.missingEvidenceDetails?.find((item) => item.index === index)?.citations ?? []
-    onDiscuss(`请帮我核对这条审查意见。\n产物：${artifact.title}\n产物 ID：${artifact.id}\n版本时间：${artifact.updatedAt}\n审查 ID：${review.id}\n审查时间：${review.createdAt}\n意见：${review.missingEvidence[index]}\n${quotes.map((item) => `原文快照（${item.sourceId}，${item.contentDigest}，${item.start}–${item.end}）：\n${item.quote}`).join('\n')}\n${bound ? '这份报告与当前正文绑定一致。' : '这份报告尚不能证明当前正文已审查，请先核对版本。'}`)
+    onDiscuss({
+      materialId: `${artifact.id}#review-${review.id}-${index}`,
+      materialTitle: `${artifact.title} · 审查意见 ${index + 1}`,
+      version: `记录于 ${formatLocalTime(artifact.updatedAt)}`,
+      excerpt: `意见：${review.missingEvidence[index]}\n审查时间：${review.createdAt}\n${quotes.map((item) => `原文：${item.quote}`).join('\n')}\n${bound ? '这份报告与当前正文绑定一致。' : '这份报告尚不能证明当前正文已审查，请先核对版本。'}`,
+    })
   } : undefined
   const report = review ? <section className="requirement-review-list" data-testid="review-evidence-results"><h3>{bound ? '本版本审查意见' : '历史或尚未核验绑定的审查'}</h3>
     <p>{review.conclusion}</p><p className="meta">共 {review.missingEvidence.length} 条待核对意见 · {review.createdAt}。{bound ? '已绑定当前正文。' : '不能将这份报告当作当前版本已审查或问题已解决的证明。'}</p>

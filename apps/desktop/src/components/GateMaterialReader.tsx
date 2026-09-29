@@ -3,9 +3,12 @@ import { buildClarificationReviewBundle, type AgentReviewResult, type Artifact }
 import { ArtifactBody } from './ArtifactBody'
 import { ArtifactReviewReader } from './ArtifactReviewReader'
 import { type RecordReviewFeedback } from './ReviewEvidenceDetails'
+import type { DiscussionMaterial } from '../app/discussion-reference'
+import { formatLocalTime } from '../app/desktop-view-model'
 
 export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedback, onToggleRevision, revisionSelected = [], onDiscuss }: {
-  onDiscuss?: ((prompt: string) => void) | undefined
+  /** Adds a reference card to the discussion; never sends or calls a model (plan W7). */
+  onDiscuss?: ((material: DiscussionMaterial) => void) | undefined
   bundle: ReturnType<typeof buildClarificationReviewBundle>
   review?: AgentReviewResult | null | undefined
   reports: Artifact[]
@@ -38,7 +41,12 @@ export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedb
       {bundle.activeRevision ? <button type="button" className="text-button" onClick={() => setReadingId('')}>{pendingConfirmation ? '返回待确认版本' : '返回当前版本'}</button> : null}
     </p>}
     <article className="material-document" data-testid="clarification-current-revision">
-      <div className="compact-row"><h2>需求澄清 v{revision?.clarificationRevision?.revision ?? '—'}</h2><span>{({ draft: '草稿', review_requested: '待确认', revision_requested: '待修订', approved: '已确认', superseded: '已有新版本' } as Record<string, string>)[revision?.clarificationRevision?.status ?? ''] ?? '版本不可用'}</span></div>
+      <div className="compact-row"><h2>需求澄清 v{revision?.clarificationRevision?.revision ?? '—'}</h2><span>{({ draft: '草稿', review_requested: '待确认', revision_requested: '待修订', approved: '已确认', superseded: '已有新版本' } as Record<string, string>)[revision?.clarificationRevision?.status ?? ''] ?? '版本不可用'}</span>
+        {revision && onDiscuss ? <button type="button" className="text-button" onClick={() => onDiscuss({
+          materialId: revision.id,
+          materialTitle: revision.title,
+          version: revision.clarificationRevision ? `需求 v${revision.clarificationRevision.revision}` : `记录于 ${formatLocalTime(revision.updatedAt)}`,
+        })}>讨论此材料</button> : null}</div>
       {revision ? <ArtifactReviewReader artifact={revision} review={review} reports={reports} requirement onFeedback={onFeedback} onToggleRevision={toggleRevision} revisionSelected={revisionSelected} onDiscuss={onDiscuss} /> : <p>正文不可用，请核对源产物。</p>}
     </article>
   </div>

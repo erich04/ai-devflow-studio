@@ -8,6 +8,8 @@ import type {
 } from '@ai-devflow/shared'
 import {
   buildGateRemediationViewModel,
+  withoutStatusRowActions,
+  type GateRemediationCtaKind,
   type GateRemediationItem,
 } from './app/gate-remediation-view-model'
 
@@ -27,21 +29,6 @@ function gateEnforcementTone(status: GateEnforcementDecision['status']) {
   return 'info'
 }
 
-function enforcementHeadline(decision: GateEnforcementDecision): string {
-  if (decision.status === 'blocked_policy_unavailable') return '团队策略不可用'
-  if (decision.status === 'hard_blocked') return `存在 ${decision.blockingReasons.length} 项强制阻断`
-  if (decision.status === 'blocked') return `存在 ${decision.blockingReasons.length} 项阻断`
-  if (decision.status === 'overridden') return '阻断已由 Lead 例外放行'
-  if (decision.status === 'warn') return `存在 ${decision.warningReasons.length} 项警告`
-  return 'Gate Enforcement 已通过'
-}
-
-function enforcementIcon(decision: GateEnforcementDecision): string {
-  if (decision.blocksApproval) return '⛔'
-  if (decision.status === 'warn' || decision.status === 'overridden') return '⚠'
-  return '✓'
-}
-
 function reasonTitle(reason: GateEnforcementReason): string {
   if (reason.id === 'policy-unavailable' || reason.ruleKey === 'policy-unavailable') {
     return '团队策略尚未同步'
@@ -53,29 +40,6 @@ function reasonTitle(reason: GateEnforcementReason): string {
     return '知识治理条件未满足'
   }
   return '门禁审查发现风险'
-}
-
-function nextStepForDecision(decision: GateEnforcementDecision): string {
-  const primaryReason = decision.blockingReasons[0] ?? decision.warningReasons[0]
-  if (decision.status === 'blocked_policy_unavailable') {
-    return '同步团队策略后重新评估 Gate。'
-  }
-  if (primaryReason?.target === 'missing_agent_review') {
-    return '运行基于知识的门禁审查，然后重新评估 Gate。'
-  }
-  if (decision.requiredActions[0]) {
-    return decision.requiredActions[0]
-  }
-  if (primaryReason?.remediation) {
-    return primaryReason.remediation
-  }
-  if (decision.blocksApproval) {
-    return '在 Remediation 中处理首要阻断项，然后重新评估 Gate。'
-  }
-  if (decision.status === 'warn') {
-    return '确认警告影响；当前策略允许继续审批。'
-  }
-  return '确认条件和证据后通过 Gate。'
 }
 
 function overrideLabel(override: GateOverrideDecision): string {
@@ -117,34 +81,16 @@ export function GateEnforcementPanel({
   const canShowOverrideForm = decision?.status === 'blocked' && decision.canOverride && canSaveOverride
   const isOverrideSaveDisabled = !overrideReason.trim() || isSavingOverride || isInspectorWriteBlocked
   const reasons = decision ? [...decision.blockingReasons, ...decision.warningReasons] : []
-  const primaryReason = reasons[0]
 
+  // The status row is the one conclusion (plan W6): this panel lists the findings, the technical
+  // details and the Lead exception form, without its own verdict or “主要下一步”.
   return (
     <div className="agent-advisory-list" data-testid="gate-enforcement-details">
-      <span className="panel-label">Gate Enforcement · 详细结论</span>
+      <span className="panel-label">策略评估详情</span>
       {isLoading ? (
-        <p className="empty-note">正在加载 Gate Enforcement...</p>
+        <p className="empty-note">正在读取策略评估…</p>
       ) : decision ? (
         <article className={`agent-advisory agent-advisory--${gateEnforcementTone(decision.status)}`}>
-          <section className="gate-enforcement-summary" aria-live="polite" data-testid="gate-enforcement-summary">
-            <div className="compact-row">
-              <strong><span aria-hidden="true">{enforcementIcon(decision)}</span> {enforcementHeadline(decision)}</strong>
-              <span className={`pill ${decision.blocksApproval ? 'bad' : decision.status === 'pass' ? 'good' : 'warn'}`}>
-                {decision.blocksApproval ? '阻断审批' : '可继续审批'}
-              </span>
-            </div>
-            <dl className="gate-enforcement-facts">
-              <div>
-                <dt>主要原因</dt>
-                <dd>{primaryReason ? `${reasonTitle(primaryReason)}：${primaryReason.summary}` : '所有 Enforcement 条件已满足。'}</dd>
-              </div>
-              <div>
-                <dt>主要下一步</dt>
-                <dd>{nextStepForDecision(decision)}</dd>
-              </div>
-            </dl>
-          </section>
-
           {reasons.length > 0 ? (
             <section className="enforcement-findings" aria-label="Gate Enforcement 详细原因">
               {reasons.map((reason) => (
@@ -161,7 +107,7 @@ export function GateEnforcementPanel({
               ))}
             </section>
           ) : (
-            <p className="empty-note">没有 Enforcement 警告或阻断项。</p>
+            <p className="empty-note">没有策略警告或阻断项。</p>
           )}
 
           <details className="gate-technical-details" data-testid="gate-technical-details">
@@ -207,7 +153,7 @@ export function GateEnforcementPanel({
           ) : null}
         </article>
       ) : (
-        <p className="empty-note">当前环境尚未加载 Gate Enforcement。</p>
+        <p className="empty-note">当前环境尚未加载策略评估。</p>
       )}
     </div>
   )
@@ -222,6 +168,7 @@ export function GateRemediationPanel({
   pairingState,
   isStartingRetry,
   isInspectorWriteBlocked,
+  hiddenCtaKinds = [],
   onSyncTeam,
   onOpenTests,
   onOpenOverride,
@@ -236,19 +183,21 @@ export function GateRemediationPanel({
   pairingState: 'unpaired' | 'paired' | 'sync_failed'
   isStartingRetry: boolean
   isInspectorWriteBlocked: boolean
+  /** Steps the task status row already offers; not repeated here (plan W6). */
+  hiddenCtaKinds?: readonly GateRemediationCtaKind[]
   onSyncTeam: () => void
   onOpenTests: () => void
   onOpenOverride: () => void
   onRunKnowledgeReview: () => void
   onStartRetry: (candidateId: string) => void
 }) {
-  const viewModel = buildGateRemediationViewModel({
+  const viewModel = withoutStatusRowActions(buildGateRemediationViewModel({
     decision,
     remediationPlan,
     overrides,
     canSaveOverride,
     isStartingRetry,
-  })
+  }), hiddenCtaKinds)
 
   if (isLoading) {
     return <p className="empty-note">正在整理处理动作...</p>

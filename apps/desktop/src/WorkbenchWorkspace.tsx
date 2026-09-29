@@ -8,8 +8,18 @@ import { ArrowUp, Brain, ChevronDown, History, MessageCircle, MoreHorizontal, Pa
 import { type WorkflowRun } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
 import type { ConversationAction, ConversationCommand, ConversationMessage, WorkbenchConversation } from '../electron/workbench-conversation-contract'
+import {
+  MAX_CONVERSATION_TEXT,
+  addDiscussionReference,
+  composeMessageWithReferences,
+  loadDiscussionReferences,
+  saveDiscussionReferences,
+  type DiscussionReference,
+} from './app/discussion-reference'
+import { formatLocalTime } from './app/desktop-view-model'
 
-export type WorkbenchOpenRequest = { serial: number; type: 'details' | 'discussion'; prompt?: string }
+/** `reference` adds a card to the current discussion without sending anything (plan W7). */
+export type WorkbenchOpenRequest = { serial: number; type: 'details' | 'discussion' | 'reference'; prompt?: string; reference?: DiscussionReference }
 
 type DiscussionPaneState = { open: boolean; toggle: () => void; attention: boolean }
 /** Lets the task title row toggle the project discussion without owning its state (plan §5.4). */
@@ -52,6 +62,9 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   const [detailsTarget, setDetailsTarget] = useState<ConversationTabTarget | null>(null)
   const closeMenu = useCallback(() => setTabMenu(null), [])
   const [creationRequest, setCreationRequest] = useState<{ projectId: string; prompt: string } | null>(null)
+  // Reference cards per conversation: local UI state, persisted best-effort (plan W7).
+  const [referenceStore, setReferenceStore] = useState<Record<string, DiscussionReference[]>>({})
+  const pendingReference = useRef<DiscussionReference | null>(null)
   const creatingRef = useRef(false)
   const generation = useRef(0)
   const activeRef = useRef(active)
@@ -99,9 +112,19 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     catch (failure) { if (command.projectId === visibleProject.current) setError(failure instanceof Error ? failure.message : '会话操作未完成，请重试。'); return undefined }
   }, [call])
 
+  const referencesFor = useCallback((conversationId: string) =>
+    referenceStore[conversationId] ?? (projectId ? loadDiscussionReferences(projectId, conversationId) : []), [projectId, referenceStore])
+  const setReferencesFor = useCallback((conversationId: string, next: DiscussionReference[]) => {
+    setReferenceStore((current) => ({ ...current, [conversationId]: next }))
+    if (projectId && !saveDiscussionReferences(projectId, conversationId, next)) {
+      setError('引用只保留在本次窗口中，未能写入本机界面状态。')
+    }
+  }, [projectId])
+
   useEffect(() => {
     generation.current++
     setSessions([]); setShowHistory(false); setError(''); setCreationRequest(null); setTabMenu(null); setDetailsTarget(null)
+    setReferenceStore({}); pendingReference.current = null
     let restored = 'details'
     try { restored = projectId ? localStorage.getItem(`devflow-workbench-tab:${projectId}`) ?? 'details' : 'details' } catch { /* optional UI preference */ }
     setActive(restored)
@@ -148,7 +171,11 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     setActive('new-pending')
     const result = await runCommand({ type: 'create', projectId, inputDraft: creationRequest.prompt, executor })
     if (currentGeneration === generation.current) {
-      if (result?.conversationId) { setCreationRequest(null); activate(result.conversationId); setShowHistory(false) }
+      if (result?.conversationId) {
+        // A reference that asked for a new conversation lands on it; still nothing is sent.
+        if (pendingReference.current) { setReferencesFor(result.conversationId, [pendingReference.current]); pendingReference.current = null }
+        setCreationRequest(null); activate(result.conversationId); setShowHistory(false)
+      }
       else setActive(previousActive)
     }
     creatingRef.current = false
@@ -162,8 +189,22 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       if (splitDetails && reader.current) { reader.current.scrollTop = 0; reader.current.focus({ preventScroll: true }) }
       else { activate('details'); setShowHistory(false); setCreationRequest(null) }
     }
+    else if (request.type === 'reference' && request.reference) {
+      if (splitDetails) rememberDiscussion('open')
+      const open = sessions.filter((item) => item.localProjectId === projectId && item.isOpen)
+      const target = open.find((item) => item.id === activeRef.current) ??
+        [...open].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+      if (target) {
+        setReferencesFor(target.id, addDiscussionReference(referencesFor(target.id), request.reference))
+        activate(target.id); setShowHistory(false)
+      } else {
+        // No conversation yet: open the new-conversation dialog first (plan W7).
+        pendingReference.current = request.reference
+        beginCreate('')
+      }
+    }
     else { if (splitDetails) rememberDiscussion('open'); beginCreate(request.prompt) }
-  }, [activate, beginCreate, rememberDiscussion, request, splitDetails])
+  }, [activate, beginCreate, projectId, referencesFor, rememberDiscussion, request, sessions, setReferencesFor, splitDetails])
 
   useEffect(() => {
     tabbar.current?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
@@ -229,7 +270,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     </div>
     {tabMenu && menuSession && <ConversationTabMenu key={menuSession.id} target={tabMenu} onClose={closeMenu} onDetails={() => { setDetailsTarget(tabMenu); setTabMenu(null) }} />}
     {detailsTarget && detailsSession && <ConversationDetailsDialog key={detailsSession.id} session={detailsSession} projectName={projectName ?? '当前项目'} providerName={providerName} statusLabel={statusCopy[detailsSession.status]} returnFocus={detailsTarget.trigger} onClose={() => setDetailsTarget(null)} onRename={(title) => runCommand({ type: 'update', projectId: detailsSession.localProjectId, conversationId: detailsSession.id, title })} />}
-    {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError('') } }} onCreate={(executor) => void create(executor)} />}
+    {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError(''); pendingReference.current = null } }} onCreate={(executor) => void create(executor)} />}
     {error && !creationRequest && <div className="conversation-error" role="alert">{error}<button aria-label="关闭会话提示" onClick={() => setError('')}><X size={14} /></button></div>}
     {showHistory && <section className="conversation-history" aria-label="会话历史记录">
       <div className="row"><strong>会话历史</strong><button className="workspace-icon" onClick={() => setShowHistory(false)} aria-label="关闭会话历史"><X size={16} /></button></div>
@@ -247,7 +288,8 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     </div>
     {active !== 'details' && !session && !showHistory && <p className="conversation-loading" role="status">{creating ? '正在创建独立对话…' : '正在恢复会话…'}</p>}
     {session && <div id={`chat-panel-${session.id}`} role="tabpanel" aria-labelledby={`chat-tab-${session.id}`} hidden={showHistory} className="workspace-conversation">
-      <ConversationView modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand} />
+      <ConversationView modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand}
+        references={referencesFor(session.id)} onReferencesChange={(next) => setReferencesFor(session.id, next)} />
     </div>}
   </aside>
   return splitDetails ? <DiscussionPaneContext.Provider value={{ open: discussionOpen, attention: discussionAttention, toggle: () => rememberDiscussion(discussionOpen ? 'closed' : 'open') }}>
@@ -259,14 +301,16 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   </DiscussionPaneContext.Provider> : conversationPane
 }
 
-function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError }: {
+function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError, references, onReferencesChange }: {
   modelReadinessError?: string | undefined
   session: WorkbenchConversation; runs: WorkflowRun[]; providerId: string; providerName: string
   command: (input: ConversationCommand) => Promise<unknown>
   onNavigate: (action: ConversationAction) => void; onConfigure: () => void
+  references: DiscussionReference[]; onReferencesChange: (next: DiscussionReference[]) => void
 }) {
   const [input, setInput] = useState(session.inputDraft)
   const [sending, setSending] = useState(false)
+  const [sendError, setSendError] = useState('')
   const [answerTo, setAnswerTo] = useState<string | null>(null)
   const inputRef = useRef(input)
   const messagesEnd = useRef<HTMLDivElement>(null)
@@ -285,11 +329,18 @@ function ConversationView({ session, runs, providerId, providerName, command, on
   const updateInput = (value: string) => { inputRef.current = value; setInput(value) }
   async function send(text = input) {
     if (!text.trim() || !providerId || busy || sending || modelReadinessError) return
+    // References are prepended as plain text; the contract's text bound still applies (W7).
+    const outgoing = composeMessageWithReferences(references, text)
+    if (outgoing.length > MAX_CONVERSATION_TEXT) {
+      setSendError(`引用与输入合计超过 ${MAX_CONVERSATION_TEXT} 字，请移除部分引用或缩短输入。草稿已保留。`)
+      return
+    }
+    setSendError('')
     setSending(true)
     // Save the exact pending input first, so a rejected send never loses the draft.
     await command({ type: 'update', ...scope, inputDraft: text })
-    const result = await command({ type: 'send', ...scope, providerId, text, ...(answerTo ? { answerToMessageId: answerTo } : {}) })
-    if (result) { updateInput(''); setAnswerTo(null) }
+    const result = await command({ type: 'send', ...scope, providerId, text: outgoing, ...(answerTo ? { answerToMessageId: answerTo } : {}) })
+    if (result) { updateInput(''); setAnswerTo(null); if (references.length) onReferencesChange([]) }
     setSending(false)
     textarea.current?.focus()
   }
@@ -310,6 +361,15 @@ function ConversationView({ session, runs, providerId, providerName, command, on
     <form className="conversation-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
       {!providerId && <p>先配置模型才能开始调查。<button type="button" className="text-button" onClick={onConfigure}>配置 Provider</button></p>}
       <div className="conversation-answer-target" hidden={!answerTo}>回答：{session.messages.find((message) => message.id === answerTo)?.question?.prompt}<button type="button" className="text-button" onClick={() => setAnswerTo(null)}>取消关联</button></div>
+      {references.length > 0 && <div className="conversation-reference-cards" aria-label="引用的材料">
+        {references.map((reference) => <div className="conversation-reference-card" key={reference.id} data-testid="conversation-reference-card">
+          <div><strong>{reference.materialTitle}</strong> · <span>{reference.version}</span></div>
+          <small>{reference.projectName} · {reference.runTitle} · {reference.stageLabel} · {reference.stepTitle} · 读取于 {formatLocalTime(reference.readAt)}</small>
+          <button type="button" className="workspace-icon" aria-label={`移除引用：${reference.materialTitle}`} onClick={() => onReferencesChange(references.filter((item) => item.id !== reference.id))}><X size={13} /></button>
+        </div>)}
+        <p className="meta">引用会在发送时附在消息前；添加引用不会发送消息，也不会调用模型。</p>
+      </div>}
+      {sendError && <p className="conversation-error" role="alert">{sendError}</p>}
       <label className="sr-only" htmlFor={`compose-${session.id}`}>对话内容</label>
       <textarea ref={textarea} id={`compose-${session.id}`} aria-label="对话内容" value={input} maxLength={12000} onChange={(event) => updateInput(event.target.value)} placeholder="问进度、查代码、讨论需求或回答问题…" onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void send() } }} />
       <div className="conversation-composer-footer"><span title="本会话所选模型；调用可能产生费用，用量可在顶栏查看">{providerName || '未配置模型'}</span>
@@ -346,6 +406,8 @@ function ReasoningView({ message }: { message: ConversationMessage }) {
 function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish }: {
   message: ConversationMessage; busy: boolean; targetLabel: string; onAnswer: (answer: string) => void; onNavigate: (action: ConversationAction) => void; onPublish: () => void
 }) {
+  // Saving a proposal first shows where it goes and what is saved (plan W8).
+  const [confirmingPublish, setConfirmingPublish] = useState(false)
   if (message.reasoning) return <>{message.failure && <p className="meta">{message.text}</p>}<ReasoningView message={message} /></>
   if (message.role === 'tool') return <details className="conversation-tool"><summary>{message.text}</summary>{message.citations?.map((source) => <pre key={source.id}>{source.excerpt}</pre>)}</details>
   return <article className={`conversation-message conversation-message--${message.role}`}>
@@ -357,7 +419,20 @@ function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavig
     {!!message.actions?.length && <div className="conversation-actions">{message.actions.map((action, index) => <button className="ghost-button" key={`${action.runId}-${action.nodeId}-${index}`} onClick={() => onNavigate(action)}>{action.label} ↗</button>)}</div>}
     {message.draft && <div className="conversation-proposal"><span className="pill soft">{message.draft.publishedArtifactId ? '已保存 · 待确认' : '仅本会话草稿'}</span><strong>{message.draft.title}</strong><pre>{message.draft.content}</pre><p className="meta">目标：{targetLabel}。保存后其他会话可以查询；仍需在节点形成正式产物。</p>
       {message.draft.inputReceipt && <details><summary>正文与验收覆盖 · {message.draft.inputReceipt.coverage.length} 项</summary><p className="meta">关键正文已完整送达本次模型调用。以下是模型给出的对应关系，请核对含义是否准确。</p>{message.draft.inputReceipt.coverage.map((row) => <div key={row.criterionId}><blockquote>{row.sourceQuote}</blockquote><p>提案对应：{row.proposalQuote}</p></div>)}</details>}
-      <button className="ghost-button" disabled={!!message.draft.publishedArtifactId} onClick={onPublish}>{message.draft.publishedArtifactId ? '已保存为节点提案' : '保存为节点提案'}</button>
+      {message.draft.publishedArtifactId ? (
+        <p className="meta" role="status" data-testid="proposal-saved-note">提案已保存，尚未更新正式需求；流程不会推进。它在目标步骤的「材料与版本」中标为「讨论提案（待确认）」。</p>
+      ) : confirmingPublish ? (
+        <div className="conversation-publish-preview" role="group" aria-label="保存提案前确认" data-testid="proposal-publish-preview">
+          <p>将保存到：<strong>{targetLabel}</strong></p>
+          <p>保存内容：上方「{message.draft.title}」全文，作为「讨论提案（待确认）」。保存后其他会话可以查询；不会更新正式需求，也不会推进流程。</p>
+          <div className="inspector-actions">
+            <button className="primary-button" type="button" disabled={busy} onClick={() => { setConfirmingPublish(false); onPublish() }}>确认保存提案</button>
+            <button className="text-button" type="button" onClick={() => setConfirmingPublish(false)}>取消</button>
+          </div>
+        </div>
+      ) : (
+        <button className="ghost-button" type="button" onClick={() => setConfirmingPublish(true)}>保存为节点提案</button>
+      )}
     </div>}
     {!!message.citations?.length && <details className="conversation-sources"><summary>查询依据 · {message.citations.length}</summary>{message.citations.map((citation) => <div key={citation.id}><strong>{citation.label}</strong><small>读取于 {new Date(citation.observedAt).toLocaleString()}</small><pre>{citation.excerpt}</pre></div>)}</details>}
   </article>

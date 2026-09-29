@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   LocalProject,
@@ -50,7 +50,7 @@ const run: WorkflowRun = {
 
 const defaultProps = {
   evidence: [] as TestEvidence[],
-  onRunTests: vi.fn(),
+  onHandleInTask: vi.fn(),
   isRunningTests: false,
   commandDraft: 'pnpm test',
   onCommandDraftChange: vi.fn(),
@@ -149,17 +149,30 @@ describe('TestsView empty states and run preconditions (plan D4, X6)', () => {
     render(<TestsView {...defaultProps} {...overrides} />)
 
     expect(screen.getByTestId('tests-empty-state')).toHaveTextContent(emptyCopy)
-    const runButton = screen.getByRole('button', { name: '执行测试' })
-    expect(runButton).toBeDisabled()
-    expect(runButton).toHaveAccessibleDescription(blockedReason)
+    // The page only hands back to the task (W5); the reason why a run would be refused stays visible.
+    const handBack = screen.getByRole('button', { name: '在任务中处理' })
+    expect(handBack).toHaveAccessibleDescription(blockedReason)
+    expect(screen.queryByRole('button', { name: /执行本地测试|执行测试/ })).not.toBeInTheDocument()
   })
 
   it('does not treat a saved command as a finished test', () => {
-    render(<TestsView {...defaultProps} />)
+    const onHandleInTask = vi.fn()
+    render(<TestsView {...defaultProps} onHandleInTask={onHandleInTask} />)
 
-    expect(screen.getByTestId('tests-empty-state')).toHaveTextContent('当前任务尚未运行测试，可以点击「执行本地测试」。')
-    expect(screen.getByRole('button', { name: '执行测试' })).toBeEnabled()
+    expect(screen.getByTestId('tests-empty-state')).toHaveTextContent('当前任务尚未运行测试，可以在任务的测试步骤点击「运行检查」。')
+    fireEvent.click(screen.getByRole('button', { name: '在任务中处理' }))
+    expect(onHandleInTask).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('tests-run-blocked-reason')).not.toBeInTheDocument()
+  })
+
+  it('offers the way back after the command is saved from a task (W9)', () => {
+    const supportContext = { runId: run.id, nodeId: testNode.id, sourceView: 'workbench' as const, returnView: 'workbench' as const, focusTarget: 'local-tests' as const, label: '设置测试命令', inspectorTab: '当前工作', createdAt: '2026-09-28T00:00:00.000Z' }
+    const { rerender } = render(<TestsView {...defaultProps} supportContext={supportContext} />)
+    expect(screen.getByTestId('support-context-banner')).toHaveTextContent('保存测试命令后可以返回任务；返回后不会自动运行检查。')
+    rerender(<TestsView {...defaultProps} supportContext={{ ...supportContext, savedAt: '2026-09-28T00:01:00.000Z' }} />)
+    expect(screen.getByTestId('support-context-banner')).toHaveTextContent('已保存。可以返回任务')
+    fireEvent.click(screen.getByRole('button', { name: '返回任务' }))
+    expect(defaultProps.onReturnToInspector).toHaveBeenCalled()
   })
 
   it('names the actual step when the task has not reached testing', () => {
@@ -168,7 +181,6 @@ describe('TestsView empty states and run preconditions (plan D4, X6)', () => {
     const earlyRun = { ...run, currentNodeId: designNode.id, nodes: [designNode, pendingTest] }
     render(<TestsView {...defaultProps} selectedRun={earlyRun} selectedNode={pendingTest} />)
 
-    expect(screen.getByRole('button', { name: '执行测试' })).toBeDisabled()
     expect(screen.getByTestId('tests-run-blocked-reason')).toHaveTextContent('任务进入测试步骤后才能执行；当前实际步骤：方案设计。')
     expect(screen.getByTestId('tests-empty-state')).toHaveTextContent('命令已保存不代表测试已完成。')
   })

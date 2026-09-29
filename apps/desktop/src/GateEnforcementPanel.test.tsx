@@ -77,7 +77,7 @@ describe('GateEnforcementPanel', () => {
     expect(onSaveOverride).toHaveBeenCalledWith('Reviewed the canonical blocking evidence.')
   })
 
-  it('uses human language for the verdict, approval impact, cause, and one next step', () => {
+  it('lists the concrete findings without a second verdict or “主要下一步” (plan W6)', () => {
     render(
       <GateEnforcementPanel
         policySnapshot={null}
@@ -89,11 +89,12 @@ describe('GateEnforcementPanel', () => {
       />,
     )
 
-    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('存在 1 项阻断')
-    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('阻断审批')
-    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('知识治理条件未满足')
-    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('Fix the API response shape before approving.')
+    // The task status row is the one conclusion; this panel keeps findings and details only.
+    expect(screen.getByText('策略评估详情')).toBeInTheDocument()
+    expect(screen.queryByTestId('gate-enforcement-summary')).not.toBeInTheDocument()
+    expect(screen.queryByText(/主要下一步|阻断审批|可继续审批/)).not.toBeInTheDocument()
     expect(screen.getAllByTestId('enforcement-finding')).toHaveLength(1)
+    expect(screen.getByTestId('enforcement-finding')).toHaveTextContent('知识治理条件未满足')
     expect(screen.getByTestId('gate-technical-details')).not.toHaveAttribute('open')
     expect(screen.getByText('api_contract:violated')).toBeInTheDocument()
   })
@@ -117,9 +118,30 @@ describe('GateEnforcementPanel', () => {
       />,
     )
 
-    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('Gate Enforcement 已通过')
-    expect(screen.getByTestId('gate-enforcement-summary')).toHaveTextContent('可继续审批')
-    expect(screen.getByText('没有 Enforcement 警告或阻断项。')).toBeInTheDocument()
+    expect(screen.getByText('没有策略警告或阻断项。')).toBeInTheDocument()
+    expect(screen.queryByTestId('gate-enforcement-summary')).not.toBeInTheDocument()
+  })
+
+  it('omits recovery steps the task status row already offers (plan W6)', () => {
+    render(
+      <GateRemediationPanel
+        decision={{ ...decision, blockingReasons: [{ ...decision.blockingReasons[0]!, id: 'missing-review', target: 'missing_agent_review', ruleKey: 'require_review' }] }}
+        remediationPlan={null}
+        overrides={[]}
+        isLoading={false}
+        canSaveOverride={false}
+        pairingState="paired"
+        isStartingRetry={false}
+        isInspectorWriteBlocked={false}
+        hiddenCtaKinds={['knowledge_review']}
+        onSyncTeam={vi.fn()}
+        onOpenTests={vi.fn()}
+        onOpenOverride={vi.fn()}
+        onRunKnowledgeReview={vi.fn()}
+        onStartRetry={vi.fn()}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: '运行门禁审查' })).not.toBeInTheDocument()
   })
 
   it('keeps remediation actions in the dedicated action-only panel', () => {
@@ -221,7 +243,7 @@ describe('GateEnforcementPanel', () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole('button', { name: '去 Tests 处理' }))
+    fireEvent.click(screen.getByRole('button', { name: '查看测试步骤' }))
     expect(onOpenTests).toHaveBeenCalledOnce()
   })
 

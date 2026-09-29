@@ -510,3 +510,76 @@ it('refreshes from pushes, skips hidden fallback polls and recovers immediately 
     vi.useRealTimers()
   }
 })
+
+describe('discussion references and proposal preview (plan W7, W8)', () => {
+  const reference = {
+    id: 'artifact-1:需求 v2:0', materialId: 'artifact-1', materialTitle: '需求澄清', version: '需求 v2',
+    projectName: '任务清单', runTitle: run.title, stageLabel: '需求澄清', stepTitle: '需求确认 Gate', readAt: '2026-09-28T02:00:00.000Z',
+  }
+
+  it('adds a reference card to the active conversation without sending, and prepends it on send', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '讨论需求' })
+    const { rerender } = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    await screen.findByRole('textbox', { name: '对话内容' })
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'reference', reference }} />)
+    const card = await screen.findByTestId('conversation-reference-card')
+    expect(card).toHaveTextContent('需求澄清 · 需求 v2')
+    expect(card).toHaveTextContent(`任务清单 · ${run.title} · 需求澄清 · 需求确认 Gate · 读取于`)
+    // Adding a reference never sends a message or calls a model.
+    expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(0)
+    // Browsing another node does not replace the card.
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 2, type: 'details' }}><p>另一个节点</p></WorkbenchWorkspace>)
+    expect(screen.getByTestId('conversation-reference-card')).toBeInTheDocument()
+
+    fireEvent.change(screen.getByRole('textbox', { name: '对话内容' }), { target: { value: '这一版的验收标准够吗？' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送消息' }))
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'send')).toBe(true))
+    const sent = f.commands.find((command) => command.type === 'send')
+    expect(sent).toMatchObject({ type: 'send', conversationId: 'chat-1' })
+    const text = (sent as Extract<ConversationCommand, { type: 'send' }>).text
+    expect(text.startsWith('【引用材料】需求澄清（需求 v2）')).toBe(true)
+    expect(text.endsWith('这一版的验收标准够吗？')).toBe(true)
+    await waitFor(() => expect(screen.queryByTestId('conversation-reference-card')).not.toBeInTheDocument())
+  })
+
+  it('opens the new-conversation dialog first when no conversation exists, then attaches the reference', async () => {
+    const f = fixture()
+    const { rerender } = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'reference', reference }} />)
+    const dialog = await screen.findByRole('dialog')
+    expect(f.commands.filter((command) => command.type === 'create')).toHaveLength(0)
+    fireEvent.click(within(dialog).getAllByRole('button').find((button) => /开始|创建|新建/.test(button.textContent ?? ''))!)
+    await screen.findByTestId('conversation-reference-card')
+    expect(f.commands.filter((command) => command.type === 'send')).toHaveLength(0)
+  })
+
+  it('removes a reference card on request', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '讨论需求' })
+    const { rerender } = render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    await screen.findByRole('textbox', { name: '对话内容' })
+    rerender(<WorkbenchWorkspace {...f.props} splitDetails request={{ serial: 1, type: 'reference', reference }} />)
+    fireEvent.click(await screen.findByRole('button', { name: '移除引用：需求澄清' }))
+    expect(screen.queryByTestId('conversation-reference-card')).not.toBeInTheDocument()
+  })
+
+  it('previews the target and content before saving a proposal, then says the requirement is unchanged', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '提案' })
+    const node = run.nodes.find((item) => item.stage === 'clarify' && item.kind === 'agent')!
+    const session = f.sessions[0]!
+    session.messages.push({ id: 'draft-1', role: 'assistant', text: '草稿', createdAt: run.createdAt, draft: { runId: run.id, nodeId: node.id, title: '筛选提案', content: '保留筛选状态。' } } as never)
+    render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    fireEvent.click(await screen.findByRole('button', { name: '保存为节点提案' }))
+    const preview = screen.getByTestId('proposal-publish-preview')
+    expect(preview).toHaveTextContent(`将保存到：${run.title} · ${node.title}`)
+    expect(preview).toHaveTextContent('不会更新正式需求，也不会推进流程')
+    expect(f.commands.filter((command) => command.type === 'publish')).toHaveLength(0)
+    fireEvent.click(within(preview).getByRole('button', { name: '取消' }))
+    expect(screen.queryByTestId('proposal-publish-preview')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '保存为节点提案' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认保存提案' }))
+    await waitFor(() => expect(f.commands.filter((command) => command.type === 'publish')).toEqual([{ type: 'publish', projectId: run.projectId, conversationId: session.id, messageId: 'draft-1' }]))
+  })
+})

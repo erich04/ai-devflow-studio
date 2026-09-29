@@ -12,6 +12,7 @@ import {
   type SupportContext,
   formatLocalTime,
 } from '../app/desktop-view-model'
+import { buildTestRunReadiness } from '../app/test-run-readiness'
 
 export function SkillView() {
   return (
@@ -82,7 +83,7 @@ export function McpView({
 
 export function TestsView({
   evidence,
-  onRunTests,
+  onHandleInTask,
   isRunningTests,
   commandDraft,
   onCommandDraftChange,
@@ -97,7 +98,8 @@ export function TestsView({
   onReturnToInspector,
 }: {
   evidence: TestEvidence[]
-  onRunTests: () => void
+  /** Checks run at the task's test step (plan W5); this page keeps the command and history. */
+  onHandleInTask: () => void
   isRunningTests: boolean
   commandDraft: string
   onCommandDraftChange: (value: string) => void
@@ -141,29 +143,15 @@ export function TestsView({
         : latestEvidence?.status === 'timed_out'
           ? { label: '已超时', tone: 'bad', detail: latestEvidence.summary }
           : { label: '待执行', tone: 'soft', detail: '尚未产生当前 Run 的测试结果。' }
-  // Tests can only run at the actual test step (plan X6); say why before the click, not after.
-  const actualNode = selectedRun?.nodes.find((node) => node.id === selectedRun.currentNodeId)
-  const canRunAtActualStep = Boolean(
-    actualNode && actualNode.kind === 'test' && actualNode.stage === 'test' &&
-      (actualNode.status === 'running' || actualNode.status === 'failed'),
-  )
-  const savedCommand = project?.testCommand?.trim() ?? ''
-  const runBlockedReason = !project
-    ? '先选择本地仓库，再配置或执行测试。'
-    : !savedCommand
-      ? '先保存当前项目的测试命令。'
-      : !selectedRun
-        ? '先选择一个任务。'
-        : !canRunAtActualStep
-          ? `任务进入测试步骤后才能执行；当前实际步骤：${actualNode ? displayNodeTitle(actualNode) : '无'}。`
-          : ''
+  // Same rule as the task's 「运行检查」 (plan W4): the reason is shown before any click.
+  const { blockedReason: runBlockedReason, savedCommand } = buildTestRunReadiness({ project, run: selectedRun })
   const evidenceEmptyCopy = !project
     ? '选择本地仓库后再配置或执行测试。'
     : !savedCommand
       ? '配置当前项目的测试命令后，才能产生测试证据。'
       : !latestEvidence
-        ? canRunAtActualStep
-          ? '当前任务尚未运行测试，可以点击「执行本地测试」。'
+        ? !runBlockedReason
+          ? '当前任务尚未运行测试，可以在任务的测试步骤点击「运行检查」。'
           : '当前任务尚未运行测试。命令已保存不代表测试已完成。'
         : ''
   const workflowState = !selectedRun
@@ -187,24 +175,27 @@ export function TestsView({
       <div className="page-main">
         <div className="panel-head">
           <span className="panel-title">测试计划与证据</span>
-          <button className="primary-button" aria-label="执行测试" aria-describedby={runBlockedReason ? 'tests-run-blocked-reason' : undefined} disabled={isRunningTests || Boolean(runBlockedReason)} onClick={onRunTests}>
+          {/* One execution entry (plan W5): the check runs at the task's test step. */}
+          <button className="primary-button" aria-describedby={runBlockedReason ? 'tests-run-blocked-reason' : undefined} disabled={!selectedRun} onClick={onHandleInTask}>
             <Play size={16} />
-            {isRunningTests ? '测试中' : '执行本地测试'}
+            {isRunningTests ? '测试中 · 在任务中查看' : '在任务中处理'}
           </button>
         </div>
         {runBlockedReason && !isRunningTests ? <p className="meta" id="tests-run-blocked-reason" data-testid="tests-run-blocked-reason">{runBlockedReason}</p> : null}
         {supportContext?.focusTarget === 'local-tests' ? (
           <div className="support-context-banner" data-testid="support-context-banner">
             <div>
-              <span className="panel-label">来自 Workbench Inspector</span>
+              <span className="panel-label">来自任务</span>
               <strong>{supportContext.label}</strong>
               <p>
                 当前目标：{selectedRun?.title ?? supportContext.runId} · {selectedNode ? displayNodeTitle(selectedNode) : supportContext.nodeId}
               </p>
+              {/* Saving never navigates or runs the tests; the user returns explicitly (plan W9). */}
+              <p role="status">{supportContext.savedAt ? '已保存。可以返回任务，回到原来的阅读位置；返回后不会自动运行检查。' : '保存测试命令后可以返回任务；返回后不会自动运行检查。'}</p>
             </div>
             <button className="ghost-button" type="button" onClick={onReturnToInspector}>
               <ArrowLeft size={16} />
-              返回当前 Inspector
+              返回任务
             </button>
           </div>
         ) : null}
