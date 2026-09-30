@@ -34,6 +34,7 @@ type PlanStore = Pick<LocalStore,
   | 'getDesktopPairingCredential'
   | 'getPolicySnapshot'
   | 'getAgentRuntime'
+  | 'getAgentRuntimeContextAttachment'
   | 'isAgentRuntimeContextCurrent'
   | 'commitAgentRuntimeTransition'
   | 'createCoordinationSession'
@@ -301,17 +302,23 @@ export function createBoundedAgentCoordinationPlan(input: {
           })
         ) throw new Error('conflicting_supervisor')
 
-        const expectedContext = await assembleAgentRuntimeContext({
-          id: ids.contextId,
-          runtimeId: ids.runtimeId,
-          checkpointVersion: 1,
-          scope,
-          authority,
-          citationSources: [],
-          memorySources: [],
-          attachedAt: supervisor.requestedAt,
-        })
-        if (supervisor.contextDigest !== expectedContext.contextDigest) {
+        // Check the Context persisted with the Supervisor rather than rebuilding it, so a retry
+        // does not depend on today's assembly producing the same digest. The Supervisor carries
+        // no Knowledge or Memory (ADR 0024 §3 defers Memory for coordination).
+        const attachment = await input.store.getAgentRuntimeContextAttachment(supervisor.id)
+        if (
+          attachment === null ||
+          attachment.id !== ids.contextId ||
+          attachment.runtimeId !== supervisor.id ||
+          attachment.checkpointVersion !== 1 ||
+          attachment.attachedAt !== supervisor.requestedAt ||
+          attachment.contextDigest !== supervisor.contextDigest ||
+          !sameJson(attachment.scope, scope) ||
+          !sameJson(attachment.authority, authority) ||
+          attachment.knowledgeCitations.length !== 0 ||
+          attachment.memoryRevisions.length !== 0 ||
+          attachment.memoryRevisionIdentities.length !== 0
+        ) {
           throw new Error('conflicting_context')
         }
         if (!await input.store.isAgentRuntimeContextCurrent(supervisor.id, supervisor.requestedAt)) {
