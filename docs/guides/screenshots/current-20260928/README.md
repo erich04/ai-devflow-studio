@@ -1,6 +1,8 @@
-# 当前源码界面截图（2026-09-28）
+# 工作区改造前的界面截图（2026-09-28，历史）
 
-这批截图供根 README 与使用指南展示当前界面。来自 `main` 源码提交 `bf18e4aa2347f34d3816239e6bd03ff3c0ad9fd6`（包版本 2.3.0），不是已发布安装包的截图。图片原始字节、尺寸、SHA-256 和引用更新数量见 [manifest.json](./manifest.json)。
+> **这批截图已被替代。** 它们拍摄于[工作区改造](../../../plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md)之前，展示的 Agents、测试、Skills、MCP 等一级页面和四个页签的任务页已不存在。当前界面见 [`workspace-redesign-20260928`](../workspace-redesign-20260928/README.md)。这里保留原图，供版本化的历史指南引用；目录名中的 “current” 是当时的命名。
+
+这批截图原先供根 README 与使用指南展示当时的界面。来自 `main` 源码提交 `bf18e4aa2347f34d3816239e6bd03ff3c0ad9fd6`（包版本 2.3.0），不是已发布安装包的截图。图片原始字节、尺寸、SHA-256 和引用更新数量见 [manifest.json](./manifest.json)。
 
 ## 采集环境
 
