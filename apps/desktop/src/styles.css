@@ -1389,6 +1389,85 @@ button:disabled {
   margin-bottom: 14px;
 }
 
+/* Knowledge directory, stage usage and checks (knowledge-context plan K4). */
+.knowledge-directory {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.knowledge-directory-instructions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-body);
+}
+
+.knowledge-directory-instructions .gate-technical-details {
+  flex-basis: 100%;
+}
+
+.knowledge-stage-table caption {
+  padding-bottom: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  text-align: left;
+}
+
+/* `.table` is declared later in this file; the doubled class keeps these compact rows. */
+.table.knowledge-stage-table th,
+.table.knowledge-stage-table td {
+  padding: 8px 10px;
+}
+
+.table.knowledge-stage-table th {
+  text-transform: none;
+}
+
+.table.knowledge-stage-table th[scope='row'] {
+  color: var(--text);
+  font-size: var(--font-size-body);
+  font-weight: 700;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.knowledge-stage-table td .pill {
+  margin-left: 8px;
+}
+
+.knowledge-checks-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.knowledge-check-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.knowledge-check-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--font-size-body);
+}
+
+.knowledge-check-list code {
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-mono);
+}
+
+.knowledge-check-list .gate-technical-details {
+  flex-basis: 100%;
+}
+
 .knowledge-doc-card {
   display: grid;
   gap: 8px;
