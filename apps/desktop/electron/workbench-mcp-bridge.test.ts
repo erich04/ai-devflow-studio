@@ -18,7 +18,9 @@ it('exposes only scoped read tools over authenticated loopback HTTP and rejects 
   const initialized = await (await rpc('initialize', { protocolVersion: '2025-06-18' })).json()
   expect(initialized.result.capabilities).toEqual({ tools: {} })
   const tools = (await (await rpc('tools/list')).json()).result.tools
-  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'requirement', 'repo_list', 'repo_read', 'repo_search', 'knowledge'])
+  // knowledge-context K3: the directory is listed and read by path; the older keyword tool stays callable only.
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'requirement', 'repo_list', 'repo_read', 'repo_search', 'knowledge_list', 'knowledge_read'])
+  expect(tools.find((tool: { name: string }) => tool.name === 'knowledge_read').inputSchema).toMatchObject({ required: ['path'] })
   expect(tools.every((tool: { annotations: { readOnlyHint: boolean } }) => tool.annotations.readOnlyHint)).toBe(true)
   expect((await (await rpc('tools/call', { name: 'node', arguments: { runId: 'run-A', nodeId: 'node-A' } })).json()).result.content[0].text).toContain('project-A')
   expect(query).toHaveBeenCalledWith('node', { runId: 'run-A', nodeId: 'node-A' })
@@ -28,9 +30,16 @@ it('exposes only scoped read tools over authenticated loopback HTTP and rejects 
   expect((await (await rpc('tools/call', { name: 'requirement', arguments: { runId: 'run-A', offset: 6000, limit: 18000 } })).json()).result.content[0].text).toContain('project-A')
   expect(query).toHaveBeenLastCalledWith('requirement', { runId: 'run-A', offset: 6000, limit: 18000 })
   expect((await (await rpc('tools/call', { name: 'artifact', arguments: { runId: 'run-A', artifactId: 'raw-A', limit: 18001 } })).json()).error.code).toBe(-32602)
+  await rpc('tools/call', { name: 'knowledge_list', arguments: { stage: 'build' } })
+  expect(query).toHaveBeenLastCalledWith('knowledge_list', { stage: 'build' })
+  await rpc('tools/call', { name: 'knowledge_read', arguments: { path: 'docs/knowledge/a.md', offset: 0 } })
+  expect(query).toHaveBeenLastCalledWith('knowledge_read', { path: 'docs/knowledge/a.md', offset: 0 })
+  expect((await (await rpc('tools/call', { name: 'knowledge_read', arguments: {} })).json()).error.code).toBe(-32602)
+  await rpc('tools/call', { name: 'knowledge', arguments: { query: 'health' } })
+  expect(query).toHaveBeenLastCalledWith('knowledge', { query: 'health' })
   controller.abort()
   expect((await (await rpc('tools/call', { name: 'workflow', arguments: {} })).json()).result.isError).toBe(true)
-  expect(query).toHaveBeenCalledTimes(2)
+  expect(query).toHaveBeenCalledTimes(5)
 })
 
 it('keeps concurrent bridges independent, bounds queries and never returns raw internal errors', async () => {

@@ -197,6 +197,10 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 .task-work-panel .inspector-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .task-work-panel ul { margin: 0; padding-left: 18px; }
 .task-work-panel code { overflow-wrap: anywhere; font-size: var(--font-size-mono); }
+/* Repository facts of a read-only OpenCode Gate Review (knowledge-context K2). */
+.review-repository-findings { display: grid; gap: 6px; }
+.review-repository-findings summary { cursor: pointer; }
+.review-repository-findings li code { margin-left: 6px; }
 .task-coding-review { padding: 0; border: 0; background: transparent; }
 .task-work-panel:focus-visible, .task-coding-review:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .coding-retry-dialog { display: grid; gap: 12px; max-width: 560px; }

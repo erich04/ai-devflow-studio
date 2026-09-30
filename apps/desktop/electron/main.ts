@@ -52,8 +52,10 @@ import {
   resolveEffectivePolicy,
   runWorkflowStageAgent,
   type AgentEvent,
+  type AgentProvider,
   type AgentTrace,
   type GateCommand,
+  type StageAgentExecutorKind,
   type GateEnforcementDecision,
   type GateOverrideDecision,
   type LocalProject,
@@ -276,6 +278,7 @@ import {
   type ResolvedCodingRuntimeSelection,
 } from './coding-runtime-configuration.js'
 import { createKnowledgeReviewRuntime } from './knowledge-review-runtime.js'
+import { createReadOnlyLocalKnowledgeReviewProvider } from './knowledge-review-local-agent.js'
 import { createRepositoryKnowledgeCache } from './repository-knowledge-cache.js'
 import { createRepositoryKnowledgeResolver } from './repository-knowledge-resolver.js'
 import { createRepositoryKnowledgeService } from './repository-knowledge.js'
@@ -1486,6 +1489,8 @@ async function createCodingRuntimeForRequest(
       ? {
           knowledgeDocuments: knowledgeSnapshot.documents,
           knowledgeChunks: knowledgeSnapshot.chunks,
+          knowledgeRoot: knowledgeSnapshot.knowledgeRoot ?? null,
+          projectInstructions: knowledgeSnapshot.projectInstructions ?? null,
         }
       : {}),
     budgetGuard: createRuntimeBudgetGuard(remoteSync),
@@ -1646,6 +1651,7 @@ async function createKnowledgeReviewRuntimeForRequest(
   beforeCommit?: () => void,
   projectId?: string,
   approvalId?: string,
+  executor: StageAgentExecutorKind = 'direct-provider',
 ) {
   const [remoteSync, store] = await Promise.all([
     getProjectBoundRemoteSync(),
@@ -1660,14 +1666,80 @@ async function createKnowledgeReviewRuntimeForRequest(
     projectInstructions: knowledgeSnapshot.projectInstructions ?? null,
     loadPolicySnapshot: async (projectId) =>
       loadPolicySnapshotForProject(await resolvePolicyProjectId(projectId)),
-    resolveProviderMetadata: (providerId) =>
-      resolveElectronAgentProviderMetadata({
+    resolveProviderMetadata: async (providerId) => {
+      const metadata = await resolveElectronAgentProviderMetadata({
         providerId,
         fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
         credentialSource: store,
-      }),
-    resolveProvider: (providerId) => resolveAgentProvider(store, providerId, projectId, approvalId),
+      })
+      if (executor !== 'local-agent') return metadata
+      // Checked before the review context is built, so the reason reaches the task unchanged.
+      await resolveLocalAgentReviewTarget(store, providerId, projectId)
+      return { ...metadata, name: `OpenCode（可读仓库）· ${metadata.name}`, executorKind: 'local-agent' as const }
+    },
+    resolveProvider: (providerId) => executor === 'local-agent'
+      ? resolveLocalAgentReviewProvider(store, providerId, projectId, approvalId, knowledgeSnapshot.knowledgeRoot ?? null)
+      : resolveAgentProvider(store, providerId, projectId, approvalId),
     budgetGuard: createKnowledgeReviewRuntimeBudgetGuard(remoteSync),
+  })
+}
+
+/** Saved Provider and local OpenCode for a read-only Gate Review (knowledge-context K2). */
+async function resolveLocalAgentReviewTarget(store: LocalStore, providerId: string, projectId: string | undefined) {
+  if (providerId === 'fake-knowledge-review') {
+    throw new Error('OpenCode 门禁审查需要已保存的模型 Provider；演示用的假 Provider 不能读取仓库。')
+  }
+  if (!projectId) throw new Error('请选择本地仓库。')
+  const project = await findProject(projectId)
+  const credential = (await store.listProviderCredentials()).find((item) => item.providerId === providerId)
+  if (!credential) throw new Error('请先在设置中保存门禁审查使用的模型 Provider。')
+  const discovery = await detectCodingRuntimeEngines({ projectId: project.id })
+  const candidate = discovery.candidates.find((item) => item.engine === 'opencode-http' && item.status === 'available')
+  if (!candidate?.binaryPath || !candidate.version) {
+    throw new Error('未检测到兼容的本机 OpenCode，请先安装并在设置中检测；也可以把门禁审查方式改回只依据知识目录。')
+  }
+  return { project, credential, binaryPath: candidate.binaryPath }
+}
+
+async function resolveLocalAgentReviewProvider(
+  store: LocalStore,
+  providerId: string,
+  projectId: string | undefined,
+  approvalId: string | undefined,
+  knowledgeRoot: string | null,
+): Promise<AgentProvider> {
+  const { project, credential, binaryPath } = await resolveLocalAgentReviewTarget(store, providerId, projectId)
+  const binding = await resolveSavedOpencodeProviderBinding({
+    providerId,
+    modelId: credential.model,
+    credentialSource: store,
+    decryptCredential,
+  })
+  if (!binding) throw new Error('无法读取所选 Provider 的凭据，请在设置中重新保存。')
+  const metadata = await resolveElectronAgentProviderMetadata({
+    providerId,
+    fakeRuntimeEnabled: runtimeFlags.fakeRuntimeEnabled,
+    credentialSource: store,
+  })
+  const provider = createReadOnlyLocalKnowledgeReviewProvider({
+    projectId: project.id,
+    projectPath: project.path,
+    binaryPath,
+    metadata,
+    processManager: opencodeProcessManager,
+    runtimeEnv: buildOpencodeRuntimeEnv({ baseEnv: process.env, apiKeyEnvName: 'OPENCODE_API_KEY' }),
+    knowledgeRoot,
+    // Every OpenCode model round is admitted against the project budget, like stage Agents.
+    openBudgetRelay: async () => createGovernedOpencodeProxy({
+      binding,
+      projectId: project.id,
+      governance: await modelCallGovernance(store),
+      ...(approvalId ? { approvalId } : {}),
+    }),
+  })
+  return guardProviderCalls(provider, {
+    guard: providerOperations,
+    credentialExists: async () => (await store.listProviderCredentials()).some((item) => item.providerId === providerId),
   })
 }
 
@@ -3758,7 +3830,7 @@ function registerIpcHandlers() {
         await store.getDesktopPairingCredential(),
       )
       const { knowledgeSnapshot } = await loadTrustedRunKnowledge(input)
-      const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot, signal, () => reviewOperations.seal(input.runId, input.nodeId), input.projectId, input.runtimeBudgetApprovalId)
+      const runtime = await createKnowledgeReviewRuntimeForRequest(knowledgeSnapshot, signal, () => reviewOperations.seal(input.runId, input.nodeId), input.projectId, input.runtimeBudgetApprovalId, input.executor)
       try { return await runtime.run({ ...input, requestedBy: actor.userId }) }
       finally { wakeRemoteSyncOutbox(); broadcastToRenderers(ipcChannels.localStateUpdated, await store.loadState()) }
     }))

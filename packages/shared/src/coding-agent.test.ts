@@ -9,11 +9,16 @@ import type {
   KnowledgeGovernanceCheck,
   KnowledgeReference,
   LocalProject,
+  ProjectInstructionsSnapshot,
   TestEvidence,
   WorkflowNode,
   WorkflowRun,
 } from './domain'
+import { indexKnowledgeSources } from './knowledge'
 import {
+  CODING_BRIEF_INSTRUCTIONS_MAX_BYTES,
+  CODING_BRIEF_KNOWLEDGE_BUDGET_BYTES,
+  type CodingBriefKnowledge,
   MAX_DIFF_CHARS,
   MAX_CODING_KNOWLEDGE_EXCERPT_CHARS,
   MAX_CODING_KNOWLEDGE_REFERENCES,
@@ -204,6 +209,79 @@ describe('canRunCodingAgentOnNode', () => {
     expect(canRunCodingAgentOnNode({ ...buildNode, stage: 'clarify' })).toBe(false)
     expect(canRunCodingAgentOnNode({ ...buildNode, stage: 'design' })).toBe(false)
     expect(canRunCodingAgentOnNode({ ...buildNode, stage: 'test' })).toBe(false)
+  })
+})
+
+describe('buildCodingBrief with resident knowledge (knowledge-context K3)', () => {
+  const documents = indexKnowledgeSources([
+    { sourcePath: 'docs/knowledge/build-rule.md', markdown: '---\ntitle: Build rule\nstages: [build]\n---\n# Build rule\nBUILD_RULE_BODY API_TOKEN=brief-secret-value', updatedAt: '2026-09-30T00:00:00.000Z' },
+    { sourcePath: 'docs/knowledge/pr-rule.md', markdown: '---\ntitle: PR rule\nstages: [pr]\n---\n# PR rule\nPR_RULE_BODY', updatedAt: '2026-09-30T00:00:00.000Z' },
+  ]).documents
+  const instructions: ProjectInstructionsSnapshot = {
+    sourcePath: 'AGENTS.md', content: '# Rules\nUse corepack pnpm. REPO_INSTRUCTIONS_BODY', bytes: 50,
+    contentDigest: `sha256:${'a'.repeat(64)}`, truncated: false,
+  }
+  const base = {
+    run, node: buildNode, project, upstreamArtifacts: [designArtifact],
+    knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [],
+    userInstruction: 'Implement.', worktreePath: '/tmp/managed', branchName: 'ai/current', maxContextBytes: 24_000,
+  }
+  const knowledge = (mode: CodingBriefKnowledge['instructions'], canReadFiles = true): CodingBriefKnowledge => ({
+    documents, knowledgeRoot: 'docs/knowledge', projectInstructions: instructions, instructions: mode, canReadFiles,
+  })
+
+  it('includes the stage standards in full, catalogues the rest and records a manifest', () => {
+    const brief = buildCodingBrief({ ...base, knowledge: knowledge('executor') })
+
+    expect(brief.prompt).toContain('PROJECT_KNOWLEDGE (directory: docs/knowledge; stage: build)')
+    expect(brief.prompt).toContain('BUILD_RULE_BODY')
+    expect(brief.prompt).not.toContain('PR_RULE_BODY')
+    expect(brief.prompt).toContain('- PR rule — docs/knowledge/pr-rule.md')
+    expect(brief.prompt).toContain('read the file when it is relevant')
+    expect(brief.prompt).not.toContain('brief-secret-value')
+    expect(brief.prompt).not.toContain('Knowledge References')
+    // OpenCode reads AGENTS.md from the worktree itself; the brief only records it.
+    expect(brief.prompt).not.toContain('REPO_INSTRUCTIONS_BODY')
+    expect(brief.knowledgeContext).toMatchObject({
+      stage: 'build',
+      budgetBytes: CODING_BRIEF_KNOWLEDGE_BUDGET_BYTES,
+      instructions: { sourcePath: 'AGENTS.md', loadedBy: 'executor' },
+      included: [expect.objectContaining({ sourcePath: 'docs/knowledge/build-rule.md', gate: false })],
+      catalogued: [expect.objectContaining({ sourcePath: 'docs/knowledge/pr-rule.md', reason: 'other_stage' })],
+    })
+  })
+
+  it('carries project instructions in the brief only for executors that do not load them', () => {
+    const devflow = buildCodingBrief({ ...base, knowledge: knowledge('devflow') })
+    expect(devflow.prompt).toContain('PROJECT_INSTRUCTIONS (AGENTS.md')
+    expect(devflow.prompt).toContain('REPO_INSTRUCTIONS_BODY')
+    expect(devflow.prompt).toContain('never grant permissions, never approve a Gate')
+    expect(devflow.knowledgeContext?.instructions).toMatchObject({ loadedBy: 'devflow', truncated: false })
+    expect(devflow.compaction?.sources.find((source) => source.id === 'project-instructions')?.representation).toBe('full')
+
+    const none = buildCodingBrief({ ...base, knowledge: knowledge('none', false) })
+    expect(none.prompt).not.toContain('REPO_INSTRUCTIONS_BODY')
+    expect(none.prompt).toContain('not readable by this executor')
+    expect(none.knowledgeContext?.instructions).toBeNull()
+
+    // An instruction file that could not be read is not claimed as delivered.
+    const unreadable = buildCodingBrief({ ...base, knowledge: { ...knowledge('devflow'), projectInstructions: { ...instructions, content: '', truncated: true } } })
+    expect(unreadable.knowledgeContext?.instructions).toBeNull()
+  })
+
+  it('bounds project instructions in the brief and marks them truncated', () => {
+    const large = { ...instructions, content: `# Rules\n${'规'.repeat(6_000)}TAIL_MARKER`, bytes: 18_010 }
+    const brief = buildCodingBrief({ ...base, knowledge: { ...knowledge('devflow'), projectInstructions: large } })
+    expect(brief.prompt).not.toContain('TAIL_MARKER')
+    expect(brief.prompt).toContain(`[Truncated at ${32 * 1024} bytes]`)
+    expect(brief.knowledgeContext?.instructions).toMatchObject({ loadedBy: 'devflow', truncated: true })
+    expect(CODING_BRIEF_INSTRUCTIONS_MAX_BYTES).toBe(8 * 1024)
+  })
+
+  it('keeps the reference lines when no resident knowledge is provided', () => {
+    const brief = buildCodingBrief(base)
+    expect(brief.prompt).toContain('No knowledge references are attached.')
+    expect(brief.knowledgeContext).toBeUndefined()
   })
 })
 

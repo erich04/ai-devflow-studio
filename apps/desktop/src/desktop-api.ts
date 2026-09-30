@@ -209,6 +209,8 @@ export type RunKnowledgeReviewInput = {
   providerId?: string
   runtimeBudgetApprovalId?: string
   previousReviewId?: string
+  /** `local-agent`: read-only OpenCode session that may inspect the repository. */
+  executor?: 'direct-provider' | 'local-agent'
 }
 
 export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {

@@ -747,6 +747,10 @@ describe('IPC contract parsers', () => {
     expect(() => parseAgentProviderRemovalInput({ providerId: 'provider-one', apiKey: 'forged' })).toThrow()
     expect(parseSettingsInput({ selectedAgentProviderId: '' })).toEqual({ selectedAgentProviderId: '' })
     expect(() => parseSettingsInput({ selectedAgentProviderId: ' invalid ' })).toThrow()
+    // Gate Review execution mode (knowledge-context K2).
+    expect(parseSettingsInput({ knowledgeReviewExecutor: 'local-agent' })).toEqual({ knowledgeReviewExecutor: 'local-agent' })
+    expect(parseSettingsInput({ knowledgeReviewExecutor: 'direct-provider' })).toEqual({ knowledgeReviewExecutor: 'direct-provider' })
+    expect(() => parseSettingsInput({ knowledgeReviewExecutor: 'codex' })).toThrow(/knowledgeReviewExecutor/)
   })
 
   it('validates thinking updates through IPC independently of provider removal', () => {
@@ -925,6 +929,12 @@ describe('IPC contract parsers', () => {
       runtimeBudgetApprovalId: 'approval-knowledge-1',
       previousReviewId: 'prior-review-1',
     })
+
+    // Read-only OpenCode review (knowledge-context K2); the default stays a direct model call.
+    const review = { runId: 'run-1', nodeId: 'node-test', projectId: 'project-1', requestedBy: 'u-ling', runtime: 'electron' }
+    expect(parseRunKnowledgeReviewInput({ ...review, executor: 'local-agent' })).toEqual({ ...review, executor: 'local-agent' })
+    expect(parseRunKnowledgeReviewInput({ ...review, executor: 'direct-provider' })).toEqual(review)
+    expect(() => parseRunKnowledgeReviewInput({ ...review, executor: 'shell-agent' })).toThrow(/executor/)
   })
 
   it('requires a local project when pairing the desktop with a team project', () => {

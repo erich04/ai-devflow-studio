@@ -6,6 +6,7 @@ import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   buildCodingBrief,
+  describeKnowledgeContextManifest,
   canRunCodingAgentOnNode,
   createTestEvidenceArtifact,
   createTestEvidenceEvent,
@@ -23,6 +24,7 @@ import {
   type AgentEvent,
   type Artifact,
   type BudgetGuardDecision,
+  type CodingBriefKnowledge,
   type CodingRuntimeCostSummary,
   type CodingRuntimeCostEstimate,
   type CodingAgentEvent,
@@ -39,6 +41,7 @@ import {
   type LocalExecutionState,
   type LocalProject,
   type ManagedCodingWorkspace,
+  type ProjectInstructionsSnapshot,
   type RemediationPlan,
   type RetryAttempt,
   type TestEvidence,
@@ -331,6 +334,9 @@ export type CodingRuntimeDeps = {
   now?: () => string
   knowledgeDocuments?: KnowledgeDocument[]
   knowledgeChunks?: KnowledgeChunk[]
+  /** Knowledge directory and root AGENTS.md/CLAUDE.md of the same snapshot (ADR 0025). */
+  knowledgeRoot?: string | null
+  projectInstructions?: ProjectInstructionsSnapshot | null
   createWorkspace?: typeof createManagedCodingWorkspace
   deleteWorkspace?: typeof deleteManagedCodingWorkspace
   cleanupWorkspace?: (input: {
@@ -356,6 +362,14 @@ export type CodingRuntime = {
   subscribeCodingRun(input: { codingRunId: string }): Promise<LocalExecutionState>
   findManagedWorktree(input: OpenManagedWorktreeRuntimeInput): Promise<ManagedCodingWorkspace>
   deleteManagedWorktree(input: DeleteManagedWorktreeRuntimeInput): Promise<ManagedCodingWorkspace>
+}
+
+/** Who delivers project instructions for an executor and whether it can open files (K3). */
+export function codingBriefKnowledgeDelivery(
+  executor: Pick<CodingExecutor, 'engine' | 'descriptor'>,
+): Pick<CodingBriefKnowledge, 'instructions' | 'canReadFiles'> {
+  if (executor.engine === 'fake') return { instructions: 'none', canReadFiles: false }
+  return { instructions: executor.descriptor.kind === 'opencode' ? 'executor' : 'devflow', canReadFiles: true }
 }
 
 export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
@@ -787,8 +801,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     const artifacts = await deps.store.listArtifacts(run.id)
     const events = await deps.store.listEvents(run.id)
     const testEvidence = await deps.store.listTestEvidence(run.id)
-    // Standards that apply to this node's stage (ADR 0025); the full K3 brief
-    // rework waits for the prompt-cache layout change.
+    // Standards that apply to this node's stage (ADR 0025). References stay for the engine
+    // start input and governance; the brief itself uses the stage knowledge below.
     const knowledgeReferences = buildKnowledgeReferences({
       run,
       artifacts,
@@ -816,6 +830,21 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       governanceChecks,
       gateDecisions: events.flatMap((event) => gateDecisionFromEvent(event)),
       testEvidence,
+      knowledge: codingBriefKnowledge(),
+    }
+  }
+
+  /**
+   * How the brief carries project knowledge for this executor (knowledge-context K3): OpenCode
+   * loads the worktree's AGENTS.md itself; Native v2 does not, so the brief carries it; the
+   * no-cost fake engine gets neither instructions nor file access.
+   */
+  function codingBriefKnowledge(): CodingBriefKnowledge {
+    return {
+      documents: knowledgeDocuments,
+      knowledgeRoot: deps.knowledgeRoot ?? null,
+      projectInstructions: deps.projectInstructions ?? null,
+      ...codingBriefKnowledgeDelivery(executor),
     }
   }
 
@@ -2833,6 +2862,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         runtimeId: recalled.runtimeId, scope: recalled.scope,
         promptDigest: codingPromptDigest(canonicalBrief.prompt), memories: recalled.memories,
         omittedMemoryCount: recalled.omittedMemoryCount, compaction: canonicalBrief.compaction!,
+        ...(canonicalBrief.knowledgeContext ? { knowledgeContext: canonicalBrief.knowledgeContext } : {}),
       }
       const estimatedCost = metered && executor.descriptor.kind === 'native'
         ? estimateNativeCodingWorstCaseCost({
@@ -3456,6 +3486,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           executionContext: {
             promptDigest: contextReceipt.promptDigest, memoryCount: contextReceipt.memories.length,
             omittedMemoryCount: contextReceipt.omittedMemoryCount, compaction: contextReceipt.compaction,
+            ...(contextReceipt.knowledgeContext
+              ? { knowledgeContext: describeKnowledgeContextManifest(contextReceipt.knowledgeContext) }
+              : {}),
           },
           codingExecutorRequestId: executorRequest.id,
           codingExecutorSelection: selection,

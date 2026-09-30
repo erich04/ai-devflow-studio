@@ -804,6 +804,13 @@ export type AgentReviewResult = {
   confidence: number
   gateAdvisory: GateAdvisory
   createdAt: string
+  /** Absent means a direct model call without repository access (older reviews included). */
+  executorKind?: StageAgentExecutorKind
+  /**
+   * Read-only local Agent reviews: facts the Agent verified in the repository, with citations
+   * digested from local bytes. Supplementary only; never Gate evidence (ADR 0025 §4).
+   */
+  repositoryFindings?: ClarificationRepositoryFindings
 }
 
 export type AgentReviewEvidenceCitation = {
@@ -1061,6 +1068,21 @@ export type RepositoryKnowledgeSnapshot = {
   knowledgeRoot?: string
   /** Root AGENTS.md (or CLAUDE.md) of the project, when present. */
   projectInstructions?: ProjectInstructionsSnapshot | null
+  /**
+   * Relative link targets of the indexed documents that are not themselves indexed,
+   * resolved by the desktop indexer for the knowledge checks (K4). Bounded; targets
+   * beyond the bound are absent and count as unchecked.
+   */
+  linkTargets?: RepositoryKnowledgeLinkTarget[]
+}
+
+export type RepositoryKnowledgeLinkTarget = {
+  /** Repository-relative POSIX path. */
+  path: string
+  /** `unsupported`: a symbolic link or special file, not followed. */
+  kind: 'file' | 'directory' | 'missing' | 'unsupported'
+  /** Heading and `<a id>` anchors of a Markdown target; absent when not read. */
+  anchors?: string[]
 }
 
 export type KnowledgeRetrievalQuery = {
@@ -1529,6 +1551,8 @@ export type LocalSettings = {
   themePreference: ThemePreference
   /** An explicit empty value preserves the user's unselected Provider state. */
   selectedAgentProviderId?: string
+  /** How Gate Reviews run with the selected Provider; absent means `direct-provider`. */
+  knowledgeReviewExecutor?: StageAgentExecutorKind
 }
 
 export type LocalExecutionState = {

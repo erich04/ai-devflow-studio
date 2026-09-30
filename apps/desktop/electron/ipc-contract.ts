@@ -486,6 +486,8 @@ export type RunKnowledgeReviewInput = {
   providerId?: string
   runtimeBudgetApprovalId?: string
   previousReviewId?: string
+  /** `local-agent`: read-only OpenCode session that may inspect the repository (ADR 0025 L2). */
+  executor?: StageAgentExecutorKind
 }
 
 export type ListAgentReviewsInput = {
@@ -1563,10 +1565,15 @@ export function parseSettingsInput(value: unknown): Partial<LocalSettings> {
   if (themePreference !== undefined && !isThemePreference(themePreference)) {
     throw new Error('Invalid themePreference')
   }
+  const knowledgeReviewExecutor = value['knowledgeReviewExecutor']
+  if (knowledgeReviewExecutor !== undefined && knowledgeReviewExecutor !== 'direct-provider' && knowledgeReviewExecutor !== 'local-agent') {
+    throw new Error('Invalid knowledgeReviewExecutor')
+  }
 
   return {
     ...(themePreference ? { themePreference } : {}),
     ...(selectedAgentProviderId !== undefined ? { selectedAgentProviderId } : {}),
+    ...(knowledgeReviewExecutor !== undefined ? { knowledgeReviewExecutor } : {}),
   }
 }
 
@@ -1747,6 +1754,10 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
   if (previousReviewId !== undefined && (typeof previousReviewId !== 'string' || !previousReviewId.trim())) {
     throw new Error('Invalid previous review confirmation')
   }
+  const executor = value['executor']
+  if (executor !== undefined && executor !== 'direct-provider' && executor !== 'local-agent') {
+    throw new Error('Invalid Gate Review executor')
+  }
 
   return {
     runId,
@@ -1754,6 +1765,7 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     projectId,
     requestedBy,
     runtime,
+    ...(executor === 'local-agent' ? { executor } : {}),
     ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
     ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
       ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }

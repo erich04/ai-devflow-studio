@@ -4,7 +4,7 @@ import { AgentProviderRequestError, governedModelCall, modelCallMetadata, parseO
 import type { OpencodeProviderBinding } from './opencode-provider-binding'
 
 /** OpenCode's internal model rounds traverse this authenticated, loopback-only relay. */
-export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch}) {
+export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string}) {
   const token=randomBytes(32).toString('hex')
   const attempts:Array<{at:string;usage:AgentProviderUsage}>=[]
   const controllers=new Set<AbortController>()
@@ -21,6 +21,7 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
       const body=JSON.parse(raw) as Record<string,unknown>
       if(body.model!==input.binding.modelId)throw new Error('OpenCode 模型与当前项目选择不一致。')
       const result=await governedModelCall({governance:input.governance,projectId:input.projectId,provider:modelCallMetadata(input.binding),prompt:raw,signal:controller.signal,
+        ...(input.approvalId?{approvalId:input.approvalId}:{}),
         ...(typeof body.max_tokens==='number'?{maxOutputTokens:body.max_tokens}:{}),action:async()=>{
           // Buffer one bounded provider response so usage survives downstream cancellation/parsing.
           const upstream=await (input.fetcher??fetch)(`${input.binding.baseUrl.replace(/\/$/u,'')}/chat/completions`,{

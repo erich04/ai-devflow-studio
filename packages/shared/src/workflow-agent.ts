@@ -434,7 +434,8 @@ function safeStringList(
   return value.map((item, index) => safeString(item, `${label}[${index}]`, 2_000))
 }
 
-function validateRepositoryFindings(
+/** Shape, bounds and citation references of read-only local Agent findings; digests come from the executor. */
+export function validateRepositoryFindings(
   value: ClarificationRepositoryFindings | undefined,
   bounds: StageAgentExecutionBounds,
 ): ClarificationRepositoryFindings | undefined {

@@ -2753,7 +2753,8 @@ describe('App', () => {
     // The exact diff review is rendered in 当前工作 (plan W3); approval exists only there.
     const changeSetPanel = await within(inspector).findByTestId('task-coding-change-set')
     const review = within(changeSetPanel).getByTestId('coding-change-set-review')
-    expect(within(review).getByText('Files').nextElementSibling).toHaveTextContent('2')
+    // The panel renders before the exact preview loads (App requests it in an effect); wait for it.
+    await waitFor(() => expect(within(review).getByText('Files').nextElementSibling).toHaveTextContent('2'))
     expect(review).toHaveTextContent(digest)
     const statusRow = within(inspector).getByTestId('task-status-row')
     expect(within(statusRow).queryByRole('button', { name: '批准本次' })).not.toBeInTheDocument()
@@ -5895,6 +5896,13 @@ describe('App', () => {
     for (const reference of screen.getAllByTestId('knowledge-run-reference')) {
       expect(reference).toHaveTextContent('docs/knowledge/standards/api-health.md')
     }
+    // K4: directory, stage usage and checks come from the same snapshot.
+    const directory = screen.getByTestId('knowledge-directory')
+    expect(directory).toHaveTextContent('知识目录')
+    expect(within(directory).getAllByTestId('knowledge-stage-budget')).toHaveLength(6)
+    expect(screen.getByTestId('knowledge-checks')).toHaveTextContent('不会阻断任何步骤或 Gate')
+    expect(screen.getByTestId('knowledge-checks')).toHaveTextContent('本项目的阶段生成和开发执行还没有记录上下文清单，未检查已删除的文件。')
+    expect(screen.getByTestId('knowledge-document-stages')).toHaveTextContent('适用阶段：需求澄清、方案设计、开发实现、测试证据')
   })
 
   it('bounds a large repository knowledge graph in the renderer', async () => {
@@ -6122,6 +6130,29 @@ describe('App', () => {
     }))
     expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
+  })
+
+  it('runs Gate Review through read-only OpenCode after the review mode is switched in settings (knowledge-context K2)', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
+    const models = openSettingsSection('模型与执行方式')
+    const mode = await within(models).findByLabelText('门禁审查方式')
+    expect(mode).toHaveValue('direct-provider')
+    expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不读取仓库')
+    fireEvent.change(mode, { target: { value: 'local-agent' } })
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ knowledgeReviewExecutor: 'local-agent' }))
+    expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不修改代码、不运行命令、不批准 Gate')
+
+    clickPrimaryNav('任务')
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    await waitFor(() => expect(runReview).toBeEnabled())
+    fireEvent.click(runReview)
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+      executor: 'local-agent',
+      providerId: agentProvider.id,
+    })))
   })
 
   it('runs Gate Review in the task inspector and keeps the current inspector without opening settings', async () => {

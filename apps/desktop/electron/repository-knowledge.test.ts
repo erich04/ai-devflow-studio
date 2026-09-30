@@ -434,3 +434,39 @@ describe('knowledge directory and project instructions (ADR 0025)', () => {
     expect(snapshot.projectInstructions).toBeNull()
   })
 })
+
+describe('link targets for the knowledge checks (K4)', () => {
+  it('resolves linked paths outside the index, lists Markdown anchors and keeps the content hash', async () => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'devflow-knowledge-outside-'))
+    tempDirectories.push(outside)
+    await writeFile(path.join(outside, 'secret.md'), '# SECRET_HEADING')
+    const project = await createTrackedRepository({
+      'docs/knowledge/a.md': [
+        '---', 'title: A', 'stages: [build]', '---',
+        '[b](b.md) [adr](../adr/0001.md#context) [folder](../adr/) [gone](../missing.md)',
+        '[image](../img/flow.png) [link](../linked.md) [web](https://example.com)',
+      ].join('\n'),
+      'docs/knowledge/b.md': '# B',
+      'docs/adr/0001.md': '<a id="context"></a>\n# Decision',
+      'docs/img/flow.png': Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    })
+    await symlink(path.join(outside, 'secret.md'), path.join(project.path, 'docs/linked.md'))
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+    const snapshot = await service.index(project)
+
+    expect(snapshot.linkTargets).toEqual([
+      { path: 'docs/adr', kind: 'directory' },
+      { path: 'docs/adr/0001.md', kind: 'file', anchors: ['context', 'decision'] },
+      { path: 'docs/img/flow.png', kind: 'file' },
+      { path: 'docs/linked.md', kind: 'unsupported' },
+      { path: 'docs/missing.md', kind: 'missing' },
+    ])
+    expect(JSON.stringify(snapshot)).not.toContain('SECRET_HEADING')
+
+    // Link targets inform the knowledge page only; they do not change the Gate-relevant hash.
+    await rm(path.join(project.path, 'docs/adr/0001.md'))
+    const changed = await service.index(project)
+    expect(changed.linkTargets).toContainEqual({ path: 'docs/adr/0001.md', kind: 'missing' })
+    expect(changed.contentHash).toBe(snapshot.contentHash)
+  })
+})
