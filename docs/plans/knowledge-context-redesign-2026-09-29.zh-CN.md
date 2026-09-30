@@ -1,7 +1,7 @@
 # 知识上下文改造方案：项目说明常驻 + Agent 现场检索
 
-- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0、K1 已完成，K2 部分完成，K3、K4 未开始；结果见第 11 节。
-- 分支：`feat/knowledge-context`，基于 `main` / `f0fad85`（S5 合入）。
+- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0、K1、K4 已完成，K2 部分完成（知识审查 local-agent 未做），K3 未开始；结果见第 11 节。
+- 分支：K0–K2 已随 #191 合入 `main`（`b79a910`）；K4 在 `feat/knowledge-page-k4`，基于 `b79a910`。
 - 文中的新字段、新工具、新批次在对应批次完成前都只是计划。实施结果见第 11 节。
 - 决策记录：[ADR 0025](../adr/0025-resident-knowledge-context.md)。
 
@@ -239,6 +239,42 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 - 探针与评估：`corepack pnpm test:knowledge-context-opencode-probe`（需要本机 OpenCode 1.17/1.18）、`corepack pnpm knowledge:evaluate`。
 - 未运行：真实模型调用（包括 `test:stage-agent-opencode-smoke`，需要显式授权的提供方与预算）、界面走查。知识页的展示改造属于 K4；S6 已合入 main，K4 可以基于本分支进行。
 
+### 11.5 K4 结果
+
+- **实现**：
+  - `packages/shared/src/knowledge-checks.ts`：确定性检查，不调用模型，也不阻断任何步骤或 Gate。
+    - 缺少 front matter：文件开头没有，或没有结束的 `---` 行。
+    - `stages`、`gate` 中不是阶段的取值。解析时这些值会被忽略，作者此前看不到。
+    - 相对链接和锚点：链接按 GitHub 的规则解析（相对文档，`/` 开头相对仓库根）；锚点取标题 slug 与 `<a id>`/`<a name>`；代码块和行内代码里的不算。
+    - 超出预算：某阶段适用的文档超过 24 KiB，或项目说明超过 32 KiB。
+    - 上下文清单中记录过、当前知识目录里已没有的文件（包括项目说明）。
+  - `summarizeKnowledgeStageBudgets`（`knowledge-context.ts`）：与阶段提示词相同的组装逻辑，知识页的用量表和预算检查共用。
+  - 桌面索引新增 `linkTargets`：知识文档链接到、但不在索引里的仓库路径。不跟随符号链接；Markdown 目标用同一个安全读取函数列出锚点。最多 256 个目标，其中最多 64 个读取锚点。`linkTargets` 不计入 `contentHash`，所以链接目标变化不会触发 Gate 重新评估。
+  - 知识页（`KnowledgeView.tsx`）新增「知识目录」区：
+    - 项目说明的文件、大小和上限，摘要放在「详情」；
+    - 各阶段注入的文档数、Gate 依据数和用量；
+    - 检查结果，写明只用于提示，原始检查代码放在「详情」；
+    - 每份文档的适用阶段与 Gate 依据阶段（未声明 `stages` 时注明按分类推定）。
+    - 知识目录为空时，用一行说明代替六行全零的用量表。
+  - 上下文清单取自当前项目任务的阶段 Agent 轨迹（`executorProvenance.knowledgeContext`）。
+- **结果**：本仓库 `docs/knowledge` 没有检查问题（1 处链接已核实，0 处未核实），由 `scripts/knowledge-context-evaluation.test.ts` 固定。
+- **与方案的差异与限制**：
+  1. "清单里的文件已被删除"只对照阶段 Agent 的清单。知识审查记录的 `knowledgeCriteria` 与编码回执没有同结构的清单，编码回执的清单属于 K3。
+  2. 索引达到上限（`truncated`）时不做已删除文件检查，因为缺失可能只是没有进入索引。
+  3. 符号链接、特殊文件和超出数量上限的链接目标计为"未核实"，不报断链；目标文档锚点超过 1,024 个时不检查锚点。
+  4. 超出仓库根目录的相对链接按断链报告。
+  5. 阶段名沿用任务页的显示名，测试阶段显示为「测试证据」。
+  6. 界面改动在 `KnowledgeView.tsx`，没有改 `DesktopViews.tsx`。第 6 节"涉及 `DesktopViews.tsx`"的预估不准确。
+- **界面检查**：用基线工具的 `doc-tour` 样例在隔离环境截图，尺寸为 1440×742 浅色和 1024×742 深色。为了截到有文档和检查问题的状态，临时给样例仓库加了两份知识文档（其中一个非法阶段、一个断链），截图后已还原，截图没有入库。模型调用来自确定性假提供方。
+
+### 11.6 K4 验证
+
+- `corepack pnpm verify`（2026-09-30，`feat/knowledge-page-k4`，基于 main `b79a910`）：类型检查通过；332 个测试文件通过、1 个跳过，4,512 个测试通过、15 个跳过；跨平台检查通过。
+- 新增测试：`knowledge-checks.test.ts`（10 项）、`knowledge-directory-view-model.test.ts`（6 项）；`KnowledgeView.test.tsx` 增加 3 项；`repository-knowledge.test.ts` 与 `knowledge-context-evaluation.test.ts` 各增加 1 项；`App.test.tsx` 的知识页用例增加断言。
+- `corepack pnpm test:electron-smoke`：通过。隔离临时数据、假提供方，新增知识目录与检查结果的断言，走真实主进程索引。
+- `corepack pnpm test:workbench-conversation-electron-smoke`：通过，使用本地受控模型服务，`externalProviderCalled: false`。
+- 未运行：真实模型调用、可用性走查。
+
 ## 参考
 
 - [OpenCode：Rules（AGENTS.md 加载顺序、Claude Code 兼容开关）](https://opencode.ai/docs/rules/)
@@ -252,14 +288,14 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 
 本节供接手的对话使用。完成后删除本节，结论并入第 11 节。
 
-**当前状态**：分支 `feat/knowledge-context` 已 rebase 到 main `a10625d`（含 S6，#190），没有冲突。改动分为 K1 共享层、K1/K2 桌面端、K0/K1 评估脚本、方案与 ADR、测试证据规范改为 `gate: [test]` 等几个提交，已推送并开 PR。`verify` 与两项 Electron 冒烟的结果见 11.4。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
+**当前状态**：K0–K2 已随 #191 合入 main（`b79a910`），验证见 11.4。K4 在分支 `feat/knowledge-page-k4` 上，结果与验证见 11.5、11.6。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
 
 **用户决定**（erich04，2026-09-30）：
 
 1. 测试证据规范改为 `gate: [test]`：**已改**，见 11.2 差异 2。`packages/shared/src/fixtures.ts` 与评估集中 6 个 design 场景的 `gate` 已同步。
-2. 提交方式：rebase 到最新 main，解决 `DesktopViews.tsx` 可能的冲突，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。**已开 PR**，合入待 CI 结果与用户确认。
+2. 提交方式：rebase 到最新 main，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。#191 按此方式合入；K4 沿用同一方式。
 3. 真实模型验证：**待定**。可选做法有两种：由用户在 `corepack pnpm dev:electron` 中手动跑澄清到设计；或由用户指定已保存的提供方和预算上限，授权 Agent 在隔离数据中运行。结果记入第 11 节。
-4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行，K3 等 P0 合入。PR 开出并向用户汇报后开始 K4。
+4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行，K3 等 P0 合入。#191 已于 2026-09-30 合入；K4 已完成，见 11.5。下一步是知识审查 local-agent。
 5. 本地项目知识目录暂时固定为 `docs/knowledge`，见 11.2 差异 3。
 
 **注意**：只在本 worktree 中修改；不改 `../ai-devflow-studio`（主工作区）和 `../ai-devflow-prompt-cache`。跑开发服务或 Electron 前先检查 4310、4311、5173 端口是否被其他对话占用。
