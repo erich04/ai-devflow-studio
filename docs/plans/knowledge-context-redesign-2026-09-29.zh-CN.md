@@ -1,7 +1,7 @@
 # 知识上下文改造方案：项目说明常驻 + Agent 现场检索
 
-- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0、K1、K4 已完成，K2 部分完成（知识审查 local-agent 未做），K3 未开始；结果见第 11 节。
-- 分支：K0–K2 已随 #191 合入 `main`（`b79a910`）；K4 在 `feat/knowledge-page-k4`，基于 `b79a910`。
+- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0、K1、K2、K4 已完成，K3 未开始；结果见第 11 节。
+- 分支：K0–K2 的主体随 #191、K4 随 #194 合入 `main`；知识审查 local-agent 在 `feat/knowledge-review-local-agent`，基于 `c145f5f`。
 - 文中的新字段、新工具、新批次在对应批次完成前都只是计划。实施结果见第 11 节。
 - 决策记录：[ADR 0025](../adr/0025-resident-knowledge-context.md)。
 
@@ -222,13 +222,13 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
   3. 桌面端的本地项目没有 `knowledgeBasePath` 字段（该字段只属于团队项目，且默认值是 `docs/<slug>/`），所以本批统一使用 `docs/knowledge`。2026-09-30 用户决定暂时保持固定；按项目配置知识目录需要本地项目设置，另行处理。
   4. 没有声明 `gate` 的项目不再产生知识治理检查（第 0 节决定 2 的直接后果）。
 
-### 11.3 K2 结果（部分完成）
+### 11.3 K2 结果
 
 - **已完成**：
   - 只读阶段 Agent 在有已保存提供方绑定时使用隔离的 OpenCode 配置目录（独立 XDG 目录与 HOME，关闭 Claude 兼容和默认插件），运行结束后删除。探针结果：仓库 `AGENTS.md` 仍进入请求，上表所有用户全局来源均不再进入。`corepack pnpm test:knowledge-context-opencode-probe` 在出现泄漏时以非零退出。
   - OpenCode 编码引擎使用按项目固定的隔离配置目录（位于桌面用户数据目录），但**不移动 HOME**，因为编码运行里的 shell 命令需要用户的工具链。因此 `~/.agents/skills` 的技能描述仍可能进入编码运行，而技能调用本身被权限规则拒绝。编码引擎这条路径没有做运行时探针，结论依据的是与阶段 Agent 相同的加载机制（推断）。
   - 引用校验新增：行号范围必须落在文件实际行数内。
-- **未完成**：知识审查的 local-agent（OpenCode）选项。它涉及审查输出结构、执行器选择界面和预算，工作量接近一个独立批次，留待后续。
+- **知识审查 local-agent**：2026-09-30 补上，是 #191 之后单独的批次，见 11.7。
 - **已知限制**：仓库绝对路径仍由 OpenCode 发给提供方（见 11.1）。
 
 ### 11.4 验证
@@ -275,6 +275,45 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 - `corepack pnpm test:workbench-conversation-electron-smoke`：通过，使用本地受控模型服务，`externalProviderCalled: false`。
 - 未运行：真实模型调用、可用性走查。
 
+### 11.7 知识审查 local-agent 结果（K2 剩余部分）
+
+- **实现**：
+  - 设置 › 模型与执行方式新增「门禁审查方式」：只依据材料与知识目录（默认，一次模型调用），或 OpenCode 读取仓库核对。选择保存在本机设置 `knowledgeReviewExecutor`，任务页首屏不加控件。
+  - 主进程用所选的已保存 Provider 启动一次只读 OpenCode 会话，沿用阶段 Agent 的做法：
+    - 只允许 read、glob、grep、list；
+    - 使用隔离的 OpenCode 配置目录与 HOME；
+    - 每轮模型调用都经过项目预算中继，一次性预算批准编号会传给中继；
+    - 会话结束后仓库的 HEAD、状态、差异与未跟踪文件必须不变；
+    - 请求额外权限或产生改动时停止，不保存报告。
+  - 提示词：直接调用时的审查提示词原样放在最后，前面加上只读仓库的说明和 `repositoryFindings` 的格式。仓库引用按本机文件字节计算 sha256，并检查路径与行号范围，结构校验复用阶段 Agent 的 `validateRepositoryFindings`。
+  - 审查结论先经过与直接调用相同的结构校验（`normalizeKnowledgeReviewProviderOutput`，从 OpenAI 兼容 Provider 中抽出），再走现有的新鲜度检查、审计与产物保存。Gate 建议仍然只警告。
+  - 审查记录新增 `executorKind` 与 `repositoryFindings`，只有 local-agent 执行时写入；直接调用即使输出里带了仓库事实也会丢弃。用量记录的 `executorKind` 相应为 `local-agent`。
+  - 任务页的门禁审查面板写明审查方式。OpenCode 审查的仓库事实与引用收在折叠区，注明"只作补充说明，不作为 Gate 依据"。
+  - 失败原因写成中文，包括：未检测到 OpenCode、请求额外权限、仓库在审查期间变化、仓库引用无法核对、工具调用超限、超时与停止。选择 OpenCode 但当前 Provider 是演示用假 Provider 时，在任务页说明原因，不发起调用。
+- **与方案的差异与限制**：
+  1. 预算预检仍按直接调用的提示词估算，只覆盖第一轮；后续轮次由预算中继逐轮准入。费用未知时预检会直接阻断，所以没有把整次审查标成"费用未知"。
+  2. OpenCode 审查超时为 240 秒（直接调用由 Provider 的请求超时决定）。
+  3. 仓库事实只保存在本机审查记录里，不随审查摘要同步到团队；Web 端看不到。
+  4. 仓库绝对路径仍由 OpenCode 发给提供方（同 11.1），探针再次确认。
+
+### 11.8 知识审查 local-agent 验证
+
+- `corepack pnpm verify`（2026-09-30，基于 main `c145f5f`）：类型检查通过；334 个测试文件通过、1 个跳过，4,524 个测试通过、15 个跳过；跨平台检查通过。
+- 新增或改写的测试：
+  - `knowledge-review-local-agent.test.ts`：共享层 4 项；主进程 6 项，使用临时 Git 仓库和注入的会话，覆盖引用摘要、权限请求、仓库变化、无法核对的引用、非法输出、停止与超时。
+  - `knowledge-review-runtime.test.ts`：执行方式与确认时不一致时拒绝。
+  - `ipc-contract.test.ts`：`executor` 与 `knowledgeReviewExecutor` 的解析。
+  - `TaskWorkPanel.test.tsx`：审查方式与仓库事实的展示。
+  - `App.test.tsx`：在设置切换方式后，任务页的审查请求带上 `executor: 'local-agent'`。
+  - `main-repository-knowledge-wiring.test.ts`：断言执行方式随知识快照一起传入审查运行时。
+- `corepack pnpm test:knowledge-context-opencode-probe`：通过。新增 review 场景，本机 OpenCode 1.18.15 与本地假模型服务：
+  - 审查会话加载了仓库 `AGENTS.md`，用户全局说明与技能都没有进入请求；
+  - 请求里带有只读说明和原审查提示词；
+  - README 引用得到 sha256 摘要。
+  - 探针用假模型服务代替预算中继，所以预算准入不在这一项的覆盖范围内。预算中继本身沿用阶段 Agent 已有的实现。
+- `corepack pnpm test:electron-smoke`、`test:workbench-conversation-electron-smoke`：通过（隔离数据、假提供方，`externalProviderCalled: false`）。两项冒烟都使用默认的直接调用方式，没有在 Electron 窗口里跑 OpenCode 审查。
+- 未运行：真实模型调用（第 3 条待定）、Electron 窗口中的 OpenCode 审查走查。
+
 ## 参考
 
 - [OpenCode：Rules（AGENTS.md 加载顺序、Claude Code 兼容开关）](https://opencode.ai/docs/rules/)
@@ -288,14 +327,14 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 
 本节供接手的对话使用。完成后删除本节，结论并入第 11 节。
 
-**当前状态**：K0–K2 已随 #191 合入 main（`b79a910`），验证见 11.4。K4 在分支 `feat/knowledge-page-k4` 上，结果与验证见 11.5、11.6。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
+**当前状态**：K0–K2 的主体随 #191 合入（验证见 11.4），K4 随 #194 合入（见 11.5、11.6）。知识审查 local-agent 在分支 `feat/knowledge-review-local-agent` 上，结果与验证见 11.7、11.8。剩下的是 K3（等 P0 合入）和第 3 条真实模型验证。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
 
 **用户决定**（erich04，2026-09-30）：
 
 1. 测试证据规范改为 `gate: [test]`：**已改**，见 11.2 差异 2。`packages/shared/src/fixtures.ts` 与评估集中 6 个 design 场景的 `gate` 已同步。
 2. 提交方式：rebase 到最新 main，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。#191 按此方式合入；K4 沿用同一方式。
 3. 真实模型验证：**待定**。可选做法有两种：由用户在 `corepack pnpm dev:electron` 中手动跑澄清到设计；或由用户指定已保存的提供方和预算上限，授权 Agent 在隔离数据中运行。结果记入第 11 节。
-4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行，K3 等 P0 合入。#191 已于 2026-09-30 合入；K4 已完成，见 11.5。下一步是知识审查 local-agent。
+4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行，K3 等 P0 合入。K4（#194）与知识审查 local-agent（11.7）都已完成；下一步是 K3。
 5. 本地项目知识目录暂时固定为 `docs/knowledge`，见 11.2 差异 3。
 
 **注意**：只在本 worktree 中修改；不改 `../ai-devflow-studio`（主工作区）和 `../ai-devflow-prompt-cache`。跑开发服务或 Electron 前先检查 4310、4311、5173 端口是否被其他对话占用。

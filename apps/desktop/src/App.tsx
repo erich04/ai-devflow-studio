@@ -133,6 +133,7 @@ export function App() {
     mcpServers,
     agentProviders,
     selectedAgentProviderId,
+    knowledgeReviewExecutor,
     agentReviews,
     agentTraces,
     agentTokenUsage,
@@ -192,6 +193,7 @@ export function App() {
     setMcpServers,
     setAgentProviders,
     setSelectedAgentProviderId,
+    setKnowledgeReviewExecutor,
     setAgentReviews,
     setAgentTraces,
     setAgentTokenUsage,
@@ -938,12 +940,16 @@ export function App() {
 
   // Gate Review in the task (plan W2): model, budget and failure facts for the status row.
   const reviewProvider = agentProviders.find((provider) => provider.id === selectedAgentProviderId)
-  const reviewProviderLabel = reviewProvider ? `${reviewProvider.name} · ${reviewProvider.model}` : undefined
+  const reviewProviderLabel = reviewProvider
+    ? `${knowledgeReviewExecutor === 'local-agent' ? 'OpenCode（可读仓库）· ' : ''}${reviewProvider.name} · ${reviewProvider.model}`
+    : undefined
   const reviewRunBlockedReason = !desktopApi
     ? '请在桌面应用中运行门禁审查。'
     : !selectedAgentProviderId
       ? '尚未选择门禁审查使用的模型，请先在设置／模型与执行方式中选择。'
-      : modelReadinessError
+      : knowledgeReviewExecutor === 'local-agent' && reviewProvider?.kind === 'fake'
+        ? 'OpenCode 门禁审查需要已保存的模型 Provider；请在设置中更换，或把审查方式改回只依据知识目录。'
+        : modelReadinessError
   const latestReviewFailure = selectedEvents
     .filter((event) => event.kind === 'error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp > latestAgentReview.createdAt))
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]?.message
@@ -1794,6 +1800,15 @@ export function App() {
                 onProviderChange={(providerId) => {
                   setSelectedAgentProviderId(providerId)
                   void desktopApi?.saveSettings({ selectedAgentProviderId: providerId }).catch(() => setToast('Provider 选择保存失败，请重新选择。'))
+                }}
+                reviewExecutor={knowledgeReviewExecutor}
+                onReviewExecutorChange={(executor) => {
+                  const previous = knowledgeReviewExecutor
+                  setKnowledgeReviewExecutor(executor)
+                  void desktopApi?.saveSettings({ knowledgeReviewExecutor: executor }).catch(() => {
+                    setKnowledgeReviewExecutor(previous)
+                    setToast('门禁审查方式保存失败，已恢复原来的选择。')
+                  })
                 }}
                 onProviderRemoved={(providerId) => {
                   setAgentProviders((providers) => providers.filter((item) => item.id !== providerId))

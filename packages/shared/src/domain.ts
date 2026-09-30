@@ -804,6 +804,13 @@ export type AgentReviewResult = {
   confidence: number
   gateAdvisory: GateAdvisory
   createdAt: string
+  /** Absent means a direct model call without repository access (older reviews included). */
+  executorKind?: StageAgentExecutorKind
+  /**
+   * Read-only local Agent reviews: facts the Agent verified in the repository, with citations
+   * digested from local bytes. Supplementary only; never Gate evidence (ADR 0025 §4).
+   */
+  repositoryFindings?: ClarificationRepositoryFindings
 }
 
 export type AgentReviewEvidenceCitation = {
@@ -1544,6 +1551,8 @@ export type LocalSettings = {
   themePreference: ThemePreference
   /** An explicit empty value preserves the user's unselected Provider state. */
   selectedAgentProviderId?: string
+  /** How Gate Reviews run with the selected Provider; absent means `direct-provider`. */
+  knowledgeReviewExecutor?: StageAgentExecutorKind
 }
 
 export type LocalExecutionState = {

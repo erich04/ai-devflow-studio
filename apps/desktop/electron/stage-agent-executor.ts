@@ -45,7 +45,7 @@ export function buildReadOnlyStageAgentRuntimeEnv(
   ), ...opencodeProviderBindingEnv(providerBinding) }
 }
 
-type ManagedOpencodeProcessManager = {
+export type ManagedOpencodeProcessManager = {
   stopProject(projectId: string): Promise<void>
   ensure(input: {
     projectId: string
@@ -170,13 +170,15 @@ function assertReadOnlyCapability(capability: Parameters<StageAgentExecutor['exe
   }
 }
 
-function createManagedOpencodeRunner(input: {
+/** One read-only OpenCode session in its own managed process; also used by the local Agent Gate Review. */
+export function createManagedOpencodeRunner(input: {
   projectId: string
   binaryPath: string
   providerId: string
   modelId: string
   processManager: ManagedOpencodeProcessManager
   runtimeEnv: NodeJS.ProcessEnv
+  sessionTitle?: string
 }): ReadOnlyStageAgentRunner {
   return async ({ prompt, directory, signal }) => {
     let sessionId: string | undefined
@@ -191,7 +193,7 @@ function createManagedOpencodeRunner(input: {
       const session = await createOpencodeSession({
         baseUrl: server.baseUrl,
         directory,
-        title: 'DevFlow read-only workflow analysis',
+        title: input.sessionTitle ?? 'DevFlow read-only workflow analysis',
         model: { providerID: input.providerId, id: input.modelId },
         permissionRules: createReadOnlyStageAgentPermissionRules(),
         signal,
@@ -252,6 +254,21 @@ async function validateAndDigestRepositoryCitations(
   if (!findings || !Array.isArray(findings.citations) || findings.citations.length === 0) {
     throw new StageAgentExecutionError('evidence_invalid', 'Managed stage Agent returned no repository citations')
   }
+  return { ...value, repositoryFindings: await digestRepositoryCitations(findings, root, repositoryDigest) }
+}
+
+/**
+ * Resolves each citation inside the repository without crossing a symlink, checks its line range
+ * and replaces the digest with sha256 of the local bytes. Throws `evidence_invalid` otherwise.
+ */
+export async function digestRepositoryCitations(
+  findings: ClarificationRepositoryFindings,
+  root: string,
+  repositoryDigest: string,
+): Promise<ClarificationRepositoryFindings> {
+  if (!Array.isArray(findings.citations)) {
+    throw new StageAgentExecutionError('evidence_invalid', 'Repository citations must be an array')
+  }
   const citations: ClarificationRepositoryFindings['citations'] = []
   for (const citation of findings.citations) {
     if (typeof citation.path !== 'string' || path.isAbsolute(citation.path) || citation.path.includes('\\')) {
@@ -282,14 +299,7 @@ async function validateAndDigestRepositoryCitations(
     }
     citations.push({ ...citation, path: path.relative(root, canonical).split(path.sep).join('/'), contentDigest })
   }
-  return {
-    ...value,
-    repositoryFindings: {
-      ...findings,
-      repositoryDigest,
-      citations,
-    },
-  }
+  return { ...findings, repositoryDigest, citations }
 }
 
 function countLines(bytes: Buffer): number {
@@ -299,7 +309,8 @@ function countLines(bytes: Buffer): number {
   return bytes[bytes.byteLength - 1] === 0x0a ? lines : lines + 1
 }
 
-async function repositoryWorkingTreeDigest(root: string): Promise<string> {
+/** HEAD, status, diff and untracked bytes; a read-only run must leave it unchanged. */
+export async function repositoryWorkingTreeDigest(root: string): Promise<string> {
   try {
     const [{ stdout: head }, { stdout: status }, { stdout: diff }, { stdout: untracked }] = await Promise.all([
       execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024 }),
@@ -333,7 +344,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function isOfficialDeepSeekBinding(binding?: OpencodeProviderBinding): boolean {
+export function isOfficialDeepSeekBinding(binding?: OpencodeProviderBinding): boolean {
   if (!binding) return false
   try {
     const url = new URL(binding.baseUrl)

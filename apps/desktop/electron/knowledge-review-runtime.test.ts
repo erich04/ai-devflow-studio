@@ -64,6 +64,30 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.reviews).toHaveLength(2)
   })
 
+  it('refuses a resolved provider whose execution mode differs from the confirmed one (knowledge-context K2)', async () => {
+    const store = new MemoryKnowledgeReviewStore()
+    const direct = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(direct, 'reviewKnowledge')
+    const local: AgentProvider = { ...direct, executorKind: 'local-agent' }
+    const mismatched = createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks,
+      resolveProviderMetadata: async () => local,
+      resolveProvider: async () => direct,
+    })
+    await expect(mismatched.run(reviewInput(direct.id))).rejects.toThrow()
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+    expect(store.reviews).toHaveLength(0)
+
+    const matching = createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks,
+      resolveProviderMetadata: async () => local,
+      resolveProvider: async () => local,
+    })
+    const result = await matching.run(reviewInput(direct.id))
+    expect(result.review.executorKind).toBe('local-agent')
+    expect(store.reviews[0]?.executorKind).toBe('local-agent')
+  })
+
   it('retains the saved result after a confirmed rerun fails and permits its confirmed retry', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const provider = createFakeAgentProvider()

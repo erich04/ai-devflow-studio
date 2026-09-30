@@ -35,6 +35,39 @@ describe('GateReviewRunPanel (plan W2)', () => {
     expect(screen.getByTestId('task-review-run')).toHaveTextContent('尚未配置当前项目的云端预算')
   })
 
+  it('says how the last review was produced and keeps repository facts collapsed (knowledge-context K2)', () => {
+    const props = { failure: undefined, isRunning: false, providerLabel: 'p', blockedReason: undefined, isWriteLocked: false, target: 't', onRun: vi.fn() }
+    const first = render(<GateReviewRunPanel {...props} latestReview={review} />)
+    expect(screen.getByTestId('review-method')).toHaveTextContent('只依据材料与知识目录，未读取仓库')
+    first.unmount()
+
+    const local = { ...review, executorKind: 'local-agent' } as AgentReviewResult
+    const second = render(<GateReviewRunPanel {...props} latestReview={local} />)
+    expect(screen.getByTestId('review-method')).toHaveTextContent('OpenCode 读取仓库核对，本次没有引用仓库文件')
+    second.unmount()
+
+    const withFindings = {
+      ...local,
+      repositoryFindings: {
+        version: 1, repositoryDigest: 'd'.repeat(64),
+        verifiedFacts: [{ id: 'fact-1', statement: '健康路由已存在。', citationIds: ['c-1', 'c-2'] }],
+        citations: [
+          { id: 'c-1', path: 'src/routes/health.ts', contentDigest: 'a'.repeat(64), lineStart: 3, lineEnd: 9 },
+          { id: 'c-2', path: 'src/routes/health.ts', contentDigest: 'a'.repeat(64) },
+        ],
+        assumptions: [], openQuestions: [], uncheckedScopes: ['部署脚本'],
+      },
+    } as AgentReviewResult
+    render(<GateReviewRunPanel {...props} latestReview={withFindings} />)
+    const details = screen.getByTestId('review-repository-findings')
+    expect(details).not.toHaveAttribute('open')
+    expect(within(details).getByText(/核对 1 项事实，引用 1 个文件/)).toBeInTheDocument()
+    expect(details).toHaveTextContent('不作为 Gate 依据')
+    expect(within(details).getByText('src/routes/health.ts:3–9')).toBeInTheDocument()
+    expect(within(details).getByText('src/routes/health.ts')).toBeInTheDocument()
+    expect(details).toHaveTextContent('未核对：部署脚本')
+  })
+
   it('renders nothing before any review, failure or run', () => {
     const { container } = render(<GateReviewRunPanel latestReview={undefined} failure={undefined} isRunning={false} providerLabel="p" blockedReason={undefined} isWriteLocked={false} target="t" onRun={vi.fn()} />)
     expect(container).toBeEmptyDOMElement()

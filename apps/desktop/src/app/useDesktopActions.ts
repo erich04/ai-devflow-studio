@@ -147,6 +147,7 @@ export function useDesktopActions(input: {
     pairingCodeDraft,
     mcpServers,
     selectedAgentProviderId,
+    knowledgeReviewExecutor,
     providerNameDraft,
     providerBaseUrlDraft,
     providerModelDraft,
@@ -822,6 +823,7 @@ export function useDesktopActions(input: {
         requestedBy: currentUser.id,
         runtime: 'electron',
         providerId: selectedAgentProviderId,
+        ...(knowledgeReviewExecutor === 'local-agent' ? { executor: 'local-agent' as const } : {}),
         ...(previousReviewId ? { previousReviewId } : {}),
         ...(runtimeBudgetApprovalId.trim()
           ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
