@@ -830,3 +830,35 @@ describe('recalled Memory in the discussion bar (ADR 0024)', () => {
     expect(JSON.parse(calls[0]!)).not.toHaveProperty('backgroundMemory')
   })
 })
+
+describe('tool observation degradation in the discussion bar (ADR 0024 §6)', () => {
+  it('degrades older tool results to re-queryable placeholders before dropping chat history, and keeps them degraded', async () => {
+    for (const name of ['a', 'b', 'c', 'd']) await writeFile(path.join(project.path, `${name}.ts`), `const ${name} = 1\n`.repeat(750))
+    let step = 0
+    const { service, calls } = harness(async () => {
+      step += 1
+      if (step <= 4) return { value: { tool: { name: 'repo_read', args: { path: `${'abcd'[step - 1]}.ts` } } } }
+      return { value: { text: '已读完四个文件。' } }
+    })
+    const result = await send(service, await create(service), '逐个读取 a、b、c、d 四个文件。')
+    expect(result.status).toBe('idle')
+    expect(calls).toHaveLength(5)
+    const contexts = calls.map((prompt) => JSON.parse(prompt))
+    for (const prompt of calls) expect(prompt.length).toBeLessThanOrEqual(32000)
+
+    // Step 4 no longer fits all three results: the oldest becomes a placeholder, the rest stay complete.
+    expect(contexts[3].toolObservations).toHaveLength(3)
+    expect(contexts[3].toolObservations[0]).toEqual({ sourceId: 'source-1', name: 'repo_read', args: { path: 'a.ts' }, observedAt: expect.any(String), degraded: true })
+    expect(contexts[3].toolObservations.slice(1).every((observation: { result?: unknown }) => observation.result)).toBe(true)
+    expect(contexts[3].history).toHaveLength(1)
+    expect(contexts[3].contextNotice).toContain('上下文受长度限制')
+
+    // The placeholder is written back: the next step keeps it and extends the same prefix.
+    const throughFirstObservation = (context: Record<string, unknown> & { toolObservations: unknown[] }) =>
+      JSON.stringify({ originalRequirements: context.originalRequirements, history: context.history, toolObservations: [context.toolObservations[0]] }).slice(0, -2)
+    expect(calls[4]!.startsWith(`${throughFirstObservation(contexts[3])},`)).toBe(true)
+    expect(contexts[4].toolObservations.at(-1)).toMatchObject({ sourceId: 'source-4', result: expect.any(Object) })
+    expect(contexts[4].history).toHaveLength(1)
+    expect(result.contextReceipt?.omittedMessages).toBe(0)
+  })
+})
