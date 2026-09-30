@@ -1,0 +1,261 @@
+# 知识上下文改造方案：项目说明常驻 + Agent 现场检索
+
+- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0、K1 已完成，K2 部分完成，K3、K4 未开始；结果见第 11 节。
+- 分支：`feat/knowledge-context`，基于 `main` / `f0fad85`（S5 合入）。
+- 文中的新字段、新工具、新批次在对应批次完成前都只是计划。实施结果见第 11 节。
+- 决策记录：[ADR 0025](../adr/0025-resident-knowledge-context.md)。
+
+## 0. 已确认的决定（2026-09-29）
+
+1. **暂不接入 Codex**。本方案只覆盖 Direct Provider、OpenCode 和 DevFlow Native v2。以后要接 Codex，另立方案。
+2. **front matter 新增 `stages` 和 `gate` 两个字段**，由文档作者显式声明适用阶段和是否作为 Gate 依据。没写 `stages` 的文档按现有 category 对照表推默认阶段，`gate` 默认为 `false`。
+3. **Web 端这一版不同步知识**：维持 ADR 0011 的边界，Markdown 不离开桌面。以后需要时再考虑只同步元数据（标题、版本哈希、Gate 要求检查哪几篇），不同步正文。
+
+## 1. 结论
+
+不再用"词法检索取前 3 个片段"给模型提供知识，改成三层：
+
+1. **项目说明常驻（L0）**：仓库根目录的 AGENTS.md。无论用哪个执行器，看到的都是同一份。
+2. **知识目录常驻（L1）**：项目知识目录（默认 `docs/knowledge/`）按阶段整篇注入，超出预算的只给目录。
+3. **现场检索（L2）**：能调用工具的执行器（OpenCode）自己用 grep 查、自己读文件。引用来自实际读取，由 DevFlow 按文件字节校验。
+
+Run、Gate、证据等结构化事实继续走现有的工作流投影和讨论工具。记忆由另一条线（P0–P2）负责，本方案不改。
+
+不做：向量索引、GraphRAG、代码索引。v2.1 的向量表和 RRF 契约保留，但不接入。
+
+## 2. 现状
+
+| 入口 | 知识从哪来 | 问题 | 代码 |
+| --- | --- | --- | --- |
+| 澄清、设计（Direct Provider） | 提示词里没有知识，也没有 AGENTS.md | 模型不知道项目规范 | `packages/shared/src/workflow-agent.ts` 的 `createWorkflowArtifactPrompt` |
+| 澄清、设计（OpenCode 只读） | 提示词同上。会话目录是仓库根，且没有关闭说明文件加载 | 会读仓库的 AGENTS.md，也可能带入用户全局说明，DevFlow 不记录（K0 实测结论见第 11 节） | `apps/desktop/electron/stage-agent-executor.ts` |
+| 知识审查 | REVIEW_CRITERIA 放词法命中的片段，最多 8 段、共 24,000 字符 | 中文基本命中不了；只支持 Direct Provider | `packages/shared/src/agent-review.ts` |
+| Gate 治理检查 | 本阶段类别下的所有文档都列为"需要证据"，类别按路径猜 | 按代码推算，本仓库的需求确认 Gate 约有 163 份 | `packages/shared/src/knowledge.ts` 的 `documentsForNode` |
+| 编码简报 | 词法命中最多 8 条，每条摘录 1,200 字符，合计 6,000 字符，优先级 60 | 同上。OpenCode 编码引擎在工作树里运行，会自己读 AGENTS.md；Native v2 不读 | `packages/shared/src/coding-agent.ts` |
+| 讨论栏 `knowledge` 工具 | 按空格切词，任一词作为子串命中就返回，取前 8 条，不排序 | 中文查询通常是一整句，切不开 | `apps/desktop/electron/workbench-conversation-service.ts` |
+| 知识页 | 全仓 191 份 Markdown 的列表，外加"文档 → 标签"图 | 混进了方案和验证报告 | `apps/desktop/src/views/KnowledgeView.tsx` |
+
+共性问题：
+
+- 索引范围是整个仓库，而不是策展过的知识目录。桌面端也不读项目配置的 `knowledgeBasePath`，这个字段只出现在测试夹具里。
+- 项目说明文件有的执行器读、有的不读，DevFlow 也不记录读了什么。
+- 同一个任务换一个执行器，模型拿到的规范就不一样。
+
+## 3. 设计原则
+
+1. **执行器之间一致**：同一任务无论选哪个执行器，项目说明和阶段知识都相同。执行器之间只有一个区别：能不能现场查。
+2. **常驻内容小而确定**：来源、顺序、上限固定，并记录摘要，结果可复现。常驻内容放在提示词的稳定前缀里，便于命中 prompt cache。
+3. **Gate 判定只看确定性输入**，即常驻层加结构化事实。现场检索读到的内容只用作补充说明和引用，不作为通过依据。
+4. **仓库里的说明文件是不可信输入**：它可以约束模型行为，但不能扩大权限。权限仍由 DevFlow 的能力授权和 OpenCode 的权限配置决定。
+5. **沿用外部约定，不发明新格式**：用 AGENTS.md（OpenCode、Codex、Claude Code 等工具通用），大小上限参考 Codex 的默认值 32 KiB。
+
+## 4. 目标结构
+
+### 4.1 L0：项目说明
+
+- **读哪个文件**：只读仓库根目录的 `AGENTS.md`，没有时读 `CLAUDE.md`。
+  - DevFlow 发起的运行都以仓库根或受管工作树根为工作目录，OpenCode 从当前目录向上找最近的一份，加载的就是根目录这份。
+  - 子目录里的说明文件由 Agent 在需要时自己读。
+- **上限**：32 KiB。超出部分截断，并在界面提示。本仓库的 AGENTS.md 是 3,003 字节。
+- **不带入用户全局说明**：`~/.config/opencode`、`~/.claude` 下的文件不进入 DevFlow 发起的运行。个人偏好不应影响团队流程，而且这部分无法审计。
+- **怎么注入**：
+  - Direct Provider、Native v2、知识审查：DevFlow 读取文件，放在提示词开头的 `PROJECT_INSTRUCTIONS` 段。
+  - OpenCode：由 OpenCode 自己加载，DevFlow 不重复注入，只计算同一文件的摘要写进上下文清单。
+
+### 4.2 L1：知识目录
+
+- **范围**：只索引项目的知识目录，不再扫描全仓。读取项目配置的 `knowledgeBasePath`，没有配置时用 `docs/knowledge/`。
+- **front matter 新增两个字段**（保留现有的 title、category、summary、tags、ownerId）：
+
+  ```yaml
+  ---
+  title: 测试证据规范
+  category: testing_standard
+  stages: [test, pr]   # 注入到哪些阶段的提示词里
+  gate: true           # 是否作为对应阶段 Gate 的审查依据
+  ---
+  ```
+
+  - `stages`：适用阶段，取值为 `clarify`、`design`、`build`、`test`、`pr`、`accept`。不填时按现有 category 对照表（`knowledgeDocumentCategoriesForStage`）推默认阶段。
+  - `gate`：`true` 表示进入对应阶段的治理检查。不填时为 `false`，文档只作为背景资料，不产生警告或阻断。
+- **解析器**：换成支持列表和布尔值的 front matter 解析。只接受第 4.2 节列出的键，其余键保留原样、不解释。`packages/shared` 目前没有任何运行时依赖，Web 端也引用它，所以不引入通用 YAML 库，而是实现一个受限子集：标量、带引号的字符串、`true`/`false`、行内列表 `[a, b]` 和块列表 `- a`。
+- **每次调用按阶段组装**：
+  1. 适用本阶段的文档整篇放入。先放 `gate: true` 的，其余按路径排序。
+  2. 超过阶段预算后，剩下的文档降为目录项，只列标题、摘要、路径和摘要哈希。预算初定 24 KiB，与现在知识审查的上限相当。现有 10 份策展文档合计 29,230 字节。
+  3. 不适用本阶段的文档只列标题和路径，条数超过上限时截断，并注明省略了多少。
+- **位置**：目录和正文都放在稳定前缀里，紧跟 L0。
+
+### 4.3 L2：现场检索
+
+- **能力**：OpenCode 用现有的 read、glob、grep、list。
+- **提示词**：说明知识目录的位置，附上目录清单，并告诉 Agent 需要细节时自己去读。
+- **引用**：
+  - 沿用现有的 `repositoryFindings` 结构和 `validateAndDigestRepositoryCitations`：按本地字节算 sha256，路径不能越出仓库。
+  - 补一项校验：行号范围必须落在文件的实际行数内。现在只校验格式。
+- **Direct Provider**：没有这一层，界面上继续标明"未进行仓库核查"，这是现有行为。
+
+### 4.4 L3：结构化事实与记忆
+
+- 不改。Run、节点、材料、证据和 Gate 决定继续由工作流投影和讨论工具提供。
+- 记忆召回和提示缓存布局由另一条线处理，其中 P0 提示重排正在进行。L0 和 L1 按那条线的稳定前缀规则放置。K3 要改 Native v2 和讨论栏，等 P0 合入后再动。
+
+### 4.5 上下文清单
+
+每次模型调用都记录一份清单，扩展现有的 `contextDigest` 和 `CodingContextReceipt`：
+
+- **L0**：文件路径、字节数、sha256、是否截断，以及由谁加载（DevFlow 注入还是 OpenCode 自己加载）。
+- **L1**：整篇注入的文档（路径加 sha256）、降为目录的文档、预算用了多少。
+- **执行器**：执行器和引擎的版本。
+
+审查结论和设计证据都引用这份清单。它取代现在按片段记录的 `KnowledgeReference`，以及其中 `kh-` 前缀的 32 位 FNV 哈希。
+
+## 5. 各入口的改法
+
+| 入口 | 改后 | 批次 |
+| --- | --- | --- |
+| 澄清、设计（Direct Provider） | 提示词开头加 L0 和 L1 | K1 |
+| 澄清、设计（OpenCode） | 注入 L1，L0 由 OpenCode 自己读；有已保存提供方绑定时隔离用户全局配置；记录清单 | K2 |
+| 知识审查 | REVIEW_CRITERIA 改为本阶段 `gate: true` 的文档整篇；新增 local-agent（OpenCode）选项，可以读仓库核对；默认仍只警告 | criteria 在 K1，local-agent 在 K2 |
+| Gate 治理检查 | 只检查 `gate: true` 且适用本阶段的文档。测试规范按测试证据判定满足或违反的规则不变 | K1 |
+| 编码简报 | `knowledge` 来源改为适用 build 阶段的文档加目录；OpenCode 编码引擎同样隔离全局配置；Native v2 加 L0 | K3 |
+| 讨论栏 | `knowledge` 工具拆成 `knowledge_list`（目录）和 `knowledge_read`（按路径分段读）。现有 `repo_search` 已经能搜知识目录 | K3 |
+| 知识页 | 展示知识目录、适用阶段、哪些是 Gate 依据、L0 文件和预算，以及检查结果（见 K4） | K4 |
+
+K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate`。这样严格策略下"测试规范缺证据即阻断"等规则在本仓库的表现保持不变。
+
+## 6. 分批实施
+
+| 批次 | 内容 | 完成条件 |
+| --- | --- | --- |
+| K0 核实与评估集 | ① 起一个本地假模型服务，截获 OpenCode 发给模型的请求，确认 `serve` 会话会按 `directory` 加载仓库 AGENTS.md，以及会不会带入用户全局文件。② 整理 20–30 条中文评估场景，每条标注需求、阶段、应适用的知识文档、Gate 应检查的规范；记录现有词法检索的命中率作为基线 | 两项都有结论；评估集入库；默认零付费调用 |
+| K1 知识目录与常驻注入 | shared 与桌面主进程：读取知识目录（`knowledgeBasePath`）、新 front matter 字段、读取 L0、按阶段组装、上下文清单。Direct Provider 阶段提示词、知识审查的 criteria 和 Gate 治理检查改用新输入。给现有 10 份文档补字段 | 评估集里"应适用的文档"全部进入对应阶段的上下文；本仓库需求确认 Gate 的治理检查数从约 163 降到 `gate: true` 的文档数；同一输入组装两次，清单完全相同 |
+| K2 OpenCode 对齐 | 阶段 Agent 和编码引擎隔离用户全局配置；知识审查支持 local-agent；补上引用行号范围校验 | 假模型服务断言：请求里有仓库 AGENTS.md，没有用户全局说明；local-agent 审查的产出通过现有校验 |
+| K3 编码简报与讨论栏 | 替换编码简报的知识来源；Native v2 加 L0；拆分讨论栏的知识工具。要等 P0 合入 | 现有编码和讨论冒烟测试通过；简报回执记录新清单 |
+| K4 知识页与检查 | 知识页按 4.2 展示。加入确定性检查：断链（相对链接和锚点）、缺 front matter、`stages` 取值非法、超出预算、清单里的文件已被删除 | 检查结果显示在知识页，不阻断流程 |
+
+依赖关系：
+
+- K0 → K1 → K2 依次进行。
+- K3 在 K1 之后，并等另一条线的 P0 合入。
+- K4 在 K1 之后，随时可以做；涉及 `DesktopViews.tsx` 的界面部分等 S6 合入后 rebase 再做。
+
+## 7. 与既有设计的关系
+
+- **保留**：
+  - ADR 0002：Git Markdown 是权威来源。
+  - ADR 0007 里"检索结果不是治理证据"的原则。
+  - ADR 0011：Markdown 不离开桌面（第 0 节决定 3）。
+- **取代或搁置**：
+  - ADR 0007、0008 里以词法命中片段作为审查依据的部分被取代。
+  - ADR 0017 的混合检索搁置：表和契约保留，不接入。
+  - `CONTEXT.md` 里"知识片段""知识检索命中""知识引用"的定义需要更新。
+- 决策记录见 [ADR 0025](../adr/0025-resident-knowledge-context.md)。
+
+## 8. 风险
+
+1. **成本**：常驻注入每次调用多出几 KiB 到二十几 KiB 的输入。用阶段预算和 prompt cache 控制；K0 的评估集记录每个阶段的实际体积。
+2. **仓库 AGENTS.md 是提示注入面**：能提交代码的人就能影响模型。它不能扩大权限（见第 3 节原则 4），界面上显示本次加载了哪些说明文件及其摘要。
+3. **OpenCode 的加载行为依赖外部版本**：K0 在当前支持的 1.18 上实测；升级 OpenCode 时重跑 K0 的核实脚本。
+4. **Web 端审查仍然没有知识**：这是决定 3 接受的代价。Web 审批依赖桌面同步上去的审查结果。
+
+## 9. 不做
+
+- 向量索引、嵌入模型、GraphRAG、给代码建索引。
+- 用 LLM 生成知识摘要，或自动改写知识文档。
+- 记忆召回、压缩和提示缓存布局，这些属于另一条线。
+- 本版不做：Codex 接入、Web 端同步知识。
+
+## 10. 修订记录
+
+- **v1**（2026-09-29）：初稿，含 Codex 只读阶段 Agent 和编码引擎评估。
+- **v2**（2026-09-29）：按第 0 节决定删除 Codex 相关内容（原第 6 节和 K4），原 K5 改为 K4；`stages` 缺省改为按 category 推默认阶段，删除单独的兼容模式；Web 端维持不同步。入库时补充：front matter 解析采用受限子集，不引入 YAML 依赖。
+
+## 11. 实施结果
+
+以下结果都来自本地确定性运行：本地假模型服务或假提供方，没有调用真实模型，没有远端发布。
+
+### 11.1 K0 核实（2026-09-29）
+
+**① OpenCode 实际加载了哪些说明文件**。脚本 `scripts/knowledge-context-opencode-probe.mts`：本地 OpenCode 1.18.15，本地假模型服务截获请求，临时 Git 仓库和临时 HOME 中放入哨兵文件，不读也不改真实用户配置。改动前（DevFlow 当时传给只读阶段 Agent 的环境）：
+
+| 来源 | 是否进入模型请求 |
+| --- | --- |
+| 仓库根目录 `AGENTS.md` | 是 |
+| 仓库根目录 `CLAUDE.md` | 否（`AGENTS.md` 优先） |
+| `~/.config/opencode/AGENTS.md` | 是 |
+| `~/.config/opencode/opencode.json` 的 `instructions` | 是 |
+| `~/.claude/skills` 的技能描述 | 是 |
+| `~/.claude/CLAUDE.md` | 否（被 `~/.config/opencode/AGENTS.md` 覆盖；只隔离 XDG 目录时会进入） |
+| `~/.agents/skills` 的技能描述 | 是（K2 补测） |
+
+另外两点：OpenCode 在自身环境说明中把仓库**绝对路径**发给提供方，DevFlow 的脱敏覆盖不到；本机真实 `~/.config/opencode` 下有 `opencode.jsonc` 和插件，按上表机制，改动前的阶段 Agent 会加载它们（机制已实测，本机插件本身未实测）。
+
+**② 中文评估集与基线**。`scripts/fixtures/knowledge-context-evaluation.json` 共 24 条场景，覆盖六个阶段，每条标注应整篇进入上下文的规范（required）、至少出现在目录的规范（available）和 Gate 应恰好检查的规范（gate）。改动前的结果（`docs/engineering/evidence/knowledge-context-baseline-20260929.json`）：
+
+| 指标 | 改动前 |
+| --- | --- |
+| 索引范围 | 全仓 191 份 Markdown，2,064 个片段 |
+| required 召回率 | 23.3% |
+| 全部命中的场景 | 7 / 24 |
+| Gate 检查恰好正确的场景 | 0 / 24 |
+| 各阶段治理检查数（clarify / design / build / test / pr / accept） | 163 / 35 / 155 / 2 / 8 / 32 |
+
+`--baseline` 模式只复现改动前的索引范围和词法检索；Gate 选择已改为按 `gate` 字段，所以要看改动前的治理检查数请以上述证据文件为准。
+
+### 11.2 K1 结果
+
+- **实现**：
+  - `packages/shared/src/knowledge-context.ts`：阶段解析、按阶段组装、预算与目录、上下文清单。
+  - `knowledge.ts`：front matter 受限子集解析（行内与块列表、布尔值、行内注释），`stages`、`gate`；治理检查只看 `gate`；未显式传入检索器时，引用按阶段生成（`strategy: 'stage'`，并带 `stages`），不再调用词法检索。
+  - 桌面索引只读知识目录（默认 `docs/knowledge`，`''` 表示整仓），为每份文档记录 sha256 摘要，读取根目录 `AGENTS.md`/`CLAUDE.md`（32 KiB 上限、拒绝符号链接越界），快照哈希包含说明文件。
+  - 阶段 Agent 提示词在 `RAW_REQUEST` 之前加入 `PROJECT_INSTRUCTIONS` 与 `PROJECT_KNOWLEDGE`（已脱敏），溯源记录清单（`provenance.knowledgeContext`），轨迹新增 "Bind project knowledge"。
+  - 知识审查：REVIEW_CRITERIA 改为整篇文档、Gate 依据在前（片段上限由 8 提到 32，字符总预算 24,000 不变），并加入项目说明。
+  - 编码简报：知识引用限定为适用 build 阶段的文档（只改一行，完整改造留在 K3）。
+  - 本仓库 10 份知识文档补了 `stages`/`gate`，`packages/shared/src/fixtures.ts` 同步。
+- **结果**（`docs/engineering/evidence/knowledge-context-resident-20260929.json`）：索引 10 份文档、30 个片段；required 与 available 召回率均为 100%；24/24 场景的 Gate 检查恰好正确；各阶段治理检查数 0 / 1 / 0 / 1 / 1 / 1；单阶段知识上下文最大 11,043 字节（accept），低于 24 KiB 预算。`scripts/knowledge-context-evaluation.test.ts` 把这些条件固定进 `corepack pnpm test`。
+- **与方案的差异**：
+  1. `gate` 除 `true`/`false` 外也接受阶段列表。原因：测试证据规范要在设计阶段注入，但只在方案评审与测试阶段作为 Gate 依据。
+  2. 本仓库测试证据规范设为 `gate: [design, test]`，保留改动前"严格策略下方案评审 Gate 缺测试证据即阻断"的表现。这条表现本身值得商榷：方案评审时还不可能有测试证据。是否改为只在测试阶段检查，需要另行决定。
+  3. 桌面端的本地项目没有 `knowledgeBasePath` 字段（该字段只属于团队项目，且默认值是 `docs/<slug>/`），所以本批统一使用 `docs/knowledge`；按项目配置知识目录需要本地项目设置，另行处理。
+  4. 没有声明 `gate` 的项目不再产生知识治理检查（第 0 节决定 2 的直接后果）。
+
+### 11.3 K2 结果（部分完成）
+
+- **已完成**：
+  - 只读阶段 Agent 在有已保存提供方绑定时使用隔离的 OpenCode 配置目录（独立 XDG 目录与 HOME，关闭 Claude 兼容和默认插件），运行结束后删除。探针结果：仓库 `AGENTS.md` 仍进入请求，上表所有用户全局来源均不再进入。`corepack pnpm test:knowledge-context-opencode-probe` 在出现泄漏时以非零退出。
+  - OpenCode 编码引擎使用按项目固定的隔离配置目录（位于桌面用户数据目录），但**不移动 HOME**，因为编码运行里的 shell 命令需要用户的工具链。因此 `~/.agents/skills` 的技能描述仍可能进入编码运行，而技能调用本身被权限规则拒绝。编码引擎这条路径没有做运行时探针，结论依据的是与阶段 Agent 相同的加载机制（推断）。
+  - 引用校验新增：行号范围必须落在文件实际行数内。
+- **未完成**：知识审查的 local-agent（OpenCode）选项。它涉及审查输出结构、执行器选择界面和预算，工作量接近一个独立批次，留待后续。
+- **已知限制**：仓库绝对路径仍由 OpenCode 发给提供方（见 11.1）。
+
+### 11.4 验证
+
+- `corepack pnpm verify`（2026-09-30，本分支）：类型检查通过；330 个测试文件通过、1 个跳过，4,486 个测试通过、15 个跳过（改动前基线 4,462 通过、15 跳过）；跨平台检查通过。之后只改了文档与 `package.json` 脚本，已重跑 `scripts/` 下的测试与跨平台检查，均通过。
+- `corepack pnpm test:electron-smoke`：通过（隔离临时数据、假提供方）。
+- 探针与评估：`corepack pnpm test:knowledge-context-opencode-probe`（需要本机 OpenCode 1.17/1.18）、`corepack pnpm knowledge:evaluate`。
+- 未运行：真实模型调用（包括 `test:stage-agent-opencode-smoke`，需要显式授权的提供方与预算）、`test:workbench-conversation-electron-smoke`、界面走查。知识页的展示改造属于 K4，涉及的 `DesktopViews.tsx` 与 S6 有交集，等 S6 合入后再做。
+
+## 参考
+
+- [OpenCode：Rules（AGENTS.md 加载顺序、Claude Code 兼容开关）](https://opencode.ai/docs/rules/)
+- [OpenCode：CLI 与环境变量](https://opencode.ai/docs/cli/)
+- [Codex：AGENTS.md 发现规则与 32 KiB 上限](https://developers.openai.com/codex/guides/agents-md)
+- [Anthropic：Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
+
+外部资料的内容已改写，以符合许可要求。
+
+## 12. 交接：待决定事项与下一步（2026-09-30）
+
+本节供接手的对话使用。完成后删除本节，结论并入第 11 节。
+
+**当前状态**：分支 `feat/knowledge-context` 基于旧 main `f0fad85`，43 个文件改动未提交。`verify` 与 `test:electron-smoke` 已通过。ADR 已从 0024 改为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024；改号后已重跑类型检查与相关测试。main 已合入 S6（#190）。
+
+**待用户决定**（括号内为推荐）：
+
+1. 测试证据规范的 `gate` 是否改为只在测试阶段：`gate: [test]`（推荐改；方案评审 Gate 不可能有测试证据）。改后要同步 `packages/shared/src/fixtures.ts` 和 `scripts/fixtures/knowledge-context-evaluation.json` 中 design 场景的 `gate`。
+2. 提交方式（推荐：rebase 到最新 main，解决 `DesktopViews.tsx` 可能的冲突，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入）。
+3. 真实模型验证：由用户在 `corepack pnpm dev:electron` 中手动跑澄清到设计，或授权指定已保存提供方与预算上限后由 Agent 在隔离数据中运行。结果记入第 11 节。
+4. 下一批（推荐：K4 知识页 → 知识审查 local-agent → K3，K3 等 P0 合入）。
+5. 本地项目知识目录（推荐：暂时固定 `docs/knowledge`）。
+
+**注意**：只在本 worktree 中修改；不改 `../ai-devflow-studio`（主工作区）和 `../ai-devflow-prompt-cache`。跑开发服务或 Electron 前先检查 4310、4311、5173 端口是否被其他对话占用。

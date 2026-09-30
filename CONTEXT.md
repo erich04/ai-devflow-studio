@@ -220,7 +220,19 @@ Agent 在 Run 期间可以调用的本地或远程工具连接器，受团队策
 
 ## 知识文档（Knowledge Document）
 
-知识源文件的索引表示，包括标题、分类、摘要、标签、所有者、来源路径和 Markdown 正文。
+知识源文件的索引表示，包括标题、分类、摘要、标签、所有者、来源路径、Markdown 正文，以及 front matter 声明的适用阶段（`stages`）和 Gate 依据阶段（`gate`）。桌面端只索引项目知识目录（默认 `docs/knowledge/`），见 [ADR 0025](docs/adr/0025-resident-knowledge-context.md)。
+
+<a id="project-instructions"></a>
+
+## 项目说明（Project Instructions）
+
+仓库根目录的 `AGENTS.md`（没有时为 `CLAUDE.md`），上限 32 KiB。每个阶段的模型调用都能看到同一份：Direct Provider 由 DevFlow 注入，OpenCode 自行加载。它可以约束模型的工作方式，但不能授予权限或批准 Gate。用户全局说明不进入 DevFlow 发起的运行。
+
+<a id="stage-knowledge-context"></a>
+
+## 阶段知识上下文（Stage Knowledge Context）
+
+按阶段确定性组装的常驻上下文：项目说明，加上知识目录中适用本阶段的文档全文（Gate 依据在前），超出预算的文档与其他阶段的文档只列目录。每次组装生成一份上下文清单，记录路径、摘要、字节数、是否截断与预算使用。
 
 <a id="knowledge-chunk"></a>
 
@@ -238,7 +250,7 @@ Agent 在 Run 期间可以调用的本地或远程工具连接器，受团队策
 
 ## 知识检索（Knowledge Retrieval）
 
-为 Run、节点、产物、测试证据或 Gate 决策寻找相关知识片段的过程。检索推荐参考材料，不判断标准是否已经满足。
+为 Run、节点、产物、测试证据或 Gate 决策寻找相关知识片段的过程。检索推荐参考材料，不判断标准是否已经满足。运行时不再使用词法检索（ADR 0025）：阶段所需规范由阶段知识上下文常驻提供，能调用只读工具的执行器按需自行读取知识与代码；词法检索只保留给显式调用方与评估基线。
 
 <a id="knowledge-retrieval-hit"></a>
 
