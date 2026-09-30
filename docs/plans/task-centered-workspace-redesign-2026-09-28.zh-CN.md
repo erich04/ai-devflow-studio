@@ -1,6 +1,6 @@
 # 以开发任务为中心的工作区改造方案
 
-日期：2026-09-28。状态：**设计方案（第 16 版），已确认；S0–S5 已完成，S6 实施中**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S5 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)、[S4 实施报告](../validation/workspace-redesign-s4-20260928.md)、[S5 实施报告](../validation/workspace-redesign-s5-20260928.md)。
+日期：2026-09-28。状态：**设计方案（第 17 版），已确认；S0–S6 已全部完成**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S6 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)、[S4 实施报告](../validation/workspace-redesign-s4-20260928.md)、[S5 实施报告](../validation/workspace-redesign-s5-20260928.md)、[S6 实施报告](../validation/workspace-redesign-s6-20260928.md)。
 
 代码基线：`main` / `bf18e4a`。之后到 `0518870` 的提交只改文档与截图，`apps/`、`packages/` 没有变化。本文中的新页面、模块名称、交互和目标数值都是计划，不代表产品已提供。
 
@@ -716,6 +716,22 @@ S6 是最后一批：用隔离环境完整验收改造后的产品，收尾剩�
 - 文档中的截图引用都指向存在的文件；文档测试通过。
 - 按 8.2 节的 S6 场景验收。
 
+**S6 实施结果**（[实施报告](../validation/workspace-redesign-s6-20260928.md)）：R1–R7 已完成，8.2 节 S6 的两个场景通过。
+- 打包后的桌面端冒烟与打包后的 GitHub 交付冒烟（一次性 Postgres、离线 GitHub 替代服务）都在本批次运行并通过，后者走到了 Draft PR 与业务验收完成。
+- 基线 32 个样例的控件数与字号与 S4 相同。位置指标下移 1px，原因是本次采集的显示器缩放系数为 1，S4、S5 为 2；同一显示器上复测 S5 合入代码的结果相同。
+
+实施中与本节原文的差异：
+- R2 多改了桌面端的团队请求列表，以及 Web 的项目创建与组织管理页面。
+- 基线工具新增两个只在显式指定时运行的样例：`doc-tour`（文档截图）与 `long-content`（长内容验收）。
+- 验收中发现 S5 引入的 Web 侧栏页脚拉伸，已修复。
+
+S6 发现、留给后续的事项：
+- 知识库底层优化另行立项。
+- 设置／模型与执行方式的“启动前检查”仍显示英文状态 `Blocked` 与模板中的英文节点名。
+- 配对码输入框的无障碍名称仍是 `Desktop pairing code`。
+- 3–5 人的可用性走查没有做。
+- 真实模型、真实 GitHub 远端发布与签名安装包不在本次改造的验收范围内。
+
 ### 7.7 回退
 
 每个批次都是独立、可评审的变更，不要求一次性重写 `App.tsx` 或更换框架。可以用临时开发开关分批验证布局，但开关只影响界面，不切换写入路径；新旧界面不能同时发起同一动作。回退时保留既有记录与身份，恢复旧导航映射，不删除任务、不重建用户数据库。兼容入口在验证完成后，按明确的批次移除。
@@ -840,4 +856,6 @@ S4、S5 与技术落地的细节在对应批次开始前单独评审，这里只
 
 - **第 16 版**（2026-09-28）：新增 7.6 节 S6 改动清单（R1–R7），原 7.6 节“回退”改为 7.7 节。起草时确定四条前提：不改业务逻辑与契约；知识库底层优化在 S6 之后另行立项（erich04 决定）；验收只用模拟模型、本机受控服务与本机 GitHub 替代服务；无法招募走查人员时不做可用性走查，也不用自评代替。
 
-第 6 版随 S1 的产品改动一起提交，验证结果见 S1 实施报告；没有调用真实模型或提交远端变更。全部批次实施并验证后，再同步更新[界面设计理由](../product/details/ui-design-rationale.md)、[会话行为说明](../engineering/workbench-conversations.md)、用户指南、README 与截图。
+- **第 17 版**（2026-09-28）：回写 S6 结果。状态改为 S0–S6 已全部完成；7.6 节末尾加入实施结果、与原文的差异和留给后续的事项。
+
+第 6 版随 S1 的产品改动一起提交，验证结果见 S1 实施报告；没有调用真实模型或提交远端变更。S6 已按改造后的界面同步更新以下文档：[界面设计理由](../product/details/ui-design-rationale.md)、[会话行为说明](../engineering/workbench-conversations.md)、部署与使用指南、README 与截图。版本化的历史指南只更新了横幅。
