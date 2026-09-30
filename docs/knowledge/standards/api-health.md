@@ -1,6 +1,7 @@
 ---
 title: API 健康端点规范
 category: api_contract
+stages: [clarify, design, build, test]
 ownerId: u-ling
 tags: api, health, degraded
 summary: 健康端点必须提供 ok、degraded、down 三种状态，并明确状态映射。

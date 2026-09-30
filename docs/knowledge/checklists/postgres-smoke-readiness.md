@@ -1,6 +1,7 @@
 ---
 title: Postgres 冒烟测试就绪检查清单
 category: review_checklist
+stages: [test, accept]
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
 summary: Postgres 冒烟测试应证明 Team schema v21、数据保留迁移、有界本地开发身份与原生编码摘要引擎、受控 GitHub 交付、运行时/记忆/协作投影、策略、同步与脱敏。

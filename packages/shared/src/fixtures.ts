@@ -359,6 +359,7 @@ export const knowledgeSources: KnowledgeSourceFile[] = [
     markdown: `---
 title: API 健康端点规范
 category: api_contract
+stages: [clarify, design, build, test]
 ownerId: u-ling
 tags: api, health, degraded
 summary: 健康端点必须提供 ok、degraded、down 三种状态，并明确状态映射。
@@ -381,6 +382,8 @@ summary: 健康端点必须提供 ok、degraded、down 三种状态，并明确�
     markdown: `---
 title: 本地测试证据规范
 category: testing_standard
+stages: [clarify, design, build, test]
+gate: [test]
 ownerId: u-yu
 tags: test, evidence, smoke
 summary: 本地测试证据必须包含命令、退出码、耗时和脱敏输出。
@@ -400,7 +403,13 @@ summary: 本地测试证据必须包含命令、退出码、耗时和脱敏输�
   {
     sourcePath: 'docs/knowledge/prompts/opendesign-design-prompts.md',
     updatedAt: '2026-06-23T08:00:00.000Z',
-    markdown: `<a id="opendesign-design-prompts"></a>
+    markdown: `---
+title: OpenDesign 设计提示词
+category: development_standard
+stages: []
+summary: OpenDesign 界面设计提示词模板与已保存提示词，只在需要做界面设计时按需阅读。
+---
+<a id="opendesign-design-prompts"></a>
 
 # OpenDesign 设计提示词
 
@@ -714,6 +723,8 @@ Tests：
     markdown: `---
 title: PR 审查就绪检查清单
 category: review_checklist
+stages: [pr, accept]
+gate: true
 ownerId: u-ling
 tags: pr, review, gate, github-delivery
 summary: PR 审查应绑定交付包、精确批准的提交、核实后的草稿 PR、证据和业务验收决定。
@@ -739,6 +750,7 @@ summary: PR 审查应绑定交付包、精确批准的提交、核实后的草�
     markdown: `---
 title: Electron 演示就绪检查清单
 category: review_checklist
+stages: [test, accept]
 ownerId: u-erich
 tags: electron, demo, smoke, local, github-delivery
 summary: Electron 演示应证明 Desktop schema v26、生产权限边界、持久化运行时上下文与本地 MCP 审计恢复、受控 GitHub 交付以及凭据隔离。
@@ -779,6 +791,7 @@ summary: Electron 演示应证明 Desktop schema v26、生产权限边界、持�
     markdown: `---
 title: Postgres 冒烟测试就绪检查清单
 category: review_checklist
+stages: [test, accept]
 ownerId: u-erich
 tags: postgres, api, smoke, policy, github-delivery
 summary: Postgres 冒烟测试应证明 Team schema v21、数据保留迁移、有界本地开发身份与原生编码摘要引擎、受控 GitHub 交付、运行时/记忆/协作投影、策略、同步与脱敏。
@@ -829,6 +842,7 @@ summary: Postgres 冒烟测试应证明 Team schema v21、数据保留迁移、�
     markdown: `---
 title: OpenCode 运行时验收检查清单
 category: review_checklist
+stages: [test, accept]
 ownerId: u-erich
 tags: opencode, coding-agent, smoke, provider
 summary: 真实 OpenCode 运行时验收必须显式启动、由环境开关控制、记录权限审计并保护密钥。
@@ -864,6 +878,7 @@ summary: 真实 OpenCode 运行时验收必须显式启动、由环境开关控�
     markdown: `---
 title: v0.9 演示就绪检查清单
 category: review_checklist
+stages: [accept]
 ownerId: u-erich
 tags: demo, opencode, observability, policy-aware-delivery
 summary: v0.9 演示应证明策略感知交付、运行时可观测性，并如实说明真实 OpenCode 的能力边界。
@@ -892,6 +907,7 @@ summary: v0.9 演示应证明策略感知交付、运行时可观测性，并如
     markdown: `---
 title: Gate 治理架构决策
 category: adr
+stages: [clarify, design, accept]
 ownerId: u-erich
 tags: gate, approval, governance
 summary: Gate 是审查决策，必须引用证据以及审查者使用的规范。
@@ -910,6 +926,7 @@ Gate 是审查决策，必须引用证据以及审查者使用的规范。
     markdown: `---
 title: Skill 与 MCP 使用规则
 category: mcp_rule
+stages: [design, build]
 ownerId: u-erich
 tags: skill, mcp, permission
 summary: 使用工具时必须明确命令目的、权限范围和审计证据。

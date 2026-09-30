@@ -140,4 +140,40 @@ describe('read-only local stage Agent executor', () => {
     }))
     await expect(localExecutor.execute(executionInput(stage))).rejects.toThrow('requested additional permission')
   })
+
+  it('rejects citations whose line range is outside the cited file', async () => {
+    const root = await repository()
+    const findings = (lineEnd: number) => ({
+      toolCalls: 1, pendingPermissionCount: 0, diffCount: 0,
+      value: {
+        model: 'model-1', title: 'Clarification', summary: 'Verified.', goals: ['Goal'],
+        acceptanceCriteria: ['Acceptance'], nonGoals: ['Non-goal'], openQuestions: [], assumptions: [], risks: [],
+        repositoryFindings: {
+          version: 1 as const, repositoryDigest: '0'.repeat(64),
+          verifiedFacts: [{ id: 'fact-1', statement: 'Package exists.', citationIds: ['c1'] }],
+          citations: [{ id: 'c1', path: 'package.json', contentDigest: '', lineStart: 1, lineEnd }],
+          assumptions: [], openQuestions: [], uncheckedScopes: [],
+        },
+      },
+    })
+    // package.json is one line with a trailing newline.
+    await expect(executor(root, async () => findings(1)).execute(executionInput())).resolves.toBeDefined()
+    await expect(executor(root, async () => findings(2)).execute(executionInput()))
+      .rejects.toThrow('line range is outside the cited file')
+  })
+})
+
+describe('OpenCode profile isolation (ADR 0025)', () => {
+  it('moves XDG directories, disables Claude compatibility and default plugins, and only moves HOME on request', async () => {
+    const { isolatedOpencodeProfileEnv } = await import('./opencode-profile-isolation')
+    const coding = isolatedOpencodeProfileEnv('/tmp/profile')
+    expect(coding).toMatchObject({
+      XDG_CONFIG_HOME: path.join('/tmp/profile', 'config'),
+      XDG_DATA_HOME: path.join('/tmp/profile', 'data'),
+      OPENCODE_DISABLE_CLAUDE_CODE: 'true',
+      OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
+    })
+    expect(coding.HOME).toBeUndefined()
+    expect(isolatedOpencodeProfileEnv('/tmp/profile', { isolateHome: true }).HOME).toBe(path.join('/tmp/profile', 'home'))
+  })
 })

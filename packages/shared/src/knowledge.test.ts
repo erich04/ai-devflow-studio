@@ -14,10 +14,10 @@ const sources = [
     markdown: `---
 title: API Health Endpoint Standard
 category: api_contract
+gate: true
 ownerId: u-ling
 tags: api, health, degraded
 ---
-
 # API Health Endpoint Standard
 
 Health endpoints must describe ok, degraded, and down states.
@@ -29,10 +29,10 @@ Health endpoints must describe ok, degraded, and down states.
     markdown: `---
 title: Local Test Evidence Standard
 category: testing_standard
+gate: true
 ownerId: u-yu
 tags: test, evidence, smoke
 ---
-
 # Local Test Evidence Standard
 
 Every Run needs command, exit code, duration, and redacted output.
@@ -192,7 +192,41 @@ describe('buildKnowledgeReferences', () => {
           runId: run.id,
           documentId: 'knowledge-doc-api-health',
           relation: 'cites',
+          strategy: 'stage',
+          stages: ['design'],
         }),
+        expect.objectContaining({
+          targetType: 'gate_decision',
+          nodeId: 'n-design-gate',
+          documentId: 'knowledge-doc-api-health',
+          relation: 'requires_evidence',
+          stages: ['design'],
+        }),
+        expect.objectContaining({
+          targetType: 'test_evidence',
+          evidenceId: 'evidence-1',
+          documentId: 'knowledge-doc-testing-evidence',
+          relation: 'satisfies',
+        }),
+      ]),
+    )
+    // Stage references are not retrieval: nothing is attached to individual artifacts.
+    expect(references.some((reference) => reference.targetType === 'artifact')).toBe(false)
+  })
+
+  it('keeps legacy lexical retrieval for explicit callers', () => {
+    const index = indexKnowledgeSources(sources)
+    const run = runs[0]!
+    const references = buildKnowledgeReferences({
+      run,
+      artifacts,
+      documents: index.documents,
+      testEvidence: [],
+      retriever: lexicalKnowledgeRetriever,
+    })
+
+    expect(references).toEqual(
+      expect.arrayContaining([
         expect.objectContaining({
           targetType: 'artifact',
           artifactId: 'art-design',
@@ -208,18 +242,6 @@ describe('buildKnowledgeReferences', () => {
           }),
           gateEvidence: { status: 'retrieval_candidate' },
           contentHash: expect.stringMatching(/^kh-[a-f0-9]{8}$/),
-        }),
-        expect.objectContaining({
-          targetType: 'gate_decision',
-          nodeId: 'n-design-gate',
-          documentId: 'knowledge-doc-api-health',
-          relation: 'requires_evidence',
-        }),
-        expect.objectContaining({
-          targetType: 'test_evidence',
-          evidenceId: 'evidence-1',
-          documentId: 'knowledge-doc-testing-evidence',
-          relation: 'satisfies',
         }),
       ]),
     )
@@ -320,6 +342,7 @@ describe('buildKnowledgeGovernanceChecks', () => {
       documents: index.documents,
       chunks: index.chunks,
       testEvidence: [],
+      retriever: lexicalKnowledgeRetriever,
     })
     const checks = buildKnowledgeGovernanceChecks({
       run,
@@ -395,6 +418,7 @@ describe('buildKnowledgeGovernanceChecks', () => {
       artifacts: [],
       documents: index.documents,
       testEvidence: [],
+      retriever: lexicalKnowledgeRetriever,
     })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -415,3 +439,27 @@ describe('buildKnowledgeGovernanceChecks', () => {
     )
   })
 })
+
+describe('Gate criteria from front matter (ADR 0025)', () => {
+  it('lists only documents whose gate covers the node stage', () => {
+    const index = indexKnowledgeSources([
+      { sourcePath: 'docs/knowledge/a.md', markdown: '---\ntitle: Tests\ncategory: testing_standard\nstages: [design, test]\ngate: [test]\n---\n# Tests', updatedAt: '2026-09-29T00:00:00.000Z' },
+      { sourcePath: 'docs/knowledge/b.md', markdown: '---\ntitle: Checklist\ncategory: review_checklist\n---\n# Checklist', updatedAt: '2026-09-29T00:00:00.000Z' },
+    ])
+    const run = runs[0]!
+    const designGate = run.nodes.find((node) => node.id === 'n-design-gate')!
+    const testNode = run.nodes.find((node) => node.stage === 'test')!
+    const common = { run, artifacts: [], documents: index.documents, chunks: index.chunks, testEvidence: [] }
+
+    expect(buildKnowledgeGovernanceChecks({ ...common, node: designGate })).toEqual([])
+    expect(buildKnowledgeGovernanceChecks({ ...common, node: testNode }).map((check) => check.title)).toEqual(['Tests'])
+    // Without gate front matter the checklist is background for its default stages only.
+    const projected = projectKnowledgeReferencesForNode({
+      node: designGate,
+      references: buildKnowledgeReferences(common),
+    })
+    expect(projected.map((reference) => reference.documentId).sort()).toEqual(['knowledge-doc-a', 'knowledge-doc-b'])
+    expect(projected.every((reference) => reference.relation === 'cites')).toBe(true)
+  })
+})
+

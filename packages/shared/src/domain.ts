@@ -318,6 +318,8 @@ export type StageAgentExecutorProvenance = {
   durationMs: number
   terminalReason: StageAgentTerminalReason
   contextDigest: string
+  /** L0/L1 context bound into the prompt (ADR 0025); absent on older records. */
+  knowledgeContext?: KnowledgeContextManifest
 }
 
 export type ClarificationRevisionStatus =
@@ -741,6 +743,8 @@ export type AgentReviewContext = {
   >
   fieldProjection?: WorkflowContextProjection
   manifest: AgentReviewContextManifest
+  /** Repository instruction file (ADR 0025 L0), bounded and redacted. */
+  projectInstructions?: Pick<ProjectInstructionsSnapshot, 'sourcePath' | 'contentDigest' | 'truncated' | 'content'>
 }
 
 export type GateAdvisory = {
@@ -945,9 +949,51 @@ export type KnowledgeDocument = {
   ownerId?: string
   updatedAt: string
   markdown: string
+  /**
+   * Stages declared in front matter (`stages`). Undefined means the author did not
+   * declare stages; consumers fall back to the category default (ADR 0025).
+   */
+  stages?: NodeStage[]
+  /** Stages whose Gate reviews against this document (`gate`). Empty when not declared. */
+  gateStages?: NodeStage[]
+  /** `sha256:<hex>` of the full source bytes, computed by the desktop indexer. */
+  contentDigest?: string
 }
 
-export type KnowledgeRetrievalStrategy = 'heuristic' | 'lexical' | 'vector' | 'hybrid'
+/** Repository instruction file resident in every stage context (ADR 0025 L0). */
+export type ProjectInstructionsSnapshot = {
+  sourcePath: 'AGENTS.md' | 'CLAUDE.md'
+  /** Content bounded to PROJECT_INSTRUCTIONS_MAX_BYTES; empty when the file was unreadable. */
+  content: string
+  /** Size of the source file in bytes. */
+  bytes: number
+  /** `sha256:<hex>` of the full source file bytes. */
+  contentDigest: string
+  truncated: boolean
+}
+
+export type KnowledgeContextManifest = {
+  version: 1
+  stage: NodeStage
+  knowledgeRoot: string | null
+  budgetBytes: number
+  usedBytes: number
+  instructions: null | {
+    sourcePath: ProjectInstructionsSnapshot['sourcePath']
+    bytes: number
+    contentDigest: string
+    truncated: boolean
+    /** `devflow` = injected into the prompt; `executor` = loaded by the executor itself. */
+    loadedBy: 'devflow' | 'executor'
+  }
+  included: Array<{ sourcePath: string; contentDigest: string; bytes: number; gate: boolean }>
+  catalogued: Array<{ sourcePath: string; contentDigest: string; reason: 'budget' | 'other_stage' }>
+  /** Catalogue entries dropped because the catalogue limit was reached. */
+  omittedCount: number
+}
+
+/** `stage`: the document applies to the stage by its front matter (ADR 0025); not retrieval. */
+export type KnowledgeRetrievalStrategy = 'heuristic' | 'lexical' | 'vector' | 'hybrid' | 'stage'
 
 export type KnowledgeLexicalMatch = {
   /** Raw additive keyword score. It is not normalized and has no fixed maximum. */
@@ -1011,6 +1057,10 @@ export type RepositoryKnowledgeSnapshot = {
   indexedAt: string
   truncated: boolean
   warnings: RepositoryKnowledgeWarning[]
+  /** Repository-relative knowledge directory; `''` indexes the whole repository. */
+  knowledgeRoot?: string
+  /** Root AGENTS.md (or CLAUDE.md) of the project, when present. */
+  projectInstructions?: ProjectInstructionsSnapshot | null
 }
 
 export type KnowledgeRetrievalQuery = {
@@ -1077,6 +1127,8 @@ export type KnowledgeReference = {
   nodeId?: string
   artifactId?: string
   evidenceId?: string
+  /** Stages the document applies to; present on stage references (ADR 0025). */
+  stages?: NodeStage[]
 }
 
 export type KnowledgeGovernanceStatus = 'satisfied' | 'needs_evidence' | 'violated'

@@ -1,6 +1,7 @@
 ---
 title: Gate 治理架构决策
 category: adr
+stages: [clarify, design, accept]
 ownerId: u-erich
 tags: gate, approval, governance
 summary: Gate 是审查决策，必须引用证据以及审查者使用的规范。

@@ -53,7 +53,9 @@
     "verify": "corepack pnpm typecheck && corepack pnpm test && corepack pnpm test:cross-platform",
     "verify:demo": "corepack pnpm verify && corepack pnpm test:e2e && corepack pnpm test:electron-smoke && corepack pnpm test:native-coding-electron-smoke && corepack pnpm test:workbench-conversation-electron-smoke",
     "release:status": "node scripts/release-signoff-status.mjs",
-    "test:studio-onboarding-postgres-smoke": "node scripts/studio-onboarding-postgres-smoke.mjs"
+    "test:studio-onboarding-postgres-smoke": "node scripts/studio-onboarding-postgres-smoke.mjs",
+    "knowledge:evaluate": "tsx scripts/knowledge-context-evaluation.mts",
+    "test:knowledge-context-opencode-probe": "tsx scripts/knowledge-context-opencode-probe.mts"
   },
   "devDependencies": {
     "@playwright/test": "^1.57.0",

@@ -5,7 +5,10 @@ import { lstat, open, realpath, type FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import {
+  DEFAULT_KNOWLEDGE_ROOT,
   indexKnowledgeSources,
+  PROJECT_INSTRUCTIONS_MAX_BYTES,
+  truncateUtf8,
   type KnowledgeChunk,
   type KnowledgeDocument,
   type KnowledgeDocumentCategory,
@@ -13,6 +16,7 @@ import {
   type KnowledgeRelation,
   type KnowledgeSourceFile,
   type LocalProject,
+  type ProjectInstructionsSnapshot,
   type RepositoryKnowledgeSnapshot,
   type RepositoryKnowledgeWarning,
 } from '@ai-devflow/shared'
@@ -332,10 +336,67 @@ export type RepositoryKnowledgeService = {
   index(project: LocalProject): Promise<RepositoryKnowledgeSnapshot>
 }
 
+/**
+ * Repository-relative knowledge directory (ADR 0025). `''` means the whole
+ * repository. Unsafe values fall back to the default directory.
+ */
+export function normalizeKnowledgeRoot(value: string | undefined): string {
+  if (value === undefined) return DEFAULT_KNOWLEDGE_ROOT
+  const trimmed = value.trim().replace(/\/+$/u, '')
+  if (trimmed === '' || trimmed === '.') return ''
+  if (
+    trimmed.startsWith('/') ||
+    trimmed.includes('\\') ||
+    path.posix.normalize(trimmed) !== trimmed ||
+    trimmed.split('/').some((segment) => segment === '..' || segment === '.' || segment === '')
+  ) {
+    return DEFAULT_KNOWLEDGE_ROOT
+  }
+  return trimmed
+}
+
+function sha256Digest(content: Buffer | string): string {
+  return `sha256:${createHash('sha256').update(content).digest('hex')}`
+}
+
+const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const
+
+/** Root AGENTS.md, falling back to CLAUDE.md, as the executors discover them. */
+async function readProjectInstructions(root: string): Promise<ProjectInstructionsSnapshot | null> {
+  for (const sourcePath of PROJECT_INSTRUCTION_FILES) {
+    let file: Awaited<ReturnType<typeof readSafeRegularFile>>
+    try {
+      file = await readSafeRegularFile(root, sourcePath)
+    } catch {
+      file = null
+    }
+    if (!file) continue
+    if ('tooLarge' in file) {
+      // Larger than the per-file read bound; recorded without content.
+      return { sourcePath, content: '', bytes: MAX_FILE_BYTES + 1, contentDigest: 'unavailable', truncated: true }
+    }
+    const bounded = truncateUtf8(file.content.toString('utf8'), PROJECT_INSTRUCTIONS_MAX_BYTES)
+    return {
+      sourcePath,
+      content: bounded.value,
+      bytes: file.content.byteLength,
+      contentDigest: sha256Digest(file.content),
+      truncated: bounded.truncated,
+    }
+  }
+  return null
+}
+
 export function createRepositoryKnowledgeService(options: {
   now?: () => string
+  /** Repository-relative knowledge directory; defaults to `docs/knowledge`, `''` = whole repository. */
+  knowledgeRoot?: string
 } = {}): RepositoryKnowledgeService {
   const now = options.now ?? (() => new Date().toISOString())
+  const knowledgeRoot = normalizeKnowledgeRoot(options.knowledgeRoot)
+  const pathspecs = knowledgeRoot
+    ? [`${knowledgeRoot}/*.md`, `${knowledgeRoot}/*.markdown`]
+    : ['*.md', '*.markdown']
 
   return {
     async index(project) {
@@ -343,7 +404,7 @@ export function createRepositoryKnowledgeService(options: {
       const root = await realpath(project.path)
       const { stdout } = await execFile(
         'git',
-        ['ls-files', '-z', '--cached', '--', '*.md', '*.markdown'],
+        ['ls-files', '-z', '--cached', '--', ...pathspecs],
         { cwd: root, maxBuffer: 2 * 1024 * 1024, timeout: 10_000, windowsHide: true },
       )
       const relativePaths = stdout
@@ -352,6 +413,7 @@ export function createRepositoryKnowledgeService(options: {
         .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
       const warnings = new Set<RepositoryKnowledgeWarning>()
       const sources: KnowledgeSourceFile[] = []
+      const contentDigests = new Map<string, string>()
       let totalBytes = 0
       let totalCharacters = 0
       let inspectedCandidates = 0
@@ -402,6 +464,7 @@ export function createRepositoryKnowledgeService(options: {
           markdown,
           updatedAt: indexedAt,
         })
+        contentDigests.set(sourcePath, sha256Digest(content))
       }
       const metadataBoundedSources = boundSourceMetadata(sources)
       if (metadataBoundedSources.truncated) {
@@ -417,19 +480,29 @@ export function createRepositoryKnowledgeService(options: {
       index.documents = index.documents.map((document) => ({
         ...document,
         markdown: fullMarkdownByPath.get(document.sourcePath)!,
+        contentDigest: contentDigests.get(document.sourcePath)!,
       }))
       const remappedIndex = remapStableKnowledgeIds(index)
       if (remappedIndex.chunks.length > MAX_CHUNKS) {
         warnings.add('chunk_limit_exceeded')
         remappedIndex.chunks.length = MAX_CHUNKS
       }
+      const projectInstructions = await readProjectInstructions(root)
       const contentHash = createHash('sha256')
-        .update(JSON.stringify(sources.map(({ sourcePath, markdown }) => ({ sourcePath, markdown }))))
+        .update(JSON.stringify({
+          knowledgeRoot,
+          sources: sources.map(({ sourcePath, markdown }) => ({ sourcePath, markdown })),
+          instructions: projectInstructions
+            ? { sourcePath: projectInstructions.sourcePath, contentDigest: projectInstructions.contentDigest }
+            : null,
+        }))
         .digest('hex')
 
       return {
         projectId: project.id,
         contentHash: `sha256:${contentHash}`,
+        knowledgeRoot,
+        projectInstructions,
         documents: remappedIndex.documents,
         chunks: remappedIndex.chunks,
         entities: remappedIndex.entities,
