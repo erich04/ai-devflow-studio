@@ -162,6 +162,26 @@ function parseFrontmatter(markdown: string): { fields: Record<string, Frontmatte
   return { fields, body }
 }
 
+export type KnowledgeFrontMatterValue = FrontmatterValue
+
+/**
+ * Front matter as the indexer reads it, for the knowledge checks (K4). `missing`: the file
+ * does not start with `---`; `unclosed`: it does, but no closing `---` line follows.
+ */
+export function readKnowledgeFrontMatter(markdown: string): {
+  status: 'present' | 'missing' | 'unclosed'
+  fields: Record<string, KnowledgeFrontMatterValue>
+} {
+  if (!markdown.startsWith('---')) return { status: 'missing', fields: {} }
+  if (markdown.indexOf('\n---', 3) === -1) return { status: 'unclosed', fields: {} }
+  return { status: 'present', fields: parseFrontmatter(markdown).fields }
+}
+
+/** List values of a front matter field as written (`[a, b]`, block list or a single scalar). */
+export function knowledgeFrontMatterList(value: KnowledgeFrontMatterValue | undefined): string[] {
+  return listField(value)
+}
+
 function stringField(fields: Record<string, FrontmatterValue>, key: string): string | undefined {
   const value = fields[key]
   if (typeof value === 'string') return value.trim() || undefined

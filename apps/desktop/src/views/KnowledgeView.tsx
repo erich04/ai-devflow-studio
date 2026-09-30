@@ -10,6 +10,7 @@ import type {
   WorkflowRun,
 } from '@ai-devflow/shared'
 import { matchesQuery, type FieldDataSource, type SupportContext } from '../app/desktop-view-model'
+import type { KnowledgeDirectoryView } from '../app/knowledge-directory-view-model'
 import {
   groupKnowledgeReferences,
   type KnowledgeCitation,
@@ -56,6 +57,7 @@ export function KnowledgeView({
   onRefresh,
   onReturnToInspector,
   memoryPanel,
+  directory,
 }: {
   query: string
   documents: KnowledgeDocument[]
@@ -77,6 +79,8 @@ export function KnowledgeView({
   onReturnToInspector: () => void
   /** Rendered under 「记忆管理」 near the end of the page (plan §4.1). */
   memoryPanel?: ReactNode
+  /** Knowledge directory, stage usage and checks (knowledge-context plan K4); absent before indexing. */
+  directory?: KnowledgeDirectoryView | undefined
 }) {
   const maxVisibleEntities = 12
   const maxVisibleRelations = 16
@@ -247,6 +251,76 @@ export function KnowledgeView({
             </button>
           </div>
         ) : null}
+        {directory ? (
+          <section
+            aria-labelledby="knowledge-directory-heading"
+            className="knowledge-directory"
+            data-testid="knowledge-directory"
+          >
+            <div className="section-heading section-heading--inline">
+              <span>知识目录</span>
+              <strong id="knowledge-directory-heading">{directory.rootLabel}</strong>
+            </div>
+            <div className="knowledge-directory-instructions" data-testid="knowledge-project-instructions">
+              <span className={`pill ${directory.instructions.tone}`}>项目说明</span>
+              <span>{directory.instructions.label}</span>
+              {directory.instructions.details.length > 0 ? <RawDetails details={directory.instructions.details} /> : null}
+            </div>
+            {directory.documentCount === 0 ? (
+              <p className="empty-note" data-testid="knowledge-directory-empty">
+                知识目录中还没有文档。在 {directory.rootLabel} 下提交 Markdown 规范后，刷新索引即可在各阶段注入。
+              </p>
+            ) : (
+            <table className="table knowledge-stage-table" data-testid="knowledge-stage-budgets">
+              <caption>各阶段整篇注入的规范（{directory.budgetLabel}）</caption>
+              <thead>
+                <tr>
+                  <th scope="col">阶段</th>
+                  <th scope="col">注入文档</th>
+                  <th scope="col">Gate 依据</th>
+                  <th scope="col">用量</th>
+                </tr>
+              </thead>
+              <tbody>
+                {directory.stages.map((row) => (
+                  <tr data-testid="knowledge-stage-budget" key={row.stage}>
+                    <th scope="row">{row.label}</th>
+                    <td>{row.documentCount} 份</td>
+                    <td>{row.gateCount ? `${row.gateCount} 份` : '无'}</td>
+                    <td>
+                      {row.usageLabel}
+                      {row.overBudgetCount ? <span className="pill warn">{row.overBudgetCount} 份超出，只列入目录</span> : null}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            )}
+            <div
+              className={`mini-card ${directory.findings.length ? 'soft' : ''}`}
+              data-testid="knowledge-checks"
+            >
+              <strong>检查结果</strong>
+              <p>{directory.summary}</p>
+              <p className="knowledge-checks-note">这些检查只用于提示，不会阻断任何步骤或 Gate。</p>
+              {directory.findings.length > 0 ? (
+                <ul className="knowledge-check-list">
+                  {directory.findings.map((finding) => (
+                    <li data-testid="knowledge-check-finding" key={finding.id}>
+                      <span className="pill warn">{finding.kindLabel}</span>
+                      <code>{finding.location}</code>
+                      <span>{finding.message}</span>
+                      <RawDetails details={finding.details} />
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {directory.notes.map((note) => (
+                <p className="knowledge-checks-note" key={note}>{note}</p>
+              ))}
+            </div>
+          </section>
+        ) : null}
         {visibleDocuments.length === 0 && unindexedGroups.length === 0 ? (
           <p className="empty-note">没有匹配的知识文档</p>
         ) : (
@@ -264,6 +338,12 @@ export function KnowledgeView({
                 </div>
                 <p>{document.summary}</p>
                 <code>{document.sourcePath}</code>
+                {directory?.documentStages[document.id] ? (
+                  <div className="knowledge-reference-meta" data-testid="knowledge-document-stages">
+                    <span>{directory.documentStages[document.id]!.stagesLabel}</span>
+                    <span>{directory.documentStages[document.id]!.gateLabel}</span>
+                  </div>
+                ) : null}
                 <div className="tag-list">
                   {document.tags.map((tag) => (
                     <span key={tag}>{tag}</span>
@@ -335,7 +415,7 @@ export function KnowledgeView({
       </div>
       <aside className="page-side">
         <strong>知识来源</strong>
-        <p>知识文档保存在项目仓库的 Git Markdown 中；这里只负责索引、图谱和检索，并列出引用它们的任务位置。</p>
+        <p>知识文档保存在项目仓库的 Git Markdown 中；这里展示各阶段注入的规范、检查结果和图谱，并列出引用它们的任务位置。修改文档请在仓库中进行。</p>
         <strong>当前任务的引用</strong>
         <p>{selectedRun?.title ?? '尚未选择任务'}</p>
         {references.length === 0 ? (

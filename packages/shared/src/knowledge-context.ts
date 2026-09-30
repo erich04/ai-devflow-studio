@@ -243,6 +243,56 @@ export function assembleKnowledgeStageContext(input: KnowledgeStageContextInput)
   return { instructionsSection, knowledgeSection, manifest }
 }
 
+export type KnowledgeStageBudgetSummary = {
+  stage: NodeStage
+  budgetBytes: number
+  /** Bytes of the documents that fit into the stage context. */
+  usedBytes: number
+  /** Bytes all applicable documents would need in full. */
+  requiredBytes: number
+  /** Applicable documents, Gate criteria first, in the order they are assembled. */
+  applicablePaths: string[]
+  /** Applicable documents the Gate of this stage reviews against. */
+  gatePaths: string[]
+  /** Applicable documents that do not fit and are only catalogued. */
+  overBudgetPaths: string[]
+}
+
+/**
+ * Per-stage L1 usage for the knowledge page (K4). Uses the same assembly as the prompts,
+ * so the numbers match what a stage call would include. L0 has its own limit and is not
+ * counted here.
+ */
+export function summarizeKnowledgeStageBudgets(
+  documents: readonly KnowledgeDocument[],
+  budgetBytes = KNOWLEDGE_STAGE_CONTEXT_BUDGET_BYTES,
+): KnowledgeStageBudgetSummary[] {
+  const sorted = [...documents].sort(compareByPath)
+  return KNOWLEDGE_STAGES.map((stage) => {
+    const { manifest } = assembleKnowledgeStageContext({
+      stage,
+      documents: sorted,
+      injectInstructions: false,
+      canReadFiles: false,
+      budgetBytes,
+      catalogLimit: Number.MAX_SAFE_INTEGER,
+    })
+    const applicable = sorted.filter((document) => knowledgeDocumentAppliesToStage(document, stage))
+    const gate = applicable.filter((document) => isKnowledgeGateDocumentForStage(document, stage))
+    const ordered = [...gate, ...applicable.filter((document) => !isKnowledgeGateDocumentForStage(document, stage))]
+    return {
+      stage,
+      budgetBytes,
+      usedBytes: manifest.usedBytes,
+      requiredBytes: ordered.reduce((sum, document) =>
+        sum + utf8ByteLength(renderDocument(document, isKnowledgeGateDocumentForStage(document, stage))), 0),
+      applicablePaths: ordered.map((document) => document.sourcePath),
+      gatePaths: gate.map((document) => document.sourcePath),
+      overBudgetPaths: manifest.catalogued.filter((entry) => entry.reason === 'budget').map((entry) => entry.sourcePath),
+    }
+  })
+}
+
 /** One-line manifest summary for traces and receipts. */
 export function describeKnowledgeContextManifest(manifest: KnowledgeContextManifest): string {
   const instructions = manifest.instructions

@@ -8,6 +8,7 @@ import type {
 } from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import { buildKnowledgeDataSource, formatLocalTime, type SupportContext } from '../app/desktop-view-model'
+import { buildKnowledgeDirectoryView } from '../app/knowledge-directory-view-model'
 import { KnowledgeView } from './KnowledgeView'
 
 const run = fixtureRuns[0]!
@@ -79,6 +80,10 @@ const snapshot = {
   indexedAt,
   truncated: true,
   warnings: ['file_count_limit_exceeded' as const],
+}
+
+function withFrontMatter(fields: string, body: string): string {
+  return `---\ntitle: Doc\n${fields}\n---\n${body}`
 }
 
 function renderView(overrides: Partial<Parameters<typeof KnowledgeView>[0]> = {}) {
@@ -245,6 +250,91 @@ describe('KnowledgeView', () => {
     const relation = screen.getByTestId('knowledge-graph-relation')
     expect(relation).toHaveTextContent('Health API 定义 health route')
     expect(within(relation).getByTitle('defines')).toHaveTextContent('定义')
+  })
+
+  it('shows the knowledge directory, stage usage and non-blocking checks (K4)', () => {
+    const directory = buildKnowledgeDirectoryView({
+      snapshot: {
+        ...snapshot,
+        truncated: false,
+        warnings: [],
+        knowledgeRoot: 'docs/knowledge',
+        projectInstructions: {
+          sourcePath: 'AGENTS.md', content: '# Rules', bytes: 3_003, contentDigest: `sha256:${'a'.repeat(64)}`, truncated: false,
+        },
+        documents: [
+          { ...apiDocument, stages: ['clarify', 'design'], gateStages: [], markdown: withFrontMatter('stages: [clarify, design]', '# API 健康端点规范') },
+          {
+            ...testDocument,
+            stages: ['design', 'test'],
+            gateStages: ['test'],
+            markdown: withFrontMatter('stages: [design, test]\ngate: [test]', '# 本地测试证据规范\n[旧链接](removed.md)'),
+          },
+        ],
+        linkTargets: [{ path: 'docs/knowledge/standards/removed.md', kind: 'missing' }],
+      },
+      recordedManifests: [],
+    })
+    renderView({ directory, truncated: false, warnings: [] })
+
+    const section = screen.getByRole('region', { name: 'docs/knowledge' })
+    expect(section).toHaveTextContent('知识目录')
+    expect(within(screen.getByTestId('knowledge-project-instructions')).getByText('AGENTS.md · 2.9 KiB（上限 32 KiB）')).toBeInTheDocument()
+    expectOnlyInClosedDetails(/sha256:a{64}/)
+
+    const table = within(section).getByRole('table', { name: '各阶段整篇注入的规范（每个阶段上限 24 KiB）' })
+    const rows = within(table).getAllByTestId('knowledge-stage-budget')
+    expect(rows.map((row) => within(row).getByRole('rowheader').textContent)).toEqual([
+      '需求澄清', '方案设计', '开发实现', '测试证据', 'PR 交付', '业务验收',
+    ])
+    expect(rows[1]).toHaveTextContent('2 份')
+    expect(rows[3]).toHaveTextContent('1 份1 份')
+
+    const checks = screen.getByTestId('knowledge-checks')
+    expect(checks).toHaveTextContent('发现 1 项需要处理的问题。')
+    expect(checks).toHaveTextContent('这些检查只用于提示，不会阻断任何步骤或 Gate。')
+    const finding = within(checks).getByTestId('knowledge-check-finding')
+    expect(finding).toHaveTextContent('断链')
+    expect(finding).toHaveTextContent('docs/knowledge/standards/testing.md 第 7 行')
+    expect(finding).toHaveTextContent('链接目标 removed.md 不存在。')
+    expectOnlyInClosedDetails(/broken_link:missing/)
+
+    const [apiCard, testCard] = screen.getAllByTestId('knowledge-document')
+    expect(within(apiCard!).getByTestId('knowledge-document-stages')).toHaveTextContent('适用阶段：需求澄清、方案设计不作为 Gate 依据')
+    expect(within(testCard!).getByTestId('knowledge-document-stages')).toHaveTextContent('Gate 依据：测试证据')
+  })
+
+  it('replaces the stage table with a short note while the directory is empty', () => {
+    const directory = buildKnowledgeDirectoryView({
+      snapshot: { ...snapshot, documents: [], truncated: false, warnings: [], knowledgeRoot: 'docs/knowledge', projectInstructions: null },
+      recordedManifests: [],
+    })
+    renderView({ directory, documents: [], truncated: false, warnings: [] })
+
+    expect(screen.getByTestId('knowledge-directory-empty')).toHaveTextContent('在 docs/knowledge 下提交 Markdown 规范后')
+    expect(screen.queryByTestId('knowledge-stage-budgets')).not.toBeInTheDocument()
+    expect(screen.getByTestId('knowledge-checks')).toHaveTextContent('没有发现问题')
+  })
+
+  it('reports a clean directory without a warning style', () => {
+    const directory = buildKnowledgeDirectoryView({
+      snapshot: {
+        ...snapshot,
+        truncated: false,
+        warnings: [],
+        knowledgeRoot: 'docs/knowledge',
+        projectInstructions: null,
+        documents: [{ ...apiDocument, markdown: withFrontMatter('stages: [design]', '# API 健康端点规范') }],
+      },
+      recordedManifests: [],
+    })
+    renderView({ directory, truncated: false, warnings: [] })
+
+    const checks = screen.getByTestId('knowledge-checks')
+    expect(checks).not.toHaveClass('soft')
+    expect(checks).toHaveTextContent('没有发现问题')
+    expect(within(checks).queryByTestId('knowledge-check-finding')).not.toBeInTheDocument()
+    expect(screen.getByTestId('knowledge-project-instructions')).toHaveTextContent('未找到仓库根目录的 AGENTS.md 或 CLAUDE.md')
   })
 
   it('renders the memory panel under 记忆管理 only when provided', () => {

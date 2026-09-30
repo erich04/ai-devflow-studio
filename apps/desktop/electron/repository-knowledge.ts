@@ -1,11 +1,13 @@
 import { execFile as execFileCallback } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { constants as fsConstants } from 'node:fs'
+import { constants as fsConstants, type Stats } from 'node:fs'
 import { lstat, open, realpath, type FileHandle } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import {
+  collectKnowledgeLinkTargetPaths,
   DEFAULT_KNOWLEDGE_ROOT,
+  extractMarkdownAnchors,
   indexKnowledgeSources,
   PROJECT_INSTRUCTIONS_MAX_BYTES,
   truncateUtf8,
@@ -17,6 +19,7 @@ import {
   type KnowledgeSourceFile,
   type LocalProject,
   type ProjectInstructionsSnapshot,
+  type RepositoryKnowledgeLinkTarget,
   type RepositoryKnowledgeSnapshot,
   type RepositoryKnowledgeWarning,
 } from '@ai-devflow/shared'
@@ -387,6 +390,75 @@ async function readProjectInstructions(root: string): Promise<ProjectInstruction
   return null
 }
 
+const MAX_LINK_TARGETS = 256
+const MAX_ANCHOR_TARGETS = 64
+const MAX_ANCHORS_PER_TARGET = 1_024
+
+function isNotFoundError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  return code === 'ENOENT' || code === 'ENOTDIR'
+}
+
+/** Existence of a repository-relative path without following symbolic links. */
+async function inspectLinkTarget(
+  root: string,
+  sourcePath: string,
+): Promise<RepositoryKnowledgeLinkTarget['kind']> {
+  if (
+    path.posix.isAbsolute(sourcePath) ||
+    sourcePath.includes('\\') ||
+    path.posix.normalize(sourcePath) !== sourcePath ||
+    sourcePath.split('/').includes('..')
+  ) {
+    return 'unsupported'
+  }
+  let candidate = root
+  let metadata: Stats | undefined
+  for (const segment of sourcePath.split('/')) {
+    candidate = path.join(candidate, segment)
+    try {
+      metadata = await lstat(candidate)
+    } catch (error) {
+      return isNotFoundError(error) ? 'missing' : 'unsupported'
+    }
+    if (metadata.isSymbolicLink()) return 'unsupported'
+  }
+  if (!metadata) return 'unsupported'
+  return metadata.isFile() ? 'file' : metadata.isDirectory() ? 'directory' : 'unsupported'
+}
+
+/**
+ * Link targets of the indexed documents that are not indexed themselves (K4 checks).
+ * Markdown targets are read with the same safe, bounded reader to list their anchors.
+ */
+async function resolveLinkTargets(
+  root: string,
+  documents: readonly KnowledgeDocument[],
+): Promise<RepositoryKnowledgeLinkTarget[]> {
+  const targets: RepositoryKnowledgeLinkTarget[] = []
+  let anchorReads = 0
+  for (const targetPath of collectKnowledgeLinkTargetPaths(documents).slice(0, MAX_LINK_TARGETS)) {
+    const kind = await inspectLinkTarget(root, targetPath)
+    if (kind === 'file' && /\.(md|markdown)$/iu.test(targetPath) && anchorReads < MAX_ANCHOR_TARGETS) {
+      anchorReads += 1
+      let file: Awaited<ReturnType<typeof readSafeRegularFile>> = null
+      try {
+        file = await readSafeRegularFile(root, targetPath)
+      } catch {
+        file = null
+      }
+      const anchors = file && 'content' in file ? extractMarkdownAnchors(file.content.toString('utf8')) : undefined
+      // Without the complete anchor list a missing anchor could be a false alarm.
+      if (anchors && anchors.length <= MAX_ANCHORS_PER_TARGET) {
+        targets.push({ path: targetPath, kind, anchors })
+        continue
+      }
+    }
+    targets.push({ path: targetPath, kind })
+  }
+  return targets
+}
+
 export function createRepositoryKnowledgeService(options: {
   now?: () => string
   /** Repository-relative knowledge directory; defaults to `docs/knowledge`, `''` = whole repository. */
@@ -488,6 +560,8 @@ export function createRepositoryKnowledgeService(options: {
         remappedIndex.chunks.length = MAX_CHUNKS
       }
       const projectInstructions = await readProjectInstructions(root)
+      // Not part of contentHash: link targets inform the knowledge page only, never a Gate.
+      const linkTargets = await resolveLinkTargets(root, remappedIndex.documents)
       const contentHash = createHash('sha256')
         .update(JSON.stringify({
           knowledgeRoot,
@@ -503,6 +577,7 @@ export function createRepositoryKnowledgeService(options: {
         contentHash: `sha256:${contentHash}`,
         knowledgeRoot,
         projectInstructions,
+        linkTargets,
         documents: remappedIndex.documents,
         chunks: remappedIndex.chunks,
         entities: remappedIndex.entities,
