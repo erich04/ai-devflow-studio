@@ -163,7 +163,7 @@ export function health() { return { status: "ok", checkedAt: now().toISOString()
   - 阶段 Agent 的兜底错误码 `cli_unavailable` 会掩盖真实原因。第 2 次运行中，方案设计在预算检查拒绝之后失败，没有发出上游请求，也显示为这个错误码。
   - Native 分析阶段又读取了已在简报里的 `AGENTS.md`、`api-response.md` 和 `time-and-clock.md`，约 800 字节重复，不影响结果。
   - OpenCode 会话的请求中含有临时仓库的绝对路径，与 11.1 已记录的限制相同。
-  - [#200](https://github.com/erich04/ai-devflow-studio/issues/200) 没有复现：Native 分析阶段输出 816 / 2,048 tokens，思考为默认开启。
+  - [#200](https://github.com/erich04/ai-devflow-studio/issues/200) 没有复现：Native 分析阶段输出 816 / 2,048 tokens，思考为默认开启。本次代码在修复 #200 的 #206 合入之前。
 
 ## 费用
 
