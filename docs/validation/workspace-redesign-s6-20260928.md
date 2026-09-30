@@ -88,7 +88,7 @@ corepack pnpm exec tsx scripts/workspace-baseline.mts --self-check
 
 提交 `28444b3`：
 - `corepack pnpm verify`：通过。类型检查（含 Web `next build`）通过；328 个测试文件、4466 项测试通过（1 个文件、15 项按既有配置跳过）；跨平台检查通过。
-- `corepack pnpm test:e2e`：41 项通过，1 项跳过（默认跳过的截图采集脚本）。
+- `corepack pnpm test:e2e`：本机 41 项通过，1 项跳过（默认跳过的截图采集脚本）。CI 的 macOS 首次运行中，Web 项目创建用例在 760 与 390 两档失败：页面在 React 接管前就被填写，受控状态随后被重置，提交按钮保持禁用。修正后，团队请求表单会重复填写，直到提交按钮可用；本机再跑 Web 两个规格，13 项通过。
 - `corepack pnpm test:electron-smoke`：通过。
 - `corepack pnpm test:workbench-conversation-electron-smoke`：通过，24 次受控模型调用，`externalProviderCalled: false`。
 - `corepack pnpm test:native-coding-electron-smoke`：通过。

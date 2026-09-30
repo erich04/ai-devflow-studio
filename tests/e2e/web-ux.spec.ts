@@ -1,9 +1,23 @@
-import { expect, test, type BrowserContext } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { createSessionCookie } from '../../apps/api/src/auth/session-cookie'
 
 const apiUrl = process.env.DEVFLOW_E2E_API_URL!
 const webUrl = process.env.DEVFLOW_E2E_WEB_URL!
 const fixtureSecret = process.env.DEVFLOW_E2E_SESSION_SECRET
+
+/**
+ * Fills the team request form once React owns it. On a slow runner the server-rendered inputs
+ * can accept text before hydration, which then resets the controlled state and leaves the
+ * submit button disabled; refill until the button reflects the input.
+ */
+async function fillWorkRequest(page: Page, title: string, details: string) {
+  const submit = page.getByRole('button', { name: '创建团队请求', exact: true })
+  await expect(async () => {
+    await page.getByLabel('团队请求标题', { exact: true }).fill(title)
+    await page.getByLabel('团队请求需求说明', { exact: true }).fill(details)
+    await expect(submit).toBeEnabled({ timeout: 1_000 })
+  }).toPass({ timeout: 20_000 })
+}
 
 test.describe('Web UX in the isolated seed API', () => {
   test.skip(!fixtureSecret || process.env.DEVFLOW_ENABLE_DEMO_DATA !== 'true', 'Requires the isolated E2E runner and its ephemeral session key')
@@ -78,8 +92,7 @@ test.describe('Web UX in the isolated seed API', () => {
         await testInfo.attach(`${width}-${theme}-empty`, { body: await work.screenshot(), contentType: 'image/png' })
       }
 
-      await page.getByRole('textbox', { name: '团队请求标题', exact: true }).fill('Update the README heading')
-      await page.getByRole('textbox', { name: '团队请求需求说明', exact: true }).fill('Change one heading, preserve the rest, and run the configured tests.')
+      await fillWorkRequest(page, 'Update the README heading', 'Change one heading, preserve the rest, and run the configured tests.')
       await page.getByRole('button', { name: '创建团队请求', exact: true }).click()
       await expect(page.getByText('团队请求已创建。已配对的桌面端现在可以领取。')).toBeVisible()
       for (const theme of ['light', 'dark']) {
@@ -169,8 +182,7 @@ test.describe('Web UX in the isolated seed API', () => {
       await expect(page).toHaveURL(`${webUrl}/?projectId=p-${slug}&view=tasks`)
       await page.waitForLoadState('load')
       await expect(page.getByRole('heading', { level: 1, name: '项目任务' })).toBeVisible()
-      await page.getByLabel('团队请求标题', { exact: true }).fill('Change the README heading')
-      await page.getByLabel('团队请求需求说明', { exact: true }).fill('Change the README heading to Mini Agent Ready and preserve the remaining content.')
+      await fillWorkRequest(page, 'Change the README heading', 'Change the README heading to Mini Agent Ready and preserve the remaining content.')
       await page.getByRole('button', { name: '创建团队请求', exact: true }).click()
       await expect(page.getByText('团队请求已创建。已配对的桌面端现在可以领取。')).toBeVisible()
       await page.getByRole('link', { name: '设置', exact: true }).click()
