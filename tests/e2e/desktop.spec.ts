@@ -1880,7 +1880,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await referencesTab.focus()
     await referencesTab.press('Enter')
     await expect(page.getByTestId('knowledge-reference-sources')).toContainText(
-      '当前 Gate 尚无节点作用域内的 Knowledge 引用',
+      '当前 Gate 还没有属于本步骤的知识引用',
     )
     await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
       'Knowledge review completed for this node.',
