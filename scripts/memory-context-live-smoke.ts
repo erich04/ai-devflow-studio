@@ -1,5 +1,6 @@
 /** Explicitly invoked, paid-provider acceptance. Never runs in default CI. */
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -15,6 +16,34 @@ import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.js'
 
 export { createOpenAiCompatibleAgentProvider }
 const exec = promisify(execFile)
+
+type LiveProviderCallObservation = {
+  phase: string
+  containsMemory: boolean
+  containsInstruction: boolean
+  chars: number
+  systemPromptDigest: string
+  systemPromptChars: number
+  usage?: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; cacheMissTokens?: number; cacheStatus?: string }
+}
+
+type CacheTotals = { calls: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheMissTokens: number; cacheHitRate: number | null; completeCacheReports: boolean }
+
+/** Provider-reported prompt cache use; cacheHitRate matches the runtime cost summary definition. */
+export function summarizePromptCache(calls: readonly LiveProviderCallObservation[]): CacheTotals {
+  const totals = calls.reduce((sum, call) => ({
+    inputTokens: sum.inputTokens + (call.usage?.inputTokens ?? 0),
+    outputTokens: sum.outputTokens + (call.usage?.outputTokens ?? 0),
+    cacheReadTokens: sum.cacheReadTokens + (call.usage?.cacheReadTokens ?? 0),
+    cacheMissTokens: sum.cacheMissTokens + (call.usage?.cacheMissTokens ?? 0),
+  }), { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 0 })
+  const completeCacheReports = calls.length > 0 && calls.every((call) => call.usage?.cacheStatus === 'complete')
+  return {
+    calls: calls.length, ...totals,
+    cacheHitRate: completeCacheReports && totals.inputTokens > 0 ? totals.cacheReadTokens / totals.inputTokens : null,
+    completeCacheReports,
+  }
+}
 
 export async function runMemoryContextLiveSmoke(input: { provider: AgentProvider; outputDirectory: string }) {
   const output = path.resolve(input.outputDirectory)
@@ -37,14 +66,32 @@ export async function runMemoryContextLiveSmoke(input: { provider: AgentProvider
   const expectedMemoryGreeting = 'Welcome to the remembered workspace'
   const memoryStatement = `Project greeting preference: use exactly "${expectedMemoryGreeting}" as the greeting in src/greeting.js. Preserve its export name.`
   const request = 'Update only the greeting string in src/greeting.js. Use the exact project greeting wording in recalled Memory when available; otherwise use exactly "Standard greeting". Preserve all other bytes, including the export name and tests.'
-  const observations: { phase: string; containsMemory: boolean; containsInstruction: boolean; chars: number }[] = []
+  const observations: LiveProviderCallObservation[] = []
   const wrapped: AgentProvider = {
     ...input.provider,
     completeStructuredJson: async (call) => {
       // Native v2 shares one system prompt across phases; the user JSON names the phase.
       const payload = JSON.parse(call.userPrompt) as { brief?: string; phase?: string }
-      observations.push({ phase: payload.phase === 'analysis' ? 'analysis' : 'implementation', containsMemory: payload.brief?.includes(expectedMemoryGreeting) ?? false, containsInstruction: payload.brief?.includes(request) ?? false, chars: call.userPrompt.length })
-      return input.provider.completeStructuredJson!(call)
+      const observation: LiveProviderCallObservation = {
+        phase: payload.phase ?? 'unknown',
+        containsMemory: payload.brief?.includes(expectedMemoryGreeting) ?? false,
+        containsInstruction: payload.brief?.includes(request) ?? false,
+        chars: call.userPrompt.length,
+        // Digests only: shows whether calls shared a system prompt without storing prompts.
+        systemPromptDigest: createHash('sha256').update(call.systemPrompt).digest('hex').slice(0, 16),
+        systemPromptChars: call.systemPrompt.length,
+      }
+      observations.push(observation)
+      const result = await input.provider.completeStructuredJson!(call)
+      if (result.usage) {
+        const { inputTokens, outputTokens, cacheReadTokens, cacheMissTokens, cacheStatus } = result.usage
+        observation.usage = {
+          ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}),
+          ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}), ...(cacheMissTokens !== undefined ? { cacheMissTokens } : {}),
+          ...(cacheStatus !== undefined ? { cacheStatus } : {}),
+        }
+      }
+      return result
     },
   }
   const executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(wrapped), configVersion: 1 })
@@ -113,7 +160,14 @@ export async function runMemoryContextLiveSmoke(input: { provider: AgentProvider
     assert.ok(observations.slice(2, 4).every((entry) => entry.containsMemory))
     assert.ok(observations.slice(4).every((entry) => !entry.containsMemory))
     assert.ok(observations.every((entry) => entry.containsInstruction))
-    const report = { passed: true, provider: { id: input.provider.id, model: input.provider.model }, results, completedAt: now(), scope: 'Real DevFlow Native Provider, local Store, managed worktrees, saved tests, Memory promotion/revision/deletion and evidence evaluation. No cloud deployment or UI acceptance claimed.' }
+    const phases = [...new Set(observations.map((entry) => entry.phase))]
+    const promptCache = {
+      total: summarizePromptCache(observations),
+      byPhase: Object.fromEntries(phases.map((phase) => [phase, summarizePromptCache(observations.filter((entry) => entry.phase === phase))])),
+      distinctSystemPrompts: new Set(observations.map((entry) => entry.systemPromptDigest)).size,
+      note: 'Provider-reported cache use. DeepSeek caching is best-effort, so one run is indicative, not a guarantee.',
+    }
+    const report = { passed: true, provider: { id: input.provider.id, model: input.provider.model }, results, promptCache, completedAt: now(), scope: 'Real DevFlow Native Provider, local Store, managed worktrees, saved tests, Memory promotion/revision/deletion and evidence evaluation. No cloud deployment or UI acceptance claimed.' }
     await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
     return report
   } finally { store.close() }
