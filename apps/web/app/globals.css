@@ -690,7 +690,8 @@ button {
   top: 0;
   height: 100vh;
   display: grid;
-  grid-template-rows: auto auto 1fr auto;
+  /* Brand, primary navigation, footer (the S5 rail has no primary action button). */
+  grid-template-rows: auto 1fr auto;
   gap: 22px;
   padding: 22px 16px;
   border-right: 1px solid var(--studio-line);
@@ -1906,7 +1907,7 @@ button {
 
   .studio-nav {
     grid-column: 1 / -1;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .studio-rail-footer {
