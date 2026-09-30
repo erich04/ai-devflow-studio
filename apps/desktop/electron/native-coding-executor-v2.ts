@@ -54,6 +54,19 @@ const MAX_EXCERPT_BYTES = 32 * 1_024
 const MAX_EXCERPT_TOTAL_BYTES = 128 * 1_024
 const MAX_PROMPT_CHARS = 30_000
 const MAX_OUTPUT_TOKENS = 4_096
+const ANALYSIS_MAX_OUTPUT_TOKENS = 2_048
+
+/**
+ * Output budget of the analysis request. Enabled thinking is billed and bounded by the same
+ * max_tokens as the JSON answer, so 2,048 left too little room and truncated some analyses
+ * (#200); it then gets the change-proposal budget. The worst-case preflight estimate already
+ * assumes MAX_OUTPUT_TOKENS for every call (NATIVE_CODING_MAX_OUTPUT_TOKENS).
+ */
+export function nativeAnalysisOutputLimit(
+  thinking: import('@ai-devflow/shared').EffectiveProviderThinking | undefined,
+): number {
+  return thinking?.mode === 'enabled' ? MAX_OUTPUT_TOKENS : ANALYSIS_MAX_OUTPUT_TOKENS
+}
 const PERMISSION_WINDOW_MS = 15 * 60_000
 const TEST_TIMEOUT_MS = 120_000
 
@@ -1297,7 +1310,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         phase: 'analysis',
         systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
         userPrompt: analysisPrompt,
-        maxOutputTokens: Math.min(2_048, MAX_OUTPUT_TOKENS),
+        maxOutputTokens: nativeAnalysisOutputLimit(input.decisionProvider.effectiveThinking),
         manifestPathCount: manifest.length,
         excerptCount: 0,
         parse: (value) => parseSearchPlan(value, manifest),

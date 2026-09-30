@@ -14,6 +14,7 @@ import {
   modelCallActualUsage,
   modelCallBudgetRollup,
   type CodingAgentRun,
+  type EffectiveProviderThinking,
   type LocalProject,
   type ModelCallAttempt,
   type ModelCallGovernance,
@@ -131,6 +132,8 @@ async function createFixture(
   baseUrl: string,
   runSavedTest?: () => Promise<LocalTestCommandResult>,
   governance?: ModelCallGovernance,
+  /** Overrides the Provider's resolved thinking, as a DeepSeek Provider reports it. */
+  thinking?: EffectiveProviderThinking,
 ): Promise<{
   dbPath: string
   project: LocalProject
@@ -200,7 +203,7 @@ async function createFixture(
         await store.saveRun(run)
         initialized = true
       }
-      const provider = createOpenAiCompatibleAgentProvider({
+      const compatible = createOpenAiCompatibleAgentProvider({
         id: 'local-compatible',
         name: 'Local compatible fixture',
         model: 'local-test-model',
@@ -208,6 +211,7 @@ async function createFixture(
         baseUrl: `${baseUrl}/v1`,
         structuredRequestTimeoutMs: providerFixtureTimeoutMs,
       })
+      const provider = thinking ? { ...compatible, effectiveThinking: thinking } : compatible
       const executor = createNativeCodingExecutorV2({
         store,
         // main.ts governs the Native Provider per project the same way (resolveAgentProvider).
@@ -340,6 +344,29 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
     expect(failed.runtimeCostSummary?.providerCallSettlements?.map((call) => call.budgetAttemptIds))
       .toEqual([[...attempts.keys()]])
     expect(teamBudgetTokens(failed, [...attempts.values()])).toEqual({ actual: 30, budget: 30 })
+  })
+
+  it.each([
+    ['thinking enabled', { mode: 'enabled', effort: 'low', source: 'application_default' }, 4_096],
+    ['thinking disabled', { mode: 'disabled', source: 'provider_configuration' }, 2_048],
+    ['provider default', undefined, 2_048],
+  ] as const)('bounds the analysis output for %s so reasoning does not truncate it (#200)', async (_label, thinking, analysisLimit) => {
+    const limits: Array<unknown> = []
+    const baseUrl = await startCompatibleServer(async (request, response) => {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      limits.push(JSON.parse(body).max_tokens)
+      sendStructuredResponse(response, limits.length === 1 ? analysisValue : initialValue, limits.length)
+    })
+    const fixture = await createFixture(baseUrl, undefined, undefined, thinking)
+    const { store, runtime } = await fixture.openRuntime()
+    expect((await runtime.runCodingAgent(runInput(fixture))).codingRun.status).toBe('waiting_permission')
+    // Analysis, then the initial change proposal, which always has the full budget.
+    expect(limits).toEqual([analysisLimit, 4_096])
+    const codingRun = (await store.listCodingAgentRuns(fixture.run.id))[0]!
+    const traces = providerTrace(await store.listCodingAgentEvents(codingRun.id))
+    expect(traces.find((trace) => trace.phase === 'analysis' && trace.status === 'succeeded'))
+      .toMatchObject({ maxOutputTokens: analysisLimit })
   })
 
   it('sends the enforced file and replacement bounds as model instructions', async () => {
