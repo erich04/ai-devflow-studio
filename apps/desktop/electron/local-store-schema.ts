@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 36
+export const CURRENT_SCHEMA_VERSION = 37
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2624,6 +2624,123 @@ export const schemaMigrations: readonly SchemaMigration[] = [
     },
   },
   { version: 36, migrate(db) { db.run(`create table if not exists model_call_settlements (id text primary key, project_id text not null, json text not null)`); } },
+  {
+    // ADR 0024 §4: Memory candidates may come from a completed Coding Run as well as an
+    // accepted Agent Runtime observation. Runtime columns become required per kind.
+    version: 37,
+    migrate(db) {
+      db.run('pragma legacy_alter_table = on')
+      try {
+        db.run(`
+    drop index if exists idx_agent_memory_candidates_scope;
+    alter table agent_memory_candidates rename to agent_memory_candidates_v36;
+
+    create table agent_memory_candidates (
+      id text primary key,
+      scope_kind text not null,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      provenance_kind text not null,
+      runtime_id text,
+      action_id text,
+      checkpoint_version integer,
+      observation_sequence integer,
+      result_digest text,
+      coding_run_id text,
+      statement text not null,
+      content_digest text not null,
+      provenance_digest text not null,
+      status text not null,
+      state_version integer not null,
+      json text not null,
+      created_at text not null,
+      foreign key (local_project_id) references local_projects(id) on delete cascade,
+      unique (local_project_id, provenance_digest, content_digest),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (provenance_kind in ('agent_observation', 'coding_run')),
+      check (
+        (provenance_kind = 'agent_observation' and
+          runtime_id is not null and action_id is not null and checkpoint_version is not null and
+          observation_sequence is not null and result_digest is not null and coding_run_id is null) or
+        (provenance_kind = 'coding_run' and
+          runtime_id is null and action_id is null and checkpoint_version is null and
+          observation_sequence is null and result_digest is null and coding_run_id is not null)
+      ),
+      check (length(trim(id)) > 0 and length(id) <= 200 and trim(id) = id),
+      check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
+      check (organization_id is null or (length(trim(organization_id)) > 0 and length(organization_id) <= 200 and trim(organization_id) = organization_id)),
+      check (team_project_id is null or (length(trim(team_project_id)) > 0 and length(team_project_id) <= 200 and trim(team_project_id) = team_project_id)),
+      check (length(trim(user_id)) > 0 and length(user_id) <= 200 and trim(user_id) = user_id),
+      check (length(trim(session_id)) > 0 and length(session_id) <= 200 and trim(session_id) = session_id),
+      check (runtime_id is null or (length(trim(runtime_id)) > 0 and length(runtime_id) <= 200 and trim(runtime_id) = runtime_id)),
+      check (action_id is null or (length(trim(action_id)) > 0 and length(action_id) <= 200 and trim(action_id) = action_id)),
+      check (coding_run_id is null or (length(trim(coding_run_id)) > 0 and length(coding_run_id) <= 200 and trim(coding_run_id) = coding_run_id)),
+      check (checkpoint_version is null or checkpoint_version between 1 and 2147483647),
+      check (observation_sequence is null or observation_sequence between 1 and 2147483647),
+      check (result_digest is null or (length(result_digest) = 64 and result_digest not glob '*[^0-9a-f]*')),
+      check (length(cast(statement as blob)) between 1 and 8192 and trim(statement) = statement),
+      check (length(content_digest) = 64 and content_digest not glob '*[^0-9a-f]*'),
+      check (length(provenance_digest) = 64 and provenance_digest not glob '*[^0-9a-f]*'),
+      check (status = 'candidate'),
+      check (state_version = 1),
+      check (json_valid(json) and json_type(json) = 'object'),
+      check (json_extract(json, '$.id') = id),
+      check (json_extract(json, '$.status') = status),
+      check (json_extract(json, '$.scope.kind') = scope_kind),
+      check (json_extract(json, '$.scope.localProjectId') = local_project_id),
+      check (json_extract(json, '$.scope.organizationId') is organization_id),
+      check (json_extract(json, '$.scope.projectId') is team_project_id),
+      check (json_extract(json, '$.scope.userId') = user_id),
+      check (json_extract(json, '$.scope.sessionId') = session_id),
+      check (json_extract(json, '$.provenance.kind') = provenance_kind),
+      check (json_extract(json, '$.provenance.runtimeId') is runtime_id),
+      check (json_extract(json, '$.provenance.actionId') is action_id),
+      check (json_extract(json, '$.provenance.checkpointVersion') is checkpoint_version),
+      check (json_extract(json, '$.provenance.sequence') is observation_sequence),
+      check (json_extract(json, '$.provenance.resultDigest') is result_digest),
+      check (json_extract(json, '$.provenance.codingRunId') is coding_run_id),
+      check (json_extract(json, '$.statement') = statement),
+      check (json_extract(json, '$.contentDigest') = content_digest),
+      check (json_extract(json, '$.provenanceDigest') = provenance_digest),
+      check (json_extract(json, '$.stateVersion') = state_version),
+      check (json_extract(json, '$.createdAt') = created_at)
+    );
+
+    insert into agent_memory_candidates (
+      id, scope_kind, local_project_id, organization_id, team_project_id,
+      user_id, session_id, provenance_kind, runtime_id, action_id, checkpoint_version,
+      observation_sequence, result_digest, coding_run_id, statement, content_digest,
+      provenance_digest, status, state_version, json, created_at
+    )
+    select
+      id, scope_kind, local_project_id, organization_id, team_project_id,
+      user_id, session_id, 'agent_observation', runtime_id, action_id, checkpoint_version,
+      observation_sequence, result_digest, null, statement, content_digest,
+      provenance_digest, status, state_version, json, created_at
+    from agent_memory_candidates_v36;
+
+    drop table agent_memory_candidates_v36;
+
+    create index idx_agent_memory_candidates_scope
+      on agent_memory_candidates(
+        organization_id, team_project_id, user_id, session_id, local_project_id, created_at, id
+      );
+    create index idx_agent_memory_candidates_coding_run
+      on agent_memory_candidates(coding_run_id)
+      where coding_run_id is not null;
+        `)
+      } finally {
+        db.run('pragma legacy_alter_table = off')
+      }
+    },
+  },
 ]
 
 export const schemaMigrationVersions = Object.freeze(

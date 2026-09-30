@@ -20,6 +20,10 @@ function scopeLabel(scope: AgentMemoryRendererScope) {
     : `本地 ${scope.localProjectId} · 用户 ${scope.userId}`
 }
 
+function codingRunStatementLabel(kind: 'test_command' | 'change_map' | 'repair_pattern') {
+  return { test_command: '已验证的测试命令', change_map: '改动位置', repair_pattern: '修复经验' }[kind]
+}
+
 function memoryStatusLabel(status: string) {
   return {
     pending: '待确认',
@@ -307,8 +311,9 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                   <div className="compact-row">
                     <span>来源</span>
                     <strong>
-                      {candidate.provenance.runtimeId} · 检查点 v
-                      {candidate.provenance.checkpointVersion} · 序号 {candidate.provenance.sequence}
+                      {candidate.provenance.kind === 'agent_observation'
+                        ? `${candidate.provenance.runtimeId} · 检查点 v${candidate.provenance.checkpointVersion} · 序号 ${candidate.provenance.sequence}`
+                        : `开发任务 ${candidate.provenance.codingRunId} · ${codingRunStatementLabel(candidate.provenance.statementKind)}`}
                     </strong>
                   </div>
                   <p className="empty-note">{scopeLabel(candidate.scope)}</p>

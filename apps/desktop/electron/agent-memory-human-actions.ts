@@ -131,6 +131,7 @@ export function createAgentMemoryHumanActions(
           (runtime.scope.kind === 'local' && runtime.scope.userId !== run.creatorId) ||
           !pairingMatchesScope(pairing, runtime.scope) ||
           !exactScopesMatch(candidate.scope, runtime.scope) ||
+          candidate.provenance.kind !== 'agent_observation' ||
           candidate.provenance.runtimeId !== runtime.id ||
           candidate.contentDigest !== command.expectedContentDigest ||
           candidate.provenanceDigest !== command.expectedProvenanceDigest

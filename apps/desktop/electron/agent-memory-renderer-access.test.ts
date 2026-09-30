@@ -130,7 +130,9 @@ describe('Agent Memory renderer access', () => {
       projectId: 'team-project-1',
       tokenId: 'pairing-token-1',
     })
-    otherRuntimeCandidate.provenance.runtimeId = 'agent-runtime-other'
+    if (otherRuntimeCandidate.provenance.kind === 'agent_observation') {
+      otherRuntimeCandidate.provenance.runtimeId = 'agent-runtime-other'
+    }
     const selectedRevision = revisionFixture(selectedCandidate)
     const staleRevision = revisionFixture(staleCandidate)
     const selectedHead = {

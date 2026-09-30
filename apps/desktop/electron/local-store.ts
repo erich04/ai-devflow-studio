@@ -147,6 +147,9 @@ import {
   parseGateCommandReceiptRecord,
   type AgentEvent,
   type AgentMemoryCandidate,
+  type AgentMemoryCodingRunProvenance,
+  type AgentMemoryObservationProvenance,
+  agentMemoryCandidateSourceRuntimeId,
   type AgentMemoryDeletionAuthority,
   type AgentMemoryPromotionAuthority,
   type AgentMemoryRetrievalRequest,
@@ -2759,13 +2762,14 @@ function selectAgentMemoryCandidate(
 }
 
 function writeAgentMemoryCandidate(db: Database, candidate: AgentMemoryCandidate): void {
+  const observation = candidate.provenance.kind === 'agent_observation' ? candidate.provenance : null
   db.run(
     `insert into agent_memory_candidates (
        id, scope_kind, local_project_id, organization_id, team_project_id,
-       user_id, session_id, runtime_id, action_id, checkpoint_version,
-       observation_sequence, result_digest, statement, content_digest,
+       user_id, session_id, provenance_kind, runtime_id, action_id, checkpoint_version,
+       observation_sequence, result_digest, coding_run_id, statement, content_digest,
        provenance_digest, status, state_version, json, created_at
-     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       candidate.id,
       candidate.scope.kind,
@@ -2774,11 +2778,13 @@ function writeAgentMemoryCandidate(db: Database, candidate: AgentMemoryCandidate
       candidate.scope.projectId,
       candidate.scope.userId,
       candidate.scope.sessionId,
-      candidate.provenance.runtimeId,
-      candidate.provenance.actionId,
-      candidate.provenance.checkpointVersion,
-      candidate.provenance.sequence,
-      candidate.provenance.resultDigest,
+      candidate.provenance.kind,
+      observation?.runtimeId ?? null,
+      observation?.actionId ?? null,
+      observation?.checkpointVersion ?? null,
+      observation?.sequence ?? null,
+      observation?.resultDigest ?? null,
+      candidate.provenance.kind === 'coding_run' ? candidate.provenance.codingRunId : null,
       candidate.statement,
       candidate.contentDigest,
       candidate.provenanceDigest,
@@ -4531,25 +4537,14 @@ class SqlJsLocalStore implements LocalStore {
       'select json from local_projects where id = ? limit 1',
       [candidate.scope.localProjectId],
     )[0])
-    const runtime = selectAgentRuntime(this.db, candidate.provenance.runtimeId)
-    if (!localProjectExists || runtime === null) {
+    if (!localProjectExists) {
       return { committed: false, reason: 'source_not_found' }
     }
-    if (JSON.stringify(runtime.scope) !== JSON.stringify(candidate.scope)) {
-      return { committed: false, reason: 'scope_mismatch' }
-    }
-    const observation = selectAgentRuntimeEvents(this.db, runtime.id).find(
-      (event) => event.sequence === candidate.provenance.sequence,
-    )
-    if (
-      observation?.type !== 'observation_recorded' ||
-      observation.checkpointVersion !== candidate.provenance.checkpointVersion ||
-      observation.metadata.actionId !== candidate.provenance.actionId ||
-      observation.metadata.resultDigest !== candidate.provenance.resultDigest ||
-      !runtime.acceptedActionIds.includes(candidate.provenance.actionId) ||
-      Date.parse(candidate.createdAt) < Date.parse(observation.createdAt)
-    ) {
-      return { committed: false, reason: 'source_not_found' }
+    const sourceCheck = candidate.provenance.kind === 'agent_observation'
+      ? this.checkObservationMemoryCandidateSource(candidate, candidate.provenance)
+      : await this.checkCodingRunMemoryCandidateSource(candidate, candidate.provenance)
+    if (sourceCheck !== 'ok') {
+      return { committed: false, reason: sourceCheck }
     }
     if (candidate.scope.kind === 'team') {
       const pairing = await this.getDesktopPairingCredential()
@@ -4585,6 +4580,78 @@ class SqlJsLocalStore implements LocalStore {
     writeAgentMemoryCandidate(this.db, candidate)
     await this.persist()
     return { committed: true, replayed: false, candidate }
+  }
+
+  private checkObservationMemoryCandidateSource(
+    candidate: AgentMemoryCandidate,
+    provenance: AgentMemoryObservationProvenance,
+  ): 'ok' | 'source_not_found' | 'scope_mismatch' {
+    const runtime = selectAgentRuntime(this.db, provenance.runtimeId)
+    if (runtime === null) return 'source_not_found'
+    if (JSON.stringify(runtime.scope) !== JSON.stringify(candidate.scope)) return 'scope_mismatch'
+    const observation = selectAgentRuntimeEvents(this.db, runtime.id).find(
+      (event) => event.sequence === provenance.sequence,
+    )
+    if (
+      observation?.type !== 'observation_recorded' ||
+      observation.checkpointVersion !== provenance.checkpointVersion ||
+      observation.metadata.actionId !== provenance.actionId ||
+      observation.metadata.resultDigest !== provenance.resultDigest ||
+      !runtime.acceptedActionIds.includes(provenance.actionId) ||
+      Date.parse(candidate.createdAt) < Date.parse(observation.createdAt)
+    ) return 'source_not_found'
+    return 'ok'
+  }
+
+  /**
+   * ADR 0024 §4: a Coding Run candidate needs a completed real Coding Run whose own saved
+   * test passed with the project's canonical command and whose Diff exists, in the exact
+   * scope of that run's Context receipt.
+   */
+  private async checkCodingRunMemoryCandidateSource(
+    candidate: AgentMemoryCandidate,
+    provenance: AgentMemoryCodingRunProvenance,
+  ): Promise<'ok' | 'source_not_found' | 'scope_mismatch'> {
+    const [codingRuns, evidence, diffs, projects] = await Promise.all([
+      this.listCodingAgentRuns(provenance.runId),
+      this.listTestEvidence(provenance.runId),
+      this.listCodingDiffArtifacts(provenance.runId),
+      this.listProjects(),
+    ])
+    const codingRun = codingRuns.find((entry) => entry.id === provenance.codingRunId)
+    const project = projects.find((entry) => entry.id === candidate.scope.localProjectId)
+    if (
+      codingRun === undefined ||
+      project === undefined ||
+      codingRun.status !== 'completed' ||
+      codingRun.engine === 'fake' ||
+      codingRun.runId !== provenance.runId ||
+      codingRun.nodeId !== provenance.nodeId ||
+      codingRun.projectId !== project.id ||
+      codingRun.testEvidenceId !== provenance.testEvidenceId ||
+      codingRun.diffArtifactId !== provenance.diffArtifactId ||
+      codingRun.completedAt === undefined ||
+      Date.parse(candidate.createdAt) < Date.parse(codingRun.completedAt)
+    ) return 'source_not_found'
+    if (!codingRun.contextReceipt || !stableJsonMatches(codingRun.contextReceipt.scope, candidate.scope)) {
+      return 'scope_mismatch'
+    }
+    const test = evidence.find((entry) => entry.id === provenance.testEvidenceId)
+    const diff = diffs.find((entry) => entry.id === provenance.diffArtifactId)
+    if (
+      test === undefined ||
+      test.runId !== codingRun.runId ||
+      test.nodeId !== codingRun.nodeId ||
+      test.projectId !== project.id ||
+      test.status !== 'passed' ||
+      test.exitCode !== 0 ||
+      test.command !== project.testCommand.trim() ||
+      diff === undefined ||
+      diff.runId !== codingRun.runId ||
+      diff.projectId !== project.id ||
+      diff.changedPaths.length === 0
+    ) return 'source_not_found'
+    return 'ok'
   }
 
   async listAgentMemoryCandidates(localProjectId?: string): Promise<AgentMemoryCandidate[]> {
@@ -4994,6 +5061,8 @@ class SqlJsLocalStore implements LocalStore {
       return null
     }
     if (!stableJsonMatches(candidate.scope, head.scope)) return null
+    // Coding Run facts stay on this desktop (ADR 0024 §5); callers skip them before here.
+    if (candidate.provenance.kind !== 'agent_observation') return null
 
     const runtime = await this.getAgentRuntime(candidate.provenance.runtimeId)
     const run = runtime === null ? null : await this.getRun(runtime.authority.runId)
@@ -6486,7 +6555,7 @@ class SqlJsLocalStore implements LocalStore {
         head.updatedAt !== identity.updatedAt ||
         identity.memoryId !== revision.id ||
         identity.contentDigest !== revision.contentDigest ||
-        identity.sourceRuntimeId !== sourceCandidate.provenance.runtimeId ||
+        identity.sourceRuntimeId !== agentMemoryCandidateSourceRuntimeId(sourceCandidate) ||
         !sameJson(head.scope, identity.scope) ||
         !sameJson(storedRevision, revision) ||
         (revision.expiresAt !== null && Date.parse(revision.expiresAt) <= Date.parse(now))
@@ -9314,6 +9383,14 @@ class SqlJsLocalStore implements LocalStore {
       throw new Error('Canonical Agent Memory projection source is missing.')
     }
     if (head.scope.kind === 'local') return
+    // Memory learned from a Coding Run is local-only, including in Team scope (ADR 0024 §5).
+    const sourceKind = this.db.exec(
+      `select c.provenance_kind from agent_memory_revisions r
+       join agent_memory_candidates c on c.id = r.source_candidate_id
+       where r.memory_id = ? and r.revision = ? limit 1`,
+      [head.memoryId, head.currentRevision],
+    )[0]?.values[0]?.[0]
+    if (sourceKind === 'coding_run') return
     const source = await this.getAgentMemoryTeamProjectionInput(memoryId)
     if (source === null) {
       throw new Error('Canonical Agent Memory projection source is invalid.')

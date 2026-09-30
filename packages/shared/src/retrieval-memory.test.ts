@@ -7,8 +7,10 @@ import {
   resumeAgentRuntime,
 } from './agent-runtime'
 import {
+  agentMemoryCandidateSourceRuntimeId,
   createAgentMemoryCandidate,
   createAgentMemoryTombstone,
+  createCodingRunMemoryCandidate,
   evaluateAgentMemoryTaskCandidate,
   evaluateHybridRetrievalCandidate,
   evaluateLexicalRetrievalBaseline,
@@ -1141,5 +1143,44 @@ describe('V2.1 Retrieval and Memory evaluation corpus contract', () => {
         paidProviderCalls: 1,
       },
     })).toThrowError('invalid_retrieval_memory_evaluation_corpus')
+  })
+})
+
+describe('Coding Run Memory candidate contract (ADR 0024 §4)', () => {
+  const scope = {
+    kind: 'local' as const, organizationId: null, projectId: null, userId: 'u-owner',
+    sessionId: 'coding-session-1', localProjectId: 'local-project-1',
+  }
+  const provenance = {
+    kind: 'coding_run' as const, runId: 'run-1', nodeId: 'node-build', codingRunId: 'coding-run-1',
+    testEvidenceId: 'evidence-1', diffArtifactId: 'diff-1', statementKind: 'test_command' as const,
+  }
+  const input = {
+    id: 'agent-memory-candidate-coding-1',
+    statement: 'Verified test command for this project: npm test (passed after the accepted change for "Filter").',
+    scope, provenance, createdAt: '2026-09-30T00:00:00.000Z',
+  }
+
+  it('creates a digest-bound candidate with a fixed provenance order and a derived source runtime', async () => {
+    const candidate = await createCodingRunMemoryCandidate({
+      ...input, provenance: { statementKind: 'test_command', diffArtifactId: 'diff-1', testEvidenceId: 'evidence-1', codingRunId: 'coding-run-1', nodeId: 'node-build', runId: 'run-1', kind: 'coding_run' },
+    })
+    expect(Object.keys(candidate.provenance)).toEqual(Object.keys(provenance))
+    await expect(parseAgentMemoryCandidate(JSON.parse(JSON.stringify(candidate)))).resolves.toEqual(candidate)
+    expect(agentMemoryCandidateSourceRuntimeId(candidate)).toBe('agent-runtime-coding-coding-run-1')
+    // Changing any provenance field invalidates the stored digest.
+    await expect(parseAgentMemoryCandidate({ ...candidate, provenance: { ...candidate.provenance, codingRunId: 'coding-run-2' } }))
+      .rejects.toThrow('invalid_agent_memory_candidate')
+  })
+
+  it('rejects unknown statement kinds, extra provenance keys and unredacted statements', async () => {
+    await expect(createCodingRunMemoryCandidate({ ...input, provenance: { ...provenance, statementKind: 'convention' } }))
+      .rejects.toThrow('invalid_agent_memory_candidate')
+    await expect(createCodingRunMemoryCandidate({ ...input, provenance: { ...provenance, runtimeId: 'agent-runtime-1' } }))
+      .rejects.toThrow('invalid_agent_memory_candidate')
+    await expect(createCodingRunMemoryCandidate({ ...input, statement: 'OPENAI_API_KEY=sk-live-1234567890abcdef test' }))
+      .rejects.toThrow('invalid_agent_memory_candidate')
+    await expect(createCodingRunMemoryCandidate({ ...input, provenance: { ...provenance, kind: 'agent_observation' } }))
+      .rejects.toThrow('invalid_agent_memory_candidate')
   })
 })
