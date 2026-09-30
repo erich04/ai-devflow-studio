@@ -115,6 +115,29 @@ describe('remote sync outbox client factory', () => {
     expect(JSON.stringify(uploadRunSummary.mock.calls)).not.toContain(canonicalRun.request)
   })
 
+  it('attributes consumption recorded before pairing to the user of the captured credential (X1)', async () => {
+    const canonicalRun = { ...makeRun(), creatorId: 'local-user' }
+    const usage = createLocalStageAgentUsage({
+      id: 'usage-before-pairing', runId: canonicalRun.id, nodeId: canonicalRun.currentNodeId,
+      userId: 'local-user', projectId: canonicalRun.projectId,
+      providerId: 'gateway', model: 'model', timestamp: '2026-08-01T00:00:30.000Z',
+      usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0 },
+    })
+    const uploadRunSummary = vi.fn(async (_summary: unknown) => ({ accepted: true,
+      syncedAt: '2026-08-01T00:02:00.000Z', message: 'accepted' }))
+    const client = await createRemoteSyncOutboxClient({
+      source: { ...makeSource(async () => ({ credential: makeCredential(), encryptedToken: OLD_ENCRYPTED_TOKEN })),
+        listRuns: async () => [canonicalRun], listAgentTokenUsage: async () => [usage] },
+      expectedScope: OLD_SCOPE, signal: new AbortController().signal,
+      decryptToken: async () => 'fixture-token',
+      createClient: () => ({ uploadRunSummary }) as unknown as RemoteSyncClient,
+    })
+    await client.uploadCanonicalRunSummary(canonicalRun.id)
+    expect(uploadRunSummary).toHaveBeenCalledWith(expect.objectContaining({
+      stageAgentUsage: [{ ...usage, projectId: OLD_SCOPE.teamProjectId, userId: makeCredential().userId }],
+    }))
+  })
+
   it.each([
     ['missing bundle', null],
     [

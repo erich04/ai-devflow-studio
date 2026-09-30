@@ -123,3 +123,5 @@ corepack pnpm exec tsx scripts/workspace-baseline.mts --self-check
 - 新增 `apps/desktop/electron/github-delivery-local-store.test.ts` 的两条用例：同一团队项目重新配对会撤销进行中的交付；保存完全相同的凭据不会撤销。
 - 入库的 JSON 已检查，不含本机用户路径、令牌、配对码或合成 API Key；截图中的本机路径只有脚本创建的临时目录。
 - 所有运行都在隔离环境中完成，结束后临时目录已删除。
+
+后记（后续补记，正文不改）：X1 已在 S6 合入后修复。桌面端上传前把阶段用量的用户改为上传凭据的用户，服务端校验不变；同一台机器上重跑 `team-paired`，修复前以 `conflict` 终止，修复后上传完成，团队数据中可见该任务。说明见方案修订记录中的“X1 修复”。

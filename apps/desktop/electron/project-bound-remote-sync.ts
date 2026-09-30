@@ -120,14 +120,21 @@ function bindCanonicalProjectId<T extends { projectId: string }>(
   return { ...payload, projectId: scope.teamProjectId }
 }
 
+/** The scope of one canonical operation, plus the user whose credential authenticates it. */
+type FrozenCanonicalScope = ProjectBoundRemoteSyncScope & { uploaderUserId?: string }
+
 export function createProjectBoundRemoteSync(input: {
   remoteSync: RemoteSyncClient
   credentialSource: PairingCredentialSource
   expectedScope?: ProjectBoundRemoteSyncScope
+  /** User of the credential that authenticates uploads; frozen together with `expectedScope`. */
+  expectedUploaderUserId?: string
 }): ProjectBoundRemoteSync {
-  const configuredScope = input.expectedScope ? { ...input.expectedScope } : undefined
+  const configuredScope: FrozenCanonicalScope | undefined = input.expectedScope
+    ? { ...input.expectedScope, ...(input.expectedUploaderUserId ? { uploaderUserId: input.expectedUploaderUserId } : {}) }
+    : undefined
 
-  async function freezeCanonicalScope(): Promise<ProjectBoundRemoteSyncScope> {
+  async function freezeCanonicalScope(): Promise<FrozenCanonicalScope> {
     if (configuredScope) {
       return configuredScope
     }
@@ -137,6 +144,7 @@ export function createProjectBoundRemoteSync(input: {
       localProjectId,
       organizationId: credential?.organizationId ?? '',
       teamProjectId: resolveTeamProjectId({ localProjectId, credential }),
+      ...(credential?.userId ? { uploaderUserId: credential.userId } : {}),
     }
   }
 
@@ -174,7 +182,7 @@ export function createProjectBoundRemoteSync(input: {
 
   async function uploadCanonicalRun(
     runId: string,
-    scope: ProjectBoundRemoteSyncScope,
+    scope: FrozenCanonicalScope,
   ): Promise<RemoteSyncUploadResult> {
     const run = (await input.credentialSource.listRuns()).find(
       (candidate) => candidate.id === runId,
@@ -183,9 +191,14 @@ export function createProjectBoundRemoteSync(input: {
       throw new CanonicalRemoteSyncEntityError('entity_missing', 'workflow_run')
     }
 
+    // Stage consumption recorded before pairing (or while this project was not the bound one)
+    // carries the run creator, usually the 'local-user' placeholder. The desktop is single-user,
+    // so it belongs to the user whose credential uploads it; the API still accepts only that
+    // user's consumption (X1). The uploader is frozen with the scope, never re-read here.
+    const owner = scope.uploaderUserId
     const usage = (await input.credentialSource.listAgentTokenUsage?.(run.id) ?? [])
       .filter((row) => row.runId === run.id && row.projectId === run.projectId && row.executorKind)
-      .map((row) => ({ ...row, projectId: scope.teamProjectId }))
+      .map((row) => ({ ...row, projectId: scope.teamProjectId, ...(owner ? { userId: owner } : {}) }))
     const summary = bindCanonicalProjectId(
       buildCanonicalSummary('workflow_run', () => createRemoteRunSummary(run, 'run')),
       scope,
@@ -205,7 +218,7 @@ export function createProjectBoundRemoteSync(input: {
 
   async function uploadDependentSummary(
     runId: string,
-    scope: ProjectBoundRemoteSyncScope,
+    scope: FrozenCanonicalScope,
     entityKind: CanonicalRemoteSyncEntityKind,
     upload: () => Promise<RemoteSyncUploadResult>,
   ): Promise<RemoteSyncUploadResult> {
@@ -220,7 +233,7 @@ export function createProjectBoundRemoteSync(input: {
     }
   }
 
-  async function uploadCanonicalCodingAgent(codingRunId: string, scope: ProjectBoundRemoteSyncScope) {
+  async function uploadCanonicalCodingAgent(codingRunId: string, scope: FrozenCanonicalScope) {
     const codingRun = (await input.credentialSource.listCodingAgentRuns()).find(
       (candidate) => candidate.id === codingRunId,
     )

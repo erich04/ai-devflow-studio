@@ -409,6 +409,41 @@ describe('project-bound Electron remote sync', () => {
     expect(evaluate).not.toHaveBeenCalled()
   })
 
+  it('attributes Stage consumption recorded before pairing to the paired user (X1)', async () => {
+    // The API accepts Stage consumption only for the authenticated desktop user and rejects the
+    // whole run summary otherwise (team-repository uploadRunSummary). The mock mirrors that rule.
+    const upload = vi.fn(async (summary: RemoteRunSummary) => {
+      if (summary.stageAgentUsage?.some((row) => row.userId !== pairingCredential.userId)) {
+        throw new RemoteSyncHttpError({ status: 409, code: 'conflict', path: '/api/sync/run-summary', retryable: false })
+      }
+      return { accepted: true, syncedAt: runSummary.updatedAt, message: 'saved' }
+    })
+    const evaluate = vi.fn(async () => ({ status: 'allowed' as const, blocksRun: false, currentSpendUsd: 0, projectedCostUsd: 0 }))
+    // Before pairing the trusted actor is the run creator, which is a local placeholder.
+    const prePairingRun = { ...localRun, creatorId: 'local-user' }
+    const usage = createLocalStageAgentUsage({ id: 'stage-usage-before-pairing', runId: prePairingRun.id, nodeId: prePairingRun.currentNodeId,
+      projectId: prePairingRun.projectId, userId: 'local-user', providerId: 'gateway', model: 'model',
+      timestamp: runSummary.updatedAt, usage: { inputTokens: 20, outputTokens: 10, cacheReadTokens: 0 } })
+    const bound = createProjectBoundRemoteSync({
+      remoteSync: { uploadRunSummary: upload, evaluateRuntimeBudget: evaluate } as unknown as RemoteSyncClient,
+      credentialSource: {
+        getDesktopPairingCredential: async () => pairingCredential, listRuns: async () => [prePairingRun],
+        listAgentTokenUsage: async () => [usage], listAgentReviews: async () => [], listTestEvidence: async () => [],
+        listCodingAgentRuns: async () => [], listCodingDiffArtifacts: async () => [],
+      },
+    })
+
+    await expect(bound.uploadCanonicalRunSummary(prePairingRun.id)).resolves.toMatchObject({ accepted: true })
+    const { userId: _localUser, projectId: _localProject, ...unchanged } = usage
+    expect(upload.mock.calls[0]![0].stageAgentUsage).toEqual([
+      { ...unchanged, userId: pairingCredential.userId, projectId: pairingCredential.projectId },
+    ])
+    // The budget flush before every governed model call uploads the same run; it must not fail closed.
+    await expect(bound.evaluateRuntimeBudget({ projectId: prePairingRun.projectId, providerId: 'gateway',
+      projectedCostUsd: 0 })).resolves.toMatchObject({ blocksRun: false })
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(evaluate).toHaveBeenCalledTimes(1)
+  })
   it('exposes only canonical identifier uploads and project-bound commands', () => {
     const boundRemoteSync = createProjectBoundRemoteSync({
       remoteSync: {} as RemoteSyncClient,

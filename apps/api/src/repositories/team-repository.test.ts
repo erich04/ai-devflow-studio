@@ -119,6 +119,10 @@ describe('seed team repository', () => {
     expect(cost.unknownCostCount).toBe(1)
     expect(after.totalCost).toContain('1 项金额待确认')
     await expect(repository.uploadRunSummary({ ...summary, stageAgentUsage: [{ ...usage, inputTokens: 999 }] }, context)).rejects.toThrow()
+    // Only the authenticated user's consumption is accepted; the desktop attributes pre-pairing
+    // rows to the paired user before upload (X1), the API does not rewrite them.
+    await expect(repository.uploadRunSummary({ ...summary, stageAgentUsage: [{ ...usage, id: 'usage-local-user', userId: 'local-user' }] }, context))
+      .rejects.toThrow()
     expect((await repository.getTeamOverview(context)).projectCost).toEqual(after.projectCost)
   })
 

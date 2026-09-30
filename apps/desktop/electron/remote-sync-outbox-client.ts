@@ -106,6 +106,8 @@ export async function createRemoteSyncOutboxClient(
   return createProjectBoundRemoteSync({
     remoteSync,
     expectedScope,
+    // The token above belongs to this credential, so its user is the authenticated uploader.
+    expectedUploaderUserId: credential.userId,
     credentialSource: {
       getDesktopPairingCredential: async () => credential,
       listRuns: () => input.source.listRuns(),
