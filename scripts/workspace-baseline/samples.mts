@@ -1586,8 +1586,40 @@ const docTour: Sample = {
   },
 }
 
+const LONG_TITLE = 'Health API 增加数据库、缓存、消息队列与第三方支付网关的依赖探测，并在超时或部分依赖失败时返回可解释的降级状态'
+const LONG_REQUEST = `${TASK_REQUEST} `.repeat(12).trim()
+
+/**
+ * Plan 8.2 S6: with a long task title and request, the main actions and the body stay reachable
+ * and the page does not overflow sideways. Opt-in; measured at the narrowest content width.
+ */
+const longContent: Sample = {
+  ...common,
+  id: 'long-content',
+  title: '长内容：长任务名与长需求下的需求确认 Gate（8.2 节 S6）',
+  planRefs: ['8.2 S6'],
+  method: 'ui',
+  sizes: ['1024x742', '1440x742'],
+  limits: [fakeLimit, '只用于 S6 验收，不计入首屏基线。'],
+  async prepare(ctx) {
+    const project = await selectRepository(ctx)
+    await createTask(ctx, LONG_TITLE, LONG_REQUEST)
+    await generateClarification(ctx)
+    const run = await runByTitle(ctx, project.id, LONG_TITLE)
+    ctx.observe('run', await runSummary(ctx, run.id))
+    const statusRow = ctx.desktop.page.getByTestId('node-inspector').getByTestId('task-status-row')
+    const reachable: Record<string, boolean> = {}
+    for (const name of ['运行门禁审查', '确认需求 v1', '请求修订当前版本']) {
+      const button = statusRow.getByRole('button', { name, exact: true })
+      reachable[name] = (await button.count()) > 0 && (await button.isVisible())
+    }
+    ctx.observe('statusRowActionsVisible', reachable)
+    await settle(ctx)
+  },
+}
+
 /** Samples outside the default measured set; selected explicitly with `--samples`. */
-export const extraSamples: Sample[] = [docTour]
+export const extraSamples: Sample[] = [docTour, longContent]
 
 export function findSamples(ids: string[] | undefined): Sample[] {
   if (!ids || ids.length === 0) return samples
