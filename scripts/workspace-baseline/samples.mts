@@ -1541,11 +1541,60 @@ export const samples: Sample[] = [
   discussionMessages,
 ]
 
+/**
+ * README and guide screenshots (plan S6, R3). Reaches the PR step with the fake runtimes, then
+ * captures the three tabs, a browsed history step and the other primary pages. Opt-in only: it
+ * is not part of the measured baseline, so the default run and its comparisons stay at 32 samples.
+ */
+const docTour: Sample = {
+  ...common,
+  id: 'doc-tour',
+  title: '文档截图：PR 交付步骤的三个页签、浏览历史步骤，以及知识、团队、设置页面',
+  planRefs: ['S6 R3'],
+  method: 'ipc',
+  limits: [fakeLimit, ipcLimit, '只用于文档截图，不计入首屏基线。'],
+  async prepare(ctx) {
+    const state = await reachPrStage(ctx)
+    await reloadAndSelectRun(ctx, TASK_TITLE)
+    const prNode = nodeOf(state.run, 'pr', 'pr')
+    await selectNode(ctx, STAGE.pr, prNode)
+    await settle(ctx)
+    await ctx.capture('task-current-work')
+    await openInspectorTab(ctx, '材料与版本')
+    await ctx.capture('task-materials')
+    await openInspectorTab(ctx, '执行记录')
+    await ctx.capture('task-records')
+    await openInspectorTab(ctx, '当前工作')
+    await selectNode(ctx, STAGE.clarify, nodeOf(state.run, 'clarify', 'gate'))
+    await ctx.capture('task-history-clarify')
+    await selectNode(ctx, STAGE.build, nodeOf(state.run, 'build', 'task'))
+    await ctx.capture('task-history-build')
+    await clickNav(ctx, '知识')
+    await ctx.capture('knowledge')
+    await clickNav(ctx, '团队')
+    await ctx.capture('team')
+    await clickNav(ctx, '设置')
+    const sections = ctx.desktop.page.getByRole('navigation', { name: '设置分区' })
+    for (const [label, name] of [['本地项目', 'settings-project'], ['模型与执行方式', 'settings-models'], ['扩展能力', 'settings-extensions'], ['团队连接', 'settings-team']] as const) {
+      await sections.getByRole('button', { name: label, exact: true }).click()
+      await delay(600)
+      await ctx.capture(name)
+    }
+    await clickNav(ctx, TASKS_NAV)
+    await selectNode(ctx, STAGE.pr, prNode)
+    await settle(ctx)
+  },
+}
+
+/** Samples outside the default measured set; selected explicitly with `--samples`. */
+export const extraSamples: Sample[] = [docTour]
+
 export function findSamples(ids: string[] | undefined): Sample[] {
   if (!ids || ids.length === 0) return samples
-  const unknown = ids.filter((id) => !samples.some((sample) => sample.id === id))
+  const known = [...samples, ...extraSamples]
+  const unknown = ids.filter((id) => !known.some((sample) => sample.id === id))
   if (unknown.length > 0) {
-    throw new Error(`Unknown sample id(s): ${unknown.join(', ')}. Known: ${samples.map((s) => s.id).join(', ')}`)
+    throw new Error(`Unknown sample id(s): ${unknown.join(', ')}. Known: ${known.map((s) => s.id).join(', ')}`)
   }
-  return ids.map((id) => samples.find((sample) => sample.id === id)!)
+  return ids.map((id) => known.find((sample) => sample.id === id)!)
 }
