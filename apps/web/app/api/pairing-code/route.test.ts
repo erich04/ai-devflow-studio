@@ -102,7 +102,7 @@ describe('pairing-code Web proxy', () => {
 
     expect(response.status).toBe(status)
     await expect(response.json()).resolves.toEqual({
-      message: 'Pairing code request was rejected.',
+      message: '配对码请求被拒绝。',
     })
     expect(mockedCreateDesktopPairingCode).toHaveBeenCalledWith({
       projectId: 'p-remote',

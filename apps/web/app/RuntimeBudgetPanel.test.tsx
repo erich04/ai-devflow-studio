@@ -91,11 +91,13 @@ describe('RuntimeBudgetPanel', () => {
     )
     expect(screen.getByText('approval-current-1')).toHaveClass('runtime-budget-approval-id')
 
-    expect(screen.getByLabelText('Requested by')).toHaveValue('user-current')
-    expect(screen.getByLabelText('Requested by')).toHaveAttribute('readonly')
-    expect(screen.getByLabelText('Provider')).toHaveValue('provider-current')
+    expect(screen.getByLabelText('申请人')).toHaveValue('user-current')
+    expect(screen.getByLabelText('申请人')).toHaveAttribute('readonly')
+    expect(screen.getByLabelText('模型提供方')).toHaveValue('provider-current')
     expect(screen.getByRole('option', { name: /Current Team Provider/ })).toBeInTheDocument()
-    expect(screen.getByLabelText('Expires at')).toHaveAttribute(
+    expect(screen.getByText('已批准 · $0.05')).toBeInTheDocument()
+    expect(screen.getByLabelText('额外费用上限（USD）')).toHaveAttribute('name', 'maxAdditionalCostUsd')
+    expect(screen.getByLabelText('过期时间')).toHaveAttribute(
       'placeholder',
       '留空则默认 24 小时',
     )
@@ -107,18 +109,19 @@ describe('RuntimeBudgetPanel', () => {
   it('shows understandable empty values when session or Provider context is unavailable', () => {
     renderPanel({ policy: null, providers: [], sessionUser: null })
 
-    expect(screen.getByLabelText('Requested by')).toHaveValue('')
-    expect(screen.getByLabelText('Requested by')).toHaveAttribute(
+    expect(screen.getByLabelText('申请人')).toHaveValue('')
+    expect(screen.getByLabelText('申请人')).toHaveAttribute(
       'placeholder',
       '当前会话不可用',
     )
-    expect(screen.getByLabelText('Provider')).toBeDisabled()
-    expect(screen.getByRole('option', { name: '没有可用 Provider' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Create approval' })).toBeDisabled()
-    expect(screen.getByText('Budget not configured')).toBeInTheDocument()
+    expect(screen.getByLabelText('模型提供方')).toBeDisabled()
+    expect(screen.getByRole('option', { name: '没有可用的模型提供方' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '创建批准' })).toBeDisabled()
+    expect(screen.getByText('尚未配置预算规则')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('团队尚未配置预算规则；桌面端当前没有可同步的预算规则。')
   })
 
-  it('immediately refreshes the summary from the API policy and distinguishes Team save from Electron sync', async () => {
+  it('immediately refreshes the summary from the API policy and distinguishes the team save from desktop sync', async () => {
     const savedPolicy: RuntimeBudgetPolicy = {
       ...initialPolicy,
       enabled: true,
@@ -129,17 +132,20 @@ describe('RuntimeBudgetPanel', () => {
     const savePolicyAction = vi.fn(async () => ({ ok: true as const, policy: savedPolicy }))
     renderPanel({ savePolicyAction })
 
-    fireEvent.click(screen.getByLabelText('Enable runtime budget'))
-    fireEvent.change(screen.getByLabelText('Monthly limit USD'), { target: { value: '0.35' } })
-    expect(screen.getByRole('status')).toHaveTextContent('尚未保存到 Team')
+    fireEvent.click(screen.getByLabelText('启用预算'))
+    fireEvent.change(screen.getByLabelText('月上限（USD）'), { target: { value: '0.35' } })
+    expect(screen.getByRole('status')).toHaveTextContent('有尚未保存到团队的修改。')
+    expect(screen.getByRole('button', { name: '保存预算规则' })).toBeEnabled()
     fireEvent.submit(screen.getByTestId('runtime-budget-policy-form'))
 
-    expect(await screen.findByText('Budget enabled')).toBeInTheDocument()
-    expect(screen.getByText('monthly $0.40')).toBeInTheDocument()
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Team 已保存'))
-    expect(screen.getByRole('status')).toHaveTextContent('Electron 是否已同步无法从 Web 确认')
+    expect(await screen.findByText('预算已启用')).toBeInTheDocument()
+    expect(screen.getByText('月上限 $0.40')).toBeInTheDocument()
+    expect(screen.getByText('预警阈值 $0.20')).toBeInTheDocument()
+    expect(screen.getByText('已用 $0.04')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已保存到团队'))
+    expect(screen.getByRole('status')).toHaveTextContent('桌面端是否已同步无法从 Web 确认；请在桌面端执行“更新团队数据”。')
     expect(screen.getByRole('button', { name: '已保存' })).toBeDisabled()
-    expect(screen.getByLabelText('Monthly limit USD')).toHaveValue(0.4)
+    expect(screen.getByLabelText('月上限（USD）')).toHaveValue(0.4)
   })
 
   it('keeps the previous summary visible and exposes a retry state when saving fails', async () => {
@@ -149,13 +155,13 @@ describe('RuntimeBudgetPanel', () => {
     }))
     renderPanel({ savePolicyAction })
 
-    fireEvent.change(screen.getByLabelText('Warning threshold USD'), {
+    fireEvent.change(screen.getByLabelText('预警阈值（USD）'), {
       target: { value: '0.15' },
     })
     fireEvent.submit(screen.getByTestId('runtime-budget-policy-form'))
 
     expect(await screen.findByRole('alert')).toHaveTextContent('预算服务暂时不可用')
-    expect(screen.getByText('Budget disabled')).toBeInTheDocument()
+    expect(screen.getByText('预算未启用')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '保存失败，重试' })).toBeEnabled()
   })
 
@@ -166,7 +172,7 @@ describe('RuntimeBudgetPanel', () => {
     }))
     renderPanel({ savePolicyAction })
 
-    fireEvent.change(screen.getByLabelText('Monthly limit USD'), { target: { value: '0.3' } })
+    fireEvent.change(screen.getByLabelText('月上限（USD）'), { target: { value: '0.3' } })
     const form = screen.getByTestId('runtime-budget-policy-form')
     fireEvent.submit(form)
     fireEvent.submit(form)

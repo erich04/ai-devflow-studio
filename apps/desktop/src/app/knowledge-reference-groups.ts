@@ -78,6 +78,11 @@ const relationLabels: Record<KnowledgeReferenceRelation, string> = {
   violates: '与此规范冲突',
 }
 
+/** User-facing name of a reference relation; the stored value stays in the technical details. */
+export function knowledgeReferenceRelationLabel(relation: string): string {
+  return relationLabels[relation as KnowledgeReferenceRelation] ?? '关系待核实'
+}
+
 const reviewStatusLabels: Record<KnowledgeGateEvidenceStatus, string> = {
   retrieval_candidate: '检索候选，尚未经审查确认',
   reviewed_reference: '已经审查确认',

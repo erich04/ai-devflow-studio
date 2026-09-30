@@ -42,7 +42,7 @@ describe('PairingCodePanel', () => {
     vi.stubGlobal('fetch', fetcher)
     vi.stubGlobal('navigator', { clipboard: { writeText } })
     render(panel('p-one'))
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' })) })
     expect(screen.getByText(code.code)).toBeInTheDocument()
     await act(async () => { vi.advanceTimersByTime(600_001) })
     expect(screen.getByText('配对码已过期')).toBeInTheDocument()
@@ -76,7 +76,7 @@ describe('PairingCodePanel', () => {
 
     function EarlyClick() {
       useLayoutEffect(() => {
-        screen.getByRole('button', { name: 'Create desktop pairing code' }).click()
+        screen.getByRole('button', { name: '生成桌面配对码' }).click()
       }, [])
       return panel('p-one')
     }
@@ -92,13 +92,13 @@ describe('PairingCodePanel', () => {
     const { rerender } = render(panel('p-one'))
     expect(screen.getByText((_, element) =>
       element?.classList.contains('pairing-subject') === true &&
-      /Ling.*lead.*Project One.*lead/.test(element.textContent ?? ''),
+      /Ling.*Lead.*Project One.*桌面端有效权限上限为 Lead/.test(element.textContent ?? ''),
     )).toBeInTheDocument()
 
     rerender(
       <PairingCodePanel projectId="p-one" projectName="Project One" subject={null} />,
     )
-    expect(screen.getByRole('button', { name: 'Create desktop pairing code' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '生成桌面配对码' })).toBeDisabled()
     expect(fetcher).not.toHaveBeenCalled()
   })
 
@@ -115,7 +115,7 @@ describe('PairingCodePanel', () => {
       attemptsRemaining: 5,
     }), { status: 201 })))
     render(panel('p-one'))
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
     expect(await screen.findByText(/团队服务返回了无法识别的结果.*诊断编号/, { selector: 'small' })).toBeInTheDocument()
     expect(screen.queryByText('p-one.must-not-render')).not.toBeInTheDocument()
   })
@@ -136,8 +136,10 @@ describe('PairingCodePanel', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ revoked: true }), { status: 200 }))
     vi.stubGlobal('fetch', fetcher)
     render(panel('p-one'))
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
     await screen.findByText('p-one.copy-once-secret')
+    expect(screen.getByLabelText('项目 p-one 的桌面配对码')).toHaveTextContent('p-one.copy-once-secret')
+    expect(screen.getByText(/^有效期至 /)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '撤销配对码' }))
     await screen.findByText('配对码已撤销。')
     expect(screen.queryByText('p-one.copy-once-secret')).not.toBeInTheDocument()
@@ -167,13 +169,13 @@ describe('PairingCodePanel', () => {
     vi.stubGlobal('fetch', fetcher)
     const { rerender } = render(panel('p-one'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
     await waitFor(() => expect(screen.getByText('p-one.copy-once-secret')).toBeInTheDocument())
 
     rerender(<PairingCodePanel projectId={projectId} projectName={projectId} subject={subject} />)
 
     expect(screen.queryByText('p-one.copy-once-secret')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText(`Desktop pairing code for ${projectId}`)).not.toBeInTheDocument()
+    expect(screen.queryByLabelText(`项目 ${projectId} 的桌面配对码`)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '复制配对码' })).not.toBeInTheDocument()
   })
 
@@ -187,7 +189,7 @@ describe('PairingCodePanel', () => {
     vi.stubGlobal('fetch', fetcher)
     const { rerender } = render(panel('p-one'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
     expect(fetcher).toHaveBeenCalledWith('/api/pairing-code', {
       signal: expect.any(AbortSignal),
       method: 'POST',
@@ -220,7 +222,7 @@ describe('PairingCodePanel', () => {
     })
 
     expect(screen.queryByText('late.p-one-secret')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Create desktop pairing code' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '生成桌面配对码' })).toBeEnabled()
   })
 
   it('does not display a pairing code returned for a different project', async () => {
@@ -240,7 +242,7 @@ describe('PairingCodePanel', () => {
     ))
     render(panel('p-one'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
 
     await waitFor(() =>
       expect(screen.getByText(/团队服务返回了无法识别的结果.*诊断编号/, { selector: 'small' })).toBeInTheDocument(),
@@ -267,7 +269,7 @@ describe('PairingCodePanel', () => {
     render(panel('p-one'))
 
     expect(screen.queryByRole('button', { name: '复制配对码' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
     await screen.findByText('p-one.copy-once-secret')
 
     fireEvent.click(screen.getByRole('button', { name: '复制配对码' }))
@@ -297,7 +299,7 @@ describe('PairingCodePanel', () => {
     ))
     render(panel('p-one'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
     await screen.findByText('p-one.copy-once-secret')
     fireEvent.click(screen.getByRole('button', { name: '复制配对码' }))
 
@@ -328,7 +330,7 @@ describe('PairingCodePanel', () => {
     ))
     const { rerender } = render(panel('p-one'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create desktop pairing code' }))
+    fireEvent.click(screen.getByRole('button', { name: '生成桌面配对码' }))
     await screen.findByText('p-one.copy-once-secret')
     fireEvent.click(screen.getByRole('button', { name: '复制配对码' }))
     expect(screen.getByRole('button', { name: '复制中...' })).toBeDisabled()

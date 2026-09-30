@@ -124,7 +124,7 @@ describe('Work Request Web proxy', () => {
 
       expect(response.status).toBe(status)
       await expect(response.json()).resolves.toEqual({
-        message: 'Work Request was rejected.',
+        message: '团队请求被拒绝。',
       })
     },
   )

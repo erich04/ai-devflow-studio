@@ -1,0 +1,77 @@
+{
+  "run": {
+    "generatedAt": "2026-09-30T04:27:28.067Z",
+    "commit": {
+      "head": "9f3e082",
+      "productCodeDirty": false
+    },
+    "node": "v24.18.0",
+    "platform": "darwin-arm64",
+    "theme": "light",
+    "zoom": 1,
+    "sizes": "per sample",
+    "environment": {
+      "screen": {
+        "workArea": {
+          "x": 0,
+          "y": 30,
+          "width": 1920,
+          "height": 1050
+        },
+        "size": {
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 1
+      },
+      "versions": {
+        "electron": "42.11.6",
+        "chrome": "148.0.7778.280"
+      }
+    }
+  },
+  "samples": [
+    {
+      "id": "long-content",
+      "title": "长内容：长任务名与长需求下的需求确认 Gate（8.2 节 S6）",
+      "planRefs": [
+        "8.2 S6"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "只用于 S6 验收，不计入首屏基线。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/long-content-1024x742.jpg",
+        "shots/long-content-1440x742.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "run": {
+          "currentNode": "需求确认 Gate",
+          "status": "paused_at_gate",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:running",
+            "design/agent:pending",
+            "design/gate:pending",
+            "build/task:pending",
+            "test/test:pending",
+            "pr/pr:pending",
+            "accept/acceptance:pending"
+          ]
+        },
+        "statusRowActionsVisible": {
+          "运行门禁审查": true,
+          "确认需求 v1": true,
+          "请求修订当前版本": true
+        }
+      },
+      "result": "prepared"
+    }
+  ]
+}

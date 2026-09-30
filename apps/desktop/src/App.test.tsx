@@ -2083,7 +2083,7 @@ describe('App', () => {
     expect(api.listWorkRequests).toHaveBeenCalledWith({
       localProjectId: localProject.id,
     })
-    expect(screen.getByRole('region', { name: 'Work Request Inbox' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '团队请求' })).toBeInTheDocument()
   })
 
   it('materializes a Work Request through the narrow command and selects the returned local Run', async () => {
@@ -2143,7 +2143,7 @@ describe('App', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: '创建本地 Run：交付可恢复 Inbox',
+        name: '创建本地任务：交付可恢复 Inbox',
       }),
     )
 
@@ -2160,7 +2160,7 @@ describe('App', () => {
       'workRequestId',
     ])
     expect(await screen.findByText('ai/work-request-inbox')).toBeInTheDocument()
-    expect(screen.getByTestId('toast')).toHaveTextContent('Work Request 已创建本地 Run')
+    expect(screen.getByTestId('toast')).toHaveTextContent('已从团队请求创建本地任务')
   })
 
   it('treats a credential for another local project as unbound on the current project', async () => {
@@ -4927,14 +4927,14 @@ describe('App', () => {
     clickInspectorTab('材料与版本')
     const sources = within(inspector).getByTestId('knowledge-reference-sources')
     expect(sources).toHaveTextContent('docs/standards/api-design.md')
-    expect(sources).toHaveTextContent('document document-api-design-standard')
-    expect(sources).toHaveTextContent('chunk chunk-api-design-standard-contract')
+    expect(sources).toHaveTextContent('文档 document-api-design-standard')
+    expect(sources).toHaveTextContent('分块 chunk-api-design-standard-contract')
     expect(sources).toHaveTextContent('API design / Status mapping')
     expect(sources).toHaveTextContent('knowledge-hash-design-1')
     expect(sources).toHaveTextContent('关键词匹配分 7（原始累加）')
     expect(sources).toHaveTextContent('未进行语义相关性判断')
     expect(sources).toHaveTextContent('Gate 使用状态：已审查引用')
-    expect(sources).not.toHaveTextContent('Review Subject')
+    expect(sources).not.toHaveTextContent('审查时的记录时间')
     expect(sources).not.toHaveTextContent('Baseline tests passed before implementation.')
 
     clickInspectorTab('当前工作')
@@ -4946,7 +4946,7 @@ describe('App', () => {
     expect(evidence).not.toHaveTextContent('Baseline tests passed before implementation.')
     clickInspectorTab(/^材料与版本$/)
     expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('Baseline tests passed before implementation.')
-    expect(inspector).not.toHaveTextContent('Review Subject')
+    expect(inspector).not.toHaveTextContent('审查时的记录时间')
     expect(evidence).not.toHaveTextContent('docs/standards/api-design.md')
     expect(evidence).not.toHaveTextContent('关键词匹配分')
 
@@ -5773,7 +5773,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     clickInspectorTab('材料与版本')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('知识治理')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('API 健康端点规范')
 
     clickPrimaryNav('知识')
@@ -5794,7 +5794,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     clickInspectorTab('材料与版本')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('知识治理')
     expect(screen.queryByRole('button', { name: /查看引用来源/ })).not.toBeInTheDocument()
   })
 
@@ -6165,7 +6165,7 @@ describe('App', () => {
     clickInspectorTab('当前工作')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('关联审查内容')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge review completed for the selected gate.')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('仅警告')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent(agentProvider.id)
   })
 

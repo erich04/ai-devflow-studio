@@ -18,6 +18,18 @@ async function getDevFlowCookieHeader(): Promise<string | undefined> {
   return sessionCookie ? `devflow_session=${sessionCookie}` : undefined
 }
 
+/**
+ * The API client reports failures as English transport text (“DevFlow API … failed with 403”).
+ * Only its HTTP status is used here, so the page shows Chinese feedback without the endpoint.
+ */
+function saveFailureMessage(error: unknown): string {
+  const status = error instanceof Error ? /failed with (\d{3})$/u.exec(error.message)?.[1] : undefined
+  if (status === '401') return '登录已过期，请重新登录后再保存预算规则。'
+  if (status === '403') return '当前身份没有修改这个项目预算规则的权限。'
+  if (status === '400') return '预算规则未通过服务端校验，请检查金额后重试。'
+  return '预算规则保存失败，请重试。'
+}
+
 export async function saveRuntimeBudgetPolicyAction(
   formData: FormData,
 ): Promise<RuntimeBudgetPolicySaveResult> {
@@ -29,7 +41,7 @@ export async function saveRuntimeBudgetPolicyAction(
   const enabled = formData.get('enabled') === 'on'
 
   if (!projectId || !Number.isFinite(monthlyLimitUsd) || !Number.isFinite(warningThresholdUsd)) {
-    return { ok: false, error: '请填写有效的预算策略。' }
+    return { ok: false, error: '请填写有效的预算规则。' }
   }
 
   try {
@@ -45,10 +57,7 @@ export async function saveRuntimeBudgetPolicyAction(
     revalidatePath('/')
     return { ok: true, policy }
   } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : '预算策略保存失败，请重试。',
-    }
+    return { ok: false, error: saveFailureMessage(error) }
   }
 }
 

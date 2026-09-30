@@ -7,8 +7,8 @@ type WorkRequestDesktopApi = Pick<
   'listWorkRequests' | 'materializeWorkRequest'
 >
 
-const listErrorMessage = 'Work Requests 暂时不可用，请稍后重试。'
-const materializeErrorMessage = '无法创建本地 Run，请稍后重试。'
+const listErrorMessage = '团队请求暂时不可用，请稍后重试。'
+const materializeErrorMessage = '无法创建本地任务，请稍后重试。'
 
 function isExactIdentifier(value: string): boolean {
   return value.length > 0 && value.trim() === value

@@ -1,0 +1,18 @@
+{
+  "sourceCommit": "006f7b1",
+  "date": "2026-09-28",
+  "captureMethod": "Playwright page screenshots in the isolated e2e runner (in-memory API with demo data, ephemeral session key, Next.js dev server) via tests/e2e/doc-screenshots.spec.ts with DEVFLOW_CAPTURE_DOC_SCREENSHOTS=1; no compositing or editing",
+  "images": [
+    { "file": "web-todo.png", "size": "1440x900", "sha256": "cf44943f2b00917c592ebe0e6e16be7f50fc2efd0029b9c1836bacfd62e27327" },
+    { "file": "web-todo-390.png", "size": "390x1384", "sha256": "27e9d2487129a35a36b6249c6d7e5418d7fa8d386dd6001cbbb445ce1ea9dce2" },
+    { "file": "web-task-detail.png", "size": "1440x900", "sha256": "4e6bf1468535a8dde0251be8d2b82416ca150b812d74c7b8eafab51536cd1620" },
+    { "file": "web-task-detail-full.png", "size": "1440x1783", "sha256": "f3ef6116188fd6776a4b5c5118ffe7670e9ef8d55dc968d617939d4e1cb6a6cb" },
+    { "file": "web-task-detail-dark.png", "size": "1440x900", "sha256": "15868923ecfc1587fa66d5a7454f4e5999e171430cb4f8dd539a6447cbba92e4" },
+    { "file": "web-project-tasks.png", "size": "1440x900", "sha256": "57cb1cccf3b5f65e1e525d18902eea6aed3d8b727bc44c357a0070d134ed87b5" },
+    { "file": "web-team.png", "size": "1440x900", "sha256": "d5f2b8ed911404c3011bd18641ab26215faf1728c45a7de52c692e1da41df072" },
+    { "file": "web-settings-budget.png", "size": "1440x900", "sha256": "6a333efd8211c0332db5f23c37123730359e6b57e0512e6c0859cc4ec2244d47" },
+    { "file": "web-settings-policy.png", "size": "1440x900", "sha256": "2d89d50aa904398dff928c8f45e2dd33374cb08de3e9357ab59b67b83807c2f6" },
+    { "file": "web-settings-desktop.png", "size": "1440x900", "sha256": "89fa7c087adbecb595cf7254ddaf427adaf3bcff6ae56e71ef20575ff43d83d9" },
+    { "file": "web-settings-github.png", "size": "1440x900", "sha256": "83c70a1af63d7b0463eb1fa367d1adaefd3c129bfba82a482939c1b87f5e0361" }
+  ]
+}

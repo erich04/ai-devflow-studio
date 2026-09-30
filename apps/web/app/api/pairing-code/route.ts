@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   const projectId = typeof body?.projectId === 'string' ? body.projectId.trim() : ''
 
   if (!projectId) {
-    return NextResponse.json({ message: 'projectId is required' }, { status: 400, headers })
+    return NextResponse.json({ message: '缺少项目标识（projectId）。' }, { status: 400, headers })
   }
 
   try {
@@ -47,8 +47,8 @@ export async function POST(request: NextRequest) {
       {
         message:
           status === 502
-            ? 'Pairing code service is unavailable.'
-            : 'Pairing code request was rejected.',
+            ? '配对码服务暂时不可用。'
+            : '配对码请求被拒绝。',
       },
       { status, headers },
     )
@@ -64,14 +64,14 @@ export async function DELETE(request: NextRequest) {
     typeof body?.pairingCodeId === 'string' ? body.pairingCodeId.trim() : ''
   if (!projectId || !pairingCodeId) {
     return NextResponse.json(
-      { message: 'projectId and pairingCodeId are required' },
+      { message: '缺少项目标识（projectId）或配对码标识（pairingCodeId）。' },
       { status: 400, headers },
     )
   }
   try {
     const cookieHeader = await getDevFlowCookieHeader()
     if (!cookieHeader) {
-      return NextResponse.json({ message: 'Authentication required.' }, { status: 401, headers })
+      return NextResponse.json({ message: '需要先登录。' }, { status: 401, headers })
     }
     await revokeDesktopPairingCode({ projectId, pairingCodeId, cookieHeader, diagnosticId })
     return NextResponse.json({ revoked: true }, { status: 200, headers })
@@ -81,7 +81,7 @@ export async function DELETE(request: NextRequest) {
         ? error.status
         : 502
     return NextResponse.json(
-      { message: status === 502 ? 'Pairing code service is unavailable.' : 'Revoke was rejected.' },
+      { message: status === 502 ? '配对码服务暂时不可用。' : '撤销配对码的请求被拒绝。' },
       { status, headers },
     )
   }

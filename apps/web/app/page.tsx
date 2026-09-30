@@ -439,7 +439,7 @@ function ErrorShell({
           </form>
         ) : null}
         {authenticationRequired ? (
-          <a href={`${apiBaseUrl}/api/auth/github/start`}>Sign in with GitHub</a>
+          <a href={`${apiBaseUrl}/api/auth/github/start`}>使用 GitHub 登录</a>
         ) : null}
         <a href="/">重新加载工作台</a>
         <a href="/organizations">组织与成员</a>
@@ -461,7 +461,7 @@ function BrowserSessionControls({
     return (
       <a className="studio-secondary-link" href={`${apiBaseUrl}/api/auth/github/start`}>
         <Github size={16} />
-        Sign in with GitHub
+        使用 GitHub 登录
       </a>
     )
   }

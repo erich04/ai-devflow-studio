@@ -315,7 +315,7 @@ describe('GitHub Delivery Web proxy', () => {
     const payload = await response.json()
     expect(payload).toEqual({
       code: 'service_unavailable',
-      message: 'GitHub Delivery service is unavailable.',
+      message: 'GitHub 交付服务暂时不可用。',
     })
     expect(JSON.stringify(payload)).not.toContain('API_TOKEN')
   })
@@ -406,7 +406,7 @@ describe('GitHub Delivery Web proxy', () => {
     expect(response.status).toBe(503)
     await expect(response.json()).resolves.toEqual({
       code: 'provider_unavailable',
-      message: 'GitHub provider is unavailable. No operation was applied.',
+      message: 'GitHub 服务暂时不可用，没有执行任何操作。',
     })
   })
 })

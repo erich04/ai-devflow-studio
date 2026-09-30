@@ -1,0 +1,399 @@
+{
+  "run": {
+    "generatedAt": "2026-09-30T03:35:36.456Z",
+    "commit": {
+      "head": "e20bf85",
+      "productCodeDirty": false
+    },
+    "node": "v24.18.0",
+    "platform": "darwin-arm64",
+    "theme": "light",
+    "zoom": 1,
+    "sizes": [
+      "1440x900"
+    ],
+    "environment": {
+      "screen": {
+        "workArea": {
+          "x": 0,
+          "y": 30,
+          "width": 1920,
+          "height": 1050
+        },
+        "size": {
+          "width": 1920,
+          "height": 1080
+        },
+        "scaleFactor": 1
+      },
+      "versions": {
+        "electron": "42.11.6",
+        "chrome": "148.0.7778.280"
+      }
+    }
+  },
+  "samples": [
+    {
+      "id": "doc-tour",
+      "title": "文档截图：PR 交付步骤的三个页签、浏览历史步骤，以及知识、团队、设置页面",
+      "planRefs": [
+        "S6 R3"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "只用于文档截图，不计入首屏基线。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/doc-tour-1440x900.jpg"
+      ],
+      "extraScreenshots": [
+        "shots/doc-tour-task-current-work-1440x900.jpg",
+        "shots/doc-tour-task-materials-1440x900.jpg",
+        "shots/doc-tour-task-records-1440x900.jpg",
+        "shots/doc-tour-task-history-clarify-1440x900.jpg",
+        "shots/doc-tour-task-history-build-1440x900.jpg",
+        "shots/doc-tour-knowledge-1440x900.jpg",
+        "shots/doc-tour-team-1440x900.jpg",
+        "shots/doc-tour-settings-project-1440x900.jpg",
+        "shots/doc-tour-settings-models-1440x900.jpg",
+        "shots/doc-tour-settings-extensions-1440x900.jpg",
+        "shots/doc-tour-settings-team-1440x900.jpg"
+      ],
+      "observations": {
+        "testEvidenceStatus": "passed"
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "clarify-gate-warn",
+      "title": "需求确认 Gate：策略仅警告，缺少门禁审查（主基线；同时是空讨论样例）",
+      "planRefs": [
+        "2.2",
+        "D1",
+        "D3",
+        "L1-L5",
+        "5.4 空讨论",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "本地项目未连接团队，使用内置的仅警告策略。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/clarify-gate-warn-1440x900.jpg"
+      ],
+      "extraScreenshots": [
+        "shots/clarify-gate-warn-toast-1440x900.jpg"
+      ],
+      "observations": {},
+      "result": "prepared"
+    },
+    {
+      "id": "design-gate",
+      "title": "方案评审 Gate：已生成方案，缺少门禁审查",
+      "planRefs": [
+        "3.1 六阶段",
+        "V2",
+        "6.2"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "需求确认 Gate 经 IPC 运行审查并批准，方案由 Fake Provider 生成。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/design-gate-1440x900.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "run": {
+          "currentNode": "方案评审 Gate",
+          "status": "paused_at_gate",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:running",
+            "build/task:pending",
+            "test/test:pending",
+            "pr/pr:pending",
+            "accept/acceptance:pending"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "build-permission",
+      "title": "开发实现：待处理的权限请求",
+      "planRefs": [
+        "3.1 六阶段",
+        "6.1",
+        "8.1 关键操作可见"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": true,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "权限请求由 fake 编码引擎在启动时发出，会超时，所以制备后立即截图。",
+        "已连接团队并保存预算策略，这是开始编码的前提。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/build-permission-1440x900.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "codingRun": {
+          "status": "waiting_permission",
+          "hasPendingPermission": true
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "test-stage",
+      "title": "测试验证：编码完成后进入测试节点",
+      "planRefs": [
+        "3.1 六阶段"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/test-stage-1440x900.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "run": {
+          "currentNode": "Run tests",
+          "status": "testing",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:success",
+            "build/task:success",
+            "test/test:running",
+            "pr/pr:pending",
+            "accept/acceptance:pending"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "pr-ready",
+      "title": "PR 交付：已生成 PR 草稿，等待准备交付",
+      "planRefs": [
+        "3.1 六阶段",
+        "5.3"
+      ],
+      "method": "ipc",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "没有 GitHub 仓库绑定，停在“准备交付”之前。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/pr-ready-1440x900.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "testEvidenceStatus": "passed",
+        "run": {
+          "currentNode": "Prepare PR draft",
+          "status": "paused_at_gate",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:success",
+            "build/task:success",
+            "test/test:success",
+            "pr/pr:running",
+            "accept/acceptance:pending"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "acceptance",
+      "title": "业务验收：交付后进入验收节点",
+      "planRefs": [
+        "3.1 六阶段"
+      ],
+      "method": "store",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "部分步骤直接调用桌面 IPC 快进（方案 8.3 节），只用于布局对比，不作为用户路径的证据。",
+        "验收依赖已完成的 GitHub 交付，离线无法走到。先快进到 PR 草稿，再在应用关闭时直接改写本地库，把 PR 节点标为完成、验收节点标为进行中；页面上的交付证据仍缺失，只用于布局对比。"
+      ],
+      "layoutOnly": true,
+      "screenshots": [
+        "shots/acceptance-1440x900.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "testEvidenceStatus": "passed",
+        "run": {
+          "currentNode": "Acceptance signoff",
+          "status": "paused_at_gate",
+          "nodes": [
+            "clarify/agent:success",
+            "clarify/gate:success",
+            "design/agent:success",
+            "design/gate:success",
+            "build/task:success",
+            "test/test:success",
+            "pr/pr:success",
+            "accept/acceptance:running"
+          ]
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "discussion-messages",
+      "title": "讨论栏：有一轮问答",
+      "planRefs": [
+        "5.4",
+        "L3",
+        "8.1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。",
+        "对话模型是本脚本的受控服务，固定返回一段回答；没有真实模型调用。会话需要团队连接与预算，所以顶栏是已连接状态。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/discussion-messages-1440x900.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "conversation": {
+          "retries": 0,
+          "modelRequests": 1
+        }
+      },
+      "result": "prepared"
+    },
+    {
+      "id": "team-paired",
+      "title": "已连接团队：上传完成后的同步弹层",
+      "planRefs": [
+        "6.5",
+        "T4",
+        "待验证项 1"
+      ],
+      "method": "ui",
+      "simulated": true,
+      "transient": false,
+      "limits": [
+        "模型输出来自 Deterministic Fake Provider，门禁审查与编码使用确定性模拟，不代表真实模型的内容或耗时。",
+        "团队服务是本脚本启动的内存演示 Team API，配对码由脚本签发。"
+      ],
+      "layoutOnly": false,
+      "screenshots": [
+        "shots/team-paired-1440x900.jpg"
+      ],
+      "extraScreenshots": [],
+      "observations": {
+        "identity": {
+          "pairingUserId": "u-ling",
+          "stageUsageUserIds": [
+            "local-user"
+          ]
+        },
+        "pullRightAfterPairing": {
+          "toast": "团队数据已更新 · 策略 v1 · 2026-09-30T03:35:15.718Z",
+          "snapshot": {
+            "counts": {
+              "projects": 1,
+              "members": 4,
+              "runs": 1,
+              "artifacts": 6,
+              "events": 3,
+              "projectCost": 1,
+              "memberCost": 0
+            },
+            "containsLocalRun": false,
+            "localRunProjectIds": []
+          },
+          "operations": [
+            {
+              "kind": "run-summary",
+              "runId": "run-31ee0a38-f78c-4db1-8787-2cb306cb986d",
+              "status": "terminal",
+              "lastErrorCode": "conflict",
+              "recovery": "none",
+              "hasTeamTarget": true,
+              "teamProjectId": "p-payments",
+              "attemptCount": 1
+            }
+          ]
+        },
+        "pullAfterUpload": {
+          "toast": "团队数据已更新 · 策略 v1 · 2026-09-30T03:35:25.176Z",
+          "snapshot": {
+            "counts": {
+              "projects": 1,
+              "members": 4,
+              "runs": 1,
+              "artifacts": 6,
+              "events": 3,
+              "projectCost": 1,
+              "memberCost": 0
+            },
+            "containsLocalRun": false,
+            "localRunProjectIds": []
+          },
+          "operations": [
+            {
+              "kind": "run-summary",
+              "runId": "run-31ee0a38-f78c-4db1-8787-2cb306cb986d",
+              "status": "terminal",
+              "lastErrorCode": "conflict",
+              "recovery": "none",
+              "hasTeamTarget": true,
+              "teamProjectId": "p-payments",
+              "attemptCount": 1
+            }
+          ]
+        },
+        "runRowsAfterPull": 1
+      },
+      "result": "prepared"
+    }
+  ]
+}

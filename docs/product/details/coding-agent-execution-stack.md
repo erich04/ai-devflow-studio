@@ -9,9 +9,9 @@
 
 | 入口 | 选择位置 | 使用范围 |
 | --- | --- | --- |
-| 开发实现 | Agents → 项目执行工具 | OpenCode 或 DevFlow Native；在托管工作树执行代码修改 |
-| 需求澄清 / 方案设计 | 节点详情 → 澄清执行器 / 设计执行器、模型 | 各节点独立选择 Direct Provider 或 OpenCode；OpenCode 只读调查仓库 |
-| 右侧聊天 | 新对话执行方式 | 独立选择 Direct Provider 或 OpenCode，不随开发实现设置切换 |
+| 开发实现 | 设置 › 模型与执行方式 › 项目执行工具 | OpenCode 或 DevFlow Native；在托管工作树执行代码修改 |
+| 需求澄清 / 方案设计 | 任务页「当前工作」→ 澄清执行器 / 设计执行器、模型（只在实际当前步骤显示） | 各节点独立选择 Direct Provider 或 OpenCode；OpenCode 只读调查仓库 |
+| 项目讨论（任务页右侧，默认收起） | 新对话执行方式 | 独立选择 Direct Provider 或 OpenCode，不随开发实现设置切换 |
 
 模型提供方（Provider）是模型 API 的配置，可以由多个入口明确选择并共用；执行器选择和权限仍然独立。
 方案设计必须读取需求 Gate 已批准的澄清正文，生成产物后停在方案评审 Gate。

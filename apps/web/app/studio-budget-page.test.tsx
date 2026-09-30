@@ -61,8 +61,8 @@ describe('Studio budget settings', () => {
   it('opens an empty budget form for the second project without borrowing the first project policy', async () => {
     mockedFetchTeamOverview.mockResolvedValue(budgetOverview())
     render(await Page({ searchParams: Promise.resolve({ view: 'settings', projectId: 'second' }) }))
-    expect(screen.getByText('Budget not configured')).toBeInTheDocument()
-    expect(screen.getByLabelText('Monthly limit USD')).toHaveValue(null)
+    expect(screen.getByText('尚未配置预算规则')).toBeInTheDocument()
+    expect(screen.getByLabelText('月上限（USD）')).toHaveValue(null)
     expect(screen.getByTestId('runtime-budget-policy-form').querySelector('[name="projectId"]')).toHaveValue('second')
     expect(screen.getByRole('link', { name: /second Project/ })).toHaveAttribute('aria-current', 'page')
   })
@@ -70,9 +70,9 @@ describe('Studio budget settings', () => {
   it('remounts the selected budget form when moving between projects', async () => {
     mockedFetchTeamOverview.mockResolvedValue(budgetOverview())
     const { rerender } = render(await Page({ searchParams: Promise.resolve({ view: 'settings', projectId: 'first' }) }))
-    expect(screen.getByLabelText('Monthly limit USD')).toHaveValue(10)
+    expect(screen.getByLabelText('月上限（USD）')).toHaveValue(10)
     rerender(await Page({ searchParams: Promise.resolve({ view: 'settings', projectId: 'second' }) }))
-    expect(screen.getByLabelText('Monthly limit USD')).toHaveValue(null)
+    expect(screen.getByLabelText('月上限（USD）')).toHaveValue(null)
     expect(screen.getByTestId('runtime-budget-policy-form').querySelector('[name="projectId"]')).toHaveValue('second')
   })
 
@@ -80,7 +80,7 @@ describe('Studio budget settings', () => {
     mockedFetchTeamOverview.mockResolvedValue(budgetOverview())
     render(await Page({ searchParams: Promise.resolve({ view: 'settings', projectId: 'inaccessible' }) }))
     expect(screen.getByText(/所选项目不可用/)).toBeInTheDocument()
-    expect(screen.queryByLabelText('Monthly limit USD')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('月上限（USD）')).not.toBeInTheDocument()
   })
 
 })

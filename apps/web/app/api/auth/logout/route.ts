@@ -17,7 +17,7 @@ export async function POST(_request: NextRequest) {
     })
     if (!upstream.ok) {
       return NextResponse.json(
-        { message: 'Logout service is unavailable.' },
+        { message: '退出登录服务暂时不可用。' },
         { status: 502 },
       )
     }
@@ -32,7 +32,7 @@ export async function POST(_request: NextRequest) {
     return response
   } catch {
     return NextResponse.json(
-      { message: 'Logout service is unavailable.' },
+      { message: '退出登录服务暂时不可用。' },
       { status: 502 },
     )
   }
