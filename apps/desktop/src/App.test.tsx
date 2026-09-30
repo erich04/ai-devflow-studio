@@ -737,7 +737,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       new Error('Agent Coordination is not configured for this test.'),
     ),
     listAgentMemoryLifecycle: vi.fn(async ({ localProjectId }: {
-      runtimeId: string
+      runtimeId?: string
       runId: string
       localProjectId: string
     }) => ({

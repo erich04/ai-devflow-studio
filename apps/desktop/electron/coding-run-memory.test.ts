@@ -21,6 +21,8 @@ import {
 import { createLocalStore, type LocalStore } from './local-store'
 import { schemaMigrations } from './local-store-schema'
 import { learnFromCompletedCodingRun, type CodingRunMemoryLearningStore } from './coding-run-memory-learning'
+import { AgentMemoryDuplicateError, createAgentMemoryHumanActions } from './agent-memory-human-actions'
+import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access'
 
 const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -316,6 +318,89 @@ describe('learning Memory from a completed Coding Run (ADR 0024 §4–5)', () =>
     await expect(learnFromCompletedCodingRun({ store, codingRun: withoutReceipt, evaluationPassed: true, now }))
       .resolves.toMatchObject({ skipped: 'not_eligible', candidates: [] })
     await expect(store.listAgentMemoryCandidates(project.id)).resolves.toEqual([])
+    store.close()
+  })
+})
+
+describe('project-wide Memory view and human actions without an Agent Runtime (ADR 0024 §4–5)', () => {
+  it('lists learned Memory across Coding Run sessions, blocks exact duplicates and allows revise and delete', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const first = completedCodingRun()
+    await seed(store, first)
+    await learnFromCompletedCodingRun({ store, codingRun: first, evaluationPassed: true, now: () => '2026-09-30T00:05:00.000Z' })
+
+    // A second run of the same task, in its own local session, repeats the same facts.
+    const secondEvidence: TestEvidence = { ...evidence, id: 'coding-test-passed-2', createdAt: '2026-09-30T00:06:00.000Z' }
+    const secondDiff = sanitizeCodingDiffArtifact({
+      id: 'coding-diff-2', runId: run.id, nodeId: 'coding-memory-build', projectId: project.id,
+      changedPaths: ['src/filter.ts'], patch: '+export const filter = true\n', createdAt: '2026-09-30T00:06:30.000Z',
+    })
+    const second: CodingAgentRun = {
+      ...completedCodingRun({ ...localScope, sessionId: 'coding-session-second' }),
+      id: 'coding-run-memory-2', testEvidenceId: secondEvidence.id, diffArtifactId: secondDiff.id,
+      startedAt: '2026-09-30T00:05:30.000Z', completedAt: '2026-09-30T00:07:00.000Z',
+    }
+    await store.saveTestEvidence(secondEvidence)
+    await store.saveCodingDiffArtifact(secondDiff)
+    await store.saveCodingAgentRun(second)
+    const learned = await learnFromCompletedCodingRun({ store, codingRun: second, evaluationPassed: true, now: () => '2026-09-30T00:07:30.000Z' })
+    expect(learned.promoted).toEqual([])
+    expect(learned.notPromoted.map(({ reason }) => reason)).toEqual(['duplicate', 'duplicate'])
+
+    const selection = { runId: run.id, localProjectId: project.id }
+    const access = createAgentMemoryRendererAccess(store, { clock: () => new Date('2026-09-30T00:08:00.000Z') })
+    const snapshot = await access.list(selection)
+    expect(snapshot.memories).toHaveLength(2)
+    expect(snapshot.memories.every((memory) => memory.promotionPolicyId === 'desktop-coding-run-memory-policy')).toBe(true)
+    expect(snapshot.candidates).toHaveLength(4)
+    const pending = snapshot.candidates.filter((candidate) => candidate.lifecycleStatus === 'pending')
+    expect(pending.map((candidate) => candidate.duplicateOf?.kind)).toEqual(['exact', 'exact'])
+    // Runtime mode still shows only that Runtime's own candidates.
+    await expect(access.list({ ...selection, runtimeId: 'agent-runtime-missing' }))
+      .rejects.toThrow('Runtime selection is stale')
+
+    let tick = 0
+    const actions = createAgentMemoryHumanActions({
+      store, clock: () => new Date(Date.parse('2026-09-30T00:10:00.000Z') + (tick += 1) * 1_000).toISOString(),
+    })
+    const duplicate = pending[0]!
+    await expect(actions.promote({
+      ...selection, candidateId: duplicate.id,
+      expectedContentDigest: duplicate.contentDigest, expectedProvenanceDigest: duplicate.provenanceDigest,
+    })).rejects.toBeInstanceOf(AgentMemoryDuplicateError)
+
+    const [target, other] = snapshot.memories
+    const current = { memoryId: target!.memoryId, expectedRevision: target!.currentRevision, expectedHeadVersion: target!.headVersion,
+      expectedContentDigest: target!.contentDigest, expectedProvenanceDigest: target!.provenanceDigest }
+    await expect(actions.revise({ ...selection, ...current, statement: `${other!.statement!.toUpperCase()}  ` .trim() }))
+      .rejects.toBeInstanceOf(AgentMemoryDuplicateError)
+    const revised = await actions.revise({ ...selection, ...current, statement: 'Run npm test before handing work to review.' })
+    expect(revised).toMatchObject({ revision: 2, retentionClass: 'thirty_days', visibility: 'user_project' })
+
+    const afterRevision = (await access.list(selection)).memories.find((memory) => memory.memoryId === target!.memoryId)!
+    await expect(actions.delete({
+      ...selection, memoryId: afterRevision.memoryId, expectedRevision: afterRevision.currentRevision,
+      expectedHeadVersion: afterRevision.headVersion, expectedContentDigest: afterRevision.contentDigest,
+      expectedProvenanceDigest: afterRevision.provenanceDigest,
+    })).resolves.toMatchObject({ purgeStatus: 'completed' })
+    expect((await access.list(selection)).memories.find((memory) => memory.memoryId === target!.memoryId))
+      .toMatchObject({ lifecycleStatus: 'deleted', statement: null })
+    store.close()
+  })
+
+  it('does not let another user act on a local project Memory', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const codingRun = completedCodingRun()
+    await seed(store, codingRun)
+    await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now: () => '2026-09-30T00:05:00.000Z' })
+    const otherRun: WorkflowRun = {
+      ...run, id: 'coding-memory-run-other', creatorId: 'u-other', currentNodeId: 'other-test',
+      nodes: run.nodes.map((node) => ({ ...node, id: node.id.replace('coding-memory', 'other') })),
+    }
+    await store.saveRun(otherRun)
+    const snapshot = await createAgentMemoryRendererAccess(store).list({ runId: otherRun.id, localProjectId: project.id })
+    expect(snapshot.memories).toEqual([])
+    expect(snapshot.candidates).toEqual([])
     store.close()
   })
 })

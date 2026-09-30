@@ -1,13 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type {
-  AgentMemoryDeletionAuthority,
-  AgentMemoryPromotionAuthority,
-  AgentMemoryRevisionAuthority,
-  AgentMemoryTombstone,
-  AgentRuntimeScope,
-  DesktopPairingCredential,
-  DurableAgentMemoryRevision,
-  KnowledgeRetrievalScope,
+import {
+  findDuplicateMemory,
+  type AgentMemoryDeletionAuthority,
+  type AgentMemoryPromotionAuthority,
+  type AgentMemoryRevisionAuthority,
+  type AgentMemoryTombstone,
+  type DurableAgentMemoryRevision,
 } from '@ai-devflow/shared'
 import type {
   DeleteAgentMemoryInput,
@@ -15,6 +13,10 @@ import type {
   ReviseAgentMemoryInput,
 } from './ipc-contract.js'
 import type { LocalStore } from './local-store.js'
+import {
+  listActiveAgentMemoryRevisions as activeMemoriesInScope,
+  resolveAgentMemoryLifecycleAuthority,
+} from './agent-memory-authority.js'
 
 const HUMAN_PROMOTION_POLICY_ID = 'desktop-human-memory-promotion'
 const HUMAN_PROMOTION_POLICY_VERSION = 1
@@ -30,6 +32,7 @@ type AgentMemoryHumanActionStore = Pick<
   | 'getRun'
   | 'getDesktopPairingCredential'
   | 'listAgentMemoryCandidates'
+  | 'listAgentMemoryHeads'
   | 'authorizeAgentMemoryPromotion'
   | 'commitAgentMemoryPromotion'
   | 'getAgentMemoryHead'
@@ -58,36 +61,28 @@ function reject(): never {
   throw new Error('Agent Memory promotion was rejected')
 }
 
+/** The statement repeats an active Memory; revise that Memory instead (ADR 0024 §5). */
+export class AgentMemoryDuplicateError extends Error {
+  constructor(readonly memoryId: string) {
+    super(`Agent Memory repeats active Memory ${memoryId}`)
+    this.name = 'AgentMemoryDuplicateError'
+  }
+}
+
+function rejectDuplicate(memoryId: string): never {
+  throw new AgentMemoryDuplicateError(memoryId)
+}
+
+function rethrowDuplicateOrReject(error: unknown): never {
+  if (error instanceof AgentMemoryDuplicateError) throw error
+  reject()
+}
+
 function canonicalNow(clock: () => string): string {
   const value = clock()
   const timestamp = Date.parse(value)
   if (!Number.isFinite(timestamp) || new Date(timestamp).toISOString() !== value) reject()
   return value
-}
-
-function exactScopesMatch(left: KnowledgeRetrievalScope, right: AgentRuntimeScope): boolean {
-  return left.kind === right.kind &&
-    left.organizationId === right.organizationId &&
-    left.projectId === right.projectId &&
-    left.userId === right.userId &&
-    left.sessionId === right.sessionId &&
-    left.localProjectId === right.localProjectId
-}
-
-function pairingMatchesScope(
-  pairing: DesktopPairingCredential | null,
-  scope: AgentRuntimeScope,
-): boolean {
-  return scope.kind === 'local'
-    ? pairing === null || pairing.localProjectId !== scope.localProjectId
-    : Boolean(
-        pairing &&
-        pairing.organizationId === scope.organizationId &&
-        pairing.projectId === scope.projectId &&
-        pairing.userId === scope.userId &&
-        pairing.tokenId === scope.sessionId &&
-        pairing.localProjectId === scope.localProjectId,
-      )
 }
 
 function createExactId(createId: (prefix: string) => string, prefix: string): string {
@@ -114,31 +109,27 @@ export function createAgentMemoryHumanActions(
   return {
     async promote(command) {
       try {
-        const [runtime, run, pairing, candidates] = await Promise.all([
-          input.store.getAgentRuntime(command.runtimeId),
-          input.store.getRun(command.runId),
-          input.store.getDesktopPairingCredential(),
+        const [resolved, candidates] = await Promise.all([
+          resolveAgentMemoryLifecycleAuthority(input.store, command),
           input.store.listAgentMemoryCandidates(command.localProjectId),
         ])
+        if (!resolved.ok) reject()
+        const access = resolved.authority
         const candidate = candidates.find((entry) => entry.id === command.candidateId)
         if (
-          runtime === null ||
-          run === null ||
           candidate === undefined ||
-          runtime.authority.runId !== command.runId ||
-          runtime.scope.localProjectId !== command.localProjectId ||
-          run.projectId !== command.localProjectId ||
-          (runtime.scope.kind === 'local' && runtime.scope.userId !== run.creatorId) ||
-          !pairingMatchesScope(pairing, runtime.scope) ||
-          !exactScopesMatch(candidate.scope, runtime.scope) ||
-          candidate.provenance.kind !== 'agent_observation' ||
-          candidate.provenance.runtimeId !== runtime.id ||
+          !access.candidateVisible(candidate) ||
           candidate.contentDigest !== command.expectedContentDigest ||
           candidate.provenanceDigest !== command.expectedProvenanceDigest
         ) reject()
 
         const decidedAt = canonicalNow(clock)
         if (Date.parse(decidedAt) < Date.parse(candidate.createdAt)) reject()
+        // ADR 0024 §5: the same statement as an active Memory is revised there, not duplicated.
+        const duplicate = findDuplicateMemory(
+          candidate.statement, await activeMemoriesInScope(input.store, candidate.scope, decidedAt),
+          (revision) => revision.statement)
+        if (duplicate?.kind === 'exact') rejectDuplicate(duplicate.item.id)
         const memoryId = createExactId(createId, 'agent-memory')
         const decisionId = createExactId(createId, 'agent-memory-promotion')
         const unsignedAuthority: Omit<AgentMemoryPromotionAuthority, 'authorityDigest'> = {
@@ -176,39 +167,32 @@ export function createAgentMemoryHumanActions(
           JSON.stringify(committed.revision) !== JSON.stringify(authorization.revision)
         ) reject()
         return committed.revision
-      } catch {
-        reject()
+      } catch (error) {
+        rethrowDuplicateOrReject(error)
       }
     },
     async revise(command) {
       try {
-        const [runtime, run, pairing, head, revisions] = await Promise.all([
-          input.store.getAgentRuntime(command.runtimeId),
-          input.store.getRun(command.runId),
-          input.store.getDesktopPairingCredential(),
+        const [resolved, head, revisions] = await Promise.all([
+          resolveAgentMemoryLifecycleAuthority(input.store, command),
           input.store.getAgentMemoryHead(command.memoryId),
           input.store.listAgentMemoryRevisions(command.memoryId),
         ])
+        if (!resolved.ok) reject()
+        const access = resolved.authority
         const matchingRevisions = revisions.filter((entry) =>
           entry.id === command.memoryId && entry.revision === command.expectedRevision)
         const currentRevision = matchingRevisions[0]
         if (
-          runtime === null ||
-          run === null ||
           head === null ||
           matchingRevisions.length !== 1 ||
           currentRevision === undefined ||
-          runtime.authority.runId !== command.runId ||
-          runtime.scope.localProjectId !== command.localProjectId ||
-          run.projectId !== command.localProjectId ||
-          (runtime.scope.kind === 'local' && runtime.scope.userId !== run.creatorId) ||
-          !pairingMatchesScope(pairing, runtime.scope) ||
-          !exactScopesMatch(currentRevision.scope, runtime.scope) ||
+          !access.inScope(currentRevision.scope) ||
           head.memoryId !== command.memoryId ||
           head.currentRevision !== command.expectedRevision ||
           head.version !== command.expectedHeadVersion ||
           head.status !== 'active' ||
-          !exactScopesMatch(head.scope, runtime.scope) ||
+          !access.inScope(head.scope) ||
           currentRevision.status !== 'active' ||
           currentRevision.contentDigest !== command.expectedContentDigest ||
           currentRevision.provenanceDigest !== command.expectedProvenanceDigest ||
@@ -217,6 +201,11 @@ export function createAgentMemoryHumanActions(
 
         const decidedAt = canonicalNow(clock)
         if (Date.parse(decidedAt) <= Date.parse(currentRevision.createdAt)) reject()
+        // ADR 0024 §5: revising into another active Memory's statement would duplicate it.
+        const others = (await activeMemoriesInScope(input.store, currentRevision.scope, decidedAt))
+          .filter((revision) => revision.id !== currentRevision.id)
+        const duplicate = findDuplicateMemory(command.statement, others, (revision) => revision.statement)
+        if (duplicate?.kind === 'exact') rejectDuplicate(duplicate.item.id)
         const decisionId = createExactId(createId, 'agent-memory-revision')
         const unsignedAuthority: Omit<AgentMemoryRevisionAuthority, 'authorityDigest'> = {
           stateVersion: 1,
@@ -255,39 +244,32 @@ export function createAgentMemoryHumanActions(
           JSON.stringify(committed.revision) !== JSON.stringify(authorization.revision)
         ) reject()
         return committed.revision
-      } catch {
-        reject()
+      } catch (error) {
+        rethrowDuplicateOrReject(error)
       }
     },
     async delete(command) {
       try {
-        const [runtime, run, pairing, head, revisions, existingTombstone] = await Promise.all([
-          input.store.getAgentRuntime(command.runtimeId),
-          input.store.getRun(command.runId),
-          input.store.getDesktopPairingCredential(),
+        const [resolved, head, revisions, existingTombstone] = await Promise.all([
+          resolveAgentMemoryLifecycleAuthority(input.store, command),
           input.store.getAgentMemoryHead(command.memoryId),
           input.store.listAgentMemoryRevisions(command.memoryId),
           input.store.getAgentMemoryTombstone(command.memoryId),
         ])
+        if (!resolved.ok) reject()
+        const access = resolved.authority
         const matchingRevisions = revisions.filter((entry) =>
           entry.id === command.memoryId && entry.revision === command.expectedRevision)
         const currentRevision = matchingRevisions[0]
         if (
-          runtime === null ||
-          run === null ||
           head === null ||
           matchingRevisions.length !== 1 ||
           currentRevision === undefined ||
-          runtime.authority.runId !== command.runId ||
-          runtime.scope.localProjectId !== command.localProjectId ||
-          run.projectId !== command.localProjectId ||
-          (runtime.scope.kind === 'local' && runtime.scope.userId !== run.creatorId) ||
-          !pairingMatchesScope(pairing, runtime.scope) ||
-          !exactScopesMatch(currentRevision.scope, runtime.scope) ||
+          !access.inScope(currentRevision.scope) ||
           head.memoryId !== command.memoryId ||
           head.currentRevision !== command.expectedRevision ||
           head.version !== command.expectedHeadVersion ||
-          !exactScopesMatch(head.scope, runtime.scope) ||
+          !access.inScope(head.scope) ||
           currentRevision.status !== 'active' ||
           currentRevision.contentDigest !== command.expectedContentDigest ||
           currentRevision.provenanceDigest !== command.expectedProvenanceDigest
@@ -336,7 +318,7 @@ export function createAgentMemoryHumanActions(
             existingTombstone.deletionVersion !== head.version ||
             existingTombstone.purgeStatus !== 'pending' ||
             existingTombstone.purgedAt !== null ||
-            !exactScopesMatch(existingTombstone.scope, runtime.scope)
+            !access.inScope(existingTombstone.scope)
           ) reject()
           tombstone = existingTombstone
         }
@@ -356,8 +338,8 @@ export function createAgentMemoryHumanActions(
           JSON.stringify(purged.tombstone) !== JSON.stringify(expectedTombstone)
         ) reject()
         return purged.tombstone
-      } catch {
-        reject()
+      } catch (error) {
+        rethrowDuplicateOrReject(error)
       }
     },
   }

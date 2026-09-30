@@ -335,7 +335,7 @@ describe('IPC contract parsers', () => {
     })).toThrow(/confirmation/)
   })
 
-  it('keeps Agent Memory lifecycle reads bound to one exact Runtime selection', () => {
+  it('keeps Agent Memory lifecycle reads bound to one exact Runtime or project selection', () => {
     expect(parseListAgentMemoryLifecycleInput({
       runtimeId: 'agent-runtime-1',
       runId: 'run-1',
@@ -345,13 +345,17 @@ describe('IPC contract parsers', () => {
       runId: 'run-1',
       localProjectId: 'project-1',
     })
+    // Without runtimeId Main resolves the project-wide view from the Run and pairing (ADR 0024).
+    expect(parseListAgentMemoryLifecycleInput({ runId: 'run-1', localProjectId: 'project-1' }))
+      .toEqual({ runId: 'run-1', localProjectId: 'project-1' })
 
     for (const payload of [
       undefined,
       {},
       { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: '' },
       { runtimeId: 'agent-runtime-1', localProjectId: 'project-1' },
-      { runId: 'run-1', localProjectId: 'project-1' },
+      { runtimeId: '', runId: 'run-1', localProjectId: 'project-1' },
+      { runId: 'run-1', localProjectId: 'project-1', userId: 'spoofed-user' },
       { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', memoryId: 'memory-1' },
       { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', candidateId: 'candidate-1' },
       { runtimeId: 'agent-runtime-1', runId: 'run-1', localProjectId: 'project-1', sessionId: 'pairing-token' },

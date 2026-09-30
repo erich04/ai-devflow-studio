@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import {
-  agentMemoryScopesMatch,
   createCodingRunMemoryCandidate,
   deriveCodingRunMemoryStatements,
   findDuplicateMemory,
@@ -9,10 +8,9 @@ import {
   type AgentMemoryPromotionAuthority,
   type CodingAgentRun,
   type CodingRunMemoryFacts,
-  type DurableAgentMemoryRevision,
-  type KnowledgeRetrievalScope,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
+import { listActiveAgentMemoryRevisions } from './agent-memory-authority.js'
 
 /**
  * ADR 0024 §4–5: after a Coding Run completes with passing evidence, turn its observable
@@ -61,28 +59,6 @@ function digest(value: string): string {
 /** Stored test output replaces the worktree root with `<workspace>`; restore relative paths. */
 function workspaceRelative(output: string): string {
   return output.replace(/<workspace>[\\/]/gu, '')
-}
-
-async function activeMemoriesInScope(
-  store: CodingRunMemoryLearningStore,
-  scope: KnowledgeRetrievalScope,
-  now: string,
-): Promise<DurableAgentMemoryRevision[]> {
-  const heads = (await store.listAgentMemoryHeads(scope.localProjectId))
-    .filter((head) => head.status === 'active' && agentMemoryScopesMatch(head.scope, scope, 'user_project'))
-  const active: DurableAgentMemoryRevision[] = []
-  for (const head of heads) {
-    const [revisions, tombstone] = await Promise.all([
-      store.listAgentMemoryRevisions(head.memoryId),
-      store.getAgentMemoryTombstone(head.memoryId),
-    ])
-    const current = revisions.find((revision) => revision.revision === head.currentRevision)
-    if (
-      current?.status === 'active' && tombstone === null &&
-      (current.expiresAt === null || Date.parse(current.expiresAt) > Date.parse(now))
-    ) active.push(current)
-  }
-  return active
 }
 
 export async function learnFromCompletedCodingRun(input: {
@@ -142,7 +118,7 @@ export async function learnFromCompletedCodingRun(input: {
   const statements = deriveCodingRunMemoryStatements(facts)
   if (statements.length === 0) return { ...result, skipped: 'no_statements' }
 
-  const active = await activeMemoriesInScope(store, receipt.scope, clock())
+  const active = await listActiveAgentMemoryRevisions(store, receipt.scope, clock())
   for (const entry of statements) {
     const candidateId = `agent-memory-candidate-coding-${digest(`${codingRun.id}:${entry.kind}`).slice(0, 32)}`
     const candidate = await createCodingRunMemoryCandidate({

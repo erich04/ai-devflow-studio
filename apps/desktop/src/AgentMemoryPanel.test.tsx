@@ -208,7 +208,6 @@ describe('AgentMemoryPanel', () => {
     expect(screen.getByText(snapshot.candidates[0]!.statement)).toBeInTheDocument()
     expect(screen.getByText(snapshot.memories[0]!.statement!)).toBeInTheDocument()
     expect(listAgentMemoryLifecycle).toHaveBeenCalledWith({
-      runtimeId: runtime.id,
       runId: runtime.authority.runId,
       localProjectId: runtime.scope.localProjectId,
     })
@@ -238,12 +237,29 @@ describe('AgentMemoryPanel', () => {
     expect(screen.queryByText(snapshot.candidates[0]!.statement)).not.toBeInTheDocument()
   })
 
-  it('does not enumerate Memory without an exact Runtime in the selected Run', async () => {
-    const listAgentMemoryLifecycle = vi.fn()
-    const api = {
-      listAgentRuntimes: vi.fn().mockResolvedValue([]),
-      listAgentMemoryLifecycle,
-    } as unknown as DevFlowDesktopApi
+  it('reads the project-wide view without an Agent Runtime and marks Coding Run duplicates (ADR 0024)', async () => {
+    const policyMemory = {
+      ...snapshot.memories[0]!, memoryId: 'agent-memory-coding-1', lifecycleStatus: 'active' as const,
+      revisionStatus: 'active' as const, statement: 'Verified test command for this project: npm test.',
+      promotionPolicyId: 'desktop-coding-run-memory-policy', retentionClass: 'thirty_days' as const,
+      expiresAt: '2026-09-13T10:00:00.000Z', tombstone: null,
+    }
+    const codingSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot, candidateCount: 1, memoryCount: 1,
+      memories: [policyMemory],
+      candidates: [{
+        ...snapshot.candidates[0]!, id: 'candidate-coding-duplicate',
+        statement: 'Verified test command for this project: npm test.',
+        provenance: {
+          kind: 'coding_run', runId: 'run-selected', nodeId: 'node-build', codingRunId: 'coding-run-2',
+          testEvidenceId: 'evidence-2', diffArtifactId: 'diff-2', statementKind: 'test_command',
+        },
+        duplicateOf: { memoryId: 'agent-memory-coding-1', kind: 'exact', similarity: 1 },
+      }],
+    }
+    const listAgentMemoryLifecycle = vi.fn().mockResolvedValue(codingSnapshot)
+    const listAgentRuntimes = vi.fn()
+    const api = { listAgentRuntimes, listAgentMemoryLifecycle } as unknown as DevFlowDesktopApi
 
     render(<AgentMemoryPanel
       desktopApi={api}
@@ -251,9 +267,36 @@ describe('AgentMemoryPanel', () => {
       localProjectId="local-project-1"
     />)
 
-    expect(await screen.findByText('当前 Run 尚无可用于 Memory 作用域的精确独立 Runtime。'))
-      .toBeInTheDocument()
-    expect(listAgentMemoryLifecycle).not.toHaveBeenCalled()
+    expect(await screen.findByText('开发任务 coding-run-2 · 已验证的测试命令')).toBeInTheDocument()
+    expect(listAgentMemoryLifecycle).toHaveBeenCalledWith({ runId: 'run-selected', localProjectId: 'local-project-1' })
+    expect(listAgentRuntimes).not.toHaveBeenCalled()
+    expect(screen.getByText('与已有记忆相同')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '提升为用户项目私有 Memory' })).toBeDisabled()
+    expect(screen.getByText('开发任务测试通过后由策略自动保存，仅本人可见，可随时删除')).toBeInTheDocument()
+  })
+
+  it('blocks a revision that would repeat another active Memory', async () => {
+    const [first] = snapshot.memories
+    const twoActive: AgentMemoryRendererSnapshot = {
+      ...snapshot, memoryCount: 2,
+      memories: [
+        { ...first!, memoryId: 'agent-memory-a', lifecycleStatus: 'active', revisionStatus: 'active', statement: 'Keep the export name.', tombstone: null },
+        { ...first!, memoryId: 'agent-memory-b', lifecycleStatus: 'active', revisionStatus: 'active', statement: 'Run npm test before review.', tombstone: null },
+      ],
+    }
+    const reviseAgentMemory = vi.fn()
+    const api = {
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(twoActive),
+      reviseAgentMemory,
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+
+    fireEvent.click((await screen.findAllByRole('button', { name: '修订此 Memory' }))[0]!)
+    fireEvent.change(screen.getByLabelText('修订 Memory 内容 agent-memory-a'), { target: { value: 'run npm test before review' } })
+    expect(screen.getByRole('status')).toHaveTextContent('与持久记忆 agent-memory-b 相同')
+    expect(screen.getByRole('button', { name: '保存精确修订' })).toBeDisabled()
+    expect(reviseAgentMemory).not.toHaveBeenCalled()
   })
 
   it('promotes only a pending Candidate with exact renderer-observed digests', async () => {
@@ -282,7 +325,6 @@ describe('AgentMemoryPanel', () => {
     fireEvent.click(button)
 
     await waitFor(() => expect(promoteAgentMemoryCandidate).toHaveBeenCalledWith({
-      runtimeId: runtime.id,
       runId: runtime.authority.runId,
       localProjectId: runtime.scope.localProjectId,
       candidateId: snapshot.candidates[0]!.id,
@@ -341,7 +383,6 @@ describe('AgentMemoryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存精确修订' }))
 
     await waitFor(() => expect(reviseAgentMemory).toHaveBeenCalledWith({
-      runtimeId: runtime.id,
       runId: runtime.authority.runId,
       localProjectId: runtime.scope.localProjectId,
       memoryId: activeMemory.memoryId,
@@ -405,7 +446,6 @@ describe('AgentMemoryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认删除此 Memory' }))
 
     await waitFor(() => expect(deleteAgentMemory).toHaveBeenCalledWith({
-      runtimeId: runtime.id,
       runId: runtime.authority.runId,
       localProjectId: runtime.scope.localProjectId,
       memoryId: activeMemory.memoryId,
@@ -472,7 +512,6 @@ describe('AgentMemoryPanel', () => {
     fireEvent.click(await screen.findByRole('button', { name: '完成精确清除' }))
 
     await waitFor(() => expect(deleteAgentMemory).toHaveBeenCalledWith({
-      runtimeId: runtime.id,
       runId: runtime.authority.runId,
       localProjectId: runtime.scope.localProjectId,
       memoryId: pendingMemory.memoryId,
