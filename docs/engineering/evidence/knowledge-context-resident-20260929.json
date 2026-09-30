@@ -15,7 +15,7 @@
   "gateExactScenarios": 24,
   "gateCountByStage": {
     "clarify": 0,
-    "design": 1,
+    "design": 0,
     "build": 0,
     "test": 1,
     "pr": 1,
@@ -23,7 +23,7 @@
   },
   "maxContextBytesByStage": {
     "clarify": 915,
-    "design": 1108,
+    "design": 1092,
     "build": 921,
     "test": 9666,
     "pr": 832,
@@ -52,8 +52,8 @@
       "availableHit": 0,
       "availableTotal": 0,
       "fullDocuments": 4,
-      "contextBytes": 1108,
-      "gateCount": 1,
+      "contextBytes": 1092,
+      "gateCount": 0,
       "gateExact": true,
       "missing": []
     },
@@ -130,8 +130,8 @@
       "availableHit": 0,
       "availableTotal": 0,
       "fullDocuments": 4,
-      "contextBytes": 1108,
-      "gateCount": 1,
+      "contextBytes": 1092,
+      "gateCount": 0,
       "gateExact": true,
       "missing": []
     },
@@ -143,8 +143,8 @@
       "availableHit": 0,
       "availableTotal": 0,
       "fullDocuments": 4,
-      "contextBytes": 1108,
-      "gateCount": 1,
+      "contextBytes": 1092,
+      "gateCount": 0,
       "gateExact": true,
       "missing": []
     },
@@ -247,8 +247,8 @@
       "availableHit": 0,
       "availableTotal": 0,
       "fullDocuments": 4,
-      "contextBytes": 1108,
-      "gateCount": 1,
+      "contextBytes": 1092,
+      "gateCount": 0,
       "gateExact": true,
       "missing": []
     },
@@ -286,8 +286,8 @@
       "availableHit": 1,
       "availableTotal": 1,
       "fullDocuments": 4,
-      "contextBytes": 1108,
-      "gateCount": 1,
+      "contextBytes": 1092,
+      "gateCount": 0,
       "gateExact": true,
       "missing": []
     },
@@ -338,8 +338,8 @@
       "availableHit": 1,
       "availableTotal": 1,
       "fullDocuments": 4,
-      "contextBytes": 1108,
-      "gateCount": 1,
+      "contextBytes": 1092,
+      "gateCount": 0,
       "gateExact": true,
       "missing": []
     }

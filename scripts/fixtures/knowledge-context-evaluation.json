@@ -23,9 +23,7 @@
         "docs/knowledge/standards/testing-evidence.md"
       ],
       "available": [],
-      "gate": [
-        "docs/knowledge/standards/testing-evidence.md"
-      ]
+      "gate": []
     },
     {
       "id": "health-build",
@@ -94,9 +92,7 @@
         "docs/knowledge/adr/gate-governance.md"
       ],
       "available": [],
-      "gate": [
-        "docs/knowledge/standards/testing-evidence.md"
-      ]
+      "gate": []
     },
     {
       "id": "mcp-tool-design",
@@ -106,9 +102,7 @@
         "docs/knowledge/rules/mcp-skill-usage.md"
       ],
       "available": [],
-      "gate": [
-        "docs/knowledge/standards/testing-evidence.md"
-      ]
+      "gate": []
     },
     {
       "id": "mcp-tool-build",
@@ -204,9 +198,7 @@
         "docs/knowledge/standards/testing-evidence.md"
       ],
       "available": [],
-      "gate": [
-        "docs/knowledge/standards/testing-evidence.md"
-      ]
+      "gate": []
     },
     {
       "id": "draft-pr-commit-pr",
@@ -240,9 +232,7 @@
       "available": [
         "docs/knowledge/prompts/opendesign-design-prompts.md"
       ],
-      "gate": [
-        "docs/knowledge/standards/testing-evidence.md"
-      ]
+      "gate": []
     },
     {
       "id": "v09-demo-clarify",
@@ -285,9 +275,7 @@
       "available": [
         "docs/knowledge/checklists/pr-review.md"
       ],
-      "gate": [
-        "docs/knowledge/standards/testing-evidence.md"
-      ]
+      "gate": []
     }
   ]
 }

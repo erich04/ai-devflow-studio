@@ -383,7 +383,7 @@ summary: 健康端点必须提供 ok、degraded、down 三种状态，并明确�
 title: 本地测试证据规范
 category: testing_standard
 stages: [clarify, design, build, test]
-gate: [design, test]
+gate: [test]
 ownerId: u-yu
 tags: test, evidence, smoke
 summary: 本地测试证据必须包含命令、退出码、耗时和脱敏输出。

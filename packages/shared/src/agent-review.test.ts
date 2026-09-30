@@ -411,15 +411,41 @@ describe('buildAgentReviewContext', () => {
         strategy: 'stage',
         gateEvidence: { status: 'retrieval_candidate' },
       }),
+    ]))
+    // The testing standard is design background (`stages`), but only the test
+    // stage reviews against it (`gate: [test]`), so the design Gate has no criteria.
+    expect(context.knowledgeReferences.some((reference) => reference.relation === 'requires_evidence')).toBe(false)
+    expect(context.knowledgeChunks.map((chunk) => chunk.documentId)).toContain('knowledge-doc-testing-evidence')
+    expect(context.knowledgeReferences.every((reference) => reference.semanticRelevance === undefined)).toBe(true)
+    expect(context.fieldProjection).toEqual(context.manifest.fieldProjection)
+  })
+
+  it('puts the Gate criteria of the reviewed stage first in REVIEW_CRITERIA', async () => {
+    const testGate = {
+      ...node,
+      id: 'n-test-gate',
+      stage: 'test' as const,
+      kind: 'gate' as const,
+      title: '测试 Gate',
+      artifactIds: ['art-test'],
+    }
+    const context = await buildAgentReviewContext({
+      run,
+      node: testGate,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+    })
+
+    expect(context.knowledgeReferences).toEqual(expect.arrayContaining([
       expect.objectContaining({
         relation: 'requires_evidence',
+        nodeId: testGate.id,
         documentId: 'knowledge-doc-testing-evidence',
       }),
     ]))
-    expect(context.knowledgeReferences.every((reference) => reference.semanticRelevance === undefined)).toBe(true)
-    // Gate criteria come first in REVIEW_CRITERIA.
     expect(context.knowledgeChunks[0]?.documentId).toBe('knowledge-doc-testing-evidence')
-    expect(context.fieldProjection).toEqual(context.manifest.fieldProjection)
   })
 
   it('adds the repository instruction file to the review criteria when provided', async () => {
@@ -984,8 +1010,9 @@ describe('runKnowledgeReviewAgent', () => {
     expect(result.review).toMatchObject({
       conclusion: expect.stringContaining('Gate Review'),
       confidence: expect.any(Number),
+      // The design Gate has no Gate criteria and no risk signal in these fixtures.
       gateAdvisory: {
-        level: 'warn',
+        level: 'info',
         blocksApproval: false,
       },
     })

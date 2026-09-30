@@ -212,11 +212,14 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
   - 知识审查：REVIEW_CRITERIA 改为整篇文档、Gate 依据在前（片段上限由 8 提到 32，字符总预算 24,000 不变），并加入项目说明。
   - 编码简报：知识引用限定为适用 build 阶段的文档（只改一行，完整改造留在 K3）。
   - 本仓库 10 份知识文档补了 `stages`/`gate`，`packages/shared/src/fixtures.ts` 同步。
-- **结果**（`docs/engineering/evidence/knowledge-context-resident-20260929.json`）：索引 10 份文档、30 个片段；required 与 available 召回率均为 100%；24/24 场景的 Gate 检查恰好正确；各阶段治理检查数 0 / 1 / 0 / 1 / 1 / 1；单阶段知识上下文最大 11,043 字节（accept），低于 24 KiB 预算。`scripts/knowledge-context-evaluation.test.ts` 把这些条件固定进 `corepack pnpm test`。
+- **结果**（`docs/engineering/evidence/knowledge-context-resident-20260929.json`）：索引 10 份文档、30 个片段；required 与 available 召回率均为 100%；24/24 场景的 Gate 检查恰好正确；各阶段治理检查数 0 / 0 / 0 / 1 / 1 / 1（K1 入库时方案评审为 1，2026-09-30 按差异 2 改为 0）；单阶段知识上下文最大 11,043 字节（accept），低于 24 KiB 预算。`scripts/knowledge-context-evaluation.test.ts` 把这些条件固定进 `corepack pnpm test`。
 - **与方案的差异**：
-  1. `gate` 除 `true`/`false` 外也接受阶段列表。原因：测试证据规范要在设计阶段注入，但只在方案评审与测试阶段作为 Gate 依据。
-  2. 本仓库测试证据规范设为 `gate: [design, test]`，保留改动前"严格策略下方案评审 Gate 缺测试证据即阻断"的表现。这条表现本身值得商榷：方案评审时还不可能有测试证据。是否改为只在测试阶段检查，需要另行决定。
-  3. 桌面端的本地项目没有 `knowledgeBasePath` 字段（该字段只属于团队项目，且默认值是 `docs/<slug>/`），所以本批统一使用 `docs/knowledge`；按项目配置知识目录需要本地项目设置，另行处理。
+  1. `gate` 除 `true`/`false` 外也接受阶段列表。原因：测试证据规范要在设计阶段注入，但只在测试阶段作为 Gate 依据。
+  2. 本仓库测试证据规范的 `gate` 为 `[test]`。K1 入库时设为 `[design, test]`，以保留改动前"严格策略下方案评审 Gate 缺测试证据即阻断"的表现；2026-09-30 用户决定改为只在测试阶段检查，因为方案评审时还不可能有测试证据。影响：
+     - 严格策略下，方案评审 Gate 不再因缺测试证据而阻断；缺少门禁审查时仍然阻断。
+     - 方案评审的 REVIEW_CRITERIA 里，这份规范仍整篇注入，但不再排在最前，也不带 `[Gate criteria]` 标记。
+     - 确定性假提供方对方案评审 Gate 不再给出"Gate requires reviewer evidence"风险，本仓库样例的审查级别由"警告"变为"信息"。
+  3. 桌面端的本地项目没有 `knowledgeBasePath` 字段（该字段只属于团队项目，且默认值是 `docs/<slug>/`），所以本批统一使用 `docs/knowledge`。2026-09-30 用户决定暂时保持固定；按项目配置知识目录需要本地项目设置，另行处理。
   4. 没有声明 `gate` 的项目不再产生知识治理检查（第 0 节决定 2 的直接后果）。
 
 ### 11.3 K2 结果（部分完成）
@@ -250,12 +253,12 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 
 **当前状态**：分支 `feat/knowledge-context` 基于旧 main `f0fad85`，43 个文件改动未提交。`verify` 与 `test:electron-smoke` 已通过。ADR 已从 0024 改为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024；改号后已重跑类型检查与相关测试。main 已合入 S6（#190）。
 
-**待用户决定**（括号内为推荐）：
+**用户决定**（erich04，2026-09-30）：
 
-1. 测试证据规范的 `gate` 是否改为只在测试阶段：`gate: [test]`（推荐改；方案评审 Gate 不可能有测试证据）。改后要同步 `packages/shared/src/fixtures.ts` 和 `scripts/fixtures/knowledge-context-evaluation.json` 中 design 场景的 `gate`。
-2. 提交方式（推荐：rebase 到最新 main，解决 `DesktopViews.tsx` 可能的冲突，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入）。
-3. 真实模型验证：由用户在 `corepack pnpm dev:electron` 中手动跑澄清到设计，或授权指定已保存提供方与预算上限后由 Agent 在隔离数据中运行。结果记入第 11 节。
-4. 下一批（推荐：K4 知识页 → 知识审查 local-agent → K3，K3 等 P0 合入）。
-5. 本地项目知识目录（推荐：暂时固定 `docs/knowledge`）。
+1. 测试证据规范改为 `gate: [test]`：**已改**，见 11.2 差异 2。`packages/shared/src/fixtures.ts` 与评估集中 6 个 design 场景的 `gate` 已同步。
+2. 提交方式：rebase 到最新 main，解决 `DesktopViews.tsx` 可能的冲突，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。**进行中。**
+3. 真实模型验证：**待定**。可选做法有两种：由用户在 `corepack pnpm dev:electron` 中手动跑澄清到设计；或由用户指定已保存的提供方和预算上限，授权 Agent 在隔离数据中运行。结果记入第 11 节。
+4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行，K3 等 P0 合入。PR 开出并向用户汇报后开始 K4。
+5. 本地项目知识目录暂时固定为 `docs/knowledge`，见 11.2 差异 3。
 
 **注意**：只在本 worktree 中修改；不改 `../ai-devflow-studio`（主工作区）和 `../ai-devflow-prompt-cache`。跑开发服务或 Electron 前先检查 4310、4311、5173 端口是否被其他对话占用。
