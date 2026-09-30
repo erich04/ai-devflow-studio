@@ -174,6 +174,32 @@ function safeText(value: string): string {
   return redactLocalAbsolutePaths(redactSensitiveText(value).value).value
 }
 
+const PRIVATE_KEY_BLOCK = /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/g
+const UNPAIRED_PRIVATE_KEY_MARKER = /-----(?:BEGIN|END) (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/
+
+function countNewlines(value: string): number {
+  let count = 0
+  for (let index = value.indexOf('\n'); index >= 0; index = value.indexOf('\n', index + 1)) count += 1
+  return count
+}
+
+/**
+ * Redacts a whole file before any excerpt is cut from it, so multi-line secrets cannot be
+ * split by a window edge. Private key blocks keep their line count, so line numbers from
+ * test output still address the redacted text; `lineAligned` is false only when another
+ * rule changed the number of lines. A key marker left without its pair is dropped too.
+ */
+export function redactFileForExcerpts(content: string): { content: string; lineAligned: boolean } {
+  // Every line of the block becomes a marker, so any window through it shows the redaction.
+  const masked = content.replace(PRIVATE_KEY_BLOCK, (block) =>
+    block.replace(/[^\r\n]+/gu, '[REDACTED:private_key]'))
+  const redacted = safeText(masked)
+    .split('\n')
+    .map((line) => UNPAIRED_PRIVATE_KEY_MARKER.test(line) ? '[REDACTED:private_key]' : line)
+    .join('\n')
+  return { content: redacted, lineAligned: countNewlines(redacted) === countNewlines(content) }
+}
+
 function permissionExpiry(requestedAt: string, deadline: string): string {
   const timestamp = Math.min(Date.parse(requestedAt) + PERMISSION_WINDOW_MS, Date.parse(deadline))
   if (timestamp <= Date.parse(requestedAt)) {
@@ -475,7 +501,7 @@ function modelValidationCause(error: unknown): string {
 export const NATIVE_CODING_V2_SYSTEM_PROMPT = [
   [
     'You are the DevFlow Native v2 bounded coding executor. Return one JSON object only, without Markdown or prose.',
-    'The user message is one JSON object. Its phase field selects exactly one contract below; follow only that contract and the limits field.',
+    'The user message is one JSON object. Follow every block below that names its phase field, and the limits field; ignore blocks for other phases.',
   ],
   [
     'Phase "analysis" selects repository evidence.',
@@ -564,7 +590,8 @@ async function collectExcerpts(input: {
     } catch {
       return false
     }
-    const excerpt = safeText(excerptAround(content, query))
+    // Redact the whole file first so a window edge cannot split a secret (ADR 0024 §6).
+    const excerpt = excerptAround(redactFileForExcerpts(content).content, query)
     if (!excerpt) return false
     const remaining = MAX_EXCERPT_TOTAL_BYTES - totalBytes
     if (remaining <= 0) return false
@@ -708,15 +735,20 @@ export async function buildNativeCodingV2RepairPrompt(input: NativeCodingV2Repai
   const failureLocations = parseTestFailureLocations(`${input.testFailure.stdout}\n${input.testFailure.stderr}`, {
     workspaceRoots: [input.worktreePath],
   }).filter((location) => safeText(location.path) === location.path)
+  // Redact whole files before windowing: a window edge must never split a secret out of
+  // reach of the redaction rules (ADR 0024 §6).
   const editableFiles = await Promise.all(allowedPaths.map(async (filePath) => ({
     path: filePath,
-    content: await input.readFile(filePath),
+    ...redactFileForExcerpts(await input.readFile(filePath)),
     focusLine: failureLocations.find((location) => location.path === filePath)?.line ?? 1,
   })))
   // Windows stay centred on the failing line when they shrink, unlike tail truncation.
   const editableExcerpts = (windowChars: number): Excerpt[] => editableFiles.map((file) => {
     const window = excerptAroundLine(file.content, file.focusLine, windowChars)
-    return { path: file.path, content: safeText(window.content), reason: 'selected' as const, ...(window.startLine > 1 ? { startLine: window.startLine } : {}) }
+    return {
+      path: file.path, content: window.content, reason: 'selected' as const,
+      ...(file.lineAligned && window.startLine > 1 ? { startLine: window.startLine } : {}),
+    }
   })
   const readOnlyExcerpts: Array<{ path: string; startLine: number; content: string }> = []
   for (const location of failureLocations) {
@@ -728,8 +760,11 @@ export async function buildNativeCodingV2RepairPrompt(input: NativeCodingV2Repai
     } catch {
       continue
     }
-    const window = readOnlyWindow(content, location.line)
-    if (window.content) readOnlyExcerpts.push({ path: location.path, startLine: window.startLine, content: safeText(window.content) })
+    const redacted = redactFileForExcerpts(content)
+    // Without line alignment the window could miss the failing line; skip optional context.
+    if (!redacted.lineAligned) continue
+    const window = readOnlyWindow(redacted.content, location.line)
+    if (window.content) readOnlyExcerpts.push({ path: location.path, startLine: window.startLine, content: window.content })
   }
   const initialChangeSet = boundedInitialChangeSet(input.initialChanges)
   const initialChangeSetPaths = { paths: allowedPaths, bodyOmitted: true }

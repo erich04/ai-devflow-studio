@@ -37,6 +37,15 @@ const ENGLISH_STOP_WORDS = new Set([
 ])
 // Chinese function characters; a bigram containing one carries little topical signal.
 const HAN_STOP_CHARACTERS = new Set([...'的了是在和与或及把被对将就都也还而并等个这那其之以于为'])
+// Common two-character words that appear in almost any requirement or instruction.
+const HAN_STOP_BIGRAMS = new Set([
+  '需要', '使用', '可以', '进行', '实现', '支持', '如果', '我们', '一个', '没有', '已经', '应该',
+  '通过', '相关', '以及', '功能', '问题', '需求', '要求', '当前', '现在', '时候', '保持', '确保',
+  '所有', '不要', '不能', '只有', '然后', '因为', '所以', '但是', '或者', '其他', '这些', '那些',
+  '是否', '能够', '根据', '按照', '处理', '修改', '增加', '添加', '内容', '情况', '方式', '部分',
+])
+// Path and file-type segments shared by most repositories (`src/…`, `…/index.tsx`).
+const STRUCTURAL_ASCII_TOKENS = new Set(['src', 'lib', 'dist', 'app', 'index', 'tsx', 'jsx', 'mjs', 'cjs'])
 
 function stemAsciiWord(word: string): string {
   if (word.length > 4 && word.endsWith('sses')) return word.slice(0, -2)
@@ -57,9 +66,9 @@ export function tokenizeMemoryText(text: string): string[] {
   const ascii = normalized.replace(/([a-z0-9])([A-Z])/gu, '$1 $2').toLowerCase()
   for (const match of ascii.matchAll(/[a-z0-9]+/gu)) {
     const word = match[0] ?? ''
-    if (word.length < 3 || ENGLISH_STOP_WORDS.has(word)) continue
+    if (word.length < 3 || ENGLISH_STOP_WORDS.has(word) || STRUCTURAL_ASCII_TOKENS.has(word)) continue
     const stemmed = stemAsciiWord(word)
-    if (!ENGLISH_STOP_WORDS.has(stemmed)) tokens.push(stemmed)
+    if (!ENGLISH_STOP_WORDS.has(stemmed) && !STRUCTURAL_ASCII_TOKENS.has(stemmed)) tokens.push(stemmed)
   }
   for (const match of normalized.matchAll(/\p{Script=Han}+/gu)) {
     const run = [...(match[0] ?? '')]
@@ -70,7 +79,8 @@ export function tokenizeMemoryText(text: string): string[] {
     for (let index = 0; index + 1 < run.length; index += 1) {
       const left = run[index]!
       const right = run[index + 1]!
-      if (!HAN_STOP_CHARACTERS.has(left) && !HAN_STOP_CHARACTERS.has(right)) tokens.push(left + right)
+      const bigram = left + right
+      if (!HAN_STOP_CHARACTERS.has(left) && !HAN_STOP_CHARACTERS.has(right) && !HAN_STOP_BIGRAMS.has(bigram)) tokens.push(bigram)
     }
   }
   return tokens

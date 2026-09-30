@@ -87,6 +87,16 @@ describe('Electron Agent Runtime production wiring', () => {
     expect(handlers).not.toMatch(/graph|roleId|capabilityIds|scope|summary|transition|sessionId/)
   })
 
+  it('recalls stage Agent Memory for the trusted actor and generates without it when recall fails (ADR 0024)', () => {
+    expect(main).toMatch(
+      /const stageMemory = await recallScopedMemory\(\{[\s\S]*?userId: actor\.userId[\s\S]*?runtimeId: `agent-runtime-stage-\$\{stageRuntimeKey\}`[\s\S]*?budget: STAGE_AGENT_MEMORY_RECALL_BUDGET[\s\S]*?\}\)\.catch\(\(\) => \{[\s\S]*?return \{ revisions: \[\]/,
+    )
+    expect(main).toMatch(
+      /generated = await runWorkflowStageAgent\(\{[\s\S]*?stageMemory\.revisions\.length[\s\S]*?memoryContext: stageMemory\.revisions\.map\(\(\{ id, revision, statement \}\) => \(\{ id, revision, statement \}\)\)/,
+    )
+    expect(main).toMatch(/new WorkbenchConversationService\(\{\s*store,\s*memory: store,/)
+  })
+
   it('recovers durable nonterminal runtimes after app readiness', () => {
     const ready = main.slice(main.indexOf('app.whenReady().then'))
     expect(ready).toMatch(

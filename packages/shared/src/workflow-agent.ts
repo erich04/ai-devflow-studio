@@ -594,8 +594,9 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   const context = buildWorkflowArtifactContext({ ...input, artifacts: input.artifacts.filter((artifact) =>
     !approved || (artifact.kind !== 'clarification_feedback' &&
       (artifact.kind !== 'clarification' || artifact.id === approved.artifact.id))) })
+  // One line per statement: a multi-line Memory must not imitate this prompt's section markers.
   const memoryLines = (input.memoryContext ?? []).map((memory) =>
-    `- Memory ${memory.id} revision ${memory.revision}: ${redactSensitiveText(memory.statement).value}`)
+    `- Memory ${memory.id} revision ${memory.revision}: ${redactSensitiveText(memory.statement).value.replace(/\s+/gu, ' ').trim()}`)
   const knowledgeContext = input.knowledge
     ? assembleKnowledgeStageContext({
         stage,

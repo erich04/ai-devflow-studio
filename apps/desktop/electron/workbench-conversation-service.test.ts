@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type DesktopPairingCredential, type DurableAgentMemoryRevision, type GitHubDeliveryIntent, type KnowledgeRetrievalScope, type LocalProject } from '@ai-devflow/shared'
 import type { CodingMemoryStore } from './coding-context'
 import { createLocalStore, type LocalStore } from './local-store'
-import { WorkbenchConversationService } from './workbench-conversation-service'
+import { degradeOlderObservations, WorkbenchConversationService } from './workbench-conversation-service'
 import { parseConversationCommand } from './workbench-conversation-contract'
 import { readWorkbenchRepository } from './workbench-repository'
 import { ConversationExecutorError } from './conversation-executor'
@@ -840,7 +840,14 @@ describe('tool observation degradation in the discussion bar (ADR 0024 §6)', ()
       if (step <= 4) return { value: { tool: { name: 'repo_read', args: { path: `${'abcd'[step - 1]}.ts` } } } }
       return { value: { text: '已读完四个文件。' } }
     })
-    const result = await send(service, await create(service), '逐个读取 a、b、c、d 四个文件。')
+    const id = await create(service)
+    // Earlier chat history must survive: tool results are degraded before any history is dropped.
+    const original = (await store.listWorkbenchConversations(projectId)).find((session) => session.id === id)!
+    await store.saveWorkbenchConversation({ ...original, version: original.version + 1, messages: Array.from({ length: 3 }, (_, index) => ({
+      id: `earlier-${index}`, role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
+      text: `之前讨论第 ${index + 1} 轮：${'清理规则'.repeat(60)}`, createdAt: created.run.createdAt,
+    })) }, original.version)
+    const result = await send(service, id, '逐个读取 a、b、c、d 四个文件。')
     expect(result.status).toBe('idle')
     expect(calls).toHaveLength(5)
     const contexts = calls.map((prompt) => JSON.parse(prompt))
@@ -850,7 +857,8 @@ describe('tool observation degradation in the discussion bar (ADR 0024 §6)', ()
     expect(contexts[3].toolObservations).toHaveLength(3)
     expect(contexts[3].toolObservations[0]).toEqual({ sourceId: 'source-1', name: 'repo_read', args: { path: 'a.ts' }, observedAt: expect.any(String), degraded: true })
     expect(contexts[3].toolObservations.slice(1).every((observation: { result?: unknown }) => observation.result)).toBe(true)
-    expect(contexts[3].history).toHaveLength(1)
+    expect(contexts[3].history.map((entry: { id: string }) => entry.id).slice(0, 3)).toEqual(['earlier-0', 'earlier-1', 'earlier-2'])
+    expect(contexts[3].history).toHaveLength(4)
     expect(contexts[3].contextNotice).toContain('上下文受长度限制')
 
     // The placeholder is written back: the next step keeps it and extends the same prefix.
@@ -858,7 +866,34 @@ describe('tool observation degradation in the discussion bar (ADR 0024 §6)', ()
       JSON.stringify({ originalRequirements: context.originalRequirements, history: context.history, toolObservations: [context.toolObservations[0]] }).slice(0, -2)
     expect(calls[4]!.startsWith(`${throughFirstObservation(contexts[3])},`)).toBe(true)
     expect(contexts[4].toolObservations.at(-1)).toMatchObject({ sourceId: 'source-4', result: expect.any(Object) })
-    expect(contexts[4].history).toHaveLength(1)
+    expect(contexts[4].history).toHaveLength(4)
     expect(result.contextReceipt?.omittedMessages).toBe(0)
+  })
+
+  it('keeps the newest tool result complete when older results must be degraded', async () => {
+    for (const name of ['a', 'b', 'c']) await writeFile(path.join(project.path, `${name}.ts`), `const ${name} = 1\n`.repeat(1_050))
+    let step = 0
+    const { service, calls } = harness(async () => {
+      step += 1
+      if (step <= 3) return { value: { tool: { name: 'repo_read', args: { path: `${'abc'[step - 1]}.ts` } } } }
+      return { value: { text: '已读完三个文件。' } }
+    })
+    expect((await send(service, await create(service), '逐个读取 a、b、c 三个文件。')).status).toBe('idle')
+    const last = JSON.parse(calls.at(-1)!) as { toolObservations: Array<{ sourceId?: string; degraded?: boolean; result?: unknown }> }
+    const newest = last.toolObservations.filter((observation) => observation.sourceId).at(-1)!
+    expect(newest).toMatchObject({ sourceId: 'source-3', result: expect.any(Object) })
+    expect(newest.degraded).toBeUndefined()
+    expect(last.toolObservations.some((observation) => observation.degraded)).toBe(true)
+  })
+})
+
+describe('degradeOlderObservations', () => {
+  it('protects the newest real tool result even when a recovery instruction was appended after it', () => {
+    const observation = (index: number) => ({ sourceId: `source-${index}`, name: 'repo_read', args: { path: `${index}.ts` }, result: { content: 'x'.repeat(100) }, observedAt: '2026-09-16T10:00:00.000Z' })
+    const observations: unknown[] = [observation(1), observation(2), { instruction: '上一份提案未通过完整性校验。' }]
+    expect(degradeOlderObservations(observations, () => true)).toBe(true)
+    expect(observations[0]).toMatchObject({ sourceId: 'source-1', degraded: true })
+    expect(observations[1]).toEqual(observation(2))
+    expect(observations[2]).toEqual({ instruction: '上一份提案未通过完整性校验。' })
   })
 })
