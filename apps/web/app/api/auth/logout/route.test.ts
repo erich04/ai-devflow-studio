@@ -58,7 +58,7 @@ describe('browser logout proxy', () => {
 
     expect(response.status).toBe(502)
     expect(await response.json()).toEqual({
-      message: 'Logout service is unavailable.',
+      message: '退出登录服务暂时不可用。',
     })
   })
 })

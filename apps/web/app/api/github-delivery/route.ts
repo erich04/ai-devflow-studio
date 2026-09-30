@@ -168,14 +168,14 @@ function projectDelivery(
 function feedbackMessage(code: GitHubDeliveryFeedbackCode): string {
   if (code === 'repository_not_assigned') return '请联系部署管理员，将此 GitHub 仓库分配给当前组织后再配置。'
   if (code === 'provider_unavailable') {
-    return 'GitHub provider is unavailable. No operation was applied.'
+    return 'GitHub 服务暂时不可用，没有执行任何操作。'
   }
-  if (code === 'authority_required') return 'Required project authority was not verified.'
+  if (code === 'authority_required') return '未能核实所需的项目权限。'
   if (code === 'binding_conflict') return '此仓库已绑定其他项目，请使用独立仓库。'
-  if (code === 'state_conflict') return 'GitHub Delivery state changed. Reload before retrying.'
-  if (code === 'not_found') return 'GitHub Delivery resource was not found.'
-  if (code === 'expired') return 'GitHub Delivery authority has expired.'
-  return 'GitHub Delivery service is unavailable.'
+  if (code === 'state_conflict') return '交付状态已变化，请刷新后重试。'
+  if (code === 'not_found') return '找不到对应的交付记录。'
+  if (code === 'expired') return '交付授权已过期。'
+  return 'GitHub 交付服务暂时不可用。'
 }
 
 function failureResponse(error: unknown) {
@@ -191,7 +191,7 @@ function failureResponse(error: unknown) {
   return NextResponse.json(
     {
       code: 'service_unavailable',
-      message: 'GitHub Delivery service is unavailable.',
+      message: 'GitHub 交付服务暂时不可用。',
     },
     { status: 502 },
   )
@@ -199,14 +199,14 @@ function failureResponse(error: unknown) {
 
 function badInput() {
   return NextResponse.json(
-    { code: 'invalid_input', message: 'Invalid GitHub Delivery input.' },
+    { code: 'invalid_input', message: 'GitHub 交付请求的输入无效。' },
     { status: 400 },
   )
 }
 
 function missingAuthority() {
   return NextResponse.json(
-    { code: 'authority_required', message: 'Signed project authority is required.' },
+    { code: 'authority_required', message: '需要已登录的浏览器身份及项目权限。' },
     { status: 401 },
   )
 }
@@ -218,7 +218,7 @@ function hasJsonContentType(request: NextRequest): boolean {
 
 function unsupportedMediaType() {
   return NextResponse.json(
-    { code: 'unsupported_media_type', message: 'GitHub Delivery mutations require application/json.' },
+    { code: 'unsupported_media_type', message: 'GitHub 交付写入请求必须使用 application/json。' },
     { status: 415 },
   )
 }
@@ -250,7 +250,7 @@ function hasAllowedMutationOrigin(request: NextRequest): boolean {
 
 function forbiddenOrigin() {
   return NextResponse.json(
-    { code: 'origin_forbidden', message: 'GitHub Delivery mutation origin was rejected.' },
+    { code: 'origin_forbidden', message: 'GitHub 交付写入请求的来源被拒绝。' },
     { status: 403 },
   )
 }

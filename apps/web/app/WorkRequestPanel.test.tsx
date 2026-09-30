@@ -49,16 +49,19 @@ describe('WorkRequestPanel', () => {
     )
 
     expect(screen.getByText('Request for p-one')).toBeInTheDocument()
-    fireEvent.change(screen.getByLabelText('Work Request title'), {
+    fireEvent.change(screen.getByLabelText('团队请求标题'), {
       target: { value: 'Prepare rollout' },
     })
-    fireEvent.change(screen.getByLabelText('Work Request details'), {
+    fireEvent.change(screen.getByLabelText('团队请求需求说明'), {
       target: { value: 'Keep the rollout reversible.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create Work Request' }))
-    await waitFor(() => expect(screen.getByText('Work Request creation failed.')).toBeInTheDocument())
-    fireEvent.click(screen.getByRole('button', { name: 'Create Work Request' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建团队请求' }))
+    await waitFor(() => expect(screen.getByText('团队请求创建失败，请重试。')).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: '创建团队请求' }))
     await waitFor(() => expect(screen.getByText('Prepare rollout')).toBeInTheDocument())
+    expect(screen.getByRole('status')).toHaveTextContent('团队请求已创建。已配对的桌面端现在可以领取。')
+    expect(screen.getByRole('region', { name: '团队请求' })).toBeInTheDocument()
+    expect(screen.getAllByText('待领取')).toHaveLength(2)
 
     expect(fetcher).toHaveBeenCalledTimes(2)
     for (const call of fetcher.mock.calls) {
@@ -81,13 +84,13 @@ describe('WorkRequestPanel', () => {
         createIdempotencyKey={() => 'create:key'}
       />,
     )
-    fireEvent.change(screen.getByLabelText('Work Request title'), {
+    fireEvent.change(screen.getByLabelText('团队请求标题'), {
       target: { value: 'Late request' },
     })
-    fireEvent.change(screen.getByLabelText('Work Request details'), {
+    fireEvent.change(screen.getByLabelText('团队请求需求说明'), {
       target: { value: 'Must not cross projects.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create Work Request' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建团队请求' }))
 
     rerender(
       <WorkRequestPanel
@@ -127,15 +130,33 @@ describe('WorkRequestPanel', () => {
         createIdempotencyKey={() => 'create:key'}
       />,
     )
-    fireEvent.change(screen.getByLabelText('Work Request title'), {
+    fireEvent.change(screen.getByLabelText('团队请求标题'), {
       target: { value: 'Unsafe response check' },
     })
-    fireEvent.change(screen.getByLabelText('Work Request details'), {
+    fireEvent.change(screen.getByLabelText('团队请求需求说明'), {
       target: { value: 'Reject internal metadata.' },
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Create Work Request' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建团队请求' }))
 
-    await waitFor(() => expect(screen.getByText('Work Request response was invalid.')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('团队请求服务返回了无法核对的结果，请刷新后确认是否已创建。')).toBeInTheDocument())
     expect(screen.queryByText('must-not-reach-renderer')).not.toBeInTheDocument()
+  })
+
+  it('shows Chinese feedback instead of a raw transport error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
+    render(
+      <WorkRequestPanel
+        projectId="p-one"
+        initialWorkRequests={[]}
+        createIdempotencyKey={() => 'create:key'}
+      />,
+    )
+    expect(screen.getByText('当前项目还没有团队请求。')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('团队请求标题'), { target: { value: 'Offline check' } })
+    fireEvent.change(screen.getByLabelText('团队请求需求说明'), { target: { value: 'Network is down.' } })
+    fireEvent.click(screen.getByRole('button', { name: '创建团队请求' }))
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('团队请求创建失败，请重试。'))
+    expect(screen.queryByText('Failed to fetch')).not.toBeInTheDocument()
   })
 })

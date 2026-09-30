@@ -509,7 +509,7 @@ describe('GitHubDeliveryApprovals', () => {
   it('does not misreport a rejected Web origin as decision authority', async () => {
     stubFetch({
       code: 'origin_forbidden',
-      message: 'GitHub Delivery mutation origin was rejected.',
+      message: 'GitHub 交付写入请求的来源被拒绝。',
     }, 403)
     renderApprovals()
 
@@ -721,7 +721,7 @@ describe('GitHubRepositoryBindingSettings', () => {
   it('does not misreport a rejected Web origin as missing owner authority', async () => {
     stubFetch({
       code: 'origin_forbidden',
-      message: 'GitHub Delivery mutation origin was rejected.',
+      message: 'GitHub 交付写入请求的来源被拒绝。',
     }, 403)
     renderBindingSettings()
 
@@ -751,7 +751,7 @@ describe('GitHubRepositoryBindingSettings', () => {
   it('shows owner guidance only for the typed authority failure', async () => {
     stubFetch({
       code: 'authority_required',
-      message: 'Required project authority was not verified.',
+      message: '未能核实所需的项目权限。',
     }, 403)
     renderBindingSettings()
 
@@ -864,7 +864,7 @@ describe('GitHubRepositoryBindingSettings', () => {
   it('does not misreport a rejected Web origin as revocation owner authority', async () => {
     stubFetch({
       code: 'origin_forbidden',
-      message: 'GitHub Delivery mutation origin was rejected.',
+      message: 'GitHub 交付写入请求的来源被拒绝。',
     }, 403)
     renderBindingSettings({ initialBinding: binding })
 

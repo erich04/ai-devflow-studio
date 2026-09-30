@@ -165,7 +165,7 @@ describe('Gate Command Web proxy', () => {
     const unavailable = await POST(request(input))
     expect(unavailable.status).toBe(502)
     await expect(unavailable.json()).resolves.toEqual({
-      message: 'Gate Command service is unavailable.',
+      message: '审批服务暂时不可用。',
     })
   })
 

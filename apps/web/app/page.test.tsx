@@ -70,7 +70,7 @@ it('shows all policy rules in settings and gives members read-only access', asyn
   mockedFetchAuthSession.mockResolvedValue({ user: { id: 'member', name: 'Member', role: 'member' }, authentication: { provider: 'github' }, projectMemberships: [] })
   render(await Page({ searchParams: Promise.resolve({ view: 'settings', section: 'policy' }) }))
   expect(screen.getByRole('heading', { name: '团队策略' })).toBeInTheDocument()
-  expect(screen.getByRole('table', { name: 'Team Policy 规则' }).querySelectorAll('tbody tr')).toHaveLength(10)
+  expect(screen.getByRole('table', { name: '团队策略规则' }).querySelectorAll('tbody tr')).toHaveLength(10)
   expect(screen.queryByRole('button', { name: '预览变更' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '创建团队项目' })).not.toBeInTheDocument()
 })
@@ -668,7 +668,7 @@ describe('web product shell page', () => {
     mockedFetchTeamOverview.mockResolvedValue(overview)
 
     const todo = render(await Page({ searchParams: Promise.resolve({ projectId: 'p-remote' }) }))
-    expect(screen.queryByRole('button', { name: 'Create desktop pairing code' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '生成桌面配对码' })).not.toBeInTheDocument()
     todo.unmount()
 
     render(
@@ -678,7 +678,7 @@ describe('web product shell page', () => {
     )
 
     expect(screen.getByRole('heading', { name: '桌面连接 · Remote API' })).toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Create desktop pairing code' })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: '生成桌面配对码' })).toHaveLength(1)
     expect(screen.getByRole('link', { name: '桌面连接' })).toHaveAttribute('aria-current', 'page')
   })
 
@@ -703,7 +703,8 @@ describe('web product shell page', () => {
       searchParams: Promise.resolve({ projectId: 'p-remote', view: 'tasks' }),
     }))
 
-    expect(screen.getByRole('region', { name: 'Work Requests' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '团队请求' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 2, name: '团队请求' })).toBeInTheDocument()
     expect(screen.getByText('Prepare remote rollout')).toBeInTheDocument()
     expect(mockedFetchWorkRequests).toHaveBeenCalledWith({
       projectId: 'p-remote',
@@ -886,7 +887,7 @@ describe('web product shell page', () => {
     expect(screen.getByRole('region', { name: '项目预算' })).toBeInTheDocument()
     expect(screen.getByText('$0.123 / $0.20')).toBeInTheDocument()
     // Management forms are not on the task's first screen.
-    expect(screen.queryByRole('button', { name: 'Create desktop pairing code' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '生成桌面配对码' })).not.toBeInTheDocument()
     expect(screen.queryByRole('form', { name: '仓库绑定设置' })).not.toBeInTheDocument()
     expect(mockedFetchTeamOverview).toHaveBeenCalledWith({
       cookieHeader: 'devflow_session=session-1',
@@ -1042,7 +1043,7 @@ describe('web product shell page', () => {
 
     expect(screen.getByText('需要登录')).toBeInTheDocument()
     expect(screen.getByText('请先建立浏览器身份，再进入团队工作台。')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: /Sign in with GitHub/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '使用 GitHub 登录' })).toHaveAttribute(
       'href',
       'http://api.local/api/auth/github/start',
     )

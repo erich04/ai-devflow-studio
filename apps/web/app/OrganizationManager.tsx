@@ -29,7 +29,7 @@ function AccessFields({ projects, current }: { projects: ProjectChoice[]; curren
   return <>
     <label>组织角色<select name="role" defaultValue={current?.role ?? 'member'}>{Object.entries(roleLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
     <label>成员状态<select name="status" defaultValue={current?.status ?? 'active'}><option value="active">启用</option>{current ? <option value="disabled">停用</option> : null}</select></label>
-    <fieldset><legend>项目权限</legend><p>管理员可查看组织内所有项目；Desktop 配对仍需明确的项目权限。</p>
+    <fieldset><legend>项目权限</legend><p>管理员可查看组织内所有项目；桌面配对仍需明确的项目权限。</p>
       {projects.length ? projects.map(project => <label key={project.id}>{project.name}<select name={`project:${project.id}`} defaultValue={current?.projects.find(p => p.projectId === project.id)?.role ?? ''}>
         <option value="">无访问权限</option>{Object.entries(projectRoleLabel).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select></label>) : <p>当前组织尚无项目，可以加入组织后再分配项目。</p>}
@@ -86,7 +86,7 @@ export function OrganizationManager({ initial, projects, requestAction, onSelect
   return <div className="organization-manager">
     {error ? <p role="alert">{error}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}
-    <section aria-label="我的组织"><h2>我的组织</h2><p>切换只影响当前 Web 登录。Desktop 仍绑定原来的团队项目，需另外配对。</p>
+    <section aria-label="我的组织"><h2>我的组织</h2><p>切换只影响当前 Web 登录。桌面端仍绑定原来的团队项目，需另外配对。</p>
       <div className="organization-cards">{index.organizations.map(organization => <article key={organization.id}>
         <h3>{organization.name}</h3><p>{roleLabel[organization.role]} · {organization.status === 'active' ? '可用' : '已归档'}</p><small>{organization.slug}</small>
         <details><summary>组织标识（供部署配置使用）</summary><code>{organization.id}</code></details>
@@ -114,7 +114,7 @@ export function OrganizationManager({ initial, projects, requestAction, onSelect
     {owner && selected ? <section aria-label="管理当前组织"><h2>管理「{selected.name}」</h2>
       <form method="post" key={`${selected.id}:${selected.status}:${selected.name}`} onSubmit={event => void submit(event, async data => {
         const result = await perform(base, 'PUT', { name: data.get('name'), status: data.get('status') })
-        if (result) { await refreshIndex(); setNotice('组织设置已保存。归档后恢复使用，需要重新配对 Desktop。') }
+        if (result) { await refreshIndex(); setNotice('组织设置已保存。归档后恢复使用，需要重新配对桌面端。') }
       })}><fieldset disabled={pending}><label>当前组织名称<input name="name" defaultValue={selected.name} required maxLength={120} /></label>
         <label>组织状态<select name="status" defaultValue={selected.status}><option value="active">启用</option><option value="archived">归档</option></select></label>
         <p>归档会暂停团队访问并撤销配对凭据，保留全部数据。管理员可以恢复组织。</p><button>保存组织设置</button></fieldset></form>
@@ -132,7 +132,7 @@ export function OrganizationManager({ initial, projects, requestAction, onSelect
         const result = await perform(`${base}/members/${member.userId}`, 'PUT', readAccess(data, projects))
         if (result) {
           if (member.userId === selected.userId) { onSelected(); return }
-          await loadMembers(); setNotice('成员权限已保存；该成员的旧 Desktop 凭据已撤销。')
+          await loadMembers(); setNotice('成员权限已保存；该成员的旧桌面端凭据已撤销。')
         }
       })}><h4>{member.name} · {member.providerAccountId}</h4><fieldset disabled={pending || selected.status === 'archived'}><AccessFields projects={projects} current={member} /><button>保存 {member.name} 的权限</button></fieldset></form>)}
 
