@@ -32,7 +32,6 @@ export async function createProjectAction(formData: FormData): Promise<CreatePro
       repository,
       ...(sessionCookie ? { cookieHeader: `devflow_session=${sessionCookie}` } : {}),
     })
-    revalidatePath('/legacy-shell')
     revalidatePath('/')
     return { ok: true, projectName: project.name, projectId: project.id }
   } catch (error) {

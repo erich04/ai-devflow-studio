@@ -53,7 +53,6 @@ export async function saveRuntimeBudgetPolicyAction(
       warningThresholdUsd,
       ...(cookieHeader ? { cookieHeader } : {}),
     })
-    revalidatePath('/legacy-shell')
     revalidatePath('/')
     return { ok: true, policy }
   } catch (error) {

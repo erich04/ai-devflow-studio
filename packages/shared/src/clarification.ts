@@ -76,12 +76,6 @@ export function clarificationRevisionNumber(artifact: Artifact): number {
   return artifact.clarificationRevision?.revision ?? 1
 }
 
-export function clarificationRevisionDigest(artifact: Artifact): string | undefined {
-  return artifact.kind === 'clarification'
-    ? artifact.clarificationRevision?.revisionDigest
-    : undefined
-}
-
 export function listClarificationRevisions(
   runId: string,
   artifacts: readonly Artifact[],

@@ -130,11 +130,6 @@ export function splitSqlStatements(sql: string): string[] {
     .filter(Boolean)
 }
 
-export async function readInitialMigrationSql(): Promise<string> {
-  const currentDir = path.dirname(fileURLToPath(import.meta.url))
-  return readFile(path.join(currentDir, 'migrations', '0001_initial.sql'), 'utf8')
-}
-
 export async function readTeamMigrationCatalog(): Promise<TeamMigration[]> {
   const currentDir = path.dirname(fileURLToPath(import.meta.url))
   return Promise.all(teamMigrationCatalog.map(async (migration) => ({
