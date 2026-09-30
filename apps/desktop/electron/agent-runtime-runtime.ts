@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   AGENT_RUNTIME_CONTEXT_MEMORY_REVISIONS_MAX,
   acceptAgentActionResult,
+  agentMemoryCandidateSourceRuntimeId,
   assembleAgentRuntimeContext,
   canRunAgentRuntimeOnNode,
   cancelAgentRuntime,
@@ -494,7 +495,7 @@ export function createDesktopAgentRuntime(
                   headVersion: head.version,
                   status: 'active',
                   scope: head.scope,
-                  sourceRuntimeId: candidate.provenance.runtimeId,
+                  sourceRuntimeId: agentMemoryCandidateSourceRuntimeId(candidate),
                   contentDigest: revision.contentDigest,
                   updatedAt: head.updatedAt,
                 },

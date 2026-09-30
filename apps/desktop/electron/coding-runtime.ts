@@ -75,7 +75,8 @@ import {
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
 import { CODING_BRIEF_MAX_BYTES, estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
 import { assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
-import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
+import { evaluateCurrentWorkflowEvidence, type WorkflowEvidenceEvaluation } from './workflow-evaluation.js'
+import type { CodingRunMemoryLearningResult } from './coding-run-memory-learning.js'
 import type {
   CodingAgentMutation,
   CodingAgentMutationResult,
@@ -320,6 +321,12 @@ export type CodingRuntimeDeps = {
   scheduleRunTimeout?: CodingRuntimeRunTimeoutScheduler
   budgetGuard?: CodingRuntimeBudgetGuard
   completeWorkflowBuild?: CodingRuntimeCompleteWorkflowBuild
+  /**
+   * ADR 0024 §4: called once when a Coding Run completes and its recorded evidence
+   * evaluation passed. Best-effort; a failure never affects the run or the Workflow.
+   */
+  learnCodingRunMemory?: (input: { codingRun: CodingAgentRun; evaluationPassed: boolean }) =>
+    Promise<CodingRunMemoryLearningResult>
   testTimeoutMs?: number
   maxOpaqueOpenCodeRunsPerWorkflowNode?: number
   worktreeRoot?: string
@@ -494,8 +501,45 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     runBestEffortNotification(() => deps.publisher?.publishRunStatus(run))
   }
 
-  async function recordCodingEvaluation(codingRun: CodingAgentRun): Promise<void> {
-    if (codingRun.engine === 'fake') return
+  /** Best-effort Memory learning after completion (ADR 0024 §4); traced on the Coding Run. */
+  async function learnFromCompletedCodingRun(
+    codingRun: CodingAgentRun,
+    evaluation: WorkflowEvidenceEvaluation | null,
+  ): Promise<void> {
+    if (!deps.learnCodingRunMemory || !evaluation?.passed) return
+    let message: string
+    let metadata: Record<string, unknown>
+    try {
+      const learned = await deps.learnCodingRunMemory({ codingRun, evaluationPassed: evaluation.passed })
+      if (learned.candidates.length === 0) return
+      const saved = learned.candidates.filter((candidate) => candidate.outcome === 'proposed' || candidate.outcome === 'replayed')
+      const awaitingReview = learned.notPromoted.filter((entry) =>
+        entry.reason === 'human_review_required' || entry.reason === 'duplicate').length
+      const skipped = learned.candidates.filter((candidate) => candidate.outcome === 'duplicate').length
+      message = `Saved ${saved.length} Memory candidate(s) from this accepted Coding Run: ` +
+        `${learned.promoted.length} saved as Memory by the bounded Coding Run policy, ${awaitingReview} awaiting review` +
+        `${skipped ? `, ${skipped} already known and not saved again` : ''}.`
+      metadata = { memoryLearning: {
+        candidates: learned.candidates, promoted: learned.promoted, notPromoted: learned.notPromoted,
+      } }
+    } catch {
+      message = 'Memory learning stopped early for this Coding Run; any candidates already saved stay listed under Memory. The run and its evidence are unaffected.'
+      metadata = { memoryLearning: { status: 'failed' } }
+    }
+    try {
+      await saveEvents([{
+        id: idGenerator('coding-event'), codingRunId: codingRun.id,
+        runId: codingRun.runId, nodeId: codingRun.nodeId,
+        sequence: await nextSequence(codingRun.id), kind: 'status', timestamp: now(),
+        message, metadata, redacted: true,
+      }])
+    } catch {
+      // The trace is informational; Memory state itself is already durable or unchanged.
+    }
+  }
+
+  async function recordCodingEvaluation(codingRun: CodingAgentRun): Promise<WorkflowEvidenceEvaluation | null> {
+    if (codingRun.engine === 'fake') return null
     const workflow = await findRun(codingRun.runId)
     const evaluation = await evaluateCurrentWorkflowEvidence({
       getRun: findRun,
@@ -518,6 +562,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         : `Current task evidence checks failed: ${evaluation.failures.join(', ')}`,
       metadata: { workflowEvaluation: evaluation }, redacted: true,
     }])
+    return evaluation
   }
 
   function permissionPolicyReporter(codingRun: CodingAgentRun): CodingPermissionPolicyReporter {
@@ -1660,7 +1705,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!completionCommitted.committed) {
       return false
     }
-    await recordCodingEvaluation(completedRun)
+    await learnFromCompletedCodingRun(completedRun, await recordCodingEvaluation(completedRun))
     try {
       await deps.completeWorkflowBuild?.({
         runId: completedRun.runId,
@@ -2064,7 +2109,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         if (!completed.committed) {
           throw new Error('Accepted OpenCode run could not persist its terminal state safely.')
         }
-        await recordCodingEvaluation(completedRun)
+        await learnFromCompletedCodingRun(completedRun, await recordCodingEvaluation(completedRun))
         return updatedRequest
       }
 

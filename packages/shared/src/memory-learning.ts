@@ -122,19 +122,30 @@ function finalize(kind: CodingRunMemoryStatementKind, statement: string): Coding
   return { kind, statement: trimmed }
 }
 
+/**
+ * Bounded policy that saves Coding Run facts without review (ADR 0024 §5). Only the
+ * project's own saved test command qualifies: it is configured by the user, and the
+ * statement carries no task title or model-chosen text. The local store re-checks all of it.
+ */
+export const CODING_RUN_MEMORY_POLICY_ID = 'desktop-coding-run-memory-policy'
+export const CODING_RUN_MEMORY_POLICY_VERSION = 1
+export const CODING_RUN_MEMORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000
+export const CODING_RUN_MEMORY_POLICY_KINDS: readonly CodingRunMemoryStatementKind[] = ['test_command']
+
+/** Title-free, so every later task derives the same statement and finds it as a duplicate. */
+export function codingRunTestCommandStatement(testCommand: string): string | null {
+  const command = inlineText(testCommand, MAX_COMMAND_CHARS + 1)
+  return command && command.length <= MAX_COMMAND_CHARS ? `Verified test command for this project: ${command}.` : null
+}
+
 export function deriveCodingRunMemoryStatements(facts: CodingRunMemoryFacts): CodingRunMemoryStatement[] {
   if (!facts.testPassed) return []
   const runTitle = inlineText(facts.runTitle, MAX_TITLE_CHARS)
   const nodeTitle = inlineText(facts.nodeTitle, MAX_TITLE_CHARS)
   const statements: Array<CodingRunMemoryStatement | null> = []
 
-  const command = inlineText(facts.testCommand, MAX_COMMAND_CHARS + 1)
-  if (command && command.length <= MAX_COMMAND_CHARS) {
-    statements.push(finalize(
-      'test_command',
-      `Verified test command for this project: ${command} (passed after the accepted change for "${runTitle}").`,
-    ))
-  }
+  const testCommand = codingRunTestCommandStatement(facts.testCommand)
+  if (testCommand) statements.push(finalize('test_command', testCommand))
 
   const changed = pathList(facts.changedPaths)
   if (changed) {
