@@ -25,14 +25,15 @@ beforeEach(() => {
 })
 
 describe('createProjectAction', () => {
-  it('returns the created project and refreshes both project entry points', async () => {
+  it('returns the created project and refreshes the project entry point', async () => {
     vi.mocked(createTeamProject).mockResolvedValue({ name: 'Mini Agent', id: 'p-mini-agent' } as never)
     await expect(createProjectAction(input())).resolves.toEqual({ ok: true, projectName: 'Mini Agent', projectId: 'p-mini-agent' })
     expect(createTeamProject).toHaveBeenCalledWith({
       name: 'Mini Agent', slug: 'mini-agent', description: 'Small pilot.', repository: 'erich/mini-agent',
       cookieHeader: 'devflow_session=test-session',
     })
-    expect(revalidatePath).toHaveBeenCalledWith('/legacy-shell')
+    // /legacy-shell only redirects, so there is no cached page there to refresh.
+    expect(revalidatePath).toHaveBeenCalledTimes(1)
     expect(revalidatePath).toHaveBeenCalledWith('/')
   })
 

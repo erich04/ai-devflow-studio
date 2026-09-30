@@ -88,10 +88,10 @@ export function GitHubDeliveryPanel({
       {!intent ? (
         <p className="meta">
           {isAcceptanceEvidenceMissing
-            ? '无法唯一确认与当前 Run 记录的 Draft URL 对应的 completed GitHub Delivery；Acceptance 保持 fail-closed。'
+            ? '无法唯一确认与本任务记录的 Draft PR 地址对应的已完成 GitHub 交付，业务验收保持阻断。'
             : hasExactPrPackage
-            ? '精确且已脱敏的 PR Delivery Package 已附加。点击顶部 Prepare 后才会固定 commit 与测试证据。'
-            : '先生成绑定到 reviewed coding source 的精确且已脱敏 PR Delivery Package。'}
+            ? '已附加精确且已脱敏的 PR 交付包。点击「准备 GitHub 交付」后才会固定提交与测试证据。'
+            : '先生成绑定到已审查代码来源、精确且已脱敏的 PR 交付包。'}
         </p>
       ) : (
         <>

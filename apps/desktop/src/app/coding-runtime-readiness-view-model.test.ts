@@ -31,7 +31,7 @@ describe('Coding Runtime readiness presentation', () => {
       { code: 'budget_blocked', status: 'ready', message: 'allowed' },
     ]))
 
-    expect(display).toMatchObject({ status: 'ready', statusLabel: 'Ready' })
+    expect(display).toMatchObject({ status: 'ready', statusLabel: '可以启动' })
     expect(display.items.map(({ label, statusLabel }) => [label, statusLabel])).toEqual([
       ['执行工具', '已配置'],
       ['Provider', '可用'],
@@ -50,7 +50,7 @@ describe('Coding Runtime readiness presentation', () => {
       { code: 'provider_unavailable', status: 'ready', message: 'Provider available.' },
     ]))
 
-    expect(display.status).toBe('blocked')
+    expect(display).toMatchObject({ status: 'blocked', statusLabel: '暂不能启动' })
     expect(display.items[0]).toMatchObject({
       label: '执行工具',
       statusLabel: '未配置',

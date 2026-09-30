@@ -56,7 +56,9 @@ describe('saveRuntimeBudgetPolicyAction', () => {
       warningThresholdUsd: 0.15,
       cookieHeader: 'devflow_session=session-token',
     })
-    expect(mockedRevalidatePath).toHaveBeenCalledWith('/legacy-shell')
+    // /legacy-shell only redirects, so only the current page is refreshed.
+    expect(mockedRevalidatePath).toHaveBeenCalledTimes(1)
+    expect(mockedRevalidatePath).toHaveBeenCalledWith('/')
   })
 
   it('reports a save failure without revalidating stale data as successful', async () => {

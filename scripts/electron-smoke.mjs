@@ -449,7 +449,18 @@ function resolveWorkflowNodes(run) {
   return nodes
 }
 
-async function selectWorkflowNode(page, testId, expectedTitle) {
+/**
+ * Display names the desktop shows for stored template titles; mirrors `legacyNodeTitleLabels`
+ * in apps/desktop/src/app/node-inspector-view-model.ts. Stored titles stay unchanged.
+ */
+const templateNodeDisplayTitles = {
+  'Implement locally': '开发实现',
+  'Run tests': '运行测试',
+  'Prepare PR draft': '准备 PR 草稿',
+  'Acceptance signoff': '业务验收',
+}
+async function selectWorkflowNode(page, testId, storedTitle) {
+  const expectedTitle = templateNodeDisplayTitles[storedTitle] ?? storedTitle
   await chooseBoardView(page, '流程视图')
   const node = page.getByTestId(testId)
   const inspector = page.getByTestId('node-inspector')
@@ -548,7 +559,7 @@ async function runKnowledgeReviewInTask(page, { runId, nodeId, nodeTitle }) {
   await runReview.click()
   await expect(page.getByTestId('toast')).toContainText('门禁审查已完成', { timeout: 30_000 })
   await expect(page.getByTestId('settings-view')).toHaveCount(0)
-  await expect(page.getByTestId('node-inspector')).toContainText(nodeTitle)
+  await expect(page.getByTestId('node-inspector')).toContainText(templateNodeDisplayTitles[nodeTitle] ?? nodeTitle)
   const persisted = await page.evaluate(async (input) => {
     const reviews = await window.aiDevFlowDesktop.listAgentReviews({ runId: input.runId })
     const pairing = await window.aiDevFlowDesktop.loadDesktopPairing()
@@ -969,7 +980,7 @@ try {
     }),
   ])
   // The data source badge is part of 设置／高级 (plan Y2).
-  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
+  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('本地暂无任务')
   await clickPrimaryNav(first.page, '任务')
   await expect(first.page.getByTestId('workflow-empty-state')).toContainText('暂无任务')
   await expect(first.page.getByTestId('node-inspector-empty')).toContainText('选择任务后显示')
@@ -1073,7 +1084,7 @@ try {
   await setTopbarProjectMenuOpen(first.page, true)
   await expect(first.page.getByTestId('project-overview')).toContainText('本地')
   await setTopbarProjectMenuOpen(first.page, false)
-  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('remote snapshot + local merge')
+  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('团队数据与本地数据')
   await clickPrimaryNav(first.page, '任务')
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
 

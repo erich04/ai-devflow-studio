@@ -425,5 +425,5 @@ export async function removeWorkspace(workspace: Workspace): Promise<void> {
 /** Path of the Electron binary installed for the desktop app. */
 export function electronExecutable(): string {
   const requireFromDesktop = createRequire(path.join(desktopDir, 'package.json'))
-  return requireFromDesktop('electron') as unknown as string
+  return requireFromDesktop('electron') as string
 }
