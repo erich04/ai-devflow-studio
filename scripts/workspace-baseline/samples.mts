@@ -333,8 +333,20 @@ async function reloadAndSelectRun(ctx: SampleContext, title: string) {
   await selectRun(ctx, title)
 }
 
+/**
+ * Display names the desktop shows for stored template titles; mirrors `legacyNodeTitleLabels`
+ * in apps/desktop/src/app/node-inspector-view-model.ts. Stored titles stay unchanged.
+ */
+const templateNodeDisplayTitles: Record<string, string> = {
+  'Implement locally': '开发实现',
+  'Run tests': '运行测试',
+  'Prepare PR draft': '准备 PR 草稿',
+  'Acceptance signoff': '业务验收',
+}
+
 /** Selects a node through the compact stage navigation, as a user would. */
-async function selectNode(ctx: SampleContext, stageLabel: string, node: any) {
+async function selectNode(ctx: SampleContext, stageLabel: string, storedNode: any) {
+  const node = { ...storedNode, title: templateNodeDisplayTitles[storedNode.title] ?? storedNode.title }
   const { page } = ctx.desktop
   const stageButton = page.locator('.workflow-stage-navigation .workflow-stage-step > button').filter({ hasText: stageLabel })
   // From S3 the stage being browsed carries aria-expanded and a click toggles its sub-steps (Y6);
