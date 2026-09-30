@@ -25,7 +25,7 @@ import {
 } from '@ai-devflow/shared'
 import type { RunKnowledgeReviewInput, RunKnowledgeReviewResult } from './ipc-contract.js'
 
-export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking'>
+export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking' | 'executorKind'>
 
 export type KnowledgeReviewRuntimeStore = {
   listRuns(): Promise<WorkflowRun[]>
@@ -183,7 +183,8 @@ export function createKnowledgeReviewRuntime(
         try { provider = await deps.resolveProvider(providerId) } catch (error) {
           throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'credential_unavailable', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: true, cause: error })
         }
-        if (provider.id !== providerMetadata.id || provider.model !== providerMetadata.model) {
+        if (provider.id !== providerMetadata.id || provider.model !== providerMetadata.model ||
+          (provider.executorKind ?? 'direct-provider') !== (providerMetadata.executorKind ?? 'direct-provider')) {
           throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'provider_configuration_changed', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: true })
         }
         return provider.reviewKnowledge(providerInput)
