@@ -1,6 +1,7 @@
 ---
 title: OpenCode 运行时验收检查清单
 category: review_checklist
+stages: [test, accept]
 ownerId: u-erich
 tags: opencode, coding-agent, smoke, provider
 summary: 真实 OpenCode 运行时验收必须显式启动、由环境开关控制、记录权限审计并保护密钥。

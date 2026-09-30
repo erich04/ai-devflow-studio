@@ -95,6 +95,7 @@ const retrievalLabels: Record<KnowledgeRetrievalStrategy, string> = {
   heuristic: '启发式检索',
   vector: '语义检索',
   hybrid: '混合检索',
+  stage: '按阶段适用',
 }
 
 type CitableArtifact = Pick<Artifact, 'id' | 'title' | 'nodeId'> & Partial<Pick<Artifact, 'clarificationRevision'>>

@@ -1,3 +1,9 @@
+---
+title: OpenDesign 设计提示词
+category: development_standard
+stages: []
+summary: OpenDesign 界面设计提示词模板与已保存提示词，只在需要做界面设计时按需阅读。
+---
 <a id="opendesign-design-prompts"></a>
 
 # OpenDesign 设计提示词

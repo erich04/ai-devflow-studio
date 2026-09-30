@@ -1,6 +1,8 @@
 ---
 title: PR 审查就绪检查清单
 category: review_checklist
+stages: [pr, accept]
+gate: true
 ownerId: u-ling
 tags: pr, review, gate, github-delivery
 summary: PR 审查应绑定交付包、精确批准的提交、核实后的草稿 PR、证据和业务验收决定。

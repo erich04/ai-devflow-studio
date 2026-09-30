@@ -1,6 +1,7 @@
 ---
 title: Electron 演示就绪检查清单
 category: review_checklist
+stages: [test, accept]
 ownerId: u-erich
 tags: electron, demo, smoke, local, github-delivery
 summary: Electron 演示应证明 Desktop schema v26、生产权限边界、持久化运行时上下文与本地 MCP 审计恢复、受控 GitHub 交付以及凭据隔离。
