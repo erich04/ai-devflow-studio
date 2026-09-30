@@ -1,7 +1,7 @@
 # 知识上下文改造方案：项目说明常驻 + Agent 现场检索
 
-- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0、K1、K2、K4 已完成，K3 未开始；结果见第 11 节。
-- 分支：K0–K2 的主体随 #191、K4 随 #194 合入 `main`；知识审查 local-agent 在 `feat/knowledge-review-local-agent`，基于 `c145f5f`。
+- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0、K1、K2、K4 已完成；K3 除 Native v2 中项目说明的位置调整外已完成；结果见第 11 节。
+- 分支：K0–K2 随 #191、K4 随 #194、知识审查 local-agent 随 #197 合入 `main`；K3 在 `feat/knowledge-k3-brief-discussion`，基于 `b6ca57f`。
 - 文中的新字段、新工具、新批次在对应批次完成前都只是计划。实施结果见第 11 节。
 - 决策记录：[ADR 0025](../adr/0025-resident-knowledge-context.md)。
 
@@ -97,7 +97,7 @@ Run、Gate、证据等结构化事实继续走现有的工作流投影和讨论�
 ### 4.4 L3：结构化事实与记忆
 
 - 不改。Run、节点、材料、证据和 Gate 决定继续由工作流投影和讨论工具提供。
-- 记忆召回和提示缓存布局由另一条线处理，其中 P0 提示重排正在进行。L0 和 L1 按那条线的稳定前缀规则放置。K3 要改 Native v2 和讨论栏，等 P0 合入后再动。
+- 记忆召回和提示缓存布局由另一条线处理（ADR 0024，#193 的提示前缀契约，本方案原先称为 P0）。L0 和 L1 按那条线的稳定前缀规则放置。K3 中只有"把项目说明移到 Native v2 user JSON 的稳定位置"要改 #193 重写的 `native-coding-executor-v2.ts`，需等它合入；其余部分不依赖它，见 11.9。
 
 ### 4.5 上下文清单
 
@@ -130,13 +130,13 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 | K0 核实与评估集 | ① 起一个本地假模型服务，截获 OpenCode 发给模型的请求，确认 `serve` 会话会按 `directory` 加载仓库 AGENTS.md，以及会不会带入用户全局文件。② 整理 20–30 条中文评估场景，每条标注需求、阶段、应适用的知识文档、Gate 应检查的规范；记录现有词法检索的命中率作为基线 | 两项都有结论；评估集入库；默认零付费调用 |
 | K1 知识目录与常驻注入 | shared 与桌面主进程：读取知识目录（`knowledgeBasePath`）、新 front matter 字段、读取 L0、按阶段组装、上下文清单。Direct Provider 阶段提示词、知识审查的 criteria 和 Gate 治理检查改用新输入。给现有 10 份文档补字段 | 评估集里"应适用的文档"全部进入对应阶段的上下文；本仓库需求确认 Gate 的治理检查数从约 163 降到 `gate: true` 的文档数；同一输入组装两次，清单完全相同 |
 | K2 OpenCode 对齐 | 阶段 Agent 和编码引擎隔离用户全局配置；知识审查支持 local-agent；补上引用行号范围校验 | 假模型服务断言：请求里有仓库 AGENTS.md，没有用户全局说明；local-agent 审查的产出通过现有校验 |
-| K3 编码简报与讨论栏 | 替换编码简报的知识来源；Native v2 加 L0；拆分讨论栏的知识工具。要等 P0 合入 | 现有编码和讨论冒烟测试通过；简报回执记录新清单 |
+| K3 编码简报与讨论栏 | 替换编码简报的知识来源；Native v2 加 L0；拆分讨论栏的知识工具。L0 在 Native v2 提示中的最终位置等 #193 合入 | 现有编码和讨论冒烟测试通过；简报回执记录新清单 |
 | K4 知识页与检查 | 知识页按 4.2 展示。加入确定性检查：断链（相对链接和锚点）、缺 front matter、`stages` 取值非法、超出预算、清单里的文件已被删除 | 检查结果显示在知识页，不阻断流程 |
 
 依赖关系：
 
 - K0 → K1 → K2 依次进行。
-- K3 在 K1 之后，并等另一条线的 P0 合入。
+- K3 在 K1 之后。原写"等另一条线的 P0 合入"不准确：2026-09-30 逐文件核对后，只有 Native v2 提示布局一处与 #193 重叠（见 11.9）。
 - K4 在 K1 之后，随时可以做；涉及 `DesktopViews.tsx` 的界面部分等 S6 合入后 rebase 再做。
 
 ## 7. 与既有设计的关系
@@ -314,6 +314,39 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 - `corepack pnpm test:electron-smoke`、`test:workbench-conversation-electron-smoke`：通过（隔离数据、假提供方，`externalProviderCalled: false`）。两项冒烟都使用默认的直接调用方式，没有在 Electron 窗口里跑 OpenCode 审查。
 - 未运行：真实模型调用（第 3 条待定）、Electron 窗口中的 OpenCode 审查走查。
 
+### 11.9 K3 结果（编码简报与讨论栏）
+
+- **与记忆线的关系**（2026-09-30 逐文件核对 #193、#196）：
+  - #193 重写了 `native-coding-executor-v2.ts` 的提示布局（三阶段共用固定 system prompt，user JSON 以 `stateVersion → brief` 开头），但没有改编码简报的生成（`coding-agent.ts`）、回执类型（`execution-context.ts`），也没有改讨论栏的工具说明与 `knowledge` 处理。
+  - 所以 K3 的简报与讨论栏部分不依赖它；只有"项目说明在 Native v2 提示里放在哪"一处要等它合入。
+- **编码简报**：
+  - `knowledge` 来源改为 `assembleKnowledgeStageContext`：适用 build 阶段的规范整篇放入，其余列目录。简报总上限是 24,000 字节，所以知识单独限 8 KiB（`CODING_BRIEF_KNOWLEDGE_BUDGET_BYTES`），不沿用阶段提示词的 24 KiB；超出的文档只列目录，执行器可以在工作树里读。
+  - 项目说明按执行器分三种（`codingBriefKnowledgeDelivery`）：OpenCode 自己从工作树读 `AGENTS.md`，简报只记录（`executor`）；Native v2 不读，简报带上正文，上限 8 KiB（`devflow`）；无费用的假引擎两者都不给（`none`）。
+  - 回执 `CodingContextReceipt` 新增 `knowledgeContext`（上下文清单），执行开始事件里记一行摘要。清单只作记录：知识之后变化不会让进行中的运行失效，这与记忆不同。
+  - 没有传入知识时仍用原来的引用行（兼容旧调用方）。
+- **Native v2 的项目说明（接口已定，位置待调整）**：Native v2 现在通过简报拿到项目说明，这一处没有改 `native-coding-executor-v2.ts`。简报是按任务变化的内容，项目说明放在里面，同一项目不同任务之间不能共享缓存前缀。#193 合入后，打算把它移到 user JSON 中 `brief` 之前的独立字段，需要同步改 ADR 0024 第 1 节写定的顺序；如果不改 ADR，就维持现状。两种都不影响本批的接口（`CodingBriefKnowledge`、回执字段）。
+- **讨论栏**：
+  - `knowledge` 工具拆成 `knowledge_list({stage?,offset?})`（知识目录：适用阶段、Gate 依据阶段、摘要、字节数、摘要哈希，以及项目说明文件）和 `knowledge_read({path,offset?,limit?})`（按路径分页读一篇或项目说明，正文脱敏）。按关键词找仍用 `repo_search`，提示词里写明了。
+  - 读取知识目录以外的路径会拒绝，并指向 `repo_read`。
+  - 旧的 `knowledge({query})` 不再出现在提示词和 MCP 工具列表里，但仍可调用，这样已有的工具观察可以按相同 name 和 args 重新查询（#193 的降级占位规则）。
+- **未做**：Native v2 中项目说明的位置调整（等 #193）；编码简报没有真实模型的前后对比。
+
+### 11.10 K3 验证
+
+- `corepack pnpm verify`（2026-09-30，基于 main `b6ca57f`）：类型检查通过；335 个测试文件通过、1 个跳过，4,536 个测试通过、15 个跳过；跨平台检查通过。第一次运行时本机另有 vitest 进程占满 CPU，6 个测试超时（其中包括没有改动的 `apps/web`），单独重跑这些文件全部通过，随后完整重跑通过。
+- 新增或改写的测试：
+  - `coding-agent.test.ts`：简报整篇放入适用规范、其余列目录、三种项目说明方式、项目说明截断、未传知识时的兼容。
+  - `coding-runtime.test.ts`：回执记录上下文清单；按执行器选择项目说明方式。
+  - `workbench-knowledge-tools.test.ts`：目录、按阶段过滤与分页、按路径读取与脱敏、越界路径。
+  - `workbench-mcp-bridge.test.ts`：工具列表只公开新的两个工具，旧工具仍可调用。
+  - `workbench-conversation-service.test.ts`：模型按 `knowledge_list` → `knowledge_read` 调用，提示词不再列出旧工具。
+- Electron 冒烟（隔离数据、本地受控模型服务）：
+  - `test:workbench-conversation-electron-smoke`：通过。样例仓库新增 `docs/knowledge/cleanup.md`，模型改为先 `knowledge_list` 再 `knowledge_read`，并断言读到的正文；`externalProviderCalled: false`。
+  - `test:native-coding-electron-smoke`：通过。样例仓库没有知识文档和 `AGENTS.md`，所以只证明简报改动后 Native v2 流程不受影响；项目说明进入 Native v2 简报由 `coding-agent.test.ts` 覆盖。
+  - `test:electron-smoke`：通过。
+- 与记忆线的兼容：与 #193、#196 的最新提交做了试合并，结果见 PR 描述。
+- 未运行：真实模型调用。
+
 ## 参考
 
 - [OpenCode：Rules（AGENTS.md 加载顺序、Claude Code 兼容开关）](https://opencode.ai/docs/rules/)
@@ -327,14 +360,14 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 
 本节供接手的对话使用。完成后删除本节，结论并入第 11 节。
 
-**当前状态**：K0–K2 的主体随 #191 合入（验证见 11.4），K4 随 #194 合入（见 11.5、11.6）。知识审查 local-agent 在分支 `feat/knowledge-review-local-agent` 上，结果与验证见 11.7、11.8。剩下的是 K3（等 P0 合入）和第 3 条真实模型验证。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
+**当前状态**：K0–K2 随 #191、K4 随 #194、知识审查 local-agent 随 #197 合入。K3 在分支 `feat/knowledge-k3-brief-discussion` 上，结果与验证见 11.9、11.10。剩下的是 #193 合入后调整 Native v2 中项目说明的位置并复验，以及第 3 条真实模型验证。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
 
 **用户决定**（erich04，2026-09-30）：
 
 1. 测试证据规范改为 `gate: [test]`：**已改**，见 11.2 差异 2。`packages/shared/src/fixtures.ts` 与评估集中 6 个 design 场景的 `gate` 已同步。
 2. 提交方式：rebase 到最新 main，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。#191 按此方式合入；K4 沿用同一方式。
 3. 真实模型验证：**待定**。可选做法有两种：由用户在 `corepack pnpm dev:electron` 中手动跑澄清到设计；或由用户指定已保存的提供方和预算上限，授权 Agent 在隔离数据中运行。结果记入第 11 节。
-4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行，K3 等 P0 合入。K4（#194）与知识审查 local-agent（11.7）都已完成；下一步是 K3。
+4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行。前两项已完成。K3 按用户 2026-09-30 的要求先做不依赖记忆线的部分，接口先定好，#193 合入后再调整和验证，见 11.9。
 5. 本地项目知识目录暂时固定为 `docs/knowledge`，见 11.2 差异 3。
 
 **注意**：只在本 worktree 中修改；不改 `../ai-devflow-studio`（主工作区）和 `../ai-devflow-prompt-cache`。跑开发服务或 Electron 前先检查 4310、4311、5173 端口是否被其他对话占用。
