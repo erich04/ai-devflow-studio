@@ -2753,7 +2753,8 @@ describe('App', () => {
     // The exact diff review is rendered in 当前工作 (plan W3); approval exists only there.
     const changeSetPanel = await within(inspector).findByTestId('task-coding-change-set')
     const review = within(changeSetPanel).getByTestId('coding-change-set-review')
-    expect(within(review).getByText('Files').nextElementSibling).toHaveTextContent('2')
+    // The panel renders before the exact preview loads (App requests it in an effect); wait for it.
+    await waitFor(() => expect(within(review).getByText('Files').nextElementSibling).toHaveTextContent('2'))
     expect(review).toHaveTextContent(digest)
     const statusRow = within(inspector).getByTestId('task-status-row')
     expect(within(statusRow).queryByRole('button', { name: '批准本次' })).not.toBeInTheDocument()
