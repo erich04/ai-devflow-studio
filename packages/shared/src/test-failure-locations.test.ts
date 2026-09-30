@@ -46,3 +46,26 @@ describe('test failure locations', () => {
     ])
   })
 })
+
+describe('parseTestFailureLocations on Windows output and long lines', () => {
+  it('maps Windows absolute and file URL frames inside the worktree to relative paths', () => {
+    const output = [
+      ' ❯ C:\\Work\\Tree\\src\\filter.test.ts:12:5',
+      '    at file:///c:/work/tree/src/filter.ts:3:9',
+      ' ❯ C:\\Other\\src\\outside.ts:1:1',
+      ' ❯ src\\relative.ts:7',
+    ].join('\r\n')
+    expect(parseTestFailureLocations(output, { workspaceRoots: ['C:\\Work\\Tree'] })).toEqual([
+      { path: 'src/filter.test.ts', line: 12, column: 5 },
+      { path: 'src/filter.ts', line: 3, column: 9 },
+      { path: 'src/relative.ts', line: 7 },
+    ])
+  })
+
+  it('stays fast on long unbroken tokens', () => {
+    const output = `${'ab.ts'.repeat(8_000)}\n${'A'.repeat(40_000)}\nsrc/a.ts:5:1`
+    const startedAt = performance.now()
+    expect(parseTestFailureLocations(output, { workspaceRoots })).toEqual([{ path: 'src/a.ts', line: 5, column: 1 }])
+    expect(performance.now() - startedAt).toBeLessThan(500)
+  })
+})

@@ -91,3 +91,16 @@ describe('Memory recall budget', () => {
       .toEqual(['a'])
   })
 })
+
+describe('Memory relevance floor on realistic queries (ADR 0024 §2)', () => {
+  it('does not treat generic Chinese words or path segments as a shared topic', () => {
+    const memories: Memory[] = [
+      { id: 'release', statement: '发布说明需要使用英文书写。' },
+      { id: 'cards', statement: '桌面卡片可以使用句首大写。' },
+      { id: 'change-map', statement: 'Change map: "Filter tasks" was implemented by changing src/tasks/filter.ts.' },
+      { id: 'export', statement: '导出报表时保留月份列的原始顺序。' },
+    ]
+    const query = '需要支持导出月度报表，可以使用现有的 src/export/report.ts。'
+    expect(rankMemoryByRelevance(memories, query, statementOf).map(({ item }) => item.id)).toEqual(['export'])
+  })
+})

@@ -101,9 +101,16 @@ function degradedObservation(value: unknown): unknown {
  * entry stays complete. Callers pass the turn's own array so later steps keep the same
  * degraded prefix instead of re-sending or reshuffling earlier results.
  */
-function degradeOlderObservations(observations: unknown[], tooLarge: () => boolean): boolean {
+export function degradeOlderObservations(observations: unknown[], tooLarge: () => boolean): boolean {
   let changed = false
-  for (let index = 0; index < observations.length - 1 && tooLarge(); index += 1) {
+  // Protect the newest real tool result, not merely the last slot: recovery instructions
+  // are also appended to this array.
+  let newestToolResult = -1
+  for (let index = observations.length - 1; index >= 0; index -= 1) {
+    if (typeof recordOrEmpty(observations[index]).sourceId === 'string') { newestToolResult = index; break }
+  }
+  for (let index = 0; index < observations.length && tooLarge(); index += 1) {
+    if (index === newestToolResult) continue
     const degraded = degradedObservation(observations[index])
     if (degraded === observations[index]) continue
     observations[index] = degraded
@@ -156,8 +163,11 @@ function packConversationContext(input: {
     markLimited()
     while (JSON.stringify(context.latestWorkflow).length > 6000 && context.latestWorkflow.runs.length > 1) context.latestWorkflow.runs.pop()
   }
-  // Degrade older tool results to re-queryable placeholders before dropping anything, and
-  // write that back to the turn's observations so later steps keep a stable prefix.
+  // Recalled Memory is optional low-trust background: drop it (for this step) before
+  // degrading verified tool evidence for the rest of the turn.
+  if (serialize().length > 30000 && context.backgroundMemory) { markLimited(); delete context.backgroundMemory }
+  // Degrade older tool results to re-queryable placeholders before dropping chat history,
+  // and write that back to the turn's observations so later steps keep a stable prefix.
   if (serialize().length > 30000 && input.observations.length > 1) {
     markLimited()
     degradeOlderObservations(input.observations, () => {
@@ -166,8 +176,6 @@ function packConversationContext(input: {
     })
     context.toolObservations = [...input.observations]
   }
-  // Recalled Memory is optional background: drop it before any chat history.
-  if (serialize().length > 30000 && context.backgroundMemory) { markLimited(); delete context.backgroundMemory }
   while (serialize().length > 30000 && context.history.length > 1) { markLimited(); context.history.shift() }
   while (serialize().length > 30000 && context.toolObservations.length > 1) { markLimited(); context.toolObservations.shift() }
   if (serialize().length > 30000 && context.toolObservations.length) {
@@ -414,7 +422,9 @@ export class WorkbenchConversationService {
       const userId = pairing?.localProjectId === projectId ? pairing.userId : run?.creatorId
       if (!userId) return []
       const latestUserText = session.messages.slice().reverse().find((message) => message.role === 'user')?.text ?? ''
-      const query = [latestUserText, run?.title ?? '', requirement?.content ?? ''].join('\n')
+      // The latest question and the Run title only: a whole requirement page shares generic
+      // terms with almost every Memory and would defeat the relevance floor.
+      const query = [latestUserText, run?.title ?? ''].join('\n')
       const recalledAt = now()
       const key = codingPromptDigest(`${projectId}\n${session.id}`).slice(0, 32)
       const recalled = await recallScopedMemory({
