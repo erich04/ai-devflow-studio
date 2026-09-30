@@ -217,10 +217,24 @@ export function preflightGateCommand(
   if (!approval.allowed) {
     return rejection('preflight_blocked')
   }
+  // Requirement and design Gates approve one material version: without the desktop-uploaded
+  // subject for this exact step and Run version, the approver cannot know what they approve
+  // (plan S5, Q8). Rejections stay available above.
+  const subject = input.run.gateReviewSubject
+  if (
+    input.currentNode.kind === 'gate' &&
+    (input.currentNode.stage === 'clarify' || input.currentNode.stage === 'design') &&
+    (!subject ||
+      subject.nodeId !== input.currentNode.id ||
+      subject.runVersion !== input.run.version ||
+      subject.stage !== input.currentNode.stage)
+  ) {
+    return rejection('preflight_blocked')
+  }
 
   return {
     allowed: true,
-    ...(input.run.gateReviewSubject ? { reviewSubject: input.run.gateReviewSubject } : {}),
+    ...(subject ? { reviewSubject: subject } : {}),
     workflowCommand:
       input.currentNode.kind === 'acceptance'
         ? 'approve_acceptance'

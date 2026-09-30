@@ -9,6 +9,17 @@ import {
 } from '@ai-devflow/shared'
 import type { GateCommandEvaluationSnapshot } from './lib/devflow-api'
 
+/**
+ * What the signed-in member may do here (plan S5, Q4). Approval needs the Gate's required role,
+ * rejection needs Lead or Owner (the server rules); without either no buttons are shown.
+ */
+export type GateCommandAuthority = {
+  canApprove: boolean
+  canReject: boolean
+  /** Shown instead of buttons when the member can do neither, e.g. “等待负责人审批”. */
+  waitingLabel: string
+}
+
 type GateCommandPanelProps = {
   projectId: string
   runId: string
@@ -16,7 +27,19 @@ type GateCommandPanelProps = {
   expectedRunVersion: number
   evaluation: GateCommandEvaluationSnapshot | null
   initialCommands: GateCommand[]
+  authority?: GateCommandAuthority
+  /** Why approval is unavailable even with authority, e.g. the material version is not synced. */
+  approvalUnavailableReason?: string
   createIdempotencyKey?: (action: GateCommandAction) => string
+}
+
+function creationFailureMessage(status: number): string {
+  if (status === 401) return '需要浏览器身份才能提交审批，没有创建审批。'
+  if (status === 403) return '当前身份没有这个审批的权限，没有创建审批。'
+  if (status === 409) return '任务、策略、阻断项或所审材料已变化，没有创建审批。请刷新后重新核对。'
+  if (status === 410) return '审批已过期，没有创建审批。请刷新后重新核对。'
+  if (status === 400) return '审批请求不完整或已失效，没有创建审批。请刷新后重试。'
+  return '审批服务暂时不可用，没有创建审批。'
 }
 
 type PanelState = {
@@ -38,7 +61,7 @@ const outcomeLabels: Record<GateCommandOutcomeCode, string> = {
   stale_run: '本地 Run 已变化，请刷新后重新评估。',
   stale_policy: '本地策略已变化，请刷新后重新评估。',
   blockers_changed: '本地阻断项已变化，请刷新后重新评估。',
-  evidence_blocked: '完整本地证据仍阻止该操作。',
+  evidence_blocked: '桌面端复核后未执行：所审材料已变化或未同步，或本地证据仍阻止该操作。请刷新后重新核对。',
   authorization_denied: '本地授权检查拒绝了该操作。',
 }
 
@@ -94,11 +117,11 @@ function lifecycleMessage(
   const latest = latestCommand(commands, nodeId, expectedRunVersion)
   if (!latest) return ''
   if (latest.status === 'pending' || latest.status === 'delivering') {
-    return 'Gate Command 已提交，等待拥有该 Run 的 Desktop 复核并执行。'
+    return '审批已提交，等待拥有该任务的桌面端复核并执行。'
   }
   return latest.outcomeCode
     ? outcomeLabels[latest.outcomeCode]
-    : 'Gate Command 状态不可用，请刷新后重试。'
+    : '审批状态不可用，请刷新后重试。'
 }
 
 function parseListResponse(value: unknown, projectId: string): GateCommand[] {
@@ -204,6 +227,8 @@ export function GateCommandPanel({
   expectedRunVersion,
   evaluation,
   initialCommands,
+  authority = { canApprove: true, canReject: true, waitingLabel: '' },
+  approvalUnavailableReason,
   createIdempotencyKey = defaultIdempotencyKey,
 }: GateCommandPanelProps) {
   const key = scopeKey(projectId, runId, nodeId, expectedRunVersion)
@@ -317,7 +342,9 @@ export function GateCommandPanel({
     !active
 
   async function submit(action: GateCommandAction) {
-    if (!canSubmit || (action === 'approve' && evaluation.blocksApproval)) return
+    if (!canSubmit) return
+    if (action === 'approve' && (evaluation.blocksApproval || !authority.canApprove || approvalUnavailableReason)) return
+    if (action === 'reject' && !authority.canReject) return
 
     const requestScopeKey = key
     const currentRequestVersion = requestVersion.current + 1
@@ -351,7 +378,7 @@ export function GateCommandPanel({
         body: JSON.stringify(input),
       })
       if (response.status !== 201) {
-        throw new Error('Gate Command creation failed.')
+        throw new Error(creationFailureMessage(response.status))
       }
       const command = parseCreateResponse(
         await response.json().catch(() => {
@@ -397,19 +424,30 @@ export function GateCommandPanel({
         ...current,
         status: 'error',
         message:
-          error instanceof Error
+          error instanceof Error && !error.message.startsWith('Gate Command')
             ? error.message
-            : 'Gate Command creation failed.',
+            : '审批服务返回了无法核对的结果，请刷新后确认是否已提交。',
       }))
     }
   }
 
+  // No dead buttons: a member who can neither approve nor reject sees who has to act (plan S5, Q4).
+  if (!authority.canApprove && !authority.canReject) {
+    return (
+      <div className="gate-command-panel">
+        <p className="gate-command-waiting" role="note">{authority.waitingLabel}</p>
+        {visibleState.message ? <small role="status">{visibleState.message}</small> : null}
+      </div>
+    )
+  }
+
+  const approveDisabled = !canSubmit || !authority.canApprove || Boolean(evaluation?.blocksApproval) || Boolean(approvalUnavailableReason)
   return (
     <div className="gate-command-panel">
       <label>
         <span>审批说明</span>
         <textarea
-          aria-label="Gate Command reason"
+          aria-label="审批说明"
           maxLength={2_000}
           value={reason}
           disabled={Boolean(active)}
@@ -417,25 +455,40 @@ export function GateCommandPanel({
         />
       </label>
       <div className="studio-gate-buttons">
-        <button
-          type="button"
-          disabled={!canSubmit || Boolean(evaluation?.blocksApproval)}
-          onClick={() => void submit('approve')}
-        >
-          批准并继续
-        </button>
-        <button
-          type="button"
-          disabled={!canSubmit}
-          onClick={() => void submit('reject')}
-        >
-          驳回
-        </button>
+        {authority.canApprove ? (
+          <button
+            type="button"
+            disabled={approveDisabled}
+            onClick={() => void submit('approve')}
+          >
+            批准并继续
+          </button>
+        ) : null}
+        {authority.canReject ? (
+          <button
+            type="button"
+            disabled={!canSubmit}
+            onClick={() => void submit('reject')}
+          >
+            驳回
+          </button>
+        ) : null}
       </div>
+      {evaluation === null ? (
+        <small role="note">无法读取审批前检查，暂时不能提交。请刷新页面重试。</small>
+      ) : !active && reason.trim().length === 0 ? (
+        <small>填写审批说明后才能提交。</small>
+      ) : null}
+      {authority.canApprove && approvalUnavailableReason && !active ? (
+        <small role="note">暂时不能批准：{approvalUnavailableReason}{authority.canReject ? '。仍可驳回。' : '。'}</small>
+      ) : null}
+      {!authority.canApprove ? (
+        <small role="note">批准需要更高的项目角色；你可以驳回。</small>
+      ) : null}
       {evaluation?.blocksApproval && !active ? (
         <small>{evaluation.expectedBlockerIds.includes('gate-review-subject-not-current')
-          ? '云端缺少当前评审的产物指纹，或指纹与 Review 不一致。请在已配对 Desktop 同步；内容有变化时重新审查，再刷新此页面。'
-          : '当前 Team enforcement preflight 阻止批准；可记录人工驳回。'}</small>
+          ? '团队数据中缺少当前审查对应的材料指纹，或指纹与审查结果不一致。请在已连接的桌面端同步；内容有变化时重新审查，再刷新此页面。'
+          : '团队策略的审批前检查阻止批准；可以记录人工驳回。'}</small>
       ) : null}
       {visibleState.message ? (
         <small role="status">{visibleState.message}</small>

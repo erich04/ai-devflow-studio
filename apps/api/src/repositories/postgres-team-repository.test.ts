@@ -724,7 +724,21 @@ class HistoricalGateOverrideDbClient extends FakeTeamDbClient {
         } as T,
       ]
     }
-    return super.query<T>(sql, params)
+    const rows = await super.query<T>(sql, params)
+    // A design approval needs the desktop-uploaded subject for this step and version (plan S5, Q8).
+    return sql.includes('FROM workflow_runs') && !sql.includes('SELECT id')
+      ? rows.map((row) => (row as { id?: unknown }).id === 'run-remote-1'
+        ? { ...row, gate_review_subject: designGateReviewSubject('run-remote-1', 'n-design-gate', 4) } as T
+        : row)
+      : rows
+  }
+}
+
+function designGateReviewSubject(runId: string, nodeId: string, runVersion: number) {
+  return {
+    version: 1 as const, runId, runVersion, nodeId, stage: 'design' as const,
+    sanitizerVersion: 'sensitive-text-v1', requestDigest: 'a'.repeat(64),
+    artifacts: [{ id: 'artifact-design', nodeId: 'n-design', kind: 'design' as const, updatedAt: '2026-07-31T11:00:00.000Z', contentDigest: 'b'.repeat(64) }],
   }
 }
 

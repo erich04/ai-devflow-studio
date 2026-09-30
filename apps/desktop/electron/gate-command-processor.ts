@@ -35,6 +35,7 @@ import type {
 } from './local-store.js'
 import { gateCommandExecutionFingerprint } from './local-store.js'
 import { RemoteSyncHttpError } from './remote-sync.js'
+import { requiresApprovalMaterialSnapshot, resolveRemoteApprovalMaterial } from './gate-command-material.js'
 
 export type FrozenGateCommandBinding = Readonly<{
   pairing: Readonly<DesktopPairingCredential>
@@ -607,8 +608,10 @@ export function createGateCommandProcessor(
         const currentSubject = command.reviewSubject
           ? await buildGateReviewSubjectSnapshot({ run: localRun, artifacts: evaluation.evidence.artifacts }).catch(() => null)
           : null
-        const subjectIsCurrent = !command.reviewSubject || (currentSubject !== null &&
-          hasSameGateReviewSubject(command.reviewSubject, currentSubject))
+        // Requirement and design approvals fail closed without the subject the approver saw (plan S5, Q8).
+        const subjectIsCurrent = command.reviewSubject
+          ? currentSubject !== null && hasSameGateReviewSubject(command.reviewSubject, currentSubject)
+          : command.action !== 'approve' || !requiresApprovalMaterialSnapshot(node)
         const policyIsStale =
           evaluation.policySnapshot.source !== 'remote_cache' ||
           evaluation.policySnapshot.effectivePolicy === null ||
@@ -702,12 +705,31 @@ export function createGateCommandProcessor(
                   },
                 },
               })
+              const sequence =
+                events.reduce(
+                  (maximum, event) => Math.max(maximum, event.sequence),
+                  0,
+                ) + 1
+              const material = applied.applied
+                ? await resolveRemoteApprovalMaterial({
+                    run: localRun,
+                    node,
+                    artifacts: evaluation.evidence.artifacts,
+                    subject: command.reviewSubject,
+                    actorId: command.requestedByUserId,
+                    now: timestamp,
+                    sequence,
+                  })
+                : undefined
               if (!applied.applied) {
                 outcomeCode = applied.blockers.some(
                   (blocker) => blocker.code === 'authorization_denied',
                 )
                   ? 'authorization_denied'
                   : 'evidence_blocked'
+              } else if (material?.status === 'blocked') {
+                // The desktop's own approval object is not the version the Web approver saw.
+                outcomeCode = 'evidence_blocked'
               } else {
                 plannedRun = applied.run
                 evaluationBinding = {
@@ -732,15 +754,16 @@ export function createGateCommandProcessor(
                   id: gateCommandEventId(command.id),
                   runId: command.runId,
                   nodeId: command.nodeId,
-                  sequence:
-                    events.reduce(
-                      (maximum, event) => Math.max(maximum, event.sequence),
-                      0,
-                    ) + 1,
+                  sequence,
                   kind: 'approval',
                   message:
                     'Remote Gate Command approved the current workflow node.',
                   timestamp,
+                  ...(material?.status === 'clarification'
+                    ? { clarificationAudit: material.audit }
+                    : material?.status === 'design'
+                      ? { designAudit: material.audit }
+                      : {}),
                 }
                 outcomeCode = 'applied'
               }

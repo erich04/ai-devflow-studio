@@ -8,6 +8,7 @@ import {
   applyWorkflowCommand,
   applyCoordinationHandoff,
   acceptAgentActionResult,
+  buildGateReviewSubjectSnapshot,
   assembleAgentRuntimeContext,
   cancelAgentRuntime,
   createAgentMemoryCandidate,
@@ -366,6 +367,8 @@ const gateWorkflowCreation = createWorkflowRunFromRequest({
   branchName: run.branchName,
   now: '2026-08-01T01:58:00.000Z',
 })
+const gateRawRequestArtifact = gateWorkflowCreation.artifacts.find((artifact) => artifact.kind === 'raw_request')!
+// A remote requirement approval confirms one review-requested revision (plan S5, Q8).
 const gateClarificationArtifact: Artifact = {
   id: 'artifact-gate-command-clarification',
   runId: gateWorkflowCreation.run.id,
@@ -376,6 +379,21 @@ const gateClarificationArtifact: Artifact = {
   content: 'Apply the shared workflow transition over canonical local evidence.',
   redacted: true,
   updatedAt: '2026-08-01T01:59:00.000Z',
+  clarificationRevision: {
+    version: 1, revision: 1, status: 'review_requested', revisionDigest: 'c'.repeat(64),
+    rawRequestArtifactId: gateRawRequestArtifact.id, feedbackArtifactIds: [],
+    goals: ['Apply the transition'], acceptanceCriteria: ['Canonical evidence'], nonGoals: [], assumptions: [], risks: [], openQuestions: [],
+    executor: {
+      version: 1, kind: 'direct-provider', executorId: 'fake', executorVersion: '1',
+      capabilityProfile: 'repository-read-only-v1', model: 'fake', startedAt: '2026-08-01T01:58:30.000Z',
+      completedAt: '2026-08-01T01:59:00.000Z', durationMs: 1, terminalReason: 'success', contextDigest: 'd'.repeat(64),
+    },
+    generatedAt: '2026-08-01T01:59:00.000Z',
+  },
+}
+const gateMaterialArtifacts = [gateRawRequestArtifact, gateClarificationArtifact]
+async function saveGateMaterial(store: { saveArtifact(artifact: Artifact): Promise<void> }) {
+  for (const artifact of gateMaterialArtifacts) await store.saveArtifact(artifact)
 }
 const gateCompletion = applyWorkflowCommand({
   run: gateWorkflowCreation.run,
@@ -385,7 +403,7 @@ const gateCompletion = applyWorkflowCommand({
     artifactId: gateClarificationArtifact.id,
   },
   evidence: {
-    artifacts: [gateClarificationArtifact],
+    artifacts: gateMaterialArtifacts,
     codingRuns: [],
     codingDiffs: [],
     testEvidence: [],
@@ -405,7 +423,7 @@ const gateTransition = applyWorkflowCommand({
   run: gateRunBefore,
   command: { type: 'approve_gate', nodeId: gateRunBefore.currentNodeId },
   evidence: {
-    artifacts: [gateClarificationArtifact],
+    artifacts: gateMaterialArtifacts,
     codingRuns: [],
     codingDiffs: [],
     testEvidence: [],
@@ -423,6 +441,7 @@ if (!gateTransition.applied) {
   throw new Error('Gate Command fixture did not apply its shared transition.')
 }
 const gateRunAfter = gateTransition.run
+const gateReviewSubject = await buildGateReviewSubjectSnapshot({ run: gateRunBefore, artifacts: gateMaterialArtifacts })
 
 const deliveringGateCommand: GateCommand = {
   id: 'gate-command-local-1',
@@ -434,6 +453,7 @@ const deliveringGateCommand: GateCommand = {
   action: 'approve',
   workflowCommand: 'approve_gate',
   reason: 'Approve the current Design Gate.',
+  reviewSubject: gateReviewSubject,
   requestedByUserId: 'u-review-lead',
   requestedRole: 'lead',
   idempotencyKey: 'gate-command:create:run-1:v3',
@@ -452,6 +472,9 @@ const deliveringGateCommand: GateCommand = {
   updatedAt: '2026-08-01T02:01:00.000Z',
 }
 
+// Only approvals carry the review subject; rejections are derived without it.
+const { reviewSubject: _approvalOnlySubject, ...deliveringGateRejectBase } = deliveringGateCommand
+
 const gateCommandReceipt: GateCommandReceipt = {
   id: 'gate-command-receipt-local-1',
   commandId: deliveringGateCommand.id,
@@ -469,6 +492,18 @@ const gateApprovalEvent: AgentEvent = {
   kind: 'approval',
   message: 'Remote Gate Command applied.',
   timestamp: gateRunAfter.updatedAt,
+}
+// What the store records for that approval: the confirmed revision (plan S5, Q8).
+const gateApprovedClarificationEvent: AgentEvent = {
+  ...gateApprovalEvent,
+  clarificationAudit: {
+    version: 1,
+    action: 'approved',
+    artifactId: gateClarificationArtifact.id,
+    revision: 1,
+    revisionDigest: gateClarificationArtifact.clarificationRevision!.revisionDigest,
+    actorId: deliveringGateCommand.requestedByUserId,
+  },
 }
 
 const gateOrganizationPolicyV2 = {
@@ -501,7 +536,7 @@ const gateEnforcementV2: GateEnforcementDecision = {
   provisional: false,
 }
 const gatePersistedEvidence: WorkflowEvidenceSnapshot = {
-  artifacts: [gateClarificationArtifact],
+  artifacts: gateMaterialArtifacts,
   codingRuns: [],
   codingDiffs: [],
   testEvidence: [],
@@ -5124,7 +5159,7 @@ describe('createLocalStore', () => {
     )
     await store.saveRun(gateRunBefore)
     const command: GateCommand = {
-      ...deliveringGateCommand,
+      ...deliveringGateRejectBase,
       id: 'gate-command-observed-reject',
       action: 'reject',
       workflowCommand: null,
@@ -5334,6 +5369,44 @@ describe('createLocalStore', () => {
     db.close()
   })
 
+  // Plan S5, Q8: the store derives the remote approval's audit itself and fails closed.
+  it.each([
+    ['without the server-bound review subject', { command: deliveringGateRejectBase as GateCommand }],
+    ['with an audit that names another revision', { event: { ...gateApprovedClarificationEvent, clarificationAudit: { ...gateApprovedClarificationEvent.clarificationAudit!, revision: 2 } } }],
+    ['with a design audit on a requirement Gate', { event: { ...gateApprovalEvent, designAudit: { version: 1 as const, action: 'approved' as const, artifactId: gateClarificationArtifact.id, updatedAt: gateClarificationArtifact.updatedAt, contentDigest: 'e'.repeat(64), actorId: 'u-review-lead' } } }],
+  ])('refuses a remote requirement approval %s without writing anything', async (_label, override) => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    await store.saveDesktopPairingCredential(
+      { ...desktopPairingCredential, localProjectId: project.id },
+      'encrypted-token',
+    )
+    await store.saveRun(gateRunBefore)
+    await saveGateMaterial(store)
+    await store.savePolicySnapshot(gatePolicySnapshotV2)
+
+    await expect(
+      store.commitGateCommandExecution({
+        command: deliveringGateCommand,
+        receipt: gateCommandReceipt,
+        expectedPairing: workRequestPairing,
+        outcomeCode: 'applied',
+        evaluatedAt: gateRunAfter.updatedAt,
+        expectedRun: gateRunBefore,
+        run: gateRunAfter,
+        event: gateApprovalEvent,
+        evaluationBinding: gateEvaluationBinding,
+        ...override,
+      }),
+    ).resolves.toEqual({ committed: false, reason: 'invalid_input' })
+    await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunBefore)
+    await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([])
+    expect((await store.listArtifacts(gateRunBefore.id))
+      .find((artifact) => artifact.id === gateClarificationArtifact.id)?.clarificationRevision?.status)
+      .toBe('review_requested')
+    store.close()
+  })
+
   it('atomically applies an approved Gate Command with its receipt, event, and Run summary', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
@@ -5342,7 +5415,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
 
     await expect(
@@ -5372,9 +5445,14 @@ describe('createLocalStore', () => {
       },
     })
     await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunAfter)
+    // A remote requirement approval records the revision it confirmed and marks it approved,
+    // exactly like a local approval (plan S5, Q8).
     await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([
-      gateApprovalEvent,
+      gateApprovedClarificationEvent,
     ])
+    expect((await store.listArtifacts(gateRunBefore.id))
+      .find((artifact) => artifact.id === gateClarificationArtifact.id)?.clarificationRevision)
+      .toMatchObject({ revision: 1, status: 'approved' })
     await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
       expect.objectContaining({
         kind: 'run-summary',
@@ -5406,7 +5484,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
 
     await expect(
@@ -5434,7 +5512,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
     await store.savePolicySnapshot({
       ...gatePolicySnapshotV2,
@@ -5534,7 +5612,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
     await store.saveGateOverride(acceptedOverride)
     await store.saveGateOverride({ ...acceptedOverride, status: 'rejected' })
@@ -5622,7 +5700,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
     await store.saveGateOverride(override)
 
@@ -5687,7 +5765,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
 
     await expect(
@@ -5723,7 +5801,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
     await store.saveArtifact({
       ...gateClarificationArtifact,
@@ -5770,7 +5848,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
 
     await expect(
@@ -5809,7 +5887,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     const existingEvent = {
       ...gateApprovalEvent,
       message: 'Existing immutable workflow event.',
@@ -5846,7 +5924,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     const forgedRun: WorkflowRun = {
       ...gateRunBefore,
       version: gateRunBefore.version + 1,
@@ -5914,12 +5992,12 @@ describe('createLocalStore', () => {
         'encrypted-token',
       )
       await store.saveRun(gateRunBefore)
-      await store.saveArtifact(gateClarificationArtifact)
+      await saveGateMaterial(store)
       const boundaryTransition = applyWorkflowCommand({
         run: gateRunBefore,
         command: { type: 'approve_gate', nodeId: gateRunBefore.currentNodeId },
         evidence: {
-          artifacts: [gateClarificationArtifact],
+          artifacts: gateMaterialArtifacts,
           codingRuns: [],
           codingDiffs: [],
           testEvidence: [],
@@ -5967,7 +6045,7 @@ describe('createLocalStore', () => {
     )
     await store.saveRun(gateRunBefore)
     const rejectCommand: GateCommand = {
-      ...deliveringGateCommand,
+      ...deliveringGateRejectBase,
       id: 'gate-command-local-reject',
       action: 'reject',
       workflowCommand: null,
@@ -6078,7 +6156,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
     const initial = {
       command: deliveringGateCommand,
@@ -6136,9 +6214,14 @@ describe('createLocalStore', () => {
       }),
     ])
     await expect(store.getRun(gateRunBefore.id)).resolves.toEqual(gateRunAfter)
+    // A remote requirement approval records the revision it confirmed and marks it approved,
+    // exactly like a local approval (plan S5, Q8).
     await expect(store.listEvents(gateRunBefore.id)).resolves.toEqual([
-      gateApprovalEvent,
+      gateApprovedClarificationEvent,
     ])
+    expect((await store.listArtifacts(gateRunBefore.id))
+      .find((artifact) => artifact.id === gateClarificationArtifact.id)?.clarificationRevision)
+      .toMatchObject({ revision: 1, status: 'approved' })
     await expect(store.listRemoteSyncOperations(gateRunBefore.id)).resolves.toEqual([
       expect.objectContaining({ generation: 2 }),
     ])
@@ -6177,7 +6260,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
     const initial = await store.commitGateCommandExecution({
       command: deliveringGateCommand,
@@ -6831,7 +6914,7 @@ describe('createLocalStore', () => {
       'encrypted-token',
     )
     await store.saveRun(gateRunBefore)
-    await store.saveArtifact(gateClarificationArtifact)
+    await saveGateMaterial(store)
     await store.savePolicySnapshot(gatePolicySnapshotV2)
     await rename(dbPath, backupPath)
     await mkdir(dbPath)
@@ -8620,7 +8703,7 @@ describe('createLocalStore', () => {
     )
     await initial.saveRun(gateRunBefore)
     const command: GateCommand = {
-      ...deliveringGateCommand,
+      ...deliveringGateRejectBase,
       id: 'gate-command-v11-observation-migration',
       action: 'reject',
       workflowCommand: null,

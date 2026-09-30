@@ -89,6 +89,7 @@ describe('Gate Command server vertical flow', () => {
         version: 3,
         projectId: 'p-payments',
         title: 'V1.4 Gate flow',
+        gateReviewSubject: designGateReviewSubject(runId, nodeId, 3),
         status: 'paused_at_gate',
         currentNodeId: nodeId,
         currentNode: {
@@ -239,3 +240,12 @@ describe('Gate Command server vertical flow', () => {
     })
   })
 })
+
+/** The desktop-uploaded subject a design approval is bound to (plan S5, Q8). */
+function designGateReviewSubject(runId: string, nodeId: string, runVersion: number) {
+  return {
+    version: 1 as const, runId, runVersion, nodeId, stage: 'design' as const,
+    sanitizerVersion: 'sensitive-text-v1', requestDigest: 'a'.repeat(64),
+    artifacts: [{ id: 'artifact-design', nodeId: 'node-design', kind: 'design' as const, updatedAt: '2026-07-31T11:00:00.000Z', contentDigest: 'b'.repeat(64) }],
+  }
+}

@@ -77,7 +77,7 @@ describe('GateCommandPanel', () => {
     vi.stubGlobal('fetch', fetcher)
     render(<GateCommandPanel {...defaultProps} />)
 
-    fireEvent.change(screen.getByLabelText('Gate Command reason'), {
+    fireEvent.change(screen.getByLabelText('审批说明'), {
       target: { value: 'Reviewed current projection.' },
     })
     fireEvent.click(screen.getByRole('button', { name: '批准并继续' }))
@@ -101,7 +101,7 @@ describe('GateCommandPanel', () => {
         idempotencyKey: 'gate:approve:fixed',
       }),
     })
-    expect(await screen.findByText(/等待拥有该 Run 的 Desktop/)).toBeInTheDocument()
+    expect(await screen.findByText(/等待拥有该任务的桌面端/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '批准并继续' })).toBeDisabled()
   })
 
@@ -137,7 +137,7 @@ describe('GateCommandPanel', () => {
       />,
     )
 
-    fireEvent.change(screen.getByLabelText('Gate Command reason'), {
+    fireEvent.change(screen.getByLabelText('审批说明'), {
       target: { value: 'Acceptance criteria are not met.' },
     })
     expect(screen.getByRole('button', { name: '批准并继续' })).toBeDisabled()
@@ -166,13 +166,13 @@ describe('GateCommandPanel', () => {
       ),
     )
     render(<GateCommandPanel {...defaultProps} />)
-    fireEvent.change(screen.getByLabelText('Gate Command reason'), {
+    fireEvent.change(screen.getByLabelText('审批说明'), {
       target: { value: 'Reviewed current projection.' },
     })
     fireEvent.click(screen.getByRole('button', { name: '批准并继续' }))
 
     expect(
-      await screen.findByText('Gate Command response was invalid.'),
+      await screen.findByText('审批服务返回了无法核对的结果，请刷新后确认是否已提交。'),
     ).toBeInTheDocument()
     expect(screen.queryByText('secret-token-id')).not.toBeInTheDocument()
   })
@@ -192,15 +192,15 @@ describe('GateCommandPanel', () => {
       ),
     )
     render(<GateCommandPanel {...defaultProps} />)
-    fireEvent.change(screen.getByLabelText('Gate Command reason'), {
+    fireEvent.change(screen.getByLabelText('审批说明'), {
       target: { value: 'Reviewed current projection.' },
     })
     fireEvent.click(screen.getByRole('button', { name: '批准并继续' }))
 
     expect(
-      await screen.findByText('Gate Command creation failed.'),
+      await screen.findByText('审批服务暂时不可用，没有创建审批。'),
     ).toBeInTheDocument()
-    expect(screen.queryByText(/等待拥有该 Run 的 Desktop/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/等待拥有该任务的桌面端/)).not.toBeInTheDocument()
   })
 
   it('ignores a late response after the selected Run changes', async () => {
@@ -210,7 +210,7 @@ describe('GateCommandPanel', () => {
     )
     vi.stubGlobal('fetch', fetcher)
     const { rerender } = render(<GateCommandPanel {...defaultProps} />)
-    fireEvent.change(screen.getByLabelText('Gate Command reason'), {
+    fireEvent.change(screen.getByLabelText('审批说明'), {
       target: { value: 'Reviewed current projection.' },
     })
     fireEvent.click(screen.getByRole('button', { name: '批准并继续' }))
@@ -235,9 +235,9 @@ describe('GateCommandPanel', () => {
     )
 
     await waitFor(() =>
-      expect(screen.getByLabelText('Gate Command reason')).toHaveValue(''),
+      expect(screen.getByLabelText('审批说明')).toHaveValue(''),
     )
-    expect(screen.queryByText(/等待拥有该 Run 的 Desktop/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/等待拥有该任务的桌面端/)).not.toBeInTheDocument()
   })
 
   it.each([
@@ -276,7 +276,7 @@ describe('GateCommandPanel', () => {
 
     expect(screen.getByText(terminal.message)).toBeInTheDocument()
     expect(
-      screen.queryByText(/等待拥有该 Run 的 Desktop/),
+      screen.queryByText(/等待拥有该任务的桌面端/),
     ).not.toBeInTheDocument()
   })
 
@@ -308,5 +308,66 @@ describe('GateCommandPanel', () => {
       { headers: { accept: 'application/json' } },
     )
     expect(screen.getByText(/Desktop 已执行批准/)).toBeInTheDocument()
+  })
+
+  // Plan S5, Q4: no dead buttons, and approval waits for the material version.
+  it('shows who has to decide and no controls when the member can neither approve nor reject', () => {
+    const fetcher = vi.fn()
+    vi.stubGlobal('fetch', fetcher)
+    render(
+      <GateCommandPanel
+        {...defaultProps}
+        authority={{ canApprove: false, canReject: false, waitingLabel: '等待负责人审批（需要 Lead 及以上）。' }}
+      />,
+    )
+    expect(screen.getByRole('note')).toHaveTextContent('等待负责人审批（需要 Lead 及以上）。')
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('审批说明')).not.toBeInTheDocument()
+    expect(fetcher).not.toHaveBeenCalled()
+  })
+
+  it('offers only rejection to a lead below the required approval role', () => {
+    render(
+      <GateCommandPanel
+        {...defaultProps}
+        authority={{ canApprove: false, canReject: true, waitingLabel: '' }}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: '批准并继续' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '驳回' })).toBeInTheDocument()
+    expect(screen.getByText('批准需要更高的项目角色；你可以驳回。')).toBeInTheDocument()
+  })
+
+  it('keeps approval unavailable while the material version is not synced, and rejection available', () => {
+    render(
+      <GateCommandPanel
+        {...defaultProps}
+        approvalUnavailableReason="所审材料的版本尚未从桌面端同步"
+      />,
+    )
+    fireEvent.change(screen.getByLabelText('审批说明'), { target: { value: 'Reviewed.' } })
+    expect(screen.getByRole('button', { name: '批准并继续' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '驳回' })).toBeEnabled()
+    expect(screen.getByText(/暂时不能批准：所审材料的版本尚未从桌面端同步/)).toHaveTextContent('仍可驳回')
+  })
+
+  it('explains an unreadable pre-approval check instead of leaving silent disabled buttons', () => {
+    render(<GateCommandPanel {...defaultProps} evaluation={null} />)
+    expect(screen.getByRole('button', { name: '批准并继续' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '驳回' })).toBeDisabled()
+    expect(screen.getByText('无法读取审批前检查，暂时不能提交。请刷新页面重试。')).toBeInTheDocument()
+  })
+
+  it.each([
+    [409, '任务、策略、阻断项或所审材料已变化，没有创建审批。请刷新后重新核对。'],
+    [403, '当前身份没有这个审批的权限，没有创建审批。'],
+    [503, '审批服务暂时不可用，没有创建审批。'],
+  ])('explains a %s creation failure in Chinese', async (status, copy) => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Gate Command was rejected.' }), { status })))
+    render(<GateCommandPanel {...defaultProps} />)
+    fireEvent.change(screen.getByLabelText('审批说明'), { target: { value: 'Reviewed.' } })
+    fireEvent.click(screen.getByRole('button', { name: '批准并继续' }))
+    expect(await screen.findByText(copy)).toBeInTheDocument()
+    expect(screen.queryByText('Gate Command was rejected.')).not.toBeInTheDocument()
   })
 })
