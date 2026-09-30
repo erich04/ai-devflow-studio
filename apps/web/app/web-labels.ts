@@ -1,9 +1,11 @@
-import type {
-  GateReviewSubjectSnapshot,
-  NodeStatus,
-  Role,
-  WorkflowNode,
-  WorkflowRun,
+import {
+  REMOTE_STEP_SUBTITLE,
+  remoteStepTitle,
+  type GateReviewSubjectSnapshot,
+  type NodeStatus,
+  type Role,
+  type WorkflowNode,
+  type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { BrowserAuthSessionResponse, GitHubDeliveryRequestView } from './lib/devflow-api'
 
@@ -48,6 +50,19 @@ export function stageLabel(stage: WorkflowNode['stage']): string {
   return labels[stage]
 }
 
+/** Placeholders written by older Team APIs and the desktop's English template titles. */
+const syncedPlaceholderTitle = /^(Synced (clarify|design|build|test|pr|accept) node|Test Evidence|Implement locally|Run tests|Prepare PR draft|Acceptance signoff)$/u
+const syncedPlaceholderSubtitle = 'Canonical current node from DevFlow Electron.'
+
+/** Step title for the Web: synced steps carry no local title, so they are named by stage and kind. */
+export function stepTitle(node: Pick<WorkflowNode, 'stage' | 'kind' | 'title'>): string {
+  return syncedPlaceholderTitle.test(node.title) ? remoteStepTitle(node.stage, node.kind) : node.title
+}
+
+export function stepSubtitle(node: Pick<WorkflowNode, 'subtitle'>): string {
+  return node.subtitle === syncedPlaceholderSubtitle ? REMOTE_STEP_SUBTITLE : node.subtitle
+}
+
 export function roleLabel(role: Role): string {
   return role === 'owner' ? 'Owner' : role === 'lead' ? 'Lead' : '成员'
 }
@@ -57,7 +72,7 @@ export function gateDecisionLabel(node: Pick<WorkflowNode, 'kind' | 'stage' | 't
   if (node.kind === 'acceptance') return '业务验收'
   if (node.kind === 'gate' && node.stage === 'clarify') return '需求确认'
   if (node.kind === 'gate' && node.stage === 'design') return '方案评审'
-  return node.title
+  return stepTitle(node)
 }
 
 export function requiredRoleLabel(node: Pick<WorkflowNode, 'requiredRole'>): string {

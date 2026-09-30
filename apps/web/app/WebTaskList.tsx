@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import type { Project, WorkflowRun } from '@ai-devflow/shared'
 import { taskHref } from './studio-navigation'
 import { StatusPill, statusTone } from './studio-ui'
-import { formatWebTime, runStatusLabel } from './web-labels'
+import { formatWebTime, runStatusLabel, stepTitle } from './web-labels'
 
 /** 项目任务 (plan S5, Q3): team requests and a read-only list of development tasks. */
 export function WebTaskList({ project, runs, workRequests }: {
@@ -31,7 +31,7 @@ export function WebTaskList({ project, runs, workRequests }: {
                 <li key={run.id}>
                   <a href={taskHref(project.id, run.id)}>
                     <strong>{run.title}</strong>
-                    <span>当前步骤：{current?.title ?? '未记录'}</span>
+                    <span>当前步骤：{current ? stepTitle(current) : '未记录'}</span>
                     <small>更新于 {formatWebTime(run.updatedAt)}</small>
                   </a>
                   <StatusPill tone={statusTone(run.status)}>{runStatusLabel(run.status)}</StatusPill>

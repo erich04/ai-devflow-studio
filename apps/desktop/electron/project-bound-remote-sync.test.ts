@@ -1350,6 +1350,9 @@ describe('project-bound Electron remote sync', () => {
     expect(uploadRunSummary).toHaveBeenCalledWith({
       ...runSummary,
       projectId: 'team-project-1',
+      // The ordered, metadata-only step list (hardening H2); titles stay local.
+      nodes: localRun.nodes.map(({ id, stage, kind, status, requiredRole }) =>
+        ({ id, stage, kind, status, ...(requiredRole ? { requiredRole } : {}) })),
     })
   })
 

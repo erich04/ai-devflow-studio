@@ -1611,6 +1611,11 @@ export type RemoteRunNodeSummary = Pick<
 export type RemoteRunSummary = {
   gateReviewSubject?: import('./gate-review-subject').GateReviewSubjectSnapshot
   stageAgentUsage?: AgentTokenUsage[]
+  /**
+   * Every workflow step in order, with the same metadata-only fields as `currentNode`; titles,
+   * artifacts and content stay local. Older desktops omit it and only the current step is known.
+   */
+  nodes?: RemoteRunNodeSummary[]
   kind: RemoteRunSummaryKind
   runId: string
   version: number
