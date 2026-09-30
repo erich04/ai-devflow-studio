@@ -233,10 +233,11 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 
 ### 11.4 验证
 
-- `corepack pnpm verify`（2026-09-30，本分支）：类型检查通过；330 个测试文件通过、1 个跳过，4,486 个测试通过、15 个跳过（改动前基线 4,462 通过、15 跳过）；跨平台检查通过。之后只改了文档与 `package.json` 脚本，已重跑 `scripts/` 下的测试与跨平台检查，均通过。
-- `corepack pnpm test:electron-smoke`：通过（隔离临时数据、假提供方）。
+- `corepack pnpm verify`（2026-09-30，rebase 到 main `a10625d` 之后，含测试证据规范改为 `gate: [test]`）：类型检查通过；330 个测试文件通过、1 个跳过，4,491 个测试通过、15 个跳过；跨平台检查通过。rebase 之前在旧 main `f0fad85` 上为 4,486 通过、15 跳过（改动前基线 4,462 通过、15 跳过）。
+- `corepack pnpm test:electron-smoke`：rebase 之后重跑，通过（隔离临时数据、假提供方）。
+- `corepack pnpm test:workbench-conversation-electron-smoke`：rebase 之后运行，通过（隔离临时数据，本地受控模型服务，`externalProviderCalled: false`）。
 - 探针与评估：`corepack pnpm test:knowledge-context-opencode-probe`（需要本机 OpenCode 1.17/1.18）、`corepack pnpm knowledge:evaluate`。
-- 未运行：真实模型调用（包括 `test:stage-agent-opencode-smoke`，需要显式授权的提供方与预算）、`test:workbench-conversation-electron-smoke`、界面走查。知识页的展示改造属于 K4，涉及的 `DesktopViews.tsx` 与 S6 有交集，等 S6 合入后再做。
+- 未运行：真实模型调用（包括 `test:stage-agent-opencode-smoke`，需要显式授权的提供方与预算）、界面走查。知识页的展示改造属于 K4；S6 已合入 main，K4 可以基于本分支进行。
 
 ## 参考
 
@@ -251,12 +252,12 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 
 本节供接手的对话使用。完成后删除本节，结论并入第 11 节。
 
-**当前状态**：分支 `feat/knowledge-context` 基于旧 main `f0fad85`，43 个文件改动未提交。`verify` 与 `test:electron-smoke` 已通过。ADR 已从 0024 改为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024；改号后已重跑类型检查与相关测试。main 已合入 S6（#190）。
+**当前状态**：分支 `feat/knowledge-context` 已 rebase 到 main `a10625d`（含 S6，#190），没有冲突。改动分为 K1 共享层、K1/K2 桌面端、K0/K1 评估脚本、方案与 ADR、测试证据规范改为 `gate: [test]` 等几个提交，已推送并开 PR。`verify` 与两项 Electron 冒烟的结果见 11.4。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
 
 **用户决定**（erich04，2026-09-30）：
 
 1. 测试证据规范改为 `gate: [test]`：**已改**，见 11.2 差异 2。`packages/shared/src/fixtures.ts` 与评估集中 6 个 design 场景的 `gate` 已同步。
-2. 提交方式：rebase 到最新 main，解决 `DesktopViews.tsx` 可能的冲突，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。**进行中。**
+2. 提交方式：rebase 到最新 main，解决 `DesktopViews.tsx` 可能的冲突，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。**已开 PR**，合入待 CI 结果与用户确认。
 3. 真实模型验证：**待定**。可选做法有两种：由用户在 `corepack pnpm dev:electron` 中手动跑澄清到设计；或由用户指定已保存的提供方和预算上限，授权 Agent 在隔离数据中运行。结果记入第 11 节。
 4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行，K3 等 P0 合入。PR 开出并向用户汇报后开始 K4。
 5. 本地项目知识目录暂时固定为 `docs/knowledge`，见 11.2 差异 3。
