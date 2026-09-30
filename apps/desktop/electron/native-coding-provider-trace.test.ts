@@ -9,8 +9,14 @@ import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   createOpenAiCompatibleAgentProvider,
+  governAgentProvider,
+  modelBudgetUsageWithRuntime,
+  modelCallActualUsage,
+  modelCallBudgetRollup,
   type CodingAgentRun,
   type LocalProject,
+  type ModelCallAttempt,
+  type ModelCallGovernance,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import { createCodingRuntime } from './coding-runtime.js'
@@ -91,9 +97,40 @@ const initialValue = {
   summary: 'Replace only the requested message.',
 }
 
+/**
+ * Team model-call admission as the API records it: every governed request is reserved and then
+ * settled under its own attempt ID (apps/api model-call-budget).
+ */
+function recordingGovernance(userId: string) {
+  const attempts = new Map<string, ModelCallAttempt>()
+  const governance: ModelCallGovernance = {
+    async reserve(quote) {
+      attempts.set(quote.id, { ...quote, userId, state: 'reserved', projectedCostUsd: 0, costUsd: null })
+      return { accepted: true, decision: { status: 'allowed', blocksRun: false, currentSpendUsd: 0, projectedCostUsd: 0, reason: 'Fixture admission.' } }
+    },
+    async settle(settlement) {
+      const attempt = attempts.get(settlement.id)
+      if (attempt) attempts.set(settlement.id, { ...attempt, state: settlement.state, ...(settlement.usage ? { usage: settlement.usage } : {}) })
+    },
+    async persist() {},
+    async pending() { return [] },
+  }
+  return { governance, attempts }
+}
+
+/** The Team overview's budget rows for one coding run plus the recorded model calls. */
+function teamBudgetTokens(run: CodingAgentRun, attempts: ModelCallAttempt[]) {
+  const rows = modelBudgetUsageWithRuntime([], run.runtimeCostSummary ? [run.runtimeCostSummary] : [])
+  return {
+    actual: modelCallActualUsage(rows, attempts).reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0),
+    budget: modelCallBudgetRollup(rows, attempts, new Date().toISOString())[0]?.totalTokens ?? 0,
+  }
+}
+
 async function createFixture(
   baseUrl: string,
   runSavedTest?: () => Promise<LocalTestCommandResult>,
+  governance?: ModelCallGovernance,
 ): Promise<{
   dbPath: string
   project: LocalProject
@@ -173,7 +210,10 @@ async function createFixture(
       })
       const executor = createNativeCodingExecutorV2({
         store,
-        decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(provider),
+        // main.ts governs the Native Provider per project the same way (resolveAgentProvider).
+        decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(
+          governance ? governAgentProvider(provider, project.id, governance) : provider,
+        ),
         configVersion: 1,
         ...(runSavedTest ? { runSavedTest } : {}),
       })
@@ -264,6 +304,42 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
       source: 'provider_reported', inputTokens: 20, outputTokens: 10, costUsd: null, costStatus: 'unknown',
     } })
     expect((await store.getRun(fixture.run.id))?.currentNodeId).toBe(fixture.run.currentNodeId)
+  })
+
+  it('keeps each governed call identity on its settlement so the Team counts it once (#199)', async () => {
+    let requestNumber = 0
+    const baseUrl = await startCompatibleServer((_request, response) => {
+      requestNumber += 1
+      sendStructuredResponse(response, requestNumber === 1 ? analysisValue : initialValue, requestNumber)
+    })
+    const { governance, attempts } = recordingGovernance('u-local-owner')
+    const fixture = await createFixture(baseUrl, undefined, governance)
+    const { store, runtime } = await fixture.openRuntime()
+    expect((await runtime.runCodingAgent(runInput(fixture))).codingRun.status).toBe('waiting_permission')
+
+    const codingRun = (await store.listCodingAgentRuns(fixture.run.id))[0]!
+    const attemptIds = [...attempts.keys()]
+    expect(attemptIds).toHaveLength(2)
+    expect(codingRun.runtimeCostSummary?.providerCallSettlements?.map((call) => call.budgetAttemptIds))
+      .toEqual([[attemptIds[0]], [attemptIds[1]]])
+    // Two calls of 30 tokens each: the settlement rows and the recorded calls are one consumption.
+    expect(teamBudgetTokens(codingRun, [...attempts.values()])).toEqual({ actual: 60, budget: 60 })
+  })
+
+  it('keeps the governed call identity on a failed, billed response (#199)', async () => {
+    const baseUrl = await startCompatibleServer((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ choices: [{ message: { content: '{"bad":' } }], usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 } }))
+    })
+    const { governance, attempts } = recordingGovernance('u-local-owner')
+    const fixture = await createFixture(baseUrl, undefined, governance)
+    const { store, runtime } = await fixture.openRuntime()
+    await expect(runtime.runCodingAgent(runInput(fixture))).rejects.toMatchObject({ code: 'invalid_model_output' })
+
+    const failed = (await store.listCodingAgentRuns(fixture.run.id))[0]!
+    expect(failed.runtimeCostSummary?.providerCallSettlements?.map((call) => call.budgetAttemptIds))
+      .toEqual([[...attempts.keys()]])
+    expect(teamBudgetTokens(failed, [...attempts.values()])).toEqual({ actual: 30, budget: 30 })
   })
 
   it('sends the enforced file and replacement bounds as model instructions', async () => {
