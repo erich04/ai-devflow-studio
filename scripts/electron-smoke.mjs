@@ -969,7 +969,7 @@ try {
     }),
   ])
   // The data source badge is part of 设置／高级 (plan Y2).
-  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
+  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('本地暂无任务')
   await clickPrimaryNav(first.page, '任务')
   await expect(first.page.getByTestId('workflow-empty-state')).toContainText('暂无任务')
   await expect(first.page.getByTestId('node-inspector-empty')).toContainText('选择任务后显示')
@@ -1073,7 +1073,7 @@ try {
   await setTopbarProjectMenuOpen(first.page, true)
   await expect(first.page.getByTestId('project-overview')).toContainText('本地')
   await setTopbarProjectMenuOpen(first.page, false)
-  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('remote snapshot + local merge')
+  await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('团队数据与本地数据')
   await clickPrimaryNav(first.page, '任务')
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
 

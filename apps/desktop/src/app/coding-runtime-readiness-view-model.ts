@@ -77,7 +77,7 @@ export type CodingReadinessDisplayItem = {
 
 export type CodingReadinessDisplay = {
   status: 'ready' | 'blocked'
-  statusLabel: 'Ready' | 'Blocked'
+  statusLabel: '可以启动' | '暂不能启动'
   items: CodingReadinessDisplayItem[]
 }
 
@@ -88,7 +88,7 @@ export function buildCodingReadinessDisplay(
   const status = items.some((item) => item.state === 'blocked') ? 'blocked' : 'ready'
   return {
     status,
-    statusLabel: status === 'ready' ? 'Ready' : 'Blocked',
+    statusLabel: status === 'ready' ? '可以启动' : '暂不能启动',
     items,
   }
 }

@@ -226,17 +226,17 @@ async function closeProjectMenu(ctx: SampleContext) {
  */
 async function openTeamControls(ctx: SampleContext) {
   const { page } = ctx.desktop
-  if (await page.getByLabel('Desktop pairing code').isVisible().catch(() => false)) return
+  if (await page.getByLabel('配对码', { exact: true }).isVisible().catch(() => false)) return
   if (await hasSettingsNav(ctx)) {
     await clickNav(ctx, '设置')
     await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '团队连接', exact: true }).click()
-    await page.getByLabel('Desktop pairing code').waitFor({ state: 'visible', timeout: 5_000 })
+    await page.getByLabel('配对码', { exact: true }).waitFor({ state: 'visible', timeout: 5_000 })
     return
   }
   const trigger = page.getByRole('button', { name: /^团队连接(：|$)/ })
   if ((await trigger.count()) > 0) {
     await trigger.click()
-    await page.getByLabel('Desktop pairing code').waitFor({ state: 'visible', timeout: 5_000 })
+    await page.getByLabel('配对码', { exact: true }).waitFor({ state: 'visible', timeout: 5_000 })
   }
 }
 
@@ -367,7 +367,7 @@ async function pairViaForm(ctx: SampleContext, code: string) {
   const before = JSON.stringify((await pairing(ctx)) ?? null)
   await openTeamControls(ctx)
   const { page } = ctx.desktop
-  await page.getByLabel('Desktop pairing code').fill(code)
+  await page.getByLabel('配对码', { exact: true }).fill(code)
   await page.getByRole('button', { name: /^(绑定|连接|重新连接)$/ }).click()
   const confirm = page.getByRole('button', { name: '确认替换', exact: true })
   if (await confirm.waitFor({ state: 'visible', timeout: 1_500 }).then(() => true).catch(() => false)) await confirm.click()
@@ -1283,7 +1283,7 @@ const teamExistingCredential: Sample = {
     await pairViaForm(ctx, await createPairingCode(ctx.api))
     await settle(ctx)
     await openTeamControls(ctx)
-    await ctx.desktop.page.getByLabel('Desktop pairing code').fill('PLACEHOLDER.not-a-real-code')
+    await ctx.desktop.page.getByLabel('配对码', { exact: true }).fill('PLACEHOLDER.not-a-real-code')
     await delay(500)
   },
   async followUp(ctx) {
@@ -1291,7 +1291,7 @@ const teamExistingCredential: Sample = {
     const before = await pairing(ctx)
     await openTeamControls(ctx)
     const { page } = ctx.desktop
-    await page.getByLabel('Desktop pairing code').fill(await createPairingCode(ctx.api))
+    await page.getByLabel('配对码', { exact: true }).fill(await createPairingCode(ctx.api))
     await page.getByRole('button', { name: /^(绑定|连接|重新连接)$/ }).click()
     await delay(300)
     const dialogs = await page.locator('[role="alertdialog"]').count()

@@ -77,7 +77,8 @@ describe('settings sections (plan §4.1, §4.3, Y1)', () => {
     const banner = screen.getByTestId('support-context-banner')
     expect(banner).toHaveTextContent('来自任务')
     expect(banner).toHaveTextContent('设置测试命令')
-    expect(banner).toHaveTextContent('当前目标：Fixture run · Run tests')
+    // The stored template title 'Run tests' is shown by its display name.
+    expect(banner).toHaveTextContent('当前目标：Fixture run · 运行测试')
     expect(banner).toHaveTextContent('保存后可以返回任务；返回后不会自动执行任何操作。')
 
     rerender(<SettingsView section="project" onSectionChange={vi.fn()} supportContext={{ ...fromTask, savedAt: '2026-09-28T00:01:00.000Z' }} run={run} onReturnToTask={onReturnToTask}><p /></SettingsView>)
