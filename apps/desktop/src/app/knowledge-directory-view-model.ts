@@ -4,6 +4,7 @@ import {
   PROJECT_INSTRUCTIONS_MAX_BYTES,
   resolveKnowledgeDocumentStages,
   type AgentTrace,
+  type CodingAgentRun,
   type KnowledgeCheckFinding,
   type KnowledgeDocument,
   type NodeStage,
@@ -150,7 +151,7 @@ function describeFinding(finding: KnowledgeCheckFinding, index: number): Knowled
         ...base,
         kindLabel: '文件已删除',
         location: finding.sourcePath,
-        message: `${finding.manifestCount} 次模型调用的上下文清单包含这个文件（${stageList(finding.stages)}），当前已找不到。最近一次记录于 ${formatLocalTime(finding.lastRecordedAt)}。`,
+        message: `${finding.manifestCount} 份上下文清单包含这个文件（${stageList(finding.stages)}），当前已找不到。最近一次记录于 ${formatLocalTime(finding.lastRecordedAt)}。`,
         details: [
           { label: '检查代码', value: finding.code },
           { label: '最近记录时间', value: finding.lastRecordedAt },
@@ -179,15 +180,25 @@ function describeInstructions(snapshot: RepositoryKnowledgeSnapshot): KnowledgeD
     : { label: `${instructions.sourcePath} · ${formatKnowledgeBytes(instructions.bytes)}（上限 ${limit}）`, tone: 'good', details }
 }
 
-/** Manifests recorded by stage agent calls of the given runs (ADR 0025 §5). */
+/**
+ * Manifests recorded for the given runs (ADR 0025 §5): stage agent calls, and since K3 the
+ * coding brief receipt of each Coding Run.
+ */
 export function recordedKnowledgeManifests(
   traces: readonly AgentTrace[],
   runIds: ReadonlySet<string>,
+  codingRuns: readonly Pick<CodingAgentRun, 'runId' | 'startedAt' | 'contextReceipt'>[] = [],
 ): RecordedKnowledgeContextManifest[] {
-  return traces.flatMap((trace) => {
-    const manifest = trace.executorProvenance?.knowledgeContext
-    return manifest && runIds.has(trace.runId) ? [{ manifest, recordedAt: trace.createdAt }] : []
-  })
+  return [
+    ...traces.flatMap((trace) => {
+      const manifest = trace.executorProvenance?.knowledgeContext
+      return manifest && runIds.has(trace.runId) ? [{ manifest, recordedAt: trace.createdAt }] : []
+    }),
+    ...codingRuns.flatMap((codingRun) => {
+      const manifest = codingRun.contextReceipt?.knowledgeContext
+      return manifest && runIds.has(codingRun.runId) ? [{ manifest, recordedAt: codingRun.startedAt }] : []
+    }),
+  ]
 }
 
 export function buildKnowledgeDirectoryView(input: {
@@ -214,7 +225,7 @@ export function buildKnowledgeDirectoryView(input: {
       ? `已对照 ${report.checkedManifestCount} 份上下文清单检查文件是否已删除。`
       : report.manifestCheck === 'index_truncated'
         ? '索引不完整，未检查上下文清单中的文件是否已删除。'
-        : '本项目还没有记录上下文清单的模型调用，未检查已删除的文件。',
+        : '本项目的阶段生成和开发执行还没有记录上下文清单，未检查已删除的文件。',
   ]
   return {
     rootLabel: snapshot.knowledgeRoot === '' ? '整个仓库' : snapshot.knowledgeRoot ?? 'docs/knowledge',
