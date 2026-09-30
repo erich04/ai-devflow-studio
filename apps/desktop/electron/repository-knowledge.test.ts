@@ -11,6 +11,8 @@ import { createRepositoryKnowledgeService } from './repository-knowledge'
 const execFile = promisify(execFileCallback)
 const indexedAt = '2026-08-01T12:00:00.000Z'
 const FILE_SYSTEM_STRESS_TEST_TIMEOUT_MS = 30_000
+// Boundary tests below index the whole repository; the default is docs/knowledge (ADR 0025).
+const wholeRepository = ''
 const tempDirectories: string[] = []
 
 afterEach(async () => {
@@ -56,7 +58,7 @@ describe('createRepositoryKnowledgeService', () => {
       'ignored.txt': 'not Markdown',
     })
     await writeFile(path.join(project.path, 'untracked.md'), '# Untracked')
-    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository })
 
     const first = await service.index(project)
     const second = await service.index(project)
@@ -88,7 +90,7 @@ describe('createRepositoryKnowledgeService', () => {
       'docs/guide.md': '# Docs Guide\n\nDocument guidance.',
       'standards/guide.md': '# Standards Guide\n\nStandards guidance.',
     })
-    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository })
 
     const first = await service.index(project)
     const second = await service.index(project)
@@ -117,7 +119,7 @@ describe('createRepositoryKnowledgeService', () => {
         '# Standards Guide',
       ].join('\n'),
     })
-    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository })
 
     const first = await service.index(project)
     const second = await service.index(project)
@@ -152,7 +154,7 @@ describe('createRepositoryKnowledgeService', () => {
       ]),
     ))
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(Math.max(...snapshot.documents.map((document) => document.tags.length))).toBe(32)
     expect(snapshot.relations).toHaveLength(1_024)
@@ -169,7 +171,7 @@ describe('createRepositoryKnowledgeService', () => {
     await symlink(secretPath, path.join(project.path, 'leak.md'))
     await execFile('git', ['add', '--', 'leak.md'], { cwd: project.path })
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents).toEqual([])
     expect(snapshot.chunks).toEqual([])
@@ -190,7 +192,7 @@ describe('createRepositoryKnowledgeService', () => {
       '.pytest_cache/private.md': '# Hidden tool cache',
     })
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents.map(({ sourcePath }) => sourcePath)).toEqual(['docs/keep.md'])
     expect(snapshot.truncated).toBe(false)
@@ -204,7 +206,7 @@ describe('createRepositoryKnowledgeService', () => {
       [tooDeep]: '# Too deep',
     })
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents.map(({ sourcePath }) => sourcePath)).toEqual(['within-limit.md'])
     expect(snapshot.truncated).toBe(true)
@@ -218,7 +220,7 @@ describe('createRepositoryKnowledgeService', () => {
       'oversized.md': Buffer.alloc(256 * 1024 + 1, 'a'),
     })
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents.map(({ sourcePath }) => sourcePath)).toEqual(['small.md'])
     expect(snapshot.truncated).toBe(true)
@@ -232,7 +234,7 @@ describe('createRepositoryKnowledgeService', () => {
     ]))
     const project = await createTrackedRepository(files)
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents).toHaveLength(256)
     expect(snapshot.documents.at(-1)?.sourcePath).toBe('docs/doc-255.md')
@@ -254,7 +256,7 @@ describe('createRepositoryKnowledgeService', () => {
     )
     await execFile('git', ['add', '--', ...unsafePaths], { cwd: project.path })
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents).toEqual([])
     expect(snapshot.truncated).toBe(true)
@@ -272,7 +274,7 @@ describe('createRepositoryKnowledgeService', () => {
     ]))
     const project = await createTrackedRepository(files)
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents).toHaveLength(16)
     expect(snapshot.truncated).toBe(true)
@@ -286,7 +288,7 @@ describe('createRepositoryKnowledgeService', () => {
     ]))
     const project = await createTrackedRepository(files)
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents).toHaveLength(8)
     expect(snapshot.truncated).toBe(true)
@@ -299,7 +301,7 @@ describe('createRepositoryKnowledgeService', () => {
     ).join('\n')
     const project = await createTrackedRepository({ 'many-headings.md': markdown })
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents).toHaveLength(1)
     expect(snapshot.chunks).toHaveLength(4_096)
@@ -308,7 +310,7 @@ describe('createRepositoryKnowledgeService', () => {
 
     const changedMarkdown = markdown.replace('Content 4096.', 'Changed beyond indexed chunks.')
     await writeFile(path.join(project.path, 'many-headings.md'), changedMarkdown)
-    const changed = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const changed = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
     expect(changed.contentHash).not.toBe(snapshot.contentHash)
     expect(changed.chunks).toEqual(snapshot.chunks)
   })
@@ -323,7 +325,7 @@ describe('createRepositoryKnowledgeService', () => {
       { cwd: project.path },
     )
 
-    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository }).index(project)
 
     expect(snapshot.documents.map(({ sourcePath }) => sourcePath)).toEqual(['seed.md'])
     expect(snapshot.truncated).toBe(true)
@@ -334,7 +336,7 @@ describe('createRepositoryKnowledgeService', () => {
     const project = await createTrackedRepository({
       'README.txt': 'There is no Markdown here.',
     })
-    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: wholeRepository })
 
     const snapshot: RepositoryKnowledgeSnapshot = await service.index(project)
 
@@ -349,5 +351,86 @@ describe('createRepositoryKnowledgeService', () => {
     })
     expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot)
     await expect(service.index(project)).resolves.toEqual(snapshot)
+  })
+})
+
+describe('knowledge directory and project instructions (ADR 0025)', () => {
+  it('indexes only docs/knowledge by default and records sha256 document digests', async () => {
+    const project = await createTrackedRepository({
+      'README.md': '# Readme',
+      'docs/plans/plan.md': '# Plan',
+      'docs/knowledge/standards/testing.md': '---\ntitle: Testing\nstages: [test]\ngate: true\n---\n# Testing',
+      'docs/knowledge/adr/nested/decision.markdown': '# Decision',
+    })
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+
+    expect(snapshot.knowledgeRoot).toBe('docs/knowledge')
+    expect(snapshot.documents.map((document) => document.sourcePath)).toEqual([
+      'docs/knowledge/adr/nested/decision.markdown',
+      'docs/knowledge/standards/testing.md',
+    ])
+    expect(snapshot.documents[1]).toMatchObject({
+      stages: ['test'],
+      gateStages: ['test'],
+      contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    })
+  })
+
+  it('honours a configured knowledge root and falls back to the default for unsafe values', async () => {
+    const project = await createTrackedRepository({
+      'handbook/guide.md': '# Guide',
+      'docs/knowledge/rule.md': '# Rule',
+    })
+    const custom = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: 'handbook/' }).index(project)
+    const unsafe = await createRepositoryKnowledgeService({ now: () => indexedAt, knowledgeRoot: '../outside' }).index(project)
+
+    expect(custom.documents.map((document) => document.sourcePath)).toEqual(['handbook/guide.md'])
+    expect(custom.knowledgeRoot).toBe('handbook')
+    expect(unsafe.documents.map((document) => document.sourcePath)).toEqual(['docs/knowledge/rule.md'])
+  })
+
+  it('reads the root AGENTS.md, falls back to CLAUDE.md, and binds it into the snapshot hash', async () => {
+    const project = await createTrackedRepository({
+      'AGENTS.md': '# Rules\nUse pnpm.',
+      'CLAUDE.md': '# Claude rules',
+    })
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+    const first = await service.index(project)
+    expect(first.projectInstructions).toEqual({
+      sourcePath: 'AGENTS.md',
+      content: '# Rules\nUse pnpm.',
+      bytes: Buffer.byteLength('# Rules\nUse pnpm.'),
+      contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      truncated: false,
+    })
+
+    await writeFile(path.join(project.path, 'AGENTS.md'), '# Rules\nUse npm.')
+    const changed = await service.index(project)
+    expect(changed.contentHash).not.toBe(first.contentHash)
+
+    await rm(path.join(project.path, 'AGENTS.md'))
+    const fallback = await service.index(project)
+    expect(fallback.projectInstructions).toMatchObject({ sourcePath: 'CLAUDE.md', content: '# Claude rules' })
+  })
+
+  it('truncates project instructions at 32 KiB and reports no instructions when absent', async () => {
+    const large = `# Rules\n${'规'.repeat(12_000)}`
+    const project = await createTrackedRepository({ 'AGENTS.md': large })
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    expect(snapshot.projectInstructions).toMatchObject({ truncated: true, bytes: Buffer.byteLength(large) })
+    expect(Buffer.byteLength(snapshot.projectInstructions!.content)).toBeLessThanOrEqual(32 * 1024)
+
+    const empty = await createTrackedRepository({ 'README.md': '# Readme' })
+    expect((await createRepositoryKnowledgeService({ now: () => indexedAt }).index(empty)).projectInstructions).toBeNull()
+  })
+
+  it('does not follow an AGENTS.md symlink outside the repository', async () => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'devflow-knowledge-outside-'))
+    tempDirectories.push(outside)
+    await writeFile(path.join(outside, 'secret.md'), 'SECRET')
+    const project = await createTrackedRepository({ 'README.md': '# Readme' })
+    await symlink(path.join(outside, 'secret.md'), path.join(project.path, 'AGENTS.md'))
+    const snapshot = await createRepositoryKnowledgeService({ now: () => indexedAt }).index(project)
+    expect(snapshot.projectInstructions).toBeNull()
   })
 })
