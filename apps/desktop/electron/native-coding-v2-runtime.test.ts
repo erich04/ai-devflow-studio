@@ -418,7 +418,8 @@ describe('DevFlow Native Executor v2 runtime', () => {
         path: 'src/message.ts',
         replacements: expect.arrayContaining([{ oldText: 'message = "old"', newText: 'message = "new"' }]),
       })] })
-      expect(repairPayload.excerpts).toEqual([expect.objectContaining({ path: 'src/message.ts', content: 'export const message = "new"\n' })])
+      // Windows checkouts may use CRLF line endings.
+      expect(repairPayload.excerpts).toEqual([expect.objectContaining({ path: 'src/message.ts', content: expect.stringMatching(/^export const message = "new"\r?\n$/u) })])
       await expect(readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8')).resolves.toBe('export const message = "old"\n')
       store.close()
       return
