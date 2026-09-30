@@ -6131,6 +6131,29 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
   })
 
+  it('runs Gate Review through read-only OpenCode after the review mode is switched in settings (knowledge-context K2)', async () => {
+    const api = installDesktopApi()
+    render(<App />)
+
+    await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
+    const models = openSettingsSection('模型与执行方式')
+    const mode = await within(models).findByLabelText('门禁审查方式')
+    expect(mode).toHaveValue('direct-provider')
+    expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不读取仓库')
+    fireEvent.change(mode, { target: { value: 'local-agent' } })
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ knowledgeReviewExecutor: 'local-agent' }))
+    expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不修改代码、不运行命令、不批准 Gate')
+
+    clickPrimaryNav('任务')
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    await waitFor(() => expect(runReview).toBeEnabled())
+    fireEvent.click(runReview)
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+      executor: 'local-agent',
+      providerId: agentProvider.id,
+    })))
+  })
+
   it('runs Gate Review in the task inspector and keeps the current inspector without opening settings', async () => {
     const api = installDesktopApi()
     render(<App />)

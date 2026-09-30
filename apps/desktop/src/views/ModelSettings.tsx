@@ -12,6 +12,7 @@ import {
   type CodingRuntimeReadiness,
   type ProviderCredentialMetadata,
   type ProviderThinkingConfiguration,
+  type StageAgentExecutorKind,
   type WorkflowNode,
 } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
@@ -33,6 +34,8 @@ export function ModelSettings({
   providers,
   selectedProviderId,
   onProviderChange,
+  reviewExecutor,
+  onReviewExecutorChange,
   onProviderRemoved,
   onProviderUpdated,
   providerNameDraft,
@@ -64,6 +67,9 @@ export function ModelSettings({
   providers: AgentProviderConfig[]
   selectedProviderId: string
   onProviderChange: (providerId: string) => void
+  /** Gate Review execution mode (knowledge-context K2); absent hides the choice. */
+  reviewExecutor?: StageAgentExecutorKind | undefined
+  onReviewExecutorChange?: ((executor: StageAgentExecutorKind) => void) | undefined
   onProviderRemoved: (providerId: string) => void
   onProviderUpdated?: (metadata: ProviderCredentialMetadata) => void
   providerNameDraft: string
@@ -471,6 +477,24 @@ export function ModelSettings({
               </div>
             ) : null}
             {desktopApi && selectedProvider?.kind === 'openai-compatible' ? <SavedProviderThinkingSettings key={selectedProvider.id} provider={selectedProvider} api={desktopApi} onUpdated={onProviderUpdated} /> : null}
+            {reviewExecutor && onReviewExecutorChange && providers.length > 0 ? (
+              <label className="runtime-provider-picker" data-testid="review-executor-setting">
+                门禁审查方式
+                <select
+                  aria-label="门禁审查方式"
+                  value={reviewExecutor}
+                  onChange={(event) => onReviewExecutorChange(event.target.value as StageAgentExecutorKind)}
+                >
+                  <option value="direct-provider">只依据材料与知识目录</option>
+                  <option value="local-agent">OpenCode 读取仓库核对</option>
+                </select>
+                <small>
+                  {reviewExecutor === 'local-agent'
+                    ? '用所选模型启动本机 OpenCode，只读查看仓库后给出审查意见；不修改代码、不运行命令、不批准 Gate。需要本机 OpenCode 和已保存的 Provider；模型会调用多轮，费用通常高于只依据材料的审查。'
+                    : '一次模型调用，只依据待审材料、项目说明和知识目录中的规范，不读取仓库。'}
+                </small>
+              </label>
+            ) : null}
           </article>
 
           <article className="agent-evidence-card runtime-settings-form">

@@ -30,6 +30,7 @@ import {
   type RepositoryKnowledgeSnapshot,
   type RemoteSyncOperation,
   type RetryAttempt,
+  type StageAgentExecutorKind,
   type TeamMember,
   type TestEvidence,
   type ThemePreference,
@@ -100,6 +101,8 @@ export type DesktopWorkspaceState = {
   mcpServers: McpServerDefinition[]
   agentProviders: AgentProviderConfig[]
   selectedAgentProviderId: string
+  /** How Gate Reviews run with the selected Provider (knowledge-context K2). */
+  knowledgeReviewExecutor: StageAgentExecutorKind
   agentReviews: AgentReviewResult[]
   agentTraces: AgentTrace[]
   agentTokenUsage: AgentTokenUsage[]
@@ -161,6 +164,7 @@ export type DesktopWorkspaceSetters = {
   setMcpServers: Dispatch<SetStateAction<McpServerDefinition[]>>
   setAgentProviders: Dispatch<SetStateAction<AgentProviderConfig[]>>
   setSelectedAgentProviderId: Dispatch<SetStateAction<string>>
+  setKnowledgeReviewExecutor: Dispatch<SetStateAction<StageAgentExecutorKind>>
   setAgentReviews: Dispatch<SetStateAction<AgentReviewResult[]>>
   setAgentTraces: Dispatch<SetStateAction<AgentTrace[]>>
   setAgentTokenUsage: Dispatch<SetStateAction<AgentTokenUsage[]>>
@@ -244,6 +248,7 @@ export function useDesktopWorkspace(input: {
   const [mcpServers, setMcpServers] = useState<McpServerDefinition[]>([])
   const [agentProviders, setAgentProviders] = useState<AgentProviderConfig[]>([])
   const [selectedAgentProviderId, setSelectedAgentProviderId] = useState('')
+  const [knowledgeReviewExecutor, setKnowledgeReviewExecutor] = useState<StageAgentExecutorKind>('direct-provider')
   const [agentReviews, setAgentReviews] = useState<AgentReviewResult[]>([])
   const [agentTraces, setAgentTraces] = useState<AgentTrace[]>([])
   const [agentTokenUsage, setAgentTokenUsage] = useState<AgentTokenUsage[]>([])
@@ -385,6 +390,7 @@ export function useDesktopWorkspace(input: {
     if (state.settings.selectedAgentProviderId !== undefined) {
       setSelectedAgentProviderId(state.settings.selectedAgentProviderId)
     }
+    setKnowledgeReviewExecutor(state.settings.knowledgeReviewExecutor === 'local-agent' ? 'local-agent' : 'direct-provider')
     setHasLoadedLocalState(true)
     if (state.projects[0] && !selectedLocalProjectIdRef.current) {
       setSelectedLocalProjectId(state.projects[0].id)
@@ -632,6 +638,7 @@ export function useDesktopWorkspace(input: {
     mcpServers,
     agentProviders,
     selectedAgentProviderId,
+    knowledgeReviewExecutor,
     agentReviews,
     agentTraces,
     agentTokenUsage,
@@ -693,6 +700,7 @@ export function useDesktopWorkspace(input: {
     setMcpServers,
     setAgentProviders,
     setSelectedAgentProviderId,
+    setKnowledgeReviewExecutor,
     setAgentReviews,
     setAgentTraces,
     setAgentTokenUsage,

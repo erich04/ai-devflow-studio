@@ -51,6 +51,44 @@ export function formatCodingRunCost(summary: CodingAgentRun['runtimeCostSummary'
   return formatUsd(summary.costUsd)
 }
 
+function citationLabel(citation: NonNullable<AgentReviewResult['repositoryFindings']>['citations'][number] | undefined): string {
+  if (!citation) return '未知引用'
+  if (!citation.lineStart) return citation.path
+  return `${citation.path}:${citation.lineStart}${citation.lineEnd && citation.lineEnd !== citation.lineStart ? `–${citation.lineEnd}` : ''}`
+}
+
+/**
+ * How the review was produced (knowledge-context K2). Repository facts of a read-only OpenCode
+ * review stay collapsed and are marked as supplementary; they never count as Gate evidence.
+ */
+function ReviewRepositoryCheck({ review }: { review: AgentReviewResult }) {
+  if (review.executorKind !== 'local-agent') {
+    return <p className="meta" data-testid="review-method">审查方式：只依据材料与知识目录，未读取仓库。</p>
+  }
+  const findings = review.repositoryFindings
+  if (!findings || findings.citations.length === 0) {
+    return <p className="meta" data-testid="review-method">审查方式：OpenCode 读取仓库核对，本次没有引用仓库文件。</p>
+  }
+  const citationById = new Map(findings.citations.map((citation) => [citation.id, citation]))
+  const fileCount = new Set(findings.citations.map((citation) => citation.path)).size
+  return (
+    <details className="review-repository-findings" data-testid="review-repository-findings">
+      <summary>审查方式：OpenCode 读取仓库核对 · 核对 {findings.verifiedFacts.length} 项事实，引用 {fileCount} 个文件</summary>
+      <p className="meta">仓库引用按本机文件内容校验过，只作补充说明，不作为 Gate 依据。</p>
+      <ul>
+        {findings.verifiedFacts.map((fact) => (
+          <li key={fact.id}>
+            {fact.statement}
+            {' '}
+            {fact.citationIds.map((id) => <code key={id}>{citationLabel(citationById.get(id))}</code>)}
+          </li>
+        ))}
+      </ul>
+      {findings.uncheckedScopes.length > 0 ? <p className="meta">未核对：{findings.uncheckedScopes.join('、')}</p> : null}
+    </details>
+  )
+}
+
 /** Gate Review in the task: failure reason with retry, and a confirmed re-run (plan W2). */
 export function GateReviewRunPanel({
   latestReview,
@@ -90,6 +128,7 @@ export function GateReviewRunPanel({
       ) : latestReview ? (
         <p>上次审查：{formatLocalTime(latestReview.createdAt)} · {latestReview.model}。内容变化后可以重新审查，旧结果保留在历史中。</p>
       ) : null}
+      {latestReview && !isRunning ? <ReviewRepositoryCheck review={latestReview} /> : null}
       {!isRunning ? (
         <div className="inspector-actions">
           <button className="ghost-button" type="button" disabled={disabled} title={blockedReason} onClick={start}>
