@@ -92,6 +92,13 @@ type ExposedDesktopApi = {
     expectedContentDigest: string
     expectedProvenanceDigest: string
   }) => Promise<unknown>
+  dismissAgentMemoryCandidate: (input: {
+    runId: string
+    localProjectId: string
+    candidateId: string
+    expectedContentDigest: string
+    expectedProvenanceDigest: string
+  }) => Promise<unknown>
   reviseAgentMemory: (input: {
     runtimeId: string
     runId: string
@@ -233,6 +240,13 @@ describe('Electron preload remote sync operator surface', () => {
       expectedProvenanceDigest: 'b'.repeat(64),
     }
     await expect(exposedApi.promoteAgentMemoryCandidate(promotion)).resolves.toBe(snapshot)
+    const dismissal = {
+      ...selection,
+      candidateId: 'memory-candidate-2',
+      expectedContentDigest: 'a'.repeat(64),
+      expectedProvenanceDigest: 'b'.repeat(64),
+    }
+    await expect(exposedApi.dismissAgentMemoryCandidate(dismissal)).resolves.toBe(snapshot)
     const revision = {
       runtimeId: 'agent-runtime-1',
       ...selection,
@@ -299,6 +313,10 @@ describe('Electron preload remote sync operator surface', () => {
     expect(electron.invoke).toHaveBeenCalledWith(
       ipcChannels.promoteAgentMemoryCandidate,
       promotion,
+    )
+    expect(electron.invoke).toHaveBeenCalledWith(
+      ipcChannels.dismissAgentMemoryCandidate,
+      dismissal,
     )
     expect(electron.invoke).toHaveBeenCalledWith(
       ipcChannels.reviseAgentMemory,

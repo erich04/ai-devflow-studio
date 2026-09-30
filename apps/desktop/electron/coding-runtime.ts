@@ -516,9 +516,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const awaitingReview = learned.notPromoted.filter((entry) =>
         entry.reason === 'human_review_required' || entry.reason === 'duplicate').length
       const skipped = learned.candidates.filter((candidate) => candidate.outcome === 'duplicate').length
+      const dismissed = learned.candidates.filter((candidate) => candidate.outcome === 'dismissed').length
       message = `Saved ${saved.length} Memory candidate(s) from this accepted Coding Run: ` +
         `${learned.promoted.length} saved as Memory by the bounded Coding Run policy, ${awaitingReview} awaiting review` +
-        `${skipped ? `, ${skipped} already known and not saved again` : ''}.`
+        `${skipped ? `, ${skipped} already known and not saved again` : ''}` +
+        `${dismissed ? `, ${dismissed} previously dismissed and not proposed again` : ''}.`
       metadata = { memoryLearning: {
         candidates: learned.candidates, promoted: learned.promoted, notPromoted: learned.notPromoted,
       } }

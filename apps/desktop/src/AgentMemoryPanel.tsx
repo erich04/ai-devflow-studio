@@ -60,6 +60,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
   const [revisionStatement, setRevisionStatement] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const [deletingMemoryId, setDeletingMemoryId] = useState<string | null>(null)
+  const [isDismissing, setIsDismissing] = useState(false)
+  const [dismissingCandidateId, setDismissingCandidateId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const selectionVersion = useRef(0)
 
@@ -75,6 +77,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       setRevisionStatement('')
       setIsDeleting(false)
       setDeletingMemoryId(null)
+      setIsDismissing(false)
+      setDismissingCandidateId(null)
       setError(null)
       return
     }
@@ -88,6 +92,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
     setRevisionStatement('')
     setIsDeleting(false)
     setDeletingMemoryId(null)
+    setIsDismissing(false)
+    setDismissingCandidateId(null)
     setError(null)
     void (async () => {
       // Project-wide view (ADR 0024): Main resolves the user from the Run and pairing, so
@@ -144,6 +150,40 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       }
     } finally {
       if (operationVersion === selectionVersion.current) setIsPromoting(false)
+    }
+  }
+
+  async function dismissCandidate(candidate: AgentMemoryRendererSnapshot['candidates'][number]) {
+    if (
+      !desktopApi ||
+      runtimeSelection === null ||
+      runtimeSelection.runId !== runId ||
+      runtimeSelection.localProjectId !== localProjectId ||
+      candidate.lifecycleStatus !== 'pending'
+    ) return
+    const operationVersion = selectionVersion.current
+    setIsDismissing(true)
+    setError(null)
+    try {
+      const value = await desktopApi.dismissAgentMemoryCandidate({
+        ...runtimeSelection,
+        candidateId: candidate.id,
+        expectedContentDigest: candidate.contentDigest,
+        expectedProvenanceDigest: candidate.provenanceDigest,
+      })
+      const parsed = parseAgentMemoryRendererSnapshot(value)
+      if (
+        parsed.localProjectId !== runtimeSelection.localProjectId ||
+        operationVersion !== selectionVersion.current
+      ) throw new Error('Agent Memory dismissal result is stale')
+      setSnapshot(parsed)
+      setDismissingCandidateId(null)
+    } catch {
+      if (operationVersion === selectionVersion.current) {
+        setError('忽略 Memory 候选的请求已被安全拒绝；请刷新后重新检查。')
+      }
+    } finally {
+      if (operationVersion === selectionVersion.current) setIsDismissing(false)
     }
   }
 
@@ -311,14 +351,48 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                     </div>
                   ) : null}
                   {candidate.lifecycleStatus === 'pending' ? (
-                    <button
-                      type="button"
-                      className="ghost-button"
-                      disabled={isPromoting || candidate.duplicateOf?.kind === 'exact'}
-                      onClick={() => { void promoteCandidate(candidate) }}
-                    >
-                      {isPromoting ? '正在提升 Memory…' : '提升为用户项目私有 Memory'}
-                    </button>
+                    dismissingCandidateId === candidate.id ? (
+                      <div className="agent-advisory">
+                        <span>忽略后移除这条候选，同一来源不会再次提出；已保存的记忆不受影响。</span>
+                        <div className="button-row">
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            disabled={isDismissing}
+                            onClick={() => { void dismissCandidate(candidate) }}
+                          >
+                            {isDismissing ? '正在忽略候选…' : '确认忽略此候选'}
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            disabled={isDismissing}
+                            onClick={() => setDismissingCandidateId(null)}
+                          >
+                            取消忽略
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="button-row">
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          disabled={isPromoting || isDismissing || candidate.duplicateOf?.kind === 'exact'}
+                          onClick={() => { void promoteCandidate(candidate) }}
+                        >
+                          {isPromoting ? '正在提升 Memory…' : '提升为用户项目私有 Memory'}
+                        </button>
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          disabled={isPromoting || isDismissing}
+                          onClick={() => setDismissingCandidateId(candidate.id)}
+                        >
+                          忽略此候选
+                        </button>
+                      </div>
+                    )
                   ) : null}
                 </article>
               ))}

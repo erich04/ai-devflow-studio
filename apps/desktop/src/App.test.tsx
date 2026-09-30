@@ -754,6 +754,9 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     promoteAgentMemoryCandidate: vi.fn().mockRejectedValue(
       new Error('Agent Memory promotion is not configured for this test.'),
     ),
+    dismissAgentMemoryCandidate: vi.fn().mockRejectedValue(
+      new Error('Agent Memory candidate dismissal is not configured for this test.'),
+    ),
     reviseAgentMemory: vi.fn().mockRejectedValue(
       new Error('Agent Memory revision is not configured for this test.'),
     ),

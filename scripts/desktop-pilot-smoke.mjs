@@ -411,6 +411,20 @@ try {
     ) {
       throw new Error('Packaged Agent Memory promotion did not commit exact revision one.')
     }
+    // ADR 0024 §5: a promoted candidate is the provenance of its Memory and cannot be dismissed.
+    const dismissPromoted = await window.aiDevFlowDesktop.dismissAgentMemoryCandidate({
+      ...selection,
+      candidateId: candidate.id,
+      expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest,
+    }).then(() => 'dismissed', () => 'rejected')
+    const afterDismissAttempt = await window.aiDevFlowDesktop.listAgentMemoryLifecycle(selection)
+    if (
+      dismissPromoted !== 'rejected' ||
+      afterDismissAttempt.candidates.find((entry) => entry.id === candidate.id)?.lifecycleStatus !== 'promoted'
+    ) {
+      throw new Error('Packaged Agent Memory dismissed a promoted candidate.')
+    }
     lifecycle = await window.aiDevFlowDesktop.reviseAgentMemory({
       ...selection,
       memoryId: promoted.memoryId,
@@ -751,8 +765,8 @@ try {
     )[0]?.values ?? [],
   }
   database.close()
-  if (schemaVersion !== 37) {
-    throw new Error(`Packaged Desktop did not initialize schema 37: ${schemaVersion}`)
+  if (schemaVersion !== 38) {
+    throw new Error(`Packaged Desktop did not initialize schema 38: ${schemaVersion}`)
   }
   const [toolId, source, installationId, installationVersion, started, succeeded, records, results] =
     workflowEvaluationAudit ?? []
