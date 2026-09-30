@@ -5895,6 +5895,13 @@ describe('App', () => {
     for (const reference of screen.getAllByTestId('knowledge-run-reference')) {
       expect(reference).toHaveTextContent('docs/knowledge/standards/api-health.md')
     }
+    // K4: directory, stage usage and checks come from the same snapshot.
+    const directory = screen.getByTestId('knowledge-directory')
+    expect(directory).toHaveTextContent('知识目录')
+    expect(within(directory).getAllByTestId('knowledge-stage-budget')).toHaveLength(6)
+    expect(screen.getByTestId('knowledge-checks')).toHaveTextContent('不会阻断任何步骤或 Gate')
+    expect(screen.getByTestId('knowledge-checks')).toHaveTextContent('本项目还没有记录上下文清单的模型调用，未检查已删除的文件。')
+    expect(screen.getByTestId('knowledge-document-stages')).toHaveTextContent('适用阶段：需求澄清、方案设计、开发实现、测试证据')
   })
 
   it('bounds a large repository knowledge graph in the renderer', async () => {

@@ -55,6 +55,7 @@ import {
   type SearchResultItem,
   matchesQuery,
 } from './app/desktop-view-model'
+import { buildKnowledgeDirectoryView, recordedKnowledgeManifests } from './app/knowledge-directory-view-model'
 import {
   displayNodeTitle,
   resolveInspectorTabForSearchResult,
@@ -825,6 +826,16 @@ export function App() {
         error: repositoryKnowledgeError,
       }),
     [dataOrigin, desktopApi, isLoadingRepositoryKnowledge, repositoryKnowledge, repositoryKnowledgeError],
+  )
+  // Knowledge page (knowledge-context plan K4): computed only while the page is open.
+  const knowledgeDirectory = useMemo(
+    () => activeView === 'knowledge'
+      ? buildKnowledgeDirectoryView({
+          snapshot: repositoryKnowledge,
+          recordedManifests: recordedKnowledgeManifests(agentTraces, scopedRunIdSet),
+        })
+      : undefined,
+    [activeView, agentTraces, repositoryKnowledge, scopedRunIdSet],
   )
   const isSelectedNodeGateLike = selectedNode?.kind === 'gate' || selectedNode?.kind === 'acceptance'
   const gateEnforcement = useGateEnforcement({
@@ -1735,6 +1746,7 @@ export function App() {
             onRefresh={() => void refreshRepositoryKnowledge()}
             onReturnToInspector={returnToInspector}
             artifacts={scopedArtifacts}
+            directory={knowledgeDirectory}
             // Memory management moved here from the Agents page (plan §4.1, Y3).
             memoryPanel={<AgentMemoryPanel desktopApi={desktopApi} runId={selectedRun?.id} localProjectId={selectedLocalProject?.id} />}
           />

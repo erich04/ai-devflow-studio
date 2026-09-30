@@ -1020,6 +1020,12 @@ try {
 
   await clickPrimaryNav(first.page, '知识')
   await expect(first.page.getByTestId('knowledge-view')).toContainText('知识治理')
+  // K4: the knowledge directory and its checks come from the real main-process index.
+  await expect(first.page.getByTestId('knowledge-directory')).toContainText('docs/knowledge')
+  // The fixture repository has no knowledge documents yet.
+  await expect(first.page.getByTestId('knowledge-directory-empty')).toContainText('知识目录中还没有文档')
+  await expect(first.page.getByTestId('knowledge-stage-budget')).toHaveCount(0)
+  await expect(first.page.getByTestId('knowledge-checks')).toContainText('不会阻断任何步骤或 Gate')
   await first.page.getByLabel('搜索当前项目').fill('api')
   await expect(first.page.getByTestId('knowledge-view')).toContainText('没有匹配的知识文档')
   await expect(first.page.getByTestId('knowledge-view')).toContainText('没有匹配的知识节点')
