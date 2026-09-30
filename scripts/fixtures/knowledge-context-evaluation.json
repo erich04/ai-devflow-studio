@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "corpusId": "knowledge-context-zh",
+  "description": "K0 中文评估集（docs/plans/knowledge-context-redesign-2026-09-29.zh-CN.md §6）。corpus 为本仓库 docs/knowledge。required：该阶段上下文必须包含全文；available：至少出现在目录中；gate：该阶段节点的知识治理检查应恰好列出的规范（仅 clarify/design/test/pr/accept 阶段的节点会产生治理检查）。",
+  "knowledgeRoot": "docs/knowledge",
+  "scenarios": [
+    {
+      "id": "health-clarify",
+      "stage": "clarify",
+      "request": "API 增加依赖探测，健康检查要区分降级状态",
+      "required": [
+        "docs/knowledge/standards/api-health.md"
+      ],
+      "available": [],
+      "gate": []
+    },
+    {
+      "id": "health-design",
+      "stage": "design",
+      "request": "API 增加依赖探测，健康检查要区分降级状态",
+      "required": [
+        "docs/knowledge/standards/api-health.md",
+        "docs/knowledge/standards/testing-evidence.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "health-build",
+      "stage": "build",
+      "request": "API 增加依赖探测，健康检查要区分降级状态",
+      "required": [
+        "docs/knowledge/standards/api-health.md",
+        "docs/knowledge/standards/testing-evidence.md"
+      ],
+      "available": [],
+      "gate": []
+    },
+    {
+      "id": "health-test",
+      "stage": "test",
+      "request": "API 增加依赖探测，健康检查要区分降级状态",
+      "required": [
+        "docs/knowledge/standards/testing-evidence.md",
+        "docs/knowledge/standards/api-health.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "health-pr",
+      "stage": "pr",
+      "request": "API 增加依赖探测，健康检查要区分降级状态",
+      "required": [
+        "docs/knowledge/checklists/pr-review.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/checklists/pr-review.md"
+      ]
+    },
+    {
+      "id": "health-accept",
+      "stage": "accept",
+      "request": "API 增加依赖探测，健康检查要区分降级状态",
+      "required": [
+        "docs/knowledge/checklists/pr-review.md",
+        "docs/knowledge/adr/gate-governance.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/checklists/pr-review.md"
+      ]
+    },
+    {
+      "id": "gate-evidence-clarify",
+      "stage": "clarify",
+      "request": "Gate 审批前必须引用证据，需求确认页要显示审查依据",
+      "required": [
+        "docs/knowledge/adr/gate-governance.md"
+      ],
+      "available": [],
+      "gate": []
+    },
+    {
+      "id": "design-version-binding",
+      "stage": "design",
+      "request": "方案评审 Gate 需要绑定设计材料的版本",
+      "required": [
+        "docs/knowledge/adr/gate-governance.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "mcp-tool-design",
+      "stage": "design",
+      "request": "给编码执行器接入新的 MCP 工具，需要记录权限范围和审计",
+      "required": [
+        "docs/knowledge/rules/mcp-skill-usage.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "mcp-tool-build",
+      "stage": "build",
+      "request": "给编码执行器接入新的 MCP 工具，需要记录权限范围和审计",
+      "required": [
+        "docs/knowledge/rules/mcp-skill-usage.md"
+      ],
+      "available": [],
+      "gate": []
+    },
+    {
+      "id": "opencode-smoke-test",
+      "stage": "test",
+      "request": "跑一次真实 OpenCode 运行时冒烟，验证权限审计和密钥保护",
+      "required": [
+        "docs/knowledge/checklists/opencode-runtime-signoff.md",
+        "docs/knowledge/standards/testing-evidence.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "opencode-release-accept",
+      "stage": "accept",
+      "request": "发布前确认真实 OpenCode 验收已经完成",
+      "required": [
+        "docs/knowledge/checklists/opencode-runtime-signoff.md",
+        "docs/knowledge/checklists/pr-review.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/checklists/pr-review.md"
+      ]
+    },
+    {
+      "id": "postgres-smoke-test",
+      "stage": "test",
+      "request": "Postgres 冒烟测试要覆盖数据保留迁移和同步脱敏",
+      "required": [
+        "docs/knowledge/checklists/postgres-smoke-readiness.md",
+        "docs/knowledge/standards/testing-evidence.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "electron-demo-accept",
+      "stage": "accept",
+      "request": "Electron 演示前检查生产权限边界和凭据隔离",
+      "required": [
+        "docs/knowledge/checklists/electron-demo-readiness.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/checklists/pr-review.md"
+      ]
+    },
+    {
+      "id": "electron-mcp-test",
+      "stage": "test",
+      "request": "Electron 冒烟测试要验证本地 MCP 审计恢复",
+      "required": [
+        "docs/knowledge/checklists/electron-demo-readiness.md",
+        "docs/knowledge/standards/testing-evidence.md"
+      ],
+      "available": [
+        "docs/knowledge/rules/mcp-skill-usage.md"
+      ],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "failed-test-visible-clarify",
+      "stage": "clarify",
+      "request": "测试失败时审查者要能看到脱敏后的输出",
+      "required": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ],
+      "available": [],
+      "gate": []
+    },
+    {
+      "id": "evidence-redaction-design",
+      "stage": "design",
+      "request": "测试证据同步到团队之前要先对密钥和令牌脱敏",
+      "required": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "draft-pr-commit-pr",
+      "stage": "pr",
+      "request": "草稿 PR 必须和批准的提交一致，不能自动合并",
+      "required": [
+        "docs/knowledge/checklists/pr-review.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/checklists/pr-review.md"
+      ]
+    },
+    {
+      "id": "business-accept",
+      "stage": "accept",
+      "request": "业务验收要引用草稿 PR 和完成证据",
+      "required": [
+        "docs/knowledge/checklists/pr-review.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/checklists/pr-review.md"
+      ]
+    },
+    {
+      "id": "task-page-redesign-design",
+      "stage": "design",
+      "request": "重做桌面端任务页的界面设计，降低信息密度",
+      "required": [],
+      "available": [
+        "docs/knowledge/prompts/opendesign-design-prompts.md"
+      ],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    },
+    {
+      "id": "v09-demo-clarify",
+      "stage": "clarify",
+      "request": "v0.9 演示需要说明策略感知交付和运行时可观测性",
+      "required": [],
+      "available": [
+        "docs/knowledge/checklists/v09-demo-readiness.md"
+      ],
+      "gate": []
+    },
+    {
+      "id": "v09-demo-accept",
+      "stage": "accept",
+      "request": "v0.9 演示验收，确认如实说明 OpenCode 的能力边界",
+      "required": [
+        "docs/knowledge/checklists/v09-demo-readiness.md",
+        "docs/knowledge/checklists/opencode-runtime-signoff.md"
+      ],
+      "available": [],
+      "gate": [
+        "docs/knowledge/checklists/pr-review.md"
+      ]
+    },
+    {
+      "id": "cache-outage-build",
+      "stage": "build",
+      "request": "修复缓存故障时健康端点仍返回 ok 的问题",
+      "required": [
+        "docs/knowledge/standards/api-health.md"
+      ],
+      "available": [],
+      "gate": []
+    },
+    {
+      "id": "metadata-only-package-design",
+      "stage": "design",
+      "request": "PR 交付包只允许元数据，不能包含源码和本地路径",
+      "required": [],
+      "available": [
+        "docs/knowledge/checklists/pr-review.md"
+      ],
+      "gate": [
+        "docs/knowledge/standards/testing-evidence.md"
+      ]
+    }
+  ]
+}
