@@ -1,11 +1,72 @@
 import assert from 'node:assert/strict'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { createHmac } from 'node:crypto'
 import { mkdir } from 'node:fs/promises'
+import { createServer as createNetServer } from 'node:net'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron, expect, type ElectronApplication } from '@playwright/test'
 import type { Artifact, WorkflowRun } from '../packages/shared/src/domain.ts'
 import type {} from '../apps/desktop/src/desktop-api.ts'
 import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
+
+const sessionSecret = 'stage-design-smoke-isolated-session-secret-32'
+
+async function freePort(): Promise<number> {
+  const server = createNetServer()
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  await new Promise<void>((resolve) => server.close(() => resolve()))
+  if (!address || typeof address === 'string') throw new Error('No free port for the isolated Team API')
+  return address.port
+}
+
+/**
+ * In-memory demo Team API. Since #168 every stage model call is admitted against the paired
+ * Team Project's policy snapshot and budget, so the design step needs a real Team boundary.
+ */
+async function startIsolatedTeamApi(workspace: string, root: string) {
+  const port = await freePort()
+  const url = `http://127.0.0.1:${port}`
+  let log = ''
+  const child: ChildProcess = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], {
+    cwd: path.join(workspace, 'apps/api'),
+    env: { ...process.env, DATABASE_URL: '', DEVFLOW_DATABASE_URL: '', DEVFLOW_ENABLE_DEMO_DATA: 'true',
+      DEV_AUTH_ENABLED: 'true', DEVFLOW_SESSION_SECRET: sessionSecret, PORT: String(port), HOST: '127.0.0.1',
+      DEVFLOW_GITHUB_APP_ID: '', DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64: '',
+      DEVFLOW_API_DIAGNOSTICS_PATH: path.join(root, 'api-diagnostics.json') },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  for (const stream of [child.stdout, child.stderr]) stream?.on('data', (chunk) => { log = (log + chunk).slice(-8_000) })
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    if (child.exitCode !== null) throw new Error(`Isolated Team API exited: ${log}`)
+    if (await fetch(`${url}/ready`).then((response) => response.ok).catch(() => false)) break
+    if (attempt === 149) throw new Error(`Isolated Team API did not become ready: ${log}`)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  const post = async (route: string, body: unknown) => {
+    const payload = Buffer.from(JSON.stringify({ v: 1, authAccountId: 'acct-demo-u-erich',
+      expiresAt: Math.floor(Date.now() / 1_000) + 3_600 })).toString('base64url')
+    const signature = createHmac('sha256', sessionSecret).update(payload).digest('base64url')
+    const response = await fetch(`${url}${route}`, { method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: `devflow_session=${payload}.${signature}` }, body: JSON.stringify(body) })
+    assert.equal(response.status, 201, `Team API ${route} failed with ${response.status}`)
+    return response.json() as Promise<Record<string, unknown>>
+  }
+  const project = await post('/api/team/projects', { name: 'Stage design smoke', slug: `stage-design-${Date.now()}`,
+    repository: 'local/stage-design-smoke', description: 'Isolated no-cost design stage verification.' })
+  const pairing = await post(`/api/team/projects/${encodeURIComponent(String(project.id))}/pairing-codes`, {})
+  return {
+    url,
+    pairingCode: String(pairing.code),
+    stop: async () => {
+      if (child.exitCode !== null) return
+      child.kill('SIGTERM')
+      await Promise.race([new Promise((resolve) => child.once('exit', resolve)), new Promise((resolve) => setTimeout(resolve, 3_000))])
+      if (child.exitCode === null) child.kill('SIGKILL')
+    },
+  }
+}
 
 /** Isolated real Main/preload/renderer test. All model responses and credentials are synthetic. */
 export async function verifyDesignInElectron(input: {
@@ -25,6 +86,8 @@ export async function verifyDesignInElectron(input: {
     baseUrl: input.endpoint, maskedCredential: 'synthetic-only', updatedAt: input.run.updatedAt },
   Buffer.from('synthetic-not-billed').toString('base64'))
   await store.saveSettings({ selectedAgentProviderId: 'design-fixture', themePreference: 'dark' })
+  store.close()
+  const team = await startIsolatedTeamApi(workspace, input.root)
   let app: ElectronApplication | undefined
   const launch = async () => {
     app = await electron.launch({ args: ['.'], cwd: path.join(workspace, 'apps', 'desktop'), env: {
@@ -32,15 +95,19 @@ export async function verifyDesignInElectron(input: {
       XDG_DATA_HOME: path.join(input.root, 'data'), XDG_CACHE_HOME: path.join(input.root, 'cache'),
       DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'),
       DEVFLOW_OPENCODE_BIN: process.env.DEVFLOW_OPENCODE_BIN || 'opencode',
-      DEVFLOW_API_BASE_URL: 'http://127.0.0.1:9', DEVFLOW_INITIAL_THEME: 'dark',
+      DEVFLOW_API_BASE_URL: team.url, DEVFLOW_INITIAL_THEME: 'dark',
       VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
     } })
     // No macOS keychain access: accept exactly the test secret seeded above, in this process only.
+    // The pairing token saved by this test is encrypted with the same in-process adapter.
     await app.evaluate(({ safeStorage }) => {
       safeStorage.isAsyncEncryptionAvailable = async () => true
+      safeStorage.encryptStringAsync = async (value: string) => Buffer.from(`stage-design-smoke:${value}`)
       safeStorage.decryptStringAsync = async (bytes) => {
-        if (bytes.toString() !== 'synthetic-not-billed') throw new Error('Unexpected test credential')
-        return { result: 'synthetic-not-billed', shouldReEncrypt: false }
+        const text = bytes.toString()
+        if (text === 'synthetic-not-billed') return { result: text, shouldReEncrypt: false }
+        if (text.startsWith('stage-design-smoke:')) return { result: text.slice('stage-design-smoke:'.length), shouldReEncrypt: false }
+        throw new Error('Unexpected test credential')
       }
     })
     const page = await app.firstWindow()
@@ -50,6 +117,14 @@ export async function verifyDesignInElectron(input: {
   }
   try {
     let page = await launch()
+    // Governed model calls need the paired Team Project's policy and budget (#168). The synthetic
+    // model has no price, so this test project's budget guard is explicitly disabled.
+    await page.evaluate((pairing) => window.aiDevFlowDesktop!.pairDesktop(pairing),
+      { code: team.pairingCode, localProjectId: input.run.projectId })
+    await page.evaluate((projectId) => window.aiDevFlowDesktop!.saveCodingRuntimeBudgetPolicy({
+      projectId, enabled: false, monthlyLimitUsd: 1, warningThresholdUsd: 0.5 }), input.run.projectId)
+    await page.reload()
+    await page.waitForLoadState('domcontentloaded')
     await expect(page.getByTestId('workflow-canvas')).toBeVisible()
     // Sub-steps are folded into the browsed stage item (plan L2, Y6); open them before clicking a node.
     const openSubSteps = async () => {
@@ -73,8 +148,23 @@ export async function verifyDesignInElectron(input: {
     assert(cancelled.agentTraces.some((trace) => trace.steps.some((step) => step.summary.includes('cancelled'))))
     input.setHold(false)
     await page.getByTestId('complete-design-agent').click()
-    await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).artifacts
-      .filter((item) => item.kind === 'design').length, { timeout: 60_000 }).toBe(1)
+    try {
+      await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).artifacts
+        .filter((item) => item.kind === 'design').length, { timeout: 60_000 }).toBe(1)
+    } catch (error) {
+      // Say why the design was not produced: the latest traces, events and on-screen notice.
+      const state = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
+      await page.screenshot({ path: path.join(output, 'failure-retry.png'), scale: 'css' }).catch(() => undefined)
+      console.error(JSON.stringify({
+        statusRow: await page.getByTestId('task-status-row').innerText().catch(() => null),
+        dialogs: await page.getByRole('dialog').allInnerTexts().catch(() => []),
+        toast: await page.getByTestId('toast').textContent().catch(() => null),
+        traces: state.agentTraces.slice(-3).map((trace) => trace.steps.map((step) => step.summary)),
+        events: state.events.slice(-3).map((event) => event.message),
+        providerRequests: input.requestCount(),
+      }, null, 2))
+      throw error
+    }
     const completed = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
     const artifact = completed.artifacts.find((item) => item.kind === 'design')!
     assert.equal(artifact.designEvidence?.executor.kind, 'local-agent')
@@ -107,6 +197,10 @@ export async function verifyDesignInElectron(input: {
     assert.equal(input.requestCount(), callsBeforeCancel + 3)
     console.log(JSON.stringify({ electronDesignPassed: true, realMainAndPreload: true,
       cancelAndRetry: true, reviewGateAwaitingHuman: true, codingConfigurationUnchanged: true,
-      restartPreserved: true, keychain: 'synthetic test adapter; no OS credentials accessed' }))
-  } finally { await app?.close() }
+      restartPreserved: true, governedByIsolatedTeamApi: true,
+      keychain: 'synthetic test adapter; no OS credentials accessed' }))
+  } finally {
+    await app?.close()
+    await team.stop()
+  }
 }

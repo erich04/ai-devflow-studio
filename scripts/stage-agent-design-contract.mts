@@ -28,8 +28,11 @@ const server = createServer((request, response) => {
     const tools = (body.tools ?? []).map((tool: { function: { name: string } }) => tool.function.name)
     const prompt = JSON.stringify(body.messages)
     requests.push({ prompt, tools })
-    response.writeHead(200, { 'Content-Type': 'text/event-stream' })
-    if (hold) { response.write(': held\n\n'); releaseHeld(); return }
+    // The desktop's governed relay (#168) forwards each OpenCode round with stream:false and
+    // expects one JSON completion; OpenCode itself streams.
+    const streaming = body.stream !== false
+    response.writeHead(200, { 'Content-Type': streaming ? 'text/event-stream' : 'application/json' })
+    if (hold) { if (streaming) response.write(': held\n\n'); releaseHeld(); return }
     const read = tools.find((name: string) => name === 'read')
     const readCompleted = body.messages.some((message: { role: string }) => message.role === 'tool')
     const design = {
@@ -47,7 +50,17 @@ const server = createServer((request, response) => {
         name: read, arguments: JSON.stringify({ filePath: path.join(repository, 'task.ts') }),
       } }] }
       : { role: 'assistant', content: JSON.stringify(design) }
-    for (const [value, reason] of [[delta, null], [{}, read && !readCompleted ? 'tool_calls' : 'stop']] as const) {
+    const finishReason = read && !readCompleted ? 'tool_calls' : 'stop'
+    if (!streaming) {
+      const message = 'tool_calls' in delta
+        ? { role: 'assistant', content: null, tool_calls: delta.tool_calls.map(({ index: _index, ...call }) => call) }
+        : delta
+      response.end(JSON.stringify({ id: 'contract', object: 'chat.completion', model: body.model,
+        choices: [{ index: 0, message, finish_reason: finishReason }],
+        usage: { prompt_tokens: 50, completion_tokens: 25, total_tokens: 75 } }))
+      return
+    }
+    for (const [value, reason] of [[delta, null], [{}, finishReason]] as const) {
       response.write(`data: ${JSON.stringify({ id: 'contract', object: 'chat.completion.chunk', model: body.model,
         choices: [{ index: 0, delta: value, finish_reason: reason }],
         ...(reason ? { usage: { prompt_tokens: 50, completion_tokens: 25, total_tokens: 75 } } : {}),

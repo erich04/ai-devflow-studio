@@ -110,3 +110,5 @@ corepack pnpm exec tsx scripts/workspace-baseline.mts --self-check
 - `test:studio-onboarding-postgres-smoke`：需要真实 Postgres 与 Electron。本批次只更新了它的界面名称。
 - `test:postgres-smoke`、`test:docker-smoke`、`test:docker-lifecycle-smoke`：由 PR 的 CI 运行。
 - `test:stage-agent-design-electron`：自 #168 起在生成前失败，与本次改造无关（S3 报告已记录）。
+
+后记（后续补记，正文不改）：`test:stage-agent-design-electron` 已修复并通过，冒烟改为配对内存版演示 Team API，原因见[加固批次 H1](../plans/post-redesign-hardening-2026-09-30.zh-CN.md#h1本-pr)。

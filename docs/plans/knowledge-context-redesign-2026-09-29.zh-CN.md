@@ -1,7 +1,7 @@
 # 知识上下文改造方案：项目说明常驻 + Agent 现场检索
 
-- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0–K4 均已完成；结果见第 11 节。剩下第 12 节第 3 条的真实模型验证，其中一部分已由 #203 覆盖。
-- 分支：K0–K2 随 #191、K4 随 #194、知识审查 local-agent 随 #197、K3 随 #198 合入 `main`；知识页检查纳入编码回执的清单在 `feat/knowledge-checks-coding-receipts`，基于 `e9ce1f5`。
+- 状态：第 3 版，方向和第 0 节的三项决定已确认（erich04，2026-09-29）。K0–K4 均已完成，真实模型验证也已完成；结果见第 11 节，真实模型部分见 11.11。
+- 分支：K0–K2 随 #191、K4 随 #194、知识审查 local-agent 随 #197、K3 随 #198、知识页检查纳入编码回执的清单随 #204 合入 `main`。
 - 文中的新字段、新工具、新批次在对应批次完成前都只是计划。实施结果见第 11 节。
 - 决策记录：[ADR 0025](../adr/0025-resident-knowledge-context.md)。
 
@@ -169,10 +169,11 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 
 - **v1**（2026-09-29）：初稿，含 Codex 只读阶段 Agent 和编码引擎评估。
 - **v2**（2026-09-29）：按第 0 节决定删除 Codex 相关内容（原第 6 节和 K4），原 K5 改为 K4；`stages` 缺省改为按 category 推默认阶段，删除单独的兼容模式；Web 端维持不同步。入库时补充：front matter 解析采用受限子集，不引入 YAML 依赖。
+- **补记**（2026-09-30）：加入真实模型验证结果（11.11）。原第 12 节“交接”中的用户决定并入 11.12，第 12 节删除。
 
 ## 11. 实施结果
 
-以下结果都来自本地确定性运行：本地假模型服务或假提供方，没有调用真实模型，没有远端发布。
+11.1–11.10 的结果都来自本地确定性运行：本地假模型服务或假提供方，没有调用真实模型，没有远端发布。11.11 是真实模型验证，11.12 汇总实施期间用户的决定。
 
 ### 11.1 K0 核实（2026-09-29）
 
@@ -312,7 +313,7 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
   - README 引用得到 sha256 摘要。
   - 探针用假模型服务代替预算中继，所以预算准入不在这一项的覆盖范围内。预算中继本身沿用阶段 Agent 已有的实现。
 - `corepack pnpm test:electron-smoke`、`test:workbench-conversation-electron-smoke`：通过（隔离数据、假提供方，`externalProviderCalled: false`）。两项冒烟都使用默认的直接调用方式，没有在 Electron 窗口里跑 OpenCode 审查。
-- 未运行：真实模型调用（第 3 条待定）、Electron 窗口中的 OpenCode 审查走查。
+- 当时未运行：真实模型调用（后来在 11.11 中补做，经 IPC 驱动的 Electron 主进程），以及 Electron 窗口中的 OpenCode 审查界面走查（仍未做）。
 
 ### 11.9 K3 结果（编码简报与讨论栏）
 
@@ -350,7 +351,61 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
   - `test:native-coding-electron-smoke`：通过。样例仓库没有知识文档和 `AGENTS.md`，所以只证明简报改动后 Native v2 流程不受影响；项目说明进入 Native v2 简报由 `coding-agent.test.ts` 覆盖。
   - `test:electron-smoke`：通过。
 - 与记忆线的兼容：与 #193、#196 的最新提交做了试合并，结果见 PR 描述。
-- 未运行：真实模型调用。
+- 未运行：真实模型调用。真实模型调用后来在 11.11 中补做。
+
+### 11.11 真实模型验证（2026-09-30）
+
+详细记录见 [知识上下文真实 DeepSeek 验证](../validation/knowledge-context-real-deepseek-20260930.md)。
+
+**环境**：
+
+- 代码：main `a61fc28`，模型 `deepseek-flash`，OpenCode 1.18.15。
+- 隔离方式与 #203 相同。示例仓库带 `AGENTS.md` 和 4 篇 `docs/knowledge`，每个文件放一个唯一标记，用来检查哪份内容进了请求。
+- 需求原文不提时钟、字段名和测试名前缀；这些只写在 L0 和 L1 里。
+
+**结果**：
+
+- 以下路径全部通过，但有几条经过重试：
+  - Direct Provider 的需求澄清、方案设计和两个门禁审查。
+  - DevFlow Native 编码与测试证据。
+  - OpenCode 只读阶段 Agent（需求澄清、方案设计）和 OpenCode 门禁审查。
+  - OpenCode 编码。
+  - 讨论栏的 Direct Provider 与 OpenCode 两种执行方式。
+- 上下文清单与请求一致：
+  - Direct 路径和 Native 简报：L0 与整篇放入的文档都出现在请求里，只列目录的文档不在首个请求里。
+  - OpenCode 路径：L0 由 OpenCode 自己加载（`loadedBy: executor`），DevFlow 没有重复注入。
+  - 用户全局说明没有进入任何 OpenCode 请求。
+- 模型产出遵守了只写在 L0 和 L1 里的约定：字段为 `checkedAt`，取值 `now().toISOString()`，测试用 `setNow()` 并以 `[health-api] ` 开头。两个编码执行器只改了需求范围内的两个文件，测试通过。
+- 按需读取生效：
+  - Native 分析阶段从目录中选读了 `testing-evidence.md`。
+  - OpenCode 阶段 Agent 和审查读取了只列目录的规范。
+  - 讨论栏不常驻知识，两种执行方式都通过 `knowledge_list` → `knowledge_read` 找到 pr 阶段的发布清单，并据此回答。
+
+**失败与问题**（均不在知识上下文代码里）：
+
+- [#201](https://github.com/erich04/ai-devflow-studio/issues/201) 复现一次。
+- 新登记三个问题：
+  - [#207](https://github.com/erich04/ai-devflow-studio/issues/207)：OpenCode 步骤的费用记为未知。
+  - [#208](https://github.com/erich04/ai-devflow-studio/issues/208)：TLS 建立前的连接失败被记为费用未知，并阻断项目后续全部模型调用。
+  - [#209](https://github.com/erich04/ai-devflow-studio/issues/209)：只读 OpenCode 会话每次重新下载 ripgrep，轮次之间停顿约 1–2 分钟。
+
+**费用**：6 次运行共 69 个请求。按峰时价计算，上限约 $0.19。
+
+**仍未覆盖**：
+
+- 知识页的界面走查。
+- PR 与验收阶段的知识注入。
+- 大体积知识目录的预算截断：示例仓库只用了 1,007 / 24,576 字节。
+
+### 11.12 实施期间的用户决定（erich04，2026-09-30）
+
+1. 测试证据规范从 `gate: [design, test]` 改为 `gate: [test]`，见 11.2 差异 2。原因是方案评审时还不可能有测试证据。`packages/shared/src/fixtures.ts` 与评估集中 6 个 design 场景已同步修改。
+2. 提交方式：rebase 到最新 main，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。K0–K4、知识审查 local-agent 和 #204 都按这个方式合入。
+3. 真实模型验证：由用户授权 Agent，使用本机已保存的 DeepSeek Provider，预算上限 $1.00，在隔离数据中运行。已完成，见 11.11。[#203 的流程验证](../validation/real-deepseek-flow-20260930.md)不算在内，因为它的示例仓库没有知识目录。
+4. 批次顺序：K4 知识页 → 知识审查 local-agent → K3，已全部完成。K3 按用户要求先做不依赖记忆线的部分。#193 合入后重新核算，项目说明留在 Native v2 简报里，不单独移动，见 11.9。
+5. 本地项目知识目录暂时固定为 `docs/knowledge`，见 11.2 差异 3。
+
+ADR 编号为 0025：0024 已由记忆学习那条线占用。
 
 ## 参考
 
@@ -360,19 +415,3 @@ K1 要同步给现有 `docs/knowledge` 的 10 份文档补上 `stages` 和 `gate
 - [Anthropic：Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents)
 
 外部资料的内容已改写，以符合许可要求。
-
-## 12. 交接：待决定事项与下一步（2026-09-30）
-
-本节供接手的对话使用。完成后删除本节，结论并入第 11 节。
-
-**当前状态**：K0–K4 已全部合入（#191、#194、#197、#198），#193 也已合入。Native v2 中项目说明的位置经核算不再调整（11.9）。剩下第 3 条真实模型验证中未覆盖的部分。ADR 编号为 0025，因为记忆学习那条线（`../ai-devflow-prompt-cache`）占用了 0024。
-
-**用户决定**（erich04，2026-09-30）：
-
-1. 测试证据规范改为 `gate: [test]`：**已改**，见 11.2 差异 2。`packages/shared/src/fixtures.ts` 与评估集中 6 个 design 场景的 `gate` 已同步。
-2. 提交方式：rebase 到最新 main，重跑 `verify`，分批提交，推送并开 PR，CI 通过后合入。#191 按此方式合入；K4 沿用同一方式。
-3. 真实模型验证：**部分覆盖，其余待定**。[#203](../validation/real-deepseek-flow-20260930.md) 在 main `b6ca57f`（含 K0–K2、K4 与知识审查 local-agent，不含 K3）上用 `deepseek-flash` 从需求澄清跑到 PR 交付包，最后一次完整通过。它走的是生产路径，知识上下文的组装代码都执行了。但按报告，示例仓库与工作区基线工具的 `health-api` 相同，而基线工具的示例仓库没有 `AGENTS.md` 和 `docs/knowledge`，组装结果为空；报告也没有检查提示词内容。所以知识注入本身没有被真实模型验证。仍未覆盖：带知识目录的仓库、OpenCode 阶段 Agent 与 OpenCode 门禁审查、K3 之后的编码简报与讨论栏知识工具。做法仍为两种：用户手动跑，或用户指定已保存的提供方和预算上限后由 Agent 在隔离数据中运行。
-4. 下一批按 K4 知识页 → 知识审查 local-agent → K3 的顺序进行：**已全部完成**。K3 按用户 2026-09-30 的要求先做不依赖记忆线的部分，#193 合入后核算，项目说明的位置不调整（11.9）。
-5. 本地项目知识目录暂时固定为 `docs/knowledge`，见 11.2 差异 3。
-
-**注意**：只在本 worktree 中修改；不改 `../ai-devflow-studio`（主工作区）和 `../ai-devflow-prompt-cache`。跑开发服务或 Electron 前先检查 4310、4311、5173 端口是否被其他对话占用。
