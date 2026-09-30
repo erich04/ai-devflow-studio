@@ -1061,6 +1061,21 @@ export type RepositoryKnowledgeSnapshot = {
   knowledgeRoot?: string
   /** Root AGENTS.md (or CLAUDE.md) of the project, when present. */
   projectInstructions?: ProjectInstructionsSnapshot | null
+  /**
+   * Relative link targets of the indexed documents that are not themselves indexed,
+   * resolved by the desktop indexer for the knowledge checks (K4). Bounded; targets
+   * beyond the bound are absent and count as unchecked.
+   */
+  linkTargets?: RepositoryKnowledgeLinkTarget[]
+}
+
+export type RepositoryKnowledgeLinkTarget = {
+  /** Repository-relative POSIX path. */
+  path: string
+  /** `unsupported`: a symbolic link or special file, not followed. */
+  kind: 'file' | 'directory' | 'missing' | 'unsupported'
+  /** Heading and `<a id>` anchors of a Markdown target; absent when not read. */
+  anchors?: string[]
 }
 
 export type KnowledgeRetrievalQuery = {
