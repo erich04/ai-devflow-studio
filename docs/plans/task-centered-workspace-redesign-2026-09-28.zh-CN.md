@@ -1,6 +1,6 @@
 # 以开发任务为中心的工作区改造方案
 
-日期：2026-09-28。状态：**设计方案（第 15 版），已确认；S0–S5 已完成，S6 待实施**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S5 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)、[S4 实施报告](../validation/workspace-redesign-s4-20260928.md)、[S5 实施报告](../validation/workspace-redesign-s5-20260928.md)。
+日期：2026-09-28。状态：**设计方案（第 16 版），已确认；S0–S5 已完成，S6 实施中**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S5 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)、[S4 实施报告](../validation/workspace-redesign-s4-20260928.md)、[S5 实施报告](../validation/workspace-redesign-s5-20260928.md)。
 
 代码基线：`main` / `bf18e4a`。之后到 `0518870` 的提交只改文档与截图，`apps/`、`packages/` 没有变化。本文中的新页面、模块名称、交互和目标数值都是计划，不代表产品已提供。
 
@@ -683,7 +683,40 @@ S5 发现、留给后续批次的事项：
 - 待办只按角色判断是否需要你审批，不逐行调用审批前检查；策略阻断在任务详情显示。
 - `studio-onboarding-postgres-smoke` 已按新导航更新，未运行；打包冒烟同 S4，未运行。
 
-### 7.6 回退
+### 7.6 S6 改动清单
+
+**状态：已确认**（2026-09-28，erich04 委托 S4–S6 连续实施）。实施中发现的差异记回本节末尾。
+
+S6 是最后一批：用隔离环境完整验收改造后的产品，收尾剩余的英文文案，并按当前界面更新文档与截图。起草时确定了四条前提：
+
+- 不改业务逻辑、写入路径、数据库结构和契约。验收中发现的缺陷，影响验收结论的就地修复并记录；其余的记录下来，另行处理。
+- **知识库底层优化不在 S6**（erich04，2026-09-28）。它涉及索引、检索和匹配逻辑，S6 合入后以当前实现为基线另行立项。
+- 验收只用模拟模型、本机受控服务和本机替代的 GitHub。真实模型调用与真实远端发布需要已授权的项目、提供方与预算，S6 不做，在报告中写明覆盖到哪里为止。
+- 可用性走查（8.3 节）需要 3–5 位未参与实现的人。本批次无法招募，不做，也不用自评代替，在报告中如实写明。
+
+| 编号 | 改动 | 主要位置 |
+| --- | --- | --- |
+| R1 | **完整验收**：<br>- 桌面端：Electron 冒烟（主进程、IPC、SQLite，从需求澄清推进到 PR 交付，并确认 Web 能看到同步后的任务）、Native Coding 冒烟、会话冒烟。<br>- 打包：打包后的桌面端冒烟，以及打包后的 GitHub 交付冒烟（隔离 Postgres 与本机 GitHub 替代服务，覆盖分支发布、Draft PR 与业务验收证据）。<br>- 界面：e2e，基线 32 个样例的三档尺寸与深色主题。<br>S4、S5 改过传参却没有运行的打包冒烟在这里补跑 | `scripts/` 下对应脚本；不新增脚本 |
+| R2 | **剩余英文**：<br>- 桌面端「材料与版本」的知识治理与引用来源区（Knowledge Governance、Review Criteria、Knowledge / Policy 等）。<br>- Web 的团队请求表单、配对码面板、预算面板的字段、按钮与反馈，以及 Web 代理路由返回给页面的提示 | [`DesktopViews.tsx`](../../apps/desktop/src/views/DesktopViews.tsx)；[`WorkRequestPanel.tsx`](../../apps/web/app/WorkRequestPanel.tsx)、[`PairingCodePanel.tsx`](../../apps/web/app/PairingCodePanel.tsx)、[`RuntimeBudgetPanel.tsx`](../../apps/web/app/RuntimeBudgetPanel.tsx)、`apps/web/app/api/*/route.ts` |
+| R3 | **截图**：新建截图目录，写明采集方法、源码提交与演示数据范围。桌面端用基线工具在隔离 Electron 中拍摄；Web 用默认跳过、显式开启才运行的 e2e 采集脚本拍摄。原 `current-20260928` 目录标为改造前的历史截图，保留给历史指南引用 | 新增 `docs/guides/screenshots/workspace-redesign-20260928/`；新增 `tests/e2e/doc-screenshots.spec.ts` |
+| R4 | **README**：界面描述、截图、演示步骤与本地团队步骤按新导航改写（任务、知识、团队、设置；Web 的我的待办、项目任务、团队、设置） | [`README.md`](../../README.md) |
+| R5 | **当前使用与部署指南**：自行部署指南中的配对、工作请求与门禁演练，多组织部署指南中的界面名称 | [`devflow-studio-self-hosted-pilot.md`](../guides/devflow-studio-self-hosted-pilot.md)、[`multi-organization-deployment.md`](../guides/multi-organization-deployment.md) |
+| R6 | **产品与工程文档**：<br>- 界面区域与导航：`surfaces.md`、`product-definition.md`、`workflow-node-semantics.md`、`coding-agent-execution-stack.md`、`current-product-prd.md`。<br>- [界面设计理由](../product/details/ui-design-rationale.md)：增加当前界面结构一节；原 10–15 节的模块导航标为改造前的历史设计。<br>- [会话行为说明](../engineering/workbench-conversations.md) | `docs/product/`、`docs/engineering/` |
+| R7 | **历史指南**：正文与验收数字不改；只把横幅中“当前节点使用四个页签”这类已不成立的说法改为“改造前截图”，并链接当前界面。文档测试只在读取当前文档时更新 | `docs/guides/` 下的版本化指南；`scripts/*doc*.test.ts` |
+
+**S6 不包括**：
+- 知识库底层优化；
+- 真实模型、真实 GitHub 远端发布、签名安装包与完整平台发布验收；
+- 3–5 人的可用性走查；
+- 状态规则、写入路径、契约或数据库的任何改动。
+
+**验证**：
+- `corepack pnpm verify`、`corepack pnpm test:e2e`、R1 列出的冒烟。
+- 基线 32 个样例（三档尺寸、深色主题、`--self-check`）与 S5 相同。
+- 文档中的截图引用都指向存在的文件；文档测试通过。
+- 按 8.2 节的 S6 场景验收。
+
+### 7.7 回退
 
 每个批次都是独立、可评审的变更，不要求一次性重写 `App.tsx` 或更换框架。可以用临时开发开关分批验证布局，但开关只影响界面，不切换写入路径；新旧界面不能同时发起同一动作。回退时保留既有记录与身份，恢复旧导航映射，不删除任务、不重建用户数据库。兼容入口在验证完成后，按明确的批次移除。
 
@@ -804,5 +837,7 @@ S4、S5 与技术落地的细节在对应批次开始前单独评审，这里只
   契约变更限于 Web 发起的需求确认与方案评审审批：缺少材料快照即拒绝；桌面端执行时核对本机审批对象，并写入与本地审批相同的审计记录。
 
 - **第 15 版**（2026-09-28）：回写 S5 结果。状态改为 S0–S5 已完成；7.5 节末尾加入实施结果、与原文的差异（门禁审查面板、写入层自行推导审计、交付确认随绑定清除、不属于项目的成员的待办文案）和留给后续批次的事项；7.5 节契约表中“本地写入”一行按实现改写。
+
+- **第 16 版**（2026-09-28）：新增 7.6 节 S6 改动清单（R1–R7），原 7.6 节“回退”改为 7.7 节。起草时确定四条前提：不改业务逻辑与契约；知识库底层优化在 S6 之后另行立项（erich04 决定）；验收只用模拟模型、本机受控服务与本机 GitHub 替代服务；无法招募走查人员时不做可用性走查，也不用自评代替。
 
 第 6 版随 S1 的产品改动一起提交，验证结果见 S1 实施报告；没有调用真实模型或提交远端变更。全部批次实施并验证后，再同步更新[界面设计理由](../product/details/ui-design-rationale.md)、[会话行为说明](../engineering/workbench-conversations.md)、用户指南、README 与截图。
