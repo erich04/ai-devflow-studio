@@ -5,5 +5,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["scripts/memory-context-live.ts", "scripts/memory-context-live-smoke.ts"]
+  "include": ["scripts/memory-context-live.ts", "scripts/memory-context-live-smoke.ts", "scripts/native-repair-live.ts"]
 }
