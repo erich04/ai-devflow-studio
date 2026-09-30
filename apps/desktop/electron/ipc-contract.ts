@@ -130,17 +130,25 @@ export type CancelCoordinationSessionInput = ResumeCoordinationSessionInput & {
 
 export type CoordinationSessionSnapshot = CoordinationRendererSnapshot
 
-export type ListAgentMemoryLifecycleInput = GetAgentRuntimeInput
+/**
+ * Agent Memory lifecycle selection. With `runtimeId`: that Agent Runtime's exact scope.
+ * Without: every Memory the project user can recall, including Coding Run learning (ADR 0024).
+ */
+export type AgentMemoryLifecycleSelection = ListAgentRuntimesInput & {
+  runtimeId?: string
+}
+
+export type ListAgentMemoryLifecycleInput = AgentMemoryLifecycleSelection
 
 export type AgentMemoryLifecycleSnapshot = AgentMemoryRendererSnapshot
 
-export type PromoteAgentMemoryCandidateInput = GetAgentRuntimeInput & {
+export type PromoteAgentMemoryCandidateInput = AgentMemoryLifecycleSelection & {
   candidateId: string
   expectedContentDigest: string
   expectedProvenanceDigest: string
 }
 
-export type ReviseAgentMemoryInput = GetAgentRuntimeInput & {
+export type ReviseAgentMemoryInput = AgentMemoryLifecycleSelection & {
   memoryId: string
   expectedRevision: number
   expectedHeadVersion: number
@@ -149,7 +157,7 @@ export type ReviseAgentMemoryInput = GetAgentRuntimeInput & {
   statement: string
 }
 
-export type DeleteAgentMemoryInput = GetAgentRuntimeInput & {
+export type DeleteAgentMemoryInput = AgentMemoryLifecycleSelection & {
   memoryId: string
   expectedRevision: number
   expectedHeadVersion: number
@@ -1239,8 +1247,13 @@ export function parseListAgentMemoryLifecycleInput(
     ['runtimeId', 'runId', 'localProjectId'],
     'list Agent Memory lifecycle payload',
   )
+  return readAgentMemoryLifecycleSelection(value)
+}
+
+/** `runtimeId` is optional: omitted selects the project-wide Memory view (ADR 0024). */
+function readAgentMemoryLifecycleSelection(value: Record<string, unknown>): AgentMemoryLifecycleSelection {
   return {
-    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
+    ...(value.runtimeId === undefined ? {} : { runtimeId: readExactRequiredIdentifier(value, 'runtimeId') }),
     runId: readExactRequiredIdentifier(value, 'runId'),
     localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
   }
@@ -1263,9 +1276,7 @@ export function parsePromoteAgentMemoryCandidateInput(
     'promote Agent Memory candidate payload',
   )
   return {
-    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
-    runId: readExactRequiredIdentifier(value, 'runId'),
-    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    ...readAgentMemoryLifecycleSelection(value),
     candidateId: readExactRequiredIdentifier(value, 'candidateId'),
     expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
     expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
@@ -1290,9 +1301,7 @@ export function parseReviseAgentMemoryInput(value: unknown): ReviseAgentMemoryIn
     'revise Agent Memory payload',
   )
   return {
-    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
-    runId: readExactRequiredIdentifier(value, 'runId'),
-    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    ...readAgentMemoryLifecycleSelection(value),
     memoryId: readExactRequiredIdentifier(value, 'memoryId'),
     expectedRevision: readExactPositiveVersion(value, 'expectedRevision'),
     expectedHeadVersion: readExactPositiveVersion(value, 'expectedHeadVersion'),
@@ -1319,9 +1328,7 @@ export function parseDeleteAgentMemoryInput(value: unknown): DeleteAgentMemoryIn
     'delete Agent Memory payload',
   )
   return {
-    runtimeId: readExactRequiredIdentifier(value, 'runtimeId'),
-    runId: readExactRequiredIdentifier(value, 'runId'),
-    localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
+    ...readAgentMemoryLifecycleSelection(value),
     memoryId: readExactRequiredIdentifier(value, 'memoryId'),
     expectedRevision: readExactPositiveVersion(value, 'expectedRevision'),
     expectedHeadVersion: readExactPositiveVersion(value, 'expectedHeadVersion'),

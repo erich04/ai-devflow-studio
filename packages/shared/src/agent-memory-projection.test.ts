@@ -103,6 +103,7 @@ describe('Agent Memory renderer projection', () => {
         contentDigest: candidate.contentDigest,
         provenance: candidate.provenance,
         provenanceDigest: candidate.provenanceDigest,
+        duplicateOf: null,
         createdAt: candidate.createdAt,
         redacted: true,
       }],
@@ -241,6 +242,82 @@ describe('Agent Memory renderer projection', () => {
         tombstone: null,
       }],
       observedAt: '2026-08-13T11:00:00.000Z',
+    })).toThrow('invalid_agent_memory_renderer_snapshot')
+  })
+})
+
+describe('Agent Memory renderer projection for Coding Run candidates (ADR 0024)', () => {
+  const localScope = {
+    kind: 'local' as const, organizationId: null, projectId: null, userId: 'user-1',
+    sessionId: 'coding-session-a', localProjectId: 'local-project-1',
+  }
+  const codingCandidate = (id: string, statement: string, sessionId: string): AgentMemoryCandidate => ({
+    ...candidate, id, statement, scope: { ...localScope, sessionId },
+    provenance: {
+      kind: 'coding_run', runId: 'run-1', nodeId: 'node-build', codingRunId: `coding-${id}`,
+      testEvidenceId: 'evidence-1', diffArtifactId: 'diff-1', statementKind: 'change_map',
+    },
+  })
+  const activeMemory = {
+    head: { ...head, scope: { ...localScope, sessionId: 'runtime-session' }, status: 'active' as const },
+    revision: {
+      ...revision, scope: { ...localScope, sessionId: 'runtime-session' }, status: 'active' as const,
+      visibility: 'user_project' as const, statement: 'Run pnpm verify before opening a pull request.',
+      expiresAt: null, retentionClass: 'until_deleted' as const,
+    },
+    tombstone: null,
+  }
+
+  it('lists every local session of the user in user_project mode and marks duplicates of active Memory', () => {
+    const snapshot = createAgentMemoryRendererSnapshot({
+      scope: localScope,
+      scopeMatch: 'user_project',
+      candidates: [
+        codingCandidate('exact', 'run PNPM verify before opening a pull request', 'coding-session-b'),
+        codingCandidate('similar', 'Run pnpm verify before opening a draft pull request.', 'coding-session-c'),
+        codingCandidate('distinct', 'Release notes are written in Chinese.', 'coding-session-d'),
+      ],
+      memories: [activeMemory],
+      observedAt: '2026-08-13T11:00:00.000Z',
+    })
+    const byId = Object.fromEntries(snapshot.candidates.map((entry) => [entry.id, entry]))
+    expect(byId.exact!.duplicateOf).toEqual({ memoryId: revision.id, kind: 'exact', similarity: 1 })
+    expect(byId.similar!.duplicateOf).toMatchObject({ memoryId: revision.id, kind: 'similar' })
+    expect(byId.distinct!.duplicateOf).toBeNull()
+    expect(byId.exact!.provenance).toMatchObject({ kind: 'coding_run', statementKind: 'change_map' })
+    expect(parseAgentMemoryRendererSnapshot(JSON.parse(JSON.stringify(snapshot)))).toEqual(snapshot)
+  })
+
+  it('keeps exact session matching by default and ignores expired or deleted Memory for duplicates', () => {
+    expect(() => createAgentMemoryRendererSnapshot({
+      scope: localScope, candidates: [codingCandidate('other', 'Other statement.', 'coding-session-b')],
+      memories: [], observedAt: '2026-08-13T11:00:00.000Z',
+    })).toThrow('invalid_agent_memory_renderer_snapshot')
+    const expired = {
+      ...activeMemory,
+      revision: { ...activeMemory.revision, retentionClass: 'thirty_days' as const, expiresAt: '2026-08-13T10:45:00.000Z' },
+    }
+    const snapshot = createAgentMemoryRendererSnapshot({
+      scope: localScope, scopeMatch: 'user_project',
+      candidates: [codingCandidate('exact', 'Run pnpm verify before opening a pull request.', 'coding-session-b')],
+      memories: [expired], observedAt: '2026-08-13T11:00:00.000Z',
+    })
+    expect(snapshot.candidates[0]!.duplicateOf).toBeNull()
+  })
+
+  it('rejects a renderer candidate with a malformed Coding Run provenance or duplicate hint', () => {
+    const valid = createAgentMemoryRendererSnapshot({
+      scope: localScope, scopeMatch: 'user_project',
+      candidates: [codingCandidate('exact', 'Run pnpm verify before opening a pull request.', 'coding-session-b')],
+      memories: [activeMemory], observedAt: '2026-08-13T11:00:00.000Z',
+    })
+    const withProvenance = (provenance: unknown) => ({ ...valid, candidates: [{ ...valid.candidates[0], provenance }] })
+    expect(() => parseAgentMemoryRendererSnapshot(withProvenance({ ...valid.candidates[0]!.provenance, runtimeId: 'x' })))
+      .toThrow('invalid_agent_memory_renderer_snapshot')
+    expect(() => parseAgentMemoryRendererSnapshot(withProvenance({ ...valid.candidates[0]!.provenance, statementKind: 'guess' })))
+      .toThrow('invalid_agent_memory_renderer_snapshot')
+    expect(() => parseAgentMemoryRendererSnapshot({
+      ...valid, candidates: [{ ...valid.candidates[0], duplicateOf: { memoryId: revision.id, kind: 'exact', similarity: 0.5 } }],
     })).toThrow('invalid_agent_memory_renderer_snapshot')
   })
 })

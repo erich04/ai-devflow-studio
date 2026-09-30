@@ -79,7 +79,7 @@ export type KnowledgeRetrievalTarget = {
   runVersion: number
 }
 
-export type AgentMemoryCandidateProvenance = {
+export type AgentMemoryObservationProvenance = {
   kind: 'agent_observation'
   runtimeId: string
   actionId: string
@@ -87,6 +87,27 @@ export type AgentMemoryCandidateProvenance = {
   sequence: number
   resultDigest: string
 }
+
+export const AGENT_MEMORY_CODING_RUN_STATEMENT_KINDS = ['test_command', 'change_map', 'repair_pattern'] as const
+export type AgentMemoryCodingRunStatementKind = typeof AGENT_MEMORY_CODING_RUN_STATEMENT_KINDS[number]
+
+/**
+ * A fixed-template fact derived from a completed Coding Run whose saved test passed
+ * (ADR 0024 §4). The referenced Coding Run, Test Evidence and Diff stay in the local store.
+ */
+export type AgentMemoryCodingRunProvenance = {
+  kind: 'coding_run'
+  runId: string
+  nodeId: string
+  codingRunId: string
+  testEvidenceId: string
+  diffArtifactId: string
+  statementKind: AgentMemoryCodingRunStatementKind
+}
+
+export type AgentMemoryCandidateProvenance =
+  | AgentMemoryObservationProvenance
+  | AgentMemoryCodingRunProvenance
 
 export type AgentMemoryCandidate = {
   stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
@@ -361,7 +382,7 @@ export async function createAgentMemoryCandidate(input: unknown): Promise<AgentM
     failMemoryCandidate()
   }
 
-  const provenance: AgentMemoryCandidateProvenance = {
+  const provenance: AgentMemoryObservationProvenance = {
     kind: 'agent_observation',
     runtimeId: transition.runtime.id,
     actionId: String(observationEvent.metadata.actionId),
@@ -374,6 +395,88 @@ export async function createAgentMemoryCandidate(input: unknown): Promise<AgentM
     id: input.id,
     status: 'candidate',
     scope: { ...transition.runtime.scope },
+    statement: input.statement,
+    contentDigest: await sha256Hex(input.statement),
+    provenance,
+    provenanceDigest: await sha256Hex(JSON.stringify(provenance)),
+    createdAt: input.createdAt,
+  })
+}
+
+/** Exact-key parser for either provenance kind; the result has a fixed key order. */
+export function parseAgentMemoryCandidateProvenance(value: unknown): AgentMemoryCandidateProvenance {
+  if (!isPlainRecord(value)) failMemoryCandidate()
+  if (value.kind === 'agent_observation') {
+    if (
+      !hasExactKeys(value, ['kind', 'runtimeId', 'actionId', 'checkpointVersion', 'sequence', 'resultDigest']) ||
+      !isIdentifier(value.runtimeId) ||
+      !isIdentifier(value.actionId) ||
+      !isPositiveVersion(value.checkpointVersion) ||
+      !isPositiveVersion(value.sequence) ||
+      typeof value.resultDigest !== 'string' ||
+      !digestPattern.test(value.resultDigest)
+    ) failMemoryCandidate()
+    return {
+      kind: 'agent_observation',
+      runtimeId: value.runtimeId,
+      actionId: value.actionId,
+      checkpointVersion: value.checkpointVersion,
+      sequence: value.sequence,
+      resultDigest: value.resultDigest,
+    }
+  }
+  if (value.kind === 'coding_run') {
+    if (
+      !hasExactKeys(value, ['kind', 'runId', 'nodeId', 'codingRunId', 'testEvidenceId', 'diffArtifactId', 'statementKind']) ||
+      !isIdentifier(value.runId) ||
+      !isIdentifier(value.nodeId) ||
+      !isIdentifier(value.codingRunId) ||
+      !isIdentifier(value.testEvidenceId) ||
+      !isIdentifier(value.diffArtifactId) ||
+      !(AGENT_MEMORY_CODING_RUN_STATEMENT_KINDS as readonly unknown[]).includes(value.statementKind)
+    ) failMemoryCandidate()
+    return {
+      kind: 'coding_run',
+      runId: value.runId,
+      nodeId: value.nodeId,
+      codingRunId: value.codingRunId,
+      testEvidenceId: value.testEvidenceId,
+      diffArtifactId: value.diffArtifactId,
+      statementKind: value.statementKind as AgentMemoryCodingRunStatementKind,
+    }
+  }
+  failMemoryCandidate()
+}
+
+/**
+ * The runtime identity a recalled Memory came from. A Coding Run has no persisted
+ * AgentRuntime; its Context receipt uses `agent-runtime-coding-<codingRunId>`.
+ */
+export function agentMemoryCandidateSourceRuntimeId(candidate: Pick<AgentMemoryCandidate, 'provenance'>): string {
+  return candidate.provenance.kind === 'agent_observation'
+    ? candidate.provenance.runtimeId
+    : `agent-runtime-coding-${candidate.provenance.codingRunId}`
+}
+
+/** A Coding Run candidate (ADR 0024 §4). The store verifies the referenced run and evidence. */
+export async function createCodingRunMemoryCandidate(input: unknown): Promise<AgentMemoryCandidate> {
+  if (
+    !isPlainRecord(input) ||
+    !hasExactKeys(input, ['id', 'statement', 'scope', 'provenance', 'createdAt'])
+  ) failMemoryCandidate()
+  const provenance = parseAgentMemoryCandidateProvenance(input.provenance)
+  if (provenance.kind !== 'coding_run' || typeof input.statement !== 'string') failMemoryCandidate()
+  let scope: KnowledgeRetrievalScope
+  try {
+    scope = parseScope(input.scope)
+  } catch {
+    failMemoryCandidate()
+  }
+  return parseAgentMemoryCandidate({
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION,
+    id: input.id,
+    status: 'candidate',
+    scope,
     statement: input.statement,
     contentDigest: await sha256Hex(input.statement),
     provenance,
@@ -408,23 +511,7 @@ export async function parseAgentMemoryCandidate(value: unknown): Promise<AgentMe
     !digestPattern.test(value.contentDigest) ||
     typeof value.provenanceDigest !== 'string' ||
     !digestPattern.test(value.provenanceDigest) ||
-    !isCanonicalIso(value.createdAt) ||
-    !isPlainRecord(value.provenance) ||
-    !hasExactKeys(value.provenance, [
-      'kind',
-      'runtimeId',
-      'actionId',
-      'checkpointVersion',
-      'sequence',
-      'resultDigest',
-    ]) ||
-    value.provenance.kind !== 'agent_observation' ||
-    !isIdentifier(value.provenance.runtimeId) ||
-    !isIdentifier(value.provenance.actionId) ||
-    !isPositiveVersion(value.provenance.checkpointVersion) ||
-    !isPositiveVersion(value.provenance.sequence) ||
-    typeof value.provenance.resultDigest !== 'string' ||
-    !digestPattern.test(value.provenance.resultDigest)
+    !isCanonicalIso(value.createdAt)
   ) {
     failMemoryCandidate()
   }
@@ -435,14 +522,8 @@ export async function parseAgentMemoryCandidate(value: unknown): Promise<AgentMe
   } catch {
     failMemoryCandidate()
   }
-  const provenance: AgentMemoryCandidateProvenance = {
-    kind: 'agent_observation',
-    runtimeId: value.provenance.runtimeId,
-    actionId: value.provenance.actionId,
-    checkpointVersion: value.provenance.checkpointVersion,
-    sequence: value.provenance.sequence,
-    resultDigest: value.provenance.resultDigest,
-  }
+  // Rebuilt in a fixed key order: the provenance digest is over this exact serialization.
+  const provenance = parseAgentMemoryCandidateProvenance(value.provenance)
   if (
     await sha256Hex(value.statement) !== value.contentDigest ||
     await sha256Hex(JSON.stringify(provenance)) !== value.provenanceDigest

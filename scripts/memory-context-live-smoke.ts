@@ -148,7 +148,8 @@ export async function runMemoryContextLiveSmoke(input: { provider: AgentProvider
     let state = await runtime.start({ runId: baseline.id, nodeId: baseline.currentNodeId, localProjectId: project.id })
     for (let step = 0; step < 3; step += 1) state = await runtime.advance({ runtimeId: state.runtime.id, runId: baseline.id, localProjectId: project.id, expectedVersion: state.runtime.version, expectedCheckpointVersion: state.runtime.checkpointVersion })
     assert.equal(state.runtime.stopReason, 'success')
-    const candidate = (await store.listAgentMemoryCandidates(project.id)).find((item) => item.provenance.runtimeId === state.runtime.id)!
+    const candidate = (await store.listAgentMemoryCandidates(project.id)).find((item) =>
+      item.provenance.kind === 'agent_observation' && item.provenance.runtimeId === state.runtime.id)!
     const actions = createAgentMemoryHumanActions({ store })
     const target = { runtimeId: state.runtime.id, runId: baseline.id, localProjectId: project.id }
     const memory = await actions.promote({ ...target, candidateId: candidate.id, expectedContentDigest: candidate.contentDigest, expectedProvenanceDigest: candidate.provenanceDigest })

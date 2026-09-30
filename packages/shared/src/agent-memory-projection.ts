@@ -1,7 +1,10 @@
 import { redactSensitiveText } from './redaction'
+import { findDuplicateMemory } from './memory-learning'
 import {
   AGENT_MEMORY_CANDIDATE_TEXT_MAX_BYTES,
+  parseAgentMemoryCandidateProvenance,
   type AgentMemoryCandidate,
+  type AgentMemoryCandidateProvenance,
   type AgentMemoryRetentionClass,
   type AgentMemorySensitivity,
   type AgentMemoryTombstone,
@@ -40,15 +43,13 @@ export type AgentMemoryRendererCandidate = {
   scope: AgentMemoryRendererScope
   statement: string
   contentDigest: string
-  provenance: {
-    kind: 'agent_observation'
-    runtimeId: string
-    actionId: string
-    checkpointVersion: number
-    sequence: number
-    resultDigest: string
-  }
+  provenance: AgentMemoryCandidateProvenance
   provenanceDigest: string
+  /**
+   * An active Memory this pending candidate repeats (ADR 0024 §5): `exact` blocks
+   * promotion, `similar` suggests revising that Memory instead. Null when promoted.
+   */
+  duplicateOf: { memoryId: string; kind: 'exact' | 'similar'; similarity: number } | null
   createdAt: string
   redacted: true
 }
@@ -98,6 +99,12 @@ export type AgentMemoryRendererSnapshot = {
 
 export type CreateAgentMemoryRendererSnapshotInput = {
   scope: KnowledgeRetrievalScope
+  /**
+   * `exact` (default) requires every source to share the scope's session. `user_project`
+   * lists everything the scope's user can recall in this project: the session is ignored
+   * for local scopes, which each Runtime and Coding Run derive separately (ADR 0024).
+   */
+  scopeMatch?: 'exact' | 'user_project'
   candidates: AgentMemoryCandidate[]
   memories: Array<{
     head: AgentMemoryLifecycleHeadSource
@@ -206,6 +213,23 @@ function knowledgeScopesMatch(
     left.localProjectId === right.localProjectId
 }
 
+/**
+ * Scope equality for Agent Memory lifecycle views. `user_project` ignores the session of
+ * local scopes only; Team scopes keep their pairing session, which the store requires.
+ */
+export function agentMemoryScopesMatch(
+  left: KnowledgeRetrievalScope,
+  right: KnowledgeRetrievalScope,
+  mode: 'exact' | 'user_project' = 'exact',
+): boolean {
+  return left.kind === right.kind &&
+    left.organizationId === right.organizationId &&
+    left.projectId === right.projectId &&
+    left.userId === right.userId &&
+    (left.sessionId === right.sessionId || (mode === 'user_project' && left.kind === 'local')) &&
+    left.localProjectId === right.localProjectId
+}
+
 function parseCandidate(value: unknown): AgentMemoryRendererCandidate {
   if (
     !isRecord(value) ||
@@ -217,6 +241,7 @@ function parseCandidate(value: unknown): AgentMemoryRendererCandidate {
       'contentDigest',
       'provenance',
       'provenanceDigest',
+      'duplicateOf',
       'createdAt',
       'redacted',
     ]) ||
@@ -226,41 +251,46 @@ function parseCandidate(value: unknown): AgentMemoryRendererCandidate {
     !isDigest(value.contentDigest) ||
     !isDigest(value.provenanceDigest) ||
     !isCanonicalIso(value.createdAt) ||
-    value.redacted !== true ||
-    !isRecord(value.provenance) ||
-    !hasExactKeys(value.provenance, [
-      'kind',
-      'runtimeId',
-      'actionId',
-      'checkpointVersion',
-      'sequence',
-      'resultDigest',
-    ]) ||
-    value.provenance.kind !== 'agent_observation' ||
-    !isIdentifier(value.provenance.runtimeId) ||
-    !isIdentifier(value.provenance.actionId) ||
-    !isVersion(value.provenance.checkpointVersion) ||
-    !isVersion(value.provenance.sequence) ||
-    !isDigest(value.provenance.resultDigest)
+    value.redacted !== true
   ) fail()
+  let provenance: AgentMemoryCandidateProvenance
+  try {
+    provenance = parseAgentMemoryCandidateProvenance(value.provenance)
+  } catch {
+    fail()
+  }
   return {
     id: value.id,
     lifecycleStatus: value.lifecycleStatus,
     scope: parseScope(value.scope),
     statement: value.statement,
     contentDigest: value.contentDigest,
-    provenance: {
-      kind: 'agent_observation',
-      runtimeId: value.provenance.runtimeId,
-      actionId: value.provenance.actionId,
-      checkpointVersion: value.provenance.checkpointVersion,
-      sequence: value.provenance.sequence,
-      resultDigest: value.provenance.resultDigest,
-    },
+    provenance,
     provenanceDigest: value.provenanceDigest,
+    duplicateOf: parseDuplicateOf(value.duplicateOf, value.lifecycleStatus),
     createdAt: value.createdAt,
     redacted: true,
   }
+}
+
+function parseDuplicateOf(
+  value: unknown,
+  lifecycleStatus: AgentMemoryRendererCandidate['lifecycleStatus'],
+): AgentMemoryRendererCandidate['duplicateOf'] {
+  if (value === null) return null
+  if (
+    lifecycleStatus !== 'pending' ||
+    !isRecord(value) ||
+    !hasExactKeys(value, ['memoryId', 'kind', 'similarity']) ||
+    !isIdentifier(value.memoryId) ||
+    (value.kind !== 'exact' && value.kind !== 'similar') ||
+    typeof value.similarity !== 'number' ||
+    !Number.isFinite(value.similarity) ||
+    value.similarity < 0 ||
+    value.similarity > 1 ||
+    (value.kind === 'exact' && value.similarity !== 1)
+  ) fail()
+  return { memoryId: value.memoryId, kind: value.kind, similarity: value.similarity }
 }
 
 function parseTombstone(value: unknown): AgentMemoryRendererTombstone {
@@ -442,24 +472,11 @@ export function createAgentMemoryRendererSnapshot(
     (input.scope.kind === 'local' &&
       (input.scope.organizationId !== null || input.scope.projectId !== null)) ||
     (input.scope.kind === 'team' &&
-      (!isIdentifier(input.scope.organizationId) || !isIdentifier(input.scope.projectId))) ||
-    input.candidates.some((candidate) => !knowledgeScopesMatch(candidate.scope, input.scope))
+      (!isIdentifier(input.scope.organizationId) || !isIdentifier(input.scope.projectId)))
   ) fail()
-  const promotedCandidateIds = new Set(input.memories.map(({ revision }) => revision.sourceCandidateId))
-  const candidates: AgentMemoryRendererCandidate[] = [...input.candidates]
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id))
-    .slice(0, AGENT_MEMORY_RENDERER_ITEMS_MAX)
-    .map((candidate) => ({
-      id: candidate.id,
-      lifecycleStatus: promotedCandidateIds.has(candidate.id) ? 'promoted' : 'pending',
-      scope: projectScope(candidate.scope),
-      statement: candidate.statement,
-      contentDigest: candidate.contentDigest,
-      provenance: { ...candidate.provenance },
-      provenanceDigest: candidate.provenanceDigest,
-      createdAt: candidate.createdAt,
-      redacted: true,
-    }))
+  const scopeMatch = input.scopeMatch ?? 'exact'
+  const inScope = (scope: KnowledgeRetrievalScope) => agentMemoryScopesMatch(scope, input.scope, scopeMatch)
+  if (input.candidates.some((candidate) => !inScope(candidate.scope))) fail()
   const memories: AgentMemoryRendererItem[] = [...input.memories]
     .sort((left, right) =>
       right.head.updatedAt.localeCompare(left.head.updatedAt) ||
@@ -470,12 +487,13 @@ export function createAgentMemoryRendererSnapshot(
       if (
         head.memoryId !== revision.id ||
         head.currentRevision !== revision.revision ||
-        !knowledgeScopesMatch(head.scope, input.scope) ||
-        !knowledgeScopesMatch(revision.scope, input.scope) ||
+        !inScope(head.scope) ||
+        !inScope(revision.scope) ||
+        !knowledgeScopesMatch(head.scope, revision.scope) ||
         !rendererScopesMatch(projectScope(head.scope), scope) ||
         (tombstone !== null &&
           (tombstone.memoryId !== revision.id ||
-            !knowledgeScopesMatch(tombstone.scope, input.scope))) ||
+            !knowledgeScopesMatch(tombstone.scope, revision.scope))) ||
         Date.parse(head.updatedAt) < Date.parse(revision.createdAt)
       ) fail()
       let lifecycleStatus: AgentMemoryRendererItem['lifecycleStatus']
@@ -519,6 +537,36 @@ export function createAgentMemoryRendererSnapshot(
               deletedAt: tombstone.deletedAt,
               purgedAt: tombstone.purgedAt,
             },
+        redacted: true,
+      }
+    })
+  const promotedCandidateIds = new Set(input.memories.map(({ revision }) => revision.sourceCandidateId))
+  // Duplicate hints compare against every active Memory in scope, not only the listed page.
+  const activeMemories = input.memories.flatMap(({ head, revision, tombstone }) =>
+    head.status === 'active' && revision.status === 'active' && tombstone === null &&
+    (revision.expiresAt === null || Date.parse(input.observedAt) < Date.parse(revision.expiresAt))
+      ? [{ memoryId: revision.id, statement: revision.statement }]
+      : [])
+  const candidates: AgentMemoryRendererCandidate[] = [...input.candidates]
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id))
+    .slice(0, AGENT_MEMORY_RENDERER_ITEMS_MAX)
+    .map((candidate) => {
+      const lifecycleStatus = promotedCandidateIds.has(candidate.id) ? 'promoted' as const : 'pending' as const
+      const duplicate = lifecycleStatus === 'pending'
+        ? findDuplicateMemory(candidate.statement, activeMemories, (memory) => memory.statement)
+        : null
+      return {
+        id: candidate.id,
+        lifecycleStatus,
+        scope: projectScope(candidate.scope),
+        statement: candidate.statement,
+        contentDigest: candidate.contentDigest,
+        provenance: { ...candidate.provenance },
+        provenanceDigest: candidate.provenanceDigest,
+        duplicateOf: duplicate
+          ? { memoryId: duplicate.item.memoryId, kind: duplicate.kind, similarity: duplicate.similarity }
+          : null,
+        createdAt: candidate.createdAt,
         redacted: true,
       }
     })
