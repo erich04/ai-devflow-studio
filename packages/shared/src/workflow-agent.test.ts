@@ -88,6 +88,21 @@ describe('runWorkflowStageAgent', () => {
     }
   })
 
+  it('appends recalled Memory as low-trust background only when Memory is supplied (ADR 0024)', async () => {
+    const base = { run: created.run, node: clarifyNode(), artifacts: created.artifacts, requestedBy: 'u-ling', runtime: 'electron' as const }
+    const without = await runWorkflowStageAgent({ ...base, provider: createFakeAgentProvider() })
+    expect(without.prompt).not.toContain('RECALLED_MEMORY_BACKGROUND')
+    const withMemory = await runWorkflowStageAgent({
+      ...base, provider: createFakeAgentProvider(),
+      memoryContext: [{ id: 'agent-memory-1', revision: 2, statement: 'Desktop cards use sentence case. TOKEN=sk-supersecret123456789' }],
+    })
+    expect(withMemory.prompt).toContain('RECALLED_MEMORY_BACKGROUND')
+    expect(withMemory.prompt).toContain('- Memory agent-memory-1 revision 2: Desktop cards use sentence case.')
+    expect(withMemory.prompt).toContain('not a requirement, Gate approval, or verified repository evidence')
+    expect(withMemory.prompt).not.toContain('sk-supersecret123456789')
+    expect(withMemory.prompt.indexOf('RECALLED_MEMORY_BACKGROUND')).toBeGreaterThan(withMemory.prompt.indexOf('RAW_REQUEST'))
+  })
+
   it('rejects oversized saved proposals before calling the provider instead of truncating decisions', async () => {
     const provider = createFakeAgentProvider()
     const generate = vi.spyOn(provider, 'generateWorkflowArtifact')

@@ -70,6 +70,7 @@ import {
   createAgentRuntimeRendererSnapshot,
   resolveDevFlowCodingExecutorSelection,
   resolveDevFlowRuntimeFlags,
+  STAGE_AGENT_MEMORY_RECALL_BUDGET,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
@@ -203,6 +204,7 @@ import {
 } from './native-coding-executor-v2.js'
 import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
+import { codingPromptDigest, recallScopedMemory } from './coding-context.js'
 import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
@@ -2782,6 +2784,16 @@ function registerIpcHandlers() {
         }
         let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>> | undefined
         try {
+          // ADR 0024: scoped Memory as low-trust background, recalled fresh for every call.
+          const recalledAt = new Date().toISOString()
+          const stageRuntimeKey = codingPromptDigest(`${run.id}\n${node.id}`).slice(0, 32)
+          const stageMemory = await recallScopedMemory({
+            store, projectId: run.projectId, userId: actor.userId,
+            runtimeId: `agent-runtime-stage-${stageRuntimeKey}`,
+            requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
+            query: [run.request, node.title, node.subtitle].join('\n'),
+            now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+          })
           generated = await runWorkflowStageAgent({
             run,
             node,
@@ -2791,6 +2803,9 @@ function registerIpcHandlers() {
             requestedBy: actor.userId,
             runtime: 'electron',
             signal,
+            ...(stageMemory.revisions.length
+              ? { memoryContext: stageMemory.revisions.map(({ id, revision, statement }) => ({ id, revision, statement })) }
+              : {}),
           })
           signal.throwIfAborted()
           if (generated.artifact.designEvidence) {

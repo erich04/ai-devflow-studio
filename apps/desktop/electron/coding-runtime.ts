@@ -71,7 +71,7 @@ import {
 } from './coding-engine-lifecycle.js'
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
 import { CODING_BRIEF_MAX_BYTES, estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
-import { assertCodingContextCurrent, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
+import { assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
 import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
 import type {
   CodingAgentMutation,
@@ -2761,7 +2761,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const briefContext = await loadCodingBriefContext(run, node)
       const recalled = await recallCodingMemory({
         store: deps.store, run, codingRunId, userId: input.requestedBy,
-        query: `${run.request}\n${input.userInstruction}`, now: now(),
+        query: buildCodingMemoryQuery({
+          run, node, userInstruction: input.userInstruction, artifacts: briefContext.upstreamArtifacts,
+        }),
+        now: now(),
       })
       const model = executor.modelId ?? providerId
       const canonicalBrief = buildCodingBrief({

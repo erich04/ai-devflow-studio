@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import {
-  AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, contextBytes, redactSensitiveText,
-  type AgentRuntimeScope, type CodingAgentRun, type CodingContextReceipt,
-  type DurableAgentMemoryRevision, type WorkflowRun,
+  AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, CODING_MEMORY_RECALL_BUDGET, rankMemoryByRelevance, redactSensitiveText,
+  selectMemoryWithinBudget,
+  type AgentRuntimeScope, type Artifact, type CodingAgentRun, type CodingContextReceipt,
+  type DurableAgentMemoryRevision, type MemoryRecallBudget, type WorkflowNode, type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 
@@ -31,44 +32,85 @@ async function executionScope(input: {
   }
 }
 
-function relevance(statement: string, query: string): number {
-  const words = new Set(query.toLocaleLowerCase().match(/[a-z0-9_]{3,}|[\p{Script=Han}]{1,2}/gu) ?? [])
-  const text = statement.toLocaleLowerCase()
-  return [...words].filter((word) => text.includes(word)).length
+export type RecalledMemory = {
+  scope: AgentRuntimeScope
+  runtimeId: string
+  revisions: DurableAgentMemoryRevision[]
+  memories: CodingContextReceipt['memories']
+  /** Retrievable but not attached: irrelevant, oversized or over budget. */
+  omittedMemoryCount: number
 }
 
-export async function recallCodingMemory(input: {
-  store: CodingMemoryStore; run: WorkflowRun; codingRunId: string; userId: string; query: string; now: string
-}) {
-  const runtimeId = `agent-runtime-coding-${input.codingRunId}`
-  const scope = await executionScope({ store: input.store, projectId: input.run.projectId, userId: input.userId, runtimeId })
+/**
+ * Scoped, ranked Memory recall shared by the coding brief, the stage Agent and the
+ * discussion bar (ADR 0024). Retrieval keeps every existing scope, expiry and tombstone
+ * rule; ranking is BM25 with a minimum of one shared non-stop-word term, newest first on
+ * ties; selection never truncates a statement.
+ */
+export async function recallScopedMemory(input: {
+  store: CodingMemoryStore; projectId: string; userId: string; runtimeId: string; requestId: string
+  query: string; now: string; budget: MemoryRecallBudget
+}): Promise<RecalledMemory> {
+  const scope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
   // Lightweight test adapters may have no Memory store. A partially configured adapter is invalid.
   if (Boolean(input.store.retrieveAgentMemoryRevisions) !== Boolean(input.store.getAgentMemoryHead)) {
     throw new Error('Coding Memory store is incomplete')
   }
   const available = await input.store.retrieveAgentMemoryRevisions?.({
-    stateVersion: 1, id: `coding-memory-${codingPromptDigest(input.codingRunId).slice(0, 32)}`,
-    scope, runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: input.now,
+    stateVersion: 1, id: input.requestId,
+    scope, runtimeId: input.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: input.now,
   }) ?? []
-  const ranked = [...available].sort((a, b) =>
-    relevance(b.statement, input.query) - relevance(a.statement, input.query) ||
-    b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id),
-  )
+  const newestFirst = [...available].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+  const relevant = rankMemoryByRelevance(newestFirst, input.query, (revision) => revision.statement)
+    .map((entry) => entry.item)
+  const selected = selectMemoryWithinBudget(relevant, (revision) => redactSensitiveText(revision.statement).value, input.budget)
   const revisions: DurableAgentMemoryRevision[] = []
   const memories: CodingContextReceipt['memories'] = []
-  let usedBytes = 0
-  for (const revision of ranked) {
-    const size = contextBytes(redactSensitiveText(revision.statement).value) + 200
-    if (revisions.length >= 8 || usedBytes + size > 4_000) continue
+  for (const revision of selected) {
     const head = await input.store.getAgentMemoryHead!(revision.id)
     if (!head || head.status !== 'active' || head.currentRevision !== revision.revision) {
       throw new Error('Coding Memory source changed during Context preparation')
     }
     revisions.push(revision)
     memories.push({ id: revision.id, revision: revision.revision, headVersion: head.version, contentDigest: revision.contentDigest })
-    usedBytes += size
   }
-  return { scope, runtimeId, revisions, memories, omittedMemoryCount: available.length - revisions.length }
+  return { scope, runtimeId: input.runtimeId, revisions, memories, omittedMemoryCount: available.length - revisions.length }
+}
+
+export async function recallCodingMemory(input: {
+  store: CodingMemoryStore; run: WorkflowRun; codingRunId: string; userId: string; query: string; now: string
+}): Promise<RecalledMemory> {
+  return recallScopedMemory({
+    store: input.store, projectId: input.run.projectId, userId: input.userId,
+    runtimeId: `agent-runtime-coding-${input.codingRunId}`,
+    requestId: `coding-memory-${codingPromptDigest(input.codingRunId).slice(0, 32)}`,
+    query: input.query, now: input.now, budget: CODING_MEMORY_RECALL_BUDGET,
+  })
+}
+
+const MAX_QUERY_PATHS = 24
+
+/**
+ * Recall query for a coding brief: the request and instruction plus the node and the
+ * Gate-approved clarification/design (title, summary and cited repository paths).
+ */
+export function buildCodingMemoryQuery(input: {
+  run: WorkflowRun; node: WorkflowNode; userInstruction: string; artifacts: readonly Artifact[]
+}): string {
+  const approvedIds = new Set(input.run.nodes
+    .filter((node) => node.kind === 'gate' && node.status === 'success' && (node.stage === 'clarify' || node.stage === 'design'))
+    .flatMap((node) => node.artifactIds))
+  const approved = input.artifacts.filter((artifact) => artifact.runId === input.run.id && approvedIds.has(artifact.id) &&
+    (artifact.kind === 'clarification' || artifact.kind === 'design'))
+  const citedPaths = [...new Set(approved.flatMap((artifact) => [
+    ...(artifact.clarificationRevision?.repositoryFindings?.citations ?? []),
+    ...(artifact.designEvidence?.repositoryFindings?.citations ?? []),
+  ].map((citation) => citation.path)))].slice(0, MAX_QUERY_PATHS)
+  return [
+    input.run.request, input.userInstruction, input.node.title, input.node.subtitle,
+    ...approved.map((artifact) => `${artifact.title}\n${artifact.summary}`),
+    citedPaths.join(' '),
+  ].filter((part) => part.trim().length > 0).join('\n')
 }
 
 export async function assertCodingContextCurrent(input: {
