@@ -41,8 +41,9 @@ export async function runMemoryContextLiveSmoke(input: { provider: AgentProvider
   const wrapped: AgentProvider = {
     ...input.provider,
     completeStructuredJson: async (call) => {
-      const payload = JSON.parse(call.userPrompt) as { brief?: string }
-      observations.push({ phase: call.systemPrompt.includes('Do not propose edits yet') ? 'analysis' : 'implementation', containsMemory: payload.brief?.includes(expectedMemoryGreeting) ?? false, containsInstruction: payload.brief?.includes(request) ?? false, chars: call.userPrompt.length })
+      // Native v2 shares one system prompt across phases; the user JSON names the phase.
+      const payload = JSON.parse(call.userPrompt) as { brief?: string; phase?: string }
+      observations.push({ phase: payload.phase === 'analysis' ? 'analysis' : 'implementation', containsMemory: payload.brief?.includes(expectedMemoryGreeting) ?? false, containsInstruction: payload.brief?.includes(request) ?? false, chars: call.userPrompt.length })
       return input.provider.completeStructuredJson!(call)
     },
   }

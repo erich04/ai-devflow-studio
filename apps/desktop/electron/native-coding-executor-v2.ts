@@ -462,25 +462,49 @@ function modelValidationCause(error: unknown): string {
   return `native_v2_${error instanceof Error ? causes[error.message] ?? 'output_validation_failed' : 'output_validation_failed'}`
 }
 
-export function createNativeCodingV2RepairSystemPrompt(
-  allowedPaths: readonly string[],
-): string {
-  return [
-    'Return one JSON object only, without Markdown or prose.',
-    'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"one/exact/allowed/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded repair"}.',
+/**
+ * One static system prompt shared by every phase and every run. Provider prompt caches
+ * (DeepSeek disk cache, OpenAI automatic caching) only reuse an exact token prefix, so
+ * nothing run- or phase-specific may appear here: the user JSON's `phase` field selects
+ * the contract, and run data such as allowed paths stays in the user message.
+ */
+export const NATIVE_CODING_V2_SYSTEM_PROMPT = [
+  [
+    'You are the DevFlow Native v2 bounded coding executor. Return one JSON object only, without Markdown or prose.',
+    'The user message is one JSON object. Its phase field selects exactly one contract below; follow only that contract and the limits field.',
+  ],
+  [
+    'Phase "analysis" selects repository evidence.',
+    'Use exactly this shape: {"stateVersion":2,"files":["path/from/repositoryManifest"],"searches":[{"query":"literal text","path":"path/from/repositoryManifest"}],"summary":"bounded repository analysis"}.',
+    'The top-level keys are exactly stateVersion, files, searches, summary. Do not add extra keys.',
+    'stateVersion must be the number 2. Every files item and optional searches.path must exactly equal one file path from repositoryManifest; do not use directories or globs.',
+    'Each searches item has only query and optional path. searches may be empty. Do not propose edits yet.',
+    'Hard limits: select at most 8 unique file paths and at most 8 searches. Each literal query is 1–200 characters. summary is a non-empty string of at most 1000 characters.',
+  ],
+  [
+    'Phases "initial" and "repair" each propose one exact Change Set.',
+    'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"one/exact/allowed/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded change"}.',
     'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
     'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
-    'A safe repair contains between 1 and 6 file entries. If the failure cannot be repaired within the allowed paths while preserving the original request, return an empty changes array and explain why in summary.',
-    'Do not undo correct requested behavior to address missing dependencies, unavailable tools, or other environment failures.',
-    `Every path must exactly equal one entry in this allowed path list: ${JSON.stringify(allowedPaths)}. Do not use any other path.`,
-    'If a TypeScript error appears in a file outside the allowed list, fix the public contract from an allowed file instead of editing the outside file.',
-    'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
-    'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
     'oldText must be a non-empty string. newText must be a string. oldText and newText must not be identical. Do not include unchanged or placeholder replacements.',
     'oldText must be copied verbatim from the supplied excerpt for that same path and occur exactly once.',
+    'Every path must exactly equal one entry in the allowedPaths list of the user message. Do not use any other path. Do not create, delete, rename, or edit binary files.',
+    'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
+    'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
+  ],
+  [
+    'Phase "initial" implements the brief.',
+    'Hard limits: change at most 6 unique file paths with at most 12 replacements in total across all files. Include each path only once. summary is a non-empty string of at most 1000 characters.',
+    'Plan the smallest complete implementation within those limits, including required tests and documentation. Reuse existing structure and styling; avoid unrelated refactoring or optional cosmetic edits. Check these counts before returning JSON.',
+  ],
+  [
+    'Phase "repair" fixes the saved test failure in testFailure.',
+    'A safe repair contains between 1 and 6 file entries. If the failure cannot be repaired within the allowed paths while preserving the original request, return an empty changes array and explain why in summary.',
+    'Do not undo correct requested behavior to address missing dependencies, unavailable tools, or other environment failures.',
+    'If a TypeScript error appears in a file outside the allowed list, fix the public contract from an allowed file instead of editing the outside file.',
     'Repair only supplied files. Do not create, delete, rename, or touch any path outside the initial Change Set.',
-  ].join(' ')
-}
+  ],
+].map((block) => block.join(' ')).join('\n\n')
 
 async function buildRepositoryManifest(worktreePath: string): Promise<string[]> {
   const paths: string[] = []
@@ -1043,22 +1067,17 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       await context.assertContextCurrent?.()
       const manifest = await buildRepositoryManifest(context.workspace.worktreePath)
       if (manifest.length < 1) throw new Error('DevFlow Native v2 repository manifest is empty')
+      // Stable content first: every phase begins with the same stateVersion + brief so the
+      // provider can reuse that prefix; phase-specific evidence and limits follow it.
       const analysisPrompt = boundedPrompt({
         stateVersion: 2,
+        brief: safeText(context.brief.prompt),
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
-        brief: safeText(context.brief.prompt),
         repositoryManifest: manifest,
+        phase: 'analysis',
         limits: { maxFiles: 8, maxSearches: 8, literalSearchOnly: true },
       })
-      const analysisSystemPrompt = [
-        'Return one JSON object only, without Markdown or prose.',
-        'Use exactly this shape: {"stateVersion":2,"files":["path/from/repositoryManifest"],"searches":[{"query":"literal text","path":"path/from/repositoryManifest"}],"summary":"bounded repository analysis"}.',
-        'The top-level keys are exactly stateVersion, files, searches, summary. Do not add extra keys.',
-        'stateVersion must be the number 2. Every files item and optional searches.path must exactly equal one file path from repositoryManifest; do not use directories or globs.',
-        'Each searches item has only query and optional path. searches may be empty. Do not propose edits yet.',
-        'Hard limits: select at most 8 unique file paths and at most 8 searches. Each literal query is 1–200 characters. summary is a non-empty string of at most 1000 characters.',
-      ].join(' ')
       const analysis = await runProviderCall({
         assertContextCurrent: context.assertContextCurrent,
         codingRunId: request.id,
@@ -1066,7 +1085,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           ? { reportProviderCall: context.reportProviderCall }
           : {}),
         phase: 'analysis',
-        systemPrompt: analysisSystemPrompt,
+        systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
         userPrompt: analysisPrompt,
         maxOutputTokens: Math.min(2_048, MAX_OUTPUT_TOKENS),
         manifestPathCount: manifest.length,
@@ -1082,27 +1101,15 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       })
       const initialPrompt = fitChangePrompt({
         stateVersion: 2,
+        brief: safeText(context.brief.prompt),
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
-        brief: safeText(context.brief.prompt),
         analysisSummary: plan.summary,
         excerpts,
         allowedPaths: excerpts.map((excerpt) => excerpt.path),
+        phase: 'initial',
         limits: { existingUtf8Files: true, maxFiles: 6, maxReplacements: 12 },
       })
-      const initialSystemPrompt = [
-        'Return one JSON object only, without Markdown or prose.',
-        'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"supplied/excerpt/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded implementation"}.',
-        'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
-        'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
-        'oldText must be a non-empty string. newText must be a string. oldText and newText must not be identical. Do not include unchanged or placeholder replacements.',
-        'oldText must be copied verbatim from a supplied excerpt and occur exactly once.',
-        'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
-        'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
-        'Use only supplied excerpt paths. Do not create, delete, rename, or edit binary files.',
-        'Hard limits: change at most 6 unique file paths with at most 12 replacements in total across all files. Include each path only once. summary is a non-empty string of at most 1000 characters.',
-        'Plan the smallest complete implementation within those limits, including required tests and documentation. Reuse existing structure and styling; avoid unrelated refactoring or optional cosmetic edits. Check these counts before returning JSON.',
-      ].join(' ')
       const initialResult = await runProviderCall({
         assertContextCurrent: context.assertContextCurrent,
         codingRunId: request.id,
@@ -1110,7 +1117,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           ? { reportProviderCall: context.reportProviderCall }
           : {}),
         phase: 'initial',
-        systemPrompt: initialSystemPrompt,
+        systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
         userPrompt: initialPrompt,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
         manifestPathCount: manifest.length,
@@ -1289,6 +1296,8 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           content: safeText((await readCodingWorkspaceTextFile(workspace.worktreePath, change.path)).slice(0, MAX_EXCERPT_BYTES)),
           reason: 'selected' as const,
         })))
+        // Same leading stateVersion + brief as analysis/initial; the persisted brief is the
+        // canonical one those calls sent, so the provider can reuse the shared prefix.
         const repairPrompt = fitChangePrompt({
           stateVersion: 2,
           brief: safeText(codingRun.prompt),
@@ -1299,9 +1308,9 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           },
           excerpts,
           allowedPaths: [...initialPaths],
+          phase: 'repair',
           limits: { existingPreviouslyChangedFilesOnly: true, maxFiles: 6, maxReplacements: 12 },
         })
-        const repairSystemPrompt = createNativeCodingV2RepairSystemPrompt([...initialPaths])
         const repairResult = await runProviderCall({
           assertContextCurrent: context.assertContextCurrent,
           codingRunId: codingRun.id,
@@ -1309,7 +1318,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             ? { reportProviderCall: context.reportProviderCall }
             : {}),
           phase: 'repair',
-          systemPrompt: repairSystemPrompt,
+          systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
           userPrompt: repairPrompt,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           manifestPathCount: 0,

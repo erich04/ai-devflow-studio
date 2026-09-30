@@ -98,13 +98,18 @@ function packConversationContext(input: {
   facts: { runs: Array<{ id: string; title: string; status: string; version: number; currentNodeId: string; updatedAt: string }>; totalRuns: number; observedAt: string }
   observations: unknown[]; remainingSteps: number; requirements: RequirementContext[]; criticalProposalInput?: CriticalContext; proposalVerification?: { content: string }
 }) {
+  // Key order is a caching contract: provider prompt caches reuse only an exact prefix.
+  // Stable-within-turn content comes first (requirements, history, critical input), then
+  // append-only tool observations, then per-step values (workflow snapshot with its
+  // observedAt, notices, remaining steps, verification). Keys are looked up by name.
   const context = {
-    history: [...input.history],
-    latestWorkflow: { ...input.facts, runs: [...input.facts.runs], contextSummaryOnly: false },
-    toolObservations: [...input.observations], remainingSteps: input.remainingSteps,
     originalRequirements: input.requirements,
-    contextNotice: '',
+    history: [...input.history],
     ...(input.criticalProposalInput ? { criticalProposalInput: input.criticalProposalInput } : {}),
+    toolObservations: [...input.observations],
+    latestWorkflow: { ...input.facts, runs: [...input.facts.runs], contextSummaryOnly: false },
+    contextNotice: '',
+    remainingSteps: input.remainingSteps,
     ...(input.proposalVerification ? { proposalVerification: input.proposalVerification } : {}),
   }
   const serialize = () => redactSensitiveText(JSON.stringify(context)).value
@@ -430,7 +435,10 @@ export class WorkbenchConversationService {
         controller.signal.throwIfAborted()
         phase = 'read_context'
         const facts = await this.overview(projectId)
-        const packed = packConversationContext({ history, facts, observations, remainingSteps: 12 - step, requirements: [...requirements.values()], ...(criticalProposalInput ? { criticalProposalInput } : {}), ...(pendingProposal ? { proposalVerification: { content: String(recordOrEmpty(pendingProposal.draft).content) } } : {}) })
+        // The Map keeps the two most recently investigated Runs; serialize them in a stable
+        // order so re-querying a Run does not reshuffle the prompt prefix.
+        const orderedRequirements = [...requirements.values()].sort((left, right) => left.runId.localeCompare(right.runId))
+        const packed = packConversationContext({ history, facts, observations, remainingSteps: 12 - step, requirements: orderedRequirements, ...(criticalProposalInput ? { criticalProposalInput } : {}), ...(pendingProposal ? { proposalVerification: { content: String(recordOrEmpty(pendingProposal.draft).content) } } : {}) })
         await this.update(projectId, id, (current) => ({ ...current, contextReceipt: {
           includedMessages: packed.includedMessages,
           omittedMessages: session.messages.filter((message) => message.role !== 'tool' && message.role !== 'notice').length - packed.includedMessages,

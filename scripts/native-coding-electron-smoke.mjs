@@ -106,8 +106,18 @@ async function readRequestBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'))
 }
 
-function modelContentFor(systemPrompt) {
-  if (systemPrompt.includes('Do not propose edits yet')) {
+// Native v2 sends one shared system prompt; the user JSON's phase field selects the contract.
+function nativePhaseOf(body) {
+  const userContent = body?.messages?.find((message) => message.role === 'user')?.content
+  try {
+    return JSON.parse(userContent).phase
+  } catch {
+    return undefined
+  }
+}
+
+function modelContentFor(phase) {
+  if (phase === 'analysis') {
     return JSON.stringify({
       stateVersion: 2,
       files: ['src/message.js'],
@@ -147,7 +157,7 @@ const modelServer = createServer(async (request, response) => {
     }
     modelRequests.push(body)
     const payload = JSON.stringify({
-      choices: [{ message: { content: modelContentFor(systemPrompt) } }],
+      choices: [{ message: { content: modelContentFor(nativePhaseOf(body)) } }],
       usage: {
         prompt_tokens: 40 + modelRequests.length,
         completion_tokens: 20,
@@ -504,6 +514,13 @@ try {
     .toBeGreaterThanOrEqual(4)
   expect(modelRequests).toHaveLength(2)
   expect(modelRequests.every((request) => request.model === 'deepseek-flash')).toBe(true)
+  // Through the real HTTP adapter: both phases send the identical system message and open
+  // the user JSON with the same brief, so provider prefix caching can reuse it.
+  expect(modelRequests.map(nativePhaseOf)).toEqual(['analysis', 'initial'])
+  expect(modelRequests[1].messages[0].content).toBe(modelRequests[0].messages[0].content)
+  const sentBrief = JSON.parse(modelRequests[0].messages[1].content).brief
+  const sharedPrefix = `{"stateVersion":2,"brief":${JSON.stringify(sentBrief)},`
+  expect(modelRequests.every((request) => request.messages[1].content.startsWith(sharedPrefix))).toBe(true)
   console.log('DevFlow Native Electron smoke passed: real Main, local model server, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
 } finally {
   if (app) await app.close().catch(() => undefined)

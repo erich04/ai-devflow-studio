@@ -65,6 +65,42 @@ describe('unified conversation execution and boundaries', () => {
     expect(result.status).toBe('idle')
   })
 
+  it('keeps every step prompt an exact-prefix extension of the previous one for provider caching', async () => {
+    // Everything before the open toolObservations array must be byte-identical at the next
+    // step, so the provider can serve requirements, history and prior observations from cache.
+    const cacheablePrefix = (prompt: string) => {
+      const context = JSON.parse(prompt)
+      return JSON.stringify({ originalRequirements: context.originalRequirements, history: context.history, toolObservations: context.toolObservations }).slice(0, -2)
+    }
+    let step = 0
+    const { service, calls } = harness(async () => {
+      step += 1
+      if (step === 1) return { value: { tool: { name: 'node', args: { runId: created.run.id, nodeId: created.run.currentNodeId } } } }
+      if (step === 2) return { value: { tool: { name: 'requirement', args: { runId: created.run.id } } } }
+      if (step === 3) return { value: { tool: { name: 'knowledge', args: { query: '清理' } } } }
+      return { value: { text: '已查到当前进展和清理规则。' } }
+    })
+    const id = await create(service)
+    expect((await send(service, id, '先看当前进展和清理规则。')).status).toBe('idle')
+    expect(calls).toHaveLength(4)
+    for (const [index, prompt] of calls.entries()) {
+      const keys = Object.keys(JSON.parse(prompt))
+      expect(keys.slice(0, 3)).toEqual(['originalRequirements', 'history', 'toolObservations'])
+      expect(keys.at(-1)).toBe('remainingSteps')
+      expect(prompt.startsWith(cacheablePrefix(prompt))).toBe(true)
+      if (index > 0) expect(prompt.startsWith(cacheablePrefix(calls[index - 1]!))).toBe(true)
+    }
+
+    // A new turn keeps the requirement body and the earlier history entries as its prefix.
+    step = 3
+    const firstTurn = JSON.parse(calls[0]!)
+    expect((await send(service, id, '继续。')).status).toBe('idle')
+    const nextTurn = calls.at(-1)!
+    const sharedAcrossTurns = JSON.stringify({ originalRequirements: firstTurn.originalRequirements, history: firstTurn.history }).slice(0, -2)
+    expect(nextTurn.startsWith(sharedAcrossTurns)).toBe(true)
+    expect(JSON.parse(nextTurn).history.length).toBeGreaterThan(firstTurn.history.length)
+  })
+
   it('recovers once from invalid model output without losing input, billed usage or workflow state (#154)', async () => {
     let attempts = 0
     const { service } = harness(async () => {
