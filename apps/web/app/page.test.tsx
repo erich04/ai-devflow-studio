@@ -95,6 +95,37 @@ it('shows the authoritative policy and one actionable policy control in the task
   expect(screen.getByRole('link', { name: /策略设置/ })).toHaveAttribute('href', '/?projectId=p-remote&view=settings&section=policy')
 })
 
+// Hardening H2: the whole synced step list drives progress; old placeholder titles read in Chinese.
+it('shows progress and Chinese step names from the synced step list', async () => {
+  const base = overview.runs[0]!.nodes[0]!
+  const step = (id: string, stage: typeof base.stage, kind: typeof base.kind, status: typeof base.status, title: string) =>
+    ({ ...base, id: `run-remote:${id}`, stage, kind, status, title, subtitle: 'Canonical current node from DevFlow Electron.' })
+  mockedFetchTeamOverview.mockResolvedValue({
+    ...overview,
+    runs: [{
+      ...overview.runs[0]!,
+      status: 'designing',
+      currentNodeId: 'run-remote:n-design',
+      nodes: [
+        step('n-clarify', 'clarify', 'agent', 'success', '需求澄清'),
+        step('n-clarify-gate', 'clarify', 'gate', 'success', '需求确认 Gate'),
+        step('n-design', 'design', 'agent', 'running', 'Synced design node'),
+        step('n-build', 'build', 'task', 'pending', 'Implement locally'),
+      ],
+    }],
+  })
+  render(await Page({ searchParams: Promise.resolve({ projectId: 'p-remote', runId: 'run-remote' }) }))
+  const steps = screen.getByRole('region', { name: '进度与材料' })
+  expect(steps).toHaveTextContent('50%')
+  for (const title of ['需求澄清', '需求确认 Gate', '方案设计', '开发实现']) {
+    expect(within(steps).getByRole('heading', { name: title, level: 3 })).toBeInTheDocument()
+  }
+  expect(steps).not.toHaveTextContent('Synced design node')
+  expect(steps).not.toHaveTextContent('Implement locally')
+  expect(steps).not.toHaveTextContent('Canonical current node')
+  expect(steps).toHaveTextContent('步骤状态由桌面端同步。')
+})
+
 // Plan S5, Q1: four entries; legacy links keep resolving.
 it('uses the four Web entries and treats the old workbench view as the task list', async () => {
   mockedFetchTeamOverview.mockResolvedValue(overview)

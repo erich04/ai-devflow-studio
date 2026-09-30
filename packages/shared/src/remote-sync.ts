@@ -39,6 +39,30 @@ function isRunStatus(value: unknown): boolean {
   )
 }
 
+/** Upper bound for a Run's synced step list; the workflow template has eight steps. */
+export const REMOTE_RUN_MAX_NODES = 64
+
+function sameRemoteRunNode(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return left['id'] === right['id'] && left['stage'] === right['stage'] && left['kind'] === right['kind'] &&
+    left['status'] === right['status'] && left['requiredRole'] === right['requiredRole']
+}
+
+/** Optional ordered step list: bounded, exact keys, unique IDs, and it agrees with `currentNode`. */
+function isRemoteRunNodeList(value: unknown, currentNode: unknown): boolean {
+  if (value === undefined) return true
+  if (!Array.isArray(value) || value.length === 0 || value.length > REMOTE_RUN_MAX_NODES) return false
+  const ids = new Set<string>()
+  for (const node of value) {
+    if (!isRemoteRunNodeSummary(node)) return false
+    const record = node as Record<string, unknown>
+    if (Object.keys(record).some((key) => !['id', 'stage', 'kind', 'status', 'requiredRole'].includes(key))) return false
+    if (ids.has(record['id'] as string)) return false
+    ids.add(record['id'] as string)
+  }
+  const current = value.find((node) => (node as Record<string, unknown>)['id'] === (currentNode as Record<string, unknown>)['id'])
+  return Boolean(current) && sameRemoteRunNode(current as Record<string, unknown>, currentNode as Record<string, unknown>)
+}
+
 function isRemoteRunNodeSummary(value: unknown): boolean {
   if (!isRecord(value)) return false
   const stage = value['stage']
@@ -67,6 +91,7 @@ function isRemoteRunSummary(value: unknown): value is RemoteRunSummary {
     typeof value['currentNodeId'] === 'string' &&
     isRemoteRunNodeSummary(value['currentNode']) &&
     (value['currentNode'] as Record<string, unknown>)['id'] === value['currentNodeId'] &&
+    isRemoteRunNodeList(value['nodes'], value['currentNode']) &&
     typeof value['branchName'] === 'string' &&
     typeof value['updatedAt'] === 'string'
   )
@@ -441,6 +466,13 @@ export function createRemoteRunSummary(
     throw new Error(`Canonical Run current node not found: ${run.currentNodeId}`)
   }
 
+  const nodeSummary = (node: WorkflowRun['nodes'][number]) => ({
+    id: node.id,
+    stage: node.stage,
+    kind: node.kind,
+    status: node.status,
+    ...(node.requiredRole ? { requiredRole: node.requiredRole } : {}),
+  })
   return redactRemoteRunSummaryForSync({
     kind,
     runId: run.id,
@@ -449,13 +481,9 @@ export function createRemoteRunSummary(
     title: run.title,
     status: run.status,
     currentNodeId: run.currentNodeId,
-    currentNode: {
-      id: currentNode.id,
-      stage: currentNode.stage,
-      kind: currentNode.kind,
-      status: currentNode.status,
-      ...(currentNode.requiredRole ? { requiredRole: currentNode.requiredRole } : {}),
-    },
+    currentNode: nodeSummary(currentNode),
+    // The whole step list lets the Team show real progress, not only the step current at upload.
+    ...(run.nodes.length <= REMOTE_RUN_MAX_NODES ? { nodes: run.nodes.map(nodeSummary) } : {}),
     branchName: run.branchName,
     updatedAt: run.updatedAt,
   })
@@ -469,6 +497,10 @@ export function redactRemoteRunSummaryForSync(
   const stageAgentUsage = summary.stageAgentUsage === undefined ? undefined
     : parseStageAgentUsage(summary.stageAgentUsage, summary.runId, summary.projectId)
   stageAgentUsage?.forEach((usage) => assertCanonicalLocalNodeId(summary.runId, usage.nodeId))
+  if (summary.nodes !== undefined && !isRemoteRunNodeList(summary.nodes, summary.currentNode)) {
+    throw new Error('Run summary step list does not match its current step.')
+  }
+  summary.nodes?.forEach((node) => assertCanonicalLocalNodeId(summary.runId, node.id))
   const gateReviewSubject = summary.gateReviewSubject === undefined ? undefined
     : parseGateReviewSubjectSnapshot(summary.gateReviewSubject)
   if (gateReviewSubject && (gateReviewSubject.runId !== summary.runId ||
@@ -496,10 +528,40 @@ export function redactRemoteRunSummaryForSync(
         ? { requiredRole: summary.currentNode.requiredRole }
         : {}),
     },
+    ...(summary.nodes
+      ? {
+          nodes: summary.nodes.map((node) => ({
+            id: node.id,
+            stage: node.stage,
+            kind: node.kind,
+            status: node.status,
+            ...(node.requiredRole ? { requiredRole: node.requiredRole } : {}),
+          })),
+        }
+      : {}),
     branchName: redactSensitiveText(summary.branchName).value,
     updatedAt: summary.updatedAt,
   }
 }
+
+/**
+ * Chinese display title of a synced step. Step titles never leave the desktop, so the Team names
+ * a step by its stage and kind; the same names as the desktop's template display names.
+ */
+export function remoteStepTitle(stage: WorkflowRun['nodes'][number]['stage'], kind: WorkflowRun['nodes'][number]['kind']): string {
+  const gate = kind === 'gate' || kind === 'acceptance'
+  switch (stage) {
+    case 'clarify': return gate ? '需求确认 Gate' : '需求澄清'
+    case 'design': return gate ? '方案评审 Gate' : '方案设计'
+    case 'build': return gate ? '开发实现 Gate' : '开发实现'
+    case 'test': return gate ? '测试 Gate' : '运行测试'
+    case 'pr': return gate ? 'PR 交付 Gate' : '准备 PR 草稿'
+    case 'accept': return '业务验收'
+  }
+}
+
+/** Subtitle stored for synced steps; content stays on the desktop. */
+export const REMOTE_STEP_SUBTITLE = '步骤状态由桌面端同步。'
 
 export function createRemoteTestEvidenceSummary(
   evidence: TestEvidence,

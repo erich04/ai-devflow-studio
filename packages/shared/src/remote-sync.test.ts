@@ -10,6 +10,7 @@ import {
   parseRemoteRunSummary,
   parseRemoteTestEvidenceSummary,
   redactRemoteTestEvidenceSummaryForSync,
+  remoteStepTitle,
   resolveTeamProjectId,
 } from './remote-sync'
 
@@ -174,14 +175,48 @@ describe('remote sync helpers', () => {
         status: 'blocked',
         requiredRole: 'lead',
       },
+      // Metadata-only step list; titles and subtitles stay on the desktop.
+      nodes: [{ id: 'node-gate', stage: 'design', kind: 'gate', status: 'blocked', requiredRole: 'lead' }],
       branchName: 'ai/remote-sync',
       updatedAt: '2026-06-16T00:10:00.000Z',
     })
+    expect(JSON.stringify(summary)).not.toContain('Design Gate')
+    expect(JSON.stringify(summary)).not.toContain('Review the design.')
     expect(parseRemoteRunSummary(summary)).toEqual(summary)
     expect(() => parseRemoteRunSummary({
       ...summary,
       currentNode: { ...summary.currentNode, requiredRole: 'viewer' },
     })).toThrow('Invalid remote run summary payload')
+  })
+
+  it('accepts a summary without a step list from an older desktop and validates a present one', () => {
+    const { nodes: _nodes, ...legacy } = createRemoteRunSummary(run)
+    expect(parseRemoteRunSummary(legacy)).toEqual(legacy)
+    const summary = createRemoteRunSummary(run)
+    const pending = { id: 'node-next', stage: 'build' as const, kind: 'task' as const, status: 'pending' as const }
+    expect(parseRemoteRunSummary({ ...summary, nodes: [...summary.nodes!, pending] }).nodes).toHaveLength(2)
+    for (const nodes of [
+      [],
+      [pending],
+      [{ ...summary.currentNode, status: 'success' }],
+      [...summary.nodes!, summary.nodes![0]],
+      [{ ...summary.nodes![0], title: 'Local title must not sync' }],
+      Array.from({ length: 65 }, (_, index) => ({ ...pending, id: `node-${index}` })),
+    ]) {
+      expect(() => parseRemoteRunSummary({ ...summary, nodes })).toThrow('Invalid remote run summary payload')
+    }
+    expect(() => parseRemoteRunSummary({ ...summary, nodes: [...summary.nodes!, { ...pending, id: 'run-1:node-next' }] }))
+      .toThrow(/reserved Team node namespace/)
+  })
+
+  it('names synced steps by stage and kind in Chinese', () => {
+    expect(remoteStepTitle('clarify', 'agent')).toBe('需求澄清')
+    expect(remoteStepTitle('clarify', 'gate')).toBe('需求确认 Gate')
+    expect(remoteStepTitle('design', 'gate')).toBe('方案评审 Gate')
+    expect(remoteStepTitle('build', 'task')).toBe('开发实现')
+    expect(remoteStepTitle('test', 'test')).toBe('运行测试')
+    expect(remoteStepTitle('pr', 'pr')).toBe('准备 PR 草稿')
+    expect(remoteStepTitle('accept', 'acceptance')).toBe('业务验收')
   })
 
   it('rejects local node IDs that impersonate the Team storage namespace', () => {

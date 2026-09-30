@@ -59,6 +59,8 @@ import {
   redactRemoteCodingAgentSummaryForSync,
   redactRemoteAgentReviewSummaryForSync,
   redactRemoteRunSummaryForSync,
+  remoteStepTitle,
+  REMOTE_STEP_SUBTITLE,
   redactRemoteTestEvidenceSummaryForSync,
   resolveEffectivePolicy,
   toTeamStoredNodeId,
@@ -2754,68 +2756,75 @@ export function createPostgresTeamRepository(
           }
         }
 
-        await tx.query(
-          `
-            UPDATE workflow_nodes
-            SET status = 'success',
-                updated_at = $3
-            WHERE run_id = $1
-              AND id <> $2
-              AND status IN ('running', 'blocked')
-          `,
-          [
-            summary.runId,
-            remoteNodeId(summary.runId, summary.currentNode.id),
-            summary.updatedAt,
-          ],
-        )
+        if (!summary.nodes) {
+          // Older desktops send only the current step; earlier active steps are assumed finished.
+          await tx.query(
+            `
+              UPDATE workflow_nodes
+              SET status = 'success',
+                  updated_at = $3
+              WHERE run_id = $1
+                AND id <> $2
+                AND status IN ('running', 'blocked')
+            `,
+            [
+              summary.runId,
+              remoteNodeId(summary.runId, summary.currentNode.id),
+              summary.updatedAt,
+            ],
+          )
+        }
 
-        const [acceptedNode] = await tx.query<{ id: string }>(
-          `
-            INSERT INTO workflow_nodes (
-              id,
-              run_id,
-              stage,
-              title,
-              subtitle,
-              kind,
-              status,
-              owner_id,
-              required_role,
-              retry_count,
-              token_usage_id,
-              position,
-              created_at,
-              updated_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NULL, $10, $11, $11)
-            ON CONFLICT (id) DO UPDATE
-            SET stage = excluded.stage,
-                kind = excluded.kind,
-                status = excluded.status,
-                owner_id = excluded.owner_id,
-                required_role = excluded.required_role,
-                position = excluded.position,
-                updated_at = excluded.updated_at
-            WHERE workflow_nodes.run_id = excluded.run_id
-            RETURNING id
-          `,
-          [
-            remoteNodeId(summary.runId, summary.currentNode.id),
-            summary.runId,
-            summary.currentNode.stage,
-            `Synced ${summary.currentNode.stage} node`,
-            'Canonical current node from DevFlow Electron.',
-            summary.currentNode.kind,
-            summary.currentNode.status,
-            context.userId,
-            summary.currentNode.requiredRole ?? null,
-            remoteNodePosition(summary.currentNode.stage, summary.currentNode.kind),
-            summary.updatedAt,
-          ],
-        )
-        if (!acceptedNode) {
-          throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+        // The desktop's ordered step list is authoritative when present.
+        for (const node of summary.nodes ?? [summary.currentNode]) {
+          const [acceptedNode] = await tx.query<{ id: string }>(
+            `
+              INSERT INTO workflow_nodes (
+                id,
+                run_id,
+                stage,
+                title,
+                subtitle,
+                kind,
+                status,
+                owner_id,
+                required_role,
+                retry_count,
+                token_usage_id,
+                position,
+                created_at,
+                updated_at
+              )
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NULL, $10, $11, $11)
+              ON CONFLICT (id) DO UPDATE
+              SET stage = excluded.stage,
+                  title = excluded.title,
+                  kind = excluded.kind,
+                  status = excluded.status,
+                  owner_id = excluded.owner_id,
+                  required_role = excluded.required_role,
+                  position = excluded.position,
+                  updated_at = excluded.updated_at
+              WHERE workflow_nodes.run_id = excluded.run_id
+              RETURNING id
+            `,
+            [
+              remoteNodeId(summary.runId, node.id),
+              summary.runId,
+              node.stage,
+              remoteStepTitle(node.stage, node.kind),
+              REMOTE_STEP_SUBTITLE,
+              node.kind,
+              node.status,
+              context.userId,
+              node.requiredRole ?? null,
+              remoteNodePosition(node.stage, node.kind),
+              summary.updatedAt,
+            ],
+          )
+          if (!acceptedNode) {
+            throw new RemoteRunSummaryConflictError(summary.runId, summary.projectId)
+          }
         }
 
         await persistReviewSubject()

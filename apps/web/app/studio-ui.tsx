@@ -13,7 +13,7 @@ import {
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { NodeStatus, WorkflowNode, WorkflowRun } from '@ai-devflow/shared'
-import { nodeStatusLabel, stageLabel } from './web-labels'
+import { nodeStatusLabel, stageLabel, stepSubtitle, stepTitle } from './web-labels'
 
 export type StatusTone = 'done' | 'run' | 'gate' | 'warn' | 'idle' | 'fail'
 
@@ -66,8 +66,8 @@ export function EvidenceStep({
           <span>{stageLabel(node.stage)}</span>
           <StatusPill tone={nodeTone(node.status)}>{nodeStatusLabel(node.status)}</StatusPill>
         </div>
-        <h3>{node.title}</h3>
-        <p>{node.subtitle}</p>
+        <h3>{stepTitle(node)}</h3>
+        <p>{stepSubtitle(node)}</p>
         <div className="studio-step-meta">
           <span>重试 {node.retryCount} 次</span>
           <span>证据 {evidenceCount} 项</span>

@@ -28,6 +28,7 @@ import {
   roleLabel,
   runStatusLabel,
   shortIdentifier,
+  stepTitle,
 } from './web-labels'
 
 function calculateProgress(nodes: WorkflowNode[]) {
@@ -105,7 +106,7 @@ export function WebTaskDetail({
     <section className="studio-task-detail" aria-label="任务详情">
       <dl className="studio-task-facts">
         <div><dt>状态</dt><dd><StatusPill tone={statusTone(run.status)}>{runStatusLabel(run.status)}</StatusPill></dd></div>
-        <div><dt>当前步骤</dt><dd>{currentNode ? `${currentNode.title} · ${nodeStatusLabel(currentNode.status)}` : '未记录'}</dd></div>
+        <div><dt>当前步骤</dt><dd>{currentNode ? `${stepTitle(currentNode)} · ${nodeStatusLabel(currentNode.status)}` : '未记录'}</dd></div>
         <div><dt>进度</dt><dd>{progress}%</dd></div>
         <div><dt>分支</dt><dd>{run.branchName || '暂无分支'}</dd></div>
         <div><dt>数据时效</dt><dd>桌面端最近一次上传：{formatWebTime(run.updatedAt)}</dd></div>
@@ -122,7 +123,7 @@ export function WebTaskDetail({
               <div className="studio-section-heading compact">
                 <div>
                   <span>审批 · {gateDecisionLabel(node)}</span>
-                  <h2>{node.title}</h2>
+                  <h2>{stepTitle(node)}</h2>
                 </div>
                 <StatusPill tone={nodeTone(node.status)}>{nodeStatusLabel(node.status)}</StatusPill>
               </div>
@@ -191,7 +192,7 @@ export function WebTaskDetail({
                 <h2>当前没有待审批的步骤</h2>
               </div>
             </div>
-            <p>实际进度：{currentNode ? `${currentNode.title}（${nodeStatusLabel(currentNode.status)}）` : '未记录'}。轮到审批时，这里会显示所审材料与审批入口。</p>
+            <p>实际进度：{currentNode ? `${stepTitle(currentNode)}（${nodeStatusLabel(currentNode.status)}）` : '未记录'}。轮到审批时，这里会显示所审材料与审批入口。</p>
           </>
         )}
       </section>
