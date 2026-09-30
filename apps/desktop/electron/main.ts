@@ -1486,6 +1486,8 @@ async function createCodingRuntimeForRequest(
       ? {
           knowledgeDocuments: knowledgeSnapshot.documents,
           knowledgeChunks: knowledgeSnapshot.chunks,
+          knowledgeRoot: knowledgeSnapshot.knowledgeRoot ?? null,
+          projectInstructions: knowledgeSnapshot.projectInstructions ?? null,
         }
       : {}),
     budgetGuard: createRuntimeBudgetGuard(remoteSync),

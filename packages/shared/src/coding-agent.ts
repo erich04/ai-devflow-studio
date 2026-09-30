@@ -8,10 +8,13 @@ import type {
   DependencyBootstrapSnapshot,
   GateDecision,
   KnowledgeChunk,
+  KnowledgeContextManifest,
+  KnowledgeDocument,
   KnowledgeGovernanceCheck,
   KnowledgeReference,
   LocalProject,
   PackageManager,
+  ProjectInstructionsSnapshot,
   RemoteCodingAgentSummary,
   TestEvidence,
   WorkflowNode,
@@ -27,6 +30,7 @@ import {
 import { assertCanonicalLocalNodeId } from './remote-node-identity'
 import { parseBudgetGuardDecision } from './cost'
 import { compactExecutionContext, type ContextCompactionReceipt } from './execution-context'
+import { assembleKnowledgeStageContext, truncateUtf8 } from './knowledge-context'
 
 export const MAX_DIFF_CHARS = 50_000
 export const CURRENT_CODING_DIFF_SANITIZER_VERSION = 2
@@ -35,6 +39,14 @@ export const MAX_REMOTE_CHANGED_PATHS = 50
 export const MAX_CODING_KNOWLEDGE_REFERENCES = 8
 export const MAX_CODING_KNOWLEDGE_EXCERPT_CHARS = 1_200
 export const MAX_CODING_KNOWLEDGE_TOTAL_EXCERPT_CHARS = 6_000
+/**
+ * Stage knowledge inside the coding brief (knowledge-context K3). The whole brief is bounded by
+ * the runtime (24,000 bytes), so knowledge gets its own share instead of the 24 KiB stage budget;
+ * documents beyond it are catalogued and can be read in the worktree.
+ */
+export const CODING_BRIEF_KNOWLEDGE_BUDGET_BYTES = 8 * 1024
+/** Project instructions placed in the brief for executors that do not load them themselves. */
+export const CODING_BRIEF_INSTRUCTIONS_MAX_BYTES = 8 * 1024
 const MAX_CODING_TEST_DIAGNOSTIC_CHARS = 2_000
 export const activeCodingAgentRunStatuses: readonly CodingAgentRun['status'][] = [
   'queued',
@@ -86,6 +98,25 @@ export type CodingBriefInput = {
   branchName: string
   memoryContext?: { id: string; revision: number; statement: string }[]
   maxContextBytes?: number
+  /**
+   * Resident knowledge (ADR 0025). When present it replaces the reference lines: documents that
+   * apply to the node's stage are included in full up to CODING_BRIEF_KNOWLEDGE_BUDGET_BYTES.
+   */
+  knowledge?: CodingBriefKnowledge
+}
+
+export type CodingBriefKnowledge = {
+  documents: KnowledgeDocument[]
+  knowledgeRoot: string | null
+  projectInstructions: ProjectInstructionsSnapshot | null
+  /**
+   * `devflow`: the brief carries the repository instructions (Native v2 does not read AGENTS.md
+   * itself). `executor`: the executor loads them from the worktree (OpenCode); only recorded.
+   * `none`: not provided (the no-cost fake engine).
+   */
+  instructions: 'devflow' | 'executor' | 'none'
+  /** Whether the executor can open catalogued documents in the worktree. */
+  canReadFiles: boolean
 }
 
 export type CodingBrief = {
@@ -98,6 +129,60 @@ export type CodingBrief = {
   userInstruction: string
   prompt: string
   compaction?: ContextCompactionReceipt
+  /** L0/L1 context bound into this brief (ADR 0025); absent for legacy reference-line briefs. */
+  knowledgeContext?: KnowledgeContextManifest
+}
+
+/** Stage knowledge and, for `devflow` delivery, project instructions for the coding brief. */
+function codingBriefKnowledgeSources(input: CodingBriefInput): {
+  sources: Array<{ id: string; title: string; content: string; summary: string; priority: number }>
+  manifest: KnowledgeContextManifest
+} | undefined {
+  const knowledge = input.knowledge
+  if (!knowledge) return undefined
+  const instructions = knowledge.projectInstructions
+  // An instruction file that could not be read has no content to deliver.
+  const delivered = knowledge.instructions === 'devflow' && instructions?.content
+    ? truncateUtf8(instructions.content, CODING_BRIEF_INSTRUCTIONS_MAX_BYTES)
+    : undefined
+  const recordedInstructions = knowledge.instructions === 'none' || !instructions
+    ? null
+    : knowledge.instructions === 'devflow'
+      ? delivered ? { ...instructions, content: delivered.value, truncated: instructions.truncated || delivered.truncated } : null
+      : instructions
+  const stage = assembleKnowledgeStageContext({
+    stage: input.node.stage,
+    documents: knowledge.documents,
+    knowledgeRoot: knowledge.knowledgeRoot,
+    projectInstructions: recordedInstructions,
+    injectInstructions: knowledge.instructions === 'devflow',
+    canReadFiles: knowledge.canReadFiles,
+    budgetBytes: CODING_BRIEF_KNOWLEDGE_BUDGET_BYTES,
+  })
+  const manifest = stage.manifest
+  const sources: Array<{ id: string; title: string; content: string; summary: string; priority: number }> = []
+  if (stage.instructionsSection && manifest.instructions) {
+    sources.push({
+      id: 'project-instructions',
+      title: 'Project Instructions',
+      content: redactSensitiveText(stage.instructionsSection).value,
+      summary: `${manifest.instructions.sourcePath} ${manifest.instructions.contentDigest}: repository instructions; read the file in the worktree for omitted detail.`,
+      priority: 75,
+    })
+  }
+  if (stage.knowledgeSection) {
+    sources.push({
+      id: 'knowledge',
+      title: 'Project Knowledge',
+      content: redactSensitiveText(stage.knowledgeSection).value,
+      summary: [
+        ...manifest.included.map((entry) => `Standard ${entry.sourcePath} ${entry.contentDigest}${entry.gate ? ' [Gate criteria]' : ''}`),
+        ...manifest.catalogued.map((entry) => `Catalogued ${entry.sourcePath}`),
+      ].join('\n'),
+      priority: 60,
+    })
+  }
+  return { sources, manifest }
 }
 
 export type RawCodingDiffArtifact = {
@@ -144,6 +229,7 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
       required: approved,
     }
   })
+  const stageKnowledge = codingBriefKnowledgeSources(input)
   let remainingKnowledgeExcerptChars = MAX_CODING_KNOWLEDGE_TOTAL_EXCERPT_CHARS
   const knowledgeLines = input.knowledgeReferences.length
     ? input.knowledgeReferences.slice(0, MAX_CODING_KNOWLEDGE_REFERENCES).map((reference) => {
@@ -247,12 +333,12 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
       { id: 'remediation', title: 'Remediation Plan', content: remediationLines.join('\n'), summary: '', priority: 95, required: true },
       { id: 'test-failure', title: 'Latest Test Diagnostic', content: testFailureLines.join('\n'), summary: '', priority: 90, required: true },
       ...artifactSources,
-      {
+      ...(stageKnowledge ? stageKnowledge.sources : [{
         id: 'knowledge', title: 'Knowledge References', content: knowledgeLines.join('\n'), priority: 60,
         summary: input.knowledgeReferences.slice(0, MAX_CODING_KNOWLEDGE_REFERENCES)
           .map((reference) => `Source ${reference.documentId}/${reference.chunkId ?? '(document)'}${reference.contentHash ? ` hash=${reference.contentHash}` : ''}`)
           .join('\n'),
-      },
+      }]),
       {
         id: 'governance', title: 'Governance Checks', content: governanceLines.join('\n'), priority: 50,
         summary: input.governanceChecks.map((check) => `${check.id} [${check.status}]: ${check.title}`).join('\n'),
@@ -275,6 +361,7 @@ export function buildCodingBrief(input: CodingBriefInput): CodingBrief {
     userInstruction,
     prompt,
     compaction,
+    ...(stageKnowledge ? { knowledgeContext: stageKnowledge.manifest } : {}),
   }
 }
 
