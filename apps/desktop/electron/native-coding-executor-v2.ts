@@ -65,6 +65,8 @@ type ProviderUsage = {
   totalTokens?: number
   cacheStatus?: 'complete' | 'unknown'
   billingProvider?: 'deepseek' | 'openai_compatible'
+  /** Team model-call admissions for this request; the Team deduplicates by them (#199). */
+  budgetAttemptIds?: string[]
 }
 
 type NativeV2ModelResult = {
@@ -1009,6 +1011,11 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
           ...(usage.billingProvider !== undefined
             ? { billingProvider: usage.billingProvider }
             : {}),
+          // A governed Provider attaches its admission IDs; without them the Team counts the
+          // settled call and the recorded model call separately (#199).
+          ...(usage.budgetAttemptIds?.length
+            ? { budgetAttemptIds: [...usage.budgetAttemptIds] }
+            : {}),
         },
         ...(completed.responseMetadata
           ? { responseMetadata: completed.responseMetadata }
@@ -1759,5 +1766,8 @@ function providerUsageTrace(usage: AgentProviderUsage): NonNullable<CodingProvid
     ...(totalTokens !== undefined ? { totalTokens } : {}),
     cacheStatus: usage.cacheStatus ?? 'unknown',
     ...(usage.billingProvider ? { billingProvider: usage.billingProvider } : {}),
+    // The persisted cost ledger is built from this trace (coding-call-cost.ts), including
+    // failed but billed responses whose IDs arrive on the Provider error (#199).
+    ...(usage.budgetAttemptIds?.length ? { budgetAttemptIds: [...usage.budgetAttemptIds] } : {}),
   }
 }
