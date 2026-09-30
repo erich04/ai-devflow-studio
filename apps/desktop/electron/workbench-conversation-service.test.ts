@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type GitHubDeliveryIntent, type LocalProject } from '@ai-devflow/shared'
+import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type DesktopPairingCredential, type DurableAgentMemoryRevision, type GitHubDeliveryIntent, type KnowledgeRetrievalScope, type LocalProject } from '@ai-devflow/shared'
+import type { CodingMemoryStore } from './coding-context'
 import { createLocalStore, type LocalStore } from './local-store'
 import { WorkbenchConversationService } from './workbench-conversation-service'
 import { parseConversationCommand } from './workbench-conversation-contract'
@@ -27,7 +28,8 @@ beforeEach(async () => {
 })
 afterEach(async () => { await rm(directory, { force: true, recursive: true }) })
 
-function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>, criticalReplies = true) {
+type ServiceDependencies = ConstructorParameters<typeof WorkbenchConversationService>[0]
+function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>, criticalReplies = true, extra: Partial<ServiceDependencies> = {}) {
   const calls: string[] = []
   const provider = { ...createFakeAgentProvider(), completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => { calls.push(input.userPrompt)
     const context=JSON.parse(input.userPrompt)
@@ -43,7 +45,7 @@ function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>,
   const inspectGate = vi.fn(async () => ({ canApprove: false, source: 'test policy', blockers: ['upstream'] }))
   const service = new WorkbenchConversationService({ store, resolveProvider: async () => provider,
     loadKnowledge: async (id) => ({ projectId: id, contentHash: 'knowledge-hash', indexedAt: '2026-09-16T10:00:00.000Z', truncated: false, warnings: [], documents: [], entities: [], relations: [], chunks: [{ id: 'chunk1', documentId: 'doc1', sourcePath: 'docs/product.md', headingPath: ['清理规则'], content: '清理操作只删除已完成项，保留未完成项。', contentHash: 'chunk-hash', tokenCount: 20, tags: [], updatedAt: '2026-09-16T10:00:00.000Z' }] }),
-    changed: vi.fn(), inspectGate,
+    changed: vi.fn(), inspectGate, ...extra,
   })
   return { service, calls, provider, inspectGate }
 }
@@ -744,4 +746,87 @@ describe('host controlled critical input coverage (#164)',()=>{
  it('rejects semantic contradiction even when every source quote and destination quote exists',async()=>{const {service}=harness(async(input)=>{const ctx=JSON.parse(input.userPrompt);if(ctx.proposalVerification)return {value:{coverageReview:ctx.criticalProposalInput.criteria.map((c:{id:string})=>({criterionId:c.id,status:'contradiction',reason:'提案修改了持久化约定'}))}};return {value:{text:'草稿',draft:{...draft,...(ctx.criticalProposalInput?{coverage:ctx.criticalProposalInput.criteria.map((c:{id:string;text:string})=>({criterionId:c.id,sourceQuote:c.text,proposalQuote:draft.content}))}:{})}}}},false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(result.error).toContain('语义核对');expect(result.messages.some(m=>m.draft)).toBe(false)})
  it('rechecks the source version at explicit save time',async()=>{const {service}=harness(async()=>({value:{text:'待保存',draft}}));const id=await create(service);const result=await send(service,id,'生成完整提案');const message=result.messages.find(m=>m.draft)!;expect(message.draft?.inputReceipt).toBeDefined();await store.saveArtifact({...created.artifacts[0]!,id:'conversation-proposal-new-input',kind:'log',nodeId:created.run.currentNodeId,content:'新增已确认条件',updatedAt:'2026-09-23T00:00:00Z'});await expect(service.command({type:'publish',projectId,conversationId:id,messageId:message.id})).rejects.toThrow();expect(await store.listArtifacts()).toHaveLength(created.artifacts.length+1)})
  it('fails explicitly when protected original body exceeds the final request capacity',async()=>{await store.saveArtifact({...created.artifacts[0]!,id:'conversation-proposal-large-input',kind:'log',nodeId:created.run.currentNodeId,content:'完整正文。'.repeat(9000)});const {service,calls}=harness(async()=>({value:{text:'草稿',draft}}),false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(result.error).toContain('容量');expect(calls.length).toBeLessThanOrEqual(2);expect(result.messages.some(m=>m.draft)).toBe(false)})
+})
+
+describe('recalled Memory in the discussion bar (ADR 0024)', () => {
+  const recordedAt = '2026-09-16T09:00:00.000Z'
+  const scope: KnowledgeRetrievalScope = { kind: 'local', organizationId: null, projectId: null, userId: 'u-test', sessionId: 'conversation-session-test', localProjectId: projectId }
+  function memory(id: string, statement: string): DurableAgentMemoryRevision {
+    return {
+      stateVersion: 1, id, revision: 1, status: 'active', scope, visibility: 'user_project', statement,
+      contentDigest: 'a'.repeat(64), provenanceDigest: 'b'.repeat(64), sourceCandidateId: `candidate-${id}`, supersedesRevision: null,
+      sensitivity: 'private', retentionClass: 'until_deleted', expiresAt: null, promotionDecisionId: `decision-${id}`,
+      promotionActorKind: 'human', promotionActorId: 'u-test', promotionPolicyId: 'test-memory-policy', promotionPolicyVersion: 1,
+      promotionAuthorityDigest: 'c'.repeat(64), createdAt: recordedAt,
+    }
+  }
+  function memoryStore(available: () => Promise<DurableAgentMemoryRevision[]>, pairing: DesktopPairingCredential | null = null) {
+    const retrieve = vi.fn(available)
+    const memoryDependency: CodingMemoryStore = {
+      getDesktopPairingCredential: async () => pairing,
+      retrieveAgentMemoryRevisions: retrieve,
+      getAgentMemoryHead: async (memoryId) => ({ memoryId, currentRevision: 1, scope, status: 'active', version: 1, updatedAt: recordedAt }),
+    }
+    return { memoryDependency, retrieve }
+  }
+  const answer = async () => ({ value: { text: '已按需求回答。' } })
+
+  it('attaches relevant Memory once per turn after history, scoped to the attached Run creator', async () => {
+    const { memoryDependency, retrieve } = memoryStore(async () => [
+      memory('m-clear', '清理已完成任务时保留未完成项的原有顺序。TOKEN=sk-supersecret123456789'),
+      memory('m-release', 'Release notes are written in English.'),
+    ])
+    let step = 0
+    const { service, calls } = harness(async () => {
+      step += 1
+      if (step === 1) return { value: { tool: { name: 'knowledge', args: { query: '清理' } } } }
+      return { value: { text: '按需求和记忆回答。' } }
+    }, true, { memory: memoryDependency })
+    expect((await send(service, await create(service), '清理已完成任务要注意什么？')).status).toBe('idle')
+    expect(calls).toHaveLength(2)
+    expect(retrieve).toHaveBeenCalledTimes(1)
+    expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({
+      scope: expect.objectContaining({ kind: 'local', userId: 'u-test', localProjectId: projectId }),
+    }))
+    for (const prompt of calls) {
+      const context = JSON.parse(prompt)
+      expect(Object.keys(context).slice(0, 4)).toEqual(['originalRequirements', 'history', 'backgroundMemory', 'toolObservations'])
+      expect(context.backgroundMemory.map((item: { id: string }) => item.id)).toEqual(['m-clear'])
+    }
+    expect(calls[0]).not.toContain('sk-supersecret123456789')
+    // Memory sits in the cacheable prefix and does not change between steps of a turn.
+    expect(calls[1]!.startsWith(calls[0]!.slice(0, calls[0]!.indexOf('"toolObservations"')))).toBe(true)
+  })
+
+  it('uses the paired user when this local project is paired', async () => {
+    const pairing: DesktopPairingCredential = {
+      tokenId: 'pairing-session', organizationId: 'org-1', projectId: 'team-project-1', localProjectId: projectId,
+      userId: 'u-paired', role: 'member', authAccountId: 'account-1', projectMemberships: [], createdAt: recordedAt,
+    }
+    const { memoryDependency, retrieve } = memoryStore(async () => [], pairing)
+    const { service } = harness(answer, true, { memory: memoryDependency })
+    expect((await send(service, await create(service), '清理规则是什么？')).status).toBe('idle')
+    expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({
+      scope: expect.objectContaining({ kind: 'team', userId: 'u-paired', organizationId: 'org-1', localProjectId: projectId }),
+    }))
+  })
+
+  it('continues without Memory when recall fails', async () => {
+    const { memoryDependency, retrieve } = memoryStore(async () => { throw new Error('Memory store unavailable') })
+    const { service, calls } = harness(answer, true, { memory: memoryDependency })
+    expect((await send(service, await create(service), '清理规则是什么？')).status).toBe('idle')
+    expect(retrieve).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(calls[0]!)).not.toHaveProperty('backgroundMemory')
+  })
+
+  it('does not recall when neither a pairing nor an attached requirement names the user', async () => {
+    const second = createWorkflowRunFromRequest({ runId: 'conversation-flow-second', title: '导出报表', request: '导出月度报表', projectId, creatorId: 'u-other', branchName: 'ai/second', now: '2026-09-16T10:00:00.000Z' })
+    await store.saveRun(second.run)
+    for (const artifact of second.artifacts) await store.saveArtifact(artifact)
+    const { memoryDependency, retrieve } = memoryStore(async () => [memory('m-clear', '清理已完成任务时保留未完成项的原有顺序。')])
+    const { service, calls } = harness(answer, true, { memory: memoryDependency })
+    expect((await send(service, await create(service), '清理规则是什么？')).status).toBe('idle')
+    expect(retrieve).not.toHaveBeenCalled()
+    expect(JSON.parse(calls[0]!)).not.toHaveProperty('backgroundMemory')
+  })
 })

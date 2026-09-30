@@ -103,6 +103,20 @@ describe('runWorkflowStageAgent', () => {
     expect(withMemory.prompt.indexOf('RECALLED_MEMORY_BACKGROUND')).toBeGreaterThan(withMemory.prompt.indexOf('RAW_REQUEST'))
   })
 
+  it('drops recalled Memory instead of failing when only the Memory exceeds the input limit (ADR 0024)', async () => {
+    const base = {
+      run: created.run, node: clarifyNode(), artifacts: created.artifacts, requestedBy: 'u-ling', runtime: 'electron' as const,
+      now: () => '2026-09-30T00:00:00.000Z',
+    }
+    const without = await runWorkflowStageAgent({ ...base, provider: createFakeAgentProvider() })
+    const oversized = await runWorkflowStageAgent({
+      ...base, provider: createFakeAgentProvider(),
+      memoryContext: [{ id: 'agent-memory-large', revision: 1, statement: 'Desktop cards use sentence case. '.repeat(3_500) }],
+    })
+    expect(oversized.prompt).not.toContain('RECALLED_MEMORY_BACKGROUND')
+    expect(oversized.prompt).toBe(without.prompt)
+  })
+
   it('rejects oversized saved proposals before calling the provider instead of truncating decisions', async () => {
     const provider = createFakeAgentProvider()
     const generate = vi.spyOn(provider, 'generateWorkflowArtifact')

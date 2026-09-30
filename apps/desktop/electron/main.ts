@@ -2155,6 +2155,7 @@ async function getWorkbenchConversationService() {
   workbenchConversationService ??= getStore().then(async (store) => {
     const service = new WorkbenchConversationService({
       store,
+      memory: store,
       resolveProvider: (id, projectId) => resolveAgentProvider(store, id, projectId),
       openHarness: async ({ project, providerId, signal, query }) => {
         const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === providerId)
@@ -2785,6 +2786,7 @@ function registerIpcHandlers() {
         let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>> | undefined
         try {
           // ADR 0024: scoped Memory as low-trust background, recalled fresh for every call.
+          // Memory is optional: a recall failure generates without it instead of failing the stage.
           const recalledAt = new Date().toISOString()
           const stageRuntimeKey = codingPromptDigest(`${run.id}\n${node.id}`).slice(0, 32)
           const stageMemory = await recallScopedMemory({
@@ -2793,6 +2795,9 @@ function registerIpcHandlers() {
             requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
             query: [run.request, node.title, node.subtitle].join('\n'),
             now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+          }).catch(() => {
+            console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
+            return { revisions: [] as Array<{ id: string; revision: number; statement: string }> }
           })
           generated = await runWorkflowStageAgent({
             run,
