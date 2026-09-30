@@ -13,7 +13,7 @@ import { createDiagnosticLog } from '@ai-devflow/shared/node/diagnostic-log'
 import { diagnosticFetch } from './remote-diagnostics.js'
 import { createCredentialAccess } from './credential-access.js'
 import { createProviderOperationGuard, guardProviderCalls } from './provider-operation-guard.js'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import {
   app,
@@ -236,6 +236,7 @@ import { createManagedWorkspaceCleanupService } from './managed-workspace-cleanu
 import { createWorkspaceOperationCoordinator } from './workspace-operation-coordinator.js'
 import { createOpencodeProcessManager } from './opencode-process.js'
 import { createReadOnlyLocalStageAgentExecutor } from './stage-agent-executor.js'
+import { isolatedOpencodeProfileEnv } from './opencode-profile-isolation.js'
 import { createOpencodeHttpCodingEngineAdapter } from './opencode-http-engine.js'
 import {
   detectCodingRuntimeEngines,
@@ -459,11 +460,19 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             processManager: opencodeProcessManager,
             configurationFingerprint: `coding-runtime-configuration:${configuration.version}`,
             requireExecutionAuthorization: true,
-            runtimeEnv: buildOpencodeRuntimeEnv({
-              baseEnv: process.env,
-              apiKeyEnvName: 'OPENCODE_API_KEY',
-              providerBinding:budgetProxy.binding,
-            }),
+            runtimeEnv: {
+              ...buildOpencodeRuntimeEnv({
+                baseEnv: process.env,
+                apiKeyEnvName: 'OPENCODE_API_KEY',
+                providerBinding:budgetProxy.binding,
+              }),
+              // A bound Provider needs no personal profile; keep the user's global
+              // instructions, plugins and skills out of coding runs (ADR 0025).
+              ...isolatedOpencodeProfileEnv(path.join(
+                app.getPath('userData'), 'opencode-profiles',
+                `coding-${createHash('sha256').update(projectId).digest('hex').slice(0, 16)}`,
+              )),
+            },
           }),
         )
       }
@@ -1645,6 +1654,7 @@ async function createKnowledgeReviewRuntimeForRequest(
     store,
     knowledgeDocuments: knowledgeSnapshot.documents,
     knowledgeChunks: knowledgeSnapshot.chunks,
+    projectInstructions: knowledgeSnapshot.projectInstructions ?? null,
     loadPolicySnapshot: async (projectId) =>
       loadPolicySnapshotForProject(await resolvePolicyProjectId(projectId)),
     resolveProviderMetadata: (providerId) =>
@@ -2784,6 +2794,8 @@ function registerIpcHandlers() {
           }}
         }
         let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>> | undefined
+        // Resident project knowledge (ADR 0025). A failed index never blocks generation.
+        const stageKnowledge = await loadTrustedRepositoryKnowledge(run.projectId).catch(() => undefined)
         try {
           // ADR 0024: scoped Memory as low-trust background, recalled fresh for every call.
           // Memory is optional: a recall failure generates without it instead of failing the stage.
@@ -2803,6 +2815,11 @@ function registerIpcHandlers() {
             run,
             node,
             artifacts,
+            ...(stageKnowledge ? { knowledge: {
+              documents: stageKnowledge.documents,
+              knowledgeRoot: stageKnowledge.knowledgeRoot ?? null,
+              projectInstructions: stageKnowledge.projectInstructions ?? null,
+            } } : {}),
             ...(provider ? { provider } : {}),
             ...(executor ? { executor } : {}),
             requestedBy: actor.userId,

@@ -147,7 +147,7 @@ describe('useWorkRequestInbox', () => {
 
     await waitFor(() => {
       expect(result.current.error).toBe(
-        'Work Requests 暂时不可用，请稍后重试。',
+        '团队请求暂时不可用，请稍后重试。',
       )
     })
     expect(result.current.error).not.toMatch(/token|secret|authorization/i)
@@ -358,7 +358,7 @@ describe('useWorkRequestInbox', () => {
       await result.current.materialize(workRequest)
     })
 
-    expect(result.current.error).toBe('无法创建本地 Run，请稍后重试。')
+    expect(result.current.error).toBe('无法创建本地任务，请稍后重试。')
     expect(result.current.error).not.toMatch(/token|secret|bearer/i)
     expect(result.current.materializingId).toBeNull()
     expect(onMaterialized).not.toHaveBeenCalled()

@@ -23,6 +23,7 @@ import type { ManagedOpencodeServer } from './opencode-process.js'
 import { opencodeProviderBindingEnv, type OpencodeProviderBinding } from './opencode-provider-binding.js'
 import { readStageAgentOpencodeOutput } from './stage-agent-opencode-output.js'
 import { isGitWorkingTreeRoot } from './git-repository-boundary.js'
+import { createIsolatedOpencodeProfile } from './opencode-profile-isolation.js'
 
 const execFileAsync = promisify(execFile)
 const citationFileBytesMax = 2 * 1024 * 1024
@@ -99,6 +100,10 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
       execution.signal?.addEventListener('abort', abort, { once: true })
       const started = Date.now()
       let reportedUsage: AgentProviderUsage | null | undefined
+      // With a saved Provider binding the user's personal OpenCode profile stays out (ADR 0025).
+      const profile = !input.runner && input.providerBinding
+        ? await createIsolatedOpencodeProfile('devflow-stage-opencode-', { isolateHome: true })
+        : undefined
       try {
         const runner = input.runner ?? createManagedOpencodeRunner({
           // A stage's model/profile must never replace a Coding or another stage's process.
@@ -107,7 +112,10 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
           providerId: input.providerId,
           modelId: input.modelId,
           processManager: input.processManager,
-          runtimeEnv: buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv, input.providerBinding),
+          runtimeEnv: {
+            ...buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv, input.providerBinding),
+            ...(profile?.env ?? {}),
+          },
         })
         const result = await runner({
           prompt: execution.prompt,
@@ -146,6 +154,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
       } finally {
         clearTimeout(timeout)
         execution.signal?.removeEventListener('abort', abort)
+        await profile?.dispose().catch(() => undefined)
       }
     },
   }
@@ -264,6 +273,13 @@ async function validateAndDigestRepositoryCitations(
     if (citation.contentDigest && citation.contentDigest !== contentDigest) {
       throw new StageAgentExecutionError('evidence_invalid', 'Repository citation digest does not match the cited file')
     }
+    const lineCount = countLines(bytes)
+    if (
+      (typeof citation.lineStart === 'number' && citation.lineStart > lineCount) ||
+      (typeof citation.lineEnd === 'number' && citation.lineEnd > lineCount)
+    ) {
+      throw new StageAgentExecutionError('evidence_invalid', 'Repository citation line range is outside the cited file')
+    }
     citations.push({ ...citation, path: path.relative(root, canonical).split(path.sep).join('/'), contentDigest })
   }
   return {
@@ -274,6 +290,13 @@ async function validateAndDigestRepositoryCitations(
       citations,
     },
   }
+}
+
+function countLines(bytes: Buffer): number {
+  if (bytes.byteLength === 0) return 0
+  let lines = 0
+  for (const byte of bytes) if (byte === 0x0a) lines += 1
+  return bytes[bytes.byteLength - 1] === 0x0a ? lines : lines + 1
 }
 
 async function repositoryWorkingTreeDigest(root: string): Promise<string> {

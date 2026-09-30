@@ -459,6 +459,11 @@ const legacyNodeTitleLabels: Record<string, string> = {
   'Clarification Gate': '需求确认 Gate',
   'Design solution': '方案设计',
   'Design Gate': '方案评审 Gate',
+  // Template titles of the later stages (packages/shared/src/workflow.ts); stored values stay unchanged.
+  'Implement locally': '开发实现',
+  'Run tests': '运行测试',
+  'Prepare PR draft': '准备 PR 草稿',
+  'Acceptance signoff': '业务验收',
 }
 
 const legacyNodeSubtitleLabels: Record<string, string> = {
@@ -467,6 +472,10 @@ const legacyNodeSubtitleLabels: Record<string, string> = {
   'Define implementation and test strategy': '定义实现方案与测试策略',
   'Approve architecture before implementation': '审批方案后进入实现',
   'Lead 审批后进入实现': 'Lead 审批方案后进入实现',
+  'Run Coding Agent in a managed worktree': '在受管工作树中运行 Coding Agent',
+  'Archive local test evidence': '归档本地测试证据',
+  'Summarize diff, tests, policy, and review evidence': '汇总代码差异、测试、策略与审查证据',
+  'Approve final delivery bundle': '确认最终交付材料',
 }
 
 export function displayNodeTitle(node: WorkflowNode): string {
@@ -1055,7 +1064,7 @@ function buildActionCatalog(
     },
     createPrDraft: {
       id: 'createPrDraft',
-      label: '生成 PR Delivery Package',
+      label: '生成 PR 交付包',
       variant: 'ghost',
       disabledReasons: hasTeamProjectBinding ? [] : ['team_project_binding_missing'],
     },

@@ -226,17 +226,17 @@ async function closeProjectMenu(ctx: SampleContext) {
  */
 async function openTeamControls(ctx: SampleContext) {
   const { page } = ctx.desktop
-  if (await page.getByLabel('Desktop pairing code').isVisible().catch(() => false)) return
+  if (await page.getByLabel('配对码', { exact: true }).isVisible().catch(() => false)) return
   if (await hasSettingsNav(ctx)) {
     await clickNav(ctx, '设置')
     await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '团队连接', exact: true }).click()
-    await page.getByLabel('Desktop pairing code').waitFor({ state: 'visible', timeout: 5_000 })
+    await page.getByLabel('配对码', { exact: true }).waitFor({ state: 'visible', timeout: 5_000 })
     return
   }
   const trigger = page.getByRole('button', { name: /^团队连接(：|$)/ })
   if ((await trigger.count()) > 0) {
     await trigger.click()
-    await page.getByLabel('Desktop pairing code').waitFor({ state: 'visible', timeout: 5_000 })
+    await page.getByLabel('配对码', { exact: true }).waitFor({ state: 'visible', timeout: 5_000 })
   }
 }
 
@@ -333,8 +333,20 @@ async function reloadAndSelectRun(ctx: SampleContext, title: string) {
   await selectRun(ctx, title)
 }
 
+/**
+ * Display names the desktop shows for stored template titles; mirrors `legacyNodeTitleLabels`
+ * in apps/desktop/src/app/node-inspector-view-model.ts. Stored titles stay unchanged.
+ */
+const templateNodeDisplayTitles: Record<string, string> = {
+  'Implement locally': '开发实现',
+  'Run tests': '运行测试',
+  'Prepare PR draft': '准备 PR 草稿',
+  'Acceptance signoff': '业务验收',
+}
+
 /** Selects a node through the compact stage navigation, as a user would. */
-async function selectNode(ctx: SampleContext, stageLabel: string, node: any) {
+async function selectNode(ctx: SampleContext, stageLabel: string, storedNode: any) {
+  const node = { ...storedNode, title: templateNodeDisplayTitles[storedNode.title] ?? storedNode.title }
   const { page } = ctx.desktop
   const stageButton = page.locator('.workflow-stage-navigation .workflow-stage-step > button').filter({ hasText: stageLabel })
   // From S3 the stage being browsed carries aria-expanded and a click toggles its sub-steps (Y6);
@@ -367,7 +379,7 @@ async function pairViaForm(ctx: SampleContext, code: string) {
   const before = JSON.stringify((await pairing(ctx)) ?? null)
   await openTeamControls(ctx)
   const { page } = ctx.desktop
-  await page.getByLabel('Desktop pairing code').fill(code)
+  await page.getByLabel('配对码', { exact: true }).fill(code)
   await page.getByRole('button', { name: /^(绑定|连接|重新连接)$/ }).click()
   const confirm = page.getByRole('button', { name: '确认替换', exact: true })
   if (await confirm.waitFor({ state: 'visible', timeout: 1_500 }).then(() => true).catch(() => false)) await confirm.click()
@@ -1283,7 +1295,7 @@ const teamExistingCredential: Sample = {
     await pairViaForm(ctx, await createPairingCode(ctx.api))
     await settle(ctx)
     await openTeamControls(ctx)
-    await ctx.desktop.page.getByLabel('Desktop pairing code').fill('PLACEHOLDER.not-a-real-code')
+    await ctx.desktop.page.getByLabel('配对码', { exact: true }).fill('PLACEHOLDER.not-a-real-code')
     await delay(500)
   },
   async followUp(ctx) {
@@ -1291,7 +1303,7 @@ const teamExistingCredential: Sample = {
     const before = await pairing(ctx)
     await openTeamControls(ctx)
     const { page } = ctx.desktop
-    await page.getByLabel('Desktop pairing code').fill(await createPairingCode(ctx.api))
+    await page.getByLabel('配对码', { exact: true }).fill(await createPairingCode(ctx.api))
     await page.getByRole('button', { name: /^(绑定|连接|重新连接)$/ }).click()
     await delay(300)
     const dialogs = await page.locator('[role="alertdialog"]').count()
@@ -1541,11 +1553,92 @@ export const samples: Sample[] = [
   discussionMessages,
 ]
 
+/**
+ * README and guide screenshots (plan S6, R3). Reaches the PR step with the fake runtimes, then
+ * captures the three tabs, a browsed history step and the other primary pages. Opt-in only: it
+ * is not part of the measured baseline, so the default run and its comparisons stay at 32 samples.
+ */
+const docTour: Sample = {
+  ...common,
+  id: 'doc-tour',
+  title: '文档截图：PR 交付步骤的三个页签、浏览历史步骤，以及知识、团队、设置页面',
+  planRefs: ['S6 R3'],
+  method: 'ipc',
+  limits: [fakeLimit, ipcLimit, '只用于文档截图，不计入首屏基线。'],
+  async prepare(ctx) {
+    const state = await reachPrStage(ctx)
+    await reloadAndSelectRun(ctx, TASK_TITLE)
+    const prNode = nodeOf(state.run, 'pr', 'pr')
+    await selectNode(ctx, STAGE.pr, prNode)
+    await settle(ctx)
+    await ctx.capture('task-current-work')
+    await openInspectorTab(ctx, '材料与版本')
+    await ctx.capture('task-materials')
+    await openInspectorTab(ctx, '执行记录')
+    await ctx.capture('task-records')
+    await openInspectorTab(ctx, '当前工作')
+    await selectNode(ctx, STAGE.clarify, nodeOf(state.run, 'clarify', 'gate'))
+    await ctx.capture('task-history-clarify')
+    await selectNode(ctx, STAGE.build, nodeOf(state.run, 'build', 'task'))
+    await ctx.capture('task-history-build')
+    await clickNav(ctx, '知识')
+    await ctx.capture('knowledge')
+    await clickNav(ctx, '团队')
+    await ctx.capture('team')
+    await clickNav(ctx, '设置')
+    const sections = ctx.desktop.page.getByRole('navigation', { name: '设置分区' })
+    for (const [label, name] of [['本地项目', 'settings-project'], ['模型与执行方式', 'settings-models'], ['扩展能力', 'settings-extensions'], ['团队连接', 'settings-team']] as const) {
+      await sections.getByRole('button', { name: label, exact: true }).click()
+      await delay(600)
+      await ctx.capture(name)
+    }
+    await clickNav(ctx, TASKS_NAV)
+    await selectNode(ctx, STAGE.pr, prNode)
+    await settle(ctx)
+  },
+}
+
+const LONG_TITLE = 'Health API 增加数据库、缓存、消息队列与第三方支付网关的依赖探测，并在超时或部分依赖失败时返回可解释的降级状态'
+const LONG_REQUEST = `${TASK_REQUEST} `.repeat(12).trim()
+
+/**
+ * Plan 8.2 S6: with a long task title and request, the main actions and the body stay reachable
+ * and the page does not overflow sideways. Opt-in; measured at the narrowest content width.
+ */
+const longContent: Sample = {
+  ...common,
+  id: 'long-content',
+  title: '长内容：长任务名与长需求下的需求确认 Gate（8.2 节 S6）',
+  planRefs: ['8.2 S6'],
+  method: 'ui',
+  sizes: ['1024x742', '1440x742'],
+  limits: [fakeLimit, '只用于 S6 验收，不计入首屏基线。'],
+  async prepare(ctx) {
+    const project = await selectRepository(ctx)
+    await createTask(ctx, LONG_TITLE, LONG_REQUEST)
+    await generateClarification(ctx)
+    const run = await runByTitle(ctx, project.id, LONG_TITLE)
+    ctx.observe('run', await runSummary(ctx, run.id))
+    const statusRow = ctx.desktop.page.getByTestId('node-inspector').getByTestId('task-status-row')
+    const reachable: Record<string, boolean> = {}
+    for (const name of ['运行门禁审查', '确认需求 v1', '请求修订当前版本']) {
+      const button = statusRow.getByRole('button', { name, exact: true })
+      reachable[name] = (await button.count()) > 0 && (await button.isVisible())
+    }
+    ctx.observe('statusRowActionsVisible', reachable)
+    await settle(ctx)
+  },
+}
+
+/** Samples outside the default measured set; selected explicitly with `--samples`. */
+export const extraSamples: Sample[] = [docTour, longContent]
+
 export function findSamples(ids: string[] | undefined): Sample[] {
   if (!ids || ids.length === 0) return samples
-  const unknown = ids.filter((id) => !samples.some((sample) => sample.id === id))
+  const known = [...samples, ...extraSamples]
+  const unknown = ids.filter((id) => !known.some((sample) => sample.id === id))
   if (unknown.length > 0) {
-    throw new Error(`Unknown sample id(s): ${unknown.join(', ')}. Known: ${samples.map((s) => s.id).join(', ')}`)
+    throw new Error(`Unknown sample id(s): ${unknown.join(', ')}. Known: ${known.map((s) => s.id).join(', ')}`)
   }
-  return ids.map((id) => samples.find((sample) => sample.id === id)!)
+  return ids.map((id) => known.find((sample) => sample.id === id)!)
 }

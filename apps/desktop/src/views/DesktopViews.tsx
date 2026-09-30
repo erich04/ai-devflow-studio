@@ -47,6 +47,7 @@ import {
 import { GateEnforcementPanel, GateRemediationPanel } from '../GateEnforcementPanel'
 import { GitHubDeliveryPanel } from '../GitHubDeliveryPanel'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
+import { knowledgeReferenceRelationLabel } from '../app/knowledge-reference-groups'
 import { codingPermissionDecisionState, type CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
 import { buildGateRemediationViewModel, withoutStatusRowActions, hasRemediationContent, type GateRemediationCtaKind } from '../app/gate-remediation-view-model'
 import type { TestRunReadiness } from '../app/test-run-readiness'
@@ -978,6 +979,7 @@ export function Inspector({
     lexical: '词法检索',
     vector: '向量语义检索',
     hybrid: '混合检索',
+    stage: '按阶段适用',
   } as const)[reference.strategy ?? 'lexical']
   const renderReferenceSemantics = (reference: KnowledgeReference) => {
     const semantics = resolveKnowledgeReferenceSemantics(reference)
@@ -1011,9 +1013,9 @@ export function Inspector({
 
   const renderGovernance = () => (
     <div className="governance-list">
-      <span className="panel-label">Knowledge Governance</span>
-      <p className="empty-note">Knowledge 是 Gate 审查依据；Gate 条件和阶段产物才是审查对象。</p>
-      <ol className="knowledge-governance-flow" aria-label="Knowledge Governance 状态链" data-testid="knowledge-governance-flow">
+      <span className="panel-label">知识治理</span>
+      <p className="empty-note">知识是 Gate 审查的依据；Gate 条件和阶段材料才是审查对象。</p>
+      <ol className="knowledge-governance-flow" aria-label="知识治理状态链" data-testid="knowledge-governance-flow">
         <li className={scopedReferences.length > 0 || governanceChecks.length > 0 ? 'is-complete' : 'is-pending'}>
           <strong>1 · 找到候选</strong>
           <span>{scopedReferences.length > 0 || governanceChecks.length > 0 ? `${Math.max(scopedReferences.length, governanceChecks.length)} 个` : '尚未找到'}</span>
@@ -1135,29 +1137,32 @@ export function Inspector({
 
   const renderKnowledgeReferences = () => (
     <div className="artifact-list" data-testid="knowledge-reference-sources">
-      <span className="panel-label">引用来源 · Review Criteria</span>
+      <span className="panel-label">引用来源 · 审查依据</span>
       <p className="empty-note">
-        这里仅展示 Knowledge / Policy 来源。引用用于支持审查，不等于 Artifact、Test Evidence 或 Gate 通过结论。
+        这里只列出知识与策略来源。引用用于支持审查，不等于材料、测试证据或 Gate 已通过。
       </p>
       {scopedReferences.length === 0 ? (
-        <p className="empty-note">当前 Gate 尚无节点作用域内的 Knowledge 引用。</p>
+        <p className="empty-note">当前 Gate 还没有属于本步骤的知识引用。</p>
       ) : (
         scopedReferences.map((reference) => (
           <article className="artifact-card" key={reference.id}>
             <div className="compact-row">
               <strong>{reference.sourcePath ?? reference.documentId}</strong>
-              <span className="pill soft">{reference.relation}</span>
+              <span className="pill soft" title={reference.relation}>{knowledgeReferenceRelationLabel(reference.relation)}</span>
             </div>
             <p>{reference.reason}</p>
             {renderReferenceSemantics(reference)}
-            <div className="knowledge-reference-meta">
-              <code>reference {reference.id}</code>
-              <code>document {reference.documentId}</code>
-              {reference.chunkId ? <code>chunk {reference.chunkId}</code> : null}
-              {reference.category ? <span>{reference.category}</span> : null}
-              {reference.headingPath?.length ? <span>{reference.headingPath.join(' / ')}</span> : null}
-              {reference.contentHash ? <code>{reference.contentHash}</code> : null}
-            </div>
+            {reference.headingPath?.length ? <p className="meta">{reference.headingPath.join(' / ')}</p> : null}
+            <details className="governance-technical-details">
+              <summary>技术详情</summary>
+              <div className="knowledge-reference-meta">
+                <code>引用 {reference.id}</code>
+                <code>文档 {reference.documentId}</code>
+                {reference.chunkId ? <code>分块 {reference.chunkId}</code> : null}
+                {reference.category ? <code>{reference.category}</code> : null}
+                {reference.contentHash ? <code>{reference.contentHash}</code> : null}
+              </div>
+            </details>
             <button
               className="inline-link-button"
               type="button"
@@ -1191,16 +1196,20 @@ export function Inspector({
             <article className="artifact-card" key={artifact.id}>
               <div className="compact-row">
                 <strong>{artifact.title}</strong>
-                <span className="pill soft">Review Subject</span>
+                <span className="pill soft">审查对象</span>
               </div>
               <p>{artifact.summary}</p>
-              <div className="knowledge-reference-meta">
-                <code>{artifact.id}</code>
-                <span>{artifact.kind}</span>
-                <span>revision {manifest?.updatedAt ?? artifact.updatedAt}</span>
-                {manifest?.contentDigest ? <code>{manifest.contentDigest}</code> : <span>legacy digest unavailable</span>}
-                <span>coverage {manifest?.coverage ?? 'legacy_unverifiable'}</span>
-              </div>
+              <p className="meta">审查时的记录时间：{formatLocalTime(manifest?.updatedAt ?? artifact.updatedAt)} · {manifest?.contentDigest ? (manifest.coverage === 'incomplete' ? '内容未完整纳入审查' : '内容已纳入审查') : '旧记录，没有内容摘要，无法核对'}</p>
+              <details className="governance-technical-details">
+                <summary>技术详情</summary>
+                <div className="knowledge-reference-meta">
+                  <code>{artifact.id}</code>
+                  <code>{artifact.kind}</code>
+                  <code>{manifest?.updatedAt ?? artifact.updatedAt}</code>
+                  {manifest?.contentDigest ? <code>{manifest.contentDigest}</code> : null}
+                  <code>coverage {manifest?.coverage ?? 'legacy_unverifiable'}</code>
+                </div>
+              </details>
             </article>
           )
         })}
@@ -1212,9 +1221,9 @@ export function Inspector({
             </div>
             <p>{latestAgentReview.summary}</p>
             <div className="knowledge-reference-meta">
-              <code>{latestAgentReview.id}</code>
-              <span>{latestAgentReview.gateAdvisory.blocksApproval ? 'blocking' : 'warning-only'}</span>
-              <span>{latestAgentReview.policyFindings.length} policy finding(s)</span>
+              <span>{latestAgentReview.gateAdvisory.blocksApproval ? '阻断审批' : '仅警告'}</span>
+              <span>{latestAgentReview.policyFindings.length} 条策略发现</span>
+              <code title="审查记录标识">{latestAgentReview.id}</code>
             </div>
             {latestAgentReview.policyFindings.map((finding) => (
               <p key={finding.id}>{finding.severity} · {finding.category} · {finding.summary}</p>
@@ -1543,7 +1552,7 @@ export function Inspector({
         </label>
         <label className="stage-agent-executor">本节点使用的模型
           <select aria-label="本节点使用的模型" value={stageProviderId} disabled={hasInspectorWriteLock} onChange={(event) => onStageProviderChange(event.target.value)}>
-            <option value="">请选择已保存 Provider</option>
+            <option value="">请选择已保存的模型提供方</option>
             {stageProviders.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
           </select>
         </label>
@@ -1611,14 +1620,14 @@ export function Inspector({
     {!selectedDocument && latestAgentReview && renderReviewEvidence()}
     {codingActionProjection?.terminal && <section aria-label="开发变更与检查"><h3>开发变更与检查</h3>
             {codingActionProjection.terminal.changedPaths.length > 0 ? (
-              <div className="knowledge-reference-meta" aria-label="Changed paths">
+              <div className="knowledge-reference-meta" aria-label="变更文件">
                 {codingActionProjection.terminal.changedPaths.map((path) => <code key={path}>{path}</code>)}
               </div>
             ) : null}
             {codingActionProjection.terminal.testSummary ? <p>{codingActionProjection.terminal.testSummary}</p> : null}
             {codingActionProjection.terminal.diffPatch ? (
               <details open>
-                <summary>Diff Artifact</summary>
+                <summary>代码差异</summary>
                 <pre className="diff-preview" tabIndex={0}>{codingActionProjection.terminal.diffPatch}</pre>
               </details>
             ) : null}

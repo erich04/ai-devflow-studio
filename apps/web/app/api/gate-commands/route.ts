@@ -31,14 +31,14 @@ export async function GET(request: NextRequest) {
   const projectId = request.nextUrl.searchParams.get('projectId')
   if (!isProjectId(projectId)) {
     return NextResponse.json(
-      { message: 'Invalid Gate Command scope.' },
+      { message: '审批查询范围无效。' },
       { status: 400 },
     )
   }
   const cookieHeader = await getDevFlowCookieHeader()
   if (!cookieHeader) {
     return NextResponse.json(
-      { message: 'Gate Command was rejected.' },
+      { message: '审批请求被拒绝。' },
       { status: 401 },
     )
   }
@@ -54,8 +54,8 @@ export async function GET(request: NextRequest) {
       {
         message:
           status === 502
-            ? 'Gate Command service is unavailable.'
-            : 'Gate Command was rejected.',
+            ? '审批服务暂时不可用。'
+            : '审批请求被拒绝。',
       },
       { status },
     )
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
     input = parseGateCommandCreate(await request.json())
   } catch {
     return NextResponse.json(
-      { message: 'Invalid Gate Command input.' },
+      { message: '审批请求的输入无效。' },
       { status: 400 },
     )
   }
@@ -76,7 +76,7 @@ export async function POST(request: NextRequest) {
   const cookieHeader = await getDevFlowCookieHeader()
   if (!cookieHeader) {
     return NextResponse.json(
-      { message: 'Gate Command was rejected.' },
+      { message: '审批请求被拒绝。' },
       { status: 401 },
     )
   }
@@ -108,8 +108,8 @@ export async function POST(request: NextRequest) {
       {
         message:
           status === 502
-            ? 'Gate Command service is unavailable.'
-            : 'Gate Command was rejected.',
+            ? '审批服务暂时不可用。'
+            : '审批请求被拒绝。',
       },
       { status },
     )

@@ -78,6 +78,11 @@ const relationLabels: Record<KnowledgeReferenceRelation, string> = {
   violates: '与此规范冲突',
 }
 
+/** User-facing name of a reference relation; the stored value stays in the technical details. */
+export function knowledgeReferenceRelationLabel(relation: string): string {
+  return relationLabels[relation as KnowledgeReferenceRelation] ?? '关系待核实'
+}
+
 const reviewStatusLabels: Record<KnowledgeGateEvidenceStatus, string> = {
   retrieval_candidate: '检索候选，尚未经审查确认',
   reviewed_reference: '已经审查确认',
@@ -90,6 +95,7 @@ const retrievalLabels: Record<KnowledgeRetrievalStrategy, string> = {
   heuristic: '启发式检索',
   vector: '语义检索',
   hybrid: '混合检索',
+  stage: '按阶段适用',
 }
 
 type CitableArtifact = Pick<Artifact, 'id' | 'title' | 'nodeId'> & Partial<Pick<Artifact, 'clarificationRevision'>>

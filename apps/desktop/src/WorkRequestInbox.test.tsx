@@ -49,7 +49,7 @@ describe('WorkRequestInbox', () => {
     expect(screen.getAllByText('Prepare rollout')).toHaveLength(2)
     expect(screen.getByText('待领取')).toBeInTheDocument()
     expect(screen.getByText('待恢复')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '创建本地 Run：Prepare rollout' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建本地任务：Prepare rollout' }))
     expect(onMaterialize).toHaveBeenCalledWith(openRequest)
   })
 
@@ -65,8 +65,8 @@ describe('WorkRequestInbox', () => {
         onMaterialize={vi.fn()}
       />,
     )
-    expect(screen.getByText('绑定 Team Project 后可领取工作请求')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /创建本地 Run/ })).not.toBeInTheDocument()
+    expect(screen.getByText('连接团队项目后可领取团队请求')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /创建本地任务/ })).not.toBeInTheDocument()
 
     rerender(
       <WorkRequestInbox
@@ -94,7 +94,7 @@ describe('WorkRequestInbox', () => {
         onMaterialize={vi.fn()}
       />,
     )
-    expect(screen.getByText('正在加载 Work Requests…')).toBeInTheDocument()
+    expect(screen.getByText('正在读取团队请求…')).toBeInTheDocument()
 
     rerender(
       <WorkRequestInbox
@@ -120,6 +120,6 @@ describe('WorkRequestInbox', () => {
         onMaterialize={vi.fn()}
       />,
     )
-    expect(screen.getByText('当前没有可执行的 Work Request')).toBeInTheDocument()
+    expect(screen.getByText('当前没有可领取的团队请求')).toBeInTheDocument()
   })
 })

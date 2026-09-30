@@ -56,7 +56,9 @@ describe('saveRuntimeBudgetPolicyAction', () => {
       warningThresholdUsd: 0.15,
       cookieHeader: 'devflow_session=session-token',
     })
-    expect(mockedRevalidatePath).toHaveBeenCalledWith('/legacy-shell')
+    // /legacy-shell only redirects, so only the current page is refreshed.
+    expect(mockedRevalidatePath).toHaveBeenCalledTimes(1)
+    expect(mockedRevalidatePath).toHaveBeenCalledWith('/')
   })
 
   it('reports a save failure without revalidating stale data as successful', async () => {
@@ -70,8 +72,25 @@ describe('saveRuntimeBudgetPolicyAction', () => {
 
     await expect(saveRuntimeBudgetPolicyAction(formData)).resolves.toEqual({
       ok: false,
-      error: 'DevFlow API /api/runtime/budget-policy failed with 503',
+      error: '预算规则保存失败，请重试。',
     })
+    expect(mockedRevalidatePath).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [401, '登录已过期，请重新登录后再保存预算规则。'],
+    [403, '当前身份没有修改这个项目预算规则的权限。'],
+    [400, '预算规则未通过服务端校验，请检查金额后重试。'],
+  ])('explains an HTTP %s save failure in Chinese without the endpoint', async (status, message) => {
+    mockedSaveRuntimeBudgetPolicy.mockRejectedValue(
+      new Error(`DevFlow API /api/runtime/budget-policy failed with ${status}`),
+    )
+    const formData = new FormData()
+    formData.set('projectId', 'project-1')
+    formData.set('monthlyLimitUsd', '0.25')
+    formData.set('warningThresholdUsd', '0.15')
+
+    await expect(saveRuntimeBudgetPolicyAction(formData)).resolves.toEqual({ ok: false, error: message })
     expect(mockedRevalidatePath).not.toHaveBeenCalled()
   })
 
@@ -83,7 +102,7 @@ describe('saveRuntimeBudgetPolicyAction', () => {
 
     await expect(saveRuntimeBudgetPolicyAction(formData)).resolves.toEqual({
       ok: false,
-      error: '请填写有效的预算策略。',
+      error: '请填写有效的预算规则。',
     })
     expect(mockedSaveRuntimeBudgetPolicy).not.toHaveBeenCalled()
     expect(mockedRevalidatePath).not.toHaveBeenCalled()

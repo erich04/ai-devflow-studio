@@ -1851,8 +1851,8 @@ describe('App', () => {
     expect(screen.getByTestId('workflow-empty-state')).toHaveTextContent('暂无任务')
 
     const badge = openRuntimeSourceBadge()
-    expect(badge).toHaveTextContent('browser preview')
-    expect(badge).toHaveTextContent('missing contract')
+    expect(badge).toHaveTextContent('数据源 浏览器预览')
+    expect(badge).toHaveAttribute('title', expect.stringContaining('browser preview · missing contract'))
 
     openSettingsSection('模型与执行方式')
     expect(screen.getByTestId('review-provider-mode')).toHaveTextContent(
@@ -1989,7 +1989,7 @@ describe('App', () => {
     expect(within(localProjectPanel).queryByText('Team Project')).not.toBeInTheDocument()
     expect(within(localProjectPanel).queryByText('Branch')).not.toBeInTheDocument()
 
-    await waitFor(() => expect(openRuntimeSourceBadge()).toHaveTextContent('local SQLite empty'))
+    await waitFor(() => expect(openRuntimeSourceBadge()).toHaveTextContent('本地暂无任务'))
   })
 
   it('does not show a stale run project id as the selected local repository team ownership', async () => {
@@ -2083,7 +2083,7 @@ describe('App', () => {
     expect(api.listWorkRequests).toHaveBeenCalledWith({
       localProjectId: localProject.id,
     })
-    expect(screen.getByRole('region', { name: 'Work Request Inbox' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '团队请求' })).toBeInTheDocument()
   })
 
   it('materializes a Work Request through the narrow command and selects the returned local Run', async () => {
@@ -2143,7 +2143,7 @@ describe('App', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: '创建本地 Run：交付可恢复 Inbox',
+        name: '创建本地任务：交付可恢复 Inbox',
       }),
     )
 
@@ -2160,7 +2160,7 @@ describe('App', () => {
       'workRequestId',
     ])
     expect(await screen.findByText('ai/work-request-inbox')).toBeInTheDocument()
-    expect(screen.getByTestId('toast')).toHaveTextContent('Work Request 已创建本地 Run')
+    expect(screen.getByTestId('toast')).toHaveTextContent('已从团队请求创建本地任务')
   })
 
   it('treats a credential for another local project as unbound on the current project', async () => {
@@ -2569,7 +2569,7 @@ describe('App', () => {
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR 交付包/ }))
     })
 
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('创建 PR')
@@ -2642,7 +2642,7 @@ describe('App', () => {
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR 交付包/ }))
     })
 
     expect(api.createPrDraft).toHaveBeenCalledWith({
@@ -3317,7 +3317,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
-    const action = within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })
+    const action = within(inspector).getByRole('button', { name: /生成 PR 交付包/ })
 
     expect(action).toBeDisabled()
     expect(inspector).toHaveTextContent('先把当前本地项目连接到团队项目')
@@ -3340,7 +3340,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
 
-    expect(within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ })).toBeDisabled()
+    expect(within(inspector).getByRole('button', { name: /生成 PR 交付包/ })).toBeDisabled()
     expect(inspector).toHaveTextContent('先把当前本地项目连接到团队项目')
     expect(api.createPrDraft).not.toHaveBeenCalled()
   })
@@ -3357,10 +3357,10 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
+    fireEvent.click(screen.getByRole('button', { name: /生成 PR 交付包/ }))
 
     const toast = await screen.findByTestId('toast')
-    expect(toast).toHaveTextContent('当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Delivery Package')
+    expect(toast).toHaveTextContent('当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR 交付包')
     expect(toast).not.toHaveTextContent('Error invoking remote method')
   })
 
@@ -3372,7 +3372,7 @@ describe('App', () => {
 
     expect(api.createPrDraft).not.toHaveBeenCalled()
     expect(screen.getByTestId('pr-draft-action-toast')).toHaveTextContent(
-      '请先将当前 Local Project 绑定到 Team Project，再生成 PR Delivery Package',
+      '请先将当前 Local Project 绑定到 Team Project，再生成 PR 交付包',
     )
   })
 
@@ -3406,9 +3406,9 @@ describe('App', () => {
     clickUpdateTeamData()
     await waitFor(() => expect(api.loadRemoteSnapshot).toHaveBeenCalled())
     const inspector = screen.getByTestId('node-inspector')
-    expect(inspector).toHaveTextContent('生成 PR Delivery Package')
+    expect(inspector).toHaveTextContent('生成 PR 交付包')
     await act(async () => {
-      fireEvent.click(within(inspector).getByRole('button', { name: /生成 PR Delivery Package/ }))
+      fireEvent.click(within(inspector).getByRole('button', { name: /生成 PR 交付包/ }))
     })
 
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('准备 GitHub 交付')
@@ -3458,7 +3458,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(loadState, 1)
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('准备 GitHub 交付')
-    expect(within(inspector).queryByRole('button', { name: '生成 PR Delivery Package' })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: '生成 PR 交付包' })).not.toBeInTheDocument()
 
     const prepareButton = within(inspector).getByRole('button', { name: '准备 GitHub 交付' })
     expect(prepareButton).not.toBeDisabled()
@@ -3759,7 +3759,7 @@ describe('App', () => {
 
     await waitFor(() => expect(loadState).toHaveBeenCalledTimes(1))
     expect(screen.queryByRole('button', { name: 'Resume GitHub Delivery' })).not.toBeInTheDocument()
-    expect(openRuntimeSourceBadge()).toHaveTextContent('loading local IPC')
+    expect(openRuntimeSourceBadge()).toHaveTextContent('正在读取本地数据')
     clickPrimaryNav('任务')
     await act(async () => { finishInitialLoad(loadedState) })
     await waitForLocalStateLoaded(loadState, 1)
@@ -4311,7 +4311,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-pr'))
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /生成 PR Delivery Package/ }))
+      fireEvent.click(screen.getByRole('button', { name: /生成 PR 交付包/ }))
     })
 
     expect(api.createPrDraft).not.toHaveBeenCalled()
@@ -4474,8 +4474,8 @@ describe('App', () => {
     expect(screen.queryByText('为 Payments API 增加 /health 端点')).not.toBeInTheDocument()
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('healthService.check()')
     const badge = openRuntimeSourceBadge()
-    expect(badge).toHaveTextContent('local SQLite')
-    expect(badge).toHaveTextContent('local persisted')
+    expect(badge).toHaveTextContent('数据源 本地数据')
+    expect(badge).toHaveAttribute('title', expect.stringContaining('local SQLite · local persisted'))
   })
 
   it('separates workflow node type, source, display mode, and Inspector semantics', async () => {
@@ -4750,8 +4750,8 @@ describe('App', () => {
     expect(screen.getByTestId('toast')).toHaveTextContent('团队数据已更新 · 策略 v1')
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-runtime-source', 'real IPC/API')
     const badge = openRuntimeSourceBadge()
-    expect(badge).toHaveTextContent('remote snapshot + local merge')
-    expect(badge).toHaveTextContent('real IPC/API')
+    expect(badge).toHaveTextContent('团队数据与本地数据')
+    expect(badge).toHaveAttribute('title', expect.stringContaining('remote snapshot + local merge · real IPC/API'))
 
     clickPrimaryNav('团队')
     expect(screen.getAllByText('Remote Team API').length).toBeGreaterThan(0)
@@ -4927,14 +4927,14 @@ describe('App', () => {
     clickInspectorTab('材料与版本')
     const sources = within(inspector).getByTestId('knowledge-reference-sources')
     expect(sources).toHaveTextContent('docs/standards/api-design.md')
-    expect(sources).toHaveTextContent('document document-api-design-standard')
-    expect(sources).toHaveTextContent('chunk chunk-api-design-standard-contract')
+    expect(sources).toHaveTextContent('文档 document-api-design-standard')
+    expect(sources).toHaveTextContent('分块 chunk-api-design-standard-contract')
     expect(sources).toHaveTextContent('API design / Status mapping')
     expect(sources).toHaveTextContent('knowledge-hash-design-1')
     expect(sources).toHaveTextContent('关键词匹配分 7（原始累加）')
     expect(sources).toHaveTextContent('未进行语义相关性判断')
     expect(sources).toHaveTextContent('Gate 使用状态：已审查引用')
-    expect(sources).not.toHaveTextContent('Review Subject')
+    expect(sources).not.toHaveTextContent('审查时的记录时间')
     expect(sources).not.toHaveTextContent('Baseline tests passed before implementation.')
 
     clickInspectorTab('当前工作')
@@ -4946,7 +4946,7 @@ describe('App', () => {
     expect(evidence).not.toHaveTextContent('Baseline tests passed before implementation.')
     clickInspectorTab(/^材料与版本$/)
     expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('Baseline tests passed before implementation.')
-    expect(inspector).not.toHaveTextContent('Review Subject')
+    expect(inspector).not.toHaveTextContent('审查时的记录时间')
     expect(evidence).not.toHaveTextContent('docs/standards/api-design.md')
     expect(evidence).not.toHaveTextContent('关键词匹配分')
 
@@ -4988,13 +4988,13 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     // The popover's one details button leads to 设置／团队连接, where pairing lives (plan Y7).
     const popover = openTeamConnection()
-    expect(within(popover).queryByLabelText('Desktop pairing code')).not.toBeInTheDocument()
+    expect(within(popover).queryByLabelText('配对码', { exact: true })).not.toBeInTheDocument()
     fireEvent.click(within(popover).getByRole('button', { name: '查看连接详情' }))
     expect(screen.queryByRole('dialog', { name: '团队连接' })).not.toBeInTheDocument()
     expect(within(screen.getByRole('navigation', { name: '设置分区' })).getByRole('button', { name: '团队连接' }))
       .toHaveAttribute('aria-current', 'page')
     const teamConnection = screen.getByTestId('team-connection-settings')
-    fireEvent.change(within(teamConnection).getByLabelText('Desktop pairing code'), {
+    fireEvent.change(within(teamConnection).getByLabelText('配对码', { exact: true }), {
       target: { value: 'pair-p-payments.copy-once-secret' },
     })
     // The fixture already holds a credential, so replacing it needs a confirmation first (plan P1).
@@ -5032,7 +5032,7 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
 
     const teamConnection = openTeamConnectionSettings()
-    fireEvent.change(within(teamConnection).getByLabelText('Desktop pairing code'), { target: { value: 'pair-same-team.secret' } })
+    fireEvent.change(within(teamConnection).getByLabelText('配对码', { exact: true }), { target: { value: 'pair-same-team.secret' } })
     fireEvent.click(within(teamConnection).getByRole('button', { name: '重新连接' }))
     const confirmation = within(teamConnection).getByRole('alertdialog', { name: '确认替换团队连接' })
     expect(confirmation).toHaveTextContent('ai/other-project')
@@ -5042,7 +5042,7 @@ describe('App', () => {
 
     fireEvent.click(within(confirmation).getByRole('button', { name: '取消' }))
     expect(within(teamConnection).queryByRole('alertdialog')).not.toBeInTheDocument()
-    expect(within(teamConnection).getByLabelText('Desktop pairing code')).toHaveValue('pair-same-team.secret')
+    expect(within(teamConnection).getByLabelText('配对码', { exact: true })).toHaveValue('pair-same-team.secret')
     expect(api.pairDesktop).not.toHaveBeenCalled()
     expect(screen.getByTestId('desktop-pairing-identity')).toHaveTextContent('Ling · lead · Payments API')
   })
@@ -5773,7 +5773,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     clickInspectorTab('材料与版本')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('知识治理')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('API 健康端点规范')
 
     clickPrimaryNav('知识')
@@ -5794,7 +5794,7 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     clickInspectorTab('材料与版本')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge Governance')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('知识治理')
     expect(screen.queryByRole('button', { name: /查看引用来源/ })).not.toBeInTheDocument()
   })
 
@@ -6165,7 +6165,7 @@ describe('App', () => {
     clickInspectorTab('当前工作')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('关联审查内容')
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Knowledge review completed for the selected gate.')
-    expect(screen.getByTestId('node-inspector')).toHaveTextContent('warning-only')
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('仅警告')
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent(agentProvider.id)
   })
 

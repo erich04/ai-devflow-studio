@@ -1759,7 +1759,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.locator('header.topbar').getByTestId('theme-toggle')).toHaveCount(0)
     // The data source badge is part of 设置／高级 (plan Y2).
     const advanced = await openSettingsSection(page, '高级')
-    await expect(advanced.getByTestId('runtime-source-badge')).toContainText('local SQLite empty')
+    await expect(advanced.getByTestId('runtime-source-badge')).toContainText('本地暂无任务')
     // The theme is chosen in 设置／外观 (plan Y5).
     const appearance = await openSettingsSection(page, '外观')
     const themeToggle = appearance.getByTestId('theme-toggle')
@@ -1880,7 +1880,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await referencesTab.focus()
     await referencesTab.press('Enter')
     await expect(page.getByTestId('knowledge-reference-sources')).toContainText(
-      '当前 Gate 尚无节点作用域内的 Knowledge 引用',
+      '当前 Gate 还没有属于本步骤的知识引用',
     )
     await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
       'Knowledge review completed for this node.',

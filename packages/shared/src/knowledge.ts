@@ -15,6 +15,12 @@ import type {
   WorkflowNode,
   WorkflowRun,
 } from './domain'
+import {
+  isKnowledgeGateDocumentForStage,
+  knowledgeDocumentAppliesToStage,
+  normalizeKnowledgeStages,
+  resolveKnowledgeDocumentStages,
+} from './knowledge-context'
 
 export type KnowledgeGraph = {
   entities: KnowledgeEntity[]
@@ -79,7 +85,41 @@ function basenameWithoutExtension(sourcePath: string): string {
   return sourcePath.split('/').at(-1)?.replace(/\.md$/u, '') ?? sourcePath
 }
 
-function parseFrontmatter(markdown: string): { fields: Record<string, string>; body: string } {
+type FrontmatterValue = string | boolean | string[]
+
+function unquote(value: string): string {
+  const trimmed = value.trim()
+  if (trimmed.length >= 2 && (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  )) {
+    return trimmed.slice(1, -1)
+  }
+  return trimmed
+}
+
+/** Drops a trailing ` # comment` from an unquoted value. */
+function stripInlineComment(value: string): string {
+  if (value.startsWith('"') || value.startsWith("'")) return value
+  const commentIndex = value.search(/\s#/u)
+  return commentIndex === -1 ? value : value.slice(0, commentIndex).trimEnd()
+}
+
+function parseScalar(value: string): FrontmatterValue {
+  const cleaned = stripInlineComment(value.trim())
+  if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+    return cleaned.slice(1, -1).split(',').map(unquote).filter(Boolean)
+  }
+  if (/^(true|false)$/iu.test(cleaned)) return cleaned.toLocaleLowerCase() === 'true'
+  return unquote(cleaned)
+}
+
+/**
+ * Restricted YAML subset for knowledge front matter (ADR 0025): `key: value`,
+ * quoted strings, `true`/`false`, inline lists `[a, b]` and block lists (`- a`).
+ * Nested maps and multi-line strings are not supported and stay unparsed.
+ */
+function parseFrontmatter(markdown: string): { fields: Record<string, FrontmatterValue>; body: string } {
   if (!markdown.startsWith('---')) {
     return { fields: {}, body: markdown }
   }
@@ -91,9 +131,17 @@ function parseFrontmatter(markdown: string): { fields: Record<string, string>; b
 
   const rawFrontmatter = markdown.slice(3, endIndex).trim()
   const body = markdown.slice(endIndex + 4).trim()
-  const fields: Record<string, string> = {}
+  const fields: Record<string, FrontmatterValue> = {}
+  let listKey: string | undefined
 
   for (const line of rawFrontmatter.split('\n')) {
+    const listItem = /^\s+-\s+(.*)$/u.exec(line) ?? /^-\s+(.*)$/u.exec(line)
+    if (listItem && listKey) {
+      const current = fields[listKey]
+      const item = unquote(stripInlineComment(listItem[1]!))
+      fields[listKey] = [...(Array.isArray(current) ? current : []), ...(item ? [item] : [])]
+      continue
+    }
     const separatorIndex = line.indexOf(':')
     if (separatorIndex === -1) {
       continue
@@ -101,25 +149,57 @@ function parseFrontmatter(markdown: string): { fields: Record<string, string>; b
 
     const key = line.slice(0, separatorIndex).trim()
     const value = line.slice(separatorIndex + 1).trim()
-    if (key) {
-      fields[key] = value
+    if (!key) continue
+    if (!value) {
+      fields[key] = []
+      listKey = key
+      continue
     }
+    listKey = undefined
+    fields[key] = parseScalar(value)
   }
 
   return { fields, body }
 }
 
-function parseTags(value: string | undefined): string[] {
-  if (!value) {
-    return []
-  }
+function stringField(fields: Record<string, FrontmatterValue>, key: string): string | undefined {
+  const value = fields[key]
+  if (typeof value === 'string') return value.trim() || undefined
+  if (typeof value === 'boolean') return String(value)
+  return undefined
+}
 
-  return value
-    .replace(/^\[/u, '')
-    .replace(/\]$/u, '')
-    .split(',')
+function listField(value: FrontmatterValue | undefined): string[] {
+  if (value === undefined || typeof value === 'boolean') return []
+  if (Array.isArray(value)) return value
+  return value.replace(/^\[/u, '').replace(/\]$/u, '').split(',').map(unquote).filter(Boolean)
+}
+
+function parseTags(value: FrontmatterValue | undefined): string[] {
+  return listField(value)
     .map((tag) => tag.trim().replace(/^"|"$/gu, '').toLocaleLowerCase())
     .filter(Boolean)
+}
+
+/** `stages` and `gate` front matter (ADR 0025). */
+function parseStageMetadata(
+  fields: Record<string, FrontmatterValue>,
+  category: KnowledgeDocumentCategory,
+): Pick<KnowledgeDocument, 'stages' | 'gateStages'> {
+  const declaredStages = fields['stages'] === undefined
+    ? undefined
+    : normalizeKnowledgeStages(listField(fields['stages']))
+  const stages = declaredStages ?? resolveKnowledgeDocumentStages({ category })
+  const gate = fields['gate']
+  const gateStages = gate === true
+    ? stages
+    : gate === undefined || gate === false
+      ? []
+      : normalizeKnowledgeStages(listField(gate))
+  return {
+    ...(declaredStages ? { stages: declaredStages } : {}),
+    gateStages,
+  }
 }
 
 function titleFromMarkdown(body: string, sourcePath: string): string {
@@ -302,8 +382,9 @@ function documentEntityKind(category: KnowledgeDocumentCategory): KnowledgeEntit
 export function indexKnowledgeSources(sources: KnowledgeSourceFile[]): KnowledgeIndex {
   const indexedDocuments = sources.map((source) => {
     const { fields, body } = parseFrontmatter(source.markdown)
-    const title = fields['title']?.trim() || titleFromMarkdown(body, source.sourcePath)
-    const category = parseCategory(fields['category'], source.sourcePath)
+    const title = stringField(fields, 'title') || titleFromMarkdown(body, source.sourcePath)
+    const category = parseCategory(stringField(fields, 'category'), source.sourcePath)
+    const ownerId = stringField(fields, 'ownerId')
 
     return {
       document: {
@@ -311,11 +392,12 @@ export function indexKnowledgeSources(sources: KnowledgeSourceFile[]): Knowledge
         title,
         category,
         sourcePath: source.sourcePath,
-        summary: fields['summary']?.trim() || summaryFromMarkdown(body),
+        summary: stringField(fields, 'summary') || summaryFromMarkdown(body),
         tags: parseTags(fields['tags']),
         updatedAt: source.updatedAt || DEFAULT_UPDATED_AT,
         markdown: source.markdown,
-        ...(fields['ownerId']?.trim() ? { ownerId: fields['ownerId'].trim() } : {}),
+        ...(ownerId ? { ownerId } : {}),
+        ...parseStageMetadata(fields, category),
       } satisfies KnowledgeDocument,
       body,
     }
@@ -592,9 +674,16 @@ function firstChunkMetadataForDocument(
   }
 }
 
+/** Gate criteria for a node: documents whose `gate` front matter covers its stage (ADR 0025). */
 function documentsForNode(node: WorkflowNode, documents: KnowledgeDocument[]): KnowledgeDocument[] {
-  const categories = knowledgeDocumentCategoriesForStage(node.stage)
-  return documents.filter((document) => categories.includes(document.category))
+  return documents.filter((document) => isKnowledgeGateDocumentForStage(document, node.stage))
+}
+
+export function knowledgeGateDocumentsForNode(
+  node: WorkflowNode,
+  documents: KnowledgeDocument[],
+): KnowledgeDocument[] {
+  return documentsForNode(node, documents)
 }
 
 function pushReference(references: KnowledgeReference[], reference: Omit<KnowledgeReference, 'id'>) {
@@ -639,6 +728,13 @@ export function projectKnowledgeReferencesForNode(input: {
   const directlyScopedDocumentIds = new Set(directlyScoped.map((reference) => reference.documentId))
 
   return input.references.filter((reference) => {
+    // Stage references (ADR 0025) carry the stages they apply to; legacy
+    // retrieval references are scoped by category.
+    if (reference.stages) {
+      return directlyScopedIds.has(reference.id) || (
+        reference.targetType === 'run' && !reference.nodeId && reference.stages.includes(input.node.stage)
+      )
+    }
     if (reference.category && !allowedCategories.has(reference.category)) {
       return false
     }
@@ -654,64 +750,62 @@ export function projectKnowledgeReferencesForNode(input: {
   })
 }
 
+function compareDocumentsByPath(left: KnowledgeDocument, right: KnowledgeDocument): number {
+  return left.sourcePath < right.sourcePath ? -1 : left.sourcePath > right.sourcePath ? 1 : 0
+}
+
+/** One `cites` reference per document that applies to the node's stage (ADR 0025). */
+function pushStageReferences(
+  references: KnowledgeReference[],
+  run: WorkflowRun,
+  documents: KnowledgeDocument[],
+  chunks: KnowledgeChunk[],
+  targetNode: WorkflowNode | undefined,
+) {
+  for (const document of [...documents].sort(compareDocumentsByPath)) {
+    const stages = resolveKnowledgeDocumentStages(document)
+    if (stages.length === 0) continue
+    if (targetNode && !knowledgeDocumentAppliesToStage(document, targetNode.stage)) continue
+    pushReference(references, {
+      runId: run.id,
+      targetType: 'run',
+      ...(targetNode ? { nodeId: targetNode.id } : {}),
+      documentId: document.id,
+      relation: 'cites',
+      reason: document.stages
+        ? `${document.title} applies to stages declared in front matter: ${stages.join(', ')}.`
+        : `${document.title} applies to its category default stages: ${stages.join(', ')}.`,
+      ...firstChunkMetadataForDocument(document, chunks),
+      strategy: 'stage',
+      stages,
+    })
+  }
+}
+
 export function buildKnowledgeReferences({
   run,
   artifacts,
   documents,
   chunks,
   testEvidence,
-  retriever = lexicalKnowledgeRetriever,
+  retriever,
   targetNode,
 }: KnowledgeReferenceInput): KnowledgeReference[] {
   const references: KnowledgeReference[] = []
   const index = indexFromDocuments(documents, chunks)
-  const runText = searchableText([run.title, run.request, run.branchName, run.status])
 
-  for (const hit of retriever.retrieve(
-    {
-      id: `knowledge-query-run-${run.id}`,
-      runId: run.id,
-      targetType: 'run',
-      text: runText,
-      ...(targetNode
-        ? {
-            nodeId: targetNode.id,
-            stage: targetNode.stage,
-            categories: knowledgeDocumentCategoriesForStage(targetNode.stage),
-          }
-        : {}),
-      topK: 3,
-      minScore: 2,
-    },
-    index,
-  )) {
-    pushReference(references, {
-      runId: run.id,
-      targetType: 'run',
-      documentId: hit.documentId,
-      relation: 'cites',
-      reason: hit.reason,
-      ...referenceMetadataFromHit(hit),
-    })
-  }
-
-  for (const artifact of artifacts.filter((artifact) => artifact.runId === run.id)) {
-    const artifactText = searchableText([
-      artifact.title,
-      artifact.summary,
-      artifact.content,
-      artifact.kind,
-    ])
+  if (retriever) {
+    // Legacy retrieval, kept for explicit callers and the K0 baseline (ADR 0025).
+    const runText = searchableText([run.title, run.request, run.branchName, run.status])
     for (const hit of retriever.retrieve(
       {
-        id: `knowledge-query-artifact-${artifact.id}`,
+        id: `knowledge-query-run-${run.id}`,
         runId: run.id,
-        targetType: 'artifact',
-        artifactId: artifact.id,
-        nodeId: artifact.nodeId,
-        text: artifactText,
+        targetType: 'run',
+        text: runText,
         ...(targetNode
           ? {
+              nodeId: targetNode.id,
               stage: targetNode.stage,
               categories: knowledgeDocumentCategoriesForStage(targetNode.stage),
             }
@@ -723,15 +817,54 @@ export function buildKnowledgeReferences({
     )) {
       pushReference(references, {
         runId: run.id,
-        targetType: 'artifact',
-        artifactId: artifact.id,
-        nodeId: artifact.nodeId,
+        targetType: 'run',
         documentId: hit.documentId,
         relation: 'cites',
-        reason: `${artifact.title} references relevant guidance. ${hit.reason}`,
+        reason: hit.reason,
         ...referenceMetadataFromHit(hit),
       })
     }
+
+    for (const artifact of artifacts.filter((artifact) => artifact.runId === run.id)) {
+      const artifactText = searchableText([
+        artifact.title,
+        artifact.summary,
+        artifact.content,
+        artifact.kind,
+      ])
+      for (const hit of retriever.retrieve(
+        {
+          id: `knowledge-query-artifact-${artifact.id}`,
+          runId: run.id,
+          targetType: 'artifact',
+          artifactId: artifact.id,
+          nodeId: artifact.nodeId,
+          text: artifactText,
+          ...(targetNode
+            ? {
+                stage: targetNode.stage,
+                categories: knowledgeDocumentCategoriesForStage(targetNode.stage),
+              }
+            : {}),
+          topK: 3,
+          minScore: 2,
+        },
+        index,
+      )) {
+        pushReference(references, {
+          runId: run.id,
+          targetType: 'artifact',
+          artifactId: artifact.id,
+          nodeId: artifact.nodeId,
+          documentId: hit.documentId,
+          relation: 'cites',
+          reason: `${artifact.title} references relevant guidance. ${hit.reason}`,
+          ...referenceMetadataFromHit(hit),
+        })
+      }
+    }
+  } else {
+    pushStageReferences(references, run, documents, index.chunks, targetNode)
   }
 
   const reviewNodes = targetNode
@@ -749,6 +882,7 @@ export function buildKnowledgeReferences({
         relation: 'requires_evidence',
         reason: `${node.title} should review ${document.title}.`,
         ...firstChunkMetadataForDocument(document, index.chunks),
+        stages: [...(document.gateStages ?? [])],
       })
     }
   }
@@ -778,7 +912,7 @@ export function buildKnowledgeGovernanceChecks({
   documents,
   chunks,
   testEvidence,
-  retriever = lexicalKnowledgeRetriever,
+  retriever,
 }: KnowledgeGovernanceInput): KnowledgeGovernanceCheck[] {
   const references = buildKnowledgeReferences({
     run,
@@ -786,7 +920,7 @@ export function buildKnowledgeGovernanceChecks({
     documents,
     ...(chunks ? { chunks } : {}),
     testEvidence,
-    retriever,
+    ...(retriever ? { retriever } : {}),
     targetNode: node,
   })
   const runEvidence = testEvidence.filter((evidence) => evidence.runId === run.id)

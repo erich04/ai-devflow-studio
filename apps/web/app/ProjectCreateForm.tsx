@@ -42,25 +42,25 @@ export function ProjectCreateForm({
   return (
     <form className="project-create-form" onSubmit={handleSubmit}>
       <label>
-        Name
+        项目名称
         <input name="name" placeholder="Agent Platform" readOnly={isPending} required />
       </label>
       <label>
-        Slug
+        项目标识（Slug）
         <input name="slug" placeholder="agent-platform" pattern="[a-z0-9]+(?:-[a-z0-9]+)*" readOnly={isPending} required />
       </label>
       <label>
-        Repository
+        仓库
         <input name="repository" placeholder="erich/agent-platform" readOnly={isPending} required />
       </label>
       <label>
-        Description
-        <textarea name="description" placeholder="Pilot project for team delivery." readOnly={isPending} required />
+        项目描述
+        <textarea name="description" placeholder="团队交付试点项目。" readOnly={isPending} required />
       </label>
-      <button disabled={isPending} type="submit">{isPending ? '创建中…' : 'Create project'}</button>
+      <button disabled={isPending} type="submit">{isPending ? '创建中…' : '创建项目'}</button>
       {result ? (
         <p role={result.ok ? 'status' : 'alert'} aria-live="polite">
-          {result.ok ? `项目「${result.projectName}」已创建，可以继续 Desktop 配对。` : result.error}
+          {result.ok ? `项目「${result.projectName}」已创建，可以继续桌面配对。` : result.error}
           {!result.ok && result.authenticationRequired ? (
             <> <a href={signInUrl} target="_blank" rel="noreferrer">重新登录 GitHub（新窗口）</a></>
           ) : null}

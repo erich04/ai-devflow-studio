@@ -15,6 +15,7 @@ import {
   type AgentTrace,
   type Artifact,
   type KnowledgeChunk,
+  type ProjectInstructionsSnapshot,
   type KnowledgeDocument,
   type KnowledgeReviewBudgetGuard,
   type LocalExecutionState,
@@ -45,6 +46,8 @@ export type KnowledgeReviewRuntimeDependencies = {
   store: KnowledgeReviewRuntimeStore
   knowledgeDocuments: KnowledgeDocument[]
   knowledgeChunks: KnowledgeChunk[]
+  /** Repository instruction file (ADR 0025 L0). */
+  projectInstructions?: ProjectInstructionsSnapshot | null
   resolveProviderMetadata(providerId: string): Promise<KnowledgeReviewProviderMetadata>
   resolveProvider(providerId: string): Promise<AgentProvider>
   budgetGuard?: KnowledgeReviewBudgetGuard
@@ -160,6 +163,7 @@ export function createKnowledgeReviewRuntime(
         testEvidence,
         knowledgeDocuments: deps.knowledgeDocuments,
         knowledgeChunks: deps.knowledgeChunks,
+        ...(deps.projectInstructions ? { projectInstructions: deps.projectInstructions } : {}),
         policySnapshot,
         requiredContextFields: deriveWorkflowContextPolicyRequirements(
           policySnapshot?.effectivePolicy,

@@ -13,6 +13,7 @@ import { buildTeamConnectionView, deliveryIntentsRevokedByRepair } from './app/t
 import { formatLocalTime, settingsSectionForTaskTarget, type InspectorReadingPosition, type SettingsSection } from './app/desktop-view-model'
 import { buildRunUsageSummary } from './app/run-usage-summary'
 import { buildTestRunReadiness } from './app/test-run-readiness'
+import { runtimeSourceLabel } from './app/team-overview-copy'
 import {
   BookOpen,
   ClipboardCheck,
@@ -494,7 +495,7 @@ export function App() {
       setSelectedRunId(result.run.id)
       setSelectedNodeId(result.run.currentNodeId)
       setActiveView('workbench')
-      setToast('Work Request 已创建本地 Run')
+      setToast('已从团队请求创建本地任务')
     },
     [
       applyLocalExecutionState,
@@ -1217,9 +1218,13 @@ export function App() {
           </section>
           <CredentialAccessStatus api={desktopApi} detailed />
           <DiagnosticHistory api={desktopApi} active />
-          <span className="stat stat--source" data-testid="runtime-source-badge" title={runtimeDataSource.detail}>
-            数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeDataSource.label}</strong>
-            <em>{runtimeDataSource.status}</em>
+          {/* First layer in Chinese; the raw diagnostic values stay in the title (plan §1.1). */}
+          <span
+            className="stat stat--source"
+            data-testid="runtime-source-badge"
+            title={`${runtimeDataSource.label} · ${runtimeDataSource.status} · ${runtimeDataSource.detail}`}
+          >
+            数据源 <strong className={`pill ${runtimeDataSource.tone}`}>{runtimeSourceLabel(runtimeDataSource.label)}</strong>
           </span>
           <details open className="data-profile-diagnostics" data-testid="data-profile-diagnostics">
             <summary>

@@ -88,7 +88,6 @@ export function TeamConnectionSettings({
           <label>
             配对码
             <input
-              aria-label="Desktop pairing code"
               placeholder="粘贴 Web 端生成的配对码"
               value={pairingCodeDraft}
               disabled={!hasSelectedProject}

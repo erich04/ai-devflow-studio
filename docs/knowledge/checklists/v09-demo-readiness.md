@@ -1,6 +1,7 @@
 ---
 title: v0.9 演示就绪检查清单
 category: review_checklist
+stages: [accept]
 ownerId: u-erich
 tags: demo, opencode, observability, policy-aware-delivery
 summary: v0.9 演示应证明策略感知交付、运行时可观测性，并如实说明真实 OpenCode 的能力边界。

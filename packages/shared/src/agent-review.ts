@@ -21,6 +21,8 @@ import type {
   ClarificationRepositoryFindings,
   GateAdvisory,
   KnowledgeChunk,
+  KnowledgeReference,
+  ProjectInstructionsSnapshot,
   KnowledgeDocument,
   TestEvidence,
   WorkflowNode,
@@ -321,6 +323,8 @@ export type BuildAgentReviewContextInput = {
   knowledgeChunks: KnowledgeChunk[]
   requiredContextFields?: WorkflowContextPolicyRequirements
   policySnapshot?: PolicySnapshot | (Pick<PolicySnapshot, 'effectivePolicy' | 'version'> & { source: 'api' }) | null
+  /** Repository instruction file (ADR 0025 L0). */
+  projectInstructions?: ProjectInstructionsSnapshot | null
 }
 
 export type RunKnowledgeReviewAgentInput = {
@@ -415,7 +419,8 @@ const MODEL_PRICES_PER_1K: Record<string, { input: number; output: number }> = {
 
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_PROVIDER_ID = 'fake-knowledge-review'
 const BUILT_IN_FAKE_KNOWLEDGE_REVIEW_MODEL = 'fake'
-export const KNOWLEDGE_REVIEW_MAX_CHUNKS = 8
+/** Whole documents are reviewed (ADR 0025); the character budget below is the effective bound. */
+export const KNOWLEDGE_REVIEW_MAX_CHUNKS = 32
 export const KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS = 4_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS = 24_000
 export const KNOWLEDGE_REVIEW_SUBJECT_CHUNK_CHARACTERS = 4_000
@@ -461,22 +466,35 @@ function redactedSummary(value: unknown): string {
   return redactedSummaryResult(value).value
 }
 
+/**
+ * Whole referenced documents, Gate criteria first (ADR 0025). Legacy chunk-level
+ * references still select only their chunk.
+ */
 function buildBoundedReviewKnowledgeChunks(
   knowledgeChunks: KnowledgeChunk[],
-  referencedChunkIds: Set<string>,
+  references: KnowledgeReference[],
 ): AgentReviewContext['knowledgeChunks'] {
+  const documentOrder: string[] = []
+  const wholeDocuments = new Set<string>()
+  const legacyChunkIds = new Set<string>()
+  for (const reference of [
+    ...references.filter((item) => item.relation === 'requires_evidence'),
+    ...references.filter((item) => item.relation !== 'requires_evidence'),
+  ]) {
+    if (!documentOrder.includes(reference.documentId)) documentOrder.push(reference.documentId)
+    if (reference.stages) wholeDocuments.add(reference.documentId)
+    else if (reference.chunkId) legacyChunkIds.add(reference.chunkId)
+  }
+  const orderedChunks = documentOrder.flatMap((documentId) => knowledgeChunks.filter((chunk) =>
+    chunk.documentId === documentId && (wholeDocuments.has(documentId) || legacyChunkIds.has(chunk.id))))
   const selectedChunks: AgentReviewContext['knowledgeChunks'] = []
   let remainingCharacters = KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS
-
-  for (const chunk of knowledgeChunks) {
+  for (const chunk of orderedChunks) {
     if (
       selectedChunks.length >= KNOWLEDGE_REVIEW_MAX_CHUNKS ||
       remainingCharacters <= 0
     ) {
       break
-    }
-    if (!referencedChunkIds.has(chunk.id)) {
-      continue
     }
 
     const redactedContent = redactSensitiveText(providerValueToString(chunk.content)).value
@@ -975,6 +993,7 @@ export async function buildAgentReviewContext({
   knowledgeChunks,
   requiredContextFields,
   policySnapshot,
+  projectInstructions,
 }: BuildAgentReviewContextInput): Promise<AgentReviewContext> {
   const runArtifacts = artifacts.filter((artifact) => artifact.runId === run.id)
   const selectedArtifacts = selectReviewSubjectArtifacts(run, node, runArtifacts)
@@ -1086,8 +1105,15 @@ export async function buildAgentReviewContext({
     },
     ...(requiredContextFields ? { requiredByPolicy: requiredContextFields } : {}),
   })
-  const referencedChunkIds = new Set(references.flatMap((reference) => reference.chunkId ?? []))
-  const boundedKnowledgeChunks = buildBoundedReviewKnowledgeChunks(knowledgeChunks, referencedChunkIds)
+  const boundedKnowledgeChunks = buildBoundedReviewKnowledgeChunks(knowledgeChunks, rawReferences)
+  const boundedInstructions = projectInstructions?.content
+    ? {
+        sourcePath: projectInstructions.sourcePath,
+        contentDigest: projectInstructions.contentDigest,
+        truncated: projectInstructions.truncated,
+        content: redactSensitiveText(projectInstructions.content).value,
+      }
+    : undefined
   const runRequestResult = redactSensitiveText(providerValueToString(run.request))
   const runRequestCoverage =
     runRequestResult.value.length > KNOWLEDGE_REVIEW_MAX_RUN_REQUEST_CHARACTERS
@@ -1180,6 +1206,7 @@ export async function buildAgentReviewContext({
     fieldProjection,
     ...(policy ? { policy } : {}),
     manifest,
+    ...(boundedInstructions ? { projectInstructions: boundedInstructions } : {}),
   }
 }
 
@@ -1268,6 +1295,7 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         knowledgeCoverage: context.manifest.criteriaCoverage,
         knowledgeReferences: context.manifest.knowledgeCriteria,
         knowledgeChunks: context.knowledgeChunks,
+        ...(context.projectInstructions ? { projectInstructions: context.projectInstructions } : {}),
         ...(context.policy ? { policy: context.policy } : {}),
       },
       REVIEW_OUTPUT: {

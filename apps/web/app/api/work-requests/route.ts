@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
     input = parseWorkRequestCreate(await request.json())
   } catch {
     return NextResponse.json(
-      { message: 'Invalid Work Request input.' },
+      { message: '团队请求的输入无效。' },
       { status: 400 },
     )
   }
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
   const cookieHeader = await getDevFlowCookieHeader()
   if (!cookieHeader) {
     return NextResponse.json(
-      { message: 'Work Request was rejected.' },
+      { message: '团队请求被拒绝。' },
       { status: 401 },
     )
   }
@@ -60,8 +60,8 @@ export async function POST(request: NextRequest) {
       {
         message:
           status === 502
-            ? 'Work Request service is unavailable.'
-            : 'Work Request was rejected.',
+            ? '团队请求服务暂时不可用。'
+            : '团队请求被拒绝。',
       },
       { status },
     )

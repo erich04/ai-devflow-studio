@@ -5,6 +5,7 @@ import type { DiagnosticRecord, DesktopPairingCode, Role } from '@ai-devflow/sha
 import { parseDesktopPairingCodePayload } from './lib/pairing-code'
 import { pairingRequest } from './lib/pairing-diagnostics'
 import { PairingDiagnosticHistory } from './PairingDiagnosticHistory'
+import { roleLabel } from './web-labels'
 
 type PairingPanelState = {
   projectId: string
@@ -152,7 +153,7 @@ export function PairingCodePanel({ projectId, projectName, subject }: PairingCod
         projectId: requestProjectId,
         pairingCode: nextPairingCode,
         status: 'ready',
-        message: `Expires ${new Date(nextPairingCode.expiresAt).toLocaleTimeString()}`,
+        message: `有效期至 ${new Date(nextPairingCode.expiresAt).toLocaleTimeString()}`,
       })
     } catch (error) {
       if (
@@ -166,7 +167,7 @@ export function PairingCodePanel({ projectId, projectName, subject }: PairingCod
         projectId: requestProjectId,
         pairingCode: null,
         status: 'error',
-        message: error instanceof Error ? error.message : 'Failed to create desktop pairing code',
+        message: error instanceof Error ? error.message : '无法生成桌面配对码。',
       })
     } finally { activeRequests.current.delete(requestKey) }
   }
@@ -283,8 +284,8 @@ export function PairingCodePanel({ projectId, projectName, subject }: PairingCod
     <div className="pairing-code-panel">
       {subject ? (
         <p className="pairing-subject">
-          将以 <strong>{subject.userName}</strong> / {subject.role} 绑定到{' '}
-          <strong>{projectName}</strong>；Desktop 有效权限上限为 {issuedRoleFor(subject.role)}。
+          将以 <strong>{subject.userName}</strong> / {roleLabel(subject.role)} 绑定到{' '}
+          <strong>{projectName}</strong>；桌面端有效权限上限为 {roleLabel(issuedRoleFor(subject.role))}。
         </p>
       ) : (
         <p className="pairing-subject">登录并成为当前项目成员后，才能为自己创建配对码。</p>
@@ -294,11 +295,11 @@ export function PairingCodePanel({ projectId, projectName, subject }: PairingCod
         onClick={createPairingCode}
         disabled={!subject || visibleState.status === 'creating' || visibleState.status === 'revoking'}
       >
-        {visibleState.status === 'creating' ? 'Creating code...' : visibleState.status === 'expired' ? '重新生成配对码' : 'Create desktop pairing code'}
+        {visibleState.status === 'creating' ? '生成中...' : visibleState.status === 'expired' ? '重新生成配对码' : '生成桌面配对码'}
       </button>
       {visibleState.pairingCode ? (
         <div className="pairing-code-result">
-          {visibleState.status === 'expired' ? <strong role="status">配对码已过期</strong> : <code aria-label={`Desktop pairing code for ${projectId}`}>{visibleState.pairingCode.code}</code>}
+          {visibleState.status === 'expired' ? <strong role="status">配对码已过期</strong> : <code aria-label={`项目 ${projectId} 的桌面配对码`}>{visibleState.pairingCode.code}</code>}
           <div className="pairing-code-actions">
             <button
               type="button"

@@ -3,6 +3,7 @@ import type { AgentProvider } from './agent-review'
 import type { Artifact } from './domain'
 import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider } from './agent-review'
 import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workflow'
+import { indexKnowledgeSources } from './knowledge'
 import {
   runWorkflowStageAgent,
   StageAgentExecutionError,
@@ -512,3 +513,75 @@ describe('runWorkflowStageAgent', () => {
     expect(JSON.stringify(call)).toContain('[REDACTED:')
   })
 })
+
+describe('resident project knowledge in stage prompts (ADR 0025)', () => {
+  const documents = indexKnowledgeSources([
+    { sourcePath: 'docs/knowledge/clarify-rule.md', markdown: '---\ntitle: Clarify rule\nstages: [clarify]\ngate: true\n---\n# Clarify rule\nCLARIFY_RULE_BODY', updatedAt: '2026-09-29T00:00:00.000Z' },
+    { sourcePath: 'docs/knowledge/pr-rule.md', markdown: '---\ntitle: PR rule\nstages: [pr]\n---\n# PR rule\nPR_RULE_BODY', updatedAt: '2026-09-29T00:00:00.000Z' },
+  ]).documents
+  const projectInstructions = {
+    sourcePath: 'AGENTS.md' as const,
+    content: 'REPO_INSTRUCTIONS token=sk-supersecret123456789',
+    bytes: 48,
+    contentDigest: `sha256:${'c'.repeat(64)}`,
+    truncated: false,
+  }
+
+  it('injects instructions and stage knowledge for Direct Provider and records the manifest', async () => {
+    const result = await runWorkflowStageAgent({
+      run: created.run, node: clarifyNode(), artifacts: created.artifacts, provider: createFakeAgentProvider(),
+      requestedBy: 'u-ling', runtime: 'electron',
+      knowledge: { documents, knowledgeRoot: 'docs/knowledge', projectInstructions },
+    })
+    expect(result.prompt).toContain('PROJECT_INSTRUCTIONS (AGENTS.md')
+    expect(result.prompt).toContain('REPO_INSTRUCTIONS')
+    expect(result.prompt).not.toContain('sk-supersecret123456789')
+    expect(result.prompt).toContain('CLARIFY_RULE_BODY')
+    expect(result.prompt).not.toContain('PR_RULE_BODY')
+    expect(result.prompt.indexOf('PROJECT_KNOWLEDGE')).toBeLessThan(result.prompt.indexOf('RAW_REQUEST'))
+    expect(result.provenance.knowledgeContext).toMatchObject({
+      stage: 'clarify',
+      instructions: { sourcePath: 'AGENTS.md', loadedBy: 'devflow' },
+      included: [expect.objectContaining({ sourcePath: 'docs/knowledge/clarify-rule.md', gate: true })],
+      catalogued: [expect.objectContaining({ sourcePath: 'docs/knowledge/pr-rule.md', reason: 'other_stage' })],
+    })
+    expect(result.trace.steps.map((step) => step.label)).toContain('Bind project knowledge')
+  })
+
+  it('leaves the instruction file to a local Agent that loads it itself', async () => {
+    let prompt = ''
+    const executor: StageAgentExecutor = {
+      kind: 'local-agent', id: 'fake-local', version: '1', model: 'fake-model',
+      async execute(input) {
+        prompt = input.prompt
+        return { terminalReason: 'success', toolCalls: 1, value: {
+          model: 'fake-model', title: 'Clarified', summary: 'Clarified.', goals: ['g'], acceptanceCriteria: ['a'], nonGoals: ['n'],
+          openQuestions: [], assumptions: [], risks: [],
+          repositoryFindings: { version: 1, repositoryDigest: 'd'.repeat(64),
+            verifiedFacts: [{ id: 'f1', statement: 'Rule exists.', citationIds: ['c1'] }],
+            citations: [{ id: 'c1', path: 'docs/knowledge/clarify-rule.md', contentDigest: 'e'.repeat(64), lineStart: 1, lineEnd: 2 }],
+            assumptions: [], openQuestions: [], uncheckedScopes: [] },
+        } }
+      },
+    }
+    const result = await runWorkflowStageAgent({
+      run: created.run, node: clarifyNode(), artifacts: created.artifacts, executor,
+      requestedBy: 'u-ling', runtime: 'electron',
+      knowledge: { documents, knowledgeRoot: 'docs/knowledge', projectInstructions },
+    })
+    expect(prompt).not.toContain('PROJECT_INSTRUCTIONS')
+    expect(prompt).toContain('CLARIFY_RULE_BODY')
+    expect(prompt).toContain('read the file when it is relevant')
+    expect(result.provenance.knowledgeContext?.instructions).toMatchObject({ loadedBy: 'executor' })
+  })
+
+  it('keeps the previous prompt when no knowledge is supplied', async () => {
+    const result = await runWorkflowStageAgent({
+      run: created.run, node: clarifyNode(), artifacts: created.artifacts, provider: createFakeAgentProvider(),
+      requestedBy: 'u-ling', runtime: 'electron',
+    })
+    expect(result.prompt).not.toContain('PROJECT_KNOWLEDGE')
+    expect(result.provenance.knowledgeContext).toBeUndefined()
+  })
+})
+

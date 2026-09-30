@@ -1,0 +1,238 @@
+{
+  "mode": "baseline-lexical",
+  "corpus": "knowledge-context-zh",
+  "indexedDocuments": 191,
+  "indexedChunks": 2064,
+  "snapshotWarnings": [],
+  "scenarios": 24,
+  "requiredRecall": 0.233,
+  "scenariosWithAllRequired": 7,
+  "gateExactScenarios": 0,
+  "gateCountByStage": {
+    "clarify": 163,
+    "design": 35,
+    "build": 155,
+    "test": 2,
+    "pr": 8,
+    "accept": 32
+  },
+  "paidProviderCalls": 0,
+  "rows": [
+    {
+      "id": "health-clarify",
+      "stage": "clarify",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 3,
+      "gateCount": 163,
+      "gateExact": false
+    },
+    {
+      "id": "health-design",
+      "stage": "design",
+      "requiredHit": 1,
+      "requiredTotal": 2,
+      "citedCount": 2,
+      "gateCount": 35,
+      "gateExact": false
+    },
+    {
+      "id": "health-build",
+      "stage": "build",
+      "requiredHit": 0,
+      "requiredTotal": 2,
+      "citedCount": 5,
+      "gateCount": 155,
+      "gateExact": false
+    },
+    {
+      "id": "health-test",
+      "stage": "test",
+      "requiredHit": 0,
+      "requiredTotal": 2,
+      "citedCount": 1,
+      "gateCount": 2,
+      "gateExact": false
+    },
+    {
+      "id": "health-pr",
+      "stage": "pr",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 2,
+      "gateCount": 8,
+      "gateExact": false
+    },
+    {
+      "id": "health-accept",
+      "stage": "accept",
+      "requiredHit": 0,
+      "requiredTotal": 2,
+      "citedCount": 3,
+      "gateCount": 32,
+      "gateExact": false
+    },
+    {
+      "id": "gate-evidence-clarify",
+      "stage": "clarify",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 2,
+      "gateCount": 163,
+      "gateExact": false
+    },
+    {
+      "id": "design-version-binding",
+      "stage": "design",
+      "requiredHit": 1,
+      "requiredTotal": 1,
+      "citedCount": 2,
+      "gateCount": 35,
+      "gateExact": false
+    },
+    {
+      "id": "mcp-tool-design",
+      "stage": "design",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 1,
+      "gateCount": 35,
+      "gateExact": false
+    },
+    {
+      "id": "mcp-tool-build",
+      "stage": "build",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 5,
+      "gateCount": 155,
+      "gateExact": false
+    },
+    {
+      "id": "opencode-smoke-test",
+      "stage": "test",
+      "requiredHit": 0,
+      "requiredTotal": 2,
+      "citedCount": 1,
+      "gateCount": 2,
+      "gateExact": false
+    },
+    {
+      "id": "opencode-release-accept",
+      "stage": "accept",
+      "requiredHit": 1,
+      "requiredTotal": 2,
+      "citedCount": 2,
+      "gateCount": 32,
+      "gateExact": false
+    },
+    {
+      "id": "postgres-smoke-test",
+      "stage": "test",
+      "requiredHit": 0,
+      "requiredTotal": 2,
+      "citedCount": 1,
+      "gateCount": 2,
+      "gateExact": false
+    },
+    {
+      "id": "electron-demo-accept",
+      "stage": "accept",
+      "requiredHit": 1,
+      "requiredTotal": 1,
+      "citedCount": 3,
+      "gateCount": 32,
+      "gateExact": false
+    },
+    {
+      "id": "electron-mcp-test",
+      "stage": "test",
+      "requiredHit": 0,
+      "requiredTotal": 2,
+      "citedCount": 1,
+      "gateCount": 2,
+      "gateExact": false
+    },
+    {
+      "id": "failed-test-visible-clarify",
+      "stage": "clarify",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 5,
+      "gateCount": 163,
+      "gateExact": false
+    },
+    {
+      "id": "evidence-redaction-design",
+      "stage": "design",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 3,
+      "gateCount": 35,
+      "gateExact": false
+    },
+    {
+      "id": "draft-pr-commit-pr",
+      "stage": "pr",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 2,
+      "gateCount": 8,
+      "gateExact": false
+    },
+    {
+      "id": "business-accept",
+      "stage": "accept",
+      "requiredHit": 1,
+      "requiredTotal": 1,
+      "citedCount": 4,
+      "gateCount": 32,
+      "gateExact": false
+    },
+    {
+      "id": "task-page-redesign-design",
+      "stage": "design",
+      "requiredHit": 0,
+      "requiredTotal": 0,
+      "citedCount": 3,
+      "gateCount": 35,
+      "gateExact": false
+    },
+    {
+      "id": "v09-demo-clarify",
+      "stage": "clarify",
+      "requiredHit": 0,
+      "requiredTotal": 0,
+      "citedCount": 5,
+      "gateCount": 163,
+      "gateExact": false
+    },
+    {
+      "id": "v09-demo-accept",
+      "stage": "accept",
+      "requiredHit": 2,
+      "requiredTotal": 2,
+      "citedCount": 2,
+      "gateCount": 32,
+      "gateExact": false
+    },
+    {
+      "id": "cache-outage-build",
+      "stage": "build",
+      "requiredHit": 0,
+      "requiredTotal": 1,
+      "citedCount": 5,
+      "gateCount": 155,
+      "gateExact": false
+    },
+    {
+      "id": "metadata-only-package-design",
+      "stage": "design",
+      "requiredHit": 0,
+      "requiredTotal": 0,
+      "citedCount": 3,
+      "gateCount": 35,
+      "gateExact": false
+    }
+  ]
+}

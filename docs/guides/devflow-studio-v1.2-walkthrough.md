@@ -1,6 +1,6 @@
 <a id="devflow-studio-v12-手动-walkthrough-指南"></a>
 
-> **截图更新（2026-09-28）**：下图为当前 `main`（`bf18e4aa`）重新构建后采集的界面，使用隔离的 Payments API 演示数据。正文中的历史版本、验收结果和限制仍属于原演练，不因换图而成为本次验证结论。当前节点使用“概览 / 内容与审查 / 产物与证据 / 执行记录”标签；详见[截图来源与尚未重拍项](./screenshots/current-20260928/README.md)。
+> **截图更新（2026-09-28）**：下图为 `main`（`bf18e4aa`）在工作区改造前采集的界面，使用隔离的 Payments API 演示数据。正文中的历史版本、验收结果和限制仍属于原演练，不因换图而成为本次验证结论。图中的 Agents、测试等一级页面和“概览 / 内容与审查 / 产物与证据 / 执行记录”四个页签已被改造替代，当前界面见 [README](../../README.md) 与[改造后的截图](./screenshots/workspace-redesign-20260928/README.md)；本批截图的来源与尚未重拍项见[截图记录](./screenshots/current-20260928/README.md)。
 
 # DevFlow Studio v1.2 人工演练指南
 

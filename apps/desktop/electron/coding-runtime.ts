@@ -742,12 +742,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     const artifacts = await deps.store.listArtifacts(run.id)
     const events = await deps.store.listEvents(run.id)
     const testEvidence = await deps.store.listTestEvidence(run.id)
+    // Standards that apply to this node's stage (ADR 0025); the full K3 brief
+    // rework waits for the prompt-cache layout change.
     const knowledgeReferences = buildKnowledgeReferences({
       run,
       artifacts,
       documents: knowledgeDocuments,
       chunks: knowledgeChunks,
       testEvidence,
+      targetNode: node,
     })
     const governanceChecks = buildKnowledgeGovernanceChecks({
       run,

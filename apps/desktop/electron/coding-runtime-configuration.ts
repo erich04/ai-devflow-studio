@@ -164,8 +164,8 @@ export async function evaluateCodingRuntimeReadiness(input: {
     'wrong_workflow_node',
     workflowReady,
     workflowReady
-      ? '当前节点是可执行的 Implement locally 构建节点。'
-      : 'Coding Agent 只能从当前 Implement locally 构建节点启动。',
+      ? '当前步骤是可执行的开发实现步骤。'
+      : 'Coding Agent 只能从当前的开发实现步骤启动。',
   )
 
   const gitReady = project ? await isGitRepository(project.path) : false

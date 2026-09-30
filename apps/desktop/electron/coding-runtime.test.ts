@@ -2501,6 +2501,8 @@ describe('CodingRuntime', () => {
       tags: ['api', 'health'],
       updatedAt: '2026-06-17T00:00:00.000Z',
       markdown: '# API Health Standard\n\nUNIQUE_KNOWLEDGE_CONTENT requires contract tests.',
+      // The brief carries standards that apply to the build stage (ADR 0025).
+      stages: ['build'],
     }]
     const knowledgeChunks: KnowledgeChunk[] = [{
       id: 'knowledge-chunk-api-health',

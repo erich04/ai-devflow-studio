@@ -2,7 +2,6 @@ import { redactSensitiveText } from './redaction'
 import type { WorkflowNode } from './domain'
 
 export const AGENT_RUNTIME_CONTRACT_VERSION = 1 as const
-export const AGENT_RUNTIME_ID_MAX_LENGTH = 200
 export const AGENT_RUNTIME_MAX_STEPS = 32
 export const AGENT_RUNTIME_MAX_WALL_TIME_MS = 30 * 60_000
 export const AGENT_RUNTIME_MAX_TOOL_CALLS = 64

@@ -363,11 +363,11 @@ describe('GateCommandPanel', () => {
     [403, '当前身份没有这个审批的权限，没有创建审批。'],
     [503, '审批服务暂时不可用，没有创建审批。'],
   ])('explains a %s creation failure in Chinese', async (status, copy) => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: 'Gate Command was rejected.' }), { status })))
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ message: '审批请求被拒绝。' }), { status })))
     render(<GateCommandPanel {...defaultProps} />)
     fireEvent.change(screen.getByLabelText('审批说明'), { target: { value: 'Reviewed.' } })
     fireEvent.click(screen.getByRole('button', { name: '批准并继续' }))
     expect(await screen.findByText(copy)).toBeInTheDocument()
-    expect(screen.queryByText('Gate Command was rejected.')).not.toBeInTheDocument()
+    expect(screen.queryByText('审批请求被拒绝。')).not.toBeInTheDocument()
   })
 })

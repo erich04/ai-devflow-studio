@@ -35,9 +35,9 @@ import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './useDeskto
 import type { PendingInspectorAction, PendingInspectorActionId } from './node-inspector-view-model'
 
 const prDraftBindingFailureMessage =
-  '当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR Delivery Package'
+  '当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR 交付包'
 const prDraftMissingBindingMessage =
-  '请先将当前 Local Project 绑定到 Team Project，再生成 PR Delivery Package'
+  '请先将当前 Local Project 绑定到 Team Project，再生成 PR 交付包'
 const browserPreviewWorkflowWriteMessage =
   '浏览器预览不执行工作流推进，请在 Electron 应用中继续'
 
@@ -385,7 +385,7 @@ export function useDesktopActions(input: {
 
     const code = pairingCodeDraft.trim()
     if (!code) {
-      setToast('请输入 Web Team Console 生成的 Desktop pairing code')
+      setToast('请输入 Web 控制端生成的配对码')
       return
     }
 
@@ -1126,7 +1126,7 @@ export function useDesktopActions(input: {
       node.stage !== 'pr' ||
       node.status !== 'running'
     ) {
-      setToast('只能为当前 PR 节点生成 PR Delivery Package')
+      setToast('只能为当前 PR 节点生成 PR 交付包')
       return
     }
     if (!desktopApi) {
@@ -1141,7 +1141,7 @@ export function useDesktopActions(input: {
       return
     }
 
-    const pending = startPendingInspectorAction('createPrDraft', selectedRun, node, '正在生成 PR Delivery Package...')
+    const pending = startPendingInspectorAction('createPrDraft', selectedRun, node, '正在生成 PR 交付包...')
     try {
       const result = await desktopApi.createPrDraft({
         runId: selectedRun.id,
@@ -1176,7 +1176,7 @@ export function useDesktopActions(input: {
       node.artifactIds.includes(artifact.id)
     ))
     if (!exactPackage) {
-      setToast('请先生成并附加精确且已脱敏的 PR Delivery Package')
+      setToast('请先生成并附加精确且已脱敏的 PR 交付包')
       return
     }
     if (!desktopApi) {

@@ -1,4 +1,3 @@
-import type { Edge, Node } from '@xyflow/react'
 import {
   type AgentEvent,
   type AgentProviderConfig,
@@ -162,15 +161,6 @@ export type SearchResultItem = {
   documentId?: string | undefined
   eventId?: string | undefined
   referenceId?: string | undefined
-}
-
-export const stageX: Record<NodeStage, number> = {
-  clarify: 0,
-  design: 230,
-  build: 460,
-  test: 690,
-  pr: 920,
-  accept: 1150,
 }
 
 export const stageTone: Record<NodeStage, string> = {
@@ -582,32 +572,6 @@ export function reviewProviderFromMetadata(metadata: ProviderCredentialMetadata)
   }
 }
 
-export function buildFlow(run: WorkflowRun): { nodes: Node<{ workflowNode: WorkflowNode }>[]; edges: Edge[] } {
-  const stageCounts = new Map<NodeStage, number>()
-
-  const nodes: Node<{ workflowNode: WorkflowNode }>[] = run.nodes.map((workflowNode) => {
-    const count = stageCounts.get(workflowNode.stage) ?? 0
-    stageCounts.set(workflowNode.stage, count + 1)
-
-    return {
-      id: workflowNode.id,
-      type: 'appNode',
-      position: { x: stageX[workflowNode.stage], y: 72 + count * 150 },
-      data: { workflowNode },
-    }
-  })
-
-  const edges: Edge[] = run.edges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    animated: edge.kind === 'gate',
-    className: `flow-edge flow-edge--${edge.kind}`,
-  }))
-
-  return { nodes, edges }
-}
-
 export function mergeById<T extends { id: string }>(base: T[], incoming: T[]): T[] {
   const map = new Map(base.map((item) => [item.id, item]))
   for (const item of incoming) {
@@ -815,42 +779,6 @@ export function buildSearchResults(input: {
   }
 
   return results.slice(0, 12)
-}
-
-export function createRunningRun(run: WorkflowRun, nodeId: string): WorkflowRun {
-  const timestamp = new Date().toISOString()
-  const targetIndex = run.nodes.findIndex((node) => node.id === nodeId)
-
-  return {
-    ...run,
-    status: 'testing',
-    currentNodeId: nodeId,
-    updatedAt: timestamp,
-    nodes: run.nodes.map((node, index) => {
-      if (node.id === nodeId) {
-        return { ...node, status: 'running' as const }
-      }
-      if (targetIndex >= 0 && index < targetIndex && node.status === 'running') {
-        return { ...node, status: 'success' as const }
-      }
-      if (targetIndex >= 0 && index > targetIndex && node.status !== 'pending') {
-        return { ...node, status: 'pending' as const }
-      }
-      return node
-    }),
-  }
-}
-
-export function appendArtifactToNode(run: WorkflowRun, nodeId: string, artifactId: string): WorkflowRun {
-  return {
-    ...run,
-    updatedAt: new Date().toISOString(),
-    nodes: run.nodes.map((node) =>
-      node.id === nodeId && !node.artifactIds.includes(artifactId)
-        ? { ...node, artifactIds: [...node.artifactIds, artifactId] }
-        : node,
-    ),
-  }
 }
 
 export function codingTraceMetadataString(
