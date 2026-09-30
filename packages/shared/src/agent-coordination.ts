@@ -392,7 +392,7 @@ export type CoordinationTaskRetryInput = {
   now: string
 }
 
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+function hasExactKeys(value: object, keys: readonly string[]): boolean {
   const actual = Object.keys(value).sort()
   const expected = [...keys].sort()
   return actual.length === expected.length && actual.every((key, index) => key === expected[index])
@@ -673,7 +673,7 @@ export function parseAgentTaskGraph(
   const acceptedRoleIds = new Set(options.acceptedRoleIds)
   if (
     graph.nodes.some((node) =>
-      !hasExactKeys(node as unknown as Record<string, unknown>, [
+      !hasExactKeys(node, [
         'id',
         'roleId',
         'contextDigest',
@@ -712,7 +712,7 @@ export function parseAgentTaskGraph(
   const edgeRelations = graph.edges.map((edge) =>
     `${edge.sourceTaskId}\u0000${edge.targetTaskId}`)
   if (
-    graph.edges.some((edge) => !hasExactKeys(edge as unknown as Record<string, unknown>, [
+    graph.edges.some((edge) => !hasExactKeys(edge, [
       'id',
       'sourceTaskId',
       'targetTaskId',
@@ -1399,7 +1399,7 @@ export function parseCoordinationSessionState(value: unknown): CoordinationSessi
     new Set(taskIds).size !== taskIds.length ||
     taskIds.some((id, index) => index > 0 &&
       String(taskIds[index - 1]).localeCompare(String(id)) >= 0) ||
-    !hasExactKeys(counters as unknown as Record<string, unknown>, counterKeys) ||
+    !hasExactKeys(counters, counterKeys) ||
     !isNonNegativeIntegerAtMost(counters.specialistStarts, state.tasks.length + state.bounds.maxSpecialistRetries) ||
     !isNonNegativeIntegerAtMost(counters.activeSpecialists, state.bounds.maxParallelSpecialists) ||
     !isNonNegativeIntegerAtMost(counters.acceptedHandoffs, state.bounds.maxAcceptedHandoffs) ||
