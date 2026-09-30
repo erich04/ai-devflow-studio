@@ -3,19 +3,19 @@ import type { WorkRequest } from '@ai-devflow/shared'
 const statusLabels: Record<WorkRequest['status'], string> = {
   open: '待领取',
   claim_pending: '待恢复',
-  materialized: '已创建',
+  materialized: '已创建本地任务',
   expired: '已过期',
   cancelled: '已取消',
 }
 
 function actionLabel(workRequest: WorkRequest): string {
   if (workRequest.status === 'claim_pending') {
-    return '恢复本地 Run'
+    return '恢复本地任务'
   }
   if (workRequest.status === 'materialized') {
-    return '打开本地 Run'
+    return '打开本地任务'
   }
-  return '创建本地 Run'
+  return '创建本地任务'
 }
 
 export function WorkRequestInbox({
@@ -36,9 +36,9 @@ export function WorkRequestInbox({
   onMaterialize: (workRequest: WorkRequest) => void
 }) {
   return (
-    <section className="work-request-inbox" aria-label="Work Request Inbox">
+    <section className="work-request-inbox" aria-label="团队请求">
       <div className="section-heading work-request-inbox__heading">
-        <span>Work Requests</span>
+        <span>团队请求</span>
         <button
           className="ghost-button"
           type="button"
@@ -50,13 +50,13 @@ export function WorkRequestInbox({
       </div>
 
       {!isPaired ? (
-        <p className="empty-note">绑定 Team Project 后可领取工作请求</p>
+        <p className="empty-note">连接团队项目后可领取团队请求</p>
       ) : isLoading ? (
-        <p className="empty-note">正在加载 Work Requests…</p>
+        <p className="empty-note">正在读取团队请求…</p>
       ) : error ? (
         <p className="empty-note" role="alert">{error}</p>
       ) : workRequests.length === 0 ? (
-        <p className="empty-note">当前没有可执行的 Work Request</p>
+        <p className="empty-note">当前没有可领取的团队请求</p>
       ) : (
         <div className="work-request-inbox__list">
           {workRequests.map((workRequest) => {

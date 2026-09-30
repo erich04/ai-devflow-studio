@@ -2083,7 +2083,7 @@ describe('App', () => {
     expect(api.listWorkRequests).toHaveBeenCalledWith({
       localProjectId: localProject.id,
     })
-    expect(screen.getByRole('region', { name: 'Work Request Inbox' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '团队请求' })).toBeInTheDocument()
   })
 
   it('materializes a Work Request through the narrow command and selects the returned local Run', async () => {
@@ -2143,7 +2143,7 @@ describe('App', () => {
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: '创建本地 Run：交付可恢复 Inbox',
+        name: '创建本地任务：交付可恢复 Inbox',
       }),
     )
 
@@ -2160,7 +2160,7 @@ describe('App', () => {
       'workRequestId',
     ])
     expect(await screen.findByText('ai/work-request-inbox')).toBeInTheDocument()
-    expect(screen.getByTestId('toast')).toHaveTextContent('Work Request 已创建本地 Run')
+    expect(screen.getByTestId('toast')).toHaveTextContent('已从团队请求创建本地任务')
   })
 
   it('treats a credential for another local project as unbound on the current project', async () => {

@@ -494,7 +494,7 @@ export function App() {
       setSelectedRunId(result.run.id)
       setSelectedNodeId(result.run.currentNodeId)
       setActiveView('workbench')
-      setToast('Work Request 已创建本地 Run')
+      setToast('已从团队请求创建本地任务')
     },
     [
       applyLocalExecutionState,
