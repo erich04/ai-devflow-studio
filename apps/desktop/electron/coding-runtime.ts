@@ -498,14 +498,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     try {
       const learned = await deps.learnCodingRunMemory({ codingRun, evaluationPassed: evaluation.passed })
       if (learned.candidates.length === 0) return
-      const proposed = learned.candidates.filter((candidate) => candidate.outcome !== 'rejected')
-      message = `Proposed ${proposed.length} Memory candidate(s) from this accepted Coding Run; ` +
-        `${learned.promoted.length} promoted by the bounded Coding Run policy, the rest await review.`
+      const saved = learned.candidates.filter((candidate) => candidate.outcome === 'proposed' || candidate.outcome === 'replayed')
+      const awaitingReview = learned.notPromoted.filter((entry) =>
+        entry.reason === 'human_review_required' || entry.reason === 'duplicate').length
+      const skipped = learned.candidates.filter((candidate) => candidate.outcome === 'duplicate').length
+      message = `Saved ${saved.length} Memory candidate(s) from this accepted Coding Run: ` +
+        `${learned.promoted.length} saved as Memory by the bounded Coding Run policy, ${awaitingReview} awaiting review` +
+        `${skipped ? `, ${skipped} already known and not saved again` : ''}.`
       metadata = { memoryLearning: {
         candidates: learned.candidates, promoted: learned.promoted, notPromoted: learned.notPromoted,
       } }
     } catch {
-      message = 'Memory candidates were not created for this Coding Run; the run and its evidence are unaffected.'
+      message = 'Memory learning stopped early for this Coding Run; any candidates already saved stay listed under Memory. The run and its evidence are unaffected.'
       metadata = { memoryLearning: { status: 'failed' } }
     }
     try {

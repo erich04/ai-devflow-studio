@@ -1,27 +1,24 @@
 import { createHash } from 'node:crypto'
 import {
+  CODING_RUN_MEMORY_POLICY_KINDS,
   createCodingRunMemoryCandidate,
   deriveCodingRunMemoryStatements,
   findDuplicateMemory,
   parseTestFailureLocations,
   type AgentMemoryCodingRunStatementKind,
-  type AgentMemoryPromotionAuthority,
   type CodingAgentRun,
   type CodingRunMemoryFacts,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 import { listActiveAgentMemoryRevisions } from './agent-memory-authority.js'
+import { createCodingRunPolicyAuthority } from './coding-run-memory-policy.js'
 
 /**
  * ADR 0024 §4–5: after a Coding Run completes with passing evidence, turn its observable
- * facts into fixed-template Memory candidates, and let one bounded policy promote the
- * low-risk ones. Nothing here calls a model. Every id is derived from the Coding Run, so
- * a retry replays instead of duplicating.
+ * facts into fixed-template Memory candidates, and let one bounded policy save the saved
+ * test command. Nothing here calls a model. Every id is derived from the Coding Run, so a
+ * retry replays instead of duplicating.
  */
-export const CODING_RUN_MEMORY_POLICY_ID = 'desktop-coding-run-memory-policy'
-export const CODING_RUN_MEMORY_POLICY_VERSION = 1
-export const CODING_RUN_MEMORY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000
-const POLICY_PROMOTABLE_KINDS: ReadonlySet<AgentMemoryCodingRunStatementKind> = new Set(['test_command', 'change_map'])
 
 export type CodingRunMemoryLearningStore = Pick<LocalStore,
   | 'getRun'
@@ -41,8 +38,10 @@ export type CodingRunMemoryLearningResult = {
   candidates: Array<{
     candidateId: string
     kind: AgentMemoryCodingRunStatementKind
-    outcome: 'proposed' | 'replayed' | 'rejected'
+    /** `duplicate`: an active Memory already holds this statement, so nothing was saved. */
+    outcome: 'proposed' | 'replayed' | 'rejected' | 'duplicate'
     reason?: string
+    duplicateOf?: string
   }>
   promoted: Array<{ candidateId: string; memoryId: string }>
   notPromoted: Array<{
@@ -121,6 +120,14 @@ export async function learnFromCompletedCodingRun(input: {
   const active = await listActiveAgentMemoryRevisions(store, receipt.scope, clock())
   for (const entry of statements) {
     const candidateId = `agent-memory-candidate-coding-${digest(`${codingRun.id}:${entry.kind}`).slice(0, 32)}`
+    // A statement another active Memory already holds is not saved again: it could never
+    // be promoted and would only crowd out candidates that need review (ADR 0024 §5).
+    const duplicate = findDuplicateMemory(entry.statement, active, (revision) => revision.statement)
+    const duplicateOfOther = duplicate && duplicate.item.sourceCandidateId !== candidateId ? duplicate : null
+    if (duplicateOfOther?.kind === 'exact') {
+      result.candidates.push({ candidateId, kind: entry.kind, outcome: 'duplicate', duplicateOf: duplicateOfOther.item.id })
+      continue
+    }
     const candidate = await createCodingRunMemoryCandidate({
       id: candidateId,
       statement: entry.statement,
@@ -139,37 +146,23 @@ export async function learnFromCompletedCodingRun(input: {
     }
     result.candidates.push({ candidateId, kind: entry.kind, outcome: saved.replayed ? 'replayed' : 'proposed' })
 
-    if (!POLICY_PROMOTABLE_KINDS.has(entry.kind)) {
+    // Titles and model-chosen paths are untrusted; only the saved test command is promoted
+    // without review.
+    if (!CODING_RUN_MEMORY_POLICY_KINDS.includes(entry.kind)) {
       result.notPromoted.push({ candidateId, reason: 'human_review_required' })
       continue
     }
-    const duplicate = findDuplicateMemory(candidate.statement, active, (revision) => revision.statement)
-    if (duplicate) {
-      result.notPromoted.push({ candidateId, reason: 'duplicate', duplicateOf: duplicate.item.id })
+    if (duplicateOfOther) {
+      result.notPromoted.push({ candidateId, reason: 'duplicate', duplicateOf: duplicateOfOther.item.id })
       continue
     }
-    const decidedAt = clock()
     const key = digest(candidateId).slice(0, 32)
-    const unsigned: Omit<AgentMemoryPromotionAuthority, 'authorityDigest'> = {
-      stateVersion: 1,
-      decisionId: `agent-memory-policy-promotion-${key}`,
-      candidateId,
-      candidateContentDigest: candidate.contentDigest,
-      scope: { ...candidate.scope },
-      actorKind: 'policy',
-      actorId: CODING_RUN_MEMORY_POLICY_ID,
-      policyId: CODING_RUN_MEMORY_POLICY_ID,
-      policyVersion: CODING_RUN_MEMORY_POLICY_VERSION,
-      visibility: 'user_project',
-      sensitivity: 'private',
-      retentionClass: 'thirty_days',
-      expiresAt: new Date(Date.parse(decidedAt) + CODING_RUN_MEMORY_RETENTION_MS).toISOString(),
-      decidedAt,
-    }
     const authorization = await store.authorizeAgentMemoryPromotion({
       candidateId,
       memoryId: `agent-memory-coding-${key}`,
-      authority: { ...unsigned, authorityDigest: digest(JSON.stringify(unsigned)) },
+      authority: createCodingRunPolicyAuthority({
+        candidate, decisionId: `agent-memory-policy-promotion-${key}`, decidedAt: clock(),
+      }),
     })
     if (!authorization.authorized) {
       result.notPromoted.push({ candidateId, reason: authorization.reason === 'already_promoted' ? 'already_promoted' : 'rejected' })

@@ -61,7 +61,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 
 - 触发点：Coding Run 进入 `completed`，并且最新规范测试证据为 `passed`（Native 在 `settleCompletedExecutorResult`，OpenCode 在 Change Acceptance 之后）。与 `recordCodingEvaluation` 同一位置。
 - 内容：只用可观察事实和确定性模板，不调用模型。当前模板有三类：
-  - `test_command`：已验证的项目测试命令。
+  - `test_command`：已验证的项目测试命令。语句不带任务标题（`Verified test command for this project: <命令>.`），同一项目的每个任务得到同一句，去重才能识别。
   - `change_map`：需求/节点标题到改动路径的对应。
   - `repair_pattern`：初次测试失败（含解析出的 `file:line`），经修复后通过，以及修复涉及的路径。
 - 每条语句不超过可召回上限，必须满足 `redactSensitiveText` 不改变原文（与现有候选规则一致）。模板实现在 `packages/shared/src/memory-learning.ts`。
@@ -76,7 +76,9 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 ### 5. 晋升：去重与策略晋升
 
 - 去重：晋升和修订前，先规范化语句（NFKC、小写、合并空白、去掉末尾标点）并与同一用户、同一项目的有效记忆（未过期、未删除）比较。规范化后相同的，拒绝晋升（`AgentMemoryDuplicateError` 带已有记忆 id），修订成另一条有效记忆的内容也拒绝。词元 Jaccard 相似度不低于 0.8 的，面板提示修订那条记忆，但不阻止。判定函数在 `memory-learning.ts`；渲染投影的候选带 `duplicateOf`，面板据此提示并禁用完全相同候选的提升按钮。
-- 策略晋升（`actorKind: 'policy'`）只用于 `coding_run` 来源中的 `test_command` 和 `change_map`，并且要求没有去重命中。`repair_pattern` 和所有 Agent Runtime 来源仍需人工晋升。
+- 策略晋升（`actorKind: 'policy'`）只用于 `coding_run` 来源中的 `test_command`，并且要求没有去重命中。`change_map`、`repair_pattern` 和所有 Agent Runtime 来源仍需人工晋升。原计划 `change_map` 也走策略，2026-09-30 审阅后收窄：它带任务标题（Team 需求的标题可能由其他成员撰写）和模型选的路径，不经审阅就会进入之后 30 天的提示；而测试命令是用户自己保存的项目配置。
+- 存储层自己校验策略晋升，不信任调用方：候选必须是 `coding_run` 的 `test_command`，语句等于按当前项目测试命令生成的模板，授权的 `actorId`、`policyId`、版本、`user_project`、`private`、`thirty_days`、`expiresAt = decidedAt + 30 天` 都是固定值，`authorityDigest` 由存储按固定键序重算。规则在 `apps/desktop/electron/coding-run-memory-policy.ts`，学习流程和存储共用。
+- 已有有效记忆完全相同的语句，学习时不再保存为候选（轨迹记为 `duplicate`），否则这类永远不能晋升的候选会一直留在面板里，挤掉需要审阅的候选。
 - 策略晋升的可见性：原计划用 `runtime` 可见性 + `thirty_days`，但按背景中的约束 2，这样的记忆跨运行召回不到，没有学习效果。因此改为 `user_project` + `private` + `thirty_days`：只对同一用户在同一本地项目可见，不进入 Team 摘要，30 天自动过期，可随时删除。这比原计划的范围更宽，2026-09-30 确认采用。
 - 策略标识为 `desktop-coding-run-memory-policy` v1，审计照常记录 `promotion_actor_kind = 'policy'`。
 
@@ -112,7 +114,8 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 | 第 4 节 模板与去重判定（共享纯函数） | 已实现，有单元测试 |
 | 第 4 节 `coding_run` 来源、v37 迁移、存储校验、完成时生成候选（Native、OpenCode） | 已实现，有测试；只用模拟模型验证 |
 | 第 4 节 项目范围的记忆面板与生命周期 IPC | 已实现，有测试 |
-| 第 5 节 人工晋升与修订前去重、策略晋升 | 已实现，有测试 |
+| 第 5 节 人工晋升与修订前去重、策略晋升（仅 `test_command`，存储层校验） | 已实现，有测试 |
+| 第 5 节 撤销待审候选 | 未做：候选目前没有"忽略"操作，也不随记忆删除而清除 |
 | 第 6 节 `file:line` 解析（共享纯函数） | 已实现，有单元测试 |
 | 第 6 节 repair 上下文接入执行器 | 已实现，有测试（`buildNativeCodingV2RepairPrompt`）；真实 DeepSeek 触发一次，修复后测试通过 |
 | 第 6 节 工具结果占位 | 已实现，有测试。本轮 42,000 字符观察上限和 30,000 字符提示上限都先降级再丢弃 |

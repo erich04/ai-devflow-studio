@@ -152,6 +152,7 @@ export function createAgentMemoryHumanActions(
           ...unsignedAuthority,
           authorityDigest: digestAuthority(unsignedAuthority),
         }
+        if (!await access.stillCurrent()) reject()
         const authorization = await input.store.authorizeAgentMemoryPromotion({
           candidateId: candidate.id,
           memoryId,
@@ -228,6 +229,7 @@ export function createAgentMemoryHumanActions(
           ...unsignedAuthority,
           authorityDigest: digestAuthority(unsignedAuthority),
         }
+        if (!await access.stillCurrent()) reject()
         const authorization = await input.store.authorizeAgentMemoryRevision({
           memoryId: currentRevision.id,
           expectedHeadVersion: command.expectedHeadVersion,
@@ -275,6 +277,7 @@ export function createAgentMemoryHumanActions(
           currentRevision.provenanceDigest !== command.expectedProvenanceDigest
         ) reject()
 
+        if (!await access.stillCurrent()) reject()
         let tombstone: AgentMemoryTombstone
         if (existingTombstone === null) {
           if (head.status !== 'active') reject()

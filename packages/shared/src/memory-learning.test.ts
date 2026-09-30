@@ -49,7 +49,7 @@ describe('Coding Run Memory statements', () => {
     expect(deriveCodingRunMemoryStatements(facts)).toEqual([
       {
         kind: 'test_command',
-        statement: 'Verified test command for this project: npm test (passed after the accepted change for "Filter tasks").',
+        statement: 'Verified test command for this project: npm test.',
       },
       {
         kind: 'change_map',

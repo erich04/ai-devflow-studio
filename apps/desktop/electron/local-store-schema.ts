@@ -2699,7 +2699,7 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       check (json_extract(json, '$.scope.projectId') is team_project_id),
       check (json_extract(json, '$.scope.userId') = user_id),
       check (json_extract(json, '$.scope.sessionId') = session_id),
-      check (json_extract(json, '$.provenance.kind') = provenance_kind),
+      check (json_extract(json, '$.provenance.kind') is provenance_kind),
       check (json_extract(json, '$.provenance.runtimeId') is runtime_id),
       check (json_extract(json, '$.provenance.actionId') is action_id),
       check (json_extract(json, '$.provenance.checkpointVersion') is checkpoint_version),

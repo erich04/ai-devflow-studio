@@ -438,7 +438,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
       .find((event) => event.metadata?.workflowEvaluation)?.metadata?.workflowEvaluation)
       .toMatchObject({ passed: true, failures: [], evidenceDigest: expect.any(String) })
     // ADR 0024 §4–5: the accepted, test-passing run proposes fixed-template candidates and
-    // the bounded policy promotes the low-risk ones, traced on the Coding Run.
+    // the bounded policy saves the test command, traced on the Coding Run.
     const learnedCandidates = (await store.listAgentMemoryCandidates(project.id))
       .filter((entry) => entry.provenance.kind === 'coding_run')
     expect(learnedCandidates.map((entry) => entry.provenance.kind === 'coding_run' && entry.provenance.statementKind).sort())
@@ -448,7 +448,8 @@ describe('DevFlow Native Executor v2 runtime', () => {
       .toBe('Change map: "Native v2 execution" (Implement locally) was implemented by changing src/message.ts.')
     const learningTrace = (await store.listCodingAgentEvents(completed!.id))
       .find((event) => event.metadata?.memoryLearning)?.metadata?.memoryLearning as { promoted: unknown[] } | undefined
-    expect(learningTrace?.promoted).toHaveLength(2)
+    // Only the saved test command is saved without review (ADR 0024 §5).
+    expect(learningTrace?.promoted).toHaveLength(1)
     expect(completed).toMatchObject({
       status: 'completed', changedPaths: ['src/message.ts'],
       runtimeCostSummary: {

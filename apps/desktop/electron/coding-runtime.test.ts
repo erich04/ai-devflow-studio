@@ -297,10 +297,14 @@ describe('CodingRuntime', () => {
       patch: 'diff --git a/devflow-opencode-smoke.txt b/devflow-opencode-smoke.txt\n--- /dev/null\n+++ b/devflow-opencode-smoke.txt\n@@ -0,0 +1 @@\n+ok\n',
     }))
     const completeWorkflowBuild = vi.fn(async () => undefined)
-    const learnCodingRunMemory = vi.fn(async () => ({
-      candidates: [{ candidateId: 'agent-memory-candidate-coding-1', kind: 'change_map' as const, outcome: 'proposed' as const }],
-      promoted: [], notPromoted: [],
-    }))
+    // One variant makes learning throw: the run must still complete and the build still advance.
+    const learnCodingRunMemory = vi.fn(async () => {
+      if (requireExecutionAuthorization) throw new Error('Memory store unavailable')
+      return {
+        candidates: [{ candidateId: 'agent-memory-candidate-coding-1', kind: 'change_map' as const, outcome: 'proposed' as const }],
+        promoted: [], notPromoted: [],
+      }
+    })
     const runtimeDependencies = {
       store,
       engine,
@@ -392,8 +396,12 @@ describe('CodingRuntime', () => {
     expect(learnCodingRunMemory).toHaveBeenCalledWith({
       codingRun: expect.objectContaining({ id: started.codingRun.id, status: 'completed' }), evaluationPassed: true,
     })
-    expect(store.codingEvents.some((event) => event.codingRunId === started.codingRun.id &&
-      event.metadata?.memoryLearning)).toBe(true)
+    const learningTrace = store.codingEvents.find((event) => event.codingRunId === started.codingRun.id &&
+      event.metadata?.memoryLearning)?.metadata?.memoryLearning
+    expect(learningTrace).toEqual(requireExecutionAuthorization
+      ? { status: 'failed' }
+      : expect.objectContaining({ promoted: [] }))
+    expect(completeWorkflowBuild).toHaveBeenCalledTimes(1)
     expect(store.codingRuns.at(-1)?.budgetDecision).toEqual(trustedBudgetDecision)
     expect(store.codingRuns.at(-1)?.runtimeCostSummary).toBeUndefined()
     expect(store.codingRuns.at(-1)?.budgetDecision?.reason).toContain('billing is opaque')

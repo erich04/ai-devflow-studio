@@ -1157,7 +1157,7 @@ describe('Coding Run Memory candidate contract (ADR 0024 §4)', () => {
   }
   const input = {
     id: 'agent-memory-candidate-coding-1',
-    statement: 'Verified test command for this project: npm test (passed after the accepted change for "Filter").',
+    statement: 'Verified test command for this project: npm test.',
     scope, provenance, createdAt: '2026-09-30T00:00:00.000Z',
   }
 

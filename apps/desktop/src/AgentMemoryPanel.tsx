@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BrainCircuit, ShieldAlert } from 'lucide-react'
 import {
+  CODING_RUN_MEMORY_POLICY_ID,
   normalizeMemoryStatement,
   parseAgentMemoryRendererSnapshot,
   type AgentMemoryRendererSnapshot,
@@ -19,9 +20,6 @@ function scopeLabel(scope: AgentMemoryRendererScope) {
     ? `Team ${scope.organizationId}/${scope.projectId} · 用户 ${scope.userId}`
     : `本地 ${scope.localProjectId} · 用户 ${scope.userId}`
 }
-
-/** Policy that saves low-risk Coding Run facts (ADR 0024 §5); mirrors Electron Main. */
-const CODING_RUN_MEMORY_POLICY_ID = 'desktop-coding-run-memory-policy'
 
 /** Another active Memory whose statement equals `statement` after normalization. */
 function revisionDuplicate(snapshot: AgentMemoryRendererSnapshot, memoryId: string, statement: string): string | null {
@@ -366,7 +364,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                   {memory.promotionPolicyId === CODING_RUN_MEMORY_POLICY_ID ? (
                     <div className="compact-row">
                       <span>保存方式</span>
-                      <strong>开发任务测试通过后由策略自动保存，仅本人可见，可随时删除</strong>
+                      <strong>开发任务测试通过后由策略自动保存，仅本人可见，30 天后过期；删除后不再召回</strong>
                     </div>
                   ) : null}
                   <div className="compact-row">

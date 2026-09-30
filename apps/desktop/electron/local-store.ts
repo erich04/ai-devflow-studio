@@ -2,6 +2,7 @@ import type { ModelCallSettlement } from '@ai-devflow/shared'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
+import { isAllowedCodingRunPolicyPromotion } from './coding-run-memory-policy.js'
 import { resolveRemoteApprovalMaterial } from './gate-command-material.js'
 import type { RecordAgentReviewFeedbackInput } from '@ai-devflow/shared'
 import type { CodingProviderCallTrace } from './coding-engine.js'
@@ -4706,6 +4707,17 @@ class SqlJsLocalStore implements LocalStore {
         authority: input.authority,
       })
     } catch {
+      return { authorized: false, reason: 'invalid_input' }
+    }
+    // ADR 0024 §5: a non-human promotion must be exactly the bounded Coding Run policy.
+    if (
+      input.authority.actorKind === 'policy' &&
+      !isAllowedCodingRunPolicyPromotion({
+        candidate,
+        authority: input.authority,
+        project: (await this.listProjects()).find((project) => project.id === candidate.scope.localProjectId),
+      })
+    ) {
       return { authorized: false, reason: 'invalid_input' }
     }
     const pairing = candidate.scope.kind === 'team'

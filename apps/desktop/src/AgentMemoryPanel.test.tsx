@@ -272,7 +272,7 @@ describe('AgentMemoryPanel', () => {
     expect(listAgentRuntimes).not.toHaveBeenCalled()
     expect(screen.getByText('与已有记忆相同')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '提升为用户项目私有 Memory' })).toBeDisabled()
-    expect(screen.getByText('开发任务测试通过后由策略自动保存，仅本人可见，可随时删除')).toBeInTheDocument()
+    expect(screen.getByText('开发任务测试通过后由策略自动保存，仅本人可见，30 天后过期；删除后不再召回')).toBeInTheDocument()
   })
 
   it('blocks a revision that would repeat another active Memory', async () => {
