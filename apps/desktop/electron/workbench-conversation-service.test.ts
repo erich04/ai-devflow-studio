@@ -9,6 +9,7 @@ import { WorkbenchConversationService } from './workbench-conversation-service'
 import { parseConversationCommand } from './workbench-conversation-contract'
 import { readWorkbenchRepository } from './workbench-repository'
 import { ConversationExecutorError } from './conversation-executor'
+import { indexKnowledgeSources } from '@ai-devflow/shared'
 
 const projectId = 'local-conversations'
 const created = createWorkflowRunFromRequest({ runId: 'conversation-flow', title: '清除已完成任务', request: '清理已完成任务并持久化结果', projectId, creatorId: 'u-test', branchName: 'ai/test', now: '2026-09-16T10:00:00.000Z' })
@@ -467,6 +468,43 @@ describe('unified conversation execution and boundaries', () => {
     expect(resumed.status).toBe('idle')
     expect(resumed.messages.find((item) => item.id === question.id)?.question?.answeredAt).toBeTruthy()
     expect(calls[3]).toContain('需要撤销吗')
+  })
+  it('lists and reads the knowledge directory with knowledge_list and knowledge_read (knowledge-context K3)', async () => {
+    let step = 0
+    const outputs = [
+      { tool: { name: 'knowledge_list', args: { stage: 'build' } } },
+      { tool: { name: 'knowledge_read', args: { path: 'docs/knowledge/build.md' } } },
+      { tool: { name: 'knowledge_read', args: { path: 'tasks.ts' } } },
+      { text: '构建规范要求保留任务顺序。', citationIds: ['source-2'] },
+    ]
+    const calls: string[] = []
+    const systems: string[] = []
+    const provider = { ...createFakeAgentProvider(), completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => {
+      calls.push(input.userPrompt)
+      systems.push(input.systemPrompt)
+      return { value: outputs[step++]! }
+    }) }
+    const index = indexKnowledgeSources([
+      { sourcePath: 'docs/knowledge/build.md', markdown: '---\ntitle: Build rule\nstages: [build]\ngate: [build]\n---\n# Build rule\nBUILD_RULE_BODY keep task order.', updatedAt: '2026-09-30T00:00:00.000Z' },
+      { sourcePath: 'docs/knowledge/pr.md', markdown: '---\ntitle: PR rule\nstages: [pr]\n---\n# PR rule\nPR_RULE_BODY', updatedAt: '2026-09-30T00:00:00.000Z' },
+    ])
+    const service = new WorkbenchConversationService({
+      store, resolveProvider: async () => provider, changed: vi.fn(),
+      loadKnowledge: async (id) => ({ projectId: id, contentHash: 'knowledge-hash', indexedAt: '2026-09-30T00:00:00.000Z', truncated: false, warnings: [],
+        documents: index.documents, chunks: index.chunks, entities: [], relations: [], knowledgeRoot: 'docs/knowledge', projectInstructions: null }),
+    })
+    const result = await send(service, await create(service), '构建阶段有什么规范？')
+
+    expect(systems[0]).toContain('knowledge_list({stage?,offset?})')
+    expect(systems[0]).toContain('knowledge_read({path,offset?,limit?})')
+    expect(systems[0]).not.toContain('knowledge({query})')
+    const listed = JSON.parse(calls[1]!).toolObservations.at(-1)
+    expect(listed).toMatchObject({ name: 'knowledge_list', result: { stage: 'build', totalDocuments: 1, documents: [expect.objectContaining({ path: 'docs/knowledge/build.md', gateStages: ['build'] })] } })
+    expect(calls[1]).not.toContain('PR_RULE_BODY')
+    expect(calls[2]).toContain('BUILD_RULE_BODY keep task order.')
+    // Paths outside the directory are refused with a pointer to repo_read.
+    expect(JSON.parse(calls[3]!).toolObservations.at(-1).result.error).toContain('repo_read')
+    expect(result.status).toBe('idle')
   })
 
   it.each([

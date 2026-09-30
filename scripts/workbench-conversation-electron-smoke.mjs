@@ -19,6 +19,8 @@ const git = (args) => promisify(execFile)('git', args, { cwd: repository })
 await writeFile(path.join(repository, 'package.json'), JSON.stringify({ name: 'task-list', version: '1.0.0', scripts: { test: 'node --test' } }))
 await writeFile(path.join(repository, 'tasks.js'), 'export function clearDone(tasks) { return tasks.filter(task => !task.done) }\n')
 await writeFile(path.join(repository, 'README.md'), '# 中文任务清单\n\n清理已完成任务，保留未完成任务。\n')
+await mkdir(path.join(repository, 'docs', 'knowledge'), { recursive: true })
+await writeFile(path.join(repository, 'docs', 'knowledge', 'cleanup.md'), '---\ntitle: 任务清理规范\ncategory: development_standard\nstages: [clarify, build]\nsummary: 清理规则。\n---\n# 任务清理规范\n\n清理只删除已完成任务，未完成任务的顺序保持不变。\n')
 await git(['init', '-b', 'main']); await git(['config', 'user.email', 'smoke@example.invalid']); await git(['config', 'user.name', 'DevFlow Smoke'])
 await git(['add', '.']); await git(['-c', 'commit.gpgsign=false', 'commit', '-m', 'Test fixture'])
 const before = (await git(['status', '--porcelain'])).stdout
@@ -95,9 +97,18 @@ const server = createServer(async (request, response) => {
       ? { tool: { name: 'node', args: { runId: run.id, nodeId: run.nodes[index].id } } }
       : { text: `已检查全部 ${run.nodes.length} 个节点，覆盖需求、方案、开发、测试、交付和验收。当前在需求澄清；下游尚未开始。`, actions: run.nodes.map((node) => ({ label: `定位：${node.title}`, runId: run.id, nodeId: node.id, section: '状态' })) }
   } else if (user.includes('调查代码')) {
+    // knowledge-context K3: list the knowledge directory, then read one standard by path.
+    if (observations.length === 2) {
+      expect(observations[1]).toMatchObject({ name: 'knowledge_list', result: { knowledgeRoot: 'docs/knowledge', totalDocuments: 1, documents: [expect.objectContaining({ path: 'docs/knowledge/cleanup.md', stages: ['clarify', 'build'] })] } })
+    }
+    if (observations.length === 3) {
+      expect(observations[2]).toMatchObject({ name: 'knowledge_read', result: { kind: 'knowledge_document', path: 'docs/knowledge/cleanup.md' } })
+      expect(observations[2].result.content).toContain('清理只删除已完成任务')
+    }
     value = observations.length === 0 ? { tool: { name: 'repo_read', args: { path: 'tasks.js' } } }
-      : observations.length === 1 ? { tool: { name: 'knowledge', args: { query: '清理' } } }
-      : { text: '代码使用 filter 保留未完成任务；项目文档要求一致。还有一个产品行为需要确认。', question: { prompt: '清理之后需要支持撤销吗？', options: ['需要撤销', '不需要撤销'] }, citationIds: ['source-1', 'source-2'] }
+      : observations.length === 1 ? { tool: { name: 'knowledge_list', args: { stage: 'clarify' } } }
+      : observations.length === 2 ? { tool: { name: 'knowledge_read', args: { path: 'docs/knowledge/cleanup.md' } } }
+      : { text: '代码使用 filter 保留未完成任务；项目文档要求一致。还有一个产品行为需要确认。', question: { prompt: '清理之后需要支持撤销吗？', options: ['需要撤销', '不需要撤销'] }, citationIds: ['source-1', 'source-3'] }
   } else if (user.includes('不需要撤销')) {
     value = { text: '已记录：不增加撤销操作。可以将这份提案保存到需求节点供后续流程使用。', question: { purpose: 'save_proposal', prompt: '将这份草稿保存到需求节点吗？', options: ['保存', '继续讨论'] }, draft: { runId: run.id, nodeId: run.nodes[0].id, title: '清理已完成任务', content: '清理所有已完成任务，保留未完成任务；刷新保留清理结果；没有已完成任务时按钮禁用；本次不增加撤销功能。' } }
   } else if (user.includes('查询共享提案')) {

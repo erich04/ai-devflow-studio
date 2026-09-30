@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type ServerResponse } from 'node:http'
 import { redactSensitiveText } from '@ai-devflow/shared'
 
-const fields: Record<string, { required: string[]; optional: string[]; description: string }> = {
+const fields: Record<string, { required: string[]; optional: string[]; description: string; listed?: false }> = {
   workflow: { required: [], optional: ['runId', 'query', 'offset'], description: '查询当前项目的真实流程与节点；支持分页。' },
   node: { required: ['runId', 'nodeId'], optional: [], description: '查询节点的执行状态、产物、测试、交付回执与 Gate 条件。' },
   artifact: { required: ['runId', 'artifactId'], optional: ['offset', 'limit'], description: '分页读取当前项目某个 Run 的产物正文；摘要不代表全文。' },
@@ -10,7 +10,10 @@ const fields: Record<string, { required: string[]; optional: string[]; descripti
   repo_list: { required: [], optional: ['path'], description: '列出当前项目允许读取的目录；只接受仓库相对路径。' },
   repo_read: { required: ['path'], optional: [], description: '读取当前项目的普通文本文件，拒绝敏感文件与符号链接。' },
   repo_search: { required: ['query'], optional: ['path'], description: '在当前项目允许范围内搜索文本；搜索有明确边界。' },
-  knowledge: { required: ['query'], optional: [], description: '检索当前项目已配置的知识；知识不是 Gate 批准。' },
+  knowledge_list: { required: [], optional: ['stage', 'offset'], description: '列出项目知识目录中的规范（适用阶段、Gate 依据、摘要）与项目说明文件；知识不是 Gate 批准。' },
+  knowledge_read: { required: ['path'], optional: ['offset', 'limit'], description: '分页阅读知识目录中的一篇文档或仓库根目录的项目说明。' },
+  // Superseded by knowledge_list/knowledge_read (knowledge-context K3); callable, not listed.
+  knowledge: { required: ['query'], optional: [], description: '检索当前项目已配置的知识；知识不是 Gate 批准。', listed: false },
 }
 
 function object(value: unknown): Record<string, unknown> | undefined {
@@ -63,7 +66,7 @@ export async function createWorkbenchMcpBridge(input: {
       }
       if (payload.method === 'ping') { result({}); return }
       if (payload.method === 'tools/list') {
-        result({ tools: Object.entries(fields).map(([name, definition]) => ({ name, description: definition.description,
+        result({ tools: Object.entries(fields).filter(([, definition]) => definition.listed !== false).map(([name, definition]) => ({ name, description: definition.description,
           inputSchema: { type: 'object', additionalProperties: false, required: definition.required,
             properties: Object.fromEntries([...definition.required, ...definition.optional].map((key) => [key,
               key === 'offset' ? { type: 'integer', minimum: 0 } : key === 'limit' ? { type: 'integer', minimum: 1, maximum: 18000 } : { type: 'string', maxLength: 500 }])) },
