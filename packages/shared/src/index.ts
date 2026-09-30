@@ -42,6 +42,7 @@ export * from './theme'
 export * from './workflow'
 export * from './workflow-transition'
 export * from './workflow-agent'
+export * from './knowledge-review-local-agent'
 export * from './workflow-context-projection'
 export * from './work-authority'
 

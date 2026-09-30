@@ -24,6 +24,7 @@ import type {
   KnowledgeReference,
   ProjectInstructionsSnapshot,
   KnowledgeDocument,
+  StageAgentExecutorKind,
   TestEvidence,
   WorkflowNode,
   WorkflowRun,
@@ -57,6 +58,8 @@ export type KnowledgeReviewProviderOutput = {
   suggestedTests: string[]
   confidence: number
   usage?: AgentProviderUsage
+  /** Read-only local Agent only: repository facts with digested citations; never Gate evidence. */
+  repositoryFindings?: ClarificationRepositoryFindings
   policyFindings?: Array<
     Pick<AgentPolicyFinding, 'category' | 'severity' | 'summary'> & {
       evidenceIds?: string[]
@@ -239,13 +242,20 @@ export function describeAgentProviderFailure(error: unknown): string {
     cancelled_by_user: '已停止本次模型调用，未保存新报告。',
     response_too_large: '响应超过安全接收容量，未保存不完整报告。',
     http_429: '模型服务限流，请稍后重试。',
+    local_agent_unavailable: 'OpenCode 审查未能完成，未保存本次报告。请检查本机 OpenCode 与所选 Provider 后重试。',
+    local_agent_permission_requested: 'OpenCode 审查请求了只读之外的权限，已停止，未保存本次报告。',
+    local_agent_repository_changed: 'OpenCode 审查期间仓库发生了变化，未保存本次报告。请在仓库稳定后重新审查。',
+    local_agent_repository_unavailable: '所选项目不是可读取的 Git 仓库根目录，OpenCode 审查没有开始。',
+    local_agent_invalid_findings: 'OpenCode 返回的仓库引用无法核对（路径越界、文件不存在或行号超出范围），未保存本次报告。',
+    local_agent_tool_limit: 'OpenCode 审查的工具调用或输出超过上限，未保存本次报告。',
   }
   return descriptions[error.sanitizedCause] ?? descriptions[error.code] ?? `模型调用失败（${error.code}${error.httpStatus ? `，HTTP ${error.httpStatus}` : ''}），未保存本次报告。`
 }
 
-export function recordedAgentAttemptUsage(input: EstimateAgentTokenUsageInput & { providerId: string }): AgentTokenUsage {
-  const usage = estimateAgentTokenUsage(input)
-  return { ...usage, executorKind: 'direct-provider', providerId: input.providerId,
+export function recordedAgentAttemptUsage(input: EstimateAgentTokenUsageInput & { providerId: string; executorKind?: StageAgentExecutorKind }): AgentTokenUsage {
+  const { executorKind = 'direct-provider', ...estimateInput } = input
+  const usage = estimateAgentTokenUsage(estimateInput)
+  return { ...usage, executorKind, providerId: input.providerId,
     ...(input.providerUsage?.inputTokens !== undefined && input.providerUsage.outputTokens !== undefined ? { usageStatus: 'complete' as const } : {
       inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: null,
       source: 'unknown' as const, usageStatus: 'unknown' as const, costStatus: 'unknown' as const,
@@ -269,6 +279,11 @@ export type AgentProvider = {
   effectiveThinking?: EffectiveProviderThinking
   reviewOutputLimit?: number
   defaultReviewOutputTokens?: number
+  /**
+   * How `reviewKnowledge` runs: one direct model call (default), or a read-only local Agent
+   * that may inspect the repository before answering (ADR 0025 L2).
+   */
+  executorKind?: StageAgentExecutorKind
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
   completeStructuredJson?: (input: {
@@ -1822,9 +1837,10 @@ export async function runKnowledgeReviewAgent({
   const createdAt = now()
   const reviewId = createId('agent-review', `${request.id}-${request.runtime}`)
   const prompt = createKnowledgeReviewPrompt(context)
+  const executorKind: StageAgentExecutorKind = provider.executorKind ?? 'direct-provider'
   const attemptBase = { id: createId('agent-token-usage', reviewId), runId: request.runId, nodeId: request.nodeId,
     userId: request.requestedBy, projectId: request.projectId, provider: toProviderName(provider.id), providerId: provider.id,
-    model: provider.model, prompt: '', completion: '', timestamp: createdAt }
+    model: provider.model, prompt: '', completion: '', timestamp: createdAt, executorKind }
   let providerOutput: KnowledgeReviewProviderOutput
   if (signal?.aborted) throw new AgentProviderRequestError({ code: 'cancelled_by_user', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false, sanitizedCause: 'caller_abort_signal' })
   try { providerOutput = await provider.reviewKnowledge({ request, context, prompt, ...(signal ? { signal } : {}) }) }
@@ -1865,7 +1881,13 @@ export async function runKnowledgeReviewAgent({
     confidence: providerOutput.confidence,
     gateAdvisory,
     createdAt,
+    ...(executorKind === 'local-agent' ? { executorKind } : {}),
+    // Repository facts are only accepted from an executor that can read the repository.
+    ...(executorKind === 'local-agent' && providerOutput.repositoryFindings
+      ? { repositoryFindings: providerOutput.repositoryFindings }
+      : {}),
   }
+  const citationCount = review.repositoryFindings?.citations.length ?? 0
   const trace: AgentTrace = {
     id: createId('agent-trace', reviewId),
     runId: request.runId,
@@ -1894,8 +1916,10 @@ export async function runKnowledgeReviewAgent({
         reviewId,
         3,
         'provider_call',
-        `Call ${provider.name}`,
-        `${providerOutput.model} returned structured review output.${provider.effectiveThinking ? ` ${describeProviderThinking(provider.effectiveThinking)}.` : ''}`,
+        executorKind === 'local-agent' ? `Run ${provider.name} (read-only repository access)` : `Call ${provider.name}`,
+        executorKind === 'local-agent'
+          ? `${providerOutput.model} returned structured review output; ${citationCount} repository citation(s) verified against local bytes.`
+          : `${providerOutput.model} returned structured review output.${provider.effectiveThinking ? ` ${describeProviderThinking(provider.effectiveThinking)}.` : ''}`,
         createdAt,
       ),
       createTraceStep(
@@ -1909,7 +1933,7 @@ export async function runKnowledgeReviewAgent({
     ],
   }
 
-  return { review, trace, tokenUsage: { ...tokenUsage, executorKind: 'direct-provider', providerId: provider.id } }
+  return { review, trace, tokenUsage: { ...tokenUsage, executorKind, providerId: provider.id } }
 }
 
 export function createAgentReviewArtifacts(result: AgentReviewExecutionResult): {
@@ -1998,6 +2022,30 @@ export function createAgentReviewArtifacts(result: AgentReviewExecutionResult): 
   return { artifact, event, gateAdvisory: result.review.gateAdvisory }
 }
 
+/**
+ * The review schema every executor must satisfy before a report is saved. Model identity and
+ * usage come from the caller, never from model-authored JSON.
+ */
+export function normalizeKnowledgeReviewProviderOutput(
+  value: unknown,
+  meta: { model: string; usage?: AgentProviderUsage; responseMetadata?: AgentProviderResponseMetadata },
+): KnowledgeReviewProviderOutput {
+  const parsed = (value && typeof value === 'object' && !Array.isArray(value) ? value : {}) as Partial<KnowledgeReviewProviderOutput>
+  if (!providerValueToString(parsed.conclusion).trim() || !providerValueToString(parsed.summary).trim() ||
+      !Array.isArray(parsed.risks) || !Array.isArray(parsed.missingEvidence) || !Array.isArray(parsed.suggestedTests) ||
+      typeof parsed.confidence !== 'number' || parsed.confidence < 0 || parsed.confidence > 1) {
+    throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_review_schema', deliveryState: 'response_received',
+      billingState: meta.usage ? 'confirmed' : 'unknown', retryable: true,
+      ...(meta.usage ? { usage: meta.usage } : {}), ...(meta.responseMetadata ? { responseMetadata: meta.responseMetadata } : {}) })
+  }
+  const policyFindings = normalizeProviderPolicyFindings(parsed.policyFindings)
+  return { model: meta.model, conclusion: providerValueToString(parsed.conclusion), summary: providerValueToString(parsed.summary),
+    risks: providerValueToStringList(parsed.risks), missingEvidence: providerValueToStringList(parsed.missingEvidence),
+    missingEvidenceDetails: parsed.missingEvidenceDetails, suggestedTests: providerValueToStringList(parsed.suggestedTests), confidence: parsed.confidence,
+    ...(policyFindings ? { policyFindings } : {}), ...(meta.usage ? { usage: meta.usage } : {}),
+  }
+}
+
 export function reviewProviderCapabilities(input: { id?: string; model: string; baseUrl?: string; thinking?: ProviderThinkingConfiguration | undefined }): Pick<AgentProvider, 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking'> {
   const effectiveThinking = resolveProviderThinking(input)
   const deepSeek = isDeepSeekUsageContext({ providerId: input.id ?? '', ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}) })
@@ -2063,19 +2111,13 @@ export function createOpenAiCompatibleAgentProvider({
         ...(reviewOutputLimit === undefined ? {} : { maxOutputTokens: reviewOutputLimit }),
         ...(signal ? { signal } : {}),
       })
-      const parsed = result.value as unknown as KnowledgeReviewProviderOutput
-      if (!providerValueToString(parsed.conclusion).trim() || !providerValueToString(parsed.summary).trim() ||
-          !Array.isArray(parsed.risks) || !Array.isArray(parsed.missingEvidence) || !Array.isArray(parsed.suggestedTests) ||
-          typeof parsed.confidence !== 'number' || parsed.confidence < 0 || parsed.confidence > 1) {
-        throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_review_schema', deliveryState: 'response_received',
-          billingState: result.usage ? 'confirmed' : 'unknown', retryable: true,
-          ...(result.usage ? { usage: result.usage } : {}), ...(result.responseMetadata ? { responseMetadata: result.responseMetadata } : {}) })
-      }
-      const policyFindings = normalizeProviderPolicyFindings(parsed.policyFindings)
-      return { model, effectiveThinking, conclusion: providerValueToString(parsed.conclusion), summary: providerValueToString(parsed.summary),
-        risks: providerValueToStringList(parsed.risks), missingEvidence: providerValueToStringList(parsed.missingEvidence),
-        missingEvidenceDetails: parsed.missingEvidenceDetails, suggestedTests: providerValueToStringList(parsed.suggestedTests), confidence: parsed.confidence,
-        ...(policyFindings ? { policyFindings } : {}), ...(result.usage ? { usage: result.usage } : {}),
+      return {
+        ...normalizeKnowledgeReviewProviderOutput(result.value, {
+          model,
+          ...(result.usage ? { usage: result.usage } : {}),
+          ...(result.responseMetadata ? { responseMetadata: result.responseMetadata } : {}),
+        }),
+        effectiveThinking,
         ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
       }
     },
