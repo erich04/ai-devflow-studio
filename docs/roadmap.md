@@ -82,7 +82,7 @@ DevFlow Studio 是**小团队自行托管的 AI 开发流程工作台**。外层
 | V1.5 产品契约 | `docs/product/prd/v1.5-github-delivery-prd.md` |
 | V1.5 执行历史 | `docs/plans/v1.5-github-delivery.md` 及四份不可变发布证据 |
 | 已完成版本线 | 1.x 受治理自托管交付 |
-| 发布后的修复 | 草稿 PR #178 验证进行中；未宣称合并或发布 |
+| 发布后的修复 | #171–#177 的修复经 #178 合入；工作区改造 S0–S6 经 #183–#190 合入；均未形成新发布 |
 | 已完成 2.x 里程碑 | V2.0 原生 Agent 运行时基础；V2.1 经评估检索与记忆；V2.2 多 Agent 与执行租户隔离 |
 | 完成证据 | `docs/releases/v2.0.0/`；`docs/releases/v2.1.0/`；`docs/releases/v2.2.0/` |
 | 当前 2.x 状态 | V2.3 已发布；后续修复逐项验证 |
@@ -141,7 +141,7 @@ V2.0、V2.1 和 V2.2 均已完成，有限的已接受 2.x 线已结束。候选
 
 这些是里程碑完成证据；另行发布的 `v2.2.0` 使用 `docs/releases/v2.2.0/release-*` 及 `docs/plans/v2.2-release-signoff.md`，不重写任何记录。
 
-V2.3 已按 `docs/plans/v2.3-release-signoff.md` 和 `docs/guides/devflow-studio-v2.3-walkthrough.md` 完成独立发布，证据不重写。当前优先级是逐项修复并验证已报告的工作台布局、节点内容层级、会话用量、长时运行及中文文档问题，以真实仓库完整流程补齐证据，再关闭实质解决的 Issue。草稿 PR #178 尚未合并；#135 正式 Developer ID 签名安装验证按负责人决定保留待验证。此维护工作不新增多 Agent/公共 SaaS 范围，也不自动形成新发布。
+V2.3 已按 `docs/plans/v2.3-release-signoff.md` 和 `docs/guides/devflow-studio-v2.3-walkthrough.md` 完成独立发布，证据不重写。当前优先级是逐项修复并验证已报告的工作台布局、节点内容层级、会话用量、长时运行及中文文档问题，以真实仓库完整流程补齐证据，再关闭实质解决的 Issue。上述修复已经 #178 合入；随后按[任务中心化工作区改造方案](plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md)完成 S0–S6（#183–#190），各批次记录见 `docs/validation/workspace-redesign-s*-20260928.md`。#135 正式 Developer ID 签名安装验证按负责人决定保留待验证。此维护工作不新增多 Agent/公共 SaaS 范围，也不自动形成新发布。
 
 V2.2 契约集已冻结于：
 
@@ -581,7 +581,7 @@ V2.2 只有在所选任务可衡量地优于单 Agent，同时不违反费用、
 
 ## 证据支持的维护待办
 
-负责人在 2026 年 9 月 open issue 处理期间明确纳入 #128：一个已认证、自托管 Postgres 部署可选择启用独立组织。ADR 0023 和多组织验证记录定义范围/证据。这是实现工作，不是已发布版本或公共托管 SaaS 范围；上方发布基线不变。
+负责人在 2026 年 9 月 open issue 处理期间明确纳入 #128：一个已认证、自托管 Postgres 部署可选择启用独立组织。ADR 0023 和多组织验证记录定义范围/证据。实现已完成，#128 已关闭；它不是已发布版本或公共托管 SaaS 范围，上方发布基线不变。
 
 以下条目仅在试点证据、发布风险或安全要求支持后安排版本，不再预留自动 V1.6/V1.7：
 

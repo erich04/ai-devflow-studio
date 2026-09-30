@@ -2,7 +2,7 @@
 
 日期：2026-09-28。状态：**设计方案（第 17 版），已确认；S0–S6 已全部完成**。确认：erich04，2026-09-28。S0 结果见[基线报告](../validation/workspace-redesign-s0-baseline-20260928.md)，S1–S6 结果见 [S1 实施报告](../validation/workspace-redesign-s1-20260928.md)、[S2 实施报告](../validation/workspace-redesign-s2-20260928.md)、[S3 实施报告](../validation/workspace-redesign-s3-20260928.md)、[S4 实施报告](../validation/workspace-redesign-s4-20260928.md)、[S5 实施报告](../validation/workspace-redesign-s5-20260928.md)、[S6 实施报告](../validation/workspace-redesign-s6-20260928.md)。
 
-代码基线：`main` / `bf18e4a`。之后到 `0518870` 的提交只改文档与截图，`apps/`、`packages/` 没有变化。本文中的新页面、模块名称、交互和目标数值都是计划，不代表产品已提供。
+代码基线：`main` / `bf18e4a`。之后到 `0518870` 的提交只改文档与截图，`apps/`、`packages/` 没有变化。起草时，本文中的新页面、模块名称、交互和目标数值都是计划；实际交付以第 7 节各批次的“实施结果”和对应实施报告为准。
 
 ## 1. 结论
 
@@ -477,7 +477,7 @@ S2 的目标是正常走完六个阶段不用离开任务页。起草时确定�
 | 编号 | 改动 | 主要代码位置 |
 | --- | --- | --- |
 | W1 | **页签合并为三个**：当前工作、材料与版本、执行记录，按 5.2 节分配内容。<br>- 当前工作：正文、差异或测试结果、直接相关的审查意见与阻碍、就地执行面板（W2–W4）、审批核对清单（W6）。<br>- 材料与版本：本步骤与上游材料、知识引用、测试证据历史、审查报告原文、讨论提案。<br>- 执行记录：执行轨迹、测试日志、开发执行详情与费用、生成记录。<br>同一内容只出现一次，现有的五处重复都要消除：知识引用、测试节点的测试证据、PR 交付面板、正文待核对事项、审查报告原文。旧页签名（概览、内容与审查、产物与证据、产物、测试证据、轨迹、引用来源等）通过映射继续可用，会话动作里的旧页签名也按映射定位，会话契约不变。澄清与方案的执行器和模型选择只在实际当前步骤显示。修正验收节点的阶段值判断（代码写成 `acceptance`，实际值是 `accept`），使交付面板在验收节点显示一次 | [`node-inspector-view-model.ts`](../../apps/desktop/src/app/node-inspector-view-model.ts) 的 `workspaceTabs`、`legacyWorkspaceTabs`；[`DesktopViews.tsx`](../../apps/desktop/src/views/DesktopViews.tsx) 的 `Inspector` |
-| W2 | **门禁审查就地运行**：「运行门禁审查」直接调用现有 `runKnowledgeReview`。<br>- 运行前，状态行写明将使用的模型和费用说明，预算未读取时不可运行，条件与 Agents 页相同。<br>- 运行中，「停止门禁审查」始终在状态行，调用现有的 `cancelKnowledgeReview`。<br>- 「重新审查」复用现有确认框，携带 `previousReviewId`。<br>- 上次审查失败时，在当前工作中说明原因并提供重试。<br>- 完成后留在任务页 | [`useDesktopActions.ts`](../../apps/desktop/src/app/useDesktopActions.ts) 的 `runKnowledgeReview`（去掉完成后的页面跳转）；[`AgentWorkbenchView.tsx`](../../apps/desktop/src/views/AgentWorkbenchView.tsx) 中的确认框与失败说明 |
+| W2 | **门禁审查就地运行**：「运行门禁审查」直接调用现有 `runKnowledgeReview`。<br>- 运行前，状态行写明将使用的模型和费用说明，预算未读取时不可运行，条件与 Agents 页相同。<br>- 运行中，「停止门禁审查」始终在状态行，调用现有的 `cancelKnowledgeReview`。<br>- 「重新审查」复用现有确认框，携带 `previousReviewId`。<br>- 上次审查失败时，在当前工作中说明原因并提供重试。<br>- 完成后留在任务页 | [`useDesktopActions.ts`](../../apps/desktop/src/app/useDesktopActions.ts) 的 `runKnowledgeReview`（去掉完成后的页面跳转）；`AgentWorkbenchView.tsx`（S3 已删除） 中的确认框与失败说明 |
 | W3 | **开发实现就地处理**：<br>- 开始执行后留在任务页；未就绪时在当前工作列出阻碍，提供「去设置执行工具」（W9）。<br>- 执行中显示阶段与停止。<br>- 代码改动与最终接收修改的权限请求：在当前工作中渲染现有的精确差异审查组件，批准按钮只在差异显示后可用；状态行的「拒绝」采用与该组件相同的可用条件。<br>- 权限过期后「重新核验」就地进行。<br>- 失败或超时后的重试沿用现有确认框（新建 Run、费用说明、追加尝试次数），显示将使用的预算批准编号。<br>- 「打开受管工作树」「删除受管工作树」移到执行记录，删除前增加确认。<br>- 回复权限期间防止重复提交 | `useDesktopActions.ts` 的 `runCodingAgent`、`startRemediationRetry`（去掉完成后的页面跳转）、`replyCodingPermission`、`renewCodingPermission`；[`App.tsx`](../../apps/desktop/src/App.tsx) 的 `runCodingAgent` 包装；[`CodingChangeSetReview.tsx`](../../apps/desktop/src/views/CodingChangeSetReview.tsx) |
 | W4 | **测试就地执行**：测试步骤的「运行检查」直接调用现有 `executeTestPlan`，结果显示在当前工作，日志在执行记录；执行前补上进行中防重复。未配置命令时说明原因，并提供「设置测试命令」（W9）。已通过的结果继续按“适用性无法核实”显示；“已过期”要等测试证据记录提交号，属于写入改动，与 X1 一起另行处理 | `useDesktopActions.ts` 的 `executeTestPlan`（去掉完成后的页面跳转）；`DesktopViews.tsx` 的 `renderTestEvidence` |
 | W5 | **执行入口只保留一处**：Agents 页的主执行按钮、权限面板、差异审查、重试确认、停止与取消，改为「在任务中处理」，跳回对应任务和步骤。测试页的执行按钮同样改为跳回。Agents 页保留配置（模型凭据、项目执行工具、预算、一次性预算批准）、只读证据和高级诊断；测试页保留命令编辑与证据历史。两处页面在 S3 迁入设置 | `AgentWorkbenchView.tsx`；[`SupportViews.tsx`](../../apps/desktop/src/views/SupportViews.tsx) 的 `TestsView` |
@@ -529,7 +529,7 @@ S3 只改导航与呈现：一级导航收为 4 项，配置类页面并入设�
 | --- | --- | --- |
 | Y1 | **一级导航收为 4 项**：任务、知识、团队、设置，名称与可访问名称都用中文。<br>- 视图标识改为 `workbench`、`knowledge`、`team`、`settings`；设置分为本地项目、模型与执行方式、扩展能力、团队连接、外观、高级。<br>- 原 5 个入口按 4.3 节映射：Agents 的配置 → 模型与执行方式；Skills、MCP → 扩展能力；测试命令 → 本地项目；诊断 → 高级。<br>- 任务内的「去设置执行工具」「设置模型与预算」进入模型与执行方式，「设置测试命令」进入本地项目，继续携带返回位置（W9） | [`App.tsx`](../../apps/desktop/src/App.tsx) 的导航与 `openSettingsFromTask`；[`desktop-view-model.ts`](../../apps/desktop/src/app/desktop-view-model.ts) 的 `ViewId`；[`useDesktopWorkspace.ts`](../../apps/desktop/src/app/useDesktopWorkspace.ts) |
 | Y2 | **设置页**：左侧分区列表，右侧一次显示一个分区，每个分区写明作用域（本机、本地项目、团队）。<br>- 本地项目：当前仓库、测试命令的编辑与安全检查、本项目的测试记录（只读）。<br>- 模型与执行方式：模型提供方的新增、选择、管理与删除；项目执行工具与启动前检查；团队预算、一次性预算批准与预算批准编号（团队作用域，需要 Owner 或 Lead）。<br>- 扩展能力：Skills、MCP，启用语义和权限检查不变。<br>- 团队连接：见 Y7。<br>- 外观：主题。<br>- 高级：脱敏自检、凭据访问状态、诊断记录、数据源与本地数据；原 Agents 页高级区的独立 Runtime 与多 Agent 诊断。<br>从任务进入时，分区顶部保留「来自任务 · 返回任务」与保存后的提示 | 新增 `views/SettingsView.tsx`；[`SupportViews.tsx`](../../apps/desktop/src/views/SupportViews.tsx)；`App.tsx` 中的诊断区 |
-| Y3 | **拆分 Agents 页**，删除 `AgentWorkbenchView`：<br>- 配置迁入设置（Y2）。<br>- 开发执行证据迁入开发步骤的「执行记录」：费用与逐次结算、预算评估、历次执行的权限与轨迹。它替代现有的「开发执行详情」简表；差异与变更路径已在「当前工作」，不再重复。<br>- 其余证据分组（门禁审查轨迹与历史、模型调用与工具时间线、依赖准备、重试记录）放在「执行记录」的折叠区，与页签内已有内容重复的分组不再显示。<br>- 记忆管理迁到知识页（4.1 节）。<br>- “当前任务”卡片和能力路径卡与状态行重复，删除 | [`AgentWorkbenchView.tsx`](../../apps/desktop/src/views/AgentWorkbenchView.tsx)；[`agent-console-view-model.ts`](../../apps/desktop/src/app/agent-console-view-model.ts)；`DesktopViews.tsx` 的 `renderTrace` |
+| Y3 | **拆分 Agents 页**，删除 `AgentWorkbenchView`：<br>- 配置迁入设置（Y2）。<br>- 开发执行证据迁入开发步骤的「执行记录」：费用与逐次结算、预算评估、历次执行的权限与轨迹。它替代现有的「开发执行详情」简表；差异与变更路径已在「当前工作」，不再重复。<br>- 其余证据分组（门禁审查轨迹与历史、模型调用与工具时间线、依赖准备、重试记录）放在「执行记录」的折叠区，与页签内已有内容重复的分组不再显示。<br>- 记忆管理迁到知识页（4.1 节）。<br>- “当前任务”卡片和能力路径卡与状态行重复，删除 | `AgentWorkbenchView.tsx`（S3 已删除）；`agent-console-view-model.ts`（S3 已删除）；`DesktopViews.tsx` 的 `renderTrace` |
 | Y4 | **测试页并入**：命令编辑与测试记录迁到设置／本地项目，执行与结果仍在测试步骤（S2）。删除 `TestsView` | `SupportViews.tsx` |
 | Y5 | **顶栏 4 个控件**：主题切换移到设置／外观，顶栏剩项目、搜索、团队连接、新建任务。主题偏好的存储不变 | `App.tsx`；[`ShellControls.tsx`](../../apps/desktop/src/views/ShellControls.tsx) |
 | Y6 | **任务页首屏控件**（常规场景 ≤ 28 个）：<br>- 标题行 2 个：任务菜单、讨论。「本任务用量」改为常显文字，未知费用仍在首层；原弹层中的用量说明、流程策略、预算评估、「重试读取策略」和设置入口移入任务菜单。<br>- 阶段行 6 个：去掉「子步骤」按钮，再次点击正在查看的阶段项时展开或收起子步骤（5.1 节）；「精简导航／流程视图／列表视图」移入任务菜单。<br>- 正文区 ≤ 5 个：审查依据（原始需求、代码调查、团队规范）、目录与「查看原文」收进材料正文上方的一个「阅读工具」折叠项；保留「讨论此材料」和材料分节页签。<br>- 状态行不变：停止、取消与拒绝仍直接可见（第 3 节） | `App.tsx` 的任务标题行；`DesktopViews.tsx` 的 `WorkflowBoard`；[`GateMaterialReader.tsx`](../../apps/desktop/src/components/GateMaterialReader.tsx)；[`ArtifactBody.tsx`](../../apps/desktop/src/components/ArtifactBody.tsx) |
@@ -790,7 +790,7 @@ S4、S5 与技术落地的细节在对应批次开始前单独评审，这里只
 - 材料分为当前待处理、已确认依据、原始输入与参考、讨论提案、历史记录。标签至少包含类型、版本标识、状态和更新时间；没有正式修订号时显示实际记录时间，不伪造 v1、v2。
 - 默认阅读顺序：有显式链接时打开该材料；阶段待审时打开待审材料；已完成阶段打开与审批记录绑定的材料；尚无正式材料时显示原始输入和生成入口。不能用数组第一项或最新更新时间推断“已生效”。
 - 阅读历史版本时明确提示，确认按钮不能指向历史版本，也不能悄悄确认另一个版本。
-- 已知缺口（V2）：方案评审的审批目前不绑定用户看到的版本。`approveGate` 只接收 `runId`、`nodeId` 和需求阶段的可选版本；主进程使用的 `expectedRunUpdatedAt` 是它自己刚读取的 Run，只能防止并发写入。S4 需要先定义设计材料的版本标识，再修改审批契约；S1 显示的标题与时间只用于辨认，不能替代这项保护。
+- 已知缺口（V2，已在 S4 解决）：起草时，方案评审的审批不绑定用户看到的版本。`approveGate` 只接收 `runId`、`nodeId` 和需求阶段的可选版本；主进程使用的 `expectedRunUpdatedAt` 是它自己刚读取的 Run，只能防止并发写入。S4 定义了设计材料的版本标识并修改了审批契约（7.4 节）；S1 显示的标题与时间只用于辨认，不能替代这项保护。
 - 复用 [`clarification.ts`](../../packages/shared/src/clarification.ts) 与 [`GateMaterialReader`](../../apps/desktop/src/components/GateMaterialReader.tsx)，不维护两套需求版本选择器。设计等阶段先统一阅读与来源标识，完整修订能力另行立项。
 
 ### 9.2 Web 审查与跨端交接（S5）
@@ -812,7 +812,7 @@ S4、S5 与技术落地的细节在对应批次开始前单独评审，这里只
 | --- | --- |
 | [`App.tsx`](../../apps/desktop/src/App.tsx) 的导航、顶栏、跨视图跳转 | 提取外壳与导航上下文，保留装配职责 |
 | [`DesktopViews.tsx`](../../apps/desktop/src/views/DesktopViews.tsx) 的流程看板与节点详情 | 拆出当前工作、材料、记录三个视图 |
-| [`AgentWorkbenchView.tsx`](../../apps/desktop/src/views/AgentWorkbenchView.tsx) | 执行区域迁入任务，配置迁入设置 |
+| `AgentWorkbenchView.tsx`（S3 已删除） | 执行区域迁入任务，配置迁入设置 |
 | [`WorkbenchWorkspace.tsx`](../../apps/desktop/src/WorkbenchWorkspace.tsx) | 增加显式材料引用，保留会话恢复与隔离 |
 | 桌面端 [`GitHubDeliveryPanel.tsx`](../../apps/desktop/src/GitHubDeliveryPanel.tsx) 与 Web 端 [`GitHubDeliveryPanel.tsx`](../../apps/web/app/GitHubDeliveryPanel.tsx) | 分开任务内的交付详情与仓库管理表单 |
 | Web [`page.tsx`](../../apps/web/app/page.tsx)、[`studio-navigation.ts`](../../apps/web/app/studio-navigation.ts)、[`StudioManagement.tsx`](../../apps/web/app/StudioManagement.tsx) | 划分待办、任务、团队、设置，保留旧链接解析 |
@@ -857,5 +857,7 @@ S4、S5 与技术落地的细节在对应批次开始前单独评审，这里只
 - **第 16 版**（2026-09-28）：新增 7.6 节 S6 改动清单（R1–R7），原 7.6 节“回退”改为 7.7 节。起草时确定四条前提：不改业务逻辑与契约；知识库底层优化在 S6 之后另行立项（erich04 决定）；验收只用模拟模型、本机受控服务与本机 GitHub 替代服务；无法招募走查人员时不做可用性走查，也不用自评代替。
 
 - **第 17 版**（2026-09-28）：回写 S6 结果。状态改为 S0–S6 已全部完成；7.6 节末尾加入实施结果、与原文的差异和留给后续的事项。
+
+- **勘误**（S6 合入后，不改版本号）：开头说明改为“起草时是计划”；9.1 节的已知缺口 V2 标为已在 S4 解决；指向 S3 已删除文件的链接改为文件名并注明已删除。S3、S6 留下的英文文案（启动前检查的总体状态、模板步骤名、配对码输入框的无障碍名称、设置／高级的数据源标签）已在随后的技术债清理中改为中文。
 
 第 6 版随 S1 的产品改动一起提交，验证结果见 S1 实施报告；没有调用真实模型或提交远端变更。S6 已按改造后的界面同步更新以下文档：[界面设计理由](../product/details/ui-design-rationale.md)、[会话行为说明](../engineering/workbench-conversations.md)、部署与使用指南、README 与截图。版本化的历史指南只更新了横幅。
