@@ -205,6 +205,7 @@ import {
 import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import { codingPromptDigest, recallScopedMemory } from './coding-context.js'
+import { learnFromCompletedCodingRun } from './coding-run-memory-learning.js'
 import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
@@ -1488,6 +1489,8 @@ async function createCodingRuntimeForRequest(
         }
       : {}),
     budgetGuard: createRuntimeBudgetGuard(remoteSync),
+    learnCodingRunMemory: ({ codingRun, evaluationPassed }) =>
+      learnFromCompletedCodingRun({ store, codingRun, evaluationPassed }),
     completeWorkflowBuild: async ({ runId, nodeId, codingRunId, diffId, now }) => {
       const existingEvents = await store.listEvents(runId)
       const event: AgentEvent = {

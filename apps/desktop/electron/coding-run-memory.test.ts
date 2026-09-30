@@ -20,6 +20,7 @@ import {
 } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { schemaMigrations } from './local-store-schema'
+import { learnFromCompletedCodingRun, type CodingRunMemoryLearningStore } from './coding-run-memory-learning'
 
 const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -231,5 +232,90 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     expect(parents).not.toContain('agent_memory_candidates_v36')
     expect(inspected.exec("select name from sqlite_master where name = 'agent_memory_candidates_v36'")).toEqual([])
     inspected.close()
+  })
+})
+
+describe('learning Memory from a completed Coding Run (ADR 0024 §4–5)', () => {
+  const now = () => '2026-09-30T00:05:00.000Z'
+  function withRepair(store: LocalStore, codingRun: CodingAgentRun): CodingRunMemoryLearningStore {
+    // A stored repair Change Set needs a real worktree digest; the learning step reads only these fields.
+    const repair = { id: 'coding-change-set-repair', phase: 'repair', changes: [{ path: 'src/filter.ts' }] }
+    return {
+      getRun: (id) => store.getRun(id), listProjects: () => store.listProjects(),
+      listTestEvidence: (runId) => store.listTestEvidence(runId),
+      saveAgentMemoryCandidate: (candidate) => store.saveAgentMemoryCandidate(candidate),
+      listAgentMemoryHeads: (projectId) => store.listAgentMemoryHeads(projectId),
+      listAgentMemoryRevisions: (memoryId) => store.listAgentMemoryRevisions(memoryId),
+      getAgentMemoryTombstone: (memoryId) => store.getAgentMemoryTombstone(memoryId),
+      authorizeAgentMemoryPromotion: (input) => store.authorizeAgentMemoryPromotion(input),
+      commitAgentMemoryPromotion: (input, capability) => store.commitAgentMemoryPromotion(input, capability),
+      listCodingChangeSets: async (codingRunId) => codingRunId === codingRun.id
+        ? [repair as unknown as Awaited<ReturnType<LocalStore['listCodingChangeSets']>>[number]] : [],
+    }
+  }
+
+  it('proposes fixed-template candidates, promotes the low-risk ones for 30 days and replays on retry', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const codingRun = completedCodingRun()
+    await seed(store, codingRun)
+    const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+    expect(learned.candidates.map(({ kind, outcome }) => [kind, outcome])).toEqual([
+      ['test_command', 'proposed'], ['change_map', 'proposed'],
+    ])
+    expect(learned.promoted).toHaveLength(2)
+    const revisions = await Promise.all(learned.promoted.map(async ({ memoryId }) => (await store.listAgentMemoryRevisions(memoryId))[0]!))
+    for (const revision of revisions) {
+      expect(revision).toMatchObject({
+        visibility: 'user_project', sensitivity: 'private', retentionClass: 'thirty_days',
+        expiresAt: '2026-10-30T00:05:00.000Z', promotionActorKind: 'policy',
+        promotionPolicyId: 'desktop-coding-run-memory-policy', promotionPolicyVersion: 1,
+      })
+    }
+    // A later Coding Run with its own local session recalls the learned facts.
+    const recalled = await store.retrieveAgentMemoryRevisions({
+      stateVersion: 1, id: 'later-coding-run-recall', runtimeId: 'agent-runtime-coding-later',
+      scope: { ...localScope, sessionId: 'coding-session-later' }, limit: 8, requestedAt: '2026-10-01T00:00:00.000Z',
+    })
+    expect(recalled.map((revision) => revision.id).sort()).toEqual(learned.promoted.map(({ memoryId }) => memoryId).sort())
+
+    const retried = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+    expect(retried.candidates.map(({ outcome }) => outcome)).toEqual(['replayed', 'replayed'])
+    expect(retried.promoted).toEqual([])
+    expect(retried.notPromoted.map(({ reason }) => reason)).toEqual(['duplicate', 'duplicate'])
+    expect(await store.listAgentMemoryCandidates(project.id)).toHaveLength(2)
+    store.close()
+  })
+
+  it('records a repair pattern for human review with the first failure location', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const codingRun = { ...completedCodingRun(), changeSetId: 'coding-change-set-repair' }
+    await seed(store, codingRun)
+    await store.saveTestEvidence({
+      ...evidence, id: 'coding-test-failed', status: 'failed', exitCode: 1, createdAt: '2026-09-30T00:02:00.000Z',
+      summary: 'Coding worktree tests failed in <workspace>.',
+      stdout: 'FAIL src/filter.test.ts\n ❯ <workspace>/src/filter.test.ts:12:5\n ❯ [REDACTED:local_absolute_path]:3:1',
+    })
+    const learned = await learnFromCompletedCodingRun({ store: withRepair(store, codingRun), codingRun, evaluationPassed: true, now })
+    expect(learned.candidates.map(({ kind }) => kind)).toEqual(['test_command', 'change_map', 'repair_pattern'])
+    expect(learned.notPromoted).toEqual([expect.objectContaining({ reason: 'human_review_required' })])
+    const repair = (await store.listAgentMemoryCandidates(project.id)).find((candidate) =>
+      candidate.provenance.kind === 'coding_run' && candidate.provenance.statementKind === 'repair_pattern')!
+    expect(repair.statement).toContain('first reported at src/filter.test.ts:12')
+    expect(repair.statement).toContain('the accepted repair changed src/filter.ts')
+    expect(repair.statement).not.toContain('<workspace>')
+    store.close()
+  })
+
+  it('learns nothing when the evaluation failed or the run is not eligible', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const codingRun = completedCodingRun()
+    await seed(store, codingRun)
+    await expect(learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: false, now }))
+      .resolves.toMatchObject({ skipped: 'not_eligible', candidates: [] })
+    const { contextReceipt: _receipt, ...withoutReceipt } = codingRun
+    await expect(learnFromCompletedCodingRun({ store, codingRun: withoutReceipt, evaluationPassed: true, now }))
+      .resolves.toMatchObject({ skipped: 'not_eligible', candidates: [] })
+    await expect(store.listAgentMemoryCandidates(project.id)).resolves.toEqual([])
+    store.close()
   })
 })

@@ -297,6 +297,10 @@ describe('CodingRuntime', () => {
       patch: 'diff --git a/devflow-opencode-smoke.txt b/devflow-opencode-smoke.txt\n--- /dev/null\n+++ b/devflow-opencode-smoke.txt\n@@ -0,0 +1 @@\n+ok\n',
     }))
     const completeWorkflowBuild = vi.fn(async () => undefined)
+    const learnCodingRunMemory = vi.fn(async () => ({
+      candidates: [{ candidateId: 'agent-memory-candidate-coding-1', kind: 'change_map' as const, outcome: 'proposed' as const }],
+      promoted: [], notPromoted: [],
+    }))
     const runtimeDependencies = {
       store,
       engine,
@@ -322,6 +326,7 @@ describe('CodingRuntime', () => {
         summary: 'Coding worktree tests passed.',
       }),
       completeWorkflowBuild,
+      learnCodingRunMemory,
       idGenerator: (prefix = 'id') => `${prefix}-cross-runtime-${idSequence += 1}`,
       now: fixedNow('2026-06-17T00:00:00.000Z'),
     }
@@ -382,6 +387,13 @@ describe('CodingRuntime', () => {
     })
 
     expect(store.codingRuns.at(-1)?.status).toBe('completed')
+    // ADR 0024 §4: OpenCode learns only after Change Acceptance, and only once.
+    expect(learnCodingRunMemory).toHaveBeenCalledTimes(1)
+    expect(learnCodingRunMemory).toHaveBeenCalledWith({
+      codingRun: expect.objectContaining({ id: started.codingRun.id, status: 'completed' }), evaluationPassed: true,
+    })
+    expect(store.codingEvents.some((event) => event.codingRunId === started.codingRun.id &&
+      event.metadata?.memoryLearning)).toBe(true)
     expect(store.codingRuns.at(-1)?.budgetDecision).toEqual(trustedBudgetDecision)
     expect(store.codingRuns.at(-1)?.runtimeCostSummary).toBeUndefined()
     expect(store.codingRuns.at(-1)?.budgetDecision?.reason).toContain('billing is opaque')

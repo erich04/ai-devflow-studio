@@ -15,6 +15,7 @@ import {
   type NativeCodingV2DecisionProvider,
 } from './native-coding-executor-v2.js'
 import { runLocalTestCommand } from './test-runner.js'
+import { learnFromCompletedCodingRun } from './coding-run-memory-learning.js'
 import { assertCodingContextCurrent } from './coding-context.js'
 import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
 
@@ -283,6 +284,8 @@ describe('DevFlow Native Executor v2 runtime', () => {
       worktreeRoot,
       now: clock,
       runTestCommand: runLocalTestCommand,
+      learnCodingRunMemory: ({ codingRun, evaluationPassed }) =>
+        learnFromCompletedCodingRun({ store, codingRun, evaluationPassed, now: clock }),
       budgetGuard: async () => ({
         status: 'allowed', blocksRun: false, currentSpendUsd: 0,
         projectedCostUsd: 0.01, limitUsd: 0.20, reason: 'Within the saved project budget.',
@@ -434,6 +437,18 @@ describe('DevFlow Native Executor v2 runtime', () => {
     expect((await store.listCodingAgentEvents(completed!.id))
       .find((event) => event.metadata?.workflowEvaluation)?.metadata?.workflowEvaluation)
       .toMatchObject({ passed: true, failures: [], evidenceDigest: expect.any(String) })
+    // ADR 0024 §4–5: the accepted, test-passing run proposes fixed-template candidates and
+    // the bounded policy promotes the low-risk ones, traced on the Coding Run.
+    const learnedCandidates = (await store.listAgentMemoryCandidates(project.id))
+      .filter((entry) => entry.provenance.kind === 'coding_run')
+    expect(learnedCandidates.map((entry) => entry.provenance.kind === 'coding_run' && entry.provenance.statementKind).sort())
+      .toEqual(['change_map', 'test_command'])
+    expect(learnedCandidates.every((entry) => JSON.stringify(entry.scope) === JSON.stringify(completed!.contextReceipt!.scope))).toBe(true)
+    expect(learnedCandidates.find((entry) => entry.provenance.kind === 'coding_run' && entry.provenance.statementKind === 'change_map')!.statement)
+      .toBe('Change map: "Native v2 execution" (Implement locally) was implemented by changing src/message.ts.')
+    const learningTrace = (await store.listCodingAgentEvents(completed!.id))
+      .find((event) => event.metadata?.memoryLearning)?.metadata?.memoryLearning as { promoted: unknown[] } | undefined
+    expect(learningTrace?.promoted).toHaveLength(2)
     expect(completed).toMatchObject({
       status: 'completed', changedPaths: ['src/message.ts'],
       runtimeCostSummary: {
