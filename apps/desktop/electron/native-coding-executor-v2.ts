@@ -20,10 +20,13 @@ import {
   type CodingAgentEvent,
   type CodingAgentRun,
   type CodingChangeSet,
+  type CodingChangeSetChange,
   type CodingPermissionRequest,
   type CodingRuntimeCostSummary,
+  parseTestFailureLocations,
   type RuntimeProviderCallSettlement,
   type TestEvidence,
+  type TestFailureLocation,
 } from '@ai-devflow/shared'
 import type {
   CodingEngineStartInput,
@@ -103,7 +106,8 @@ type ChangeProposal = {
   summary: string
 }
 
-type Excerpt = { path: string; content: string; reason: 'selected' | 'search' }
+/** `startLine` is present only when the excerpt does not begin at the first line of the file. */
+type Excerpt = { path: string; content: string; reason: 'selected' | 'search'; startLine?: number }
 
 export type CreateNativeCodingExecutorV2Input = {
   store: LocalStore
@@ -168,6 +172,32 @@ function canonicalNow(clock: () => string): string {
 
 function safeText(value: string): string {
   return redactLocalAbsolutePaths(redactSensitiveText(value).value).value
+}
+
+const PRIVATE_KEY_BLOCK = /-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/g
+const UNPAIRED_PRIVATE_KEY_MARKER = /-----(?:BEGIN|END) (?:RSA |EC |OPENSSH |)PRIVATE KEY-----/
+
+function countNewlines(value: string): number {
+  let count = 0
+  for (let index = value.indexOf('\n'); index >= 0; index = value.indexOf('\n', index + 1)) count += 1
+  return count
+}
+
+/**
+ * Redacts a whole file before any excerpt is cut from it, so multi-line secrets cannot be
+ * split by a window edge. Private key blocks keep their line count, so line numbers from
+ * test output still address the redacted text; `lineAligned` is false only when another
+ * rule changed the number of lines. A key marker left without its pair is dropped too.
+ */
+export function redactFileForExcerpts(content: string): { content: string; lineAligned: boolean } {
+  // Every line of the block becomes a marker, so any window through it shows the redaction.
+  const masked = content.replace(PRIVATE_KEY_BLOCK, (block) =>
+    block.replace(/[^\r\n]+/gu, '[REDACTED:private_key]'))
+  const redacted = safeText(masked)
+    .split('\n')
+    .map((line) => UNPAIRED_PRIVATE_KEY_MARKER.test(line) ? '[REDACTED:private_key]' : line)
+    .join('\n')
+  return { content: redacted, lineAligned: countNewlines(redacted) === countNewlines(content) }
 }
 
 function permissionExpiry(requestedAt: string, deadline: string): string {
@@ -462,25 +492,51 @@ function modelValidationCause(error: unknown): string {
   return `native_v2_${error instanceof Error ? causes[error.message] ?? 'output_validation_failed' : 'output_validation_failed'}`
 }
 
-export function createNativeCodingV2RepairSystemPrompt(
-  allowedPaths: readonly string[],
-): string {
-  return [
-    'Return one JSON object only, without Markdown or prose.',
-    'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"one/exact/allowed/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded repair"}.',
+/**
+ * One static system prompt shared by every phase and every run. Provider prompt caches
+ * (DeepSeek disk cache, OpenAI automatic caching) only reuse an exact token prefix, so
+ * nothing run- or phase-specific may appear here: the user JSON's `phase` field selects
+ * the contract, and run data such as allowed paths stays in the user message.
+ */
+export const NATIVE_CODING_V2_SYSTEM_PROMPT = [
+  [
+    'You are the DevFlow Native v2 bounded coding executor. Return one JSON object only, without Markdown or prose.',
+    'The user message is one JSON object. Follow every block below that names its phase field, and the limits field; ignore blocks for other phases.',
+  ],
+  [
+    'Phase "analysis" selects repository evidence.',
+    'Use exactly this shape: {"stateVersion":2,"files":["path/from/repositoryManifest"],"searches":[{"query":"literal text","path":"path/from/repositoryManifest"}],"summary":"bounded repository analysis"}.',
+    'The top-level keys are exactly stateVersion, files, searches, summary. Do not add extra keys.',
+    'stateVersion must be the number 2. Every files item and optional searches.path must exactly equal one file path from repositoryManifest; do not use directories or globs.',
+    'Each searches item has only query and optional path. searches may be empty. Do not propose edits yet.',
+    'Hard limits: select at most 8 unique file paths and at most 8 searches. Each literal query is 1–200 characters. summary is a non-empty string of at most 1000 characters.',
+  ],
+  [
+    'Phases "initial" and "repair" each propose one exact Change Set.',
+    'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"one/exact/allowed/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded change"}.',
     'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
     'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
-    'A safe repair contains between 1 and 6 file entries. If the failure cannot be repaired within the allowed paths while preserving the original request, return an empty changes array and explain why in summary.',
-    'Do not undo correct requested behavior to address missing dependencies, unavailable tools, or other environment failures.',
-    `Every path must exactly equal one entry in this allowed path list: ${JSON.stringify(allowedPaths)}. Do not use any other path.`,
-    'If a TypeScript error appears in a file outside the allowed list, fix the public contract from an allowed file instead of editing the outside file.',
-    'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
-    'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
     'oldText must be a non-empty string. newText must be a string. oldText and newText must not be identical. Do not include unchanged or placeholder replacements.',
     'oldText must be copied verbatim from the supplied excerpt for that same path and occur exactly once.',
+    'Every path must exactly equal one entry in the allowedPaths list of the user message. Do not use any other path. Do not create, delete, rename, or edit binary files.',
+    'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
+    'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
+  ],
+  [
+    'Phase "initial" implements the brief.',
+    'Hard limits: change at most 6 unique file paths with at most 12 replacements in total across all files. Include each path only once. summary is a non-empty string of at most 1000 characters.',
+    'Plan the smallest complete implementation within those limits, including required tests and documentation. Reuse existing structure and styling; avoid unrelated refactoring or optional cosmetic edits. Check these counts before returning JSON.',
+  ],
+  [
+    'Phase "repair" fixes the saved test failure in testFailure.',
+    'failureLocations lists file:line positions parsed from the test output, first failure first. initialChangeSet shows the replacements the initial phase already applied; excerpts show the current content, and an excerpt with startLine begins at that line of the file.',
+    'readOnlyExcerpts are context only. Never change a readOnlyExcerpts path unless it is also in allowedPaths.',
+    'A safe repair contains between 1 and 6 file entries. If the failure cannot be repaired within the allowed paths while preserving the original request, return an empty changes array and explain why in summary.',
+    'Do not undo correct requested behavior to address missing dependencies, unavailable tools, or other environment failures.',
+    'If a TypeScript error appears in a file outside the allowed list, fix the public contract from an allowed file instead of editing the outside file.',
     'Repair only supplied files. Do not create, delete, rename, or touch any path outside the initial Change Set.',
-  ].join(' ')
-}
+  ],
+].map((block) => block.join(' ')).join('\n\n')
 
 async function buildRepositoryManifest(worktreePath: string): Promise<string[]> {
   const paths: string[] = []
@@ -534,7 +590,8 @@ async function collectExcerpts(input: {
     } catch {
       return false
     }
-    const excerpt = safeText(excerptAround(content, query))
+    // Redact the whole file first so a window edge cannot split a secret (ADR 0024 §6).
+    const excerpt = excerptAround(redactFileForExcerpts(content).content, query)
     if (!excerpt) return false
     const remaining = MAX_EXCERPT_TOTAL_BYTES - totalBytes
     if (remaining <= 0) return false
@@ -561,11 +618,11 @@ async function collectExcerpts(input: {
   return excerpts
 }
 
-function fitChangePrompt(input: Record<string, unknown> & { excerpts: Excerpt[] }): string {
+function fitChangePrompt(input: Record<string, unknown> & { excerpts: Excerpt[] }, maxChars = MAX_PROMPT_CHARS): string {
   const excerpts = input.excerpts.map((excerpt) => ({ ...excerpt }))
   while (excerpts.length > 0) {
     const serialized = JSON.stringify({ ...input, excerpts })
-    if (serialized.length <= MAX_PROMPT_CHARS) return serialized
+    if (serialized.length <= maxChars) return serialized
     const longest = excerpts.reduce((current, excerpt) =>
       excerpt.content.length > current.content.length ? excerpt : current,
     )
@@ -576,6 +633,176 @@ function fitChangePrompt(input: Record<string, unknown> & { excerpts: Excerpt[] 
     }
   }
   throw new Error('DevFlow Native v2 could not fit repository evidence in the 30,000 character prompt')
+}
+
+const REPAIR_READ_ONLY_EXCERPTS_MAX = 3
+const REPAIR_READ_ONLY_CONTEXT_LINES = 20
+const REPAIR_READ_ONLY_EXCERPT_CHARS = 2_000
+const REPAIR_INITIAL_CHANGE_SET_MAX_CHARS = 6_000
+const REPAIR_REPLACEMENT_TEXT_MAX_CHARS = 800
+const REPAIR_EDITABLE_EXCERPT_MIN_CHARS = 4_000
+
+/** Character offset where 1-based `line` starts, or the content length past the end. */
+function lineStartOffset(content: string, line: number): number {
+  let offset = 0
+  for (let current = 1; current < line; current += 1) {
+    const next = content.indexOf('\n', offset)
+    if (next < 0) return content.length
+    offset = next + 1
+  }
+  return offset
+}
+
+function lineNumberAt(content: string, offset: number): number {
+  let line = 1
+  for (let index = content.indexOf('\n'); index >= 0 && index < offset; index = content.indexOf('\n', index + 1)) line += 1
+  return line
+}
+
+/** A window of whole lines centred on `line`, at most `maxChars` long. */
+function excerptAroundLine(content: string, line: number, maxChars: number): { content: string; startLine: number } {
+  if (content.length <= maxChars) return { content, startLine: 1 }
+  const target = lineStartOffset(content, line)
+  let start = Math.max(0, Math.min(target - Math.floor(maxChars / 2), content.length - maxChars))
+  if (start > 0) {
+    const lineStart = content.indexOf('\n', start - 1)
+    start = lineStart < 0 || lineStart + 1 > target ? start : lineStart + 1
+  }
+  return { content: content.slice(start, start + maxChars), startLine: lineNumberAt(content, start) }
+}
+
+function readOnlyWindow(content: string, line: number): { content: string; startLine: number } {
+  const startLine = Math.max(1, line - REPAIR_READ_ONLY_CONTEXT_LINES)
+  const start = lineStartOffset(content, startLine)
+  const end = lineStartOffset(content, line + REPAIR_READ_ONLY_CONTEXT_LINES + 1)
+  const window = content.slice(start, end)
+  if (window.length <= REPAIR_READ_ONLY_EXCERPT_CHARS) return { content: window, startLine }
+  // Long lines: keep a character window centred on the failing line.
+  const inner = excerptAroundLine(window, line - startLine + 1, REPAIR_READ_ONLY_EXCERPT_CHARS)
+  return { content: inner.content, startLine: startLine + inner.startLine - 1 }
+}
+
+function boundedInitialChangeSet(changes: readonly Pick<CodingChangeSetChange, 'path' | 'replacements'>[]) {
+  let used = 0
+  let truncated = false
+  const clip = (text: string) => {
+    const safe = safeText(text)
+    if (safe.length <= REPAIR_REPLACEMENT_TEXT_MAX_CHARS) return safe
+    truncated = true
+    return `${safe.slice(0, REPAIR_REPLACEMENT_TEXT_MAX_CHARS)}…`
+  }
+  const bounded = changes.map((change) => ({
+    path: change.path,
+    replacements: change.replacements.flatMap((replacement) => {
+      const oldText = clip(replacement.oldText)
+      const newText = clip(replacement.newText)
+      if (used + oldText.length + newText.length > REPAIR_INITIAL_CHANGE_SET_MAX_CHARS) {
+        truncated = true
+        return []
+      }
+      used += oldText.length + newText.length
+      return [{ oldText, newText }]
+    }),
+  }))
+  return { changes: bounded, ...(truncated ? { truncated: true } : {}) }
+}
+
+export type NativeCodingV2RepairPromptInput = {
+  brief: string
+  testFailure: { summary: string; stdout: string; stderr: string }
+  worktreePath: string
+  /** The applied initial Change Set; its paths are the only editable paths. */
+  initialChanges: readonly Pick<CodingChangeSetChange, 'path' | 'replacements'>[]
+  /** Reads a canonical relative path inside the worktree; rejects paths it must not read. */
+  readFile(path: string): Promise<string>
+  maxPromptChars?: number
+}
+
+/**
+ * Repair prompt (ADR 0024 §6). Editable excerpts are centred on the first reported failure
+ * in that file; failing files outside the Change Set get short read-only excerpts. When the
+ * prompt is too long, read-only excerpts go first, then the initial Change Set body, then
+ * failure locations, and only then are editable excerpts shortened.
+ */
+export async function buildNativeCodingV2RepairPrompt(input: NativeCodingV2RepairPromptInput): Promise<{
+  prompt: string
+  excerptCount: number
+  failureLocations: TestFailureLocation[]
+}> {
+  const maxChars = input.maxPromptChars ?? MAX_PROMPT_CHARS
+  const allowedPaths = [...new Set(input.initialChanges.map((change) => change.path))]
+  const allowed = new Set(allowedPaths)
+  const failureLocations = parseTestFailureLocations(`${input.testFailure.stdout}\n${input.testFailure.stderr}`, {
+    workspaceRoots: [input.worktreePath],
+  }).filter((location) => safeText(location.path) === location.path)
+  // Redact whole files before windowing: a window edge must never split a secret out of
+  // reach of the redaction rules (ADR 0024 §6).
+  const editableFiles = await Promise.all(allowedPaths.map(async (filePath) => ({
+    path: filePath,
+    ...redactFileForExcerpts(await input.readFile(filePath)),
+    focusLine: failureLocations.find((location) => location.path === filePath)?.line ?? 1,
+  })))
+  // Windows stay centred on the failing line when they shrink, unlike tail truncation.
+  const editableExcerpts = (windowChars: number): Excerpt[] => editableFiles.map((file) => {
+    const window = excerptAroundLine(file.content, file.focusLine, windowChars)
+    return {
+      path: file.path, content: window.content, reason: 'selected' as const,
+      ...(file.lineAligned && window.startLine > 1 ? { startLine: window.startLine } : {}),
+    }
+  })
+  const readOnlyExcerpts: Array<{ path: string; startLine: number; content: string }> = []
+  for (const location of failureLocations) {
+    if (readOnlyExcerpts.length >= REPAIR_READ_ONLY_EXCERPTS_MAX) break
+    if (allowed.has(location.path) || readOnlyExcerpts.some((excerpt) => excerpt.path === location.path)) continue
+    let content: string
+    try {
+      content = await input.readFile(location.path)
+    } catch {
+      continue
+    }
+    const redacted = redactFileForExcerpts(content)
+    // Without line alignment the window could miss the failing line; skip optional context.
+    if (!redacted.lineAligned) continue
+    const window = readOnlyWindow(redacted.content, location.line)
+    if (window.content) readOnlyExcerpts.push({ path: location.path, startLine: window.startLine, content: window.content })
+  }
+  const initialChangeSet = boundedInitialChangeSet(input.initialChanges)
+  const initialChangeSetPaths = { paths: allowedPaths, bodyOmitted: true }
+  const testFailure = {
+    summary: safeText(input.testFailure.summary),
+    stdout: safeText(input.testFailure.stdout).slice(-4_000),
+    stderr: safeText(input.testFailure.stderr).slice(-4_000),
+  }
+  // Degradation level: 0 everything, 1 without read-only excerpts, 2 without the initial
+  // Change Set body, 3 without failure locations. Key order keeps the shared prefix.
+  const assemble = (level: number, excerpts: Excerpt[]) => ({
+    stateVersion: 2,
+    brief: safeText(input.brief),
+    testFailure,
+    ...(level < 3 && failureLocations.length ? { failureLocations } : {}),
+    initialChangeSet: level < 2 ? initialChangeSet : initialChangeSetPaths,
+    excerpts,
+    ...(level < 1 && readOnlyExcerpts.length ? { readOnlyExcerpts } : {}),
+    allowedPaths,
+    phase: 'repair',
+    limits: { existingPreviouslyChangedFilesOnly: true, maxFiles: 6, maxReplacements: 12 },
+  })
+  const excerptCount = editableFiles.length
+  let excerpts = editableExcerpts(MAX_EXCERPT_BYTES)
+  for (let level = 0; level <= 3; level += 1) {
+    // At each level, shrink editable windows down to a useful floor before dropping more context.
+    let windowChars = MAX_EXCERPT_BYTES
+    for (;;) {
+      excerpts = editableExcerpts(windowChars)
+      const serialized = JSON.stringify(assemble(level, excerpts))
+      if (serialized.length <= maxChars) return { prompt: serialized, excerptCount, failureLocations }
+      if (windowChars <= REPAIR_EDITABLE_EXCERPT_MIN_CHARS) break
+      const overflow = serialized.length - maxChars
+      windowChars = Math.max(REPAIR_EDITABLE_EXCERPT_MIN_CHARS, windowChars - Math.ceil(overflow / Math.max(1, excerptCount)) - 64)
+    }
+  }
+  // Last resort: shorten editable excerpts below the floor.
+  return { prompt: fitChangePrompt(assemble(3, excerpts), maxChars), excerptCount, failureLocations }
 }
 
 function assertStartAuthority(
@@ -1043,22 +1270,17 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       await context.assertContextCurrent?.()
       const manifest = await buildRepositoryManifest(context.workspace.worktreePath)
       if (manifest.length < 1) throw new Error('DevFlow Native v2 repository manifest is empty')
+      // Stable content first: every phase begins with the same stateVersion + brief so the
+      // provider can reuse that prefix; phase-specific evidence and limits follow it.
       const analysisPrompt = boundedPrompt({
         stateVersion: 2,
+        brief: safeText(context.brief.prompt),
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
-        brief: safeText(context.brief.prompt),
         repositoryManifest: manifest,
+        phase: 'analysis',
         limits: { maxFiles: 8, maxSearches: 8, literalSearchOnly: true },
       })
-      const analysisSystemPrompt = [
-        'Return one JSON object only, without Markdown or prose.',
-        'Use exactly this shape: {"stateVersion":2,"files":["path/from/repositoryManifest"],"searches":[{"query":"literal text","path":"path/from/repositoryManifest"}],"summary":"bounded repository analysis"}.',
-        'The top-level keys are exactly stateVersion, files, searches, summary. Do not add extra keys.',
-        'stateVersion must be the number 2. Every files item and optional searches.path must exactly equal one file path from repositoryManifest; do not use directories or globs.',
-        'Each searches item has only query and optional path. searches may be empty. Do not propose edits yet.',
-        'Hard limits: select at most 8 unique file paths and at most 8 searches. Each literal query is 1–200 characters. summary is a non-empty string of at most 1000 characters.',
-      ].join(' ')
       const analysis = await runProviderCall({
         assertContextCurrent: context.assertContextCurrent,
         codingRunId: request.id,
@@ -1066,7 +1288,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           ? { reportProviderCall: context.reportProviderCall }
           : {}),
         phase: 'analysis',
-        systemPrompt: analysisSystemPrompt,
+        systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
         userPrompt: analysisPrompt,
         maxOutputTokens: Math.min(2_048, MAX_OUTPUT_TOKENS),
         manifestPathCount: manifest.length,
@@ -1082,27 +1304,15 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       })
       const initialPrompt = fitChangePrompt({
         stateVersion: 2,
+        brief: safeText(context.brief.prompt),
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
-        brief: safeText(context.brief.prompt),
         analysisSummary: plan.summary,
         excerpts,
         allowedPaths: excerpts.map((excerpt) => excerpt.path),
+        phase: 'initial',
         limits: { existingUtf8Files: true, maxFiles: 6, maxReplacements: 12 },
       })
-      const initialSystemPrompt = [
-        'Return one JSON object only, without Markdown or prose.',
-        'Use exactly this shape: {"stateVersion":2,"changes":[{"path":"supplied/excerpt/path","replacements":[{"oldText":"exact existing text","newText":"replacement text"}]}],"summary":"bounded implementation"}.',
-        'The top-level keys are exactly stateVersion, changes, summary. Do not add extra keys.',
-        'stateVersion must be the number 2. Each change has exactly path and replacements. Each replacement has exactly oldText and newText.',
-        'oldText must be a non-empty string. newText must be a string. oldText and newText must not be identical. Do not include unchanged or placeholder replacements.',
-        'oldText must be copied verbatim from a supplied excerpt and occur exactly once.',
-        'Respect ownership boundaries named in the brief. Do not move server-, runtime-, or agent-owned fields into a provider/model result unless the brief explicitly assigns them there.',
-        'Generate each value exactly once at its named owning boundary. Transport layers must pass owned results through instead of duplicating business data.',
-        'Use only supplied excerpt paths. Do not create, delete, rename, or edit binary files.',
-        'Hard limits: change at most 6 unique file paths with at most 12 replacements in total across all files. Include each path only once. summary is a non-empty string of at most 1000 characters.',
-        'Plan the smallest complete implementation within those limits, including required tests and documentation. Reuse existing structure and styling; avoid unrelated refactoring or optional cosmetic edits. Check these counts before returning JSON.',
-      ].join(' ')
       const initialResult = await runProviderCall({
         assertContextCurrent: context.assertContextCurrent,
         codingRunId: request.id,
@@ -1110,7 +1320,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           ? { reportProviderCall: context.reportProviderCall }
           : {}),
         phase: 'initial',
-        systemPrompt: initialSystemPrompt,
+        systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
         userPrompt: initialPrompt,
         maxOutputTokens: MAX_OUTPUT_TOKENS,
         manifestPathCount: manifest.length,
@@ -1284,24 +1494,16 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           updatedAt: canonicalNow(clock),
         })
         const initialPaths = new Set(changeSet.changes.map((change) => change.path))
-        const excerpts = await Promise.all(changeSet.changes.map(async (change) => ({
-          path: change.path,
-          content: safeText((await readCodingWorkspaceTextFile(workspace.worktreePath, change.path)).slice(0, MAX_EXCERPT_BYTES)),
-          reason: 'selected' as const,
-        })))
-        const repairPrompt = fitChangePrompt({
-          stateVersion: 2,
-          brief: safeText(codingRun.prompt),
-          testFailure: {
-            summary: safeText(tested.result.summary),
-            stdout: safeText(tested.result.stdout).slice(-4_000),
-            stderr: safeText(tested.result.stderr).slice(-4_000),
-          },
-          excerpts,
-          allowedPaths: [...initialPaths],
-          limits: { existingPreviouslyChangedFilesOnly: true, maxFiles: 6, maxReplacements: 12 },
+        // Same leading stateVersion + brief as analysis/initial; the persisted brief is the
+        // canonical one those calls sent, so the provider can reuse the shared prefix.
+        const repair = await buildNativeCodingV2RepairPrompt({
+          brief: codingRun.prompt,
+          testFailure: { summary: tested.result.summary, stdout: tested.result.stdout, stderr: tested.result.stderr },
+          worktreePath: workspace.worktreePath,
+          initialChanges: changeSet.changes,
+          readFile: (filePath) => readCodingWorkspaceTextFile(workspace.worktreePath, filePath),
         })
-        const repairSystemPrompt = createNativeCodingV2RepairSystemPrompt([...initialPaths])
+        const repairPrompt = repair.prompt
         const repairResult = await runProviderCall({
           assertContextCurrent: context.assertContextCurrent,
           codingRunId: codingRun.id,
@@ -1309,11 +1511,11 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             ? { reportProviderCall: context.reportProviderCall }
             : {}),
           phase: 'repair',
-          systemPrompt: repairSystemPrompt,
+          systemPrompt: NATIVE_CODING_V2_SYSTEM_PROMPT,
           userPrompt: repairPrompt,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
           manifestPathCount: 0,
-          excerptCount: excerpts.length,
+          excerptCount: repair.excerptCount,
           parse: (value) => parseChangeProposal(value, initialPaths, true),
         })
         const repairProposal = repairResult.value

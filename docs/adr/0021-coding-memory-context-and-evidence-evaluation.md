@@ -6,6 +6,8 @@
 
 日期：2026-09-16
 
+更新（2026-09-29）：简报预算实际为 24,000 UTF-8 字节（`CODING_BRIEF_MAX_BYTES`），下文的 12,000 是共享默认值。"不在每个 Coding Run 后自动学习"和"不扩展阶段 Agent"两项限制由 [ADR 0024](0024-governed-memory-learning-and-recall.md)（2026-09-30 接受）修改。
+
 <a id="context"></a>
 
 ## 背景

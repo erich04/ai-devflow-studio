@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "provider": {
+    "kind": "real",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-flash"
+  },
+  "harness": "scripts/native-repair-live.ts (runNativeRepairLiveSmoke): the exact wording lives only in build/acceptance.test.mjs, which the Native v2 manifest skips",
+  "executor": "Native v2 executor from feat/prompt-cache-prefix (c00f100 + harness)",
+  "passed": true,
+  "completedAt": "2026-09-30T08:33:17.896Z",
+  "codingRunId": "coding-run-5a60718e-7efc-44bb-a8d0-b476cc3b0c63",
+  "status": "completed",
+  "repairTriggered": true,
+  "approvedPhases": [
+    "initial",
+    "repair"
+  ],
+  "testEvidenceStatuses": [
+    "failed",
+    "passed"
+  ],
+  "greetingMatches": true,
+  "repairPrompt": {
+    "failureLocations": [
+      {
+        "path": "build/acceptance.test.mjs",
+        "line": 5
+      },
+      {
+        "path": "build/acceptance.test.mjs",
+        "line": 6
+      }
+    ],
+    "readOnlyExcerptPaths": [
+      "build/acceptance.test.mjs"
+    ],
+    "initialChangeSetReplacements": 1,
+    "initialChangeSetBodyOmitted": false,
+    "editableExcerptStartLines": [
+      1
+    ]
+  },
+  "calls": [
+    {
+      "phase": "analysis",
+      "systemPromptDigest": "11449f91f64d4191",
+      "inputTokens": 1314,
+      "outputTokens": 124,
+      "cacheReadTokens": 640,
+      "cacheMissTokens": 674,
+      "cacheStatus": "complete"
+    },
+    {
+      "phase": "initial",
+      "systemPromptDigest": "11449f91f64d4191",
+      "inputTokens": 1469,
+      "outputTokens": 335,
+      "cacheReadTokens": 1024,
+      "cacheMissTokens": 445,
+      "cacheStatus": "complete"
+    },
+    {
+      "phase": "repair",
+      "systemPromptDigest": "11449f91f64d4191",
+      "inputTokens": 1837,
+      "outputTokens": 215,
+      "cacheReadTokens": 1024,
+      "cacheMissTokens": 813,
+      "cacheStatus": "complete"
+    }
+  ],
+  "promptCache": {
+    "total": {
+      "calls": 3,
+      "inputTokens": 4620,
+      "outputTokens": 674,
+      "cacheReadTokens": 2688,
+      "cacheMissTokens": 1932,
+      "cacheHitRate": 0.5818,
+      "completeCacheReports": true
+    },
+    "byPhase": {
+      "analysis": {
+        "calls": 1,
+        "inputTokens": 1314,
+        "outputTokens": 124,
+        "cacheReadTokens": 640,
+        "cacheMissTokens": 674,
+        "cacheHitRate": 0.4871,
+        "completeCacheReports": true
+      },
+      "initial": {
+        "calls": 1,
+        "inputTokens": 1469,
+        "outputTokens": 335,
+        "cacheReadTokens": 1024,
+        "cacheMissTokens": 445,
+        "cacheHitRate": 0.6971,
+        "completeCacheReports": true
+      },
+      "repair": {
+        "calls": 1,
+        "inputTokens": 1837,
+        "outputTokens": 215,
+        "cacheReadTokens": 1024,
+        "cacheMissTokens": 813,
+        "cacheHitRate": 0.5574,
+        "completeCacheReports": true
+      }
+    },
+    "distinctSystemPrompts": 1
+  },
+  "costUsd": {
+    "cacheHitInputUsd": 0.000016128,
+    "cacheMissInputUsd": 0.0005796,
+    "outputUsd": 0.0008088,
+    "totalUsd": 0.001404528
+  },
+  "pricing": {
+    "providerId": "native-repair-live-provider",
+    "model": "deepseek-flash",
+    "tier": "peak",
+    "effectiveAt": "2026-09-10T15:17:38.000Z",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "sourceVersion": "deepseek-pricing-snapshot-2026-09-10",
+    "currency": "USD",
+    "unit": "per_1m_tokens",
+    "cacheHitInputUsdPerMillion": 0.006,
+    "cacheMissInputUsdPerMillion": 0.3,
+    "outputUsdPerMillion": 1.2
+  },
+  "limits": [
+    "One run; model behavior and DeepSeek caching vary between runs.",
+    "The repair excerpt started at line 1 because the fixture file is shorter than the excerpt window; centring on a failure line is covered by unit tests."
+  ]
+}

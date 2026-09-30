@@ -1,0 +1,251 @@
+{
+  "schemaVersion": 1,
+  "provider": {
+    "kind": "real",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-flash"
+  },
+  "pricing": {
+    "providerId": "memory-live-provider",
+    "model": "deepseek-flash",
+    "tier": "peak",
+    "effectiveAt": "2026-09-10T15:17:38.000Z",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "sourceVersion": "deepseek-pricing-snapshot-2026-09-10",
+    "currency": "USD",
+    "unit": "per_1m_tokens",
+    "cacheHitInputUsdPerMillion": 0.006,
+    "cacheMissInputUsdPerMillion": 0.3,
+    "outputUsdPerMillion": 1.2
+  },
+  "harness": "scripts/memory-context-live-smoke.ts, three sequential cases (without memory, with memory, after deletion); only the executor module differs between runs",
+  "runs": [
+    {
+      "label": "baseline",
+      "executor": "Native v2 executor from f0fad85 (per-phase system prompts, brief after digests)",
+      "passed": true,
+      "completedAt": "2026-09-30T08:16:07.723Z",
+      "distinctSystemPrompts": 2,
+      "total": {
+        "calls": 6,
+        "inputTokens": 6062,
+        "outputTokens": 3411,
+        "cacheReadTokens": 768,
+        "cacheMissTokens": 5294,
+        "cacheHitRate": 0.1267,
+        "completeCacheReports": true
+      },
+      "byPhase": {
+        "analysis": {
+          "calls": 3,
+          "inputTokens": 2394,
+          "outputTokens": 2033,
+          "cacheReadTokens": 256,
+          "cacheMissTokens": 2138,
+          "cacheHitRate": 0.1069,
+          "completeCacheReports": true
+        },
+        "initial": {
+          "calls": 3,
+          "inputTokens": 3668,
+          "outputTokens": 1378,
+          "cacheReadTokens": 512,
+          "cacheMissTokens": 3156,
+          "cacheHitRate": 0.1396,
+          "completeCacheReports": true
+        }
+      },
+      "costUsd": {
+        "cacheHitInput": 0.0000046,
+        "cacheMissInput": 0.0015882,
+        "output": 0.0040932,
+        "total": 0.005686
+      },
+      "cases": [
+        {
+          "label": "without-memory",
+          "greeting": "Standard greeting",
+          "codingRunId": "coding-run-9df2f03a-9b8b-4a09-91de-b46954440c42",
+          "testsPassed": true,
+          "calls": [
+            {
+              "phase": "analysis",
+              "containsMemory": false,
+              "inputTokens": 773,
+              "cacheReadTokens": 0,
+              "outputTokens": 641
+            },
+            {
+              "phase": "initial",
+              "containsMemory": false,
+              "inputTokens": 1168,
+              "cacheReadTokens": 0,
+              "outputTokens": 601
+            }
+          ]
+        },
+        {
+          "label": "with-memory",
+          "greeting": "Welcome to the remembered workspace",
+          "codingRunId": "coding-run-cddcaa15-9030-4024-adf3-d6028b9baece",
+          "testsPassed": true,
+          "calls": [
+            {
+              "phase": "analysis",
+              "containsMemory": true,
+              "inputTokens": 848,
+              "cacheReadTokens": 128,
+              "outputTokens": 823
+            },
+            {
+              "phase": "initial",
+              "containsMemory": true,
+              "inputTokens": 1293,
+              "cacheReadTokens": 256,
+              "outputTokens": 329
+            }
+          ]
+        },
+        {
+          "label": "after-delete",
+          "greeting": "Standard greeting",
+          "codingRunId": "coding-run-f8ac6bf5-862f-4e18-9791-258cf4fad2ca",
+          "testsPassed": true,
+          "calls": [
+            {
+              "phase": "analysis",
+              "containsMemory": false,
+              "inputTokens": 773,
+              "cacheReadTokens": 128,
+              "outputTokens": 569
+            },
+            {
+              "phase": "initial",
+              "containsMemory": false,
+              "inputTokens": 1207,
+              "cacheReadTokens": 256,
+              "outputTokens": 448
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "label": "current",
+      "executor": "Native v2 executor from e9761b0 (one shared system prompt, stateVersion + brief first)",
+      "passed": true,
+      "completedAt": "2026-09-30T08:16:33.386Z",
+      "distinctSystemPrompts": 1,
+      "total": {
+        "calls": 6,
+        "inputTokens": 9318,
+        "outputTokens": 2713,
+        "cacheReadTokens": 4992,
+        "cacheMissTokens": 4326,
+        "cacheHitRate": 0.5357,
+        "completeCacheReports": true
+      },
+      "byPhase": {
+        "analysis": {
+          "calls": 3,
+          "inputTokens": 4209,
+          "outputTokens": 2148,
+          "cacheReadTokens": 1280,
+          "cacheMissTokens": 2929,
+          "cacheHitRate": 0.3041,
+          "completeCacheReports": true
+        },
+        "initial": {
+          "calls": 3,
+          "inputTokens": 5109,
+          "outputTokens": 565,
+          "cacheReadTokens": 3712,
+          "cacheMissTokens": 1397,
+          "cacheHitRate": 0.7266,
+          "completeCacheReports": true
+        }
+      },
+      "costUsd": {
+        "cacheHitInput": 0.00003,
+        "cacheMissInput": 0.0012978,
+        "output": 0.0032556,
+        "total": 0.0045834
+      },
+      "cases": [
+        {
+          "label": "without-memory",
+          "greeting": "Standard greeting",
+          "codingRunId": "coding-run-16e2af75-0baf-4ed8-b4fb-c3af6bc05de0",
+          "testsPassed": true,
+          "calls": [
+            {
+              "phase": "analysis",
+              "containsMemory": false,
+              "inputTokens": 1379,
+              "cacheReadTokens": 0,
+              "outputTokens": 761
+            },
+            {
+              "phase": "initial",
+              "containsMemory": false,
+              "inputTokens": 1672,
+              "cacheReadTokens": 1280,
+              "outputTokens": 182
+            }
+          ]
+        },
+        {
+          "label": "with-memory",
+          "greeting": "Welcome to the remembered workspace",
+          "codingRunId": "coding-run-b9b3ea5e-e155-4807-9021-c4ffd7534327",
+          "testsPassed": true,
+          "calls": [
+            {
+              "phase": "analysis",
+              "containsMemory": true,
+              "inputTokens": 1451,
+              "cacheReadTokens": 640,
+              "outputTokens": 446
+            },
+            {
+              "phase": "initial",
+              "containsMemory": true,
+              "inputTokens": 1748,
+              "cacheReadTokens": 1152,
+              "outputTokens": 195
+            }
+          ]
+        },
+        {
+          "label": "after-delete",
+          "greeting": "Standard greeting",
+          "codingRunId": "coding-run-ba00c1a1-ad25-4efb-b2bf-2492320eab1a",
+          "testsPassed": true,
+          "calls": [
+            {
+              "phase": "analysis",
+              "containsMemory": false,
+              "inputTokens": 1379,
+              "cacheReadTokens": 640,
+              "outputTokens": 941
+            },
+            {
+              "phase": "initial",
+              "containsMemory": false,
+              "inputTokens": 1689,
+              "cacheReadTokens": 1280,
+              "outputTokens": 188
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "limits": [
+    "One run each; DeepSeek caching is best-effort, so rates are indicative.",
+    "The compacted brief here is about 2 KB; real briefs up to 24,000 bytes share more cacheable prefix.",
+    "Every case passed its saved test on the first attempt, so the repair phase and its new context were not exercised.",
+    "Output tokens vary between runs and are not attributed to the change.",
+    "Discussion-bar and stage-Agent memory injection are not covered by this harness."
+  ]
+}

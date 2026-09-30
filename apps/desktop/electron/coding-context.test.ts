@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
-import { compactExecutionContext, type CodingAgentRun, type DesktopPairingCredential } from '@ai-devflow/shared'
+import {
+  compactExecutionContext, type CodingAgentRun, type DesktopPairingCredential, type DurableAgentMemoryRevision,
+  type KnowledgeRetrievalScope,
+} from '@ai-devflow/shared'
 import { runs } from '@ai-devflow/shared/fixtures'
-import { assertCodingContextCurrent, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context'
+import {
+  assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, type CodingMemoryStore,
+} from './coding-context'
 
 const run = runs[0]!
 const now = '2026-09-15T20:00:00.000Z'
@@ -78,5 +83,62 @@ describe('Coding Context authority', () => {
     await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('pairing changed')
     currentPairing = { ...pairing, tokenId: 'renewed-session' }
     await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('pairing changed')
+  })
+})
+
+describe('Coding Memory relevance (ADR 0024)', () => {
+  const localScope: KnowledgeRetrievalScope = {
+    kind: 'local', organizationId: null, projectId: null, userId: run.creatorId,
+    sessionId: 'coding-session-test', localProjectId: run.projectId,
+  }
+  function memory(id: string, statement: string, createdAt: string): DurableAgentMemoryRevision {
+    return {
+      stateVersion: 1, id, revision: 1, status: 'active', scope: localScope, visibility: 'user_project', statement,
+      contentDigest: 'a'.repeat(64), provenanceDigest: 'b'.repeat(64), sourceCandidateId: `candidate-${id}`,
+      supersedesRevision: null, sensitivity: 'private', retentionClass: 'until_deleted', expiresAt: null,
+      promotionDecisionId: `decision-${id}`, promotionActorKind: 'human', promotionActorId: run.creatorId,
+      promotionPolicyId: 'test-memory-policy', promotionPolicyVersion: 1, promotionAuthorityDigest: 'c'.repeat(64), createdAt,
+    }
+  }
+
+  it('attaches only relevant Memory, best match first, and counts the rest as omitted', async () => {
+    const available = [
+      memory('m-greeting', 'Greeting copy lives in src/greeting.js; keep the export name.', '2026-09-15T19:00:00.000Z'),
+      memory('m-latest', 'Keep the latest release notes in docs.', '2026-09-15T19:00:01.000Z'),
+      memory('m-copy', 'Copy changes need design review.', '2026-09-15T19:00:02.000Z'),
+    ]
+    const store: CodingMemoryStore = {
+      getDesktopPairingCredential: async () => null,
+      retrieveAgentMemoryRevisions: async () => available,
+      getAgentMemoryHead: async (memoryId) => ({
+        memoryId, currentRevision: 1, scope: localScope, status: 'active', version: 1, updatedAt: now,
+      }),
+    }
+    const recalled = await recallCodingMemory({
+      store, run, codingRunId: 'coding-relevance', userId: run.creatorId,
+      query: 'Update the greeting copy in src/greeting.js', now,
+    })
+    expect(recalled.revisions.map((revision) => revision.id)).toEqual(['m-greeting', 'm-copy'])
+    expect(recalled.memories.map((identity) => identity.id)).toEqual(['m-greeting', 'm-copy'])
+    expect(recalled.omittedMemoryCount).toBe(1)
+  })
+
+  it('builds the recall query from the node and Gate-approved artifacts, not superseded drafts', () => {
+    const node = run.nodes.find((candidate) => candidate.id === run.currentNodeId)!
+    const approvedGate = { ...node, id: 'gate-clarify', kind: 'gate' as const, stage: 'clarify' as const, status: 'success' as const, artifactIds: ['approved-clarification'] }
+    const approvedRun = { ...run, nodes: [...run.nodes, approvedGate] }
+    const base = { runId: run.id, nodeId: 'clarify-agent', content: 'body', redacted: true, updatedAt: now }
+    const query = buildCodingMemoryQuery({
+      run: approvedRun, node, userInstruction: 'Keep the diff small.',
+      artifacts: [
+        { ...base, id: 'approved-clarification', kind: 'clarification', title: 'Approved scope', summary: 'Filter by status' },
+        { ...base, id: 'old-clarification', kind: 'clarification', title: 'Superseded scope', summary: 'Obsolete idea' },
+      ],
+    })
+    expect(query).toContain(run.request)
+    expect(query).toContain('Keep the diff small.')
+    expect(query).toContain(node.title)
+    expect(query).toContain('Approved scope\nFilter by status')
+    expect(query).not.toContain('Superseded scope')
   })
 })

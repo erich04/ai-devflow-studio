@@ -72,6 +72,7 @@ import {
   createAgentRuntimeRendererSnapshot,
   resolveDevFlowCodingExecutorSelection,
   resolveDevFlowRuntimeFlags,
+  STAGE_AGENT_MEMORY_RECALL_BUDGET,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
@@ -205,6 +206,7 @@ import {
 } from './native-coding-executor-v2.js'
 import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
+import { codingPromptDigest, recallScopedMemory } from './coding-context.js'
 import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
@@ -2233,6 +2235,7 @@ async function getWorkbenchConversationService() {
   workbenchConversationService ??= getStore().then(async (store) => {
     const service = new WorkbenchConversationService({
       store,
+      memory: store,
       resolveProvider: (id, projectId) => resolveAgentProvider(store, id, projectId),
       openHarness: async ({ project, providerId, signal, query }) => {
         const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === providerId)
@@ -2864,6 +2867,20 @@ function registerIpcHandlers() {
         // Resident project knowledge (ADR 0025). A failed index never blocks generation.
         const stageKnowledge = await loadTrustedRepositoryKnowledge(run.projectId).catch(() => undefined)
         try {
+          // ADR 0024: scoped Memory as low-trust background, recalled fresh for every call.
+          // Memory is optional: a recall failure generates without it instead of failing the stage.
+          const recalledAt = new Date().toISOString()
+          const stageRuntimeKey = codingPromptDigest(`${run.id}\n${node.id}`).slice(0, 32)
+          const stageMemory = await recallScopedMemory({
+            store, projectId: run.projectId, userId: actor.userId,
+            runtimeId: `agent-runtime-stage-${stageRuntimeKey}`,
+            requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
+            query: [run.request, node.title, node.subtitle].join('\n'),
+            now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+          }).catch(() => {
+            console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
+            return { revisions: [] as Array<{ id: string; revision: number; statement: string }> }
+          })
           generated = await runWorkflowStageAgent({
             run,
             node,
@@ -2878,6 +2895,9 @@ function registerIpcHandlers() {
             requestedBy: actor.userId,
             runtime: 'electron',
             signal,
+            ...(stageMemory.revisions.length
+              ? { memoryContext: stageMemory.revisions.map(({ id, revision, statement }) => ({ id, revision, statement })) }
+              : {}),
           })
           signal.throwIfAborted()
           if (generated.artifact.designEvidence) {

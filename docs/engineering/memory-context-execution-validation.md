@@ -80,7 +80,9 @@
 - `DEVFLOW_AGENT_OPENAI_MODEL`
 - 可选 `DEVFLOW_MEMORY_LIVE_OUTPUT`；不提供时在 `out/` 下创建新的时间戳目录。
 
-运行 `corepack pnpm test:memory-context-live`。没有启用标志时报告跳过，不加载凭据，也不联系服务商。脱敏报告包含各场景编码 Run ID、提示内容存在性检查、上下文回执、自动与按需证据检查、Token 结算及断言，不包含 API 密钥或完整服务商请求。
+运行 `corepack pnpm test:memory-context-live`。没有启用标志时报告跳过，不加载凭据，也不联系服务商。脱敏报告包含各场景编码 Run ID、提示内容存在性检查、上下文回执、自动与按需证据检查、Token 结算及断言，不包含 API 密钥或完整服务商请求。报告的 `promptCache` 按阶段汇总服务商返回的缓存命中与未命中 token，并记录 system prompt 摘要的种类数；2026-09-30 的前缀缓存对比见 [ADR 0024](../adr/0024-governed-memory-learning-and-recall.md#consequences)。
+
+repair 阶段另有 `corepack pnpm test:native-repair-live`，使用相同的三个凭据变量和单独的启用标志 `DEVFLOW_NATIVE_REPAIR_LIVE=1`，可选 `DEVFLOW_NATIVE_REPAIR_LIVE_OUTPUT`。测试只放在 Native v2 清单跳过的 `build/` 下，所以 initial 提案通常会让已保存测试失败并进入 repair；报告记录 repair 提示的结构（失败位置、只读片段路径、initial 替换数），不保存提示正文。initial 猜中时脚本失败并说明没有触发 repair。
 
 <a id="cursor-consultation"></a>
 

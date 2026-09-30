@@ -10,7 +10,7 @@ import { createDesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import { createLocalStore } from './local-store.js'
 import {
-  createNativeCodingV2RepairSystemPrompt,
+  NATIVE_CODING_V2_SYSTEM_PROMPT,
   createNativeCodingExecutorV2,
   type NativeCodingV2DecisionProvider,
 } from './native-coding-executor-v2.js'
@@ -40,23 +40,54 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   return directory
 }
 
-describe('DevFlow Native Executor v2 runtime', () => {
-  it('binds repair output to the exact previously approved paths and JSON schema', () => {
-    const prompt = createNativeCodingV2RepairSystemPrompt([
-      'src/agent/contracts.ts',
-      'src/web/App.tsx',
-    ])
+/**
+ * Provider prompt caches only reuse an exact prefix. Every Native v2 call must send the
+ * identical system prompt and open its user JSON with the identical stateVersion + brief,
+ * so the brief (the largest shared input) is never re-billed at the cache-miss rate.
+ */
+function expectCacheFriendlyNativeCalls(
+  calls: Array<{ phase: string; systemPrompt: string; userPrompt: string }>,
+  phases: string[],
+): void {
+  expect(calls.map((call) => call.phase)).toEqual(phases)
+  expect(calls.every((call) => call.systemPrompt === NATIVE_CODING_V2_SYSTEM_PROMPT)).toBe(true)
+  const brief = (JSON.parse(calls[0]!.userPrompt) as { brief: string }).brief
+  expect(brief).toContain('DevFlow Coding Brief')
+  const sharedPrefix = `{"stateVersion":2,"brief":${JSON.stringify(brief)},`
+  for (const call of calls) {
+    expect(call.userPrompt.startsWith(sharedPrefix)).toBe(true)
+    // Phase selection and limits are the variable tail, after all evidence.
+    const payload = JSON.parse(call.userPrompt) as Record<string, unknown>
+    expect(payload.phase).toBe(call.phase)
+    expect(Object.keys(payload).slice(-2)).toEqual(['phase', 'limits'])
+  }
+}
 
+describe('DevFlow Native Executor v2 runtime', () => {
+  it('shares one static system prompt that carries every phase contract', () => {
+    const prompt = NATIVE_CODING_V2_SYSTEM_PROMPT
+
+    // Analysis contract.
+    expect(prompt).toContain('"path/from/repositoryManifest"')
+    expect(prompt).toContain('The top-level keys are exactly stateVersion, files, searches, summary')
+    expect(prompt).toContain('Do not propose edits yet')
+    // Change Set contract shared by initial and repair.
     expect(prompt).toContain('"path":"one/exact/allowed/path"')
+    expect(prompt).toContain('"oldText":"exact existing text"')
     expect(prompt).toContain('The top-level keys are exactly stateVersion, changes, summary')
-    expect(prompt).toContain('src/agent/contracts.ts')
-    expect(prompt).toContain('src/web/App.tsx')
-    expect(prompt).toContain('Do not use any other path')
+    expect(prompt).toContain('Do not add extra keys')
+    expect(prompt).toContain('oldText must be a non-empty string')
+    expect(prompt).toContain('oldText and newText must not be identical')
+    expect(prompt).toContain('allowedPaths list of the user message. Do not use any other path')
+    expect(prompt).toContain('Respect ownership boundaries named in the brief')
+    expect(prompt).toContain('Generate each value exactly once at its named owning boundary')
+    expect(prompt).toContain('at most 6 unique file paths with at most 12 replacements')
+    // Repair contract.
     expect(prompt).toContain('return an empty changes array')
     expect(prompt).toContain('Do not undo correct requested behavior')
     expect(prompt).toContain('fix the public contract from an allowed file')
-    expect(prompt).toContain('Respect ownership boundaries named in the brief')
-    expect(prompt).toContain('Generate each value exactly once at its named owning boundary')
+    // The OpenAI-compatible adapter rejects system prompts above 8,000 characters.
+    expect(prompt.length).toBeLessThanOrEqual(8_000)
   })
 
   it.each(['success', 'unrepairable', 'invalid_repair', 'memory_deleted', 'memory_expired', 'memory_changes_during_provider'] as const)(
@@ -114,13 +145,13 @@ describe('DevFlow Native Executor v2 runtime', () => {
       }],
       edges: [],
     }
-    let analysisSystemPrompt = ''
-    let initialSystemPrompt = ''
     const providerPrompts: string[] = []
+    const providerCalls: Array<{ phase: string; systemPrompt: string; userPrompt: string }> = []
     const provider: NativeCodingV2DecisionProvider = {
       id: 'deepseek', version: 2, modelId: 'deepseek-v4-flash', billing: 'metered',
       async complete(input) {
         providerPrompts.push(input.userPrompt)
+        providerCalls.push({ phase: input.phase, systemPrompt: input.systemPrompt, userPrompt: input.userPrompt })
         if (scenario === 'memory_changes_during_provider' && input.phase === 'analysis') {
           if (!promotion.authorized) throw new Error('Expected authorized Memory promotion')
           currentTime = '2026-08-31T00:30:00.001Z'
@@ -138,8 +169,6 @@ describe('DevFlow Native Executor v2 runtime', () => {
           if (!revised.authorized) throw new Error('Expected revision authority')
           await store.commitAgentMemoryRevision({ revision: revised.revision, recordedAt: clock() }, revised.capability)
         }
-        if (input.phase === 'analysis') analysisSystemPrompt = input.systemPrompt
-        if (input.phase === 'initial') initialSystemPrompt = input.systemPrompt
         if (input.phase === 'repair') {
           return {
             value: scenario === 'unrepairable'
@@ -301,14 +330,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
     const waiting = await starting
     expect(providerPrompts).toHaveLength(2)
     expect(providerPrompts.every((prompt) => prompt.includes(rememberedRule))).toBe(true)
-    expect(analysisSystemPrompt).toContain('"path/from/repositoryManifest"')
-    expect(analysisSystemPrompt).toContain('Do not add extra keys')
-    expect(initialSystemPrompt).toContain('"oldText":"exact existing text"')
-    expect(initialSystemPrompt).toContain('Do not add extra keys')
-    expect(initialSystemPrompt).toContain('oldText must be a non-empty string')
-    expect(initialSystemPrompt).toContain('oldText and newText must not be identical')
-    expect(initialSystemPrompt).toContain('Respect ownership boundaries named in the brief')
-    expect(initialSystemPrompt).toContain('Generate each value exactly once at its named owning boundary')
+    expectCacheFriendlyNativeCalls(providerCalls, ['analysis', 'initial'])
     expect(waiting.codingRun).toMatchObject({
       status: 'waiting_permission', engine: 'native', providerId: 'deepseek',
       configVersion: 1, runtimeCostSummary: { source: 'provider_reported' },
@@ -387,6 +409,17 @@ describe('DevFlow Native Executor v2 runtime', () => {
         billingState: 'confirmed',
         usage: expect.objectContaining({ inputTokens: 40, outputTokens: 20 }),
       })]))
+      // The repair call runs after approval, in a separate executor entry point, and must
+      // still start with the same system prompt and brief prefix as the earlier calls.
+      expectCacheFriendlyNativeCalls(providerCalls, ['analysis', 'initial', 'repair'])
+      // ADR 0024 §6: the repair call sees what the initial phase already applied.
+      const repairPayload = JSON.parse(providerCalls[2]!.userPrompt) as { initialChangeSet: unknown; excerpts: Array<{ path: string; content: string }> }
+      expect(repairPayload.initialChangeSet).toEqual({ changes: [expect.objectContaining({
+        path: 'src/message.ts',
+        replacements: expect.arrayContaining([{ oldText: 'message = "old"', newText: 'message = "new"' }]),
+      })] })
+      // Windows checkouts may use CRLF line endings.
+      expect(repairPayload.excerpts).toEqual([expect.objectContaining({ path: 'src/message.ts', content: expect.stringMatching(/^export const message = "new"\r?\n$/u) })])
       await expect(readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8')).resolves.toBe('export const message = "old"\n')
       store.close()
       return
