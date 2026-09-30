@@ -405,14 +405,43 @@ describe('buildAgentReviewContext', () => {
     expect(serialized).not.toContain(evidence.stderr)
     expect(serialized).not.toContain('sk-secret')
     expect(context.knowledgeReferences.length).toBeGreaterThan(0)
+    // Stage references (ADR 0025) remain retrieval candidates, never Gate evidence.
     expect(context.knowledgeReferences).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        lexicalMatch: expect.objectContaining({ normalized: false }),
+        strategy: 'stage',
         gateEvidence: { status: 'retrieval_candidate' },
+      }),
+      expect.objectContaining({
+        relation: 'requires_evidence',
+        documentId: 'knowledge-doc-testing-evidence',
       }),
     ]))
     expect(context.knowledgeReferences.every((reference) => reference.semanticRelevance === undefined)).toBe(true)
+    // Gate criteria come first in REVIEW_CRITERIA.
+    expect(context.knowledgeChunks[0]?.documentId).toBe('knowledge-doc-testing-evidence')
     expect(context.fieldProjection).toEqual(context.manifest.fieldProjection)
+  })
+
+  it('adds the repository instruction file to the review criteria when provided', async () => {
+    const context = await buildAgentReviewContext({
+      run,
+      node,
+      artifacts,
+      testEvidence: [],
+      knowledgeDocuments,
+      knowledgeChunks,
+      projectInstructions: {
+        sourcePath: 'AGENTS.md',
+        content: 'Use corepack pnpm. OPENAI_API_KEY=sk-review-secret-123456',
+        bytes: 58,
+        contentDigest: `sha256:${'b'.repeat(64)}`,
+        truncated: false,
+      },
+    })
+
+    expect(context.projectInstructions).toMatchObject({ sourcePath: 'AGENTS.md', truncated: false })
+    expect(context.projectInstructions?.content).toContain('Use corepack pnpm.')
+    expect(JSON.stringify(context)).not.toContain('sk-review-secret-123456')
   })
 
   it('normalizes legacy non-string artifact fields before redaction', async () => {

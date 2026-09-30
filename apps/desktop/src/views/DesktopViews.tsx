@@ -979,6 +979,7 @@ export function Inspector({
     lexical: '词法检索',
     vector: '向量语义检索',
     hybrid: '混合检索',
+    stage: '按阶段适用',
   } as const)[reference.strategy ?? 'lexical']
   const renderReferenceSemantics = (reference: KnowledgeReference) => {
     const semantics = resolveKnowledgeReferenceSemantics(reference)

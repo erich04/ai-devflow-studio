@@ -20,6 +20,8 @@ import type {
   AgentTrace,
   Artifact,
   ClarificationRepositoryFindings,
+  KnowledgeDocument,
+  ProjectInstructionsSnapshot,
   StageAgentCapabilityGrant,
   StageAgentExecutionBounds,
   StageAgentExecutorKind,
@@ -30,6 +32,7 @@ import type {
 } from './domain'
 import { redactSensitiveText } from './redaction'
 import { resolveDesignClarificationInput } from './design-input'
+import { assembleKnowledgeStageContext, describeKnowledgeContextManifest } from './knowledge-context'
 
 export type WorkflowStageAgentSource = 'model' | 'fake_template' | 'local_agent'
 
@@ -104,6 +107,12 @@ export type RunWorkflowStageAgentInput = {
   bounds?: StageAgentExecutionBounds
   signal?: AbortSignal
   now?: () => string
+  /** Project knowledge directory and instruction file (ADR 0025). */
+  knowledge?: {
+    documents: KnowledgeDocument[]
+    knowledgeRoot?: string | null
+    projectInstructions?: ProjectInstructionsSnapshot | null
+  }
 }
 
 export type RunWorkflowStageAgentResult = {
@@ -237,6 +246,8 @@ function createWorkflowArtifactPrompt(input: {
   request: WorkflowArtifactProviderRequest
   context: WorkflowArtifactProviderContext
   executorKind: StageAgentExecutorKind
+  /** Resident L0/L1 sections (ADR 0025), placed in the stable prompt prefix. */
+  knowledgeSections?: string[]
 }): string {
   const upstreamArtifacts = input.context.artifacts
     .map((artifact) => `- ${artifact.kind}: ${artifact.title} (${artifact.id})\n  Summary: ${artifact.summary}`)
@@ -291,6 +302,7 @@ function createWorkflowArtifactPrompt(input: {
     ...stageInstruction,
     workflowArtifactOutputInstructions(input.request.stage, input.executorKind === 'local-agent'),
     ...repositoryInstruction,
+    ...(input.knowledgeSections ?? []).filter(Boolean).flatMap((section) => ['', section]),
     '',
     'RAW_REQUEST',
     input.context.run.request,
@@ -580,7 +592,22 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   const context = buildWorkflowArtifactContext({ ...input, artifacts: input.artifacts.filter((artifact) =>
     !approved || (artifact.kind !== 'clarification_feedback' &&
       (artifact.kind !== 'clarification' || artifact.id === approved.artifact.id))) })
-  const prompt = [createWorkflowArtifactPrompt({ request, context, executorKind: executor.kind }),
+  const knowledgeContext = input.knowledge
+    ? assembleKnowledgeStageContext({
+        stage,
+        documents: input.knowledge.documents,
+        knowledgeRoot: input.knowledge.knowledgeRoot ?? null,
+        projectInstructions: input.knowledge.projectInstructions ?? null,
+        // OpenCode loads the repository AGENTS.md itself (ADR 0025, K0).
+        injectInstructions: executor.kind !== 'local-agent',
+        canReadFiles: executor.kind === 'local-agent',
+      })
+    : undefined
+  const prompt = [createWorkflowArtifactPrompt({
+    request, context, executorKind: executor.kind,
+    ...(knowledgeContext ? { knowledgeSections: [knowledgeContext.instructionsSection, knowledgeContext.knowledgeSection]
+      .map((section) => redactSensitiveText(section).value) } : {}),
+  }),
     ...(approved ? ['APPROVED_CLARIFICATION_INPUT', JSON.stringify(approved.binding),
       'Use only this Gate-approved clarification. Saved proposals are pending input; identify any conflict with the approved scope.'] : []),
   ].join('\n')
@@ -693,6 +720,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     durationMs: execution.durationMs ?? Math.max(0, Date.now() - started),
     terminalReason: 'success',
     contextDigest,
+    ...(knowledgeContext ? { knowledgeContext: knowledgeContext.manifest } : {}),
   }
 
   let clarificationRevision: Artifact['clarificationRevision']
@@ -772,6 +800,13 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
         summary: `${encodedBytes({ request, context })} bounded bytes; ${context.artifacts.length} immutable context artifact(s).`,
         timestamp: generatedAt,
       },
+      ...(knowledgeContext ? [{
+        id: `agent-trace-${artifact.id}-knowledge`,
+        kind: 'context' as const,
+        label: 'Bind project knowledge',
+        summary: describeKnowledgeContextManifest(knowledgeContext.manifest),
+        timestamp: generatedAt,
+      }] : []),
       {
         id: `agent-trace-${artifact.id}-executor`,
         kind: 'provider_call',
