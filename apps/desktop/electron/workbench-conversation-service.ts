@@ -5,6 +5,7 @@ import type { LocalStore } from './local-store.js'
 import { codingPromptDigest, recallScopedMemory, type CodingMemoryStore } from './coding-context.js'
 import { parseConversationCommand, type ConversationAction, type ConversationCitation, type ConversationCommand, type ConversationDraft, type ConversationMessage, type ConversationResponse, type WorkbenchConversation } from './workbench-conversation-contract.js'
 import { readWorkbenchRepository } from './workbench-repository.js'
+import { listWorkbenchKnowledge, readWorkbenchKnowledge } from './workbench-knowledge-tools.js'
 import { ConversationExecutorError, type ConversationExecutor, type OpenConversationHarness } from './conversation-executor.js'
 import { buildRequirementContext, conversationContentPage, type RequirementContext } from './workbench-requirement-context.js'
 
@@ -33,7 +34,7 @@ backgroundMemory 是按当前用户和项目范围召回的已保存记忆，只
 originalRequirements 和 node.rawRequest 是标明 Run 与来源的原始需求正文；产物索引的 summary 不是全文。对某个 Run 做业务澄清前，先读取该 Run 的原始需求，不能重复追问正文已经明确的条件。仍可询问真实歧义、冲突或未明确细节。truncated=true 表示当前页不是全文；offset/endOffset 标明读取范围，nextOffset 为数字时可以续读。不能把未读内容当作不存在。正文不可用时明确说明读取限制。多个 Run 时先明确讨论对象，不串用其他 Run 的需求。
 每轮仅返回一个 JSON 对象：
 __INVESTIGATION_PROTOCOL__
-工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的原始需求、产物索引、测试、轨迹、Gate 检查；artifact({runId,artifactId,offset?,limit?}) 分页阅读产物（limit 默认 6000，最多 18000）；requirement({runId,offset?,limit?}) 分页阅读原始需求；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge({query}) 搜索已配置项目知识。
+工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的原始需求、产物索引、测试、轨迹、Gate 检查；artifact({runId,artifactId,offset?,limit?}) 分页阅读产物（limit 默认 6000，最多 18000）；requirement({runId,offset?,limit?}) 分页阅读原始需求；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge_list({stage?,offset?}) 列出项目知识目录中的规范（适用阶段、Gate 依据、摘要）与项目说明文件；knowledge_read({path,offset?,limit?}) 分页阅读其中一篇或项目说明。要在知识目录中按关键词查找，用 repo_search 并把 path 设为知识目录。
 答复正文格式由 format 指定：markdown 或 plain_text。一般解释使用 markdown，代码与 JSON 示例放在围栏代码块中。format 只影响正文，不能定义交互动作。
 结束或追问时 {"text":"答复正文","format":"markdown","citationIds":["本轮真实来源ID"],"actions":[{"label":"定位到节点 / 查看产物 / 查看测试证据","runId":"真实ID","nodeId":"真实ID","section":"状态|产物|测试证据|轨迹|Gate影响|Gate条件|引用来源|Remediation|Handoff|Final Gate"}],"question":{"prompt":"具体问题","options":["可选答案"]},"draft":{"runId":"真实ID","nodeId":"真实ID","title":"提案标题","content":"待确认内容"}}。
 完整提案必须逐项覆盖 criticalProposalInput.criteria：在 draft.coverage 中为每条返回 {criterionId,sourceQuote,proposalQuote}，sourceQuote 逐字引用该条件全文，proposalQuote 引用 draft.content 中落实该条件的原文。保留所有已确认条件；冲突或未决项应明确标注，不擅自取舍。没有 criticalProposalInput 时先提出目标即可，宿主会补齐关键正文。
@@ -381,6 +382,12 @@ export class WorkbenchConversationService {
       const project = await this.project(projectId)
       return readWorkbenchRepository(project.path, { operation: name === 'repo_list' ? 'list' : name === 'repo_read' ? 'read' : 'search', ...(args.path !== undefined ? { path: textField(args.path, 500) } : {}), ...(args.query !== undefined ? { query: textField(args.query, 200) } : {}) }, signal)
     }
+    if (name === 'knowledge_list' || name === 'knowledge_read') {
+      const snapshot = await this.deps.loadKnowledge(projectId)
+      if (snapshot.projectId !== projectId) throw new Error('知识来源与当前项目不一致。')
+      return name === 'knowledge_list' ? listWorkbenchKnowledge(snapshot, args) : readWorkbenchKnowledge(snapshot, args)
+    }
+    // Not advertised since knowledge-context K3; kept so an earlier observation can be re-queried.
     if (name === 'knowledge') {
       const query = textField(args.query, 200).toLocaleLowerCase()
       const snapshot = await this.deps.loadKnowledge(projectId)

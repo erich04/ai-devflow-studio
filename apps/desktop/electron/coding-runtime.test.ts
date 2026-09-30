@@ -42,6 +42,7 @@ import {
   CodingEnginePermissionDiscoveryError,
 } from './coding-engine-lifecycle'
 import {
+  codingBriefKnowledgeDelivery,
   createCodingRuntime,
   type CodingRuntimeDependencyBootstrapRunner,
 } from './coding-runtime'
@@ -2477,8 +2478,12 @@ describe('CodingRuntime', () => {
     })
 
     expect(result.codingRun.prompt).toContain('Health endpoint design')
-    expect(result.codingRun.prompt).toContain('No knowledge references are attached.')
+    // Stage knowledge replaces the reference lines (knowledge-context K3); an empty
+    // knowledge directory adds nothing to the brief but is still recorded.
+    expect(result.codingRun.prompt).not.toContain('PROJECT_KNOWLEDGE')
+    expect(result.codingRun.prompt).not.toContain('Knowledge References')
     expect(result.codingRun.prompt).not.toContain('knowledge-doc-api-health')
+    expect(result.codingRun.contextReceipt?.knowledgeContext).toMatchObject({ stage: 'build', instructions: null, included: [] })
     expect(result.codingRun.prompt).toContain('Gate Decisions')
     expect(result.codingRun.prompt).toContain('approved by devflow: Lead Gate 已通过：方案评审 Gate')
     expect(result.codingRun.prompt).toContain('Existing Test Evidence')
@@ -2500,9 +2505,10 @@ describe('CodingRuntime', () => {
       summary: 'Health endpoints expose degraded dependency states.',
       tags: ['api', 'health'],
       updatedAt: '2026-06-17T00:00:00.000Z',
-      markdown: '# API Health Standard\n\nUNIQUE_KNOWLEDGE_CONTENT requires contract tests.',
+      markdown: '# API Health Standard\n\nUNIQUE_KNOWLEDGE_CONTENT requires contract tests. API_TOKEN=runtime-secret-value',
       // The brief carries standards that apply to the build stage (ADR 0025).
       stages: ['build'],
+      contentDigest: `sha256:${'c'.repeat(64)}`,
     }]
     const knowledgeChunks: KnowledgeChunk[] = [{
       id: 'knowledge-chunk-api-health',
@@ -2535,9 +2541,19 @@ describe('CodingRuntime', () => {
     })
 
     expect(result.codingRun.prompt).toContain('UNIQUE_KNOWLEDGE_CONTENT requires contract tests.')
-    expect(result.codingRun.prompt).toContain('source=docs/standards/api-health.md')
+    expect(result.codingRun.prompt).toContain('### API Health Standard — docs/standards/api-health.md')
     expect(result.codingRun.prompt).toContain('[REDACTED:env_secret_assignment]')
     expect(result.codingRun.prompt).not.toContain('runtime-secret-value')
+    expect(result.codingRun.contextReceipt?.knowledgeContext?.included).toEqual([
+      expect.objectContaining({ sourcePath: 'docs/standards/api-health.md', contentDigest: `sha256:${'c'.repeat(64)}`, gate: false }),
+    ])
+  })
+
+  it('chooses how the brief delivers project instructions per executor (knowledge-context K3)', () => {
+    const descriptor = (kind: 'opencode' | 'native') => ({ kind } as CodingExecutor['descriptor'])
+    expect(codingBriefKnowledgeDelivery({ engine: 'fake', descriptor: descriptor('native') })).toEqual({ instructions: 'none', canReadFiles: false })
+    expect(codingBriefKnowledgeDelivery({ engine: 'opencode-http', descriptor: descriptor('opencode') })).toEqual({ instructions: 'executor', canReadFiles: true })
+    expect(codingBriefKnowledgeDelivery({ engine: 'native', descriptor: descriptor('native') })).toEqual({ instructions: 'devflow', canReadFiles: true })
   })
 
   it('uses one canonical coding brief for paid budget preflight and the engine prompt', async () => {

@@ -35,6 +35,11 @@ export type CodingContextReceipt = {
   memories: { id: string; revision: number; headVersion: number; contentDigest: string }[]
   omittedMemoryCount: number
   compaction: ContextCompactionReceipt
+  /**
+   * Project instructions and stage knowledge bound into the brief (ADR 0025 §5). Background
+   * only: a later knowledge change does not invalidate the run. Absent on older receipts.
+   */
+  knowledgeContext?: import('./domain').KnowledgeContextManifest
 }
 
 export function contextBytes(value: string): number {
