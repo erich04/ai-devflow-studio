@@ -412,6 +412,13 @@ describe('DevFlow Native Executor v2 runtime', () => {
       // The repair call runs after approval, in a separate executor entry point, and must
       // still start with the same system prompt and brief prefix as the earlier calls.
       expectCacheFriendlyNativeCalls(providerCalls, ['analysis', 'initial', 'repair'])
+      // ADR 0024 §6: the repair call sees what the initial phase already applied.
+      const repairPayload = JSON.parse(providerCalls[2]!.userPrompt) as { initialChangeSet: unknown; excerpts: Array<{ path: string; content: string }> }
+      expect(repairPayload.initialChangeSet).toEqual({ changes: [expect.objectContaining({
+        path: 'src/message.ts',
+        replacements: expect.arrayContaining([{ oldText: 'message = "old"', newText: 'message = "new"' }]),
+      })] })
+      expect(repairPayload.excerpts).toEqual([expect.objectContaining({ path: 'src/message.ts', content: 'export const message = "new"\n' })])
       await expect(readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8')).resolves.toBe('export const message = "old"\n')
       store.close()
       return

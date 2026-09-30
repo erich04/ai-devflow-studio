@@ -81,7 +81,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 
 ### 6. 运行中和会话级压缩
 
-- Native v2 repair 调用增加：`initialChangeSet`（已应用的 initial 替换，有长度上限）和 `failureLocations`（从原始测试输出解析出的 `file:line`，只保留工作区内的规范相对路径）。可编辑文件的片段以首个失败位置为中心，而不是文件开头。不可编辑文件只附带短的只读片段。提示超限时依次去掉只读片段、`initialChangeSet` 正文、`failureLocations`，最后才截短可编辑片段。initial 提案的 `summary` 和分析摘要目前没有持久化，暂不附带。
+- Native v2 repair 调用增加：`initialChangeSet`（已应用的 initial 替换，有长度上限）和 `failureLocations`（从原始测试输出解析出的 `file:line`，只保留工作区内的规范相对路径）。可编辑文件的片段以首个失败位置为中心，而不是文件开头；片段不从第 1 行开始时带 `startLine`。不可编辑文件只附带短的只读片段（最多 3 个，失败行前后各 20 行，每个不超过 2,000 字符）。提示超限时依次去掉只读片段、`initialChangeSet` 正文（只保留路径）、`failureLocations`，最后才把可编辑片段截短到下限以下。单个可编辑片段上限 32 KB 已超过 30,000 字符的提示上限，所以每一级先把以失败行为中心的窗口缩到 4,000 字符的下限，仍超限才进入下一级。initial 提案的 `summary` 和分析摘要目前没有持久化，暂不附带。
 - 讨论栏超出预算时，较早的工具观察先降级为占位 `{sourceId, name, args, observedAt, degraded: true}`，可以用相同 `name` 和 `args` 重新查询，而不是整条丢弃。降级按从旧到新进行，最新一条保持完整，并写回本轮的观察数组，保证之后各步的前缀稳定。降级优先于丢弃较早的聊天历史。
 - 滚动会话摘要、LLM 摘要和按提供方估算 token 的预算单位，等 V3.0 的会话账本与 `PromptSection` 压缩契约（`docs/plans/v3.x-agent-runtime-capability-roadmap.md`）建成后再做，避免两套压缩边界。
 
@@ -110,7 +110,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 | 第 4 节 `coding_run` 来源、迁移、存储校验、UI | 未做 |
 | 第 5 节 去重接入晋升、策略晋升 | 未做，策略可见性待确认 |
 | 第 6 节 `file:line` 解析（共享纯函数） | 已实现，有单元测试 |
-| 第 6 节 repair 上下文接入执行器 | 未做 |
+| 第 6 节 repair 上下文接入执行器 | 已实现，有测试（`buildNativeCodingV2RepairPrompt`） |
 | 第 6 节 工具结果占位 | 未做 |
 | 第 6 节 滚动摘要、token 预算单位 | 推迟到 V3.0 |
 
