@@ -6,9 +6,9 @@
 
 [快速开始](#quick-start) · [完整流程](#from-request-to-acceptance) · [架构](#architecture) · [文档](#documentation) · [项目简介](docs/product/project-introduction.zh-CN.md)
 
-![Electron 工作台全窗口：四个阶段已完成、三组测试通过，并显示用量与已有项目对话](docs/guides/screenshots/current-20260928/desktop-workbench.jpg)
+![Electron 任务页：前四个阶段已通过，PR 交付步骤的状态行写明“可以准备交付”与主动作](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-task-current-work-1440x900.jpg)
 
-_2026 年 9 月 28 日的 Electron 全窗口截图。Payments API 示例包含四个工作流实例、阶段进度、产物、三条测试结果、用量估算和已保存的对话。流程历史、审查、用量和对话内容为演示样例；示例项目中的 14 项测试确已执行。点击图片可查看原始分辨率。[截图来源与范围](docs/guides/screenshots/current-20260928/README.md)。_
+_2026 年 9 月 28 日工作区改造后的 Electron 任务页，内容区 1440 × 900。左侧是任务、知识、团队、设置四个入口；标题下是六个阶段；状态行给出当前结论与主动作；下方是「当前工作」「材料与版本」「执行记录」三个页签。示例在隔离环境中用 Deterministic Fake Provider 和模拟编码推进，正文为模拟模板。[截图来源与范围](docs/guides/screenshots/workspace-redesign-20260928/README.md)。_
 
 > **发布与路线图状态**：最新已发布版本是 [`v2.3.0`](https://github.com/erich04/ai-devflow-studio/releases/tag/v2.3.0)，发布时间为 2026 年 9 月 14 日。本 README 介绍当前 `main` 源码，包括此后完成的工作台、记忆、模型治理和多组织改动。使用这些改动需要从源码构建，已发布安装包不会自动包含后续源码变化。详见 [V2.3 发布说明](docs/releases/v2.3.0/notes.md)与[路线图](docs/roadmap.md)。候选版本验证、正式验收和已发布安装包分别记录。
 
@@ -27,43 +27,34 @@ _2026 年 9 月 28 日的 Electron 全窗口截图。Payments API 示例包含�
 | **PR 交付** | 准备交付包，取得独立的 Web 批准后发布获准的提交。 | 经核验的分支头与 Draft pull request。 |
 | **业务验收** | 对照需求目标，核对交付结果与证据。 | 明确的业务验收结论。 |
 
-浏览阶段不会推进 Run。工作台区分“正在查看”与“实际进度”；同阶段的 Gate 尚未通过时显示部分完成，并提供返回当前进度的操作。精简导航、流程视图和列表视图共用同一份流程状态。
+浏览阶段不会推进 Run。任务页区分“正在查看”与“实际进度”：浏览已完成或尚未开始的步骤时，页面同时写明实际进度，并提供「返回当前工作」。状态行的结论与按钮来自同一份状态投影；仅警告的策略不显示为阻断，停止、取消和拒绝始终在状态行上。
 
 <details>
-<summary>查看包含阶段卡片与证据的完整流程看板</summary>
+<summary>Electron 阶段图集：需求确认 → 方案评审 → 开发权限 → 浏览历史步骤</summary>
 
-![Electron 流程视图全窗口：澄清、设计、实现与测试已完成，PR 交付待处理](docs/guides/screenshots/current-20260928/desktop-workflow-overview.jpg)
+**1. 需求确认 Gate：策略仅警告、尚未运行门禁审查**
 
-_同一示例的流程视图，展示六阶段导航、当前可见的流程卡片、节点详情和独立对话；下方卡片通过页面内滚动查看。截图保留完整的 3840 × 1608 应用视口。_
+![Electron 任务页：状态行写明“等待你确认需求 v1 · 尚未运行 AI 审查”，同屏有运行门禁审查与确认需求 v1](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/clarify-gate-warn-1440x900.jpg)
 
-</details>
+_确认按钮写明所确认的版本。阅读历史版本或原始需求时，按钮仍指向待确认版本，第一次点击只提示，第二次才提交。_
 
-<details>
-<summary>Electron 阶段图集：需求 → 设计 → 代码变更 → PR 准备</summary>
+**2. 方案评审 Gate：审批绑定所看到的方案版本**
 
-**1. 需求澄清：原始请求、验收标准与非目标**
+![Electron 任务页：状态行写明所审方案与记录时间，主动作为运行门禁审查，次要动作为确认方案](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/design-gate-1440x900.jpg)
 
-![Electron 全窗口：展开的需求澄清产物与原始请求，右侧保留项目对话](docs/guides/screenshots/current-20260928/desktop-clarification.jpg)
+_确认时发送方案的标识、记录时间与内容摘要，主进程重新读取后逐项比对，不一致时在写入前拒绝。_
 
-_Run 仍停留在 PR 准备阶段，用户正在浏览已完成的澄清节点。阅读区展开了目标、验收标准与范围边界。_
+**3. 开发实现：权限请求在状态行上处理**
 
-**2. 方案设计：模块职责、取舍与评审问题**
+![Electron 任务页：等待处理权限请求，剩余时间、批准本次、查看权限详情、拒绝与停止执行都在状态行上](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/build-permission-1440x900.jpg)
 
-![Electron 全窗口：Health API 方案、组件职责与项目讨论](docs/guides/screenshots/current-20260928/desktop-design.jpg)
+_编码在任务页内运行；权限请求显示剩余时间，批准与拒绝不需要离开任务页。_
 
-_Health API 示例展示 HealthRoute、HealthService 与 DependencyProbe 的职责和依赖降级方案。当前浏览的是已完成的设计阶段；300 ms 超时仍是未完成的设计目标。_
+**4. 浏览已完成的步骤：实际进度仍然可见**
 
-**3. 开发实现：变更文件与验证摘要**
+![Electron 任务页：正在查看历史步骤开发实现，提示条写明实际进度在 PR 交付](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-task-history-build-1440x900.jpg)
 
-![Electron 全窗口：变更文件表、验证摘要，以及测试和交付进度](docs/guides/screenshots/current-20260928/desktop-implementation.jpg)
-
-_当前可见区域列出隔离示例仓库的实现文件、测试文件和 14 项测试摘要；完整差异位于产物下方。流程历史和对话仍为演示样例。_
-
-**4. PR 准备：交付范围、测试证据与剩余检查**
-
-![Electron 全窗口：展开的 PR 准备材料，展示交付范围与变更文件](docs/guides/screenshots/current-20260928/desktop-pr-preparation.jpg)
-
-_人工编写的 PR 材料预览用于展示交付阅读区，其中明确记录尚未实现的超时要求和待完成的团队批准。该示例没有发布 PR，也没有完成业务验收。_
+_在历史步骤上的操作不会改变实际进度。「材料与版本」按当前待处理、已确认依据、原始输入与参考、讨论提案、历史记录分组；「执行记录」保留模型调用、工具时间线与测试日志。_
 
 </details>
 
@@ -79,7 +70,7 @@ _人工编写的 PR 材料预览用于展示交付阅读区，其中明确记录
 | **门禁审查（Gate Review）** | 根据知识提出意见、证据缺口、建议测试和策略建议，帮助人工判断是否批准。模型不会批准 Gate。 |
 | **有界协作** | 高级 Supervisor/Specialist 运行时采用预先定义的任务依赖图、共享预算、限定能力和工作区单写入者租约。详见 [V2.2 契约与评估范围](docs/product/prd/v2.2-multi-agent-execution-tenancy-prd.md)。 |
 
-浏览流程时，独立对话保留在节点详情旁。新建会话时可选择执行方式，也可从历史记录重新打开会话，或通过会话页签菜单查看详情和模型调用记录。讨论可以保存为**待确认的节点提案**；保存本身不会修改代码、批准 Gate 或发布 PR。
+项目讨论默认收起，在任务标题行点「讨论」后在任务页右侧展开，收起再打开时草稿仍在。新建会话时可选择执行方式，也可从历史记录重新打开会话，或通过会话页签菜单查看详情和模型调用记录。讨论可以保存为**待确认的节点提案**；保存本身不会修改代码、批准 Gate 或发布 PR。
 
 协作中的委派深度、并发、能力和工作区写入均有明确边界。Agent 输出经过相应的确定性校验后才能作为工作流证据；推进流程和批准 Gate 仍由可信命令及人工决策控制。
 
@@ -94,52 +85,53 @@ _人工编写的 PR 材料预览用于展示交付阅读区，其中明确记录
 
 实现边界与实验记录见[记忆与上下文验证](docs/engineering/memory-context-execution-validation.md)、[记忆生命周期 ADR](docs/adr/0018-scoped-agent-memory-lifecycle.md)和[编码上下文 ADR](docs/adr/0021-coding-memory-context-and-evidence-evaluation.md)。
 
-![Electron 全窗口：待批准的方案 Gate、就绪检查、策略详情与已有设计评审对话](docs/guides/screenshots/current-20260928/desktop-gate-review.jpg)
+![Electron 知识页：仓库 Markdown 索引已更新，同一份文档的引用按任务、材料与 Gate 分组列出](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-knowledge-1440x900.jpg)
 
-_第二个示例 Run 展示待批准的方案 Gate、就绪检查与策略详情，右侧保留关于并发、发布顺序和兼容性的讨论。设计、审查和对话均为明确标注的预置演示记录，Gate 仍未获批准。_
+_知识页展示仓库 Markdown 索引与当前任务的引用。同一份文档被多处引用时按文档合并，每处写明引用关系、审查状态和检索方式；检索候选尚未经审查确认，不等于 Gate 依据。示例知识文档来自隔离示例仓库。_
 
 <a id="team-collaboration-and-delivery"></a>
 
 ## 团队协作与交付
 
-当前 Web 界面包含工作台、团队概览、项目设置、预算和策略页面。历史 `/legacy-shell` 地址会重定向到当前界面。
+当前 Web 界面有我的待办、项目任务、团队、设置四个入口。我的待办列出当前项目中等待你处理的 Gate、交付审批与异常，并写明数据的读取时间；旧的 `projectId + runId` 链接仍直接打开对应任务，历史 `/legacy-shell` 地址会重定向到当前界面。
 
-- **项目与请求**：创建团队项目（Team Project），提交工作请求（Work Request），再由已配对桌面端明确领取。有效项目成员可以为自己生成有期限、仅能使用一次的桌面配对码。
+- **项目与请求**：创建团队项目（Team Project），在「项目任务」中提交团队请求（Work Request），再由已配对桌面端明确领取。有效项目成员可以在「设置 › 桌面连接」为自己生成有期限、仅能使用一次的桌面配对码。
+- **Web 审批**：需求确认与方案评审绑定桌面端上传的材料版本；材料版本未同步或已变化时不能批准，但仍可驳回。没有审批权限的成员看到“等待负责人审批”，不显示按钮。
 - **组织**：独立组织、成员关系、邀请、切换、归档/恢复和限定组织范围的 GitHub 仓库分配已实现，由 `DEVFLOW_MULTI_ORGANIZATION_ENABLED=true` 开启。默认入门流程仍为单团队模式。详见[部署指南](docs/guides/multi-organization-deployment.md)。
-- **预算与策略**：查看用量、配置项目策略和预算、评审批准或修复请求。当权威预算上下文不可用或超出作用范围时，付费 Coding 与 Gate Review 运行时在调用提供方前拒绝继续；受治理的模型调用也覆盖阶段生成和工作台对话。
+- **预算与策略**：在 Web「设置」中查看用量、配置项目策略和预算、创建一次性预算批准；桌面端只读显示团队预算。当权威预算上下文不可用或超出作用范围时，付费 Coding 与 Gate Review 运行时在调用提供方前拒绝继续；受治理的模型调用也覆盖阶段生成和工作台对话。
 - **可恢复同步**：持久化发件箱保存脱敏同步任务，支持有限次数重试与重启恢复。桌面端仍是本地 Run 和完整执行记录的权威来源。
 - **GitHub 交付（GitHub Delivery）**：交付意图（Delivery Intent）绑定精确提交、Run 版本、测试、仓库绑定和交付包。发布前必须取得独立签名的 Web 批准。遵循最小权限的 GitHub App 支持推送获准的精确分支，并通过 API 核验 Draft pull request。DevFlow 永不合并代码，也不强制推送、删除远端分支或发布标签。
 
-![Web 团队概览全窗口：成员、项目费用估算、不同阶段的 Run 与三组已通过测试摘要](docs/guides/screenshots/current-20260928/web-team-overview.jpg)
+![Web 我的待办：数据读取时间，两条方案评审，其中一条写明材料版本未同步、暂不能批准](docs/guides/screenshots/workspace-redesign-20260928/web/web-todo.png)
 
-_Next.js 团队概览展示示例成员、项目费用、Run 状态与测试证据。隔离的演示 API 通过正常端点接收脱敏示例摘要。完整截图与源码提交见[截图记录](docs/guides/screenshots/current-20260928/README.md)。_
+_Next.js 控制台的我的待办。每行写明请求方、材料版本、更新时间和是否需要你处理，并只有一个「查看」入口。隔离的演示 API 通过正常同步接口接收脱敏示例摘要；左下角的 “N” 是 Next.js 开发模式标记。完整截图与源码提交见[截图记录](docs/guides/screenshots/workspace-redesign-20260928/README.md)。_
 
 <details>
-<summary>Web 控制台图集：工作请求 → 证据与评审 → 预算 → 团队策略</summary>
+<summary>Web 控制台图集：任务详情与审批 → 项目任务 → 预算 → 团队策略</summary>
 
-**1. 工作请求：提交需求与查看待领取队列**
+**1. 任务详情：所审材料、审批角色与你的角色**
 
-![Web 控制台全窗口：两条已保存请求、填写中的新请求草稿与项目/Run 选择器](docs/guides/screenshots/current-20260928/web-work-requests.jpg)
+![Web 任务详情：状态、当前步骤、数据时效，以及方案评审的所审材料、审批角色和审批说明](docs/guides/screenshots/workspace-redesign-20260928/web/web-task-detail.png)
 
-_隔离的 Team API 保存了两条示例请求；填写中的表单是尚未提交的第三条草稿。桌面端须明确领取请求后才创建本地 Run。_
+_审批区写明所审材料的类型与记录时间，完整标识在技术详情中。批准前必须填写审批说明；Web 只提交协作意图，由拥有该任务的桌面端复核后执行。_
 
-**2. 证据与人工评审：核对进度，再批准下一阶段**
+**2. 项目任务：团队请求与开发任务**
 
-![Web 全视口：四个已同步节点、75% 进度，以及待批准的方案 Gate](docs/guides/screenshots/current-20260928/web-evidence-review.jpg)
+![Web 项目任务：团队请求表单（尚无请求），下方是两个等待审批的开发任务](docs/guides/screenshots/workspace-redesign-20260928/web/web-project-tasks.png)
 
-_页面展示 API 已接收的四个节点，其中三个完成，因此显示 75%。这是当前同步摘要的进度，不是桌面端完整八节点流程的完成率；Gate 尚未批准。节点标题由当前 API 同步逻辑生成。_
+_桌面端须明确领取团队请求后才创建本地任务；任务列表只读，进度来自桌面端最近一次上传。_
 
-**3. 预算治理：额度、用量记录与限定范围的批准**
+**3. 设置 › 预算：额度、用量与一次性批准**
 
-![Web 设置全窗口：已保存项目预算、一条演示预算批准与新批准表单](docs/guides/screenshots/current-20260928/web-budget-governance.jpg)
+![Web 设置的预算分区：当前规则、预算规则表单与一次性预算批准](docs/guides/screenshots/workspace-redesign-20260928/web/web-settings-budget.png)
 
-_示例使用每月 $200 的额度、$150 的预警阈值和一条 $5 批准记录展示控件。费用为演示值，没有调用付费模型。_
+_预算只在 Web 修改；桌面端设置中只读显示，并写明修改位置。_
 
-**4. 团队策略：规则动作、最低要求与修复指引**
+**4. 设置 › 策略：规则动作、最低要求与修复指引**
 
-![Web 团队策略：已保存的 Recommended 预设、规则动作、最低要求和当前项目生效动作](docs/guides/screenshots/current-20260928/web-policy-rules.jpg)
+![Web 设置的策略分区：团队策略规则表与预设](docs/guides/screenshots/workspace-redesign-20260928/web/web-settings-policy.png)
 
-_演示 Owner 通过实际 Web 编辑器将内置 Recommended 预设保存为策略 v2。页面区分已保存的团队策略与桌面端上次同步的策略快照。_
+_页面区分已保存的团队策略与桌面端上次同步的策略快照；只有组织 Owner 可以修改。_
 
 </details>
 
@@ -305,15 +297,15 @@ DEVFLOW_CODING_ENGINE=fake \
 corepack pnpm dev:electron
 ```
 
-这些开发标志启用确定性的流程/审查提供方和模拟编码引擎。本次演练在 **Agents** 中选择 **Deterministic Fake Provider**，不会调用付费模型。选择仓库并创建 Run 后，桌面端会显示相应内容。对网络开放的部署应关闭演示身份认证。
+这些开发标志启用确定性的流程/审查提供方和模拟编码引擎。本次演练在**设置 › 模型与执行方式**中选择 **Deterministic Fake Provider**，不会调用付费模型。选择仓库并新建任务后，桌面端会显示相应内容。对网络开放的部署应关闭演示身份认证。
 
-1. 选择一个已提交的小型 Git 仓库，保存检测到的测试命令。
-2. 创建 Run，填写具体请求和验收标准。
-3. 生成澄清与设计，核对材料，并评审人工 Gate。
-4. 从开发节点运行编码，检查权限和工作树差异，再执行测试。
-5. 核对产物、测试、轨迹与用量。真实 GitHub 发布还需要团队配置、仓库绑定和独立交付批准。
+1. 在顶栏的项目菜单中选择一个已提交的小型 Git 仓库，在**设置 › 本地项目**保存检测到的测试命令。
+2. 点击**新建任务**，填写具体请求和验收标准。
+3. 在任务页生成需求澄清与方案，阅读材料，按状态行确认需求与方案 Gate。
+4. 在开发实现步骤运行编码，在状态行处理权限请求，查看工作树差异，再到测试步骤运行检查。
+5. 在「材料与版本」和「执行记录」中核对材料、测试、轨迹与用量。真实 GitHub 发布还需要团队配置、仓库绑定和独立交付批准。
 
-日常使用时，省略演示标志，在 **Agents** 中配置所需提供方/执行器，并在付费模型调用前完成团队项目配对与预算设置。凭据和执行方式需要明确配置；安装 DevFlow 不会自动配置模型提供方。
+日常使用时，省略演示标志，在**设置 › 模型与执行方式**中配置所需提供方与执行器，并在付费模型调用前于**设置 › 团队连接**连接团队项目（顶栏的「团队连接」弹层显示连接状态），由团队在 Web「设置 › 预算」中配置预算。凭据和执行方式需要明确配置；安装 DevFlow 不会自动配置模型提供方。
 
 `corepack pnpm dev:desktop` 仅启动浏览器渲染预览。目录选择、本地命令、流程写入和编码执行需要 `corepack pnpm dev:electron`。
 
@@ -335,7 +327,7 @@ corepack pnpm --filter @ai-devflow/api db:setup
 corepack pnpm --parallel --filter @ai-devflow/api --filter @ai-devflow/web dev
 ```
 
-打开 `http://127.0.0.1:4311`，选择**使用本地开发身份**。在当前 Web 界面创建团队项目，通过**设置**配置预算并生成桌面配对码。在另一终端运行 `corepack pnpm dev:electron`，选择本地仓库并输入配对码完成绑定。本地开发身份要求真实 Postgres，不会启用演示种子数据，也不能替代生产身份认证。
+打开 `http://127.0.0.1:4311`，选择**使用本地开发身份**。创建团队项目，在「设置 › 预算」配置预算，在「设置 › 桌面连接」生成桌面配对码。在另一终端运行 `corepack pnpm dev:electron`，选择本地仓库，在**设置 › 团队连接**粘贴配对码并点击**连接**。本地开发身份要求真实 Postgres，不会启用演示种子数据，也不能替代生产身份认证。
 
 Docker、GitHub OAuth、部署密钥、备份恢复与发布包的操作见[自行部署试用指南](docs/guides/devflow-studio-self-hosted-pilot.md)。启用多组织时，另请阅读[组织部署指南](docs/guides/multi-organization-deployment.md)。
 
@@ -385,7 +377,7 @@ corepack pnpm verify
 | --- | --- |
 | 项目简介 | [项目简介](docs/product/project-introduction.zh-CN.md) |
 | 产品术语与历史设计 | [产品定义](docs/product/product-definition.md)、[上下文术语表](CONTEXT.md)、[架构决策](docs/adr/) |
-| 工作台行为 | [阶段导航与会话栏](docs/validation/workflow-navigation-20260924.md)、[对话架构](docs/engineering/workbench-conversations.md) |
+| 任务页与 Web 控制台的结构 | [工作区改造方案](docs/plans/task-centered-workspace-redesign-2026-09-28.zh-CN.md)、[界面设计理由](docs/product/details/ui-design-rationale.md)、[对话架构](docs/engineering/workbench-conversations.md) |
 | 记忆、上下文与真实证据检查 | [实现验证](docs/engineering/memory-context-execution-validation.md) |
 | 组织与租户隔离 | [部署](docs/guides/multi-organization-deployment.md)、[ADR 0023](docs/adr/0023-independent-organizations.md)、[验证](docs/validation/multi-organization-20260921.md) |
 | 桌面配对 | [配对权限与诊断](docs/engineering/desktop-pairing-security.md) |
@@ -393,4 +385,4 @@ corepack pnpm verify
 | 受治理的 GitHub 交付 | [V1.5 演练](docs/guides/devflow-studio-v1.5-walkthrough.md) |
 | 里程碑契约与计划 | [PRD 索引](docs/product/prd/README.md)、[路线图](docs/roadmap.md) |
 | 历史功能演示 | [完整功能演练](docs/guides/devflow-studio-full-feature-walkthrough.md)（V1.3）、[V2.2 演练](docs/guides/devflow-studio-v2.2-walkthrough.md) |
-| 本 README 的截图 | [源码提交、采集方法与演示数据范围](docs/guides/screenshots/current-20260928/README.md) |
+| 本 README 的截图 | [源码提交、采集方法与演示数据范围](docs/guides/screenshots/workspace-redesign-20260928/README.md)；改造前的截图见[历史记录](docs/guides/screenshots/current-20260928/README.md) |
