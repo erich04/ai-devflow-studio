@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { describeProviderThinking, resolveProviderThinking, supportsProviderThinking, type AgentProviderConfig, type ProviderCredentialMetadata, type ProviderThinkingConfiguration } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
+import { ipcErrorMessage } from '../app/ipc-error'
 
 export function ProviderThinkingFields({ model, baseUrl, value, onChange, disabled = false }: {
   model: string; baseUrl?: string | undefined; value: ProviderThinkingConfiguration
@@ -53,7 +54,7 @@ export function SavedProviderThinkingSettings({ provider, api, onUpdated }: {
         const metadata = await api.updateProviderThinking({ providerId: saved.id, expectedUpdatedAt: saved.updatedAt, thinking: value })
         setSaved({ ...saved, ...metadata }); onUpdated?.(metadata)
         setStatus('已保存；新发起的调用使用此设置，正在运行的调用保持原配置。')
-      } catch (error) { setStatus(error instanceof Error ? error.message : '保存失败，请重试。') }
+      } catch (error) { setStatus(ipcErrorMessage(error, '保存失败，请重试。')) }
       finally { setBusy(false) }
     }}>保存思考设置</button>
     <p role="status">{status}</p>

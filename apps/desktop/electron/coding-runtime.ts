@@ -72,6 +72,7 @@ import {
   CodingEnginePermissionRevalidationError,
   CodingEnginePermissionDiscoveryError,
 } from './coding-engine-lifecycle.js'
+import { providerCallTraceMessage } from './provider-call-trace-message.js'
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
 import { CODING_BRIEF_MAX_BYTES, estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
 import { assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
@@ -89,10 +90,10 @@ const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 
 function safeCodingFailureSummary(error: unknown, fallback: string): string {
   if (error instanceof CodingEnginePermissionDiscoveryError) {
-    return `OpenCode failed (${error.code}).`
+    return `OpenCode 执行失败（${error.code}）。`
   }
   if (error instanceof OpencodeMessageResponseError || error instanceof OpencodeHttpRequestError) {
-    return `OpenCode failed (${error.code}${error.statusCode === undefined ? '' : `, HTTP ${error.statusCode}`}).`
+    return `OpenCode 执行失败（${error.code}${error.statusCode === undefined ? '' : `，HTTP ${error.statusCode}`}）。`
   }
   return fallback
 }
@@ -107,30 +108,6 @@ const pendingBootstrapPermissions = new Map<
   string,
   (decision: CodingPermissionDecision['decision']) => void
 >()
-
-function providerCallTraceMessage(trace: CodingProviderCallTrace): string {
-  const provider = trace.providerId.toLowerCase() === 'deepseek'
-    ? 'DeepSeek'
-    : trace.providerId
-  if (trace.status === 'started') {
-    return `${provider} · ${trace.phase} · Provider 调用已开始。`
-  }
-  const duration = trace.durationMs === undefined
-    ? '耗时未知'
-    : trace.durationMs >= 1_000
-      ? `${(trace.durationMs / 1_000).toFixed(trace.durationMs % 1_000 === 0 ? 0 : 1)} 秒`
-      : `${trace.durationMs} 毫秒`
-  const billing = trace.billingState === 'confirmed'
-    ? '费用已确认'
-    : trace.billingState === 'not_incurred'
-      ? '未产生 Provider 费用'
-      : '费用状态未知'
-  if (trace.status === 'succeeded') {
-    return `${provider} · ${trace.phase} · Provider 调用成功（${duration}） · ${billing}。`
-  }
-  const retry = trace.retryable ? '可以手动重试' : '不建议直接重试'
-  return `${provider} · ${trace.phase} · ${trace.errorCode ?? 'unknown_provider_failure'}（${duration}） · ${billing} · ${retry}。`
-}
 
 function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecutorCapability[] {
   return executor.descriptor.kind === 'opencode'
@@ -2311,7 +2288,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         const failureTimestamp = now()
         const failureSummary = await latestProviderFailureSummary(
           currentRun.id,
-          safeCodingFailureSummary(error, 'Coding engine failed after permission approval.'),
+          safeCodingFailureSummary(error, '批准后编码执行失败。'),
         )
         const failedRun: CodingAgentRun = {
           ...currentRun,
@@ -3560,7 +3537,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         const failureTimestamp = now()
         const failureSummary = await latestProviderFailureSummary(
           executorReadyRun.id,
-          'Coding engine failed to start.',
+          '编码执行未能启动。',
         )
         let cleaned: ManagedCodingWorkspace
         try {

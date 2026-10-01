@@ -18,6 +18,7 @@ import {
 } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
 import type { PendingInspectorAction } from './app/node-inspector-view-model'
+import { ipcErrorMessage } from './app/ipc-error'
 
 function mergeById<T extends { id: string }>(current: T[], incoming: T[]) {
   const map = new Map(current.map((item) => [item.id, item]))
@@ -117,7 +118,7 @@ export function useGateEnforcement(input: {
       }
       return snapshot
     } catch (error) {
-      if (generation === refreshGeneration.current) setLoadError(error instanceof Error ? error.message : '读取失败')
+      if (generation === refreshGeneration.current) setLoadError(ipcErrorMessage(error, '读取失败'))
       throw error
     } finally {
       if (generation === refreshGeneration.current) setIsLoading(false)
@@ -141,7 +142,7 @@ export function useGateEnforcement(input: {
   useEffect(() => {
     let disposed = false
     void refresh().catch((error: unknown) => {
-      if (!disposed) onToast(error instanceof Error ? error.message : '加载 Gate Enforcement 失败')
+      if (!disposed) onToast(ipcErrorMessage(error, '加载 Gate Enforcement 失败'))
     })
     return () => {
       disposed = true
@@ -187,7 +188,7 @@ export function useGateEnforcement(input: {
         onToast(override.provisional ? '临时 override 已保存，等待团队确认' : 'Lead override 已保存')
       }
     } catch (error) {
-      onToast(error instanceof Error ? error.message : '保存 Gate override 失败')
+      onToast(ipcErrorMessage(error, '保存 Gate override 失败'))
     } finally {
       setPendingInspectorAction((current) =>
         current &&

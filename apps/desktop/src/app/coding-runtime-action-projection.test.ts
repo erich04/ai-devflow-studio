@@ -274,7 +274,7 @@ describe('buildCodingRuntimeActionProjection', () => {
     })
     expect(stale.permission).toMatchObject({
       canApprove: false,
-      staleReason: '最终 Diff、权威测试或 managed worktree 已变化，不能接收。',
+      staleReason: '最终 Diff、权威测试或受管工作树已变化，不能接收。',
     })
   })
 

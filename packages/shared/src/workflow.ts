@@ -527,6 +527,18 @@ function nextEventSequence(events: AgentEvent[], runId: string): number {
   return events.filter((event) => event.runId === runId).length + 1
 }
 
+const prTestStatusLabels: Record<TestEvidence['status'], string> = {
+  running: '执行中', passed: '已通过', failed: '失败', timed_out: '已超时',
+}
+const prPolicyStatusLabels: Record<GateEnforcementDecision['status'], string> = {
+  pass: '条件已满足', warn: '有建议', blocked: '审批受阻', hard_blocked: '审批受阻 · 不可例外',
+  overridden: '已按例外处理', blocked_policy_unavailable: '状态待核实 · 团队策略未读取',
+}
+const prBudgetStatusLabels: Record<BudgetGuardDecision['status'], string> = {
+  allowed: '在预算内', warning: '接近预算上限', requires_lead_approval: '需负责人批准',
+  approved_over_budget: '已批准超出预算', disabled: '预算守卫已关闭', unavailable: '预算不可用',
+}
+
 export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifact {
   const prNode = input.run.nodes.find((node) => node.stage === 'pr' && node.kind === 'pr')
   const rawRequest = input.artifacts.find((artifact) => artifact.kind === 'raw_request')
@@ -540,34 +552,35 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
   )
   const title = redactDeliveryText(input.run.title)
   const request = redactDeliveryText(rawRequest?.content ?? input.run.request)
-  const designSummary = redactDeliveryText(design?.summary ?? 'No design artifact linked.')
+  const designSummary = redactDeliveryText(design?.summary ?? '未关联方案。')
   const reviewSummary = redactDeliveryText(
-    input.agentReviewSummaries?.join(' | ') || 'No Gate Review summary provided.',
+    input.agentReviewSummaries?.join(' | ') || '没有门禁审查摘要。',
   )
   const testSummary = latestTest ? redactDeliveryText(latestTest.summary) : ''
 
+  // The package body is also the GitHub PR body; labels are Chinese, stored values unchanged (H4).
   const content = [
     `# ${title}`,
     '',
-    `Request: ${request}`,
-    `Design: ${designSummary}`,
-    `Compare: ${compareUrl ?? 'unavailable'}`,
-    ...(compareUrl ? [] : ['Repository mapping could not be converted into a safe compare URL.']),
+    `需求：${request}`,
+    `方案：${designSummary}`,
+    `对比：${compareUrl ?? '不可用'}`,
+    ...(compareUrl ? [] : ['仓库映射无法转换为安全的对比链接。']),
     '',
-    '## Changed Paths',
-    ...(changedPaths.length ? changedPaths.map((path) => `- ${path}`) : ['- No changed paths captured.']),
+    '## 改动文件',
+    ...(changedPaths.length ? changedPaths.map((path) => `- ${path}`) : ['- 没有记录到改动文件。']),
     '',
-    '## Evidence',
-    `Test Evidence: ${latestTest ? `${latestTest.status} - ${testSummary}` : 'missing'}`,
-    `Policy: ${input.enforcement?.status ?? 'not_evaluated'}`,
-    `Budget: ${input.budgetDecision ? `${input.budgetDecision.status} - projected $${input.budgetDecision.projectedCostUsd.toFixed(6)}` : 'not_evaluated'}`,
-    `Gate Review: ${reviewSummary}`,
+    '## 证据',
+    `测试：${latestTest ? `${prTestStatusLabels[latestTest.status]} - ${testSummary}` : '缺失'}`,
+    `策略：${input.enforcement ? prPolicyStatusLabels[input.enforcement.status] : '未评估'}`,
+    `预算：${input.budgetDecision ? `${prBudgetStatusLabels[input.budgetDecision.status]} - 预计 $${input.budgetDecision.projectedCostUsd.toFixed(6)}` : '未评估'}`,
+    `门禁审查：${reviewSummary}`,
     '',
-    '## Checklist',
-    '- [ ] Diff reviewed',
-    '- [ ] Tests reviewed',
-    '- [ ] Policy evidence reviewed',
-    '- [ ] Budget/cost reviewed',
+    '## 核对清单',
+    '- [ ] 已审阅差异',
+    '- [ ] 已审阅测试结果',
+    '- [ ] 已审阅策略证据',
+    '- [ ] 已审阅预算与费用',
   ].join('\n')
 
   return {

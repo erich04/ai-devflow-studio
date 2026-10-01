@@ -51,9 +51,9 @@ describe('CodingChangeSetReview', () => {
     render(<CodingChangeSetReview permission={projection()} run={run} workspace={undefined} isReplying={false} onDecision={onDecision} />)
     const review = screen.getByTestId('coding-change-set-review')
     expect(within(review).getAllByText('src/a.ts')).toHaveLength(2)
-    expect(within(review).getByLabelText('src/b.ts diff')).toBeTruthy()
+    expect(within(review).getByLabelText('src/b.ts 的改动')).toBeTruthy()
     expect(within(review).getByText('digest-1')).toBeTruthy()
-    fireEvent.click(within(review).getByRole('button', { name: 'Approve exact Change Set' }))
+    fireEvent.click(within(review).getByRole('button', { name: '批准这些改动' }))
     expect(onDecision).toHaveBeenCalledWith('approved')
   })
 
@@ -66,9 +66,9 @@ describe('CodingChangeSetReview', () => {
       isReplying={false}
       onDecision={onDecision}
     />)
-    expect(screen.getByRole('button', { name: 'Approve exact Change Set' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Reject' })).toBeDisabled()
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }))
+    expect(screen.getByRole('button', { name: '批准这些改动' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '拒绝改动' })).toBeDisabled()
+    fireEvent.click(screen.getByRole('button', { name: '拒绝改动' }))
     expect(onDecision).not.toHaveBeenCalled()
   })
 
@@ -86,7 +86,7 @@ describe('CodingChangeSetReview', () => {
       onDecision={vi.fn()}
     />)
 
-    expect(screen.queryByLabelText('src/a.ts diff')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('src/a.ts 的改动')).not.toBeInTheDocument()
     expect(screen.getByText('精确预览尚未通过 ID、Run、digest 与 TTL 校验。')).toBeInTheDocument()
   })
 
@@ -122,9 +122,9 @@ describe('CodingChangeSetReview', () => {
     />)
 
     expect(screen.getByText('最终变更接收（Change Acceptance）')).toBeInTheDocument()
-    expect(screen.getByText('passed')).toBeInTheDocument()
+    expect(screen.getByText('已通过')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: '接收最终修改' }))
     expect(onDecision).toHaveBeenCalledWith('approved')
-    expect(screen.getByRole('button', { name: '拒绝并保留 worktree' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '拒绝并保留工作树' })).toBeEnabled()
   })
 })

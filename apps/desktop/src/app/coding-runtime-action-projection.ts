@@ -217,7 +217,7 @@ function buildPermissionProjection(input: {
   } else if (expired) {
     staleReason = 'Permission 已过期，不能审批。'
   } else if (kind === 'change-acceptance' && !previewVerified) {
-    staleReason = '最终 Diff、权威测试或 managed worktree 已变化，不能接收。'
+    staleReason = '最终 Diff、权威测试或受管工作树已变化，不能接收。'
   } else if (kind === 'change-set') {
     if (!preview) {
       staleReason = '精确 Change Set 尚未完成校验。'
@@ -578,7 +578,7 @@ export function buildCodingRuntimeActionProjection(
       id: 'start',
       target: 'agents-progress',
       label: '启动 Coding Agent',
-      summary: '新建受控 Coding Run，在 managed worktree 中生成 diff、测试与执行证据。',
+      summary: '新建受控 Coding Run，在受管工作树中生成 diff、测试与执行证据。',
       disabled: false,
       createsNewRun: true,
       mayInvokeProvider: true,

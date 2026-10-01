@@ -19,6 +19,7 @@ import type { DevFlowDesktopApi } from '../desktop-api'
 import { buildProviderSettingsView } from '../app/agent-evidence-view-model'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 import type { ProjectRuntimeBudget } from '../app/useProjectRuntimeBudget'
+import { ipcErrorMessage } from '../app/ipc-error'
 
 /**
  * 设置／模型与执行方式 (plan Y2): model providers and credentials (this machine), the project's
@@ -138,7 +139,7 @@ export function ModelSettings({
         setOpencodeModelId(configuration.modelId)
       }
     }).catch((error) => {
-      if (active) setCodingConfigurationStatus(error instanceof Error ? error.message : '无法读取项目执行工具配置')
+      if (active) setCodingConfigurationStatus(ipcErrorMessage(error, '无法读取项目执行工具配置'))
     })
     return () => {
       active = false
@@ -210,7 +211,7 @@ export function ModelSettings({
       onSettingsSaved?.()
       await onRefreshCodingReadiness()
     } catch (error) {
-      setCodingConfigurationStatus(error instanceof Error ? error.message : '保存 Coding Agent 配置失败')
+      setCodingConfigurationStatus(ipcErrorMessage(error, '保存 Coding Agent 配置失败'))
     } finally {
       setIsSavingCodingConfiguration(false)
     }
@@ -227,7 +228,7 @@ export function ModelSettings({
       setCodingConfigurationStatus(candidate?.reason ?? '未检测到 Coding Engine')
     } catch (error) {
       setCodingDiscovery(null)
-      setCodingConfigurationStatus(error instanceof Error ? error.message : '检测 OpenCode 失败')
+      setCodingConfigurationStatus(ipcErrorMessage(error, '检测 OpenCode 失败'))
     } finally {
       setIsSavingCodingConfiguration(false)
     }
@@ -249,7 +250,7 @@ export function ModelSettings({
       onSettingsSaved?.()
       if (selectedNode?.kind === 'task' && selectedNode.stage === 'build') await onRefreshCodingReadiness(approval.id)
     } catch (error) {
-      setCodingConfigurationStatus(error instanceof Error ? error.message : '创建一次性预算批准失败')
+      setCodingConfigurationStatus(ipcErrorMessage(error, '创建一次性预算批准失败'))
     } finally {
       setIsSavingCodingConfiguration(false)
     }

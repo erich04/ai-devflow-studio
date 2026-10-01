@@ -180,17 +180,20 @@ describe('delivery artifacts', () => {
       githubDeliverySource: deliverySource,
     })
     expect(artifact.content).toContain(
-      'Request: Fix webhook retry handling and archive the delivery evidence.',
+      '需求：Fix webhook retry handling and archive the delivery evidence.',
     )
-    expect(artifact.content).not.toContain('Request: Ship webhook retry')
+    expect(artifact.content).not.toContain('需求：Ship webhook retry')
     expect(artifact.content).toContain(
-      'Compare: https://github.com/erich/payments-api/compare/main...devflow%2Frun-delivery-build-coding-run-1',
+      '对比：https://github.com/erich/payments-api/compare/main...devflow%2Frun-delivery-build-coding-run-1',
     )
     expect(artifact.content).toContain('src/webhook.ts')
-    expect(artifact.content).toContain('Test Evidence: passed - Tests passed.')
-    expect(artifact.content).toContain('Policy: warn')
-    expect(artifact.content).toContain('Budget: warning - projected $0.120000')
-    expect(artifact.content).toContain('Gate Review: No blocking risks.')
+    expect(artifact.content).toContain('测试：已通过 - Tests passed.')
+    expect(artifact.content).toContain('策略：有建议')
+    expect(artifact.content).toContain('预算：接近预算上限 - 预计 $0.120000')
+    expect(artifact.content).toContain('门禁审查：No blocking risks.')
+    expect(artifact.content).toContain('## 改动文件')
+    expect(artifact.content).toContain('## 核对清单')
+    expect(artifact.content).not.toMatch(/Changed Paths|Checklist|Test Evidence/u)
     expect(artifact.content).not.toContain('+ redacted patch')
   })
 
@@ -205,8 +208,8 @@ describe('delivery artifacts', () => {
       now: '2026-06-21T16:35:00.000Z',
     })
 
-    expect(artifact.content).toContain('Compare: unavailable')
-    expect(artifact.content).toContain('Repository mapping could not be converted into a safe compare URL.')
+    expect(artifact.content).toContain('对比：不可用')
+    expect(artifact.content).toContain('仓库映射无法转换为安全的对比链接。')
   })
 
   it('redacts secrets and local paths from delivery requests', () => {

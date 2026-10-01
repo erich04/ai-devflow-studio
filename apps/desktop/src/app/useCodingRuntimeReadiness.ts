@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CodingRuntimeReadiness } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
+import { ipcErrorMessage } from './ipc-error'
 
 export function useCodingRuntimeReadiness(input: {
   desktopApi: DevFlowDesktopApi | null
@@ -45,7 +46,7 @@ export function useCodingRuntimeReadiness(input: {
     } catch (caught) {
       if (requestVersion.current === version) {
         setReadiness(null)
-        setError(caught instanceof Error ? caught.message : '无法读取 Coding Runtime Readiness')
+        setError(ipcErrorMessage(caught, '无法读取 Coding Runtime Readiness'))
       }
       return null
     }
