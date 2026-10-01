@@ -521,6 +521,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       totalCost: '$0.000',
     }),
     listWorkRequests: vi.fn().mockResolvedValue([]),
+    getTestEvidenceFreshness: vi.fn().mockResolvedValue([]),
     materializeWorkRequest: vi.fn().mockRejectedValue(
       new Error('Work Request materialization is not configured for this test.'),
     ),
@@ -7368,6 +7369,16 @@ describe('App', () => {
     const passedPill = within(evidence).getByText('已通过')
     expect(passedPill).toHaveAttribute('title', 'passed')
     expect(evidence).toHaveTextContent('适用性无法核实')
+    // Hardening H3: the main process compares the recorded tree with the current one.
+    expect(api.getTestEvidenceFreshness).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id })
+    vi.mocked(api.getTestEvidenceFreshness!).mockResolvedValue([{ evidenceId: 'evidence-1', state: 'stale' }])
+    act(() => { window.dispatchEvent(new Event('focus')) })
+    await waitFor(() => expect(within(evidence).getByText('已过期')).toBeInTheDocument())
+    expect(evidence).toHaveTextContent('所测代码之后有改动，结果已过期，请重新运行检查。')
+    vi.mocked(api.getTestEvidenceFreshness!).mockResolvedValue([{ evidenceId: 'evidence-1', state: 'current' }])
+    act(() => { window.dispatchEvent(new Event('focus')) })
+    await waitFor(() => expect(evidence).toHaveTextContent('结果对应当前代码。'))
+    expect(within(evidence).queryByText('已过期')).not.toBeInTheDocument()
     expect(within(taskInspector).queryAllByText(/Gate Enforcement/).every((element) => element.closest('details')?.open !== true)).toBe(true)
     clickInspectorTab('材料与版本')
     expect(within(taskInspector).getByTestId('inspector-status-matrix')).toHaveTextContent('测试报告已记录')

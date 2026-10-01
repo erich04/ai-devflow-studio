@@ -1241,8 +1241,21 @@ export type TestEvidence = {
   summary: string
   redacted: boolean
   sourceCommitSha?: string
+  /**
+   * Local-only fingerprint of the tested tree (HEAD, tracked changes, untracked files) and the
+   * managed workspace it ran in; the desktop compares it with the current tree to tell whether
+   * the result still applies (hardening H3, X6). Never synced; delivery keeps using sourceCommitSha.
+   */
+  sourceTree?: { digest: string; workspaceId?: string }
   createdAt: string
 }
+
+/** Whether a passed result still applies to the code it was taken from (hardening H3, X6). */
+export type TestEvidenceFreshness =
+  | { evidenceId: string; state: 'current' }
+  | { evidenceId: string; state: 'stale' }
+  | { evidenceId: string; state: 'unrecorded' }
+  | { evidenceId: string; state: 'unavailable' }
 
 export type CodingAgentEngine = 'fake' | 'native' | 'opencode-http' | 'opencode-acp'
 

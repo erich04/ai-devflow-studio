@@ -13,6 +13,7 @@ import { buildTeamConnectionView, deliveryIntentsRevokedByRepair } from './app/t
 import { formatLocalTime, settingsSectionForTaskTarget, type InspectorReadingPosition, type SettingsSection } from './app/desktop-view-model'
 import { buildRunUsageSummary } from './app/run-usage-summary'
 import { buildTestRunReadiness } from './app/test-run-readiness'
+import { useTestEvidenceFreshness } from './app/test-evidence-freshness'
 import { runtimeSourceLabel } from './app/team-overview-copy'
 import {
   BookOpen,
@@ -662,6 +663,9 @@ export function App() {
     [retryAttempts, selectedRun],
   )
   const latestCodingRun = selectedCodingRuns[0]
+  // Whether each passed result still applies to the tested code (hardening H3, X6).
+  const testEvidenceFreshness = useTestEvidenceFreshness(desktopApi, selectedRun?.id, scopedTestEvidence,
+    selectedCodingRuns.map((run) => `${run.id}:${run.status}:${run.completedAt ?? ''}`).join('|'))
   const selectedCodingEvents = latestCodingRun
     ? codingEvents
         .filter((event) => event.codingRunId === latestCodingRun.id)
@@ -1580,6 +1584,7 @@ export function App() {
                   events={selectedEvents}
                   runEvents={scopedEvents.filter((event) => event.runId === selectedRun.id)}
                   testEvidence={scopedTestEvidence}
+                  testEvidenceFreshness={testEvidenceFreshness}
                   governanceChecks={selectedGovernanceChecks}
                   references={knowledgeReferences}
                   latestAgentReview={latestAgentReview}
@@ -1776,6 +1781,7 @@ export function App() {
                 project={selectedLocalProject}
                 gitStatus={projectGitStatus}
                 evidence={scopedTestEvidence}
+                evidenceFreshness={testEvidenceFreshness}
                 onHandleInTask={handleInTask}
                 isRunningTests={isRunningTests}
                 commandDraft={testCommandDraft}

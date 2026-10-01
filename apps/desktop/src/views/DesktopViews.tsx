@@ -85,6 +85,7 @@ import {
   type PendingInspectorAction,
 } from '../app/node-inspector-view-model'
 import { buildWorkflowGateImpact } from '../app/workflow-gate-impact'
+import { passedEvidenceApplicability, type TestEvidenceFreshnessMap } from '../app/test-evidence-freshness'
 import {
   describeMaterial,
   groupMaterials,
@@ -331,6 +332,7 @@ export function Inspector({
   workflowArtifacts,
   events,
   testEvidence,
+  testEvidenceFreshness = {},
   governanceChecks,
   references,
   latestAgentReview,
@@ -422,6 +424,7 @@ export function Inspector({
   workflowArtifacts: Artifact[]
   events: AgentEvent[]
   testEvidence: TestEvidence[]
+  testEvidenceFreshness?: TestEvidenceFreshnessMap
   governanceChecks: KnowledgeGovernanceCheck[]
   references: KnowledgeReference[]
   latestAgentReview: AgentReviewResult | undefined
@@ -1254,10 +1257,11 @@ export function Inspector({
               <span className={`pill ${evidence.status === 'passed' ? 'good' : evidence.status === 'running' ? 'warn' : 'bad'}`} title={evidence.status}>
                 {formatStatusState(evidence.status)}
               </span>
+              {evidence.status === 'passed' && testEvidenceFreshness[evidence.id] === 'stale' ? <span className="pill warn">已过期</span> : null}
             </div>
             <p>{evidence.summary}</p>
-            {/* Evidence does not record the tested commit (plan §6.4, X6): never shown as still valid. */}
-            {evidence.status === 'passed' ? <p className="meta">执行于 {formatLocalTime(evidence.createdAt)}。证据没有记录所测代码的提交，适用性无法核实。</p> : null}
+            {/* Only a matching tree fingerprint reads as current (plan §6.4, hardening H3). */}
+            {evidence.status === 'passed' ? <p className="meta">{passedEvidenceApplicability(evidence, testEvidenceFreshness[evidence.id]).text}</p> : null}
             <div className="knowledge-reference-meta">
               <code>{evidence.id}</code><code>{evidence.command}</code>
               <span>{evidence.durationMs}ms</span><span>退出码 {evidence.exitCode ?? '未知'}</span>
