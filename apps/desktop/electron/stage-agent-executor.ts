@@ -83,6 +83,8 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
    * `providerBinding` is the loopback budget relay, whose address hides the Provider (#207).
    */
   billingBinding?: OpencodeProviderBinding | undefined
+  /** Shared cache for the tool binaries OpenCode downloads (#209); see `createIsolatedOpencodeProfile`. */
+  toolCacheDirectory?: string
   runner?: ReadOnlyStageAgentRunner
 }): StageAgentExecutor {
   return {
@@ -107,7 +109,10 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
       let reportedUsage: AgentProviderUsage | null | undefined
       // With a saved Provider binding the user's personal OpenCode profile stays out (ADR 0025).
       const profile = !input.runner && input.providerBinding
-        ? await createIsolatedOpencodeProfile('devflow-stage-opencode-', { isolateHome: true })
+        ? await createIsolatedOpencodeProfile('devflow-stage-opencode-', {
+            isolateHome: true,
+            ...(input.toolCacheDirectory ? { toolCacheDirectory: input.toolCacheDirectory } : {}),
+          })
         : undefined
       try {
         const runner = input.runner ?? createManagedOpencodeRunner({

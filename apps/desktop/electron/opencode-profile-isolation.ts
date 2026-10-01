@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, rmdir, symlink, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -30,15 +30,46 @@ export function isolatedOpencodeProfileEnv(
   }
 }
 
-export async function createIsolatedOpencodeProfile(prefix: string, options: { isolateHome?: boolean } = {}): Promise<{
+/** Where OpenCode keeps the tool binaries it downloads (ripgrep), under `XDG_CACHE_HOME`. */
+export function opencodeToolBinDirectory(profileRoot: string): string {
+  return path.join(profileRoot, 'cache', 'opencode', 'bin')
+}
+
+export async function createIsolatedOpencodeProfile(prefix: string, options: {
+  isolateHome?: boolean
+  /**
+   * DevFlow-owned directory shared by short-lived profiles for the tool binaries OpenCode
+   * downloads. Without it every read-only session downloads ripgrep again before its first
+   * grep (#209). It holds executables only, never the user's configuration.
+   */
+  toolCacheDirectory?: string
+} = {}): Promise<{
   root: string
   env: NodeJS.ProcessEnv
   dispose(): Promise<void>
 }> {
   const root = await mkdtemp(path.join(tmpdir(), prefix))
+  const toolBin = opencodeToolBinDirectory(root)
+  let linked = false
+  if (options.toolCacheDirectory) {
+    try {
+      await mkdir(options.toolCacheDirectory, { recursive: true, mode: 0o700 })
+      await mkdir(path.dirname(toolBin), { recursive: true })
+      // A junction needs no privilege on Windows; elsewhere the type is ignored.
+      await symlink(path.resolve(options.toolCacheDirectory), toolBin, process.platform === 'win32' ? 'junction' : 'dir')
+      linked = true
+    } catch {
+      // The shared cache only saves a download; a session without it still works.
+    }
+  }
   return {
     root,
-    env: isolatedOpencodeProfileEnv(root, options),
-    dispose: () => rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }),
+    env: isolatedOpencodeProfileEnv(root, { ...(options.isolateHome ? { isolateHome: true } : {}) }),
+    dispose: async () => {
+      // Remove the link itself first so the shared binaries are never deleted with the profile.
+      // (`rmdir` removes a Windows junction without touching its target.)
+      if (linked) await unlink(toolBin).catch(() => rmdir(toolBin)).catch(() => undefined)
+      await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+    },
   }
 }

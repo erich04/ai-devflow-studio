@@ -429,6 +429,11 @@ function getStore() {
 
 const codingBudgetProxies = new Set<Awaited<ReturnType<typeof createGovernedOpencodeProxy>>>()
 
+/** Tool binaries (ripgrep) shared by the short-lived read-only OpenCode profiles (#209). */
+function opencodeToolCacheDirectory(): string {
+  return path.join(app.getPath('userData'), 'opencode-profiles', 'tool-bin')
+}
+
 async function resolveCodingExecutorForProject(projectId: string): Promise<{
   selection: ResolvedCodingRuntimeSelection
   executor: CodingExecutor | null
@@ -1731,6 +1736,7 @@ async function resolveLocalAgentReviewProvider(
     metadata,
     processManager: opencodeProcessManager,
     runtimeEnv: buildOpencodeRuntimeEnv({ baseEnv: process.env, apiKeyEnvName: 'OPENCODE_API_KEY' }),
+    toolCacheDirectory: opencodeToolCacheDirectory(),
     knowledgeRoot,
     // Every OpenCode model round is admitted against the project budget, like stage Agents.
     openBudgetRelay: async () => createGovernedOpencodeProxy({
@@ -2883,6 +2889,7 @@ function registerIpcHandlers() {
             providerBinding:budgetProxy.binding,
             // The relay's loopback address hides the Provider; price usage by the saved binding (#207).
             billingBinding: binding,
+            toolCacheDirectory: opencodeToolCacheDirectory(),
             runtimeEnv: buildOpencodeRuntimeEnv({
               baseEnv: process.env,
               apiKeyEnvName: 'OPENCODE_API_KEY',

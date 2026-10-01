@@ -228,3 +228,28 @@ export function health() { return { status: "ok", checkedAt: now().toISOString()
 - `corepack pnpm verify` 通过。
 
 **补充**：正文提到 OpenCode 编码运行没有 `runtimeCostSummary`。这一点与 #207 无关：OpenCode 编码执行器的计费方式是 `opaque`，本来就不生成费用摘要。它的每一轮调用照样经过中继，在团队端逐次结算。
+
+## 后记：#209 的修复（2026-09-30 补记，正文不改）
+
+正文对停顿原因的推断已经核实。OpenCode 把它下载的 ripgrep 放在 `XDG_CACHE_HOME/opencode/bin`。只读阶段 Agent 和门禁审查每次都新建隔离的配置目录，所以每个会话在第一次 `grep` 之前都要重新下载一次。
+
+**修复**：
+
+- 这些短期配置目录里的 `cache/opencode/bin` 改为链接到 DevFlow 用户数据下的共用目录 `opencode-profiles/tool-bin`。链接在 Windows 上是 junction。
+- 这个目录只存可执行文件，不含用户配置。
+- 会话结束时先删除链接，再删除配置目录，共用的二进制会保留。
+- 链接建立失败时，会话照常运行，只是仍要下载。
+
+**验证**（本地假模型，没有调用真实模型）：
+
+- 直接运行只读阶段 Agent，本机 OpenCode 1.18.15，本机没有安装 `rg`：
+  - 修复前：每个会话都下载一次 ripgrep（4 MB），`grep` 这一轮约 6.5 秒。
+  - 修复后：只有第一个会话下载；之后的会话 `grep` 这一轮约 0.12 秒，整个会话从约 11 秒降到约 1.9 秒。
+  - 本机这次下载只用了几秒；正文中 57–108 秒的停顿出现在当时的网络条件下。
+- 在 Electron 主进程中依次跑 OpenCode 需求澄清和 OpenCode 门禁审查：
+  - 澄清之后，用户数据下的 `tool-bin` 里出现了 `rg`。
+  - 审查的 `grep` 这一轮为 131 毫秒。
+  - 没有残留的临时配置目录。
+- 修复后没有用真实模型复跑。
+
+还有一处没处理：两个会话第一次同时下载时可能互相覆盖。这种情况只会发生在共用目录还空着的时候，没有另外加锁。
