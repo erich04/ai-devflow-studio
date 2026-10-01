@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type {
+  AgentRuntimeContextAttachment,
   AgentRuntimeState,
   DesktopPairingCredential,
   LocalProject,
@@ -71,15 +72,18 @@ const policy = {
 
 function fixture() {
   let runtime: AgentRuntimeState | null = null
+  let attachment: AgentRuntimeContextAttachment | null = null
   const store = {
     getRun: vi.fn().mockResolvedValue(run),
     listProjects: vi.fn().mockResolvedValue([project]),
     getDesktopPairingCredential: vi.fn().mockResolvedValue({ ...pairing, localProjectId: project.id }),
     getPolicySnapshot: vi.fn().mockResolvedValue(policy),
     getAgentRuntime: vi.fn(async () => runtime),
+    getAgentRuntimeContextAttachment: vi.fn(async () => attachment),
     isAgentRuntimeContextCurrent: vi.fn().mockResolvedValue(true),
-    commitAgentRuntimeTransition: vi.fn(async ({ transition }) => {
+    commitAgentRuntimeTransition: vi.fn(async ({ transition, contextAttachment }) => {
       runtime = transition.runtime
+      attachment = contextAttachment
       return { committed: true, replayed: false, runtime: transition.runtime }
     }),
     createCoordinationSession: vi.fn(async ({ coordination, graph, startedAt }) => ({
@@ -318,6 +322,34 @@ describe('main-owned bounded Agent Coordination plan', () => {
 
     expect(store.commitAgentRuntimeTransition).not.toHaveBeenCalled()
     expect(store.createCoordinationSession).not.toHaveBeenCalled()
+  })
+
+  it('checks the persisted Supervisor Context on retry instead of rebuilding it', async () => {
+    const { store, planner } = fixture()
+    store.createCoordinationSession.mockRejectedValueOnce(new Error('simulated process interruption'))
+    await expect(planner.start(request)).rejects.toThrowError('agent_coordination_plan_start_failed')
+    const persisted = store.commitAgentRuntimeTransition.mock.calls[0]![0].contextAttachment as AgentRuntimeContextAttachment
+
+    // A retry reads the stored attachment for the existing Supervisor.
+    store.getAgentRuntimeContextAttachment.mockClear()
+    await expect(planner.start(request)).resolves.toMatchObject({ replayed: false })
+    expect(store.getAgentRuntimeContextAttachment).toHaveBeenCalledWith(persisted.runtimeId)
+
+    // Any other stored Context for that Supervisor, including one carrying Memory, is refused.
+    const memoryRevision = { id: 'agent-memory-1' } as AgentRuntimeContextAttachment['memoryRevisions'][number]
+    for (const conflicting of [
+      null,
+      { ...persisted, id: 'coordination-context-other' },
+      { ...persisted, attachedAt: '2026-08-13T18:00:01.000Z' },
+      { ...persisted, contextDigest: 'f'.repeat(64) },
+      { ...persisted, authority: { ...persisted.authority, policyVersion: 99 } },
+      { ...persisted, memoryRevisions: [memoryRevision] },
+    ]) {
+      store.getAgentRuntimeContextAttachment.mockResolvedValueOnce(conflicting)
+      await expect(planner.start(request)).rejects.toThrowError('agent_coordination_plan_start_failed')
+    }
+    expect(store.commitAgentRuntimeTransition).toHaveBeenCalledTimes(1)
+    expect(store.createCoordinationSession).toHaveBeenCalledTimes(2)
   })
 
   it('does not create a session from a stale Supervisor Context attachment', async () => {

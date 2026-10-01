@@ -36,6 +36,7 @@
     "test:agent-live": "tsx scripts/agent-live-smoke.ts",
     "test:memory-context-live": "tsx scripts/memory-context-live.ts",
     "test:native-repair-live": "tsx scripts/native-repair-live.ts",
+    "test:memory-learning-live": "tsx scripts/memory-learning-live.ts",
     "test:opencode-smoke": "tsx scripts/opencode-smoke.ts",
     "test:stage-agent-opencode-smoke": "tsx scripts/stage-agent-opencode-smoke.ts",
     "test:stage-agent-design-electron": "corepack pnpm --filter @ai-devflow/desktop build && tsx scripts/stage-agent-design-contract.mts --electron",

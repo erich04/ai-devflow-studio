@@ -339,6 +339,84 @@ describe('AgentMemoryPanel', () => {
     )
   })
 
+  it('dismisses a pending Candidate only after confirmation, with exact renderer-observed digests', async () => {
+    const dismissedSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      candidateCount: 1,
+      candidates: snapshot.candidates.filter((entry) => entry.id !== 'candidate-pending'),
+    }
+    const dismissAgentMemoryCandidate = vi.fn().mockResolvedValue(dismissedSnapshot)
+    const promoteAgentMemoryCandidate = vi.fn()
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(snapshot),
+      promoteAgentMemoryCandidate,
+      dismissAgentMemoryCandidate,
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '忽略此候选' }))
+    expect(dismissAgentMemoryCandidate).not.toHaveBeenCalled()
+    expect(screen.getByText('忽略后移除这条候选，同一来源不会再次提出；已保存的记忆不受影响。')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '取消忽略' }))
+    expect(screen.queryByRole('button', { name: '确认忽略此候选' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: '忽略此候选' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认忽略此候选' }))
+    await waitFor(() => expect(dismissAgentMemoryCandidate).toHaveBeenCalledWith({
+      runId: runtime.authority.runId,
+      localProjectId: runtime.scope.localProjectId,
+      candidateId: 'candidate-pending',
+      expectedContentDigest: snapshot.candidates[0]!.contentDigest,
+      expectedProvenanceDigest: snapshot.candidates[0]!.provenanceDigest,
+    }))
+    await waitFor(() => expect(screen.queryByText('Pending memory statement for explicit human review.')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '忽略此候选' })).not.toBeInTheDocument()
+    expect(promoteAgentMemoryCandidate).not.toHaveBeenCalled()
+    expect(JSON.stringify(dismissAgentMemoryCandidate.mock.calls)).not.toMatch(
+      /authority|policy|actor|memoryId|sessionId|capability|statement|dismissedAt/,
+    )
+  })
+
+  it('reports a rejected dismissal and keeps the Candidate listed', async () => {
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(snapshot),
+      dismissAgentMemoryCandidate: vi.fn().mockRejectedValue(new Error('rejected')),
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '忽略此候选' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认忽略此候选' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('忽略 Memory 候选的请求已被安全拒绝')
+    expect(screen.getByText('Pending memory statement for explicit human review.')).toBeInTheDocument()
+  })
+
+  it('reloads the stored state when a dismissal committed but its reply failed', async () => {
+    const dismissedSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      candidateCount: 1,
+      candidates: snapshot.candidates.filter((entry) => entry.id !== 'candidate-pending'),
+    }
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn()
+        .mockResolvedValueOnce(snapshot)
+        .mockResolvedValueOnce(dismissedSnapshot),
+      dismissAgentMemoryCandidate: vi.fn().mockRejectedValue(new Error('reply lost')),
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '忽略此候选' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认忽略此候选' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('忽略 Memory 候选的请求已被安全拒绝')
+    await waitFor(() => expect(screen.queryByText('Pending memory statement for explicit human review.')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '确认忽略此候选' })).not.toBeInTheDocument()
+  })
+
   it('revises only one active Memory with exact renderer-observed versions and digests', async () => {
     const activeMemory = {
       ...snapshot.memories[0]!,

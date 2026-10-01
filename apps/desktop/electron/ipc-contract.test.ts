@@ -41,6 +41,7 @@ import {
   parseListAgentMemoryLifecycleInput,
   parseDeleteAgentMemoryInput,
   parsePromoteAgentMemoryCandidateInput,
+  parseDismissAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
   parseListAgentRuntimesInput,
   parseListCoordinationSessionsInput,
@@ -397,6 +398,34 @@ describe('IPC contract parsers', () => {
       { ...payload, expectedProvenanceDigest: 'b'.repeat(63) },
     ]) {
       expect(() => parsePromoteAgentMemoryCandidateInput(malformed)).toThrow()
+    }
+  })
+
+  it('accepts only exact candidate identities for dismissing a Memory candidate', () => {
+    const payload = {
+      runId: 'run-1',
+      localProjectId: 'project-1',
+      candidateId: 'memory-candidate-1',
+      expectedContentDigest: 'a'.repeat(64),
+      expectedProvenanceDigest: 'b'.repeat(64),
+    }
+    expect(parseDismissAgentMemoryCandidateInput(payload)).toEqual(payload)
+    expect(parseDismissAgentMemoryCandidateInput({ ...payload, runtimeId: 'agent-runtime-1' }))
+      .toEqual({ ...payload, runtimeId: 'agent-runtime-1' })
+    for (const forbidden of [
+      { actorId: 'spoofed-user' },
+      { dismissedAt: '2026-09-30T00:00:00.000Z' },
+      { statement: 'Renderer replacement text.' },
+      { scope: { kind: 'local' } },
+    ]) {
+      expect(() => parseDismissAgentMemoryCandidateInput({ ...payload, ...forbidden })).toThrow()
+    }
+    for (const malformed of [
+      { ...payload, candidateId: '' },
+      { ...payload, expectedContentDigest: 'A'.repeat(64) },
+      { ...payload, expectedProvenanceDigest: 'b'.repeat(63) },
+    ]) {
+      expect(() => parseDismissAgentMemoryCandidateInput(malformed)).toThrow()
     }
   })
 
