@@ -1907,7 +1907,7 @@ describe('CodingRuntime', () => {
         id: 'coding-run-start-failure',
         status: 'failed',
         managedWorkspaceId: workspace.id,
-        summary: 'Coding engine failed to start.',
+        summary: '编码执行未能启动。',
       }),
     ])
     expect(store.codingEvents).toEqual(expect.arrayContaining([
@@ -3476,10 +3476,10 @@ describe('CodingRuntime', () => {
   })
 
   it.each([
-    { providerFailure: new OpencodeMessageResponseError({ code: 'provider_api_error', statusCode: 429, retryable: true }), summary: 'OpenCode failed (provider_api_error, HTTP 429).' },
-    { providerFailure: new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out'), summary: 'OpenCode failed (permission_discovery_timed_out).' },
-    { providerFailure: new CodingEnginePermissionDiscoveryError('provider_retry_observed'), summary: 'OpenCode failed (provider_retry_observed).' },
-    { providerFailure: new Error('RAW_PROVIDER_SECRET'), summary: 'Coding engine failed after permission approval.' },
+    { providerFailure: new OpencodeMessageResponseError({ code: 'provider_api_error', statusCode: 429, retryable: true }), summary: 'OpenCode 执行失败（provider_api_error，HTTP 429）。' },
+    { providerFailure: new CodingEnginePermissionDiscoveryError('permission_discovery_timed_out'), summary: 'OpenCode 执行失败（permission_discovery_timed_out）。' },
+    { providerFailure: new CodingEnginePermissionDiscoveryError('provider_retry_observed'), summary: 'OpenCode 执行失败（provider_retry_observed）。' },
+    { providerFailure: new Error('RAW_PROVIDER_SECRET'), summary: '批准后编码执行失败。' },
   ])('persists safe diagnostics and cleans the approved failed run: $summary', async ({ providerFailure, summary }) => {
     const repo = await gitRepo()
     const store = new MemoryCodingStore({

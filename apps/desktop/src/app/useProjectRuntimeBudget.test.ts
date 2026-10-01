@@ -31,7 +31,8 @@ describe('project runtime budget', () => {
 
   it('distinguishes missing policy, disabled policy, and failed reads and permits recovery', async () => {
     const desktopApi = setup()
-    desktopApi.getCodingRuntimeBudgetPolicy.mockRejectedValueOnce(new Error('offline'))
+    // Electron's channel prefix is not shown (hardening H4).
+    desktopApi.getCodingRuntimeBudgetPolicy.mockRejectedValueOnce(new Error("Error invoking remote method 'devflow:coding:runtime-budget-policy:get': Error: offline"))
     const { result } = renderHook(() => useProjectRuntimeBudget({ desktopApi, projectId: 'local-a', bindingKey: 'token-a' }))
     await waitFor(() => expect(result.current.status).toBe('unavailable'))
     expect(result.current.error).toBe('offline')

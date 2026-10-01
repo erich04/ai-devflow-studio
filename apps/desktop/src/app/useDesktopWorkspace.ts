@@ -45,6 +45,7 @@ import {
   type ViewId,
 } from './desktop-view-model'
 import type { PendingInspectorAction } from './node-inspector-view-model'
+import { ipcErrorMessage } from './ipc-error'
 
 function useThemePreference() {
   const [preference, setPreference] = useState<ThemePreference>(() =>
@@ -476,7 +477,7 @@ export function useDesktopWorkspace(input: {
           if (!disposed) applyLocalExecutionState(state)
         })
         .catch((error: unknown) => {
-          if (!disposed) setToast(error instanceof Error ? error.message : fallbackMessage)
+          if (!disposed) setToast(ipcErrorMessage(error, fallbackMessage))
         })
     }
     const unsubscribeRun = desktopApi.onCodingRunStatusUpdated((run) => {
@@ -524,7 +525,7 @@ export function useDesktopWorkspace(input: {
       })
       .catch((error: unknown) => {
         setHasLoadedLocalState(true)
-        setToast(error instanceof Error ? error.message : '加载本地状态失败')
+        setToast(ipcErrorMessage(error, '加载本地状态失败'))
       })
 
     Promise.all([desktopApi.listAgentProviders(), initialState])
@@ -541,7 +542,7 @@ export function useDesktopWorkspace(input: {
         )
       })
       .catch((error: unknown) => {
-        setToast(error instanceof Error ? error.message : '加载 Agent Provider 失败')
+        setToast(ipcErrorMessage(error, '加载 Agent Provider 失败'))
       })
 
     return () => {

@@ -17,6 +17,7 @@ import {
   type DiscussionReference,
 } from './app/discussion-reference'
 import { formatLocalTime } from './app/desktop-view-model'
+import { ipcErrorMessage } from './app/ipc-error'
 
 /** `reference` adds a card to the current discussion without sending anything (plan W7). */
 export type WorkbenchOpenRequest = { serial: number; type: 'details' | 'discussion' | 'reference'; prompt?: string; reference?: DiscussionReference }
@@ -109,7 +110,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   }, [api, splitDetails])
   const runCommand = useCallback(async (command: ConversationCommand) => {
     try { setError(''); return await call(command) }
-    catch (failure) { if (command.projectId === visibleProject.current) setError(failure instanceof Error ? failure.message : '会话操作未完成，请重试。'); return undefined }
+    catch (failure) { if (command.projectId === visibleProject.current) setError(ipcErrorMessage(failure, '会话操作未完成，请重试。')); return undefined }
   }, [call])
 
   const referencesFor = useCallback((conversationId: string) =>

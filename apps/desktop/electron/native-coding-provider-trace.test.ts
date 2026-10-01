@@ -474,7 +474,7 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
       nodeId: interrupted.nodeId,
       sequence: 1,
       kind: 'tool_call',
-      message: 'local-compatible · analysis · Provider 调用已开始。',
+      message: 'local-test-model · 分析 · 模型调用已开始。',
       timestamp: startedAt,
       metadata: {
         providerCall: {
@@ -547,8 +547,9 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
     })
     const failed = (await first.store.listCodingAgentRuns(fixture.run.id))[0]!
     expect(failed).toMatchObject({ status: 'failed' })
-    expect(failed.summary).toContain('analysis · provider_timeout')
-    expect(failed.summary).toContain('费用状态未知 · 可以手动重试')
+    expect(failed.summary).toMatch(/^local-test-model · 分析 · 模型响应超时（[^）]+） · 费用状态未知 · 可以手动重试。$/u)
+    // The internal Provider ID and the raw error code stay in the trace metadata only (H4).
+    expect(failed.summary).not.toMatch(/local-compatible|provider_timeout/u)
     expect(Date.parse(failed.completedAt!)).toBeGreaterThan(Date.parse(failed.startedAt))
     const failedTrace = providerTrace(await first.store.listCodingAgentEvents(failed.id))
     expect(failedTrace).toMatchObject([
@@ -629,7 +630,7 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
       code: 'provider_timeout',
     })
     const failed = (await store.listCodingAgentRuns(fixture.run.id))[0]!
-    expect(failed.summary).toContain('initial · provider_timeout')
+    expect(failed.summary).toContain('生成改动 · 模型响应超时')
     expect(providerTrace(await store.listCodingAgentEvents(failed.id))).toMatchObject([
       { phase: 'analysis', status: 'started' },
       { phase: 'analysis', status: 'succeeded' },
@@ -678,7 +679,7 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
 
     const failed = (await store.listCodingAgentRuns(fixture.run.id))[0]!
     expect(failed.status).toBe('failed')
-    expect(failed.summary).toContain('repair · provider_timeout')
+    expect(failed.summary).toContain('修正改动 · 模型响应超时')
     expect(providerTrace(await store.listCodingAgentEvents(failed.id))).toMatchObject([
       { phase: 'analysis', status: 'started' },
       { phase: 'analysis', status: 'succeeded' },

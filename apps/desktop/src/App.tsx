@@ -88,6 +88,7 @@ import {
   WorkflowBoard,
   type WorkflowBoardView,
 } from './views/DesktopViews'
+import { ipcErrorMessage } from './app/ipc-error'
 
 export { getToastDisplayDurationMs } from './app/desktop-view-model'
 
@@ -721,7 +722,8 @@ export function App() {
       : '',
   })
   const modelReadinessError = !desktopApi || selectedAgentProviderId === 'fake-knowledge-review' ? undefined :
-    projectRuntimeBudget.status !== 'loaded' ? (projectRuntimeBudget.error || `云端预算${projectRuntimeBudget.label}，请先同步团队策略。`) :
+    // The conversation bar says what to do; the read error itself is shown in 设置／模型与执行方式 (H4).
+    projectRuntimeBudget.status !== 'loaded' ? `云端预算${projectRuntimeBudget.label}，请先同步团队策略。` :
     !projectRuntimeBudget.policy ? '尚未配置当前项目的云端预算，请先在设置／模型与执行方式中保存团队预算。' : undefined
 
   const codingRuntime = useCodingRuntimeReadiness({
@@ -1613,7 +1615,7 @@ export function App() {
                   onCancelStageAgent={desktopApi?.cancelWorkflowAgentNode ? async () => {
                     if (!pendingInspectorAction) return
                     try { await desktopApi.cancelWorkflowAgentNode!({ runId: pendingInspectorAction.runId, nodeId: pendingInspectorAction.nodeId }) }
-                    catch (error) { setToast(error instanceof Error ? error.message : '取消失败，请重试。') }
+                    catch (error) { setToast(ipcErrorMessage(error, '取消失败，请重试。')) }
                   } : undefined}
                   stageAgentExecutorKind={stageAgentExecutorKind}
                   onStageAgentExecutorKindChange={setStageAgentExecutorKind}

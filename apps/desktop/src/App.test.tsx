@@ -2758,20 +2758,20 @@ describe('App', () => {
     const changeSetPanel = await within(inspector).findByTestId('task-coding-change-set')
     const review = within(changeSetPanel).getByTestId('coding-change-set-review')
     // The panel renders before the exact preview loads (App requests it in an effect); wait for it.
-    await waitFor(() => expect(within(review).getByText('Files').nextElementSibling).toHaveTextContent('2'))
+    await waitFor(() => expect(within(review).getByText('文件数').nextElementSibling).toHaveTextContent('2'))
     expect(review).toHaveTextContent(digest)
     const statusRow = within(inspector).getByTestId('task-status-row')
     expect(within(statusRow).queryByRole('button', { name: '批准本次' })).not.toBeInTheDocument()
-    expect(within(statusRow).queryByRole('button', { name: /Approve/ })).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: 'Approve exact Change Set' })).toHaveLength(1)
+    expect(within(statusRow).queryByRole('button', { name: /批准这些改动/ })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '批准这些改动' })).toHaveLength(1)
 
     fireEvent.click(within(statusRow).getByRole('button', { name: '审查并批准修改' }))
     expect(within(inspector).getByRole('tab', { name: '当前工作' })).toHaveAttribute('aria-selected', 'true')
     await waitFor(() => expect(changeSetPanel).toHaveFocus())
     expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
-    expect(within(review).getByLabelText('src/a.ts diff')).toBeInTheDocument()
-    expect(within(review).getByLabelText('src/b.ts diff')).toBeInTheDocument()
-    expect(within(review).getByRole('button', { name: 'Approve exact Change Set' })).toBeEnabled()
+    expect(within(review).getByLabelText('src/a.ts 的改动')).toBeInTheDocument()
+    expect(within(review).getByLabelText('src/b.ts 的改动')).toBeInTheDocument()
+    expect(within(review).getByRole('button', { name: '批准这些改动' })).toBeEnabled()
     expect(api.replyCodingPermission).not.toHaveBeenCalled()
   })
 
@@ -4685,10 +4685,14 @@ describe('App', () => {
     await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00 / 月 · 预警 $0.50'))
     expect(screen.getByTestId('flow-node-n-design-gate')).toBeInTheDocument()
     expect(api.getCodingRuntimeBudgetPolicy).toHaveBeenLastCalledWith({ projectId: localProject.id })
-    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockRejectedValue(new Error('Budget unavailable'))
+    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockRejectedValue(
+      new Error("Error invoking remote method 'devflow:coding:runtime-budget-policy:get': Error: Budget unavailable"),
+    )
     clickUpdateTeamData()
     await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('不可用'))
     expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).not.toHaveTextContent('$1.00')
+    // Hardening H4: the read error never reaches the page with Electron's IPC prefix.
+    expect(document.body).not.toHaveTextContent('Error invoking remote method')
   })
 
   it('loads remote team state without mixing other project runs into the selected local project', async () => {

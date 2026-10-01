@@ -2007,8 +2007,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     const statusRow = inspector.getByTestId('task-status-row')
     const changeSetPanel = inspector.getByTestId('task-coding-change-set')
     await expect(changeSetPanel.getByTestId('coding-change-set-review')).toBeVisible()
-    await expect(statusRow.getByRole('button', { name: /Approve exact/ })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: 'Approve exact Change Set' })).toHaveCount(1)
+    await expect(statusRow.getByRole('button', { name: /批准这些改动/ })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '批准这些改动' })).toHaveCount(1)
     await inspector.getByRole('tab', { name: '执行记录', exact: true }).click()
     await statusRow.getByRole('button', { name: '审查并批准修改', exact: true }).click()
     await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
@@ -2017,10 +2017,10 @@ test.describe('AI DevFlow desktop workbench', () => {
 
     const review = changeSetPanel.getByTestId('coding-change-set-review')
     await expect(review).toBeVisible()
-    await expect(review.getByLabel('src/a.ts diff')).toBeVisible()
-    await expect(review.getByLabel('src/b.ts diff')).toBeVisible()
+    await expect(review.getByLabel('src/a.ts 的改动')).toBeVisible()
+    await expect(review.getByLabel('src/b.ts 的改动')).toBeVisible()
     await expect(review).toContainText('c'.repeat(64))
-    const diffStyle = await review.getByLabel('src/a.ts diff').evaluate((element) => ({
+    const diffStyle = await review.getByLabel('src/a.ts 的改动').evaluate((element) => ({
       whiteSpace: getComputedStyle(element).whiteSpace,
       overflowX: getComputedStyle(element).overflowX,
     }))
@@ -2031,15 +2031,15 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.evaluate(() => {
       document.documentElement.style.zoom = '1.25'
     })
-    await review.getByRole('button', { name: 'Approve exact Change Set' }).scrollIntoViewIfNeeded()
-    await expect(review.getByRole('button', { name: 'Approve exact Change Set' })).toBeVisible()
-    await expect(review.getByRole('button', { name: 'Reject' })).toBeVisible()
+    await review.getByRole('button', { name: '批准这些改动' }).scrollIntoViewIfNeeded()
+    await expect(review.getByRole('button', { name: '批准这些改动' })).toBeVisible()
+    await expect(review.getByRole('button', { name: '拒绝改动' })).toBeVisible()
     await page.emulateMedia({ colorScheme: 'dark' })
     await expect(review).toBeVisible()
     await page.emulateMedia({ colorScheme: 'light' })
     await expect(review).toBeVisible()
 
-    await review.getByRole('button', { name: 'Approve exact Change Set' }).click()
+    await review.getByRole('button', { name: '批准这些改动' }).click()
     await expect.poll(() => page.evaluate(() => (
       window as unknown as { __codingPermissionReplies: unknown[] }
     ).__codingPermissionReplies)).toEqual([{
@@ -2062,10 +2062,10 @@ test.describe('AI DevFlow desktop workbench', () => {
     await inspector.getByRole('button', { name: '启动 Coding Agent' }).click()
     // The exact diff is reviewed and approved in the task's 当前工作 (plan W3).
     const review = inspector.getByTestId('task-coding-change-set').getByTestId('coding-change-set-review')
-    await expect(review.getByLabel('src/a.ts diff')).toContainText('new a 59')
-    await expect(review.getByLabel('src/b.ts diff')).toContainText('new b 59')
+    await expect(review.getByLabel('src/a.ts 的改动')).toContainText('new a 59')
+    await expect(review.getByLabel('src/b.ts 的改动')).toContainText('new b 59')
     await expectStaysOnWorkbench(page)
-    await review.getByRole('button', { name: 'Approve exact Change Set' }).click()
+    await review.getByRole('button', { name: '批准这些改动' }).click()
     await expect(review).toHaveCount(0)
     await expectStaysOnWorkbench(page)
 

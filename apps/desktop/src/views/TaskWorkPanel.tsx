@@ -12,7 +12,7 @@ import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action
 import type { CodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 import { formatLocalTime } from '../app/desktop-view-model'
 import type { TestRunReadiness } from '../app/test-run-readiness'
-import { CodingChangeSetReview } from './CodingChangeSetReview'
+import { CodingChangeSetReview, commandRiskLabels } from './CodingChangeSetReview'
 import { ReviewRerunDialog } from './ReviewRerunDialog'
 
 /*
@@ -198,7 +198,7 @@ export function CodingWorkPanel({
         <p>{permission.request.reasons.join(' ')}</p>
         <div className="knowledge-reference-meta">
           <span>{permission.request.permission}</span>
-          <span>风险 {permission.request.risk}</span>
+          <span>风险 {commandRiskLabels[permission.request.risk] ?? permission.request.risk}</span>
           {permission.request.filePath ? <code>{permission.request.filePath}</code> : null}
           <span>{permission.changedPaths.length} 个文件</span>
           {permission.changeSetDigest ? <code>{permission.changeSetDigest}</code> : null}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { formatUsd, type RuntimeBudgetPolicy } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
+import { ipcErrorMessage } from './ipc-error'
 
 type BudgetState = {
   policy: RuntimeBudgetPolicy | null
@@ -36,7 +37,7 @@ export function useProjectRuntimeBudget(input: {
       if (currentScope.current === scope && requestVersion.current === version) {
         setResult({ scope, state: {
           policy: null, status: 'unavailable',
-          error: error instanceof Error ? error.message : '无法读取 Team 预算策略',
+          error: ipcErrorMessage(error, '无法读取 Team 预算策略'),
         } })
       }
     }
@@ -62,7 +63,7 @@ export function useProjectRuntimeBudget(input: {
           ? previous
           : { scope, state: {
               policy: null, status: 'unavailable',
-              error: error instanceof Error ? error.message : '无法保存 Team 预算策略',
+              error: ipcErrorMessage(error, '无法保存 Team 预算策略'),
             } })
       }
       throw error
