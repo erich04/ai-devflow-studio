@@ -1,10 +1,13 @@
 // @vitest-environment node
 
 import { createServer, type RequestListener, type Server } from 'node:http'
+import { createServer as createNetServer, type Socket } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   AgentProviderRequestError,
+  classifyProviderTransportError,
   createOpenAiCompatibleAgentProvider,
+  describeAgentProviderFailure,
 } from './agent-review'
 
 const servers: Server[] = []
@@ -218,6 +221,8 @@ describe('Agent Provider structured request errors', () => {
     ['ENOTFOUND', 'dns_failure', 'not_sent', 'not_incurred', true],
     ['CERT_HAS_EXPIRED', 'tls_failure', 'not_sent', 'not_incurred', false],
     ['ECONNRESET', 'connection_reset', 'possibly_delivered', 'unknown', true],
+    ['ECONNREFUSED', 'connection_failed', 'not_sent', 'not_incurred', true],
+    ['UND_ERR_CONNECT_TIMEOUT', 'connection_failed', 'not_sent', 'not_incurred', true],
     ['ERR_PROXY_CONNECTION_FAILED', 'proxy_failure', 'not_sent', 'not_incurred', true],
     ['UNMAPPED_PROVIDER_CODE', 'unknown_provider_failure', 'possibly_delivered', 'unknown', false],
   ] as const)('classifies structured transport cause %s without matching its message', async (
@@ -238,6 +243,53 @@ describe('Agent Provider structured request errors', () => {
 
     expect(failure).toMatchObject({ code, deliveryState, billingState, retryable })
     expect(JSON.stringify(failure)).not.toContain('RAW_TRANSPORT_SECRET')
+  })
+
+  // #208: a peer that closes during the TLS handshake received no request bytes.
+  it('settles a socket closed before the TLS handshake as never sent', async () => {
+    const sockets = new Set<Socket>()
+    const tcp = createNetServer((socket) => { sockets.add(socket); socket.end() })
+    await new Promise<void>((resolve) => tcp.listen(0, '127.0.0.1', resolve))
+    const address = tcp.address()
+    if (!address || typeof address === 'string') throw new Error('Local TCP server did not bind')
+    try {
+      const provider = createOpenAiCompatibleAgentProvider({
+        model: 'test-model', apiKey: 'placeholder', baseUrl: `https://127.0.0.1:${address.port}/v1`,
+      })
+      const failure = await provider.completeStructuredJson!({
+        systemPrompt: 'Return JSON.', userPrompt: 'Task.', maxOutputTokens: 64,
+      }).catch((error: unknown) => error)
+      expect(failure).toMatchObject({
+        code: 'connection_failed', deliveryState: 'not_sent', billingState: 'not_incurred',
+        retryable: true, sanitizedCause: 'reset_before_tls_handshake',
+      })
+      expect(describeAgentProviderFailure(failure)).toContain('请求没有发出')
+    } finally {
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => tcp.close(() => resolve()))
+    }
+  })
+
+  it('keeps any other connection reset as possibly delivered', () => {
+    const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+    expect(classifyProviderTransportError(new TypeError('fetch failed', { cause }))).toMatchObject({
+      code: 'connection_reset', deliveryState: 'possibly_delivered', billingState: 'unknown',
+    })
+  })
+
+  it('classifies a refused local connection as never sent', async () => {
+    const closed = createNetServer()
+    await new Promise<void>((resolve) => closed.listen(0, '127.0.0.1', resolve))
+    const address = closed.address()
+    if (!address || typeof address === 'string') throw new Error('Local TCP server did not bind')
+    await new Promise<void>((resolve) => closed.close(() => resolve()))
+    const provider = createOpenAiCompatibleAgentProvider({
+      model: 'test-model', apiKey: 'placeholder', baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    })
+    const failure = await provider.completeStructuredJson!({
+      systemPrompt: 'Return JSON.', userPrompt: 'Task.', maxOutputTokens: 64,
+    }).catch((error: unknown) => error)
+    expect(failure).toMatchObject({ code: 'connection_failed', deliveryState: 'not_sent', billingState: 'not_incurred' })
   })
 
   it('classifies a local compatible-server connection reset', async () => {

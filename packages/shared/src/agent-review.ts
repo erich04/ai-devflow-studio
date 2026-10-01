@@ -140,6 +140,8 @@ export type AgentProviderErrorCode =
   | 'provider_timeout'
   | 'dns_failure'
   | 'tls_failure'
+  /** The connection was never established, so no request bytes reached the Provider. */
+  | 'connection_failed'
   | 'connection_reset'
   | 'proxy_failure'
   | 'http_429'
@@ -242,6 +244,7 @@ export function describeAgentProviderFailure(error: unknown): string {
     cancelled_by_user: '已停止本次模型调用，未保存新报告。',
     response_too_large: '响应超过安全接收容量，未保存不完整报告。',
     http_429: '模型服务限流，请稍后重试。',
+    connection_failed: '未能连接到模型服务，请求没有发出，不产生费用。请检查网络后重试。',
     local_agent_unavailable: 'OpenCode 审查未能完成，未保存本次报告。请检查本机 OpenCode 与所选 Provider 后重试。',
     local_agent_permission_requested: 'OpenCode 审查请求了只读之外的权限，已停止，未保存本次报告。',
     local_agent_repository_changed: 'OpenCode 审查期间仓库发生了变化，未保存本次报告。请在仓库稳定后重新审查。',
@@ -2407,8 +2410,45 @@ function providerResponseError(
   })
 }
 
-function classifyProviderTransportError(error: unknown): AgentProviderRequestError {
+/** Transport causes raised before a connection exists: no request bytes reached the Provider. */
+const CONNECT_PHASE_CAUSES: Readonly<Record<string, string>> = {
+  ECONNREFUSED: 'connection_refused',
+  EHOSTUNREACH: 'host_unreachable',
+  ENETUNREACH: 'network_unreachable',
+  UND_ERR_CONNECT_TIMEOUT: 'connect_timeout',
+}
+
+// Node's TLS client raises ECONNRESET with exactly this message when the peer closes the
+// socket before the handshake completes. HTTPS sends nothing before the handshake, so the
+// request cannot have been delivered. Any other ECONNRESET stays "possibly delivered".
+const RESET_BEFORE_TLS_HANDSHAKE = 'Client network socket disconnected before secure TLS connection was established'
+
+function isResetBeforeTlsHandshake(error: unknown): boolean {
+  let current = error
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== 'object' || current === null) return false
+    const record = current as { code?: unknown; message?: unknown; cause?: unknown }
+    if (record.code === 'ECONNRESET') {
+      return typeof record.message === 'string' && record.message.startsWith(RESET_BEFORE_TLS_HANDSHAKE)
+    }
+    current = record.cause
+  }
+  return false
+}
+
+/**
+ * Maps a thrown fetch/socket error to delivery and billing states. Also used by the
+ * OpenCode budget relay so both paths settle a never-sent request the same way (#208).
+ */
+export function classifyProviderTransportError(error: unknown): AgentProviderRequestError {
   const causeCode = providerTransportCauseCode(error)
+  const connectPhaseCause = causeCode ? CONNECT_PHASE_CAUSES[causeCode] : undefined
+  if (connectPhaseCause || isResetBeforeTlsHandshake(error)) {
+    return new AgentProviderRequestError({
+      code: 'connection_failed', deliveryState: 'not_sent', billingState: 'not_incurred',
+      retryable: true, sanitizedCause: connectPhaseCause ?? 'reset_before_tls_handshake', cause: error,
+    })
+  }
   if (causeCode && ['ENOTFOUND', 'EAI_AGAIN', 'EAI_FAIL'].includes(causeCode)) {
     return new AgentProviderRequestError({
       code: 'dns_failure', deliveryState: 'not_sent', billingState: 'not_incurred',
