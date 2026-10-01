@@ -659,17 +659,39 @@ async function runProjectTestsInTask(page, { runId, nodeId, nodeTitle }) {
     const evidence = state.testEvidence
       .filter((candidate) => candidate.runId === input.runId && candidate.nodeId === input.nodeId)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+    const workspace = evidence?.sourceTree?.workspaceId
+      ? state.managedCodingWorkspaces.find((candidate) => candidate.id === evidence.sourceTree.workspaceId)
+      : undefined
     return {
-      evidence: evidence ? { id: evidence.id, status: evidence.status, command: evidence.command } : null,
+      evidence: evidence ? {
+        id: evidence.id,
+        status: evidence.status,
+        command: evidence.command,
+        sourceTree: evidence.sourceTree,
+      } : null,
+      testedTreePath: workspace?.worktreePath,
       run: state.runs.find((candidate) => candidate.id === input.runId),
     }
   }, { runId, nodeId })
   expect(execution.evidence?.status).toBe('passed')
   expect(execution.evidence?.command).toBe('npm test')
+  expect(execution.evidence?.sourceTree?.digest).toMatch(/^[0-9a-f]{64}$/)
   // Results stay in the task: 当前工作 of the (now finished) test step shows them.
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
-  await expect(inspector.getByTestId('node-test-evidence')).toContainText('已通过')
-  await expect(inspector.getByTestId('node-test-evidence')).toContainText('适用性无法核实')
+  const evidenceCard = inspector.getByTestId('node-test-evidence')
+  await expect(evidenceCard).toContainText('已通过')
+  await expect(evidenceCard).toContainText('结果对应当前代码。')
+  // Hardening H3: a change in the tested tree marks the result stale; undoing it restores it.
+  expect(execution.testedTreePath).toBeTruthy()
+  const probe = path.join(execution.testedTreePath, 'devflow-freshness-probe.txt')
+  await writeFile(probe, 'changed after the test\n')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(evidenceCard).toContainText('所测代码之后有改动，结果已过期，请重新运行检查。')
+  await expect(evidenceCard.getByText('已过期', { exact: true })).toBeVisible()
+  await rm(probe)
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(evidenceCard).toContainText('结果对应当前代码。')
+  await expect(evidenceCard.getByText('已过期', { exact: true })).toHaveCount(0)
   return execution
 }
 

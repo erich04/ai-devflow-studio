@@ -9,6 +9,7 @@ import type {
 } from '@ai-devflow/shared'
 import { formatLocalTime } from '../app/desktop-view-model'
 import { buildTestRunReadiness } from '../app/test-run-readiness'
+import { passedEvidenceApplicability, type TestEvidenceFreshnessMap } from '../app/test-evidence-freshness'
 import { formatStatusState } from '../app/node-inspector-view-model'
 
 /**
@@ -19,6 +20,7 @@ export function LocalProjectSettings({
   project,
   gitStatus,
   evidence,
+  evidenceFreshness = {},
   onHandleInTask,
   isRunningTests,
   commandDraft,
@@ -33,6 +35,8 @@ export function LocalProjectSettings({
   project: LocalProject | undefined
   gitStatus: ProjectGitStatus | null
   evidence: TestEvidence[]
+  /** Whether each passed result still applies to the current code (hardening H3). */
+  evidenceFreshness?: TestEvidenceFreshnessMap
   /** Back to the task's test step; nothing runs from settings (plan W5). */
   onHandleInTask: () => void
   isRunningTests: boolean
@@ -61,10 +65,11 @@ export function LocalProjectSettings({
         : isCommandDirty
           ? { label: '有未保存修改', tone: 'warn', detail: '当前输入尚未保存，不代表测试已经执行。' }
           : { label: '已保存', tone: 'good', detail: '命令已保存到本地项目；这不代表测试已经完成。' }
+  const applicability = latestEvidence ? passedEvidenceApplicability(latestEvidence, evidenceFreshness[latestEvidence.id]) : undefined
   const executionState = isRunningTests || latestEvidence?.status === 'running'
     ? { label: '执行中', tone: 'warn', detail: '本地测试命令正在执行。' }
     : latestEvidence?.status === 'passed'
-      ? { label: '已通过', tone: 'good', detail: `${latestEvidence.summary} · 执行于 ${formatLocalTime(latestEvidence.createdAt)}。证据没有记录所测代码的提交，适用性无法核实。` }
+      ? { label: applicability?.stale ? '已过期' : '已通过', tone: applicability?.stale ? 'warn' : 'good', detail: `${latestEvidence.summary} · ${applicability?.text ?? ''}` }
       : latestEvidence?.status === 'failed'
         ? { label: '失败', tone: 'bad', detail: latestEvidence.summary }
         : latestEvidence?.status === 'timed_out'

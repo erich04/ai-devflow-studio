@@ -2295,8 +2295,8 @@ describe('Postgres team repository', () => {
       'run-synced:n-build',
       'run-synced',
       'build',
-      'Synced build node',
-      'Canonical current node from DevFlow Electron.',
+      '开发实现',
+      '步骤状态由桌面端同步。',
       'task',
       'running',
       'u-ling',
@@ -2318,6 +2318,44 @@ describe('Postgres team repository', () => {
     expect(runWriteIndex).toBeGreaterThan(beginIndex)
     expect(convergenceIndex).toBeGreaterThan(runWriteIndex)
     expect(nodeWriteIndex).toBeGreaterThan(convergenceIndex)
+    expect(commitIndex).toBeGreaterThan(nodeWriteIndex)
+  })
+
+  it('writes every synced step from the desktop step list without guessing earlier statuses', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    const nodes = [
+      { id: 'n-clarify', stage: 'clarify' as const, kind: 'agent' as const, status: 'success' as const },
+      { id: 'n-build', stage: 'build' as const, kind: 'task' as const, status: 'running' as const },
+      { id: 'n-accept', stage: 'accept' as const, kind: 'acceptance' as const, status: 'pending' as const, requiredRole: 'lead' as const },
+    ]
+    await repository.uploadRunSummary({
+      kind: 'run', runId: 'run-steps', version: 3, projectId: 'p-payments', title: 'Step list',
+      status: 'building', currentNodeId: 'n-build', currentNode: nodes[1]!, nodes,
+      branchName: 'ai/steps', updatedAt: '2026-09-30T12:00:00.000Z',
+    }, { organizationId: 'org-demo', userId: 'u-ling' })
+    const nodeWrites = db.queries.filter((query) => query.sql.includes('INSERT INTO workflow_nodes'))
+    expect(nodeWrites.map((query) => query.params?.slice(0, 7))).toEqual([
+      ['run-steps:n-clarify', 'run-steps', 'clarify', '需求澄清', '步骤状态由桌面端同步。', 'agent', 'success'],
+      ['run-steps:n-build', 'run-steps', 'build', '开发实现', '步骤状态由桌面端同步。', 'task', 'running'],
+      ['run-steps:n-accept', 'run-steps', 'accept', '业务验收', '步骤状态由桌面端同步。', 'acceptance', 'pending'],
+    ])
+    expect(nodeWrites[2]?.params?.[8]).toBe('lead')
+    // The step list is authoritative, so earlier active steps are not marked finished by guess.
+    expect(db.queries.some((query) => query.sql.includes('UPDATE workflow_nodes'))).toBe(false)
+  })
+
+  it('keeps the transaction order for the legacy current-step upload', async () => {
+    const db = new FakeTeamDbClient()
+    const repository = createPostgresTeamRepository(db)
+    await repository.uploadRunSummary({
+      kind: 'run', runId: 'run-legacy', version: 2, projectId: 'p-payments', title: 'Legacy',
+      status: 'building', currentNodeId: 'n-build', currentNode: { id: 'n-build', stage: 'build', kind: 'task', status: 'running' },
+      branchName: 'ai/legacy', updatedAt: '2026-09-30T12:00:00.000Z',
+    }, { organizationId: 'org-demo', userId: 'u-ling' })
+    const statements = db.queries.map(({ sql }) => sql.trim())
+    const commitIndex = statements.indexOf('COMMIT')
+    const nodeWriteIndex = db.queries.findIndex(({ sql }) => sql.includes('INSERT INTO workflow_nodes'))
     expect(commitIndex).toBeGreaterThan(nodeWriteIndex)
     expect(statements).not.toContain('ROLLBACK')
     expect(db.checkoutCount).toBe(1)

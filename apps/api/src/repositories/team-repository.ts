@@ -20,6 +20,8 @@ import {
   parseRemoteAgentMemorySummary,
   parseRemoteAgentCoordinationSummary,
   redactRemoteRunSummaryForSync,
+  remoteStepTitle,
+  REMOTE_STEP_SUBTITLE,
   redactRemoteTestEvidenceSummaryForSync,
   resolveAgentProviderDisplayName,
   resolveEffectivePolicy,
@@ -61,6 +63,7 @@ import {
   type TeamSession,
   type TokenUsage,
   type TokenUsageRollup,
+  type WorkflowNode,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import {
@@ -1229,29 +1232,42 @@ export function createSeedTeamRepository(): TeamRepository {
         }
       }
 
-      const currentNode = {
-        id: summary.currentNode.id,
-        stage: summary.currentNode.stage,
-        title: `Synced ${summary.currentNode.stage} node`,
-        subtitle: 'Canonical current node from DevFlow Electron.',
-        kind: summary.currentNode.kind,
-        status: summary.currentNode.status,
-        ownerId: context.userId,
-        ...(summary.currentNode.requiredRole
-          ? { requiredRole: summary.currentNode.requiredRole }
-          : {}),
-        retryCount: 0,
-        artifactIds: [],
+      const syncedNode = (node: RemoteRunSummary['currentNode']): WorkflowNode => {
+        const previous = existingRun?.nodes.find((candidate) => candidate.id === node.id)
+        return {
+          id: node.id,
+          stage: node.stage,
+          title: remoteStepTitle(node.stage, node.kind),
+          subtitle: REMOTE_STEP_SUBTITLE,
+          kind: node.kind,
+          status: node.status,
+          ownerId: previous?.ownerId ?? context.userId,
+          ...(node.requiredRole ? { requiredRole: node.requiredRole } : {}),
+          retryCount: previous?.retryCount ?? 0,
+          artifactIds: previous?.artifactIds ?? [],
+        }
       }
-      const nodes =
-        existingRun?.nodes
+      let nodes: WorkflowNode[]
+      if (summary.nodes) {
+        // The desktop's ordered step list is authoritative; child steps materialized from other
+        // summaries (for example test evidence) stay after it.
+        const listed = new Set(summary.nodes.map((node) => node.id))
+        nodes = [
+          ...summary.nodes.map(syncedNode),
+          ...(existingRun?.nodes.filter((node) => !listed.has(node.id)) ?? []),
+        ]
+      } else {
+        // Older desktops send only the current step; earlier active steps are assumed finished.
+        const currentNode = syncedNode(summary.currentNode)
+        nodes = existingRun?.nodes
           .filter((node) => node.id !== currentNode.id)
           .map((node) =>
             node.status === 'running' || node.status === 'blocked'
               ? { ...node, status: 'success' as const }
               : node,
           ) ?? []
-      nodes.push(currentNode)
+        nodes.push(currentNode)
+      }
 
       const syncedRun: WorkflowRun = existingRun
         ? {

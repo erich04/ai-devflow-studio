@@ -10,6 +10,7 @@ import {
   gateDecisionLabel,
   requiredRoleLabel,
   shortIdentifier,
+  stepTitle,
 } from './web-labels'
 
 /**
@@ -97,7 +98,7 @@ export function buildWebTodo(input: {
       items.push({
         id: `anomaly:${run.id}`,
         kind: 'anomaly',
-        label: run.status === 'failed' ? '任务执行失败' : `步骤失败：${currentNode?.title ?? '当前步骤'}`,
+        label: run.status === 'failed' ? '任务执行失败' : `步骤失败：${currentNode ? stepTitle(currentNode) : '当前步骤'}`,
         taskTitle: run.title,
         runId: run.id,
         requester,

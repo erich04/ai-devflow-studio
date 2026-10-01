@@ -33,6 +33,7 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.retryRemoteSyncOperation, input),
   selectLocalProject: () => ipcRenderer.invoke(ipcChannels.selectProject),
   getProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.getProjectGitStatus, input),
+  getTestEvidenceFreshness: (input) => ipcRenderer.invoke(ipcChannels.getTestEvidenceFreshness, input),
   watchProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.watchProjectGitStatus, input),
   unwatchProjectGitStatus: (input) => ipcRenderer.invoke(ipcChannels.unwatchProjectGitStatus, input),
   saveProjectTestCommand: (input) =>

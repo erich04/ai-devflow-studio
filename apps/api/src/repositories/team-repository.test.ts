@@ -127,6 +127,33 @@ describe('seed team repository', () => {
   })
 
   const syncContext = { organizationId: 'org-demo', userId: 'u-erich' }
+  it('projects the whole synced step list so the Web shows real progress', async () => {
+    const repository = createSeedTeamRepository()
+    const nodes = [
+      { id: 'clarify', stage: 'clarify' as const, kind: 'agent' as const, status: 'success' as const },
+      { id: 'clarify-gate', stage: 'clarify' as const, kind: 'gate' as const, status: 'success' as const },
+      { id: 'design', stage: 'design' as const, kind: 'agent' as const, status: 'running' as const },
+      { id: 'accept', stage: 'accept' as const, kind: 'acceptance' as const, status: 'pending' as const, requiredRole: 'lead' as const },
+    ]
+    const summary = { kind: 'run' as const, runId: 'run-step-list', version: 3, projectId: 'p-payments', title: 'Step list',
+      status: 'designing' as const, currentNodeId: 'design', currentNode: nodes[2]!, nodes,
+      branchName: 'ai/steps', updatedAt: '2026-09-30T12:00:00.000Z' }
+    await repository.uploadRunSummary(summary, syncContext)
+    const run = (await repository.getTeamOverview(syncContext)).runs.find((candidate) => candidate.id === summary.runId)!
+    expect(run.nodes.map((node) => [node.id, node.title, node.status])).toEqual([
+      ['clarify', '需求澄清', 'success'],
+      ['clarify-gate', '需求确认 Gate', 'success'],
+      ['design', '方案设计', 'running'],
+      ['accept', '业务验收', 'pending'],
+    ])
+    expect(run.nodes[3]?.requiredRole).toBe('lead')
+    // A later version moves on without inventing statuses for steps it did not report.
+    const later = nodes.map((node) => node.id === 'design' ? { ...node, status: 'failed' as const } : node)
+    await repository.uploadRunSummary({ ...summary, version: 4, status: 'failed', currentNode: later[2]!, nodes: later,
+      updatedAt: '2026-09-30T12:05:00.000Z' }, syncContext)
+    const updated = (await repository.getTeamOverview(syncContext)).runs.find((candidate) => candidate.id === summary.runId)!
+    expect(updated.nodes.map((node) => node.status)).toEqual(['success', 'success', 'failed', 'pending'])
+  })
 
   it('stores only a monotonic metadata-only Agent Runtime Team projection', async () => {
     const repository = createSeedTeamRepository()

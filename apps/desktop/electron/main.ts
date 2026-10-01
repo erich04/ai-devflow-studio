@@ -125,6 +125,7 @@ import {
   parseProviderThinkingInput,
   parsePairDesktopInput,
   parseProjectGitStatusInput,
+  parseTestEvidenceFreshnessInput,
   parseCreateAcceptanceBundleInput,
   parseCreatePrDraftInput,
   parsePrepareGitHubDeliveryInput,
@@ -191,6 +192,7 @@ import { createDesktopWorkRequestService } from './work-request-service.js'
 import { inspectProjectDirectory, runLocalTestCommand } from './test-runner.js'
 import { isGitWorkingTreeRoot } from './git-repository-boundary.js'
 import { runWorkflowTestCommand } from './workflow-test-command.js'
+import { evaluateTestEvidenceFreshness } from './test-evidence-freshness.js'
 import { recordStageAgentFailure } from './stage-agent-failure.js'
 import { buildOpencodeRuntimeEnv, createCodingEngineAdapterFromEnv } from './coding-engine.js'
 import {
@@ -2475,6 +2477,20 @@ function registerIpcHandlers() {
     return validateTestCommandSafety(input.testCommand)
   })
 
+  ipcMain.handle(ipcChannels.getTestEvidenceFreshness, async (_, payload: unknown) => {
+    const input = parseTestEvidenceFreshnessInput(payload)
+    const store = await getStore()
+    const run = await store.getRun(input.runId)
+    if (!run) throw new Error(`Run not found: ${input.runId}`)
+    const project = await findProject(run.projectId)
+    return evaluateTestEvidenceFreshness({
+      evidence: await store.listTestEvidence(run.id),
+      projectId: project.id,
+      projectPath: project.path,
+      workspaces: await store.listManagedCodingWorkspaces(project.id),
+    })
+  })
+
   ipcMain.handle(ipcChannels.runProjectTests, async (_, payload: unknown) => {
     const input = parseRunProjectTestsInput(payload)
     const store = await getStore()
@@ -2490,7 +2506,7 @@ function registerIpcHandlers() {
       store,
       workspaceCoordinator: workspaceOperationCoordinator,
       timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
-      complete: async ({ command, cwd, result }) => {
+      complete: async ({ command, cwd, result, sourceTree }) => {
         const createdAt = new Date().toISOString()
         const evidence: TestEvidence = redactTestEvidenceForStorage({
           id: `evidence-${randomUUID()}`,
@@ -2506,6 +2522,7 @@ function registerIpcHandlers() {
           stderr: result.stderr,
           summary: result.summary,
           redacted: result.redacted,
+          ...(sourceTree ? { sourceTree } : {}),
           createdAt,
         })
         const artifact = createTestEvidenceArtifact(evidence)

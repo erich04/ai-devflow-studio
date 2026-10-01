@@ -288,6 +288,8 @@ export type DevFlowDesktopApi = {
   ) => Promise<LocalExecutionState>
   selectLocalProject: () => Promise<LocalProject | null>
   getProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
+  /** Whether each passed test result of the run still applies to the current code (hardening H3). */
+  getTestEvidenceFreshness?: (input: { runId: string }) => Promise<import('@ai-devflow/shared').TestEvidenceFreshness[]>
   watchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<ProjectGitStatus>
   unwatchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<void>
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>

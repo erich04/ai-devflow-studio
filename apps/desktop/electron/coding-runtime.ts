@@ -83,6 +83,7 @@ import type {
   ReserveCodingAgentRunResult,
   ReserveCodingAgentRunOptions,
 } from './local-store.js'
+import { withSourceTreeDigest } from './source-tree-digest.js'
 
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 
@@ -950,11 +951,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     await saveEvents([startedEvent])
 
     if (input.codingRun.contextReceipt) await assertExecutionContext(input.codingRun)
-    const result = await deps.runTestCommand({
+    const runTestCommand = deps.runTestCommand
+    const { value: result, digest } = await withSourceTreeDigest(input.workspace.worktreePath, () => runTestCommand({
       command,
       cwd: input.workspace.worktreePath,
       timeoutMs: deps.testTimeoutMs ?? 120_000,
-    })
+    }))
     const evidence: TestEvidence = redactTestEvidenceForStorage({
       id: idGenerator('evidence'),
       runId: input.codingRun.runId,
@@ -969,6 +971,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       stderr: result.stderr,
       summary: result.summary,
       redacted: result.redacted,
+      ...(digest ? { sourceTree: { digest, workspaceId: input.workspace.id } } : {}),
       createdAt: input.timestamp,
     })
     const artifact = createTestEvidenceArtifact(evidence)

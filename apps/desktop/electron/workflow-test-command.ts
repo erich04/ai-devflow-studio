@@ -6,9 +6,11 @@ import {
   validateTestCommandSafety,
   type LocalProject,
   type ManagedCodingWorkspace,
+  type TestEvidence,
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
+import { withSourceTreeDigest } from './source-tree-digest.js'
 import { runLocalTestCommand } from './test-runner.js'
 import type { WorkspaceOperationCoordinator } from './workspace-operation-coordinator.js'
 
@@ -19,6 +21,8 @@ export type WorkflowTestCommandResult = {
   command: string
   cwd: string
   result: Awaited<ReturnType<typeof runLocalTestCommand>>
+  /** Fingerprint of the tested tree; absent when it could not be taken (hardening H3). */
+  sourceTree?: NonNullable<TestEvidence['sourceTree']>
 }
 
 export async function runWorkflowTestCommand<T>(input: {
@@ -97,14 +101,17 @@ export async function runWorkflowTestCommand<T>(input: {
       throw new Error('Workflow Test source changed while waiting for its workspace')
     }
     const cwd = workspace ? await verifyManagedWorkspace(workspace) : project.path
-    const result = await runLocalTestCommand({
+    const { value: result, digest } = await withSourceTreeDigest(cwd, () => runLocalTestCommand({
       command: safety.normalizedCommand,
       cwd,
       timeoutMs: input.timeoutMs,
-    })
+    }))
     if (workspace) await verifyManagedWorkspace(workspace)
     // Keep the workspace lease through the existing atomic evidence/transition commit.
-    return input.complete({ command: safety.normalizedCommand, cwd, result })
+    return input.complete({
+      command: safety.normalizedCommand, cwd, result,
+      ...(digest ? { sourceTree: { digest, ...(workspace ? { workspaceId: workspace.id } : {}) } } : {}),
+    })
   }
   return initialWorkspace
     ? input.workspaceCoordinator.runExclusive(initialWorkspace.id, execute)
