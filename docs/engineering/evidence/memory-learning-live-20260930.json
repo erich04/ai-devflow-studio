@@ -6,7 +6,7 @@
     "model": "deepseek-flash"
   },
   "harness": "scripts/memory-learning-live.ts (runMemoryLearningLiveSmoke): two sequential Coding Runs in one isolated project, each in its own local session, with the same learning wiring as Desktop Main",
-  "executor": "Native v2 executor from feat/memory-candidate-dismissal (c186d04 + harness)",
+  "executor": "Native v2 executor from feat/memory-candidate-dismissal at c186d04, with the harness then uncommitted; the harness was committed unchanged as d1c78a5",
   "passed": true,
   "completedAt": "2026-09-30T17:04:44.753Z",
   "runs": [
@@ -97,6 +97,7 @@
     "One run; model behavior and DeepSeek caching vary between runs.",
     "Both tasks change the same one-line file, so the recalled Memory is background only and is not what made the second run succeed.",
     "Human promotion and dismissal were called through the same main-process services as the Desktop panel, not through the UI.",
-    "The second run's learning was retried by calling the learning step directly after the dismissal."
+    "The second run's learning was retried by calling the learning step directly after the dismissal.",
+    "This file is a hand-condensed summary of the harness report.json (kept locally under out/, not committed); figures are copied from it."
   ]
 }

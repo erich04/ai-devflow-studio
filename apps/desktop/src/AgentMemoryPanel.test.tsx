@@ -394,6 +394,29 @@ describe('AgentMemoryPanel', () => {
     expect(screen.getByText('Pending memory statement for explicit human review.')).toBeInTheDocument()
   })
 
+  it('reloads the stored state when a dismissal committed but its reply failed', async () => {
+    const dismissedSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      candidateCount: 1,
+      candidates: snapshot.candidates.filter((entry) => entry.id !== 'candidate-pending'),
+    }
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn()
+        .mockResolvedValueOnce(snapshot)
+        .mockResolvedValueOnce(dismissedSnapshot),
+      dismissAgentMemoryCandidate: vi.fn().mockRejectedValue(new Error('reply lost')),
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '忽略此候选' }))
+    fireEvent.click(screen.getByRole('button', { name: '确认忽略此候选' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('忽略 Memory 候选的请求已被安全拒绝')
+    await waitFor(() => expect(screen.queryByText('Pending memory statement for explicit human review.')).not.toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: '确认忽略此候选' })).not.toBeInTheDocument()
+  })
+
   it('revises only one active Memory with exact renderer-observed versions and digests', async () => {
     const activeMemory = {
       ...snapshot.memories[0]!,

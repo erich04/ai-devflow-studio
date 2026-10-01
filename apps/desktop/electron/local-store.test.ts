@@ -1673,6 +1673,70 @@ describe('createLocalStore', () => {
     await expect(reopened.saveAgentMemoryCandidate(candidate))
       .resolves.toEqual({ committed: false, reason: 'dismissed' })
     await expect(reopened.listAgentMemoryCandidates(project.id)).resolves.toEqual([])
+
+    // A new accepted transition on another Runtime cannot reuse the dismissed candidate id.
+    const secondCreated = createAgentRuntime({ ...agentRuntimeStartRequest, id: 'agent-runtime-dismissed-reuse' })
+    const secondResumed = resumeAgentRuntime({
+      runtime: secondCreated.runtime,
+      expectedCheckpointVersion: secondCreated.runtime.checkpointVersion,
+      authority: secondCreated.runtime.authority,
+      contextDigest: secondCreated.runtime.contextDigest,
+      capabilitySetDigest: secondCreated.runtime.capabilitySetDigest,
+      now: '2026-08-12T20:30:01.000Z',
+    })
+    const secondRequested = requestAgentAction({
+      runtime: secondResumed.runtime,
+      expectedCheckpointVersion: secondResumed.runtime.checkpointVersion,
+      now: '2026-08-12T20:30:02.000Z',
+      action: {
+        id: 'memory-observation-atomic-2',
+        kind: 'tool',
+        capabilityId: 'test.observe',
+        capabilityVersion: 1,
+        requestDigest: 'e'.repeat(64),
+        requiresPermission: false,
+      },
+    })
+    const secondAccepted = acceptAgentActionResult({
+      runtime: secondRequested.runtime,
+      expectedCheckpointVersion: secondRequested.runtime.checkpointVersion,
+      actionId: 'memory-observation-atomic-2',
+      requestDigest: 'e'.repeat(64),
+      result: {
+        outcome: 'success',
+        resultDigest: 'f'.repeat(64),
+        resultBytes: 64,
+        tokens: 0,
+        costUsd: 0,
+        evaluation: 'success',
+        evaluationSummary: 'The accepted atomic observation is ready for explicit human review.',
+      },
+      now: '2026-08-12T20:30:03.000Z',
+    })
+    await reopened.commitAgentRuntimeTransition({ expectedRuntime: null, transition: secondCreated })
+    await reopened.commitAgentRuntimeTransition({ expectedRuntime: secondCreated.runtime, transition: secondResumed })
+    await reopened.commitAgentRuntimeTransition({ expectedRuntime: secondResumed.runtime, transition: secondRequested })
+    const candidateFromSecond = (id: string) => createAgentMemoryCandidate({
+      id,
+      statement: 'The accepted atomic observation is ready for explicit human review.',
+      previousRuntime: secondRequested.runtime,
+      acceptedTransition: secondAccepted,
+      createdAt: secondAccepted.runtime.updatedAt,
+    })
+    await expect(reopened.commitAgentRuntimeTransition({
+      expectedRuntime: secondRequested.runtime,
+      transition: secondAccepted,
+      memoryCandidate: await candidateFromSecond(candidate.id),
+    })).resolves.toEqual({ committed: false, reason: 'invalid_transition' })
+    await expect(reopened.getAgentRuntime(secondAccepted.runtime.id)).resolves.toEqual(secondRequested.runtime)
+    // The same transition with a fresh candidate id is accepted, so only the dismissal blocked it.
+    const fresh = await candidateFromSecond('memory-candidate-atomic-fresh')
+    await expect(reopened.commitAgentRuntimeTransition({
+      expectedRuntime: secondRequested.runtime,
+      transition: secondAccepted,
+      memoryCandidate: fresh,
+    })).resolves.toEqual({ committed: true, replayed: false, runtime: secondAccepted.runtime })
+    await expect(reopened.listAgentMemoryCandidates(project.id)).resolves.toEqual([fresh])
     reopened.close()
   })
 

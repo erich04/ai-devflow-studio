@@ -181,6 +181,21 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
     } catch {
       if (operationVersion === selectionVersion.current) {
         setError('忽略 Memory 候选的请求已被安全拒绝；请刷新后重新检查。')
+        // The dismissal may have committed before the reply failed; show the stored state.
+        try {
+          const current = parseAgentMemoryRendererSnapshot(
+            await desktopApi.listAgentMemoryLifecycle(runtimeSelection),
+          )
+          if (
+            current.localProjectId === runtimeSelection.localProjectId &&
+            operationVersion === selectionVersion.current
+          ) {
+            setSnapshot(current)
+            if (!current.candidates.some((entry) => entry.id === candidate.id)) setDismissingCandidateId(null)
+          }
+        } catch {
+          // Keep the previous snapshot; the error above already asks for a refresh.
+        }
       }
     } finally {
       if (operationVersion === selectionVersion.current) setIsDismissing(false)
@@ -358,7 +373,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                           <button
                             type="button"
                             className="ghost-button"
-                            disabled={isDismissing}
+                            disabled={isPromoting || isDismissing}
                             onClick={() => { void dismissCandidate(candidate) }}
                           >
                             {isDismissing ? '正在忽略候选…' : '确认忽略此候选'}
@@ -366,7 +381,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                           <button
                             type="button"
                             className="ghost-button"
-                            disabled={isDismissing}
+                            disabled={isPromoting || isDismissing}
                             onClick={() => setDismissingCandidateId(null)}
                           >
                             取消忽略

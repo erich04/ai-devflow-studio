@@ -650,4 +650,65 @@ describe('dismissing a pending Memory candidate (ADR 0024 §5)', () => {
       .toEqual([pending.id, promoted.id].sort())
     store.close()
   })
+
+  it('makes a promotion authorized before the dismissal fail as stale', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await seed(store)
+    const candidate = await candidateFor()
+    await store.saveAgentMemoryCandidate(candidate)
+    const authorization = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'agent-memory-race',
+      authority: {
+        stateVersion: 1, decisionId: 'agent-memory-race-promotion', candidateId: candidate.id,
+        candidateContentDigest: candidate.contentDigest, scope: candidate.scope, actorKind: 'human',
+        actorId: candidate.scope.userId, policyId: 'desktop-human-memory-promotion', policyVersion: 1,
+        visibility: 'user_project', sensitivity: 'private', retentionClass: 'until_deleted', expiresAt: null,
+        authorityDigest: '9'.repeat(64), decidedAt: '2026-09-30T00:06:00.000Z',
+      },
+    })
+    if (!authorization.authorized) throw new Error(`expected promotion authority: ${authorization.reason}`)
+    await expect(store.dismissAgentMemoryCandidate({
+      candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest, actorId: candidate.scope.userId,
+      dismissedAt: '2026-09-30T00:06:30.000Z',
+    })).resolves.toMatchObject({ dismissed: true, replayed: false })
+    await expect(store.commitAgentMemoryPromotion({ revision: authorization.revision }, authorization.capability))
+      .resolves.toEqual({ committed: false, reason: 'source_stale' })
+    await expect(store.listAgentMemoryRevisions('agent-memory-race')).resolves.toEqual([])
+    await expect(store.getAgentMemoryHead('agent-memory-race')).resolves.toBeNull()
+    store.close()
+  })
+
+  it('dismisses a Team-scoped candidate only for the paired session', async () => {
+    const pairing: DesktopPairingCredential = {
+      tokenId: 'pairing-token', organizationId: 'org-1', projectId: 'team-project-1', localProjectId: project.id,
+      userId: 'u-owner', role: 'member', authAccountId: 'account-1', projectMemberships: [], createdAt: '2026-09-30T00:00:00.000Z',
+    }
+    const teamScope: KnowledgeRetrievalScope = {
+      kind: 'team', organizationId: 'org-1', projectId: 'team-project-1', userId: 'u-owner',
+      sessionId: 'pairing-token', localProjectId: project.id,
+    }
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await store.saveDesktopPairingCredential(pairing, 'encrypted-test-token')
+    await seed(store, completedCodingRun(teamScope))
+    const candidate = await candidateFor(teamScope)
+    await expect(store.saveAgentMemoryCandidate(candidate)).resolves.toMatchObject({ committed: true })
+    const exact = {
+      candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest, actorId: teamScope.userId,
+      dismissedAt: '2026-09-30T00:06:00.000Z',
+    }
+    const repaired = { ...pairing, tokenId: 'pairing-token-renewed' }
+    await store.saveDesktopPairingCredential(repaired, 'encrypted-test-token')
+    await expect(store.dismissAgentMemoryCandidate(exact)).resolves.toEqual({ dismissed: false, reason: 'scope_mismatch' })
+    await expect(store.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+
+    await store.saveDesktopPairingCredential(pairing, 'encrypted-test-token')
+    await expect(store.dismissAgentMemoryCandidate(exact)).resolves.toMatchObject({ dismissed: true, replayed: false })
+    // A replay from another session is refused even though the dismissal exists.
+    await store.saveDesktopPairingCredential(repaired, 'encrypted-test-token')
+    await expect(store.dismissAgentMemoryCandidate(exact)).resolves.toEqual({ dismissed: false, reason: 'scope_mismatch' })
+    store.close()
+  })
 })
