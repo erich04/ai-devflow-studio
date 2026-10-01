@@ -27,6 +27,7 @@ const codeDescriptions: Record<AgentProviderErrorCode, string> = {
   dns_failure: '无法解析模型服务地址',
   tls_failure: '与模型服务的安全连接失败',
   connection_reset: '与模型服务的连接中断',
+  connection_failed: '未能连接到模型服务，请求没有发出',
   proxy_failure: '代理连接失败',
   http_429: '模型服务限流',
   http_4xx: '模型服务拒绝了请求',
