@@ -832,6 +832,9 @@ export type LocalStore = {
     candidate: AgentMemoryCandidate,
   ): Promise<SaveAgentMemoryCandidateResult>
   listAgentMemoryCandidates(localProjectId?: string): Promise<AgentMemoryCandidate[]>
+  dismissAgentMemoryCandidate(
+    input: DismissStoredAgentMemoryCandidateInput,
+  ): Promise<DismissStoredAgentMemoryCandidateResult>
   authorizeAgentMemoryPromotion(
     input: AuthorizeAgentMemoryPromotionInput,
   ): Promise<AuthorizeAgentMemoryPromotionResult>
@@ -1345,7 +1348,38 @@ export type SaveAgentMemoryCandidateResult =
   | { committed: true; replayed: boolean; candidate: AgentMemoryCandidate }
   | {
       committed: false
-      reason: 'invalid_candidate' | 'source_not_found' | 'scope_mismatch' | 'id_conflict'
+      reason: 'invalid_candidate' | 'source_not_found' | 'scope_mismatch' | 'id_conflict' | 'dismissed'
+    }
+
+/** What stays after a person dismisses a pending candidate: identity and digests, no text. */
+export type AgentMemoryCandidateDismissal = {
+  candidateId: string
+  scope: KnowledgeRetrievalScope
+  provenanceKind: AgentMemoryCandidate['provenance']['kind']
+  contentDigest: string
+  provenanceDigest: string
+  actorId: string
+  dismissedAt: string
+}
+
+export type DismissStoredAgentMemoryCandidateInput = {
+  candidateId: string
+  expectedContentDigest: string
+  expectedProvenanceDigest: string
+  actorId: string
+  dismissedAt: string
+}
+
+export type DismissStoredAgentMemoryCandidateResult =
+  | { dismissed: true; replayed: boolean; dismissal: AgentMemoryCandidateDismissal }
+  | {
+      dismissed: false
+      reason:
+        | 'invalid_input'
+        | 'candidate_not_found'
+        | 'digest_mismatch'
+        | 'scope_mismatch'
+        | 'already_promoted'
     }
 
 declare const agentMemoryPromotionCapabilityBrand: unique symbol
@@ -2760,6 +2794,73 @@ function selectAgentMemoryCandidate(
     'select json from agent_memory_candidates where id = ? limit 1',
     [candidateId],
   )[0]
+}
+
+function selectAgentMemoryCandidateDismissal(
+  db: Database,
+  where: { candidateId: string } | { localProjectId: string; provenanceDigest: string; contentDigest: string },
+): AgentMemoryCandidateDismissal | undefined {
+  const result = 'candidateId' in where
+    ? db.exec(
+        `select candidate_id, scope_kind, local_project_id, organization_id, team_project_id,
+           user_id, session_id, provenance_kind, content_digest, provenance_digest, actor_id, dismissed_at
+         from agent_memory_candidate_dismissals where candidate_id = ? limit 1`,
+        [where.candidateId],
+      )
+    : db.exec(
+        `select candidate_id, scope_kind, local_project_id, organization_id, team_project_id,
+           user_id, session_id, provenance_kind, content_digest, provenance_digest, actor_id, dismissed_at
+         from agent_memory_candidate_dismissals
+         where local_project_id = ? and provenance_digest = ? and content_digest = ? limit 1`,
+        [where.localProjectId, where.provenanceDigest, where.contentDigest],
+      )
+  const row = result[0]?.values[0]
+  if (row === undefined) return undefined
+  const [
+    candidateId, scopeKind, localProjectId, organizationId, teamProjectId,
+    userId, sessionId, provenanceKind, contentDigest, provenanceDigest, actorId, dismissedAt,
+  ] = row.map((value) => (value === null ? null : String(value)))
+  const scope: KnowledgeRetrievalScope = scopeKind === 'team'
+    ? {
+        kind: 'team', organizationId: organizationId!, projectId: teamProjectId!,
+        userId: userId!, sessionId: sessionId!, localProjectId: localProjectId!,
+      }
+    : {
+        kind: 'local', organizationId: null, projectId: null,
+        userId: userId!, sessionId: sessionId!, localProjectId: localProjectId!,
+      }
+  return {
+    candidateId: candidateId!,
+    scope,
+    provenanceKind: provenanceKind === 'coding_run' ? 'coding_run' : 'agent_observation',
+    contentDigest: contentDigest!,
+    provenanceDigest: provenanceDigest!,
+    actorId: actorId!,
+    dismissedAt: dismissedAt!,
+  }
+}
+
+/** A dismissed candidate may not return under the same id or from the same source. */
+function isAgentMemoryCandidateDismissed(db: Database, candidate: AgentMemoryCandidate): boolean {
+  return selectAgentMemoryCandidateDismissal(db, { candidateId: candidate.id }) !== undefined ||
+    selectAgentMemoryCandidateDismissal(db, {
+      localProjectId: candidate.scope.localProjectId,
+      provenanceDigest: candidate.provenanceDigest,
+      contentDigest: candidate.contentDigest,
+    }) !== undefined
+}
+
+/** The stored dismissal is exactly the one this candidate would have produced. */
+function dismissalMatchesCandidate(
+  dismissal: AgentMemoryCandidateDismissal | undefined,
+  candidate: AgentMemoryCandidate,
+): boolean {
+  return dismissal !== undefined &&
+    dismissal.candidateId === candidate.id &&
+    dismissal.contentDigest === candidate.contentDigest &&
+    dismissal.provenanceDigest === candidate.provenanceDigest &&
+    dismissal.provenanceKind === candidate.provenance.kind &&
+    stableJsonMatches(dismissal.scope, candidate.scope)
 }
 
 function writeAgentMemoryCandidate(db: Database, candidate: AgentMemoryCandidate): void {
@@ -4568,6 +4669,9 @@ class SqlJsLocalStore implements LocalStore {
         ? { committed: true, replayed: true, candidate: existing }
         : { committed: false, reason: 'id_conflict' }
     }
+    if (isAgentMemoryCandidateDismissed(this.db, candidate)) {
+      return { committed: false, reason: 'dismissed' }
+    }
     const sameSource = selectJson<unknown>(
       this.db,
       `select json from agent_memory_candidates
@@ -4674,6 +4778,112 @@ class SqlJsLocalStore implements LocalStore {
           [localProjectId],
         )
     return Promise.all(values.map(parseAgentMemoryCandidate))
+  }
+
+  /**
+   * ADR 0024 §5: remove a pending candidate a person does not want. Only never-promoted
+   * candidates qualify, because a promoted candidate is the provenance of its Memory. The
+   * dismissal keeps identity and digests (no statement) so the source cannot propose it again.
+   */
+  async dismissAgentMemoryCandidate(
+    input: DismissStoredAgentMemoryCandidateInput,
+  ): Promise<DismissStoredAgentMemoryCandidateResult> {
+    const sha256Pattern = /^[0-9a-f]{64}$/u
+    if (
+      typeof input !== 'object' ||
+      input === null ||
+      !isNonEmptyIdentifier(input.candidateId) ||
+      input.candidateId.length > 200 ||
+      typeof input.expectedContentDigest !== 'string' ||
+      !sha256Pattern.test(input.expectedContentDigest) ||
+      typeof input.expectedProvenanceDigest !== 'string' ||
+      !sha256Pattern.test(input.expectedProvenanceDigest) ||
+      !isNonEmptyIdentifier(input.actorId) ||
+      input.actorId.length > 200 ||
+      !isCanonicalIsoTimestamp(input.dismissedAt)
+    ) {
+      return { dismissed: false, reason: 'invalid_input' }
+    }
+
+    const candidateValue = selectAgentMemoryCandidate(this.db, input.candidateId)
+    if (candidateValue === undefined) {
+      const existing = selectAgentMemoryCandidateDismissal(this.db, { candidateId: input.candidateId })
+      if (existing === undefined) return { dismissed: false, reason: 'candidate_not_found' }
+      if (
+        existing.contentDigest !== input.expectedContentDigest ||
+        existing.provenanceDigest !== input.expectedProvenanceDigest
+      ) return { dismissed: false, reason: 'digest_mismatch' }
+      if (existing.actorId !== input.actorId) return { dismissed: false, reason: 'scope_mismatch' }
+      const pairing = existing.scope.kind === 'team' ? await this.getDesktopPairingCredential() : null
+      if (!agentMemoryScopeMatchesPairing(existing.scope, pairing)) {
+        return { dismissed: false, reason: 'scope_mismatch' }
+      }
+      return { dismissed: true, replayed: true, dismissal: existing }
+    }
+
+    let candidate: AgentMemoryCandidate
+    try {
+      candidate = await parseAgentMemoryCandidate(candidateValue)
+    } catch {
+      return { dismissed: false, reason: 'candidate_not_found' }
+    }
+    if (
+      candidate.contentDigest !== input.expectedContentDigest ||
+      candidate.provenanceDigest !== input.expectedProvenanceDigest
+    ) return { dismissed: false, reason: 'digest_mismatch' }
+    if (input.actorId !== candidate.scope.userId) return { dismissed: false, reason: 'scope_mismatch' }
+    const pairing = candidate.scope.kind === 'team' ? await this.getDesktopPairingCredential() : null
+    if (!agentMemoryScopeMatchesPairing(candidate.scope, pairing)) {
+      return { dismissed: false, reason: 'scope_mismatch' }
+    }
+    if (Date.parse(input.dismissedAt) < Date.parse(candidate.createdAt)) {
+      return { dismissed: false, reason: 'invalid_input' }
+    }
+    const promoted = this.db.exec(
+      'select 1 from agent_memory_revisions where source_candidate_id = ? limit 1',
+      [candidate.id],
+    )[0]?.values[0] !== undefined
+    if (promoted) return { dismissed: false, reason: 'already_promoted' }
+
+    const dismissal: AgentMemoryCandidateDismissal = {
+      candidateId: candidate.id,
+      scope: { ...candidate.scope },
+      provenanceKind: candidate.provenance.kind,
+      contentDigest: candidate.contentDigest,
+      provenanceDigest: candidate.provenanceDigest,
+      actorId: input.actorId,
+      dismissedAt: input.dismissedAt,
+    }
+    this.db.run(
+      `delete from agent_memory_candidates
+       where id = ? and content_digest = ? and provenance_digest = ?`,
+      [candidate.id, candidate.contentDigest, candidate.provenanceDigest],
+    )
+    if (this.db.getRowsModified() !== 1) {
+      throw new Error('Agent Memory candidate dismissal CAS was lost')
+    }
+    this.db.run(
+      `insert into agent_memory_candidate_dismissals (
+         candidate_id, scope_kind, local_project_id, organization_id, team_project_id,
+         user_id, session_id, provenance_kind, content_digest, provenance_digest, actor_id, dismissed_at
+       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        dismissal.candidateId,
+        dismissal.scope.kind,
+        dismissal.scope.localProjectId,
+        dismissal.scope.organizationId,
+        dismissal.scope.projectId,
+        dismissal.scope.userId,
+        dismissal.scope.sessionId,
+        dismissal.provenanceKind,
+        dismissal.contentDigest,
+        dismissal.provenanceDigest,
+        dismissal.actorId,
+        dismissal.dismissedAt,
+      ],
+    )
+    await this.persist()
+    return { dismissed: true, replayed: false, dismissal }
   }
 
   async authorizeAgentMemoryPromotion(
@@ -9121,10 +9331,20 @@ class SqlJsLocalStore implements LocalStore {
       const storedCandidate = memoryCandidate === null
         ? undefined
         : selectAgentMemoryCandidate(this.db, memoryCandidate.id)
+      // A person may have dismissed the candidate after the first commit; its dismissal stands in.
+      const candidateReplayMatches = memoryCandidate === null ||
+        sameJson(storedCandidate, memoryCandidate) ||
+        (
+          storedCandidate === undefined &&
+          dismissalMatchesCandidate(
+            selectAgentMemoryCandidateDismissal(this.db, { candidateId: memoryCandidate.id }),
+            memoryCandidate,
+          )
+        )
       return sameJson(events, transition.events) &&
         sameJson(checkpoint, transition.checkpoint) &&
         (contextAttachment === null || sameJson(storedAttachment, contextAttachment)) &&
-        (memoryCandidate === null || sameJson(storedCandidate, memoryCandidate))
+        candidateReplayMatches
         ? { committed: true, replayed: true, runtime: current }
         : { committed: false, reason: 'invalid_transition' }
     }
@@ -9195,6 +9415,7 @@ class SqlJsLocalStore implements LocalStore {
         memoryCandidate.scope.localProjectId !== currentProject.id ||
         !sameJson(memoryCandidate.scope, transition.runtime.scope) ||
         selectAgentMemoryCandidate(this.db, memoryCandidate.id) !== undefined ||
+        isAgentMemoryCandidateDismissed(this.db, memoryCandidate) ||
         selectJson<unknown>(
           this.db,
           `select json from agent_memory_candidates
@@ -13843,6 +14064,7 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   rebuildKnowledgeIndexSnapshot: 'durable',
   saveAgentMemoryCandidate: 'durable',
   listAgentMemoryCandidates: 'direct',
+  dismissAgentMemoryCandidate: 'durable',
   authorizeAgentMemoryPromotion: 'direct',
   commitAgentMemoryPromotion: 'durable',
   listAgentMemoryRevisions: 'direct',

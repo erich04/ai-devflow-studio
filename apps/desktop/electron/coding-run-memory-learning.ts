@@ -38,8 +38,11 @@ export type CodingRunMemoryLearningResult = {
   candidates: Array<{
     candidateId: string
     kind: AgentMemoryCodingRunStatementKind
-    /** `duplicate`: an active Memory already holds this statement, so nothing was saved. */
-    outcome: 'proposed' | 'replayed' | 'rejected' | 'duplicate'
+    /**
+     * `duplicate`: an active Memory already holds this statement, so nothing was saved.
+     * `dismissed`: a person already dismissed this candidate, so it is not proposed again.
+     */
+    outcome: 'proposed' | 'replayed' | 'rejected' | 'duplicate' | 'dismissed'
     reason?: string
     duplicateOf?: string
   }>
@@ -141,7 +144,9 @@ export async function learnFromCompletedCodingRun(input: {
     })
     const saved = await store.saveAgentMemoryCandidate(candidate)
     if (!saved.committed) {
-      result.candidates.push({ candidateId, kind: entry.kind, outcome: 'rejected', reason: saved.reason })
+      result.candidates.push(saved.reason === 'dismissed'
+        ? { candidateId, kind: entry.kind, outcome: 'dismissed' }
+        : { candidateId, kind: entry.kind, outcome: 'rejected', reason: saved.reason })
       continue
     }
     result.candidates.push({ candidateId, kind: entry.kind, outcome: saved.replayed ? 'replayed' : 'proposed' })

@@ -302,7 +302,10 @@ describe('CodingRuntime', () => {
     const learnCodingRunMemory = vi.fn(async () => {
       if (requireExecutionAuthorization) throw new Error('Memory store unavailable')
       return {
-        candidates: [{ candidateId: 'agent-memory-candidate-coding-1', kind: 'change_map' as const, outcome: 'proposed' as const }],
+        candidates: [
+          { candidateId: 'agent-memory-candidate-coding-1', kind: 'change_map' as const, outcome: 'proposed' as const },
+          { candidateId: 'agent-memory-candidate-coding-2', kind: 'repair_pattern' as const, outcome: 'dismissed' as const },
+        ],
         promoted: [], notPromoted: [],
       }
     })
@@ -397,11 +400,15 @@ describe('CodingRuntime', () => {
     expect(learnCodingRunMemory).toHaveBeenCalledWith({
       codingRun: expect.objectContaining({ id: started.codingRun.id, status: 'completed' }), evaluationPassed: true,
     })
-    const learningTrace = store.codingEvents.find((event) => event.codingRunId === started.codingRun.id &&
-      event.metadata?.memoryLearning)?.metadata?.memoryLearning
+    const learningEvent = store.codingEvents.find((event) => event.codingRunId === started.codingRun.id &&
+      event.metadata?.memoryLearning)
+    const learningTrace = learningEvent?.metadata?.memoryLearning
     expect(learningTrace).toEqual(requireExecutionAuthorization
       ? { status: 'failed' }
       : expect.objectContaining({ promoted: [] }))
+    if (!requireExecutionAuthorization) {
+      expect(learningEvent?.message).toContain('1 previously dismissed and not proposed again')
+    }
     expect(completeWorkflowBuild).toHaveBeenCalledTimes(1)
     expect(store.codingRuns.at(-1)?.budgetDecision).toEqual(trustedBudgetDecision)
     expect(store.codingRuns.at(-1)?.runtimeCostSummary).toBeUndefined()

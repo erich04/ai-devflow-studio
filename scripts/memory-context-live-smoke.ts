@@ -11,6 +11,8 @@ import { createCodingRuntime } from '../apps/desktop/electron/coding-runtime.js'
 import { createNativeCodingExecutorV2, createAgentProviderNativeCodingV2DecisionProvider } from '../apps/desktop/electron/native-coding-executor-v2.js'
 import { createDesktopAgentRuntime } from '../apps/desktop/electron/agent-runtime-runtime.js'
 import { createAgentMemoryHumanActions } from '../apps/desktop/electron/agent-memory-human-actions.js'
+import { createAgentMemoryRendererAccess } from '../apps/desktop/electron/agent-memory-renderer-access.js'
+import { learnFromCompletedCodingRun, type CodingRunMemoryLearningResult } from '../apps/desktop/electron/coding-run-memory-learning.js'
 import { evaluateCurrentWorkflowEvidence } from '../apps/desktop/electron/workflow-evaluation.js'
 import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.js'
 
@@ -312,6 +314,211 @@ export async function runNativeRepairLiveSmoke(input: { provider: AgentProvider;
     assert.equal(finished.status, 'completed')
     assert.equal(report.greetingMatches, true)
     assert.deepEqual(evidence.sort(), ['failed', 'passed'])
+    return report
+  } finally { store.close() }
+}
+
+type LearningCallObservation = LiveProviderCallObservation & {
+  runLabel: string
+  briefHasTestCommandMemory: boolean
+  briefHasChangeMapMemory: boolean
+}
+
+const LEARNED_TEST_COMMAND = 'Verified test command for this project: npm test.'
+
+/**
+ * Paid acceptance of learning from accepted Coding Runs (ADR 0024 §4–5). Two sequential
+ * Coding Runs in one isolated project, each with its own local session:
+ *
+ * 1. The first run learns the saved test command (bounded policy, 30 days) and proposes a
+ *    change map, which a person saves.
+ * 2. The second run's brief recalls both; its learning recognizes the test command as
+ *    already known, and a person dismisses its new change map, which is then not proposed
+ *    again when learning is retried.
+ */
+export async function runMemoryLearningLiveSmoke(input: { provider: AgentProvider; outputDirectory: string }) {
+  const output = path.resolve(input.outputDirectory)
+  await mkdir(path.dirname(output), { recursive: true })
+  // Refuse to overwrite an earlier report or a user-owned repository.
+  await mkdir(output)
+  const repository = path.join(output, 'repository')
+  await mkdir(path.join(repository, 'src'), { recursive: true })
+  const original = 'export const greeting = "Old greeting";\n'
+  await writeFile(path.join(repository, 'src/greeting.js'), original)
+  await writeFile(path.join(repository, 'package.json'), JSON.stringify({ name: 'memory-learning-live', version: '1.0.0', type: 'module', scripts: { test: 'node --test test.mjs' } }))
+  await writeFile(path.join(repository, 'test.mjs'), "import { test } from 'node:test';\nimport assert from 'node:assert/strict';\nimport { greeting } from './src/greeting.js';\ntest('greeting remains a nonempty string', () => { assert.equal(typeof greeting, 'string'); assert.ok(greeting.length > 0); });\ntest('greeting stays on one line', () => assert.ok(!greeting.includes('\\n')));\n")
+  for (const args of [['init', '-b', 'main'], ['config', 'user.name', 'DevFlow Live QA'], ['config', 'user.email', 'live-qa@example.invalid'], ['add', '.'], ['commit', '-m', 'Isolated memory learning fixture']]) {
+    await exec('git', ['-C', repository, ...args])
+  }
+  const store = await createLocalStore({ dbPath: path.join(output, 'devflow.sqlite') })
+  const now = () => new Date().toISOString()
+  const project: LocalProject = { id: 'memory-learning-live-project', name: 'Memory learning live acceptance', path: repository, packageManager: 'npm', detectedTestCommand: 'npm test', testCommand: 'npm test', createdAt: now(), updatedAt: now() }
+  await store.upsertProject(project)
+  const observations: LearningCallObservation[] = []
+  let currentRunLabel = 'none'
+  let currentRequest = ''
+  let firstChangeMapStatement: string | null = null
+  const wrapped: AgentProvider = {
+    ...input.provider,
+    completeStructuredJson: async (call) => {
+      const payload = JSON.parse(call.userPrompt) as { brief?: string; phase?: string }
+      const observation: LearningCallObservation = {
+        runLabel: currentRunLabel,
+        phase: payload.phase ?? 'unknown',
+        containsMemory: false,
+        containsInstruction: currentRequest.length > 0 && (payload.brief?.includes(currentRequest) ?? false),
+        briefHasTestCommandMemory: payload.brief?.includes(LEARNED_TEST_COMMAND) ?? false,
+        briefHasChangeMapMemory: firstChangeMapStatement !== null && (payload.brief?.includes(firstChangeMapStatement) ?? false),
+        chars: call.userPrompt.length,
+        // Digests only: no prompt text is kept in the report.
+        systemPromptDigest: createHash('sha256').update(call.systemPrompt).digest('hex').slice(0, 16),
+        systemPromptChars: call.systemPrompt.length,
+      }
+      observation.containsMemory = observation.briefHasTestCommandMemory || observation.briefHasChangeMapMemory
+      observations.push(observation)
+      const result = await input.provider.completeStructuredJson!(call)
+      if (result.usage) {
+        const { inputTokens, outputTokens, cacheReadTokens, cacheMissTokens, cacheStatus } = result.usage
+        observation.usage = {
+          ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}),
+          ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}), ...(cacheMissTokens !== undefined ? { cacheMissTokens } : {}),
+          ...(cacheStatus !== undefined ? { cacheStatus } : {}),
+        }
+      }
+      return result
+    },
+  }
+  const executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(wrapped), configVersion: 1 })
+  const coding = createCodingRuntime({
+    store, executor, worktreeRoot: path.join(output, 'worktrees'), runTestCommand: runLocalTestCommand,
+    budgetGuard: async () => ({ status: 'allowed', blocksRun: false, currentSpendUsd: 0, projectedCostUsd: 0.02, limitUsd: 0.20, reason: 'Explicit bounded live acceptance budget.' }),
+    // The same wiring as Desktop Main: learning runs after the saved test passes.
+    learnCodingRunMemory: ({ codingRun, evaluationPassed }) => learnFromCompletedCodingRun({ store, codingRun, evaluationPassed }),
+  })
+  const actions = createAgentMemoryHumanActions({ store })
+
+  async function executeRun(label: string, title: string, greeting: string) {
+    currentRunLabel = label
+    const id = `memory-learning-${label}`
+    const request = `Update only the greeting string in src/greeting.js to exactly "${greeting}". Keep the export name, change nothing else, and keep npm test passing.`
+    currentRequest = request
+    const run: WorkflowRun = {
+      id, version: 1, title, request, projectId: project.id, creatorId: 'live-qa-owner',
+      status: 'building', currentNodeId: `${id}-build`, branchName: `devflow/${label}`, createdAt: now(), updatedAt: now(),
+      nodes: [
+        { id: `${id}-design`, stage: 'design', title: 'Fixture acceptance plan', subtitle: 'A supplied test plan', kind: 'task', status: 'success', ownerId: 'live-qa-owner', retryCount: 0, artifactIds: [`${id}-design-artifact`] },
+        { id: `${id}-build`, stage: 'build', title: 'Update greeting', subtitle: 'Preserve public export', kind: 'task', status: 'running', ownerId: 'live-qa-owner', retryCount: 0, artifactIds: [] },
+      ], edges: [],
+    }
+    await store.saveRun(run)
+    await store.saveArtifact({ id: `${id}-design-artifact`, runId: id, nodeId: `${id}-design`, kind: 'design', title: 'Supplied learning acceptance context', summary: 'Change the greeting string only.', content: 'Acceptance: preserve the greeting export and keep the saved tests passing.', redacted: true, updatedAt: now() })
+    const waiting = await coding.runCodingAgent({ runId: id, nodeId: run.currentNodeId, projectId: project.id, requestedBy: run.creatorId, userInstruction: request })
+    assert.equal(waiting.codingRun.status, 'waiting_permission')
+    const permission = (await store.listCodingPermissionRequests(waiting.codingRun.id)).find((item) => item.status === 'pending' && item.origin === 'coding_executor')
+    assert.ok(permission)
+    const [changeSet] = await store.listCodingChangeSets(waiting.codingRun.id)
+    assert.ok(changeSet)
+    assert.deepEqual(changeSet.changes.map((change) => change.path), ['src/greeting.js'])
+    await coding.replyCodingPermission({ requestId: permission.id, codingRunId: permission.codingRunId, decidedBy: run.creatorId, decision: 'approved', comment: 'Accept the exact isolated fixture Change Set for the authorized live test.' })
+    const completed = (await store.listCodingAgentRuns(id))[0]!
+    assert.equal(completed.status, 'completed')
+    const workspace = (await store.listManagedCodingWorkspaces(project.id)).find((item) => item.id === completed.managedWorkspaceId)!
+    assert.equal(await readFile(path.join(workspace.worktreePath, 'src/greeting.js'), 'utf8'), original.replace('Old greeting', greeting))
+    const learning = (await store.listCodingAgentEvents(completed.id))
+      .map((event) => event.metadata?.memoryLearning)
+      .find((value) => value !== undefined) as Pick<CodingRunMemoryLearningResult, 'candidates' | 'promoted' | 'notPromoted'> | undefined
+    assert.ok(learning, `${label}: the Coding Run trace has no Memory learning result`)
+    console.log(JSON.stringify({ liveProgress: label, status: 'passed', codingRunId: completed.id }))
+    return { run, codingRun: completed, learning }
+  }
+
+  const kindsAndOutcomes = (learning: Pick<CodingRunMemoryLearningResult, 'candidates'>) =>
+    learning.candidates.map(({ kind, outcome }) => [kind, outcome])
+  const selectionFor = (run: WorkflowRun) => ({ runId: run.id, localProjectId: project.id })
+
+  try {
+    // Run 1: nothing is known yet.
+    const first = await executeRun('first', 'Greeting for the onboarding page', 'Welcome to onboarding')
+    assert.deepEqual(kindsAndOutcomes(first.learning), [['test_command', 'proposed'], ['change_map', 'proposed']])
+    assert.equal(first.learning.promoted.length, 1)
+    assert.deepEqual(first.learning.notPromoted.map(({ reason }) => reason), ['human_review_required'])
+    const policyMemoryId = first.learning.promoted[0]!.memoryId
+    const [policyRevision] = await store.listAgentMemoryRevisions(policyMemoryId)
+    assert.ok(policyRevision)
+    assert.equal(policyRevision.statement, LEARNED_TEST_COMMAND)
+    assert.equal(policyRevision.promotionActorKind, 'policy')
+    assert.equal(policyRevision.visibility, 'user_project')
+    assert.equal(policyRevision.retentionClass, 'thirty_days')
+
+    // A person reviews and saves the first change map.
+    const access = createAgentMemoryRendererAccess(store)
+    const afterFirst = await access.list(selectionFor(first.run))
+    const firstChangeMap = afterFirst.candidates.find((candidate) => candidate.lifecycleStatus === 'pending')
+    assert.ok(firstChangeMap)
+    firstChangeMapStatement = firstChangeMap.statement
+    const humanMemory = await actions.promote({
+      ...selectionFor(first.run), candidateId: firstChangeMap.id,
+      expectedContentDigest: firstChangeMap.contentDigest, expectedProvenanceDigest: firstChangeMap.provenanceDigest,
+    })
+
+    // Run 2: a different task in the same project, in its own local session.
+    const second = await executeRun('second', 'Greeting for the settings page', 'Welcome to settings')
+    assert.notEqual(second.codingRun.contextReceipt?.scope.sessionId, first.codingRun.contextReceipt?.scope.sessionId)
+    const recalledIds = (second.codingRun.contextReceipt?.memories ?? []).map((memory) => memory.id).sort()
+    assert.deepEqual(recalledIds, [humanMemory.id, policyMemoryId].sort())
+    assert.deepEqual(kindsAndOutcomes(second.learning), [['test_command', 'duplicate'], ['change_map', 'proposed']])
+    assert.deepEqual(second.learning.promoted, [])
+
+    // A person dismisses the second change map; retried learning does not propose it again.
+    const afterSecond = await access.list(selectionFor(second.run))
+    const secondChangeMap = afterSecond.candidates.find((candidate) => candidate.lifecycleStatus === 'pending')
+    assert.ok(secondChangeMap)
+    const dismissal = await actions.dismiss({
+      ...selectionFor(second.run), candidateId: secondChangeMap.id,
+      expectedContentDigest: secondChangeMap.contentDigest, expectedProvenanceDigest: secondChangeMap.provenanceDigest,
+    })
+    const retried = await learnFromCompletedCodingRun({ store, codingRun: second.codingRun, evaluationPassed: true })
+    assert.deepEqual(kindsAndOutcomes(retried), [['test_command', 'duplicate'], ['change_map', 'dismissed']])
+    const final = await access.list(selectionFor(second.run))
+    assert.equal(final.candidates.filter((candidate) => candidate.lifecycleStatus === 'pending').length, 0)
+    assert.deepEqual(final.memories.map((memory) => memory.lifecycleStatus), ['active', 'active'])
+
+    // Run 1 had nothing to recall; every Run 2 call carried both learned Memories.
+    const firstCalls = observations.filter((entry) => entry.runLabel === 'first')
+    const secondCalls = observations.filter((entry) => entry.runLabel === 'second')
+    assert.ok(firstCalls.length > 0 && firstCalls.every((entry) => !entry.containsMemory))
+    assert.ok(secondCalls.length > 0 && secondCalls.every((entry) => entry.briefHasTestCommandMemory && entry.briefHasChangeMapMemory))
+    assert.ok(observations.every((entry) => entry.containsInstruction))
+    // Coding Run Memory stays local.
+    for (const codingRun of [first.codingRun, second.codingRun]) {
+      const summary = JSON.stringify(createRemoteCodingAgentSummary(codingRun))
+      assert.ok(!summary.includes(LEARNED_TEST_COMMAND) && !summary.includes(firstChangeMapStatement))
+    }
+    assert.equal(await readFile(path.join(repository, 'src/greeting.js'), 'utf8'), original)
+
+    const report = {
+      passed: true,
+      provider: { id: input.provider.id, model: input.provider.model },
+      runs: [first, second].map(({ run, codingRun, learning }) => ({
+        runId: run.id, codingRunId: codingRun.id, title: run.title,
+        recalledMemoryIds: (codingRun.contextReceipt?.memories ?? []).map((memory) => memory.id),
+        learning, cost: codingRun.runtimeCostSummary,
+      })),
+      memories: {
+        policy: { memoryId: policyMemoryId, statement: policyRevision.statement, visibility: policyRevision.visibility, retentionClass: policyRevision.retentionClass, expiresAt: policyRevision.expiresAt },
+        human: { memoryId: humanMemory.id, statement: humanMemory.statement },
+      },
+      dismissal: { candidateId: dismissal.candidateId, provenanceKind: dismissal.provenanceKind, retriedLearning: kindsAndOutcomes(retried) },
+      providerCalls: observations,
+      promptCache: {
+        total: summarizePromptCache(observations),
+        byRun: Object.fromEntries(['first', 'second'].map((label) => [label, summarizePromptCache(observations.filter((entry) => entry.runLabel === label))])),
+        distinctSystemPrompts: new Set(observations.map((entry) => entry.systemPromptDigest)).size,
+      },
+      completedAt: now(),
+      scope: 'Real DevFlow Native v2 Provider, local Store, managed worktrees, saved tests, automatic learning after evaluation, bounded policy promotion, human promotion and dismissal, recall in a later Coding Run. No UI acceptance claimed.',
+    }
+    await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
     return report
   } finally { store.close() }
 }

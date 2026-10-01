@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 37
+export const CURRENT_SCHEMA_VERSION = 38
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2739,6 +2739,48 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       } finally {
         db.run('pragma legacy_alter_table = off')
       }
+    },
+  },
+  {
+    // ADR 0024 §5: a person may dismiss a pending candidate. The candidate row is removed and
+    // only its identity and digests stay, so the same source cannot propose it again. The
+    // statement text is not kept.
+    version: 38,
+    migrate(db) {
+      db.run(`
+    create table if not exists agent_memory_candidate_dismissals (
+      candidate_id text primary key,
+      scope_kind text not null,
+      local_project_id text not null,
+      organization_id text,
+      team_project_id text,
+      user_id text not null,
+      session_id text not null,
+      provenance_kind text not null,
+      content_digest text not null,
+      provenance_digest text not null,
+      actor_id text not null,
+      dismissed_at text not null,
+      foreign key (local_project_id) references local_projects(id) on delete cascade,
+      unique (local_project_id, provenance_digest, content_digest),
+      check (scope_kind in ('team', 'local')),
+      check (
+        (scope_kind = 'team' and organization_id is not null and team_project_id is not null) or
+        (scope_kind = 'local' and organization_id is null and team_project_id is null)
+      ),
+      check (provenance_kind in ('agent_observation', 'coding_run')),
+      check (length(trim(candidate_id)) > 0 and length(candidate_id) <= 200 and trim(candidate_id) = candidate_id),
+      check (length(trim(local_project_id)) > 0 and length(local_project_id) <= 200 and trim(local_project_id) = local_project_id),
+      check (organization_id is null or (length(trim(organization_id)) > 0 and length(organization_id) <= 200 and trim(organization_id) = organization_id)),
+      check (team_project_id is null or (length(trim(team_project_id)) > 0 and length(team_project_id) <= 200 and trim(team_project_id) = team_project_id)),
+      check (length(trim(user_id)) > 0 and length(user_id) <= 200 and trim(user_id) = user_id),
+      check (length(trim(session_id)) > 0 and length(session_id) <= 200 and trim(session_id) = session_id),
+      check (length(content_digest) = 64 and content_digest not glob '*[^0-9a-f]*'),
+      check (length(provenance_digest) = 64 and provenance_digest not glob '*[^0-9a-f]*'),
+      check (actor_id = user_id),
+      check (length(trim(dismissed_at)) > 0 and length(dismissed_at) <= 64)
+    );
+      `)
     },
   },
 ]

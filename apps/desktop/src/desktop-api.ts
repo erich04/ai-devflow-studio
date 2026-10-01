@@ -50,6 +50,7 @@ import type {
   StartCoordinationTaskInput,
   CancelCoordinationSessionInput,
   DeleteAgentMemoryInput,
+  DismissAgentMemoryCandidateInput,
   ListAgentMemoryLifecycleInput,
   PromoteAgentMemoryCandidateInput,
   ReviseAgentMemoryInput,
@@ -326,6 +327,9 @@ export type DevFlowDesktopApi = {
   ) => Promise<AgentMemoryLifecycleSnapshot>
   promoteAgentMemoryCandidate: (
     input: PromoteAgentMemoryCandidateInput,
+  ) => Promise<AgentMemoryLifecycleSnapshot>
+  dismissAgentMemoryCandidate: (
+    input: DismissAgentMemoryCandidateInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
   reviseAgentMemory: (
     input: ReviseAgentMemoryInput,

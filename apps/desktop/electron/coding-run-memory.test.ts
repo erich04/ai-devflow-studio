@@ -232,7 +232,7 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     const SQL = await initSqlJs({ locateFile: (fileName) => path.join(sqlJsDist, fileName) })
     const retained = new SQL.Database(await readFile(dbPath))
     // Recreate the exact schema 23–36 candidate table and one observation row in it.
-    retained.run('drop index idx_agent_memory_candidates_scope; drop index idx_agent_memory_candidates_coding_run; drop table agent_memory_candidates')
+    retained.run('drop table agent_memory_candidate_dismissals; drop index idx_agent_memory_candidates_scope; drop index idx_agent_memory_candidates_coding_run; drop table agent_memory_candidates')
     schemaMigrations.find((migration) => migration.version === 23)!.migrate(retained, {
       migrateWorkflowRunsIntoRelationalTables: () => undefined, afterMigrations: () => undefined,
     })
@@ -260,7 +260,7 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(37)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
     await expect(migrated.listAgentMemoryCandidates(project.id)).resolves.toEqual([legacy])
     migrated.close()
     const inspected = new SQL.Database(await readFile(dbPath))
@@ -274,6 +274,31 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     expect(parents).not.toContain('agent_memory_candidates_v36')
     expect(inspected.exec("select name from sqlite_master where name = 'agent_memory_candidates_v36'")).toEqual([])
     inspected.close()
+  })
+
+  it('migrates retained schema 37 by adding an empty dismissal table and keeps pending candidates', async () => {
+    const dbPath = await tempDbPath()
+    const initial = await createLocalStore({ dbPath })
+    await seed(initial)
+    const candidate = await candidateFor()
+    await initial.saveAgentMemoryCandidate(candidate)
+    initial.close()
+    const SQL = await initSqlJs({ locateFile: (fileName) => path.join(sqlJsDist, fileName) })
+    const retained = new SQL.Database(await readFile(dbPath))
+    retained.run("drop table agent_memory_candidate_dismissals; update schema_meta set value = '37' where key = 'schema_version'")
+    await writeFile(dbPath, Buffer.from(retained.export()))
+    retained.close()
+
+    const migrated = await createLocalStore({ dbPath })
+    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+    await expect(migrated.dismissAgentMemoryCandidate({
+      candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest, actorId: candidate.scope.userId,
+      dismissedAt: '2026-09-30T00:06:00.000Z',
+    })).resolves.toMatchObject({ dismissed: true, replayed: false })
+    await expect(migrated.listAgentMemoryCandidates(project.id)).resolves.toEqual([])
+    migrated.close()
   })
 })
 
@@ -523,6 +548,167 @@ describe('project-wide Memory view and human actions without an Agent Runtime (A
     const paired = await createAgentMemoryRendererAccess(store).list(selection)
     expect(paired.memories).toEqual([])
     expect(paired.candidates).toEqual([])
+    store.close()
+  })
+})
+
+describe('dismissing a pending Memory candidate (ADR 0024 §5)', () => {
+  const now = () => '2026-09-30T00:05:00.000Z'
+  const selection = { runId: run.id, localProjectId: project.id }
+
+  it('removes the candidate, keeps only its identity and digests, and stops the same source proposing it again', async () => {
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const codingRun = completedCodingRun()
+    await seed(store, codingRun)
+    await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+    const access = createAgentMemoryRendererAccess(store, { clock: () => new Date('2026-09-30T00:06:00.000Z') })
+    const pending = (await access.list(selection)).candidates.find((entry) => entry.lifecycleStatus === 'pending')!
+    const stored = (await store.listAgentMemoryCandidates(project.id)).find((entry) => entry.id === pending.id)!
+
+    const actions = createAgentMemoryHumanActions({ store, clock: () => '2026-09-30T00:07:00.000Z' })
+    await expect(actions.dismiss({
+      ...selection, candidateId: pending.id,
+      expectedContentDigest: pending.contentDigest, expectedProvenanceDigest: pending.provenanceDigest,
+    })).resolves.toEqual({
+      candidateId: pending.id, scope: localScope, provenanceKind: 'coding_run',
+      contentDigest: pending.contentDigest, provenanceDigest: pending.provenanceDigest,
+      actorId: localScope.userId, dismissedAt: '2026-09-30T00:07:00.000Z',
+    })
+    const after = await access.list(selection)
+    expect(after.candidates.map((entry) => entry.id)).not.toContain(pending.id)
+    // The saved test command Memory is untouched.
+    expect(after.memories.map((memory) => memory.lifecycleStatus)).toEqual(['active'])
+
+    // Learning again from the same run reports the dismissal and saves nothing new.
+    const retried = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+    expect(retried.candidates.map(({ kind, outcome }) => [kind, outcome])).toEqual([
+      ['test_command', 'replayed'], ['change_map', 'dismissed'],
+    ])
+    await expect(store.saveAgentMemoryCandidate(stored)).resolves.toEqual({ committed: false, reason: 'dismissed' })
+    // Replaying the same dismissal is idempotent.
+    await expect(store.dismissAgentMemoryCandidate({
+      candidateId: pending.id, expectedContentDigest: pending.contentDigest,
+      expectedProvenanceDigest: pending.provenanceDigest, actorId: localScope.userId,
+      dismissedAt: '2026-09-30T00:08:00.000Z',
+    })).resolves.toMatchObject({ dismissed: true, replayed: true, dismissal: { dismissedAt: '2026-09-30T00:07:00.000Z' } })
+    store.close()
+
+    const reopened = await createLocalStore({ dbPath })
+    await expect(reopened.saveAgentMemoryCandidate(stored)).resolves.toEqual({ committed: false, reason: 'dismissed' })
+    expect((await reopened.listAgentMemoryCandidates(project.id)).map((entry) => entry.id)).not.toContain(pending.id)
+    reopened.close()
+
+    const SQL = await initSqlJs({ locateFile: (fileName) => path.join(sqlJsDist, fileName) })
+    const inspected = new SQL.Database(await readFile(dbPath))
+    const columns = inspected.exec('pragma table_info(agent_memory_candidate_dismissals)')[0]?.values.map((row) => String(row[1]))
+    expect(columns).not.toContain('statement')
+    expect(columns).not.toContain('json')
+    expect(inspected.exec('select candidate_id, provenance_kind, actor_id from agent_memory_candidate_dismissals')[0]?.values)
+      .toEqual([[pending.id, 'coding_run', localScope.userId]])
+    inspected.close()
+  })
+
+  it('refuses to dismiss a promoted candidate, a stale digest or another user\'s candidate', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    const codingRun = completedCodingRun()
+    await seed(store, codingRun)
+    const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+    const candidates = await store.listAgentMemoryCandidates(project.id)
+    const promoted = candidates.find((entry) => entry.id === learned.promoted[0]!.candidateId)!
+    const pending = candidates.find((entry) => entry.id !== promoted.id)!
+    const exact = (candidate: AgentMemoryCandidate) => ({
+      candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest, actorId: candidate.scope.userId,
+      dismissedAt: '2026-09-30T00:07:00.000Z',
+    })
+    // A promoted candidate is the provenance of its Memory and stays.
+    await expect(store.dismissAgentMemoryCandidate(exact(promoted)))
+      .resolves.toEqual({ dismissed: false, reason: 'already_promoted' })
+    await expect(store.dismissAgentMemoryCandidate({ ...exact(pending), expectedContentDigest: 'e'.repeat(64) }))
+      .resolves.toEqual({ dismissed: false, reason: 'digest_mismatch' })
+    await expect(store.dismissAgentMemoryCandidate({ ...exact(pending), actorId: 'u-other' }))
+      .resolves.toEqual({ dismissed: false, reason: 'scope_mismatch' })
+    await expect(store.dismissAgentMemoryCandidate({ ...exact(pending), dismissedAt: '2026-09-30T00:00:00.000Z' }))
+      .resolves.toEqual({ dismissed: false, reason: 'invalid_input' })
+    await expect(store.dismissAgentMemoryCandidate({ ...exact(pending), candidateId: 'agent-memory-candidate-missing' }))
+      .resolves.toEqual({ dismissed: false, reason: 'candidate_not_found' })
+
+    const actions = createAgentMemoryHumanActions({ store, clock: () => '2026-09-30T00:07:00.000Z' })
+    const command = (candidate: AgentMemoryCandidate, runId = run.id) => ({
+      runId, localProjectId: project.id, candidateId: candidate.id,
+      expectedContentDigest: candidate.contentDigest, expectedProvenanceDigest: candidate.provenanceDigest,
+    })
+    await expect(actions.dismiss(command(promoted))).rejects.toThrow('rejected')
+    const otherRun: WorkflowRun = {
+      ...run, id: 'coding-memory-run-other', creatorId: 'u-other', currentNodeId: 'other-test',
+      nodes: run.nodes.map((node) => ({ ...node, id: node.id.replace('coding-memory', 'other') })),
+    }
+    await store.saveRun(otherRun)
+    await expect(actions.dismiss(command(pending, otherRun.id))).rejects.toThrow('rejected')
+    expect((await store.listAgentMemoryCandidates(project.id)).map((entry) => entry.id).sort())
+      .toEqual([pending.id, promoted.id].sort())
+    store.close()
+  })
+
+  it('makes a promotion authorized before the dismissal fail as stale', async () => {
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await seed(store)
+    const candidate = await candidateFor()
+    await store.saveAgentMemoryCandidate(candidate)
+    const authorization = await store.authorizeAgentMemoryPromotion({
+      candidateId: candidate.id,
+      memoryId: 'agent-memory-race',
+      authority: {
+        stateVersion: 1, decisionId: 'agent-memory-race-promotion', candidateId: candidate.id,
+        candidateContentDigest: candidate.contentDigest, scope: candidate.scope, actorKind: 'human',
+        actorId: candidate.scope.userId, policyId: 'desktop-human-memory-promotion', policyVersion: 1,
+        visibility: 'user_project', sensitivity: 'private', retentionClass: 'until_deleted', expiresAt: null,
+        authorityDigest: '9'.repeat(64), decidedAt: '2026-09-30T00:06:00.000Z',
+      },
+    })
+    if (!authorization.authorized) throw new Error(`expected promotion authority: ${authorization.reason}`)
+    await expect(store.dismissAgentMemoryCandidate({
+      candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest, actorId: candidate.scope.userId,
+      dismissedAt: '2026-09-30T00:06:30.000Z',
+    })).resolves.toMatchObject({ dismissed: true, replayed: false })
+    await expect(store.commitAgentMemoryPromotion({ revision: authorization.revision }, authorization.capability))
+      .resolves.toEqual({ committed: false, reason: 'source_stale' })
+    await expect(store.listAgentMemoryRevisions('agent-memory-race')).resolves.toEqual([])
+    await expect(store.getAgentMemoryHead('agent-memory-race')).resolves.toBeNull()
+    store.close()
+  })
+
+  it('dismisses a Team-scoped candidate only for the paired session', async () => {
+    const pairing: DesktopPairingCredential = {
+      tokenId: 'pairing-token', organizationId: 'org-1', projectId: 'team-project-1', localProjectId: project.id,
+      userId: 'u-owner', role: 'member', authAccountId: 'account-1', projectMemberships: [], createdAt: '2026-09-30T00:00:00.000Z',
+    }
+    const teamScope: KnowledgeRetrievalScope = {
+      kind: 'team', organizationId: 'org-1', projectId: 'team-project-1', userId: 'u-owner',
+      sessionId: 'pairing-token', localProjectId: project.id,
+    }
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    await store.saveDesktopPairingCredential(pairing, 'encrypted-test-token')
+    await seed(store, completedCodingRun(teamScope))
+    const candidate = await candidateFor(teamScope)
+    await expect(store.saveAgentMemoryCandidate(candidate)).resolves.toMatchObject({ committed: true })
+    const exact = {
+      candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,
+      expectedProvenanceDigest: candidate.provenanceDigest, actorId: teamScope.userId,
+      dismissedAt: '2026-09-30T00:06:00.000Z',
+    }
+    const repaired = { ...pairing, tokenId: 'pairing-token-renewed' }
+    await store.saveDesktopPairingCredential(repaired, 'encrypted-test-token')
+    await expect(store.dismissAgentMemoryCandidate(exact)).resolves.toEqual({ dismissed: false, reason: 'scope_mismatch' })
+    await expect(store.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
+
+    await store.saveDesktopPairingCredential(pairing, 'encrypted-test-token')
+    await expect(store.dismissAgentMemoryCandidate(exact)).resolves.toMatchObject({ dismissed: true, replayed: false })
+    // A replay from another session is refused even though the dismissal exists.
+    await store.saveDesktopPairingCredential(repaired, 'encrypted-test-token')
+    await expect(store.dismissAgentMemoryCandidate(exact)).resolves.toEqual({ dismissed: false, reason: 'scope_mismatch' })
     store.close()
   })
 })

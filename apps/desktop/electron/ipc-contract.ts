@@ -148,6 +148,8 @@ export type PromoteAgentMemoryCandidateInput = AgentMemoryLifecycleSelection & {
   expectedProvenanceDigest: string
 }
 
+export type DismissAgentMemoryCandidateInput = PromoteAgentMemoryCandidateInput
+
 export type ReviseAgentMemoryInput = AgentMemoryLifecycleSelection & {
   memoryId: string
   expectedRevision: number
@@ -228,6 +230,7 @@ export const ipcChannels = {
   cancelCoordinationSession: 'devflow:agent-coordination:cancel',
   listAgentMemoryLifecycle: 'devflow:agent-memory:lifecycle:list',
   promoteAgentMemoryCandidate: 'devflow:agent-memory:candidate:promote',
+  dismissAgentMemoryCandidate: 'devflow:agent-memory:candidate:dismiss',
   reviseAgentMemory: 'devflow:agent-memory:revise',
   deleteAgentMemory: 'devflow:agent-memory:delete',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
@@ -712,6 +715,9 @@ export type DevFlowDesktopApi = {
   ) => Promise<AgentMemoryLifecycleSnapshot>
   promoteAgentMemoryCandidate: (
     input: PromoteAgentMemoryCandidateInput,
+  ) => Promise<AgentMemoryLifecycleSnapshot>
+  dismissAgentMemoryCandidate: (
+    input: DismissAgentMemoryCandidateInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
   reviseAgentMemory: (
     input: ReviseAgentMemoryInput,
@@ -1286,6 +1292,30 @@ export function parsePromoteAgentMemoryCandidateInput(
       'expectedProvenanceDigest',
     ],
     'promote Agent Memory candidate payload',
+  )
+  return {
+    ...readAgentMemoryLifecycleSelection(value),
+    candidateId: readExactRequiredIdentifier(value, 'candidateId'),
+    expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
+    expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
+  }
+}
+
+export function parseDismissAgentMemoryCandidateInput(
+  value: unknown,
+): DismissAgentMemoryCandidateInput {
+  if (!isRecord(value)) throw new Error('Invalid dismiss Agent Memory candidate payload')
+  rejectUnexpectedFields(
+    value,
+    [
+      'runtimeId',
+      'runId',
+      'localProjectId',
+      'candidateId',
+      'expectedContentDigest',
+      'expectedProvenanceDigest',
+    ],
+    'dismiss Agent Memory candidate payload',
   )
   return {
     ...readAgentMemoryLifecycleSelection(value),

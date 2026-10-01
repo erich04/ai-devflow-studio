@@ -9,10 +9,11 @@ import {
 } from '@ai-devflow/shared'
 import type {
   DeleteAgentMemoryInput,
+  DismissAgentMemoryCandidateInput,
   PromoteAgentMemoryCandidateInput,
   ReviseAgentMemoryInput,
 } from './ipc-contract.js'
-import type { LocalStore } from './local-store.js'
+import type { AgentMemoryCandidateDismissal, LocalStore } from './local-store.js'
 import {
   listActiveAgentMemoryRevisions as activeMemoriesInScope,
   resolveAgentMemoryLifecycleAuthority,
@@ -32,6 +33,7 @@ type AgentMemoryHumanActionStore = Pick<
   | 'getRun'
   | 'getDesktopPairingCredential'
   | 'listAgentMemoryCandidates'
+  | 'dismissAgentMemoryCandidate'
   | 'listAgentMemoryHeads'
   | 'authorizeAgentMemoryPromotion'
   | 'commitAgentMemoryPromotion'
@@ -47,6 +49,7 @@ type AgentMemoryHumanActionStore = Pick<
 
 export type AgentMemoryHumanActions = {
   promote(input: PromoteAgentMemoryCandidateInput): Promise<DurableAgentMemoryRevision>
+  dismiss(input: DismissAgentMemoryCandidateInput): Promise<AgentMemoryCandidateDismissal>
   revise(input: ReviseAgentMemoryInput): Promise<DurableAgentMemoryRevision>
   delete(input: DeleteAgentMemoryInput): Promise<AgentMemoryTombstone>
 }
@@ -170,6 +173,37 @@ export function createAgentMemoryHumanActions(
         return committed.revision
       } catch (error) {
         rethrowDuplicateOrReject(error)
+      }
+    },
+    async dismiss(command) {
+      try {
+        const [resolved, candidates] = await Promise.all([
+          resolveAgentMemoryLifecycleAuthority(input.store, command),
+          input.store.listAgentMemoryCandidates(command.localProjectId),
+        ])
+        if (!resolved.ok) reject()
+        const access = resolved.authority
+        const candidate = candidates.find((entry) => entry.id === command.candidateId)
+        if (
+          candidate === undefined ||
+          !access.candidateVisible(candidate) ||
+          candidate.contentDigest !== command.expectedContentDigest ||
+          candidate.provenanceDigest !== command.expectedProvenanceDigest
+        ) reject()
+        const dismissedAt = canonicalNow(clock)
+        if (Date.parse(dismissedAt) < Date.parse(candidate.createdAt)) reject()
+        if (!await access.stillCurrent()) reject()
+        const dismissed = await input.store.dismissAgentMemoryCandidate({
+          candidateId: candidate.id,
+          expectedContentDigest: candidate.contentDigest,
+          expectedProvenanceDigest: candidate.provenanceDigest,
+          actorId: candidate.scope.userId,
+          dismissedAt,
+        })
+        if (!dismissed.dismissed) reject()
+        return dismissed.dismissal
+      } catch {
+        reject()
       }
     },
     async revise(command) {

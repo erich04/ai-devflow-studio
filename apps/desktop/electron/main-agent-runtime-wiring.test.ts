@@ -133,6 +133,17 @@ describe('Electron Agent Runtime production wiring', () => {
     expect(handlers).not.toMatch(/authorityDigest|sessionId|statement|capability/)
   })
 
+  it('dismisses one exact Candidate through main-owned authority and returns only the projection', () => {
+    const handlers = main.slice(
+      main.indexOf('ipcMain.handle(ipcChannels.dismissAgentMemoryCandidate'),
+      main.indexOf('ipcMain.handle(ipcChannels.deleteRun'),
+    )
+    expect(handlers).toMatch(
+      /parseDismissAgentMemoryCandidateInput\(payload\)[\s\S]*?getStore\(\)[\s\S]*?createAgentMemoryHumanActions\(\{ store \}\)\.dismiss\(input\)[\s\S]*?createAgentMemoryRendererAccess\(store\)\.list\(input\)/,
+    )
+    expect(handlers).not.toMatch(/actorId|dismissedAt|sessionId|capability/)
+  })
+
   it('revises one exact Memory through main-owned authority and returns only the projection', () => {
     const handlers = main.slice(
       main.indexOf('ipcMain.handle(ipcChannels.reviseAgentMemory'),

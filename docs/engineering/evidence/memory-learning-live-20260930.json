@@ -1,0 +1,103 @@
+{
+  "schemaVersion": 1,
+  "provider": {
+    "kind": "real",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-flash"
+  },
+  "harness": "scripts/memory-learning-live.ts (runMemoryLearningLiveSmoke): two sequential Coding Runs in one isolated project, each in its own local session, with the same learning wiring as Desktop Main",
+  "executor": "Native v2 executor from feat/memory-candidate-dismissal at c186d04, with the harness then uncommitted; the harness was committed unchanged as d1c78a5",
+  "passed": true,
+  "completedAt": "2026-09-30T17:04:44.753Z",
+  "runs": [
+    {
+      "label": "first",
+      "title": "Greeting for the onboarding page",
+      "status": "completed",
+      "recalledMemoryIds": [],
+      "learning": [
+        ["test_command", "proposed"],
+        ["change_map", "proposed"]
+      ],
+      "promotedByPolicy": ["test_command"],
+      "awaitingReview": ["change_map"],
+      "costUsd": 0.000501192
+    },
+    {
+      "label": "second",
+      "title": "Greeting for the settings page",
+      "status": "completed",
+      "recalledMemoryIds": [
+        "agent-memory-d3a3191a-a346-4ca2-b148-3f146c2491cb",
+        "agent-memory-coding-0a52eb3c73c3c8087be3db282a82fefc"
+      ],
+      "learning": [
+        ["test_command", "duplicate"],
+        ["change_map", "proposed"]
+      ],
+      "promotedByPolicy": [],
+      "awaitingReview": ["change_map"],
+      "costUsd": 0.000570126
+    }
+  ],
+  "memories": {
+    "policy": {
+      "memoryId": "agent-memory-coding-0a52eb3c73c3c8087be3db282a82fefc",
+      "statement": "Verified test command for this project: npm test.",
+      "promotionActorKind": "policy",
+      "visibility": "user_project",
+      "retentionClass": "thirty_days",
+      "expiresAt": "2026-10-30T17:04:41.045Z"
+    },
+    "human": {
+      "memoryId": "agent-memory-d3a3191a-a346-4ca2-b148-3f146c2491cb",
+      "statement": "Change map: \"Greeting for the onboarding page\" (Update greeting) was implemented by changing src/greeting.js.",
+      "promotionActorKind": "human"
+    }
+  },
+  "dismissal": {
+    "candidate": "second run change_map",
+    "provenanceKind": "coding_run",
+    "retriedLearning": [
+      ["test_command", "duplicate"],
+      ["change_map", "dismissed"]
+    ],
+    "pendingCandidatesAfter": 0
+  },
+  "calls": [
+    { "run": "first", "phase": "analysis", "briefHasTestCommandMemory": false, "briefHasChangeMapMemory": false, "systemPromptDigest": "c5c5607d24c127d6", "inputTokens": 1314, "outputTokens": 404, "cacheReadTokens": 640, "cacheMissTokens": 674, "cacheStatus": "complete" },
+    { "run": "first", "phase": "initial", "briefHasTestCommandMemory": false, "briefHasChangeMapMemory": false, "systemPromptDigest": "c5c5607d24c127d6", "inputTokens": 1570, "outputTokens": 118, "cacheReadTokens": 1024, "cacheMissTokens": 546, "cacheStatus": "complete" },
+    { "run": "second", "phase": "analysis", "briefHasTestCommandMemory": true, "briefHasChangeMapMemory": true, "systemPromptDigest": "c5c5607d24c127d6", "inputTokens": 1426, "outputTokens": 509, "cacheReadTokens": 640, "cacheMissTokens": 786, "cacheStatus": "complete" },
+    { "run": "second", "phase": "initial", "briefHasTestCommandMemory": true, "briefHasChangeMapMemory": true, "systemPromptDigest": "c5c5607d24c127d6", "inputTokens": 1679, "outputTokens": 104, "cacheReadTokens": 1152, "cacheMissTokens": 527, "cacheStatus": "complete" }
+  ],
+  "promptCache": {
+    "calls": 4,
+    "inputTokens": 5989,
+    "outputTokens": 1135,
+    "cacheReadTokens": 3456,
+    "cacheMissTokens": 2533,
+    "cacheHitRate": 0.577,
+    "distinctSystemPrompts": 1
+  },
+  "costUsd": {
+    "totalUsd": 0.001071318
+  },
+  "pricing": {
+    "model": "deepseek-flash",
+    "tier": "off_peak",
+    "source": "https://api-docs.deepseek.com/quick_start/pricing/",
+    "sourceVersion": "deepseek-pricing-snapshot-2026-09-10",
+    "currency": "USD",
+    "unit": "per_1m_tokens",
+    "cacheHitInputUsdPerMillion": 0.003,
+    "cacheMissInputUsdPerMillion": 0.15,
+    "outputUsdPerMillion": 0.6
+  },
+  "limits": [
+    "One run; model behavior and DeepSeek caching vary between runs.",
+    "Both tasks change the same one-line file, so the recalled Memory is background only and is not what made the second run succeed.",
+    "Human promotion and dismissal were called through the same main-process services as the Desktop panel, not through the UI.",
+    "The second run's learning was retried by calling the learning step directly after the dismissal.",
+    "This file is a hand-condensed summary of the harness report.json (kept locally under out/, not committed); figures are copied from it."
+  ]
+}

@@ -36,7 +36,7 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('insufficient_evidence:missing_clarification_artifact')
     expect(smoke).toContain('completeWorkflowAgentNode')
     expect(smoke).toContain('requestClarificationChanges')
-    expect(smoke).toContain('schemaVersion !== 37')
+    expect(smoke).toContain('schemaVersion !== 38')
     expect(smoke).toMatch(
       /startAgentRuntime\(\{\s*runId: run\.id,\s*nodeId: run\.currentNodeId,\s*localProjectId: project\.id,\s*\}\)/,
     )
@@ -63,6 +63,7 @@ describe('Desktop pilot launch smoke contract', () => {
   it('promotes, revises, deletes, and reopens one exact Agent Memory without repeated effects', () => {
     expect(smoke).toContain('listAgentMemoryLifecycle')
     expect(smoke).toContain('promoteAgentMemoryCandidate')
+    expect(smoke).toContain('dismissAgentMemoryCandidate')
     expect(smoke).toContain('reviseAgentMemory')
     expect(smoke).toContain('deleteAgentMemory')
     expect(smoke).toContain('memoryAfterRestart')
