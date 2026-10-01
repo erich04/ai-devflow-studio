@@ -78,6 +78,11 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
   processManager: ManagedOpencodeProcessManager
   runtimeEnv: NodeJS.ProcessEnv
   providerBinding?: OpencodeProviderBinding | undefined
+  /**
+   * Binding whose Provider is billed. Defaults to `providerBinding`; pass the saved binding when
+   * `providerBinding` is the loopback budget relay, whose address hides the Provider (#207).
+   */
+  billingBinding?: OpencodeProviderBinding | undefined
   runner?: ReadOnlyStageAgentRunner
 }): StageAgentExecutor {
   return {
@@ -85,7 +90,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
     id: 'managed-opencode-read-only-stage-agent',
     version: `1/${input.detectedVersion}`,
     providerId: input.providerId,
-    ...(isOfficialDeepSeekBinding(input.providerBinding) ? { billingProvider: 'deepseek' as const } : {}),
+    ...(isOfficialDeepSeekBinding(input.billingBinding ?? input.providerBinding) ? { billingProvider: 'deepseek' as const } : {}),
     model: input.modelId,
     async execute(execution) {
       assertReadOnlyCapability(execution.capability)

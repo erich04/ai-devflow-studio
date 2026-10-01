@@ -5,9 +5,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  createLocalStageAgentUsage,
   DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS,
   READ_ONLY_STAGE_AGENT_CAPABILITY,
 } from '@ai-devflow/shared'
+import { summarizeRelayedUsage } from './governed-opencode-proxy'
 import {
   buildReadOnlyStageAgentRuntimeEnv,
   createReadOnlyLocalStageAgentExecutor,
@@ -76,6 +78,31 @@ describe('read-only local stage Agent executor', () => {
 
     await expect(localExecutor.execute(executionInput(stage))).rejects.toThrow(/repository root/)
     expect(invoked).toBe(false)
+  })
+
+  // #207: behind the budget relay the executor only sees a loopback binding.
+  it('prices relayed rounds by the saved binding, not the loopback relay address', () => {
+    const saved = { providerId: 'provider-1', modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey: 'saved', fingerprint: 'saved' }
+    const relay = { ...saved, baseUrl: 'http://127.0.0.1:41000/v1', apiKey: 'relay-token', fingerprint: 'relay' }
+    const base = {
+      projectId: 'project-1', projectPath: '/not-used', binaryPath: '/not-used/opencode', providerId: 'provider-1',
+      modelId: 'deepseek-flash', detectedVersion: '1.18.15',
+      processManager: { ensure: async () => { throw new Error('not used') }, stopProject: async () => {} }, runtimeEnv: {},
+    }
+    expect(createReadOnlyLocalStageAgentExecutor({ ...base, providerBinding: relay }).billingProvider).toBeUndefined()
+    const relayed = createReadOnlyLocalStageAgentExecutor({ ...base, providerBinding: relay, billingBinding: saved })
+    expect(relayed.billingProvider).toBe('deepseek')
+    const usage = summarizeRelayedUsage([
+      { inputTokens: 4_000, outputTokens: 300, cacheReadTokens: 1_000, cacheMissTokens: 3_000, cacheStatus: 'complete', budgetAttemptIds: ['attempt-1'] },
+      { inputTokens: 5_000, outputTokens: 900, cacheReadTokens: 4_000, cacheMissTokens: 1_000, cacheStatus: 'complete', budgetAttemptIds: ['attempt-2'] },
+    ], 'deepseek')
+    const row = createLocalStageAgentUsage({
+      id: 'usage-1', runId: 'run-1', nodeId: 'node-1', userId: 'user-1', projectId: 'project-1',
+      providerId: 'provider-1', model: 'deepseek-flash', timestamp: '2026-09-30T15:54:00.000Z',
+      billingProvider: relayed.billingProvider!, usage: usage!,
+    })
+    expect(row).toMatchObject({ costStatus: 'estimated', usageStatus: 'complete', inputTokens: 9_000, cacheReadTokens: 5_000, budgetAttemptIds: ['attempt-1', 'attempt-2'] })
+    expect(row.costUsd).toBeGreaterThan(0)
   })
 
   it('passes only the bounded runtime environment allowlist to the managed CLI', () => {

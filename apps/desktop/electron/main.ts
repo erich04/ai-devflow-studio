@@ -2881,6 +2881,8 @@ function registerIpcHandlers() {
             detectedVersion: configuration.detectedVersion,
             processManager: opencodeProcessManager,
             providerBinding:budgetProxy.binding,
+            // The relay's loopback address hides the Provider; price usage by the saved binding (#207).
+            billingBinding: binding,
             runtimeEnv: buildOpencodeRuntimeEnv({
               baseEnv: process.env,
               apiKeyEnvName: 'OPENCODE_API_KEY',
