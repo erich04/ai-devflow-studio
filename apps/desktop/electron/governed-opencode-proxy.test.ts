@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { request } from 'node:http'
 import type { ModelCallGovernance, ModelCallSettlement } from '@ai-devflow/shared'
-import { createGovernedOpencodeProxy } from './governed-opencode-proxy'
+import { createGovernedOpencodeProxy, summarizeRelayedUsage } from './governed-opencode-proxy'
 
 const binding = { providerId: 'fixture', modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'fixture-only-key', fingerprint: 'fixture' }
 const close: Array<() => Promise<void>> = []
@@ -66,6 +66,43 @@ describe('OpenCode governed relay', () => {
       req.on('error', reject); req.write(body.subarray(0, index)); req.end(body.subarray(index))
     })
     expect(JSON.parse(String(f.upstream.mock.calls[0]![1]!.body)).messages[0].content).toBe('中文🧭')
+  })
+  // #207: the relay's own address is loopback, so the billing identity must come from the saved binding.
+  it('reports the summed usage with the saved binding as billing identity and a complete cache split', async () => {
+    const f = await setup()
+    await f.send({ model: binding.modelId, messages: [] })
+    await f.send({ model: binding.modelId, messages: [] })
+    expect(f.proxy.binding.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:/u)
+    expect(f.proxy.usageSince('')).toEqual({
+      inputTokens: 20, outputTokens: 10, cacheReadTokens: 0, cacheMissTokens: 20,
+      cacheStatus: 'complete', billingProvider: 'deepseek',
+      budgetAttemptIds: [expect.any(String), expect.any(String)], missingUsageCount: 0,
+    })
+  })
+  it('leaves the session unpriced when one round has no cache split', () => {
+    expect(summarizeRelayedUsage([
+      { inputTokens: 10, outputTokens: 5, cacheReadTokens: 2, cacheMissTokens: 8, cacheStatus: 'complete' },
+      { inputTokens: 10, outputTokens: 5, cacheStatus: 'unknown' },
+    ], 'deepseek')).toMatchObject({ inputTokens: 20, cacheStatus: 'unknown', billingProvider: 'deepseek', missingUsageCount: 0 })
+    expect(summarizeRelayedUsage([{ budgetAttemptIds: ['a'] }], 'deepseek')).toMatchObject({ cacheStatus: 'unknown', missingUsageCount: 1 })
+    expect(summarizeRelayedUsage([], 'deepseek')).toBeUndefined()
+  })
+  // #208: a connection that closed during the TLS handshake never reached the Provider.
+  it('settles a round as not sent when the upstream TLS handshake never completed', async () => {
+    const preTls = Object.assign(new Error('Client network socket disconnected before secure TLS connection was established'), { code: 'ECONNRESET' })
+    const f = await setup(true, async () => { throw new TypeError('fetch failed', { cause: preTls }) })
+    const response = await f.send({ model: binding.modelId, messages: [] })
+    expect(response.status).toBe(400)
+    expect(f.budget.settle).toHaveBeenCalledWith(expect.objectContaining({ state: 'not_sent' }))
+    // The failed round neither costs anything nor leaves the session's usage unknown.
+    expect(f.proxy.usageSince('')).toMatchObject({ inputTokens: 0, outputTokens: 0, cacheStatus: 'complete', missingUsageCount: 0, budgetAttemptIds: [expect.any(String)] })
+  })
+  it('keeps a reset after the connection opened as possibly billed', async () => {
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+    const f = await setup(true, async () => { throw new TypeError('fetch failed', { cause: reset }) })
+    await f.send({ model: binding.modelId, messages: [] })
+    expect(f.budget.settle).toHaveBeenCalledWith(expect.objectContaining({ state: 'failed' }))
+    expect(f.proxy.usageSince('')).toMatchObject({ cacheStatus: 'unknown', missingUsageCount: 1 })
   })
   it('records a cancelled upstream call as unknown instead of free', async () => {
     const f = await setup(true, async (_url, options) => new Promise((_resolve, reject) => options!.signal!.addEventListener('abort', () => reject(new Error('cancelled')))))

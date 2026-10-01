@@ -1,11 +1,37 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { AgentProviderRequestError, governedModelCall, modelCallMetadata, parseOpenAiCompatibleProviderUsage, type AgentProviderUsage, type ModelCallGovernance } from '@ai-devflow/shared'
+import { AgentProviderRequestError, classifyProviderTransportError, governedModelCall, modelCallMetadata, parseOpenAiCompatibleProviderUsage, type AgentProviderUsage, type ModelCallGovernance } from '@ai-devflow/shared'
 import type { OpencodeProviderBinding } from './opencode-provider-binding'
+
+/**
+ * Rounds relayed since a point in time, summed. The billing identity comes from the saved
+ * binding (the relay's own address is loopback), never from OpenCode's report (#207).
+ */
+export function summarizeRelayedUsage(
+  values: readonly AgentProviderUsage[],
+  billingProvider: AgentProviderUsage['billingProvider'],
+): AgentProviderUsage | undefined {
+  if (!values.length) return undefined
+  const sum = (key: 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheMissTokens') => values.reduce((n, u) => n + (u[key] ?? 0), 0)
+  const missingUsageCount = values.filter((u) => u.inputTokens === undefined || u.outputTokens === undefined).length
+  // A price needs every round's cache split; one unknown round leaves the whole session unpriced.
+  const cacheComplete = !missingUsageCount && values.every((u) => u.cacheStatus === 'complete')
+  return {
+    inputTokens: sum('inputTokens'), outputTokens: sum('outputTokens'), cacheReadTokens: sum('cacheReadTokens'),
+    ...(cacheComplete ? { cacheMissTokens: sum('cacheMissTokens') } : {}),
+    cacheStatus: cacheComplete ? 'complete' : 'unknown',
+    ...(billingProvider ? { billingProvider } : {}),
+    budgetAttemptIds: values.flatMap((u) => u.budgetAttemptIds ?? []),
+    missingUsageCount,
+  }
+}
+
+const NOT_SENT_USAGE: AgentProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 0, cacheStatus: 'complete' }
 
 /** OpenCode's internal model rounds traverse this authenticated, loopback-only relay. */
 export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string}) {
   const token=randomBytes(32).toString('hex')
+  const {billingProvider}=modelCallMetadata(input.binding)
   const attempts:Array<{at:string;usage:AgentProviderUsage}>=[]
   const controllers=new Set<AbortController>()
   const server=createServer(async(req,res)=>{
@@ -24,9 +50,17 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
         ...(input.approvalId?{approvalId:input.approvalId}:{}),
         ...(typeof body.max_tokens==='number'?{maxOutputTokens:body.max_tokens}:{}),action:async()=>{
           // Buffer one bounded provider response so usage survives downstream cancellation/parsing.
-          const upstream=await (input.fetcher??fetch)(`${input.binding.baseUrl.replace(/\/$/u,'')}/chat/completions`,{
-            method:'POST',headers:{authorization:`Bearer ${input.binding.apiKey}`,'content-type':'application/json'},redirect:'error',signal:controller.signal,
-            body:JSON.stringify({...body,stream:false,stream_options:undefined})})
+          let upstream: Response
+          try {
+            upstream=await (input.fetcher??fetch)(`${input.binding.baseUrl.replace(/\/$/u,'')}/chat/completions`,{
+              method:'POST',headers:{authorization:`Bearer ${input.binding.apiKey}`,'content-type':'application/json'},redirect:'error',signal:controller.signal,
+              body:JSON.stringify({...body,stream:false,stream_options:undefined})})
+          } catch (error) {
+            // Cancellation is settled by governedModelCall; a transport failure is classified like
+            // the direct Provider path, so a connection that never opened is not billed (#208).
+            if (controller.signal.aborted) throw error
+            throw classifyProviderTransportError(error)
+          }
           if(!upstream.ok)throw new AgentProviderRequestError({code:upstream.status===429?'http_429':upstream.status>=500?'http_5xx':'http_4xx',httpStatus:upstream.status,deliveryState:'response_received',billingState:'unknown',retryable:false,sanitizedCause:'opencode_provider_http'})
           let output=''; const decoder=new TextDecoder('utf-8',{fatal:true}); const reader=upstream.body?.getReader()
           if(!reader)throw new Error('模型未返回正文。')
@@ -46,7 +80,9 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
         res.end()
       } else res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify(result.value))
     } catch(error) {
-      if(error instanceof AgentProviderRequestError && error.usage?.budgetAttemptIds) attempts.push({at:new Date().toISOString(),usage:error.usage})
+      if(error instanceof AgentProviderRequestError && error.usage?.budgetAttemptIds) attempts.push({at:new Date().toISOString(),
+        // A round that was never sent costs nothing; it must not leave the session's usage unknown.
+        usage:error.billingState==='not_incurred'?{...NOT_SENT_USAGE,budgetAttemptIds:error.usage.budgetAttemptIds}:error.usage})
       if(!res.destroyed){res.writeHead(400,{'content-type':'application/json'}).end(JSON.stringify({error:{message:error instanceof Error && /^[\u4e00-\u9fff]/u.test(error.message)?error.message:'模型调用未完成，请检查项目预算和执行记录。'}}))}
     } finally {clearTimeout(timeout);controllers.delete(controller);res.off('close',abort)}
   })
@@ -55,10 +91,7 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
   return {
     binding:{...input.binding,baseUrl:`http://127.0.0.1:${address.port}/v1`,apiKey:token},
     usageSince(since:string):AgentProviderUsage|undefined {
-      const values=attempts.filter((row)=>row.at>=since).map((row)=>row.usage)
-      if(!values.length)return undefined
-      return {inputTokens:values.reduce((n,u)=>n+(u.inputTokens??0),0),outputTokens:values.reduce((n,u)=>n+(u.outputTokens??0),0),cacheReadTokens:values.reduce((n,u)=>n+(u.cacheReadTokens??0),0),
-        budgetAttemptIds:values.flatMap((u)=>u.budgetAttemptIds??[]),missingUsageCount:values.filter((u)=>u.inputTokens===undefined||u.outputTokens===undefined).length}
+      return summarizeRelayedUsage(attempts.filter((row)=>row.at>=since).map((row)=>row.usage),billingProvider)
     },
     async close(){for(const controller of controllers)controller.abort();server.closeAllConnections();await new Promise<void>((resolve)=>server.close(()=>resolve()))},
   }

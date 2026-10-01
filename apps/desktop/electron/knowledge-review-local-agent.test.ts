@@ -137,6 +137,26 @@ describe('read-only local Agent Gate Review (knowledge-context K2)', () => {
     expect(budgetRelay.closed).toBe(true)
   })
 
+  // #207: the relay summary carries the saved binding's billing identity and cache split.
+  it('prices a DeepSeek review from the relayed rounds', async () => {
+    const root = await repository()
+    const deepSeekRelay = { ...relay(), usageSince: (): AgentProviderUsage => ({
+      inputTokens: 9_000, outputTokens: 1_200, cacheReadTokens: 6_000, cacheMissTokens: 3_000,
+      cacheStatus: 'complete', billingProvider: 'deepseek', budgetAttemptIds: ['attempt-1', 'attempt-2'], missingUsageCount: 0,
+    }) }
+    const reviewProvider = createReadOnlyLocalKnowledgeReviewProvider({
+      projectId: 'project-1', projectPath: root, binaryPath: '/not-used/opencode',
+      metadata: { id: 'saved-provider', name: 'OpenCode（可读仓库）· DeepSeek', model: 'deepseek-flash', billingProvider: 'deepseek' },
+      processManager: { stopProject: async () => undefined, ensure: async () => { throw new Error('not used') } },
+      runtimeEnv: {}, openBudgetRelay: async () => deepSeekRelay,
+      runner: async (input) => ({ ...(await answer(reviewAnswer)(input)), value: { ...reviewAnswer, model: 'deepseek-flash' } as never }),
+    })
+    const { context, request } = await reviewContext()
+    const result = await runKnowledgeReviewAgent({ request, context, provider: reviewProvider, now: () => '2026-09-30T16:00:00.000Z' })
+    expect(result.tokenUsage).toMatchObject({ executorKind: 'local-agent', inputTokens: 9_000, cacheReadTokens: 6_000, costStatus: 'estimated', budgetAttemptIds: ['attempt-1', 'attempt-2'] })
+    expect(result.tokenUsage.costUsd).toBeGreaterThan(0)
+  })
+
   it('accepts a review that did not need the repository', async () => {
     const root = await repository()
     const { provider: reviewProvider } = provider(root, answer(reviewAnswer))
