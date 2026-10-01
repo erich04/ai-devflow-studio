@@ -454,8 +454,9 @@ export async function runMemoryLearningLiveSmoke(input: { provider: AgentProvide
     const access = createAgentMemoryRendererAccess(store)
     const afterFirst = await access.list(selectionFor(first.run))
     const firstChangeMap = afterFirst.candidates.find((candidate) => candidate.lifecycleStatus === 'pending')
-    assert.ok(firstChangeMap)
-    firstChangeMapStatement = firstChangeMap.statement
+    assert.ok(firstChangeMap?.statement)
+    const changeMapStatement = firstChangeMap.statement
+    firstChangeMapStatement = changeMapStatement
     const humanMemory = await actions.promote({
       ...selectionFor(first.run), candidateId: firstChangeMap.id,
       expectedContentDigest: firstChangeMap.contentDigest, expectedProvenanceDigest: firstChangeMap.provenanceDigest,
@@ -492,7 +493,7 @@ export async function runMemoryLearningLiveSmoke(input: { provider: AgentProvide
     // Coding Run Memory stays local.
     for (const codingRun of [first.codingRun, second.codingRun]) {
       const summary = JSON.stringify(createRemoteCodingAgentSummary(codingRun))
-      assert.ok(!summary.includes(LEARNED_TEST_COMMAND) && !summary.includes(firstChangeMapStatement))
+      assert.ok(!summary.includes(LEARNED_TEST_COMMAND) && !summary.includes(changeMapStatement))
     }
     assert.equal(await readFile(path.join(repository, 'src/greeting.js'), 'utf8'), original)
 

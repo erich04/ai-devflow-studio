@@ -67,6 +67,7 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('reviseAgentMemory')
     expect(smoke).toContain('deleteAgentMemory')
     expect(smoke).toContain('memoryAfterRestart')
+    expect(smoke).toContain('memoryAfterRestart.candidate.statement !== null')
     expect(smoke).toContain('agent_memory_candidates')
     expect(smoke).toContain('agent_memory_revisions')
     expect(smoke).toContain('agent_memory_tombstones')

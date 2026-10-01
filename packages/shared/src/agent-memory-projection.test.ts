@@ -181,6 +181,34 @@ describe('Agent Memory renderer projection', () => {
       },
     })
 
+    // The deleted Memory's source candidate stays listed as promoted but without its text,
+    // while a pending purge still shows it on both cards (ADR 0024 §5).
+    const deletedWithSource = createAgentMemoryRendererSnapshot({
+      scope,
+      candidates: [candidate],
+      memories: [{
+        head: { ...head, status: 'deleted', version: 6, updatedAt: tombstone.purgedAt! },
+        revision: { ...revision, status: 'active' },
+        tombstone,
+      }],
+      observedAt: '2026-08-14T12:00:00.000Z',
+    })
+    expect(deletedWithSource.candidates[0]).toMatchObject({ id: candidate.id, lifecycleStatus: 'promoted', statement: null })
+    expect(JSON.stringify(deletedWithSource)).not.toContain(candidate.statement)
+    expect(JSON.stringify(deletedWithSource)).not.toContain(revision.statement)
+    expect(parseAgentMemoryRendererSnapshot(JSON.parse(JSON.stringify(deletedWithSource)))).toEqual(deletedWithSource)
+    const purgePending = createAgentMemoryRendererSnapshot({
+      scope,
+      candidates: [candidate],
+      memories: [{
+        head: { ...head, status: 'purge_pending', version: 5, updatedAt: tombstone.deletedAt },
+        revision: { ...revision, status: 'active' },
+        tombstone: { ...tombstone, purgeStatus: 'pending', purgedAt: null },
+      }],
+      observedAt: '2026-08-14T12:00:00.000Z',
+    })
+    expect(purgePending.candidates[0]!.statement).toBe(candidate.statement)
+
     const expired = createAgentMemoryRendererSnapshot({
       scope,
       candidates: [],
@@ -319,5 +347,12 @@ describe('Agent Memory renderer projection for Coding Run candidates (ADR 0024)'
     expect(() => parseAgentMemoryRendererSnapshot({
       ...valid, candidates: [{ ...valid.candidates[0], duplicateOf: { memoryId: revision.id, kind: 'exact', similarity: 0.5 } }],
     })).toThrow('invalid_agent_memory_renderer_snapshot')
+    // Only a promoted candidate may arrive without its text.
+    expect(() => parseAgentMemoryRendererSnapshot({
+      ...valid, candidates: [{ ...valid.candidates[0], statement: null, duplicateOf: null }],
+    })).toThrow('invalid_agent_memory_renderer_snapshot')
+    expect(parseAgentMemoryRendererSnapshot({
+      ...valid, candidates: [{ ...valid.candidates[0], lifecycleStatus: 'promoted', statement: null, duplicateOf: null }],
+    }).candidates[0]!.statement).toBeNull()
   })
 })

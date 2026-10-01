@@ -499,8 +499,14 @@ describe('project-wide Memory view and human actions without an Agent Runtime (A
       expectedHeadVersion: afterRevision.headVersion, expectedContentDigest: afterRevision.contentDigest,
       expectedProvenanceDigest: afterRevision.provenanceDigest,
     })).resolves.toMatchObject({ purgeStatus: 'completed' })
-    expect((await access.list(selection)).memories.find((memory) => memory.memoryId === target.memoryId))
+    const afterDelete = await access.list(selection)
+    expect(afterDelete.memories.find((memory) => memory.memoryId === target.memoryId))
       .toMatchObject({ lifecycleStatus: 'deleted', statement: null })
+    // Its source candidate stays listed as promoted, without the deleted text.
+    expect(afterDelete.candidates.find((candidate) => candidate.id === target.sourceCandidateId))
+      .toMatchObject({ lifecycleStatus: 'promoted', statement: null })
+    expect(JSON.stringify(afterDelete)).not.toContain('Verified test command for this project: npm test.')
+    expect(JSON.stringify(afterDelete)).not.toContain('Run npm test before handing work to review.')
     store.close()
   })
 

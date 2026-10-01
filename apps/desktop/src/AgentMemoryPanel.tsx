@@ -341,7 +341,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                     <span>Memory Candidate（记忆候选）</span>
                     <strong>{memoryStatusLabel(candidate.lifecycleStatus)}</strong>
                   </div>
-                  <p>{candidate.statement}</p>
+                  <p>{candidate.statement ?? '对应的 Memory 已删除，内容不可用。'}</p>
                   <div className="compact-row">
                     <span>候选 ID</span>
                     <code>{candidate.id}</code>

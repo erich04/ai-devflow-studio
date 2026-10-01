@@ -662,6 +662,8 @@ try {
   }, memoryBeforeRestart)
   if (
     memoryAfterRestart.candidate?.lifecycleStatus !== 'promoted' ||
+    // ADR 0024 §5: the deleted Memory's source candidate no longer carries its text.
+    memoryAfterRestart.candidate.statement !== null ||
     memoryAfterRestart.memory?.lifecycleStatus !== 'deleted' ||
     memoryAfterRestart.memory.revisionStatus !== 'active' ||
     memoryAfterRestart.memory.currentRevision !== memoryBeforeRestart.currentRevision ||

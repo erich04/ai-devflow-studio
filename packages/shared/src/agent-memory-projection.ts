@@ -41,7 +41,11 @@ export type AgentMemoryRendererCandidate = {
   id: string
   lifecycleStatus: 'pending' | 'promoted'
   scope: AgentMemoryRendererScope
-  statement: string
+  /**
+   * Null once the Memory promoted from this candidate is deleted, so its text is not shown
+   * again through the candidate list (ADR 0024 §5). Only promoted candidates can be null.
+   */
+  statement: string | null
   contentDigest: string
   provenance: AgentMemoryCandidateProvenance
   provenanceDigest: string
@@ -247,7 +251,9 @@ function parseCandidate(value: unknown): AgentMemoryRendererCandidate {
     ]) ||
     !isIdentifier(value.id) ||
     (value.lifecycleStatus !== 'pending' && value.lifecycleStatus !== 'promoted') ||
-    !isRendererStatement(value.statement) ||
+    (value.statement === null
+      ? value.lifecycleStatus !== 'promoted'
+      : !isRendererStatement(value.statement)) ||
     !isDigest(value.contentDigest) ||
     !isDigest(value.provenanceDigest) ||
     !isCanonicalIso(value.createdAt) ||
@@ -263,7 +269,7 @@ function parseCandidate(value: unknown): AgentMemoryRendererCandidate {
     id: value.id,
     lifecycleStatus: value.lifecycleStatus,
     scope: parseScope(value.scope),
-    statement: value.statement,
+    statement: value.statement as string | null,
     contentDigest: value.contentDigest,
     provenance,
     provenanceDigest: value.provenanceDigest,
@@ -541,6 +547,10 @@ export function createAgentMemoryRendererSnapshot(
       }
     })
   const promotedCandidateIds = new Set(input.memories.map(({ revision }) => revision.sourceCandidateId))
+  // The deleted Memory card hides its text; its source candidate must not show it either.
+  const deletedSourceCandidateIds = new Set(input.memories
+    .filter(({ head }) => head.status === 'deleted')
+    .map(({ revision }) => revision.sourceCandidateId))
   // Duplicate hints compare against every active Memory in scope, not only the listed page.
   const activeMemories = input.memories.flatMap(({ head, revision, tombstone }) =>
     head.status === 'active' && revision.status === 'active' && tombstone === null &&
@@ -559,7 +569,7 @@ export function createAgentMemoryRendererSnapshot(
         id: candidate.id,
         lifecycleStatus,
         scope: projectScope(candidate.scope),
-        statement: candidate.statement,
+        statement: deletedSourceCandidateIds.has(candidate.id) ? null : candidate.statement,
         contentDigest: candidate.contentDigest,
         provenance: { ...candidate.provenance },
         provenanceDigest: candidate.provenanceDigest,
