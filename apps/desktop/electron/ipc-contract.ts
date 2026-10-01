@@ -208,6 +208,7 @@ export const ipcChannels = {
   unwatchProjectGitStatus: 'devflow:local-project:git-status:unwatch',
   saveProjectTestCommand: 'devflow:local-project:save-test-command',
   validateTestCommand: 'devflow:local-project:validate-test-command',
+  getTestEvidenceFreshness: 'devflow:test-evidence:freshness:get',
   runProjectTests: 'devflow:local-tests:run',
   loadEnforcementPolicy: 'devflow:enforcement:policy:load',
   evaluateGateEnforcement: 'devflow:enforcement:gate:evaluate',
@@ -295,6 +296,10 @@ export type SaveProjectTestCommandInput = {
 
 export type ProjectGitStatusInput = {
   projectId: string
+}
+/** Read-only: compares each recorded test tree with the current one (hardening H3). */
+export type TestEvidenceFreshnessInput = {
+  runId: string
 }
 
 export type ValidateTestCommandInput = SaveProjectTestCommandInput
@@ -673,6 +678,7 @@ export type DevFlowDesktopApi = {
   unwatchProjectGitStatus: (input: ProjectGitStatusInput) => Promise<void>
   saveProjectTestCommand: (input: SaveProjectTestCommandInput) => Promise<LocalProject>
   validateTestCommand: (input: ValidateTestCommandInput) => Promise<CommandSafetyResult>
+  getTestEvidenceFreshness: (input: TestEvidenceFreshnessInput) => Promise<import('@ai-devflow/shared').TestEvidenceFreshness[]>
   runProjectTests: (input: RunProjectTestsInput) => Promise<RunProjectTestsResult>
   loadEnforcementPolicy: (input: LoadEnforcementPolicyInput) => Promise<PolicySnapshot>
   evaluateGateEnforcement: (input: EvaluateGateEnforcementInput) => Promise<GateEnforcementDecision>
@@ -927,6 +933,12 @@ export function parseProjectGitStatusInput(value: unknown): ProjectGitStatusInpu
   }
 }
 
+export function parseTestEvidenceFreshnessInput(value: unknown): TestEvidenceFreshnessInput {
+  if (!isRecord(value) || Object.keys(value).some((key) => key !== 'runId')) {
+    throw new Error('Invalid test evidence freshness payload')
+  }
+  return { runId: readRequiredString(value, 'runId') }
+}
 export function parseValidateTestCommandInput(value: unknown): ValidateTestCommandInput {
   return parseSaveProjectTestCommandInput(value)
 }

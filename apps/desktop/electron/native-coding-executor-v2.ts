@@ -45,6 +45,7 @@ import {
 import { captureWorktreeDiff } from './coding-runner.js'
 import type { LocalStore } from './local-store.js'
 import { runLocalTestCommand, type LocalTestCommandInput, type LocalTestCommandResult } from './test-runner.js'
+import { withSourceTreeDigest } from './source-tree-digest.js'
 
 const MAX_MANIFEST_PATHS = 256
 const MAX_MANIFEST_DEPTH = 6
@@ -1231,14 +1232,15 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     workspace: CodingEngineStartInput['workspace']
     createdAt: string
   }): Promise<{ result: LocalTestCommandResult; evidence: TestEvidence }> {
-    const result = await runSavedTest({
+    const { value: result, digest } = await withSourceTreeDigest(context.workspace.worktreePath, () => runSavedTest({
       command: context.project.testCommand,
       cwd: context.workspace.worktreePath,
       timeoutMs: input.testTimeoutMs ?? TEST_TIMEOUT_MS,
-    })
+    }))
     return {
       result,
       evidence: redactTestEvidenceForStorage({
+        ...(digest ? { sourceTree: { digest, workspaceId: context.workspace.id } } : {}),
         id: createId('coding-test'),
         runId: context.codingRun.runId,
         nodeId: context.codingRun.nodeId,
