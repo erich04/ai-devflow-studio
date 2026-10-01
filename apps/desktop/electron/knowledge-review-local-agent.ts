@@ -68,6 +68,8 @@ export function createReadOnlyLocalKnowledgeReviewProvider(input: {
   openBudgetRelay: () => Promise<LocalAgentReviewBudgetRelay>
   knowledgeRoot?: string | null
   bounds?: StageAgentExecutionBounds
+  /** Shared cache for the tool binaries OpenCode downloads (#209); see `createIsolatedOpencodeProfile`. */
+  toolCacheDirectory?: string
   /** Tests replace the managed OpenCode session; the profile is then not created. */
   runner?: ReadOnlyStageAgentRunner
   now?: () => string
@@ -118,7 +120,10 @@ export function createReadOnlyLocalKnowledgeReviewProvider(input: {
         }
         const before = await repositoryWorkingTreeDigest(root)
         relay = await input.openBudgetRelay()
-        profile = input.runner ? undefined : await createIsolatedOpencodeProfile('devflow-review-opencode-', { isolateHome: true })
+        profile = input.runner ? undefined : await createIsolatedOpencodeProfile('devflow-review-opencode-', {
+          isolateHome: true,
+          ...(input.toolCacheDirectory ? { toolCacheDirectory: input.toolCacheDirectory } : {}),
+        })
         const runner = input.runner ?? createManagedOpencodeRunner({
           // A review never replaces a Coding or stage process of the same project.
           projectId: `review:${input.projectId}:${randomUUID()}`,
