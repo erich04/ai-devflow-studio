@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "provider": {
+    "kind": "real",
+    "baseUrl": "https://api.deepseek.com",
+    "model": "deepseek-flash",
+    "via": "OpenCode 1.18.15 with a bound openai-compatible provider (OPENCODE_CONFIG_CONTENT) and an isolated OpenCode profile, as Desktop Main binds a saved Provider"
+  },
+  "harness": "scripts/opencode-memory-learning-live.ts (runOpencodeMemoryLearningLiveSmoke): two sequential OpenCode Coding Runs in one isolated project, each in its own local session, with Desktop Main's learning and Workflow build wiring",
+  "executor": "OpenCode executor from fix/memory-deleted-source-candidate at 42f1869, with the harness then uncommitted; the harness was committed unchanged afterwards",
+  "passed": true,
+  "completedAt": "2026-10-01T04:28:25.567Z",
+  "runs": [
+    {
+      "label": "first",
+      "title": "Greeting for the onboarding page",
+      "engine": "opencode-http",
+      "status": "completed",
+      "changedPaths": ["src/greeting.js"],
+      "recalledMemoryIds": [],
+      "learning": [
+        ["test_command", "proposed"],
+        ["change_map", "proposed"]
+      ],
+      "promotedByPolicy": ["test_command"],
+      "awaitingReview": ["change_map"]
+    },
+    {
+      "label": "second",
+      "title": "Greeting for the settings page",
+      "engine": "opencode-http",
+      "status": "completed",
+      "changedPaths": ["src/greeting.js"],
+      "recalledMemoryIds": ["agent-memory-coding-7a4a90b9b7b02593b0da13029f79fa68"],
+      "learning": [
+        ["test_command", "duplicate"],
+        ["change_map", "proposed"]
+      ],
+      "promotedByPolicy": [],
+      "awaitingReview": ["change_map"]
+    }
+  ],
+  "policyMemory": {
+    "memoryId": "agent-memory-coding-7a4a90b9b7b02593b0da13029f79fa68",
+    "statement": "Verified test command for this project: npm test.",
+    "promotionActorKind": "policy",
+    "visibility": "user_project",
+    "retentionClass": "thirty_days",
+    "expiresAt": "2026-10-31T04:28:19.804Z"
+  },
+  "permissionDecisions": [
+    { "run": "first", "origin": "execution_authorization", "permission": "write", "decision": "approved" },
+    { "run": "first", "origin": "change_acceptance", "permission": "patch", "decision": "approved" },
+    { "run": "second", "origin": "execution_authorization", "permission": "write", "decision": "approved" },
+    { "run": "second", "origin": "change_acceptance", "permission": "patch", "decision": "approved" }
+  ],
+  "cost": {
+    "devflowRecorded": null,
+    "reason": "OpenCode billing is opaque to DevFlow; no runtimeCostSummary is recorded (see issue #207).",
+    "accountBalanceCny": { "before": "21.37", "after": "21.35", "covers": "three OpenCode attempts: one harness wiring failure and two passing runs (the balance is also read with a short delay)" }
+  },
+  "limits": [
+    "One passing run used for this record; an earlier pass with a slightly different harness (no changed-paths assertion) also passed, and a first attempt failed because the harness did not wire Workflow build completion.",
+    "Desktop's default OpenCode rules allow edits inside the managed worktree without a prompt, so no edit permission was shown; the harness asserts that only src/greeting.js changed.",
+    "Both tasks change the same one-line file, so the recalled Memory is background only and is not what made the second run succeed.",
+    "No human promotion or dismissal in this run; those are covered by the Native live record (memory-learning-live-20260930.json) and unit tests.",
+    "This file is a hand-condensed summary of the harness report.json (kept locally under out/, not committed); figures are copied from it."
+  ]
+}

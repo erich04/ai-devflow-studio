@@ -119,7 +119,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 | 第 3 节 协调器重试读取已持久化附件 | 已实现，有测试 |
 | 第 3 节 协调器召回记忆 | 推迟，见第 3 节原因 |
 | 第 4 节 模板与去重判定（共享纯函数） | 已实现，有单元测试 |
-| 第 4 节 `coding_run` 来源、v37 迁移、存储校验、完成时生成候选（Native、OpenCode） | 已实现，有测试；Native 已用真实 DeepSeek 跑通两次连续 Coding Run 的学习与召回（见“影响”），OpenCode 只用模拟模型验证 |
+| 第 4 节 `coding_run` 来源、v37 迁移、存储校验、完成时生成候选（Native、OpenCode） | 已实现，有测试；Native 和 OpenCode 各用真实 DeepSeek 跑通两次连续 Coding Run 的学习与召回（见“影响”） |
 | 第 4 节 项目范围的记忆面板与生命周期 IPC | 已实现，有测试 |
 | 第 5 节 人工晋升与修订前去重、策略晋升（仅 `test_command`，存储层校验） | 已实现，有测试 |
 | 第 5 节 忽略待审候选（v38 迁移、存储、IPC、面板） | 已实现，有测试；打包冒烟校验已晋升候选不能忽略 |
@@ -147,3 +147,6 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
   - 第二个运行的两次调用都在简报里带着这两条记忆，Context 回执记录召回了这两条。完成后 `test_command` 记为 `duplicate`，没有再保存；新的 `change_map` 被人工忽略，重试学习时记为 `dismissed`，面板不再有待审候选。
   - 4 次调用共用同一个 system prompt，缓存命中率 57.7%，费用 USD 0.0010713。
   - 局限：只跑一次；两个任务改的是同一行，召回的记忆只是背景，不是第二个运行成功的原因；人工晋升和忽略调用的是面板背后的同一套主进程服务，没有经过界面。
+- 同日用 `test:opencode-memory-learning-live` 在 OpenCode 路径上做了同样的两次连续运行（[证据](../engineering/evidence/opencode-memory-learning-live-20260930.json)）：OpenCode 1.18.15 通过与 Desktop Main 相同的 Provider 绑定方式调用 `deepseek-flash`，使用隔离的 OpenCode 配置目录；执行授权和 Change Acceptance 都经过审批，学习在 Change Acceptance 和规范测试通过之后执行，Workflow 的开发步骤随之推进。
+  - 第一个运行学到 `test_command`（策略晋升）和一条待审的 `change_map`；第二个运行的 Context 回执召回了这条测试命令记忆，学习时记为 `duplicate`。两次都只改了 `src/greeting.js`。
+  - 局限：只跑一次；OpenCode 的计费对 DevFlow 不透明，没有记录费用（[#207](https://github.com/erich04/ai-devflow-studio/issues/207)），三次尝试前后账户余额减少 0.02 元；Desktop 默认的 OpenCode 规则允许在受管工作树内直接编辑，所以没有出现编辑审批；这次没有人工晋升或忽略。
