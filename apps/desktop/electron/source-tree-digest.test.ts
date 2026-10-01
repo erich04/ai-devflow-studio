@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFile } from 'node:child_process'
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -18,6 +18,9 @@ async function repository() {
   directories.push(directory)
   const git = (...args: string[]) => execFileAsync('git', ['-C', directory, ...args])
   await git('init', '-q', '-b', 'main')
+  // The fixture's own commit must not start background maintenance that races the assertions.
+  await git('config', 'gc.auto', '0')
+  await git('config', 'maintenance.auto', 'false')
   await writeFile(path.join(directory, '.gitignore'), 'coverage/\n')
   await writeFile(path.join(directory, 'app.js'), 'export const value = 1\n')
   await git('add', '.')
@@ -49,13 +52,15 @@ describe('source tree digest (hardening H3)', () => {
     expect((await computeSourceTreeDigest(directory))?.tracked).toBe(edited?.tracked)
   })
 
-  it('never writes objects or takes the index lock', async () => {
-    const { directory } = await repository()
+  it('never writes objects or the index', async () => {
+    const { directory, git } = await repository()
     await writeFile(path.join(directory, 'new.js'), 'export const created = true\n')
-    const objects = async () => (await readdir(path.join(directory, '.git', 'objects'))).sort()
-    const before = await objects()
+    const objectId = (await git('hash-object', 'new.js')).stdout.trim()
+    const index = path.join(directory, '.git', 'index')
+    const indexBefore = await stat(index)
     await computeSourceTreeDigest(directory)
-    expect(await objects()).toEqual(before)
+    await expect(git('cat-file', '-e', objectId)).rejects.toThrow()
+    expect((await stat(index)).mtimeMs).toBe(indexBefore.mtimeMs)
   })
 
   it('returns null outside a Git checkout', async () => {
