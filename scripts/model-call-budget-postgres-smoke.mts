@@ -29,7 +29,6 @@ try {
   await restarted.settleModelCall(pending[0]!, context)
   assert.equal((await repo.listPendingModelCallSettlements(projectId, context)).length, 0)
   await repo.settleModelCall({ ...settlement, usage: { outputTokens: 20, inputTokens: 100, cacheMissTokens: 100, cacheReadTokens: 0, cacheStatus: 'complete' } }, context)
-  await assert.rejects(repo.settleModelCall({ ...settlement, state: 'not_sent' }, context), /immutable/)
   const overview = await repo.getTeamOverview(context)
   assert.equal(overview.budgetProjectCost?.find((r) => r.key === projectId)?.totalTokens, 120)
   assert.equal(overview.projectCost.find((r) => r.key === projectId)?.totalTokens, 120)
@@ -39,5 +38,10 @@ try {
   assert.equal((await repo.reserveModelCall(quote(randomUUID()), context)).accepted, false)
   await repo.saveRuntimeBudgetPolicy({ projectId, enabled: false, monthlyLimitUsd: 50, warningThresholdUsd: 40, currency: 'USD', updatedAt: now }, context)
   assert.equal((await repo.reserveModelCall(quote(randomUUID()), context)).decision.status, 'disabled')
-  console.log(JSON.stringify({ passed: true, projectId, concurrentReservation: 'one admitted', durableSettlementRecovery: true, immutableSettlement: true, failedUsageRecorded: true, actualReportTokens: 120, unknownCostBlocked: true, freshDisabledPolicyApplied: true }))
+  const conflict = await repo.settleModelCall({ ...settlement, state: 'not_sent' }, context)
+  assert.equal(conflict.status, 'conflict_recorded')
+  const record = (await repo.getTeamOverview(context)).modelCostRecovery!.find(row => row.projectId === projectId)!.records.find(row => row.sourceId === id)!
+  assert.equal(record.originalState, 'failed')
+  assert.equal(record.usage?.inputTokens, 100)
+  console.log(JSON.stringify({ passed: true, projectId, concurrentReservation: 'one admitted', durableSettlementRecovery: true, originalSettlementPreserved: true, durableConflictReceipt: true, failedUsageRecorded: true, actualReportTokens: 120, unknownCostBlocked: true, freshDisabledPolicyApplied: true }))
 } finally { await db.close() }

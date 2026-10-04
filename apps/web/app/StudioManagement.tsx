@@ -2,6 +2,8 @@ import type { ReactNode } from 'react'
 import { formatCostRollup, type Project } from '@ai-devflow/shared'
 import type { BrowserAuthSessionResponse, TeamOverviewResponse } from './lib/devflow-api'
 import { RuntimeBudgetPanel } from './RuntimeBudgetPanel'
+import { ModelCostRecoveryPanel } from './ModelCostRecoveryPanel'
+import { readModelCostRecoveryAction, retryModelCostSettlementsAction, reconcileModelCostAction } from './model-cost-actions'
 import { createRuntimeBudgetApprovalAction, saveRuntimeBudgetPolicyAction } from './runtime-budget-actions'
 import { TeamPolicyEditor } from './TeamPolicyEditor'
 import { readTeamPolicyAction, saveTeamPolicyAction } from './team-policy-actions'
@@ -61,9 +63,13 @@ export function StudioManagement({ overview, session, project, view, section, de
         projectId={project.id}
         initialPolicy={overview.runtimeBudgetPolicies.find((policy) => policy.projectId === project.id) ?? null}
         approvals={overview.runtimeBudgetApprovals.filter((approval) => approval.projectId === project.id)}
-        spendUsd={overview.projectCost.find((cost) => cost.key === project.id)?.costUsd ?? 0}
+        spendUsd={overview.modelCostRecovery?.find(row => row.projectId === project.id)?.actualCostUsd ?? overview.projectCost.find((cost) => cost.key === project.id)?.costUsd ?? 0}
+        unknownCostCount={overview.modelCostRecovery?.find(row => row.projectId === project.id)?.actualUnknownCount ?? overview.projectCost.find(cost => cost.key === project.id)?.unknownCostCount ?? 0}
         providers={overview.agentProviders} sessionUser={session?.user ?? null}
         savePolicyAction={saveRuntimeBudgetPolicyAction} createApprovalAction={createRuntimeBudgetApprovalAction} /> : <p>所选项目不可用，请先创建或选择有权限访问的项目。</p>}
+      {project && overview.modelCostRecovery?.filter(row => row.projectId === project.id).map(row => <ModelCostRecoveryPanel key={row.projectId}
+        initialOverview={row} userId={session?.user.id} canManage={session?.user.role === 'owner' || session?.projectMemberships.some(membership => membership.projectId === project.id && (membership.role === 'lead' || membership.role === 'owner')) === true}
+        readAction={readModelCostRecoveryAction} retryAction={retryModelCostSettlementsAction} reconcileAction={reconcileModelCostAction} />)}
     </section>}
   </section>
 }

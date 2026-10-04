@@ -460,6 +460,7 @@ describe('project-bound Electron remote sync', () => {
     expect(Object.keys(boundRemoteSync).sort()).toEqual([
       'createRuntimeBudgetApproval',
       'evaluateRuntimeBudget',
+      'getModelCostRecovery',
       'getRuntimeBudgetPolicy',
       'importHistoricalModelCall',
       'reserveModelCall',
@@ -1843,6 +1844,7 @@ describe('project-bound Electron remote sync', () => {
       message: 'accepted',
     }
     const uploadRunSummary = vi.fn(async () => acceptedUpload)
+    const getModelCostRecovery = vi.fn()
     const uploadTestEvidenceSummary = vi.fn(async () => acceptedUpload)
     const uploadAgentReviewSummary = vi.fn(async () => acceptedUpload)
     const uploadCodingAgentSummary = vi.fn(async () => acceptedUpload)
@@ -1868,6 +1870,7 @@ describe('project-bound Electron remote sync', () => {
       reason: 'Within budget.',
     }))
     const remoteSync = {
+      getModelCostRecovery,
       uploadRunSummary,
       uploadTestEvidenceSummary,
       uploadAgentReviewSummary,
@@ -1906,6 +1909,10 @@ describe('project-bound Electron remote sync', () => {
     await boundRemoteSync.uploadCanonicalCodingAgentSummary(canonicalCodingRun.id)
     await boundRemoteSync.saveGateOverride(gateOverride)
     await boundRemoteSync.evaluateRuntimeBudget(budgetRequest)
+    await boundRemoteSync.getModelCostRecovery('local-project-1')
+    expect(getModelCostRecovery).toHaveBeenCalledWith('team-project-1')
+    await expect(boundRemoteSync.getModelCostRecovery('other-local-project')).rejects.toThrow()
+    expect(getModelCostRecovery).toHaveBeenCalledTimes(1)
 
     expect(uploadTestEvidenceSummary).toHaveBeenCalledWith({
       ...evidenceSummary,

@@ -1,5 +1,8 @@
+import { isFinalModelCallSettlement } from '@ai-devflow/shared'
 import { modelCallActualUsage, modelBudgetUsageWithRuntime, modelCallBudgetRollup, type HistoricalModelCall, type ModelCallAttempt } from '@ai-devflow/shared'
 import { admitModelCall, finishModelCall, queueModelCallSettlement } from './model-call-budget'
+import { modelCostRecoveryOverview, type ModelCostEvent } from '@ai-devflow/shared'
+import { reconcileModelCostRecord, settleModelCallWithRecovery } from './model-cost-recovery'
 import { createOrganizationRepository } from './organization-repository'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import { assertPolicyRevision, EnforcementPolicyConflictError } from './enforcement-policy-write'
@@ -72,6 +75,12 @@ import {
 } from '@ai-devflow/shared'
 import type { TeamDbClient, TeamDbRepositoryClient } from '../db/client'
 import { withTeamDbTransaction } from '../db/transaction'
+
+async function appendModelCostEvent(db: Pick<TeamDbClient, 'query'>, organizationId: string, event: ModelCostEvent): Promise<void> {
+  await db.query('INSERT INTO model_cost_events (id,organization_id,project_id,source_kind,source_id,kind,idempotency_key,json,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9)',
+    [event.id, organizationId, event.projectId, event.sourceKind, event.sourceId, event.kind,
+      event.kind === 'reconciliation' ? event.idempotencyKey : null, JSON.stringify(event), event.createdAt])
+}
 import {
   CanonicalRunRequiredError,
   findCurrentGateCommandOverride,
@@ -1915,17 +1924,20 @@ export function createPostgresTeamRepository(
   return {
     organizations: createOrganizationRepository(db),
     async importHistoricalModelCall(input,context) {
-      await withTeamDbTransaction(db,async(tx)=>{
+      return withTeamDbTransaction(db,async(tx)=>{
         await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`model-budget:${context.organizationId}:${input.quote.projectId}`])
         const existing = (await tx.query<{ organization_id: string; json: ModelCallAttempt }>('SELECT organization_id,json FROM model_call_attempts WHERE id=$1',[input.quote.id]))[0]
         if (existing) {
           if (existing.organization_id !== context.organizationId || existing.json.projectId !== input.quote.projectId) throw new Error('Model call accounting scope mismatch')
-          await finishModelCall(input.settlement, context, async () => existing.json, async () => {})
-          return
+          return settleModelCallWithRecovery({ settlement: input.settlement, context, previous: existing.json,
+            events: (await tx.query<{json:ModelCostEvent}>('SELECT json FROM model_cost_events WHERE organization_id=$1 AND project_id=$2 ORDER BY sequence', [context.organizationId, input.quote.projectId])).map(row => row.json),
+            write: async value => { await tx.query('UPDATE model_call_attempts SET json=$1::jsonb WHERE id=$2 AND organization_id=$3', [JSON.stringify(value), value.id, context.organizationId]) },
+            append: event => appendModelCostEvent(tx, context.organizationId, event) })
         }
         if(!(await tx.query('SELECT id FROM projects WHERE id=$1 AND organization_id=$2',[input.quote.projectId,context.organizationId])).length)throw new Error('Project scope mismatch')
         const row={...input.quote,userId:context.userId,state:'reserved' as const,projectedCostUsd:null,costUsd:null}
         await finishModelCall(input.settlement,context,async()=>row,async(value)=>{await tx.query('INSERT INTO model_call_attempts (id,organization_id,project_id,user_id,json,created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6)',[value.id,context.organizationId,value.projectId,context.userId,JSON.stringify(value),value.createdAt])})
+        return { status: 'settled', id: row.id, projectId: row.projectId }
       })
     },
     async reserveModelCall(input, context) {
@@ -1940,21 +1952,38 @@ export function createPostgresTeamRepository(
     async settleModelCall(input, context) {
       return withTeamDbTransaction(db,async(tx)=>{
         await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`model-budget:${context.organizationId}:${input.projectId}`])
-        return finishModelCall(input,context,async()=> (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1 AND organization_id=$2 FOR UPDATE',[input.id,context.organizationId]))[0]?.json??null,
-          async(value)=>{await tx.query('UPDATE model_call_attempts SET json=$1::jsonb WHERE id=$2 AND organization_id=$3',[JSON.stringify(value),value.id,context.organizationId])})
+        return settleModelCallWithRecovery({ settlement: input, context,
+          previous: (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1 AND organization_id=$2 FOR UPDATE',[input.id,context.organizationId]))[0]?.json ?? null,
+          events: (await tx.query<{json:ModelCostEvent}>('SELECT json FROM model_cost_events WHERE organization_id=$1 AND project_id=$2 ORDER BY sequence',[context.organizationId,input.projectId])).map(row => row.json),
+          write: async value => { await tx.query('UPDATE model_call_attempts SET json=$1::jsonb WHERE id=$2 AND organization_id=$3',[JSON.stringify(value),value.id,context.organizationId]) },
+          append: event => appendModelCostEvent(tx, context.organizationId, event) })
       })
     },
-    async persistModelCallSettlement(input, context) {
+    async reconcileModelCost(input, context) {
+      return withTeamDbTransaction(db, async tx => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`model-budget:${context.organizationId}:${input.projectId}`])
+        const scopedDb: TeamDbRepositoryClient = { ...tx, async close() {}, async checkout() { throw new Error('Nested budget transaction') } }
+        const repo = createPostgresTeamRepository(scopedDb, options)
+        const overview = await repo.getTeamOverview(context)
+        const record = overview.modelCostRecovery?.find(row => row.projectId === input.projectId)?.records.find(row => row.sourceKind === input.sourceKind && row.sourceId === input.sourceId)
+        const events = (await tx.query<{json:ModelCostEvent}>('SELECT json FROM model_cost_events WHERE organization_id=$1 AND project_id=$2 ORDER BY sequence', [context.organizationId, input.projectId])).map(row => row.json)
+        const attempt = (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1 AND organization_id=$2 AND project_id=$3', [input.sourceId, context.organizationId, input.projectId]))[0]?.json
+        const event = reconcileModelCostRecord({ command: input, session: context, record, events, ...(attempt ? { attempt } : {}) })
+        if (!events.some(row => row.id === event.id)) await appendModelCostEvent(tx, context.organizationId, event)
+        return (await repo.getTeamOverview(context)).modelCostRecovery!.find(row => row.projectId === input.projectId)!.records.find(row => row.sourceKind === input.sourceKind && row.sourceId === input.sourceId)!
+      })
+    },
+    async persistModelCallSettlement(input, context, isFinal) {
       return withTeamDbTransaction(db, async (tx) => {
         await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`model-budget:${context.organizationId}:${input.projectId}`])
         return queueModelCallSettlement(input, context,
           async () => (await tx.query<{json: ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1 AND organization_id=$2 FOR UPDATE', [input.id, context.organizationId]))[0]?.json ?? null,
-          async (value) => { await tx.query('UPDATE model_call_attempts SET json=$1::jsonb WHERE id=$2 AND organization_id=$3', [JSON.stringify(value), value.id, context.organizationId]) })
+          async (value) => { await tx.query('UPDATE model_call_attempts SET json=$1::jsonb WHERE id=$2 AND organization_id=$3', [JSON.stringify(value), value.id, context.organizationId]) }, isFinal)
       })
     },
     async listPendingModelCallSettlements(projectId, context) {
       const rows = await db.query<{json: ModelCallAttempt}>("SELECT json FROM model_call_attempts WHERE organization_id=$1 AND project_id=$2 AND user_id=$3 AND json->>'state'='reserved' AND json ? 'pendingSettlement'", [context.organizationId, projectId, context.userId])
-      return rows.flatMap((row) => row.json.pendingSettlement ? [row.json.pendingSettlement] : [])
+      return rows.flatMap((row) => isFinalModelCallSettlement(row.json.pendingSettlement, row.json.pendingSettlementFinal) ? [row.json.pendingSettlement] : [])
     },
     ...workRequestRepository,
     ...gateCommandRepository,
@@ -2474,9 +2503,11 @@ export function createPostgresTeamRepository(
 
       const accountingRows = modelBudgetUsageWithRuntime(allTokenUsage, codingCostSummaries)
       const attempts = modelCalls.map((row)=>row.json)
-      const actualUsage = modelCallActualUsage(accountingRows, attempts)
+      const costEvents = (await db.query<{json:ModelCostEvent}>('SELECT json FROM model_cost_events WHERE organization_id=$1 ORDER BY sequence', [context.organizationId])).map(row => row.json)
+      const actualUsage = modelCallActualUsage(accountingRows, attempts, costEvents)
       return {
-        budgetProjectCost: modelCallBudgetRollup(accountingRows, attempts, new Date().toISOString()),
+        budgetProjectCost: modelCallBudgetRollup(accountingRows, attempts, new Date().toISOString(), costEvents),
+        modelCostRecovery: projectRows.map(project => modelCostRecoveryOverview(accountingRows, attempts, costEvents, project.id, new Date().toISOString())),
         projects: projectRows.map(mapProject),
         members: memberRows.map(mapMember),
         runs: runsBundle.runs,

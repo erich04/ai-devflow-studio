@@ -1,3 +1,4 @@
+import { modelCostRecoveryOverview } from '@ai-devflow/shared'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -497,6 +498,8 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   let deliveryArtifacts = [...fixtureArtifacts]
   let deliveryEvents = [...fixtureEvents]
   const api: DevFlowDesktopApi = {
+    getModelCostRecovery: vi.fn(async () => ({ overview: modelCostRecoveryOverview([], [], [], 'p-payments', '2026-10-04T12:00:00Z'), local: [] })),
+    retryModelCostSettlements: vi.fn(async () => ({ overview: modelCostRecoveryOverview([], [], [], 'p-payments', '2026-10-04T12:00:00Z'), local: [] })),
     platform: 'test',
     loadState: vi.fn().mockResolvedValue(persistedFixtureRunState()),
     inspectAgentProviderRemoval: vi.fn().mockRejectedValue(new Error('Provider management is not configured for this test.')),
@@ -4876,6 +4879,11 @@ describe('App', () => {
     await waitForLocalStateLoaded(loadState)
     clickInspectorTab('执行记录')
     expect(await screen.findByTestId('stage-agent-failure-records')).toHaveTextContent(summary)
+    expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: '查看项目费用与恢复' }))
+    expect(await screen.findByTestId('settings-models')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '查看项目费用记录' }))
+    await waitFor(() => expect(api.getModelCostRecovery).toHaveBeenCalledWith({ projectId: localProject.id }))
     expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
   })
 

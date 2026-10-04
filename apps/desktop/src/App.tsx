@@ -1691,7 +1691,7 @@ export function App() {
                     />
                   ) : undefined}
                   executionEvidence={<>
-                    <StageAgentFailureRecords traces={agentTraces} runId={selectedRun.id} {...(selectedNode ? { nodeId: selectedNode.id } : {})} />
+                    <StageAgentFailureRecords traces={agentTraces} runId={selectedRun.id} {...(selectedNode ? { nodeId: selectedNode.id } : {})} onViewCosts={() => openSettingsFromTask('models')} />
                     <AgentEvidenceGroups groups={executionEvidenceGroups} />
                   </>}
                 />

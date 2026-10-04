@@ -1,5 +1,6 @@
 import type {HistoricalModelCall} from '@ai-devflow/shared'
 import type { ModelCallQuote, ModelCallSettlement, ModelCallAdmission } from '@ai-devflow/shared'
+import { parseModelCallSettlementReceipt, type ModelCallSettlementReceipt, type ModelCostRecoveryOverview } from '@ai-devflow/shared'
 import {
   DIAGNOSTIC_HEADER,
   safeDiagnosticId,
@@ -103,6 +104,8 @@ export type RemoteTeamOverviewResponse = {
   members: TeamMember[]
   runs: WorkflowRun[]
   projectCost: TokenUsageRollup[]
+  budgetProjectCost?: TokenUsageRollup[]
+  modelCostRecovery?: ModelCostRecoveryOverview[]
   memberCost: TokenUsageRollup[]
   totalCost: string
   enforcementPolicies?: {
@@ -116,7 +119,8 @@ export type RemoteTeamOverviewResponse = {
 export type RemoteSyncClient = {
   importHistoricalModelCall(input:HistoricalModelCall):Promise<void>
   reserveModelCall(input: ModelCallQuote): Promise<ModelCallAdmission>
-  settleModelCall(input: ModelCallSettlement): Promise<void>
+  settleModelCall(input: ModelCallSettlement): Promise<ModelCallSettlementReceipt>
+  getModelCostRecovery(projectId: string): Promise<ModelCostRecoveryOverview>
   exchangeDesktopPairingCode(input: { code: string }): Promise<DesktopPairingExchangeResult>
   loadRemoteSnapshot(input?: LoadRemoteSnapshotInput): Promise<RemoteTeamSnapshot>
   listWorkRequests(
@@ -889,6 +893,8 @@ export function createRemoteSyncClient(
         artifacts: runsBundle.artifacts,
         events: runsBundle.events,
         projectCost: overview.projectCost,
+        ...(overview.budgetProjectCost ? { budgetProjectCost: overview.budgetProjectCost } : {}),
+        ...(overview.modelCostRecovery ? { modelCostRecovery: overview.modelCostRecovery } : {}),
         memberCost: overview.memberCost,
         totalCost: overview.totalCost,
         ...(overview.enforcementPolicies ? { enforcementPolicies: overview.enforcementPolicies } : {}),
@@ -1267,7 +1273,14 @@ export function createRemoteSyncClient(
       return postJson<ModelCallAdmission>(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/reserve'),input,'/api/runtime/model-calls/reserve',requirePostHeaders({authToken,sessionHeaders}),signal)
     },
     async settleModelCall(input) {
-      await postJson(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/settle'),input,'/api/runtime/model-calls/settle',requirePostHeaders({authToken,sessionHeaders}),signal)
+      const receipt = await postJson(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/settle'),input,'/api/runtime/model-calls/settle',requirePostHeaders({authToken,sessionHeaders}),signal)
+      return parseModelCallSettlementReceipt(receipt, input)
+    },
+    async getModelCostRecovery(projectId) {
+      const path = '/api/runtime/model-costs'
+      const url = new URL(buildUrl(apiBaseUrl, path)); url.searchParams.set('projectId', projectId)
+      const response = await fetchRemote(fetcher, url.toString(), { headers: requirePostHeaders({ authToken, sessionHeaders }) }, path, signal)
+      return readJson<ModelCostRecoveryOverview>(response, path)
     },
     async evaluateRuntimeBudget(input) {
       const decision = await postJson<unknown>(

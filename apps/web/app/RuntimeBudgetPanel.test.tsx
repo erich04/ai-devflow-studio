@@ -141,7 +141,7 @@ describe('RuntimeBudgetPanel', () => {
     expect(await screen.findByText('预算已启用')).toBeInTheDocument()
     expect(screen.getByText('月上限 $0.40')).toBeInTheDocument()
     expect(screen.getByText('预警阈值 $0.20')).toBeInTheDocument()
-    expect(screen.getByText('已用 $0.04')).toBeInTheDocument()
+    expect(screen.getByText('已确认花费 $0.04')).toBeInTheDocument()
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已保存到团队'))
     expect(screen.getByRole('status')).toHaveTextContent('桌面端是否已同步无法从 Web 确认；请在桌面端执行“更新团队数据”。')
     expect(screen.getByRole('button', { name: '已保存' })).toBeDisabled()

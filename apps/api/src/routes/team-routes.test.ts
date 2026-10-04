@@ -699,10 +699,11 @@ function createRepository(): TeamRepository & GateCommandRepository {
     ),
     saveAgentProviderCredential: vi.fn(async (metadata) => metadata),
     getAgentProviderCredential: vi.fn(async () => null),
-    importHistoricalModelCall:vi.fn(async()=>undefined),
+    importHistoricalModelCall:vi.fn(async(input)=>({status:'settled' as const,id:input.quote.id,projectId:input.quote.projectId})),
     saveAgentAttemptUsage: vi.fn(async () => undefined),
     reserveModelCall: vi.fn(async () => ({accepted:true,decision:{status:'allowed' as const,blocksRun:false,currentSpendUsd:0,projectedCostUsd:0,reason:'Fixture admission'}})),
-    settleModelCall: vi.fn(async () => undefined),
+    settleModelCall: vi.fn(async (input) => ({ status: 'settled' as const, id: input.id, projectId: input.projectId })),
+    reconcileModelCost: vi.fn(async () => { throw new Error('unused fixture') }),
     persistModelCallSettlement: vi.fn(async () => undefined),
     listPendingModelCallSettlements: vi.fn(async () => []),
     saveAgentReviewBundle: vi.fn(async (bundle) => ({

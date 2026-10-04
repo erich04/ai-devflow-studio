@@ -14,6 +14,7 @@ type RuntimeBudgetPanelProps = {
   initialPolicy: RuntimeBudgetPolicy | null
   approvals: RuntimeBudgetApproval[]
   spendUsd: number
+  unknownCostCount?: number
   providers: AgentProviderConfig[]
   sessionUser: { id: string; name: string } | null
   savePolicyAction: (formData: FormData) => Promise<RuntimeBudgetPolicySaveResult>
@@ -46,6 +47,7 @@ export function RuntimeBudgetPanel({
   initialPolicy,
   approvals,
   spendUsd,
+  unknownCostCount = 0,
   providers,
   sessionUser,
   savePolicyAction,
@@ -140,7 +142,7 @@ export function RuntimeBudgetPanel({
         <div className="runtime-budget-metrics" aria-label="预算摘要">
           <span>月上限 {policy ? formatUsd(policy.monthlyLimitUsd) : '未配置'}</span>
           <span>预警阈值 {policy ? formatUsd(policy.warningThresholdUsd) : '未配置'}</span>
-          <span>已用 {formatUsd(spendUsd)}</span>
+          <span>已确认花费 {formatUsd(spendUsd)}{unknownCostCount ? ` · 另有 ${unknownCostCount} 笔实际费用待确认` : ''}</span>
         </div>
         <p>此处显示团队服务端保存的规则，不代表桌面端已经完成同步。</p>
       </article>

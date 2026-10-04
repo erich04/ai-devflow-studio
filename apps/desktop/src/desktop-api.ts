@@ -260,6 +260,8 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  getModelCostRecovery: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
+  retryModelCostSettlements: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
   listCredentialAccess?: () => Promise<import('../electron/credential-access').CredentialAccessRecord[]>
   cancelCredentialAccess?: (id: string) => Promise<boolean>

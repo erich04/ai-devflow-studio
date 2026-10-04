@@ -1,5 +1,8 @@
+import { isFinalModelCallSettlement } from '@ai-devflow/shared'
 import { modelCallActualUsage, modelBudgetUsageWithRuntime, modelCallBudgetRollup, type HistoricalModelCall, type ModelCallAttempt, type ModelCallQuote, type ModelCallSettlement, type ModelCallAdmission } from '@ai-devflow/shared'
 import { admitModelCall, finishModelCall, queueModelCallSettlement } from './model-call-budget'
+import { modelCostRecoveryOverview, type ModelCostEvent, type ModelCostRecoveryOverview, type ModelCostRecord, type ModelCostReconciliationInput, type ModelCallSettlementReceipt } from '@ai-devflow/shared'
+import { reconcileModelCostRecord, settleModelCallWithRecovery } from './model-cost-recovery'
 import type { OrganizationRepository } from './organization-repository'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
@@ -109,6 +112,7 @@ export type TeamOverviewPayload = {
   members: TeamMember[]
   runs: WorkflowRun[]
   budgetProjectCost?: TokenUsageRollup[]
+  modelCostRecovery?: ModelCostRecoveryOverview[]
   projectCost: TokenUsageRollup[]
   memberCost: TokenUsageRollup[]
   totalCost: string
@@ -215,10 +219,11 @@ export type TeamProjectCreateInput = {
 export type TeamRepository = WorkRequestRepository &
   GateCommandRepository &
   GitHubDeliveryRepository & {
-  importHistoricalModelCall(input:HistoricalModelCall,context:TeamRepositorySyncContext):Promise<void>
+  importHistoricalModelCall(input:HistoricalModelCall,context:TeamRepositorySyncContext):Promise<ModelCallSettlementReceipt>
   reserveModelCall(input: ModelCallQuote, context: TeamRepositorySyncContext): Promise<ModelCallAdmission>
-  settleModelCall(input: ModelCallSettlement, context: TeamRepositorySyncContext): Promise<void>
-  persistModelCallSettlement(input: ModelCallSettlement, context: TeamRepositorySyncContext): Promise<void>
+  settleModelCall(input: ModelCallSettlement, context: TeamRepositorySyncContext): Promise<ModelCallSettlementReceipt>
+  persistModelCallSettlement(input: ModelCallSettlement, context: TeamRepositorySyncContext, isFinal?: boolean): Promise<void>
+  reconcileModelCost(input: ModelCostReconciliationInput, context: TeamSession): Promise<ModelCostRecord>
   listPendingModelCallSettlements(projectId: string, context: TeamRepositorySyncContext): Promise<ModelCallSettlement[]>
   organizations?: OrganizationRepository
   getAuthenticatedIdentity(input: {
@@ -399,6 +404,7 @@ export function findCurrentGateCommandOverride(input: {
 
 export function createSeedTeamRepository(): TeamRepository {
   const modelCalls = new Map<string, { organizationId:string; value:ModelCallAttempt }>()
+  const modelCostEvents: { organizationId: string; value: ModelCostEvent }[] = []
   let budgetTail: Promise<unknown> = Promise.resolve()
   async function budgetLock<T>(action:()=>Promise<T>):Promise<T> { const next=budgetTail.catch(()=>undefined).then(action); budgetTail=next; return next }
   const teamProjects = [...projects]
@@ -723,33 +729,54 @@ export function createSeedTeamRepository(): TeamRepository {
 
   repository = {
     async importHistoricalModelCall(input,context) {
-      await budgetLock(async()=>{
+      return budgetLock(async()=>{
         const existing = modelCalls.get(input.quote.id)
         if (existing) {
           if (existing.organizationId !== context.organizationId || existing.value.projectId !== input.quote.projectId) throw new Error('Model call accounting scope mismatch')
-          await finishModelCall(input.settlement, context, async () => existing.value, async () => {})
-          return
+          return settleModelCallWithRecovery({ settlement: input.settlement, context, previous: existing.value,
+            events: modelCostEvents.filter(row => row.organizationId === context.organizationId).map(row => row.value),
+            write: async value => { modelCalls.set(value.id, { organizationId: context.organizationId, value }) },
+            append: async value => { modelCostEvents.push({ organizationId: context.organizationId, value }) } })
         }
         const overview=await this.getTeamOverview(context)
         if(!overview.projects.some((p)=>p.id===input.quote.projectId))throw new Error('Project scope mismatch')
         const row={...input.quote,userId:context.userId,state:'reserved' as const,projectedCostUsd:null,costUsd:null}
         await finishModelCall(input.settlement,context,async()=>row,async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})})
+        return { status: 'settled', id: row.id, projectId: row.projectId }
       })
     },
     async reserveModelCall(input, context) {
       return budgetLock(() => admitModelCall(this,input,context, async()=>modelCalls.get(input.id)?.value??null, async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})}, [...modelCalls.values()].filter((row)=>row.organizationId===context.organizationId).map((row)=>row.value)))
     },
     async settleModelCall(input, context) {
-      await budgetLock(()=>finishModelCall(input,context,async()=>modelCalls.get(input.id)?.organizationId===context.organizationId ? modelCalls.get(input.id)!.value:null,async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})}))
+      return budgetLock(() => settleModelCallWithRecovery({ settlement: input, context,
+        previous: modelCalls.get(input.id)?.organizationId === context.organizationId ? modelCalls.get(input.id)!.value : null,
+        events: modelCostEvents.filter(row => row.organizationId === context.organizationId).map(row => row.value),
+        write: async value => { modelCalls.set(value.id, { organizationId: context.organizationId, value }) },
+        append: async value => { modelCostEvents.push({ organizationId: context.organizationId, value }) } }))
     },
-    async persistModelCallSettlement(input, context) {
+    async reconcileModelCost(input, context) {
+      return budgetLock(async () => {
+        const overview = await this.getTeamOverview(context)
+        const record = overview.modelCostRecovery?.find(row => row.projectId === input.projectId)?.records
+          .find(row => row.sourceKind === input.sourceKind && row.sourceId === input.sourceId)
+        const events = modelCostEvents.filter(row => row.organizationId === context.organizationId).map(row => row.value)
+        const attempt = modelCalls.get(input.sourceId)
+        const event = reconcileModelCostRecord({ command: input, session: context, record, events,
+          ...(attempt?.organizationId === context.organizationId ? { attempt: attempt.value } : {}) })
+        if (!events.some(row => row.id === event.id)) modelCostEvents.push({ organizationId: context.organizationId, value: event })
+        return (await this.getTeamOverview(context)).modelCostRecovery!.find(row => row.projectId === input.projectId)!.records
+          .find(row => row.sourceKind === input.sourceKind && row.sourceId === input.sourceId)!
+      })
+    },
+    async persistModelCallSettlement(input, context, isFinal) {
       await budgetLock(() => queueModelCallSettlement(input, context,
         async () => modelCalls.get(input.id)?.organizationId === context.organizationId ? modelCalls.get(input.id)!.value : null,
-        async (value) => { modelCalls.set(value.id, { organizationId: context.organizationId, value }) }))
+        async (value) => { modelCalls.set(value.id, { organizationId: context.organizationId, value }) }, isFinal))
     },
     async listPendingModelCallSettlements(projectId, context) {
       return [...modelCalls.values()].filter((row) => row.organizationId === context.organizationId && row.value.projectId === projectId && row.value.userId === context.userId && row.value.state === 'reserved')
-        .flatMap((row) => row.value.pendingSettlement ? [row.value.pendingSettlement] : [])
+        .flatMap((row) => isFinalModelCallSettlement(row.value.pendingSettlement, row.value.pendingSettlementFinal) ? [row.value.pendingSettlement] : [])
     },
     ...workRequestRepository,
     ...gateCommandRepository,
@@ -1122,9 +1149,11 @@ export function createSeedTeamRepository(): TeamRepository {
 
       const accountingRows = modelBudgetUsageWithRuntime(allTokenUsage, codingCostSummaries)
       const attempts = [...modelCalls.values()].filter((row)=>row.organizationId===context.organizationId && projectIds.has(row.value.projectId)).map((row)=>row.value)
-      const actualUsage = modelCallActualUsage(accountingRows, attempts)
+      const costEvents = modelCostEvents.filter(row => row.organizationId === context.organizationId).map(row => row.value)
+      const actualUsage = modelCallActualUsage(accountingRows, attempts, costEvents)
       return {
-        budgetProjectCost: modelCallBudgetRollup(accountingRows, attempts, new Date().toISOString()),
+        budgetProjectCost: modelCallBudgetRollup(accountingRows, attempts, new Date().toISOString(), costEvents),
+        modelCostRecovery: scopedProjects.map(project => modelCostRecoveryOverview(accountingRows, attempts, costEvents, project.id, new Date().toISOString())),
         projects: scopedProjects,
         members: context.organizationId === DEMO_ORGANIZATION_ID ? members : [],
         runs: scopedRuns,

@@ -6,7 +6,7 @@ const sources: Record<StageAgentFailureSource, string> = {
   opencode_runtime: 'OpenCode 运行时', stage_validation: '阶段校验', executor: '执行器', lifecycle: '资源清理',
 }
 
-export function StageAgentFailureRecords({ traces, runId, nodeId }: { traces: AgentTrace[]; runId?: string; nodeId?: string }) {
+export function StageAgentFailureRecords({ traces, runId, nodeId, onViewCosts }: { traces: AgentTrace[]; runId?: string; nodeId?: string; onViewCosts?: () => void }) {
   const failures = traces.filter((trace) => trace.runId === runId && trace.nodeId === nodeId)
     .flatMap((trace) => {
       const details = sanitizeStageAgentFailureDetails(trace.failureDetails)
@@ -18,6 +18,7 @@ export function StageAgentFailureRecords({ traces, runId, nodeId }: { traces: Ag
     {failures.map(({ trace, details }) => <article key={trace.id}>
       <p className="meta">{formatLocalTime(trace.createdAt)} · {sources[details.source]}</p>
       <p>{describeStageAgentFailure(details)}</p>
+      {onViewCosts && ['budget_denied', 'accounting_unavailable', 'settlement_sync_failed'].includes(details.code) && <button onClick={onViewCosts}>查看项目费用与恢复</button>}
     </article>)}
   </section>
 }

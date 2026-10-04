@@ -3,6 +3,8 @@ import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
 import { withGovernedStageAgent } from './governed-stage-agent.js'
 import { withCleanupFailure } from './opencode-failure.js'
 import { governAgentProvider, type ModelCallGovernance } from './governed-provider.js'
+import { createDesktopModelCostRecovery } from './model-cost-recovery.js'
+import { canonicalFinancialValue, type ModelCallAccountingScope } from '@ai-devflow/shared'
 import { resolveDesignClarificationInput, StageAgentExecutionError } from '@ai-devflow/shared'
 import { StageAgentOperations } from './stage-agent-operations.js'
 import { requireCurrentClarificationRevision } from './gate-approval-revision.js'
@@ -1786,12 +1788,26 @@ async function listAgentProviderConfigs() {
 }
 
 const explicitModelBudgetApprovals = new Map<string, string>()
+async function modelCallAccountingScope(store: LocalStore): Promise<ModelCallAccountingScope> {
+  const pairing = await store.getDesktopPairingCredential()
+  if (!pairing?.localProjectId) throw new Error('请先将本地项目配对到团队项目。')
+  return { organizationId: pairing.organizationId, userId: pairing.userId, teamProjectId: pairing.projectId, localProjectId: pairing.localProjectId }
+}
+async function desktopModelCostRecovery(store: LocalStore) {
+  const scope = await modelCallAccountingScope(store)
+  const remote = await getRemoteSyncClient()
+  if (canonicalFinancialValue(scope) !== canonicalFinancialValue(await modelCallAccountingScope(store))) throw new Error('团队绑定已更新，请重试。')
+  return { scope, remote, recovery: createDesktopModelCostRecovery({ store, scope, remote, getScope: () => modelCallAccountingScope(store) }) }
+}
 async function modelCallGovernance(store:LocalStore):Promise<ModelCallGovernance> {
+  const { scope, remote, recovery } = await desktopModelCostRecovery(store)
+  const sync = createProjectBoundRemoteSync({ remoteSync: remote, credentialSource: store,
+    expectedScope: { localProjectId: scope.localProjectId, organizationId: scope.organizationId, teamProjectId: scope.teamProjectId }, expectedUploaderUserId: scope.userId })
   return {
-    pending:(projectId)=>store.listModelCallSettlements(projectId),
-    persist:(input)=>store.saveModelCallSettlement(input),
+    pending: recovery.pending,
+    persist: (input, metadata) => store.saveModelCallSettlement(input, { final: metadata?.final === true, scope }),
     reserve:async(input)=>{
-      const sync=await getProjectBoundRemoteSync()
+      if (canonicalFinancialValue(scope) !== canonicalFinancialValue(await modelCallAccountingScope(store))) throw new Error('团队绑定已更新，请重新执行。')
       const policyProjectId = await resolvePolicyProjectId(input.projectId)
       if (!await refreshRemotePolicySnapshotForProject(policyProjectId)) throw new Error('尚未调用模型：无法同步当前团队流程策略，请检查 Team 连接后重试。')
       const snapshot=await loadPolicySnapshotForProject(policyProjectId)
@@ -1807,7 +1823,7 @@ async function modelCallGovernance(store:LocalStore):Promise<ModelCallGovernance
       broadcastToRenderers(ipcChannels.modelBudgetUpdated, { projectId: input.projectId, providerId: input.providerId, decision: admission.decision })
       return admission
     },
-    settle:async(input)=>{await (await getProjectBoundRemoteSync()).settleModelCall(input);await store.deleteModelCallSettlement(input.id)},
+    settle: recovery.settle,
   }
 }
 async function resolveAgentProvider(store: LocalStore, providerId: string, projectId?: string, approvalId?:string) {
@@ -3687,6 +3703,17 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.getCodingRuntimeBudgetPolicy, async (_, payload: unknown) => {
     const input = parseGetCodingRuntimeConfigurationInput(payload)
     return (await getProjectBoundRemoteSync()).getRuntimeBudgetPolicy(input.projectId)
+  })
+
+  ipcMain.handle(ipcChannels.getModelCostRecovery, async (_, payload: unknown) => {
+    const input = parseGetCodingRuntimeConfigurationInput(payload)
+    const { recovery } = await desktopModelCostRecovery(await getStore())
+    return recovery.load(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.retryModelCostSettlements, async (_, payload: unknown) => {
+    const input = parseGetCodingRuntimeConfigurationInput(payload)
+    const { recovery } = await desktopModelCostRecovery(await getStore())
+    return recovery.retry(input.projectId)
   })
 
   ipcMain.handle(ipcChannels.saveCodingRuntimeBudgetPolicy, async (_, payload: unknown) => {

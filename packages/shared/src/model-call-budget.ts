@@ -1,6 +1,7 @@
 import { estimateAgentTokenUsage } from './agent-review'
 import { resolveDeepSeekPricingSnapshot, rollupTokenUsage, runtimeCostSummaryToTokenUsage, type TokenUsageRollup } from './cost'
 import type { AgentProviderUsage, BudgetGuardDecision, TokenUsage, CodingRuntimeCostSummary } from './domain'
+import { buildModelCostRecords, type ModelCostEvent, type ModelCostRecord } from './model-cost-recovery'
 
 /** Financial metadata only: never prompts, responses, API keys or conversation text. */
 export type ModelCallQuote = {
@@ -16,8 +17,14 @@ export type ModelCallAttempt = ModelCallQuote & {
   userId: string; state: 'reserved' | ModelCallSettlement['state']; projectedCostUsd: number | null
   costUsd: number | null; usage?: AgentProviderUsage
   pendingSettlement?: ModelCallSettlement
+  pendingSettlementFinal?: boolean
 }
 export type ModelCallAdmission = { accepted: boolean; decision: BudgetGuardDecision }
+
+/** Older failed/no-usage entries can be pre-dispatch markers, not final failures. */
+export function isFinalModelCallSettlement(settlement: ModelCallSettlement | undefined, final?: boolean): settlement is ModelCallSettlement {
+  return Boolean(settlement && (final ?? (settlement.state !== 'failed' || Boolean(settlement.usage))))
+}
 
 export function parseBudgetAttemptIds(value: unknown): string[] {
   if (!Array.isArray(value) || value.length > 512 || value.some((id) => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,160}$/u.test(id)) || new Set(value).size !== value.length) throw new Error('Invalid model call accounting references')
@@ -69,20 +76,9 @@ export function settledModelCallCost(attempt: ModelCallQuote, settlement: ModelC
   return estimateAgentTokenUsage({id:attempt.id,runId:'',nodeId:'',projectId:attempt.projectId,userId:'',provider:'openai',model:attempt.model,prompt:'',completion:'',timestamp:attempt.createdAt,providerUsage:{...u,billingProvider:attempt.billingProvider}}).costUsd
 }
 /** Actual call IDs deduplicate the same consumption projected as stage/review/coding evidence. */
-export function modelCallBudgetRollup(legacy: TokenUsage[], calls: ModelCallAttempt[], now: string): TokenUsageRollup[] {
-  const month=now.slice(0,7)
-  const known=new Map(calls.map((call)=>[call.id,call]))
-  const rows=legacy.filter((row)=>row.timestamp.slice(0,7)===month && !(row.budgetAttemptIds?.length && row.budgetAttemptIds.every((id)=>known.get(id)?.projectId===row.projectId)))
-  const result=new Map(rollupTokenUsage(rows,'projectId').map((row)=>[row.key,row]))
-  for (const call of calls.filter((row)=>row.createdAt.slice(0,7)===month)) {
-    const row=result.get(call.projectId) ?? {key:call.projectId,inputTokens:0,outputTokens:0,cacheReadTokens:0,totalTokens:0,costUsd:0}
-    const cost=call.state==='reserved' ? (Date.parse(now)-Date.parse(call.createdAt)>10*60_000 ? null : call.projectedCostUsd) : call.costUsd
-    row.inputTokens+=call.usage?.inputTokens??0; row.outputTokens+=call.usage?.outputTokens??0; row.cacheReadTokens+=call.usage?.cacheReadTokens??0
-    row.totalTokens+=(call.usage?.inputTokens??0)+(call.usage?.outputTokens??0)
-    if (cost===null) row.unknownCostCount=(row.unknownCostCount??0)+1; else row.costUsd+=cost
-    result.set(row.key,row)
-  }
-  return [...result.values()]
+export function modelCallBudgetRollup(legacy: TokenUsage[], calls: ModelCallAttempt[], now: string, events: ModelCostEvent[] = []): TokenUsageRollup[] {
+  return rollupTokenUsage(buildModelCostRecords(legacy, calls, events, now).filter(row => row.affectsCurrentBudget)
+    .map(record => costRecordUsage(record, legacy)), 'projectId')
 }
 
 /** Preserve old unknown costs and split mixed old/new coding calls before deduplication. */
@@ -113,6 +109,7 @@ export function modelBudgetUsageWithRuntime(
         inputTokens: hasTokens ? part.inputTokens : 0,
         outputTokens: hasTokens ? part.outputTokens : 0,
         cacheReadTokens: hasTokens ? part.cacheReadTokens ?? 0 : 0,
+        usageStatus: hasTokens ? 'complete' : 'unknown',
         ...(part.budgetAttemptIds?.length ? { budgetAttemptIds: part.budgetAttemptIds } : {}),
       }
       rows.set(row.id, row)
@@ -123,14 +120,17 @@ export function modelBudgetUsageWithRuntime(
 export type HistoricalModelCall = {quote:ModelCallQuote;settlement:ModelCallSettlement}
 
 /** Actual spend for team reporting; in-flight reservations belong only to budget admission. */
-export function modelCallActualUsage(legacy: TokenUsage[], calls: ModelCallAttempt[]): TokenUsage[] {
-  const known = new Map(calls.map((call) => [call.id, call]))
-  const rows = legacy.filter((row) => !(row.budgetAttemptIds?.length && row.budgetAttemptIds.every((id) => known.get(id)?.projectId === row.projectId)))
-  return [...rows, ...calls.filter((call) => call.state !== 'reserved').map((call): TokenUsage => ({
-    id: call.id, projectId: call.projectId, userId: call.userId, runId: '', nodeId: '',
-    provider: 'openai', model: call.model,
-    timestamp: call.createdAt, inputTokens: call.usage?.inputTokens ?? 0,
-    outputTokens: call.usage?.outputTokens ?? 0, cacheReadTokens: call.usage?.cacheReadTokens ?? 0,
-    costUsd: call.costUsd, budgetAttemptIds: [call.id],
-  }))]
+export function modelCallActualUsage(legacy: TokenUsage[], calls: ModelCallAttempt[], events: ModelCostEvent[] = []): TokenUsage[] {
+  return buildModelCostRecords(legacy, calls, events, new Date().toISOString()).filter(row => !row.isReservation)
+    .map(record => costRecordUsage(record, legacy))
+}
+
+function costRecordUsage(record: ModelCostRecord, legacy: TokenUsage[]): TokenUsage {
+  const original = record.sourceKind === 'legacy_usage' ? legacy.find(row => row.id === record.sourceId && row.projectId === record.projectId) : undefined
+  return { ...original, id: record.sourceId, projectId: record.projectId, userId: record.originalUserId,
+    runId: original?.runId ?? '', nodeId: original?.nodeId ?? '', provider: original?.provider ?? 'openai', model: record.model,
+    timestamp: record.createdAt, inputTokens: record.usage?.inputTokens ?? 0, outputTokens: record.usage?.outputTokens ?? 0,
+    cacheReadTokens: record.usage?.cacheReadTokens ?? 0, costUsd: record.costUsd,
+    usageStatus: record.usageKnown ? 'complete' : 'unknown',
+    ...(record.sourceKind === 'model_call' ? { budgetAttemptIds: [record.sourceId] } : {}) }
 }

@@ -120,6 +120,8 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.getCodingChangeSetPreview, input),
   getCodingRuntimeBudgetPolicy: (input) =>
     ipcRenderer.invoke(ipcChannels.getCodingRuntimeBudgetPolicy, input),
+  getModelCostRecovery: (input) => ipcRenderer.invoke(ipcChannels.getModelCostRecovery, input),
+  retryModelCostSettlements: (input) => ipcRenderer.invoke(ipcChannels.retryModelCostSettlements, input),
   saveCodingRuntimeBudgetPolicy: (input) =>
     ipcRenderer.invoke(ipcChannels.saveCodingRuntimeBudgetPolicy, input),
   createCodingRuntimeBudgetApproval: (input) =>
