@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createFakeAgentProvider,
+  AgentProviderRequestError,
+  stageAgentFailureDetails,
   createRecommendedEnforcementPreset,
   resolveEffectivePolicy,
   type AgentEvent,
@@ -21,6 +23,23 @@ import {
 } from './knowledge-review-runtime'
 
 describe('KnowledgeReviewRuntime', () => {
+  it('persists safe local-agent failure diagnostics without publishing a review or advancing the Gate', async () => {
+    const store = new MemoryKnowledgeReviewStore()
+    const details = stageAgentFailureDetails('provider_rate_limit', 'provider', { httpStatus: 429, cleanupFailures: ['process_stop'] })
+    const provider: AgentProvider = { ...createFakeAgentProvider(), executorKind: 'local-agent', reviewKnowledge: async () => {
+      throw new AgentProviderRequestError({ code: 'http_429', sanitizedCause: 'local_agent_provider_rate_limit',
+        deliveryState: 'response_received', billingState: 'unknown', retryable: false,
+        failureDetails: details, usage: { inputTokens: 10, outputTokens: 5, budgetAttemptIds: ['prior-call'] } })
+    } }
+    const runtime = createKnowledgeReviewRuntime({ store, knowledgeDocuments, knowledgeChunks,
+      resolveProviderMetadata: async () => provider, resolveProvider: async () => provider })
+    const before = await store.listRuns()
+    await expect(runtime.run(reviewInput(provider.id))).rejects.toThrow('模型服务限流')
+    expect(store.traces[0]?.failureDetails).toEqual(details)
+    expect(store.reviews).toEqual([])
+    expect(await store.listRuns()).toEqual(before)
+    expect(store.tokenUsage[0]).toMatchObject({ inputTokens: 10, outputTokens: 5, budgetAttemptIds: ['prior-call'] })
+  })
   it('shares the Gate execution guard across per-request runtimes for the same store', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const provider = createFakeAgentProvider()

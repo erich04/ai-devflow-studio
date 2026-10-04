@@ -4,6 +4,7 @@ import type { Artifact } from './domain'
 import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider } from './agent-review'
 import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workflow'
 import { indexKnowledgeSources } from './knowledge'
+import { stageAgentFailureDetails } from './stage-agent-failure'
 import {
   runWorkflowStageAgent,
   StageAgentExecutionError,
@@ -23,6 +24,68 @@ const created = createWorkflowRunFromRequest({
 function clarifyNode() {
   return created.run.nodes.find((node) => node.id === 'run-live-stage-agent-clarify')!
 }
+
+it.each(['cancelled', 'timeout'] as const)('waits for bounded local %s cleanup and preserves settled usage', async (reason) => {
+  const controller = new AbortController()
+  let running!: () => void
+  const started = new Promise<void>((resolve) => { running = resolve })
+  const local: StageAgentExecutor = {
+    kind: 'local-agent', id: 'fixture', version: '1', providerId: 'deepseek', model: 'deepseek-flash', billingProvider: 'deepseek', cancellationGraceMs: 100,
+    async execute({ signal }) {
+      running()
+      await new Promise<void>((resolve) => signal!.addEventListener('abort', () => setTimeout(resolve, 10), { once: true }))
+      throw new StageAgentExecutionError('cancelled', 'Stopped', undefined, {
+        inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheMissTokens: 10, cacheStatus: 'complete', budgetAttemptIds: ['call-1'],
+      }, stageAgentFailureDetails('cancelled', 'executor', { cleanupFailures: ['relay_close'] }))
+    },
+  }
+  const pending = runWorkflowStageAgent({ run: created.run, node: clarifyNode(), artifacts: created.artifacts,
+    executor: local, requestedBy: 'u-ling', runtime: 'electron', signal: controller.signal,
+    bounds: { timeoutMs: reason === 'timeout' ? 20 : 1_000, maxInputBytes: 96 * 1024, maxOutputBytes: 64 * 1024, maxToolCalls: 64, maxCitations: 64 },
+  })
+  await started
+  if (reason === 'cancelled') controller.abort()
+  await expect(pending).rejects.toMatchObject({ terminalReason: reason,
+    failureDetails: { code: reason, cleanupFailures: ['relay_close'] },
+    tokenUsage: { inputTokens: 10, outputTokens: 5, budgetAttemptIds: ['call-1'], costStatus: 'estimated' },
+  })
+})
+
+it('keeps the scoped usage snapshot when a local executor ignores cancellation past its grace period', async () => {
+  const executor: StageAgentExecutor = { kind: 'local-agent', id: 'stuck', version: '1', model: 'fixture', cancellationGraceMs: 5,
+    reportedUsageOnAbort: () => ({ inputTokens: 10, outputTokens: 5, missingUsageCount: 1, budgetAttemptIds: ['prior-call'] }),
+    execute: async () => new Promise(() => {}),
+  }
+  await expect(runWorkflowStageAgent({ run: created.run, node: clarifyNode(), artifacts: created.artifacts,
+    executor, requestedBy: 'u-ling', runtime: 'electron',
+    bounds: { timeoutMs: 5, maxInputBytes: 96 * 1024, maxOutputBytes: 64 * 1024, maxToolCalls: 64, maxCitations: 64 },
+  })).rejects.toMatchObject({ terminalReason: 'timeout', tokenUsage: { inputTokens: 10, outputTokens: 5, costUsd: null, budgetAttemptIds: ['prior-call'] } })
+})
+
+it('keeps the first user cancellation when cleanup crosses the original execution deadline', async () => {
+  vi.useFakeTimers()
+  try {
+    const controller = new AbortController()
+    let started!: () => void
+    const ready = new Promise<void>(resolve => { started = resolve })
+    const executor: StageAgentExecutor = { kind: 'local-agent', id: 'cancel-race', version: '1', model: 'fixture', cancellationGraceMs: 100,
+      async execute({ signal }) {
+        started()
+        await new Promise<void>(resolve => signal!.addEventListener('abort', () => setTimeout(resolve, 50), { once: true }))
+        throw new StageAgentExecutionError('cancelled', 'Stopped', undefined, { inputTokens: 10, outputTokens: 2 })
+      },
+    }
+    const pending = runWorkflowStageAgent({ run: created.run, node: clarifyNode(), artifacts: created.artifacts,
+      executor, requestedBy: 'u-ling', runtime: 'electron', signal: controller.signal,
+      bounds: { timeoutMs: 30, maxInputBytes: 96 * 1024, maxOutputBytes: 64 * 1024, maxToolCalls: 64, maxCitations: 64 } })
+    const outcome = pending.catch(error => error)
+    await ready
+    await vi.advanceTimersByTimeAsync(10)
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(60)
+    expect(await outcome).toMatchObject({ terminalReason: 'cancelled', failureDetails: { code: 'cancelled' }, tokenUsage: { inputTokens: 10 } })
+  } finally { vi.useRealTimers() }
+})
 
 function designNode() {
   return created.run.nodes.find((node) => node.id === 'run-live-stage-agent-design')!
@@ -590,4 +653,3 @@ describe('resident project knowledge in stage prompts (ADR 0025)', () => {
     expect(result.provenance.knowledgeContext).toBeUndefined()
   })
 })
-

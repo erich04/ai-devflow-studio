@@ -6,6 +6,8 @@ import {
   completeWorkflowAgentNode,
   createRecommendedEnforcementPreset,
   createLocalStageAgentUsage,
+  stageAgentFailureDetails,
+  describeStageAgentFailure,
   createWorkflowRunFromRequest,
   createDesignRevisionDigest,
   createWarnOnlyDefaultPolicy,
@@ -4845,6 +4847,36 @@ describe('App', () => {
     expect(screen.getByTestId('flow-node-n-clarify')).toHaveTextContent('当前步骤')
     expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('toast')).toHaveTextContent('Citation rejected')
+  })
+
+  it('reloads structured stage diagnostics after plain IPC rejection and keeps them visible after reopening', async () => {
+    const initial = localStateAtCurrentNode('n-clarify')
+    const details = stageAgentFailureDetails('budget_denied', 'budget_relay', { cleanupFailures: ['process_stop'] })
+    const summary = describeStageAgentFailure(details)
+    const trace = { id: 'failed-stage', runId: initial.runs[0]!.id, nodeId: 'n-clarify', reviewId: 'stage-agent-failure-test',
+      runtime: 'electron' as const, terminalReason: 'failed' as const, createdAt: '2026-10-04T10:00:00.000Z', steps: [], failureDetails: details }
+    const loadState = vi.fn().mockResolvedValue(initial)
+    const api = installDesktopApi({ loadState, completeWorkflowAgentNode: vi.fn().mockRejectedValue(
+      new Error(`Error invoking remote method 'complete-stage': Error: Stage Agent failed closed: failed; ${summary}`),
+    ) })
+    const view = render(<App />)
+    fireEvent.click(await screen.findByRole('button', { name: '流程视图' }))
+    await waitFor(() => expect(screen.getByTestId('complete-clarify-agent')).toBeEnabled())
+    loadState.mockResolvedValue({ ...initial, agentTraces: [trace, { ...trace, id: 'other-node', nodeId: 'n-design',
+      failureDetails: stageAgentFailureDetails('provider_auth', 'provider') }] })
+    fireEvent.click(screen.getByTestId('complete-clarify-agent'))
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('本轮请求尚未发送'))
+    expect(screen.getByTestId('toast')).not.toHaveTextContent('Error invoking remote method')
+    clickInspectorTab('执行记录')
+    expect(await screen.findByTestId('stage-agent-failure-records')).toHaveTextContent(summary)
+    expect(screen.getByTestId('stage-agent-failure-records')).not.toHaveTextContent('鉴权失败')
+    expect(screen.getByTestId('flow-node-n-clarify')).toHaveTextContent('当前步骤')
+    view.unmount()
+    render(<App />)
+    await waitForLocalStateLoaded(loadState)
+    clickInspectorTab('执行记录')
+    expect(await screen.findByTestId('stage-agent-failure-records')).toHaveTextContent(summary)
+    expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1)
   })
 
   it('opens each card attachment in its matching tab without counting another node or invoking a Provider', async () => {

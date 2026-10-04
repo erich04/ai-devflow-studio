@@ -21,9 +21,10 @@ import {
 } from './opencode-http-adapter.js'
 import type { ManagedOpencodeServer } from './opencode-process.js'
 import { opencodeProviderBindingEnv, type OpencodeProviderBinding } from './opencode-provider-binding.js'
-import { readStageAgentOpencodeOutput } from './stage-agent-opencode-output.js'
+import { readStageAgentOpencodeOutput, reportedUsage as reportedOpencodeUsage } from './stage-agent-opencode-output.js'
 import { isGitWorkingTreeRoot } from './git-repository-boundary.js'
 import { createIsolatedOpencodeProfile } from './opencode-profile-isolation.js'
+import { classifyOpencodeFailure, withCleanupFailure, withOpencodeCleanup } from './opencode-failure.js'
 
 const execFileAsync = promisify(execFile)
 const citationFileBytesMax = 2 * 1024 * 1024
@@ -89,6 +90,7 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
 }): StageAgentExecutor {
   return {
     kind: 'local-agent',
+    cancellationGraceMs: 10_000,
     id: 'managed-opencode-read-only-stage-agent',
     version: `1/${input.detectedVersion}`,
     providerId: input.providerId,
@@ -96,7 +98,9 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
     model: input.modelId,
     async execute(execution) {
       assertReadOnlyCapability(execution.capability)
-      const root = await realpath(input.projectPath)
+      const root = await realpath(input.projectPath).catch(() => {
+        throw new StageAgentExecutionError('repository_unavailable', 'Selected project path is unavailable')
+      })
       if (!(await isGitWorkingTreeRoot(root))) {
         throw new StageAgentExecutionError('evidence_invalid', 'Select a Git working-tree repository root before repository analysis')
       }
@@ -108,63 +112,63 @@ export function createReadOnlyLocalStageAgentExecutor(input: {
       const started = Date.now()
       let reportedUsage: AgentProviderUsage | null | undefined
       // With a saved Provider binding the user's personal OpenCode profile stays out (ADR 0025).
-      const profile = !input.runner && input.providerBinding
-        ? await createIsolatedOpencodeProfile('devflow-stage-opencode-', {
-            isolateHome: true,
-            ...(input.toolCacheDirectory ? { toolCacheDirectory: input.toolCacheDirectory } : {}),
-          })
-        : undefined
+      let profile: Awaited<ReturnType<typeof createIsolatedOpencodeProfile>> | undefined
       try {
-        const runner = input.runner ?? createManagedOpencodeRunner({
-          // A stage's model/profile must never replace a Coding or another stage's process.
-          projectId: `stage:${input.projectId}:${randomUUID()}`,
-          binaryPath: input.binaryPath,
-          providerId: input.providerId,
-          modelId: input.modelId,
-          processManager: input.processManager,
-          runtimeEnv: {
-            ...buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv, input.providerBinding),
-            ...(profile?.env ?? {}),
-          },
-        })
-        const result = await runner({
-          prompt: execution.prompt,
-          directory: root,
-          signal: timeoutController.signal,
-        })
-        reportedUsage = result.value.usage ?? null
-        if (result.pendingPermissionCount > 0) {
-          throw new StageAgentExecutionError('permission_denied', 'Read-only stage Agent requested additional permission')
-        }
-        if (result.diffCount > 0) {
-          throw new StageAgentExecutionError('repository_changed', 'Read-only stage Agent produced a repository diff')
-        }
-        const after = await repositoryWorkingTreeDigest(root)
-        if (before !== after) {
-          throw new StageAgentExecutionError('repository_changed', 'Repository changed while the read-only stage Agent was running')
-        }
-        const value = await validateAndDigestRepositoryCitations(result.value, root, before)
-        return {
-          value,
-          terminalReason: 'success',
-          toolCalls: result.toolCalls,
-          durationMs: Math.max(0, Date.now() - started),
-        }
+        return await withOpencodeCleanup(async () => {
+          profile = !input.runner && input.providerBinding
+          ? await createIsolatedOpencodeProfile('devflow-stage-opencode-', {
+              isolateHome: true,
+              ...(input.toolCacheDirectory ? { toolCacheDirectory: input.toolCacheDirectory } : {}),
+            })
+          : undefined
+          const runner = input.runner ?? createManagedOpencodeRunner({
+            // A stage's model/profile must never replace a Coding or another stage's process.
+            projectId: `stage:${input.projectId}:${randomUUID()}`,
+            binaryPath: input.binaryPath,
+            providerId: input.providerId,
+            modelId: input.modelId,
+            processManager: input.processManager,
+            runtimeEnv: {
+              ...buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv, input.providerBinding),
+              ...(profile?.env ?? {}),
+            },
+          })
+          if (execution.signal?.aborted) timeoutController.abort()
+          timeoutController.signal.throwIfAborted()
+          const result = await runner({
+            prompt: execution.prompt,
+            directory: root,
+            signal: timeoutController.signal,
+          })
+          reportedUsage = result.value.usage ?? null
+          timeoutController.signal.throwIfAborted()
+          if (result.pendingPermissionCount > 0) {
+            throw new StageAgentExecutionError('permission_denied', 'Read-only stage Agent requested additional permission')
+          }
+          if (result.diffCount > 0) {
+            throw new StageAgentExecutionError('repository_changed', 'Read-only stage Agent produced a repository diff')
+          }
+          const after = await repositoryWorkingTreeDigest(root)
+          if (before !== after) {
+            throw new StageAgentExecutionError('repository_changed', 'Repository changed while the read-only stage Agent was running')
+          }
+          const value = await validateAndDigestRepositoryCitations(result.value, root, before)
+          return {
+            value,
+            terminalReason: 'success' as const,
+            toolCalls: result.toolCalls,
+            durationMs: Math.max(0, Date.now() - started),
+          }
+        }, async () => { await profile?.dispose() }, 'profile_dispose', (result) => result.value.usage)
       } catch (error) {
-        if (error instanceof StageAgentExecutionError) {
-          throw new StageAgentExecutionError(error.terminalReason, error.message, error.tokenUsage, error.reportedUsage !== undefined ? error.reportedUsage : reportedUsage)
-        }
-        if (timeoutController.signal.aborted) {
-          throw new StageAgentExecutionError(
-            execution.signal?.aborted ? 'cancelled' : 'timeout',
-            execution.signal?.aborted ? 'Read-only stage Agent was cancelled' : 'Read-only stage Agent timed out',
-          )
-        }
-        throw new StageAgentExecutionError('cli_unavailable', 'Managed read-only stage Agent could not complete', undefined, reportedUsage)
+        throw classifyOpencodeFailure(error, {
+          ...(error instanceof StageAgentExecutionError && error.reportedUsage !== undefined
+            ? { reportedUsage: error.reportedUsage } : reportedUsage !== undefined ? { reportedUsage } : {}),
+          ...(timeoutController.signal.aborted ? { aborted: execution.signal?.aborted ? 'cancelled' : 'timeout' } : {}),
+        })
       } finally {
         clearTimeout(timeout)
         execution.signal?.removeEventListener('abort', abort)
-        await profile?.dispose().catch(() => undefined)
       }
     },
   }
@@ -190,16 +194,17 @@ export function createManagedOpencodeRunner(input: {
   runtimeEnv: NodeJS.ProcessEnv
   sessionTitle?: string
 }): ReadOnlyStageAgentRunner {
-  return async ({ prompt, directory, signal }) => {
+  return async ({ prompt, directory, signal }) => withOpencodeCleanup(async () => {
     let sessionId: string | undefined
     let server: ManagedOpencodeServer | undefined
     try {
+      signal.throwIfAborted()
       server = await input.processManager.ensure({
         projectId: input.projectId,
         binaryPath: input.binaryPath,
         env: input.runtimeEnv,
         configurationFingerprint: readOnlyStageAgentConfigurationFingerprint(input),
-      })
+      }).catch(() => { throw new StageAgentExecutionError('cli_unavailable', 'OpenCode 运行时未能启动。请检查本机安装和运行时配置。') })
       const session = await createOpencodeSession({
         baseUrl: server.baseUrl,
         directory,
@@ -222,24 +227,30 @@ export function createManagedOpencodeRunner(input: {
         listOpencodeDiff({ baseUrl: server.baseUrl, sessionId, directory, signal }),
         listOpencodeMessages({ baseUrl: server.baseUrl, sessionId, directory, signal }),
       ])
+      // These policy failures must remain primary even if process shutdown also fails.
+      const pendingPermissionCount = permissions.filter((permission) => permission.sessionID === sessionId).length
+      if (pendingPermissionCount) {
+        throw new StageAgentExecutionError('permission_denied', 'Read-only Agent requested additional permission', undefined, reportedOpencodeUsage(messages))
+      }
+      if (diffs.length) {
+        throw new StageAgentExecutionError('repository_changed', 'Read-only Agent produced a repository diff', undefined, reportedOpencodeUsage(messages))
+      }
       return {
         ...readStageAgentOpencodeOutput({ response, messages, providerId: input.providerId, modelId: input.modelId }),
-        pendingPermissionCount: permissions.filter((permission) => permission.sessionID === sessionId).length,
+        pendingPermissionCount,
         diffCount: diffs.length,
       }
     } catch (error) {
       if (signal.aborted && sessionId && server) {
         try {
-          await abortOpencodeSession({ baseUrl: server.baseUrl, sessionId, directory })
+          await abortOpencodeSession({ baseUrl: server.baseUrl, sessionId, directory, signal: AbortSignal.timeout(2_000) })
         } catch {
-          // The original terminal reason remains authoritative.
+          throw withCleanupFailure(error, 'session_abort')
         }
       }
       throw error
-    } finally {
-      await input.processManager.stopProject(input.projectId)
     }
-  }
+  }, () => input.processManager.stopProject(input.projectId), 'process_stop', (result) => result.value.usage)
 }
 
 function readOnlyStageAgentConfigurationFingerprint(input: {

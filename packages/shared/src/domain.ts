@@ -863,6 +863,7 @@ export type AgentTraceStep = {
 }
 
 export type AgentTrace = {
+  failureDetails?: import('./stage-agent-failure').StageAgentFailureDetails
   id: string
   runId: string
   nodeId: string

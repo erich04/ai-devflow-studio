@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { request } from 'node:http'
 import type { ModelCallGovernance, ModelCallSettlement } from '@ai-devflow/shared'
 import { createGovernedOpencodeProxy, summarizeRelayedUsage } from './governed-opencode-proxy'
+import { OpencodeMessageResponseError, sendOpencodeMessage } from './opencode-http-adapter'
+import { classifyOpencodeFailure } from './opencode-failure'
 
 const binding = { providerId: 'fixture', modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'fixture-only-key', fingerprint: 'fixture' }
 const close: Array<() => Promise<void>> = []
@@ -30,6 +32,83 @@ async function setup(accepted = true, responder?: typeof fetch) {
   return { proxy, budget, upstream, send }
 }
 describe('OpenCode governed relay', () => {
+  it.each(['invalid-json', 'invalid-usage', 'oversized'] as const)('records a safe diagnostic for a malformed provider response (%s)', async (kind) => {
+    const body = kind === 'invalid-json' ? 'PRIVATE_PROVIDER_BODY'
+      : kind === 'invalid-usage' ? JSON.stringify({ usage: { prompt_tokens: -1 } }) : 'x'.repeat(2 * 1024 * 1024 + 1)
+    const f = await setup(true, async () => new Response(body))
+    const response = await f.send({ model: binding.modelId })
+    expect(f.proxy.failureForRequest(response.headers.get('x-devflow-relay-request')!, 0)).toMatchObject({
+      code: kind === 'oversized' ? 'output_limit' : 'output_format', source: 'provider',
+    })
+    expect(await response.text()).not.toContain('PRIVATE_PROVIDER_BODY')
+    expect(f.proxy.usageSince('')?.missingUsageCount).toBe(1)
+    expect(f.budget.settle).toHaveBeenCalledWith(expect.objectContaining({ state: 'failed' }))
+  })
+
+  it('matches only the current call and execution, even when retries share a timestamp', async () => {
+    let status = 429
+    const f = await setup(true, async () => new Response('{}', { status }))
+    const checkpoint = f.proxy.checkpoint()
+    const denied = await f.send({ model: binding.modelId })
+    const requestId = denied.headers.get('x-devflow-relay-request')!
+    const adapted = await sendOpencodeMessage({ baseUrl: 'http://fixture', sessionId: 's', directory: 'repo',
+      model: { providerID: binding.providerId, modelID: binding.modelId }, text: 'x',
+      fetcher: async () => new Response(JSON.stringify({ info: { error: { name: 'APIError', data: {
+        statusCode: 400, responseHeaders: { 'x-devflow-relay-request': requestId, authorization: 'PRIVATE_KEY' }, responseBody: 'PRIVATE_BODY',
+      } } }, parts: [] })),
+    }).catch((error: unknown) => error)
+    const classify = () => classifyOpencodeFailure(adapted, { relayFailure: (id) => f.proxy.failureForRequest(id, checkpoint) })
+    expect(classify().failureDetails).toMatchObject({ code: 'provider_rate_limit', httpStatus: 429, relayRequestId: requestId })
+    expect(JSON.stringify(adapted)).not.toMatch(/PRIVATE_KEY|PRIVATE_BODY/)
+    expect(f.proxy.failureForRequest(requestId, f.proxy.checkpoint())).toBeUndefined()
+    const other = await setup(false)
+    expect(other.proxy.failureForRequest(requestId, 0)).toBeUndefined()
+    status = 200
+    await f.send({ model: binding.modelId })
+    expect(classify().failureDetails?.code).toBe('provider_request_failed')
+    expect(classifyOpencodeFailure(new OpencodeMessageResponseError({ code: 'structured_output', relayRequestId: requestId }), {
+      relayFailure: (id) => f.proxy.failureForRequest(id, checkpoint),
+    }).failureDetails?.code).toBe('output_format')
+    // The legacy Coding/Chat view still includes both attempts; the new cursor excludes them.
+    expect(f.proxy.usageSince('')?.budgetAttemptIds).toHaveLength(2)
+    expect(f.proxy.usageAfter(f.proxy.checkpoint())).toBeUndefined()
+  })
+
+  it('does not let a late concurrent failure overwrite a newer successful call', async () => {
+    let rejectFirst!: () => void
+    let calls = 0
+    const f = await setup(true, async () => {
+      if (++calls === 1) await new Promise<void>((resolve) => { rejectFirst = resolve })
+      else return new Response('{}')
+      return new Response('PRIVATE_PROVIDER_BODY', { status: 503 })
+    })
+    const first = f.send({ model: binding.modelId })
+    await vi.waitFor(() => expect(calls).toBe(1))
+    await f.send({ model: binding.modelId })
+    rejectFirst()
+    const response = await first
+    expect(f.proxy.failureForRequest(response.headers.get('x-devflow-relay-request')!, 0)).toBeUndefined()
+    expect(f.proxy.usageSince('')?.budgetAttemptIds).toHaveLength(2)
+  })
+
+  it('keeps settled rounds and marks an active round unknown in the scoped cancellation snapshot', async () => {
+    let calls = 0
+    const f = await setup(true, async (_url, options) => {
+      if (++calls === 1) return new Response(JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 5, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 } }))
+      return new Promise((_resolve, reject) => options!.signal!.addEventListener('abort', () => reject(new Error('cancelled'))))
+    })
+    await f.send({ model: binding.modelId })
+    const running = f.send({ model: binding.modelId }).catch(() => undefined)
+    await vi.waitFor(() => expect(calls).toBe(2))
+    expect(f.proxy.usageAfter(0)).toMatchObject({ inputTokens: 10, outputTokens: 5, missingUsageCount: 1, cacheStatus: 'unknown', budgetAttemptIds: [expect.any(String)] })
+    // Existing Coding/Chat usageSince behavior is unchanged while a call is still running.
+    expect(f.proxy.usageSince('')).toMatchObject({ inputTokens: 10, missingUsageCount: 0 })
+    await f.proxy.close()
+    await running
+    expect(f.proxy.usageAfter(0)?.budgetAttemptIds).toHaveLength(2)
+    await expect(f.proxy.close()).resolves.toBeUndefined()
+  })
+
   it('enforces the chosen model and ephemeral authorization before admission', async () => {
     const f = await setup()
     expect((await f.send({ model: binding.modelId }, 'wrong')).status).toBe(403)

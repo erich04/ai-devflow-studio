@@ -217,6 +217,15 @@ export function createKnowledgeReviewRuntime(
       const detail = error instanceof AgentProviderRequestError ? describeAgentProviderFailure(error) : failureMessage(error)
       const diagnostic = error instanceof AgentProviderRequestError ? JSON.stringify({ requestId, model: providerMetadata.model, code: error.code, cause: error.sanitizedCause, billingState: error.billingState, ...error.responseMetadata }) : ''
       await persistError(input, requestId, `门禁审查在产物保存前失败：${detail} ${diagnostic}`)
+      if (error instanceof AgentProviderRequestError && error.failureDetails) {
+        const createdAt = now()
+        await deps.store.saveAgentTrace({
+          id: `agent-trace-${requestId}-error`, runId: input.runId, nodeId: input.nodeId,
+          reviewId: requestId, runtime: 'electron', createdAt, failureDetails: error.failureDetails,
+          terminalReason: error.code === 'cancelled_by_user' ? 'cancelled' : error.code === 'provider_timeout' ? 'timeout' : 'failed',
+          steps: [{ id: `agent-trace-${requestId}-error-terminal`, kind: 'provider_call', label: 'Gate Review', summary: detail, timestamp: createdAt }],
+        })
+      }
       throw new Error(`基于知识的门禁审查在产物保存前失败：${detail}`)
     }
 

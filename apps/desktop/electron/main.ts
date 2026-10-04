@@ -1,5 +1,7 @@
 import {legacyChatBudget} from './legacy-chat-budget'
 import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
+import { withGovernedStageAgent } from './governed-stage-agent.js'
+import { withCleanupFailure } from './opencode-failure.js'
 import { governAgentProvider, type ModelCallGovernance } from './governed-provider.js'
 import { resolveDesignClarificationInput, StageAgentExecutionError } from '@ai-devflow/shared'
 import { StageAgentOperations } from './stage-agent-operations.js'
@@ -2843,6 +2845,7 @@ function registerIpcHandlers() {
         )
         let provider: Awaited<ReturnType<typeof resolveAgentProvider>> | undefined
         let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
+        let closeStageRelay: (() => Promise<void>) | undefined
         if (executorKind === 'direct-provider') {
           if (!input.providerId) {
             throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
@@ -2878,6 +2881,7 @@ function registerIpcHandlers() {
             })
           if (!binding) throw new Error('请先保存项目所选 OpenCode Provider。')
           const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store)})
+          closeStageRelay = budgetProxy.close
           const stageExecutor = createReadOnlyLocalStageAgentExecutor({
             projectId: project.id,
             projectPath: project.path,
@@ -2895,12 +2899,7 @@ function registerIpcHandlers() {
               apiKeyEnvName: 'OPENCODE_API_KEY',
             }),
           })
-          executor={...stageExecutor,execute:async(execution)=>{
-            const since=new Date().toISOString()
-            try{const result=await stageExecutor.execute(execution);return {...result,value:{...result.value,usage:{...result.value.usage,...budgetProxy.usageSince(since)}}}}
-            catch(error){throw new StageAgentExecutionError(error instanceof StageAgentExecutionError?error.terminalReason:'failed',error instanceof Error?error.message:'模型调查未完成。',undefined,budgetProxy.usageSince(since))}
-            finally{await budgetProxy.close()}
-          }}
+          executor = withGovernedStageAgent(stageExecutor, budgetProxy)
         }
         let generated: Awaited<ReturnType<typeof runWorkflowStageAgent>> | undefined
         // Resident project knowledge (ADR 0025). A failed index never blocks generation.
@@ -2949,12 +2948,16 @@ function registerIpcHandlers() {
           }
           stageAgentOperations.seal(run.id, node.id)
         } catch (error) {
+          // Shared input/context validation can fail before execute() starts. Close that relay too.
+          try { await closeStageRelay?.() } catch { error = withCleanupFailure(error, 'relay_close') }
           try {
             return await recordStageAgentFailure({
               store, run, nodeId: node.id, executorKind, completedAt: new Date().toISOString(),
               sequence: events.length + 1, error: generated?.tokenUsage ? new StageAgentExecutionError(
                 error instanceof StageAgentExecutionError ? error.terminalReason : 'evidence_invalid',
                 error instanceof Error ? error.message : '阶段完成校验失败。', generated.tokenUsage,
+                error instanceof StageAgentExecutionError ? error.reportedUsage : undefined,
+                error instanceof StageAgentExecutionError ? error.failureDetails : undefined,
               ) : error,
             })
           } finally { wakeRemoteSyncOutbox() }
