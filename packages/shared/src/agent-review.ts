@@ -238,8 +238,9 @@ export function describeAgentProviderFailure(error: unknown): string {
     incomplete_response: '模型未正常结束回答，未保存本次报告。',
     insufficient_system_resource: '模型服务资源不足，提前结束了回答；可稍后重试。未保存本次报告。',
     empty_content: '模型未返回正文，未保存本次报告。', missing_content: '模型未返回正文，未保存本次报告。',
-    invalid_json: '模型返回的正文格式不完整，未保存本次报告。',
-    invalid_review_schema: '模型返回的审查报告缺少必要字段，未保存本次报告。',
+    not_json_object: '模型返回的正文不是报告对象，未保存本次报告。',
+    invalid_json: '模型返回的正文格式有误，无法解析，未保存本次报告。',
+    invalid_review_schema: '模型返回的审查报告字段缺失或格式不符合要求，未保存本次报告。',
     provider_timeout: '模型响应超时，未保存本次报告。已有报告保持不变。',
     cancelled_by_user: '已停止本次模型调用，未保存新报告。',
     response_too_large: '响应超过安全接收容量，未保存不完整报告。',
@@ -903,17 +904,30 @@ async function readProviderJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
-function parseProviderJson<T>(raw: string, outputKind: string): Partial<T> {
+function parseProviderJson(raw: string): Record<string, unknown> {
+  if (!raw.trim()) throw new StructuredProviderOutputError('empty_content')
+  let value: unknown
   try {
-    return JSON.parse(raw) as Partial<T>
+    value = JSON.parse(raw) as unknown
   } catch {
+    // Preserve the existing prose/Markdown wrapper support. Do not repair JSON
+    // or choose one report from multiple objects; either could change a finding.
     const start = raw.indexOf('{')
     const end = raw.lastIndexOf('}')
     if (start === -1 || end === -1 || end <= start) {
-      throw new Error(`Agent provider returned invalid JSON ${outputKind} output`)
+      throw new StructuredProviderOutputError('invalid_json')
     }
-    return JSON.parse(raw.slice(start, end + 1)) as Partial<T>
+    try {
+      value = JSON.parse(raw.slice(start, end + 1)) as unknown
+    } catch {
+      // A SyntaxError can include model text; only retain the fixed reason.
+      throw new StructuredProviderOutputError('invalid_json')
+    }
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new StructuredProviderOutputError('not_json_object')
+  }
+  return value as Record<string, unknown>
 }
 
 const policyFindingCategories = new Set<AgentPolicyFinding['category']>([
@@ -2273,8 +2287,7 @@ export function createOpenAiCompatibleAgentProvider({
         }
         let value: Record<string, unknown>
         try {
-          value = input.purpose ? parseProviderJson<Record<string, unknown>>(raw, 'review') : parseStructuredProviderOutput(raw)
-          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid review object')
+          value = input.purpose ? parseProviderJson(raw) : parseStructuredProviderOutput(raw)
         } catch (error) {
           throw providerResponseError('invalid_model_output', true, responseMetadata, error, error instanceof StructuredProviderOutputError ? error.reason : 'invalid_json')
         }
