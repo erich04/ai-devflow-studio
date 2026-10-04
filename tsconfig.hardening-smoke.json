@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["scripts/hardening-settlement-electron.mts"]
+}

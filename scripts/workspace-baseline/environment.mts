@@ -390,7 +390,7 @@ export async function setContentSize(
   const minimumSizeRelaxed = await desktop.app.evaluate(({ BrowserWindow }, size) => {
     const window = BrowserWindow.getAllWindows()[0]
     if (!window) throw new Error('No desktop window')
-    const [minWidth, minHeight] = window.getMinimumSize()
+    const [minWidth, minHeight] = window.getMinimumSize() as [number, number]
     const relax = size.width < minWidth || size.height < minHeight
     if (relax) window.setMinimumSize(Math.min(minWidth, size.width), Math.min(minHeight, size.height))
     window.setContentSize(size.width, size.height)

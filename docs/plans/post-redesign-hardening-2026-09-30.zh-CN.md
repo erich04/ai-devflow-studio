@@ -71,3 +71,7 @@
 未包括：验收证据包正文、编码运行的其余英文摘要（如 `Preparing a managed Coding Agent run.`、`Coding Agent run cancelled by user.`）和编码运行记录的英文无障碍名称；主进程抛出的错误本身仍可能是英文。
 
 验证：完整 `corepack pnpm verify` 通过（345 个测试文件、4625 项）；`test:e2e`（41 项）、`test:electron-smoke`、`test:workbench-conversation-electron-smoke`、`test:native-coding-electron-smoke` 通过。均使用模拟模型。
+
+## H6 调查记录（2026-10-04）
+
+完成真实 Electron 与隔离 Team API 的故障注入：HTTP 503、连接中断、已结算但回执丢失各 3 次，另有正常对照和生命周期采集正对照。9 次均复现 `settlement_sync_failed`，均未复现页面关闭；失败不保存设计，恢复后可明确重试。没有修改产品代码，#202 保持开放。详见 [H6 验证记录](../validation/h6-settlement-electron-20261004.md)。
