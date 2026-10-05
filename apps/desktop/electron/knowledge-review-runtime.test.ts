@@ -22,6 +22,43 @@ import {
 } from './knowledge-review-runtime'
 
 describe('KnowledgeReviewRuntime', () => {
+  it('reviews the current PR package without advancing delivery', async () => {
+    const prRun = structuredClone(fixtureRun)
+    const pr = prRun.nodes.find((candidate) => candidate.kind === 'pr')!
+    prRun.currentNodeId = pr.id
+    pr.status = 'running'
+    pr.artifactIds = ['pr-package']
+    const store = new MemoryKnowledgeReviewStore([{
+      id: 'pr-package', runId: prRun.id, nodeId: pr.id, kind: 'pr',
+      title: 'PR package', summary: 'Ready for delivery review',
+      content: 'Reviewed diff and passed tests, awaiting Web delivery approval.',
+      redacted: true, updatedAt: '2026-10-04T12:00:00.000Z',
+    }])
+    vi.spyOn(store, 'listRuns').mockResolvedValue([prRun])
+    const before = structuredClone(prRun)
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const runtime = createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks,
+      resolveProviderMetadata: async () => provider, resolveProvider: async () => provider,
+    })
+    const input = { ...reviewInput(provider.id), nodeId: pr.id }
+
+    const result = await runtime.run(input)
+    expect(result.review.nodeId).toBe(pr.id)
+    expect(result.review.contextManifest?.stage).toBe('pr')
+    expect(reviewKnowledge.mock.calls[0]![0].prompt).toContain('PR delivery package')
+    expect(prRun).toEqual(before)
+    expect(store.reviews).toHaveLength(1)
+
+    pr.status = 'success'
+    await expect(runtime.run({ ...input, previousReviewId: result.review.id })).rejects.toThrow('当前')
+    pr.status = 'running'
+    prRun.currentNodeId = fixtureRun.currentNodeId
+    await expect(runtime.run(input)).rejects.toThrow('当前')
+    expect(reviewKnowledge).toHaveBeenCalledTimes(1)
+  })
+
   it('shares the Gate execution guard across per-request runtimes for the same store', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const provider = createFakeAgentProvider()

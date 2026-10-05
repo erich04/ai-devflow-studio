@@ -6254,7 +6254,24 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent(agentProvider.id)
   })
 
-  it('runs the required Gate Review from final acceptance enforcement', async () => {
+  it('starts PR knowledge review from the delivery step without preparing or approving delivery', async () => {
+    const state = prDeliveryState()
+    const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(state) })
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    const inspector = await screen.findByTestId('node-inspector')
+    const review = within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    await waitFor(() => expect(review).toBeEnabled())
+    fireEvent.click(review)
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+      runId: state.runs[0]!.id, nodeId: 'n-pr', projectId: state.runs[0]!.projectId,
+      providerId: agentProvider.id, requestedBy: fixturePairingCredential.userId,
+    })))
+    expect(api.prepareGitHubDelivery).not.toHaveBeenCalled()
+    expect(api.approveGate).not.toHaveBeenCalled()
+  })
+
+  it('collects the acceptance bundle before running the required Gate Review', async () => {
     const recommended = createRecommendedEnforcementPreset({
       organizationId: 'org-demo',
       updatedAt: '2026-06-18T00:00:00.000Z',
@@ -6265,6 +6282,7 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
         runs: [acceptanceRun],
+        artifacts: [],
         desktopPairingCredential: fixturePairingCredential,
       })),
       loadEnforcementPolicy: vi.fn().mockResolvedValue({
@@ -6307,8 +6325,16 @@ describe('App', () => {
     }))
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('业务验收')
+    const statusRow = within(inspector).getByTestId('task-status-row')
+    expect(within(statusRow).queryByRole('button', { name: '运行门禁审查' })).not.toBeInTheDocument()
+    fireEvent.click(within(statusRow).getByRole('button', { name: '生成验收证据包' }))
+    await waitFor(() => expect(api.createAcceptanceBundle).toHaveBeenCalledWith({
+      runId: acceptanceRun.id, nodeId: 'n-accept',
+    }))
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    expect(api.approveGate).not.toHaveBeenCalled()
     // The required review runs in place from the acceptance status row (plan W2).
-    const runReview = within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    const runReview = await within(within(inspector).getByTestId('task-status-row')).findByRole('button', { name: '运行门禁审查' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
 

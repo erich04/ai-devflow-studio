@@ -30,6 +30,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { buildKnowledgeReferences, projectKnowledgeReferencesForNode } from './knowledge'
+import { assembleKnowledgeStageContext } from './knowledge-context'
 import { isDeepSeekUsageContext, parseOpenAiCompatibleProviderUsage } from './provider-usage'
 import { redactSecrets, redactSensitiveText } from './redaction'
 import type { PolicySnapshot } from './enforcement'
@@ -340,6 +341,9 @@ export type BuildAgentReviewContextInput = {
   testEvidence: TestEvidence[]
   knowledgeDocuments: KnowledgeDocument[]
   knowledgeChunks: KnowledgeChunk[]
+  /** Explicit for repository-backed reviews; older callers keep bounded chunk inputs. */
+  knowledgeRoot?: string | null
+  knowledgeExecutor?: StageAgentExecutorKind
   requiredContextFields?: WorkflowContextPolicyRequirements
   policySnapshot?: PolicySnapshot | (Pick<PolicySnapshot, 'effectivePolicy' | 'version'> & { source: 'api' }) | null
   /** Repository instruction file (ADR 0025 L0). */
@@ -632,6 +636,10 @@ function selectReviewSubjectArtifacts(
       label: 'approved clarification',
     })
     return [clarification, design]
+  }
+
+  if (node.stage === 'pr' && node.kind === 'pr') {
+    return [requireExactlyOneLinkedArtifact({ run, node, artifacts: runArtifacts, kind: 'pr', label: 'PR delivery package' })]
   }
 
   const linkedIds = new Set(node.artifactIds)
@@ -1026,6 +1034,8 @@ export async function buildAgentReviewContext({
   requiredContextFields,
   policySnapshot,
   projectInstructions,
+  knowledgeRoot,
+  knowledgeExecutor = 'direct-provider',
 }: BuildAgentReviewContextInput): Promise<AgentReviewContext> {
   const runArtifacts = artifacts.filter((artifact) => artifact.runId === run.id)
   const selectedArtifacts = selectReviewSubjectArtifacts(run, node, runArtifacts)
@@ -1137,8 +1147,18 @@ export async function buildAgentReviewContext({
     },
     ...(requiredContextFields ? { requiredByPolicy: requiredContextFields } : {}),
   })
-  const boundedKnowledgeChunks = buildBoundedReviewKnowledgeChunks(knowledgeChunks, rawReferences)
-  const boundedInstructions = projectInstructions?.content
+  const residentKnowledge = knowledgeRoot !== undefined
+    ? assembleKnowledgeStageContext({
+        documents: knowledgeDocuments, stage: node.stage, knowledgeRoot,
+        ...(projectInstructions ? { projectInstructions } : {}),
+        injectInstructions: knowledgeExecutor !== 'local-agent',
+        canReadFiles: knowledgeExecutor === 'local-agent',
+      })
+    : undefined
+  // Repository reviews share the knowledge page's 24 KiB whole-document budget.
+  // Do not append legacy chunks: that would reintroduce catalogued document bodies.
+  const boundedKnowledgeChunks = residentKnowledge ? [] : buildBoundedReviewKnowledgeChunks(knowledgeChunks, rawReferences)
+  const boundedInstructions = knowledgeExecutor !== 'local-agent' && projectInstructions?.content
     ? {
         sourcePath: projectInstructions.sourcePath,
         contentDigest: projectInstructions.contentDigest,
@@ -1186,9 +1206,10 @@ export async function buildAgentReviewContext({
     criteriaCoverage:
       knowledgeDocuments.length === 0
         ? 'unavailable'
-        : boundedKnowledgeChunks.length === 0
+        : (residentKnowledge ? residentKnowledge.manifest.included.length : boundedKnowledgeChunks.length) === 0
           ? 'empty'
           : 'available',
+    ...(residentKnowledge ? { knowledgeContext: residentKnowledge.manifest } : {}),
     fieldProjection,
   }
 
@@ -1235,6 +1256,7 @@ export async function buildAgentReviewContext({
       })),
     knowledgeReferences: references,
     knowledgeChunks: boundedKnowledgeChunks,
+    ...(residentKnowledge ? { knowledgeSection: redactSensitiveText(residentKnowledge.knowledgeSection).value } : {}),
     fieldProjection,
     ...(policy ? { policy } : {}),
     manifest,
@@ -1260,6 +1282,12 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         openQuestions: 'List unresolved design questions and missing evidence.',
         recommendedChanges: 'List concrete changes before human Gate approval.',
       }
+    : context.node.stage === 'pr'
+      ? {
+          requirementCoverage: 'Review the PR delivery package against the request and PR-stage project standards.',
+          deliveryEvidence: 'Check the recorded diff and current test evidence; identify missing or stale evidence without claiming to have inspected the repository.',
+          publicationTiming: 'This review happens before Web delivery approval and publication. An absent remote PR URL is expected at this stage. The review never authorizes publishing or advances the workflow.',
+        }
     : context.node.stage === 'accept'
       ? {
           requirementCoverage: 'Compare the final implementation and recorded delivery with the original acceptance criteria.',
@@ -1327,6 +1355,7 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         knowledgeCoverage: context.manifest.criteriaCoverage,
         knowledgeReferences: context.manifest.knowledgeCriteria,
         knowledgeChunks: context.knowledgeChunks,
+        ...(context.knowledgeSection !== undefined ? { projectKnowledge: context.knowledgeSection } : {}),
         ...(context.projectInstructions ? { projectInstructions: context.projectInstructions } : {}),
         ...(context.policy ? { policy: context.policy } : {}),
       },

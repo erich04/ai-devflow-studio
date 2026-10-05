@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   buildAgentReviewContext,
+  canRunKnowledgeReviewOnNode,
   assessAgentReviewFreshness,
   AgentProviderRequestError,
   describeAgentProviderFailure,
@@ -46,6 +47,7 @@ export type KnowledgeReviewRuntimeDependencies = {
   store: KnowledgeReviewRuntimeStore
   knowledgeDocuments: KnowledgeDocument[]
   knowledgeChunks: KnowledgeChunk[]
+  knowledgeRoot?: string | null
   /** Repository instruction file (ADR 0025 L0). */
   projectInstructions?: ProjectInstructionsSnapshot | null
   resolveProviderMetadata(providerId: string): Promise<KnowledgeReviewProviderMetadata>
@@ -116,10 +118,10 @@ export function createKnowledgeReviewRuntime(
     if (
       run.projectId !== input.projectId ||
       run.currentNodeId !== node.id ||
-      (node.kind !== 'gate' && node.kind !== 'acceptance') ||
+      !canRunKnowledgeReviewOnNode(node) ||
       (node.status !== 'running' && node.status !== 'blocked')
     ) {
-      throw new Error('基于知识的门禁审查只能针对当前 Gate 或 Acceptance 节点运行')
+      throw new Error('基于知识的门禁审查只能针对当前 Gate、PR 交付或 Acceptance 节点运行')
     }
     if (!input.providerId) {
       throw new Error(
@@ -163,6 +165,8 @@ export function createKnowledgeReviewRuntime(
         testEvidence,
         knowledgeDocuments: deps.knowledgeDocuments,
         knowledgeChunks: deps.knowledgeChunks,
+        ...(deps.knowledgeRoot !== undefined ? { knowledgeRoot: deps.knowledgeRoot } : {}),
+        knowledgeExecutor: providerMetadata.executorKind ?? 'direct-provider',
         ...(deps.projectInstructions ? { projectInstructions: deps.projectInstructions } : {}),
         policySnapshot,
         requiredContextFields: deriveWorkflowContextPolicyRequirements(
