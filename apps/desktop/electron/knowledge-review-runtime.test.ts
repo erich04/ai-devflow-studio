@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   createFakeAgentProvider,
+  createOpenAiCompatibleAgentProvider,
   createRecommendedEnforcementPreset,
   resolveEffectivePolicy,
   type AgentEvent,
@@ -132,6 +133,69 @@ describe('KnowledgeReviewRuntime', () => {
     expect(store.tokenUsage).toHaveLength(1)
     expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
     expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+  })
+
+  it.each([false, true])('keeps reports and Gate unchanged after malformed billed output, then allows a budgeted retry (existing report: %s)', async (hasReport) => {
+    const store = new MemoryKnowledgeReviewStore()
+    const valid = JSON.stringify({
+      conclusion: '建议通过', summary: '完整结论', risks: [], missingEvidence: [],
+      suggestedTests: [], confidence: 0.8,
+    })
+    const invalid = '{"summary":"private response text",}'
+    let content = valid
+    const fetcher = vi.fn(async () => Response.json({
+      choices: [{ finish_reason: 'stop', message: { content, reasoning_content: 'private reasoning' } }],
+      usage: { prompt_tokens: 99, completion_tokens: 123 },
+    }))
+    const provider = createOpenAiCompatibleAgentProvider({
+      model: 'gpt-4.1-mini', apiKey: 'fixture-key', baseUrl: 'http://127.0.0.1:9/v1', fetcher,
+    })
+    const budgetGuard = vi.fn(async () => ({
+      status: 'allowed' as const, blocksRun: false, currentSpendUsd: 0,
+      projectedCostUsd: 0.01, limitUsd: 1, reason: 'Within fixture budget.',
+    }))
+    let sequence = 0
+    const runtime = createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks, budgetGuard,
+      resolveProviderMetadata: async () => provider,
+      resolveProvider: async () => provider,
+      createRequestId: () => `json-review-${++sequence}`,
+    })
+    const first = hasReport ? await runtime.run(reviewInput(provider.id)) : undefined
+    const request = {
+      ...reviewInput(provider.id), ...(first ? { previousReviewId: first.review.id } : {}),
+    }
+    const before = structuredClone({
+      runs: await store.listRuns(), reviews: store.reviews,
+      artifacts: store.savedArtifacts, traces: store.traces,
+    })
+    content = invalid
+
+    await expect(runtime.run(request)).rejects.toThrow('模型返回的正文格式有误，无法解析，未保存本次报告。')
+    expect({
+      runs: await store.listRuns(), reviews: store.reviews,
+      artifacts: store.savedArtifacts, traces: store.traces,
+    }).toEqual(before)
+    const diagnostic = store.events.find((event) => event.kind === 'error')!.message
+    expect(diagnostic).toContain('"cause":"invalid_json"')
+    expect(diagnostic).toContain('"finishReason":"stop"')
+    expect(diagnostic).toContain(`"contentLength":${invalid.length}`)
+    expect(diagnostic).toContain('"billingState":"confirmed"')
+    expect(diagnostic).not.toMatch(/private response text|private reasoning|fixture-key/)
+    const priorCalls = hasReport ? 1 : 0
+    expect(fetcher).toHaveBeenCalledTimes(priorCalls + 1)
+    expect(store.tokenUsage).toHaveLength(priorCalls + 1)
+    expect(store.tokenUsage.at(-1)).toMatchObject({ inputTokens: 99, outputTokens: 123, usageStatus: 'complete' })
+
+    content = valid
+    await expect(runtime.run(request)).resolves.toMatchObject({ review: { summary: '完整结论' } })
+    expect(fetcher).toHaveBeenCalledTimes(priorCalls + 2)
+    expect(budgetGuard).toHaveBeenCalledTimes(priorCalls + 2)
+    expect(store.tokenUsage).toHaveLength(priorCalls + 2)
+    expect(new Set(store.tokenUsage.map((usage) => usage.id)).size).toBe(priorCalls + 2)
+    expect(store.reviews).toHaveLength(priorCalls + 1)
+    expect(store.savedArtifacts).toHaveLength(priorCalls + 1)
+    expect(await store.listRuns()).toEqual(before.runs)
   })
 
   it('releases the current-Gate execution guard after provider failure so a retry can succeed', async () => {
