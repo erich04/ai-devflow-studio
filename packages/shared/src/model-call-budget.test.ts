@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CodingRuntimeCostSummary, RuntimeProviderCallSettlement } from './domain'
 import { modelBudgetUsageWithRuntime, modelCallBudgetRollup, type ModelCallAttempt } from './model-call-budget'
+import { buildModelCostRecords, type ModelCostEvent } from './model-cost-recovery'
 
 const now = '2026-09-23T18:00:00.000Z'
 const summary: CodingRuntimeCostSummary = {
@@ -34,8 +35,16 @@ describe('coding usage alongside per-call budget accounting', () => {
       billingProvider: 'deepseek', projectedCostUsd: 2, costUsd: 1, state: 'completed',
       usage: { inputTokens: 100, outputTokens: 20, cacheReadTokens: 0 },
     }
-    const rows = modelBudgetUsageWithRuntime([{ ...summary, cacheReadTokens: 0, costUsd: 2 }], [mixed])
+    const rows = modelBudgetUsageWithRuntime([{ ...summary, cacheReadTokens: 0, costUsd: 2, usageStatus: 'complete' }], [mixed])
     expect(rows).toHaveLength(2)
     expect(modelCallBudgetRollup(rows, [attempt], now)[0]).toMatchObject({ costUsd: 2, totalTokens: 240 })
+  })
+  it('keeps missing historical runtime Tokens unknown after amount-only reconciliation', () => {
+    const rows = modelBudgetUsageWithRuntime([], [{ ...summary, usageStatus: 'legacy_unknown' }])
+    const before = buildModelCostRecords(rows, [], [], now)[0]!
+    expect(before).toMatchObject({ status: 'missing_usage', usageKnown: false })
+    const event: ModelCostEvent = { kind: 'reconciliation', id: 'correction', idempotencyKey: 'once', projectId: 'p', sourceKind: 'legacy_usage', sourceId: before.sourceId,
+      originalUserId: 'u', actorId: 'lead', createdAt: now, expectedVersion: before.version, costUsd: 0.5, reason: '已核对账单', evidence: '账单 INV-123', evidenceKind: 'provider_bill', executionStatus: 'ended' }
+    expect(buildModelCostRecords(rows, [], [event], now)[0]).toMatchObject({ costUsd: 0.5, usageKnown: false })
   })
 })

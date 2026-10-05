@@ -1,4 +1,5 @@
 import { ProviderRemovalDialog } from './ProviderRemovalDialog'
+import { ModelCostRecovery } from './ModelCostRecovery'
 import { ProviderThinkingFields, SavedProviderThinkingSettings } from '../components/ProviderThinkingSettings'
 import { ArrowLeft, Code2, Save, Settings2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -290,6 +291,7 @@ export function ModelSettings({
             <p data-testid="runtime-budget-web-location">修改月上限与预警阈值：在 Web 控制端打开「设置 › 预算」，选择当前连接的团队项目。保存后回到这里点「同步云端预算策略」读取。</p>
             <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>同步云端预算策略</button>
             {modelBudget && <p role="status">最近一次模型预算检查：{modelBudget.decision.reason}</p>}
+            <ModelCostRecovery desktopApi={desktopApi} projectId={localProjectId} />
             {codingConfigurationStatus ? <p role="status">{codingConfigurationStatus}</p> : null}
             {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
             {projectRuntimeBudget.status === 'unavailable' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>重试读取预算</button> : null}

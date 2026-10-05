@@ -1,3 +1,5 @@
+import { safeRelayRequestId } from '@ai-devflow/shared'
+
 export type Fetcher = typeof fetch
 
 export type OpencodePermissionRule = {
@@ -113,6 +115,7 @@ class BoundedResponseBodyError extends Error {
 }
 
 export class OpencodeMessageResponseError extends Error {
+  readonly relayRequestId: string | undefined
   readonly code: OpencodeMessageResponseErrorCode
   readonly statusCode: number | undefined
   readonly retryable: boolean | undefined
@@ -121,6 +124,7 @@ export class OpencodeMessageResponseError extends Error {
     code: OpencodeMessageResponseErrorCode
     statusCode?: number
     retryable?: boolean
+    relayRequestId?: string
   }) {
     super(
       input.code === 'invalid_message_response'
@@ -131,6 +135,7 @@ export class OpencodeMessageResponseError extends Error {
     this.code = input.code
     this.statusCode = input.statusCode
     this.retryable = input.retryable
+    this.relayRequestId = safeRelayRequestId(input.relayRequestId)
   }
 }
 
@@ -386,8 +391,11 @@ function opencodeMessageTerminalError(response: unknown): OpencodeMessageRespons
   }
   const code = OPENCODE_MESSAGE_ERROR_CODES[error.name] ?? 'unknown_provider_error'
   const data = isRecord(error.data) ? error.data : undefined
+  const headers = isRecord(data?.responseHeaders) ? data.responseHeaders : undefined
+  const relayRequestId = code === 'provider_api_error' ? safeRelayRequestId(headers?.['x-devflow-relay-request']) : undefined
   return new OpencodeMessageResponseError({
     code,
+    ...(relayRequestId ? { relayRequestId } : {}),
     ...(typeof data?.statusCode === 'number' && Number.isInteger(data.statusCode)
       ? { statusCode: data.statusCode }
       : {}),

@@ -1,4 +1,5 @@
 import { createLocalStageAgentUsage } from './stage-agent-usage'
+import { failureDetailsForTerminalReason, sanitizeStageAgentFailureDetails, stageAgentFailureDetails, type StageAgentFailureDetails } from './stage-agent-failure'
 import { describeProviderThinking } from './provider-thinking'
 import {
   AgentProviderRequestError,
@@ -72,6 +73,10 @@ export type StageAgentExecutorOutput = {
 }
 
 export type StageAgentExecutor = {
+  /** Managed local executors may drain cancelled calls/cleanup before the bounded abort fallback. */
+  cancellationGraceMs?: number
+  /** A scoped snapshot if cleanup exceeds the cancellation grace; never starts a model call. */
+  reportedUsageOnAbort?(): AgentProviderUsage | undefined
   effectiveThinking?: import('./provider-thinking').EffectiveProviderThinking
   kind: StageAgentExecutorKind
   id: string
@@ -84,14 +89,18 @@ export type StageAgentExecutor = {
 
 export class StageAgentExecutionError extends Error {
   override readonly name = 'StageAgentExecutionError'
+  readonly failureDetails?: StageAgentFailureDetails
 
   constructor(
     readonly terminalReason: Exclude<StageAgentTerminalReason, 'success'>,
     message: string,
     readonly tokenUsage?: AgentTokenUsage,
     readonly reportedUsage?: AgentProviderUsage | null,
+    failureDetails?: StageAgentFailureDetails,
   ) {
     super(redactSensitiveText(message).value.slice(0, 512))
+    const details = sanitizeStageAgentFailureDetails(failureDetails) ?? failureDetailsForTerminalReason(terminalReason)
+    if (details) this.failureDetails = details
   }
 }
 
@@ -640,14 +649,23 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   const cancelExecution = () => executionController.abort()
   input.signal?.addEventListener('abort', cancelExecution, { once: true })
   const timeout = setTimeout(() => {
+    if (executionController.signal.aborted) return
     timedOut = true
     executionController.abort()
   }, bounds.timeoutMs)
+  let abortFallback: ReturnType<typeof setTimeout> | undefined
+  const abortFailure = (usage?: AgentProviderUsage | null, details?: StageAgentFailureDetails) => {
+    const reason = timedOut ? 'timeout' : 'cancelled'
+    return new StageAgentExecutionError(reason,
+      timedOut ? 'Workflow stage Agent timed out' : 'Workflow stage Agent was cancelled', undefined, usage ?? executor.reportedUsageOnAbort?.(),
+      stageAgentFailureDetails(reason, 'executor', details?.cleanupFailures ? { cleanupFailures: details.cleanupFailures } : {}))
+  }
   const aborted = new Promise<never>((_resolve, reject) => {
-    executionController.signal.addEventListener('abort', () => reject(new StageAgentExecutionError(
-      timedOut ? 'timeout' : 'cancelled',
-      timedOut ? 'Workflow stage Agent timed out' : 'Workflow stage Agent was cancelled',
-    )), { once: true })
+    executionController.signal.addEventListener('abort', () => {
+      const grace = Math.min(10_000, Math.max(0, executor.cancellationGraceMs ?? 0))
+      if (grace) abortFallback = setTimeout(() => reject(abortFailure()), grace)
+      else reject(abortFailure())
+    }, { once: true })
   })
   const localUsage = (usage: AgentProviderUsage | null, id: string, timestamp: string) => createLocalStageAgentUsage({
     id, runId: input.run.id, nodeId: input.node.id, userId: input.requestedBy, projectId: input.run.projectId,
@@ -667,14 +685,19 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
       }),
       aborted,
     ])
+    if (executionController.signal.aborted) throw abortFailure(execution.value.usage)
   } catch (error) {
+    if (error instanceof StageAgentExecutionError && executionController.signal.aborted && error.terminalReason === 'cancelled') {
+      error = abortFailure(error.reportedUsage, error.failureDetails)
+    }
     if (executor.kind === 'local-agent' && error instanceof StageAgentExecutionError && error.reportedUsage !== undefined) {
       throw new StageAgentExecutionError(error.terminalReason, error.message,
-        localUsage(error.reportedUsage, `agent-token-usage-${request.id}-failed`, now()))
+        localUsage(error.reportedUsage, `agent-token-usage-${request.id}-failed`, now()), error.reportedUsage, error.failureDetails)
     }
     throw error
   } finally {
     clearTimeout(timeout)
+    clearTimeout(abortFallback)
     input.signal?.removeEventListener('abort', cancelExecution)
   }
   let output: WorkflowArtifactProviderOutput
@@ -691,7 +714,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     const usage = reportedFailureUsage(execution.value?.usage)
     if (error instanceof StageAgentExecutionError && executor.kind === 'local-agent') {
       throw new StageAgentExecutionError(error.terminalReason, error.message,
-        localUsage(usage ?? null, `agent-token-usage-${request.id}-failed`, generatedAt))
+        localUsage(usage ?? null, `agent-token-usage-${request.id}-failed`, generatedAt), usage, error.failureDetails)
     }
     if (error instanceof StageAgentExecutionError && executor.kind === 'direct-provider' && usage) {
       throw new StageAgentExecutionError(error.terminalReason, error.message, { ...estimateAgentTokenUsage({
@@ -700,7 +723,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
         projectId: input.run.projectId, provider: tokenProvider(executor),
         model: redactSensitiveText(executor.model).value.slice(0, 256),
         prompt: '', completion: '', timestamp: generatedAt, providerUsage: usage,
-      }), executorKind: executor.kind, providerId: executor.providerId ?? executor.id })
+      }), executorKind: executor.kind, providerId: executor.providerId ?? executor.id }, usage, error.failureDetails)
     }
     throw error
   }

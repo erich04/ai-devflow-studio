@@ -50,6 +50,8 @@ export * from './workflow-context-projection'
 export * from './work-authority'
 
 export * from './stage-agent-usage'
+export * from './stage-agent-failure'
+export * from './model-cost-recovery'
 
 export { resolveDesignClarificationInput } from './design-input'
 export * from './design-revision'

@@ -1,4 +1,6 @@
 import { parseModelCallQuote, parseModelCallSettlement, governAgentProvider } from '@ai-devflow/shared'
+import { parseModelCostReconciliation } from '@ai-devflow/shared'
+import { ModelCostVersionConflict } from '../repositories/model-cost-recovery'
 import { EnforcementPolicyConflictError } from '../repositories/enforcement-policy-write'
 import { DesktopPairingExchangeError } from '@ai-devflow/shared'
 import type { EnforcementPolicyRevision } from '@ai-devflow/shared'
@@ -552,6 +554,8 @@ function filterOverviewForSession(
     members: overview.members,
     runs,
     projectCost,
+    ...(overview.budgetProjectCost ? { budgetProjectCost: overview.budgetProjectCost.filter(row => projectIds.has(row.key)) } : {}),
+    ...(overview.modelCostRecovery ? { modelCostRecovery: overview.modelCostRecovery.filter(row => projectIds.has(row.projectId)) } : {}),
     memberCost: projects.length === overview.projects.length ? overview.memberCost : [],
     totalCost: formatCostRollup(projectCost),
     testEvidenceSummaries: overview.testEvidenceSummaries.filter((evidence) =>
@@ -1214,6 +1218,39 @@ export async function resolveTeamRoute(
     }
   }
 
+  if (pathname === '/api/runtime/model-costs' && method === 'GET') {
+    if (!options.session) return unauthorized()
+    const projectId = options.searchParams?.get('projectId') ?? ''
+    if (!canAccessProject(options.session, projectId)) return forbidden('Project access required')
+    const overview = await repository.getTeamOverview(options.session)
+    const recovery = overview.modelCostRecovery?.find(row => row.projectId === projectId)
+    return recovery ? { status: 200, body: recovery } : forbidden('Project scope mismatch')
+  }
+
+  if (method === 'POST' && pathname === '/api/runtime/model-costs/reconcile') {
+    if (!options.session) return unauthorized()
+    try {
+      const input = parseModelCostReconciliation(options.body)
+      if (!canSyncProject(options.session, input.projectId, 'lead')) return forbidden('Project role lead required')
+      return { status: 200, body: await repository.reconcileModelCost(input, options.session) }
+    } catch (error) {
+      if (error instanceof ModelCostVersionConflict) return conflict(error.message)
+      return badRequest(error instanceof Error ? error.message : '费用核对失败。')
+    }
+  }
+
+  if (method === 'POST' && pathname === '/api/runtime/model-costs/retry') {
+    if (!options.session) return unauthorized()
+    const body = options.body as { projectId?: unknown } | null
+    if (!body || typeof body.projectId !== 'string' || Object.keys(body).some(key => key !== 'projectId')) return badRequest('Invalid recovery scope')
+    if (!canSyncProject(options.session, body.projectId, 'member')) return forbidden('Project role member required')
+    const receipts = []
+    for (const settlement of await repository.listPendingModelCallSettlements(body.projectId, options.session)) {
+      receipts.push(await repository.settleModelCall(settlement, options.session))
+    }
+    return { status: 200, body: { receipts } }
+  }
+
   if(method==='POST' && pathname==='/api/runtime/model-calls/history') {
     if(!options.session)return unauthorized()
     try {
@@ -1221,8 +1258,8 @@ export async function resolveTeamRoute(
       const quote=parseModelCallQuote(body.quote), settlement=parseModelCallSettlement(body.settlement)
       if(!canSyncProject(options.session,quote.projectId,'member'))return forbidden('Project role member required')
       if(!quote.id.startsWith('legacy-chat-') || quote.id!==settlement.id || quote.projectId!==settlement.projectId || quote.approvalId || Date.parse(quote.createdAt)>Date.now())return badRequest('Invalid historical usage')
-      await repository.importHistoricalModelCall({quote,settlement},options.session)
-      return {status:200,body:{accepted:true}}
+      const receipt = await repository.importHistoricalModelCall({quote,settlement},options.session)
+      return {status:200,body:{accepted:true,...receipt}}
     }catch(error){return badRequest(error instanceof Error?error.message:'Invalid historical usage')}
   }
 
@@ -1233,8 +1270,8 @@ export async function resolveTeamRoute(
       const input=reserve ? parseModelCallQuote(options.body) : parseModelCallSettlement(options.body)
       if (!canSyncProject(options.session,input.projectId,'member')) return forbidden('Project role member required')
       if (reserve) return {status:200,body:await repository.reserveModelCall({...parseModelCallQuote(input),createdAt:new Date().toISOString()},options.session)}
-      await repository.settleModelCall(parseModelCallSettlement(input),options.session)
-      return {status:200,body:{accepted:true}}
+      const receipt = await repository.settleModelCall(parseModelCallSettlement(input),options.session)
+      return {status:200,body:{accepted:true,...receipt}}
     } catch(error) { return badRequest(error instanceof Error ? error.message : 'Model call budget unavailable') }
   }
 
@@ -1506,9 +1543,9 @@ export async function resolveTeamRoute(
                 ...(credential.metadata.thinking ? { thinking: credential.metadata.thinking } : {}),
               }),input.projectId,{
                 pending: (projectId) => repository.listPendingModelCallSettlements(projectId, options.session!),
-                persist: (settlement) => repository.persistModelCallSettlement(settlement, options.session!),
+                persist: (settlement, metadata) => repository.persistModelCallSettlement(settlement, options.session!, metadata?.final),
                 reserve: (quote) => repository.reserveModelCall(quote, options.session!),
-                settle: (settlement) => repository.settleModelCall(settlement, options.session!),
+                settle: async (settlement) => { await repository.settleModelCall(settlement, options.session!) },
               },input.runtimeBudgetApprovalId).reviewKnowledge(providerInput)
             },
           }

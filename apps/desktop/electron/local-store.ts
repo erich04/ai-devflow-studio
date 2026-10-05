@@ -1,4 +1,5 @@
-import type { ModelCallSettlement } from '@ai-devflow/shared'
+import type { ModelCallSettlement, ModelCallAccountingScope, ModelCallSettlementReceipt, StoredModelCallSettlement } from '@ai-devflow/shared'
+import { storedModelCallSettlement } from './model-cost-recovery'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
@@ -1056,8 +1057,10 @@ export type LocalStore = {
   saveAgentTrace(trace: AgentTrace): Promise<void>
   listAgentTraces(runId?: string): Promise<AgentTrace[]>
   deleteModelCallSettlement(id:string):Promise<void>
-  saveModelCallSettlement(value: ModelCallSettlement): Promise<void>
+  saveModelCallSettlement(value: ModelCallSettlement, metadata?: { final: boolean; scope: ModelCallAccountingScope }): Promise<void>
   listModelCallSettlements(projectId: string): Promise<ModelCallSettlement[]>
+  listModelCallSettlementRecords(projectId: string): Promise<StoredModelCallSettlement[]>
+  recordModelCallSettlementReceipt(id: string, receipt: ModelCallSettlementReceipt): Promise<void>
   saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void>
   listAgentTokenUsage(runId?: string): Promise<AgentTokenUsage[]>
   saveCodingAgentRun(run: CodingAgentRun): Promise<void>
@@ -12814,12 +12817,25 @@ class SqlJsLocalStore implements LocalStore {
     )
   }
 
-  async deleteModelCallSettlement(id:string):Promise<void> { this.db.run('delete from model_call_settlements where id = ?', [id]) }
-  async saveModelCallSettlement(value: ModelCallSettlement): Promise<void> {
-    this.db.run('insert into model_call_settlements (id,project_id,json) values (?,?,?) on conflict(id) do update set json=excluded.json', [value.id,value.projectId,JSON.stringify(value)])
+  async deleteModelCallSettlement(id:string):Promise<void> {
+    this.db.run('delete from model_call_settlements where id = ?', [id])
+    await this.persist()
+  }
+  async saveModelCallSettlement(value: ModelCallSettlement, metadata?: { final: boolean; scope: ModelCallAccountingScope }): Promise<void> {
+    this.db.run('insert into model_call_settlements (id,project_id,json) values (?,?,?) on conflict(id) do update set json=excluded.json', [value.id,value.projectId,JSON.stringify(metadata ? { settlement: value, ...metadata } : value)])
+    await this.persist()
   }
   async listModelCallSettlements(projectId: string): Promise<ModelCallSettlement[]> {
-    return selectJson<ModelCallSettlement>(this.db, 'select json from model_call_settlements where project_id = ?', [projectId])
+    return (await this.listModelCallSettlementRecords(projectId)).filter(row => row.final && !row.receipt).map(row => row.settlement)
+  }
+  async listModelCallSettlementRecords(projectId: string): Promise<StoredModelCallSettlement[]> {
+    return selectJson<StoredModelCallSettlement | ModelCallSettlement>(this.db, 'select json from model_call_settlements where project_id = ?', [projectId]).map(storedModelCallSettlement)
+  }
+  async recordModelCallSettlementReceipt(id: string, receipt: ModelCallSettlementReceipt): Promise<void> {
+    const value = selectJson<StoredModelCallSettlement | ModelCallSettlement>(this.db, 'select json from model_call_settlements where id = ?', [id])[0]
+    if (!value) throw new Error('Missing model call settlement')
+    this.db.run('update model_call_settlements set json = ? where id = ?', [JSON.stringify({ ...storedModelCallSettlement(value), receipt }), id])
+    await this.persist()
   }
   async saveAgentTokenUsage(usage: AgentTokenUsage): Promise<void> {
     this.db.run('begin transaction')
@@ -14165,6 +14181,8 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   deleteModelCallSettlement: 'durable',
   saveModelCallSettlement: 'durable',
   listModelCallSettlements: 'direct',
+  listModelCallSettlementRecords: 'direct',
+  recordModelCallSettlementReceipt: 'durable',
   saveAgentTokenUsage: 'durable',
   listAgentTokenUsage: 'direct',
   saveCodingAgentRun: 'durable',

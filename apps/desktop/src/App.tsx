@@ -5,6 +5,7 @@ import { SettingsView } from './views/SettingsView'
 import { ModelSettings } from './views/ModelSettings'
 import { LocalProjectSettings } from './views/LocalProjectSettings'
 import { AgentEvidenceGroups, CodingRunRecords } from './views/CodingRunRecords'
+import { StageAgentFailureRecords } from './views/StageAgentFailureRecords'
 import { AgentRuntimePanel } from './AgentRuntimePanel'
 import { AgentCoordinationPanel } from './AgentCoordinationPanel'
 import { AgentMemoryPanel } from './AgentMemoryPanel'
@@ -1689,7 +1690,10 @@ export function App() {
                       {...(codingActionProjection ? { codingActionProjection } : {})}
                     />
                   ) : undefined}
-                  executionEvidence={<AgentEvidenceGroups groups={executionEvidenceGroups} />}
+                  executionEvidence={<>
+                    <StageAgentFailureRecords traces={agentTraces} runId={selectedRun.id} {...(selectedNode ? { nodeId: selectedNode.id } : {})} onViewCosts={() => openSettingsFromTask('models')} />
+                    <AgentEvidenceGroups groups={executionEvidenceGroups} />
+                  </>}
                 />
               </>
             ) : (

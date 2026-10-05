@@ -15,6 +15,8 @@ import {
 import { isGitWorkingTreeRoot } from './git-repository-boundary.js'
 import { createIsolatedOpencodeProfile } from './opencode-profile-isolation.js'
 import type { OpencodeProviderBinding } from './opencode-provider-binding.js'
+import type { GovernedOpencodeProxy } from './governed-opencode-proxy.js'
+import { classifyOpencodeFailure, withOpencodeCleanup } from './opencode-failure.js'
 import {
   buildReadOnlyStageAgentRuntimeEnv,
   createManagedOpencodeRunner,
@@ -38,7 +40,7 @@ export type LocalAgentReviewBudgetRelay = {
   binding: OpencodeProviderBinding
   usageSince(since: string): AgentProviderUsage | undefined
   close(): Promise<void>
-}
+} & Pick<GovernedOpencodeProxy, 'checkpoint' | 'usageAfter' | 'failureForRequest'>
 
 type Metadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking'>
 
@@ -75,12 +77,11 @@ export function createReadOnlyLocalKnowledgeReviewProvider(input: {
   now?: () => string
 }): AgentProvider {
   const bounds = input.bounds ?? LOCAL_AGENT_KNOWLEDGE_REVIEW_BOUNDS
-  const now = input.now ?? (() => new Date().toISOString())
   return {
     ...input.metadata,
     executorKind: 'local-agent',
     async reviewKnowledge({ prompt, signal }) {
-      const since = now()
+      let checkpoint = 0
       let relay: LocalAgentReviewBudgetRelay | undefined
       let profile: Awaited<ReturnType<typeof createIsolatedOpencodeProfile>> | undefined
       let reportedUsage: AgentProviderUsage | undefined
@@ -91,95 +92,110 @@ export function createReadOnlyLocalKnowledgeReviewProvider(input: {
       signal?.addEventListener('abort', abort, { once: true })
       // Relayed rounds carry the budget attempt IDs; the session's own report fills the gaps.
       const usage = (): AgentProviderUsage | undefined => {
-        const relayed = relay?.usageSince(since)
+        const relayed = relay?.usageAfter(checkpoint)
         return relayed || reportedUsage ? { ...(reportedUsage ?? {}), ...(relayed ?? {}) } : undefined
       }
       const toProviderError = (error: unknown): AgentProviderRequestError => {
-        if (error instanceof AgentProviderRequestError) return error
-        const known = usage()
-        const reason = controller.signal.aborted
-          ? signal?.aborted ? 'cancelled' : 'timeout'
-          : error instanceof StageAgentExecutionError ? error.terminalReason : 'cli_unavailable'
-        const mapped = causeByTerminalReason[reason] ?? { code: 'unknown_provider_failure' as const, sanitizedCause: 'local_agent_unavailable', retryable: true }
+        const stageError = classifyOpencodeFailure(error, {
+          ...(controller.signal.aborted ? { aborted: signal?.aborted ? 'cancelled' : 'timeout' } : {}),
+          relayFailure: (requestId) => relay?.failureForRequest(requestId, checkpoint),
+        })
+        const details = stageError.failureDetails!
+        const known = usage() ?? stageError.reportedUsage ?? undefined
+        const reason = stageError.terminalReason
+        const mapped = causeByTerminalReason[reason] ?? {
+          code: details.code === 'provider_auth' ? 'http_4xx' as const
+            : details.code === 'provider_rate_limit' ? 'http_429' as const
+              : details.code === 'provider_unavailable' ? 'http_5xx' as const
+                : details.code === 'output_format' ? 'invalid_model_output' as const : 'unknown_provider_failure' as const,
+          sanitizedCause: details.code === 'runtime_unavailable' ? 'local_agent_unavailable' : `local_agent_${details.code}`,
+          retryable: false,
+        }
+        const notSent = !sessionStarted || ['budget_denied', 'accounting_unavailable', 'runtime_unavailable'].includes(details.code)
         return new AgentProviderRequestError({
           ...mapped,
-          deliveryState: known ? 'response_received' : sessionStarted ? 'possibly_delivered' : 'not_sent',
+          ...(error instanceof AgentProviderRequestError && !controller.signal.aborted ? { code: error.code, sanitizedCause: error.sanitizedCause, retryable: error.retryable } : {}),
+          deliveryState: known ? 'response_received' : notSent ? 'not_sent' : 'possibly_delivered',
           billingState: known
-            ? known.inputTokens !== undefined && known.outputTokens !== undefined ? 'confirmed' : 'unknown'
-            : sessionStarted ? 'unknown' : 'not_incurred',
+            ? known.inputTokens !== undefined && known.outputTokens !== undefined && !known.missingUsageCount ? 'confirmed' : 'unknown'
+            : notSent ? 'not_incurred' : 'unknown',
           ...(known ? { usage: known } : {}),
-          cause: error,
+          failureDetails: details,
+          ...(details.httpStatus ? { httpStatus: details.httpStatus } : {}),
         })
       }
       try {
-        const root = await realpath(input.projectPath).catch(() => {
-          throw new StageAgentExecutionError('repository_unavailable', 'Selected project path is unavailable')
-        })
-        if (!(await isGitWorkingTreeRoot(root))) {
-          throw new StageAgentExecutionError('repository_unavailable', 'Select a Git working-tree repository root before repository review')
-        }
-        const before = await repositoryWorkingTreeDigest(root)
-        relay = await input.openBudgetRelay()
-        profile = input.runner ? undefined : await createIsolatedOpencodeProfile('devflow-review-opencode-', {
-          isolateHome: true,
-          ...(input.toolCacheDirectory ? { toolCacheDirectory: input.toolCacheDirectory } : {}),
-        })
-        const runner = input.runner ?? createManagedOpencodeRunner({
-          // A review never replaces a Coding or stage process of the same project.
-          projectId: `review:${input.projectId}:${randomUUID()}`,
-          binaryPath: input.binaryPath,
-          providerId: input.metadata.id,
-          modelId: input.metadata.model,
-          processManager: input.processManager,
-          runtimeEnv: {
-            ...buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv, relay.binding),
-            ...(profile?.env ?? {}),
-          },
-          sessionTitle: 'DevFlow read-only Gate Review',
-        })
-        // A stop request during the repository checks must not start a session.
-        controller.signal.throwIfAborted()
-        sessionStarted = true
-        const result = await runner({
-          prompt: createLocalAgentKnowledgeReviewPrompt(prompt, { knowledgeRoot: input.knowledgeRoot ?? null }),
-          directory: root,
-          signal: controller.signal,
-        })
-        reportedUsage = result.value.usage ?? undefined
-        if (result.pendingPermissionCount > 0) {
-          throw new StageAgentExecutionError('permission_denied', 'Read-only Gate Review requested additional permission')
-        }
-        if (result.diffCount > 0 || (await repositoryWorkingTreeDigest(root)) !== before) {
-          throw new StageAgentExecutionError('repository_changed', 'Repository changed during the read-only Gate Review')
-        }
-        const value = result.value as unknown as Record<string, unknown>
-        const findings = value.repositoryFindings
-        const digested = isRecord(findings) && Array.isArray(findings.citations) && findings.citations.length > 0
-          ? {
-              ...value,
-              repositoryFindings: await digestRepositoryCitations(
-                findings as unknown as ClarificationRepositoryFindings, root, before,
-              ).catch((error: unknown) => {
-                throw error instanceof StageAgentExecutionError
-                  ? error
-                  : new StageAgentExecutionError('evidence_invalid', 'Repository citation could not be read')
-              }),
-            }
-          : value
-        const known = usage()
-        return readLocalAgentKnowledgeReviewOutput(digested, {
-          model: input.metadata.model,
-          ...(known ? { usage: known } : {}),
-          toolCalls: result.toolCalls,
-          bounds,
-        })
+        return await withOpencodeCleanup(() => withOpencodeCleanup(async () => {
+          const root = await realpath(input.projectPath).catch(() => {
+            throw new StageAgentExecutionError('repository_unavailable', 'Selected project path is unavailable')
+          })
+          if (!(await isGitWorkingTreeRoot(root))) {
+            throw new StageAgentExecutionError('repository_unavailable', 'Select a Git working-tree repository root before repository review')
+          }
+          const before = await repositoryWorkingTreeDigest(root)
+          relay = await input.openBudgetRelay()
+          checkpoint = relay.checkpoint()
+          profile = input.runner ? undefined : await createIsolatedOpencodeProfile('devflow-review-opencode-', {
+            isolateHome: true,
+            ...(input.toolCacheDirectory ? { toolCacheDirectory: input.toolCacheDirectory } : {}),
+          })
+          const runner = input.runner ?? createManagedOpencodeRunner({
+            // A review never replaces a Coding or stage process of the same project.
+            projectId: `review:${input.projectId}:${randomUUID()}`,
+            binaryPath: input.binaryPath,
+            providerId: input.metadata.id,
+            modelId: input.metadata.model,
+            processManager: input.processManager,
+            runtimeEnv: {
+              ...buildReadOnlyStageAgentRuntimeEnv(input.runtimeEnv, relay.binding),
+              ...(profile?.env ?? {}),
+            },
+            sessionTitle: 'DevFlow read-only Gate Review',
+          })
+          // A stop request during the repository checks must not start a session.
+          controller.signal.throwIfAborted()
+          sessionStarted = true
+          const result = await runner({
+            prompt: createLocalAgentKnowledgeReviewPrompt(prompt, { knowledgeRoot: input.knowledgeRoot ?? null }),
+            directory: root,
+            signal: controller.signal,
+          })
+          reportedUsage = result.value.usage ?? undefined
+          controller.signal.throwIfAborted()
+          if (result.pendingPermissionCount > 0) {
+            throw new StageAgentExecutionError('permission_denied', 'Read-only Gate Review requested additional permission')
+          }
+          if (result.diffCount > 0 || (await repositoryWorkingTreeDigest(root)) !== before) {
+            throw new StageAgentExecutionError('repository_changed', 'Repository changed during the read-only Gate Review')
+          }
+          const value = result.value as unknown as Record<string, unknown>
+          const findings = value.repositoryFindings
+          const digested = isRecord(findings) && Array.isArray(findings.citations) && findings.citations.length > 0
+            ? {
+                ...value,
+                repositoryFindings: await digestRepositoryCitations(
+                  findings as unknown as ClarificationRepositoryFindings, root, before,
+                ).catch((error: unknown) => {
+                  throw error instanceof StageAgentExecutionError
+                    ? error
+                    : new StageAgentExecutionError('evidence_invalid', 'Repository citation could not be read')
+                }),
+              }
+            : value
+          const known = usage()
+          return readLocalAgentKnowledgeReviewOutput(digested, {
+            model: input.metadata.model,
+            ...(known ? { usage: known } : {}),
+            toolCalls: result.toolCalls,
+            bounds,
+          })
+        }, async () => { await profile?.dispose() }, 'profile_dispose', (result) => result.usage),
+        async () => { await relay?.close() }, 'relay_close', (result) => result.usage)
       } catch (error) {
         throw toProviderError(error)
       } finally {
         clearTimeout(timeout)
         signal?.removeEventListener('abort', abort)
-        await profile?.dispose().catch(() => undefined)
-        await relay?.close().catch(() => undefined)
       }
     },
   }

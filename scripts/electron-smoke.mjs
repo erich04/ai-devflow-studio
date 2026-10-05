@@ -1037,6 +1037,19 @@ try {
     return pairing.userId
   })
   expect(trustedPairingUserId).not.toBe('renderer-spoofed-coding-user')
+  const costRecovery = await first.page.evaluate(async (projectId) => {
+    const before = await window.aiDevFlowDesktop.getModelCostRecovery({ projectId })
+    const after = await window.aiDevFlowDesktop.retryModelCostSettlements({ projectId })
+    let wrongScopeRejected = false
+    try { await window.aiDevFlowDesktop.retryModelCostSettlements({ projectId: 'unpaired-cost-project' }) }
+    catch { wrongScopeRejected = true }
+    return { teamProjectId: before.overview.projectId, beforeCount: before.overview.records.length,
+      afterCount: after.overview.records.length, local: after.local, wrongScopeRejected }
+  }, localProjectId)
+  expect(costRecovery.teamProjectId).toBe('p-payments')
+  expect(costRecovery.afterCount).toBe(costRecovery.beforeCount)
+  expect(costRecovery.local).toEqual([])
+  expect(costRecovery.wrongScopeRejected).toBe(true)
   await first.page.evaluate(async (projectId) => {
     await window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({
       projectId,

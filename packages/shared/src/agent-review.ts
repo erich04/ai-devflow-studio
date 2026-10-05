@@ -1,4 +1,5 @@
 import { resolveDeepSeekPricingSnapshot } from './cost'
+import { describeStageAgentFailure, sanitizeStageAgentFailureDetails, type StageAgentFailureDetails } from './stage-agent-failure'
 import { locateReviewMissingEvidence } from './review-grounding'
 import { describeProviderThinking, resolveProviderThinking, supportsProviderThinking, providerThinkingRequestFields, type EffectiveProviderThinking, type ProviderThinkingConfiguration } from './provider-thinking'
 import { KNOWLEDGE_REVIEW_SANITIZER_VERSION, parseGateReviewSubjectSnapshot, type GateReviewSubjectSnapshot } from './gate-review-subject'
@@ -176,6 +177,7 @@ export type AgentProviderResponseMetadata = {
 }
 
 export class AgentProviderRequestError extends Error {
+  readonly failureDetails?: StageAgentFailureDetails
   readonly code: AgentProviderErrorCode
   readonly deliveryState: AgentProviderDeliveryState
   readonly billingState: AgentProviderBillingState
@@ -195,9 +197,12 @@ export class AgentProviderRequestError extends Error {
     responseMetadata?: AgentProviderResponseMetadata
     usage?: AgentProviderUsage
     cause?: unknown
+    failureDetails?: StageAgentFailureDetails
   }) {
     super(providerErrorMessage(input.code, input.httpStatus ?? null), { cause: input.cause })
     this.name = 'AgentProviderRequestError'
+    const details = sanitizeStageAgentFailureDetails(input.failureDetails)
+    if (details) this.failureDetails = details
     this.code = input.code
     this.deliveryState = input.deliveryState
     this.billingState = input.billingState
@@ -229,6 +234,7 @@ export class AgentProviderRequestError extends Error {
 }
 
 export function describeAgentProviderFailure(error: unknown): string {
+  if (error instanceof AgentProviderRequestError && error.failureDetails) return describeStageAgentFailure(error.failureDetails)
   if (error instanceof AgentProviderRequestError && error.sanitizedCause === 'budget_not_ready') return error.message
   if (!(error instanceof AgentProviderRequestError)) return '模型调用未完成，请查看执行记录后重试。'
   const descriptions: Record<string, string> = {

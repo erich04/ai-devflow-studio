@@ -1,4 +1,4 @@
-export const TEAM_SCHEMA_VERSION = 30
+export const TEAM_SCHEMA_VERSION = 31
 
 export const requiredTeamTableNames = [
   'team_schema_migrations',
@@ -36,6 +36,7 @@ export const requiredTeamTableNames = [
   'enforcement_policies',
   'gate_override_decisions',
   'model_call_attempts',
+  'model_cost_events',
   'runtime_budget_policies',
   'runtime_budget_approvals',
   'agent_policy_findings',
@@ -668,6 +669,13 @@ export const teamTableDefinitions: TeamTableDefinition[] = [
     column('project_id', 'text', { references: 'projects(id)' }),
     column('user_id', 'text', { references: 'users(id)' }),
     column('json', 'jsonb'), column('created_at', 'timestamptz'),
+  ] },
+  { name: 'model_cost_events', columns: [
+    column('sequence', 'bigserial', { primaryKey: true }), column('id', 'text'),
+    column('organization_id', 'text', { references: 'organizations.id' }),
+    column('project_id', 'text', { references: 'projects.id' }),
+    column('source_kind', 'text'), column('source_id', 'text'), column('kind', 'text'),
+    column('idempotency_key', 'text', { nullable: true }), column('json', 'jsonb'), column('created_at', 'timestamptz'),
   ] },
   {
     name: 'runtime_budget_policies',

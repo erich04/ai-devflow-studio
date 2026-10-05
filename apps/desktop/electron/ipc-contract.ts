@@ -274,6 +274,8 @@ export const ipcChannels = {
   getCodingRuntimeReadiness: 'devflow:coding:runtime-readiness:get',
   getCodingChangeSetPreview: 'devflow:coding:change-set-preview:get',
   getCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:get',
+  getModelCostRecovery: 'devflow:model-costs:get',
+  retryModelCostSettlements: 'devflow:model-costs:retry',
   saveCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:save',
   createCodingRuntimeBudgetApproval: 'devflow:coding:runtime-budget-approval:create',
   runCodingAgent: 'devflow:coding:agent:run',
@@ -649,6 +651,8 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  getModelCostRecovery: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
+  retryModelCostSettlements: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
   listCredentialAccess?: () => Promise<CredentialAccessRecord[]>
   cancelCredentialAccess?: (id: string) => Promise<boolean>

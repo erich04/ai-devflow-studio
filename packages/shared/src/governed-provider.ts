@@ -6,7 +6,7 @@ import type {ModelCallQuote,ModelCallSettlement,ModelCallAdmission} from './mode
 export type ModelCallGovernance = {
   reserve(input:ModelCallQuote):Promise<ModelCallAdmission>
   settle(input:ModelCallSettlement):Promise<void>
-  persist(input:ModelCallSettlement):Promise<void>
+  persist(input:ModelCallSettlement, metadata?: { final: boolean }):Promise<void>
   pending(projectId:string):Promise<ModelCallSettlement[]>
 }
 const activeAttempts=new Set<string>()
@@ -33,7 +33,7 @@ export async function governedModelCall<T extends CallResult>(input:{
   }
   let settlement:ModelCallSettlement={id,projectId:input.projectId,state:'failed'}
   activeAttempts.add(id)
-  try { await g.persist(settlement) } catch (error) {
+  try { await g.persist(settlement, { final: false }) } catch (error) {
     activeAttempts.delete(id)
     // Nothing has been dispatched. Release the reservation even if local persistence failed.
     await g.settle({ ...settlement, state: 'not_sent' }).catch(() => undefined)
@@ -60,7 +60,7 @@ export async function governedModelCall<T extends CallResult>(input:{
       usage: { budgetAttemptIds: [id] }, cause: error,
     })
   } finally {
-    try { await g.persist(settlement); await g.settle(settlement) }
+    try { await g.persist(settlement, { final: true }); await g.settle(settlement) }
     catch (error) {
       throw new AgentProviderRequestError({ code: 'unknown_provider_failure',
         sanitizedCause: 'settlement_sync_failed', deliveryState: sent ? 'possibly_delivered' : 'not_sent',

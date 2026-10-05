@@ -10,6 +10,7 @@ import {
   READ_ONLY_STAGE_AGENT_CAPABILITY,
 } from '@ai-devflow/shared'
 import { summarizeRelayedUsage } from './governed-opencode-proxy'
+import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter'
 import {
   buildReadOnlyStageAgentRuntimeEnv,
   createReadOnlyLocalStageAgentExecutor,
@@ -66,6 +67,35 @@ function executionInput(stage: 'clarify' | 'design' = 'clarify') {
 }
 
 describe('read-only local stage Agent executor', () => {
+  it.each([
+    [new Error('PRIVATE_KEY /private/project RAW_BODY'), 'failed', 'unknown_failure', 'executor'],
+    [new OpencodeMessageResponseError({ code: 'provider_auth_error' }), 'failed', 'provider_auth', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'provider_api_error', statusCode: 429 }), 'failed', 'provider_rate_limit', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'provider_api_error', statusCode: 503 }), 'failed', 'provider_unavailable', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'context_overflow' }), 'input_limit', 'context_limit', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'structured_output' }), 'schema_invalid', 'output_format', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'output_length' }), 'output_limit', 'output_limit', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'content_filter' }), 'failed', 'content_filter', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'message_aborted' }), 'cancelled', 'cancelled', 'provider'],
+    [new OpencodeMessageResponseError({ code: 'invalid_message_response' }), 'schema_invalid', 'output_format', 'opencode_http'],
+    [new OpencodeHttpRequestError({ code: 'http_status_error', statusCode: 403 }), 'failed', 'runtime_http_error', 'opencode_http'],
+    [new OpencodeHttpRequestError({ code: 'transport_error' }), 'failed', 'network_error', 'opencode_http'],
+    [new OpencodeHttpRequestError({ code: 'invalid_json_response' }), 'schema_invalid', 'output_format', 'opencode_http'],
+    [new OpencodeHttpRequestError({ code: 'response_too_large' }), 'output_limit', 'output_limit', 'opencode_http'],
+  ])('classifies %s without guessing a missing CLI', async (cause, terminalReason, code, source) => {
+    const root = await repository()
+    const error = await executor(root, async () => { throw cause }).execute(executionInput()).catch((error: unknown) => error)
+    expect(error).toMatchObject({ terminalReason, failureDetails: { version: 1, code, source } })
+    expect(JSON.stringify(error)).not.toMatch(/PRIVATE_KEY|\/private\/project|RAW_BODY/)
+  })
+
+  it('reserves cli_unavailable for a failed process startup', async () => {
+    const root = await repository()
+    await expect(executor(root, undefined).execute(executionInput())).rejects.toMatchObject({
+      terminalReason: 'cli_unavailable', failureDetails: { code: 'runtime_unavailable', source: 'opencode_runtime' },
+    })
+  })
+
   it.each(['clarify', 'design'] as const)('rejects a selected subdirectory before invoking the repository Agent (%s)', async (stage) => {
     const parent = await repository()
     const selected = path.join(parent, 'empty-project')

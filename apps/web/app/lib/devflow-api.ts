@@ -50,6 +50,8 @@ import {
 import { parseDesktopPairingCodePayload } from './pairing-code'
 
 export type TeamOverviewResponse = {
+  budgetProjectCost?: TokenUsageRollup[]
+  modelCostRecovery?: import('@ai-devflow/shared').ModelCostRecoveryOverview[]
   projects: Project[]
   members: TeamMember[]
   runs: WorkflowRun[]
@@ -75,6 +77,16 @@ export type TeamOverviewResponse = {
     effectivePolicies: EffectiveEnforcementPolicy[]
     gateOverrides: GateOverrideDecision[]
   }
+}
+
+export async function modelCostRecoveryRequest<T>(path: string, options: FetchTeamOverviewOptions, body?: unknown): Promise<T> {
+  const response = await (options.fetcher ?? fetch)(`${options.apiBaseUrl ?? resolveDevFlowApiBaseUrl()}${path}`, {
+    method: body === undefined ? 'GET' : 'POST', cache: 'no-store',
+    headers: createApiHeaders({ accept: 'application/json', 'content-type': 'application/json' }, options),
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  })
+  if (!response.ok) throw new DevFlowApiError(path, response.status)
+  return response.json() as Promise<T>
 }
 
 export type FetchTeamOverviewOptions = {

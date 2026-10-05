@@ -449,6 +449,8 @@ export type GateDecision = {
 
 export type TokenUsage = {
   budgetAttemptIds?: string[]
+  /** Zero placeholders in older records are not evidence of complete usage. */
+  usageStatus?: 'complete' | 'partial' | 'unknown'
   id: string
   runId: string
   nodeId: string
@@ -529,7 +531,7 @@ export type RuntimeProviderCallSettlement = {
  * Provider settlements may have an unknown cache split or price, represented by
  * null instead of inventing a zero-value cache hit or exact cost.
  */
-export type CodingRuntimeCostSummary = Omit<TokenUsage, 'cacheReadTokens' | 'costUsd'> & {
+export type CodingRuntimeCostSummary = Omit<TokenUsage, 'cacheReadTokens' | 'costUsd' | 'usageStatus'> & {
   providerId: string
   source: TokenUsageSource
   redacted: true
@@ -867,6 +869,7 @@ export type AgentTraceStep = {
 }
 
 export type AgentTrace = {
+  failureDetails?: import('./stage-agent-failure').StageAgentFailureDetails
   id: string
   runId: string
   nodeId: string
@@ -1607,6 +1610,8 @@ export type RemoteTeamSnapshot = {
   artifacts: Artifact[]
   events: AgentEvent[]
   projectCost: import('./cost').TokenUsageRollup[]
+  budgetProjectCost?: import('./cost').TokenUsageRollup[]
+  modelCostRecovery?: import('./model-cost-recovery').ModelCostRecoveryOverview[]
   memberCost: import('./cost').TokenUsageRollup[]
   totalCost: string
   enforcementPolicies?: {

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import {
   StageAgentExecutionError,
+  describeStageAgentFailure,
   type AgentEvent,
   type AgentTrace,
   type StageAgentExecutorKind,
@@ -33,6 +34,7 @@ export async function recordStageAgentFailure(input: {
     reviewId: failureId,
     runtime: 'electron',
     terminalReason,
+    ...(error instanceof StageAgentExecutionError && error.failureDetails ? { failureDetails: error.failureDetails } : {}),
     createdAt: input.completedAt,
     steps: [{
       id: `agent-trace-${failureId}-terminal`,
@@ -72,5 +74,9 @@ export async function recordStageAgentFailure(input: {
       `Stage Agent failed closed: ${terminalReason}; failure audit was rejected (${failureAudit.reason})`,
     )
   }
-  throw new Error(`Stage Agent failed closed: ${terminalReason}; ${diagnostic}`)
+  // Electron does not preserve custom Error properties. The trace is authoritative;
+  // the rejected invoke contains a safe, human-readable summary for older clients too.
+  const hint = error instanceof StageAgentExecutionError && error.failureDetails ? describeStageAgentFailure(error.failureDetails) : undefined
+  const summary = hint ? hint.startsWith(diagnostic) ? hint : `${hint} ${diagnostic}` : diagnostic
+  throw new Error(`Stage Agent failed closed: ${terminalReason}; ${summary}`)
 }

@@ -1,7 +1,8 @@
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'
-import { AgentProviderRequestError, classifyProviderTransportError, governedModelCall, modelCallMetadata, parseOpenAiCompatibleProviderUsage, type AgentProviderUsage, type ModelCallGovernance } from '@ai-devflow/shared'
+import { AgentProviderRequestError, classifyProviderTransportError, describeStageAgentFailure, governedModelCall, modelCallMetadata, parseOpenAiCompatibleProviderUsage, stageAgentFailureDetails, type AgentProviderUsage, type ModelCallGovernance, type StageAgentFailureDetails } from '@ai-devflow/shared'
 import type { OpencodeProviderBinding } from './opencode-provider-binding'
+import { providerFailureDetails } from './opencode-failure.js'
 
 /**
  * Rounds relayed since a point in time, summed. The billing identity comes from the saved
@@ -31,16 +32,29 @@ const NOT_SENT_USAGE: AgentProviderUsage = { inputTokens: 0, outputTokens: 0, ca
 /** OpenCode's internal model rounds traverse this authenticated, loopback-only relay. */
 export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string}) {
   const token=randomBytes(32).toString('hex')
+  const executionId = randomBytes(16).toString('hex')
+  let sequence = 0
+  let latestCall: { sequence: number; requestId: string; failure?: StageAgentFailureDetails } | undefined
   const {billingProvider}=modelCallMetadata(input.binding)
-  const attempts:Array<{at:string;usage:AgentProviderUsage}>=[]
+  const attempts:Array<{at:string;sequence:number;usage:AgentProviderUsage}>=[]
   const controllers=new Set<AbortController>()
+  const pending = new Set<Promise<void>>()
+  const activeCalls = new Set<number>()
+  let closePromise: Promise<void> | undefined
   const server=createServer(async(req,res)=>{
+    let finished!: () => void
+    const completion = new Promise<void>((resolve) => { finished = resolve })
+    pending.add(completion)
+    let call: typeof latestCall
     const controller=new AbortController(); controllers.add(controller)
     const abort=()=>{if(!res.writableEnded)controller.abort()}
     res.on('close',abort)
     const timeout=setTimeout(()=>controller.abort(),300_000)
     try {
       if (req.method!=='POST' || req.url!=='/v1/chat/completions' || req.headers.authorization!==`Bearer ${token}`) {res.writeHead(403).end();return}
+      call = { sequence: ++sequence, requestId: `${executionId}:${sequence}` }
+      latestCall = call
+      activeCalls.add(call.sequence)
       let size = 0; const chunks: Buffer[] = []
       for await (const chunk of req) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 2 * 1024 * 1024) throw new Error('模型请求超过接收容量。'); chunks.push(bytes) }
       const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
@@ -62,15 +76,37 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
             throw classifyProviderTransportError(error)
           }
           if(!upstream.ok)throw new AgentProviderRequestError({code:upstream.status===429?'http_429':upstream.status>=500?'http_5xx':'http_4xx',httpStatus:upstream.status,deliveryState:'response_received',billingState:'unknown',retryable:false,sanitizedCause:'opencode_provider_http'})
-          let output=''; const decoder=new TextDecoder('utf-8',{fatal:true}); const reader=upstream.body?.getReader()
-          if(!reader)throw new Error('模型未返回正文。')
-          try{while(true){const next=await reader.read();if(next.done)break;output+=decoder.decode(next.value,{stream:true});if(Buffer.byteLength(output)>2*1024*1024)throw new Error('模型响应超过安全接收容量。')}}finally{await reader.cancel().catch(()=>undefined)}
-          output+=decoder.decode();
-          const value=JSON.parse(output) as Record<string,unknown>
-          const usage=parseOpenAiCompatibleProviderUsage(value.usage,{providerId:input.binding.providerId,model:input.binding.modelId,baseUrl:input.binding.baseUrl})
+          const responseError = (code: 'invalid_response_json' | 'invalid_usage' | 'response_too_large' | 'connection_reset') =>
+            new AgentProviderRequestError({ code, httpStatus: upstream.status, deliveryState: 'response_received', billingState: 'unknown', retryable: false, sanitizedCause: `opencode_${code}` })
+          let output = ''
+          const decoder = new TextDecoder('utf-8', { fatal: true })
+          const reader = upstream.body?.getReader()
+          if (!reader) throw responseError('invalid_response_json')
+          try {
+            while (true) {
+              const next = await reader.read().catch((error: unknown) => {
+                if (controller.signal.aborted) throw error
+                throw responseError('connection_reset')
+              })
+              if (next.done) break
+              try { output += decoder.decode(next.value, { stream: true }) } catch { throw responseError('invalid_response_json') }
+              if (Buffer.byteLength(output) > 2 * 1024 * 1024) throw responseError('response_too_large')
+            }
+          } finally { await reader.cancel().catch(() => undefined) }
+          let value: Record<string, unknown>
+          try {
+            output += decoder.decode()
+            const parsed: unknown = JSON.parse(output)
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw responseError('invalid_response_json')
+            value = parsed as Record<string, unknown>
+          } catch { throw responseError('invalid_response_json') }
+          let usage: AgentProviderUsage | undefined
+          try {
+            usage = parseOpenAiCompatibleProviderUsage(value.usage, { providerId: input.binding.providerId, model: input.binding.modelId, baseUrl: input.binding.baseUrl })
+          } catch { throw responseError('invalid_usage') }
           return {value,...(usage?{usage}:{})}
         }})
-      attempts.push({at:new Date().toISOString(),usage:result.usage!})
+      attempts.push({at:new Date().toISOString(),sequence:call.sequence,usage:result.usage!})
       if(res.destroyed)return
       if(body.stream===true){
         const choices=Array.isArray(result.value.choices)?result.value.choices:[]
@@ -80,11 +116,13 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
         res.end()
       } else res.writeHead(200,{'content-type':'application/json'}).end(JSON.stringify(result.value))
     } catch(error) {
-      if(error instanceof AgentProviderRequestError && error.usage?.budgetAttemptIds) attempts.push({at:new Date().toISOString(),
+      if(error instanceof AgentProviderRequestError && error.usage?.budgetAttemptIds) attempts.push({at:new Date().toISOString(),sequence:call!.sequence,
         // A round that was never sent costs nothing; it must not leave the session's usage unknown.
         usage:error.billingState==='not_incurred'?{...NOT_SENT_USAGE,budgetAttemptIds:error.usage.budgetAttemptIds}:error.usage})
-      if(!res.destroyed){res.writeHead(400,{'content-type':'application/json'}).end(JSON.stringify({error:{message:error instanceof Error && /^[\u4e00-\u9fff]/u.test(error.message)?error.message:'模型调用未完成，请检查项目预算和执行记录。'}}))}
-    } finally {clearTimeout(timeout);controllers.delete(controller);res.off('close',abort)}
+      const details = error instanceof AgentProviderRequestError ? providerFailureDetails(error) : stageAgentFailureDetails('unknown_failure', 'budget_relay')
+      if (call) call.failure = { ...details, relayRequestId: call.requestId }
+      if(!res.destroyed){res.writeHead(400,{'content-type':'application/json', ...(call ? { 'x-devflow-relay-request': call.requestId } : {})}).end(JSON.stringify({error:{message:describeStageAgentFailure(details)}}))}
+    } finally {clearTimeout(timeout);controllers.delete(controller);res.off('close',abort);if(call)activeCalls.delete(call.sequence);pending.delete(completion);finished()}
   })
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)})
   const address=server.address();if(!address || typeof address==='string')throw new Error('Budget relay unavailable')
@@ -93,6 +131,33 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
     usageSince(since:string):AgentProviderUsage|undefined {
       return summarizeRelayedUsage(attempts.filter((row)=>row.at>=since).map((row)=>row.usage),billingProvider)
     },
-    async close(){for(const controller of controllers)controller.abort();server.closeAllConnections();await new Promise<void>((resolve)=>server.close(()=>resolve()))},
+    checkpoint: () => sequence,
+    usageAfter(afterSequence: number): AgentProviderUsage | undefined {
+      const completed = attempts.filter((row) => row.sequence > afterSequence)
+      const unsettled = [...activeCalls].filter((id) => id > afterSequence && !completed.some((row) => row.sequence === id))
+      return summarizeRelayedUsage([...completed.map((row) => row.usage), ...unsettled.map(() => ({}))], billingProvider)
+    },
+    failureForRequest(requestId: string, afterSequence: number): StageAgentFailureDetails | undefined {
+      // A prior retry, another execution, or an older concurrent completion cannot win.
+      return latestCall && latestCall.sequence > afterSequence && latestCall.requestId === requestId
+        ? latestCall.failure : undefined
+    },
+    close(){
+      if (closePromise) return closePromise
+      closePromise = (async () => {
+        for(const controller of controllers)controller.abort()
+        server.closeAllConnections()
+        let timer: ReturnType<typeof setTimeout> | undefined
+        try {
+          await Promise.race([
+            Promise.all([new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())), ...pending]),
+            new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('Budget relay cleanup timed out')), 5_000) }),
+          ])
+        } finally { clearTimeout(timer) }
+      })()
+      return closePromise
+    },
   }
 }
+
+export type GovernedOpencodeProxy = Awaited<ReturnType<typeof createGovernedOpencodeProxy>>
