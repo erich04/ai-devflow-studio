@@ -1675,6 +1675,7 @@ async function createKnowledgeReviewRuntimeForRequest(
     store,
     knowledgeDocuments: knowledgeSnapshot.documents,
     knowledgeChunks: knowledgeSnapshot.chunks,
+    knowledgeRoot: knowledgeSnapshot.knowledgeRoot ?? null,
     projectInstructions: knowledgeSnapshot.projectInstructions ?? null,
     loadPolicySnapshot: async (projectId) =>
       loadPolicySnapshotForProject(await resolvePolicyProjectId(projectId)),

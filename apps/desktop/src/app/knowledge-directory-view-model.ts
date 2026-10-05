@@ -4,6 +4,7 @@ import {
   PROJECT_INSTRUCTIONS_MAX_BYTES,
   resolveKnowledgeDocumentStages,
   type AgentTrace,
+  type AgentReviewResult,
   type CodingAgentRun,
   type KnowledgeCheckFinding,
   type KnowledgeDocument,
@@ -188,6 +189,7 @@ export function recordedKnowledgeManifests(
   traces: readonly AgentTrace[],
   runIds: ReadonlySet<string>,
   codingRuns: readonly Pick<CodingAgentRun, 'runId' | 'startedAt' | 'contextReceipt'>[] = [],
+  reviews: readonly Pick<AgentReviewResult, 'runId' | 'createdAt' | 'contextManifest'>[] = [],
 ): RecordedKnowledgeContextManifest[] {
   return [
     ...traces.flatMap((trace) => {
@@ -197,6 +199,10 @@ export function recordedKnowledgeManifests(
     ...codingRuns.flatMap((codingRun) => {
       const manifest = codingRun.contextReceipt?.knowledgeContext
       return manifest && runIds.has(codingRun.runId) ? [{ manifest, recordedAt: codingRun.startedAt }] : []
+    }),
+    ...reviews.flatMap((review) => {
+      const manifest = review.contextManifest?.knowledgeContext
+      return manifest && runIds.has(review.runId) ? [{ manifest, recordedAt: review.createdAt }] : []
     }),
   ]
 }
@@ -235,7 +241,7 @@ export function buildKnowledgeDirectoryView(input: {
     stages: report.budgets.map((budget) => ({
       stage: budget.stage,
       label: stageLabels[budget.stage],
-      documentCount: budget.applicablePaths.length,
+      documentCount: budget.applicablePaths.length - budget.overBudgetPaths.length,
       gateCount: budget.gatePaths.length,
       usageLabel: `${formatKnowledgeBytes(budget.usedBytes)} / ${formatKnowledgeBytes(budget.budgetBytes)}`,
       overBudgetCount: budget.overBudgetPaths.length,

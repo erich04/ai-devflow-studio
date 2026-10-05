@@ -725,6 +725,8 @@ export type AgentReviewContextManifest = {
     score?: number
   }>
   criteriaCoverage: 'available' | 'unavailable' | 'empty'
+  /** Whole-document L0/L1 selection for repository-backed reviews (ADR 0025). */
+  knowledgeContext?: KnowledgeContextManifest
   /** Optional for persisted v1 Reviews created before workflow-aware projection. */
   fieldProjection?: WorkflowContextProjection
 }
@@ -740,6 +742,8 @@ export type AgentReviewContext = {
   >
   policy?: { version: number; source: 'remote_cache' | 'built_in_default' | 'api'; effectivePolicy: string }
   knowledgeReferences: KnowledgeReference[]
+  /** Bounded whole documents and catalogue; absent on legacy chunk-based reviews. */
+  knowledgeSection?: string
   knowledgeChunks: Array<
     Pick<KnowledgeChunk, 'id' | 'documentId' | 'sourcePath' | 'headingPath' | 'contentHash' | 'content'>
   >
