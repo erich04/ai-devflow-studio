@@ -507,7 +507,10 @@ export function createRepositoryKnowledgeService(options: {
         let file: Awaited<ReturnType<typeof readSafeRegularFile>>
         try {
           file = await readSafeRegularFile(root, sourcePath)
-        } catch {
+        } catch (error) {
+          // Git's index still lists unstaged deletions. Absence is a complete
+          // observation, so recorded manifests can report the missing file.
+          if (isNotFoundError(error)) continue
           file = null
         }
         if (!file) {

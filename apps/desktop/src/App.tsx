@@ -841,10 +841,10 @@ export function App() {
     () => activeView === 'knowledge'
       ? buildKnowledgeDirectoryView({
           snapshot: repositoryKnowledge,
-          recordedManifests: recordedKnowledgeManifests(agentTraces, scopedRunIdSet, codingRuns),
+          recordedManifests: recordedKnowledgeManifests(agentTraces, scopedRunIdSet, codingRuns, agentReviews),
         })
       : undefined,
-    [activeView, agentTraces, codingRuns, repositoryKnowledge, scopedRunIdSet],
+    [activeView, agentTraces, codingRuns, agentReviews, repositoryKnowledge, scopedRunIdSet],
   )
   const isSelectedNodeGateLike = selectedNode?.kind === 'gate' || selectedNode?.kind === 'acceptance'
   const gateEnforcement = useGateEnforcement({

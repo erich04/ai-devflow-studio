@@ -380,6 +380,7 @@ const workspaceTabs = (type: InspectorNodeType): InspectorTabPlan[] => {
         // A test step's results are its current work; other steps keep them as history.
         ...(type === 'test' ? ['testEvidence'] as const : []),
         'workspaceContent',
+        ...(type === 'pr' ? ['reviewRun'] as const : []),
         ...(gate ? ['reviewRun', 'statusMatrix', 'gateEnforcementPanel', 'remediationActions'] as const : ['gateImpactSummary'] as const),
       ],
     },
@@ -1425,6 +1426,7 @@ function buildNextAction(input: {
   }
 
   if (node.kind === 'pr') {
+    if (input.isRunningKnowledgeReview) return reviewRunning()
     const intent = input.githubDeliveryIntent
     if (intent?.status === 'failed') {
       return statusOf('failed', 'blocked', '交付已安全停止', '交付已安全停止且不会自动重试。请核对远端记录；只有当前 pairing claimant 能证明精确远端终态时，显式 Retry 才会创建新 attempt，否则请重新认领新的 Work Request/Run。', {
@@ -1474,8 +1476,9 @@ function buildNextAction(input: {
       })
     }
     if (hasExactPrDeliveryPackage(input.artifacts)) {
-      return statusOf('ready', 'neutral', '可以准备交付', '交付包已对应本次开发的代码改动。准备交付会提交并复核该提交，仍需在 Web 端审批。', {
+      return statusOf('ready', 'neutral', '可以准备交付', `交付包已对应本次开发的代码改动。准备交付会提交并复核该提交，仍需在 Web 端审批。${input.latestAgentReview ? '' : reviewCost}`, {
         primaryActionId: 'prepareGitHubDelivery',
+        secondaryActionIds: input.latestAgentReview ? [] : ['runKnowledgeReview'],
       })
     }
     return statusOf(input.hasTeamProjectBinding ? 'ready' : 'blocked', input.hasTeamProjectBinding ? 'neutral' : 'warning', '可以生成交付包', input.hasTeamProjectBinding
@@ -1487,14 +1490,15 @@ function buildNextAction(input: {
 
   if (node.kind === 'acceptance') {
     if (input.isRunningKnowledgeReview) return reviewRunning()
-    if (hasMissingReviewReason(input.gateEnforcementDecision)) {
-      return statusOf('blocked', 'warning', '验收缺少 AI 审查', `${reviewCost}最终验收缺少基于知识的门禁审查；完成后会重新评估验收 Gate。`, {
-        primaryActionId: 'runKnowledgeReview',
-      })
-    }
+    // The review needs a linked subject before missing-review policy can be remedied.
     if (!hasAcceptanceArtifact(input.artifacts)) {
       return statusOf('ready', 'neutral', '可以整理验收材料', '先汇总最终交付证据，再进入业务验收审批。', {
         primaryActionId: 'createAcceptanceBundle',
+      })
+    }
+    if (hasMissingReviewReason(input.gateEnforcementDecision)) {
+      return statusOf('blocked', 'warning', '验收缺少 AI 审查', `${reviewCost}最终验收缺少基于知识的门禁审查；完成后会重新评估验收 Gate。`, {
+        primaryActionId: 'runKnowledgeReview',
       })
     }
     return statusOf(input.canApprove ? 'approvable' : 'awaiting_role', 'neutral', input.canApprove ? '等待你确认验收' : '等待有权限的成员确认验收', input.canApprove

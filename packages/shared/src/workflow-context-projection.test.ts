@@ -83,10 +83,15 @@ describe('projectWorkflowContext', () => {
     })
   })
 
-  it('keeps the Knowledge Review runtime capability scoped to Gate and Acceptance nodes', () => {
+  it('keeps Knowledge Review scoped to Gate, PR delivery, and Acceptance nodes', () => {
     expect(canRunKnowledgeReviewOnNode(node('design', 'agent'))).toBe(false)
     expect(canRunKnowledgeReviewOnNode(node('design', 'gate'))).toBe(true)
     expect(canRunKnowledgeReviewOnNode(node('accept', 'acceptance'))).toBe(true)
+    expect(canRunKnowledgeReviewOnNode(node('pr', 'pr'))).toBe(true)
+    expect(canRunKnowledgeReviewOnNode(node('build', 'pr'))).toBe(false)
+    const projection = projectWorkflowContext({ node: node('pr', 'pr'), availability: { knowledge_references: 1, agent_review: true } })
+    expect(workflowContextField(projection, 'knowledge_references')).toMatchObject({ state: 'available', includeInProviderPrompt: true })
+    expect(workflowContextField(projection, 'agent_review')).toMatchObject({ state: 'available', visible: true })
   })
 })
 
