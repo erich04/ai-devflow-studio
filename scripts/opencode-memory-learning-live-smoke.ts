@@ -1,6 +1,6 @@
 /**
- * Paid acceptance of learning from accepted OpenCode Coding Runs (ADR 0024 §4–5).
- * Explicitly invoked; never runs in default CI.
+ * Acceptance of learning from accepted OpenCode Coding Runs (ADR 0024 §4–5).
+ * Explicitly invoked with a bounded live Provider or a local deterministic Provider.
  *
  * Two sequential OpenCode Coding Runs in one isolated project, each with its own local
  * session, wired exactly like Desktop Main: learning runs after Change Acceptance and the
@@ -8,9 +8,10 @@
  * map; the second run's Context receipt recalls the test command Memory, and its learning
  * recognizes the test command as already known.
  *
- * The Provider credential reaches only the OpenCode child process, through the same
- * binding shape Main uses (`OPENCODE_CONFIG_CONTENT` + one env var), with an isolated
- * OpenCode profile. Desktop's default OpenCode rules allow edits inside the managed
+ * The upstream Provider credential stays in the governed relay; OpenCode receives only
+ * the relay binding (`OPENCODE_CONFIG_CONTENT` + one env var), with an isolated profile.
+ * Every upstream request reserves and settles in the persistent acceptance ledger.
+ * Desktop's default OpenCode rules allow edits inside the managed
  * worktree without a prompt and ask for shell commands; this harness rejects every shell
  * request, and the run must change only the one fixture file.
  */
@@ -192,7 +193,12 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
     const governedUsage = relay.usageAfter(checkpoint)
     assert.ok(governedUsage?.budgetAttemptIds?.length, `${label}: no governed model call recorded`)
     assert.equal(governedUsage.missingUsageCount, 0, `${label}: provider usage is incomplete`)
-    return { run, codingRun: completed, learning, governedUsage }
+    const calls = budget.records().filter((call) => governedUsage.budgetAttemptIds!.includes(call.quote.id))
+    assert.equal(calls.length, governedUsage.budgetAttemptIds.length)
+    assert.ok(calls.every((call) => call.final && call.settled && call.costUsd !== null), `${label}: model costs are not fully settled`)
+    const governedCost = { source: 'acceptance_model_call_ledger' as const, status: 'settled' as const,
+      costUsd: calls.reduce((sum, call) => sum + call.costUsd!, 0), currency: 'USD' as const }
+    return { run, codingRun: completed, learning, governedUsage, governedCost }
   }
 
   const kindsAndOutcomes = (learning: Pick<CodingRunMemoryLearningResult, 'candidates'>) =>
@@ -230,12 +236,11 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
     const report = {
       passed: true,
       provider: { id: input.providerId, model: input.modelId, baseUrl: input.baseUrl },
-      runs: [first, second].map(({ run, codingRun, learning, governedUsage }) => ({
-        governedUsage,
+      runs: [first, second].map(({ run, codingRun, learning, governedUsage, governedCost }) => ({
+        governedUsage, governedCost,
         runId: run.id, codingRunId: codingRun.id, title: run.title, engine: codingRun.engine,
         recalledMemoryIds: (codingRun.contextReceipt?.memories ?? []).map((memory) => memory.id),
-        learning, changedPaths: codingRun.changedPaths, cost: codingRun.runtimeCostSummary ?? null,
-        budgetReason: codingRun.budgetDecision?.reason ?? null,
+        learning, changedPaths: codingRun.changedPaths,
       })),
       policyMemory: { memoryId: policyMemoryId, statement: policyRevision.statement, visibility: policyRevision.visibility, retentionClass: policyRevision.retentionClass, expiresAt: policyRevision.expiresAt },
       permissionDecisions: decisions,

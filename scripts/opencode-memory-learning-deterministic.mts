@@ -1,5 +1,6 @@
 /** Real OpenCode + local deterministic provider. No external model endpoint or credential. */
 import { createServer } from 'node:http'
+import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -36,6 +37,12 @@ try {
   const report = await runOpencodeMemoryLearningLiveSmoke({ binaryPath: process.env.DEVFLOW_OPENCODE_BIN ?? 'opencode',
     providerId: 'fixture', modelId: 'gpt-4o-mini', baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: 'fixture-local-only',
     outputDirectory: path.join(root, 'acceptance'), maxCostUsd: 0.5, maxCalls: 12 })
+  assert.equal(report.modelCalls.length, 6)
+  assert.ok(report.modelCalls.every((call) => call.final && call.settled && call.costUsd !== null))
+  for (const run of report.runs) {
+    assert.equal(run.governedCost.status, 'settled')
+    assert.ok(run.governedCost.costUsd > 0 && run.governedCost.costUsd < report.maxCostUsd)
+  }
   console.log(JSON.stringify({ passed: report.passed, mode: 'deterministic-local-provider', providerCalls: calls, outputDirectory: path.join(root, 'acceptance') }))
 } finally {
   server.closeAllConnections()
