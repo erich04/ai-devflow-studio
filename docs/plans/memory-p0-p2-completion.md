@@ -23,11 +23,11 @@
 测试接缝沿交接要求：共享纯函数、LocalStore 的持久接口、ConversationService、Native Coding Runtime、OpenCode 预算代理与学习 harness，以及用户界面。先失败回归，再最小实现；保存原进程退出码。
 
 - [x] 独立基线及两个遗留提交整合。
-- [ ] 遗留补丁当前候选验证、OpenCode harness 治理适配。
-- [ ] 大小/预算提示、轮内新鲜度、L0 一致性。
-- [ ] repair 结构化摘要持久来源。
-- [ ] 会话账本、配对工具事件、压缩边界与 Token 预算。
-- [ ] 两次压缩、取消/重启/重复执行、损坏及写入失败恢复。
-- [ ] Native / OpenCode / 阶段 / Chat 兼容与费用回归。
-- [ ] verify、build、浏览器、Electron、Native/Chat、打包与必要 Postgres 验证。
-- [ ] 最终文档与逐项结果。实际结果将记录在 `docs/validation/memory-p0-p2-20261004.md`。
+- [x] 遗留补丁当前候选验证、OpenCode harness 治理适配。
+- [x] 大小/预算提示、轮内新鲜度、L0 一致性。
+- [x] repair 结构化摘要持久来源。
+- [x] 会话账本、配对工具事件、压缩边界与 Token 预算。
+- [x] 两次压缩、取消/重启/重复执行、损坏及写入失败恢复。
+- [x] Native / OpenCode / 阶段 / Chat 兼容与费用回归。
+- [x] verify、build、浏览器、Electron、Native/Chat、打包与必要 Postgres 验证。
+- [x] 最终文档与逐项结果。实际结果见 [本地候选验收](../validation/memory-p0-p2-20261004.md)，机器可读摘要见 [验收证据](../engineering/evidence/memory-p0-p2-local-20261004.json)。
