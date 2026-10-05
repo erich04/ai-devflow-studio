@@ -6,5 +6,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["scripts/hardening-settlement-electron.mts"]
+  "include": ["scripts/hardening-settlement-electron.mts", "scripts/hardening-live-flow.mts"]
 }
