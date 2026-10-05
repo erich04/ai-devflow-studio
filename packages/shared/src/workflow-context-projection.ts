@@ -41,22 +41,23 @@ function isGateLike(node: WorkflowNode): boolean {
   return node.kind === 'gate' || node.kind === 'acceptance'
 }
 
-export function canRunKnowledgeReviewOnNode(node: Pick<WorkflowNode, 'kind'>): boolean {
-  return node.kind === 'gate' || node.kind === 'acceptance'
+export function canRunKnowledgeReviewOnNode(node: Pick<WorkflowNode, 'kind' | 'stage'>): boolean {
+  return node.kind === 'gate' || node.kind === 'acceptance' || (node.kind === 'pr' && node.stage === 'pr')
 }
 
 function defaultRule(node: WorkflowNode, field: WorkflowContextFieldId): DefaultRule {
   const gateLike = isGateLike(node)
+  const reviewable = canRunKnowledgeReviewOnNode(node)
 
   switch (field) {
     case 'raw_request':
       return { applicability: 'required', reason: 'The original request anchors every workflow stage.' }
     case 'artifacts':
-      return gateLike
+      return reviewable
         ? { applicability: 'required', reason: 'A Gate reviews its exact associated stage Artifact.' }
         : { applicability: 'optional', reason: 'The current task may produce or consume stage Artifacts.' }
     case 'knowledge_references':
-      return gateLike
+      return reviewable
         ? { applicability: 'optional', reason: 'Knowledge references are Gate review criteria, not evidence.' }
         : { applicability: 'not_applicable', reason: 'Gate-review references belong to Gate or Acceptance nodes.' }
     case 'generation_references':
@@ -64,8 +65,8 @@ function defaultRule(node: WorkflowNode, field: WorkflowContextFieldId): Default
         ? { applicability: 'optional', reason: 'Generation references may explain inputs used by this workflow Agent.' }
         : { applicability: 'not_applicable', reason: 'Generation references apply only to workflow generation Agents.' }
     case 'agent_review':
-      return gateLike
-        ? { applicability: 'optional', reason: 'Knowledge-grounded review is scoped to Gate and Acceptance nodes.' }
+      return reviewable
+        ? { applicability: 'optional', reason: 'Knowledge-grounded review is scoped to Gate, PR delivery, and Acceptance nodes.' }
         : { applicability: 'not_applicable', reason: 'This node cannot execute a Gate Review.' }
     case 'test_evidence':
       if (node.stage === 'clarify' || (node.stage === 'design' && node.kind !== 'gate')) {
@@ -98,10 +99,11 @@ function defaultRule(node: WorkflowNode, field: WorkflowContextFieldId): Default
       }
       return unavailableUntil('build', 'Coding output is produced after design approval.')
     case 'budget':
-      return node.kind === 'agent' || node.kind === 'gate' || node.kind === 'task' || node.kind === 'acceptance'
+      return node.kind === 'agent' || node.kind === 'task' || reviewable
         ? { applicability: 'optional', reason: 'Budget applies only when this node can invoke a provider or coding runtime.' }
         : { applicability: 'not_applicable', reason: 'This node has no provider action requiring a runtime budget.' }
     case 'policy':
+      if (node.kind === 'pr') return { applicability: 'optional', reason: 'The PR review may use policy as guidance; delivery approval remains in Web.' }
       return gateLike
         ? { applicability: 'required', reason: 'Gate and Acceptance decisions require an effective policy snapshot.' }
         : { applicability: 'not_applicable', reason: 'Policy enforcement is evaluated at Gate boundaries.' }

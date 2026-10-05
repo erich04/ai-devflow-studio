@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
+import { assembleKnowledgeStageContext, checkKnowledgeDirectory } from '@ai-devflow/shared'
 import type { LocalProject } from '@ai-devflow/shared'
 import type { RepositoryKnowledgeSnapshot } from '@ai-devflow/shared'
 import { createRepositoryKnowledgeService } from './repository-knowledge'
@@ -51,6 +52,44 @@ async function createTrackedRepository(
 }
 
 describe('createRepositoryKnowledgeService', () => {
+  it.each(['file', 'directory'] as const)('detects a referenced document deleted with its %s before Git stages the deletion', async (deletedKind) => {
+    const removedPath = 'docs/knowledge/obsolete/removed.md'
+    const project = await createTrackedRepository({
+      'docs/knowledge/keep.md': '# Keep\n\nCurrent guidance.',
+      [removedPath]: '# Removed\n\nOld guidance.',
+    })
+    const service = createRepositoryKnowledgeService({ now: () => indexedAt })
+    const before = await service.index(project)
+    const { manifest } = assembleKnowledgeStageContext({
+      documents: before.documents,
+      stage: 'clarify',
+      knowledgeRoot: before.knowledgeRoot ?? null,
+      injectInstructions: false,
+      canReadFiles: false,
+    })
+
+    await rm(path.join(project.path, deletedKind === 'file' ? removedPath : path.dirname(removedPath)), { recursive: true })
+    const after = await service.index(project)
+    const report = checkKnowledgeDirectory({
+      documents: after.documents,
+      knowledgeRoot: after.knowledgeRoot ?? null,
+      indexTruncated: after.truncated,
+      recordedManifests: [{ manifest, recordedAt: indexedAt }],
+    })
+
+    expect(after.truncated).toBe(false)
+    expect(after.warnings).toEqual([])
+    expect(after.documents.map(({ sourcePath }) => sourcePath)).toEqual(['docs/knowledge/keep.md'])
+    expect(report.manifestCheck).toBe('checked')
+    expect(report.findings).toContainEqual({
+      code: 'manifest_file_missing',
+      sourcePath: removedPath,
+      manifestCount: 1,
+      lastRecordedAt: indexedAt,
+      stages: ['clarify'],
+    })
+  })
+
   it('indexes Git-managed Markdown in canonical path order with a deterministic snapshot hash', async () => {
     const project = await createTrackedRepository({
       'z-last.markdown': '# Last\n\nLast guidance.',

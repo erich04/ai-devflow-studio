@@ -118,6 +118,21 @@ function viewModelFor(node: WorkflowNode, overrides: Partial<Parameters<typeof b
 }
 
 describe('node inspector view model', () => {
+  it('offers a paid PR knowledge review only after a package exists and retains cancellation', () => {
+    const node = { ...findNode((candidate) => candidate.kind === 'pr'), status: 'running' as const }
+    const input = { artifacts: [prDeliveryPackage(node.id)], reviewProviderLabel: 'DeepSeek' }
+    const ready = viewModelFor(node, input)
+    expect(ready.nextAction.primaryActionId).toBe('prepareGitHubDelivery')
+    expect(ready.nextAction.secondaryActionIds).toContain('runKnowledgeReview')
+    expect(ready.nextAction.copy).toContain('可能产生费用')
+    expect(ready.activeTab.sections).toContain('reviewRun')
+    expect(viewModelFor(node, { artifacts: [] }).nextAction.secondaryActionIds).not.toContain('runKnowledgeReview')
+    expect(viewModelFor(node, { ...input, isSelectedCurrentNode: false }).nextAction.secondaryActionIds).not.toContain('runKnowledgeReview')
+    expect(viewModelFor(node, { ...input, isRunningKnowledgeReview: true }).nextAction).toMatchObject({
+      kind: 'running', persistentActionIds: ['cancelKnowledgeReview'],
+    })
+  })
+
   it('shows an upstream archived diff before any delivery intent, without treating the package as generated', () => {
     const node = findNode((candidate) => candidate.kind === 'pr')
     const build = findNode((candidate) => candidate.stage === 'build')
@@ -504,7 +519,7 @@ describe('node inspector view model', () => {
     // The delivery handoff renders once, inside the body (W1); the old tab name still resolves.
     expect(viewModelFor(prNode, { requestedTab: 'Handoff' })).toMatchObject({
       visualKind: 'Delivery',
-      activeTab: { label: '当前工作', sections: ['workPanel', 'workspaceContent', 'gateImpactSummary'] },
+      activeTab: { label: '当前工作', sections: ['workPanel', 'workspaceContent', 'reviewRun', 'gateImpactSummary'] },
     })
     expect(viewModelFor(testNode).activeTab.sections).toEqual(['workPanel', 'testEvidence', 'workspaceContent', 'gateImpactSummary'])
     expect(viewModelFor(testNode, { requestedTab: '测试证据' }).activeTab.label).toBe('当前工作')
@@ -544,7 +559,7 @@ describe('node inspector view model', () => {
     expect(viewModel.nextAction).toMatchObject({
       title: '可以准备交付',
       primaryActionId: 'prepareGitHubDelivery',
-      secondaryActionIds: [],
+      secondaryActionIds: ['runKnowledgeReview'],
     })
     expect(viewModel.actions.map((action) => action.id)).not.toContain('createPrDraft')
   })
@@ -994,6 +1009,20 @@ describe('task status row projection (S1, plan §6.1)', () => {
     knowledgeReferences: [],
     gateAdvisory: { level: counts.risks ? 'warn' : 'info', blocksApproval: false, summary: 'review', missingEvidence: [], riskCount: counts.risks },
   }) as unknown as NonNullable<Parameters<typeof buildNodeInspectorViewModel>[0]['latestAgentReview']>
+
+  it.each(['warn', 'block'] as const)('collects acceptance evidence before a missing-review %s action', (action) => {
+    const node = { ...findNode((candidate) => candidate.kind === 'acceptance'), status: 'running' as const }
+    const gateEnforcementDecision = decision({
+      status: action === 'block' ? 'blocked' : 'warn',
+      blocksApproval: action === 'block',
+      blockingReasons: action === 'block' ? [{ ...missingReviewReason, action }] : [],
+      warningReasons: action === 'warn' ? [{ ...missingReviewReason, action }] : [],
+    })
+    expect(viewModelFor(node, { artifacts: [], gateEnforcementDecision }).nextAction).toMatchObject({
+      primaryActionId: 'createAcceptanceBundle', secondaryActionIds: [],
+    })
+    expect(viewModelFor(node, { gateEnforcementDecision }).nextAction.primaryActionId).toBe('runKnowledgeReview')
+  })
 
   it('keeps approval reachable when a warn-only policy only lacks the Gate Review (D1)', () => {
     const viewModel = viewModelFor(clarifyGate, {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   indexKnowledgeSources,
   type AgentTrace,
+  type AgentReviewResult,
   type CodingAgentRun,
   type KnowledgeContextManifest,
   type RepositoryKnowledgeSnapshot,
@@ -135,10 +136,37 @@ describe('knowledge directory view model (K4)', () => {
     expect(view.notes).toEqual(['已对照 1 份上下文清单检查文件是否已删除。'])
   })
 
+  it('counts only fully injected documents when applicable standards exceed the stage budget', () => {
+    const view = buildKnowledgeDirectoryView({
+      snapshot: snapshot({
+        'docs/knowledge/01-release.md': '---\ntitle: Release\nstages: [pr, accept]\ngate: true\n---\n# Release\nReview the current test evidence.',
+        'docs/knowledge/02-large.md': `---\ntitle: Large\nstages: [pr, accept]\ngate: true\n---\n# Large\n${'Large reference material. '.repeat(2_000)}`,
+        'docs/knowledge/03-summary.md': '---\ntitle: Summary\nstages: [pr]\n---\n# Summary\nDescribe the change.',
+      }),
+      recordedManifests: [],
+    })!
+
+    expect(view.stages.find((row) => row.stage === 'pr')).toMatchObject({
+      documentCount: 2, gateCount: 2, overBudgetCount: 1,
+    })
+    expect(view.stages.find((row) => row.stage === 'accept')).toMatchObject({
+      documentCount: 1, gateCount: 2, overBudgetCount: 1,
+    })
+  })
+
   it('collects manifests recorded by stage agent calls of the current project runs only', () => {
     const traces = [trace('run-a', manifest), trace('run-b', manifest), trace('run-a')]
     expect(recordedKnowledgeManifests(traces, new Set(['run-a']))).toEqual([
       { manifest, recordedAt: '2026-09-29T08:00:00.000Z' },
+    ])
+  })
+
+  it('checks files recorded by current-project PR and acceptance reviews', () => {
+    const review = (runId: string) => ({ runId, createdAt: indexedAt,
+      contextManifest: { knowledgeContext: manifest } as NonNullable<AgentReviewResult['contextManifest']>,
+    })
+    expect(recordedKnowledgeManifests([], new Set(['run-a']), [], [review('run-a'), review('run-b')])).toEqual([
+      { manifest, recordedAt: indexedAt },
     ])
   })
 

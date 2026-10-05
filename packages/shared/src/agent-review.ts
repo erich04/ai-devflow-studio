@@ -31,6 +31,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { buildKnowledgeReferences, projectKnowledgeReferencesForNode } from './knowledge'
+import { assembleKnowledgeStageContext } from './knowledge-context'
 import { isDeepSeekUsageContext, parseOpenAiCompatibleProviderUsage } from './provider-usage'
 import { redactSecrets, redactSensitiveText } from './redaction'
 import type { PolicySnapshot } from './enforcement'
@@ -244,8 +245,9 @@ export function describeAgentProviderFailure(error: unknown): string {
     incomplete_response: '模型未正常结束回答，未保存本次报告。',
     insufficient_system_resource: '模型服务资源不足，提前结束了回答；可稍后重试。未保存本次报告。',
     empty_content: '模型未返回正文，未保存本次报告。', missing_content: '模型未返回正文，未保存本次报告。',
-    invalid_json: '模型返回的正文格式不完整，未保存本次报告。',
-    invalid_review_schema: '模型返回的审查报告缺少必要字段，未保存本次报告。',
+    not_json_object: '模型返回的正文不是报告对象，未保存本次报告。',
+    invalid_json: '模型返回的正文格式有误，无法解析，未保存本次报告。',
+    invalid_review_schema: '模型返回的审查报告字段缺失或格式不符合要求，未保存本次报告。',
     provider_timeout: '模型响应超时，未保存本次报告。已有报告保持不变。',
     cancelled_by_user: '已停止本次模型调用，未保存新报告。',
     response_too_large: '响应超过安全接收容量，未保存不完整报告。',
@@ -345,6 +347,9 @@ export type BuildAgentReviewContextInput = {
   testEvidence: TestEvidence[]
   knowledgeDocuments: KnowledgeDocument[]
   knowledgeChunks: KnowledgeChunk[]
+  /** Explicit for repository-backed reviews; older callers keep bounded chunk inputs. */
+  knowledgeRoot?: string | null
+  knowledgeExecutor?: StageAgentExecutorKind
   requiredContextFields?: WorkflowContextPolicyRequirements
   policySnapshot?: PolicySnapshot | (Pick<PolicySnapshot, 'effectivePolicy' | 'version'> & { source: 'api' }) | null
   /** Repository instruction file (ADR 0025 L0). */
@@ -639,6 +644,10 @@ function selectReviewSubjectArtifacts(
     return [clarification, design]
   }
 
+  if (node.stage === 'pr' && node.kind === 'pr') {
+    return [requireExactlyOneLinkedArtifact({ run, node, artifacts: runArtifacts, kind: 'pr', label: 'PR delivery package' })]
+  }
+
   const linkedIds = new Set(node.artifactIds)
   const linked = runArtifacts.filter((artifact) => linkedIds.has(artifact.id))
   if (linked.length === 0) {
@@ -909,17 +918,30 @@ async function readProviderJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
-function parseProviderJson<T>(raw: string, outputKind: string): Partial<T> {
+function parseProviderJson(raw: string): Record<string, unknown> {
+  if (!raw.trim()) throw new StructuredProviderOutputError('empty_content')
+  let value: unknown
   try {
-    return JSON.parse(raw) as Partial<T>
+    value = JSON.parse(raw) as unknown
   } catch {
+    // Preserve the existing prose/Markdown wrapper support. Do not repair JSON
+    // or choose one report from multiple objects; either could change a finding.
     const start = raw.indexOf('{')
     const end = raw.lastIndexOf('}')
     if (start === -1 || end === -1 || end <= start) {
-      throw new Error(`Agent provider returned invalid JSON ${outputKind} output`)
+      throw new StructuredProviderOutputError('invalid_json')
     }
-    return JSON.parse(raw.slice(start, end + 1)) as Partial<T>
+    try {
+      value = JSON.parse(raw.slice(start, end + 1)) as unknown
+    } catch {
+      // A SyntaxError can include model text; only retain the fixed reason.
+      throw new StructuredProviderOutputError('invalid_json')
+    }
   }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new StructuredProviderOutputError('not_json_object')
+  }
+  return value as Record<string, unknown>
 }
 
 const policyFindingCategories = new Set<AgentPolicyFinding['category']>([
@@ -1018,6 +1040,8 @@ export async function buildAgentReviewContext({
   requiredContextFields,
   policySnapshot,
   projectInstructions,
+  knowledgeRoot,
+  knowledgeExecutor = 'direct-provider',
 }: BuildAgentReviewContextInput): Promise<AgentReviewContext> {
   const runArtifacts = artifacts.filter((artifact) => artifact.runId === run.id)
   const selectedArtifacts = selectReviewSubjectArtifacts(run, node, runArtifacts)
@@ -1129,8 +1153,18 @@ export async function buildAgentReviewContext({
     },
     ...(requiredContextFields ? { requiredByPolicy: requiredContextFields } : {}),
   })
-  const boundedKnowledgeChunks = buildBoundedReviewKnowledgeChunks(knowledgeChunks, rawReferences)
-  const boundedInstructions = projectInstructions?.content
+  const residentKnowledge = knowledgeRoot !== undefined
+    ? assembleKnowledgeStageContext({
+        documents: knowledgeDocuments, stage: node.stage, knowledgeRoot,
+        ...(projectInstructions ? { projectInstructions } : {}),
+        injectInstructions: knowledgeExecutor !== 'local-agent',
+        canReadFiles: knowledgeExecutor === 'local-agent',
+      })
+    : undefined
+  // Repository reviews share the knowledge page's 24 KiB whole-document budget.
+  // Do not append legacy chunks: that would reintroduce catalogued document bodies.
+  const boundedKnowledgeChunks = residentKnowledge ? [] : buildBoundedReviewKnowledgeChunks(knowledgeChunks, rawReferences)
+  const boundedInstructions = knowledgeExecutor !== 'local-agent' && projectInstructions?.content
     ? {
         sourcePath: projectInstructions.sourcePath,
         contentDigest: projectInstructions.contentDigest,
@@ -1178,9 +1212,10 @@ export async function buildAgentReviewContext({
     criteriaCoverage:
       knowledgeDocuments.length === 0
         ? 'unavailable'
-        : boundedKnowledgeChunks.length === 0
+        : (residentKnowledge ? residentKnowledge.manifest.included.length : boundedKnowledgeChunks.length) === 0
           ? 'empty'
           : 'available',
+    ...(residentKnowledge ? { knowledgeContext: residentKnowledge.manifest } : {}),
     fieldProjection,
   }
 
@@ -1227,6 +1262,7 @@ export async function buildAgentReviewContext({
       })),
     knowledgeReferences: references,
     knowledgeChunks: boundedKnowledgeChunks,
+    ...(residentKnowledge ? { knowledgeSection: redactSensitiveText(residentKnowledge.knowledgeSection).value } : {}),
     fieldProjection,
     ...(policy ? { policy } : {}),
     manifest,
@@ -1252,6 +1288,12 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         openQuestions: 'List unresolved design questions and missing evidence.',
         recommendedChanges: 'List concrete changes before human Gate approval.',
       }
+    : context.node.stage === 'pr'
+      ? {
+          requirementCoverage: 'Review the PR delivery package against the request and PR-stage project standards.',
+          deliveryEvidence: 'Check the recorded diff and current test evidence; identify missing or stale evidence without claiming to have inspected the repository.',
+          publicationTiming: 'This review happens before Web delivery approval and publication. An absent remote PR URL is expected at this stage. The review never authorizes publishing or advances the workflow.',
+        }
     : context.node.stage === 'accept'
       ? {
           requirementCoverage: 'Compare the final implementation and recorded delivery with the original acceptance criteria.',
@@ -1319,6 +1361,7 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
         knowledgeCoverage: context.manifest.criteriaCoverage,
         knowledgeReferences: context.manifest.knowledgeCriteria,
         knowledgeChunks: context.knowledgeChunks,
+        ...(context.knowledgeSection !== undefined ? { projectKnowledge: context.knowledgeSection } : {}),
         ...(context.projectInstructions ? { projectInstructions: context.projectInstructions } : {}),
         ...(context.policy ? { policy: context.policy } : {}),
       },
@@ -2279,8 +2322,7 @@ export function createOpenAiCompatibleAgentProvider({
         }
         let value: Record<string, unknown>
         try {
-          value = input.purpose ? parseProviderJson<Record<string, unknown>>(raw, 'review') : parseStructuredProviderOutput(raw)
-          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid review object')
+          value = input.purpose ? parseProviderJson(raw) : parseStructuredProviderOutput(raw)
         } catch (error) {
           throw providerResponseError('invalid_model_output', true, responseMetadata, error, error instanceof StructuredProviderOutputError ? error.reason : 'invalid_json')
         }

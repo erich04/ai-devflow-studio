@@ -6203,6 +6203,52 @@ describe('App', () => {
     })))
   })
 
+  it('offers an explicit retry after a malformed Gate Review without advancing the Gate (#201)', async () => {
+    const state = persistedFixtureRunState()
+    let listener: Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0] | undefined
+    let rejectReview: ((error: Error) => void) | undefined
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(state),
+      onLocalStateUpdated: vi.fn((callback) => { listener = callback; return vi.fn() }),
+    })
+    vi.mocked(api.runKnowledgeReview).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectReview = reject }))
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    await waitFor(() => expect(runReview).toBeEnabled())
+    fireEvent.click(runReview)
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
+    expect(screen.getByTestId('task-review-run')).toHaveTextContent('正在运行门禁审查')
+
+    const detail = '模型返回的正文格式有误，无法解析，未保存本次报告。'
+    // The trusted IPC handler broadcasts the persisted failure state in finally.
+    await act(async () => {
+      listener?.({ ...state, events: [{
+        id: 'review-error', runId: fixtureRuns[0]!.id, nodeId: 'n-design-gate',
+        sequence: 1, kind: 'error', timestamp: '2026-06-15T00:03:59.000Z',
+        message: `门禁审查在产物保存前失败：${detail} {"cause":"invalid_json","finishReason":"stop"}`,
+      }] })
+      rejectReview?.(new Error(`基于知识的门禁审查在产物保存前失败：${detail}`))
+    })
+    expect(screen.getByTestId('toast')).toHaveTextContent(detail)
+    const panel = screen.getByTestId('task-review-run')
+    expect(panel).toHaveTextContent('上次门禁审查未完成')
+    expect(panel).toHaveTextContent('可能产生费用')
+    const retry = within(panel).getByRole('button', { name: '重试门禁审查' })
+    await waitFor(() => expect(retry).toBeEnabled())
+    expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1)
+    expect(api.approveGate).not.toHaveBeenCalled()
+    expect(screen.getByTestId('readiness-group-review-evidence')).toHaveTextContent('缺失')
+
+    fireEvent.click(retry)
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(api.runKnowledgeReview).mock.calls[1]![0]).toEqual(vi.mocked(api.runKnowledgeReview).mock.calls[0]![0])
+    await waitFor(() => expect(screen.getByTestId('readiness-group-review-evidence')).toHaveTextContent('已完成'))
+    expect(screen.queryByRole('button', { name: '重试门禁审查' })).not.toBeInTheDocument()
+    expect(api.approveGate).not.toHaveBeenCalled()
+    expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案评审')
+  })
+
   it('runs Gate Review in the task inspector and keeps the current inspector without opening settings', async () => {
     const api = installDesktopApi()
     render(<App />)
@@ -6248,7 +6294,24 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).not.toHaveTextContent(agentProvider.id)
   })
 
-  it('runs the required Gate Review from final acceptance enforcement', async () => {
+  it('starts PR knowledge review from the delivery step without preparing or approving delivery', async () => {
+    const state = prDeliveryState()
+    const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(state) })
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    const inspector = await screen.findByTestId('node-inspector')
+    const review = within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    await waitFor(() => expect(review).toBeEnabled())
+    fireEvent.click(review)
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+      runId: state.runs[0]!.id, nodeId: 'n-pr', projectId: state.runs[0]!.projectId,
+      providerId: agentProvider.id, requestedBy: fixturePairingCredential.userId,
+    })))
+    expect(api.prepareGitHubDelivery).not.toHaveBeenCalled()
+    expect(api.approveGate).not.toHaveBeenCalled()
+  })
+
+  it('collects the acceptance bundle before running the required Gate Review', async () => {
     const recommended = createRecommendedEnforcementPreset({
       organizationId: 'org-demo',
       updatedAt: '2026-06-18T00:00:00.000Z',
@@ -6259,6 +6322,7 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
         runs: [acceptanceRun],
+        artifacts: [],
         desktopPairingCredential: fixturePairingCredential,
       })),
       loadEnforcementPolicy: vi.fn().mockResolvedValue({
@@ -6301,8 +6365,16 @@ describe('App', () => {
     }))
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('业务验收')
+    const statusRow = within(inspector).getByTestId('task-status-row')
+    expect(within(statusRow).queryByRole('button', { name: '运行门禁审查' })).not.toBeInTheDocument()
+    fireEvent.click(within(statusRow).getByRole('button', { name: '生成验收证据包' }))
+    await waitFor(() => expect(api.createAcceptanceBundle).toHaveBeenCalledWith({
+      runId: acceptanceRun.id, nodeId: 'n-accept',
+    }))
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    expect(api.approveGate).not.toHaveBeenCalled()
     // The required review runs in place from the acceptance status row (plan W2).
-    const runReview = within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    const runReview = await within(within(inspector).getByTestId('task-status-row')).findByRole('button', { name: '运行门禁审查' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
 

@@ -21,6 +21,8 @@ import {
   type KnowledgeReviewBudgetGuardInput,
 } from './agent-review'
 import type { Artifact, TestEvidence } from './domain'
+import { indexKnowledgeSources } from './knowledge'
+import { assembleKnowledgeStageContext } from './knowledge-context'
 import { createRecommendedEnforcementPreset, evaluateGateEnforcement, resolveEffectivePolicy } from './enforcement'
 import { buildRemediationPlan } from './remediation'
 import { createRemoteAgentReviewSummary } from './remote-sync'
@@ -50,6 +52,43 @@ it('reviews an existing acceptance bundle under the effective policy with final-
 
 const run = runs[0]!
 const node = run.nodes.find((item) => item.id === 'n-design-gate')!
+
+it.each(['pr', 'accept'] as const)('uses the same whole-document byte budget for %s review and the knowledge page', async (stage) => {
+  const document = (title: string, body: string) => `---\ntitle: ${title}\nsummary: ${title}\nstages: [pr, accept]\ngate: false\n---\n# ${title}\n${body}`
+  const index = indexKnowledgeSources([
+    { sourcePath: 'docs/knowledge/01-complete.md', markdown: document('Complete', '完整正文。'.repeat(950) + 'END_OF_COMPLETE_DOCUMENT'), updatedAt: '2026-10-04T00:00:00Z' },
+    { sourcePath: 'docs/knowledge/99-large.md', markdown: document('Large', 'OVERSIZE_BODY_SENTINEL' + '大型附录。'.repeat(4000)), updatedAt: '2026-10-04T00:00:00Z' },
+  ])
+  const reviewNode = { ...node, id: `${stage}-review`, stage, kind: stage === 'pr' ? 'pr' as const : 'acceptance' as const, artifactIds: ['delivery-subject'] }
+  const input = {
+    run, node: reviewNode, knowledgeRoot: 'docs/knowledge',
+    artifacts: [{ id: 'delivery-subject', runId: run.id, nodeId: reviewNode.id, kind: stage === 'pr' ? 'pr' as const : 'acceptance' as const,
+      title: 'Delivery', summary: 'Verified delivery', content: 'Current diff and tests.', updatedAt: '2026-10-04T00:00:00Z', redacted: true }],
+    testEvidence: [], knowledgeDocuments: index.documents, knowledgeChunks: index.chunks,
+  }
+  const context = await buildAgentReviewContext(input)
+  const prompt = createKnowledgeReviewPrompt(context)
+  const assembled = assembleKnowledgeStageContext({ documents: index.documents, stage, knowledgeRoot: input.knowledgeRoot, injectInstructions: true, canReadFiles: false })
+  expect(prompt).toContain('END_OF_COMPLETE_DOCUMENT')
+  expect(prompt).not.toContain('OVERSIZE_BODY_SENTINEL')
+  expect(prompt).toContain('not loaded because of the context budget')
+  expect(context.manifest).toMatchObject({ knowledgeContext: assembled.manifest })
+  expect(context).toEqual(await buildAgentReviewContext(input))
+})
+
+it('leaves repository instructions to the local review executor and records that ownership', async () => {
+  const context = await buildAgentReviewContext({
+    run, node, artifacts, testEvidence: [], knowledgeDocuments, knowledgeChunks,
+    knowledgeRoot: 'docs/knowledge', knowledgeExecutor: 'local-agent',
+    projectInstructions: {
+      sourcePath: 'AGENTS.md', content: 'LOCAL_EXECUTOR_INSTRUCTIONS_SENTINEL',
+      bytes: 36, contentDigest: 'sha256:instructions', truncated: false,
+    },
+  })
+  expect(context.manifest.knowledgeContext?.instructions?.loadedBy).toBe('executor')
+  expect(createKnowledgeReviewPrompt(context)).not.toContain('LOCAL_EXECUTOR_INSTRUCTIONS_SENTINEL')
+  expect(context.projectInstructions).toBeUndefined()
+})
 
 it('treats the review being generated as output rather than a missing input prerequisite', async () => {
   const context = await buildAgentReviewContext({
