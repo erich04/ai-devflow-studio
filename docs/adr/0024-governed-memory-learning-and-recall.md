@@ -33,7 +33,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 
 - Native v2 的 analysis、initial、repair 共用一个静态 `NATIVE_CODING_V2_SYSTEM_PROMPT`，由 user JSON 的 `phase` 字段选择规则。运行数据（例如 `allowedPaths`）只放在 user 消息里。
 - Native v2 的 user JSON 以 `stateVersion → brief` 开头，以 `phase → limits` 结尾，阶段数据放在中间。
-- 讨论栏的上下文键顺序为 `originalRequirements → history → [backgroundMemory] → [criticalProposalInput] → toolObservations → latestWorkflow → contextNotice → remainingSteps → [proposalVerification]`。同一轮内工具观察只追加；已降级的观察保持降级，使后续步骤仍是前一步的前缀扩展。
+- 讨论栏的上下文键顺序为 `originalRequirements → [projectInstructions] → history → [rollingSummary] → [backgroundMemory] → [criticalProposalInput] → toolObservations → latestWorkflow → contextNotice → remainingSteps → [proposalVerification]`。当前需求、L0 和记忆未变化且未触发压缩时，同一轮内工具观察只追加，已降级的观察保持降级，使后续步骤保持稳定前缀；新鲜度与硬预算优先于缓存复用。
 - 不添加 `cache_control` 或 `prompt_cache_key` 请求参数。前后效果用现有的 `cacheReadTokens` 和 `cacheHitRate` 对比。
 
 <a id="recall"></a>
@@ -52,7 +52,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 
 - 阶段 Agent 和讨论栏把召回的记忆作为低信任背景，与编码简报的规则相同：不能授权，不能覆盖当前请求、原始需求或已批准产物，不算 Gate 或仓库证据，冲突时以当前请求为准。
 - 范围沿用 ADR 0018 的交集规则。阶段 Agent 使用 `resolveTrustedWorkflowActor` 得到的用户。讨论栏在已配对到该本地项目时使用配对用户；未配对时使用本轮开始时已附加需求的 Run 创建者；两者都没有时本轮不召回。
-- 这两处在每次调用时重新召回，不持久化附件，所以删除和过期对下一次调用立即生效。它们不产出受回执保护的执行，不增加 `CodingContextReceipt` 式的变化检查。
+- 阶段 Agent 每次阶段调用重新召回；讨论栏每个宿主模型步骤重新召回，不持久化记忆正文附件，所以删除和过期对下一宿主步骤生效。OpenCode 内部单步的模型循环由 OpenCode 管理，宿主不能撤回已发送上下文。它们不产出受回执保护的执行，不增加 `CodingContextReceipt` 式的变化检查。
 - 多 Agent 协调器暂不召回记忆。原计划的前置条件已完成：Supervisor 重试时读取已持久化的附件并逐项核对（附件 id、Runtime、检查点、`attachedAt`、范围、授权、`contextDigest`，且不含知识引用和记忆），不再在 `attachedAt` 时刻重建来源。召回本身推迟，原因有三：
   - 协调器的 Supervisor 和 Specialist 目前都不调用模型，召回的记忆没有消费方，只会增加失效面。
   - 存储层拒绝带知识或记忆的 Specialist 附件（启动和重试替换两处），接入需要同时放开并设计 Specialist 的继承规则。
@@ -86,15 +86,15 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 - 策略晋升的可见性：原计划用 `runtime` 可见性 + `thirty_days`，但按背景中的约束 2，这样的记忆跨运行召回不到，没有学习效果。因此改为 `user_project` + `private` + `thirty_days`：只对同一用户在同一本地项目可见，不进入 Team 摘要，30 天自动过期，可随时删除。这比原计划的范围更宽，2026-09-30 确认采用。
 - 策略标识为 `desktop-coding-run-memory-policy` v1，审计照常记录 `promotion_actor_kind = 'policy'`。
 - 忽略待审候选：本人可以在面板里忽略一条从未晋升的候选（二次确认）。v38 迁移新增 `agent_memory_candidate_dismissals`，只保存候选 id、范围、来源类型、`contentDigest`、`provenanceDigest`、操作人和时间，不保存语句。删除候选行和写入忽略记录在同一次持久化变更里完成，任一步失败都整体回滚（与晋升相同的 `runDurableMutation` 快照恢复）。之后同一 id 或同一来源和内容的候选不会再被保存：`saveAgentMemoryCandidate` 返回 `dismissed`，学习轨迹记为 `dismissed`，Agent Runtime 带候选的新转换被拒绝；已提交的同一转换重放时，匹配的忽略记录代替候选行。已在忽略前取得授权、尚未提交的晋升，提交时因候选行不存在而返回 `source_stale`。已晋升的候选是记忆的来源，不能忽略，要不再召回应删除那条记忆。
-- 删除记忆沿用 ADR 0018：写墓碑、清除索引与派生状态，之后不再召回，记忆卡片不再显示内容。已知缺口：它的来源候选仍保留，面板以「已提升」显示原语句；修订历史中的语句也保留在本地数据库中，用于审计和版本链。删除记忆后隐藏来源候选的语句，留作后续。
+- 删除记忆沿用 ADR 0018：写墓碑、清除索引与派生状态，之后不再召回，记忆卡片不再显示内容。它的来源候选仍以「已提升」列出（保留来源关系），但渲染投影的 `statement` 为 `null`，面板显示「对应的 Memory 已删除，内容不可用。」；只有已晋升的候选允许没有语句。与记忆卡片一致，等待清除（`purge_pending`）时两处仍显示内容，便于完成清除。候选行和修订历史中的语句仍保留在本地数据库中，用于审计和版本链，只在 Electron Main 内可读。
 
 <a id="in-run-compaction"></a>
 
 ### 6. 运行中和会话级压缩
 
-- Native v2 repair 调用增加：`initialChangeSet`（已应用的 initial 替换，有长度上限）和 `failureLocations`（从原始测试输出解析出的 `file:line`，只保留工作区内的规范相对路径）。可编辑文件的片段以首个失败位置为中心，而不是文件开头；片段不从第 1 行开始时带 `startLine`。不可编辑文件只附带短的只读片段（最多 3 个，失败行前后各 20 行，每个不超过 2,000 字符）。提示超限时依次去掉只读片段、`initialChangeSet` 正文（只保留路径）、`failureLocations`，最后才把可编辑片段截短到下限以下。单个可编辑片段上限 32 KB 已超过 30,000 字符的提示上限，所以每一级先把以失败行为中心的窗口缩到 4,000 字符的下限，仍超限才进入下一级。initial 提案的 `summary` 和分析摘要目前没有持久化，暂不附带。所有片段（包括 initial 阶段的搜索片段）都先对整个文件脱敏再截取，避免窗口边缘把多行私钥切成脱敏规则识别不了的片段；私钥块逐行替换为标记，保持行数，行号仍对得上。脱敏改变了行数时，可编辑片段不带 `startLine`，只读片段直接跳过。解析 `file:line` 时逐行匹配并限制路径长度，避免长串输出触发回溯；Windows 的盘符根目录（含 `file:///C:/`）会先去掉再匹配。
-- 讨论栏超出预算时，较早的工具观察先降级为占位 `{sourceId, name, args, observedAt, degraded: true}`，可以用相同 `name` 和 `args` 重新查询，而不是整条丢弃。降级按从旧到新进行，最新一条真实工具结果（不是数组最后一项，恢复提示也会追加进来）保持完整，并写回本轮的观察数组，保证之后各步的前缀稳定。超限时的处理顺序是：先去掉本步的召回记忆，再降级工具结果，最后才丢弃较早的聊天历史。
-- 滚动会话摘要、LLM 摘要和按提供方估算 token 的预算单位，等 V3.0 的会话账本与 `PromptSection` 压缩契约（`docs/plans/v3.x-agent-runtime-capability-roadmap.md`）建成后再做，避免两套压缩边界。
+- Native v2 repair 调用增加：`initialChangeSet`（已应用的 initial 替换，有长度上限）和 `failureLocations`（从原始测试输出解析出的 `file:line`，只保留工作区内的规范相对路径）。可编辑文件的片段以首个失败位置为中心，而不是文件开头；片段不从第 1 行开始时带 `startLine`。不可编辑文件只附带短的只读片段（最多 3 个，失败行前后各 20 行，每个不超过 2,000 字符）。提示超限时依次去掉只读片段、`initialChangeSet` 正文（只保留路径）、`failureLocations`，最后才把可编辑片段截短到下限以下。单个可编辑片段上限 32 KB 已超过 30,000 字符的提示上限，所以每一级先把以失败行为中心的窗口缩到 4,000 字符的下限，仍超限才进入下一级。analysis 和 initial 的公开结构化 summary 现在保存于本地 Coding Run 轨迹，绑定调用 ID 与精确 Change Set；repair 读取持久来源。旧记录缺失时省略，不保存提供方隐藏推理。所有片段（包括 initial 阶段的搜索片段）都先对整个文件脱敏再截取，避免窗口边缘把多行私钥切成脱敏规则识别不了的片段；私钥块逐行替换为标记，保持行数，行号仍对得上。脱敏改变了行数时，可编辑片段不带 `startLine`，只读片段直接跳过。解析 `file:line` 时逐行匹配并限制路径长度，避免长串输出触发回溯；Windows 的盘符根目录（含 `file:///C:/`）会先去掉再匹配。
+- 讨论栏超出预算时，较早的工具观察先降级为占位 `{sourceId, requestId, name, args, observedAt, degraded: true}`，保留工具事件关联，可续读原始结果或用相同 `name` 和 `args` 重新查询。降级按从旧到新进行，先保护最新一条真实工具结果（不是数组最后一项，恢复提示也会追加进来），并写回本轮的观察数组。超限时先去掉本步召回记忆，再降级旧工具结果，再对旧历史生成摘要；仍超限时采用明确标记的有界截断，原始事实保留在本地账本中。
+- 本地最小会话账本、配对工具事实、确定性摘要、覆盖 ID、幂等边界和 PromptSection 预算见 ADR 0026。恢复重建当前上下文；可选 LLM 摘要未启用，这不代表完整 V3.x 已实现。
 
 <a id="supersedes"></a>
 
@@ -115,19 +115,19 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 | 第 2 节 BM25、最低分、查询扩展、单条上限常量 | 已实现，有单元测试 |
 | 第 2 节 常驻记忆 | 不做，由 ADR 0025 L0 项目说明承担 |
 | 第 3 节 阶段 Agent 注入 | 已实现，有测试 |
-| 第 3 节 讨论栏注入 | 已实现，有测试。每轮开始时召回一次；召回失败或超出上下文预算时本轮不带记忆 |
+| 第 3 节 讨论栏注入 | 已实现，有测试。每个宿主模型步骤重新召回；召回失败或超出预算时该步不带记忆 |
 | 第 3 节 协调器重试读取已持久化附件 | 已实现，有测试 |
 | 第 3 节 协调器召回记忆 | 推迟，见第 3 节原因 |
 | 第 4 节 模板与去重判定（共享纯函数） | 已实现，有单元测试 |
-| 第 4 节 `coding_run` 来源、v37 迁移、存储校验、完成时生成候选（Native、OpenCode） | 已实现，有测试；Native 已用真实 DeepSeek 跑通两次连续 Coding Run 的学习与召回（见“影响”），OpenCode 只用模拟模型验证 |
+| 第 4 节 `coding_run` 来源、v37 迁移、存储校验、完成时生成候选（Native、OpenCode） | 已实现，有测试；Native 和 OpenCode 各用真实 DeepSeek 跑通两次连续 Coding Run 的学习与召回（见“影响”） |
 | 第 4 节 项目范围的记忆面板与生命周期 IPC | 已实现，有测试 |
 | 第 5 节 人工晋升与修订前去重、策略晋升（仅 `test_command`，存储层校验） | 已实现，有测试 |
 | 第 5 节 忽略待审候选（v38 迁移、存储、IPC、面板） | 已实现，有测试；打包冒烟校验已晋升候选不能忽略 |
-| 第 5 节 删除记忆后隐藏来源候选的语句 | 未做：删除后来源候选仍以「已提升」显示原语句，见第 5 节 |
+| 第 5 节 删除记忆后隐藏来源候选的语句 | 已实现，有测试；打包冒烟在重启后检查 |
 | 第 6 节 `file:line` 解析（共享纯函数） | 已实现，有单元测试 |
 | 第 6 节 repair 上下文接入执行器 | 已实现，有测试（`buildNativeCodingV2RepairPrompt`）；真实 DeepSeek 触发一次，修复后测试通过 |
 | 第 6 节 工具结果占位 | 已实现，有测试。本轮 42,000 字符观察上限和 30,000 字符提示上限都先降级再丢弃 |
-| 第 6 节 滚动摘要、token 预算单位 | 推迟到 V3.0 |
+| 第 6 节 滚动摘要、token 预算单位 | 本地最小契约已实现，见 ADR 0026；当前验收独立于历史 live |
 
 <a id="consequences"></a>
 
@@ -135,7 +135,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 
 - 不相关的记忆不再占用简报预算。代价是查询词和记忆没有共同词元时不会召回，即使语义相关。仍然不使用嵌入。
 - 阶段 Agent 和讨论栏的提示会包含记忆语句。它们与编码简报一样只保存在本地，不进入 Team 摘要。
-- 每条记忆的可召回上限统一为 3,800 字节，界面和修订都应按这个上限提示。
+- 存储兼容历史 8 KiB；编码/阶段/讨论的实际单条阈值分别是 3,800 / 2,800 / 1,800 UTF-8 字节，面板与修订框明确说明。大小合格仍需满足相关度、作用域与剩余预算。
 - 确定性测试只保证前缀结构。2026-09-30 用 `deepseek-flash` 做了一次真实对比（[证据](../engineering/evidence/prompt-cache-live-20260930.json)），同一套 `memory-context-live` 三个场景各跑一次，只替换执行器：
   - 前缀契约之前（`f0fad85` 的执行器）：6 次调用，输入 6,062 token，缓存命中 768（12.7%），未命中 5,294；initial 阶段命中率 14.0%。
   - 前缀契约之后：6 次调用，输入 9,318 token，缓存命中 4,992（53.6%），未命中 4,326；initial 阶段命中率 72.7%。
@@ -147,3 +147,6 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
   - 第二个运行的两次调用都在简报里带着这两条记忆，Context 回执记录召回了这两条。完成后 `test_command` 记为 `duplicate`，没有再保存；新的 `change_map` 被人工忽略，重试学习时记为 `dismissed`，面板不再有待审候选。
   - 4 次调用共用同一个 system prompt，缓存命中率 57.7%，费用 USD 0.0010713。
   - 局限：只跑一次；两个任务改的是同一行，召回的记忆只是背景，不是第二个运行成功的原因；人工晋升和忽略调用的是面板背后的同一套主进程服务，没有经过界面。
+- 同日用 `test:opencode-memory-learning-live` 在 OpenCode 路径上做了同样的两次连续运行（[证据](../engineering/evidence/opencode-memory-learning-live-20260930.json)）：OpenCode 1.18.15 通过与 Desktop Main 相同的 Provider 绑定方式调用 `deepseek-flash`，使用隔离的 OpenCode 配置目录；执行授权和 Change Acceptance 都经过审批，学习在 Change Acceptance 和规范测试通过之后执行，Workflow 的开发步骤随之推进。
+  - 第一个运行学到 `test_command`（策略晋升）和一条待审的 `change_map`；第二个运行的 Context 回执召回了这条测试命令记忆，学习时记为 `duplicate`。两次都只改了 `src/greeting.js`。
+  - 局限：只跑一次；OpenCode 的计费对 DevFlow 不透明，没有记录费用（[#207](https://github.com/erich04/ai-devflow-studio/issues/207)），三次尝试前后账户余额减少 0.02 元；Desktop 默认的 OpenCode 规则允许在受管工作树内直接编辑，所以没有出现编辑审批；这次没有人工晋升或忽略。

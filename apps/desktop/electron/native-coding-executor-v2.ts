@@ -3,6 +3,8 @@ import { readdir } from 'node:fs/promises'
 import path from 'node:path'
 import {
   aggregateCodingRuntimeCostSettlements,
+  measurePromptSections,
+  type PromptBudgetReceipt,
   AgentProviderRequestError,
   parseCodingExecutorDescriptor,
   parseCodingExecutorRequest,
@@ -111,6 +113,14 @@ type SearchPlan = {
   files: string[]
   searches: Array<{ query: string; path?: string }>
   summary: string
+}
+
+type NativeObservableSummaries = {
+  stateVersion: 1
+  changeSetId: string
+  changeSetDigest: string
+  analysis: { requestId: string; summary: string }
+  initial: { requestId: string; summary: string }
 }
 
 type ChangeProposal = {
@@ -634,11 +644,20 @@ async function collectExcerpts(input: {
   return excerpts
 }
 
-function fitChangePrompt(input: Record<string, unknown> & { excerpts: Excerpt[] }, maxChars = MAX_PROMPT_CHARS): string {
+type NativePromptBudget = { id: string; model: string; maxTokens?: number }
+function nativePromptBudget(prompt: string, provider: NativePromptBudget = { id: 'generic', model: 'unknown' }) {
+  const payload = JSON.parse(prompt) as Record<string, unknown>
+  return measurePromptSections([
+    { id: 'system', kind: 'system', content: NATIVE_CODING_V2_SYSTEM_PROMPT, required: true },
+    ...Object.entries(payload).map(([key, value]) => ({ id: key, kind: key === 'excerpts' ? 'tools' as const : 'current' as const, content: JSON.stringify({ [key]: value }), required: key === 'brief' || key === 'allowedPaths' })),
+  ], { provider: provider.id, model: provider.model, ...(provider.maxTokens ? { maxTokens: provider.maxTokens } : {}) })
+}
+
+function fitChangePrompt(input: Record<string, unknown> & { excerpts: Excerpt[] }, maxChars = MAX_PROMPT_CHARS, provider?: NativePromptBudget): string {
   const excerpts = input.excerpts.map((excerpt) => ({ ...excerpt }))
   while (excerpts.length > 0) {
     const serialized = JSON.stringify({ ...input, excerpts })
-    if (serialized.length <= maxChars) return serialized
+    if (serialized.length <= maxChars && !nativePromptBudget(serialized, provider).overflow) return serialized
     const longest = excerpts.reduce((current, excerpt) =>
       excerpt.content.length > current.content.length ? excerpt : current,
     )
@@ -732,6 +751,9 @@ export type NativeCodingV2RepairPromptInput = {
   /** Reads a canonical relative path inside the worktree; rejects paths it must not read. */
   readFile(path: string): Promise<string>
   maxPromptChars?: number
+  observableSummaries?: NativeObservableSummaries
+  provider?: { id: string; model: string }
+  maxInputTokens?: number
 }
 
 /**
@@ -744,8 +766,10 @@ export async function buildNativeCodingV2RepairPrompt(input: NativeCodingV2Repai
   prompt: string
   excerptCount: number
   failureLocations: TestFailureLocation[]
+  budget: PromptBudgetReceipt
 }> {
   const maxChars = input.maxPromptChars ?? MAX_PROMPT_CHARS
+  const provider = { ...(input.provider ?? { id: 'generic', model: 'unknown' }), ...(input.maxInputTokens ? { maxTokens: input.maxInputTokens } : {}) }
   const allowedPaths = [...new Set(input.initialChanges.map((change) => change.path))]
   const allowed = new Set(allowedPaths)
   const failureLocations = parseTestFailureLocations(`${input.testFailure.stdout}\n${input.testFailure.stderr}`, {
@@ -796,6 +820,7 @@ export async function buildNativeCodingV2RepairPrompt(input: NativeCodingV2Repai
     brief: safeText(input.brief),
     testFailure,
     ...(level < 3 && failureLocations.length ? { failureLocations } : {}),
+    ...(input.observableSummaries ? { observableSummaries: input.observableSummaries } : {}),
     initialChangeSet: level < 2 ? initialChangeSet : initialChangeSetPaths,
     excerpts,
     ...(level < 1 && readOnlyExcerpts.length ? { readOnlyExcerpts } : {}),
@@ -811,14 +836,21 @@ export async function buildNativeCodingV2RepairPrompt(input: NativeCodingV2Repai
     for (;;) {
       excerpts = editableExcerpts(windowChars)
       const serialized = JSON.stringify(assemble(level, excerpts))
-      if (serialized.length <= maxChars) return { prompt: serialized, excerptCount, failureLocations }
+      if (serialized.length <= maxChars && !nativePromptBudget(serialized, provider).overflow) return { prompt: serialized, excerptCount, failureLocations, budget: nativePromptBudget(serialized, provider) }
       if (windowChars <= REPAIR_EDITABLE_EXCERPT_MIN_CHARS) break
-      const overflow = serialized.length - maxChars
+      // Token/byte overflow can happen before the character cap. Always make progress.
+      const overflow = Math.max(1024, serialized.length - maxChars)
       windowChars = Math.max(REPAIR_EDITABLE_EXCERPT_MIN_CHARS, windowChars - Math.ceil(overflow / Math.max(1, excerptCount)) - 64)
     }
   }
   // Last resort: shorten editable excerpts below the floor.
-  return { prompt: fitChangePrompt(assemble(3, excerpts), maxChars), excerptCount, failureLocations }
+  for (let size = REPAIR_EDITABLE_EXCERPT_MIN_CHARS / 2; size >= 256; size = Math.floor(size / 2)) {
+    const prompt = JSON.stringify(assemble(3, editableExcerpts(size)))
+    const budget = nativePromptBudget(prompt, provider)
+    if (prompt.length <= maxChars && !budget.overflow) return { prompt, excerptCount, failureLocations, budget }
+  }
+  const prompt = fitChangePrompt(assemble(3, editableExcerpts(256)), maxChars, provider)
+  return { prompt, excerptCount, failureLocations, budget: nativePromptBudget(prompt, provider) }
 }
 
 function assertStartAuthority(
@@ -1085,8 +1117,10 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     manifestPathCount: number
     excerptCount: number
     parse: (value: Record<string, unknown>) => T
-  }): Promise<{ value: T; usage: ProviderUsage; requestedAt: string }> {
+  }): Promise<{ value: T; usage: ProviderUsage; requestedAt: string; requestId: string }> {
     await call.assertContextCurrent?.()
+    const promptBudget = nativePromptBudget(call.userPrompt, { id: input.decisionProvider.id, model: input.decisionProvider.modelId })
+    if (promptBudget.overflow) throw new Error('DevFlow Native context exceeds the token or hard size limit before provider dispatch')
     const requestId = createId('provider-call')
     const requestedAt = canonicalNow(clock)
     const timeoutMs = input.decisionProvider.timeoutMs ?? 30_000
@@ -1124,7 +1158,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     })
 
     let completed: NativeV2ModelResult | undefined
-    let result: { value: T; usage: ProviderUsage; requestedAt: string }
+    let result: { value: T; usage: ProviderUsage; requestedAt: string; requestId: string }
     try {
       completed = await input.decisionProvider.complete({
         phase: call.phase,
@@ -1162,7 +1196,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           : {}),
         usage: providerUsageTrace(completed.usage),
       })
-      result = { value, usage: completed.usage, requestedAt }
+      result = { value, usage: completed.usage, requestedAt, requestId }
     } catch (error) {
       const failure = error instanceof AgentProviderRequestError
         ? error
@@ -1334,7 +1368,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         allowedPaths: excerpts.map((excerpt) => excerpt.path),
         phase: 'initial',
         limits: { existingUtf8Files: true, maxFiles: 6, maxReplacements: 12 },
-      })
+      }, MAX_PROMPT_CHARS, { id: input.decisionProvider.id, model: input.decisionProvider.modelId })
       const initialResult = await runProviderCall({
         assertContextCurrent: context.assertContextCurrent,
         codingRunId: request.id,
@@ -1432,7 +1466,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
           id: createId('coding-event'), codingRunId: request.id, runId: context.run.id,
           nodeId: context.node.id, sequence: 1, kind: 'brief',
           message: 'DevFlow Native v2 built a bounded repository manifest and selected code evidence.',
-          timestamp: request.requestedAt, metadata: { manifestPaths: manifest.length, excerpts: excerpts.length }, redacted: true,
+          timestamp: request.requestedAt, metadata: { manifestPaths: manifest.length, excerpts: excerpts.length, promptBudgets: { analysis: nativePromptBudget(analysisPrompt, { id: input.decisionProvider.id, model: input.decisionProvider.modelId }), initial: nativePromptBudget(initialPrompt, { id: input.decisionProvider.id, model: input.decisionProvider.modelId }) } }, redacted: true,
         },
         {
           id: createId('coding-event'), codingRunId: request.id, runId: context.run.id,
@@ -1443,6 +1477,11 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             requestId: permissionRequest.id,
             changeSetId: changeSet.id,
             changeSetDigest: changeSet.changeSetDigest,
+            observableSummaries: {
+              stateVersion: 1, changeSetId: changeSet.id, changeSetDigest: changeSet.changeSetDigest,
+              analysis: { requestId: analysis.requestId, summary: plan.summary },
+              initial: { requestId: initialResult.requestId, summary: proposal.summary },
+            } satisfies NativeObservableSummaries,
             runtimeCost: runtimeCostTrace(settledCost),
           },
           redacted: true,
@@ -1518,7 +1557,25 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         const initialPaths = new Set(changeSet.changes.map((change) => change.path))
         // Same leading stateVersion + brief as analysis/initial; the persisted brief is the
         // canonical one those calls sent, so the provider can reuse the shared prefix.
+        const persistedEvents = await input.store.listCodingAgentEvents(codingRun.id)
+        const observableSummaries = persistedEvents.flatMap((event): NativeObservableSummaries[] => {
+          const value = event.metadata?.observableSummaries
+          if (!isPlainRecord(value) || value.stateVersion !== 1 || value.changeSetId !== changeSet.id || value.changeSetDigest !== changeSet.changeSetDigest) return []
+          const analysis = value.analysis
+          const initial = value.initial
+          const valid = (part: unknown): part is NativeObservableSummaries['analysis'] => isPlainRecord(part) &&
+            typeof part.summary === 'string' && part.summary.length > 0 && part.summary.length <= 1000 && safeText(part.summary) === part.summary &&
+            typeof part.requestId === 'string' && persistedEvents.some((source) => {
+              const trace = source.metadata?.providerCall
+              return isPlainRecord(trace) && trace.requestId === part.requestId && trace.status === 'succeeded'
+            })
+          if (!valid(analysis) || !valid(initial)) return []
+          return [{ stateVersion: 1, changeSetId: changeSet.id, changeSetDigest: changeSet.changeSetDigest,
+            analysis: { summary: analysis.summary, requestId: analysis.requestId }, initial: { summary: initial.summary, requestId: initial.requestId } }]
+        })[0]
         const repair = await buildNativeCodingV2RepairPrompt({
+          ...(observableSummaries ? { observableSummaries } : {}),
+          provider: { id: input.decisionProvider.id, model: input.decisionProvider.modelId },
           brief: codingRun.prompt,
           testFailure: { summary: tested.result.summary, stdout: tested.result.stdout, stderr: tested.result.stderr },
           worktreePath: workspace.worktreePath,
@@ -1591,7 +1648,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
             id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,
             nodeId: codingRun.nodeId, sequence: 1, kind: 'test',
             message: 'The saved worktree test failed; DevFlow Native v2 generated one bounded repair proposal.',
-            timestamp: testedAt, metadata: { status: tested.result.status, evidenceId: tested.evidence.id }, redacted: true,
+            timestamp: testedAt, metadata: { status: tested.result.status, evidenceId: tested.evidence.id, promptBudget: repair.budget }, redacted: true,
           },
           {
             id: createId('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId,

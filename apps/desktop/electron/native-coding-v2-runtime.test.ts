@@ -171,6 +171,14 @@ describe('DevFlow Native Executor v2 runtime', () => {
           await store.commitAgentMemoryRevision({ revision: revised.revision, recordedAt: clock() }, revised.capability)
         }
         if (input.phase === 'repair') {
+          const repair = JSON.parse(input.userPrompt)
+          expect(repair.observableSummaries).toMatchObject({
+            stateVersion: 1,
+            analysis: { summary: 'Inspect the message module.', requestId: expect.any(String) },
+            initial: { summary: 'Replace only the requested message.', requestId: expect.any(String) },
+            changeSetId: expect.any(String), changeSetDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          })
+          expect(repair.observableSummaries).not.toHaveProperty('explanation')
           return {
             value: scenario === 'unrepairable'
               ? { stateVersion: 2, changes: [], summary: 'Missing dependency cannot be repaired by changing the requested message.' }

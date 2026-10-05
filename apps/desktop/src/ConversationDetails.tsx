@@ -69,7 +69,7 @@ export function ConversationDetailsDialog({ session, projectName, providerName, 
         <p>本地保留 {session.messages.length} 条会话记录，包含消息、工具查询和调用通知。完整聊天仍在原会话中。</p>
         {receipt ? <>
           <p>上次上下文记录时间：{receipt.observedAt}。</p>
-          <p>纳入 {receipt.includedMessages} 条本会话消息；{receipt.omittedMessages} 条较早消息未纳入，历史仍保留。</p>
+          <p>纳入 {receipt.includedMessages} 条本会话消息；{receipt.omittedMessages} 条较早消息{receipt.boundaryId ? '已生成有界摘要，原文仍保留。' : '未纳入，历史仍保留。'}</p>
           {receipt.limited && <p className="meta">本次上下文达到容量限制，部分查询内容未全部附带。可以缩小问题范围后继续调查。</p>}
           <p className="meta">这里只记录消息数量和容量限制，没有保存逐条模型输入或完整来源明细。</p>
         </> : <p className="meta">尚无上下文使用记录，不代表历史消息已被删除。</p>}

@@ -1,6 +1,7 @@
 import type { ModelCallSettlement, ModelCallAccountingScope, ModelCallSettlementReceipt, StoredModelCallSettlement } from '@ai-devflow/shared'
 import { storedModelCallSettlement } from './model-cost-recovery'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
+import { validateConversationContext } from './conversation-context.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
 import { isAllowedCodingRunPolicyPromotion } from './coding-run-memory-policy.js'
@@ -4561,6 +4562,7 @@ class SqlJsLocalStore implements LocalStore {
     const previous = selectJson<WorkbenchConversation>(this.db, 'select json from workbench_conversations where id = ?', [conversation.id])[0]
     if ((previous?.version ?? 0) !== expectedVersion) return false
     if (conversation.version !== expectedVersion + 1 || (previous && previous.localProjectId !== conversation.localProjectId)) throw new Error('Invalid conversation revision')
+    validateConversationContext(conversation, previous)
     if (!selectJson<LocalProject>(this.db, 'select json from local_projects where id = ?', [conversation.localProjectId]).length) throw new Error('Conversation project not found')
     if (JSON.stringify(conversation).length > 2000000) throw new Error('会话已达到存储上限，请新建会话。')
     if (artifact) {

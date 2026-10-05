@@ -12,6 +12,7 @@ const fields: Record<string, { required: string[]; optional: string[]; descripti
   repo_search: { required: ['query'], optional: ['path'], description: '在当前项目允许范围内搜索文本；搜索有明确边界。' },
   knowledge_list: { required: [], optional: ['stage', 'offset'], description: '列出项目知识目录中的规范（适用阶段、Gate 依据、摘要）与项目说明文件；知识不是 Gate 批准。' },
   knowledge_read: { required: ['path'], optional: ['offset', 'limit'], description: '分页阅读知识目录中的一篇文档或仓库根目录的项目说明。' },
+  conversation_read: { required: [], optional: ['messageId', 'eventId', 'offset', 'limit'], description: '分页读取本会话的原始消息或工具事件；省略 ID 时列出本会话索引，不返回隐藏推理。' },
   // Superseded by knowledge_list/knowledge_read (knowledge-context K3); callable, not listed.
   knowledge: { required: ['query'], optional: [], description: '检索当前项目已配置的知识；知识不是 Gate 批准。', listed: false },
 }

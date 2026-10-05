@@ -5,5 +5,5 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["scripts/memory-context-live.ts", "scripts/memory-context-live-smoke.ts", "scripts/native-repair-live.ts", "scripts/memory-learning-live.ts"]
+  "include": ["scripts/memory-context-live.ts", "scripts/memory-context-live-smoke.ts", "scripts/native-repair-live.ts", "scripts/memory-learning-live.ts", "scripts/opencode-memory-learning-live.ts", "scripts/opencode-memory-learning-live-smoke.ts", "scripts/opencode-memory-learning-deterministic.mts"]
 }

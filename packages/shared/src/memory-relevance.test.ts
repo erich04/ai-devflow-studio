@@ -5,6 +5,7 @@ import {
   CONVERSATION_MEMORY_RECALL_BUDGET,
   STAGE_AGENT_MEMORY_RECALL_BUDGET,
   AGENT_MEMORY_RECALL_LABEL_BYTES,
+  memoryRecallAvailability,
   rankMemoryByRelevance,
   selectMemoryWithinBudget,
   tokenizeMemoryText,
@@ -102,5 +103,16 @@ describe('Memory relevance floor on realistic queries (ADR 0024 §2)', () => {
     ]
     const query = '需要支持导出月度报表，可以使用现有的 src/export/report.ts。'
     expect(rankMemoryByRelevance(memories, query, statementOf).map(({ item }) => item.id)).toEqual(['export'])
+  })
+})
+
+
+describe('Memory entry size availability', () => {
+  it('explains each entry budget using UTF-8, while legacy 8 KiB records stay readable', () => {
+    expect(memoryRecallAvailability('中'.repeat(600))).toEqual({ bytes: 1800, coding: true, stage: true, conversation: true })
+    expect(memoryRecallAvailability('中'.repeat(601))).toEqual({ bytes: 1803, coding: true, stage: true, conversation: false })
+    expect(memoryRecallAvailability('a'.repeat(2801))).toEqual({ bytes: 2801, coding: true, stage: false, conversation: false })
+    expect(memoryRecallAvailability('a'.repeat(3800)).coding).toBe(true)
+    expect(memoryRecallAvailability('a'.repeat(8192))).toEqual({ bytes: 8192, coding: false, stage: false, conversation: false })
   })
 })

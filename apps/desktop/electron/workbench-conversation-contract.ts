@@ -28,6 +28,7 @@ export type ConversationMessage = {
   createdAt: string
   actions?: ConversationAction[]
   citations?: ConversationCitation[]
+  toolRequestId?: string
   question?: { prompt: string; options: string[]; purpose?: 'clarification' | 'save_proposal'; answeredAt?: string; resolvedBy?: 'proposal_saved' }
   draft?: ConversationDraft
   usage?: AgentProviderUsage
@@ -50,11 +51,14 @@ export type WorkbenchConversation = {
   memory?: string
   status: 'idle' | 'running' | 'awaiting_answer' | 'failed' | 'cancelled' | 'interrupted'
   messages: ConversationMessage[]
+  /** Main-owned local facts and derived context; absent on legacy conversations. */
+  toolEvents?: import('./conversation-context.js').ConversationToolEvent[]
+  compactions?: import('./conversation-context.js').ConversationCompaction[]
   createdAt: string
   updatedAt: string
   error?: string
   failure?: ConversationFailure
-  contextReceipt?: { includedMessages: number; omittedMessages: number; limited?: boolean; observedAt: string }
+  contextReceipt?: { includedMessages: number; omittedMessages: number; limited?: boolean; observedAt: string; boundaryId?: string; budget?: import('@ai-devflow/shared').PromptBudgetReceipt }
 }
 export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }

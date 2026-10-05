@@ -180,6 +180,37 @@ const runtimeListItem = createAgentRuntimeRendererListItem({
 })
 
 describe('AgentMemoryPanel', () => {
+  it('explains why a legacy large memory cannot fit a recall entry', async () => {
+    const large = { ...snapshot, candidateCount: 1, candidates: [{ ...snapshot.candidates[0]!, statement: '中'.repeat(1000) }] }
+    const api = { listAgentMemoryLifecycle: vi.fn().mockResolvedValue(large) } as unknown as DevFlowDesktopApi
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+    expect(await screen.findByText(/3000 UTF-8 字节/)).toHaveTextContent('超出阶段、讨论入口预算')
+  })
+
+  it('shows no text for the source candidate of a deleted Memory', async () => {
+    const withDeletedSource: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      candidateCount: 3,
+      candidates: [...snapshot.candidates, {
+        ...snapshot.candidates[1]!,
+        id: 'candidate-deleted',
+        statement: null,
+        contentDigest: digest('9'),
+        createdAt: '2026-08-13T10:25:00.000Z',
+      }],
+    }
+    const api = {
+      listAgentRuntimes: vi.fn().mockResolvedValue([runtimeListItem]),
+      listAgentMemoryLifecycle: vi.fn().mockResolvedValue(withDeletedSource),
+    } as unknown as DevFlowDesktopApi
+
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+
+    expect(await screen.findByText('对应的 Memory 已删除，内容不可用。')).toBeInTheDocument()
+    expect(screen.getByText('删除后内容不可用。')).toBeInTheDocument()
+    expect(screen.getAllByText('已提升')).toHaveLength(2)
+  })
+
   it('distinguishes Working, Candidate, Durable, conflict, expiry, and deletion state', async () => {
     const listAgentMemoryLifecycle = vi.fn().mockResolvedValue(snapshot)
     const api = {
@@ -205,7 +236,7 @@ describe('AgentMemoryPanel', () => {
     expect(screen.getByText('已删除')).toBeInTheDocument()
     expect(screen.getByText('修订 2 · 当前头版本 v4')).toBeInTheDocument()
     expect(screen.getByText('purge completed · deletion v3')).toBeInTheDocument()
-    expect(screen.getByText(snapshot.candidates[0]!.statement)).toBeInTheDocument()
+    expect(screen.getByText(snapshot.candidates[0]!.statement!)).toBeInTheDocument()
     expect(screen.getByText(snapshot.memories[0]!.statement!)).toBeInTheDocument()
     expect(listAgentMemoryLifecycle).toHaveBeenCalledWith({
       runId: runtime.authority.runId,
@@ -234,7 +265,7 @@ describe('AgentMemoryPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       '无法安全读取 Agent Memory 生命周期。',
     )
-    expect(screen.queryByText(snapshot.candidates[0]!.statement)).not.toBeInTheDocument()
+    expect(screen.queryByText(snapshot.candidates[0]!.statement!)).not.toBeInTheDocument()
   })
 
   it('reads the project-wide view without an Agent Runtime and marks Coding Run duplicates (ADR 0024)', async () => {

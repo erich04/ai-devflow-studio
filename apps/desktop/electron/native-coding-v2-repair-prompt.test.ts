@@ -50,6 +50,18 @@ function input(files: Record<string, string>, overrides: Partial<NativeCodingV2R
 }
 
 describe('Native v2 repair prompt (ADR 0024 §6)', () => {
+  it('shrinks long Chinese code to the provider token budget while retaining the failure line', async () => {
+    const text = Array.from({ length: 900 }, (_, i) => `${i === 450 ? 'FAILURE_MARKER' : ''}// 中文代码说明`.repeat(4)).join('\n')
+    const built = await buildNativeCodingV2RepairPrompt(input({ 'src/filter.ts': text }, {
+      provider: { id: 'openai', model: 'gpt-test' }, maxInputTokens: 5000,
+      testFailure: { summary: 'failed', stdout: 'src/filter.ts:451:1', stderr: '' },
+    }))
+    const payload = JSON.parse(built.prompt) as Payload
+    expect(payload.excerpts[0]!.content).toContain('FAILURE_MARKER')
+    expect(payload.excerpts[0]!.content.length).toBeLessThan(3500)
+    expect(built.budget!.overflow).toBe(false)
+  })
+
   it('centres editable excerpts on the first failure and adds read-only excerpts for other failing files', async () => {
     const built = await buildNativeCodingV2RepairPrompt(input({ 'src/filter.ts': largeSource, 'src/filter.test.ts': testSource }))
     expect(built.prompt.length).toBeLessThanOrEqual(30_000)

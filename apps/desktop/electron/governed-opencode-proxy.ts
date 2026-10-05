@@ -30,7 +30,8 @@ export function summarizeRelayedUsage(
 const NOT_SENT_USAGE: AgentProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 0, cacheStatus: 'complete' }
 
 /** OpenCode's internal model rounds traverse this authenticated, loopback-only relay. */
-export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string}) {
+export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string;maxOutputTokens?:number}) {
+  if (input.maxOutputTokens !== undefined && (!Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1)) throw new Error('Invalid relay output limit')
   const token=randomBytes(32).toString('hex')
   const executionId = randomBytes(16).toString('hex')
   let sequence = 0
@@ -60,6 +61,11 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
       const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
       const body=JSON.parse(raw) as Record<string,unknown>
       if(body.model!==input.binding.modelId)throw new Error('OpenCode 模型与当前项目选择不一致。')
+      if (input.maxOutputTokens !== undefined) {
+        const requested = body.max_tokens ?? body.max_completion_tokens
+        body.max_tokens = typeof requested === 'number' && Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, input.maxOutputTokens) : input.maxOutputTokens
+        delete body.max_completion_tokens
+      }
       const result=await governedModelCall({governance:input.governance,projectId:input.projectId,provider:modelCallMetadata(input.binding),prompt:raw,signal:controller.signal,
         ...(input.approvalId?{approvalId:input.approvalId}:{}),
         ...(typeof body.max_tokens==='number'?{maxOutputTokens:body.max_tokens}:{}),action:async()=>{

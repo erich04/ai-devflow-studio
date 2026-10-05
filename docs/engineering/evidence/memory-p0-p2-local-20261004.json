@@ -1,0 +1,1234 @@
+{
+  "schemaVersion": 1,
+  "scope": "Local Memory P0/P1/P2 candidate; deterministic providers only, not release approval",
+  "mainAtStart": "8c6a50172beff3198f4ae4a7a98f2a24a2f97dae",
+  "integrationBase": "cb9cb27c4399ccf910aa3bbde7ec640e82f2b7f5",
+  "codeCandidateSha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+  "platform": "Darwin arm64",
+  "node": "24.18.0",
+  "pnpm": "9.15.0",
+  "opencode": "1.18.15",
+  "paidProviderCalls": 0,
+  "attempts": [
+    {
+      "label": "verify-1",
+      "command": [
+        "corepack",
+        "pnpm",
+        "verify"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 2,
+      "startedAt": "2026-10-05T01:41:05.845818+00:00",
+      "completedAt": "2026-10-05T01:41:07.192849+00:00",
+      "logSha256": "fdb2e75d541cb3dc350b2a43bbef235243f7c4c6e7432612715211ce1de2ae86"
+    },
+    {
+      "label": "opencode-deterministic-final",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:opencode-memory-learning-deterministic"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:41:22.882057+00:00",
+      "completedAt": "2026-10-05T01:41:28.840054+00:00",
+      "logSha256": "f4b2c42db69bd0aabd15b4bd7726cdae9eb06c97ab328f5d25b44f054ba4f4bd"
+    },
+    {
+      "label": "postgres",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:postgres-smoke"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:41:29.739536+00:00",
+      "completedAt": "2026-10-05T01:41:33.585346+00:00",
+      "logSha256": "73805b04be244c22581393bc8f13279c632cc0c0997fdae9bf47604a5bfadd7d"
+    },
+    {
+      "label": "damaged-metadata-red",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/conversation-context.test.ts"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 1,
+      "startedAt": "2026-10-05T01:45:57.245378+00:00",
+      "completedAt": "2026-10-05T01:45:58.689035+00:00",
+      "logSha256": "33214c554bc1acdfd4966715a7513ca2c9d8db22fcee3fa9bd7b27d5799ee712"
+    },
+    {
+      "label": "damaged-metadata-green",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/conversation-context.test.ts",
+        "apps/desktop/electron/workbench-conversation-service.test.ts"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:46:33.528143+00:00",
+      "completedAt": "2026-10-05T01:46:41.039961+00:00",
+      "logSha256": "4ac9eaf1447900926e8625e4000b0e788e1201d43df6d3e0f67597fbb7c1e612"
+    },
+    {
+      "label": "cancelled-tools-red",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/workbench-conversation-service.test.ts",
+        "-t",
+        "records missing tool results"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 1,
+      "startedAt": "2026-10-05T01:46:48.200144+00:00",
+      "completedAt": "2026-10-05T01:46:49.368407+00:00",
+      "logSha256": "2f2ae2dc96c4bd815f5a908207a88fc4da8667b145c9208827af3b99b6d889ae"
+    },
+    {
+      "label": "cancelled-tools-green",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/workbench-conversation-service.test.ts",
+        "-t",
+        "records missing tool results"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:47:08.817032+00:00",
+      "completedAt": "2026-10-05T01:47:09.987155+00:00",
+      "logSha256": "f8855ec6f71788fd5917a0ff9ae2e63912b41d9cb0fe9a45bd0a1109e18ef49f"
+    },
+    {
+      "label": "retry-budget-red",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/workbench-conversation-service.test.ts",
+        "-t",
+        "recovers once from invalid model output"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 1,
+      "startedAt": "2026-10-05T01:47:45.995025+00:00",
+      "completedAt": "2026-10-05T01:47:47.121870+00:00",
+      "logSha256": "1f8949cbe07f48b205bbf1b350e75175572d035cd8d09ba131be559ad717af62"
+    },
+    {
+      "label": "retry-budget-green",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/workbench-conversation-service.test.ts",
+        "-t",
+        "recovers once from invalid model output"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:48:08.760780+00:00",
+      "completedAt": "2026-10-05T01:48:09.869793+00:00",
+      "logSha256": "7225b6df48525e77cfeff400dea4f13463a1aff4dbfadfe349cfab6e24460f27"
+    },
+    {
+      "label": "duplicate-tools-red",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/conversation-context.test.ts"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 1,
+      "startedAt": "2026-10-05T01:48:40.513535+00:00",
+      "completedAt": "2026-10-05T01:48:41.532828+00:00",
+      "logSha256": "2548cfef0437023f520c12346d3aaacb50bef94c324c514869f98d75aa65a813"
+    },
+    {
+      "label": "review-targeted",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "apps/desktop/electron/conversation-context.test.ts",
+        "apps/desktop/electron/workbench-conversation-service.test.ts",
+        "packages/shared/src/memory-relevance.test.ts",
+        "apps/desktop/src/AgentMemoryPanel.test.tsx"
+      ],
+      "sha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:49:18.203982+00:00",
+      "completedAt": "2026-10-05T01:49:26.244143+00:00",
+      "logSha256": "57f9a13b1dba405fa44b75c5b5619773b33da891495026389f5d0d380e306cc9"
+    },
+    {
+      "label": "cost-db-setup",
+      "command": [
+        "corepack",
+        "pnpm",
+        "--filter",
+        "@ai-devflow/api",
+        "db:seed"
+      ],
+      "sha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "exitCode": 1,
+      "startedAt": "2026-10-05T01:50:16.669599+00:00",
+      "completedAt": "2026-10-05T01:50:17.125145+00:00",
+      "logSha256": "65a266b7d62a5b10675943f9b40c9c94f58a0da8c77ad3c47ad251fb59d2e919"
+    },
+    {
+      "label": "cost-db-migrate",
+      "command": [
+        "corepack",
+        "pnpm",
+        "--filter",
+        "@ai-devflow/api",
+        "db:setup"
+      ],
+      "sha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:50:22.551790+00:00",
+      "completedAt": "2026-10-05T01:50:23.421420+00:00",
+      "logSha256": "1535f390f2a2c6358f941103c1310ca9b9564c18c32151d9c238b2f205b0ddf3"
+    },
+    {
+      "label": "cost-db-seed",
+      "command": [
+        "corepack",
+        "pnpm",
+        "--filter",
+        "@ai-devflow/api",
+        "db:seed"
+      ],
+      "sha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:50:36.530059+00:00",
+      "completedAt": "2026-10-05T01:50:37.054081+00:00",
+      "logSha256": "73237ecefed209b15b492c633ef8989b3fa8a933a3812f3e97f41c7ae09c4813"
+    },
+    {
+      "label": "cost-recovery-postgres",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "tsx",
+        "scripts/model-cost-recovery-postgres-smoke.mts"
+      ],
+      "sha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:50:37.097430+00:00",
+      "completedAt": "2026-10-05T01:50:38.079995+00:00",
+      "logSha256": "be4ddfdbbe38bc12a22f582ead0b5f5c6bcfb6b4fd0663945d31d0c664f5f53b"
+    },
+    {
+      "label": "frozen-retrieval-memory",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:v21-retrieval-memory-evaluator"
+      ],
+      "sha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:50:58.790362+00:00",
+      "completedAt": "2026-10-05T01:50:59.330828+00:00",
+      "logSha256": "24a1ffaa0513ebc2ad83bd587a3ef312ce33b46ebdeaa90ed1447a71e66c61ad"
+    },
+    {
+      "label": "governed-report-red",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:opencode-memory-learning-deterministic"
+      ],
+      "sha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "exitCode": 1,
+      "startedAt": "2026-10-05T01:52:17.627955+00:00",
+      "completedAt": "2026-10-05T01:52:23.884148+00:00",
+      "logSha256": "5aa53504655164f266e88e53edfa5ac01fadca48bb530a3affcfbdf7af6e3c7e"
+    },
+    {
+      "label": "verify-final",
+      "command": [
+        "corepack",
+        "pnpm",
+        "verify"
+      ],
+      "sha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "exitCode": 1,
+      "startedAt": "2026-10-05T01:49:56.528322+00:00",
+      "completedAt": "2026-10-05T01:52:47.470610+00:00",
+      "logSha256": "14d2a2f698d6ff21ea0793cd8368a21cd6f7d45f3cca3b456d70f76cdcb2d70f"
+    },
+    {
+      "label": "harness-typecheck-final",
+      "command": [
+        "corepack",
+        "pnpm",
+        "typecheck:memory-context-smoke"
+      ],
+      "sha": "35f6f520b714662d80659e0734b8b7138cb65464",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:52:53.451292+00:00",
+      "completedAt": "2026-10-05T01:52:55.280361+00:00",
+      "logSha256": "19274efe8bd16659bd454c082a9451ca15af5e36635f2886ba9df03ebbd6ea1c"
+    },
+    {
+      "label": "opencode-governed-final",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:opencode-memory-learning-deterministic"
+      ],
+      "sha": "35f6f520b714662d80659e0734b8b7138cb65464",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:52:52.304032+00:00",
+      "completedAt": "2026-10-05T01:52:58.044490+00:00",
+      "logSha256": "0b067af6f99b10b9fe204bb425c183cefc2421acb13f356970d5285bb6adf554"
+    },
+    {
+      "label": "readme-contract",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "scripts/v15-readme-doc.test.ts"
+      ],
+      "sha": "35f6f520b714662d80659e0734b8b7138cb65464",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:53:27.491785+00:00",
+      "completedAt": "2026-10-05T01:53:28.322953+00:00",
+      "logSha256": "e0e1c54fa9b7b06b6cf40b9b4682cb6d1eaf9573cafc983f0b10dd7c86422fc4"
+    },
+    {
+      "label": "stage-opencode-contract",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:stage-agent-design-contract"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:53:38.272737+00:00",
+      "completedAt": "2026-10-05T01:53:46.594215+00:00",
+      "logSha256": "13dbe4aea87a0ed7058508eb480e3f163e924b6ef5020b3f70d4a4133044a356"
+    },
+    {
+      "label": "chat-opencode-contract",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:workbench-opencode-contract"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:53:38.272737+00:00",
+      "completedAt": "2026-10-05T01:53:47.060074+00:00",
+      "logSha256": "065e7982046574986a3f57daf9cb8ec9d8c3dd1fc415ad93a163566205730084"
+    },
+    {
+      "label": "verify-complete",
+      "command": [
+        "corepack",
+        "pnpm",
+        "verify"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:53:28.412425+00:00",
+      "completedAt": "2026-10-05T01:56:15.458800+00:00",
+      "logSha256": "25b8e117b5129ce0821e7b9de5c9a1710abeaef8514b8a760244b3512f334cb7"
+    },
+    {
+      "label": "build",
+      "command": [
+        "corepack",
+        "pnpm",
+        "build"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:56:40.530878+00:00",
+      "completedAt": "2026-10-05T01:56:53.629927+00:00",
+      "logSha256": "c32f8618d9fb008a7a7e150653c38b8a0a26397b08fae8f2c6bc352fa1fed5fd"
+    },
+    {
+      "label": "browser-e2e",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:e2e"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:57:03.727859+00:00",
+      "completedAt": "2026-10-05T01:57:29.758340+00:00",
+      "logSha256": "6ee533554f56a9349e94b765cc2e009c5454e88e2a1f38f4a0a9e2aa779911c8"
+    },
+    {
+      "label": "electron-smoke",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:electron-smoke"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:57:37.653297+00:00",
+      "completedAt": "2026-10-05T01:58:04.897285+00:00",
+      "logSha256": "589b4e79ffbcccfc148f927f8ec7cafc9d774904d9e84c9ab9fba985b4222b4b"
+    },
+    {
+      "label": "native-electron",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:native-coding-electron-smoke"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T01:58:15.638517+00:00",
+      "completedAt": "2026-10-05T01:58:24.802940+00:00",
+      "logSha256": "4cc664e5329e4d49e039acb9251b0d2dda2babf6d61a1447c7ab87f0530213d5"
+    },
+    {
+      "label": "chat-electron",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:workbench-conversation-electron-smoke"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T02:01:23.930102+00:00",
+      "completedAt": "2026-10-05T02:01:53.397592+00:00",
+      "logSha256": "0d4de8b84d9d0363cfb4bd70c1ab5d1d910206c683ebc63f51878a2c39dc8765"
+    },
+    {
+      "label": "desktop-pilot-build",
+      "command": [
+        "corepack",
+        "pnpm",
+        "build:desktop-pilot"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T02:02:08.824029+00:00",
+      "completedAt": "2026-10-05T02:02:30.226029+00:00",
+      "logSha256": "fe673f9ab51ec63078500cff55895219a2a79e8d6c1e0dcca5a6c3c9de748828"
+    },
+    {
+      "label": "desktop-pilot-smoke",
+      "command": [
+        "corepack",
+        "pnpm",
+        "test:desktop-pilot-smoke"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T02:02:37.170812+00:00",
+      "completedAt": "2026-10-05T02:02:41.541969+00:00",
+      "logSha256": "74b0ccbc28fda3e8f6364c181e918c6706da17d984cceea0aa508c843d9dd8ed"
+    },
+    {
+      "label": "final-doc-contracts",
+      "command": [
+        "corepack",
+        "pnpm",
+        "exec",
+        "vitest",
+        "run",
+        "scripts/roadmap-doc.test.ts",
+        "scripts/v15-readme-doc.test.ts"
+      ],
+      "sha": "ffe6ca303c89961ce7755d80eb29ff0ad1b963df",
+      "exitCode": 0,
+      "startedAt": "2026-10-05T02:03:44.334216+00:00",
+      "completedAt": "2026-10-05T02:03:45.286754+00:00",
+      "logSha256": "9b3a3934e826068b502ef747398eed221443fb41375f92252abffc7a2332937e"
+    }
+  ],
+  "opencodeLearning": {
+    "candidateSha": "35f6f520b714662d80659e0734b8b7138cb65464",
+    "mode": "real OpenCode, loopback synthetic provider",
+    "passed": true,
+    "providerCalls": 6,
+    "maxCalls": 12,
+    "maxCostUsd": 0.5,
+    "maxOutputTokens": 4096,
+    "costMeaning": "Synthetic usage priced by the repository catalog, not actual spend",
+    "runs": [
+      {
+        "governedUsage": {
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheReadTokens": 60,
+          "cacheMissTokens": 240,
+          "cacheStatus": "complete",
+          "billingProvider": "openai_compatible",
+          "budgetAttemptIds": [
+            "model-call-768caba8-c635-41c4-9c71-6b3d041cd99d",
+            "model-call-9839cf6f-54bb-402a-b2d2-c4ad4801adf9",
+            "model-call-c0db9c3e-2358-408a-a4de-9b59b2c57039"
+          ],
+          "missingUsageCount": 0
+        },
+        "governedCost": {
+          "source": "acceptance_model_call_ledger",
+          "status": "settled",
+          "costUsd": 8.099999999999999e-05,
+          "currency": "USD"
+        },
+        "runId": "opencode-memory-learning-first",
+        "codingRunId": "coding-run-17dd9491-11c0-45de-ae5a-dc0427265323",
+        "title": "Greeting for the onboarding page",
+        "engine": "opencode-http",
+        "recalledMemoryIds": [],
+        "learning": {
+          "candidates": [
+            {
+              "candidateId": "agent-memory-candidate-coding-82e0c9a685dfd8300e006b156886c3e2",
+              "kind": "test_command",
+              "outcome": "proposed"
+            },
+            {
+              "candidateId": "agent-memory-candidate-coding-ace97d9934815fd061c44fc47e8bddfd",
+              "kind": "change_map",
+              "outcome": "proposed"
+            }
+          ],
+          "promoted": [
+            {
+              "candidateId": "agent-memory-candidate-coding-82e0c9a685dfd8300e006b156886c3e2",
+              "memoryId": "agent-memory-coding-b7b68b86e61e31a247b866cd72adc7f1"
+            }
+          ],
+          "notPromoted": [
+            {
+              "candidateId": "agent-memory-candidate-coding-ace97d9934815fd061c44fc47e8bddfd",
+              "reason": "human_review_required"
+            }
+          ]
+        },
+        "changedPaths": [
+          "src/greeting.js"
+        ]
+      },
+      {
+        "governedUsage": {
+          "inputTokens": 300,
+          "outputTokens": 60,
+          "cacheReadTokens": 60,
+          "cacheMissTokens": 240,
+          "cacheStatus": "complete",
+          "billingProvider": "openai_compatible",
+          "budgetAttemptIds": [
+            "model-call-b2069121-c98e-4b0d-8958-2bdd65dee437",
+            "model-call-f4289b58-c09e-4077-b437-f591468defeb",
+            "model-call-40bd0646-d8fa-4b5d-8884-c25f1d4abcb7"
+          ],
+          "missingUsageCount": 0
+        },
+        "governedCost": {
+          "source": "acceptance_model_call_ledger",
+          "status": "settled",
+          "costUsd": 8.099999999999999e-05,
+          "currency": "USD"
+        },
+        "runId": "opencode-memory-learning-second",
+        "codingRunId": "coding-run-6d117303-ad19-4f41-a620-238bb6fc48c4",
+        "title": "Greeting for the settings page",
+        "engine": "opencode-http",
+        "recalledMemoryIds": [
+          "agent-memory-coding-b7b68b86e61e31a247b866cd72adc7f1"
+        ],
+        "learning": {
+          "candidates": [
+            {
+              "candidateId": "agent-memory-candidate-coding-e17d83825eb5047afc6ea7696c2d7522",
+              "kind": "test_command",
+              "outcome": "duplicate",
+              "duplicateOf": "agent-memory-coding-b7b68b86e61e31a247b866cd72adc7f1"
+            },
+            {
+              "candidateId": "agent-memory-candidate-coding-a6ad69cde53ffd3bfe284b5a6029ceb7",
+              "kind": "change_map",
+              "outcome": "proposed"
+            }
+          ],
+          "promoted": [],
+          "notPromoted": [
+            {
+              "candidateId": "agent-memory-candidate-coding-a6ad69cde53ffd3bfe284b5a6029ceb7",
+              "reason": "human_review_required"
+            }
+          ]
+        },
+        "changedPaths": [
+          "src/greeting.js"
+        ]
+      }
+    ],
+    "policyMemory": {
+      "memoryId": "agent-memory-coding-b7b68b86e61e31a247b866cd72adc7f1",
+      "statement": "Verified test command for this project: npm test.",
+      "visibility": "user_project",
+      "retentionClass": "thirty_days",
+      "expiresAt": "2026-11-04T01:52:56.374Z"
+    },
+    "permissionDecisions": [
+      {
+        "run": "first",
+        "origin": "execution_authorization",
+        "permission": "write",
+        "decision": "approved"
+      },
+      {
+        "run": "first",
+        "origin": "change_acceptance",
+        "permission": "patch",
+        "decision": "approved"
+      },
+      {
+        "run": "second",
+        "origin": "execution_authorization",
+        "permission": "write",
+        "decision": "approved"
+      },
+      {
+        "run": "second",
+        "origin": "change_acceptance",
+        "permission": "patch",
+        "decision": "approved"
+      }
+    ],
+    "modelCalls": [
+      {
+        "quote": {
+          "id": "model-call-768caba8-c635-41c4-9c71-6b3d041cd99d",
+          "projectId": "opencode-memory-learning-live-project",
+          "providerId": "fixture",
+          "model": "gpt-4o-mini",
+          "createdAt": "2026-10-05T01:52:54.721Z",
+          "inputTokens": 29610,
+          "maxOutputTokens": 4096,
+          "billingProvider": "openai_compatible"
+        },
+        "projectedCostUsd": 0.006899099999999999,
+        "costUsd": 2.7e-05,
+        "settlement": {
+          "id": "model-call-768caba8-c635-41c4-9c71-6b3d041cd99d",
+          "projectId": "opencode-memory-learning-live-project",
+          "state": "completed",
+          "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "cacheReadTokens": 20,
+            "cacheMissTokens": 80,
+            "totalTokens": 120,
+            "cacheStatus": "complete"
+          }
+        },
+        "final": true,
+        "settled": true
+      },
+      {
+        "quote": {
+          "id": "model-call-9839cf6f-54bb-402a-b2d2-c4ad4801adf9",
+          "projectId": "opencode-memory-learning-live-project",
+          "providerId": "fixture",
+          "model": "gpt-4o-mini",
+          "createdAt": "2026-10-05T01:52:54.854Z",
+          "inputTokens": 30212,
+          "maxOutputTokens": 4096,
+          "billingProvider": "openai_compatible"
+        },
+        "projectedCostUsd": 0.0069894,
+        "costUsd": 2.7e-05,
+        "settlement": {
+          "id": "model-call-9839cf6f-54bb-402a-b2d2-c4ad4801adf9",
+          "projectId": "opencode-memory-learning-live-project",
+          "state": "completed",
+          "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "cacheReadTokens": 20,
+            "cacheMissTokens": 80,
+            "totalTokens": 120,
+            "cacheStatus": "complete"
+          }
+        },
+        "final": true,
+        "settled": true
+      },
+      {
+        "quote": {
+          "id": "model-call-c0db9c3e-2358-408a-a4de-9b59b2c57039",
+          "projectId": "opencode-memory-learning-live-project",
+          "providerId": "fixture",
+          "model": "gpt-4o-mini",
+          "createdAt": "2026-10-05T01:52:55.020Z",
+          "inputTokens": 30537,
+          "maxOutputTokens": 4096,
+          "billingProvider": "openai_compatible"
+        },
+        "projectedCostUsd": 0.007038149999999999,
+        "costUsd": 2.7e-05,
+        "settlement": {
+          "id": "model-call-c0db9c3e-2358-408a-a4de-9b59b2c57039",
+          "projectId": "opencode-memory-learning-live-project",
+          "state": "completed",
+          "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "cacheReadTokens": 20,
+            "cacheMissTokens": 80,
+            "totalTokens": 120,
+            "cacheStatus": "complete"
+          }
+        },
+        "final": true,
+        "settled": true
+      },
+      {
+        "quote": {
+          "id": "model-call-b2069121-c98e-4b0d-8958-2bdd65dee437",
+          "projectId": "opencode-memory-learning-live-project",
+          "providerId": "fixture",
+          "model": "gpt-4o-mini",
+          "createdAt": "2026-10-05T01:52:56.892Z",
+          "inputTokens": 29760,
+          "maxOutputTokens": 4096,
+          "billingProvider": "openai_compatible"
+        },
+        "projectedCostUsd": 0.0069216,
+        "costUsd": 2.7e-05,
+        "settlement": {
+          "id": "model-call-b2069121-c98e-4b0d-8958-2bdd65dee437",
+          "projectId": "opencode-memory-learning-live-project",
+          "state": "completed",
+          "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "cacheReadTokens": 20,
+            "cacheMissTokens": 80,
+            "totalTokens": 120,
+            "cacheStatus": "complete"
+          }
+        },
+        "final": true,
+        "settled": true
+      },
+      {
+        "quote": {
+          "id": "model-call-f4289b58-c09e-4077-b437-f591468defeb",
+          "projectId": "opencode-memory-learning-live-project",
+          "providerId": "fixture",
+          "model": "gpt-4o-mini",
+          "createdAt": "2026-10-05T01:52:56.981Z",
+          "inputTokens": 30364,
+          "maxOutputTokens": 4096,
+          "billingProvider": "openai_compatible"
+        },
+        "projectedCostUsd": 0.0070122,
+        "costUsd": 2.7e-05,
+        "settlement": {
+          "id": "model-call-f4289b58-c09e-4077-b437-f591468defeb",
+          "projectId": "opencode-memory-learning-live-project",
+          "state": "completed",
+          "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "cacheReadTokens": 20,
+            "cacheMissTokens": 80,
+            "totalTokens": 120,
+            "cacheStatus": "complete"
+          }
+        },
+        "final": true,
+        "settled": true
+      },
+      {
+        "quote": {
+          "id": "model-call-40bd0646-d8fa-4b5d-8884-c25f1d4abcb7",
+          "projectId": "opencode-memory-learning-live-project",
+          "providerId": "fixture",
+          "model": "gpt-4o-mini",
+          "createdAt": "2026-10-05T01:52:57.111Z",
+          "inputTokens": 30687,
+          "maxOutputTokens": 4096,
+          "billingProvider": "openai_compatible"
+        },
+        "projectedCostUsd": 0.00706065,
+        "costUsd": 2.7e-05,
+        "settlement": {
+          "id": "model-call-40bd0646-d8fa-4b5d-8884-c25f1d4abcb7",
+          "projectId": "opencode-memory-learning-live-project",
+          "state": "completed",
+          "usage": {
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "cacheReadTokens": 20,
+            "cacheMissTokens": 80,
+            "totalTokens": 120,
+            "cacheStatus": "complete"
+          }
+        },
+        "final": true,
+        "settled": true
+      }
+    ],
+    "completedAt": "2026-10-05T01:52:58.007Z"
+  },
+  "frozenV21Evaluation": {
+    "meaning": "Existing small synthetic corpus; not real-task improvement or a new BM25 efficacy experiment",
+    "record": {
+      "schemaVersion": 1,
+      "corpusId": "v2.1-evaluated-retrieval-memory",
+      "corpusVersion": 1,
+      "corpusSha256": "052b6ea8f2fe06ed4f2614b00b102d6b05e147b790196687bf5d7f299d3b3008",
+      "contractSha256": "0ced2fc7b3dbc3ce4f76a380f37624806cb6b215b315995b8604fb402a1847aa",
+      "retrievalContractVersion": 1,
+      "memoryContractVersion": 1,
+      "candidateSha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "recordedAt": "2026-10-05T01:50:59.287Z",
+      "lexical": {
+        "contractVersion": 1,
+        "corpusId": "v2.1-evaluated-retrieval-memory",
+        "corpusVersion": 1,
+        "strategy": "lexical",
+        "evaluatedCaseCount": 2,
+        "recallAtK": 0.5,
+        "ndcgAtK": 0.5,
+        "meanReciprocalRank": 0.5,
+        "isolationViolations": 0,
+        "paidProviderCalls": 0,
+        "observations": [
+          {
+            "caseId": "lexical-health-baseline",
+            "rankedChunkIds": [
+              "chunk-api-health-contract",
+              "chunk-api-health-test"
+            ],
+            "forbiddenHitIds": []
+          },
+          {
+            "caseId": "semantic-outage-recall",
+            "rankedChunkIds": [
+              "chunk-api-health-contract"
+            ],
+            "forbiddenHitIds": []
+          },
+          {
+            "caseId": "cross-tenant-retrieval-isolation",
+            "rankedChunkIds": [
+              "chunk-api-health-contract"
+            ],
+            "forbiddenHitIds": []
+          }
+        ]
+      },
+      "hybrid": {
+        "contractVersion": 1,
+        "corpusId": "v2.1-evaluated-retrieval-memory",
+        "corpusVersion": 1,
+        "strategy": "hybrid-reranked",
+        "embedding": {
+          "modelId": "fixture-embedding",
+          "modelVersion": "1",
+          "dimensions": 3
+        },
+        "rankingContractVersion": 1,
+        "rerankingContractVersion": 1,
+        "evaluatedCaseCount": 2,
+        "citationCaseCount": 2,
+        "recallAtK": 1,
+        "ndcgAtK": 1,
+        "meanReciprocalRank": 1,
+        "aggregateImprovementOverLexical": 0.5,
+        "citationPrecision": 1,
+        "citationFaithfulness": 1,
+        "isolationViolations": 0,
+        "paidProviderCalls": 0,
+        "observations": [
+          {
+            "caseId": "lexical-health-baseline",
+            "rankedChunkIds": [
+              "chunk-api-health-contract",
+              "chunk-api-health-test"
+            ],
+            "forbiddenHitIds": [],
+            "citationOutcome": null
+          },
+          {
+            "caseId": "semantic-outage-recall",
+            "rankedChunkIds": [
+              "chunk-api-health-test",
+              "chunk-api-health-contract"
+            ],
+            "forbiddenHitIds": [],
+            "citationOutcome": null
+          },
+          {
+            "caseId": "citation-current-hash",
+            "rankedChunkIds": [
+              "chunk-delivery-non-force"
+            ],
+            "forbiddenHitIds": [],
+            "citationOutcome": "accepted"
+          },
+          {
+            "caseId": "citation-stale-hash-rejected",
+            "rankedChunkIds": [
+              "chunk-delivery-non-force",
+              "chunk-api-health-test"
+            ],
+            "forbiddenHitIds": [
+              "chunk-delivery-non-force"
+            ],
+            "citationOutcome": "stale_rejected"
+          },
+          {
+            "caseId": "cross-tenant-retrieval-isolation",
+            "rankedChunkIds": [
+              "chunk-api-health-contract"
+            ],
+            "forbiddenHitIds": [],
+            "citationOutcome": null
+          }
+        ]
+      },
+      "memory": {
+        "contractVersion": 1,
+        "corpusId": "v2.1-evaluated-retrieval-memory",
+        "corpusVersion": 1,
+        "evaluatedCaseCount": 5,
+        "qualityCaseCount": 1,
+        "noMemoryTaskSuccessRate": 0,
+        "memoryTaskSuccessRate": 1,
+        "aggregateImprovementOverNoMemory": 1,
+        "additionalHumanInterventions": 0,
+        "lifecycleViolations": 0,
+        "isolationViolations": 0,
+        "resurrectionViolations": 0,
+        "paidProviderCalls": 0,
+        "observations": [
+          {
+            "caseId": "project-memory-improves-repair",
+            "admittedMemoryIds": [
+              "memory-health-regression-test-v1"
+            ],
+            "blockedMemoryIds": [],
+            "expectedMemoryIds": [
+              "memory-health-regression-test-v1"
+            ],
+            "taskSucceededWithoutMemory": false,
+            "taskSucceededWithMemory": true
+          },
+          {
+            "caseId": "stale-memory-revision-conflict",
+            "admittedMemoryIds": [],
+            "blockedMemoryIds": [
+              "memory-conflict-v1",
+              "memory-conflict-v2"
+            ],
+            "expectedMemoryIds": [],
+            "taskSucceededWithoutMemory": null,
+            "taskSucceededWithMemory": null
+          },
+          {
+            "caseId": "deleted-memory-never-returns",
+            "admittedMemoryIds": [],
+            "blockedMemoryIds": [
+              "memory-deleted-tombstone-v2"
+            ],
+            "expectedMemoryIds": [],
+            "taskSucceededWithoutMemory": null,
+            "taskSucceededWithMemory": null
+          },
+          {
+            "caseId": "expired-memory-never-returns",
+            "admittedMemoryIds": [],
+            "blockedMemoryIds": [
+              "memory-expired-v1"
+            ],
+            "expectedMemoryIds": [],
+            "taskSucceededWithoutMemory": null,
+            "taskSucceededWithMemory": null
+          },
+          {
+            "caseId": "cross-scope-memory-never-returns",
+            "admittedMemoryIds": [],
+            "blockedMemoryIds": [
+              "memory-foreign-v1"
+            ],
+            "expectedMemoryIds": [],
+            "taskSucceededWithoutMemory": null,
+            "taskSucceededWithMemory": null
+          }
+        ]
+      },
+      "scans": {
+        "secretLeaks": 0,
+        "absolutePathLeaks": 0,
+        "sourceContentLeaks": 0,
+        "rawOutputLeaks": 0,
+        "isolationViolations": 0,
+        "deletionViolations": 0
+      },
+      "paidProviderCalls": 0,
+      "status": "passed"
+    }
+  },
+  "reviews": {
+    "standards": {
+      "originalFindings": 2,
+      "status": "resolved",
+      "suggestion": "UI size thresholds share the same source as eligibility"
+    },
+    "spec": {
+      "originalFindings": 2,
+      "status": "resolved",
+      "retryBoundaryTokens": [
+        47999,
+        47867,
+        47991
+      ],
+      "additionalDuplicateEventRegression": "passed"
+    }
+  },
+  "limitations": [
+    "No new paid live model run",
+    "No measured real-task success or cache improvement",
+    "No Windows/Linux GUI validation this session",
+    "No signed package or production deployment",
+    "No push or merge",
+    "Optional LLM summary disabled",
+    "Native fixed execution loop unchanged"
+  ],
+  "acceptance": {
+    "status": "passed",
+    "requiredLabels": [
+      "verify-complete",
+      "build",
+      "browser-e2e",
+      "electron-smoke",
+      "native-electron",
+      "chat-electron",
+      "desktop-pilot-build",
+      "desktop-pilot-smoke",
+      "stage-opencode-contract",
+      "chat-opencode-contract",
+      "opencode-governed-final",
+      "harness-typecheck-final",
+      "postgres",
+      "cost-recovery-postgres",
+      "frozen-retrieval-memory",
+      "final-doc-contracts"
+    ],
+    "unitAndComponentTests": {
+      "passedFiles": 356,
+      "skippedFiles": 1,
+      "passedTests": 4746,
+      "skippedTests": 15,
+      "skipReason": "Dedicated organization-postgres tests require their own environment"
+    },
+    "browser": {
+      "passed": 42,
+      "skipped": 1,
+      "skipReason": "Optional documentation screenshot capture"
+    }
+  },
+  "stageOpenCode": {
+    "passed": true,
+    "realOpenCode": true,
+    "provider": "local synthetic / no paid model",
+    "providerRequests": 5,
+    "readCitations": 1,
+    "repositoryUnchanged": true,
+    "restartEvidencePreserved": true,
+    "codingConfigurationUnchanged": true,
+    "stoppedAtReviewGate": true,
+    "concurrentModelIsolation": true,
+    "cancellation": "cancelled without artifact or workflow transition"
+  },
+  "chatOpenCode": {
+    "passed": true,
+    "provider": "local fixture, no paid model",
+    "calls": 7,
+    "queries": 3,
+    "actualTools": [
+      "devflow_artifact",
+      "devflow_conversation_read",
+      "devflow_knowledge_list",
+      "devflow_knowledge_read",
+      "devflow_node",
+      "devflow_repo_list",
+      "devflow_repo_read",
+      "devflow_repo_search",
+      "devflow_requirement",
+      "devflow_workflow"
+    ],
+    "result": {
+      "value": {
+        "text": "当前在需求澄清阶段，来源 source-1。",
+        "format": "markdown",
+        "citationIds": [
+          "source-1"
+        ]
+      },
+      "usage": {
+        "inputTokens": 80,
+        "outputTokens": 24,
+        "cacheReadTokens": 0,
+        "cacheMissTokens": 80,
+        "totalTokens": 104,
+        "cacheStatus": "complete"
+      },
+      "reasoningContent": ""
+    },
+    "cancellation": "owned request closed",
+    "isolation": "second conversation completed",
+    "retry": "fresh runtime completed"
+  },
+  "packagedBuild": {
+    "status": "ok",
+    "schemaVersion": 1,
+    "platform": "darwin",
+    "arch": "arm64",
+    "appDirectory": "app-directory/AI DevFlow Studio-darwin-arm64",
+    "manifest": "ai-devflow-studio-desktop-2.3.0-darwin-arm64.manifest.json",
+    "archive": "ai-devflow-studio-desktop-2.3.0-darwin-arm64.tar.gz",
+    "archiveSha256": "0f71013c1974b406ce8c88fa052ce617d607e2302cb8638f793ab0ff34f42c6f"
+  },
+  "packagedSmoke": {
+    "status": "ok",
+    "executablePath": "/Users/erich/.codex/worktrees/0acb/ai-devflow-studio/out/desktop-pilot/app-directory/AI DevFlow Studio-darwin-arm64/AI DevFlow Studio.app/Contents/MacOS/AI DevFlow Studio",
+    "loadedProtocol": "file:",
+    "hostileDevelopmentServerRequests": 0,
+    "isolatedStore": "user-data/devflow.sqlite",
+    "agentRuntime": {
+      "status": "terminal",
+      "stopReason": "success",
+      "acceptedActionCount": 1,
+      "restartDuplicateEffects": 0,
+      "workflowEvaluation": {
+        "toolId": "workflow.evaluate",
+        "source": "native",
+        "started": 1,
+        "succeeded": 1,
+        "durableRecords": 2
+      },
+      "localMcpInstallation": {
+        "installationId": "local-mcp-installation-runtime-fixture",
+        "installationVersion": 2,
+        "enabled": true
+      }
+    },
+    "nativeCoding": {
+      "status": "completed",
+      "changedPaths": [
+        "devflow-native-change.txt"
+      ],
+      "permissionDecisions": 1,
+      "durableToolAuditRows": 6,
+      "nativeCodingRestartDuplicateEffects": 0
+    },
+    "agentMemory": {
+      "lifecycleStatus": "deleted",
+      "currentRevision": 2,
+      "headVersion": 4,
+      "purgeStatus": "completed",
+      "durableLifecycleRows": {
+        "candidates": 1,
+        "revisions": 2,
+        "tombstones": 1,
+        "derivedIndexEntries": 0,
+        "audits": [
+          [
+            "candidate_promoted",
+            1
+          ],
+          [
+            "memory_deleted",
+            1
+          ],
+          [
+            "memory_revised",
+            1
+          ],
+          [
+            "purge_completed",
+            1
+          ]
+        ]
+      },
+      "memoryRestartDuplicateEffects": 0
+    }
+  },
+  "chatElectron": {
+    "passed": true,
+    "modelCalls": 25,
+    "model": "controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation",
+    "reasoningEffort": "low",
+    "liveReasoningBeforeAnswer": true,
+    "sourceFilesUnchanged": true,
+    "sessionIsolation": true,
+    "restartAndHistory": true,
+    "helpDialogKeyboardAndNarrowLayout": true,
+    "independentTabDetails": true,
+    "detailsPreserveLiveRequestAndScroll": true,
+    "tabMenuKeyboardAccess": true,
+    "noPermanentHeader": true,
+    "shortWindow": {
+      "width": 1280,
+      "height": 760
+    },
+    "cancelledCreationHasNoEffects": true,
+    "executorChoiceSurvivesRestart": true,
+    "fullOriginalRequirement": true,
+    "boundedFormatRecovery": true,
+    "externalProviderCalled": false,
+    "generatedAt": "2026-10-05T02:01:53.247Z"
+  },
+  "fixtureCleanup": {
+    "postgresContainer": "removed",
+    "databases": [
+      "devflow_memory_qa",
+      "devflow_opencode_cost_memory"
+    ],
+    "userDatabaseReused": false
+  },
+  "mainAtFinish": "8c6a50172beff3198f4ae4a7a98f2a24a2f97dae",
+  "completedAt": "2026-10-05T02:03:45.286754+00:00"
+}
