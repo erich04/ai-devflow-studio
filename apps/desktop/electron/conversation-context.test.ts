@@ -10,6 +10,25 @@ const messages: ConversationMessage[] = [
 const session = (): WorkbenchConversation => ({ id: 'chat', localProjectId: 'p', version: 1, title: 'Test', isOpen: true, inputDraft: '', status: 'idle', messages, createdAt: messages[0]!.createdAt, updatedAt: messages[0]!.createdAt })
 
 describe('persistent conversation context', () => {
+  it.each(['sourceDigest', 'previousBoundaryId', 'stateVersion', 'algorithm'] as const)('retains damaged %s receipts for diagnosis while rebuilding a usable boundary', (field) => {
+    const first = buildRollingSummary(session(), ['u1'], 'now')!
+    const damaged = { ...first, [field]: field === 'stateVersion' ? 99 : 'damaged' } as typeof first
+    const previous = { ...session(), compactions: [damaged] }
+    // Unchanged derived damage cannot block saving status or retaining original facts.
+    expect(() => validateConversationContext({ ...previous, status: 'running' }, previous)).not.toThrow()
+    const rebuilt = buildRollingSummary(previous, ['u1'], 'recovered')!
+    expect(rebuilt.id).not.toBe(damaged.id)
+    expect(rebuilt.sourceDigest).toBe(first.sourceDigest)
+    expect(rebuilt.stateVersion).toBe(1)
+    expect(rebuilt.algorithm).toBe('extractive-v1')
+    expect(rebuilt.previousBoundaryId).toBeNull()
+    const recovered = { ...previous, compactions: [damaged, rebuilt] }
+    expect(() => validateConversationContext(recovered, previous)).not.toThrow()
+    expect(buildRollingSummary(recovered, ['u1'], 'again')).toEqual(rebuilt)
+    expect(recovered.messages).toEqual(messages)
+    expect(() => validateConversationContext({ ...previous, compactions: [first] }, previous)).toThrow(/receipt/)
+  })
+
   it('creates two traceable deterministic boundaries from original facts without reasoning', () => {
     const first = buildRollingSummary(session(), ['u1'], 'now')!
     expect(first.coveredMessageIds).toEqual(['u1'])
@@ -37,6 +56,7 @@ describe('persistent conversation context', () => {
     expect(appendToolEvents(events, [request, result])).toEqual(events)
     expect(() => appendToolEvents(events, [{ ...result, value: 'changed' }])).toThrow(/replay/)
     expect(() => appendToolEvents([], [result])).toThrow(/request/)
+    expect(() => validateConversationContext({ ...session(), toolEvents: [...events, ...events] }, session())).toThrow(/Duplicate tool event/)
     const summary = buildRollingSummary({ ...session(), toolEvents: events }, ['u1'], 'now')!
     expect(summary.coveredEventIds).toEqual(['q1', 'r1'])
     expect(buildRollingSummary({ ...session(), toolEvents: [request] }, ['u1'], 'now')!.summary.pendingToolRequestIds).toEqual(['q1'])

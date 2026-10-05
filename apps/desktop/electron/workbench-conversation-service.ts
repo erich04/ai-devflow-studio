@@ -97,7 +97,7 @@ function conversationFailure(error: unknown, phase: string) {
 function degradedObservation(value: unknown): unknown {
   const observation = recordOrEmpty(value)
   if (typeof observation.sourceId !== 'string' || observation.degraded === true || !('result' in observation)) return value
-  return { sourceId: observation.sourceId, name: observation.name, args: observation.args, observedAt: observation.observedAt, degraded: true }
+  return { sourceId: observation.sourceId, ...(typeof observation.requestId === 'string' ? { requestId: observation.requestId } : {}), name: observation.name, args: observation.args, observedAt: observation.observedAt, degraded: true }
 }
 
 /**
@@ -234,8 +234,16 @@ export class WorkbenchConversationService {
 
   async recoverInterrupted(): Promise<void> {
     for (const session of await this.deps.store.listWorkbenchConversations()) {
-      if (reconcileSavedProposalQuestions(session) !== session) await this.update(session.localProjectId, session.id, reconcileSavedProposalQuestions)
-      if (session.status === 'running') await this.update(session.localProjectId, session.id, (current) => ({ ...current, status: 'interrupted', toolEvents: interruptPendingTools(current.toolEvents ?? [], now()), messages: current.messages.map((message) => message.reasoning?.status === 'streaming' ? { ...message, reasoning: { ...message.reasoning, status: 'interrupted' } } : message), error: '上次调查因应用退出而中断。点击重试继续，不会自动重复请求。' }))
+      const hasPendingTools = interruptPendingTools(session.toolEvents ?? [], now()).length !== (session.toolEvents?.length ?? 0)
+      if (session.status !== 'running' && !hasPendingTools && reconcileSavedProposalQuestions(session) === session) continue
+      await this.update(session.localProjectId, session.id, (current) => {
+        const reconciled = reconcileSavedProposalQuestions(current)
+        return { ...reconciled,
+          ...(current.status === 'running' ? { status: 'interrupted' as const, error: '上次调查因应用退出而中断。点击重试继续，不会自动重复请求。' } : {}),
+          toolEvents: interruptPendingTools(current.toolEvents ?? [], now()),
+          messages: reconciled.messages.map((message) => message.reasoning?.status === 'streaming' ? { ...message, reasoning: { ...message.reasoning, status: 'interrupted' } } : message),
+        }
+      })
     }
   }
 
@@ -288,7 +296,7 @@ export class WorkbenchConversationService {
         case 'cancel':
           this.controllers.get(session.id)?.abort()
           if (reconcileSavedProposalQuestions(session) !== session) await this.update(session.localProjectId, session.id, reconcileSavedProposalQuestions)
-      if (session.status === 'running') await this.update(input.projectId, session.id, (current) => ({ ...current, status: 'cancelled', error: '已停止调查。已保存的消息和依据可以继续使用。' }))
+          if (session.status === 'running') await this.update(input.projectId, session.id, (current) => ({ ...current, status: 'cancelled', error: '已停止调查。已保存的消息和依据可以继续使用。' }))
           break
         case 'send': case 'retry':
           await this.start(input, session)
@@ -340,7 +348,7 @@ export class WorkbenchConversationService {
         const messages = current.messages.map((message) => input.type === 'send' && input.answerToMessageId === message.id && message.question && !message.question.answeredAt ? { ...message, question: { ...message.question, answeredAt: now() } } : message)
         if (input.type === 'send') messages.push({ id: randomUUID(), role: 'user', text: redactSensitiveText(input.text.trim()).value, createdAt: now() })
         const { error: _error, failure: _failure, ...rest } = current
-        return { ...rest, messages, inputDraft: '', isOpen: true, status: 'running', title: current.title === '新对话' && input.type === 'send' ? input.text.trim().slice(0, 28) : current.title }
+        return { ...rest, messages, toolEvents: interruptPendingTools(current.toolEvents ?? [], now()), inputDraft: '', isOpen: true, status: 'running', title: current.title === '新对话' && input.type === 'send' ? input.text.trim().slice(0, 28) : current.title }
       })
       const task = this.run(input.projectId, session.id, input.providerId, controller)
       this.tasks.set(session.id, task)
@@ -370,7 +378,7 @@ export class WorkbenchConversationService {
     const limit = args.limit === undefined ? 6000 : Number(args.limit)
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 18000) throw new Error('无效的续读范围。')
     if (!args.messageId && !args.eventId) {
-      const sources = [...session.messages.filter((message) => message.role !== 'notice').map((message) => ({ messageId: message.id, role: message.role })), ...(session.toolEvents ?? []).map((event) => ({ eventId: event.id, kind: event.kind }))]
+      const sources = [...session.messages.filter((message) => message.role !== 'notice').map((message) => ({ messageId: message.id, role: message.role, ...(message.toolRequestId ? { toolRequestId: message.toolRequestId } : {}) })), ...(session.toolEvents ?? []).map((event) => ({ eventId: event.id, kind: event.kind }))]
       return { sources: sources.slice(offset, offset + 30), total: sources.length, nextOffset: offset + 30 < sources.length ? offset + 30 : null }
     }
     const message = session.messages.find((entry) => entry.id === args.messageId && entry.role !== 'notice')
@@ -537,11 +545,11 @@ export class WorkbenchConversationService {
         const bounded = serialized.length > 22000 ? { truncated: true, excerpt: serialized.slice(0, 22000) } : JSON.parse(serialized)
         const citation = { id: `source-${citations.length + 1}`, label: `${name} · ${typeof args.path === 'string' ? args.path : typeof args.nodeId === 'string' ? args.nodeId : typeof args.query === 'string' ? args.query : '流程数据'}`, excerpt: JSON.stringify(bounded).slice(0, 2500), observedAt: now() }
         citations.push(citation)
-        const observation = { sourceId: citation.id, name, args: safeArgs, result: bounded, observedAt: citation.observedAt }
+        const observation = { sourceId: citation.id, requestId, name, args: safeArgs, result: bounded, observedAt: citation.observedAt }
         observations.push(observation)
         degradeOlderObservations(observations, () => JSON.stringify(observations).length > 42000)
         while (JSON.stringify(observations).length > 42000 && observations.length > 1) observations.shift()
-        await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, { id: randomUUID(), role: 'tool', text: `${recordOrEmpty(output).error ? '查询未完成' : '已查询'}：${citation.label}`, createdAt: now(), citations: [citation] }] }))
+        await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, { id: randomUUID(), role: 'tool', toolRequestId: requestId, text: `${recordOrEmpty(output).error ? '查询未完成' : '已查询'}：${citation.label}`, createdAt: now(), citations: [citation] }] }))
         return observation
       }
       if (session.executor === 'opencode') {
@@ -569,6 +577,7 @@ export class WorkbenchConversationService {
       for (let step = 0; step < 12; step++) {
         controller.signal.throwIfAborted()
         phase = 'read_context'
+        const currentSession = await this.conversation(projectId, id)
         const projectInstructions = (await this.deps.loadKnowledge(projectId).catch(() => undefined))?.projectInstructions
         const backgroundMemory = await this.recallBackgroundMemory(projectId, session, [...requirements.values()][0], controller.signal)
         for (const runId of [...requirements.keys()]) await attachRequirement(runId)
@@ -580,9 +589,10 @@ export class WorkbenchConversationService {
           ? '调查时调用 devflow MCP 中的同名只读工具，例如 devflow_workflow、devflow_node；不要用 JSON tool 字段代替真正的工具调用。完成调查后按下述答复格式返回 JSON，不加额外说明。'
           : '调查时 {"tool":{"name":"...","args":{...}}}。')
         const verificationPrompt = pendingProposal ? '\n本轮只做提案语义核对，不生成新提案。逐项对照 criticalProposalInput.criteria 与 proposalVerification.content，判断是否完整保留条件、是否存在矛盾或擅自改变约定。只返回 {"coverageReview":[{"criterionId":"真实ID","status":"covered|missing|contradiction","reason":"简要说明"}]}。引用过原文不等于落实了要求。每条必须判断，不得省略。' : ''
-        const packed = packConversationContext({ session, provider, systemPrompt: systemPrompt + verificationPrompt, history, facts, observations, remainingSteps: 12 - step, requirements: orderedRequirements, backgroundMemory, ...(projectInstructions ? { projectInstructions } : {}), ...(criticalProposalInput ? { criticalProposalInput } : {}), ...(pendingProposal ? { proposalVerification: { content: String(recordOrEmpty(pendingProposal.draft).content) } } : {}) })
+        const finalSystemPrompt = systemPrompt + verificationPrompt + (retryingOutput ? '\n上次响应格式或完整性校验失败。本次请简洁返回一个完整 JSON 对象，正确转义字符串；不加对象外说明。不要把正文和 draft 重复写成长篇内容。' : '')
+        const packed = packConversationContext({ session: currentSession, provider, systemPrompt: finalSystemPrompt, history, facts, observations, remainingSteps: 12 - step, requirements: orderedRequirements, backgroundMemory, ...(projectInstructions ? { projectInstructions } : {}), ...(criticalProposalInput ? { criticalProposalInput } : {}), ...(pendingProposal ? { proposalVerification: { content: String(recordOrEmpty(pendingProposal.draft).content) } } : {}) })
         await this.update(projectId, id, (current) => ({ ...current,
-          ...(packed.compaction && !current.compactions?.some((item) => item.id === packed.compaction!.id) ? { compactions: [...(current.compactions ?? []), { ...packed.compaction, previousBoundaryId: current.compactions?.at(-1)?.id ?? null }] } : {}),
+          ...(packed.compaction && !current.compactions?.some((item) => item.id === packed.compaction!.id) ? { compactions: [...(current.compactions ?? []), packed.compaction] } : {}),
           contextReceipt: {
           ...(packed.compaction ? { boundaryId: packed.compaction.id } : {}), budget: packed.budget,
           includedMessages: packed.includedMessages,
@@ -604,7 +614,7 @@ export class WorkbenchConversationService {
         }] }))
         let result: Awaited<ReturnType<NonNullable<ConversationExecutor['completeStructuredJson']>>>
         try {
-          result = await provider.completeStructuredJson({ systemPrompt: systemPrompt + verificationPrompt + (retryingOutput ? '\n上次响应格式或完整性校验失败。本次请简洁返回一个完整 JSON 对象，正确转义字符串；不加对象外说明。不要把正文和 draft 重复写成长篇内容。' : ''),
+          result = await provider.completeStructuredJson({ systemPrompt: finalSystemPrompt,
           userPrompt: packed.prompt, ...(criticalProposalInput ? { purpose: 'proposal' as const } : { maxOutputTokens: 3500 }), signal: controller.signal,
           ...(thinking ? { reasoning: { onDelta: async (delta: string) => {
             controller.signal.throwIfAborted()

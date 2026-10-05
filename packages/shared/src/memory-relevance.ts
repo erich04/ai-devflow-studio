@@ -19,6 +19,12 @@ export type MemoryRecallBudget = { readonly maxItems: number; readonly maxBytes:
 export const CODING_MEMORY_RECALL_BUDGET: MemoryRecallBudget = Object.freeze({ maxItems: 8, maxBytes: 4_000 })
 export const STAGE_AGENT_MEMORY_RECALL_BUDGET: MemoryRecallBudget = Object.freeze({ maxItems: 6, maxBytes: 3_000 })
 export const CONVERSATION_MEMORY_RECALL_BUDGET: MemoryRecallBudget = Object.freeze({ maxItems: 4, maxBytes: 2_000 })
+const statementLimit = (budget: MemoryRecallBudget) => Math.min(AGENT_MEMORY_RECALLABLE_STATEMENT_MAX_BYTES, budget.maxBytes - AGENT_MEMORY_RECALL_LABEL_BYTES)
+export const MEMORY_RECALL_STATEMENT_LIMITS = Object.freeze({
+  coding: statementLimit(CODING_MEMORY_RECALL_BUDGET),
+  stage: statementLimit(STAGE_AGENT_MEMORY_RECALL_BUDGET),
+  conversation: statementLimit(CONVERSATION_MEMORY_RECALL_BUDGET),
+})
 
 const BM25_K1 = 1.2
 const BM25_B = 0.75
@@ -142,8 +148,7 @@ export function memoryStatementBytes(statement: string): number {
 /** Size eligibility only: scope, lifecycle, relevance and remaining budget still apply. */
 export function memoryRecallAvailability(statement: string) {
   const bytes = memoryStatementBytes(statement)
-  const fits = (budget: MemoryRecallBudget) => bytes <= AGENT_MEMORY_RECALLABLE_STATEMENT_MAX_BYTES && bytes + AGENT_MEMORY_RECALL_LABEL_BYTES <= budget.maxBytes
-  return { bytes, coding: fits(CODING_MEMORY_RECALL_BUDGET), stage: fits(STAGE_AGENT_MEMORY_RECALL_BUDGET), conversation: fits(CONVERSATION_MEMORY_RECALL_BUDGET) }
+  return { bytes, coding: bytes <= MEMORY_RECALL_STATEMENT_LIMITS.coding, stage: bytes <= MEMORY_RECALL_STATEMENT_LIMITS.stage, conversation: bytes <= MEMORY_RECALL_STATEMENT_LIMITS.conversation }
 }
 
 /**

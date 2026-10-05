@@ -4,6 +4,7 @@ import {
   CODING_RUN_MEMORY_POLICY_ID,
   normalizeMemoryStatement,
   memoryRecallAvailability,
+  MEMORY_RECALL_STATEMENT_LIMITS,
   parseAgentMemoryRendererSnapshot,
   type AgentMemoryRendererSnapshot,
   type AgentMemoryRendererScope,
@@ -52,7 +53,7 @@ function RecallSize({ statement }: { statement: string | null }) {
   if (statement === null) return null
   const size = memoryRecallAvailability(statement)
   const omitted = [!size.coding && '编码', !size.stage && '阶段', !size.conversation && '讨论'].filter(Boolean)
-  return <p className="empty-note">{size.bytes} UTF-8 字节 · {omitted.length ? `超出${omitted.join('、')}入口预算；可修订缩短。` : '大小符合各入口预算。'} 编码 ≤ 3800、阶段 ≤ 2800、讨论 ≤ 1800 字节；实际召回还需满足范围、有效期、相关度和剩余预算。</p>
+  return <p className="empty-note">{size.bytes} UTF-8 字节 · {omitted.length ? `超出${omitted.join('、')}入口预算；可修订缩短。` : '大小符合各入口预算。'} 编码 ≤ {MEMORY_RECALL_STATEMENT_LIMITS.coding}、阶段 ≤ {MEMORY_RECALL_STATEMENT_LIMITS.stage}、讨论 ≤ {MEMORY_RECALL_STATEMENT_LIMITS.conversation} 字节；实际召回还需满足范围、有效期、相关度和剩余预算。</p>
 }
 
 export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMemoryPanelProps) {

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, runWorkflowStageAgent, type AgentProvider, type DesktopPairingCredential, type DurableAgentMemoryRevision, type GitHubDeliveryIntent, type KnowledgeRetrievalScope, type LocalProject } from '@ai-devflow/shared'
+import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, measurePromptSections, runWorkflowStageAgent, type AgentProvider, type DesktopPairingCredential, type DurableAgentMemoryRevision, type GitHubDeliveryIntent, type KnowledgeRetrievalScope, type LocalProject } from '@ai-devflow/shared'
 import type { CodingMemoryStore } from './coding-context'
 import { createLocalStore, type LocalStore } from './local-store'
 import { degradeOlderObservations, WorkbenchConversationService } from './workbench-conversation-service'
@@ -60,16 +60,17 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
 }
 
 describe('unified conversation execution and boundaries', () => {
-  it('records missing tool results on restart and does not replay or duplicate the user message', async () => {
+  it.each(['running', 'cancelled'] as const)('records missing tool results after restarting a %s turn without replaying or duplicating the user message', async (status) => {
     const { service, provider } = harness(async () => ({ value: { text: '重新读取当前上下文。' } }))
     const id = await create(service)
     const original = (await store.listWorkbenchConversations(projectId))[0]!
-    await store.saveWorkbenchConversation({ ...original, version: 2, status: 'running', messages: [{ id: 'interrupted-user', role: 'user', text: '调查仓库', createdAt: created.run.createdAt }],
+    await store.saveWorkbenchConversation({ ...original, version: 2, status, messages: [{ id: 'interrupted-user', role: 'user', text: '调查仓库', createdAt: created.run.createdAt }],
       toolEvents: [{ kind: 'tool_request', id: 'missing-query', turnId: 'interrupted-user', name: 'repo_read', args: { path: 'tasks.ts' }, createdAt: created.run.createdAt }] }, 1)
     await service.recoverInterrupted()
     await service.recoverInterrupted()
     expect(provider.completeStructuredJson).not.toHaveBeenCalled()
     const recovered = (await store.listWorkbenchConversations(projectId))[0]!
+    expect(recovered.status).toBe(status === 'running' ? 'interrupted' : 'cancelled')
     expect(recovered.toolEvents).toHaveLength(2)
     expect(recovered.toolEvents![1]).toMatchObject({ kind: 'tool_result', outcome: 'interrupted', requestId: 'missing-query' })
     await service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
@@ -120,6 +121,7 @@ describe('unified conversation execution and boundaries', () => {
       expect.objectContaining({ kind: 'tool_request', name: 'repo_read' }),
       expect.objectContaining({ kind: 'tool_result', outcome: 'completed', requestId: first.toolEvents![0]!.id }),
     ])
+    expect(first.messages.find((message) => message.role === 'tool')?.toolRequestId).toBe(first.toolEvents![0]!.id)
     expect(first.messages.slice(0, 8)).toEqual(old)
     store.close()
     store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
@@ -199,7 +201,11 @@ describe('unified conversation execution and boundaries', () => {
 
   it('recovers once from invalid model output without losing input, billed usage or workflow state (#154)', async () => {
     let attempts = 0
-    const { service } = harness(async () => {
+    const sentSystemTokens: Array<{ estimated: number; sent: number }> = []
+    const { service, provider } = harness(async (input) => {
+      const receipt = (await store.listWorkbenchConversations(projectId))[0]!.contextReceipt!.budget!
+      sentSystemTokens.push({ estimated: receipt.sections.find((section) => section.id === 'system')!.tokens,
+        sent: measurePromptSections([{ id: 'system', kind: 'system', required: true, content: input.systemPrompt }], { provider: provider.id, model: provider.model }).tokens })
       if (++attempts === 1) throw new AgentProviderRequestError({ code: 'invalid_model_output', httpStatus: 200,
         deliveryState: 'response_received', billingState: 'confirmed', retryable: true, sanitizedCause: 'invalid_json',
         usage: { inputTokens: 31, outputTokens: 9, totalTokens: 40 } })
@@ -209,6 +215,7 @@ describe('unified conversation execution and boundaries', () => {
     const result = await send(service, await create(service), '请结合完整原始需求更新讨论提案。')
     expect(result.status, result.error).toBe('idle')
     expect(attempts).toBe(2)
+    for (const call of sentSystemTokens) expect(call.estimated).toBe(call.sent)
     expect(result.messages.filter((m) => m.role === 'user')).toHaveLength(1)
     expect(result.messages.at(-1)?.text).toBe('更新后的讨论提案已准备好。')
     expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(55)
@@ -998,7 +1005,7 @@ describe('tool observation degradation in the discussion bar (ADR 0024 §6)', ()
 
     // Step 4 no longer fits all three results: the oldest becomes a placeholder, the rest stay complete.
     expect(contexts[3].toolObservations).toHaveLength(3)
-    expect(contexts[3].toolObservations[0]).toEqual({ sourceId: 'source-1', name: 'repo_read', args: { path: 'a.ts' }, observedAt: expect.any(String), degraded: true })
+    expect(contexts[3].toolObservations[0]).toEqual({ sourceId: 'source-1', requestId: expect.any(String), name: 'repo_read', args: { path: 'a.ts' }, observedAt: expect.any(String), degraded: true })
     expect(contexts[3].toolObservations.slice(1).every((observation: { result?: unknown }) => observation.result)).toBe(true)
     expect(contexts[3].history.map((entry: { id: string }) => entry.id).slice(0, 3)).toEqual(['earlier-0', 'earlier-1', 'earlier-2'])
     expect(contexts[3].history).toHaveLength(4)

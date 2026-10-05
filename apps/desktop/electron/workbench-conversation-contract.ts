@@ -28,6 +28,7 @@ export type ConversationMessage = {
   createdAt: string
   actions?: ConversationAction[]
   citations?: ConversationCitation[]
+  toolRequestId?: string
   question?: { prompt: string; options: string[]; purpose?: 'clarification' | 'save_proposal'; answeredAt?: string; resolvedBy?: 'proposal_saved' }
   draft?: ConversationDraft
   usage?: AgentProviderUsage

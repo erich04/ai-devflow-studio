@@ -33,7 +33,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 
 - Native v2 的 analysis、initial、repair 共用一个静态 `NATIVE_CODING_V2_SYSTEM_PROMPT`，由 user JSON 的 `phase` 字段选择规则。运行数据（例如 `allowedPaths`）只放在 user 消息里。
 - Native v2 的 user JSON 以 `stateVersion → brief` 开头，以 `phase → limits` 结尾，阶段数据放在中间。
-- 讨论栏的上下文键顺序为 `originalRequirements → history → [backgroundMemory] → [criticalProposalInput] → toolObservations → latestWorkflow → contextNotice → remainingSteps → [proposalVerification]`。同一轮内工具观察只追加；已降级的观察保持降级，使后续步骤仍是前一步的前缀扩展。
+- 讨论栏的上下文键顺序为 `originalRequirements → [projectInstructions] → history → [rollingSummary] → [backgroundMemory] → [criticalProposalInput] → toolObservations → latestWorkflow → contextNotice → remainingSteps → [proposalVerification]`。当前需求、L0 和记忆未变化且未触发压缩时，同一轮内工具观察只追加，已降级的观察保持降级，使后续步骤保持稳定前缀；新鲜度与硬预算优先于缓存复用。
 - 不添加 `cache_control` 或 `prompt_cache_key` 请求参数。前后效果用现有的 `cacheReadTokens` 和 `cacheHitRate` 对比。
 
 <a id="recall"></a>
@@ -93,7 +93,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 ### 6. 运行中和会话级压缩
 
 - Native v2 repair 调用增加：`initialChangeSet`（已应用的 initial 替换，有长度上限）和 `failureLocations`（从原始测试输出解析出的 `file:line`，只保留工作区内的规范相对路径）。可编辑文件的片段以首个失败位置为中心，而不是文件开头；片段不从第 1 行开始时带 `startLine`。不可编辑文件只附带短的只读片段（最多 3 个，失败行前后各 20 行，每个不超过 2,000 字符）。提示超限时依次去掉只读片段、`initialChangeSet` 正文（只保留路径）、`failureLocations`，最后才把可编辑片段截短到下限以下。单个可编辑片段上限 32 KB 已超过 30,000 字符的提示上限，所以每一级先把以失败行为中心的窗口缩到 4,000 字符的下限，仍超限才进入下一级。analysis 和 initial 的公开结构化 summary 现在保存于本地 Coding Run 轨迹，绑定调用 ID 与精确 Change Set；repair 读取持久来源。旧记录缺失时省略，不保存提供方隐藏推理。所有片段（包括 initial 阶段的搜索片段）都先对整个文件脱敏再截取，避免窗口边缘把多行私钥切成脱敏规则识别不了的片段；私钥块逐行替换为标记，保持行数，行号仍对得上。脱敏改变了行数时，可编辑片段不带 `startLine`，只读片段直接跳过。解析 `file:line` 时逐行匹配并限制路径长度，避免长串输出触发回溯；Windows 的盘符根目录（含 `file:///C:/`）会先去掉再匹配。
-- 讨论栏超出预算时，较早的工具观察先降级为占位 `{sourceId, name, args, observedAt, degraded: true}`，可以用相同 `name` 和 `args` 重新查询，而不是整条丢弃。降级按从旧到新进行，最新一条真实工具结果（不是数组最后一项，恢复提示也会追加进来）保持完整，并写回本轮的观察数组，保证之后各步的前缀稳定。超限时的处理顺序是：先去掉本步的召回记忆，再降级工具结果，最后才丢弃较早的聊天历史。
+- 讨论栏超出预算时，较早的工具观察先降级为占位 `{sourceId, requestId, name, args, observedAt, degraded: true}`，保留工具事件关联，可续读原始结果或用相同 `name` 和 `args` 重新查询。降级按从旧到新进行，先保护最新一条真实工具结果（不是数组最后一项，恢复提示也会追加进来），并写回本轮的观察数组。超限时先去掉本步召回记忆，再降级旧工具结果，再对旧历史生成摘要；仍超限时采用明确标记的有界截断，原始事实保留在本地账本中。
 - 本地最小会话账本、配对工具事实、确定性摘要、覆盖 ID、幂等边界和 PromptSection 预算见 ADR 0026。恢复重建当前上下文；可选 LLM 摘要未启用，这不代表完整 V3.x 已实现。
 
 <a id="supersedes"></a>
