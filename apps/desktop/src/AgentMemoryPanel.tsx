@@ -3,6 +3,7 @@ import { BrainCircuit, ShieldAlert } from 'lucide-react'
 import {
   CODING_RUN_MEMORY_POLICY_ID,
   normalizeMemoryStatement,
+  memoryRecallAvailability,
   parseAgentMemoryRendererSnapshot,
   type AgentMemoryRendererSnapshot,
   type AgentMemoryRendererScope,
@@ -45,6 +46,13 @@ function memoryStatusLabel(status: string) {
     deleted: '已删除',
     expired: '已过期',
   }[status] ?? status
+}
+
+function RecallSize({ statement }: { statement: string | null }) {
+  if (statement === null) return null
+  const size = memoryRecallAvailability(statement)
+  const omitted = [!size.coding && '编码', !size.stage && '阶段', !size.conversation && '讨论'].filter(Boolean)
+  return <p className="empty-note">{size.bytes} UTF-8 字节 · {omitted.length ? `超出${omitted.join('、')}入口预算；可修订缩短。` : '大小符合各入口预算。'} 编码 ≤ 3800、阶段 ≤ 2800、讨论 ≤ 1800 字节；实际召回还需满足范围、有效期、相关度和剩余预算。</p>
 }
 
 export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMemoryPanelProps) {
@@ -342,6 +350,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                     <strong>{memoryStatusLabel(candidate.lifecycleStatus)}</strong>
                   </div>
                   <p>{candidate.statement ?? '对应的 Memory 已删除，内容不可用。'}</p>
+                  <RecallSize statement={candidate.statement} />
                   <div className="compact-row">
                     <span>候选 ID</span>
                     <code>{candidate.id}</code>
@@ -436,6 +445,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                     <strong>{memoryStatusLabel(memory.lifecycleStatus)}</strong>
                   </div>
                   <p>{memory.statement ?? '删除后内容不可用。'}</p>
+                  <RecallSize statement={memory.statement} />
                   <div className="compact-row">
                     <span>版本</span>
                     <strong>修订 {memory.currentRevision} · 当前头版本 v{memory.headVersion}</strong>
@@ -483,6 +493,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                             onChange={(event) => setRevisionStatement(event.target.value)}
                           />
                         </label>
+                        <RecallSize statement={revisionStatement} />
                         {revisionDuplicate(snapshot, memory.memoryId, revisionStatement) ? (
                           <p className="error-note" role="status">
                             修订后的内容与持久记忆 {revisionDuplicate(snapshot, memory.memoryId, revisionStatement)} 相同，不能保存为重复记忆。

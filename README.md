@@ -79,8 +79,8 @@ _在历史步骤上的操作不会改变实际进度。「材料与版本」按�
 ## 知识、记忆与证据
 
 - **仓库知识**：Git 管理的 Markdown 是规范、决策、检查清单和项目上下文的可审查来源。检索结果带有引用；知识关系视图连接文档、术语和流程证据。
-- **智能体记忆（Agent Memory）**：被接受的运行时结果可以存为候选项。当前产品要求人工明确提升候选项，才能形成持久记忆。编码时自动召回符合条件的已保存记忆，并检查作用范围、修订版本、过期和删除状态。尚未实现每次 Coding Run 后自动学习。
-- **有界上下文**：Native Coding 和 OpenCode 共用编码任务简报（Coding Brief）。已有摘要与明确约束用于压缩较早上下文，同时保留当前请求和选定的记忆。这是一种有长度边界的抽取式压缩。
+- **智能体记忆（Agent Memory）**：被接受的运行时结果可以存为候选项。已接受且测试通过的 Native / OpenCode 编码任务自动提取候选：测试命令可由受限策略保存为本人项目私有、30 天记忆；改动位置与修复经验仍需人工审阅。编码、阶段生成和讨论召回有效的相关记忆。面板说明各入口的可容纳大小。
+- **有界上下文**：Native Coding 和 OpenCode 共用编码任务简报（Coding Brief）。已有摘要与明确约束用于压缩较早上下文，同时保留当前请求和选定的记忆。讨论长历史生成可追溯的确定性摘要，保留完整原文与配对工具记录，重启后重新加载当前材料、项目说明与有效记忆。上下文使用提供方相关的 Token 估算和字符/字节硬限制；不自动调用收费摘要模型。
 - **真实证据**：编码完成时，系统对照当前产物、代码差异和实际执行的测试记录检查结果。成功的评估样例不能替代缺失或过期的证据。记忆和模型建议均不能满足 Gate 条件或授权操作。
 
 实现边界与实验记录见[记忆与上下文验证](docs/engineering/memory-context-execution-validation.md)、[记忆生命周期 ADR](docs/adr/0018-scoped-agent-memory-lifecycle.md)和[编码上下文 ADR](docs/adr/0021-coding-memory-context-and-evidence-evaluation.md)。
@@ -194,7 +194,7 @@ flowchart TB
 | **阶段生成与对话** | 澄清/设计生成正式产物；项目对话通过有限定范围的只读工具调查流程、产物、仓库文件和知识。Direct Provider 与只读 OpenCode 是两种执行选择。 | [`workflow-agent.ts`](packages/shared/src/workflow-agent.ts)、[`workbench-conversation-service.ts`](apps/desktop/electron/workbench-conversation-service.ts) |
 | **编码编排** | `coding-runtime` 准备受管理工作树和 Coding Brief，检查权限与预算，调用选定执行器，归档差异、测试、用量和结果。Native Coding 与 OpenCode 共用 Coding Executor 契约。 | [`coding-runtime.ts`](apps/desktop/electron/coding-runtime.ts)、[`coding-executor.ts`](apps/desktop/electron/coding-executor.ts)、[`native-coding-executor-v2.ts`](apps/desktop/electron/native-coding-executor-v2.ts) |
 | **有界运行时与协作** | 观察、行动、评估、检查点保存组成有明确限制及恢复能力的执行循环。Supervisor/Specialist 协作增加预定义任务依赖、限定权限、共享预算与工作区归属；与单次阶段生成或审查调用分别建模。 | [`agent-runtime-runtime.ts`](apps/desktop/electron/agent-runtime-runtime.ts)、[`specialist-runtime-coordinator.ts`](apps/desktop/electron/specialist-runtime-coordinator.ts) |
-| **知识与记忆** | 仓库 Markdown 建立索引用于检索和引用。版本化、限定范围的记忆经人工明确提升后可进入编码上下文。私有会话历史单独保存。 | [`repository-knowledge.ts`](apps/desktop/electron/repository-knowledge.ts)、[`coding-context.ts`](apps/desktop/electron/coding-context.ts)、[`agent-memory-human-actions.ts`](apps/desktop/electron/agent-memory-human-actions.ts) |
+| **知识与记忆** | 仓库 Markdown 建立索引用于检索和引用。限定范围的记忆经人工或受限测试命令策略提升后可进入上下文。私有会话历史、工具事件和派生摘要单独保存。 | [`repository-knowledge.ts`](apps/desktop/electron/repository-knowledge.ts)、[`coding-context.ts`](apps/desktop/electron/coding-context.ts)、[`agent-memory-human-actions.ts`](apps/desktop/electron/agent-memory-human-actions.ts) |
 | **工具与 MCP** | 主进程管理的注册表校验工具定义与执行权限。可信本地 stdio MCP 安装与 OpenCode 对话临时只读 MCP 桥接各有边界。 | [`native-tool-registry.ts`](apps/desktop/electron/native-tool-registry.ts)、[`local-mcp-client.ts`](apps/desktop/electron/local-mcp-client.ts)、[`workbench-mcp-bridge.ts`](apps/desktop/electron/workbench-mcp-bridge.ts) |
 | **模型调用治理** | 受治理调用在发出前预留预算、记录尝试，再结算实际报告的用量或不确定结果。未完成记账须先对账，再进行下一次计费；运行时与权限限制仍独立生效。 | [`governed-provider.ts`](packages/shared/src/governed-provider.ts)、[`model-call-budget.ts`](apps/api/src/repositories/model-call-budget.ts) |
 

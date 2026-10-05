@@ -6,6 +6,8 @@ async function main() {
     console.log('Skipped paid OpenCode Memory learning acceptance. Set DEVFLOW_OPENCODE_MEMORY_LEARNING_LIVE=1 to opt in.')
     return
   }
+  const maxCostUsd = Number(process.env.DEVFLOW_OPENCODE_MEMORY_MAX_COST_USD)
+  if (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0) throw new Error('Explicit DEVFLOW_OPENCODE_MEMORY_MAX_COST_USD required')
   const apiKey = process.env.DEVFLOW_AGENT_OPENAI_API_KEY
   const baseUrl = process.env.DEVFLOW_AGENT_OPENAI_BASE_URL
   const model = process.env.DEVFLOW_AGENT_OPENAI_MODEL
@@ -24,6 +26,7 @@ async function main() {
     baseUrl,
     apiKey,
     outputDirectory,
+    maxCostUsd,
   })
   console.log(`OpenCode Memory learning acceptance passed. Report: ${path.join(outputDirectory, 'report.json')}`)
 }

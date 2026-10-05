@@ -653,3 +653,15 @@ describe('resident project knowledge in stage prompts (ADR 0025)', () => {
     expect(result.provenance.knowledgeContext).toBeUndefined()
   })
 })
+
+it('drops optional Chinese memory under the shared token budget before stage dispatch', async () => {
+  const provider = createFakeAgentProvider()
+  const generate = vi.spyOn(provider, 'generateWorkflowArtifact')
+  const result = await runWorkflowStageAgent({ provider, run: created.run, node: clarifyNode(), artifacts: created.artifacts,
+    runtime: 'local', requestedBy: 'u-ling', bounds: { timeoutMs: 1000, maxInputBytes: 1000000, maxOutputBytes: 64000, maxToolCalls: 64, maxCitations: 64 },
+    memoryContext: [{ id: 'large', revision: 1, statement: '保留数据'.repeat(10000) }],
+  })
+  expect(generate).toHaveBeenCalledTimes(1)
+  expect(result.prompt).not.toContain('RECALLED_MEMORY_BACKGROUND')
+  expect(result.trace.steps[0]!.summary).toContain('tokens (')
+})

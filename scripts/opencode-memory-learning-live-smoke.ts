@@ -29,6 +29,9 @@ import { buildOpencodeRuntimeEnv } from '../apps/desktop/electron/coding-engine.
 import { isolatedOpencodeProfileEnv } from '../apps/desktop/electron/opencode-profile-isolation.js'
 import { learnFromCompletedCodingRun, type CodingRunMemoryLearningResult } from '../apps/desktop/electron/coding-run-memory-learning.js'
 import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.js'
+import { createGovernedOpencodeProxy } from '../apps/desktop/electron/governed-opencode-proxy.js'
+import { classifyOpencodeFailure } from '../apps/desktop/electron/opencode-failure.js'
+import { createMemoryLearningBudget } from './memory-learning-budget.js'
 import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime.js'
 
 const exec = promisify(execFile)
@@ -43,6 +46,8 @@ export type OpencodeMemoryLearningLiveInput = {
   baseUrl: string
   apiKey: string
   outputDirectory: string
+  maxCostUsd: number
+  maxCalls?: number
 }
 
 type PermissionDecisionRecord = {
@@ -78,6 +83,12 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
     providerId: input.providerId, modelId: input.modelId, baseUrl: input.baseUrl, apiKey: input.apiKey,
     fingerprint: createHash('sha256').update(JSON.stringify([input.providerId, input.modelId, input.baseUrl, 'live-acceptance'])).digest('hex'),
   }
+  const budget = await createMemoryLearningBudget({ path: path.join(output, 'model-calls.json'), projectId: project.id, maxCostUsd: input.maxCostUsd, maxCalls: input.maxCalls ?? 12 })
+  const relay = await createGovernedOpencodeProxy({ binding: providerBinding, projectId: project.id, governance: budget, maxOutputTokens: 4096 })
+  const runtimeEnv = buildOpencodeRuntimeEnv({ baseEnv: process.env, apiKeyEnvName: 'OPENCODE_API_KEY', providerBinding: relay.binding })
+  const configuration = JSON.parse(runtimeEnv.OPENCODE_CONFIG_CONTENT!)
+  configuration.provider[input.providerId].models[input.modelId].limit = { context: 32768, output: 4096 }
+  runtimeEnv.OPENCODE_CONFIG_CONTENT = JSON.stringify(configuration)
   const engine = createOpencodeHttpCodingEngineAdapter({
     binaryPath: input.binaryPath,
     providerID: input.providerId,
@@ -87,7 +98,7 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
     requireExecutionAuthorization: true,
     permissionDiscoveryTimeoutMs: 240_000,
     runtimeEnv: {
-      ...buildOpencodeRuntimeEnv({ baseEnv: process.env, apiKeyEnvName: 'OPENCODE_API_KEY', providerBinding }),
+      ...runtimeEnv,
       // Same isolation as Desktop coding runs: no personal instructions, plugins or skills.
       ...isolatedOpencodeProfileEnv(path.join(output, 'opencode-profile')),
     },
@@ -109,7 +120,7 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
       })
       if (!result.applied) throw new Error(`Workflow command rejected: ${result.blockers.map((blocker) => blocker.code).join(',')}`)
     },
-    budgetGuard: async () => ({ status: 'allowed', blocksRun: false, currentSpendUsd: 0, projectedCostUsd: 0.05, limitUsd: 0.5, reason: 'Explicit bounded live acceptance budget.' }),
+    budgetGuard: async () => ({ status: 'allowed', blocksRun: false, currentSpendUsd: budget.records().reduce((sum, row) => sum + (row.costUsd ?? row.projectedCostUsd), 0), projectedCostUsd: 0, limitUsd: input.maxCostUsd, reason: 'Each actual request must also pass the governed relay and persistent acceptance budget.' }),
     // The same wiring as Desktop Main: learning runs after Change Acceptance and the saved test.
     learnCodingRunMemory: ({ codingRun, evaluationPassed }) => learnFromCompletedCodingRun({ store, codingRun, evaluationPassed }),
   })
@@ -135,6 +146,7 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
   }
 
   async function executeRun(label: string, title: string, greeting: string) {
+    const checkpoint = relay.checkpoint()
     const id = `opencode-memory-learning-${label}`
     const request = `Change only the greeting string in src/greeting.js to exactly "${greeting}". Keep the export name and change nothing else. Do not run shell commands; DevFlow runs the saved test after your edit.`
     const run: WorkflowRun = {
@@ -177,7 +189,10 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
     const evidenceText = JSON.stringify(events.map((event) => event.metadata ?? {}))
     assert.ok(!evidenceText.includes(input.apiKey), `${label}: the Provider key appeared in Coding Run evidence`)
     console.log(JSON.stringify({ liveProgress: label, status: 'passed', codingRunId: completed.id }))
-    return { run, codingRun: completed, learning }
+    const governedUsage = relay.usageAfter(checkpoint)
+    assert.ok(governedUsage?.budgetAttemptIds?.length, `${label}: no governed model call recorded`)
+    assert.equal(governedUsage.missingUsageCount, 0, `${label}: provider usage is incomplete`)
+    return { run, codingRun: completed, learning, governedUsage }
   }
 
   const kindsAndOutcomes = (learning: Pick<CodingRunMemoryLearningResult, 'candidates'>) =>
@@ -215,7 +230,8 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
     const report = {
       passed: true,
       provider: { id: input.providerId, model: input.modelId, baseUrl: input.baseUrl },
-      runs: [first, second].map(({ run, codingRun, learning }) => ({
+      runs: [first, second].map(({ run, codingRun, learning, governedUsage }) => ({
+        governedUsage,
         runId: run.id, codingRunId: codingRun.id, title: run.title, engine: codingRun.engine,
         recalledMemoryIds: (codingRun.contextReceipt?.memories ?? []).map((memory) => memory.id),
         learning, changedPaths: codingRun.changedPaths, cost: codingRun.runtimeCostSummary ?? null,
@@ -223,13 +239,20 @@ export async function runOpencodeMemoryLearningLiveSmoke(input: OpencodeMemoryLe
       })),
       policyMemory: { memoryId: policyMemoryId, statement: policyRevision.statement, visibility: policyRevision.visibility, retentionClass: policyRevision.retentionClass, expiresAt: policyRevision.expiresAt },
       permissionDecisions: decisions,
+      modelCalls: budget.records(),
+      maxCostUsd: input.maxCostUsd,
       completedAt: now(),
-      scope: 'Real OpenCode with a real Provider, local Store, managed worktrees, execution authorization, Change Acceptance, saved tests, Workflow build advance, automatic learning, bounded policy promotion, recall in a later Coding Run. No UI acceptance claimed.',
+      scope: 'OpenCode with an explicitly configured Provider, local Store, managed worktrees, execution authorization, Change Acceptance, saved tests, Workflow build advance, automatic learning, bounded policy promotion, recall in a later Coding Run. No UI acceptance claimed.',
     }
     await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
     return report
+  } catch (error) {
+    const details = classifyOpencodeFailure(error, { relayFailure: (id) => relay.failureForRequest(id, 0) }).failureDetails
+    await writeFile(path.join(output, 'failure.json'), JSON.stringify({ passed: false, failure: details, modelCalls: budget.records(), usage: relay.usageAfter(0), completedAt: now() }, null, 2))
+    throw error
   } finally {
-    await processManager.stopAll().catch(() => undefined)
-    store.close()
+    try { await processManager.stopAll() } finally {
+      try { await relay.close() } finally { store.close() }
+    }
   }
 }

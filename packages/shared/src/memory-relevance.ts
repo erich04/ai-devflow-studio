@@ -139,6 +139,13 @@ export function memoryStatementBytes(statement: string): number {
   return new TextEncoder().encode(statement).byteLength
 }
 
+/** Size eligibility only: scope, lifecycle, relevance and remaining budget still apply. */
+export function memoryRecallAvailability(statement: string) {
+  const bytes = memoryStatementBytes(statement)
+  const fits = (budget: MemoryRecallBudget) => bytes <= AGENT_MEMORY_RECALLABLE_STATEMENT_MAX_BYTES && bytes + AGENT_MEMORY_RECALL_LABEL_BYTES <= budget.maxBytes
+  return { bytes, coding: fits(CODING_MEMORY_RECALL_BUDGET), stage: fits(STAGE_AGENT_MEMORY_RECALL_BUDGET), conversation: fits(CONVERSATION_MEMORY_RECALL_BUDGET) }
+}
+
 /**
  * Greedy selection in rank order under an item and byte budget. Oversized statements are
  * skipped, never truncated: Memory is indivisible (ADR 0021).

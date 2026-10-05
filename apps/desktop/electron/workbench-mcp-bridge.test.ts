@@ -19,7 +19,7 @@ it('exposes only scoped read tools over authenticated loopback HTTP and rejects 
   expect(initialized.result.capabilities).toEqual({ tools: {} })
   const tools = (await (await rpc('tools/list')).json()).result.tools
   // knowledge-context K3: the directory is listed and read by path; the older keyword tool stays callable only.
-  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'requirement', 'repo_list', 'repo_read', 'repo_search', 'knowledge_list', 'knowledge_read'])
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'requirement', 'repo_list', 'repo_read', 'repo_search', 'knowledge_list', 'knowledge_read', 'conversation_read'])
   expect(tools.find((tool: { name: string }) => tool.name === 'knowledge_read').inputSchema).toMatchObject({ required: ['path'] })
   expect(tools.every((tool: { annotations: { readOnlyHint: boolean } }) => tool.annotations.readOnlyHint)).toBe(true)
   expect((await (await rpc('tools/call', { name: 'node', arguments: { runId: 'run-A', nodeId: 'node-A' } })).json()).result.content[0].text).toContain('project-A')

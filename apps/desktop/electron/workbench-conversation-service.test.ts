@@ -60,12 +60,105 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
 }
 
 describe('unified conversation execution and boundaries', () => {
+  it('records missing tool results on restart and does not replay or duplicate the user message', async () => {
+    const { service, provider } = harness(async () => ({ value: { text: '重新读取当前上下文。' } }))
+    const id = await create(service)
+    const original = (await store.listWorkbenchConversations(projectId))[0]!
+    await store.saveWorkbenchConversation({ ...original, version: 2, status: 'running', messages: [{ id: 'interrupted-user', role: 'user', text: '调查仓库', createdAt: created.run.createdAt }],
+      toolEvents: [{ kind: 'tool_request', id: 'missing-query', turnId: 'interrupted-user', name: 'repo_read', args: { path: 'tasks.ts' }, createdAt: created.run.createdAt }] }, 1)
+    await service.recoverInterrupted()
+    await service.recoverInterrupted()
+    expect(provider.completeStructuredJson).not.toHaveBeenCalled()
+    const recovered = (await store.listWorkbenchConversations(projectId))[0]!
+    expect(recovered.toolEvents).toHaveLength(2)
+    expect(recovered.toolEvents![1]).toMatchObject({ kind: 'tool_result', outcome: 'interrupted', requestId: 'missing-query' })
+    await service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+    await service.settled(id)
+    const after = (await store.listWorkbenchConversations(projectId))[0]!
+    expect(after.messages.filter((message) => message.role === 'user')).toHaveLength(1)
+    expect(after.toolEvents).toEqual(recovered.toolEvents)
+  })
+
+  it('preserves originals and skips billing when a compaction cannot be saved, then retries deterministically', async () => {
+    let failCompaction = true
+    const guarded = new Proxy(store, { get(target, property) {
+      if (property === 'saveWorkbenchConversation') return async (next: Parameters<LocalStore['saveWorkbenchConversation']>[0], version: number, artifact?: Parameters<LocalStore['saveWorkbenchConversation']>[2]) => {
+        if (failCompaction && next.compactions?.length) throw new Error('fixture disk failure')
+        return target.saveWorkbenchConversation(next, version, artifact)
+      }
+      return Reflect.get(target, property)
+    } })
+    const { service, provider } = harness(async () => ({ value: { text: '上下文恢复完成。' } }), true, { store: guarded })
+    const id = await create(service)
+    const original = (await store.listWorkbenchConversations(projectId))[0]!
+    const history = Array.from({ length: 8 }, (_, i) => ({ id: `large-${i}`, role: 'user' as const, text: '历史中文'.repeat(1600), createdAt: created.run.createdAt }))
+    await store.saveWorkbenchConversation({ ...original, version: 2, messages: history }, 1)
+    const failed = await send(service, id, '继续')
+    expect(failed.status).toBe('failed')
+    expect(failed.messages.slice(0, 8)).toEqual(history)
+    expect(provider.completeStructuredJson).not.toHaveBeenCalled()
+    failCompaction = false
+    await service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+    await service.settled(id)
+    const after = (await store.listWorkbenchConversations(projectId))[0]!
+    expect(after.status, after.error).toBe('idle')
+    expect(after.compactions).toHaveLength(1)
+    expect(after.messages.filter((message) => message.role === 'user')).toHaveLength(9)
+  })
+
+  it('recovers across two persisted compaction boundaries with original messages and paired tools intact', async () => {
+    let step = 0
+    const { service } = harness(async () => ++step === 1 ? { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } } : { value: { text: '已读取事实。' } })
+    const id = await create(service)
+    const original = (await store.listWorkbenchConversations(projectId))[0]!
+    const old = Array.from({ length: 8 }, (_, i) => ({ id: `long-${i}`, role: 'user' as const, text: `约束 ${i}：保留数据。` + '中文历史'.repeat(1300), createdAt: created.run.createdAt }))
+    await store.saveWorkbenchConversation({ ...original, version: 2, messages: old }, 1)
+    const first = await send(service, id, '先读取任务模块')
+    expect(first.status, first.error).toBe('idle')
+    expect(first.compactions!.length).toBeGreaterThanOrEqual(1)
+    expect(first.toolEvents).toEqual([
+      expect.objectContaining({ kind: 'tool_request', name: 'repo_read' }),
+      expect.objectContaining({ kind: 'tool_result', outcome: 'completed', requestId: first.toolEvents![0]!.id }),
+    ])
+    expect(first.messages.slice(0, 8)).toEqual(old)
+    store.close()
+    store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    const resumed = harness(async () => ({ value: { text: '继续当前需求。' } }))
+    await resumed.service.recoverInterrupted()
+    for (let i = 0; i < 3; i++) await send(resumed.service, id, '新增长历史'.repeat(1800))
+    const after = (await store.listWorkbenchConversations(projectId)).find((entry) => entry.id === id)!
+    expect(after.status, after.error).toBe('idle')
+    expect(after.compactions!.length).toBeGreaterThan(first.compactions!.length)
+    expect(after.compactions!.at(-1)!.previousBoundaryId).not.toBeNull()
+    expect(after.messages.slice(0, 8)).toEqual(old)
+    expect(after.toolEvents).toEqual(first.toolEvents)
+    expect(after.contextReceipt!.budget!.overflow).toBe(false)
+    expect(JSON.parse(resumed.calls.at(-1)!).rollingSummary.trust).toBe('historical_context_only')
+    expect(JSON.parse(resumed.calls.at(-1)!).originalRequirements[0].content).toBe(created.run.request)
+  })
+
+  it.each(['direct-provider', 'opencode'] as const)('reloads L0 for each %s step without trusting it as authority', async (executor) => {
+    let revision = 1
+    const loadKnowledge = vi.fn(async () => ({ projectId, contentHash: 'k', indexedAt: created.run.createdAt, truncated: false, warnings: [], documents: [], entities: [], relations: [], chunks: [],
+      projectInstructions: { sourcePath: 'AGENTS.md' as const, content: `Project rule v${revision}`, contentDigest: `sha256:${revision.toString().repeat(64)}`, bytes: 15, truncated: false } }))
+    const complete = async () => ++revision === 2 ? { value: { tool: { name: 'workflow', args: {} } } } : { value: { text: '已读当前说明。' } }
+    const { service, calls } = harness(complete, true, { loadKnowledge, ...(executor === 'opencode' ? { openHarness: async ({ query }) => ({ id: 'fixture', model: 'test', completeStructuredJson: async (input) => {
+      calls.push(input.userPrompt)
+      if (revision++ === 1) { await query('workflow', {}); return { value: { question: { prompt: '当前说明是什么？', options: [] }, text: '说明已读。' } } }
+      return { value: { text: '已读当前说明。' } }
+    } }) } : {}) })
+    const id = (await service.command({ type: 'create', projectId, executor })).conversationId!
+    expect((await send(service, id)).status).toMatch(/idle|awaiting_answer/)
+    expect(JSON.parse(calls[0]!).projectInstructions).toMatchObject({ sourcePath: 'AGENTS.md', content: 'Project rule v1' })
+    if (executor === 'direct-provider') expect(JSON.parse(calls[1]!).projectInstructions.content).toBe('Project rule v2')
+  })
+
   it('includes the complete original requirement before a first clarification question (#153)', async () => {
     const requirement = created.run.request
     const { service, calls } = harness(async () => ({ value: { text: '可以按已有要求生成澄清。' } }))
     const result = await send(service, await create(service))
     expect(calls[0]).toContain(requirement)
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
   })
 
   it('keeps every step prompt an exact-prefix extension of the previous one for provider caching', async () => {
@@ -114,7 +207,7 @@ describe('unified conversation execution and boundaries', () => {
     })
     const before = await store.listRuns()
     const result = await send(service, await create(service), '请结合完整原始需求更新讨论提案。')
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     expect(attempts).toBe(2)
     expect(result.messages.filter((m) => m.role === 'user')).toHaveLength(1)
     expect(result.messages.at(-1)?.text).toBe('更新后的讨论提案已准备好。')
@@ -144,7 +237,7 @@ describe('unified conversation execution and boundaries', () => {
       return { value: { text: '未明确的具体空状态文案仍可确认。', question: { prompt: '中文提示用什么文案？', options: [] } } }
     })
     const result = await send(service, await create(service))
-    expect(result.status).toBe('awaiting_answer')
+    expect(result.status, result.error).toBe('awaiting_answer')
     expect(calls[1]).not.toContain(created.run.request)
     expect((await store.listArtifacts(flow.run.id))).toHaveLength(2)
   })
@@ -211,7 +304,7 @@ describe('unified conversation execution and boundaries', () => {
     const original = (await store.listWorkbenchConversations(projectId))[0]!
     await store.saveWorkbenchConversation({ ...original, version: original.version + 1, messages: Array.from({ length: 8 }, (_, i) => ({ id: `history-${i}`, role: 'assistant', createdAt: created.run.createdAt, text: '旧内容'.repeat(1800) })) }, original.version)
     const result = await send(service, id, '当前问题：根据原始需求回答')
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     expect(result.contextReceipt!.omittedMessages).toBeGreaterThan(0)
   })
 
@@ -221,7 +314,7 @@ describe('unified conversation execution and boundaries', () => {
     const id = await create(service)
     const first = await send(service, id)
     expect(JSON.parse(calls[0]!).originalRequirements[0]).toMatchObject({ source: 'run_request', content: created.run.request })
-    expect(first.status).toBe('awaiting_answer')
+    expect(first.status, first.error).toBe('awaiting_answer')
     vi.spyOn(store, 'listRuns').mockResolvedValue([{ ...created.run, request: '' }])
     const failedRead = await send(service, id)
     expect(failedRead.messages.at(-1)?.text).toContain('原始需求正文暂时无法读取')
@@ -237,7 +330,7 @@ describe('unified conversation execution and boundaries', () => {
     const id = await create(service)
     const result = await send(service, id)
     expect(requests).toBe(2)
-    expect(result.status).toBe('failed')
+    expect(result.status, result.error).toBe('failed')
     expect(result.failure).toMatchObject({ code: 'invalid_model_output', httpStatus: 200, reason: raw === '' ? 'empty_content' : raw === '[]' ? 'not_json_object' : 'invalid_json' })
     expect(result.error).not.toMatch(/配置|网络/)
     expect(JSON.stringify(result)).not.toContain('PRIVATE_RESPONSE')
@@ -265,7 +358,7 @@ describe('unified conversation execution and boundaries', () => {
       loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
     const id = (await service.command({ type: 'create', projectId, executor: 'opencode' })).conversationId!
     const result = await send(service, id)
-    expect(result.status).toBe('failed')
+    expect(result.status, result.error).toBe('failed')
     expect(result.messages.find((message) => message.provider)).toMatchObject({ usage: { totalTokens: 50 }, provider: { executor: 'opencode' } })
     expect(result.messages.filter((message) => message.role === 'assistant')).toHaveLength(0)
     expect(direct).not.toHaveBeenCalled()
@@ -327,7 +420,7 @@ describe('unified conversation execution and boundaries', () => {
     const { service } = harness(async () => ({ value: { text: '**完整原文**', format } }))
     const result = await send(service, await create(service))
     expect(result.messages.at(-1)).toMatchObject({ text: '**完整原文**', format: expected })
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
   })
 
   it('preserves legacy notes for inspection but never sends them to the model or accepts new manual notes', async () => {
@@ -360,7 +453,7 @@ describe('unified conversation execution and boundaries', () => {
     provider.effectiveThinking = { mode: 'enabled', effort: 'low', source: 'application_default' }
     id = await create(service)
     const result = await send(service, id)
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     expect(result.messages.find((message) => message.reasoning)?.reasoning?.text).toContain('[REDACTED:openai_api_key]')
     expect(JSON.stringify(result)).not.toContain('abcdef1234567890')
   })
@@ -478,7 +571,7 @@ describe('unified conversation execution and boundaries', () => {
     let step = 0
     const { service, calls, inspectGate } = harness(async () => ({ value: step++ === 0 ? { tool: { name: 'node', args: { runId: created.run.id, nodeId: node.id } } } : { text: `已查询 ${node.title}`, actions: [{ label: '定位到节点', runId: created.run.id, nodeId: node.id, section: node.kind === 'test' ? '测试证据' : '状态' }] } }))
     const result = await send(service, await create(service))
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     const context = JSON.parse(calls[1]!)
     expect(context.latestWorkflow.runs[0].nodes).toHaveLength(created.run.nodes.length)
     expect(context.toolObservations[0].result.node).toMatchObject({ id: node.id, kind: node.kind, status: node.status })
@@ -497,7 +590,7 @@ describe('unified conversation execution and boundaries', () => {
     const { service, calls } = harness(async () => ({ value: outputs[step++]! }))
     const id = await create(service)
     const first = await send(service, id, '结合代码和知识澄清清理功能。')
-    expect(first.status).toBe('awaiting_answer')
+    expect(first.status, first.error).toBe('awaiting_answer')
     expect(calls[2]).toContain('tasks.filter')
     expect(calls[2]).toContain('清理操作只删除已完成项')
     const question = first.messages.at(-1)!
@@ -542,7 +635,7 @@ describe('unified conversation execution and boundaries', () => {
     expect(calls[2]).toContain('BUILD_RULE_BODY keep task order.')
     // Paths outside the directory are refused with a pointer to repo_read.
     expect(JSON.parse(calls[3]!).toolObservations.at(-1).result.error).toContain('repo_read')
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
   })
 
   it.each([
@@ -581,7 +674,7 @@ describe('unified conversation execution and boundaries', () => {
     const id = await create(service)
     await send(service, id)
     const result = await send(service, id, '先告诉我测试节点的进度')
-    expect(result.status).toBe('awaiting_answer')
+    expect(result.status, result.error).toBe('awaiting_answer')
     expect(result.messages.find((message) => message.question)?.question?.answeredAt).toBeUndefined()
   })
 
@@ -665,7 +758,7 @@ describe('unified conversation execution and boundaries', () => {
     const current = (await store.listWorkbenchConversations(projectId))[0]!
     await store.saveWorkbenchConversation({ ...current, version: 2, memory: '会话记忆'.repeat(1500), messages: Array.from({ length: 6 }, (_, index) => ({ id: `history-${index}`, role: 'user' as const, text: '历史讨论'.repeat(1300), createdAt: created.run.createdAt })) }, 1)
     const result = await send(service, id, '最新问题'.repeat(2500))
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     expect(calls[1]).toContain('上下文受长度限制')
     expect(result.contextReceipt?.limited).toBe(true)
     expect(result.messages.filter((message) => message.role === 'user')).toHaveLength(7)
@@ -679,7 +772,7 @@ describe('unified conversation execution and boundaries', () => {
     let step = 0
     const { service, calls } = harness(async () => ({ value: step++ === 0 ? { tool: { name: 'workflow', args: { offset: 30 } } } : { text: '已查询剩余流程。' } }))
     const result = await send(service, await create(service))
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     const observed = JSON.parse(calls[1]!).toolObservations[0].result
     expect(observed).toMatchObject({ totalRuns: 36, offset: 30, nextOffset: null })
     expect(observed.runs).toHaveLength(6)
@@ -689,7 +782,7 @@ describe('unified conversation execution and boundaries', () => {
   it('keeps credential failure actionable before any Provider request', async () => {
     const service = new WorkbenchConversationService({ store, resolveProvider: async () => { throw new Error('safeStorage decryption failed') }, loadKnowledge: async () => { throw new Error('must not run') }, changed: vi.fn() })
     const result = await send(service, await create(service))
-    expect(result.status).toBe('failed')
+    expect(result.status, result.error).toBe('failed')
     expect(result.error).toContain('重新保存 API Key')
     expect(result.failure).toMatchObject({ phase: 'resolve_provider', code: 'Error' })
     expect(result.messages.some((message) => message.provider)).toBe(false)
@@ -701,7 +794,7 @@ describe('unified conversation execution and boundaries', () => {
     const id = await create(service)
     await expect(service.command({ type: 'update', projectId: 'other', conversationId: id, inputDraft: 'leak' })).rejects.toThrow('当前项目中没有')
     const result = await send(service, id)
-    expect(result.status).toBe('failed')
+    expect(result.status, result.error).toBe('failed')
     expect(result.messages.some((message) => message.actions?.length)).toBe(false)
     expect(() => parseConversationCommand({ type: 'send', projectId, conversationId: id, text: 'x', providerId: 'x', localPath: '/etc' })).toThrow()
   })
@@ -745,7 +838,7 @@ describe('unified conversation execution and boundaries', () => {
     await service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
     await service.settled(id)
     const result = (await store.listWorkbenchConversations(projectId))[0]!
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     expect(result.messages.filter((message) => message.role === 'user')).toHaveLength(1)
     expect(result.messages.find((message) => message.usage)?.usage).toMatchObject({ inputTokens: 12, outputTokens: 3 })
   })
@@ -754,7 +847,7 @@ describe('unified conversation execution and boundaries', () => {
     const loop = harness(async () => ({ value: { tool: { name: 'shell', args: { command: 'touch compromised' } } } }))
     const result = await send(loop.service, await create(loop.service))
     expect(loop.calls).toHaveLength(12)
-    expect(result.status).toBe('failed')
+    expect(result.status, result.error).toBe('failed')
     expect(result.error).toContain('12 次')
     const malformed = harness(async () => ({ value: { question: { options: 'bad' } } }))
     expect((await send(malformed.service, await create(malformed.service))).status).toBe('failed')
@@ -780,10 +873,10 @@ describe('conversation read-only repository tools', () => {
 
 describe('host controlled critical input coverage (#164)',()=>{
  const draft={runId:created.run.id,nodeId:created.run.currentNodeId,title:'完整澄清',content:'清理已完成任务并持久化结果'}
- it('bounds a model that repeatedly returns an unmapped premature complete proposal',async()=>{const {service,calls}=harness(async()=>({value:{text:'完成',draft}}),false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(calls.length).toBeLessThanOrEqual(4);expect(JSON.parse(calls[1]!).criticalProposalInput.documents[0].content).toBe(created.run.request);expect(result.messages.some(m=>m.draft)).toBe(false);expect(await store.listArtifacts()).toHaveLength(created.artifacts.length)})
- it('rejects semantic contradiction even when every source quote and destination quote exists',async()=>{const {service}=harness(async(input)=>{const ctx=JSON.parse(input.userPrompt);if(ctx.proposalVerification)return {value:{coverageReview:ctx.criticalProposalInput.criteria.map((c:{id:string})=>({criterionId:c.id,status:'contradiction',reason:'提案修改了持久化约定'}))}};return {value:{text:'草稿',draft:{...draft,...(ctx.criticalProposalInput?{coverage:ctx.criticalProposalInput.criteria.map((c:{id:string;text:string})=>({criterionId:c.id,sourceQuote:c.text,proposalQuote:draft.content}))}:{})}}}},false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(result.error).toContain('语义核对');expect(result.messages.some(m=>m.draft)).toBe(false)})
+ it('bounds a model that repeatedly returns an unmapped premature complete proposal',async()=>{const {service,calls}=harness(async()=>({value:{text:'完成',draft}}),false);const result=await send(service,await create(service),'生成完整提案');expect(result.status, result.error).toBe('failed');expect(calls.length).toBeLessThanOrEqual(4);expect(JSON.parse(calls[1]!).criticalProposalInput.documents[0].content).toBe(created.run.request);expect(result.messages.some(m=>m.draft)).toBe(false);expect(await store.listArtifacts()).toHaveLength(created.artifacts.length)})
+ it('rejects semantic contradiction even when every source quote and destination quote exists',async()=>{const {service}=harness(async(input)=>{const ctx=JSON.parse(input.userPrompt);if(ctx.proposalVerification)return {value:{coverageReview:ctx.criticalProposalInput.criteria.map((c:{id:string})=>({criterionId:c.id,status:'contradiction',reason:'提案修改了持久化约定'}))}};return {value:{text:'草稿',draft:{...draft,...(ctx.criticalProposalInput?{coverage:ctx.criticalProposalInput.criteria.map((c:{id:string;text:string})=>({criterionId:c.id,sourceQuote:c.text,proposalQuote:draft.content}))}:{})}}}},false);const result=await send(service,await create(service),'生成完整提案');expect(result.status, result.error).toBe('failed');expect(result.error).toContain('语义核对');expect(result.messages.some(m=>m.draft)).toBe(false)})
  it('rechecks the source version at explicit save time',async()=>{const {service}=harness(async()=>({value:{text:'待保存',draft}}));const id=await create(service);const result=await send(service,id,'生成完整提案');const message=result.messages.find(m=>m.draft)!;expect(message.draft?.inputReceipt).toBeDefined();await store.saveArtifact({...created.artifacts[0]!,id:'conversation-proposal-new-input',kind:'log',nodeId:created.run.currentNodeId,content:'新增已确认条件',updatedAt:'2026-09-23T00:00:00Z'});await expect(service.command({type:'publish',projectId,conversationId:id,messageId:message.id})).rejects.toThrow();expect(await store.listArtifacts()).toHaveLength(created.artifacts.length+1)})
- it('fails explicitly when protected original body exceeds the final request capacity',async()=>{await store.saveArtifact({...created.artifacts[0]!,id:'conversation-proposal-large-input',kind:'log',nodeId:created.run.currentNodeId,content:'完整正文。'.repeat(9000)});const {service,calls}=harness(async()=>({value:{text:'草稿',draft}}),false);const result=await send(service,await create(service),'生成完整提案');expect(result.status).toBe('failed');expect(result.error).toContain('容量');expect(calls.length).toBeLessThanOrEqual(2);expect(result.messages.some(m=>m.draft)).toBe(false)})
+ it('fails explicitly when protected original body exceeds the final request capacity',async()=>{await store.saveArtifact({...created.artifacts[0]!,id:'conversation-proposal-large-input',kind:'log',nodeId:created.run.currentNodeId,content:'完整正文。'.repeat(9000)});const {service,calls}=harness(async()=>({value:{text:'草稿',draft}}),false);const result=await send(service,await create(service),'生成完整提案');expect(result.status, result.error).toBe('failed');expect(result.error).toContain('容量');expect(calls.length).toBeLessThanOrEqual(2);expect(result.messages.some(m=>m.draft)).toBe(false)})
 })
 
 describe('recalled Memory in the discussion bar (ADR 0024)', () => {
@@ -809,7 +902,7 @@ describe('recalled Memory in the discussion bar (ADR 0024)', () => {
   }
   const answer = async () => ({ value: { text: '已按需求回答。' } })
 
-  it('attaches relevant Memory once per turn after history, scoped to the attached Run creator', async () => {
+  it('refreshes relevant Memory per model step with a stable prefix when unchanged', async () => {
     const { memoryDependency, retrieve } = memoryStore(async () => [
       memory('m-clear', '清理已完成任务时保留未完成项的原有顺序。TOKEN=sk-supersecret123456789'),
       memory('m-release', 'Release notes are written in English.'),
@@ -822,7 +915,7 @@ describe('recalled Memory in the discussion bar (ADR 0024)', () => {
     }, true, { memory: memoryDependency })
     expect((await send(service, await create(service), '清理已完成任务要注意什么？')).status).toBe('idle')
     expect(calls).toHaveLength(2)
-    expect(retrieve).toHaveBeenCalledTimes(1)
+    expect(retrieve).toHaveBeenCalledTimes(2)
     expect(retrieve).toHaveBeenCalledWith(expect.objectContaining({
       scope: expect.objectContaining({ kind: 'local', userId: 'u-test', localProjectId: projectId }),
     }))
@@ -834,6 +927,18 @@ describe('recalled Memory in the discussion bar (ADR 0024)', () => {
     expect(calls[0]).not.toContain('sk-supersecret123456789')
     // Memory sits in the cacheable prefix and does not change between steps of a turn.
     expect(calls[1]!.startsWith(calls[0]!.slice(0, calls[0]!.indexOf('"toolObservations"')))).toBe(true)
+  })
+
+  it.each(['deleted', 'expired'])('omits %s memory before the next provider step in the same turn', async (state) => {
+    let step = 0
+    const revision = memory('m-clear', '清理已完成任务时保留未完成项的原有顺序。')
+    const { memoryDependency } = memoryStore(async () => step === 0 ? [revision] : state === 'deleted' ? [] : [{ ...revision, expiresAt: '2020-01-01T00:00:00.000Z' }])
+    const { service, calls } = harness(async () => ++step === 1
+      ? { value: { tool: { name: 'workflow', args: {} } } }
+      : { value: { text: '使用当前需求。' } }, true, { memory: memoryDependency })
+    expect((await send(service, await create(service), '清理已完成任务')).status).toBe('idle')
+    expect(JSON.parse(calls[0]!).backgroundMemory).toHaveLength(1)
+    expect(JSON.parse(calls[1]!)).not.toHaveProperty('backgroundMemory')
   })
 
   it('uses the paired user when this local project is paired', async () => {
@@ -886,7 +991,7 @@ describe('tool observation degradation in the discussion bar (ADR 0024 §6)', ()
       text: `之前讨论第 ${index + 1} 轮：${'清理规则'.repeat(60)}`, createdAt: created.run.createdAt,
     })) }, original.version)
     const result = await send(service, id, '逐个读取 a、b、c、d 四个文件。')
-    expect(result.status).toBe('idle')
+    expect(result.status, result.error).toBe('idle')
     expect(calls).toHaveLength(5)
     const contexts = calls.map((prompt) => JSON.parse(prompt))
     for (const prompt of calls) expect(prompt.length).toBeLessThanOrEqual(32000)

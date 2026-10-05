@@ -60,7 +60,7 @@ export async function recallScopedMemory(input: {
     stateVersion: 1, id: input.requestId,
     scope, runtimeId: input.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: input.now,
   }) ?? []
-  const newestFirst = [...available].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
+  const newestFirst = available.filter((revision) => revision.status === 'active' && (!revision.expiresAt || Date.parse(revision.expiresAt) > Date.parse(input.now))).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
   const relevant = rankMemoryByRelevance(newestFirst, input.query, (revision) => revision.statement)
     .map((entry) => entry.item)
   const selected = selectMemoryWithinBudget(relevant, (revision) => redactSensitiveText(revision.statement).value, input.budget)

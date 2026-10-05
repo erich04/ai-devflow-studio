@@ -180,6 +180,13 @@ const runtimeListItem = createAgentRuntimeRendererListItem({
 })
 
 describe('AgentMemoryPanel', () => {
+  it('explains why a legacy large memory cannot fit a recall entry', async () => {
+    const large = { ...snapshot, candidateCount: 1, candidates: [{ ...snapshot.candidates[0]!, statement: '中'.repeat(1000) }] }
+    const api = { listAgentMemoryLifecycle: vi.fn().mockResolvedValue(large) } as unknown as DevFlowDesktopApi
+    render(<AgentMemoryPanel desktopApi={api} runId="run-selected" localProjectId="local-project-1" />)
+    expect(await screen.findByText(/3000 UTF-8 字节/)).toHaveTextContent('超出阶段、讨论入口预算')
+  })
+
   it('shows no text for the source candidate of a deleted Memory', async () => {
     const withDeletedSource: AgentMemoryRendererSnapshot = {
       ...snapshot,

@@ -32,6 +32,17 @@ async function setup(accepted = true, responder?: typeof fetch) {
   return { proxy, budget, upstream, send }
 }
 describe('OpenCode governed relay', () => {
+  it('applies an explicit output cap to both admission and the forwarded request', async () => {
+    const budget = governance()
+    const upstream = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => Response.json({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1 } }))
+    const proxy = await createGovernedOpencodeProxy({ binding, projectId: 'project', governance: budget, fetcher: upstream, maxOutputTokens: 4096 })
+    close.push(proxy.close)
+    const response = await fetch(proxy.binding.baseUrl + '/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${proxy.binding.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: binding.modelId }) })
+    expect(response.status).toBe(200)
+    expect(budget.reserve).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 4096 }))
+    expect(JSON.parse(String(upstream.mock.calls[0]![1]!.body)).max_tokens).toBe(4096)
+  })
+
   it.each(['invalid-json', 'invalid-usage', 'oversized'] as const)('records a safe diagnostic for a malformed provider response (%s)', async (kind) => {
     const body = kind === 'invalid-json' ? 'PRIVATE_PROVIDER_BODY'
       : kind === 'invalid-usage' ? JSON.stringify({ usage: { prompt_tokens: -1 } }) : 'x'.repeat(2 * 1024 * 1024 + 1)
