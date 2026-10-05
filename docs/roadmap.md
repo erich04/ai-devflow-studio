@@ -6,11 +6,11 @@
 
 需求文档定义里程碑结果，计划定义实施与验证，ADR 记录架构决定，发布证据证明实际交付。其他文件不建立并行路线图；研究和提案只有被本文正式纳入后，才改变产品顺序。
 
-## 当前本地候选：Memory P0 / P1 / P2 收尾
+## Memory P0 / P1 / P2：实现与集成
 
-在独立 `codex/memory-p0-p2` 分支推进，尚未合入或发布。整合删除后候选投影与 OpenCode 学习 harness，补充大小提示、轮内记忆新鲜度、L0、repair 公开摘要和 [ADR 0026](adr/0026-persistent-conversation-context.md) 的最小持久会话压缩契约。Native 固定循环、协调器无模型消费者和完整 V3.x 目标不因此改变。
+代码集成记录为 OpenCode 诊断与费用恢复依赖 [PR #222](https://github.com/erich04/ai-devflow-studio/pull/222)，以及 Memory [PR #223](https://github.com/erich04/ai-devflow-studio/pull/223)。Memory 整合删除后候选投影与 OpenCode 学习 harness，补充大小提示、轮内记忆新鲜度、L0、repair 公开摘要和 [ADR 0026](adr/0026-persistent-conversation-context.md) 的最小持久会话压缩契约。Native 固定循环、协调器无模型消费者和完整 V3.x 目标不因此改变。
 
-逐项范围见 [Memory 收尾计划](plans/memory-p0-p2-completion.md)，当前分支的实际结果见 [本地候选验收](validation/memory-p0-p2-20261004.md)。历史真实模型报告不覆盖当前候选，不声称复杂任务完成率或缓存收益已改善。
+逐项范围见 [Memory 收尾计划](plans/memory-p0-p2-completion.md)，本地实际结果见 [本地候选验收](validation/memory-p0-p2-20261004.md)，CI 与合并状态见对应 PR。代码合并不自动更新已发布安装包；发布覆盖仍以本文的当前发布记录与版本证据为准。历史真实模型报告不覆盖本次变更，不声称复杂任务完成率或缓存收益已改善。
 
 <a id="documentation-map"></a>
 

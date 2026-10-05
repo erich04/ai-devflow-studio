@@ -6,7 +6,7 @@
 
 本次只读核验远端 main 为 `8c6a50172beff3198f4ae4a7a98f2a24a2f97dae`。实际整合起点为本地 `cb9cb27c4399ccf910aa3bbde7ec640e82f2b7f5`，包含尚未合入 main 的 OpenCode 诊断 `d11c921` 与费用恢复 `cb9cb27`。顺序 cherry-pick `42f1869` → `953ddf6`、`00073b6` → `6a2d052`，没有冲突。历史 live JSON 保持原样。
 
-仅推进原始 Memory P0/P1/P2，不扩展 Native 固定执行循环、不接手 H5/H6，不推送、合并或发布。默认无收费模型调用。
+本地开发阶段仅推进原始 Memory P0/P1/P2，不扩展 Native 固定执行循环、不接手 H5/H6，当时不推送、合并或发布。后续代码集成单独记录如下。默认无收费模型调用。
 
 ## 实现契约
 
@@ -31,3 +31,7 @@
 - [x] Native / OpenCode / 阶段 / Chat 兼容与费用回归。
 - [x] verify、build、浏览器、Electron、Native/Chat、打包与必要 Postgres 验证。
 - [x] 最终文档与逐项结果。实际结果见 [本地候选验收](../validation/memory-p0-p2-20261004.md)，机器可读摘要见 [验收证据](../engineering/evidence/memory-p0-p2-local-20261004.json)。
+
+## 后续代码集成
+
+按依赖顺序通过 [OpenCode PR #222](https://github.com/erich04/ai-devflow-studio/pull/222) 与 [Memory PR #223](https://github.com/erich04/ai-devflow-studio/pull/223) 集成。PR 保留各自提交范围、当前 CI 与合并记录；上面的基线和本地验收是历史记录，不改写为远端 CI 或发布证明。真实模型验收仍需明确项目、提供方与预算，签名安装包另按发布流程验证。

@@ -85,7 +85,7 @@ _在历史步骤上的操作不会改变实际进度。「材料与版本」按�
 
 实现边界与实验记录见[记忆与上下文验证](docs/engineering/memory-context-execution-validation.md)、[记忆生命周期 ADR](docs/adr/0018-scoped-agent-memory-lifecycle.md)和[编码上下文 ADR](docs/adr/0021-coding-memory-context-and-evidence-evaluation.md)。
 
-本分支的记忆大小提示、讨论轮内新鲜度和持久压缩仍属于本地候选，整合基线与本次验证见 [P0/P1/P2 收尾记录](docs/validation/memory-p0-p2-20261004.md)；不表示已合并或进入已发布安装包。
+记忆大小提示、讨论轮内新鲜度和持久压缩的整合基线与本地验证见 [P0/P1/P2 收尾记录](docs/validation/memory-p0-p2-20261004.md)，代码集成与 CI 结果见 [Memory PR #223](https://github.com/erich04/ai-devflow-studio/pull/223)。安装包是否包含这些变化，以[路线图的发布记录](docs/roadmap.md#当前发布)和对应版本证据为准。
 
 ![Electron 知识页：仓库 Markdown 索引已更新，同一份文档的引用按任务、材料与 Gate 分组列出](docs/guides/screenshots/workspace-redesign-20260928/desktop/shots/doc-tour-knowledge-1440x900.jpg)
 
