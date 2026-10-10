@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, rm, writeFile, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -21,6 +21,30 @@ describe('private conversation content', () => {
       expect(await new ConversationContentStore(join(dir, 'private')).decode(saved)).toEqual(source)
       await writeFile(store.contentPath(saved.scope, manifest.hash), 'corrupted')
       await expect(store.decode(saved)).rejects.toThrow('integrity')
+      await expect(store.encode('conversation', source)).rejects.toThrow('integrity')
+      expect(await readFile(store.contentPath(saved.scope, manifest.hash), 'utf8')).toBe('corrupted')
+    } finally { await rm(dir, { recursive: true, force: true }) }
+  })
+
+  it('atomically publishes identical long text from concurrent fields and store instances without replacing readers', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'devflow-content-concurrent-'))
+    try {
+      const body = '并发写入同一份完整材料😀'.repeat(1200)
+      const source = { id: 'conversation', messages: Array.from({ length: 12 }, () => ({ text: body })) }
+      const stores = Array.from({ length: 4 }, () => new ConversationContentStore(dir))
+      const saved = await Promise.all(stores.map(store => store.encode(source.id, source)))
+      const first = saved[0]!, store = stores[0]!
+      const destination = store.contentPath(first.scope, first.strings[0]!.hash)
+      const original = await stat(destination)
+      expect(await readdir(join(dir, first.scope))).toEqual([first.strings[0]!.hash])
+      await Promise.all(saved.map(async manifest => expect(await store.decode(manifest)).toEqual(source)))
+      await Promise.all(stores.map(async current => {
+        const [again, text] = await Promise.all([current.encode(source.id, source), readFile(destination, 'utf8')])
+        expect(text).toBe(body)
+        expect(await current.decode(again)).toEqual(source)
+      }))
+      expect((await stat(destination)).ino).toBe(original.ino)
+      expect((await stat(destination)).mtimeMs).toBe(original.mtimeMs)
     } finally { await rm(dir, { recursive: true, force: true }) }
   })
 })

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, open, rename, unlink, appendFile } from 'node:fs/promises'
+import { mkdir, readFile, open, link, unlink, appendFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -33,10 +33,18 @@ export class ConversationContentStore {
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
         if (!exists) {
           const temporary = `${destination}.${randomUUID()}.tmp`
-          const handle = await open(temporary, 'wx', 0o600)
-          try { await handle.writeFile(item, 'utf8'); await handle.sync() }
-          finally { await handle.close() }
-          try { await rename(temporary, destination) }
+          try {
+            const handle = await open(temporary, 'wx', 0o600)
+            try { await handle.writeFile(item, 'utf8'); await handle.sync() }
+            finally { await handle.close() }
+            // Publish the complete immutable file without replacing concurrent readers
+            // or another writer's identical blob (rename-over-existing can fail on Windows).
+            try { await link(temporary, destination) }
+            catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+              if (hash(await readFile(destination, 'utf8')) !== digest) throw new Error('Private content integrity check failed')
+            }
+          }
           finally { await unlink(temporary).catch(() => undefined) }
         }
         strings.push({ path, hash: digest, bytes: Buffer.byteLength(item) })
