@@ -7,6 +7,9 @@ import { buildModelCostRecords, type ModelCostEvent, type ModelCostRecord } from
 export type ModelCallQuote = {
   id: string; projectId: string; providerId: string; model: string; createdAt: string
   inputTokens: number; maxOutputTokens: number | null
+  boundBasis?: 'deepseek-context-v1'
+  operation?: { id: string; version: string; purpose: string }
+  continuationId?: string
   billingProvider: 'deepseek' | 'openai_compatible'; approvalId?: string
 }
 export type ModelCallSettlement = {
@@ -16,9 +19,23 @@ export type ModelCallSettlement = {
 export type ModelCallAttempt = ModelCallQuote & {
   userId: string; state: 'reserved' | ModelCallSettlement['state']; projectedCostUsd: number | null
   costUsd: number | null; usage?: AgentProviderUsage
+  verifiedBound?: VerifiedModelCallBound
+  remoteEnded?: boolean
+  usageObservation?: AgentProviderUsage
   pendingSettlement?: ModelCallSettlement
   pendingSettlementFinal?: boolean
 }
+export type VerifiedModelCallBound = { costUsd: number; inputTokenBound: number; maxOutputTokens: number; priceVersion: string; basis: 'deepseek-context-v1' }
+/** Full supported context capacity is an upper bound; UTF-8(prompt)+overhead is only an estimate. */
+export function verifiedModelCallBound(quote: ModelCallQuote): VerifiedModelCallBound | null {
+  if (quote.boundBasis !== 'deepseek-context-v1' || quote.billingProvider !== 'deepseek' ||
+    !['deepseek-flash', 'deepseek-pro'].includes(quote.model) || !quote.maxOutputTokens || quote.maxOutputTokens > 393216 || quote.inputTokens > 1048576) return null
+  const price = resolveDeepSeekPricingSnapshot({ providerId: 'deepseek', model: quote.model, timestamp: quote.createdAt, worstCase: true })
+  if (!price) return null
+  return { basis: quote.boundBasis, inputTokenBound: 1048576, maxOutputTokens: quote.maxOutputTokens, priceVersion: price.sourceVersion,
+    costUsd: (1048576 * price.cacheMissInputUsdPerMillion + quote.maxOutputTokens * price.outputUsdPerMillion) / 1_000_000 }
+}
+
 export type ModelCallAdmission = { accepted: boolean; decision: BudgetGuardDecision }
 
 /** Older failed/no-usage entries can be pre-dispatch markers, not final failures. */
@@ -37,7 +54,13 @@ export function parseModelCallQuote(value: unknown): ModelCallQuote {
       !/^[a-zA-Z0-9_-]{1,160}$/u.test(v.id) || !Number.isFinite(Date.parse(v.createdAt)) || !Number.isSafeInteger(v.inputTokens) || v.inputTokens < 0 || v.inputTokens > 2_000_000 ||
       (v.maxOutputTokens !== null && (!Number.isSafeInteger(v.maxOutputTokens) || v.maxOutputTokens < 1 || v.maxOutputTokens > 1_000_000)) || !['deepseek','openai_compatible'].includes(v.billingProvider) ||
       (v.approvalId !== undefined && (typeof v.approvalId !== 'string' || v.approvalId.length > 512))) throw new Error('Invalid model call quote')
-  return { id:v.id, projectId:v.projectId, providerId:v.providerId, model:v.model, createdAt:v.createdAt, inputTokens:v.inputTokens, maxOutputTokens:v.maxOutputTokens, billingProvider:v.billingProvider, ...(v.approvalId ? {approvalId:v.approvalId} : {}) }
+  if (v.boundBasis !== undefined && v.boundBasis !== 'deepseek-context-v1') throw new Error('Invalid bound basis')
+  if (v.continuationId !== undefined) parseBudgetAttemptIds([v.continuationId])
+  if (v.operation) {
+    parseBudgetAttemptIds([v.operation.id])
+    if (!/^[a-f0-9]{64}$/u.test(v.operation.version) || !['conversation','proposal','review','workflow','native-tool'].includes(v.operation.purpose)) throw new Error('Invalid operation scope')
+  }
+  return { id:v.id, projectId:v.projectId, providerId:v.providerId, model:v.model, createdAt:v.createdAt, inputTokens:v.inputTokens, maxOutputTokens:v.maxOutputTokens, billingProvider:v.billingProvider, ...(v.boundBasis ? { boundBasis: v.boundBasis } : {}), ...(v.operation ? { operation: { ...v.operation } } : {}), ...(v.continuationId ? { continuationId: v.continuationId } : {}), ...(v.approvalId ? {approvalId:v.approvalId} : {}) }
 }
 export function parseModelCallSettlement(value: unknown): ModelCallSettlement {
   if (!value || typeof value !== 'object') throw new Error('Invalid model call settlement')
@@ -48,6 +71,10 @@ export function parseModelCallSettlement(value: unknown): ModelCallSettlement {
   if (v.usage !== undefined) {
     if (!v.usage || typeof v.usage !== 'object' || Array.isArray(v.usage)) throw new Error('Invalid model call usage')
     usage = {}
+    if (v.usage.usageCompleteness !== undefined) {
+      if (!['partial', 'final'].includes(v.usage.usageCompleteness)) throw new Error('Invalid usage completeness')
+      usage.usageCompleteness = v.usage.usageCompleteness
+    }
     for (const key of ['inputTokens','outputTokens','cacheReadTokens','cacheMissTokens','totalTokens','missingUsageCount'] as const) {
       const n = v.usage[key]
       if (n !== undefined) { if (!Number.isSafeInteger(n) || n < 0) throw new Error('Invalid model call usage'); usage[key]=n }
@@ -72,13 +99,13 @@ export function projectedModelCallCost(quote: ModelCallQuote): number | null {
 export function settledModelCallCost(attempt: ModelCallQuote, settlement: ModelCallSettlement): number | null {
   if (settlement.state === 'not_sent') return 0
   const u=settlement.usage
-  if (u?.inputTokens === undefined || u.outputTokens === undefined || u.missingUsageCount) return null
+  if (u?.usageCompleteness === 'partial' || u?.inputTokens === undefined || u.outputTokens === undefined || u.missingUsageCount) return null
   return estimateAgentTokenUsage({id:attempt.id,runId:'',nodeId:'',projectId:attempt.projectId,userId:'',provider:'openai',model:attempt.model,prompt:'',completion:'',timestamp:attempt.createdAt,providerUsage:{...u,billingProvider:attempt.billingProvider}}).costUsd
 }
 /** Actual call IDs deduplicate the same consumption projected as stage/review/coding evidence. */
 export function modelCallBudgetRollup(legacy: TokenUsage[], calls: ModelCallAttempt[], now: string, events: ModelCostEvent[] = []): TokenUsageRollup[] {
   return rollupTokenUsage(buildModelCostRecords(legacy, calls, events, now).filter(row => row.affectsCurrentBudget)
-    .map(record => costRecordUsage(record, legacy)), 'projectId')
+    .map(record => ({ ...costRecordUsage(record, legacy), costUsd: record.budgetCostUsd, timestamp: now })), 'projectId')
 }
 
 /** Preserve old unknown costs and split mixed old/new coding calls before deduplication. */

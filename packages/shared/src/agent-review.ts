@@ -1,3 +1,8 @@
+import { expandedOutputAllowance } from './provider-request-policy'
+import { modelExecutionRollout } from './model-execution-rollout'
+import { validateNativeToolBatch, type NativeToolCall, type NativeToolMessage, type ReadOnlyFunctionDefinition } from './native-readonly-tools'
+import { MODEL_INPUT_BYTES, resolveRequestPolicy, type ResolvedRequestPolicy, type ModelRequestPurpose } from './provider-request-policy'
+import { readProviderResponse, ProviderResponseReadError, type ResponseReadDiagnostics, type ProviderContentSink } from './provider-response'
 import { resolveDeepSeekPricingSnapshot } from './cost'
 import { describeStageAgentFailure, sanitizeStageAgentFailureDetails, type StageAgentFailureDetails } from './stage-agent-failure'
 import { locateReviewMissingEvidence } from './review-grounding'
@@ -42,10 +47,12 @@ import {
 } from './workflow-context-projection'
 
 export type KnowledgeReviewProviderInput = {
+  maxOutputTokens?: number
   request: AgentReviewRequest
   context: AgentReviewContext
   prompt: string
   signal?: AbortSignal
+  onUsage?: (usage: AgentProviderUsage) => void | Promise<void>
 }
 
 export type KnowledgeReviewProviderOutput = {
@@ -92,6 +99,7 @@ export type WorkflowArtifactProviderInput = {
   context: WorkflowArtifactProviderContext
   prompt: string
   signal?: AbortSignal
+  onUsage?: (usage: AgentProviderUsage) => void | Promise<void>
 }
 
 export type WorkflowArtifactProviderOutput = {
@@ -163,7 +171,7 @@ export type AgentProviderDeliveryState =
 
 export type AgentProviderBillingState = 'confirmed' | 'not_incurred' | 'unknown'
 
-export type AgentProviderResponseMetadata = {
+export type AgentProviderResponseMetadata = ResponseReadDiagnostics & {
   httpStatus: number
   responseId?: string
   systemFingerprint?: string
@@ -221,10 +229,12 @@ export class AgentProviderRequestError extends Error {
         httpStatus: input.responseMetadata.httpStatus,
         ...(responseId ? { responseId } : {}),
         ...(systemFingerprint ? { systemFingerprint } : {}),
-        ...Object.fromEntries(['durationMs', 'contentLength', 'reasoningLength', 'maxOutputTokens'].flatMap((key) => {
+        ...Object.fromEntries(['durationMs', 'contentLength', 'reasoningLength', 'maxOutputTokens', 'contentBytes', 'reasoningBytes', 'wireBytes', 'limitThreshold', 'observedBytes', 'parserPosition'].flatMap((key) => {
           const value = input.responseMetadata![key as keyof AgentProviderResponseMetadata]
           return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? [[key, value]] : []
         })),
+        ...(['content_bytes', 'reasoning_bytes', 'envelope_bytes', 'sse_frame_bytes'].includes(input.responseMetadata.limitKind ?? '') ? { limitKind: input.responseMetadata.limitKind, limitUnit: 'bytes' as const } : {}),
+        ...(['sse_json', 'response_json', 'stream_shape', 'stream_incomplete', 'utf8', 'body_read'].includes(input.responseMetadata.parserCategory ?? '') ? { parserCategory: input.responseMetadata.parserCategory } : {}),
         ...(input.responseMetadata.finishReason ? { finishReason: ['stop', 'length', 'content_filter', 'insufficient_system_resource', 'tool_calls'].includes(input.responseMetadata.finishReason) ? input.responseMetadata.finishReason : 'unknown' } : {}),
         ...(input.responseMetadata.outputLimitMode ? { outputLimitMode: input.responseMetadata.outputLimitMode } : {}),
         ...(input.responseMetadata.effectiveThinking ? { effectiveThinking: input.responseMetadata.effectiveThinking } : {}),
@@ -263,9 +273,27 @@ export function describeAgentProviderFailure(error: unknown): string {
   return descriptions[error.sanitizedCause] ?? descriptions[error.code] ?? `模型调用失败（${error.code}${error.httpStatus ? `，HTTP ${error.httpStatus}` : ''}），未保存本次报告。`
 }
 
+/** Back off transient transport failures; format/semantic repair can start immediately. */
+export async function waitForProviderRetry(error: unknown, recovery: number, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  if (!(error instanceof AgentProviderRequestError) || !['http_429', 'http_5xx', 'provider_timeout', 'connection_reset', 'connection_failed', 'dns_failure', 'proxy_failure'].includes(error.code)) return
+  const delayMs = Math.min(8000, 1000 * 2 ** Math.max(0, recovery - 1))
+  await new Promise<void>((resolve, reject) => {
+    const cancel = () => { clearTimeout(timer); signal?.removeEventListener('abort', cancel); reject(signal?.reason ?? new Error('Cancelled')) }
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', cancel); resolve() }, delayMs)
+    signal?.addEventListener('abort', cancel, { once: true })
+    if (signal?.aborted) cancel()
+  })
+}
+
 export function recordedAgentAttemptUsage(input: EstimateAgentTokenUsageInput & { providerId: string; executorKind?: StageAgentExecutorKind }): AgentTokenUsage {
   const { executorKind = 'direct-provider', ...estimateInput } = input
   const usage = estimateAgentTokenUsage(estimateInput)
+  if (input.providerUsage?.usageCompleteness === 'partial' || input.providerUsage?.missingUsageCount) return {
+    ...usage, executorKind, providerId: input.providerId, inputTokens: input.providerUsage.inputTokens ?? 0,
+    outputTokens: input.providerUsage.outputTokens ?? 0, cacheReadTokens: input.providerUsage.cacheReadTokens ?? 0,
+    costUsd: null, source: 'provider_reported', usageStatus: 'partial', costStatus: 'unknown',
+  }
   return { ...usage, executorKind, providerId: input.providerId,
     ...(input.providerUsage?.inputTokens !== undefined && input.providerUsage.outputTokens !== undefined ? { usageStatus: 'complete' as const } : {
       inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: null,
@@ -286,6 +314,7 @@ export type AgentProvider = {
   model: string
   targetHost?: string
   requestTimeoutMs?: number
+  resolveRequestPolicy?: (input: { maxOutputTokens?: number | undefined; purpose?: ModelRequestPurpose | undefined }) => ResolvedRequestPolicy
   billingProvider?: AgentProviderUsage['billingProvider']
   effectiveThinking?: EffectiveProviderThinking
   reviewOutputLimit?: number
@@ -297,16 +326,24 @@ export type AgentProvider = {
   executorKind?: StageAgentExecutorKind
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
+  supportsNativeTools?: boolean
+  validateStructuredRequest?: (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => void
   completeStructuredJson?: (input: {
+    operationKey?: string
+    nativeTools?: { definitions: ReadOnlyFunctionDefinition[]; messages: NativeToolMessage[] }
     systemPrompt: string
     userPrompt: string
     maxOutputTokens?: number
-    purpose?: 'review' | 'workflow' | 'proposal'
+    purpose?: ModelRequestPurpose
     signal?: AbortSignal
+    onUsage?: (usage: AgentProviderUsage) => void | Promise<void>
+    contentSink?: ProviderContentSink
     /** Display subscription only. Provider configuration controls the model's mode. */
     reasoning?: { onDelta?: (text: string) => void | Promise<void> }
   }) => Promise<{
     value: Record<string, unknown>
+    toolCalls?: NativeToolCall[]
+    assistantMessage?: Extract<NativeToolMessage, { role: 'assistant' }>
     usage?: AgentProviderUsage
     responseMetadata?: AgentProviderResponseMetadata
     reasoningContent?: string
@@ -363,6 +400,7 @@ export type RunKnowledgeReviewAgentInput = {
   now?: () => string
   signal?: AbortSignal
   onAttemptUsage?: (usage: AgentTokenUsage) => Promise<void>
+  onAttemptFailure?: (failure: { attempt: number; code: string; reason: string; billingState?: AgentProviderBillingState; deliveryState?: AgentProviderDeliveryState; metadata?: AgentProviderResponseMetadata; usage?: AgentProviderUsage }) => Promise<void>
 }
 
 export type EstimateAgentTokenUsageInput = {
@@ -453,8 +491,8 @@ export const KNOWLEDGE_REVIEW_MAX_CHUNKS = 32
 export const KNOWLEDGE_REVIEW_MAX_CHUNK_CHARACTERS = 4_000
 export const KNOWLEDGE_REVIEW_MAX_TOTAL_KNOWLEDGE_CHARACTERS = 24_000
 export const KNOWLEDGE_REVIEW_SUBJECT_CHUNK_CHARACTERS = 4_000
-export const KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS = 48_000
-export const KNOWLEDGE_REVIEW_MAX_TOTAL_SUBJECT_CHARACTERS = 64_000
+export const KNOWLEDGE_REVIEW_MAX_ARTIFACT_CHARACTERS = MODEL_INPUT_BYTES
+export const KNOWLEDGE_REVIEW_MAX_TOTAL_SUBJECT_CHARACTERS = MODEL_INPUT_BYTES
 export const KNOWLEDGE_REVIEW_MAX_RUN_REQUEST_CHARACTERS = 12_000
 const KNOWLEDGE_REVIEW_SYSTEM_PROMPT =
   'Return only valid JSON with conclusion, summary, risks, missingEvidence, missingEvidenceDetails, suggestedTests, confidence. conclusion and summary must be non-empty strings. risks, missingEvidence and suggestedTests must be arrays of strings; missingEvidenceDetails must be an array. confidence must be a JSON number between 0 and 1 inclusive (for example 0.8), never a label, percentage or quoted number. Review the Subject; use Criteria only as grounding. Do not approve the Gate. Do not wrap the response in Markdown.'
@@ -745,96 +783,6 @@ class BoundedProviderResponseError extends Error {
   constructor(readonly code: 'response_too_large' | 'body_read_failed') {
     super(code)
     this.name = 'BoundedProviderResponseError'
-  }
-}
-
-/** Read Chat Completions SSE without exposing the incomplete structured answer as chat text. */
-async function readReasoningResponse(
-  response: Response,
-  signal: AbortSignal,
-  onDelta: (text: string) => void | Promise<void>,
-): Promise<string> {
-  if (!response.body) throw new BoundedProviderResponseError('body_read_failed')
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder('utf-8', { fatal: true })
-  const encoder = new TextEncoder()
-  let buffer = ''
-  let content = ''
-  let reasoning = ''
-  let wireBytes = 0
-  let contentBytes = 0
-  let reasoningBytes = 0
-  let finished = false
-  let finishReason: unknown
-  let done = false
-  let usage: unknown
-  let id: unknown
-  let fingerprint: unknown
-  const abort = () => { void reader.cancel().catch(() => undefined) }
-  signal.addEventListener('abort', abort, { once: true })
-  const consume = async (frame: string) => {
-    const data = frame.split(/\r?\n/u).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).replace(/^ /u, '')).join('\n')
-    if (!data) return // Includes the provider's keep-alive comments.
-    if (data === '[DONE]') { done = true; return }
-    const chunk = JSON.parse(data) as Record<string, unknown>
-    if (!chunk || typeof chunk !== 'object' || Array.isArray(chunk) || chunk.error) throw new BoundedProviderResponseError('body_read_failed')
-    if (chunk.id !== undefined) id = chunk.id
-    if (chunk.system_fingerprint !== undefined) fingerprint = chunk.system_fingerprint
-    if (chunk.usage != null) usage = chunk.usage
-    if (!Array.isArray(chunk.choices) || chunk.choices.length > 1) throw new BoundedProviderResponseError('body_read_failed')
-    if (!chunk.choices.length) return // A separate usage-only terminal chunk is also accepted.
-    const choice = chunk.choices[0]
-    if (!choice || typeof choice !== 'object' || (choice.index !== undefined && choice.index !== 0)) throw new BoundedProviderResponseError('body_read_failed')
-    const delta = choice.delta
-    if (!delta || typeof delta !== 'object' || Array.isArray(delta)) throw new BoundedProviderResponseError('body_read_failed')
-    for (const field of ['reasoning_content', 'content'] as const) {
-      const text = delta[field]
-      if (text == null) continue
-      if (typeof text !== 'string') throw new BoundedProviderResponseError('body_read_failed')
-      if (field === 'reasoning_content') {
-        reasoningBytes += encoder.encode(text).byteLength
-        if (reasoningBytes > 64 * 1024) throw new BoundedProviderResponseError('response_too_large')
-        reasoning += text
-        if (text) await onDelta(text)
-      } else {
-        contentBytes += encoder.encode(text).byteLength
-        if (contentBytes > 32 * 1024) throw new BoundedProviderResponseError('response_too_large')
-        content += text
-      }
-    }
-    if (choice.finish_reason != null) {
-      // A later frame cannot turn an incomplete response into a successful one.
-      if (!finished) finishReason = choice.finish_reason
-      finished = true
-    }
-  }
-  try {
-    while (!done) {
-      signal.throwIfAborted()
-      const next = await reader.read()
-      signal.throwIfAborted()
-      if (next.done) { buffer += decoder.decode(); break }
-      wireBytes += next.value.byteLength
-      // SSE envelopes can be much larger than the bounded model text.
-      if (wireBytes > 4 * 1024 * 1024) throw new BoundedProviderResponseError('response_too_large')
-      buffer += decoder.decode(next.value, { stream: true })
-      let boundary: RegExpExecArray | null
-      while (!done && (boundary = /\r?\n\r?\n/u.exec(buffer))) {
-        const frame = buffer.slice(0, boundary.index)
-        buffer = buffer.slice(boundary.index + boundary[0].length)
-        await consume(frame)
-      }
-    }
-    if (!done && buffer.trim()) await consume(buffer)
-    if (!done || !finished) throw new BoundedProviderResponseError('body_read_failed')
-    return JSON.stringify({ id, system_fingerprint: fingerprint, usage, choices: [{ message: { content, reasoning_content: reasoning }, finish_reason: finishReason }] })
-  } catch (error) {
-    if (error instanceof BoundedProviderResponseError || error instanceof AgentProviderRequestError || signal.aborted) throw error
-    throw new BoundedProviderResponseError('body_read_failed')
-  } finally {
-    signal.removeEventListener('abort', abort)
-    await reader.cancel().catch(() => undefined)
-    reader.releaseLock()
   }
 }
 
@@ -1158,7 +1106,7 @@ export async function buildAgentReviewContext({
         documents: knowledgeDocuments, stage: node.stage, knowledgeRoot,
         ...(projectInstructions ? { projectInstructions } : {}),
         injectInstructions: knowledgeExecutor !== 'local-agent',
-        canReadFiles: knowledgeExecutor === 'local-agent',
+        canReadFiles: knowledgeExecutor !== 'direct-provider',
       })
     : undefined
   // Repository reviews share the knowledge page's 24 KiB whole-document budget.
@@ -1519,6 +1467,7 @@ export async function runBudgetedKnowledgeReviewAgent({
   approvalId,
   signal,
   onAttemptUsage,
+  onAttemptFailure,
 }: RunBudgetedKnowledgeReviewAgentInput): Promise<BudgetedKnowledgeReviewAgentResult> {
   const preflight = estimateKnowledgeReviewCostPreflight({ request, context, provider })
   if (preflight.noCost) {
@@ -1534,7 +1483,7 @@ export async function runBudgetedKnowledgeReviewAgent({
       context,
       provider,
       ...(signal ? { signal } : {}),
-      ...(onAttemptUsage ? { onAttemptUsage } : {}),
+      ...(onAttemptUsage ? { onAttemptUsage } : {}), ...(onAttemptFailure ? { onAttemptFailure } : {}),
       ...(now ? { now } : {}),
     })
     return { status: 'completed', budgetDecision, execution }
@@ -1572,7 +1521,7 @@ export async function runBudgetedKnowledgeReviewAgent({
       context,
       provider,
       ...(signal ? { signal } : {}),
-      ...(onAttemptUsage ? { onAttemptUsage } : {}),
+      ...(onAttemptUsage ? { onAttemptUsage } : {}), ...(onAttemptFailure ? { onAttemptFailure } : {}),
       ...(now ? { now } : {}),
     })
     return { status: 'completed', budgetDecision, execution }
@@ -1885,6 +1834,7 @@ export async function runKnowledgeReviewAgent({
   now = () => new Date().toISOString(),
   signal,
   onAttemptUsage,
+  onAttemptFailure,
 }: RunKnowledgeReviewAgentInput): Promise<AgentReviewExecutionResult> {
   const createdAt = now()
   const reviewId = createId('agent-review', `${request.id}-${request.runtime}`)
@@ -1894,13 +1844,26 @@ export async function runKnowledgeReviewAgent({
     userId: request.requestedBy, projectId: request.projectId, provider: toProviderName(provider.id), providerId: provider.id,
     model: provider.model, prompt: '', completion: '', timestamp: createdAt, executorKind }
   let providerOutput: KnowledgeReviewProviderOutput
+  let maxOutputTokens = provider.reviewOutputLimit
   if (signal?.aborted) throw new AgentProviderRequestError({ code: 'cancelled_by_user', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false, sanitizedCause: 'caller_abort_signal' })
-  try { providerOutput = await provider.reviewKnowledge({ request, context, prompt, ...(signal ? { signal } : {}) }) }
-  catch (error) {
-    if (!(error instanceof AgentProviderRequestError) || error.billingState !== 'not_incurred') {
-      await onAttemptUsage?.(recordedAgentAttemptUsage({ ...attemptBase, ...(error instanceof AgentProviderRequestError && error.usage ? { providerUsage: error.usage } : {}) }))
+  for (let attempt = 0; ; attempt++) {
+    try {
+      providerOutput = await provider.reviewKnowledge({ request, context, prompt, ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }), ...(signal ? { signal } : {}) })
+      attemptBase.id = createId('agent-token-usage', `${reviewId}-attempt-${attempt + 1}`)
+      break
+    } catch (error) {
+      const failure = error instanceof AgentProviderRequestError ? error : undefined
+      await onAttemptFailure?.({ attempt: attempt + 1, code: failure?.code ?? 'unknown_review_failure', reason: failure?.sanitizedCause ?? 'review_failed', ...(failure ? { billingState: failure.billingState, deliveryState: failure.deliveryState } : {}), ...(failure?.responseMetadata ? { metadata: failure.responseMetadata } : {}), ...(failure?.usage ? { usage: failure.usage } : {}) })
+      if (failure?.billingState !== 'not_incurred') await onAttemptUsage?.(recordedAgentAttemptUsage({ ...attemptBase, id: createId('agent-token-usage', `${reviewId}-attempt-${attempt + 1}`), ...(failure?.usage ? { providerUsage: failure.usage } : {}) }))
+      if (failure?.sanitizedCause === 'output_length') {
+        const policy = provider.resolveRequestPolicy?.({ purpose: 'review', ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }) })
+        const expanded = policy && expandedOutputAllowance(policy)
+        if (!expanded) throw error
+        maxOutputTokens = expanded
+      }
+      if (!modelExecutionRollout().stepRecovery || !failure?.retryable || attempt >= 2 || signal?.aborted || executorKind !== 'direct-provider') throw error
+      await waitForProviderRetry(error, attempt + 1, signal)
     }
-    throw error
   }
   const tokenUsage = recordedAgentAttemptUsage({ ...attemptBase, model: providerOutput.model, ...(providerOutput.usage ? { providerUsage: providerOutput.usage } : {}) })
   await onAttemptUsage?.(tokenUsage)
@@ -1933,9 +1896,9 @@ export async function runKnowledgeReviewAgent({
     confidence: providerOutput.confidence,
     gateAdvisory,
     createdAt,
-    ...(executorKind === 'local-agent' ? { executorKind } : {}),
+    ...(executorKind !== 'direct-provider' ? { executorKind } : {}),
     // Repository facts are only accepted from an executor that can read the repository.
-    ...(executorKind === 'local-agent' && providerOutput.repositoryFindings
+    ...(executorKind !== 'direct-provider' && providerOutput.repositoryFindings
       ? { repositoryFindings: providerOutput.repositoryFindings }
       : {}),
   }
@@ -1968,8 +1931,8 @@ export async function runKnowledgeReviewAgent({
         reviewId,
         3,
         'provider_call',
-        executorKind === 'local-agent' ? `Run ${provider.name} (read-only repository access)` : `Call ${provider.name}`,
-        executorKind === 'local-agent'
+        executorKind !== 'direct-provider' ? `Run ${provider.name} (read-only repository access)` : `Call ${provider.name}`,
+        executorKind !== 'direct-provider'
           ? `${providerOutput.model} returned structured review output; ${citationCount} repository citation(s) verified against local bytes.`
           : `${providerOutput.model} returned structured review output.${provider.effectiveThinking ? ` ${describeProviderThinking(provider.effectiveThinking)}.` : ''}`,
         createdAt,
@@ -2108,6 +2071,10 @@ export function reviewProviderCapabilities(input: { id?: string; model: string; 
   }
 }
 
+function unsentStructuredRequestError(cause: string) {
+  return new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: cause, deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false })
+}
+
 export function createOpenAiCompatibleAgentProvider({
   id = 'openai-compatible',
   name = 'OpenAI Compatible',
@@ -2146,10 +2113,11 @@ export function createOpenAiCompatibleAgentProvider({
     name,
     model,
     targetHost,
+    supportsNativeTools: model === 'deepseek-flash' && supportsProviderThinking({ baseUrl, model }),
     requestTimeoutMs: structuredRequestTimeoutMs,
     ...(reviewOutputLimit === undefined ? {} : { reviewOutputLimit }),
-    // Documented DeepSeek Chat API defaults, verified 2026-09-23. This is an
-    // estimate bound only; no max_tokens field is sent when using provider defaults.
+    resolveRequestPolicy: (input) => resolveRequestPolicy({ model, baseUrl, effectiveThinking, ...input }),
+    // Defaults become explicit wire limits; the same resolver is used by admission.
     ...(supportsProviderThinking({ baseUrl, model }) ? {
       defaultReviewOutputTokens: effectiveThinking.mode === 'enabled' ? (effectiveThinking.effort === 'max' ? 131_072 : 65_536) : 8_192,
     } : {}),
@@ -2157,11 +2125,11 @@ export function createOpenAiCompatibleAgentProvider({
     billingProvider: deepSeek
       ? 'deepseek'
       : 'openai_compatible',
-    async reviewKnowledge({ prompt, signal }) {
+    async reviewKnowledge({ prompt, signal, onUsage, maxOutputTokens }) {
       const result = await provider.completeStructuredJson!({
         purpose: 'review', systemPrompt: KNOWLEDGE_REVIEW_SYSTEM_PROMPT, userPrompt: prompt,
-        ...(reviewOutputLimit === undefined ? {} : { maxOutputTokens: reviewOutputLimit }),
-        ...(signal ? { signal } : {}),
+        ...((maxOutputTokens ?? reviewOutputLimit) === undefined ? {} : { maxOutputTokens: maxOutputTokens ?? reviewOutputLimit }),
+        ...(signal ? { signal } : {}), ...(onUsage ? { onUsage } : {}),
       })
       return {
         ...normalizeKnowledgeReviewProviderOutput(result.value, {
@@ -2173,25 +2141,40 @@ export function createOpenAiCompatibleAgentProvider({
         ...(result.reasoningContent ? { reasoningContent: result.reasoningContent } : {}),
       }
     },
-    async completeStructuredJson(input) {
+    validateStructuredRequest(input) {
+      const policy = provider.resolveRequestPolicy!(input)
+      if (input.nativeTools && !provider.supportsNativeTools) throw unsentStructuredRequestError('unsupported_native_tools')
+      const messages = [
+        { role: 'system', content: input.systemPrompt },
+        ...(input.nativeTools?.messages ?? []),
+        { role: 'user', content: input.userPrompt },
+      ]
+      if (new TextEncoder().encode(JSON.stringify({ messages, tools: input.nativeTools?.definitions })).byteLength > policy.maxInputBytes) {
+        throw unsentStructuredRequestError('input_capacity_exceeded')
+      }
       if (
         typeof input.systemPrompt !== 'string' ||
         input.systemPrompt.length < 1 ||
         input.systemPrompt.length > 8_000 ||
         typeof input.userPrompt !== 'string' ||
         input.userPrompt.length < 1 ||
-        input.userPrompt.length > (input.purpose ? 256_000 : 32_000) ||
-        (input.maxOutputTokens !== undefined && (!Number.isInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > (input.purpose ? 1_000_000 : 4_096))) ||
-        (!input.purpose && input.maxOutputTokens === undefined)
+        new TextEncoder().encode(input.userPrompt).byteLength > policy.maxInputBytes
       ) {
-        throw new Error('Agent provider structured request is invalid')
+        throw unsentStructuredRequestError('invalid_structured_request')
       }
+    },
+    async completeStructuredJson(input) {
+      provider.validateStructuredRequest!(input)
+      const policy = provider.resolveRequestPolicy!(input)
+      const messages = [{ role: 'system', content: input.systemPrompt }, ...(input.nativeTools?.messages ?? []), { role: 'user', content: input.userPrompt }]
       const startedAt = Date.now()
       const controller = new AbortController()
       const thinking = effectiveThinking.mode === 'enabled'
-      const stream = thinking && input.reasoning?.onDelta !== undefined
+      const stream = policy.stream
       let requestStarted = false
       let observedUsage: AgentProviderUsage | undefined
+      let responseReceived = false
+      let transportMetadata: AgentProviderResponseMetadata | undefined
       let timedOut = false
       let cancelledByUser = input.signal?.aborted ?? false
       const cancel = () => {
@@ -2200,10 +2183,12 @@ export function createOpenAiCompatibleAgentProvider({
       }
       input.signal?.addEventListener('abort', cancel, { once: true })
       if (cancelledByUser) controller.abort()
-      const timeout = setTimeout(() => {
-        timedOut = true
-        controller.abort()
-      }, structuredRequestTimeoutMs)
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      const resetIdleTimeout = () => {
+        clearTimeout(timeout)
+        timeout = setTimeout(() => { timedOut = true; controller.abort() }, structuredRequestTimeoutMs)
+      }
+      resetIdleTimeout()
       try {
         if (controller.signal.aborted) throw new Error('cancelled')
         requestStarted = true
@@ -2216,69 +2201,58 @@ export function createOpenAiCompatibleAgentProvider({
           body: JSON.stringify({
             model,
             temperature: input.purpose ? 0.2 : 0,
-            ...(input.maxOutputTokens === undefined ? {} : { max_tokens: input.maxOutputTokens }),
+            max_tokens: policy.maxOutputTokens,
             ...(deepSeek
               ? {
                   ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
-                  response_format: { type: 'json_object' },
+                  ...(!input.nativeTools ? { response_format: { type: 'json_object' } } : {}),
                 }
               : {}),
             ...thinkingFields,
-            messages: [
-              { role: 'system', content: input.systemPrompt },
-              { role: 'user', content: input.userPrompt },
-            ],
+            messages,
+            ...(input.nativeTools ? { tools: input.nativeTools.definitions, tool_choice: 'auto' } : {}),
           }),
           redirect: 'error',
           signal: controller.signal,
         })
+        responseReceived = true
+        transportMetadata = { httpStatus: response.status, maxOutputTokens: policy.maxOutputTokens, outputLimitMode: 'explicit', effectiveThinking }
         if (!response.ok) {
           throw providerHttpError(response.status)
         }
-        let responseText: string
+        let body: Record<string, unknown>
+        let readDiagnostics: ResponseReadDiagnostics
         try {
-          responseText = stream && response.headers.get('content-type')?.includes('text/event-stream')
-            ? await readReasoningResponse(response, controller.signal, input.reasoning!.onDelta!)
-            : await readBoundedProviderResponseText(response, input.purpose ? 2 * 1024 * 1024 : undefined)
+          const result = await readProviderResponse({ response, signal: controller.signal, policy,
+            onProgress: resetIdleTimeout,
+            onDiagnostics: diagnostics => { transportMetadata = { httpStatus: response.status, ...transportMetadata, ...diagnostics } },
+            onUsage: async (value, final) => {
+              try { observedUsage = parseOpenAiCompatibleProviderUsage(value, { providerId: id, model, baseUrl }) }
+              catch (error) { throw providerResponseError('invalid_usage', false, { httpStatus: response.status }, error) }
+              if (observedUsage) { observedUsage = { ...observedUsage, usageCompleteness: final ? 'final' : 'partial' }; await input.onUsage?.(observedUsage) }
+            },
+            sink: { append: async (channel, text) => {
+              await input.contentSink?.append(channel, text)
+              if (channel === 'reasoning' && thinking) await input.reasoning?.onDelta?.(text)
+            } },
+          })
+          body = result.body; readDiagnostics = result.diagnostics
         } catch (error) {
-          if (error instanceof BoundedProviderResponseError) {
-            if (error.code === 'response_too_large') {
-              throw providerResponseError('response_too_large', false, {
-                httpStatus: response.status,
-              })
-            }
-            throw providerResponseError(
-              'invalid_response_json',
-              true,
-              { httpStatus: response.status },
-              error,
-            )
-          }
+          if (error instanceof ProviderResponseReadError) throw providerResponseError(
+            error.code === 'response_too_large' ? 'response_too_large' : error.diagnostics.parserCategory === 'body_read' ? 'connection_reset' : 'invalid_response_json',
+            error.code !== 'response_too_large', { httpStatus: response.status, ...error.diagnostics,
+              maxOutputTokens: policy.maxOutputTokens, outputLimitMode: 'explicit', effectiveThinking }, error)
           throw error
-        }
-        let body: unknown
-        try {
-          body = JSON.parse(responseText) as unknown
-        } catch (error) {
-          throw providerResponseError(
-            'invalid_response_json',
-            true,
-            { httpStatus: response.status },
-            error,
-          )
-        }
-        if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-          throw providerResponseError('invalid_response_json', true, { httpStatus: response.status })
         }
         const record = body as Record<string, unknown>
         const responseId = safeProviderResponseIdentifier(record.id)
         const systemFingerprint = safeProviderResponseIdentifier(record.system_fingerprint)
         const responseMetadata: AgentProviderResponseMetadata = {
           httpStatus: response.status,
+          ...readDiagnostics,
           effectiveThinking,
           ...(input.purpose ? { durationMs: Date.now() - startedAt,
-          outputLimitMode: input.maxOutputTokens === undefined ? 'provider_default' : 'explicit',
-          ...(input.maxOutputTokens === undefined ? {} : { maxOutputTokens: input.maxOutputTokens }), } : {}),
+          outputLimitMode: 'explicit', maxOutputTokens: policy.maxOutputTokens, } : {}),
           ...(responseId ? { responseId } : {}),
           ...(systemFingerprint ? { systemFingerprint } : {}),
         }
@@ -2288,19 +2262,24 @@ export function createOpenAiCompatibleAgentProvider({
           responseMetadata.contentLength = typeof choices[0]?.message?.content === 'string' ? choices[0].message.content.length : 0
           responseMetadata.reasoningLength = typeof choices[0]?.message?.reasoning_content === 'string' ? choices[0].message.reasoning_content.length : 0
         }
-        const usageValue = record.usage
-        try {
-          observedUsage = parseOpenAiCompatibleProviderUsage(usageValue, { providerId: id, model, baseUrl })
-        } catch (error) {
-          throw providerResponseError('invalid_usage', false, responseMetadata, error)
-        }
         const reasoningContent: unknown = thinking && Array.isArray(choices)
           ? choices[0]?.message?.reasoning_content
           : undefined
         if (reasoningContent != null && typeof reasoningContent !== 'string') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_reasoning')
-        // Some compatible gateways return one JSON response even when streaming was requested.
-        if (typeof reasoningContent === 'string' && !response.headers.get('content-type')?.includes('text/event-stream')) await input.reasoning?.onDelta?.(reasoningContent)
-        if (Array.isArray(choices) && (input.purpose === 'review' || choices[0]?.finish_reason != null) && choices[0]?.finish_reason !== 'stop') {
+        const nativeMessage = input.nativeTools && Array.isArray(choices) ? choices[0]?.message : undefined
+        if (Array.isArray(choices) && nativeMessage?.tool_calls !== undefined) {
+          if (choices[0]?.finish_reason !== 'tool_calls') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_tool_finish')
+          let validated
+          try { validated = validateNativeToolBatch(nativeMessage.tool_calls, input.nativeTools!.definitions.map(tool => tool.function.name),
+            input.nativeTools!.messages.flatMap(message => message.role === 'assistant' ? message.tool_calls?.map(call => call.id) ?? [] : [])) }
+          catch (error) { throw providerResponseError('invalid_model_output', true, responseMetadata, error, 'invalid_tool_batch') }
+          if (controller.signal.aborted) throw new Error('cancelled')
+          const toolCalls = validated.map(entry => entry.call)
+          return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: typeof nativeMessage.content === 'string' ? nativeMessage.content : null,
+            ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}), tool_calls: toolCalls },
+            ...(observedUsage ? { usage: observedUsage } : {}), responseMetadata, ...(typeof reasoningContent === 'string' ? { reasoningContent } : {}) }
+        }
+        if (Array.isArray(choices) && (input.purpose === 'review' || input.nativeTools || choices[0]?.finish_reason != null) && choices[0]?.finish_reason !== 'stop') {
           const reason = choices[0].finish_reason === 'length' ? 'output_length' : choices[0].finish_reason === 'content_filter' ? 'content_filter' : choices[0].finish_reason === 'insufficient_system_resource' ? 'insufficient_system_resource' : 'incomplete_response'
           throw providerResponseError('invalid_model_output', reason !== 'content_filter', responseMetadata, undefined, reason)
         }
@@ -2317,9 +2296,6 @@ export function createOpenAiCompatibleAgentProvider({
         if (typeof raw !== 'string') {
           throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'missing_content')
         }
-        if (new TextEncoder().encode(raw).byteLength > (input.purpose ? 512 : 32) * 1_024) {
-          throw providerResponseError('response_too_large', false, responseMetadata)
-        }
         let value: Record<string, unknown>
         try {
           value = input.purpose ? parseProviderJson(raw) : parseStructuredProviderOutput(raw)
@@ -2330,16 +2306,20 @@ export function createOpenAiCompatibleAgentProvider({
         const usage = observedUsage
         return {
           value,
+          ...(input.nativeTools ? { assistantMessage: { role: 'assistant' as const, content: raw,
+            ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}) } } : {}),
           ...(usage ? { usage } : {}),
           responseMetadata,
           ...(typeof reasoningContent === 'string' ? { reasoningContent } : {}),
         }
       } catch (error) {
+        if (transportMetadata) transportMetadata.durationMs = Date.now() - startedAt
         if (timedOut) {
           throw new AgentProviderRequestError({
             code: 'provider_timeout',
-            deliveryState: 'possibly_delivered',
-            billingState: observedUsage ? 'confirmed' : 'unknown',
+            deliveryState: responseReceived ? 'response_received' : requestStarted ? 'possibly_delivered' : 'not_sent',
+            ...(transportMetadata ? { responseMetadata: transportMetadata } : {}),
+            billingState: observedUsage && observedUsage.usageCompleteness !== 'partial' ? 'confirmed' : 'unknown',
             ...(observedUsage ? { usage: observedUsage } : {}),
             retryable: true,
             sanitizedCause: 'request_deadline_exceeded',
@@ -2349,8 +2329,9 @@ export function createOpenAiCompatibleAgentProvider({
         if (cancelledByUser) {
           throw new AgentProviderRequestError({
             code: 'cancelled_by_user',
-            deliveryState: 'possibly_delivered',
-            billingState: observedUsage ? 'confirmed' : (!requestStarted ? 'not_incurred' : 'unknown'),
+            deliveryState: responseReceived ? 'response_received' : requestStarted ? 'possibly_delivered' : 'not_sent',
+            ...(transportMetadata ? { responseMetadata: transportMetadata } : {}),
+            billingState: observedUsage && observedUsage.usageCompleteness !== 'partial' ? 'confirmed' : (!requestStarted ? 'not_incurred' : 'unknown'),
             ...(observedUsage ? { usage: observedUsage } : {}),
             retryable: false,
             sanitizedCause: 'caller_abort_signal',
@@ -2359,17 +2340,22 @@ export function createOpenAiCompatibleAgentProvider({
         }
         if (error instanceof AgentProviderRequestError) {
           throw observedUsage
-            ? new AgentProviderRequestError({ ...error, billingState: 'confirmed', usage: observedUsage, cause: error })
-            : error
+            ? new AgentProviderRequestError({ ...error, ...(transportMetadata || error.responseMetadata ? { responseMetadata: { httpStatus: transportMetadata?.httpStatus ?? error.responseMetadata!.httpStatus, ...transportMetadata, ...error.responseMetadata } } : {}), billingState: observedUsage.usageCompleteness === 'partial' ? 'unknown' : 'confirmed', usage: observedUsage, cause: error })
+            : new AgentProviderRequestError({ ...error, ...(transportMetadata || error.responseMetadata ? { responseMetadata: { httpStatus: transportMetadata?.httpStatus ?? error.responseMetadata!.httpStatus, ...transportMetadata, ...error.responseMetadata } } : {}), cause: error })
         }
-        throw classifyProviderTransportError(error)
+        const transportError = classifyProviderTransportError(error)
+        throw new AgentProviderRequestError({ ...transportError,
+          ...(responseReceived ? { deliveryState: 'response_received' as const, billingState: 'unknown' as const } : {}),
+          ...(observedUsage ? { usage: observedUsage, billingState: observedUsage.usageCompleteness === 'partial' ? 'unknown' as const : 'confirmed' as const } : {}),
+          ...(transportMetadata ? { responseMetadata: transportMetadata } : {}), cause: error,
+        })
       } finally {
         clearTimeout(timeout)
         input.signal?.removeEventListener('abort', cancel)
       }
     },
-    async generateWorkflowArtifact({ request, prompt, signal }) {
-      const result=await provider.completeStructuredJson!({purpose:'workflow',systemPrompt:workflowArtifactOutputInstructions(request.stage),userPrompt:prompt,...(signal?{signal}:{})})
+    async generateWorkflowArtifact({ request, prompt, signal, onUsage }) {
+      const result=await provider.completeStructuredJson!({purpose:'workflow',systemPrompt:workflowArtifactOutputInstructions(request.stage),userPrompt:prompt,...(signal?{signal}:{}),...(onUsage?{onUsage}:{})})
       const parsed=result.value as Partial<WorkflowArtifactProviderOutput>
       const usage=result.usage
       const title = providerValueToString(parsed.title, request.stage === 'clarify' ? '需求澄清结果' : '方案设计')
@@ -2439,7 +2425,7 @@ function providerHttpError(status: number): AgentProviderRequestError {
 function providerResponseError(
   code: Extract<
     AgentProviderErrorCode,
-    'invalid_response_json' | 'invalid_model_output' | 'invalid_usage' | 'response_too_large'
+    'invalid_response_json' | 'invalid_model_output' | 'invalid_usage' | 'response_too_large' | 'connection_reset'
   >,
   retryable: boolean,
   responseMetadata: AgentProviderResponseMetadata,

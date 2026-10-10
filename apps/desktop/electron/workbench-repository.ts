@@ -12,13 +12,8 @@ function relativeInput(value: unknown): string {
   return value || '.'
 }
 
-// Do not execute shell, load plugins, or follow symlinks from a model request.
-export async function readWorkbenchRepository(rootPath: string, input: {
-  operation: 'list' | 'read' | 'search'; path?: string; query?: string
-}, signal: AbortSignal): Promise<unknown> {
-  signal.throwIfAborted()
-  const root = await realpath(rootPath)
-  async function safeFile(relative: string): Promise<string> {
+export async function validateWorkbenchRepositoryPath(rootPath: string, relative: string): Promise<string> {
+    const root = await realpath(rootPath)
     const parts = relativeInput(relative).split('/').filter((part) => part && part !== '.')
     let current = root
     for (const part of parts) {
@@ -30,6 +25,14 @@ export async function readWorkbenchRepository(rootPath: string, input: {
     if (within === '..' || within.startsWith(`..${path.sep}`) || path.isAbsolute(within)) throw new Error('路径超出了当前项目。')
     return actual
   }
+
+// Do not execute shell, load plugins, or follow symlinks from a model request.
+export async function readWorkbenchRepository(rootPath: string, input: {
+  operation: 'list' | 'read' | 'search'; path?: string; query?: string
+}, signal: AbortSignal): Promise<unknown> {
+  signal.throwIfAborted()
+  const root = await realpath(rootPath)
+  const safeFile = (relative: string) => validateWorkbenchRepositoryPath(root, relative)
   async function read(relative: string) {
     signal.throwIfAborted()
     const absolute = await safeFile(relative)

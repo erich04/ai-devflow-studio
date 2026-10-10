@@ -11,6 +11,7 @@ import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.
 import type {
   AgentEvent,
   DesignRevisionIdentity,
+  DesignRevisionRequest,
   AgentProviderConfig,
   AgentReviewExecutionResult,
   AgentRuntimeRendererListItem,
@@ -199,6 +200,8 @@ export const ipcChannels = {
   listCredentialAccess: 'devflow:credential-access:list',
   cancelCredentialAccess: 'devflow:credential-access:cancel',
   credentialAccessUpdated: 'devflow:credential-access:updated',
+  modelBudgetContinuation: 'devflow:model-budget:continuation',
+  modelBudgetContinuationUpdated: 'devflow:model-budget:continuation-updated',
   modelBudgetUpdated: 'devflow:model-budget:updated',
   workbenchConversation: 'devflow:workbench-conversation',
   workbenchConversationUpdated: 'devflow:workbench-conversation:updated',
@@ -283,6 +286,7 @@ export const ipcChannels = {
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
   replyCodingPermission: 'devflow:coding:permission:reply',
   renewCodingPermission: 'devflow:coding:permission:renew',
+  codingSessionPermissions: 'devflow:coding:permission:session',
   subscribeCodingRun: 'devflow:coding:run:subscribe',
   listCodingAgentRuns: 'devflow:coding:runs:list',
   openManagedWorktree: 'devflow:coding:worktree:open',
@@ -341,6 +345,7 @@ export type CompleteWorkflowAgentNodeInput = {
   userName: string
   providerId?: string
   executor?: StageAgentExecutorKind
+  designRevision?: DesignRevisionRequest
 }
 
 export type ClarificationRevisionIdentity = {
@@ -603,6 +608,7 @@ export type ReplyCodingPermissionInput = {
   decidedBy: string
   decision: CodingPermissionDecision['decision']
   comment: string
+  scope?: 'once' | 'session'
 }
 
 export type RenewCodingPermissionInput = Pick<ReplyCodingPermissionInput, 'requestId' | 'codingRunId' | 'decidedBy'>
@@ -656,6 +662,8 @@ export type DevFlowDesktopApi = {
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
   listCredentialAccess?: () => Promise<CredentialAccessRecord[]>
   cancelCredentialAccess?: (id: string) => Promise<boolean>
+  modelBudgetContinuation?: (input: { action: 'list' } | { action: 'respond'; id: string; expectedVersion: string; confirmed: boolean }) => Promise<Array<import('@ai-devflow/shared').ModelBudgetContinuation & { localProjectId: string }>>
+  onModelBudgetContinuationUpdated?: (listener: (cards: Array<import('@ai-devflow/shared').ModelBudgetContinuation & { localProjectId: string }>) => void) => () => void
   onModelBudgetUpdated?: (listener: (event: { projectId: string; providerId: string; decision: import('@ai-devflow/shared').BudgetGuardDecision }) => void) => () => void
   onCredentialAccessUpdated?: (listener: (records: CredentialAccessRecord[]) => void) => () => void
   workbenchConversation?: WorkbenchConversationApi
@@ -797,6 +805,7 @@ export type DevFlowDesktopApi = {
   startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: CancelCodingAgentRunInput) => Promise<CodingAgentRun>
   replyCodingPermission: (input: ReplyCodingPermissionInput) => Promise<CodingPermissionRequest>
+  codingSessionPermissions: (input: { codingRunId: string; revokeId?: string }) => Promise<import('@ai-devflow/shared').CodingSessionGrant[]>
   renewCodingPermission: (input: RenewCodingPermissionInput) => Promise<CodingPermissionRequest>
   subscribeCodingRun: (input: SubscribeCodingRunInput) => Promise<LocalExecutionState>
   listCodingAgentRuns: (input?: ListCodingAgentRunsInput) => Promise<CodingAgentRun[]>
@@ -1400,11 +1409,32 @@ export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWor
     throw new Error('Invalid complete workflow agent node payload: artifact/run/event fields are not accepted')
   }
 
+  const revision = value['designRevision']
+  let designRevision: DesignRevisionRequest | undefined
+  if (revision !== undefined) {
+    if (!isRecord(revision)) throw new Error('Invalid design revision')
+    rejectUnexpectedFields(revision, ['expectedRunVersion', 'previous', 'proposals'], 'design revision')
+    const identity = (item: unknown): DesignRevisionIdentity => {
+      if (!isRecord(item)) throw new Error('Invalid design input identity')
+      rejectUnexpectedFields(item, ['artifactId', 'updatedAt', 'contentDigest'], 'design input identity')
+      return { artifactId: readExactRequiredIdentifier(item, 'artifactId'), updatedAt: readExactTimestamp(item, 'updatedAt'),
+        contentDigest: readExactRequiredDigest(item, 'contentDigest') }
+    }
+    if (!Array.isArray(revision['proposals']) || revision['proposals'].length < 1 || revision['proposals'].length > 20) {
+      throw new Error('Invalid design proposal selection')
+    }
+    const proposals = revision['proposals'].map(identity)
+    if (new Set(proposals.map((item) => item.artifactId)).size !== proposals.length) throw new Error('Duplicate design proposal')
+    designRevision = { expectedRunVersion: readExactPositiveVersion(revision, 'expectedRunVersion'),
+      previous: identity(revision['previous']), proposals }
+  }
+
   return {
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
     userId: readRequiredString(value, 'userId'),
     userName: readRequiredString(value, 'userName'),
+    ...(designRevision ? { designRevision } : {}),
     ...(typeof value['providerId'] === 'string' && value['providerId'].trim()
       ? { providerId: value['providerId'].trim() }
       : {}),
@@ -1612,7 +1642,7 @@ export function parseSettingsInput(value: unknown): Partial<LocalSettings> {
     throw new Error('Invalid themePreference')
   }
   const knowledgeReviewExecutor = value['knowledgeReviewExecutor']
-  if (knowledgeReviewExecutor !== undefined && knowledgeReviewExecutor !== 'direct-provider' && knowledgeReviewExecutor !== 'local-agent') {
+  if (knowledgeReviewExecutor !== undefined && knowledgeReviewExecutor !== 'direct-provider' && knowledgeReviewExecutor !== 'local-agent' && knowledgeReviewExecutor !== 'native-agent') {
     throw new Error('Invalid knowledgeReviewExecutor')
   }
 
@@ -1801,7 +1831,7 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     throw new Error('Invalid previous review confirmation')
   }
   const executor = value['executor']
-  if (executor !== undefined && executor !== 'direct-provider' && executor !== 'local-agent') {
+  if (executor !== undefined && executor !== 'direct-provider' && executor !== 'local-agent' && executor !== 'native-agent') {
     throw new Error('Invalid Gate Review executor')
   }
 
@@ -1811,7 +1841,7 @@ export function parseRunKnowledgeReviewInput(value: unknown): RunKnowledgeReview
     projectId,
     requestedBy,
     runtime,
-    ...(executor === 'local-agent' ? { executor } : {}),
+    ...(executor === 'local-agent' || executor === 'native-agent' ? { executor } : {}),
     ...(typeof providerId === 'string' && providerId.trim() ? { providerId: providerId.trim() } : {}),
     ...(typeof runtimeBudgetApprovalId === 'string' && runtimeBudgetApprovalId.trim()
       ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
@@ -2042,11 +2072,15 @@ export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPerm
     throw new Error('Invalid coding permission decision')
   }
 
+  const scope = value['scope']
+  if (scope !== undefined && scope !== 'once' && scope !== 'session') throw new Error('Invalid permission scope')
+  if (scope === 'session' && decision !== 'approved') throw new Error('Session permission requires explicit approval')
   return {
     requestId: readRequiredString(value, 'requestId'),
     codingRunId: readRequiredString(value, 'codingRunId'),
     decidedBy: readRequiredString(value, 'decidedBy'),
     decision,
+    ...(scope ? { scope } : {}),
     comment: typeof value['comment'] === 'string' ? value['comment'].trim() : '',
   }
 }

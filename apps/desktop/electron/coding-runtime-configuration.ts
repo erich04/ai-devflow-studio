@@ -333,7 +333,7 @@ export async function evaluateCodingRuntimeReadiness(input: {
 
   let budgetPolicy: RuntimeBudgetPolicy | null = null
   let budgetDecision: BudgetGuardDecision | undefined
-  if (paired && configured && engineReady && capabilityReady && providerReady && providerId && workflowReady && project) {
+  if (paired && project) {
     try {
       budgetPolicy = await input.getBudgetPolicy(project.id)
       check(
@@ -344,7 +344,7 @@ export async function evaluateCodingRuntimeReadiness(input: {
           ? '项目已显式保存 Runtime Budget Policy。'
           : '请先确认并保存项目 Runtime Budget Policy。',
       )
-      if (budgetPolicy) {
+      if (budgetPolicy && configured && engineReady && capabilityReady && providerReady && providerId && workflowReady) {
         if (usesOpenCodeProvider && input.executor?.billing !== 'metered') {
           budgetDecision = {
             status: 'disabled',
@@ -381,21 +381,23 @@ export async function evaluateCodingRuntimeReadiness(input: {
           !budgetDecision.blocksRun,
           budgetDecision.reason,
         )
+      } else if (budgetPolicy) {
+        check(checks, 'budget_not_evaluated', false, '预算策略已读取；执行条件就绪后才评估本次运行额度。')
       }
     } catch {
       check(
         checks,
-        'budget_policy_missing',
+        budgetPolicy ? 'budget_evaluation_failed' : 'budget_fetch_failed',
         false,
-        '无法读取 Team Runtime Budget Policy；请检查配对和 API 连接。',
+        budgetPolicy ? '预算策略已读取，但本次额度评估未完成；请恢复团队连接后刷新。' : '无法读取 Team Runtime Budget Policy；请检查配对和 API 连接。',
       )
     }
   } else {
     check(
       checks,
-      'budget_policy_missing',
+      'budget_not_checked',
       false,
-      '完成 Executor、Provider 与 Team Project 配对后才能校验预算。',
+      '当前项目尚未配对，暂未读取团队预算策略。',
     )
   }
 

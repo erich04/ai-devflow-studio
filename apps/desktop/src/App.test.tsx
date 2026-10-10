@@ -36,6 +36,8 @@ import {
   runs as fixtureRuns,
 } from '@ai-devflow/shared/fixtures'
 import { App, getToastDisplayDurationMs } from './App'
+import { designRevisionFixture } from './testing/design-revision'
+import { applyDesignRevision, createFakeAgentProvider, runWorkflowStageAgent } from '@ai-devflow/shared'
 import { buildWorkflowBoard, formatLocalTime } from './app/desktop-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
 import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './app/useDesktopWorkspace'
@@ -1266,6 +1268,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
       },
     }),
     cancelCodingAgentRun: vi.fn(),
+    codingSessionPermissions: vi.fn(async () => []),
     replyCodingPermission: vi.fn(),
     renewCodingPermission: vi.fn(),
     subscribeCodingRun: vi.fn().mockResolvedValue({
@@ -1326,9 +1329,15 @@ async function waitForLocalStateLoaded(
 }
 
 /** Four primary entries (plan §4.1, Y1): 任务, 知识, 团队, 设置. */
+function openTaskCenter() { fireEvent.click(within(screen.getByRole('complementary', { name: 'Primary navigation' })).getByRole('button', { name: /^任务中心/ })) }
+
 function clickPrimaryNav(name: '任务' | '知识' | '团队' | '设置') {
   const navigation = screen.getByRole('complementary', { name: 'Primary navigation' })
-  fireEvent.click(within(navigation).getByRole('button', { name }))
+  fireEvent.click(within(navigation).getByRole('button', { name: name === '任务' ? /^任务中心/ : name }))
+  if (name === '任务') {
+    const resume = screen.queryAllByRole('button', { name: /^继续任务：/ })[0]
+    if (resume) fireEvent.click(resume)
+  }
 }
 
 type SettingsSectionLabel = '本地项目' | '模型与执行方式' | '扩展能力' | '团队连接' | '外观' | '高级'
@@ -2087,12 +2096,14 @@ describe('App', () => {
 
     render(<App />)
 
+    await waitForLocalStateLoaded(api.loadState)
+    openTaskCenter()
     expect(await screen.findByText('实现 Work Request Inbox')).toBeInTheDocument()
-    expect(api.listWorkRequests).toHaveBeenCalledTimes(1)
+    expect(api.listWorkRequests).toHaveBeenCalledTimes(2)
     expect(api.listWorkRequests).toHaveBeenCalledWith({
       localProjectId: localProject.id,
     })
-    expect(screen.getByRole('region', { name: '团队请求' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '任务中心' })).toBeInTheDocument()
   })
 
   it('materializes a Work Request through the narrow command and selects the returned local Run', async () => {
@@ -2141,6 +2152,7 @@ describe('App', () => {
       listWorkRequests: vi
         .fn()
         .mockResolvedValueOnce([inboxWorkRequest])
+        .mockResolvedValueOnce([inboxWorkRequest])
         .mockResolvedValue([materializedWorkRequest]),
       materializeWorkRequest: vi.fn().mockResolvedValue({
         workRequest: materializedWorkRequest,
@@ -2150,11 +2162,11 @@ describe('App', () => {
     })
     render(<App />)
 
-    fireEvent.click(
-      await screen.findByRole('button', {
-        name: '创建本地任务：交付可恢复 Inbox',
-      }),
-    )
+    await waitForLocalStateLoaded(api.loadState)
+    openTaskCenter()
+    const claimButton = await screen.findByRole('button', { name: '领取任务：交付可恢复 Inbox' })
+    await waitFor(() => expect(claimButton).not.toBeDisabled())
+    fireEvent.click(claimButton)
 
     await waitFor(() => {
       expect(api.materializeWorkRequest).toHaveBeenCalledWith({
@@ -2168,7 +2180,7 @@ describe('App', () => {
       'localProjectId',
       'workRequestId',
     ])
-    expect(await screen.findByText('ai/work-request-inbox')).toBeInTheDocument()
+    expect(await screen.findByTestId('workflow-canvas')).toHaveAttribute('aria-label', '任务阶段：交付可恢复 Inbox')
     expect(screen.getByTestId('toast')).toHaveTextContent('已从团队请求创建本地任务')
   })
 
@@ -2317,9 +2329,7 @@ describe('App', () => {
     }))
     expect(screen.getAllByText('本地真实 Run').length).toBeGreaterThan(0)
     await waitFor(() => {
-      const runRows = Array.from(container.querySelectorAll('.run-row'))
-      expect(runRows[0]).toHaveTextContent('本地真实 Run')
-      expect(runRows[0]).toHaveClass('is-selected')
+      expect(within(container).getByTestId('workflow-canvas')).toHaveAttribute('aria-label', '任务阶段：本地真实 Run')
     })
   })
 
@@ -2328,8 +2338,10 @@ describe('App', () => {
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    fireEvent.click(screen.getByRole('button', { name: `${fixtureRuns[0]!.title} actions` }))
-    fireEvent.click(screen.getByRole('menuitem', { name: /删除本地 Run/ }))
+    openTaskCenter()
+    const row = screen.getByRole('article', { name: fixtureRuns[0]!.title })
+    fireEvent.click(within(row).getByText('更多操作'))
+    fireEvent.click(within(row).getByRole('button', { name: '删除任务…' }))
     expect(screen.getByRole('dialog', { name: 'Delete run' })).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: '删除本地 Run' }))
@@ -2342,45 +2354,24 @@ describe('App', () => {
     )
   })
 
-  it('keeps the run menu open internally and closes it on outside click, pointer, or Escape', async () => {
+  it('keeps task actions open internally and closes them outside or with Escape', async () => {
     const api = installDesktopApi()
     render(<App />)
-
     await waitForLocalStateLoaded(api.loadState)
-    const menuTrigger = screen.getByRole('button', { name: `${fixtureRuns[0]!.title} actions` })
-    await act(async () => {
-      fireEvent.click(menuTrigger)
-    })
-
-    const menu = screen.getByRole('menu')
-    await act(async () => {
-      fireEvent.pointerDown(menu)
-      fireEvent.click(menu)
-    })
-    expect(screen.getByRole('menu')).toBeInTheDocument()
-
-    await act(async () => {
-      fireEvent.click(document.body)
-    })
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-
-    await act(async () => {
-      fireEvent.click(menuTrigger)
-    })
-    expect(screen.getByRole('menu')).toBeInTheDocument()
-    await act(async () => {
-      fireEvent.pointerDown(document.body)
-    })
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-
-    await act(async () => {
-      fireEvent.click(menuTrigger)
-    })
-    expect(screen.getByRole('menu')).toBeInTheDocument()
-    await act(async () => {
-      fireEvent.keyDown(document, { key: 'Escape' })
-    })
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    openTaskCenter()
+    const row = screen.getByRole('article', { name: fixtureRuns[0]!.title })
+    const trigger = within(row).getByText('更多操作')
+    const menu = trigger.closest('details')!
+    fireEvent.click(trigger)
+    expect(menu.open).toBe(true)
+    fireEvent.pointerDown(menu); fireEvent.click(menu)
+    expect(menu.open).toBe(true)
+    fireEvent.click(document.body)
+    expect(menu.open).toBe(false)
+    fireEvent.click(trigger); fireEvent.pointerDown(document.body)
+    expect(menu.open).toBe(false)
+    fireEvent.click(trigger); fireEvent.keyDown(document, { key: 'Escape' })
+    expect(menu.open).toBe(false)
   })
 
   it('completes the current clarify agent through the desktop write path', async () => {
@@ -2484,7 +2475,8 @@ describe('App', () => {
     render(<App />)
     const executor = await screen.findByRole('combobox', { name: /澄清执行器/ })
     fireEvent.change(executor, { target: { value: 'local-agent' } })
-    fireEvent.click(screen.getByRole('button', { name: /Design executor routing.*local/ }))
+    openTaskCenter()
+    fireEvent.click(screen.getByRole('button', { name: '继续任务：Design executor routing' }))
     fireEvent.click(await screen.findByTestId('complete-design-agent'))
     await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
       runId: 'run-design-route', nodeId: 'n-design', executor: 'direct-provider', providerId: agentProvider.id,
@@ -2528,6 +2520,49 @@ describe('App', () => {
     expect(await screen.findByTestId('complete-design-agent')).toBeEnabled()
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案设计')
     expect(api.approveGate).not.toHaveBeenCalled()
+  })
+
+  it('generates a design revision only from selected saved proposals, keeps the Gate pending and cancels through that Gate', async () => {
+    const f = await designRevisionFixture()
+    let state = desktopState({ projects: [{ ...localProject, id: f.run.projectId }],
+      runs: [f.run], artifacts: f.artifacts, desktopPairingCredential: { ...fixturePairingCredential, localProjectId: f.run.projectId } })
+    let rejectGeneration!: (error: Error) => void
+    const api = installDesktopApi({
+      loadState: vi.fn(async () => state),
+      completeWorkflowAgentNode: vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectGeneration = reject }))
+        .mockImplementation(async (input) => {
+          const generated = await runWorkflowStageAgent({ ...f, provider: createFakeAgentProvider(), requestedBy: 'user-1',
+            runtime: 'electron', designRevision: input.designRevision })
+          const run = await applyDesignRevision({ ...f, gateNodeId: input.nodeId, request: input.designRevision!, artifact: generated.artifact })
+          state = { ...state, runs: [run], artifacts: [...f.artifacts, generated.artifact] }
+          return { run, artifact: generated.artifact, event: fixtureEvents[0]!, state }
+        }),
+      cancelWorkflowAgentNode: vi.fn(async () => { rejectGeneration(new Error('已取消阶段生成。')); return true }),
+    })
+    render(<App />)
+    const panel = await screen.findByRole('region', { name: '修订方案' })
+    expect(api.completeWorkflowAgentNode).not.toHaveBeenCalled()
+    await waitFor(() => expect(within(panel).getByRole('checkbox', { name: f.proposal.title })).toBeEnabled())
+    fireEvent.click(within(panel).getByRole('checkbox', { name: f.proposal.title }))
+    const generate = within(panel).getByRole('button', { name: '根据提案生成新版方案' })
+    await waitFor(() => expect(generate).toBeEnabled())
+    fireEvent.click(generate)
+    await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
+      nodeId: f.run.currentNodeId, designRevision: f.selection,
+    })))
+    fireEvent.click(await within(screen.getByTestId('task-status-row')).findByRole('button', { name: '取消生成' }))
+    await waitFor(() => expect(api.cancelWorkflowAgentNode).toHaveBeenCalledWith({ runId: f.run.id, nodeId: f.run.currentNodeId }))
+    await waitFor(() => expect(within(panel).getByRole('button', { name: '根据提案生成新版方案' })).toBeEnabled())
+    fireEvent.click(within(panel).getByRole('button', { name: '根据提案生成新版方案' }))
+    await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('新版方案已生成，旧版已保留'))
+    expect(state.runs[0]).toMatchObject({ status: 'paused_at_gate', currentNodeId: f.run.currentNodeId })
+    expect(state.artifacts).toContainEqual(f.design)
+    fireEvent.click(screen.getByRole('button', { name: '查看历史方案与提案' }))
+    expect(await screen.findByRole('tab', { name: '材料与版本', selected: true })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '历史记录' })).toHaveTextContent(f.design.title)
+    expect(api.approveGate).not.toHaveBeenCalled()
+    expect(api.runCodingAgent).not.toHaveBeenCalled()
+    expect(api.runKnowledgeReview).not.toHaveBeenCalled()
   })
 
   it('keeps workflow execution read-only in the browser preview', async () => {
@@ -3773,6 +3808,7 @@ describe('App', () => {
     clickPrimaryNav('任务')
     await act(async () => { finishInitialLoad(loadedState) })
     await waitForLocalStateLoaded(loadState, 1)
+    clickPrimaryNav('任务')
     fireEvent.click(await screen.findByRole('button', { name: 'Resume GitHub Delivery' }))
 
     await waitFor(() => expect(resumeGitHubDelivery).toHaveBeenCalledTimes(1))
@@ -4760,7 +4796,7 @@ describe('App', () => {
     expect(screen.getAllByText('为 Payments API 增加 /health 端点').length).toBeGreaterThan(0)
     expect(screen.queryByText('远端同步 Run')).not.toBeInTheDocument()
     expect(screen.getByTestId('project-overview')).toHaveTextContent('1 本地 · 0 远端')
-    expect(screen.getAllByText('local').length).toBeGreaterThan(0)
+    expect(screen.queryByText('远端同步 Run')).not.toBeInTheDocument()
     expect(screen.getByTestId('toast')).toHaveTextContent('团队数据已更新 · 策略 v1')
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-runtime-source', 'real IPC/API')
     const badge = openRuntimeSourceBadge()
@@ -5810,7 +5846,7 @@ describe('App', () => {
       target: { value: 'nothing matches this' },
     })
     expect(screen.getByTestId('search-results')).toHaveTextContent('没有匹配结果')
-    expect(screen.getByText('没有匹配的 Run')).toBeInTheDocument()
+    expect(screen.getByTestId('workflow-canvas')).toBeInTheDocument() // Global search does not discard the selected task.
 
     clickPrimaryNav('知识')
     expect(screen.getByText('没有匹配的知识节点')).toBeInTheDocument()
@@ -6180,7 +6216,7 @@ describe('App', () => {
     expect(screen.getByTestId('node-inspector')).toBeInTheDocument()
   })
 
-  it('runs Gate Review through read-only OpenCode after the review mode is switched in settings (knowledge-context K2)', async () => {
+  it.each(['local-agent', 'native-agent'] as const)('runs Gate Review through %s after the review mode is switched in settings', async (executor) => {
     const api = installDesktopApi()
     render(<App />)
 
@@ -6189,18 +6225,36 @@ describe('App', () => {
     const mode = await within(models).findByLabelText('门禁审查方式')
     expect(mode).toHaveValue('direct-provider')
     expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不读取仓库')
-    fireEvent.change(mode, { target: { value: 'local-agent' } })
-    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ knowledgeReviewExecutor: 'local-agent' }))
-    expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不修改代码、不运行命令、不批准 Gate')
+    fireEvent.change(mode, { target: { value: executor } })
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith({ knowledgeReviewExecutor: executor }))
+    expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不修改代码')
+    expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不批准 Gate')
 
     clickPrimaryNav('任务')
     const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
-      executor: 'local-agent',
+      executor,
       providerId: agentProvider.id,
     })))
+  })
+
+  it('restores the built-in repository review choice after reload without changing the coding executor', async () => {
+    const state = persistedFixtureRunState()
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue({ ...state, settings: { ...state.settings, knowledgeReviewExecutor: 'native-agent' } }),
+    })
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    const models = openSettingsSection('模型与执行方式')
+    expect(await within(models).findByLabelText('门禁审查方式')).toHaveValue('native-agent')
+    expect(api.saveCodingRuntimeConfiguration).not.toHaveBeenCalled()
+    clickPrimaryNav('任务')
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    await waitFor(() => expect(runReview).toBeEnabled())
+    fireEvent.click(runReview)
+    await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({ executor: 'native-agent' })))
   })
 
   it('offers an explicit retry after a malformed Gate Review without advancing the Gate (#201)', async () => {
@@ -6622,9 +6676,10 @@ describe('App', () => {
     })
     render(<App />)
 
-    const selectedRunButton = await screen.findByTitle('Selected during sync')
-    fireEvent.click(selectedRunButton)
-    expect(selectedRunButton.closest('.run-row')).toHaveClass('is-selected')
+    await screen.findByTestId('workflow-canvas')
+    openTaskCenter()
+    fireEvent.click(await screen.findByRole('button', { name: '继续任务：Selected during sync' }))
+    expect(screen.getByTestId('workflow-canvas')).toHaveAttribute('aria-label', '任务阶段：Selected during sync')
 
     act(() => {
       localStateListener?.(desktopState({
@@ -6634,7 +6689,7 @@ describe('App', () => {
       }))
     })
 
-    expect(selectedRunButton.closest('.run-row')).toHaveClass('is-selected')
+    expect(screen.getByTestId('workflow-canvas')).toHaveAttribute('aria-label', '任务阶段：Selected during sync')
   })
 
   it('shows terminal sync metadata without exposing raw remote errors', async () => {

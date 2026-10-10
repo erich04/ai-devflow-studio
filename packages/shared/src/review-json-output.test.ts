@@ -72,7 +72,7 @@ describe('review JSON output classification (#201)', () => {
     ['number', '42', 'not_json_object'],
     ['missing fields', '{"conclusion":"ok","summary":"s"}', 'invalid_review_schema'],
     ['wrong field type', JSON.stringify({ ...review, risks: 'none' }), 'invalid_review_schema'],
-  ])('classifies %s without retrying or losing billed usage', async (_name, content, cause) => {
+  ])('classifies %s after two bounded retries without losing billed usage', async (_name, content, cause) => {
     const { provider, fetcher } = fixture(content)
     const onAttemptUsage = vi.fn(async () => undefined)
     const failure: unknown = await runKnowledgeReviewAgent({
@@ -88,11 +88,11 @@ describe('review JSON output classification (#201)', () => {
         httpStatus: 200, finishReason: 'stop',
         contentLength: typeof content === 'string' ? content.length : 0,
         reasoningLength: 'private reasoning'.length,
-        outputLimitMode: 'provider_default', durationMs: expect.any(Number),
+        outputLimitMode: 'explicit', durationMs: expect.any(Number),
       },
     })
-    expect(fetcher).toHaveBeenCalledOnce()
-    expect(onAttemptUsage).toHaveBeenCalledOnce()
+    expect(fetcher).toHaveBeenCalledTimes(3)
+    expect(onAttemptUsage).toHaveBeenCalledTimes(3)
     expect(onAttemptUsage.mock.calls[0]).toMatchObject([{ inputTokens: 99, outputTokens: 123 }])
     expect(JSON.stringify(failure)).not.toMatch(/private reasoning|fixture-key|完整结论/)
     // Error.cause is not enumerable; check it separately from persisted metadata.
@@ -109,7 +109,7 @@ describe('review JSON output classification (#201)', () => {
     await expect(runKnowledgeReviewAgent({ ...await input(), provider, onAttemptUsage })).rejects.toMatchObject({
       sanitizedCause: 'empty_content', billingState: 'unknown',
     })
-    expect(onAttemptUsage).toHaveBeenCalledOnce()
+    expect(onAttemptUsage).toHaveBeenCalledTimes(3)
     expect(onAttemptUsage.mock.calls[0]).toMatchObject([{ costUsd: null, usageStatus: 'unknown' }])
   })
 

@@ -175,6 +175,45 @@ async function createOpenCodeReadinessFixture() {
 }
 
 describe('project Coding Runtime configuration', () => {
+  it('reads saved budget outside build without performing admission or reporting a missing policy', async () => {
+    const f = await createOpenCodeReadinessFixture()
+    await f.store.saveRun({ ...f.run, nodes: f.run.nodes.map(node => ({ ...node, stage: 'design' as const })) })
+    const result = await f.evaluate(openCodeReadinessDefaults)
+    expect(result.budgetPolicy).toMatchObject({ enabled: true })
+    expect(result.checks).toContainEqual(expect.objectContaining({ code: 'budget_policy_missing', status: 'ready' }))
+    expect(result.checks).toContainEqual(expect.objectContaining({ code: 'budget_not_evaluated' }))
+    expect(result.budgetDecision).toBeUndefined()
+    expect(result.status).toBe('blocked')
+    expect(f.evaluateBudget).not.toHaveBeenCalled()
+  })
+
+  it('distinguishes a failed policy fetch from an absent saved policy', async () => {
+    const f = await createOpenCodeReadinessFixture()
+    const result = await evaluateCodingRuntimeReadiness({
+      ...f, projectId: f.project.id, runId: f.run.id, nodeId: f.run.currentNodeId,
+      requestedBy: f.run.creatorId, opencodeReadiness: openCodeReadinessDefaults,
+      getBudgetPolicy: async () => { throw new Error('offline') },
+    })
+    expect(result.checks).toContainEqual(expect.objectContaining({ code: 'budget_fetch_failed', status: 'blocked' }))
+    expect(result.checks.some(check => check.code === 'budget_policy_missing')).toBe(false)
+    expect(f.evaluateBudget).not.toHaveBeenCalled()
+  })
+
+  it('keeps the saved policy ready when only admission evaluation fails', async () => {
+    const f = await createOpenCodeReadinessFixture()
+    try {
+      const result = await evaluateCodingRuntimeReadiness({
+        ...f, executor: { ...f.executor, billing: 'metered' }, projectId: f.project.id, runId: f.run.id, nodeId: f.run.currentNodeId,
+        requestedBy: f.run.creatorId, opencodeReadiness: openCodeReadinessDefaults,
+        getBudgetPolicy: async () => ({ projectId: f.project.id, enabled: true, monthlyLimitUsd: 20, warningThresholdUsd: 15, currency: 'USD', updatedAt: '2026-10-10T00:00:00Z' }),
+        evaluateBudget: async () => { throw new Error('temporarily offline') },
+      })
+      expect(result.checks).toContainEqual(expect.objectContaining({ code: 'budget_policy_missing', status: 'ready' }))
+      expect(result.checks).toContainEqual(expect.objectContaining({ code: 'budget_evaluation_failed', status: 'blocked' }))
+      expect(result.checks.some(check => check.code === 'budget_fetch_failed')).toBe(false)
+    } finally { f.store.close() }
+  })
+
   it('uses a saved project configuration with no DEVFLOW_CODING_* override and becomes ready', async () => {
     const repositoryPath = await temporaryDirectory('devflow-coding-readiness-repository')
     const storeDirectory = await temporaryDirectory('devflow-coding-readiness-store')

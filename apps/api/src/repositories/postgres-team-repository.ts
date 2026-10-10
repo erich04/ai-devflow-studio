@@ -1,3 +1,5 @@
+import { prepareModelBudgetContinuation, confirmModelBudgetContinuation } from './model-budget-continuation'
+import type { ModelBudgetContinuation, ConfirmModelBudgetContinuation } from '@ai-devflow/shared'
 import { isFinalModelCallSettlement } from '@ai-devflow/shared'
 import { modelCallActualUsage, modelBudgetUsageWithRuntime, modelCallBudgetRollup, type HistoricalModelCall, type ModelCallAttempt } from '@ai-devflow/shared'
 import { admitModelCall, finishModelCall, queueModelCallSettlement } from './model-call-budget'
@@ -1940,13 +1942,31 @@ export function createPostgresTeamRepository(
         return { status: 'settled', id: row.id, projectId: row.projectId }
       })
     },
+    async prepareModelBudgetContinuation(input, context) {
+      return withTeamDbTransaction(db, async tx => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`model-budget:${context.organizationId}:${input.projectId}`])
+        const scopedDb: TeamDbRepositoryClient = { ...tx, async close() {}, async checkout() { throw new Error('Nested budget transaction') } }
+        return prepareModelBudgetContinuation(createPostgresTeamRepository(scopedDb, options), input, context,
+          async id => (await tx.query<{ json: ModelBudgetContinuation }>('SELECT json FROM model_budget_continuations WHERE id=$1 AND organization_id=$2', [id, context.organizationId]))[0]?.json ?? null,
+          async card => { await tx.query('INSERT INTO model_budget_continuations (id,organization_id,project_id,user_id,json,created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT (id) DO UPDATE SET json=EXCLUDED.json WHERE model_budget_continuations.organization_id=EXCLUDED.organization_id', [card.id, context.organizationId, card.projectId, context.userId, JSON.stringify(card), card.createdAt]) })
+      })
+    },
+    async confirmModelBudgetContinuation(input, context) {
+      return withTeamDbTransaction(db, async tx => {
+        await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`model-budget:${context.organizationId}:${input.projectId}`])
+        const scopedDb: TeamDbRepositoryClient = { ...tx, async close() {}, async checkout() { throw new Error('Nested budget transaction') } }
+        return confirmModelBudgetContinuation(createPostgresTeamRepository(scopedDb, options), input, context,
+          async id => (await tx.query<{ json: ModelBudgetContinuation }>('SELECT json FROM model_budget_continuations WHERE id=$1 AND organization_id=$2', [id, context.organizationId]))[0]?.json ?? null,
+          async card => { await tx.query('INSERT INTO model_budget_continuations (id,organization_id,project_id,user_id,json,created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6) ON CONFLICT (id) DO UPDATE SET json=EXCLUDED.json WHERE model_budget_continuations.organization_id=EXCLUDED.organization_id', [card.id, context.organizationId, card.projectId, context.userId, JSON.stringify(card), card.createdAt]) })
+      })
+    },
     async reserveModelCall(input, context) {
       return withTeamDbTransaction(db, async(tx)=>{
         await tx.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`model-budget:${context.organizationId}:${input.projectId}`])
         const scopedDb:TeamDbRepositoryClient={...tx,async close(){},async checkout(){throw new Error('Nested budget transaction')}}
         const repo=createPostgresTeamRepository(scopedDb,options)
         return admitModelCall(repo,input,context,async()=> (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE id=$1',[input.id]))[0]?.json??null,
-          async(value)=>{await tx.query('INSERT INTO model_call_attempts (id,organization_id,project_id,user_id,json,created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6)',[value.id,context.organizationId,value.projectId,context.userId,JSON.stringify(value),value.createdAt])}, (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE organization_id=$1 AND project_id=$2',[context.organizationId,input.projectId])).map((row)=>row.json))
+          async(value)=>{await tx.query('INSERT INTO model_call_attempts (id,organization_id,project_id,user_id,json,created_at) VALUES ($1,$2,$3,$4,$5::jsonb,$6)',[value.id,context.organizationId,value.projectId,context.userId,JSON.stringify(value),value.createdAt])}, (await tx.query<{json:ModelCallAttempt}>('SELECT json FROM model_call_attempts WHERE organization_id=$1 AND project_id=$2',[context.organizationId,input.projectId])).map((row)=>row.json), (await tx.query<{json:ModelBudgetContinuation}>('SELECT json FROM model_budget_continuations WHERE organization_id=$1 AND project_id=$2', [context.organizationId, input.projectId])).map(row => row.json))
       })
     },
     async settleModelCall(input, context) {

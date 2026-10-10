@@ -1221,7 +1221,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       systemPrompt: 'Return one exact JSON object.',
       userPrompt: 'Choose one bounded edit.',
       maxOutputTokens: 1_024,
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       value: { stateVersion: 1, ok: true },
       usage: {
         inputTokens: 21,
@@ -1363,7 +1363,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     }
   })
 
-  it('uses the provider default output allowance without adding max_tokens', async () => {
+  it('sends the resolved output allowance for admission and transport', async () => {
     let requestBody: Record<string, unknown> | undefined
     const provider = createOpenAiCompatibleAgentProvider({
       model: 'ark-code-latest',
@@ -1418,7 +1418,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
       prompt: createKnowledgeReviewPrompt(context),
     })
 
-    expect(requestBody).not.toHaveProperty('max_tokens')
+    expect(requestBody).toHaveProperty('max_tokens', 8192)
     expect(requestBody?.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'system', content: expect.stringContaining('confidence must be a JSON number between 0 and 1 inclusive') }),
     ]))
@@ -1868,7 +1868,7 @@ describe('createOpenAiCompatibleAgentProvider', () => {
     const response = new Response(new ReadableStream<Uint8Array>({
       pull(controller) {
         pulls += 1
-        controller.enqueue(new Uint8Array(16 * 1_024).fill(120))
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024).fill(120))
         if (pulls === 256) controller.close()
       },
       cancel() {

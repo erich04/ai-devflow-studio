@@ -1,3 +1,5 @@
+import { prepareModelBudgetContinuation, confirmModelBudgetContinuation } from './model-budget-continuation'
+import type { ModelBudgetContinuation, ConfirmModelBudgetContinuation } from '@ai-devflow/shared'
 import { isFinalModelCallSettlement } from '@ai-devflow/shared'
 import { modelCallActualUsage, modelBudgetUsageWithRuntime, modelCallBudgetRollup, type HistoricalModelCall, type ModelCallAttempt, type ModelCallQuote, type ModelCallSettlement, type ModelCallAdmission } from '@ai-devflow/shared'
 import { admitModelCall, finishModelCall, queueModelCallSettlement } from './model-call-budget'
@@ -220,6 +222,8 @@ export type TeamRepository = WorkRequestRepository &
   GateCommandRepository &
   GitHubDeliveryRepository & {
   importHistoricalModelCall(input:HistoricalModelCall,context:TeamRepositorySyncContext):Promise<ModelCallSettlementReceipt>
+  prepareModelBudgetContinuation(input: ModelCallQuote, context: TeamSession): Promise<ModelBudgetContinuation>
+  confirmModelBudgetContinuation(input: ConfirmModelBudgetContinuation, context: TeamSession): Promise<ModelBudgetContinuation>
   reserveModelCall(input: ModelCallQuote, context: TeamRepositorySyncContext): Promise<ModelCallAdmission>
   settleModelCall(input: ModelCallSettlement, context: TeamRepositorySyncContext): Promise<ModelCallSettlementReceipt>
   persistModelCallSettlement(input: ModelCallSettlement, context: TeamRepositorySyncContext, isFinal?: boolean): Promise<void>
@@ -403,6 +407,7 @@ export function findCurrentGateCommandOverride(input: {
 }
 
 export function createSeedTeamRepository(): TeamRepository {
+  const modelContinuations = new Map<string, ModelBudgetContinuation>()
   const modelCalls = new Map<string, { organizationId:string; value:ModelCallAttempt }>()
   const modelCostEvents: { organizationId: string; value: ModelCostEvent }[] = []
   let budgetTail: Promise<unknown> = Promise.resolve()
@@ -745,8 +750,16 @@ export function createSeedTeamRepository(): TeamRepository {
         return { status: 'settled', id: row.id, projectId: row.projectId }
       })
     },
+    async prepareModelBudgetContinuation(input, context) {
+      return budgetLock(() => prepareModelBudgetContinuation(this, input, context,
+        async id => modelContinuations.get(id) ?? null, async card => { modelContinuations.set(card.id, card) }))
+    },
+    async confirmModelBudgetContinuation(input, context) {
+      return budgetLock(() => confirmModelBudgetContinuation(this, input, context,
+        async id => modelContinuations.get(id) ?? null, async card => { modelContinuations.set(card.id, card) }))
+    },
     async reserveModelCall(input, context) {
-      return budgetLock(() => admitModelCall(this,input,context, async()=>modelCalls.get(input.id)?.value??null, async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})}, [...modelCalls.values()].filter((row)=>row.organizationId===context.organizationId).map((row)=>row.value)))
+      return budgetLock(() => admitModelCall(this,input,context, async()=>modelCalls.get(input.id)?.value??null, async(value)=>{modelCalls.set(value.id,{organizationId:context.organizationId,value})}, [...modelCalls.values()].filter((row)=>row.organizationId===context.organizationId).map((row)=>row.value), [...modelContinuations.values()]))
     },
     async settleModelCall(input, context) {
       return budgetLock(() => settleModelCallWithRecovery({ settlement: input, context,

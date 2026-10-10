@@ -139,6 +139,21 @@ function modelContentFor(phase) {
   ].join('\n')
 }
 
+function repositoryReviewContent(body) {
+  const input = JSON.parse(body.messages[1].content)
+  if (!input.observations?.length) return JSON.stringify({ tool: { name: 'repo_read', args: { path: 'src/message.js' } } })
+  expect(input.observations[0].result.content).toContain('message = "old"')
+  return JSON.stringify({
+    conclusion: 'pass', summary: 'Verified the original message before implementation.',
+    confidence: 1, risks: [], missingEvidence: [], suggestedTests: [],
+    repositoryFindings: { version: 1, repositoryDigest: '',
+      citations: [{ id: 'source', path: 'src/message.js', contentDigest: '', lineStart: 1, lineEnd: 1 }],
+      verifiedFacts: [{ id: 'message', statement: 'The original message is old.', citationIds: ['source'] }],
+      assumptions: [], openQuestions: [], uncheckedScopes: [],
+    },
+  })
+}
+
 const modelServer = createServer(async (request, response) => {
   try {
     if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
@@ -157,7 +172,8 @@ const modelServer = createServer(async (request, response) => {
     }
     modelRequests.push(body)
     const payload = JSON.stringify({
-      choices: [{ message: { content: modelContentFor(nativePhaseOf(body)) } }],
+      choices: [{ message: { content: systemPrompt.includes('repo_list|repo_read|repo_search')
+        ? repositoryReviewContent(body) : modelContentFor(nativePhaseOf(body)) }, finish_reason: 'stop' }],
       usage: {
         prompt_tokens: 40 + modelRequests.length,
         completion_tokens: 20,
@@ -259,7 +275,7 @@ async function completePreBuildWorkflow(page, run, projectId) {
       })
     }, { runId: current.id, nodeId: agentNode.id })
     current = completed.run
-    await page.evaluate(async (input) => {
+    const initialReview = await page.evaluate(async (input) => {
       return window.aiDevFlowDesktop.runKnowledgeReview({
         runId: input.runId,
         nodeId: input.nodeId,
@@ -269,6 +285,20 @@ async function completePreBuildWorkflow(page, run, projectId) {
         providerId: 'fake-knowledge-review',
       })
     }, { runId: current.id, nodeId: gateNode.id, projectId })
+    if (gateNode.stage === 'design') {
+      await page.evaluate(() => window.aiDevFlowDesktop.saveSettings({ knowledgeReviewExecutor: 'native-agent' }))
+      const reviewed = await page.evaluate((input) => window.aiDevFlowDesktop.runKnowledgeReview(input), {
+        runId: current.id, nodeId: gateNode.id, projectId, requestedBy: 'u-erich', runtime: 'electron',
+        providerId: 'deepseek-native-smoke', executor: 'native-agent',
+        previousReviewId: initialReview.review.id,
+      })
+      expect(reviewed.review.executorKind).toBe('native-agent')
+      expect(reviewed.review.repositoryFindings.citations[0]).toMatchObject({
+        path: 'src/message.js', contentDigest: expect.stringMatching(/^[a-f0-9]{64}$/), lineStart: 1,
+      })
+      expect(reviewed.state.runs.find(candidate => candidate.id === current.id).currentNodeId).toBe(gateNode.id)
+      expect(await readFile(path.join(repositoryPath, 'src/message.js'), 'utf8')).toBe('export const message = "old"\n')
+    }
     const expectedClarificationRevision = completed.artifact.clarificationRevision
       ? {
           artifactId: completed.artifact.id,
@@ -305,6 +335,10 @@ async function completePreBuildWorkflow(page, run, projectId) {
 let apiProcess
 let viteProcess
 let app
+const watchdog = setTimeout(() => {
+  console.error('Native smoke timed out; closing only its isolated Electron application.', { modelRequests: modelRequests.length })
+  void app?.close()
+}, 180_000)
 try {
   await mkdir(path.join(repositoryPath, 'src'), { recursive: true })
   await writeFile(path.join(repositoryPath, '.gitignore'), 'node_modules\n', 'utf8')
@@ -363,10 +397,15 @@ try {
       DEVFLOW_CODING_ENGINE: '',
       DEVFLOW_CODING_EXECUTOR: '',
       DEVFLOW_NATIVE_CODING_PROVIDER_ID: '',
+      DEVFLOW_OPENCODE_BIN: path.join(tempRoot, 'opencode-not-installed'),
       ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
       VITE_DEV_SERVER_URL: desktopUrl,
     },
   })
+  app.process().stderr?.on('data', chunk => process.stderr.write(chunk))
+  app.on('close', () => console.log('Isolated Native Electron application closed.'))
+  const page = await app.firstWindow()
+  await page.waitForLoadState('domcontentloaded')
   // Only this isolated test process stores synthetic credentials; OS keychain
   // acceptance is a separate signed-installation check, not part of this fixture.
   await app.evaluate(({ safeStorage }) => {
@@ -386,8 +425,6 @@ try {
       return original(input, init)
     }
   }, modelUrl)
-  const page = await app.firstWindow()
-  await page.waitForLoadState('domcontentloaded')
   await app.evaluate(({ dialog }, selectedPath) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] })
   }, repositoryPath)
@@ -416,11 +453,11 @@ try {
     return window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({
       projectId,
       enabled: true,
-      monthlyLimitUsd: 0.20,
-      warningThresholdUsd: 0.10,
+      monthlyLimitUsd: 5,
+      warningThresholdUsd: 2.5,
     })
   }, project.id)
-  expect(policy).toMatchObject({ enabled: true, monthlyLimitUsd: 0.20, warningThresholdUsd: 0.10 })
+  expect(policy).toMatchObject({ enabled: true, monthlyLimitUsd: 5, warningThresholdUsd: 2.5 })
 
   const createdRun = await page.evaluate(async (projectId) => {
     return window.aiDevFlowDesktop.createRun({
@@ -431,6 +468,13 @@ try {
       branchName: 'devflow/native-coding-electron-smoke',
     })
   }, project.id)
+  const preBuildReadiness = await page.evaluate(async ({ run, projectId }) => window.aiDevFlowDesktop.getCodingRuntimeReadiness({
+    runId: run.id, nodeId: run.currentNodeId, projectId, requestedBy: 'u-erich',
+  }), { run: createdRun, projectId: project.id })
+  expect(preBuildReadiness.budgetPolicy).toMatchObject({ enabled: true, monthlyLimitUsd: 5 })
+  expect(preBuildReadiness.checks.find(check => check.code === 'budget_policy_missing')?.status).toBe('ready')
+  expect(preBuildReadiness.checks.some(check => check.code === 'budget_not_evaluated')).toBe(true)
+  expect(preBuildReadiness.status).not.toBe('ready')
   const { run, buildNode } = await completePreBuildWorkflow(page, createdRun, project.id)
   const readiness = await page.evaluate(async (input) => {
     return window.aiDevFlowDesktop.getCodingRuntimeReadiness(input)
@@ -440,7 +484,7 @@ try {
     projectId: project.id,
     requestedBy: 'u-erich',
   })
-  expect(readiness.status).toBe('ready')
+  expect(readiness.status, JSON.stringify(readiness)).toBe('ready')
   expect(readiness).toMatchObject({
     engine: 'native',
     providerId: 'deepseek-native-smoke',
@@ -512,17 +556,21 @@ try {
     diff.id === codingRun.diffArtifactId && diff.changedPaths.includes('src/message.js'))).toBe(true)
   expect(completedState.codingEvents.filter((event) => event.codingRunId === codingRun.id).length)
     .toBeGreaterThanOrEqual(4)
-  expect(modelRequests).toHaveLength(2)
+  const codingRequests = modelRequests.filter(request => nativePhaseOf(request) !== undefined)
+  expect(codingRequests).toHaveLength(2)
+  expect(modelRequests).toHaveLength(4)
   expect(modelRequests.every((request) => request.model === 'deepseek-flash')).toBe(true)
   // Through the real HTTP adapter: both phases send the identical system message and open
   // the user JSON with the same brief, so provider prefix caching can reuse it.
-  expect(modelRequests.map(nativePhaseOf)).toEqual(['analysis', 'initial'])
-  expect(modelRequests[1].messages[0].content).toBe(modelRequests[0].messages[0].content)
-  const sentBrief = JSON.parse(modelRequests[0].messages[1].content).brief
+  expect(codingRequests.map(nativePhaseOf)).toEqual(['analysis', 'initial'])
+  expect(codingRequests[1].messages[0].content).toBe(codingRequests[0].messages[0].content)
+  const sentBrief = JSON.parse(codingRequests[0].messages[1].content).brief
   const sharedPrefix = `{"stateVersion":2,"brief":${JSON.stringify(sentBrief)},`
-  expect(modelRequests.every((request) => request.messages[1].content.startsWith(sharedPrefix))).toBe(true)
-  console.log('DevFlow Native Electron smoke passed: real Main, local model server, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
+  expect(codingRequests.every((request) => request.messages[1].content.startsWith(sharedPrefix))).toBe(true)
+  expect((await page.evaluate(() => window.aiDevFlowDesktop.loadState())).settings.knowledgeReviewExecutor).toBe('native-agent')
+  console.log('DevFlow Native Electron smoke passed: real Main, local model server, built-in repository review without OpenCode, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
 } finally {
+  clearTimeout(watchdog)
   if (app) await app.close().catch(() => undefined)
   await Promise.all([
     stopProcess(viteProcess),

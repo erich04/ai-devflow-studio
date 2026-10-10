@@ -224,7 +224,7 @@ describe('workbench tabs and independent conversation interaction', () => {
     await act(async () => f.push())
     openDetails('正在调查')
     fireEvent.click(screen.getByRole('button', { name: '关闭详情' }))
-    fireEvent.click(screen.getByRole('button', { name: '重试调查' }))
+    fireEvent.click(screen.getByRole('button', { name: '重试这一步' }))
     await waitFor(() => expect(f.commands.filter((command) => command.type === 'retry')).toHaveLength(1))
   })
 

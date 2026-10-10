@@ -59,3 +59,13 @@ export * from './design-revision'
 
 export * from './model-call-budget'
 export * from './governed-provider'
+
+export * from './provider-request-policy'
+export * from './provider-response'
+
+export * from './coding-session-permissions'
+
+export * from './native-readonly-tools'
+
+export * from './model-budget-continuation'
+export * from './model-execution-rollout'

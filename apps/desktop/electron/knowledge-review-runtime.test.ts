@@ -240,16 +240,16 @@ describe('KnowledgeReviewRuntime', () => {
     expect(diagnostic).toContain('"billingState":"confirmed"')
     expect(diagnostic).not.toMatch(/private response text|private reasoning|fixture-key/)
     const priorCalls = hasReport ? 1 : 0
-    expect(fetcher).toHaveBeenCalledTimes(priorCalls + 1)
-    expect(store.tokenUsage).toHaveLength(priorCalls + 1)
+    expect(fetcher).toHaveBeenCalledTimes(priorCalls + 3)
+    expect(store.tokenUsage).toHaveLength(priorCalls + 3)
     expect(store.tokenUsage.at(-1)).toMatchObject({ inputTokens: 99, outputTokens: 123, usageStatus: 'complete' })
 
     content = valid
     await expect(runtime.run(request)).resolves.toMatchObject({ review: { summary: '完整结论' } })
-    expect(fetcher).toHaveBeenCalledTimes(priorCalls + 2)
+    expect(fetcher).toHaveBeenCalledTimes(priorCalls + 4)
     expect(budgetGuard).toHaveBeenCalledTimes(priorCalls + 2)
-    expect(store.tokenUsage).toHaveLength(priorCalls + 2)
-    expect(new Set(store.tokenUsage.map((usage) => usage.id)).size).toBe(priorCalls + 2)
+    expect(store.tokenUsage).toHaveLength(priorCalls + 4)
+    expect(new Set(store.tokenUsage.map((usage) => usage.id)).size).toBe(priorCalls + 4)
     expect(store.reviews).toHaveLength(priorCalls + 1)
     expect(store.savedArtifacts).toHaveLength(priorCalls + 1)
     expect(await store.listRuns()).toEqual(before.runs)
@@ -274,7 +274,7 @@ describe('KnowledgeReviewRuntime', () => {
 
     expect(reviewKnowledge).toHaveBeenCalledTimes(2)
     expect(store.reviews).toHaveLength(1)
-    expect(store.events.filter((event) => event.kind === 'error')).toHaveLength(1)
+    expect(store.events.filter((event) => event.kind === 'error')).toHaveLength(2)
     expect(store.events.filter((event) => event.kind === 'agent_review')).toHaveLength(1)
   })
 

@@ -1,3 +1,4 @@
+import { CodingSessionPermissions } from '../components/CodingSessionPermissions'
 import { type Node, type NodeProps } from '@xyflow/react'
 import { ReviewEvidenceDetails, type RecordReviewFeedback } from '../components/ReviewEvidenceDetails'
 import {
@@ -45,6 +46,7 @@ import {
   type StageAgentExecutorKind,
 } from '@ai-devflow/shared'
 import { GateEnforcementPanel, GateRemediationPanel } from '../GateEnforcementPanel'
+import { DesignRevisionPanel } from '../components/DesignRevisionPanel'
 import { GitHubDeliveryPanel } from '../GitHubDeliveryPanel'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
 import { knowledgeReferenceRelationLabel } from '../app/knowledge-reference-groups'
@@ -349,6 +351,7 @@ export function Inspector({
   canSaveOverride,
   onApprove,
   onCompleteAgentNode,
+  onGenerateDesignRevision,
   onRequestClarificationChanges,
   stageProviders = [],
   stageProviderId = '',
@@ -415,7 +418,7 @@ export function Inspector({
   /** Remaining execution evidence groups, folded at the end of 执行记录 (plan Y3). */
   executionEvidence?: React.ReactNode
   onCancelCodingRun?: (() => void) | undefined
-  onReplyCodingPermission?: ((decision: 'approved' | 'rejected') => void) | undefined
+  onReplyCodingPermission?: ((decision: 'approved' | 'rejected', scope?: 'once' | 'session') => void) | undefined
   modelReadinessError?: string | undefined
   selectedRun: WorkflowRun | undefined
   selectedNode: WorkflowNode | undefined
@@ -442,6 +445,7 @@ export function Inspector({
   canSaveOverride: boolean
   onApprove: () => void
   onCompleteAgentNode: () => void
+  onGenerateDesignRevision?: (proposalIds: string[]) => void
   onRequestClarificationChanges?: (reason: string) => void
   stageProviders?: Array<{ id: string; name: string; model: string }>
   stageProviderId?: string
@@ -508,6 +512,7 @@ export function Inspector({
   const codingFocusRef = useRef<HTMLDivElement | null>(null)
   const tabPanelRef = useRef<HTMLDivElement | null>(null)
   const pendingScrollRestore = useRef<{ tab: string; scrollTop: number } | null>(null)
+  const pendingNodeTab = useRef<{ nodeId: string; tab: string } | null>(null)
   // Action armed by a first click that needs a reminder before submitting (plan §6.1).
   const [armedActionKey, setArmedActionKey] = useState('')
   const [revisionDrafts, setRevisionDrafts] = useState<Record<string, string>>(() => {
@@ -515,7 +520,10 @@ export function Inspector({
   })
   // Reset the node workspace before paint so a newly visible tab cannot lose its first click.
   useLayoutEffect(() => {
-    setRequestedTab(CURRENT_WORK_TAB); setDocumentId(''); setRevisionFormOpen(false); setArmedActionKey(''); setRetryDialog(null)
+    const target = pendingNodeTab.current
+    setRequestedTab(target && target.nodeId === selectedNode?.id ? target.tab : CURRENT_WORK_TAB)
+    pendingNodeTab.current = null
+    setDocumentId(''); setRevisionFormOpen(false); setArmedActionKey(''); setRetryDialog(null)
   }, [selectedNode?.id])
 
   useEffect(() => {
@@ -605,7 +613,7 @@ export function Inspector({
   const requirementReader = clarificationReview ?? (selectedRun && clarifyGateNode && selectedNode.stage === 'clarify'
     ? buildClarificationReviewBundle({ run: selectedRun, gateNode: clarifyGateNode, artifacts: workflowArtifacts })
     : undefined)
-  const materialContext: MaterialContext = { run: selectedRun, events: runEvents ?? events, formatTime: formatLocalTime }
+  const materialContext: MaterialContext = { run: selectedRun, artifacts: workflowArtifacts, events: runEvents ?? events, formatTime: formatLocalTime }
   const requirementReading = requirementReader ? selectRequirementReading(requirementReader, documentId || undefined) ?? requirementReader.rawRequest : undefined
   const requirementTarget = clarificationReview ? pendingRequirementTarget(clarificationReview) : undefined
   // Reading something other than the version to confirm arms a reminder before approval (plan S4, Z6).
@@ -647,7 +655,7 @@ export function Inspector({
     artifacts,
     events,
     ...(approvalTarget ? { approvalTarget } : {}),
-    isGeneratingStageAgent: pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'completeAgent',
+    isGeneratingStageAgent: pendingMatchesSelectedNode && ['completeAgent', 'generateDesignRevision'].includes(pendingInspectorAction?.actionId ?? ''),
     ...(stageProvider ? { stageProviderLabel: `${stageProvider.name} · ${stageProvider.model}` } : {}),
     isRunningKnowledgeReview: isRunningKnowledgeReviewHere,
     ...(reviewProviderLabel ? { reviewProviderLabel } : {}),
@@ -1110,7 +1118,7 @@ export function Inspector({
             <div className="compact-row"><strong>{entry.typeLabel} {entry.versionLabel}</strong>{renderDiscussMaterial(artifact)}</div>
             {/* Type, version, status and time on the first layer; the business title below (plan S4, Z5). */}
             <p className="material-card-status">
-              {entry.group === 'proposal' ? <span className="pill warn">讨论提案（待确认）</span> : entry.statusLabel ? <span className={`pill ${entry.group === 'confirmed' ? 'good' : 'soft'}`}>{entry.statusLabel}</span> : null}
+              {entry.group === 'proposal' ? <span className="pill warn">{entry.statusLabel === '已用于方案修订，保留讨论记录' ? entry.statusLabel : '讨论提案（待确认）'}</span> : entry.statusLabel ? <span className={`pill ${entry.group === 'confirmed' ? 'good' : 'soft'}`}>{entry.statusLabel}</span> : null}
               <span className="meta">{entry.timeLabel}</span>
             </p>
             <p className="meta material-business-title">{artifact.title}</p>
@@ -1535,12 +1543,7 @@ export function Inspector({
     /></details>
   )
 
-  const renderWorkPanel = () => {
-    const isStageAgent = selectedNode.kind === 'agent' && ['clarify', 'design'].includes(selectedNode.stage)
-    const isTestStep = selectedNode.kind === 'test' || selectedNode.stage === 'test'
-    return <>
-      {/* Executor and model only for the actual current step (plan W1). */}
-      {isStageAgent && isSelectedCurrentNode && selectedNode.status !== 'success' ? (
+  const renderStageSettings = () => (
         <div className="next-action task-work-panel"><label className="stage-agent-executor" htmlFor="stage-agent-executor">
           {selectedNode.stage === 'clarify' ? '澄清执行器' : '设计执行器'}
           <select
@@ -1562,7 +1565,24 @@ export function Inspector({
         </label>
         <p className="empty-note">只影响本节点本次生成，不改变开发实现或已有聊天的选择。模型调用可能产生费用。</p>
         </div>
-      ) : null}
+  )
+  const renderWorkPanel = () => {
+    const isStageAgent = selectedNode.kind === 'agent' && ['clarify', 'design'].includes(selectedNode.stage)
+    const isTestStep = selectedNode.kind === 'test' || selectedNode.stage === 'test'
+    const canRevise = isSelectedCurrentNode && selectedNode.status === 'running' && selectedRun?.status === 'paused_at_gate'
+      && designGateMaterial?.state === 'ready' && onGenerateDesignRevision
+    return <>
+      {isStageAgent && isSelectedCurrentNode && selectedNode.status !== 'success' ? renderStageSettings() : null}
+      {canRevise && designGateMaterial?.state === 'ready' && <DesignRevisionPanel
+        key={designGateMaterial.artifact.id}
+        previous={designGateMaterial.artifact}
+        proposals={workflowArtifacts.filter((artifact) => artifact.runId === selectedRun?.id &&
+          artifact.nodeId === designGateMaterial.artifact.nodeId && isDiscussionProposal(artifact))}
+        onGenerate={onGenerateDesignRevision!}
+        disabled={hasInspectorWriteLock || Boolean(modelReadinessError) || !stageProviderId}
+        generating={pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'generateDesignRevision'}
+        settings={<>{renderStageSettings()}{modelReadinessError && <p role="status">{modelReadinessError}</p>}</>}
+      />}
       {canRunCodingAgentOnNode(selectedNode) ? (
         <CodingWorkPanel
           projection={codingActionProjection}
@@ -1571,10 +1591,11 @@ export function Inspector({
           latestCodingRun={latestCodingRun}
           workspace={codingWorkspace}
           isReplying={isReplyingCodingPermission}
-          onDecision={(decision) => { if (decision === 'approved' || decision === 'rejected') onReplyCodingPermission?.(decision) }}
+          onDecision={(decision, scope) => { if (decision === 'approved' || decision === 'rejected') onReplyCodingPermission?.(decision, scope) }}
           focusRef={codingFocusRef}
         />
       ) : null}
+      {latestCodingRun && <CodingSessionPermissions codingRunId={latestCodingRun.id} status={latestCodingRun.status} />}
       {isTestStep && isSelectedCurrentNode && selectedNode.status !== 'success' ? (
         <TestRunPanel readiness={testRunReadiness} isRunning={isRunningTests} onOpenTestSettings={() => openSettings('tests')} />
       ) : null}
@@ -1620,6 +1641,13 @@ export function Inspector({
       </p>
       <p>{selectedDocument.summary}</p>
       <ArtifactReviewReader key={selectedDocument.id} artifact={selectedDocument} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} onDiscuss={onDiscussMaterial} />
+      {selectedDocument.designRevision && <p className="meta">本版基于旧方案与 {selectedDocument.designRevision.proposals.length} 份提案修订。
+        <button className="text-button" onClick={() => {
+          if (selectedDocument.nodeId === selectedNode.id) { setRequestedTab(MATERIALS_TAB); return }
+          pendingNodeTab.current = { nodeId: selectedDocument.nodeId, tab: MATERIALS_TAB }
+          onSelectWorkflowNode(selectedDocument.nodeId)
+        }}>查看历史方案与提案</button>
+      </p>}
     </article> : <p>当前步骤尚无可阅读的正文；请按状态行的操作继续。</p>}
     {!selectedDocument && latestAgentReview && renderReviewEvidence()}
     {codingActionProjection?.terminal && <section aria-label="开发变更与检查"><h3>开发变更与检查</h3>
@@ -1638,7 +1666,7 @@ export function Inspector({
 </section>}
     {/* The stage value is `accept`, not `acceptance`; the handoff shows once on both steps (plan W1). */}
     {['pr', 'accept'].includes(selectedNode.stage) && renderDeliveryHandoff()}
-    {selectedNode.stage === 'design' && <p className="meta">当前设计节点尚不支持直接提交修订；如需修改，应先保留具体意见并核对当前流程，不会通过此阅读页面自动重新生成或批准。</p>}
+    {selectedNode.stage === 'design' && <p className="meta">修改意见需先保存为“方案设计”节点提案，再到当前方案评审步骤选择提案并生成新版。保存提案不会替换正式方案。</p>}
 
   </div>
   const renderArtifactRecords = () => <div>{contentArtifacts.filter((artifact) => partitionArtifact(artifact.content).some((section) => section.group === 'records' && hasSectionContent(section))).map((artifact) => <article key={artifact.id}><h3>{artifact.title} · 生成详情</h3><p className="meta">{artifact.updatedAt}</p><ArtifactBody content={artifact.content} kind={artifact.kind} section="records" /></article>)}</div>
@@ -1662,6 +1690,11 @@ export function Inspector({
 
   return (
     <aside className="inspector" data-testid="node-inspector">
+      {selectedNode.stage === 'design' && selectedNode.kind === 'agent' && currentRunNode?.stage === 'design' &&
+        currentRunNode.kind === 'gate' && currentRunNode.status === 'running' && onGenerateDesignRevision &&
+        <div className="task-browsing-row"><span>已保存修改意见后，可以用旧方案和提案生成新版。</span>
+          <button className="text-button" onClick={() => { setRequestedTab(CURRENT_WORK_TAB); onSelectWorkflowNode(currentRunNode.id) }}>到方案评审生成新版</button>
+        </div>}
       {!isSelectedCurrentNode && currentRunNode ? (
         <div className="task-browsing-row" data-testid="task-browsing-row">
           <span>

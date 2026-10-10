@@ -1,3 +1,4 @@
+import type { ModelBudgetContinuation, ConfirmModelBudgetContinuation } from '@ai-devflow/shared'
 import {
   createRemoteAgentCoordinationSummary,
   createRemoteAgentRuntimeSummary,
@@ -86,6 +87,8 @@ export type ProjectBoundRemoteSync = Pick<
   | 'evaluateRuntimeBudget'
   | 'importHistoricalModelCall'
   | 'reserveModelCall'
+  | 'prepareModelBudgetContinuation'
+  | 'confirmModelBudgetContinuation'
   | 'settleModelCall'
   | 'getModelCostRecovery'
 > & {
@@ -487,6 +490,16 @@ export function createProjectBoundRemoteSync(input: {
       )
     },
     async importHistoricalModelCall(request) {await input.remoteSync.importHistoricalModelCall({quote:await bindProjectId(request.quote,input.credentialSource),settlement:await bindProjectId(request.settlement,input.credentialSource)})},
+    async prepareModelBudgetContinuation(request) {
+      const scope = await freezeCanonicalScope()
+      if (scope.localProjectId !== request.projectId) throw new Error('Paired Team Project is bound to a different local project.')
+      return input.remoteSync.prepareModelBudgetContinuation({ ...request, projectId: scope.teamProjectId })
+    },
+    async confirmModelBudgetContinuation(request) {
+      const scope = await freezeCanonicalScope()
+      if (scope.localProjectId !== request.projectId) throw new Error('Paired Team Project is bound to a different local project.')
+      return input.remoteSync.confirmModelBudgetContinuation({ ...request, projectId: scope.teamProjectId })
+    },
     async reserveModelCall(request) {
       const scope=await freezeCanonicalScope()
       if (scope.localProjectId!==request.projectId) throw new Error('Paired Team Project is bound to a different local project.')

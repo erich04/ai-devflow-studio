@@ -23,7 +23,7 @@ describe('one effective model cost ledger', () => {
       call('stale', { state: 'reserved', createdAt: '2026-10-04T11:49:59Z' }),
       call('queued', { state: 'reserved', pendingSettlement: { id: 'queued', projectId: 'p', state: 'completed', usage: { inputTokens: 2, outputTokens: 1 } } })]
     const view = modelCostRecoveryOverview([], calls, [], 'p', now)
-    expect(view).toMatchObject({ actualCostUsd: 3, reservedCostUsd: 4, reservedUnknownCount: 1, reviewCount: 2 })
+    expect(view).toMatchObject({ actualCostUsd: 3, reservedCostUsd: 0, reservedUnknownCount: 3, reviewCount: 2 })
     expect(view.records.map(r => r.status)).toEqual(['settled', 'running', 'stale_reservation', 'upload_pending'])
     expect(view.records.find(r => r.sourceId === 'running')?.canReconcile).toBe(false)
   })
@@ -39,7 +39,7 @@ describe('one effective model cost ledger', () => {
   })
 
   it('uses exactly the admission deduplication and billing month, including legacy coding records', () => {
-    const calls = [call('known', { costUsd: 2 }), call('last-month', { createdAt: '2026-09-30T23:59:59Z' })]
+    const calls = [call('known', { costUsd: 2 }), call('last-month', { createdAt: '2026-09-30T23:59:59Z', remoteEnded: true })]
     const duplicate = { ...legacy, budgetAttemptIds: ['known'] }
     const view = modelCostRecoveryOverview([duplicate, { ...legacy, id: 'unmatched', budgetAttemptIds: ['missing'] }], calls, [], 'p', now)
     expect(view.records.map(r => r.sourceId)).toEqual(['unmatched', 'known', 'last-month'])

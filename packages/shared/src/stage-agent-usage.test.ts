@@ -44,6 +44,10 @@ describe('Stage Agent usage accounting', () => {
     expect(parseStageAgentUsage([{ ...usage, apiKey: 'must-not-leave' }], request.runId, request.projectId)[0]).not.toHaveProperty('apiKey')
     const priced = createLocalStageAgentUsage({ ...request, billingProvider: 'deepseek' })
     expect(parseStageAgentUsage([priced], request.runId, request.projectId)).toEqual([priced])
+    const nativeReview = { ...priced, executorKind: 'native-agent' as const }
+    expect(parseStageAgentUsage([nativeReview], request.runId, request.projectId)).toEqual([nativeReview])
+    expect(() => parseStageAgentUsage([{ ...priced, executorKind: 'unrecognized' }], request.runId, request.projectId))
+      .toThrow('Invalid stage Agent usage')
     expect(() => parseStageAgentUsage([{ ...priced, pricingSnapshot: { ...priced.pricingSnapshot, outputUsdPerMillion: 0 } }], request.runId, request.projectId))
       .toThrow('Invalid stage Agent pricing snapshot')
     for (const rows of [[usage, usage], [{ ...usage, runId: 'other' }], [{ ...usage, costUsd: -1 }], [{ ...usage, costUsd: 0, usageStatus: 'unknown' }]]) {

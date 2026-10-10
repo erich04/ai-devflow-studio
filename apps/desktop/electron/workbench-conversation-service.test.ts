@@ -27,12 +27,12 @@ beforeEach(async () => {
   await store.saveRun(created.run)
   for (const artifact of created.artifacts) await store.saveArtifact(artifact)
 })
-afterEach(async () => { await rm(directory, { force: true, recursive: true }) })
+afterEach(async () => { vi.unstubAllEnvs(); await rm(directory, { force: true, recursive: true }) })
 
 type ServiceDependencies = ConstructorParameters<typeof WorkbenchConversationService>[0]
 function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>, criticalReplies = true, extra: Partial<ServiceDependencies> = {}) {
   const calls: string[] = []
-  const provider = { ...createFakeAgentProvider(), completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => { calls.push(input.userPrompt)
+  const provider = { ...createFakeAgentProvider(), supportsNativeTools: false, completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => { calls.push(input.userPrompt)
     const context=JSON.parse(input.userPrompt)
     // Existing interaction fixtures explicitly simulate a cooperative verifier.
     // Adversarial coverage tests below disable this fixture behavior.
@@ -44,7 +44,7 @@ function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>,
     }
     return result }) }
   const inspectGate = vi.fn(async () => ({ canApprove: false, source: 'test policy', blockers: ['upstream'] }))
-  const service = new WorkbenchConversationService({ store, resolveProvider: async () => provider,
+  const service = new WorkbenchConversationService({ nativeReadOnlyPilotEnabled: true, store, resolveProvider: async () => provider,
     loadKnowledge: async (id) => ({ projectId: id, contentHash: 'knowledge-hash', indexedAt: '2026-09-16T10:00:00.000Z', truncated: false, warnings: [], documents: [], entities: [], relations: [], chunks: [{ id: 'chunk1', documentId: 'doc1', sourcePath: 'docs/product.md', headingPath: ['清理规则'], content: '清理操作只删除已完成项，保留未完成项。', contentHash: 'chunk-hash', tokenCount: 20, tags: [], updatedAt: '2026-09-16T10:00:00.000Z' }] }),
     changed: vi.fn(), inspectGate, ...extra,
   })
@@ -60,6 +60,180 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
 }
 
 describe('unified conversation execution and boundaries', () => {
+  it('can stop automatic recovery without losing evidence or preventing explicit manual continuation', async () => {
+    vi.stubEnv('DEVFLOW_STEP_RECOVERY_ENABLED', '0')
+    let calls = 0
+    const first = harness(async () => {
+      if (++calls === 1) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+      throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'unknown', retryable: true })
+    })
+    const id = await create(first.service), failed = await send(first.service, id)
+    expect(calls).toBe(2)
+    expect(failed.checkpoint).toMatchObject({ step: 2, recoveries: 0 })
+    const resumed = harness(async input => {
+      expect(JSON.parse(input.userPrompt).toolObservations).toHaveLength(1)
+      return { value: { text: '按用户指示继续。' } }
+    })
+    await resumed.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+    await resumed.service.settled(id)
+    expect(resumed.calls).toHaveLength(1)
+    expect((await store.listWorkbenchConversations(projectId))[0]?.status).toBe('idle')
+  })
+  it('keeps the native pilot disabled unless explicitly enabled and preserves old records when disabled', async () => {
+    const disabled = harness(async () => ({value:{text:'unused'}}), true, {nativeReadOnlyPilotEnabled:false})
+    expect((await disabled.service.command({type:'list',projectId})).nativeReadOnlyPilotEnabled).toBe(false)
+    await expect(disabled.service.command({type:'create',projectId,executor:'native-tools'})).rejects.toThrow('尚未启用')
+    const enabled = harness(async () => ({value:{text:'unused'}})); enabled.provider.supportsNativeTools=true
+    const id=(await enabled.service.command({type:'create',projectId,executor:'native-tools'})).conversationId!
+    disabled.provider.supportsNativeTools=true
+    const stopped=await send(disabled.service,id)
+    expect(stopped.status).toBe('failed'); expect(stopped.executor).toBe('native-tools'); expect(disabled.calls).toHaveLength(0)
+  })
+
+  it('resumes a persisted failed step with its evidence and a fresh manual recovery cycle', async () => {
+    let calls = 0
+    const first = harness(async () => {
+      if (++calls === 1) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+      throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'unknown', retryable: true })
+    })
+    const id = await create(first.service)
+    const failed = await send(first.service, id)
+    expect(calls).toBe(4)
+    expect(failed.checkpoint).toMatchObject({ step: 2, cycle: 1, recoveries: 2 })
+    const reopened = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    const resumed = harness(async input => {
+      const context = JSON.parse(input.userPrompt)
+      expect(context.toolObservations).toHaveLength(1)
+      expect(context.toolObservations[0]).toMatchObject({ name: 'repo_read', args: { path: 'tasks.ts' } })
+      return { value: { text: '继续完成。' } }
+    }, true, { store: reopened })
+    await resumed.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+    await resumed.service.settled(id)
+    const final = (await reopened.listWorkbenchConversations(projectId))[0]!
+    expect(final.status).toBe('idle')
+    expect(final.checkpoint).toBeUndefined()
+    expect(final.messages.filter(message => message.role === 'user')).toHaveLength(1)
+    expect(final.messages.filter(message => message.role === 'tool')).toHaveLength(1)
+    expect(final.messages.filter(message => message.attempt).at(-1)?.attempt).toMatchObject({ step: 2, cycle: 2, recovery: 0 })
+  })
+
+  it('invalidates repository observations changed between failure and manual recovery', async () => {
+    let calls = 0
+    const first = harness(async () => {
+      if (++calls === 1) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+      throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'unknown', retryable: true })
+    })
+    const id = await create(first.service); await send(first.service, id)
+    await writeFile(path.join(project.path, 'tasks.ts'), 'export const changed = true')
+    const resumed = harness(async input => {
+      expect(JSON.parse(input.userPrompt).toolObservations).toEqual([])
+      return { value: { text: '仓库已变化，需要重新查询。' } }
+    })
+    await resumed.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' }); await resumed.service.settled(id)
+    expect((await store.listWorkbenchConversations(projectId))[0]?.status).toBe('idle')
+  })
+
+  it('executes a validated native batch once and preserves tool history through the final cited answer', async () => {
+    let calls = 0
+    const result = harness(async input => {
+      if (++calls === 1) {
+        const toolCalls = [{ id: 'native-read-1', type: 'function' as const, function: { name: 'repo_read', arguments: '{"path":"tasks.ts"}' } }]
+        return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, reasoning_content: 'private reasoning', tool_calls: toolCalls } }
+      }
+      expect(input.nativeTools?.messages.some(message => message.role === 'tool' && message.tool_call_id === 'native-read-1')).toBe(true)
+      expect(input.nativeTools?.messages.some(message => message.role === 'assistant' && message.reasoning_content === 'private reasoning')).toBe(true)
+      return { value: { text: '清理保留未完成任务。', citationIds: ['source-1'] }, assistantMessage: { role: 'assistant' as const, content: '{"text":"清理保留未完成任务。"}' } }
+    })
+    result.provider.supportsNativeTools = true
+    const id = (await result.service.command({ type: 'create', projectId, executor: 'native-tools' })).conversationId!
+    const session = await send(result.service, id)
+    expect(session.status, session.error).toBe('idle'); expect(calls).toBe(2)
+    expect(session.toolEvents?.filter(event => event.kind === 'tool_request')).toHaveLength(1)
+    expect(session.messages.at(-1)?.citations?.[0]?.id).toBe('source-1')
+  })
+
+  it('rejects the entire native batch before any read if a later path is a symlink', async () => {
+    await symlink('tasks.ts', path.join(project.path, 'alias.ts'))
+    let calls = 0
+    const result = harness(async input => {
+      calls++
+      expect(input.nativeTools?.messages ?? []).toEqual([])
+      const toolCalls = ['tasks.ts', 'alias.ts'].map((path, index) => ({ id: `call-${index}`, type: 'function' as const, function: { name: 'repo_read', arguments: JSON.stringify({ path }) } }))
+      return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, tool_calls: toolCalls } }
+    })
+    result.provider.supportsNativeTools = true
+    const id = (await result.service.command({ type: 'create', projectId, executor: 'native-tools' })).conversationId!
+    const session = await send(result.service, id)
+    expect(session.status).toBe('failed')
+    expect(calls).toBe(1)
+    expect(session.checkpoint?.nativeMessages ?? []).toEqual([])
+    await result.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+    await result.service.settled(id)
+    expect(calls).toBe(2)
+    expect(session.toolEvents?.filter(event => event.kind === 'tool_request') ?? []).toEqual([])
+  })
+
+  it('saves long answers across SQLite restart and pages them through scoped IPC without truncating the original', async () => {
+    const text = '中文长文 😀\\n'.repeat(120_000)
+    const { service } = harness(async () => ({ value: { text } }))
+    const id = await create(service)
+    expect((await send(service, id)).messages.at(-1)?.text).toBe(text)
+    const view = await service.command({ type: 'list', projectId })
+    const message = view.conversations[0]!.messages.at(-1)!
+    expect(message.text.length).toBeLessThan(20_000)
+    expect(message.contentLengths?.text).toBe(text.length)
+    const result = await service.command({ type: 'read_content', projectId, conversationId: id, messageId: message.id, field: 'text', offset: 20_000 })
+    expect(result.contentPage?.text).toBe(text.slice(20_000, 20_000 + result.contentPage!.text.length))
+    const reopened = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    expect((await reopened.listWorkbenchConversations(projectId))[0]!.messages.at(-1)?.text).toBe(text)
+    await expect(service.command({ type: 'read_content', projectId, conversationId: id, messageId: 'other-session', field: 'text', offset: 0 })).rejects.toThrow('本会话')
+  })
+
+  it('gives each successfully advanced step two recoveries and preserves earlier failure diagnostics', async () => {
+    let calls = 0
+    const { service } = harness(async () => {
+      calls++
+      if ([1, 2, 4, 5].includes(calls)) throw new AgentProviderRequestError({ code: 'invalid_model_output',
+        sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'confirmed', retryable: true,
+        usage: { inputTokens: 2, outputTokens: 3 } })
+      if (calls === 3) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+      return { value: { text: '读取完成。' } }
+    })
+    const result = await send(service, await create(service))
+    expect(result.status).toBe('idle')
+    expect(calls).toBe(6)
+    expect(result.messages.filter(message => message.failure)).toHaveLength(4)
+    expect(result.messages.filter(message => message.role === 'user')).toHaveLength(1)
+  })
+
+  it('finishes a thinking conversation beyond the old output allowance without changing workflow state', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const provider = createOpenAiCompatibleAgentProvider({
+      baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-flash', apiKey: 'fixture-only',
+      thinking: { mode: 'enabled', effort: 'high' },
+      fetcher: async (_url, init) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        bodies.push(body)
+        const complete = Number(body.max_tokens) >= 8_192
+        return Response.json({ choices: [{
+          message: { content: complete ? JSON.stringify({ text: '方案仍待评审，继续当前讨论。' }) : '', reasoning_content: 'fixture reasoning' },
+          finish_reason: complete ? 'stop' : 'length',
+        }] })
+      },
+    })
+    const { service } = harness(async () => ({ value: { text: 'unused fixture' } }), true, { resolveProvider: async () => provider })
+    const beforeRuns = await store.listRuns()
+    const beforeArtifacts = await store.listArtifacts(created.run.id)
+    const id = await create(service)
+    const session = await send(service, id, '保留已有进度，继续核对当前方案。')
+    expect(session.status, session.error).toBe('idle')
+    expect(session.messages.at(-1)?.text).toBe('方案仍待评审，继续当前讨论。')
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({ max_tokens: 65_536, thinking: { type: 'enabled' }, reasoning_effort: 'high' })
+    expect(await store.listRuns()).toEqual(beforeRuns)
+    expect(await store.listArtifacts(created.run.id)).toEqual(beforeArtifacts)
+  })
+
   it.each(['running', 'cancelled'] as const)('records missing tool results after restarting a %s turn without replaying or duplicating the user message', async (status) => {
     const { service, provider } = harness(async () => ({ value: { text: '重新读取当前上下文。' } }))
     const id = await create(service)
@@ -336,23 +510,23 @@ describe('unified conversation execution and boundaries', () => {
     const service = new WorkbenchConversationService({ store, resolveProvider: async () => provider, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
     const id = await create(service)
     const result = await send(service, id)
-    expect(requests).toBe(2)
+    expect(requests).toBe(3)
     expect(result.status, result.error).toBe('failed')
     expect(result.failure).toMatchObject({ code: 'invalid_model_output', httpStatus: 200, reason: raw === '' ? 'empty_content' : raw === '[]' ? 'not_json_object' : 'invalid_json' })
     expect(result.error).not.toMatch(/配置|网络/)
     expect(JSON.stringify(result)).not.toContain('PRIVATE_RESPONSE')
     expect(result.messages.filter((m) => m.role === 'user')).toHaveLength(1)
     expect(result.messages.filter((m) => m.role === 'assistant')).toHaveLength(0)
-    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(80)
+    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(120)
     const reopened = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
     expect((await reopened.listWorkbenchConversations(projectId))[0]).toEqual(result)
   })
 
-  it('does not retry network, credentials, filtered responses or cancellation as format recovery (#154)', async () => {
+  it('retries transient network errors but never credentials, filtered responses or cancellation (#154)', async () => {
     for (const [code, retryable, reason] of [['http_4xx', false, 'unauthorized'], ['connection_reset', true, 'reset'], ['invalid_model_output', false, 'content_filter'], ['cancelled_by_user', false, 'cancelled']] as const) {
       const { service, provider } = harness(async () => { throw new AgentProviderRequestError({ code, retryable, sanitizedCause: reason, deliveryState: 'response_received', billingState: 'unknown' }) })
       await send(service, await create(service))
-      expect(provider.completeStructuredJson).toHaveBeenCalledTimes(1)
+      expect(provider.completeStructuredJson).toHaveBeenCalledTimes(retryable ? 3 : 1)
     }
   })
 
@@ -617,7 +791,7 @@ describe('unified conversation execution and boundaries', () => {
     ]
     const calls: string[] = []
     const systems: string[] = []
-    const provider = { ...createFakeAgentProvider(), completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => {
+    const provider = { ...createFakeAgentProvider(), supportsNativeTools: false, completeStructuredJson: vi.fn(async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => {
       calls.push(input.userPrompt)
       systems.push(input.systemPrompt)
       return { value: outputs[step++]! }
@@ -854,7 +1028,7 @@ describe('unified conversation execution and boundaries', () => {
     const loop = harness(async () => ({ value: { tool: { name: 'shell', args: { command: 'touch compromised' } } } }))
     const result = await send(loop.service, await create(loop.service))
     expect(loop.calls).toHaveLength(12)
-    expect(result.status, result.error).toBe('failed')
+    expect(result.status, result.error).toBe('paused')
     expect(result.error).toContain('12 次')
     const malformed = harness(async () => ({ value: { question: { options: 'bad' } } }))
     expect((await send(malformed.service, await create(malformed.service))).status).toBe('failed')

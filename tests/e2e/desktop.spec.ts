@@ -1237,14 +1237,19 @@ async function openTopbarProjectMenu(page: Page) {
 }
 
 /** Four primary entries (plan §4.1, Y1): 任务, 知识, 团队, 设置. */
-const PRIMARY_NAV = ['任务', '知识', '团队', '设置'] as const
+const PRIMARY_NAV = ['任务中心', '知识', '团队', '设置'] as const
 
 function primaryNavigation(page: Page) {
   return page.locator('aside[aria-label="Primary navigation"]')
 }
 
 async function clickPrimaryNav(page: Page, name: typeof PRIMARY_NAV[number]) {
-  await primaryNavigation(page).getByRole('button', { name, exact: true }).click()
+  await primaryNavigation(page).getByRole('button', { name: name === '任务中心' ? /^任务中心/u : name, exact: true }).click()
+}
+
+async function resumeTask(page: Page) {
+  await clickPrimaryNav(page, '任务中心')
+  await page.getByRole('button', { name: /^继续任务：/u }).first().click()
 }
 
 const SETTINGS_SECTION_IDS = {
@@ -1328,10 +1333,10 @@ async function createFixtureRun(page: Page) {
   await dialog.getByLabel('标题').fill('重构 GitHub webhook 重试策略')
   await dialog.getByLabel('一句话需求').fill('请先澄清 webhook retry 的失败边界，再设计实现方案。')
   await dialog.getByRole('button', { name: '创建任务', exact: true }).click()
-  await showProjectRuns(page)
-  await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
-  await closeTaskMenu(page)
   await expect(page.getByTestId('toast')).toContainText('任务已创建，尚未调用模型')
+  await clickPrimaryNav(page, '任务中心')
+  await expect(page.getByRole('article', { name: '重构 GitHub webhook 重试策略', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '继续任务：重构 GitHub webhook 重试策略', exact: true }).click()
   await expect(page.getByTestId('workflow-canvas')).toContainText('需求澄清')
   await expect(page.getByTestId('node-inspector')).toContainText('需求澄清')
 }
@@ -1662,7 +1667,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     })
     expect(lightContrast).toBeGreaterThan(4.5)
     // Returning to the task runs nothing; the design generation is still the status row's primary action.
-    await clickPrimaryNav(page, '任务')
+    await resumeTask(page)
     await expectStaysOnWorkbench(page)
     await expect(inspector).toContainText('方案设计')
     await expect(statusRow.getByTestId('complete-design-agent')).toBeVisible()
@@ -1768,13 +1773,9 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.locator('html')).toHaveAttribute('data-theme-preference', 'light')
     await expect(themeToggle).toHaveText('浅色')
 
-    await clickPrimaryNav(page, '任务')
-    await showProjectRuns(page)
-    await expect(page.getByText('当前项目的任务')).toBeVisible()
-    await expect(page.getByTestId('workflow-empty-state')).toContainText('任务阶段')
-    await expect(page.getByTestId('workflow-empty-state')).toContainText('暂无任务')
-    await expect(page.getByTestId('node-inspector-empty')).toContainText('任务详情')
-    await expect(page.getByTestId('node-inspector-empty')).toContainText('选择任务后显示当前步骤、材料、执行记录与审批。')
+    await clickPrimaryNav(page, '任务中心')
+    await expect(page.getByRole('region', { name: '任务中心', exact: true })).toContainText('当前项目还没有任务。')
+    await expect(page.getByRole('tab', { name: '待领取 0', exact: true })).toBeVisible()
 
     await createFixtureRun(page)
 
@@ -1826,15 +1827,16 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(testsSettings.getByLabel('测试命令')).toHaveValue('pnpm test -- --run')
     await expect(testsSettings).toContainText('pnpm test -- --run')
     await expect(testsSettings.getByTestId('test-command-status')).toContainText('已保存')
-    await clickPrimaryNav(page, '任务')
-
-    await showProjectRuns(page)
+    await clickPrimaryNav(page, '任务中心')
     await page.getByLabel('搜索当前项目').fill('nothing matches this')
     await expect(page.getByTestId('search-results')).toContainText('没有匹配结果')
-    await expect(page.getByText('没有匹配的 Run')).toBeVisible()
+    const center = page.getByRole('region', { name: '任务中心', exact: true })
+    await center.getByLabel('搜索任务', { exact: true }).fill('nothing matches this')
+    await expect(center).toContainText('没有符合当前筛选的任务。')
     await page.getByLabel('搜索当前项目').fill('重构 GitHub')
     await expect(page.getByTestId('search-results')).toContainText('重构 GitHub webhook 重试策略')
-    await expect(page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true })).toBeVisible()
+    await center.getByLabel('搜索任务', { exact: true }).fill('重构 GitHub')
+    await expect(center.getByRole('article', { name: '重构 GitHub webhook 重试策略', exact: true })).toBeVisible()
   })
 
   test('supports manager, knowledge, skill, MCP, and test views', async ({ page }) => {
@@ -1851,7 +1853,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     const settings = page.getByTestId('settings-view')
     await expect(settings.getByRole('button', { name: /运行门禁审查/ })).toHaveCount(0)
     await expect(settings.getByRole('button', { name: /生成需求澄清/ })).toHaveCount(0)
-    await clickPrimaryNav(page, '任务')
+    await resumeTask(page)
     await expectStaysOnWorkbench(page)
     const reviewedGateInspector = page.getByTestId('node-inspector')
     await reviewedGateInspector.getByTestId('task-status-row').getByTestId('complete-clarify-agent').click()
@@ -1909,7 +1911,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByLabel('搜索当前项目').fill('')
 
     // The review evidence formerly on Agents is in the Gate's 执行记录, folded (plan Y3).
-    await clickPrimaryNav(page, '任务')
+    await resumeTask(page)
     await expectStaysOnWorkbench(page)
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
     await inspectorTab(page, '执行记录').click()
@@ -2102,3 +2104,61 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(inspector.getByRole('button', { name: /启动|重新运行/ })).toHaveCount(0)
   })
 })
+
+
+for (const width of [760, 1440]) {
+  for (const colorScheme of ['light', 'dark'] as const) {
+    test(`task center preserves selection, scroll and keyboard preview (${width}, ${colorScheme})`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 })
+      await page.emulateMedia({ colorScheme })
+      await installDesktopApi(page, 'configured')
+      await page.addInitScript(() => {
+        const api = window.aiDevFlowDesktop!
+        const original = api.loadState
+        api.listWorkRequests = async () => []
+        api.loadState = async () => {
+          const state = await original()
+          const base = await api.createRun({
+            title: 'Task center fixture', request: '保留完整需求。'.repeat(180),
+            projectId: 'local-project-1', creatorId: 'u-ling', branchName: 'test/task-center',
+          })
+          return { ...state, runs: Array.from({ length: 30 }, (_, index) => ({
+            ...base, id: `center-${index.toString().padStart(2, '0')}`,
+            title: `任务 ${index.toString().padStart(2, '0')}：处理较长的中文任务标题与状态展示`,
+          })) }
+        }
+      })
+      await page.goto('/')
+      await clickPrimaryNav(page, '任务中心')
+      const center = page.getByRole('region', { name: '任务中心', exact: true })
+      await expect(center.getByRole('article')).toHaveCount(30)
+      await center.getByRole('tab', { name: /^进行中/u }).click()
+      await center.getByLabel('搜索任务', { exact: true }).fill('任务')
+      const target = center.getByRole('article', { name: '任务 18：处理较长的中文任务标题与状态展示', exact: true })
+      const title = target.getByRole('button', { name: '任务 18：处理较长的中文任务标题与状态展示', exact: true })
+      await title.focus()
+      await title.press('Enter')
+      const dialog = page.getByRole('dialog', { name: '任务详情', exact: true })
+      await expect(dialog).toBeFocused()
+      await expect(dialog.locator('pre')).toHaveText('保留完整需求。'.repeat(180))
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+      await page.keyboard.press('Tab')
+      await expect(dialog.getByRole('button', { name: '关闭任务详情', exact: true })).toBeFocused()
+      await page.keyboard.press('Shift+Tab')
+      await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeFocused()
+      await page.keyboard.press('Escape')
+      await expect(title).toBeFocused()
+      const scrollBefore = await center.locator('.task-center-list').evaluate(element => element.scrollTop)
+      expect(scrollBefore).toBeGreaterThan(0)
+      await target.getByRole('button', { name: /^继续任务：/u }).click()
+      await expect(page.getByTestId('workflow-canvas')).toBeVisible()
+      await page.getByRole('button', { name: '← 任务中心', exact: true }).click()
+      await expect(center.getByRole('tab', { name: /^进行中/u })).toHaveAttribute('aria-selected', 'true')
+      await expect(center.getByLabel('搜索任务', { exact: true })).toHaveValue('任务')
+      await expect(target).toHaveAttribute('data-selected', 'true')
+      await expect.poll(() => center.locator('.task-center-list').evaluate(element => element.scrollTop)).toBe(scrollBefore)
+      expect(await center.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+      await page.screenshot({ path: testInfo.outputPath(`task-center-${width}-${colorScheme}.png`) })
+    })
+  }
+}

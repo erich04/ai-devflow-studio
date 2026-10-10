@@ -101,6 +101,10 @@ _知识页展示仓库 Markdown 索引与当前任务的引用。同一份文档
 - **Web 审批**：需求确认与方案评审绑定桌面端上传的材料版本；材料版本未同步或已变化时不能批准，但仍可驳回。没有审批权限的成员看到“等待负责人审批”，不显示按钮。
 - **组织**：独立组织、成员关系、邀请、切换、归档/恢复和限定组织范围的 GitHub 仓库分配已实现，由 `DEVFLOW_MULTI_ORGANIZATION_ENABLED=true` 开启。默认入门流程仍为单团队模式。详见[部署指南](docs/guides/multi-organization-deployment.md)。
 - **预算与策略**：在 Web「设置」中查看用量、配置项目策略和预算、创建一次性预算批准；桌面端只读显示团队预算。当权威预算上下文不可用或超出作用范围时，付费 Coding 与 Gate Review 运行时在调用提供方前拒绝继续；受治理的模型调用也覆盖阶段生成和工作台对话。
+
+费用待确认的调用有可靠上界时按上界占用预算；否则当前操作会展示继续确认卡，由 Lead/Owner 明确勾选有限授权。它不修改历史账单，也不关闭预算。对话按步骤保留查询进展，每步最多自动重试两次。完整策略与容量、私有内容备份、会话工具授权及默认关闭的原生工具试点见 [ADR 0027](docs/adr/0027-request-recovery-and-budget-continuation.md)。
+
+桌面一级导航的**任务中心**汇总当前项目的团队请求与本地执行，提供待领取、进行中、待你处理和已完成筛选。点击标题先预览；只有“领取并进入”才领取任务。门禁的内置仓库只读审查可独立于开发执行器选择，无需 OpenCode。
 - **可恢复同步**：持久化发件箱保存脱敏同步任务，支持有限次数重试与重启恢复。桌面端仍是本地 Run 和完整执行记录的权威来源。
 - **GitHub 交付（GitHub Delivery）**：交付意图（Delivery Intent）绑定精确提交、Run 版本、测试、仓库绑定和交付包。发布前必须取得独立签名的 Web 批准。遵循最小权限的 GitHub App 支持推送获准的精确分支，并通过 API 核验 Draft pull request。DevFlow 永不合并代码，也不强制推送、删除远端分支或发布标签。
 
@@ -198,7 +202,7 @@ flowchart TB
 | **有界运行时与协作** | 观察、行动、评估、检查点保存组成有明确限制及恢复能力的执行循环。Supervisor/Specialist 协作增加预定义任务依赖、限定权限、共享预算与工作区归属；与单次阶段生成或审查调用分别建模。 | [`agent-runtime-runtime.ts`](apps/desktop/electron/agent-runtime-runtime.ts)、[`specialist-runtime-coordinator.ts`](apps/desktop/electron/specialist-runtime-coordinator.ts) |
 | **知识与记忆** | 仓库 Markdown 建立索引用于检索和引用。限定范围的记忆经人工或受限测试命令策略提升后可进入上下文。私有会话历史、工具事件和派生摘要单独保存。 | [`repository-knowledge.ts`](apps/desktop/electron/repository-knowledge.ts)、[`coding-context.ts`](apps/desktop/electron/coding-context.ts)、[`agent-memory-human-actions.ts`](apps/desktop/electron/agent-memory-human-actions.ts) |
 | **工具与 MCP** | 主进程管理的注册表校验工具定义与执行权限。可信本地 stdio MCP 安装与 OpenCode 对话临时只读 MCP 桥接各有边界。 | [`native-tool-registry.ts`](apps/desktop/electron/native-tool-registry.ts)、[`local-mcp-client.ts`](apps/desktop/electron/local-mcp-client.ts)、[`workbench-mcp-bridge.ts`](apps/desktop/electron/workbench-mcp-bridge.ts) |
-| **模型调用治理** | 受治理调用在发出前预留预算、记录尝试，再结算实际报告的用量或不确定结果。未完成记账须先对账，再进行下一次计费；运行时与权限限制仍独立生效。 | [`governed-provider.ts`](packages/shared/src/governed-provider.ts)、[`model-call-budget.ts`](apps/api/src/repositories/model-call-budget.ts) |
+| **模型调用治理** | 每次请求预留预算并保存用量；结算上传失败保留有效结果，重放账本。未知费用保留为未知，有可靠上界时占用预算，否则使用明确的有限继续授权；运行时与权限限制仍独立生效。 | [`governed-provider.ts`](packages/shared/src/governed-provider.ts)、[`model-call-budget.ts`](apps/api/src/repositories/model-call-budget.ts) |
 
 <a id="state-ownership-and-collaboration"></a>
 
@@ -348,8 +352,11 @@ corepack pnpm verify
 | `corepack pnpm test:e2e` | 使用隔离演示服务验证浏览器工作台与 Web 交互。 |
 | `corepack pnpm test:electron-smoke` | 真实 Electron 主进程/preload、本地 SQLite 与流程操作。 |
 | `corepack pnpm test:native-coding-electron-smoke` | 通过受控本地模型服务验证 Native Coding 批准、工作树修改、测试与证据。 |
+| `corepack pnpm test:workbench-conversation-electron-smoke` | 真实 Electron 中验证对话、逐步骤恢复、勾选预算继续、原生只读试点与重启历史；模型端点为本地模拟。 |
+| `corepack pnpm test:stage-agent-design-electron` | 真实 OpenCode 与 Electron 生成及修订方案、取消、重试和重启；模型端点为本地模拟。 |
 | `corepack pnpm test:postgres-smoke` | Postgres 迁移、持久化、策略、批准与脱敏同步。 |
 | `corepack pnpm test:organization-postgres` | 在专用测试数据库中验证组织成员、隔离、配对与仓库分配。 |
+| `DEVFLOW_BUDGET_TEST_DATABASE_URL=... corepack pnpm test:budget-postgres` | 在专用 Postgres 的临时 schema 验证并发预算预留、继续授权、重启与迟到用量；需数据库建 schema 权限。 |
 | `corepack pnpm test:docker-smoke` / `corepack pnpm test:docker-lifecycle-smoke` | 容器启动、迁移、数据保留与恢复。 |
 | `corepack pnpm test:v15-github-delivery` | 离线验证受治理分支发布与草稿 PR 交付。 |
 | `corepack pnpm build:desktop-pilot` + `corepack pnpm test:v15-github-delivery-packaged-smoke` | 打包桌面端连接隔离 Postgres 和本地 GitHub 替代服务，验证交付。 |

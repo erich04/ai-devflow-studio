@@ -101,6 +101,8 @@ export type NativeCodingV2DecisionProvider = {
   targetHost?: string
   timeoutMs?: number
   complete(input: {
+    operationKey?: string
+    signal?: AbortSignal
     phase: 'analysis' | 'initial' | 'repair'
     systemPrompt: string
     userPrompt: string
@@ -896,6 +898,7 @@ function permissionForChangeSet(input: {
     title: input.phase === 'initial' ? 'Apply the proposed Coding Change Set' : 'Apply the proposed repair Change Set',
     changeSetId: input.changeSet.id,
     changeSetDigest: input.changeSet.changeSetDigest,
+    filePaths: input.changeSet.changes.map((change) => change.path),
     risk: 'warn',
     reasons: [
       `Review all ${input.changeSet.changes.length} changed file(s) and the exact Change Set digest.`,
@@ -995,13 +998,14 @@ export function createAgentProviderNativeCodingV2DecisionProvider(
         throw new Error('DevFlow Native v2 provider prompt exceeds the hard limit')
       }
       const completed = await provider.completeStructuredJson!({
+        ...(input.operationKey ? { operationKey: input.operationKey } : {}), ...(input.signal ? { signal: input.signal } : {}), purpose: 'native-tool',
         systemPrompt: input.systemPrompt,
         userPrompt: input.userPrompt,
         maxOutputTokens: input.maxOutputTokens,
       })
       const usage = completed.usage
       if (
-        !usage ||
+        !usage || usage.usageCompleteness === 'partial' || Boolean(usage.missingUsageCount) ||
         !Number.isSafeInteger(usage.inputTokens) ||
         !Number.isSafeInteger(usage.outputTokens) ||
         (usage.cacheReadTokens !== undefined && !Number.isSafeInteger(usage.cacheReadTokens)) ||
@@ -1106,6 +1110,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
     ],
   })
 
+  const activeRequests = new Map<string, AbortController>()
   async function runProviderCall<T>(call: {
     codingRunId: string
     assertContextCurrent?: (() => Promise<void>) | undefined
@@ -1157,10 +1162,13 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       retryable: false,
     })
 
+    const controller = new AbortController()
+    activeRequests.set(call.codingRunId, controller)
     let completed: NativeV2ModelResult | undefined
     let result: { value: T; usage: ProviderUsage; requestedAt: string; requestId: string }
     try {
       completed = await input.decisionProvider.complete({
+        operationKey: call.codingRunId, signal: controller.signal,
         phase: call.phase,
         systemPrompt: call.systemPrompt,
         userPrompt: call.userPrompt,
@@ -1229,7 +1237,7 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
         sanitizedCause: failure.sanitizedCause,
       })
       throw failure
-    }
+    } finally { if (activeRequests.get(call.codingRunId) === controller) activeRequests.delete(call.codingRunId) }
     // The Provider has already completed and incurred usage. A local Memory or
     // workflow change must stop execution without misreporting a Provider error.
     await call.assertContextCurrent?.()
@@ -1790,8 +1798,8 @@ export function createNativeCodingExecutorV2(input: CreateNativeCodingExecutorV2
       if (turn.status !== 'terminal') throw new Error('DevFlow Native v2 completion is not terminal')
       return { kind: 'engine_completed', codingRun: finalRun, events, diff, testEvidence: tested.evidence, turn }
     },
-    async cancel() {
-      return undefined
+    async cancel({ codingRun }) {
+      activeRequests.get(codingRun.id)?.abort()
     },
   }
 }

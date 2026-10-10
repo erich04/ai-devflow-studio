@@ -40,17 +40,18 @@ export function ConversationDialog({ title, onClose, busy = false, returnFocus, 
   </div>, document.body)
 }
 
-export function NewConversationDialog({ prompt, providerName, creating, error, onClose, onCreate }: {
+export function NewConversationDialog({ nativeReadOnlyPilotEnabled = false, prompt, providerName, creating, error, onClose, onCreate }: {
+  nativeReadOnlyPilotEnabled?: boolean
   prompt: string; providerName: string; creating: boolean; error: string; onClose: () => void
-  onCreate: (executor: 'direct-provider' | 'opencode') => void
+  onCreate: (executor: 'direct-provider' | 'opencode' | 'native-tools') => void
 }) {
-  const [executor, setExecutor] = useState<'direct-provider' | 'opencode'>('direct-provider')
+  const [executor, setExecutor] = useState<'direct-provider' | 'opencode' | 'native-tools'>('direct-provider')
   return <ConversationDialog title="新建对话" onClose={onClose} busy={creating}>
     <div className="conversation-dialog-body">
       <label className="conversation-executor-field">执行方式<select aria-label="新对话执行方式" value={executor} disabled={creating} onChange={(event) => setExecutor(event.target.value as typeof executor)}>
-        <option value="direct-provider">Direct Provider</option><option value="opencode">OpenCode</option>
+        <option value="direct-provider">Direct Provider</option><option value="opencode">OpenCode</option>{nativeReadOnlyPilotEnabled && <option value="native-tools">Direct Provider · 原生只读工具试点</option>}
       </select></label>
-      <p>{executor === 'opencode' ? '通过本机 OpenCode 查询资料和分析问题；需要已安装 OpenCode。' : '由 DevFlow 直接调用模型，查询资料和分析问题。'}</p>
+      <p>{executor === 'native-tools' ? '自愿试点：仅支持官方 DeepSeek deepseek-flash；协议仍在兼容性验证中，失败时保留记录，不自动切换。' : executor === 'opencode' ? '通过本机 OpenCode 查询资料和分析问题；需要已安装 OpenCode。' : '由 DevFlow 直接调用模型，查询资料和分析问题。'}</p>
       <p>模型：{providerName || '尚未选择，请在设置／模型与执行方式中配置'}。创建后，这段聊天将保持所选执行方式；需要更换时可另建对话。</p>
       {prompt && <div className="conversation-prefill"><strong>预填问题</strong><p>{prompt}</p></div>}
       <p className="meta">创建只会准备好对话和输入草稿，由你点击发送后才调用模型。已有聊天保持不变。</p>

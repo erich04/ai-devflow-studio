@@ -36,6 +36,7 @@ export function DiscussionToggle() {
 
 const discussionPreferenceKey = (projectId: string) => `devflow-workbench-discussion:${projectId}`
 const statusCopy: Record<WorkbenchConversation['status'], string> = {
+  paused: '已暂停，可继续',
   idle: '可以继续提问', running: '正在调查', awaiting_answer: '等待你的回答', failed: '需要重试', interrupted: '上次调查已中断', cancelled: '已停止',
 }
 
@@ -56,6 +57,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   const reader = useRef<HTMLElement>(null)
   const [sessions, setSessions] = useState<WorkbenchConversation[]>([])
   const [active, setActive] = useState('details')
+  const [nativeReadOnlyPilotEnabled, setNativeReadOnlyPilotEnabled] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
@@ -97,11 +99,13 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     const result = await api.workbenchConversation(command)
     if (requestedGeneration !== generation.current || command.projectId !== visibleProject.current) return undefined
     if (result.error) throw new Error(result.error)
+    if (result.nativeReadOnlyPilotEnabled !== undefined) setNativeReadOnlyPilotEnabled(result.nativeReadOnlyPilotEnabled)
     if (command.type === 'list' && !['details', 'new-pending'].includes(activeRef.current) && !result.conversations.some((item) => item.id === activeRef.current && item.isOpen)) setActive('details')
     if (splitDetails && activeRef.current === 'details') {
       const lastOpen = result.conversations.filter((item) => item.isOpen).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
       if (lastOpen) setActive(lastOpen.id)
     }
+    if (command.type === 'read_content') return result
     setSessions((current) => result.conversations.map((incoming) => {
       const existing = current.find((item) => item.id === incoming.id)
       return existing && existing.version > incoming.version ? existing : incoming
@@ -124,7 +128,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
 
   useEffect(() => {
     generation.current++
-    setSessions([]); setShowHistory(false); setError(''); setCreationRequest(null); setTabMenu(null); setDetailsTarget(null)
+    setNativeReadOnlyPilotEnabled(false); setSessions([]); setShowHistory(false); setError(''); setCreationRequest(null); setTabMenu(null); setDetailsTarget(null)
     setReferenceStore({}); pendingReference.current = null
     let restored = 'details'
     try { restored = projectId ? localStorage.getItem(`devflow-workbench-tab:${projectId}`) ?? 'details' : 'details' } catch { /* optional UI preference */ }
@@ -163,7 +167,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     setError('')
     setCreationRequest({ projectId, prompt })
   }, [api, projectId])
-  const create = async (executor: 'direct-provider' | 'opencode') => {
+  const create = async (executor: 'direct-provider' | 'opencode' | 'native-tools') => {
     if (!projectId || creationRequest?.projectId !== projectId || creatingRef.current) return
     const currentGeneration = generation.current
     const previousActive = active
@@ -271,7 +275,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     </div>
     {tabMenu && menuSession && <ConversationTabMenu key={menuSession.id} target={tabMenu} onClose={closeMenu} onDetails={() => { setDetailsTarget(tabMenu); setTabMenu(null) }} />}
     {detailsTarget && detailsSession && <ConversationDetailsDialog key={detailsSession.id} session={detailsSession} projectName={projectName ?? '当前项目'} providerName={providerName} statusLabel={statusCopy[detailsSession.status]} returnFocus={detailsTarget.trigger} onClose={() => setDetailsTarget(null)} onRename={(title) => runCommand({ type: 'update', projectId: detailsSession.localProjectId, conversationId: detailsSession.id, title })} />}
-    {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError(''); pendingReference.current = null } }} onCreate={(executor) => void create(executor)} />}
+    {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog nativeReadOnlyPilotEnabled={nativeReadOnlyPilotEnabled} prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError(''); pendingReference.current = null } }} onCreate={(executor) => void create(executor)} />}
     {error && !creationRequest && <div className="conversation-error" role="alert">{error}<button aria-label="关闭会话提示" onClick={() => setError('')}><X size={14} /></button></div>}
     {showHistory && <section className="conversation-history" aria-label="会话历史记录">
       <div className="row"><strong>会话历史</strong><button className="workspace-icon" onClick={() => setShowHistory(false)} aria-label="关闭会话历史"><X size={16} /></button></div>
@@ -281,7 +285,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
         if (!projectId) return
         const result = await runCommand({ type: 'update', projectId, conversationId: item.id, isOpen: true })
         if (result) { activate(item.id); setShowHistory(false) }
-      }}><span>{item.title}</span><small>{statusCopy[item.status]} · {item.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {new Date(item.updatedAt).toLocaleString()}</small></button>)}
+      }}><span>{item.title}</span><small>{statusCopy[item.status]} · {item.executor === 'opencode' ? 'OpenCode' : item.executor === 'native-tools' ? 'Direct Provider · 原生工具试点' : 'Direct Provider'} · {new Date(item.updatedAt).toLocaleString()}</small></button>)}
     </section>}
     <div id={splitDetails ? 'conversation-empty' : 'details-panel'} role={splitDetails ? 'region' : 'tabpanel'} aria-label={splitDetails ? '对话空状态' : undefined} aria-labelledby={splitDetails ? undefined : 'details-tab'} hidden={active !== 'details' || showHistory} className="workspace-details">
       {splitDetails ? <p className="empty-note">点击 ＋ 新建对话，或从历史继续。浏览节点不会切换会话。</p> : children}
@@ -305,7 +309,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
 function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError, references, onReferencesChange }: {
   modelReadinessError?: string | undefined
   session: WorkbenchConversation; runs: WorkflowRun[]; providerId: string; providerName: string
-  command: (input: ConversationCommand) => Promise<unknown>
+  command: (input: ConversationCommand) => Promise<import('../electron/workbench-conversation-contract').ConversationResponse | undefined>
   onNavigate: (action: ConversationAction) => void; onConfigure: () => void
   references: DiscussionReference[]; onReferencesChange: (next: DiscussionReference[]) => void
 }) {
@@ -352,10 +356,10 @@ function ConversationView({ session, runs, providerId, providerName, command, on
         <div className="conversation-avatar"><MessageCircle /></div><h3>从一个问题开始</h3><p>讨论整个项目，也可以深入任意节点。每个 Tab 保留自己的聊天历史。</p>
         {['现在进行到哪里了，下一步做什么？', '结合项目代码，帮我澄清这次需求。', '哪些测试或审批还没有完成？'].map((suggestion) => <button key={suggestion} onClick={() => { updateInput(suggestion); textarea.current?.focus() }}>{suggestion}<ArrowUp size={14} /></button>)}
       </div>}
-      {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} onPublish={() => void command({ type: 'publish', ...scope, messageId: message.id })} />)}
+      {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} readContent={async (field, offset) => (await command({ type: 'read_content', ...scope, messageId: message.id, field, offset }))?.contentPage} onPublish={() => void command({ type: 'publish', ...scope, messageId: message.id })} />)}
       {busy && <p className="conversation-activity" role="status"><span className="conversation-running-dot" />正在调用 {providerName || 'Provider'} 调查；可以停止。</p>}
       {modelReadinessError && <div className="conversation-error" role="status">{modelReadinessError}<button className="text-button" onClick={onConfigure}>打开项目模型设置</button></div>}
-      {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending || Boolean(modelReadinessError)} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />重试调查</button>}</div>}
+      {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted', 'paused'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending || Boolean(modelReadinessError)} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />{session.status === 'paused' ? '继续当前步骤' : '重试这一步'}</button>}</div>}
       {session.failure && <details className="conversation-tool"><summary>本次失败诊断</summary><p>阶段：{session.failure.phase} · 代码：{session.failure.code}{session.failure.reason ? ` · 原因：${session.failure.reason}` : ''}{session.failure.httpStatus ? ` · HTTP ${session.failure.httpStatus}` : ''}</p></details>}
       <div ref={messagesEnd} />
     </div>
@@ -380,7 +384,7 @@ function ConversationView({ session, runs, providerId, providerName, command, on
   </>
 }
 
-function ReasoningView({ message }: { message: ConversationMessage }) {
+function ReasoningView({ message, readContent }: { message: ConversationMessage; readContent: ContentReader }) {
   const reasoning = message.reasoning!
   const [expanded, setExpanded] = useState<boolean | undefined>()
   const content = useRef<HTMLDivElement>(null)
@@ -399,26 +403,28 @@ function ReasoningView({ message }: { message: ConversationMessage }) {
       <div ref={content} className="reasoning-content" onScroll={(event) => { const element = event.currentTarget; follow.current = element.scrollHeight - element.scrollTop - element.clientHeight < 40 }}>
         {reasoning.text || (streaming ? '已发起请求，等待模型返回推理内容…' : reasoning.status === 'interrupted' ? '本次调用已中断，尚未收到可展示的推理内容。' : '模型未返回可展示的推理内容。')}
       </div>
+      {message.contentLengths?.reasoning && <ContentPages field="reasoning" readContent={readContent} />}
       <p className="reasoning-note">模型生成时的推理记录；最终结论以回答为准。</p>
     </div>
   </section>
 }
 
-function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish }: {
-  message: ConversationMessage; busy: boolean; targetLabel: string; onAnswer: (answer: string) => void; onNavigate: (action: ConversationAction) => void; onPublish: () => void
+function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish, readContent }: {
+  message: ConversationMessage; readContent: ContentReader; busy: boolean; targetLabel: string; onAnswer: (answer: string) => void; onNavigate: (action: ConversationAction) => void; onPublish: () => void
 }) {
   // Saving a proposal first shows where it goes and what is saved (plan W8).
   const [confirmingPublish, setConfirmingPublish] = useState(false)
-  if (message.reasoning) return <>{message.failure && <p className="meta">{message.text}</p>}<ReasoningView message={message} /></>
+  if (message.reasoning) return <>{message.failure && <p className="meta">{message.text}</p>}<ReasoningView message={message} readContent={readContent} /></>
   if (message.role === 'tool') return <details className="conversation-tool"><summary>{message.text}</summary>{message.citations?.map((source) => <pre key={source.id}>{source.excerpt}</pre>)}</details>
   return <article className={`conversation-message conversation-message--${message.role}`}>
     <span className="message-author">{message.role === 'user' ? '你' : 'DevFlow'}</span>
     <ConversationBody message={message} />
+    {message.contentLengths?.text && <ContentPages field="text" readContent={readContent} />}
     {message.question && <div className="conversation-question"><span className="meta">{message.question.resolvedBy === 'proposal_saved' ? '已保存提案' : message.question.answeredAt ? '已收到后续回复' : '需要你补充'}</span><strong>{message.question.prompt}</strong>
       {!message.question.answeredAt && <><div className="question-options">{message.question.options.map((option) => <button className="ghost-button" key={option} disabled={busy} onClick={() => onAnswer(option)}>{option}</button>)}</div><button className="text-button" disabled={busy} onClick={() => onAnswer('')}>输入回答</button><small>点击选项填入输入框，也可以直接输入自己的回答。</small></>}
     </div>}
     {!!message.actions?.length && <div className="conversation-actions">{message.actions.map((action, index) => <button className="ghost-button" key={`${action.runId}-${action.nodeId}-${index}`} onClick={() => onNavigate(action)}>{action.label} ↗</button>)}</div>}
-    {message.draft && <div className="conversation-proposal"><span className="pill soft">{message.draft.publishedArtifactId ? '已保存 · 待确认' : '仅本会话草稿'}</span><strong>{message.draft.title}</strong><pre>{message.draft.content}</pre><p className="meta">目标：{targetLabel}。保存后其他会话可以查询；仍需在节点形成正式产物。</p>
+    {message.draft && <div className="conversation-proposal"><span className="pill soft">{message.draft.publishedArtifactId ? '已保存 · 待确认' : '仅本会话草稿'}</span><strong>{message.draft.title}</strong><pre>{message.draft.content}</pre>{message.contentLengths?.draft && <ContentPages field="draft" readContent={readContent} />}<p className="meta">目标：{targetLabel}。保存后其他会话可以查询；仍需在节点形成正式产物。</p>
       {message.draft.inputReceipt && <details><summary>正文与验收覆盖 · {message.draft.inputReceipt.coverage.length} 项</summary><p className="meta">关键正文已完整送达本次模型调用。以下是模型给出的对应关系，请核对含义是否准确。</p>{message.draft.inputReceipt.coverage.map((row) => <div key={row.criterionId}><blockquote>{row.sourceQuote}</blockquote><p>提案对应：{row.proposalQuote}</p></div>)}</details>}
       {message.draft.publishedArtifactId ? (
         <p className="meta" role="status" data-testid="proposal-saved-note">提案已保存，尚未更新正式需求；流程不会推进。它在目标步骤的「材料与版本」中标为「讨论提案（待确认）」。</p>
@@ -437,4 +443,15 @@ function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavig
     </div>}
     {!!message.citations?.length && <details className="conversation-sources"><summary>查询依据 · {message.citations.length}</summary>{message.citations.map((citation) => <div key={citation.id}><strong>{citation.label}</strong><small>读取于 {new Date(citation.observedAt).toLocaleString()}</small><pre>{citation.excerpt}</pre></div>)}</details>}
   </article>
+}
+
+
+type ContentReader = (field: 'text' | 'draft' | 'reasoning', offset: number) => Promise<import('../electron/workbench-conversation-contract').ConversationResponse['contentPage']>
+function ContentPages({ field, readContent }: { field: 'text' | 'draft' | 'reasoning'; readContent: ContentReader }) {
+  const [page, setPage] = useState<Awaited<ReturnType<ContentReader>>>()
+  const [loading, setLoading] = useState(false)
+  async function read(offset: number) { setLoading(true); try { setPage(await readContent(field, offset)) } finally { setLoading(false) } }
+  return <details className="conversation-content-pages"><summary onClick={() => { if (!page && !loading) void read(0) }}>预览已省略部分内容 · 分页阅读完整原文</summary>
+    {page && <><p>{page.offset + 1}–{page.offset + page.text.length} / {page.total} 字符</p><pre>{page.text}</pre><button disabled={loading || page.offset === 0} onClick={() => void read(Math.max(0, page.offset - 16_384))}>上一页</button><button disabled={loading || page.nextOffset === null} onClick={() => { if (page.nextOffset !== null) void read(page.nextOffset) }}>下一页</button></>}
+  </details>
 }

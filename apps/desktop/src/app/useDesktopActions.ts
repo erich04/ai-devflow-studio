@@ -4,6 +4,7 @@ import {
   buildClarificationReviewBundle,
   buildDesignRevisionIdentity,
   resolveDesignGateMaterial,
+  resolveDesignRevisionInput,
   canRunCodingAgentOnNode,
   canApproveGate,
   createWorkflowRunFromRequest,
@@ -571,6 +572,39 @@ export function useDesktopActions(input: {
     }
   }
 
+  async function generateSelectedDesignRevision(proposalIds: string[]) {
+    if (!selectedRun || !selectedNode || !currentUser) return
+    if (!desktopApi) { setToast(browserPreviewWorkflowWriteMessage); return }
+    if (blockIfInspectorWriteInFlight()) return
+    const providerId = input.stageProviderId ?? selectedAgentProviderId
+    if (!providerId) { setToast('请先选择本次修订使用的模型'); return }
+    const gate = selectedRun.nodes.find((node) => node.id === selectedRun.currentNodeId)
+    if (!gate || gate.id !== selectedNode.id) { setToast('请先返回当前方案评审步骤'); return }
+    const material = resolveDesignGateMaterial({ run: selectedRun, gateNode: gate, artifacts })
+    if (material.state !== 'ready') { setToast(material.message); return }
+    const pending = startPendingInspectorAction('generateDesignRevision', selectedRun, gate, '正在根据旧方案和提案生成新版…')
+    try {
+      const proposals = proposalIds.map((id) => {
+        const proposal = artifacts.find((item) => item.id === id)
+        if (!proposal) throw new Error('提案已变化，请重新选择')
+        return proposal
+      })
+      const designRevision = { expectedRunVersion: selectedRun.version, previous: await buildDesignRevisionIdentity(material.artifact),
+        proposals: await Promise.all(proposals.map(buildDesignRevisionIdentity)) }
+      await resolveDesignRevisionInput({ run: selectedRun, gateNodeId: gate.id, artifacts, request: designRevision })
+      const result = await desktopApi.completeWorkflowAgentNode({ runId: selectedRun.id, nodeId: gate.id,
+        userId: currentUser.id, userName: currentUser.name, executor: stageAgentExecutorKind, providerId, designRevision })
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
+      setActiveView('workbench')
+      setToast('新版方案已生成，旧版已保留。请核对新版后再确认方案评审。')
+    } catch (error) {
+      try { applyLocalExecutionState(await desktopApi.loadState()) } catch { /* Preserve the original error. */ }
+      setToast(ipcErrorMessage(error, '生成新版方案失败，原方案和进度保持不变'))
+    } finally { clearPendingInspectorAction(pending) }
+  }
+
   async function requestSelectedClarificationChanges(reason: string) {
     if (
       !desktopApi?.requestClarificationChanges || !selectedRun || !selectedNode ||
@@ -824,7 +858,7 @@ export function useDesktopActions(input: {
         requestedBy: currentUser.id,
         runtime: 'electron',
         providerId: selectedAgentProviderId,
-        ...(knowledgeReviewExecutor === 'local-agent' ? { executor: 'local-agent' as const } : {}),
+        ...(knowledgeReviewExecutor !== 'direct-provider' ? { executor: knowledgeReviewExecutor } : {}),
         ...(previousReviewId ? { previousReviewId } : {}),
         ...(runtimeBudgetApprovalId.trim()
           ? { runtimeBudgetApprovalId: runtimeBudgetApprovalId.trim() }
@@ -940,7 +974,7 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function replyCodingPermission(decision: CodingPermissionDecision['decision']) {
+  async function replyCodingPermission(decision: CodingPermissionDecision['decision'], scope?: 'once' | 'session') {
     if (!desktopApi || !pendingCodingPermission || !currentUser) {
       return
     }
@@ -956,6 +990,7 @@ export function useDesktopActions(input: {
         codingRunId: pendingCodingPermission.codingRunId,
         decidedBy: currentUser.id,
         decision,
+        ...(scope ? { scope } : {}),
         comment: decision === 'approved' ? 'Approved from DevFlow Agent Workbench.' : 'Rejected from DevFlow Agent Workbench.',
       })
       applyLocalExecutionState(await desktopApi.loadState())
@@ -1589,6 +1624,7 @@ export function useDesktopActions(input: {
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
+    generateSelectedDesignRevision,
     requestSelectedClarificationChanges,
     selectLocalProject,
     saveTestCommand,

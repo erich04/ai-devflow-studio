@@ -75,6 +75,7 @@ export type NativeCodingDecisionProvider = {
   billing: 'no_cost' | 'metered'
   decide(input: {
     requestId: string
+    signal?: AbortSignal
     objectiveDigest: string
     contextDigest: string
     brief: string
@@ -139,6 +140,7 @@ export function createAgentProviderNativeCodingDecisionProvider(
     async decide(input) {
       const planning = input.phase === 'plan'
       const completed = await provider.completeStructuredJson!({
+        operationKey: input.requestId, ...(input.signal ? { signal: input.signal } : {}), purpose: 'native-tool',
         systemPrompt: planning
           ? [
               'Return only one exact JSON object with keys stateVersion, read, summary.',
@@ -517,6 +519,13 @@ function nativeCodingAttempt(runtime: AgentRuntimeState): 1 | 2 {
 export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInput): CodingExecutor {
   const clock = input.clock ?? (() => new Date().toISOString())
   const createId = input.createId ?? ((prefix) => `${prefix}-${randomUUID()}`)
+  const activeRequests = new Map<string, AbortController>()
+  async function decide(request: Parameters<NativeCodingDecisionProvider['decide']>[0]) {
+    const controller = new AbortController()
+    activeRequests.set(request.requestId, controller)
+    try { return await input.decisionProvider.decide({ ...request, signal: controller.signal }) }
+    finally { if (activeRequests.get(request.requestId) === controller) activeRequests.delete(request.requestId) }
+  }
   const registryInstanceId = randomUUID()
   let nativeToolSequence = 0
   const registry = input.nativeToolRegistry ?? createNativeToolRegistry({
@@ -673,7 +682,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         requiresPermission: false,
       })
       await startInput.runtimeContext.assertContextCurrent?.()
-      const plannedRead = parsePlannedRead(await input.decisionProvider.decide({
+      const plannedRead = parsePlannedRead(await decide({
         requestId: request.id,
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
@@ -771,7 +780,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
         requiresPermission: false,
       })
       await startInput.runtimeContext.assertContextCurrent?.()
-      const pending = parsePlannedEdit(await input.decisionProvider.decide({
+      const pending = parsePlannedEdit(await decide({
         requestId: request.id,
         objectiveDigest: request.objectiveDigest,
         contextDigest: request.contextDigest,
@@ -1227,7 +1236,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
             testSummary: redactSensitiveText(testValue!.summary).value,
           }
           await continuationInput.runtimeContext.assertContextCurrent?.()
-          const repair = parsePlannedEdit(await input.decisionProvider.decide({
+          const repair = parsePlannedEdit(await decide({
             requestId: continuationInput.requestId,
             objectiveDigest: instructionDigest(context.codingRun.userInstruction),
             contextDigest: runtime.contextDigest,
@@ -1617,6 +1626,7 @@ export function createNativeCodingExecutor(input: CreateNativeCodingExecutorInpu
       }
     },
     async cancel({ codingRun }) {
+      activeRequests.get(codingRun.id)?.abort()
       const runtimeId = `${RUNTIME_PREFIX}${codingRun.id}`
       registry.cancelRuntime(runtimeId)
       const runtime = await input.store.getAgentRuntime(runtimeId)

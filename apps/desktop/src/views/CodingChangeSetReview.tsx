@@ -1,3 +1,4 @@
+import { SessionPermissionChoice } from '../components/CodingSessionPermissions'
 import { CheckCircle2 } from 'lucide-react'
 import type { CodingAgentRun, CodingPermissionDecision, CommandRiskLevel, ManagedCodingWorkspace } from '@ai-devflow/shared'
 import { codingPermissionDecisionState, type CodingPermissionProjection } from '../app/coding-runtime-action-projection'
@@ -30,7 +31,7 @@ export function CodingChangeSetReview({
   run: CodingAgentRun
   workspace: ManagedCodingWorkspace | undefined
   isReplying: boolean
-  onDecision: (decision: CodingPermissionDecision['decision']) => void
+  onDecision: (decision: CodingPermissionDecision['decision'], scope?: 'once' | 'session') => void
 }) {
   const isAcceptance = permission.kind === 'change-acceptance'
   const preview = permission.previewVerified ? permission.preview : undefined
@@ -138,6 +139,8 @@ export function CodingChangeSetReview({
           </button>
         </div>
       </div>
+      {!isAcceptance && <SessionPermissionChoice request={permission.request} disabled={approvalDisabled}
+        onAllow={() => onDecision('approved', 'session')} />}
     </section>
   )
 }

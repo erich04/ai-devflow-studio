@@ -59,7 +59,13 @@ export async function settleModelCallWithRecovery(input: {
   const effective = buildModelCostRecords([], [previous], events, new Date().toISOString())[0]!
   const correction = [...events].reverse().find(event => event.kind === 'reconciliation')
   const cost = settledModelCallCost(previous, settlement)
-  const matches = correction?.kind === 'reconciliation' && effective.unresolvedConflictIds.length === 0 &&
+  const fillsUnknown = !correction && !effective.unresolvedConflictIds.length && effective.costUsd === null &&
+    cost !== null && ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheMissTokens'].every(key => {
+      const field = key as keyof NonNullable<ModelCallSettlement['usage']>
+      const known = effective.usage?.[field], next = settlement.usage?.[field]
+      return known === undefined || (effective.usage?.usageCompleteness === 'partial' ? typeof known === 'number' && typeof next === 'number' && next >= known : known === next)
+    })
+  const matches = fillsUnknown || correction?.kind === 'reconciliation' && effective.unresolvedConflictIds.length === 0 &&
     (correction.executionStatus !== 'not_sent' || settlement.state === 'not_sent') &&
     (cost === null || Math.abs(correction.costUsd - cost) <= 1e-9) &&
     ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheMissTokens'].every(key => {

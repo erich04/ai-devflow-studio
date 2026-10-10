@@ -19,22 +19,25 @@ export function useWorkRequestInbox({
   localProjectId,
   isPaired,
   onMaterialized,
+  authorityKey = '',
 }: {
   desktopApi: WorkRequestDesktopApi | null
   localProjectId: string
   isPaired: boolean
+  authorityKey?: string
   onMaterialized: (
     result: Awaited<ReturnType<WorkRequestDesktopApi['materializeWorkRequest']>>,
   ) => void | Promise<void>
 }) {
   const [workRequests, setWorkRequests] = useState<WorkRequest[]>([])
   const [isLoading, setIsLoading] = useState(false)
+  const [resolvedContext, setResolvedContext] = useState<{ desktopApi: WorkRequestDesktopApi; localProjectId: string; authorityKey: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [materializingId, setMaterializingId] = useState<string | null>(null)
   const materializationRef = useRef<object | null>(null)
   const requestSequenceByProjectRef = useRef<Record<string, number>>({})
-  const activeContextRef = useRef({ desktopApi, isPaired, localProjectId })
-  activeContextRef.current = { desktopApi, isPaired, localProjectId }
+  const activeContextRef = useRef({ desktopApi, isPaired, localProjectId, authorityKey })
+  activeContextRef.current = { desktopApi, isPaired, localProjectId, authorityKey }
 
   const requestWorkRequests = useCallback(
     async (
@@ -49,6 +52,7 @@ export function useWorkRequestInbox({
         return (
           activeContext.desktopApi === requestedDesktopApi &&
           activeContext.isPaired &&
+          activeContext.authorityKey === authorityKey &&
           activeContext.localProjectId === requestedLocalProjectId &&
           requestSequenceByProjectRef.current[requestedLocalProjectId] === sequence
         )
@@ -73,10 +77,11 @@ export function useWorkRequestInbox({
       } finally {
         if (isCurrentRequest()) {
           setIsLoading(false)
+          setResolvedContext({ desktopApi: requestedDesktopApi, localProjectId: requestedLocalProjectId, authorityKey })
         }
       }
     },
-    [],
+    [authorityKey],
   )
 
   useEffect(() => {
@@ -85,6 +90,7 @@ export function useWorkRequestInbox({
 
     if (!desktopApi || !isPaired || !isExactIdentifier(localProjectId)) {
       setWorkRequests([])
+      setResolvedContext(null)
       setIsLoading(false)
       setError(null)
       return undefined
@@ -125,6 +131,7 @@ export function useWorkRequestInbox({
           materializationRef.current === operation &&
           activeContext.desktopApi === desktopApi &&
           activeContext.isPaired &&
+          activeContext.authorityKey === authorityKey &&
           activeContext.localProjectId === localProjectId
         )
       }
@@ -156,13 +163,15 @@ export function useWorkRequestInbox({
         }
       }
     },
-    [desktopApi, isPaired, localProjectId, onMaterialized, refresh],
+    [desktopApi, isPaired, localProjectId, onMaterialized, refresh, authorityKey],
   )
 
+  const resolved = resolvedContext?.desktopApi === desktopApi && resolvedContext?.localProjectId === localProjectId && resolvedContext?.authorityKey === authorityKey
+  const canLoad = Boolean(desktopApi && isPaired && isExactIdentifier(localProjectId))
   return {
-    workRequests,
-    isLoading,
-    error,
+    workRequests: resolved ? workRequests : [],
+    isLoading: canLoad && (isLoading || !resolved),
+    error: resolved ? error : null,
     materializingId,
     refresh,
     materialize,

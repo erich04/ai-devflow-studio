@@ -612,6 +612,7 @@ export function parseBudgetGuardDecision(value: unknown): BudgetGuardDecision {
   }
 
   return {
+    ...(decision.continuationEligible === true ? { continuationEligible: true } : {}),
     status: status as BudgetGuardDecision['status'],
     blocksRun,
     currentSpendUsd,
@@ -690,6 +691,7 @@ export function evaluateRuntimeBudgetGuard(
     projectedCostUsd: input.projectedCostUsd,
     limitUsd: input.policy.monthlyLimitUsd,
     approvalRequiredRole: 'lead',
+    continuationEligible: true,
     reason: 'Project runtime budget would be exceeded; lead approval is required before calling the real provider.',
   }
 }

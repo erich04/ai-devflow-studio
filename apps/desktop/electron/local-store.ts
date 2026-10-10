@@ -1,3 +1,4 @@
+import { ConversationContentStore } from './conversation-content-store.js'
 import type { ModelCallSettlement, ModelCallAccountingScope, ModelCallSettlementReceipt, StoredModelCallSettlement } from '@ai-devflow/shared'
 import { storedModelCallSettlement } from './model-cost-recovery'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
@@ -243,6 +244,8 @@ export type LocalStoreOptions = {
 
 export type WorkflowMutation = {
   expectedRun: WorkflowRun
+  /** Source snapshots checked inside the serialized commit, before any writes. */
+  expectedArtifacts?: readonly Artifact[]
   run: WorkflowRun
   artifacts?: readonly Artifact[]
   events?: readonly AgentEvent[]
@@ -702,7 +705,7 @@ export type TerminalizeGateCommandAcknowledgementResult =
 
 export type WorkflowMutationCommitResult =
   | { committed: true }
-  | { committed: false; reason: 'run_not_found' | 'stale_run' }
+  | { committed: false; reason: 'run_not_found' | 'stale_run' | 'stale_artifact' }
 
 export type EnqueueRemoteSyncOperationResult =
   | { enqueued: true; operation: RemoteSyncOperation }
@@ -813,6 +816,8 @@ export type {
 } from './local-mcp-store'
 
 export type LocalStore = {
+  appendWorkbenchResponseChunk?(conversationId: string, requestId: string, channel: 'content' | 'reasoning', text: string): Promise<void>
+  readWorkbenchResponseReasoning?(conversationId: string, requestId: string): Promise<string | undefined>
   listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]>
   saveWorkbenchConversation(conversation: WorkbenchConversation, expectedVersion: number, artifact?: Artifact): Promise<boolean>
   getSpecialistTaskAuthorityStoreIdentity(): object
@@ -3738,6 +3743,7 @@ function assertWorkflowMutationScope(mutation: WorkflowMutation): void {
   }
   const runId = mutation.run.id
   if (
+    mutation.expectedArtifacts?.some((artifact) => artifact.runId !== runId) ||
     mutation.artifacts?.some((artifact) => artifact.runId !== runId) ||
     mutation.events?.some((event) => event.runId !== runId) ||
     mutation.testEvidence?.some((evidence) => evidence.runId !== runId) ||
@@ -4552,19 +4558,28 @@ class SqlJsLocalStore implements LocalStore {
     private readonly dbPath: string,
   ) {}
 
+  private get conversationContent() { return new ConversationContentStore(`${this.dbPath}.contents`) }
+
+  async appendWorkbenchResponseChunk(conversationId: string, requestId: string, channel: 'content' | 'reasoning', text: string): Promise<void> {
+    await this.conversationContent.appendStream(conversationId, requestId, channel, text)
+  }
+  async readWorkbenchResponseReasoning(conversationId: string, requestId: string): Promise<string | undefined> {
+    return this.conversationContent.readStreamReasoning(conversationId, requestId)
+  }
   async listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]> {
-    return selectJson<WorkbenchConversation>(this.db,
+    const rows = selectJson<unknown>(this.db,
       `select json from workbench_conversations ${projectId ? 'where local_project_id = ?' : ''} order by updated_at desc, id`,
       projectId ? [projectId] : [])
+    return Promise.all(rows.map(row => this.conversationContent.decode<WorkbenchConversation>(row)))
   }
 
   async saveWorkbenchConversation(conversation: WorkbenchConversation, expectedVersion: number, artifact?: Artifact): Promise<boolean> {
-    const previous = selectJson<WorkbenchConversation>(this.db, 'select json from workbench_conversations where id = ?', [conversation.id])[0]
+    const previous = await this.conversationContent.decode<WorkbenchConversation | undefined>(selectJson<unknown>(this.db, 'select json from workbench_conversations where id = ?', [conversation.id])[0])
     if ((previous?.version ?? 0) !== expectedVersion) return false
     if (conversation.version !== expectedVersion + 1 || (previous && previous.localProjectId !== conversation.localProjectId)) throw new Error('Invalid conversation revision')
     validateConversationContext(conversation, previous)
     if (!selectJson<LocalProject>(this.db, 'select json from local_projects where id = ?', [conversation.localProjectId]).length) throw new Error('Conversation project not found')
-    if (JSON.stringify(conversation).length > 2000000) throw new Error('会话已达到存储上限，请新建会话。')
+    const stored = await this.conversationContent.encode(conversation.id, conversation)
     if (artifact) {
       const run = readWorkflowRuns(this.db).find((candidate) => candidate.id === artifact.runId)
       if (!run || run.projectId !== conversation.localProjectId || !run.nodes.some((node) => node.id === artifact.nodeId) || artifact.kind !== 'log') throw new Error('Invalid conversation publication target')
@@ -4573,7 +4588,7 @@ class SqlJsLocalStore implements LocalStore {
     }
     this.db.run(`insert into workbench_conversations (id, local_project_id, version, updated_at, json) values (?, ?, ?, ?, ?)
       on conflict(id) do update set version = excluded.version, updated_at = excluded.updated_at, json = excluded.json`,
-      [conversation.id, conversation.localProjectId, conversation.version, conversation.updatedAt, JSON.stringify(conversation)])
+      [conversation.id, conversation.localProjectId, conversation.version, conversation.updatedAt, JSON.stringify(stored)])
     await this.persist()
     return true
   }
@@ -11463,6 +11478,11 @@ class SqlJsLocalStore implements LocalStore {
       return { committed: false, reason: 'stale_run' }
     }
 
+    for (const expected of mutation.expectedArtifacts ?? []) {
+      const current = selectJson<Artifact>(this.db, 'select json from artifacts where id = ? limit 1', [expected.id])[0]
+      if (!current || !isDeepStrictEqual(current, expected)) return { committed: false, reason: 'stale_artifact' }
+    }
+
     const snapshot = this.db.export()
     const nextRun = normalizeWorkflowRunProgress(mutation.run)
     let transactionOpen = false
@@ -14071,6 +14091,8 @@ class SqlJsLocalStore implements LocalStore {
 // Direct methods access state or handle in-memory authority/lifecycle; Memory retrieval is
 // durable because it also records expiry and retrieval audit state.
 const LOCAL_STORE_METHOD_EXECUTION = {
+  appendWorkbenchResponseChunk: 'direct',
+  readWorkbenchResponseReasoning: 'direct',
   listWorkbenchConversations: 'direct',
   saveWorkbenchConversation: 'durable',
   getSpecialistTaskAuthorityStoreIdentity: 'direct',

@@ -2,6 +2,7 @@ import type { WorkbenchConversationApi } from '../electron/workbench-conversatio
 import type {
   AgentEvent,
   DesignRevisionIdentity,
+  DesignRevisionRequest,
   AgentProviderConfig,
   AgentReviewResult,
   AgentReviewExecutionResult,
@@ -127,6 +128,7 @@ export type CompleteWorkflowAgentNodeInput = {
   userName: string
   providerId?: string
   executor?: StageAgentExecutorKind
+  designRevision?: DesignRevisionRequest
 }
 
 export type ClarificationRevisionIdentity = {
@@ -211,7 +213,7 @@ export type RunKnowledgeReviewInput = {
   runtimeBudgetApprovalId?: string
   previousReviewId?: string
   /** `local-agent`: read-only OpenCode session that may inspect the repository. */
-  executor?: 'direct-provider' | 'local-agent'
+  executor?: StageAgentExecutorKind
 }
 
 export type RunKnowledgeReviewResult = AgentReviewExecutionResult & {
@@ -265,6 +267,8 @@ export type DevFlowDesktopApi = {
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
   listCredentialAccess?: () => Promise<import('../electron/credential-access').CredentialAccessRecord[]>
   cancelCredentialAccess?: (id: string) => Promise<boolean>
+  modelBudgetContinuation?: (input: { action: 'list' } | { action: 'respond'; id: string; expectedVersion: string; confirmed: boolean }) => Promise<Array<import('../electron/model-budget-continuation').PendingBudgetContinuation>>
+  onModelBudgetContinuationUpdated?: (listener: (cards: Array<import('../electron/model-budget-continuation').PendingBudgetContinuation>) => void) => () => void
   onModelBudgetUpdated?: (listener: (event: { projectId: string; providerId: string; decision: import('@ai-devflow/shared').BudgetGuardDecision }) => void) => () => void
   onCredentialAccessUpdated?: (listener: (records: import('../electron/credential-access').CredentialAccessRecord[]) => void) => () => void
   workbenchConversation?: WorkbenchConversationApi
@@ -429,8 +433,10 @@ export type DevFlowDesktopApi = {
     decidedBy: string
     decision: CodingPermissionDecision['decision']
     comment: string
+    scope?: 'once' | 'session'
   }) => Promise<CodingPermissionRequest>
   subscribeCodingRun: (input: { codingRunId: string }) => Promise<LocalExecutionState>
+  codingSessionPermissions: (input: { codingRunId: string; revokeId?: string }) => Promise<import('@ai-devflow/shared').CodingSessionGrant[]>
   renewCodingPermission: (input: { requestId: string; codingRunId: string; decidedBy: string }) => Promise<CodingPermissionRequest>
   listCodingAgentRuns: (input?: { runId?: string }) => Promise<CodingAgentRun[]>
   openManagedWorktree: (input: { workspaceId: string }) => Promise<ManagedCodingWorkspace>

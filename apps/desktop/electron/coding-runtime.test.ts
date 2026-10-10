@@ -68,6 +68,36 @@ afterEach(async () => {
 })
 
 describe('CodingRuntime', () => {
+  it('reuses an explicitly scoped permission across runtime instances and stops at an unapproved path', async () => {
+    const run = opencodeCodingRun()
+    const workspace = managedWorkspace({ codingRunId: run.id })
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [workspace] })
+    const first = codingPermissionRequest(run, { filePath: 'src/a.ts' })
+    store.permissionRequests.push(first)
+    const engine = createSpyCodingEngine('opencode-http')
+    let turns = 0
+    vi.mocked(engine.approvePermission).mockImplementation(async (input) => {
+      turns += 1
+      return { codingRun: { ...input.codingRun, status: 'waiting_permission' }, events: [],
+        permissionRequest: { ...first, id: `next-${turns}`, filePath: turns === 1 ? 'src/a.ts' : 'src/new.ts' } }
+    })
+    const deps = { store, engine, now: fixedNow('2026-08-12T23:36:00.000Z'), sessionAuthority: async () => ({ actorId: 'user-1', key: 'org-project-user-token' }) }
+    await createCodingRuntime(deps).replyCodingPermission({
+      requestId: first.id, codingRunId: run.id, decidedBy: 'user-1', decision: 'approved', comment: '', scope: 'session',
+    })
+    await vi.waitFor(() => expect(turns).toBe(2))
+    expect(store.permissionRequests.find((entry) => entry.id === 'next-1')?.status).toBe('approved')
+    expect(store.permissionRequests.find((entry) => entry.id === 'next-2')?.status).toBe('pending')
+    expect(store.permissionDecisions).toHaveLength(2)
+    expect(store.permissionDecisions[1]?.sessionGrantId).toBeTruthy()
+    const runtime = createCodingRuntime(deps)
+    const grants = await runtime.sessionPermissions({ codingRunId: run.id })
+    expect(grants).toHaveLength(1)
+    await runtime.sessionPermissions({ codingRunId: run.id, revokeId: grants[0]!.id })
+    expect(await runtime.sessionPermissions({ codingRunId: run.id })).toEqual([])
+    expect(store.codingEvents.filter((event) => event.metadata?.origin === 'session_permission').map((event) => event.metadata?.action)).toEqual(['created', 'used', 'revoked'])
+  })
+
   it('retains the worktree when a renewed approval fails its final revalidation', async () => {
     const run = opencodeCodingRun()
     const workspace = managedWorkspace({ codingRunId: run.id })

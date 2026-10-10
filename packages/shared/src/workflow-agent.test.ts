@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentProvider } from './agent-review'
 import type { Artifact } from './domain'
-import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider } from './agent-review'
+import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider } from './agent-review'
 import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workflow'
 import { indexKnowledgeSources } from './knowledge'
 import { stageAgentFailureDetails } from './stage-agent-failure'
 import {
+  DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS,
   runWorkflowStageAgent,
   StageAgentExecutionError,
   type StageAgentExecutor,
@@ -181,6 +182,7 @@ describe('runWorkflowStageAgent', () => {
     const without = await runWorkflowStageAgent({ ...base, provider: createFakeAgentProvider() })
     const oversized = await runWorkflowStageAgent({
       ...base, provider: createFakeAgentProvider(),
+      bounds: { ...DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS, maxInputBytes: 96 * 1024 },
       memoryContext: [{ id: 'agent-memory-large', revision: 1, statement: 'Desktop cards use sentence case. '.repeat(3_500) }],
     })
     expect(oversized.prompt).not.toContain('RECALLED_MEMORY_BACKGROUND')
@@ -664,4 +666,12 @@ it('drops optional Chinese memory under the shared token budget before stage dis
   expect(generate).toHaveBeenCalledTimes(1)
   expect(result.prompt).not.toContain('RECALLED_MEMORY_BACKGROUND')
   expect(result.trace.steps[0]!.summary).toContain('tokens (')
+})
+
+it('preserves observed partial usage when a direct design transport fails after billing began', async () => {
+  const provider = createFakeAgentProvider()
+  provider.generateWorkflowArtifact = async () => { throw new AgentProviderRequestError({code:'connection_reset',sanitizedCause:'connection_reset',deliveryState:'response_received',billingState:'unknown',retryable:true,usage:{inputTokens:17,outputTokens:5,usageCompleteness:'partial',budgetAttemptIds:['failed-call']}}) }
+  await expect(runWorkflowStageAgent({run:created.run,node:clarifyNode(),artifacts:created.artifacts,provider,requestedBy:'u-ling',runtime:'electron'})).rejects.toMatchObject({
+    reportedUsage:{inputTokens:17,outputTokens:5,usageCompleteness:'partial'},tokenUsage:{inputTokens:17,outputTokens:5,usageStatus:'partial',costUsd:null,budgetAttemptIds:['failed-call']},failureDetails:{code:'provider_request_failed'},
+  })
 })

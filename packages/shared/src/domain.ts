@@ -243,7 +243,7 @@ export type WorkflowEdge = {
   kind: 'normal' | 'gate' | 'retry' | 'failure'
 }
 
-export type StageAgentExecutorKind = 'direct-provider' | 'local-agent'
+export type StageAgentExecutorKind = 'direct-provider' | 'local-agent' | 'native-agent'
 
 export type StageAgentTerminalReason =
   | 'success'
@@ -398,6 +398,8 @@ export type Artifact = {
   clarificationRevision?: ClarificationRevisionMetadata
   clarificationFeedback?: ClarificationFeedbackMetadata
   designEvidence?: DesignEvidence
+  /** Exact inputs of an explicitly requested design revision; old materials remain immutable. */
+  designRevision?: { version: 1; previous: DesignRevisionIdentity; proposals: DesignRevisionIdentity[] }
   githubDeliverySource?: GitHubDeliveryPackageSource
 }
 
@@ -585,6 +587,7 @@ export type RuntimeBudgetApproval = {
 }
 
 export type BudgetGuardDecision = {
+  continuationEligible?: boolean
   status: 'allowed' | 'warning' | 'requires_lead_approval' | 'approved_over_budget' | 'disabled' | 'unavailable'
   blocksRun: boolean
   currentSpendUsd: number
@@ -640,6 +643,9 @@ export type ProviderRemovalResult =
   | { status: 'blocked' | 'changed' | 'not_found'; check: ProviderRemovalCheck }
 
 export type AgentProviderUsage = {
+  /** Snapshots from an unfinished stream never establish the final charge. */
+  usageCompleteness?: 'partial' | 'final'
+  settlementStatus?: 'synced' | 'pending'
   budgetAttemptIds?: string[]
   inputTokens?: number
   outputTokens?: number
@@ -1315,6 +1321,10 @@ export type CodingRuntimeReadinessCode =
   | 'provider_unavailable'
   | 'team_project_unpaired'
   | 'budget_policy_missing'
+  | 'budget_fetch_failed'
+  | 'budget_evaluation_failed'
+  | 'budget_not_checked'
+  | 'budget_not_evaluated'
   | 'budget_blocked'
   | 'active_run'
   | 'permission_pending'
@@ -1474,6 +1484,8 @@ export type CodingPermissionRequest = {
   title: string
   command?: string
   filePath?: string
+  /** All paths from the host-validated Change Set. */
+  filePaths?: string[]
   diffPreview?: string
   changeSetId?: string
   changeSetDigest?: string
@@ -1496,6 +1508,8 @@ export type CodingPermissionDecision = {
   decision: 'approved' | 'rejected' | 'expired'
   comment: string
   decidedAt: string
+  scope?: 'once' | 'session'
+  sessionGrantId?: string
 }
 
 export type ManagedCodingWorkspace = {
@@ -1730,4 +1744,15 @@ export type CommandSafetyResult = {
   level: CommandRiskLevel
   reasons: string[]
   normalizedCommand: string
+}
+
+export type CodingSessionGrant = {
+  id: string
+  codingRunId: string
+  actorId: string
+  scopeKey: string
+  rule: { kind: 'files'; paths: string[] } | { kind: 'command'; command: string }
+  createdAt: string
+  expiresAt: string
+  revokedAt?: string
 }

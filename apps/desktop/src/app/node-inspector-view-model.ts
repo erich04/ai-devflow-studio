@@ -80,7 +80,7 @@ export type InspectorActionId =
   | 'cancelStageAgent'
   | 'syncTeam'
 
-export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride'
+export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride' | 'generateDesignRevision'
 
 export type PendingInspectorAction = {
   actionId: PendingInspectorActionId
@@ -1330,6 +1330,11 @@ function buildNextAction(input: {
   }
 
   if (node.kind === 'gate') {
+    if (node.stage === 'design' && input.isGeneratingStageAgent) {
+      return statusOf('running', 'progress', '正在生成新版方案', '以旧方案和所选提案生成完整新版；完成后仍停在方案评审。', {
+        persistentActionIds: ['cancelStageAgent'],
+      })
+    }
     const decision = input.gateEnforcementDecision
     const target = input.approvalTarget
     const subject = gateApprovalSubject(node, target)

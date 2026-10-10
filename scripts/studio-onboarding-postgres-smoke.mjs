@@ -124,9 +124,20 @@ try {
   desktop = await electron.launch({ executablePath: requireDesktop('electron'), cwd: path.join(root, 'apps/desktop'), args: ['.'], env: desktopEnv })
   const window = await desktop.firstWindow()
   await window.waitForLoadState('domcontentloaded')
+  // Synthetic pairing credentials belong only to this temporary process/profile.
+  // Platform keychain acceptance is tracked separately and is not exercised here.
+  await desktop.evaluate(({ safeStorage }) => {
+    safeStorage.isAsyncEncryptionAvailable = async () => true
+    safeStorage.encryptStringAsync = async (value) => Buffer.from(`isolated-onboarding:${value}`)
+    safeStorage.decryptStringAsync = async (bytes) => {
+      if (!bytes.toString().startsWith('isolated-onboarding:')) throw new Error('Unexpected test credential')
+      return { result: bytes.toString().slice('isolated-onboarding:'.length), shouldReEncrypt: false }
+    }
+  })
   await desktop.evaluate(({ dialog }, selectedPath) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selectedPath] }) }, repo)
+  await window.locator('.topbar-project-menu > summary').click()
   await window.getByRole('button', { name: '选择本地仓库' }).click()
-  const binding = await window.evaluate(async ({ code, repo }) => {
+  const intake = await window.evaluate(async ({ code, repo }) => {
     const api = window.aiDevFlowDesktop
     const state = await api.loadState()
     const project = state.projects.find((item) => item.path === repo)
@@ -136,13 +147,34 @@ try {
     const requests = await api.listWorkRequests({ localProjectId: project.id })
     const request = requests.find((item) => item.title === 'Update the README heading')
     if (!request) throw new Error('Cloud request is missing from Desktop inbox')
-    const materialized = await api.materializeWorkRequest({ localProjectId: project.id, workRequestId: request.id, expectedVersion: request.version })
-    const gate = materialized.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'gate')
-    const input = { runId: materialized.run.id, nodeId: gate.id, projectId: project.id }
-    const initial = await api.loadEnforcementPolicy({ projectId: project.id })
+    return { projectId: project.id, requestId: request.id }
+  }, { code, repo })
+  await window.reload()
+  await window.getByRole('button', { name: /^任务中心/u }).click()
+  const taskCenter = window.getByRole('region', { name: '任务中心', exact: true })
+  await taskCenter.getByRole('button', { name: '刷新任务', exact: true }).click()
+  const task = taskCenter.getByRole('article', { name: 'Update the README heading', exact: true })
+  await expect(task).toBeVisible()
+  await task.getByRole('button', { name: 'Update the README heading', exact: true }).click()
+  await expect(window.getByRole('dialog', { name: '任务详情', exact: true })).toContainText('preserving all other content')
+  expect((await window.evaluate(() => window.aiDevFlowDesktop.loadState())).runs).toHaveLength(0)
+  await window.keyboard.press('Escape')
+  await window.screenshot({ path: path.join(artifactDir, '04-desktop-task-center.png'), fullPage: true })
+  await task.getByRole('button', { name: '领取任务：Update the README heading', exact: true }).click()
+  await expect(window.getByTestId('workflow-canvas')).toBeVisible()
+  const binding = await window.evaluate(async ({ projectId, requestId }) => {
+    const api = window.aiDevFlowDesktop
+    const requests = await api.listWorkRequests({ localProjectId: projectId })
+    const request = requests.find((item) => item.id === requestId)
+    const state = await api.loadState()
+    const run = state.runs.find((item) => item.id === request?.claim?.runId)
+    if (!run || state.runs.length !== 1) throw new Error('Explicit intake must create exactly one linked local run')
+    const gate = run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'gate')
+    const input = { runId: run.id, nodeId: gate.id, projectId }
+    const initial = await api.loadEnforcementPolicy({ projectId })
     const decision = await api.evaluateGateEnforcement(input)
     return { input, initialVersion: initial.version, initialSource: initial.source, initialStatus: decision.status }
-  }, { code, repo })
+  }, intake)
   expect(binding.initialSource).toBe('remote_cache')
   expect(binding.initialVersion).toBe(1)
   expect(binding.initialStatus).toBe('warn')

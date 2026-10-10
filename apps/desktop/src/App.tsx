@@ -75,8 +75,9 @@ import { useProjectRuntimeBudget } from './app/useProjectRuntimeBudget'
 import { buildCodingRuntimeActionProjection } from './app/coding-runtime-action-projection'
 import type { DesktopDataProfileDiagnostics } from './desktop-api'
 import { DiagnosticHistory } from './components/DiagnosticHistory'
+import { BudgetContinuationCard } from './components/BudgetContinuationCard'
 import { CredentialAccessStatus } from './components/CredentialAccessStatus'
-import { WorkRequestInbox } from './WorkRequestInbox'
+import { TaskCenter } from './TaskCenter'
 import {
   Inspector,
   KnowledgeView,
@@ -511,11 +512,16 @@ export function App() {
       setToast,
     ],
   )
+  const taskAuthorityKey = JSON.stringify([
+    desktopPairing?.tokenId, desktopPairing?.organizationId, desktopPairing?.projectId,
+    desktopPairing?.userId, desktopPairing?.role,
+  ])
   const workRequestInbox = useWorkRequestInbox({
     desktopApi,
     localProjectId: selectedLocalProject?.id ?? '',
     isPaired: hasSelectedLocalProjectBinding,
     onMaterialized: handleWorkRequestMaterialized,
+    authorityKey: taskAuthorityKey,
   })
   const hasDeliveryProjectBinding = Boolean(
     !desktopPairingExpired &&
@@ -873,6 +879,7 @@ export function App() {
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
+    generateSelectedDesignRevision,
     requestSelectedClarificationChanges,
     selectLocalProject,
     saveTestCommand,
@@ -948,14 +955,14 @@ export function App() {
   // Gate Review in the task (plan W2): model, budget and failure facts for the status row.
   const reviewProvider = agentProviders.find((provider) => provider.id === selectedAgentProviderId)
   const reviewProviderLabel = reviewProvider
-    ? `${knowledgeReviewExecutor === 'local-agent' ? 'OpenCode（可读仓库）· ' : ''}${reviewProvider.name} · ${reviewProvider.model}`
+    ? `${knowledgeReviewExecutor === 'local-agent' ? 'OpenCode（可读仓库）· ' : knowledgeReviewExecutor === 'native-agent' ? '内置仓库只读审查 · ' : ''}${reviewProvider.name} · ${reviewProvider.model}`
     : undefined
   const reviewRunBlockedReason = !desktopApi
     ? '请在桌面应用中运行门禁审查。'
     : !selectedAgentProviderId
       ? '尚未选择门禁审查使用的模型，请先在设置／模型与执行方式中选择。'
-      : knowledgeReviewExecutor === 'local-agent' && reviewProvider?.kind === 'fake'
-        ? 'OpenCode 门禁审查需要已保存的模型 Provider；请在设置中更换，或把审查方式改回只依据知识目录。'
+      : knowledgeReviewExecutor !== 'direct-provider' && reviewProvider?.kind === 'fake'
+        ? '仓库门禁审查需要已保存的模型 Provider；请在设置中更换，或把审查方式改回只依据知识目录。'
         : modelReadinessError
   const latestReviewFailure = selectedEvents
     .filter((event) => event.kind === 'error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp > latestAgentReview.createdAt))
@@ -1374,7 +1381,7 @@ export function App() {
       <aside className="sidebar rail" aria-label="Primary navigation">
         <nav className="nav-list">
           {/* Four primary entries (plan §4.1, Y1); Agents, Skills, MCP, tests and diagnostics are settings sections. */}
-          <NavButton active={activeView === 'workbench'} icon={<Workflow />} label="任务" onClick={() => setActiveView('workbench')} />
+          <NavButton active={activeView === 'task-center' || activeView === 'workbench'} icon={<Workflow />} label={`任务中心${hasSelectedLocalProjectBinding ? workRequestInbox.isLoading || workRequestInbox.error ? ' · ?' : ` · ${workRequestInbox.workRequests.filter(item => item.status === 'open').length}` : ''}`} onClick={() => { setActiveView('task-center'); void workRequestInbox.refresh() }} />
           <NavButton active={activeView === 'knowledge'} icon={<BookOpen />} label="知识" onClick={() => setActiveView('knowledge')} />
           <NavButton active={activeView === 'team'} icon={<Users />} label="团队" onClick={() => setActiveView('team')} />
           <NavButton active={activeView === 'settings'} icon={<Settings2 />} label="设置" onClick={() => openSettings(settingsSection)} />
@@ -1384,6 +1391,7 @@ export function App() {
 
       <main className="workspace main-shell">
         <CredentialAccessStatus api={desktopApi} detailed={false} />
+        {hasSelectedLocalProjectBinding && <BudgetContinuationCard key={taskAuthorityKey} api={desktopApi} projectId={selectedLocalProject?.id} />}
         <div className="main-shell-content">
 
         {toast && (
@@ -1397,6 +1405,14 @@ export function App() {
             {toast}
           </div>
         )}
+
+        {activeView === 'task-center' && <TaskCenter key={`${selectedLocalProject?.id}:${taskAuthorityKey}`} projectId={selectedLocalProject?.id ?? ''} runs={scopedRuns} requests={workRequestInbox.workRequests} role={currentUser?.role} paired={hasSelectedLocalProjectBinding} loading={workRequestInbox.isLoading} error={workRequestInbox.error} materializingId={workRequestInbox.materializingId}
+          codingRuns={codingRuns} actorId={currentUser?.id}
+          onRefresh={() => { void workRequestInbox.refresh(); if (hasSelectedLocalProjectBinding) void syncRemoteTeamState() }}
+          onClaim={request => void workRequestInbox.materialize(request)}
+          onOpen={run => { setSelectedRunId(run.id); setSelectedNodeId(run.currentNodeId); openNodeDetails(); setActiveView('workbench') }}
+          canDelete={run => Boolean(desktopApi) && !activeCodingRunIdSet.has(run.id)}
+          onDelete={run => { if (desktopApi && !activeCodingRunIdSet.has(run.id)) setDeleteRunTarget({ run, deleteRemote: remoteRunIdSet.has(run.id) }) }} />}
 
         {activeView === 'workbench' && (
           <section className="workbench-layout review-workbench">
@@ -1415,105 +1431,12 @@ export function App() {
                   }}>
 
             <div className="task-title-row">
+            <button className="text-button" onClick={() => { setActiveView('task-center'); void workRequestInbox.refresh() }}>← 任务中心</button>
             <details className="workbench-project-menu">
               <summary title={selectedRun?.title}><span className="task-title-text">{selectedRun?.title ?? (selectedLocalProject ? '选择任务' : '先选择本地项目')}</span><ChevronDown size={14} aria-hidden="true" /></summary>
             <div className="run-list">
               {!selectedLocalProject ? <p className="empty-note">先在顶栏的项目菜单中选择本地项目。</p> : null}
-              <WorkRequestInbox
-                workRequests={workRequestInbox.workRequests}
-                isPaired={hasSelectedLocalProjectBinding}
-                isLoading={workRequestInbox.isLoading}
-                materializingId={workRequestInbox.materializingId}
-                error={workRequestInbox.error}
-                onRefresh={() => void workRequestInbox.refresh()}
-                onMaterialize={(workRequest) =>
-                  void workRequestInbox.materialize(workRequest)
-                }
-              />
-              <div className="section-heading">
-                <span>任务</span>
-                <strong>当前项目的任务</strong>
-              </div>
-              {visibleRuns.length === 0 ? (
-                <p className="empty-note">没有匹配的 Run</p>
-              ) : (
-                visibleRuns.map((run) => {
-                  const isRemoteRun = remoteRunIdSet.has(run.id)
-                  const isPreviewRun = dataOrigin === 'seed'
-                  const isDeleteDisabled = !desktopApi || activeCodingRunIdSet.has(run.id)
-                  const deleteDisabledReason = !desktopApi
-                    ? '请在 Electron 应用中删除 Run'
-                    : activeCodingRunIdSet.has(run.id)
-                      ? '请先取消 Coding Agent'
-                      : ''
-                  const deleteLabel = isRemoteRun ? '删除 Run...' : '删除本地 Run...'
-
-                  return (
-                    <div
-                      key={run.id}
-                      className={`run-row ${run.id === selectedRun?.id ? 'is-selected' : ''}`}
-                    >
-                      <button
-                        className="run-row-main"
-                        title={run.title}
-                        onClick={() => {
-                          openNodeDetails()
-                          setSelectedRunId(run.id)
-                          setSelectedNodeId(run.currentNodeId)
-                          setOpenRunMenuId(null)
-                        }}
-                      >
-                        <strong>{run.title}</strong>
-                        <span>{run.branchName}</span>
-                        <em>{getRunStatusLabel(run.status)}</em>
-                        <span className={`pill ${isRemoteRun ? 'accent' : isPreviewRun ? 'soft' : 'good'}`}>
-                          {isRemoteRun ? 'remote' : isPreviewRun ? 'preview' : 'local'}
-                        </span>
-                      </button>
-                      {!isPreviewRun && (
-                        <div
-                          className="run-row-actions"
-                          ref={openRunMenuId === run.id ? openRunMenuRef : undefined}
-                        >
-                          <button
-                            className="run-menu-trigger"
-                            aria-label={`${run.title} actions`}
-                            aria-haspopup="menu"
-                            aria-expanded={openRunMenuId === run.id}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              setOpenRunMenuId((current) => (current === run.id ? null : run.id))
-                            }}
-                          >
-                            <MoreHorizontal aria-hidden="true" />
-                          </button>
-                          {openRunMenuId === run.id && (
-                            <div className="run-row-menu" role="menu">
-                              <button
-                                role="menuitem"
-                                disabled={isDeleteDisabled}
-                                title={deleteDisabledReason || deleteLabel}
-                                onClick={() => {
-                                  if (isDeleteDisabled) {
-                                    return
-                                  }
-                                  setDeleteRunTarget({ run, deleteRemote: isRemoteRun })
-                                }}
-                              >
-                                <Trash2 aria-hidden="true" />
-                                {deleteLabel}
-                              </button>
-                              {deleteDisabledReason && (
-                                <span className="run-row-menu-note">{deleteDisabledReason}</span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })
-              )}
+              <button className="ghost-button" onClick={() => { setActiveView('task-center'); void workRequestInbox.refresh() }}>返回任务中心</button>
               {/* Moved from the title row and the stage row to keep the first screen small (plan Y6). */}
               {selectedRun ? (
                 <section className="task-menu-section" aria-label="本任务用量与策略" data-testid="task-menu-usage">
@@ -1608,6 +1531,7 @@ export function App() {
                   canSaveOverride={gateEnforcement.canSaveOverride}
                   onApprove={approveSelectedGate}
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
+                  onGenerateDesignRevision={generateSelectedDesignRevision}
                   onDiscussMaterial={(material) => discussMaterial(material)}
                   {...(desktopApi?.requestClarificationChanges ? { onRequestClarificationChanges: requestSelectedClarificationChanges } : {})}
                   stageProviders={agentProviders}
@@ -1641,7 +1565,7 @@ export function App() {
                   upstreamCodingDiffReady={hasArchivedUpstreamCodingDiff({ run: selectedRun, node: selectedNode, codingRuns, diffs: codingDiffArtifacts })}
                   {...(codingActionProjection ? { codingActionProjection } : {})}
                   onCancelCodingRun={() => void cancelCodingRun()}
-                  onReplyCodingPermission={(decision) => void replyCodingPermission(decision)}
+                  onReplyCodingPermission={(decision, scope) => void replyCodingPermission(decision, scope)}
                   onRenewCodingPermission={() => void renewCodingPermission()}
                   isReplyingCodingPermission={isReplyingCodingPermission}
                   latestCodingRun={latestCodingRun}

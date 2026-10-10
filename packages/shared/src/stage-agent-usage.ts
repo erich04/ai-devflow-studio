@@ -49,7 +49,7 @@ export function parseStageAgentUsage(value: unknown, runId: string, projectId: s
     const textFields = ['id', 'runId', 'nodeId', 'userId', 'projectId', 'model', 'timestamp'] as const
     if (textFields.some((key) => typeof row[key] !== 'string' || !row[key].length || row[key].length > 512) ||
       row.runId !== runId || row.projectId !== projectId || ids.has(String(row.id)) ||
-      !['direct-provider', 'local-agent'].includes(String(row.executorKind)) ||
+      !['direct-provider', 'local-agent', 'native-agent'].includes(String(row.executorKind)) ||
       !['openai', 'anthropic', 'dashscope', 'local'].includes(String(row.provider)) ||
       !['provider_reported', 'estimated', 'unknown'].includes(String(row.source)) ||
       (row.usageStatus !== undefined && !['complete', 'partial', 'unknown'].includes(String(row.usageStatus))) ||

@@ -18,7 +18,24 @@ export type ConversationDraft = ConversationTarget & {
   inputReceipt?: import('./conversation-critical-context').CriticalContextReceipt
   publishedArtifactId?: string
 }
-export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string }
+export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string } & Partial<import('@ai-devflow/shared').AgentProviderResponseMetadata>
+export type ConversationCheckpoint = {
+  version: 1
+  turnId: string
+  step: number
+  cycle: number
+  recoveries: number
+  group: string
+  providerId: string
+  maxOutputTokens?: number
+  nativeMessages?: import('@ai-devflow/shared').NativeToolMessage[]
+  nativePendingCalls?: import('@ai-devflow/shared').NativeToolCall[] | undefined
+  observations: unknown[]
+  citations: ConversationCitation[]
+  requirementRunIds: string[]
+  criticalProposalInput?: import('./conversation-critical-context').CriticalContext | undefined
+  pendingProposal?: Record<string, unknown> | undefined
+}
 export type ConversationMessage = {
   id: string
   role: 'user' | 'assistant' | 'tool' | 'notice'
@@ -34,7 +51,9 @@ export type ConversationMessage = {
   usage?: AgentProviderUsage
   /** Bounded, non-content diagnostic for this call, including a recovered failure. */
   failure?: ConversationFailure
-  provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
+  attempt?: { turnId: string; step: number; cycle: number; recovery: number; group: string; startedAt: string; durationMs?: number; status: 'running' | 'completed' | 'failed' }
+  provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode' | 'native-tools'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
+  contentLengths?: Partial<Record<'text' | 'draft' | 'reasoning', number>>
   /** Provider-returned reasoning, local to this conversation; never shared workflow context. */
   reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort?: 'low' | 'high' | 'max' }
 }
@@ -42,14 +61,15 @@ export type WorkbenchConversation = {
   id: string
   localProjectId: string
   /** Immutable per conversation. Legacy records use direct-provider. */
-  executor?: 'direct-provider' | 'opencode'
+  executor?: 'direct-provider' | 'opencode' | 'native-tools'
   version: number
   title: string
   isOpen: boolean
   inputDraft: string
   /** Archived legacy note; never added to prompts or editable through commands. */
   memory?: string
-  status: 'idle' | 'running' | 'awaiting_answer' | 'failed' | 'cancelled' | 'interrupted'
+  status: 'idle' | 'running' | 'awaiting_answer' | 'failed' | 'cancelled' | 'interrupted' | 'paused'
+  checkpoint?: ConversationCheckpoint | undefined
   messages: ConversationMessage[]
   /** Main-owned local facts and derived context; absent on legacy conversations. */
   toolEvents?: import('./conversation-context.js').ConversationToolEvent[]
@@ -62,14 +82,17 @@ export type WorkbenchConversation = {
 }
 export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }
-  | { type: 'create'; title?: string; inputDraft?: string; executor?: 'direct-provider' | 'opencode' }
+  | { type: 'create'; title?: string; inputDraft?: string; executor?: 'direct-provider' | 'opencode' | 'native-tools' }
   | { type: 'update'; conversationId: string; title?: string; isOpen?: boolean; inputDraft?: string }
   | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string }
   | { type: 'retry'; conversationId: string; providerId: string }
+  | { type: 'read_content'; conversationId: string; messageId: string; field: 'text' | 'draft' | 'reasoning'; offset: number }
   | { type: 'cancel'; conversationId: string }
   | { type: 'publish'; conversationId: string; messageId: string }
 )
 export type ConversationResponse = {
+  nativeReadOnlyPilotEnabled?: boolean
+  contentPage?: { text: string; offset: number; nextOffset: number | null; total: number }
   conversations: WorkbenchConversation[]
   conversationId?: string
   error?: string
@@ -84,6 +107,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   const fields: Record<string, string[]> = {
     list: [], create: ['title', 'inputDraft', 'executor'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
     send: ['conversationId', 'text', 'providerId', 'answerToMessageId'], retry: ['conversationId', 'providerId'],
+    read_content: ['conversationId', 'messageId', 'field', 'offset'],
     cancel: ['conversationId'], publish: ['conversationId', 'messageId'],
   }
   const type = typeof record.type === 'string' ? record.type : ''
@@ -92,8 +116,9 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   for (const [key, limit] of Object.entries(limits)) {
     if (record[key] !== undefined && (typeof record[key] !== 'string' || (record[key] as string).length > limit || (record[key] as string).includes('\0'))) throw new Error('会话输入过长或格式不正确。')
   }
+  if (type === 'read_content' && (!['text', 'draft', 'reasoning'].includes(String(record.field)) || !Number.isSafeInteger(record.offset) || Number(record.offset) < 0 || typeof record.messageId !== 'string')) throw new Error('无效的正文分页请求。')
   if (record.isOpen !== undefined && typeof record.isOpen !== 'boolean') throw new Error('无效的 Tab 状态。')
-  if (record.executor !== undefined && record.executor !== 'direct-provider' && record.executor !== 'opencode') throw new Error('不支持这个会话执行方式。')
+  if (record.executor !== undefined && record.executor !== 'direct-provider' && record.executor !== 'opencode' && record.executor !== 'native-tools') throw new Error('不支持这个会话执行方式。')
   const required = ['projectId', ...(['list', 'create'].includes(type) ? [] : ['conversationId']), ...(['send', 'retry'].includes(type) ? ['providerId'] : []), ...(type === 'send' ? ['text'] : []), ...(type === 'publish' ? ['messageId'] : [])]
   if (required.some((key) => typeof record[key] !== 'string' || !(record[key] as string).trim())) throw new Error('会话请求缺少必要信息。')
   if (record.title !== undefined && !(record.title as string).trim()) throw new Error('请输入会话名称。')

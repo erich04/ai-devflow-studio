@@ -44,12 +44,13 @@ export function ModelCostRecoveryPanel({ initialOverview, userId, canManage, rea
       evidenceKind: executionStatus === 'not_sent' ? 'not_sent' as const : String(form.get('evidenceKind')) as ModelCostReconciliationInput['evidenceKind'], executionStatus }
     const fingerprint = JSON.stringify(values)
     if (lastRequest.current?.fingerprint !== fingerprint) lastRequest.current = { fingerprint, key: crypto.randomUUID() }
-    await perform(() => reconcileAction({ ...values, idempotencyKey: lastRequest.current!.key }), '已更新费用记录并重新计算预算；不会自动重跑任务。其他未知费用或预算超限仍会阻断。')
+    await perform(() => reconcileAction({ ...values, idempotencyKey: lastRequest.current!.key }), '已更新费用记录并重新计算预算；不会自动重跑任务。待确认费用保留；桌面端可为当前操作发起继续授权。')
   }
   return <section aria-label="费用核对与恢复" className="runtime-budget-group runtime-budget-full-row">
     <h3>费用记录与恢复</h3>
     <p>{overview.month}（UTC） · 已确认花费 {formatUsd(overview.actualCostUsd)} · 实际费用待确认 {overview.actualUnknownCount} 笔</p>
-    <p>执行中预计占用 {formatUsd(overview.reservedCostUsd)} · 预留金额待确认 {overview.reservedUnknownCount} 笔 · 待处理 {overview.reviewCount} 笔</p>
+    <p>执行中预留占用 {formatUsd(overview.reservedCostUsd)} · 待确认费用按上界占用 {formatUsd(overview.pendingBoundedCostUsd ?? 0)} · 预留金额待确认 {overview.reservedUnknownCount} 笔 · 待处理 {overview.reviewCount} 笔</p>
+    <p>要继续工作，可回桌面端继续原操作：有可信费用上界且预算充足时会继续；需要额外授权时会显示一张确认卡。无需为继续工作填写未核实的账单或 Token。</p>
     <p>重新同步只处理服务端已保存、属于当前身份的最终结果。原桌面仍未上传的用量，需要回原设备同步。这里不会重新调用模型。</p>
     <button disabled={pending} onClick={() => void perform(() => readAction(overview.projectId), '已刷新费用记录。')}>刷新费用记录</button>
     <button disabled={pending || !userId} onClick={() => void perform(() => retryAction(overview.projectId), '已同步现有最终结果并刷新预算；不会自动重跑任务。')}>重新同步已保存用量</button>
@@ -58,6 +59,7 @@ export function ModelCostRecoveryPanel({ initialOverview, userId, canManage, rea
       <h4>{row.model} · {modelCostStatusLabels[row.status]}</h4>
       <p><code>{row.sourceId}</code> · {row.createdAt} · {row.affectsCurrentBudget ? '本月预算' : '历史月份，不计入本月预算'}</p>
       <p>原调用者：{row.originalUserId} · {row.costUsd === null ? '费用待确认' : `${row.isReservation ? '预计占用' : '有效费用'} ${formatUsd(row.costUsd)}`} · {row.usageKnown ? `Token ${(row.usage?.inputTokens ?? 0) + (row.usage?.outputTokens ?? 0)}` : 'Token 仍未知'}</p>
+      {row.verifiedHoldUsd !== undefined && <p>按可信上界占用预算 {formatUsd(row.verifiedHoldUsd)}，实际费用仍待提供方确认。</p>}
       {row.status === 'upload_pending' && <p>{row.originalUserId === userId ? '可同步服务端保存的最终结果。' : '请原调用者同步；负责人可凭可靠依据核对费用。'}</p>}
       {row.isReservation && <p>预留时间不能证明调用已经结束或未收费，需核实执行状态。</p>}
       {canManage && row.canReconcile && <button disabled={pending} onClick={() => setSelected(`${row.sourceKind}:${row.sourceId}`)}>核对费用</button>}
@@ -68,7 +70,7 @@ export function ModelCostRecoveryPanel({ initialOverview, userId, canManage, rea
       </p>)}</details>}
     </article>)}
     {!overview.reviewCount && <p>当前没有待处理费用。预算仍按本月实际费用和预留占用检查。</p>}
-    {record && canManage && <form aria-label="费用核对" onSubmit={submit} key={record.version}>
+    {record && canManage && <form className="model-cost-reconciliation" aria-label="费用核对" onSubmit={submit} key={record.version}>
       <h4>核对 {record.sourceId}</h4>
       <p>原记录保留。只有金额确定时可只填写金额，Token 保持未知；核定零费用也必须有可靠依据。</p>
       <label>核定金额（USD）<input name="costUsd" type="number" min="0" step="any" /></label>

@@ -44,6 +44,29 @@ function deferred<T>() {
 }
 
 describe('useWorkRequestInbox', () => {
+  it('clears old identity data and rejects its delayed list when authority changes on the same project', async () => {
+    const desktopApi = createDesktopApi()
+    const oldRefresh = deferred<WorkRequest[]>()
+    const nextIdentity = deferred<WorkRequest[]>()
+    desktopApi.listWorkRequests.mockResolvedValueOnce([workRequest])
+      .mockReturnValueOnce(oldRefresh.promise).mockReturnValueOnce(nextIdentity.promise)
+    const onMaterialized = vi.fn()
+    const { result, rerender } = renderHook(({ authorityKey }) => useWorkRequestInbox({
+      desktopApi, localProjectId: 'local-project-1', isPaired: true, authorityKey, onMaterialized,
+    }), { initialProps: { authorityKey: 'identity-a' } })
+    await waitFor(() => expect(result.current.workRequests).toEqual([workRequest]))
+    act(() => { void result.current.refresh() })
+    rerender({ authorityKey: 'identity-b' })
+    expect(result.current.workRequests).toEqual([])
+    expect(result.current.isLoading).toBe(true)
+    await act(async () => { oldRefresh.resolve([workRequest]) })
+    expect(result.current.workRequests).toEqual([])
+    expect(result.current.isLoading).toBe(true)
+    await act(async () => { nextIdentity.resolve([]) })
+    expect(result.current.workRequests).toEqual([])
+    expect(result.current.isLoading).toBe(false)
+  })
+
   it('does not call IPC without pairing and an exact local project, and clears on unpair', async () => {
     const desktopApi = createDesktopApi()
     desktopApi.listWorkRequests.mockResolvedValue([workRequest])

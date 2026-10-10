@@ -1,3 +1,4 @@
+import { ChevronRight } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { describeProviderThinking, resolveProviderThinking, supportsProviderThinking, type AgentProviderConfig, type ProviderCredentialMetadata, type ProviderThinkingConfiguration } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
@@ -45,7 +46,7 @@ export function SavedProviderThinkingSettings({ provider, api, onUpdated }: {
     setSaved(provider)
     setValue(provider.thinking ?? { mode: 'default' })
   }, [provider])
-  return <details className="provider-thinking-settings"><summary>思考模式与推理强度</summary>
+  return <details className="provider-thinking-settings"><summary><ChevronRight aria-hidden="true" size={18} /><span>思考模式与推理强度</span><span className="provider-thinking-settings__hint">展开设置</span></summary>
     <ProviderThinkingFields model={saved.model} baseUrl={saved.baseUrl} value={value} onChange={(next) => { setValue(next); setStatus('尚未保存；保存后对新调用生效。') }} disabled={busy} />
     <button className="ghost-button" disabled={busy || !api.updateProviderThinking} onClick={async () => {
       if (!api.updateProviderThinking) return

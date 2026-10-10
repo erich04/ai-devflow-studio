@@ -193,6 +193,17 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 /* In-task execution panels (plan §7.2 W2–W4). One compact block per concern, no nested
    fixed-height scroll areas; the exact diff review keeps its own layout. */
 .task-work-panel { display: grid; gap: 8px; margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: var(--font-size-body); }
+.design-revision-panel { display: grid; gap: 10px; padding: 14px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; }
+.design-revision-panel > h3, .design-revision-panel > p { margin: 0; }
+.design-revision-panel fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
+.design-revision-panel legend { margin-bottom: 8px; font-weight: 600; }
+.design-revision-proposal { padding: 8px 0; }
+.design-revision-proposal label { display: flex; align-items: start; gap: 8px; overflow-wrap: anywhere; }
+.design-revision-proposal input { width: auto; flex: none; }
+.design-revision-proposal details { margin: 6px 0 0 24px; color: var(--text-muted); }
+.design-revision-proposal pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; color: var(--text); }
+.design-revision-panel .task-work-panel { margin: 0; }
+.design-revision-panel > button { justify-self: start; }
 .task-work-panel p { margin: 0; }
 .task-work-panel .inspector-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .task-work-panel ul { margin: 0; padding-left: 18px; }
@@ -278,3 +289,28 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 .runtime-budget-summary div { display: contents; }
 .runtime-budget-summary dt { color: var(--text-muted); }
 .runtime-budget-summary dd { margin: 0; }
+
+.task-center { padding: 24px; min-width: 0; }
+.task-center-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.task-center-heading h2 { margin: 0; font-size: var(--font-size-title); }
+.task-center > p { margin: 10px 0 24px; color: var(--text-muted); }
+.task-center > p[role=alert] { color: var(--danger); }
+.task-center-search { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--text-muted); }
+.task-center-search input { width: min(380px, 100%); min-height: 40px; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.task-center [role=tablist] { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0 12px; }
+.task-center [role=tab] { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 8px 12px; border: 1px solid transparent; border-radius: 8px; color: var(--text-muted); background: transparent; }
+.task-center [role=tab] span { padding: 1px 6px; border-radius: 5px; background: var(--surface-2); font-size: var(--font-size-xs); }
+.task-center [role=tab][aria-selected=true] { color: var(--accent); border-color: var(--border); background: var(--surface); font-weight: 600; }
+.task-center-list { overflow: auto; max-height: calc(100vh - 320px); }
+.task-center-row { display: flex; align-items: center; gap: 16px; padding: 18px 12px; border-bottom: 1px solid var(--border); }
+.task-center-row > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.task-center-row .text-button { padding: 0; text-align: start; color: var(--text); background: transparent; border: 0; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.task-center-row .text-button:hover { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.task-center-row[data-selected=true] { border-inline-start: 3px solid var(--accent); padding-inline-start: 9px; background: var(--surface); }
+.task-center-row p { margin: 6px 0 0; color: var(--text-muted); font-size: var(--font-size-xs); }
+.task-center-menu { flex: 0 0 auto; font-size: var(--font-size-xs); color: var(--text-muted); }
+.task-center-menu summary { padding: 8px; cursor: pointer; }
+.task-center-menu button { padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--danger); }
+.task-center :is(button, input, summary):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.task-center-request { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; font: inherit; line-height: 1.7; }
+@media (max-width: 760px) { .task-center { padding: 18px; } .task-center-row { flex-wrap: wrap; } .task-center-row > div { flex-basis: 100%; } .task-center-search input { min-width: 0; max-width: 100%; } }

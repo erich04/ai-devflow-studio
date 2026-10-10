@@ -604,6 +604,19 @@ describe('IPC contract parsers', () => {
     ).toThrow(/artifact/)
   })
 
+  it('accepts only exact saved input identities for a design revision, never renderer content', () => {
+    const identity = { artifactId: 'design', updatedAt: '2026-10-10T00:00:00.000Z', contentDigest: 'a'.repeat(64) }
+    const designRevision = { expectedRunVersion: 4, previous: identity, proposals: [{ ...identity, artifactId: 'conversation-proposal-one' }] }
+    const payload = { runId: 'run', nodeId: 'design-gate', userId: 'u', userName: 'User', designRevision }
+    expect(parseCompleteWorkflowAgentNodeInput(payload)).toEqual(payload)
+    for (const bad of [null, {}, { ...designRevision, proposals: [] }, { ...designRevision, expectedRunVersion: -1 },
+      { ...designRevision, proposals: [identity, identity] }, { ...designRevision, previous: { ...identity, content: 'forged' } },
+      { ...designRevision, previous: { ...identity, contentDigest: 'bad' } },
+      { ...designRevision, proposals: [{ ...identity, content: 'forged' }] }, { ...designRevision, run: {} }]) {
+      expect(() => parseCompleteWorkflowAgentNodeInput({ ...payload, designRevision: bad })).toThrow()
+    }
+  })
+
   it('rejects create run payloads without a raw request', () => {
     expect(() =>
       parseCreateRunInput({
@@ -962,6 +975,7 @@ describe('IPC contract parsers', () => {
     // Read-only OpenCode review (knowledge-context K2); the default stays a direct model call.
     const review = { runId: 'run-1', nodeId: 'node-test', projectId: 'project-1', requestedBy: 'u-ling', runtime: 'electron' }
     expect(parseRunKnowledgeReviewInput({ ...review, executor: 'local-agent' })).toEqual({ ...review, executor: 'local-agent' })
+    expect(parseRunKnowledgeReviewInput({ ...review, executor: 'native-agent' })).toEqual({ ...review, executor: 'native-agent' })
     expect(parseRunKnowledgeReviewInput({ ...review, executor: 'direct-provider' })).toEqual(review)
     expect(() => parseRunKnowledgeReviewInput({ ...review, executor: 'shell-agent' })).toThrow(/executor/)
   })

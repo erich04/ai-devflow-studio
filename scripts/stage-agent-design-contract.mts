@@ -30,7 +30,7 @@ const server = createServer((request, response) => {
     requests.push({ prompt, tools })
     // The desktop's governed relay (#168) forwards each OpenCode round with stream:false and
     // expects one JSON completion; OpenCode itself streams.
-    const streaming = body.stream !== false
+    const streaming = body.stream === true
     response.writeHead(200, { 'Content-Type': streaming ? 'text/event-stream' : 'application/json' })
     if (hold) { if (streaming) response.write(': held\n\n'); releaseHeld(); return }
     const read = tools.find((name: string) => name === 'read')
@@ -45,11 +45,19 @@ const server = createServer((request, response) => {
       ], citations: [{ id: 'task-source', path: 'task.ts', contentDigest: '', lineStart: 1, lineEnd: 1 }],
       assumptions: [], openQuestions: [], uncheckedScopes: ['Browser presentation'] },
     }
+    if (prompt.includes('PREVIOUS_DESIGN_FULL_TEXT')) {
+      assert(prompt.includes('DESIGN_PROPOSAL_MARKER'), 'Revision omitted the selected proposal')
+      assert(prompt.includes('## Delivery and rollback'), 'Revision omitted the full previous design')
+      design.title = 'Revised task filter design'
+      design.content += '\n## Selected amendment\nPreserve the original scope; no counts. Run npm test before and after editing.'
+    }
+    // Direct-provider design generation has no repository tools or verified citations.
+    const { repositoryFindings: _findings, ...unverifiedDesign } = design
     const delta = read && !readCompleted
       ? { role: 'assistant', tool_calls: [{ index: 0, id: 'read-source', type: 'function', function: {
         name: read, arguments: JSON.stringify({ filePath: path.join(repository, 'task.ts') }),
       } }] }
-      : { role: 'assistant', content: JSON.stringify(design) }
+      : { role: 'assistant', content: JSON.stringify(read ? design : unverifiedDesign) }
     const finishReason = read && !readCompleted ? 'tool_calls' : 'stop'
     if (!streaming) {
       const message = 'tool_calls' in delta
