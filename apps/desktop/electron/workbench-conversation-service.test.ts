@@ -60,6 +60,27 @@ async function send(service: WorkbenchConversationService, id: string, text = 'ç
 }
 
 describe('unified conversation execution and boundaries', () => {
+  it('finishes bounded recovery at the batch time boundary before pausing new steps', async () => {
+    const wallClock = Date.now()
+    let elapsed = 0, calls = 0
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => wallClock + elapsed)
+    try {
+      const h = harness(async () => {
+        if (++calls === 1) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+        if (calls <= 3) {
+          elapsed = 181000
+          throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'unknown', retryable: true })
+        }
+        return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+      })
+      const result = await send(h.service, await create(h.service))
+      expect(calls).toBe(4)
+      expect(result.status).toBe('paused')
+      expect(result.checkpoint).toMatchObject({ step: 3, recoveries: 0 })
+      expect(result.messages.filter(message => message.attempt).map(message => message.attempt?.status)).toEqual(['completed', 'failed', 'failed', 'completed'])
+    } finally { clock.mockRestore() }
+  })
+
   it('can stop automatic recovery without losing evidence or preventing explicit manual continuation', async () => {
     vi.stubEnv('DEVFLOW_STEP_RECOVERY_ENABLED', '0')
     let calls = 0

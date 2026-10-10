@@ -654,7 +654,10 @@ export class WorkbenchConversationService {
         criticalProposalInput = latest
       }
       let retryingOutput = checkpoint.recoveries > 0
-      for (let step = 0; step < 12 && (step === 0 || Date.now() - batchStartedAt < 180000); step++) {
+      let completingRecovery = false
+      for (let step = 0; step < 12 && (completingRecovery || step === 0 || Date.now() - batchStartedAt < 180000); step++) {
+        // The time boundary pauses new work, not the current step's bounded recovery.
+        completingRecovery = false
         checkpoint.requirementRunIds = [...requirements.keys()]
         checkpoint.criticalProposalInput = criticalProposalInput
         checkpoint.pendingProposal = pendingProposal
@@ -846,6 +849,7 @@ export class WorkbenchConversationService {
           checkpoint.recoveries += 1
           await waitForProviderRetry(error, checkpoint.recoveries, controller.signal)
           retryingOutput = true
+          completingRecovery = true
           // Recovery consumes a request, not another successful work step.
           step -= 1
         } finally {
