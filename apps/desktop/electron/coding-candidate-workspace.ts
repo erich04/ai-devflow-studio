@@ -178,7 +178,7 @@ export class CodingCandidateWorkspace {
       GIT_AUTHOR_NAME: 'DevFlow snapshot', GIT_AUTHOR_EMAIL: 'snapshot@devflow.invalid', GIT_COMMITTER_NAME: 'DevFlow snapshot', GIT_COMMITTER_EMAIL: 'snapshot@devflow.invalid', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' }
     // Explicit private paths avoid both Git's `init <path>` preflight and the
     // Windows process-cwd length limit. No command targets the caller's repo.
-    const repository = ['-c', 'core.longpaths=true', `--git-dir=${path.join(destination, '.git')}`, `--work-tree=${destination}`]
+    const repository = ['-c', 'core.longpaths=true', `--git-dir=${path.toNamespacedPath(path.join(destination, '.git'))}`, `--work-tree=${path.toNamespacedPath(destination)}`]
     await exec('git', [...repository, '-c', 'init.templateDir=', 'init', '--quiet'], { env })
     await exec('git', [...repository, 'config', '--local', 'core.longpaths', 'true'], { env })
     await exec('git', [...repository, '-c', 'core.autocrlf=false', 'add', '--force', '--all'], { env })

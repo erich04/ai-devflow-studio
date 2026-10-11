@@ -160,7 +160,7 @@ it('keeps coding children isolated until the parent explicitly merges their froz
         await new Promise(resolve => setTimeout(resolve, 150))
         return reply('read_command', { id: results[2].id })
       }
-      expect(results.at(-1).receipt.status).toBe('passed')
+      expect(results.at(-1).receipt.status, JSON.stringify(results.at(-1))).toBe('passed')
       return reply('propose_changeset', { summary: 'Child proposes value two' })
     }
     if (!results.length) return reply('delegate_task', { title: 'Implement value', prompt: 'Change value to two', mode: 'isolated_coding', paths: ['value.ts'], maxTokens: 2000, maxCostUsd: 0.2 })
@@ -175,7 +175,9 @@ it('keeps coding children isolated until the parent explicitly merges their froz
   try {
     await fixture.authorize(); await fixture.executor.settled('coding')
     const review = (await fixture.get()).snapshot
-    expect(review.status, JSON.stringify(review)).toBe('review')
+    const children = await Promise.all(review.children.map(async child => (await fixture.get(child.id)).snapshot))
+    const sessions = await fixture.store.listNativeCodingSessions('project')
+    expect(review.status, JSON.stringify({ review, children, attempts: sessions.map(session => ({ id: session.id, attempts: session.attempts })) })).toBe('review')
     expect(review.revision!.files.map(file => file.path)).toEqual(['value.ts'])
     expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe('export const value = 1\n')
     const completed = await fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: 'approve-child-merge', expectedVersion: review.version, objectiveVersion: review.objectiveVersion, revisionDigest: review.revision!.digest }, async () => {})
