@@ -458,11 +458,13 @@ describe('project-bound Electron remote sync', () => {
     })
 
     expect(Object.keys(boundRemoteSync).sort()).toEqual([
+      'confirmModelBudgetContinuation',
       'createRuntimeBudgetApproval',
       'evaluateRuntimeBudget',
       'getModelCostRecovery',
       'getRuntimeBudgetPolicy',
       'importHistoricalModelCall',
+      'prepareModelBudgetContinuation',
       'reserveModelCall',
       'saveGateOverride',
       'saveRuntimeBudgetPolicy',

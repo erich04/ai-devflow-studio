@@ -2240,7 +2240,7 @@ button:disabled {
   background: var(--surface-2);
 }
 
-.runtime-settings summary {
+.runtime-settings > summary {
   display: grid;
   grid-template-columns: minmax(180px, auto) minmax(0, 1fr);
   gap: 12px;
@@ -2249,7 +2249,7 @@ button:disabled {
   cursor: pointer;
 }
 
-.runtime-settings summary span {
+.runtime-settings > summary span {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -2257,7 +2257,7 @@ button:disabled {
   font-weight: 800;
 }
 
-.runtime-settings summary strong {
+.runtime-settings > summary strong {
   min-width: 0;
   color: var(--text-muted);
   font-size: var(--font-size-xs);
@@ -4768,3 +4768,32 @@ body { min-width: 0; }
 .review-evidence-details blockquote { margin: 0.6rem 0; padding-left: 0.7rem; border-left: 3px solid var(--accent); white-space: pre-wrap; }
 .review-evidence-details code { display: block; overflow-wrap: anywhere; font-size: var(--font-size-xs); }
 .review-evidence-details textarea { display: block; width: 100%; min-height: 5rem; resize: vertical; }
+
+/* Native details retains keyboard behavior; an explicit marker survives layout resets. */
+.provider-thinking-settings > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-2);
+  cursor: pointer;
+  list-style: none;
+  color: var(--text);
+  font-weight: 700;
+}
+.provider-thinking-settings > summary::-webkit-details-marker { display: none; }
+.provider-thinking-settings > summary:hover { background: var(--surface); }
+.provider-thinking-settings > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.provider-thinking-settings[open] > summary > svg { transform: rotate(90deg); }
+.provider-thinking-settings__hint { margin-left: auto; color: var(--text-muted); font-size: var(--font-size-xs); font-weight: 400; }
+.provider-thinking-settings[open] .provider-thinking-settings__hint { display: none; }
+
+.budget-continuation { margin: 12px 20px; padding: 16px; border: 1px solid var(--border-strong, #d99630); border-radius: 12px; background: var(--surface, #fff); }
+.budget-continuation h2 { font-size: 17px; margin: 0 0 8px; }
+.budget-continuation p { margin: 8px 0; line-height: 1.55; }
+.budget-continuation label { display: flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 600; }
+.budget-continuation input { width: 18px; height: 18px; flex-shrink: 0; }
+.budget-continuation code { overflow-wrap: anywhere; }

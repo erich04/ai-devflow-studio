@@ -94,7 +94,7 @@ describe('Electron Agent Runtime production wiring', () => {
     expect(main).toMatch(
       /generated = await runWorkflowStageAgent\(\{[\s\S]*?stageMemory\.revisions\.length[\s\S]*?memoryContext: stageMemory\.revisions\.map\(\(\{ id, revision, statement \}\) => \(\{ id, revision, statement \}\)\)/,
     )
-    expect(main).toMatch(/new WorkbenchConversationService\(\{\s*store,\s*memory: store,/)
+    expect(main).toMatch(/new WorkbenchConversationService\(\{\s*nativeReadOnlyPilotEnabled: process\.env\.DEVFLOW_NATIVE_READONLY_PILOT_ENABLED === '1',\s*store,\s*memory: store,/)
   })
 
   it('recovers durable nonterminal runtimes after app readiness', () => {

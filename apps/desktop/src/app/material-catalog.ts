@@ -67,6 +67,7 @@ const clarificationStatusLabels: Record<string, { label: string; group: Material
 
 export type MaterialContext = {
   run: WorkflowRun | undefined
+  artifacts?: readonly Artifact[]
   events: readonly AgentEvent[]
   formatTime: (iso: string) => string
 }
@@ -85,6 +86,8 @@ function clarificationDescription(artifact: Artifact, context: MaterialContext):
 }
 
 function designDescription(artifact: Artifact, context: MaterialContext): Pick<MaterialEntry, 'group' | 'statusLabel'> {
+  if (context.artifacts?.some((item) => item.runId === artifact.runId && item.kind === 'design' &&
+    item.designRevision?.previous.artifactId === artifact.id)) return { statusLabel: '已被替代（历史）', group: 'history' }
   const gate = context.run?.nodes.find((node) => node.stage === 'design' && node.kind === 'gate' && node.artifactIds.includes(artifact.id))
   if (!gate) return { statusLabel: '尚未进入方案评审', group: 'step' }
   if (gate.status !== 'success') return { statusLabel: '待评审', group: 'pending' }
@@ -116,7 +119,9 @@ export function describeMaterial(artifact: Artifact, context: MaterialContext): 
     group = 'input'
   } else if (isDiscussionProposalArtifact(artifact)) {
     typeLabel = '讨论提案'
-    statusLabel = '待确认，不是正式材料'
+    statusLabel = context.artifacts?.some((item) => item.runId === artifact.runId && item.kind === 'design' &&
+      item.designRevision?.proposals.some((proposal) => proposal.artifactId === artifact.id))
+      ? '已用于方案修订，保留讨论记录' : '待确认，不是正式材料'
     group = 'proposal'
   }
   const label = [`${typeLabel} ${versionLabel}`, statusLabel, versionLabel === recorded ? '' : timeLabel].filter(Boolean).join(' · ')

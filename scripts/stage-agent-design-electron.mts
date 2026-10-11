@@ -125,6 +125,12 @@ export async function verifyDesignInElectron(input: {
       projectId, enabled: false, monthlyLimitUsd: 1, warningThresholdUsd: 0.5 }), input.run.projectId)
     await page.reload()
     await page.waitForLoadState('domcontentloaded')
+    await page.locator('aside[aria-label="Primary navigation"]').getByRole('button', { name: /^任务中心/ }).click()
+    try { await page.getByRole('button', { name: `继续任务：${input.run.title}`, exact: true }).click() } catch (error) {
+      await page.screenshot({path:path.join(output,'failure-task-center.png')})
+      console.error('Task center:', await page.locator('main').innerText().catch(()=>'unavailable'))
+      throw error
+    }
     await expect(page.getByTestId('workflow-canvas')).toBeVisible()
     // Sub-steps are folded into the browsed stage item (plan L2, Y6); open them before clicking a node.
     const openSubSteps = async () => {
@@ -181,6 +187,51 @@ export async function verifyDesignInElectron(input: {
     await page.getByTestId('node-inspector').locator('details').last().scrollIntoViewIfNeeded()
     await expect(page.getByTestId('node-inspector')).toContainText('task.ts:1')
     await page.screenshot({ path: path.join(output, '02-design-evidence.png'), scale: 'css' })
+    // A saved proposal never replaces a design automatically. Exercise the new real renderer → Main path.
+    await page.getByRole('button', { name: '到方案评审生成新版', exact: true }).click()
+    const revisionPanel = page.getByRole('region', { name: '修订方案', exact: true })
+    await expect(revisionPanel).toBeVisible()
+    await revisionPanel.getByRole('combobox', { name: '设计执行器' }).selectOption('direct-provider')
+    await expect(revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true })).toBeDisabled()
+    await revisionPanel.getByRole('checkbox').check()
+    const beforeRevisionCalls = input.requestCount()
+    input.setHold(true)
+    await revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true }).click()
+    await expect.poll(input.requestCount, { timeout: 30_000 }).toBeGreaterThan(beforeRevisionCalls)
+    await page.getByRole('button', { name: '取消生成', exact: true }).click()
+    await expect(revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true })).toBeEnabled({ timeout: 15_000 })
+    const cancelledRevision = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
+    assert.deepEqual(cancelledRevision.runs, completed.runs)
+    assert.deepEqual(cancelledRevision.artifacts, completed.artifacts)
+    input.setHold(false)
+    await revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true }).click()
+    try {
+      await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).artifacts
+        .filter((item) => item.kind === 'design').length, { timeout: 30_000 }).toBe(2)
+    } catch (error) {
+      const state = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
+      await page.screenshot({ path: path.join(output, 'failure-revision.png'), scale: 'css' })
+      console.error(JSON.stringify({ revisionFailure: true,
+        status: await page.getByTestId('task-status-row').innerText(),
+        toast: await page.getByTestId('toast').textContent().catch(() => null),
+        traces: state.agentTraces.slice(-3).map((trace) => trace.steps.map((step) => step.summary)),
+        events: state.events.slice(-3).map((event) => event.message), providerRequests: input.requestCount() }, null, 2))
+      throw error
+    }
+    const revised = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
+    const newDesign = revised.artifacts.find((item) => item.designRevision)!
+    assert.equal(newDesign.designRevision!.previous.artifactId, artifact.id)
+    assert.equal(newDesign.designRevision!.proposals[0]!.artifactId, 'conversation-proposal-design-contract')
+    assert.deepEqual(revised.artifacts.find((item) => item.id === artifact.id), artifact)
+    assert.equal(revised.runs[0]!.currentNodeId, completed.runs[0]!.currentNodeId)
+    assert.equal(revised.runs[0]!.status, 'paused_at_gate')
+    assert.deepEqual(revised.runs[0]!.nodes.map((item) => item.status), completed.runs[0]!.nodes.map((item) => item.status))
+    assert.equal(revised.runs[0]!.nodes.find((item) => item.id === revised.runs[0]!.currentNodeId)!.artifactIds.includes(newDesign.id), true)
+    await expect(page.getByTestId('node-inspector')).toContainText('Revised task filter design')
+    await page.screenshot({ path: path.join(output, '04-revised-design-awaiting-review.png'), scale: 'css' })
+    await page.getByRole('button', { name: '查看历史方案与提案', exact: true }).click()
+    await expect(page.getByRole('region', { name: '历史记录', exact: true })).toContainText('已被替代（历史）')
+    await page.screenshot({ path: path.join(output, '05-design-history.png'), scale: 'css' })
     // The execution tool is configured in 设置／模型与执行方式 since S3 (plan Y2).
     await page.locator('aside[aria-label="Primary navigation"]').getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '模型与执行方式', exact: true }).click()
@@ -189,14 +240,18 @@ export async function verifyDesignInElectron(input: {
     await expect(page.getByText('DevFlow Native（内置编码执行器）', { exact: true })).toBeVisible()
     await page.getByRole('combobox', { name: '执行工具', exact: true }).scrollIntoViewIfNeeded()
     await page.screenshot({ path: path.join(output, '03-execution-tool-names.png'), scale: 'css' })
+    const callsBeforeRestart = input.requestCount()
     await app!.close(); app = undefined
     page = await launch()
     const restored = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
     assert.deepEqual(restored.artifacts.find((item) => item.id === artifact.id), artifact)
-    assert.deepEqual(restored.runs, completed.runs)
-    assert.equal(input.requestCount(), callsBeforeCancel + 3)
+    assert.deepEqual(restored.artifacts.find((item) => item.id === newDesign.id), newDesign)
+    assert.deepEqual(restored.runs, revised.runs)
+    assert.equal(input.requestCount(), callsBeforeRestart)
+    assert.equal(callsBeforeRestart, beforeRevisionCalls + 2)
     console.log(JSON.stringify({ electronDesignPassed: true, realMainAndPreload: true,
-      cancelAndRetry: true, reviewGateAwaitingHuman: true, codingConfigurationUnchanged: true,
+      cancelAndRetry: true, designRevisionCancelAndRetry: true, previousDesignPreserved: true,
+      reviewGateAwaitingHuman: true, codingConfigurationUnchanged: true,
       restartPreserved: true, governedByIsolatedTeamApi: true,
       keychain: 'synthetic test adapter; no OS credentials accessed' }))
   } finally {

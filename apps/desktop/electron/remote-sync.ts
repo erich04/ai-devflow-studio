@@ -1,3 +1,4 @@
+import type { ModelBudgetContinuation, ConfirmModelBudgetContinuation } from '@ai-devflow/shared'
 import type {HistoricalModelCall} from '@ai-devflow/shared'
 import type { ModelCallQuote, ModelCallSettlement, ModelCallAdmission } from '@ai-devflow/shared'
 import { parseModelCallSettlementReceipt, type ModelCallSettlementReceipt, type ModelCostRecoveryOverview } from '@ai-devflow/shared'
@@ -118,6 +119,8 @@ export type RemoteTeamOverviewResponse = {
 
 export type RemoteSyncClient = {
   importHistoricalModelCall(input:HistoricalModelCall):Promise<void>
+  prepareModelBudgetContinuation(input: ModelCallQuote): Promise<ModelBudgetContinuation>
+  confirmModelBudgetContinuation(input: ConfirmModelBudgetContinuation): Promise<ModelBudgetContinuation>
   reserveModelCall(input: ModelCallQuote): Promise<ModelCallAdmission>
   settleModelCall(input: ModelCallSettlement): Promise<ModelCallSettlementReceipt>
   getModelCostRecovery(projectId: string): Promise<ModelCostRecoveryOverview>
@@ -1269,6 +1272,14 @@ export function createRemoteSyncClient(
     },
 
     async importHistoricalModelCall(input) {await postJson(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/history'),input,'/api/runtime/model-calls/history',requirePostHeaders({authToken,sessionHeaders}),signal)},
+    async prepareModelBudgetContinuation(input) {
+      const path = '/api/runtime/model-budget-continuations/prepare'
+      return postJson<ModelBudgetContinuation>(fetcher, buildUrl(apiBaseUrl, path), input, path, requirePostHeaders({ authToken, sessionHeaders }), signal)
+    },
+    async confirmModelBudgetContinuation(input) {
+      const path = '/api/runtime/model-budget-continuations/confirm'
+      return postJson<ModelBudgetContinuation>(fetcher, buildUrl(apiBaseUrl, path), input, path, requirePostHeaders({ authToken, sessionHeaders }), signal)
+    },
     async reserveModelCall(input) {
       return postJson<ModelCallAdmission>(fetcher,buildUrl(apiBaseUrl,'/api/runtime/model-calls/reserve'),input,'/api/runtime/model-calls/reserve',requirePostHeaders({authToken,sessionHeaders}),signal)
     },

@@ -122,6 +122,7 @@ export const teamMigrationCatalog = [
   { version: 29, name: '0029_organization_memberships', fileName: '0029_organization_memberships.sql' },
   { version: 30, name: '0030_model_call_budget', fileName: '0030_model_call_budget.sql' },
   { version: 31, name: '0031_model_cost_recovery', fileName: '0031_model_cost_recovery.sql' },
+  { version: 32, name: '0032_model_budget_continuations', fileName: '0032_model_budget_continuations.sql' },
 ] as const
 
 export function splitSqlStatements(sql: string): string[] {

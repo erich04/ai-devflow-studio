@@ -1,3 +1,4 @@
+import { SessionPermissionChoice } from '../components/CodingSessionPermissions'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { FolderOpen, RotateCcw, Trash2 } from 'lucide-react'
@@ -58,22 +59,23 @@ function citationLabel(citation: NonNullable<AgentReviewResult['repositoryFindin
 }
 
 /**
- * How the review was produced (knowledge-context K2). Repository facts of a read-only OpenCode
+ * How the review was produced (knowledge-context K2). Facts from a read-only repository
  * review stay collapsed and are marked as supplementary; they never count as Gate evidence.
  */
 function ReviewRepositoryCheck({ review }: { review: AgentReviewResult }) {
-  if (review.executorKind !== 'local-agent') {
+  if (review.executorKind !== 'local-agent' && review.executorKind !== 'native-agent') {
     return <p className="meta" data-testid="review-method">审查方式：只依据材料与知识目录，未读取仓库。</p>
   }
+  const executorLabel = review.executorKind === 'native-agent' ? '内置审查' : 'OpenCode '
   const findings = review.repositoryFindings
   if (!findings || findings.citations.length === 0) {
-    return <p className="meta" data-testid="review-method">审查方式：OpenCode 读取仓库核对，本次没有引用仓库文件。</p>
+    return <p className="meta" data-testid="review-method">审查方式：{executorLabel}读取仓库核对，本次没有引用仓库文件。</p>
   }
   const citationById = new Map(findings.citations.map((citation) => [citation.id, citation]))
   const fileCount = new Set(findings.citations.map((citation) => citation.path)).size
   return (
     <details className="review-repository-findings" data-testid="review-repository-findings">
-      <summary>审查方式：OpenCode 读取仓库核对 · 核对 {findings.verifiedFacts.length} 项事实，引用 {fileCount} 个文件</summary>
+      <summary>审查方式：{executorLabel}读取仓库核对 · 核对 {findings.verifiedFacts.length} 项事实，引用 {fileCount} 个文件</summary>
       <p className="meta">仓库引用按本机文件内容校验过，只作补充说明，不作为 Gate 依据。</p>
       <ul>
         {findings.verifiedFacts.map((fact) => (
@@ -171,7 +173,7 @@ export function CodingWorkPanel({
   latestCodingRun: CodingAgentRun | undefined
   workspace: ManagedCodingWorkspace | undefined
   isReplying: boolean
-  onDecision: (decision: CodingPermissionDecision['decision']) => void
+  onDecision: (decision: CodingPermissionDecision['decision'], scope?: 'once' | 'session') => void
   focusRef: RefObject<HTMLDivElement | null>
 }) {
   if (!projection) return null
@@ -205,6 +207,8 @@ export function CodingWorkPanel({
           <span>{permission.expired ? '已过期' : `剩余 ${Math.ceil(permission.remainingMs / 1_000)} 秒`}</span>
         </div>
         {permission.staleReason ? <p role="alert">{permission.staleReason}</p> : null}
+        <SessionPermissionChoice request={permission.request} disabled={isReplying || !permission.canApprove || permission.expired}
+          onAllow={() => onDecision('approved', 'session')} />
       </div>
     )
   }

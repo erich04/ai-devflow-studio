@@ -1251,6 +1251,23 @@ export async function resolveTeamRoute(
     return { status: 200, body: { receipts } }
   }
 
+  if (method === 'POST' && (pathname === '/api/runtime/model-budget-continuations/prepare' || pathname === '/api/runtime/model-budget-continuations/confirm')) {
+    if (!options.session) return unauthorized()
+    try {
+      if (pathname.endsWith('/prepare')) {
+        const quote = parseModelCallQuote(options.body)
+        if (!canSyncProject(options.session, quote.projectId, 'member')) return forbidden('Project member required')
+        return { status: 200, body: await repository.prepareModelBudgetContinuation(quote, options.session) }
+      }
+      const body = options.body as Record<string, unknown>
+      if (!body || typeof body !== 'object' || Object.keys(body).some(key => !['id', 'projectId', 'expectedVersion'].includes(key)) ||
+        typeof body.id !== 'string' || body.id.length > 160 || typeof body.projectId !== 'string' || body.projectId.length > 160 ||
+        typeof body.expectedVersion !== 'string' || !/^[a-f0-9]{64}$/.test(body.expectedVersion)) return badRequest('Invalid continuation confirmation')
+      if (!canSyncProject(options.session, body.projectId, 'lead')) return forbidden('Project Lead or Owner required')
+      return { status: 200, body: await repository.confirmModelBudgetContinuation({ id: body.id, projectId: body.projectId, expectedVersion: body.expectedVersion }, options.session) }
+    } catch (error) { return badRequest(error instanceof Error ? error.message : 'Continuation unavailable') }
+  }
+
   if(method==='POST' && pathname==='/api/runtime/model-calls/history') {
     if(!options.session)return unauthorized()
     try {
@@ -1303,7 +1320,8 @@ export async function resolveTeamRoute(
           blocksRun: true,
           currentSpendUsd,
           projectedCostUsd: input.projectedCostUsd,
-          reason: '有模型调用的实际费用尚未确认，请先核对用量；不能按零费用放行。',
+          continuationEligible: true,
+          reason: '历史费用待确认；可以查看当前操作的继续授权，原记录仍保持未知。',
         } satisfies BudgetGuardDecision,
       }
     }

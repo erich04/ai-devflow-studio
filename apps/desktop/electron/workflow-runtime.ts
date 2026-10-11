@@ -215,8 +215,8 @@ export function createWorkflowRuntime(store: WorkflowRuntimeStore): WorkflowRunt
       if (!committed.committed) {
         return rejected(
           await store.getRun(run.id),
-          committed.reason,
-          committed.reason === 'stale_run'
+          committed.reason === 'run_not_found' ? 'run_not_found' : 'stale_run',
+          committed.reason !== 'run_not_found'
             ? 'The workflow run changed before the command could be committed'
             : `Workflow run not found: ${run.id}`,
         )

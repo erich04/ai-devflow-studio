@@ -1,6 +1,9 @@
+import { codingSessionGrantsForStore, type CodingGrantContext } from './coding-session-grants.js'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   CODING_EXECUTOR_CONTRACT_VERSION,
+  codingSessionPermissionRule,
+  type CodingSessionGrant,
   DEFAULT_OPENCODE_ATTEMPT_LIMIT,
   countOpenCodeAttempts,
   buildKnowledgeGovernanceChecks,
@@ -261,6 +264,7 @@ export type ReplyCodingPermissionRuntimeInput = {
   decidedBy: string
   decision: CodingPermissionDecision['decision']
   comment: string
+  scope?: 'once' | 'session'
 }
 
 export type CancelCodingAgentRunRuntimeInput = {
@@ -290,6 +294,7 @@ export type DeleteManagedWorktreeRuntimeInput = OpenManagedWorktreeRuntimeInput
 
 export type CodingRuntimeDeps = {
   store: CodingRuntimeStore
+  sessionAuthority?: (projectId: string) => Promise<{ actorId: string; key: string }>
   engine?: CodingEngineAdapter
   executor?: CodingExecutor
   publisher?: CodingRuntimePublisher
@@ -336,6 +341,7 @@ export type CodingRuntime = {
   cancelCodingAgentRun(input: CancelCodingAgentRunRuntimeInput): Promise<CodingAgentRun>
   replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest>
   renewCodingPermission(input: Pick<ReplyCodingPermissionRuntimeInput, 'requestId' | 'codingRunId' | 'decidedBy'>): Promise<CodingPermissionRequest>
+  sessionPermissions(input: { codingRunId: string; revokeId?: string }): Promise<CodingSessionGrant[]>
   recoverCodingAgentRuns(): Promise<CodingAgentRun[]>
   subscribeCodingRun(input: { codingRunId: string }): Promise<LocalExecutionState>
   findManagedWorktree(input: OpenManagedWorktreeRuntimeInput): Promise<ManagedCodingWorkspace>
@@ -359,6 +365,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   }
   const executor: CodingExecutor = selectedExecutor
   const idGenerator = deps.idGenerator ?? ((prefix = 'id') => `${prefix}-${randomUUID()}`)
+  const sessionGrants = codingSessionGrantsForStore(deps.store)
   const now = deps.now ?? (() => new Date().toISOString())
   const knowledgeDocuments = deps.knowledgeDocuments ?? defaultKnowledgeDocuments
   const knowledgeChunks = deps.knowledgeChunks ?? defaultKnowledgeChunks
@@ -436,6 +443,61 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       throw new Error(`Coding Agent run not found: ${codingRunId}`)
     }
     return codingRun
+  }
+
+  async function sessionContext(codingRun: CodingAgentRun): Promise<CodingGrantContext> {
+    if (!deps.sessionAuthority || !codingRun.managedWorkspaceId) throw new Error('Current session authority is unavailable.')
+    const authority = await deps.sessionAuthority(codingRun.projectId)
+    const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
+    const project = await findProject(codingRun.projectId)
+    return {
+      actorId: authority.actorId,
+      active: activeCodingStatuses.has(codingRun.status) && !workspace.deletedAt && workspace.cleanupStatus !== 'cleanup_failed',
+      key: createHash('sha256').update(JSON.stringify([
+        authority.key, codingRun.id, codingRun.runId, codingRun.nodeId, codingRun.projectId,
+        codingRun.engine, codingRun.configVersion, codingRun.workflowRunVersion,
+        workspace.id, workspace.worktreePath, project,
+      ])).digest('hex'),
+    }
+  }
+
+  async function auditSessionGrant(codingRun: CodingAgentRun, grant: CodingSessionGrant, action: string) {
+    await saveEvents([{
+      id: idGenerator('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId, nodeId: codingRun.nodeId,
+      sequence: await nextSequence(codingRun.id), kind: 'permission', timestamp: now(),
+      message: `Session permission ${action}.`, metadata: { origin: 'session_permission', action, grant }, redacted: true,
+    }])
+  }
+
+  async function listSessionPermissions(input: { codingRunId: string; revokeId?: string }): Promise<CodingSessionGrant[]> {
+    const codingRun = await findCodingRun(input.codingRunId)
+    // Preparing a run does not create a workspace-scoped grant. The renderer
+    // can already be observing that run while workspace creation is pending.
+    if (!codingRun.managedWorkspaceId && !input.revokeId) return []
+    const context = await sessionContext(codingRun)
+    for (const grant of sessionGrants.list(codingRun.id)) {
+      if (grant.revokedAt) continue
+      const expired = !context.active || grant.scopeKey !== context.key || grant.actorId !== context.actorId || Date.parse(grant.expiresAt) <= Date.parse(now())
+      if (expired || input.revokeId === grant.id) {
+        if (input.revokeId === grant.id && grant.actorId !== context.actorId) throw new Error('Session permission belongs to another identity.')
+        // Audit first: a persistence failure cannot create an unrecorded grant or revocation.
+        await auditSessionGrant(codingRun, grant, expired ? 'expired' : 'revoked')
+        sessionGrants.revoke(grant.id, grant.actorId, now())
+      }
+    }
+    return sessionGrants.list(codingRun.id).filter((grant) => !grant.revokedAt && grant.actorId === context.actorId)
+  }
+
+  async function useSessionPermission(request: CodingPermissionRequest) {
+    if (!deps.sessionAuthority || !codingSessionPermissionRule(request)) return
+    const codingRun = await findCodingRun(request.codingRunId)
+    await listSessionPermissions({ codingRunId: codingRun.id })
+    const context = await sessionContext(codingRun)
+    const grant = sessionGrants.match(request, context, now())
+    if (!grant) return
+    await replyCodingPermission({ requestId: request.id, codingRunId: request.codingRunId,
+      decidedBy: context.actorId, decision: 'approved', comment: `Matched session permission ${grant.id}.`,
+    }, undefined, grant.id)
   }
 
   async function findPermissionRequest(input: Pick<ReplyCodingPermissionRuntimeInput, 'requestId' | 'codingRunId'>): Promise<CodingPermissionRequest> {
@@ -585,6 +647,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   function publishPermissionRequest(request: CodingPermissionRequest) {
     runBestEffortNotification(() => deps.publisher?.publishPermission(request))
     if (request.status === 'pending') {
+      // Run after the producing turn commits; the reply performs a fresh CAS and policy check.
+      setTimeout(() => { void useSessionPermission(request).catch(() => undefined) }, 0).unref?.()
       runBestEffortNotification(() => {
         deps.schedulePermissionTimeout?.(request, async () => {
           const latest = (await deps.store.listCodingPermissionRequests(request.codingRunId)).find(
@@ -1711,6 +1775,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   async function replyCodingPermission(
     input: ReplyCodingPermissionRuntimeInput,
     recoveryDecisionAt?: string,
+    matchedSessionGrantId?: string,
   ): Promise<CodingPermissionRequest> {
     const request = await findPermissionRequest(input)
     const timestamp = recoveryDecisionAt ?? now()
@@ -1743,8 +1808,19 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       decision: input.decision,
       comment: input.comment,
       decidedAt: timestamp,
+      ...(input.scope ? { scope: input.scope } : {}),
+      ...(matchedSessionGrantId ? { sessionGrantId: matchedSessionGrantId } : {}),
     }
     const codingRun = await findCodingRun(input.codingRunId)
+    if (input.scope === 'session' || matchedSessionGrantId) {
+      if (input.decision !== 'approved' || !codingSessionPermissionRule(request)) throw new Error('Session scope is only available for an eligible tool permission.')
+      await assertExecutionContext(codingRun)
+      const context = await sessionContext(codingRun)
+      if (context.actorId !== input.decidedBy || !context.active) throw new Error('Session permission authority changed.')
+      if (matchedSessionGrantId && sessionGrants.match(request, context, timestamp)?.id !== matchedSessionGrantId) {
+        throw new Error('Session permission expired, changed or was revoked.')
+      }
+    }
     let renewedWorkflow: WorkflowRun | undefined
     if (request.replacesRequestId && input.decision === 'approved' && request.status === 'pending') {
       renewedWorkflow = await findRun(codingRun.runId)
@@ -2209,6 +2285,14 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       let completed
       try {
         await assertExecutionContext(codingRun)
+        if (input.scope === 'session') {
+          const grant = sessionGrants.create(request, await sessionContext(codingRun), timestamp)
+          try { await auditSessionGrant(codingRun, grant, 'created') }
+          catch (error) { sessionGrants.revoke(grant.id, grant.actorId, now()); throw error }
+        } else if (matchedSessionGrantId) {
+          const grant = sessionGrants.list(codingRun.id).find((entry) => entry.id === matchedSessionGrantId)
+          if (grant) await auditSessionGrant(codingRun, grant, 'used')
+        }
         completed = await executor.continuePermission({
           requestId: codingRun.id,
           ...continuationState,
@@ -3865,6 +3949,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     },
 
     replyCodingPermission,
+    sessionPermissions: listSessionPermissions,
 
     async renewCodingPermission(input) {
       const codingRun = await findCodingRun(input.codingRunId)

@@ -135,7 +135,7 @@ describe('Agent Provider structured request errors', () => {
       false,
       'unknown',
     ],
-    ['oversized response', 'x'.repeat(70 * 1_024), 'response_too_large', false, 'unknown'],
+    ['oversized response', 'x'.repeat(64 * 1024 * 1024 + 1), 'response_too_large', false, 'unknown'],
   ] as const)('classifies %s from the local compatible server', async (
     _label,
     body,
@@ -171,7 +171,7 @@ describe('Agent Provider structured request errors', () => {
     const response = new Response(new ReadableStream<Uint8Array>({
       pull(controller) {
         pulls += 1
-        controller.enqueue(new Uint8Array(16 * 1_024).fill(120))
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024).fill(120))
         if (pulls === 8) controller.close()
       },
       cancel() {
@@ -200,7 +200,7 @@ describe('Agent Provider structured request errors', () => {
   })
 
   it('does not trust a forged smaller Content-Length for the provider response bound', async () => {
-    const response = new Response('x'.repeat(70 * 1_024), {
+    const response = new Response('x'.repeat(64 * 1024 * 1024 + 1), {
       status: 200,
       headers: { 'content-length': '1' },
     })

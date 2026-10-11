@@ -180,16 +180,19 @@ export function createKnowledgeReviewRuntime(
       throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
     }
 
+    // Resolve once per review operation so repair attempts share one budget consent.
+    // The provider guard still checks credentials and cancellation on every actual call.
+    let resolvedProvider: AgentProvider | undefined
     const lazyProvider: AgentProvider = {
       ...providerMetadata,
       reviewKnowledge: async (providerInput) => {
         let provider: AgentProvider
-        try { provider = await deps.resolveProvider(providerId) } catch (error) {
-          throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'credential_unavailable', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: true, cause: error })
+        try { provider = resolvedProvider ??= await deps.resolveProvider(providerId) } catch (error) {
+          throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'credential_unavailable', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false, cause: error })
         }
         if (provider.id !== providerMetadata.id || provider.model !== providerMetadata.model ||
           (provider.executorKind ?? 'direct-provider') !== (providerMetadata.executorKind ?? 'direct-provider')) {
-          throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'provider_configuration_changed', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: true })
+          throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'provider_configuration_changed', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false })
         }
         return provider.reviewKnowledge(providerInput)
       },
@@ -216,6 +219,7 @@ export function createKnowledgeReviewRuntime(
         now,
         ...(deps.signal ? { signal: deps.signal } : {}),
         onAttemptUsage: (usage) => deps.store.saveAgentTokenUsage(usage),
+        onAttemptFailure: async failure => persistError(input, `${requestId}-attempt-${failure.attempt}`, `门禁审查调用未完成：${JSON.stringify({ ...failure, cause: failure.reason })}`),
       })
     } catch (error) {
       const detail = error instanceof AgentProviderRequestError ? describeAgentProviderFailure(error) : failureMessage(error)

@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
-import { randomBytes } from 'node:crypto'
-import { AgentProviderRequestError, classifyProviderTransportError, describeStageAgentFailure, governedModelCall, modelCallMetadata, parseOpenAiCompatibleProviderUsage, stageAgentFailureDetails, type AgentProviderUsage, type ModelCallGovernance, type StageAgentFailureDetails } from '@ai-devflow/shared'
+import { createHash, randomBytes } from 'node:crypto'
+import { AgentProviderRequestError, readProviderResponse, ProviderResponseReadError, resolveRequestPolicy, classifyProviderTransportError, describeStageAgentFailure, governedModelCall, modelCallMetadata, parseOpenAiCompatibleProviderUsage, stageAgentFailureDetails, type AgentProviderUsage, type ModelCallGovernance, type ModelCallQuote, type StageAgentFailureDetails } from '@ai-devflow/shared'
 import type { OpencodeProviderBinding } from './opencode-provider-binding'
 import { providerFailureDetails } from './opencode-failure.js'
 
@@ -14,7 +14,7 @@ export function summarizeRelayedUsage(
 ): AgentProviderUsage | undefined {
   if (!values.length) return undefined
   const sum = (key: 'inputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheMissTokens') => values.reduce((n, u) => n + (u[key] ?? 0), 0)
-  const missingUsageCount = values.filter((u) => u.inputTokens === undefined || u.outputTokens === undefined).length
+  const missingUsageCount = values.filter((u) => u.inputTokens === undefined || u.outputTokens === undefined || u.usageCompleteness === 'partial').length
   // A price needs every round's cache split; one unknown round leaves the whole session unpriced.
   const cacheComplete = !missingUsageCount && values.every((u) => u.cacheStatus === 'complete')
   return {
@@ -30,7 +30,7 @@ export function summarizeRelayedUsage(
 const NOT_SENT_USAGE: AgentProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 0, cacheStatus: 'complete' }
 
 /** OpenCode's internal model rounds traverse this authenticated, loopback-only relay. */
-export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string;maxOutputTokens?:number}) {
+export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string;maxOutputTokens?:number;resolveOperation?:()=>Promise<NonNullable<ModelCallQuote['operation']>>}) {
   if (input.maxOutputTokens !== undefined && (!Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1)) throw new Error('Invalid relay output limit')
   const token=randomBytes(32).toString('hex')
   const executionId = randomBytes(16).toString('hex')
@@ -50,31 +50,38 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
     const controller=new AbortController(); controllers.add(controller)
     const abort=()=>{if(!res.writableEnded)controller.abort()}
     res.on('close',abort)
-    const timeout=setTimeout(()=>controller.abort(),300_000)
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const resetIdleTimeout = () => { clearTimeout(timeout); timeout = setTimeout(() => controller.abort(), 300_000) }
     try {
       if (req.method!=='POST' || req.url!=='/v1/chat/completions' || req.headers.authorization!==`Bearer ${token}`) {res.writeHead(403).end();return}
       call = { sequence: ++sequence, requestId: `${executionId}:${sequence}` }
       latestCall = call
       activeCalls.add(call.sequence)
       let size = 0; const chunks: Buffer[] = []
-      for await (const chunk of req) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 2 * 1024 * 1024) throw new Error('模型请求超过接收容量。'); chunks.push(bytes) }
+      for await (const chunk of req) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 4 * 1024 * 1024) throw new Error('模型请求超过接收容量。'); chunks.push(bytes) }
       const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
       const body=JSON.parse(raw) as Record<string,unknown>
       if(body.model!==input.binding.modelId)throw new Error('OpenCode 模型与当前项目选择不一致。')
-      if (input.maxOutputTokens !== undefined) {
-        const requested = body.max_tokens ?? body.max_completion_tokens
-        body.max_tokens = typeof requested === 'number' && Number.isSafeInteger(requested) && requested > 0 ? Math.min(requested, input.maxOutputTokens) : input.maxOutputTokens
-        delete body.max_completion_tokens
+      const requested = body.max_tokens ?? body.max_completion_tokens
+      const explicit = typeof requested === 'number' && Number.isSafeInteger(requested) && requested > 0 ? requested : undefined
+      const policy = resolveRequestPolicy({ model: input.binding.modelId, baseUrl: input.binding.baseUrl,
+        ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: Math.min(explicit ?? input.maxOutputTokens, input.maxOutputTokens) } : explicit !== undefined ? { maxOutputTokens: explicit } : {}) })
+      body.max_tokens = policy.maxOutputTokens
+      delete body.max_completion_tokens
+      const operation = input.resolveOperation ? await input.resolveOperation() : {
+        id: `opencode-${executionId}`, version: createHash('sha256').update(input.binding.fingerprint).digest('hex'), purpose: 'native-tool',
       }
       const result=await governedModelCall({governance:input.governance,projectId:input.projectId,provider:modelCallMetadata(input.binding),prompt:raw,signal:controller.signal,
+        operation, ...(policy.capability === 'deepseek-2026-10-10' ? { boundBasis: 'deepseek-context-v1' as const } : {}),
         ...(input.approvalId?{approvalId:input.approvalId}:{}),
-        ...(typeof body.max_tokens==='number'?{maxOutputTokens:body.max_tokens}:{}),action:async()=>{
-          // Buffer one bounded provider response so usage survives downstream cancellation/parsing.
+        ...(typeof body.max_tokens==='number'?{maxOutputTokens:body.max_tokens}:{}),action:async(observe)=>{
+          resetIdleTimeout()
+          // The shared reader preserves observed usage independently from downstream parsing.
           let upstream: Response
           try {
             upstream=await (input.fetcher??fetch)(`${input.binding.baseUrl.replace(/\/$/u,'')}/chat/completions`,{
               method:'POST',headers:{authorization:`Bearer ${input.binding.apiKey}`,'content-type':'application/json'},redirect:'error',signal:controller.signal,
-              body:JSON.stringify({...body,stream:false,stream_options:undefined})})
+              body:JSON.stringify({...body,stream:policy.stream,stream_options:policy.stream ? { include_usage: true } : undefined})})
           } catch (error) {
             // Cancellation is settled by governedModelCall; a transport failure is classified like
             // the direct Provider path, so a connection that never opened is not billed (#208).
@@ -82,34 +89,26 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
             throw classifyProviderTransportError(error)
           }
           if(!upstream.ok)throw new AgentProviderRequestError({code:upstream.status===429?'http_429':upstream.status>=500?'http_5xx':'http_4xx',httpStatus:upstream.status,deliveryState:'response_received',billingState:'unknown',retryable:false,sanitizedCause:'opencode_provider_http'})
-          const responseError = (code: 'invalid_response_json' | 'invalid_usage' | 'response_too_large' | 'connection_reset') =>
-            new AgentProviderRequestError({ code, httpStatus: upstream.status, deliveryState: 'response_received', billingState: 'unknown', retryable: false, sanitizedCause: `opencode_${code}` })
-          let output = ''
-          const decoder = new TextDecoder('utf-8', { fatal: true })
-          const reader = upstream.body?.getReader()
-          if (!reader) throw responseError('invalid_response_json')
-          try {
-            while (true) {
-              const next = await reader.read().catch((error: unknown) => {
-                if (controller.signal.aborted) throw error
-                throw responseError('connection_reset')
-              })
-              if (next.done) break
-              try { output += decoder.decode(next.value, { stream: true }) } catch { throw responseError('invalid_response_json') }
-              if (Buffer.byteLength(output) > 2 * 1024 * 1024) throw responseError('response_too_large')
-            }
-          } finally { await reader.cancel().catch(() => undefined) }
+          let usage: AgentProviderUsage | undefined
           let value: Record<string, unknown>
           try {
-            output += decoder.decode()
-            const parsed: unknown = JSON.parse(output)
-            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw responseError('invalid_response_json')
-            value = parsed as Record<string, unknown>
-          } catch { throw responseError('invalid_response_json') }
-          let usage: AgentProviderUsage | undefined
-          try {
-            usage = parseOpenAiCompatibleProviderUsage(value.usage, { providerId: input.binding.providerId, model: input.binding.modelId, baseUrl: input.binding.baseUrl })
-          } catch { throw responseError('invalid_usage') }
+            value = (await readProviderResponse({ response: upstream, signal: controller.signal, policy,
+              onProgress: resetIdleTimeout,
+              onUsage: async (rawUsage, final) => {
+                try { usage = parseOpenAiCompatibleProviderUsage(rawUsage, { providerId: input.binding.providerId, model: input.binding.modelId, baseUrl: input.binding.baseUrl }) }
+                catch { throw new AgentProviderRequestError({ code: 'invalid_usage', deliveryState: 'response_received', billingState: 'unknown', retryable: false, sanitizedCause: 'opencode_invalid_usage' }) }
+                if (usage) { usage = { ...usage, usageCompleteness: final ? 'final' : 'partial' }; await observe(usage) }
+              },
+            })).body
+          } catch (error) {
+            if (error instanceof ProviderResponseReadError) throw new AgentProviderRequestError({
+              code: error.code === 'response_too_large' ? 'response_too_large' : 'invalid_response_json', httpStatus: upstream.status,
+              deliveryState: 'response_received', billingState: usage?.usageCompleteness === 'final' ? 'confirmed' : 'unknown', retryable: false,
+              sanitizedCause: `opencode_${error.code}`, ...(usage ? { usage } : {}),
+              responseMetadata: { httpStatus: upstream.status, ...error.diagnostics, maxOutputTokens: policy.maxOutputTokens },
+            })
+            throw error
+          }
           return {value,...(usage?{usage}:{})}
         }})
       attempts.push({at:new Date().toISOString(),sequence:call.sequence,usage:result.usage!})

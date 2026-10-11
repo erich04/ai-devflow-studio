@@ -72,7 +72,7 @@ export {
 } from './workflow-node-presentation'
 
 /** Four primary entries (plan §4.1, Y1): 任务, 知识, 团队, 设置. */
-export type ViewId = 'workbench' | 'knowledge' | 'team' | 'settings'
+export type ViewId = 'task-center' | 'workbench' | 'knowledge' | 'team' | 'settings'
 
 export type SettingsSection = 'project' | 'models' | 'extensions' | 'team' | 'appearance' | 'advanced'
 

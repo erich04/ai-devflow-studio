@@ -258,7 +258,7 @@ export function ModelSettings({
   }
 
   const configurationIssues = codingReadiness && codingReadiness.projectId === localProjectId
-    ? codingReadiness.checks.filter((check) => check.status === 'blocked' && !['wrong_workflow_node', 'active_run', 'permission_pending', 'budget_blocked'].includes(check.code))
+    ? codingReadiness.checks.filter((check) => check.status === 'blocked' && !['wrong_workflow_node', 'active_run', 'permission_pending', 'budget_blocked', 'budget_not_evaluated', 'budget_not_checked', 'budget_fetch_failed'].includes(check.code))
     : []
   const codingConfigurationLabel = !codingConfiguration || codingConfiguration.projectId !== localProjectId
     ? '未配置'
@@ -489,10 +489,13 @@ export function ModelSettings({
                   onChange={(event) => onReviewExecutorChange(event.target.value as StageAgentExecutorKind)}
                 >
                   <option value="direct-provider">只依据材料与知识目录</option>
-                  <option value="local-agent">OpenCode 读取仓库核对</option>
+                  <option value="native-agent">结合仓库只读核对 · 内置</option>
+                  <option value="local-agent">结合仓库只读核对 · OpenCode</option>
                 </select>
                 <small>
-                  {reviewExecutor === 'local-agent'
+                  {reviewExecutor === 'native-agent'
+                    ? '内置只读工具结合所选模型检查实际文件，报告保留文件与版本引用；不依赖 OpenCode，不修改代码、不批准 Gate。每轮模型调用单独计量。'
+                    : reviewExecutor === 'local-agent'
                     ? '用所选模型启动本机 OpenCode，只读查看仓库后给出审查意见；不修改代码、不运行命令、不批准 Gate。需要本机 OpenCode 和已保存的 Provider；模型会调用多轮，费用通常高于只依据材料的审查。'
                     : '一次模型调用，只依据待审材料、项目说明和知识目录中的规范，不读取仓库。'}
                 </small>

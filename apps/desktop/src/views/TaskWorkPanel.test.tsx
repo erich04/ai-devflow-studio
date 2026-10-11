@@ -35,15 +35,15 @@ describe('GateReviewRunPanel (plan W2)', () => {
     expect(screen.getByTestId('task-review-run')).toHaveTextContent('尚未配置当前项目的云端预算')
   })
 
-  it('says how the last review was produced and keeps repository facts collapsed (knowledge-context K2)', () => {
+  it.each(['local-agent', 'native-agent'] as const)('says how %s review was produced and keeps repository facts collapsed', (executorKind) => {
     const props = { failure: undefined, isRunning: false, providerLabel: 'p', blockedReason: undefined, isWriteLocked: false, target: 't', onRun: vi.fn() }
     const first = render(<GateReviewRunPanel {...props} latestReview={review} />)
     expect(screen.getByTestId('review-method')).toHaveTextContent('只依据材料与知识目录，未读取仓库')
     first.unmount()
 
-    const local = { ...review, executorKind: 'local-agent' } as AgentReviewResult
+    const local = { ...review, executorKind } as AgentReviewResult
     const second = render(<GateReviewRunPanel {...props} latestReview={local} />)
-    expect(screen.getByTestId('review-method')).toHaveTextContent('OpenCode 读取仓库核对，本次没有引用仓库文件')
+    expect(screen.getByTestId('review-method')).toHaveTextContent(`${executorKind === 'native-agent' ? '内置审查' : 'OpenCode '}读取仓库核对，本次没有引用仓库文件`)
     second.unmount()
 
     const withFindings = {

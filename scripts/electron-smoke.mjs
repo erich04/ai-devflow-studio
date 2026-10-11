@@ -365,9 +365,8 @@ async function createSmokePairingCode() {
 }
 
 async function showProjectRuns(page) {
-  const menu = page.locator('.workbench-project-menu')
-  await expect(menu).toBeVisible()
-  if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
+  await page.locator('aside[aria-label="Primary navigation"]').getByRole('button', { name: /^任务中心/ }).click()
+  await expect(page.getByRole('region', { name: '任务中心', exact: true })).toBeVisible()
 }
 
 // The top bar project menu holds the local project panel and the project overview (plan L1).
@@ -377,17 +376,37 @@ async function setTopbarProjectMenuOpen(page, open) {
   if ((await menu.getAttribute('open') !== null) !== open) await menu.locator(':scope > summary').click()
 }
 
+const selectedTaskTitles = new WeakMap()
 async function selectRunByTitle(page, title) {
+  selectedTaskTitles.set(page, title)
   await showProjectRuns(page)
-  const runRow = page.locator('.run-row').filter({ hasText: title })
-  await expect(runRow).toBeVisible()
-  await runRow.click()
-  await expect(runRow).toHaveClass(/is-selected/)
-  await page.locator('.workbench-project-menu > summary').click()
+  const row = page.getByRole('article', { name: title, exact: true })
+  await expect(row).toBeVisible()
+  const next = row.getByRole('button', { name: `继续任务：${title}`, exact: true })
+  if (await next.count()) await next.click()
+  else {
+    await row.getByRole('button', { name: title, exact: true }).click()
+    await page.getByRole('dialog', { name: '任务详情', exact: true }).getByRole('button', { name: '打开任务详情', exact: true }).click()
+  }
+  await expect(page.getByTestId('workflow-canvas')).toBeVisible()
 }
 
-/** Four primary entries (plan §4.1, Y1): 任务, 知识, 团队, 设置. */
+/** Return to the currently selected task through the task center. */
 async function clickPrimaryNav(page, name) {
+  if (name === '任务') {
+    const summary = page.locator('.workbench-project-menu > summary')
+    const selected = await summary.count() ? await summary.textContent() : selectedTaskTitles.get(page)
+    await showProjectRuns(page)
+    const selectedRow = selected ? page.getByRole('article', { name: selected.trim(), exact: true }) : null
+    if (selectedRow && await selectedRow.count()) await selectRunByTitle(page, selected.trim())
+    else {
+      const next = page.getByRole('button', { name: /^继续任务：/ })
+      if (await next.count()) await next.first().click()
+    }
+    return
+  }
+  const current = page.locator('.workbench-project-menu > summary')
+  if (await current.count()) selectedTaskTitles.set(page, (await current.textContent()).trim())
   await page.locator('aside[aria-label="Primary navigation"]').getByRole('button', { name, exact: true }).click()
 }
 
@@ -422,7 +441,8 @@ async function openSettingsDisclosure(scope, summaryText) {
 async function chooseBoardView(page, name) {
   const viewClass = { 精简导航: 'compact', 流程视图: 'flow', 列表视图: 'list' }[name]
   if (await page.getByTestId('workflow-canvas').evaluate((element, className) => element.classList.contains(className), `workflow-view--${viewClass}`)) return
-  await showProjectRuns(page)
+  const menu = page.locator('.workbench-project-menu')
+  if (await menu.getAttribute('open') === null) await menu.locator(':scope > summary').click()
   await page.getByTestId('task-menu-usage').getByRole('group', { name: '看板展示方式' }).getByRole('button', { name, exact: true }).click()
   await page.locator('.workbench-project-menu > summary').click()
 }
@@ -543,7 +563,7 @@ async function runKnowledgeReviewViaDesktopApi(
   })
   await page.reload({ waitUntil: 'domcontentloaded' })
   await showProjectRuns(page)
-  await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.task-center-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await clickPrimaryNav(page, '任务')
   // The result is read in the task, not on the Agents page (plan W2).
@@ -602,7 +622,7 @@ async function runCodingAgentViaDesktopApi(
   expect(typeof codingRun.permissionRequestId).toBe('string')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await showProjectRuns(page)
-  await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.task-center-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await clickPrimaryNav(page, '任务')
   // The permission request is handled in the task (plan W3).
@@ -638,7 +658,7 @@ async function startRetryAttemptViaDesktopApi(
   expect(typeof retryAttempt.codingRunId).toBe('string')
   await page.reload({ waitUntil: 'domcontentloaded' })
   await showProjectRuns(page)
-  await expect(page.locator('.run-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
+  await expect(page.locator('.task-center-list').getByText(runTitle, { exact: true })).toBeVisible({ timeout: 20_000 })
   await selectRunByTitle(page, runTitle)
   await clickPrimaryNav(page, '任务')
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
@@ -1004,8 +1024,7 @@ try {
   // The data source badge is part of 设置／高级 (plan Y2).
   await expect((await openSettingsSection(first.page, '高级')).getByTestId('runtime-source-badge')).toContainText('本地暂无任务')
   await clickPrimaryNav(first.page, '任务')
-  await expect(first.page.getByTestId('workflow-empty-state')).toContainText('暂无任务')
-  await expect(first.page.getByTestId('node-inspector-empty')).toContainText('选择任务后显示')
+  await expect(first.page.getByRole('region', { name: '任务中心', exact: true })).toContainText('当前项目还没有任务。')
 
   await setTopbarProjectMenuOpen(first.page, true)
   await first.page.getByRole('button', { name: /选择本地仓库/ }).click()
@@ -1103,7 +1122,7 @@ try {
   await expect(createRunDialog).toBeHidden({ timeout: 20_000 })
   await expect(first.page.getByTestId('toast')).toContainText('任务已创建，尚未调用模型')
   await showProjectRuns(first.page)
-  await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
+  await expect(first.page.locator('.task-center-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await selectRunByTitle(first.page, '重构 GitHub webhook 重试策略')
   await clickPrimaryNav(first.page, '团队')
   await first.page.getByTestId('team-overview').getByRole('button', { name: '更新团队数据', exact: true }).click()
@@ -1121,7 +1140,7 @@ try {
   await expect(teamConnection).toBeHidden()
   await clickPrimaryNav(first.page, '任务')
   await showProjectRuns(first.page)
-  await expect(first.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
+  await expect(first.page.locator('.task-center-list').getByText('重构 GitHub webhook 重试策略')).toBeVisible()
   await setTopbarProjectMenuOpen(first.page, true)
   await expect(first.page.getByTestId('project-overview')).toContainText('本地')
   await setTopbarProjectMenuOpen(first.page, false)
@@ -1897,7 +1916,7 @@ try {
   )
   await showProjectRuns(second.page)
   await expect(
-    second.page.locator('.run-list').getByText('重构 GitHub webhook 重试策略', { exact: true }),
+    second.page.locator('.task-center-list').getByText('重构 GitHub webhook 重试策略', { exact: true }),
   ).toBeVisible()
   await selectRunByTitle(second.page, '重构 GitHub webhook 重试策略')
   const restoredWorkflow = await second.page.evaluate(async (runId) => {
@@ -1966,6 +1985,29 @@ try {
   const removalSelector = second.page.getByLabel('Saved Agent Provider')
   await expect(removalSelector.locator('option:checked')).toContainText('Temporary removal smoke')
   const removalProviderId = await removalSelector.inputValue()
+  const thinkingOutput = path.join(rootDir, 'out', 'electron-smoke')
+  await mkdir(thinkingOutput, { recursive: true })
+  const providersBeforeDisclosure = await second.page.evaluate(() => window.aiDevFlowDesktop.listAgentProviders())
+  for (const theme of ['light', 'dark']) {
+    await selectThemePreference(second.page, theme)
+    await openSettingsDisclosure(await openSettingsSection(second.page, '模型与执行方式'), '模型提供方 · 本机')
+    const thinking = second.page.locator('.provider-thinking-settings').first()
+    const summary = thinking.locator(':scope > summary')
+    await expect(summary).toContainText('展开设置')
+    expect((await summary.boundingBox()).height).toBeGreaterThanOrEqual(44)
+    await expect(summary.locator('svg')).toBeVisible()
+    await summary.focus()
+    await summary.press('Enter')
+    await expect(thinking).toHaveAttribute('open', '')
+    await summary.press('Space')
+    await expect(thinking).not.toHaveAttribute('open', '')
+    await summary.click()
+    await expect(thinking).toHaveAttribute('open', '')
+    await summary.click()
+    await expect(thinking).not.toHaveAttribute('open', '')
+    await second.page.screenshot({ path: path.join(thinkingOutput, `thinking-disclosure-${theme}.png`) })
+  }
+  expect(await second.page.evaluate(() => window.aiDevFlowDesktop.listAgentProviders())).toEqual(providersBeforeDisclosure)
   await second.page.getByRole('button', { name: '管理已保存 Provider' }).click()
   const removalDialog = second.page.getByRole('dialog', { name: '管理已保存 Provider' })
   await expect(removalDialog).toContainText('Temporary removal smoke')
@@ -1990,6 +2032,7 @@ try {
     await expect(third.page.getByLabel('Saved Agent Provider')).toHaveValue('')
   } finally { await third.app.close() }
 
+  console.log('Electron integration smoke passed: task center, workflow, review, permissions, tests, persistence and provider removal.')
 } finally {
   await Promise.all([stopSpawnedProcess(vite), stopSpawnedProcess(web), stopSpawnedProcess(api)])
   await rm(tempRoot, { recursive: true, force: true })

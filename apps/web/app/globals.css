@@ -2088,3 +2088,9 @@ button {
   .studio-todo-row__facts { grid-template-columns: 1fr 1fr; }
   .studio-todo-row__open { justify-self: start; }
 }
+
+.model-cost-reconciliation { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; padding: 16px; border: 1px solid var(--border, #ccd6d4); border-radius: 10px; }
+.model-cost-reconciliation h4, .model-cost-reconciliation > p { grid-column: 1 / -1; }
+.model-cost-reconciliation label { display: flex; flex-direction: column; gap: 6px; }
+.model-cost-reconciliation input, .model-cost-reconciliation select, .model-cost-reconciliation textarea { width: 100%; min-height: 38px; }
+.model-cost-reconciliation textarea { min-height: 80px; }

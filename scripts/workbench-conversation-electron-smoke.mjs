@@ -67,9 +67,8 @@ const server = createServer(async (request, response) => {
   const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
   requests.push(body)
   expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low', stream: true })
-  const input = JSON.parse(body.messages.find((message) => message.role === 'user').content)
-  if (input.criticalProposalInput) expect(body).not.toHaveProperty('max_tokens')
-  else expect(body.max_tokens).toBe(3500)
+  const input = JSON.parse(body.messages.filter((message) => message.role === 'user').at(-1).content)
+  expect(body.max_tokens).toBe(65536)
   expect(input.originalRequirements).toContainEqual(expect.objectContaining({ runId: run.id, content: run.request, truncated: false }))
   const user = input.history.filter((message) => message.role === 'user').at(-1)?.text ?? ''
   const observations = input.toolObservations
@@ -83,6 +82,22 @@ const server = createServer(async (request, response) => {
   if (user.includes('停止调查')) {
     const timer = setTimeout(() => { response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ text: '延迟响应' }) } }], usage: reportedUsage(10, 2) })) }, 5000)
     response.once('close', () => clearTimeout(timer)); return
+  }
+  if (body.tools && user.includes('原生只读验证')) {
+    const completedTools = body.messages.filter(message => message.role === 'tool')
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    if (!completedTools.length) {
+      const calls = [
+        {index:0,id:'native-list',type:'function',function:{name:'repo_list',arguments:'{"path":"."}'}},
+        {index:1,id:'native-read',type:'function',function:{name:'repo_read',arguments:'{"path":"tasks.js"}'}},
+      ]
+      response.write(`data: ${JSON.stringify({choices:[{index:0,delta:{role:'assistant',reasoning_content:'NATIVE_REQUIRED_HISTORY',tool_calls:calls},finish_reason:'tool_calls'}],usage:reportedUsage()})}\n\n`)
+    } else {
+      expect(completedTools.map(message => message.tool_call_id)).toEqual(['native-list','native-read'])
+      expect(body.messages.some(message => message.role === 'assistant' && message.reasoning_content === 'NATIVE_REQUIRED_HISTORY')).toBe(true)
+      response.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:JSON.stringify({text:'原生工具已核实清理函数保留未完成任务。',citationIds:['source-2']})},finish_reason:'stop'}],usage:reportedUsage()})}\n\n`)
+    }
+    response.end('data: [DONE]\n\n'); return
   }
   if (input.proposalVerification) {
     expect(input.proposalVerification.content).toContain('清理所有已完成任务')
@@ -136,7 +151,7 @@ let app
 let page
 const errors = []
 async function launch() {
-  app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: apiUrl, DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
+  app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: apiUrl, DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_NATIVE_READONLY_PILOT_ENABLED: '1', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
   // Keep this synthetic-credential test independent of a user's OS keychain authorization.
   await app.evaluate(({ safeStorage }) => {
     safeStorage.isAsyncEncryptionAvailable = async () => true
@@ -333,20 +348,32 @@ try {
   await send('格式恢复验证')
   await readyText('格式恢复成功，原始需求仍然完整。')
   expect(requests.length - recoveryStart).toBe(2)
-  await expect(page.getByText(/本轮允许自动重新生成一次/)).toBeVisible()
-  await expect(page.getByRole('button', { name: '重试调查', exact: true })).toHaveCount(0)
+  await expect(page.getByText(/本步骤调用未完成；正在自动重试/)).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试这一步', exact: true })).toHaveCount(0)
   await page.screenshot({ scale: 'css', path: path.join(output, '07-format-recovery.png') })
+  // A failed call retains its known bound. The same operation can recover without reconciling a fake bill.
+  const beforeTransient = requests.length
   await send('失败重试场景，请查询测试进度。')
-  await expect(page.getByRole('button', { name: '重试调查', exact: true })).toBeVisible({ timeout: 30000 })
-  const callsAfterFailure = requests.length
-  await page.getByRole('button', { name: '重试调查', exact: true }).click()
-  await readyText('有模型调用的实际费用尚未确认')
-  expect(requests.length).toBe(callsAfterFailure)
-  // This isolated local endpoint has no bill. Explicitly change only its test project policy
-  // to exercise retry after the real budget boundary has demonstrably refused unknown cost.
-  await page.evaluate((projectId) => window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({ projectId, enabled: false, monthlyLimitUsd: 1, warningThresholdUsd: 0.5 }), project.id)
-  await page.getByRole('button', { name: '重试调查', exact: true }).click()
   await readyText('测试节点尚未执行')
+  expect(requests.length - beforeTransient).toBe(3)
+  const afterTransient = await page.evaluate((projectId) => window.aiDevFlowDesktop.getModelCostRecovery({ projectId }), project.id)
+  expect(afterTransient.overview.pendingBoundedCostUsd).toBeGreaterThan(0)
+  expect(afterTransient.overview.records.some(row => row.costUsd === null && row.verifiedHoldUsd > 0)).toBe(true)
+  // Exercise the real single-action continuation card, with this isolated team's budget still enabled.
+  await page.evaluate((projectId) => window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({ projectId, enabled: true, monthlyLimitUsd: 0.01, warningThresholdUsd: 0.005 }), project.id)
+  const beforeConsent = requests.length
+  await send('确认预算后查询测试进度。')
+  const continuation = page.getByRole('region', { name: '预算继续确认', exact: true })
+  await expect(continuation).toBeVisible({ timeout: 30000 })
+  expect(requests.length).toBe(beforeConsent)
+  await expect(continuation.getByRole('checkbox')).not.toBeChecked()
+  await continuation.getByRole('checkbox').click()
+  await expect(continuation).toHaveCount(0)
+  await expect.poll(() => requests.length - beforeConsent).toBe(2)
+  await expect(page.getByRole('button', { name: '停止调查', exact: true })).toHaveCount(0)
+  await readyText('测试节点尚未执行')
+  // Return the dedicated fixture budget to its initial limit; no real cost record is edited.
+  await page.evaluate((projectId) => window.aiDevFlowDesktop.saveCodingRuntimeBudgetPolicy({ projectId, enabled: true, monthlyLimitUsd: 10, warningThresholdUsd: 5 }), project.id)
   await send('停止调查场景')
   await page.getByRole('button', { name: '停止调查', exact: true }).click()
   await readyText('已停止调查')
@@ -415,7 +442,8 @@ try {
   await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '外观', exact: true }).click()
   for (let attempt = 0; attempt < 3 && await page.locator('html').getAttribute('data-theme') !== 'light'; attempt++) await page.getByTestId('theme-toggle').click()
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
-  await navigation.getByRole('button', { name: '任务', exact: true }).click()
+  await navigation.getByRole('button', { name: /^任务中心/ }).click()
+  await page.getByRole('button', { name: `继续任务：${run.title}`, exact: true }).click()
   await expect(page.getByRole('textbox', { name: '对话内容' })).toHaveValue('重启后继续输入')
   await expect(page.locator('.toast')).toHaveCount(0, { timeout: 15000 })
   await page.screenshot({ scale: 'css', path: path.join(output, '04-light-workspace.png') })
@@ -442,12 +470,25 @@ try {
   }
   // Diagnostics are 设置／高级 (plan Y2); four primary entries (Y1).
   const primaryNav = page.locator('aside[aria-label="Primary navigation"]')
-  await expect(primaryNav.getByRole('button')).toHaveText(['任务', '知识', '团队', '设置'])
+  await expect(primaryNav.getByRole('button')).toHaveText([/^任务中心/, '知识', '团队', '设置'])
   await expect(page.getByTestId('data-profile-diagnostics')).toHaveCount(0)
   await primaryNav.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '高级', exact: true }).click()
   await expect(page.getByTestId('data-profile-diagnostics')).toBeVisible()
-  await primaryNav.getByRole('button', { name: '任务', exact: true }).click()
+  await primaryNav.getByRole('button', { name: /^任务中心/ }).click()
+  await page.getByRole('button', { name: `继续任务：${run.title}`, exact: true }).click()
+  const beforeNative = requests.length
+  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByLabel('新对话执行方式').selectOption('native-tools')
+  await page.getByRole('button', { name: '创建对话', exact: true }).click()
+  await send('原生只读验证：列出目录、读取 tasks.js，并给出带引用的结论。')
+  await readyText('原生工具已核实清理函数保留未完成任务。')
+  expect(requests.length - beforeNative).toBe(2)
+  const nativeSessions = await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({type:'list',projectId}), project.id)
+  const native = nativeSessions.conversations.find(conversation => conversation.executor === 'native-tools')
+  expect(native.messages.at(-1).citations[0].label).toContain('tasks.js')
+  expect(native.messages.filter(message => message.role === 'tool')).toHaveLength(2)
+  expect(native.status).toBe('idle')
   const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
   expect(state.runs[0].currentNodeId).toBe(run.currentNodeId)
   expect(state.artifacts.some((artifact) => artifact.title.includes('讨论提案（待确认）'))).toBe(true)
@@ -457,7 +498,7 @@ try {
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
   expect(modelErrors).toEqual([])
-  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, nativeReadOnlyPilot: true, budgetContinuationCheckbox: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
 } catch (error) {

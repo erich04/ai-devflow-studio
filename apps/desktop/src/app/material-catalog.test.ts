@@ -8,6 +8,8 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
+import { applyDesignRevision, createFakeAgentProvider, runWorkflowStageAgent } from '@ai-devflow/shared'
+import { designRevisionFixture } from '../testing/design-revision'
 import {
   describeMaterial,
   groupMaterials,
@@ -72,6 +74,15 @@ function issue181(v1Status: 'superseded' | 'approved', v2Status: 'approved' | 'r
 }
 
 describe('material labels and groups (plan §9.1, S4 Z5, Issue #181)', () => {
+  it('shows a replaced design as history and the new Gate-linked design as pending', async () => {
+    const f = await designRevisionFixture()
+    const generated = await runWorkflowStageAgent({ ...f, provider: createFakeAgentProvider(), requestedBy: 'user-1', runtime: 'electron', designRevision: f.selection })
+    const run = await applyDesignRevision({ ...f, gateNodeId: f.run.currentNodeId, request: f.selection, artifact: generated.artifact })
+    const context = { run, events: [], formatTime: time, artifacts: [...f.artifacts, generated.artifact] }
+    expect(describeMaterial(f.design, context)).toMatchObject({ group: 'history', statusLabel: '已被替代（历史）' })
+    expect(describeMaterial(generated.artifact, context)).toMatchObject({ group: 'pending', statusLabel: '待评审' })
+    expect(describeMaterial(f.proposal, context)).toMatchObject({ group: 'proposal', statusLabel: '已用于方案修订，保留讨论记录' })
+  })
   it('tells the four materials of Issue #181 apart by type, version, status and time', () => {
     const value = issue181('superseded', 'approved')
     const labels = [value.raw, value.proposal, value.v1, value.v2].map((artifact) => describeMaterial(artifact, value.context).label)

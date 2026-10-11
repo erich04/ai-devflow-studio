@@ -391,7 +391,7 @@ export function useDesktopWorkspace(input: {
     if (state.settings.selectedAgentProviderId !== undefined) {
       setSelectedAgentProviderId(state.settings.selectedAgentProviderId)
     }
-    setKnowledgeReviewExecutor(state.settings.knowledgeReviewExecutor === 'local-agent' ? 'local-agent' : 'direct-provider')
+    setKnowledgeReviewExecutor(state.settings.knowledgeReviewExecutor ?? 'direct-provider')
     setHasLoadedLocalState(true)
     if (state.projects[0] && !selectedLocalProjectIdRef.current) {
       setSelectedLocalProjectId(state.projects[0].id)

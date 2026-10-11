@@ -1,5 +1,5 @@
 import type { AgentProviderUsage, TokenUsage } from './domain'
-import { isFinalModelCallSettlement, parseModelCallSettlement, type ModelCallAttempt, type ModelCallSettlement } from './model-call-budget'
+import { settledModelCallCost, isFinalModelCallSettlement, parseModelCallSettlement, type ModelCallAttempt, type ModelCallSettlement } from './model-call-budget'
 import { redactSensitiveText } from './redaction'
 
 export type ModelCostSourceKind = 'model_call' | 'legacy_usage'
@@ -45,6 +45,7 @@ export type ModelCostRecord = {
   projectId: string; sourceKind: ModelCostSourceKind; sourceId: string; originalUserId: string
   model: string; providerId: string; createdAt: string; version: string
   originalState: string; originalCostUsd: number | null; costUsd: number | null
+  budgetCostUsd: number | null; verifiedHoldUsd?: number
   usage?: AgentProviderUsage; usageKnown: boolean; isReservation: boolean
   status: 'settled' | 'running' | 'stale_reservation' | 'upload_pending' | 'missing_usage' | 'missing_pricing' | 'conflict'
   affectsCurrentBudget: boolean; canReconcile: boolean
@@ -53,6 +54,7 @@ export type ModelCostRecord = {
 export type ModelCostRecoveryOverview = {
   projectId: string; month: string; asOf: string
   actualCostUsd: number; actualUnknownCount: number
+  pendingBoundedCostUsd?: number
   reservedCostUsd: number; reservedUnknownCount: number; reviewCount: number
   records: ModelCostRecord[]
 }
@@ -96,7 +98,7 @@ export function parseModelCostReconciliation(value: unknown): ModelCostReconcili
 }
 
 function hasUsage(usage: AgentProviderUsage | undefined): boolean {
-  return usage?.inputTokens !== undefined && usage.outputTokens !== undefined && !usage.missingUsageCount
+  return usage?.usageCompleteness !== 'partial' && usage?.inputTokens !== undefined && usage.outputTokens !== undefined && !usage.missingUsageCount
 }
 
 /** Call IDs and project scope use the same deduplication for the budget, reports and recovery list. */
@@ -113,12 +115,13 @@ export function buildModelCostRecords(legacy: TokenUsage[], calls: ModelCallAtte
       usage: { inputTokens: row.inputTokens, outputTokens: row.outputTokens, cacheReadTokens: row.cacheReadTokens,
         ...((row.usageStatus && row.usageStatus !== 'complete') || ('source' in row && row.source === 'unknown') ||
           (!row.usageStatus && row.costUsd === null && row.inputTokens === 0 && row.outputTokens === 0) ? { missingUsageCount: 1 } : {}) } as AgentProviderUsage | undefined,
-      reservation: false, pending: false, projectedCostUsd: null as number | null,
+      reservation: false, pending: false, projectedCostUsd: null as number | null, verifiedBound: undefined as ModelCallAttempt['verifiedBound'], remoteEnded: true,
     })),
     ...calls.map(call => ({
       sourceKind: 'model_call' as const, sourceId: call.id, projectId: call.projectId, originalUserId: call.userId,
       model: call.model, providerId: call.providerId, createdAt: call.createdAt, originalState: call.state,
-      originalCostUsd: call.costUsd, usage: call.usage ?? call.pendingSettlement?.usage, reservation: call.state === 'reserved',
+      originalCostUsd: call.costUsd, usage: call.usage ?? call.pendingSettlement?.usage ?? call.usageObservation, reservation: call.state === 'reserved',
+      verifiedBound: call.verifiedBound, remoteEnded: call.remoteEnded ?? (call.state === 'completed' || call.state === 'not_sent'),
       pending: isFinalModelCallSettlement(call.pendingSettlement, call.pendingSettlementFinal), projectedCostUsd: call.projectedCostUsd,
     })),
   ]
@@ -131,12 +134,23 @@ export function buildModelCostRecords(legacy: TokenUsage[], calls: ModelCallAtte
     const versionBase = { ...base, model: redactSensitiveText(base.model).value, providerId: redactSensitiveText(base.providerId).value }
     if (correction && base.sourceKind === 'legacy_usage') {
       try {
-        if (canonicalFinancialValue(JSON.parse(correction.expectedVersion)[0]) !== canonicalFinancialValue(versionBase)) unresolvedConflictIds.push('source_changed')
+        const comparable = (value: Record<string, unknown>) => { const { remoteEnded: _, ...rest } = value; return canonicalFinancialValue(rest) }
+        if (comparable(JSON.parse(correction.expectedVersion)[0]) !== comparable(versionBase)) unresolvedConflictIds.push('source_changed')
       } catch { unresolvedConflictIds.push('source_changed') }
     }
     const stale = base.reservation && Date.parse(now) - Date.parse(base.createdAt) > 10 * 60_000
     const isReservation = base.reservation && !correction
-    const costUsd = unresolvedConflictIds.length ? null : correction?.costUsd ?? (isReservation ? (stale ? null : base.projectedCostUsd) : base.originalCostUsd)
+    const confirmation = history.slice(lastReconciliationIndex + 1).reverse().find(event => event.kind === 'settlement_confirmation')
+    const confirmedCost = confirmation?.kind === 'settlement_confirmation' && base.sourceKind === 'model_call'
+      ? calls.find(call => call.id === base.sourceId && call.projectId === base.projectId) : undefined
+    const lateCost = confirmedCost && confirmation?.kind === 'settlement_confirmation'
+      ? settledModelCallCost(confirmedCost, confirmation.settlement) : null
+    const costUsd = unresolvedConflictIds.length ? null : correction?.costUsd ?? lateCost ?? base.originalCostUsd
+    const boundBreached = !correction && base.verifiedBound && ((costUsd !== null && costUsd > base.verifiedBound.costUsd + 1e-9) ||
+      (base.usage?.inputTokens ?? 0) > base.verifiedBound.inputTokenBound || (base.usage?.outputTokens ?? 0) > base.verifiedBound.maxOutputTokens)
+    if (boundBreached) unresolvedConflictIds.push('verified_bound_exceeded')
+    const verifiedHold = !unresolvedConflictIds.length && !boundBreached ? base.verifiedBound?.costUsd : undefined
+    const budgetCostUsd = unresolvedConflictIds.length || boundBreached ? null : costUsd ?? verifiedHold ?? null
     const confirmed = history.slice(lastReconciliationIndex + 1).reverse().find(event => event.kind === 'settlement_confirmation' && hasUsage(event.settlement.usage))
     const usage = correction?.usage ?? (confirmed?.kind === 'settlement_confirmation' ? confirmed.settlement.usage : undefined) ?? base.usage
     const status: ModelCostRecord['status'] = unresolvedConflictIds.length ? 'conflict' : correction ? 'settled' :
@@ -147,9 +161,10 @@ export function buildModelCostRecords(legacy: TokenUsage[], calls: ModelCallAtte
       model: redactSensitiveText(base.model).value, providerId: redactSensitiveText(base.providerId).value, createdAt: base.createdAt,
       // Exact financial snapshot + last append ID; no lossy hashes or clocks as concurrency control.
       version: canonicalFinancialValue([versionBase, history.at(-1)?.id ?? null]),
-      originalState: base.originalState, originalCostUsd: base.originalCostUsd, costUsd,
+      originalState: base.originalState, originalCostUsd: base.originalCostUsd, costUsd, budgetCostUsd,
+      ...(verifiedHold !== undefined && costUsd === null ? { verifiedHoldUsd: verifiedHold } : {}),
       ...(usage ? { usage } : {}), usageKnown: hasUsage(usage), isReservation, status,
-      affectsCurrentBudget: base.createdAt.slice(0, 7) === now.slice(0, 7),
+      affectsCurrentBudget: base.createdAt.slice(0, 7) === now.slice(0, 7) || (!base.remoteEnded && !correction && !confirmation && costUsd === null),
       canReconcile: !base.reservation || stale,
       events: history, unresolvedConflictIds,
     }
@@ -158,13 +173,13 @@ export function buildModelCostRecords(legacy: TokenUsage[], calls: ModelCallAtte
 
 export function modelCostRecoveryOverview(legacy: TokenUsage[], calls: ModelCallAttempt[], events: ModelCostEvent[], projectId: string, now: string): ModelCostRecoveryOverview {
   const records = buildModelCostRecords(legacy, calls, events, now).filter(record => record.projectId === projectId)
-  const view: ModelCostRecoveryOverview = { projectId, month: now.slice(0, 7), asOf: now, actualCostUsd: 0, actualUnknownCount: 0, reservedCostUsd: 0, reservedUnknownCount: 0, reviewCount: 0, records }
+  const view: ModelCostRecoveryOverview = { projectId, month: now.slice(0, 7), asOf: now, actualCostUsd: 0, actualUnknownCount: 0, pendingBoundedCostUsd: 0, reservedCostUsd: 0, reservedUnknownCount: 0, reviewCount: 0, records }
   for (const record of records) {
     if (!['settled', 'running'].includes(record.status)) view.reviewCount++
     if (!record.affectsCurrentBudget) continue
     if (record.isReservation) {
-      if (record.costUsd === null) view.reservedUnknownCount++; else view.reservedCostUsd += record.costUsd
-    } else if (record.costUsd === null) view.actualUnknownCount++; else view.actualCostUsd += record.costUsd
+      if (record.budgetCostUsd === null) view.reservedUnknownCount++; else view.reservedCostUsd += record.budgetCostUsd
+    } else if (record.costUsd === null) { view.actualUnknownCount++; view.pendingBoundedCostUsd! += record.verifiedHoldUsd ?? 0 } else view.actualCostUsd += record.costUsd
   }
   return view
 }

@@ -2613,7 +2613,8 @@ describe('team API route resolver', () => {
       blocksRun: true,
       currentSpendUsd: 0,
       projectedCostUsd: 0.01,
-      reason: '有模型调用的实际费用尚未确认，请先核对用量；不能按零费用放行。',
+      reason: '历史费用待确认；可以查看当前操作的继续授权，原记录仍保持未知。',
+      continuationEligible: true,
     })
   })
 

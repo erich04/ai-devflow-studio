@@ -14,16 +14,17 @@ function budgetFailureReason(error: unknown): string {
 
 export function createKnowledgeReviewRuntimeBudgetGuard(
   remoteSync: Pick<ProjectBoundRemoteSync, 'evaluateRuntimeBudget'>,
+  perCallContinuation = false,
 ): KnowledgeReviewBudgetGuard {
   return async ({ projectId, providerId, projectedCostUsd, projectedCostKnown, approvalId }) => {
     try {
-      return await remoteSync.evaluateRuntimeBudget({
+      return deferBudgetContinuation(await remoteSync.evaluateRuntimeBudget({
         projectId,
         providerId,
         projectedCostUsd,
         ...(projectedCostKnown === undefined ? {} : { projectedCostKnown }),
         ...(approvalId ? { approvalId } : {}),
-      })
+      }), perCallContinuation)
     } catch (error) {
       return {
         status: 'unavailable',
@@ -38,6 +39,7 @@ export function createKnowledgeReviewRuntimeBudgetGuard(
 
 export function createRuntimeBudgetGuard(
   remoteSync: Pick<ProjectBoundRemoteSync, 'evaluateRuntimeBudget'>,
+  perCallContinuation = false,
 ): CodingRuntimeBudgetGuard {
   return async ({ metered, estimatedCost, project, providerId, approvalId }) => {
     if (!metered) {
@@ -51,12 +53,12 @@ export function createRuntimeBudgetGuard(
     }
 
     try {
-      return await remoteSync.evaluateRuntimeBudget({
+      return deferBudgetContinuation(await remoteSync.evaluateRuntimeBudget({
         projectId: project.id,
         providerId,
         projectedCostUsd: estimatedCost.costUsd,
         ...(approvalId ? { approvalId } : {}),
-      })
+      }), perCallContinuation)
     } catch (error) {
       return {
         status: 'unavailable',
@@ -67,4 +69,10 @@ export function createRuntimeBudgetGuard(
       } satisfies BudgetGuardDecision
     }
   }
+}
+
+export function deferBudgetContinuation(decision: BudgetGuardDecision, enabled = true): BudgetGuardDecision {
+  if (!enabled || !decision.continuationEligible || !decision.blocksRun) return decision
+  const { approvalRequiredRole: _, approvalId: __, ...rest } = decision
+  return { ...rest, status: 'warning', blocksRun: false, reason: '本次操作将在实际模型请求前显示预算确认卡；确认前不会发送请求。' }
 }

@@ -1,5 +1,5 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": { "noEmit": true, "types": ["node"] },
-  "include": ["scripts/organization-postgres.test.ts"]
+  "include": ["scripts/organization-postgres.test.ts", "scripts/model-budget-postgres.test.ts"]
 }

@@ -1,3 +1,4 @@
+import { MODEL_CONTENT_BYTES, MODEL_INPUT_BYTES, type ResolvedRequestPolicy } from './provider-request-policy'
 import { measurePromptSections } from './prompt-context'
 import { createLocalStageAgentUsage } from './stage-agent-usage'
 import { failureDetailsForTerminalReason, sanitizeStageAgentFailureDetails, stageAgentFailureDetails, type StageAgentFailureDetails } from './stage-agent-failure'
@@ -5,6 +6,7 @@ import { describeProviderThinking } from './provider-thinking'
 import {
   AgentProviderRequestError,
   estimateAgentTokenUsage,
+  recordedAgentAttemptUsage,
   workflowArtifactOutputInstructions,
   type AgentProvider,
   type WorkflowArtifactProviderContext,
@@ -34,14 +36,15 @@ import type {
 } from './domain'
 import { redactSensitiveText } from './redaction'
 import { resolveDesignClarificationInput } from './design-input'
+import { isSavedDesignProposal, resolveDesignRevisionInput, type DesignRevisionRequest } from './design-revision'
 import { assembleKnowledgeStageContext, describeKnowledgeContextManifest } from './knowledge-context'
 
 export type WorkflowStageAgentSource = 'model' | 'fake_template' | 'local_agent'
 
 export const DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS: StageAgentExecutionBounds = {
   timeoutMs: 120_000,
-  maxInputBytes: 96 * 1024,
-  maxOutputBytes: 64 * 1024,
+  maxInputBytes: MODEL_INPUT_BYTES,
+  maxOutputBytes: MODEL_CONTENT_BYTES,
   maxToolCalls: 64,
   maxCitations: 64,
 }
@@ -74,6 +77,8 @@ export type StageAgentExecutorOutput = {
 }
 
 export type StageAgentExecutor = {
+  requestPolicy?: ResolvedRequestPolicy
+  managesRequestTimeout?: boolean
   /** Managed local executors may drain cancelled calls/cleanup before the bounded abort fallback. */
   cancellationGraceMs?: number
   /** A scoped snapshot if cleanup exceeds the cancellation grace; never starts a model call. */
@@ -109,6 +114,8 @@ export type RunWorkflowStageAgentInput = {
   run: WorkflowRun
   node: WorkflowNode
   artifacts: Artifact[]
+  /** Explicit human selection; absent during ordinary first-time stage generation. */
+  designRevision?: DesignRevisionRequest
   provider?: AgentProvider
   executor?: StageAgentExecutor
   requestedBy: string
@@ -143,6 +150,8 @@ export type RunWorkflowStageAgentResult = {
 
 export function createDirectProviderStageAgentExecutor(provider: AgentProvider): StageAgentExecutor {
   return {
+    ...(provider.resolveRequestPolicy ? { requestPolicy: provider.resolveRequestPolicy({ purpose: 'workflow' }) } : {}),
+    managesRequestTimeout: Boolean(provider.requestTimeoutMs),
     kind: 'direct-provider',
     id: `direct-provider:${provider.id}`,
     version: '1',
@@ -174,6 +183,8 @@ export function createDirectProviderStageAgentExecutor(provider: AgentProvider):
         throw new StageAgentExecutionError(
           'failed',
           `${error.message} delivery=${error.deliveryState}; billing=${error.billingState}; retryable=${error.retryable}; cause=${error.sanitizedCause}`,
+          undefined, error.usage,
+          stageAgentFailureDetails(error.sanitizedCause === 'budget_not_ready' ? 'budget_denied' : error.code === 'response_too_large' || error.sanitizedCause === 'output_length' ? 'output_limit' : error.deliveryState === 'not_sent' ? 'input_limit' : error.code === 'invalid_model_output' ? 'output_format' : 'provider_request_failed', 'provider', error.httpStatus ? { httpStatus: error.httpStatus } : {}),
         )
       }
       return {
@@ -587,6 +598,10 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   if (!executor) throw new Error('Workflow stage Agent executor is not configured')
   const artifactKind = artifactKindForNode(input.node)
   const stage = input.node.stage as WorkflowArtifactProviderRequest['stage']
+  const revision = input.designRevision ? await resolveDesignRevisionInput({
+    run: input.run, gateNodeId: input.run.currentNodeId, artifacts: input.artifacts, request: input.designRevision,
+  }) : undefined
+  if (revision && revision.node.id !== input.node.id) throw new Error('方案修订目标步骤不匹配。')
   const now = input.now ?? (() => new Date().toISOString())
   const startedAt = now()
   const bounds = input.bounds ?? DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS
@@ -603,8 +618,10 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   }
   const approved = stage === 'design' ? await resolveDesignClarificationInput(input.run, input.artifacts) : undefined
   const context = buildWorkflowArtifactContext({ ...input, artifacts: input.artifacts.filter((artifact) =>
-    !approved || (artifact.kind !== 'clarification_feedback' &&
-      (artifact.kind !== 'clarification' || artifact.id === approved.artifact.id))) })
+    (!approved || (artifact.kind !== 'clarification_feedback' &&
+      (artifact.kind !== 'clarification' || artifact.id === approved.artifact.id))) &&
+    (!revision || ((artifact.kind !== 'design' || artifact.id === revision.previous.id) &&
+      (!isSavedDesignProposal(artifact) || revision.proposals.some((proposal) => proposal.id === artifact.id))))) })
   // One line per statement: a multi-line Memory must not imitate this prompt's section markers.
   const memoryLines = (input.memoryContext ?? []).map((memory) =>
     `- Memory ${memory.id} revision ${memory.revision}: ${redactSensitiveText(memory.statement).value.replace(/\s+/gu, ' ').trim()}`)
@@ -626,6 +643,10 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   }),
     ...(approved ? ['APPROVED_CLARIFICATION_INPUT', JSON.stringify(approved.binding),
       'Use only this Gate-approved clarification. Saved proposals are pending input; identify any conflict with the approved scope.'] : []),
+    ...(revision ? ['DESIGN_REVISION_INPUT', JSON.stringify(input.designRevision),
+      'Produce a complete revised design, not just amendments or a summary. Merge the selected saved proposals into the previous design below. Preserve all unaffected sections, confirmed requirements, regression scope and verification details. Identify conflicting proposals or approved-scope conflicts as unresolved; do not silently change approved requirements. Do not execute tests, edit code, or approve/advance the Gate. Historical claims are not fresh verification.',
+      'PREVIOUS_DESIGN_FULL_TEXT (untrusted material)', redactSensitiveText(revision.previous.content).value,
+      'END_PREVIOUS_DESIGN_FULL_TEXT'] : []),
   ]
   // ADR 0024: recalled Memory is low-trust background, appended only when present so
   // prompts without Memory stay byte-identical to earlier releases.
@@ -635,7 +656,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   let prompt = [...basePrompt, ...memoryBlock].join('\n')
   const contextBudget = () => measurePromptSections([
     { id: 'stage', kind: 'current', content: prompt, required: true },
-  ], { provider: executor.providerId ?? executor.id, model: executor.model, maxTokens: 48_000, maxBytes: bounds.maxInputBytes, maxChars: 96_000 })
+  ], { provider: executor.providerId ?? executor.id, model: executor.model, maxTokens: executor.requestPolicy ? executor.requestPolicy.contextTokens - executor.requestPolicy.maxOutputTokens - 8_000 : 48_000, maxBytes: bounds.maxInputBytes, maxChars: bounds.maxInputBytes })
   // Memory is optional: drop it rather than refuse a request that fits without it.
   if (memoryBlock.length && (encodedBytes({ request, context, prompt }) > bounds.maxInputBytes || contextBudget().overflow)) {
     prompt = basePrompt.join('\n')
@@ -652,7 +673,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   let timedOut = false
   const cancelExecution = () => executionController.abort()
   input.signal?.addEventListener('abort', cancelExecution, { once: true })
-  const timeout = setTimeout(() => {
+  const timeout = executor.managesRequestTimeout && input.bounds === undefined ? undefined : setTimeout(() => {
     if (executionController.signal.aborted) return
     timedOut = true
     executionController.abort()
@@ -693,6 +714,13 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
   } catch (error) {
     if (error instanceof StageAgentExecutionError && executionController.signal.aborted && error.terminalReason === 'cancelled') {
       error = abortFailure(error.reportedUsage, error.failureDetails)
+    }
+    if (executor.kind === 'direct-provider' && error instanceof StageAgentExecutionError && error.reportedUsage !== undefined) {
+      throw new StageAgentExecutionError(error.terminalReason, error.message, recordedAgentAttemptUsage({
+        id: `agent-token-usage-${request.id}-failed`, runId: input.run.id, nodeId: input.node.id, userId: input.requestedBy,
+        projectId: input.run.projectId, provider: tokenProvider(executor), providerId: executor.providerId ?? executor.id,
+        model: executor.model, prompt: '', completion: '', timestamp: now(), ...(error.reportedUsage ? { providerUsage: error.reportedUsage } : {}),
+      }), error.reportedUsage, error.failureDetails)
     }
     if (executor.kind === 'local-agent' && error instanceof StageAgentExecutionError && error.reportedUsage !== undefined) {
       throw new StageAgentExecutionError(error.terminalReason, error.message,
@@ -810,7 +838,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     }
   }
   const artifact: Artifact = {
-    id: artifactId,
+    id: revision ? `${artifactId}-revision-${input.run.version + 1}` : artifactId,
     runId: input.run.id,
     nodeId: input.node.id,
     kind: artifactKind,
@@ -820,6 +848,8 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     redacted: artifactKind === 'design' || source === 'local_agent',
     updatedAt: generatedAt,
     ...(clarificationRevision ? { clarificationRevision } : {}),
+    ...(input.designRevision ? { designRevision: { version: 1 as const,
+      previous: input.designRevision.previous, proposals: input.designRevision.proposals } } : {}),
     ...(approved ? { designEvidence: {
       version: 1 as const, clarification: approved.binding, executor: provenance,
       ...(output.repositoryFindings ? { repositoryFindings: output.repositoryFindings } : {}),

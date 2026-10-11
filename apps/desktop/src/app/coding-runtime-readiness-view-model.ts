@@ -54,6 +54,18 @@ const readinessCopy: Record<CodingRuntimeReadinessCode, ReadinessCopy> = {
   budget_policy_missing: {
     label: '预算策略', ready: '已配置', blocked: '未配置', remediation: '保存当前项目的 Runtime Budget Policy。',
   },
+  budget_evaluation_failed: {
+    label: '预算评估', ready: '已评估', blocked: '评估失败', remediation: '预算已配置；恢复团队连接后重新评估。',
+  },
+  budget_fetch_failed: {
+    label: '预算读取', ready: '已读取', blocked: '读取失败', remediation: '恢复团队连接后刷新；无需重复保存预算。',
+  },
+  budget_not_checked: {
+    label: '预算策略', ready: '已读取', blocked: '尚未读取', remediation: '连接当前团队项目后刷新。',
+  },
+  budget_not_evaluated: {
+    label: '预算评估', ready: '已评估', blocked: '尚未评估', remediation: '执行条件就绪后评估本次运行额度。',
+  },
   budget_blocked: {
     label: '预算评估', ready: '允许执行', blocked: '阻止执行', remediation: '调整预算策略或取得一次性 Owner/Lead 批准。',
   },

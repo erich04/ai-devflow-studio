@@ -5,6 +5,24 @@ import { runs, artifacts } from './fixtures'
 
 const deepseek = { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' }
 describe('Provider thinking configuration', () => {
+  it('accepts a larger bounded output allowance while retaining input and output validation', async () => {
+    const bodies: Record<string, unknown>[] = []
+    const provider = createOpenAiCompatibleAgentProvider({ ...deepseek, apiKey: 'fixture-only',
+      fetcher: async (_url, init) => {
+        bodies.push(JSON.parse(String(init?.body)))
+        return Response.json({ choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] })
+      },
+    })
+    const request = { systemPrompt: 'JSON', userPrompt: 'fixture', maxOutputTokens: 32_768 }
+    await expect(provider.completeStructuredJson!(request)).resolves.toMatchObject({ value: { ok: true } })
+    await expect(provider.completeStructuredJson!({ ...request, maxOutputTokens: 393_217 })).rejects.toThrow('structured request is invalid')
+    await expect(provider.completeStructuredJson!({ ...request, userPrompt: 'x'.repeat(4 * 1024 * 1024 + 1) })).rejects.toMatchObject({
+      sanitizedCause: 'input_capacity_exceeded', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false,
+    })
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({ max_tokens: 32_768 })
+  })
+
   it.each([{ mode: 'disabled' as const }, { mode: 'enabled' as const, effort: 'high' as const }])('applies $mode consistently to review, clarification and design requests', async (thinking) => {
     const bodies: Record<string, unknown>[] = []
     const provider = createOpenAiCompatibleAgentProvider({ ...deepseek, thinking, apiKey: 'fixture-only', fetcher: async (_url, init) => {
@@ -57,7 +75,7 @@ describe('Provider thinking configuration', () => {
     })
     const result = await provider.completeStructuredJson!({ systemPrompt: 'JSON', userPrompt: 'fixture', maxOutputTokens: 500 })
     expect(bodies[0]).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: effort })
-    expect(bodies[0]).not.toHaveProperty('stream')
+    expect(bodies[0]).toHaveProperty('stream', true)
     expect(result).toMatchObject({ value: { ok: true }, reasoningContent: 'provider reasoning', responseMetadata: { effectiveThinking: { mode: 'enabled', effort } } })
   })
 
@@ -70,6 +88,6 @@ describe('Provider thinking configuration', () => {
     await provider.completeStructuredJson!({ systemPrompt: 'JSON', userPrompt: 'fixture', maxOutputTokens: 500, reasoning: { onDelta() { throw new Error('disabled') } } })
     expect(body).toMatchObject({ thinking: { type: 'disabled' } })
     expect(body).not.toHaveProperty('reasoning_effort')
-    expect(body).not.toHaveProperty('stream')
+    expect(body).toHaveProperty('stream', true)
   })
 })
