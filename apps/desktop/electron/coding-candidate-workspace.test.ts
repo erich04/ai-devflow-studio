@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile, symlink } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
@@ -107,4 +107,8 @@ it('materializes and verifies nested candidate paths beyond the Windows legacy p
   await workspace.materializeAtomic(manifest, destination)
   expect(await readFile(path.join(destination, 'old.ts'), 'utf8')).toBe('export const value = 1\n')
   await workspace.materializeAtomic(manifest, destination)
+  const relocated = path.join(root, 'relocated-independent-snapshot')
+  await rename(destination, relocated)
+  await promisify(execFile)('git', ['-C', relocated, 'fsck', '--full'])
+  expect((await promisify(execFile)('git', ['-C', relocated, 'status', '--porcelain'])).stdout).toBe('')
 })

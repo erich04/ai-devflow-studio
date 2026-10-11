@@ -49,7 +49,18 @@ export async function atomicCodingFile(destination: string, bytes: Uint8Array, m
   const temporary = `${destination}.${randomUUID()}.tmp`
   const handle = await open(temporary, 'wx', mode)
   try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-  try { await rename(temporary, destination) } finally { await rm(temporary, { force: true }) }
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try { await rename(temporary, destination); break }
+      catch (error) {
+        // Windows can deny replacement while a receipt reader or antivirus has
+        // the old file open. Never unlink it: retain the last durable value and
+        // retry only these transient errors, for at most 1.1 seconds in total.
+        if (process.platform !== 'win32' || attempt >= 8 || !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+        await new Promise(resolve => setTimeout(resolve, Math.min(20 * 2 ** attempt, 200)))
+      }
+    }
+  } finally { await rm(temporary, { force: true }) }
   // Persist the rename as well as the file contents on platforms supporting directory fsync.
   try { const directory = await open(path.dirname(destination), 'r'); try { await directory.sync() } finally { await directory.close() } }
   catch (error) { if (process.platform !== 'win32' || !['EPERM', 'EISDIR', 'EINVAL', 'EBADF'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error }
@@ -182,9 +193,11 @@ export class CodingCandidateWorkspace {
       const config = path.join(staging, 'empty-gitconfig'); await writeFile(config, '', { mode: 0o600 })
       const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: config,
         GIT_AUTHOR_NAME: 'DevFlow snapshot', GIT_AUTHOR_EMAIL: 'snapshot@devflow.invalid', GIT_COMMITTER_NAME: 'DevFlow snapshot', GIT_COMMITTER_EMAIL: 'snapshot@devflow.invalid', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' }
-      const git = (args: string[]) => exec('git', ['-c', 'core.longpaths=true', ...args], { cwd: tree, env })
+      const git = (args: string[]) => exec('git', ['-c', 'core.longpaths=true', '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', ...args], { cwd: tree, env })
       await git(['-c', 'init.templateDir=', 'init', '--quiet'])
       await git(['config', '--local', 'core.longpaths', 'true'])
+      await git(['config', '--local', 'maintenance.auto', 'false'])
+      await git(['config', '--local', 'gc.auto', '0'])
       await git(['-c', 'core.autocrlf=false', 'add', '--force', '--all'])
       await git(['-c', 'core.hooksPath=', 'commit', '--quiet', '--allow-empty', '-m', `Immutable input ${manifest.digest}`])
       for (const name of await readdir(tree)) await cp(path.join(tree, name), path.join(destination, name), { recursive: true, force: false, errorOnExist: true })
