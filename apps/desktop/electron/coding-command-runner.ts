@@ -16,6 +16,24 @@ export type CodingCommandReceipt = {
   phase?: 'preparation' | 'command'
 }
 const exec = promisify(execFile)
+async function waitForWorkerExit(pid: number, timeoutMs = 2000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  do {
+    try { process.kill(process.platform === 'win32' ? pid : -pid, 0) }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return true; throw error }
+    if (Date.now() >= deadline) return false
+    await new Promise(resolve => setTimeout(resolve, 25))
+  } while (true)
+}
+
+async function terminateCodingWorker(child: ChildProcess): Promise<void> {
+  if (process.platform !== 'win32' || !child.pid) return terminateProcessTree(child, { timeoutMs: 250, forceTimeoutMs: 2000 })
+  if (child.exitCode !== null || await waitForWorkerExit(child.pid, 0)) return
+  // On Windows, child.kill() forcibly exits only the worker; its JavaScript
+  // SIGTERM handler cannot stop the actual command descendant.
+  await exec('taskkill', ['/PID', String(child.pid), '/T', '/F'], { timeout: 5000 }).catch(async error => { if (!await waitForWorkerExit(child.pid!, 0)) throw error })
+  if (!await waitForWorkerExit(child.pid)) throw new Error('Coding command process tree did not exit')
+}
 // The worker will not start a command until the host durably records its identity and sends `go`.
 // Host IPC loss stops the worker's process group. It never interprets model-generated JavaScript.
 const workerSource = String.raw`
@@ -127,7 +145,7 @@ export class CodingCommandRunner {
       reason ??= why
       stopping ??= (async () => {
         if (plan.profile.kind === 'container') await exec('docker', ['rm', '--force', containerName], { timeout: 10_000 }).catch(error => { if (!String(error.stderr).includes('No such container')) throw error })
-        await terminateProcessTree(child, { timeoutMs: 250, forceTimeoutMs: 2000 })
+        await terminateCodingWorker(child)
       })()
       return stopping
     }
@@ -160,7 +178,7 @@ export class CodingCommandRunner {
       child.once('close', code => {
         void (async () => {
           clearTimeout(timer); signal?.removeEventListener('abort', abort)
-          try { await (stopping ?? terminateProcessTree(child, { timeoutMs: 250, forceTimeoutMs: 2000 })); await output }
+          try { await (stopping ?? terminateCodingWorker(child)); await output }
           catch (error) { logError = error }
           receipt.exitCode = reason ? null : commandExit
           receipt.status = logError ? 'unknown' : reason ?? (code === 0 && commandExit === 0 && !spawnError ? 'passed' : 'failed')
@@ -214,16 +232,17 @@ export class CodingCommandRunner {
       }
       try {
         let identity = ''
-        if (process.platform === 'win32') identity = (await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId = ${receipt.pid}").CommandLine`], { timeout: 5000 })).stdout
+        // Cold PowerShell/CIM startup can exceed five seconds on Windows. This
+        // bounded read only authenticates the old worker; it never grants work.
+        if (process.platform === 'win32') identity = (await exec('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId = ${receipt.pid}" -OperationTimeoutSec 5).CommandLine`], { timeout: 15000 })).stdout
         else identity = (await exec('ps', ['-p', String(receipt.pid), '-o', 'command='], { timeout: 5000 }).catch(error => { if (error.code === 1) return { stdout: '' }; throw error })).stdout
         if (identity.trim()) {
           if (!receipt.workerToken || !identity.includes(receipt.workerToken) || !identity.includes('command-worker.cjs')) { receipt.error = 'Recovery could not authenticate the recorded worker'; await this.save(receipt); safe = false; continue }
-          if (process.platform === 'win32') await exec('taskkill', ['/PID', String(receipt.pid), '/T', '/F'], { timeout: 5000 })
+          if (process.platform === 'win32') await exec('taskkill', ['/PID', String(receipt.pid), '/T', '/F'], { timeout: 5000 }).catch(async error => { if (!await waitForWorkerExit(receipt.pid!, 0)) throw error })
           else { try { process.kill(-receipt.pid, 'SIGTERM') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }; await new Promise(resolve => setTimeout(resolve, 400)); try { process.kill(-receipt.pid, 'SIGKILL') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error } }
         }
         if (receipt.plan.profile.kind === 'container') await exec('docker', ['rm', '--force', `devflow-${codingDigest(receipt.id).slice(0, 24)}`], { timeout: 10000 }).catch(error => { if (!String(error.stderr).includes('No such container')) throw error })
-        try { process.kill(process.platform === 'win32' ? receipt.pid : -receipt.pid, 0); receipt.error = 'Recorded worker still exists after termination'; await this.save(receipt); safe = false; continue }
-        catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
+        if (!await waitForWorkerExit(receipt.pid)) { receipt.error = 'Recorded worker still exists after termination'; await this.save(receipt); safe = false; continue }
         receipt.status = 'cancelled'; receipt.exitCode = null; receipt.completedAt = new Date().toISOString(); receipt.error = 'Interrupted command stopped during recovery; no success is inferred'; await this.save(receipt)
       } catch (error) { receipt.error = `Worker recovery could not prove termination: ${error instanceof Error ? error.message : 'unknown error'}`; await this.save(receipt); safe = false }
     }

@@ -175,12 +175,19 @@ export class CodingCandidateWorkspace {
     await writeFile(config, '', { mode: 0o600 })
     const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: config,
       GIT_AUTHOR_NAME: 'DevFlow snapshot', GIT_AUTHOR_EMAIL: 'snapshot@devflow.invalid', GIT_COMMITTER_NAME: 'DevFlow snapshot', GIT_COMMITTER_EMAIL: 'snapshot@devflow.invalid', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' }
-    await exec('git', ['-c', 'init.templateDir=', 'init', '--quiet', destination], { env })
+    // Windows' Git defaults to MAX_PATH even though Node can create the deeper
+    // private child/verification trees. Configure this repository, never global Git.
+    await exec('git', ['-c', 'core.longpaths=true', '-c', 'init.templateDir=', 'init', '--quiet', destination], { env })
+    await exec('git', ['-c', 'core.longpaths=true', 'config', '--local', 'core.longpaths', 'true'], { env, cwd: destination })
     await exec('git', ['-c', 'core.autocrlf=false', 'add', '--force', '--all'], { env, cwd: destination })
     await exec('git', ['-c', 'core.hooksPath=', 'commit', '--quiet', '--allow-empty', '-m', `Immutable input ${manifest.digest}`], { env, cwd: destination })
     if ((await snapshotCodingTree(destination, manifest.excludedPaths)).digest !== manifest.digest) throw new Error('Materialized snapshot mismatch')
   }
   async materializeAtomic(manifest: CodingManifest, destination: string): Promise<void> {
+    try {
+      if ((await snapshotCodingTree(destination, manifest.excludedPaths)).digest !== manifest.digest) throw new Error('Existing delegated base differs from its durable intent')
+      return
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
     const staging = `${destination}.creating-${randomUUID()}`
     try {
       await this.materialize(manifest, staging)

@@ -37,6 +37,24 @@ it('waits for the actual process to stop before returning cancellation', async (
   if (receipt.pid) expect(() => process.kill(receipt.pid!, 0)).toThrow()
 })
 
+it('cancels the actual command descendant as well as its worker', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-command-tree-')); directories.push(root)
+  const runner = new CodingCommandRunner(path.join(root, 'receipts'))
+  let commandPid: number | undefined
+  try {
+    const receipt = await runner.start('command-tree', { executable: process.execPath, args: ['-e', 'require("fs").writeFileSync("command.pid", String(process.pid));setInterval(()=>{},100)'], timeoutMs: 10000, profile: { kind: 'trusted_local' } }, root)
+    await expect.poll(async () => { try { commandPid = Number(await readFile(path.join(root, 'command.pid'), 'utf8')); return Number.isSafeInteger(commandPid) } catch { return false } }).toBe(true)
+    expect(commandPid).not.toBe(receipt.pid)
+    await runner.cancelAll()
+    expect((await runner.wait(receipt.id)).status).toBe('cancelled')
+    expect(() => process.kill(commandPid!, 0)).toThrow()
+  } finally {
+    // Failed assertions must not leave a real command holding the test directory.
+    if (commandPid) { try { process.kill(commandPid, 'SIGKILL') } catch {} }
+    await runner.cancelAll()
+  }
+})
+
 it('enforces the preparation deadline independently of the following test allowance', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-phase-deadline-')); directories.push(root)
   const runner = new CodingCommandRunner(path.join(root, 'receipts'))
@@ -48,14 +66,14 @@ it('enforces the preparation deadline independently of the following test allowa
 it('reconciles a surviving authenticated worker even when no logical writer lease remains', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-command-takeover-')); directories.push(root)
   const original = new CodingCommandRunner(path.join(root, 'receipts'))
-  const started = await original.start('old-worker', { executable: process.execPath, args: ['-e', 'setInterval(()=>{},100)'], timeoutMs: 10000, profile: { kind: 'trusted_local' } }, root)
+  const started = await original.start('old-worker', { executable: process.execPath, args: ['-e', 'setInterval(()=>{},100)'], timeoutMs: 30000, profile: { kind: 'trusted_local' } }, root)
   try {
-  const replacement = new CodingCommandRunner(path.join(root, 'receipts'))
-  const reconciled = await replacement.reconcile()
-  expect(reconciled, JSON.stringify(await replacement.get('old-worker'))).toBe(true)
-  await original.wait('old-worker')
-  expect(['cancelled', 'failed']).toContain((await replacement.get('old-worker'))!.status)
-  expect(() => process.kill(started.pid!, 0)).toThrow()
+    const replacement = new CodingCommandRunner(path.join(root, 'receipts'))
+    const reconciled = await replacement.reconcile()
+    expect(reconciled, JSON.stringify(await replacement.get('old-worker'))).toBe(true)
+    await original.wait('old-worker')
+    expect(['cancelled', 'failed']).toContain((await replacement.get('old-worker'))!.status)
+    expect(() => process.kill(started.pid!, 0)).toThrow()
   } finally { await original.cancelAll() }
 })
 
