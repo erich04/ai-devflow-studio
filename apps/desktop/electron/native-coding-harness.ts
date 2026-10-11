@@ -1,4 +1,4 @@
-import { codingHarnessSnapshot } from './native-coding-projection'
+import { codingHarnessSnapshot, markCodingDeliveryConflict, currentCodingDeliveryDigest } from './native-coding-projection'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseCodingHarnessCommand, sanitizeCodingDiffArtifact, redactSensitiveText, type AgentProvider, type CodingAgentRun, type CodingHarnessCommand, type CodingHarnessSnapshot, type CodingHarnessPage, type TestEvidence, type ModelCostRecord } from '@ai-devflow/shared'
@@ -297,8 +297,11 @@ function createHarnessService(host: HarnessHost): Harness {
     const evidence = session.deliveryEvidence.at(-1)
     if (session.status === 'completed' && evidence && ['technical_completed', 'verified_no_change', 'manual_accepted'].includes(evidence.status)) {
       const binding = session.binding!, revision = revisionFor(session)!, core = await loadCore(session, async () => {})
-      if ((await snapshotCodingTree(binding.context.workspace.worktreePath, revision.base.excludedPaths)).digest !== evidence.targetDigest) {
-        view.evidence.push({ id: `${evidence.id}-historical`, status: 'historical_content_changed', summary: '交付内容在本次验证后已变化。原记录保留为历史证据，不再据此推进当前工作流。' })
+      const currentDelivery = await currentCodingDeliveryDigest(binding.context.workspace.worktreePath, revision.base.excludedPaths)
+      if (currentDelivery !== evidence.targetDigest) {
+        if (!view.evidence.some(item => item.status.startsWith('historical_content_'))) view.evidence.push({ id: `${evidence.id}-historical`, status: currentDelivery === null ? 'historical_content_unavailable' : 'historical_content_changed', summary: '当前交付内容已变化或无法读取。原记录保留为历史证据，不再据此推进当前工作流。' })
+        const persisted = (await host.store.listCodingAgentRuns()).find(run => run.id === id)
+        if (persisted && !['completed', 'cancelled', 'failed', 'timed_out'].includes(persisted.status)) { markCodingDeliveryConflict(view); bundle.codingRun.summary = view.controlUnavailableReason!; bundle.codingRun.harness = { ...bundle.codingRun.harness!, status: 'delivery_conflict' } }
         return bundle
       }
       if (evidence.status === 'manual_accepted') {

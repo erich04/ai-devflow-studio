@@ -1,3 +1,4 @@
+import { NATIVE_CODING_EXECUTOR_UNAVAILABLE } from '@ai-devflow/shared'
 import { codingSessionGrantsForStore, type CodingGrantContext } from './coding-session-grants.js'
 import { snapshotCodingTree } from './coding-candidate-workspace.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -2773,18 +2774,24 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const recoverNative = executor.descriptor.id === 'coding-executor-native'
       const recoverOpenCode =
         executor.descriptor.kind === 'opencode' && executor.engine === 'opencode-http'
-      if (!recoverNative && !recoverOpenCode) return []
 
       const recovered: CodingAgentRun[] = []
       const codingRuns = await deps.store.listCodingAgentRuns()
       for (const codingRun of codingRuns) {
         if (deps.projectId && codingRun.projectId !== deps.projectId) continue
-        if (codingRun.harness && !executor.harness) continue
+        if (codingRun.harness && !executor.harness) {
+          if (activeCodingStatuses.has(codingRun.status) && codingRun.summary !== NATIVE_CODING_EXECUTOR_UNAVAILABLE) {
+            await commitCodingAgentMutation({ expectedRun: codingRun, expectedPendingPermissionRequestIds: [], run: { ...codingRun, summary: NATIVE_CODING_EXECUTOR_UNAVAILABLE, harness: { ...codingRun.harness, status: 'paused' } } })
+            recovered.push(await findCodingRun(codingRun.id))
+          }
+          continue
+        }
         if (codingRun.harness && executor.harness) {
           const recoveredBundle = await executor.harness.recover(codingRun, () => assertExecutionContext(codingRun))
           if (recoveredBundle) { await settleHarnessResult(recoveredBundle); recovered.push(await findCodingRun(codingRun.id)) }
           continue
         }
+        if (!recoverNative && !recoverOpenCode) continue
         const isOpenCodeRun = recoverOpenCode && codingRun.engine === 'opencode-http'
         const isNativeRun = recoverNative && codingRun.engine !== 'opencode-http'
         if (!isOpenCodeRun && !isNativeRun) continue

@@ -1,3 +1,4 @@
+import { NATIVE_CODING_EXECUTOR_UNAVAILABLE } from '@ai-devflow/shared'
 import { createNativeCodingExecutorV3, shutdownNativeCodingHarnesses } from './native-coding-harness.js'
 import { codingHarnessSnapshot } from './native-coding-projection.js'
 import { cleanupNativeCodingSession } from './native-coding-retention.js'
@@ -3937,7 +3938,9 @@ function registerIpcHandlers() {
     }
     if (command.type === 'get' && session) {
       const profile = await loadNativeCodingProfile(path.join(app.getPath('userData'), 'native-coding-profile.json'))
-      return codingHarnessSnapshot(session, { store, ...(profile.container ? { containerProfile: profile.container } : {}), costRecords: projectId => nativeCodingCostRecords(store, projectId) }, command)
+      const selection = await resolveCodingRuntimeSelection({ store, projectId: codingRun.projectId })
+      const available = selection.source === 'project' && selection.configuration.executor === 'native-model' && selection.configuration.nativeVersion === 3
+      return codingHarnessSnapshot(session, { store, ...(profile.container ? { containerProfile: profile.container } : {}), ...(!available ? { runtimeUnavailableReason: NATIVE_CODING_EXECUTOR_UNAVAILABLE } : {}), costRecords: projectId => nativeCodingCostRecords(store, projectId) }, command)
     }
     const runtime = await createCodingRuntimeForRequest(undefined, codingRun.projectId)
     return runtime.codingHarnessCommand(command)

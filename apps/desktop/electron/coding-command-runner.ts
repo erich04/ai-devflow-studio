@@ -217,15 +217,15 @@ export class CodingCommandRunner {
         if (process.platform === 'win32') identity = (await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId = ${receipt.pid}").CommandLine`], { timeout: 5000 })).stdout
         else identity = (await exec('ps', ['-p', String(receipt.pid), '-o', 'command='], { timeout: 5000 }).catch(error => { if (error.code === 1) return { stdout: '' }; throw error })).stdout
         if (identity.trim()) {
-          if (!receipt.workerToken || !identity.includes(receipt.workerToken) || !identity.includes('command-worker.cjs')) { safe = false; continue }
+          if (!receipt.workerToken || !identity.includes(receipt.workerToken) || !identity.includes('command-worker.cjs')) { receipt.error = 'Recovery could not authenticate the recorded worker'; await this.save(receipt); safe = false; continue }
           if (process.platform === 'win32') await exec('taskkill', ['/PID', String(receipt.pid), '/T', '/F'], { timeout: 5000 })
           else { try { process.kill(-receipt.pid, 'SIGTERM') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }; await new Promise(resolve => setTimeout(resolve, 400)); try { process.kill(-receipt.pid, 'SIGKILL') } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error } }
         }
         if (receipt.plan.profile.kind === 'container') await exec('docker', ['rm', '--force', `devflow-${codingDigest(receipt.id).slice(0, 24)}`], { timeout: 10000 }).catch(error => { if (!String(error.stderr).includes('No such container')) throw error })
-        try { process.kill(process.platform === 'win32' ? receipt.pid : -receipt.pid, 0); safe = false; continue }
+        try { process.kill(process.platform === 'win32' ? receipt.pid : -receipt.pid, 0); receipt.error = 'Recorded worker still exists after termination'; await this.save(receipt); safe = false; continue }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error }
         receipt.status = 'cancelled'; receipt.exitCode = null; receipt.completedAt = new Date().toISOString(); receipt.error = 'Interrupted command stopped during recovery; no success is inferred'; await this.save(receipt)
-      } catch { safe = false }
+      } catch (error) { receipt.error = `Worker recovery could not prove termination: ${error instanceof Error ? error.message : 'unknown error'}`; await this.save(receipt); safe = false }
     }
     return safe
   }

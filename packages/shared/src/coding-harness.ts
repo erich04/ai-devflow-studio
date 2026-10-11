@@ -1,5 +1,6 @@
 /** Harness turn protocol is versioned independently of executor implementation and file patches. */
 export const CODING_HARNESS_PROTOCOL_VERSION = 2 as const
+export const NATIVE_CODING_EXECUTOR_UNAVAILABLE = 'Native v3 任务尚未结算；请在模型与执行方式中切回 Native v3，再重新打开任务或重启应用继续恢复。'
 export type CodingHarnessStatus = 'ready' | 'running' | 'waiting_input' | 'waiting_task' | 'waiting_permission' | 'review' | 'paused' | 'reconciling' | 'applying' | 'verifying' | 'completed' | 'cancelled' | 'failed' | 'delivery_conflict'
 type CommandBase = { protocolVersion: 2; codingRunId: string }
 type Mutation = CommandBase & { commandId: string; expectedVersion: number }
@@ -19,6 +20,7 @@ export type CodingHarnessCommand =
 export type CodingHarnessSummary = { protocolVersion: 2; sessionId: string; status: CodingHarnessStatus; version: number }
 export type CodingHarnessSnapshot = CodingHarnessSummary & {
   codingRunId: string; objectiveVersion: number; pauseReason?: string; steps: number; activeMilliseconds: number
+  controlUnavailableReason?: string
   messages: Array<{ id: string; role: 'user' | 'assistant' | 'tool'; text: string; truncated?: boolean }>
   question?: { id: string; text: string; options: string[] }
   permission?: { id: string; title: string; details: string }

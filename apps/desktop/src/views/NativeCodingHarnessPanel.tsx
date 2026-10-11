@@ -23,7 +23,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     return () => unsubscribe?.()
   }, [api, codingRunId, refresh])
   const command = async (action: Action<CodingHarnessCommand>) => {
-    if (!snapshot || !api.codingHarness || (busy && !['cancel', 'pause', 'steer'].includes(action.type))) return
+    if (!snapshot || snapshot.controlUnavailableReason || !api.codingHarness || (busy && !['cancel', 'pause', 'steer'].includes(action.type))) return
     setPending(value => value + 1); setError('')
     try {
       const input = { protocolVersion: 2, codingRunId, commandId: crypto.randomUUID(), expectedVersion: snapshot.version, ...action } as CodingHarnessCommand
@@ -46,9 +46,10 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     <div className="section-heading"><strong>Native v3 · {snapshot.status === 'completed' && snapshot.manualValidationPlan ? '人工验收完成（无自动测试）' : labels[snapshot.status]}</strong><span>{snapshot.steps} 轮 · 活跃 {Math.ceil(snapshot.activeMilliseconds / 1000)} 秒</span></div>
     {error ? <p role="alert">{error}</p> : null}
     {snapshot.pauseReason ? <p>{snapshot.pauseReason}</p> : null}
+    {snapshot.controlUnavailableReason ? <p role="status">{snapshot.controlUnavailableReason}</p> : null}
     <p className="meta">输入 {snapshot.cost.inputTokens ?? '未知'} / 输出 {snapshot.cost.outputTokens ?? '未知'} tokens · 费用 {snapshot.cost.costUsd === null ? '待权威账本核定' : `$${snapshot.cost.costUsd.toFixed(4)}`} · {snapshot.cost.pendingSettlements} 笔待结算 · {snapshot.cost.unknownAttempts} 笔用量待核对</p>
     {snapshot.cost.costUsd === null && snapshot.cost.knownCostUsd !== undefined ? <p>已确认费用小计 ${snapshot.cost.knownCostUsd.toFixed(4)}；另有 {snapshot.cost.unknownCostCount} 笔金额未确认。</p> : null}
-    {snapshot.status === 'waiting_permission' && !snapshot.permission ? <div className="coding-permission-card">
+    {!snapshot.controlUnavailableReason && snapshot.status === 'waiting_permission' && !snapshot.permission ? <div className="coding-permission-card">
       <h4>允许这次任务在候选目录中工作</h4>
       <p>基线：{snapshot.execution?.baseline}。授权搜索、读取、编辑候选文件，以及运行下面保存的测试；可委派最多 3 个并行子任务，子任务费用计入总额度，编码子任务使用独立候选目录。最终改动另行批准。</p>
       <p>本任务总上限：{snapshot.execution?.maxTokens ?? '未知'} tokens / ${snapshot.execution?.maxCostUsd ?? '未知'}；子任务和上下文压缩共用此额度。</p>
@@ -63,7 +64,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
       <p>{snapshot.execution?.profiles.find(item => item.kind === profile)?.reason}</p>
       <button disabled={busy || (manualMode ? !manualPlan.trim() : !snapshot.execution?.testCommand.trim())} onClick={() => void command({ type: 'authorize', profile, ...(manualMode ? { manualValidationPlan: manualPlan } : {}) })}>授权并开始</button>
     </div> : null}
-    {snapshot.permission ? <div className="coding-permission-card"><h4>{snapshot.permission.title}</h4><pre>{snapshot.permission.details}</pre>
+    {!snapshot.controlUnavailableReason && snapshot.permission ? <div className="coding-permission-card"><h4>{snapshot.permission.title}</h4><pre>{snapshot.permission.details}</pre>
       <button disabled={busy} onClick={() => void command({ type: 'permission', permissionId: snapshot.permission!.id, decision: 'approved' })}>允许这次操作</button>
       <button disabled={busy} onClick={() => void command({ type: 'permission', permissionId: snapshot.permission!.id, decision: 'rejected' })}>拒绝</button>
     </div> : null}
@@ -72,7 +73,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     </div> : null}
     {snapshot.revision ? <div className="coding-changeset-review"><h4>候选修订：{snapshot.revision.summary}</h4><p className="meta">{snapshot.revision.digest}</p>
       {snapshot.revision.files.length ? snapshot.revision.files.map(file => <details key={file.path}><summary>{file.kind} · {file.sourcePath ? `${file.sourcePath} → ` : ''}{file.path}{file.binary ? ' · 二进制' : ''}</summary><pre>{file.diff}</pre>{file.truncated ? <button onClick={() => void detail({ kind: 'diff', id: file.path, revisionDigest: snapshot.revision!.digest, offset: 0 })}>改动较长，逐页查看全文</button> : null}</details>) : <p>无需代码变更，仍需批准并运行验证。</p>}
-      {snapshot.status === 'review' && !snapshot.parent ? <div>
+      {!snapshot.controlUnavailableReason && snapshot.status === 'review' && !snapshot.parent ? <div>
         {snapshot.acceptance?.length ? <fieldset><legend>核对已确认需求中的验收条目</legend>{snapshot.acceptance.map(criterion => <label key={criterion.id}><input type="checkbox" checked={confirmedCriteria.includes(criterion.id)} onChange={event => setConfirmedCriteria(current => event.target.checked ? [...current, criterion.id] : current.filter(id => id !== criterion.id))} />{criterion.text}<small>来源：{criterion.sourceRef}</small></label>)}</fieldset> : <p>未结构化验收：自动测试之外的业务正确性仍需后续人工验收门禁确认。</p>}
         {snapshot.manualValidationPlan ? <div><p>事先选定的人工验收计划：{snapshot.manualValidationPlan}</p><label>实际人工检查依据<textarea aria-label="实际人工检查依据" value={manualEvidence} onChange={event => setManualEvidence(event.target.value)} /></label><p>确认你已检查这份冻结修订；宿主仍会核对交付字节，不会运行或伪造自动测试。</p></div> : null}
         <button disabled={busy || (snapshot.acceptance?.length ?? 0) !== confirmedCriteria.length || Boolean(snapshot.manualValidationPlan && !manualEvidence.trim())} onClick={() => void command({ type: 'approve', revisionDigest: snapshot.revision!.digest, objectiveVersion: snapshot.objectiveVersion, confirmedCriteria, ...(snapshot.manualValidationPlan ? { manualValidationEvidence: manualEvidence } : {}) })}>{snapshot.manualValidationPlan ? '确认人工验收并批准' : '批准最终改动'}</button>
@@ -82,12 +83,12 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     </div> : null}
     {snapshot.evidence.map(evidence => <p key={evidence.id}>{evidence.status} · {evidence.summary}</p>)}
     {snapshot.children.map(child => <details key={child.id}><summary>{child.title} · {child.status}</summary><NativeCodingHarnessPanel codingRunId={child.id} api={api} /></details>)}
-    {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
+    {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{!snapshot.controlUnavailableReason && snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
     <details><summary>任务对话与工具记录（{snapshot.historyPage?.total ?? snapshot.messages.length}）</summary>{snapshot.messages.map(message => <div key={message.id}><strong>{message.role === 'user' ? '你' : message.role === 'assistant' ? 'Native' : '工具结果'}</strong><pre>{message.text}</pre>{message.truncated ? <button onClick={() => void detail({ kind: 'message', id: message.id, offset: 0 })}>记录较长，逐页查看全文</button> : null}</div>)}
       {snapshot.historyPage ? <p><button disabled={snapshot.historyPage.previous === null} onClick={() => void page('historyOffset', snapshot.historyPage!.previous)}>更早记录</button><button disabled={snapshot.historyPage.next === null} onClick={() => void page('historyOffset', snapshot.historyPage!.next)}>后续记录</button></p> : null}
     </details>
     {snapshot.detail ? <section aria-label="完整内容分页"><h4>{snapshot.detail.kind === 'diff' ? '改动全文' : '记录全文'} · {snapshot.detail.id}</h4><pre>{snapshot.detail.text}</pre><p>字符 {snapshot.detail.offset}–{snapshot.detail.offset + snapshot.detail.text.length} / {snapshot.detail.total}</p><button disabled={snapshot.detail.previous === null} onClick={() => void detail({ ...snapshot.detail!, offset: snapshot.detail!.previous! })}>上页内容</button><button disabled={snapshot.detail.next === null} onClick={() => void detail({ ...snapshot.detail!, offset: snapshot.detail!.next! })}>下页内容</button></section> : null}
-    {!finished ? <>
+    {snapshot.controlUnavailableReason ? null : !finished ? <>
       <label>补充说明或回答<textarea aria-label="补充说明或回答" value={text} onChange={event => setText(event.target.value)} /></label>
       {snapshot.status === 'reconciling' && snapshot.pauseReason === 'model_delivery_unknown' ? <p>上一次请求可能已经产生费用，无法确认是否收到完整结果。<button disabled={busy} onClick={() => void command({ type: 'retry_unknown' })}>知情授权一次新请求（可能重复计费）</button></p> : null}
       {snapshot.status === 'paused' && snapshot.pauseReason === 'task_limit' && snapshot.limits && !snapshot.parent ? <p>金额与 token 总额度保持原授权。<button disabled={busy} onClick={() => void command({ type: 'extend_limits', maxSteps: Math.min(10000, snapshot.limits!.maxSteps + 40), maxActiveMilliseconds: Math.min(24 * 60 * 60_000, snapshot.limits!.maxActiveMilliseconds + 30 * 60_000) })}>增加 40 步与 30 分钟</button></p> : null}

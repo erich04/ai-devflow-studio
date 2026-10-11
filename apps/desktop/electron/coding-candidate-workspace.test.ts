@@ -91,3 +91,16 @@ it('invalidates an exit-zero test that changes source and restores delivery from
   expect(await readFile(path.join(delivery, 'old.ts'), 'utf8')).toBe('export const value = 1\n')
   expect((await CodingCandidateWorkspace.open(workspace.root)).identity.base.digest).toBe(revision.base.digest)
 })
+
+
+it('materializes and verifies nested candidate paths beyond the Windows legacy path limit', async () => {
+  const { root, workspace } = await fixture()
+  const parent = path.join(root, 'nested-' + 'a'.repeat(80), 'nested-' + 'b'.repeat(80))
+  await mkdir(parent, { recursive: true })
+  const destination = path.join(parent, 'verification-' + 'c'.repeat(40))
+  expect(path.join(destination, '.git', 'objects').length).toBeGreaterThan(260)
+  const manifest = await workspace.capture()
+  await workspace.materializeAtomic(manifest, destination)
+  expect(await readFile(path.join(destination, 'old.ts'), 'utf8')).toBe('export const value = 1\n')
+  await workspace.materializeAtomic(manifest, destination)
+})

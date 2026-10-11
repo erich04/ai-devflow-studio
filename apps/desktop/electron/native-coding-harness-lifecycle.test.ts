@@ -18,7 +18,7 @@ it('enforces active time while a model request is in flight, without waiting for
     await expect.poll(() => aborted, { timeout: 2000 }).toBe(true)
     await fixture.executor.settled('coding')
     const view = (await fixture.get()).snapshot
-    expect(view.status).toBe('reconciling')
+    expect(view.status, JSON.stringify(view)).toBe('reconciling')
     expect(view.cost.unknownAttempts).toBe(1)
     expect(view.messages).toHaveLength(1)
   } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
@@ -53,7 +53,7 @@ it('stops an old child before renewing authority and preserves its unknown-reque
   })
   try {
     await fixture.authorize(); await fixture.executor.settled('coding')
-    await expect.poll(() => childStarted).toBe(true)
+    await expect.poll(async () => childStarted ? true : (await fixture.get()).snapshot).toBe(true)
     await mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.status = 'paused'; draft.pauseReason = 'authorization_expired' })
     const paused = (await fixture.get()).snapshot
     await fixture.executor.harness!.command({ protocolVersion: 2, type: 'renew_authorization', codingRunId: 'coding', commandId: 'renew', expectedVersion: paused.version }, async () => {})
@@ -77,9 +77,9 @@ it('workflow cancellation interrupts final verification and restores the actual 
   try {
     await fixture.authorize(); await fixture.executor.settled('coding')
     const review = (await fixture.get()).snapshot
-    expect(review.status).toBe('review')
+    expect(review.status, JSON.stringify(review)).toBe('review')
     const approving = fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: 'approve-cancelled', expectedVersion: review.version, objectiveVersion: review.objectiveVersion, revisionDigest: review.revision!.digest }, async () => {})
-    await expect.poll(async () => (await fixture.get()).snapshot.status).toBe('verifying')
+    await expect.poll(async () => { const view = (await fixture.get()).snapshot; return view.status === 'verifying' ? view.status : view }).toBe('verifying')
     expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toContain('value = 2')
     const codingRun = (await fixture.store.listCodingAgentRuns()).find(run => run.id === 'coding')!
     await fixture.executor.cancel({ codingRun })
@@ -101,7 +101,7 @@ it('requires a preselected manual plan and human evidence, without inventing a p
     const approve = { protocolVersion: 2 as const, type: 'approve' as const, codingRunId: 'coding', commandId: 'manual-approve', expectedVersion: view.version, objectiveVersion: view.objectiveVersion, revisionDigest: view.revision!.digest }
     await expect(fixture.executor.harness!.command(approve, async () => {})).rejects.toThrow(/人工|manual/i)
     const result = await fixture.executor.harness!.command({ ...approve, manualValidationEvidence: 'I inspected the frozen value.ts content: export const value = 1. No automated test was run.' }, async () => {})
-    expect(result.snapshot.status).toBe('completed')
+    expect(result.snapshot.status, JSON.stringify(result.snapshot)).toBe('completed')
     expect(result.completion?.manualEvidence?.status).toBe('manual_accepted')
     expect(result.completion?.testEvidence).toBeUndefined()
     expect(await fixture.store.listTestEvidence('workflow')).toEqual([])
@@ -129,7 +129,7 @@ it('routes a delegated question through restart to a human and collects its sour
   try {
     await fixture.authorize(); await fixture.executor.settled('coding')
     const parent = (await fixture.get()).snapshot
-    expect(parent.status).toBe('waiting_task')
+    expect(parent.status, JSON.stringify(parent)).toBe('waiting_task')
     expect(parent.children).toHaveLength(1)
     await executor.shutdown(); await store.close()
     store = await createLocalStore({ dbPath: path.join(fixture.root, 'local.sqlite') })
@@ -142,7 +142,7 @@ it('routes a delegated question through restart to a human and collects its sour
     await executor.settled(child.codingRunId)
     await executor.settled('coding')
     const reviewed = (await executor.harness!.command({ protocolVersion: 2, type: 'get', codingRunId: 'coding' }, async () => {})).snapshot
-    expect(reviewed.status).toBe('review')
+    expect(reviewed.status, JSON.stringify(reviewed)).toBe('review')
     expect(reviewed.revision?.summary).toContain('Child evidence reviewed')
   } finally { await executor.shutdown(); await store.close(); await rm(fixture.root, { recursive: true, force: true }) }
 })
@@ -169,7 +169,7 @@ it('keeps coding children isolated until the parent explicitly merges their froz
   try {
     await fixture.authorize(); await fixture.executor.settled('coding')
     const review = (await fixture.get()).snapshot
-    expect(review.status).toBe('review')
+    expect(review.status, JSON.stringify(review)).toBe('review')
     expect(review.revision!.files.map(file => file.path)).toEqual(['value.ts'])
     expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe('export const value = 1\n')
     const completed = await fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: 'approve-child-merge', expectedVersion: review.version, objectiveVersion: review.objectiveVersion, revisionDigest: review.revision!.digest }, async () => {})

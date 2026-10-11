@@ -1,15 +1,25 @@
 import { redactSensitiveText, type CodingHarnessSnapshot, type CodingHarnessPage, type ModelCostRecord } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
 import type { NativeCodingSession } from './native-coding-session'
-import { CodingCandidateWorkspace } from './coding-candidate-workspace'
+import { CodingCandidateWorkspace, snapshotCodingTree } from './coding-candidate-workspace'
 import { codingActiveMilliseconds } from './coding-activity-clock'
 import { pendingCodingPermission } from './native-coding-permissions'
 import type { CodingExecutionProfile } from './coding-command-runner'
 import { codingRetentionPolicy } from './native-coding-retention'
 
+export function markCodingDeliveryConflict(view: CodingHarnessSnapshot): void {
+  view.status = 'delivery_conflict'
+  view.controlUnavailableReason = '结算前无法确认交付内容仍与验收时一致，工作流尚未推进。原验收记录保留；请核对外部改动或不可访问的工作区，恢复已批准的内容后重新检查运行或重启应用结算，系统不会覆盖外部改动。'
+}
+
+export async function currentCodingDeliveryDigest(directory: string, excludedPaths: string[]): Promise<string | null> {
+  try { return (await snapshotCodingTree(directory, excludedPaths)).digest }
+  catch { return null } // Unavailable live files never erase readable historical evidence.
+}
+
 /** Historical records never need a model, API key or the project's current executor. */
 export async function codingHarnessSnapshot(session: NativeCodingSession, host: {
-  store: LocalStore; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>
+  store: LocalStore; containerProfile?: Extract<CodingExecutionProfile, { kind: 'container' }>; runtimeUnavailableReason?: string
   costRecords?(projectId: string): Promise<ModelCostRecord[]>
 }, page?: CodingHarnessPage): Promise<CodingHarnessSnapshot> {
     const binding = session.binding!
@@ -58,6 +68,20 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       })) }
     }
     if (page?.detail && !result.detail) throw new Error('Content not in selected revision page')
+    const codingRun = (await host.store.listCodingAgentRuns()).find(run => run.id === (session.parent?.codingRunId ?? session.codingRunId))
+    const pendingSettlement = Boolean(codingRun && !['completed', 'cancelled', 'failed', 'timed_out'].includes(codingRun.status))
+    const accepted = session.deliveryEvidence.at(-1)
+    if (!session.parent && session.status === 'completed' && revision && accepted) {
+      const currentDigest = await currentCodingDeliveryDigest(binding.context.workspace.worktreePath, revision.base.excludedPaths)
+      if (currentDigest !== accepted.targetDigest) {
+        result.evidence.push({ id: `${accepted.id}-historical`, status: currentDigest === null ? 'historical_content_unavailable' : 'historical_content_changed', summary: '当前交付内容已变化或无法读取；原验收仅作为历史证据，不能据此推进当前工作流。' })
+        if (pendingSettlement) markCodingDeliveryConflict(result)
+      }
+    }
+    if (pendingSettlement && host.runtimeUnavailableReason) {
+      result.controlUnavailableReason = [result.controlUnavailableReason, host.runtimeUnavailableReason].filter(Boolean).join('\n')
+      if (result.status !== 'delivery_conflict') result.status = 'paused'
+    }
     const uncertain = [...session.attempts.filter(item => ['started', 'unknown'].includes(item.status)).map(item => ({ id: item.id, kind: '模型请求', status: item.status })), ...session.toolReceipts.filter(item => item.status !== 'completed').map(item => ({ id: item.id, kind: item.name, status: item.status }))]
     result.diagnostics = { checkpoint: session.version, objectiveVersion: session.objectiveVersion, writerActive: Boolean(session.writer), uncertainOperations: uncertain.slice(0, 50), uncertainTotal: uncertain.length, profile: binding.profile.kind }
     result.storage = codingRetentionPolicy(session, childSessions, ledger)

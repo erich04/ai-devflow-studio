@@ -82,6 +82,8 @@ jobs:
           cache: pnpm
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - name: Native v3 Windows filesystem and recovery regression
+        run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-child-merge.test.ts
       - run: corepack pnpm typecheck
       # Bound concurrent Git/SQLite fixtures on the shared Windows runner.
       - run: corepack pnpm run test --maxWorkers=2

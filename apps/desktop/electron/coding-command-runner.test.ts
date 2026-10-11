@@ -49,11 +49,14 @@ it('reconciles a surviving authenticated worker even when no logical writer leas
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-command-takeover-')); directories.push(root)
   const original = new CodingCommandRunner(path.join(root, 'receipts'))
   const started = await original.start('old-worker', { executable: process.execPath, args: ['-e', 'setInterval(()=>{},100)'], timeoutMs: 10000, profile: { kind: 'trusted_local' } }, root)
+  try {
   const replacement = new CodingCommandRunner(path.join(root, 'receipts'))
-  expect(await replacement.reconcile()).toBe(true)
+  const reconciled = await replacement.reconcile()
+  expect(reconciled, JSON.stringify(await replacement.get('old-worker'))).toBe(true)
   await original.wait('old-worker')
   expect(['cancelled', 'failed']).toContain((await replacement.get('old-worker'))!.status)
   expect(() => process.kill(started.pid!, 0)).toThrow()
+  } finally { await original.cancelAll() }
 })
 
 it('keeps an installed stdio transport under the same durable process owner and cancels it', async () => {
