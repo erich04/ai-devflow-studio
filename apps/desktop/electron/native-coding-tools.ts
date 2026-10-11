@@ -289,7 +289,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         const current = await host.store.getNativeCodingSession(host.sessionId)
         // Long commands run in the durable worker; the registry only authorizes and starts them.
         const duration = 120000
-        const now = new Date().toISOString(), deadline = new Date(Math.min(Date.parse(host.authority.expiresAt), Date.now() + duration)).toISOString()
+        const now = new Date().toISOString(), deadline = new Date(Math.min(Date.parse(host.authority.expiresAt), Date.parse(now) + duration)).toISOString()
         const created = createAgentRuntime({ stateVersion: 1, id: `coding-tool-${codingDigest(`${host.sessionId}:${context.operationId}:${current!.toolAuthorities.length}`)}`, scope: host.authority.scope,
           authority: { runId: context.session.workflowRunId, nodeId: context.session.nodeId, runVersion: host.authority.runVersion, policyVersion: host.authority.policyVersion },
           contextDigest: codingDigest(context.session.objective), capabilitySetDigest: registry.capabilitySetDigest(),

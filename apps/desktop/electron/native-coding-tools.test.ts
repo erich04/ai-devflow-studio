@@ -2,7 +2,7 @@
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, expect, it } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { createNativeCodingTools } from './native-coding-tools'
 import { CodingCommandRunner } from './coding-command-runner'
@@ -33,3 +33,26 @@ it('pages beyond the initial files and applies a digest-bound edit through the e
   await store.close()
 })
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))) })
+
+it('authorizes a legitimate read when separate clock observations straddle a millisecond', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-tool-clock-')); directories.push(root)
+  const delivery = path.join(root, 'delivery'); await mkdir(delivery)
+  await writeFile(path.join(delivery, 'value.txt'), 'real content')
+  const workspace = await CodingCandidateWorkspace.create({ root: path.join(root, 'private'), delivery, baseCommitSha: 'a'.repeat(40), excludedPaths: [] })
+  const store = await createLocalStore({ dbPath: path.join(root, 'local.sqlite') }), instant = Date.now(), now = new Date(instant).toISOString()
+  try {
+    await store.upsertProject({ id: 'project', name: 'test', path: delivery, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
+    const session = createNativeCodingSession({ id: 'clock-session', localProjectId: 'project', codingRunId: 'coding', workflowRunId: 'run', nodeId: 'build', objective: 'Read file', providerId: 'deepseek', model: 'deepseek-flash', now })
+    await store.saveNativeCodingSession(session, 0)
+    const tools = createNativeCodingTools({ store, sessionId: session.id, workspace, commands: new CodingCommandRunner(path.join(root, 'commands')),
+      authority: { scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user', sessionId: 'auth-session', localProjectId: 'project' }, runVersion: 1, policyVersion: 1, expiresAt: new Date(instant + 3600000).toISOString(), allowCandidateEdits: true, commands: [] },
+      assertAuthority: async () => {}, sources: [], testPlanDigest: 'b'.repeat(64) })
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(instant)
+    // Reproduce a clock tick between new Date() and Date.now(), without sleeps
+    // or changing real filesystem scheduling.
+    vi.spyOn(Date, 'now').mockReturnValue(instant + 1)
+    expect(await tools.execute('read_file', { path: 'value.txt' }, { session, operationId: 'clock-read', signal: new AbortController().signal })).toMatchObject({ content: 'real content' })
+    const runtime = (await store.getNativeCodingSession(session.id))!.toolAuthorities[0]!.runtime
+    expect(Date.parse(runtime.deadline) - Date.parse(runtime.requestedAt)).toBe(runtime.bounds.maxWallTimeMs)
+  } finally { vi.restoreAllMocks(); vi.useRealTimers(); await store.close() }
+})

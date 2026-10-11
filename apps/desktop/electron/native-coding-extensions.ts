@@ -82,7 +82,7 @@ export function createCodingExtensions(host: { store: LocalStore; sessionId: str
           const args: unknown = JSON.parse(String(input.arguments))
           if (!validateNativeToolValue(registration.definition.inputSchema, args)) throw new Error('MCP arguments do not match the verified schema')
           const tools = createNativeToolRegistry({ tools: [registration], capabilitySetDigest: client.capabilitySetDigest, persistence })
-          const session = (await host.store.getNativeCodingSession(host.sessionId))!, now = new Date().toISOString(), deadline = new Date(Math.min(Date.now() + 120000, Date.parse(host.authority.expiresAt))).toISOString()
+          const session = (await host.store.getNativeCodingSession(host.sessionId))!, now = new Date().toISOString(), deadline = new Date(Math.min(Date.parse(now) + 120000, Date.parse(host.authority.expiresAt))).toISOString()
           const created = createAgentRuntime({ stateVersion: 1, id: `coding-mcp-${codingDigest(`${host.sessionId}:${context.operationId}:${session.toolAuthorities.length}`)}`, scope: host.authority.scope,
             authority: { runId: session.workflowRunId, nodeId: session.nodeId, runVersion: host.authority.runVersion, policyVersion: host.authority.policyVersion }, contextDigest: codingDigest(session.objective), capabilitySetDigest: tools.capabilitySetDigest(),
             bounds: { maxSteps: 1, maxWallTimeMs: 120000, maxToolCalls: 1, maxToolResultBytes: registration.definition.maxResultBytes, maxTrajectoryMetadataBytes: 4096, maxCheckpointBytes: 16384, maxTokens: 1, maxCostUsd: 1 }, requestedAt: now, deadline })
