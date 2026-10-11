@@ -2,6 +2,8 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile, symlink } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { afterEach, expect, it } from 'vitest'
 import { CodingCandidateWorkspace, codingRelativePath } from './coding-candidate-workspace'
 import { applyAndVerifyCodingRevision, recoverCodingDelivery } from './coding-evidence-v3'
@@ -25,6 +27,8 @@ it('freezes real additions, updates and deletes without changing delivery or sha
   expect(revision.operations.map(operation => [operation.kind, operation.path])).toEqual([['delete', 'remove.txt'], ['create', 'new.ts'], ['update', 'old.ts']])
   expect(await readFile(path.join(delivery, 'old.ts'), 'utf8')).toBe('export const value = 1\n')
   expect(await readFile(path.join(workspace.candidatePath, '.git', 'config'), 'utf8')).not.toContain('remote')
+  const status = await promisify(execFile)('git', ['-C', workspace.candidatePath, 'status', '--porcelain'])
+  expect(status.stdout).toContain('old.ts')
   const restored = await CodingCandidateWorkspace.open(workspace.root)
   expect((await restored.inspect()).digest).toBe(revision.target.digest)
 })

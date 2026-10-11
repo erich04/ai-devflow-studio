@@ -194,7 +194,10 @@ function createHarnessService(host: HarnessHost): Harness {
         }
         if (intent.inputDigest !== inputDigest) throw new Error('Delegation identity changed during recovery')
         const base = intent.base
-        const view = path.join(directory, `${childId}-base`), root = path.join(directory, childId)
+        // Keep executable working directories as shallow as root sessions.
+        // Deep parent/children nesting exceeds Windows' process-cwd limit.
+        // Existing sessions still reopen the exact path in their saved binding.
+        const view = path.join(host.root, `${childId}-base`), root = path.join(host.root, codingDigest(sessionId(childId)))
         await workspace.materializeAtomic(base, view)
         let childWorkspace: CodingCandidateWorkspace
         try { childWorkspace = await CodingCandidateWorkspace.open(root) } catch (error) {

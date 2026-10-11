@@ -79,7 +79,7 @@ it('workflow cancellation interrupts final verification and restores the actual 
     const review = (await fixture.get()).snapshot
     expect(review.status, JSON.stringify(review)).toBe('review')
     const approving = fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: 'approve-cancelled', expectedVersion: review.version, objectiveVersion: review.objectiveVersion, revisionDigest: review.revision!.digest }, async () => {})
-    await expect.poll(async () => { const view = (await fixture.get()).snapshot; return view.status === 'verifying' ? view.status : view }).toBe('verifying')
+    await expect.poll(async () => { const view = (await fixture.get()).snapshot; return view.status === 'verifying' ? view.status : view }, { timeout: 5000 }).toBe('verifying')
     expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toContain('value = 2')
     const codingRun = (await fixture.store.listCodingAgentRuns()).find(run => run.id === 'coding')!
     await fixture.executor.cancel({ codingRun })
@@ -155,6 +155,12 @@ it('keeps coding children isolated until the parent explicitly merges their froz
     if (request.messages[0]?.content?.includes('rootObjective')) {
       if (!results.length) return reply('read_file', { path: 'value.ts' })
       if (results.length === 1) return reply('write_file', { path: 'value.ts', expectedHash: results[0].hash, content: 'export const value = 2\n' })
+      if (results.length === 2) return reply('run_test_plan', {})
+      if (!results.at(-1).receipt || ['starting', 'running'].includes(results.at(-1).receipt.status)) {
+        await new Promise(resolve => setTimeout(resolve, 150))
+        return reply('read_command', { id: results[2].id })
+      }
+      expect(results.at(-1).receipt.status).toBe('passed')
       return reply('propose_changeset', { summary: 'Child proposes value two' })
     }
     if (!results.length) return reply('delegate_task', { title: 'Implement value', prompt: 'Change value to two', mode: 'isolated_coding', paths: ['value.ts'], maxTokens: 2000, maxCostUsd: 0.2 })

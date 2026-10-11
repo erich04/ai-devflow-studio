@@ -164,6 +164,7 @@ export class CodingCandidateWorkspace {
     await removeCodingFile(this.candidatePath, relative)
   }
   async materialize(manifest: CodingManifest, destination: string): Promise<void> {
+    if (!path.isAbsolute(destination)) throw new Error('Snapshot destination must be absolute')
     await mkdir(destination, { mode: 0o700 })
     for (const file of manifest.files) {
       const full = await codingFilePath(destination, file.path, true)
@@ -175,14 +176,13 @@ export class CodingCandidateWorkspace {
     await writeFile(config, '', { mode: 0o600 })
     const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: config,
       GIT_AUTHOR_NAME: 'DevFlow snapshot', GIT_AUTHOR_EMAIL: 'snapshot@devflow.invalid', GIT_COMMITTER_NAME: 'DevFlow snapshot', GIT_COMMITTER_EMAIL: 'snapshot@devflow.invalid', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' }
-    // Windows' Git defaults to MAX_PATH even though Node can create the deeper
-    // private child/verification trees. Configure this repository, never global Git.
-    // The directory already exists. Git's Windows `init <absolute-path>`
-    // preflight can reject it before longpaths applies; enter it through Node.
-    await exec('git', ['-c', 'core.longpaths=true', '-c', 'init.templateDir=', 'init', '--quiet'], { env, cwd: destination })
-    await exec('git', ['-c', 'core.longpaths=true', 'config', '--local', 'core.longpaths', 'true'], { env, cwd: destination })
-    await exec('git', ['-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', 'add', '--force', '--all'], { env, cwd: destination })
-    await exec('git', ['-c', 'core.longpaths=true', '-c', 'core.hooksPath=', 'commit', '--quiet', '--allow-empty', '-m', `Immutable input ${manifest.digest}`], { env, cwd: destination })
+    // Explicit private paths avoid both Git's `init <path>` preflight and the
+    // Windows process-cwd length limit. No command targets the caller's repo.
+    const repository = ['-c', 'core.longpaths=true', `--git-dir=${path.join(destination, '.git')}`, `--work-tree=${destination}`]
+    await exec('git', [...repository, '-c', 'init.templateDir=', 'init', '--quiet'], { env })
+    await exec('git', [...repository, 'config', '--local', 'core.longpaths', 'true'], { env })
+    await exec('git', [...repository, '-c', 'core.autocrlf=false', 'add', '--force', '--all'], { env })
+    await exec('git', [...repository, '-c', 'core.hooksPath=', 'commit', '--quiet', '--allow-empty', '-m', `Immutable input ${manifest.digest}`], { env })
     if ((await snapshotCodingTree(destination, manifest.excludedPaths)).digest !== manifest.digest) throw new Error('Materialized snapshot mismatch')
   }
   async materializeAtomic(manifest: CodingManifest, destination: string): Promise<void> {
