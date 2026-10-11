@@ -1,0 +1,91 @@
+# Native Coding v3：使用、恢复与备份
+
+实现依据：[ADR 0029](../adr/0029-native-coding-harness-v3.md)。发布状态见[实施与验收记录](../plans/native-coding-harness-v3-implementation.md)。本指南说明已实现入口，不替代真实模型或平台的发布验收。
+
+## 启动与审查
+
+在 Electron 的“模型与执行方式”中选择 Native v3 和已保存的模型提供方。新会话显式保存版本 3；旧配置未填版本时仍使用 v2。切换执行器不重放历史会话，也不会在失败后自动改用 OpenCode。
+
+从已批准需求与方案对应的开发节点启动任务。在“当前工作”的 Native 面板核对原有改动、输入摘要、测试/安装命令、命令运行方式以及总额度，点击“授权并开始”。授权后，模型可以在私有候选目录中多轮调查、编辑和测试。
+
+需要澄清时在问题卡回答；需要额外权限时核对权限卡；普通补充说明可随时发送。修改方向后旧修订的审批失效。模型提交修订后，逐项查看真实差异、来源明确的验收条目，再批准最终改动。长记录与大文件有全文分页入口。批准后仍须通过独立验证，不能把批准本身当作成功。
+
+子任务的状态和问题在父任务下展开。子任务不能直接交付；编码子任务需父任务显式合入，合并冲突不会被覆盖。根任务的时间、轮次和费用上限包含子任务。上限暂停时可明确增加时间/轮次，金额与 token 上限不会因此扩大。
+
+没有适用自动测试时，在开工授权卡选择人工验收并填写检查步骤与预期结果。批准时填写对**这份冻结修订**的实际检查依据；宿主核对 C/D/V 的精确内容后保存 `manual_accepted`，不生成 TestEvidence、不记录“测试通过”。这只完成编码任务；后续工作流的测试与业务门禁继续生效，不能用人工编码验收免除项目测试要求。
+
+内容完全相同且来源唯一的重命名在差异中显示原路径与新路径；事务内部按删除/创建两个文件效果执行。存在多份相同内容或同时改写内容时，不猜测重命名关系，仍显示真实删除/创建及字节差异。
+
+## 暂停、中断和故障
+
+| 状态 | 操作与含义 |
+| --- | --- |
+| 等待回答/权限 | 信息已经落盘；重启后继续回答，不必重建任务 |
+| 已暂停 | 先看原因，再继续；继续可能产生新的模型费用 |
+| 请求交付未知 | 先核对账单；显式授权新请求可能重复计费，不会自动重发 |
+| 旧命令未确认停止 | 保留进程与命令收据，先停止或对账，不能直接并发重跑 |
+| 交付冲突 | D 有外部变化或事务不能证明一致；保留目录，先解决冲突 |
+| 最终测试失败 | 保存失败证据并恢复本轮 D，继续修改 C；新的修订重新批准 |
+| 测试改写源码 | 证据失效。调整测试计划或形成新修订重新验证 |
+| 历史内容已改变 | 原验证仍可查询，但不再作为当前工作流的通过证据 |
+
+“恢复诊断与资料保留”显示检查点、执行单元、未知操作和清理条件。不要以删库、删事务日志或把状态手动改成 completed 的方式消除故障。
+
+## 命令与网络配置
+
+主进程从当前资料目录下的 `native-coding-profile.json` 读取配置；模型和渲染进程不能传入宿主路径或凭据。资料目录可在设置的数据档案信息中确认，开发版和打包版可能不同。
+
+```json
+{
+  "version": 1,
+  "container": {
+    "kind": "container",
+    "image": "your-runtime@sha256:<64 位真实摘要>",
+    "network": "none"
+  },
+  "network": {
+    "allowedOrigins": ["https://developer.example.com"],
+    "searchEndpoint": "https://developer.example.com/search",
+    "apiKeyEnvironment": "DEVFLOW_DOCUMENT_SEARCH_KEY"
+  }
+}
+```
+
+上面是配置格式示意，替换为实际镜像摘要和实际服务后才能使用。容器需预先安装构建工具；依赖安装需要联网时显式选择 `bridge`。缺失镜像时不回退本机。普通文档读取只接受已配置的 HTTPS origin，阻止私网和跨域重定向；搜索密钥从主进程环境读取，不放进模型消息。网络读取仍需要操作授权。
+
+MCP 使用项目中真实安装并被授予能力的本地服务，stdio 进程由宿主管理。容器配置下不偷偷转为宿主 MCP。Skills 读取项目资料并保留内容摘要；工具结果和 Skill 文本不能提升权限。语义符号查询当前支持 TypeScript/JavaScript，其他语言明确返回不可用并可继续文本检索。
+
+## 保留与离线备份
+
+默认保留全部事实，不自动清理。面板的清理按钮只在任务结束、没有活动写者、费用全部确认后出现；先保存候选产品文件，再清理 C/V 和安装依赖。对话、文件 blob、修订、命令日志、应用/合并事务继续保留，D 不删除。
+
+备份前暂停任务并完全退出 Electron。Node.js 24 下执行：
+
+```sh
+corepack pnpm exec tsx scripts/native-coding-data.ts backup /原资料目录 /新备份目录 --app-stopped
+corepack pnpm exec tsx scripts/native-coding-data.ts verify /新备份目录
+```
+
+包含 `devflow.sqlite`、`devflow.sqlite.contents`、`native-coding-harness`、`coding-worktrees` 和宿主配置；逐文件校验内容及模式，前后比对源资料。排除可重建的 `node_modules`、`.cache`、`coverage`，不解密凭据、不上传、不执行迁移。
+
+恢复仅支持原平台和原资料路径。先退出应用，将现存资料目录另行保留；目标目录必须不存在：
+
+```sh
+corepack pnpm exec tsx scripts/native-coding-data.ts restore /备份目录 /原资料目录 --app-stopped
+```
+
+备份不是跨机器迁移包。保留原机器密钥链和原项目 Git 仓库，D 的 Git 工作树引用仍可能指向该仓库。只有能够读取当前 schema 的应用可以打开恢复数据；不能用旧应用强行打开 schema 39。应用回滚应使用升级前完整备份，v3 历史不能降为 v2 重放。依赖目录恢复后需要按已授权计划重新准备。
+
+## 验证入口
+
+```sh
+corepack pnpm verify
+node scripts/native-coding-electron-smoke.mjs --harness-v3
+node scripts/native-coding-electron-smoke.mjs --harness-v3 --manual-acceptance
+corepack pnpm test:budget-postgres
+DEVFLOW_NATIVE_CONTAINER_TEST_IMAGE='镜像@sha256:真实摘要' corepack pnpm exec vitest run scripts/native-coding-container.test.ts
+```
+
+Electron smoke 阻断外部模型请求，检查真实界面、IPC、文件、进程、证据和工作流。Postgres 需要专用 `DEVFLOW_BUDGET_TEST_DATABASE_URL`。容器检查需 Docker 和已存在的固定镜像；没有配置时跳过，跳过不等于通过。真实模型与三执行器对照是独立验收。
+
+对照任务、资格检查、评分及费用统计见[评估说明](../evaluation/README.md)。不把本地模拟模型、历史参考补丁或题目资格检查当作 Native v3 的真实模型成功率。

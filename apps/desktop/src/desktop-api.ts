@@ -262,6 +262,8 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  codingHarness?: (command: import('@ai-devflow/shared').CodingHarnessCommand) => Promise<import('@ai-devflow/shared').CodingHarnessSnapshot>
+  onCodingHarnessUpdated?: (listener: (codingRunId: string) => void) => () => void
   getModelCostRecovery: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   retryModelCostSettlements: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
@@ -389,6 +391,7 @@ export type DevFlowDesktopApi = {
   saveCodingRuntimeConfiguration: (input: {
     projectId: string
     executor: 'native-model' | 'opencode-http'
+    nativeVersion?: 2 | 3
     providerId: string
     binaryPath?: string
     modelId?: string

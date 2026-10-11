@@ -45,6 +45,12 @@ jobs:
       - run: corepack pnpm test:build-output-smoke
       - run: corepack pnpm test:e2e
       - run: corepack pnpm test:electron-smoke
+      - name: Native v2 compatibility in real Electron
+        run: node scripts/native-coding-electron-smoke.mjs
+      - name: Native v3 task, question, approval and evidence in real Electron
+        run: node scripts/native-coding-electron-smoke.mjs --harness-v3
+      - name: Native v3 manual acceptance without fabricated test evidence
+        run: node scripts/native-coding-electron-smoke.mjs --harness-v3 --manual-acceptance
       - run: corepack pnpm build:desktop-pilot
       - run: corepack pnpm test:desktop-pilot-smoke
       - run: node scripts/desktop-artifact-trio.mjs stage out/desktop-pilot/artifact-index.json out/verify-candidate-desktop
@@ -80,6 +86,40 @@ jobs:
       # Bound concurrent Git/SQLite fixtures on the shared Windows runner.
       - run: corepack pnpm run test --maxWorkers=2
       - run: corepack pnpm test:cross-platform
+      - run: node scripts/ensure-electron-install.mjs
+      - name: Native v3 real Electron on Windows
+        run: node scripts/native-coding-electron-smoke.mjs --harness-v3
+
+  native-v3-linux:
+    name: Native v3 Linux lifecycle and Electron
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5
+        with:
+          version: 9.15.0
+          run_install: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: corepack enable
+      - run: corepack pnpm install --frozen-lockfile
+      - name: Real files, recovery, child sessions and process cancellation
+        run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-child-merge.test.ts
+      - run: node scripts/ensure-electron-install.mjs
+      - run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11 gnome-keyring libsecret-1-0
+      - name: Isolated CI Electron session (local synthetic model only)
+        run: xvfb-run -a dbus-run-session -- node scripts/native-coding-electron-smoke.mjs --harness-v3
+        env:
+          DEVFLOW_CODING_SMOKE_NO_SANDBOX: 'true'
+      - name: Manual acceptance in isolated Electron
+        run: xvfb-run -a dbus-run-session -- node scripts/native-coding-electron-smoke.mjs --harness-v3 --manual-acceptance
+        env:
+          DEVFLOW_CODING_SMOKE_NO_SANDBOX: 'true'
 
   postgres-integration:
     name: Postgres integration
@@ -166,6 +206,12 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - run: corepack pnpm test:docker-smoke
+      - name: Native v3 actual pinned container execution and cancellation
+        run: |
+          docker pull ubuntu@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+          corepack pnpm exec vitest run scripts/native-coding-container.test.ts
+        env:
+          DEVFLOW_NATIVE_CONTAINER_TEST_IMAGE: ubuntu@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
 
   docker-lifecycle-smoke:
     name: Docker lifecycle smoke

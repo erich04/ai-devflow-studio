@@ -10,6 +10,8 @@ import { resolveE2eRuntime } from './e2e-runtime.mjs'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
+const manualAcceptance = process.argv.includes('--manual-acceptance')
+const nativeV3 = process.argv.includes('--harness-v3') || manualAcceptance
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const {
   apiPort,
@@ -41,8 +43,10 @@ function runCommand(command, args, options = {}) {
     const child = spawn(command, args, {
       cwd: rootDir,
       stdio: 'inherit',
+      shell: process.platform === 'win32' && command.endsWith('.cmd'),
       ...options,
     })
+    child.once('error', reject)
     child.once('exit', (code) => {
       if (code === 0) resolve()
       else reject(new Error(`${command} ${args.join(' ')} exited with ${code}`))
@@ -53,6 +57,7 @@ function runCommand(command, args, options = {}) {
 function spawnQuiet(command, args, env = {}) {
   return spawn(command, args, {
     cwd: rootDir,
+    shell: process.platform === 'win32' && command.endsWith('.cmd'),
     env: { ...process.env, ...env },
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -171,6 +176,28 @@ const modelServer = createServer(async (request, response) => {
       return
     }
     modelRequests.push(body)
+    if (nativeV3 && body.tools?.some(tool => tool.function.name === 'propose_changeset')) {
+      const results = body.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content))
+      const operations = [
+        ['glob_files', { pattern: 'src/**' }],
+        ['read_file', { path: 'src/message.js' }],
+        ['request_user_input', { text: 'Should the message become new?', options: ['Yes'] }],
+        ['write_file', { path: 'src/message.js', expectedHash: results[1]?.hash, content: 'export const message = "new"\n' }],
+        ['propose_changeset', { summary: 'Updated the human-confirmed message using source evidence.' }],
+      ]
+      if (results.some(result => result.error) || results.length >= operations.length) throw new Error(`Unexpected tool history: ${JSON.stringify(results)}`)
+      const [name, input] = operations[results.length]
+      const args = JSON.stringify(input), half = Math.floor(args.length / 2)
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      for (const delta of [
+        { reasoning_content: 'Investigate the exact source and use host tools.' },
+        { tool_calls: [{ index: 0, id: `native-tool-${results.length}`, type: 'function', function: { name, arguments: args.slice(0, half) } }] },
+        { tool_calls: [{ index: 0, function: { arguments: args.slice(half) } }] },
+      ]) response.write(`data: ${JSON.stringify({ choices: [{ delta, finish_reason: null }] })}\n\n`)
+      response.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 120, completion_tokens: 30, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 120 } })}\n\n`)
+      response.end('data: [DONE]\n\n')
+      return
+    }
     const payload = JSON.stringify({
       choices: [{ message: { content: systemPrompt.includes('repo_list|repo_read|repo_search')
         ? repositoryReviewContent(body) : modelContentFor(nativePhaseOf(body)) }, finish_reason: 'stop' }],
@@ -386,7 +413,7 @@ try {
   const pairingCode = await createPairingCode(teamProject.id)
 
   app = await electron.launch({
-    args: ['.'],
+    args: ['.', ...(process.platform === 'linux' && process.env.CI === 'true' && process.env.DEVFLOW_CODING_SMOKE_NO_SANDBOX === 'true' ? ['--no-sandbox'] : [])],
     cwd: desktopDir,
     env: {
       ...process.env,
@@ -447,6 +474,7 @@ try {
     projectId: project.id,
     executor: 'native-model',
     providerId: 'deepseek-native-smoke',
+    ...(nativeV3 ? { nativeVersion: 3 } : {}),
   })
   expect(configuration).toMatchObject({ version: 1, executor: 'native-model' })
   const policy = await page.evaluate(async (projectId) => {
@@ -500,6 +528,60 @@ try {
     requestedBy: 'u-erich',
     userInstruction: 'Change the message from old to new.',
   })
+  if (nativeV3) {
+    const command = input => page.evaluate(input => window.aiDevFlowDesktop.codingHarness(input), { protocolVersion: 2, codingRunId: started.codingRun.id, ...input })
+    const get = () => command({ type: 'get' })
+    const initial = await get()
+    expect(initial.status).toBe('waiting_permission')
+    await page.reload()
+    if (manualAcceptance) {
+      await page.getByRole('checkbox', { name: '本任务没有适用的自动测试，事先选择人工验收' }).check()
+      await page.getByRole('textbox', { name: '人工验收计划', exact: true }).fill('Inspect src/message.js in the frozen diff and confirm the export changed from old to new.')
+    }
+    await page.getByRole('button', { name: '授权并开始', exact: true }).click({ timeout: 15000 })
+    await expect.poll(async () => (await get()).status, { timeout: 30000 }).toBe('waiting_input')
+    const question = await get()
+    expect(question.question.text).toBe('Should the message become new?')
+    await page.getByRole('textbox', { name: '补充说明或回答', exact: true }).fill('Yes')
+    await page.getByRole('button', { name: '回答并继续', exact: true }).click()
+    await expect.poll(async () => (await get()).status, { timeout: 30000 }).toBe('review')
+    const review = await get()
+    expect(review.revision.files.map(file => file.path)).toEqual(['src/message.js'])
+    expect(await readFile(path.join(repositoryPath, 'src/message.js'), 'utf8')).toBe('export const message = "old"\n')
+    const panel = page.getByRole('region', { name: 'Native 多轮任务', exact: true })
+    for (const checkbox of await panel.getByRole('checkbox').all()) await checkbox.check()
+    if (manualAcceptance) await panel.getByRole('textbox', { name: '实际人工检查依据', exact: true }).fill('Checked the exact frozen diff: message is exported as new. No automated test was performed.')
+    await panel.getByRole('button', { name: manualAcceptance ? '确认人工验收并批准' : '批准最终改动', exact: true }).click()
+    await expect.poll(async () => (await get()).status, { timeout: 30000 }).toBe('completed')
+    const approved = await get()
+    expect(approved.status).toBe('completed')
+    await expect.poll(async () => {
+      const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
+      return { coding: state.codingRuns.find(item => item.id === started.codingRun.id)?.status, build: state.runs.find(item => item.id === run.id)?.nodes.find(item => item.id === buildNode.id)?.status }
+    }, { timeout: 15000 }).toEqual({ coding: 'completed', build: 'success' })
+    const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
+    const saved = state.codingRuns.find(item => item.id === started.codingRun.id)
+    expect(saved.status).toBe('completed')
+    expect(state.runs.find(item => item.id === run.id).nodes.find(item => item.id === buildNode.id).status).toBe('success')
+    if (manualAcceptance) {
+      expect(saved.testEvidenceId).toBeUndefined()
+      expect(state.testEvidence.filter(item => item.runId === run.id && item.nodeId === buildNode.id)).toHaveLength(0)
+      expect(approved.evidence.at(-1).status).toBe('manual_accepted')
+      expect(saved.summary).toContain('未执行自动测试')
+      expect(state.runs.find(item => item.id === run.id).nodes.find(item => item.kind === 'test').status).not.toBe('success')
+    } else {
+      const proof = state.testEvidence.find(item => item.id === saved.testEvidenceId)
+      expect(proof.codingVerification).toMatchObject({ executionLocation: 'private_verification', revisionDigest: review.revision.digest })
+      expect(proof.status).toBe('passed')
+    }
+    const workspace = state.managedCodingWorkspaces.find(item => item.id === saved.managedWorkspaceId)
+    expect(await readFile(path.join(workspace.worktreePath, 'src/message.js'), 'utf8')).toBe('export const message = "new"\n')
+    expect(modelRequests.filter(request => request.tools?.some(tool => tool.function.name === 'propose_changeset'))).toHaveLength(5)
+    await page.evaluate(input => window.aiDevFlowDesktop.saveCodingRuntimeConfiguration(input), { projectId: project.id, executor: 'native-model', providerId: 'deepseek-native-smoke', nativeVersion: 2 })
+    expect((await get()).revision.digest).toBe(review.revision.digest)
+    if (manualAcceptance) console.log('Native v3 manual acceptance smoke passed: preselected plan, exact revision, human notes, archived acceptance; no automated test evidence or workflow test exemption.')
+    else console.log('Native v3 Electron smoke passed: streamed tool arguments, multi-round discovery/editing, human question, frozen approval, independent real test, atomic archived proof and workflow advancement; no external model requests.')
+  } else {
   expect(started.codingRun).toMatchObject({
     status: 'waiting_permission',
     engine: 'native',
@@ -569,6 +651,7 @@ try {
   expect(codingRequests.every((request) => request.messages[1].content.startsWith(sharedPrefix))).toBe(true)
   expect((await page.evaluate(() => window.aiDevFlowDesktop.loadState())).settings.knowledgeReviewExecutor).toBe('native-agent')
   console.log('DevFlow Native Electron smoke passed: real Main, local model server, built-in repository review without OpenCode, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
+  }
 } finally {
   clearTimeout(watchdog)
   if (app) await app.close().catch(() => undefined)

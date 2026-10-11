@@ -310,6 +310,9 @@ function providerErrorMessage(code: AgentProviderErrorCode, httpStatus: number |
 }
 
 export type NativeConversationRequest = Omit<Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0], 'nativeTools' | 'userPrompt'> & {
+  /** Durable host operation, separate from each network attempt. Never accepted from model text. */
+  nativeOperation?: { id: string; version: string; purpose: string }
+  taskBudget?: import('./model-call-budget').ModelTaskBudget
   messages: NativeToolMessage[]
   tools: ReadOnlyFunctionDefinition[]
 }
@@ -345,6 +348,8 @@ export type AgentProvider = {
   supportsNativeTools?: boolean
   validateStructuredRequest?: (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => void
   completeStructuredJson?: (input: {
+    /** Host-persisted attempt identity. Replaying unknown delivery requires a new approved attempt. */
+    budgetAttemptId?: string
     operationKey?: string
     nativeTools?: { definitions: ReadOnlyFunctionDefinition[]; messages: NativeToolMessage[] }
     systemPrompt: string
