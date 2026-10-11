@@ -17,6 +17,15 @@ export type ConversationDraft = ConversationTarget & {
   content: string
   inputReceipt?: import('./conversation-critical-context').CriticalContextReceipt
   publishedArtifactId?: string
+  requestedByMessageId?: string
+  /** Native candidates exist before their independent semantic check completes. */
+  review?: {
+    status: 'pending' | 'running' | 'passed' | 'needs_revision' | 'unavailable' | 'stale'
+    findings?: Array<{ criterionId: string; status: 'covered' | 'missing' | 'contradiction'; reason: string }>
+    error?: string
+    checkedAt?: string
+    humanAcknowledgedAt?: string
+  }
 }
 export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string } & Partial<import('@ai-devflow/shared').AgentProviderResponseMetadata>
 export type ConversationCheckpoint = {
@@ -35,6 +44,7 @@ export type ConversationCheckpoint = {
   requirementRunIds: string[]
   criticalProposalInput?: import('./conversation-critical-context').CriticalContext | undefined
   pendingProposal?: Record<string, unknown> | undefined
+  nativeReviewMessageId?: string | undefined
 }
 export type ConversationMessage = {
   id: string
@@ -54,6 +64,7 @@ export type ConversationMessage = {
   attempt?: { turnId: string; step: number; cycle: number; recovery: number; group: string; startedAt: string; durationMs?: number; status: 'running' | 'completed' | 'failed' }
   provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode' | 'native-tools'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
   contentLengths?: Partial<Record<'text' | 'draft' | 'reasoning', number>>
+  responseMetadata?: import('@ai-devflow/shared').AgentProviderResponseMetadata
   /** Provider-returned reasoning, local to this conversation; never shared workflow context. */
   reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort?: 'low' | 'high' | 'max' }
 }
@@ -70,6 +81,12 @@ export type WorkbenchConversation = {
   memory?: string
   status: 'idle' | 'running' | 'awaiting_answer' | 'failed' | 'cancelled' | 'interrupted' | 'paused'
   checkpoint?: ConversationCheckpoint | undefined
+  /** Main-only provider protocol. Never project raw protocol/hidden reasoning to IPC or team data. */
+  nativeTranscript?: Array<{ turnId: string; message: import('@ai-devflow/shared').NativeToolMessage }>
+  nativeProtocolVersion?: 2
+  /** New Direct Provider sessions bind a protocol once, after the first model is selected. */
+  nativeProtocolSelection?: 'pending' | 'selected'
+  nativeContextStart?: number
   messages: ConversationMessage[]
   /** Main-owned local facts and derived context; absent on legacy conversations. */
   toolEvents?: import('./conversation-context.js').ConversationToolEvent[]
@@ -88,9 +105,11 @@ export type ConversationCommand = { projectId: string } & (
   | { type: 'retry'; conversationId: string; providerId: string }
   | { type: 'read_content'; conversationId: string; messageId: string; field: 'text' | 'draft' | 'reasoning'; offset: number }
   | { type: 'cancel'; conversationId: string }
-  | { type: 'publish'; conversationId: string; messageId: string }
+  | { type: 'publish'; conversationId: string; messageId: string; acknowledgeUnverified?: boolean }
+  | { type: 'retry_review'; conversationId: string; messageId: string; providerId: string }
 )
 export type ConversationResponse = {
+  nativeConversationsEnabled?: boolean
   nativeReadOnlyPilotEnabled?: boolean
   contentPage?: { text: string; offset: number; nextOffset: number | null; total: number }
   conversations: WorkbenchConversation[]
@@ -108,7 +127,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
     list: [], create: ['title', 'inputDraft', 'executor'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
     send: ['conversationId', 'text', 'providerId', 'answerToMessageId'], retry: ['conversationId', 'providerId'],
     read_content: ['conversationId', 'messageId', 'field', 'offset'],
-    cancel: ['conversationId'], publish: ['conversationId', 'messageId'],
+    cancel: ['conversationId'], publish: ['conversationId', 'messageId', 'acknowledgeUnverified'], retry_review: ['conversationId', 'messageId', 'providerId'],
   }
   const type = typeof record.type === 'string' ? record.type : ''
   const allowed = Object.hasOwn(fields, type) ? fields[type]! : undefined
@@ -118,8 +137,9 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   }
   if (type === 'read_content' && (!['text', 'draft', 'reasoning'].includes(String(record.field)) || !Number.isSafeInteger(record.offset) || Number(record.offset) < 0 || typeof record.messageId !== 'string')) throw new Error('无效的正文分页请求。')
   if (record.isOpen !== undefined && typeof record.isOpen !== 'boolean') throw new Error('无效的 Tab 状态。')
+  if (record.acknowledgeUnverified !== undefined && typeof record.acknowledgeUnverified !== 'boolean') throw new Error('无效的提案确认。')
   if (record.executor !== undefined && record.executor !== 'direct-provider' && record.executor !== 'opencode' && record.executor !== 'native-tools') throw new Error('不支持这个会话执行方式。')
-  const required = ['projectId', ...(['list', 'create'].includes(type) ? [] : ['conversationId']), ...(['send', 'retry'].includes(type) ? ['providerId'] : []), ...(type === 'send' ? ['text'] : []), ...(type === 'publish' ? ['messageId'] : [])]
+  const required = ['projectId', ...(['list', 'create'].includes(type) ? [] : ['conversationId']), ...(['send', 'retry', 'retry_review'].includes(type) ? ['providerId'] : []), ...(type === 'send' ? ['text'] : []), ...(['publish', 'retry_review'].includes(type) ? ['messageId'] : [])]
   if (required.some((key) => typeof record[key] !== 'string' || !(record[key] as string).trim())) throw new Error('会话请求缺少必要信息。')
   if (record.title !== undefined && !(record.title as string).trim()) throw new Error('请输入会话名称。')
   return record as ConversationCommand

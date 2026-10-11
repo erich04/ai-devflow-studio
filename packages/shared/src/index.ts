@@ -69,3 +69,5 @@ export * from './native-readonly-tools'
 
 export * from './model-budget-continuation'
 export * from './model-execution-rollout'
+
+export * from './native-conversation-protocol'

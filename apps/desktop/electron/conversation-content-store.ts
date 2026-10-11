@@ -17,7 +17,10 @@ export class ConversationContentStore {
     await appendFile(join(directory, `${hash(requestId)}.${channel}`), text, { mode: 0o600 })
   }
   async readStreamReasoning(scopeId: string, requestId: string): Promise<string | undefined> {
-    try { return await readFile(join(this.root, hash(scopeId), 'streams', `${hash(requestId)}.reasoning`), 'utf8') }
+    return this.readStream(scopeId, requestId, 'reasoning')
+  }
+  async readStream(scopeId: string, requestId: string, channel: 'content' | 'reasoning'): Promise<string | undefined> {
+    try { return await readFile(join(this.root, hash(scopeId), 'streams', `${hash(requestId)}.${channel}`), 'utf8') }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error }
   }
   async encode(scopeId: string, value: unknown): Promise<StoredContent> {

@@ -1,0 +1,1050 @@
+{
+  "scope": "Isolated synthetic fixtures; existing authorized official DeepSeek flash credential; no user Run or billing records changed",
+  "runs": [
+    {
+      "name": "native-conversation-live",
+      "generatedAt": "2026-10-11T03:44:24.362Z",
+      "probePassed": false,
+      "capUsd": 1,
+      "cells": [
+        {
+          "mode": "off",
+          "stream": true,
+          "callsBefore": 0,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "mode": "off",
+          "stream": false,
+          "callsBefore": 4,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "mode": "low",
+          "stream": true,
+          "callsBefore": 8,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "mode": "low",
+          "stream": false,
+          "callsBefore": 12,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "mode": "high",
+          "stream": true,
+          "callsBefore": 16,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "mode": "high",
+          "stream": false,
+          "callsBefore": 20,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "mode": "max",
+          "stream": true,
+          "callsBefore": 24,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "mode": "max",
+          "stream": false,
+          "callsBefore": 28,
+          "passed": true,
+          "calls": 4
+        },
+        {
+          "scenario": "summary-and-reading-note",
+          "passed": false,
+          "callsBefore": 32,
+          "failure": {
+            "code": "probe_assertion_or_host_failure",
+            "message": "Check the isolated probe assertion or host setup."
+          },
+          "calls": 0
+        },
+        {
+          "scenario": "empty-state-and-test-baseline",
+          "passed": false,
+          "callsBefore": 32,
+          "failure": {
+            "code": "probe_assertion_or_host_failure",
+            "message": "Check the isolated probe assertion or host setup."
+          },
+          "calls": 0
+        }
+      ],
+      "requests": 32,
+      "finalUsage": 32,
+      "failedRequests": 0,
+      "unknownCost": 0,
+      "costUsd": 0.004188336000000001,
+      "calls": [
+        {
+          "index": 1,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 337,
+            "outputTokens": 42,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 337,
+            "totalTokens": 379,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0001515
+        },
+        {
+          "index": 2,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 396,
+            "outputTokens": 11,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 396,
+            "totalTokens": 407,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000132
+        },
+        {
+          "index": 3,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 449,
+            "outputTokens": 42,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 193,
+            "totalTokens": 491,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000109836
+        },
+        {
+          "index": 4,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 508,
+            "outputTokens": 11,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 252,
+            "totalTokens": 519,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000090336
+        },
+        {
+          "index": 5,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 337,
+            "outputTokens": 42,
+            "cacheReadTokens": 128,
+            "cacheMissTokens": 209,
+            "totalTokens": 379,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000113868
+        },
+        {
+          "index": 6,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 396,
+            "outputTokens": 11,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 140,
+            "totalTokens": 407,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000056736
+        },
+        {
+          "index": 7,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 449,
+            "outputTokens": 42,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 193,
+            "totalTokens": 491,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000109836
+        },
+        {
+          "index": 8,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 508,
+            "outputTokens": 11,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 252,
+            "totalTokens": 519,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000090336
+        },
+        {
+          "index": 9,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 362,
+            "outputTokens": 75,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 362,
+            "totalTokens": 437,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0001986
+        },
+        {
+          "index": 10,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 454,
+            "outputTokens": 14,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 454,
+            "totalTokens": 468,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000153
+        },
+        {
+          "index": 11,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 510,
+            "outputTokens": 53,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 254,
+            "totalTokens": 563,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000141336
+        },
+        {
+          "index": 12,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 580,
+            "outputTokens": 14,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 196,
+            "totalTokens": 594,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000077904
+        },
+        {
+          "index": 13,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 362,
+            "outputTokens": 69,
+            "cacheReadTokens": 128,
+            "cacheMissTokens": 234,
+            "totalTokens": 431,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000153768
+        },
+        {
+          "index": 14,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 448,
+            "outputTokens": 13,
+            "cacheReadTokens": 128,
+            "cacheMissTokens": 320,
+            "totalTokens": 461,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000112368
+        },
+        {
+          "index": 15,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 503,
+            "outputTokens": 53,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 247,
+            "totalTokens": 556,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000139236
+        },
+        {
+          "index": 16,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 573,
+            "outputTokens": 13,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 189,
+            "totalTokens": 586,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000074604
+        },
+        {
+          "index": 17,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 362,
+            "outputTokens": 201,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 362,
+            "totalTokens": 563,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0003498
+        },
+        {
+          "index": 18,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 580,
+            "outputTokens": 12,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 580,
+            "totalTokens": 592,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0001884
+        },
+        {
+          "index": 19,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 634,
+            "outputTokens": 56,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 250,
+            "totalTokens": 690,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000144504
+        },
+        {
+          "index": 20,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 707,
+            "outputTokens": 12,
+            "cacheReadTokens": 512,
+            "cacheMissTokens": 195,
+            "totalTokens": 719,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000075972
+        },
+        {
+          "index": 21,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 362,
+            "outputTokens": 66,
+            "cacheReadTokens": 128,
+            "cacheMissTokens": 234,
+            "totalTokens": 428,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000150168
+        },
+        {
+          "index": 22,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 445,
+            "outputTokens": 38,
+            "cacheReadTokens": 128,
+            "cacheMissTokens": 317,
+            "totalTokens": 483,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000141468
+        },
+        {
+          "index": 23,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 525,
+            "outputTokens": 43,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 141,
+            "totalTokens": 568,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000096204
+        },
+        {
+          "index": 24,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 585,
+            "outputTokens": 15,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 201,
+            "totalTokens": 600,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000080604
+        },
+        {
+          "index": 25,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 362,
+            "outputTokens": 74,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 362,
+            "totalTokens": 436,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0001974
+        },
+        {
+          "index": 26,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 453,
+            "outputTokens": 16,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 453,
+            "totalTokens": 469,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0001551
+        },
+        {
+          "index": 27,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 511,
+            "outputTokens": 43,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 255,
+            "totalTokens": 554,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000129636
+        },
+        {
+          "index": 28,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 571,
+            "outputTokens": 16,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 187,
+            "totalTokens": 587,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000077604
+        },
+        {
+          "index": 29,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 362,
+            "outputTokens": 78,
+            "cacheReadTokens": 128,
+            "cacheMissTokens": 234,
+            "totalTokens": 440,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000164568
+        },
+        {
+          "index": 30,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 457,
+            "outputTokens": 35,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 201,
+            "totalTokens": 492,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000103836
+        },
+        {
+          "index": 31,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 534,
+            "outputTokens": 75,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 150,
+            "totalTokens": 609,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000137304
+        },
+        {
+          "index": 32,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 626,
+            "outputTokens": 13,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 242,
+            "totalTokens": 639,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000090504
+        }
+      ]
+    },
+    {
+      "name": "native-conversation-live-proposals",
+      "generatedAt": "2026-10-11T03:45:22.918Z",
+      "probePassed": false,
+      "capUsd": 1,
+      "cells": [
+        {
+          "scenario": "summary-and-reading-note",
+          "passed": false,
+          "callsBefore": 0,
+          "status": "idle",
+          "failure": {
+            "code": "probe_assertion_or_host_failure",
+            "message": "Expected values to be strictly equal:\n+ actual - expected\n\n+ 'needs_revision'\n- 'passed'\n"
+          },
+          "calls": 4,
+          "reviewStatus": "needs_revision",
+          "findings": [
+            {
+              "criterionId": "artifact-live-run-raw-request:0",
+              "status": "missing"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:1",
+              "status": "missing"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:2",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:3",
+              "status": "missing"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:4",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:5",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:6",
+              "status": "covered"
+            },
+            {
+              "criterionId": "formal-design:preserve",
+              "status": "covered"
+            },
+            {
+              "criterionId": "user-request:1be7287b-6b10-46fc-a8ea-3c8a59411d70",
+              "status": "covered"
+            }
+          ]
+        },
+        {
+          "scenario": "empty-state-and-test-baseline",
+          "passed": true,
+          "callsBefore": 4,
+          "status": "idle",
+          "calls": 7,
+          "reviewStatus": "passed",
+          "findings": [
+            {
+              "criterionId": "artifact-live-run-raw-request:0",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:1",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:2",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:3",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:4",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:5",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:6",
+              "status": "covered"
+            },
+            {
+              "criterionId": "formal-design:preserve",
+              "status": "covered"
+            },
+            {
+              "criterionId": "user-request:c795e183-2012-49ca-aa41-7fac4ebcf84a",
+              "status": "covered"
+            }
+          ]
+        }
+      ],
+      "requests": 11,
+      "finalUsage": 11,
+      "failedRequests": 2,
+      "unknownCost": 0,
+      "costUsd": 0.038016588,
+      "calls": [
+        {
+          "index": 1,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 2540,
+            "outputTokens": 389,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 2540,
+            "totalTokens": 2929,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0012288
+        },
+        {
+          "index": 2,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 3752,
+            "outputTokens": 466,
+            "cacheReadTokens": 2816,
+            "cacheMissTokens": 936,
+            "totalTokens": 4218,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000856896
+        },
+        {
+          "index": 3,
+          "state": "failed",
+          "usage": {
+            "inputTokens": 1725,
+            "outputTokens": 8192,
+            "cacheReadTokens": 0,
+            "cacheMissTokens": 1725,
+            "totalTokens": 9917,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.0103479
+        },
+        {
+          "index": 4,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 1725,
+            "outputTokens": 3746,
+            "cacheReadTokens": 1536,
+            "cacheMissTokens": 189,
+            "totalTokens": 5471,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.004561116
+        },
+        {
+          "index": 5,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 2541,
+            "outputTokens": 324,
+            "cacheReadTokens": 1664,
+            "cacheMissTokens": 877,
+            "totalTokens": 2865,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000661884
+        },
+        {
+          "index": 6,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 2965,
+            "outputTokens": 80,
+            "cacheReadTokens": 2816,
+            "cacheMissTokens": 149,
+            "totalTokens": 3045,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000157596
+        },
+        {
+          "index": 7,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 3561,
+            "outputTokens": 62,
+            "cacheReadTokens": 2944,
+            "cacheMissTokens": 617,
+            "totalTokens": 3623,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000277164
+        },
+        {
+          "index": 8,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 3959,
+            "outputTokens": 119,
+            "cacheReadTokens": 3584,
+            "cacheMissTokens": 375,
+            "totalTokens": 4078,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000276804
+        },
+        {
+          "index": 9,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 4901,
+            "outputTokens": 525,
+            "cacheReadTokens": 3968,
+            "cacheMissTokens": 933,
+            "totalTokens": 5426,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000933708
+        },
+        {
+          "index": 10,
+          "state": "failed",
+          "usage": {
+            "inputTokens": 1864,
+            "outputTokens": 8192,
+            "cacheReadTokens": 256,
+            "cacheMissTokens": 1608,
+            "totalTokens": 10056,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.010314336
+        },
+        {
+          "index": 11,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 1864,
+            "outputTokens": 6942,
+            "cacheReadTokens": 1664,
+            "cacheMissTokens": 200,
+            "totalTokens": 8806,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.008400384
+        }
+      ]
+    },
+    {
+      "name": "native-conversation-live-manual",
+      "generatedAt": "2026-10-11T03:48:21.854Z",
+      "probePassed": true,
+      "capUsd": 1,
+      "cells": [
+        {
+          "scenario": "summary-and-reading-note",
+          "passed": true,
+          "callsBefore": 0,
+          "status": "idle",
+          "manualAcknowledgment": true,
+          "compaction": {
+            "state": "idle",
+            "boundaries": 1,
+            "originalPreserved": true
+          },
+          "calls": 8,
+          "reviewStatus": "needs_revision",
+          "findings": [
+            {
+              "criterionId": "artifact-live-run-raw-request:0",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:1",
+              "status": "contradiction"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:2",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:3",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:4",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:5",
+              "status": "covered"
+            },
+            {
+              "criterionId": "artifact-live-run-raw-request:6",
+              "status": "covered"
+            },
+            {
+              "criterionId": "formal-design:preserve",
+              "status": "covered"
+            },
+            {
+              "criterionId": "user-request:3215b05b-127d-4757-bf81-98c54ad198ad",
+              "status": "covered"
+            }
+          ]
+        }
+      ],
+      "requests": 8,
+      "finalUsage": 8,
+      "failedRequests": 0,
+      "unknownCost": 0,
+      "costUsd": 0.009076223999999999,
+      "calls": [
+        {
+          "index": 1,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 2547,
+            "outputTokens": 212,
+            "cacheReadTokens": 128,
+            "cacheMissTokens": 2419,
+            "totalTokens": 2759,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000980868,
+          "finishReason": "tool_calls"
+        },
+        {
+          "index": 2,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 2827,
+            "outputTokens": 79,
+            "cacheReadTokens": 2688,
+            "cacheMissTokens": 139,
+            "totalTokens": 2906,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000152628,
+          "finishReason": "tool_calls"
+        },
+        {
+          "index": 3,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 3427,
+            "outputTokens": 204,
+            "cacheReadTokens": 2816,
+            "cacheMissTokens": 611,
+            "totalTokens": 3631,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000444996,
+          "finishReason": "tool_calls"
+        },
+        {
+          "index": 4,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 3969,
+            "outputTokens": 66,
+            "cacheReadTokens": 3584,
+            "cacheMissTokens": 385,
+            "totalTokens": 4035,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000216204,
+          "finishReason": "tool_calls"
+        },
+        {
+          "index": 5,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 4858,
+            "outputTokens": 621,
+            "cacheReadTokens": 3968,
+            "cacheMissTokens": 890,
+            "totalTokens": 5479,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.001036008,
+          "finishReason": "tool_calls"
+        },
+        {
+          "index": 6,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 1718,
+            "outputTokens": 3967,
+            "cacheReadTokens": 384,
+            "cacheMissTokens": 1334,
+            "totalTokens": 5685,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.005162904,
+          "finishReason": "tool_calls"
+        },
+        {
+          "index": 7,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 2829,
+            "outputTokens": 278,
+            "cacheReadTokens": 1664,
+            "cacheMissTokens": 1165,
+            "totalTokens": 3107,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000693084,
+          "finishReason": "tool_calls"
+        },
+        {
+          "index": 8,
+          "state": "completed",
+          "usage": {
+            "inputTokens": 3761,
+            "outputTokens": 137,
+            "cacheReadTokens": 3072,
+            "cacheMissTokens": 689,
+            "totalTokens": 3898,
+            "cacheStatus": "complete",
+            "billingProvider": "deepseek",
+            "usageCompleteness": "final"
+          },
+          "costUsd": 0.000389532,
+          "finishReason": "stop"
+        }
+      ]
+    }
+  ],
+  "totalRequests": 51,
+  "costUsd": 0.051281148,
+  "unknownCost": 0
+}

@@ -564,6 +564,25 @@ describe('discussion references and proposal preview (plan W7, W8)', () => {
     expect(screen.queryByTestId('conversation-reference-card')).not.toBeInTheDocument()
   })
 
+  it('requires explicit acknowledgement for an unverified candidate and retries only its review', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '未核对提案' })
+    const node = run.nodes.find(item => item.kind === 'agent')!
+    const session = f.sessions[0]!
+    session.messages.push({ id: 'native-draft', role: 'assistant', text: '候选已保留', createdAt: run.createdAt, draft: { runId: run.id, nodeId: node.id, title: '候选', content: '提案正文', review: { status: 'unavailable', error: '核对超时' } } })
+    render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    fireEvent.click(await screen.findByRole('button', { name: '重新核对提案' }))
+    await waitFor(() => expect(f.commands).toContainEqual({ type: 'retry_review', projectId: run.projectId, conversationId: session.id, messageId: 'native-draft', providerId: 'provider' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存为节点提案' }))
+    const confirm = screen.getByRole('button', { name: '确认保存提案' })
+    expect(confirm).toBeDisabled()
+    fireEvent.click(screen.getByRole('checkbox', { name: /我已阅读提案和核对状态/ }))
+    expect(confirm).toBeEnabled()
+    fireEvent.click(confirm)
+    await waitFor(() => expect(f.commands).toContainEqual({ type: 'publish', projectId: run.projectId, conversationId: session.id, messageId: 'native-draft', acknowledgeUnverified: true }))
+    expect(f.commands.filter(command => command.type === 'send' || command.type === 'retry')).toHaveLength(0)
+  })
+
   it('previews the target and content before saving a proposal, then says the requirement is unchanged', async () => {
     const f = fixture()
     await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '提案' })

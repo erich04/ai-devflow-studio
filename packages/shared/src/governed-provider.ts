@@ -91,6 +91,14 @@ export function governAgentProvider(provider: AgentProvider, projectId: string, 
     ...(provider.generateWorkflowArtifact ? { generateWorkflowArtifact: async (input: Parameters<NonNullable<AgentProvider['generateWorkflowArtifact']>>[0]) => governedModelCall({ ...base, operation: await operationFor(input.prompt, 'workflow'), prompt: input.prompt,
       maxOutputTokens: provider.resolveRequestPolicy?.({ purpose: 'workflow' }).maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192,
       ...(input.signal ? { signal: input.signal } : {}), action: observe => provider.generateWorkflowArtifact!({ ...input, onUsage: async usage => { await observe(usage); await input.onUsage?.(usage) } }) }) } : {}),
+    ...(provider.completeNativeConversation ? { completeNativeConversation: async (input: Parameters<NonNullable<AgentProvider['completeNativeConversation']>>[0]) => {
+      provider.validateNativeRequest?.(input)
+      const prompt = JSON.stringify({ system: input.systemPrompt, messages: input.messages, tools: input.tools })
+      const maxOutputTokens = provider.resolveRequestPolicy?.(input).maxOutputTokens ?? input.maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192
+      return governedModelCall({ ...base, operation: await operationFor(prompt, input.purpose ?? 'conversation', input.operationKey), prompt, maxOutputTokens,
+        ...(input.signal ? { signal: input.signal } : {}), action: observe => provider.completeNativeConversation!({ ...input, maxOutputTokens,
+          onUsage: async usage => { await observe(usage); await input.onUsage?.(usage) } }) })
+    } } : {}),
     ...(provider.completeStructuredJson ? { completeStructuredJson: async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => {
       provider.validateStructuredRequest?.(input)
       const maxOutputTokens = provider.resolveRequestPolicy?.(input).maxOutputTokens ?? input.maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192

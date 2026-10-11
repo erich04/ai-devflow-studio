@@ -53,6 +53,11 @@ function harness(complete: NonNullable<AgentProvider['completeStructuredJson']>,
 async function create(service: WorkbenchConversationService, id = projectId) {
   return (await service.command({ type: 'create', projectId: id })).conversationId!
 }
+async function createLegacyNative() {
+  const id = crypto.randomUUID()
+  await store.saveWorkbenchConversation({ id, localProjectId: projectId, version: 1, title: '旧原生工具试点', executor: 'native-tools', isOpen: true, inputDraft: '', status: 'idle', messages: [], createdAt: created.run.createdAt, updatedAt: created.run.updatedAt }, 0)
+  return id
+}
 async function send(service: WorkbenchConversationService, id: string, text = '现在进行到哪里？', extra = {}) {
   await service.command({ type: 'send', projectId, conversationId: id, providerId: 'test', text, ...extra })
   await service.settled(id)
@@ -154,7 +159,7 @@ describe('unified conversation execution and boundaries', () => {
     expect((await store.listWorkbenchConversations(projectId))[0]?.status).toBe('idle')
   })
 
-  it('executes a validated native batch once and preserves tool history through the final cited answer', async () => {
+  it('preserves the legacy native pilot protocol through its final cited answer', async () => {
     let calls = 0
     const result = harness(async input => {
       if (++calls === 1) {
@@ -166,14 +171,14 @@ describe('unified conversation execution and boundaries', () => {
       return { value: { text: '清理保留未完成任务。', citationIds: ['source-1'] }, assistantMessage: { role: 'assistant' as const, content: '{"text":"清理保留未完成任务。"}' } }
     })
     result.provider.supportsNativeTools = true
-    const id = (await result.service.command({ type: 'create', projectId, executor: 'native-tools' })).conversationId!
+    const id = await createLegacyNative()
     const session = await send(result.service, id)
     expect(session.status, session.error).toBe('idle'); expect(calls).toBe(2)
     expect(session.toolEvents?.filter(event => event.kind === 'tool_request')).toHaveLength(1)
     expect(session.messages.at(-1)?.citations?.[0]?.id).toBe('source-1')
   })
 
-  it('rejects the entire native batch before any read if a later path is a symlink', async () => {
+  it('rejects the entire legacy native batch before any read if a later path is a symlink', async () => {
     await symlink('tasks.ts', path.join(project.path, 'alias.ts'))
     let calls = 0
     const result = harness(async input => {
@@ -183,7 +188,7 @@ describe('unified conversation execution and boundaries', () => {
       return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, tool_calls: toolCalls } }
     })
     result.provider.supportsNativeTools = true
-    const id = (await result.service.command({ type: 'create', projectId, executor: 'native-tools' })).conversationId!
+    const id = await createLegacyNative()
     const session = await send(result.service, id)
     expect(session.status).toBe('failed')
     expect(calls).toBe(1)

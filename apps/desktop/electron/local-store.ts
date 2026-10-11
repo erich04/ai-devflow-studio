@@ -3,6 +3,7 @@ import type { ModelCallSettlement, ModelCallAccountingScope, ModelCallSettlement
 import { storedModelCallSettlement } from './model-cost-recovery'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
 import { validateConversationContext } from './conversation-context.js'
+import { buildCriticalContext, buildNativeCriticalContext, receiptIsCurrent } from './conversation-critical-context.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
 import { isAllowedCodingRunPolicyPromotion } from './coding-run-memory-policy.js'
@@ -818,6 +819,7 @@ export type {
 export type LocalStore = {
   appendWorkbenchResponseChunk?(conversationId: string, requestId: string, channel: 'content' | 'reasoning', text: string): Promise<void>
   readWorkbenchResponseReasoning?(conversationId: string, requestId: string): Promise<string | undefined>
+  readWorkbenchResponseContent?(conversationId: string, requestId: string): Promise<string | undefined>
   listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]>
   saveWorkbenchConversation(conversation: WorkbenchConversation, expectedVersion: number, artifact?: Artifact): Promise<boolean>
   getSpecialistTaskAuthorityStoreIdentity(): object
@@ -4566,6 +4568,9 @@ class SqlJsLocalStore implements LocalStore {
   async readWorkbenchResponseReasoning(conversationId: string, requestId: string): Promise<string | undefined> {
     return this.conversationContent.readStreamReasoning(conversationId, requestId)
   }
+  async readWorkbenchResponseContent(conversationId: string, requestId: string): Promise<string | undefined> {
+    return this.conversationContent.readStream(conversationId, requestId, 'content')
+  }
   async listWorkbenchConversations(projectId?: string): Promise<WorkbenchConversation[]> {
     const rows = selectJson<unknown>(this.db,
       `select json from workbench_conversations ${projectId ? 'where local_project_id = ?' : ''} order by updated_at desc, id`,
@@ -4583,6 +4588,11 @@ class SqlJsLocalStore implements LocalStore {
     if (artifact) {
       const run = readWorkflowRuns(this.db).find((candidate) => candidate.id === artifact.runId)
       if (!run || run.projectId !== conversation.localProjectId || !run.nodes.some((node) => node.id === artifact.nodeId) || artifact.kind !== 'log') throw new Error('Invalid conversation publication target')
+      const draft = conversation.messages.find(message => message.draft?.publishedArtifactId === artifact.id)?.draft
+      if (draft?.inputReceipt) {
+        const current = (draft.review ? buildNativeCriticalContext : buildCriticalContext)(run, draft.nodeId, selectJson<Artifact>(this.db, 'select json from artifacts where run_id = ? order by updated_at asc', [run.id]))
+        if (!receiptIsCurrent(draft.inputReceipt, current)) throw new Error('原始需求或材料已更新，请重新生成提案后再保存。')
+      }
       assertImmutableWorkflowArtifactWrite(this.db, artifact)
       writeArtifact(this.db, artifact)
     }
@@ -14093,6 +14103,7 @@ class SqlJsLocalStore implements LocalStore {
 const LOCAL_STORE_METHOD_EXECUTION = {
   appendWorkbenchResponseChunk: 'direct',
   readWorkbenchResponseReasoning: 'direct',
+  readWorkbenchResponseContent: 'direct',
   listWorkbenchConversations: 'direct',
   saveWorkbenchConversation: 'durable',
   getSpecialistTaskAuthorityStoreIdentity: 'direct',

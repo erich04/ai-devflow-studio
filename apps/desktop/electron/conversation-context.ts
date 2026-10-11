@@ -111,11 +111,18 @@ export function buildRollingSummary(session: WorkbenchConversation, coveredIds: 
 
 /** Main-owned persistence boundary; prevents summary writes from replacing original facts. */
 export function validateConversationContext(next: WorkbenchConversation, previous?: WorkbenchConversation) {
+  if (previous?.nativeProtocolSelection === 'selected' && next.nativeProtocolSelection !== 'selected') throw new Error('Cannot reselect a conversation protocol')
+  if (previous?.nativeProtocolSelection === 'selected' && previous.nativeProtocolVersion !== next.nativeProtocolVersion) throw new Error('Cannot change a selected protocol')
+  const oldTranscript = previous?.nativeTranscript ?? []
+  if (JSON.stringify((next.nativeTranscript ?? []).slice(0, oldTranscript.length)) !== JSON.stringify(oldTranscript)) throw new Error('Cannot replace native protocol history')
+  if (previous?.nativeProtocolVersion !== undefined && previous.nativeProtocolVersion !== next.nativeProtocolVersion) throw new Error('Cannot change native conversation protocol')
+  if (next.nativeContextStart !== undefined && (!Number.isSafeInteger(next.nativeContextStart) || next.nativeContextStart < 0 || next.nativeContextStart >= (next.nativeTranscript?.length ?? 0) || next.nativeTranscript?.[next.nativeContextStart]?.message.role !== 'user')) throw new Error('Invalid native context boundary')
   const messages = new Map(next.messages.map((message) => [message.id, message]))
   if (messages.size !== next.messages.length) throw new Error('Duplicate conversation message')
   for (const message of previous?.messages ?? []) {
     const current = messages.get(message.id)
     if (!current || (message.role !== 'notice' && (message.text !== current.text || message.role !== current.role || message.createdAt !== current.createdAt))) throw new Error('Cannot replace original conversation facts')
+    if (message.draft?.review && (!current.draft || message.draft.content !== current.draft.content || message.draft.title !== current.draft.title || message.draft.runId !== current.draft.runId || message.draft.nodeId !== current.draft.nodeId || message.draft.requestedByMessageId !== current.draft.requestedByMessageId || JSON.stringify(message.draft.inputReceipt) !== JSON.stringify(current.draft.inputReceipt))) throw new Error('Cannot replace a native proposal candidate')
   }
   if (appendToolEvents([], next.toolEvents ?? []).length !== (next.toolEvents?.length ?? 0)) throw new Error('Duplicate tool event')
   for (const event of next.toolEvents ?? []) if (messages.get(event.turnId)?.role !== 'user') throw new Error('Tool event turn is missing')

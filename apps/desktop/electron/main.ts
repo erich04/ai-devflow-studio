@@ -2313,6 +2313,7 @@ async function getWorkbenchConversationService() {
   workbenchConversationService ??= getStore().then(async (store) => {
     const service = new WorkbenchConversationService({
       nativeReadOnlyPilotEnabled: process.env.DEVFLOW_NATIVE_READONLY_PILOT_ENABLED === '1',
+      nativeConversationsEnabled: process.env.DEVFLOW_NATIVE_CONVERSATIONS_ENABLED !== '0',
       store,
       memory: store,
       resolveProvider: (id, projectId) => resolveAgentProvider(store, id, projectId),
