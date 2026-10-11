@@ -7,6 +7,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { _electron as electron, expect } from '@playwright/test'
 import { resolveE2eRuntime } from './e2e-runtime.mjs'
+import { stopNativeSmokeProcess } from './native-smoke-process.mjs'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
@@ -79,30 +80,6 @@ async function waitForServer(url) {
     await delay(500)
   }
   throw new Error(`Timed out waiting for ${url}`)
-}
-
-async function stopProcess(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return
-  const kill = (signal) => {
-    if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal)
-    else child.kill(signal)
-  }
-  try {
-    kill('SIGTERM')
-  } catch {
-    child.kill('SIGTERM')
-  }
-  const exited = await Promise.race([
-    new Promise((resolve) => child.once('exit', resolve)),
-    delay(3_000).then(() => false),
-  ])
-  if (exited === false && child.exitCode === null && child.signalCode === null) {
-    try {
-      kill('SIGKILL')
-    } catch {
-      child.kill('SIGKILL')
-    }
-  }
 }
 
 async function readRequestBody(request) {
@@ -656,9 +633,10 @@ try {
   clearTimeout(watchdog)
   if (app) await app.close().catch(() => undefined)
   await Promise.all([
-    stopProcess(viteProcess),
-    stopProcess(apiProcess),
+    stopNativeSmokeProcess(viteProcess),
+    stopNativeSmokeProcess(apiProcess),
     closeModelServer(),
   ])
   await rm(tempRoot, { recursive: true, force: true })
+  console.log('Native smoke cleanup completed: isolated API and Vite process trees closed.')
 }

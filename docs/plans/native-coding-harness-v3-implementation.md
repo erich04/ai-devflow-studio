@@ -46,6 +46,8 @@
 
 Linux 使用 `node@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7`；容器命令验证使用 `ubuntu@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea`。Linux 以 CI 显式选项在隔离容器/Xvfb 中关闭 Chromium sandbox，产品默认配置未改变。
 
+Windows 的 `50f5a15` 真实 Electron 日志已确认 v3 全链路通过、应用退出；随后测试脚本仅停止 `cmd.exe`，遗留的 API/Vite 子进程占着输出管道，导致检查不能结束。测试清理改为只对本次启动的 PID 整树终止并有界等待管道关闭，新增真实父子进程退出及无关进程不受影响的回归。此项属于验证脚本清理，产品执行语义不变；平台最终通过仍须以完整 CI 退出结果为准。
+
 本机原始日志保存在忽略目录 `out/native-v3-validation/`，`manifest.json` 保存日志摘要。历史题目的实际输出另在 `out/native-v3-evaluation/qualification-20261011-r2/`；[可追溯资格摘要](../evaluation/native-coding-v3-qualification-20261011.json)和[评测规则](../evaluation/README.md)纳入版本控制。日志和资格检查不能被解释为付费模型成绩。
 
 ## Cursor 审查与处理

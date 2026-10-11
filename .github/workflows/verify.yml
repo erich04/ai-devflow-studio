@@ -83,7 +83,7 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - name: Native v3 Windows filesystem and recovery regression
-        run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-child-merge.test.ts apps/desktop/electron/coding-runner.test.ts apps/desktop/electron/coding-atomic-file.test.ts
+        run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-child-merge.test.ts apps/desktop/electron/coding-runner.test.ts apps/desktop/electron/coding-atomic-file.test.ts scripts/native-smoke-process.test.ts
       - run: node scripts/ensure-electron-install.mjs
       - name: Native v3 real Electron on Windows
         run: node scripts/native-coding-electron-smoke.mjs --harness-v3
@@ -111,7 +111,7 @@ jobs:
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
       - name: Real files, recovery, child sessions and process cancellation
-        run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-child-merge.test.ts apps/desktop/electron/coding-runner.test.ts apps/desktop/electron/coding-atomic-file.test.ts
+        run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-child-merge.test.ts apps/desktop/electron/coding-runner.test.ts apps/desktop/electron/coding-atomic-file.test.ts scripts/native-smoke-process.test.ts
       - run: node scripts/ensure-electron-install.mjs
       - run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11 gnome-keyring libsecret-1-0
       - name: Isolated CI Electron session (local synthetic model only)
