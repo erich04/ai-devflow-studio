@@ -177,10 +177,12 @@ export class CodingCandidateWorkspace {
       GIT_AUTHOR_NAME: 'DevFlow snapshot', GIT_AUTHOR_EMAIL: 'snapshot@devflow.invalid', GIT_COMMITTER_NAME: 'DevFlow snapshot', GIT_COMMITTER_EMAIL: 'snapshot@devflow.invalid', GIT_AUTHOR_DATE: '2000-01-01T00:00:00Z', GIT_COMMITTER_DATE: '2000-01-01T00:00:00Z' }
     // Windows' Git defaults to MAX_PATH even though Node can create the deeper
     // private child/verification trees. Configure this repository, never global Git.
-    await exec('git', ['-c', 'core.longpaths=true', '-c', 'init.templateDir=', 'init', '--quiet', destination], { env })
+    // The directory already exists. Git's Windows `init <absolute-path>`
+    // preflight can reject it before longpaths applies; enter it through Node.
+    await exec('git', ['-c', 'core.longpaths=true', '-c', 'init.templateDir=', 'init', '--quiet'], { env, cwd: destination })
     await exec('git', ['-c', 'core.longpaths=true', 'config', '--local', 'core.longpaths', 'true'], { env, cwd: destination })
-    await exec('git', ['-c', 'core.autocrlf=false', 'add', '--force', '--all'], { env, cwd: destination })
-    await exec('git', ['-c', 'core.hooksPath=', 'commit', '--quiet', '--allow-empty', '-m', `Immutable input ${manifest.digest}`], { env, cwd: destination })
+    await exec('git', ['-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', 'add', '--force', '--all'], { env, cwd: destination })
+    await exec('git', ['-c', 'core.longpaths=true', '-c', 'core.hooksPath=', 'commit', '--quiet', '--allow-empty', '-m', `Immutable input ${manifest.digest}`], { env, cwd: destination })
     if ((await snapshotCodingTree(destination, manifest.excludedPaths)).digest !== manifest.digest) throw new Error('Materialized snapshot mismatch')
   }
   async materializeAtomic(manifest: CodingManifest, destination: string): Promise<void> {
