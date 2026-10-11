@@ -46,6 +46,7 @@ export function createNativeCodingExecutorV3(host: HarnessHost): Harness {
 }
 function createHarnessService(host: HarnessHost): Harness {
   const cores = new Map<string, Core>(), jobs = new Map<string, Promise<void>>()
+  const loadingCores = new Map<string, Promise<Core>>()
   const commandQueues = new Map<string, Promise<unknown>>()
   const verifications = new Map<string, AbortController>()
   const budgetTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -93,9 +94,19 @@ function createHarnessService(host: HarnessHost): Harness {
     void operation.finally(() => { if (stopping.get(id) === operation) stopping.delete(id) }).catch(() => undefined)
     return operation
   }
-  const loadCore = async (session: NativeCodingSession, assertAuthority: () => Promise<void>): Promise<Core> => {
+  const loadCore = (session: NativeCodingSession, assertAuthority: () => Promise<void>): Promise<Core> => {
     const cached = cores.get(session.codingRunId)
-    if (cached) return cached
+    if (cached) return Promise.resolve(cached)
+    const pending = loadingCores.get(session.codingRunId)
+    if (pending) return pending
+    // Scheduling, collection and cancellation must share the same live process
+    // owner even while its filesystem state is still being opened.
+    const loading = createCore(session, assertAuthority)
+    loadingCores.set(session.codingRunId, loading)
+    void loading.finally(() => { if (loadingCores.get(session.codingRunId) === loading) loadingCores.delete(session.codingRunId) }).catch(() => undefined)
+    return loading
+  }
+  const createCore = async (session: NativeCodingSession, assertAuthority: () => Promise<void>): Promise<Core> => {
     const binding = session.binding!, workspace = await CodingCandidateWorkspace.open(binding.workspaceRoot)
     const activity = async (unitId: string, active: boolean) => {
       const rootId = session.parent?.codingRunId ?? session.codingRunId

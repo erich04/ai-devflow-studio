@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { readFile, rm } from 'node:fs/promises'
-import { expect, it } from 'vitest'
+import { expect, it, vi } from 'vitest'
 import { codingHarnessFixture, codingToolReply } from './native-coding-test-fixture'
 import { mutateNativeCodingSession } from './native-coding-session'
 import path from 'node:path'
 import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
+import { CodingCandidateWorkspace } from './coding-candidate-workspace'
+import { CodingCommandRunner } from './coding-command-runner'
 
 it('enforces active time while a model request is in flight, without waiting for another step', async () => {
   let aborted = false
@@ -185,4 +187,61 @@ it('keeps coding children isolated until the parent explicitly merges their froz
     expect(completed.completion?.testEvidence?.status).toBe('passed')
     expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe('export const value = 2\n')
   } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
+})
+
+it('cancels the real child command when collection races its first load', async () => {
+  let sequence = 0, childLoads = 0, commandStarted = () => {}, commandPid: number | undefined
+  const runners = new Set<CodingCommandRunner>()
+  const started = new Promise<void>(resolve => { commandStarted = resolve })
+  const fixture = await codingHarnessFixture(async request => {
+    const results = request.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content))
+    const reply = (name: string, args: unknown) => codingToolReply(`race-${++sequence}`, name, args)
+    if (!request.messages[0]?.content?.includes('rootObjective')) {
+      if (!results.length) return reply('delegate_task', { title: 'Verify', prompt: 'Run the saved test', mode: 'isolated_coding', paths: ['value.ts'], maxTokens: 2000, maxCostUsd: 0.2 })
+      if (results.length === 1) return reply('await_task', { codingRunId: results[0].codingRunId })
+      return reply('report_blocked', { reason: 'Parent has collected the child result for this test' })
+    }
+    if (!results.length) {
+      const child = (await fixture.store.listNativeCodingSessions('project')).find(session => session.parent)!
+      await mutateNativeCodingSession(fixture.store, child.id, draft => { draft.limits.batchSteps = 1 })
+      return reply('run_test_plan', {})
+    }
+    if (!results.at(-1).receipt || ['starting', 'running'].includes(results.at(-1).receipt.status)) {
+      await new Promise(resolve => setTimeout(resolve, 150))
+      return reply('read_command', { id: results[0].id })
+    }
+    expect(results.at(-1).receipt.status, JSON.stringify(results.at(-1))).toBe('passed')
+    return reply('propose_changeset', { summary: 'The child executed its saved test' })
+  }, 'node -e "setInterval(()=>{},100)"')
+  const open = CodingCandidateWorkspace.open, start = CodingCommandRunner.prototype.start
+  const openSpy = vi.spyOn(CodingCandidateWorkspace, 'open').mockImplementation(async root => {
+    const workspace = await open(root)
+    const child = (await fixture.store.listNativeCodingSessions('project')).find(session => session.parent && session.binding?.workspaceRoot === root)
+    if (child) {
+      childLoads++
+      // Keep both real callers in flight; a duplicate loader must not replace
+      // the process owner after the first loader has started a real command.
+      if (childLoads === 1) await new Promise(resolve => setTimeout(resolve, 200))
+      else await started
+    }
+    return workspace
+  })
+  const startSpy = vi.spyOn(CodingCommandRunner.prototype, 'start').mockImplementation(async function (this: CodingCommandRunner, ...args) {
+    const receipt = await start.apply(this, args)
+    if (args[0].startsWith('native-child-')) { runners.add(this); commandPid = receipt.pid; commandStarted() }
+    return receipt
+  })
+  try {
+    await fixture.authorize(); await started
+    await new Promise<void>(resolve => setImmediate(resolve))
+    const codingRun = (await fixture.store.listCodingAgentRuns()).find(run => run.id === 'coding')!
+    await fixture.executor.cancel({ codingRun })
+    expect((await fixture.get()).snapshot.status).toBe('cancelled')
+    expect(commandPid).toBeDefined()
+    expect(() => process.kill(commandPid!, 0)).toThrow()
+  } finally {
+    commandStarted(); openSpy.mockRestore(); startSpy.mockRestore()
+    await Promise.all([...runners].map(runner => runner.cancelAll()))
+    await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true })
+  }
 })
