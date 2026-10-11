@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, expect, it } from 'vitest'
 import { CodingCommandRunner } from './coding-command-runner'
+import { codingShellPlan } from './coding-dependency-preparation'
 
 const directories: string[] = []
 it('executes an authorized real command, keeps paged output, and never reruns a completed command id', async () => {
@@ -18,6 +19,17 @@ it('executes an authorized real command, keeps paged output, and never reruns a 
   expect(await readFile(path.join(root, 'count.txt'), 'utf8')).toBe('x')
 })
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))) })
+
+it('preserves quoted arguments, spaces and operators in a saved shell test command', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow command quoting ')); directories.push(root)
+  const runner = new CodingCommandRunner(path.join(root, 'receipts'))
+  const plan = codingShellPlan('node -e "require(\'fs\').writeFileSync(\'result with spaces.txt\', \'expected value\')" && node -e "process.exit(0)"', { kind: 'trusted_local' })
+  try {
+    const receipt = await runner.start('quoted-saved-test', plan, root)
+    expect(await runner.wait(receipt.id), JSON.stringify(await runner.read(receipt.id))).toMatchObject({ status: 'passed', exitCode: 0 })
+    expect(await readFile(path.join(root, 'result with spaces.txt'), 'utf8')).toBe('expected value')
+  } finally { await runner.cancelAll() }
+})
 
 it('does not run the saved test when dependency preparation fails', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-preparation-')); directories.push(root)

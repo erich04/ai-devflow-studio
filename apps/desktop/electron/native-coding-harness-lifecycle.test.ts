@@ -187,7 +187,9 @@ it('keeps coding children isolated until the parent explicitly merges their froz
     expect(completed.completion?.testEvidence?.status).toBe('passed')
     expect(await readFile(path.join(fixture.delivery, 'value.ts'), 'utf8')).toBe('export const value = 2\n')
   } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
-})
+// This fixture creates parent/child/base/verification Git snapshots and runs
+// both child and final test processes. Linux CI exceeded the generic 5 s limit.
+}, process.platform === 'win32' ? 30000 : 15000)
 
 it('cancels the real child command when collection races its first load', async () => {
   let sequence = 0, childLoads = 0, commandStarted = () => {}, commandPid: number | undefined

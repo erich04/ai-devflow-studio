@@ -54,7 +54,11 @@ process.on('message', message => {
   if (started || message.type !== 'go') return; started = true;
   function run(index) {
     const command = message.commands[index];
-    child = spawn(command.executable, command.args, { cwd: message.cwd, env: message.env, shell: false, stdio: [message.streamInput ? 'pipe' : 'ignore', 'inherit', 'inherit'] });
+    // Match Node's cmd.exe shell convention for an already-authorized script.
+    // Default argv escaping inserts backslashes which cmd.exe treats literally.
+    const cmdScript = process.platform === 'win32' && /^(?:.*[\\/])?cmd(?:\.exe)?$/i.test(command.executable) && command.args.length === 4 && command.args.slice(0, 3).join(' ').toLowerCase() === '/d /s /c';
+    const args = cmdScript ? [...command.args.slice(0, 3), '"' + command.args[3] + '"'] : command.args;
+    child = spawn(command.executable, args, { cwd: message.cwd, env: message.env, shell: false, windowsVerbatimArguments: cmdScript, stdio: [message.streamInput ? 'pipe' : 'ignore', 'inherit', 'inherit'] });
     if (message.streamInput) process.stdin.pipe(child.stdin);
     child.on('error', error => { process.stderr.write(String(error)); process.exitCode = 1; });
     child.on('close', code => {
