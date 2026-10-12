@@ -167,7 +167,10 @@ it('routes a delegated question through restart to a human and collects its sour
       return reply('report_findings', { summary: 'Confirmed by the human; value is one.', sources: ['value.ts'] })
     }
     if (!results.length) return reply('delegate_task', { title: 'Inspect value', prompt: 'Check value with the user', mode: 'read_only', paths: [], maxTokens: 1000, maxCostUsd: 0.1 })
-    if (!results.some(item => item.findings)) return reply('await_task', { codingRunId: results[0].codingRunId })
+    if (!results.some(item => item.findings)) {
+      if (results.some(item => item.pendingChild)) expect(request.messages.some(message => message.role === 'user' && message.content.startsWith('[DevFlow 宿主状态通知，并非用户的新指令]') && message.content.includes('host_child_status') && message.content.includes('review'))).toBe(true)
+      return reply('await_task', { codingRunId: results[0].codingRunId })
+    }
     expect(results.at(-1).findings.sources[0]).toMatchObject({ path: 'value.ts' })
     return reply('propose_changeset', { summary: 'Child evidence reviewed; no change needed' })
   })

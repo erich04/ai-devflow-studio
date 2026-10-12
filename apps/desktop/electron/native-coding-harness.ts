@@ -85,7 +85,8 @@ function createHarnessService(host: HarnessHost): Harness {
         if (terminal(await read(session.codingRunId))) continue
         if (!session.binding?.executionGranted) continue
         const core = await loadCore(session, async () => {})
-        if (reason !== 'application_shutdown' || jobs.has(session.codingRunId) || core.commands.hasActiveCommands) await core.loop.pause(session.id, reason)
+        const durableWait = ['waiting_input', 'waiting_permission', 'waiting_task', 'review'].includes(session.status)
+        if (reason !== 'application_shutdown' || (!durableWait && jobs.has(session.codingRunId)) || core.commands.hasActiveCommands) await core.loop.pause(session.id, reason)
         await core.commands.cancelAll()
       }
       await Promise.all(sessions.map(session => jobs.get(session.codingRunId)))
@@ -272,6 +273,13 @@ function createHarnessService(host: HarnessHost): Harness {
     }
     host.changed?.(session.codingRunId)
   }
+  const wakeForChild = (parentId: string, child: NativeCodingSession) => mutate(parentId, draft => {
+    if (draft.status !== 'waiting_task' || draft.pauseReason !== `child:${child.codingRunId}`) return
+    draft.status = 'ready'; delete draft.pauseReason
+    // The old await_task receipt is immutable history. Supply a new host
+    // observation so the model does not mistake its old question for live state.
+    draft.transcript.push({ role: 'user', content: '[DevFlow 宿主状态通知，并非用户的新指令]\n' + JSON.stringify({ type: 'host_child_status', codingRunId: child.codingRunId, status: child.status, version: child.version, nextAction: 'Call await_task to collect the current result. Earlier waiting observations are historical.' }) })
+  })
   const schedule = (id: string, assertAuthority: () => Promise<void>) => {
     if (shuttingDown || stopping.has(id) || jobs.has(id)) return
     const job = (async () => {
@@ -295,11 +303,11 @@ function createHarnessService(host: HarnessHost): Harness {
       if (current.status === 'ready') schedule(id, assertAuthority)
       if (current.parent && ['review', 'cancelled', 'failed', 'paused', 'reconciling'].includes(current.status)) {
         const parent = await read(current.parent.codingRunId)
-        if (parent.status === 'waiting_task' && parent.pauseReason === `child:${id}`) { await mutate(parent.codingRunId, draft => { if (draft.status === 'waiting_task') { draft.status = 'ready'; delete draft.pauseReason } }); schedule(parent.codingRunId, assertAuthority) }
+        if (parent.status === 'waiting_task' && parent.pauseReason === `child:${id}`) { await wakeForChild(parent.codingRunId, current); schedule(parent.codingRunId, assertAuthority) }
       }
       if (current.status === 'waiting_task' && current.pauseReason?.startsWith('child:')) {
         const child = await read(current.pauseReason.slice(6))
-        if (['review', 'cancelled', 'failed', 'paused', 'reconciling'].includes(child.status)) { await mutate(id, draft => { if (draft.status === 'waiting_task') draft.status = 'ready' }); schedule(id, assertAuthority) }
+        if (['review', 'cancelled', 'failed', 'paused', 'reconciling'].includes(child.status)) { await wakeForChild(id, child); schedule(id, assertAuthority) }
       }
     })
     jobs.set(id, job)
@@ -555,7 +563,7 @@ function createHarnessService(host: HarnessHost): Harness {
             for (const child of children) if (['ready', 'running', 'reconciling'].includes(child.status)) schedule(child.codingRunId, assertAuthority)
             if (session.status === 'waiting_task' && session.pauseReason?.startsWith('child:')) {
               const child = await read(session.pauseReason.slice(6))
-              if (['review', 'paused', 'cancelled', 'failed', 'reconciling'].includes(child.status)) await mutate(codingRun.id, draft => { draft.status = 'ready'; delete draft.pauseReason })
+              if (['review', 'paused', 'cancelled', 'failed', 'reconciling'].includes(child.status)) await wakeForChild(codingRun.id, child)
             }
             if (['ready', 'running', 'reconciling'].includes((await read(codingRun.id)).status)) schedule(codingRun.id, assertAuthority)
           }
