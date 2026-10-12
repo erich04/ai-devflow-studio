@@ -73,6 +73,25 @@ it('waits for the actual process to stop before returning cancellation', async (
   if (receipt.pid) expect(() => process.kill(receipt.pid!, 0)).toThrow()
 })
 
+it('cancels only one owned command, preserves its outcome on replay and refuses an unauthenticated old worker', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-command-selective-cancel-')); directories.push(root)
+  const runner = new CodingCommandRunner(path.join(root, 'receipts'))
+  const plan = { executable: process.execPath, args: ['-e', 'setInterval(()=>{},100)'], timeoutMs: 15000, profile: { kind: 'trusted_local' as const } }
+  try {
+    const first = await runner.start('first', plan, root), second = await runner.start('second', plan, root)
+    const reopened = new CodingCommandRunner(runner.root)
+    await expect(reopened.cancel('second')).rejects.toThrow('reconcile')
+    expect(process.kill(second.pid!, 0)).toBe(true)
+    expect(await runner.cancel('first')).toMatchObject({ id: 'first', status: 'cancelled', exitCode: null })
+    expect(() => process.kill(first.pid!, 0)).toThrow()
+    expect(runner.isActive('second')).toBe(true)
+    expect(await runner.cancel('first')).toMatchObject({ status: 'cancelled' })
+    await expect(runner.cancel('absent')).rejects.toThrow('not found')
+    await runner.start('later', { ...plan, args: ['-e', 'console.log("continued")'] }, root)
+    expect((await runner.wait('later')).status).toBe('passed')
+  } finally { await runner.cancelAll() }
+})
+
 it('cancels the actual command descendant as well as its worker', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-command-tree-')); directories.push(root)
   const runner = new CodingCommandRunner(path.join(root, 'receipts'))

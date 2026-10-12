@@ -1,7 +1,8 @@
 import { fork, execFile, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { promisify } from 'node:util'
-import { appendFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
+import { appendFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { atomicCodingFile, codingDigest } from './coding-candidate-workspace'
 import { terminateProcessTree } from './opencode-process'
@@ -14,8 +15,44 @@ export type CodingCommandReceipt = {
   exitCode: number | null; outputBytes: number; startedAt: string; completedAt?: string; error?: string
   preparationExitCode?: number | null
   phase?: 'preparation' | 'command'
+  temporaryDirectory?: string
+  temporaryCleanupStatus?: 'completed' | 'failed'
+  temporaryCleanupError?: string
 }
 const exec = promisify(execFile)
+// Socket-based tools (including tsx) cannot use the arbitrarily deep receipt
+// directory as TEMP. Keep a private, short directory outside any project Git tree.
+const temporaryBase = () => process.platform === 'win32' ? os.tmpdir() : '/tmp'
+const temporaryPrefix = (id: string) => `dfcmd-${codingDigest(id).slice(0, 12)}-`
+async function createCommandTemporaryDirectory(receipt: CodingCommandReceipt): Promise<string> {
+  const directory = await mkdtemp(path.join(temporaryBase(), temporaryPrefix(receipt.id)))
+  try {
+    await writeFile(path.join(directory, '.devflow-owner.json'), JSON.stringify({ id: receipt.id, workerToken: receipt.workerToken }), { mode: 0o600, flag: 'wx' })
+    return directory
+  } catch (error) { await rm(directory, { recursive: true, force: true }); throw error }
+}
+async function removeCommandTemporaryDirectory(receipt: CodingCommandReceipt): Promise<void> {
+  const directory = receipt.temporaryDirectory
+  if (!directory) return
+  let entry
+  try { entry = await lstat(directory) } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return; throw error }
+  const prefix = temporaryPrefix(receipt.id), name = path.basename(directory)
+  if (!path.isAbsolute(directory) || !name.startsWith(prefix) || !/^[a-zA-Z0-9]{6}$/u.test(name.slice(prefix.length)) ||
+      await realpath(path.dirname(directory)) !== await realpath(temporaryBase()) || !entry.isDirectory() || entry.isSymbolicLink() ||
+      (process.getuid && entry.uid !== process.getuid())) throw new Error('Command temporary directory ownership is not verifiable')
+  let owner: { id?: string; workerToken?: string }
+  try { owner = JSON.parse(await readFile(path.join(directory, '.devflow-owner.json'), 'utf8')) as typeof owner }
+  catch (error) {
+    // The old host and a recovery host may both finish cleaning the same stopped
+    // worker. A missing directory is idempotent; a missing owner in a live one is not.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      try { await lstat(directory) } catch (missing) { if ((missing as NodeJS.ErrnoException).code === 'ENOENT') return }
+    }
+    throw error
+  }
+  if (!receipt.workerToken || owner.id !== receipt.id || owner.workerToken !== receipt.workerToken) throw new Error('Command temporary directory owner does not match its receipt')
+  await rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
+}
 async function waitForWorkerExit(pid: number, timeoutMs = 2000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs
   do {
@@ -88,6 +125,11 @@ export class CodingCommandRunner {
     const pending = previous.then(() => atomicCodingFile(this.file(receipt.id, 'json'), bytes)); this.writes.set(receipt.id, pending)
     return pending
   }
+  private async cleanupTemporary(receipt: CodingCommandReceipt): Promise<boolean> {
+    if (!receipt.temporaryDirectory || receipt.temporaryCleanupStatus === 'completed') return true
+    try { await removeCommandTemporaryDirectory(receipt); receipt.temporaryCleanupStatus = 'completed'; delete receipt.temporaryCleanupError; return true }
+    catch (error) { receipt.temporaryCleanupStatus = 'failed'; receipt.temporaryCleanupError = error instanceof Error ? error.message : 'Temporary directory cleanup failed'; return false }
+  }
   async get(id: string): Promise<CodingCommandReceipt | undefined> {
     try { return JSON.parse(await readFile(this.file(id, 'json'), 'utf8')) as CodingCommandReceipt }
     catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined; throw error }
@@ -137,9 +179,11 @@ export class CodingCommandRunner {
         '--mount', `type=bind,source=${cwd},target=/workspace`, '--workdir', '/workspace', '--env', 'HOME=/tmp', ...(process.getuid ? ['--user', `${process.getuid()}:${process.getgid!()}`] : []), profile.image, command.executable, ...command.args] }))
     }
     const receipt: CodingCommandReceipt = { schemaVersion: 1, id, plan, planDigest, cwd, status: 'starting', exitCode: null, outputBytes: 0, startedAt: new Date().toISOString(), workerToken: randomUUID() }
-    await this.save(receipt)
+    if (!transport) receipt.temporaryDirectory = await createCommandTemporaryDirectory(receipt)
+    try { await this.save(receipt) } catch (error) { await this.cleanupTemporary(receipt); throw error }
     const environment = transport?.environment ?? {
-      PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR, TEMP: privateHome, TMP: privateHome,
+      PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
+      TEMP: receipt.temporaryDirectory, TMP: receipt.temporaryDirectory, TMPDIR: receipt.temporaryDirectory,
       HOME: privateHome, USERPROFILE: privateHome, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig, GIT_TERMINAL_PROMPT: '0', CI: '1',
     }
     const workerFile = path.join(this.root, 'command-worker.cjs'); await atomicCodingFile(workerFile, Buffer.from(workerSource))
@@ -182,11 +226,14 @@ export class CodingCommandRunner {
       child.once('close', code => {
         void (async () => {
           clearTimeout(timer); signal?.removeEventListener('abort', abort)
-          try { await (stopping ?? terminateCodingWorker(child)); await output }
+          let stopped = false
+          try { await (stopping ?? terminateCodingWorker(child)); stopped = true; await output }
           catch (error) { logError = error }
           receipt.exitCode = reason ? null : commandExit
           receipt.status = logError ? 'unknown' : reason ?? (code === 0 && commandExit === 0 && !spawnError ? 'passed' : 'failed')
           if (spawnError || logError) receipt.error = String(spawnError ?? logError)
+          if (stopped) await this.cleanupTemporary(receipt)
+          else if (receipt.temporaryDirectory) { receipt.temporaryCleanupStatus = 'failed'; receipt.temporaryCleanupError = 'Worker termination not confirmed; temporary directory preserved for recovery' }
           receipt.completedAt = new Date().toISOString(); await this.save(receipt); this.active.delete(id)
           await this.activity?.(id, false); resolve(receipt)
         })().catch(reject)
@@ -233,6 +280,17 @@ export class CodingCommandRunner {
     const bytes = await readFile(this.file(id, 'log')).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Buffer.alloc(0); throw error })
     return { receipt, output: bytes.subarray(offset, offset + limit).toString('utf8'), nextOffset: offset + limit < bytes.length ? offset + limit : null }
   }
+  async cancel(id: string): Promise<CodingCommandReceipt> {
+    await this.starting.get(id)
+    const active = this.active.get(id)
+    if (active) { await active.stop('cancelled'); return active.done }
+    const receipt = await this.get(id)
+    if (!receipt) throw new Error('Command not found')
+    // A persisted PID is not authority to kill. Recovery must authenticate an
+    // orphaned worker before any new owner can stop it.
+    if (['starting', 'running', 'unknown'].includes(receipt.status)) throw new Error('Command owner is unknown; reconcile before cancellation')
+    return receipt
+  }
   async cancelAll(): Promise<void> {
     await Promise.all([...this.starting.values()])
     const running = [...this.active.values()]
@@ -249,8 +307,13 @@ export class CodingCommandRunner {
     let safe = true
     for (const file of files.filter(value => /^[a-f0-9]{64}\.json$/u.test(value))) {
       const receipt = JSON.parse(await readFile(path.join(this.root, file), 'utf8')) as CodingCommandReceipt
-      if (!['starting', 'running', 'unknown'].includes(receipt.status) || this.active.has(receipt.id)) continue
+      if (this.active.has(receipt.id)) continue
+      if (!['starting', 'running', 'unknown'].includes(receipt.status)) {
+        if (receipt.temporaryDirectory && receipt.temporaryCleanupStatus !== 'completed') { if (!await this.cleanupTemporary(receipt)) safe = false; await this.save(receipt) }
+        continue
+      }
       if (!receipt.pid) {
+        if (!await this.cleanupTemporary(receipt)) safe = false
         receipt.status = 'failed'; receipt.error = 'Host stopped before the durable worker grant; command was not started'; await this.save(receipt); continue
       }
       try {
@@ -266,6 +329,7 @@ export class CodingCommandRunner {
         }
         if (receipt.plan.profile.kind === 'container') await exec('docker', ['rm', '--force', `devflow-${codingDigest(receipt.id).slice(0, 24)}`], { timeout: 10000 }).catch(error => { if (!String(error.stderr).includes('No such container')) throw error })
         if (!await waitForWorkerExit(receipt.pid)) { receipt.error = 'Recorded worker still exists after termination'; await this.save(receipt); safe = false; continue }
+        if (!await this.cleanupTemporary(receipt)) safe = false
         receipt.status = 'cancelled'; receipt.exitCode = null; receipt.completedAt = new Date().toISOString(); receipt.error = 'Interrupted command stopped during recovery; no success is inferred'; await this.save(receipt)
       } catch (error) { receipt.error = `Worker recovery could not prove termination: ${error instanceof Error ? error.message : 'unknown error'}`; await this.save(receipt); safe = false }
     }

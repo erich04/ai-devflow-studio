@@ -33,6 +33,33 @@ it('keeps a coding question and history through restart, accepting only one comp
 })
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))) })
 
+it('shows the actual shared remaining step budget to the model without granting more steps', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-loop-budget-')); directories.push(directory)
+  const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()
+  try {
+    await store.upsertProject({ id: 'project', name: 'test', path: directory, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
+    const session = createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'run', workflowRunId: 'workflow', nodeId: 'build', objective: 'Trace a dependency', providerId: 'fake', model: 'test', now })
+    session.limits.maxSteps = 5
+    await store.saveNativeCodingSession(session, 0)
+    let sharedUsed = 2, calls = 0
+    const observed: Array<{ steps: { usedBeforeThisCall: number; remainingIncludingThisCall: number; maximum: number } }> = []
+    const loop = new NativeCodingLoop({ store, rootStepsUsed: async () => sharedUsed,
+      reserveRootStep: async () => { if (sharedUsed >= 5) return false; sharedUsed++; return true },
+      provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: input => JSON.stringify(input), completeNativeConversation: async input => {
+        observed.push(JSON.parse(input.systemPrompt!.split('[DevFlow runtime state]\n')[1]!) as typeof observed[number])
+        const toolCalls: NativeToolCall[] = [{ id: `read-${++calls}`, type: 'function', function: { name: 'discover', arguments: '{}' } }]
+        return { kind: 'tools', toolCalls, assistantMessage: { role: 'assistant', content: null, tool_calls: toolCalls } }
+      } }, tools: { definitions: [{ type: 'function', function: { name: 'discover', description: '', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } }], effects: { discover: 'read' }, execute: async () => ({ newEvidence: calls }) } })
+    expect((await loop.runBatch('session')).pauseReason).toBe('task_limit')
+    expect(observed.map(value => value.steps)).toEqual([
+      { usedBeforeThisCall: 2, remainingIncludingThisCall: 3, maximum: 5 },
+      { usedBeforeThisCall: 3, remainingIncludingThisCall: 2, maximum: 5 },
+      { usedBeforeThisCall: 4, remainingIncludingThisCall: 1, maximum: 5 },
+    ])
+    expect(calls).toBe(3)
+  } finally { await store.close() }
+})
+
 it('rejects a batched child wait before executing anything and closes both tool pairs', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-child-wait-batch-')); directories.push(directory)
   const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()

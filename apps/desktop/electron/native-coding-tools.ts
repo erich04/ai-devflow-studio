@@ -26,11 +26,11 @@ function definition(name: string, description: string, properties: Record<string
     defaultDeadlineMs: 120000, maxResultBytes: 256000, idempotency: effect === 'read' ? 'idempotent' : 'reconcilable', auditPolicy: 'redacted_metadata_only' }
 }
 const builtinDefinitions = [
-  definition('list_directory', '分页发现目录及文件；不受初始文件清单限制。', { path: string(1000), offset: integer(200000), limit: integer(200) }, []),
-  definition('glob_files', '按 glob 分页查找仓库文件。', { pattern: string(1000), offset: integer(200000), limit: integer(200) }, ['pattern']),
-  definition('read_file', '按行读取文本，返回实际字节摘要；二进制不冒充文本。', { path: string(1000), startLine: integer(10000000), limit: integer(400) }, ['path']),
+  definition('list_directory', '分页发现目录及文件；根目录省略 path。默认 100 项，nextOffset 为下一页；不受初始文件清单限制。', { path: string(1000), offset: integer(200000), limit: integer(200) }, []),
+  definition('glob_files', '按仓库相对路径 glob 查找文件。*.ts 仅匹配根目录，**/*.ts 包括子目录。返回总数及下一页；空文件范围不等于文字没有命中。', { pattern: string(1000), offset: integer(200000), limit: integer(200) }, ['pattern']),
+  definition('read_file', '按行读取文本，默认 100 行，最多 400 行；用 nextLine 续读。返回文件摘要供编辑校验；二进制不冒充文本。', { path: string(1000), startLine: integer(10000000), limit: integer(400) }, ['path']),
   definition('read_ranges', '一次读取同一文件的多组行范围，返回当前内容身份。', { path: string(1000), ranges: { type: 'array', maxItems: 16, items: { type: 'object', properties: { startLine: integer(10000000), limit: integer(400) }, required: ['startLine', 'limit'], additionalProperties: false } } }, ['path', 'ranges']),
-  definition('search_text', '分页检索文字/正则及上下文，可指定路径 glob。正则在独立线程中有界运行。', { query: string(2000), regex: { type: 'boolean' }, contextLines: integer(5), glob: string(1000), offset: integer(200000), limit: integer(200) }, ['query']),
+  definition('search_text', '检索文字（默认）或 regex=true 的正则。glob 按仓库相对路径匹配，**/*.ts 包含子目录；单页最多 30 个命中，每行展示最多 500 字，返回总数、扫描范围及 nextOffset。完整内容用 read_file 读取。', { query: string(2000), regex: { type: 'boolean' }, contextLines: integer(5), glob: string(1000), offset: integer(200000), limit: integer(200) }, ['query']),
   definition('find_symbol', '查询带版本的 TypeScript/JavaScript 语义索引；其他语言会说明不可用。', { query: string(500), offset: integer(200000), limit: integer(100) }, ['query']),
   definition('find_references', '按已读文件摘要及行列定位 TypeScript/JavaScript 符号引用。', { path: string(1000), expectedHash: string(64), line: integer(10000000), column: integer(10000000), offset: integer(200000), limit: integer(100) }, ['path', 'expectedHash', 'line', 'column']),
   definition('repo_status', '读取当前候选的真实内容身份和变化。', {}, []),
@@ -43,6 +43,7 @@ const builtinDefinitions = [
   definition('run_command', '运行已授权 planIndex；或提交 executable/args/timeoutMs 申请具体命令授权。不能更换 cwd。', { planIndex: integer(1000), executable: string(1000), args: { type: 'array', items: string(16000), maxItems: 100 }, timeoutMs: integer(3600000) }, [], 'command'),
   definition('run_test_plan', '在候选目录准备独立依赖并启动项目保存的测试。计划和依赖改变时需重新授权。', {}, [], 'command'),
   definition('read_command', '分页读取命令的真实日志与状态；运行中默认在宿主等待至多 10 秒再返回，可用 waitMs 调整为 0–30000 毫秒。running 不是测试通过，无需用模型快速重复轮询。', { id: string(200), offset: integer(100000000), limit: integer(16000), waitMs: integer(30000) }, ['id']),
+  definition('cancel_command', '停止本任务已启动的指定命令并等待进程退出；保留实际取消/完成结果，不代表测试通过。不能停止其他任务的命令。', { id: string(200) }, ['id'], 'command'),
   definition('inspect_diff', '列出变化；提供 path 时分页回读该文件变更前后的真实内容。', { path: string(1000), offset: integer(200000), limit: integer(16000) }, []),
   definition('read_evidence', '分页读取本次任务调查测试、最终验证和已冻结修订；记录不代表自动验收。', { offset: integer(100000000), limit: integer(16000) }, []),
   definition('propose_changeset', '宿主冻结真实文件供人审查；不是模型自报完成。必须单独调用。', { summary: string(4000) }, ['summary'], 'write'),
@@ -112,7 +113,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     if (name === 'find_symbol' || name === 'find_references') return queryCodingSymbols(workspace, readable, name, input)
     if (name === 'read_evidence') {
       const session = (await host.store.getNativeCodingSession(host.sessionId))!
-      const content = JSON.stringify({ final: session.deliveryEvidence, revisions: session.revisions.map(({ id, digest, objectiveVersion, testPlanDigest }) => ({ id, digest, objectiveVersion, testPlanDigest })), commands: session.toolReceipts.filter(receipt => ['run_command', 'run_test_plan', 'read_command'].includes(receipt.name)) })
+      const content = JSON.stringify({ final: session.deliveryEvidence, revisions: session.revisions.map(({ id, digest, objectiveVersion, testPlanDigest }) => ({ id, digest, objectiveVersion, testPlanDigest })), commands: session.toolReceipts.filter(receipt => ['run_command', 'run_test_plan', 'read_command', 'cancel_command'].includes(receipt.name)) })
       return { content: content.slice(offset, offset + Math.min(limit, 16000)), nextOffset: offset + limit < content.length ? offset + limit : null, sourceDigest: codingDigest(content) }
     }
     if (name === 'inspect_diff' && input.path) {
@@ -193,6 +194,10 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       if (!String(input.id).startsWith(`${host.sessionId}:`)) throw new Error('Command is outside this task')
       return host.commands.read(String(input.id), offset, Math.min(limit, 16000), { waitMs: Number(input.waitMs ?? 10000), signal: ctx.signal })
     }
+    if (name === 'cancel_command') {
+      if (!String(input.id).startsWith(`${host.sessionId}:`)) throw new Error('Command is outside this task')
+      return host.commands.cancel(String(input.id))
+    }
     if (name === 'propose_changeset') {
       if (host.commands.hasActiveCommands) throw new Error('Commands are still running; wait before freezing')
       if (host.child) {
@@ -209,7 +214,10 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     const files = manifest.files.filter(file => { try { readable(file.path); return true } catch { return false } })
     if (name === 'glob_files') {
       const selected = files.filter(file => path.matchesGlob(file.path, String(input.pattern)))
-      return { files: selected.slice(offset, offset + limit), nextOffset: offset + limit < selected.length ? offset + limit : null, revision: manifest.digest }
+      const page = selected.slice(offset, offset + limit)
+      return { files: page, pattern: input.pattern, totalFiles: selected.length, returned: page.length, offset, pageSize: limit,
+        emptyReason: selected.length === 0 ? 'no_matching_files' : page.length === 0 ? 'page_exhausted' : null,
+        nextOffset: offset + limit < selected.length ? offset + limit : null, revision: manifest.digest }
     }
     if (name === 'list_directory') {
       const directory = input.path ? `${codingRelativePath(String(input.path))}/` : ''
@@ -219,18 +227,29 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     if (name === 'search_text') {
       if (!input.query) throw new Error('Search query is empty')
       const matches: Array<{ path: string; line: number; text: string; hash: string; contextStart: number; context: string[] }> = []
-      let total = 0
+      let total = 0, matchedFiles = 0, scannedTextFiles = 0, binaryFilesSkipped = 0
+      let displayedLinesTruncated = false
+      const pageSize = Math.min(limit, 30)
       for (const file of files) {
         if (input.glob && !path.matchesGlob(file.path, String(input.glob))) continue
+        matchedFiles++
         ctx.signal.throwIfAborted()
         const value = await workspace.read(file.path)
-        if (value.bytes.includes(0)) continue
+        if (value.bytes.includes(0)) { binaryFilesSkipped++; continue }
+        scannedTextFiles++
         const text = value.bytes.toString('utf8'), lines = text.split('\n'), contextLines = Number(input.contextLines ?? 0)
         for (const line of await codingMatchingLines(text, String(input.query), Boolean(input.regex), signal)) {
-          if (total++ >= offset && matches.length < Math.min(limit, 30)) matches.push({ path: file.path, line: line + 1, text: lines[line]!.slice(0, 500), hash: value.hash, contextStart: Math.max(1, line + 1 - contextLines), context: lines.slice(Math.max(0, line - contextLines), line + 1 + contextLines).map(value => value.slice(0, 500)) })
+          if (total++ >= offset && matches.length < pageSize) {
+            const context = lines.slice(Math.max(0, line - contextLines), line + 1 + contextLines)
+            displayedLinesTruncated ||= lines[line]!.length > 500 || context.some(value => value.length > 500)
+            matches.push({ path: file.path, line: line + 1, text: lines[line]!.slice(0, 500), hash: value.hash, contextStart: Math.max(1, line + 1 - contextLines), context: context.map(value => value.slice(0, 500)) })
+          }
         }
       }
-      return { matches, nextOffset: offset + matches.length < total ? offset + matches.length : null, revision: manifest.digest }
+      return { matches, totalMatches: total, returned: matches.length, offset, pageSize, matchedFiles, scannedTextFiles, binaryFilesSkipped,
+        glob: input.glob ?? '**', regex: Boolean(input.regex), displayedLinesTruncated,
+        emptyReason: !matchedFiles ? 'no_matching_files' : !scannedTextFiles ? 'no_text_files' : !total ? 'no_text_matches' : !matches.length ? 'page_exhausted' : null,
+        nextOffset: offset + matches.length < total ? offset + matches.length : null, revision: manifest.digest }
     }
     const base = new Map(workspace.identity.base.files.map(file => [file.path, file]))
     const changed = manifest.files.filter(file => base.get(file.path)?.hash !== file.hash || base.get(file.path)?.mode !== file.mode)
@@ -271,7 +290,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         const item = definitions.find(value => value.id === name)
         if (!item || !validateNativeToolValue(item.inputSchema, input)) throw new Error('Invalid tool arguments')
         if (Date.now() >= Date.parse(host.authority.expiresAt) || (item.permissionClass === 'edit' && !host.authority.allowCandidateEdits)) throw new Error('Coding tool is not authorized')
-        if (item.permissionClass !== 'read' && host.commands.hasActiveCommands) throw new Error('Wait for the running command before another candidate writer')
+        if (name === 'cancel_command' && !String(input.id).startsWith(`${host.sessionId}:`)) throw new Error('Command is outside this task')
+        if (item.permissionClass !== 'read' && name !== 'cancel_command' && host.commands.hasActiveCommands) throw new Error('Wait for the running command before another candidate writer')
         if (codingExtensionNames.includes(name)) await host.extensions!.authorize(name, input, context.operationId)
         if (name === 'run_command' && input.planIndex === undefined) {
           const plan = commandPlan(input)
@@ -316,6 +336,14 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       if (receipt.name === 'run_command' || receipt.name === 'run_test_plan') {
         const command = await host.commands.get(`${host.sessionId}:${receipt.id}`)
         return command ? ['starting', 'running', 'unknown'].includes(command.status) && !host.commands.isActive(command.id) ? { state: 'unknown' } : { state: 'completed', result: command } : { state: 'not_executed' }
+      }
+      if (receipt.name === 'cancel_command') {
+        const id = receipt.input.id
+        if (typeof id !== 'string' || !id.startsWith(`${host.sessionId}:`)) return { state: 'not_executed' }
+        const command = await host.commands.get(id)
+        if (!command) return { state: 'not_executed' }
+        if (['starting', 'running', 'unknown'].includes(command.status)) return host.commands.isActive(id) ? { state: 'not_executed' } : { state: 'unknown' }
+        return { state: 'completed', result: command }
       }
       let effect: Effect
       try { effect = JSON.parse(await readFile(effectFile(receipt.id), 'utf8')) as Effect }

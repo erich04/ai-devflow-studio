@@ -161,6 +161,7 @@ function createHarnessService(host: HarnessHost): Harness {
       reconcileWorkers: () => commands.reconcile(),
       activity: (unitId, active) => activity(`${session.id}:${unitId}`, active),
       rootActiveMilliseconds: async () => codingActiveMilliseconds((await read(session.parent?.codingRunId ?? session.codingRunId)).activity),
+      rootStepsUsed: async () => { const root = await read(session.parent?.codingRunId ?? session.codingRunId); return root.rootStepAttempts?.length ?? root.attempts.length },
       reserveRootStep: async attemptId => {
         const rootId = session.parent?.codingRunId ?? session.codingRunId
         const root = await mutate(rootId, draft => {

@@ -2985,6 +2985,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         run,
         node,
         project,
+        ...(executor.descriptor.kind === 'native' && executor.descriptor.version === 3 ? { executionModel: 'native-harness-v3' as const } : {}),
         ...briefContext,
         maxContextBytes: CODING_BRIEF_MAX_BYTES,
         memoryContext: recalled.revisions,
