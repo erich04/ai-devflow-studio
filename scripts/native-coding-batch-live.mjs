@@ -156,13 +156,15 @@ async function runBatch(output, keyFile, only) {
         console.log(JSON.stringify({ event: 'start', task: task.id, engine }))
         const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)
         let trial; try { trial = JSON.parse(await readFile(path.join(trialOutput, 'trial.json'), 'utf8')) } catch {}
-        if (!trial) throw new Error(`Trial process produced no report (exit ${execution.code}, timeout ${execution.timedOut}); inspect ledger and execution.log before any retry`)
-        const providerReason = providerStopReason(trial.providerUnavailable)
+        let availability = trial?.providerUnavailable
+        if (!availability) { try { availability = JSON.parse(await readFile(path.join(trialOutput, 'provider-availability.json'), 'utf8')) } catch {} }
+        const providerReason = providerStopReason(availability)
         if (providerReason) {
           stopDispatch = true
-          await json(path.join(directory, 'provider-stop.json'), { at: new Date().toISOString(), reason: providerReason, ...trial.providerUnavailable }, true)
+          await json(path.join(directory, 'provider-stop.json'), { at: new Date().toISOString(), reason: providerReason, ...availability }, true)
           console.log(JSON.stringify({ event: 'provider_dispatch_stopped', task: task.id, engine, reason: providerReason }))
         }
+        if (!trial) throw new Error(`Trial process produced no report (exit ${execution.code}, timeout ${execution.timedOut}); inspect ledger and execution.log before any retry`)
         let deliveredWorkspace = trial.workspace
         if (deliveredWorkspace) { try { await access(path.join(deliveredWorkspace, '.git')) } catch { deliveredWorkspace = undefined } }
         if (deliveredWorkspace) await writeFile(path.join(directory, 'candidate.patch'), git(['diff', '--binary', 'HEAD'], deliveredWorkspace))
@@ -178,6 +180,9 @@ async function runBatch(output, keyFile, only) {
         const update = queue.then(async () => { rows.push(row); await save() }); queue = update.catch(() => {}); await update
         console.log(JSON.stringify({ event: 'result', task: task.id, engine, status: trial.status, independentPassed: independent.passed, costUsd: trial.costUsd, elapsedMs: Date.now() - started }))
       } catch (error) {
+        // A pipeline failure is not a model failure. Keep concurrent work, but
+        // require inspection before dispatching more paid trials.
+        stopDispatch = true
         await mkdir(directory, { recursive: true }); await json(path.join(directory, 'runner-failure.json'), { message: error.message, at: new Date().toISOString() })
         console.log(JSON.stringify({ event: 'runner_failure', task: task.id, engine, message: error.message }))
       }
