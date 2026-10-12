@@ -108,7 +108,11 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   } catch (error) { failure = redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)) }
   finally {
     await native?.shutdown(); await manager.stopAll(); await relay?.close()
-    const current = codingRunId ? (await store.listCodingAgentRuns(run.id)).find(item => item.id === codingRunId) : undefined
+    const persistedRuns = await store.listCodingAgentRuns(run.id)
+    // start() can fail after the production runtime has already saved its run.
+    // Keep that actual failed run instead of reporting a paid call as not started.
+    const current = codingRunId ? persistedRuns.find(item => item.id === codingRunId) : persistedRuns.at(-1)
+    codingRunId ??= current?.id
     const workspace = current ? (await store.listManagedCodingWorkspaces(projectId)).find(item => item.id === current.managedWorkspaceId) : undefined
     const session = codingRunId ? await store.getNativeCodingSession(`native-${codingRunId}`) : undefined
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []

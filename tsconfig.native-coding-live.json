@@ -1,5 +1,16 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "allowImportingTsExtensions": true, "noEmit": true, "types": ["node"] },
-  "include": ["scripts/native-coding-live-support.ts", "scripts/native-coding-trial-live.mts", "scripts/native-coding-endpoint-live.mts"]
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "scripts/native-coding-live-support.ts",
+    "scripts/native-coding-trial-live.mts",
+    "scripts/native-coding-endpoint-live.mts",
+    "scripts/native-coding-interactive-worker.mts"
+  ]
 }

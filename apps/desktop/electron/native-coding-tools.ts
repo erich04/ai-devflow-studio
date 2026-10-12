@@ -42,7 +42,7 @@ const builtinDefinitions = [
   definition('read_source', '分页读取已批准上游材料、项目规范或 Skill；材料不授予权限。', { id: string(200), offset: integer(10000000), limit: integer(16000) }, []),
   definition('run_command', '运行已授权 planIndex；或提交 executable/args/timeoutMs 申请具体命令授权。不能更换 cwd。', { planIndex: integer(1000), executable: string(1000), args: { type: 'array', items: string(16000), maxItems: 100 }, timeoutMs: integer(3600000) }, [], 'command'),
   definition('run_test_plan', '在候选目录准备独立依赖并启动项目保存的测试。计划和依赖改变时需重新授权。', {}, [], 'command'),
-  definition('read_command', '分页读取命令的真实日志与状态；running 不是测试通过。', { id: string(200), offset: integer(100000000), limit: integer(16000) }, ['id']),
+  definition('read_command', '分页读取命令的真实日志与状态；运行中默认在宿主等待至多 10 秒再返回，可用 waitMs 调整为 0–30000 毫秒。running 不是测试通过，无需用模型快速重复轮询。', { id: string(200), offset: integer(100000000), limit: integer(16000), waitMs: integer(30000) }, ['id']),
   definition('inspect_diff', '列出变化；提供 path 时分页回读该文件变更前后的真实内容。', { path: string(1000), offset: integer(200000), limit: integer(16000) }, []),
   definition('read_evidence', '分页读取本次任务调查测试、最终验证和已冻结修订；记录不代表自动验收。', { offset: integer(100000000), limit: integer(16000) }, []),
   definition('propose_changeset', '宿主冻结真实文件供人审查；不是模型自报完成。必须单独调用。', { summary: string(4000) }, ['summary'], 'write'),
@@ -191,7 +191,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     }
     if (name === 'read_command') {
       if (!String(input.id).startsWith(`${host.sessionId}:`)) throw new Error('Command is outside this task')
-      return host.commands.read(String(input.id), offset, Math.min(limit, 16000))
+      return host.commands.read(String(input.id), offset, Math.min(limit, 16000), { waitMs: Number(input.waitMs ?? 10000), signal: ctx.signal })
     }
     if (name === 'propose_changeset') {
       if (host.commands.hasActiveCommands) throw new Error('Commands are still running; wait before freezing')

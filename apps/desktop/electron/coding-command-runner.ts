@@ -208,8 +208,27 @@ export class CodingCommandRunner {
     if (active) return active.done
     const saved = await this.get(id); if (!saved) throw new Error('Command not found'); return saved
   }
-  async read(id: string, offset = 0, limit = 16000): Promise<{ receipt: CodingCommandReceipt; output: string; nextOffset: number | null }> {
+  async read(id: string, offset = 0, limit = 16000, options: { waitMs?: number; signal?: AbortSignal } = {}): Promise<{ receipt: CodingCommandReceipt; output: string; nextOffset: number | null }> {
     if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 64_000) throw new Error('Invalid output page')
+    const waitMs = options.waitMs ?? 0
+    if (!Number.isSafeInteger(waitMs) || waitMs < 0 || waitMs > 30000) throw new Error('Invalid command read wait')
+    options.signal?.throwIfAborted()
+    const active = this.active.get(id)
+    if (active && waitMs > 0) {
+      // Keep waiting inside the host tool call rather than spending another
+      // model turn to rediscover the same running process. This never restarts it.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let abort = () => {}
+      try {
+        await Promise.race([active.done, new Promise<void>((resolve, reject) => {
+          timer = setTimeout(resolve, waitMs)
+          abort = () => reject(options.signal?.reason ?? new DOMException('Command read interrupted', 'AbortError'))
+          options.signal?.addEventListener('abort', abort, { once: true })
+          if (options.signal?.aborted) abort()
+        })])
+      } finally { clearTimeout(timer); options.signal?.removeEventListener('abort', abort) }
+    }
+    options.signal?.throwIfAborted()
     const receipt = await this.get(id); if (!receipt) throw new Error('Command not found')
     const bytes = await readFile(this.file(id, 'log')).catch(error => { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return Buffer.alloc(0); throw error })
     return { receipt, output: bytes.subarray(offset, offset + limit).toString('utf8'), nextOffset: offset + limit < bytes.length ? offset + limit : null }

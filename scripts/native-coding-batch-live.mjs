@@ -1,7 +1,7 @@
 /** Prepare blinded inputs, invoke the production live trial, then run private acceptance. */
 import { spawn, execFileSync } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, writeFile, cp, rm, readdir } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, cp, access } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -86,10 +86,12 @@ async function runBatch(output, keyFile, only) {
   for (const task of plan.tasks) for (const engine of plan.engines) work.push({ task, engine })
   const save = async () => { await json(path.join(output, 'runs.json'), rows); await json(path.join(output, 'score.json'), scoreNativeCodingEvaluation(plan.tasks, rows, JSON.parse(await readFile(path.join(output, 'qualification.json'), 'utf8')).results)) }
   for (const item of work) { try { rows.push(JSON.parse(await readFile(path.join(output, `${item.task.id}-${item.engine}`, 'row.json'), 'utf8'))) } catch (error) { if (error.code !== 'ENOENT') throw error } }
-  let index = 0, queue = Promise.resolve()
+  let index = 0, queue = Promise.resolve(), stopDispatch = false
+  const stop = () => { stopDispatch = true; console.log(JSON.stringify({ event: 'dispatch_stopping', activeTrialsWillFinish: true })) }
+  process.once('SIGINT', stop); process.once('SIGTERM', stop)
   const selected = work.filter(item => (!only.length || only.includes(item.task.id)) && !rows.some(row => row.taskId === item.task.id && row.engine === item.engine))
   await Promise.all(Array.from({ length: plan.concurrency }, async () => {
-    while (index < selected.length) {
+    while (index < selected.length && !stopDispatch) {
       const { task, engine } = selected[index++], directory = path.join(output, `${task.id}-${engine}`), trialOutput = path.join(directory, 'execution'), started = Date.now()
       try {
         const baseline = await prepare(task, directory)
@@ -99,8 +101,14 @@ async function runBatch(output, keyFile, only) {
         const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)
         let trial; try { trial = JSON.parse(await readFile(path.join(trialOutput, 'trial.json'), 'utf8')) } catch {}
         if (!trial) throw new Error(`Trial process produced no report (exit ${execution.code}, timeout ${execution.timedOut}); inspect ledger and execution.log before any retry`)
-        if (trial.workspace) await writeFile(path.join(directory, 'candidate.patch'), git(['diff', '--binary', 'HEAD'], trial.workspace))
-        const independent = await independentCheck(task, baseline, trial.workspace, directory); await json(path.join(directory, 'independent.json'), independent, true)
+        let deliveredWorkspace = trial.workspace
+        if (deliveredWorkspace) { try { await access(path.join(deliveredWorkspace, '.git')) } catch { deliveredWorkspace = undefined } }
+        if (deliveredWorkspace) await writeFile(path.join(directory, 'candidate.patch'), git(['diff', '--binary', 'HEAD'], deliveredWorkspace))
+        // Failed engines may deliberately delete their managed worktree. There is
+        // then no delivered patch: independently test the untouched baseline and
+        // keep that reason visible, rather than losing the observation to ENOENT.
+        const independent = { ...await independentCheck(task, baseline, deliveredWorkspace, directory), deliveredWorkspaceAvailable: !!deliveredWorkspace }
+        await json(path.join(directory, 'independent.json'), independent, true)
         const row = { taskId: task.id, engine, trial: 1, provider: trial.provider, model: trial.model, claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, category: task.category, split: task.split, trialStatus: trial.status, failure: trial.failure ?? null, execution, independent, artifacts: path.relative(repository, directory) }
         await json(path.join(directory, 'row.json'), row, true)
         const update = queue.then(async () => { rows.push(row); await save() }); queue = update.catch(() => {}); await update
@@ -111,6 +119,7 @@ async function runBatch(output, keyFile, only) {
       }
     }
   }))
+  process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop)
   await save()
 }
 

@@ -20,6 +20,30 @@ it('executes an authorized real command, keeps paged output, and never reruns a 
 })
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))) })
 
+it('waits within one read for a real command to finish instead of spending model turns polling', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-command-read-')); directories.push(root)
+  const runner = new CodingCommandRunner(path.join(root, 'receipts'))
+  try {
+    await runner.start('slow', { executable: process.execPath, args: ['-e', 'setTimeout(()=>console.log("finished once"),250)'], timeoutMs: 5000, profile: { kind: 'trusted_local' } }, root)
+    const result = await runner.read('slow', 0, 500, { waitMs: 2000 })
+    expect(result.receipt.status).toBe('passed'); expect(result.output).toContain('finished once')
+  } finally { await runner.cancelAll() }
+})
+
+it('bounds a command read and interrupts its wait without fabricating completion or restarting it', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-command-read-abort-')); directories.push(root)
+  const runner = new CodingCommandRunner(path.join(root, 'receipts'))
+  try {
+    const command = await runner.start('slow', { executable: process.execPath, args: ['-e', 'setInterval(()=>{},100)'], timeoutMs: 10000, profile: { kind: 'trusted_local' } }, root)
+    expect((await runner.read('slow', 0, 500, { waitMs: 20 })).receipt.status).toBe('running')
+    const controller = new AbortController(), reading = runner.read('slow', 0, 500, { waitMs: 10000, signal: controller.signal })
+    setTimeout(() => controller.abort(), 20)
+    await expect(reading).rejects.toMatchObject({ name: 'AbortError' })
+    expect(runner.isActive('slow')).toBe(true); expect((await runner.get('slow'))!.pid).toBe(command.pid)
+    await expect(runner.read('slow', 0, 500, { waitMs: 30001 })).rejects.toThrow('wait')
+  } finally { await runner.cancelAll() }
+})
+
 it('preserves quoted arguments, spaces and operators in a saved shell test command', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow command quoting ')); directories.push(root)
   const runner = new CodingCommandRunner(path.join(root, 'receipts'))
