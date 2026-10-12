@@ -299,7 +299,11 @@ export class NativeCodingLoop {
         if (receipt.effect !== 'read') {
           const resolution = await this.host.tools.reconcile?.(receipt, session)
           if (!resolution || resolution.state === 'unknown') return this.change(session.id, draft => { draft.status = 'reconciling'; draft.pauseReason = 'tool_effect_unknown' })
-          if (resolution.state === 'completed') { session = await this.recordToolResult(session.id, call.id, resolution.result); continue }
+          if (resolution.state === 'completed') {
+            session = await this.recordToolResult(session.id, call.id, resolution.result)
+            if (name === 'propose_changeset' || name === 'report_findings') return this.enterReview(session.id, signal)
+            continue
+          }
         }
         session = await this.recordToolResult(session.id, call.id, { error: reason }); batchFailed = true
       }

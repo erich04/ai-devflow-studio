@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { createAgentRuntime, resumeAgentRuntime, requestAgentAction, validateNativeToolValue, type AgentRuntimeScope, type NativeToolDefinition, type NativeToolJsonSchema } from '@ai-devflow/shared'
+import { createAgentRuntime, resumeAgentRuntime, requestAgentAction, validateNativeToolValue, redactSensitiveValue, type AgentRuntimeScope, type NativeToolDefinition, type NativeToolJsonSchema } from '@ai-devflow/shared'
 import { createNativeToolRegistry, digestNativeToolValue, type NativeToolRegistration } from './native-tool-registry'
 import { CodingCandidateWorkspace, atomicCodingFile, codingDigest, codingFilePath, codingRelativePath } from './coding-candidate-workspace'
 import { CodingCommandRunner, type CodingCommandPlan } from './coding-command-runner'
@@ -67,6 +67,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
   extensions?: ReturnType<typeof createCodingExtensions>;
   delegation?: { execute(name: string, input: Record<string, unknown>, context: Parameters<CodingLoopTools['execute']>[2]): Promise<unknown>; reconcile(receipt: CodingToolReceipt): Promise<{ state: 'completed'; result: unknown } | { state: 'not_executed' } | { state: 'unknown' }> } }): CodingLoopTools {
   const { workspace } = host
+  const completedResult = (result: unknown) => ({ state: 'completed' as const, result: redactSensitiveValue(result).value })
+  const safeResolution = (resolution: Awaited<ReturnType<NonNullable<CodingLoopTools['reconcile']>>>) => resolution.state === 'completed' ? completedResult(resolution.result) : resolution
   const delegationNames = ['delegate_task', 'await_task', 'cancel_task', 'merge_task']
   const definitions = builtinDefinitions.filter(item => (!codingExtensionNames.includes(item.id) || Boolean(host.extensions)) && (!delegationNames.includes(item.id) || Boolean(host.delegation && !host.child)) && (item.id !== 'report_findings' || host.child?.mode === 'read_only') && (host.child?.mode !== 'read_only' || (item.permissionClass === 'read' && !['web_search', 'fetch_document'].includes(item.id))))
   const commandPlan = (input: Record<string, unknown>): CodingCommandPlan => {
@@ -261,7 +263,13 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     const invocation = run(item.id, input as Record<string, unknown>, signal); handlers.add(invocation)
     try { return { data: JSON.stringify(await invocation) } } finally { handlers.delete(invocation) }
   } }))
-  const registry = createNativeToolRegistry({ tools: registrations, persistence: {
+  const registry = createNativeToolRegistry({ tools: registrations,
+    // Redact leaf values before serializing the transport envelope. Treating
+    // encoded JSON as prose can consume an escape before a quote and corrupt it.
+    redactResult: raw => {
+      const result = redactSensitiveValue(JSON.parse((raw as { data: string }).data))
+      return { value: { data: JSON.stringify(result.value) }, redacted: result.redacted }
+    }, persistence: {
     reserveGrant: async grant => {
       await change(draft => {
         const record = draft.toolAuthorities.find(item => item.runtime.id === grant.runtimeId)
@@ -324,18 +332,18 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       queue = invocation.catch(() => undefined); return invocation
     },
     async reconcile(receipt, session) {
-      if (codingExtensionNames.includes(receipt.name)) return host.extensions!.reconcile(receipt)
-      if (delegationNames.includes(receipt.name)) return host.delegation!.reconcile(receipt)
+      if (codingExtensionNames.includes(receipt.name)) return safeResolution(await host.extensions!.reconcile(receipt))
+      if (delegationNames.includes(receipt.name)) return safeResolution(await host.delegation!.reconcile(receipt))
       if (receipt.name === 'propose_changeset') {
         const id = `changeset-${codingDigest(`${host.sessionId}:${receipt.id}`)}`
         const revision = session.revisions.find(item => item.id === id) ?? await workspace.revision(id)
         if (revision && (revision.sessionId !== session.id || revision.objectiveVersion !== session.objectiveVersion || revision.policyVersion !== host.authority.policyVersion)) return { state: 'unknown', reason: 'Frozen revision authority changed before publication' }
         if (revision && !session.revisions.some(item => item.id === id)) await change(draft => { if (!draft.revisions.some(item => item.id === id)) draft.revisions.push(revision) })
-        return revision ? { state: 'completed', result: { revisionId: revision.id, digest: revision.digest, summary: revision.summary, fileCount: revision.operations.length } } : { state: 'not_executed' }
+        return revision ? completedResult({ revisionId: revision.id, digest: revision.digest, summary: revision.summary, fileCount: revision.operations.length }) : { state: 'not_executed' }
       }
       if (receipt.name === 'run_command' || receipt.name === 'run_test_plan') {
         const command = await host.commands.get(`${host.sessionId}:${receipt.id}`)
-        return command ? ['starting', 'running', 'unknown'].includes(command.status) && !host.commands.isActive(command.id) ? { state: 'unknown' } : { state: 'completed', result: command } : { state: 'not_executed' }
+        return command ? ['starting', 'running', 'unknown'].includes(command.status) && !host.commands.isActive(command.id) ? { state: 'unknown' } : completedResult(command) : { state: 'not_executed' }
       }
       if (receipt.name === 'cancel_command') {
         const id = receipt.input.id
@@ -343,14 +351,14 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         const command = await host.commands.get(id)
         if (!command) return { state: 'not_executed' }
         if (['starting', 'running', 'unknown'].includes(command.status)) return host.commands.isActive(id) ? { state: 'not_executed' } : { state: 'unknown' }
-        return { state: 'completed', result: command }
+        return completedResult(command)
       }
       let effect: Effect
       try { effect = JSON.parse(await readFile(effectFile(receipt.id), 'utf8')) as Effect }
       catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'not_executed' }; throw error }
       if (effect.inputDigest !== receipt.inputDigest || effect.objectiveVersion !== session.objectiveVersion) return { state: 'unknown' }
-      if (effect.result) return { state: 'completed', result: effect.result }
-      try { return { state: 'completed', result: await finishEffect(effect) } } catch { return { state: 'unknown' } }
+      if (effect.result) return completedResult(effect.result)
+      try { return completedResult(await finishEffect(effect)) } catch { return { state: 'unknown' } }
     },
   }
   return tools

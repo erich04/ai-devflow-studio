@@ -85,6 +85,32 @@ it('distinguishes an empty file scope from no text matches and exposes the actua
   } finally { await store.close() }
 })
 
+it('redacts structured tool content without corrupting JSON escapes around quoted paths', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-tool-json-')); directories.push(root)
+  const delivery = path.join(root, 'delivery'); await mkdir(delivery); await writeFile(path.join(delivery, 'value.txt'), 'before')
+  const workspace = await CodingCandidateWorkspace.create({ root: path.join(root, 'private'), delivery, baseCommitSha: 'a'.repeat(40), excludedPaths: [] })
+  const store = await createLocalStore({ dbPath: path.join(root, 'local.sqlite') }), now = new Date().toISOString()
+  try {
+    await store.upsertProject({ id: 'project', name: 'test', path: delivery, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
+    const session = createNativeCodingSession({ id: 'json-session', localProjectId: 'project', codingRunId: 'coding', workflowRunId: 'run', nodeId: 'build', objective: 'Inspect sources', providerId: 'fake', model: 'test', now })
+    await store.saveNativeCodingSession(session, 0)
+    const content = 'Compare "alpha"/"beta". API_TOKEN=fixture-private-value'
+    const tools = createNativeCodingTools({ store, sessionId: session.id, workspace, commands: new CodingCommandRunner(path.join(root, 'commands')),
+      authority: { scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user', sessionId: 'auth', localProjectId: 'project' }, runVersion: 1, policyVersion: 1, expiresAt: new Date(Date.now() + 60000).toISOString(), allowCandidateEdits: true, commands: [] }, assertAuthority: async () => {}, sources: [{ id: 'source', version: '1', title: 'Fixture', content }], testPlanDigest: 'b'.repeat(64) })
+    const result = await tools.execute('read_source', { id: 'source' }, { session, operationId: 'quoted-source', signal: new AbortController().signal }) as { content: string }
+    expect(result.content).toContain('"alpha"/"beta"')
+    expect(result.content).not.toContain('fixture-private-value')
+    expect(result.content).toContain('[REDACTED:')
+    const input = { summary: content }, operationId = 'quoted-freeze'
+    const proposal = await tools.execute('propose_changeset', input, { session, operationId, signal: new AbortController().signal }) as { summary: string }
+    expect(proposal.summary).toBe(result.content)
+    const saved = (await store.getNativeCodingSession(session.id))!
+    const recovered = await tools.reconcile!({ id: operationId, name: 'propose_changeset', input, inputDigest: codingDigest(JSON.stringify(input)), objectiveVersion: session.objectiveVersion, effect: 'write', status: 'started' }, saved)
+    expect(recovered).toEqual({ state: 'completed', result: proposal })
+    expect((await store.getNativeCodingSession(session.id))!.toolAuthorities.some(record => record.audit.some(event => event.status === 'succeeded' && event.redactionState === 'applied'))).toBe(true)
+  } finally { await store.close() }
+})
+
 it('authorizes a legitimate read when separate clock observations straddle a millisecond', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-tool-clock-')); directories.push(root)
   const delivery = path.join(root, 'delivery'); await mkdir(delivery)

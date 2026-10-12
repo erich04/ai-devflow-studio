@@ -32,7 +32,9 @@ const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
 const servers: Server[] = []
 const stores = new Set<LocalStore>()
-const providerFixtureTimeoutMs = 1_000
+// This local server checks response parsing and cost traces, not provider latency.
+// A hosted Windows run hit the 1 s deadline instead of receiving the delayed reply.
+const providerFixtureTimeoutMs = process.platform === 'win32' ? 10_000 : 1_000
 
 afterEach(async () => {
   for (const store of stores) store.close()

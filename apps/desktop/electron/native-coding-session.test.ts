@@ -113,6 +113,32 @@ it('invalidates a frozen answer when steering arrived during its last tool', asy
   await store.close()
 })
 
+it('enters review when a revision durably froze but its result delivery failed', async () => {
+  const name = 'propose_changeset'
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-control-result-')); directories.push(directory)
+  const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()
+  try {
+    await store.upsertProject({ id: 'project', name: 'test', path: directory, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
+    await store.saveNativeCodingSession(createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'run', workflowRunId: 'workflow', nodeId: 'build', objective: 'Finish the approved task', providerId: 'fake', model: 'test', now }), 0)
+    const result = { revisionId: 'frozen-on-disk', digest: 'a'.repeat(64) }
+    let modelCalls = 0, effectRecorded = false
+    const toolCalls: NativeToolCall[] = [{ id: 'control', type: 'function', function: { name, arguments: '{}' } }]
+    const loop = new NativeCodingLoop({ store, provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: input => JSON.stringify(input), completeNativeConversation: async () => {
+      modelCalls++
+      if (modelCalls > 1) return { kind: 'text', text: 'Already submitted; waiting for review.', assistantMessage: { role: 'assistant', content: 'Already submitted; waiting for review.' } }
+      return { kind: 'tools', toolCalls, assistantMessage: { role: 'assistant', content: null, tool_calls: toolCalls } }
+    } }, tools: { definitions: [{ type: 'function', function: { name, description: '', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } }], effects: { [name]: 'write' },
+      execute: async () => { effectRecorded = true; throw new Error('Result delivery failed after durable effect') },
+      reconcile: async () => effectRecorded ? { state: 'completed', result } : { state: 'not_executed' },
+    } })
+    expect(await loop.runBatch('session')).toMatchObject({ status: 'review' })
+    expect(modelCalls).toBe(1)
+    const saved = (await store.getNativeCodingSession('session'))!
+    expect(saved.toolReceipts).toMatchObject([{ status: 'completed', result }])
+    expect(saved.transcript.filter(message => message.role === 'tool')).toHaveLength(1)
+  } finally { await store.close() }
+})
+
 it('continues native tool feedback past the initial investigation and resumes a question in the same run after restart', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-coding-loop-')); directories.push(directory)
   const dbPath = path.join(directory, 'local.sqlite'), store = await createLocalStore({ dbPath })

@@ -68,6 +68,13 @@ async function review(client, timeout = 480000) {
   const end = Date.now() + timeout
   while (Date.now() < end) {
     const snapshot = await settledView(client)
+    // The real UI renders each child's own permission panel. Apply the same
+    // frozen rejection policy there rather than leaving its parent waiting.
+    for (const child of snapshot.children ?? []) {
+      if (child.status !== 'waiting_permission') continue
+      const view = await client.get(child.id)
+      if (view.status === 'waiting_permission' && view.permission) await client.command({ type: 'permission', permissionId: view.permission.id, decision: 'rejected' }, child.id)
+    }
     if (snapshot.status === 'review') return snapshot
     if (['ready', 'running', 'waiting_task'].includes(snapshot.status)) { await wait(100); continue }
     if (snapshot.status === 'waiting_permission' && snapshot.permission) { await client.command({ type: 'permission', permissionId: snapshot.permission.id, decision: 'rejected' }); continue }
