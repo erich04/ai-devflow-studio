@@ -9,6 +9,18 @@ import { scoreNativeCodingEvaluation } from './native-coding-evaluation.mjs'
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const digest = value => createHash('sha256').update(value).digest('hex')
+export function providerStopReason(status) {
+  return status?.httpStatus === 401 ? 'authentication_failed' : status?.httpStatus === 402 ? 'balance_unavailable' : null
+}
+export async function checkDeepSeekAvailability(apiKey, fetcher = fetch) {
+  const response = await fetcher('https://api.deepseek.com/user/balance', { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) })
+  const httpStatus = response.status, rejected = providerStopReason({ httpStatus })
+  if (!response.ok) return { available: false, httpStatus, reason: rejected ?? 'availability_unknown' }
+  const data = await response.json()
+  // Persist only availability. Account amounts and credentials are not evidence
+  // about coding quality and do not belong in the experiment report.
+  return { available: data.is_available === true, httpStatus, reason: data.is_available === true ? 'available' : data.is_available === false ? 'balance_unavailable' : 'availability_unknown' }
+}
 const environment = () => ({ ...Object.fromEntries(['PATH', 'LANG', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot', 'HOME', 'PNPM_HOME', 'COREPACK_HOME'].filter(key => process.env[key]).map(key => [key, process.env[key]])), CI: '1', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0', ELECTRON_SKIP_BINARY_DOWNLOAD: '1' })
 export function protectedEvaluationPath(file) {
   return /(?:^|\/)(?:package\.json|pnpm-lock\.yaml|package-lock\.json|pnpm-workspace\.yaml|\.npmrc|vitest[^/]*|vite\.config\.[^/]+|tsconfig[^/]*)$/u.test(file) || /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)
@@ -96,7 +108,7 @@ async function freeze(output) {
   })
   const publicQualification = JSON.parse(sources['native-coding-v3-public-qualification-20261011.json'])
   const tasks = bindPublicTestPlans(qualifiedTasks, JSON.parse(sources['native-coding-v3-public-test-plans.json']), publicQualification, digest(sources['native-coding-v3-tasks.json']), digest(sources['native-coding-v3-public-test-plans.json']))
-  const runnerDigests = Object.fromEntries(await Promise.all(['native-coding-batch-live.mjs', 'native-coding-trial-live.mts', 'native-coding-live-support.ts'].map(async file => [file, digest(await readFile(path.join(repository, 'scripts', file)))])))
+  const runnerDigests = Object.fromEntries(await Promise.all(['native-coding-batch-live.mjs', 'native-coding-trial-live.mts', 'native-coding-live-support.ts', 'native-coding-live-operator.ts'].map(async file => [file, digest(await readFile(path.join(repository, 'scripts', file)))])))
   const plan = { schemaVersion: 1, id: path.basename(output), frozenAt: new Date().toISOString(), candidateCommit: git(['rev-parse', 'HEAD']).toString().trim(), sourceDigests: Object.fromEntries(Object.entries(sources).map(([name, bytes]) => [name, digest(bytes)])), runnerDigests,
     provider: { id: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', baseUrl: 'https://api.deepseek.com', thinking: 'enabled', effort: 'high', pricingSource: 'https://api-docs.deepseek.com/quick_start/pricing/', userMonetaryCeiling: null, authorization: 'User explicitly authorized this model, supplied its credential, and set no cost ceiling.' },
     node: process.version, platform: process.platform, opencodeVersion: execFileSync('/opt/homebrew/bin/opencode', ['--version']).toString().trim(), opencodeBinary: '/opt/homebrew/bin/opencode',
@@ -128,6 +140,11 @@ async function runBatch(output, keyFile, only) {
   const stop = () => { stopDispatch = true; console.log(JSON.stringify({ event: 'dispatch_stopping', activeTrialsWillFinish: true })) }
   process.once('SIGINT', stop); process.once('SIGTERM', stop)
   const selected = work.filter(item => (!only.length || only.includes(item.task.id)) && !rows.some(row => row.taskId === item.task.id && row.engine === item.engine))
+  if (selected.length) {
+    const availability = await checkDeepSeekAvailability((await readFile(keyFile, 'utf8')).trim())
+    await json(path.join(output, `provider-preflight-${Date.now()}.json`), { at: new Date().toISOString(), ...availability }, true)
+    if (!availability.available) throw new Error(`Provider unavailable before paid trials: ${availability.reason}`)
+  }
   await Promise.all(Array.from({ length: plan.concurrency }, async () => {
     while (index < selected.length && !stopDispatch) {
       const { task, engine } = selected[index++], directory = path.join(output, `${task.id}-${engine}`), trialOutput = path.join(directory, 'execution'), started = Date.now()
@@ -140,6 +157,12 @@ async function runBatch(output, keyFile, only) {
         const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)
         let trial; try { trial = JSON.parse(await readFile(path.join(trialOutput, 'trial.json'), 'utf8')) } catch {}
         if (!trial) throw new Error(`Trial process produced no report (exit ${execution.code}, timeout ${execution.timedOut}); inspect ledger and execution.log before any retry`)
+        const providerReason = providerStopReason(trial.providerUnavailable)
+        if (providerReason) {
+          stopDispatch = true
+          await json(path.join(directory, 'provider-stop.json'), { at: new Date().toISOString(), reason: providerReason, ...trial.providerUnavailable }, true)
+          console.log(JSON.stringify({ event: 'provider_dispatch_stopped', task: task.id, engine, reason: providerReason }))
+        }
         let deliveredWorkspace = trial.workspace
         if (deliveredWorkspace) { try { await access(path.join(deliveredWorkspace, '.git')) } catch { deliveredWorkspace = undefined } }
         if (deliveredWorkspace) await writeFile(path.join(directory, 'candidate.patch'), git(['diff', '--binary', 'HEAD'], deliveredWorkspace))

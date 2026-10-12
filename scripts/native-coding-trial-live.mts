@@ -14,6 +14,7 @@ import { createGovernedOpencodeProxy } from '../apps/desktop/electron/governed-o
 import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.ts'
 import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime.ts'
 import { createEvaluationLedger, evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
+import { handleEvaluationChildControls } from './native-coding-live-operator.ts'
 
 export type TrialInput = { id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string }
 export async function runLiveTrial(input: TrialInput, apiKey: string) {
@@ -26,9 +27,18 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const observations: Array<Record<string, unknown>> = [], actions: Array<Record<string, unknown>> = []
   const deadlineAbort = new AbortController()
   const deadlineSignal = (signal?: AbortSignal | null) => signal ? AbortSignal.any([signal, deadlineAbort.signal]) : deadlineAbort.signal
+  let providerUnavailable: { httpStatus: number; at: string } | undefined
+  const providerFetch: typeof fetch = async (url, init) => {
+    const response = await fetch(url, { ...init, signal: deadlineSignal(init?.signal) })
+    if (response.status === 401 || response.status === 402) {
+      providerUnavailable = { httpStatus: response.status, at: now() }
+      await saveJson(path.join(input.output, 'provider-availability.json'), providerUnavailable)
+    }
+    return response
+  }
   const runBoundedTest: typeof runLocalTestCommand = value => runLocalTestCommand({ ...value, signal: deadlineSignal(value.signal) })
   const redact = (text: string) => text.replaceAll(apiKey, '[redacted]')
-  const raw = createOpenAiCompatibleAgentProvider({ id: providerId, name: 'DeepSeek V4.1 Flash', model: 'deepseek-flash', apiKey, baseUrl: 'https://api.deepseek.com', thinking: { mode: 'enabled', effort: 'high' }, structuredRequestTimeoutMs: 180000, fetcher: (url, init) => fetch(url, { ...init, signal: deadlineSignal(init?.signal) }) })
+  const raw = createOpenAiCompatibleAgentProvider({ id: providerId, name: 'DeepSeek V4.1 Flash', model: 'deepseek-flash', apiKey, baseUrl: 'https://api.deepseek.com', thinking: { mode: 'enabled', effort: 'high' }, structuredRequestTimeoutMs: 180000, fetcher: providerFetch })
   const capped: AgentProvider = { ...raw, resolveRequestPolicy: value => raw.resolveRequestPolicy!({ ...value, maxOutputTokens: Math.min(value.maxOutputTokens ?? input.maxOutputTokens, input.maxOutputTokens) }) }
   const governed = governAgentProvider(capped, projectId, ledger)
   const observe = async <T,>(kind: string, request: unknown, call: () => Promise<T>): Promise<T> => {
@@ -50,7 +60,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   else if (input.engine === 'native-v2') executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(provider), configVersion: 1, runSavedTest: runBoundedTest, testTimeoutMs: 300000 })
   else {
     relay = await createGovernedOpencodeProxy({ binding: { providerId, modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, fingerprint: digest('frozen-deepseek-flash-high') }, projectId, governance: ledger, maxOutputTokens: input.maxOutputTokens,
-      fetcher: async (url, init) => { const body = JSON.parse(String(init?.body)); await writeFile(path.join(input.output, `opencode-request-${observations.length}.json`), redact(JSON.stringify(body)), { mode: 0o600 }); observations.push({ kind: 'opencode', startedAt: now() }); return fetch(url, { ...init, signal: deadlineSignal(init?.signal) }) } })
+      fetcher: async (url, init) => { const body = JSON.parse(String(init?.body)); await writeFile(path.join(input.output, `opencode-request-${observations.length}.json`), redact(JSON.stringify(body)), { mode: 0o600 }); observations.push({ kind: 'opencode', startedAt: now() }); return providerFetch(url, init) } })
     const env = buildOpencodeRuntimeEnv({ baseEnv: process.env, apiKeyEnvName: 'OPENCODE_API_KEY', providerBinding: relay.binding })
     const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!)
     config.provider[providerId].models['deepseek-flash'] = { name: 'DeepSeek V4.1 Flash', limit: { context: 1048576, output: input.maxOutputTokens }, options: { thinking: { type: 'enabled' }, reasoningEffort: 'high' } }
@@ -93,14 +103,17 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   try {
     const started = await coding.runCodingAgent({ runId: run.id, nodeId: run.currentNodeId, projectId, requestedBy: run.creatorId, userInstruction: input.prompt }); codingRunId = started.codingRun.id
     if (native) {
-      const get = () => coding.codingHarnessCommand({ protocolVersion: 2, type: 'get', codingRunId: codingRunId! })
-      const command = async (body: Record<string, unknown>) => { const snapshot = await get(); const value = { protocolVersion: 2, codingRunId, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
+      const get = (target = codingRunId!) => coding.codingHarnessCommand({ protocolVersion: 2, type: 'get', codingRunId: target })
+      const command = async (body: Record<string, unknown>, target = codingRunId!) => { const snapshot = await get(target); const value = { protocolVersion: 2, codingRunId: target, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
       await command({ type: 'authorize', profile: 'trusted_local' })
       let answered = false
       while (!deadlineExpired) {
         await native.settled(codingRunId)
         const snapshot = await get(); finalSnapshot = snapshot
         await saveJson(path.join(input.output, 'snapshot.json'), snapshot)
+        const childControls = await handleEvaluationChildControls(snapshot, { get, command })
+        if (childControls.unansweredChild) { failure = `unanswered_child_question:${childControls.unansweredChild}`; break }
+        if (childControls.handled) continue
         if (snapshot.status === 'review' && snapshot.revision) {
           // Approval permits verification only. The independent evaluator still judges correctness.
           await command({ type: 'approve', revisionDigest: snapshot.revision.digest, objectiveVersion: snapshot.objectiveVersion, confirmedCriteria: [] }); continue
@@ -133,7 +146,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     const session = codingRunId ? await store.getNativeCodingSession(`native-${codingRunId}`) : undefined
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []
     const usage = evaluationUsage(ledger.records())
-    const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: session?.status ?? current?.status ?? 'not_started', failure: deadlineExpired ? failure ?? 'evaluation_wall_time_limit' : failure, deadlineExpired, durationMs: Date.now() - start, ...usage,
+    const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: session?.status ?? current?.status ?? 'not_started', failure: deadlineExpired ? failure ?? 'evaluation_wall_time_limit' : failure, providerUnavailable, deadlineExpired, durationMs: Date.now() - start, ...usage,
       codingRun: current, workspace: workspace?.worktreePath, finalSnapshot, metrics: { humanInterventions: actions.filter(action => (action.command as { type?: string })?.type === 'reply').length, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, peakContextTokens: usage.peakContextTokens,
         effectiveInvestigationSteps: session ? session.toolReceipts.filter(row => row.effect === 'read' && row.status === 'completed').length : input.engine === 'native-v2' ? observations.filter(row => row.kind === 'structured').length : null,
         repairAttempts: session ? session.revisions.length - Math.min(1, session.revisions.length) : null, recoveryAttempts: 0, recoverySuccesses: 0 } }

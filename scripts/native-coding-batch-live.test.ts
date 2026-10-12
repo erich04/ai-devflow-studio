@@ -1,7 +1,24 @@
 // @vitest-environment node
 import { expect, it } from 'vitest'
 // @ts-expect-error Standalone Node evaluator has no declaration file.
-import { bindPublicTestPlans, protectedEvaluationPath } from './native-coding-batch-live.mjs'
+import { bindPublicTestPlans, checkDeepSeekAvailability, providerStopReason, protectedEvaluationPath } from './native-coding-batch-live.mjs'
+
+it('stops before paid work when the provider reports no balance, without recording account amounts or credentials', async () => {
+  const secret = 'private-fixture-credential'
+  const result = await checkDeepSeekAvailability(secret, async () => new Response(JSON.stringify({ is_available: false, balance_infos: [{ total_balance: '-1.00' }] })))
+  expect(result).toEqual({ available: false, httpStatus: 200, reason: 'balance_unavailable' })
+  expect(JSON.stringify(result)).not.toContain(secret)
+  expect(JSON.stringify(result)).not.toContain('total_balance')
+  expect(await checkDeepSeekAvailability(secret, async () => new Response(JSON.stringify({ is_available: true })))).toEqual({ available: true, httpStatus: 200, reason: 'available' })
+})
+
+it('distinguishes confirmed access/balance errors from task failures and ambiguous provider state', async () => {
+  expect(providerStopReason({ httpStatus: 401 })).toBe('authentication_failed')
+  expect(providerStopReason({ httpStatus: 402 })).toBe('balance_unavailable')
+  for (const value of [undefined, { httpStatus: 429 }, { httpStatus: 500 }, { failure: 'invalid_model_output' }]) expect(providerStopReason(value)).toBeNull()
+  expect(await checkDeepSeekAvailability('fixture', async () => new Response('', { status: 401 }))).toEqual({ available: false, httpStatus: 401, reason: 'authentication_failed' })
+  expect(await checkDeepSeekAvailability('fixture', async () => new Response('{}'))).toEqual({ available: false, httpStatus: 200, reason: 'availability_unknown' })
+})
 
 it('protects package/test configuration and acceptance files without masking production changes', () => {
   for (const file of ['package.json', 'apps/web/package.json', 'pnpm-lock.yaml', 'vitest.config.ts', 'vitest.setup.ts', 'apps/desktop/tsconfig.json', 'apps/api/src/a.test.ts', 'apps/web/src/a.spec.tsx']) expect(protectedEvaluationPath(file), file).toBe(true)
