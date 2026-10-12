@@ -24,8 +24,11 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const project = { id: projectId, name: 'Authorized Native comparison', path: input.repository, packageManager: 'pnpm' as const, testCommand: input.testCommand, createdAt: now(), updatedAt: now() }
   await store.upsertProject(project)
   const observations: Array<Record<string, unknown>> = [], actions: Array<Record<string, unknown>> = []
+  const deadlineAbort = new AbortController()
+  const deadlineSignal = (signal?: AbortSignal | null) => signal ? AbortSignal.any([signal, deadlineAbort.signal]) : deadlineAbort.signal
+  const runBoundedTest: typeof runLocalTestCommand = value => runLocalTestCommand({ ...value, signal: deadlineSignal(value.signal) })
   const redact = (text: string) => text.replaceAll(apiKey, '[redacted]')
-  const raw = createOpenAiCompatibleAgentProvider({ id: providerId, name: 'DeepSeek V4.1 Flash', model: 'deepseek-flash', apiKey, baseUrl: 'https://api.deepseek.com', thinking: { mode: 'enabled', effort: 'high' }, structuredRequestTimeoutMs: 180000 })
+  const raw = createOpenAiCompatibleAgentProvider({ id: providerId, name: 'DeepSeek V4.1 Flash', model: 'deepseek-flash', apiKey, baseUrl: 'https://api.deepseek.com', thinking: { mode: 'enabled', effort: 'high' }, structuredRequestTimeoutMs: 180000, fetcher: (url, init) => fetch(url, { ...init, signal: deadlineSignal(init?.signal) }) })
   const capped: AgentProvider = { ...raw, resolveRequestPolicy: value => raw.resolveRequestPolicy!({ ...value, maxOutputTokens: Math.min(value.maxOutputTokens ?? input.maxOutputTokens, input.maxOutputTokens) }) }
   const governed = governAgentProvider(capped, projectId, ledger)
   const observe = async <T,>(kind: string, request: unknown, call: () => Promise<T>): Promise<T> => {
@@ -44,10 +47,10 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   let engine: ReturnType<typeof createOpencodeHttpCodingEngineAdapter> | undefined
   let executor: ReturnType<typeof createNativeCodingExecutorV2> | ReturnType<typeof createNativeCodingExecutorV3> | undefined
   if (input.engine === 'native-v3') executor = native = createNativeCodingExecutorV3({ store, provider, root: path.join(input.output, 'harness'), configVersion: 1 })
-  else if (input.engine === 'native-v2') executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(provider), configVersion: 1, runSavedTest: runLocalTestCommand, testTimeoutMs: 300000 })
+  else if (input.engine === 'native-v2') executor = createNativeCodingExecutorV2({ store, decisionProvider: createAgentProviderNativeCodingV2DecisionProvider(provider), configVersion: 1, runSavedTest: runBoundedTest, testTimeoutMs: 300000 })
   else {
     relay = await createGovernedOpencodeProxy({ binding: { providerId, modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, fingerprint: digest('frozen-deepseek-flash-high') }, projectId, governance: ledger, maxOutputTokens: input.maxOutputTokens,
-      fetcher: async (url, init) => { const body = JSON.parse(String(init?.body)); await writeFile(path.join(input.output, `opencode-request-${observations.length}.json`), redact(JSON.stringify(body)), { mode: 0o600 }); observations.push({ kind: 'opencode', startedAt: now() }); return fetch(url, init) } })
+      fetcher: async (url, init) => { const body = JSON.parse(String(init?.body)); await writeFile(path.join(input.output, `opencode-request-${observations.length}.json`), redact(JSON.stringify(body)), { mode: 0o600 }); observations.push({ kind: 'opencode', startedAt: now() }); return fetch(url, { ...init, signal: deadlineSignal(init?.signal) }) } })
     const env = buildOpencodeRuntimeEnv({ baseEnv: process.env, apiKeyEnvName: 'OPENCODE_API_KEY', providerBinding: relay.binding })
     const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!)
     config.provider[providerId].models['deepseek-flash'] = { name: 'DeepSeek V4.1 Flash', limit: { context: 1048576, output: input.maxOutputTokens }, options: { thinking: { type: 'enabled' }, reasoningEffort: 'high' } }
@@ -55,7 +58,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     engine = createOpencodeHttpCodingEngineAdapter({ binaryPath: input.opencodeBinary, providerID: providerId, modelID: 'deepseek-flash', processManager: manager, configurationFingerprint: 'frozen-evaluation-1', requireExecutionAuthorization: true, permissionDiscoveryTimeoutMs: 180000, runtimeEnv: { ...env, ...isolatedOpencodeProfileEnv(path.join(input.output, 'opencode-profile')) } })
   }
   const workflow = createWorkflowRuntime(store)
-  const coding = createCodingRuntime({ store, ...(executor ? { executor } : { engine: engine! }), worktreeRoot: path.join(input.output, 'worktrees'), runTestCommand: runLocalTestCommand, testTimeoutMs: 300000,
+  const coding = createCodingRuntime({ store, ...(executor ? { executor } : { engine: engine! }), worktreeRoot: path.join(input.output, 'worktrees'), runTestCommand: runBoundedTest, testTimeoutMs: 300000,
     completeWorkflowBuild: async ({ runId, nodeId, codingRunId, diffId, now: timestamp }) => {
       const events = await store.listEvents(runId)
       const result = await workflow.execute({ runId, command: { type: 'complete_build', nodeId, codingRunId, diffId }, candidates: { events: [{ id: `completed-${codingRunId}`, runId, nodeId, sequence: events.length + 1, kind: 'file_change', message: 'Isolated evaluated coding completion.', timestamp }] }, now: timestamp })
@@ -68,7 +71,18 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   await store.saveArtifact({ id: 'evaluation-design-artifact', runId: run.id, nodeId: 'evaluation-design', kind: 'design', title: 'Behavioral requirement', summary: input.prompt, content: input.prompt, redacted: true, updatedAt: now() })
   await saveJson(path.join(input.output, 'input.json'), input)
   let codingRunId: string | undefined, failure: string | undefined, finalSnapshot: CodingHarnessSnapshot | undefined
-  const recordAction = async (action: Record<string, unknown>) => { actions.push({ at: now(), ...action }); await saveJson(path.join(input.output, 'operator-actions.json'), actions) }
+  let actionWrites = Promise.resolve(), deadlineExpired = false, deadlineCleanup: Promise<void> | undefined
+  const recordAction = async (action: Record<string, unknown>) => { actions.push({ at: now(), ...action }); const next = actionWrites.then(() => saveJson(path.join(input.output, 'operator-actions.json'), actions)); actionWrites = next.catch(() => {}); await next }
+  // The product's cumulative active-time allowance is not the benchmark wall
+  // deadline. Stop actual model I/O, owned processes and verification at this
+  // separate operator boundary, even while settled() is awaiting a long batch.
+  const deadlineTimer = setTimeout(() => {
+    deadlineExpired = true; deadlineAbort.abort(new Error('Frozen evaluation wall-time deadline'))
+    deadlineCleanup = (async () => {
+      await recordAction({ type: 'evaluation_deadline', maxActiveMilliseconds: input.maxActiveMilliseconds })
+      await native?.shutdown(); await manager.stopAll()
+    })().catch(error => { failure = redact(`Deadline cleanup: ${String(error)}`) })
+  }, Math.max(1, input.maxActiveMilliseconds - (Date.now() - start)))
   function legacyDecision(permission: CodingPermissionRequest): 'approved' | 'rejected' {
     const origin = permission.origin ?? 'coding_executor'
     if (origin === 'execution_authorization' || origin === 'change_acceptance' || origin === 'dependency_bootstrap' || ['edit', 'write', 'patch', 'workspace_edit'].includes(permission.permission)) return 'approved'
@@ -83,7 +97,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
       const command = async (body: Record<string, unknown>) => { const snapshot = await get(); const value = { protocolVersion: 2, codingRunId, commandId: `operator-${actions.length}`, expectedVersion: snapshot.version, ...body } as CodingHarnessCommand; await recordAction({ command: value }); return coding.codingHarnessCommand(value) }
       await command({ type: 'authorize', profile: 'trusted_local' })
       let answered = false
-      while (Date.now() - start < input.maxActiveMilliseconds + 300000) {
+      while (!deadlineExpired) {
         await native.settled(codingRunId)
         const snapshot = await get(); finalSnapshot = snapshot
         await saveJson(path.join(input.output, 'snapshot.json'), snapshot)
@@ -98,6 +112,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
       }
     } else {
       for (let index = 0; index < 100; index++) {
+        if (deadlineExpired) break
         const current = (await store.listCodingAgentRuns(run.id)).find(item => item.id === codingRunId)!
         if (current.status !== 'waiting_permission') break
         const pending = (await store.listCodingPermissionRequests(codingRunId)).filter(item => item.status === 'pending')
@@ -107,6 +122,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     }
   } catch (error) { failure = redact(error instanceof Error ? `${error.name}: ${error.message}` : String(error)) }
   finally {
+    clearTimeout(deadlineTimer); await deadlineCleanup
     await native?.shutdown(); await manager.stopAll(); await relay?.close()
     const persistedRuns = await store.listCodingAgentRuns(run.id)
     // start() can fail after the production runtime has already saved its run.
@@ -117,7 +133,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     const session = codingRunId ? await store.getNativeCodingSession(`native-${codingRunId}`) : undefined
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []
     const usage = evaluationUsage(ledger.records())
-    const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: finalSnapshot?.status ?? current?.status ?? 'not_started', failure, durationMs: Date.now() - start, ...usage,
+    const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: session?.status ?? current?.status ?? 'not_started', failure: deadlineExpired ? failure ?? 'evaluation_wall_time_limit' : failure, deadlineExpired, durationMs: Date.now() - start, ...usage,
       codingRun: current, workspace: workspace?.worktreePath, finalSnapshot, metrics: { humanInterventions: actions.filter(action => (action.command as { type?: string })?.type === 'reply').length, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, peakContextTokens: usage.peakContextTokens,
         effectiveInvestigationSteps: session ? session.toolReceipts.filter(row => row.effect === 'read' && row.status === 'completed').length : input.engine === 'native-v2' ? observations.filter(row => row.kind === 'structured').length : null,
         repairAttempts: session ? session.revisions.length - Math.min(1, session.revisions.length) : null, recoveryAttempts: 0, recoverySuccesses: 0 } }
