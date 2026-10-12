@@ -396,9 +396,22 @@ function createHarnessService(host: HarnessHost): Harness {
       } else if (command.type === 'pause') { await core.loop.pause(session.id); await core.commands.cancelAll(); await jobs.get(id) }
       else if (command.type === 'cancel') { await stopChildren(session, true, assertAuthority); await core.loop.pause(session.id); await core.commands.cancelAll(); await jobs.get(id); await core.loop.cancel(session.id) }
       else if (command.type === 'resume') {
-        await core.loop.resume(session.id)
-        for (const entry of session.children.filter(child => child.state === 'active')) { const child = await read(entry.codingRunId); if (child.status === 'paused' && child.pauseReason === 'parent_pause') { const childCore = await loadCore(child, assertAuthority); await childCore.loop.resume(child.id); schedule(child.codingRunId, assertAuthority) } }
-        schedule(id, assertAuthority)
+        if (session.status === 'paused' && session.pauseReason === 'delivery_restored_after_restart') {
+          const revision = revisionFor(session)
+          const delivery = await snapshotCodingTree(core.workspace.identity.delivery, core.workspace.identity.base.excludedPaths)
+          if (!revision || session.pendingInput.length || revision.policyVersion !== session.binding!.request.authority.policyVersion ||
+            delivery.digest !== revision.base.digest || (await core.workspace.inspect()).digest !== revision.target.digest) {
+            await mutate(id, draft => { draft.status = 'delivery_conflict'; draft.pauseReason = 'delivery_reconciliation_required' })
+          } else {
+            // Recovery restored D, not the human's approval. Re-display the
+            // immutable revision and require a new approval and verification.
+            await mutate(id, draft => { draft.status = 'review'; delete draft.pauseReason })
+          }
+        } else {
+          await core.loop.resume(session.id)
+          for (const entry of session.children.filter(child => child.state === 'active')) { const child = await read(entry.codingRunId); if (child.status === 'paused' && child.pauseReason === 'parent_pause') { const childCore = await loadCore(child, assertAuthority); await childCore.loop.resume(child.id); schedule(child.codingRunId, assertAuthority) } }
+          schedule(id, assertAuthority)
+        }
       }
       else if (command.type === 'permission') {
         const permission = pendingCodingPermission(session)

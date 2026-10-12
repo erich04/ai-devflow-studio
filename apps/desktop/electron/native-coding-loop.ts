@@ -186,18 +186,20 @@ export class NativeCodingLoop {
             draft.transcript.push(response.assistantMessage)
             // Source/result identity matters: repeated polling that produces new output is progress.
             const lastResults = draft.transcript.filter(message => message.role === 'tool').slice(-8)
-            const fingerprint = codingDigest(JSON.stringify({ request: response.kind === 'tools' ? response.toolCalls.map(call => call.function) : response.text,
+            const fingerprint = codingDigest(JSON.stringify({ request: response.kind === 'tools' ? response.toolCalls.map(call => call.function) : 'text_without_tool_action',
               results: lastResults.map(message => message.content) }))
             draft.progressFingerprints.push(fingerprint)
             if (draft.progressFingerprints.slice(-draft.limits.noProgressLimit).length === draft.limits.noProgressLimit && draft.progressFingerprints.slice(-draft.limits.noProgressLimit).every(item => item === fingerprint)) { draft.status = 'paused'; draft.pauseReason = 'no_progress' }
           })
         } catch (error) {
+          const responseReceived = received || error instanceof AgentProviderRequestError && error.deliveryState === 'response_received'
           session = await this.change(id, draft => {
             const attempt = draft.attempts.find(item => item.id === attemptId)!
-            attempt.status = received ? 'completed' : error instanceof AgentProviderRequestError && error.deliveryState === 'not_sent' ? 'not_sent' : 'unknown'
+            attempt.status = responseReceived ? 'completed' : error instanceof AgentProviderRequestError && error.deliveryState === 'not_sent' ? 'not_sent' : 'unknown'
+            if (responseReceived) attempt.completedAt = this.now()
             attempt.error = error instanceof Error ? error.message : 'Provider request failed'
             if (error instanceof AgentProviderRequestError && error.usage) attempt.usage = error.usage
-            if (!terminal(draft) && (draft.status === 'running' || attempt.status === 'unknown')) { draft.status = attempt.status === 'unknown' ? 'reconciling' : 'paused'; draft.pauseReason = attempt.status === 'unknown' ? 'model_delivery_unknown' : received ? 'invalid_model_response' : 'provider_not_sent' }
+            if (!terminal(draft) && (draft.status === 'running' || attempt.status === 'unknown')) { draft.status = attempt.status === 'unknown' ? 'reconciling' : 'paused'; draft.pauseReason = attempt.status === 'unknown' ? 'model_delivery_unknown' : responseReceived ? 'invalid_model_response' : 'provider_not_sent' }
           }); return session
         }
       }

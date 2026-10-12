@@ -1,7 +1,7 @@
 /** Prepare blinded inputs, invoke the production live trial, then run private acceptance. */
 import { spawn, execFileSync } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile, writeFile, cp, access } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, cp, access, readdir, rm } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -14,6 +14,14 @@ export function protectedEvaluationPath(file) {
   return /(?:^|\/)(?:package\.json|pnpm-lock\.yaml|package-lock\.json|pnpm-workspace\.yaml|\.npmrc|vitest[^/]*|vite\.config\.[^/]+|tsconfig[^/]*)$/u.test(file) || /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(file)
 }
 async function json(file, value, exclusive = false) { await writeFile(file, JSON.stringify(value, null, 2) + '\n', { flag: exclusive ? 'wx' : 'w', mode: 0o600 }) }
+async function removeDisposableDependencies(root) {
+  for (const item of await readdir(root, { withFileTypes: true })) {
+    if (!item.isDirectory() || item.name === '.git') continue
+    const directory = path.join(root, item.name)
+    if (item.name === 'node_modules') await rm(directory, { recursive: true, force: true })
+    else await removeDisposableDependencies(directory)
+  }
+}
 export function runProcess(command, args, cwd, log, timeoutMs = 300000) {
   return new Promise((resolve, reject) => {
     const output = createWriteStream(log, { flags: 'wx', mode: 0o600 })
@@ -65,8 +73,8 @@ async function freeze(output) {
     provider: { id: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', baseUrl: 'https://api.deepseek.com', thinking: 'enabled', effort: 'high', pricingSource: 'https://api-docs.deepseek.com/quick_start/pricing/', userMonetaryCeiling: null, authorization: 'User explicitly authorized this model, supplied its credential, and set no cost ceiling.' },
     node: process.version, platform: process.platform, opencodeVersion: execFileSync('/opt/homebrew/bin/opencode', ['--version']).toString().trim(), opencodeBinary: '/opt/homebrew/bin/opencode',
     engines: ['native-v2', 'native-v3', 'opencode'], trials: 1, concurrency: 2,
-    limits: { maxCalls: 192, maxCostUsd: 100, maxSteps: 80, maxActiveMilliseconds: 900000, maxOutputTokens: 16384 },
-    limitsNote: 'Operational bounds per trial, not a new user spending ceiling. Native v2 retains its production 4096 output and fixed proposal/repair limits. Native v3 keeps its production 80-step loop and 15-minute initial grant; no post-hoc extensions/retries.',
+    limits: { maxCalls: 192, maxCostUsd: 100, maxSteps: 80, maxActiveMilliseconds: 900000, maxOutputTokens: 65536 },
+    limitsNote: 'Operational bounds per trial, not a new user spending ceiling. Use the production high-thinking default 65536 output cap instead of the initial exploratory 16384 cap. Native v2 retains its production 4096 output and fixed proposal/repair limits. Native v3 keeps its production 80-step loop and 15-minute initial grant; no post-hoc extensions/retries. After a trial and independent checking have both ended, discard only reproducible node_modules directories inside that trial; preserve source, exact patches, lockfiles, sessions, ledgers and all logs.',
     operatorPolicy: 'Authorize isolated trusted_local execution and frozen dependency preparation. Approve exact proposed changes only to permit production verification; no hidden-test feedback to the agent. Questions end historical trials without invented answers. Reject external/network grants. OpenCode shell grants are limited to single read commands and saved tests; no task/question integration changes. No automatic retry of unknown calls.',
     testing: 'Agents run the unchanged baseline test suite. Private evaluator restores baseline test/config files then overlays exact reference acceptance tests. Candidate/source and reviewer tests are separate; evaluate managed delivery even on failed runs. Full reference patch never enters an agent workspace.',
     gates: { mandatoryInteractiveScenarios: 8, minimumQualifiedTasks: 30, falseSuccessMaximum: 0, complexCategories: ['cross_module', 'recovery', 'concurrency'], complexV3AbsolutePassRateGainOverV2: 0.10, maxMedianV3DurationMs: 900000, maxMeanV3CostPerIndependentlyPassedTaskUsd: 10, releaseRequiresHumanEvidenceReview: true },
@@ -111,6 +119,7 @@ async function runBatch(output, keyFile, only) {
         await json(path.join(directory, 'independent.json'), independent, true)
         const row = { taskId: task.id, engine, trial: 1, provider: trial.provider, model: trial.model, claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, category: task.category, split: task.split, trialStatus: trial.status, failure: trial.failure ?? null, execution, independent, artifacts: path.relative(repository, directory) }
         await json(path.join(directory, 'row.json'), row, true)
+        await removeDisposableDependencies(directory)
         const update = queue.then(async () => { rows.push(row); await save() }); queue = update.catch(() => {}); await update
         console.log(JSON.stringify({ event: 'result', task: task.id, engine, status: trial.status, independentPassed: independent.passed, costUsd: trial.costUsd, elapsedMs: Date.now() - started }))
       } catch (error) {

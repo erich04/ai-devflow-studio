@@ -47,7 +47,14 @@ function start(id, mode = 'new') {
     async request(command) { if (exited) throw new Error('Worker already exited'); actions.push({ at: new Date().toISOString(), command }); const index = ++commandNumber; return new Promise((resolve, reject) => { pending.set(index, { resolve, reject }); child.send({ id: index, command }) }) },
     async event(name, timeout = 180000) { const end = Date.now() + timeout; while (!events.some(event => event.event === name)) { if (exited) throw new Error(`Worker exited before ${name}`); if (Date.now() > end) throw new Error(`Event timeout: ${name}`); await wait(50) }; return events.find(event => event.event === name) },
     async get(codingRunId = 'coding') { return (await client.request({ protocolVersion: 2, type: 'get', codingRunId })).snapshot },
-    async command(body, codingRunId = 'coding') { const snapshot = await client.get(codingRunId); return client.request({ protocolVersion: 2, codingRunId, expectedVersion: snapshot.version, commandId: `operator-${++commandNumber}`, ...body }) },
+    async command(body, codingRunId = 'coding') {
+      // Refresh a racing stop request, never refresh an approval or paid retry.
+      for (let attempt = 0; ; attempt++) {
+        const snapshot = await client.get(codingRunId)
+        try { return await client.request({ protocolVersion: 2, codingRunId, expectedVersion: snapshot.version, commandId: `operator-${++commandNumber}`, ...body }) }
+        catch (error) { if (!['pause', 'cancel'].includes(body.type) || attempt >= 4 || !error.message.includes('任务已更新')) throw error }
+      }
+    },
     async stop(kill = false) { if (!exited) { if (kill) child.kill('SIGKILL'); else await client.request({ type: 'close' }) }; const exit = await closed; await save(path.join(output, `${id}-${mode}-operator.json`), { events, actions, exit }); clients.delete(client); return exit },
   }; clients.add(client); return client
 }
@@ -156,6 +163,8 @@ await run('children', async () => {
   while (Date.now() < end) { const sessions = await client.request({ type: 'dump' }); childQuestion = sessions.find(session => session.parent && session.question); if (childQuestion) break; await wait(200) }
   assert.ok(childQuestion, 'Delegated child did not ask its required question'); assert.match(await deliveredValue('children'), /value\s*=\s*1/)
   await client.stop(); client = await fixture('children', 'recovered')
+  const parent = await client.get()
+  if (parent.status === 'paused' && parent.pauseReason === 'application_shutdown') await client.command({ type: 'resume' })
   const child = await client.get(childQuestion.codingRunId); assert.equal(child.status, 'waiting_input')
   await client.command({ type: 'reply', questionId: child.question.id, objectiveVersion: child.objectiveVersion, text: 'Yes. The confirmed desired value is 7.' }, child.codingRunId)
   const final = await review(client); assert.match(await deliveredValue('children'), /value\s*=\s*1/)

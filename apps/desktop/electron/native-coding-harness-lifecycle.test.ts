@@ -8,6 +8,7 @@ import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
 import { CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { CodingCommandRunner } from './coding-command-runner'
+import { AgentProviderRequestError } from '@ai-devflow/shared'
 
 it('enforces active time while a model request is in flight, without waiting for another step', async () => {
   let aborted = false
@@ -23,6 +24,49 @@ it('enforces active time while a model request is in flight, without waiting for
     expect(view.status, JSON.stringify(view)).toBe('reconciling')
     expect(view.cost.unknownAttempts).toBe(1)
     expect(view.messages).toHaveLength(1)
+  } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
+})
+
+it('returns a restored frozen revision for fresh approval without asking the model to finish it again', async () => {
+  const model = vi.fn(async () => codingToolReply('frozen', 'propose_changeset', { summary: 'Reviewed unchanged value' }))
+  const fixture = await codingHarnessFixture(model)
+  try {
+    await fixture.authorize(); await fixture.executor.settled('coding')
+    const original = (await fixture.get()).snapshot
+    expect(original.status).toBe('review')
+    // State produced after durable delivery recovery has proved rollback to B.
+    await mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.status = 'paused'; draft.pauseReason = 'delivery_restored_after_restart' })
+    const restored = (await fixture.get()).snapshot
+    const resumed = await fixture.executor.harness!.command({ protocolVersion: 2, type: 'resume', codingRunId: 'coding', commandId: 'review-restored', expectedVersion: restored.version }, async () => {})
+    await fixture.executor.settled('coding')
+    expect(resumed.snapshot.status).toBe('review'); expect(resumed.snapshot.revision?.digest).toBe(original.revision?.digest); expect(model).toHaveBeenCalledTimes(1)
+    const accepted = await fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: 'fresh-approval', expectedVersion: resumed.snapshot.version, objectiveVersion: resumed.snapshot.objectiveVersion, revisionDigest: resumed.snapshot.revision!.digest }, async () => {})
+    expect(accepted.snapshot.status).toBe('completed')
+  } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
+})
+
+it('stops varying text-only completions without treating rewording as execution progress', async () => {
+  let count = 0
+  const fixture = await codingHarnessFixture(async () => ({ kind: 'text', text: `Nothing further to do ${++count}`, assistantMessage: { role: 'assistant', content: `Nothing further to do ${count}` } }))
+  try {
+    await fixture.authorize(); await fixture.executor.settled('coding')
+    const view = (await fixture.get()).snapshot
+    expect(view.status).toBe('paused'); expect(view.pauseReason).toBe('no_progress'); expect(count).toBe(3)
+    expect(view.revision).toBeUndefined(); expect(view.evidence).toEqual([])
+  } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
+})
+
+it('preserves a received malformed response and its charge without calling it an unknown delivery', async () => {
+  const model = vi.fn(async () => { throw new AgentProviderRequestError({ code: 'invalid_model_output', httpStatus: 200, deliveryState: 'response_received', billingState: 'confirmed', retryable: false, sanitizedCause: 'invalid_tool_response', usage: { inputTokens: 90, outputTokens: 30 } }) })
+  const fixture = await codingHarnessFixture(model)
+  try {
+    await fixture.authorize(); await fixture.executor.settled('coding')
+    const view = (await fixture.get()).snapshot
+    expect(view.status).toBe('paused'); expect(view.pauseReason).toBe('invalid_model_response')
+    expect(view.cost.unknownAttempts).toBe(0); expect(model).toHaveBeenCalledTimes(1)
+    const attempt = (await fixture.store.getNativeCodingSession('native-coding'))!.attempts.at(-1)!
+    expect(attempt.status).toBe('completed'); expect(attempt.usage).toMatchObject({ inputTokens: 90, outputTokens: 30 })
+    expect(view.revision).toBeUndefined()
   } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
 })
 

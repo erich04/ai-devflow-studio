@@ -2,7 +2,7 @@
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
-import { createOpenAiCompatibleAgentProvider, governAgentProvider, buildCodingBrief, createWorkflowRunFromRequest, type AgentProvider, type CodingHarnessCommand, type Artifact } from '../packages/shared/src/index.ts'
+import { AgentProviderRequestError, createOpenAiCompatibleAgentProvider, governAgentProvider, buildCodingBrief, createWorkflowRunFromRequest, type AgentProvider, type CodingHarnessCommand, type Artifact } from '../packages/shared/src/index.ts'
 import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
 import { createNativeCodingExecutorV3 } from '../apps/desktop/electron/native-coding-harness.ts'
 import { createEvaluationLedger, evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
@@ -26,7 +26,7 @@ const raw = createOpenAiCompatibleAgentProvider({ id: 'deepseek-interactive', mo
     }
     return response
   } })
-const capped: AgentProvider = { ...raw, resolveRequestPolicy: input => raw.resolveRequestPolicy!({ ...input, maxOutputTokens: Math.min(input.maxOutputTokens ?? 16384, 16384) }) }
+const capped: AgentProvider = { ...raw, resolveRequestPolicy: input => raw.resolveRequestPolicy!({ ...input, maxOutputTokens: Math.min(input.maxOutputTokens ?? 65536, 65536) }) }
 const governed = governAgentProvider(capped, 'interactive', ledger)
 let calls = 0
 const provider: AgentProvider = { ...governed, completeNativeConversation: async request => {
@@ -34,9 +34,14 @@ const provider: AgentProvider = { ...governed, completeNativeConversation: async
   if (!announcedTools && request.messages.some(message => message.role === 'tool')) { announcedTools = true; send({ event: 'after_tools' }) }
   const file = path.join(root, `model-${index}.json`)
   await saveJson(file, { request: { ...request, signal: undefined }, startedAt: new Date().toISOString() })
-  const result = await governed.completeNativeConversation!(request)
-  await saveJson(file, { request: { ...request, signal: undefined }, result, completedAt: new Date().toISOString() })
-  return result
+  try {
+    const result = await governed.completeNativeConversation!(request)
+    await saveJson(file, { request: { ...request, signal: undefined }, result, completedAt: new Date().toISOString() })
+    return result
+  } catch (error) {
+    await saveJson(file, { request: { ...request, signal: undefined }, error: String(error).replaceAll(apiKey, '[redacted]'), ...(error instanceof AgentProviderRequestError ? { providerError: { code: error.code, deliveryState: error.deliveryState, billingState: error.billingState, sanitizedCause: error.sanitizedCause, responseMetadata: error.responseMetadata, usage: error.usage } } : {}), completedAt: new Date().toISOString() })
+    throw error
+  }
 } }
 const executor = createNativeCodingExecutorV3({ store, provider, root: path.join(root, 'harness'), configVersion: 1, changed: id => send({ event: 'changed', codingRunId: id }) })
 const authority = async () => {

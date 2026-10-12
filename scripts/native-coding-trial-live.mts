@@ -1,7 +1,7 @@
 /** One isolated, paid trial through production CodingRuntime and governed executors. */
 import { readFile, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { createOpenAiCompatibleAgentProvider, governAgentProvider, type AgentProvider, type WorkflowRun, type CodingHarnessCommand, type CodingPermissionRequest } from '../packages/shared/src/index.ts'
+import { AgentProviderRequestError, createOpenAiCompatibleAgentProvider, governAgentProvider, type AgentProvider, type WorkflowRun, type CodingHarnessCommand, type CodingHarnessSnapshot, type CodingPermissionRequest } from '../packages/shared/src/index.ts'
 import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
 import { createCodingRuntime } from '../apps/desktop/electron/coding-runtime.ts'
 import { createNativeCodingExecutorV2, createAgentProviderNativeCodingV2DecisionProvider } from '../apps/desktop/electron/native-coding-executor-v2.ts'
@@ -32,7 +32,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     const index = observations.length, record: Record<string, unknown> = { index, kind, startedAt: now(), request }; observations.push(record)
     await saveJson(path.join(input.output, `model-${index}.json`), record)
     try { const value = await call(); record.result = value; return value }
-    catch (error) { record.error = redact(error instanceof Error ? error.message : String(error)); throw error }
+    catch (error) { record.error = redact(error instanceof Error ? error.message : String(error)); if (error instanceof AgentProviderRequestError) record.providerError = { code: error.code, deliveryState: error.deliveryState, billingState: error.billingState, sanitizedCause: error.sanitizedCause, responseMetadata: error.responseMetadata, usage: error.usage }; throw error }
     finally { record.completedAt = now(); await saveJson(path.join(input.output, `model-${index}.json`), JSON.parse(redact(JSON.stringify(record)))) }
   }
   const provider: AgentProvider = { ...governed,
@@ -67,7 +67,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   await store.saveRun(run)
   await store.saveArtifact({ id: 'evaluation-design-artifact', runId: run.id, nodeId: 'evaluation-design', kind: 'design', title: 'Behavioral requirement', summary: input.prompt, content: input.prompt, redacted: true, updatedAt: now() })
   await saveJson(path.join(input.output, 'input.json'), input)
-  let codingRunId: string | undefined, failure: string | undefined, finalSnapshot: unknown
+  let codingRunId: string | undefined, failure: string | undefined, finalSnapshot: CodingHarnessSnapshot | undefined
   const recordAction = async (action: Record<string, unknown>) => { actions.push({ at: now(), ...action }); await saveJson(path.join(input.output, 'operator-actions.json'), actions) }
   function legacyDecision(permission: CodingPermissionRequest): 'approved' | 'rejected' {
     const origin = permission.origin ?? 'coding_executor'
@@ -117,7 +117,7 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     const session = codingRunId ? await store.getNativeCodingSession(`native-${codingRunId}`) : undefined
     const events = codingRunId ? await store.listCodingAgentEvents(codingRunId) : []
     const usage = evaluationUsage(ledger.records())
-    const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: current?.status ?? 'not_started', failure, durationMs: Date.now() - start, ...usage,
+    const report = { id: input.id, engine: input.engine, provider: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', claimedCompleted: current?.status === 'completed', status: finalSnapshot?.status ?? current?.status ?? 'not_started', failure, durationMs: Date.now() - start, ...usage,
       codingRun: current, workspace: workspace?.worktreePath, finalSnapshot, metrics: { humanInterventions: actions.filter(action => (action.command as { type?: string })?.type === 'reply').length, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, peakContextTokens: usage.peakContextTokens,
         effectiveInvestigationSteps: session ? session.toolReceipts.filter(row => row.effect === 'read' && row.status === 'completed').length : input.engine === 'native-v2' ? observations.filter(row => row.kind === 'structured').length : null,
         repairAttempts: session ? session.revisions.length - Math.min(1, session.revisions.length) : null, recoveryAttempts: 0, recoverySuccesses: 0 } }
