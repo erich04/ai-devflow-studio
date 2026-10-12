@@ -1,6 +1,6 @@
 # Native v3：真实任务对照与证据
 
-当前状态：**已检查题目有效性，尚未运行真实模型对照**。资格检查使用历史真实代码和验收测试，不能当作 Native 的成功率。
+当前状态：**31 项题目资格已检查；DeepSeek 真实端点兼容检查通过，三执行器对照准备中**。资格检查不能当作 Native 的成功率。
 
 ## 固定输入与资格
 
@@ -24,7 +24,13 @@ node scripts/native-coding-evaluation.mjs qualify docs/evaluation/native-coding-
 
 ## 三执行器运行规则
 
-真实调用只使用用户指定的项目、模型提供方、金额上限。尚无这些授权信息，因此没有启动 Native v2/v3/OpenCode 的付费实验。
+用户已授权在独立评测项目使用 DeepSeek V4.1 Flash，并明确不设费用上限。官方 `/models` 实际返回 `deepseek-flash` / `DeepSeek-V4.1-Flash`。密钥通过独立私有文件注入，不能存入本仓库或候选工作区。每题仍设置固定的操作额度，用来保证实验可比较和可终止，不把它解释为用户新增的金额限制。
+
+真实端点检查输出在 `out/native-v3-evaluation/endpoint-20261011-r1/`：思考 high / 非思考 × SSE / 非流式四组全部通过，每组含两轮工具调用及结构化 JSON；20 次实际调用，用量 6,929 输入 / 645 输出 token，按当前公开单价计算 $0.001874268。账本没有未知费用。这是端点兼容性结果，不是编码解题结果或账户账单。
+
+`scripts/native-coding-trial-live.mts` 通过生产 `CodingRuntime`、Native v2/v3 或 OpenCode HTTP 适配层执行；每次模型调用经过 `governAgentProvider` / `createGovernedOpencodeProxy` 和独立持久化账本。OpenCode 仅取得本地转发令牌。三个执行器均使用隔离项目，不连接用户日常团队数据库。
+
+`scripts/native-coding-batch-live.mjs freeze <新目录>` 封存输入、代码提交、评测器摘要、阈值和操作规则；`run <已封存目录> <私有密钥文件>` 执行并独立评分。候选只取得无远程地址、无历史后续提交的基线及行为要求；独立验证恢复原测试和配置，再叠加参考断言。输入或代码变化必须建立新实验，不覆盖失败记录。付费脚本不在 CI 中自动运行。
 
 实验前记录并冻结：候选代码提交、31 项合格任务的输入、各执行器及模型版本、每题/总费用或 token 上限、环境、工具/网络范围、重试与人工介入规则、重复次数和验收阈值。同模型优先；不同模型分组报告，不把模型差异归于 Harness。保留任务不能参与提示或默认阈值调参。
 
