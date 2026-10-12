@@ -47,7 +47,7 @@ const builtinDefinitions = [
   definition('read_evidence', '分页读取本次任务调查测试、最终验证和已冻结修订；记录不代表自动验收。', { offset: integer(100000000), limit: integer(16000) }, []),
   definition('propose_changeset', '宿主冻结真实文件供人审查；不是模型自报完成。必须单独调用。', { summary: string(4000) }, ['summary'], 'write'),
   definition('delegate_task', '委派一个只读或独立候选编码子任务；最大深度 1，最多同时 3 个。子额度计入根额度。', { title: string(300), prompt: string(16000), mode: { type: 'string', enum: ['read_only', 'isolated_coding'] }, paths: { type: 'array', items: string(1000), maxItems: 100 }, maxTokens: integer(10000000), maxCostUsd: { type: 'number', minimum: 0, maximum: 1000000 } }, ['title', 'prompt', 'mode', 'paths', 'maxTokens', 'maxCostUsd'], 'command'),
-  definition('await_task', '等待子任务至多 5 秒，返回实际状态与有来源的结果。问题必须交给人回答。', { codingRunId: string(200) }, ['codingRunId']),
+  definition('await_task', '等待子任务至多 5 秒，返回实际状态与有来源的结果；必须单独调用。问题必须交给人回答。', { codingRunId: string(200) }, ['codingRunId']),
   definition('cancel_task', '取消并明确从本轮冻结中排除子任务；其历史保留。', { codingRunId: string(200) }, ['codingRunId'], 'command'),
   definition('merge_task', '将指定子修订三方合入当前父候选；绑定当前父摘要，冲突不写入。', { codingRunId: string(200), childChangeSetId: string(200), expectedParentRevision: string(64) }, ['codingRunId', 'childChangeSetId', 'expectedParentRevision'], 'write'),
   definition('report_findings', '只读子任务报告发现与文件来源，不自行宣称测试通过；必须单独调用。', { summary: string(12000), sources: { type: 'array', items: string(1000), maxItems: 100 } }, ['summary', 'sources']),

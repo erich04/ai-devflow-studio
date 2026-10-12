@@ -217,7 +217,7 @@ export class NativeCodingLoop {
     if (session.status !== 'running') return session
     const completed = new Set(session.transcript.flatMap(message => message.role === 'tool' ? [message.tool_call_id] : []))
     const pending = session.transcript.flatMap(message => message.role === 'assistant' ? message.tool_calls ?? [] : []).filter(call => !completed.has(call.id))
-    const controls = ['request_user_input', 'report_blocked', 'propose_changeset', 'report_findings']
+    const controls = ['request_user_input', 'report_blocked', 'propose_changeset', 'report_findings', 'await_task']
     try {
       for (const call of pending) {
         const definition = [...this.host.tools.definitions, ...controlTools].find(item => item.function.name === call.function.name)

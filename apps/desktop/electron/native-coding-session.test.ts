@@ -33,6 +33,28 @@ it('keeps a coding question and history through restart, accepting only one comp
 })
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))) })
 
+it('rejects a batched child wait before executing anything and closes both tool pairs', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-child-wait-batch-')); directories.push(directory)
+  const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()
+  try {
+    await store.upsertProject({ id: 'project', name: 'test', path: directory, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
+    await store.saveNativeCodingSession(createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'run', workflowRunId: 'workflow', nodeId: 'build', objective: 'Wait for child', providerId: 'fake', model: 'test', now }), 0)
+    let calls = 0
+    const execute = vi.fn(async () => ({ pendingChild: 'child' }))
+    const loop = new NativeCodingLoop({ store, provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: input => JSON.stringify(input), completeNativeConversation: async () => {
+      const toolCalls: NativeToolCall[] = ++calls === 1 ? [
+        { id: 'wait', type: 'function', function: { name: 'await_task', arguments: '{}' } },
+        { id: 'read', type: 'function', function: { name: 'read_file', arguments: '{}' } },
+      ] : [{ id: 'stop', type: 'function', function: { name: 'report_blocked', arguments: '{"reason":"Need to call await_task alone"}' } }]
+      return { kind: 'tools', toolCalls, assistantMessage: { role: 'assistant', content: null, tool_calls: toolCalls } }
+    } }, tools: { definitions: ['await_task', 'read_file'].map(name => ({ type: 'function', function: { name, description: '', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } })), effects: { await_task: 'read', read_file: 'read' }, execute } })
+    const result = await loop.runBatch('session')
+    expect(result.status).toBe('paused'); expect(execute).not.toHaveBeenCalled()
+    const pairs = result.transcript.filter(message => message.role === 'tool' && ['wait', 'read'].includes(message.tool_call_id))
+    expect(pairs).toHaveLength(2); expect(pairs.every(message => JSON.parse(message.content!).executed === false)).toBe(true)
+  } finally { await store.close() }
+})
+
 it.each(['pause', 'cancel'] as const)('does not execute a late provider tool call after %s, while retaining usage', async action => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-late-response-')); directories.push(directory)
   const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()
