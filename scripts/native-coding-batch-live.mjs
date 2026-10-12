@@ -22,6 +22,20 @@ async function removeDisposableDependencies(root) {
     else await removeDisposableDependencies(directory)
   }
 }
+async function removeTrialCommandCaches(execution) {
+  const harness = path.join(execution, 'harness')
+  const entries = await readdir(harness, { withFileTypes: true }).catch(error => { if (error.code === 'ENOENT') return []; throw error })
+  const removed = []
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !/^[a-f0-9]{64}$/u.test(entry.name)) continue
+    const home = path.join(harness, entry.name, 'commands', 'home')
+    for (const cache of ['Library/pnpm/store', '.local/share/pnpm/store', '.cache/node/corepack']) {
+      const directory = path.join(home, cache)
+      await rm(directory, { recursive: true, force: true }); removed.push(path.relative(execution, directory))
+    }
+  }
+  await json(path.join(execution, 'disposable-cache-cleanup.json'), { scope: 'Only private command package-manager download stores, after trial and independent checking. Source, receipts, logs and ledgers preserved.', removed }, true)
+}
 export function runProcess(command, args, cwd, log, timeoutMs = 300000) {
   return new Promise((resolve, reject) => {
     const output = createWriteStream(log, { flags: 'wx', mode: 0o600 })
@@ -34,6 +48,17 @@ export function runProcess(command, args, cwd, log, timeoutMs = 300000) {
 }
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const git = (args, cwd = repository) => execFileSync('git', args, { cwd, env: environment(), maxBuffer: 64 * 1024 * 1024 })
+
+export function bindPublicTestPlans(tasks, publicPlans, qualification, taskManifestDigest, publicPlanDigest) {
+  if (publicPlans.taskManifestDigest !== taskManifestDigest || qualification.taskManifestDigest !== taskManifestDigest || qualification.publicPlanDigest !== publicPlanDigest) throw new Error('Public qualification digest does not match frozen inputs')
+  if (publicPlans.tasks.length !== tasks.length || qualification.results.length !== tasks.length || qualification.qualified !== tasks.length || new Set(publicPlans.tasks.map(row => row.taskId)).size !== tasks.length || new Set(qualification.results.map(row => row.taskId)).size !== tasks.length || tasks.some(task => !publicPlans.tasks.some(row => row.taskId === task.id))) throw new Error('A public plan is required for every qualified task; no dataset reduction')
+  return tasks.map(task => {
+    const plan = publicPlans.tasks.find(row => row.taskId === task.id), result = qualification.results.find(row => row.taskId === task.id)
+    if (!plan.publicTestFiles?.length || plan.publicTestFiles.some(file => !/^(apps|packages|scripts|tests)\/[a-zA-Z0-9._/-]+\.test\.tsx?$/u.test(file) || file.split('/').includes('..')) || plan.testCommand !== `corepack pnpm exec vitest run ${plan.publicTestFiles.join(' ')}`) throw new Error('Invalid public test command')
+    if (plan.baseSha !== task.baseSha || !result?.qualified || result.baseSha !== task.baseSha || result.testCommand !== plan.testCommand || result.receipt?.status !== 'passed' || !(result.tests?.passed > 0) || result.tests.failed || result.tests.unhandledErrors) throw new Error(`Missing qualified public plan for ${task.id}`)
+    return { ...task, publicTestFiles: plan.publicTestFiles, testCommand: plan.testCommand }
+  })
+}
 
 async function prepare(task, directory) {
   await mkdir(directory)
@@ -61,13 +86,16 @@ async function independentCheck(task, baseline, worktree, directory) {
 }
 
 async function freeze(output) {
+  if (git(['status', '--porcelain']).toString().trim()) throw new Error('Commit the implementation and evaluation inputs before freezing')
   await mkdir(output)
-  const sources = Object.fromEntries(await Promise.all(['native-coding-v3-tasks.json', 'native-coding-v3-task-briefs.json', 'native-coding-v3-qualification-20261011.json'].map(async name => [name, await readFile(path.join(repository, 'docs/evaluation', name))])))
+  const sources = Object.fromEntries(await Promise.all(['native-coding-v3-tasks.json', 'native-coding-v3-task-briefs.json', 'native-coding-v3-qualification-20261011.json', 'native-coding-v3-public-test-plans.json', 'native-coding-v3-public-qualification-20261011.json'].map(async name => [name, await readFile(path.join(repository, 'docs/evaluation', name))])))
   const manifest = JSON.parse(sources['native-coding-v3-tasks.json']), briefs = JSON.parse(sources['native-coding-v3-task-briefs.json']), qualification = JSON.parse(sources['native-coding-v3-qualification-20261011.json'])
   if (qualification.manifestDigest !== digest(sources['native-coding-v3-tasks.json'])) throw new Error('Qualification does not match task input')
-  const tasks = manifest.tasks.filter(task => qualification.results.some(row => row.taskId === task.id && row.qualified && row.baseSha === task.baseSha && row.referenceSha === task.referenceSha)).map(task => {
+  const qualifiedTasks = manifest.tasks.filter(task => qualification.results.some(row => row.taskId === task.id && row.qualified && row.baseSha === task.baseSha && row.referenceSha === task.referenceSha)).map(task => {
     const brief = briefs.tasks.find(brief => brief.taskId === task.id); if (!brief?.qualifiedFixture) throw new Error('Brief/qualification mismatch'); return { ...task, prompt: brief.prompt, category: brief.category }
   })
+  const publicQualification = JSON.parse(sources['native-coding-v3-public-qualification-20261011.json'])
+  const tasks = bindPublicTestPlans(qualifiedTasks, JSON.parse(sources['native-coding-v3-public-test-plans.json']), publicQualification, digest(sources['native-coding-v3-tasks.json']), digest(sources['native-coding-v3-public-test-plans.json']))
   const runnerDigests = Object.fromEntries(await Promise.all(['native-coding-batch-live.mjs', 'native-coding-trial-live.mts', 'native-coding-live-support.ts'].map(async file => [file, digest(await readFile(path.join(repository, 'scripts', file)))])))
   const plan = { schemaVersion: 1, id: path.basename(output), frozenAt: new Date().toISOString(), candidateCommit: git(['rev-parse', 'HEAD']).toString().trim(), sourceDigests: Object.fromEntries(Object.entries(sources).map(([name, bytes]) => [name, digest(bytes)])), runnerDigests,
     provider: { id: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', baseUrl: 'https://api.deepseek.com', thinking: 'enabled', effort: 'high', pricingSource: 'https://api-docs.deepseek.com/quick_start/pricing/', userMonetaryCeiling: null, authorization: 'User explicitly authorized this model, supplied its credential, and set no cost ceiling.' },
@@ -76,19 +104,21 @@ async function freeze(output) {
     limits: { maxCalls: 192, maxCostUsd: 100, maxSteps: 80, maxActiveMilliseconds: 900000, maxOutputTokens: 65536 },
     limitsNote: 'Operational bounds per trial, not a new user spending ceiling. Use the production high-thinking default 65536 output cap instead of the initial exploratory 16384 cap. Native v2 retains its production 4096 output and fixed proposal/repair limits. Native v3 keeps its production 80-step loop. A separate 15-minute operator wall deadline aborts model I/O and stops owned commands/executors, then preserves cleanup and a durable result; do not confuse it with the product cumulative active-time or authorization expiry. No post-hoc extensions/retries. After a trial and independent checking have both ended, discard only reproducible node_modules directories inside that trial; preserve source, exact patches, lockfiles, sessions, ledgers and all logs.',
     operatorPolicy: 'Authorize isolated trusted_local execution and frozen dependency preparation. Approve exact proposed changes only to permit production verification; no hidden-test feedback to the agent. Questions end historical trials without invented answers. Reject external/network grants. OpenCode shell grants are limited to single read commands and saved tests; no task/question integration changes. No automatic retry of unknown calls.',
-    testing: 'Agents run the unchanged baseline test suite. Private evaluator restores baseline test/config files then overlays exact reference acceptance tests. Candidate/source and reviewer tests are separate; evaluate managed delivery even on failed runs. Full reference patch never enters an agent workspace.',
+    testing: 'Every engine receives the same prequalified saved public regression plan per task. These are existing baseline suites at acceptance paths, or a deterministic same-directory filename-prefix fallback when the future suite did not exist. No reference test contents enter the agent workspace. This targeted baseline check is not whole-repository release/provenance testing. Private evaluator restores baseline test/config files then overlays the unchanged exact reference acceptance tests; evaluate managed delivery even on failed runs. Preserve all 31 tasks and the private qualification rules.',
     gates: { mandatoryInteractiveScenarios: 8, minimumQualifiedTasks: 30, falseSuccessMaximum: 0, complexCategories: ['cross_module', 'recovery', 'concurrency'], complexV3AbsolutePassRateGainOverV2: 0.10, maxMedianV3DurationMs: 900000, maxMeanV3CostPerIndependentlyPassedTaskUsd: 10, releaseRequiresHumanEvidenceReview: true },
     tasks, excluded: qualification.results.filter(row => !row.qualified).map(row => row.taskId) }
   if (tasks.length < 30) throw new Error('At least 30 qualified tasks required')
   await json(path.join(output, 'experiment.json'), plan, true)
   await json(path.join(output, 'qualified-tasks.json'), { ...manifest, taskCount: tasks.length, tasks }, true)
   await json(path.join(output, 'qualification.json'), qualification, true)
+  await json(path.join(output, 'public-qualification.json'), publicQualification, true)
   console.log(JSON.stringify({ experiment: plan.id, qualified: tasks.length, frozenDigest: digest(JSON.stringify(plan)), plannedRuns: tasks.length * plan.engines.length }))
 }
 
 async function runBatch(output, keyFile, only) {
   const plan = JSON.parse(await readFile(path.join(output, 'experiment.json'), 'utf8'))
   if (git(['rev-parse', 'HEAD']).toString().trim() !== plan.candidateCommit) throw new Error('Candidate commit differs from frozen experiment')
+  if (git(['status', '--porcelain']).toString().trim()) throw new Error('Working tree differs from the committed frozen experiment')
   for (const [file, hash] of Object.entries(plan.runnerDigests)) if (digest(await readFile(path.join(repository, 'scripts', file))) !== hash) throw new Error('Runner changed; start a new experiment')
   const rows = [], work = []
   for (const task of plan.tasks) for (const engine of plan.engines) work.push({ task, engine })
@@ -103,7 +133,8 @@ async function runBatch(output, keyFile, only) {
       const { task, engine } = selected[index++], directory = path.join(output, `${task.id}-${engine}`), trialOutput = path.join(directory, 'execution'), started = Date.now()
       try {
         const baseline = await prepare(task, directory)
-        const input = { id: task.id, engine, repository: baseline, output: trialOutput, prompt: task.prompt, testCommand: 'corepack pnpm exec vitest run', ...plan.limits, opencodeBinary: plan.opencodeBinary }
+        if (!task.testCommand) throw new Error('Frozen task has no qualified public test plan')
+        const input = { id: task.id, engine, repository: baseline, output: trialOutput, prompt: task.prompt, testCommand: task.testCommand, ...plan.limits, opencodeBinary: plan.opencodeBinary }
         const inputFile = path.join(directory, 'input.json'); await json(inputFile, input, true)
         console.log(JSON.stringify({ event: 'start', task: task.id, engine }))
         const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)
@@ -120,6 +151,7 @@ async function runBatch(output, keyFile, only) {
         const row = { taskId: task.id, engine, trial: 1, provider: trial.provider, model: trial.model, claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, category: task.category, split: task.split, trialStatus: trial.status, failure: trial.failure ?? null, execution, independent, artifacts: path.relative(repository, directory) }
         await json(path.join(directory, 'row.json'), row, true)
         await removeDisposableDependencies(directory)
+        await removeTrialCommandCaches(trialOutput)
         const update = queue.then(async () => { rows.push(row); await save() }); queue = update.catch(() => {}); await update
         console.log(JSON.stringify({ event: 'result', task: task.id, engine, status: trial.status, independentPassed: independent.passed, costUsd: trial.costUsd, elapsedMs: Date.now() - started }))
       } catch (error) {

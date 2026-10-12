@@ -12,6 +12,7 @@
     "scripts/native-coding-trial-live.mts",
     "scripts/native-coding-endpoint-live.mts",
     "scripts/native-coding-interactive-worker.mts",
-    "scripts/native-coding-deep-live.mts"
+    "scripts/native-coding-deep-live.mts",
+    "scripts/native-coding-public-plans.mts"
   ]
 }
