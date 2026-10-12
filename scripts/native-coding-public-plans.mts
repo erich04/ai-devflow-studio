@@ -44,13 +44,14 @@ async function derive(file: string) {
   await writeFile(file, JSON.stringify({ schemaVersion: 1, taskManifestDigest: digest(raw), purpose: 'Same public saved test plan for every engine. Targeted baseline regression only, not whole-repository release/provenance testing. Future reference acceptance remains private and unchanged. Qualify each plan before paid trials.', tasks }, null, 2) + '\n', { flag: 'wx' })
 }
 
-async function qualify(file: string, output: string) {
+async function qualify(file: string, output: string, only: string[] = []) {
   const bytes = await readFile(file), manifest = JSON.parse(bytes.toString()) as { schemaVersion: number; taskManifestDigest: string; tasks: PublicPlan[] }
   if (manifest.schemaVersion !== 1 || manifest.tasks.length < 30 || new Set(manifest.tasks.map(task => task.taskId)).size !== manifest.tasks.length) throw new Error('Invalid public plan manifest')
+  if (only.some(id => !manifest.tasks.some(task => task.taskId === id)) || new Set(only).size !== only.length) throw new Error('Invalid public plan selection')
   await mkdir(output)
   const sourceDigests = Object.fromEntries(await Promise.all(sourceFiles.map(async file => [file, digest(await readFile(path.join(repository, file)))])))
   const results: Array<Record<string, unknown>> = []
-  for (const task of manifest.tasks) {
+  for (const task of manifest.tasks.filter(task => !only.length || only.includes(task.taskId))) {
     if (!/^[a-z0-9-]+$/u.test(task.taskId) || !/^[a-f0-9]{40}$/u.test(task.baseSha) || !task.publicTestFiles.length || task.publicTestFiles.some(file => !/^(apps|packages|scripts|tests)\/[a-zA-Z0-9._/-]+\.test\.tsx?$/u.test(file) || file.split('/').includes('..')) || task.testCommand !== commandFor(task.publicTestFiles)) throw new Error('Invalid public plan')
     const directory = path.join(output, task.taskId); await mkdir(directory)
     const scratch = await mkdtemp(path.join(os.tmpdir(), 'df-public-plan-')), checkout = path.join(scratch, 'baseline'), archive = path.join(scratch, 'baseline.tar')
@@ -80,7 +81,7 @@ async function qualify(file: string, output: string) {
   }
 }
 
-const [command, file, output] = process.argv.slice(2)
+const [command, file, output, ...only] = process.argv.slice(2)
 if (command === 'derive' && file && !output) await derive(path.resolve(file))
-else if (command === 'qualify' && file && output) await qualify(path.resolve(file), path.resolve(output))
-else throw new Error('Usage: tsx scripts/native-coding-public-plans.mts derive <new-manifest.json> | qualify <manifest.json> <new-output>')
+else if (command === 'qualify' && file && output) await qualify(path.resolve(file), path.resolve(output), only)
+else throw new Error('Usage: tsx scripts/native-coding-public-plans.mts derive <new-manifest.json> | qualify <manifest.json> <new-output> [task-id ...]')
