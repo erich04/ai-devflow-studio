@@ -6,9 +6,14 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { createLocalStore } from './local-store'
 import { createNativeCodingSession, updateNativeCodingSession } from './native-coding-session'
 import { NativeCodingLoop } from './native-coding-loop'
-import { createFakeAgentProvider, type NativeToolCall } from '@ai-devflow/shared'
+import { runtimeStateKey, runtimeStateMarker } from './native-coding-context'
+import { createFakeAgentProvider, createOpenAiCompatibleAgentProvider, type NativeToolCall } from '@ai-devflow/shared'
 
 const directories: string[] = []
+const runtimeStateOf = (content: string | null): unknown => {
+  const text = String(content)
+  return text.includes(runtimeStateMarker) ? JSON.parse(text.split(runtimeStateMarker)[1]!) : (JSON.parse(text) as Record<string, unknown>)[runtimeStateKey]
+}
 it('keeps a coding question and history through restart, accepting only one competing checkpoint', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-coding-session-'))
   directories.push(directory)
@@ -46,7 +51,7 @@ it('shows the actual shared remaining step budget to the model without granting 
     const loop = new NativeCodingLoop({ store, rootStepsUsed: async () => sharedUsed,
       reserveRootStep: async () => { if (sharedUsed >= 5) return false; sharedUsed++; return true },
       provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: input => JSON.stringify(input), completeNativeConversation: async input => {
-        observed.push(JSON.parse(input.systemPrompt!.split('[DevFlow runtime state]\n')[1]!) as typeof observed[number])
+        observed.push(runtimeStateOf(input.messages.at(-1)!.content) as typeof observed[number])
         const toolCalls: NativeToolCall[] = [{ id: `read-${++calls}`, type: 'function', function: { name: 'discover', arguments: '{}' } }]
         return { kind: 'tools', toolCalls, assistantMessage: { role: 'assistant', content: null, tool_calls: toolCalls } }
       } }, tools: { definitions: [{ type: 'function', function: { name: 'discover', description: '', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } }], effects: { discover: 'read' }, execute: async () => ({ newEvidence: calls }) } })
@@ -57,6 +62,44 @@ it('shows the actual shared remaining step budget to the model without granting 
       { usedBeforeThisCall: 4, remainingIncludingThisCall: 1, maximum: 5 },
     ])
     expect(calls).toBe(3)
+  } finally { await store.close() }
+})
+
+it('keeps the serialized system prompt, tools and prior history as an unchanged request prefix across steps (#239)', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-loop-prefix-')); directories.push(directory)
+  const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()
+  try {
+    await store.upsertProject({ id: 'project', name: 'test', path: directory, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
+    const session = createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'run', workflowRunId: 'workflow', nodeId: 'build', objective: 'Trace a dependency', providerId: 'deepseek', model: 'deepseek-flash', now })
+    session.limits.maxSteps = 4
+    await store.saveNativeCodingSession(session, 0)
+    const wire = createOpenAiCompatibleAgentProvider({ id: 'deepseek', name: 'DeepSeek', model: 'deepseek-flash', apiKey: 'unused', baseUrl: 'https://api.deepseek.com' })
+    type Body = { messages: Array<{ role: string; content: string | null }>; tools: unknown }
+    const bodies: Body[] = []
+    let calls = 0
+    const loop = new NativeCodingLoop({ store,
+      provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: wire.serializeNativeRequest!, completeNativeConversation: async input => {
+        bodies.push(JSON.parse(wire.serializeNativeRequest!(input)) as Body)
+        const toolCalls: NativeToolCall[] = [{ id: `read-${++calls}`, type: 'function', function: { name: 'discover', arguments: '{}' } }]
+        return { kind: 'tools', toolCalls, assistantMessage: { role: 'assistant', content: null, reasoning_content: `thought ${calls}`, tool_calls: toolCalls } }
+      } }, tools: { definitions: [{ type: 'function', function: { name: 'discover', description: '', parameters: { type: 'object', properties: {}, required: [], additionalProperties: false } } }], effects: { discover: 'read' }, execute: async () => ({ newEvidence: calls }) } })
+    expect((await loop.runBatch('session')).pauseReason).toBe('task_limit')
+    expect(bodies).toHaveLength(4)
+    const transcript = (await store.getNativeCodingSession('session'))!.transcript
+    for (let index = 1; index < bodies.length; index++) {
+      const previous = bodies[index - 1]!, next = bodies[index]!, tail = previous.messages.length - 1
+      expect(next.messages[0]).toEqual(previous.messages[0])
+      expect(next.tools).toEqual(previous.tools)
+      expect(next.messages.slice(0, tail)).toEqual(previous.messages.slice(0, tail))
+      // The state previously appended to the tail is gone, and every byte before the append point is reused.
+      const stored = String(next.messages[tail]!.content)
+      expect(stored).toBe(transcript[tail - 1]!.content)
+      expect(String(previous.messages[tail]!.content).startsWith(stored.slice(0, -1))).toBe(true)
+      expect(next.messages.filter(message => message.role === 'user')).toHaveLength(1)
+      expect(runtimeStateOf(next.messages.at(-1)!.content)).toMatchObject({ steps: { usedBeforeThisCall: index } })
+    }
+    expect(runtimeStateOf(bodies[0]!.messages.at(-1)!.content)).toMatchObject({ steps: { usedBeforeThisCall: 0, remainingIncludingThisCall: 4 } })
+    expect(JSON.stringify(transcript)).not.toMatch(new RegExp(`${runtimeStateKey}|DevFlow runtime state`))
   } finally { await store.close() }
 })
 

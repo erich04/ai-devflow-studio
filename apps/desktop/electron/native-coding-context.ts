@@ -5,7 +5,30 @@ import type { NativeCodingSession } from './native-coding-session'
 
 export type CodingCompaction = { through: number; sourceDigest: string; summary: string; attemptId: string; createdAt: string }
 export type CodingContext = { request: NativeConversationRequest; compact?: { through: number; sourceDigest: string } }
-export function codingContext(session: NativeCodingSession, provider: AgentProvider, input: NativeConversationRequest): CodingContext {
+export const runtimeStateMarker = '[DevFlow runtime state]\n'
+export const runtimeStateKey = 'devflowRuntimeState'
+// Provider prefix caches reuse only an unchanged leading sequence, so per-call state goes after the history.
+// Appending to the final user/tool content avoids opening a new user turn, which would drop Thinking history.
+function withRuntimeState(messages: NativeToolMessage[], state: string | undefined): NativeToolMessage[] {
+  if (state === undefined) return messages
+  const last = messages.at(-1)!
+  if (last.role === 'assistant') return [...messages, { role: 'user', content: runtimeStateMarker + state }]
+  return [...messages.slice(0, -1), { ...last, content: appendRuntimeState(last.content, state) }]
+}
+function jsonObject(content: string): Record<string, unknown> | undefined {
+  if (!content.startsWith('{') || !content.endsWith('}')) return undefined
+  try {
+    const value: unknown = JSON.parse(content)
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+  } catch { return undefined }
+}
+// Tool results stay valid JSON: only the closing brace moves, so every earlier byte is unchanged.
+function appendRuntimeState(content: string, state: string): string {
+  const value = jsonObject(content)
+  if (!value) return `${content}\n\n${runtimeStateMarker}${state}`
+  return `${content.slice(0, -1)}${Object.keys(value).length ? ',' : ''}"${runtimeStateKey}":${state}}`
+}
+export function codingContext(session: NativeCodingSession, provider: AgentProvider, input: NativeConversationRequest, runtimeState?: string): CodingContext {
   const prior = session.compactions.at(-1), from = prior?.through ?? 1
   const humanCalls = new Set(session.transcript.flatMap(message => message.role === 'assistant' ? (message.tool_calls ?? []).filter(call => call.function.name === 'request_user_input').map(call => call.id) : []))
   const constraints = session.transcript.slice(1, prior?.through ?? 1).flatMap((message, index) => message.role === 'user' || (message.role === 'tool' && humanCalls.has(message.tool_call_id)) ? [{ index: index + 1, text: message.content }] : [])
@@ -14,7 +37,7 @@ export function codingContext(session: NativeCodingSession, provider: AgentProvi
     // Human constraints cannot depend on a model-written summary retaining them.
     { role: 'user' as const, content: `必须保留的用户原话与澄清答案（后续明确更正优先）：\n${JSON.stringify(constraints)}` },
   ] : [])]
-  const request = { ...input, messages: prior ? [...pinned, ...session.transcript.slice(prior.through)] : session.transcript }
+  const request = { ...input, messages: withRuntimeState(prior ? [...pinned, ...session.transcript.slice(prior.through)] : session.transcript, runtimeState) }
   const budget = nativeRequestBudget(provider, request)
   if (!budget.overflow && budget.bytes < budget.limits.bytes * .8 && budget.tokens < budget.limits.tokens * .8) return { request }
   validateNativeHistory(session.transcript)
@@ -32,7 +55,7 @@ export function codingContext(session: NativeCodingSession, provider: AgentProvi
     if (measured.overflow) break
     candidate = { request: compactRequest, compact: { through, sourceDigest: codingDigest(JSON.stringify(session.transcript.slice(0, through))) } }
     // Keep recent closed turns whenever the remainder will fit. Otherwise compact the next bounded chunk.
-    const remaining = { ...request, messages: [...pinned, { role: 'user' as const, content: '摘要空间'.repeat(3000) }, ...session.transcript.slice(through)] }
+    const remaining = { ...request, messages: withRuntimeState([...pinned, { role: 'user' as const, content: '摘要空间'.repeat(3000) }, ...session.transcript.slice(through)], runtimeState) }
     if (!nativeRequestBudget(provider, remaining).overflow && through >= session.transcript.length - 12) break
   }
   if (!candidate) throw new Error('Complete required coding context exceeds provider capacity; no model call was sent')

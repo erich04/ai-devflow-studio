@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { expect, it } from 'vitest'
 import { createFakeAgentProvider, resolveRequestPolicy, validateNativeHistory, type AgentProvider } from '@ai-devflow/shared'
-import { codingContext } from './native-coding-context'
+import { codingContext, runtimeStateMarker } from './native-coding-context'
 import { createNativeCodingSession } from './native-coding-session'
 import { nativeRequestBudget } from './native-request-budget'
 
@@ -34,4 +34,22 @@ it('pins exact human constraints and question answers even when the model summar
   const context = codingContext(session, provider, { systemPrompt: 'coding', messages: session.transcript, tools: [] })
   expect(JSON.stringify(context.request.messages)).toContain('Do not change the public API.')
   expect(JSON.stringify(context.request.messages)).toContain('Support v1 as well')
+})
+
+it('appends runtime state after the history without rewriting model output or the stored transcript', () => {
+  const session = createNativeCodingSession({ id: 's', codingRunId: 'c', workflowRunId: 'r', nodeId: 'n', localProjectId: 'p', providerId: 'fake', model: 'test', objective: 'Implement feature', now: new Date().toISOString() })
+  const provider = { ...createFakeAgentProvider(), serializeNativeRequest: (value: unknown) => JSON.stringify(value) }
+  const input = { systemPrompt: 'coding', messages: session.transcript, tools: [] }
+  const initial = codingContext(session, provider, input, '{"steps":1}')
+  expect(initial.request.messages).toEqual([{ role: 'user', content: `${session.transcript[0]!.content}\n\n${runtimeStateMarker}{"steps":1}` }])
+  session.transcript.push({ role: 'assistant', content: 'Plain text without a tool call.', reasoning_content: 'kept' })
+  const stored = structuredClone(session.transcript)
+  const afterText = codingContext(session, provider, input, '{"steps":2}')
+  expect(afterText.request.messages.slice(0, -1)).toEqual(stored)
+  expect(afterText.request.messages.at(-1)).toEqual({ role: 'user', content: `${runtimeStateMarker}{"steps":2}` })
+  session.transcript.push({ role: 'assistant', content: null, tool_calls: [{ id: 'read', type: 'function', function: { name: 'read_file', arguments: '{}' } }] }, { role: 'tool', tool_call_id: 'read', content: '{"path":"a.ts","content":"}"}' })
+  const afterTool = codingContext(session, provider, input, '{"steps":3}')
+  expect(afterTool.request.messages.at(-1)).toEqual({ role: 'tool', tool_call_id: 'read', content: '{"path":"a.ts","content":"}","devflowRuntimeState":{"steps":3}}' })
+  expect(JSON.parse(String(afterTool.request.messages.at(-1)!.content))).toEqual({ path: 'a.ts', content: '}', devflowRuntimeState: { steps: 3 } })
+  expect(session.transcript.at(-1)!.content).toBe('{"path":"a.ts","content":"}"}')
 })

@@ -33,6 +33,7 @@ ADR 0018 和 ADR 0021 建立了带版本、有范围、可删除的记忆，以�
 
 - Native v2 的 analysis、initial、repair 共用一个静态 `NATIVE_CODING_V2_SYSTEM_PROMPT`，由 user JSON 的 `phase` 字段选择规则。运行数据（例如 `allowedPaths`）只放在 user 消息里。
 - Native v2 的 user JSON 以 `stateVersion → brief` 开头，以 `phase → limits` 结尾，阶段数据放在中间。
+- Native v3 的 system 内容在会话内固定（主任务与只读子任务各一份静态文本），工具定义保持稳定。每轮变化的运行状态（已用/剩余步骤、活动时间、目标版本、编辑授权）只附加在本次请求最后一条消息的末尾，不写入持久化 transcript：JSON 工具结果在末尾 `}` 前加入 `devflowRuntimeState` 字段，文本消息追加 `[DevFlow runtime state]` 段；最后一条是模型输出时才追加一条临时 user 消息。不得为此每轮插入 user 消息，否则 Thinking 模式会把之前的推理历史视为上一轮。预算、步骤和时间上限仍由宿主强制执行，模型看到的状态只用于规划。上下文压缩和用户补充要求可以改变前缀并重建缓存。
 - 讨论栏的上下文键顺序为 `originalRequirements → [projectInstructions] → history → [rollingSummary] → [backgroundMemory] → [criticalProposalInput] → toolObservations → latestWorkflow → contextNotice → remainingSteps → [proposalVerification]`。当前需求、L0 和记忆未变化且未触发压缩时，同一轮内工具观察只追加，已降级的观察保持降级，使后续步骤保持稳定前缀；新鲜度与硬预算优先于缓存复用。
 - 不添加 `cache_control` 或 `prompt_cache_key` 请求参数。前后效果用现有的 `cacheReadTokens` 和 `cacheHitRate` 对比。
 
