@@ -1,4 +1,5 @@
 import { codingSessionGrantsForStore, type CodingGrantContext } from './coding-session-grants.js'
+import { codingCommandInputsDigest, CommandInputsUnavailableError } from './coding-command-inputs.js'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   CODING_EXECUTOR_CONTRACT_VERSION,
@@ -461,6 +462,13 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     }
   }
 
+  /** Throws CommandInputsUnavailableError when a package-manager command's inputs cannot be checked. */
+  async function grantInputsDigest(codingRun: CodingAgentRun, rule: CodingSessionGrant['rule'] | undefined): Promise<string | undefined> {
+    if (rule?.kind !== 'command' || !codingRun.managedWorkspaceId) return undefined
+    const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
+    return codingCommandInputsDigest(workspace.worktreePath, rule.command)
+  }
+
   async function auditSessionGrant(codingRun: CodingAgentRun, grant: CodingSessionGrant, action: string) {
     await saveEvents([{
       id: idGenerator('coding-event'), codingRunId: codingRun.id, runId: codingRun.runId, nodeId: codingRun.nodeId,
@@ -478,10 +486,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     for (const grant of sessionGrants.list(codingRun.id)) {
       if (grant.revokedAt) continue
       const expired = !context.active || grant.scopeKey !== context.key || grant.actorId !== context.actorId || Date.parse(grant.expiresAt) <= Date.parse(now())
-      if (expired || input.revokeId === grant.id) {
+      const inputsChanged = !expired && grant.inputsDigest !== undefined &&
+        await grantInputsDigest(codingRun, grant.rule).then((digest) => digest !== grant.inputsDigest, () => true)
+      if (expired || inputsChanged || input.revokeId === grant.id) {
         if (input.revokeId === grant.id && grant.actorId !== context.actorId) throw new Error('Session permission belongs to another identity.')
         // Audit first: a persistence failure cannot create an unrecorded grant or revocation.
-        await auditSessionGrant(codingRun, grant, expired ? 'expired' : 'revoked')
+        await auditSessionGrant(codingRun, grant, expired ? 'expired' : inputsChanged ? 'invalidated' : 'revoked')
         sessionGrants.revoke(grant.id, grant.actorId, now())
       }
     }
@@ -493,7 +503,9 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     const codingRun = await findCodingRun(request.codingRunId)
     await listSessionPermissions({ codingRunId: codingRun.id })
     const context = await sessionContext(codingRun)
-    const grant = sessionGrants.match(request, context, now())
+    let inputsDigest: string | undefined
+    try { inputsDigest = await grantInputsDigest(codingRun, codingSessionPermissionRule(request)) } catch { return }
+    const grant = sessionGrants.match(request, context, now(), inputsDigest)
     if (!grant) return
     await replyCodingPermission({ requestId: request.id, codingRunId: request.codingRunId,
       decidedBy: context.actorId, decision: 'approved', comment: `Matched session permission ${grant.id}.`,
@@ -1812,12 +1824,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       ...(matchedSessionGrantId ? { sessionGrantId: matchedSessionGrantId } : {}),
     }
     const codingRun = await findCodingRun(input.codingRunId)
+    let sessionInputsDigest: string | undefined
     if (input.scope === 'session' || matchedSessionGrantId) {
-      if (input.decision !== 'approved' || !codingSessionPermissionRule(request)) throw new Error('Session scope is only available for an eligible tool permission.')
+      const rule = codingSessionPermissionRule(request)
+      if (input.decision !== 'approved' || !rule) throw new Error('Session scope is only available for an eligible tool permission.')
       await assertExecutionContext(codingRun)
       const context = await sessionContext(codingRun)
       if (context.actorId !== input.decidedBy || !context.active) throw new Error('Session permission authority changed.')
-      if (matchedSessionGrantId && sessionGrants.match(request, context, timestamp)?.id !== matchedSessionGrantId) {
+      try { sessionInputsDigest = await grantInputsDigest(codingRun, rule) } catch (error) {
+        if (!(error instanceof CommandInputsUnavailableError)) throw error
+        throw new Error('This command cannot be reused for the session because its package scripts and configuration could not be checked. Approve it once instead.')
+      }
+      if (matchedSessionGrantId && sessionGrants.match(request, context, timestamp, sessionInputsDigest)?.id !== matchedSessionGrantId) {
         throw new Error('Session permission expired, changed or was revoked.')
       }
     }
@@ -2286,7 +2304,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       try {
         await assertExecutionContext(codingRun)
         if (input.scope === 'session') {
-          const grant = sessionGrants.create(request, await sessionContext(codingRun), timestamp)
+          const grant = sessionGrants.create(request, await sessionContext(codingRun), timestamp, sessionInputsDigest)
           try { await auditSessionGrant(codingRun, grant, 'created') }
           catch (error) { sessionGrants.revoke(grant.id, grant.actorId, now()); throw error }
         } else if (matchedSessionGrantId) {
