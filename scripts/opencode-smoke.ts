@@ -283,6 +283,7 @@ async function main(preflight: ReadyOpencodeSmokePreflight) {
         permissionRequest = result.permissionRequest
         continue
       }
+      if ('questionRequest' in result) throw new Error('Release smoke does not permit interactive questions')
       completed = result
       break
     }

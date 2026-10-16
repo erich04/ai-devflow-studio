@@ -116,6 +116,7 @@ export type InspectorAction = {
  * qualifier and the buttons all come from this object, so they cannot disagree.
  */
 export type InspectorStatusKind =
+  | 'waiting_input'
   | 'history'
   | 'waiting_upstream'
   | 'loading'
@@ -1222,6 +1223,11 @@ function permissionNeedsExactReview(permission: NonNullable<CodingRuntimeActionP
 function buildCodingStatus(projection: CodingRuntimeActionProjection): InspectorNextAction {
   const projected = projection.action
   const phaseLabel = codingPhaseLabels[projection.phase]
+  if (projection.phase === 'waiting_input') {
+    return statusOf('waiting_input', 'warning', '等待你回答编码问题', '在「当前工作」补充需求，回答后继续执行。', {
+      secondaryActionIds: ['viewCodingRecords'], persistentActionIds: ['stopCodingRun'],
+    })
+  }
   if (projected.id === 'start') {
     return statusOf('ready', 'neutral', '可以开始开发实现', projected.summary, {
       primaryActionId: 'runCodingAgent',

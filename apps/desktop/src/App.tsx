@@ -890,6 +890,8 @@ export function App() {
     knowledgeReviewTarget,
     runCodingAgent: runCodingAgentAction,
     startRemediationRetry,
+    replyCodingQuestion,
+    isReplyingCodingQuestion,
     replyCodingPermission,
     renewCodingPermission,
     isReplyingCodingPermission,
@@ -1565,6 +1567,8 @@ export function App() {
                   upstreamCodingDiffReady={hasArchivedUpstreamCodingDiff({ run: selectedRun, node: selectedNode, codingRuns, diffs: codingDiffArtifacts })}
                   {...(codingActionProjection ? { codingActionProjection } : {})}
                   onCancelCodingRun={() => void cancelCodingRun()}
+                  onReplyCodingQuestion={(reply) => void replyCodingQuestion(reply)}
+                  isReplyingCodingQuestion={isReplyingCodingQuestion}
                   onReplyCodingPermission={(decision, scope) => void replyCodingPermission(decision, scope)}
                   onRenewCodingPermission={() => void renewCodingPermission()}
                   isReplyingCodingPermission={isReplyingCodingPermission}

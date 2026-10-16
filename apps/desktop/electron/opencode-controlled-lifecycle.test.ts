@@ -155,7 +155,7 @@ describe('controlled OpenCode lifecycle', () => {
       const requests: string[] = []
       const processEnsure = vi.fn(async ({ projectId }: { projectId: string }) => ({
         baseUrl: 'http://127.0.0.1:4097',
-        child: {} as never,
+        child: { exitCode: null, killed: false } as never,
         projectId,
       }))
       const fetcher: Fetcher = vi.fn(async (input, init) => {

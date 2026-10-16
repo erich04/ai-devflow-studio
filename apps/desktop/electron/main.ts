@@ -160,6 +160,7 @@ import {
   parseDismissAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
   parseReplyCodingPermissionInput,
+  parseReplyCodingQuestionInput,
   parseRenewCodingPermissionInput,
   parseRemoteSnapshotInput,
   parseRetryRemoteSyncOperationInput,
@@ -484,6 +485,7 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             processManager: opencodeProcessManager,
             configurationFingerprint: `coding-runtime-configuration:${configuration.version}`,
             requireExecutionAuthorization: true,
+            enableQuestions: true,
             runtimeEnv: {
               ...buildOpencodeRuntimeEnv({
                 baseEnv: process.env,
@@ -3893,6 +3895,19 @@ function registerIpcHandlers() {
     )
     const runtime = await createCodingRuntimeForRequest(undefined, codingRun?.projectId)
     return runtime.cancelCodingAgentRun(input)
+  })
+
+  ipcMain.handle(ipcChannels.replyCodingQuestion, async (_, payload: unknown) => {
+    const input = parseReplyCodingQuestionInput(payload)
+    const store = await getStore()
+    const run = (await store.listCodingAgentRuns()).find((candidate) => candidate.id === input.codingRunId)
+    if (!run) throw new Error('Coding Agent run is unavailable')
+    const trusted = resolveTrustedCodingPermissionReply({
+      input: { requestId: input.requestId, codingRunId: run.id, decidedBy: '', decision: 'approved', comment: '' },
+      projectId: run.projectId, pairing: await store.getDesktopPairingCredential(),
+    })
+    const runtime = await createCodingRuntimeForRequest(undefined, run.projectId)
+    return runtime.replyCodingQuestion({ ...input, answeredBy: trusted.decidedBy })
   })
 
   ipcMain.handle(ipcChannels.replyCodingPermission, async (_, payload: unknown) => {

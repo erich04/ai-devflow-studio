@@ -500,6 +500,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
   let deliveryArtifacts = [...fixtureArtifacts]
   let deliveryEvents = [...fixtureEvents]
   const api: DevFlowDesktopApi = {
+    replyCodingQuestion: vi.fn().mockRejectedValue(new Error('No question in this fixture')),
     getModelCostRecovery: vi.fn(async () => ({ overview: modelCostRecoveryOverview([], [], [], 'p-payments', '2026-10-04T12:00:00Z'), local: [] })),
     retryModelCostSettlements: vi.fn(async () => ({ overview: modelCostRecoveryOverview([], [], [], 'p-payments', '2026-10-04T12:00:00Z'), local: [] })),
     platform: 'test',

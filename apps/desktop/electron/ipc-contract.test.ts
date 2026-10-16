@@ -28,6 +28,7 @@ import {
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
   parseReplyCodingPermissionInput,
+  parseReplyCodingQuestionInput,
   parseRenewCodingPermissionInput,
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
@@ -1261,5 +1262,20 @@ describe('IPC contract parsers', () => {
     })
     expect(() => parseDeleteRunInput({ runId: ' ' })).toThrow(/runId/)
     expect(() => parseDeleteRunInput({ runId: 'run-1', deleteRemote: 'yes' })).toThrow(/deleteRemote/)
+  })
+})
+describe('coding question IPC', () => {
+  const payload = { codingRunId: 'run', requestId: 'que-1', revision: 'a'.repeat(64), reply: { kind: 'answer', answers: [['Blue'], ['Web', 'App']] } }
+  it('accepts bounded business answers and no renderer-supplied authority', () => {
+    expect(parseReplyCodingQuestionInput(payload)).toEqual(payload)
+    for (const extra of [{ answeredBy: 'owner' }, { projectId: 'another' }, { sessionId: 'another' }, { permission: 'always' }, { directory: '/another' }]) {
+      expect(() => parseReplyCodingQuestionInput({ ...payload, ...extra })).toThrow()
+    }
+  })
+  it('rejects malformed or oversized payloads before reaching the runtime', () => {
+    for (const reply of [{ kind: 'approve' }, { kind: 'answer', answers: [['x'.repeat(4001)]] }, { kind: 'answer', answers: [['Blue']], scope: 'session' }, { kind: 'dismiss', answers: [] }]) {
+      expect(() => parseReplyCodingQuestionInput({ ...payload, reply })).toThrow()
+    }
+    expect(() => parseReplyCodingQuestionInput({ ...payload, revision: 'wrong' })).toThrow()
   })
 })

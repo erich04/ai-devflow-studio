@@ -1,8 +1,25 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
-import { createOpencodeProcessManager, terminateProcessTree } from './opencode-process'
+import { createOpencodeProcessManager, terminateProcessTree, type SpawnOpencodeProcess } from './opencode-process'
 
 describe('opencode process manager', () => {
+  it('isolates question-enabled coding from other project processes and stops both profiles', async () => {
+    const spawnProcess = vi.fn<SpawnOpencodeProcess>(() => fakeChild({ exitOnKill: true }))
+    const manager = createOpencodeProcessManager({ spawnProcess, findPort: async () => 4100 + spawnProcess.mock.calls.length,
+      waitUntilReady: async () => undefined })
+    const input = { projectId: 'same-project', binaryPath: 'opencode', env: {} }
+    const readOnly = await manager.ensure(input)
+    const coding = await manager.ensure({ ...input, profile: 'coding' })
+    expect(coding).not.toBe(readOnly)
+    expect(readOnly.child.kill).not.toHaveBeenCalled()
+    expect(spawnProcess.mock.calls[1]?.[2]).toMatchObject({ env: { OPENCODE_ENABLE_QUESTION_TOOL: 'true' } })
+    expect(await manager.ensure(input)).toBe(readOnly)
+    expect(await manager.ensure({ ...input, profile: 'coding', env: { OPENCODE_ENABLE_QUESTION_TOOL: 'false' } })).toBe(coding)
+    await manager.stopProject(input.projectId)
+    expect(coding.child.kill).toHaveBeenCalled()
+    expect(readOnly.child.kill).toHaveBeenCalled()
+  })
+
   it('spawns opencode serve on localhost without unsafe flags', async () => {
     const spawned: Array<{ command: string; args: string[]; options: unknown }> = []
     const removeRuntimeRoot = vi.fn(async () => undefined)

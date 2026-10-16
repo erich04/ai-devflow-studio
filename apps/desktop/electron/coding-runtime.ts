@@ -1,3 +1,6 @@
+import { CodingQuestionError } from './coding-question-error.js'
+import { validateCodingQuestionReply, type CodingQuestionRequest, type CodingQuestionReply, type CodingQuestionReceipt } from '@ai-devflow/shared'
+import type { CodingExecutorQuestionResult, CodingExecutorWaitingPermissionResult } from './coding-executor.js'
 import { codingSessionGrantsForStore, type CodingGrantContext } from './coding-session-grants.js'
 import { codingCommandInputsDigest, CommandInputsUnavailableError } from './coding-command-inputs.js'
 import { createHash, randomUUID } from 'node:crypto'
@@ -131,6 +134,7 @@ function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun)
   return {
     ...executorRun,
     prompt: previous.prompt,
+    ...(previous.questionReceipts ? { questionReceipts: previous.questionReceipts } : {}),
     ...(previous.contextReceipt ? { contextReceipt: previous.contextReceipt } : {}),
     ...(previous.budgetDecision ? { budgetDecision: previous.budgetDecision } : {}),
     ...(previous.workflowRunVersion === undefined ? {} : { workflowRunVersion: previous.workflowRunVersion }),
@@ -330,6 +334,11 @@ export type CodingRuntimeDeps = {
   captureWorkspaceDiff?: typeof captureWorktreeDiff
 }
 
+export type ReplyCodingQuestionRuntimeInput = {
+  codingRunId: string; requestId: string; revision: string; answeredBy: string; reply: CodingQuestionReply
+}
+const questionTimeouts = new WeakMap<CodingRuntimeStore, Map<string, ReturnType<typeof setTimeout>>>()
+
 export type CodingRuntime = {
   ensureCodingEngine(input: { projectId: string }): Promise<{
     projectId: string
@@ -340,6 +349,7 @@ export type CodingRuntime = {
   runCodingAgent(input: RunCodingAgentRuntimeInput): Promise<RunCodingAgentRuntimeResult>
   startRetryAttempt(input: StartRetryAttemptRuntimeInput): Promise<StartRetryAttemptRuntimeResult>
   cancelCodingAgentRun(input: CancelCodingAgentRunRuntimeInput): Promise<CodingAgentRun>
+  replyCodingQuestion(input: ReplyCodingQuestionRuntimeInput): Promise<CodingQuestionReceipt>
   replyCodingPermission(input: ReplyCodingPermissionRuntimeInput): Promise<CodingPermissionRequest>
   renewCodingPermission(input: Pick<ReplyCodingPermissionRuntimeInput, 'requestId' | 'codingRunId' | 'decidedBy'>): Promise<CodingPermissionRequest>
   sessionPermissions(input: { codingRunId: string; revokeId?: string }): Promise<CodingSessionGrant[]>
@@ -381,6 +391,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     'queued',
     'preparing',
     'waiting_permission',
+    'waiting_input',
     'bootstrapping',
     'running',
     'applying',
@@ -636,6 +647,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   async function commitCodingAgentMutation(
     mutation: CodingAgentMutation,
   ): Promise<CodingAgentMutationResult> {
+    if (mutation.run?.question && !activeCodingStatuses.has(mutation.run.status) && ['pending', 'sending'].includes(mutation.run.question.status)) {
+      mutation = { ...mutation, run: { ...mutation.run, question: { ...mutation.run.question,
+        status: mutation.run.status === 'timed_out' ? 'expired' : mutation.run.question.status === 'sending' ? 'delivery_unknown' : 'invalidated', settledAt: now() } } }
+    }
     const safeEvents = mutation.events?.map((event) => redactCodingAgentEventForStorage(event))
     const result = await deps.store.commitCodingAgentMutation({
       ...mutation,
@@ -646,6 +661,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     }
     if (mutation.run) {
       runBestEffortNotification(() => deps.publisher?.publishRunStatus(result.run))
+      const timers = questionTimeouts.get(deps.store) ?? new Map<string, ReturnType<typeof setTimeout>>()
+      questionTimeouts.set(deps.store, timers)
+      const previous = timers.get(result.run.id)
+      if (previous) clearTimeout(previous)
+      timers.delete(result.run.id)
+      if (result.run.status === 'waiting_input' && result.run.question?.status === 'pending') {
+        const question = result.run.question
+        const timer = setTimeout(() => { timers.delete(result.run.id); void expireQuestion(result.run.id, question.id).catch(() => undefined) },
+          Math.min(2_147_483_647, Math.max(0, Date.parse(question.expiresAt) - Date.parse(now()))))
+        timer.unref?.()
+        timers.set(result.run.id, timer)
+      }
     }
     for (const event of safeEvents ?? []) {
       runBestEffortNotification(() => deps.publisher?.publishEvent(event))
@@ -1784,6 +1811,129 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     return true
   }
 
+  async function persistPausedOutcome(expectedRun: CodingAgentRun, result: CodingExecutorQuestionResult | CodingExecutorWaitingPermissionResult): Promise<void> {
+    try {
+      let run = preserveCodingRunContext(result.codingRun, expectedRun)
+      if (result.kind === 'waiting_input') {
+        const authorityKey = deps.sessionAuthority ? (await sessionContext(expectedRun)).key : undefined
+        const question = { ...result.questionRequest, ...(authorityKey ? { authorityKey } : {}) }
+        if (question.codingRunId !== expectedRun.id || question.projectId !== expectedRun.projectId || question.managedWorkspaceId !== expectedRun.managedWorkspaceId) throw new Error('Question ownership mismatch')
+        run = { ...run, question, status: 'waiting_input' }
+      }
+      const events = (await mapObservableExecutorEvents(run.id, result.events)).map((event) =>
+        result.kind === 'waiting_permission' && event.kind === 'permission' ? { ...event, metadata: { ...event.metadata, codingExecutorTurn: result.turn } } : event)
+      const committed = await commitCodingAgentMutation({ expectedRun, expectedPendingPermissionRequestIds: [], run, events,
+        ...(result.kind === 'waiting_permission' ? { permissionRequests: [result.permissionRequest] } : {}) })
+      if (!committed.committed) throw new Error('Coding Agent continuation could not be persisted safely.')
+
+    } catch (error) {
+      const current = await findCodingRun(expectedRun.id)
+      try { await executor.cancel({ codingRun: current }) }
+      catch (cleanupError) {
+        if (activeCodingStatuses.has(current.status)) await recordContinuationCleanupFailure(current, now())
+        throw new CodingEngineContinuationCleanupError([error, cleanupError])
+      }
+      if (activeCodingStatuses.has(current.status) && !current.question?.stopRequestedAt) await failActiveCodingRun(current,
+        'Coding Agent continuation could not be persisted safely.', now(), { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' })
+      throw error
+    }
+  }
+
+  async function expireQuestion(codingRunId: string, requestId: string): Promise<void> {
+    const run = await findCodingRun(codingRunId)
+    if (run.status !== 'waiting_input' || run.question?.id !== requestId || run.question.status !== 'pending') return
+    if (Date.parse(run.question.expiresAt) > Date.parse(now())) return
+    try {
+      await executor.cancel({ codingRun: run })
+    } catch (error) {
+      const summary = '回答等待已超时，但会话清理未完成；请重试停止编码。'
+      const committed = await commitCodingAgentMutation({ expectedRun: run, expectedPendingPermissionRequestIds: [],
+        run: { ...run, question: { ...run.question, status: 'expired', settledAt: now() }, summary } })
+      if (committed.committed) await recordActiveCleanupFailure(committed.run, now(), summary)
+      throw error
+    }
+    await commitCodingAgentMutation({ expectedRun: run, expectedPendingPermissionRequestIds: [],
+      run: { ...run, status: 'timed_out', question: { ...run.question, status: 'expired', settledAt: now() }, completedAt: now(), summary: '回答等待已超时；编码已停止，工作区保留。' } })
+  }
+
+  async function replyCodingQuestion(input: ReplyCodingQuestionRuntimeInput): Promise<CodingQuestionReceipt> {
+    const run = await findCodingRun(input.codingRunId), request = run.question
+    const authority = deps.sessionAuthority ? await sessionContext(run) : { actorId: run.requestedBy, key: undefined }
+    if (input.answeredBy !== authority.actorId) throw new Error('Question requires the current project authority')
+    const replyDigest = createHash('sha256').update(JSON.stringify([input.answeredBy, input.reply])).digest('hex')
+    const previousReceipt = run.questionReceipts?.find((receipt) => receipt.id === input.requestId && receipt.revision === input.revision)
+    if (previousReceipt) {
+      if (previousReceipt.replyDigest !== replyDigest) throw new Error('This question already has a different reply')
+      return previousReceipt
+    }
+    if (!request || run.engine !== 'opencode-http' || request.id !== input.requestId || request.revision !== input.revision ||
+      request.codingRunId !== run.id || request.projectId !== run.projectId || request.managedWorkspaceId !== run.managedWorkspaceId || !executor.replyQuestion) throw new Error('Question is stale or belongs to another run')
+    if (request.authorityKey && request.authorityKey !== authority.key) throw new Error('Question requires the original project authority')
+    const reply = validateCodingQuestionReply(request.questions, input.reply)
+    if (['sending', 'answered', 'dismissed'].includes(request.status)) {
+      if (request.replyDigest !== replyDigest) throw new Error('This question already has a different reply')
+      return request
+    }
+    if (run.status !== 'waiting_input' || request.status !== 'pending' || request.stopRequestedAt) throw new Error('Question is no longer pending')
+    if (Date.parse(request.expiresAt) <= Date.parse(now())) { await expireQuestion(run.id, request.id); throw new Error('Question expired') }
+    const workflow = await findRun(run.runId)
+    validateCodingWorkflowContext(workflow, run)
+    if (run.workflowRunVersion !== undefined && workflow.version !== run.workflowRunVersion) throw new Error('Workflow changed while waiting for input')
+    await assertExecutionContext(run)
+    const workspace = await findWorkspace(request.managedWorkspaceId, run.projectId)
+    if (workspace.codingRunId !== run.id || workspace.deletedAt || workspace.cleanupStatus === 'deleted' || workspace.cleanupStatus === 'cleanup_failed') throw new Error('Question workspace is unavailable')
+    const project = await findProject(run.projectId)
+    const sending: CodingQuestionRequest = { ...request, status: 'sending', replyDigest, answeredBy: input.answeredBy }
+    let claimedRun: CodingAgentRun = { ...run, question: sending, status: 'applying', summary: '正在向 OpenCode 发送回答。' }
+    const claimed = await commitCodingAgentMutation({ expectedRun: run, expectedWorkflowRun: workflow, expectedPendingPermissionRequestIds: [], run: claimedRun })
+    if (!claimed.committed) {
+      const current = (await findCodingRun(run.id)).question
+      if (current?.id === request.id && current.replyDigest === replyDigest) return current
+      throw new Error('Question changed before the reply could be sent')
+    }
+    try {
+      const result = await executor.replyQuestion({ requestId: run.id, ...await loadExecutorContinuationState(run.id), runtimeContext: {
+        codingRun: claimedRun, request: sending, reply, workspace, project, now: now(), assertContextCurrent: () => assertExecutionContext(run),
+        onDelivered: async (status) => {
+          const receipt: CodingQuestionReceipt = { id: request.id, revision: request.revision, status, replyDigest, answeredBy: input.answeredBy, settledAt: now() }
+          const delivered: CodingAgentRun = { ...claimedRun, question: { ...sending, ...receipt },
+            questionReceipts: [...(claimedRun.questionReceipts ?? []), receipt].slice(-24), summary: '回答已送达，OpenCode 正在继续执行。' }
+          const committed = await commitCodingAgentMutation({ expectedRun: claimedRun, expectedPendingPermissionRequestIds: [], run: delivered })
+          if (!committed.committed) throw new Error('Question delivery receipt could not be persisted')
+          claimedRun = committed.run
+        },
+      } })
+      const current = await findCodingRun(run.id)
+      if (current.status !== 'applying' || current.question?.replyDigest !== replyDigest || current.question.stopRequestedAt) throw new Error('Question continuation was cancelled')
+      const receipt: CodingQuestionRequest = { ...sending, status: reply.kind === 'answer' ? 'answered' : 'dismissed', settledAt: now() }
+      const completed = { ...result, codingRun: preserveCodingRunContext({ ...result.codingRun,
+        ...(result.kind === 'waiting_input' ? {} : { question: receipt }) }, claimedRun) }
+      await saveEvents([{ id: idGenerator('coding-event'), codingRunId: run.id, runId: run.runId, nodeId: run.nodeId,
+        sequence: await nextSequence(run.id), kind: 'status', timestamp: now(), message: reply.kind === 'answer' ? '用户已回答问题；工具审批与最终验收仍独立执行。' : '用户跳过了问题。',
+        metadata: { questionId: request.id, revision: request.revision, replyDigest, answeredBy: input.answeredBy }, redacted: true }])
+      if (completed.kind !== 'engine_completed') await persistPausedOutcome(claimedRun, completed)
+      else if (!await settleCompletedExecutorResult({ expectedRun: claimedRun, completed, workspace, project, timestamp: now() })) throw new Error('Question completion lost its reservation')
+      return receipt
+    } catch (error) {
+      const current = await findCodingRun(run.id)
+      if (activeCodingStatuses.has(current.status) && current.question?.id === request.id && !current.question.stopRequestedAt) {
+        try { await executor.cancel({ codingRun: current }) }
+        catch (cleanupError) {
+          const status = error instanceof CodingQuestionError ? error.questionStatus : current.question.status === 'sending' ? 'delivery_unknown' : current.question.status
+          await commitCodingAgentMutation({ expectedRun: current, expectedPendingPermissionRequestIds: [], run: { ...current,
+            question: { ...current.question, status }, summary: '问题会话清理未完成；请重试停止编码。' } })
+          await recordActiveCleanupFailure(await findCodingRun(run.id), now(), '问题会话清理未完成；请重试停止编码。')
+          throw new CodingEngineContinuationCleanupError([error, cleanupError])
+        }
+        const status = error instanceof CodingQuestionError ? error.questionStatus : ['answered', 'dismissed'].includes(current.question.status) ? current.question.status : 'invalidated'
+        await commitCodingAgentMutation({ expectedRun: current, expectedPendingPermissionRequestIds: [], run: { ...current,
+          status: 'failed', completedAt: now(), question: { ...current.question, status, settledAt: now() },
+          summary: error instanceof CodingQuestionError ? error.message : '问题续接失败；编码已停止，工作区保留。' } })
+      }
+      throw error
+    }
+  }
+
   async function replyCodingPermission(
     input: ReplyCodingPermissionRuntimeInput,
     recoveryDecisionAt?: string,
@@ -2430,48 +2580,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         throw error
       }
-      if (completed.kind === 'waiting_permission') {
-        const continuationEvents = (await mapObservableExecutorEvents(
-          completed.codingRun.id,
-          completed.events,
-        )).map((event) =>
-          event.kind === 'permission'
-            ? {
-                ...event,
-                metadata: { ...event.metadata, codingExecutorTurn: completed.turn },
-              }
-            : event,
-        )
-        const continuationCommitted = await commitCodingAgentMutation({
-          expectedRun: continuationExpectedRun,
-          expectedPendingPermissionRequestIds: [],
-          run: completed.codingRun,
-          events: continuationEvents,
-          permissionRequests: [completed.permissionRequest],
-        })
-        if (!continuationCommitted.committed) {
-          const persistenceError = new Error(
-            'Coding Agent continuation could not be persisted safely.',
-          )
-          try {
-            await executor.cancel({ codingRun: completed.codingRun })
-          } catch (cleanupError) {
-            if (continuationCommitted.run && activeCodingStatuses.has(continuationCommitted.run.status)) {
-              await recordContinuationCleanupFailure(continuationCommitted.run, timestamp)
-            }
-            throw new CodingEngineContinuationCleanupError([persistenceError, cleanupError])
-          }
-          if (continuationCommitted.run && activeCodingStatuses.has(continuationCommitted.run.status)) {
-            const cleanup = await cleanupWorkspaceForRun(continuationCommitted.run, timestamp)
-            await failActiveCodingRun(
-              continuationCommitted.run,
-              'Coding Agent continuation could not be persisted safely.',
-              timestamp,
-              cleanup,
-            )
-          }
-          throw persistenceError
-        }
+      if (completed.kind !== 'engine_completed') {
+        await persistPausedOutcome(continuationExpectedRun, completed)
         return updatedRequest
       }
       await settleCompletedExecutorResult({
@@ -2744,6 +2854,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         if (!isOpenCodeRun && !isNativeRun) continue
 
         if (
+          codingRun.status === 'waiting_input' ||
           codingRun.status === 'preparing' ||
           codingRun.status === 'running' ||
           codingRun.status === 'bootstrapping' ||
@@ -3719,6 +3830,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           state: await deps.store.loadState(),
         }
       }
+      if (bundle.kind === 'waiting_input') {
+        await persistPausedOutcome(executorReadyRun, bundle)
+        return { codingRun: await findCodingRun(codingRunId), state: await deps.store.loadState() }
+      }
       let startupRun: CodingAgentRun
       let bundleCommitted: CodingAgentMutationResult
       try {
@@ -3880,6 +3995,17 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       if (!activeCodingStatuses.has(expectedRun.status)) {
         return expectedRun
       }
+      // Claim cancellation before any network await, so a late answer/ack cannot
+      // resurrect the run or turn a user cancellation into a continuation failure.
+      for (let claimAttempt = 0; expectedRun.question && !expectedRun.question.stopRequestedAt && claimAttempt < 8; claimAttempt += 1) {
+        if (!activeCodingStatuses.has(expectedRun.status)) return expectedRun
+        const claimed = await commitCodingAgentMutation({ expectedRun,
+          expectedPendingPermissionRequestIds: (await deps.store.listCodingPermissionRequests(expectedRun.id)).filter((request) => request.status === 'pending').map((request) => request.id),
+          run: { ...expectedRun, question: { ...expectedRun.question, stopRequestedAt: now() }, summary: '正在停止编码会话。' } })
+        if (!claimed.run) throw new Error('Coding Agent run disappeared during cancellation')
+        expectedRun = claimed.run
+      }
+      if (expectedRun.question && !expectedRun.question.stopRequestedAt) throw new Error('Coding Agent cancellation could not claim concurrent state changes')
       const initialPendingRequests = await deps.store.listCodingPermissionRequests(expectedRun.id)
       const waitingForBootstrap = initialPendingRequests.some(
         (request) => request.status === 'pending' && request.origin === 'dependency_bootstrap',
@@ -3947,7 +4073,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
               resolveBootstrapPermission(request.id, 'rejected')
             }
           }
-          const cleanup = await cleanupWorkspaceForRun(updated, timestamp)
+          const cleanup = updated.question ? { status: 'not_required' as const, reasonCode: 'workspace_retained_for_recovery' } : await cleanupWorkspaceForRun(updated, timestamp)
           await saveEvents([
             await buildCodingExecutorTerminalEvent({
               codingRun: updated,
@@ -3966,6 +4092,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       throw new Error('Coding Agent cancellation could not settle concurrent state changes')
     },
 
+    replyCodingQuestion,
     replyCodingPermission,
     sessionPermissions: listSessionPermissions,
 
