@@ -36,7 +36,7 @@ describe('Desktop pilot launch smoke contract', () => {
     expect(smoke).toContain('insufficient_evidence:missing_clarification_artifact')
     expect(smoke).toContain('completeWorkflowAgentNode')
     expect(smoke).toContain('requestClarificationChanges')
-    expect(smoke).toContain('schemaVersion !== 38')
+    expect(smoke).toContain('schemaVersion !== 39')
     expect(smoke).toMatch(
       /startAgentRuntime\(\{\s*runId: run\.id,\s*nodeId: run\.currentNodeId,\s*localProjectId: project\.id,\s*\}\)/,
     )

@@ -1,7 +1,7 @@
 import type { Database } from 'sql.js'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 38
+export const CURRENT_SCHEMA_VERSION = 39
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2780,6 +2780,23 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       check (actor_id = user_id),
       check (length(trim(dismissed_at)) > 0 and length(dismissed_at) <= 64)
     );
+      `)
+    },
+  },
+  {
+    version: 39,
+    migrate(db) {
+      db.run(`
+        create table if not exists native_coding_sessions (
+          id text primary key,
+          local_project_id text not null references local_projects(id) on delete cascade,
+          coding_run_id text not null unique,
+          version integer not null check (version > 0),
+          status text not null,
+          updated_at text not null,
+          json text not null
+        );
+        create index if not exists native_coding_sessions_project on native_coding_sessions(local_project_id, updated_at);
       `)
     },
   },

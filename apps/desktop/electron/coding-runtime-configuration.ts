@@ -179,12 +179,13 @@ export async function evaluateCodingRuntimeReadiness(input: {
   const commandSafety = project?.testCommand.trim()
     ? validateTestCommandSafety(project.testCommand)
     : null
-  const testReady = Boolean(commandSafety && commandSafety.level !== 'blocked')
+  const manualPlanAvailable = input.executor?.descriptor.kind === 'native' && input.executor.descriptor.version === 3
+  const testReady = Boolean(commandSafety && commandSafety.level !== 'blocked') || (manualPlanAvailable && !project?.testCommand.trim())
   check(
     checks,
     'test_command_missing',
     testReady,
-    testReady ? '项目已保存安全测试命令。' : '请先为本地项目保存可识别的安全测试命令。',
+    testReady ? commandSafety ? '项目已保存安全测试命令。' : '本任务必须在开工前明确人工验收计划；不会记录自动测试通过。' : '请先为本地项目保存可识别的安全测试命令。',
   )
 
   const configured = input.selection.executor !== 'unconfigured' && input.executor !== null

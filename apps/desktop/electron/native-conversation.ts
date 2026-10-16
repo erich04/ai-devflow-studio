@@ -52,15 +52,8 @@ function reviewFindings(context: CriticalContext, result: NativeConversationResp
   })
 }
 
-/** Actual wire payload measurement, including tools, complete messages and required reasoning. */
-export function nativeRequestBudget(provider: ConversationExecutor, request: NativeConversationRequest) {
-  const policy = provider.resolveRequestPolicy?.(request)
-  const serialized = provider.serializeNativeRequest?.(request) ?? JSON.stringify({ messages: [{ role: 'system', content: request.systemPrompt }, ...request.messages], tools: request.tools })
-  return measurePromptSections([{ id: 'native-request', kind: 'current', content: serialized, required: true }], {
-    provider: provider.id, model: provider.model, maxBytes: policy?.maxInputBytes ?? 4 * 1024 * 1024, maxChars: policy?.maxInputBytes ?? 4 * 1024 * 1024,
-    maxTokens: Math.max(1, (policy?.contextTokens ?? 128000) - (policy?.maxOutputTokens ?? 8192) - 8000),
-  })
-}
+export { nativeRequestBudget } from './native-request-budget'
+import { nativeRequestBudget } from './native-request-budget'
 
 /** Separate state machine: natural text, native read pairs, durable candidates, independent review. */
 export async function runNativeConversation(host: Host): Promise<void> {

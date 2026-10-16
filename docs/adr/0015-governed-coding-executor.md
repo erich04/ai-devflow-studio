@@ -4,6 +4,8 @@
 
 状态：已接受（Accepted）。
 
+Native 新建 v3 会话的多轮执行与恢复定义由 [ADR 0029](0029-native-coding-harness-v3.md) 替代；本 ADR 的旧版记录解释、工作流与权限权威继续适用。
+
 日期：2026-08-12
 
 <a id="context"></a>

@@ -1,3 +1,9 @@
+import { NATIVE_CODING_EXECUTOR_UNAVAILABLE } from '@ai-devflow/shared'
+import { createNativeCodingExecutorV3, shutdownNativeCodingHarnesses } from './native-coding-harness.js'
+import { codingHarnessSnapshot } from './native-coding-projection.js'
+import { cleanupNativeCodingSession } from './native-coding-retention.js'
+import { loadNativeCodingProfile } from './native-coding-profile.js'
+import { parseCodingHarnessCommand } from '@ai-devflow/shared'
 import { createNativeRepositoryReviewProvider } from './knowledge-review-native.js'
 import {legacyChatBudget} from './legacy-chat-budget'
 import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
@@ -506,6 +512,14 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
           decisionProvider: createDeterministicNativeCodingDecisionProvider(),
           runSavedTest: runLocalTestCommand,
         })
+      }
+      if (selection.source === 'project' && selection.configuration.executor === 'native-model' && selection.configuration.nativeVersion === 3) {
+        const profile = await loadNativeCodingProfile(path.join(app.getPath('userData'), 'native-coding-profile.json'))
+        return createNativeCodingExecutorV3({ store, provider: await resolveAgentProvider(store, selection.providerId, projectId),
+          root: path.join(app.getPath('userData'), 'native-coding-harness'), configVersion: selection.configVersion,
+          ...(profile.container ? { containerProfile: profile.container } : {}), ...(profile.network ? { network: profile.network } : {}),
+          changed: codingRunId => broadcastToRenderers(ipcChannels.codingHarnessUpdated, codingRunId),
+          costRecords: localProjectId => nativeCodingCostRecords(store, localProjectId) })
       }
       return createNativeCodingExecutorV2({
         store,
@@ -1502,6 +1516,7 @@ async function createCodingRuntimeForRequest(
   ])
   return createCodingRuntime({
     store,
+    ...(projectId ? { projectId } : {}),
     executor,
     sessionAuthority: async (localProjectId) => {
       const pairing = await store.getDesktopPairingCredential()
@@ -1823,6 +1838,22 @@ async function desktopModelCostRecovery(store: LocalStore) {
   const remote = await getRemoteSyncClient()
   if (canonicalFinancialValue(scope) !== canonicalFinancialValue(await modelCallAccountingScope(store))) throw new Error('团队绑定已更新，请重试。')
   return { scope, remote, recovery: createDesktopModelCostRecovery({ store, scope, remote, getScope: () => modelCallAccountingScope(store) }) }
+}
+// UI projections share a short-lived, scope-bound read. This cache never admits a model call.
+const nativeCodingLedgers = new WeakMap<LocalStore, Map<string, { expires: number; pending: Promise<import('@ai-devflow/shared').ModelCostRecord[]> }>>()
+async function nativeCodingCostRecords(store: LocalStore, projectId: string) {
+  const scope = await modelCallAccountingScope(store)
+  if (scope.localProjectId !== projectId) throw new Error('Project accounting scope changed')
+  const key = canonicalFinancialValue(scope)
+  let cache = nativeCodingLedgers.get(store)
+  if (!cache) { cache = new Map(); nativeCodingLedgers.set(store, cache) }
+  const previous = cache.get(key)
+  if (previous && previous.expires > Date.now()) return previous.pending
+  const pending = desktopModelCostRecovery(store).then(({ recovery }) => recovery.load(projectId)).then(result => result.overview.records)
+  const entry = { expires: Date.now() + 5000, pending }
+  cache.set(key, entry)
+  void pending.catch(() => { if (cache.get(key) === entry) cache.delete(key) })
+  return pending
 }
 let budgetPromptPublication = 0
 const budgetContinuationPrompts = createBudgetContinuationPrompts(cards => {
@@ -3699,7 +3730,7 @@ function registerIpcHandlers() {
       }
       const configuration = await store.saveCodingRuntimeConfiguration(
         input.executor === 'native-model'
-          ? { ...commonConfiguration, executor: 'native-model' }
+          ? { ...commonConfiguration, executor: 'native-model', ...(input.nativeVersion ? { nativeVersion: input.nativeVersion } : {}) }
           : {
               ...commonConfiguration,
               executor: 'opencode-http',
@@ -3893,6 +3924,26 @@ function registerIpcHandlers() {
     )
     const runtime = await createCodingRuntimeForRequest(undefined, codingRun?.projectId)
     return runtime.cancelCodingAgentRun(input)
+  })
+
+  ipcMain.handle(ipcChannels.codingHarness, async (_, payload: unknown) => {
+    const command = parseCodingHarnessCommand(payload)
+    const store = await getStore()
+    const session = await store.getNativeCodingSession(`native-${command.codingRunId}`)
+    const codingRun = (await store.listCodingAgentRuns()).find(run => run.id === (session?.parent?.codingRunId ?? command.codingRunId))
+    if (!codingRun?.harness) throw new Error('Native v3 run not found')
+    if (command.type === 'cleanup_scratch' && session) {
+      const updated = await cleanupNativeCodingSession(store, command, async projectId => (await (await desktopModelCostRecovery(store)).recovery.load(projectId)).overview.records)
+      return codingHarnessSnapshot(updated, { store, costRecords: projectId => nativeCodingCostRecords(store, projectId) })
+    }
+    if (command.type === 'get' && session) {
+      const profile = await loadNativeCodingProfile(path.join(app.getPath('userData'), 'native-coding-profile.json'))
+      const selection = await resolveCodingRuntimeSelection({ store, projectId: codingRun.projectId })
+      const available = selection.source === 'project' && selection.configuration.executor === 'native-model' && selection.configuration.nativeVersion === 3
+      return codingHarnessSnapshot(session, { store, ...(profile.container ? { containerProfile: profile.container } : {}), ...(!available ? { runtimeUnavailableReason: NATIVE_CODING_EXECUTOR_UNAVAILABLE } : {}), costRecords: projectId => nativeCodingCostRecords(store, projectId) }, command)
+    }
+    const runtime = await createCodingRuntimeForRequest(undefined, codingRun.projectId)
+    return runtime.codingHarnessCommand(command)
   })
 
   ipcMain.handle(ipcChannels.replyCodingPermission, async (_, payload: unknown) => {
@@ -4158,6 +4209,7 @@ app.on('before-quit', (event) => {
   githubDeliveryScheduler?.stop()
   githubDeliveryOperationAbortController?.abort()
   quitCleanupPromise ??= Promise.all([
+    getStore().then(store => shutdownNativeCodingHarnesses(store)),
     reviewOperations.drain(),
     stageAgentOperations.drain(),
     ...[...codingBudgetProxies].map((proxy)=>proxy.close()),

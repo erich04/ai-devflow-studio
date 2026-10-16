@@ -1260,6 +1260,8 @@ export type TestEvidence = {
    * the result still applies (hardening H3, X6). Never synced; delivery keeps using sourceCommitSha.
    */
   sourceTree?: { digest: string; workspaceId?: string }
+  /** Local provenance for Native v3. The test process ran in a private copy, not the delivery tree. */
+  codingVerification?: { schemaVersion: 1; executionLocation: 'private_verification'; revisionDigest: string; productDigest: string; testPlanDigest: string; verificationBefore: string; verificationAfter: string; deliveryAfter: string; environmentDigest: string }
   createdAt: string
 }
 
@@ -1282,6 +1284,7 @@ type CodingRuntimeConfigurationBase = {
 export type CodingRuntimeConfiguration =
   | (CodingRuntimeConfigurationBase & {
       executor: 'native-model'
+      nativeVersion?: 2 | 3
     })
   | (CodingRuntimeConfigurationBase & {
       executor: 'opencode-http'
@@ -1408,6 +1411,7 @@ export type CodingAgentRunStatus =
   | 'cancelled'
 
 export type CodingAgentRun = {
+  harness?: import('./coding-harness').CodingHarnessSummary
   id: string
   runId: string
   nodeId: string

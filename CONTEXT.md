@@ -420,6 +420,12 @@ Run、节点、产物、测试证据或 Gate 决策与知识文档之间的关�
 
 对限定范围的仓库读取/修改、获批命令/测试、权限事件、取消和结构化代码差异/测试证据实施治理的边界。OpenCode 是首个外部执行器；V2.0 在相同契约后增加了一个能力范围较窄、由 DevFlow 管理的 Coding Agent。执行器不拥有工作流、Gate 或交付权限。
 
+Native v3 在同一权威边界后增加持续多轮 Harness：调查、编辑、测试、问答与隔离子任务可以交替进行。模型请求冻结候选修订，宿主生成真实 ChangeSet；人工批准和独立验证仍由 DevFlow 控制。新旧运行按显式版本解释，见 [ADR 0029](docs/adr/0029-native-coding-harness-v3.md)。
+
+### Native 候选与验证身份
+
+B 是不可变输入清单与内容，C 是模型可编辑的独立候选仓库，D 是连接工作流交付的受管工作树，V 是按冻结修订创建的独立验证仓库。C/V 不共享原仓库 Git 元数据；目录隔离本身不代表 OS 沙箱。最终证据绑定精确修订、测试计划、验证前后内容和 D 内容。
+
 <a id="coding-executor-capability"></a>
 
 ## 编码执行器能力（Coding Executor Capability）

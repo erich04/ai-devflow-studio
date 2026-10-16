@@ -354,6 +354,7 @@ corepack pnpm verify
 | `corepack pnpm test:e2e` | 使用隔离演示服务验证浏览器工作台与 Web 交互。 |
 | `corepack pnpm test:electron-smoke` | 真实 Electron 主进程/preload、本地 SQLite 与流程操作。 |
 | `corepack pnpm test:native-coding-electron-smoke` | 通过受控本地模型服务验证 Native Coding 批准、工作树修改、测试与证据。 |
+| `node scripts/native-coding-electron-smoke.mjs --harness-v3` | 多轮 Native v3 的真实 Electron 问答、修订审批、独立验证与工作流；本地模拟模型。另加 `--manual-acceptance` 检查无自动测试的人工验收。实现与发布验收分开，见 [Native v3 指南](docs/guides/native-coding-harness-v3.md)。 |
 | `corepack pnpm test:workbench-conversation-electron-smoke` | 真实 Electron 中验证对话、逐步骤恢复、预算继续、原生工具、候选人工确认保存与重启历史；模型端点为本地模拟。 |
 | `corepack pnpm test:native-conversation-live` | 显式选择既有授权凭证，在隔离 Electron 中验证官方 flash 的原生协议和提案；会真实计费，配置与证据见 [#231 验证记录](docs/validation/issue-231-native-conversation-20261010.md)。 |
 | `corepack pnpm test:stage-agent-design-electron` | 真实 OpenCode 与 Electron 生成及修订方案、取消、重试和重启；模型端点为本地模拟。 |

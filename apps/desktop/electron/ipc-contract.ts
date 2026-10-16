@@ -204,6 +204,8 @@ export const ipcChannels = {
   modelBudgetContinuationUpdated: 'devflow:model-budget:continuation-updated',
   modelBudgetUpdated: 'devflow:model-budget:updated',
   workbenchConversation: 'devflow:workbench-conversation',
+  codingHarness: 'devflow:coding-harness',
+  codingHarnessUpdated: 'devflow:coding-harness:updated',
   workbenchConversationUpdated: 'devflow:workbench-conversation:updated',
   loadState: 'devflow:local-state:load',
   loadDataProfileDiagnostics: 'devflow:data-profile:diagnostics:load',
@@ -531,6 +533,7 @@ export type SaveCodingRuntimeConfigurationInput =
   | {
       projectId: string
       executor: 'native-model'
+      nativeVersion?: 2 | 3
       providerId: string
     }
   | {
@@ -657,6 +660,8 @@ export type PairDesktopResult = {
 }
 
 export type DevFlowDesktopApi = {
+  codingHarness?: (command: import('@ai-devflow/shared').CodingHarnessCommand) => Promise<import('@ai-devflow/shared').CodingHarnessSnapshot>
+  onCodingHarnessUpdated?: (listener: (codingRunId: string) => void) => () => void
   getModelCostRecovery: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   retryModelCostSettlements: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
@@ -1888,14 +1893,15 @@ export function parseSaveCodingRuntimeConfigurationInput(
   rejectUnexpectedFields(
     value,
     executor === 'native-model'
-      ? ['projectId', 'executor', 'providerId']
+      ? ['projectId', 'executor', 'providerId', 'nativeVersion']
       : ['projectId', 'executor', 'providerId', 'binaryPath', 'modelId', 'detectedVersion'],
     'Coding Runtime configuration payload',
   )
   const projectId = readRequiredString(value, 'projectId')
   const providerId = readRequiredString(value, 'providerId')
+  if (executor === 'native-model' && value['nativeVersion'] !== undefined && value['nativeVersion'] !== 2 && value['nativeVersion'] !== 3) throw new Error('Invalid Native executor version')
   return executor === 'native-model'
-    ? { projectId, executor, providerId }
+    ? { projectId, executor, providerId, ...(value['nativeVersion'] ? { nativeVersion: value['nativeVersion'] as 2 | 3 } : {}) }
     : {
         projectId,
         executor,

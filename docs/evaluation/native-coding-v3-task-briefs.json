@@ -1,0 +1,218 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-10-11",
+  "status": "Prepared before any model trial; freeze this digest with the model/environment/budget before execution.",
+  "fixtureManifest": "native-coding-v3-tasks.json",
+  "tasks": [
+    {
+      "taskId": "devflow-history-01",
+      "category": "concurrency",
+      "qualifiedFixture": false,
+      "prompt": "多个会话和存储实例同时保存相同的长文本时，读者偶尔看到不完整内容或保存失败。请保证内容发布原子化：并发写入相同内容后，所有引用都能完整读取同一份文本；不能替换读者正在使用的内容，也不能破坏已有引用。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-02",
+      "category": "recovery",
+      "qualifiedFixture": true,
+      "prompt": "会话步骤正在恢复时遇到批次时间边界，可能留下半完成的恢复。请先完成当前步骤有界的收尾和状态保存，再暂停新步骤；不得因为恢复而重复发送模型请求或重放已有工具效果。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-03",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "补齐知识审查与交付验收流程。PR 知识审查只能审阅当前已存在的交付包，不应准备、批准或推进交付；验收阶段先收集验收包，再执行必需审查。只有完整注入上下文的规范可以记为依据。界面应准确展示审查入口、进行中和可取消状态；关联文件检查须限定当前项目和当前材料。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-04",
+      "category": "recovery",
+      "qualifiedFixture": true,
+      "prompt": "持久会话中有损坏的派生压缩收据时，保留原始消息和损坏记录用于诊断，能够建立可用的新上下文边界，且不阻止合法状态保存。拒绝重复工具事件。模型或工具重试仍须遵守上下文和费用预算，不得借恢复重新发送不确定的请求。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-05",
+      "category": "local_fix",
+      "qualifiedFixture": true,
+      "prompt": "用户删除一条 Agent Memory 后，它的来源候选仍可能在面板中显示原语句。请让删除生效到来源候选的展示与可操作状态，同时保留必要审计事实；不能通过隐藏所有正常候选来绕过问题。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-06",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "知识审查返回格式错误、输出截断或其他不可接受内容时，目前错误原因不够明确。请区分失败原因，在界面提供明确的人工重试入口，不推进 Gate。模型没有提供用量时保持未知，不能把格式解析失败记成零费用。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-07",
+      "category": "filesystem",
+      "qualifiedFixture": true,
+      "prompt": "只读 OpenCode 会话每次新建独立运行配置时反复下载 ripgrep 等工具。请让工具二进制缓存可以复用，销毁某个会话配置时不删除共享缓存；配置和权限仍然隔离。没有缓存目录或无法准备共享缓存时，正常会话仍应能创建，不得建立指向不存在目录的共享链接。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-08",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "OpenCode 经本地转发访问模型时，应按项目保存的真实 Provider/模型绑定计价，而不是按回环转发地址计价。汇总多轮用量时保留缓存命中拆分；拆分不完整则费用保持未确认。TLS 握手前已确认连接失败属于未发送，握手后断连仍可能产生费用，不能擅自退还。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-09",
+      "category": "concurrency",
+      "qualifiedFixture": true,
+      "prompt": "忽略一个 Memory 候选必须使忽略之前取得的晋升授权失效。团队候选只允许当前配对身份操作。如果忽略已持久化但响应丢失，重新读取应呈现已忽略状态，不得重复提交或恢复成旧状态。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-10",
+      "category": "recovery",
+      "qualifiedFixture": true,
+      "prompt": "Supervisor 协调步骤重试时，应核对最初持久化的 Context 附件及其来源身份，而不是按当前状态重新生成一个不同上下文。无法证明原上下文仍有效时应明确失败，不能用重建结果冒充相同请求。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-11",
+      "category": "local_fix",
+      "qualifiedFixture": true,
+      "prompt": "Native 分析阶段开启思考时，思考和最终回答共用输出额度，原来 2048 的额度容易耗尽。有效配置明确开启思考时，分析输出上限使用 4096；关闭或模型默认仍为 2048。实际发送额度、预算预留和费用记录应一致，改码阶段行为保持兼容。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-12",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "Memory 策略晋升范围过宽。只允许把项目已保存的测试命令提升为对应策略记忆，并在存储边界校验精确授权；记忆期限为 30 天，相同测试命令跨不同任务标题应去重，重试复用已保存结果。本地与团队 Memory 必须按当前用户和配对身份隔离。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-13",
+      "category": "accounting",
+      "qualifiedFixture": true,
+      "prompt": "Native 编码的模型用量上传到团队端后可能重复计算。请在每次成功或已计费失败的结算记录中保留受管模型调用身份，使同一调用只记账一次；不能丢弃失败响应费用，也不能合并不同真实调用。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-14",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "修复上下文选材的边界问题：只读文件片段即使从私钥块中间切入也不能泄露密钥，行号应保留；读取须遵守真实工作树、链接与内部目录边界。讨论上下文超限时优先保住最新真实工具结果，不能被后来追加的恢复指令挤掉。Memory 相关度不能把泛化词或普通路径片段误判为同一主题。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-15",
+      "category": "accounting",
+      "qualifiedFixture": true,
+      "prompt": "桌面端配对团队前已产生的阶段用量，在配对后上传时应归属于本次捕获配对凭据的用户。上传过程中即使界面身份变化，也不能把旧调用上传到另一个用户或继续使用临时本地身份。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-16",
+      "category": "ui",
+      "qualifiedFixture": false,
+      "prompt": "清理桌面工作区面向用户的残留英文文案，使主要导航、空状态、按钮和提示与已有中文界面一致；保留代码标识、产品名和用户输入原文，不改变交互行为或降低可访问性。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-17",
+      "category": "local_fix",
+      "qualifiedFixture": true,
+      "prompt": "测试证据规范不应在所有阶段都被当成同一套 Gate 通过标准。请按被审阶段选取规范，并优先提供该阶段的 Gate 条件；测试证据规范只在适用的测试阶段作为必需审查依据。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-18",
+      "category": "ui",
+      "qualifiedFixture": false,
+      "prompt": "工作区改造后，顶栏项目菜单及部分界面交互出现回归。项目菜单应能用 Escape 或点击外部关闭；在保持真实用户可见行为和键盘访问的前提下修正相关端到端定位，不能只放宽断言或移除用例。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-19",
+      "category": "ui",
+      "qualifiedFixture": true,
+      "prompt": "已完成业务验收的运行应在所有检查器标签中保持只读：显示真实已批准状态，不再提供会改变验收结果的操作；保留必要的只读交付验证和证据查看能力。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-20",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "审查意见中的引用必须绑定被审材料的精确版本。跨区块、失效或非法位置的引用仍应出现在报告中并说明不可定位，不能猜一个行号挂成有效的行内意见；材料更新后旧引用不得被当作当前版本证据。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-21",
+      "category": "recovery",
+      "qualifiedFixture": true,
+      "prompt": "Gate 批准遇到磁盘保存失败或 IPC 响应丢失时，界面和持久状态可能不一致。真正保存失败应回滚状态、明确提示并允许用户显式重试；保存成功但回复失败时应重新读取已存结果，不重复批准。不要自动重试有副作用的动作。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-22",
+      "category": "concurrency",
+      "qualifiedFixture": true,
+      "prompt": "交付完成后的绑定观察仍需发现后续待办使用的授权被撤回，同时避免无意义的网络和整库刷新。先结算已完成的远程交付，再处理待办授权撤回；完全空闲且未绑定的项目不得访问凭据、网络或全量状态，不变的绑定也不重复发布。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-23",
+      "category": "ui",
+      "qualifiedFixture": true,
+      "prompt": "把会话详情放进标签页对话框。查看非活动标签详情不能切走活动聊天、重建其组件或改变草稿、滚动和请求。支持键盘菜单；重命名失败要可见且能显式重试，关闭对话框不等于保存。进行中请求的取消和重试能力应保留。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-24",
+      "category": "accounting",
+      "qualifiedFixture": true,
+      "prompt": "模型回复失败时已经发生的费用必须先结算，再做下一次预算决定。即使内容不是有效 JSON，也要保留已知 token 和未知价格。每个失败响应只结算一次，恢复遗漏费用不得调用模型或推进工作流；用量上传被拒绝时不能继续越过预算检查。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-25",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "会话需要回答某次运行是否实际发布了 PR。只公开当前项目、当前 Run 已验证的发布事实：URL、编号、Draft 状态和所绑定提交。不能暴露内部交付元数据，也不能把意向、未完成动作或其他运行的 PR 说成已发布。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-26",
+      "category": "local_fix",
+      "qualifiedFixture": true,
+      "prompt": "Native 有界改码协议的限制未明确告诉模型，导致被拒绝输出难定位。请求中应说明实际执行的文件数与替换范围限制；被拒绝时保存精确的结构或上限失败分类，不把拒绝的原始模型内容暴露到界面。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-27",
+      "category": "context",
+      "qualifiedFixture": true,
+      "prompt": "编码上下文超限时，已批准需求和设计正文不能被裁成只剩摘要。优先保持当前批准材料完整，把已被替代材料和参考历史降为可追溯引用；若指定批准版本缺失，应明确拒绝，不能偷偷选另一个版本。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-28",
+      "category": "context",
+      "qualifiedFixture": true,
+      "prompt": "把已保存的会话决策纳入阶段生成提示。只使用当前 Run 和节点的提案，脱敏并保留其仍待批准的授权状态，不能把提案伪装成已批准事实。提案超出输入上限时在调用模型前拒绝，不截断关键决策继续执行。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-29",
+      "category": "cross_module",
+      "qualifiedFixture": true,
+      "prompt": "证据评估工具需要在实际打包桌面的本地 MCP 运行时工作，并能在应用重启后与持久化的 MCP 安装一起重新打开。必须通过真实工具安装和调用路径执行，不能只在开发环境注册一个模拟工具。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-30",
+      "category": "concurrency",
+      "qualifiedFixture": true,
+      "prompt": "OpenCode 等待工具权限批准期间，相关 Memory 可能被撤回或改变。批准后、真正向 OpenCode 转发权限之前再次核对 Memory 来源和授权；失效时拒绝继续，不能只依赖请求权限时的旧校验。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-31",
+      "category": "local_fix",
+      "qualifiedFixture": true,
+      "prompt": "知识审查输出未提供 policyFindings 或给出空数组时，不能合成一条不存在的政策问题。审查报告、Gate 策略、整改计划和远端摘要均应保持没有问题；如果确有低严重度问题，则应按真实内容保留。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-32",
+      "category": "concurrency",
+      "qualifiedFixture": true,
+      "prompt": "Web 配对面板初始 effect 尚未全部执行时，用户已经发起的配对请求可能被随后到达的初始化动作清掉。请保留该次真实签发及其结果，避免重复签发，同时正确处理项目切换和过期响应。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-33",
+      "category": "filesystem",
+      "qualifiedFixture": false,
+      "prompt": "交付路径集合的一致性校验不应依赖数据库排序规则。请以确定性的路径集合语义比较批准与实际文件，识别缺失、多余、重复或不合法路径；不得因为大小写或数据库 collation 差异错误放行。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-34",
+      "category": "ui",
+      "qualifiedFixture": true,
+      "prompt": "OpenCode 配置应默认使用用户保存的 Provider 凭据和模型。没有可用保存项时不能假装已有配置。已有自定义 Provider/模型应保留到用户明确更改；高级手工输入仍可使用，切换保存项后实际提交必须对应所选项。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    },
+    {
+      "taskId": "devflow-history-35",
+      "category": "concurrency",
+      "qualifiedFixture": true,
+      "prompt": "OpenCode 的模型消息已经结束不代表受管会话已经停止写文件。只有确认会话 idle 后才采集最终 diff；消息传输失败也要先核对会话状态。超过执行期限仍忙时明确失败并停止，不能把提前采到的差异作为完成结果。\n请实现上述行为并说明实际检查结果。保留兼容行为，不移除或削弱既有测试、权限、证据与费用校验。"
+    }
+  ]
+}

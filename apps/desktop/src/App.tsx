@@ -5,6 +5,7 @@ import { SettingsView } from './views/SettingsView'
 import { ModelSettings } from './views/ModelSettings'
 import { LocalProjectSettings } from './views/LocalProjectSettings'
 import { AgentEvidenceGroups, CodingRunRecords } from './views/CodingRunRecords'
+import { NativeCodingHarnessPanel } from './views/NativeCodingHarnessPanel'
 import { StageAgentFailureRecords } from './views/StageAgentFailureRecords'
 import { AgentRuntimePanel } from './AgentRuntimePanel'
 import { AgentCoordinationPanel } from './AgentCoordinationPanel'
@@ -1614,6 +1615,7 @@ export function App() {
                       {...(codingActionProjection ? { codingActionProjection } : {})}
                     />
                   ) : undefined}
+                  codingHarness={showsCodingRecords && latestCodingRun?.harness && desktopApi?.codingHarness ? <NativeCodingHarnessPanel codingRunId={latestCodingRun.id} api={desktopApi} /> : undefined}
                   executionEvidence={<>
                     <StageAgentFailureRecords traces={agentTraces} runId={selectedRun.id} {...(selectedNode ? { nodeId: selectedNode.id } : {})} onViewCosts={() => openSettingsFromTask('models')} />
                     <AgentEvidenceGroups groups={executionEvidenceGroups} />
