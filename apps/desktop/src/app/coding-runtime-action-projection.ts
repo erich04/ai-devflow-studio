@@ -452,14 +452,14 @@ export function buildCodingRuntimeActionProjection(
         id: 'view-progress',
         target: 'agents-progress',
         label:
-          activeRun.status === 'waiting_permission'
+          activeRun.status === 'waiting_input' ? '回答编码问题' : activeRun.status === 'waiting_permission'
             ? '查看权限状态'
             : activeRun.status === 'applying'
               ? '查看应用进度'
               : activeRun.status === 'testing'
                 ? '查看测试进度'
                 : '查看运行进度',
-        summary: activeRun.status === 'waiting_permission'
+        summary: activeRun.status === 'waiting_input' ? '请在编码问题卡片中补充需求，回答后会继续执行。' : activeRun.status === 'waiting_permission'
           ? 'Runtime 正在等待权限，但没有可审批的当前请求；请刷新状态。'
           : `Coding Run 正在 ${activeRun.status}，不能重复启动。`,
         disabled: false,

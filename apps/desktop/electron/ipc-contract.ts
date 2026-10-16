@@ -1,3 +1,4 @@
+import type { CodingQuestionReceipt, CodingQuestionReply } from '@ai-devflow/shared'
 import type { WorkbenchConversationApi } from './workbench-conversation-contract.js'
 import type { CredentialAccessRecord } from './credential-access.js'
 import {
@@ -284,6 +285,7 @@ export const ipcChannels = {
   runCodingAgent: 'devflow:coding:agent:run',
   startRetryAttempt: 'devflow:remediation:retry:start',
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
+  replyCodingQuestion: 'devflow:coding:question:reply',
   replyCodingPermission: 'devflow:coding:permission:reply',
   renewCodingPermission: 'devflow:coding:permission:renew',
   codingSessionPermissions: 'devflow:coding:permission:session',
@@ -602,6 +604,10 @@ export type CancelCodingAgentRunInput = {
   codingRunId: string
 }
 
+export type ReplyCodingQuestionInput = {
+  codingRunId: string; requestId: string; revision: string; reply: CodingQuestionReply
+}
+
 export type ReplyCodingPermissionInput = {
   requestId: string
   codingRunId: string
@@ -804,6 +810,7 @@ export type DevFlowDesktopApi = {
   runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
   startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: CancelCodingAgentRunInput) => Promise<CodingAgentRun>
+  replyCodingQuestion: (input: ReplyCodingQuestionInput) => Promise<CodingQuestionReceipt>
   replyCodingPermission: (input: ReplyCodingPermissionInput) => Promise<CodingPermissionRequest>
   codingSessionPermissions: (input: { codingRunId: string; revokeId?: string }) => Promise<import('@ai-devflow/shared').CodingSessionGrant[]>
   renewCodingPermission: (input: RenewCodingPermissionInput) => Promise<CodingPermissionRequest>
@@ -2061,6 +2068,28 @@ export function parseCancelCodingAgentRunInput(value: unknown): CancelCodingAgen
   }
 
   return { codingRunId: readRequiredString(value, 'codingRunId') }
+}
+
+export function parseReplyCodingQuestionInput(value: unknown): ReplyCodingQuestionInput {
+  if (!isRecord(value)) throw new Error('Invalid coding question reply')
+  rejectUnexpectedFields(value, ['codingRunId', 'requestId', 'revision', 'reply'], 'coding question reply')
+  const revision = readRequiredString(value, 'revision')
+  if (!/^[a-f0-9]{64}$/u.test(revision) || !isRecord(value.reply)) throw new Error('Invalid coding question identity')
+  const reply = value.reply
+  let parsed: CodingQuestionReply
+  if (reply.kind === 'dismiss') {
+    rejectUnexpectedFields(reply, ['kind'], 'coding question reply')
+    parsed = { kind: 'dismiss' }
+  } else {
+    rejectUnexpectedFields(reply, ['kind', 'answers'], 'coding question reply')
+    if (reply.kind !== 'answer' || !Array.isArray(reply.answers) || !reply.answers.length || reply.answers.length > 8 || JSON.stringify(reply.answers).length > 32_000) throw new Error('Invalid coding question answers')
+    const answers = reply.answers.map((answer: unknown) => {
+      if (!Array.isArray(answer) || !answer.length || answer.length > 17 || answer.some((label) => typeof label !== 'string' || !label.trim() || label.length > 4000 || label.includes('\0'))) throw new Error('Invalid coding question answer')
+      return answer as string[]
+    })
+    parsed = { kind: 'answer', answers }
+  }
+  return { codingRunId: readRequiredString(value, 'codingRunId'), requestId: readRequiredString(value, 'requestId'), revision, reply: parsed }
 }
 
 export function parseReplyCodingPermissionInput(value: unknown): ReplyCodingPermissionInput {

@@ -77,7 +77,7 @@ async function fixture(rounds: Array<number | 'denied' | 'cancelled'>, options: 
     projectId: 'project', projectPath: repo, binaryPath: 'controlled-opencode', providerId: binding.providerId,
     modelId: binding.modelId, detectedVersion: 'fixture', runtimeEnv: {}, billingBinding: binding,
     processManager: {
-      ensure: async ({ projectId }) => ({ projectId, baseUrl: `http://127.0.0.1:${address.port}`, child: {} as never }),
+      ensure: async ({ projectId }) => ({ projectId, baseUrl: `http://127.0.0.1:${address.port}`, child: { exitCode: null, killed: false } as never }),
       stopProject: async () => { if (options.stopFails) throw new Error('PRIVATE_STOP /private/project') },
     },
   })

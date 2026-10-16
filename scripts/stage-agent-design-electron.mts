@@ -25,7 +25,7 @@ async function freePort(): Promise<number> {
  * In-memory demo Team API. Since #168 every stage model call is admitted against the paired
  * Team Project's policy snapshot and budget, so the design step needs a real Team boundary.
  */
-async function startIsolatedTeamApi(workspace: string, root: string) {
+export async function startIsolatedTeamApi(workspace: string, root: string) {
   const port = await freePort()
   const url = `http://127.0.0.1:${port}`
   let log = ''

@@ -1,5 +1,7 @@
 import {
   redactSecrets,
+  validateCodingQuestionReply,
+  type CodingQuestionRequest,
   sanitizeCodingDiffArtifact,
   type CodingAgentEvent,
   type CodingAgentRun,
@@ -8,6 +10,8 @@ import {
 import { realpathSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { isAbsolute, relative, resolve } from 'node:path'
+import { CodingQuestionError } from './coding-question-error.js'
+import type { CodingEngineQuestionResult } from './coding-engine.js'
 import type { CodingEngineAdapter, CodingEngineStartInput, CodingPermissionPolicyReporter } from './coding-engine.js'
 import {
   CodingEngineContinuationCleanupError,
@@ -23,6 +27,10 @@ import {
   listOpencodeDiff,
   listOpencodeMessages,
   listOpencodePermissions,
+  listOpencodeQuestions,
+  replyOpencodeQuestion,
+  OpencodeHttpRequestError,
+  type OpencodeQuestion,
   replyOpencodePermission,
   sendOpencodeMessage,
   OpencodeMessageResponseError,
@@ -44,6 +52,7 @@ import {
 export type OpencodeHttpProcessManager = {
   ensure(input: {
     projectId: string
+    profile?: 'coding'
     binaryPath: string
     env: NodeJS.ProcessEnv
     configurationFingerprint?: string
@@ -60,6 +69,8 @@ export type OpencodeHttpCodingEngineConfig = {
   runtimeEnv?: NodeJS.ProcessEnv
   configurationFingerprint?: string
   requireExecutionAuthorization?: boolean
+  enableQuestions?: boolean
+  questionTimeoutMs?: number
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
   maxToolTurns?: number
@@ -79,6 +90,8 @@ type OpencodeMessagePromise = Promise<
 type OpencodeRuntimeSession = {
   assertContextCurrent?: (() => Promise<void>) | undefined
   baseUrl: string
+  child: ManagedOpencodeServer['child']
+  pendingQuestion?: { request: CodingQuestionRequest; sourceDigest: string; workspaceDigest: string; replying?: boolean }
   cleanupPromise?: Promise<void>
   directory: string
   deadlineAtMs: number
@@ -116,7 +129,8 @@ export function createOpencodeHttpCodingEngineAdapter(
       modelID: config.modelID,
       apiKeyEnvName: config.apiKeyEnvName ?? '',
       requireExecutionAuthorization: config.requireExecutionAuthorization ?? false,
-      permissionRules: config.permissionRules ?? createDefaultOpencodePermissionRules(),
+      enableQuestions: config.enableQuestions === true,
+      permissionRules: config.permissionRules ?? createDefaultOpencodePermissionRules({ question: config.enableQuestions === true }),
       maxToolTurns,
       maxWallClockMs,
     }))
@@ -217,6 +231,7 @@ export function createOpencodeHttpCodingEngineAdapter(
 
   async function nextManagedOutcome(session: OpencodeRuntimeSession, codingRun: CodingAgentRun) {
     while (true) {
+      if (session.cleanupPromise) await failForSessionCleanup(session.cleanupPromise)
       if (session.assertContextCurrent) await session.assertContextCurrent()
       const outcome = await waitForNextPermissionOrMessage({
         baseUrl: session.baseUrl, directory: session.directory,
@@ -224,6 +239,7 @@ export function createOpencodeHttpCodingEngineAdapter(
         messagePromise: session.messagePromise,
         observeToolTurns: (signal) => refreshObservedToolTurns(session, signal),
         pollMs: config.permissionPollMs ?? 1_000, sessionId: session.sessionId,
+        discoverQuestions: config.enableQuestions === true,
         timeoutMs: permissionWaitTimeout(session), maxWaitMs: remainingSessionMs(session), requireIdle: true,
         ...fetcherOption(config.fetcher),
       })
@@ -260,21 +276,64 @@ export function createOpencodeHttpCodingEngineAdapter(
     }
   }
 
+  async function questionResult(session: OpencodeRuntimeSession, run: CodingAgentRun, source: OpencodeQuestion): Promise<CodingEngineQuestionResult> {
+    if (session.cleanupPromise || !run.managedWorkspaceId || source.sessionID !== session.sessionId) throw new CodingQuestionError('invalidated', '问题已失效。')
+    if (source.tool) session.observedToolCallKeys.add(`${source.tool.messageID}:${source.tool.callID}`)
+    assertToolTurnLimit(session)
+    const requestedAt = new Date(nowMs()).toISOString()
+    const digest = createHash('sha256').update(JSON.stringify(source)).digest('hex')
+    const request: CodingQuestionRequest = {
+      version: 1, id: source.id, revision: digest, codingRunId: run.id, projectId: run.projectId,
+      managedWorkspaceId: run.managedWorkspaceId, sessionId: session.sessionId, status: 'pending',
+      questions: source.questions.map((question) => ({ ...question, header: redactSecrets(question.header).value, question: redactSecrets(question.question).value,
+        options: question.options.map((option) => ({ label: redactSecrets(option.label).value, description: redactSecrets(option.description).value })) })),
+      requestedAt, expiresAt: new Date(nowMs() + positiveInteger(config.questionTimeoutMs, 30 * 60_000)).toISOString(),
+    }
+    if (source.questions.some((question, index) => question.options.some((option, optionIndex) => option.label !== request.questions[index]!.options[optionIndex]!.label))) {
+      throw new Error('OpenCode question contains sensitive option labels and cannot be answered safely')
+    }
+    session.pendingQuestion = { request, sourceDigest: digest, workspaceDigest: await workspaceDigest(session) }
+    session.awaitingApprovalSinceMs = nowMs()
+    return { codingRun: { ...run, status: 'waiting_input', question: request, summary: 'OpenCode 等待你补充需求。回答不会批准工具或最终变更。' },
+      questionRequest: request, events: [{ id: `coding-question-${run.id}-${request.id}`, codingRunId: run.id, runId: run.runId, nodeId: run.nodeId,
+        sequence: session.nextEventSequence++, kind: 'status', message: 'OpenCode 等待用户回答问题。', timestamp: requestedAt,
+        metadata: { questionId: request.id, revision: request.revision }, redacted: true }] }
+  }
+
   function cleanupRegisteredSession(
     codingRunId: string,
     session: OpencodeRuntimeSession,
     phase: 'startup' | 'continuation' | 'cancellation',
   ): Promise<void> {
+    if (session.child.exitCode !== null) {
+      // The manager owns process-tree teardown. A dead server cannot accept a reply;
+      // retain the worktree and never contact a replacement process at the same URL.
+      sessions.delete(codingRunId)
+      return Promise.resolve()
+    }
     if (!session.cleanupPromise) {
-      const cleanupPromise = cleanupOpencodeSession({
-        baseUrl: session.baseUrl,
-        sessionId: session.sessionId,
-        directory: session.directory,
-        messagePromise: session.messagePromise,
-        phase,
-        cleanupTimeoutMs: config.startupCleanupTimeoutMs ?? 5_000,
-        ...fetcherOption(config.fetcher),
-      }).then(
+      const cleanupPromise = (async () => {
+        if (session.pendingQuestion) {
+          const signal = AbortSignal.timeout(config.startupCleanupTimeoutMs ?? 5_000)
+          await abortOpencodeSession({ baseUrl: session.baseUrl, directory: session.directory, sessionId: session.sessionId, ...fetcherOption(config.fetcher), signal })
+          try {
+            await replyOpencodeQuestion({ baseUrl: session.baseUrl, directory: session.directory, requestId: session.pendingQuestion.request.id,
+              reply: { kind: 'dismiss' }, ...fetcherOption(config.fetcher), signal })
+          } catch (error) {
+            if (!(error instanceof OpencodeHttpRequestError && error.statusCode === 404)) throw error
+          }
+          delete session.pendingQuestion
+        }
+        return cleanupOpencodeSession({
+          baseUrl: session.baseUrl,
+          sessionId: session.sessionId,
+          directory: session.directory,
+          messagePromise: session.messagePromise,
+          phase,
+          cleanupTimeoutMs: config.startupCleanupTimeoutMs ?? 5_000,
+          ...fetcherOption(config.fetcher),
+        })
+      })().then(
         () => {
           if (sessions.get(codingRunId) === session) {
             sessions.delete(codingRunId)
@@ -413,6 +472,7 @@ export function createOpencodeHttpCodingEngineAdapter(
       if (!config.requireExecutionAuthorization) {
         await processManager.ensure({
           projectId: input.project.id,
+          ...(config.enableQuestions ? { profile: 'coding' as const } : {}),
           binaryPath: config.binaryPath,
           env: config.runtimeEnv ?? process.env,
           configurationFingerprint: processConfigurationFingerprint,
@@ -458,6 +518,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           : undefined
         const server = await processManager.ensure({
           projectId: input.project.id,
+          ...(config.enableQuestions ? { profile: 'coding' as const } : {}),
           binaryPath: config.binaryPath,
           env: config.runtimeEnv ?? process.env,
           configurationFingerprint: processConfigurationFingerprint,
@@ -472,12 +533,13 @@ export function createOpencodeHttpCodingEngineAdapter(
           directory,
           title: `DevFlow ${input.run.title}`,
           model: { providerID: config.providerID, id: config.modelID },
-          ...(config.permissionRules ? { permissionRules: config.permissionRules } : {}),
+          permissionRules: config.permissionRules ?? createDefaultOpencodePermissionRules({ question: config.enableQuestions === true }),
           ...fetcherOption(config.fetcher),
         })
         runtimeSession = {
           assertContextCurrent: input.assertContextCurrent,
           baseUrl: server.baseUrl,
+          child: server.child,
           deadlineAtMs: nowMs() + maxWallClockMs,
           directory,
           ...(gitBoundary ? { gitBoundary } : {}),
@@ -505,7 +567,7 @@ export function createOpencodeHttpCodingEngineAdapter(
             session,
             directory,
             resolveManagedDirectory,
-            config.permissionRules ?? createDefaultOpencodePermissionRules(),
+            config.permissionRules ?? createDefaultOpencodePermissionRules({ question: config.enableQuestions === true }),
           )
           if (input.assertContextCurrent) await input.assertContextCurrent()
           const messagePromise = sendOpencodeMessage({
@@ -523,6 +585,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           const firstOutcome = config.requireExecutionAuthorization
             ? await nextManagedOutcome(runtimeSession, createRunningOpencodeRun(input, prompt))
             : undefined
+          if (firstOutcome?.kind === 'question') return await questionResult(runtimeSession, createRunningOpencodeRun(input, prompt), firstOutcome.question)
           if (firstOutcome?.kind === 'message') {
             return await finishSession({
               session: runtimeSession,
@@ -668,6 +731,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           timeoutMs: permissionWaitTimeout(session),
           ...fetcherOption(config.fetcher),
         })
+        if (continuation.kind === 'question') return await questionResult(session, input.codingRun, continuation.question)
         if (continuation.kind === 'permission') {
           registerPermissionToolTurn(session, continuation.permission)
           await rememberApproval(session, continuation.permission)
@@ -705,6 +769,64 @@ export function createOpencodeHttpCodingEngineAdapter(
         try {
           await cleanupRegisteredSession(input.codingRun.id, session, 'continuation')
         } catch (cleanupError) {
+          throw new CodingEngineContinuationCleanupError([error, cleanupError])
+        }
+        throw error
+      }
+    },
+
+    async replyQuestion(input) {
+      const session = sessions.get(input.codingRun.id)
+      const pending = session?.pendingQuestion
+      if (!session || !pending || session.cleanupPromise || pending.replying || session.child.exitCode !== null || session.child.killed ||
+        input.codingRun.engine !== 'opencode-http' || input.request.id !== pending.request.id || input.request.revision !== pending.request.revision ||
+        input.request.codingRunId !== input.codingRun.id || input.request.projectId !== input.project.id || input.codingRun.projectId !== input.project.id ||
+        input.workspace.id !== pending.request.managedWorkspaceId || input.codingRun.managedWorkspaceId !== input.workspace.id ||
+        (config.resolveManagedDirectory ?? resolveManagedOpencodeDirectory)(input.workspace.worktreePath) !== session.directory ||
+        nowMs() >= Date.parse(pending.request.expiresAt)) throw new CodingQuestionError('invalidated', '原问题或 OpenCode 会话已失效，不能发送回答。')
+      const reply = validateCodingQuestionReply(pending.request.questions, input.reply)
+      pending.replying = true
+      try {
+        if (input.assertContextCurrent) await input.assertContextCurrent()
+        if (session.gitBoundary) await assertOpenCodeGitBoundary({ sourcePath: session.projectPath, worktreePath: session.directory, snapshot: session.gitBoundary })
+        const current = (await listOpencodeQuestions({ baseUrl: session.baseUrl, directory: session.directory, ...fetcherOption(config.fetcher), signal: AbortSignal.timeout(5_000) }))
+          .find((question) => question.id === pending.request.id && question.sessionID === session.sessionId)
+        if (!current || createHash('sha256').update(JSON.stringify(current)).digest('hex') !== pending.sourceDigest ||
+          await workspaceDigest(session) !== pending.workspaceDigest || session.cleanupPromise) throw new CodingQuestionError('invalidated', '问题或工作区已变化，请重新开始编码。')
+        if (input.assertContextCurrent) await input.assertContextCurrent()
+        if (session.cleanupPromise) throw new CodingQuestionError('invalidated', 'OpenCode 会话正在停止。')
+        try {
+          const acknowledged = await replyOpencodeQuestion({ baseUrl: session.baseUrl, directory: session.directory, requestId: pending.request.id,
+            reply, ...fetcherOption(config.fetcher), signal: AbortSignal.timeout(5_000) })
+          if (acknowledged !== true) throw new Error('Reply was not acknowledged')
+        } catch (error) {
+          if (error instanceof OpencodeHttpRequestError && error.statusCode === 404) throw new CodingQuestionError('invalidated', 'OpenCode 已没有这个问题。')
+          // Read-only reconciliation cannot prove this response was accepted. Do not resend
+          // or label it answered; stop the owned session and retain the unknown receipt.
+          await listOpencodeQuestions({ baseUrl: session.baseUrl, directory: session.directory, ...fetcherOption(config.fetcher), signal: AbortSignal.timeout(5_000) }).catch(() => undefined)
+          throw new CodingQuestionError('delivery_unknown', '无法确认回答是否送达；已停止继续执行，请查看记录后重新开始。')
+        }
+        await input.onDelivered?.(reply.kind === 'answer' ? 'answered' : 'dismissed')
+        delete session.pendingQuestion
+        resumeApprovalClock(session)
+        const question: CodingQuestionRequest = { ...input.request, status: reply.kind === 'answer' ? 'answered' : 'dismissed', settledAt: input.now }
+        const codingRun: CodingAgentRun = { ...input.codingRun, question, status: 'running' }
+        const outcome = await nextManagedOutcome(session, codingRun)
+        if (outcome.kind === 'question') return await questionResult(session, codingRun, outcome.question)
+        if (outcome.kind === 'permission') {
+          registerPermissionToolTurn(session, outcome.permission)
+          await rememberApproval(session, outcome.permission)
+          session.handledPermissionIds.add(outcome.permission.id)
+          const request = toCodingPermissionRequest(codingRun, outcome.permission, new Date(nowMs()).toISOString(), session.directory, session.projectPath)
+          return { codingRun: { ...codingRun, status: 'waiting_permission', summary: 'OpenCode 等待工具审批。' }, permissionRequest: request,
+            events: [{ id: `coding-event-${codingRun.id}-${request.id}`, codingRunId: codingRun.id, runId: codingRun.runId, nodeId: codingRun.nodeId,
+              sequence: session.nextEventSequence++, kind: 'permission', message: 'OpenCode 请求工具审批。', timestamp: request.requestedAt, metadata: { requestId: request.id }, redacted: true }] }
+        }
+        return await finishSession({ session, codingRun, projectId: input.project.id, now: new Date(nowMs()).toISOString(), messageResult: outcome.result })
+      } catch (error) {
+        try { await cleanupRegisteredSession(input.codingRun.id, session, 'continuation') }
+        catch (cleanupError) {
+          if (error instanceof CodingQuestionError) throw new CodingQuestionError(error.questionStatus, error.message, { cause: cleanupError })
           throw new CodingEngineContinuationCleanupError([error, cleanupError])
         }
         throw error
@@ -1069,9 +1191,11 @@ async function waitForNextPermissionOrMessage(input: {
   timeoutMs: number
   maxWaitMs?: number
   requireIdle?: boolean
+  discoverQuestions?: boolean
 }): Promise<
   | { kind: 'message'; result: Awaited<OpencodeRuntimeSession['messagePromise']> }
   | { kind: 'permission'; permission: OpencodePermission }
+  | { kind: 'question'; question: OpencodeQuestion }
 > {
   const startedAt = Date.now()
   const absoluteExpiresAt = startedAt + (input.maxWaitMs ?? input.timeoutMs)
@@ -1103,6 +1227,14 @@ async function waitForNextPermissionOrMessage(input: {
         operation: input.observeToolTurns,
       })
       return { kind: 'permission', permission: firstPermission }
+    }
+
+    if (input.discoverQuestions) {
+      const questions = await runBeforePermissionDeadline({ expiresAt,
+        operation: (signal) => listOpencodeQuestions({ baseUrl: input.baseUrl, directory: input.directory, ...fetcherOption(input.fetcher), signal }) })
+      const own = questions.filter((question) => question.sessionID === input.sessionId)
+      if (own.length > 1) throw new Error('Concurrent questions are unsupported for a parent session')
+      if (own[0]) return { kind: 'question', question: own[0] }
     }
 
     const status = await runBeforePermissionDeadline({
