@@ -1,7 +1,7 @@
 import type { AgentProvider, AgentProviderUsage, LocalProject } from '@ai-devflow/shared'
 import type { WorkbenchConversation } from './workbench-conversation-contract.js'
 
-export type ConversationExecutor = Pick<AgentProvider, 'id' | 'model' | 'completeStructuredJson' | 'effectiveThinking' | 'resolveRequestPolicy' | 'supportsNativeTools'> & {
+export type ConversationExecutor = Pick<AgentProvider, 'id' | 'model' | 'completeStructuredJson' | 'completeNativeConversation' | 'serializeNativeRequest' | 'effectiveThinking' | 'resolveRequestPolicy' | 'supportsNativeTools'> & {
   supportsReasoning?: boolean
   close?(): Promise<void>
 }

@@ -57,6 +57,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   const reader = useRef<HTMLElement>(null)
   const [sessions, setSessions] = useState<WorkbenchConversation[]>([])
   const [active, setActive] = useState('details')
+  const [nativeConversationsEnabled, setNativeConversationsEnabled] = useState(false)
   const [nativeReadOnlyPilotEnabled, setNativeReadOnlyPilotEnabled] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [error, setError] = useState('')
@@ -99,6 +100,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     const result = await api.workbenchConversation(command)
     if (requestedGeneration !== generation.current || command.projectId !== visibleProject.current) return undefined
     if (result.error) throw new Error(result.error)
+    if (result.nativeConversationsEnabled !== undefined) setNativeConversationsEnabled(result.nativeConversationsEnabled)
     if (result.nativeReadOnlyPilotEnabled !== undefined) setNativeReadOnlyPilotEnabled(result.nativeReadOnlyPilotEnabled)
     if (command.type === 'list' && !['details', 'new-pending'].includes(activeRef.current) && !result.conversations.some((item) => item.id === activeRef.current && item.isOpen)) setActive('details')
     if (splitDetails && activeRef.current === 'details') {
@@ -275,7 +277,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     </div>
     {tabMenu && menuSession && <ConversationTabMenu key={menuSession.id} target={tabMenu} onClose={closeMenu} onDetails={() => { setDetailsTarget(tabMenu); setTabMenu(null) }} />}
     {detailsTarget && detailsSession && <ConversationDetailsDialog key={detailsSession.id} session={detailsSession} projectName={projectName ?? '当前项目'} providerName={providerName} statusLabel={statusCopy[detailsSession.status]} returnFocus={detailsTarget.trigger} onClose={() => setDetailsTarget(null)} onRename={(title) => runCommand({ type: 'update', projectId: detailsSession.localProjectId, conversationId: detailsSession.id, title })} />}
-    {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog nativeReadOnlyPilotEnabled={nativeReadOnlyPilotEnabled} prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError(''); pendingReference.current = null } }} onCreate={(executor) => void create(executor)} />}
+    {creationRequest && creationRequest.projectId === projectId && <NewConversationDialog nativeReadOnlyPilotEnabled={nativeReadOnlyPilotEnabled && !nativeConversationsEnabled} prompt={creationRequest.prompt} providerName={providerName} creating={creating} error={error} onClose={() => { if (!creatingRef.current) { setCreationRequest(null); setError(''); pendingReference.current = null } }} onCreate={(executor) => void create(executor)} />}
     {error && !creationRequest && <div className="conversation-error" role="alert">{error}<button aria-label="关闭会话提示" onClick={() => setError('')}><X size={14} /></button></div>}
     {showHistory && <section className="conversation-history" aria-label="会话历史记录">
       <div className="row"><strong>会话历史</strong><button className="workspace-icon" onClick={() => setShowHistory(false)} aria-label="关闭会话历史"><X size={16} /></button></div>
@@ -356,7 +358,7 @@ function ConversationView({ session, runs, providerId, providerName, command, on
         <div className="conversation-avatar"><MessageCircle /></div><h3>从一个问题开始</h3><p>讨论整个项目，也可以深入任意节点。每个 Tab 保留自己的聊天历史。</p>
         {['现在进行到哪里了，下一步做什么？', '结合项目代码，帮我澄清这次需求。', '哪些测试或审批还没有完成？'].map((suggestion) => <button key={suggestion} onClick={() => { updateInput(suggestion); textarea.current?.focus() }}>{suggestion}<ArrowUp size={14} /></button>)}
       </div>}
-      {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} readContent={async (field, offset) => (await command({ type: 'read_content', ...scope, messageId: message.id, field, offset }))?.contentPage} onPublish={() => void command({ type: 'publish', ...scope, messageId: message.id })} />)}
+      {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} readContent={async (field, offset) => (await command({ type: 'read_content', ...scope, messageId: message.id, field, offset }))?.contentPage} onRetryReview={() => void command({ type: 'retry_review', ...scope, messageId: message.id, providerId })} onPublish={(acknowledgeUnverified) => void command({ type: 'publish', ...scope, messageId: message.id, ...(acknowledgeUnverified ? { acknowledgeUnverified: true } : {}) })} />)}
       {busy && <p className="conversation-activity" role="status"><span className="conversation-running-dot" />正在调用 {providerName || 'Provider'} 调查；可以停止。</p>}
       {modelReadinessError && <div className="conversation-error" role="status">{modelReadinessError}<button className="text-button" onClick={onConfigure}>打开项目模型设置</button></div>}
       {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted', 'paused'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending || Boolean(modelReadinessError)} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />{session.status === 'paused' ? '继续当前步骤' : '重试这一步'}</button>}</div>}
@@ -409,11 +411,16 @@ function ReasoningView({ message, readContent }: { message: ConversationMessage;
   </section>
 }
 
-function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish, readContent }: {
-  message: ConversationMessage; readContent: ContentReader; busy: boolean; targetLabel: string; onAnswer: (answer: string) => void; onNavigate: (action: ConversationAction) => void; onPublish: () => void
+function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish, onRetryReview, readContent }: {
+  message: ConversationMessage; readContent: ContentReader; busy: boolean; targetLabel: string; onAnswer: (answer: string) => void; onNavigate: (action: ConversationAction) => void; onPublish: (acknowledgeUnverified?: boolean) => void; onRetryReview: () => void
 }) {
   // Saving a proposal first shows where it goes and what is saved (plan W8).
   const [confirmingPublish, setConfirmingPublish] = useState(false)
+  const [acknowledgeUnverified, setAcknowledgeUnverified] = useState(false)
+  const review = message.draft?.review
+  const needsAcknowledgement = Boolean(review && review.status !== 'passed')
+  const stale = review?.status === 'stale'
+  const reviewCopy = { pending: 'AI 核对待开始', running: 'AI 正在核对', passed: 'AI 核对通过', needs_revision: 'AI 发现待处理问题', unavailable: 'AI 核对未完成', stale: '来源已更新' }
   if (message.reasoning) return <>{message.failure && <p className="meta">{message.text}</p>}<ReasoningView message={message} readContent={readContent} /></>
   if (message.role === 'tool') return <details className="conversation-tool"><summary>{message.text}</summary>{message.citations?.map((source) => <pre key={source.id}>{source.excerpt}</pre>)}</details>
   return <article className={`conversation-message conversation-message--${message.role}`}>
@@ -425,20 +432,25 @@ function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavig
     </div>}
     {!!message.actions?.length && <div className="conversation-actions">{message.actions.map((action, index) => <button className="ghost-button" key={`${action.runId}-${action.nodeId}-${index}`} onClick={() => onNavigate(action)}>{action.label} ↗</button>)}</div>}
     {message.draft && <div className="conversation-proposal"><span className="pill soft">{message.draft.publishedArtifactId ? '已保存 · 待确认' : '仅本会话草稿'}</span><strong>{message.draft.title}</strong><pre>{message.draft.content}</pre>{message.contentLengths?.draft && <ContentPages field="draft" readContent={readContent} />}<p className="meta">目标：{targetLabel}。保存后其他会话可以查询；仍需在节点形成正式产物。</p>
-      {message.draft.inputReceipt && <details><summary>正文与验收覆盖 · {message.draft.inputReceipt.coverage.length} 项</summary><p className="meta">关键正文已完整送达本次模型调用。以下是模型给出的对应关系，请核对含义是否准确。</p>{message.draft.inputReceipt.coverage.map((row) => <div key={row.criterionId}><blockquote>{row.sourceQuote}</blockquote><p>提案对应：{row.proposalQuote}</p></div>)}</details>}
+      {review && <div className="conversation-proposal-review" role="status"><strong>{reviewCopy[review.status]}</strong>{review.error && <p>{review.error}</p>}
+        {review.findings?.filter(item => item.status !== 'covered').map(item => <p key={item.criterionId}>{item.reason}</p>)}
+        {!message.draft.publishedArtifactId && !stale && review.status !== 'passed' && <><p>可以重新核对，或阅读提案后明确确认，保存为尚未通过 AI 核对的待评审提案。</p><button className="ghost-button" type="button" disabled={busy} onClick={onRetryReview}>重新核对提案</button><small>重新核对会调用模型，可能产生费用。</small></>}
+      </div>}
+      {message.draft.inputReceipt && message.draft.inputReceipt.coverage.length > 0 && <details><summary>正文与验收覆盖 · {message.draft.inputReceipt.coverage.length} 项</summary><p className="meta">关键正文已完整送达本次模型调用。以下是模型给出的对应关系，请核对含义是否准确。</p>{message.draft.inputReceipt.coverage.map((row) => <div key={row.criterionId}><blockquote>{row.sourceQuote}</blockquote><p>提案对应：{row.proposalQuote}</p></div>)}</details>}
       {message.draft.publishedArtifactId ? (
         <p className="meta" role="status" data-testid="proposal-saved-note">提案已保存，尚未更新正式需求；流程不会推进。它在目标步骤的「材料与版本」中标为「讨论提案（待确认）」。</p>
       ) : confirmingPublish ? (
         <div className="conversation-publish-preview" role="group" aria-label="保存提案前确认" data-testid="proposal-publish-preview">
           <p>将保存到：<strong>{targetLabel}</strong></p>
           <p>保存内容：上方「{message.draft.title}」全文，作为「讨论提案（待确认）」。保存后其他会话可以查询；不会更新正式需求，也不会推进流程。</p>
+          {needsAcknowledgement && <label><input type="checkbox" checked={acknowledgeUnverified} onChange={event => setAcknowledgeUnverified(event.target.checked)} />我已阅读提案和核对状态，确认按尚未通过 AI 核对的待评审提案保存。</label>}
           <div className="inspector-actions">
-            <button className="primary-button" type="button" disabled={busy} onClick={() => { setConfirmingPublish(false); onPublish() }}>确认保存提案</button>
+            <button className="primary-button" type="button" disabled={busy || stale || (needsAcknowledgement && !acknowledgeUnverified)} onClick={() => { setConfirmingPublish(false); onPublish(needsAcknowledgement && acknowledgeUnverified) }}>确认保存提案</button>
             <button className="text-button" type="button" onClick={() => setConfirmingPublish(false)}>取消</button>
           </div>
         </div>
       ) : (
-        <button className="ghost-button" type="button" onClick={() => setConfirmingPublish(true)}>保存为节点提案</button>
+        <button className="ghost-button" type="button" disabled={busy || stale} onClick={() => setConfirmingPublish(true)}>保存为节点提案</button>
       )}
     </div>}
     {!!message.citations?.length && <details className="conversation-sources"><summary>查询依据 · {message.citations.length}</summary>{message.citations.map((citation) => <div key={citation.id}><strong>{citation.label}</strong><small>读取于 {new Date(citation.observedAt).toLocaleString()}</small><pre>{citation.excerpt}</pre></div>)}</details>}

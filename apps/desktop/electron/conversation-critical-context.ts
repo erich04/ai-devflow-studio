@@ -41,6 +41,19 @@ export function buildCriticalContext(run: WorkflowRun, nodeId: string, artifacts
   return { projectId: run.projectId, runId: run.id, nodeId, documents, criteria }
 }
 
+/** Native revision input also includes the actual formal material, not its index/summary. */
+export function buildNativeCriticalContext(run: WorkflowRun, nodeId: string, artifacts: Artifact[]): CriticalContext {
+  const context = buildCriticalContext(run, nodeId, artifacts)
+  const formal = artifacts.filter(a => a.runId === run.id && a.nodeId === nodeId && (a.kind === 'design' || a.kind === 'clarification'))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id))[0]
+  if (formal) {
+    context.documents.push({ id: formal.id, updatedAt: formal.updatedAt, digest: digest(formal.content), content: redactSensitiveText(formal.content).value })
+    context.criteria.push({ id: `${formal.id}:preserve`, documentId: formal.id, text: '除用户本轮明确要求的变更外，保留当前正式材料中的技术方案、测试要求和非目标；不得擅自删改。' })
+  }
+  // The full design is review context. Its paragraphs are not extra user requirements.
+  return context
+}
+
 export function criticalContextSent(prompt: string, expected: CriticalContext): boolean {
   try {
     const actual = JSON.parse(prompt).criticalProposalInput

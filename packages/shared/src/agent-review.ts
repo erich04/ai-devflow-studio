@@ -1,3 +1,4 @@
+import { nativeCallEnvelope, validateNativeHistory } from './native-conversation-protocol'
 import { expandedOutputAllowance } from './provider-request-policy'
 import { modelExecutionRollout } from './model-execution-rollout'
 import { validateNativeToolBatch, type NativeToolCall, type NativeToolMessage, type ReadOnlyFunctionDefinition } from './native-readonly-tools'
@@ -308,6 +309,17 @@ function providerErrorMessage(code: AgentProviderErrorCode, httpStatus: number |
     : `Agent provider request failed (${code}, HTTP ${httpStatus}).`
 }
 
+export type NativeConversationRequest = Omit<Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0], 'nativeTools' | 'userPrompt'> & {
+  messages: NativeToolMessage[]
+  tools: ReadOnlyFunctionDefinition[]
+}
+export type NativeConversationResponse = {
+  assistantMessage: Extract<NativeToolMessage, { role: 'assistant' }>
+  usage?: AgentProviderUsage
+  responseMetadata?: AgentProviderResponseMetadata
+  reasoningContent?: string
+} & ({ kind: 'text'; text: string } | { kind: 'tools'; toolCalls: NativeToolCall[] })
+
 export type AgentProvider = {
   id: string
   name: string
@@ -326,6 +338,10 @@ export type AgentProvider = {
   executorKind?: StageAgentExecutorKind
   reviewKnowledge: (input: KnowledgeReviewProviderInput) => Promise<KnowledgeReviewProviderOutput>
   generateWorkflowArtifact?: (input: WorkflowArtifactProviderInput) => Promise<WorkflowArtifactProviderOutput>
+  /** Same JSON body used for preflight measurement and transport; excludes credentials. */
+  serializeNativeRequest?: (input: NativeConversationRequest) => string
+  validateNativeRequest?: (input: NativeConversationRequest) => void
+  completeNativeConversation?: (input: NativeConversationRequest) => Promise<NativeConversationResponse>
   supportsNativeTools?: boolean
   validateStructuredRequest?: (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => void
   completeStructuredJson?: (input: {
@@ -2108,6 +2124,200 @@ export function createOpenAiCompatibleAgentProvider({
   const deepSeek = isDeepSeekUsageContext({ providerId: id, baseUrl })
   const effectiveThinking = resolveProviderThinking({ baseUrl, model, thinking: thinkingConfiguration })
   const thinkingFields = providerThinkingRequestFields(effectiveThinking)
+  function serializeChatRequest(input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0], native: boolean): string {
+    const policy = provider.resolveRequestPolicy!(input)
+    return JSON.stringify({
+      model,
+      temperature: input.purpose ? 0.2 : 0,
+      max_tokens: policy.maxOutputTokens,
+      ...(deepSeek ? {
+        ...(policy.stream ? { stream: true, stream_options: { include_usage: true } } : {}),
+        ...(!input.nativeTools ? { response_format: { type: 'json_object' } } : {}),
+      } : {}),
+      ...thinkingFields,
+      messages: [{ role: 'system', content: input.systemPrompt }, ...(input.nativeTools?.messages ?? []), ...(!native ? [{ role: 'user', content: input.userPrompt }] : [])],
+      ...(input.nativeTools ? { tools: input.nativeTools.definitions, tool_choice: 'auto' } : {}),
+    })
+  }
+  async function completeChat(input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0], native: boolean): Promise<Awaited<ReturnType<NonNullable<AgentProvider['completeStructuredJson']>>>> {
+      if (!native) provider.validateStructuredRequest!(input)
+      const policy = provider.resolveRequestPolicy!(input)
+      const startedAt = Date.now()
+      const controller = new AbortController()
+      const thinking = effectiveThinking.mode === 'enabled'
+      let requestStarted = false
+      let observedUsage: AgentProviderUsage | undefined
+      let responseReceived = false
+      let transportMetadata: AgentProviderResponseMetadata | undefined
+      let timedOut = false
+      let cancelledByUser = input.signal?.aborted ?? false
+      const cancel = () => {
+        cancelledByUser = true
+        controller.abort()
+      }
+      input.signal?.addEventListener('abort', cancel, { once: true })
+      if (cancelledByUser) controller.abort()
+      let timeout: ReturnType<typeof setTimeout> | undefined
+      const resetIdleTimeout = () => {
+        clearTimeout(timeout)
+        timeout = setTimeout(() => { timedOut = true; controller.abort() }, structuredRequestTimeoutMs)
+      }
+      resetIdleTimeout()
+      try {
+        if (controller.signal.aborted) throw new Error('cancelled')
+        requestStarted = true
+        const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: serializeChatRequest(input, native),
+          redirect: 'error',
+          signal: controller.signal,
+        })
+        responseReceived = true
+        transportMetadata = { httpStatus: response.status, maxOutputTokens: policy.maxOutputTokens, outputLimitMode: 'explicit', effectiveThinking }
+        if (!response.ok) {
+          throw providerHttpError(response.status)
+        }
+        let body: Record<string, unknown>
+        let readDiagnostics: ResponseReadDiagnostics
+        try {
+          const result = await readProviderResponse({ response, signal: controller.signal, policy,
+            onProgress: resetIdleTimeout,
+            onDiagnostics: diagnostics => { transportMetadata = { httpStatus: response.status, ...transportMetadata, ...diagnostics } },
+            onUsage: async (value, final) => {
+              try { observedUsage = parseOpenAiCompatibleProviderUsage(value, { providerId: id, model, baseUrl }) }
+              catch (error) { throw providerResponseError('invalid_usage', false, { httpStatus: response.status }, error) }
+              if (observedUsage) { observedUsage = { ...observedUsage, usageCompleteness: final ? 'final' : 'partial' }; await input.onUsage?.(observedUsage) }
+            },
+            sink: { append: async (channel, text) => {
+              await input.contentSink?.append(channel, text)
+              if (channel === 'reasoning' && thinking) await input.reasoning?.onDelta?.(text)
+            } },
+          })
+          body = result.body; readDiagnostics = result.diagnostics
+        } catch (error) {
+          if (error instanceof ProviderResponseReadError) throw providerResponseError(
+            error.code === 'response_too_large' ? 'response_too_large' : error.diagnostics.parserCategory === 'body_read' ? 'connection_reset' : 'invalid_response_json',
+            error.code !== 'response_too_large', { httpStatus: response.status, ...error.diagnostics,
+              maxOutputTokens: policy.maxOutputTokens, outputLimitMode: 'explicit', effectiveThinking }, error)
+          throw error
+        }
+        const record = body as Record<string, unknown>
+        const responseId = safeProviderResponseIdentifier(record.id)
+        const systemFingerprint = safeProviderResponseIdentifier(record.system_fingerprint)
+        const responseMetadata: AgentProviderResponseMetadata = {
+          httpStatus: response.status,
+          ...readDiagnostics,
+          effectiveThinking,
+          ...(input.purpose ? { durationMs: Date.now() - startedAt,
+          outputLimitMode: 'explicit', maxOutputTokens: policy.maxOutputTokens, } : {}),
+          ...(responseId ? { responseId } : {}),
+          ...(systemFingerprint ? { systemFingerprint } : {}),
+        }
+        const choices = record.choices
+        if (native && (!Array.isArray(choices) || choices.length !== 1)) throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_choices')
+        if (input.purpose && Array.isArray(choices)) {
+          responseMetadata.finishReason = choices[0]?.finish_reason ?? 'unknown'
+          responseMetadata.contentLength = typeof choices[0]?.message?.content === 'string' ? choices[0].message.content.length : 0
+          responseMetadata.reasoningLength = typeof choices[0]?.message?.reasoning_content === 'string' ? choices[0].message.reasoning_content.length : 0
+        }
+        const reasoningContent: unknown = thinking && Array.isArray(choices)
+          ? choices[0]?.message?.reasoning_content
+          : undefined
+        if (reasoningContent != null && typeof reasoningContent !== 'string') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_reasoning')
+        const nativeMessage = input.nativeTools && Array.isArray(choices) ? choices[0]?.message : undefined
+        if (Array.isArray(choices) && nativeMessage?.tool_calls !== undefined) {
+          if (choices[0]?.finish_reason !== 'tool_calls') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_tool_finish')
+          let validated
+          try { validated = (native ? nativeCallEnvelope : validateNativeToolBatch)(nativeMessage.tool_calls, input.nativeTools!.definitions.map(tool => tool.function.name),
+            input.nativeTools!.messages.flatMap(message => message.role === 'assistant' ? message.tool_calls?.map(call => call.id) ?? [] : [])) }
+          catch (error) { throw providerResponseError('invalid_model_output', true, responseMetadata, error, 'invalid_tool_batch') }
+          if (controller.signal.aborted) throw new Error('cancelled')
+          const toolCalls = validated.map(entry => 'call' in entry ? entry.call : entry)
+          return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: typeof nativeMessage.content === 'string' ? nativeMessage.content : null,
+            ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}), tool_calls: toolCalls },
+            ...(observedUsage ? { usage: observedUsage } : {}), responseMetadata, ...(typeof reasoningContent === 'string' ? { reasoningContent } : {}) }
+        }
+        if (Array.isArray(choices) && (input.purpose === 'review' || input.nativeTools || choices[0]?.finish_reason != null) && choices[0]?.finish_reason !== 'stop') {
+          const reason = choices[0].finish_reason === 'length' ? 'output_length' : choices[0].finish_reason === 'content_filter' ? 'content_filter' : choices[0].finish_reason === 'insufficient_system_resource' ? 'insufficient_system_resource' : 'incomplete_response'
+          throw providerResponseError('invalid_model_output', reason !== 'content_filter', responseMetadata, undefined, reason)
+        }
+        const raw =
+          Array.isArray(choices) &&
+          choices.length === 1 &&
+          typeof choices[0] === 'object' &&
+          choices[0] !== null &&
+          !Array.isArray(choices[0]) &&
+          typeof (choices[0] as { message?: unknown }).message === 'object' &&
+          (choices[0] as { message?: unknown }).message !== null
+            ? ((choices[0] as { message: { content?: unknown } }).message.content)
+            : undefined
+        if (typeof raw !== 'string') {
+          throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'missing_content')
+        }
+        let value: Record<string, unknown>
+        try {
+          if (!raw.trim()) throw new StructuredProviderOutputError('empty_content')
+          value = native ? {} : input.purpose ? parseProviderJson(raw) : parseStructuredProviderOutput(raw)
+        } catch (error) {
+          throw providerResponseError('invalid_model_output', true, responseMetadata, error, error instanceof StructuredProviderOutputError ? error.reason : 'invalid_json')
+        }
+        if (controller.signal.aborted) throw new Error('cancelled')
+        const usage = observedUsage
+        return {
+          value,
+          ...(input.nativeTools ? { assistantMessage: { role: 'assistant' as const, content: raw,
+            ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}) } } : {}),
+          ...(usage ? { usage } : {}),
+          responseMetadata,
+          ...(typeof reasoningContent === 'string' ? { reasoningContent } : {}),
+        }
+      } catch (error) {
+        if (transportMetadata) transportMetadata.durationMs = Date.now() - startedAt
+        if (timedOut) {
+          throw new AgentProviderRequestError({
+            code: 'provider_timeout',
+            deliveryState: responseReceived ? 'response_received' : requestStarted ? 'possibly_delivered' : 'not_sent',
+            ...(transportMetadata ? { responseMetadata: transportMetadata } : {}),
+            billingState: observedUsage && observedUsage.usageCompleteness !== 'partial' ? 'confirmed' : 'unknown',
+            ...(observedUsage ? { usage: observedUsage } : {}),
+            retryable: true,
+            sanitizedCause: 'request_deadline_exceeded',
+            cause: error,
+          })
+        }
+        if (cancelledByUser) {
+          throw new AgentProviderRequestError({
+            code: 'cancelled_by_user',
+            deliveryState: responseReceived ? 'response_received' : requestStarted ? 'possibly_delivered' : 'not_sent',
+            ...(transportMetadata ? { responseMetadata: transportMetadata } : {}),
+            billingState: observedUsage && observedUsage.usageCompleteness !== 'partial' ? 'confirmed' : (!requestStarted ? 'not_incurred' : 'unknown'),
+            ...(observedUsage ? { usage: observedUsage } : {}),
+            retryable: false,
+            sanitizedCause: 'caller_abort_signal',
+            cause: error,
+          })
+        }
+        if (error instanceof AgentProviderRequestError) {
+          throw observedUsage
+            ? new AgentProviderRequestError({ ...error, ...(transportMetadata || error.responseMetadata ? { responseMetadata: { httpStatus: transportMetadata?.httpStatus ?? error.responseMetadata!.httpStatus, ...transportMetadata, ...error.responseMetadata } } : {}), billingState: observedUsage.usageCompleteness === 'partial' ? 'unknown' : 'confirmed', usage: observedUsage, cause: error })
+            : new AgentProviderRequestError({ ...error, ...(transportMetadata || error.responseMetadata ? { responseMetadata: { httpStatus: transportMetadata?.httpStatus ?? error.responseMetadata!.httpStatus, ...transportMetadata, ...error.responseMetadata } } : {}), cause: error })
+        }
+        const transportError = classifyProviderTransportError(error)
+        throw new AgentProviderRequestError({ ...transportError,
+          ...(responseReceived ? { deliveryState: 'response_received' as const, billingState: 'unknown' as const } : {}),
+          ...(observedUsage ? { usage: observedUsage, billingState: observedUsage.usageCompleteness === 'partial' ? 'unknown' as const : 'confirmed' as const } : {}),
+          ...(transportMetadata ? { responseMetadata: transportMetadata } : {}), cause: error,
+        })
+      } finally {
+        clearTimeout(timeout)
+        input.signal?.removeEventListener('abort', cancel)
+      }
+
+  }
   const provider: AgentProvider = {
     id,
     name,
@@ -2163,197 +2373,26 @@ export function createOpenAiCompatibleAgentProvider({
         throw unsentStructuredRequestError('invalid_structured_request')
       }
     },
-    async completeStructuredJson(input) {
-      provider.validateStructuredRequest!(input)
-      const policy = provider.resolveRequestPolicy!(input)
-      const messages = [{ role: 'system', content: input.systemPrompt }, ...(input.nativeTools?.messages ?? []), { role: 'user', content: input.userPrompt }]
-      const startedAt = Date.now()
-      const controller = new AbortController()
-      const thinking = effectiveThinking.mode === 'enabled'
-      const stream = policy.stream
-      let requestStarted = false
-      let observedUsage: AgentProviderUsage | undefined
-      let responseReceived = false
-      let transportMetadata: AgentProviderResponseMetadata | undefined
-      let timedOut = false
-      let cancelledByUser = input.signal?.aborted ?? false
-      const cancel = () => {
-        cancelledByUser = true
-        controller.abort()
-      }
-      input.signal?.addEventListener('abort', cancel, { once: true })
-      if (cancelledByUser) controller.abort()
-      let timeout: ReturnType<typeof setTimeout> | undefined
-      const resetIdleTimeout = () => {
-        clearTimeout(timeout)
-        timeout = setTimeout(() => { timedOut = true; controller.abort() }, structuredRequestTimeoutMs)
-      }
-      resetIdleTimeout()
-      try {
-        if (controller.signal.aborted) throw new Error('cancelled')
-        requestStarted = true
-        const response = await fetcher(`${baseUrl.replace(/\/$/u, '')}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${apiKey}`,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            model,
-            temperature: input.purpose ? 0.2 : 0,
-            max_tokens: policy.maxOutputTokens,
-            ...(deepSeek
-              ? {
-                  ...(stream ? { stream: true, stream_options: { include_usage: true } } : {}),
-                  ...(!input.nativeTools ? { response_format: { type: 'json_object' } } : {}),
-                }
-              : {}),
-            ...thinkingFields,
-            messages,
-            ...(input.nativeTools ? { tools: input.nativeTools.definitions, tool_choice: 'auto' } : {}),
-          }),
-          redirect: 'error',
-          signal: controller.signal,
-        })
-        responseReceived = true
-        transportMetadata = { httpStatus: response.status, maxOutputTokens: policy.maxOutputTokens, outputLimitMode: 'explicit', effectiveThinking }
-        if (!response.ok) {
-          throw providerHttpError(response.status)
-        }
-        let body: Record<string, unknown>
-        let readDiagnostics: ResponseReadDiagnostics
-        try {
-          const result = await readProviderResponse({ response, signal: controller.signal, policy,
-            onProgress: resetIdleTimeout,
-            onDiagnostics: diagnostics => { transportMetadata = { httpStatus: response.status, ...transportMetadata, ...diagnostics } },
-            onUsage: async (value, final) => {
-              try { observedUsage = parseOpenAiCompatibleProviderUsage(value, { providerId: id, model, baseUrl }) }
-              catch (error) { throw providerResponseError('invalid_usage', false, { httpStatus: response.status }, error) }
-              if (observedUsage) { observedUsage = { ...observedUsage, usageCompleteness: final ? 'final' : 'partial' }; await input.onUsage?.(observedUsage) }
-            },
-            sink: { append: async (channel, text) => {
-              await input.contentSink?.append(channel, text)
-              if (channel === 'reasoning' && thinking) await input.reasoning?.onDelta?.(text)
-            } },
-          })
-          body = result.body; readDiagnostics = result.diagnostics
-        } catch (error) {
-          if (error instanceof ProviderResponseReadError) throw providerResponseError(
-            error.code === 'response_too_large' ? 'response_too_large' : error.diagnostics.parserCategory === 'body_read' ? 'connection_reset' : 'invalid_response_json',
-            error.code !== 'response_too_large', { httpStatus: response.status, ...error.diagnostics,
-              maxOutputTokens: policy.maxOutputTokens, outputLimitMode: 'explicit', effectiveThinking }, error)
-          throw error
-        }
-        const record = body as Record<string, unknown>
-        const responseId = safeProviderResponseIdentifier(record.id)
-        const systemFingerprint = safeProviderResponseIdentifier(record.system_fingerprint)
-        const responseMetadata: AgentProviderResponseMetadata = {
-          httpStatus: response.status,
-          ...readDiagnostics,
-          effectiveThinking,
-          ...(input.purpose ? { durationMs: Date.now() - startedAt,
-          outputLimitMode: 'explicit', maxOutputTokens: policy.maxOutputTokens, } : {}),
-          ...(responseId ? { responseId } : {}),
-          ...(systemFingerprint ? { systemFingerprint } : {}),
-        }
-        const choices = record.choices
-        if (input.purpose && Array.isArray(choices)) {
-          responseMetadata.finishReason = choices[0]?.finish_reason ?? 'unknown'
-          responseMetadata.contentLength = typeof choices[0]?.message?.content === 'string' ? choices[0].message.content.length : 0
-          responseMetadata.reasoningLength = typeof choices[0]?.message?.reasoning_content === 'string' ? choices[0].message.reasoning_content.length : 0
-        }
-        const reasoningContent: unknown = thinking && Array.isArray(choices)
-          ? choices[0]?.message?.reasoning_content
-          : undefined
-        if (reasoningContent != null && typeof reasoningContent !== 'string') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_reasoning')
-        const nativeMessage = input.nativeTools && Array.isArray(choices) ? choices[0]?.message : undefined
-        if (Array.isArray(choices) && nativeMessage?.tool_calls !== undefined) {
-          if (choices[0]?.finish_reason !== 'tool_calls') throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'invalid_tool_finish')
-          let validated
-          try { validated = validateNativeToolBatch(nativeMessage.tool_calls, input.nativeTools!.definitions.map(tool => tool.function.name),
-            input.nativeTools!.messages.flatMap(message => message.role === 'assistant' ? message.tool_calls?.map(call => call.id) ?? [] : [])) }
-          catch (error) { throw providerResponseError('invalid_model_output', true, responseMetadata, error, 'invalid_tool_batch') }
-          if (controller.signal.aborted) throw new Error('cancelled')
-          const toolCalls = validated.map(entry => entry.call)
-          return { value: {}, toolCalls, assistantMessage: { role: 'assistant' as const, content: typeof nativeMessage.content === 'string' ? nativeMessage.content : null,
-            ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}), tool_calls: toolCalls },
-            ...(observedUsage ? { usage: observedUsage } : {}), responseMetadata, ...(typeof reasoningContent === 'string' ? { reasoningContent } : {}) }
-        }
-        if (Array.isArray(choices) && (input.purpose === 'review' || input.nativeTools || choices[0]?.finish_reason != null) && choices[0]?.finish_reason !== 'stop') {
-          const reason = choices[0].finish_reason === 'length' ? 'output_length' : choices[0].finish_reason === 'content_filter' ? 'content_filter' : choices[0].finish_reason === 'insufficient_system_resource' ? 'insufficient_system_resource' : 'incomplete_response'
-          throw providerResponseError('invalid_model_output', reason !== 'content_filter', responseMetadata, undefined, reason)
-        }
-        const raw =
-          Array.isArray(choices) &&
-          choices.length === 1 &&
-          typeof choices[0] === 'object' &&
-          choices[0] !== null &&
-          !Array.isArray(choices[0]) &&
-          typeof (choices[0] as { message?: unknown }).message === 'object' &&
-          (choices[0] as { message?: unknown }).message !== null
-            ? ((choices[0] as { message: { content?: unknown } }).message.content)
-            : undefined
-        if (typeof raw !== 'string') {
-          throw providerResponseError('invalid_model_output', true, responseMetadata, undefined, 'missing_content')
-        }
-        let value: Record<string, unknown>
-        try {
-          value = input.purpose ? parseProviderJson(raw) : parseStructuredProviderOutput(raw)
-        } catch (error) {
-          throw providerResponseError('invalid_model_output', true, responseMetadata, error, error instanceof StructuredProviderOutputError ? error.reason : 'invalid_json')
-        }
-        if (controller.signal.aborted) throw new Error('cancelled')
-        const usage = observedUsage
-        return {
-          value,
-          ...(input.nativeTools ? { assistantMessage: { role: 'assistant' as const, content: raw,
-            ...(typeof reasoningContent === 'string' ? { reasoning_content: reasoningContent } : {}) } } : {}),
-          ...(usage ? { usage } : {}),
-          responseMetadata,
-          ...(typeof reasoningContent === 'string' ? { reasoningContent } : {}),
-        }
-      } catch (error) {
-        if (transportMetadata) transportMetadata.durationMs = Date.now() - startedAt
-        if (timedOut) {
-          throw new AgentProviderRequestError({
-            code: 'provider_timeout',
-            deliveryState: responseReceived ? 'response_received' : requestStarted ? 'possibly_delivered' : 'not_sent',
-            ...(transportMetadata ? { responseMetadata: transportMetadata } : {}),
-            billingState: observedUsage && observedUsage.usageCompleteness !== 'partial' ? 'confirmed' : 'unknown',
-            ...(observedUsage ? { usage: observedUsage } : {}),
-            retryable: true,
-            sanitizedCause: 'request_deadline_exceeded',
-            cause: error,
-          })
-        }
-        if (cancelledByUser) {
-          throw new AgentProviderRequestError({
-            code: 'cancelled_by_user',
-            deliveryState: responseReceived ? 'response_received' : requestStarted ? 'possibly_delivered' : 'not_sent',
-            ...(transportMetadata ? { responseMetadata: transportMetadata } : {}),
-            billingState: observedUsage && observedUsage.usageCompleteness !== 'partial' ? 'confirmed' : (!requestStarted ? 'not_incurred' : 'unknown'),
-            ...(observedUsage ? { usage: observedUsage } : {}),
-            retryable: false,
-            sanitizedCause: 'caller_abort_signal',
-            cause: error,
-          })
-        }
-        if (error instanceof AgentProviderRequestError) {
-          throw observedUsage
-            ? new AgentProviderRequestError({ ...error, ...(transportMetadata || error.responseMetadata ? { responseMetadata: { httpStatus: transportMetadata?.httpStatus ?? error.responseMetadata!.httpStatus, ...transportMetadata, ...error.responseMetadata } } : {}), billingState: observedUsage.usageCompleteness === 'partial' ? 'unknown' : 'confirmed', usage: observedUsage, cause: error })
-            : new AgentProviderRequestError({ ...error, ...(transportMetadata || error.responseMetadata ? { responseMetadata: { httpStatus: transportMetadata?.httpStatus ?? error.responseMetadata!.httpStatus, ...transportMetadata, ...error.responseMetadata } } : {}), cause: error })
-        }
-        const transportError = classifyProviderTransportError(error)
-        throw new AgentProviderRequestError({ ...transportError,
-          ...(responseReceived ? { deliveryState: 'response_received' as const, billingState: 'unknown' as const } : {}),
-          ...(observedUsage ? { usage: observedUsage, billingState: observedUsage.usageCompleteness === 'partial' ? 'unknown' as const : 'confirmed' as const } : {}),
-          ...(transportMetadata ? { responseMetadata: transportMetadata } : {}), cause: error,
-        })
-      } finally {
-        clearTimeout(timeout)
-        input.signal?.removeEventListener('abort', cancel)
-      }
+    serializeNativeRequest(input) {
+      const { messages, tools, ...common } = input
+      return serializeChatRequest({ ...common, userPrompt: '', nativeTools: { definitions: tools, messages } }, true)
     },
+    validateNativeRequest(input) {
+      if (!provider.supportsNativeTools) throw unsentStructuredRequestError('unsupported_native_tools')
+      try { validateNativeHistory(input.messages) } catch { throw unsentStructuredRequestError('invalid_native_history') }
+      if (!input.systemPrompt || input.systemPrompt.length > 8000 || !Array.isArray(input.tools) || input.tools.some(tool => tool.type !== 'function' || !tool.function?.name)) throw unsentStructuredRequestError('invalid_native_request')
+      const policy = provider.resolveRequestPolicy!(input)
+      if (new TextEncoder().encode(provider.serializeNativeRequest!(input)).byteLength > policy.maxInputBytes) throw unsentStructuredRequestError('input_capacity_exceeded')
+    },
+    async completeNativeConversation(input) {
+      provider.validateNativeRequest!(input)
+      const { messages, tools, ...common } = input
+      const result = await completeChat({ ...common, userPrompt: '', nativeTools: { definitions: tools, messages } }, true)
+      const assistantMessage = result.assistantMessage!
+      const metadata = { assistantMessage, ...(result.usage ? { usage: result.usage } : {}), ...(result.responseMetadata ? { responseMetadata: result.responseMetadata } : {}), ...(result.reasoningContent !== undefined ? { reasoningContent: result.reasoningContent } : {}) }
+      return result.toolCalls ? { ...metadata, kind: 'tools', toolCalls: result.toolCalls } : { ...metadata, kind: 'text', text: assistantMessage.content! }
+    },
+    completeStructuredJson: input => completeChat(input, false),
     async generateWorkflowArtifact({ request, prompt, signal, onUsage }) {
       const result=await provider.completeStructuredJson!({purpose:'workflow',systemPrompt:workflowArtifactOutputInstructions(request.stage),userPrompt:prompt,...(signal?{signal}:{}),...(onUsage?{onUsage}:{})})
       const parsed=result.value as Partial<WorkflowArtifactProviderOutput>

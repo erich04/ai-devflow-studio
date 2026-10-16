@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "electron": [
+        "./apps/desktop/node_modules/electron"
+      ]
+    }
+  },
+  "include": [
+    "scripts/native-conversation-live.mts"
+  ]
+}

@@ -69,8 +69,8 @@ const server = createServer(async (request, response) => {
   expect(body).toMatchObject({ thinking: { type: 'enabled' }, reasoning_effort: 'low', stream: true })
   const input = JSON.parse(body.messages.filter((message) => message.role === 'user').at(-1).content)
   expect(body.max_tokens).toBe(65536)
-  expect(input.originalRequirements).toContainEqual(expect.objectContaining({ runId: run.id, content: run.request, truncated: false }))
-  const user = input.history.filter((message) => message.role === 'user').at(-1)?.text ?? ''
+  if (!input.proposal) expect(input.originalRequirements).toContainEqual(expect.objectContaining({ runId: run.id, content: run.request, truncated: false }))
+  const user = input.userRequest ?? input.history?.filter((message) => message.role === 'user').at(-1)?.text ?? ''
   const observations = input.toolObservations
   let value
   if (user.includes('格式恢复') && malformedAttempts++ === 0) {
@@ -95,9 +95,23 @@ const server = createServer(async (request, response) => {
     } else {
       expect(completedTools.map(message => message.tool_call_id)).toEqual(['native-list','native-read'])
       expect(body.messages.some(message => message.role === 'assistant' && message.reasoning_content === 'NATIVE_REQUIRED_HISTORY')).toBe(true)
-      response.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:JSON.stringify({text:'原生工具已核实清理函数保留未完成任务。',citationIds:['source-2']})},finish_reason:'stop'}],usage:reportedUsage()})}\n\n`)
+      response.write(`data: ${JSON.stringify({choices:[{index:0,delta:{content:'原生工具已核实清理函数保留未完成任务。'},finish_reason:'stop'}],usage:reportedUsage()})}\n\n`)
     }
     response.end('data: [DONE]\n\n'); return
+  }
+  if (body.tools && user.includes('原生提案验证')) {
+    let name, args
+    if (input.proposal) {
+      name = 'report_proposal_review'
+      args = { coverageReview: input.criticalProposalInput.criteria.map(c => ({ criterionId: c.id, status: 'missing', reason: '测试场景：仍需人工阅读核对。' })) }
+    } else {
+      const prepared = body.messages.some(m => m.role === 'tool' && m.content.includes('criticalProposalInput'))
+      name = prepared ? 'propose_revision' : 'prepare_revision'
+      args = { runId: run.id, nodeId: run.nodes[0].id, ...(prepared ? { title: '原生候选提案', content: '清理所有已完成任务，保留未完成任务；刷新保留清理结果；没有已完成任务时按钮禁用。' } : {}) }
+    }
+    response.writeHead(200, { 'content-type': 'text/event-stream' })
+    response.end(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'NATIVE_PROPOSAL_HISTORY', tool_calls: [{index: 0, id: name, type:'function', function: {name, arguments: JSON.stringify(args)}}] }, finish_reason: 'tool_calls' }], usage: reportedUsage() })}\n\ndata: [DONE]\n\n`)
+    return
   }
   if (input.proposalVerification) {
     expect(input.proposalVerification.content).toContain('清理所有已完成任务')
@@ -151,7 +165,7 @@ let app
 let page
 const errors = []
 async function launch() {
-  app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: apiUrl, DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_NATIVE_READONLY_PILOT_ENABLED: '1', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
+  app = await electron.launch({ args: ['.'], cwd: path.join(root, 'apps/desktop'), env: { ...process.env, DEVFLOW_USER_DATA_DIR: userData, DEVFLOW_DATA_PROFILE_REGISTRY_PATH: path.join(userData, 'profiles.json'), DEVFLOW_API_BASE_URL: apiUrl, DEVFLOW_ENABLE_FAKE_RUNTIME: 'true', DEVFLOW_NATIVE_READONLY_PILOT_ENABLED: '1', DEVFLOW_NATIVE_CONVERSATIONS_ENABLED: '0', DEVFLOW_INITIAL_THEME: 'dark', VITE_DEV_SERVER_URL: '', ELECTRON_DISABLE_SECURITY_WARNINGS: 'true' } })
   // Keep this synthetic-credential test independent of a user's OS keychain authorization.
   await app.evaluate(({ safeStorage }) => {
     safeStorage.isAsyncEncryptionAvailable = async () => true
@@ -486,10 +500,23 @@ try {
   expect(requests.length - beforeNative).toBe(2)
   const nativeSessions = await page.evaluate((projectId) => window.aiDevFlowDesktop.workbenchConversation({type:'list',projectId}), project.id)
   const native = nativeSessions.conversations.find(conversation => conversation.executor === 'native-tools')
-  expect(native.messages.at(-1).citations[0].label).toContain('tasks.js')
+  expect(native.messages.at(-1).citations.some(c => c.label.includes('tasks.js'))).toBe(true)
   expect(native.messages.filter(message => message.role === 'tool')).toHaveLength(2)
   expect(native.status).toBe('idle')
+  await page.getByRole('button', { name: '新建对话', exact: true }).click()
+  await page.getByLabel('新对话执行方式').selectOption('native-tools')
+  await page.getByRole('button', { name: '创建对话', exact: true }).click()
+  await send('原生提案验证：保留已确认要求，生成清理任务提案。')
+  await readyText('AI 发现待处理问题')
+  await page.getByRole('button', { name: '保存为节点提案', exact: true }).click()
+  await expect(page.getByRole('button', { name: '确认保存提案', exact: true })).toBeDisabled()
+  await page.getByRole('checkbox', { name: '我已阅读提案和核对状态，确认按尚未通过 AI 核对的待评审提案保存。' }).check()
+  const beforeSave = requests.length
+  await page.getByRole('button', { name: '确认保存提案', exact: true }).click()
+  await expect(page.getByTestId('proposal-saved-note')).toBeVisible()
+  expect(requests.length).toBe(beforeSave)
   const state = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
+  expect(state.artifacts.find(a => a.title.includes('原生候选提案')).content).toContain('用户明确选择')
   expect(state.runs[0].currentNodeId).toBe(run.currentNodeId)
   expect(state.artifacts.some((artifact) => artifact.title.includes('讨论提案（待确认）'))).toBe(true)
   expect(JSON.stringify(state)).not.toContain('ALPHA_PRIVATE_MEMORY')
@@ -498,7 +525,7 @@ try {
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
   expect(modelErrors).toEqual([])
-  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, nativeReadOnlyPilot: true, budgetContinuationCheckbox: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, nativeReadOnlyPilot: true, nativeCandidateManualSave: true, budgetContinuationCheckbox: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
 } catch (error) {

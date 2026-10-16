@@ -72,6 +72,8 @@ _在历史步骤上的操作不会改变实际进度。「材料与版本」按�
 
 项目讨论默认收起，在任务标题行点「讨论」后在任务页右侧展开，收起再打开时草稿仍在。新建会话时可选择执行方式，也可从历史记录重新打开会话，或通过会话页签菜单查看详情和模型调用记录。讨论可以保存为**待确认的节点提案**；保存本身不会修改代码、批准 Gate 或发布 PR。
 
+新建 Direct Provider 对话使用官方 `deepseek-flash` 时，普通回答直接显示 Markdown，读取操作使用原生 Function Calling。提案先保存候选再独立核对；核对失败或发现问题时，用户可以查看意见、重新核对，或明确确认后保存为尚未通过 AI 核对的待评审提案。旧会话保持原协议和进度；使用新版请新建独立对话。启用范围与回滚见 [ADR 0028](docs/adr/0028-native-conversations-and-proposal-review.md)。
+
 协作中的委派深度、并发、能力和工作区写入均有明确边界。Agent 输出经过相应的确定性校验后才能作为工作流证据；推进流程和批准 Gate 仍由可信命令及人工决策控制。
 
 <a id="knowledge-memory-and-evidence"></a>
@@ -102,7 +104,7 @@ _知识页展示仓库 Markdown 索引与当前任务的引用。同一份文档
 - **组织**：独立组织、成员关系、邀请、切换、归档/恢复和限定组织范围的 GitHub 仓库分配已实现，由 `DEVFLOW_MULTI_ORGANIZATION_ENABLED=true` 开启。默认入门流程仍为单团队模式。详见[部署指南](docs/guides/multi-organization-deployment.md)。
 - **预算与策略**：在 Web「设置」中查看用量、配置项目策略和预算、创建一次性预算批准；桌面端只读显示团队预算。当权威预算上下文不可用或超出作用范围时，付费 Coding 与 Gate Review 运行时在调用提供方前拒绝继续；受治理的模型调用也覆盖阶段生成和工作台对话。
 
-费用待确认的调用有可靠上界时按上界占用预算；否则当前操作会展示继续确认卡，由 Lead/Owner 明确勾选有限授权。它不修改历史账单，也不关闭预算。对话按步骤保留查询进展，每步最多自动重试两次。完整策略与容量、私有内容备份、会话工具授权及默认关闭的原生工具试点见 [ADR 0027](docs/adr/0027-request-recovery-and-budget-continuation.md)。
+费用待确认的调用有可靠上界时按上界占用预算；否则当前操作会展示继续确认卡，由 Lead/Owner 明确勾选有限授权。它不修改历史账单，也不关闭预算。对话按步骤保留查询进展，每步最多自动重试两次。完整策略与容量、私有内容备份及会话工具授权见 [ADR 0027](docs/adr/0027-request-recovery-and-budget-continuation.md)；原生对话的后续决定见 [ADR 0028](docs/adr/0028-native-conversations-and-proposal-review.md)。
 
 桌面一级导航的**任务中心**汇总当前项目的团队请求与本地执行，提供待领取、进行中、待你处理和已完成筛选。点击标题先预览；只有“领取并进入”才领取任务。门禁的内置仓库只读审查可独立于开发执行器选择，无需 OpenCode。
 - **可恢复同步**：持久化发件箱保存脱敏同步任务，支持有限次数重试与重启恢复。桌面端仍是本地 Run 和完整执行记录的权威来源。
@@ -352,7 +354,8 @@ corepack pnpm verify
 | `corepack pnpm test:e2e` | 使用隔离演示服务验证浏览器工作台与 Web 交互。 |
 | `corepack pnpm test:electron-smoke` | 真实 Electron 主进程/preload、本地 SQLite 与流程操作。 |
 | `corepack pnpm test:native-coding-electron-smoke` | 通过受控本地模型服务验证 Native Coding 批准、工作树修改、测试与证据。 |
-| `corepack pnpm test:workbench-conversation-electron-smoke` | 真实 Electron 中验证对话、逐步骤恢复、勾选预算继续、原生只读试点与重启历史；模型端点为本地模拟。 |
+| `corepack pnpm test:workbench-conversation-electron-smoke` | 真实 Electron 中验证对话、逐步骤恢复、预算继续、原生工具、候选人工确认保存与重启历史；模型端点为本地模拟。 |
+| `corepack pnpm test:native-conversation-live` | 显式选择既有授权凭证，在隔离 Electron 中验证官方 flash 的原生协议和提案；会真实计费，配置与证据见 [#231 验证记录](docs/validation/issue-231-native-conversation-20261010.md)。 |
 | `corepack pnpm test:stage-agent-design-electron` | 真实 OpenCode 与 Electron 生成及修订方案、取消、重试和重启；模型端点为本地模拟。 |
 | `corepack pnpm test:postgres-smoke` | Postgres 迁移、持久化、策略、批准与脱敏同步。 |
 | `corepack pnpm test:organization-postgres` | 在专用测试数据库中验证组织成员、隔离、配对与仓库分配。 |

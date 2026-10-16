@@ -1,6 +1,7 @@
+import { NativeReadArgumentError, runNativeConversation } from './native-conversation.js'
 import { expandedOutputAllowance, waitForProviderRetry, modelExecutionRollout } from '@ai-devflow/shared'
 import { readOnlyToolDefinitions, validateNativeToolBatch } from '@ai-devflow/shared'
-import { buildCriticalContext, criticalContextSent, criticalReceipt, receiptIsCurrent, proposalSemanticsPass, type CriticalContext } from './conversation-critical-context.js'
+import { buildNativeCriticalContext, buildCriticalContext, criticalContextSent, criticalReceipt, receiptIsCurrent, proposalSemanticsPass, type CriticalContext } from './conversation-critical-context.js'
 import { type ConversationCompaction, appendToolEvents, buildRollingSummary, conversationMessageContext, interruptPendingTools } from './conversation-context.js'
 import { randomUUID } from 'node:crypto'
 import { AgentProviderRequestError, MODEL_CONTENT_BYTES, describeAgentProviderFailure, measurePromptSections, CONVERSATION_MEMORY_RECALL_BUDGET, redactSensitiveText, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
@@ -12,10 +13,11 @@ import { listWorkbenchKnowledge, readWorkbenchKnowledge } from './workbench-know
 import { ConversationExecutorError, type ConversationExecutor, type OpenConversationHarness } from './conversation-executor.js'
 import { buildRequirementContext, conversationContentPage, type RequirementContext } from './workbench-requirement-context.js'
 
-type Store = Pick<LocalStore, 'appendWorkbenchResponseChunk' | 'readWorkbenchResponseReasoning' | 'listProjects' | 'listRuns' | 'listArtifacts' | 'listEvents' | 'listTestEvidence' | 'loadState' | 'listWorkbenchConversations' | 'saveWorkbenchConversation'>
+type Store = Pick<LocalStore, 'appendWorkbenchResponseChunk' | 'readWorkbenchResponseContent' | 'readWorkbenchResponseReasoning' | 'listProjects' | 'listRuns' | 'listArtifacts' | 'listEvents' | 'listTestEvidence' | 'loadState' | 'listWorkbenchConversations' | 'saveWorkbenchConversation'>
 type Dependencies = {
   store: Store
   nativeReadOnlyPilotEnabled?: boolean
+  nativeConversationsEnabled?: boolean
   resolveProvider(id: string, projectId: string): Promise<AgentProvider>
   openHarness?: OpenConversationHarness
   loadKnowledge(projectId: string): Promise<RepositoryKnowledgeSnapshot>
@@ -237,7 +239,7 @@ function packConversationContext(input: {
 
 /** IPC carries previews; original private content stays in the main process. */
 function conversationPreview(session: WorkbenchConversation): WorkbenchConversation {
-  const { checkpoint: _checkpoint, ...view } = session
+  const { checkpoint: _checkpoint, nativeTranscript: _nativeTranscript, nativeContextStart: _nativeContextStart, ...view } = session
   return { ...view, messages: session.messages.map(message => {
     const lengths: NonNullable<ConversationMessage['contentLengths']> = {}
     const preview = (field: 'text' | 'draft' | 'reasoning', value: string) => { if (value.length <= 16_384) return value; lengths[field] = value.length; return value.slice(0, 4096) }
@@ -259,16 +261,28 @@ export class WorkbenchConversationService {
       const hasPendingTools = interruptPendingTools(session.toolEvents ?? [], now()).length !== (session.toolEvents?.length ?? 0)
       if (session.status !== 'running' && !hasPendingTools && reconcileSavedProposalQuestions(session) === session) continue
       const recoveredReasoning = new Map<string, string>()
+      const recoveredContent: ConversationMessage[] = []
       for (const message of session.messages) if (message.reasoning?.status === 'streaming') {
         const full = await this.deps.store.readWorkbenchResponseReasoning?.(session.id, message.id)
         if (full !== undefined) recoveredReasoning.set(message.id, visibleReasoning(full, false))
+      }
+      if (session.nativeProtocolVersion === 2 && !session.checkpoint?.nativeReviewMessageId) {
+        for (const message of session.messages.filter(item => item.attempt?.status === 'running')) {
+          const full = await this.deps.store.readWorkbenchResponseContent?.(session.id, message.id)
+          const partialId = `native-incomplete-${message.id}`
+          if (full && !session.messages.some(item => item.id === partialId)) recoveredContent.push({ id: partialId, role: 'assistant', text: `本次回答未完成，以下内容仅供参考：\n\n${redactSensitiveText(full).value}`, format: 'markdown', createdAt: now() })
+        }
       }
       await this.update(session.localProjectId, session.id, (current) => {
         const reconciled = reconcileSavedProposalQuestions(current)
         return { ...reconciled,
           ...(current.status === 'running' ? { status: 'interrupted' as const, error: '上次调查因应用退出而中断。点击重试继续，不会自动重复请求。' } : {}),
           toolEvents: interruptPendingTools(current.toolEvents ?? [], now()),
-          messages: reconciled.messages.map((message) => message.reasoning?.status === 'streaming' ? { ...message, reasoning: { ...message.reasoning, text: recoveredReasoning.get(message.id) ?? message.reasoning.text, status: 'interrupted' } } : message),
+          messages: [...reconciled.messages.map((message) => ({ ...message,
+            ...(message.attempt?.status === 'running' ? { attempt: { ...message.attempt, status: 'failed' as const } } : {}),
+            ...(message.reasoning?.status === 'streaming' ? { reasoning: { ...message.reasoning, text: recoveredReasoning.get(message.id) ?? message.reasoning.text, status: 'interrupted' as const } } : {}),
+            ...(message.draft?.review && ['pending', 'running'].includes(message.draft.review.status) ? { draft: { ...message.draft, review: { status: 'unavailable' as const, error: '应用退出中断了核对；候选提案已保留，可以重新核对或人工确认保存。' } } } : {}),
+          })), ...recoveredContent],
         }
       })
     }
@@ -284,12 +298,12 @@ export class WorkbenchConversationService {
     if (!session) throw new Error('当前项目中没有这个会话。')
     return session
   }
-  private async update(projectId: string, id: string, transform: (value: WorkbenchConversation) => WorkbenchConversation, artifact?: Artifact) {
+  private async update(projectId: string, id: string, transform: (value: WorkbenchConversation) => WorkbenchConversation | Promise<WorkbenchConversation>, artifact?: Artifact | (() => Artifact | undefined)) {
     const previous = this.queues.get(id) ?? Promise.resolve()
     const operation = previous.catch(() => undefined).then(async () => {
       const current = await this.conversation(projectId, id)
-      const next = { ...transform(structuredClone(current)), version: current.version + 1, updatedAt: now() }
-      if (!await this.deps.store.saveWorkbenchConversation(next, current.version, artifact)) throw new Error('会话已经更新，请刷新后重试。')
+      const next = { ...await transform(structuredClone(current)), version: current.version + 1, updatedAt: now() }
+      if (!await this.deps.store.saveWorkbenchConversation(next, current.version, typeof artifact === 'function' ? artifact() : artifact)) throw new Error('会话已经更新，请刷新后重试。')
       this.deps.changed(projectId)
       return next
     })
@@ -305,6 +319,8 @@ export class WorkbenchConversationService {
       if (input.executor === 'native-tools' && !this.deps.nativeReadOnlyPilotEnabled) throw new Error('原生只读工具试点尚未启用；现有聊天和记录仍保留。')
       const created: WorkbenchConversation = {
         id: randomUUID(), localProjectId: input.projectId, version: 1, title: input.title?.trim() ?? '新对话',
+        ...(input.executor === 'native-tools' ? { nativeProtocolVersion: 2 as const } : {}),
+        ...(this.deps.nativeConversationsEnabled && (!input.executor || input.executor === 'direct-provider') ? { nativeProtocolSelection: 'pending' as const } : {}),
         isOpen: true, inputDraft: input.inputDraft ?? '', executor: input.executor ?? 'direct-provider', status: 'idle', messages: [], createdAt: now(), updatedAt: now(),
       }
       await this.deps.store.saveWorkbenchConversation(created, 0)
@@ -334,7 +350,7 @@ export class WorkbenchConversationService {
           if (reconcileSavedProposalQuestions(session) !== session) await this.update(session.localProjectId, session.id, reconcileSavedProposalQuestions)
           if (session.status === 'running') await this.update(input.projectId, session.id, (current) => ({ ...current, status: 'cancelled', error: '已停止调查。已保存的消息和依据可以继续使用。' }))
           break
-        case 'send': case 'retry':
+        case 'send': case 'retry': case 'retry_review':
           await this.start(input, session)
           break
         case 'publish':
@@ -342,7 +358,7 @@ export class WorkbenchConversationService {
           break
       }
     }
-    return { nativeReadOnlyPilotEnabled: this.deps.nativeReadOnlyPilotEnabled === true, conversations: (await this.deps.store.listWorkbenchConversations(input.projectId)).map(conversationPreview), ...(conversationId ? { conversationId } : {}) }
+    return { nativeConversationsEnabled: this.deps.nativeConversationsEnabled === true, nativeReadOnlyPilotEnabled: this.deps.nativeReadOnlyPilotEnabled === true, conversations: (await this.deps.store.listWorkbenchConversations(input.projectId)).map(conversationPreview), ...(conversationId ? { conversationId } : {}) }
   }
 
   private async target(projectId: string, runId: unknown, nodeId?: unknown) {
@@ -354,37 +370,57 @@ export class WorkbenchConversationService {
   }
 
   private async publish(input: Extract<ConversationCommand, { type: 'publish' }>, session: WorkbenchConversation) {
-    const draft = session.messages.find((message) => message.id === input.messageId)?.draft
-    if (!draft) throw new Error('没有可保存的提案。')
-    if (draft.publishedArtifactId) {
-      if (reconcileSavedProposalQuestions(session) !== session) await this.update(input.projectId, session.id, reconcileSavedProposalQuestions)
-      return
-    }
-    const { run } = await this.target(input.projectId, draft.runId, draft.nodeId)
-    if (draft.inputReceipt && !receiptIsCurrent(draft.inputReceipt, buildCriticalContext(run, draft.nodeId, await this.deps.store.listArtifacts(run.id)))) {
-      throw new Error('原始需求或已保存提案已更新，请重新生成提案后再保存。旧草稿仍保留。')
-    }
-    const artifactId = `conversation-proposal-${input.messageId}`
-    const artifact: Artifact = { id: artifactId, runId: draft.runId, nodeId: draft.nodeId, kind: 'log',
-      title: `讨论提案（待确认）：${draft.title}`, summary: '用户从独立会话明确保存的提案；未批准，也不代替本阶段的正式产物。',
-      content: `# ${draft.title}\n\n状态：待确认的讨论提案。请在对应节点核对后形成正式阶段产物。\n\n${draft.content}`,
-      redacted: true, updatedAt: now() }
-    await this.update(input.projectId, session.id, (current) => reconcileSavedProposalQuestions({ ...current, messages: current.messages.map((message) => message.id === input.messageId && message.draft ? { ...message, draft: { ...message.draft, publishedArtifactId: artifactId } } : message) }), artifact)
+    let artifact: Artifact | undefined
+    await this.update(input.projectId, session.id, async current => {
+      const draft = current.messages.find((message) => message.id === input.messageId)?.draft
+      if (!draft) throw new Error('没有可保存的提案。')
+      if (draft.publishedArtifactId) {
+        if (reconcileSavedProposalQuestions(current) !== current) return reconcileSavedProposalQuestions(current)
+        return current
+      }
+      if (this.controllers.has(session.id)) throw new Error('提案仍在生成或核对，请等待完成或先停止。')
+      if (draft.review?.status === 'stale') throw new Error('原始需求或材料已更新，请重新生成提案后再保存。')
+      if (draft.review && draft.review.status !== 'passed' && !input.acknowledgeUnverified) throw new Error('AI 核对尚未通过，请明确确认按待评审提案保存。')
+      const { run } = await this.target(input.projectId, draft.runId, draft.nodeId)
+      if (draft.inputReceipt && !receiptIsCurrent(draft.inputReceipt, (draft.review ? buildNativeCriticalContext : buildCriticalContext)(run, draft.nodeId, await this.deps.store.listArtifacts(run.id)))) {
+        throw new Error('原始需求或已保存提案已更新，请重新生成提案后再保存。旧草稿仍保留。')
+      }
+      if (this.controllers.has(session.id) || current.status === 'running') throw new Error('提案仍在生成或核对，请等待完成或先停止。')
+      const reviewNote = !draft.review ? '' : draft.review.status === 'passed' ? 'AI 核对通过；仍需人工评审。' : draft.review.status === 'needs_revision' ? 'AI 核对发现待处理问题，用户明确选择保存为待评审提案。' : 'AI 核对未完成，用户明确选择保存为待评审提案。'
+      const findings = draft.review?.findings?.filter(f => f.status !== 'covered').map(f => `- ${f.reason}`).join('\n') ?? ''
+      const artifactId = `conversation-proposal-${input.messageId}`
+      artifact = { id: artifactId, runId: draft.runId, nodeId: draft.nodeId, kind: 'log',
+        title: `讨论提案（待确认）：${draft.title}`, summary: '用户从独立会话明确保存的提案；未批准，也不代替本阶段的正式产物。',
+        content: `# ${draft.title}\n\n状态：待确认的讨论提案。请在对应节点核对后形成正式阶段产物。\n\n${reviewNote}${findings ? `\n${findings}` : ''}\n\n${draft.content}`,
+        redacted: true, updatedAt: now() }
+      return reconcileSavedProposalQuestions({ ...current, messages: current.messages.map((message) => message.id === input.messageId && message.draft ? { ...message, draft: { ...message.draft, publishedArtifactId: artifactId, ...(message.draft.review && message.draft.review.status !== 'passed' ? { review: { ...message.draft.review, humanAcknowledgedAt: now() } } : {}) } } : message) })
+    }, () => artifact)
     await this.deps.published?.()
   }
 
-  private async start(input: Extract<ConversationCommand, { type: 'send' | 'retry' }>, session: WorkbenchConversation) {
+  private async start(input: Extract<ConversationCommand, { type: 'send' | 'retry' | 'retry_review' }>, session: WorkbenchConversation) {
     if (this.controllers.has(session.id)) throw new Error('这个会话正在调查，请等待完成或先停止。')
     if (session.messages.length > 1000) throw new Error('会话已达到消息上限，请新建会话。')
     if (input.type === 'retry' && !['failed', 'cancelled', 'interrupted', 'paused'].includes(session.status)) throw new Error('当前会话没有需要重试的调查。')
+    if (input.type === 'retry_review' && (session.nativeProtocolVersion !== 2 || !session.messages.some(m => m.id === input.messageId && m.draft?.review && !m.draft.publishedArtifactId))) throw new Error('没有可重新核对的原生提案。')
     const controller = new AbortController()
     this.controllers.set(session.id, controller)
     try {
       await this.update(input.projectId, session.id, (current) => {
-        const messages = current.messages.map((message) => input.type === 'send' && input.answerToMessageId === message.id && message.question && !message.question.answeredAt ? { ...message, question: { ...message.question, answeredAt: now() } } : message)
+        if (input.type === 'retry_review' && !current.messages.some(message => message.id === input.messageId && message.draft?.review && !message.draft.publishedArtifactId)) throw new Error('提案已经保存或不存在，不能重新核对。')
+        const messages = current.messages.map(message => input.type === 'retry_review' && message.id === input.messageId && message.draft ? { ...message, draft: { ...message.draft, review: { status: 'pending' as const } } } : message).map((message) => input.type === 'send' && input.answerToMessageId === message.id && message.question && !message.question.answeredAt ? { ...message, question: { ...message.question, answeredAt: now() } } : message)
         if (input.type === 'send') messages.push({ id: randomUUID(), role: 'user', text: redactSensitiveText(input.text.trim()).value, createdAt: now() })
+        if (input.type === 'send' && current.nativeTranscript) {
+          const pending = new Set<string>()
+          for (const entry of current.nativeTranscript) {
+            if (entry.message.role === 'assistant') for (const call of entry.message.tool_calls ?? []) pending.add(call.id)
+            else if (entry.message.role === 'tool') pending.delete(entry.message.tool_call_id)
+          }
+          current.nativeTranscript = [...current.nativeTranscript, ...[...pending].map(tool_call_id => ({ turnId: current.checkpoint?.turnId ?? messages.at(-1)!.id, message: { role: 'tool' as const, tool_call_id, content: '{"status":"interrupted","result":"unknown","reason":"用户开始了新的请求；原查询记录保留。"}' } }))]
+        }
+
         const { error: _error, failure: _failure, ...rest } = current
-        return { ...rest, checkpoint: input.type === 'send' ? undefined : current.checkpoint ? { ...current.checkpoint, ...(current.status === 'paused' ? {} : { cycle: current.checkpoint.cycle + 1, recoveries: 0 }) } : undefined, messages, toolEvents: interruptPendingTools(current.toolEvents ?? [], now()), inputDraft: '', isOpen: true, status: 'running', title: current.title === '新对话' && input.type === 'send' ? input.text.trim().slice(0, 28) : current.title }
+        return { ...rest, checkpoint: input.type === 'retry_review' ? { version: 1, turnId: current.messages.find(m => m.id === input.messageId)?.draft?.requestedByMessageId ?? current.messages.slice().reverse().find(m => m.role === 'user')!.id, step: 1, cycle: (current.checkpoint?.cycle ?? 0) + 1, recoveries: 0, group: randomUUID(), providerId: input.providerId, observations: [], citations: [], requirementRunIds: [], nativeReviewMessageId: input.messageId } : input.type === 'send' ? undefined : current.checkpoint ? { ...current.checkpoint, ...(current.status === 'paused' ? {} : { cycle: current.checkpoint.cycle + 1, recoveries: 0 }) } : undefined, messages, toolEvents: interruptPendingTools(current.toolEvents ?? [], now()), inputDraft: '', isOpen: true, status: 'running', title: current.title === '新对话' && input.type === 'send' ? input.text.trim().slice(0, 28) : current.title }
       })
       const task = this.run(input.projectId, session.id, input.providerId, controller)
       this.tasks.set(session.id, task)
@@ -419,7 +455,7 @@ export class WorkbenchConversationService {
     }
     const message = session.messages.find((entry) => entry.id === args.messageId && entry.role !== 'notice')
     const source = args.eventId ? session.toolEvents?.find((entry) => entry.id === args.eventId) : message ? conversationMessageContext(message) : undefined
-    if (!source) throw new Error('本会话中没有这个原文来源。')
+    if (!source) throw new NativeReadArgumentError('本会话中没有这个原文来源。')
     const content = redactSensitiveText(JSON.stringify(source)).value
     return { sourceId: args.messageId ?? args.eventId, offset, endOffset: Math.min(content.length, offset + limit), total: content.length, content: content.slice(offset, offset + limit), nextOffset: offset + limit < content.length ? offset + limit : null }
   }
@@ -551,8 +587,8 @@ export class WorkbenchConversationService {
     let completed = false
     const saveCheckpoint = async () => { if (checkpoint && !completed) await this.update(projectId, id, current => ({ ...current, checkpoint: structuredClone(checkpoint!) })) }
     try {
-      const session = await this.conversation(projectId, id)
-      checkpoint = session.checkpoint?.providerId === providerId ? structuredClone(session.checkpoint) : { version: 1, turnId: session.messages.slice().reverse().find(message => message.role === 'user')!.id, step: 1, cycle: 1, recoveries: 0, group: randomUUID(), providerId, observations: [], citations: [], requirementRunIds: [] }
+      let session = await this.conversation(projectId, id)
+      checkpoint = session.checkpoint ? { ...structuredClone(session.checkpoint), ...(session.checkpoint.providerId !== providerId ? { providerId, cycle: session.checkpoint.cycle + 1, recoveries: 0, group: randomUUID() } : {}) } : { version: 1, turnId: session.messages.slice().reverse().find(message => message.role === 'user')!.id, step: 1, cycle: 1, recoveries: 0, group: randomUUID(), providerId, observations: [], citations: [], requirementRunIds: [] }
       const observations = checkpoint.observations
       const citations = checkpoint.citations
       if (session.checkpoint) {
@@ -568,7 +604,7 @@ export class WorkbenchConversationService {
         if (stale.size) {
           observations.splice(0, observations.length, ...observations.filter(value => !stale.has(String(recordOrEmpty(value).sourceId))))
           citations.splice(0, citations.length, ...citations.filter(value => !stale.has(value.id)))
-          checkpoint.nativeMessages = []; checkpoint.nativePendingCalls = undefined; checkpoint.pendingProposal = undefined
+          if (session.nativeProtocolVersion !== 2) { checkpoint.nativeMessages = []; checkpoint.nativePendingCalls = undefined; checkpoint.pendingProposal = undefined }
         }
       }
       let batchQueries = 0
@@ -590,25 +626,30 @@ export class WorkbenchConversationService {
         const requestId = nativeId ?? randomUUID()
         const turnId = session.messages.slice().reverse().find((message) => message.role === 'user')!.id
         const safeArgs = JSON.parse(redactSensitiveText(JSON.stringify(args)).value) as Record<string, unknown>
-        await this.update(projectId, id, (current) => ({ ...current, toolEvents: appendToolEvents(current.toolEvents ?? [], [{ kind: 'tool_request', id: requestId, turnId, name, args: safeArgs, createdAt: now() }]) }))
+        const persisted = nativeId ? await this.conversation(projectId, id) : undefined
+        const savedRequest = persisted?.toolEvents?.find(event => event.kind === 'tool_request' && event.id === requestId)
+        const savedResult = persisted?.toolEvents?.find(event => event.kind === 'tool_result' && event.requestId === requestId)
+        if (!savedRequest) await this.update(projectId, id, (current) => ({ ...current, toolEvents: appendToolEvents(current.toolEvents ?? [], [{ kind: 'tool_request', id: requestId, turnId, name, args: safeArgs, createdAt: now() }]) }))
         let output: unknown
-        try {
+        if (savedResult?.kind === 'tool_result') output = savedResult.outcome === 'interrupted' ? { error: '上次查询中断，结果未知；可发起新的只读查询。' } : savedResult.value
+        else try {
           output = name === 'conversation_read' ? await this.readConversationSource(projectId, id, safeArgs) : await this.tool(projectId, name, safeArgs, controller.signal)
         } catch (error) { output = { error: controller.signal.aborted ? '查询已中断，结果未知。' : safeError(error) } }
         const raw = JSON.parse(redactSensitiveText(JSON.stringify(output)).value) as unknown
-        await this.update(projectId, id, (current) => ({ ...current, toolEvents: appendToolEvents(current.toolEvents ?? [], [{ kind: 'tool_result', id: `${requestId}:result`, requestId, turnId,
+        if (!savedResult) await this.update(projectId, id, (current) => ({ ...current, toolEvents: appendToolEvents(current.toolEvents ?? [], [{ kind: 'tool_result', id: `${requestId}:result`, requestId, turnId,
           outcome: controller.signal.aborted ? 'interrupted' : recordOrEmpty(output).error ? 'failed' : 'completed', value: raw, createdAt: now() }]) }))
         controller.signal.throwIfAborted()
         if (!recordOrEmpty(output).error && ['node', 'artifact', 'requirement', 'workflow'].includes(name) && typeof args.runId === 'string') await attachRequirement(args.runId)
         const serialized = redactSensitiveText(JSON.stringify(output)).value
         const bounded = serialized.length > 22000 ? { truncated: true, excerpt: serialized.slice(0, 22000) } : JSON.parse(serialized)
-        const citation = { id: `source-${Math.max(0, ...citations.map(item => Number(item.id.replace('source-', '')) || 0)) + 1}`, label: `${name} · ${typeof args.path === 'string' ? args.path : typeof args.nodeId === 'string' ? args.nodeId : typeof args.query === 'string' ? args.query : '流程数据'}`, excerpt: JSON.stringify(bounded).slice(0, 2500), observedAt: now() }
-        citations.push(citation)
+        const savedMessage = persisted?.messages.find(message => message.toolRequestId === requestId)
+        const citation = savedMessage?.citations?.[0] ?? { id: `source-${Math.max(0, ...citations.map(item => Number(item.id.replace('source-', '')) || 0)) + 1}`, label: `${name} · ${typeof args.path === 'string' ? args.path : typeof args.nodeId === 'string' ? args.nodeId : typeof args.query === 'string' ? args.query : '流程数据'}`, excerpt: JSON.stringify(bounded).slice(0, 2500), observedAt: savedResult?.createdAt ?? now() }
+        if (!citations.some(item => item.id === citation.id)) citations.push(citation)
         const observation = { sourceId: citation.id, requestId, name, args: safeArgs, result: bounded, observedAt: citation.observedAt }
         observations.push(observation)
         degradeOlderObservations(observations, () => JSON.stringify(observations).length > 42000)
         while (JSON.stringify(observations).length > 42000 && observations.length > 1) observations.shift()
-        await this.update(projectId, id, (current) => ({ ...current, messages: [...current.messages, { id: randomUUID(), role: 'tool', toolRequestId: requestId, text: `${recordOrEmpty(output).error ? '查询未完成' : '已查询'}：${citation.label}`, createdAt: now(), citations: [citation] }] }))
+        await this.update(projectId, id, (current) => ({ ...current, checkpoint: structuredClone(checkpoint), messages: savedMessage ? current.messages : [...current.messages, { id: randomUUID(), role: 'tool', toolRequestId: requestId, text: `${recordOrEmpty(output).error ? '查询未完成' : '已查询'}：${citation.label}`, createdAt: now(), citations: [citation] }] }))
         return observation
       }
       const validateBatch = async (calls: unknown) => {
@@ -617,8 +658,11 @@ export class WorkbenchConversationService {
           controller.signal.throwIfAborted()
           if (entry.name.startsWith('repo_')) await validateWorkbenchRepositoryPath((await this.project(projectId)).path, String(entry.args.path ?? '.'))
           if (entry.args.runId !== undefined) {
+            const found = (await this.deps.store.listRuns()).find(run => run.id === entry.args.runId)
+            if (!found) throw new NativeReadArgumentError('不存在这个任务 ID。')
+            if (found.projectId === projectId && entry.name === 'node' && !found.nodes.some(node => node.id === entry.args.nodeId)) throw new NativeReadArgumentError('不存在这个节点 ID。')
             const { run } = await this.target(projectId, entry.args.runId, entry.name === 'node' ? String(entry.args.nodeId) : undefined)
-            if (entry.name === 'artifact' && !(await this.deps.store.listArtifacts(run.id)).some(artifact => artifact.id === entry.args.artifactId)) throw new Error('工具批次引用了当前任务之外的材料。')
+            if (entry.name === 'artifact' && !(await this.deps.store.listArtifacts(run.id)).some(artifact => artifact.id === entry.args.artifactId)) throw new NativeReadArgumentError('当前任务没有这个材料 ID。')
           }
           if (entry.name === 'conversation_read') await this.readConversationSource(projectId, id, entry.args)
         }
@@ -630,8 +674,27 @@ export class WorkbenchConversationService {
         provider = await this.deps.openHarness({ project: await this.project(projectId), conversation: session,
           providerId, signal: controller.signal, query })
       } else provider = await this.deps.resolveProvider(providerId, projectId)
+      phase = 'select_protocol'
+      if (session.nativeProtocolSelection === 'pending') session = await this.update(projectId, id, current => ({ ...current, nativeProtocolSelection: 'selected', ...(this.deps.nativeConversationsEnabled && provider!.supportsNativeTools ? { nativeProtocolVersion: 2 } : {}) }))
+      if (session.nativeProtocolVersion === 2 && session.executor !== 'native-tools' && !this.deps.nativeConversationsEnabled) throw new Error('原生对话暂时停用；已有记录和提案保留，不会自动换用旧协议。')
       if (session.executor === 'native-tools' && !this.deps.nativeReadOnlyPilotEnabled) throw new Error('原生只读工具试点已关闭；聊天记录可继续阅读，不会切换或重放为其他协议。')
-      if (session.executor === 'native-tools' && !provider.supportsNativeTools) throw new Error('当前模型不支持原生工具试点；仅支持官方 DeepSeek 端点的 deepseek-flash。请另建普通对话或选择支持的模型。')
+      if ((session.executor === 'native-tools' || session.nativeProtocolVersion === 2) && !provider.supportsNativeTools) throw new Error('当前模型不支持原生工具试点；仅支持官方 DeepSeek 端点的 deepseek-flash。请另建普通对话或选择支持的模型。')
+      if (session.nativeProtocolVersion === 2) {
+        phase = 'native_conversation'
+        await runNativeConversation({ provider, checkpoint, signal: controller.signal,
+          read: () => this.conversation(projectId, id), update: transform => this.update(projectId, id, transform), query, validateReads: validateBatch,
+          critical: async (runId, nodeId) => { const { run } = await this.target(projectId, runId, nodeId); return buildNativeCriticalContext(run, nodeId, await this.deps.store.listArtifacts(run.id)) },
+          context: async () => { const overview = await this.overview(projectId); const first = overview.totalRuns === 1 ? overview.runs[0] : undefined;
+            if (first) await attachRequirement(first.id)
+            const knowledge = await this.deps.loadKnowledge(projectId).catch(() => undefined)
+            return { latestWorkflow: overview, originalRequirements: [...requirements.values()], projectInstructions: knowledge?.projectInstructions }
+          },
+          memory: async () => this.recallBackgroundMemory(projectId, await this.conversation(projectId, id), [...requirements.values()][0], controller.signal),
+          append: async (callId, channel, text) => { await this.deps.store.appendWorkbenchResponseChunk?.(id, callId, channel, text) },
+        })
+        completed = true
+        return
+      }
       if (!provider.completeStructuredJson) throw new Error('当前执行器不支持会话调查，请检查配置。')
       const initial = await this.overview(projectId)
       if (initial.totalRuns === 1) await attachRequirement(initial.runs[0]!.id)
