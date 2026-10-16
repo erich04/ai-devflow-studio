@@ -250,13 +250,14 @@ async function hasSettingsNav(ctx: SampleContext) {
   return (await ctx.desktop.page.locator('.sidebar.rail').getByRole('button', { name: '设置', exact: true }).count()) > 0
 }
 
-/** Primary entry names before and after S3 (plan Y1); the first one on screen is used. */
-const TASKS_NAV = ['任务', '工作台']
+/** Primary entry names before and after S3 (plan Y1) and after the task center (#182); the first one on screen is used. */
+const TASKS_NAV = ['任务', '工作台', '任务中心']
 
 async function clickNav(ctx: SampleContext, name: string | string[]) {
   const rail = ctx.desktop.page.locator('.sidebar.rail')
   for (const candidate of Array.isArray(name) ? name : [name]) {
-    const button = rail.getByRole('button', { name: candidate, exact: true })
+    // The task center entry appends its claimable count, for example 「任务中心 · 2」.
+    const button = rail.getByRole('button', { name: new RegExp(`^${candidate}( · \\d+)?$`) })
     if ((await button.count()) > 0) {
       await button.click()
       await delay(500)
@@ -281,6 +282,13 @@ async function selectRepository(ctx: SampleContext, repoDir = ctx.workspace.repo
 
 async function selectRun(ctx: SampleContext, title: string) {
   await clickNav(ctx, TASKS_NAV)
+  // Since the task center (#182) runs are opened from its list rather than the project menu.
+  const center = ctx.desktop.page.getByRole('region', { name: '任务中心', exact: true })
+  if ((await center.count()) > 0) {
+    await center.getByRole('button', { name: new RegExp(`^(继续任务|查看任务)：${title}$`) }).first().click()
+    await delay(800)
+    return
+  }
   await openProjectMenu(ctx)
   await ctx.desktop.page.locator('.run-row').filter({ hasText: title }).first().click()
   await closeProjectMenu(ctx)
@@ -1630,8 +1638,111 @@ const longContent: Sample = {
   },
 }
 
+// 设置／模型与执行方式 (issue #227): before/after walkthrough of the three states it asks for.
+
+const nativeLaunchEnv = { DEVFLOW_CODING_ENGINE: undefined, DEVFLOW_CODING_EXECUTOR: undefined, DEVFLOW_NATIVE_CODING_PROVIDER_ID: undefined }
+const pricedProvider = { providerId: 'baseline-deepseek', name: 'DeepSeek', apiKey: 'sk-workspace-baseline-only', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com' }
+
+/** Opens the page with its sections in their default state, then captures it top to bottom. */
+async function captureModelSettings(ctx: SampleContext) {
+  const { page } = ctx.desktop
+  await clickNav(ctx, '设置')
+  await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '模型与执行方式', exact: true }).click()
+  await page.getByTestId('settings-models').waitFor({ state: 'visible' })
+  await settle(ctx)
+  ctx.observe('defaultOpenSections', await page.locator('[data-testid="settings-models"] details.runtime-settings[open] > summary').allInnerTexts())
+  ctx.observe('defaultVisibleText', (await page.getByTestId('settings-models').innerText()).length)
+  await capturePageSegments(ctx, 'default')
+  await page.evaluate(() => {
+    for (const details of document.querySelectorAll('[data-testid="settings-models"] details.runtime-settings')) (details as HTMLDetailsElement).open = true
+  })
+  await delay(400)
+  ctx.observe('expandedVisibleText', (await page.getByTestId('settings-models').innerText()).length)
+  await capturePageSegments(ctx, 'expanded')
+}
+
+async function capturePageSegments(ctx: SampleContext, label: string) {
+  const { page } = ctx.desktop
+  const metrics = await page.evaluate(() => {
+    for (const marked of document.querySelectorAll('[data-baseline-scroller]')) marked.removeAttribute('data-baseline-scroller')
+    let node: HTMLElement | null = document.querySelector('[data-testid="settings-models"]')
+    while (node && !(node.scrollHeight > node.clientHeight && ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))) node = node.parentElement
+    const scroller = node ?? (document.scrollingElement as HTMLElement)
+    scroller.setAttribute('data-baseline-scroller', '')
+    scroller.scrollTop = 0
+    return { scrollHeight: scroller.scrollHeight, clientHeight: scroller.clientHeight }
+  })
+  const step = Math.max(200, Math.floor(metrics.clientHeight * 0.9))
+  for (let index = 0, top = 0; top < metrics.scrollHeight && index < 8; index += 1, top += step) {
+    await page.evaluate((value) => { document.querySelector<HTMLElement>('[data-baseline-scroller]')!.scrollTop = value }, top)
+    await delay(250)
+    await ctx.capture(`models-${label}-${index + 1}`)
+    if (top + metrics.clientHeight >= metrics.scrollHeight) break
+  }
+  await page.evaluate(() => { document.querySelector<HTMLElement>('[data-baseline-scroller]')!.scrollTop = 0 })
+}
+
+async function prepareConfiguredBuild(ctx: SampleContext, budget: { monthlyLimitUsd: number; warningThresholdUsd: number }) {
+  const state = await prepareBuild(ctx)
+  await ipc(ctx, 'saveCodingRuntimeBudgetPolicy', { projectId: state.projectId, enabled: true, ...budget })
+  await ipc(ctx, 'saveAgentProviderCredential', pricedProvider)
+  await ipc(ctx, 'saveCodingRuntimeConfiguration', { projectId: state.projectId, executor: 'native-model', providerId: pricedProvider.providerId })
+  await reloadAndSelectRun(ctx, TASK_TITLE)
+  await selectNode(ctx, STAGE.build, nodeOf(state.run, 'build', 'task'))
+  await settle(ctx)
+}
+
+const modelSettingsLimit = '没有发出模型请求；DeepSeek 凭据只为显示配置和预算估算，密钥为占位值。'
+
+const modelSettingsUnconfigured: Sample = {
+  ...common,
+  id: 'settings-models-unconfigured',
+  title: '模型与执行方式：已选仓库，未配置执行工具、团队和预算',
+  planRefs: ['#227'],
+  method: 'ui',
+  simulated: false,
+  sizes: ['1440x742'],
+  launchEnv: nativeLaunchEnv,
+  limits: [modelSettingsLimit],
+  async prepare(ctx) {
+    await selectRepository(ctx)
+    await captureModelSettings(ctx)
+  },
+}
+
+const modelSettingsConfigured: Sample = {
+  ...common,
+  id: 'settings-models-configured',
+  title: '模型与执行方式：DeepSeek、DevFlow Native、团队预算 $10 / 月（预警 $5），可以启动',
+  planRefs: ['#227'],
+  method: 'ipc',
+  sizes: ['1440x742'],
+  launchEnv: nativeLaunchEnv,
+  limits: [fakeLimit, ipcLimit, pairLimit, modelSettingsLimit],
+  async prepare(ctx) {
+    await prepareConfiguredBuild(ctx, { monthlyLimitUsd: 10, warningThresholdUsd: 5 })
+    await captureModelSettings(ctx)
+  },
+}
+
+const modelSettingsBlocked: Sample = {
+  ...common,
+  id: 'settings-models-blocked',
+  title: '模型与执行方式：预算不足需 Owner/Lead 批准，且未配置测试命令',
+  planRefs: ['#227'],
+  method: 'ipc',
+  sizes: ['1440x742'],
+  repoVariant: 'none',
+  launchEnv: nativeLaunchEnv,
+  limits: [fakeLimit, ipcLimit, pairLimit, modelSettingsLimit, '月上限设为 $0.001，使预估费用超过预算。示例仓库没有 test 脚本。'],
+  async prepare(ctx) {
+    await prepareConfiguredBuild(ctx, { monthlyLimitUsd: 0.001, warningThresholdUsd: 0.0005 })
+    await captureModelSettings(ctx)
+  },
+}
+
 /** Samples outside the default measured set; selected explicitly with `--samples`. */
-export const extraSamples: Sample[] = [docTour, longContent]
+export const extraSamples: Sample[] = [docTour, longContent, modelSettingsUnconfigured, modelSettingsConfigured, modelSettingsBlocked]
 
 export function findSamples(ids: string[] | undefined): Sample[] {
   if (!ids || ids.length === 0) return samples

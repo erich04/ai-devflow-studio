@@ -237,7 +237,7 @@ export async function verifyDesignInElectron(input: {
     await page.getByRole('navigation', { name: '设置分区' }).getByRole('button', { name: '模型与执行方式', exact: true }).click()
     const executionTool = page.locator('details.runtime-settings').filter({ has: page.locator('summary', { hasText: '项目执行工具 · 本地项目' }) })
     if ((await executionTool.getAttribute('open')) === null) await executionTool.locator(':scope > summary').click()
-    await expect(page.getByText('DevFlow Native（内置编码执行器）', { exact: true })).toBeVisible()
+    await expect(page.getByRole('combobox', { name: '执行工具', exact: true })).toHaveValue('native-model')
     await page.getByRole('combobox', { name: '执行工具', exact: true }).scrollIntoViewIfNeeded()
     await page.screenshot({ path: path.join(output, '03-execution-tool-names.png'), scale: 'css' })
     const callsBeforeRestart = input.requestCount()
