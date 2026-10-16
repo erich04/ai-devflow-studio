@@ -290,6 +290,15 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 .runtime-budget-summary dt { color: var(--text-muted); }
 .runtime-budget-summary dd { margin: 0; }
 
+/* #227: secondary notes, diagnostics and the add form stay one click away from the settings. */
+.settings-model .runtime-settings-form > dl,
+.settings-model .settings-secondary { grid-column: 1 / -1; }
+.settings-model .settings-secondary > summary { cursor: pointer; color: var(--text-muted); font-size: var(--font-size-xs); font-weight: 600; }
+.settings-model .settings-secondary[open] > summary { margin-bottom: 8px; }
+.settings-model .readiness-passed-list { display: grid; gap: 2px; margin: 0; padding-left: 18px; color: var(--text-muted); font-size: var(--font-size-xs); }
+.settings-model .provider-add-settings { padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.settings-model .provider-add-settings > summary { color: var(--text); font-size: var(--font-size-body); font-weight: 800; }
+
 .task-center { padding: 24px; min-width: 0; }
 .task-center-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .task-center-heading h2 { margin: 0; font-size: var(--font-size-title); }

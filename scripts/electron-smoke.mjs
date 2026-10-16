@@ -1977,6 +1977,9 @@ try {
   // Real preload/Main/SQLite deletion in this isolated profile; never contact a cloud model.
   // Model providers are 设置／模型与执行方式 (plan Y2).
   await openSettingsDisclosure(await openSettingsSection(second.page, '模型与执行方式'), '模型提供方 · 本机')
+  // With saved providers the add form starts folded (#227).
+  const addProvider = second.page.getByTestId('provider-add-settings')
+  if ((await addProvider.getAttribute('open')) === null) await addProvider.locator(':scope > summary').click()
   await second.page.getByLabel('Agent Provider Name').fill('Temporary removal smoke')
   await second.page.getByLabel('Agent Provider Base URL').fill('https://example.invalid/v1')
   await second.page.getByLabel('Agent Provider Model').fill('fixture-removal')

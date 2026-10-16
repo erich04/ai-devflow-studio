@@ -1894,8 +1894,9 @@ describe('App', () => {
     const expectNeutralUnconfiguredModels = () => {
       const models = openSettingsSection('模型与执行方式')
       expect(within(models).getByTestId('review-provider-mode')).toHaveTextContent('未选择 Provider')
-      expect(within(models).getByText('当前未选择模型提供方。请选择已保存的提供方，或在下方新增。'))
-        .toHaveClass('empty-note')
+      expect(within(models).getByText('还没有保存的模型提供方，请先新增。')).toHaveClass('empty-note')
+      // Without a saved provider the add form is the next step, so it starts open.
+      expect(within(models).getByTestId('provider-add-settings')).toHaveAttribute('open')
       expect(within(models).queryByRole('alert')).not.toBeInTheDocument()
       expect(within(models).queryByRole('button', { name: /门禁审查/ })).not.toBeInTheDocument()
     }
@@ -3203,6 +3204,36 @@ describe('App', () => {
     expect(workbench).toHaveTextContent('预算策略：已配置')
     expect(workbench).not.toHaveTextContent('budget_policy_missing：通过')
     expect(within(workbench).getByText('budget_blocked')).toBeInTheDocument()
+    // Only the blocker is listed with its next step; passed checks fold into one line (#227).
+    const checks = within(workbench).getByTestId('coding-readiness-checks')
+    expect(within(checks).getAllByText(/：/u, { selector: '.trace-step > strong' }).map((item) => item.textContent)).toEqual(['预算评估：阻止执行'])
+    expect(within(checks).getByText(/项已通过$/u).closest('details')).not.toHaveAttribute('open')
+    expect(within(checks).getByRole('button', { name: '查看团队预算' })).toBeInTheDocument()
+  })
+
+  it('keeps internal English runtime reasons out of the default settings copy (#227)', async () => {
+    const english = 'Project runtime budget would be exceeded; lead approval is required before calling the real provider.'
+    const readiness = codingReadinessFixture({
+      status: 'blocked',
+      checks: [...codingReadinessFixture().checks.slice(0, -1), { code: 'budget_blocked', status: 'blocked', message: english }],
+    })
+    let notify!: Parameters<NonNullable<DevFlowDesktopApi['onModelBudgetUpdated']>>[0]
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-build')),
+      getCodingRuntimeReadiness: vi.fn().mockResolvedValue(readiness),
+      onModelBudgetUpdated: (listener) => { notify = listener; return () => {} },
+    })
+    render(<App />)
+    await screen.findByTestId('node-inspector')
+    act(() => notify({ projectId: localProject.id, providerId: agentProvider.id,
+      decision: { status: 'requires_lead_approval', blocksRun: true, currentSpendUsd: 9.9, projectedCostUsd: 0.25, approvalRequiredRole: 'lead', reason: english } }))
+    const models = openSettingsSection('模型与执行方式')
+    await waitFor(() => expect(within(models).getByTestId('model-budget-decision')).toHaveTextContent('预计超出月上限，需要 Owner/Lead 一次性批准'))
+    const checks = within(models).getByTestId('coding-readiness-checks')
+    await waitFor(() => expect(checks).toHaveTextContent('预算评估：阻止执行'))
+    // The original reason stays reachable inside the folded diagnostics only.
+    for (const element of within(models).getAllByText(english)) expect(element.closest('details:not([open])')).not.toBeNull()
+    expect(within(models).getByTestId('model-budget-decision')).not.toHaveTextContent(english)
   })
 
   it.each(['saved', 'manual', 'empty'] as const)('selects OpenCode credentials by their saved IDs with explicit confirmation: %s', async (mode) => {
@@ -7471,14 +7502,16 @@ describe('App', () => {
     openSettingsSection('模型与执行方式')
     const summary = await screen.findByTestId('runtime-budget-summary')
     expect(summary).toHaveTextContent('月上限尚未配置')
-    expect(screen.getByTestId('runtime-budget-web-location')).toHaveTextContent('在 Web 控制端打开「设置 › 预算」')
+    expect(screen.getByTestId('runtime-budget-web-location')).toHaveTextContent('在 Web 控制端「设置 › 预算」修改')
     // The desktop no longer edits the Team budget; the old form and its write are gone.
     expect(screen.queryByLabelText('项目月预算')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '保存团队项目预算' })).not.toBeInTheDocument()
     const changedOnWeb = { projectId: localProject.id, enabled: true, monthlyLimitUsd: 1, warningThresholdUsd: 0.5, currency: 'USD' as const, updatedAt: '2026-09-28T12:00:00.000Z' }
     vi.mocked(api.getCodingRuntimeBudgetPolicy).mockResolvedValue(changedOnWeb)
     fireEvent.click(screen.getByRole('button', { name: '同步云端预算策略' }))
-    await waitFor(() => expect(screen.getByTestId('runtime-budget-summary')).toHaveTextContent('月上限$1.00 / 月'))
+    // Once configured the amounts are stated once, in the section summary.
+    await waitFor(() => expect(screen.getByTestId('runtime-budget-label')).toHaveTextContent('已配置 · $1.00 / 月 · 预警 $0.50'))
+    expect(screen.queryByTestId('runtime-budget-summary')).not.toBeInTheDocument()
     expect(api.saveCodingRuntimeBudgetPolicy).not.toHaveBeenCalled()
     clickPrimaryNav('任务')
     await waitFor(() => expect(within(openTaskUsage()).getByTestId('runtime-budget-status')).toHaveTextContent('已配置 · $1.00'))

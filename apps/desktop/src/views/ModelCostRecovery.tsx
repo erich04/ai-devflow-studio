@@ -26,7 +26,6 @@ export function ModelCostRecovery({ desktopApi, projectId }: { desktopApi: DevFl
     finally { if (current === epoch.current) { busy.current = false; setPending(false) } }
   }
   return <section aria-label="项目费用记录">
-    <h3>费用记录与恢复</h3>
     <button disabled={pending || !desktopApi?.getModelCostRecovery || !projectId} onClick={() => void load(false)}>查看项目费用记录</button>
     {data && <>
       <p>团队项目 {data.overview.projectId} · {data.overview.month}（UTC）</p>

@@ -4,7 +4,6 @@ import { ProviderThinkingFields, SavedProviderThinkingSettings } from '../compon
 import { ArrowLeft, Code2, Save, Settings2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import {
-  formatUsd,
   type AgentProviderConfig,
   type BudgetGuardDecision,
   type CodingAgentRun,
@@ -19,6 +18,7 @@ import {
 import type { DevFlowDesktopApi } from '../desktop-api'
 import { buildProviderSettingsView } from '../app/agent-evidence-view-model'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
+import { budgetDecisionNeedsAttention, budgetDecisionText, readableText } from '../app/model-settings-view-model'
 import type { ProjectRuntimeBudget } from '../app/useProjectRuntimeBudget'
 import { ipcErrorMessage } from '../app/ipc-error'
 
@@ -114,6 +114,7 @@ export function ModelSettings({
   const effectiveOpenCodeModelId = customOpenCodeProvider ? opencodeModelId.trim() : savedOpenCodeProvider?.model ?? ''
   const budgetPolicy = projectRuntimeBudget.policy
   const [codingConfigurationStatus, setCodingConfigurationStatus] = useState('')
+  const [budgetStatus, setBudgetStatus] = useState('')
   const [isSavingCodingConfiguration, setIsSavingCodingConfiguration] = useState(false)
   const runtimeSettingsRef = useRef<HTMLDetailsElement>(null)
   const budgetSettingsRef = useRef<HTMLDetailsElement>(null)
@@ -172,6 +173,14 @@ export function ModelSettings({
     target.focus()
     target.scrollIntoView?.({ block: 'start' })
   }, [focus])
+
+  function openBudgetSettings() {
+    const target = budgetSettingsRef.current
+    if (!target) return
+    target.open = true
+    target.focus()
+    target.scrollIntoView?.({ block: 'start' })
+  }
 
   async function saveCodingConfiguration() {
     if (!desktopApi || !localProjectId) return
@@ -247,11 +256,11 @@ export function ModelSettings({
         reason: 'Explicit Owner/Lead approval for model requests on this project and Provider; valid for 15 minutes.',
       })
       onRuntimeBudgetApprovalIdChange(approval.id)
-      setCodingConfigurationStatus(`一次性预算批准已创建：${approval.id}`)
+      setBudgetStatus(`一次性预算批准已创建：${approval.id}`)
       onSettingsSaved?.()
       if (selectedNode?.kind === 'task' && selectedNode.stage === 'build') await onRefreshCodingReadiness(approval.id)
     } catch (error) {
-      setCodingConfigurationStatus(ipcErrorMessage(error, '创建一次性预算批准失败'))
+      setBudgetStatus(ipcErrorMessage(error, '创建一次性预算批准失败'))
     } finally {
       setIsSavingCodingConfiguration(false)
     }
@@ -263,86 +272,148 @@ export function ModelSettings({
   const codingConfigurationLabel = !codingConfiguration || codingConfiguration.projectId !== localProjectId
     ? '未配置'
     : configurationIssues.length ? '配置需处理' : '已配置'
+  const codingConfigurationSummary = codingConfiguration && codingConfiguration.projectId === localProjectId
+    ? codingConfiguration.executor === 'native-model'
+      ? `DevFlow Native · ${codingConfigurationProviderName}`
+      : `OpenCode · ${codingConfigurationProviderName === '旧版 Provider' ? codingConfiguration.providerId : codingConfigurationProviderName} / ${codingConfiguration.modelId}`
+    : ''
   const codingReadinessDisplay = codingReadiness ? buildCodingReadinessDisplay(codingReadiness) : null
+  const blockedReadinessItems = codingReadinessDisplay?.items.filter((item) => item.state === 'blocked') ?? []
+  const passedReadinessItems = codingReadinessDisplay?.items.filter((item) => item.state === 'ready') ?? []
   const requiresLeadApproval = (modelBudget?.decision ?? codingReadiness?.budgetDecision)?.status === 'requires_lead_approval'
   // The approval ID is configuration; the re-run itself is confirmed in the task (plan W5).
   const codingRunNeedsApproval = latestCodingRun?.budgetDecision?.status === 'requires_lead_approval'
 
   return (
     <div className="settings-model" data-testid="settings-models">
-      <details className="runtime-settings project-policy-settings" ref={budgetSettingsRef} tabIndex={-1}
-        open={projectRuntimeBudget.status !== 'loaded' || !projectRuntimeBudget.policy || modelBudget?.decision.blocksRun === true || focus === 'models'}>
-        <summary><span>团队预算 · 团队项目</span><strong>{projectRuntimeBudget.label}</strong></summary>
+      <details className="runtime-settings" open={!providerView.selectedProvider || focus === 'models'}>
+        <summary>
+          <span>
+            <Settings2 size={16} />
+            模型提供方 · 本机
+          </span>
+          <strong>{providerView.summary}</strong>
+        </summary>
         <div className="runtime-settings__body">
-          <article className="agent-evidence-card runtime-settings-form">
-            <div className="section-heading">
-              <span>云端团队预算</span>
-              <strong>{projectRuntimeBudget.label}</strong>
-            </div>
-            <p>作用于整个团队项目的月度美元预算；一次性批准需要 Owner 或 Lead 权限，不会更改 API Key。</p>
-            <p>聊天、澄清、设计、审查和编码的每次模型请求都会重新检查。预估用于预警和准入，实际用量按返回记录；未知费用需核对。</p>
-            <dl className="runtime-budget-summary" data-testid="runtime-budget-summary">
-              <div><dt>月上限</dt><dd>{budgetPolicy ? `${formatUsd(budgetPolicy.monthlyLimitUsd)} / 月` : '尚未配置'}</dd></div>
-              <div><dt>预警阈值</dt><dd>{budgetPolicy ? formatUsd(budgetPolicy.warningThresholdUsd) : '尚未配置'}</dd></div>
-              <div><dt>策略更新时间</dt><dd>{budgetPolicy?.updatedAt ?? '尚未同步'}</dd></div>
-            </dl>
-            <p className="meta">周期：UTC 自然月 · 超限：需额外批准。</p>
-            {/* Team budget is a team-side setting: it is edited on the Web (plan S5, Q7; 4.3 节). */}
-            <p data-testid="runtime-budget-web-location">修改月上限与预警阈值：在 Web 控制端打开「设置 › 预算」，选择当前连接的团队项目。保存后回到这里点「同步云端预算策略」读取。</p>
-            <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>同步云端预算策略</button>
-            {modelBudget && <p role="status">最近一次模型预算检查：{modelBudget.decision.reason}</p>}
-            <ModelCostRecovery desktopApi={desktopApi} projectId={localProjectId} />
-            {codingConfigurationStatus ? <p role="status">{codingConfigurationStatus}</p> : null}
-            {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
-            {projectRuntimeBudget.status === 'unavailable' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>重试读取预算</button> : null}
-            {requiresLeadApproval ? (
-              <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
-            ) : null}
-            {codingRunNeedsApproval || runtimeBudgetApprovalId ? (
-              <div className="runtime-budget-retry" data-testid="runtime-budget-approval">
-                <label>
-                  预算批准编号
-                  <input
-                    aria-label="Runtime budget approval ID"
-                    placeholder="runtime-budget-approval-..."
-                    value={runtimeBudgetApprovalId}
-                    onChange={(event) => onRuntimeBudgetApprovalIdChange(event.target.value)}
-                  />
+          <article className="agent-evidence-card">
+            {providers.length > 0 ? (
+              <div className="provider-picker-controls">
+                <label className="runtime-provider-picker">
+                  使用已保存 Provider
+                  <select aria-label="Saved Agent Provider" value={selectedProviderId}
+                    onChange={(event) => onProviderChange(event.target.value)}>
+                    <option value="">未选择 Provider</option>
+                    {providers.map((provider) => (
+                      <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>
+                    ))}
+                  </select>
                 </label>
-                <p className="meta">开发执行因预算需要批准时，重新运行会使用这个编号；重新运行在任务的「当前工作」中确认。</p>
-                <button className="primary-button" disabled={!runtimeBudgetApprovalId.trim() || !hasSelectedRun} onClick={onHandleInTask}>
-                  <ArrowLeft size={16} />
-                  在任务中重新运行
+                <button className="ghost-button" aria-label="管理已保存 Provider" disabled={!desktopApi || !selectedProviderId}
+                  onClick={() => setProviderRemovalTarget(providers.find((item) => item.id === selectedProviderId) ?? null)}>
+                  <Settings2 size={16} />管理
                 </button>
               </div>
+            ) : (
+              <p className="empty-note">还没有保存的模型提供方，请先新增。</p>
+            )}
+            <p className="meta" data-testid="review-provider-mode">
+              <strong>{providerView.providerDataSource.label}</strong>
+              {' '}
+              {providerView.providerMode}
+              {providerView.selectedProvider?.maskedCredential ? ` · 密钥 ${providerView.selectedProvider.maskedCredential}` : ''}
+            </p>
+            {desktopApi && selectedProvider?.kind === 'openai-compatible' ? <SavedProviderThinkingSettings key={selectedProvider.id} provider={selectedProvider} api={desktopApi} onUpdated={onProviderUpdated} /> : null}
+            {reviewExecutor && onReviewExecutorChange && providers.length > 0 ? (
+              <label className="runtime-provider-picker" data-testid="review-executor-setting">
+                门禁审查方式
+                <select
+                  aria-label="门禁审查方式"
+                  value={reviewExecutor}
+                  onChange={(event) => onReviewExecutorChange(event.target.value as StageAgentExecutorKind)}
+                >
+                  <option value="direct-provider">只依据材料与知识目录</option>
+                  <option value="native-agent">结合仓库只读核对 · 内置</option>
+                  <option value="local-agent">结合仓库只读核对 · OpenCode</option>
+                </select>
+                <small>
+                  {reviewExecutor === 'native-agent'
+                    ? '内置只读工具检查实际文件，不修改代码、不批准 Gate；每轮模型调用单独计费。'
+                    : reviewExecutor === 'local-agent'
+                    ? '需要本机 OpenCode；只读查看仓库，不修改代码、不批准 Gate；多轮调用，费用通常更高。'
+                    : '一次模型调用，只看待审材料、项目说明和知识目录，不读取仓库。'}
+                </small>
+              </label>
             ) : null}
           </article>
+
+          <details className="settings-secondary provider-add-settings" data-testid="provider-add-settings" open={providers.length === 0}>
+            <summary>新增模型提供方</summary>
+            <article className="agent-evidence-card runtime-settings-form">
+              <label>
+                Provider 名称
+                <input
+                  aria-label="Agent Provider Name"
+                  value={providerNameDraft}
+                  placeholder="OpenAI production"
+                  onChange={(event) => onProviderNameDraftChange(event.target.value)}
+                />
+              </label>
+              <label>
+                Base URL
+                <input
+                  aria-label="Agent Provider Base URL"
+                  value={providerBaseUrlDraft}
+                  placeholder="https://ark.cn-beijing.volces.com/api/coding/v3"
+                  onChange={(event) => onProviderBaseUrlDraftChange(event.target.value)}
+                />
+              </label>
+              <label>
+                模型（Model）
+                <input
+                  aria-label="Agent Provider Model"
+                  value={providerModelDraft}
+                  placeholder="ark-code-latest"
+                  onChange={(event) => onProviderModelDraftChange(event.target.value)}
+                />
+              </label>
+              <label>
+                API Key
+                <input
+                  aria-label="Agent Provider API Key"
+                  type="password"
+                  value={providerKeyDraft}
+                  placeholder="sk-..."
+                  onChange={(event) => onProviderKeyDraftChange(event.target.value)}
+                />
+              </label>
+              <details><summary>高级配置</summary><ProviderThinkingFields model={providerModelDraft.trim()} baseUrl={providerBaseUrlDraft.trim()} value={newProviderThinking} onChange={setNewProviderThinking} /></details>
+              <p className="meta">密钥只保存在本机安全存储，界面不会读回；保存后设为当前提供方。</p>
+              <button className="ghost-button" onClick={() => onSaveProviderCredential(newProviderThinking)}>
+                <Save size={16} />
+                保存并使用 Provider
+              </button>
+            </article>
+          </details>
         </div>
       </details>
 
       <details className="runtime-settings" open={codingReadiness?.status !== 'ready' || focus === 'coding'} ref={runtimeSettingsRef} tabIndex={-1}>
         <summary>
           <span><Code2 size={16} />项目执行工具 · 本地项目</span>
-          <strong>{codingConfigurationLabel}</strong>
+          <strong>{codingConfigurationSummary ? `${codingConfigurationLabel} · ${codingConfigurationSummary}` : codingConfigurationLabel}</strong>
         </summary>
         <div className="runtime-settings__body">
           <article className="agent-evidence-card runtime-settings-form">
-            <div className="section-heading">
-              <span>开发实现使用的工具</span>
-              <strong>{codingExecutor === 'native-model' ? 'DevFlow Native（内置编码执行器）' : 'OpenCode'}</strong>
-            </div>
-            <p>这里设置开发实现使用的工具和模型。需求澄清、方案设计可在各自步骤选择 Direct Provider 或只读 OpenCode；讨论栏单独选择，不随这里切换。</p>
-            {codingExecutor === 'native-model' ? <p className="empty-note">执行器版本：v2。旧称 Native Coding Agent / Native Executor，均指 DevFlow Native。</p> : null}
             <label>
               执行工具
               <select aria-label="执行工具" value={codingExecutor} onChange={(event) => setCodingExecutor(event.target.value as 'native-model' | 'opencode-http')}>
-                <option value="native-model">DevFlow Native · 内置编码执行器</option>
-                <option value="opencode-http">OpenCode · 使用 OpenCode Provider</option>
+                <option value="native-model">DevFlow Native（内置）</option>
+                <option value="opencode-http">OpenCode（需本机安装）</option>
               </select>
             </label>
             {codingExecutor === 'native-model' ? (
               <label>
-                DevFlow Native 使用的 Provider
+                使用的模型提供方
                 <select aria-label="Coding Agent Provider" value={codingProviderId} onChange={(event) => setCodingProviderId(event.target.value)}>
                   <option value="">请选择已保存 Provider</option>
                   {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
@@ -359,7 +430,7 @@ export function ModelSettings({
                     : codingDiscovery?.candidates[0]?.reason ?? '检测不会自动选择或启动 OpenCode。'}
                 </p>
                 <label>
-                  OpenCode 使用的已保存 Provider
+                  OpenCode 使用的模型提供方
                   <select aria-label="OpenCode 已保存 Provider" disabled={customOpenCodeProvider} value={savedOpenCodeProvider?.id ?? ''} onChange={(event) => {
                     opencodeDraftEdited.current = true
                     const provider = providers.find((candidate) => candidate.id === event.target.value)
@@ -370,7 +441,6 @@ export function ModelSettings({
                     {providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>)}
                   </select>
                 </label>
-                <p className="empty-note">选择后复用本机已保存的凭据和模型，无需再次输入 API Key。</p>
                 <details open={customOpenCodeProvider}>
                   <summary>高级：手动指定 OpenCode Provider / Model</summary>
                   <label>
@@ -379,7 +449,7 @@ export function ModelSettings({
                       setCustomOpenCodeProvider(event.target.checked)
                     }} />手动指定 OpenCode Provider / Model
                   </label>
-                  <p className="empty-note">用于 OpenCode 中已配置的自定义 Provider；ID 必须与实际配置一致。</p>
+                  <p className="empty-note">ID 须与 OpenCode 中的配置一致。</p>
                   <label>
                     OpenCode Provider ID
                     <input aria-label="OpenCode Provider ID" disabled={!customOpenCodeProvider} value={opencodeProviderId} onChange={(event) => { opencodeDraftEdited.current = true; setOpencodeProviderId(event.target.value) }} />
@@ -403,154 +473,101 @@ export function ModelSettings({
             >
               <Save size={16} />{codingExecutor === 'opencode-http' ? '确认并用于当前项目' : '保存并用于当前项目'}
             </button>
-            <p className="empty-note">当前：{codingConfiguration
-              ? codingConfiguration.executor === 'native-model'
-                ? `Native · ${codingConfigurationProviderName} · v${codingConfiguration.version}`
-                : `OpenCode ${codingConfiguration.detectedVersion} · ${codingConfigurationProviderName === '旧版 Provider' ? codingConfiguration.providerId : codingConfigurationProviderName} / ${codingConfiguration.modelId} · v${codingConfiguration.version}`
-              : '未配置'}</p>
+            {codingConfigurationStatus ? <p role="status">{codingConfigurationStatus}</p> : null}
+            <details className="settings-secondary">
+              <summary>技术详情</summary>
+              <p className="meta">{codingConfiguration
+                ? codingConfiguration.executor === 'native-model'
+                  ? `DevFlow Native 执行器 v2（旧称 Native Coding Agent / Native Executor）· 配置修订 v${codingConfiguration.version}`
+                  : `OpenCode ${codingConfiguration.detectedVersion} · 配置修订 v${codingConfiguration.version}`
+                : '尚未保存项目执行工具。'}</p>
+              <p className="meta">需求澄清、方案设计在各自步骤选择执行方式；讨论栏单独选择，不随这里切换。</p>
+            </details>
           </article>
 
-          <article className="agent-evidence-card">
+          <article className="agent-evidence-card" data-testid="coding-readiness-checks">
             <div className="section-heading"><span>启动前检查</span><strong>{codingReadinessDisplay?.statusLabel ?? '未读取'}</strong></div>
-            <div className="trace-list">
-              {codingReadinessDisplay?.items.map((item) => (
-                <div className="trace-step" key={item.code}>
-                  <span>{item.state === 'ready' ? '通过' : '阻塞'}</span>
-                  <strong>{item.label}：{item.statusLabel}</strong>
-                  <p>{item.detail}</p>
-                  {item.remediation ? <p>处理方式：{item.remediation}</p> : null}
-                  {item.diagnosticCode ? <details><summary>诊断详情</summary><code>{item.diagnosticCode}</code></details> : null}
-                </div>
-              )) ?? <p className="empty-note">选择开发实现步骤后会显示完整的启动前检查。</p>}
-            </div>
+            {codingReadinessDisplay ? (
+              <>
+                {blockedReadinessItems.length ? (
+                  <div className="trace-list">
+                    {blockedReadinessItems.map((item) => (
+                      <div className="trace-step" key={item.code}>
+                        <strong>{item.label}：{item.statusLabel}</strong>
+                        {readableText(item.detail) ? <p>{item.detail}</p> : null}
+                        {item.remediation ? <p>{item.remediation}</p> : null}
+                        {item.code === 'budget_blocked' ? <button className="ghost-button" onClick={openBudgetSettings}>查看团队预算</button> : null}
+                        <details><summary>诊断详情</summary><code>{item.diagnosticCode}</code>{readableText(item.detail) ? null : <p>{item.detail}</p>}</details>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                {passedReadinessItems.length ? (
+                  <details className="settings-secondary">
+                    <summary>{blockedReadinessItems.length ? `其余 ${passedReadinessItems.length} 项已通过` : `${passedReadinessItems.length} 项检查全部通过`}</summary>
+                    <ul className="readiness-passed-list">
+                      {passedReadinessItems.map((item) => <li key={item.code}>{item.label}：{item.statusLabel}</li>)}
+                    </ul>
+                  </details>
+                ) : null}
+              </>
+            ) : <p className="empty-note">选择开发实现步骤后显示启动前检查。</p>}
             {codingReadinessError ? <p className="empty-note">{codingReadinessError}</p> : null}
-            {codingConfigurationStatus ? <p className="empty-note">{codingConfigurationStatus}</p> : null}
           </article>
         </div>
       </details>
 
-      <details className="runtime-settings" open={!providerView.selectedProvider || focus === 'models'}>
-        <summary>
-          <span>
-            <Settings2 size={16} />
-            模型提供方 · 本机
-          </span>
-          <strong>{providerView.summary}</strong>
-        </summary>
+      <details className="runtime-settings project-policy-settings" ref={budgetSettingsRef} tabIndex={-1}
+        open={projectRuntimeBudget.status !== 'loaded' || !projectRuntimeBudget.policy || modelBudget?.decision.blocksRun === true || focus === 'models'}>
+        <summary><span>团队预算 · 团队项目</span><strong data-testid="runtime-budget-label">{projectRuntimeBudget.label}</strong></summary>
         <div className="runtime-settings__body">
-          <article className="agent-evidence-card">
-            <div className="section-heading">
-              <span>门禁审查与默认使用的模型</span>
-              <strong>{providerView.providerDataSource.status}</strong>
-            </div>
-            <p data-testid="review-provider-mode">
-              <strong>{providerView.providerDataSource.label}</strong>
-              {' '}
-              {providerView.providerMode}
-            </p>
-            {providerView.selectedProvider ? (
-              <div className="provider-row">
-                <div>
-                  <strong>{providerView.selectedProvider.name}</strong>
-                  <span>{providerView.selectedProvider.kind}</span>
-                </div>
-                <code>
-                  {providerView.selectedProvider.maskedCredential ?? providerView.selectedProvider.model}
-                </code>
-              </div>
-            ) : (
-              <p className="empty-note">当前未选择模型提供方。请选择已保存的提供方，或在下方新增。</p>
+          <article className="agent-evidence-card runtime-settings-form">
+            {budgetPolicy ? null : (
+              <dl className="runtime-budget-summary" data-testid="runtime-budget-summary">
+                <div><dt>月上限</dt><dd>尚未配置</dd></div>
+              </dl>
             )}
-            {providers.length > 0 ? (
-              <div className="provider-picker-controls">
-                <label className="runtime-provider-picker">
-                  使用已保存 Provider
-                  <select aria-label="Saved Agent Provider" value={selectedProviderId}
-                    onChange={(event) => onProviderChange(event.target.value)}>
-                    <option value="">未选择 Provider</option>
-                    {providers.map((provider) => (
-                      <option key={provider.id} value={provider.id}>{provider.name} · {provider.model}</option>
-                    ))}
-                  </select>
+            {modelBudget && budgetDecisionNeedsAttention(modelBudget.decision)
+              ? <p role="status" data-testid="model-budget-decision">最近一次模型预算检查：{budgetDecisionText(modelBudget.decision)}</p>
+              : null}
+            {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
+            {requiresLeadApproval ? (
+              <button className="primary-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
+            ) : null}
+            {codingRunNeedsApproval || runtimeBudgetApprovalId ? (
+              <div className="runtime-budget-retry" data-testid="runtime-budget-approval">
+                <label>
+                  预算批准编号
+                  <input
+                    aria-label="Runtime budget approval ID"
+                    placeholder="runtime-budget-approval-..."
+                    value={runtimeBudgetApprovalId}
+                    onChange={(event) => onRuntimeBudgetApprovalIdChange(event.target.value)}
+                  />
                 </label>
-                <button className="ghost-button" aria-label="管理已保存 Provider" disabled={!desktopApi || !selectedProviderId}
-                  onClick={() => setProviderRemovalTarget(providers.find((item) => item.id === selectedProviderId) ?? null)}>
-                  <Settings2 size={16} />管理
+                <p className="meta">在任务的「当前工作」中重新运行时使用这个编号。</p>
+                <button className="primary-button" disabled={!runtimeBudgetApprovalId.trim() || !hasSelectedRun} onClick={onHandleInTask}>
+                  <ArrowLeft size={16} />
+                  在任务中重新运行
                 </button>
               </div>
             ) : null}
-            {desktopApi && selectedProvider?.kind === 'openai-compatible' ? <SavedProviderThinkingSettings key={selectedProvider.id} provider={selectedProvider} api={desktopApi} onUpdated={onProviderUpdated} /> : null}
-            {reviewExecutor && onReviewExecutorChange && providers.length > 0 ? (
-              <label className="runtime-provider-picker" data-testid="review-executor-setting">
-                门禁审查方式
-                <select
-                  aria-label="门禁审查方式"
-                  value={reviewExecutor}
-                  onChange={(event) => onReviewExecutorChange(event.target.value as StageAgentExecutorKind)}
-                >
-                  <option value="direct-provider">只依据材料与知识目录</option>
-                  <option value="native-agent">结合仓库只读核对 · 内置</option>
-                  <option value="local-agent">结合仓库只读核对 · OpenCode</option>
-                </select>
-                <small>
-                  {reviewExecutor === 'native-agent'
-                    ? '内置只读工具结合所选模型检查实际文件，报告保留文件与版本引用；不依赖 OpenCode，不修改代码、不批准 Gate。每轮模型调用单独计量。'
-                    : reviewExecutor === 'local-agent'
-                    ? '用所选模型启动本机 OpenCode，只读查看仓库后给出审查意见；不修改代码、不运行命令、不批准 Gate。需要本机 OpenCode 和已保存的 Provider；模型会调用多轮，费用通常高于只依据材料的审查。'
-                    : '一次模型调用，只依据待审材料、项目说明和知识目录中的规范，不读取仓库。'}
-                </small>
-              </label>
-            ) : null}
-          </article>
-
-          <article className="agent-evidence-card runtime-settings-form">
-            <div className="section-heading">
-              <span>新增模型提供方</span>
-              <strong>OpenAI 兼容凭据</strong>
-            </div>
-            <p>新增后会自动设为当前模型提供方；明文密钥只保存在本机安全存储中，界面不会读回。</p>
-            <label>
-              Provider 名称
-              <input
-                aria-label="Agent Provider Name"
-                value={providerNameDraft}
-                placeholder="OpenAI production"
-                onChange={(event) => onProviderNameDraftChange(event.target.value)}
-              />
-            </label>
-            <label>
-              Base URL
-              <input
-                aria-label="Agent Provider Base URL"
-                value={providerBaseUrlDraft}
-                placeholder="https://ark.cn-beijing.volces.com/api/coding/v3"
-                onChange={(event) => onProviderBaseUrlDraftChange(event.target.value)}
-              />
-            </label>
-            <label>
-              模型（Model）
-              <input
-                aria-label="Agent Provider Model"
-                value={providerModelDraft}
-                placeholder="ark-code-latest"
-                onChange={(event) => onProviderModelDraftChange(event.target.value)}
-              />
-            </label>
-            <label>
-              API Key
-              <input
-                aria-label="Agent Provider API Key"
-                type="password"
-                value={providerKeyDraft}
-                placeholder="sk-..."
-                onChange={(event) => onProviderKeyDraftChange(event.target.value)}
-              />
-            </label>
-            <details><summary>高级配置</summary><ProviderThinkingFields model={providerModelDraft.trim()} baseUrl={providerBaseUrlDraft.trim()} value={newProviderThinking} onChange={setNewProviderThinking} /></details>
-            <button className="ghost-button" onClick={() => onSaveProviderCredential(newProviderThinking)}>
-              <Save size={16} />
-              保存并使用 Provider
+            {budgetStatus ? <p role="status">{budgetStatus}</p> : null}
+            {/* Team budget is a team-side setting: it is edited on the Web (plan S5, Q7; 4.3 节). */}
+            <p className="meta" data-testid="runtime-budget-web-location">每次模型请求前检查预算，超出月上限需 Owner/Lead 一次性批准。上限和预警在 Web 控制端「设置 › 预算」修改，改后在这里同步。</p>
+            <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>
+              {projectRuntimeBudget.status === 'unavailable' ? '重试读取预算' : '同步云端预算策略'}
             </button>
+            <details className="settings-secondary">
+              <summary>费用记录与恢复</summary>
+              <ModelCostRecovery desktopApi={desktopApi} projectId={localProjectId} />
+            </details>
+            {budgetPolicy ? (
+              <details className="settings-secondary">
+                <summary>技术详情</summary>
+                <p className="meta">周期：UTC 自然月 · 策略更新于 {budgetPolicy.updatedAt}</p>
+              </details>
+            ) : null}
           </article>
         </div>
       </details>
