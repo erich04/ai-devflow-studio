@@ -486,6 +486,7 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             configurationFingerprint: `coding-runtime-configuration:${configuration.version}`,
             requireExecutionAuthorization: true,
             enableQuestions: true,
+            enableTasks: true,
             runtimeEnv: {
               ...buildOpencodeRuntimeEnv({
                 baseEnv: process.env,
