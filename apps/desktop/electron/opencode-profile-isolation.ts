@@ -16,8 +16,8 @@ export function isolatedOpencodeProfileEnv(
   options: { isolateHome?: boolean } = {},
 ): NodeJS.ProcessEnv {
   return {
-    // `~/.agents/skills` has no opt-out switch. Only runs without a shell may
-    // move HOME: commands started by a coding run still need the user's tools.
+    // `~/.agents/skills` has no opt-out switch. Bounded coding tasks also isolate
+    // HOME; callers that need personal tool configuration leave this opt-in off.
     ...(options.isolateHome ? { HOME: path.join(root, 'home'), USERPROFILE: path.join(root, 'home') } : {}),
     XDG_CONFIG_HOME: path.join(root, 'config'),
     XDG_DATA_HOME: path.join(root, 'data'),

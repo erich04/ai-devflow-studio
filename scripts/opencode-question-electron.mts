@@ -11,9 +11,9 @@ import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
 import { startIsolatedTeamApi } from './stage-agent-design-electron.mts'
 
 /** Full real Main → OpenCode → question UI → canonical test → final acceptance boundary. */
-export async function verifyQuestionInElectron(input: { root: string; directory: string; endpoint: string; version: string }) {
+export async function verifyQuestionInElectron(input: { root: string; directory: string; endpoint: string; version: string; delegated?: boolean }) {
   const workspace = fileURLToPath(new URL('..', import.meta.url))
-  const output = path.join(workspace, 'output/playwright/opencode-question')
+  const output = path.join(workspace, `output/playwright/opencode-${input.delegated ? 'task' : 'question'}`)
   await mkdir(output, { recursive: true })
   await writeFile(path.join(input.directory, 'message.txt'), 'Old\n')
   await writeFile(path.join(input.directory, 'package.json'), JSON.stringify({ name: 'question-fixture', version: '1.0.0', scripts: { test: 'node test.mjs' } }))
@@ -67,13 +67,20 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
     let page = await launch()
     await page.evaluate((pairing) => window.aiDevFlowDesktop!.pairDesktop(pairing), { code: team.pairingCode, localProjectId: run.projectId })
     await page.evaluate((projectId) => window.aiDevFlowDesktop!.saveCodingRuntimeBudgetPolicy({ projectId, enabled: false, monthlyLimitUsd: 1, warningThresholdUsd: 0.5 }), run.projectId)
-    const begin = async () => page.evaluate(async (run) => {
-      const api = window.aiDevFlowDesktop!
-      const started = await api.runCodingAgent({ runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId, requestedBy: 'u-erich', userInstruction: run.request })
-      const request = started.state.codingPermissionRequests.find((item) => item.codingRunId === started.codingRun.id && item.status === 'pending')!
-      await api.replyCodingPermission({ codingRunId: started.codingRun.id, requestId: request.id, decidedBy: 'untrusted-renderer', decision: 'approved', comment: 'Fixture execution authorization' })
-      return (await api.loadState()).codingRuns.find((item) => item.id === started.codingRun.id)!
-    }, run)
+    const begin = async () => {
+      // A fresh isolated HOME may still be initializing OpenCode's model catalog.
+      // Wait through the same bounded Main readiness probes used by the UI.
+      await expect.poll(async () => (await page.evaluate((run) => window.aiDevFlowDesktop!.getCodingRuntimeReadiness({
+        runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId, requestedBy: 'u-erich',
+      }), run)).status, { timeout: 30_000 }).toBe('ready')
+      return page.evaluate(async (run) => {
+        const api = window.aiDevFlowDesktop!
+        const started = await api.runCodingAgent({ runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId, requestedBy: 'u-erich', userInstruction: run.request })
+        const request = started.state.codingPermissionRequests.find((item) => item.codingRunId === started.codingRun.id && item.status === 'pending')!
+        await api.replyCodingPermission({ codingRunId: started.codingRun.id, requestId: request.id, decidedBy: 'untrusted-renderer', decision: 'approved', comment: 'Fixture execution authorization' })
+        return (await api.loadState()).codingRuns.find((item) => item.id === started.codingRun.id)!
+      }, run)
+    }
     const waiting = await begin()
     assert.equal(waiting.status, 'waiting_input')
     assert(waiting.question?.questions[0]?.question === 'Choose color')
@@ -94,6 +101,16 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
     await panel.getByRole('checkbox', { name: /Web/ }).check()
     await page.screenshot({ path: path.join(output, '01-question.png'), scale: 'css' })
     await panel.getByRole('button', { name: '发送回答' }).click()
+    if (input.delegated) {
+      await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).codingPermissionRequests
+        .find((item) => item.codingRunId === waiting.id && item.status === 'pending' && (item.origin ?? 'coding_executor') === 'coding_executor')?.command,
+      { timeout: 30_000 }).toBe('npm test')
+      await page.evaluate(async (codingRunId) => {
+        const api = window.aiDevFlowDesktop!, state = await api.loadState()
+        const request = state.codingPermissionRequests.find((item) => item.codingRunId === codingRunId && item.status === 'pending' && (item.origin ?? 'coding_executor') === 'coding_executor')!
+        await api.replyCodingPermission({ codingRunId, requestId: request.id, decidedBy: 'untrusted-renderer', decision: 'approved', comment: 'Fixture child test approval' })
+      }, waiting.id)
+    }
     await expect.poll(async () => {
       const state = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
       const current = state.codingRuns.find((item) => item.id === waiting.id)
@@ -107,6 +124,12 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
     assert.equal(completed.runs.find((item) => item.id === run.id)?.currentNodeId, run.currentNodeId)
     assert(completed.testEvidence.some((item) => item.id === current.testEvidenceId && item.status === 'passed'))
     assert.equal(current.questionReceipts?.length, 1)
+    if (input.delegated) {
+      const event = completed.codingEvents.find((item) => item.codingRunId === waiting.id && item.kind === 'diff')
+      assert.equal(event?.metadata?.childSessions, 1)
+      assert.equal(event?.metadata?.totalToolCalls, 4)
+      assert(completed.codingEvents.some((item) => item.codingRunId === waiting.id && item.metadata?.permission === 'task' && item.metadata?.executorSessionId === current.question?.sessionId))
+    }
     await page.screenshot({ path: path.join(output, '02-final-acceptance.png'), scale: 'css' })
     await page.evaluate((codingRunId) => window.aiDevFlowDesktop!.cancelCodingAgentRun({ codingRunId }), waiting.id)
     const restartQuestion = await begin()
@@ -119,7 +142,7 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
       { timeout: 15_000 }).toBe('invalidated')
     await access(retained.worktreePath)
     assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: input.directory, encoding: 'utf8' }), '')
-    console.log(JSON.stringify({ electronQuestion: 'passed', reloadedPendingQuestion: true, realOpenCode: input.version,
+    console.log(JSON.stringify({ electronQuestion: 'passed', boundedTask: input.delegated === true, reloadedPendingQuestion: true, realOpenCode: input.version,
       canonicalTests: 'passed', finalAcceptance: 'pending', restartInvalidation: true, sourceRepositoryUnchanged: true, screenshots: output }))
   } catch (error) {
     if (app) {
