@@ -1,4 +1,7 @@
-/** H6/#202 diagnostic reproduction. Built desktop required; no paid model or existing data. */
+/** H6/#202 diagnostic reproduction. Built desktop required; no paid model or existing data.
+ * Current semantics: a settlement outage retains valid output and only replays accounting.
+ * This controlled local endpoint does not reproduce the historical real-model window closure.
+ */
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -126,6 +129,8 @@ try {
     fault = mode
     const callsBefore: number = model.requests.length
     const result: any = { mode, startedAt: Date.now() }
+    const accountingBefore = await ipc('getModelCostRecovery', { projectId: project.id })
+    const previousAccountingIds = new Set(accountingBefore.overview.records.map((row: any) => row.sourceId))
     record('design-start', { mode })
     // Cancel only after the model has returned and settlement has reached the proxy.
     const startIndex = report.events.length
@@ -151,10 +156,7 @@ try {
         assert(result.cancelled)
         // Cancellation returns promptly; final financial recording still completes independently.
         await delay(1800)
-      } else {
-        assert(result.settlementSyncFailed, 'Expected the specific settlement_sync_failed error')
-        assert(result.billingConfirmed)
-      }
+      } else assert.fail(`A valid design must survive a settlement outage: ${message}`)
     }
     const cancellationError = await cancellation
     if (cancellationError) throw cancellationError
@@ -167,20 +169,42 @@ try {
     const designs = state.artifacts.filter((a: any) => a.runId === run.id && a.kind === 'design')
     const lifecycle = await app.evaluate(() => (globalThis as any).__h6Events)
     assert.equal(lifecycle.filter((e: any) => ['window-close', 'render-process-gone', 'webcontents-destroyed'].includes(e.event)).length, 0)
-    assert.equal(result.succeeded, mode === 'none')
+    assert.equal(result.succeeded, mode !== 'cancel-settlement')
+    assert.equal(designs.length, mode === 'cancel-settlement' ? 0 : 1)
+    if (mode === 'cancel-settlement') assert.equal(current.currentNodeId, design.id)
+    else assert.notEqual(current.currentNodeId, design.id)
+    const accountingAfter = await ipc('getModelCostRecovery', { projectId: project.id })
+    const newAccounting = accountingAfter.overview.records.filter((row: any) => !previousAccountingIds.has(row.sourceId) && row.sourceKind === 'model_call')
+    assert.equal(newAccounting.length, 1)
+    result.modelCallId = newAccounting[0].sourceId
     if (mode !== 'none') {
-      assert.equal(current.currentNodeId, design.id)
-      assert.equal(designs.length, 0)
-      // Repeated admission while settlement remains unavailable must not make another model call.
-      await assert.rejects(() => completeDesign(run, design.id))
+      const pending = accountingAfter.local.find((row: any) => row.id === result.modelCallId)
+      assert(pending && pending.state === 'upload_failed' && pending.canRetry, 'Confirmed model usage must remain durably retryable')
+      result.localAccountingPending = true
+      // An accounting retry during an outage must never generate another model response.
+      await assert.rejects(() => ipc('retryModelCostSettlements', { projectId: project.id }))
       assert.equal(model.requests.length, callsBefore + 1)
       fault = 'none'
-      const recovered = await completeDesign(run, design.id)
-      assert.equal(recovered.artifact.kind, 'design')
-      assert.equal(model.requests.length, callsBefore + 2)
-      result.recoverySucceeded = true
-    } else assert.equal(designs.length, 1)
-    Object.assign(result, { rendererResponsive: true, mainAlive: true, automaticRetryCalls: 0, finishedAt: Date.now() })
+      const recovered = await ipc('retryModelCostSettlements', { projectId: project.id })
+      assert.equal(recovered.local.some((row: any) => row.id === result.modelCallId), false)
+      assert.equal(model.requests.length, callsBefore + 1)
+      const settled = recovered.overview.records.filter((row: any) => row.sourceId === result.modelCallId)
+      assert.equal(settled.length, 1)
+      assert.equal(settled[0].usage.inputTokens, 120)
+      assert.equal(settled[0].usage.outputTokens, 80)
+      result.accountingReplaySucceeded = true
+      result.accountingReplayModelCalls = 0
+      const afterReplay = await ipc('loadState', undefined)
+      assert.equal(afterReplay.artifacts.filter((artifact: any) => artifact.runId === run.id && artifact.kind === 'design').length, designs.length)
+      if (mode === 'cancel-settlement') {
+        // This is a separate explicit workflow retry after cancellation, not financial recovery.
+        const regenerated = await completeDesign(run, design.id)
+        assert.equal(regenerated.artifact.kind, 'design')
+        assert.equal(model.requests.length, callsBefore + 2)
+        result.explicitRetryAfterCancellation = true
+      }
+    } else assert.equal(accountingAfter.local.some((row: any) => row.id === result.modelCallId), false)
+    Object.assign(result, { rendererResponsive: true, mainAlive: true, automaticModelRetryCalls: 0, finishedAt: Date.now() })
     report.cases.push(result)
     console.log(JSON.stringify(result))
   }
