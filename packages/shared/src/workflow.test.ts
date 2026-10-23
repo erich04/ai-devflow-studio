@@ -197,6 +197,21 @@ describe('delivery artifacts', () => {
     expect(artifact.content).not.toContain('+ redacted patch')
   })
 
+  it.each(['disabled', 'unavailable'] as const)('does not present an unassessed %s budget as zero-cost evidence', (status) => {
+    const artifact = createPrDraftArtifact({
+      run: created.run,
+      project: { repository: 'erich/payments-api', defaultBranch: 'main' },
+      artifacts: created.artifacts,
+      codingDiffs: [codingDiff],
+      testEvidence: [testEvidence],
+      deliverySource,
+      budgetDecision: { ...budget, status, projectedCostUsd: 0 },
+      now: '2026-06-21T16:35:00.000Z',
+    })
+    expect(artifact.content).not.toContain('预计 $0.000000')
+    expect(artifact.content).toContain('金额未评估，不代表零费用')
+  })
+
   it('omits compare URLs when repository mapping is unsafe', () => {
     const artifact = createPrDraftArtifact({
       run: created.run,

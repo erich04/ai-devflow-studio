@@ -31,4 +31,20 @@ describe('design revision choice', () => {
     expect(screen.getByRole('button', { name: '正在生成新版方案…' })).toBeDisabled()
     expect(generate).not.toHaveBeenCalled()
   })
+
+  it('renders a saved amendment as Markdown and exposes its exact source without selecting or generating', async () => {
+    const f = await designRevisionFixture()
+    const generate = vi.fn()
+    const content = '# 任务编辑\n\n- 保留 **已完成** 状态\n\n```ts\nupdateTask(id, title)\n```\n'
+    const { container } = render(<DesignRevisionPanel previous={f.design} proposals={[{ ...f.proposal, content }]} onGenerate={generate} disabled={false} generating={false} />)
+    fireEvent.click(screen.getByText(/查看提案正文/))
+    expect(screen.getByRole('heading', { name: '任务编辑', level: 1 })).toBeInTheDocument()
+    expect(screen.getByText('已完成').tagName).toBe('STRONG')
+    fireEvent.click(screen.getByRole('button', { name: '查看原文' }))
+    expect(container.querySelector('.message-plain')?.textContent).toBe(content)
+    fireEvent.click(screen.getByRole('button', { name: '返回排版' }))
+    expect(screen.getByRole('heading', { name: '任务编辑' })).toBeInTheDocument()
+    expect(screen.getByRole('checkbox')).not.toBeChecked()
+    expect(generate).not.toHaveBeenCalled()
+  })
 })

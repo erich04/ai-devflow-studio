@@ -13324,7 +13324,7 @@ class SqlJsLocalStore implements LocalStore {
     if (trace && current && (current.runId !== event.runId || current.nodeId !== event.nodeId)) {
       throw new Error('Provider call event scope mismatch')
     }
-    const settled = trace && current?.engine === 'native' ? appendCodingCallCost(current, trace) : current
+    const settled = trace && current && (current.engine === 'native' || current.engine === 'opencode-http') ? appendCodingCallCost(current, trace) : current
     this.db.run('begin transaction')
     try {
       writeCodingAgentEvent(this.db, event)

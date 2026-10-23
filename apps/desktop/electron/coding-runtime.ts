@@ -78,6 +78,7 @@ import {
   CodingEngineStartupCleanupError,
   CodingEnginePermissionRevalidationError,
   CodingEnginePermissionDiscoveryError,
+  CodingEngineTaskLimitError,
 } from './coding-engine-lifecycle.js'
 import { providerCallTraceMessage } from './provider-call-trace-message.js'
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
@@ -96,6 +97,11 @@ import { withSourceTreeDigest } from './source-tree-digest.js'
 const defaultKnowledgeDocuments: KnowledgeDocument[] = []
 
 function safeCodingFailureSummary(error: unknown, fallback: string): string {
+  if (error instanceof CodingEngineTaskLimitError) {
+    const reason = error.reason === 'tool_turn_limit' ? '工具调用次数已达上限（包含被拒绝的尝试）'
+      : error.reason === 'model_call_limit' ? '模型调用次数已达上限' : '子任务次数已达上限'
+    return `OpenCode ${reason}；编码已停止，工作区保留。`
+  }
   if (error instanceof CodingEnginePermissionDiscoveryError) {
     return `OpenCode 执行失败（${error.code}）。`
   }
@@ -137,6 +143,7 @@ function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun)
     ...(previous.questionReceipts ? { questionReceipts: previous.questionReceipts } : {}),
     ...(previous.contextReceipt ? { contextReceipt: previous.contextReceipt } : {}),
     ...(previous.budgetDecision ? { budgetDecision: previous.budgetDecision } : {}),
+    ...(previous.configVersion === undefined ? {} : { configVersion: previous.configVersion }),
     ...(previous.workflowRunVersion === undefined ? {} : { workflowRunVersion: previous.workflowRunVersion }),
     ...(previous.additionalAttemptAuthorization ? { additionalAttemptAuthorization: previous.additionalAttemptAuthorization } : {}),
   }
@@ -302,6 +309,8 @@ export type CodingRuntimeDeps = {
   sessionAuthority?: (projectId: string) => Promise<{ actorId: string; key: string }>
   engine?: CodingEngineAdapter
   executor?: CodingExecutor
+  /** Version resolved together with the trusted project executor; never renderer supplied. */
+  executorConfigVersion?: number
   publisher?: CodingRuntimePublisher
   runTestCommand?: CodingRuntimeTestCommandRunner
   runDependencyBootstrap?: CodingRuntimeDependencyBootstrapRunner
@@ -1905,7 +1914,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       } })
       const current = await findCodingRun(run.id)
       if (current.status !== 'applying' || current.question?.replyDigest !== replyDigest || current.question.stopRequestedAt) throw new Error('Question continuation was cancelled')
-      const receipt: CodingQuestionRequest = { ...sending, status: reply.kind === 'answer' ? 'answered' : 'dismissed', settledAt: now() }
+      const receipt: CodingQuestionRequest = { ...sending, status: reply.kind === 'answer' ? 'answered' : 'dismissed', settledAt: claimedRun.question?.settledAt ?? now() }
       const completed = { ...result, codingRun: preserveCodingRunContext({ ...result.codingRun,
         ...(result.kind === 'waiting_input' ? {} : { question: receipt }) }, claimedRun) }
       await saveEvents([{ id: idGenerator('coding-event'), codingRunId: run.id, runId: run.runId, nodeId: run.nodeId,
@@ -1927,8 +1936,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         const status = error instanceof CodingQuestionError ? error.questionStatus : ['answered', 'dismissed'].includes(current.question.status) ? current.question.status : 'invalidated'
         await commitCodingAgentMutation({ expectedRun: current, expectedPendingPermissionRequestIds: [], run: { ...current,
-          status: 'failed', completedAt: now(), question: { ...current.question, status, settledAt: now() },
-          summary: error instanceof CodingQuestionError ? error.message : '问题续接失败；编码已停止，工作区保留。' } })
+          status: 'failed', completedAt: now(), question: { ...current.question, status, settledAt: current.question.settledAt ?? now() },
+          summary: error instanceof CodingQuestionError ? error.message : safeCodingFailureSummary(error, '问题续接失败；编码已停止，工作区保留。') } })
       }
       throw error
     }
@@ -3146,6 +3155,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           requestedBy: input.requestedBy,
           providerId,
           engine: configuredEngine,
+          ...(deps.executorConfigVersion === undefined ? {} : { configVersion: deps.executorConfigVersion }),
           status: 'failed',
           branchName: run.branchName,
           userInstruction: input.userInstruction.trim(),
@@ -3203,6 +3213,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         requestedBy: input.requestedBy,
         providerId,
         engine: configuredEngine,
+        ...(deps.executorConfigVersion === undefined ? {} : { configVersion: deps.executorConfigVersion }),
         status: 'preparing',
         branchName: run.branchName,
         userInstruction: input.userInstruction.trim(),

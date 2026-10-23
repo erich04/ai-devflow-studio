@@ -4,6 +4,7 @@ import {
   OpencodeHttpRequestError, type Fetcher, type OpencodePermission, type OpencodeSession,
 } from './opencode-http-adapter.js'
 import type { OpencodeTaskPolicy } from './opencode-task-guard.js'
+import { CodingEngineTaskLimitError } from './coding-engine-lifecycle.js'
 
 type TaskScopeInput = { baseUrl: string; directory: string; sessionId: string; codingRunId: string; workspaceId: string; policy: OpencodeTaskPolicy; fetcher?: Fetcher }
 
@@ -29,11 +30,16 @@ export class OpencodeTaskScope {
     if (!session || typeof session.id !== 'string' || !/^[\w-]{1,200}$/u.test(session.id) ||
       session.directory !== this.input.directory || !marker || marker.owner !== this.input.policy.owner ||
       marker.codingRunId !== this.input.codingRunId || marker.workspaceId !== this.input.workspaceId ||
-      (marker.stopped && !this.stopping) ||
       (child ? session.parentID !== this.input.sessionId || marker.rootSessionId !== this.input.sessionId ||
         session.agent !== 'devflow-worker' || typeof marker.taskCallId !== 'string'
         : session.id !== this.input.sessionId || !!session.parentID) ||
       JSON.stringify(session.permission) !== JSON.stringify(child ? this.input.policy.childRules : this.input.policy.parentRules)) {
+      throw new Error('opencode_task_scope_invalid')
+    }
+    if (marker.stopped && !this.stopping) {
+      if (!child && (marker.stopReason === 'tool_turn_limit' || marker.stopReason === 'model_call_limit' || marker.stopReason === 'task_limit')) {
+        throw new CodingEngineTaskLimitError(marker.stopReason)
+      }
       throw new Error('opencode_task_scope_invalid')
     }
   }

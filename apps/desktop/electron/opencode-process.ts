@@ -474,18 +474,29 @@ async function taskEnvironment(input: EnsureManagedOpencodeServerInput, runtimeR
   if (!config.provider || typeof config.provider !== 'object' || !(policy.providerID in config.provider)) {
     throw new Error('Bounded tasks require a saved, governed Provider binding')
   }
-  const pluginPath = join(runtimeRoot, 'devflow-task-guard.mjs')
+  // OpenCode installs its matched plugin SDK in this private config directory.
+  // Keeping the file alongside node_modules makes resolution independent of user/repo packages.
+  const pluginDirectory = join(runtimeRoot, 'config', 'opencode')
+  await mkdir(pluginDirectory, { recursive: true, mode: 0o700 })
+  const pluginPath = join(pluginDirectory, 'devflow-task-guard.mjs')
   await writeFile(pluginPath, opencodeTaskPluginSource(policy, baseUrl), { mode: 0o600, flag: 'wx' })
   const model = `${policy.providerID}/${policy.modelID}`
+  const toolDiscipline = [
+    'Each assistant response may contain at most one tool_call. Never call tools in parallel, including read-only tools; wait for its result before choosing the next call.',
+    `The parent and all children share ${policy.maxToolTurns} tool attempts for this entire run. Rejected attempts also consume this budget; delegation does not reset it.`,
+    'Read each relevant file once unless it changes or the earlier result was incomplete. Reuse the known contents and delegate narrowly without duplicating the parent\'s inspection.',
+    'Plan the necessary calls before acting and reserve tool attempts for the required edits and checks. Combine related changes to the same file into one edit where practical; avoid repeated status checks and unchanged file reads.',
+    'DevFlow independently runs the configured final test after your edits. Report the changes and any uncompleted work accurately; do not claim tests passed without evidence or spend the remaining budget repeating the same check.',
+  ].join('\n')
   const env: NodeJS.ProcessEnv = { ...effectiveEnvironment(input), ...isolatedOpencodeProfileEnv(runtimeRoot, { isolateHome: true }),
     OPENCODE_DISABLE_PROJECT_CONFIG: 'true', OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'false',
     OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, plugin: [pathToFileURL(pluginPath).href],
       model, small_model: model, default_agent: 'devflow-coding', subagent_depth: 1,
       agent: {
         'devflow-coding': { mode: 'primary', model, steps: policy.maxModelCalls, description: 'DevFlow managed coding',
-          prompt: 'Work only inside the managed repository. Delegate only to devflow-worker, one foreground task at a time; wait for it to finish before other tools. Task prompts must be plain text, with no @ file or agent mentions; ask the child to use read tools instead. Task and tool limits apply across the whole run. A child question or permission is handled by DevFlow. Never bypass a denied operation.' },
+          prompt: `Work only inside the managed repository. Delegate only to devflow-worker, one foreground task at a time; wait for it to finish before other tools. Task prompts must be plain text, with no @ file or agent mentions; ask the child to use read tools instead. Task and tool limits apply across the whole run. A child question or permission is handled by DevFlow. Never bypass a denied operation.\n${toolDiscipline}` },
         'devflow-worker': { mode: 'subagent', model, steps: policy.maxModelCalls, description: 'One bounded coding subtask in the same managed worktree',
-          prompt: buildOpenCodeManagedPrompt('Complete this bounded subtask in the managed repository. Use the native read, edit and question tools and request approval for commands. Do not delegate further or run in the background.') },
+          prompt: buildOpenCodeManagedPrompt(`Complete this bounded subtask in the managed repository. Use the native read, edit and question tools and request approval for commands. Do not delegate further or run in the background.\n${toolDiscipline}`) },
       },
     }) }
   delete env.OPENCODE_CONFIG

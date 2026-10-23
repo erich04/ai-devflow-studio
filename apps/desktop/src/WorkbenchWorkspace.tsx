@@ -1,6 +1,7 @@
 import { ConversationUsage } from './components/ConversationUsage'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
 import { ConversationBody } from './ConversationBody'
+import { ProposalBody } from './components/ProposalBody'
 import { NewConversationDialog } from './ConversationDialogs'
 import { ConversationDetailsDialog, ConversationTabMenu, type ConversationMenuTarget, type ConversationTabTarget } from './ConversationDetails'
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -431,7 +432,7 @@ function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavig
       {!message.question.answeredAt && <><div className="question-options">{message.question.options.map((option) => <button className="ghost-button" key={option} disabled={busy} onClick={() => onAnswer(option)}>{option}</button>)}</div><button className="text-button" disabled={busy} onClick={() => onAnswer('')}>输入回答</button><small>点击选项填入输入框，也可以直接输入自己的回答。</small></>}
     </div>}
     {!!message.actions?.length && <div className="conversation-actions">{message.actions.map((action, index) => <button className="ghost-button" key={`${action.runId}-${action.nodeId}-${index}`} onClick={() => onNavigate(action)}>{action.label} ↗</button>)}</div>}
-    {message.draft && <div className="conversation-proposal"><span className="pill soft">{message.draft.publishedArtifactId ? '已保存 · 待确认' : '仅本会话草稿'}</span><strong>{message.draft.title}</strong><pre>{message.draft.content}</pre>{message.contentLengths?.draft && <ContentPages field="draft" readContent={readContent} />}<p className="meta">目标：{targetLabel}。保存后其他会话可以查询；仍需在节点形成正式产物。</p>
+    {message.draft && <div className="conversation-proposal"><span className="pill soft">{message.draft.publishedArtifactId ? '已保存 · 待确认' : '仅本会话草稿'}</span><ProposalBody title={message.draft.title} content={message.draft.content} />{message.contentLengths?.draft && <ContentPages field="draft" readContent={readContent} />}<p className="meta">目标：{targetLabel}。保存后其他会话可以查询；仍需在节点形成正式产物。</p>
       {review && <div className="conversation-proposal-review" role="status"><strong>{reviewCopy[review.status]}</strong>{review.error && <p>{review.error}</p>}
         {review.findings?.filter(item => item.status !== 'covered').map(item => <p key={item.criterionId}>{item.reason}</p>)}
         {!message.draft.publishedArtifactId && !stale && review.status !== 'passed' && <><p>可以重新核对，或阅读提案后明确确认，保存为尚未通过 AI 核对的待评审提案。</p><button className="ghost-button" type="button" disabled={busy} onClick={onRetryReview}>重新核对提案</button><small>重新核对会调用模型，可能产生费用。</small></>}

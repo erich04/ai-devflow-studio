@@ -573,7 +573,11 @@ export function createPrDraftArtifact(input: CreatePrDraftArtifactInput): Artifa
     '## 证据',
     `测试：${latestTest ? `${prTestStatusLabels[latestTest.status]} - ${testSummary}` : '缺失'}`,
     `策略：${input.enforcement ? prPolicyStatusLabels[input.enforcement.status] : '未评估'}`,
-    `预算：${input.budgetDecision ? `${prBudgetStatusLabels[input.budgetDecision.status]} - 预计 $${input.budgetDecision.projectedCostUsd.toFixed(6)}` : '未评估'}`,
+    `预算：${input.budgetDecision
+      ? `${prBudgetStatusLabels[input.budgetDecision.status]} - ${['disabled', 'unavailable'].includes(input.budgetDecision.status)
+        ? '金额未评估，不代表零费用'
+        : `预计 $${input.budgetDecision.projectedCostUsd.toFixed(6)}`}`
+      : '未评估'}`,
     `门禁审查：${reviewSummary}`,
     '',
     '## 核对清单',

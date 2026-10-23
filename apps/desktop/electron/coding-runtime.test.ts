@@ -40,6 +40,7 @@ import {
   CodingEngineStartupCleanupError,
   CodingEnginePermissionRevalidationError,
   CodingEnginePermissionDiscoveryError,
+  CodingEngineTaskLimitError,
 } from './coding-engine-lifecycle'
 import {
   codingBriefKnowledgeDelivery,
@@ -68,6 +69,35 @@ afterEach(async () => {
 })
 
 describe('CodingRuntime', () => {
+  it.each(['permission', 'tool limit'] as const)('keeps the acknowledged question receipt time when continuation ends later: %s', async (outcome) => {
+    const run = opencodeCodingRun({ status: 'waiting_input' })
+    const workspace = managedWorkspace({ codingRunId: run.id })
+    const deliveredAt = '2026-08-12T23:36:00.000Z', endedAt = '2026-08-12T23:36:30.000Z'
+    let clock = deliveredAt
+    const request = { version: 1 as const, id: 'que-1', revision: 'a'.repeat(64), codingRunId: run.id, projectId: run.projectId,
+      managedWorkspaceId: workspace.id, sessionId: 'ses-1', status: 'pending' as const,
+      requestedAt: '2026-08-12T23:30:00.000Z', expiresAt: '2026-08-13T00:00:00.000Z',
+      questions: [{ header: 'Color', question: 'Choose color', options: [{ label: 'Blue', description: 'Blue' }], custom: false }] }
+    run.question = request
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [workspace] })
+    const engine = createSpyCodingEngine('opencode-http')
+    engine.replyQuestion = vi.fn(async (input) => {
+      await input.onDelivered?.('answered')
+      expect(store.codingRuns[0]?.question?.settledAt).toBe(deliveredAt)
+      clock = endedAt
+      if (outcome === 'tool limit') throw new CodingEngineTaskLimitError('tool_turn_limit')
+      return { codingRun: { ...input.codingRun, status: 'waiting_permission' as const }, events: [], permissionRequest: codingPermissionRequest(run) }
+    })
+    const runtime = createCodingRuntime({ store, engine, now: () => clock, sessionAuthority: async () => ({ actorId: 'user-1', key: 'pairing' }) })
+    const replying = runtime.replyCodingQuestion({ codingRunId: run.id, requestId: request.id, revision: request.revision,
+      answeredBy: 'user-1', reply: { kind: 'answer', answers: [['Blue']] } })
+    if (outcome === 'tool limit') await expect(replying).rejects.toThrow('tool_turn_limit')
+    else await expect(replying).resolves.toMatchObject({ settledAt: deliveredAt })
+    expect(store.codingRuns[0]?.question).toMatchObject({ status: 'answered', settledAt: deliveredAt })
+    expect(store.codingRuns[0]?.questionReceipts?.[0]?.settledAt).toBe(deliveredAt)
+    if (outcome === 'tool limit') expect(store.codingRuns[0]?.summary).toContain('工具调用次数已达上限')
+  })
+
   it.each(['answer', 'duplicate', 'cancel race', 'wrong revision', 'wrong actor', 'expired', 'expired cleanup', 'restart', 'unknown', 'unknown cleanup'] as const)('persists and owns a business question without granting tools: %s', async (scenario) => {
     const run = opencodeCodingRun({ status: 'waiting_input' })
     const workspace = managedWorkspace({ codingRunId: run.id })
@@ -454,6 +484,7 @@ describe('CodingRuntime', () => {
     const runtimeDependencies = {
       store,
       engine,
+      executorConfigVersion: 7,
       captureWorkspaceDiff,
       budgetGuard: createAllowingBudgetGuard(),
       createWorkspace: async (input: {
@@ -492,6 +523,8 @@ describe('CodingRuntime', () => {
       userInstruction: 'Add the marker file.',
     })
     const trustedBudgetDecision = started.codingRun.budgetDecision
+    expect(started.codingRun.configVersion).toBe(7)
+    expect(store.codingRuns.find((run) => run.id === started.codingRun.id)?.configVersion).toBe(7)
     expect(trustedBudgetDecision?.reason).toContain('billing is opaque')
     if (requireExecutionAuthorization) {
       expect(store.permissionRequests[0]?.origin).toBe('execution_authorization')
@@ -538,6 +571,7 @@ describe('CodingRuntime', () => {
 
     expect(store.codingRuns.at(-1)?.status).toBe('completed')
     // ADR 0024 §4: OpenCode learns only after Change Acceptance, and only once.
+    expect(store.codingRuns.at(-1)?.configVersion).toBe(7)
     expect(learnCodingRunMemory).toHaveBeenCalledTimes(1)
     expect(learnCodingRunMemory).toHaveBeenCalledWith({
       codingRun: expect.objectContaining({ id: started.codingRun.id, status: 'completed' }), evaluationPassed: true,

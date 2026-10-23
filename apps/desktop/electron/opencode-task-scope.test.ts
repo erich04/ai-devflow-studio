@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createDefaultOpencodePermissionRules, type OpencodeSession, type Fetcher } from './opencode-http-adapter'
 import { OpencodeTaskScope } from './opencode-task-scope'
+import { CodingEngineTaskLimitError } from './coding-engine-lifecycle'
 
 function fixture() {
   const rules = createDefaultOpencodePermissionRules({ question: true })
@@ -41,6 +42,22 @@ function fixture() {
 }
 
 describe('OpenCode child session ownership', () => {
+  it.each(['tool_turn_limit', 'model_call_limit', 'task_limit'] as const)('retains a verified guard stop reason through host observation and cleanup: %s', async (reason) => {
+    const f = fixture()
+    await f.scope.refresh()
+    Object.assign(f.root.metadata!.devflow as object, { stopped: true, stopReason: reason })
+    await expect(f.scope.refresh()).rejects.toEqual(new CodingEngineTaskLimitError(reason))
+    await f.scope.stop(2000)
+    expect(f.state.childAborted).toBe(true)
+    expect(await f.scope.idle()).toBe(true)
+    expect(f.root.metadata!.devflow).toMatchObject({ stopped: true, stopReason: reason })
+  })
+
+  it('does not trust a budget reason before verifying root ownership', async () => {
+    const f = fixture()
+    Object.assign(f.root.metadata!.devflow as object, { owner: 'foreign', stopped: true, stopReason: 'tool_turn_limit' })
+    await expect(f.scope.refresh()).rejects.toThrow('scope_invalid')
+  })
   it('requires a precreated, verified child for the exact parent call; never admits a missing guard', async () => {
     const f = fixture()
     expect(await f.scope.admit(f.permission)).toBe('child')

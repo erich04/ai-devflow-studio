@@ -7284,10 +7284,10 @@ describe('createLocalStore', () => {
     expect(bytes).not.toContain('api-key-secret')
   })
 
-  it('settles each response once without weakening cancellation fences or overwriting expenses with stale snapshots', async () => {
+  it.each(['native', 'opencode-http'] as const)('settles each %s response once without weakening cancellation fences or overwriting expenses with stale snapshots', async (engine) => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    const active: CodingAgentRun = { ...codingRun, engine: 'native', providerId: 'deepseek', status: 'running' }
+    const active: CodingAgentRun = { ...codingRun, engine, providerId: 'deepseek', status: 'running' }
     await store.saveCodingAgentRun(active)
     const event: CodingAgentEvent = {
       id: 'paid-response', codingRunId: active.id, runId: active.runId, nodeId: active.nodeId,
@@ -7317,7 +7317,7 @@ describe('createLocalStore', () => {
     expect(final.runtimeCostSummary).toMatchObject({ inputTokens: 200, outputTokens: 40, providerCallIds: ['call-one', 'call-two'] })
     expect(final.runtimeCostSummary!.costUsd).toBeCloseTo(expense.costUsd! * 2, 10)
     // An incomplete or malformed usage envelope must not erase the observation or earlier expenses.
-    for (const usage of [{ inputTokens: 1 }, { inputTokens: -1, outputTokens: 1 }]) {
+    for (const usage of (engine === 'native' ? [{ inputTokens: 1 }, { inputTokens: -1, outputTokens: 1 }] : [])) {
       const id = `unsettled-${JSON.stringify(usage)}`
       await store.saveCodingAgentEvent({ ...event, id, metadata: { providerCall: { ...call, requestId: id, usage } } })
       expect((await store.listCodingAgentEvents()).some((item) => item.id === id)).toBe(true)

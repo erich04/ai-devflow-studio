@@ -12,6 +12,14 @@ export class CodingEngineContinuationCleanupError extends AggregateError {
   }
 }
 
+/** A trusted local OpenCode guard limit, never a provider response diagnosis. */
+export class CodingEngineTaskLimitError extends Error {
+  constructor(readonly reason: 'tool_turn_limit' | 'model_call_limit' | 'task_limit') {
+    super(`opencode_${reason}_exceeded`)
+    this.name = 'CodingEngineTaskLimitError'
+  }
+}
+
 export class CodingEnginePermissionDiscoveryError extends Error {
   readonly code:
     | 'message_completed_without_permission'

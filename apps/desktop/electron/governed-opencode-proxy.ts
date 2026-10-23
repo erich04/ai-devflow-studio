@@ -3,6 +3,14 @@ import { createHash, randomBytes } from 'node:crypto'
 import { AgentProviderRequestError, readProviderResponse, ProviderResponseReadError, resolveRequestPolicy, classifyProviderTransportError, describeStageAgentFailure, governedModelCall, modelCallMetadata, parseOpenAiCompatibleProviderUsage, stageAgentFailureDetails, type AgentProviderUsage, type ModelCallGovernance, type ModelCallQuote, type StageAgentFailureDetails } from '@ai-devflow/shared'
 import type { OpencodeProviderBinding } from './opencode-provider-binding'
 import { providerFailureDetails } from './opencode-failure.js'
+import type { CodingProviderCallTrace } from './coding-engine.js'
+
+export type RelayedCodingCallTrace = Omit<CodingProviderCallTrace, 'codingRunId'>
+export type CodingRelaySession = { codingRunId: string; workspaceId: string; rootSessionId: string; sessionId: string }
+export type CodingRelayCallContext = {
+  operation: NonNullable<ModelCallQuote['operation']>
+  report(trace: RelayedCodingCallTrace): Promise<void>
+}
 
 /**
  * Rounds relayed since a point in time, summed. The billing identity comes from the saved
@@ -30,7 +38,7 @@ export function summarizeRelayedUsage(
 const NOT_SENT_USAGE: AgentProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 0, cacheStatus: 'complete' }
 
 /** OpenCode's internal model rounds traverse this authenticated, loopback-only relay. */
-export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string;maxOutputTokens?:number;resolveOperation?:()=>Promise<NonNullable<ModelCallQuote['operation']>>}) {
+export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string;maxOutputTokens?:number;resolveOperation?:()=>Promise<NonNullable<ModelCallQuote['operation']>>;resolveCodingCall?:(session:CodingRelaySession)=>Promise<CodingRelayCallContext>}) {
   if (input.maxOutputTokens !== undefined && (!Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1)) throw new Error('Invalid relay output limit')
   const token=randomBytes(32).toString('hex')
   const executionId = randomBytes(16).toString('hex')
@@ -47,6 +55,9 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
     const completion = new Promise<void>((resolve) => { finished = resolve })
     pending.add(completion)
     let call: typeof latestCall
+    let callContext: CodingRelayCallContext | undefined
+    let trace: RelayedCodingCallTrace | undefined
+    let terminalReported = false
     const controller=new AbortController(); controllers.add(controller)
     const abort=()=>{if(!res.writableEnded)controller.abort()}
     res.on('close',abort)
@@ -68,10 +79,42 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
         ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: Math.min(explicit ?? input.maxOutputTokens, input.maxOutputTokens) } : explicit !== undefined ? { maxOutputTokens: explicit } : {}) })
       body.max_tokens = policy.maxOutputTokens
       delete body.max_completion_tokens
-      const operation = input.resolveOperation ? await input.resolveOperation() : {
-        id: `opencode-${executionId}`, version: createHash('sha256').update(input.binding.fingerprint).digest('hex'), purpose: 'native-tool',
+      if (input.resolveCodingCall) {
+        const header = (name: string) => {
+          const value = req.headers[name]
+          if (typeof value !== 'string' || !/^[\w-]{1,200}$/u.test(value)) throw new Error('Coding relay session identity missing')
+          return value
+        }
+        callContext = await input.resolveCodingCall({ codingRunId: header('x-devflow-coding-run'), workspaceId: header('x-devflow-workspace'),
+          rootSessionId: header('x-devflow-root-session'), sessionId: header('x-devflow-session') })
       }
-      const result=await governedModelCall({governance:input.governance,projectId:input.projectId,provider:modelCallMetadata(input.binding),prompt:raw,signal:controller.signal,
+      const operation = callContext?.operation ?? (input.resolveOperation ? await input.resolveOperation() : {
+        id: `opencode-${executionId}`, version: createHash('sha256').update(input.binding.fingerprint).digest('hex'), purpose: 'native-tool',
+      })
+      trace = {
+        stateVersion: 1, requestId: call.requestId, phase: 'initial', attempt: call.sequence,
+        providerId: input.binding.providerId, model: input.binding.modelId, targetHost: new URL(input.binding.baseUrl).hostname,
+        status: 'started', startedAt: new Date().toISOString(), timeoutMs: 300_000,
+        promptChars: raw.length, promptBytes: Buffer.byteLength(raw), promptDigest: createHash('sha256').update(raw).digest('hex'),
+        manifestPathCount: 0, excerptCount: 0, maxOutputTokens: policy.maxOutputTokens,
+        deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false, redacted: true,
+      }
+      // Capture the Coding Run once. A late response must never be assigned to a newer run.
+      // If the durable start record fails, no provider request is sent.
+      await callContext?.report(trace)
+      const governance: ModelCallGovernance = callContext ? {
+        ...input.governance,
+        persist: async (settlement, metadata) => {
+          await input.governance.persist(settlement, metadata)
+          if (metadata?.final === false) {
+            // Save the exact budget attempt before dispatch. Recovery can then reconcile a
+            // crashed call with its existing reservation instead of inventing a second charge.
+            trace = { ...trace!, usage: { ...settlement.usage, budgetAttemptIds: [settlement.id] } }
+            await callContext!.report(trace)
+          }
+        },
+      } : input.governance
+      const result=await governedModelCall({governance,projectId:input.projectId,provider:modelCallMetadata(input.binding),prompt:raw,signal:controller.signal,
         operation, ...(policy.capability === 'deepseek-2026-10-10' ? { boundBasis: 'deepseek-context-v1' as const } : {}),
         ...(input.approvalId?{approvalId:input.approvalId}:{}),
         ...(typeof body.max_tokens==='number'?{maxOutputTokens:body.max_tokens}:{}),action:async(observe)=>{
@@ -112,6 +155,11 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
           return {value,...(usage?{usage}:{})}
         }})
       attempts.push({at:new Date().toISOString(),sequence:call.sequence,usage:result.usage!})
+      terminalReported = true
+      await callContext?.report({ ...trace, status: 'succeeded', completedAt: new Date().toISOString(),
+        durationMs: Date.now() - Date.parse(trace.startedAt), deliveryState: 'response_received',
+        billingState: result.usage?.usageCompleteness === 'final' ? 'confirmed' : 'unknown', ...(result.usage ? { usage: result.usage } : {}),
+      })
       if(res.destroyed)return
       if(body.stream===true){
         const choices=Array.isArray(result.value.choices)?result.value.choices:[]
@@ -124,6 +172,17 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
       if(error instanceof AgentProviderRequestError && error.usage?.budgetAttemptIds) attempts.push({at:new Date().toISOString(),sequence:call!.sequence,
         // A round that was never sent costs nothing; it must not leave the session's usage unknown.
         usage:error.billingState==='not_incurred'?{...NOT_SENT_USAGE,budgetAttemptIds:error.usage.budgetAttemptIds}:error.usage})
+      if (callContext && trace && !terminalReported) {
+        const failure = error instanceof AgentProviderRequestError ? error : undefined
+        const usage = failure?.billingState === 'not_incurred'
+          ? { ...NOT_SENT_USAGE, ...('budgetAttemptIds' in (failure.usage ?? {}) ? { budgetAttemptIds: failure.usage!.budgetAttemptIds } : {}) }
+          : failure?.usage ?? {}
+        await callContext.report({ ...trace, status: 'failed', completedAt: new Date().toISOString(),
+          durationMs: Date.now() - Date.parse(trace.startedAt), deliveryState: failure?.deliveryState ?? 'not_sent',
+          billingState: failure?.billingState ?? 'not_incurred', retryable: false, usage,
+          ...(failure ? { errorCode: failure.code, sanitizedCause: failure.sanitizedCause, ...(failure.httpStatus !== null ? { httpStatus: failure.httpStatus } : {}) } : {}),
+        }).catch(() => { /* The budget settlement remains durable; do not replay a paid request. */ })
+      }
       const details = error instanceof AgentProviderRequestError ? providerFailureDetails(error) : stageAgentFailureDetails('unknown_failure', 'budget_relay')
       if (call) call.failure = { ...details, relayRequestId: call.requestId }
       if(!res.destroyed){res.writeHead(400,{'content-type':'application/json', ...(call ? { 'x-devflow-relay-request': call.requestId } : {})}).end(JSON.stringify({error:{message:describeStageAgentFailure(details)}}))}

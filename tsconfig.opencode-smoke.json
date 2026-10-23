@@ -9,6 +9,7 @@
     "scripts/opencode-smoke.ts",
     "scripts/opencode-question-contract.mts",
     "scripts/opencode-task-contract.mts",
+    "scripts/opencode-document-contract.mts",
     "scripts/stage-agent-design-contract.mts",
     "scripts/workbench-opencode-conversation-smoke.mts",
     "scripts/opencode-release-config-preflight.ts",

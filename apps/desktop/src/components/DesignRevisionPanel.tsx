@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import type { Artifact } from '@ai-devflow/shared'
 import { formatLocalTime } from '../app/desktop-view-model'
+import { ProposalBody } from './ProposalBody'
 
 export function DesignRevisionPanel({ previous, proposals, onGenerate, disabled, generating, settings }: {
   previous: Artifact
@@ -24,7 +25,7 @@ export function DesignRevisionPanel({ previous, proposals, onGenerate, disabled,
         <label><input type="checkbox" checked={selected.includes(proposal.id)} onChange={(event) => {
           setSelected((current) => event.target.checked ? [...current, proposal.id] : current.filter((id) => id !== proposal.id))
         }} />{proposal.title}</label>
-        <details><summary>查看提案正文 · {formatLocalTime(proposal.updatedAt)}</summary><pre>{proposal.content}</pre></details>
+        <details><summary>查看提案正文 · {formatLocalTime(proposal.updatedAt)}</summary><ProposalBody content={proposal.content} /></details>
       </div>)}
     </fieldset> : <p>先在右侧讨论中说明修改意见，并点击“保存为节点提案”，关联到“方案设计”步骤。保存后会在这里列出。</p>}
     {proposals.length > 0 && <>

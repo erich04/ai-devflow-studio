@@ -25,6 +25,7 @@ const quotes: ModelCallQuote[] = []
 const deniedQuotes: string[] = []
 const settlements = new Map<string, ModelCallSettlement>()
 const requests: Array<{ child: boolean; tools: string[] }> = []
+let limitModelCalls = 0
 const provider = createServer((request, response) => {
   void (async () => {
     const chunks: Buffer[] = []
@@ -32,18 +33,20 @@ const provider = createServer((request, response) => {
     const body = JSON.parse(Buffer.concat(chunks).toString())
     const tools = (body.tools ?? []).map((tool: { function: { name: string } }) => tool.function.name)
     const child = body.messages.some((item: { role: string; content: unknown }) => item.role === 'user' && JSON.stringify(item.content).includes('CHILD_fixture'))
+    const limitFixture = body.messages.some((item: { role: string; content: unknown }) => item.role === 'user' && JSON.stringify(item.content).includes('LIMIT_fixture'))
+    if (limitFixture && tools.length) limitModelCalls++
     requests.push({ child, tools })
     const used = (name: string) => body.messages.some((item: { tool_calls?: Array<{ function: { name: string } }> }) => item.tool_calls?.some((call) => call.function.name === name))
-    const name = !tools.length ? undefined : !child && !used('task') ? 'task' : child && !used('question') ? 'question' : child && !used('write') ? 'write'
+    const name = !tools.length ? undefined : limitFixture ? 'read' : !child && !used('task') ? 'task' : child && !used('question') ? 'question' : child && !used('write') ? 'write'
       : child && electronMode && !used('bash') ? 'bash' : undefined
-    const args = name === 'task' ? { description: 'Write fixture', prompt: 'CHILD_fixture: ask a question and write message.txt', subagent_type: 'devflow-worker' }
+    const args = name === 'read' ? { filePath: path.join(directory, 'message.txt'), limit: limitModelCalls } : name === 'task' ? { description: 'Write fixture', prompt: 'CHILD_fixture: ask a question and write message.txt', subagent_type: 'devflow-worker' }
       : name === 'question' ? { questions: [
         { header: 'Color', question: 'Choose color', options: [{ label: 'Green', description: 'Fixture value' }] },
         { header: 'Targets', question: 'Choose targets', multiple: true, options: [{ label: 'Desktop', description: 'Desktop app' }, { label: 'Web', description: 'Web app' }] },
       ] }
       : name === 'bash' ? { command: 'npm test', description: 'Check delegated edit' } : { filePath: 'message.txt', content: 'Green\n' }
     if (name && body.stream && tools.length) assert(tools.includes(name), `Missing ${name}; got ${tools.join(',')}`)
-    const delta = name ? { role: 'assistant', tool_calls: [{ index: 0, id: `fixture-${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }
+    const delta = name ? { role: 'assistant', tool_calls: [{ index: 0, id: limitFixture ? `fixture-limit-${limitModelCalls}` : `fixture-${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }
       : { role: 'assistant', content: 'Fixture completed.' }
     const finishReason = name ? 'tool_calls' : 'stop'
     if (!body.stream) {
@@ -191,6 +194,18 @@ try {
   assert.equal(staleReply.status, 404)
   await new Promise((resolve) => setTimeout(resolve, 200))
   assert.equal(await readFile(path.join(directory, 'message.txt'), 'utf8'), 'Before cancellation\n')
+  // A tool error must not fund another model round after the local attempt
+  // budget is exhausted. Exercise the real plugin without host polling aborts.
+  const limited = await createOpencodeSession({ baseUrl: server.baseUrl, directory, title: 'Tool limit fixture', agent: 'devflow-coding',
+    model: { providerID: policy.providerID, id: policy.modelID }, permissionRules: policy.parentRules,
+    metadata: { devflow: { owner: policy.owner, codingRunId: 'run-limited', workspaceId: 'workspace-fixture' } } })
+  const limitedScope = new OpencodeTaskScope({ baseUrl: server.baseUrl, directory, sessionId: limited.id, codingRunId: 'run-limited', workspaceId: 'workspace-fixture', policy })
+  await sendOpencodeMessage({ baseUrl: server.baseUrl, directory, sessionId: limited.id, agent: 'devflow-coding',
+    model: { providerID: policy.providerID, modelID: policy.modelID }, text: 'LIMIT_fixture: read message.txt repeatedly.', signal: AbortSignal.timeout(45000) }).catch(() => undefined)
+  assert.equal(limitModelCalls, policy.maxToolTurns + 1, 'The denied tool attempt must not trigger another model request')
+  await assert.rejects(limitedScope.refresh(), /opencode_tool_turn_limit_exceeded/u)
+  await limitedScope.stop(5000)
+  assert(await limitedScope.idle())
   if (process.argv.includes('--electron')) {
     await manager.stopAll()
     electronMode = true
@@ -199,7 +214,7 @@ try {
   }
   console.log(JSON.stringify({ passed: true, version, provider: 'local synthetic / no paid model', providerRequests: requests.length,
     taskApproved, questionAnswered, explicitChildPermissions: true, managedWrite: true, sharedAccounting: true,
-    childBudgetBlockedBeforeDispatch: true, childCancellation: true, noLateWrite: true }, null, 2))
+    childBudgetBlockedBeforeDispatch: true, childCancellation: true, noLateWrite: true, toolBudgetStopsNextModel: true, limitModelCalls }, null, 2))
 } finally {
   await manager.stopAll()
   await proxy?.close()
