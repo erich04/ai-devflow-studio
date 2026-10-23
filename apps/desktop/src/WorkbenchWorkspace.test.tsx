@@ -628,3 +628,21 @@ describe('discussion references and proposal preview (plan W7, W8)', () => {
     await waitFor(() => expect(f.commands.filter((command) => command.type === 'publish')).toEqual([{ type: 'publish', projectId: run.projectId, conversationId: session.id, messageId: 'draft-1' }]))
   })
 })
+
+it('keeps the selected conversation and unsent draft when reading diagnostics with an empty conversation list', async () => {
+  const f = fixture()
+  await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '导出诊断的会话', inputDraft: '保留未发送草稿' })
+  const original = f.api.workbenchConversation.getMockImplementation()!
+  f.api.workbenchConversation.mockImplementation(async input => input.type === 'export_diagnostics' ? {
+    conversations: [], diagnostics: { version: 1, generatedAt: '2026-10-23T00:00:00.000Z', conversationId: 'chat-1', status: 'idle', retention: { maxCalls: 200, maxAgeDays: 30, maxBytes: 524288 }, replay: { available: false, reason: '没有原始响应正文，不能重放历史失败。' }, investigation: null, calls: [], omittedCalls: 0 },
+  } : original(input))
+  render(<WorkbenchWorkspace {...f.props} splitDetails />)
+  const input = await screen.findByRole('textbox', { name: '对话内容' })
+  fireEvent.click(screen.getByText('调查范围与诊断'))
+  fireEvent.click(screen.getByRole('button', { name: '查看诊断' }))
+  expect(await screen.findByRole('button', { name: '下载诊断文件' })).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: /导出诊断的会话/u })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('textbox', { name: '对话内容' })).toBe(input)
+  expect(input).toHaveValue('保留未发送草稿')
+  expect(f.commands.filter(command => command.type === 'send')).toHaveLength(0)
+})

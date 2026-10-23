@@ -41,3 +41,18 @@ it('assembles interleaved streaming tool arguments by index and preserves every 
   const result = await provider.completeStructuredJson!({ systemPrompt: 'read only', userPrompt: 'inspect', purpose: 'conversation', nativeTools: { definitions: readOnlyToolDefinitions(), messages: [] } })
   expect(result.toolCalls).toEqual([call('a', 'repo_read', '{"path":"中文.ts"}'), call('b', 'repo_list', '{"path":"src"}')])
 })
+
+it('declares and enforces the Hindsight search bounds and continuation alternatives consistently', () => {
+  const search = readOnlyToolDefinitions(['knowledge_search'])[0]!.function.parameters
+  expect(search).toMatchObject({ properties: { query: { maxLength: 2048 }, limit: { maximum: 5 }, stage: { enum: ['clarify', 'design', 'build', 'test', 'pr', 'accept'] } } })
+  expect(validateNativeToolBatch([call('search', 'knowledge_search', JSON.stringify({ query: 'q'.repeat(1500), limit: 5, stage: 'build' }))])).toHaveLength(1)
+  expect(validateNativeToolBatch([call('read', 'knowledge_read', JSON.stringify({ sourceRef: 'doc-1', expectedDigest: 'sha256:' + 'a'.repeat(64), limit: 18000 }))])).toHaveLength(1)
+  expect(validateNativeToolBatch([call('read', 'knowledge_read', '{"path":"docs/rules.md"}')])).toHaveLength(1)
+  for (const args of [{}, { sourceRef: 'doc-1' }, { path: 'docs/rules.md', expectedDigest: 'a' }, { sourceRef: '', expectedDigest: 'a' }]) {
+    expect(() => validateNativeToolBatch([call('bad', 'knowledge_read', JSON.stringify(args))])).toThrow()
+  }
+  for (const args of [{ query: 'q', limit: 6 }, { query: 'q', stage: 'foreign-stage' }, { query: '中'.repeat(700) }]) {
+    expect(() => validateNativeToolBatch([call('bad', 'knowledge_search', JSON.stringify(args))])).toThrow()
+  }
+  expect(readOnlyToolDefinitions(['knowledge_read'])[0]!.function.parameters).toHaveProperty('anyOf')
+})
