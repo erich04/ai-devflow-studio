@@ -31,6 +31,8 @@ describe('task center authoritative identity and status', () => {
     const coding = { runId: run.id, nodeId: build.id, status: 'waiting_permission' as const, startedAt: run.createdAt, requestedBy: 'user' }
     expect(taskCenterRows([current], [], 'member', [coding], 'user')[0]).toMatchObject({ filter: 'attention', status: '等待工具权限确认' })
     expect(taskCenterRows([current], [], 'member', [coding], 'someone-else')[0]?.filter).toBe('active')
+    expect(taskCenterRows([current], [], 'member', [{ ...coding, status: 'waiting_input' }], 'user')[0]).toMatchObject({ filter: 'attention', status: '等待回答编码问题' })
+    expect(taskCenterRows([current], [], 'member', [{ ...coding, status: 'waiting_input' }], 'someone-else')[0]?.filter).toBe('active')
     expect(taskCenterRows([run], [], 'member', [coding], 'user')[0]?.filter).toBe('active')
     expect(taskCenterRows([{ ...current, status: 'failed' }], [], 'member')[0]?.status).toContain('执行失败')
   })

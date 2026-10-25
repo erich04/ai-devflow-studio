@@ -12,6 +12,8 @@ import {
 } from '@ai-devflow/shared'
 import type {
   CodingEngineAdapter,
+  CodingEngineQuestionResult,
+  CodingEngineReplyQuestionInput,
   CodingEngineApprovePermissionCompletedResult,
   CodingEngineApprovePermissionContinuedResult,
   CodingEngineApprovePermissionInput,
@@ -34,7 +36,10 @@ export type CodingExecutorCompletedResult =
     testEvidence?: TestEvidence
   }
 
+export type CodingExecutorQuestionResult = CodingEngineQuestionResult & { kind: 'waiting_input' }
+
 export type CodingExecutorStartResult =
+  | CodingExecutorQuestionResult
   | CodingExecutorWaitingPermissionResult
   | CodingExecutorCompletedResult
 
@@ -63,6 +68,7 @@ export type CodingExecutor = {
   continuePermission(
     input: CodingExecutorContinuePermissionInput,
   ): Promise<CodingExecutorStartResult>
+  replyQuestion?(input: Omit<CodingExecutorContinuePermissionInput, 'runtimeContext'> & { runtimeContext: CodingEngineReplyQuestionInput }): Promise<CodingExecutorStartResult>
   refreshPermission?(input: CodingExecutorContinuePermissionInput & { newRequestId: string }): Promise<CodingExecutorWaitingPermissionResult>
   cancel(input: CodingEngineCancelInput): Promise<void>
 }
@@ -211,8 +217,17 @@ export function createCodingExecutorCompatibilityAdapter(
         }
       },
     } : {}),
+    ...(engine.replyQuestion ? {
+      async replyQuestion(input: Omit<CodingExecutorContinuePermissionInput, 'runtimeContext'> & { runtimeContext: CodingEngineReplyQuestionInput }): Promise<CodingExecutorStartResult> {
+        const result = await engine.replyQuestion!(input.runtimeContext)
+        if ('questionRequest' in result) return { kind: 'waiting_input', ...result }
+        return 'permissionRequest' in result ? { kind: 'waiting_permission', ...result,
+          turn: permissionTurn({ descriptor, ...input, result }) } : { kind: 'engine_completed', ...result }
+      },
+    } : {}),
     async start(input) {
       const result = await engine.start(input.runtimeContext)
+      if ('questionRequest' in result) return { kind: 'waiting_input', ...result }
       return 'permissionRequest' in result
         ? {
             kind: 'waiting_permission',
@@ -231,6 +246,7 @@ export function createCodingExecutorCompatibilityAdapter(
     },
     async continuePermission(input) {
       const result = await engine.approvePermission(input.runtimeContext)
+      if ('questionRequest' in result) return { kind: 'waiting_input', ...result }
       return 'permissionRequest' in result
         ? {
             kind: 'waiting_permission',

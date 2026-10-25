@@ -1152,6 +1152,9 @@ describe('task status row projection (S1, plan §6.1)', () => {
     expect(running.nextAction).toMatchObject({ kind: 'running', persistentActionIds: ['stopCodingRun'], secondaryActionIds: ['viewCodingRecords'] })
     expect(running.nextAction.primaryActionId).toBeUndefined()
     expect(running.nextAction.copy).not.toContain('Agents')
+    const question = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'view-progress' }, { phase: 'waiting_input', activeRun: { id: 'coding-1', status: 'waiting_input' } }) })
+    expect(question.nextAction).toMatchObject({ kind: 'waiting_input', title: '等待你回答编码问题', persistentActionIds: ['stopCodingRun'] })
+    expect(question.nextAction.primaryActionId).toBeUndefined()
     const permission = viewModelFor(buildNode, {
       codingActionProjection: projection({ id: 'review-permission' }, {
         phase: 'waiting_permission',

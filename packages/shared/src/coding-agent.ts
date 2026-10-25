@@ -56,6 +56,7 @@ export const activeCodingAgentRunStatuses: readonly CodingAgentRun['status'][] =
   'queued',
   'preparing',
   'waiting_permission',
+  'waiting_input',
   'bootstrapping',
   'running',
   'applying',
@@ -758,6 +759,8 @@ function hasLocalOnlyCodingField(value: Record<string, unknown>): boolean {
     'stderr' in value ||
     'prompt' in value ||
     'contextReceipt' in value ||
+    'question' in value ||
+    'questionReceipts' in value ||
     'patch' in value ||
     'rawTrace' in value ||
     'providerSecret' in value ||
@@ -933,6 +936,7 @@ export function parseRemoteCodingAgentSummary(value: unknown): RemoteCodingAgent
     status === 'queued' ||
     status === 'preparing' ||
     status === 'waiting_permission' ||
+    status === 'waiting_input' ||
     status === 'bootstrapping' ||
     status === 'running' ||
     status === 'applying' ||

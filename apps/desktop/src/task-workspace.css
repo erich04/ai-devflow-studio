@@ -193,6 +193,18 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 /* In-task execution panels (plan §7.2 W2–W4). One compact block per concern, no nested
    fixed-height scroll areas; the exact diff review keeps its own layout. */
 .task-work-panel { display: grid; gap: 8px; margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); font-size: var(--font-size-body); }
+.coding-question-panel form { display: grid; gap: 14px; }
+.coding-question-panel fieldset { min-width: 0; margin: 0; padding: 12px; display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.coding-question-panel legend { padding: 0 6px; font-weight: 600; }
+.coding-question-option { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; line-height: 1.5; }
+.coding-question-option input { flex: none; margin: 4px 0 0; accent-color: var(--accent); }
+.coding-question-option span { overflow-wrap: anywhere; }
+.coding-question-custom { display: grid; gap: 6px; max-width: 640px; color: var(--text-muted); }
+.coding-question-custom input { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text); font: inherit; }
+.coding-question-panel .button-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.coding-question-panel button { min-height: 36px; padding: 0 12px; border: 1px solid var(--border); border-radius: 6px; font: inherit; cursor: pointer; }
+.coding-question-panel .secondary-button { background: transparent; color: var(--text); }
+.coding-question-panel button:disabled { opacity: 0.5; cursor: default; }
 .design-revision-panel { display: grid; gap: 10px; padding: 14px; margin-bottom: 16px; border: 1px solid var(--border); border-radius: 8px; }
 .design-revision-panel > h3, .design-revision-panel > p { margin: 0; }
 .design-revision-panel fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }

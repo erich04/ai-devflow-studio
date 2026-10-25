@@ -1,4 +1,4 @@
-import { safeRelayRequestId } from '@ai-devflow/shared'
+import { safeRelayRequestId, parseCodingQuestions, type CodingQuestionInfo, type CodingQuestionReply } from '@ai-devflow/shared'
 
 export type Fetcher = typeof fetch
 
@@ -139,10 +139,10 @@ export class OpencodeMessageResponseError extends Error {
   }
 }
 
-export function createDefaultOpencodePermissionRules(): OpencodePermissionRule[] {
+export function createDefaultOpencodePermissionRules(options: { question?: boolean } = {}): OpencodePermissionRule[] {
   return [
     { permission: '*', pattern: '*', action: 'deny' },
-    { permission: 'question', pattern: '*', action: 'deny' },
+    { permission: 'question', pattern: '*', action: options.question ? 'allow' : 'deny' },
     { permission: 'task', pattern: '*', action: 'deny' },
     ...['read', 'glob', 'grep', 'list', 'edit', 'write', 'patch'].map((permission) => ({
       permission,
@@ -276,6 +276,30 @@ export async function listOpencodePermissions(input: {
     input.directory ? withDirectory('/permission', input.directory) : '/permission',
     input.signal,
   )
+}
+
+export type OpencodeQuestion = { id: string; sessionID: string; questions: CodingQuestionInfo[]; tool?: { messageID: string; callID: string } }
+
+export async function listOpencodeQuestions(input: {
+  baseUrl: string; directory: string; fetcher?: Fetcher; signal?: AbortSignal
+}): Promise<OpencodeQuestion[]> {
+  const value = await getJson<unknown>(input.fetcher, input.baseUrl, withDirectory('/question', input.directory), input.signal)
+  if (!Array.isArray(value) || value.length > 128) throw new Error('Invalid OpenCode questions')
+  return value.map((item: unknown) => {
+    if (!isRecord(item) || typeof item.id !== 'string' || !/^[\w-]{1,200}$/u.test(item.id) ||
+      typeof item.sessionID !== 'string' || !/^[\w-]{1,200}$/u.test(item.sessionID)) throw new Error('Invalid OpenCode question identity')
+    if (item.tool !== undefined && (!isRecord(item.tool) || typeof item.tool.messageID !== 'string' || typeof item.tool.callID !== 'string')) throw new Error('Invalid OpenCode question tool')
+    return { id: item.id, sessionID: item.sessionID, questions: parseCodingQuestions(item.questions),
+      ...(isRecord(item.tool) ? { tool: { messageID: String(item.tool.messageID), callID: String(item.tool.callID) } } : {}) }
+  })
+}
+
+export async function replyOpencodeQuestion(input: {
+  baseUrl: string; directory: string; requestId: string; reply: CodingQuestionReply; fetcher?: Fetcher; signal?: AbortSignal
+}): Promise<boolean> {
+  return postJson<boolean>(input.fetcher, input.baseUrl,
+    withDirectory(`/question/${encodeURIComponent(input.requestId)}/${input.reply.kind === 'answer' ? 'reply' : 'reject'}`, input.directory),
+    input.reply.kind === 'answer' ? { answers: input.reply.answers } : {}, input.signal)
 }
 
 export async function getOpencodeSessionStatus(input: {

@@ -68,6 +68,75 @@ afterEach(async () => {
 })
 
 describe('CodingRuntime', () => {
+  it.each(['answer', 'duplicate', 'cancel race', 'wrong revision', 'wrong actor', 'expired', 'expired cleanup', 'restart', 'unknown', 'unknown cleanup'] as const)('persists and owns a business question without granting tools: %s', async (scenario) => {
+    const run = opencodeCodingRun({ status: 'waiting_input' })
+    const workspace = managedWorkspace({ codingRunId: run.id })
+    const request = { version: 1 as const, id: 'que-1', revision: 'a'.repeat(64), codingRunId: run.id, projectId: run.projectId,
+      managedWorkspaceId: workspace.id, sessionId: 'ses-1', status: 'pending' as const,
+      requestedAt: '2026-08-12T23:30:00.000Z', expiresAt: scenario.startsWith('expired') ? '2026-08-12T23:31:00.000Z' : '2026-08-13T00:00:00.000Z',
+      questions: [{ header: 'Color', question: 'Choose color', options: [{ label: 'Blue', description: 'Blue' }], custom: false }] }
+    run.question = request
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [workspace] })
+    const engine = createSpyCodingEngine('opencode-http')
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    engine.replyQuestion = vi.fn(async (input) => {
+      if (scenario === 'duplicate' || scenario === 'cancel race') await held
+      if (scenario === 'unknown' || scenario === 'unknown cleanup') throw new (await import('./coding-question-error')).CodingQuestionError('delivery_unknown', 'Reply delivery unknown')
+      await input.onDelivered?.('answered')
+      return { codingRun: { ...input.codingRun, status: 'waiting_permission' as const, question: { ...input.request, status: 'answered' as const } }, events: [], permissionRequest: codingPermissionRequest(run) }
+    })
+    if (scenario === 'unknown cleanup' || scenario === 'expired cleanup') vi.mocked(engine.cancel).mockRejectedValue(new Error('Session still running'))
+    const completeWorkflowBuild = vi.fn(), deleteWorkspace = vi.fn()
+    const deps = { store, engine, completeWorkflowBuild, deleteWorkspace, now: fixedNow('2026-08-12T23:36:00.000Z'),
+      sessionAuthority: async () => ({ actorId: 'user-1', key: 'project-pairing' }) }
+    const runtime = createCodingRuntime(deps)
+    const input = { codingRunId: run.id, requestId: request.id, revision: scenario === 'wrong revision' ? 'b'.repeat(64) : request.revision,
+      answeredBy: scenario === 'wrong actor' ? 'intruder' : 'user-1', reply: { kind: 'answer' as const, answers: [['Blue']] } }
+    if (scenario === 'restart') {
+      await runtime.recoverCodingAgentRuns()
+      expect(store.codingRuns[0]).toMatchObject({ status: 'failed', question: { status: 'invalidated' } })
+      expect(engine.replyQuestion).not.toHaveBeenCalled()
+    } else if (scenario === 'wrong revision' || scenario === 'wrong actor' || scenario === 'expired' || scenario === 'expired cleanup' || scenario === 'unknown' || scenario === 'unknown cleanup') {
+      await expect(runtime.replyCodingQuestion(input)).rejects.toThrow()
+      expect(engine.replyQuestion).toHaveBeenCalledTimes(scenario === 'unknown' || scenario === 'unknown cleanup' ? 1 : 0)
+      if (scenario === 'unknown') expect(store.codingRuns[0]).toMatchObject({ status: 'failed', question: { status: 'delivery_unknown' } })
+      if (scenario === 'unknown cleanup') expect(store.codingRuns[0]).toMatchObject({ status: 'applying', question: { status: 'delivery_unknown' } })
+      if (scenario === 'expired') expect(store.codingRuns[0]).toMatchObject({ status: 'timed_out', question: { status: 'expired' } })
+      if (scenario === 'expired cleanup') {
+        expect(store.codingRuns[0]).toMatchObject({ status: 'waiting_input', question: { status: 'expired' }, summary: expect.stringContaining('重试停止') })
+        expect(store.codingEvents.some((event) => event.metadata?.sessionCleanupStatus === 'cleanup_failed')).toBe(true)
+      }
+    } else {
+      const reply = runtime.replyCodingQuestion(input)
+      void reply.catch(() => undefined)
+      if (scenario === 'duplicate') {
+        await vi.waitFor(() => expect(engine.replyQuestion).toHaveBeenCalledTimes(1))
+        expect(await createCodingRuntime(deps).replyCodingQuestion(input)).toMatchObject({ status: 'sending' })
+        release()
+      }
+      if (scenario === 'cancel race') {
+        await vi.waitFor(() => expect(engine.replyQuestion).toHaveBeenCalledTimes(1))
+        await createCodingRuntime(deps).cancelCodingAgentRun({ codingRunId: run.id })
+        release()
+        await expect(reply).rejects.toThrow()
+        expect(store.codingRuns[0]?.status).toBe('cancelled')
+        expect(store.permissionRequests).toHaveLength(0)
+        expect(completeWorkflowBuild).not.toHaveBeenCalled()
+        return
+      }
+      expect(await reply).toMatchObject({ status: 'answered' })
+      expect(await runtime.replyCodingQuestion(input)).toMatchObject({ status: 'answered' })
+      expect(engine.replyQuestion).toHaveBeenCalledTimes(1)
+      expect(store.permissionRequests).toHaveLength(1)
+      expect(store.permissionRequests[0]?.status).toBe('pending')
+    }
+    expect(engine.approvePermission).not.toHaveBeenCalled()
+    expect(store.permissionDecisions).toEqual([])
+    expect(completeWorkflowBuild).not.toHaveBeenCalled()
+    expect(deleteWorkspace).not.toHaveBeenCalled()
+  })
+
   it('reuses an explicitly scoped permission across runtime instances and stops at an unapproved path', async () => {
     const run = opencodeCodingRun()
     const workspace = managedWorkspace({ codingRunId: run.id })
@@ -352,7 +421,7 @@ describe('CodingRuntime', () => {
       processManager: {
         ensure: vi.fn(async ({ projectId }) => ({
           baseUrl: 'http://127.0.0.1:4097',
-          child: {} as never,
+          child: { exitCode: null, killed: false } as never,
           projectId,
         })),
       },
@@ -534,7 +603,7 @@ describe('CodingRuntime', () => {
       processManager: {
         ensure: vi.fn(async ({ projectId }) => ({
           baseUrl: 'http://127.0.0.1:4097',
-          child: {} as never,
+          child: { exitCode: null, killed: false } as never,
           projectId,
         })),
       },
@@ -666,6 +735,7 @@ describe('CodingRuntime', () => {
         project: input.runtimeContext.project,
         now: input.runtimeContext.now,
       })
+      if ('questionRequest' in completed) throw new Error('Unexpected fake question')
       if ('permissionRequest' in completed) {
         throw new Error('native no-permission fixture unexpectedly requested permission')
       }
@@ -833,6 +903,7 @@ describe('CodingRuntime', () => {
         project: input.runtimeContext.project,
         now: input.runtimeContext.now,
       })
+      if ('questionRequest' in completed) throw new Error('Unexpected fake question')
       if ('permissionRequest' in completed) {
         throw new Error('native bootstrap fixture unexpectedly requested permission')
       }
@@ -3942,7 +4013,8 @@ describe('CodingRuntime', () => {
       ...fakeEngine,
       async approvePermission(input) {
         const completed = await fakeEngine.approvePermission(input)
-        if ('permissionRequest' in completed) {
+        if ('questionRequest' in completed) throw new Error('Unexpected fake question')
+      if ('permissionRequest' in completed) {
           throw new Error(`Expected completed fake result, got permission ${completed.permissionRequest.id}`)
         }
         return {
@@ -4007,7 +4079,8 @@ describe('CodingRuntime', () => {
       engine: 'opencode-http',
       async approvePermission(input) {
         const completed = await fakeEngine.approvePermission(input)
-        if ('permissionRequest' in completed) {
+        if ('questionRequest' in completed) throw new Error('Unexpected fake question')
+      if ('permissionRequest' in completed) {
           throw new Error(`Expected completed fake result, got permission ${completed.permissionRequest.id}`)
         }
         return {
@@ -4159,7 +4232,8 @@ describe('CodingRuntime', () => {
       engine: 'opencode-http',
       async approvePermission(input) {
         const completed = await fakeEngine.approvePermission(input)
-        if ('permissionRequest' in completed) {
+        if ('questionRequest' in completed) throw new Error('Unexpected fake question')
+      if ('permissionRequest' in completed) {
           throw new Error(`Expected completed fake result, got permission ${completed.permissionRequest.id}`)
         }
         return {
@@ -4562,7 +4636,7 @@ class MemoryCodingStore {
     const active = this.codingRuns.find(
       (candidate) =>
         candidate.projectId === run.projectId &&
-        ['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'applying', 'testing'].includes(candidate.status),
+        ['queued', 'preparing', 'waiting_permission', 'waiting_input', 'bootstrapping', 'running', 'applying', 'testing'].includes(candidate.status),
     )
     if (active) {
       return { reserved: false, reason: 'active_run_exists', run: active }
@@ -4590,7 +4664,7 @@ class MemoryCodingStore {
     }
     if (
       mutation.run &&
-      !['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'applying', 'testing'].includes(currentRun.status) &&
+      !['queued', 'preparing', 'waiting_permission', 'waiting_input', 'bootstrapping', 'running', 'applying', 'testing'].includes(currentRun.status) &&
       JSON.stringify(mutation.run) !== JSON.stringify(currentRun)
     ) {
       return { committed: false, reason: 'terminal_run', run: currentRun }

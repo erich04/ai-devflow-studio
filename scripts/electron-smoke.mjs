@@ -911,6 +911,7 @@ try {
       "    try {",
       "      const url = new URL(request.url || '/', `http://${hostname}:${port}`)",
       "      const directory = url.searchParams.get('directory')",
+      "      if (request.method === 'GET' && url.pathname === '/question') return sendJson(response, [])",
       "      if (request.method === 'GET' && url.pathname === '/permission') return sendJson(response, [])",
       "      if (request.method === 'POST' && url.pathname === '/session') {",
       "        const body = await readJson(request)",
@@ -1362,7 +1363,7 @@ try {
   await expect(buildStatusRow.getByRole('button', { name: '拒绝', exact: true })).toBeVisible()
   await expect(buildStatusRow.getByRole('button', { name: '停止执行', exact: true })).toBeVisible()
   await buildStatusRow.getByRole('button', { name: '批准本次', exact: true }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已完成 diff 归档', {
+  await expect(first.page.getByTestId('toast')).toContainText('审批已处理，编码状态已更新', {
     timeout: 30_000,
   })
   await expect(first.page.getByTestId('settings-view')).toHaveCount(0)

@@ -29,6 +29,68 @@ import {
 } from './opencode-http-adapter'
 
 describe('opencode HTTP coding engine', () => {
+  it.each(['answer', 'dismiss', 'changed', 'other session', 'workspace changed', 'process exit', 'expired', 'lost response', 'cancel'] as const)('binds question replies to the original live run: %s', async (scenario) => {
+    let clock = Date.now()
+    let resolveMessage!: (response: Response) => void
+    let pending = true
+    let altered = false
+    let stopped = false
+    let workspaceChanged = false
+    const child = { exitCode: null as number | null, killed: false }
+    const posts: string[] = []
+    const question = { id: 'que-1', sessionID: 'ses-1', questions: [{ header: 'Color', question: 'Choose color', options: [{ label: 'Blue', description: 'Blue' }] }], tool: { messageID: 'msg-1', callID: 'call-1' } }
+    const fetcher: Fetcher = async (input, init) => {
+      const url = new URL(String(input))
+      if (init?.method === 'POST') posts.push(url.pathname)
+      if (url.pathname === '/question') return new Response(JSON.stringify(pending ? [{ ...question,
+        ...(altered ? scenario === 'other session' ? { sessionID: 'ses-other' } : { questions: [{ ...question.questions[0], question: 'Changed' }] } : {}),
+      }] : []))
+      if (url.pathname.startsWith('/question/')) {
+        pending = false
+        resolveMessage(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage())))
+        if (scenario === 'lost response' && url.pathname.endsWith('/reply')) throw new Error('connection closed')
+        return new Response('true')
+      }
+      if (url.pathname.endsWith('/abort')) { stopped = true; resolveMessage(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()))); return new Response('true') }
+      if (url.pathname.endsWith('/message') && init?.method === 'POST') return new Promise<Response>((resolve) => { resolveMessage = resolve })
+      if (url.pathname.endsWith('/message') || url.pathname === '/permission' || url.pathname.endsWith('/diff')) return new Response('[]')
+      if (url.pathname === '/session/status') return new Response(JSON.stringify({ 'ses-1': { type: pending && !stopped ? 'busy' : 'idle' } }))
+      return new Response(JSON.stringify({ ...managedOpencodeSession(), permission: createDefaultOpencodePermissionRules({ question: true }) }))
+    }
+    const engine = createOpencodeHttpCodingEngineAdapter({ binaryPath: 'opencode', providerID: 'fixture', modelID: 'fixture',
+      processManager: { ensure: async () => ({ baseUrl: 'http://127.0.0.1:4097', child: child as never, projectId: 'local-1' }) }, resolveManagedDirectory: identityManagedDirectory, fetcher,
+      captureWorktreeDiff: async () => ({ changedPaths: [], patch: workspaceChanged ? 'changed' : '' }), nowMs: () => clock,
+      enableQuestions: true, requireExecutionAuthorization: true, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 30, maxWallClockMs: 1000 })
+    const run = runs[0]!, node = run.nodes.find((candidate) => candidate.id === 'n-build')!, project = localProject(projects[0]!)
+    const workspace = managedWorkspace(project.id, run.id, node.id), input = startInput({ run, node, project, workspace })
+    const auth = expectPermissionResult(await engine.start(input))
+    const waiting = await engine.approvePermission({ codingRun: auth.codingRun, request: auth.permissionRequest, authorizedStart: input, workspace, project, now: input.now })
+    expect(waiting.codingRun.status).toBe('waiting_input')
+    expect('questionRequest' in waiting).toBe(true)
+    if (!('questionRequest' in waiting)) throw new Error('Expected question')
+    expect(waiting.questionRequest.sessionId).toBe('ses-1')
+    clock += 60_000 // Human waiting must not consume the 1-second execution window.
+    if (scenario === 'cancel') {
+      await engine.cancel({ codingRun: waiting.codingRun })
+      expect(posts).toContain('/question/que-1/reject')
+      return
+    }
+    altered = scenario === 'changed' || scenario === 'other session'
+    workspaceChanged = scenario === 'workspace changed'
+    if (scenario === 'process exit') child.exitCode = 1
+    if (scenario === 'expired') clock += 31 * 60_000
+    const reply = engine.replyQuestion!({ codingRun: waiting.codingRun, workspace, project, request: waiting.questionRequest,
+      reply: scenario === 'dismiss' ? { kind: 'dismiss' } : { kind: 'answer', answers: [['Blue']] }, now: new Date(clock).toISOString() })
+    if (altered || workspaceChanged || scenario === 'process exit' || scenario === 'expired' || scenario === 'lost response') {
+      await expect(reply).rejects.toMatchObject({ questionStatus: scenario === 'lost response' ? 'delivery_unknown' : 'invalidated' })
+      expect(posts.filter((pathname) => pathname.endsWith('/reply')).length).toBe(scenario === 'lost response' ? 1 : 0)
+    } else {
+      expect(expectCompletedResult(await reply).codingRun.status).toBe('completed')
+      expect(posts).toContain(`/question/que-1/${scenario === 'dismiss' ? 'reject' : 'reply'}`)
+    }
+    expect(posts.some((pathname) => pathname.startsWith('/permission/'))).toBe(false)
+  })
+
   it.each(['success', 'transport failure', 'busy past deadline'] as const)('waits for the managed session to become idle before capturing a settled message diff: %s', async (scenario) => {
     let startedAt = 0
     let capturedAt = 0
@@ -536,7 +598,7 @@ describe('opencode HTTP coding engine', () => {
     ])
     const ensure = vi.fn(async ({ projectId }: { projectId: string }) => ({
       baseUrl: 'http://127.0.0.1:4097',
-      child: {} as never,
+      child: { exitCode: null, killed: false } as never,
       projectId,
     }))
     const engine = createOpencodeHttpCodingEngineAdapter({
@@ -2669,6 +2731,7 @@ describe('opencode HTTP coding engine', () => {
 })
 
 function expectCompletedResult(result: CodingEngineApprovePermissionResult) {
+  if ('questionRequest' in result) throw new Error('Expected completion, got question')
   if ('permissionRequest' in result) {
     throw new Error(`Expected completed result, got permission request ${result.permissionRequest.id}`)
   }
@@ -2688,7 +2751,7 @@ function readyServer(): OpencodeHttpProcessManager {
   return {
     ensure: vi.fn(async () => ({
       baseUrl: 'http://127.0.0.1:4097',
-      child: {} as never,
+      child: { exitCode: null, killed: false } as never,
       projectId: 'local-1',
     })),
   }

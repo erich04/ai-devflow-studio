@@ -28,6 +28,7 @@ const codingPhaseCopy: Partial<Record<CodingRuntimeActionProjection['phase'], st
   bootstrapping: '正在安装依赖',
   running: '正在编码',
   waiting_permission: '等待权限',
+  waiting_input: '等待回答',
   applying: '正在应用改动',
   testing: '正在运行检查',
   completed: '已完成',
@@ -177,6 +178,7 @@ export function CodingWorkPanel({
   focusRef: RefObject<HTMLDivElement | null>
 }) {
   if (!projection) return null
+  if (projection.phase === 'waiting_input' && latestCodingRun?.question) return null
   const permission = projection.action.id === 'review-permission' ? projection.permission : undefined
   const phase = codingPhaseCopy[projection.phase]
   if (permission && (permission.kind === 'change-set' || permission.kind === 'change-acceptance') && latestCodingRun) {

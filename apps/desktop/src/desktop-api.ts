@@ -440,6 +440,7 @@ export type DevFlowDesktopApi = {
   runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
   startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: { codingRunId: string }) => Promise<CodingAgentRun>
+  replyCodingQuestion: (input: { codingRunId: string; requestId: string; revision: string; reply: import('@ai-devflow/shared').CodingQuestionReply }) => Promise<import('@ai-devflow/shared').CodingQuestionReceipt>
   replyCodingPermission: (input: {
     requestId: string
     codingRunId: string

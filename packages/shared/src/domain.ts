@@ -1445,6 +1445,7 @@ export type CodingAgentRunStatus =
   | 'queued'
   | 'preparing'
   | 'waiting_permission'
+  | 'waiting_input'
   | 'bootstrapping'
   | 'running'
   | 'applying'
@@ -1456,6 +1457,8 @@ export type CodingAgentRunStatus =
   | 'cancelled'
 
 export type CodingAgentRun = {
+  question?: import('./coding-question').CodingQuestionRequest
+  questionReceipts?: import('./coding-question').CodingQuestionReceipt[]
   id: string
   runId: string
   nodeId: string
