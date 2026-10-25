@@ -5269,9 +5269,10 @@ describe('App', () => {
 
       const row = await screen.findByTestId('task-status-row')
       await waitFor(() => expect(row).toHaveTextContent('等待你确认需求 v1'))
+      // Enforcement resolves separately from the workflow that supplies the title.
+      await waitFor(() => expect(row).toHaveTextContent('尚未运行 AI 审查'))
       // Warn-only is not shown as blocked (plan §3).
       expect(row).toHaveAttribute('data-status-kind', 'approvable')
-      expect(row).toHaveTextContent('尚未运行 AI 审查')
       expect(row).not.toHaveTextContent(/不能|阻断审批/)
       const approve = within(row).getByRole('button', { name: /确认需求 v1/ })
       fireEvent.click(approve)
