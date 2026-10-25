@@ -13,7 +13,7 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
 const manualAcceptance = process.argv.includes('--manual-acceptance')
 const liveRoot = process.env.DEVFLOW_CODING_CLOSURE_ROUND
-let liveRelay, liveEvidence, livePassed = false
+let liveRelay, liveEvidence, livePage, liveCodingRunId, livePassed = false
 const nativeV3 = Boolean(liveRoot) || process.argv.includes('--harness-v3') || manualAcceptance
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const {
@@ -416,6 +416,7 @@ try {
   app.process().stderr?.on('data', chunk => process.stderr.write(chunk))
   app.on('close', () => console.log('Isolated Native Electron application closed.'))
   const page = await app.firstWindow()
+  livePage = page
   await page.waitForLoadState('domcontentloaded')
   // Only this isolated test process stores synthetic credentials; OS keychain
   // acceptance is a separate signed-installation check, not part of this fixture.
@@ -518,6 +519,7 @@ try {
     requestedBy: 'u-erich',
     userInstruction: livePrompt ?? 'Change the message from old to new.',
   })
+  liveCodingRunId = started.codingRun.id
   if (nativeV3) {
     const command = input => page.evaluate(input => window.aiDevFlowDesktop.codingHarness(input), { protocolVersion: 2, codingRunId: started.codingRun.id, ...input })
     const get = () => command({ type: 'get' })
@@ -653,7 +655,12 @@ try {
   livePassed = true
 } finally {
   clearTimeout(watchdog)
-  if (liveRelay) await liveRelay.finish(livePassed, liveEvidence ?? { failure: 'Electron scenario did not reach all acceptance assertions' })
+  if (liveRelay) {
+    if (!livePassed && livePage && liveCodingRunId) {
+      try { liveEvidence = { passed: false, snapshot: await livePage.evaluate(codingRunId => window.aiDevFlowDesktop.codingHarness({ protocolVersion: 2, type: 'get', codingRunId }), liveCodingRunId) }; await livePage.screenshot({ path: path.join(liveRelay.directory, 'stopped.png'), fullPage: true }) } catch { /* Preserve ledger evidence even if the application already closed. */ }
+    }
+    await liveRelay.finish(livePassed, liveEvidence ?? { failure: 'Electron scenario did not reach all acceptance assertions' })
+  }
   if (app) await app.close().catch(() => undefined)
   await Promise.all([
     stopNativeSmokeProcess(viteProcess),

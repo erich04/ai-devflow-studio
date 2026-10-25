@@ -4,7 +4,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { continueCnyEvaluationRound, openInteractiveRound } from './native-coding-round-budget.ts'
-import { digest, saveJson } from './native-coding-live-support.ts'
+import { verifiedModelCallBound } from '../packages/shared/src/model-call-budget.ts'
+import { digest, saveJson, evaluationUsage } from './native-coding-live-support.ts'
 import { focusedFixtures } from './native-coding-focused-fixtures.ts'
 import { judgeFixture, qualifyFixtures } from './native-coding-focused-live.mts'
 import { runLiveTrial } from './native-coding-trial-live.mts'
@@ -20,10 +21,19 @@ const scopes = {
 export const closureElectronPrompt = 'Change src/message.js from old to new. Before editing, call request_user_input to confirm the target with the user and wait for the answer. Preserve the existing double quotes and trailing newline. Read the source, edit only that file, run the saved test plan and wait for its actual result, then propose_changeset. No child tasks or network access are needed.'
 const fixture = focusedFixtures.find(item => item.id === 'recovery')!
 const fixtureHash = () => digest(JSON.stringify(fixture))
-async function assertProtocol(root: string) {
+async function electronAmendment(root: string) {
+  const amendment = JSON.parse(await readFile(path.join(root, 'electron-amendment.json'), 'utf8'))
+  const prior = await readFile(path.join(root, 'electron', 'phase.json'), 'utf8')
+  if (amendment.maxOutputTokens !== 2048 || amendment.scope !== 'closure/electron' ||
+      amendment.priorPhaseSha256 !== digest(prior) || JSON.parse(prior).result?.passed !== false ||
+      amendment.protocolSha256 !== digest(await readFile(path.join(root, 'protocol.json')))) throw new Error('Electron amendment does not preserve the original failed attempt and protocol')
+  return amendment
+}
+async function assertProtocol(root: string, recovery = false) {
   if (git('status', '--porcelain')) throw new Error('Paid acceptance requires the frozen clean implementation')
   const protocol = JSON.parse(await readFile(path.join(root, 'protocol.json'), 'utf8'))
-  if (protocol.candidateCommit !== git('rev-parse', 'HEAD') || protocol.fixtureHash !== fixtureHash() || protocol.electronPrompt !== closureElectronPrompt || protocol.maxActiveMilliseconds !== 300000 || protocol.maxOutputTokens !== 8192 || protocol.model !== 'deepseek-flash' || protocol.thinking !== 'high' || JSON.stringify(protocol.scopes) !== JSON.stringify(scopes)) throw new Error('Closure protocol changed')
+  const candidateCommit = recovery ? (await electronAmendment(root)).candidateCommit : protocol.candidateCommit
+  if (candidateCommit !== git('rev-parse', 'HEAD') || protocol.fixtureHash !== fixtureHash() || protocol.electronPrompt !== closureElectronPrompt || protocol.maxActiveMilliseconds !== 300000 || protocol.maxOutputTokens !== 8192 || protocol.model !== 'deepseek-flash' || protocol.thinking !== 'high' || JSON.stringify(protocol.scopes) !== JSON.stringify(scopes)) throw new Error('Closure protocol changed')
   process.env.DEVFLOW_NATIVE_EVALUATION_ROUND = path.resolve(root)
   return protocol
 }
@@ -67,15 +77,36 @@ async function runPairs(root: string, keyFile: string) {
     console.log(JSON.stringify({ phase: layout, ...result }))
   }
 }
+async function amendElectron(root: string) {
+  if (git('status', '--porcelain')) throw new Error('Commit the bounded recovery implementation first')
+  const ledger = await openInteractiveRound(root, 'closure/electron')
+  try {
+    const summary = ledger.summary(), rows = ledger.records()
+    const prior = await readFile(path.join(root, 'electron', 'phase.json'), 'utf8')
+    if (JSON.parse(prior).result?.passed !== false || summary.closed || summary.unknownCosts || rows.length >= 24) throw new Error('No eligible failed Electron attempt to amend')
+    const amendment = { version: 1, candidateCommit: git('rev-parse', 'HEAD'), roundId: ledger.limits.roundId, scope: 'closure/electron', maxOutputTokens: 2048,
+      priorPhaseSha256: digest(prior), protocolSha256: digest(await readFile(path.join(root, 'protocol.json'))), priorCalls: rows.length,
+      maxAdditionalCalls: 24 - rows.length, authorization: summary.authorization, remainingCny: summary.remainingCny,
+      reason: 'One explicit recovery after the 8192-output reservation could not fit. Keep the failed attempt, original scope quota, sealed parent and all charges; lower only this simple Electron task output ceiling to 2048. No automatic retries.' }
+    await writeFile(path.join(root, 'electron-amendment.json'), JSON.stringify(amendment, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
+    return amendment
+  } finally { ledger.close() }
+}
 /** Real credentials remain in this external test gateway; Electron receives only a synthetic credential. */
 export async function createClosureRelay(root: string, keyFile: string) {
-  await assertProtocol(root)
-  const directory = await claimPhase(root, 'electron'), ledger = await openInteractiveRound(root, 'closure/electron')
-  if (!ledger.summary().canStartCall || ledger.summary().unknownCosts) { ledger.close(); throw new Error('Cannot admit Electron within the remaining authorization') }
+  const recovery = process.env.DEVFLOW_CODING_CLOSURE_ATTEMPT === 'electron-recovery'
+  if (process.env.DEVFLOW_CODING_CLOSURE_ATTEMPT && !recovery) throw new Error('Unknown Electron acceptance attempt')
+  const protocol = await assertProtocol(root, recovery)
+  const maxOutputTokens = recovery ? 2048 : 8192
+  const directory = await claimPhase(root, recovery ? 'electron-recovery' : 'electron'), ledger = await openInteractiveRound(root, 'closure/electron')
+  const startCalls = ledger.records().length, summary = ledger.summary()
+  const bound = verifiedModelCallBound({ id: 'electron-preflight', projectId: 'closure-electron', providerId: 'deepseek-evaluation', model: 'deepseek-flash', createdAt: new Date().toISOString(), inputTokens: 1048576, maxOutputTokens, billingProvider: 'deepseek', boundBasis: 'deepseek-context-v1' })
+  if (summary.closed || summary.unknownCosts || !bound || bound.costUsd > summary.remainingUsd || startCalls >= 24) { ledger.close(); throw new Error('Cannot admit Electron within the remaining authorization') }
   const apiKey = (await readFile(keyFile, 'utf8')).trim()
   let sequence = 0, inFlight = false, finished = false
+  const responses: Array<{ status: number; upstreamCalls: number }> = []
   const relay = await createGovernedOpencodeProxy({ binding: { providerId: 'deepseek-evaluation', modelId: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, fingerprint: 'closure-electron-deepseek-flash-high' },
-    projectId: 'closure-electron', governance: ledger, maxOutputTokens: 8192,
+    projectId: 'closure-electron', governance: ledger, maxOutputTokens,
     fetcher: async (url, init) => {
       await writeFile(path.join(directory, `wire-${++sequence}.json`), String(init?.body), { flag: 'wx', mode: 0o600 })
       const response = await fetch(url, { ...init, redirect: 'error' })
@@ -88,6 +119,8 @@ export async function createClosureRelay(root: string, keyFile: string) {
       inFlight = true
       try {
         const response = await fetch(`${relay.binding.baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${relay.binding.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(body), redirect: 'error' })
+        responses.push({ status: response.status, upstreamCalls: sequence })
+        await saveJson(path.join(directory, 'local-responses.json'), responses)
         return { status: response.status, type: response.headers.get('content-type') ?? 'application/json', body: await response.text() }
       } finally { inFlight = false }
     },
@@ -95,18 +128,22 @@ export async function createClosureRelay(root: string, keyFile: string) {
       if (finished) return
       finished = true
       try { await relay.close() } finally {
-        await saveJson(path.join(directory, 'phase.json'), { state: 'completed', result: { passed, evidence }, usage: ledger.scopeUsage(), rows: ledger.records(), summary: ledger.summary() })
+        const rows = ledger.records().slice(startCalls)
+        await saveJson(path.join(directory, 'phase.json'), { state: 'completed', result: { passed, evidence }, maxOutputTokens, startCalls, frozenProtocolRoundId: protocol.roundId, usage: evaluationUsage(rows), sharedScopeUsage: ledger.scopeUsage(), rows, responses, summary: ledger.summary() })
         ledger.close()
       }
     },
   }
 }
-export async function checkClosure(root: string) {
-  const results = await Promise.all(['legacy', 'fixed', 'electron'].map(async phase => ({ phase, ...JSON.parse(await readFile(path.join(root, phase, 'phase.json'), 'utf8')) })))
+export async function checkClosure(root: string, selectedElectron = 'electron') {
+  if (!['electron', 'electron-recovery'].includes(selectedElectron)) throw new Error('Unknown selected acceptance')
+  const amendment = selectedElectron === 'electron-recovery' ? await electronAmendment(root) : undefined
+  const historicalElectron = amendment ? JSON.parse(await readFile(path.join(root, 'electron', 'phase.json'), 'utf8')) : undefined
+  const results = await Promise.all(['legacy', 'fixed', selectedElectron].map(async phase => ({ phase, ...JSON.parse(await readFile(path.join(root, phase, 'phase.json'), 'utf8')) })))
   const ledger = await openInteractiveRound(root, 'closure/electron')
   try {
     const summary = ledger.summary()
-    await saveJson(path.join(root, 'summary.json'), { results, summary })
+    await saveJson(path.join(root, selectedElectron === 'electron' ? 'summary.json' : 'recovery-summary.json'), { results, summary, ...(amendment ? { amendment, historicalElectron } : {}) })
     if (results.some(item => item.state !== 'completed' || item.result?.passed !== true) || summary.unknownCosts || !summary.authorization || summary.authorization.accountedCny > 10) throw new Error('Closure acceptance failed or incomplete; preserve the billed evidence')
     return summary
   } finally { ledger.close() }
@@ -116,6 +153,8 @@ async function main() {
   if (!root) throw new Error('Usage: freeze ROOT PARENT | pair ROOT KEYFILE | check ROOT | seal ROOT')
   if (command === 'freeze' && argument) console.log(JSON.stringify(await freeze(path.resolve(root), path.resolve(argument))))
   else if (command === 'pair' && argument) await runPairs(path.resolve(root), argument)
+  else if (command === 'amend-electron') console.log(JSON.stringify(await amendElectron(path.resolve(root))))
+  else if (command === 'check-recovery') console.log(JSON.stringify(await checkClosure(path.resolve(root), 'electron-recovery')))
   else if (command === 'check') console.log(JSON.stringify(await checkClosure(path.resolve(root))))
   else if (command === 'seal') { const ledger = await openInteractiveRound(root, 'closure/electron'); try { await ledger.seal(); console.log(JSON.stringify(ledger.summary())) } finally { ledger.close() } }
   else throw new Error('Unknown closure command')
