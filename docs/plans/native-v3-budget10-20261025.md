@@ -24,7 +24,7 @@
 
 ## 价格与硬预算
 
-2026-10-25 核对 [DeepSeek 官方人民币价目](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)：`deepseek-flash` 对应 V4.1-Flash-1017；高峰每百万 token 输入命中 0.04 元、未命中 2 元、输出 8 元，空闲减半。账本的已知用量按调用时间与现有官方美元价目结算并映射人民币；派发前始终按高峰、全未命中做最坏预留。
+2026-10-25 核对 [DeepSeek 官方人民币价目](https://api-docs.deepseek.com/zh-cn/quick_start/pricing/)：`deepseek-flash` 对应 V4.1-Flash-1017；高峰每百万 token 输入命中 0.04 元、未命中 2 元、输出 8 元，空闲减半。账本的已知用量沿用 `estimateAgentTokenUsage` 的高峰价保守估算，再按官方两张价目表映射人民币，不是账单实扣；派发前还假定全未命中做最坏预留。实际运行再次核对了该函数的 `worstCase: true`，因此不把本轮周末费用称作按空闲价结算。
 
 本轮单次完整预留 = `1,048,576 × 2 / 1,000,000 + 16,384 × 8 / 1,000,000 = 2.228224 元`，不是按实际小提示长度猜测上界。实际用量完整后释放多余预留；缺失用量保留 2.228224 元。超过额度的请求在网络派发前拒绝。价格版本/映射不匹配、401/402、授权过期、关闭后的账本均停止新增调用。
 
@@ -53,3 +53,5 @@ node --import tsx scripts/native-coding-focused-live.mts close .tmp/native-v3-rm
 ```
 
 `budget.sqlite` 是权威账本；`summary.json` / 场景 `round-budget.json` 为只读投影，保留已知金额、未知次数、预留和总占用。不要删除账本或初始化新轮来绕开上限。最终报告列出运行时证据、独立测试、实际已知估价与未知预留，明确未覆盖项和后续门禁。
+
+本轮已执行并封账，结果见 [验收报告](../validation/native-v3-budget10-20261025.md)。
