@@ -58,6 +58,27 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
         throw new Error('Unexpected test credential')
       }
     })
+    // Test-local diagnostics: capture only the four internal scope fields and
+    // rejected relay responses, never provider credentials or prompt bodies.
+    await app.evaluate(async () => {
+      const { Server } = process.getBuiltinModule('node:http')
+      const diagnostics: unknown[] = []
+      ;(globalThis as typeof globalThis & { fixtureRelayDiagnostics?: unknown[] }).fixtureRelayDiagnostics = diagnostics
+      const emit = Server.prototype.emit
+      Server.prototype.emit = function (event: string | symbol, ...args: any[]) {
+        if (event === 'request' && args[0]?.url === '/v1/chat/completions') {
+          const request = args[0], response = args[1], end = response.end
+          const scope = Object.fromEntries(['x-devflow-coding-run', 'x-devflow-workspace', 'x-devflow-root-session', 'x-devflow-session']
+            .map((key) => [key, request.headers[key]]))
+          response.end = function (...values: any[]) {
+            diagnostics.push({ scope, status: response.statusCode,
+              ...(response.statusCode >= 400 ? { error: String(values[0] ?? '').slice(0, 500) } : {}) })
+            return end.apply(this, values)
+          }
+        }
+        return (emit as (event: string | symbol, ...args: any[]) => boolean).call(this, event, ...args)
+      }
+    })
     const page = await app.firstWindow()
     await page.waitForLoadState('domcontentloaded')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0]!.setSize(1672, 973))
@@ -105,6 +126,15 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
       await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).codingPermissionRequests
         .find((item) => item.codingRunId === waiting.id && item.status === 'pending' && (item.origin ?? 'coding_executor') === 'coding_executor')?.command,
       { timeout: 30_000 }).toBe('npm test')
+      const command = page.getByTestId('workbench-coding-permission-summary').getByLabel('待授权命令')
+      await expect(command).toBeVisible()
+      assert.equal(await command.textContent(), 'npm test')
+      assert.equal(await command.evaluate((element) => element.closest('details') === null), true,
+        'One-time command approval must not require expanding the session reuse disclosure')
+      await page.getByRole('button', { name: '查看权限详情', exact: true }).click()
+      await expect(command).toBeVisible()
+      await command.scrollIntoViewIfNeeded()
+      await page.screenshot({ path: path.join(output, '01b-command-permission.png'), scale: 'css' })
       await page.evaluate(async (codingRunId) => {
         const api = window.aiDevFlowDesktop!, state = await api.loadState()
         const request = state.codingPermissionRequests.find((item) => item.codingRunId === codingRunId && item.status === 'pending' && (item.origin ?? 'coding_executor') === 'coding_executor')!
@@ -119,6 +149,36 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
     }, { timeout: 60_000 }).toBe('pending')
     const completed = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
     const current = completed.codingRuns.find((item) => item.id === waiting.id)!
+    const providerEvents = completed.codingEvents.filter((item) => item.codingRunId === waiting.id &&
+      item.metadata?.providerCall && (item.metadata.providerCall as { status?: string }).status === 'succeeded')
+    assert(providerEvents.length > 0, 'Main must persist provider settlement events from the trusted relay')
+    assert.equal(current.runtimeCostSummary?.inputTokens, providerEvents.length * 50)
+    assert.equal(current.runtimeCostSummary?.outputTokens, providerEvents.length * 10)
+    assert.equal(current.runtimeCostSummary?.providerCallIds?.length, providerEvents.length)
+    assert.equal(current.runtimeCostSummary?.costStatus, 'unknown', 'Synthetic model has no tariff; usage is known, price is unknown')
+    assert.equal(current.runtimeCostSummary?.usageStatus, 'incomplete', 'Synthetic fixture intentionally omits the cache split')
+    const callUsage = current.runtimeCostSummary.providerCallSettlements
+    assert.equal(callUsage?.length, providerEvents.length)
+    assert(callUsage?.every((call) => call.inputTokens === 50 && call.outputTokens === 10 &&
+      call.cacheReadTokens === null && call.cacheMissTokens === null && call.usageStatus === 'incomplete' &&
+      call.costStatus === 'unknown' && call.costUsd === null && call.pricingSnapshot === null),
+    'Each fixture response omits cache usage; incomplete usage is not inferred merely from an unknown tariff')
+    const totalTokens = providerEvents.length * 60
+    await expect(page.getByTestId('task-usage-summary')).toContainText(`${totalTokens.toLocaleString()} + ${providerEvents.length} 项用量不完整 tokens`)
+    await expect(page.getByTestId('task-usage-summary')).toContainText(`${providerEvents.length} 项金额待确认`)
+    const billedSessions = new Set(providerEvents.map((item) => item.metadata?.executorSessionId))
+    const billedRoots = new Set(providerEvents.map((item) => item.metadata?.parentSessionId))
+    assert.equal(billedRoots.size, 1)
+    assert([...billedRoots].every((value) => typeof value === 'string' && value.length > 0))
+    assert(billedSessions.has([...billedRoots][0]), 'Root session usage must belong to the same Coding Run')
+    assert.equal(billedSessions.size, input.delegated ? 2 : 1, 'Parent and child usage must retain their checked session scope')
+    const relayed = await app!.evaluate(() => (globalThis as typeof globalThis & {
+      fixtureRelayDiagnostics?: Array<{ scope: Record<string, string>; status: number }>
+    }).fixtureRelayDiagnostics ?? [])
+    assert.equal(relayed.length, providerEvents.length)
+    assert(relayed.every((item) => item.status === 200 && item.scope['x-devflow-coding-run'] === waiting.id &&
+      item.scope['x-devflow-workspace'] === current.managedWorkspaceId && billedRoots.has(item.scope['x-devflow-root-session']) &&
+      billedSessions.has(item.scope['x-devflow-session'])), 'All four trusted scope headers must reach Main and match persisted usage')
     assert.equal(current.question?.status, 'answered')
     assert.equal(current.question?.answeredBy, 'u-erich')
     assert.equal(completed.runs.find((item) => item.id === run.id)?.currentNodeId, run.currentNodeId)
@@ -140,17 +200,32 @@ export async function verifyQuestionInElectron(input: { root: string; directory:
     page = await launch()
     await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).codingRuns.find((item) => item.id === restartQuestion.id)?.question?.status,
       { timeout: 15_000 }).toBe('invalidated')
+    const restarted = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
+    assert.deepEqual(restarted.codingRuns.find((item) => item.id === waiting.id)?.runtimeCostSummary, current.runtimeCostSummary,
+      'Finished run expenses must survive cancellation, another attempt and restart')
     await access(retained.worktreePath)
     assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: input.directory, encoding: 'utf8' }), '')
-    console.log(JSON.stringify({ electronQuestion: 'passed', boundedTask: input.delegated === true, reloadedPendingQuestion: true, realOpenCode: input.version,
-      canonicalTests: 'passed', finalAcceptance: 'pending', restartInvalidation: true, sourceRepositoryUnchanged: true, screenshots: output }))
+    const evidence = { electronQuestion: 'passed', boundedTask: input.delegated === true, reloadedPendingQuestion: true, realOpenCode: input.version,
+      model: 'synthetic-not-billed', teamApi: 'isolated-demo-memory', providerCalls: providerEvents.length, billedSessions: billedSessions.size,
+      inputTokens: current.runtimeCostSummary!.inputTokens, outputTokens: current.runtimeCostSummary!.outputTokens, totalTokens,
+      callUsage: callUsage!.map(({ inputTokens, outputTokens, cacheReadTokens, cacheMissTokens, usageStatus, costStatus, costUsd }) =>
+        ({ inputTokens, outputTokens, cacheReadTokens, cacheMissTokens, usageStatus, costStatus, costUsd })),
+      priceStatus: current.runtimeCostSummary!.costStatus, headerUsageProjection: true, restartedUsagePreserved: true,
+      ...(input.delegated ? { commandPermissionVisible: 'npm test', commandPermissionScreenshot: '01b-command-permission.png' } : {}),
+      canonicalTests: 'passed', finalAcceptance: 'pending', restartInvalidation: true, sourceRepositoryUnchanged: true, screenshots: output }
+    await writeFile(path.join(output, 'result.json'), JSON.stringify(evidence, null, 2))
+    console.log(JSON.stringify(evidence))
   } catch (error) {
     if (app) {
       const page = await app.firstWindow()
       await page.screenshot({ path: path.join(output, 'failure.png') }).catch(() => undefined)
       const state = await page.evaluate(() => window.aiDevFlowDesktop!.loadState()).catch(() => undefined)
-      console.error(JSON.stringify({ runs: state?.codingRuns.map((item) => ({ id: item.id, status: item.status, summary: item.summary })),
-        events: state?.codingEvents.slice(-8), toast: await page.getByTestId('toast').textContent().catch(() => null) }))
+      const relay = await app.evaluate(() => (globalThis as typeof globalThis & { fixtureRelayDiagnostics?: unknown[] }).fixtureRelayDiagnostics).catch(() => undefined)
+      const failure = { runs: state?.codingRuns.map((item) => ({ id: item.id, status: item.status, summary: item.summary,
+        engine: item.engine, providerId: item.providerId, configVersion: item.configVersion, managedWorkspaceId: item.managedWorkspaceId })),
+        events: state?.codingEvents.slice(-8), relay, toast: await page.getByTestId('toast').textContent().catch(() => null) }
+      await writeFile(path.join(output, 'failure.json'), JSON.stringify(failure, null, 2)).catch(() => undefined)
+      console.error(JSON.stringify(failure))
     }
     throw error
   } finally { await app?.close(); await team.stop() }

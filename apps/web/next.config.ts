@@ -8,6 +8,8 @@ if (e2eDistDir && !/^\.tmp\/next-e2e-[a-zA-Z0-9_-]+$/u.test(e2eDistDir)) throw n
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Parallel verification servers use their own generated output directory.
+  distDir: process.env['DEVFLOW_NEXT_DIST_DIR']?.trim() || '.next',
   outputFileTracingRoot: path.resolve(webDir, '../..'),
   transpilePackages: ['@ai-devflow/shared'],
   ...(e2eDistDir ? { distDir: e2eDistDir } : {}),

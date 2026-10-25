@@ -1,6 +1,7 @@
 import { createNativeRepositoryReviewProvider } from './knowledge-review-native.js'
 import {legacyChatBudget} from './legacy-chat-budget'
 import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
+import { createCodingRelayCallContext } from './coding-relay-accounting.js'
 import { withGovernedStageAgent } from './governed-stage-agent.js'
 import { withCleanupFailure } from './opencode-failure.js'
 import { governAgentProvider, type ModelCallGovernance } from './governed-provider.js'
@@ -553,11 +554,22 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
         }
         if (!providerBinding) throw new Error('请先保存项目所选 OpenCode Provider；受预算治理的调用不能使用未绑定的外部凭据。')
         const modelContext = createCodingModelContext()
-        const budgetProxy=await createGovernedOpencodeProxy({binding:providerBinding,projectId,governance:await modelCallGovernance(store), assertContextCurrent: modelContext.assertCurrent, resolveOperation: async () => {
-          const active = (await store.listCodingAgentRuns()).find(run => run.projectId === projectId && isActiveCodingAgentRunStatus(run.status))
-          if (!active) throw new Error('开发操作已结束，尚未发出模型请求。')
-          return { id: `coding-${active.id}`, purpose: 'native-tool', version: createHash('sha256').update(JSON.stringify([active.id, active.configVersion, active.managedWorkspaceId, active.userInstruction])).digest('hex') }
-        }})
+        const codingSessionOwners = new Map<string, { workspaceId: string; sessionId: string }>()
+        const budgetProxy=await createGovernedOpencodeProxy({binding:providerBinding,projectId,governance:await modelCallGovernance(store),
+          assertContextCurrent: modelContext.assertCurrent,
+          resolveCodingCall: (session) => {
+            const owner = codingSessionOwners.get(session.codingRunId)
+            if (!owner || owner.workspaceId !== session.workspaceId || owner.sessionId !== session.rootSessionId) {
+              throw new Error('Coding relay session does not belong to this execution')
+            }
+            return createCodingRelayCallContext({
+            store, projectId, providerId: providerBinding.providerId, model: providerBinding.modelId, configVersion: selection.configVersion,
+            session,
+            publishEvent: (event) => broadcastToRenderers(ipcChannels.codingEventAppended, event),
+            publishRun: (run) => { broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run); wakeRemoteSyncOutbox() },
+            })
+          },
+        })
         codingBudgetProxies.add(budgetProxy)
         const adapter = createCodingExecutorCompatibilityAdapter(
           createOpencodeHttpCodingEngineAdapter({
@@ -569,6 +581,13 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             requireExecutionAuthorization: true,
             enableQuestions: true,
             enableTasks: true,
+            onSessionCreated: ({ codingRunId, workspaceId, sessionId }) => {
+              const previous = codingSessionOwners.get(codingRunId)
+              if (previous && (previous.workspaceId !== workspaceId || previous.sessionId !== sessionId)) {
+                throw new Error('Coding relay session ownership cannot be replaced')
+              }
+              codingSessionOwners.set(codingRunId, { workspaceId, sessionId })
+            },
             runtimeEnv: {
               ...buildOpencodeRuntimeEnv({
                 baseEnv: process.env,
@@ -621,13 +640,14 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
   }
 }
 
-async function getCodingExecutor(projectId?: string): Promise<CodingExecutor> {
-  if (!projectId) return compatibilityCodingExecutor
+async function getCodingExecutor(projectId?: string): Promise<{ executor: CodingExecutor; configVersion?: number }> {
+  if (!projectId) return { executor: compatibilityCodingExecutor }
   const resolved = await resolveCodingExecutorForProject(projectId)
   if (!resolved.executor) {
     throw new Error('Project Coding Executor is not configured; no fallback executor was started')
   }
-  return resolved.executor
+  return { executor: resolved.executor,
+    ...(resolved.selection.executor === 'opencode-http' ? { configVersion: resolved.selection.configVersion } : {}) }
 }
 
 function getGitHubDeliveryRuntime() {
@@ -1589,14 +1609,15 @@ async function createCodingRuntimeForRequest(
   knowledgeSnapshot?: RepositoryKnowledgeSnapshot,
   projectId?: string,
 ) {
-  const [remoteSync, store, executor] = await Promise.all([
+  const [remoteSync, store, selected] = await Promise.all([
     getProjectBoundRemoteSync(),
     getStore(),
     getCodingExecutor(projectId),
   ])
   return createCodingRuntime({
     store,
-    executor,
+    executor: selected.executor,
+    ...(selected.configVersion === undefined ? {} : { executorConfigVersion: selected.configVersion }),
     prepareRetrievedKnowledge,
     assertRetrievedKnowledgeCurrent,
     sessionAuthority: async (localProjectId) => {

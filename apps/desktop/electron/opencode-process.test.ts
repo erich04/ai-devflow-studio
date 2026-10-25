@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { createDefaultOpencodePermissionRules } from './opencode-http-adapter'
 import { describe, expect, it, vi } from 'vitest'
 import { createOpencodeProcessManager, terminateProcessTree, type SpawnOpencodeProcess } from './opencode-process'
@@ -47,10 +48,27 @@ describe('opencode process manager', () => {
       expect(env.OPENCODE_CONFIG_DIR).toBeUndefined()
       const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!)
       expect(config).toMatchObject({ model: 'fixture/model', small_model: 'fixture/model', subagent_depth: 1 })
+      for (const name of ['devflow-coding', 'devflow-worker']) {
+        const prompt = config.agent[name].prompt as string
+        expect(prompt).toContain('at most one tool_call')
+        expect(prompt).toContain('including read-only tools')
+        expect(prompt).toContain('24 tool attempts')
+        expect(prompt).toContain('Rejected attempts also consume')
+        expect(prompt).toContain('Read each relevant file once')
+        expect(prompt).toContain('reserve tool attempts')
+      }
       expect(config.plugin).toHaveLength(1)
+      expect(fileURLToPath(config.plugin[0])).toBe(join(env.XDG_CONFIG_HOME!, 'opencode', 'devflow-task-guard.mjs'))
       expect(await readFile(fileURLToPath(config.plugin[0]), 'utf8')).toContain('devflow_task_')
       expect(await manager.ensure(input)).toBe(server)
-      expect(await manager.ensure({ ...input, taskPolicy: { ...policy, maxTasks: 2 } })).not.toBe(server)
+      expect(await manager.ensure({ ...input, taskPolicy: { ...policy, maxTasks: 2, maxToolTurns: 12 } })).not.toBe(server)
+      const boundedConfig = JSON.parse(spawnProcess.mock.calls[1]![2]!.env!.OPENCODE_CONFIG_CONTENT!)
+      for (const name of ['devflow-coding', 'devflow-worker']) expect(boundedConfig.agent[name].prompt).toContain('12 tool attempts')
+      const documentServer = await manager.ensure({ ...input, taskPolicy: { ...policy, maxTasks: 2, maxToolTurns: 12, publicDocuments: true } })
+      expect(documentServer).not.toBe(server)
+      expect(spawnProcess).toHaveBeenCalledTimes(3)
+      const documentConfig = JSON.parse(spawnProcess.mock.calls[2]![2]!.env!.OPENCODE_CONFIG_CONTENT!)
+      expect(await readFile(fileURLToPath(documentConfig.plugin[0]), 'utf8')).toContain('devflow_document: tool(')
     } finally { await manager.stopAll() }
   })
 

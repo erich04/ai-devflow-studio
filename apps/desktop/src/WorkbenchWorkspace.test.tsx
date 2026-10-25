@@ -538,6 +538,47 @@ it('refreshes from pushes, skips hidden fallback polls and recovers immediately 
 })
 
 describe('discussion references and proposal preview (plan W7, W8)', () => {
+  it('formats draft and saved proposals while preserving the exact source through raw preview and explicit save', async () => {
+    const f = fixture()
+    await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: 'Markdown 提案' })
+    const node = run.nodes.find((item) => item.stage === 'clarify' && item.kind === 'agent')!
+    const session = f.sessions[0]!
+    const content = '# 编辑任务提案\r\n\r\n## 目标\r\n\r\n- **保留状态**和*原始空白*\r\n- 使用 `task.title`\r\n\r\n1. 编辑\r\n2. 保存\r\n\r\n```ts\r\nconst title = "  Todo  "\r\n```\r\n\r\n| 操作 | 结果 |\r\n| --- | --- |\r\n| 保存 | 保持排序 |\r\n\r\n'
+    const draft = { runId: run.id, nodeId: node.id, title: '编辑任务提案', content }
+    session.messages.push({ id: 'markdown-draft', role: 'assistant', text: '**普通回复保持排版**', createdAt: run.createdAt, draft })
+    render(<WorkbenchWorkspace {...f.props} splitDetails />)
+    await screen.findByRole('button', { name: '保存为节点提案' })
+    expect(screen.getByRole('heading', { name: '目标', level: 2 })).toBeVisible()
+    const body = screen.getByRole('region', { name: '提案正文' })
+    expect(within(body).getByRole('heading', { name: draft.title, level: 1 })).toBeVisible()
+    expect(within(body).getAllByText(draft.title)).toHaveLength(1)
+    expect(within(body).getAllByRole('list')).toHaveLength(2)
+    expect(within(body).getByText('保留状态').tagName).toBe('STRONG')
+    expect(within(body).getByText('原始空白').tagName).toBe('EM')
+    expect(within(body).getByText('task.title').tagName).toBe('CODE')
+    expect(body.querySelector('pre code')?.textContent).toBe('const title = "  Todo  "\n')
+    expect(within(body).getByRole('table')).toHaveTextContent('保持排序')
+    fireEvent.click(within(body).getByRole('button', { name: '查看原文' }))
+    expect(body.querySelector('.message-plain')?.textContent).toBe(content)
+    expect(screen.getByText('普通回复保持排版').tagName).toBe('STRONG')
+    fireEvent.click(within(body).getByRole('button', { name: '返回排版' }))
+    expect(within(body).getByRole('table')).toHaveTextContent('保持排序')
+    expect(f.commands.some((command) => command.type === 'publish')).toBe(false)
+    fireEvent.click(screen.getByRole('button', { name: '保存为节点提案' }))
+    expect(screen.getByTestId('proposal-publish-preview')).toHaveTextContent(`上方「${draft.title}」全文`)
+    fireEvent.click(screen.getByRole('button', { name: '确认保存提案' }))
+    await waitFor(() => expect(f.commands.filter((command) => command.type === 'publish')).toEqual([{ type: 'publish', projectId: run.projectId, conversationId: session.id, messageId: 'markdown-draft' }]))
+    expect(session.messages[0]!.draft?.content).toBe(content)
+    session.messages[0]!.draft!.publishedArtifactId = 'saved-markdown-proposal'
+    session.version++
+    await act(async () => f.push())
+    expect(screen.getByText('已保存 · 待确认')).toBeVisible()
+    expect(screen.getByTestId('proposal-saved-note')).toHaveTextContent('流程不会推进')
+    expect(within(body).getByRole('table')).toHaveTextContent('保持排序')
+    fireEvent.click(within(body).getByRole('button', { name: '查看原文' }))
+    expect(body.querySelector('.message-plain')?.textContent).toBe(content)
+  })
+
   const reference = {
     id: 'artifact-1:需求 v2:0', materialId: 'artifact-1', materialTitle: '需求澄清', version: '需求 v2',
     projectName: '任务清单', runTitle: run.title, stageLabel: '需求澄清', stepTitle: '需求确认 Gate', readAt: '2026-09-28T02:00:00.000Z',

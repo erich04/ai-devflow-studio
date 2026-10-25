@@ -42,6 +42,7 @@ import {
 import { captureWorktreeDiff, type CapturedWorktreeDiff } from './coding-runner.js'
 import { createOpencodeProcessManager, type ManagedOpencodeServer } from './opencode-process.js'
 import { OpencodeTaskScope } from './opencode-task-scope.js'
+import { CodingEngineTaskLimitError } from './coding-engine-lifecycle.js'
 import type { OpencodeTaskPolicy } from './opencode-task-guard.js'
 import { buildOpenCodeManagedPrompt, classifyOpenCodePermission, isAutomaticOpenCodeRead } from './opencode-permission-policy.js'
 import {
@@ -75,6 +76,8 @@ export type OpencodeHttpCodingEngineConfig = {
   enableQuestions?: boolean
   /** Only for a saved Provider routed through the shared governed proxy. */
   enableTasks?: boolean
+  /** Bind the host's cost attribution before the first model request; failure closes admission. */
+  onSessionCreated?: (input: { codingRunId: string; workspaceId: string; sessionId: string }) => void
   questionTimeoutMs?: number
   permissionPollMs?: number
   permissionDiscoveryTimeoutMs?: number
@@ -132,10 +135,12 @@ export function createOpencodeHttpCodingEngineAdapter(
   if (config.enableTasks && (!config.requireExecutionAuthorization || config.permissionRules)) {
     throw new Error('Bounded tasks require execution authorization and the managed permission policy')
   }
-  const childRules = createDefaultOpencodePermissionRules({ question: config.enableQuestions === true })
+  const childRules = [...createDefaultOpencodePermissionRules({ question: config.enableQuestions === true }),
+    ...(config.enableTasks ? [{ permission: 'devflow_document', pattern: '*', action: 'allow' as const }] : []),
+  ]
   const taskPolicy: OpencodeTaskPolicy | undefined = config.enableTasks ? {
     owner: randomUUID(), providerID: config.providerID, modelID: config.modelID,
-    maxTasks: 4, maxToolTurns, maxModelCalls: 32, childRules,
+    maxTasks: 4, maxToolTurns, maxModelCalls: 32, publicDocuments: true, childRules,
     parentRules: [...childRules, { permission: 'task', pattern: 'devflow-worker', action: 'ask' }],
   } : undefined
   const permissionRules = taskPolicy?.parentRules ?? config.permissionRules ?? childRules
@@ -217,7 +222,7 @@ export function createOpencodeHttpCodingEngineAdapter(
   function assertToolTurnLimit(session: OpencodeRuntimeSession): void {
     remainingSessionMs(session)
     if (session.observedToolCallKeys.size > maxToolTurns) {
-      throw new Error('opencode_tool_turn_limit_exceeded')
+      throw new CodingEngineTaskLimitError('tool_turn_limit')
     }
   }
 
@@ -421,6 +426,10 @@ export function createOpencodeHttpCodingEngineAdapter(
   }) {
     remainingSessionMs(input.session)
     if (!input.messageResult.ok && input.messageResult.error instanceof OpencodeMessageResponseError) {
+      // An owned guard may have stopped the stream after enforcing a budget.
+      // Preserve that trusted cause instead of reporting its aborted body as a
+      // provider parse failure. Unrelated protocol errors remain unchanged.
+      await input.session.taskScope?.refresh(AbortSignal.timeout(5_000))
       throw input.messageResult.error
     }
     await refreshObservedToolTurns(input.session)
@@ -627,6 +636,7 @@ export function createOpencodeHttpCodingEngineAdapter(
           )
           await runtimeSession.taskScope?.refresh(AbortSignal.timeout(5_000))
           if (input.assertContextCurrent) await input.assertContextCurrent()
+          config.onSessionCreated?.({ codingRunId: input.id, workspaceId: input.workspace.id, sessionId: session.id })
           const messagePromise = sendOpencodeMessage({
             baseUrl: server.baseUrl,
             sessionId: session.id,

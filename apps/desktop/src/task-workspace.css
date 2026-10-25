@@ -209,11 +209,10 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 .design-revision-panel > h3, .design-revision-panel > p { margin: 0; }
 .design-revision-panel fieldset { min-width: 0; border: 0; padding: 0; margin: 0; }
 .design-revision-panel legend { margin-bottom: 8px; font-weight: 600; }
-.design-revision-proposal { padding: 8px 0; }
+.design-revision-proposal { padding: 8px 0; min-width: 0; }
 .design-revision-proposal label { display: flex; align-items: start; gap: 8px; overflow-wrap: anywhere; }
 .design-revision-proposal input { width: auto; flex: none; }
 .design-revision-proposal details { margin: 6px 0 0 24px; color: var(--text-muted); }
-.design-revision-proposal pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; color: var(--text); }
 .design-revision-panel .task-work-panel { margin: 0; }
 .design-revision-panel > button { justify-self: start; }
 .task-work-panel p { margin: 0; }

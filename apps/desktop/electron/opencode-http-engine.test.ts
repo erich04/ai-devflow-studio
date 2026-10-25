@@ -30,7 +30,7 @@ import {
 import type { OpencodeTaskPolicy } from './opencode-task-guard'
 
 describe('opencode HTTP coding engine', () => {
-  it.each(['answer', 'permission', 'cancel', 'failed cancel', 'changed child', 'tool limit'] as const)('governs a foreground child through the same run: %s', async (scenario) => {
+  it.each(['answer', 'permission', 'cancel', 'failed cancel', 'changed child', 'tool limit', 'continuation tool limit', 'attribution rejected'] as const)('governs a foreground child through the same run: %s', async (scenario) => {
     let policy!: OpencodeTaskPolicy
     let root!: OpencodeSession
     let child: OpencodeSession | undefined
@@ -63,11 +63,18 @@ describe('opencode HTTP coding engine', () => {
       else if (route === '/permission/task-permission/reply') { phase = scenario === 'permission' ? 'permission' : 'question'; questionPending = phase === 'question'; value = true }
       else if (route === '/permission/child-permission/reply') { phase = 'done'; busyPolls = 3; resolveMessage(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()))); value = true }
       else if (route === '/question') value = questionPending ? [{ id: 'child-question', sessionID: 'child', questions: [{ header: 'Color', question: 'Choose color', options: [{ label: 'Green', description: 'Green' }] }], tool: { messageID: 'child-message', callID: 'question' } }] : []
-      else if (route.startsWith('/question/child-question/')) { questionPending = false; phase = 'done'; busyPolls = 3; resolveMessage(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()))); value = true }
+      else if (route.startsWith('/question/child-question/')) {
+        questionPending = false; phase = 'done'; busyPolls = 3
+        if (scenario === 'continuation tool limit' && route.endsWith('/reply')) {
+          Object.assign(root.metadata!.devflow as object, { stopped: true, stopReason: 'tool_turn_limit' })
+          resolveMessage(new Response('aborted body'))
+        } else resolveMessage(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage())))
+        value = true
+      }
       else if (route.endsWith('/abort')) {
         if (abortFault) { abortFault = false; return new Response('false') }
         if (route === '/session/child/abort') childAborted = true
-        phase = 'done'; busyPolls = 0; resolveMessage(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()))); value = true
+        phase = 'done'; busyPolls = 0; resolveMessage?.(new Response(JSON.stringify(immediateSuccessfulOpencodeMessage()))); value = true
       } else if (route === '/session/status') value = { 'ses-1': { type: phase === 'done' ? 'idle' : 'busy' },
         child: { type: phase === 'done' && busyPolls-- <= 0 ? 'idle' : 'busy' } }
       else if (route.endsWith('/message')) value = child ? [{ info: { role: 'assistant', providerID: 'fixture', modelID: 'fixture' },
@@ -76,7 +83,13 @@ describe('opencode HTTP coding engine', () => {
       else throw new Error(`Unexpected ${route}`)
       return new Response(JSON.stringify(value))
     }
-    const engine = createOpencodeHttpCodingEngineAdapter({ binaryPath: 'opencode', providerID: 'fixture', modelID: 'fixture',
+    const onSessionCreated = vi.fn((scope: { codingRunId: string; workspaceId: string; sessionId: string }) => {
+      expect(posts).not.toContain('/session/ses-1/message')
+      expect(scope.sessionId).toBe(root.id)
+      expect(root.metadata?.devflow).toMatchObject({ codingRunId: scope.codingRunId, workspaceId: scope.workspaceId })
+      if (scenario === 'attribution rejected') throw new Error('attribution rejected')
+    })
+    const engine = createOpencodeHttpCodingEngineAdapter({ binaryPath: 'opencode', providerID: 'fixture', modelID: 'fixture', onSessionCreated,
       processManager: { ensure: async (input) => { policy = input.taskPolicy!; return { baseUrl: 'http://127.0.0.1:4097', child: { exitCode: null, killed: false } as never, projectId: 'local-1' } } },
       resolveManagedDirectory: identityManagedDirectory, fetcher, enableQuestions: true, enableTasks: true, requireExecutionAuthorization: true,
       permissionPollMs: 1, permissionDiscoveryTimeoutMs: 200, maxWallClockMs: 5000, maxToolTurns: scenario === 'tool limit' ? 1 : 24,
@@ -88,12 +101,21 @@ describe('opencode HTTP coding engine', () => {
     const workspace = managedWorkspace(project.id, run.id, node.id), input = startInput({ run, node, project, workspace })
     const auth = expectPermissionResult(await engine.start(input))
     const starting = engine.approvePermission({ codingRun: auth.codingRun, request: auth.permissionRequest, authorizedStart: input, workspace, project, now: input.now })
+    if (scenario === 'attribution rejected') {
+      await expect(starting).rejects.toThrow('attribution rejected')
+      expect(posts).not.toContain('/session/ses-1/message')
+      expect(onSessionCreated).toHaveBeenCalledOnce()
+      return
+    }
     if (scenario === 'tool limit') {
       await expect(starting).rejects.toThrow('tool_turn_limit')
       expect(childAborted).toBe(true)
       return
     }
     const waiting = await starting
+    expect(onSessionCreated).toHaveBeenCalledWith({ codingRunId: input.id, workspaceId: workspace.id, sessionId: 'ses-1' })
+    expect(policy.publicDocuments).toBe(true)
+    expect(policy.childRules).toContainEqual({ permission: 'devflow_document', pattern: '*', action: 'allow' })
     expect(posts).toContain('/permission/task-permission/reply')
     if (scenario === 'permission') {
       const permission = expectPermissionResult(waiting)
@@ -121,6 +143,11 @@ describe('opencode HTTP coding engine', () => {
     if (scenario === 'changed child') {
       await expect(replying).rejects.toThrow()
       expect(posts).not.toContain('/question/child-question/reply')
+      return
+    }
+    if (scenario === 'continuation tool limit') {
+      await expect(replying).rejects.toThrow('opencode_tool_turn_limit_exceeded')
+      expect(childAborted).toBe(true)
       return
     }
     const completed = expectCompletedResult(await replying)
@@ -193,6 +220,8 @@ describe('opencode HTTP coding engine', () => {
   it.each(['success', 'transport failure', 'busy past deadline'] as const)('waits for the managed session to become idle before capturing a settled message diff: %s', async (scenario) => {
     let startedAt = 0
     let capturedAt = 0
+    let releaseDiffRead!: () => void
+    const diffRead = new Promise<void>((resolve) => { releaseDiffRead = resolve })
     const patch = 'diff --git a/src/app.ts b/src/app.ts\n+export const ready = true\n'
     const fetcher: Fetcher = async (input, init) => {
       const url = String(input)
@@ -213,7 +242,7 @@ describe('opencode HTTP coding engine', () => {
       // Keep the session and polling deadlines on the same virtual clock.
       nowMs: () => Date.now(),
       processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory, fetcher,
-      captureWorktreeDiff: async () => { capturedAt = Date.now(); return { changedPaths: ['src/app.ts'], patch } },
+      captureWorktreeDiff: async () => { capturedAt = Date.now(); await diffRead; return { changedPaths: ['src/app.ts'], patch } },
       requireExecutionAuthorization: true, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 10, maxWallClockMs: 200,
     })
     const run = runs[0]!
@@ -230,12 +259,19 @@ describe('opencode HTTP coding engine', () => {
         workspace, project, authorizedStart: input, now: input.now,
       }).then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }))
         .finally(() => { settled = true })
-      // Response body microtasks can settle between timer turns. Do not jump past
-      // the execution deadline while a successful completion is still assembling.
-      for (let elapsed = 0; elapsed < 250 && !settled; elapsed += 1) {
+      // Polling uses the virtual clock; diff capture and path validation use real
+      // I/O. Stop advancing once idle permits capture, then release that I/O.
+      for (let elapsed = 0; elapsed < 250 && !settled && capturedAt === 0; elapsed += 1) {
         await vi.advanceTimersByTimeAsync(1)
       }
-      expect(settled).toBe(true)
+      if (scenario === 'busy past deadline') {
+        expect(settled).toBe(true)
+      } else {
+        expect(capturedAt).not.toBe(0)
+        expect(capturedAt - startedAt).toBeGreaterThanOrEqual(40)
+        expect(settled).toBe(false)
+        releaseDiffRead()
+      }
       const outcome = await result
       if (scenario === 'busy past deadline') {
         expect(outcome.error).toMatchObject({ code: 'permission_discovery_timed_out' })
@@ -244,8 +280,8 @@ describe('opencode HTTP coding engine', () => {
       }
       expect(outcome.error).toBeUndefined()
       expect(expectCompletedResult(outcome.value!).codingRun.status).toBe('completed')
-      expect(capturedAt - startedAt).toBeGreaterThanOrEqual(40)
     } finally {
+      releaseDiffRead()
       try { await engine.cancel({ codingRun: authorization.codingRun }) } finally { vi.useRealTimers() }
     }
   })
