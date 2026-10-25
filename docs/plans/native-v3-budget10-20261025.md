@@ -48,10 +48,13 @@ corepack pnpm typecheck:native-coding-live
 corepack pnpm exec vitest run scripts/native-coding-cny-budget.test.ts scripts/native-coding-round-budget.test.ts scripts/native-coding-focused-fixtures.test.ts scripts/native-coding-cache-probe.test.ts scripts/native-coding-interactive-cli.test.ts
 node --import tsx scripts/native-coding-focused-live.mts freeze .tmp/native-v3-rmb10-round
 node --import tsx scripts/native-coding-focused-live.mts run .tmp/native-v3-rmb10-round /absolute/path/to/authorized-key-file
+node --import tsx scripts/native-coding-focused-live.mts check .tmp/native-v3-rmb10-round
 node --import tsx scripts/native-coding-focused-live.mts status .tmp/native-v3-rmb10-round
 node --import tsx scripts/native-coding-focused-live.mts close .tmp/native-v3-rmb10-round
 ```
 
 `budget.sqlite` 是权威账本；`summary.json` / 场景 `round-budget.json` 为只读投影，保留已知金额、未知次数、预留和总占用。不要删除账本或初始化新轮来绕开上限。最终报告列出运行时证据、独立测试、实际已知估价与未知预留，明确未覆盖项和后续门禁。
+
+`check` 仅读取既有结果，不加载密钥、不发起模型请求；任一场景缺失、失败或 blocked 都返回非零状态。`run` 在所有阶段结束后执行相同检查，避免把“运行器执行完毕”当成“全部验收通过”。
 
 本轮已执行并封账，结果见 [验收报告](../validation/native-v3-budget10-20261025.md)。

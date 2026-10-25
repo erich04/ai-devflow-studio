@@ -22,6 +22,18 @@ for (const [id, calls] of Object.entries({ clarification: 16, steering: 16, appl
 add('fault/unknown', 'interactive', 'deepseek-interactive', 12)
 add('fault/child_cancel', 'interactive', 'deepseek-interactive', 20)
 const fixtureHash = () => digest(JSON.stringify(focusedFixtures))
+const cacheOrder = ['legacy_a', 'fixed_a', 'fixed_b', 'legacy_b']
+
+/** Offline quality result: completing the driver must not hide a failed/blocked control. */
+export async function assertFocusedOutcomes(root: string) {
+  const expected = [...cacheOrder.map(id => `cache-${id}`), ...focusedFixtures.map(fixture => `coding-${fixture.id}`), 'interactive-core', 'interactive-fault']
+  const failures: string[] = []
+  for (const id of expected) {
+    const phase = JSON.parse(await readFile(path.join(root, 'phases', `${id}.json`), 'utf8'))
+    if (phase.state !== 'completed' || phase.result?.passed !== true) failures.push(id)
+  }
+  if (failures.length) throw new Error(`Focused validation did not fully pass: ${failures.join(', ')}. Preserve evidence; do not automatically rerun paid phases.`)
+}
 
 async function files(root: string, entries: Record<string, string>) {
   for (const [file, text] of Object.entries(entries)) { await mkdir(path.dirname(path.join(root, file)), { recursive: true }); await writeFile(path.join(root, file), text) }
@@ -92,7 +104,7 @@ async function freeze(root: string) {
   const round = await createCnyEvaluationRound(root, { maxCostCny: 10, maxCalls: 200, maxOutputTokens: 16384, scopes: focusedScopes })
   const qualification = await qualifyFixtures(path.join(root, 'qualification'))
   const protocol = { version: 1, roundId: round.roundId, candidateCommit: git('rev-parse', 'HEAD'), fixtureHash: fixtureHash(), model: 'deepseek-flash', thinking: 'high', maxOutputTokens: 16384,
-    maxCalls: 200, scopes: focusedScopes, qualification, cacheOrder: ['legacy_a', 'fixed_a', 'fixed_b', 'legacy_b'],
+    maxCalls: 200, scopes: focusedScopes, qualification, cacheOrder,
     softCostTargetsCny: { cache: 1, interactive: 2, coding: 3, retry: 1, reserve: 3 },
     scope: 'Focused Native v3 development acceptance, not the historical 31 tasks x 3 executors quality gate. Unknown calls retain full-context reservations. No automatic rerun of partial phases.' }
   await writeFile(path.join(root, 'protocol.json'), JSON.stringify(protocol, null, 2) + '\n', { flag: 'wx', mode: 0o600 })
@@ -103,7 +115,7 @@ async function run(root: string, keyFile: string) {
   const budget = await openInteractiveRound(root, 'round/operator')
   try {
     const protocol = JSON.parse(await readFile(path.join(root, 'protocol.json'), 'utf8'))
-    if (protocol.roundId !== budget.limits.roundId || protocol.candidateCommit !== git('rev-parse', 'HEAD') || git('status', '--porcelain') || protocol.fixtureHash !== fixtureHash() || JSON.stringify(protocol.scopes) !== JSON.stringify(focusedScopes)) throw new Error('Frozen protocol or source changed; do not start paid calls')
+    if (protocol.roundId !== budget.limits.roundId || protocol.candidateCommit !== git('rev-parse', 'HEAD') || git('status', '--porcelain') || protocol.fixtureHash !== fixtureHash() || JSON.stringify(protocol.scopes) !== JSON.stringify(focusedScopes) || JSON.stringify(protocol.cacheOrder) !== JSON.stringify(cacheOrder)) throw new Error('Frozen protocol or source changed; do not start paid calls')
     const apiKey = (await readFile(keyFile, 'utf8')).trim()
     if (!apiKey || !budget.summary().canStartCall) throw new Error('Missing credential or round cannot admit a call')
     const balance = await fetch('https://api.deepseek.com/user/balance', { headers: { Authorization: `Bearer ${apiKey}` }, redirect: 'error', signal: AbortSignal.timeout(15000) })
@@ -126,16 +138,18 @@ async function run(root: string, keyFile: string) {
     for (const fixture of focusedFixtures) await phase(`coding-${fixture.id}`, () => coding(root, fixture, apiKey))
     await phase('interactive-core', () => interactive(root, 'core', keyFile))
     await phase('interactive-fault', () => interactive(root, 'fault', keyFile))
+    await assertFocusedOutcomes(root)
   } finally { await saveJson(path.join(root, 'summary.json'), budget.summary()); budget.close() }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [operation, directory, keyFile] = process.argv.slice(2)
-  if (!directory) throw new Error('Usage: focused-live qualify|freeze|run|status|close <directory> [private-key-file]')
+  if (!directory) throw new Error('Usage: focused-live qualify|freeze|run|check|status|close <directory> [private-key-file]')
   const root = path.resolve(directory)
   if (operation === 'qualify') console.log(JSON.stringify(await qualifyFixtures(root)))
   else if (operation === 'freeze') console.log(JSON.stringify(await freeze(root)))
   else if (operation === 'run' && keyFile) await run(root, path.resolve(keyFile))
+  else if (operation === 'check') { await assertFocusedOutcomes(root); console.log('All frozen focused phases passed') }
   else if (operation === 'status' || operation === 'close') {
     const budget = await openInteractiveRound(root, 'round/operator')
     try { if (operation === 'close') await budget.seal(); console.log(JSON.stringify(budget.summary())); await saveJson(path.join(root, 'summary.json'), budget.summary()) } finally { budget.close() }
