@@ -1,0 +1,523 @@
+{
+  "schemaVersion": 1,
+  "issue": 239,
+  "fixCommit": "40d96eecc1052cea9046d6be723138783d7fb5c6",
+  "codingCandidateCommit": "49266685021be2c310f2c716a13c8e006c82801a",
+  "electronRecoveryCandidateCommit": "b720e02132aa4b40bb793e037afe8f48152d3d64",
+  "roundId": "1ca3905a-9092-4501-a21d-f3dd752e72f7",
+  "parentRoundId": "55ee4b33-68ff-4a6c-9441-2073f0ff0304",
+  "parentLedgerSha256": "e1669a5882df101522d17b25af0732a1ec074bfefe86e2bf2b293d6ef1b4f689",
+  "parentManifestSha256": "f23033d334201cf7bca29cdd26d142cb467fd761bb91c64163fe3fe7cb560740",
+  "childLedgerSha256": "788622cbf91545bd029089b0cb78561193815bcfedebefe5037c826cdde3d0fd",
+  "protocolSha256": "c6f68841b19783d0cdf30f2a3f68c66caa8f092c292f8dc8f5e2a83510ffd745",
+  "amendmentSha256": "d0651e1abb6a56d3aad0953d43517805276e9fc39996d95924343502dd5fd6b8",
+  "phases": {
+    "legacy": {
+      "result": {
+        "passed": true,
+        "claimedCompleted": true,
+        "status": "completed",
+        "acceptance": {
+          "passed": true,
+          "output": "✔ bounded recovery finishes before pausing new steps at the time boundary (1.158791ms)\n✔ restored in-progress recovery remains bounded after the deadline (0.073375ms)\n✔ recovery exhaustion cannot loop forever beyond the deadline (0.077041ms)\n✔ unknown delivery requires confirmation and is never automatically replayed (0.062792ms)\n✔ an expired batch without pending recovery starts no work (0.048417ms)\n✔ ordinary successful steps retain the original contract (0.071375ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 59.936292\n",
+          "protectedUnchanged": true
+        }
+      },
+      "usage": {
+        "calls": 11,
+        "knownHighPriceCny": 0.381566,
+        "unknownCalls": 0,
+        "completeCacheUsage": true,
+        "inputTokens": 139159,
+        "outputTokens": 12906,
+        "cacheReadTokens": 0,
+        "cacheMissTokens": 139159,
+        "weightedHitRate": 0.0
+      },
+      "warmUsage": {
+        "calls": 10,
+        "knownHighPriceCny": 0.370912,
+        "unknownCalls": 0,
+        "completeCacheUsage": true,
+        "inputTokens": 133952,
+        "outputTokens": 12876,
+        "cacheReadTokens": 0,
+        "cacheMissTokens": 133952,
+        "weightedHitRate": 0.0
+      },
+      "wire": {
+        "requests": 11,
+        "systemVariants": 11,
+        "toolVariants": 1,
+        "adjacentStablePrefixes": [],
+        "wireFiles": [
+          {
+            "name": "legacy/run/wire-1.json",
+            "sha256": "06a7ae8b5722efe3b8c3f2a8c88761abf90dcc22421236a6f14311ab884251c6",
+            "bytes": 19639
+          },
+          {
+            "name": "legacy/run/wire-2.json",
+            "sha256": "d9226a40bcc22ec8c57bc54b5bdba9d48e6a7576c53cf756133e149498634cb1",
+            "bytes": 20127
+          },
+          {
+            "name": "legacy/run/wire-3.json",
+            "sha256": "1f0c5404e7f1c0d0b81056e9211ec9606d9d9974f3f976ffb1343bd8bc0bd4b2",
+            "bytes": 22134
+          },
+          {
+            "name": "legacy/run/wire-4.json",
+            "sha256": "016081ceccc34dd26b0730d5d227661b8b7be7ade7b28a6ad896fffd90689bd1",
+            "bytes": 23086
+          },
+          {
+            "name": "legacy/run/wire-5.json",
+            "sha256": "70e35841eb87596301f0c03e5081188456d2ba22a93c39b314cb56b867a12193",
+            "bytes": 55978
+          },
+          {
+            "name": "legacy/run/wire-6.json",
+            "sha256": "4c6992455f029d342edea3da8d7f80c082ba2bc458ca479ca6031a217e0e4a7c",
+            "bytes": 57725
+          },
+          {
+            "name": "legacy/run/wire-7.json",
+            "sha256": "5da2951ed0d2e2b08e51b1d4eb88988d8751bb34518e7035c843c4b38653a345",
+            "bytes": 59010
+          },
+          {
+            "name": "legacy/run/wire-8.json",
+            "sha256": "f73fe1e8d95b0ac2885ff246617b47a985bb92750c3fe661b41ef8c03c9ee482",
+            "bytes": 66273
+          },
+          {
+            "name": "legacy/run/wire-9.json",
+            "sha256": "ced3d0e9eb7ff67bdf17c545c80c75ee8c81748d08152509844353e056bba332",
+            "bytes": 74350
+          },
+          {
+            "name": "legacy/run/wire-10.json",
+            "sha256": "e69842ee418f180189f6177262654db40492854ad210c6c692991724bb2d896d",
+            "bytes": 74981
+          },
+          {
+            "name": "legacy/run/wire-11.json",
+            "sha256": "7cb82ca7bdaf14c457f7481a6b48e2d47883c29438ce454ab80dee996ae0afc8",
+            "bytes": 77001
+          }
+        ]
+      }
+    },
+    "fixed": {
+      "result": {
+        "passed": true,
+        "claimedCompleted": true,
+        "status": "completed",
+        "acceptance": {
+          "passed": true,
+          "output": "✔ bounded recovery finishes before pausing new steps at the time boundary (1.148167ms)\n✔ restored in-progress recovery remains bounded after the deadline (0.074125ms)\n✔ recovery exhaustion cannot loop forever beyond the deadline (0.083084ms)\n✔ unknown delivery requires confirmation and is never automatically replayed (0.05775ms)\n✔ an expired batch without pending recovery starts no work (0.048666ms)\n✔ ordinary successful steps retain the original contract (0.06625ms)\nℹ tests 6\nℹ suites 0\nℹ pass 6\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 57.454875\n",
+          "protectedUnchanged": true
+        }
+      },
+      "usage": {
+        "calls": 8,
+        "knownHighPriceCny": 0.11182232,
+        "unknownCalls": 0,
+        "completeCacheUsage": true,
+        "inputTokens": 92095,
+        "outputTokens": 10115,
+        "cacheReadTokens": 78208,
+        "cacheMissTokens": 13887,
+        "weightedHitRate": 0.8492100548346816
+      },
+      "warmUsage": {
+        "calls": 7,
+        "knownHighPriceCny": 0.11048464,
+        "unknownCalls": 0,
+        "completeCacheUsage": true,
+        "inputTokens": 86850,
+        "outputTokens": 10036,
+        "cacheReadTokens": 73216,
+        "cacheMissTokens": 13634,
+        "weightedHitRate": 0.8430166954519286
+      },
+      "wire": {
+        "requests": 8,
+        "systemVariants": 1,
+        "toolVariants": 1,
+        "adjacentStablePrefixes": [
+          {
+            "bytes": 5361,
+            "preserved": true
+          },
+          {
+            "bytes": 7677,
+            "preserved": true
+          },
+          {
+            "bytes": 10563,
+            "preserved": true
+          },
+          {
+            "bytes": 36499,
+            "preserved": true
+          },
+          {
+            "bytes": 39429,
+            "preserved": true
+          },
+          {
+            "bytes": 40715,
+            "preserved": true
+          },
+          {
+            "bytes": 48043,
+            "preserved": true
+          }
+        ],
+        "wireFiles": [
+          {
+            "name": "fixed/run/wire-1.json",
+            "sha256": "8733e385315afc012afa767438995bbf393f819374c18fd55beaa8cdf4145ec0",
+            "bytes": 19815
+          },
+          {
+            "name": "fixed/run/wire-2.json",
+            "sha256": "3f564d3e29b91225fca6b711215fc2d46c7af0d83d4d8925374dbc9a3e8f1a74",
+            "bytes": 22131
+          },
+          {
+            "name": "fixed/run/wire-3.json",
+            "sha256": "fc946b5e43998ccca535f1e6506c5cfb87e56cc59077b538fa2faba95a637f71",
+            "bytes": 25017
+          },
+          {
+            "name": "fixed/run/wire-4.json",
+            "sha256": "c243d7bff297e7d7ee1003738103667ec70460fddc46877ca404b86e2846973f",
+            "bytes": 50954
+          },
+          {
+            "name": "fixed/run/wire-5.json",
+            "sha256": "0f21f4b3a75fd749d7d1b0221937ecd1fa54ca73a8756fb92ac7e4f0a0c48a1e",
+            "bytes": 53884
+          },
+          {
+            "name": "fixed/run/wire-6.json",
+            "sha256": "8a683cb8fe79c6b8c8be2614804c83b0ece13ab9056726a9ee0f3ec5b17d04d2",
+            "bytes": 55170
+          },
+          {
+            "name": "fixed/run/wire-7.json",
+            "sha256": "e2fb45c800daddbe4cdf24b7b6b6f4e9e82a5832480cb8503c5ef9d381009404",
+            "bytes": 62498
+          },
+          {
+            "name": "fixed/run/wire-8.json",
+            "sha256": "70953d97792ff40d56685a0baf31e91cd5047062029bd0ca44d31c31e0dfb433",
+            "bytes": 68371
+          }
+        ]
+      }
+    },
+    "electron": {
+      "passed": false,
+      "usage": {
+        "calls": 7,
+        "knownHighPriceCny": 0.02509648,
+        "unknownCalls": 0,
+        "completeCacheUsage": true,
+        "inputTokens": 44930,
+        "outputTokens": 654,
+        "cacheReadTokens": 35712,
+        "cacheMissTokens": 9218,
+        "weightedHitRate": 0.7948364121967505
+      },
+      "wire": {
+        "requests": 7,
+        "systemVariants": 1,
+        "toolVariants": 1,
+        "adjacentStablePrefixes": [
+          {
+            "bytes": 6491,
+            "preserved": true
+          },
+          {
+            "bytes": 7633,
+            "preserved": true
+          },
+          {
+            "bytes": 8607,
+            "preserved": true
+          },
+          {
+            "bytes": 10037,
+            "preserved": true
+          },
+          {
+            "bytes": 10651,
+            "preserved": true
+          },
+          {
+            "bytes": 11700,
+            "preserved": true
+          }
+        ],
+        "wireFiles": [
+          {
+            "name": "electron/wire-1.json",
+            "sha256": "fb548f6b55102fa76ebe5e7f553a00509a06b03608fcd1023fe1fb9020dfd13b",
+            "bytes": 20945
+          },
+          {
+            "name": "electron/wire-2.json",
+            "sha256": "d389a438b8d5e20bc7881602ae061435e56ec56a73a5a7586c8dc765b3bcd031",
+            "bytes": 22087
+          },
+          {
+            "name": "electron/wire-3.json",
+            "sha256": "5492ff9eae8e1e6d2e343c68a763cfd8e70c43f67e88beff94dffe30cef6032f",
+            "bytes": 23061
+          },
+          {
+            "name": "electron/wire-4.json",
+            "sha256": "dcbb439e3c08375d4506e6727703318c00a3319d14e01256af02bdcf93ca447b",
+            "bytes": 24491
+          },
+          {
+            "name": "electron/wire-5.json",
+            "sha256": "a9e5e263de22a1fdaf955c2cc77e8ea0e74a4d9e5743dc2cbf9e4bc59b7a1d5d",
+            "bytes": 25105
+          },
+          {
+            "name": "electron/wire-6.json",
+            "sha256": "a85c18b59b4b6cd65e506c3e2531312457416743ee6bf0c3bc92f7bf99860166",
+            "bytes": 26154
+          },
+          {
+            "name": "electron/wire-7.json",
+            "sha256": "e4dd82767267142f70616feb93dd2b387d7f2503d6df2d000da16adfb3304c89",
+            "bytes": 27588
+          }
+        ]
+      },
+      "phaseSha256": "c292339ea08b9301a5e6450e3bdd4b4e65b95a39b6f3f87a11375aa4901bbadc",
+      "screenshots": [
+        {
+          "name": "electron/question.png",
+          "sha256": "bec4d836490492d3ff319e856022476c02ce25a79a149d9753827c01de426ee9"
+        }
+      ]
+    },
+    "electron-recovery": {
+      "passed": true,
+      "usage": {
+        "calls": 9,
+        "knownHighPriceCny": 0.02029112,
+        "unknownCalls": 0,
+        "completeCacheUsage": true,
+        "inputTokens": 59727,
+        "outputTokens": 964,
+        "cacheReadTokens": 54528,
+        "cacheMissTokens": 5199,
+        "weightedHitRate": 0.9129539404289517
+      },
+      "wire": {
+        "requests": 9,
+        "systemVariants": 1,
+        "toolVariants": 1,
+        "adjacentStablePrefixes": [
+          {
+            "bytes": 6491,
+            "preserved": true
+          },
+          {
+            "bytes": 7981,
+            "preserved": true
+          },
+          {
+            "bytes": 8806,
+            "preserved": true
+          },
+          {
+            "bytes": 9489,
+            "preserved": true
+          },
+          {
+            "bytes": 10515,
+            "preserved": true
+          },
+          {
+            "bytes": 11075,
+            "preserved": true
+          },
+          {
+            "bytes": 12124,
+            "preserved": true
+          },
+          {
+            "bytes": 13558,
+            "preserved": true
+          }
+        ],
+        "wireFiles": [
+          {
+            "name": "electron-recovery/wire-1.json",
+            "sha256": "dd28bd216ddbe7ec0e8dfb75fe3f7df691a163e1a895e9d80d2b4a23217a7bf0",
+            "bytes": 20945
+          },
+          {
+            "name": "electron-recovery/wire-2.json",
+            "sha256": "e0bd4850c4c6bd3f76e0226e20554e12d1af805ba3fecbe6cb1ca2929d3c3164",
+            "bytes": 22435
+          },
+          {
+            "name": "electron-recovery/wire-3.json",
+            "sha256": "87f175fa2575adeb3f1a923bf870d4e7df093aa1fbb1ff2b378a8aea3c0d77d7",
+            "bytes": 23260
+          },
+          {
+            "name": "electron-recovery/wire-4.json",
+            "sha256": "3cfe73f9f6243e9974c40fd0b3d2d3f61227eb47d521e4570464f5f576aa5447",
+            "bytes": 23943
+          },
+          {
+            "name": "electron-recovery/wire-5.json",
+            "sha256": "f3f39fb3f8cc150fb61f7c0b57d015d4bf2c6e28ddbe2e74926038f17b0c927f",
+            "bytes": 24969
+          },
+          {
+            "name": "electron-recovery/wire-6.json",
+            "sha256": "ad92b53edc4058b78f2496593187072b8d42ada39fa6f3b47c0b170dfcc70403",
+            "bytes": 25529
+          },
+          {
+            "name": "electron-recovery/wire-7.json",
+            "sha256": "e16fd2870a1820f8d620b7d5a1371510402567136d079cb0e510002b841b84d1",
+            "bytes": 26578
+          },
+          {
+            "name": "electron-recovery/wire-8.json",
+            "sha256": "86b40fd1bf8bdd7d78ca428467b131d6b1c87503323624193324d98f4970b327",
+            "bytes": 28012
+          },
+          {
+            "name": "electron-recovery/wire-9.json",
+            "sha256": "7b4610609e14d1e79641de555c0c957383247238e331e8fc358e3f5811465159",
+            "bytes": 28759
+          }
+        ]
+      },
+      "phaseSha256": "4e17bc6a65f98c8447cc987a5da35329e9146697243de47ce5bb46bcac3fdb49",
+      "screenshots": [
+        {
+          "name": "electron-recovery/completed.png",
+          "sha256": "fb5233cb8eb06e9fa65486e50db94892a6bce18f6fcee3e5039fe59157475e72"
+        },
+        {
+          "name": "electron-recovery/question.png",
+          "sha256": "09e4e05d1a0e5a8f3aa8380b05cd40cfbf6600c54b350ce88e12b7b5bc8cf240"
+        },
+        {
+          "name": "electron-recovery/review.png",
+          "sha256": "af74342095a6a9d37b1950d5aaf1d20b2d6684205af5ae828c5818f201ffc70a"
+        }
+      ]
+    }
+  },
+  "summary": {
+    "costUsd": 0.080816388,
+    "knownCostUsd": 0.080816388,
+    "unknownCosts": 0,
+    "inputTokens": 335911,
+    "outputTokens": 24639,
+    "peakContextTokens": 19394,
+    "calls": 35,
+    "reservedUsd": 0,
+    "accountedUsd": 0.080816388,
+    "knownCostCny": 0.53877592,
+    "reservedCny": 0,
+    "accountedCny": 0.53877592,
+    "authorization": {
+      "maxCostCny": 10,
+      "priorAccountedCny": 7.3203813,
+      "accountedCny": 7.85915722,
+      "parentRoundId": "55ee4b33-68ff-4a6c-9441-2073f0ff0304"
+    },
+    "roundId": "1ca3905a-9092-4501-a21d-f3dd752e72f7",
+    "maxCalls": 72,
+    "maxCostUsd": 0.40194280499999996,
+    "closed": true,
+    "maxCostCny": 2.6796187,
+    "remainingCny": 2.14084278,
+    "remainingCalls": 37,
+    "remainingUsd": 0.321126416,
+    "canStartCall": false,
+    "scopes": {
+      "closure/legacy": {
+        "costUsd": 0.0572349,
+        "knownCostUsd": 0.0572349,
+        "unknownCosts": 0,
+        "inputTokens": 139159,
+        "outputTokens": 12906,
+        "peakContextTokens": 19394,
+        "calls": 11,
+        "reservedUsd": 0,
+        "accountedUsd": 0.0572349,
+        "knownCostCny": 0.381566,
+        "reservedCny": 0,
+        "accountedCny": 0.381566
+      },
+      "closure/fixed": {
+        "costUsd": 0.016773348,
+        "knownCostUsd": 0.016773348,
+        "unknownCosts": 0,
+        "inputTokens": 92095,
+        "outputTokens": 10115,
+        "peakContextTokens": 17514,
+        "calls": 8,
+        "reservedUsd": 0,
+        "accountedUsd": 0.016773348,
+        "knownCostCny": 0.11182232,
+        "reservedCny": 0,
+        "accountedCny": 0.11182232
+      },
+      "closure/electron": {
+        "costUsd": 0.006808140000000002,
+        "knownCostUsd": 0.00680814,
+        "unknownCosts": 0,
+        "inputTokens": 104657,
+        "outputTokens": 1618,
+        "peakContextTokens": 7767,
+        "calls": 16,
+        "reservedUsd": 0,
+        "accountedUsd": 0.00680814,
+        "knownCostCny": 0.0453876,
+        "reservedCny": 0,
+        "accountedCny": 0.0453876
+      }
+    }
+  },
+  "interpretation": "Synthetic coding tasks with real DeepSeek and real Electron. Frozen layout comparison, not an entire historical version rerun or a release-quality benchmark. The first Electron attempt remains failed and included in costs. Prior three unknown calls remain fully reserved.",
+  "validation": {
+    "fullVerify": {
+      "passed": 5028,
+      "skipped": 18,
+      "filesPassed": 403,
+      "typecheck": true,
+      "crossPlatform": true
+    },
+    "targetedAfterChanges": {
+      "closureAndBudgetTests": 18,
+      "liveTypecheck": true
+    },
+    "oldSystemMutation": {
+      "failedTests": 3,
+      "restored": true
+    },
+    "productionAuditVulnerabilities": 0,
+    "electronSyntheticPreflightPassed": true,
+    "selectedClosureCheckExit": 0,
+    "originalClosureCheckExit": 1
+  }
+}

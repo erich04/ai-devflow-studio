@@ -21,7 +21,8 @@ const store = await createLocalStore({ dbPath: path.join(root, 'local.sqlite') }
 let heldHeaders = false, announcedTools = false, announcedApplication = false
 const raw = createOpenAiCompatibleAgentProvider({ id: 'deepseek-interactive', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, thinking: { mode: 'enabled', effort: 'high' }, structuredRequestTimeoutMs: 180000,
   fetcher: async (url, init) => {
-    const response = await fetch(url, init)
+    const response = await fetch(url, { ...init, redirect: 'error' })
+    if (ledger.limits.cny && [401, 402].includes(response.status)) await ledger.seal()
     if (mode === 'new' && config.holdFirstResponse && !heldHeaders) {
       heldHeaders = true; await saveJson(path.join(root, 'fault-model-headers.json'), { at: new Date().toISOString(), status: response.status, pid: process.pid })
       send({ event: 'model_headers', httpStatus: response.status })
@@ -29,7 +30,7 @@ const raw = createOpenAiCompatibleAgentProvider({ id: 'deepseek-interactive', mo
     }
     return response
   } })
-const capped: AgentProvider = { ...raw, resolveRequestPolicy: input => raw.resolveRequestPolicy!({ ...input, maxOutputTokens: Math.min(input.maxOutputTokens ?? 65536, 65536) }) }
+const capped: AgentProvider = { ...raw, resolveRequestPolicy: input => raw.resolveRequestPolicy!({ ...input, maxOutputTokens: Math.min(input.maxOutputTokens ?? ledger.limits.maxOutputTokens, ledger.limits.maxOutputTokens) }) }
 const governed = governAgentProvider(capped, 'interactive', ledger)
 let calls = 0
 const provider: AgentProvider = { ...governed, completeNativeConversation: async request => {

@@ -193,6 +193,7 @@ async function runBatch(output, keyFile, only) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('The full comparison is excluded from this guarded CNY round; no independent ledger or parallel dispatch is authorized')
   const [command, outputPath, keyFile, ...only] = process.argv.slice(2)
   if (!outputPath || !['freeze', 'run'].includes(command) || command === 'run' && !keyFile) throw new Error('Usage: batch-live freeze <new-output> | run <frozen-output> <private-key-file> [task-id ...]')
   const output = path.resolve(outputPath)

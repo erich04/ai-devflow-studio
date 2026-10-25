@@ -1,18 +1,25 @@
 /** Explicit, local-only acceptance budget. Never imported by the desktop application. */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { readFileSync, realpathSync } from 'node:fs'
 import { mkdir, open, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { parseModelCallQuote, parseModelCallSettlement, settledModelCallCost, verifiedModelCallBound,
   type ModelCallQuote, type ModelCallSettlement } from '../packages/shared/src/model-call-budget.ts'
 import type { ModelCallGovernance } from '../packages/shared/src/governed-provider.ts'
+import { resolveDeepSeekPricingSnapshot } from '../packages/shared/src/cost.ts'
 import { evaluationUsage } from './native-coding-live-support.ts'
 
 const SCALE = 1_000_000_000
+const CNY_RATIO = 0.15 // Ratio of the two published token-price tables, NOT a currency exchange rate.
+export type EvaluationScope = { projectId: string; providerId: string; maxCalls: number }
+type CnyContinuation = { parentRoot: string; parentRoundId: string; parentLedgerSha256: string; parentManifestSha256: string; allocationId: string; childRoot: string; authorizationMaxCostCny: number; priorAccountedCny: number }
+type CnyAuthorization = { continuation?: CnyContinuation; maxCostCny: number; ratio: 0.15; priceSource: string; expiresAt: string; scopes: Record<string, EvaluationScope> }
 type Round = {
   schemaVersion: 1; roundId: string; createdAt: string; projectId: 'interactive';
-  providerId: 'deepseek-interactive'; model: 'deepseek-flash'; maxOutputTokens: 65536;
+  providerId: 'deepseek-interactive'; model: 'deepseek-flash'; maxOutputTokens: number;
   priceVersion: string; maxCalls: number; maxCostUsd: number;
+  cny?: CnyAuthorization;
 }
 type Row = { scopeId: string; quote: ModelCallQuote; boundUsd: number; costUsd: number | null;
   settlement?: ModelCallSettlement; final?: boolean; settled?: boolean }
@@ -27,11 +34,32 @@ function parseRound(value: unknown): Round {
   if (!v || v.schemaVersion !== 1 || typeof v.roundId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(v.roundId) ||
       typeof v.createdAt !== 'string' || !Number.isFinite(Date.parse(v.createdAt)) ||
       v.projectId !== 'interactive' || v.providerId !== 'deepseek-interactive' || v.model !== 'deepseek-flash' ||
-      v.maxOutputTokens !== 65536 || typeof v.priceVersion !== 'string' || !v.priceVersion) throw new Error('Invalid round budget identity')
+      !Number.isSafeInteger(v.maxOutputTokens) || v.maxOutputTokens < 1 || v.maxOutputTokens > 65536 ||
+      (!v.cny && v.maxOutputTokens !== 65536) || typeof v.priceVersion !== 'string' || !v.priceVersion) throw new Error('Invalid round budget identity')
   checkLimits(v)
+  if (v.cny) {
+    const c = v.cny
+    if (!Number.isFinite(c.maxCostCny) || c.maxCostCny <= 0 || c.maxCostCny > 10 || c.ratio !== CNY_RATIO ||
+        v.maxCostUsd !== c.maxCostCny * CNY_RATIO || c.priceSource !== 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/' ||
+        !Number.isFinite(Date.parse(c.expiresAt)) || !c.scopes || typeof c.scopes !== 'object' || Array.isArray(c.scopes) || !Object.keys(c.scopes).length) throw new Error('Invalid CNY authorization')
+    if (c.continuation) {
+      const carry = c.continuation
+      if (!path.isAbsolute(carry.parentRoot) || !path.isAbsolute(carry.childRoot) || !/^[a-zA-Z0-9_-]{1,100}$/.test(carry.parentRoundId) ||
+          !/^[a-zA-Z0-9_-]{1,100}$/.test(carry.allocationId) || !/^[a-f0-9]{64}$/.test(carry.parentLedgerSha256) || !/^[a-f0-9]{64}$/.test(carry.parentManifestSha256) ||
+          !Number.isFinite(carry.authorizationMaxCostCny) || carry.authorizationMaxCostCny <= 0 || carry.authorizationMaxCostCny > 10 ||
+          !Number.isFinite(carry.priorAccountedCny) || carry.priorAccountedCny < 0 || carry.priorAccountedCny + c.maxCostCny > carry.authorizationMaxCostCny) throw new Error('Invalid continuation authorization')
+    }
+    for (const [scope, policy] of Object.entries(c.scopes)) {
+      validScope(scope)
+      if (!policy || !/^[a-zA-Z0-9_-]{1,100}$/.test(policy.projectId) ||
+          !['deepseek-interactive', 'deepseek-evaluation'].includes(policy.providerId) ||
+          !Number.isSafeInteger(policy.maxCalls) || policy.maxCalls < 0 || policy.maxCalls > v.maxCalls) throw new Error('Invalid frozen scope policy')
+    }
+  }
   return { schemaVersion: 1, roundId: v.roundId, createdAt: v.createdAt, projectId: v.projectId,
     providerId: v.providerId, model: v.model, maxOutputTokens: v.maxOutputTokens,
-    priceVersion: v.priceVersion, maxCalls: v.maxCalls, maxCostUsd: v.maxCostUsd }
+    priceVersion: v.priceVersion, maxCalls: v.maxCalls, maxCostUsd: v.maxCostUsd,
+    ...(v.cny ? { cny: structuredClone(v.cny) } : {}) }
 }
 function quoteFor(round: Omit<Round, 'priceVersion'>): ModelCallQuote {
   return { id: 'round-bound', projectId: round.projectId, providerId: round.providerId, model: round.model,
@@ -43,6 +71,13 @@ function units(value: number) {
   if (!Number.isSafeInteger(result) || result < 0) throw new Error('Invalid round accounting value')
   return result
 }
+const cny = (usd: number) => Math.ceil(units(usd) * 20 / 3) / SCALE
+function checkPrice(round: Round) {
+  if (verifiedModelCallBound(quoteFor(round))?.priceVersion !== round.priceVersion) throw new Error('Round budget price identity changed')
+  if (!round.cny) return
+  const price = resolveDeepSeekPricingSnapshot({ providerId: round.providerId, model: round.model, timestamp: round.createdAt, worstCase: true })
+  if (!price || price.cacheHitInputUsdPerMillion !== 0.006 || price.cacheMissInputUsdPerMillion !== 0.3 || price.outputUsdPerMillion !== 1.2) throw new Error('CNY and USD official price tables no longer match the frozen ratio')
+}
 function validScope(scope: string) {
   if (!/^[a-zA-Z0-9_-]{1,100}\/[a-zA-Z0-9_-]{1,100}$/.test(scope)) throw new Error('Expected attempt/scenario budget scope')
   return scope
@@ -50,13 +85,57 @@ function validScope(scope: string) {
 
 /** Creating a new round is explicit; ordinary runs can only reopen an existing budget. */
 export async function createInteractiveRound(root: string, input: { maxCalls: number; maxCostUsd: number }) {
+  if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('A guarded evaluation cannot initialize another round')
+  return createRound(root, input)
+}
+export async function createCnyEvaluationRound(root: string, input: { maxCostCny: number; maxCalls: number; maxOutputTokens: number; scopes: Record<string, EvaluationScope> }) {
+  if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('A guarded evaluation cannot initialize another round')
+  return createRound(root, { maxCalls: input.maxCalls, maxCostUsd: input.maxCostCny * CNY_RATIO }, input)
+}
+const fileSha = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex')
+function checkContinuation(round: Round, root: string) {
+  const carry = round.cny?.continuation
+  if (!carry) return
+  if (realpathSync(root) !== carry.childRoot || fileSha(path.join(carry.parentRoot, 'budget.sqlite')) !== carry.parentLedgerSha256 ||
+      fileSha(path.join(carry.parentRoot, 'round.json')) !== carry.parentManifestSha256) throw new Error('Continuation parent snapshot or child location changed')
+  const allocation = JSON.parse(readFileSync(path.join(carry.parentRoot, 'continuation.json'), 'utf8'))
+  if (JSON.stringify(allocation) !== JSON.stringify(carry)) throw new Error('Continuation allocation changed')
+}
+/** Carry only the unspent part of one sealed authorization; the old database remains byte-for-byte unchanged. */
+export async function continueCnyEvaluationRound(root: string, input: { parentRoot: string; maxCalls: number; maxOutputTokens: number; scopes: Record<string, EvaluationScope> }) {
+  if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('A guarded evaluation cannot initialize another round')
+  const parentRoot = realpathSync(input.parentRoot)
+  const manifestSha = fileSha(path.join(parentRoot, 'round.json')), ledgerSha = fileSha(path.join(parentRoot, 'budget.sqlite'))
+  const manifest = parseRound(JSON.parse(await readFile(path.join(parentRoot, 'round.json'), 'utf8')))
+  if (!manifest.cny || manifest.cny.continuation) throw new Error('Continuation requires an original CNY authorization; nested continuations are forbidden')
+  const parent = await openInteractiveRound(parentRoot, Object.keys(manifest.cny.scopes)[0]!)
+  const summary = parent.summary(); parent.close()
+  if (!summary.closed) throw new Error('Continuation requires a sealed parent')
+  const maxCostCny = Math.floor(summary.remainingCny! * SCALE) / SCALE
+  if (maxCostCny <= 0) throw new Error('No authorization remains')
+  await mkdir(path.dirname(path.resolve(root)), { recursive: true })
+  const childRoot = path.join(realpathSync(path.dirname(path.resolve(root))), path.basename(root))
+  const continuation: CnyContinuation = { parentRoot, parentRoundId: manifest.roundId, parentLedgerSha256: ledgerSha, parentManifestSha256: manifestSha,
+    allocationId: randomUUID(), childRoot, authorizationMaxCostCny: manifest.cny.maxCostCny, priorAccountedCny: summary.accountedCny! }
+  if (fileSha(path.join(parentRoot, 'budget.sqlite')) !== ledgerSha || fileSha(path.join(parentRoot, 'round.json')) !== manifestSha) throw new Error('Continuation parent changed while allocating')
+  // Exclusive durable allocation prevents two processes from spending the same remainder. A failed initialization stays closed for investigation.
+  const allocation = await open(path.join(parentRoot, 'continuation.json'), 'wx', 0o600)
+  try { await allocation.writeFile(JSON.stringify(continuation)); await allocation.sync() } finally { await allocation.close() }
+  const result = await createRound(childRoot, { maxCalls: input.maxCalls, maxCostUsd: maxCostCny * CNY_RATIO }, { ...input, maxCostCny, continuation })
+  checkContinuation(result, childRoot)
+  return result
+}
+async function createRound(root: string, input: { maxCalls: number; maxCostUsd: number }, authorization?: { maxCostCny: number; maxOutputTokens: number; scopes: Record<string, EvaluationScope>; continuation?: CnyContinuation }) {
   checkLimits(input)
   const draft = { schemaVersion: 1 as const, roundId: randomUUID(), createdAt: new Date().toISOString(),
     projectId: 'interactive' as const, providerId: 'deepseek-interactive' as const, model: 'deepseek-flash' as const,
-    maxOutputTokens: 65536 as const, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd }
+    maxOutputTokens: authorization?.maxOutputTokens ?? 65536, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd,
+    ...(authorization ? { cny: { maxCostCny: authorization.maxCostCny, ratio: CNY_RATIO as 0.15,
+      priceSource: 'https://api-docs.deepseek.com/zh-cn/quick_start/pricing/', expiresAt: new Date(Date.now() + 86_400_000).toISOString(), scopes: authorization.scopes, ...(authorization.continuation ? { continuation: authorization.continuation } : {}) } } : {}) }
   const bound = verifiedModelCallBound(quoteFor(draft))
   if (!bound) throw new Error('No verified price bound for this round')
   const round = parseRound({ ...draft, priceVersion: bound.priceVersion })
+  checkPrice(round)
   await mkdir(path.dirname(path.resolve(root)), { recursive: true })
   await mkdir(root, { mode: 0o700 }) // Never reset an existing round, including one that failed during initialization.
   const file = path.join(root, 'budget.sqlite')
@@ -64,6 +143,7 @@ export async function createInteractiveRound(root: string, input: { maxCalls: nu
   const db = new DatabaseSync(file, { timeout: 5000 })
   try {
     db.exec('PRAGMA synchronous = FULL; BEGIN IMMEDIATE; CREATE TABLE identity (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL); CREATE TABLE calls (id TEXT PRIMARY KEY, scope TEXT NOT NULL, value TEXT NOT NULL);')
+    if (round.cny) db.exec('CREATE TABLE control (id INTEGER PRIMARY KEY CHECK (id = 1), closed INTEGER NOT NULL); INSERT INTO control VALUES (1, 0);')
     db.prepare('INSERT INTO identity VALUES (1, ?)').run(JSON.stringify(round))
     db.exec('COMMIT')
   } finally { db.close() }
@@ -72,8 +152,10 @@ export async function createInteractiveRound(root: string, input: { maxCalls: nu
 }
 
 export async function openInteractiveRound(root: string, scopeId: string) {
+  if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND && path.resolve(root) !== path.resolve(process.env.DEVFLOW_NATIVE_EVALUATION_ROUND)) throw new Error('A guarded evaluation must use its one authorized round')
   validScope(scopeId)
   const round = Object.freeze(parseRound(JSON.parse(await readFile(path.join(root, 'round.json'), 'utf8'))))
+  if (round.cny && !Object.hasOwn(round.cny.scopes, scopeId)) throw new Error('Scope is not in the frozen CNY evaluation')
   const file = path.join(root, 'budget.sqlite')
   // DatabaseSync creates absent files by default. A deleted budget must never become a fresh budget.
   await (await open(file, 'r+')).close()
@@ -82,7 +164,8 @@ export async function openInteractiveRound(root: string, scopeId: string) {
     db.exec('PRAGMA synchronous = FULL')
     const saved = db.prepare('SELECT value FROM identity WHERE id = 1').get()
     if (!saved || JSON.stringify(parseRound(JSON.parse(String(saved.value)))) !== JSON.stringify(round)) throw new Error('Round budget identity changed')
-    if (verifiedModelCallBound(quoteFor(round))?.priceVersion !== round.priceVersion) throw new Error('Round budget price identity changed')
+    checkPrice(round)
+    checkContinuation(round, root)
   } catch (error) { db.close(); throw error }
 
   const all = (): Row[] => db.prepare('SELECT value FROM calls ORDER BY rowid').all().map(row => JSON.parse(String(row.value)) as Row)
@@ -93,18 +176,24 @@ export async function openInteractiveRound(root: string, scopeId: string) {
     try { const result = action(); db.exec('COMMIT'); return result }
     catch (error) { if (db.isTransaction) db.exec('ROLLBACK'); throw error }
   }
+  const closed = () => round.cny ? db.prepare('SELECT closed FROM control WHERE id = 1').get()?.closed !== 0 : false
   const usage = (rows: Row[]) => {
     const known = rows.reduce((total, row) => total + (row.costUsd === null ? 0 : units(row.costUsd)), 0)
     const reserved = rows.reduce((total, row) => total + (row.costUsd === null ? units(row.boundUsd) : 0), 0)
     return { ...evaluationUsage(rows), calls: rows.length, knownCostUsd: known / SCALE,
-      reservedUsd: reserved / SCALE, accountedUsd: (known + reserved) / SCALE }
+      reservedUsd: reserved / SCALE, accountedUsd: (known + reserved) / SCALE,
+      ...(round.cny ? { knownCostCny: cny(known / SCALE), reservedCny: cny(reserved / SCALE), accountedCny: cny((known + reserved) / SCALE) } : {}) }
   }
   const governance: ModelCallGovernance = {
     reserve: async (value, signal) => transaction(() => {
       signal?.throwIfAborted()
+      checkPrice(round)
+      checkContinuation(round, root)
       const quote = parseModelCallQuote(value), bound = verifiedModelCallBound(quote), rows = all()
       const spent = rows.reduce((total, row) => total + units(row.costUsd ?? row.boundUsd), 0)
-      const accepted = quote.projectId === round.projectId && quote.providerId === round.providerId && quote.model === round.model &&
+      const policy = round.cny?.scopes[scopeId] ?? { projectId: round.projectId, providerId: round.providerId, maxCalls: round.maxCalls }
+      const accepted = !closed() && (!round.cny || Date.now() < Date.parse(round.cny.expiresAt)) &&
+        records().length < policy.maxCalls && quote.projectId === policy.projectId && quote.providerId === policy.providerId && quote.model === round.model &&
         quote.maxOutputTokens !== null && quote.maxOutputTokens <= round.maxOutputTokens && bound !== null && bound.priceVersion === round.priceVersion &&
         rows.length < round.maxCalls && spent + units(bound.costUsd) <= Math.floor(round.maxCostUsd * SCALE) && !rows.some(row => row.quote.id === quote.id)
       if (accepted) {
@@ -131,6 +220,7 @@ export async function openInteractiveRound(root: string, scopeId: string) {
       if (!row || !row.final || JSON.stringify(row.settlement) !== JSON.stringify(settlement)) throw new Error('Settlement must first be persisted as final in its own scenario')
       const cost = settledModelCallCost(row.quote, settlement)
       row.costUsd = cost === null ? null : units(cost) / SCALE; row.settled = true; update(row)
+      if (round.cny && cost !== null && cost > row.boundUsd) db.prepare('UPDATE control SET closed = 1 WHERE id = 1').run()
     }),
     pending: async projectId => records().flatMap(row => row.quote.projectId === projectId && row.final && !row.settled && row.settlement ? [row.settlement] : []),
   }
@@ -139,11 +229,13 @@ export async function openInteractiveRound(root: string, scopeId: string) {
     summary: () => {
       const rows = all(), total = usage(rows)
       const remainingUsd = Math.max(0, (Math.floor(round.maxCostUsd * SCALE) - rows.reduce((sum, row) => sum + units(row.costUsd ?? row.boundUsd), 0)) / SCALE)
-      return { ...total, roundId: round.roundId, maxCalls: round.maxCalls, maxCostUsd: round.maxCostUsd,
+      return { ...total, ...(round.cny?.continuation ? { authorization: { maxCostCny: round.cny.continuation.authorizationMaxCostCny, priorAccountedCny: round.cny.continuation.priorAccountedCny, accountedCny: round.cny.continuation.priorAccountedCny + total.accountedCny!, parentRoundId: round.cny.continuation.parentRoundId } } : {}), roundId: round.roundId, maxCalls: round.maxCalls, maxCostUsd: round.maxCostUsd, closed: closed(),
+        ...(round.cny ? { maxCostCny: round.cny.maxCostCny, remainingCny: Math.max(0, round.cny.maxCostCny - cny(total.accountedUsd)) } : {}),
         remainingCalls: Math.max(0, round.maxCalls - rows.length), remainingUsd,
-        canStartCall: rows.length < round.maxCalls && units(verifiedModelCallBound(quoteFor(round))!.costUsd) <= Math.floor(remainingUsd * SCALE),
+        canStartCall: !closed() && (!round.cny || Date.now() < Date.parse(round.cny.expiresAt)) && rows.length < round.maxCalls && units(verifiedModelCallBound(quoteFor(round))!.costUsd) <= Math.floor(remainingUsd * SCALE),
         scopes: Object.fromEntries([...new Set(rows.map(row => row.scopeId))].map(scope => [scope, usage(rows.filter(row => row.scopeId === scope))])) }
     },
+    seal: async () => { if (!round.cny) throw new Error('Only a CNY evaluation has an explicit closure'); transaction(() => db.prepare('UPDATE control SET closed = 1 WHERE id = 1').run()) },
     close: () => { if (db.isOpen) db.close() },
   }
 }
