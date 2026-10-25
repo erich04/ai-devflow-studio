@@ -50,6 +50,8 @@ import {
   type ManagedCodingWorkspace,
   type ProjectInstructionsSnapshot,
   type RemediationPlan,
+  type RetrievedKnowledgeContext,
+  type RetrievedKnowledgeManifest,
   type RetryAttempt,
   type TestEvidence,
   type TestEvidenceStatus,
@@ -325,6 +327,10 @@ export type CodingRuntimeDeps = {
   /** Knowledge directory and root AGENTS.md/CLAUDE.md of the same snapshot (ADR 0025). */
   knowledgeRoot?: string | null
   projectInstructions?: ProjectInstructionsSnapshot | null
+  prepareRetrievedKnowledge?: (input: {
+    projectId: string; userId: string; stage: WorkflowNode['stage']; query: string; signal?: AbortSignal
+  }) => Promise<RetrievedKnowledgeContext | undefined>
+  assertRetrievedKnowledgeCurrent?: (manifest: RetrievedKnowledgeManifest) => Promise<void>
   createWorkspace?: typeof createManagedCodingWorkspace
   deleteWorkspace?: typeof deleteManagedCodingWorkspace
   cleanupWorkspace?: (input: {
@@ -940,7 +946,43 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error('Coding Context Workflow changed; start a new run')
       }
     }
-    await assertCodingContextCurrent({ store: deps.store, codingRun: current, now: now() })
+    await assertCodingContextCurrent({ store: deps.store, codingRun: current, now: now(),
+      ...(deps.assertRetrievedKnowledgeCurrent ? { assertRetrievedKnowledgeCurrent: deps.assertRetrievedKnowledgeCurrent } : {}),
+    })
+  }
+
+  async function assertRetrievedKnowledgeBeforeCompletion(codingRun: CodingAgentRun): Promise<void> {
+    if (!codingRun.contextReceipt?.knowledgeContext?.retrievedKnowledge?.references.length) return
+    try {
+      await assertExecutionContext(codingRun)
+    } catch (error) {
+      const current = await findCodingRun(codingRun.id)
+      if (activeCodingStatuses.has(current.status)) {
+        const pending = (await deps.store.listCodingPermissionRequests(current.id)).filter((request) => request.status === 'pending')
+        const timestamp = now()
+        const summary = safeCodingFailureSummary(error, '检索知识已失效，未保存成功结果。')
+        if (pending.length) {
+          const failed = { ...current, status: 'failed' as const, summary, completedAt: timestamp }
+          const committed = await commitCodingAgentMutation({
+            expectedRun: current, expectedPendingPermissionRequestIds: pending.map((request) => request.id),
+            expectedPermissionRequests: pending, run: failed,
+            permissionRequests: pending.map((request) => ({ ...request, status: 'rejected' as const })),
+            permissionDecisions: pending.map((request) => ({
+              id: idGenerator('coding-permission-decision'), requestId: request.id, codingRunId: current.id,
+              decidedBy: 'devflow-context', decision: 'rejected' as const, comment: summary, decidedAt: timestamp,
+            })),
+          })
+          if (committed.committed) await saveEvents([await buildCodingExecutorTerminalEvent({
+            codingRun: failed, stopReason: 'failure',
+            cleanup: { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' }, timestamp,
+          })])
+        } else {
+          await failActiveCodingRun(current, summary, timestamp,
+            { status: 'not_required', reasonCode: 'workspace_retained_for_recovery' })
+        }
+      }
+      throw error
+    }
   }
 
   async function buildAuthorizedOpenCodeStart(input: {
@@ -1700,6 +1742,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
             project: input.project,
             timestamp: input.timestamp,
           })
+    // Keep real test evidence and settled usage, but do not publish success from stale sources.
+    await assertRetrievedKnowledgeBeforeCompletion(tested.codingRun)
     if (executor.descriptor.kind === 'opencode') {
       if (!tested.evidence || tested.evidence.status !== 'passed') {
         const failedRun: CodingAgentRun = {
@@ -2266,6 +2310,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         if (!exactAuthority) {
           throw new Error('OpenCode Change Acceptance authority is stale or incomplete.')
         }
+        await assertRetrievedKnowledgeBeforeCompletion(codingRun)
 
         const acceptingRun: CodingAgentRun = {
           ...codingRun,
@@ -2288,6 +2333,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
 
         try {
+          await assertRetrievedKnowledgeBeforeCompletion(acceptingRun)
           if (!deps.completeWorkflowBuild) {
             throw new Error('Workflow build completion is unavailable')
           }
@@ -2504,6 +2550,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           },
         })
         completed = { ...completed, codingRun: preserveCodingRunContext(completed.codingRun, codingRun) }
+        if (completed.kind === 'waiting_permission') await assertRetrievedKnowledgeBeforeCompletion(codingRun)
       } catch (error) {
         const currentRun = await findCodingRun(codingRun.id)
         if (!activeCodingStatuses.has(currentRun.status)) {
@@ -3031,11 +3078,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const providerId = executor.providerId
       const codingRunId = idGenerator('coding-run')
       const briefContext = await loadCodingBriefContext(run, node)
+      const recallQuery = buildCodingMemoryQuery({
+        run, node, userInstruction: input.userInstruction, artifacts: briefContext.upstreamArtifacts,
+      })
+      const retrievedKnowledge = await deps.prepareRetrievedKnowledge?.({
+        projectId: project.id, userId: input.requestedBy, stage: node.stage, query: recallQuery,
+      })
       const recalled = await recallCodingMemory({
         store: deps.store, run, codingRunId, userId: input.requestedBy,
-        query: buildCodingMemoryQuery({
-          run, node, userInstruction: input.userInstruction, artifacts: briefContext.upstreamArtifacts,
-        }),
+        query: recallQuery,
         now: now(),
       })
       const model = executor.modelId ?? providerId
@@ -3044,6 +3095,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         node,
         project,
         ...briefContext,
+        ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
         maxContextBytes: CODING_BRIEF_MAX_BYTES,
         memoryContext: recalled.revisions,
         userInstruction: input.userInstruction,
@@ -3734,6 +3786,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           },
         })
         bundle = { ...bundle, codingRun: preserveCodingRunContext(bundle.codingRun, executorReadyRun) }
+        await assertRetrievedKnowledgeBeforeCompletion(executorReadyRun)
       } catch (error) {
         if (error instanceof CodingEngineStartupCleanupError) {
           await deps.store.saveManagedCodingWorkspace({
@@ -4119,12 +4172,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error('The managed worktree is no longer active.')
       }
       const project = await findProject(codingRun.projectId)
+      await assertRetrievedKnowledgeBeforeCompletion(codingRun)
       const result = await executor.refreshPermission({
         requestId: codingRun.id,
         ...await loadExecutorContinuationState(codingRun.id),
         newRequestId: idGenerator('coding-permission'),
-        runtimeContext: { codingRun, request, workspace, project, now: now() },
+        runtimeContext: { codingRun, request, workspace, project, now: now(),
+          assertContextCurrent: () => assertExecutionContext(codingRun) },
       })
+      await assertRetrievedKnowledgeBeforeCompletion(codingRun)
       const events = (await mapObservableExecutorEvents(codingRun.id, result.events)).map((event) => ({
         ...event,
         metadata: { ...event.metadata, codingExecutorTurn: result.turn, renewedBy: input.decidedBy },

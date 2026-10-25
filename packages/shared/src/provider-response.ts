@@ -1,10 +1,15 @@
+import { providerDiagnosticDigest, safeJsonParseDiagnostics } from './provider-diagnostics'
 import type { ResolvedRequestPolicy } from './provider-request-policy'
 
 export type ResponseReadDiagnostics = {
   limitKind?: 'content_bytes' | 'reasoning_bytes' | 'envelope_bytes' | 'sse_frame_bytes'
   limitUnit?: 'bytes'; limitThreshold?: number; observedBytes?: number
-  parserCategory?: 'sse_json' | 'response_json' | 'stream_shape' | 'stream_incomplete' | 'utf8' | 'body_read'
-  parserPosition?: number
+  parserCategory?: 'sse_json' | 'response_json' | 'stream_shape' | 'stream_incomplete' | 'utf8' | 'body_read' | 'model_json' | 'model_shape' | 'model_content' | 'model_finish' | 'schema' | 'semantic' | 'http'
+  parserPosition?: number; parserLine?: number; parserColumn?: number; parserPositionUnit?: 'utf16'
+  parserErrorKind?: 'syntax' | 'unexpected_end' | 'invalid_shape'
+  streamed?: boolean; sseFrameCount?: number; sseDataFrameCount?: number
+  streamDoneReceived?: boolean; streamFinishReceived?: boolean; streamCompleted?: boolean
+  contentDigest?: string; contentDigestScope?: 'received_content'
   contentBytes?: number; reasoningBytes?: number; wireBytes?: number; responseId?: string
 }
 export class ProviderResponseReadError extends Error {
@@ -18,11 +23,9 @@ function parse(raw: string, category: 'sse_json' | 'response_json'): Record<stri
     const value: unknown = JSON.parse(raw)
     if (object(value)) return value
   } catch (error) {
-    // Never retain SyntaxError.message: modern engines include input text in it.
-    const position = error instanceof Error ? /position (\d+)/u.exec(error.message)?.[1] : undefined
-    throw new ProviderResponseReadError('body_read_failed', { parserCategory: category, ...(position ? { parserPosition: Number(position) } : {}) })
+    throw new ProviderResponseReadError('body_read_failed', { parserCategory: category, ...safeJsonParseDiagnostics(error, raw) })
   }
-  throw new ProviderResponseReadError('body_read_failed', { parserCategory: category })
+  throw new ProviderResponseReadError('body_read_failed', { parserCategory: category, parserErrorKind: 'invalid_shape' })
 }
 
 /** Incremental SSE: consumed frames are discarded; only decoded channels are retained. */
@@ -35,7 +38,12 @@ export async function readProviderResponse(input: {
 }): Promise<{ body: Record<string, unknown>; diagnostics: ResponseReadDiagnostics }> {
   const { response, signal, policy } = input
   const streamed = response.headers.get('content-type')?.includes('text/event-stream') === true
-  const diagnostics: ResponseReadDiagnostics = { contentBytes: 0, reasoningBytes: 0, wireBytes: 0 }
+  const diagnostics: ResponseReadDiagnostics = { contentBytes: 0, reasoningBytes: 0, wireBytes: 0, streamed,
+    ...(streamed ? { sseFrameCount: 0, sseDataFrameCount: 0, streamDoneReceived: false, streamFinishReceived: false, streamCompleted: false } : {}) }
+  const reportDiagnostics = (value: ResponseReadDiagnostics) => {
+    // Observability callbacks are best-effort; they must not replace a response or its original failure.
+    try { input.onDiagnostics?.(value) } catch { /* The owning storage reports its own degradation. */ }
+  }
   const check = (kind: NonNullable<ResponseReadDiagnostics['limitKind']>, size: number, limit: number) => {
     if (size > limit) throw new ProviderResponseReadError('response_too_large', { ...diagnostics, limitKind: kind, limitUnit: 'bytes', limitThreshold: limit, observedBytes: size })
   }
@@ -52,24 +60,26 @@ export async function readProviderResponse(input: {
   let pending = ''; let done = false; let finished = false; let finishReason: unknown
   let usage: unknown; let id: unknown; let fingerprint: unknown
   const toolCalls = new Map<number, { id: string; type: string; function: { name: string; arguments: string } }>()
-  const malformed = () => new ProviderResponseReadError('body_read_failed', { ...diagnostics, parserCategory: 'stream_shape' })
+  const malformed = () => new ProviderResponseReadError('body_read_failed', { ...diagnostics, parserCategory: streamed ? 'stream_shape' : 'model_shape', parserErrorKind: 'invalid_shape' })
   const append = async (channel: 'content' | 'reasoning', text: unknown) => {
     if (text == null) return
     if (typeof text !== 'string') throw malformed()
     const key = channel === 'content' ? 'contentBytes' : 'reasoningBytes'
     diagnostics[key] = (diagnostics[key] ?? 0) + encoder.encode(text).byteLength
     check(channel === 'content' ? 'content_bytes' : 'reasoning_bytes', diagnostics[key]!, channel === 'content' ? policy.contentBytes : policy.reasoningBytes)
-    input.onDiagnostics?.({ ...diagnostics })
+    reportDiagnostics({ ...diagnostics })
     ;(channel === 'content' ? content : reasoning).push(text)
     await input.sink?.append(channel, text)
   }
   const consume = async (frame: string) => {
+    diagnostics.sseFrameCount = (diagnostics.sseFrameCount ?? 0) + 1
     const data = frame.split(/\r?\n/u).filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /u, '')).join('\n')
     if (!data) return
-    if (data === '[DONE]') { done = true; return }
+    diagnostics.sseDataFrameCount = (diagnostics.sseDataFrameCount ?? 0) + 1
+    if (data === '[DONE]') { done = true; diagnostics.streamDoneReceived = true; return }
     const chunk = parse(data, 'sse_json')
     if (typeof chunk.id === 'string' && /^[A-Za-z0-9_-]{1,160}$/u.test(chunk.id)) diagnostics.responseId = chunk.id
-    input.onDiagnostics?.({ ...diagnostics })
+    reportDiagnostics({ ...diagnostics })
     // Save usage before validating a later field or attempting to parse the model's JSON.
     if (chunk.usage != null) { usage = chunk.usage; await input.onUsage(usage, finished || (Array.isArray(chunk.choices) && chunk.choices.some(choice => object(choice) && choice.finish_reason != null))) }
     if (chunk.id !== undefined) id = chunk.id
@@ -102,7 +112,13 @@ export async function readProviderResponse(input: {
         toolCalls.set(index, call)
       }
     }
-    if (choice.finish_reason != null) { if (!finished) finishReason = choice.finish_reason; finished = true }
+    if (choice.finish_reason != null) { if (!finished) finishReason = choice.finish_reason; finished = true; diagnostics.streamFinishReceived = true }
+  }
+  const finalizeDiagnostics = async () => {
+    const digest = await providerDiagnosticDigest(content.join(''))
+    if (digest) { diagnostics.contentDigest = digest; diagnostics.contentDigestScope = 'received_content' }
+    if (streamed) diagnostics.streamCompleted = done && finished
+    reportDiagnostics({ ...diagnostics })
   }
   const abort = () => { void reader.cancel().catch(() => undefined) }
   signal.addEventListener('abort', abort, { once: true })
@@ -121,7 +137,7 @@ export async function readProviderResponse(input: {
       }
       input.onProgress?.()
       diagnostics.wireBytes! += next.value.byteLength
-      input.onDiagnostics?.({ ...diagnostics })
+      reportDiagnostics({ ...diagnostics })
       const text = decode(next.value, true)
       if (!streamed) { check('envelope_bytes', diagnostics.wireBytes!, policy.envelopeBytes); raw.push(text); continue }
       pending += text
@@ -137,15 +153,22 @@ export async function readProviderResponse(input: {
     if (streamed) {
       if (!done && pending.trim()) await consume(pending)
       if (!done || !finished) throw new ProviderResponseReadError('body_read_failed', { ...diagnostics, parserCategory: 'stream_incomplete' })
+      await finalizeDiagnostics()
       return { body: { id, system_fingerprint: fingerprint, usage, choices: [{ message: { content: content.join(''), reasoning_content: reasoning.join(''), ...(toolCalls.size ? { tool_calls: [...toolCalls].sort(([a], [b]) => a - b).map(([,v]) => v) } : {}) }, finish_reason: finishReason }] }, diagnostics }
     }
     const body = parse(raw.join(''), 'response_json')
     if (body.usage != null) await input.onUsage(body.usage, true)
     const message = Array.isArray(body.choices) ? body.choices[0]?.message : undefined
     if (object(message)) { await append('content', message.content); await append('reasoning', message.reasoning_content) }
+    await finalizeDiagnostics()
     return { body, diagnostics }
   } catch (error) {
-    if (error instanceof ProviderResponseReadError) { input.onDiagnostics?.({ ...diagnostics, ...error.diagnostics }); throw error }
+    await finalizeDiagnostics()
+    if (error instanceof ProviderResponseReadError) {
+      const final = { ...diagnostics, ...error.diagnostics, ...(diagnostics.contentDigest ? { contentDigest: diagnostics.contentDigest, contentDigestScope: 'received_content' as const } : {}), ...(streamed ? { streamCompleted: false } : {}) }
+      reportDiagnostics(final)
+      throw new ProviderResponseReadError(error.code, final)
+    }
     if (signal.aborted) throw error
     // Callback exceptions are not UTF-8 or network failures.
     throw error

@@ -12,6 +12,7 @@ import {
 import type { LocalStore } from './local-store.js'
 import { listActiveAgentMemoryRevisions } from './agent-memory-authority.js'
 import { createCodingRunPolicyAuthority } from './coding-run-memory-policy.js'
+import { verifiedMemoryTestCommand } from './verified-memory-command.js'
 
 /**
  * ADR 0024 §4–5: after a Coding Run completes with passing evidence, turn its observable
@@ -30,7 +31,7 @@ export type CodingRunMemoryLearningStore = Pick<LocalStore,
   | 'getAgentMemoryTombstone'
   | 'authorizeAgentMemoryPromotion'
   | 'commitAgentMemoryPromotion'
-> & Partial<Pick<LocalStore, 'listCodingChangeSets'>>
+> & Partial<Pick<LocalStore, 'listCodingChangeSets' | 'listAgentMemoryCandidates'>>
 
 export type CodingRunMemoryLearningResult = {
   /** Why nothing was learned; absent when candidates were derived. */
@@ -121,11 +122,15 @@ export async function learnFromCompletedCodingRun(input: {
   if (statements.length === 0) return { ...result, skipped: 'no_statements' }
 
   const active = await listActiveAgentMemoryRevisions(store, receipt.scope, clock())
+  const candidates = new Map((await store.listAgentMemoryCandidates?.(receipt.scope.localProjectId) ?? []).map(candidate => [candidate.id, candidate]))
   for (const entry of statements) {
     const candidateId = `agent-memory-candidate-coding-${digest(`${codingRun.id}:${entry.kind}`).slice(0, 32)}`
     // A statement another active Memory already holds is not saved again: it could never
     // be promoted and would only crowd out candidates that need review (ADR 0024 §5).
-    const duplicate = findDuplicateMemory(entry.statement, active, (revision) => revision.statement)
+    const sameVerifiedCommand = entry.kind === 'test_command' ? active.find((revision) =>
+      verifiedMemoryTestCommand(revision, candidates.get(revision.sourceCandidateId)) === facts.testCommand) : undefined
+    const duplicate = sameVerifiedCommand ? { kind: 'exact' as const, item: sameVerifiedCommand, similarity: 1 }
+      : findDuplicateMemory(entry.statement, active, (revision) => revision.statement)
     const duplicateOfOther = duplicate && duplicate.item.sourceCandidateId !== candidateId ? duplicate : null
     if (duplicateOfOther?.kind === 'exact') {
       result.candidates.push({ candidateId, kind: entry.kind, outcome: 'duplicate', duplicateOf: duplicateOfOther.item.id })
@@ -175,7 +180,9 @@ export async function learnFromCompletedCodingRun(input: {
     }
     const committed = await store.commitAgentMemoryPromotion({ revision: authorization.revision }, authorization.capability)
     if (!committed.committed) {
-      result.notPromoted.push({ candidateId, reason: 'rejected' })
+      result.notPromoted.push(committed.reason === 'duplicate'
+        ? { candidateId, reason: 'duplicate', duplicateOf: committed.duplicateOf }
+        : { candidateId, reason: 'rejected' })
       continue
     }
     result.promoted.push({ candidateId, memoryId: committed.revision.id })

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/erich04/devflow-blank-mini-agent-20260911",
+  "commit": "c2be68d6c4a03fc219c483acc79a90fdf6e11ab6",
+  "tree": "cb370a0b02a14df0b69e733d61c5bee122effadf",
+  "files": [
+    {
+      "path": ".gitignore",
+      "sha256": "dcca003d705805c650bf83f071960603aa2c3cf6f34746d7ad1cfc7575056b9c"
+    },
+    {
+      "path": "README.md",
+      "sha256": "53a24aad6f7a46162710bde5472439a0a2e3058dff87f126beb648ee9d0dd82e"
+    },
+    {
+      "path": "index.html",
+      "sha256": "f359518ffccbb03a2126c3e48a2dec4c0f98f60385b2ce90ff0c252c9f2d8896"
+    },
+    {
+      "path": "package.json",
+      "sha256": "fc92d91c6d38612290b6e7389c34dd76236e8891248d44e1c3d47163c5b2fb4d"
+    },
+    {
+      "path": "scripts/dev-server.js",
+      "sha256": "bc6c898491110afd27f46ed19742f48b2c738d2bf9bb6e5979cfa092875a9add"
+    },
+    {
+      "path": "src/app.js",
+      "sha256": "47dc6ce999ec988dd78a63dfc0ef18d2108e5a13352093ace0755498e4f3e6da"
+    },
+    {
+      "path": "src/dom.js",
+      "sha256": "1b6736e4b6173842595e2cc737dbe18b2c7bd56a26870a63aa297427ccf8002e"
+    },
+    {
+      "path": "src/store.js",
+      "sha256": "0e0f362ee962be7e1f72ad8eff82279f3995b8d36c9474b7a63e33ee72429baf"
+    },
+    {
+      "path": "src/styles.css",
+      "sha256": "400640f3496e88f2b7a1dc4060adf7d2f4dee1465b40240506ce8f87812d9a22"
+    },
+    {
+      "path": "test/dev-server.test.js",
+      "sha256": "878a084ff235194572b047b9ac2cf134fd50d37ca470d43e42cb4944c0c0878a"
+    },
+    {
+      "path": "test/store.test.js",
+      "sha256": "baae2e2bb3b0281be8119ed7d4f7b4618e11f79afac0b9dca8ae217b98910cb6"
+    }
+  ]
+}

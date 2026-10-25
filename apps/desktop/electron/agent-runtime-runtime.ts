@@ -486,6 +486,10 @@ export function createDesktopAgentRuntime(
               if (head === null || candidate === undefined) {
                 throw new Error('Desktop Agent Runtime Context source is stale')
               }
+              const sourceRuntimeId = agentMemoryCandidateSourceRuntimeId(candidate)
+              // Conversation/stage learning has a durable event, not an AgentRuntime.
+              // It is consumed by the ordinary Chat/Coding/Stage path instead.
+              if (sourceRuntimeId === null) continue
               memorySources.push({
                 revision,
                 current: {
@@ -495,7 +499,7 @@ export function createDesktopAgentRuntime(
                   headVersion: head.version,
                   status: 'active',
                   scope: head.scope,
-                  sourceRuntimeId: agentMemoryCandidateSourceRuntimeId(candidate),
+                  sourceRuntimeId,
                   contentDigest: revision.contentDigest,
                   updatedAt: head.updatedAt,
                 },

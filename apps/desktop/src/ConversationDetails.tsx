@@ -71,7 +71,8 @@ export function ConversationDetailsDialog({ session, projectName, providerName, 
           <p>上次上下文记录时间：{receipt.observedAt}。</p>
           <p>纳入 {receipt.includedMessages} 条本会话消息；{receipt.omittedMessages} 条较早消息{receipt.boundaryId ? '已生成有界摘要，原文仍保留。' : '未纳入，历史仍保留。'}</p>
           {receipt.limited && <p className="meta">本次上下文达到容量限制，部分查询内容未全部附带。可以缩小问题范围后继续调查。</p>}
-          <p className="meta">这里只记录消息数量和容量限制，没有保存逐条模型输入或完整来源明细。</p>
+          {receipt.memory && <p>本次装配 {receipt.memory.memories.length} 条长期记忆，{receipt.memory.omittedMemoryCount} 条未附带。调用状态与版本记录见下方；不表示模型已采用这些经验。</p>}
+          <p className="meta">这里只保存消息数量、容量限制和长期记忆的版本摘要，不复制完整模型输入。</p>
         </> : <p className="meta">尚无上下文使用记录，不代表历史消息已被删除。</p>}
         {session.memory && <details className="conversation-legacy-note"><summary>旧版会话备注（已停用）</summary><p className="meta">已停用，不会发送给模型；如需继续使用其中的要求，请在聊天中说明。</p><pre>{session.memory}</pre></details>}
       </section>
@@ -81,6 +82,11 @@ export function ConversationDetailsDialog({ session, projectName, providerName, 
           <p>{message.createdAt} · {message.provider!.executor === 'opencode' ? 'OpenCode' : 'Direct Provider'} · {message.provider!.model}</p>
           <p className="meta">{message.provider!.effectiveThinking ? describeProviderThinking(message.provider!.effectiveThinking!) : '未提供或未记录思考参数'}</p>
           <p className="meta">{message.usage ? `已记录用量：输入 ${message.usage.inputTokens ?? '未返回'} tokens，输出 ${message.usage.outputTokens ?? '未返回'} tokens，总计 ${message.usage.totalTokens ?? '未返回'} tokens。` : '此条记录未包含用量，不估算费用。'}</p>
+          {message.memoryReceipt && <details>
+            <summary>长期记忆 · {message.memoryReceipt.memories.length} 条 · {{ prepared: '已准备', dispatch_started: '已开始调用', response_received: '已收到响应', not_sent: '未发送', delivery_unknown: '送达状态未知' }[message.memoryReceipt.state]}</summary>
+            <p className="meta">记录宿主请求边界，未附带 {message.memoryReceipt.omittedMemoryCount} 条。{message.memoryReceipt.executor === 'opencode' ? '不能据此推断 OpenCode 内部每次请求或压缩后的保留情况。' : '收到响应不表示模型采用了这些记忆。'}</p>
+            {message.memoryReceipt.memories.map((memory) => <p className="meta" key={memory.id}>{memory.id} · 修订 {memory.revision} · {memory.contentDigest}</p>)}
+          </details>}
           {message.failure && <p className="meta">诊断：{message.failure.phase} · {message.failure.code}{message.failure.httpStatus ? ` · HTTP ${message.failure.httpStatus}` : ''}{message.failure.reason ? ` · ${message.failure.reason}` : ''}</p>}
         </div>)}
       </details>

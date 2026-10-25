@@ -13,7 +13,17 @@
     "build": "corepack pnpm -r --if-present build",
     "audit:production": "corepack pnpm audit --prod",
     "build:desktop-pilot": "corepack pnpm --filter @ai-devflow/desktop build && node scripts/build-desktop-pilot.mjs",
-    "typecheck": "corepack pnpm -r --if-present typecheck && corepack pnpm typecheck:opencode-smoke && corepack pnpm typecheck:memory-context-smoke && corepack pnpm typecheck:organization-smoke && corepack pnpm typecheck:native-conversation-live",
+    "typecheck": "corepack pnpm -r --if-present typecheck && corepack pnpm typecheck:opencode-smoke && corepack pnpm typecheck:memory-context-smoke && corepack pnpm typecheck:organization-smoke && corepack pnpm typecheck:hindsight-smoke && corepack pnpm typecheck:native-conversation-live",
+    "typecheck:hindsight-smoke": "tsc --noEmit -p tsconfig.hindsight-smoke.json",
+    "hindsight:up": "docker compose --env-file deploy/hindsight/.env -f deploy/hindsight/compose.yaml up -d --wait --wait-timeout 180",
+    "hindsight:status": "docker compose --env-file deploy/hindsight/.env -f deploy/hindsight/compose.yaml ps",
+    "hindsight:stop": "docker compose --env-file deploy/hindsight/.env -f deploy/hindsight/compose.yaml stop",
+    "test:hindsight-local": "tsx scripts/hindsight-local-smoke.mts",
+    "test:hindsight-live": "tsx scripts/hindsight-live-synthetic.mts",
+    "test:hindsight-protocol": "tsx scripts/hindsight-protocol-smoke.mts",
+    "test:hindsight-electron": "corepack pnpm --filter @ai-devflow/desktop build && node scripts/hindsight-electron-smoke.mjs",
+    "test:automatic-memory-electron": "corepack pnpm --filter @ai-devflow/desktop build && tsx scripts/automatic-memory-electron-smoke.mts",
+    "test:hindsight-fullchain": "corepack pnpm --filter @ai-devflow/desktop build && tsx scripts/hindsight-fullchain-electron.mts",
     "typecheck:organization-smoke": "tsc --noEmit -p tsconfig.organization-smoke.json",
     "test:budget-postgres": "vitest run scripts/model-budget-postgres.test.ts",
     "test:organization-postgres": "node scripts/organization-postgres-smoke.mjs",
@@ -90,7 +100,7 @@
       "postcss": "8.5.23",
       "sharp": "0.35.5",
       "source-map-js": "1.2.2",
-      "undici": "7.29.1"
+      "undici": "7.30.1"
     }
   }
 }

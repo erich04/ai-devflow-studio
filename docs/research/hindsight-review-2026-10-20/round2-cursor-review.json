@@ -1,0 +1,54 @@
+{
+  "verdict": "pass_with_risks",
+  "blocking_issues": [],
+  "risks": [
+    {
+      "summary": "真实试点会把选中 Markdown 的当前工作树字节发给 Hindsight 及其提取模型，而 ADR 0011 与 0025 仍要求 Markdown 留在桌面且不引入向量索引。新 ADR 落地前打开上传会越过现行决定。",
+      "likelihood": "medium",
+      "impact": "high"
+    },
+    {
+      "summary": "index() 对工作树缺失路径无警告地 continue，排除目录也不产生 warning。用 snapshot.documents 差集或 truncated=false 判断删除，会漏撤或误撤远端投影。",
+      "likelihood": "medium",
+      "impact": "high"
+    },
+    {
+      "summary": "解除配对或再次 opt-in 时，若未配对资格立即恢复且清理尚未核实，同一 bank 中可能同时出现新旧 retain。",
+      "likelihood": "medium",
+      "impact": "high"
+    },
+    {
+      "summary": "若把 map 展开后的 sem_rule.name 与 statement 按顺序配成对象，离线候选会把同一文档里的多条规则绑错；该展开行为尚未用锁定版本实测。",
+      "likelihood": "medium",
+      "impact": "medium"
+    },
+    {
+      "summary": "取消、删除级联、observations 开关和 metadata 是否进入抽取提示都还没有锁版本证据。提前打开真实召回会把这些文档假设当成清理完成条件。",
+      "likelihood": "medium",
+      "impact": "high"
+    }
+  ],
+  "recommended_revisions": [
+    "在 saveDesktopPairingCredential 成功且 localProjectId 进入或离开该项目时停用提供方并入队清理；恢复未配对不自动重新 opt-in，同一逻辑来源在清理核实前不提交新 retain。",
+    "把知识缺失检查写成单路径 readSafeRegularFile 加 git ls-files -z --cached -- <path>，并写明 ENOENT 与排除目录不会出现在 warnings 里。",
+    "投影、搜索引用和 knowledge_read 使用与 sha256Digest 相同的 sha256: 原始字节摘要；不上传 projectInstructions，也不上传 boundSourceMetadata 改写后的 front matter。",
+    "entity_labels 的 map 字段按独立路径评估，禁止按序配对 name 与 statement；用户可见正文只来自核验后的原文。",
+    "knowledge_search 同时改系统提示、tool() 分发、MCP fields、工具轨迹和名单测试；保留 list/read，旧的未列出 knowledge 工具继续只做本地快照词法检索。",
+    "真实上传前接受新 ADR，写明默认关闭、仅选中的知识根 Markdown、工作树字节可能出机，以及提取与 rerank 提供方。"
+  ],
+  "next_iteration_prompt": "",
+  "_artifacts": {
+    "task": "review",
+    "markdown_report_path": "/private/tmp/devflow-hindsight-20261020.ww176O/cursor-v2/hindsight-integration-v2-2026-10-20.zh-CN-20261020-071810.review.md",
+    "raw_path": "/private/tmp/devflow-hindsight-20261020.ww176O/cursor-v2/hindsight-integration-v2-2026-10-20.zh-CN-20261020-071810.attempt1.raw.json",
+    "raw_paths": [
+      "/private/tmp/devflow-hindsight-20261020.ww176O/cursor-v2/hindsight-integration-v2-2026-10-20.zh-CN-20261020-071810.attempt1.raw.json"
+    ],
+    "markdown_attempt_path": "/private/tmp/devflow-hindsight-20261020.ww176O/cursor-v2/hindsight-integration-v2-2026-10-20.zh-CN-20261020-071810.attempt1.review.md",
+    "markdown_attempt_paths": [
+      "/private/tmp/devflow-hindsight-20261020.ww176O/cursor-v2/hindsight-integration-v2-2026-10-20.zh-CN-20261020-071810.attempt1.review.md"
+    ],
+    "session_id": "dac3b3e9-b35e-4e27-ab2d-d94cfd3af9d2",
+    "resumed_from_session_id": "dac3b3e9-b35e-4e27-ab2d-d94cfd3af9d2"
+  }
+}
