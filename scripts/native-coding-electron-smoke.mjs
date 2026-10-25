@@ -12,7 +12,9 @@ import { stopNativeSmokeProcess } from './native-smoke-process.mjs'
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
 const manualAcceptance = process.argv.includes('--manual-acceptance')
-const nativeV3 = process.argv.includes('--harness-v3') || manualAcceptance
+const liveRoot = process.env.DEVFLOW_CODING_CLOSURE_ROUND
+let liveRelay, liveEvidence, livePage, liveCodingRunId, livePassed = false
+const nativeV3 = Boolean(liveRoot) || process.argv.includes('--harness-v3') || manualAcceptance
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const {
   apiPort,
@@ -153,6 +155,11 @@ const modelServer = createServer(async (request, response) => {
       return
     }
     modelRequests.push(body)
+    if (liveRelay && body.tools?.some(tool => ['propose_changeset', 'compact_context'].includes(tool.function.name))) {
+      const real = await liveRelay.complete(body)
+      response.writeHead(real.status, { 'content-type': real.type }).end(real.body)
+      return
+    }
     if (nativeV3 && body.tools?.some(tool => tool.function.name === 'propose_changeset')) {
       const results = body.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content))
       const operations = [
@@ -342,7 +349,7 @@ let app
 const watchdog = setTimeout(() => {
   console.error('Native smoke timed out; closing only its isolated Electron application.', { modelRequests: modelRequests.length })
   void app?.close()
-}, 180_000)
+}, liveRoot ? 480_000 : 180_000)
 try {
   await mkdir(path.join(repositoryPath, 'src'), { recursive: true })
   await writeFile(path.join(repositoryPath, '.gitignore'), 'node_modules\n', 'utf8')
@@ -409,6 +416,7 @@ try {
   app.process().stderr?.on('data', chunk => process.stderr.write(chunk))
   app.on('close', () => console.log('Isolated Native Electron application closed.'))
   const page = await app.firstWindow()
+  livePage = page
   await page.waitForLoadState('domcontentloaded')
   // Only this isolated test process stores synthetic credentials; OS keychain
   // acceptance is a separate signed-installation check, not part of this fixture.
@@ -496,6 +504,12 @@ try {
     configVersion: 1,
   })
 
+  let livePrompt
+  if (liveRoot) {
+    const { createClosureRelay, closureElectronPrompt } = await import('./native-coding-closure-live.mts')
+    liveRelay = await createClosureRelay(liveRoot, process.env.DEVFLOW_CODING_CLOSURE_KEY_FILE)
+    livePrompt = closureElectronPrompt
+  }
   const started = await page.evaluate(async (input) => {
     return window.aiDevFlowDesktop.runCodingAgent(input)
   }, {
@@ -503,8 +517,9 @@ try {
     nodeId: buildNode.id,
     projectId: project.id,
     requestedBy: 'u-erich',
-    userInstruction: 'Change the message from old to new.',
+    userInstruction: livePrompt ?? 'Change the message from old to new.',
   })
+  liveCodingRunId = started.codingRun.id
   if (nativeV3) {
     const command = input => page.evaluate(input => window.aiDevFlowDesktop.codingHarness(input), { protocolVersion: 2, codingRunId: started.codingRun.id, ...input })
     const get = () => command({ type: 'get' })
@@ -516,13 +531,17 @@ try {
       await page.getByRole('textbox', { name: '人工验收计划', exact: true }).fill('Inspect src/message.js in the frozen diff and confirm the export changed from old to new.')
     }
     await page.getByRole('button', { name: '授权并开始', exact: true }).click({ timeout: 15000 })
-    await expect.poll(async () => (await get()).status, { timeout: 30000 }).toBe('waiting_input')
+    await expect.poll(async () => (await get()).status, { timeout: liveRoot ? 180000 : 30000 }).toBe('waiting_input')
     const question = await get()
-    expect(question.question.text).toBe('Should the message become new?')
-    await page.getByRole('textbox', { name: '补充说明或回答', exact: true }).fill('Yes')
+    if (liveRoot) {
+      expect(question.question.text.length).toBeGreaterThan(0)
+      await page.screenshot({ path: path.join(liveRelay.directory, 'question.png'), fullPage: true })
+    } else expect(question.question.text).toBe('Should the message become new?')
+    await page.getByRole('textbox', { name: '补充说明或回答', exact: true }).fill(liveRoot ? 'Yes. The target is new; preserve double quotes and the trailing newline. Continue with the saved tests.' : 'Yes')
     await page.getByRole('button', { name: '回答并继续', exact: true }).click()
-    await expect.poll(async () => (await get()).status, { timeout: 30000 }).toBe('review')
+    await expect.poll(async () => (await get()).status, { timeout: liveRoot ? 180000 : 30000 }).toBe('review')
     const review = await get()
+    if (liveRoot) await page.screenshot({ path: path.join(liveRelay.directory, 'review.png'), fullPage: true })
     expect(review.revision.files.map(file => file.path)).toEqual(['src/message.js'])
     expect(await readFile(path.join(repositoryPath, 'src/message.js'), 'utf8')).toBe('export const message = "old"\n')
     const panel = page.getByRole('region', { name: 'Native 多轮任务', exact: true })
@@ -553,10 +572,14 @@ try {
     }
     const workspace = state.managedCodingWorkspaces.find(item => item.id === saved.managedWorkspaceId)
     expect(await readFile(path.join(workspace.worktreePath, 'src/message.js'), 'utf8')).toBe('export const message = "new"\n')
-    expect(modelRequests.filter(request => request.tools?.some(tool => tool.function.name === 'propose_changeset'))).toHaveLength(5)
+    if (liveRoot) {
+      await page.screenshot({ path: path.join(liveRelay.directory, 'completed.png'), fullPage: true })
+      liveEvidence = { model: 'deepseek-flash', realElectron: true, backend: 'isolated demo team; real SQLite and Git; no claim of PostgreSQL end-to-end coverage', review, approved, codingRun: saved, testEvidence: state.testEvidence.find(item => item.id === saved.testEvidenceId), deliveredContent: await readFile(path.join(workspace.worktreePath, 'src/message.js'), 'utf8') }
+    } else expect(modelRequests.filter(request => request.tools?.some(tool => tool.function.name === 'propose_changeset'))).toHaveLength(5)
     await page.evaluate(input => window.aiDevFlowDesktop.saveCodingRuntimeConfiguration(input), { projectId: project.id, executor: 'native-model', providerId: 'deepseek-native-smoke', nativeVersion: 2 })
     expect((await get()).revision.digest).toBe(review.revision.digest)
     if (manualAcceptance) console.log('Native v3 manual acceptance smoke passed: preselected plan, exact revision, human notes, archived acceptance; no automated test evidence or workflow test exemption.')
+    else if (liveRoot) console.log('Native v3 Electron real-model acceptance passed: UI authorization, question/answer, frozen approval, independent test and delivery.')
     else console.log('Native v3 Electron smoke passed: streamed tool arguments, multi-round discovery/editing, human question, frozen approval, independent real test, atomic archived proof and workflow advancement; no external model requests.')
   } else {
   expect(started.codingRun).toMatchObject({
@@ -629,8 +652,15 @@ try {
   expect((await page.evaluate(() => window.aiDevFlowDesktop.loadState())).settings.knowledgeReviewExecutor).toBe('native-agent')
   console.log('DevFlow Native Electron smoke passed: real Main, local model server, built-in repository review without OpenCode, exact approval, managed-worktree edit, saved test, Diff, Trace, Evidence, and provider-reported cost.')
   }
+  livePassed = true
 } finally {
   clearTimeout(watchdog)
+  if (liveRelay) {
+    if (!livePassed && livePage && liveCodingRunId) {
+      try { liveEvidence = { passed: false, snapshot: await livePage.evaluate(codingRunId => window.aiDevFlowDesktop.codingHarness({ protocolVersion: 2, type: 'get', codingRunId }), liveCodingRunId) }; await livePage.screenshot({ path: path.join(liveRelay.directory, 'stopped.png'), fullPage: true }) } catch { /* Preserve ledger evidence even if the application already closed. */ }
+    }
+    await liveRelay.finish(livePassed, liveEvidence ?? { failure: 'Electron scenario did not reach all acceptance assertions' })
+  }
   if (app) await app.close().catch(() => undefined)
   await Promise.all([
     stopNativeSmokeProcess(viteProcess),

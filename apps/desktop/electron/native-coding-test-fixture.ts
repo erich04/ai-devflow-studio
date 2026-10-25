@@ -8,7 +8,7 @@ import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
 
 /** Only the model endpoint is replaced. Git, SQLite, tools, processes and approval are real. */
-export async function codingHarnessFixture(model: NonNullable<AgentProvider['completeNativeConversation']>, testCommand = 'node -e "process.exit(0)"') {
+export async function codingHarnessFixture(model: NonNullable<AgentProvider['completeNativeConversation']>, testCommand = 'node -e "process.exit(0)"', providerOverrides: Partial<AgentProvider> = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-harness-lifecycle-'))
   const delivery = path.join(root, 'delivery'); await mkdir(delivery)
   await writeFile(path.join(delivery, 'value.ts'), 'export const value = 1\n')
@@ -21,7 +21,7 @@ export async function codingHarnessFixture(model: NonNullable<AgentProvider['com
   const { run } = createWorkflowRunFromRequest({ runId: 'workflow', title: 'Review', request: 'Inspect value', projectId: project.id, creatorId: 'user', branchName: 'test', now })
   await store.saveRun(run)
   const node = run.nodes.find(item => item.stage === 'build' && item.kind === 'task')!
-  const provider = { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: (input: unknown) => JSON.stringify(input), completeNativeConversation: model }
+  const provider = { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: (input: unknown) => JSON.stringify(input), ...providerOverrides, completeNativeConversation: model }
   const executor = createNativeCodingExecutorV3({ store, root: path.join(root, 'harness'), configVersion: 1, provider })
   const workspace = { id: 'workspace', projectId: project.id, codingRunId: 'coding', sourcePath: delivery, worktreePath: delivery, branchName: 'test', baseBranch: 'main', baseCommitSha: (await git(['rev-parse', 'HEAD'])).stdout.trim(), createdAt: now }
   const context = { id: 'coding', run, node, project, workspace, requestedBy: 'user', providerId: provider.id, userInstruction: 'Inspect value', now, upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [], brief: buildCodingBrief({ project, worktreePath: delivery, branchName: workspace.branchName, run, node, userInstruction: 'Inspect value', upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [] }) }

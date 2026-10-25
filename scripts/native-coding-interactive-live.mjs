@@ -5,11 +5,24 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
+import { createInteractiveRound, openInteractiveRound } from './native-coding-round-budget.ts'
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const [outputPath, keyFile] = process.argv.slice(2)
-if (!outputPath || !keyFile) throw new Error('Usage: interactive-live <new-output-directory> <private-key-file>')
-const output = path.resolve(outputPath); await mkdir(output)
+const args = process.argv.slice(2)
+const [operation, roundPath, attemptOrCost, keyOrCalls, scenarioList] = args
+const usage = 'Usage: node --import tsx scripts/native-coding-interactive-live.mjs init <new-round-directory> <max-cost-usd> <max-calls> | run <round-directory> <new-attempt-name> <private-key-file> [scenario,scenario]'
+if (operation === 'init') {
+  if (args.length !== 4 || !roundPath || !attemptOrCost || !keyOrCalls) throw new Error(usage)
+  console.log(JSON.stringify(await createInteractiveRound(path.resolve(roundPath), { maxCostUsd: Number(attemptOrCost), maxCalls: Number(keyOrCalls) })))
+  process.exit(0)
+}
+if (operation !== 'run' || args.length < 4 || args.length > 5 || !roundPath || !keyOrCalls) throw new Error(usage)
+const attempt = attemptOrCost
+if (!/^[a-zA-Z0-9_-]{1,100}$/.test(attempt ?? '')) throw new Error('Invalid attempt name')
+const roundRoot = path.resolve(roundPath), keyFile = path.resolve(keyOrCalls)
+const output = path.join(roundRoot, 'attempts', attempt)
+// Opening an existing round is mandatory; no worker or credential access precedes this gate.
+const budget = await openInteractiveRound(roundRoot, `${attempt}/operator`)
 const save = (file, value) => writeFile(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 })
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms))
 const sha = value => createHash('sha256').update(value).digest('hex')
@@ -29,14 +42,23 @@ const configs = {
   manual: { ...base, testCommand: '', prompt: 'Inspect value.js and keep value equal to 1; propose a no-change revision. This task uses an explicit manual validation plan; do not run tests.' },
 }
 configs.file_success = { ...configs.file_conflict }
-for (const [id, config] of Object.entries(configs)) { config.root = path.join(output, id); await save(path.join(output, `${id}.json`), config) }
+try {
+const selected = scenarioList === undefined ? new Set(Object.keys(configs)) : new Set(scenarioList.split(','))
+if (!selected.size || [...selected].some(id => !Object.hasOwn(configs, id))) throw new Error('Unknown or empty interactive scenario selection')
+await mkdir(path.dirname(output), { recursive: true }); await mkdir(output)
+for (const [id, config] of Object.entries(configs)) {
+  config.root = path.join(output, id); config.roundRoot = roundRoot; config.budgetScope = `${attempt}/${id}`
+  await save(path.join(output, `${id}.json`), config)
+}
 await save(path.join(output, 'protocol.json'), { frozenAt: new Date().toISOString(), candidateCommit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo }).toString().trim(), model: 'deepseek-flash', thinking: 'high', configDigests: Object.fromEntries(Object.entries(configs).map(([id, value]) => [id, sha(JSON.stringify(value))])),
+  roundBudget: budget.limits, roundRoot, selectedScenarios: [...selected],
   operatorAnswers: { clarification: 'Use atomic rollback: if any operation fails, leave the entire state exactly as it was before this batch and throw an error.', child: 'Yes. The confirmed desired value is 7.' },
   unknownRetryAuthorization: 'One operator-authorized additional attempt after verifying no automatic replay; original unknown cost retained.', scope: 'Real model, production executor/tools/store/approval/command ownership. Direct approved fixture context, not a Team UI test. Fault injection occurs only in the isolated worker at actual response/journal/command events.' })
 
 let commandNumber = 0
-const results = [], clients = new Set()
+const results = [], clients = new Set(), finishedScenarios = new Set()
 function start(id, mode = 'new') {
+  if (finishedScenarios.has(id)) throw new Error('Scenario has ended; no new paid worker may start')
   const events = [], pending = new Map(), actions = [], log = createWriteStream(path.join(output, `${id}-${mode}.log`), { flags: 'wx', mode: 0o600 })
   const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/native-coding-interactive-worker.mts', path.join(output, `${id}.json`), path.resolve(keyFile), mode], { cwd: repo, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
   child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false })
@@ -55,7 +77,14 @@ function start(id, mode = 'new') {
         catch (error) { if (!['pause', 'cancel'].includes(body.type) || attempt >= 4 || !error.message.includes('任务已更新')) throw error }
       }
     },
-    async stop(kill = false) { if (!exited) { if (kill) child.kill('SIGKILL'); else await client.request({ type: 'close' }) }; const exit = await closed; await save(path.join(output, `${id}-${mode}-operator.json`), { events, actions, exit }); clients.delete(client); return exit },
+    async stop(kill = false) {
+      // A stalled shutdown must not keep a paid worker alive beyond the scenario deadline.
+      const deadline = setTimeout(() => { if (!exited) child.kill('SIGKILL') }, 10000)
+      try {
+        if (!exited) { if (kill) child.kill('SIGKILL'); else await client.request({ type: 'close' }).catch(() => { if (!exited) child.kill('SIGKILL') }) }
+        const exit = await closed; await save(path.join(output, `${id}-${mode}-operator.json`), { events, actions, exit }); clients.delete(client); return exit
+      } finally { clearTimeout(deadline) }
+    },
   }; clients.add(client); return client
 }
 async function fixture(id, mode = 'new', manualValidationPlan) {
@@ -85,15 +114,28 @@ async function review(client, timeout = 480000) {
 async function approve(client, snapshot = null, extra = {}) { const view = snapshot ?? await review(client); return client.command({ type: 'approve', revisionDigest: view.revision.digest, objectiveVersion: view.objectiveVersion, ...extra }) }
 const deliveredValue = id => readFile(path.join(configs[id].root, 'delivery/value.js'), 'utf8')
 async function run(id, action) {
+  if (!selected.has(id)) return
   const started = Date.now(), record = { id, passed: false }; results.push(record)
+  let deadline
   console.log(JSON.stringify({ event: 'scenario_start', id }))
-  try { record.evidence = await action(); record.passed = true }
+  try {
+    if (!budget.summary().canStartCall) {
+      record.blocked = 'round_budget_exhausted'
+      record.failure = 'The shared round cannot reserve another bounded request; no worker was started.'
+    } else {
+      record.evidence = await Promise.race([action(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Frozen interactive scenario wall-time limit (8 minutes)')), 480000) })])
+      record.passed = true
+    }
+  }
   catch (error) { record.failure = error.message }
   finally {
+    clearTimeout(deadline)
+    finishedScenarios.add(id)
     for (const client of [...clients]) await client.stop().catch(() => client.stop(true).catch(() => {}))
     record.durationMs = Date.now() - started
-    try { record.usage = JSON.parse(await readFile(path.join(configs[id].root, 'usage.json'), 'utf8')) } catch {}
+    record.usage = budget.scopeUsage(configs[id].budgetScope)
     await save(path.join(output, 'results.json'), results)
+    await save(path.join(output, 'round-budget.json'), { ...budget.summary(), observedAt: new Date().toISOString() })
     console.log(JSON.stringify(record))
   }
 }
@@ -119,10 +161,10 @@ await run('steering', async () => {
 })
 await run('unknown', async () => {
   let client = await fixture('unknown'); await client.event('model_headers'); await client.stop(true)
-  const before = JSON.parse(await readFile(path.join(configs.unknown.root, 'ledger.json'), 'utf8')).rows.length
+  const before = budget.records(configs.unknown.budgetScope).length
   client = await fixture('unknown', 'recovered')
   const view = await settledView(client); assert.equal(view.status, 'reconciling'); assert.equal(view.pauseReason, 'model_delivery_unknown')
-  const after = JSON.parse(await readFile(path.join(configs.unknown.root, 'ledger.json'), 'utf8')).rows.length; assert.equal(after, before)
+  const after = budget.records(configs.unknown.budgetScope).length; assert.equal(after, before)
   await client.command({ type: 'retry_unknown' }); const final = await approve(client); assert.equal(final.snapshot.status, 'completed'); assert.match(await deliveredValue('unknown'), /value\s*=\s*7/)
   return { noAutomaticReplay: true, originalCalls: before, unknownAttemptsRetained: (await client.request({ type: 'dump' }))[0].attempts.some(attempt => attempt.status === 'unknown'), final: final.snapshot.status }
 })
@@ -178,7 +220,7 @@ await run('children', async () => {
   const sessions = await client.request({ type: 'dump' }); assert.ok(sessions.some(session => session.parent?.mode === 'read_only')); assert.ok(sessions.some(session => session.parent?.mode === 'isolated_coding'))
   assert.ok(sessions.find(session => !session.parent).toolReceipts.some(receipt => receipt.name === 'merge_task' && receipt.status === 'completed'))
   const approved = await approve(client, final); assert.equal(approved.snapshot.status, 'completed'); assert.match(await deliveredValue('children'), /value\s*=\s*7/)
-  const quotes = JSON.parse(await readFile(path.join(configs.children.root, 'ledger.json'), 'utf8')).rows.map(row => row.quote)
+  const quotes = budget.records(configs.children.budgetScope).map(row => row.quote)
   assert.ok(quotes.some(quote => quote.task?.parentTaskId)); assert.equal(new Set(quotes.filter(quote => quote.task).map(quote => quote.task.rootId)).size, 1)
   return { childQuestionSurvivedRestart: true, deliveryUntouchedUntilApproval: true, explicitMerge: true, sharedRootBudget: true }
 })
@@ -224,3 +266,5 @@ await run('manual', async () => {
   assert.equal(final.snapshot.status, 'completed'); assert.equal(final.completion.manualEvidence.status, 'manual_accepted'); assert.equal(final.completion.testEvidence, undefined)
   return { preselectedPlan: true, explicitEvidenceRequired: true, noFabricatedPassedTest: true }
 })
+if (results.some(result => !result.passed)) process.exitCode = 1
+} finally { budget.close() }

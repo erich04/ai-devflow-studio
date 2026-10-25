@@ -6,6 +6,7 @@ import os from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // Paid opt-in, isolated profile and ledger. Credentials are decrypted only inside Electron.
+if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('The legacy conversation probe is excluded from this guarded CNY round')
 if (!process.env.DEVFLOW_WORKBENCH_LIVE_DATABASE || !process.env.DEVFLOW_WORKBENCH_LIVE_PROVIDER_ID) throw new Error('Set the existing credential database and provider ID explicitly for this paid probe.')
 const root = fileURLToPath(new URL('..', import.meta.url))
 const require = createRequire(import.meta.url)

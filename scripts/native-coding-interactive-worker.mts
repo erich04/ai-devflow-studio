@@ -5,20 +5,24 @@ import path from 'node:path'
 import { AgentProviderRequestError, createOpenAiCompatibleAgentProvider, governAgentProvider, buildCodingBrief, createWorkflowRunFromRequest, type AgentProvider, type CodingHarnessCommand, type Artifact } from '../packages/shared/src/index.ts'
 import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
 import { createNativeCodingExecutorV3 } from '../apps/desktop/electron/native-coding-harness.ts'
-import { createEvaluationLedger, evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
+import { evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
+import { openInteractiveRound } from './native-coding-round-budget.ts'
 
 const [configPath, keyPath, mode = 'new'] = process.argv.slice(2)
 if (!configPath || !keyPath) throw new Error('Expected configuration and private credential file')
 const config = JSON.parse(await readFile(configPath, 'utf8'))
+if (typeof config.roundRoot !== 'string' || typeof config.budgetScope !== 'string') throw new Error('Explicit shared round budget required')
+// Validate the durable round before even reading the credential; never fall back to a private ledger.
+const ledger = await openInteractiveRound(config.roundRoot, config.budgetScope)
 const root: string = config.root, delivery = path.join(root, 'delivery'), apiKey = (await readFile(keyPath, 'utf8')).trim()
 await mkdir(root, { recursive: true })
 const send = (value: unknown) => { if (process.connected) process.send?.(value) }
-const ledger = await createEvaluationLedger({ file: path.join(root, 'ledger.json'), projectId: 'interactive', maxCalls: 192, maxCostUsd: 100 })
 const store = await createLocalStore({ dbPath: path.join(root, 'local.sqlite') })
 let heldHeaders = false, announcedTools = false, announcedApplication = false
 const raw = createOpenAiCompatibleAgentProvider({ id: 'deepseek-interactive', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey, thinking: { mode: 'enabled', effort: 'high' }, structuredRequestTimeoutMs: 180000,
   fetcher: async (url, init) => {
-    const response = await fetch(url, init)
+    const response = await fetch(url, { ...init, redirect: 'error' })
+    if (ledger.limits.cny && [401, 402].includes(response.status)) await ledger.seal()
     if (mode === 'new' && config.holdFirstResponse && !heldHeaders) {
       heldHeaders = true; await saveJson(path.join(root, 'fault-model-headers.json'), { at: new Date().toISOString(), status: response.status, pid: process.pid })
       send({ event: 'model_headers', httpStatus: response.status })
@@ -26,7 +30,7 @@ const raw = createOpenAiCompatibleAgentProvider({ id: 'deepseek-interactive', mo
     }
     return response
   } })
-const capped: AgentProvider = { ...raw, resolveRequestPolicy: input => raw.resolveRequestPolicy!({ ...input, maxOutputTokens: Math.min(input.maxOutputTokens ?? 65536, 65536) }) }
+const capped: AgentProvider = { ...raw, resolveRequestPolicy: input => raw.resolveRequestPolicy!({ ...input, maxOutputTokens: Math.min(input.maxOutputTokens ?? ledger.limits.maxOutputTokens, ledger.limits.maxOutputTokens) }) }
 const governed = governAgentProvider(capped, 'interactive', ledger)
 let calls = 0
 const provider: AgentProvider = { ...governed, completeNativeConversation: async request => {
@@ -66,6 +70,7 @@ function persist() {
     const sessions = await store.listNativeCodingSessions('interactive')
     await saveJson(path.join(root, `sessions-${mode}.json`), sessions)
     await saveJson(path.join(root, 'usage.json'), evaluationUsage(ledger.records()))
+    await saveJson(path.join(root, 'ledger.json'), { readOnlyProjection: true, roundId: ledger.limits.roundId, scopeId: config.budgetScope, rows: ledger.records() })
   })
   return persistence
 }
@@ -85,12 +90,19 @@ if (mode === 'new') {
       executor: { version: 1, kind: 'direct-provider', executorId: 'operator-authored-fixture', executorVersion: '1', capabilityProfile: 'repository-read-only-v1', model: 'none-fixture-metadata', startedAt: now, completedAt: now, durationMs: 0, terminalReason: 'success', contextDigest: digest(config.prompt) } } }] : []
   const briefInput = { project, worktreePath: delivery, branchName: 'main', run: fixture.run, node, userInstruction: config.prompt, upstreamArtifacts, knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [] }
   const context = { ...briefInput, id: 'coding', workspace, requestedBy: 'operator', providerId: provider.id, now, brief: buildCodingBrief(briefInput) }
-  const result = await executor.start({ request: { stateVersion: 1, id: 'coding', executor: { id: executor.descriptor.id, version: 3 }, scope: { organizationId: null, projectId: null, userId: 'operator', sessionId: 'isolated', localProjectId: project.id, managedWorkspaceId: 'workspace' }, authority: { runId: fixture.run.id, nodeId: node.id, runVersion: fixture.run.version, policyVersion: 1 }, objectiveDigest: digest(config.prompt), contextDigest: digest(context.brief.prompt), requiredCapabilities: ['workspace_read'], budget: { maxTokens: 10000000, maxCostUsd: 100 }, expectedCheckpointVersion: 0, requestedAt: now, deadline: new Date(Date.now() + 900000).toISOString() }, runtimeContext: context })
+  const result = await executor.start({ request: { stateVersion: 1, id: 'coding', executor: { id: executor.descriptor.id, version: 3 }, scope: { organizationId: null, projectId: null, userId: 'operator', sessionId: 'isolated', localProjectId: project.id, managedWorkspaceId: 'workspace' }, authority: { runId: fixture.run.id, nodeId: node.id, runVersion: fixture.run.version, policyVersion: 1 }, objectiveDigest: digest(config.prompt), contextDigest: digest(context.brief.prompt), requiredCapabilities: ['workspace_read'], budget: { maxTokens: 10000000, maxCostUsd: ledger.limits.maxCostUsd }, expectedCheckpointVersion: 0, requestedAt: now, deadline: new Date(Date.now() + 900000).toISOString() }, runtimeContext: context })
   if (result.kind !== 'harness') throw new Error('Expected harness')
   await store.saveCodingAgentRun(result.codingRun)
 } else {
   const run = (await store.listCodingAgentRuns()).find(run => run.id === 'coding')!
   await executor.harness!.recover(run, authority)
+}
+let closing: Promise<void> | undefined
+function closeWorker() {
+  return closing ??= (async () => {
+    try { await executor.shutdown(); await persist() }
+    finally { try { await store.close() } finally { ledger.close() } }
+  })()
 }
 process.on('message', async (value: { id: number; command: Record<string, unknown> }) => {
   try {
@@ -98,7 +110,7 @@ process.on('message', async (value: { id: number; command: Record<string, unknow
     let result: unknown
     if (command.type === 'settled') { await executor.settled(String(command.codingRunId ?? 'coding')); result = true }
     else if (command.type === 'dump') { result = await store.listNativeCodingSessions('interactive') }
-    else if (command.type === 'close') { await executor.shutdown(); await persist(); await store.close(); send({ id: value.id, result: true }); process.disconnect(); return }
+    else if (command.type === 'close') { await closeWorker(); send({ id: value.id, result: true }); process.disconnect(); return }
     else {
       const bundle = await executor.harness!.command(command as CodingHarnessCommand, authority)
       if (bundle.completion) await store.saveCodingAgentRun({ ...bundle.codingRun, status: 'completed', diffArtifactId: bundle.completion.diff.id, completedAt: new Date().toISOString() })
@@ -108,5 +120,5 @@ process.on('message', async (value: { id: number; command: Record<string, unknow
     send({ id: value.id, result })
   } catch (error) { send({ id: value.id, error: (error instanceof Error ? error.message : String(error)).replaceAll(apiKey, '[redacted]') }) }
 })
-process.on('disconnect', () => { void executor.shutdown().then(() => persist()).then(() => store.close()).finally(() => process.exit(0)) })
+process.on('disconnect', () => { void closeWorker().finally(() => process.exit(0)) })
 send({ event: 'ready', mode, pid: process.pid })

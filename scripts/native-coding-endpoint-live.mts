@@ -4,6 +4,7 @@ import path from 'node:path'
 import { createOpenAiCompatibleAgentProvider, governAgentProvider, AgentProviderRequestError, type NativeToolMessage } from '../packages/shared/src/index.ts'
 import { createEvaluationLedger, evaluationUsage, saveJson } from './native-coding-live-support.ts'
 
+if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('The legacy endpoint matrix is excluded from this guarded CNY round')
 const [keyFile, directory] = process.argv.slice(2)
 if (!keyFile || !directory) throw new Error('Usage: endpoint-live <private-key-file> <new-output-directory>')
 const output = path.resolve(directory); await mkdir(output, { recursive: false })

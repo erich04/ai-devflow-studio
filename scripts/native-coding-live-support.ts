@@ -12,7 +12,16 @@ export async function saveJson(file: string, value: unknown) {
 }
 type LedgerRow = { quote: ModelCallQuote; boundUsd: number; settlement?: ModelCallSettlement; final?: boolean; settled?: boolean; costUsd: number | null }
 /** Same governed Provider/relay protocol as Main, with an isolated durable admission ledger. */
-export async function createEvaluationLedger(input: { file: string; projectId: string; maxCalls: number; maxCostUsd: number }) {
+export async function createEvaluationLedger(input: { file: string; projectId: string; maxCalls: number; maxCostUsd: number; roundRoot?: string; scopeId?: string }) {
+  const root = input.roundRoot ?? process.env.DEVFLOW_NATIVE_EVALUATION_ROUND
+  if (root || input.scopeId) {
+    if (!root || !input.scopeId) throw new Error('A shared evaluation requires its frozen round and scope; no private ledger fallback')
+    const { openInteractiveRound } = await import('./native-coding-round-budget.ts')
+    const ledger = await openInteractiveRound(root, input.scopeId)
+    const policy = ledger.limits.cny?.scopes[input.scopeId]
+    if (!policy || policy.projectId !== input.projectId) { ledger.close(); throw new Error('Evaluation scope project differs from its authorization') }
+    return ledger
+  }
   let rows: LedgerRow[] = []
   try {
     const saved = JSON.parse(await readFile(input.file, 'utf8'))
@@ -51,7 +60,7 @@ export async function createEvaluationLedger(input: { file: string; projectId: s
     }),
     pending: async projectId => rows.flatMap(row => row.quote.projectId === projectId && row.final && !row.settled && row.settlement ? [structuredClone(row.settlement)] : []),
   }
-  return { ...governance, records: () => structuredClone(rows) }
+  return { ...governance, records: () => structuredClone(rows), close: () => {} }
 }
 
 export function evaluationUsage(rows: LedgerRow[]) {
