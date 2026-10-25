@@ -4,6 +4,7 @@ import type { Artifact } from './domain'
 import { AgentProviderRequestError, createFakeAgentProvider, createOpenAiCompatibleAgentProvider } from './agent-review'
 import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workflow'
 import { indexKnowledgeSources } from './knowledge'
+import { assembleRetrievedKnowledgeContext } from './knowledge-retrieval-context'
 import { stageAgentFailureDetails } from './stage-agent-failure'
 import {
   DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS,
@@ -100,6 +101,83 @@ function approvedDesignFixture() {
     nodes: created.run.nodes.map((node) => node.kind === 'gate' && node.stage === 'clarify'
       ? { ...node, status: 'success' as const, artifactIds: [clarification.id] } : node) } }
 }
+
+describe('host-retrieved knowledge in workflow stages', () => {
+  const retrieval = (stage: 'clarify' | 'design', content = 'Only tasks completed for seven days may be removed.') =>
+    assembleRetrievedKnowledgeContext({
+      stage, scope: { projectId: created.run.projectId, userId: 'u-ling' }, queryDigest: 'query',
+      configGeneration: 'generation', degraded: false,
+      sources: [{ sourceRef: 'projection-1', path: 'docs/knowledge/rules.md', title: 'Rules',
+        contentDigest: 'digest', matchReason: 'both', content }],
+    })
+  it.each(['clarify', 'design'] as const)('sends the same grounded %s excerpt to both executor kinds', async (stage) => {
+    const fixture = stage === 'design' ? approvedDesignFixture() : created
+    for (const kind of ['direct-provider', 'local-agent'] as const) {
+      const execute = vi.fn(async () => ({
+        terminalReason: 'success' as const, toolCalls: 1, value: {
+          model: 'fixture', title: 'Result', summary: 'Result', content: 'Complete design and planned verification.', goals: ['goal'],
+          acceptanceCriteria: ['criterion'], nonGoals: ['none'], openQuestions: [], assumptions: [], risks: [],
+          repositoryFindings: { version: 1 as const, repositoryDigest: 'a'.repeat(64),
+            citations: [{ id: 'c1', path: 'README.md', contentDigest: 'b'.repeat(64) }],
+            verifiedFacts: [{ id: 'f1', statement: 'Repository exists', citationIds: ['c1'] }],
+            assumptions: [], openQuestions: [], uncheckedScopes: [] },
+        },
+      }))
+      const result = await runWorkflowStageAgent({
+        ...fixture, node: stage === 'clarify' ? clarifyNode() : designNode(),
+        executor: { kind, id: 'fixture', version: '1', model: 'fixture', execute },
+        requestedBy: 'u-ling', runtime: 'electron', retrievedKnowledge: retrieval(stage),
+      })
+      expect(result.prompt).toContain('Only tasks completed for seven days may be removed.')
+      expect(result.provenance.knowledgeContext?.retrievedKnowledge?.references).toHaveLength(1)
+      expect(result.provenance.knowledgeContext?.retrievedKnowledge?.references[0]?.sourceRef).toBe('projection-1')
+    }
+  })
+
+  it('drops retrieved excerpts before existing Memory when the combined stage input is full', async () => {
+    const provider = createFakeAgentProvider()
+    const generate = vi.fn(provider.generateWorkflowArtifact!)
+    provider.generateWorkflowArtifact = generate
+    const base = {
+      run: created.run, node: clarifyNode(), artifacts: created.artifacts, provider,
+      requestedBy: 'u-ling', runtime: 'electron' as const,
+      memoryContext: [{ id: 'm1', revision: 1, statement: 'MEMORY_KEPT' }],
+    }
+    await runWorkflowStageAgent(base)
+    const first = generate.mock.calls[0]![0]
+    const bytes = new TextEncoder().encode(JSON.stringify({
+      request: first.request, context: first.context, prompt: first.prompt,
+    })).byteLength
+    const assertRetrievedKnowledgeCurrent = vi.fn(async () => {})
+    const result = await runWorkflowStageAgent({
+      ...base, retrievedKnowledge: retrieval('clarify', 'OPTIONAL_RETRIEVAL'.repeat(100)),
+      assertRetrievedKnowledgeCurrent,
+      bounds: { timeoutMs: 1000, maxInputBytes: bytes + 100, maxOutputBytes: 65536, maxToolCalls: 64, maxCitations: 64 },
+    })
+    expect(result.prompt).toContain('MEMORY_KEPT')
+    expect(result.prompt).not.toContain('OPTIONAL_RETRIEVAL')
+    expect(result.provenance.knowledgeContext?.retrievedKnowledge).toMatchObject({
+      references: [], usedBytes: 0, omittedCount: 1,
+    })
+    expect(assertRetrievedKnowledgeCurrent).toHaveBeenCalledWith(result.provenance.knowledgeContext?.retrievedKnowledge)
+  })
+
+  it('does not dispatch when the host rejects currentness or the supplied scope mismatches', async () => {
+    const provider = createFakeAgentProvider()
+    const generate = vi.spyOn(provider, 'generateWorkflowArtifact')
+    const base = { run: created.run, node: clarifyNode(), artifacts: created.artifacts,
+      provider, requestedBy: 'u-ling', runtime: 'electron' as const }
+    await expect(runWorkflowStageAgent({
+      ...base, retrievedKnowledge: retrieval('clarify'),
+      assertRetrievedKnowledgeCurrent: async () => { throw new Error('Knowledge source changed') },
+    })).rejects.toThrow('Knowledge source changed')
+    const wrongScope = retrieval('clarify')
+    wrongScope.manifest.scope.userId = 'another-user'
+    await expect(runWorkflowStageAgent({ ...base, retrievedKnowledge: wrongScope }))
+      .rejects.toMatchObject({ terminalReason: 'evidence_invalid' })
+    expect(generate).not.toHaveBeenCalled()
+  })
+})
 
 describe('runWorkflowStageAgent', () => {
   it.each(['clarify', 'design'] as const)('passes saved conversation decisions to the %s model prompt', async (stage) => {

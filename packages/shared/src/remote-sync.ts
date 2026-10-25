@@ -297,8 +297,17 @@ function isAgentReviewContextManifest(value: unknown): value is AgentReviewConte
 function redactAgentReviewContextManifest(
   manifest: AgentReviewContextManifest,
 ): AgentReviewContextManifest {
+  // Hindsight is an explicitly selected local projection. Its scope, source paths and
+  // generation must not ride along with a team Review summary.
+  let residentKnowledge = manifest.knowledgeContext
+  if (residentKnowledge) {
+    const { retrievedKnowledge: _privateRetrieval, ...resident } = residentKnowledge
+    residentKnowledge = resident
+  }
+  const { backgroundMemory: _privateMemory, ...publicManifest } = manifest
   return {
-    ...manifest,
+    ...publicManifest,
+    ...(residentKnowledge ? { knowledgeContext: residentKnowledge } : {}),
     runRequest: { ...manifest.runRequest },
     subjectArtifacts: manifest.subjectArtifacts.map((artifact) => ({
       ...artifact,

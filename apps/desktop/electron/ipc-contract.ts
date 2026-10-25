@@ -18,6 +18,10 @@ import type {
   AgentRuntimeRendererSnapshot,
   CoordinationRendererSnapshot,
   AgentMemoryRendererSnapshot,
+  AutomaticMemoryStatus,
+  ConfigureAutomaticMemoryInput,
+  ResolveAutomaticMemoryDecisionInput,
+  RememberConversationMemoryInput,
   Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
@@ -135,7 +139,10 @@ export type CoordinationSessionSnapshot = CoordinationRendererSnapshot
  * Agent Memory lifecycle selection. With `runtimeId`: that Agent Runtime's exact scope.
  * Without: every Memory the project user can recall, including Coding Run learning (ADR 0024).
  */
-export type AgentMemoryLifecycleSelection = ListAgentRuntimesInput & {
+export type AgentMemoryLifecycleSelection = {
+  localProjectId: string
+  /** Omitted for free chat: Main resolves the stable local project principal. */
+  runId?: string
   runtimeId?: string
 }
 
@@ -158,6 +165,8 @@ export type ReviseAgentMemoryInput = AgentMemoryLifecycleSelection & {
   expectedContentDigest: string
   expectedProvenanceDigest: string
   statement: string
+  /** Explicit retention change. Omitted preserves the existing retention policy. */
+  pin?: boolean
 }
 
 export type DeleteAgentMemoryInput = AgentMemoryLifecycleSelection & {
@@ -236,6 +245,11 @@ export const ipcChannels = {
   dismissAgentMemoryCandidate: 'devflow:agent-memory:candidate:dismiss',
   reviseAgentMemory: 'devflow:agent-memory:revise',
   deleteAgentMemory: 'devflow:agent-memory:delete',
+  getAutomaticMemoryStatus: 'devflow:automatic-memory:status',
+  configureAutomaticMemory: 'devflow:automatic-memory:configure',
+  processAutomaticMemory: 'devflow:automatic-memory:process',
+  resolveAutomaticMemoryDecision: 'devflow:automatic-memory:resolve',
+  rememberConversationMemory: 'devflow:automatic-memory:remember',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   cancelWorkflowAgentNode: 'devflow:workflow-agent-node:cancel',
   requestClarificationChanges: 'devflow:clarification:changes:request',
@@ -258,6 +272,10 @@ export const ipcChannels = {
   materializeWorkRequest: 'devflow:work-requests:materialize',
   retryRemoteSyncOperation: 'devflow:remote-sync:operation:retry',
   loadRepositoryKnowledge: 'devflow:repository-knowledge:load',
+  getHindsightStatus: 'devflow:hindsight:status',
+  configureHindsight: 'devflow:hindsight:configure',
+  refreshHindsight: 'devflow:hindsight:refresh',
+  disableHindsight: 'devflow:hindsight:disable',
   refreshRepositoryKnowledge: 'devflow:repository-knowledge:refresh',
   loadDesktopPairing: 'devflow:desktop-pairing:load',
   pairDesktop: 'devflow:desktop-pairing:pair',
@@ -737,6 +755,11 @@ export type DevFlowDesktopApi = {
   deleteAgentMemory: (
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
+  getAutomaticMemoryStatus?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
+  configureAutomaticMemory?: (input: ConfigureAutomaticMemoryInput) => Promise<AutomaticMemoryStatus>
+  processAutomaticMemory?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
+  resolveAutomaticMemoryDecision?: (input: ResolveAutomaticMemoryDecisionInput) => Promise<AutomaticMemoryStatus>
+  rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
@@ -766,6 +789,10 @@ export type DevFlowDesktopApi = {
   saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
   listGateOverrides: (input?: ListGateOverridesInput) => Promise<GateOverrideDecision[]>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
+  getHindsightStatus?: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').HindsightStatus>
+  configureHindsight?: (input: import('@ai-devflow/shared').HindsightSetupInput) => Promise<import('@ai-devflow/shared').HindsightStatus>
+  refreshHindsight?: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').HindsightStatus>
+  disableHindsight?: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').HindsightStatus>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
@@ -1281,11 +1308,62 @@ export function parseListAgentMemoryLifecycleInput(
   return readAgentMemoryLifecycleSelection(value)
 }
 
+export function parseAutomaticMemoryProjectInput(value: unknown): { projectId: string } {
+  if (!isRecord(value)) throw new Error('Invalid automatic Memory project payload')
+  rejectUnexpectedFields(value, ['projectId'], 'automatic Memory project payload')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId') }
+}
+
+export function parseConfigureAutomaticMemoryInput(value: unknown): ConfigureAutomaticMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid automatic Memory configuration payload')
+  rejectUnexpectedFields(value, ['projectId', 'enabled', 'consent', 'maxRetainsPerDay'], 'automatic Memory configuration payload')
+  if (typeof value.enabled !== 'boolean' || typeof value.consent !== 'boolean' || (value.enabled && !value.consent)) {
+    throw new Error('Automatic Memory requires explicit project consent')
+  }
+  const maxRetainsPerDay = readExactPositiveVersion(value, 'maxRetainsPerDay')
+  if (maxRetainsPerDay > 100) throw new Error('Invalid maxRetainsPerDay: maximum is 100')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), enabled: value.enabled, consent: value.consent, maxRetainsPerDay }
+}
+
+export function parseResolveAutomaticMemoryDecisionInput(value: unknown): ResolveAutomaticMemoryDecisionInput {
+  if (!isRecord(value)) throw new Error('Invalid automatic Memory decision payload')
+  rejectUnexpectedFields(value, ['projectId', 'decisionId', 'action', 'targetMemoryId', 'expectedRevision'], 'automatic Memory decision payload')
+  if (value.action !== 'approve' && value.action !== 'ignore') throw new Error('Invalid automatic Memory decision action')
+  if ((value.targetMemoryId === undefined) !== (value.expectedRevision === undefined)) {
+    throw new Error('A conflict decision requires its exact target revision')
+  }
+  if (value.action === 'ignore' && value.targetMemoryId !== undefined) throw new Error('Ignoring cannot replace a Memory')
+  return {
+    projectId: readExactRequiredIdentifier(value, 'projectId'),
+    decisionId: readExactRequiredIdentifier(value, 'decisionId'), action: value.action,
+    ...(value.targetMemoryId === undefined ? {} : {
+      targetMemoryId: readExactRequiredIdentifier(value, 'targetMemoryId'),
+      expectedRevision: readExactPositiveVersion(value, 'expectedRevision'),
+    }),
+  }
+}
+
+export function parseRememberConversationMemoryInput(value: unknown): RememberConversationMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid remember conversation Memory payload')
+  rejectUnexpectedFields(value, ['projectId', 'conversationId', 'messageId', 'statement', 'pin'], 'remember conversation Memory payload')
+  if (value.pin !== undefined && typeof value.pin !== 'boolean') throw new Error('Invalid pin')
+  return {
+    projectId: readExactRequiredIdentifier(value, 'projectId'),
+    conversationId: readExactRequiredIdentifier(value, 'conversationId'),
+    messageId: readExactRequiredIdentifier(value, 'messageId'),
+    ...(value.statement === undefined ? {} : { statement: readExactAgentMemoryStatement(value, 'statement') }),
+    ...(value.pin === undefined ? {} : { pin: value.pin }),
+  }
+}
+
 /** `runtimeId` is optional: omitted selects the project-wide Memory view (ADR 0024). */
 function readAgentMemoryLifecycleSelection(value: Record<string, unknown>): AgentMemoryLifecycleSelection {
+  if (value.runtimeId !== undefined && value.runId === undefined) {
+    throw new Error('Agent Runtime Memory selection requires runId')
+  }
   return {
     ...(value.runtimeId === undefined ? {} : { runtimeId: readExactRequiredIdentifier(value, 'runtimeId') }),
-    runId: readExactRequiredIdentifier(value, 'runId'),
+    ...(value.runId === undefined ? {} : { runId: readExactRequiredIdentifier(value, 'runId') }),
     localProjectId: readExactRequiredIdentifier(value, 'localProjectId'),
   }
 }
@@ -1352,9 +1430,11 @@ export function parseReviseAgentMemoryInput(value: unknown): ReviseAgentMemoryIn
       'expectedContentDigest',
       'expectedProvenanceDigest',
       'statement',
+      'pin',
     ],
     'revise Agent Memory payload',
   )
+  if (value.pin !== undefined && typeof value.pin !== 'boolean') throw new Error('Invalid pin')
   return {
     ...readAgentMemoryLifecycleSelection(value),
     memoryId: readExactRequiredIdentifier(value, 'memoryId'),
@@ -1363,6 +1443,7 @@ export function parseReviseAgentMemoryInput(value: unknown): ReviseAgentMemoryIn
     expectedContentDigest: readExactRequiredDigest(value, 'expectedContentDigest'),
     expectedProvenanceDigest: readExactRequiredDigest(value, 'expectedProvenanceDigest'),
     statement: readExactAgentMemoryStatement(value, 'statement'),
+    ...(value.pin === undefined ? {} : { pin: value.pin }),
   }
 }
 

@@ -1673,6 +1673,7 @@ export function App() {
             relations={projectKnowledgeRelations}
             references={knowledgeReferences}
             selectedRun={selectedRun}
+            selectedLocalProjectId={selectedLocalProject?.id}
             supportContext={supportContext}
             focusedDocumentId={
               supportContext?.focusTarget === 'knowledge-reference'

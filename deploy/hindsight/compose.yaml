@@ -1,0 +1,60 @@
+name: devflow-hindsight
+
+services:
+  hindsight:
+    # v1.0.0 / 39c65ffe2f140d0c84cee58566cad8900c5b9908; multi-architecture digest.
+    image: ghcr.io/vectorize-io/hindsight:1.0.0@sha256:a88678c038b0e4340822b02a5efc566c56d8176b5bffa731bc433fd37f978e4c
+    restart: unless-stopped
+    init: true
+    shm_size: 1gb
+    mem_limit: 3g
+    cpus: 2
+    stop_grace_period: 45s
+    ports:
+      - "127.0.0.1:${DEVFLOW_HINDSIGHT_API_PORT:-8890}:8888"
+      - "127.0.0.1:${DEVFLOW_HINDSIGHT_UI_PORT:-9990}:9999"
+    environment:
+      # Default is infrastructure-only: no credentials and no reachable LLM.
+      HINDSIGHT_API_LLM_PROVIDER: ${DEVFLOW_HINDSIGHT_LLM_PROVIDER:-openai}
+      HINDSIGHT_API_LLM_MODEL: ${DEVFLOW_HINDSIGHT_LLM_MODEL:-devflow-unconfigured}
+      HINDSIGHT_API_LLM_BASE_URL: ${DEVFLOW_HINDSIGHT_LLM_BASE_URL:-http://127.0.0.1:9/v1}
+      HINDSIGHT_API_LLM_API_KEY: ${DEVFLOW_HINDSIGHT_LLM_API_KEY:-devflow-no-provider}
+      HINDSIGHT_API_ENABLE_BANK_CONFIG_API: "true"
+      HINDSIGHT_API_ENABLE_OBSERVATIONS: "false"
+      HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION: "false"
+      HINDSIGHT_API_ENABLE_BANK_LLM_HEALTH: "false"
+      HINDSIGHT_API_MCP_ENABLED: "false"
+      HINDSIGHT_API_WORKER_ID: devflow-hindsight-local
+      HINDSIGHT_API_WORKER_MAX_SLOTS: "1"
+      HINDSIGHT_API_WORKER_CONSOLIDATION_RESERVED_SLOTS: "0"
+      HINDSIGHT_API_WORKER_MAX_RETRIES: "0"
+      HINDSIGHT_API_LLM_MAX_CONCURRENT: "1"
+      HINDSIGHT_API_LLM_MAX_RETRIES: "0"
+      HINDSIGHT_API_LLM_TIMEOUT: "60"
+      HINDSIGHT_API_EMBEDDINGS_PROVIDER: local
+      HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: BAAI/bge-small-en-v1.5
+      HINDSIGHT_API_RERANKER_PROVIDER: local
+      HINDSIGHT_API_RERANKER_LOCAL_MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
+      # These two models are included in the full image; avoid runtime downloads.
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - data:/home/hindsight/.pg0
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; r=json.load(urllib.request.urlopen('http://127.0.0.1:8888/health',timeout=3)); assert r['status']=='healthy' and r['database']=='connected'"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  data:

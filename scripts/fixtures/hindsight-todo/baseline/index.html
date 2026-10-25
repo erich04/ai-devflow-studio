@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>任务清单</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <h1>任务清单</h1>
+      <form id="task-form" class="task-form">
+        <label class="visually-hidden" for="task-input">新任务内容</label>
+        <input
+          id="task-input"
+          class="task-input"
+          type="text"
+          placeholder="请输入任务内容"
+          autocomplete="off"
+        />
+        <button type="submit" class="add-button">添加</button>
+      </form>
+      <p id="message" class="message" role="status" aria-live="polite"></p>
+      <p id="storage-warning" class="warning" role="status"></p>
+      <ul id="task-list" class="task-list"></ul>
+      <p id="empty-state" class="empty-state">暂无任务，请添加第一条任务</p>
+    </main>
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
