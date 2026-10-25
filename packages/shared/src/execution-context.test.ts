@@ -36,4 +36,74 @@ describe('budgeted execution Context', () => {
     expect(first.receipt.outputBytes).toBeGreaterThan(first.prompt.length)
     expect(first.receipt.compacted).toBe(false)
   })
+
+  it('makes best-effort room for an optional section before upgrading narrative to full text', () => {
+    const input = {
+      pinned: 'Current request: keep the task ordering.',
+      sources: [
+        { id: 'approved', title: 'Approved design', content: 'Complete approved body.', summary: '', priority: 100, required: true },
+        { id: 'memory', title: 'Memory', content: 'Recorded user preference.', summary: '', priority: 95, required: true },
+        { id: 'history', title: 'Background', content: `${'Background observation.\n'.repeat(50)}Constraint: retain task identifiers.`, summary: 'Earlier observations.', priority: 60 },
+      ],
+      maxBytes: 1600,
+    }
+    const baseline = compactExecutionContext(input)
+    expect(baseline.receipt.compacted).toBe(false)
+    const reserved = compactExecutionContext({ ...input, reserveBytes: 800 })
+    expect(contextBytes(reserved.prompt)).toBeLessThanOrEqual(800)
+    expect(reserved.prompt).toContain(input.pinned)
+    expect(reserved.prompt).toContain('Complete approved body.')
+    expect(reserved.prompt).toContain('Recorded user preference.')
+    expect(reserved.prompt).toContain('Constraint: retain task identifiers.')
+    expect(reserved.receipt.sources.find(source => source.id === 'history')?.representation).toBe('summary')
+    expect(compactExecutionContext({ ...input, reserveBytes: 0 })).toEqual(baseline)
+  })
+
+  it('lets protected content consume the optional reservation and does not expand short sources into longer summaries', () => {
+    const input = {
+      pinned: 'Current request',
+      sources: [
+        { id: 'approved', title: 'Approved design', content: 'Approved detail. '.repeat(40), summary: '', priority: 100, required: true },
+        { id: 'rule', title: 'Rule', content: 'Must retain all identifiers.', summary: 'Required identifiers.', priority: 60 },
+      ],
+    }
+    const baseline = compactExecutionContext(input)
+    const reserved = compactExecutionContext({
+      ...input, maxBytes: contextBytes(baseline.prompt), reserveBytes: 800,
+    })
+    expect(reserved.prompt).toBe(baseline.prompt)
+    expect(reserved.receipt.outputBytes).toBe(reserved.receipt.budgetBytes)
+  })
+
+  it.each([400, 1600])('does not downgrade a protected source below its unreserved representation at %i bytes', (maxBytes) => {
+    const input = {
+      pinned: 'Current request',
+      sources: [
+        { id: 'instructions', title: 'Project Instructions', content: `${'Project background.\n'.repeat(45)}Use corepack pnpm.`,
+          summary: 'Read AGENTS.md.', priority: 75, preserveForReservation: true },
+        { id: 'history', title: 'History', content: 'Older observation.\n'.repeat(25), summary: 'Earlier observations.', priority: 60 },
+      ],
+      maxBytes,
+    }
+    const baseline = compactExecutionContext(input)
+    const reserved = compactExecutionContext({ ...input, reserveBytes: 1000 })
+    expect(reserved.receipt.sources.find(source => source.id === 'instructions'))
+      .toEqual(baseline.receipt.sources.find(source => source.id === 'instructions'))
+    expect(reserved.receipt.outputBytes).toBeLessThanOrEqual(maxBytes)
+  })
+
+  it('keeps explicit multiline constraint blocks when a reservation compresses ordinary background', () => {
+    const block = 'Constraints:\n- Retain task IDs.\n- Keep chronological order.'
+    const input = {
+      pinned: 'Current request',
+      sources: [{ id: 'background', title: 'Background', priority: 60, summary: 'Earlier observations.',
+        content: `${'Earlier observation.\n'.repeat(70)}${block}\n\n# History\nOptional historical detail.` }],
+      maxBytes: 1600,
+    }
+    expect(compactExecutionContext(input).receipt.compacted).toBe(false)
+    const reserved = compactExecutionContext({ ...input, reserveBytes: 800 })
+    expect(reserved.prompt).toContain(block)
+    expect(reserved.prompt).not.toContain('Optional historical detail.')
+    expect(reserved.receipt.outputBytes).toBeLessThanOrEqual(800)
+  })
 })

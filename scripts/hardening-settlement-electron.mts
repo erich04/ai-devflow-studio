@@ -10,9 +10,10 @@ import {
   delay, stopProcess, removeWorkspace, rootDir,
 } from './workspace-baseline/environment.mts'
 
-type Fault = 'none' | 'http-503' | 'connection-reset' | 'lost-ack'
+type Fault = 'none' | 'http-503' | 'connection-reset' | 'lost-ack' | 'delayed-503' | 'body-reset' | 'cancel-settlement'
+const stress = process.env.DEVFLOW_H6_STRESS === '1'
 const workspace = await createWorkspace('devflow-h6-')
-const report: any = { startedAt: new Date().toISOString(), cases: [], events: [], paidModelCalls: 0 }
+const report: any = { startedAt: new Date().toISOString(), stress, cases: [], events: [], paidModelCalls: 0 }
 const record = (event: string, detail: object = {}) => report.events.push({ at: Date.now(), event, ...detail })
 let fault: Fault = 'none'
 let team: Awaited<ReturnType<typeof startTeamApi>> | undefined
@@ -33,6 +34,19 @@ try {
     const settlement = request.url === '/api/runtime/model-calls/settle'
     const mode = settlement ? fault : 'none'
     if (settlement) record('settlement-request', { mode, id: JSON.parse(bytes.toString()).id })
+    if (mode === 'delayed-503' || mode === 'cancel-settlement') {
+      record('delayed-settlement-enter', { mode })
+      await delay(mode === 'delayed-503' ? 5000 : 1500)
+      response.writeHead(503, { 'content-type': 'application/json' }).end('{}')
+      return
+    }
+    if (mode === 'body-reset') {
+      response.writeHead(200, { 'content-type': 'application/json', 'content-length': 4096 })
+      response.write('{"status":')
+      await delay(50)
+      response.destroy()
+      return
+    }
     if (mode === 'http-503') {
       response.writeHead(503, { 'content-type': 'application/json' }).end('{"error":"H6 injected settlement outage"}')
       return
@@ -96,7 +110,10 @@ try {
   const ipc = async (method: string, input: any) => page.evaluate(({ method, input }) => (window.aiDevFlowDesktop as any)[method](input), { method, input })
   const completeDesign = (run: any, nodeId: string) => ipc('completeWorkflowAgentNode', { runId: run.id, nodeId, userId: 'u-erich', userName: 'Erich', providerId: 'h6-synthetic' })
 
-  for (const mode of ['none', ...Array.from({ length: 3 }, () => ['http-503', 'connection-reset', 'lost-ack']).flat()] as Fault[]) {
+  const modes: Fault[] = ['none']
+  for (let repetition = 0; repetition < (stress ? 8 : 3); repetition++) modes.push('http-503', 'connection-reset', 'lost-ack')
+  if (stress) for (let repetition = 0; repetition < 2; repetition++) modes.push('delayed-503', 'body-reset', 'cancel-settlement')
+  for (const mode of modes) {
     fault = 'none'
     const run = await ipc('createRun', { title: `H6 ${mode} ${report.cases.length + 1}`, request: 'Add checkedAt to health() and test the ISO timestamp; preserve status and only change the two src files.', projectId: project.id, creatorId: 'u-erich', branchName: `devflow/h6-${report.cases.length + 1}` })
     const clarify = run.nodes.find((n: any) => n.stage === 'clarify' && n.kind === 'agent')
@@ -110,6 +127,18 @@ try {
     const callsBefore: number = model.requests.length
     const result: any = { mode, startedAt: Date.now() }
     record('design-start', { mode })
+    // Cancel only after the model has returned and settlement has reached the proxy.
+    const startIndex = report.events.length
+    const cancellation = mode === 'cancel-settlement' ? (async () => {
+      const deadline = Date.now() + 15_000
+      while (!report.events.slice(startIndex).some((event: any) => event.event === 'delayed-settlement-enter')) {
+        assert(Date.now() < deadline, 'Settlement did not start')
+        await delay(20)
+      }
+      result.cancelAccepted = await ipc('cancelWorkflowAgentNode', { runId: run.id, nodeId: design.id })
+      assert.equal(result.cancelAccepted, true)
+      record('user-cancel', { mode })
+    })().then(() => null, (error: unknown) => error) : Promise.resolve(null)
     try { await completeDesign(run, design.id); result.succeeded = true }
     catch (error) {
       const message = String(error)
@@ -117,9 +146,18 @@ try {
       result.settlementSyncFailed = message.includes('settlement_sync_failed')
       result.billingConfirmed = message.includes('billing=confirmed')
       record('design-rejected', { mode, settlementSyncFailed: result.settlementSyncFailed, message })
-      assert(result.settlementSyncFailed, 'Expected the specific settlement_sync_failed error')
-      assert(result.billingConfirmed)
+      if (mode === 'cancel-settlement') {
+        result.cancelled = message.includes('failed closed: cancelled')
+        assert(result.cancelled)
+        // Cancellation returns promptly; final financial recording still completes independently.
+        await delay(1800)
+      } else {
+        assert(result.settlementSyncFailed, 'Expected the specific settlement_sync_failed error')
+        assert(result.billingConfirmed)
+      }
     }
+    const cancellationError = await cancellation
+    if (cancellationError) throw cancellationError
     await delay(1000)
     const state = await ipc('loadState', undefined)
     assert.equal(page.isClosed(), false)

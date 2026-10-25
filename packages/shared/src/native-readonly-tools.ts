@@ -7,12 +7,12 @@ export const readOnlyToolFields: Record<string, { required: string[]; optional: 
   repo_read: { required: ['path'], optional: [], description: '读取当前项目的普通文本文件，拒绝敏感文件与符号链接。' },
   repo_search: { required: ['query'], optional: ['path'], description: '在当前项目允许范围内搜索文本；搜索有明确边界。' },
   knowledge_list: { required: [], optional: ['stage', 'offset'], description: '列出项目知识目录中的规范（适用阶段、Gate 依据、摘要）与项目说明文件；知识不是 Gate 批准。' },
-  knowledge_read: { required: ['path'], optional: ['offset', 'limit'], description: '分页阅读知识目录中的一篇文档或仓库根目录的项目说明。' },
+  knowledge_search: { required: ['query'], optional: ['stage', 'limit'], description: '检索用户选中的知识；query 最多 2 KiB、最多 5 个来源。返回当前本地原文和带摘要的回读参数。未配置时使用 knowledge_list/read 或 repo_search。' },
+  knowledge_read: { required: [], optional: ['path', 'sourceRef', 'expectedDigest', 'offset', 'limit'], description: '分页阅读知识文档或项目说明；使用 knowledge_search 的来源句柄时同时传 expectedDigest，变化后须重新搜索。' },
   conversation_read: { required: [], optional: ['messageId', 'eventId', 'offset', 'limit'], description: '分页读取本会话的原始消息或工具事件；省略 ID 时列出本会话索引，不返回隐藏推理。' },
   // Superseded by knowledge_list/knowledge_read (knowledge-context K3); callable, not listed.
   knowledge: { required: ['query'], optional: [], description: '检索当前项目已配置的知识；知识不是 Gate 批准。', listed: false },
 }
-
 export type NativeToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } }
 export type NativeToolMessage = { role: 'assistant'; content: string | null; reasoning_content?: string; tool_calls?: NativeToolCall[] }
   | { role: 'tool'; tool_call_id: string; content: string }

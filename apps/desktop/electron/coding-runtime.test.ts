@@ -24,7 +24,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { assertOpenCodeAttemptReservation, estimateCodingRuntimeCost } from '@ai-devflow/shared'
+import { assembleRetrievedKnowledgeContext, assertOpenCodeAttemptReservation, estimateCodingRuntimeCost } from '@ai-devflow/shared'
 import {
   createFakeCodingEngineAdapter,
   createUnconfiguredCodingEngineAdapter,
@@ -2639,10 +2639,21 @@ describe('CodingRuntime', () => {
       }),
     }
     const budgetGuard = createAllowingBudgetGuard()
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: 'project-1', userId: 'user-1' },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1', degraded: false,
+      sources: [{ sourceRef: 'cleanup-v1', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic',
+        content: 'Only completed tasks older than seven days can be removed.' }],
+    })
+    const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
+    const assertRetrievedKnowledgeCurrent = vi.fn(async () => undefined)
     const runtime = createCodingRuntime({
       store,
       executor: createMeteredCompatibilityExecutor(engine),
       budgetGuard,
+      prepareRetrievedKnowledge,
+      assertRetrievedKnowledgeCurrent,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-canonical-brief'),
       now: fixedNow('2026-06-17T00:00:00.000Z'),
@@ -2659,6 +2670,14 @@ describe('CodingRuntime', () => {
 
     const startInput = vi.mocked(engine.start).mock.calls[0]?.[0] as unknown as { brief?: CodingBrief }
     expect(startInput.brief?.prompt).toBe(result.codingRun.prompt)
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1', userId: 'user-1', stage: 'build',
+      query: expect.stringContaining('Use the approved health endpoint design.'),
+    }))
+    expect(result.codingRun.prompt).toContain('Only completed tasks older than seven days can be removed.')
+    expect(result.codingRun.contextReceipt?.knowledgeContext?.retrievedKnowledge).toEqual(retrievedKnowledge.manifest)
+    expect(assertRetrievedKnowledgeCurrent).toHaveBeenCalledWith(retrievedKnowledge.manifest)
     expect(startInput).not.toHaveProperty('knowledgeChunks')
     expect(result.codingRun.prompt).toContain('Managed worktree: <managed-worktree-created-after-budget-approval>')
     expect(result.codingRun.prompt).not.toContain(repo)
@@ -2674,6 +2693,50 @@ describe('CodingRuntime', () => {
       timestamp: '2026-06-17T00:00:00.000Z',
     })
     expect(result.codingRun.runtimeCostSummary?.inputTokens).toBe(expectedCost.inputTokens)
+  })
+
+  it.each(['permission', 'test_completion'] as const)('rejects stale retrieved knowledge at %s without rewriting the saved brief', async (when) => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({ projects: [project(repo)], runs: [buildRun()] })
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: 'project-1', userId: 'user-1' },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1', degraded: false,
+      sources: [{ sourceRef: 'cleanup-v1', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic',
+        content: 'Only completed tasks older than seven days can be removed.' }],
+    })
+    let current = true
+    const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
+    const completeWorkflowBuild = vi.fn(async () => undefined)
+    const runTestCommand = vi.fn(async () => {
+      current = false
+      return { status: 'passed' as const, exitCode: 0, durationMs: 1, stdout: 'passed', stderr: '', redacted: true, summary: 'Passed.' }
+    })
+    const dependencies = {
+      store, engine: createFakeCodingEngineAdapter(),
+      prepareRetrievedKnowledge,
+      assertRetrievedKnowledgeCurrent: async () => { if (!current) throw new Error('Retrieved knowledge source changed') },
+      completeWorkflowBuild, runTestCommand,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    }
+    const started = await createCodingRuntime(dependencies).runCodingAgent({
+      runId: 'run-1', nodeId: 'node-build', projectId: 'project-1',
+      requestedBy: 'user-1', userInstruction: 'Add the marker file.',
+    })
+    if (when === 'permission') current = false
+    // The next request gets a new runtime but must validate the receipt of the old prompt.
+    const resumed = createCodingRuntime(dependencies)
+    await expect(resumed.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id, codingRunId: started.codingRun.id,
+      decidedBy: 'user-1', decision: 'approved', comment: 'Approve exact test fixture.',
+    })).rejects.toThrow('Retrieved knowledge source changed')
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+    expect(store.codingRuns.at(-1)?.prompt).toBe(started.codingRun.prompt)
+    expect(store.codingRuns.at(-1)?.status).toBe('failed')
+    expect(completeWorkflowBuild).not.toHaveBeenCalled()
+    expect(runTestCommand).toHaveBeenCalledTimes(when === 'permission' ? 0 : 1)
+    expect(store.testEvidence).toHaveLength(when === 'permission' ? 0 : 1)
   })
 
   it('starts a human-approved retry attempt with remediation context in the coding brief', async () => {

@@ -46,7 +46,7 @@ export async function listActiveAgentMemoryRevisions(
  */
 export type AgentMemoryLifecycleSelection = {
   runtimeId?: string
-  runId: string
+  runId?: string
   localProjectId: string
 }
 
@@ -59,7 +59,8 @@ export type AgentMemoryLifecycleAuthority = {
   stillCurrent(): Promise<boolean>
 }
 
-export type AgentMemoryAuthorityStore = Pick<LocalStore, 'getAgentRuntime' | 'getRun' | 'getDesktopPairingCredential'>
+export type AgentMemoryAuthorityStore = Pick<LocalStore, 'getAgentRuntime' | 'getRun' | 'getDesktopPairingCredential'> &
+  Partial<Pick<LocalStore, 'resolveLocalProjectMemoryPrincipal'>>
 
 export type ResolveAgentMemoryAuthorityResult =
   | { ok: true; authority: AgentMemoryLifecycleAuthority }
@@ -100,12 +101,15 @@ export async function resolveAgentMemoryLifecycleAuthority(
   selection: AgentMemoryLifecycleSelection,
 ): Promise<ResolveAgentMemoryAuthorityResult> {
   const [run, pairing] = await Promise.all([
-    store.getRun(selection.runId),
+    selection.runId === undefined ? null : store.getRun(selection.runId),
     store.getDesktopPairingCredential(),
   ])
-  if (run === null || run.projectId !== selection.localProjectId) return { ok: false, reason: 'stale_selection' }
+  if (selection.runId !== undefined && (run === null || run.projectId !== selection.localProjectId)) {
+    return { ok: false, reason: 'stale_selection' }
+  }
 
   if (selection.runtimeId !== undefined) {
+    if (run === null) return { ok: false, reason: 'stale_selection' }
     const runtimeId = selection.runtimeId
     const runtime = await store.getAgentRuntime(runtimeId)
     if (
@@ -143,6 +147,13 @@ export async function resolveAgentMemoryLifecycleAuthority(
     }
   }
 
+  const paired = pairing?.localProjectId === selection.localProjectId
+  const principal = paired ? null : await store.resolveLocalProjectMemoryPrincipal?.(selection.localProjectId)
+  // The fallback preserves older injected stores; production LocalStore always resolves a principal.
+  const localUserId = principal?.status === 'resolved' ? principal.userId : principal === undefined ? run?.creatorId : undefined
+  if (!paired && (!localUserId || (run !== null && localUserId !== run.creatorId))) {
+    return { ok: false, reason: 'invalid_authority' }
+  }
   const scope: KnowledgeRetrievalScope = pairing?.localProjectId === selection.localProjectId
     ? {
         kind: 'team', organizationId: pairing.organizationId, projectId: pairing.projectId,
@@ -150,7 +161,7 @@ export async function resolveAgentMemoryLifecycleAuthority(
       }
     : {
         kind: 'local', organizationId: null, projectId: null,
-        userId: run.creatorId, sessionId: LOCAL_PROJECT_VIEW_SESSION, localProjectId: selection.localProjectId,
+        userId: localUserId!, sessionId: LOCAL_PROJECT_VIEW_SESSION, localProjectId: selection.localProjectId,
       }
   const inScope = (candidate: KnowledgeRetrievalScope) => agentMemoryScopesMatch(candidate, scope, 'user_project')
   return {
@@ -161,13 +172,15 @@ export async function resolveAgentMemoryLifecycleAuthority(
       inScope,
       candidateVisible: (candidate) => inScope(candidate.scope),
       async stillCurrent() {
-        const [currentRun, currentPairing] = await Promise.all([
-          store.getRun(selection.runId),
+        const [currentRun, currentPairing, currentPrincipal] = await Promise.all([
+          selection.runId === undefined ? null : store.getRun(selection.runId),
           store.getDesktopPairingCredential(),
+          scope.kind === 'local' ? store.resolveLocalProjectMemoryPrincipal?.(selection.localProjectId) : null,
         ])
-        return currentRun !== null &&
-          currentRun.projectId === selection.localProjectId &&
-          currentRun.creatorId === run.creatorId &&
+        return (selection.runId === undefined || (currentRun !== null && run !== null &&
+          currentRun.projectId === selection.localProjectId && currentRun.creatorId === run.creatorId)) &&
+          (scope.kind !== 'local' || currentPrincipal === undefined ||
+            (currentPrincipal?.status === 'resolved' && currentPrincipal.userId === scope.userId)) &&
           pairingsMatch(currentPairing, pairing)
       },
     },

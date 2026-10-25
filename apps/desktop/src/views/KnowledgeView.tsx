@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { HindsightPanel } from '../components/HindsightPanel'
 import type {
   Artifact,
   KnowledgeDocument,
@@ -45,6 +46,7 @@ export function KnowledgeView({
   relations,
   references,
   selectedRun,
+  selectedLocalProjectId,
   artifacts,
   supportContext,
   focusedDocumentId,
@@ -65,6 +67,8 @@ export function KnowledgeView({
   relations: KnowledgeRelation[]
   references: KnowledgeReference[]
   selectedRun: WorkflowRun | undefined
+  /** Host-selected local project owns configuration, including before the first Run. */
+  selectedLocalProjectId: string | undefined
   /** Optional: gives citing materials their titles and revisions; without it they read “未加载的材料”. */
   artifacts?: readonly Artifact[] | undefined
   supportContext: SupportContext | null
@@ -201,6 +205,7 @@ export function KnowledgeView({
   return (
     <section className="page-grid" data-testid="knowledge-view">
       <div className="page-main">
+        {selectedLocalProjectId && <HindsightPanel key={selectedLocalProjectId} projectId={selectedLocalProjectId} documents={documents} />}
         <div className="section-heading">
           <span>知识治理</span>
           <strong>仓库 Markdown 索引</strong>

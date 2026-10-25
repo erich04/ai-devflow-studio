@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "request": "按照项目知识规范，为中文任务清单增加批量清理已完成任务的能力；保持既有功能与存储兼容，补齐自动化测试和 README。",
+  "targetImplementedInBaseline": false,
+  "expectedBehaviour": [
+    "只删除 done 为 true 的任务，返回实际删除数量",
+    "未完成任务全部字段及相对顺序不变",
+    "保持 tasklist.tasks.v1 与 JSON 数组格式，刷新不恢复已删除项",
+    "无可清理项时禁用按钮，有完成项时可用",
+    "直接执行，不增加确认或撤销；初版成功文案为已清除 N 项",
+    "存储失败保持内存可用，不声称刷新可保留",
+    "无新依赖，原有功能与输入边界不回归"
+  ],
+  "stages": [
+    {"stage":"clarify","checks":["清理范围与未完成项保持","需求中的未确定项不能从知识中猜测"]},
+    {"stage":"clarification-review","checks":["实际收到当前版本知识","规范不是批准记录"]},
+    {"stage":"design","checks":["store/dom/app 职责","存储兼容与退化","测试计划"]},
+    {"stage":"design-review","checks":["实际收到设计和当前知识","源文档更新后旧引用不可续用"]},
+    {"stage":"build","checks":["Native analysis/implementation 或 OpenCode 执行实际收到知识","真实差异实现目标而非预置成功"]},
+    {"stage":"test","checks":["实际执行 npm test 并归档退出码","逻辑测试与浏览器证据分开"]},
+    {"stage":"pr","checks":["交付包记录当前引用和实际证据","不自动创建或批准远端 PR"]},
+    {"stage":"accept","checks":["真实浏览器行为检查","规范、模型意见、测试结果和人工批准分开"]}
+  ],
+  "revision": {
+    "path": "docs/knowledge/interaction-rules.md",
+    "from": "已清除 N 项",
+    "to": "已移除 N 项",
+    "versionFrom": "ui-v1",
+    "versionTo": "ui-v2"
+  },
+  "evidenceKinds": ["deterministic-local-service","real-hindsight-service","real-model-provider","real-electron-ui","real-todo-browser"],
+  "notEvidence": ["模型自述已测试","受控响应声称真实模型","历史 Todo 验收套用本轮","预置完成状态或预先实现目标"]
+}

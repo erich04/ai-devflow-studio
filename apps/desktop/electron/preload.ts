@@ -74,6 +74,11 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.reviseAgentMemory, input),
   deleteAgentMemory: (input) =>
     ipcRenderer.invoke(ipcChannels.deleteAgentMemory, input),
+  getAutomaticMemoryStatus: (input) => ipcRenderer.invoke(ipcChannels.getAutomaticMemoryStatus, input),
+  configureAutomaticMemory: (input) => ipcRenderer.invoke(ipcChannels.configureAutomaticMemory, input),
+  processAutomaticMemory: (input) => ipcRenderer.invoke(ipcChannels.processAutomaticMemory, input),
+  resolveAutomaticMemoryDecision: (input) => ipcRenderer.invoke(ipcChannels.resolveAutomaticMemoryDecision, input),
+  rememberConversationMemory: (input) => ipcRenderer.invoke(ipcChannels.rememberConversationMemory, input),
   cancelWorkflowAgentNode: (input) => ipcRenderer.invoke(ipcChannels.cancelWorkflowAgentNode, input),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
@@ -98,6 +103,10 @@ const desktopApi: DevFlowDesktopApi = {
   saveGateOverride: (input) => ipcRenderer.invoke(ipcChannels.saveGateOverride, input),
   listGateOverrides: (input) => ipcRenderer.invoke(ipcChannels.listGateOverrides, input),
   saveSettings: (settings) => ipcRenderer.invoke(ipcChannels.saveSettings, settings),
+  getHindsightStatus: (input) => ipcRenderer.invoke(ipcChannels.getHindsightStatus, input),
+  configureHindsight: (input) => ipcRenderer.invoke(ipcChannels.configureHindsight, input),
+  refreshHindsight: (input) => ipcRenderer.invoke(ipcChannels.refreshHindsight, input),
+  disableHindsight: (input) => ipcRenderer.invoke(ipcChannels.disableHindsight, input),
   saveMcpServers: (servers) => ipcRenderer.invoke(ipcChannels.saveMcpServers, servers),
   listAgentProviders: () => ipcRenderer.invoke(ipcChannels.listAgentProviders),
   updateProviderThinking: (input) => ipcRenderer.invoke(ipcChannels.updateProviderThinking, input),

@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest'
 import type {
   KnowledgeDocument,
   KnowledgeEntity,
   KnowledgeReference,
   KnowledgeRelation,
+  HindsightStatus,
 } from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import { buildKnowledgeDataSource, formatLocalTime, type SupportContext } from '../app/desktop-view-model'
@@ -94,6 +95,7 @@ function renderView(overrides: Partial<Parameters<typeof KnowledgeView>[0]> = {}
     relations,
     references,
     selectedRun: run,
+    selectedLocalProjectId: run.projectId,
     artifacts: fixtureArtifacts,
     supportContext: null,
     focusedDocumentId: undefined,
@@ -128,6 +130,45 @@ afterEach(() => {
 })
 
 describe('KnowledgeView', () => {
+  function installHindsightApi() {
+    const status: HindsightStatus = { configured: false, enabled: false, transportAvailable: true,
+      endpoint: 'http://127.0.0.1:8890', selectedPaths: [], includeMemories: false, counts: {}, note: '真实项目配置入口。' }
+    const api = { getHindsightStatus: vi.fn(async () => status), configureHindsight: vi.fn(async () => status),
+      refreshHindsight: vi.fn(async () => status), disableHindsight: vi.fn(async () => status) }
+    const previous = Object.getOwnPropertyDescriptor(window, 'aiDevFlowDesktop')
+    Object.defineProperty(window, 'aiDevFlowDesktop', { configurable: true, value: api })
+    onTestFinished(() => {
+      if (previous) Object.defineProperty(window, 'aiDevFlowDesktop', previous)
+      else delete window.aiDevFlowDesktop
+    })
+    return api
+  }
+
+  it('lets a selected local project configure Hindsight before its first Run', async () => {
+    const api = installHindsightApi()
+    renderView({ selectedRun: undefined, selectedLocalProjectId: 'local-without-run' })
+    await screen.findByText('真实项目配置入口。')
+    expect(api.getHindsightStatus).toHaveBeenCalledWith({ projectId: 'local-without-run' })
+    fireEvent.click(screen.getByText('配置来源与模型'))
+    fireEvent.click(screen.getByRole('button', { name: '保存选择' }))
+    await waitFor(() => expect(api.configureHindsight).toHaveBeenCalledWith(expect.objectContaining({ projectId: 'local-without-run' })))
+  })
+
+  it('uses the current local project instead of a stale Run from another project', async () => {
+    const api = installHindsightApi()
+    renderView({ selectedRun: run, selectedLocalProjectId: 'different-local-project' })
+    await screen.findByText('真实项目配置入口。')
+    expect(api.getHindsightStatus).toHaveBeenCalledWith({ projectId: 'different-local-project' })
+    expect(api.getHindsightStatus).not.toHaveBeenCalledWith({ projectId: run.projectId })
+  })
+
+  it('does not expose Hindsight configuration from a Run when no local project is selected', () => {
+    const api = installHindsightApi()
+    renderView({ selectedRun: run, selectedLocalProjectId: undefined })
+    expect(screen.queryByRole('region', { name: 'Hindsight 知识与记忆' })).not.toBeInTheDocument()
+    expect(api.getHindsightStatus).not.toHaveBeenCalled()
+  })
+
   it('shows each cited document once with the places that cite it beneath', () => {
     renderView()
 
