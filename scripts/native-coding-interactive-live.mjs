@@ -56,8 +56,9 @@ await save(path.join(output, 'protocol.json'), { frozenAt: new Date().toISOStrin
   unknownRetryAuthorization: 'One operator-authorized additional attempt after verifying no automatic replay; original unknown cost retained.', scope: 'Real model, production executor/tools/store/approval/command ownership. Direct approved fixture context, not a Team UI test. Fault injection occurs only in the isolated worker at actual response/journal/command events.' })
 
 let commandNumber = 0
-const results = [], clients = new Set()
+const results = [], clients = new Set(), finishedScenarios = new Set()
 function start(id, mode = 'new') {
+  if (finishedScenarios.has(id)) throw new Error('Scenario has ended; no new paid worker may start')
   const events = [], pending = new Map(), actions = [], log = createWriteStream(path.join(output, `${id}-${mode}.log`), { flags: 'wx', mode: 0o600 })
   const child = spawn(process.execPath, ['--import', 'tsx', 'scripts/native-coding-interactive-worker.mts', path.join(output, `${id}.json`), path.resolve(keyFile), mode], { cwd: repo, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
   child.stdout.pipe(log, { end: false }); child.stderr.pipe(log, { end: false })
@@ -76,7 +77,14 @@ function start(id, mode = 'new') {
         catch (error) { if (!['pause', 'cancel'].includes(body.type) || attempt >= 4 || !error.message.includes('任务已更新')) throw error }
       }
     },
-    async stop(kill = false) { if (!exited) { if (kill) child.kill('SIGKILL'); else await client.request({ type: 'close' }) }; const exit = await closed; await save(path.join(output, `${id}-${mode}-operator.json`), { events, actions, exit }); clients.delete(client); return exit },
+    async stop(kill = false) {
+      // A stalled shutdown must not keep a paid worker alive beyond the scenario deadline.
+      const deadline = setTimeout(() => { if (!exited) child.kill('SIGKILL') }, 10000)
+      try {
+        if (!exited) { if (kill) child.kill('SIGKILL'); else await client.request({ type: 'close' }).catch(() => { if (!exited) child.kill('SIGKILL') }) }
+        const exit = await closed; await save(path.join(output, `${id}-${mode}-operator.json`), { events, actions, exit }); clients.delete(client); return exit
+      } finally { clearTimeout(deadline) }
+    },
   }; clients.add(client); return client
 }
 async function fixture(id, mode = 'new', manualValidationPlan) {
@@ -108,15 +116,21 @@ const deliveredValue = id => readFile(path.join(configs[id].root, 'delivery/valu
 async function run(id, action) {
   if (!selected.has(id)) return
   const started = Date.now(), record = { id, passed: false }; results.push(record)
+  let deadline
   console.log(JSON.stringify({ event: 'scenario_start', id }))
   try {
     if (!budget.summary().canStartCall) {
       record.blocked = 'round_budget_exhausted'
       record.failure = 'The shared round cannot reserve another bounded request; no worker was started.'
-    } else { record.evidence = await action(); record.passed = true }
+    } else {
+      record.evidence = await Promise.race([action(), new Promise((_, reject) => { deadline = setTimeout(() => reject(new Error('Frozen interactive scenario wall-time limit (8 minutes)')), 480000) })])
+      record.passed = true
+    }
   }
   catch (error) { record.failure = error.message }
   finally {
+    clearTimeout(deadline)
+    finishedScenarios.add(id)
     for (const client of [...clients]) await client.stop().catch(() => client.stop(true).catch(() => {}))
     record.durationMs = Date.now() - started
     record.usage = budget.scopeUsage(configs[id].budgetScope)

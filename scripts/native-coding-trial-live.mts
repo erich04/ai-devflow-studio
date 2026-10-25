@@ -16,11 +16,12 @@ import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime
 import { createEvaluationLedger, evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
 import { handleEvaluationChildControls } from './native-coding-live-operator.ts'
 
-export type TrialInput = { id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string }
+export type TrialInput = { id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; roundRoot?: string; scopeId?: string }
 export async function runLiveTrial(input: TrialInput, apiKey: string) {
-  await mkdir(input.output)
   const start = Date.now(), now = () => new Date().toISOString(), projectId = 'evaluation-project', providerId = 'deepseek-evaluation'
-  const ledger = await createEvaluationLedger({ file: path.join(input.output, 'ledger.json'), projectId, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd })
+  const ledger = await createEvaluationLedger({ file: path.join(input.output, 'ledger.json'), projectId, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd,
+    ...(input.roundRoot ? { roundRoot: input.roundRoot } : {}), ...(input.scopeId ? { scopeId: input.scopeId } : {}) })
+  await mkdir(input.output)
   const store = await createLocalStore({ dbPath: path.join(input.output, 'devflow.sqlite') })
   const project = { id: projectId, name: 'Authorized Native comparison', path: input.repository, packageManager: 'pnpm' as const, testCommand: input.testCommand, createdAt: now(), updatedAt: now() }
   await store.upsertProject(project)
@@ -29,10 +30,11 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const deadlineSignal = (signal?: AbortSignal | null) => signal ? AbortSignal.any([signal, deadlineAbort.signal]) : deadlineAbort.signal
   let providerUnavailable: { httpStatus: number; at: string } | undefined
   const providerFetch: typeof fetch = async (url, init) => {
-    const response = await fetch(url, { ...init, signal: deadlineSignal(init?.signal) })
+    const response = await fetch(url, { ...init, redirect: 'error', signal: deadlineSignal(init?.signal) })
     if (response.status === 401 || response.status === 402) {
       providerUnavailable = { httpStatus: response.status, at: now() }
       await saveJson(path.join(input.output, 'provider-availability.json'), providerUnavailable)
+      if ('seal' in ledger) await ledger.seal()
     }
     return response
   }
@@ -156,6 +158,9 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
     await saveJson(path.join(input.output, 'test-evidence.json'), await store.listTestEvidence(run.id))
     await store.close()
     console.log(JSON.stringify({ id: input.id, engine: input.engine, status: report.status, failure, modelCalls: ledger.records().length, costUsd: usage.costUsd }))
+    if ('summary' in ledger) await saveJson(path.join(input.output, 'round-budget.json'), ledger.summary())
+    if (input.roundRoot) await saveJson(path.join(input.output, 'ledger.json'), { readOnlyProjection: true, rows: ledger.records() })
+    ledger.close()
   }
 }
 
@@ -163,5 +168,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   const [inputPath, keyPath] = process.argv.slice(2)
   if (!inputPath || !keyPath) throw new Error('Usage: trial-live <trial-input.json> <private-key-file>')
   const input = JSON.parse(await readFile(inputPath, 'utf8')) as TrialInput
+  if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) {
+    if (!input.roundRoot || !input.scopeId) throw new Error('Guarded trial requires its frozen shared round and scope before loading credentials')
+    const { openInteractiveRound } = await import('./native-coding-round-budget.ts')
+    const gate = await openInteractiveRound(input.roundRoot, input.scopeId); gate.close()
+  }
   await runLiveTrial(input, (await readFile(keyPath, 'utf8')).trim())
 }

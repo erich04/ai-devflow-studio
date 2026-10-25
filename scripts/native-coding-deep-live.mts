@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { runLiveTrial } from './native-coding-trial-live.mts'
 import { saveJson, digest } from './native-coding-live-support.ts'
 
+if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('The legacy three-engine deep entry is excluded from this guarded CNY round')
 const [outputPath, keyPath] = process.argv.slice(2)
 if (!outputPath || !keyPath) throw new Error('Usage: deep-live <new-output> <private-key-file>')
 const root = path.resolve(outputPath); await mkdir(root)
