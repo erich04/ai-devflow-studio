@@ -587,6 +587,8 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
           ...adapter,
           start: (input) => modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.start(input)),
           continuePermission: (input) => modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.continuePermission(input)),
+          ...(adapter.replyQuestion ? { replyQuestion: (input: Parameters<NonNullable<CodingExecutor['replyQuestion']>>[0]) =>
+            modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.replyQuestion!(input)) } : {}),
           ...(adapter.refreshPermission ? { refreshPermission: (input: Parameters<NonNullable<CodingExecutor['refreshPermission']>>[0]) =>
             modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.refreshPermission!(input)) } : {}),
         } satisfies CodingExecutor
