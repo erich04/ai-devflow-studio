@@ -1544,6 +1544,61 @@ describe('degradeOlderObservations', () => {
 
 // A package: test the host boundary before adding configurable investigation behaviour.
 describe('bounded investigation and diagnostic export', () => {
+  it('keeps each attempt linked to its original batch settings after reconfiguration (#250)', async () => {
+    let first = true
+    const h = harness(async input => {
+      if (input.systemPrompt.includes('阶段总结')) return { value: { text: '阶段已暂停。' } }
+      if (first) { first = false; return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } } }
+      return { value: { text: '已有证据足以完成。' } }
+    })
+    const id = await create(h.service)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 1, maxDurationMs: 30000 })
+    const paused = await send(h.service, id)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 30, maxDurationMs: 180000 })
+    await h.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+    await h.service.settled(id)
+    const report = (await h.service.command({ type: 'export_diagnostics', projectId, conversationId: id })).diagnostics!
+    expect(report.calls).toHaveLength(3)
+    for (const call of report.calls.slice(0, 2)) expect(call.attempt).toMatchObject({ batchId: paused.investigationProgress!.batch.id, maxSteps: 1, maxDurationMs: 30000, policySource: 'conversation' })
+    expect(report.calls[2]?.attempt).toMatchObject({ maxSteps: 30, maxDurationMs: 180000 })
+    expect(report.calls[2]?.attempt?.batchId).not.toBe(paused.investigationProgress!.batch.id)
+  })
+
+  it.each(['investigation', 'summary'])('preserves the %s provider failure and usage when saving its diagnostics fails once (#248)', async stage => {
+    let rejected = false
+    const failingStore = new Proxy(store, { get(target, key) {
+      if (key !== 'saveWorkbenchConversation') return Reflect.get(target, key)
+      return async (...args: Parameters<LocalStore['saveWorkbenchConversation']>) => {
+        if (!rejected && args[0].messages.some(m => m.failure?.reason === 'invalid_json')) {
+          rejected = true
+          throw new Error('SQLITE_IOERR PRIVATE_STORAGE_DETAIL')
+        }
+        return target.saveWorkbenchConversation(...args)
+      }
+    } })
+    const h = harness(async input => {
+      if (stage === 'summary' && !input.systemPrompt.includes('阶段总结')) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+      throw new AgentProviderRequestError({ code: 'invalid_model_output', httpStatus: 200,
+      sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'confirmed', retryable: true,
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, responseMetadata: { httpStatus: 200, parserCategory: 'model_json', responseId: 'original-response' } })
+    }, true, { store: failingStore })
+    const id = await create(h.service)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 1, maxDurationMs: 30000 })
+    const result = await send(h.service, id)
+    expect(rejected).toBe(true)
+    expect(h.calls).toHaveLength(stage === 'summary' ? 2 : 1)
+    expect(result.status).toBe('failed')
+    expect(result.failure).toMatchObject({ code: 'invalid_model_output', reason: 'invalid_json', diagnosticPersistenceFailed: true })
+    expect(result.error).toContain('保存失败')
+    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(15)
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_STORAGE_DETAIL')
+    const report = (await h.service.command({ type: 'export_diagnostics', projectId, conversationId: result.id })).diagnostics!
+    const failed = report.calls.filter(c => c.failure)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]?.failure).toMatchObject({ reason: 'invalid_json', diagnosticPersistenceFailed: true })
+    expect(failed[0]?.response).toMatchObject({ responseId: 'original-response', parserCategory: 'model_json' })
+  })
+
   it('recovers the exact third/eighth-call JSON failures and preserves all nine attempts after restart (#248/#249)', async () => {
     const paths = ['tasks.ts', ...Array.from({ length: 5 }, (_, i) => `evidence-${i}.ts`)]
     for (const file of paths.slice(1)) await writeFile(path.join(project.path, file), `export const evidence = '${file}'`)

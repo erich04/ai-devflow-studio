@@ -101,6 +101,11 @@ export function recordInvestigationRequest(state: InvestigationState, request: I
 
 export function advanceInvestigationStep(state: InvestigationState): void { state.batch.steps++ }
 
+/** Snapshot the effective batch at dispatch; later user settings must not rewrite historical attempts. */
+export function investigationAttemptContext(state: InvestigationState) {
+  return { batchId: state.batch.id, maxSteps: state.policy.maxSteps, maxDurationMs: state.policy.maxDurationMs, policySource: state.policy.source }
+}
+
 function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable)
   if (object(value)) return Object.fromEntries(Object.keys(value).sort().filter(key => value[key] !== undefined).map(key => [key, stable(value[key])]))

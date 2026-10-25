@@ -27,7 +27,7 @@ export type ConversationDraft = ConversationTarget & {
     humanAcknowledgedAt?: string
   }
 }
-export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string } & Partial<import('@ai-devflow/shared').AgentProviderResponseMetadata>
+export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string; diagnosticPersistenceFailed?: boolean } & Partial<import('@ai-devflow/shared').AgentProviderResponseMetadata>
 export type ConversationCheckpoint = {
   version: 1
   turnId: string
@@ -77,7 +77,7 @@ export type ConversationMessage = {
   failure?: ConversationFailure
   /** Recorded on the existing per-call notice, including failed and retried calls. */
   memoryReceipt?: ConversationMemoryReceipt
-  attempt?: { turnId: string; step: number; cycle: number; recovery: number; group: string; startedAt: string; durationMs?: number; status: 'running' | 'completed' | 'failed' }
+  attempt?: { turnId: string; step: number; cycle: number; recovery: number; group: string; startedAt: string; durationMs?: number; status: 'running' | 'completed' | 'failed'; batchId?: string; maxSteps?: number; maxDurationMs?: number; policySource?: 'default' | 'conversation' }
   provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode' | 'native-tools'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
   contentLengths?: Partial<Record<'text' | 'draft' | 'reasoning', number>>
   requestMetadata?: import('@ai-devflow/shared').AgentProviderRequestMetadata

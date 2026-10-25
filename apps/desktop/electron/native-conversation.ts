@@ -3,9 +3,10 @@ import { AgentProviderRequestError, describeAgentProviderFailure, expandedOutput
 import type { ConversationExecutor } from './conversation-executor'
 import type { ConversationCheckpoint, ConversationDraft, ConversationFailure, ConversationMemoryReceipt, WorkbenchConversation } from './workbench-conversation-contract'
 import { buildRollingSummary } from './conversation-context'
+import { ConversationPersistenceError } from './conversation-diagnostics'
 import { receiptIsCurrent, type CriticalContext } from './conversation-critical-context'
 import { businessArgs, nativeConversationSystem, nativeConversationTools, nativeReviewTools } from './native-conversation-tools'
-import { advanceInvestigationStep, beginInvestigationBatch, canStartInvestigationRequest, investigationBoundary, localInvestigationSummary, recordInvestigationRequest, type InvestigationStopReason } from './investigation-policy'
+import { investigationAttemptContext, advanceInvestigationStep, beginInvestigationBatch, canStartInvestigationRequest, investigationBoundary, localInvestigationSummary, recordInvestigationRequest, type InvestigationStopReason } from './investigation-policy'
 
 type SessionUpdate = (transform: (session: WorkbenchConversation) => WorkbenchConversation) => Promise<WorkbenchConversation>
 type Host = {
@@ -31,6 +32,7 @@ const failure = (error: unknown, phase: string): ConversationFailure => error in
   ? { ...error.responseMetadata, phase, code: error.code, ...(error.sanitizedCause ? { reason: error.sanitizedCause } : {}) }
   : { phase, code: 'native_conversation_failed' }
 function explanation(error: unknown): string {
+  if (error instanceof ConversationPersistenceError) return '会话保存失败，已停止新的模型请求；请检查本地存储后重试。'
   if (!(error instanceof AgentProviderRequestError)) return '本步骤未完成，已保存的内容仍保留。'
   if (error.sanitizedCause === 'input_capacity_exceeded') return '完整材料超过本次模型上下文容量，尚未发送请求。请缩小范围后再试；已有候选保留，也可人工核对后保存为待评审提案。'
   if (error.sanitizedCause === 'native_history_corrupt') return '本会话的工具记录配对异常，尚未发送请求。请保留诊断并新建对话；已有记录和提案仍可阅读。'
@@ -71,6 +73,7 @@ export async function runNativeConversation(host: Host): Promise<void> {
   const { provider, checkpoint, signal, update } = host
   if (!provider.completeNativeConversation) throw new Error('当前模型未提供原生会话接口。')
   let phase = 'native_context', activeId: string | undefined, partial = '', reasoning = '', lastFlush = 0
+  let requestFailure: { error: AgentProviderRequestError; phase: string; callId: string } | undefined
   const investigation = checkpoint.investigation ??= beginInvestigationBatch()
   const save = () => update(current => ({ ...current, checkpoint: structuredClone(checkpoint) }))
   const advance = () => { checkpoint.step++; advanceInvestigationStep(investigation); checkpoint.recoveries = 0; checkpoint.group = randomUUID(); delete checkpoint.maxOutputTokens }
@@ -253,9 +256,10 @@ export async function runNativeConversation(host: Host): Promise<void> {
       validateNativeHistory(request.messages)
       activeId = randomUUID(); partial = ''; reasoning = ''; lastFlush = 0
       const callId = activeId
+      requestFailure = undefined
       await update(current => ({ ...current, checkpoint: structuredClone(checkpoint), messages: [...current.messages.map(m => m.id === candidate?.id && m.draft ? { ...m, draft: { ...m.draft, review: { status: 'running' as const } } } : m), {
         id: callId, role: 'notice', text: draft ? '核对提案' : '模型调用', createdAt: now(), provider: { id: provider.id, model: provider.model, executor: 'native-tools', ...(provider.effectiveThinking ? { effectiveThinking: provider.effectiveThinking } : {}) },
-        attempt: { turnId: checkpoint.turnId, step: checkpoint.step, cycle: checkpoint.cycle, recovery: checkpoint.recoveries, group: checkpoint.group, startedAt: now(), status: 'running' },
+        attempt: { ...investigationAttemptContext(investigation), turnId: checkpoint.turnId, step: checkpoint.step, cycle: checkpoint.cycle, recovery: checkpoint.recoveries, group: checkpoint.group, startedAt: now(), status: 'running' },
       }] }))
       let result: NativeConversationResponse | undefined
       let dispatched = false
@@ -291,10 +295,12 @@ export async function runNativeConversation(host: Host): Promise<void> {
           await finish(); return
         }
       } catch (caught) {
+        if (caught instanceof AgentProviderRequestError) requestFailure = { error: caught, phase, callId }
         await host.recordModelDelivery?.(callId, result || (caught instanceof AgentProviderRequestError && caught.deliveryState === 'response_received') ? 'response_received' : !dispatched || (caught instanceof AgentProviderRequestError && caught.deliveryState === 'not_sent') ? 'not_sent' : 'delivery_unknown')
         // Storage/host failures are not malformed model output and must not trigger another paid request.
         if (!(caught instanceof AgentProviderRequestError) && !(draft && caught instanceof SyntaxError)) throw caught
         const error = caught instanceof AgentProviderRequestError ? caught : invalid('invalid_proposal_review')
+        requestFailure = { error, phase, callId }
         await flush('interrupted')
         const diagnostic = failure(error, phase)
         const usage = error.usage ?? result?.usage
@@ -317,8 +323,21 @@ export async function runNativeConversation(host: Host): Promise<void> {
     }
   } catch (error) {
     await flush('interrupted')
-    await update(current => ({ ...current, checkpoint: current.checkpoint ?? structuredClone(checkpoint), status: signal.aborted ? 'cancelled' : 'failed', failure: failure(error, phase), error: explanation(error), messages: current.messages.map(m => m.id === checkpoint.nativeReviewMessageId && m.draft && !['passed', 'needs_revision', 'stale'].includes(m.draft.review?.status ?? '') ? { ...m, draft: { ...m.draft, review: { status: 'unavailable', error: explanation(error) } } } : m),
-      ...(!checkpoint.nativeReviewMessageId && partial ? { messages: [...current.messages, { id: randomUUID(), role: 'assistant' as const, text: `本次回答未完成，以下内容仅供参考：\n\n${safe(partial)}`, format: 'markdown' as const, createdAt: now() }] } : {}),
-    }))
+    const primary = error instanceof ConversationPersistenceError ? requestFailure : undefined
+    const pending = error instanceof ConversationPersistenceError ? error.pendingDiagnostic : undefined
+    const diagnostic = { ...(pending?.failure ?? failure(primary?.error ?? error, primary?.phase ?? phase)), ...(primary || pending ? { diagnosticPersistenceFailed: true } : {}) }
+    await update(current => {
+      const messages = current.messages.map(m => {
+        if (pending && m.id === pending.id) return { ...m, ...pending, failure: diagnostic,
+          ...(m.attempt ? { attempt: { ...m.attempt, status: 'failed' as const, durationMs: Date.now() - Date.parse(m.attempt.startedAt) } } : {}) }
+        if (primary && m.id === primary.callId) return { ...m, failure: diagnostic, ...(primary.error.usage ? { usage: primary.error.usage } : {}),
+          ...(primary.error.requestMetadata ? { requestMetadata: primary.error.requestMetadata } : {}), ...(primary.error.responseMetadata ? { responseMetadata: primary.error.responseMetadata } : {}),
+          ...(m.attempt ? { attempt: { ...m.attempt, status: 'failed' as const, durationMs: Date.now() - Date.parse(m.attempt.startedAt) } } : {}) }
+        return m.id === checkpoint.nativeReviewMessageId && m.draft && !['passed', 'needs_revision', 'stale'].includes(m.draft.review?.status ?? '')
+          ? { ...m, draft: { ...m.draft, review: { status: 'unavailable' as const, error: explanation(error) } } } : m
+      })
+      if (!checkpoint.nativeReviewMessageId && partial) messages.push({ id: randomUUID(), role: 'assistant', text: `本次回答未完成，以下内容仅供参考：\n\n${safe(partial)}`, format: 'markdown', createdAt: now() })
+      return { ...current, checkpoint: current.checkpoint ?? structuredClone(checkpoint), status: signal.aborted ? 'cancelled' : 'failed', failure: diagnostic, error: explanation(error), messages }
+    })
   }
 }

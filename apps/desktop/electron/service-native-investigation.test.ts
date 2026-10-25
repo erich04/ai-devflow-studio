@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createFakeAgentProvider, createWorkflowRunFromRequest, resolveRequestPolicy, validateNativeHistory, type AgentProvider, type AutomaticMemoryFact, type KnowledgeRetrievalScope, type NativeToolCall } from '@ai-devflow/shared'
+import { AgentProviderRequestError, createFakeAgentProvider, createWorkflowRunFromRequest, resolveRequestPolicy, validateNativeHistory, type AgentProvider, type AutomaticMemoryFact, type KnowledgeRetrievalScope, type NativeToolCall } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { WorkbenchConversationService } from './workbench-conversation-service'
 import { buildConversationLearningEvent } from './automatic-memory-capture'
@@ -48,6 +48,41 @@ async function send(service: WorkbenchConversationService, id: string, message: 
   await service.settled(id)
   return (await store.listWorkbenchConversations(projectId)).find(session => session.id === id)!
 }
+
+it.each(['investigation', 'summary'])('retains a Native %s provider failure when its diagnostic write fails once (#248)', async stage => {
+  let rejected = false
+  const local = new Proxy(store, { get(target, key) {
+    if (key !== 'saveWorkbenchConversation') return Reflect.get(target, key)
+    return async (...args: Parameters<LocalStore['saveWorkbenchConversation']>) => {
+      if (!rejected && args[0].messages.some(m => m.failure?.reason === 'invalid_json')) {
+        rejected = true
+        throw new Error('SQLITE_IOERR PRIVATE_STORAGE_DETAIL')
+      }
+      return target.saveWorkbenchConversation(...args)
+    }
+  } })
+  const failure = new AgentProviderRequestError({ code: 'invalid_model_output', httpStatus: 200,
+    sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'confirmed', retryable: true,
+    usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, responseMetadata: { httpStatus: 200, parserCategory: 'model_json', responseId: 'native-original' } })
+  const h = setup(async () => { if (stage === 'summary') return read('native-read'); throw failure }, local)
+  if (stage === 'summary') h.completeStructuredJson.mockRejectedValue(failure)
+  const id = (await h.service.command({ type: 'create', projectId })).conversationId!
+  await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 1, maxDurationMs: 30000 })
+  const result = await send(h.service, id, '核对当前材料。')
+  expect(rejected).toBe(true)
+  expect(h.completeNativeConversation).toHaveBeenCalledTimes(1)
+  expect(result.failure).toMatchObject({ code: 'invalid_model_output', reason: 'invalid_json', diagnosticPersistenceFailed: true })
+  expect(result.status).toBe('failed')
+  expect(result.error).toContain('保存失败')
+  expect(result.messages.reduce((sum, m) => sum + (m.usage?.inputTokens ?? 0) + (m.usage?.outputTokens ?? 0), 0)).toBe(stage === 'summary' ? 23 : 15)
+  expect(JSON.stringify(result)).not.toContain('PRIVATE_STORAGE_DETAIL')
+  const report = (await h.service.command({ type: 'export_diagnostics', projectId, conversationId: id })).diagnostics!
+  const failed = report.calls.filter(c => c.failure)
+  expect(failed).toHaveLength(1)
+  expect(failed[0]?.failure).toMatchObject({ reason: 'invalid_json', diagnosticPersistenceFailed: true })
+  expect(failed[0]?.response).toMatchObject({ responseId: 'native-original' })
+  expect(failed[0]?.attempt?.batchId).toBe(result.investigationProgress?.batch.id)
+})
 
 /** Synthetic extraction fixture, committed through the same local evidence and promotion APIs; no remote call. */
 async function savePreference() {

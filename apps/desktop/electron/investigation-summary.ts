@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { AgentProviderRequestError, redactSensitiveText } from '@ai-devflow/shared'
 import type { ConversationExecutor } from './conversation-executor'
 import type { ConversationCheckpoint, ConversationFailure, WorkbenchConversation } from './workbench-conversation-contract'
-import { canStartInvestigationRequest, investigationProgress, investigationStopDescription, localInvestigationSummary, recordInvestigationRequest, type InvestigationStopReason } from './investigation-policy'
+import { investigationAttemptContext, canStartInvestigationRequest, investigationProgress, investigationStopDescription, localInvestigationSummary, recordInvestigationRequest, type InvestigationStopReason } from './investigation-policy'
 
 const now=()=>new Date().toISOString()
 export async function pauseWithInvestigationSummary(host:{
@@ -27,7 +27,7 @@ export async function pauseWithInvestigationSummary(host:{
       if(signal.aborted || canStartInvestigationRequest(state,{summary:true,recovery:attempt>0}))break
       recordInvestigationRequest(state,{summary:true,recovery:attempt>0})
       const id=randomUUID(),startedAt=now()
-      await host.update(current=>({...current,checkpoint:structuredClone(host.checkpoint),investigationProgress:investigationProgress(state),messages:[...current.messages,{id,role:'notice',text:'整理阶段总结',createdAt:startedAt,provider:{id:host.provider.id,model:host.provider.model,executor:'direct-provider'},attempt:{turnId:host.checkpoint.turnId,step:host.checkpoint.step,cycle:host.checkpoint.cycle,recovery:attempt,group:state.batch.id,startedAt,status:'running'}}]}))
+      await host.update(current=>({...current,checkpoint:structuredClone(host.checkpoint),investigationProgress:investigationProgress(state),messages:[...current.messages,{id,role:'notice',text:'整理阶段总结',createdAt:startedAt,provider:{id:host.provider.id,model:host.provider.model,executor:'direct-provider'},attempt:{...investigationAttemptContext(state),turnId:host.checkpoint.turnId,step:host.checkpoint.step,cycle:host.checkpoint.cycle,recovery:attempt,group:state.batch.id,startedAt,status:'running'}}]}))
       try {
         signal.throwIfAborted()
         const result=await host.provider.completeStructuredJson({systemPrompt,userPrompt,maxOutputTokens:2048,purpose:'conversation',operationKey:`conversation:${session.id}:${host.checkpoint.turnId}:${host.checkpoint.cycle}`,signal})

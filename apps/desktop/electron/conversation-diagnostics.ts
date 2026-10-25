@@ -2,6 +2,12 @@ import desktopPackage from '../package.json'
 import { redactSensitiveText, sanitizeAgentProviderRequestMetadata, sanitizeAgentProviderResponseMetadata } from '@ai-devflow/shared'
 import type { ConversationMessage, WorkbenchConversation } from './workbench-conversation-contract'
 
+/** Only the unsaved diagnostic fields, never another copy of conversation/provider bodies. */
+export class ConversationPersistenceError extends Error {
+  override name = 'ConversationPersistenceError'
+  pendingDiagnostic?: Pick<ConversationMessage, 'id' | 'failure' | 'usage' | 'requestMetadata' | 'responseMetadata'>
+}
+
 const MAX_CALLS = 200, MAX_AGE = 30 * 86400000, MAX_EXPORT_BYTES = 512 * 1024
 const atom = (value: unknown) => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,240}$/u.test(value) && redactSensitiveText(value).value === value ? value : undefined
 const count = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined
@@ -18,7 +24,8 @@ export function safeConversationFailure(value?: unknown) {
   if (!value) return undefined
   const failure = object(value)
   return { ...sanitizeAgentProviderResponseMetadata(value), phase: enumeration(failure.phase, phases),
-    code: enumeration(failure.code, codes), ...(failure.reason !== undefined ? { reason: enumeration(failure.reason, reasons) } : {}) }
+    code: enumeration(failure.code, codes), ...(failure.reason !== undefined ? { reason: enumeration(failure.reason, reasons) } : {}),
+    ...(failure.diagnosticPersistenceFailed === true ? { diagnosticPersistenceFailed: true } : {}) }
 }
 function progressDiagnostic(value: unknown) {
   const progress = object(value)
@@ -39,6 +46,7 @@ function callDiagnostic(message: ConversationMessage) {
   return { id:atom(message.id)??'unknown',createdAt:date(message.createdAt)??null,
     provider: message.provider ? {model:atom(message.provider.model)??'unknown',executor:['direct-provider','opencode','native-tools'].includes(message.provider.executor??'')?message.provider.executor:'unknown'}:null,
     attempt: attempt ? {turnId:atom(attempt.turnId)??null,step:count(attempt.step)??null,cycle:count(attempt.cycle)??null,recovery:count(attempt.recovery)??null,group:atom(attempt.group)??null,
+      batchId:atom(attempt.batchId)??null,maxSteps:count(attempt.maxSteps)??null,maxDurationMs:count(attempt.maxDurationMs)??null,policySource:enumeration(attempt.policySource,['default','conversation']),
       startedAt:date(attempt.startedAt)??null,durationMs:count(attempt.durationMs)??null,status:['running','completed','failed'].includes(attempt.status)?attempt.status:'unknown'}:null,
     request:sanitizeAgentProviderRequestMetadata(message.requestMetadata)??null,
     response:sanitizeAgentProviderResponseMetadata(message.responseMetadata)??null,
