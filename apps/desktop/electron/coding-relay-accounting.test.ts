@@ -41,8 +41,9 @@ async function fixture(fetcher: typeof fetch = async () => Response.json({ choic
     }, pending: async () => [...pending.values()],
   } satisfies ModelCallGovernance
   const published = vi.fn()
+  const publishedEvent = vi.fn()
   const upstream = vi.fn(fetcher)
-  const scope = { store, projectId: active.projectId, providerId: binding.providerId, model: binding.modelId, configVersion: 1, session, publishRun: published }
+  const scope = { store, projectId: active.projectId, providerId: binding.providerId, model: binding.modelId, configVersion: 1, session, publishRun: published, publishEvent: publishedEvent }
   const proxy = await createGovernedOpencodeProxy({ binding, projectId: active.projectId, governance, fetcher: upstream,
     resolveCodingCall: (identity) => createCodingRelayCallContext({ ...scope, session: identity }),
   })
@@ -52,7 +53,7 @@ async function fixture(fetcher: typeof fetch = async () => Response.json({ choic
     body: JSON.stringify({ model: binding.modelId, messages: [{ role: 'user', content: 'PRIVATE_PROMPT_ONLY' }] }),
   })
   const run = async (source: LocalStore = store) => (await source.listCodingAgentRuns(active.runId)).find((r) => r.id === active.id)!
-  return { store, dbPath, governance, published, upstream, proxy, send, run, scope }
+  return { store, dbPath, governance, published, publishedEvent, upstream, proxy, send, run, scope }
 }
 
 describe('OpenCode relay → Coding Run → header accounting', () => {
@@ -131,8 +132,13 @@ describe('OpenCode relay → Coding Run → header accounting', () => {
     })
     const sending = f.send().catch(() => undefined)
     if (hasPartialUsage) {
-      await vi.waitFor(async () => expect((await f.store.listCodingAgentEvents(active.id)).find(event => event.metadata?.providerCall)?.metadata?.providerCall)
-        .toMatchObject({ status: 'started', usage: { inputTokens: 100, outputTokens: 20, usageCompleteness: 'partial' } }))
+      // In-memory reads can see a mutation before its atomic file replacement finishes.
+      // Publication happens after the awaited durable write, which is the crash boundary here.
+      await vi.waitFor(() => expect(f.publishedEvent).toHaveBeenCalledWith(expect.objectContaining({
+        metadata: expect.objectContaining({ providerCall: expect.objectContaining({
+          status: 'started', usage: expect.objectContaining({ inputTokens: 100, outputTokens: 20, usageCompleteness: 'partial' }),
+        }) }),
+      })))
       crashedState = await readFile(f.dbPath)
     }
     await vi.waitFor(() => expect(crashedState).toBeDefined())
