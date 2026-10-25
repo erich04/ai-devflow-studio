@@ -1544,6 +1544,64 @@ describe('degradeOlderObservations', () => {
 
 // A package: test the host boundary before adding configurable investigation behaviour.
 describe('bounded investigation and diagnostic export', () => {
+  it('recovers the exact third/eighth-call JSON failures and preserves all nine attempts after restart (#248/#249)', async () => {
+    const paths = ['tasks.ts', ...Array.from({ length: 5 }, (_, i) => `evidence-${i}.ts`)]
+    for (const file of paths.slice(1)) await writeFile(path.join(project.path, file), `export const evidence = '${file}'`)
+    let requests = 0
+    let query = 0
+    const provider = createOpenAiCompatibleAgentProvider({ id: 'sequence', model: 'sequence', apiKey: 'test-only', baseUrl: 'https://example.test/v1',
+      fetcher: async () => {
+        requests++
+        const content = [3, 8].includes(requests) ? '{PRIVATE_BAD_JSON' : JSON.stringify(query < paths.length
+          ? { tool: { name: 'repo_read', args: { path: paths[query++] } } }
+          : { text: '六项证据已经核对，恢复后完成答复。', citationIds: ['source-1'] })
+        return Response.json({ id: `response-${requests}`, choices: [{ message: { content }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
+      } })
+    const h = harness(async () => ({ value: {} }), true, { resolveProvider: async () => provider })
+    const before = await store.listRuns()
+    const id = await create(h.service)
+    const result = await send(h.service, id)
+    expect(result.status, result.error).toBe('idle')
+    expect(requests).toBe(9)
+    expect(result.messages.filter(m => m.role === 'user')).toHaveLength(1)
+    expect(result.toolEvents?.filter(e => e.kind === 'tool_request')).toHaveLength(6)
+    expect(result.investigationProgress?.totals).toMatchObject({ requests: 9, recoveries: 2, toolCalls: 6 })
+    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(135)
+    const reopened = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    const restarted = new WorkbenchConversationService({ store: reopened, resolveProvider: async () => provider, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    const report = (await restarted.command({ type: 'export_diagnostics', projectId, conversationId: id })).diagnostics!
+    expect(report.calls).toHaveLength(9)
+    expect(report.calls.filter(c => c.failure).map(c => c.attempt?.step)).toEqual([3, 7])
+    expect(report.calls.filter(c => c.attempt?.recovery === 1)).toHaveLength(2)
+    expect(report.calls[2]?.response).toMatchObject({ responseId: 'response-3', parserCategory: 'model_json' })
+    expect(report.calls[7]?.response).toMatchObject({ responseId: 'response-8', parserCategory: 'model_json' })
+    expect(JSON.stringify(report)).not.toContain('PRIVATE_BAD_JSON')
+    expect(await store.listRuns()).toEqual(before)
+  })
+
+  it.each([12, 30])('compares the same fourteen-query task at a %i-step limit (#250)', async maxSteps => {
+    let queries = 0
+    const h = harness(async input => ({ value: input.systemPrompt.includes('阶段总结')
+      ? { text: '已有阶段依据，仍有查询待完成。' }
+      : ++queries <= 14 ? { tool: { name: 'repo_search', args: { query: `evidence-marker-${queries}` } } }
+      : { text: '十四个不同查询已完成。' }, usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }))
+    const id = await create(h.service)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps, maxDurationMs: 180000 })
+    const first = await send(h.service, id)
+    expect(first.status).toBe(maxSteps === 12 ? 'paused' : 'idle')
+    expect(first.investigationProgress?.batch.repeatedQueries).toBe(0)
+    if (maxSteps === 12) {
+      expect(first.investigationProgress?.totals).toMatchObject({ requests: 13, toolCalls: 12, summaryRequests: 1 })
+      await h.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+      await h.service.settled(id)
+    }
+    const final = (await store.listWorkbenchConversations(projectId)).find(s => s.id === id)!
+    expect(final.status, final.error).toBe('idle')
+    expect(final.messages.filter(m => m.role === 'user')).toHaveLength(1)
+    expect(final.investigationProgress?.totals).toMatchObject({ requests: maxSteps === 12 ? 16 : 15, toolCalls: 14, recoveries: 0, summaryRequests: maxSteps === 12 ? 1 : 0 })
+    expect(final.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe((maxSteps === 12 ? 16 : 15) * 15)
+  }, 15000)
+
   it('persists validated conversation limits and pauses with a grounded summary before more tools', async () => {
     const h = harness(async input => input.systemPrompt.includes('阶段总结')
       ? { value: { text: '已读取任务清理实现；完整结论仍需继续核对。', citationIds: ['source-1'] } }
