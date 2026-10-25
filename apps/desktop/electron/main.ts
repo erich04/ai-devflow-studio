@@ -2417,7 +2417,7 @@ async function getWorkbenchConversationService() {
       store,
       memory: store,
       resolveProvider: (id, projectId) => resolveAgentProvider(store, id, projectId),
-      openHarness: async ({ project, providerId, signal, query }) => {
+      openHarness: async ({ project, providerId, signal, query, investigationBudget }) => {
         const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === providerId)
         if (!metadata) throw new Error('请先在 Agents 中保存所选模型的 Provider 配置。')
         const discovery = await detectCodingRuntimeEngines({ projectId: project.id })
@@ -2431,7 +2431,7 @@ async function getWorkbenchConversationService() {
         if ((await store.listProviderCredentials()).find((item) => item.providerId === providerId)?.updatedAt !== metadata.updatedAt) throw new Error('所选模型配置已变更，请重试。')
         const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store)})
         try {
-          const harness=await createWorkbenchOpencodeExecutor({binaryPath:candidate.binaryPath,binding:budgetProxy.binding,signal,query})
+          const harness=await createWorkbenchOpencodeExecutor({binaryPath:candidate.binaryPath,binding:budgetProxy.binding,signal,query,...(investigationBudget?{investigationBudget}:{})})
           return {...harness,completeStructuredJson:async(input)=>{
             const since=new Date().toISOString()
             const result=await harness.completeStructuredJson!(input)

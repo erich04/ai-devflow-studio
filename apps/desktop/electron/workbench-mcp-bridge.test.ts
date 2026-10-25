@@ -74,3 +74,27 @@ it('keeps concurrent bridges independent, bounds queries and never returns raw i
   await a.close()
   expect(await (await call(b)).text()).toContain('project-B')
 })
+
+it('honors the supplied investigation allowance beyond 32 reads and stops exactly at its boundary', async () => {
+  const query = vi.fn(async () => ({ sourceId: 'evidence', result: {} }))
+  const bridge = await createWorkbenchMcpBridge({ query, signal: new AbortController().signal, maxQueries: 40 }); bridges.push(bridge)
+  const call = async () => (await fetch(bridge.url, { method: 'POST', headers: { ...bridge.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workflow', arguments: {} } }),
+  })).json()
+  for (let index = 0; index < 40; index++) expect((await call()).result.isError, `query ${index + 1}`).not.toBe(true)
+  expect((await call()).result.isError).toBe(true)
+  expect(query).toHaveBeenCalledTimes(40)
+})
+
+it('does not mint a query when the remaining allowance is zero or accept an unsafe allowance', async () => {
+  const query = vi.fn(async () => ({}))
+  const bridge = await createWorkbenchMcpBridge({ query, signal: new AbortController().signal, maxQueries: 0 }); bridges.push(bridge)
+  const result = await (await fetch(bridge.url, { method: 'POST', headers: { ...bridge.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workflow', arguments: {} } }),
+  })).json()
+  expect(result.result.isError).toBe(true)
+  expect(query).not.toHaveBeenCalled()
+  for (const maxQueries of [-1, 1.5, Number.NaN, Infinity, 961]) {
+    await expect(createWorkbenchMcpBridge({ query, signal: new AbortController().signal, maxQueries })).rejects.toThrow('查询额度')
+  }
+})

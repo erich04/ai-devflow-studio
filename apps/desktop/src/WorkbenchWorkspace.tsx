@@ -1,3 +1,4 @@
+import { InvestigationControls, InvestigationProgress } from './InvestigationControls'
 import { ConversationUsage } from './components/ConversationUsage'
 import { RememberConversationMemory } from './components/RememberConversationMemory'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
@@ -108,7 +109,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
       const lastOpen = result.conversations.filter((item) => item.isOpen).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
       if (lastOpen) setActive(lastOpen.id)
     }
-    if (command.type === 'read_content') return result
+    if (command.type === 'read_content' || command.type === 'export_diagnostics') return result
     setSessions((current) => result.conversations.map((incoming) => {
       const existing = current.find((item) => item.id === incoming.id)
       return existing && existing.version > incoming.version ? existing : incoming
@@ -366,9 +367,11 @@ function ConversationView({ session, runs, providerId, providerName, command, on
       {busy && <p className="conversation-activity" role="status"><span className="conversation-running-dot" />正在调用 {providerName || 'Provider'} 调查；可以停止。</p>}
       {modelReadinessError && <div className="conversation-error" role="status">{modelReadinessError}<button className="text-button" onClick={onConfigure}>打开项目模型设置</button></div>}
       {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted', 'paused'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending || Boolean(modelReadinessError)} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />{session.status === 'paused' ? '继续当前步骤' : '重试这一步'}</button>}</div>}
+      <InvestigationProgress session={session} />
       {session.failure && <details className="conversation-tool"><summary>本次失败诊断</summary><p>阶段：{session.failure.phase} · 代码：{session.failure.code}{session.failure.reason ? ` · 原因：${session.failure.reason}` : ''}{session.failure.httpStatus ? ` · HTTP ${session.failure.httpStatus}` : ''}</p></details>}
       <div ref={messagesEnd} />
     </div>
+    <InvestigationControls session={session} command={command} busy={busy || sending} />
     <form className="conversation-composer" onSubmit={(event) => { event.preventDefault(); void send() }}>
       {!providerId && <p>先配置模型才能开始调查。<button type="button" className="text-button" onClick={onConfigure}>配置 Provider</button></p>}
       <div className="conversation-answer-target" hidden={!answerTo}>回答：{session.messages.find((message) => message.id === answerTo)?.question?.prompt}<button type="button" className="text-button" onClick={() => setAnswerTo(null)}>取消关联</button></div>

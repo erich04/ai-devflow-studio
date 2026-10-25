@@ -1,3 +1,6 @@
+import { parseKnowledgeSearchArgs, validateKnowledgeReadArgs } from './hindsight'
+import { KNOWLEDGE_STAGES } from './knowledge-context'
+
 export const readOnlyToolFields: Record<string, { required: string[]; optional: string[]; description: string; listed?: false }> = {
   workflow: { required: [], optional: ['runId', 'query', 'offset'], description: '查询当前项目的真实流程与节点；支持分页。' },
   node: { required: ['runId', 'nodeId'], optional: [], description: '查询节点的执行状态、产物、测试、交付回执与 Gate 条件。' },
@@ -24,7 +27,15 @@ export function readOnlyToolDefinitions(names?: string[]): ReadOnlyFunctionDefin
     .map(([name, value]) => ({ type: 'function', function: { name, description: value.description,
       parameters: { type: 'object', additionalProperties: false, required: value.required,
         properties: Object.fromEntries([...value.required, ...value.optional].map(key => [key,
-          key === 'offset' ? { type: 'integer', minimum: 0 } : key === 'limit' ? { type: 'integer', minimum: 1, maximum: 18000 } : { type: 'string', maxLength: 500 }])) },
+          key === 'offset' ? { type: 'integer', minimum: 0 }
+            : key === 'limit' ? { type: 'integer', minimum: 1, maximum: name === 'knowledge_search' ? 5 : 18000 }
+            : name === 'knowledge_search' && key === 'stage' ? { type: 'string', enum: [...KNOWLEDGE_STAGES] }
+            : { type: 'string', maxLength: name === 'knowledge_search' && key === 'query' ? 2048 : 500 }])),
+        ...(name === 'knowledge_read' ? { anyOf: [
+          { required: ['path'], not: { anyOf: [{ required: ['sourceRef'] }, { required: ['expectedDigest'] }] } },
+          { required: ['sourceRef', 'expectedDigest'] },
+        ] } : {}),
+      },
     } }))
 }
 
@@ -45,8 +56,11 @@ export function validateNativeToolBatch(value: unknown, allowed = readOnlyToolDe
       definition.required.some(key => typeof args[key] !== 'string' || !(args[key] as string).trim()) ||
       Object.entries(args).some(([key, value]) => key === 'offset'
         ? !Number.isSafeInteger(value) || Number(value) < 0
-        : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 18000
-        : typeof value !== 'string' || value.length > 500 || value.includes('\0'))) throw new Error('Invalid native tool arguments')
+        : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > (call.function.name === 'knowledge_search' ? 5 : 18000)
+        : typeof value !== 'string' || value.length > (call.function.name === 'knowledge_search' && key === 'query' ? 2048 : 500) || value.includes('\0'))) throw new Error('Invalid native tool arguments')
+    // Use the same cross-field and UTF-8 checks as the host's Hindsight tools.
+    if (call.function.name === 'knowledge_search') parseKnowledgeSearchArgs(args)
+    if (call.function.name === 'knowledge_read') validateKnowledgeReadArgs(args)
     const path = args.path
     if (typeof path === 'string' && (path.startsWith('/') || /^[a-z]:/iu.test(path) || path.includes('\\') || path.split('/').includes('..'))) throw new Error('Tool path must stay inside the project')
     return { call, name: call.function.name, args }

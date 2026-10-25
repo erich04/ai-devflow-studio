@@ -4,7 +4,8 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { ConversationExecutorError, type ConversationExecutor } from './conversation-executor.js'
+import { ConversationExecutorError, type ConversationExecutor, type ConversationInvestigationBudget } from './conversation-executor.js'
+import { normalizeInvestigationPolicy } from './investigation-policy.js'
 import { buildOpencodeDiscoveryEnv } from './opencode-discovery.js'
 import { abortOpencodeSession, createOpencodeSession, listOpencodeMessages, listOpencodePermissions, sendOpencodeMessage, type OpencodeMessage } from './opencode-http-adapter.js'
 import { createOpencodeProcessManager, type EnsureManagedOpencodeServerInput } from './opencode-process.js'
@@ -25,11 +26,15 @@ export async function createWorkbenchOpencodeExecutor(input: {
   binaryPath: string
   binding: OpencodeProviderBinding
   signal: AbortSignal
+  investigationBudget?: ConversationInvestigationBudget
   query(name: string, args: Record<string, unknown>): Promise<unknown>
   baseEnv?: NodeJS.ProcessEnv
   deps?: { manager?: Manager; fetcher?: typeof fetch; pollMs?: number }
 }): Promise<ConversationExecutor> {
   input.signal.throwIfAborted()
+  const policy = normalizeInvestigationPolicy(input.investigationBudget ? { maxSteps: input.investigationBudget.maxSteps } : undefined)
+  const maxQueries = input.investigationBudget?.maxToolCalls ?? policy.maxToolCalls
+  if (!Number.isSafeInteger(maxQueries) || maxQueries < 0 || maxQueries > normalizeInvestigationPolicy({ maxSteps: 60 }).maxToolCalls) throw new Error('无效的调查查询额度。')
   const root = await mkdtemp(join(tmpdir(), 'devflow-conversation-'))
   const directory = join(root, 'workspace')
   const password = randomBytes(32).toString('hex')
@@ -71,7 +76,7 @@ export async function createWorkbenchOpencodeExecutor(input: {
   const onAbort = () => { void close().catch(() => undefined) }
   try {
     await mkdir(directory)
-    bridge = await createWorkbenchMcpBridge({ query: input.query, signal: input.signal })
+    bridge = await createWorkbenchMcpBridge({ query: input.query, signal: input.signal, maxQueries })
     input.signal.throwIfAborted()
     const bindingEnv = opencodeProviderBindingEnv(input.binding)
     const providerConfig = JSON.parse(bindingEnv.OPENCODE_CONFIG_CONTENT!) as Record<string, unknown>
@@ -86,7 +91,7 @@ export async function createWorkbenchOpencodeExecutor(input: {
       OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...providerConfig, model, small_model: model,
         enabled_providers: [input.binding.providerId], share: 'disabled', snapshot: false, autoupdate: false,
         permission, default_agent: 'devflow', plugin: [], lsp: false, formatter: false,
-        agent: { devflow: { description: 'DevFlow 项目只读调查', mode: 'primary', steps: 12, permission,
+        agent: { devflow: { description: 'DevFlow 项目只读调查', mode: 'primary', steps: policy.maxSteps, permission,
           prompt: 'You investigate project facts only through the supplied devflow MCP tools. Follow the application response contract.' },
           title: { disable: true }, summary: { disable: true } },
         mcp: { devflow: { type: 'remote', url: bridge.url, headers: bridge.headers, oauth: false } },

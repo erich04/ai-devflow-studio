@@ -116,7 +116,8 @@ describe('unified conversation execution and boundaries', () => {
     let elapsed = 0, calls = 0
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => wallClock + elapsed)
     try {
-      const h = harness(async () => {
+      const h = harness(async input => {
+        if(input.systemPrompt.includes('阶段总结')) return {value:{text:'已保存读取进展，仍需继续核实。'}}
         if (++calls === 1) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
         if (calls <= 3) {
           elapsed = 181000
@@ -127,8 +128,10 @@ describe('unified conversation execution and boundaries', () => {
       const result = await send(h.service, await create(h.service))
       expect(calls).toBe(4)
       expect(result.status).toBe('paused')
-      expect(result.checkpoint).toMatchObject({ step: 3, recoveries: 0 })
-      expect(result.messages.filter(message => message.attempt).map(message => message.attempt?.status)).toEqual(['completed', 'failed', 'failed', 'completed'])
+      expect(result.checkpoint).toMatchObject({ step: 2, recoveries: 2 })
+      expect(result.toolEvents?.filter(e => e.kind === 'tool_request')).toHaveLength(1)
+      expect(result.investigationProgress?.stopReason).toBe('time_limit')
+      expect(result.messages.filter(message => message.attempt).map(message => message.attempt?.status)).toEqual(['completed', 'failed', 'failed', 'completed', 'completed'])
     } finally { clock.mockRestore() }
   })
 
@@ -1123,9 +1126,11 @@ describe('unified conversation execution and boundaries', () => {
   it('bounds tool loops and reports malformed output without fabricating success', async () => {
     const loop = harness(async () => ({ value: { tool: { name: 'shell', args: { command: 'touch compromised' } } } }))
     const result = await send(loop.service, await create(loop.service))
-    expect(loop.calls).toHaveLength(12)
+    expect(loop.calls).toHaveLength(14)
+    expect(result.checkpoint?.investigation?.batch).toMatchObject({steps:12,summaryRequests:2,toolCalls:12})
     expect(result.status, result.error).toBe('paused')
-    expect(result.error).toContain('12 次')
+    expect(result.error).toContain('调查步数')
+    expect(result.messages.at(-1)?.text).toContain('尚未生成模型总结')
     const malformed = harness(async () => ({ value: { question: { options: 'bad' } } }))
     expect((await send(malformed.service, await create(malformed.service))).status).toBe('failed')
   })
@@ -1535,4 +1540,250 @@ describe('degradeOlderObservations', () => {
     expect(observations[1]).toEqual(observation(2))
     expect(observations[2]).toEqual({ instruction: '上一份提案未通过完整性校验。' })
   })
+})
+
+// A package: test the host boundary before adding configurable investigation behaviour.
+describe('bounded investigation and diagnostic export', () => {
+  it('keeps each attempt linked to its original batch settings after reconfiguration (#250)', async () => {
+    let first = true
+    const h = harness(async input => {
+      if (input.systemPrompt.includes('阶段总结')) return { value: { text: '阶段已暂停。' } }
+      if (first) { first = false; return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } } }
+      return { value: { text: '已有证据足以完成。' } }
+    })
+    const id = await create(h.service)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 1, maxDurationMs: 30000 })
+    const paused = await send(h.service, id)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 30, maxDurationMs: 180000 })
+    await h.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+    await h.service.settled(id)
+    const report = (await h.service.command({ type: 'export_diagnostics', projectId, conversationId: id })).diagnostics!
+    expect(report.calls).toHaveLength(3)
+    for (const call of report.calls.slice(0, 2)) expect(call.attempt).toMatchObject({ batchId: paused.investigationProgress!.batch.id, maxSteps: 1, maxDurationMs: 30000, policySource: 'conversation' })
+    expect(report.calls[2]?.attempt).toMatchObject({ maxSteps: 30, maxDurationMs: 180000 })
+    expect(report.calls[2]?.attempt?.batchId).not.toBe(paused.investigationProgress!.batch.id)
+  })
+
+  it.each(['investigation', 'summary'])('preserves the %s provider failure and usage when saving its diagnostics fails once (#248)', async stage => {
+    let rejected = false
+    const failingStore = new Proxy(store, { get(target, key) {
+      if (key !== 'saveWorkbenchConversation') return Reflect.get(target, key)
+      return async (...args: Parameters<LocalStore['saveWorkbenchConversation']>) => {
+        if (!rejected && args[0].messages.some(m => m.failure?.reason === 'invalid_json')) {
+          rejected = true
+          throw new Error('SQLITE_IOERR PRIVATE_STORAGE_DETAIL')
+        }
+        return target.saveWorkbenchConversation(...args)
+      }
+    } })
+    const h = harness(async input => {
+      if (stage === 'summary' && !input.systemPrompt.includes('阶段总结')) return { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } }
+      throw new AgentProviderRequestError({ code: 'invalid_model_output', httpStatus: 200,
+      sanitizedCause: 'invalid_json', deliveryState: 'response_received', billingState: 'confirmed', retryable: true,
+      usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 }, responseMetadata: { httpStatus: 200, parserCategory: 'model_json', responseId: 'original-response' } })
+    }, true, { store: failingStore })
+    const id = await create(h.service)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 1, maxDurationMs: 30000 })
+    const result = await send(h.service, id)
+    expect(rejected).toBe(true)
+    expect(h.calls).toHaveLength(stage === 'summary' ? 2 : 1)
+    expect(result.status).toBe('failed')
+    expect(result.failure).toMatchObject({ code: 'invalid_model_output', reason: 'invalid_json', diagnosticPersistenceFailed: true })
+    expect(result.error).toContain('保存失败')
+    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(15)
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_STORAGE_DETAIL')
+    const report = (await h.service.command({ type: 'export_diagnostics', projectId, conversationId: result.id })).diagnostics!
+    const failed = report.calls.filter(c => c.failure)
+    expect(failed).toHaveLength(1)
+    expect(failed[0]?.failure).toMatchObject({ reason: 'invalid_json', diagnosticPersistenceFailed: true })
+    expect(failed[0]?.response).toMatchObject({ responseId: 'original-response', parserCategory: 'model_json' })
+  })
+
+  it('recovers the exact third/eighth-call JSON failures and preserves all nine attempts after restart (#248/#249)', async () => {
+    const paths = ['tasks.ts', ...Array.from({ length: 5 }, (_, i) => `evidence-${i}.ts`)]
+    for (const file of paths.slice(1)) await writeFile(path.join(project.path, file), `export const evidence = '${file}'`)
+    let requests = 0
+    let query = 0
+    const provider = createOpenAiCompatibleAgentProvider({ id: 'sequence', model: 'sequence', apiKey: 'test-only', baseUrl: 'https://example.test/v1',
+      fetcher: async () => {
+        requests++
+        const content = [3, 8].includes(requests) ? '{PRIVATE_BAD_JSON' : JSON.stringify(query < paths.length
+          ? { tool: { name: 'repo_read', args: { path: paths[query++] } } }
+          : { text: '六项证据已经核对，恢复后完成答复。', citationIds: ['source-1'] })
+        return Response.json({ id: `response-${requests}`, choices: [{ message: { content }, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
+      } })
+    const h = harness(async () => ({ value: {} }), true, { resolveProvider: async () => provider })
+    const before = await store.listRuns()
+    const id = await create(h.service)
+    const result = await send(h.service, id)
+    expect(result.status, result.error).toBe('idle')
+    expect(requests).toBe(9)
+    expect(result.messages.filter(m => m.role === 'user')).toHaveLength(1)
+    expect(result.toolEvents?.filter(e => e.kind === 'tool_request')).toHaveLength(6)
+    expect(result.investigationProgress?.totals).toMatchObject({ requests: 9, recoveries: 2, toolCalls: 6 })
+    expect(result.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe(135)
+    const reopened = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') })
+    const restarted = new WorkbenchConversationService({ store: reopened, resolveProvider: async () => provider, loadKnowledge: async () => { throw new Error('unused') }, changed: vi.fn() })
+    const report = (await restarted.command({ type: 'export_diagnostics', projectId, conversationId: id })).diagnostics!
+    expect(report.calls).toHaveLength(9)
+    expect(report.calls.filter(c => c.failure).map(c => c.attempt?.step)).toEqual([3, 7])
+    expect(report.calls.filter(c => c.attempt?.recovery === 1)).toHaveLength(2)
+    expect(report.calls[2]?.response).toMatchObject({ responseId: 'response-3', parserCategory: 'model_json' })
+    expect(report.calls[7]?.response).toMatchObject({ responseId: 'response-8', parserCategory: 'model_json' })
+    expect(JSON.stringify(report)).not.toContain('PRIVATE_BAD_JSON')
+    expect(await store.listRuns()).toEqual(before)
+  })
+
+  it.each([12, 30])('compares the same fourteen-query task at a %i-step limit (#250)', async maxSteps => {
+    let queries = 0
+    const h = harness(async input => ({ value: input.systemPrompt.includes('阶段总结')
+      ? { text: '已有阶段依据，仍有查询待完成。' }
+      : ++queries <= 14 ? { tool: { name: 'repo_search', args: { query: `evidence-marker-${queries}` } } }
+      : { text: '十四个不同查询已完成。' }, usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 } }))
+    const id = await create(h.service)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps, maxDurationMs: 180000 })
+    const first = await send(h.service, id)
+    expect(first.status).toBe(maxSteps === 12 ? 'paused' : 'idle')
+    expect(first.investigationProgress?.batch.repeatedQueries).toBe(0)
+    if (maxSteps === 12) {
+      expect(first.investigationProgress?.totals).toMatchObject({ requests: 13, toolCalls: 12, summaryRequests: 1 })
+      await h.service.command({ type: 'retry', projectId, conversationId: id, providerId: 'test' })
+      await h.service.settled(id)
+    }
+    const final = (await store.listWorkbenchConversations(projectId)).find(s => s.id === id)!
+    expect(final.status, final.error).toBe('idle')
+    expect(final.messages.filter(m => m.role === 'user')).toHaveLength(1)
+    expect(final.investigationProgress?.totals).toMatchObject({ requests: maxSteps === 12 ? 16 : 15, toolCalls: 14, recoveries: 0, summaryRequests: maxSteps === 12 ? 1 : 0 })
+    expect(final.messages.reduce((sum, m) => sum + (m.usage?.totalTokens ?? 0), 0)).toBe((maxSteps === 12 ? 16 : 15) * 15)
+  }, 15000)
+
+  it('persists validated conversation limits and pauses with a grounded summary before more tools', async () => {
+    const h = harness(async input => input.systemPrompt.includes('阶段总结')
+      ? { value: { text: '已读取任务清理实现；完整结论仍需继续核对。', citationIds: ['source-1'] } }
+      : { value: { tool: { name: 'repo_read', args: { path: 'tasks.ts' } } } })
+    const id = await create(h.service)
+    await h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 1, maxDurationMs: 30000 })
+    const paused = await send(h.service, id)
+    expect(paused.status).toBe('paused')
+    expect(paused.messages.filter(m => m.role === 'assistant').at(-1)?.text).toContain('已读取')
+    expect(paused.toolEvents?.filter(e => e.kind === 'tool_request')).toHaveLength(1)
+    expect(paused.checkpoint?.investigation?.totals.requests).toBe(2)
+    expect(paused.investigationProgress?.stopReason).toBe('step_limit')
+    const exported = await h.service.command({ type: 'export_diagnostics', projectId, conversationId: id })
+    expect(exported.diagnostics?.calls).toHaveLength(2)
+    expect(JSON.stringify(exported.diagnostics)).not.toContain('export const clearDone')
+    expect(JSON.stringify(exported.diagnostics)).not.toContain('现在进行到哪里')
+  })
+
+  it('rejects scope escalation or unbounded settings before any model call', async () => {
+    const h = harness(async () => ({ value: { text: 'unused' } }))
+    const id = await create(h.service)
+    await expect(h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 61, maxDurationMs: 30000 })).rejects.toThrow()
+    await expect(h.service.command({ type: 'configure_investigation', projectId, conversationId: id, maxSteps: 2, maxDurationMs: 30000, maxRequests: 999999 })).rejects.toThrow()
+    await expect(h.service.command({ type: 'export_diagnostics', projectId: 'unrelated', conversationId: id })).rejects.toThrow()
+    expect(h.calls).toHaveLength(0)
+  })
+})
+
+
+describe('investigation continuation evidence and cumulative limits', () => {
+  it('finishes 34 useful queries with a 40-step configuration without the former 12/32 cutoffs', async () => {
+    let index = 0
+    const h = harness(async () => ++index <= 34 ? {value:{tool:{name:'repo_search',args:{query:`unique-marker-${index}`}}}} : {value:{text:'已完成 34 个不同范围的搜索。'}})
+    const id = await create(h.service)
+    await h.service.command({type:'configure_investigation',projectId,conversationId:id,maxSteps:40,maxDurationMs:180000})
+    const session = await send(h.service,id)
+    expect(session.status,session.error).toBe('idle')
+    expect(h.calls).toHaveLength(35)
+    expect(session.investigationProgress?.totals).toMatchObject({requests:35,toolCalls:34,summaryRequests:0})
+  }, 15000)
+
+  it('pauses alternating identical reads, reuses current evidence, and never executes summary tool requests', async () => {
+    await writeFile(path.join(project.path,'other.ts'),'export const other = 1')
+    let index = 0
+    const h = harness(async input => input.systemPrompt.includes('阶段总结') ? {value:{tool:{name:'repo_read',args:{path:'do-not-read.ts'}}}} : {value:{tool:{name:'repo_read',args:{path:index++%2?'other.ts':'tasks.ts'}}}})
+    const session = await send(h.service,await create(h.service))
+    expect(session.status).toBe('paused')
+    expect(session.investigationProgress?.stopReason).toBe('no_progress')
+    expect(session.investigationProgress?.batch).toMatchObject({repeatedQueries:4,reusedQueries:4,toolCalls:6,summaryRequests:2})
+    expect(session.toolEvents?.filter(e=>e.kind==='tool_request')).toHaveLength(6)
+    expect(session.checkpoint?.citations).toHaveLength(2)
+    expect(session.messages.at(-1)?.text).toContain('尚未生成模型总结')
+    expect(session.messages.some(m=>m.draft)).toBe(false)
+  })
+
+  it('continues across restart without resetting totals or including stale file evidence', async () => {
+    const first = harness(async input => input.systemPrompt.includes('阶段总结') ? {value:{text:'完成一次读取，等待继续。'}} : {value:{tool:{name:'repo_read',args:{path:'tasks.ts'}}}})
+    const id = await create(first.service)
+    await first.service.command({type:'configure_investigation',projectId,conversationId:id,maxSteps:1,maxDurationMs:30000})
+    const paused = await send(first.service,id)
+    await writeFile(path.join(project.path,'tasks.ts'),'export const VERSION_CHANGED = true')
+    const second = harness(async input => {
+      expect(JSON.parse(input.userPrompt).toolObservations).toEqual([])
+      return {value:{text:'旧证据失效，尚需重读更新后的代码。'}}
+    })
+    await second.service.command({type:'retry',projectId,conversationId:id,providerId:'test'})
+    await second.service.settled(id)
+    const final=(await store.listWorkbenchConversations(projectId)).find(s=>s.id===id)!
+    expect(final.status,final.error).toBe('idle')
+    expect(final.messages.filter(m=>m.role==='user')).toHaveLength(1)
+    expect(final.investigationProgress?.totals.requests).toBe(paused.investigationProgress!.totals.requests+1)
+    expect(final.messages.filter(m=>m.role==='tool')).toHaveLength(1)
+  })
+
+  it('cannot reset the cumulative request allowance by changing provider or continuation settings', async () => {
+    const h = harness(async input => input.systemPrompt.includes('阶段总结') ? {value:{text:'等待继续。'}} : {value:{tool:{name:'repo_read',args:{path:'tasks.ts'}}}})
+    const id=await create(h.service)
+    await h.service.command({type:'configure_investigation',projectId,conversationId:id,maxSteps:1,maxDurationMs:30000})
+    const paused=await send(h.service,id)
+    paused.checkpoint!.investigation!.totals.requests=238
+    await store.saveWorkbenchConversation({...paused,version:paused.version+1},paused.version)
+    await h.service.command({type:'configure_investigation',projectId,conversationId:id,maxSteps:60,maxDurationMs:600000})
+    const before=h.calls.length
+    await h.service.command({type:'retry',projectId,conversationId:id,providerId:'different-provider'})
+    await h.service.settled(id)
+    const final=(await store.listWorkbenchConversations(projectId)).find(s=>s.id===id)!
+    expect(h.calls).toHaveLength(before)
+    expect(final.status).toBe('paused')
+    expect(final.investigationProgress?.stopReason).toBe('request_limit')
+    expect(final.investigationProgress?.totals.requests).toBe(238)
+  })
+})
+
+
+it('does not dispatch if cancellation arrives while the attempt checkpoint is saving', async () => {
+  let cancelling: Promise<unknown> | undefined
+  const proxy = new Proxy(store, { get(target,key) {
+    if(key !== 'saveWorkbenchConversation') return Reflect.get(target,key)
+    return async (...args:Parameters<LocalStore['saveWorkbenchConversation']>)=>{
+      const saved=await target.saveWorkbenchConversation(...args)
+      if(args[0].checkpoint?.investigation?.totals.requests===1 && !cancelling) {
+        cancelling=h.service.command({type:'cancel',projectId,conversationId:args[0].id})
+        await new Promise(resolve=>setTimeout(resolve,0))
+      }
+      return saved
+    }
+  }})
+  const h = harness(async () => ({value:{text:'must not call'}}),true,{store:proxy})
+  const id = await create(h.service)
+  await send(h.service,id)
+  await cancelling
+  const final=(await store.listWorkbenchConversations(projectId))[0]!
+  expect(h.calls).toHaveLength(0)
+  expect(final.status).toBe('cancelled')
+  expect(final.messages.find(m=>m.memoryReceipt)?.memoryReceipt?.state).toBe('not_sent')
+})
+
+
+it('does not classify a host storage read failure during action validation as retryable model output', async () => {
+  const h=harness(async ()=>{
+    vi.spyOn(store,'listRuns').mockRejectedValueOnce(new Error('SQLITE_IOERR private diagnostic'))
+    return {value:{text:'应当查看这里',actions:[{label:'查看节点',runId:created.run.id,nodeId:created.run.nodes[0]!.id,section:'状态'}]}}
+  })
+  const result=await send(h.service,await create(h.service))
+  expect(h.calls).toHaveLength(1)
+  expect(result.status).toBe('failed')
+  expect(result.failure?.code).toBe('ConversationPersistenceError')
+  expect(result.error).not.toContain('private diagnostic')
+  expect(result.messages.some(m=>m.role==='assistant')).toBe(false)
 })

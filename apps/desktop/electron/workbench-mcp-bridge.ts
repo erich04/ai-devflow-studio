@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type ServerResponse } from 'node:http'
 import { readOnlyToolFields, redactSensitiveText, parseKnowledgeSearchArgs, validateKnowledgeReadArgs } from '@ai-devflow/shared'
+import { normalizeInvestigationPolicy } from './investigation-policy.js'
 
 const fields = readOnlyToolFields
 
@@ -14,9 +15,12 @@ export async function createWorkbenchMcpBridge(input: {
   signal: AbortSignal
   maxQueries?: number
 }) {
+  const maxQueries = input.maxQueries ?? normalizeInvestigationPolicy().maxToolCalls
+  if (!Number.isSafeInteger(maxQueries) || maxQueries < 0 || maxQueries > normalizeInvestigationPolicy({ maxSteps: 60 }).maxToolCalls) {
+    throw new Error('无效的调查查询额度。')
+  }
   const token = randomBytes(32).toString('hex')
   const authorization = Buffer.from(`Bearer ${token}`)
-  const maxQueries = Math.max(1, Math.min(32, input.maxQueries ?? 32))
   let queries = 0
   let inFlight = 0
   let closing: Promise<void> | undefined
