@@ -79,7 +79,7 @@ node --test scripts/devflow-b-test-evidence.test.mjs
 
 本工具默认准备到澄清节点，不宣称六阶段已完成。GitHub 交付需独立合成 Todo 远端仓库、有效 GitHub App 服务端配置及安装授权和项目绑定，后续仍要独立 Web 批准。没有真实交付证据时，业务验收应保持阻断。
 
-## 当前准备检查
+## 初次准备检查（2026-10-23）
 
 - 真实 Web 创建合成项目与请求、正常配对、Electron 任务中心先查看再领取成功，保存 3 张截图；第一次自动化在 Next 页面切换尚未完成时填表被组件初始化清空，增加页面网络就绪检查后通过，保留首轮失败记录，没有改产品逻辑。
 - B 专用 PostgreSQL 已启动，初次新建容器及数据卷，没有复用其他容器。
@@ -90,3 +90,17 @@ node --test scripts/devflow-b-test-evidence.test.mjs
 - 运行中的 Next dev 与验证任务的 Next build 最初共写默认 `.next`，出现 routes-manifest 缺失与 Web 500。新增 `DEVFLOW_NEXT_DIST_DIR`（默认仍为 `.next`），B 指定 `.tmp/next-<schema>`；`devflow-b-resume.mjs` 在原端口恢复服务，并保留已有 schema、profile 和 Run。Next 自动产生的 next-env / tsconfig 路径变动已恢复，不作为产品代码提交；后续启动仍需检查这两份生成文件。
 - 首次阶段触发在云端预算未配置时被产品准入拒绝，没有发送模型请求；随后 Thinking low 默认的 65,536 输出上限被网关最初的 32,768 上限拒绝，账本仍为 0 调用。已把验证上限明确提高至 65,536，保持请求内容和思考参数，并验证 65,536 准入 / 65,537 拒绝；网关使用同账本、同端口重启，没有重置额度。这两次都不属于上游模型失败。
 - #226 已完成真实无 OpenCode 复验：前两次审查暴露多 JSON 拼接问题，在内置审查提示契约内修复，通用解析器保持严格。修复后真实 DeepSeek 审查保存三个文件引用，独立宿主核验全部摘要和行范围、九文件未写入、Gate 和编码配置未改变、失败用量也计入顶部。完整的成功与失败记录、截图路径、调用 ID 和费用见 [#226 真实验收记录](../validation/issue-226-native-review-20261023.md)。三次审查共保守人民币 0.264988 元，全部属于同一 B 8 元账本；不代表 #182/#237 全部验收完成。
+
+## 真实交付配置与最终状态（2026-10-24）
+
+用户授权后，现有 GitHub App 增加对独立私有合成 Todo 仓库的访问，在真实 Web 完成项目绑定。使用原环境恢复脚本显式指定已有 App 配置文件，不复制其数据库、认证或其他服务设置：
+
+```sh
+DEVFLOW_B_GITHUB_APP_ENV=/absolute/existing-app.env \
+  node scripts/devflow-b-resume.mjs /absolute/opencode-output/ready.json
+node --test scripts/devflow-b-service-env.test.mjs
+```
+
+只允许 `DEVFLOW_GITHUB_APP_ID` 和 `DEVFLOW_GITHUB_APP_PRIVATE_KEY_BASE64` 进入 API 子进程；Web/Electron 不继承任何 `DEVFLOW_GITHUB_APP_*` 或该文件路径。三个隔离端口已占用时在启动前拒绝，必须先正常停止本包旧进程。三个配置隔离回归通过，实际子进程环境另有只读核对。不得输出源文件或凭据。
+
+真实 App 草稿 PR、精确提交测试、独立 Web 交付批准、真实模型验收审查、业务验收和完成后重启已通过，见 [最终报告](../validation/devflow-b-delivery-20261024.md)。B 累计 83 次请求，保守结算和未知预留共 ¥2.213322，费用网关已停止；历史账本和失败记录未重置。原始准备状态保留在上节，不再代表当前交付阻塞。

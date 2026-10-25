@@ -1,5 +1,7 @@
 # B 工作包真实验收记录（2026-10-23）
 
+**后续状态（2026-10-24）：** 本文保留当日现场与阻塞记录。GitHub App 配置、真实草稿 PR、Web 业务验收及完成后重启现已通过，最新结论见 [B 交付与最终验收报告](devflow-b-delivery-20261024.md)。
+
 ## 范围和环境
 
 独立分支 `codex/devflow-b-opencode-20261023`，基于 #244 的 `533ddb5`，参考工作树没有修改。Node.js 24.18.0、pnpm 9.15.0、OpenCode 1.18.15；真实 Electron/preload/SQLite、独立 PostgreSQL 容器与 schema、真实 Web/API、合成 Todo。测试账本与 profile 见[环境说明](../plans/devflow-b-validation-20261023.md)。真实提供方为已授权 DeepSeek Flash，不使用用户业务数据。
