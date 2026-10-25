@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-22",
+  "scope": "documentation only",
+  "changedPreexistingFiles": [
+    "docs/plans/memory-sharing-and-learning-2026-10-22.zh-CN.md"
+  ],
+  "addedFiles": [
+    "docs/research/automatic-memory-2026-10-22/document-checks.json",
+    "docs/research/automatic-memory-2026-10-22/harness-notes.zh-CN.md",
+    "docs/research/automatic-memory-2026-10-22/hindsight-notes.zh-CN.md",
+    "docs/research/automatic-memory-2026-10-22/input-manifest.json",
+    "docs/research/automatic-memory-2026-10-22/previous-manual-first-plan.zh-CN.md",
+    "docs/research/automatic-memory-2026-10-22/research-summary.zh-CN.md"
+  ],
+  "removedFiles": [],
+  "unexpectedChanges": [],
+  "stagedDiffUnchanged": true,
+  "activeDocumentsChecked": [
+    "docs/plans/memory-sharing-and-learning-2026-10-22.zh-CN.md",
+    "docs/research/automatic-memory-2026-10-22/research-summary.zh-CN.md",
+    "docs/research/automatic-memory-2026-10-22/harness-notes.zh-CN.md",
+    "docs/research/automatic-memory-2026-10-22/hindsight-notes.zh-CN.md"
+  ],
+  "missingLocalLinkTargets": [],
+  "unbalancedCodeFences": [],
+  "trailingWhitespace": [],
+  "archivedPlanPreserved": true,
+  "archiveRelativeLinks": "immutable snapshot; retain original docs/plans base, excluded from active-link validation",
+  "productTestsRun": false,
+  "realModelsCalled": false,
+  "hindsightServiceModified": false,
+  "passed": true
+}

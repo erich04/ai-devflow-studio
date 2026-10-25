@@ -5,6 +5,7 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalProject, WorkflowRun } from '@ai-devflow/shared'
+import { assembleRetrievedKnowledgeContext } from '@ai-devflow/shared'
 import { createCodingRuntime } from './coding-runtime.js'
 import { createDesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
@@ -91,7 +92,8 @@ describe('DevFlow Native Executor v2 runtime', () => {
     expect(prompt.length).toBeLessThanOrEqual(8_000)
   })
 
-  it.each(['success', 'unrepairable', 'invalid_repair', 'memory_deleted', 'memory_expired', 'memory_changes_during_provider'] as const)(
+  it.each(['success', 'unrepairable', 'invalid_repair', 'memory_deleted', 'memory_expired', 'memory_changes_during_provider',
+    'knowledge_changes_during_provider', 'knowledge_revoked_before_repair'] as const)(
     'preserves exact changes and executed evidence for %s', async (scenario) => {
     const repositoryPath = await temporaryDirectory('devflow-native-v2-repository')
     const worktreeRoot = await temporaryDirectory('devflow-native-v2-worktrees')
@@ -102,7 +104,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
     await writeFile(path.join(repositoryPath, 'src/message.ts'), 'export const message = "old"\n', 'utf8')
     await writeFile(
       path.join(repositoryPath, 'test.mjs'),
-      !['unrepairable', 'invalid_repair'].includes(scenario)
+      !['unrepairable', 'invalid_repair', 'knowledge_revoked_before_repair'].includes(scenario)
         ? "import { readFile } from 'node:fs/promises'\nif (!(await readFile('src/message.ts', 'utf8')).includes('message = \\\"new\\\"')) process.exit(1)\n"
         : "import './node_modules/missing-tool/lib/check.js'\n",
       'utf8',
@@ -148,11 +150,24 @@ describe('DevFlow Native Executor v2 runtime', () => {
     }
     const providerPrompts: string[] = []
     const providerCalls: Array<{ phase: string; systemPrompt: string; userPrompt: string }> = []
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: project.id, userId: run.creatorId },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1', degraded: false,
+      sources: [{ sourceRef: 'message-v1', path: 'docs/knowledge/message.md', title: 'Message rule',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic',
+        content: 'The new message must retain the public export and double quotes.' }],
+    })
+    let knowledgeCurrent = true
+    const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
+    const assertRetrievedKnowledgeCurrent = async () => {
+      if (!knowledgeCurrent) throw new Error('Retrieved knowledge source changed')
+    }
     const provider: NativeCodingV2DecisionProvider = {
       id: 'deepseek', version: 2, modelId: 'deepseek-v4-flash', billing: 'metered',
       async complete(input) {
         providerPrompts.push(input.userPrompt)
         providerCalls.push({ phase: input.phase, systemPrompt: input.systemPrompt, userPrompt: input.userPrompt })
+        if (scenario === 'knowledge_changes_during_provider' && input.phase === 'analysis') knowledgeCurrent = false
         if (scenario === 'memory_changes_during_provider' && input.phase === 'analysis') {
           if (!promotion.authorized) throw new Error('Expected authorized Memory promotion')
           currentTime = '2026-08-31T00:30:00.001Z'
@@ -277,13 +292,16 @@ describe('DevFlow Native Executor v2 runtime', () => {
       clock,
       runSavedTest: async (input) => {
         statusDuringSavedTest = (await store.listCodingAgentRuns(run.id))[0]?.status
-        return runLocalTestCommand(input)
+        const tested = await runLocalTestCommand(input)
+        if (scenario === 'knowledge_revoked_before_repair') knowledgeCurrent = false
+        return tested
       },
     })
     const publishRunStatus = vi.fn()
     const runtime = createCodingRuntime({
       store,
       executor,
+      prepareRetrievedKnowledge, assertRetrievedKnowledgeCurrent,
       publisher: {
         publishRunStatus,
         publishEvent: vi.fn(),
@@ -322,8 +340,9 @@ describe('DevFlow Native Executor v2 runtime', () => {
       requestedBy: run.creatorId,
       userInstruction: 'Change the message from old to new.',
     })
-    if (scenario === 'memory_changes_during_provider') {
-      await expect(starting).rejects.toThrow('Coding Memory changed, expired or was deleted')
+    if (scenario === 'memory_changes_during_provider' || scenario === 'knowledge_changes_during_provider') {
+      await expect(starting).rejects.toThrow(scenario === 'knowledge_changes_during_provider'
+        ? 'Retrieved knowledge source changed' : 'Coding Memory changed, expired or was deleted')
       expect(providerPrompts).toHaveLength(1)
       expect(await store.listCodingChangeSets()).toHaveLength(0)
       expect(await store.listTestEvidence(run.id)).toHaveLength(0)
@@ -341,6 +360,9 @@ describe('DevFlow Native Executor v2 runtime', () => {
     const waiting = await starting
     expect(providerPrompts).toHaveLength(2)
     expect(providerPrompts.every((prompt) => prompt.includes(rememberedRule))).toBe(true)
+    expect(providerPrompts.every((prompt) => prompt.includes('The new message must retain'))).toBe(true)
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+    expect(waiting.codingRun.contextReceipt?.knowledgeContext?.retrievedKnowledge).toEqual(retrievedKnowledge.manifest)
     expectCacheFriendlyNativeCalls(providerCalls, ['analysis', 'initial'])
     expect(waiting.codingRun).toMatchObject({
       status: 'waiting_permission', engine: 'native', providerId: 'deepseek',
@@ -375,7 +397,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
       const reopened = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
       try {
         const [persisted] = await reopened.listCodingAgentRuns(run.id)
-        await expect(assertCodingContextCurrent({ store: reopened, codingRun: persisted!, now: clock() }))
+        await expect(assertCodingContextCurrent({ store: reopened, codingRun: persisted!, now: clock(), assertRetrievedKnowledgeCurrent }))
           .rejects.toThrow('Coding Memory changed, expired or was deleted')
       } finally { reopened.close() }
     }
@@ -395,6 +417,19 @@ describe('DevFlow Native Executor v2 runtime', () => {
       expect(statusDuringSavedTest).toBeUndefined()
       expect((await store.listCodingAgentRuns(run.id))[0]?.status).toBe('failed')
       await expect(readFile(path.join(repositoryPath, 'src/message.ts'), 'utf8')).resolves.toBe('export const message = "old"\n')
+      store.close()
+      return
+    }
+
+    if (scenario === 'knowledge_revoked_before_repair') {
+      await expect(approval).rejects.toThrow('Retrieved knowledge source changed')
+      expect(providerCalls.map((call) => call.phase)).toEqual(['analysis', 'initial'])
+      expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+      expect((await store.listCodingAgentRuns(run.id))[0]?.status).toBe('failed')
+      expect((await store.listTestEvidence(run.id))[0]).toMatchObject({ status: 'failed', exitCode: 1 })
+      expect((await store.listCodingAgentEvents(waiting.codingRun.id))
+        .flatMap((event) => event.metadata?.providerCall ? [event.metadata.providerCall] : []))
+        .toEqual(expect.arrayContaining([expect.objectContaining({ phase: 'initial', status: 'succeeded', billingState: 'confirmed' })]))
       store.close()
       return
     }

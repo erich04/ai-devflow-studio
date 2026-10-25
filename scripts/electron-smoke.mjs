@@ -8,9 +8,11 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { _electron as electron, chromium, expect } from '@playwright/test'
 import { resolveE2eRuntime } from './e2e-runtime.mjs'
+import { createIsolatedNextBuild } from './e2e-next-build.mjs'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
+const nextBuild = await createIsolatedNextBuild(path.join(rootDir, 'apps/web'))
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const {
   apiPort,
@@ -28,6 +30,7 @@ const userDataDir = path.join(tempRoot, 'user-data')
 const controlledOpencodePath = path.join(tempRoot, 'controlled-opencode')
 const controlledOpencodeLogPath = path.join(tempRoot, 'controlled-opencode-events.ndjson')
 const electronDiagnostics = []
+const launchedApps = new Set()
 const blockedCommand = 'powershell Remove-Item -Recurse -Force C:\\devflow'
 const demoSessionHeaders = {
   'x-devflow-session-source': 'demo',
@@ -93,12 +96,15 @@ function run(command, args, options = {}) {
 }
 
 function spawnQuiet(command, args, env = {}) {
-  return spawn(command, args, {
+  const child = spawn(command, args, {
     cwd: rootDir,
     env: { ...process.env, ...env },
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  child.devflowClosed = false
+  child.once('close', () => { child.devflowClosed = true })
+  return child
 }
 
 function delay(ms) {
@@ -151,7 +157,7 @@ function isPortOpen(port) {
 }
 
 async function stopSpawnedProcess(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
+  if (!child || child.devflowClosed) {
     return
   }
 
@@ -169,12 +175,14 @@ async function stopSpawnedProcess(child) {
     child.kill('SIGTERM')
   }
 
+  let timeout
   const exited = await Promise.race([
-    new Promise((resolve) => child.once('exit', resolve)),
-    delay(3_000).then(() => false),
+    new Promise((resolve) => child.once('close', resolve)),
+    new Promise((resolve) => { timeout = setTimeout(() => resolve(false), 3_000) }),
   ])
+  clearTimeout(timeout)
 
-  if (exited === false && child.exitCode === null && child.signalCode === null) {
+  if (exited === false && !child.devflowClosed) {
     try {
       kill('SIGKILL')
     } catch {
@@ -226,6 +234,7 @@ async function launchApp({ useProjectCodingRuntime = false } = {}) {
     electronDiagnostics.push(chunk.toString())
   })
 
+  launchedApps.add(app)
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   return { app, page }
@@ -975,6 +984,7 @@ try {
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
       DEVFLOW_API_BASE_URL: apiServerUrl,
       NEXT_PUBLIC_DEVFLOW_API_URL: apiServerUrl,
+      ...nextBuild.env,
     },
   )
   vite = spawnQuiet(corepack, [
@@ -2035,6 +2045,8 @@ try {
 
   console.log('Electron integration smoke passed: task center, workflow, review, permissions, tests, persistence and provider removal.')
 } finally {
+  await Promise.allSettled([...launchedApps].map(app => app.close()))
   await Promise.all([stopSpawnedProcess(vite), stopSpawnedProcess(web), stopSpawnedProcess(api)])
-  await rm(tempRoot, { recursive: true, force: true })
+  await nextBuild.close()
+  await rm(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
 }

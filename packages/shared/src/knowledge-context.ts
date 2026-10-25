@@ -4,7 +4,9 @@ import type {
   KnowledgeDocumentCategory,
   NodeStage,
   ProjectInstructionsSnapshot,
+  RetrievedKnowledgeContext,
 } from './domain'
+import { boundRetrievedKnowledgeContext, describeRetrievedKnowledgeManifest, renderRetrievedKnowledgeContext } from './knowledge-retrieval-context'
 
 /**
  * Resident knowledge context (ADR 0025).
@@ -127,6 +129,8 @@ export type KnowledgeStageContextInput = {
   canReadFiles: boolean
   budgetBytes?: number
   catalogLimit?: number
+  /** Optional host retrieval remains separate from required resident standards. */
+  retrievedKnowledge?: RetrievedKnowledgeContext
 }
 
 export type KnowledgeStageContext = {
@@ -134,6 +138,7 @@ export type KnowledgeStageContext = {
   instructionsSection: string
   /** Empty when the project has no knowledge documents. */
   knowledgeSection: string
+  retrievedKnowledgeSection?: string
   manifest: KnowledgeContextManifest
 }
 
@@ -149,6 +154,15 @@ function renderDocument(document: KnowledgeDocument, gate: boolean): string {
 }
 
 export function assembleKnowledgeStageContext(input: KnowledgeStageContextInput): KnowledgeStageContext {
+  if (input.retrievedKnowledge && input.retrievedKnowledge.manifest.stage !== input.stage) {
+    throw new Error('Retrieved knowledge belongs to another workflow stage')
+  }
+  const retrievedKnowledge = input.retrievedKnowledge
+    ? boundRetrievedKnowledgeContext(input.retrievedKnowledge, input.retrievedKnowledge.manifest.budgetBytes)
+    : undefined
+  const retrievedSection = retrievedKnowledge
+    ? { retrievedKnowledgeSection: renderRetrievedKnowledgeContext(retrievedKnowledge) }
+    : {}
   const budgetBytes = input.budgetBytes ?? KNOWLEDGE_STAGE_CONTEXT_BUDGET_BYTES
   const catalogLimit = input.catalogLimit ?? KNOWLEDGE_CATALOG_MAX_ENTRIES
   const documents = [...input.documents].sort(compareByPath)
@@ -205,6 +219,7 @@ export function assembleKnowledgeStageContext(input: KnowledgeStageContextInput)
       reason,
     })),
     omittedCount,
+    ...(retrievedKnowledge ? { retrievedKnowledge: retrievedKnowledge.manifest } : {}),
   }
 
   const instructionsSection = instructions && input.injectInstructions && instructions.content
@@ -217,7 +232,7 @@ export function assembleKnowledgeStageContext(input: KnowledgeStageContextInput)
     : ''
 
   if (documents.length === 0) {
-    return { instructionsSection, knowledgeSection: '', manifest }
+    return { instructionsSection, knowledgeSection: '', manifest, ...retrievedSection }
   }
   const root = input.knowledgeRoot || 'the repository'
   const catalogueLines = catalogue.map(({ document, reason }) => reason === 'budget'
@@ -240,7 +255,7 @@ export function assembleKnowledgeStageContext(input: KnowledgeStageContextInput)
         ]
       : []),
   ].join('\n')
-  return { instructionsSection, knowledgeSection, manifest }
+  return { instructionsSection, knowledgeSection, manifest, ...retrievedSection }
 }
 
 export type KnowledgeStageBudgetSummary = {
@@ -299,5 +314,5 @@ export function describeKnowledgeContextManifest(manifest: KnowledgeContextManif
     ? `${manifest.instructions.sourcePath} ${manifest.instructions.contentDigest} (${manifest.instructions.loadedBy}${manifest.instructions.truncated ? ', truncated' : ''})`
     : 'none'
   const included = manifest.included.map((entry) => `${entry.sourcePath}${entry.gate ? '[gate]' : ''}`).join(', ') || 'none'
-  return `Knowledge context stage=${manifest.stage}; instructions=${instructions}; included=${manifest.included.length} (${included}); catalogued=${manifest.catalogued.length}; omitted=${manifest.omittedCount}; bytes=${manifest.usedBytes}/${manifest.budgetBytes}.`
+  return `Knowledge context stage=${manifest.stage}; instructions=${instructions}; included=${manifest.included.length} (${included}); catalogued=${manifest.catalogued.length}; omitted=${manifest.omittedCount}; bytes=${manifest.usedBytes}/${manifest.budgetBytes}.${manifest.retrievedKnowledge ? ` ${describeRetrievedKnowledgeManifest(manifest.retrievedKnowledge)}` : ''}`
 }

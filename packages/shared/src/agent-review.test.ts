@@ -23,6 +23,9 @@ import {
 import type { Artifact, TestEvidence } from './domain'
 import { indexKnowledgeSources } from './knowledge'
 import { assembleKnowledgeStageContext } from './knowledge-context'
+import { assembleRetrievedKnowledgeContext } from './knowledge-retrieval-context'
+import { createLocalAgentKnowledgeReviewPrompt } from './knowledge-review-local-agent'
+import { measurePromptSections } from './prompt-context'
 import { createRecommendedEnforcementPreset, evaluateGateEnforcement, resolveEffectivePolicy } from './enforcement'
 import { buildRemediationPlan } from './remediation'
 import { createRemoteAgentReviewSummary } from './remote-sync'
@@ -52,6 +55,127 @@ it('reviews an existing acceptance bundle under the effective policy with final-
 
 const run = runs[0]!
 const node = run.nodes.find((item) => item.id === 'n-design-gate')!
+
+it.each(['direct-provider', 'local-agent'] as const)('binds low-trust review Memory to the final %s prompt and cost preflight', async (knowledgeExecutor) => {
+  const backgroundMemory = [{ id: 'experience-1', revision: 2, headVersion: 3, contentDigest: 'a'.repeat(64), statement: 'REVIEW_MEMORY: inspect the previous serialization repair when investigating task regressions.' }]
+  const context = await buildAgentReviewContext({ run, node, artifacts, testEvidence: [], knowledgeDocuments, knowledgeChunks,
+    knowledgeRoot: 'docs/knowledge', knowledgeExecutor, backgroundMemory, omittedMemoryCount: 2 })
+  const prompt = createKnowledgeReviewPrompt(context)
+  const data = JSON.parse(prompt.split('\n').at(-1)!)
+  expect(data.BACKGROUND_EXPERIENCE).toEqual(backgroundMemory)
+  expect(JSON.stringify(data.REVIEW_CRITERIA)).not.toContain('REVIEW_MEMORY')
+  expect(context.manifest.backgroundMemory).toEqual({ memories: [{ id: 'experience-1', revision: 2, headVersion: 3, contentDigest: 'a'.repeat(64) }], omittedCount: 2 })
+  const provider = createFakeAgentProvider()
+  const request = { id: 'memory-review', runId: run.id, nodeId: node.id, projectId: run.projectId, requestedBy: 'reviewer', runtime: 'electron' as const, providerId: provider.id }
+  expect(estimateKnowledgeReviewCostPreflight({ context, provider, request }).prompt).toBe(prompt)
+})
+
+it('removes optional review Memory and its attachment receipt when required subject content fills the prompt', async () => {
+  const reviewNode = { ...node, id: 'pr-review', stage: 'pr' as const, kind: 'pr' as const, artifactIds: ['delivery-subject'] }
+  const context = await buildAgentReviewContext({
+    run, node: reviewNode, artifacts: [{ id: 'delivery-subject', runId: run.id, nodeId: reviewNode.id,
+      kind: 'pr', title: 'Delivery', summary: 'Complete subject', content: '正文'.repeat(16000) + 'SUBJECT_END',
+      redacted: true, updatedAt: '2026-10-20T00:00:00Z' }],
+    testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [], knowledgeRoot: 'docs/knowledge',
+    backgroundMemory: [{ id: 'experience-oversized-context', revision: 1, headVersion: 1, contentDigest: 'a'.repeat(64), statement: 'OPTIONAL_REVIEW_MEMORY: preserve conditional steps.' }],
+  })
+  const prompt = createKnowledgeReviewPrompt(context)
+  expect(prompt).toContain('SUBJECT_END')
+  expect(prompt).not.toContain('OPTIONAL_REVIEW_MEMORY')
+  expect(prompt).not.toContain('experience-oversized-context')
+  expect(context.backgroundMemory).toEqual([])
+  expect(context.manifest.backgroundMemory).toEqual({ memories: [], omittedCount: 1 })
+})
+
+it('keeps complete review Memory statements within the shared stage budget', async () => {
+  const context = await buildAgentReviewContext({ run, node, artifacts, testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [],
+    backgroundMemory: [
+      { id: 'too-long', revision: 1, headVersion: 1, contentDigest: 'a'.repeat(64), statement: '中'.repeat(1000) + 'DO_NOT_TRUNCATE_CONDITION' },
+      { id: 'small', revision: 1, headVersion: 1, contentDigest: 'b'.repeat(64), statement: 'Keep the negation: do not treat old tests as current evidence.' },
+    ] })
+  expect(context.backgroundMemory?.map((item) => item.id)).toEqual(['small'])
+  expect(context.manifest.backgroundMemory).toEqual({ memories: [{ id: 'small', revision: 1, headVersion: 1, contentDigest: 'b'.repeat(64) }], omittedCount: 1 })
+  expect(createKnowledgeReviewPrompt(context)).not.toContain('DO_NOT_TRUNCATE_CONDITION')
+})
+
+it.each(['direct-provider', 'local-agent'] as const)('binds retrieved review grounding before %s budget preflight', async (knowledgeExecutor) => {
+  const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+    stage: node.stage, scope: { projectId: run.projectId, userId: 'reviewer-private-id' },
+    queryDigest: 'query', configGeneration: 'private-generation', degraded: false,
+    sources: [{ sourceRef: 'projection-1', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+      contentDigest: 'digest', matchReason: 'both', content: 'RETRIEVED_CLEANUP_RULE: keep tasks completed fewer than seven days ago.' }],
+  })
+  const context = await buildAgentReviewContext({
+    run, node, artifacts, testEvidence: [], knowledgeDocuments, knowledgeChunks,
+    knowledgeRoot: 'docs/knowledge', knowledgeExecutor, retrievedKnowledge,
+  })
+  const prompt = createKnowledgeReviewPrompt(context)
+  const provider = createFakeAgentProvider()
+  const request = { id: 'review-knowledge', runId: run.id, nodeId: node.id,
+    projectId: run.projectId, requestedBy: 'reviewer-private-id', runtime: 'electron' as const, providerId: provider.id }
+  expect(prompt).toContain('RETRIEVED_CLEANUP_RULE')
+  expect(prompt).not.toContain('reviewer-private-id')
+  expect(prompt).not.toContain('private-generation')
+  expect(context.manifest.knowledgeContext?.retrievedKnowledge?.references).toHaveLength(1)
+  expect(estimateKnowledgeReviewCostPreflight({ context, provider, request }).prompt).toBe(prompt)
+})
+
+it('drops optional retrieved review excerpts before dropping complete subject or resident Gate standards', async () => {
+  const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+    stage: 'pr', scope: { projectId: run.projectId, userId: 'reviewer' }, queryDigest: 'query', degraded: false,
+    sources: Array.from({ length: 4 }, (_, index) => ({ sourceRef: `projection-${index}`,
+      path: `docs/knowledge/${index}.md`, title: 'Retrieved', contentDigest: 'digest',
+      matchReason: 'semantic' as const, content: 'OPTIONAL_REVIEW_EXCERPT'.repeat(90) })),
+  })
+  const reviewNode = { ...node, id: 'pr-review', stage: 'pr' as const, kind: 'pr' as const, artifactIds: ['delivery-subject'] }
+  const documents = indexKnowledgeSources([{ sourcePath: 'docs/knowledge/gate.md',
+    markdown: '---\nstages: [pr]\ngate: true\n---\nRESIDENT_GATE_MUST_STAY', updatedAt: '2026-10-20T00:00:00Z' }])
+  const context = await buildAgentReviewContext({
+    run, node: reviewNode, artifacts: [{ id: 'delivery-subject', runId: run.id, nodeId: reviewNode.id,
+      kind: 'pr', title: 'Delivery', summary: 'Complete subject', content: '正文'.repeat(16000) + 'SUBJECT_END',
+      redacted: true, updatedAt: '2026-10-20T00:00:00Z' }],
+    testEvidence: [], knowledgeDocuments: documents.documents, knowledgeChunks: documents.chunks,
+    knowledgeRoot: 'docs/knowledge', retrievedKnowledge,
+  })
+  const prompt = createKnowledgeReviewPrompt(context)
+  expect(prompt).toContain('SUBJECT_END')
+  expect(prompt).toContain('RESIDENT_GATE_MUST_STAY')
+  expect(prompt).not.toContain('OPTIONAL_REVIEW_EXCERPT')
+  expect(context.manifest.knowledgeContext?.retrievedKnowledge).toMatchObject({
+    references: [], usedBytes: 0, omittedCount: 4,
+  })
+})
+
+it('counts the actual OpenCode review wrapper before retaining optional retrieval', async () => {
+  const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+    stage: 'pr', scope: { projectId: run.projectId, userId: 'reviewer' }, queryDigest: 'query', degraded: false,
+    sources: [{ sourceRef: 'projection-1', path: 'docs/knowledge/extra.md', title: 'Extra',
+      contentDigest: 'digest', matchReason: 'semantic', content: 'OPTIONAL_WRAPPED_KNOWLEDGE'.repeat(50) }],
+  })
+  const reviewNode = { ...node, id: 'pr-review', stage: 'pr' as const, kind: 'pr' as const, artifactIds: ['delivery-subject'] }
+  const subject = { id: 'delivery-subject', runId: run.id, nodeId: reviewNode.id, kind: 'pr' as const,
+    title: 'Delivery', summary: 'Complete subject', content: '中'.repeat(20000) + 'REQUIRED_SUBJECT_END', redacted: true, updatedAt: '2026-10-20T00:00:00Z' }
+  const input = { run, node: reviewNode, artifacts: [subject], testEvidence: [],
+    knowledgeDocuments: [], knowledgeChunks: [], knowledgeRoot: 'docs/knowledge', retrievedKnowledge }
+  const budget = (prompt: string) => measurePromptSections(
+    [{ id: 'review', kind: 'current', content: prompt, required: true }],
+    { provider: 'generic', maxTokens: 48_000, maxBytes: 96 * 1024, maxChars: 96_000 },
+  )
+  const initial = await buildAgentReviewContext(input)
+  // Fill the public 48k-token boundary leaving room for the base prompt but not the
+  // additional read-only OpenCode wrapper. Chinese characters cost two in this estimator.
+  const padding = Math.floor((48_000 - budget(createKnowledgeReviewPrompt(initial)).tokens - 100) / 2)
+  const nearLimit = { ...input, artifacts: [{ ...subject, content: '中'.repeat(padding) + subject.content }] }
+  const direct = await buildAgentReviewContext(nearLimit)
+  const directPrompt = createKnowledgeReviewPrompt(direct)
+  expect(directPrompt).toContain('OPTIONAL_WRAPPED_KNOWLEDGE')
+  expect(budget(directPrompt).overflow).toBe(false)
+  expect(budget(createLocalAgentKnowledgeReviewPrompt(directPrompt, { knowledgeRoot: input.knowledgeRoot })).overflow).toBe(true)
+  const local = await buildAgentReviewContext({ ...nearLimit, knowledgeExecutor: 'local-agent' })
+  expect(createKnowledgeReviewPrompt(local)).toContain('REQUIRED_SUBJECT_END')
+  expect(createKnowledgeReviewPrompt(local)).not.toContain('OPTIONAL_WRAPPED_KNOWLEDGE')
+  expect(local.manifest.knowledgeContext?.retrievedKnowledge).toMatchObject({ references: [], omittedCount: 1 })
+})
 
 it.each(['pr', 'accept'] as const)('uses the same whole-document byte budget for %s review and the knowledge page', async (stage) => {
   const document = (title: string, body: string) => `---\ntitle: ${title}\nsummary: ${title}\nstages: [pr, accept]\ngate: false\n---\n# ${title}\n${body}`

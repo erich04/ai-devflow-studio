@@ -9,14 +9,19 @@ import {
   deriveWorkflowContextPolicyRequirements,
   redactSensitiveText,
   runBudgetedKnowledgeReviewAgent,
+  AGENT_MEMORY_RETRIEVAL_LIMIT_MAX,
+  STAGE_AGENT_MEMORY_RECALL_BUDGET,
   type AgentEvent,
   type AgentProvider,
   type AgentReviewResult,
+  type AgentReviewContext,
   type AgentTokenUsage,
   type AgentTrace,
   type Artifact,
   type KnowledgeChunk,
   type ProjectInstructionsSnapshot,
+  type RetrievedKnowledgeContext,
+  type RetrievedKnowledgeManifest,
   type KnowledgeDocument,
   type KnowledgeReviewBudgetGuard,
   type LocalExecutionState,
@@ -25,10 +30,11 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { RunKnowledgeReviewInput, RunKnowledgeReviewResult } from './ipc-contract.js'
+import { executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
 
 export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking' | 'executorKind'>
 
-export type KnowledgeReviewRuntimeStore = {
+export type KnowledgeReviewRuntimeStore = CodingMemoryStore & {
   listRuns(): Promise<WorkflowRun[]>
   listArtifacts(runId?: string): Promise<Artifact[]>
   listTestEvidence(runId?: string): Promise<TestEvidence[]>
@@ -50,6 +56,10 @@ export type KnowledgeReviewRuntimeDependencies = {
   knowledgeRoot?: string | null
   /** Repository instruction file (ADR 0025 L0). */
   projectInstructions?: ProjectInstructionsSnapshot | null
+  prepareRetrievedKnowledge?: (input: {
+    projectId: string; userId: string; stage: WorkflowRun['nodes'][number]['stage']; query: string; signal?: AbortSignal
+  }) => Promise<RetrievedKnowledgeContext | undefined>
+  assertRetrievedKnowledgeCurrent?: (manifest: RetrievedKnowledgeManifest) => Promise<void>
   resolveProviderMetadata(providerId: string): Promise<KnowledgeReviewProviderMetadata>
   resolveProvider(providerId: string): Promise<AgentProvider>
   budgetGuard?: KnowledgeReviewBudgetGuard
@@ -156,8 +166,26 @@ export function createKnowledgeReviewRuntime(
         ? deps.loadPolicySnapshot(input.projectId)
         : deps.store.getPolicySnapshot?.(input.projectId) ?? Promise.resolve(null),
     ])
-    let context
+    let context: AgentReviewContext
+    let recalledMemory: RecalledMemory | undefined
     try {
+      deps.signal?.throwIfAborted()
+      const query = [run.request, node.title, node.subtitle,
+        ...artifacts.filter((artifact) => node.artifactIds.includes(artifact.id))
+          .map((artifact) => `${artifact.title}\n${artifact.summary}`),
+      ].join('\n')
+      const retrievedKnowledge = await deps.prepareRetrievedKnowledge?.({
+        projectId: input.projectId, userId: input.requestedBy, stage: node.stage,
+        query,
+        ...(deps.signal ? { signal: deps.signal } : {}),
+      })
+      if (deps.store.retrieveAgentMemoryRevisions || deps.store.getAgentMemoryHead) {
+        recalledMemory = await recallScopedMemory({
+          store: deps.store, projectId: input.projectId, userId: input.requestedBy,
+          runtimeId: `agent-runtime-review-${requestId}`, requestId: `review-memory-${requestId}`,
+          query, now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+        })
+      }
       context = await buildAgentReviewContext({
         run,
         node,
@@ -168,6 +196,13 @@ export function createKnowledgeReviewRuntime(
         ...(deps.knowledgeRoot !== undefined ? { knowledgeRoot: deps.knowledgeRoot } : {}),
         knowledgeExecutor: providerMetadata.executorKind ?? 'direct-provider',
         ...(deps.projectInstructions ? { projectInstructions: deps.projectInstructions } : {}),
+        ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
+        ...(recalledMemory ? {
+          backgroundMemory: recalledMemory.memories.map((identity) => ({
+            ...identity, statement: recalledMemory!.revisions.find((revision) => revision.id === identity.id)!.statement,
+          })),
+          omittedMemoryCount: recalledMemory.omittedMemoryCount,
+        } : {}),
         policySnapshot,
         requiredContextFields: deriveWorkflowContextPolicyRequirements(
           policySnapshot?.effectivePolicy,
@@ -178,6 +213,39 @@ export function createKnowledgeReviewRuntime(
       const detail = failureMessage(error)
       await persistError(input, requestId, `门禁审查对象不完整：${detail}`)
       throw new Error(`基于知识的门禁审查在调用 Provider 前被阻断：${detail}`)
+    }
+    const assertRetrievedKnowledge = async () => {
+      const manifest = context.manifest.knowledgeContext?.retrievedKnowledge
+      if (!manifest?.references.length) return
+      if (manifest.scope.projectId !== input.projectId || manifest.scope.userId !== input.requestedBy) {
+        throw new Error('Review retrieved knowledge scope does not match the current actor')
+      }
+      if (!deps.assertRetrievedKnowledgeCurrent) throw new Error('Review retrieved knowledge verification is unavailable')
+      await deps.assertRetrievedKnowledgeCurrent(manifest)
+    }
+    const assertMemoryCurrent = async () => {
+      if (!recalledMemory) return
+      const scope = await executionScope({ store: deps.store, projectId: input.projectId,
+        userId: input.requestedBy, runtimeId: recalledMemory.runtimeId })
+      if (JSON.stringify(scope) !== JSON.stringify(recalledMemory.scope)) throw new Error('Review Memory scope changed')
+      const identities = context.manifest.backgroundMemory?.memories ?? []
+      if (!identities.length) return
+      if (!deps.store.retrieveAgentMemoryRevisions || !deps.store.getAgentMemoryHead) throw new Error('Review Memory store is unavailable')
+      const observedAt = now()
+      const retrieval = { stateVersion: 1, id: `review-memory-check-${requestId}`, scope,
+        runtimeId: recalledMemory.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: observedAt } as const
+      const current = deps.store.hydrateAgentMemoryRevisions
+        ? await deps.store.hydrateAgentMemoryRevisions(retrieval, identities.map((entry) => entry.id))
+        : await deps.store.retrieveAgentMemoryRevisions(retrieval)
+      for (const identity of identities) {
+        const revision = current.find((entry) => entry.id === identity.id)
+        const head = await deps.store.getAgentMemoryHead(identity.id)
+        if (!revision || !head || head.status !== 'active' || head.version !== identity.headVersion ||
+          head.currentRevision !== identity.revision || revision.status !== 'active' || revision.revision !== identity.revision ||
+          revision.contentDigest !== identity.contentDigest || (revision.expiresAt && Date.parse(revision.expiresAt) <= Date.parse(observedAt))) {
+          throw new Error('Review Memory changed, expired or was deleted')
+        }
+      }
     }
 
     // Resolve once per review operation so repair attempts share one budget consent.
@@ -194,12 +262,18 @@ export function createKnowledgeReviewRuntime(
           (provider.executorKind ?? 'direct-provider') !== (providerMetadata.executorKind ?? 'direct-provider')) {
           throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'provider_configuration_changed', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false })
         }
+        try { await assertRetrievedKnowledge(); await assertMemoryCurrent() } catch (error) {
+          throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'retrieved_knowledge_stale',
+            deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false, cause: error })
+        }
         return provider.reviewKnowledge(providerInput)
       },
     }
 
     let budgetedResult
     try {
+      await assertRetrievedKnowledge()
+      await assertMemoryCurrent()
       budgetedResult = await runBudgetedKnowledgeReviewAgent({
         request: {
           id: requestId,
@@ -248,6 +322,8 @@ export function createKnowledgeReviewRuntime(
     }
 
     const result = budgetedResult.execution
+    await assertRetrievedKnowledge()
+    await assertMemoryCurrent()
     const latestRun = (await deps.store.listRuns()).find((candidate) => candidate.id === run.id)
     if (!latestRun || latestRun.version !== run.version || latestRun.currentNodeId !== node.id ||
       (await assessAgentReviewFreshness({ review: result.review, run: latestRun, node, artifacts: await deps.store.listArtifacts(run.id) })).status !== 'current') {

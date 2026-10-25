@@ -103,6 +103,33 @@ describe('runWorkflowTestCommand', () => {
     expect(result.cwd).toBe(input.project.path)
   })
 
+  it('checks the knowledge receipt before executing and before publishing real test evidence', async () => {
+    const { input } = await fixture(false)
+    const events: string[] = []
+    const result = await runWorkflowTestCommand({
+      ...input,
+      assertKnowledgeCurrent: async () => { events.push('verify') },
+      complete: async (execution) => { events.push('publish'); return execution },
+    })
+    expect(result.result.status).toBe('passed')
+    expect(events).toEqual(['verify', 'verify', 'publish'])
+  })
+
+  it.each([1, 2])('does not publish success when knowledge becomes stale at check %i', async (failureAt) => {
+    const { input } = await fixture(false)
+    let checks = 0
+    const complete = vi.spyOn(input, 'complete')
+    await expect(runWorkflowTestCommand({
+      ...input,
+      assertKnowledgeCurrent: async () => {
+        if (++checks === failureAt) throw new Error('知识来源已变化')
+      },
+    })).rejects.toThrow('知识来源已变化')
+    expect(complete).not.toHaveBeenCalled()
+    if (failureAt === 1) await expect(readFile(path.join(input.project.path, 'executed.txt'))).rejects.toThrow()
+    else expect(await readFile(path.join(input.project.path, 'executed.txt'), 'utf8')).toBe('executed')
+  })
+
   it.each(['failed', 'running'] as const)('rejects a newer %s Coding attempt instead of selecting old success', async (status) => {
     const { input, codingRuns } = await fixture()
     codingRuns.push({ ...codingRuns[0]!, id: 'coding-newer', startedAt: '2026-09-07T08:00:00.000Z', status })
@@ -175,8 +202,10 @@ describe('runWorkflowTestCommand', () => {
     const { input } = await fixture()
     input.store.getRun = async () => ({ ...input.run, version: input.run.version + 1 })
     const complete = vi.spyOn(input, 'complete')
-    await expect(runWorkflowTestCommand(input)).rejects.toThrow(/Workflow changed/)
+    const prepareKnowledge = vi.fn(async () => {})
+    await expect(runWorkflowTestCommand({ ...input, prepareKnowledge })).rejects.toThrow(/Workflow changed/)
     expect(complete).not.toHaveBeenCalled()
+    expect(prepareKnowledge).not.toHaveBeenCalled()
   })
 
   it('rechecks the workspace after waiting for cleanup and never falls back to the source', async () => {
@@ -199,14 +228,23 @@ describe('runWorkflowTestCommand', () => {
   it('holds the workspace lease until formal Test evidence is committed', async () => {
     const { input, workspaces } = await fixture()
     let release!: () => void
+    const commitAllowed = new Promise<void>((resolve) => { release = resolve })
+    let reportStarted!: () => void
+    const commitStarted = new Promise<void>((resolve) => { reportStarted = resolve })
     input.complete = async (execution) => {
-      await new Promise<void>((resolve) => { release = resolve })
+      reportStarted()
+      await commitAllowed
       return execution
     }
     const execution = runWorkflowTestCommand(input)
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    // Await the actual commit boundary; Git/process startup can exceed waitFor's
+    // default one-second deadline on Windows. The test's own deadline still applies.
+    await Promise.race([commitStarted, execution.then(() => {
+      throw new Error('Test execution finished without reaching the evidence commit')
+    })])
     const cleanup = vi.fn(async () => undefined)
     const queued = input.workspaceCoordinator.runExclusive(workspaces[0]!.id, cleanup)
+    await new Promise<void>((resolve) => setImmediate(resolve))
     expect(cleanup).not.toHaveBeenCalled()
     release()
     expect((await execution).result.status).toBe('passed')

@@ -32,6 +32,42 @@ async function setup(accepted = true, responder?: typeof fetch) {
   return { proxy, budget, upstream, send }
 }
 describe('OpenCode governed relay', () => {
+  it('reports known zero usage when knowledge fails before the first reservation', async () => {
+    const budget = governance()
+    const upstream = vi.fn(async () => Response.json({}))
+    const proxy = await createGovernedOpencodeProxy({ binding, projectId: 'project', governance: budget, fetcher: upstream,
+      assertContextCurrent: async () => { throw new Error('knowledge changed') } })
+    close.push(proxy.close)
+    const response = await fetch(proxy.binding.baseUrl + '/chat/completions', { method: 'POST',
+      headers: { authorization: `Bearer ${proxy.binding.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: binding.modelId }) })
+    expect(response.status).toBe(400)
+    expect(budget.reserve).not.toHaveBeenCalled()
+    expect(upstream).not.toHaveBeenCalled()
+    expect(proxy.usageAfter(0)).toMatchObject({ inputTokens: 0, outputTokens: 0, missingUsageCount: 0, budgetAttemptIds: [] })
+    expect(proxy.failureForRequest(response.headers.get('x-devflow-relay-request')!, 0)?.code).toBe('evidence_invalid')
+  })
+  it('revalidates knowledge on every model round and preserves charges if the result becomes stale', async () => {
+    const budget = governance()
+    let current = true
+    const upstream = vi.fn(async () => {
+      current = false
+      return Response.json({ choices: [], usage: { prompt_tokens: 10, completion_tokens: 5,
+        prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 10 } })
+    })
+    const proxy = await createGovernedOpencodeProxy({ binding, projectId: 'project', governance: budget, fetcher: upstream,
+      assertContextCurrent: async () => { if (!current) throw new Error('knowledge changed') } })
+    close.push(proxy.close)
+    const send = () => fetch(proxy.binding.baseUrl + '/chat/completions', { method: 'POST',
+      headers: { authorization: `Bearer ${proxy.binding.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: binding.modelId }) })
+    expect((await send()).status).toBe(400)
+    expect(proxy.usageAfter(0)).toMatchObject({ inputTokens: 10, outputTokens: 5, budgetAttemptIds: [expect.any(String)] })
+    expect((await send()).status).toBe(400)
+    expect(upstream).toHaveBeenCalledTimes(1)
+    expect(budget.reserve).toHaveBeenCalledTimes(1)
+    expect(budget.settle).toHaveBeenCalledTimes(1)
+  })
   it('applies an explicit output cap to both admission and the forwarded request', async () => {
     const budget = governance()
     const upstream = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => Response.json({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1 } }))

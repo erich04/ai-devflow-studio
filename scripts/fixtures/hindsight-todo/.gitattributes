@@ -1,0 +1,2 @@
+# source.json verifies the original Todo snapshot byte for byte on every platform.
+baseline/** -text
