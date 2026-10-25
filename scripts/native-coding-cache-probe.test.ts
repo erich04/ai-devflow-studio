@@ -25,3 +25,12 @@ it('removes only the appended text state and refuses a request without the known
   expect(legacyPrefixRequest(input, 'old').messages).toEqual([{ role: 'user', content: 'Task' }])
   expect(() => legacyPrefixRequest({ ...input, messages: [{ role: 'user', content: 'Task' }] }, 'old')).toThrow(/runtime state/)
 })
+
+
+it('restores an empty JSON tool result without losing the appended state', () => {
+  const input: NativeConversationRequest = { systemPrompt: 'fixed', messages: [{ role: 'tool', tool_call_id: 'empty', content: '{"devflowRuntimeState":{"step":1}}' }], tools: [] }
+  const result = legacyPrefixRequest(input, 'old')
+  expect(result.messages[0]!.content).toBe('{}')
+  expect(result.systemPrompt).toContain('{"step":1}')
+  expect(input.messages[0]!.content).toBe('{"devflowRuntimeState":{"step":1}}')
+})

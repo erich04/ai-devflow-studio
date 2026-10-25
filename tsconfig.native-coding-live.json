@@ -9,6 +9,7 @@
   },
   "include": [
     "scripts/native-coding-focused-live.mts",
+    "scripts/native-coding-closure-live.mts",
     "scripts/native-coding-cache-probe.ts",
     "scripts/native-coding-live-support.ts",
     "scripts/native-coding-trial-live.mts",

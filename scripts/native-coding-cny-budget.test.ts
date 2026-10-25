@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { governedModelCall } from '../packages/shared/src/governed-provider'
 import type { ModelCallQuote } from '../packages/shared/src/model-call-budget'
-import { createCnyEvaluationRound, openInteractiveRound } from './native-coding-round-budget'
+import { createCnyEvaluationRound, continueCnyEvaluationRound, openInteractiveRound } from './native-coding-round-budget'
 import { createEvaluationLedger } from './native-coding-live-support'
 
 const roots: string[] = [], ledgers: Array<{ close(): void }> = []
@@ -73,6 +73,7 @@ it('refuses unknown scopes, wrong identity, scope call exhaustion and another le
   vi.stubEnv('DEVFLOW_NATIVE_EVALUATION_ROUND', root)
   await expect(createEvaluationLedger({ file: path.join(root, 'bypass.json'), projectId: 'evaluation-project', maxCalls: 200, maxCostUsd: 100 })).rejects.toThrow(/scope/i)
   await expect(open(path.join(root, 'different'))).rejects.toThrow(/round/i)
+  await expect(createCnyEvaluationRound(path.join(root, 'new-ten-yuan'), { maxCostCny: 10, maxCalls: 200, maxOutputTokens: 65536, scopes })).rejects.toThrow(/guarded/i)
 })
 
 it('blocks dispatch, not merely bookkeeping, when the last affordable reservations are used', async () => {
@@ -123,3 +124,53 @@ it.each(['native-coding-batch-live.mjs', 'native-coding-deep-live.mts', 'native-
   })).rejects.toThrow(/guarded CNY round/)
   expect((await open(root)).summary().calls).toBe(0)
 }, 30000)
+
+
+it('allocates a sealed parent remainder once, without resetting its unknown costs', async () => {
+  const root = await round(), parent = await open(root)
+  await parent.reserve(quote('unknown-one')); await parent.reserve(quote('unknown-two'))
+  await parent.seal(); parent.close()
+  const before = await readFile(path.join(root, 'budget.sqlite'))
+  const childRoot = path.join(path.dirname(root), 'continuation')
+  const attempts = await Promise.allSettled([childRoot, childRoot + '-duplicate'].map(child =>
+    continueCnyEvaluationRound(child, { parentRoot: root, maxCalls: 20, maxOutputTokens: 65536, scopes: { 'first/children': scopes['first/children'] } })))
+  expect(attempts.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+  const winner = attempts[0]!.status === 'fulfilled' ? childRoot : childRoot + '-duplicate'
+  const child = await open(winner)
+  expect(child.limits.cny!.maxCostCny).toBeCloseTo(10 - 2 * 2.62144, 8)
+  expect(child.summary().authorization).toMatchObject({ maxCostCny: 10, priorAccountedCny: 5.24288, accountedCny: 5.24288 })
+  expect((await child.reserve(quote('new-unknown'))).accepted).toBe(true)
+  expect((await child.reserve(quote('cannot-spend-parent-again'))).accepted).toBe(false)
+  expect(child.summary().authorization!.accountedCny).toBeCloseTo(7.86432, 8)
+  expect(await readFile(path.join(root, 'budget.sqlite'))).toEqual(before)
+  const old = await open(root)
+  expect(old.summary()).toMatchObject({ closed: true, calls: 2, unknownCosts: 2, reservedCny: 5.24288 })
+  expect((await old.reserve(quote('old-round-remains-closed'))).accepted).toBe(false)
+})
+
+it('fails closed if a continuation loses its parent snapshot or allocation, even after opening', async () => {
+  const root = await round(), parent = await open(root)
+  await parent.seal(); parent.close()
+  const childRoot = path.join(path.dirname(root), 'continuation')
+  await continueCnyEvaluationRound(childRoot, { parentRoot: root, maxCalls: 20, maxOutputTokens: 65536, scopes: { 'first/children': scopes['first/children'] } })
+  const child = await open(childRoot)
+  const manifestPath = path.join(root, 'round.json'), original = await readFile(manifestPath)
+  await writeFile(manifestPath, Buffer.concat([original, Buffer.from(' ')]))
+  await expect(child.reserve(quote('tampered'))).rejects.toThrow(/parent|continuation/i)
+  expect(child.records()).toHaveLength(0)
+  await writeFile(manifestPath, original)
+  const allocation = path.join(root, 'continuation.json')
+  await writeFile(allocation, '{}')
+  await expect(child.reserve(quote('missing-binding'))).rejects.toThrow(/allocation|continuation/i)
+  await expect(open(childRoot)).rejects.toThrow(/allocation|continuation/i)
+})
+
+it('refuses continuation of an active parent or another continuation', async () => {
+  const root = await round(), parent = await open(root), child = path.join(path.dirname(root), 'child')
+  const input = { parentRoot: root, maxCalls: 20, maxOutputTokens: 65536, scopes: { 'first/children': scopes['first/children'] } }
+  await expect(continueCnyEvaluationRound(child, input)).rejects.toThrow(/sealed|closed/i)
+  await parent.seal(); parent.close()
+  await continueCnyEvaluationRound(child, input)
+  const next = await open(child); await next.seal(); next.close()
+  await expect(continueCnyEvaluationRound(child + '-again', { ...input, parentRoot: child })).rejects.toThrow(/nested|continuation/i)
+})

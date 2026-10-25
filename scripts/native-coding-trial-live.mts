@@ -14,9 +14,10 @@ import { createGovernedOpencodeProxy } from '../apps/desktop/electron/governed-o
 import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.ts'
 import { createWorkflowRuntime } from '../apps/desktop/electron/workflow-runtime.ts'
 import { createEvaluationLedger, evaluationUsage, saveJson, digest } from './native-coding-live-support.ts'
+import { historicalPrefixSystem, legacyPrefixRequest } from './native-coding-cache-probe.ts'
 import { handleEvaluationChildControls } from './native-coding-live-operator.ts'
 
-export type TrialInput = { id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; roundRoot?: string; scopeId?: string }
+export type TrialInput = { requestLayout?: 'legacy' | 'fixed'; id: string; engine: 'native-v2' | 'native-v3' | 'opencode'; repository: string; output: string; prompt: string; testCommand: string; maxCalls: number; maxCostUsd: number; maxSteps: number; maxActiveMilliseconds: number; maxOutputTokens: number; opencodeBinary: string; questionAnswer?: string; roundRoot?: string; scopeId?: string }
 export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const start = Date.now(), now = () => new Date().toISOString(), projectId = 'evaluation-project', providerId = 'deepseek-evaluation'
   const ledger = await createEvaluationLedger({ file: path.join(input.output, 'ledger.json'), projectId, maxCalls: input.maxCalls, maxCostUsd: input.maxCostUsd,
@@ -29,7 +30,9 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const deadlineAbort = new AbortController()
   const deadlineSignal = (signal?: AbortSignal | null) => signal ? AbortSignal.any([signal, deadlineAbort.signal]) : deadlineAbort.signal
   let providerUnavailable: { httpStatus: number; at: string } | undefined
+  let wireSequence = 0
   const providerFetch: typeof fetch = async (url, init) => {
+    await writeFile(path.join(input.output, `wire-${++wireSequence}.json`), String(init?.body), { flag: 'wx', mode: 0o600 })
     const response = await fetch(url, { ...init, redirect: 'error', signal: deadlineSignal(init?.signal) })
     if (response.status === 401 || response.status === 402) {
       providerUnavailable = { httpStatus: response.status, at: now() }
@@ -41,7 +44,12 @@ export async function runLiveTrial(input: TrialInput, apiKey: string) {
   const runBoundedTest: typeof runLocalTestCommand = value => runLocalTestCommand({ ...value, signal: deadlineSignal(value.signal) })
   const redact = (text: string) => text.replaceAll(apiKey, '[redacted]')
   const raw = createOpenAiCompatibleAgentProvider({ id: providerId, name: 'DeepSeek V4.1 Flash', model: 'deepseek-flash', apiKey, baseUrl: 'https://api.deepseek.com', thinking: { mode: 'enabled', effort: 'high' }, structuredRequestTimeoutMs: 180000, fetcher: providerFetch })
-  const capped: AgentProvider = { ...raw, resolveRequestPolicy: value => raw.resolveRequestPolicy!({ ...value, maxOutputTokens: Math.min(value.maxOutputTokens ?? input.maxOutputTokens, input.maxOutputTokens) }) }
+  const oldSystem = input.requestLayout === 'legacy' ? historicalPrefixSystem() : undefined
+  const transform = (request: Parameters<NonNullable<AgentProvider['completeNativeConversation']>>[0]) => oldSystem ? legacyPrefixRequest(request, oldSystem) : request
+  const capped: AgentProvider = { ...raw,
+    serializeNativeRequest: request => raw.serializeNativeRequest!(transform(request)),
+    completeNativeConversation: request => raw.completeNativeConversation!(transform(request)),
+    resolveRequestPolicy: value => raw.resolveRequestPolicy!({ ...value, maxOutputTokens: Math.min(value.maxOutputTokens ?? input.maxOutputTokens, input.maxOutputTokens) }) }
   const governed = governAgentProvider(capped, projectId, ledger)
   const observe = async <T,>(kind: string, request: unknown, call: () => Promise<T>): Promise<T> => {
     const index = observations.length, record: Record<string, unknown> = { index, kind, startedAt: now(), request }; observations.push(record)

@@ -17,10 +17,11 @@ export function legacyPrefixRequest(request: NativeConversationRequest, system: 
   const content = last.content
   let state: unknown
   const jsonIndex = content.lastIndexOf(',"devflowRuntimeState":')
+  const emptyObjectState = content.startsWith('{"devflowRuntimeState":')
   const textIndex = content.lastIndexOf(marker)
-  if (content.startsWith('{') && jsonIndex > 0 && content.endsWith('}')) {
+  if (content.startsWith('{') && (jsonIndex > 0 || emptyObjectState) && content.endsWith('}')) {
     state = JSON.parse(content).devflowRuntimeState
-    last.content = content.slice(0, jsonIndex) + '}'
+    last.content = jsonIndex > 0 ? content.slice(0, jsonIndex) + '}' : '{}'
   } else if (textIndex >= 0) {
     state = JSON.parse(content.slice(textIndex + marker.length))
     if (textIndex === 0) messages.pop()
@@ -29,12 +30,17 @@ export function legacyPrefixRequest(request: NativeConversationRequest, system: 
   return { ...request, systemPrompt: `${system}\n${marker}${JSON.stringify(state)}`, messages }
 }
 
-const sha = (text: string) => createHash('sha256').update(text).digest('hex')
-export async function runCacheProbe(input: { root: string; output: string; scope: string; layout: 'legacy' | 'fixed'; pair: string }, apiKey: string) {
-  const ledger = await openInteractiveRound(input.root, input.scope)
+export function historicalPrefixSystem() {
   const oldSource = execFileSync('git', ['show', '153220124f85bec00688eb69b48726b766f72419:apps/desktop/electron/native-coding-loop.ts'], { encoding: 'utf8' })
   const legacySystem = oldSource.match(/const systemPrompt = `([^`]+)`/u)?.[1]
   if (!legacySystem) throw new Error('Cannot verify the historical system prompt')
+  return legacySystem
+}
+
+const sha = (text: string) => createHash('sha256').update(text).digest('hex')
+export async function runCacheProbe(input: { root: string; output: string; scope: string; layout: 'legacy' | 'fixed'; pair: string }, apiKey: string) {
+  const ledger = await openInteractiveRound(input.root, input.scope)
+  const legacySystem = historicalPrefixSystem()
   await mkdir(input.output)
   const store = await createLocalStore({ dbPath: path.join(input.output, 'local.sqlite') })
   const bodies: Array<{ systemHash: string; toolsHash: string; bytes: number }> = []

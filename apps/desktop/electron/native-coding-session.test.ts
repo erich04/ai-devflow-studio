@@ -65,12 +65,13 @@ it('shows the actual shared remaining step budget to the model without granting 
   } finally { await store.close() }
 })
 
-it('keeps the serialized system prompt, tools and prior history as an unchanged request prefix across steps (#239)', async () => {
+it.each(['root', 'read_only'] as const)('keeps the %s serialized system, tools and history as an unchanged request prefix across steps (#239)', async role => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-loop-prefix-')); directories.push(directory)
   const store = await createLocalStore({ dbPath: path.join(directory, 'local.sqlite') }), now = new Date().toISOString()
   try {
     await store.upsertProject({ id: 'project', name: 'test', path: directory, packageManager: 'npm', testCommand: '', createdAt: now, updatedAt: now })
     const session = createNativeCodingSession({ id: 'session', localProjectId: 'project', codingRunId: 'run', workflowRunId: 'workflow', nodeId: 'build', objective: 'Trace a dependency', providerId: 'deepseek', model: 'deepseek-flash', now })
+    if (role === 'read_only') session.parent = { sessionId: 'parent', codingRunId: 'parent-run', objectiveVersion: 1, baseDigest: 'a'.repeat(64), mode: 'read_only', paths: [] }
     session.limits.maxSteps = 4
     await store.saveNativeCodingSession(session, 0)
     const wire = createOpenAiCompatibleAgentProvider({ id: 'deepseek', name: 'DeepSeek', model: 'deepseek-flash', apiKey: 'unused', baseUrl: 'https://api.deepseek.com' })
