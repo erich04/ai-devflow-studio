@@ -1,5 +1,7 @@
 # H6：结算失败与 Electron 生命周期调查 — 2026-10-04
 
+后续：[2026-10-06 再次复查](issue-201-202-reinvestigation-20261006.md)增加到 31 组故障与时序实验，仍未复现窗口关闭，不能据此关闭 #202。
+
 基线为 `origin/main` `8c6a501`，独立分支 `codex/hardening-h6`。本轮完成 [#202](https://github.com/erich04/ai-devflow-studio/issues/202) 的隔离复现调查；**复现了结算错误，没有复现伴随的页面关闭，Issue 仍应保持开放**。没有修改产品代码。
 
 ## 方法与结果

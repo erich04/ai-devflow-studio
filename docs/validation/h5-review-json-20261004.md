@@ -1,5 +1,7 @@
 # H5：门禁审查输出分类与失败恢复验证
 
+后续：[2026-10-06 再次复查](issue-201-202-reinvestigation-20261006.md)进行了 25 次真实请求，没有捕获历史格式失败；#201 根因仍未查明。
+
 日期：2026-10-04。对应 [#201](https://github.com/erich04/ai-devflow-studio/issues/201) 与[加固计划 H5](../plans/post-redesign-hardening-2026-09-30.zh-CN.md)。基线：`8c6a501`。
 
 ## 结论与边界

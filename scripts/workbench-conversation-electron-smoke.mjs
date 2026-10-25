@@ -82,7 +82,7 @@ const server = createServer(async (request, response) => {
   const input = JSON.parse(body.messages.filter((message) => message.role === 'user').at(-1).content)
   expect(body.max_tokens).toBe(65536)
   if (!input.proposal) expect(input.originalRequirements).toContainEqual(expect.objectContaining({ runId: run.id, content: run.request, truncated: false }))
-  const user = input.userRequest ?? input.history?.filter((message) => message.role === 'user').at(-1)?.text ?? ''
+  const user = input.userRequest ?? input.currentRequest?.text ?? input.history?.filter((message) => message.role === 'user').at(-1)?.text ?? ''
   const observations = input.toolObservations
   let value
   if (user.includes('格式恢复') && malformedAttempts++ === 0) {

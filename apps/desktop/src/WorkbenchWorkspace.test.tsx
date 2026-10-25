@@ -312,6 +312,32 @@ describe('workbench tabs and independent conversation interaction', () => {
     expect(f.commands.some((command) => command.type === 'send')).toBe(false)
   })
 
+  it('shows final memory attachment identities and an unknown delivery state in conversation details', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    const session = f.sessions[0]!
+    const memoryReceipt = {
+      version: 1 as const, callId: 'call-memory', executor: 'opencode' as const, boundary: 'host_request' as const,
+      state: 'delivery_unknown' as const, promptDigest: 'a'.repeat(64), observedAt: run.updatedAt,
+      memories: [{ id: 'memory-current', revision: 3, headVersion: 5, contentDigest: 'b'.repeat(64) }], omittedMemoryCount: 2,
+    }
+    session.messages.push({ id: 'call-memory', role: 'notice', text: '模型调用 1', createdAt: run.updatedAt,
+      provider: { id: 'provider', model: 'model', executor: 'opencode' }, memoryReceipt })
+    session.contextReceipt = { includedMessages: 1, omittedMessages: 0, observedAt: run.updatedAt, memory: memoryReceipt }
+    session.version++
+    await act(async () => f.push())
+    const dialog = openDetails('对话 1')
+    expect(within(dialog).getByText(/本次装配 1 条长期记忆，2 条未附带/)).toBeVisible()
+    fireEvent.click(within(dialog).getByText('模型调用设置记录'))
+    fireEvent.click(within(dialog).getByText('长期记忆 · 1 条 · 送达状态未知'))
+    expect(within(dialog).getByText(/不能据此推断 OpenCode 内部每次请求/)).toBeVisible()
+    expect(within(dialog).getByText(/memory-current · 修订 3/)).toBeVisible()
+    expect(f.commands.some((command) => command.type === 'send')).toBe(false)
+  })
+
   it('chooses an executor for a new conversation and preserves each existing conversation selection', async () => {
     const f = fixture()
     const view = render(<WorkbenchWorkspace {...f.props} />)
@@ -642,4 +668,22 @@ describe('discussion references and proposal preview (plan W7, W8)', () => {
     fireEvent.click(screen.getByRole('button', { name: '确认保存提案' }))
     await waitFor(() => expect(f.commands.filter((command) => command.type === 'publish')).toEqual([{ type: 'publish', projectId: run.projectId, conversationId: session.id, messageId: 'draft-1' }]))
   })
+})
+
+it('keeps the selected conversation and unsent draft when reading diagnostics with an empty conversation list', async () => {
+  const f = fixture()
+  await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '导出诊断的会话', inputDraft: '保留未发送草稿' })
+  const original = f.api.workbenchConversation.getMockImplementation()!
+  f.api.workbenchConversation.mockImplementation(async input => input.type === 'export_diagnostics' ? {
+    conversations: [], diagnostics: { version: 1, generatedAt: '2026-10-23T00:00:00.000Z', conversationId: 'chat-1', status: 'idle', retention: { maxCalls: 200, maxAgeDays: 30, maxBytes: 524288 }, replay: { available: false, reason: '没有原始响应正文，不能重放历史失败。' }, investigation: null, calls: [], omittedCalls: 0 },
+  } : original(input))
+  render(<WorkbenchWorkspace {...f.props} splitDetails />)
+  const input = await screen.findByRole('textbox', { name: '对话内容' })
+  fireEvent.click(screen.getByText('调查范围与诊断'))
+  fireEvent.click(screen.getByRole('button', { name: '查看诊断' }))
+  expect(await screen.findByRole('button', { name: '下载诊断文件' })).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: /导出诊断的会话/u })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('textbox', { name: '对话内容' })).toBe(input)
+  expect(input).toHaveValue('保留未发送草稿')
+  expect(f.commands.filter(command => command.type === 'send')).toHaveLength(0)
 })

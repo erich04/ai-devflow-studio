@@ -32,6 +32,10 @@ export async function runWorkflowTestCommand<T>(input: {
   store: WorkflowTestStore
   workspaceCoordinator: WorkspaceOperationCoordinator
   timeoutMs: number
+  /** Runs only after validating the node and acquiring/verifying its workspace. */
+  prepareKnowledge?: () => Promise<void>
+  /** Source receipt only: knowledge is never interpolated into the shell command. */
+  assertKnowledgeCurrent?: () => Promise<void>
   complete: (execution: WorkflowTestCommandResult) => Promise<T>
 }): Promise<T> {
   const { project, run } = input
@@ -101,12 +105,15 @@ export async function runWorkflowTestCommand<T>(input: {
       throw new Error('Workflow Test source changed while waiting for its workspace')
     }
     const cwd = workspace ? await verifyManagedWorkspace(workspace) : project.path
+    await input.prepareKnowledge?.()
+    await input.assertKnowledgeCurrent?.()
     const { value: result, digest } = await withSourceTreeDigest(cwd, () => runLocalTestCommand({
       command: safety.normalizedCommand,
       cwd,
       timeoutMs: input.timeoutMs,
     }))
     if (workspace) await verifyManagedWorkspace(workspace)
+    await input.assertKnowledgeCurrent?.()
     // Keep the workspace lease through the existing atomic evidence/transition commit.
     return input.complete({
       command: safety.normalizedCommand, cwd, result,

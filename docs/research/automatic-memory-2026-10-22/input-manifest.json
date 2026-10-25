@@ -1,0 +1,45 @@
+{
+  "date": "2026-10-22",
+  "head": "a55d1f7ea56bb1ea77d84184a9828bc4c05ee74b",
+  "scope": "design and research only",
+  "productInputs": {
+    "apps/desktop/electron/hindsight-client.ts": "f180ff0af7372d467a35cd19af8738a0fa0c378cbfcd8a98b5761b79f5b9837f",
+    "apps/desktop/electron/hindsight-service.ts": "88e29c018c4d103e72d32c4e2607b5d11b0601ae484086083ff7c2d3e085dda9",
+    "apps/desktop/electron/hindsight-store.ts": "4ea95efc47e28a3fd0bbcdc51b70bb142bfae38a8fee4e21ac57bd8380a69af4",
+    "apps/desktop/electron/workbench-conversation-service.ts": "b9e5c577c1087bd9de309db16db30a05f9da0d5f5c84a1e92877e4c4d6932e30",
+    "apps/desktop/electron/coding-runtime.ts": "39406d95725ed759524e458c1456b07938bcb990744d961d5454013ccc83c32c",
+    "apps/desktop/electron/coding-run-memory-learning.ts": "cce1905b0bc83676f665de19bf5c4a5621ab201a7032c18a9cb2fb1dc1614976",
+    "apps/desktop/electron/coding-run-memory-policy.ts": "192ed6643e156dcc39fd47696b8ab8888b788165090df6350c4f5d729b37e1b8",
+    "apps/desktop/electron/agent-memory-authority.ts": "806f0cf0c574adb9c2e6528ef718c9736ce28d3ffcf66cbd8af063e086404dfd",
+    "packages/shared/src/retrieval-memory.ts": "a6c39366542de4184a4621f0bf52d479d4fc4b6179f94092a2491b2c0dca42e3",
+    "docs/adr/0027-selected-hindsight-projections.md": "4accc9e72a334b7d016b0d1b8208836f6d284bc9cb0d017dc21d3ddfdebf13f0",
+    "docs/validation/hindsight-integration-20261020.md": "c69e4af39bdf66b808800ccb9611d37e5bbf95913a71145c54b97a03910809dd",
+    "docs/validation/hindsight-fullchain-validation-20261020.md": "af151378afd4da20257fbe7110458be66d2d504f6fd06b06b5e5ca82ab0d5d8f"
+  },
+  "sources": [
+    {
+      "url": "https://docs.openclaw.ai/concepts/memory",
+      "evidence": "official page read this turn",
+      "snapshot": "/tmp/agentmem-openclaw.txt",
+      "sha256": "bdfa659457a4cc43ebfeb611d3559b2869ce6399909c06af6203d67e9528374e"
+    },
+    {
+      "url": "https://opencode.ai/docs/config/",
+      "evidence": "official page read this turn",
+      "snapshot": "/tmp/agentmem-opencode-config.txt",
+      "sha256": "16cb2b4f77b0740b2380dd1f62c10bf941b3ff8f9a88d7b25d3a76301b0e69e8"
+    },
+    {
+      "url": "https://github.com/vectorize-io/hindsight/blob/39c65ffe2f140d0c84cee58566cad8900c5b9908/hindsight-docs/static/openapi.json",
+      "evidence": "previous official download; digest checked against archived 2026-10-20 verification",
+      "snapshot": "/tmp/devflow-hindsight-openapi-v1.json",
+      "sha256": "8ac3fbc2eb2796c32109fd1ad016cb8f8de43c0934d87a89910bd8478e42c55d"
+    },
+    {
+      "path": "/Users/erich/.agents/skills/hindsight-coding-agent/SKILL.md",
+      "evidence": "local skill read this turn; no running plugin/version claim",
+      "sha256": "dd3a78db3e533f5053fb3f478d8de5971d0a4473cc26b48ed1107630bea1ff27"
+    }
+  ],
+  "cursorReview": "not completed; no new Cursor review claim"
+}

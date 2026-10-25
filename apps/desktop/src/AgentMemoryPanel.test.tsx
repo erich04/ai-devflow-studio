@@ -180,6 +180,40 @@ const runtimeListItem = createAgentRuntimeRendererListItem({
 })
 
 describe('AgentMemoryPanel', () => {
+  it('loads the project memory scope without requiring a workflow Run', async () => {
+    const listAgentMemoryLifecycle = vi.fn().mockResolvedValue(snapshot)
+    const api = { listAgentMemoryLifecycle } as unknown as DevFlowDesktopApi
+    render(<AgentMemoryPanel desktopApi={api} runId={undefined} localProjectId="local-project-1" />)
+    await screen.findByText('Pending memory statement for explicit human review.')
+    expect(listAgentMemoryLifecycle).toHaveBeenCalledWith({ localProjectId: 'local-project-1' })
+  })
+  it('routes learning candidates to the exception queue without offering the old promotion action', async () => {
+    const learningSnapshot: AgentMemoryRendererSnapshot = {
+      ...snapshot,
+      candidates: [{ ...snapshot.candidates[0]!, provenance: {
+        kind: 'learning_event', eventId: 'event-1', sourceDigest: `sha256:${digest('a')}`, factId: 'fact-1', statementKind: 'business_rule',
+      } }],
+      candidateCount: 1,
+    }
+    const api = { listAgentMemoryLifecycle: vi.fn().mockResolvedValue(learningSnapshot) } as unknown as DevFlowDesktopApi
+    render(<AgentMemoryPanel desktopApi={api} runId={undefined} localProjectId="local-project-1" />)
+    await screen.findByText('自动学习事件 event-1 · 业务规则候选 · 事实 fact-1')
+    expect(screen.queryByRole('button', { name: '提升为用户项目私有 Memory' })).not.toBeInTheDocument()
+    expect(screen.getByText(/此候选由自动学习队列处理/)).toBeInTheDocument()
+  })
+  it('pins an active automatic memory using its exact current revision', async () => {
+    const memory = { ...snapshot.memories[1]!, lifecycleStatus: 'active' as const, retentionClass: 'session' as const, expiresAt: '2026-11-01T00:00:00.000Z' }
+    const activeSnapshot = { ...snapshot, memories: [memory], memoryCount: 1 }
+    const reviseAgentMemory = vi.fn().mockResolvedValue(activeSnapshot)
+    const api = { listAgentMemoryLifecycle: vi.fn().mockResolvedValue(activeSnapshot), reviseAgentMemory } as unknown as DevFlowDesktopApi
+    render(<AgentMemoryPanel desktopApi={api} runId={undefined} localProjectId="local-project-1" />)
+    fireEvent.click(await screen.findByRole('button', { name: '固定保留此 Memory' }))
+    await waitFor(() => expect(reviseAgentMemory).toHaveBeenCalledWith({
+      localProjectId: 'local-project-1', memoryId: memory.memoryId, expectedRevision: memory.currentRevision,
+      expectedHeadVersion: memory.headVersion, expectedContentDigest: memory.contentDigest,
+      expectedProvenanceDigest: memory.provenanceDigest, statement: memory.statement, pin: true,
+    }))
+  })
   it('explains why a legacy large memory cannot fit a recall entry', async () => {
     const large = { ...snapshot, candidateCount: 1, candidates: [{ ...snapshot.candidates[0]!, statement: '中'.repeat(1000) }] }
     const api = { listAgentMemoryLifecycle: vi.fn().mockResolvedValue(large) } as unknown as DevFlowDesktopApi

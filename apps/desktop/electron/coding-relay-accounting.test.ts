@@ -23,7 +23,7 @@ const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, pr
 const cleanup: Array<() => Promise<void>> = []
 afterEach(async () => { for (const stop of cleanup.splice(0).reverse()) await stop() })
 
-async function fixture(fetcher: typeof fetch = async () => Response.json({ choices: [], usage })) {
+async function fixture(fetcher: typeof fetch = async () => Response.json({ choices: [], usage }), assertContextCurrent?: () => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), 'devflow-coding-relay-test-'))
   const dbPath = path.join(directory, 'state.sqlite')
   const store = await createLocalStore({ dbPath })
@@ -45,6 +45,7 @@ async function fixture(fetcher: typeof fetch = async () => Response.json({ choic
   const upstream = vi.fn(fetcher)
   const scope = { store, projectId: active.projectId, providerId: binding.providerId, model: binding.modelId, configVersion: 1, session, publishRun: published, publishEvent: publishedEvent }
   const proxy = await createGovernedOpencodeProxy({ binding, projectId: active.projectId, governance, fetcher: upstream,
+    ...(assertContextCurrent ? { assertContextCurrent } : {}),
     resolveCodingCall: (identity) => createCodingRelayCallContext({ ...scope, session: identity }),
   })
   cleanup.push(proxy.close)
@@ -57,6 +58,57 @@ async function fixture(fetcher: typeof fetch = async () => Response.json({ choic
 }
 
 describe('OpenCode relay → Coding Run → header accounting', () => {
+  it('rejects stale knowledge before reserving or recording a coding expense', async () => {
+    const f = await fixture(undefined, async () => { throw new Error('knowledge changed') })
+    const response = await f.send()
+    expect(response.status).toBe(400)
+    expect(f.proxy.failureForRequest(response.headers.get('x-devflow-relay-request')!, 0)?.code).toBe('evidence_invalid')
+    expect(f.governance.reserve).not.toHaveBeenCalled()
+    expect(f.upstream).not.toHaveBeenCalled()
+    expect(await f.store.listCodingAgentEvents(active.id)).toEqual([])
+    expect((await f.run()).runtimeCostSummary).toBeUndefined()
+  })
+
+  it('keeps a context invalidation after reservation non-billable and bound to the original attempt', async () => {
+    let current = true
+    const f = await fixture(undefined, async () => { if (!current) throw new Error('knowledge changed') })
+    const reserve = f.governance.reserve.getMockImplementation()!
+    f.governance.reserve.mockImplementationOnce(async (quote) => { current = false; return reserve(quote) })
+    const response = await f.send()
+    expect(response.status).toBe(400)
+    expect(f.proxy.failureForRequest(response.headers.get('x-devflow-relay-request')!, 0)?.code).toBe('evidence_invalid')
+    expect(f.upstream).not.toHaveBeenCalled()
+    expect((await f.run()).runtimeCostSummary).toBeUndefined()
+    const quote = f.governance.reserve.mock.calls[0]![0]
+    const traces = (await f.store.listCodingAgentEvents(active.id)).map(event => event.metadata?.providerCall)
+    expect(traces).toEqual([
+      expect.objectContaining({ status: 'started', usage: expect.objectContaining({ budgetAttemptIds: [quote.id] }) }),
+      expect.objectContaining({ status: 'failed', billingState: 'not_incurred', deliveryState: 'not_sent',
+        usage: expect.objectContaining({ inputTokens: 0, outputTokens: 0, budgetAttemptIds: [quote.id] }) }),
+    ])
+  })
+
+  it('retains a paid coding response exactly once when its knowledge context becomes stale', async () => {
+    let current = true
+    const f = await fixture(async () => { current = false; return Response.json({ choices: [], usage }) },
+      async () => { if (!current) throw new Error('knowledge changed') })
+    const response = await f.send()
+    expect(response.status).toBe(400)
+    expect(f.proxy.failureForRequest(response.headers.get('x-devflow-relay-request')!, 0)?.code).toBe('evidence_invalid')
+    expect((await f.run()).runtimeCostSummary).toMatchObject({ inputTokens: 100, outputTokens: 20, totalTokens: 120, costStatus: 'settled' })
+    expect(buildRunUsageSummary(active.runId, [], [await f.run()], []).tokenLabel).toBe('120')
+    const events = await f.store.listCodingAgentEvents(active.id)
+    expect(events.map(event => event.metadata?.providerCall)).toEqual([
+      expect.objectContaining({ status: 'started' }),
+      expect.objectContaining({ status: 'succeeded', billingState: 'confirmed' }),
+    ])
+    expect((await f.send()).status).toBe(400)
+    expect(f.upstream).toHaveBeenCalledOnce()
+    expect(f.governance.settle).toHaveBeenCalledOnce()
+    expect(await f.store.listCodingAgentEvents(active.id)).toEqual(events)
+    expect((await f.run()).runtimeCostSummary!.providerCallIds).toHaveLength(1)
+  })
+
   it('records parent and child rounds under one operation, exactly once, and retains them through stale snapshots and reopen', async () => {
     const f = await fixture()
     expect((await f.send()).status).toBe(200)

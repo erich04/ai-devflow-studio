@@ -38,7 +38,7 @@ export function summarizeRelayedUsage(
 const NOT_SENT_USAGE: AgentProviderUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheMissTokens: 0, cacheStatus: 'complete' }
 
 /** OpenCode's internal model rounds traverse this authenticated, loopback-only relay. */
-export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string;maxOutputTokens?:number;resolveOperation?:()=>Promise<NonNullable<ModelCallQuote['operation']>>;resolveCodingCall?:(session:CodingRelaySession)=>Promise<CodingRelayCallContext>}) {
+export async function createGovernedOpencodeProxy(input:{binding:OpencodeProviderBinding;projectId:string;governance:ModelCallGovernance;fetcher?:typeof fetch;approvalId?:string;maxOutputTokens?:number;assertContextCurrent?:()=>Promise<void>;resolveOperation?:()=>Promise<NonNullable<ModelCallQuote['operation']>>;resolveCodingCall?:(session:CodingRelaySession)=>Promise<CodingRelayCallContext>}) {
   if (input.maxOutputTokens !== undefined && (!Number.isSafeInteger(input.maxOutputTokens) || input.maxOutputTokens < 1)) throw new Error('Invalid relay output limit')
   const token=randomBytes(32).toString('hex')
   const executionId = randomBytes(16).toString('hex')
@@ -58,6 +58,11 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
     let callContext: CodingRelayCallContext | undefined
     let trace: RelayedCodingCallTrace | undefined
     let terminalReported = false
+    let invalidContext = false
+    const checkContext = async () => {
+      try { await input.assertContextCurrent?.() }
+      catch (error) { invalidContext = true; throw error }
+    }
     const controller=new AbortController(); controllers.add(controller)
     const abort=()=>{if(!res.writableEnded)controller.abort()}
     res.on('close',abort)
@@ -73,6 +78,11 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
       const raw = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))
       const body=JSON.parse(raw) as Record<string,unknown>
       if(body.model!==input.binding.modelId)throw new Error('OpenCode 模型与当前项目选择不一致。')
+      try { await checkContext() }
+      catch (error) {
+        attempts.push({ at: new Date().toISOString(), sequence: call.sequence, usage: { ...NOT_SENT_USAGE } })
+        throw error
+      }
       const requested = body.max_tokens ?? body.max_completion_tokens
       const explicit = typeof requested === 'number' && Number.isSafeInteger(requested) && requested > 0 ? requested : undefined
       const policy = resolveRequestPolicy({ model: input.binding.modelId, baseUrl: input.binding.baseUrl,
@@ -118,6 +128,9 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
         operation, ...(policy.capability === 'deepseek-2026-10-10' ? { boundBasis: 'deepseek-context-v1' as const } : {}),
         ...(input.approvalId?{approvalId:input.approvalId}:{}),
         ...(typeof body.max_tokens==='number'?{maxOutputTokens:body.max_tokens}:{}),action:async(observe)=>{
+          try { await checkContext() }
+          catch (cause) { throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: 'knowledge_context_changed',
+            deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false, cause }) }
           resetIdleTimeout()
           // The shared reader preserves observed usage independently from downstream parsing.
           let upstream: Response
@@ -160,6 +173,8 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
         durationMs: Date.now() - Date.parse(trace.startedAt), deliveryState: 'response_received',
         billingState: result.usage?.usageCompleteness === 'final' ? 'confirmed' : 'unknown', ...(result.usage ? { usage: result.usage } : {}),
       })
+      // Persist paid usage before rejecting a result whose knowledge changed upstream.
+      await checkContext()
       if(res.destroyed)return
       if(body.stream===true){
         const choices=Array.isArray(result.value.choices)?result.value.choices:[]
@@ -183,7 +198,8 @@ export async function createGovernedOpencodeProxy(input:{binding:OpencodeProvide
           ...(failure ? { errorCode: failure.code, sanitizedCause: failure.sanitizedCause, ...(failure.httpStatus !== null ? { httpStatus: failure.httpStatus } : {}) } : {}),
         }).catch(() => { /* The budget settlement remains durable; do not replay a paid request. */ })
       }
-      const details = error instanceof AgentProviderRequestError ? providerFailureDetails(error) : stageAgentFailureDetails('unknown_failure', 'budget_relay')
+      const details = invalidContext ? stageAgentFailureDetails('evidence_invalid', 'stage_validation')
+        : error instanceof AgentProviderRequestError ? providerFailureDetails(error) : stageAgentFailureDetails('unknown_failure', 'budget_relay')
       if (call) call.failure = { ...details, relayRequestId: call.requestId }
       if(!res.destroyed){res.writeHead(400,{'content-type':'application/json', ...(call ? { 'x-devflow-relay-request': call.requestId } : {})}).end(JSON.stringify({error:{message:describeStageAgentFailure(details)}}))}
     } finally {clearTimeout(timeout);controllers.delete(controller);res.off('close',abort);if(call)activeCalls.delete(call.sequence);pending.delete(completion);finished()}

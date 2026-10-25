@@ -27,7 +27,7 @@ export type ConversationDraft = ConversationTarget & {
     humanAcknowledgedAt?: string
   }
 }
-export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string } & Partial<import('@ai-devflow/shared').AgentProviderResponseMetadata>
+export type ConversationFailure = { phase: string; code: string; httpStatus?: number; reason?: string; diagnosticPersistenceFailed?: boolean } & Partial<import('@ai-devflow/shared').AgentProviderResponseMetadata>
 export type ConversationCheckpoint = {
   version: 1
   turnId: string
@@ -44,7 +44,21 @@ export type ConversationCheckpoint = {
   requirementRunIds: string[]
   criticalProposalInput?: import('./conversation-critical-context').CriticalContext | undefined
   pendingProposal?: Record<string, unknown> | undefined
+  investigation?: import('./investigation-policy').InvestigationState
   nativeReviewMessageId?: string | undefined
+}
+/** Local audit of the host request, not proof of a model adopting a Memory or of harness internals. */
+export type ConversationMemoryReceipt = {
+  version: 1
+  callId: string
+  executor: 'direct-provider' | 'opencode' | 'native-tools'
+  boundary: 'host_request'
+  state: 'prepared' | 'dispatch_started' | 'response_received' | 'not_sent' | 'delivery_unknown'
+  /** SHA-256 of JSON.stringify({ systemPrompt, userPrompt }) as dispatched by the host. */
+  promptDigest: string
+  memories: Array<{ id: string; revision: number; headVersion: number; contentDigest: string }>
+  omittedMemoryCount: number
+  observedAt: string
 }
 export type ConversationMessage = {
   id: string
@@ -61,9 +75,12 @@ export type ConversationMessage = {
   usage?: AgentProviderUsage
   /** Bounded, non-content diagnostic for this call, including a recovered failure. */
   failure?: ConversationFailure
-  attempt?: { turnId: string; step: number; cycle: number; recovery: number; group: string; startedAt: string; durationMs?: number; status: 'running' | 'completed' | 'failed' }
+  /** Recorded on the existing per-call notice, including failed and retried calls. */
+  memoryReceipt?: ConversationMemoryReceipt
+  attempt?: { turnId: string; step: number; cycle: number; recovery: number; group: string; startedAt: string; durationMs?: number; status: 'running' | 'completed' | 'failed'; batchId?: string; maxSteps?: number; maxDurationMs?: number; policySource?: 'default' | 'conversation' }
   provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode' | 'native-tools'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
   contentLengths?: Partial<Record<'text' | 'draft' | 'reasoning', number>>
+  requestMetadata?: import('@ai-devflow/shared').AgentProviderRequestMetadata
   responseMetadata?: import('@ai-devflow/shared').AgentProviderResponseMetadata
   /** Provider-returned reasoning, local to this conversation; never shared workflow context. */
   reasoning?: { text: string; status: 'streaming' | 'completed' | 'interrupted'; effort?: 'low' | 'high' | 'max' }
@@ -80,6 +97,8 @@ export type WorkbenchConversation = {
   /** Archived legacy note; never added to prompts or editable through commands. */
   memory?: string
   status: 'idle' | 'running' | 'awaiting_answer' | 'failed' | 'cancelled' | 'interrupted' | 'paused'
+  investigationPolicy?: import('./investigation-policy').InvestigationConfiguration
+  investigationProgress?: ReturnType<typeof import('./investigation-policy').investigationProgress>
   checkpoint?: ConversationCheckpoint | undefined
   /** Main-only provider protocol. Never project raw protocol/hidden reasoning to IPC or team data. */
   nativeTranscript?: Array<{ turnId: string; message: import('@ai-devflow/shared').NativeToolMessage }>
@@ -95,7 +114,7 @@ export type WorkbenchConversation = {
   updatedAt: string
   error?: string
   failure?: ConversationFailure
-  contextReceipt?: { includedMessages: number; omittedMessages: number; limited?: boolean; observedAt: string; boundaryId?: string; budget?: import('@ai-devflow/shared').PromptBudgetReceipt }
+  contextReceipt?: { includedMessages: number; omittedMessages: number; limited?: boolean; observedAt: string; boundaryId?: string; budget?: import('@ai-devflow/shared').PromptBudgetReceipt; memory?: ConversationMemoryReceipt }
 }
 export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }
@@ -104,11 +123,14 @@ export type ConversationCommand = { projectId: string } & (
   | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string }
   | { type: 'retry'; conversationId: string; providerId: string }
   | { type: 'read_content'; conversationId: string; messageId: string; field: 'text' | 'draft' | 'reasoning'; offset: number }
+  | { type: 'configure_investigation'; conversationId: string; maxSteps: number; maxDurationMs: number }
+  | { type: 'export_diagnostics'; conversationId: string }
   | { type: 'cancel'; conversationId: string }
   | { type: 'publish'; conversationId: string; messageId: string; acknowledgeUnverified?: boolean }
   | { type: 'retry_review'; conversationId: string; messageId: string; providerId: string }
 )
 export type ConversationResponse = {
+  diagnostics?: import('./conversation-diagnostics').ConversationDiagnostics
   nativeConversationsEnabled?: boolean
   nativeReadOnlyPilotEnabled?: boolean
   contentPage?: { text: string; offset: number; nextOffset: number | null; total: number }
@@ -126,6 +148,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   const fields: Record<string, string[]> = {
     list: [], create: ['title', 'inputDraft', 'executor'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
     send: ['conversationId', 'text', 'providerId', 'answerToMessageId'], retry: ['conversationId', 'providerId'],
+    configure_investigation: ['conversationId', 'maxSteps', 'maxDurationMs'], export_diagnostics: ['conversationId'],
     read_content: ['conversationId', 'messageId', 'field', 'offset'],
     cancel: ['conversationId'], publish: ['conversationId', 'messageId', 'acknowledgeUnverified'], retry_review: ['conversationId', 'messageId', 'providerId'],
   }
@@ -135,6 +158,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   for (const [key, limit] of Object.entries(limits)) {
     if (record[key] !== undefined && (typeof record[key] !== 'string' || (record[key] as string).length > limit || (record[key] as string).includes('\0'))) throw new Error('会话输入过长或格式不正确。')
   }
+  if (type === 'configure_investigation' && (!Number.isSafeInteger(record.maxSteps) || Number(record.maxSteps)<1 || Number(record.maxSteps)>60 || !Number.isSafeInteger(record.maxDurationMs) || Number(record.maxDurationMs)<30000 || Number(record.maxDurationMs)>600000)) throw new Error('调查范围须为 1–60 步、30–600 秒。')
   if (type === 'read_content' && (!['text', 'draft', 'reasoning'].includes(String(record.field)) || !Number.isSafeInteger(record.offset) || Number(record.offset) < 0 || typeof record.messageId !== 'string')) throw new Error('无效的正文分页请求。')
   if (record.isOpen !== undefined && typeof record.isOpen !== 'boolean') throw new Error('无效的 Tab 状态。')
   if (record.acknowledgeUnverified !== undefined && typeof record.acknowledgeUnverified !== 'boolean') throw new Error('无效的提案确认。')
