@@ -228,14 +228,23 @@ describe('runWorkflowTestCommand', () => {
   it('holds the workspace lease until formal Test evidence is committed', async () => {
     const { input, workspaces } = await fixture()
     let release!: () => void
+    const commitAllowed = new Promise<void>((resolve) => { release = resolve })
+    let reportStarted!: () => void
+    const commitStarted = new Promise<void>((resolve) => { reportStarted = resolve })
     input.complete = async (execution) => {
-      await new Promise<void>((resolve) => { release = resolve })
+      reportStarted()
+      await commitAllowed
       return execution
     }
     const execution = runWorkflowTestCommand(input)
-    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    // Await the actual commit boundary; Git/process startup can exceed waitFor's
+    // default one-second deadline on Windows. The test's own deadline still applies.
+    await Promise.race([commitStarted, execution.then(() => {
+      throw new Error('Test execution finished without reaching the evidence commit')
+    })])
     const cleanup = vi.fn(async () => undefined)
     const queued = input.workspaceCoordinator.runExclusive(workspaces[0]!.id, cleanup)
+    await new Promise<void>((resolve) => setImmediate(resolve))
     expect(cleanup).not.toHaveBeenCalled()
     release()
     expect((await execution).result.status).toBe('passed')
