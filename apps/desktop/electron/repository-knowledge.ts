@@ -362,6 +362,53 @@ function sha256Digest(content: Buffer | string): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`
 }
 
+export type SelectedKnowledgeSource =
+  | { status: 'current'; markdown: string; contentDigest: string; sourcePath: string }
+  | { status: 'missing' | 'untracked' | 'unverified' }
+
+/** Exact verification for a host-selected source. A bounded index is not a deletion manifest. */
+export async function readSelectedKnowledgeSource(
+  projectPath: string, knowledgeRoot: string, sourcePath: string,
+): Promise<SelectedKnowledgeSource> {
+  return readExactKnowledgeFile(projectPath, knowledgeRoot, sourcePath, false)
+}
+
+/** A single declarative model file in the actual knowledge root, never a caller-supplied path. */
+export function readSelectedKnowledgeModel(projectPath: string, knowledgeRoot: string): Promise<SelectedKnowledgeSource> {
+  return readExactKnowledgeFile(projectPath, knowledgeRoot, knowledgeRoot ? `${knowledgeRoot}/model.json` : 'model.json', true)
+}
+
+async function readExactKnowledgeFile(
+  projectPath: string, knowledgeRoot: string, sourcePath: string, model: boolean,
+): Promise<SelectedKnowledgeSource> {
+  if (!sourcePath || sourcePath.length > 500 || /[\u0000-\u001f\\]/u.test(sourcePath) ||
+      path.posix.normalize(sourcePath) !== sourcePath || sourcePath.startsWith('/') ||
+      sourcePath.split('/').includes('..') || (!model && !/\.(md|markdown)$/iu.test(sourcePath)) ||
+      /^(AGENTS|CLAUDE)\.md$/iu.test(sourcePath) ||
+      isExcludedPath(sourcePath) || normalizeKnowledgeRoot(knowledgeRoot) !== knowledgeRoot ||
+      (knowledgeRoot !== '' && !sourcePath.startsWith(`${knowledgeRoot}/`))) return { status: 'unverified' }
+  let root: string
+  try {
+    root = await realpath(projectPath)
+    if (!(await lstat(root)).isDirectory()) return { status: 'unverified' }
+    const { stdout } = await execFile('git', ['--literal-pathspecs', 'ls-files', '-z', '--cached', '--', sourcePath],
+      { cwd: root, maxBuffer: 16_384, timeout: 5_000, encoding: 'utf8' })
+    if (!stdout.split('\0').includes(sourcePath)) return { status: 'untracked' }
+  } catch { return { status: 'unverified' } }
+  try {
+    const file = await readSafeRegularFile(root, sourcePath)
+    if (!file || !('content' in file)) return { status: 'unverified' }
+    const markdown = new TextDecoder('utf-8', { fatal: true }).decode(file.content)
+    return { status: 'current', sourcePath, markdown, contentDigest: sha256Digest(file.content) }
+  } catch (error) {
+    // Root disappearance or a Git failure must never be mistaken for a deleted document.
+    if (isNotFoundError(error)) {
+      try { if ((await lstat(root)).isDirectory()) return { status: 'missing' } } catch { /* unverified */ }
+    }
+    return { status: 'unverified' }
+  }
+}
+
 const PROJECT_INSTRUCTION_FILES = ['AGENTS.md', 'CLAUDE.md'] as const
 
 /** Root AGENTS.md, falling back to CLAUDE.md, as the executors discover them. */

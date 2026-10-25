@@ -11,6 +11,7 @@ import {
   createAgentMemoryCandidate,
   createAgentMemoryTombstone,
   createCodingRunMemoryCandidate,
+  createLearningEventMemoryCandidate,
   evaluateAgentMemoryTaskCandidate,
   evaluateHybridRetrievalCandidate,
   evaluateLexicalRetrievalBaseline,
@@ -39,6 +40,23 @@ import {
 } from './retrieval-memory'
 
 describe('V2.1 Agent Memory candidate contract', () => {
+  it('requires a canonical learning event source and never invents a Runtime for it', async () => {
+    const input = {
+      id: 'learning-candidate-1', statement: 'The user prefers concise explanations.',
+      scope: { kind: 'local', organizationId: null, projectId: null, userId: 'user-1', sessionId: 'chat-1', localProjectId: 'project-1' },
+      provenance: { kind: 'learning_event', eventId: 'event-1', sourceDigest: `sha256:${'a'.repeat(64)}`, factId: 'fact-1', statementKind: 'communication_preference' },
+      createdAt: '2026-10-22T00:00:00.000Z',
+    }
+    const candidate = await createLearningEventMemoryCandidate(input)
+    expect(await parseAgentMemoryCandidate(candidate)).toEqual(candidate)
+    expect(agentMemoryCandidateSourceRuntimeId(candidate)).toBeNull()
+    for (const provenance of [
+      { ...input.provenance, runtimeId: 'forged-runtime' },
+      { ...input.provenance, sourceDigest: 'not-a-digest' },
+      { ...input.provenance, statementKind: 'test_command' },
+    ]) await expect(createLearningEventMemoryCandidate({ ...input, provenance })).rejects.toThrow()
+    await expect(parseAgentMemoryCandidate({ ...candidate, provenance: { ...candidate.provenance, factId: 'tampered' } })).rejects.toThrow()
+  })
   it('parses one exact bounded Memory retrieval request', () => {
     const request = {
       stateVersion: 1,

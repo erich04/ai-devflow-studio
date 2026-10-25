@@ -735,6 +735,11 @@ export type AgentReviewContextManifest = {
   knowledgeContext?: KnowledgeContextManifest
   /** Optional for persisted v1 Reviews created before workflow-aware projection. */
   fieldProjection?: WorkflowContextProjection
+  /** Only the final attached background memories, after prompt budgeting. Not review criteria. */
+  backgroundMemory?: {
+    memories: Array<{ id: string; revision: number; headVersion: number; contentDigest: string }>
+    omittedCount: number
+  }
 }
 
 export type AgentReviewContext = {
@@ -750,6 +755,12 @@ export type AgentReviewContext = {
   knowledgeReferences: KnowledgeReference[]
   /** Bounded whole documents and catalogue; absent on legacy chunk-based reviews. */
   knowledgeSection?: string
+  /** Local host retrieval; its provenance is stored under manifest.knowledgeContext. */
+  retrievedKnowledge?: RetrievedKnowledgeContext
+  /** Low-trust experience; never authoritative rules, permissions or verification evidence. */
+  backgroundMemory?: Array<{
+    id: string; revision: number; headVersion: number; contentDigest: string; statement: string
+  }>
   knowledgeChunks: Array<
     Pick<KnowledgeChunk, 'id' | 'documentId' | 'sourcePath' | 'headingPath' | 'contentHash' | 'content'>
   >
@@ -992,6 +1003,39 @@ export type ProjectInstructionsSnapshot = {
   truncated: boolean
 }
 
+/** Host-verified local excerpts; remote extracted facts never become source text. */
+export type RetrievedKnowledgeSource = {
+  sourceRef: string
+  path: string
+  title: string
+  contentDigest: string
+  matchReason: 'lexical' | 'semantic' | 'both'
+  content: string
+  truncated?: boolean
+}
+
+export type RetrievedKnowledgeManifest = {
+  version: 1
+  stage: NodeStage
+  /** Local-only binding. Never grants access and never enters a team projection. */
+  scope: { projectId: string; userId: string }
+  queryDigest: string
+  configGeneration?: string
+  modelVersion?: string
+  degraded: boolean
+  budgetBytes: number
+  /** UTF-8 bytes of the exact rendered section, including its framing. */
+  usedBytes: number
+  contentBytes: number
+  omittedCount: number
+  references: Array<Omit<RetrievedKnowledgeSource, 'content'> & { bytes: number }>
+}
+
+export type RetrievedKnowledgeContext = {
+  manifest: RetrievedKnowledgeManifest
+  sources: RetrievedKnowledgeSource[]
+}
+
 export type KnowledgeContextManifest = {
   version: 1
   stage: NodeStage
@@ -1010,6 +1054,8 @@ export type KnowledgeContextManifest = {
   catalogued: Array<{ sourcePath: string; contentDigest: string; reason: 'budget' | 'other_stage' }>
   /** Catalogue entries dropped because the catalogue limit was reached. */
   omittedCount: number
+  /** Optional host-retrieved excerpts actually delivered alongside resident standards. */
+  retrievedKnowledge?: RetrievedKnowledgeManifest
 }
 
 /** `stage`: the document applies to the stage by its front matter (ADR 0025); not retrieval. */
@@ -1260,6 +1306,8 @@ export type TestEvidence = {
    * the result still applies (hardening H3, X6). Never synced; delivery keeps using sourceCommitSha.
    */
   sourceTree?: { digest: string; workspaceId?: string }
+  /** Local-only provenance of relevant standards; does not constitute test execution. */
+  knowledgeContext?: { retrievedKnowledge: RetrievedKnowledgeManifest }
   createdAt: string
 }
 

@@ -105,9 +105,24 @@ export type AgentMemoryCodingRunProvenance = {
   statementKind: AgentMemoryCodingRunStatementKind
 }
 
+export const AGENT_MEMORY_LEARNING_STATEMENT_KINDS = [
+  'communication_preference', 'environment_fact', 'verified_procedure', 'working_practice', 'troubleshooting', 'business_rule', 'unclassified',
+] as const
+export type AgentMemoryLearningStatementKind = typeof AGENT_MEMORY_LEARNING_STATEMENT_KINDS[number]
+
+/** A fact extracted from one immutable, host-owned completed event. */
+export type AgentMemoryLearningEventProvenance = {
+  kind: 'learning_event'
+  eventId: string
+  sourceDigest: string
+  factId: string
+  statementKind: AgentMemoryLearningStatementKind
+}
+
 export type AgentMemoryCandidateProvenance =
   | AgentMemoryObservationProvenance
   | AgentMemoryCodingRunProvenance
+  | AgentMemoryLearningEventProvenance
 
 export type AgentMemoryCandidate = {
   stateVersion: typeof AGENT_MEMORY_CONTRACT_VERSION
@@ -403,7 +418,7 @@ export async function createAgentMemoryCandidate(input: unknown): Promise<AgentM
   })
 }
 
-/** Exact-key parser for either provenance kind; the result has a fixed key order. */
+/** Exact-key parser for each provenance kind; the result has a fixed key order. */
 export function parseAgentMemoryCandidateProvenance(value: unknown): AgentMemoryCandidateProvenance {
   if (!isPlainRecord(value)) failMemoryCandidate()
   if (value.kind === 'agent_observation') {
@@ -445,6 +460,18 @@ export function parseAgentMemoryCandidateProvenance(value: unknown): AgentMemory
       statementKind: value.statementKind as AgentMemoryCodingRunStatementKind,
     }
   }
+  if (value.kind === 'learning_event') {
+    if (
+      !hasExactKeys(value, ['kind', 'eventId', 'sourceDigest', 'factId', 'statementKind']) ||
+      !isIdentifier(value.eventId) || !isIdentifier(value.factId) ||
+      typeof value.sourceDigest !== 'string' || !snapshotHashPattern.test(value.sourceDigest) ||
+      !(AGENT_MEMORY_LEARNING_STATEMENT_KINDS as readonly unknown[]).includes(value.statementKind)
+    ) failMemoryCandidate()
+    return {
+      kind: 'learning_event', eventId: value.eventId, sourceDigest: value.sourceDigest,
+      factId: value.factId, statementKind: value.statementKind as AgentMemoryLearningStatementKind,
+    }
+  }
   failMemoryCandidate()
 }
 
@@ -452,10 +479,26 @@ export function parseAgentMemoryCandidateProvenance(value: unknown): AgentMemory
  * The runtime identity a recalled Memory came from. A Coding Run has no persisted
  * AgentRuntime; its Context receipt uses `agent-runtime-coding-<codingRunId>`.
  */
-export function agentMemoryCandidateSourceRuntimeId(candidate: Pick<AgentMemoryCandidate, 'provenance'>): string {
+export function agentMemoryCandidateSourceRuntimeId(candidate: Pick<AgentMemoryCandidate, 'provenance'>): string | null {
+  if (candidate.provenance.kind === 'learning_event') return null
   return candidate.provenance.kind === 'agent_observation'
     ? candidate.provenance.runtimeId
     : `agent-runtime-coding-${candidate.provenance.codingRunId}`
+}
+
+/** A semantic extraction candidate. Its immutable event and fact are verified by the store. */
+export async function createLearningEventMemoryCandidate(input: unknown): Promise<AgentMemoryCandidate> {
+  if (!isPlainRecord(input) || !hasExactKeys(input, ['id', 'statement', 'scope', 'provenance', 'createdAt'])) {
+    failMemoryCandidate()
+  }
+  const provenance = parseAgentMemoryCandidateProvenance(input.provenance)
+  if (provenance.kind !== 'learning_event' || typeof input.statement !== 'string') failMemoryCandidate()
+  return parseAgentMemoryCandidate({
+    stateVersion: AGENT_MEMORY_CONTRACT_VERSION, id: input.id, status: 'candidate',
+    scope: parseScope(input.scope), statement: input.statement,
+    contentDigest: await sha256Hex(input.statement), provenance,
+    provenanceDigest: await sha256Hex(JSON.stringify(provenance)), createdAt: input.createdAt,
+  })
 }
 
 /** A Coding Run candidate (ADR 0024 §4). The store verifies the referenced run and evidence. */

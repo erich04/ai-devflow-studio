@@ -19,8 +19,8 @@ it('exposes only scoped read tools over authenticated loopback HTTP and rejects 
   expect(initialized.result.capabilities).toEqual({ tools: {} })
   const tools = (await (await rpc('tools/list')).json()).result.tools
   // knowledge-context K3: the directory is listed and read by path; the older keyword tool stays callable only.
-  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'requirement', 'repo_list', 'repo_read', 'repo_search', 'knowledge_list', 'knowledge_read', 'conversation_read'])
-  expect(tools.find((tool: { name: string }) => tool.name === 'knowledge_read').inputSchema).toMatchObject({ required: ['path'] })
+  expect(tools.map((tool: { name: string }) => tool.name)).toEqual(['workflow', 'node', 'artifact', 'requirement', 'repo_list', 'repo_read', 'repo_search', 'knowledge_list', 'knowledge_search', 'knowledge_read', 'conversation_read'])
+  expect(tools.find((tool: { name: string }) => tool.name === 'knowledge_read').inputSchema).toMatchObject({ anyOf: [{ required: ['path'] }, { required: ['sourceRef', 'expectedDigest'] }] })
   expect(tools.every((tool: { annotations: { readOnlyHint: boolean } }) => tool.annotations.readOnlyHint)).toBe(true)
   expect((await (await rpc('tools/call', { name: 'node', arguments: { runId: 'run-A', nodeId: 'node-A' } })).json()).result.content[0].text).toContain('project-A')
   expect(query).toHaveBeenCalledWith('node', { runId: 'run-A', nodeId: 'node-A' })
@@ -40,6 +40,22 @@ it('exposes only scoped read tools over authenticated loopback HTTP and rejects 
   controller.abort()
   expect((await (await rpc('tools/call', { name: 'workflow', arguments: {} })).json()).result.isError).toBe(true)
   expect(query).toHaveBeenCalledTimes(5)
+})
+
+it('uses the same byte, stage and result bounds for semantic searches and accepts scoped continuations', async () => {
+  const query = vi.fn(async () => ({ matches: [] }))
+  const bridge = await createWorkbenchMcpBridge({ query, signal: new AbortController().signal }); bridges.push(bridge)
+  const call = async (name: string, args: unknown) => (await fetch(bridge.url, { method: 'POST',
+    headers: { ...bridge.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } }),
+  })).json()
+  expect((await call('knowledge_search', { query: '退'.repeat(600), limit: 5, stage: 'test' })).result).toBeDefined()
+  for (const args of [{ query: '退'.repeat(700) }, { query: 'x', limit: 6 }, { query: 'x', bank: 'other' }, { query: 'x', stage: 'root' }]) {
+    expect((await call('knowledge_search', args)).error.code).toBe(-32602)
+  }
+  expect((await call('knowledge_read', { sourceRef: 'host-ref', expectedDigest: 'sha256:abc' })).result).toBeDefined()
+  expect((await call('knowledge_read', { path: 'doc.md', sourceRef: 'host-ref' })).error.code).toBe(-32602)
+  expect(query).toHaveBeenCalledTimes(2)
 })
 
 it('keeps concurrent bridges independent, bounds queries and never returns raw internal errors', async () => {

@@ -1,0 +1,31 @@
+{
+  "version": "devflow-knowledge-v1",
+  "dimensions": [
+    {
+      "key": "sem_kind",
+      "type": "multi-values",
+      "tag": true,
+      "values": [
+        { "value": "system" },
+        { "value": "module" },
+        { "value": "business_rule" },
+        { "value": "decision" },
+        { "value": "term" },
+        { "value": "owner" }
+      ]
+    },
+    {
+      "key": "sem_module",
+      "type": "multi-text",
+      "description": "原文明确提到的模块名称；不推断稳定业务 ID。"
+    },
+    {
+      "key": "sem_rule",
+      "type": "map",
+      "fields": {
+        "name": { "type": "text", "description": "原文中的规则名称。" },
+        "statement": { "type": "text", "description": "原文中的规则陈述，不推断审批或执行成功。" }
+      }
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "zh-task-list",
+  "version": "1.0.0",
+  "private": true,
+  "description": "中文任务清单单页应用（原生 HTML/CSS/JavaScript，零第三方依赖）",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/dev-server.js",
+    "test": "node --test"
+  }
+}

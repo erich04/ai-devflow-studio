@@ -312,6 +312,32 @@ describe('workbench tabs and independent conversation interaction', () => {
     expect(f.commands.some((command) => command.type === 'send')).toBe(false)
   })
 
+  it('shows final memory attachment identities and an unknown delivery state in conversation details', async () => {
+    const f = fixture()
+    render(<WorkbenchWorkspace {...f.props} />)
+    fireEvent.click(screen.getByRole('button', { name: '新建对话' }))
+    fireEvent.click(screen.getByRole('button', { name: '创建对话' }))
+    await screen.findByRole('tab', { name: '对话 1' })
+    const session = f.sessions[0]!
+    const memoryReceipt = {
+      version: 1 as const, callId: 'call-memory', executor: 'opencode' as const, boundary: 'host_request' as const,
+      state: 'delivery_unknown' as const, promptDigest: 'a'.repeat(64), observedAt: run.updatedAt,
+      memories: [{ id: 'memory-current', revision: 3, headVersion: 5, contentDigest: 'b'.repeat(64) }], omittedMemoryCount: 2,
+    }
+    session.messages.push({ id: 'call-memory', role: 'notice', text: '模型调用 1', createdAt: run.updatedAt,
+      provider: { id: 'provider', model: 'model', executor: 'opencode' }, memoryReceipt })
+    session.contextReceipt = { includedMessages: 1, omittedMessages: 0, observedAt: run.updatedAt, memory: memoryReceipt }
+    session.version++
+    await act(async () => f.push())
+    const dialog = openDetails('对话 1')
+    expect(within(dialog).getByText(/本次装配 1 条长期记忆，2 条未附带/)).toBeVisible()
+    fireEvent.click(within(dialog).getByText('模型调用设置记录'))
+    fireEvent.click(within(dialog).getByText('长期记忆 · 1 条 · 送达状态未知'))
+    expect(within(dialog).getByText(/不能据此推断 OpenCode 内部每次请求/)).toBeVisible()
+    expect(within(dialog).getByText(/memory-current · 修订 3/)).toBeVisible()
+    expect(f.commands.some((command) => command.type === 'send')).toBe(false)
+  })
+
   it('chooses an executor for a new conversation and preserves each existing conversation selection', async () => {
     const f = fixture()
     const view = render(<WorkbenchWorkspace {...f.props} />)

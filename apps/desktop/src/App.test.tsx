@@ -746,7 +746,7 @@ function installDesktopApi(overrides: Partial<DevFlowDesktopApi> = {}) {
     ),
     listAgentMemoryLifecycle: vi.fn(async ({ localProjectId }: {
       runtimeId?: string
-      runId: string
+      runId?: string
       localProjectId: string
     }) => ({
       projectionVersion: 1 as const,
@@ -1947,6 +1947,32 @@ describe('App', () => {
     }))
     expect(screen.getByText('当前 Run 尚未创建多 Agent 验收会话；这是可选高级功能。'))
       .toBeInTheDocument()
+  })
+
+  it('shows automatic memory management on the knowledge page for a project without a Run', async () => {
+    const automaticStatus = { projectId: localProject.id, configuration: null, endpoint: 'http://127.0.0.1:8888', jobs: [], decisions: [] }
+    const hindsightStatus = { configured: false, enabled: false, transportAvailable: true,
+      endpoint: 'http://127.0.0.1:8888', selectedPaths: [], includeMemories: false, counts: {}, note: '未配置项目 Hindsight。' }
+    const api = installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(desktopState({ projects: [localProject] })),
+      getAutomaticMemoryStatus: vi.fn().mockResolvedValue(automaticStatus),
+      configureAutomaticMemory: vi.fn().mockResolvedValue(automaticStatus),
+      processAutomaticMemory: vi.fn().mockResolvedValue(automaticStatus),
+      resolveAutomaticMemoryDecision: vi.fn().mockResolvedValue(automaticStatus),
+      getHindsightStatus: vi.fn().mockResolvedValue(hindsightStatus),
+      configureHindsight: vi.fn().mockResolvedValue(hindsightStatus),
+      refreshHindsight: vi.fn().mockResolvedValue(hindsightStatus),
+      disableHindsight: vi.fn().mockResolvedValue(hindsightStatus),
+    })
+    render(<App />)
+    await waitForLocalStateLoaded(api.loadState)
+    clickPrimaryNav('知识')
+    const panel = screen.getByTestId('knowledge-memory-section')
+    expect(await within(panel).findByRole('region', { name: '自动积累经验' })).toBeInTheDocument()
+    await waitFor(() => expect(api.listAgentMemoryLifecycle).toHaveBeenCalledWith({ localProjectId: localProject.id }))
+    expect(api.getAutomaticMemoryStatus).toHaveBeenCalledWith({ projectId: localProject.id })
+    expect(await screen.findByRole('region', { name: 'Hindsight 知识与记忆' })).toBeInTheDocument()
+    expect(api.getHindsightStatus).toHaveBeenCalledWith({ projectId: localProject.id })
   })
 
   it('keeps the design Stage Agent as the task status row primary action, offers no execution in 设置, and explains unpaired advanced limits before use', async () => {

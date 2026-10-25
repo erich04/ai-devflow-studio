@@ -46,6 +46,19 @@ export type ConversationCheckpoint = {
   pendingProposal?: Record<string, unknown> | undefined
   nativeReviewMessageId?: string | undefined
 }
+/** Local audit of the host request, not proof of a model adopting a Memory or of harness internals. */
+export type ConversationMemoryReceipt = {
+  version: 1
+  callId: string
+  executor: 'direct-provider' | 'opencode' | 'native-tools'
+  boundary: 'host_request'
+  state: 'prepared' | 'dispatch_started' | 'response_received' | 'not_sent' | 'delivery_unknown'
+  /** SHA-256 of JSON.stringify({ systemPrompt, userPrompt }) as dispatched by the host. */
+  promptDigest: string
+  memories: Array<{ id: string; revision: number; headVersion: number; contentDigest: string }>
+  omittedMemoryCount: number
+  observedAt: string
+}
 export type ConversationMessage = {
   id: string
   role: 'user' | 'assistant' | 'tool' | 'notice'
@@ -61,6 +74,8 @@ export type ConversationMessage = {
   usage?: AgentProviderUsage
   /** Bounded, non-content diagnostic for this call, including a recovered failure. */
   failure?: ConversationFailure
+  /** Recorded on the existing per-call notice, including failed and retried calls. */
+  memoryReceipt?: ConversationMemoryReceipt
   attempt?: { turnId: string; step: number; cycle: number; recovery: number; group: string; startedAt: string; durationMs?: number; status: 'running' | 'completed' | 'failed' }
   provider?: { id: string; model: string; executor?: 'direct-provider' | 'opencode' | 'native-tools'; effectiveThinking?: import('@ai-devflow/shared').EffectiveProviderThinking }
   contentLengths?: Partial<Record<'text' | 'draft' | 'reasoning', number>>
@@ -95,7 +110,7 @@ export type WorkbenchConversation = {
   updatedAt: string
   error?: string
   failure?: ConversationFailure
-  contextReceipt?: { includedMessages: number; omittedMessages: number; limited?: boolean; observedAt: string; boundaryId?: string; budget?: import('@ai-devflow/shared').PromptBudgetReceipt }
+  contextReceipt?: { includedMessages: number; omittedMessages: number; limited?: boolean; observedAt: string; boundaryId?: string; budget?: import('@ai-devflow/shared').PromptBudgetReceipt; memory?: ConversationMemoryReceipt }
 }
 export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }

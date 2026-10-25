@@ -45,7 +45,7 @@ type AgentMemoryHumanActionStore = Pick<
   | 'authorizeAgentMemoryDeletion'
   | 'commitAgentMemoryDeletion'
   | 'purgeAgentMemoryDerivedState'
->
+> & Partial<Pick<LocalStore, 'resolveLocalProjectMemoryPrincipal'>>
 
 export type AgentMemoryHumanActions = {
   promote(input: PromoteAgentMemoryCandidateInput): Promise<DurableAgentMemoryRevision>
@@ -231,7 +231,7 @@ export function createAgentMemoryHumanActions(
           currentRevision.status !== 'active' ||
           currentRevision.contentDigest !== command.expectedContentDigest ||
           currentRevision.provenanceDigest !== command.expectedProvenanceDigest ||
-          currentRevision.statement === command.statement
+          (currentRevision.statement === command.statement && command.pin === undefined)
         ) reject()
 
         const decidedAt = canonicalNow(clock)
@@ -255,8 +255,8 @@ export function createAgentMemoryHumanActions(
           policyVersion: HUMAN_REVISION_POLICY_VERSION,
           visibility: currentRevision.visibility,
           sensitivity: currentRevision.sensitivity,
-          retentionClass: currentRevision.retentionClass,
-          expiresAt: currentRevision.expiresAt,
+          retentionClass: command.pin === undefined ? currentRevision.retentionClass : command.pin ? 'until_deleted' : 'thirty_days',
+          expiresAt: command.pin === undefined ? currentRevision.expiresAt : command.pin ? null : new Date(Date.parse(decidedAt) + 30 * 86_400_000).toISOString(),
           decidedAt,
         }
         const authority: AgentMemoryRevisionAuthority = {

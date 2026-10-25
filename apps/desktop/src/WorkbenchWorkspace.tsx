@@ -1,4 +1,5 @@
 import { ConversationUsage } from './components/ConversationUsage'
+import { RememberConversationMemory } from './components/RememberConversationMemory'
 import { WorkbenchSplitter } from './WorkbenchSplitter'
 import { ConversationBody } from './ConversationBody'
 import { NewConversationDialog } from './ConversationDialogs'
@@ -41,7 +42,7 @@ const statusCopy: Record<WorkbenchConversation['status'], string> = {
 }
 
 export function WorkbenchWorkspace({ api, projectId, projectName, runs, providerId, providerName, request, onNavigate, onConfigure, children, splitDetails = false, modelReadinessError }: {
-  api: Pick<DevFlowDesktopApi, 'workbenchConversation' | 'onWorkbenchConversationUpdated'> | null
+  api: Pick<DevFlowDesktopApi, 'workbenchConversation' | 'onWorkbenchConversationUpdated' | 'rememberConversationMemory'> | null
   projectId: string | undefined
   projectName: string | undefined
   runs: WorkflowRun[]
@@ -295,7 +296,7 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     </div>
     {active !== 'details' && !session && !showHistory && <p className="conversation-loading" role="status">{creating ? '正在创建独立对话…' : '正在恢复会话…'}</p>}
     {session && <div id={`chat-panel-${session.id}`} role="tabpanel" aria-labelledby={`chat-tab-${session.id}`} hidden={showHistory} className="workspace-conversation">
-      <ConversationView modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand}
+      <ConversationView remember={api?.rememberConversationMemory} modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand}
         references={referencesFor(session.id)} onReferencesChange={(next) => setReferencesFor(session.id, next)} />
     </div>}
   </aside>
@@ -308,7 +309,8 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
   </DiscussionPaneContext.Provider> : conversationPane
 }
 
-function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError, references, onReferencesChange }: {
+function ConversationView({ session, runs, providerId, providerName, command, onNavigate, onConfigure, modelReadinessError, references, onReferencesChange, remember }: {
+  remember: DevFlowDesktopApi['rememberConversationMemory']
   modelReadinessError?: string | undefined
   session: WorkbenchConversation; runs: WorkflowRun[]; providerId: string; providerName: string
   command: (input: ConversationCommand) => Promise<import('../electron/workbench-conversation-contract').ConversationResponse | undefined>
@@ -358,7 +360,9 @@ function ConversationView({ session, runs, providerId, providerName, command, on
         <div className="conversation-avatar"><MessageCircle /></div><h3>从一个问题开始</h3><p>讨论整个项目，也可以深入任意节点。每个 Tab 保留自己的聊天历史。</p>
         {['现在进行到哪里了，下一步做什么？', '结合项目代码，帮我澄清这次需求。', '哪些测试或审批还没有完成？'].map((suggestion) => <button key={suggestion} onClick={() => { updateInput(suggestion); textarea.current?.focus() }}>{suggestion}<ArrowUp size={14} /></button>)}
       </div>}
-      {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} readContent={async (field, offset) => (await command({ type: 'read_content', ...scope, messageId: message.id, field, offset }))?.contentPage} onRetryReview={() => void command({ type: 'retry_review', ...scope, messageId: message.id, providerId })} onPublish={(acknowledgeUnverified) => void command({ type: 'publish', ...scope, messageId: message.id, ...(acknowledgeUnverified ? { acknowledgeUnverified: true } : {}) })} />)}
+      {visibleMessages.map((message) => <ConversationMessageView key={message.id} message={message} busy={busy} targetLabel={message.draft ? (() => { const run = runs.find((item) => item.id === message.draft!.runId); const node = run?.nodes.find((item) => item.id === message.draft!.nodeId); return run && node ? `${run.title} · ${node.title}` : '目标节点已不存在，请重新调查' })() : ''} onNavigate={onNavigate} onAnswer={(answer) => { setAnswerTo(message.id); updateInput(answer); textarea.current?.focus() }} readContent={async (field, offset) => (await command({ type: 'read_content', ...scope, messageId: message.id, field, offset }))?.contentPage} onRetryReview={() => void command({ type: 'retry_review', ...scope, messageId: message.id, providerId })} onPublish={(acknowledgeUnverified) => void command({ type: 'publish', ...scope, messageId: message.id, ...(acknowledgeUnverified ? { acknowledgeUnverified: true } : {}) })}
+        memoryAction={!busy && (message.role === 'user' || message.role === 'assistant') && !message.reasoning && !message.failure ? <RememberConversationMemory {...scope} messageId={message.id} text={message.text} remember={remember} /> : null} />)}
+
       {busy && <p className="conversation-activity" role="status"><span className="conversation-running-dot" />正在调用 {providerName || 'Provider'} 调查；可以停止。</p>}
       {modelReadinessError && <div className="conversation-error" role="status">{modelReadinessError}<button className="text-button" onClick={onConfigure}>打开项目模型设置</button></div>}
       {session.error && <div className="conversation-error" role="status">{session.error}{['failed', 'cancelled', 'interrupted', 'paused'].includes(session.status) && <button className="ghost-button" disabled={!providerId || sending || Boolean(modelReadinessError)} onClick={() => void command({ type: 'retry', ...scope, providerId })}><RotateCcw size={14} />{session.status === 'paused' ? '继续当前步骤' : '重试这一步'}</button>}</div>}
@@ -411,8 +415,9 @@ function ReasoningView({ message, readContent }: { message: ConversationMessage;
   </section>
 }
 
-function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish, onRetryReview, readContent }: {
+function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavigate, onPublish, onRetryReview, readContent, memoryAction }: {
   message: ConversationMessage; readContent: ContentReader; busy: boolean; targetLabel: string; onAnswer: (answer: string) => void; onNavigate: (action: ConversationAction) => void; onPublish: (acknowledgeUnverified?: boolean) => void; onRetryReview: () => void
+  memoryAction?: ReactNode
 }) {
   // Saving a proposal first shows where it goes and what is saved (plan W8).
   const [confirmingPublish, setConfirmingPublish] = useState(false)
@@ -426,6 +431,7 @@ function ConversationMessageView({ message, busy, targetLabel, onAnswer, onNavig
   return <article className={`conversation-message conversation-message--${message.role}`}>
     <span className="message-author">{message.role === 'user' ? '你' : 'DevFlow'}</span>
     <ConversationBody message={message} />
+    {memoryAction}
     {message.contentLengths?.text && <ContentPages field="text" readContent={readContent} />}
     {message.question && <div className="conversation-question"><span className="meta">{message.question.resolvedBy === 'proposal_saved' ? '已保存提案' : message.question.answeredAt ? '已收到后续回复' : '需要你补充'}</span><strong>{message.question.prompt}</strong>
       {!message.question.answeredAt && <><div className="question-options">{message.question.options.map((option) => <button className="ghost-button" key={option} disabled={busy} onClick={() => onAnswer(option)}>{option}</button>)}</div><button className="text-button" disabled={busy} onClick={() => onAnswer('')}>输入回答</button><small>点击选项填入输入框，也可以直接输入自己的回答。</small></>}

@@ -16,7 +16,7 @@
   "dependencies": {
     "@ai-devflow/shared": "workspace:*",
     "@xyflow/react": "^12.8.5",
-    "electron": "^42.11.6",
+    "electron": "^42.11.16",
     "lucide-react": "^0.468.0",
     "mdast-util-from-markdown": "2.0.3",
     "react": "^19.1.1",
