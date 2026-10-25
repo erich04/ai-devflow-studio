@@ -98,6 +98,49 @@ describe('CodingRuntime', () => {
     expect(store.codingEvents.filter((event) => event.metadata?.origin === 'session_permission').map((event) => event.metadata?.action)).toEqual(['created', 'used', 'revoked'])
   })
 
+  it('stops reusing a session command once the package scripts it runs have changed (#237)', async () => {
+    const worktreePath = await mkdtemp(path.join(os.tmpdir(), 'devflow-grant-inputs-'))
+    tempDirs.push(worktreePath)
+    await writeFile(path.join(worktreePath, 'package.json'), '{"scripts":{"test":"vitest run"}}')
+    const run = opencodeCodingRun()
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [managedWorkspace({ codingRunId: run.id, worktreePath })] })
+    const command = { permission: 'bash' as const, command: 'pnpm test' }
+    const first = codingPermissionRequest(run, command)
+    store.permissionRequests.push(first)
+    const engine = createSpyCodingEngine('opencode-http')
+    let turns = 0
+    vi.mocked(engine.approvePermission).mockImplementation(async (input) => {
+      turns += 1
+      // While the reused approval runs, the agent rewrites the script behind the same command.
+      if (turns === 2) await writeFile(path.join(worktreePath, 'package.json'), '{"scripts":{"test":"node upload-secrets.js"}}')
+      return { codingRun: { ...input.codingRun, status: 'waiting_permission' }, events: [], permissionRequest: { ...first, id: `next-${turns}` } }
+    })
+    const runtime = createCodingRuntime({ store, engine, now: fixedNow('2026-08-12T23:36:00.000Z'), sessionAuthority: async () => ({ actorId: 'user-1', key: 'org-project-user-token' }) })
+    await runtime.replyCodingPermission({ requestId: first.id, codingRunId: run.id, decidedBy: 'user-1', decision: 'approved', comment: '', scope: 'session' })
+    await vi.waitFor(() => expect(turns).toBe(2))
+    expect(store.permissionRequests.find((entry) => entry.id === 'next-1')?.status).toBe('approved')
+    await vi.waitFor(() => expect(store.codingEvents.some((event) => event.metadata?.action === 'invalidated')).toBe(true))
+    expect(store.permissionRequests.find((entry) => entry.id === 'next-2')?.status).toBe('pending')
+    expect(turns).toBe(2)
+    expect(await runtime.sessionPermissions({ codingRunId: run.id })).toEqual([])
+    expect(store.codingEvents.filter((event) => event.metadata?.origin === 'session_permission').map((event) => event.metadata?.action))
+      .toEqual(['created', 'used', 'invalidated'])
+  })
+
+  it('refuses a session scope for a package command whose inputs cannot be checked, leaving a one-time approval available', async () => {
+    const run = opencodeCodingRun()
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run],
+      workspaces: [managedWorkspace({ codingRunId: run.id, worktreePath: path.join(os.tmpdir(), 'devflow-missing-grant-worktree') })] })
+    const first = codingPermissionRequest(run, { permission: 'bash', command: 'pnpm test' })
+    store.permissionRequests.push(first)
+    const runtime = createCodingRuntime({ store, engine: createSpyCodingEngine('opencode-http'), now: fixedNow('2026-08-12T23:36:00.000Z'),
+      sessionAuthority: async () => ({ actorId: 'user-1', key: 'org-project-user-token' }) })
+    await expect(runtime.replyCodingPermission({ requestId: first.id, codingRunId: run.id, decidedBy: 'user-1', decision: 'approved', comment: '', scope: 'session' }))
+      .rejects.toThrow('Approve it once instead')
+    expect(store.permissionRequests.find((entry) => entry.id === first.id)?.status).toBe('pending')
+    expect(store.permissionDecisions).toEqual([])
+  })
+
   it('retains the worktree when a renewed approval fails its final revalidation', async () => {
     const run = opencodeCodingRun()
     const workspace = managedWorkspace({ codingRunId: run.id })

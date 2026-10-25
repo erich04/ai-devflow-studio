@@ -1800,6 +1800,8 @@ export type CodingSessionGrant = {
   actorId: string
   scopeKey: string
   rule: { kind: 'files'; paths: string[] } | { kind: 'command'; command: string }
+  /** Package-manager commands only: digest of the manifests and configuration that decide what the command runs. */
+  inputsDigest?: string
   createdAt: string
   expiresAt: string
   revokedAt?: string
