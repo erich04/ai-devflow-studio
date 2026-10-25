@@ -220,6 +220,8 @@ describe('opencode HTTP coding engine', () => {
   it.each(['success', 'transport failure', 'busy past deadline'] as const)('waits for the managed session to become idle before capturing a settled message diff: %s', async (scenario) => {
     let startedAt = 0
     let capturedAt = 0
+    let releaseDiffRead!: () => void
+    const diffRead = new Promise<void>((resolve) => { releaseDiffRead = resolve })
     const patch = 'diff --git a/src/app.ts b/src/app.ts\n+export const ready = true\n'
     const fetcher: Fetcher = async (input, init) => {
       const url = String(input)
@@ -240,7 +242,7 @@ describe('opencode HTTP coding engine', () => {
       // Keep the session and polling deadlines on the same virtual clock.
       nowMs: () => Date.now(),
       processManager: readyServer(), resolveManagedDirectory: identityManagedDirectory, fetcher,
-      captureWorktreeDiff: async () => { capturedAt = Date.now(); return { changedPaths: ['src/app.ts'], patch } },
+      captureWorktreeDiff: async () => { capturedAt = Date.now(); await diffRead; return { changedPaths: ['src/app.ts'], patch } },
       requireExecutionAuthorization: true, permissionPollMs: 1, permissionDiscoveryTimeoutMs: 10, maxWallClockMs: 200,
     })
     const run = runs[0]!
@@ -257,12 +259,19 @@ describe('opencode HTTP coding engine', () => {
         workspace, project, authorizedStart: input, now: input.now,
       }).then((value) => ({ value, error: undefined }), (error: unknown) => ({ value: undefined, error }))
         .finally(() => { settled = true })
-      // Response body microtasks can settle between timer turns. Do not jump past
-      // the execution deadline while a successful completion is still assembling.
-      for (let elapsed = 0; elapsed < 250 && !settled; elapsed += 1) {
+      // Polling uses the virtual clock; diff capture and path validation use real
+      // I/O. Stop advancing once idle permits capture, then release that I/O.
+      for (let elapsed = 0; elapsed < 250 && !settled && capturedAt === 0; elapsed += 1) {
         await vi.advanceTimersByTimeAsync(1)
       }
-      expect(settled).toBe(true)
+      if (scenario === 'busy past deadline') {
+        expect(settled).toBe(true)
+      } else {
+        expect(capturedAt).not.toBe(0)
+        expect(capturedAt - startedAt).toBeGreaterThanOrEqual(40)
+        expect(settled).toBe(false)
+        releaseDiffRead()
+      }
       const outcome = await result
       if (scenario === 'busy past deadline') {
         expect(outcome.error).toMatchObject({ code: 'permission_discovery_timed_out' })
@@ -271,8 +280,8 @@ describe('opencode HTTP coding engine', () => {
       }
       expect(outcome.error).toBeUndefined()
       expect(expectCompletedResult(outcome.value!).codingRun.status).toBe('completed')
-      expect(capturedAt - startedAt).toBeGreaterThanOrEqual(40)
     } finally {
+      releaseDiffRead()
       try { await engine.cancel({ codingRun: authorization.codingRun }) } finally { vi.useRealTimers() }
     }
   })
