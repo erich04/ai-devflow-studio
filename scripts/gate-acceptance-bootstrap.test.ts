@@ -23,11 +23,14 @@ async function harness(fetcher: typeof fetch, closed = false) {
   const require = createRequire(import.meta.url)
   const source = (await readFile('scripts/gate-acceptance-bootstrap.cjs', 'utf8'))
     .replace(/^import\(pathToFileURL.*$/mu, '')
+    + '\n;globalThis.observationsComplete = () => Promise.allSettled([...pending])\n'
   const sandbox = { require: (name: string) => name === 'electron' ? { app } : require(name),
-    __dirname: path.resolve('scripts'), process: processStub, Buffer, URL, setTimeout, fetch: fetcher }
+    __dirname: path.resolve('scripts'), process: processStub, Buffer, URL, setTimeout, fetch: fetcher,
+    observationsComplete: async (): Promise<unknown> => undefined }
   runInNewContext(source, sandbox)
   return {
     quit: () => app.emit('before-quit'),
+    observationsComplete: () => sandbox.observationsComplete(),
     dispatch: (body = request) => sandbox.fetch('https://api.deepseek.com/chat/completions', { method: 'POST', body: JSON.stringify(body) }),
     ledger: async () => JSON.parse(await readFile(path.join(directory, 'official-budget.json'), 'utf8')),
     log: () => readFile(path.join(directory, 'lifecycle.jsonl'), 'utf8'),
@@ -65,7 +68,10 @@ describe('isolated gate acceptance observer', () => {
     expect((await run.ledger()).calls[0].status).toBe('reserved_unknown')
     expect(JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body))).toEqual(request)
     complete()
-    await vi.waitFor(async () => expect((await run.ledger()).calls[0].committedMicroyuan).toBe(88))
+    // Join the actual observer before reading its durable result. Polling the file
+    // can overlap atomic replacement on Windows and adds an unrelated one-second limit.
+    await run.observationsComplete()
+    expect((await run.ledger()).calls[0]).toMatchObject({ status: 'usage_observed', committedMicroyuan: 88 })
     expect(JSON.stringify(await run.ledger()) + await run.log()).not.toContain('PRIVATE_SYNTHETIC_PROMPT')
   })
 
@@ -73,6 +79,7 @@ describe('isolated gate acceptance observer', () => {
     const fetcher = vi.fn(async () => new Response('{}'))
     const run = await harness(fetcher)
     for (let index = 0; index < 3; index++) await run.dispatch()
+    await run.observationsComplete()
     await expect(run.dispatch()).rejects.toThrow('CNY 2')
     expect(fetcher).toHaveBeenCalledTimes(3)
     expect((await run.ledger()).calls).toHaveLength(3)
