@@ -84,7 +84,9 @@ export type CodingProviderCallReporter = (
 
 export type CodingPermissionPolicyReporter = (decision: {
   requestId: string
-  permission: CodingPermissionRequest['permission']
+  permission: CodingPermissionRequest['permission'] | 'task'
+  executorSessionId?: string
+  parentSessionId?: string
   commandSummary?: string
   filePath?: string
   decision: 'approved' | 'rejected'

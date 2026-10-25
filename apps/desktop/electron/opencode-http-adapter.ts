@@ -21,6 +21,9 @@ export type OpencodeMessageModel = {
 export type OpencodeSession = {
   id: string
   directory: string
+  parentID?: string
+  agent?: string
+  metadata?: Record<string, unknown>
   permission?: OpencodePermissionRule[]
 }
 
@@ -208,6 +211,8 @@ export async function createOpencodeSession(input: {
   directory: string
   title: string
   model: OpencodeSessionModel
+  agent?: string
+  metadata?: Record<string, unknown>
   permissionRules?: OpencodePermissionRule[]
   fetcher?: Fetcher
   signal?: AbortSignal
@@ -215,6 +220,8 @@ export async function createOpencodeSession(input: {
   return postJson<OpencodeSession>(input.fetcher, input.baseUrl, withDirectory('/session', input.directory), {
     title: input.title,
     model: input.model,
+    ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
     permission: input.permissionRules ?? createDefaultOpencodePermissionRules(),
   }, input.signal)
 }
@@ -247,6 +254,27 @@ export async function sendOpencodeMessage(input: {
     throw terminalError
   }
   return response
+}
+
+type OpencodeSessionRequest = { baseUrl: string; directory: string; sessionId: string; fetcher?: Fetcher; signal?: AbortSignal }
+
+export async function getOpencodeSession(input: OpencodeSessionRequest): Promise<OpencodeSession> {
+  return getJson(input.fetcher, input.baseUrl, withDirectory(`/session/${encodeURIComponent(input.sessionId)}`, input.directory), input.signal)
+}
+
+export async function listOpencodeChildSessions(input: OpencodeSessionRequest): Promise<OpencodeSession[]> {
+  const children = await getJson<unknown>(input.fetcher, input.baseUrl,
+    withDirectory(`/session/${encodeURIComponent(input.sessionId)}/children`, input.directory), input.signal)
+  if (!Array.isArray(children) || children.length > 32) throw new Error('Invalid OpenCode child sessions')
+  return children as OpencodeSession[]
+}
+
+export async function updateOpencodeSessionMetadata(input: OpencodeSessionRequest & { metadata: Record<string, unknown> }): Promise<OpencodeSession> {
+  return readJson(await fetchOpencodeResponse(input.fetcher, input.baseUrl,
+    withDirectory(`/session/${encodeURIComponent(input.sessionId)}`, input.directory), {
+      method: 'PATCH', headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ metadata: input.metadata }), ...(input.signal ? { signal: input.signal } : {}),
+    }))
 }
 
 export async function listOpencodeMessages(input: {

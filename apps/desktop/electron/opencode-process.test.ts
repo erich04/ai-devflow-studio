@@ -1,8 +1,59 @@
 import { EventEmitter } from 'node:events'
+import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { createDefaultOpencodePermissionRules } from './opencode-http-adapter'
 import { describe, expect, it, vi } from 'vitest'
 import { createOpencodeProcessManager, terminateProcessTree, type SpawnOpencodeProcess } from './opencode-process'
 
 describe('opencode process manager', () => {
+  it('bounds readiness when the server accepts a connection but never returns a response', async () => {
+    const child = fakeChild({ exitOnKill: true })
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => new Promise((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(new Error('timeout')), { once: true })
+    }))
+    const removeRuntimeRoot = vi.fn(async () => undefined)
+    const manager = createOpencodeProcessManager({ spawnProcess: () => child, findPort: async () => 4097,
+      createRuntimeRoot: async () => '/unused-readiness-root', removeRuntimeRoot })
+    vi.useFakeTimers()
+    vi.stubGlobal('fetch', fetcher)
+    // AbortSignal.timeout uses the platform timer; mirror it with the test clock.
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      const controller = new AbortController(); setTimeout(() => controller.abort(), ms); return controller.signal
+    })
+    try {
+      const started = manager.ensure({ projectId: 'project', binaryPath: 'opencode', env: {} })
+      const assertion = expect(started).rejects.toThrow('Timed out waiting')
+      await vi.advanceTimersByTimeAsync(30_001)
+      await assertion
+      expect(child.kill).toHaveBeenCalled()
+      expect(removeRuntimeRoot).toHaveBeenCalledWith('/unused-readiness-root')
+    } finally { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); await manager.stopAll() }
+  })
+
+  it('loads only the trusted task guard from a private profile and fingerprints its bounds', async () => {
+    const spawnProcess = vi.fn<SpawnOpencodeProcess>(() => fakeChild({ exitOnKill: true }))
+    const manager = createOpencodeProcessManager({ spawnProcess, findPort: async () => 4500 + spawnProcess.mock.calls.length, waitUntilReady: async () => undefined })
+    const policy = { owner: 'owner', providerID: 'fixture', modelID: 'model', maxTasks: 4, maxToolTurns: 24, maxModelCalls: 32,
+      parentRules: createDefaultOpencodePermissionRules(), childRules: createDefaultOpencodePermissionRules() }
+    const input = { projectId: 'project', binaryPath: 'opencode', profile: 'coding' as const, taskPolicy: policy,
+      env: { HOME: '/personal', OPENCODE_CONFIG: '/personal/config', OPENCODE_CONFIG_DIR: '/personal/plugins',
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({ provider: { fixture: {} }, plugin: ['untrusted'] }) } }
+    try {
+      const server = await manager.ensure(input)
+      const env = spawnProcess.mock.calls[0]![2]!.env!
+      expect(env).toMatchObject({ OPENCODE_DISABLE_PROJECT_CONFIG: 'true', OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'false' })
+      expect(env.HOME).not.toBe('/personal')
+      expect(env.OPENCODE_CONFIG).toBeUndefined()
+      expect(env.OPENCODE_CONFIG_DIR).toBeUndefined()
+      const config = JSON.parse(env.OPENCODE_CONFIG_CONTENT!)
+      expect(config).toMatchObject({ model: 'fixture/model', small_model: 'fixture/model', subagent_depth: 1 })
+      expect(config.plugin).toHaveLength(1)
+      expect(await readFile(fileURLToPath(config.plugin[0]), 'utf8')).toContain('devflow_task_')
+      expect(await manager.ensure(input)).toBe(server)
+      expect(await manager.ensure({ ...input, taskPolicy: { ...policy, maxTasks: 2 } })).not.toBe(server)
+    } finally { await manager.stopAll() }
+  })
+
   it('isolates question-enabled coding from other project processes and stops both profiles', async () => {
     const spawnProcess = vi.fn<SpawnOpencodeProcess>(() => fakeChild({ exitOnKill: true }))
     const manager = createOpencodeProcessManager({ spawnProcess, findPort: async () => 4100 + spawnProcess.mock.calls.length,

@@ -643,7 +643,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         runId: codingRun.runId, nodeId: codingRun.nodeId,
         sequence: await nextSequence(codingRun.id), kind: 'permission',
         message: decision.decision === 'approved'
-          ? 'DevFlow automatically allowed a bounded read-only command.'
+          ? decision.permission === 'task' ? 'DevFlow 已核对子任务归属，允许在当前运行内执行一个有界子任务。' : 'DevFlow automatically allowed a bounded read-only command.'
           : 'DevFlow rejected an unsupported tool request and returned corrective feedback.',
         timestamp: decision.timestamp, metadata: { ...decision, origin: 'permission_policy' }, redacted: true,
       }])

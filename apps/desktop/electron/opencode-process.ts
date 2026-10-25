@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { isolatedOpencodeProfileEnv } from './opencode-profile-isolation.js'
+import { opencodeTaskPluginSource, type OpencodeTaskPolicy } from './opencode-task-guard.js'
+import { buildOpenCodeManagedPrompt } from './opencode-permission-policy.js'
 import {
   buildOpencodeServeArgs,
   listOpencodePermissions,
@@ -48,6 +52,7 @@ export type EnsureManagedOpencodeServerInput = {
   projectId: string
   binaryPath: string
   env: NodeJS.ProcessEnv
+  taskPolicy?: OpencodeTaskPolicy
   /**
    * A non-secret digest or version that represents the saved project-level
    * OpenCode configuration. The manager combines it with the binary and
@@ -78,7 +83,6 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   const processTeardownFailures = new Map<InternalManagedOpencodeServer, unknown>()
   const spawnProcess = deps.spawnProcess ?? spawn
   const findPort = deps.findPort ?? randomLocalPort
-  const waitUntilReady = deps.waitUntilReady ?? waitForOpencodeReady
   const createRuntimeRoot = deps.createRuntimeRoot ?? createOpencodeRuntimeRoot
   const removeRuntimeRoot = deps.removeRuntimeRoot ?? removeOpencodeRuntimeRoot
   const stopTimeoutMs = deps.stopTimeoutMs ?? 5_000
@@ -183,12 +187,15 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     }
     let child: ManagedOpencodeChild
     try {
+      const env = input.taskPolicy
+        ? await taskEnvironment(input, runtimeRoot, baseUrl)
+        : effectiveEnvironment(input)
       child = spawnProcess(
         input.binaryPath,
         buildOpencodeServeArgs({ hostname: '127.0.0.1', port }),
         {
           cwd: runtimeRoot,
-          env: effectiveEnvironment(input),
+          env,
           detached: platform !== 'win32',
           stdio: ['ignore', 'ignore', 'ignore'],
         },
@@ -249,7 +256,13 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       if (stopping) {
         throw stoppingError
       }
-      await Promise.race([waitUntilReady(baseUrl), startupFailure])
+      // OpenCode 1.18.15 waits for its plugin SDK installation when a local
+      // plugin is configured. A fresh private task profile needs a bounded
+      // initialization window; other profiles keep their existing 30 seconds.
+      await Promise.race([
+        deps.waitUntilReady ? deps.waitUntilReady(baseUrl) : waitForOpencodeReady(baseUrl, input.taskPolicy ? 60_000 : 30_000),
+        startupFailure,
+      ])
       if (stopping) {
         throw stoppingError
       }
@@ -448,9 +461,37 @@ function createOpencodeProcessFingerprint(input: EnsureManagedOpencodeServerInpu
     .update(JSON.stringify({
       binaryPath: input.binaryPath,
       configurationFingerprint: input.configurationFingerprint ?? '',
+      taskPolicy: input.taskPolicy,
       environment,
     }))
     .digest('hex')
+}
+
+async function taskEnvironment(input: EnsureManagedOpencodeServerInput, runtimeRoot: string, baseUrl: string): Promise<NodeJS.ProcessEnv> {
+  const policy = input.taskPolicy!
+  if (input.profile !== 'coding') throw new Error('Bounded tasks require the coding process profile')
+  const config = JSON.parse(input.env.OPENCODE_CONFIG_CONTENT ?? '{}') as Record<string, unknown>
+  if (!config.provider || typeof config.provider !== 'object' || !(policy.providerID in config.provider)) {
+    throw new Error('Bounded tasks require a saved, governed Provider binding')
+  }
+  const pluginPath = join(runtimeRoot, 'devflow-task-guard.mjs')
+  await writeFile(pluginPath, opencodeTaskPluginSource(policy, baseUrl), { mode: 0o600, flag: 'wx' })
+  const model = `${policy.providerID}/${policy.modelID}`
+  const env: NodeJS.ProcessEnv = { ...effectiveEnvironment(input), ...isolatedOpencodeProfileEnv(runtimeRoot, { isolateHome: true }),
+    OPENCODE_DISABLE_PROJECT_CONFIG: 'true', OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'false',
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, plugin: [pathToFileURL(pluginPath).href],
+      model, small_model: model, default_agent: 'devflow-coding', subagent_depth: 1,
+      agent: {
+        'devflow-coding': { mode: 'primary', model, steps: policy.maxModelCalls, description: 'DevFlow managed coding',
+          prompt: 'Work only inside the managed repository. Delegate only to devflow-worker, one foreground task at a time; wait for it to finish before other tools. Task prompts must be plain text, with no @ file or agent mentions; ask the child to use read tools instead. Task and tool limits apply across the whole run. A child question or permission is handled by DevFlow. Never bypass a denied operation.' },
+        'devflow-worker': { mode: 'subagent', model, steps: policy.maxModelCalls, description: 'One bounded coding subtask in the same managed worktree',
+          prompt: buildOpenCodeManagedPrompt('Complete this bounded subtask in the managed repository. Use the native read, edit and question tools and request approval for commands. Do not delegate further or run in the background.') },
+      },
+    }) }
+  delete env.OPENCODE_CONFIG
+  delete env.OPENCODE_CONFIG_DIR
+  await mkdir(env.HOME!, { recursive: true, mode: 0o700 })
+  return env
 }
 
 async function createOpencodeRuntimeRoot(): Promise<string> {
@@ -579,13 +620,17 @@ async function randomLocalPort(): Promise<number> {
   })
 }
 
-async function waitForOpencodeReady(baseUrl: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+async function waitForOpencodeReady(baseUrl: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     try {
-      await listOpencodePermissions({ baseUrl })
+      // A connected request may initialize OpenCode's isolated profile/plugins.
+      // Give it the remaining startup window; a one-second per-poll timeout
+      // repeatedly cancels that initialization and can prevent readiness forever.
+      await listOpencodePermissions({ baseUrl, signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) })
       return
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(500, deadline - Date.now()))))
     }
   }
 
