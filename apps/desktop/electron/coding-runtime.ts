@@ -3106,7 +3106,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         ...briefContext,
         ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
         maxContextBytes: CODING_BRIEF_MAX_BYTES,
-        memoryContext: recalled.revisions,
+        memoryContext: recalled.context,
         userInstruction: input.userInstruction,
         worktreePath: '<managed-worktree-created-after-budget-approval>',
         branchName: '<managed-branch-created-after-budget-approval>',

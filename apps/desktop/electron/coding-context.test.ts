@@ -6,9 +6,11 @@ import {
 } from '@ai-devflow/shared'
 import { runs } from '@ai-devflow/shared/fixtures'
 import {
-  assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, recallScopedMemory, registerMemoryCandidateRecall, type CodingMemoryStore,
+  assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, recallScopedMemory, registerMemoryCandidateRecall,
+  registerProjectMemoryRecall, type CodingMemoryStore,
 } from './coding-context'
 import { HindsightError } from './hindsight-client'
+import { projectMemoryIdentity } from './project-memory-recall'
 
 const run = runs[0]!
 const now = '2026-09-15T20:00:00.000Z'
@@ -85,6 +87,46 @@ describe('Coding Context authority', () => {
     await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('pairing changed')
     currentPairing = { ...pairing, tokenId: 'renewed-session' }
     await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('pairing changed')
+  })
+})
+
+describe('Project memory recall (ADR 0030)', () => {
+  it('uses the project\'s Hindsight memory instead of local Memory and re-checks it on resume', async () => {
+    const retrieve = vi.fn(async () => [])
+    const store: CodingMemoryStore = { getDesktopPairingCredential: async () => pairing, retrieveAgentMemoryRevisions: retrieve,
+      getAgentMemoryHead: async () => null }
+    let enabled = true
+    const recall = vi.fn(async () => enabled ? { degraded: false, items: [
+      projectMemoryIdentity({ id: 'h1' }, '[observation] 回归测试命令是 pnpm test:regression'),
+      projectMemoryIdentity({ id: 'h2' }, `[fact 2026-10-20] ${'很长的记录'.repeat(400)}`),
+    ] } : null)
+    registerProjectMemoryRecall(store, { recall, assertCurrent: async () => { if (!enabled) throw new Error('off') } })
+    const recalled = await recallCodingMemory({ store, run, codingRunId: 'pm-1', userId: run.creatorId, query: 'regression tests', now })
+    expect(recall).toHaveBeenCalledWith(expect.objectContaining({ projectId: run.projectId, userId: run.creatorId, query: 'regression tests' }))
+    expect(recalled.context).toEqual([{ id: 'pm-h1', revision: 1, statement: '[observation] 回归测试命令是 pnpm test:regression' }])
+    expect(recalled.memories).toEqual([{ id: 'pm-h1', revision: 1, headVersion: 1, contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) }])
+    expect(recalled).toMatchObject({ revisions: [], omittedMemoryCount: 1, projectMemory: { degraded: false } })
+    expect(retrieve).not.toHaveBeenCalled()
+
+    const compacted = compactExecutionContext({ pinned: 'Current request', sources: [] })
+    const coding: CodingAgentRun = {
+      id: 'pm-1', runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId, requestedBy: run.creatorId,
+      providerId: 'deepseek', engine: 'native', status: 'running', branchName: run.branchName, userInstruction: run.request,
+      prompt: compacted.prompt, summary: 'Running', changedPaths: [], startedAt: now, redacted: true,
+      contextReceipt: { stateVersion: 1, runId: run.id, nodeId: run.currentNodeId, runVersion: run.version, runtimeId: recalled.runtimeId,
+        scope: recalled.scope, memories: recalled.memories, omittedMemoryCount: 1, promptDigest: codingPromptDigest(compacted.prompt),
+        compaction: compacted.receipt },
+    }
+    await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).resolves.toBeUndefined()
+    expect(retrieve).not.toHaveBeenCalled()
+    enabled = false
+    await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('start a new run')
+    // Memory off again: the previous local behaviour applies.
+    expect((await recallCodingMemory({ store, run, codingRunId: 'pm-2', userId: run.creatorId, query: 'regression tests', now })).projectMemory).toBeUndefined()
+    expect(retrieve).toHaveBeenCalledTimes(1)
+    // A receipt with project memory cannot be checked without the registered verifier.
+    await expect(assertCodingContextCurrent({ store: { getDesktopPairingCredential: async () => pairing }, codingRun: coding, now }))
+      .rejects.toThrow('start a new run')
   })
 })
 

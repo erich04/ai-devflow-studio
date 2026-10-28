@@ -29,6 +29,7 @@ async function fixture(includeMemories = false) {
     configureBank: vi.fn(async () => {}),
     configureMemoryBank: vi.fn(async () => {}),
     retainDocument: vi.fn(async () => {}),
+    recallMemories: vi.fn(async () => []),
     retain: vi.fn(async (_bank, item) => { docs.set(item.documentId, item) }),
     operation: vi.fn(async () => docs.size ? 'completed' : 'not_found'),
     deleteDocument: vi.fn(async (_bank, id) => { docs.delete(id) }),

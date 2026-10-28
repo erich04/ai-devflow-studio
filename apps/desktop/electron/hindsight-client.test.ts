@@ -172,3 +172,27 @@ it('retains a project memory document that replaces its earlier revision in one 
   fetcher.mockResolvedValueOnce(Response.json({ success: true, bank_id: 'df-memory-1', items_count: 1, async: true, operation_id: 'op-2' }))
   await expect(client.retainDocument('df-memory-1', item)).rejects.toThrow('protocol')
 })
+it('recalls project memory text, preferring observations, and drops malformed results', async () => {
+  const bodies: unknown[] = []
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return Response.json({ results: [
+      { id: 'o1', type: 'observation', text: '删除前要确认。', source_fact_ids: ['f0'] },
+      { id: 'f1', type: 'world', text: '撤销窗口 5 秒。', document_id: 'conversation:c1', occurred_start: '2026-10-20T08:00:00Z' },
+      { id: 'f1', type: 'world', text: 'duplicate id' },
+      { id: 'bad id', type: 'world', text: 'invalid id' },
+      { id: 'e1', type: 'experience', text: '   ' },
+      { id: 'x1', type: 'unknown', text: 'unknown type' },
+    ] })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  expect(await client.recallMemories('df-memory-1', { query: '删除', maxTokens: 1_000 })).toEqual([
+    { id: 'o1', type: 'observation', text: '删除前要确认。' },
+    { id: 'f1', type: 'world', text: '撤销窗口 5 秒。', documentId: 'conversation:c1', occurredAt: '2026-10-20T08:00:00Z' },
+  ])
+  expect(bodies).toEqual([{ query: '删除', types: ['observation', 'world', 'experience'], prefer_observations: true,
+    budget: 'low', max_tokens: 1_000, include: { entities: null } }])
+  await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 10 })).rejects.toThrow('protocol')
+  fetcher.mockResolvedValueOnce(Response.json({ results: 'not a list' }))
+  await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 1_000 })).rejects.toThrow('protocol')
+})

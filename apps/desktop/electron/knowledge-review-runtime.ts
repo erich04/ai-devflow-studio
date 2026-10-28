@@ -30,7 +30,7 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { RunKnowledgeReviewInput, RunKnowledgeReviewResult } from './ipc-contract.js'
-import { executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
+import { assertProjectMemoryCurrent, executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
 
 export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking' | 'executorKind'>
 
@@ -199,7 +199,7 @@ export function createKnowledgeReviewRuntime(
         ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
         ...(recalledMemory ? {
           backgroundMemory: recalledMemory.memories.map((identity) => ({
-            ...identity, statement: recalledMemory!.revisions.find((revision) => revision.id === identity.id)!.statement,
+            ...identity, statement: recalledMemory!.context.find((item) => item.id === identity.id)!.statement,
           })),
           omittedMemoryCount: recalledMemory.omittedMemoryCount,
         } : {}),
@@ -228,7 +228,10 @@ export function createKnowledgeReviewRuntime(
       const scope = await executionScope({ store: deps.store, projectId: input.projectId,
         userId: input.requestedBy, runtimeId: recalledMemory.runtimeId })
       if (JSON.stringify(scope) !== JSON.stringify(recalledMemory.scope)) throw new Error('Review Memory scope changed')
-      const identities = context.manifest.backgroundMemory?.memories ?? []
+      let identities = context.manifest.backgroundMemory?.memories ?? []
+      try {
+        identities = await assertProjectMemoryCurrent(deps.store, { projectId: input.projectId, userId: input.requestedBy, identities })
+      } catch { throw new Error('Review Memory changed, expired or was deleted') }
       if (!identities.length) return
       if (!deps.store.retrieveAgentMemoryRevisions || !deps.store.getAgentMemoryHead) throw new Error('Review Memory store is unavailable')
       const observedAt = now()

@@ -307,14 +307,15 @@ import { HindsightService, type HindsightScope } from './hindsight-service'
 import { createHindsightContextService } from './hindsight-context'
 import { createCodingModelContext } from './coding-model-context'
 import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint } from './hindsight-client'
-import { registerMemoryCandidateRecall } from './coding-context'
+import { registerMemoryCandidateRecall, registerProjectMemoryRecall } from './coding-context'
 import { createAutomaticMemoryRuntime, type AutomaticMemoryRuntime } from './automatic-memory-runtime'
 import { resolveProjectMemoryScope } from './automatic-memory-capture'
 import { ProjectMemoryService } from './project-memory-service'
+import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
 import { activeProjectMemoryConfiguration, projectMemoryPairingBinding } from './project-memory-capture'
 import { createMemoryModelRelay, MEMORY_RELAY_DEFAULT_PORT, type MemoryModelRelay, type MemoryRelayRoute } from './memory-model-relay'
-import { parseHindsightSetup, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
+import { parseHindsightSetup, type ProjectMemoryConfiguration, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -453,6 +454,10 @@ function getStore() {
     })
     console.info('[desktop-data-profile]', safeDesktopDataProfileSummary(selectedDataProfile))
     registerMemoryCandidateRecall(store, async (input) => (await getHindsightService()).recallMemoryCandidates(input))
+    projectMemoryRecall = createProjectMemoryRecall({ store, transportAvailable: hindsightTransportAvailable,
+      client: projectMemoryHindsightClient,
+      onDegraded: (reason) => console.warn('[project-memory] Recall unavailable; continuing without project memory.', { reason }) })
+    registerProjectMemoryRecall(store, projectMemoryRecall)
     return store
   })
   return storePromise
@@ -534,6 +539,12 @@ function wakeHindsight() {
 // Project memory (ADR 0030): captured documents go to the project's Hindsight bank, and
 // Hindsight's extraction calls come back through a loopback relay charged to the project budget.
 let projectMemoryService: Promise<ProjectMemoryService> | undefined
+let projectMemoryRecall: ProjectMemoryRecallService | undefined
+async function projectMemoryHindsightClient(config: ProjectMemoryConfiguration) {
+  return createHindsightClient({ endpoint: config.endpoint,
+    ...(config.encryptedApiKey ? { apiKey: await credentialAccess.decrypt(config.encryptedApiKey, 'provider', AbortSignal.timeout(2_000)) } : {}),
+  })
+}
 let memoryRelay: MemoryModelRelay | undefined
 let memoryRelayFailure: string | undefined
 const memoryRelayPort = (() => {
@@ -621,9 +632,7 @@ function getProjectMemoryService() {
   projectMemoryService ??= getStore().then(async (store) => {
     const service = new ProjectMemoryService({
       store,
-      client: async (config) => createHindsightClient({ endpoint: config.endpoint,
-        ...(config.encryptedApiKey ? { apiKey: await credentialAccess.decrypt(config.encryptedApiKey, 'provider', AbortSignal.timeout(2_000)) } : {}),
-      }),
+      client: projectMemoryHindsightClient,
       // Without the relay, extraction would fail and spend a retain attempt; hold new retains.
       canSubmit: () => Boolean(memoryRelay),
     })
@@ -2614,6 +2623,8 @@ async function getWorkbenchConversationService() {
         (await getHindsightService()).search(await hindsightScope(projectId), args, turn, signal),
       knowledgeRead: async (projectId, args) =>
         (await getHindsightService()).read(await hindsightScope(projectId), args),
+      memorySearch: async (projectId, args, signal) =>
+        (await projectMemoryRecall?.search({ projectId, query: args.query, limit: args.limit, signal })) ?? undefined,
       inspectGate: async (target) => {
         const evaluated = await evaluateLocalGateEnforcement(target)
         return { decision: evaluated.decision, policyVersion: evaluated.policySnapshot.version, policySource: evaluated.policySnapshot.source }
@@ -3379,7 +3390,7 @@ function registerIpcHandlers() {
             now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
           }).catch(() => {
             console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
-            return { revisions: [] as Array<{ id: string; revision: number; statement: string }> }
+            return { context: [] as Array<{ id: string; revision: number; statement: string }> }
           })
           generated = await runWorkflowStageAgent({
             run,
@@ -3402,9 +3413,7 @@ function registerIpcHandlers() {
             requestedBy: actor.userId,
             runtime: 'electron',
             signal,
-            ...(stageMemory.revisions.length
-              ? { memoryContext: stageMemory.revisions.map(({ id, revision, statement }) => ({ id, revision, statement })) }
-              : {}),
+            ...(stageMemory.context.length ? { memoryContext: stageMemory.context } : {}),
           })
           signal.throwIfAborted()
           const usedKnowledge = generated.provenance.knowledgeContext?.retrievedKnowledge

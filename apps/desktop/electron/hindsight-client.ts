@@ -15,6 +15,9 @@ export type HindsightDocument = {
   id: string; bankId: string; originalText: string; contentHash: string; memoryUnitCount: number
   updatedAt: string; metadata: Record<string, string>
 }
+export type HindsightMemory = {
+  id: string; text: string; type: 'observation' | 'world' | 'experience'; documentId?: string; occurredAt?: string
+}
 export type HindsightExtractedFact = {
   id: string; text: string; documentId: string; factType: 'world' | 'experience'
   metadata: Record<string, string>; updatedAt: string
@@ -203,6 +206,31 @@ export function createHindsightClient(input: {
         offset += page.items.length
       } while (offset < expectedCount)
       return facts
+    },
+    /**
+     * Project memory recall (ADR 0030): Hindsight is the memory's authority, so its text is used
+     * as recalled. Observations replace the raw facts they consolidate. Retrieval only; no model call.
+     */
+    async recallMemories(bank: string, input: { query: string; maxTokens: number; signal?: AbortSignal }): Promise<HindsightMemory[]> {
+      if (!Number.isSafeInteger(input.maxTokens) || input.maxTokens < 64 || input.maxTokens > 8_192) throw new HindsightError('protocol')
+      const result = await request('POST', `${bankPath(bank)}/memories/recall`, {
+        query: input.query, types: ['observation', 'world', 'experience'], prefer_observations: true,
+        budget: 'low', max_tokens: input.maxTokens, include: { entities: null },
+      }, input.signal, 5_000)
+      if (!Array.isArray(result.results) || result.results.length > 256) throw new HindsightError('protocol')
+      const seen = new Set<string>()
+      return result.results.flatMap((value): HindsightMemory[] => {
+        const item = object(value)
+        if (typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/u.test(item.id) || seen.has(item.id) ||
+            typeof item.text !== 'string' || !item.text.trim() || Buffer.byteLength(item.text) > 8_192 ||
+            !['observation', 'world', 'experience'].includes(String(item.type))) return []
+        seen.add(item.id)
+        const occurredAt = [item.occurred_start, item.mentioned_at].find((time): time is string =>
+          typeof time === 'string' && Number.isFinite(Date.parse(time)))
+        return [{ id: item.id, text: item.text, type: item.type as HindsightMemory['type'],
+          ...(typeof item.document_id === 'string' && item.document_id.length <= 300 ? { documentId: item.document_id } : {}),
+          ...(occurredAt ? { occurredAt } : {}) }]
+      })
     },
     async recall(bank: string, query: string, signal?: AbortSignal): Promise<HindsightCandidate[]> {
       // Local CPU reranking of a stage summary can exceed the short control-request
