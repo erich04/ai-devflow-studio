@@ -6,6 +6,8 @@ import {
   requireAgentProviderName,
   resolveAgentProviderDisplayName,
   parseProviderThinking,
+  PROJECT_MEMORY_KINDS,
+  PROJECT_MEMORY_MAX_EDIT_BYTES,
   WORK_REQUEST_ID_MAX_LENGTH,
 } from '@ai-devflow/shared'
 import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.js'
@@ -25,6 +27,12 @@ import type {
   RememberConversationMemoryInput,
   ConfigureProjectMemoryInput,
   ProjectMemoryStatus,
+  ClearProjectMemoryInput,
+  ForgetProjectMemoryInput,
+  ForgetProjectMemorySourceInput,
+  ListProjectMemoriesInput,
+  ProjectMemoryPage,
+  UpdateProjectMemoryInput,
   Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
@@ -255,6 +263,11 @@ export const ipcChannels = {
   rememberConversationMemory: 'devflow:automatic-memory:remember',
   getProjectMemoryStatus: 'devflow:project-memory:status',
   configureProjectMemory: 'devflow:project-memory:configure',
+  listProjectMemories: 'devflow:project-memory:list',
+  updateProjectMemory: 'devflow:project-memory:update',
+  forgetProjectMemory: 'devflow:project-memory:forget',
+  forgetProjectMemorySource: 'devflow:project-memory:forget-source',
+  clearProjectMemory: 'devflow:project-memory:clear',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   cancelWorkflowAgentNode: 'devflow:workflow-agent-node:cancel',
   requestClarificationChanges: 'devflow:clarification:changes:request',
@@ -772,6 +785,11 @@ export type DevFlowDesktopApi = {
   rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
   getProjectMemoryStatus?: (input: { projectId: string }) => Promise<ProjectMemoryStatus>
   configureProjectMemory?: (input: ConfigureProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  listProjectMemories?: (input: ListProjectMemoriesInput) => Promise<ProjectMemoryPage>
+  updateProjectMemory?: (input: UpdateProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemory?: (input: ForgetProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemorySource?: (input: ForgetProjectMemorySourceInput) => Promise<ProjectMemoryStatus>
+  clearProjectMemory?: (input: ClearProjectMemoryInput) => Promise<ProjectMemoryStatus>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
@@ -1393,6 +1411,51 @@ export function parseConfigureProjectMemoryInput(value: unknown): ConfigureProje
     providerId: readExactRequiredIdentifier(value, 'providerId'),
     ...(value.apiKey === undefined ? {} : { apiKey: value.apiKey }),
   }
+}
+
+const PROJECT_MEMORY_ID = /^[A-Za-z0-9_-]{1,100}$/u
+function readProjectMemoryId(value: Record<string, unknown>): string {
+  if (typeof value.memoryId !== 'string' || !PROJECT_MEMORY_ID.test(value.memoryId)) throw new Error('Invalid project Memory id')
+  return value.memoryId
+}
+export function parseListProjectMemoriesInput(value: unknown): ListProjectMemoriesInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory list payload')
+  rejectUnexpectedFields(value, ['projectId', 'kind', 'query', 'offset'], 'project Memory list payload')
+  if (!PROJECT_MEMORY_KINDS.includes(value.kind as never)) throw new Error('Invalid project Memory kind')
+  if (value.query !== undefined && (typeof value.query !== 'string' || value.query.length > 200 || value.query.includes('\0'))) {
+    throw new Error('Invalid project Memory search')
+  }
+  if (value.offset !== undefined && (!Number.isSafeInteger(value.offset) || Number(value.offset) < 0 || Number(value.offset) > 100_000)) {
+    throw new Error('Invalid project Memory offset')
+  }
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), kind: value.kind as ListProjectMemoriesInput['kind'],
+    ...(typeof value.query === 'string' && value.query.trim() ? { query: value.query.trim() } : {}),
+    ...(value.offset === undefined ? {} : { offset: Number(value.offset) }) }
+}
+export function parseUpdateProjectMemoryInput(value: unknown): UpdateProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory update payload')
+  rejectUnexpectedFields(value, ['projectId', 'memoryId', 'text'], 'project Memory update payload')
+  if (typeof value.text !== 'string' || !value.text.trim() || new TextEncoder().encode(value.text).byteLength > PROJECT_MEMORY_MAX_EDIT_BYTES ||
+      value.text.includes('\0')) {
+    throw new Error('记忆内容不能为空，且不能超过 4 KB。')
+  }
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), memoryId: readProjectMemoryId(value), text: value.text.trim() }
+}
+export function parseForgetProjectMemoryInput(value: unknown): ForgetProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory forget payload')
+  rejectUnexpectedFields(value, ['projectId', 'memoryId'], 'project Memory forget payload')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), memoryId: readProjectMemoryId(value) }
+}
+export function parseForgetProjectMemorySourceInput(value: unknown): ForgetProjectMemorySourceInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory source payload')
+  rejectUnexpectedFields(value, ['projectId', 'documentId'], 'project Memory source payload')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), documentId: readExactRequiredIdentifier(value, 'documentId') }
+}
+export function parseClearProjectMemoryInput(value: unknown): ClearProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory clear payload')
+  rejectUnexpectedFields(value, ['projectId', 'confirm'], 'project Memory clear payload')
+  if (value.confirm !== 'clear') throw new Error('Clearing project Memory requires explicit confirmation')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), confirm: 'clear' }
 }
 
 /** `runtimeId` is optional: omitted selects the project-wide Memory view (ADR 0024). */

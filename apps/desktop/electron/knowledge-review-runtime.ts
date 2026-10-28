@@ -230,7 +230,8 @@ export function createKnowledgeReviewRuntime(
       if (JSON.stringify(scope) !== JSON.stringify(recalledMemory.scope)) throw new Error('Review Memory scope changed')
       let identities = context.manifest.backgroundMemory?.memories ?? []
       try {
-        identities = await assertProjectMemoryCurrent(deps.store, { projectId: input.projectId, userId: input.requestedBy, identities })
+        identities = await assertProjectMemoryCurrent(deps.store, { projectId: input.projectId, userId: input.requestedBy, identities,
+          recalledAt: recalledMemory.recalledAt })
       } catch { throw new Error('Review Memory changed, expired or was deleted') }
       if (!identities.length) return
       if (!deps.store.retrieveAgentMemoryRevisions || !deps.store.getAgentMemoryHead) throw new Error('Review Memory store is unavailable')

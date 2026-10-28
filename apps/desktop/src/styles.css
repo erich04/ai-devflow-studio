@@ -4808,3 +4808,41 @@ body { min-width: 0; }
 .budget-continuation label { display: flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 600; }
 .budget-continuation input { width: 18px; height: 18px; flex-shrink: 0; }
 .budget-continuation code { overflow-wrap: anywhere; }
+
+/* Project memory panel (ADR 0030) */
+.project-memory-panel details > summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+.project-memory-panel details > .stack {
+  margin-top: 10px;
+}
+.project-memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.project-memory-search {
+  display: flex;
+  gap: 8px;
+}
+.project-memory-search input {
+  flex: 1;
+  min-width: 0;
+}
+.project-memory-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.project-memory-meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+.project-memory-panel textarea.input {
+  width: 100%;
+  resize: vertical;
+}

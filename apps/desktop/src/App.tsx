@@ -9,6 +9,7 @@ import { StageAgentFailureRecords } from './views/StageAgentFailureRecords'
 import { AgentRuntimePanel } from './AgentRuntimePanel'
 import { AgentCoordinationPanel } from './AgentCoordinationPanel'
 import { AgentMemoryPanel } from './AgentMemoryPanel'
+import { ProjectMemoryPanel } from './components/ProjectMemoryPanel'
 import { buildAgentEvidenceGroups } from './app/agent-evidence-view-model'
 import { buildTeamConnectionView, deliveryIntentsRevokedByRepair } from './app/team-connection-view-model'
 import { formatLocalTime, settingsSectionForTaskTarget, type InspectorReadingPosition, type SettingsSection } from './app/desktop-view-model'
@@ -1698,8 +1699,15 @@ export function App() {
             onReturnToInspector={returnToInspector}
             artifacts={scopedArtifacts}
             directory={knowledgeDirectory}
-            // Memory management moved here from the Agents page (plan §4.1, Y3).
-            memoryPanel={<AgentMemoryPanel desktopApi={desktopApi} runId={selectedRun?.id} localProjectId={selectedLocalProject?.id} />}
+            // Memory management moved here from the Agents page (plan §4.1, Y3). Project memory
+            // (ADR 0030) replaces the candidate workflow; local Memory stays readable until it is migrated.
+            memoryPanel={<>
+              {selectedLocalProject && <ProjectMemoryPanel key={selectedLocalProject.id} projectId={selectedLocalProject.id} />}
+              <details className="legacy-memory" data-testid="legacy-memory">
+                <summary>旧版本地记忆（迁移到项目记忆后移除）</summary>
+                <AgentMemoryPanel desktopApi={desktopApi} runId={selectedRun?.id} localProjectId={selectedLocalProject?.id} legacy />
+              </details>
+            </>}
           />
         )}
 

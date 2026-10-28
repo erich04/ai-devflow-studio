@@ -7,6 +7,12 @@ import type {
   RememberConversationMemoryInput,
   ConfigureProjectMemoryInput,
   ProjectMemoryStatus,
+  ClearProjectMemoryInput,
+  ForgetProjectMemoryInput,
+  ForgetProjectMemorySourceInput,
+  ListProjectMemoriesInput,
+  ProjectMemoryPage,
+  UpdateProjectMemoryInput,
   DesignRevisionIdentity,
   DesignRevisionRequest,
   AgentProviderConfig,
@@ -356,6 +362,11 @@ export type DevFlowDesktopApi = {
   rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
   getProjectMemoryStatus?: (input: { projectId: string }) => Promise<ProjectMemoryStatus>
   configureProjectMemory?: (input: ConfigureProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  listProjectMemories?: (input: ListProjectMemoriesInput) => Promise<ProjectMemoryPage>
+  updateProjectMemory?: (input: UpdateProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemory?: (input: ForgetProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemorySource?: (input: ForgetProjectMemorySourceInput) => Promise<ProjectMemoryStatus>
+  clearProjectMemory?: (input: ClearProjectMemoryInput) => Promise<ProjectMemoryStatus>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>

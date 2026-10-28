@@ -13,7 +13,7 @@
 | 被批准的澄清、设计、验收包 | `artifact:<id>` | 审批通过时 |
 | Gate 评审结果 | `artifact:<id>` | 保存时 |
 
-第二期起，编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。还没有记忆页，只有状态和开关两个 IPC（`getProjectMemoryStatus`、`configureProjectMemory`）。
+编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`。
 
 代码位置：
 
@@ -47,6 +47,7 @@ corepack pnpm exec vitest run \
   apps/desktop/electron/project-memory-service.test.ts \
   apps/desktop/electron/memory-model-relay.test.ts \
   apps/desktop/electron/project-memory-recall.test.ts \
+  apps/desktop/src/components/ProjectMemoryPanel.test.tsx \
   apps/desktop/electron/coding-context.test.ts \
   apps/desktop/electron/hindsight-client.test.ts
 corepack pnpm verify

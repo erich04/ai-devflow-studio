@@ -168,6 +168,11 @@ import {
   parseRememberConversationMemoryInput,
   parseConfigureProjectMemoryInput,
   parseProjectMemoryProjectInput,
+  parseClearProjectMemoryInput,
+  parseForgetProjectMemoryInput,
+  parseForgetProjectMemorySourceInput,
+  parseListProjectMemoriesInput,
+  parseUpdateProjectMemoryInput,
   parseReplyCodingPermissionInput,
   parseReplyCodingQuestionInput,
   parseRenewCodingPermissionInput,
@@ -315,7 +320,7 @@ import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './pr
 import { hindsightPairingMatches } from './hindsight-store'
 import { activeProjectMemoryConfiguration, projectMemoryPairingBinding } from './project-memory-capture'
 import { createMemoryModelRelay, MEMORY_RELAY_DEFAULT_PORT, type MemoryModelRelay, type MemoryRelayRoute } from './memory-model-relay'
-import { parseHindsightSetup, type ProjectMemoryConfiguration, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
+import { parseHindsightSetup, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectMemoryConfiguration, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -640,6 +645,51 @@ function getProjectMemoryService() {
     return service
   })
   return projectMemoryService
+}
+/** The project's memory, only for the user who owns it (viewing included). */
+async function ownedProjectMemory(projectId: string) {
+  const store = await getStore()
+  if (!(await store.listProjects()).some((project) => project.id === projectId)) throw new Error('本地项目不存在。')
+  const configuration = await store.getProjectMemoryConfiguration(projectId)
+  if (!configuration) throw new Error('本项目尚未配置项目记忆。')
+  const scope = await resolveProjectMemoryScope(store, projectId, 'project-memory')
+  if (!scope || scope.userId !== configuration.ownerUserId) throw new Error('项目记忆属于另一位用户，不能查看或修改。')
+  if (!hindsightTransportAvailable) throw new Error('当前构建未启用 Hindsight 传输。')
+  return { store, configuration, client: await projectMemoryHindsightClient(configuration) }
+}
+async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
+  const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+  const offset = input.offset ?? 0
+  const page = await client.listMemories(configuration.bankId, { type: input.kind, ...(input.query ? { query: input.query } : {}),
+    offset, limit: PROJECT_MEMORY_PAGE_SIZE })
+  const sources = new Map((await store.listProjectMemoryDocuments(input.projectId))
+    .filter((document) => document.bankId === configuration.bankId).map((document) => [document.documentId, document]))
+  return { total: page.total, offset, limit: PROJECT_MEMORY_PAGE_SIZE, items: page.items.map((memory) => {
+    const source = memory.documentId ? sources.get(memory.documentId) : undefined
+    return { id: memory.id, kind: memory.type, text: redactProjectMemoryText(memory.text).value,
+      ...(memory.occurredAt ? { date: memory.occurredAt.slice(0, 10) } : {}), ...(memory.editedAt ? { editedAt: memory.editedAt } : {}),
+      ...(source ? { source: { documentId: source.id, sourceKind: source.sourceKind, title: source.title } } : {}) }
+  }) }
+}
+/**
+ * ADR 0030 decision 3: once memory is set up for one project, a newly paired project that has no
+ * memory configuration of its own starts with memory on, with the same Hindsight and Provider.
+ * A project that already has a configuration, on or off, is never changed.
+ */
+async function autoEnableProjectMemory(projectId: string): Promise<void> {
+  if (!hindsightTransportAvailable) return
+  const store = await getStore()
+  if (await store.getProjectMemoryConfiguration(projectId)) return
+  const template = (await store.listProjectMemoryConfigurations())
+    .filter((item) => item.enabled && item.projectId !== projectId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+  const pairing = await store.getDesktopPairingCredential()
+  if (!template || pairing?.localProjectId !== projectId) return
+  if (!(await store.listProviderCredentials()).some((item) => item.providerId === template.providerId)) return
+  const scope = await resolveProjectMemoryScope(store, projectId, 'project-memory')
+  if (!scope) return
+  await store.configureProjectMemory({ projectId, ownerUserId: scope.userId, pairingBinding: projectMemoryPairingBinding(pairing),
+    enabled: true, endpoint: template.endpoint, encryptedApiKey: template.encryptedApiKey, providerId: template.providerId })
+  wakeHindsight()
 }
 async function projectMemoryStatus(projectId: string): Promise<ProjectMemoryStatus> {
   const store = await getStore()
@@ -2784,6 +2834,36 @@ function registerIpcHandlers() {
     wakeHindsight()
     return projectMemoryStatus(input.projectId)
   }))
+  ipcMain.handle(ipcChannels.listProjectMemories, async (_, payload: unknown) => listProjectMemories(parseListProjectMemoriesInput(payload)))
+  ipcMain.handle(ipcChannels.updateProjectMemory, async (_, payload: unknown) => {
+    const input = parseUpdateProjectMemoryInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    // Hindsight re-embeds the memory and consolidates again; that consolidation is a model call.
+    await client.updateMemory(configuration.bankId, input.memoryId, redactProjectMemoryText(input.text).value)
+    await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.forgetProjectMemory, async (_, payload: unknown) => {
+    const input = parseForgetProjectMemoryInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    await client.invalidateMemory(configuration.bankId, input.memoryId, 'deleted by the user in DevFlow')
+    await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.forgetProjectMemorySource, async (_, payload: unknown) => {
+    const input = parseForgetProjectMemorySourceInput(payload)
+    const { store } = await ownedProjectMemory(input.projectId)
+    await store.forgetProjectMemoryDocument(input.projectId, input.documentId)
+    wakeHindsight()
+    return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.clearProjectMemory, async (_, payload: unknown) => {
+    const input = parseClearProjectMemoryInput(payload)
+    const { store } = await ownedProjectMemory(input.projectId)
+    await store.clearProjectMemory(input.projectId)
+    wakeHindsight()
+    return projectMemoryStatus(input.projectId)
+  })
 
   ipcMain.handle(ipcChannels.retryRemoteSyncOperation, async (_, payload: unknown) => {
     const input = parseRetryRemoteSyncOperationInput(payload)
@@ -2840,6 +2920,9 @@ function registerIpcHandlers() {
     wakeRemoteSyncOutbox()
     wakeGateCommandScheduler()
     wakeGitHubDeliveryScheduler()
+    void autoEnableProjectMemory(input.localProjectId).catch(() => {
+      console.warn('[project-memory] Could not turn on memory for the newly paired project.')
+    })
     return { credential: boundCredential }
   }))
 

@@ -29,6 +29,14 @@ export type ProjectMemoryConfiguration = {
   /** Saved Agent Provider whose credential pays for Hindsight's extraction calls. */
   providerId: string
   bankId: string
+  /** Raised by "clear": later memory goes to a new, empty bank and the old bank is deleted. */
+  generation?: number
+  /** Memory recalled before this time is stale: the project's memory was cleared. */
+  clearedAt?: string
+  /** Hindsight memory id → when the user edited or deleted it; earlier recalls of it are stale. */
+  changedMemories?: Record<string, string>
+  /** Banks of earlier generations that still have to be deleted in Hindsight. */
+  pendingBankDeletions?: string[]
   createdAt: string
   updatedAt: string
 }
@@ -82,6 +90,27 @@ export type ProjectMemoryStatus = {
   recent: Array<Pick<ProjectMemoryDocument, 'id' | 'sourceKind' | 'title' | 'status' | 'updatedAt' | 'lastError'>>
   unavailableReason?: string
 }
+/** Hindsight's memory types: consolidated observations, facts about the project, and what agents did. */
+export type ProjectMemoryKind = 'observation' | 'world' | 'experience'
+export const PROJECT_MEMORY_KINDS: readonly ProjectMemoryKind[] = ['observation', 'world', 'experience']
+export const PROJECT_MEMORY_PAGE_SIZE = 50
+export const PROJECT_MEMORY_MAX_EDIT_BYTES = 4_000
+export type ProjectMemoryItem = {
+  /** Hindsight's memory id. */
+  id: string
+  kind: ProjectMemoryKind
+  text: string
+  date?: string
+  editedAt?: string
+  source?: { documentId: string; sourceKind: ProjectMemorySourceKind; title: string }
+}
+export type ProjectMemoryPage = { items: ProjectMemoryItem[]; total: number; offset: number; limit: number }
+export type ListProjectMemoriesInput = { projectId: string; kind: ProjectMemoryKind; query?: string; offset?: number }
+export type UpdateProjectMemoryInput = { projectId: string; memoryId: string; text: string }
+export type ForgetProjectMemoryInput = { projectId: string; memoryId: string }
+/** `documentId` is DevFlow's local document id, as listed in the status. */
+export type ForgetProjectMemorySourceInput = { projectId: string; documentId: string }
+export type ClearProjectMemoryInput = { projectId: string; confirm: 'clear' }
 export type ConfigureProjectMemoryInput = {
   projectId: string; enabled: boolean; endpoint: string; providerId: string
   /** Omitted keeps the saved key; an empty string removes it. */

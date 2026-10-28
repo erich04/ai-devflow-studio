@@ -38,7 +38,7 @@ type Dependencies = {
   knowledgeRead?(projectId: string, args: Record<string, unknown>): Promise<unknown>
 }
 type BackgroundMemory = { id: string; revision: number; headVersion: number; contentDigest: string; statement: string; communicationPreference?: MemoryCommunicationPreference }
-type BackgroundMemoryRecall = { memories: BackgroundMemory[]; omittedCount: number; source?: Pick<RecalledMemory, 'scope' | 'runtimeId'> }
+type BackgroundMemoryRecall = { memories: BackgroundMemory[]; omittedCount: number; source?: Pick<RecalledMemory, 'scope' | 'runtimeId' | 'recalledAt'> }
 type EffectiveCommunicationSettings = {
   language?: 'english' | 'chinese'
   detail?: 'concise' | 'detailed'
@@ -673,7 +673,7 @@ export class WorkbenchConversationService {
             ...(preference ? { communicationPreference: preference } : {}) }
         }),
         omittedCount: recalled.omittedMemoryCount,
-        source: { scope: recalled.scope, runtimeId: recalled.runtimeId },
+        source: { scope: recalled.scope, runtimeId: recalled.runtimeId, recalledAt: recalled.recalledAt },
       }
     } catch {
       signal.throwIfAborted()
@@ -698,7 +698,7 @@ export class WorkbenchConversationService {
         }
       }
       await assertScope()
-      const local = await assertProjectMemoryCurrent(memory, { projectId, userId: source.scope.userId, identities })
+      const local = await assertProjectMemoryCurrent(memory, { projectId, userId: source.scope.userId, identities, recalledAt: source.recalledAt })
       const requestedAt = now()
       const request = { stateVersion: 1 as const, id: `conversation-memory-check-${randomUUID()}`, scope: source.scope,
         runtimeId: source.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt }

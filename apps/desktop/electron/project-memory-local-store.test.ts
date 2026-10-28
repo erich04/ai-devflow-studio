@@ -264,3 +264,41 @@ describe('project memory outbox', () => {
     await expect(store.recordProjectMemoryDocument(config, input)).resolves.toBeNull()
   })
 })
+
+describe('project memory clearing and changes', () => {
+  it('clears into a new empty bank, keeps every old source forgotten and queues the old bank for deletion', async () => {
+    const { store, conversation, project, config } = await fixture()
+    await store.saveWorkbenchConversation(conversation, 0)
+    const first = reply(conversation, 2, [{ id: 'a1', role: 'assistant', text: '好的。', createdAt: now }])
+    await store.saveWorkbenchConversation(first, 1)
+    const cleared = await store.clearProjectMemory(project.id)
+    expect(cleared).toMatchObject({ generation: 1, pendingBankDeletions: [config!.bankId], clearedAt: expect.any(String) })
+    expect(cleared.bankId).not.toBe(config!.bankId)
+    expect(cleared.bankId).toMatch(/^df-memory-[a-f0-9]{32}$/u)
+    const rows = await store.listProjectMemoryDocuments(project.id)
+    expect(rows.map((row) => [row.bankId === cleared.bankId ? 'new' : 'old', row.documentId, row.status, row.payload]).sort())
+      .toEqual([['new', 'conversation:chat', 'deleted', ''], ['old', 'conversation:chat', 'deleted', '']])
+    // Continuing the old conversation does not bring its history back.
+    await store.saveWorkbenchConversation({ ...first, version: 3, status: 'running' }, 2)
+    await store.saveWorkbenchConversation(reply(first, 4, [{ id: 'a2', role: 'assistant', text: '还有吗？', createdAt: now }]), 3)
+    expect((await store.listProjectMemoryDocuments(project.id)).filter((row) => row.status !== 'deleted')).toEqual([])
+    // A new conversation is learned into the new bank.
+    await store.saveWorkbenchConversation({ ...conversation, id: 'chat-2' }, 0)
+    await store.saveWorkbenchConversation(reply({ ...conversation, id: 'chat-2' }, 2, [{ id: 'b1', role: 'assistant', text: '好。', createdAt: now }]), 1)
+    expect(await store.listProjectMemoryDocuments(project.id)).toContainEqual(expect.objectContaining({ bankId: cleared.bankId, documentId: 'conversation:chat-2', status: 'queued' }))
+    // Reconfiguring keeps the generation; the old bank stays queued until deleted.
+    const reconfigured = await store.configureProjectMemory({ ...cleared, providerId: 'other' })
+    expect(reconfigured).toMatchObject({ bankId: cleared.bankId, generation: 1, pendingBankDeletions: [config!.bankId] })
+    await store.completeProjectMemoryBankDeletion(project.id, config!.bankId)
+    expect((await store.getProjectMemoryConfiguration(project.id))?.pendingBankDeletions).toBeUndefined()
+  })
+  it('records edited or deleted memories without invalidating in-flight captures', async () => {
+    const { store, project, config } = await fixture()
+    const changed = await store.markProjectMemoryChanged(project.id, 'o1')
+    expect(changed.changedMemories).toEqual({ o1: expect.any(String) })
+    expect(changed.updatedAt).toBe(config!.updatedAt)
+    const input = { documentId: 'artifact:a1', sourceKind: 'artifact' as const, sourceId: 'a1', title: 'Doc', payload: 'x',
+      context: 'A document.', tags: ['source:artifact'], occurredAt: now }
+    await expect(store.recordProjectMemoryDocument(config!, input)).resolves.toMatchObject({ status: 'queued' })
+  })
+})

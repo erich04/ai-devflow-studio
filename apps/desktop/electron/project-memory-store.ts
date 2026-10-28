@@ -7,9 +7,16 @@ import {
 import { normalizeHindsightEndpoint } from './hindsight-client'
 
 const digest = (value: string) => createHash('sha256').update(value).digest('hex')
-/** One bank per project and owner, so a pairing change never mixes two people's memory. */
-export function projectMemoryBankId(projectId: string, ownerUserId: string): string {
-  return `df-memory-${digest(JSON.stringify([projectId, ownerUserId])).slice(0, 32)}`
+/**
+ * One bank per project and owner, so a pairing change never mixes two people's memory. Each
+ * "clear" starts a new generation with a new, empty bank.
+ */
+export function projectMemoryBankId(projectId: string, ownerUserId: string, generation = 0): string {
+  return `df-memory-${digest(JSON.stringify(generation ? [projectId, ownerUserId, generation] : [projectId, ownerUserId])).slice(0, 32)}`
+}
+function writeConfiguration(db: Database, config: ProjectMemoryConfiguration): void {
+  db.run(`insert into project_memory_configurations(project_id, json) values (?, ?)
+    on conflict(project_id) do update set json = excluded.json`, [config.projectId, JSON.stringify(config)])
 }
 function rows<T>(db: Database, sql: string, values: (string | number)[] = []): T[] {
   return (db.exec(sql, values)[0]?.values ?? []).map((row) => JSON.parse(String(row[0])) as T)
@@ -37,11 +44,20 @@ export function configureProjectMemory(db: Database, input: ProjectMemoryConfigu
   }
   if (!db.exec('select id from local_projects where id = ?', [input.projectId])[0]?.values.length) throw new Error('Project memory project is missing')
   const previous = getProjectMemoryConfiguration(db, input.projectId)
-  const config: ProjectMemoryConfiguration = { ...input, endpoint: normalizeHindsightEndpoint(input.endpoint),
-    bankId: projectMemoryBankId(input.projectId, input.ownerUserId),
-    createdAt: previous?.bankId === projectMemoryBankId(input.projectId, input.ownerUserId) ? previous.createdAt : now, updatedAt: now }
-  db.run(`insert into project_memory_configurations(project_id, json) values (?, ?)
-    on conflict(project_id) do update set json = excluded.json`, [input.projectId, JSON.stringify(config)])
+  // The same owner keeps their generation and change records; banks awaiting deletion stay queued.
+  const sameOwner = previous?.ownerUserId === input.ownerUserId
+  const generation = input.generation ?? (sameOwner ? previous?.generation : undefined)
+  const clearedAt = input.clearedAt ?? (sameOwner ? previous?.clearedAt : undefined)
+  const changedMemories = input.changedMemories ?? (sameOwner ? previous?.changedMemories : undefined)
+  const pendingBankDeletions = input.pendingBankDeletions ?? previous?.pendingBankDeletions
+  const bankId = projectMemoryBankId(input.projectId, input.ownerUserId, generation)
+  const { generation: _generation, clearedAt: _cleared, changedMemories: _changed, pendingBankDeletions: _pending, ...base } = input
+  const config: ProjectMemoryConfiguration = { ...base, endpoint: normalizeHindsightEndpoint(input.endpoint), bankId,
+    ...(generation ? { generation } : {}), ...(clearedAt ? { clearedAt } : {}),
+    ...(changedMemories && Object.keys(changedMemories).length ? { changedMemories } : {}),
+    ...(pendingBankDeletions?.length ? { pendingBankDeletions } : {}),
+    createdAt: previous?.bankId === bankId ? previous.createdAt : now, updatedAt: now }
+  writeConfiguration(db, config)
   return config
 }
 const contentDigest = (input: ProjectMemoryDocumentInput) =>
@@ -140,6 +156,52 @@ export function forgetProjectMemoryDocument(db: Database, projectId: string, id:
   const next: ProjectMemoryDocument = { ...rest, status: 'delete_pending', payload: '', notBefore: now, updatedAt: now }
   writeDocument(db, next)
   return next
+}
+const MAX_CHANGED_MEMORIES = 2_000
+/**
+ * The user edited or deleted one memory in Hindsight. Receipts that sent it earlier become stale.
+ * Past the bound, everything recalled so far is treated as stale instead. This is not a
+ * configuration change, so in-flight captures stay valid.
+ */
+export function markProjectMemoryChanged(db: Database, projectId: string, memoryId: string, now: string): ProjectMemoryConfiguration {
+  const config = getProjectMemoryConfiguration(db, projectId)
+  if (!config) throw new Error('Project memory is not configured')
+  const changed = { ...(config.changedMemories ?? {}), [memoryId]: now }
+  const next: ProjectMemoryConfiguration = Object.keys(changed).length > MAX_CHANGED_MEMORIES
+    ? { ...config, changedMemories: {}, clearedAt: now } : { ...config, changedMemories: changed }
+  writeConfiguration(db, next)
+  return next
+}
+/**
+ * Forget everything learned so far: later memory goes to a new, empty bank and the old bank is
+ * queued for deletion. Every source sent so far stays forgotten in the new bank too, so
+ * continuing an old conversation does not bring its history back.
+ */
+export function clearProjectMemory(db: Database, projectId: string, now: string): ProjectMemoryConfiguration {
+  const config = getProjectMemoryConfiguration(db, projectId)
+  if (!config) throw new Error('Project memory is not configured')
+  const generation = (config.generation ?? 0) + 1
+  const bankId = projectMemoryBankId(projectId, config.ownerUserId, generation)
+  for (const row of listProjectMemoryDocuments(db, projectId).filter((item) => item.bankId === config.bankId)) {
+    const { leaseToken: _lease, leaseUntil: _until, lastError: _error, retainedAt: _retained, ...rest } = row
+    writeDocument(db, { ...rest, status: 'deleted', payload: '', updatedAt: now })
+    writeDocument(db, { ...rest, id: randomUUID(), bankId, status: 'deleted', payload: '', operationId: randomUUID(),
+      attempts: 0, notBefore: now, createdAt: now, updatedAt: now })
+  }
+  const next: ProjectMemoryConfiguration = { ...config, generation, bankId, clearedAt: now,
+    pendingBankDeletions: [...new Set([...(config.pendingBankDeletions ?? []), config.bankId])], updatedAt: now }
+  delete next.changedMemories
+  writeConfiguration(db, next)
+  return next
+}
+export function completeProjectMemoryBankDeletion(db: Database, projectId: string, bankId: string): void {
+  const config = getProjectMemoryConfiguration(db, projectId)
+  if (!config?.pendingBankDeletions?.includes(bankId)) return
+  const pending = config.pendingBankDeletions.filter((item) => item !== bankId)
+  const next: ProjectMemoryConfiguration = { ...config }
+  if (pending.length) next.pendingBankDeletions = pending
+  else delete next.pendingBankDeletions
+  writeConfiguration(db, next)
 }
 export function recoverProjectMemoryDocuments(db: Database): void {
   for (const row of listProjectMemoryDocuments(db).filter((item) => item.leaseToken)) {
