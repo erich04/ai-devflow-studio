@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { expect, it } from 'vitest'
 // @ts-expect-error Standalone Node evaluator has no declaration file.
-import { bindPublicTestPlans, checkDeepSeekAvailability, providerStopReason, protectedEvaluationPath } from './native-coding-batch-live.mjs'
+import { bindPublicTestPlans, budgetedEngineOrder, checkDeepSeekAvailability, nextTrialBudget, providerStopReason, protectedEvaluationPath, trialLedgerAccountedUsd } from './native-coding-batch-live.mjs'
 
 it('stops before paid work when the provider reports no balance, without recording account amounts or credentials', async () => {
   const secret = 'private-fixture-credential'
@@ -39,4 +39,19 @@ it('requires a matching qualified public plan for every task, without changing p
   expect(() => bind(plan, { ...qualification, results: qualification.results.map((row, index) => index ? row : { ...row, receipt: { ...row.receipt, status: 'failed' } }) })).toThrow('qualified public plan')
   expect(() => bind({ ...plan, tasks: [plan.tasks[0]!, plan.tasks[0]!] })).toThrow('every qualified task')
   expect(() => bind({ ...plan, tasks: plan.tasks.map((row, index) => index ? row : { ...row, testCommand: 'corepack pnpm exec vitest run; echo fake' }) })).toThrow('public test command')
+})
+it('accounts unknown calls at their reservation and stops dispatch below the frozen headroom', () => {
+  const ledger = { rows: [{ costUsd: 0.012, boundUsd: 0.4 }, { costUsd: null, boundUsd: 0.25 }, { costUsd: 0, boundUsd: 0.1 }] }
+  expect(trialLedgerAccountedUsd(ledger)).toBeCloseTo(0.262, 9)
+  expect(trialLedgerAccountedUsd(undefined)).toBe(0)
+  expect(() => trialLedgerAccountedUsd({ rows: [{ costUsd: null, boundUsd: -1 }] })).toThrow('invalid accounting value')
+  const budget = { maxCostUsd: 3, minimumTrialHeadroomUsd: 0.3 }
+  expect(nextTrialBudget(budget, 0, 100)).toBe(3)
+  expect(nextTrialBudget(budget, 2.5, 100)).toBeCloseTo(0.5, 9)
+  expect(nextTrialBudget(budget, 2.75, 100)).toBeNull()
+  expect(nextTrialBudget(budget, 3.2, 100)).toBeNull()
+  expect(nextTrialBudget({ maxCostUsd: 300, minimumTrialHeadroomUsd: 0.3 }, 0, 100)).toBe(100)
+})
+it('runs the low-cost engines before Native v3 under a shared ceiling', () => {
+  expect(budgetedEngineOrder(['native-v2', 'native-v3', 'opencode'])).toEqual(['native-v2', 'opencode', 'native-v3'])
 })

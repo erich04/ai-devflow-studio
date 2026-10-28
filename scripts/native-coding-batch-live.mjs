@@ -12,6 +12,31 @@ const digest = value => createHash('sha256').update(value).digest('hex')
 export function providerStopReason(status) {
   return status?.httpStatus === 401 ? 'authentication_failed' : status?.httpStatus === 402 ? 'balance_unavailable' : null
 }
+const BUDGET_SCALE = 1_000_000_000
+/** Spend a finished or interrupted trial's ledger accounts for: settled cost, else its full reservation. */
+export function trialLedgerAccountedUsd(ledger) {
+  if (!ledger || !Array.isArray(ledger.rows)) return 0
+  const units = ledger.rows.reduce((sum, row) => {
+    const value = row.costUsd ?? row.boundUsd
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new Error('Trial ledger has an invalid accounting value')
+    return sum + Math.ceil(value * BUDGET_SCALE)
+  }, 0)
+  return units / BUDGET_SCALE
+}
+/** With a shared ceiling, each task runs the low-cost engines first and Native v3 last. */
+export function budgetedEngineOrder(engines) {
+  const rank = { 'native-v2': 0, opencode: 1, 'native-v3': 2 }
+  return [...engines].sort((left, right) => rank[left] - rank[right])
+}
+/**
+ * The cap a new trial may spend under a frozen shared ceiling, or null when dispatch must stop.
+ * Unknown calls keep their reservation, so the ceiling holds even if settlement never arrives.
+ */
+export function nextTrialBudget(totalBudget, accountedUsd, perTrialMaxUsd) {
+  const remaining = Math.floor((totalBudget.maxCostUsd - accountedUsd) * BUDGET_SCALE) / BUDGET_SCALE
+  if (!(remaining >= totalBudget.minimumTrialHeadroomUsd)) return null
+  return Math.min(perTrialMaxUsd, remaining)
+}
 export async function checkDeepSeekAvailability(apiKey, fetcher = fetch) {
   const response = await fetcher('https://api.deepseek.com/user/balance', { headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json' }, signal: AbortSignal.timeout(15000) })
   const httpStatus = response.status, rejected = providerStopReason({ httpStatus })
@@ -97,7 +122,7 @@ async function independentCheck(task, baseline, worktree, directory) {
   return { passed, process, total: report?.numTotalTests ?? null, passedAssertions: report?.numPassedTests ?? null, failedAssertions: report?.numFailedTests ?? null, reportDigest: report ? digest(JSON.stringify(report)) : null }
 }
 
-async function freeze(output) {
+async function freeze(output, totalBudget) {
   if (git(['status', '--porcelain']).toString().trim()) throw new Error('Commit the implementation and evaluation inputs before freezing')
   await mkdir(output)
   const sources = Object.fromEntries(await Promise.all(['native-coding-v3-tasks.json', 'native-coding-v3-task-briefs.json', 'native-coding-v3-qualification-20261011.json', 'native-coding-v3-public-test-plans.json', 'native-coding-v3-public-qualification-20261011.json'].map(async name => [name, await readFile(path.join(repository, 'docs/evaluation', name))])))
@@ -110,9 +135,12 @@ async function freeze(output) {
   const tasks = bindPublicTestPlans(qualifiedTasks, JSON.parse(sources['native-coding-v3-public-test-plans.json']), publicQualification, digest(sources['native-coding-v3-tasks.json']), digest(sources['native-coding-v3-public-test-plans.json']))
   const runnerDigests = Object.fromEntries(await Promise.all(['native-coding-batch-live.mjs', 'native-coding-trial-live.mts', 'native-coding-live-support.ts', 'native-coding-live-operator.ts'].map(async file => [file, digest(await readFile(path.join(repository, 'scripts', file)))])))
   const plan = { schemaVersion: 1, id: path.basename(output), frozenAt: new Date().toISOString(), candidateCommit: git(['rev-parse', 'HEAD']).toString().trim(), sourceDigests: Object.fromEntries(Object.entries(sources).map(([name, bytes]) => [name, digest(bytes)])), runnerDigests,
-    provider: { id: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', baseUrl: 'https://api.deepseek.com', thinking: 'enabled', effort: 'high', pricingSource: 'https://api-docs.deepseek.com/quick_start/pricing/', userMonetaryCeiling: null, authorization: 'User explicitly authorized this model, supplied its credential, and set no cost ceiling.' },
+    provider: { id: 'deepseek', model: 'deepseek-flash', displayName: 'DeepSeek-V4.1-Flash', baseUrl: 'https://api.deepseek.com', thinking: 'enabled', effort: 'high', pricingSource: 'https://api-docs.deepseek.com/quick_start/pricing/', userMonetaryCeiling: totalBudget?.maxCostUsd ?? null, authorization: totalBudget ? `User explicitly authorized this model with thinking high, supplied its credential, and set a shared total ceiling of $${totalBudget.maxCostUsd} for this experiment.` : 'User explicitly authorized this model, supplied its credential, and set no cost ceiling.' },
     node: process.version, platform: process.platform, opencodeVersion: execFileSync('/opt/homebrew/bin/opencode', ['--version']).toString().trim(), opencodeBinary: '/opt/homebrew/bin/opencode',
-    engines: ['native-v2', 'native-v3', 'opencode'], trials: 1, concurrency: 2,
+    engines: ['native-v2', 'native-v3', 'opencode'], trials: 1, concurrency: totalBudget ? 1 : 2,
+    ...(totalBudget ? { totalBudget: { ...totalBudget, currency: 'USD', dispatchOrder: 'Frozen manifest task order; per task native-v2, opencode, then native-v3. One trial at a time.',
+      accounting: 'Before each trial, sum every trial ledger in this experiment: settled cost, or the full reservation of an unsettled/unknown call. The next trial is capped at the remainder; dispatch stops when the remainder is below minimumTrialHeadroomUsd. A trial cut off by its cap is recorded as such, not retried.',
+      interpretation: 'Partial paid sample under a small ceiling. It does not complete the 31-task comparison and cannot satisfy the release gates.' } } : {}),
     limits: { maxCalls: 192, maxCostUsd: 100, maxSteps: 80, maxActiveMilliseconds: 900000, maxOutputTokens: 65536 },
     limitsNote: 'Operational bounds per trial, not a new user spending ceiling. Use the production high-thinking default 65536 output cap instead of the initial exploratory 16384 cap. Native v2 retains its production 4096 output and fixed proposal/repair limits. Native v3 keeps its production 80-step loop. A separate 15-minute operator wall deadline aborts model I/O and stops owned commands/executors, then preserves cleanup and a durable result; do not confuse it with the product cumulative active-time or authorization expiry. No post-hoc extensions/retries. After a trial and independent checking have both ended, discard reproducible node_modules directories and the private command homes’ package-manager download caches inside that trial; preserve source, exact patches, lockfiles, sessions, ledgers and all logs.',
     operatorPolicy: 'Authorize isolated trusted_local execution and frozen dependency preparation. Approve exact proposed changes only to permit production verification; no hidden-test feedback to the agent. Questions end historical trials without invented answers. Reject external/network grants. OpenCode shell grants are limited to single read commands and saved tests; no task/question integration changes. No automatic retry of unknown calls.',
@@ -133,7 +161,16 @@ async function runBatch(output, keyFile, only) {
   if (git(['status', '--porcelain']).toString().trim()) throw new Error('Working tree differs from the committed frozen experiment')
   for (const [file, hash] of Object.entries(plan.runnerDigests)) if (digest(await readFile(path.join(repository, 'scripts', file))) !== hash) throw new Error('Runner changed; start a new experiment')
   const rows = [], work = []
-  for (const task of plan.tasks) for (const engine of plan.engines) work.push({ task, engine })
+  for (const task of plan.tasks) for (const engine of plan.totalBudget ? budgetedEngineOrder(plan.engines) : plan.engines) work.push({ task, engine })
+  if (plan.totalBudget && plan.concurrency !== 1) throw new Error('A shared ceiling is enforced one trial at a time')
+  const accountedSpend = async () => {
+    let total = 0
+    for (const item of work) {
+      try { total += trialLedgerAccountedUsd(JSON.parse(await readFile(path.join(output, `${item.task.id}-${item.engine}`, 'execution', 'ledger.json'), 'utf8'))) }
+      catch (error) { if (error.code !== 'ENOENT') throw error }
+    }
+    return total
+  }
   const save = async () => { await json(path.join(output, 'runs.json'), rows); await json(path.join(output, 'score.json'), scoreNativeCodingEvaluation(plan.tasks, rows, JSON.parse(await readFile(path.join(output, 'qualification.json'), 'utf8')).results)) }
   for (const item of work) { try { rows.push(JSON.parse(await readFile(path.join(output, `${item.task.id}-${item.engine}`, 'row.json'), 'utf8'))) } catch (error) { if (error.code !== 'ENOENT') throw error } }
   let index = 0, queue = Promise.resolve(), stopDispatch = false
@@ -147,11 +184,23 @@ async function runBatch(output, keyFile, only) {
   }
   await Promise.all(Array.from({ length: plan.concurrency }, async () => {
     while (index < selected.length && !stopDispatch) {
-      const { task, engine } = selected[index++], directory = path.join(output, `${task.id}-${engine}`), trialOutput = path.join(directory, 'execution'), started = Date.now()
+      const { task, engine } = selected[index], directory = path.join(output, `${task.id}-${engine}`), trialOutput = path.join(directory, 'execution'), started = Date.now()
+      let trialMaxCostUsd = plan.limits.maxCostUsd
+      if (plan.totalBudget) {
+        const accounted = await accountedSpend(), cap = nextTrialBudget(plan.totalBudget, accounted, plan.limits.maxCostUsd)
+        if (cap === null) {
+          stopDispatch = true
+          await json(path.join(output, `budget-stop-${Date.now()}.json`), { at: new Date().toISOString(), accountedUsd: accounted, maxCostUsd: plan.totalBudget.maxCostUsd, nextTask: task.id, nextEngine: engine }, true)
+          console.log(JSON.stringify({ event: 'budget_dispatch_stopped', accountedUsd: accounted, nextTask: task.id, nextEngine: engine }))
+          break
+        }
+        trialMaxCostUsd = cap
+      }
+      index++
       try {
         const baseline = await prepare(task, directory)
         if (!task.testCommand) throw new Error('Frozen task has no qualified public test plan')
-        const input = { id: task.id, engine, repository: baseline, output: trialOutput, prompt: task.prompt, testCommand: task.testCommand, ...plan.limits, opencodeBinary: plan.opencodeBinary }
+        const input = { id: task.id, engine, repository: baseline, output: trialOutput, prompt: task.prompt, testCommand: task.testCommand, ...plan.limits, maxCostUsd: trialMaxCostUsd, opencodeBinary: plan.opencodeBinary }
         const inputFile = path.join(directory, 'input.json'); await json(inputFile, input, true)
         console.log(JSON.stringify({ event: 'start', task: task.id, engine }))
         const execution = await runProcess(corepack, ['pnpm', 'exec', 'tsx', 'scripts/native-coding-trial-live.mts', inputFile, keyFile], repository, path.join(directory, 'execution.log'), plan.limits.maxActiveMilliseconds + 600000)
@@ -190,12 +239,21 @@ async function runBatch(output, keyFile, only) {
   }))
   process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop)
   await save()
+  if (plan.totalBudget) await json(path.join(output, 'budget-summary.json'), { at: new Date().toISOString(), maxCostUsd: plan.totalBudget.maxCostUsd, accountedUsd: await accountedSpend(), observations: rows.length })
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('The full comparison is excluded from this guarded CNY round; no independent ledger or parallel dispatch is authorized')
   const [command, outputPath, keyFile, ...only] = process.argv.slice(2)
-  if (!outputPath || !['freeze', 'run'].includes(command) || command === 'run' && !keyFile) throw new Error('Usage: batch-live freeze <new-output> | run <frozen-output> <private-key-file> [task-id ...]')
+  if (!outputPath || !['freeze', 'run'].includes(command) || command === 'run' && !keyFile) throw new Error('Usage: batch-live freeze <new-output> [--max-total-usd <n>] | run <frozen-output> <private-key-file> [task-id ...]')
   const output = path.resolve(outputPath)
-  if (command === 'freeze') await freeze(output); else await runBatch(output, path.resolve(keyFile), only)
+  if (command === 'freeze') {
+    let totalBudget
+    if (keyFile !== undefined) {
+      const maxCostUsd = Number(only[0])
+      if (keyFile !== '--max-total-usd' || only.length !== 1 || !Number.isFinite(maxCostUsd) || maxCostUsd <= 0 || maxCostUsd > 100) throw new Error('freeze accepts only --max-total-usd <positive USD up to 100>')
+      totalBudget = { maxCostUsd, minimumTrialHeadroomUsd: 0.3 }
+    }
+    await freeze(output, totalBudget)
+  } else await runBatch(output, path.resolve(keyFile), only)
 }
