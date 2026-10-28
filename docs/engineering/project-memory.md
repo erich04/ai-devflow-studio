@@ -32,6 +32,8 @@
 2. 把同一令牌写入 `deploy/hindsight/.env` 的 `DEVFLOW_MEMORY_RELAY_TOKEN`，然后 `corepack pnpm hindsight:up`。改过中继端口时，两边的 `DEVFLOW_MEMORY_RELAY_PORT` 要一致。
 3. 调用 `configureProjectMemory({ projectId, enabled: true, endpoint: 'http://127.0.0.1:8890', providerId })`。
 
+Compose 中 shell 里导出的同名变量优先于 `--env-file`；更换令牌后先确认 shell 中没有旧的 `DEVFLOW_MEMORY_RELAY_TOKEN`，再重新创建容器。
+
 Linux Docker 的 `host.docker.internal` 指向网桥地址，访问不到只监听 `127.0.0.1` 的中继，需要设置 `DEVFLOW_MEMORY_RELAY_HOST` 为网桥地址（例如 `172.17.0.1`）。中继仍要求令牌。
 
 中继日志只记录未完成调用的状态和原因（`memory_not_enabled`、`budget_not_ready`、`budget_unavailable` 等），不记录 bank、提示或回答。
@@ -50,7 +52,18 @@ corepack pnpm exec vitest run \
 corepack pnpm verify
 ```
 
-这些测试使用假 Hindsight、假上游和假预算，不调用模型。真实 Hindsight 抽取和 DeepSeek 费用验证在第五期进行，需要单独批准预算；在那之前不能声称抽取质量或费用已经验证。
+这些测试使用假 Hindsight、假上游和假预算，不调用模型。
+
+真实模型验证（合成数据、累计预算账本）：
+
+```sh
+DEVFLOW_MEMORY_LIVE_AUTHORIZED=1 DEVFLOW_MEMORY_LIVE_MAX_USD=0.8 \
+DEVFLOW_MEMORY_RELAY_TOKEN=<与 Hindsight 相同的令牌> DEVFLOW_MEMORY_RELAY_PORT=8899 \
+DEEPSEEK_API_KEY=<已授权的密钥，只在环境中> \
+corepack pnpm exec tsx scripts/project-memory-live-validation.mts
+```
+
+脚本只在获得提供方、模型和预算授权后运行；每次运行受 `DEVFLOW_MEMORY_LIVE_MAX_USD` 和 3 美元累计账本双重限制，报告写在 `out/project-memory-validation/`。结果见[2026-10-28 验证](../validation/project-memory-live-20261028.md)。
 
 ### 2026-10-28 无费用链路检查
 

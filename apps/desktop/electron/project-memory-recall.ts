@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
+import { rankMemoryByRelevance, redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import type { LocalStore } from './local-store'
 import { activeProjectMemoryConfiguration } from './project-memory-capture'
@@ -28,6 +28,17 @@ function clipQuery(query: string): string {
   let text = query.trim()
   while (encoder.encode(text).byteLength > QUERY_MAX_BYTES) text = text.slice(0, Math.floor(text.length * 0.9))
   return text
+}
+/**
+ * Hindsight's bundled embedder and reranker are English models, so its order says little about
+ * a Chinese query. Fuse it (reciprocal rank) with DevFlow's own BM25, which tokenizes Chinese,
+ * so the caller's budget keeps the memories that actually match. Unmatched items stay, ranked lower.
+ */
+export function rankProjectMemories(memories: readonly HindsightMemory[], query: string): HindsightMemory[] {
+  const lexical = new Map(rankMemoryByRelevance(memories, query, (memory) => memory.text).map((entry, rank) => [entry.item.id, rank]))
+  return memories.map((memory, rank) => ({ memory, rank,
+    score: 1 / (60 + rank + 1) + (lexical.has(memory.id) ? 1 / (60 + lexical.get(memory.id)! + 1) : 0) }))
+    .sort((left, right) => right.score - left.score || left.rank - right.rank).map((entry) => entry.memory)
 }
 /** One line with its kind and date, so a model can weigh consolidated beliefs against single facts. */
 export function projectMemoryStatement(memory: HindsightMemory): string {
@@ -68,10 +79,10 @@ export function createProjectMemoryRecall(deps: {
     async recall(input: Parameters<ProjectMemoryRecallPort['recall']>[0]): Promise<ProjectMemoryRecall | null> {
       const configuration = await active(input.projectId, input.userId)
       if (!configuration || !input.query.trim()) return configuration ? { items: [], degraded: false } : null
-      // Hindsight counts tokens; the caller's byte budget is applied to the returned text afterwards.
-      const maxTokens = Math.min(8_192, Math.max(256, Math.ceil(input.budget.maxBytes / 2)))
+      // Ask for more than the budget so re-ranking has candidates; the caller's byte budget applies after.
+      const maxTokens = Math.min(8_192, Math.max(1_024, input.budget.maxBytes))
       const { memories, degraded } = await query(configuration, input.query, maxTokens, input.signal)
-      return { degraded, items: memories.map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
+      return { degraded, items: rankProjectMemories(memories, input.query).map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
     },
     async assertCurrent(input: Parameters<ProjectMemoryRecallPort['assertCurrent']>[0]): Promise<void> {
       if (!(await active(input.projectId, input.userId))) throw new Error('Project memory was turned off or changed owner')
@@ -80,9 +91,9 @@ export function createProjectMemoryRecall(deps: {
     async search(input: { projectId: string; query: string; limit: number; signal?: AbortSignal }) {
       const configuration = await active(input.projectId)
       if (!configuration) return null
-      const { memories, degraded } = await query(configuration, input.query, 2_048, input.signal)
+      const { memories, degraded } = await query(configuration, input.query, 4_096, input.signal)
       return {
-        items: memories.slice(0, Math.min(PROJECT_MEMORY_SEARCH_MAX_ITEMS, input.limit)).map((memory) => ({
+        items: rankProjectMemories(memories, input.query).slice(0, Math.min(PROJECT_MEMORY_SEARCH_MAX_ITEMS, input.limit)).map((memory) => ({
           id: `${PROJECT_MEMORY_IDENTITY_PREFIX}${memory.id}`, kind: memory.type === 'observation' ? 'observation' : 'fact',
           text: redactSensitiveText(memory.text).value, ...(memory.occurredAt ? { date: memory.occurredAt.slice(0, 10) } : {}),
         })),
