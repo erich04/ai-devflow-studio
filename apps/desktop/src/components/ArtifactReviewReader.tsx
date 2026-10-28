@@ -84,7 +84,7 @@ export function ArtifactReviewReader({ artifact, review, onFeedback, revisionDra
   // One line, not a list: the count is of opinions, never of cited places (#246).
   const summary = !review ? '尚未保存 AI 审查报告。'
     : !currentDigest ? '正在核对审查与当前正文的对应关系…'
-      : !bound ? '这份审查报告不能证明当前正文已审查：它审查的是其他版本，或正文之后有变化。'
+      : !bound ? '这份审查报告不能证明当前正文已审查：它可能针对其他版本，或没有记录可核验的审查对象。'
         : count === 0 ? '本次审查没有提出意见。'
           : unlocated.length === 0 ? `审查意见 ${count} 条，均已在正文旁标出。`
             : `审查意见 ${count} 条，正文旁标出 ${located.size} 条；另有 ${unlocated.length} 条没有可核验的原文位置：`
