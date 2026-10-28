@@ -231,6 +231,20 @@ describe('buildCodingBrief with resident knowledge (knowledge-context K3)', () =
     documents, knowledgeRoot: 'docs/knowledge', projectInstructions: instructions, instructions: mode, canReadFiles,
   })
 
+  it('describes the v3 candidate grant and final verification without changing user or repository instructions', () => {
+    const input = { ...base, userInstruction: 'Preserve every existing public API.', knowledge: knowledge('devflow') }
+    const legacy = buildCodingBrief(input)
+    const harness = buildCodingBrief({ ...input, executionModel: 'native-harness-v3' })
+    expect(legacy.prompt).toContain('Ask permission before bash, edit, install, patch')
+    expect(harness.prompt).not.toContain('Ask permission before bash, edit, install, patch')
+    expect(harness.prompt).toContain('private candidate workspace')
+    expect(harness.prompt).toContain('initial candidate-edit grant')
+    expect(harness.prompt).toContain('Final delivery always requires human approval of the exact revision')
+    expect(harness.prompt).toContain('independently reruns the saved test plan')
+    expect(harness.prompt).toContain('Preserve every existing public API.')
+    expect(harness.prompt).toContain('REPO_INSTRUCTIONS_BODY')
+  })
+
   it('includes the stage standards in full, catalogues the rest and records a manifest', () => {
     const brief = buildCodingBrief({ ...base, knowledge: knowledge('executor') })
 

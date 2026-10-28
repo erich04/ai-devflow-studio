@@ -411,6 +411,7 @@ export function Inspector({
   isReplyingCodingQuestion = false,
   onReplyCodingPermission,
   codingRecords,
+  codingHarness,
   executionEvidence,
   runEvents,
 }: {
@@ -418,6 +419,7 @@ export function Inspector({
   runEvents?: AgentEvent[] | undefined
   /** Coding Run evidence for the build step's 执行记录 (plan Y3). */
   codingRecords?: React.ReactNode
+  codingHarness?: React.ReactNode
   /** Remaining execution evidence groups, folded at the end of 执行记录 (plan Y3). */
   executionEvidence?: React.ReactNode
   onCancelCodingRun?: (() => void) | undefined
@@ -1588,7 +1590,7 @@ export function Inspector({
         generating={pendingMatchesSelectedNode && pendingInspectorAction?.actionId === 'generateDesignRevision'}
         settings={<>{renderStageSettings()}{modelReadinessError && <p role="status">{modelReadinessError}</p>}</>}
       />}
-      {canRunCodingAgentOnNode(selectedNode) ? (
+      {codingHarness ?? (canRunCodingAgentOnNode(selectedNode) ? (
         <CodingWorkPanel
           projection={codingActionProjection}
           readinessDisplay={codingReadinessDisplay}
@@ -1599,10 +1601,10 @@ export function Inspector({
           onDecision={(decision, scope) => { if (decision === 'approved' || decision === 'rejected') onReplyCodingPermission?.(decision, scope) }}
           focusRef={codingFocusRef}
         />
-      ) : null}
+      ) : null)}
       {latestCodingRun?.question && onReplyCodingQuestion && <CodingQuestionPanel key={`${latestCodingRun.id}:${latestCodingRun.question.id}:${latestCodingRun.question.revision}`}
         question={latestCodingRun.question} active={latestCodingRun.status === 'waiting_input'} busy={isReplyingCodingQuestion} onReply={onReplyCodingQuestion} />}
-      {latestCodingRun && <CodingSessionPermissions codingRunId={latestCodingRun.id} status={latestCodingRun.status} />}
+      {latestCodingRun && !latestCodingRun.harness && <CodingSessionPermissions codingRunId={latestCodingRun.id} status={latestCodingRun.status} />}
       {isTestStep && isSelectedCurrentNode && selectedNode.status !== 'success' ? (
         <TestRunPanel readiness={testRunReadiness} isRunning={isRunningTests} onOpenTestSettings={() => openSettings('tests')} />
       ) : null}

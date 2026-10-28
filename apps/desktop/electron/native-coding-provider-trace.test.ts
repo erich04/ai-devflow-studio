@@ -32,7 +32,12 @@ const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
 const servers: Server[] = []
 const stores = new Set<LocalStore>()
-const providerFixtureTimeoutMs = 1_000
+// This local server checks response parsing and cost traces, not provider latency.
+// A hosted Windows run hit the 1 s deadline instead of receiving the delayed reply.
+const providerFixtureTimeoutMs = process.platform === 'win32' ? 10_000 : 1_000
+// Timeout cases deliberately consume the whole Provider deadline. Allow the
+// existing 15 s Git/store lifecycle budget in addition to that intentional wait.
+const providerTimeoutTestDeadlineMs = providerFixtureTimeoutMs + 15_000
 
 afterEach(async () => {
   for (const store of stores) store.close()
@@ -611,7 +616,7 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
     expect(serialized).not.toContain('export const message')
     // Git worktrees plus a persisted restart can exceed Vitest's 5s default on Windows.
     // The fixture Provider timeout is separate from the overall test deadline.
-  }, 15_000)
+  }, providerTimeoutTestDeadlineMs)
 
   it('persists an initial timeout without leaving an approval request', async () => {
     let requestNumber = 0
@@ -638,7 +643,7 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
       { phase: 'initial', status: 'failed', errorCode: 'provider_timeout' },
     ])
     expect(await store.listCodingPermissionRequests(failed.id)).toEqual([])
-  })
+  }, providerTimeoutTestDeadlineMs)
 
   it('persists a repair timeout after the initial permission is settled', async () => {
     let requestNumber = 0
@@ -700,5 +705,5 @@ describe('DevFlow Native v2 persistent Provider call Trace', () => {
       .toMatchObject({ cleanupStatus: 'deleted' })
     // Approval, persisted repair failure, and Git cleanup can exceed 5s on Windows.
     // The fixture Provider timeout is separate from the overall test deadline.
-  }, 15_000)
+  }, providerTimeoutTestDeadlineMs)
 })

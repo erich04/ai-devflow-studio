@@ -84,4 +84,22 @@ describe.skipIf(!databaseUrl)('per-call budget and continuation with real Postgr
     expect(rows[0]!.json.costUsd).toBeNull()
     await expect(repo.confirmModelBudgetContinuation(command, actor)).rejects.toThrow(/费用记录已变化/)
   }, 120_000)
+
+  it('atomically shares a root task cap across concurrent child reservations and durable restart', async () => {
+    let repo = createPostgresTeamRepository(db)
+    const now = new Date().toISOString()
+    await repo.saveRuntimeBudgetPolicy({ projectId: 'p-payments', enabled: false, monthlyLimitUsd: 100, warningThresholdUsd: 0, currency: 'USD', updatedAt: now }, actor)
+    const rootTask = { rootId: 'native-root', taskId: 'native-root', rootMaxTokens: 300, maxTokens: 300, rootMaxCostUsd: 10, maxCostUsd: 10 }
+    const quote = (id: string, task = rootTask): ModelCallQuote => ({ id, projectId: 'p-payments', providerId: 'deepseek', billingProvider: 'deepseek', model: 'deepseek-flash', inputTokens: 100, maxOutputTokens: 100, createdAt: now, task, operation: { id, version: 'c'.repeat(64), purpose: 'coding' } })
+    expect((await repo.reserveModelCall(quote('root-step'), actor)).accepted).toBe(true)
+    await repo.settleModelCall({ id: 'root-step', projectId: 'p-payments', state: 'completed', usage: { inputTokens: 20, outputTokens: 10, cacheReadTokens: 0, cacheMissTokens: 20, cacheStatus: 'complete', usageCompleteness: 'final' } }, actor)
+    const children = ['child-a', 'child-b'].map(id => quote(id, { ...rootTask, taskId: id, parentTaskId: rootTask.rootId, maxTokens: 200 } as typeof rootTask))
+    const results = await Promise.all(children.map(child => repo.reserveModelCall(child, actor)))
+    expect(results.filter(result => result.accepted)).toHaveLength(1)
+    await db.close(); db = createPostgresPoolClient(config(scopedUrl)); repo = createPostgresTeamRepository(db)
+    expect((await repo.reserveModelCall(quote('another-root-step'), actor)).accepted).toBe(false)
+    const admitted = children[results.findIndex(result => result.accepted)]!
+    await repo.settleModelCall({ id: admitted.id, projectId: 'p-payments', state: 'not_sent' }, actor)
+    expect((await repo.reserveModelCall(quote('released-capacity'), actor)).accepted).toBe(true)
+  }, 120_000)
 })

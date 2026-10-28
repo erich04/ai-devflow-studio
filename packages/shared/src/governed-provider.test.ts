@@ -4,6 +4,20 @@ import {AgentProviderRequestError,createOpenAiCompatibleAgentProvider} from './a
 import type {ModelCallQuote,ModelCallSettlement} from './model-call-budget'
 function fixture(){const rows=new Map<string,ModelCallSettlement>();const reserve=vi.fn(async(_quote:ModelCallQuote)=>({accepted:true,decision:{status:'allowed' as const,blocksRun:false,currentSpendUsd:0,projectedCostUsd:0,reason:'fixture'}}));const settle=vi.fn(async(s:ModelCallSettlement)=>{rows.delete(s.id)});const governance:ModelCallGovernance={reserve,settle,persist:async(s)=>{rows.set(s.id,s)},pending:async()=>[...rows.values()]};const base={governance,projectId:'p',provider:{id:'deepseek',model:'deepseek-flash',billingProvider:'deepseek' as const,defaultReviewOutputTokens:8192},prompt:'JSON'};return {base,rows,reserve,settle}}
 describe('per-request governance',()=>{
+ it('uses the persisted coding step and attempt after provider reconstruction and measures its exact request body', async () => {
+  const f = fixture()
+  const raw = { ...f.base.provider, name: 'test', reviewKnowledge: vi.fn(), serializeNativeRequest: () => '{"exact":"wire request"}',
+    completeNativeConversation: vi.fn(async () => ({ kind: 'text' as const, text: 'progress', assistantMessage: { role: 'assistant' as const, content: 'progress' } })) }
+  const operation = { id: 'operation-coding-step-3', version: 'b'.repeat(64), purpose: 'coding' }
+  for (const id of ['model-call-persisted-1', 'model-call-persisted-2']) {
+    const provider = governAgentProvider(raw, 'p', f.base.governance)
+    await provider.completeNativeConversation!({ systemPrompt: 'work', messages: [{ role: 'user', content: 'fix' }], tools: [], nativeOperation: operation, budgetAttemptId: id })
+  }
+  expect(f.reserve.mock.calls.map(([quote]) => ({ id: quote.id, operation: quote.operation }))).toEqual([
+    { id: 'model-call-persisted-1', operation }, { id: 'model-call-persisted-2', operation },
+  ])
+  expect(f.reserve.mock.calls[0]![0].inputTokens).toBe(1030)
+ })
  it('blocks before action and credentials when admission fails',async()=>{const f=fixture();f.reserve.mockResolvedValueOnce({accepted:false,decision:{status:'allowed',blocksRun:true,currentSpendUsd:0,projectedCostUsd:0,reason:'预算未配置'}});const action=vi.fn();await expect(governedModelCall({...f.base,action})).rejects.toThrow('尚未调用模型');expect(action).not.toHaveBeenCalled()})
  it('settles actual usage from a malformed paid response',async()=>{const f=fixture();await expect(governedModelCall({...f.base,action:async()=>{throw new AgentProviderRequestError({code:'invalid_model_output',sanitizedCause:'invalid_json',deliveryState:'response_received',billingState:'confirmed',retryable:true,usage:{inputTokens:10,outputTokens:2048}})}})).rejects.toMatchObject({usage:{inputTokens:10,outputTokens:2048,budgetAttemptIds:expect.any(Array)}});expect(f.settle).toHaveBeenCalledWith(expect.objectContaining({state:'failed',usage:{inputTokens:10,outputTokens:2048}}));expect(f.rows.size).toBe(0)})
  it('does not reconcile an in-flight concurrent call as a crashed request',async()=>{const f=fixture();let finish!:(v:{usage:{inputTokens:number;outputTokens:number}})=>void;const first=governedModelCall({...f.base,action:()=>new Promise<{usage:{inputTokens:number;outputTokens:number}}>(resolve=>{finish=resolve})});await vi.waitFor(()=>expect(f.rows.size).toBe(1));await governedModelCall({...f.base,action:async()=>({usage:{inputTokens:1,outputTokens:1}})});expect(f.settle).toHaveBeenCalledTimes(1);finish({usage:{inputTokens:2,outputTokens:2}});await first;expect(f.settle).toHaveBeenCalledTimes(2)})

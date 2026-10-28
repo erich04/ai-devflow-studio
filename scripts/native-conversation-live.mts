@@ -8,6 +8,7 @@ import { createLocalStore } from '../apps/desktop/electron/local-store'
 import { WorkbenchConversationService } from '../apps/desktop/electron/workbench-conversation-service'
 import { AgentProviderRequestError, createOpenAiCompatibleAgentProvider, createWorkflowRunFromRequest, governAgentProvider, verifiedModelCallBound, settledModelCallCost, type ModelCallGovernance, type ModelCallQuote, type ModelCallSettlement, type NativeToolMessage, type ProviderThinkingConfiguration } from '../packages/shared/src/index'
 
+if (process.env.DEVFLOW_NATIVE_EVALUATION_ROUND) throw new Error('The legacy conversation probe is excluded from this guarded CNY round')
 const output = process.env.DEVFLOW_NATIVE_LIVE_OUTPUT!, temp = process.env.DEVFLOW_NATIVE_LIVE_TEMP!
 const report: { generatedAt: string; capUsd: number; maxCalls: number; cells: Record<string, unknown>[]; calls: Record<string, unknown>[]; passed?: boolean; blockedReason?: string } = { generatedAt: new Date().toISOString(), capUsd: 1, maxCalls: 64, cells: [], calls: [] }
 const attempts = new Map<string, { quote: ModelCallQuote; bound: number; settlement?: ModelCallSettlement; final?: boolean }>()

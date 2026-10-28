@@ -1,3 +1,5 @@
+import { NATIVE_CODING_EXECUTOR_UNAVAILABLE } from '@ai-devflow/shared'
+import { snapshotCodingTree } from './coding-candidate-workspace.js'
 import { CodingQuestionError } from './coding-question-error.js'
 import { validateCodingQuestionReply, type CodingQuestionRequest, type CodingQuestionReply, type CodingQuestionReceipt } from '@ai-devflow/shared'
 import type { CodingExecutorQuestionResult, CodingExecutorWaitingPermissionResult } from './coding-executor.js'
@@ -57,6 +59,8 @@ import {
   type TestEvidenceStatus,
   type WorkflowNode,
   type WorkflowRun,
+  type CodingHarnessCommand,
+  type CodingHarnessSnapshot,
 } from '@ai-devflow/shared'
 import {
   captureWorktreeDiff,
@@ -74,6 +78,7 @@ import {
   createCodingExecutorCompatibilityAdapter,
   type CodingExecutor,
   type CodingExecutorCompletedResult,
+  type CodingExecutorHarnessResult,
 } from './coding-executor.js'
 import {
   CodingEngineContinuationCleanupError,
@@ -152,6 +157,7 @@ function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun)
 }
 
 export type CodingRuntimeStore = CodingMemoryStore & {
+  getNativeCodingSession?(id: string): Promise<import('./native-coding-session').NativeCodingSession | undefined>
   listProjects(): Promise<LocalProject[]>
   getPolicySnapshot?(projectId: string): Promise<{ version: number } | null>
   listRuns(): Promise<WorkflowRun[]>
@@ -308,6 +314,7 @@ export type DeleteManagedWorktreeRuntimeInput = OpenManagedWorktreeRuntimeInput
 
 export type CodingRuntimeDeps = {
   store: CodingRuntimeStore
+  projectId?: string
   sessionAuthority?: (projectId: string) => Promise<{ actorId: string; key: string }>
   engine?: CodingEngineAdapter
   executor?: CodingExecutor
@@ -355,6 +362,7 @@ export type ReplyCodingQuestionRuntimeInput = {
 const questionTimeouts = new WeakMap<CodingRuntimeStore, Map<string, ReturnType<typeof setTimeout>>>()
 
 export type CodingRuntime = {
+  codingHarnessCommand(command: CodingHarnessCommand): Promise<CodingHarnessSnapshot>
   ensureCodingEngine(input: { projectId: string }): Promise<{
     projectId: string
     engine: CodingAgentRun['engine']
@@ -1607,6 +1615,46 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     throw new Error('Coding Agent timeout could not settle concurrent state changes')
   }
 
+  async function settleHarnessResult(bundle: CodingExecutorHarnessResult): Promise<void> {
+    const current = await findCodingRun(bundle.codingRun.id)
+    if (!activeCodingStatuses.has(current.status)) {
+      // Completion and workflow advancement have separate authorities. A crash between them must retry only the latter.
+      if (current.status === 'completed' && bundle.completion && current.diffArtifactId === bundle.completion.diff.id) {
+        const workflow = await findRun(current.runId)
+        if (workflow.nodes.find(node => node.id === current.nodeId)?.status !== 'success') await deps.completeWorkflowBuild?.({ runId: current.runId, nodeId: current.nodeId, codingRunId: current.id, diffId: current.diffArtifactId, now: current.completedAt! })
+      }
+      return
+    }
+    if (!bundle.completion) {
+      await commitCodingAgentMutation({ expectedRun: current, expectedPendingPermissionRequestIds: [], run: preserveCodingRunContext(bundle.codingRun, current), events: bundle.events })
+      return
+    }
+    await assertExecutionContext(current)
+    const manual = bundle.completion.manualEvidence
+    if (manual) {
+      const session = await deps.store.getNativeCodingSession?.(bundle.snapshot.sessionId)
+      const revision = session?.revisions.at(-1), accepted = manual.manualAcceptance
+      if (bundle.completion.testEvidence || bundle.snapshot.status !== 'completed' || session?.status !== 'completed' || !revision || manual.status !== 'manual_accepted' || manual.result || !accepted || !accepted.notes.trim() || accepted.actorId !== current.requestedBy || accepted.plan !== session.binding?.manualValidationPlan || manual.revisionDigest !== revision.digest || manual.testPlanDigest !== revision.testPlanDigest || [manual.verificationBefore, manual.verificationAfter, manual.deliveryAfter].some(value => value !== revision.target.digest) || JSON.stringify(session.deliveryEvidence.at(-1)) !== JSON.stringify(manual)) throw new Error('Native manual acceptance provenance is invalid')
+      if ((await snapshotCodingTree(session.binding.context.workspace.worktreePath, revision.base.excludedPaths)).digest !== revision.target.digest) throw new Error('Manually accepted delivery has changed')
+      const completed: CodingAgentRun = { ...current, harness: bundle.codingRun.harness!, changedPaths: bundle.completion.diff.changedPaths, status: 'completed', diffArtifactId: bundle.completion.diff.id, completedAt: manual.completedAt, summary: '已按事先选择的计划人工验收；未执行自动测试。工作流测试门禁仍保留。' }
+      const artifact: Artifact = { id: `artifact-${manual.id}`, runId: current.runId, nodeId: current.nodeId, kind: 'log', title: '人工编码验收（无自动测试）', summary: completed.summary, content: redactSensitiveText(JSON.stringify({ revisionDigest: revision.digest, targetDigest: revision.target.digest, manualAcceptance: accepted }, null, 2)).value, redacted: true, updatedAt: manual.completedAt }
+      const committed = await commitCodingAgentMutation({ expectedRun: current, expectedWorkflowRun: await findRun(current.runId), expectedPendingPermissionRequestIds: [], run: completed, diffArtifacts: [bundle.completion.diff], artifacts: [artifact] })
+      if (!committed.committed) throw new Error('Native manual acceptance changed concurrently')
+      await deps.completeWorkflowBuild?.({ runId: current.runId, nodeId: current.nodeId, codingRunId: current.id, diffId: bundle.completion.diff.id, now: manual.completedAt })
+      return
+    }
+    if (bundle.snapshot.status !== 'completed' || bundle.completion.testEvidence?.status !== 'passed' || !bundle.completion.testEvidence.sourceTree) throw new Error('Native v3 has no complete delivery evidence')
+    const project = await findProject(current.projectId)
+    const evidence = redactTestEvidenceForStorage(bundle.completion.testEvidence), proof = evidence.codingVerification
+    if (evidence.projectId !== project.id || evidence.runId !== current.runId || evidence.nodeId !== current.nodeId || evidence.command !== project.testCommand.trim() || evidence.exitCode !== 0 || !proof || proof.executionLocation !== 'private_verification' || [proof.verificationBefore, proof.verificationAfter, proof.deliveryAfter].some(digest => digest !== proof.productDigest)) throw new Error('Native v3 delivery provenance is invalid')
+    const completed: CodingAgentRun = { ...current, testEvidenceId: evidence.id, harness: bundle.codingRun.harness!, changedPaths: bundle.completion.diff.changedPaths,
+      status: 'completed', diffArtifactId: bundle.completion.diff.id, completedAt: bundle.completion.testEvidence.createdAt, summary: bundle.completion.testEvidence.summary }
+    const workflow = await findRun(current.runId)
+    const committed = await commitCodingAgentMutation({ expectedRun: current, expectedWorkflowRun: workflow, expectedPendingPermissionRequestIds: [], run: completed, diffArtifacts: [bundle.completion.diff], testEvidence: [evidence], artifacts: [createTestEvidenceArtifact(evidence)], workflowEvents: [createTestEvidenceEvent(evidence, await nextAgentEventSequence(current.runId))] })
+    if (!committed.committed) throw new Error('Native completion changed concurrently')
+    await deps.completeWorkflowBuild?.({ runId: completed.runId, nodeId: completed.nodeId, codingRunId: completed.id, diffId: bundle.completion.diff.id, now: completed.completedAt! })
+  }
+
   async function settleCompletedExecutorResult(input: {
     expectedRun: CodingAgentRun
     completed: CodingExecutorCompletedResult
@@ -1964,6 +2012,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       await saveEvents([{ id: idGenerator('coding-event'), codingRunId: run.id, runId: run.runId, nodeId: run.nodeId,
         sequence: await nextSequence(run.id), kind: 'status', timestamp: now(), message: reply.kind === 'answer' ? '用户已回答问题；工具审批与最终验收仍独立执行。' : '用户跳过了问题。',
         metadata: { questionId: request.id, revision: request.revision, replyDigest, answeredBy: input.answeredBy }, redacted: true }])
+      // Questions belong to protocol 1 executors; a Native v3 session handles its own questions.
+      if (completed.kind === 'harness') throw new Error('A legacy question cannot continue a protocol 2 coding session')
       if (completed.kind !== 'engine_completed') await persistPausedOutcome(claimedRun, completed)
       else if (!await settleCompletedExecutorResult({ expectedRun: claimedRun, completed, workspace, project, timestamp: now() })) throw new Error('Question completion lost its reservation')
       return receipt
@@ -2636,6 +2686,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         }
         throw error
       }
+      if (completed.kind === 'harness') throw new Error('A legacy permission cannot continue a protocol 2 coding session')
       if (completed.kind !== 'engine_completed') {
         await persistPausedOutcome(continuationExpectedRun, completed)
         return updatedRequest
@@ -2884,6 +2935,15 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   }
 
   return {
+    async codingHarnessCommand(command) {
+      if (!executor.harness) throw new Error('This executor does not implement harness protocol 2')
+      const session = await deps.store.getNativeCodingSession?.(`native-${command.codingRunId}`)
+      const codingRun = await findCodingRun(session?.parent?.codingRunId ?? command.codingRunId)
+      await deps.sessionAuthority?.(codingRun.projectId)
+      const bundle = await executor.harness.command(command, () => assertExecutionContext(codingRun))
+      if (!session?.parent) await settleHarnessResult(bundle)
+      return bundle.snapshot
+    },
     async ensureCodingEngine(input) {
       const project = await findProject(input.projectId)
       return executor.ensure({ project })
@@ -2900,11 +2960,24 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const recoverNative = executor.descriptor.id === 'coding-executor-native'
       const recoverOpenCode =
         executor.descriptor.kind === 'opencode' && executor.engine === 'opencode-http'
-      if (!recoverNative && !recoverOpenCode) return []
 
       const recovered: CodingAgentRun[] = []
       const codingRuns = await deps.store.listCodingAgentRuns()
       for (const codingRun of codingRuns) {
+        if (deps.projectId && codingRun.projectId !== deps.projectId) continue
+        if (codingRun.harness && !executor.harness) {
+          if (activeCodingStatuses.has(codingRun.status) && codingRun.summary !== NATIVE_CODING_EXECUTOR_UNAVAILABLE) {
+            await commitCodingAgentMutation({ expectedRun: codingRun, expectedPendingPermissionRequestIds: [], run: { ...codingRun, summary: NATIVE_CODING_EXECUTOR_UNAVAILABLE, harness: { ...codingRun.harness, status: 'paused' } } })
+            recovered.push(await findCodingRun(codingRun.id))
+          }
+          continue
+        }
+        if (codingRun.harness && executor.harness) {
+          const recoveredBundle = await executor.harness.recover(codingRun, () => assertExecutionContext(codingRun))
+          if (recoveredBundle) { await settleHarnessResult(recoveredBundle); recovered.push(await findCodingRun(codingRun.id)) }
+          continue
+        }
+        if (!recoverNative && !recoverOpenCode) continue
         const isOpenCodeRun = recoverOpenCode && codingRun.engine === 'opencode-http'
         const isNativeRun = recoverNative && codingRun.engine !== 'opencode-http'
         if (!isOpenCodeRun && !isNativeRun) continue
@@ -3103,6 +3176,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         run,
         node,
         project,
+        ...(executor.descriptor.kind === 'native' && executor.descriptor.version === 3 ? { executionModel: 'native-harness-v3' as const } : {}),
         ...briefContext,
         ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
         maxContextBytes: CODING_BRIEF_MAX_BYTES,
@@ -3711,9 +3785,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           .digest('hex'),
         requiredCapabilities,
         budget: {
-          maxTokens:
-            estimatedCost.inputTokens +
-            estimatedCost.outputTokens,
+          maxTokens: executor.harness ? 10_000_000 : estimatedCost.inputTokens + estimatedCost.outputTokens,
           maxCostUsd: budgetDecision.limitUsd ?? budgetDecision.projectedCostUsd,
         },
         expectedCheckpointVersion: 0,
@@ -3850,6 +3922,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
           { status: 'completed', reasonCode: null },
         )
         throw error
+      }
+      if (bundle.kind === 'harness') {
+        await settleHarnessResult(bundle)
+        return { codingRun: await findCodingRun(codingRunId), state: await deps.store.loadState() }
       }
       if (bundle.kind === 'engine_completed') {
         const providerReportedCost = bundle.codingRun.runtimeCostSummary?.source === 'provider_reported'
@@ -4076,6 +4152,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       )
       if (!waitingForBootstrap) {
         await executor.cancel({ codingRun: expectedRun })
+      }
+      if (expectedRun.harness && executor.harness) {
+        const bundle = await executor.harness.command({ protocolVersion: 2, type: 'get', codingRunId: expectedRun.id }, () => assertExecutionContext(expectedRun))
+        if (bundle.completion) { await settleHarnessResult(bundle); return findCodingRun(expectedRun.id) }
       }
       const timestamp = now()
       for (let attempt = 0; attempt < 8; attempt += 1) {

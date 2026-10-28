@@ -85,6 +85,8 @@ describe('Coding Context authority', () => {
     await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('pairing changed')
     currentPairing = { ...pairing, tokenId: 'renewed-session' }
     await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('pairing changed')
+    currentPairing = { ...pairing, userId: 'another-member' }
+    await expect(assertCodingContextCurrent({ store, codingRun: coding, now })).rejects.toThrow('actor does not match')
   })
 })
 

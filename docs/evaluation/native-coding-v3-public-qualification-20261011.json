@@ -1,0 +1,896 @@
+{
+  "schemaVersion": 1,
+  "publicPlanDigest": "8a55ca4129abd328b46a6730b0a9574f3f6c78d9365f010ccd50cabf3cdeb8fa",
+  "taskManifestDigest": "a851c0a7424670cc951a90f87c60bb933d4ed24d6b373b19df9286442adc689b",
+  "platform": "darwin",
+  "node": "v24.18.0",
+  "qualified": 31,
+  "sourceSnapshotNote": "Exact executed sources are archived under each artifact directory and checked against its sourceDigests. Run r1 started before the later cancel(id) and uncertain-stop preservation additions; it does not claim to execute a later Git commit. The short private TEMP implementation was already present. Run r2 uses the later implementation and adds optional task selection to the qualifier. Production regressions separately verify command additions.",
+  "baselineRepeatNote": "The unchanged public suite for task 30 first had 58 passes and one virtual-clock wall-limit failure, then received one targeted same-condition qualification replay. The first failure and exact assertions are preserved. No reference assertion, model task, model budget or paid trial was changed or retried. This observed public-suite timing variability remains a limitation; all future model outcomes are retained.",
+  "sourceRuns": [
+    {
+      "id": "public-plans-20261011-r1",
+      "rawReportDigest": "4b33d3393382153ff7488bf28ed0ea2a4116a735401d91b556567f5b1b0b4fec",
+      "sourceDigests": {
+        "scripts/native-coding-public-plans.mts": "811df7e49b5ddfb1f38d79487e4b72c32b3c4389c9fed43e85ac3f78d5a44107",
+        "apps/desktop/electron/coding-command-runner.ts": "cd2ffcaac877943ff1eefe473dd2340337b3f59569024eeb4f4bb1458de1cfd8",
+        "apps/desktop/electron/coding-dependency-preparation.ts": "3d120a789279a0b65d8d369f5df03c57886c1d5fc1e3e91a6093fa6ef0880189"
+      },
+      "qualified": 30,
+      "observed": 31,
+      "failures": [
+        {
+          "taskId": "devflow-history-30",
+          "tests": {
+            "passed": 58,
+            "failed": 1,
+            "skipped": 0,
+            "total": 59,
+            "unhandledErrors": 0
+          },
+          "receiptStatus": "failed"
+        }
+      ]
+    },
+    {
+      "id": "public-plans-20261011-r2",
+      "rawReportDigest": "4bb969742178281fa48621123cec940c1dab96a1d56561cd935e0914d0289100",
+      "sourceDigests": {
+        "scripts/native-coding-public-plans.mts": "eb2b44bfe75ec6a5789f77a4141442ced9b92da7b71b9ef08341a92d16daffe9",
+        "apps/desktop/electron/coding-command-runner.ts": "5ddca93626e53abcb2359c1a115c8e871db6b3bc7d2006410991a53450a27ea2",
+        "apps/desktop/electron/coding-dependency-preparation.ts": "3d120a789279a0b65d8d369f5df03c57886c1d5fc1e3e91a6093fa6ef0880189"
+      },
+      "qualified": 1,
+      "observed": 1,
+      "failures": []
+    }
+  ],
+  "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1",
+  "rawReportDigest": "4b33d3393382153ff7488bf28ed0ea2a4116a735401d91b556567f5b1b0b4fec",
+  "summary": {
+    "passed": 2923,
+    "failed": 0,
+    "skipped": 0,
+    "total": 2923,
+    "unhandledErrors": 0
+  },
+  "results": [
+    {
+      "taskId": "devflow-history-02",
+      "baseSha": "d8e25fcc085c840f812c2616cd8779c10eadbc6c",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/workbench-conversation-service.test.ts",
+      "durationMs": 93024,
+      "qualified": true,
+      "tests": {
+        "passed": 80,
+        "failed": 0,
+        "skipped": 0,
+        "total": 80,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "c58fb9174f34057d7b1d0ac961ad49740cd10f3b483319d7a1f85a238de274aa",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "ed180e73d9b1f0fb97391bb9f14b5d2736450e7c5ea3ef8a8af478e1f986e87a",
+        "startedAt": "2026-10-12T03:34:48.760Z",
+        "completedAt": "2026-10-12T03:36:18.221Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "a38ac362b4ea9fcc9ffb11b65eaa8a99172218c9ec4df1dd55e4c9910f4c5e37",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-02",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-03",
+      "baseSha": "a8c5e3b4830e7ceb27c9e5c04869a6b0a0ed550e",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/knowledge-review-runtime.test.ts apps/desktop/electron/repository-knowledge.test.ts apps/desktop/src/App.test.tsx apps/desktop/src/app/knowledge-directory-view-model.test.ts apps/desktop/src/app/node-inspector-view-model.test.ts packages/shared/src/agent-review.test.ts packages/shared/src/workflow-context-projection.test.ts",
+      "durationMs": 86098,
+      "qualified": true,
+      "tests": {
+        "passed": 327,
+        "failed": 0,
+        "skipped": 0,
+        "total": 327,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "46de3b178dde3a6b4e69d3647b2549f442fefa096b45f61f96f1326c13c07740",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "7e82419fd5702f3187d017b7c7f89802cf1f2c7d0fe089459eb1e84cce1c95db",
+        "startedAt": "2026-10-12T03:36:21.946Z",
+        "completedAt": "2026-10-12T03:37:44.563Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "2622d1f4bb6127386a8f4f6aa252e773ab97027884bbaa2c68ff1b8fc14919e2",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-03",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-04",
+      "baseSha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/conversation-context.test.ts apps/desktop/electron/workbench-conversation-service.test.ts packages/shared/src/workflow-agent.test.ts",
+      "durationMs": 102196,
+      "qualified": true,
+      "tests": {
+        "passed": 106,
+        "failed": 0,
+        "skipped": 0,
+        "total": 106,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "4a69f0fc09b7c4a815e1e6bdf78dc878dffd6e20ef903d3132b2712a36a3f01d",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "e94d56959b32f1a1f5551fb37dde058277e102b41ffa57f682a7b02a65624d0b",
+        "startedAt": "2026-10-12T03:37:47.773Z",
+        "completedAt": "2026-10-12T03:39:26.805Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "a81c596de10baace0eee31fcaa7a44fc0b015ed4ce4c1648f1c8f164f6347794",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-04",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-05",
+      "baseSha": "cb9cb27c4399ccf910aa3bbde7ec640e82f2b7f5",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/coding-run-memory.test.ts apps/desktop/src/AgentMemoryPanel.test.tsx packages/shared/src/agent-memory-projection.test.ts scripts/desktop-pilot-smoke.test.ts",
+      "durationMs": 83115,
+      "qualified": true,
+      "tests": {
+        "passed": 45,
+        "failed": 0,
+        "skipped": 0,
+        "total": 45,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "ba645bc50a36afd594a4fce59774c9b8aadc5e3198c9da7c2c8972a942f670bf",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "e22888008f52bee4f79c0ef16f410aac84ba5b500fcdb5ceb2a0b66a8953e08d",
+        "startedAt": "2026-10-12T03:39:30.181Z",
+        "completedAt": "2026-10-12T03:40:49.698Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "75b4029c4cca2f7c1621598924fab508539a87c23a581cc207743cbee084b6fb",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-05",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-06",
+      "baseSha": "722659d18017fa9864d7e85e513c8b8f768c561a",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/knowledge-review-runtime.test.ts apps/desktop/src/App.test.tsx",
+      "durationMs": 90251,
+      "qualified": true,
+      "tests": {
+        "passed": 182,
+        "failed": 0,
+        "skipped": 0,
+        "total": 182,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "94a9fa92423b26b36a8e1845c6b8e4170c17c12d786d2f25d778f6a6467a90ec",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "d281a77b912bd78878c6354d1edfb6a672afb28d2f277ca4355f23e000e6fef9",
+        "startedAt": "2026-10-12T03:40:53.923Z",
+        "completedAt": "2026-10-12T03:42:20.125Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "3746201e31f797a1a86c8d475a66dae26f1a12130832cc11fe97c2242c046866",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-06",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-07",
+      "baseSha": "db05117881cc80bc636afe7e572b03e52eef4fdf",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/opencode-controlled-lifecycle.test.ts apps/desktop/electron/opencode-discovery.test.ts apps/desktop/electron/opencode-http-adapter.test.ts apps/desktop/electron/opencode-http-engine.test.ts apps/desktop/electron/opencode-permission-policy.test.ts apps/desktop/electron/opencode-process.test.ts apps/desktop/electron/opencode-provider-binding.test.ts apps/desktop/electron/opencode-result-validation.test.ts apps/desktop/electron/opencode-shutdown.test.ts",
+      "durationMs": 99817,
+      "qualified": true,
+      "tests": {
+        "passed": 247,
+        "failed": 0,
+        "skipped": 0,
+        "total": 247,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "0714883631aa08d6f55b45373cec5595c1f3ede314499c6bd3732b574993b045",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "2b8caeced19c48cf97759868f750d1b62bbe2c931ff921999f58a1ab9047c16f",
+        "startedAt": "2026-10-12T03:42:23.358Z",
+        "completedAt": "2026-10-12T03:43:59.734Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "b5d7a79a0cc953d019785f0291f2907902d942e54a6076c7c58272fe771e6b20",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-07",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-08",
+      "baseSha": "393bf1b5900b5b67cf70e46942d555c7c125d5b1",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/governed-opencode-proxy.test.ts apps/desktop/electron/knowledge-review-local-agent.test.ts apps/desktop/electron/stage-agent-executor.test.ts packages/shared/src/provider-error.test.ts",
+      "durationMs": 126829,
+      "qualified": true,
+      "tests": {
+        "passed": 40,
+        "failed": 0,
+        "skipped": 0,
+        "total": 40,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "8a257dca6e8d5ba008ae57b7dfe339fef874d83af0770bd13d15c9d188e57a9a",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "4042ff5321c699c83ecbe65abfd4f0a313d2f3f67a8e50e73b928d6bf4aeae55",
+        "startedAt": "2026-10-12T03:44:03.786Z",
+        "completedAt": "2026-10-12T03:46:06.665Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "11e3b66e4efa717b82c84b38699bce47c5ef8d45ca988a162046ff8dff0a0fbf",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-08",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-09",
+      "baseSha": "aae4abffd9254f719e6c2fe642d6deb1e764c8ea",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/coding-run-memory.test.ts apps/desktop/electron/coding-runtime.test.ts apps/desktop/electron/local-store.test.ts apps/desktop/src/AgentMemoryPanel.test.tsx",
+      "durationMs": 88921,
+      "qualified": true,
+      "tests": {
+        "passed": 317,
+        "failed": 0,
+        "skipped": 0,
+        "total": 317,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "b138f2c973a2f13ad21822bd06dd7d1b7244a9d894226f4407082ced77d09b8b",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "b88ff00541ac0dd5ca6f93a60064c56072dc4916a4cc32d92cb38e10bfa6ff21",
+        "startedAt": "2026-10-12T03:46:09.968Z",
+        "completedAt": "2026-10-12T03:47:35.530Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "8d2d17d951cd498c3d949f3fd6560394f5da888e909dda2189ae1bf0f34c3b4e",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-09",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-10",
+      "baseSha": "e042a4e414c68d019b46bc885eefe4eb8d895d51",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/agent-coordination-plan.test.ts",
+      "durationMs": 81247,
+      "qualified": true,
+      "tests": {
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0,
+        "total": 6,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "9758593968f1bbeebea0101aaece002b8b848908ee46df5d376db8ae78978baa",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "53659b7317a28b8bb5cb5921ec3e70fdf8168f69163570429550250146de54c8",
+        "startedAt": "2026-10-12T03:47:38.892Z",
+        "completedAt": "2026-10-12T03:48:56.807Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "93a412a1814316a7b127f67cef3c3483f5894fc325f6a58241edd672c06d99a2",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-10",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-11",
+      "baseSha": "a61fc28f04c3bfb5b83ef79405b1e70028e35da2",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/native-coding-provider-trace.test.ts",
+      "durationMs": 85702,
+      "qualified": true,
+      "tests": {
+        "passed": 14,
+        "failed": 0,
+        "skipped": 0,
+        "total": 14,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "877626b60945eb34e9a1c5c37dceb987b2af481cf347cb334757f84c9795fe9c",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "aafa54eacf2ff50d8b50c9e56b0fb136f3ba62c13987f65ba19301241a5a3184",
+        "startedAt": "2026-10-12T03:49:00.240Z",
+        "completedAt": "2026-10-12T03:50:22.567Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "e0d5ea4083fcca8c5f21a568e93a330f607459aaf0e1870a878690190d6b4d65",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-11",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-12",
+      "baseSha": "0ac5122d55f10068c13cbfdc35b5428ba795c547",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/coding-run-memory.test.ts apps/desktop/electron/coding-runtime.test.ts apps/desktop/electron/local-store-schema.test.ts apps/desktop/electron/native-coding-v2-runtime.test.ts apps/desktop/src/AgentMemoryPanel.test.tsx packages/shared/src/memory-learning.test.ts packages/shared/src/retrieval-memory.test.ts",
+      "durationMs": 94044,
+      "qualified": true,
+      "tests": {
+        "passed": 183,
+        "failed": 0,
+        "skipped": 0,
+        "total": 183,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "5bb6e75959bfc40dfa7b731ce7e78b9a8793604217f49871c0b8ff2bd0fd3154",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "038096e7e020748bc2783f1f0c5ade63f5e9ef368fb5fbc490ba1b60bfec62a2",
+        "startedAt": "2026-10-12T03:50:25.781Z",
+        "completedAt": "2026-10-12T03:51:56.041Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "4ab76b98bec1323b51b760b4bf4acf6e27f8c98895a4d3c875f60d3635ce2aa2",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-12",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-13",
+      "baseSha": "e9ce1f5171a9bd4c244131ce42fd4edc30afc25e",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/native-coding-provider-trace.test.ts",
+      "durationMs": 90144,
+      "qualified": true,
+      "tests": {
+        "passed": 12,
+        "failed": 0,
+        "skipped": 0,
+        "total": 12,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "c4e16a7eff60e0ffab823fa738e87ac6abd1426b2719802082c454c850d8d05e",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "2826aa335758525606e752267f8d91bc6cc9d5fd55990bb4e4f15e8cd1f6aaed",
+        "startedAt": "2026-10-12T03:52:00.765Z",
+        "completedAt": "2026-10-12T03:53:25.630Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "9031a3495b3027e8efbbe6ac45185d816094b12eeb2afa4c33c86a2d4e5f1f48",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-13",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-14",
+      "baseSha": "33634af4b2eb0cbaa20226f212ae18d795937952",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/main-agent-runtime-wiring.test.ts apps/desktop/electron/native-coding-v2-repair-prompt.test.ts apps/desktop/electron/workbench-conversation-service.test.ts packages/shared/src/memory-relevance.test.ts packages/shared/src/test-failure-locations.test.ts packages/shared/src/workflow-agent.test.ts",
+      "durationMs": 109912,
+      "qualified": true,
+      "tests": {
+        "passed": 113,
+        "failed": 0,
+        "skipped": 0,
+        "total": 113,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "a275baa0204a39aa27d2debc29a7f89001eefdad303e51f0b3cfee51ea08c615",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "03abc2f79004f42f6fff57b1a6024822133dda6a7001e4ba5c15bc5737634357",
+        "startedAt": "2026-10-12T03:53:31.776Z",
+        "completedAt": "2026-10-12T03:55:15.755Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "5a52bf14b22ecbfdb54e678a4dcaf35833ce4c782817fe035a86016b3ffb6ef9",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-14",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-15",
+      "baseSha": "de1bd78f5683c288cedb03e9e549486a01345231",
+      "testCommand": "corepack pnpm exec vitest run apps/api/src/repositories/team-repository.test.ts apps/desktop/electron/project-bound-remote-sync.test.ts apps/desktop/electron/remote-sync-outbox-client.test.ts",
+      "durationMs": 91864,
+      "qualified": true,
+      "tests": {
+        "passed": 90,
+        "failed": 0,
+        "skipped": 0,
+        "total": 90,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "31469b25c293c98fbb86011973cd75cbf50cf410eded7e9bc476558e5adc3d84",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "214fb6f7abc0b9e7d8837e24fd1a653d68f0326c3d722afa3bfe31f8fb49fa8f",
+        "startedAt": "2026-10-12T03:55:23.438Z",
+        "completedAt": "2026-10-12T03:56:48.604Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "bcaaa465545322f326edc98b09b6f405a54456a1529c5a2ceff99cbb5a277ca2",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-15",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-17",
+      "baseSha": "b863e9de9f4c9e66e68ecc0ff961b3b4c5eef7c2",
+      "testCommand": "corepack pnpm exec vitest run packages/shared/src/agent-review.test.ts",
+      "durationMs": 80202,
+      "qualified": true,
+      "tests": {
+        "passed": 44,
+        "failed": 0,
+        "skipped": 0,
+        "total": 44,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "2de602cb777e2d317ac45dbd6dfe00fb59d59d948591d06da4712f57eac87d62",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "7be8359f3699b5ff86b313dc68ea2b8dd515ab74cf907578fcd87466159b5fc2",
+        "startedAt": "2026-10-12T03:56:51.909Z",
+        "completedAt": "2026-10-12T03:58:08.309Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "28876c41be57ccdf2ee238a6a76f63560f7d6f3390eb4f81a0766be1ea17f88f",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-17",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-19",
+      "baseSha": "87ae041c96c68dc26e318656a931a7406de62bd6",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/src/App.test.tsx apps/desktop/src/app/node-inspector-view-model.test.ts",
+      "durationMs": 89532,
+      "qualified": true,
+      "tests": {
+        "passed": 199,
+        "failed": 0,
+        "skipped": 0,
+        "total": 199,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "46b2611607d1845961e123a0f9026c43aa472ad66f902660b68e6531ec0653c2",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "67ac17f5a6462432f18e4616c7622465b5e62a5f37a1228782583ded05bf9f0a",
+        "startedAt": "2026-10-12T03:58:11.575Z",
+        "completedAt": "2026-10-12T03:59:38.386Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "9f5392edc0a21767ac2302bca19725311a32d881aea3aac980729e073ac90fb1",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-19",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-20",
+      "baseSha": "edc35046398ef8cd70c323ff6d36f9dac3e87870",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/src/components/GateMaterialReader.test.tsx",
+      "durationMs": 80920,
+      "qualified": true,
+      "tests": {
+        "passed": 5,
+        "failed": 0,
+        "skipped": 0,
+        "total": 5,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "dc636d3763a022737ff17e3887b245ea7e9678977d663f642aa844c2ed11cae5",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "c9c7f41e634a4564cc9424ed8e7a20e0a3e06a257ebbfd7850bb0dd30c75e6e2",
+        "startedAt": "2026-10-12T03:59:40.660Z",
+        "completedAt": "2026-10-12T04:00:59.212Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "7fcabd794c23f378e3b9ecb50f05626f1fe121c73a881368050e1c372f6d0a4b",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-20",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-21",
+      "baseSha": "35f9981f5198e8874e51657489187080ad6adc6c",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/workflow-runtime.test.ts apps/desktop/src/App.test.tsx",
+      "durationMs": 96626,
+      "qualified": true,
+      "tests": {
+        "passed": 160,
+        "failed": 0,
+        "skipped": 0,
+        "total": 160,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "d1954dd8b078e296778b4b6f7f0bb281ced4736297f90eaecfe60c57b3625b6c",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "8f0b962f83fbcba9cf504b1f27f909f9d273ebfefa8a2bb82b88f8c2c9d659dc",
+        "startedAt": "2026-10-12T04:01:01.551Z",
+        "completedAt": "2026-10-12T04:02:35.944Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "18e68c9d8bfb2025ec923fd77204185b3f34d7b3017ff38466949641b8811717",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-21",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-22",
+      "baseSha": "075e711b8591bcbdf41260ac6578d8b37209126b",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/main-github-delivery-wiring.test.ts",
+      "durationMs": 80605,
+      "qualified": true,
+      "tests": {
+        "passed": 11,
+        "failed": 0,
+        "skipped": 0,
+        "total": 11,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "f59932ac683fe5ec73b3d4a2faa199a8aecdbc00f711ee4ca26d429e515eb1cb",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "eb0d789b58cab2378235084a3dc2e1abcd9b82793beb663bc4a9a1b0350f4b14",
+        "startedAt": "2026-10-12T04:02:38.210Z",
+        "completedAt": "2026-10-12T04:03:56.238Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "0acc83beacbe686651e1409142ed452ad351bb7fc6047426a447c5e62fbd1f06",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-22",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-23",
+      "baseSha": "c7b4f525330a047f4a25475590a764ae96fc0960",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/src/WorkbenchWorkspace.test.tsx",
+      "durationMs": 90350,
+      "qualified": true,
+      "tests": {
+        "passed": 11,
+        "failed": 0,
+        "skipped": 0,
+        "total": 11,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "4ac066236b4a23379e6a87f708a09eedad52aae4f3ff892a09a27630ba741210",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "fb40c024bf8a90387042482b0a9d08c7de5b58ca670959dee66bc58355e13791",
+        "startedAt": "2026-10-12T04:03:59.197Z",
+        "completedAt": "2026-10-12T04:05:26.718Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "6132b0e68ee65ae8bca5742708497ab1bca0f074a609e0d109e672a5d567607b",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-23",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-24",
+      "baseSha": "bbf61be20dccadd1ef9b5ab812e75e4133bd8033",
+      "testCommand": "corepack pnpm exec vitest run apps/api/src/repositories/postgres-team-repository.test.ts apps/desktop/electron/local-store.test.ts apps/desktop/electron/native-coding-provider-trace.test.ts apps/desktop/electron/project-bound-remote-sync.test.ts packages/shared/src/agent-review.test.ts",
+      "durationMs": 167316,
+      "qualified": true,
+      "tests": {
+        "passed": 340,
+        "failed": 0,
+        "skipped": 0,
+        "total": 340,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "5f38424872629e3b8afb3477c20f4380eb1ad3ff4b0ca1f8cb782a72b6f2d328",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "2cd18fa58cbde532c8d5f5d3b9b423c6b888d273170a4958215d97b494d5bdc1",
+        "startedAt": "2026-10-12T04:05:29.094Z",
+        "completedAt": "2026-10-12T04:08:14.049Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "aed3d0ff25c7f7784cc5786788349098755f703d81708b13072a385334509640",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-24",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-25",
+      "baseSha": "8c4387ee472bd0ed0364dc03ade9e885d955c1d8",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/workbench-conversation-service.test.ts",
+      "durationMs": 182883,
+      "qualified": true,
+      "tests": {
+        "passed": 21,
+        "failed": 0,
+        "skipped": 0,
+        "total": 21,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "f8549f481ad091fafd7e1a18ee4f04a30ad6211fbeaef480de23cc157040a49f",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "8a8bbefffc501be2ed21c2aa26c9671479c575e2473a2201b430e4902e7e2770",
+        "startedAt": "2026-10-12T04:08:16.335Z",
+        "completedAt": "2026-10-12T04:11:17.081Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "be5bb2cc6f768c2bd5abfcd5e50c3107c558c14d689be3287681daf28920c78d",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-25",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-26",
+      "baseSha": "000d4b39cca4f17cb7265a34628100f167a36783",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/native-coding-provider-trace.test.ts",
+      "durationMs": 146725,
+      "qualified": true,
+      "tests": {
+        "passed": 4,
+        "failed": 0,
+        "skipped": 0,
+        "total": 4,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "c31f51a988b12d054ffc94af73b97141b7e0030a37ab49b9a7c4e0e2d700e9a3",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "d485925505b703233290b6eaa3e40f960dfe83778f8250fea2d7159fd2e51c0d",
+        "startedAt": "2026-10-12T04:11:19.149Z",
+        "completedAt": "2026-10-12T04:13:43.758Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "81a52fca8a0eeb1b792108469ec52a13bafece370e6a8ce402626467627febef",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-26",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-27",
+      "baseSha": "72d4fa093e262a13e19f69036c37c4b9df28bdb0",
+      "testCommand": "corepack pnpm exec vitest run packages/shared/src/coding-agent.test.ts",
+      "durationMs": 151736,
+      "qualified": true,
+      "tests": {
+        "passed": 30,
+        "failed": 0,
+        "skipped": 0,
+        "total": 30,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "47efe40216254609c7ef12378a827135f5521355edc9af42ff811a6f5fdf5772",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "3111fd3bc240f648165d16034e7e98045890434d98a1b20920c92e9114090848",
+        "startedAt": "2026-10-12T04:13:45.845Z",
+        "completedAt": "2026-10-12T04:16:15.363Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "a97262ae30c6114e4cd0fc74b57298928d800a22c487e78d0e86df33682b4c64",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-27",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-28",
+      "baseSha": "b30b4f59bd25f380e3e5eda488eee6f0bd7f389f",
+      "testCommand": "corepack pnpm exec vitest run packages/shared/src/workflow-agent.test.ts",
+      "durationMs": 148014,
+      "qualified": true,
+      "tests": {
+        "passed": 20,
+        "failed": 0,
+        "skipped": 0,
+        "total": 20,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "2a23a90d1fb63b265b45be117df2c1a485ee30576f2d961db9627eae6fe71f93",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "7959f6766b083bf8467971c437fe6e3e017b8bb1b6b60d99a03e377940a605f5",
+        "startedAt": "2026-10-12T04:16:17.659Z",
+        "completedAt": "2026-10-12T04:18:43.577Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "42f75d0e63dfa7ff96ada080e0f78b5170efe59cf00c7075b20f063f565b503f",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-28",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-29",
+      "baseSha": "a2adf1bbb45091f58030d9ec03f9d92be394778b",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/local-mcp-runtime.test.ts apps/desktop/electron/native-coding-v2-runtime.test.ts scripts/desktop-pilot-smoke.test.ts",
+      "durationMs": 160395,
+      "qualified": true,
+      "tests": {
+        "passed": 14,
+        "failed": 0,
+        "skipped": 0,
+        "total": 14,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "025aeecb17f4af0d8587a0c659b462f50322df10fd72704e1ba6e756a1e474fd",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "8ea1ddbf66c1d484de004d7d7b72ec87a86368653042e6c7a862469653591ef7",
+        "startedAt": "2026-10-12T04:18:45.605Z",
+        "completedAt": "2026-10-12T04:21:23.934Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "0180410327d45fd5ccdba173bfff07aa190825bd84939d5fde9731b3859fee9f",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-29",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-30",
+      "baseSha": "b0ca895d544124e766c9b810b3ac7ae78373a412",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/opencode-http-engine.test.ts",
+      "durationMs": 258046,
+      "qualified": true,
+      "tests": {
+        "passed": 59,
+        "failed": 0,
+        "skipped": 0,
+        "total": 59,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "db8c85cd78949f955d1f38fa8cf7558c1c4a0dc3c19be43d6f24ba3a6a2e3046",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "c286d430dc20e09ab7fc7c3bbc05201b1bfcfa98c2bd5217b99330ce7e5ac06d",
+        "startedAt": "2026-10-12T04:26:32.768Z",
+        "completedAt": "2026-10-12T04:30:48.593Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "4dd2233fa9665cc125e03339e96e0ff66103cc4b2e13c474acb64ce75ca408fb",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r2/devflow-history-30",
+      "sourceRun": "public-plans-20261011-r2"
+    },
+    {
+      "taskId": "devflow-history-31",
+      "baseSha": "b326f77ad5d9ad1363c1840d365caae7ac3048fb",
+      "testCommand": "corepack pnpm exec vitest run packages/shared/src/agent-review.test.ts",
+      "durationMs": 218436,
+      "qualified": true,
+      "tests": {
+        "passed": 39,
+        "failed": 0,
+        "skipped": 0,
+        "total": 39,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "334e37ca69d64b199c7a7b48f6ab6c7bf9e3759ccdb66da651526785605e548e",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "efda2f5ef3afbc46b89b6eac4b21953420d18cbb8339b6f89f83e4485751cbc5",
+        "startedAt": "2026-10-12T04:25:00.753Z",
+        "completedAt": "2026-10-12T04:28:37.119Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "53b1c0c903a30f489d541c4e21d766695475a57bad5f7e5a3e7621e484257f6e",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-31",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-32",
+      "baseSha": "a8e1a777c7e0f8c60489ffa3207701af291b810f",
+      "testCommand": "corepack pnpm exec vitest run apps/web/app/PairingCodePanel.test.tsx",
+      "durationMs": 178740,
+      "qualified": true,
+      "tests": {
+        "passed": 9,
+        "failed": 0,
+        "skipped": 0,
+        "total": 9,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "9c0cc47db7abc69b0c777b0eeba15f5757cc48c8ff4f1558ef1092896818f1df",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "deabd6ea1c200789b875e41017340b7747b32984e0f5ffd65319b71fd2b54caa",
+        "startedAt": "2026-10-12T04:28:39.245Z",
+        "completedAt": "2026-10-12T04:31:35.875Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "05863aecb3f26acc97708afe83841514ac1d9ca58c903b6c069eb01f4907ee55",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-32",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-34",
+      "baseSha": "d743ea3c2279482db10d05c4db32354c569b3156",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/src/App.test.tsx",
+      "durationMs": 167474,
+      "qualified": true,
+      "tests": {
+        "passed": 141,
+        "failed": 0,
+        "skipped": 0,
+        "total": 141,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "50dcf102398e30bd4848071be76e066698d352326f344cf3958c8767ef45247d",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "187cc5fc0664ed384a8ce7eb9abe416050ec3055cd69f6cf2038dd33622a6c19",
+        "startedAt": "2026-10-12T04:31:37.924Z",
+        "completedAt": "2026-10-12T04:34:23.265Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "1741e49506946d9ad9d49e64b5c8132175679702cba61cff278737cc3a490cf1",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-34",
+      "sourceRun": "public-plans-20261011-r1"
+    },
+    {
+      "taskId": "devflow-history-35",
+      "baseSha": "540657703d49e603042fd27fd6d0db08d9f76361",
+      "testCommand": "corepack pnpm exec vitest run apps/desktop/electron/opencode-http-engine.test.ts",
+      "durationMs": 152072,
+      "qualified": true,
+      "tests": {
+        "passed": 54,
+        "failed": 0,
+        "skipped": 0,
+        "total": 54,
+        "unhandledErrors": 0
+      },
+      "reportDigest": "01417a3130476529d50fe671e7ce276ea8999a4b6777341e52177d7c71034e4a",
+      "receipt": {
+        "status": "passed",
+        "exitCode": 0,
+        "planDigest": "507075228f211571e78dcc63a01727431d5eeb5018f5009a380e570d74c8989b",
+        "startedAt": "2026-10-12T04:34:25.655Z",
+        "completedAt": "2026-10-12T04:36:55.371Z",
+        "preparationExitCode": 0,
+        "temporaryCleanupStatus": "completed"
+      },
+      "rawRecordDigest": "738a27421ee4195da50b6e1994a0c3cd90196f9091099546b39c07a735032a49",
+      "artifacts": "out/native-v3-evaluation/public-plans-20261011-r1/devflow-history-35",
+      "sourceRun": "public-plans-20261011-r1"
+    }
+  ]
+}

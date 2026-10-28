@@ -1,0 +1,445 @@
+{
+  "schemaVersion": 1,
+  "frozenAt": "2026-10-11",
+  "sourceRepository": "erich04/ai-devflow-studio",
+  "developmentBase": "b5d8344a6f093c86f51d216ee3de23301bd131c9",
+  "taskCount": 35,
+  "qualification": "Each task must pass reference tests and fail at least one baseline acceptance test before any paid run. Unqualified tasks remain in the report.",
+  "tasks": [
+    {
+      "id": "devflow-history-01",
+      "title": "fix: publish shared content atomically across concurrent writers",
+      "baseSha": "d2190170337b904b88b3df5f7cbbedc7f1897c0b",
+      "referenceSha": "7978b92d35163e111b7f57ad53112529ea63c465",
+      "acceptanceTests": [
+        "apps/desktop/electron/conversation-content-store.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: publish shared content atomically across concurrent writers\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-02",
+      "title": "fix: finish step recovery before pausing at batch deadline",
+      "baseSha": "d8e25fcc085c840f812c2616cd8779c10eadbc6c",
+      "referenceSha": "d2190170337b904b88b3df5f7cbbedc7f1897c0b",
+      "acceptanceTests": [
+        "apps/desktop/electron/workbench-conversation-service.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: finish step recovery before pausing at batch deadline\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-03",
+      "title": "fix(desktop): complete knowledge review and acceptance workflow",
+      "baseSha": "a8c5e3b4830e7ceb27c9e5c04869a6b0a0ed550e",
+      "referenceSha": "ed26bc9aeee11fd79a774789ec654aec2927b295",
+      "acceptanceTests": [
+        "apps/desktop/electron/knowledge-review-runtime.test.ts",
+        "apps/desktop/electron/repository-knowledge.test.ts",
+        "apps/desktop/src/App.test.tsx",
+        "apps/desktop/src/app/knowledge-directory-view-model.test.ts",
+        "apps/desktop/src/app/node-inspector-view-model.test.ts",
+        "packages/shared/src/agent-review.test.ts",
+        "packages/shared/src/workflow-context-projection.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix(desktop): complete knowledge review and acceptance workflow\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-04",
+      "title": "fix: recover damaged conversation receipts and enforce retry budgets",
+      "baseSha": "0c38468b6d8adc6bb0802fe17e7408b06658209e",
+      "referenceSha": "1a80263c31e4dd86acc287d52f6946b6548813e5",
+      "acceptanceTests": [
+        "apps/desktop/electron/conversation-context.test.ts",
+        "apps/desktop/electron/workbench-conversation-service.test.ts",
+        "packages/shared/src/workflow-agent.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: recover damaged conversation receipts and enforce retry budgets\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-05",
+      "title": "fix: 删除记忆后，来源候选在面板中不再显示原语句",
+      "baseSha": "cb9cb27c4399ccf910aa3bbde7ec640e82f2b7f5",
+      "referenceSha": "953ddf61dcf7a8469b189dbed8c1989a40efcb76",
+      "acceptanceTests": [
+        "apps/desktop/electron/coding-run-memory.test.ts",
+        "apps/desktop/src/AgentMemoryPanel.test.tsx",
+        "packages/shared/src/agent-memory-projection.test.ts",
+        "scripts/desktop-pilot-smoke.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: 删除记忆后，来源候选在面板中不再显示原语句\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-06",
+      "title": "fix(shared): distinguish invalid review output causes",
+      "baseSha": "722659d18017fa9864d7e85e513c8b8f768c561a",
+      "referenceSha": "5bd602bb61691daaec26e0d8a5b7c0e20d118cbe",
+      "acceptanceTests": [
+        "apps/desktop/electron/knowledge-review-runtime.test.ts",
+        "apps/desktop/src/App.test.tsx",
+        "packages/shared/src/review-json-output.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix(shared): distinguish invalid review output causes\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-07",
+      "title": "fix(desktop): 只读 OpenCode 会话共用工具缓存，不再每次重新下载 ripgrep（#209）",
+      "baseSha": "db05117881cc80bc636afe7e572b03e52eef4fdf",
+      "referenceSha": "5f5b1b0864fcce39047e607f2a0a7eadd1ff561c",
+      "acceptanceTests": [
+        "apps/desktop/electron/opencode-profile-isolation.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): 只读 OpenCode 会话共用工具缓存，不再每次重新下载 ripgrep（#209）\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-08",
+      "title": "fix(desktop): OpenCode 步骤按保存的 Provider 计价，未建立连接的请求不计未知费用（#207，#208）",
+      "baseSha": "393bf1b5900b5b67cf70e46942d555c7c125d5b1",
+      "referenceSha": "b1ceec3d05b614e7fbbdbfb2dabc5fe94af09dfc",
+      "acceptanceTests": [
+        "apps/desktop/electron/governed-opencode-proxy.test.ts",
+        "apps/desktop/electron/knowledge-review-local-agent.test.ts",
+        "apps/desktop/electron/stage-agent-executor.test.ts",
+        "packages/shared/src/provider-error.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): OpenCode 步骤按保存的 Provider 计价，未建立连接的请求不计未知费用（#207，#208）\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-09",
+      "title": "fix: 按审阅补齐忽略候选的测试与说明",
+      "baseSha": "aae4abffd9254f719e6c2fe642d6deb1e764c8ea",
+      "referenceSha": "3cbbbc491cbedebaa91126912e11c56c30721342",
+      "acceptanceTests": [
+        "apps/desktop/electron/coding-run-memory.test.ts",
+        "apps/desktop/electron/coding-runtime.test.ts",
+        "apps/desktop/electron/local-store.test.ts",
+        "apps/desktop/src/AgentMemoryPanel.test.tsx"
+      ],
+      "split": "holdout",
+      "prompt": "fix: 按审阅补齐忽略候选的测试与说明\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-10",
+      "title": "fix: 协调 Supervisor 重试时核对已持久化的 Context 附件，不再重建",
+      "baseSha": "e042a4e414c68d019b46bc885eefe4eb8d895d51",
+      "referenceSha": "c186d041fcaf2e6aba9ea936075f590a91c69785",
+      "acceptanceTests": [
+        "apps/desktop/electron/agent-coordination-plan.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: 协调 Supervisor 重试时核对已持久化的 Context 附件，不再重建\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-11",
+      "title": "fix(desktop): 开启思考时 Native 分析阶段的输出上限提到 4096（#200）",
+      "baseSha": "a61fc28f04c3bfb5b83ef79405b1e70028e35da2",
+      "referenceSha": "76daea176c2dc924510e5d45bc3e5d03a81f8aae",
+      "acceptanceTests": [
+        "apps/desktop/electron/native-coding-provider-trace.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): 开启思考时 Native 分析阶段的输出上限提到 4096（#200）\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-12",
+      "title": "fix: 按审阅收窄策略晋升，存储层校验策略授权，跨任务去重生效",
+      "baseSha": "0ac5122d55f10068c13cbfdc35b5428ba795c547",
+      "referenceSha": "20091e665001a76ad6465e4d2344c5678db432f0",
+      "acceptanceTests": [
+        "apps/desktop/electron/coding-run-memory.test.ts",
+        "apps/desktop/electron/coding-runtime.test.ts",
+        "apps/desktop/electron/local-store-schema.test.ts",
+        "apps/desktop/electron/native-coding-v2-runtime.test.ts",
+        "apps/desktop/src/AgentMemoryPanel.test.tsx",
+        "packages/shared/src/memory-learning.test.ts",
+        "packages/shared/src/retrieval-memory.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix: 按审阅收窄策略晋升，存储层校验策略授权，跨任务去重生效\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-13",
+      "title": "fix(desktop): Native 编码的用量带上团队模型调用编号，团队端不再重复计算（#199）",
+      "baseSha": "e9ce1f5171a9bd4c244131ce42fd4edc30afc25e",
+      "referenceSha": "95929ec1717d78b368b9d20eed8feedc9ffdc8b4",
+      "acceptanceTests": [
+        "apps/desktop/electron/native-coding-provider-trace.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): Native 编码的用量带上团队模型调用编号，团队端不再重复计算（#199）\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-14",
+      "title": "fix: 按审阅修复 repair 片段脱敏、相关度门槛与讨论栏超限顺序",
+      "baseSha": "33634af4b2eb0cbaa20226f212ae18d795937952",
+      "referenceSha": "77451d361eadebee6a1696ff3a3a1bb9002f29bc",
+      "acceptanceTests": [
+        "apps/desktop/electron/main-agent-runtime-wiring.test.ts",
+        "apps/desktop/electron/native-coding-v2-repair-prompt.test.ts",
+        "apps/desktop/electron/workbench-conversation-service.test.ts",
+        "packages/shared/src/memory-relevance.test.ts",
+        "packages/shared/src/test-failure-locations.test.ts",
+        "packages/shared/src/workflow-agent.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: 按审阅修复 repair 片段脱敏、相关度门槛与讨论栏超限顺序\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-15",
+      "title": "fix(desktop): 配对前的阶段用量上传时记到配对用户名下（X1）",
+      "baseSha": "de1bd78f5683c288cedb03e9e549486a01345231",
+      "referenceSha": "d1daabfc32f4d0af6fdebac58c5b96625b99af1d",
+      "acceptanceTests": [
+        "apps/api/src/repositories/team-repository.test.ts",
+        "apps/desktop/electron/project-bound-remote-sync.test.ts",
+        "apps/desktop/electron/remote-sync-outbox-client.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix(desktop): 配对前的阶段用量上传时记到配对用户名下（X1）\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-16",
+      "title": "fix(desktop): 收尾残留的英文界面文案",
+      "baseSha": "3b04aa0c2fc6d25e950ab93dbd00564f69f5176e",
+      "referenceSha": "fc35b1531eaa95f42043b47bebed12896d25bdbc",
+      "acceptanceTests": [
+        "apps/desktop/src/App.test.tsx",
+        "apps/desktop/src/app/coding-runtime-readiness-view-model.test.ts",
+        "apps/desktop/src/views/SettingsView.test.tsx",
+        "tests/e2e/desktop.spec.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): 收尾残留的英文界面文案\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-17",
+      "title": "fix: 测试证据规范只在测试阶段作为 Gate 依据",
+      "baseSha": "b863e9de9f4c9e66e68ecc0ff961b3b4c5eef7c2",
+      "referenceSha": "4e0e59454ab87c723408de3d51c50d80d1dafab5",
+      "acceptanceTests": [
+        "packages/shared/src/agent-review.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: 测试证据规范只在测试阶段作为 Gate 依据\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-18",
+      "title": "fix: 工作区改造 S1：修正 CI 发现的界面回归与 e2e 定位",
+      "baseSha": "8ab21bf5141f9356713f755084fcb17d43c2e2f8",
+      "referenceSha": "7e003dc4af1c7c1bc39ebe8b04cdc03eec5c7d61",
+      "acceptanceTests": [
+        "apps/desktop/src/App.test.tsx",
+        "apps/desktop/src/app/node-inspector-view-model.test.ts",
+        "tests/e2e/desktop.spec.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix: 工作区改造 S1：修正 CI 发现的界面回归与 e2e 定位\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-19",
+      "title": "fix(desktop): keep completed acceptance actions read-only",
+      "baseSha": "87ae041c96c68dc26e318656a931a7406de62bd6",
+      "referenceSha": "aa9367bf413a8fa9536cbd6f8637a979c10b08a6",
+      "acceptanceTests": [
+        "apps/desktop/src/App.test.tsx",
+        "apps/desktop/src/app/node-inspector-view-model.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): keep completed acceptance actions read-only\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-20",
+      "title": "fix(desktop): bind review opinions to exact artifact revision",
+      "baseSha": "edc35046398ef8cd70c323ff6d36f9dac3e87870",
+      "referenceSha": "87ae041c96c68dc26e318656a931a7406de62bd6",
+      "acceptanceTests": [
+        "apps/desktop/src/components/GateMaterialReader.test.tsx"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): bind review opinions to exact artifact revision\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-21",
+      "title": "fix(desktop): reconcile Gate approval after storage failures",
+      "baseSha": "35f9981f5198e8874e51657489187080ad6adc6c",
+      "referenceSha": "6884d09f14512d1fc3f80796d5a883a9db674507",
+      "acceptanceTests": [
+        "apps/desktop/electron/workflow-runtime.test.ts",
+        "apps/desktop/src/App.test.tsx"
+      ],
+      "split": "holdout",
+      "prompt": "fix(desktop): reconcile Gate approval after storage failures\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-22",
+      "title": "fix(desktop): observe binding revocation after delivery completion",
+      "baseSha": "075e711b8591bcbdf41260ac6578d8b37209126b",
+      "referenceSha": "a876dd83c57890a449237ecf55465e921ee3bab0",
+      "acceptanceTests": [
+        "apps/desktop/electron/main-github-delivery-background.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): observe binding revocation after delivery completion\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-23",
+      "title": "fix(desktop): move conversation details into a Tab dialog (#163)",
+      "baseSha": "c7b4f525330a047f4a25475590a764ae96fc0960",
+      "referenceSha": "7d12bfaa537382a2aec5c411ed666f2629327610",
+      "acceptanceTests": [
+        "apps/desktop/src/WorkbenchWorkspace.test.tsx"
+      ],
+      "split": "development",
+      "prompt": "fix(desktop): move conversation details into a Tab dialog (#163)\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-24",
+      "title": "fix(coding): account for failed provider responses before retry budgets",
+      "baseSha": "bbf61be20dccadd1ef9b5ab812e75e4133bd8033",
+      "referenceSha": "9cd1281fd2f1b4877759ac1d3878aceeb652937f",
+      "acceptanceTests": [
+        "apps/api/src/repositories/postgres-team-repository.test.ts",
+        "apps/desktop/electron/local-store.test.ts",
+        "apps/desktop/electron/native-coding-provider-trace.test.ts",
+        "apps/desktop/electron/project-bound-remote-sync.test.ts",
+        "packages/shared/src/agent-review.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix(coding): account for failed provider responses before retry budgets\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-25",
+      "title": "fix(conversations): expose verified PR publication facts",
+      "baseSha": "8c4387ee472bd0ed0364dc03ade9e885d955c1d8",
+      "referenceSha": "e62c79ad872e9e306be2938d3d09dd506a4c868a",
+      "acceptanceTests": [
+        "apps/desktop/electron/workbench-conversation-service.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(conversations): expose verified PR publication facts\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-26",
+      "title": "fix(coding): explain model bounds and classify rejected output",
+      "baseSha": "000d4b39cca4f17cb7265a34628100f167a36783",
+      "referenceSha": "8c4387ee472bd0ed0364dc03ade9e885d955c1d8",
+      "acceptanceTests": [
+        "apps/desktop/electron/native-coding-provider-trace.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(coding): explain model bounds and classify rejected output\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-27",
+      "title": "fix(coding): preserve approved requirements in bounded context",
+      "baseSha": "72d4fa093e262a13e19f69036c37c4b9df28bdb0",
+      "referenceSha": "000d4b39cca4f17cb7265a34628100f167a36783",
+      "acceptanceTests": [
+        "packages/shared/src/coding-agent.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix(coding): preserve approved requirements in bounded context\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-28",
+      "title": "fix(workflow): include saved conversation decisions in stage prompts",
+      "baseSha": "b30b4f59bd25f380e3e5eda488eee6f0bd7f389f",
+      "referenceSha": "72d4fa093e262a13e19f69036c37c4b9df28bdb0",
+      "acceptanceTests": [
+        "packages/shared/src/workflow-agent.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix(workflow): include saved conversation decisions in stage prompts\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-29",
+      "title": "fix: wire evidence evaluation into packaged MCP runtime",
+      "baseSha": "a2adf1bbb45091f58030d9ec03f9d92be394778b",
+      "referenceSha": "f11246c1c6b2be94ee7f12e8a91ae48f69a00d2d",
+      "acceptanceTests": [
+        "apps/desktop/electron/local-mcp-runtime.test.ts",
+        "apps/desktop/electron/native-coding-v2-runtime.test.ts",
+        "scripts/desktop-pilot-smoke.test.ts"
+      ],
+      "split": "development",
+      "prompt": "fix: wire evidence evaluation into packaged MCP runtime\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-30",
+      "title": "fix: recheck memory before OpenCode permission relay",
+      "baseSha": "b0ca895d544124e766c9b810b3ac7ae78373a412",
+      "referenceSha": "386e95f5967e24a08c6b8996844ca4bfc1127d55",
+      "acceptanceTests": [
+        "apps/desktop/electron/opencode-http-engine.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix: recheck memory before OpenCode permission relay\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-31",
+      "title": "fix: keep empty gate reviews free of synthetic findings",
+      "baseSha": "b326f77ad5d9ad1363c1840d365caae7ac3048fb",
+      "referenceSha": "1c6c32ac94428a06ebd3b7efbe922ce1f0baaa06",
+      "acceptanceTests": [
+        "packages/shared/src/agent-review.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix: keep empty gate reviews free of synthetic findings\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-32",
+      "title": "fix(web): preserve pairing requests across initial effects",
+      "baseSha": "a8e1a777c7e0f8c60489ffa3207701af291b810f",
+      "referenceSha": "425de5b36aed37d2b59de59ae5d7352a64e32dae",
+      "acceptanceTests": [
+        "apps/web/app/PairingCodePanel.test.tsx"
+      ],
+      "split": "holdout",
+      "prompt": "fix(web): preserve pairing requests across initial effects\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-33",
+      "title": "fix(delivery): validate path sets independently of database collation",
+      "baseSha": "b48de51f003ae16d234cd4d68da65ee31a87270d",
+      "referenceSha": "d53dd2940e69696933d3042eb48a916cfad6152b",
+      "acceptanceTests": [
+        "apps/api/src/db/migrate.test.ts",
+        "apps/api/src/db/schema.test.ts",
+        "apps/desktop/src/App.test.tsx"
+      ],
+      "split": "holdout",
+      "prompt": "fix(delivery): validate path sets independently of database collation\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-34",
+      "title": "fix(desktop): select saved Provider credentials for OpenCode",
+      "baseSha": "d743ea3c2279482db10d05c4db32354c569b3156",
+      "referenceSha": "ba53ceb986df5807dfd86dfb4e01d9aa88130f18",
+      "acceptanceTests": [
+        "apps/desktop/src/App.test.tsx"
+      ],
+      "split": "holdout",
+      "prompt": "fix(desktop): select saved Provider credentials for OpenCode\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    },
+    {
+      "id": "devflow-history-35",
+      "title": "fix(opencode): capture final changes only after session becomes idle",
+      "baseSha": "540657703d49e603042fd27fd6d0db08d9f76361",
+      "referenceSha": "9f66a51817f95134fb46ccdfdbfdb8e18718f348",
+      "acceptanceTests": [
+        "apps/desktop/electron/opencode-http-engine.test.ts"
+      ],
+      "split": "holdout",
+      "prompt": "fix(opencode): capture final changes only after session becomes idle\nImplement the described behavior in this repository. Preserve compatible behavior and explain the actual checks performed. Do not remove tests or weaken permission, evidence, or cost checks."
+    }
+  ],
+  "revision": 2,
+  "previousManifestDigest": "d6574dd82415145739461cc672e13b16fb9d4acf47d6e6ddf01ea692c1b690e6",
+  "amendmentReason": "Before any model experiments: keep all original candidates, and add five historical candidates after qualification identified non-discriminating or unsupported acceptance. No model outcome was used for selection."
+}

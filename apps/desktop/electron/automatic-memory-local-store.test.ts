@@ -339,7 +339,7 @@ describe('automatic memory identity, persisted evidence and source policy', () =
     retained.run(`insert into agent_memory_candidate_dismissals values(?, 'local', ?, null, null, ?, ?, 'coding_run', ?, ?, ?, ?)`,
       [legacy.id, project.id, legacy.scope.userId, legacy.scope.sessionId, legacy.contentDigest, legacy.provenanceDigest, legacy.scope.userId, now])
     await writeFile(dbPath, Buffer.from(retained.export())); retained.close()
-    const migrated = await createLocalStore({ dbPath }); expect(await migrated.getSchemaVersion()).toBe(40); migrated.close()
+    const migrated = await createLocalStore({ dbPath }); expect(await migrated.getSchemaVersion()).toBe(41); migrated.close()
     const checked = new SQL.Database(await readFile(dbPath))
     expect(checked.exec('pragma foreign_key_check')).toEqual([])
     const parents = checked.exec('pragma foreign_key_list(agent_memory_revisions)')[0]!.values.map(row => row[2])

@@ -2,7 +2,7 @@ import type { Database } from 'sql.js'
 import { createMemoryLearningTables } from './automatic-memory-store'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 40
+export const CURRENT_SCHEMA_VERSION = 41
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2954,6 +2954,34 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       } finally {
         db.run('pragma legacy_alter_table = off')
       }
+    },
+  },
+  {
+    version: 41,
+    migrate(db) {
+      // Native v3 sessions. Before merging main this table was the draft branch's schema 39, so a
+      // database written by that branch skipped main's schema 39; its Hindsight tables are created
+      // here as well. Both statements are no-ops on databases that followed main.
+      db.run(`
+        create table if not exists hindsight_configurations (
+          generation text primary key, project_id text not null, json text not null
+        );
+        create index if not exists hindsight_config_project on hindsight_configurations(project_id);
+        create table if not exists hindsight_projections (
+          id text primary key, project_id text not null, json text not null
+        );
+        create index if not exists hindsight_projection_project on hindsight_projections(project_id);
+        create table if not exists native_coding_sessions (
+          id text primary key,
+          local_project_id text not null references local_projects(id) on delete cascade,
+          coding_run_id text not null unique,
+          version integer not null check (version > 0),
+          status text not null,
+          updated_at text not null,
+          json text not null
+        );
+        create index if not exists native_coding_sessions_project on native_coding_sessions(local_project_id, updated_at);
+      `)
     },
   },
 ]

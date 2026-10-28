@@ -1,15 +1,17 @@
 import { estimateAgentTokenUsage } from './agent-review'
 import { resolveDeepSeekPricingSnapshot, rollupTokenUsage, runtimeCostSummaryToTokenUsage, type TokenUsageRollup } from './cost'
 import type { AgentProviderUsage, BudgetGuardDecision, TokenUsage, CodingRuntimeCostSummary } from './domain'
-import { buildModelCostRecords, type ModelCostEvent, type ModelCostRecord } from './model-cost-recovery'
+import { buildModelCostRecords, canonicalFinancialValue, type ModelCostEvent, type ModelCostRecord } from './model-cost-recovery'
 
 /** Financial metadata only: never prompts, responses, API keys or conversation text. */
+export type ModelTaskBudget = { rootId: string; taskId: string; parentTaskId?: string; maxTokens: number; maxCostUsd: number; rootMaxTokens: number; rootMaxCostUsd: number }
 export type ModelCallQuote = {
   id: string; projectId: string; providerId: string; model: string; createdAt: string
   inputTokens: number; maxOutputTokens: number | null
   boundBasis?: 'deepseek-context-v1'
   operation?: { id: string; version: string; purpose: string }
   continuationId?: string
+  task?: ModelTaskBudget
   billingProvider: 'deepseek' | 'openai_compatible'; approvalId?: string
 }
 export type ModelCallSettlement = {
@@ -58,9 +60,38 @@ export function parseModelCallQuote(value: unknown): ModelCallQuote {
   if (v.continuationId !== undefined) parseBudgetAttemptIds([v.continuationId])
   if (v.operation) {
     parseBudgetAttemptIds([v.operation.id])
-    if (!/^[a-f0-9]{64}$/u.test(v.operation.version) || !['conversation','proposal','review','workflow','native-tool'].includes(v.operation.purpose)) throw new Error('Invalid operation scope')
+    if (!/^[a-f0-9]{64}$/u.test(v.operation.version) || !['conversation','proposal','review','workflow','native-tool','coding','coding-compaction'].includes(v.operation.purpose)) throw new Error('Invalid operation scope')
   }
-  return { id:v.id, projectId:v.projectId, providerId:v.providerId, model:v.model, createdAt:v.createdAt, inputTokens:v.inputTokens, maxOutputTokens:v.maxOutputTokens, billingProvider:v.billingProvider, ...(v.boundBasis ? { boundBasis: v.boundBasis } : {}), ...(v.operation ? { operation: { ...v.operation } } : {}), ...(v.continuationId ? { continuationId: v.continuationId } : {}), ...(v.approvalId ? {approvalId:v.approvalId} : {}) }
+  if (v.task) {
+    parseBudgetAttemptIds([...new Set([v.task.rootId, v.task.taskId, ...(v.task.parentTaskId ? [v.task.parentTaskId] : [])])])
+    for (const key of ['maxTokens','rootMaxTokens'] as const) if (!Number.isSafeInteger(v.task[key]) || v.task[key] < 1 || v.task[key] > 1_000_000_000) throw new Error('Invalid task token budget')
+    for (const key of ['maxCostUsd','rootMaxCostUsd'] as const) if (!Number.isFinite(v.task[key]) || v.task[key] < 0 || v.task[key] > 1000000) throw new Error('Invalid task cost budget')
+    if (v.task.maxCostUsd > v.task.rootMaxCostUsd || v.task.maxTokens > v.task.rootMaxTokens || (v.task.taskId === v.task.rootId) === Boolean(v.task.parentTaskId) || (v.task.parentTaskId && v.task.parentTaskId !== v.task.rootId)) throw new Error('Invalid task budget hierarchy')
+  }
+  return { id:v.id, projectId:v.projectId, providerId:v.providerId, model:v.model, createdAt:v.createdAt, inputTokens:v.inputTokens, maxOutputTokens:v.maxOutputTokens, billingProvider:v.billingProvider, ...(v.task ? { task: { ...v.task } } : {}), ...(v.boundBasis ? { boundBasis: v.boundBasis } : {}), ...(v.operation ? { operation: { ...v.operation } } : {}), ...(v.continuationId ? { continuationId: v.continuationId } : {}), ...(v.approvalId ? {approvalId:v.approvalId} : {}) }
+}
+
+/** Called within the same project-budget transaction as admission; never grants another allowance. */
+export function modelTaskBudgetBlock(quote: ModelCallQuote, attempts: ModelCallAttempt[], userId: string, nextCost: number | null, effectiveCosts = new Map<string, number | null>()): string | null {
+  const task = quote.task
+  if (!task) return null
+  parseModelCallQuote(quote)
+  const group = attempts.filter(row => row.task?.rootId === task.rootId)
+  if (group.some(row => row.projectId !== quote.projectId || row.userId !== userId || row.providerId !== quote.providerId || row.model !== quote.model || row.task!.rootMaxTokens !== task.rootMaxTokens || row.task!.rootMaxCostUsd !== task.rootMaxCostUsd)) throw new Error('Task budget scope is immutable')
+  if (task.parentTaskId && !group.some(row => row.task?.taskId === task.rootId)) throw new Error('Root task must be admitted before delegation')
+  const own = group.filter(row => row.task?.taskId === task.taskId)
+  if (own.some(row => canonicalFinancialValue(row.task) !== canonicalFinancialValue(task))) throw new Error('Task budget is immutable')
+  const costOf = (row: ModelCallAttempt): number => {
+    if (row.state === 'not_sent') return 0
+    const actual = effectiveCosts.has(row.id) ? effectiveCosts.get(row.id) : row.costUsd
+    return actual ?? row.verifiedBound?.costUsd ?? (row.state === 'reserved' ? row.projectedCostUsd ?? Infinity : Infinity)
+  }
+  const tokensOf = (row: ModelCallAttempt) => row.state === 'not_sent' ? 0 : row.usage?.usageCompleteness !== 'partial' && row.usage?.inputTokens !== undefined && row.usage?.outputTokens !== undefined
+    ? row.usage.inputTokens + row.usage.outputTokens : (row.verifiedBound?.inputTokenBound ?? row.inputTokens) + (row.maxOutputTokens ?? Infinity)
+  const nextTokens = (verifiedModelCallBound(quote)?.inputTokenBound ?? quote.inputTokens) + (quote.maxOutputTokens ?? Infinity)
+  if (group.reduce((sum, row) => sum + costOf(row), 0) + (nextCost ?? Infinity) > task.rootMaxCostUsd + 1e-9 || group.reduce((sum, row) => sum + tokensOf(row), 0) + nextTokens > task.rootMaxTokens) return '总任务预算不足；子任务、压缩及未知费用仍计入总额度。'
+  if (own.reduce((sum, row) => sum + costOf(row), 0) + (nextCost ?? Infinity) > task.maxCostUsd + 1e-9 || own.reduce((sum, row) => sum + tokensOf(row), 0) + nextTokens > task.maxTokens) return '当前子任务预算不足；不能重新命名请求来重置额度。'
+  return null
 }
 export function parseModelCallSettlement(value: unknown): ModelCallSettlement {
   if (!value || typeof value !== 'object') throw new Error('Invalid model call settlement')

@@ -8,6 +8,8 @@ function onIpcPayload<T>(channel: string, listener: (payload: T) => void) {
 }
 
 const desktopApi: DevFlowDesktopApi = {
+  codingHarness: input => ipcRenderer.invoke(ipcChannels.codingHarness, input),
+  onCodingHarnessUpdated: listener => onIpcPayload(ipcChannels.codingHarnessUpdated, listener),
   listDiagnosticRecords: () => ipcRenderer.invoke(ipcChannels.listDiagnosticRecords),
   listCredentialAccess: () => ipcRenderer.invoke(ipcChannels.listCredentialAccess),
   cancelCredentialAccess: (id) => ipcRenderer.invoke(ipcChannels.cancelCredentialAccess, id),

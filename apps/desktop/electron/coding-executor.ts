@@ -9,6 +9,11 @@ import {
   type CodingExecutorTerminalTurn,
   type TestEvidence,
   type AgentProviderUsage,
+  type CodingAgentRun,
+  type CodingAgentEvent,
+  type CodingHarnessCommand,
+  type CodingHarnessSnapshot,
+  type CodingDiffArtifact,
 } from '@ai-devflow/shared'
 import type {
   CodingEngineAdapter,
@@ -42,6 +47,16 @@ export type CodingExecutorStartResult =
   | CodingExecutorQuestionResult
   | CodingExecutorWaitingPermissionResult
   | CodingExecutorCompletedResult
+  | CodingExecutorHarnessResult
+
+export type CodingExecutorHarnessResult = {
+  kind: 'harness'
+  protocolVersion: 2
+  codingRun: CodingAgentRun
+  events: CodingAgentEvent[]
+  snapshot: CodingHarnessSnapshot
+  completion?: { diff: CodingDiffArtifact; testEvidence?: TestEvidence; manualEvidence?: import('./coding-evidence-v3').CodingDeliveryEvidence }
+}
 
 export type CodingExecutorStartInput = {
   request: CodingExecutorRequest
@@ -57,6 +72,11 @@ export type CodingExecutorContinuePermissionInput = {
 }
 
 export type CodingExecutor = {
+  harness?: {
+    protocolVersion: 2
+    command(command: CodingHarnessCommand, assertAuthority: () => Promise<void>): Promise<CodingExecutorHarnessResult>
+    recover(codingRun: CodingAgentRun, assertAuthority: () => Promise<void>): Promise<CodingExecutorHarnessResult | null>
+  }
   descriptor: CodingExecutorDescriptor
   engine: CodingEngineAdapter['engine']
   providerId: string

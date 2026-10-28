@@ -1,5 +1,5 @@
 import {afterEach,describe,expect,it,vi} from 'vitest'
-import {projectedModelCallCost,type ModelCallQuote,modelCallBudgetRollup,parseModelCallSettlement} from '@ai-devflow/shared'
+import {projectedModelCallCost,verifiedModelCallBound,type ModelCallQuote,modelCallBudgetRollup,parseModelCallSettlement} from '@ai-devflow/shared'
 import {createSeedTeamRepository} from './team-repository'
 const context={organizationId:'org-demo',userId:'u-ling'}
 const now='2026-09-23T18:00:00.000Z'
@@ -7,6 +7,16 @@ const quote=(id:string):ModelCallQuote=>({id,projectId:'p-payments',providerId:'
 async function setup(limit=50){vi.useFakeTimers();vi.setSystemTime(now);const repo=createSeedTeamRepository();await repo.saveRuntimeBudgetPolicy({projectId:'p-payments',enabled:true,monthlyLimitUsd:limit,warningThresholdUsd:limit*.8,currency:'USD',updatedAt:now},context);return repo}
 afterEach(()=>vi.useRealTimers())
 describe('atomic per-call model budget',()=>{
+ it('enforces root and child task caps atomically in addition to project allowance',async()=>{
+  const repo=await setup(), bounded=(id:string)=>({...quote(id),boundBasis:'deepseek-context-v1' as const}), cost=verifiedModelCallBound(bounded('base'))!.costUsd
+  const task={rootId:'root-task',taskId:'root-task',maxTokens:4000000,maxCostUsd:cost*2.5,rootMaxTokens:4000000,rootMaxCostUsd:cost*2.5}
+  expect((await repo.reserveModelCall({...bounded('parent'),task},context)).accepted).toBe(true)
+  const results=await Promise.all(['child-a','child-b'].map(id=>repo.reserveModelCall({...bounded(id),task:{...task,taskId:id,parentTaskId:'root-task',maxTokens:2000000,maxCostUsd:cost*1.5}},context)))
+  expect(results.filter(item=>item.accepted)).toHaveLength(1)
+  const rejected=results.find(item=>!item.accepted)!
+  expect(rejected.decision.reason).toContain('任务')
+  await expect(repo.reserveModelCall({...quote('changed-root'),task:{...task,rootMaxCostUsd:100,maxCostUsd:100}},context)).rejects.toThrow(/immutable/)
+ })
  it('persists a received result for recovery without publishing a provisional dispatch marker',async()=>{
   const repo=await setup();const priorTokens=(await repo.getTeamOverview(context)).projectCost.find(r=>r.key==='p-payments')?.totalTokens??0;await repo.reserveModelCall(quote('queued'),context)
   await repo.persistModelCallSettlement({id:'queued',projectId:'p-payments',state:'failed'},context)
