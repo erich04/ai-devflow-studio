@@ -7488,6 +7488,48 @@ describe('App', () => {
     expect(api.runCodingAgent).not.toHaveBeenCalled()
   })
 
+  it('states a normal budget check in plain Chinese and keeps the English result in the details (#227)', async () => {
+    let notify!: Parameters<NonNullable<DevFlowDesktopApi['onModelBudgetUpdated']>>[0]
+    installDesktopApi({
+      loadState: vi.fn().mockResolvedValue(localStateAtCurrentNode('n-design-gate')),
+      onModelBudgetUpdated: (listener) => { notify = listener; return () => {} },
+    })
+    render(<App />)
+    await screen.findByTestId('node-inspector')
+    act(() => notify({ projectId: localProject.id, providerId: agentProvider.id,
+      decision: { status: 'allowed', blocksRun: false, currentSpendUsd: 0.01, projectedCostUsd: 0.001,
+        reason: 'Projected runtime cost is within the project budget threshold.' } }))
+    const models = openSettingsSection('模型与执行方式')
+    const summary = await within(models).findByTestId('runtime-budget-summary')
+    expect(summary).toHaveTextContent('最近一次检查在预算内')
+    expect(within(models).queryByText(/最近一次模型预算检查/)).not.toBeInTheDocument()
+    // The raw result is kept for diagnosis, folded under 预算说明.
+    const details = within(models).getByText('预算说明').closest('details')!
+    expect(details).not.toHaveAttribute('open')
+    expect(details).toHaveTextContent('Projected runtime cost is within the project budget threshold.')
+  })
+
+  it('says why the Team budget cannot be read, offers one retry, and keeps the diagnosis folded (#227)', async () => {
+    const api = installDesktopApi({
+      getCodingRuntimeBudgetPolicy: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'devflow:budget': RemoteSyncHttpError: 暂时无法连接团队服务。请检查网络和服务地址后重试。 诊断编号：diag-1")),
+      loadState: vi.fn().mockResolvedValue({ ...localStateAtCurrentNode('n-design-gate'), codingRuns: [] }),
+    })
+    render(<App />)
+    await screen.findByTestId('node-inspector')
+    const models = openSettingsSection('模型与执行方式')
+    const alert = await within(models).findByRole('alert')
+    expect(alert).toHaveTextContent('暂时无法连接团队服务。请检查网络和服务地址后重试。需要调用模型的操作会先暂停')
+    expect(alert.querySelector('p')).not.toHaveTextContent('RemoteSyncHttpError')
+    expect(alert.querySelector('details')).not.toHaveAttribute('open')
+    expect(alert.querySelector('details')).toHaveTextContent('诊断编号：diag-1')
+    // Unknown amounts are not shown as “尚未配置”, and one button retries.
+    expect(within(models).queryByTestId('runtime-budget-summary')).not.toBeInTheDocument()
+    expect(within(models).queryByRole('button', { name: '同步云端预算策略' })).not.toBeInTheDocument()
+    vi.mocked(api.getCodingRuntimeBudgetPolicy).mockClear()
+    fireEvent.click(within(models).getByRole('button', { name: '重试读取预算' }))
+    await waitFor(() => expect(api.getCodingRuntimeBudgetPolicy).toHaveBeenCalledTimes(1))
+  })
+
   it('shows the Team budget read-only, points to Web settings, and picks up a Web change after sync (plan S5, Q7)', async () => {
     const api = installDesktopApi({ getCodingRuntimeBudgetPolicy:vi.fn().mockResolvedValue(null), loadState: vi.fn().mockResolvedValue({
       ...localStateAtCurrentNode('n-design-gate'), codingRuns: [],
