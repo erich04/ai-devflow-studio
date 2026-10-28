@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { CODING_MEMORY_RECALL_BUDGET } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import { createLocalStore, type LocalStore } from './local-store'
-import { createProjectMemoryRecall, projectMemoryStatement } from './project-memory-recall'
+import { createProjectMemoryRecall, projectMemoryStatement, rankProjectMemories } from './project-memory-recall'
 
 const directories: string[] = []
 const stores: LocalStore[] = []
@@ -38,7 +38,7 @@ async function fixture(options: { transport?: boolean } = {}) {
 it('recalls the project bank with a bounded query and labels each memory', async () => {
   const { recall, client, config, owner } = await fixture()
   const result = await recall.recall({ projectId: 'project', userId: owner, query: `删除确认 ${'背景'.repeat(2_000)}`, budget: CODING_MEMORY_RECALL_BUDGET })
-  expect(client.recallMemories).toHaveBeenCalledWith(config.bankId, expect.objectContaining({ maxTokens: 2_000 }))
+  expect(client.recallMemories).toHaveBeenCalledWith(config.bankId, expect.objectContaining({ maxTokens: 4_000 }))
   const sent = (client.recallMemories.mock.calls[0] as unknown as [string, { query: string }])[1].query
   expect(new TextEncoder().encode(sent).byteLength).toBeLessThanOrEqual(1_500)
   expect(result).toEqual({ degraded: false, items: [
@@ -67,8 +67,9 @@ it('degrades to no memory when Hindsight fails, and searches with a limit', asyn
   expect(await recall.recall({ projectId: 'project', userId: owner, query: '删除', budget: CODING_MEMORY_RECALL_BUDGET }))
     .toEqual({ degraded: true, items: [] })
   expect(degraded).toEqual(['Hindsight timeout'])
-  expect(await recall.search({ projectId: 'project', query: '撤销', limit: 1 })).toEqual({
-    items: [{ id: 'pm-o1', kind: 'observation', text: '删除任务前\n要二次确认。' }] })
+  const found = await recall.search({ projectId: 'project', query: '撤销', limit: 1 })
+  expect(found?.items).toEqual([{ id: 'pm-f1', kind: 'fact', date: '2026-10-20', text: expect.stringMatching(/^撤销窗口为 5 秒/u) }])
+  expect(found?.items[0]?.text).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
   const controller = new AbortController(); controller.abort()
   client.recallMemories.mockRejectedValueOnce(new HindsightError('transport'))
   await expect(recall.search({ projectId: 'project', query: '撤销', limit: 5, signal: controller.signal })).rejects.toThrow()
@@ -77,4 +78,16 @@ it('degrades to no memory when Hindsight fails, and searches with a limit', asyn
 it('formats a statement on one line with its kind and date', () => {
   expect(projectMemoryStatement({ id: 'x', type: 'experience', text: ' 用 pnpm\n安装依赖 ', occurredAt: '2026-10-21T00:00:00Z' }))
     .toBe('[fact 2026-10-21] 用 pnpm 安装依赖')
+})
+
+it('puts memories that match a Chinese query first without dropping the rest', () => {
+  const memories: HindsightMemory[] = [
+    { id: 'a', type: 'observation', text: '项目交互约定：删除前要确认。' },
+    { id: 'b', type: 'observation', text: '删除使用 ConfirmDialog 组件。' },
+    { id: 'c', type: 'observation', text: '跑测试应使用 pnpm test:regression。' },
+    { id: 'd', type: 'observation', text: '用户要求以后都用中文回答。' },
+  ]
+  expect(rankProjectMemories(memories, '怎么跑测试？').map((memory) => memory.id)).toEqual(['c', 'a', 'b', 'd'])
+  expect(rankProjectMemories(memories, '用户希望用什么语言回答？')[0]?.id).toBe('d')
+  expect(rankProjectMemories(memories, 'unrelated').map((memory) => memory.id)).toEqual(['a', 'b', 'c', 'd'])
 })

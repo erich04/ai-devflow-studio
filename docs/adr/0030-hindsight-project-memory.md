@@ -21,7 +21,7 @@ Hindsight 官方的编码 Agent 接入（Claude Code、Codex 插件）和 Codex/
    - 阶段产物：审批通过时记录被批准的澄清版本、设计和验收包；Gate 评审结果在保存时记录，标为评审意见而非决定。草稿不记录。
    - 统一限制：每个文档最多 48 KiB，超出时丢弃最早的消息或活动；写入前脱敏；不发送完整文件。
 3. **Hindsight 负责抽取和归纳。** 发送使用 `update_mode: replace`、`observation_scopes: shared`。bank 配置开启观察归纳和自动 consolidation，抽取模式 `concise`，并写入 retain/observations/reflect 三段任务说明（`PROJECT_MEMORY_MISSIONS`）。DevFlow 不做逐条抽取、去重或冲突判断。
-4. **抽取模型调用经过 DevFlow 中继，计入项目预算。** Hindsight 只持有中继令牌，不持有 Provider 密钥：
+4. **抽取模型调用经过 DevFlow 中继，计入项目预算。** 首次真实验证见[2026-10-28 记录](../validation/project-memory-live-20261028.md)：每个文档约 1.6 次调用、不到 0.1 美分。 Hindsight 只持有中继令牌，不持有 Provider 密钥：
    - 中继监听本机 `127.0.0.1:8891`（`DEVFLOW_MEMORY_RELAY_PORT`，Linux Docker 可用 `DEVFLOW_MEMORY_RELAY_HOST` 指定网桥地址），校验 Bearer 令牌。令牌首次启动时生成，保存在 userData 的 `memory-relay-token`（权限 0600），也可由 `DEVFLOW_MEMORY_RELAY_TOKEN` 指定。
    - Hindsight 开启 `HINDSIGHT_API_LLM_SEND_BANK_AS_USER`，用 OpenAI `user` 字段带上 bank id。中继据此找到项目，转发前删除该字段。
    - 只有已配对团队项目、项目记忆已开启且归属一致时才放行；同项目当前的仓库知识 bank（ADR 0027）也走同一路由。每次调用通过 `governedModelCall` 预留和结算，没有预算续期提示；拒绝时返回 429，未配对或无法读取预算时返回 403，均不调用模型。
@@ -33,7 +33,7 @@ Hindsight 官方的编码 Agent 接入（Claude Code、Codex 插件）和 Codex/
 ## 召回
 
 - 编码简报、阶段 Agent、Gate 评审和讨论栏在项目记忆开启时，从项目 bank 召回（`observation` 优先，同一事实不重复给出），不再查询本地记忆；未开启的项目保持原行为，直到第四期迁移。召回只检索，不调用模型。
-- 查询沿用各入口原有的查询文本（截断到 1.5 KiB），结果按各入口原有的条数和字节预算选取，不拆分单条记忆。每条写成一行，带类型和日期，例如 `[observation] …`、`[fact 2026-10-20] …`，作为低信任背景，规则与 ADR 0024 第 3 节相同。
+- 查询沿用各入口原有的查询文本（截断到 1.5 KiB）。镜像自带的 embedding 和 reranker 是英文模型，对中文问题排序很弱，所以 DevFlow 多要一些候选，再用自己的中文 BM25 与 Hindsight 的顺序做倒数排名融合，最后按各入口原有的条数和字节预算选取，不拆分单条记忆。换成多语言模型需要下载模型、改变部署，暂未采用。每条写成一行，带类型和日期，例如 `[observation] …`、`[fact 2026-10-20] …`，作为低信任背景，规则与 ADR 0024 第 3 节相同。
 - 回执沿用原格式：`pm-<Hindsight id>`、revision 1、所发送文本的摘要。发送前（讨论、评审）和编码继续前都会检查项目记忆仍开启且归属未变，否则停止并要求用当前上下文重来。单条记忆被删除后的检查在第三期随删除功能加入。
 - Hindsight 不可用时按「没有记忆」继续，不阻断任务，并记录一次降级日志。
 - 讨论栏新增只读工具 `memory_search({query, limit≤8})`，Direct、OpenCode（MCP）和原生工具三种执行方式共用。没有加 `memory_save`：讨论工具保持只读，整段讨论本来就会自动写入记忆，用户说「记住……」的那句话会被 Hindsight 抽取。Native Coding v3 的 `memory_search` 在 v3 合并到 main 后接入。
