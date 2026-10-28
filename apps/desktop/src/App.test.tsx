@@ -1,4 +1,4 @@
-import { modelCostRecoveryOverview } from '@ai-devflow/shared'
+import { modelCostRecoveryOverview, sha256Text } from '@ai-devflow/shared'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -245,6 +245,7 @@ function codingReadinessFixture(
 
 function reviewedDesignGateState() {
   const subjectArtifact = fixtureArtifacts.find((artifact) => artifact.id === 'art-design')!
+  const approvedRequirement = fixtureArtifacts.find((artifact) => artifact.id === 'art-clarify')!
   const reference = {
     id: 'knowledge-reference-design-review',
     runId: fixtureRuns[0]!.id,
@@ -294,22 +295,23 @@ function reviewedDesignGateState() {
         sanitizerVersion: 'redaction-v1',
         coverage: 'complete',
       },
-      subjectArtifacts: [{
-        id: subjectArtifact.id,
-        runId: subjectArtifact.runId,
-        nodeId: subjectArtifact.nodeId,
-        kind: subjectArtifact.kind,
-        updatedAt: subjectArtifact.updatedAt,
-        contentDigest: 'artifact-digest-design-1',
+      // A design Gate Review covers the approved requirement and the design, as the runtime records it.
+      subjectArtifacts: [approvedRequirement, subjectArtifact].map((artifact) => ({
+        id: artifact.id,
+        runId: artifact.runId,
+        nodeId: artifact.nodeId,
+        kind: artifact.kind,
+        updatedAt: artifact.updatedAt,
+        contentDigest: artifact.kind === 'design' ? 'artifact-digest-design-1' : 'artifact-digest-clarify-1',
         sanitizerVersion: 'redaction-v1',
-        coverage: 'complete',
+        coverage: 'complete' as const,
         chunks: [{
           index: 0,
           start: 0,
-          end: subjectArtifact.content.length,
-          contentDigest: 'artifact-chunk-digest-design-1',
+          end: artifact.content.length,
+          contentDigest: artifact.kind === 'design' ? 'artifact-chunk-digest-design-1' : 'artifact-chunk-digest-clarify-1',
         }],
-      }],
+      })),
       knowledgeCriteria: [{
         referenceId: reference.id,
         documentId: reference.documentId,
@@ -357,7 +359,7 @@ function reviewedDesignGateState() {
   return desktopState({
     projects: [localProject],
     runs: [fixtureRuns[0]!],
-    artifacts: [subjectArtifact],
+    artifacts: [approvedRequirement, subjectArtifact],
     testEvidence: [testEvidence],
     agentReviews: [review],
     desktopPairingCredential: fixturePairingCredential,
@@ -2466,7 +2468,7 @@ describe('App', () => {
 
     // Settings only configure (plan Y2, W5): no generation or Gate Review entry there.
     const models = openSettingsSection('模型与执行方式')
-    expect(within(models).queryByRole('button', { name: /运行门禁审查|重新审查/ })).not.toBeInTheDocument()
+    expect(within(models).queryByRole('button', { name: /运行门禁审查|审查当前|重新审查/ })).not.toBeInTheDocument()
     expect(within(models).queryByRole('button', { name: /生成需求/ })).not.toBeInTheDocument()
     const project = openSettingsSection('本地项目')
     expect(within(project).queryByRole('button', { name: /生成需求/ })).not.toBeInTheDocument()
@@ -5022,7 +5024,7 @@ describe('App', () => {
     // recovery plan is omitted rather than repeated (plan W6).
     clickInspectorTab('当前工作')
     const currentInspector = screen.getByTestId('node-inspector')
-    expect(within(within(currentInspector).getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })).toBeInTheDocument()
+    expect(within(within(currentInspector).getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })).toBeInTheDocument()
     expect(within(currentInspector).queryByText('查看恢复计划')).not.toBeInTheDocument()
     expect(within(currentInspector).queryByTestId('remediation-actions')).not.toBeInTheDocument()
   })
@@ -5050,14 +5052,18 @@ describe('App', () => {
     expect(sources).not.toHaveTextContent('审查时的记录时间')
     expect(sources).not.toHaveTextContent('Baseline tests passed before implementation.')
 
+    // 当前工作 keeps one summary line beside the body; the full report has one home (#252).
     clickInspectorTab('当前工作')
-    const evidence = within(inspector).getByTestId('review-evidence-results')
+    const summary = within(inspector).getByTestId('review-reference-summary')
     expect(inspector).toHaveTextContent('方案设计')
-    expect(evidence).toHaveTextContent('历史或尚未核验绑定的审查')
+    await waitFor(() => expect(summary).toHaveTextContent('这份审查报告不能证明当前正文已审查'))
+    expect(within(inspector).queryByTestId('review-report')).not.toBeInTheDocument()
+    expect(inspector).not.toHaveTextContent('The complete design Artifact satisfies the API contract criteria.')
+    fireEvent.click(within(summary).getByRole('button', { name: '在「材料与版本」查看完整报告' }))
+    const evidence = within(inspector).getByTestId('review-report')
     expect(evidence).toHaveTextContent('artifact-digest-design-1')
     expect(evidence).toHaveTextContent('The complete design Artifact satisfies the API contract criteria.')
     expect(evidence).not.toHaveTextContent('Baseline tests passed before implementation.')
-    clickInspectorTab(/^材料与版本$/)
     expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('Baseline tests passed before implementation.')
     expect(inspector).not.toHaveTextContent('审查时的记录时间')
     expect(evidence).not.toHaveTextContent('docs/standards/api-design.md')
@@ -5090,7 +5096,7 @@ describe('App', () => {
     const inspector = screen.getByTestId('node-inspector')
     expect(inspector).toHaveTextContent('方案设计')
     expect(within(inspector).queryByRole('tab', { name: /引用来源|Evidence/ })).not.toBeInTheDocument()
-    expect(within(inspector).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: /运行门禁审查|审查当前/ })).not.toBeInTheDocument()
     expect(inspector).not.toHaveTextContent('当前阶段缺少 Policy 要求的 Test Evidence')
   })
 
@@ -5359,6 +5365,121 @@ describe('App', () => {
       expect(screen.queryByText(/正在阅读历史版本/)).not.toBeInTheDocument()
     })
 
+    it('reviews the current version from the status row after v1 was reviewed and revised to v2 (#251)', async () => {
+      const base = clarifyGateState()
+      const v1 = base.artifacts.find((artifact) => artifact.clarificationRevision)!
+      const v2: Artifact = {
+        ...v1, id: `${v1.id}-v2`, title: '需求澄清 v2', content: '第二版澄清正文。', updatedAt: '2026-06-21T16:10:00.000Z',
+        clarificationRevision: { ...v1.clarificationRevision!, revision: 2, revisionDigest: 'c'.repeat(64), previousRevisionArtifactId: v1.id },
+      }
+      const run = base.runs[0]!
+      const designReview = reviewedDesignGateState().agentReviews[0]!
+      // The saved review covered v1, exactly as the runtime records its subject.
+      const v1Review: AgentReviewResult = {
+        ...designReview,
+        id: 'agent-review-clarify-v1', runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId,
+        model: 'review-model', createdAt: '2026-06-21T16:06:00.000Z',
+        contextManifest: {
+          ...designReview.contextManifest!,
+          stage: 'clarify',
+          subjectArtifacts: [{ ...designReview.contextManifest!.subjectArtifacts[0]!, id: v1.id, runId: v1.runId, nodeId: v1.nodeId, kind: 'clarification', updatedAt: v1.updatedAt }],
+        },
+        gateAdvisory: { ...designReview.gateAdvisory, runId: run.id, nodeId: run.currentNodeId },
+      }
+      const state = {
+        ...base,
+        runs: [{ ...run, nodes: run.nodes.map((node) => node.id === run.currentNodeId ? { ...node, artifactIds: [v2.id] } : node) }],
+        artifacts: [
+          ...base.artifacts.map((artifact) => artifact.id === v1.id
+            ? { ...artifact, clarificationRevision: { ...artifact.clarificationRevision!, status: 'superseded' as const } }
+            : artifact),
+          v2,
+        ],
+        agentReviews: [v1Review],
+      }
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(state),
+        evaluateGateEnforcement: vi.fn().mockResolvedValue({
+          status: 'warn', blocksApproval: false, blockingReasons: [], warningReasons: [missingReviewReason('warn')],
+          requiredActions: [], canOverride: false, overrideRoleRequired: 'lead', policySource: 'built_in_default', policyVersion: 1, provisional: false,
+        }),
+      })
+      render(<App />)
+
+      const row = await screen.findByTestId('task-status-row')
+      await waitFor(() => expect(row).toHaveTextContent('等待你确认需求 v2'))
+      await waitFor(() => expect(row).toHaveTextContent('当前版本尚未审查'))
+      expect(row).toHaveTextContent('已有的审查针对需求 v1，不适用于当前版本。')
+      // The task names the v1 result as history and leaves the one review entry to the status row.
+      clickInspectorTab('当前工作')
+      const reviewRun = within(screen.getByTestId('node-inspector')).getByTestId('task-review-run')
+      expect(reviewRun).toHaveTextContent('上次审查针对需求 v1，当前版本已更新')
+      expect(within(reviewRun).queryByRole('button')).not.toBeInTheDocument()
+
+      const review = within(row).getByRole('button', { name: '审查当前需求 v2' })
+      await waitFor(() => expect(review).toBeEnabled())
+      fireEvent.click(review)
+      let dialog = screen.getByRole('dialog', { name: '确认审查需求 v2' })
+      expect(dialog).toHaveTextContent('将审查需求 v2')
+      expect(dialog).toHaveTextContent('上次审查：需求 v1')
+      expect(dialog).toHaveTextContent('当前版本已更新')
+      expect(dialog).toHaveTextContent(`本次 Provider：${agentProvider.name} · ${agentProvider.model}`)
+      expect(dialog).toHaveTextContent('可能产生 Provider 费用')
+      expect(dialog).toHaveTextContent('需求 v1的审查结果保留在历史记录中，不作为需求 v2的结果。')
+      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+
+      fireEvent.click(review)
+      dialog = screen.getByRole('dialog', { name: '确认审查需求 v2' })
+      fireEvent.click(within(dialog).getByRole('button', { name: '开始审查需求 v2' }))
+      await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
+      expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+        runId: run.id, nodeId: run.currentNodeId, previousReviewId: v1Review.id,
+      }))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(api.approveGate).not.toHaveBeenCalled()
+    })
+
+    it('drops an open review confirmation when the review record changes meanwhile (#251)', async () => {
+      const base = clarifyGateState()
+      const revision = base.artifacts.find((artifact) => artifact.clarificationRevision)!
+      const run = base.runs[0]!
+      const designReview = reviewedDesignGateState().agentReviews[0]!
+      const reviewOfRevision = (id: string, createdAt: string): AgentReviewResult => ({
+        ...designReview, id, runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId, createdAt,
+        contextManifest: {
+          ...designReview.contextManifest!, stage: 'clarify',
+          subjectArtifacts: [{ ...designReview.contextManifest!.subjectArtifacts[0]!, id: revision.id, runId: revision.runId, nodeId: revision.nodeId, kind: 'clarification', updatedAt: revision.updatedAt }],
+        },
+        gateAdvisory: { ...designReview.gateAdvisory, runId: run.id, nodeId: run.currentNodeId },
+      })
+      const state = { ...base, agentReviews: [reviewOfRevision('review-a', '2026-06-21T16:06:00.000Z')] }
+      let listener: Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0] | undefined
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(state),
+        onLocalStateUpdated: vi.fn((callback) => { listener = callback; return vi.fn() }),
+      })
+      render(<App />)
+
+      await waitForLocalStateLoaded(api.loadState)
+      await screen.findByTestId('task-status-row')
+      clickInspectorTab('当前工作')
+      const reviewRun = await within(screen.getByTestId('node-inspector')).findByTestId('task-review-run')
+      const rerun = within(reviewRun).getByRole('button', { name: '重新审查' })
+      await waitFor(() => expect(rerun).toBeEnabled())
+      fireEvent.click(rerun)
+      expect(screen.getByRole('dialog', { name: '确认重新审查' })).toBeInTheDocument()
+
+      // Another window saved a newer review while the dialog was open.
+      await act(async () => {
+        listener?.({ ...state, agentReviews: [...state.agentReviews, reviewOfRevision('review-b', '2026-06-21T16:07:00.000Z')] })
+      })
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      expect(within(screen.getByTestId('task-status-row')).getByRole('alert')).toHaveTextContent('审查记录、待审材料或模型已更新，本次未开始审查')
+      expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+    })
+
     it('offers no approval while the policy blocks the Gate', async () => {
       const api = installDesktopApi({
         loadState: vi.fn().mockResolvedValue(clarifyGateState()),
@@ -5374,7 +5495,7 @@ describe('App', () => {
       expect(row).toHaveTextContent('暂不能确认需求 v1')
       expect(row).toHaveTextContent('缺少 AI 审查')
       expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+      expect(within(row).getByRole('button', { name: /审查当前需求 v1/ })).toBeEnabled()
       expect(api.approveGate).not.toHaveBeenCalled()
     })
   })
@@ -5627,14 +5748,14 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('policy v1')
     expect(inspector).toHaveTextContent('此受保护 Gate 尚未运行基于知识的门禁审查。')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /审查当前方案/ })).toBeEnabled()
     expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /执行测试|运行检查/ })).not.toBeInTheDocument()
 
     // The review step is offered once, in the status row; the recovery plan keeps the rest (plan W6).
     openRecoveryDetails()
-    expect(within(screen.getByTestId('remediation-actions')).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /运行门禁审查/ })).toHaveLength(1)
+    expect(within(screen.getByTestId('remediation-actions')).queryByRole('button', { name: /审查当前方案|运行门禁审查/ })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /审查当前方案|运行门禁审查/ })).toHaveLength(1)
     expect(screen.getAllByTestId('enforcement-finding')).toHaveLength(1)
     openPolicyDetails()
 
@@ -5762,7 +5883,7 @@ describe('App', () => {
     expect(details).toHaveTextContent('Provisional override')
     expect(details).not.toHaveTextContent('Confirmed override')
     expect(details).toHaveTextContent('Offline lead override pending server confirmation.')
-    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /审查当前方案/ })).toBeEnabled()
   })
 
   it('shows rejected provisional overrides as blocked and actionable', async () => {
@@ -5816,7 +5937,7 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('Rejected override')
     expect(inspector).toHaveTextContent('Rejected by team policy because version 1 is stale.')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /运行门禁审查/ })).toBeEnabled()
+    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /审查当前方案/ })).toBeEnabled()
   })
 
   it('persists theme and MCP local preferences through the desktop API', async () => {
@@ -6260,7 +6381,7 @@ describe('App', () => {
     expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不批准 Gate')
 
     clickPrimaryNav('任务')
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
@@ -6280,7 +6401,7 @@ describe('App', () => {
     expect(await within(models).findByLabelText('门禁审查方式')).toHaveValue('native-agent')
     expect(api.saveCodingRuntimeConfiguration).not.toHaveBeenCalled()
     clickPrimaryNav('任务')
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({ executor: 'native-agent' })))
@@ -6297,7 +6418,7 @@ describe('App', () => {
     vi.mocked(api.runKnowledgeReview).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectReview = reject }))
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
@@ -6340,7 +6461,7 @@ describe('App', () => {
     const readinessBeforeReview = screen.getByTestId('gate-readiness-summary')
     await waitFor(() => expect(readinessBeforeReview).toHaveTextContent('缺失'))
     // The review runs in place from the status row (plan W2); its accessible name is its visible text.
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '运行门禁审查' })
+    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
     await waitFor(() => expect(runReview).toBeEnabled())
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
     fireEvent.click(runReview)
@@ -6356,7 +6477,7 @@ describe('App', () => {
     expect(screen.queryByTestId('settings-view')).not.toBeInTheDocument()
     const inspector = await screen.findByTestId('node-inspector')
     await waitFor(() => expect(within(inspector).getByTestId('readiness-group-review-evidence')).toHaveTextContent('已完成'))
-    expect(within(inspector).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: /运行门禁审查|审查当前/ })).not.toBeInTheDocument()
 
     // The resulting trace, review record and usage are read-only evidence in 执行记录 (plan Y3).
     clickInspectorTab('执行记录')
@@ -6366,7 +6487,7 @@ describe('App', () => {
     expect(evidenceGroups).toHaveTextContent('基于知识的门禁审查')
     expect(evidenceGroups).toHaveTextContent('Build redacted context')
     expect(evidenceGroups).toHaveTextContent('estimated')
-    expect(within(evidenceGroups).queryByRole('button', { name: /运行门禁审查/ })).not.toBeInTheDocument()
+    expect(within(evidenceGroups).queryByRole('button', { name: /运行门禁审查|审查当前/ })).not.toBeInTheDocument()
 
     clickInspectorTab('材料与版本')
     expect(screen.getByTestId('knowledge-governance-flow')).toHaveTextContent('2 · 完成审查已完成')
@@ -7755,6 +7876,61 @@ describe('App', () => {
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('测试命令已阻断'))
     expect(api.runProjectTests).not.toHaveBeenCalled()
   })
+})
+
+it('drafts a revision suggestion beside the cited text and submits exactly the previewed request (#247)', async () => {
+  const created = createWorkflowRunFromRequest({ runId: 'suggestion-drafts', title: '任务文本编辑', request: '支持编辑任务文本', projectId: localProject.id, creatorId: 'reviewer', branchName: 'codex/suggestion-test', now: '2026-10-18T00:00:00Z' })
+  const node = created.run.nodes.find((item) => item.kind === 'agent' && item.stage === 'clarify')!
+  const content = '# Goals\n\n支持编辑任务文本\n\n## Acceptance Criteria\n\n保存前校验任务文本。'
+  const artifact: Artifact = { id: 'suggestion-artifact-v1', runId: created.run.id, nodeId: node.id, kind: 'clarification', title: '需求 v1', summary: '编辑', content, redacted: true, updatedAt: created.run.updatedAt,
+    clarificationRevision: { version: 1, revision: 1, status: 'review_requested', revisionDigest: 'a'.repeat(64), rawRequestArtifactId: created.artifacts[0]!.id, feedbackArtifactIds: [], goals: ['支持编辑任务文本'], acceptanceCriteria: ['保存前校验任务文本。'], nonGoals: [], assumptions: [], risks: [], openQuestions: [], generatedAt: created.run.updatedAt, executor: { version: 1, kind: 'direct-provider', executorId: 'fixture', executorVersion: '1', capabilityProfile: 'repository-read-only-v1', model: 'fixture', startedAt: created.run.updatedAt, completedAt: created.run.updatedAt, durationMs: 1, terminalReason: 'success', contextDigest: 'b'.repeat(64) } } }
+  const completed = completeWorkflowAgentNode({ run: created.run, nodeId: node.id, artifacts: created.artifacts, generatedArtifact: artifact, existingEvents: created.events, actorName: 'Reviewer', now: created.run.updatedAt })
+  const gateId = completed.run.currentNodeId
+  const digest = await sha256Text(content)
+  const quote = '保存前校验任务文本。'
+  const start = content.indexOf(quote)
+  const base = reviewedDesignGateState().agentReviews[0]!
+  const review: AgentReviewResult = {
+    ...base, id: 'review-suggestions', runId: completed.run.id, nodeId: gateId, projectId: completed.run.projectId, feedback: [],
+    missingEvidence: ['现有文本输入校验规则未核实'],
+    missingEvidenceDetails: [{ index: 0, assessment: 'gap', requiresReview: true, citations: [{ sourceId: artifact.id, title: '需求 v1', quote, contentDigest: digest, start, end: start + quote.length, updatedAt: artifact.updatedAt }] }],
+    contextManifest: { ...base.contextManifest!, stage: 'clarify', subjectArtifacts: [{ ...base.contextManifest!.subjectArtifacts[0]!, id: artifact.id, runId: artifact.runId, nodeId: artifact.nodeId, kind: 'clarification', updatedAt: artifact.updatedAt, contentDigest: digest }] },
+    gateAdvisory: { ...base.gateAdvisory, runId: completed.run.id, nodeId: gateId },
+  }
+  const save = vi.fn().mockRejectedValue(new Error('提交已记录'))
+  installDesktopApi({
+    loadState: vi.fn().mockResolvedValue(desktopState({ projects: [localProject], runs: [completed.run], artifacts: completed.artifacts, events: [...created.events, completed.event], agentReviews: [review] })),
+    requestClarificationChanges: save,
+  })
+  const first = render(<App />)
+  const acceptance = await screen.findByRole('tab', { name: /验收标准/ })
+  await waitFor(() => expect(acceptance).toHaveTextContent('1 条定位意见'))
+  fireEvent.click(acceptance)
+  fireEvent.click(screen.getByRole('button', { name: '审查意见 1' }))
+  let popover = screen.getByRole('dialog', { name: '审查意见 1' })
+  fireEvent.click(within(popover).getByRole('button', { name: '整理修订建议' }))
+  fireEvent.change(within(popover).getByLabelText('意见 1 的核实结论'), { target: { value: '先 trim() 再判空，按 Unicode 码点计数。' } })
+  fireEvent.change(within(popover).getByLabelText('意见 1 的拟修改内容'), { target: { value: '验收标准写明上限 200 个码点。' } })
+  fireEvent.click(within(popover).getByRole('button', { name: '保存到修订草稿' }))
+  // Saving a draft changes nothing in the workflow.
+  expect(save).not.toHaveBeenCalled()
+  expect(screen.getByTestId('task-status-row')).toHaveTextContent('需求 v1')
+  popover = screen.getByRole('dialog', { name: '审查意见 1' })
+  fireEvent.click(within(popover).getByRole('button', { name: '查看并提交修订请求' }))
+  const form = screen.getByRole('region', { name: '请求修订当前版本' })
+  expect(within(form).getByRole('region', { name: '已整理的意见修订建议' })).toHaveTextContent('意见 1：现有文本输入校验规则未核实')
+  fireEvent.change(within(form).getByLabelText('其他修订说明'), { target: { value: '补充撤销范围。' } })
+  const expected = '审查意见 1（review-suggestions）：现有文本输入校验规则未核实\n核实结论：先 trim() 再判空，按 Unicode 码点计数。\n拟修改内容：验收标准写明上限 200 个码点。\n\n其他修订说明：\n补充撤销范围。'
+  expect(within(form).getByTestId('revision-request-preview').textContent).toBe(expected)
+  // Drafts survive a reload of the page.
+  first.unmount()
+  render(<App />)
+  fireEvent.click(await screen.findByRole('button', { name: '请求修订当前版本' }))
+  const reloaded = screen.getByRole('region', { name: '请求修订当前版本' })
+  expect(within(reloaded).getByTestId('revision-request-preview').textContent).toBe(expected)
+  fireEvent.click(within(reloaded).getByRole('button', { name: '确认提交修订请求' }))
+  await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ artifactId: artifact.id, revision: 1, reason: expected }))
 })
 
 it('keeps revision drafts through page changes, failed submission, reload and a new artifact revision', async () => {
