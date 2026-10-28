@@ -50,7 +50,7 @@ export function createNativeRepositoryReviewProvider(input: { projectPath: strin
         const root = await realpath(input.projectPath)
         if (!(await isGitWorkingTreeRoot(root))) throw failure('native_review_repository_unavailable', 'unknown_provider_failure')
         const before = await repositoryWorkingTreeDigest(root)
-        const instructions = createLocalAgentKnowledgeReviewPrompt(prompt, { knowledgeRoot: input.knowledgeRoot ?? null })
+        const instructions = createLocalAgentKnowledgeReviewPrompt(prompt, { knowledgeRoot: input.knowledgeRoot ?? null, toolProtocol: 'native-json' })
         let retries = 0
         let maxOutputTokens: number | undefined
         for (let step = 0; step < 12; step++) {
@@ -60,8 +60,8 @@ export function createNativeRepositoryReviewProvider(input: { projectPath: strin
             requestStarted = true
             const result = await base.completeStructuredJson({
               purpose: 'review', signal: controller.signal, ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
-              systemPrompt: 'Return one JSON object. To inspect the repository return {"tool":{"name":"repo_list|repo_read|repo_search","args":{...}}}. Only repo-relative paths and read-only operations are available. Final review must follow the supplied schema and cite files actually read. Never edit, execute commands or approve a Gate.',
-              userPrompt: JSON.stringify({ instructions, observations, ...(retries ? { correction: 'Previous output was invalid. Return a complete valid tool request or review with verified file citations.' } : {}) }),
+              systemPrompt: 'Return exactly one JSON object per turn: one repo_list, repo_read or repo_search tool request, OR one final review. Never concatenate objects or return multiple tools. After a tool request, stop and wait for its host observation before requesting the next tool. Follow the supplied tool and final-review schemas. Only repo-relative paths and read-only operations are available. Cite files actually read. Never edit, execute commands or approve a Gate.',
+              userPrompt: JSON.stringify({ instructions, observations, ...(retries ? { correction: 'The previous response was invalid. Return exactly one complete JSON object: either the next single tool request OR the final review. Do not concatenate objects, batch tools or include prose. Stop after that object and wait for the host observation; preserve and reuse the observations already supplied.' } : {}) }),
             })
             received = true
             usageRows.push(result.usage)

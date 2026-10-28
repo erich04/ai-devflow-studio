@@ -1,3 +1,4 @@
+import { CodingQuestionPanel } from '../components/CodingQuestionPanel'
 import { CodingSessionPermissions } from '../components/CodingSessionPermissions'
 import { type Node, type NodeProps } from '@xyflow/react'
 import { ReviewEvidenceDetails, type RecordReviewFeedback } from '../components/ReviewEvidenceDetails'
@@ -406,6 +407,8 @@ export function Inspector({
   codingActionProjection,
   upstreamCodingDiffReady,
   onCancelCodingRun,
+  onReplyCodingQuestion,
+  isReplyingCodingQuestion = false,
   onReplyCodingPermission,
   codingRecords,
   codingHarness,
@@ -420,6 +423,8 @@ export function Inspector({
   /** Remaining execution evidence groups, folded at the end of 执行记录 (plan Y3). */
   executionEvidence?: React.ReactNode
   onCancelCodingRun?: (() => void) | undefined
+  onReplyCodingQuestion?: ((reply: import('@ai-devflow/shared').CodingQuestionReply) => void) | undefined
+  isReplyingCodingQuestion?: boolean
   onReplyCodingPermission?: ((decision: 'approved' | 'rejected', scope?: 'once' | 'session') => void) | undefined
   modelReadinessError?: string | undefined
   selectedRun: WorkflowRun | undefined
@@ -1597,6 +1602,8 @@ export function Inspector({
           focusRef={codingFocusRef}
         />
       ) : null)}
+      {latestCodingRun?.question && onReplyCodingQuestion && <CodingQuestionPanel key={`${latestCodingRun.id}:${latestCodingRun.question.id}:${latestCodingRun.question.revision}`}
+        question={latestCodingRun.question} active={latestCodingRun.status === 'waiting_input'} busy={isReplyingCodingQuestion} onReply={onReplyCodingQuestion} />}
       {latestCodingRun && !latestCodingRun.harness && <CodingSessionPermissions codingRunId={latestCodingRun.id} status={latestCodingRun.status} />}
       {isTestStep && isSelectedCurrentNode && selectedNode.status !== 'success' ? (
         <TestRunPanel readiness={testRunReadiness} isRunning={isRunningTests} onOpenTestSettings={() => openSettings('tests')} />

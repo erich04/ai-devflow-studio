@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-22",
+  "head": "a55d1f7ea56bb1ea77d84184a9828bc4c05ee74b",
+  "basis": "existing working tree including pre-existing uncommitted changes",
+  "task": "plan-only Cursor read-only review",
+  "model": "grok-4.7-xhigh",
+  "initialInputHashes": {
+    "docs/plans/memory-sharing-and-learning-2026-10-22.zh-CN.md": "bbc5aeb85c3e7f12c2d940ce246d12686871cd1784563058d0b92a482e325fbb",
+    "apps/desktop/electron/workbench-conversation-service.ts": "b9e5c577c1087bd9de309db16db30a05f9da0d5f5c84a1e92877e4c4d6932e30",
+    "apps/desktop/electron/workbench-conversation-contract.ts": "424f78a5fb39cfb0b92cebd1dcb9532dee6946c1cf40cf2b98e06f0e3f89e436",
+    "apps/desktop/electron/agent-memory-authority.ts": "806f0cf0c574adb9c2e6528ef718c9736ce28d3ffcf66cbd8af063e086404dfd",
+    "apps/desktop/electron/agent-memory-human-actions.ts": "f017278d473b02fde212a734935f67d65c0624de010378f0e33fbbd32fd07a1b",
+    "apps/desktop/electron/local-store.ts": "a7292e9e20cd7992d5ff2f9df4c0c743618c48b2702b07777d2438945f58f5f4",
+    "apps/desktop/electron/local-store-schema.ts": "fd83a5661b885652668b4cffddaacb303df6ce1ddedb4264580e31f09f857dc8",
+    "apps/desktop/electron/hindsight-service.ts": "88e29c018c4d103e72d32c4e2607b5d11b0601ae484086083ff7c2d3e085dda9",
+    "apps/desktop/electron/hindsight-store.ts": "4ea95efc47e28a3fd0bbcdc51b70bb142bfae38a8fee4e21ac57bd8380a69af4",
+    "apps/desktop/electron/coding-context.ts": "d7447bb5a36335d998e4e1feabe62b1102a9494706d52b3659cf7960c2b4380d",
+    "apps/desktop/electron/coding-runtime.ts": "39406d95725ed759524e458c1456b07938bcb990744d961d5454013ccc83c32c",
+    "packages/shared/src/retrieval-memory.ts": "a6c39366542de4184a4621f0bf52d479d4fc4b6179f94092a2491b2c0dca42e3",
+    "packages/shared/src/agent-memory-projection.ts": "d95c98074f9bc940bfa2e85f6021a6c239bb34a5260183e424c92d26a9bcfec4",
+    "packages/shared/src/agent-memory-team-projection.ts": "0e42f88dd023ef6974bf65bc5c105edf8727f33d218240b1dd14525988f7e049",
+    "packages/shared/src/memory-relevance.ts": "27cb5bf9469564676c6bcd387b06273d148bafc9e3b217461f6bd92559f42073",
+    "docs/validation/hindsight-fullchain-validation-20261020.md": "af151378afd4da20257fbe7110458be66d2d504f6fd06b06b5e5ca82ab0d5d8f"
+  },
+  "revisedReviewInput": {
+    "path": "docs/plans/memory-sharing-and-learning-2026-10-22.zh-CN.md",
+    "sha256": "22143ea9ee1e104aaccd3241f6728dbb5256127093f1170955006662219696d5",
+    "snapshot": "review-input-v2.zh-CN.md",
+    "reason": "Codex independent source-backed corrections before final network retry"
+  },
+  "finalPlanSha256": "22143ea9ee1e104aaccd3241f6728dbb5256127093f1170955006662219696d5",
+  "cursorReviewStatus": "blocked_tls_connection_failure"
+}

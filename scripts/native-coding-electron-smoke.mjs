@@ -123,6 +123,10 @@ function modelContentFor(phase) {
   ].join('\n')
 }
 
+// The read-only Gate Review prompt names its three repository tools; the wording changed with #201.
+function isRepositoryReviewPrompt(systemPrompt) {
+  return /repo_list[\s\S]*repo_read[\s\S]*repo_search/u.test(systemPrompt)
+}
 function repositoryReviewContent(body) {
   const input = JSON.parse(body.messages[1].content)
   if (!input.observations?.length) return JSON.stringify({ tool: { name: 'repo_read', args: { path: 'src/message.js' } } })
@@ -183,7 +187,7 @@ const modelServer = createServer(async (request, response) => {
       return
     }
     const payload = JSON.stringify({
-      choices: [{ message: { content: systemPrompt.includes('repo_list|repo_read|repo_search')
+      choices: [{ message: { content: isRepositoryReviewPrompt(systemPrompt)
         ? repositoryReviewContent(body) : modelContentFor(nativePhaseOf(body)) }, finish_reason: 'stop' }],
       usage: {
         prompt_tokens: 40 + modelRequests.length,

@@ -58,6 +58,25 @@ it('runs through the harness, exposes scoped MCP tools, and reports only actual 
   await expect(access(directory)).rejects.toThrow()
 })
 
+it('forwards the investigation step and remaining query allowance to its owned runtime', async () => {
+  let runtimeEnv: NodeJS.ProcessEnv = {}
+  const query = vi.fn(async () => ({ sourceId: 'source', result: {} }))
+  const executor = await createWorkbenchOpencodeExecutor({ binaryPath: '/fixture/opencode', binding,
+    signal: new AbortController().signal, query, investigationBudget: { maxSteps: 45, maxToolCalls: 35 },
+    deps: { manager: { ensure: async (input) => { runtimeEnv = input.env; return { baseUrl: 'http://127.0.0.1:41234' } }, stopAll: async () => {} },
+      fetcher: async () => Response.json({ id: 'allowance-session' }) } })
+  cleanups.push(() => executor.close!())
+  const config = JSON.parse(runtimeEnv.OPENCODE_CONFIG_CONTENT!)
+  expect(config.agent.devflow.steps).toBe(45)
+  const bridge = config.mcp.devflow
+  const call = async () => (await fetch(bridge.url, { method: 'POST', headers: { ...bridge.headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'workflow', arguments: {} } }),
+  })).json()
+  for (let index = 0; index < 35; index++) expect((await call()).result.isError).not.toBe(true)
+  expect((await call()).result.isError).toBe(true)
+  expect(query).toHaveBeenCalledTimes(35)
+})
+
 it('cleans up its bridge and temporary directory when cancelled during runtime startup', async () => {
   const controller = new AbortController()
   let release!: () => void

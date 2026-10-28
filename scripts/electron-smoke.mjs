@@ -8,9 +8,11 @@ import path from 'node:path'
 import { promisify } from 'node:util'
 import { _electron as electron, chromium, expect } from '@playwright/test'
 import { resolveE2eRuntime } from './e2e-runtime.mjs'
+import { createIsolatedNextBuild } from './e2e-next-build.mjs'
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const desktopDir = path.join(rootDir, 'apps/desktop')
+const nextBuild = await createIsolatedNextBuild(path.join(rootDir, 'apps/web'))
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const {
   apiPort,
@@ -28,6 +30,7 @@ const userDataDir = path.join(tempRoot, 'user-data')
 const controlledOpencodePath = path.join(tempRoot, 'controlled-opencode')
 const controlledOpencodeLogPath = path.join(tempRoot, 'controlled-opencode-events.ndjson')
 const electronDiagnostics = []
+const launchedApps = new Set()
 const blockedCommand = 'powershell Remove-Item -Recurse -Force C:\\devflow'
 const demoSessionHeaders = {
   'x-devflow-session-source': 'demo',
@@ -93,12 +96,15 @@ function run(command, args, options = {}) {
 }
 
 function spawnQuiet(command, args, env = {}) {
-  return spawn(command, args, {
+  const child = spawn(command, args, {
     cwd: rootDir,
     env: { ...process.env, ...env },
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  child.devflowClosed = false
+  child.once('close', () => { child.devflowClosed = true })
+  return child
 }
 
 function delay(ms) {
@@ -151,7 +157,7 @@ function isPortOpen(port) {
 }
 
 async function stopSpawnedProcess(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
+  if (!child || child.devflowClosed) {
     return
   }
 
@@ -169,12 +175,14 @@ async function stopSpawnedProcess(child) {
     child.kill('SIGTERM')
   }
 
+  let timeout
   const exited = await Promise.race([
-    new Promise((resolve) => child.once('exit', resolve)),
-    delay(3_000).then(() => false),
+    new Promise((resolve) => child.once('close', resolve)),
+    new Promise((resolve) => { timeout = setTimeout(() => resolve(false), 3_000) }),
   ])
+  clearTimeout(timeout)
 
-  if (exited === false && child.exitCode === null && child.signalCode === null) {
+  if (exited === false && !child.devflowClosed) {
     try {
       kill('SIGKILL')
     } catch {
@@ -226,6 +234,7 @@ async function launchApp({ useProjectCodingRuntime = false } = {}) {
     electronDiagnostics.push(chunk.toString())
   })
 
+  launchedApps.add(app)
   const page = await app.firstWindow()
   await page.waitForLoadState('domcontentloaded')
   return { app, page }
@@ -898,16 +907,22 @@ try {
       "    process.exit(64)",
       "  }",
       "  const sessionId = 'controlled-main-session'",
+      "  let session",
       "  const server = createServer(async (request, response) => {",
       "    try {",
       "      const url = new URL(request.url || '/', `http://${hostname}:${port}`)",
       "      const directory = url.searchParams.get('directory')",
+      "      if (request.method === 'GET' && url.pathname === '/question') return sendJson(response, [])",
       "      if (request.method === 'GET' && url.pathname === '/permission') return sendJson(response, [])",
       "      if (request.method === 'POST' && url.pathname === '/session') {",
       "        const body = await readJson(request)",
       "        if (!directory) return sendJson(response, { error: 'directory_required' }, 400)",
-      "        return sendJson(response, { id: sessionId, directory, permission: body.permission })",
+      "        session = { ...body, id: sessionId, directory }",
+      "        return sendJson(response, session)",
       "      }",
+      "      if (request.method === 'GET' && url.pathname === `/session/${sessionId}`) return sendJson(response, session)",
+      "      if (request.method === 'GET' && url.pathname === `/session/${sessionId}/children`) return sendJson(response, [])",
+      "      if (request.method === 'PATCH' && url.pathname === `/session/${sessionId}`) { session.metadata = (await readJson(request)).metadata; return sendJson(response, session) }",
       "      if (request.method === 'POST' && url.pathname === `/session/${sessionId}/message`) {",
       "        await readJson(request)",
       "        if (!directory) return sendJson(response, { error: 'directory_required' }, 400)",
@@ -974,6 +989,7 @@ try {
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
       DEVFLOW_API_BASE_URL: apiServerUrl,
       NEXT_PUBLIC_DEVFLOW_API_URL: apiServerUrl,
+      ...nextBuild.env,
     },
   )
   vite = spawnQuiet(corepack, [
@@ -1352,7 +1368,7 @@ try {
   await expect(buildStatusRow.getByRole('button', { name: '拒绝', exact: true })).toBeVisible()
   await expect(buildStatusRow.getByRole('button', { name: '停止执行', exact: true })).toBeVisible()
   await buildStatusRow.getByRole('button', { name: '批准本次', exact: true }).click()
-  await expect(first.page.getByTestId('toast')).toContainText('Coding Agent 已完成 diff 归档', {
+  await expect(first.page.getByTestId('toast')).toContainText('审批已处理，编码状态已更新', {
     timeout: 30_000,
   })
   await expect(first.page.getByTestId('settings-view')).toHaveCount(0)
@@ -2034,6 +2050,8 @@ try {
 
   console.log('Electron integration smoke passed: task center, workflow, review, permissions, tests, persistence and provider removal.')
 } finally {
+  await Promise.allSettled([...launchedApps].map(app => app.close()))
   await Promise.all([stopSpawnedProcess(vite), stopSpawnedProcess(web), stopSpawnedProcess(api)])
-  await rm(tempRoot, { recursive: true, force: true })
+  await nextBuild.close()
+  await rm(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
 }

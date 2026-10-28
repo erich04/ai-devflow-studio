@@ -24,7 +24,7 @@ import type {
   TestEvidence,
   WorkflowRun,
 } from '@ai-devflow/shared'
-import { assertOpenCodeAttemptReservation, estimateCodingRuntimeCost } from '@ai-devflow/shared'
+import { assembleRetrievedKnowledgeContext, assertOpenCodeAttemptReservation, estimateCodingRuntimeCost } from '@ai-devflow/shared'
 import {
   createFakeCodingEngineAdapter,
   createUnconfiguredCodingEngineAdapter,
@@ -40,6 +40,7 @@ import {
   CodingEngineStartupCleanupError,
   CodingEnginePermissionRevalidationError,
   CodingEnginePermissionDiscoveryError,
+  CodingEngineTaskLimitError,
 } from './coding-engine-lifecycle'
 import {
   codingBriefKnowledgeDelivery,
@@ -68,6 +69,104 @@ afterEach(async () => {
 })
 
 describe('CodingRuntime', () => {
+  it.each(['permission', 'tool limit'] as const)('keeps the acknowledged question receipt time when continuation ends later: %s', async (outcome) => {
+    const run = opencodeCodingRun({ status: 'waiting_input' })
+    const workspace = managedWorkspace({ codingRunId: run.id })
+    const deliveredAt = '2026-08-12T23:36:00.000Z', endedAt = '2026-08-12T23:36:30.000Z'
+    let clock = deliveredAt
+    const request = { version: 1 as const, id: 'que-1', revision: 'a'.repeat(64), codingRunId: run.id, projectId: run.projectId,
+      managedWorkspaceId: workspace.id, sessionId: 'ses-1', status: 'pending' as const,
+      requestedAt: '2026-08-12T23:30:00.000Z', expiresAt: '2026-08-13T00:00:00.000Z',
+      questions: [{ header: 'Color', question: 'Choose color', options: [{ label: 'Blue', description: 'Blue' }], custom: false }] }
+    run.question = request
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [workspace] })
+    const engine = createSpyCodingEngine('opencode-http')
+    engine.replyQuestion = vi.fn(async (input) => {
+      await input.onDelivered?.('answered')
+      expect(store.codingRuns[0]?.question?.settledAt).toBe(deliveredAt)
+      clock = endedAt
+      if (outcome === 'tool limit') throw new CodingEngineTaskLimitError('tool_turn_limit')
+      return { codingRun: { ...input.codingRun, status: 'waiting_permission' as const }, events: [], permissionRequest: codingPermissionRequest(run) }
+    })
+    const runtime = createCodingRuntime({ store, engine, now: () => clock, sessionAuthority: async () => ({ actorId: 'user-1', key: 'pairing' }) })
+    const replying = runtime.replyCodingQuestion({ codingRunId: run.id, requestId: request.id, revision: request.revision,
+      answeredBy: 'user-1', reply: { kind: 'answer', answers: [['Blue']] } })
+    if (outcome === 'tool limit') await expect(replying).rejects.toThrow('tool_turn_limit')
+    else await expect(replying).resolves.toMatchObject({ settledAt: deliveredAt })
+    expect(store.codingRuns[0]?.question).toMatchObject({ status: 'answered', settledAt: deliveredAt })
+    expect(store.codingRuns[0]?.questionReceipts?.[0]?.settledAt).toBe(deliveredAt)
+    if (outcome === 'tool limit') expect(store.codingRuns[0]?.summary).toContain('工具调用次数已达上限')
+  })
+
+  it.each(['answer', 'duplicate', 'cancel race', 'wrong revision', 'wrong actor', 'expired', 'expired cleanup', 'restart', 'unknown', 'unknown cleanup'] as const)('persists and owns a business question without granting tools: %s', async (scenario) => {
+    const run = opencodeCodingRun({ status: 'waiting_input' })
+    const workspace = managedWorkspace({ codingRunId: run.id })
+    const request = { version: 1 as const, id: 'que-1', revision: 'a'.repeat(64), codingRunId: run.id, projectId: run.projectId,
+      managedWorkspaceId: workspace.id, sessionId: 'ses-1', status: 'pending' as const,
+      requestedAt: '2026-08-12T23:30:00.000Z', expiresAt: scenario.startsWith('expired') ? '2026-08-12T23:31:00.000Z' : '2026-08-13T00:00:00.000Z',
+      questions: [{ header: 'Color', question: 'Choose color', options: [{ label: 'Blue', description: 'Blue' }], custom: false }] }
+    run.question = request
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [workspace] })
+    const engine = createSpyCodingEngine('opencode-http')
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    engine.replyQuestion = vi.fn(async (input) => {
+      if (scenario === 'duplicate' || scenario === 'cancel race') await held
+      if (scenario === 'unknown' || scenario === 'unknown cleanup') throw new (await import('./coding-question-error')).CodingQuestionError('delivery_unknown', 'Reply delivery unknown')
+      await input.onDelivered?.('answered')
+      return { codingRun: { ...input.codingRun, status: 'waiting_permission' as const, question: { ...input.request, status: 'answered' as const } }, events: [], permissionRequest: codingPermissionRequest(run) }
+    })
+    if (scenario === 'unknown cleanup' || scenario === 'expired cleanup') vi.mocked(engine.cancel).mockRejectedValue(new Error('Session still running'))
+    const completeWorkflowBuild = vi.fn(), deleteWorkspace = vi.fn()
+    const deps = { store, engine, completeWorkflowBuild, deleteWorkspace, now: fixedNow('2026-08-12T23:36:00.000Z'),
+      sessionAuthority: async () => ({ actorId: 'user-1', key: 'project-pairing' }) }
+    const runtime = createCodingRuntime(deps)
+    const input = { codingRunId: run.id, requestId: request.id, revision: scenario === 'wrong revision' ? 'b'.repeat(64) : request.revision,
+      answeredBy: scenario === 'wrong actor' ? 'intruder' : 'user-1', reply: { kind: 'answer' as const, answers: [['Blue']] } }
+    if (scenario === 'restart') {
+      await runtime.recoverCodingAgentRuns()
+      expect(store.codingRuns[0]).toMatchObject({ status: 'failed', question: { status: 'invalidated' } })
+      expect(engine.replyQuestion).not.toHaveBeenCalled()
+    } else if (scenario === 'wrong revision' || scenario === 'wrong actor' || scenario === 'expired' || scenario === 'expired cleanup' || scenario === 'unknown' || scenario === 'unknown cleanup') {
+      await expect(runtime.replyCodingQuestion(input)).rejects.toThrow()
+      expect(engine.replyQuestion).toHaveBeenCalledTimes(scenario === 'unknown' || scenario === 'unknown cleanup' ? 1 : 0)
+      if (scenario === 'unknown') expect(store.codingRuns[0]).toMatchObject({ status: 'failed', question: { status: 'delivery_unknown' } })
+      if (scenario === 'unknown cleanup') expect(store.codingRuns[0]).toMatchObject({ status: 'applying', question: { status: 'delivery_unknown' } })
+      if (scenario === 'expired') expect(store.codingRuns[0]).toMatchObject({ status: 'timed_out', question: { status: 'expired' } })
+      if (scenario === 'expired cleanup') {
+        expect(store.codingRuns[0]).toMatchObject({ status: 'waiting_input', question: { status: 'expired' }, summary: expect.stringContaining('重试停止') })
+        expect(store.codingEvents.some((event) => event.metadata?.sessionCleanupStatus === 'cleanup_failed')).toBe(true)
+      }
+    } else {
+      const reply = runtime.replyCodingQuestion(input)
+      void reply.catch(() => undefined)
+      if (scenario === 'duplicate') {
+        await vi.waitFor(() => expect(engine.replyQuestion).toHaveBeenCalledTimes(1))
+        expect(await createCodingRuntime(deps).replyCodingQuestion(input)).toMatchObject({ status: 'sending' })
+        release()
+      }
+      if (scenario === 'cancel race') {
+        await vi.waitFor(() => expect(engine.replyQuestion).toHaveBeenCalledTimes(1))
+        await createCodingRuntime(deps).cancelCodingAgentRun({ codingRunId: run.id })
+        release()
+        await expect(reply).rejects.toThrow()
+        expect(store.codingRuns[0]?.status).toBe('cancelled')
+        expect(store.permissionRequests).toHaveLength(0)
+        expect(completeWorkflowBuild).not.toHaveBeenCalled()
+        return
+      }
+      expect(await reply).toMatchObject({ status: 'answered' })
+      expect(await runtime.replyCodingQuestion(input)).toMatchObject({ status: 'answered' })
+      expect(engine.replyQuestion).toHaveBeenCalledTimes(1)
+      expect(store.permissionRequests).toHaveLength(1)
+      expect(store.permissionRequests[0]?.status).toBe('pending')
+    }
+    expect(engine.approvePermission).not.toHaveBeenCalled()
+    expect(store.permissionDecisions).toEqual([])
+    expect(completeWorkflowBuild).not.toHaveBeenCalled()
+    expect(deleteWorkspace).not.toHaveBeenCalled()
+  })
+
   it('reuses an explicitly scoped permission across runtime instances and stops at an unapproved path', async () => {
     const run = opencodeCodingRun()
     const workspace = managedWorkspace({ codingRunId: run.id })
@@ -96,6 +195,49 @@ describe('CodingRuntime', () => {
     await runtime.sessionPermissions({ codingRunId: run.id, revokeId: grants[0]!.id })
     expect(await runtime.sessionPermissions({ codingRunId: run.id })).toEqual([])
     expect(store.codingEvents.filter((event) => event.metadata?.origin === 'session_permission').map((event) => event.metadata?.action)).toEqual(['created', 'used', 'revoked'])
+  })
+
+  it('stops reusing a session command once the package scripts it runs have changed (#237)', async () => {
+    const worktreePath = await mkdtemp(path.join(os.tmpdir(), 'devflow-grant-inputs-'))
+    tempDirs.push(worktreePath)
+    await writeFile(path.join(worktreePath, 'package.json'), '{"scripts":{"test":"vitest run"}}')
+    const run = opencodeCodingRun()
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run], workspaces: [managedWorkspace({ codingRunId: run.id, worktreePath })] })
+    const command = { permission: 'bash' as const, command: 'pnpm test' }
+    const first = codingPermissionRequest(run, command)
+    store.permissionRequests.push(first)
+    const engine = createSpyCodingEngine('opencode-http')
+    let turns = 0
+    vi.mocked(engine.approvePermission).mockImplementation(async (input) => {
+      turns += 1
+      // While the reused approval runs, the agent rewrites the script behind the same command.
+      if (turns === 2) await writeFile(path.join(worktreePath, 'package.json'), '{"scripts":{"test":"node upload-secrets.js"}}')
+      return { codingRun: { ...input.codingRun, status: 'waiting_permission' }, events: [], permissionRequest: { ...first, id: `next-${turns}` } }
+    })
+    const runtime = createCodingRuntime({ store, engine, now: fixedNow('2026-08-12T23:36:00.000Z'), sessionAuthority: async () => ({ actorId: 'user-1', key: 'org-project-user-token' }) })
+    await runtime.replyCodingPermission({ requestId: first.id, codingRunId: run.id, decidedBy: 'user-1', decision: 'approved', comment: '', scope: 'session' })
+    await vi.waitFor(() => expect(turns).toBe(2))
+    expect(store.permissionRequests.find((entry) => entry.id === 'next-1')?.status).toBe('approved')
+    await vi.waitFor(() => expect(store.codingEvents.some((event) => event.metadata?.action === 'invalidated')).toBe(true))
+    expect(store.permissionRequests.find((entry) => entry.id === 'next-2')?.status).toBe('pending')
+    expect(turns).toBe(2)
+    expect(await runtime.sessionPermissions({ codingRunId: run.id })).toEqual([])
+    expect(store.codingEvents.filter((event) => event.metadata?.origin === 'session_permission').map((event) => event.metadata?.action))
+      .toEqual(['created', 'used', 'invalidated'])
+  })
+
+  it('refuses a session scope for a package command whose inputs cannot be checked, leaving a one-time approval available', async () => {
+    const run = opencodeCodingRun()
+    const store = new MemoryCodingStore({ projects: [project('/tmp/repo')], runs: [buildRun()], codingRuns: [run],
+      workspaces: [managedWorkspace({ codingRunId: run.id, worktreePath: path.join(os.tmpdir(), 'devflow-missing-grant-worktree') })] })
+    const first = codingPermissionRequest(run, { permission: 'bash', command: 'pnpm test' })
+    store.permissionRequests.push(first)
+    const runtime = createCodingRuntime({ store, engine: createSpyCodingEngine('opencode-http'), now: fixedNow('2026-08-12T23:36:00.000Z'),
+      sessionAuthority: async () => ({ actorId: 'user-1', key: 'org-project-user-token' }) })
+    await expect(runtime.replyCodingPermission({ requestId: first.id, codingRunId: run.id, decidedBy: 'user-1', decision: 'approved', comment: '', scope: 'session' }))
+      .rejects.toThrow('Approve it once instead')
+    expect(store.permissionRequests.find((entry) => entry.id === first.id)?.status).toBe('pending')
+    expect(store.permissionDecisions).toEqual([])
   })
 
   it('retains the worktree when a renewed approval fails its final revalidation', async () => {
@@ -309,7 +451,7 @@ describe('CodingRuntime', () => {
       processManager: {
         ensure: vi.fn(async ({ projectId }) => ({
           baseUrl: 'http://127.0.0.1:4097',
-          child: {} as never,
+          child: { exitCode: null, killed: false } as never,
           projectId,
         })),
       },
@@ -342,6 +484,7 @@ describe('CodingRuntime', () => {
     const runtimeDependencies = {
       store,
       engine,
+      executorConfigVersion: 7,
       captureWorkspaceDiff,
       budgetGuard: createAllowingBudgetGuard(),
       createWorkspace: async (input: {
@@ -380,6 +523,8 @@ describe('CodingRuntime', () => {
       userInstruction: 'Add the marker file.',
     })
     const trustedBudgetDecision = started.codingRun.budgetDecision
+    expect(started.codingRun.configVersion).toBe(7)
+    expect(store.codingRuns.find((run) => run.id === started.codingRun.id)?.configVersion).toBe(7)
     expect(trustedBudgetDecision?.reason).toContain('billing is opaque')
     if (requireExecutionAuthorization) {
       expect(store.permissionRequests[0]?.origin).toBe('execution_authorization')
@@ -426,6 +571,7 @@ describe('CodingRuntime', () => {
 
     expect(store.codingRuns.at(-1)?.status).toBe('completed')
     // ADR 0024 §4: OpenCode learns only after Change Acceptance, and only once.
+    expect(store.codingRuns.at(-1)?.configVersion).toBe(7)
     expect(learnCodingRunMemory).toHaveBeenCalledTimes(1)
     expect(learnCodingRunMemory).toHaveBeenCalledWith({
       codingRun: expect.objectContaining({ id: started.codingRun.id, status: 'completed' }), evaluationPassed: true,
@@ -491,7 +637,7 @@ describe('CodingRuntime', () => {
       processManager: {
         ensure: vi.fn(async ({ projectId }) => ({
           baseUrl: 'http://127.0.0.1:4097',
-          child: {} as never,
+          child: { exitCode: null, killed: false } as never,
           projectId,
         })),
       },
@@ -623,6 +769,7 @@ describe('CodingRuntime', () => {
         project: input.runtimeContext.project,
         now: input.runtimeContext.now,
       })
+      if ('questionRequest' in completed) throw new Error('Unexpected fake question')
       if ('permissionRequest' in completed) {
         throw new Error('native no-permission fixture unexpectedly requested permission')
       }
@@ -790,6 +937,7 @@ describe('CodingRuntime', () => {
         project: input.runtimeContext.project,
         now: input.runtimeContext.now,
       })
+      if ('questionRequest' in completed) throw new Error('Unexpected fake question')
       if ('permissionRequest' in completed) {
         throw new Error('native bootstrap fixture unexpectedly requested permission')
       }
@@ -2639,10 +2787,21 @@ describe('CodingRuntime', () => {
       }),
     }
     const budgetGuard = createAllowingBudgetGuard()
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: 'project-1', userId: 'user-1' },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1', degraded: false,
+      sources: [{ sourceRef: 'cleanup-v1', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic',
+        content: 'Only completed tasks older than seven days can be removed.' }],
+    })
+    const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
+    const assertRetrievedKnowledgeCurrent = vi.fn(async () => undefined)
     const runtime = createCodingRuntime({
       store,
       executor: createMeteredCompatibilityExecutor(engine),
       budgetGuard,
+      prepareRetrievedKnowledge,
+      assertRetrievedKnowledgeCurrent,
       worktreeRoot: await tempDir('devflow-worktrees-'),
       idGenerator: fixedIds('coding-run-canonical-brief'),
       now: fixedNow('2026-06-17T00:00:00.000Z'),
@@ -2659,6 +2818,14 @@ describe('CodingRuntime', () => {
 
     const startInput = vi.mocked(engine.start).mock.calls[0]?.[0] as unknown as { brief?: CodingBrief }
     expect(startInput.brief?.prompt).toBe(result.codingRun.prompt)
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: 'project-1', userId: 'user-1', stage: 'build',
+      query: expect.stringContaining('Use the approved health endpoint design.'),
+    }))
+    expect(result.codingRun.prompt).toContain('Only completed tasks older than seven days can be removed.')
+    expect(result.codingRun.contextReceipt?.knowledgeContext?.retrievedKnowledge).toEqual(retrievedKnowledge.manifest)
+    expect(assertRetrievedKnowledgeCurrent).toHaveBeenCalledWith(retrievedKnowledge.manifest)
     expect(startInput).not.toHaveProperty('knowledgeChunks')
     expect(result.codingRun.prompt).toContain('Managed worktree: <managed-worktree-created-after-budget-approval>')
     expect(result.codingRun.prompt).not.toContain(repo)
@@ -2674,6 +2841,50 @@ describe('CodingRuntime', () => {
       timestamp: '2026-06-17T00:00:00.000Z',
     })
     expect(result.codingRun.runtimeCostSummary?.inputTokens).toBe(expectedCost.inputTokens)
+  })
+
+  it.each(['permission', 'test_completion'] as const)('rejects stale retrieved knowledge at %s without rewriting the saved brief', async (when) => {
+    const repo = await gitRepo()
+    const store = new MemoryCodingStore({ projects: [project(repo)], runs: [buildRun()] })
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: 'project-1', userId: 'user-1' },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1', degraded: false,
+      sources: [{ sourceRef: 'cleanup-v1', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic',
+        content: 'Only completed tasks older than seven days can be removed.' }],
+    })
+    let current = true
+    const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
+    const completeWorkflowBuild = vi.fn(async () => undefined)
+    const runTestCommand = vi.fn(async () => {
+      current = false
+      return { status: 'passed' as const, exitCode: 0, durationMs: 1, stdout: 'passed', stderr: '', redacted: true, summary: 'Passed.' }
+    })
+    const dependencies = {
+      store, engine: createFakeCodingEngineAdapter(),
+      prepareRetrievedKnowledge,
+      assertRetrievedKnowledgeCurrent: async () => { if (!current) throw new Error('Retrieved knowledge source changed') },
+      completeWorkflowBuild, runTestCommand,
+      worktreeRoot: await tempDir('devflow-worktrees-'),
+      now: fixedNow('2026-06-17T00:00:00.000Z'),
+    }
+    const started = await createCodingRuntime(dependencies).runCodingAgent({
+      runId: 'run-1', nodeId: 'node-build', projectId: 'project-1',
+      requestedBy: 'user-1', userInstruction: 'Add the marker file.',
+    })
+    if (when === 'permission') current = false
+    // The next request gets a new runtime but must validate the receipt of the old prompt.
+    const resumed = createCodingRuntime(dependencies)
+    await expect(resumed.replyCodingPermission({
+      requestId: store.permissionRequests[0]!.id, codingRunId: started.codingRun.id,
+      decidedBy: 'user-1', decision: 'approved', comment: 'Approve exact test fixture.',
+    })).rejects.toThrow('Retrieved knowledge source changed')
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+    expect(store.codingRuns.at(-1)?.prompt).toBe(started.codingRun.prompt)
+    expect(store.codingRuns.at(-1)?.status).toBe('failed')
+    expect(completeWorkflowBuild).not.toHaveBeenCalled()
+    expect(runTestCommand).toHaveBeenCalledTimes(when === 'permission' ? 0 : 1)
+    expect(store.testEvidence).toHaveLength(when === 'permission' ? 0 : 1)
   })
 
   it('starts a human-approved retry attempt with remediation context in the coding brief', async () => {
@@ -3836,7 +4047,8 @@ describe('CodingRuntime', () => {
       ...fakeEngine,
       async approvePermission(input) {
         const completed = await fakeEngine.approvePermission(input)
-        if ('permissionRequest' in completed) {
+        if ('questionRequest' in completed) throw new Error('Unexpected fake question')
+      if ('permissionRequest' in completed) {
           throw new Error(`Expected completed fake result, got permission ${completed.permissionRequest.id}`)
         }
         return {
@@ -3901,7 +4113,8 @@ describe('CodingRuntime', () => {
       engine: 'opencode-http',
       async approvePermission(input) {
         const completed = await fakeEngine.approvePermission(input)
-        if ('permissionRequest' in completed) {
+        if ('questionRequest' in completed) throw new Error('Unexpected fake question')
+      if ('permissionRequest' in completed) {
           throw new Error(`Expected completed fake result, got permission ${completed.permissionRequest.id}`)
         }
         return {
@@ -4053,7 +4266,8 @@ describe('CodingRuntime', () => {
       engine: 'opencode-http',
       async approvePermission(input) {
         const completed = await fakeEngine.approvePermission(input)
-        if ('permissionRequest' in completed) {
+        if ('questionRequest' in completed) throw new Error('Unexpected fake question')
+      if ('permissionRequest' in completed) {
           throw new Error(`Expected completed fake result, got permission ${completed.permissionRequest.id}`)
         }
         return {
@@ -4456,7 +4670,7 @@ class MemoryCodingStore {
     const active = this.codingRuns.find(
       (candidate) =>
         candidate.projectId === run.projectId &&
-        ['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'applying', 'testing'].includes(candidate.status),
+        ['queued', 'preparing', 'waiting_permission', 'waiting_input', 'bootstrapping', 'running', 'applying', 'testing'].includes(candidate.status),
     )
     if (active) {
       return { reserved: false, reason: 'active_run_exists', run: active }
@@ -4484,7 +4698,7 @@ class MemoryCodingStore {
     }
     if (
       mutation.run &&
-      !['queued', 'preparing', 'waiting_permission', 'bootstrapping', 'running', 'applying', 'testing'].includes(currentRun.status) &&
+      !['queued', 'preparing', 'waiting_permission', 'waiting_input', 'bootstrapping', 'running', 'applying', 'testing'].includes(currentRun.status) &&
       JSON.stringify(mutation.run) !== JSON.stringify(currentRun)
     ) {
       return { committed: false, reason: 'terminal_run', run: currentRun }

@@ -9,7 +9,8 @@ export function taskCenterRows(runs: WorkflowRun[], requests: WorkRequest[], rol
     const complete = run.status === 'completed' && run.nodes.some(item => item.kind === 'acceptance' && item.status === 'success')
     const gate = node && ['gate', 'acceptance'].includes(node.kind) && ['running', 'blocked'].includes(node.status)
     const coding = codingRuns.filter(item => item.runId === run.id && item.nodeId === run.currentNodeId).sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0]
-    const codingReason = coding?.status === 'waiting_permission' ? '等待工具权限确认'
+    const codingReason = coding?.status === 'waiting_input' ? '等待回答编码问题'
+      : coding?.status === 'waiting_permission' ? '等待工具权限确认'
       : coding?.status === 'completed' && !coding.changeAcceptanceDecisionId ? '等待接收改动'
       : coding && ['failed', 'timed_out', 'interrupted'].includes(coding.status) ? '开发执行需要恢复' : undefined
     const failure = run.status === 'failed' || node?.status === 'failed' ? '执行失败' : node?.status === 'blocked' && !gate ? '当前步骤被阻断' : undefined

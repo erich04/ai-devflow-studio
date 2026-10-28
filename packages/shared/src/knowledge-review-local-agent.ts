@@ -29,12 +29,21 @@ const LOCAL_AGENT_REVIEW_SYSTEM_PROMPT =
 
 export function createLocalAgentKnowledgeReviewPrompt(
   reviewPrompt: string,
-  options: { knowledgeRoot?: string | null } = {},
+  options: { knowledgeRoot?: string | null; toolProtocol?: 'native-json' } = {},
 ): string {
   const root = options.knowledgeRoot === '' ? 'the repository' : options.knowledgeRoot ?? 'docs/knowledge'
+  const native = options.toolProtocol === 'native-json'
   return [
-    LOCAL_AGENT_REVIEW_SYSTEM_PROMPT,
-    'You run as a read-only local Agent inside the selected Git repository. Use only the read, glob, grep and list tools. Never edit files, run shell commands, request permissions, or change the workflow.',
+    ...(native ? [
+      'Return exactly one JSON object per turn. A turn is either ONE tool request or ONE final review, never both. Do not concatenate JSON objects, return an array or batch of tools, or wrap the object in prose or Markdown.',
+      'For a tool turn, return only {"tool":{"name":"repo_read","args":{"path":"<repo-relative-file>"}}}. The host executes this one request and includes its result in observations in the next turn. Stop after this one object and wait for that observation before choosing another tool.',
+      'The only tools are repo_list (args: optional path, use "." for root), repo_read (args: required path), and repo_search (args: required query, optional path). For several files, read one file per turn. Reuse earlier observations; do not repeat a completed read without a reason.',
+      'For the final-review turn, omit tool and follow this review schema: ' + LOCAL_AGENT_REVIEW_SYSTEM_PROMPT,
+      'You run as a read-only local Agent inside the selected Git repository. Never edit files, run shell commands, request permissions, or change the workflow.',
+    ] : [
+      LOCAL_AGENT_REVIEW_SYSTEM_PROMPT,
+      'You run as a read-only local Agent inside the selected Git repository. Use only the read, glob, grep and list tools. Never edit files, run shell commands, request permissions, or change the workflow.',
+    ]),
     'Use the repository to check statements in REVIEW_SUBJECT about existing code, configuration and documents before reporting them as gaps or risks. Do not report something as missing when the repository shows it exists.',
     `Project knowledge lives in ${root}. REVIEW_CRITERIA already contains the standards for this stage; read other documents there only when they are relevant.`,
     'When you verified something in the repository, add repositoryFindings with this exact nested shape (arrays of OBJECTS, not strings):',
@@ -45,7 +54,9 @@ export function createLocalAgentKnowledgeReviewPrompt(
       assumptions: [], openQuestions: [], uncheckedScopes: [],
     } }),
     'Cite only files you actually read. Paths are relative to the repository root without line suffixes; lineStart/lineEnd are 1-based. Leave repositoryDigest and contentDigest empty: DevFlow computes them from the repository bytes. Never include source bodies, absolute paths or secrets.',
-    'Omit repositoryFindings when the review did not need the repository. Repository findings are supplementary notes: they are not Gate evidence and never satisfy or approve the Gate.',
+    native
+      ? 'Before the final review, read at least one relevant file with repo_read. Final repositoryFindings must include at least one citation to a file in those observations. Repository findings are supplementary notes: they are not Gate evidence and never satisfy or approve the Gate.'
+      : 'Omit repositoryFindings when the review did not need the repository. Repository findings are supplementary notes: they are not Gate evidence and never satisfy or approve the Gate.',
     '',
     reviewPrompt,
   ].join('\n')

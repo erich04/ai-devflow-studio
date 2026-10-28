@@ -15,6 +15,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { indexKnowledgeSources } from './knowledge'
+import { assembleRetrievedKnowledgeContext, renderRetrievedKnowledgeContext } from './knowledge-retrieval-context'
 import {
   CODING_BRIEF_INSTRUCTIONS_MAX_BYTES,
   CODING_BRIEF_KNOWLEDGE_BUDGET_BYTES,
@@ -296,6 +297,184 @@ describe('buildCodingBrief with resident knowledge (knowledge-context K3)', () =
     const brief = buildCodingBrief(base)
     expect(brief.prompt).toContain('No knowledge references are attached.')
     expect(brief.knowledgeContext).toBeUndefined()
+  })
+
+  it('keeps exact retrieved excerpts and preserves the original brief when no excerpt fits', () => {
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: project.id, userId: run.creatorId },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1',
+      modelVersion: 'todo-v1', degraded: false,
+      sources: [{ sourceRef: 'cleanup-v1', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic',
+        content: 'Only completed tasks older than seven days can be removed.' }],
+    })
+    const input = { ...base, knowledge: knowledge('devflow') }
+    const baseline = buildCodingBrief(input)
+    const delivered = buildCodingBrief({ ...input, retrievedKnowledge })
+    expect(delivered.prompt).toContain(renderRetrievedKnowledgeContext(retrievedKnowledge))
+    expect(delivered.knowledgeContext?.retrievedKnowledge).toEqual(retrievedKnowledge.manifest)
+    expect(delivered.compaction?.sources.find((source) => source.id === 'retrieved-knowledge'))
+      .toMatchObject({ representation: 'full' })
+
+    const smallBaseline = buildCodingBrief({ ...input, maxContextBytes: new TextEncoder().encode(baseline.prompt).byteLength })
+    const constrained = buildCodingBrief({
+      ...input, retrievedKnowledge,
+      maxContextBytes: new TextEncoder().encode(smallBaseline.prompt).byteLength,
+    })
+    expect(constrained.prompt).toBe(smallBaseline.prompt)
+    expect(constrained.knowledgeContext?.retrievedKnowledge).toMatchObject({
+      references: [], usedBytes: 0, contentBytes: 0, omittedCount: 1,
+    })
+    expect(constrained.prompt).toContain('BUILD_RULE_BODY')
+    expect(constrained.prompt).not.toContain('RETRIEVED_PROJECT_KNOWLEDGE')
+  })
+
+  it('shares a nearly full coding budget with semantic retrieval by compacting optional resident narrative', () => {
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: project.id, userId: run.creatorId },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1',
+      modelVersion: 'todo-v1', degraded: false,
+      sources: Array.from({ length: 5 }, (_, index) => ({
+        sourceRef: `semantic-${index}`, path: `docs/knowledge/recalled-${index}.md`, title: `Recall ${index}`,
+        contentDigest: `sha256:${String(index).repeat(64)}`, matchReason: 'semantic' as const,
+        content: `SEMANTIC_RULE_${index}: completed task cleanup uses the recorded completion date.`,
+      })),
+    })
+    const approved = { ...designArtifact, content: 'Complete approved implementation and acceptance plan.\n' }
+    const optionalNarrative = 'Historical implementation background.\n'.repeat(150)
+    const constraint = 'Constraint: retain the identifiers of unfinished tasks.'
+    const input = {
+      ...base,
+      run: { ...run, nodes: [{ ...buildNode, id: 'design-gate', kind: 'gate' as const, stage: 'design' as const,
+        status: 'success' as const, artifactIds: [approved.id] }] },
+      upstreamArtifacts: [approved],
+      memoryContext: [{ id: 'remembered-choice', revision: 1, statement: 'The user selected the existing task-list interface.' }],
+      knowledge: {
+        ...knowledge('devflow'),
+        documents: indexKnowledgeSources([{
+          sourcePath: 'docs/knowledge/implementation-background.md',
+          markdown: `---\ntitle: Implementation background\nstages: [build]\nsummary: Earlier implementation notes.\n---\n${optionalNarrative}${constraint}`,
+          updatedAt: '2026-09-30T00:00:00.000Z',
+        }]).documents,
+      },
+    }
+    // Reproduce the live run: the old policy accepts almost 24 KiB of complete input,
+    // leaving too little for even one framed retrieval source despite compressible prose.
+    const initial = buildCodingBrief(input)
+    approved.content += 'a'.repeat(23_864 - new TextEncoder().encode(initial.prompt).byteLength)
+    const baseline = buildCodingBrief(input)
+    expect(baseline.compaction?.outputBytes).toBe(23_864)
+    expect(baseline.prompt).toContain(optionalNarrative)
+    expect(baseline.compaction?.sources.find(source => source.id === 'knowledge')?.representation).toBe('full')
+
+    const brief = buildCodingBrief({ ...input, retrievedKnowledge })
+    expect(brief.prompt).toContain(renderRetrievedKnowledgeContext(retrievedKnowledge))
+    expect(brief.knowledgeContext?.retrievedKnowledge?.references).toHaveLength(5)
+    expect(brief.knowledgeContext?.retrievedKnowledge?.omittedCount).toBe(0)
+    expect(brief.prompt).toContain(approved.content)
+    expect(brief.prompt).toContain(input.memoryContext[0]!.statement)
+    expect(brief.prompt).toContain(input.userInstruction)
+    expect(brief.prompt).toContain(run.request)
+    expect(brief.prompt).toContain(constraint)
+    expect(brief.prompt).not.toContain(optionalNarrative)
+    expect(brief.compaction?.sources.find(source => source.id === 'knowledge')?.representation).toBe('summary')
+    expect(brief.compaction?.outputBytes).toBe(new TextEncoder().encode(brief.prompt).byteLength)
+    expect(brief.compaction?.outputBytes).toBeLessThanOrEqual(24_000)
+  })
+
+  it('truthfully omits retrieval when approved content and Memory leave no space', () => {
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: project.id, userId: run.creatorId },
+      queryDigest: `sha256:${'b'.repeat(64)}`, degraded: false,
+      sources: [{ sourceRef: 'no-space', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic', content: 'SEMANTIC_CLEANUP_RULE' }],
+    })
+    const approved = { ...designArtifact, content: 'Complete approved specification.\n' }
+    const input = {
+      ...base,
+      run: { ...run, nodes: [{ ...buildNode, id: 'design-gate', kind: 'gate' as const, stage: 'design' as const,
+        status: 'success' as const, artifactIds: [approved.id] }] },
+      upstreamArtifacts: [approved],
+      memoryContext: [{ id: 'remembered-choice', revision: 1, statement: 'Keep the selected task-list interface.' }],
+    }
+    approved.content += 'a'.repeat(24_000 - new TextEncoder().encode(buildCodingBrief(input).prompt).byteLength)
+    const baseline = buildCodingBrief(input)
+    const brief = buildCodingBrief({ ...input, retrievedKnowledge })
+    expect(brief.prompt).toBe(baseline.prompt)
+    expect(brief.prompt).toContain(approved.content)
+    expect(brief.prompt).toContain(input.memoryContext[0]!.statement)
+    expect(brief.compaction?.outputBytes).toBe(24_000)
+    expect(brief.compaction?.sources.find(source => source.id === 'retrieved-knowledge'))
+      .toMatchObject({ representation: 'omitted', outputBytes: 0 })
+    expect(brief.knowledgeContext?.retrievedKnowledge).toMatchObject({
+      references: [], usedBytes: 0, contentBytes: 0, omittedCount: 1,
+    })
+    expect(brief.prompt).not.toContain('SEMANTIC_CLEANUP_RULE')
+  })
+
+  it('records a bounded retrieved source as summarized instead of claiming full coverage', () => {
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: project.id, userId: run.creatorId },
+      queryDigest: `sha256:${'b'.repeat(64)}`, degraded: false,
+      sources: Array.from({ length: 3 }, (_, index) => ({
+        sourceRef: `large-${index}`, path: `docs/knowledge/large-${index}.md`, title: `Large ${index}`,
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic' as const,
+        content: `SEMANTIC_RULE_${index}: ${'Historical detail. '.repeat(100)}`,
+      })),
+    })
+    const brief = buildCodingBrief({ ...base, maxContextBytes: 4_000, retrievedKnowledge })
+    const originalSection = `Retrieved Project Knowledge\n${renderRetrievedKnowledgeContext(retrievedKnowledge)}`
+    const deliveredSection = brief.prompt.slice(brief.prompt.indexOf('Retrieved Project Knowledge\n'))
+    expect(brief.knowledgeContext?.retrievedKnowledge?.references.length).toBeGreaterThan(0)
+    expect(deliveredSection.length).toBeLessThan(originalSection.length)
+    expect(brief.compaction?.sources.find(source => source.id === 'retrieved-knowledge')).toEqual({
+      id: 'retrieved-knowledge', representation: 'summary',
+      inputBytes: new TextEncoder().encode(originalSection).byteLength,
+      outputBytes: new TextEncoder().encode(deliveredSection).byteLength,
+    })
+    expect(brief.compaction?.outputBytes).toBeLessThanOrEqual(4_000)
+  })
+
+  it.each(['gate', 'instructions'] as const)('does not remove multiline %s rules to make room for retrieval', (protectedKind) => {
+    const rule = protectedKind === 'gate'
+      ? '验收条件：\n- 退款需要两名主管签字。'
+      : 'Use corepack pnpm.\n- Run the project test command.';
+    const body = `${'Historical implementation background.\n'.repeat(150)}${rule}`
+    const approved = { ...designArtifact, content: 'Complete approved design.\n' }
+    const input = {
+      ...base,
+      run: { ...run, nodes: [{ ...buildNode, id: 'design-gate', kind: 'gate' as const, stage: 'design' as const,
+        status: 'success' as const, artifactIds: [approved.id] }] },
+      upstreamArtifacts: [approved],
+      knowledge: {
+        ...knowledge('devflow'),
+        documents: protectedKind === 'gate' ? indexKnowledgeSources([{
+          sourcePath: 'docs/knowledge/gate-rule.md',
+          markdown: `---\ntitle: Gate rule\nstages: [build]\ngate: true\nsummary: Build policy.\n---\n${body}`,
+          updatedAt: '2026-09-30T00:00:00.000Z',
+        }]).documents : [],
+        projectInstructions: protectedKind === 'instructions' ? {
+          ...instructions, content: body, bytes: new TextEncoder().encode(body).byteLength,
+        } : instructions,
+      },
+    }
+    const initial = buildCodingBrief(input)
+    approved.content += 'a'.repeat(23_864 - new TextEncoder().encode(initial.prompt).byteLength)
+    const baseline = buildCodingBrief(input)
+    expect(baseline.prompt).toContain(body)
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'build', scope: { projectId: project.id, userId: run.creatorId },
+      queryDigest: `sha256:${'b'.repeat(64)}`, degraded: false,
+      sources: [{ sourceRef: 'cleanup', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic', content: 'SEMANTIC_RULE' }],
+    })
+    const brief = buildCodingBrief({ ...input, retrievedKnowledge })
+    expect(brief.prompt).toBe(baseline.prompt)
+    expect(brief.prompt).toContain(body)
+    expect(brief.prompt).toContain(approved.content)
+    expect(brief.knowledgeContext?.retrievedKnowledge).toMatchObject({
+      references: [], usedBytes: 0, contentBytes: 0, omittedCount: 1,
+    })
   })
 })
 

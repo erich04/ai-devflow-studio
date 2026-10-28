@@ -10,7 +10,7 @@
 
 | 工作包 | 已实现 | 证据与边界 |
 | --- | --- | --- |
-| A 契约与数据 | 描述符 v3、Harness protocol 2；schema 39 的持久会话、大内容引用、模型 attempt、工具收据、权限、问题、检查点、修订及输入身份 | shared 契约测试、SQLite 重启/CAS/终态约束与既有 schema 回归通过。版本迁移不把旧记录改成 v3 |
+| A 契约与数据 | 描述符 v3、Harness protocol 2；schema 41（合并 main 后由 39 改号，main 已用 39、40）的持久会话、大内容引用、模型 attempt、工具收据、权限、问题、检查点、修订及输入身份 | shared 契约测试、SQLite 重启/CAS/终态约束与既有 schema 回归通过。版本迁移不把旧记录改成 v3 |
 | B Provider 与历史 | 复用原生工具协议；精确序列化请求、持久操作 ID、逐次预算；长历史和闭合工具配对压缩，用户原话单独保留 | 协议、请求与压缩确定性测试通过；真实 DeepSeek high / 非思考、SSE / 非流式端点检查全部通过 |
 | C 自适应循环 | 搜索、分页读取、TS/JS 符号、上游材料、编辑、测试、澄清、插话、暂停/继续、无进展检测；达到批次边界自动让出后继续 | 真实文件/SQLite、多次工具反馈、问题重启续答通过；其他语言的语义索引明确不可用，可继续文本检索 |
 | D 候选与事务 | B 输入、独立 Git 候选 C、交付 D、验证 V；实际文件冻结、内容/模式摘要、二进制、重命名、文件与目录转换、预写应用/恢复 | 候选文件、路径与链接边界、精确修订重放、真实命令进程及 Linux/macOS 回归通过。无法确认重命名时保留删除/新增，不猜关系 |
@@ -32,7 +32,7 @@
 | --- | --- |
 | `corepack pnpm verify` | 390 个测试文件通过、3 个跳过；4,953 项测试通过、18 项跳过；类型检查与跨平台静态检查通过。跳过项不计为通过 |
 | `corepack pnpm build` | 全工作区构建通过 |
-| 打包桌面应用 | 本机 `build:desktop-pilot` 与 `test:desktop-pilot-smoke` 通过，包括 schema 39；修复了旧断言仍要求 schema 38 的 CI 失败 |
+| 打包桌面应用 | 本机 `build:desktop-pilot` 与 `test:desktop-pilot-smoke` 通过，当时为 schema 39；修复了旧断言仍要求 schema 38 的 CI 失败 |
 | `corepack pnpm test:e2e` | 46 通过、1 跳过 |
 | `corepack pnpm test:electron-smoke` | macOS 真实应用：任务中心、工作流、审核、权限、测试、持久化及移除提供方通过 |
 | Native v2 Electron | 原入口兼容流程通过 |
@@ -82,6 +82,20 @@ Windows 的 `50f5a15` 真实 Electron 日志已确认 v3 全链路通过、应�
 - 接受：模型补丁只覆盖原生待执行工具批次，遗漏默认结构化执行器的恢复边界。公开与独立测试虽然都是 81 条，组成不同，独立断言实际为 80／81；公开退出码和内容摘要通过不等于行为要求全部满足。
 - 不接受“当前主干需要同一补丁”的推论：当前 `workbench-conversation-service.ts` 已用 `completingRecovery` 处理该历史边界。失败属于历史题中生成的候选，不修改主干来掩盖评测失败，也不把保留集断言暴露给模型。
 - 不接受“缺少未结构化验收提示”的结论：`NativeCodingHarnessPanel.tsx` 已在验收条目为空时显示该提示，完成页也明确区分技术验证与业务验收。未据此增加重复实现。诊断中未实际打印的检查点字段仍作为推断，不写成观测事实。
+
+## 2026-10-27 合并 main
+
+把 `origin/main`（`289a12b`，#257）合入本分支，解决了 16 个冲突文件。只调整合并所需的部分，Native v3 的行为和评测规则不变。
+
+- **数据库版本**：main 已把 39 用于 Hindsight、40 用于 Memory 候选，本分支的持久会话表改为 **schema 41**。本分支以前写入的 39 号数据库没有 main 的 Hindsight 表，41 号迁移会一并补建（`create table if not exists`，对按 main 升级的数据库不起作用）。新增 `native-coding-schema-migration.test.ts` 用这种旧库验证可以打开并升级到 41。
+- **编码问答与 v3 会话**：main 新增的 OpenCode 问答（#237）和 v3 的 `harness` 结果并存。旧协议的问答和权限续跑遇到 v3 会话时明确报错，不交给旧流程处理。任务页同时保留问答面板和 v3 面板。
+- **冒烟脚本**：#201 修改了只读门禁审查的系统提示，`native-coding-electron-smoke` 的模拟模型按旧文字识别审查请求，在 main 上已经失败（main 的 CI 不跑这项冒烟）。改为按三个工具名识别。
+
+验证（模拟模型，未调用付费 API）：
+
+- 完整 `corepack pnpm verify` 通过：442 个测试文件、5,645 项通过，3 个文件、18 项跳过。
+- `native-coding-electron-smoke` 的 v2、v3 自动、v3 人工验收三种模式通过；`test:electron-smoke`、`test:workbench-conversation-electron-smoke`、`test:e2e`（46 项）通过。
+- `test:opencode-question-electron` 在合并后和 main 上都出现过“等待 opencode serve 超时”，各自也都通过过一次，属于本机 OpenCode 启动时间的波动，与本次合并无关。
 
 ## 尚未满足的发布条件
 

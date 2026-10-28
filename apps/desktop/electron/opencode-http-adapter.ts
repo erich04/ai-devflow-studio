@@ -1,4 +1,4 @@
-import { safeRelayRequestId } from '@ai-devflow/shared'
+import { safeRelayRequestId, parseCodingQuestions, type CodingQuestionInfo, type CodingQuestionReply } from '@ai-devflow/shared'
 
 export type Fetcher = typeof fetch
 
@@ -21,6 +21,9 @@ export type OpencodeMessageModel = {
 export type OpencodeSession = {
   id: string
   directory: string
+  parentID?: string
+  agent?: string
+  metadata?: Record<string, unknown>
   permission?: OpencodePermissionRule[]
 }
 
@@ -139,10 +142,10 @@ export class OpencodeMessageResponseError extends Error {
   }
 }
 
-export function createDefaultOpencodePermissionRules(): OpencodePermissionRule[] {
+export function createDefaultOpencodePermissionRules(options: { question?: boolean } = {}): OpencodePermissionRule[] {
   return [
     { permission: '*', pattern: '*', action: 'deny' },
-    { permission: 'question', pattern: '*', action: 'deny' },
+    { permission: 'question', pattern: '*', action: options.question ? 'allow' : 'deny' },
     { permission: 'task', pattern: '*', action: 'deny' },
     ...['read', 'glob', 'grep', 'list', 'edit', 'write', 'patch'].map((permission) => ({
       permission,
@@ -208,6 +211,8 @@ export async function createOpencodeSession(input: {
   directory: string
   title: string
   model: OpencodeSessionModel
+  agent?: string
+  metadata?: Record<string, unknown>
   permissionRules?: OpencodePermissionRule[]
   fetcher?: Fetcher
   signal?: AbortSignal
@@ -215,6 +220,8 @@ export async function createOpencodeSession(input: {
   return postJson<OpencodeSession>(input.fetcher, input.baseUrl, withDirectory('/session', input.directory), {
     title: input.title,
     model: input.model,
+    ...(input.agent ? { agent: input.agent } : {}),
+    ...(input.metadata ? { metadata: input.metadata } : {}),
     permission: input.permissionRules ?? createDefaultOpencodePermissionRules(),
   }, input.signal)
 }
@@ -249,6 +256,27 @@ export async function sendOpencodeMessage(input: {
   return response
 }
 
+type OpencodeSessionRequest = { baseUrl: string; directory: string; sessionId: string; fetcher?: Fetcher; signal?: AbortSignal }
+
+export async function getOpencodeSession(input: OpencodeSessionRequest): Promise<OpencodeSession> {
+  return getJson(input.fetcher, input.baseUrl, withDirectory(`/session/${encodeURIComponent(input.sessionId)}`, input.directory), input.signal)
+}
+
+export async function listOpencodeChildSessions(input: OpencodeSessionRequest): Promise<OpencodeSession[]> {
+  const children = await getJson<unknown>(input.fetcher, input.baseUrl,
+    withDirectory(`/session/${encodeURIComponent(input.sessionId)}/children`, input.directory), input.signal)
+  if (!Array.isArray(children) || children.length > 32) throw new Error('Invalid OpenCode child sessions')
+  return children as OpencodeSession[]
+}
+
+export async function updateOpencodeSessionMetadata(input: OpencodeSessionRequest & { metadata: Record<string, unknown> }): Promise<OpencodeSession> {
+  return readJson(await fetchOpencodeResponse(input.fetcher, input.baseUrl,
+    withDirectory(`/session/${encodeURIComponent(input.sessionId)}`, input.directory), {
+      method: 'PATCH', headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ metadata: input.metadata }), ...(input.signal ? { signal: input.signal } : {}),
+    }))
+}
+
 export async function listOpencodeMessages(input: {
   baseUrl: string
   sessionId: string
@@ -276,6 +304,30 @@ export async function listOpencodePermissions(input: {
     input.directory ? withDirectory('/permission', input.directory) : '/permission',
     input.signal,
   )
+}
+
+export type OpencodeQuestion = { id: string; sessionID: string; questions: CodingQuestionInfo[]; tool?: { messageID: string; callID: string } }
+
+export async function listOpencodeQuestions(input: {
+  baseUrl: string; directory: string; fetcher?: Fetcher; signal?: AbortSignal
+}): Promise<OpencodeQuestion[]> {
+  const value = await getJson<unknown>(input.fetcher, input.baseUrl, withDirectory('/question', input.directory), input.signal)
+  if (!Array.isArray(value) || value.length > 128) throw new Error('Invalid OpenCode questions')
+  return value.map((item: unknown) => {
+    if (!isRecord(item) || typeof item.id !== 'string' || !/^[\w-]{1,200}$/u.test(item.id) ||
+      typeof item.sessionID !== 'string' || !/^[\w-]{1,200}$/u.test(item.sessionID)) throw new Error('Invalid OpenCode question identity')
+    if (item.tool !== undefined && (!isRecord(item.tool) || typeof item.tool.messageID !== 'string' || typeof item.tool.callID !== 'string')) throw new Error('Invalid OpenCode question tool')
+    return { id: item.id, sessionID: item.sessionID, questions: parseCodingQuestions(item.questions),
+      ...(isRecord(item.tool) ? { tool: { messageID: String(item.tool.messageID), callID: String(item.tool.callID) } } : {}) }
+  })
+}
+
+export async function replyOpencodeQuestion(input: {
+  baseUrl: string; directory: string; requestId: string; reply: CodingQuestionReply; fetcher?: Fetcher; signal?: AbortSignal
+}): Promise<boolean> {
+  return postJson<boolean>(input.fetcher, input.baseUrl,
+    withDirectory(`/question/${encodeURIComponent(input.requestId)}/${input.reply.kind === 'answer' ? 'reply' : 'reject'}`, input.directory),
+    input.reply.kind === 'answer' ? { answers: input.reply.answers } : {}, input.signal)
 }
 
 export async function getOpencodeSessionStatus(input: {

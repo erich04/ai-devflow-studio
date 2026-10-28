@@ -1,4 +1,5 @@
 import { SessionPermissionChoice } from '../components/CodingSessionPermissions'
+import { CodingPermissionCommand } from '../components/CodingPermissionCommand'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { FolderOpen, RotateCcw, Trash2 } from 'lucide-react'
@@ -28,6 +29,7 @@ const codingPhaseCopy: Partial<Record<CodingRuntimeActionProjection['phase'], st
   bootstrapping: '正在安装依赖',
   running: '正在编码',
   waiting_permission: '等待权限',
+  waiting_input: '等待回答',
   applying: '正在应用改动',
   testing: '正在运行检查',
   completed: '已完成',
@@ -177,6 +179,7 @@ export function CodingWorkPanel({
   focusRef: RefObject<HTMLDivElement | null>
 }) {
   if (!projection) return null
+  if (projection.phase === 'waiting_input' && latestCodingRun?.question) return null
   const permission = projection.action.id === 'review-permission' ? projection.permission : undefined
   const phase = codingPhaseCopy[projection.phase]
   if (permission && (permission.kind === 'change-set' || permission.kind === 'change-acceptance') && latestCodingRun) {
@@ -198,6 +201,7 @@ export function CodingWorkPanel({
         <span className="panel-label">权限请求 · 批准与拒绝在状态行</span>
         <strong>{permission.request.title}</strong>
         <p>{permission.request.reasons.join(' ')}</p>
+        <CodingPermissionCommand request={permission.request} />
         <div className="knowledge-reference-meta">
           <span>{permission.request.permission}</span>
           <span>风险 {commandRiskLabels[permission.request.risk] ?? permission.request.risk}</span>

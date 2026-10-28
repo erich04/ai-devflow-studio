@@ -1,12 +1,61 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentReviewResult, CodingAgentRun, ManagedCodingWorkspace } from '@ai-devflow/shared'
-import { CodingRetryDialog, CodingWorkspaceRecords, GateReviewRunPanel, TestRunPanel } from './TaskWorkPanel'
+import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
+import { CodingRetryDialog, CodingWorkPanel, CodingWorkspaceRecords, GateReviewRunPanel, TestRunPanel } from './TaskWorkPanel'
 
 const review = { id: 'review-1', model: 'model-a', createdAt: '2026-09-28T01:00:00.000Z' } as AgentReviewResult
 const workspace = {
   id: 'workspace-1', worktreePath: '/tmp/devflow-worktrees/run-1', cleanupStatus: 'active',
 } as ManagedCodingWorkspace
+
+describe('CodingWorkPanel command permission details', () => {
+  const run: CodingAgentRun = {
+    id: 'coding-command', runId: 'run-command', nodeId: 'build', projectId: 'project-command', requestedBy: 'user-1',
+    providerId: 'provider-1', engine: 'opencode-http', status: 'waiting_permission', branchName: 'devflow/command',
+    userInstruction: 'Run saved tests', prompt: 'Run saved tests', summary: 'Waiting', changedPaths: [],
+    startedAt: '2026-10-23T12:00:00.000Z', redacted: true,
+  }
+  function projection(command?: string): CodingRuntimeActionProjection {
+    return {
+      scope: { runId: run.runId, nodeId: run.nodeId, projectId: run.projectId }, phase: 'waiting_permission',
+      action: { id: 'review-permission', target: 'agents-permission', label: '审批权限', summary: 'Waiting for permission', disabled: false, createsNewRun: false, mayInvokeProvider: false, requiresConfirmation: false },
+      history: [run], latestRun: run, activeRun: run,
+      permission: {
+        request: { id: 'permission-command', codingRunId: run.id, runId: run.runId, nodeId: run.nodeId,
+          origin: 'coding_executor', permission: 'bash', title: 'opencode requested bash permission', ...(command === undefined ? {} : { command }),
+          risk: 'warn', reasons: ['opencode requested a tool permission through the managed adapter.'],
+          status: 'pending', requestedAt: '2026-10-23T12:00:00.000Z', expiresAt: '2026-10-23T12:05:00.000Z' },
+        kind: 'legacy', remainingMs: 120_000, expired: false, canApprove: true, previewVerified: false, changedPaths: [],
+      },
+    }
+  }
+  const props = { readinessDisplay: null, readinessError: '', latestCodingRun: run, workspace: undefined, isReplying: false, focusRef: { current: null } }
+
+  it.each(['npm test', 'npm test -- --name="<b>x</b>"\nprintf \'%s\\n\' "$RESULT" > result.txt'])('shows the exact pending command without opening another disclosure: %s', (command) => {
+    const onDecision = vi.fn()
+    render(<CodingWorkPanel {...props} projection={projection(command)} onDecision={onDecision} />)
+    const panel = screen.getByTestId('workbench-coding-permission-summary')
+    const preview = within(panel).getByLabelText('待授权命令')
+    expect(preview).toBeVisible()
+    expect(preview.textContent).toBe(command)
+    expect(preview.closest('details')).toBeNull()
+    expect(preview.querySelector('b')).toBeNull()
+    expect(onDecision).not.toHaveBeenCalled()
+  })
+
+  it('updates to the new request command and does not invent a command when none is provided', () => {
+    const onDecision = vi.fn()
+    const view = render(<CodingWorkPanel {...props} projection={projection('npm test')} onDecision={onDecision} />)
+    view.rerender(<CodingWorkPanel {...props} projection={projection('npm run lint')} onDecision={onDecision} />)
+    expect(screen.getByLabelText('待授权命令').textContent).toBe('npm run lint')
+    expect(screen.queryByText('npm test')).not.toBeInTheDocument()
+    view.rerender(<CodingWorkPanel {...props} projection={projection()} onDecision={onDecision} />)
+    expect(screen.queryByLabelText('待授权命令')).not.toBeInTheDocument()
+    expect(screen.getByText('opencode requested bash permission')).toBeVisible()
+    expect(onDecision).not.toHaveBeenCalled()
+  })
+})
 
 describe('GateReviewRunPanel (plan W2)', () => {
   it('re-runs only after the existing confirmation and passes the previous review', () => {

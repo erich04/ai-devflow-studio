@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createCodingRunMemoryCandidate,
   sanitizeCodingDiffArtifact,
@@ -25,6 +25,9 @@ import { learnFromCompletedCodingRun, type CodingRunMemoryLearningStore } from '
 import { codingRunPolicyAuthorityDigest, createCodingRunPolicyAuthority } from './coding-run-memory-policy'
 import { AgentMemoryDuplicateError, createAgentMemoryHumanActions } from './agent-memory-human-actions'
 import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access'
+import { buildCodingLearningEvent } from './automatic-memory-capture'
+import { automaticMemoryDigest } from './automatic-memory-store'
+import { classifyMemoryLearningFact } from './automatic-memory-policy'
 
 const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -33,6 +36,7 @@ const sqlJsDist = path.dirname(require.resolve('sql.js/dist/sql-wasm.wasm'))
 
 const directories: string[] = []
 afterEach(async () => {
+  vi.restoreAllMocks()
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
@@ -115,6 +119,37 @@ async function seed(store: LocalStore, codingRun: CodingAgentRun = completedCodi
 }
 
 describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () => {
+  it('durably projects opted-in formal memory and queues cleanup at expiry without exporting candidates', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-20T00:00:00.000Z'))
+    const dbPath = await tempDbPath()
+    const store = await createLocalStore({ dbPath })
+    const codingRun = completedCodingRun()
+    await seed(store, codingRun)
+    await store.configureHindsight({
+      projectId: project.id, ownerUserId: localScope.userId, projectPath: project.path,
+      knowledgeRoot: 'docs/knowledge', rootGeneration: 'fixture-root',
+      endpoint: 'http://127.0.0.1:8888', encryptedApiKey: null, enabled: true,
+      includeMemories: true, selectedPaths: [], modelDigest: 'fixture-model',
+      model: { version: 'fixture-v1', dimensions: [{ key: 'sem_kind', type: 'text' }] },
+    })
+    const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now: () => '2026-09-30T00:05:00.000Z' })
+    expect(learned.promoted).toHaveLength(1)
+    const projected = await store.listHindsightProjections(project.id)
+    expect(projected).toHaveLength(1)
+    expect(projected[0]).toMatchObject({ kind: 'memory', status: 'queued', memoryId: learned.promoted[0]!.memoryId })
+    const claim = await store.claimHindsightProjection('2026-10-20T00:00:00.000Z')
+    await store.settleHindsightProjection(claim!.record.id, claim!.leaseToken, 'ready', '2026-10-20T00:00:01.000Z')
+    await store.hydrateAgentMemoryRevisions({
+      stateVersion: 1, id: 'expire-hindsight', runtimeId: 'later-runtime',
+      scope: { ...localScope, sessionId: 'later-session' }, requestedAt: '2026-10-31T00:00:00.000Z', limit: 1,
+    }, [learned.promoted[0]!.memoryId])
+    store.close()
+    const reopened = await createLocalStore({ dbPath })
+    expect((await reopened.getAgentMemoryHead(learned.promoted[0]!.memoryId))?.status).toBe('expired')
+    expect((await reopened.listHindsightProjections(project.id))[0]).toMatchObject({ status: 'cleanup_pending', revoked: true, payload: '' })
+    reopened.close()
+  })
+
   it('accepts a candidate from a completed, test-passing Coding Run once and replays it after restart', async () => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
@@ -260,7 +295,7 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(39)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listAgentMemoryCandidates(project.id)).resolves.toEqual([legacy])
     migrated.close()
     const inspected = new SQL.Database(await readFile(dbPath))
@@ -290,7 +325,7 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(39)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
     await expect(migrated.dismissAgentMemoryCandidate({
       candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,
@@ -304,6 +339,60 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
 
 describe('learning Memory from a completed Coding Run (ADR 0024 §4–5)', () => {
   const now = () => '2026-09-30T00:05:00.000Z'
+  it.each(['coding_first', 'hindsight_first', 'interleaved'] as const)('deduplicates verified commands across the old and Hindsight learning paths: %s', async (order) => {
+    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now())
+    const store = await createLocalStore({ dbPath: await tempDbPath() })
+    try {
+      const codingRun = completedCodingRun(); await seed(store, codingRun)
+      const hindsight = await store.configureHindsight({ projectId: project.id, ownerUserId: localScope.userId,
+        projectPath: project.path, knowledgeRoot: 'docs/knowledge', rootGeneration: 'fixture-root', endpoint: 'http://127.0.0.1:8888',
+        encryptedApiKey: null, enabled: true, includeMemories: true, selectedPaths: [], modelDigest: 'fixture-model',
+        model: { version: 'fixture-v1', dimensions: [{ key: 'sem_kind', type: 'text' }] } })
+      await store.configureAutomaticMemory({ projectId: project.id, ownerUserId: localScope.userId,
+        enabled: true, hindsightGeneration: hindsight.generation, maxRetainsPerDay: 10 })
+      const source = buildCodingLearningEvent(codingRun, evidence, project.testCommand, localScope)!
+      const event = (await store.enqueueMemoryLearningEvent(source))!
+      const claim = (await store.claimMemoryLearningJob(now()))!
+      const text = 'The command npm test passed. | Involving: assistant'
+      const fact = { id: `fact-${event.id}`, eventId: event.id, remoteFactId: 'remote-command', documentId: claim.job.documentId,
+        text, factType: 'experience' as const, sourceDigest: event.sourceDigest, contentDigest: automaticMemoryDigest(text), extractedAt: now() }
+      await store.recordMemoryLearningExtraction(claim.job.id, claim.leaseToken, [fact])
+      const decision = classifyMemoryLearningFact(event, fact, [], now())
+      expect(decision.disposition).toBe('auto_save')
+      await store.recordMemoryLearningDecisions(claim.job.id, claim.leaseToken, [decision])
+      if (order === 'coding_first') {
+        const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+        expect(learned.promoted).toHaveLength(1)
+        const before = await store.listAgentMemoryRevisions(learned.promoted[0]!.memoryId)
+        expect(await store.commitMemoryLearningDecision({ decisionId: decision.id, mode: 'automatic' })).toEqual({ status: 'ignored' })
+        expect(await store.getMemoryLearningDecision(decision.id)).toMatchObject({ disposition: 'ignored', reason: 'duplicate' })
+        expect(await store.listAgentMemoryRevisions(learned.promoted[0]!.memoryId)).toEqual(before)
+      } else if (order === 'hindsight_first') {
+        const saved = await store.commitMemoryLearningDecision({ decisionId: decision.id, mode: 'automatic' })
+        expect(saved.status).toBe('saved')
+        const before = await store.listAgentMemoryRevisions(saved.memoryId!)
+        const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+        expect(learned.promoted).toEqual([])
+        expect(learned.candidates.find(candidate => candidate.kind === 'test_command'))
+          .toMatchObject({ outcome: 'duplicate', duplicateOf: saved.memoryId })
+        expect(await store.listAgentMemoryRevisions(saved.memoryId!)).toEqual(before)
+      } else {
+        let automaticMemoryId: string | undefined
+        const interleaved = new Proxy(store, { get(target, property) {
+          if (property === 'commitAgentMemoryPromotion') return async (...args: Parameters<LocalStore['commitAgentMemoryPromotion']>) => {
+            automaticMemoryId = (await store.commitMemoryLearningDecision({ decisionId: decision.id, mode: 'automatic' })).memoryId
+            return target.commitAgentMemoryPromotion(...args)
+          }
+          return Reflect.get(target, property)
+        } })
+        const learned = await learnFromCompletedCodingRun({ store: interleaved, codingRun, evaluationPassed: true, now })
+        expect(automaticMemoryId).toBeDefined()
+        expect(learned.promoted).toEqual([])
+        expect(learned.notPromoted).toContainEqual(expect.objectContaining({ reason: 'duplicate', duplicateOf: automaticMemoryId }))
+      }
+      expect((await store.listAgentMemoryHeads(project.id)).filter(head => head.status === 'active')).toHaveLength(1)
+    } finally { store.close(); vi.useRealTimers() }
+  })
   function withRepair(store: LocalStore, codingRun: CodingAgentRun): CodingRunMemoryLearningStore {
     // A stored repair Change Set needs a real worktree digest; the learning step reads only these fields.
     const repair = { id: 'coding-change-set-repair', phase: 'repair', changes: [{ path: 'src/filter.ts' }] }
@@ -524,9 +613,8 @@ describe('project-wide Memory view and human actions without an Agent Runtime (A
     }
     await store.saveRun(otherRun)
     const otherSelection = { runId: otherRun.id, localProjectId: project.id }
-    const snapshot = await createAgentMemoryRendererAccess(store).list(otherSelection)
-    expect(snapshot.memories).toEqual([])
-    expect(snapshot.candidates).toEqual([])
+    await expect(createAgentMemoryRendererAccess(store).list(otherSelection)).rejects.toThrow('authority is invalid')
+    expect(await store.resolveLocalProjectMemoryPrincipal(project.id)).toEqual({ status: 'ambiguous' })
 
     const actions = createAgentMemoryHumanActions({ store, clock: () => '2026-09-30T00:10:00.000Z' })
     const exact = { memoryId: memory.memoryId, expectedRevision: memory.currentRevision, expectedHeadVersion: memory.headVersion,

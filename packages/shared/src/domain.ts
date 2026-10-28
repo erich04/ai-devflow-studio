@@ -735,6 +735,11 @@ export type AgentReviewContextManifest = {
   knowledgeContext?: KnowledgeContextManifest
   /** Optional for persisted v1 Reviews created before workflow-aware projection. */
   fieldProjection?: WorkflowContextProjection
+  /** Only the final attached background memories, after prompt budgeting. Not review criteria. */
+  backgroundMemory?: {
+    memories: Array<{ id: string; revision: number; headVersion: number; contentDigest: string }>
+    omittedCount: number
+  }
 }
 
 export type AgentReviewContext = {
@@ -750,6 +755,12 @@ export type AgentReviewContext = {
   knowledgeReferences: KnowledgeReference[]
   /** Bounded whole documents and catalogue; absent on legacy chunk-based reviews. */
   knowledgeSection?: string
+  /** Local host retrieval; its provenance is stored under manifest.knowledgeContext. */
+  retrievedKnowledge?: RetrievedKnowledgeContext
+  /** Low-trust experience; never authoritative rules, permissions or verification evidence. */
+  backgroundMemory?: Array<{
+    id: string; revision: number; headVersion: number; contentDigest: string; statement: string
+  }>
   knowledgeChunks: Array<
     Pick<KnowledgeChunk, 'id' | 'documentId' | 'sourcePath' | 'headingPath' | 'contentHash' | 'content'>
   >
@@ -992,6 +1003,39 @@ export type ProjectInstructionsSnapshot = {
   truncated: boolean
 }
 
+/** Host-verified local excerpts; remote extracted facts never become source text. */
+export type RetrievedKnowledgeSource = {
+  sourceRef: string
+  path: string
+  title: string
+  contentDigest: string
+  matchReason: 'lexical' | 'semantic' | 'both'
+  content: string
+  truncated?: boolean
+}
+
+export type RetrievedKnowledgeManifest = {
+  version: 1
+  stage: NodeStage
+  /** Local-only binding. Never grants access and never enters a team projection. */
+  scope: { projectId: string; userId: string }
+  queryDigest: string
+  configGeneration?: string
+  modelVersion?: string
+  degraded: boolean
+  budgetBytes: number
+  /** UTF-8 bytes of the exact rendered section, including its framing. */
+  usedBytes: number
+  contentBytes: number
+  omittedCount: number
+  references: Array<Omit<RetrievedKnowledgeSource, 'content'> & { bytes: number }>
+}
+
+export type RetrievedKnowledgeContext = {
+  manifest: RetrievedKnowledgeManifest
+  sources: RetrievedKnowledgeSource[]
+}
+
 export type KnowledgeContextManifest = {
   version: 1
   stage: NodeStage
@@ -1010,6 +1054,8 @@ export type KnowledgeContextManifest = {
   catalogued: Array<{ sourcePath: string; contentDigest: string; reason: 'budget' | 'other_stage' }>
   /** Catalogue entries dropped because the catalogue limit was reached. */
   omittedCount: number
+  /** Optional host-retrieved excerpts actually delivered alongside resident standards. */
+  retrievedKnowledge?: RetrievedKnowledgeManifest
 }
 
 /** `stage`: the document applies to the stage by its front matter (ADR 0025); not retrieval. */
@@ -1262,6 +1308,8 @@ export type TestEvidence = {
   sourceTree?: { digest: string; workspaceId?: string }
   /** Local provenance for Native v3. The test process ran in a private copy, not the delivery tree. */
   codingVerification?: { schemaVersion: 1; executionLocation: 'private_verification'; revisionDigest: string; productDigest: string; testPlanDigest: string; verificationBefore: string; verificationAfter: string; deliveryAfter: string; environmentDigest: string }
+  /** Local-only provenance of relevant standards; does not constitute test execution. */
+  knowledgeContext?: { retrievedKnowledge: RetrievedKnowledgeManifest }
   createdAt: string
 }
 
@@ -1400,6 +1448,7 @@ export type CodingAgentRunStatus =
   | 'queued'
   | 'preparing'
   | 'waiting_permission'
+  | 'waiting_input'
   | 'bootstrapping'
   | 'running'
   | 'applying'
@@ -1412,6 +1461,8 @@ export type CodingAgentRunStatus =
 
 export type CodingAgentRun = {
   harness?: import('./coding-harness').CodingHarnessSummary
+  question?: import('./coding-question').CodingQuestionRequest
+  questionReceipts?: import('./coding-question').CodingQuestionReceipt[]
   id: string
   runId: string
   nodeId: string
@@ -1756,6 +1807,8 @@ export type CodingSessionGrant = {
   actorId: string
   scopeKey: string
   rule: { kind: 'files'; paths: string[] } | { kind: 'command'; command: string }
+  /** Package-manager commands only: digest of the manifests and configuration that decide what the command runs. */
+  inputsDigest?: string
   createdAt: string
   expiresAt: string
   revokedAt?: string

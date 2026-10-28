@@ -1,6 +1,10 @@
 import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
+  AutomaticMemoryStatus,
+  ConfigureAutomaticMemoryInput,
+  ResolveAutomaticMemoryDecisionInput,
+  RememberConversationMemoryInput,
   DesignRevisionIdentity,
   DesignRevisionRequest,
   AgentProviderConfig,
@@ -345,6 +349,11 @@ export type DevFlowDesktopApi = {
   deleteAgentMemory: (
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
+  getAutomaticMemoryStatus?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
+  configureAutomaticMemory?: (input: ConfigureAutomaticMemoryInput) => Promise<AutomaticMemoryStatus>
+  processAutomaticMemory?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
+  resolveAutomaticMemoryDecision?: (input: ResolveAutomaticMemoryDecisionInput) => Promise<AutomaticMemoryStatus>
+  rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
@@ -374,6 +383,10 @@ export type DevFlowDesktopApi = {
   saveGateOverride: (input: SaveGateOverrideInput) => Promise<GateOverrideDecision>
   listGateOverrides: (input?: { runId?: string }) => Promise<GateOverrideDecision[]>
   saveSettings: (settings: Partial<LocalSettings>) => Promise<LocalSettings>
+  getHindsightStatus?: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').HindsightStatus>
+  configureHindsight?: (input: import('@ai-devflow/shared').HindsightSetupInput) => Promise<import('@ai-devflow/shared').HindsightStatus>
+  refreshHindsight?: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').HindsightStatus>
+  disableHindsight?: (input: { projectId: string }) => Promise<import('@ai-devflow/shared').HindsightStatus>
   saveMcpServers: (servers: McpServerDefinition[]) => Promise<McpServerDefinition[]>
   listAgentProviders: () => Promise<AgentProviderConfig[]>
   saveAgentProviderCredential: (input: AgentProviderCredentialInput) => Promise<ProviderCredentialMetadata>
@@ -430,6 +443,7 @@ export type DevFlowDesktopApi = {
   runCodingAgent: (input: RunCodingAgentInput) => Promise<RunCodingAgentResult>
   startRetryAttempt: (input: StartRetryAttemptInput) => Promise<StartRetryAttemptResult>
   cancelCodingAgentRun: (input: { codingRunId: string }) => Promise<CodingAgentRun>
+  replyCodingQuestion: (input: { codingRunId: string; requestId: string; revision: string; reply: import('@ai-devflow/shared').CodingQuestionReply }) => Promise<import('@ai-devflow/shared').CodingQuestionReceipt>
   replyCodingPermission: (input: {
     requestId: string
     codingRunId: string

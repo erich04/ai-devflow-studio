@@ -16,7 +16,7 @@ type AgentMemoryRendererStore = Pick<
   | 'getDesktopPairingCredential'
   | 'getAgentRuntime'
   | 'getRun'
->
+> & Partial<Pick<LocalStore, 'resolveLocalProjectMemoryPrincipal'>>
 
 export type ListAgentMemoryLifecycleInput = AgentMemoryLifecycleSelection
 

@@ -82,7 +82,7 @@ corepack pnpm exec tsx scripts/native-coding-data.ts verify /新备份目录
 corepack pnpm exec tsx scripts/native-coding-data.ts restore /备份目录 /原资料目录 --app-stopped
 ```
 
-备份不是跨机器迁移包。保留原机器密钥链和原项目 Git 仓库，D 的 Git 工作树引用仍可能指向该仓库。只有能够读取当前 schema 的应用可以打开恢复数据；不能用旧应用强行打开 schema 39。应用回滚应使用升级前完整备份，v3 历史不能降为 v2 重放。依赖目录恢复后需要按已授权计划重新准备。
+备份不是跨机器迁移包。保留原机器密钥链和原项目 Git 仓库，D 的 Git 工作树引用仍可能指向该仓库。只有能够读取当前 schema 的应用可以打开恢复数据；不能用旧应用强行打开 schema 41。应用回滚应使用升级前完整备份，v3 历史不能降为 v2 重放。依赖目录恢复后需要按已授权计划重新准备。
 
 ## 验证入口
 

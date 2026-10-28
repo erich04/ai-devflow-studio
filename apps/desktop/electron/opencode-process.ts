@@ -1,9 +1,13 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { isolatedOpencodeProfileEnv } from './opencode-profile-isolation.js'
+import { opencodeTaskPluginSource, type OpencodeTaskPolicy } from './opencode-task-guard.js'
+import { buildOpenCodeManagedPrompt } from './opencode-permission-policy.js'
 import {
   buildOpencodeServeArgs,
   listOpencodePermissions,
@@ -43,9 +47,12 @@ export type OpencodeProcessManagerDeps = {
 }
 
 export type EnsureManagedOpencodeServerInput = {
+  /** Coding owns a separate process slot with the question tool enabled. */
+  profile?: 'coding'
   projectId: string
   binaryPath: string
   env: NodeJS.ProcessEnv
+  taskPolicy?: OpencodeTaskPolicy
   /**
    * A non-secret digest or version that represents the saved project-level
    * OpenCode configuration. The manager combines it with the binary and
@@ -57,6 +64,7 @@ export type EnsureManagedOpencodeServerInput = {
 export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = {}) {
   type InternalManagedOpencodeServer = ManagedOpencodeServer & {
     fingerprint: string
+    key: string
     ready: boolean
     runtimeRoot: string
     runtimeRootCleanup?: Promise<void>
@@ -75,7 +83,6 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   const processTeardownFailures = new Map<InternalManagedOpencodeServer, unknown>()
   const spawnProcess = deps.spawnProcess ?? spawn
   const findPort = deps.findPort ?? randomLocalPort
-  const waitUntilReady = deps.waitUntilReady ?? waitForOpencodeReady
   const createRuntimeRoot = deps.createRuntimeRoot ?? createOpencodeRuntimeRoot
   const removeRuntimeRoot = deps.removeRuntimeRoot ?? removeOpencodeRuntimeRoot
   const stopTimeoutMs = deps.stopTimeoutMs ?? 5_000
@@ -125,8 +132,9 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     if (stopping) {
       throw stoppingError
     }
+    const key = processKey(input)
     const fingerprint = createOpencodeProcessFingerprint(input)
-    const pending = pendingServers.get(input.projectId)
+    const pending = pendingServers.get(key)
     if (pending) {
       if (pending.fingerprint === fingerprint) {
         return pending.promise
@@ -140,7 +148,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       return ensure(input)
     }
 
-    const existing = servers.get(input.projectId)
+    const existing = servers.get(processKey(input))
     if (existing) {
       if (existing.ready && existing.child.exitCode === null) {
         if (existing.fingerprint === fingerprint) {
@@ -153,12 +161,12 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     }
 
     const startup = startServer(input, fingerprint)
-    pendingServers.set(input.projectId, { fingerprint, promise: startup })
+    pendingServers.set(key, { fingerprint, promise: startup })
     try {
       return await startup
     } finally {
-      if (pendingServers.get(input.projectId)?.promise === startup) {
-        pendingServers.delete(input.projectId)
+      if (pendingServers.get(key)?.promise === startup) {
+        pendingServers.delete(key)
       }
     }
   }
@@ -179,16 +187,15 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     }
     let child: ManagedOpencodeChild
     try {
+      const env = input.taskPolicy
+        ? await taskEnvironment(input, runtimeRoot, baseUrl)
+        : effectiveEnvironment(input)
       child = spawnProcess(
         input.binaryPath,
         buildOpencodeServeArgs({ hostname: '127.0.0.1', port }),
         {
           cwd: runtimeRoot,
-          env: {
-            ...input.env,
-            OPENCODE_CLIENT: 'server',
-            OPENCODE_ENABLE_QUESTION_TOOL: 'false',
-          },
+          env,
           detached: platform !== 'win32',
           stdio: ['ignore', 'ignore', 'ignore'],
         },
@@ -206,6 +213,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     }
     const server: InternalManagedOpencodeServer = {
       projectId: input.projectId,
+      key: processKey(input),
       baseUrl,
       child,
       fingerprint,
@@ -213,7 +221,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       runtimeRoot,
     }
 
-    servers.set(input.projectId, server)
+    servers.set(processKey(input), server)
     let startupComplete = false
     let terminal = false
     let startupError: Error | undefined
@@ -222,9 +230,9 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       rejectStartup = reject
     })
     const cancelStartup = () => rejectStartup(stoppingError)
-    const projectCancellations = startupCancellations.get(input.projectId) ?? new Set()
+    const projectCancellations = startupCancellations.get(processKey(input)) ?? new Set()
     projectCancellations.add(cancelStartup)
-    startupCancellations.set(input.projectId, projectCancellations)
+    startupCancellations.set(processKey(input), projectCancellations)
     const handleTerminal = () => {
       if (terminal) {
         return
@@ -248,7 +256,13 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       if (stopping) {
         throw stoppingError
       }
-      await Promise.race([waitUntilReady(baseUrl), startupFailure])
+      // OpenCode 1.18.15 waits for its plugin SDK installation when a local
+      // plugin is configured. A fresh private task profile needs a bounded
+      // initialization window; other profiles keep their existing 30 seconds.
+      await Promise.race([
+        deps.waitUntilReady ? deps.waitUntilReady(baseUrl) : waitForOpencodeReady(baseUrl, input.taskPolicy ? 60_000 : 30_000),
+        startupFailure,
+      ])
       if (stopping) {
         throw stoppingError
       }
@@ -262,8 +276,8 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
       const spawnFailedBeforePid = Boolean(startupError && child.pid === undefined)
       const teardownErrors: unknown[] = []
       if (spawnFailedBeforePid) {
-        if (servers.get(input.projectId) === server) {
-          servers.delete(input.projectId)
+        if (servers.get(processKey(input)) === server) {
+          servers.delete(processKey(input))
         }
         try {
           await awaitRuntimeRootCleanup(server)
@@ -287,32 +301,28 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     } finally {
       projectCancellations.delete(cancelStartup)
       if (projectCancellations.size === 0) {
-        startupCancellations.delete(input.projectId)
+        startupCancellations.delete(processKey(input))
       }
     }
     return server
   }
 
   async function stopProject(projectId: string): Promise<void> {
-    for (const cancelStartup of startupCancellations.get(projectId) ?? []) {
-      cancelStartup()
-    }
-    const pending = pendingServers.get(projectId)
-    if (pending) {
-      await pending.promise.catch(() => undefined)
-    }
-
     const failures: unknown[] = []
-    const server = servers.get(projectId)
-    if (server) {
-      try {
-        await shutdownServer(server)
-      } catch (error) {
-        failures.push(error)
+    const projectServers = new Set<InternalManagedOpencodeServer>()
+    for (const profile of [undefined, 'coding'] as const) {
+      const key = processKey({ projectId, ...(profile ? { profile } : {}) })
+      for (const cancelStartup of startupCancellations.get(key) ?? []) cancelStartup()
+      const pending = pendingServers.get(key)
+      if (pending) await pending.promise.catch(() => undefined)
+      const server = servers.get(key)
+      if (server) {
+        projectServers.add(server)
+        try { await shutdownServer(server) } catch (error) { failures.push(error) }
       }
     }
     for (const failedServer of failedRuntimeRootServers) {
-      if (failedServer.projectId !== projectId || failedServer === server) continue
+      if (failedServer.projectId !== projectId || projectServers.has(failedServer)) continue
       try {
         await awaitRuntimeRootCleanup(failedServer)
       } catch (error) {
@@ -343,8 +353,8 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
         throw error
       }
       processTeardownFailures.delete(server)
-      if (servers.get(server.projectId) === server) {
-        servers.delete(server.projectId)
+      if (servers.get(server.key) === server) {
+        servers.delete(server.key)
       }
       await awaitRuntimeRootCleanup(server)
     })
@@ -370,7 +380,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     }
 
     for (const server of servers.values()) {
-      if (!pendingProjectIds.has(server.projectId)) {
+      if (!pendingProjectIds.has(server.key)) {
         launchShutdown(server, initialShutdowns)
       }
     }
@@ -393,7 +403,7 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
     )
     const trailingShutdowns: Promise<void>[] = []
     for (const server of servers.values()) {
-      if (!attemptedServers.has(server) && !failedPendingProjects.has(server.projectId)) {
+      if (!attemptedServers.has(server) && !failedPendingProjects.has(server.key)) {
         launchShutdown(server, trailingShutdowns)
       }
     }
@@ -435,17 +445,64 @@ export function createOpencodeProcessManager(deps: OpencodeProcessManagerDeps = 
   return { ensure, stopAll, stopProject }
 }
 
+function processKey(input: Pick<EnsureManagedOpencodeServerInput, 'projectId' | 'profile'>): string {
+  return JSON.stringify([input.projectId, input.profile ?? 'default'])
+}
+
+function effectiveEnvironment(input: EnsureManagedOpencodeServerInput): NodeJS.ProcessEnv {
+  return { ...input.env, OPENCODE_CLIENT: 'server', OPENCODE_ENABLE_QUESTION_TOOL: input.profile === 'coding' ? 'true' : 'false' }
+}
+
 function createOpencodeProcessFingerprint(input: EnsureManagedOpencodeServerInput): string {
-  const environment = Object.entries(input.env)
+  const environment = Object.entries(effectiveEnvironment(input))
     .filter((entry): entry is [string, string] => typeof entry[1] === 'string')
     .sort(([left], [right]) => left.localeCompare(right))
   return createHash('sha256')
     .update(JSON.stringify({
       binaryPath: input.binaryPath,
       configurationFingerprint: input.configurationFingerprint ?? '',
+      taskPolicy: input.taskPolicy,
       environment,
     }))
     .digest('hex')
+}
+
+async function taskEnvironment(input: EnsureManagedOpencodeServerInput, runtimeRoot: string, baseUrl: string): Promise<NodeJS.ProcessEnv> {
+  const policy = input.taskPolicy!
+  if (input.profile !== 'coding') throw new Error('Bounded tasks require the coding process profile')
+  const config = JSON.parse(input.env.OPENCODE_CONFIG_CONTENT ?? '{}') as Record<string, unknown>
+  if (!config.provider || typeof config.provider !== 'object' || !(policy.providerID in config.provider)) {
+    throw new Error('Bounded tasks require a saved, governed Provider binding')
+  }
+  // OpenCode installs its matched plugin SDK in this private config directory.
+  // Keeping the file alongside node_modules makes resolution independent of user/repo packages.
+  const pluginDirectory = join(runtimeRoot, 'config', 'opencode')
+  await mkdir(pluginDirectory, { recursive: true, mode: 0o700 })
+  const pluginPath = join(pluginDirectory, 'devflow-task-guard.mjs')
+  await writeFile(pluginPath, opencodeTaskPluginSource(policy, baseUrl), { mode: 0o600, flag: 'wx' })
+  const model = `${policy.providerID}/${policy.modelID}`
+  const toolDiscipline = [
+    'Each assistant response may contain at most one tool_call. Never call tools in parallel, including read-only tools; wait for its result before choosing the next call.',
+    `The parent and all children share ${policy.maxToolTurns} tool attempts for this entire run. Rejected attempts also consume this budget; delegation does not reset it.`,
+    'Read each relevant file once unless it changes or the earlier result was incomplete. Reuse the known contents and delegate narrowly without duplicating the parent\'s inspection.',
+    'Plan the necessary calls before acting and reserve tool attempts for the required edits and checks. Combine related changes to the same file into one edit where practical; avoid repeated status checks and unchanged file reads.',
+    'DevFlow independently runs the configured final test after your edits. Report the changes and any uncompleted work accurately; do not claim tests passed without evidence or spend the remaining budget repeating the same check.',
+  ].join('\n')
+  const env: NodeJS.ProcessEnv = { ...effectiveEnvironment(input), ...isolatedOpencodeProfileEnv(runtimeRoot, { isolateHome: true }),
+    OPENCODE_DISABLE_PROJECT_CONFIG: 'true', OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS: 'false',
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ ...config, plugin: [pathToFileURL(pluginPath).href],
+      model, small_model: model, default_agent: 'devflow-coding', subagent_depth: 1,
+      agent: {
+        'devflow-coding': { mode: 'primary', model, steps: policy.maxModelCalls, description: 'DevFlow managed coding',
+          prompt: `Work only inside the managed repository. Delegate only to devflow-worker, one foreground task at a time; wait for it to finish before other tools. Task prompts must be plain text, with no @ file or agent mentions; ask the child to use read tools instead. Task and tool limits apply across the whole run. A child question or permission is handled by DevFlow. Never bypass a denied operation.\n${toolDiscipline}` },
+        'devflow-worker': { mode: 'subagent', model, steps: policy.maxModelCalls, description: 'One bounded coding subtask in the same managed worktree',
+          prompt: buildOpenCodeManagedPrompt(`Complete this bounded subtask in the managed repository. Use the native read, edit and question tools and request approval for commands. Do not delegate further or run in the background.\n${toolDiscipline}`) },
+      },
+    }) }
+  delete env.OPENCODE_CONFIG
+  delete env.OPENCODE_CONFIG_DIR
+  await mkdir(env.HOME!, { recursive: true, mode: 0o700 })
+  return env
 }
 
 async function createOpencodeRuntimeRoot(): Promise<string> {
@@ -574,13 +631,17 @@ async function randomLocalPort(): Promise<number> {
   })
 }
 
-async function waitForOpencodeReady(baseUrl: string) {
-  for (let attempt = 0; attempt < 60; attempt += 1) {
+async function waitForOpencodeReady(baseUrl: string, timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
     try {
-      await listOpencodePermissions({ baseUrl })
+      // A connected request may initialize OpenCode's isolated profile/plugins.
+      // Give it the remaining startup window; a one-second per-poll timeout
+      // repeatedly cancels that initialization and can prevent readiness forever.
+      await listOpencodePermissions({ baseUrl, signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) })
       return
     } catch {
-      await new Promise((resolve) => setTimeout(resolve, 500))
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(500, deadline - Date.now()))))
     }
   }
 

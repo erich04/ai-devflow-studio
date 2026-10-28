@@ -10,6 +10,7 @@ import {
   type AgentMemoryRendererScope,
 } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from './desktop-api'
+import { AutomaticMemoryPanel } from './components/AutomaticMemoryPanel'
 
 type AgentMemoryPanelProps = {
   desktopApi: DevFlowDesktopApi | null
@@ -36,6 +37,21 @@ function codingRunStatementLabel(kind: 'test_command' | 'change_map' | 'repair_p
   return { test_command: '已验证的测试命令', change_map: '改动位置', repair_pattern: '修复经验' }[kind]
 }
 
+function provenanceLabel(provenance: AgentMemoryRendererSnapshot['candidates'][number]['provenance']) {
+  if (provenance.kind === 'agent_observation') {
+    return `${provenance.runtimeId} · 检查点 v${provenance.checkpointVersion} · 序号 ${provenance.sequence}`
+  }
+  if (provenance.kind === 'coding_run') {
+    return `开发任务 ${provenance.codingRunId} · ${codingRunStatementLabel(provenance.statementKind)}`
+  }
+  const label = {
+    communication_preference: '沟通偏好', environment_fact: '环境事实',
+    verified_procedure: '已验证经验', business_rule: '业务规则候选', unclassified: '待核实',
+    working_practice: '工作习惯', troubleshooting: '排障经验',
+  }[provenance.statementKind]
+  return `自动学习事件 ${provenance.eventId} · ${label} · 事实 ${provenance.factId}`
+}
+
 function memoryStatusLabel(status: string) {
   return {
     pending: '待确认',
@@ -59,7 +75,7 @@ function RecallSize({ statement }: { statement: string | null }) {
 export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMemoryPanelProps) {
   const [snapshot, setSnapshot] = useState<AgentMemoryRendererSnapshot | null>(null)
   const [runtimeSelection, setRuntimeSelection] = useState<{
-    runId: string
+    runId?: string
     localProjectId: string
   } | null>(null)
   const [isLoading, setIsLoading] = useState(false)
@@ -72,11 +88,12 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
   const [isDismissing, setIsDismissing] = useState(false)
   const [dismissingCandidateId, setDismissingCandidateId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [refreshVersion, setRefreshVersion] = useState(0)
   const selectionVersion = useRef(0)
 
   useEffect(() => {
     selectionVersion.current += 1
-    if (!desktopApi || !runId || !localProjectId) {
+    if (!desktopApi || !localProjectId) {
       setSnapshot(null)
       setRuntimeSelection(null)
       setIsLoading(false)
@@ -105,9 +122,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
     setDismissingCandidateId(null)
     setError(null)
     void (async () => {
-      // Project-wide view (ADR 0024): Main resolves the user from the Run and pairing, so
-      // Memory learned by any Coding Run is visible, reviewable and deletable here.
-      const selection = { runId, localProjectId }
+      // Main owns identity resolution, including projects with free chat and no Run.
+      const selection = { ...(runId ? { runId } : {}), localProjectId }
       const value = await desktopApi.listAgentMemoryLifecycle(selection)
       const parsed = parseAgentMemoryRendererSnapshot(value)
       if (parsed.localProjectId !== localProjectId) {
@@ -127,7 +143,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
     return () => {
       disposed = true
     }
-  }, [desktopApi, localProjectId, runId])
+  }, [desktopApi, localProjectId, runId, refreshVersion])
 
   async function promoteCandidate(candidate: AgentMemoryRendererSnapshot['candidates'][number]) {
     if (
@@ -211,7 +227,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
     }
   }
 
-  async function reviseMemory(memory: AgentMemoryRendererSnapshot['memories'][number]) {
+  async function reviseMemory(memory: AgentMemoryRendererSnapshot['memories'][number], pin?: boolean) {
+    const statement = pin === undefined ? revisionStatement : memory.statement
     if (
       !desktopApi ||
       runtimeSelection === null ||
@@ -220,9 +237,9 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
       memory.lifecycleStatus !== 'active' ||
       memory.revisionStatus !== 'active' ||
       memory.statement === null ||
-      revisionStatement.length === 0 ||
-      revisionStatement.trim() !== revisionStatement ||
-      revisionStatement === memory.statement
+      !statement ||
+      statement.trim() !== statement ||
+      (pin === undefined && statement === memory.statement)
     ) return
     const operationVersion = selectionVersion.current
     setIsRevising(true)
@@ -235,7 +252,8 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
         expectedHeadVersion: memory.headVersion,
         expectedContentDigest: memory.contentDigest,
         expectedProvenanceDigest: memory.provenanceDigest,
-        statement: revisionStatement,
+        statement,
+        ...(pin === undefined ? {} : { pin }),
       })
       const parsed = parseAgentMemoryRendererSnapshot(value)
       if (
@@ -306,9 +324,11 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
         <strong><BrainCircuit size={15} /> 按作用域管理生命周期</strong>
       </div>
 
-      {!desktopApi || !runId || !localProjectId ? (
+      {desktopApi && localProjectId && <AutomaticMemoryPanel projectId={localProjectId} api={desktopApi} onMemoriesChanged={() => setRefreshVersion((version) => version + 1)} />}
+
+      {!desktopApi || !localProjectId ? (
         <article className="agent-evidence-card">
-          <p className="empty-note">请先选择 Local Project（本地项目）和 Run，再检查 Agent Memory。</p>
+          <p className="empty-note">请先选择 Local Project（本地项目），再检查 Agent Memory。自由聊天不需要关联 Run。</p>
         </article>
       ) : null}
       {isLoading ? <p className="empty-note">正在读取 Agent Memory 生命周期…</p> : null}
@@ -359,9 +379,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                   <div className="compact-row">
                     <span>来源</span>
                     <strong>
-                      {candidate.provenance.kind === 'agent_observation'
-                        ? `${candidate.provenance.runtimeId} · 检查点 v${candidate.provenance.checkpointVersion} · 序号 ${candidate.provenance.sequence}`
-                        : `开发任务 ${candidate.provenance.codingRunId} · ${codingRunStatementLabel(candidate.provenance.statementKind)}`}
+                      {provenanceLabel(candidate.provenance)}
                     </strong>
                   </div>
                   <p className="empty-note">{scopeLabel(candidate.scope)}</p>
@@ -375,7 +393,10 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                       </strong>
                     </div>
                   ) : null}
-                  {candidate.lifecycleStatus === 'pending' ? (
+                  {candidate.lifecycleStatus === 'pending' && candidate.provenance.kind === 'learning_event' ? (
+                    <p className="empty-note">此候选由自动学习队列处理。业务规则需进入正式工作流；冲突请在上方新旧内容对照中处理。</p>
+                  ) : null}
+                  {candidate.lifecycleStatus === 'pending' && candidate.provenance.kind !== 'learning_event' ? (
                     dismissingCandidateId === candidate.id ? (
                       <div className="agent-advisory">
                         <span>忽略后移除这条候选，同一来源不会再次提出；已保存的记忆不受影响。</span>
@@ -467,6 +488,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                       <strong>开发任务测试通过后由策略自动保存，仅本人可见，30 天后过期；删除后不再召回</strong>
                     </div>
                   ) : null}
+                  {memory.promotionPolicyId === 'automatic-memory-v1' && <p className="empty-note">完成回合后自动保存，仅当前项目本人使用；可修订、固定或删除。</p>}
                   <div className="compact-row">
                     <span>来源候选</span>
                     <code>{memory.sourceCandidateId}</code>
@@ -544,9 +566,18 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
                   ) : null}
                   {memory.lifecycleStatus === 'active' &&
                   memory.revisionStatus === 'active' ? (
+                    <button type="button" className="ghost-button" disabled={isRevising || isDeleting || editingMemoryId !== null}
+                      onClick={() => { void reviseMemory(memory, memory.retentionClass !== 'until_deleted') }}>
+                      {memory.retentionClass === 'until_deleted' ? '取消固定（30 天后过期）' : '固定保留此 Memory'}
+                    </button>
+                  ) : null}
+                  {memory.lifecycleStatus === 'active' &&
+                  memory.revisionStatus === 'active' ? (
                     deletingMemoryId === memory.memoryId ? (
                       <div className="agent-advisory">
                         <span>确认后会先为当前精确 Memory 写入墓碑，再清除派生状态。</span>
+                        {snapshot.candidates.some(candidate => candidate.id === memory.sourceCandidateId && candidate.provenance.kind === 'learning_event') &&
+                          <p>同一学习事件产生的其他经验也会停止使用，远端原文将在后台清理；确认替换冲突内容只影响单条经验。</p>}
                         <div className="button-row">
                           <button
                             type="button"

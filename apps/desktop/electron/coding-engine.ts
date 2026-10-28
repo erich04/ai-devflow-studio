@@ -6,6 +6,8 @@ import type {
   CodingBrief,
   CodingDiffArtifact,
   CodingPermissionRequest,
+  CodingQuestionRequest,
+  CodingQuestionReply,
   DependencyBootstrapEvidence,
   GateDecision,
   KnowledgeGovernanceCheck,
@@ -82,7 +84,9 @@ export type CodingProviderCallReporter = (
 
 export type CodingPermissionPolicyReporter = (decision: {
   requestId: string
-  permission: CodingPermissionRequest['permission']
+  permission: CodingPermissionRequest['permission'] | 'task'
+  executorSessionId?: string
+  parentSessionId?: string
   commandSummary?: string
   filePath?: string
   decision: 'approved' | 'rejected'
@@ -153,6 +157,24 @@ export type CodingEngineApprovePermissionContinuedResult = {
 export type CodingEngineApprovePermissionResult =
   | CodingEngineApprovePermissionCompletedResult
   | CodingEngineApprovePermissionContinuedResult
+  | CodingEngineQuestionResult
+
+export type CodingEngineQuestionResult = {
+  codingRun: CodingAgentRun
+  events: CodingAgentEvent[]
+  questionRequest: CodingQuestionRequest
+}
+
+export type CodingEngineReplyQuestionInput = {
+  codingRun: CodingAgentRun
+  workspace: ManagedCodingWorkspace
+  project: LocalProject
+  request: CodingQuestionRequest
+  reply: CodingQuestionReply
+  onDelivered?: (status: 'answered' | 'dismissed') => Promise<void>
+  now: string
+  assertContextCurrent?: () => Promise<void>
+}
 
 export type CodingEngineCancelInput = {
   codingRun: CodingAgentRun
@@ -166,9 +188,10 @@ export type CodingEngineAdapter = {
   modelId?: string
   ensure(input: CodingEngineEnsureInput): Promise<CodingEngineEnsureResult>
   start(input: CodingEngineStartInput): Promise<
-    CodingEngineStartResult | CodingEngineApprovePermissionCompletedResult
+    CodingEngineStartResult | CodingEngineApprovePermissionCompletedResult | CodingEngineQuestionResult
   >
   approvePermission(input: CodingEngineApprovePermissionInput): Promise<CodingEngineApprovePermissionResult>
+  replyQuestion?(input: CodingEngineReplyQuestionInput): Promise<CodingEngineApprovePermissionResult>
   refreshPermission?(input: CodingEngineRefreshPermissionInput): Promise<CodingEngineApprovePermissionContinuedResult>
   cancel(input: CodingEngineCancelInput): Promise<void>
 }
@@ -208,6 +231,7 @@ export function createCodingEngineAdapterFromEnv(
       modelID: env.DEVFLOW_OPENCODE_MODEL_ID ?? 'gpt-4.1-mini',
       apiKeyEnvName,
       requireExecutionAuthorization: true,
+      enableQuestions: true,
       ...(deps.processManager ? { processManager: deps.processManager } : {}),
       runtimeEnv: buildOpencodeRuntimeEnv({
         baseEnv: process.env,
