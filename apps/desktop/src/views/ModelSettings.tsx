@@ -19,8 +19,30 @@ import {
 import type { DevFlowDesktopApi } from '../desktop-api'
 import { buildProviderSettingsView } from '../app/agent-evidence-view-model'
 import { buildCodingReadinessDisplay } from '../app/coding-runtime-readiness-view-model'
+import { formatLocalTime } from '../app/desktop-view-model'
 import type { ProjectRuntimeBudget } from '../app/useProjectRuntimeBudget'
 import { ipcErrorMessage } from '../app/ipc-error'
+
+/** Plain Chinese for a budget check; English check results are replaced, never shown raw (#227). */
+const budgetStatusCopy: Record<BudgetGuardDecision['status'], string> = {
+  allowed: '在预算内',
+  warning: '已超过预警阈值',
+  requires_lead_approval: '超出月上限，需要 Owner 或 Lead 一次性批准',
+  approved_over_budget: '超出月上限，已使用一次性批准',
+  disabled: '未启用预算检查',
+  unavailable: '暂时无法读取预算，需要调用模型的操作会先暂停',
+}
+function budgetDecisionCopy(decision: BudgetGuardDecision): string {
+  return /^[\u4e00-\u9fff]/u.test(decision.reason) ? decision.reason : budgetStatusCopy[decision.status]
+}
+/** “RemoteSyncHttpError: 暂时无法连接… 诊断编号：…” → the readable sentence first, the rest as diagnosis. */
+function splitBudgetError(message: string): { summary: string; detail: string } {
+  const withoutClass = message.replace(/^[A-Za-z]*Error:\s*/u, '')
+  const summary = withoutClass.split(/\s*诊断编号[:：]/u)[0]!.trim()
+  return { summary: summary || '暂时无法读取团队预算。', detail: message }
+}
+/** Checks that depend on the task being at its coding step, not on this page's settings. */
+const runContextReadinessCodes = new Set(['wrong_workflow_node', 'active_run', 'permission_pending', 'budget_blocked', 'budget_not_evaluated', 'budget_not_checked', 'budget_fetch_failed'])
 
 /**
  * 设置／模型与执行方式 (plan Y2): model providers and credentials (this machine), the project's
@@ -258,12 +280,26 @@ export function ModelSettings({
   }
 
   const configurationIssues = codingReadiness && codingReadiness.projectId === localProjectId
-    ? codingReadiness.checks.filter((check) => check.status === 'blocked' && !['wrong_workflow_node', 'active_run', 'permission_pending', 'budget_blocked', 'budget_not_evaluated', 'budget_not_checked', 'budget_fetch_failed'].includes(check.code))
+    ? codingReadiness.checks.filter((check) => check.status === 'blocked' && !runContextReadinessCodes.has(check.code))
     : []
   const codingConfigurationLabel = !codingConfiguration || codingConfiguration.projectId !== localProjectId
     ? '未配置'
     : configurationIssues.length ? '配置需处理' : '已配置'
+  // Collapsed, the summary still says which tool and model the project uses (#227).
+  const codingConfigurationSummary = codingConfiguration && codingConfiguration.projectId === localProjectId
+    ? `${codingConfigurationLabel} · ${codingConfiguration.executor === 'native-model' ? 'DevFlow Native' : 'OpenCode'} · ${codingConfigurationProviderName === '旧版 Provider' ? codingConfiguration.providerId : codingConfigurationProviderName}`
+    : codingConfigurationLabel
   const codingReadinessDisplay = codingReadiness ? buildCodingReadinessDisplay(codingReadiness) : null
+  // Only what the user can fix here comes first; checks that pass or wait for the coding step fold away (#227).
+  const readinessToFix = codingReadinessDisplay?.items.filter((item) => item.state === 'blocked' && !runContextReadinessCodes.has(item.code)) ?? []
+  const readinessOther = codingReadinessDisplay?.items.filter((item) => !readinessToFix.includes(item)) ?? []
+  const readinessHeadline = !codingReadinessDisplay ? '未读取'
+    : codingReadinessDisplay.status === 'ready' ? '可以启动'
+      : readinessToFix.length ? `需要处理 ${readinessToFix.length} 项` : '设置已就绪'
+  const budgetDecision = modelBudget?.decision
+  const budgetError = projectRuntimeBudget.error ? splitBudgetError(projectRuntimeBudget.error) : null
+  const budgetNeedsAttention = Boolean(budgetDecision && (budgetDecision.blocksRun || ['warning', 'requires_lead_approval', 'unavailable'].includes(budgetDecision.status)))
+  const budgetWebLocation = <p data-testid="runtime-budget-web-location">修改月上限与预警阈值：在 Web 控制端打开「设置 › 预算」，选择当前连接的团队项目。保存后回到这里点「同步云端预算策略」读取。</p>
   const requiresLeadApproval = (modelBudget?.decision ?? codingReadiness?.budgetDecision)?.status === 'requires_lead_approval'
   // The approval ID is configuration; the re-run itself is confirmed in the task (plan W5).
   const codingRunNeedsApproval = latestCodingRun?.budgetDecision?.status === 'requires_lead_approval'
@@ -275,26 +311,35 @@ export function ModelSettings({
         <summary><span>团队预算 · 团队项目</span><strong>{projectRuntimeBudget.label}</strong></summary>
         <div className="runtime-settings__body">
           <article className="agent-evidence-card runtime-settings-form">
-            <div className="section-heading">
-              <span>云端团队预算</span>
-              <strong>{projectRuntimeBudget.label}</strong>
-            </div>
-            <p>作用于整个团队项目的月度美元预算；一次性批准需要 Owner 或 Lead 权限，不会更改 API Key。</p>
-            <p>聊天、澄清、设计、审查和编码的每次模型请求都会重新检查。预估用于预警和准入，实际用量按返回记录；未知费用需核对。</p>
-            <dl className="runtime-budget-summary" data-testid="runtime-budget-summary">
+            {/* The summary above already names the state; the card leads with the rule and the next step (#227). */}
+            <p>{projectRuntimeBudget.status === 'unpaired'
+              ? '先在「设置 › 团队连接」配对团队项目，才能读取预算；配对前需要付费模型的操作会暂停。'
+              : '每次调用模型前按团队项目的月预算检查；超出月上限时需要 Owner 或 Lead 一次性批准。'}</p>
+            {/* Amounts only once they are read; while unpaired or unreadable they are unknown, not “未配置”. */}
+            {projectRuntimeBudget.status === 'loaded' ? <dl className="runtime-budget-summary" data-testid="runtime-budget-summary">
               <div><dt>月上限</dt><dd>{budgetPolicy ? `${formatUsd(budgetPolicy.monthlyLimitUsd)} / 月` : '尚未配置'}</dd></div>
               <div><dt>预警阈值</dt><dd>{budgetPolicy ? formatUsd(budgetPolicy.warningThresholdUsd) : '尚未配置'}</dd></div>
-              <div><dt>策略更新时间</dt><dd>{budgetPolicy?.updatedAt ?? '尚未同步'}</dd></div>
-            </dl>
-            <p className="meta">周期：UTC 自然月 · 超限：需额外批准。</p>
+              {budgetDecision && !budgetNeedsAttention ? <div><dt>最近一次检查</dt><dd>{budgetStatusCopy[budgetDecision.status]}</dd></div> : null}
+            </dl> : null}
+            {budgetDecision && budgetNeedsAttention ? <p role="status" className="runtime-budget-attention">最近一次模型预算检查：{budgetDecisionCopy(budgetDecision)}</p> : null}
             {/* Team budget is a team-side setting: it is edited on the Web (plan S5, Q7; 4.3 节). */}
-            <p data-testid="runtime-budget-web-location">修改月上限与预警阈值：在 Web 控制端打开「设置 › 预算」，选择当前连接的团队项目。保存后回到这里点「同步云端预算策略」读取。</p>
-            <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>同步云端预算策略</button>
-            {modelBudget && <p role="status">最近一次模型预算检查：{modelBudget.decision.reason}</p>}
+            {projectRuntimeBudget.status === 'loaded' && !budgetPolicy ? budgetWebLocation : null}
+            {budgetError ? <div role="alert" className="runtime-budget-attention">
+              <p>{budgetError.summary}需要调用模型的操作会先暂停，恢复连接后重试。</p>
+              <details><summary>诊断详情</summary><code>{budgetError.detail}</code></details>
+            </div> : null}
+            {projectRuntimeBudget.status !== 'unpaired' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>
+              {projectRuntimeBudget.status === 'unavailable' ? '重试读取预算' : '同步云端预算策略'}
+            </button> : null}
+            <details className="runtime-budget-details">
+              <summary>预算说明</summary>
+              <p>周期为 UTC 自然月。聊天、澄清、设计、审查和编码的每次模型请求都会检查；预估用于预警和准入，实际用量按返回记录，未知费用需核对。一次性批准不会更改 API Key。</p>
+              <p>策略更新时间：{budgetPolicy?.updatedAt ? formatLocalTime(budgetPolicy.updatedAt) : '尚未同步'}</p>
+              {budgetDecision && budgetDecisionCopy(budgetDecision) !== budgetDecision.reason ? <p>最近一次检查原文：<code>{budgetDecision.reason}</code></p> : null}
+              {projectRuntimeBudget.status === 'loaded' && !budgetPolicy ? null : budgetWebLocation}
+            </details>
             <ModelCostRecovery desktopApi={desktopApi} projectId={localProjectId} />
             {codingConfigurationStatus ? <p role="status">{codingConfigurationStatus}</p> : null}
-            {projectRuntimeBudget.error ? <p role="alert">{projectRuntimeBudget.error}</p> : null}
-            {projectRuntimeBudget.status === 'unavailable' ? <button className="ghost-button" onClick={() => void projectRuntimeBudget.refresh()}>重试读取预算</button> : null}
             {requiresLeadApproval ? (
               <button className="ghost-button" disabled={isSavingCodingConfiguration} onClick={approveOverBudgetOnce}>创建 Owner/Lead 一次性批准</button>
             ) : null}
@@ -320,10 +365,11 @@ export function ModelSettings({
         </div>
       </details>
 
-      <details className="runtime-settings" open={codingReadiness?.status !== 'ready' || focus === 'coding'} ref={runtimeSettingsRef} tabIndex={-1}>
+      {/* Opens when the tool is not set or needs fixing here, not merely because the task is not at its coding step (#227). */}
+      <details className="runtime-settings" open={codingConfigurationLabel !== '已配置' || readinessToFix.length > 0 || focus === 'coding'} ref={runtimeSettingsRef} tabIndex={-1}>
         <summary>
           <span><Code2 size={16} />项目执行工具 · 本地项目</span>
-          <strong>{codingConfigurationLabel}</strong>
+          <strong>{codingConfigurationSummary}</strong>
         </summary>
         <div className="runtime-settings__body">
           <article className="agent-evidence-card runtime-settings-form">
@@ -331,8 +377,9 @@ export function ModelSettings({
               <span>开发实现使用的工具</span>
               <strong>{codingExecutor === 'native-model' ? 'DevFlow Native（内置编码执行器）' : 'OpenCode'}</strong>
             </div>
-            <p>这里设置开发实现使用的工具和模型。需求澄清、方案设计可在各自步骤选择 Direct Provider 或只读 OpenCode；讨论栏单独选择，不随这里切换。</p>
-            {codingExecutor === 'native-model' ? <p className="empty-note">执行器版本：v2。旧称 Native Coding Agent / Native Executor，均指 DevFlow Native。</p> : null}
+            <p>只影响开发实现；需求澄清、方案设计和讨论栏在各自位置选择模型。</p>
+            {/* Version and former names are reference, not part of the choice (#227). */}
+            {codingExecutor === 'native-model' ? <details className="readiness-details"><summary>关于 DevFlow Native</summary><p className="empty-note">执行器版本：v2。旧称 Native Coding Agent / Native Executor，均指 DevFlow Native。</p></details> : null}
             <label>
               执行工具
               <select aria-label="执行工具" value={codingExecutor} onChange={(event) => setCodingExecutor(event.target.value as 'native-model' | 'opencode-http')}>
@@ -410,19 +457,35 @@ export function ModelSettings({
               : '未配置'}</p>
           </article>
 
-          <article className="agent-evidence-card">
-            <div className="section-heading"><span>启动前检查</span><strong>{codingReadinessDisplay?.statusLabel ?? '未读取'}</strong></div>
-            <div className="trace-list">
-              {codingReadinessDisplay?.items.map((item) => (
-                <div className="trace-step" key={item.code}>
-                  <span>{item.state === 'ready' ? '通过' : '阻塞'}</span>
-                  <strong>{item.label}：{item.statusLabel}</strong>
-                  <p>{item.detail}</p>
-                  {item.remediation ? <p>处理方式：{item.remediation}</p> : null}
-                  {item.diagnosticCode ? <details><summary>诊断详情</summary><code>{item.diagnosticCode}</code></details> : null}
+          <article className="agent-evidence-card" data-testid="coding-readiness-summary">
+            <div className="section-heading"><span>启动前检查</span><strong>{readinessHeadline}</strong></div>
+            {codingReadinessDisplay ? <>
+              {readinessToFix.length ? <div className="trace-list">
+                {readinessToFix.map((item) => (
+                  <div className="trace-step" key={item.code}>
+                    <span>需要处理</span>
+                    <strong>{item.label}：{item.statusLabel}</strong>
+                    <p>{item.detail}</p>
+                    {item.remediation ? <p>处理方式：{item.remediation}</p> : null}
+                  </div>
+                ))}
+              </div> : codingReadinessDisplay.status === 'ready'
+                ? <p className="empty-note">本项目可以开始开发实现。</p>
+                : <p className="empty-note">这里的设置都已就绪；在任务的开发实现步骤启动时，还会检查运行条件和本次预算。</p>}
+              {readinessOther.length ? <details className="readiness-details">
+                <summary>全部检查 · {codingReadinessDisplay.items.filter((item) => item.state === 'ready').length} 项通过</summary>
+                <div className="trace-list">
+                  {readinessOther.map((item) => (
+                    <div className="trace-step" key={item.code}>
+                      <span>{item.state === 'ready' ? '通过' : '启动时检查'}</span>
+                      <strong>{item.label}：{item.statusLabel}</strong>
+                      <p>{item.detail}</p>
+                      {item.diagnosticCode ? <code>{item.diagnosticCode}</code> : null}
+                    </div>
+                  ))}
                 </div>
-              )) ?? <p className="empty-note">选择开发实现步骤后会显示完整的启动前检查。</p>}
-            </div>
+              </details> : null}
+            </> : <p className="empty-note">选择开发实现步骤后会显示启动前检查。</p>}
             {codingReadinessError ? <p className="empty-note">{codingReadinessError}</p> : null}
             {codingConfigurationStatus ? <p className="empty-note">{codingConfigurationStatus}</p> : null}
           </article>

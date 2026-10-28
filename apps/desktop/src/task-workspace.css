@@ -300,6 +300,12 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 .runtime-budget-summary div { display: contents; }
 .runtime-budget-summary dt { color: var(--text-muted); }
 .runtime-budget-summary dd { margin: 0; }
+/* #227: details span the form grid; a check that needs action stands out, normal results stay quiet. */
+.runtime-settings-form > details, .runtime-settings-form > dl { grid-column: 1 / -1; }
+.runtime-budget-attention { padding: 8px 10px; border-left: 3px solid var(--warning, var(--accent)); background: var(--surface-2); border-radius: 6px; }
+.runtime-budget-details, .readiness-details { color: var(--text-muted); }
+.runtime-budget-details > summary, .readiness-details > summary { cursor: pointer; width: fit-content; }
+.runtime-budget-details code { overflow-wrap: anywhere; }
 
 .task-center { padding: 24px; min-width: 0; }
 .task-center-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
