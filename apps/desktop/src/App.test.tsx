@@ -1952,12 +1952,17 @@ describe('App', () => {
       .toBeInTheDocument()
   })
 
-  it('shows automatic memory management on the knowledge page for a project without a Run', async () => {
+  it('shows project memory on the knowledge page for a project without a Run, with local Memory collapsed', async () => {
     const automaticStatus = { projectId: localProject.id, configuration: null, endpoint: 'http://127.0.0.1:8888', jobs: [], decisions: [] }
     const hindsightStatus = { configured: false, enabled: false, transportAvailable: true,
       endpoint: 'http://127.0.0.1:8888', selectedPaths: [], includeMemories: false, counts: {}, note: '未配置项目 Hindsight。' }
+    const projectMemoryStatus = { projectId: localProject.id, configured: false, enabled: false, transportAvailable: true, pairedProject: false,
+      endpoint: '', providerId: null, bankId: null, counts: {}, recent: [],
+      relay: { port: 8891, running: true, tokenFile: '/tmp/memory-relay-token', hindsightBaseUrl: 'http://host.docker.internal:8891/v1' } }
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(desktopState({ projects: [localProject] })),
+      getProjectMemoryStatus: vi.fn().mockResolvedValue(projectMemoryStatus),
+      configureProjectMemory: vi.fn().mockResolvedValue(projectMemoryStatus),
       getAutomaticMemoryStatus: vi.fn().mockResolvedValue(automaticStatus),
       configureAutomaticMemory: vi.fn().mockResolvedValue(automaticStatus),
       processAutomaticMemory: vi.fn().mockResolvedValue(automaticStatus),
@@ -1971,9 +1976,13 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     clickPrimaryNav('知识')
     const panel = screen.getByTestId('knowledge-memory-section')
-    expect(await within(panel).findByRole('region', { name: '自动积累经验' })).toBeInTheDocument()
+    expect(await within(panel).findByRole('region', { name: '项目记忆' })).toBeInTheDocument()
+    expect(api.getProjectMemoryStatus).toHaveBeenCalledWith({ projectId: localProject.id })
+    // ADR 0030: no candidate queue; local Memory stays readable, collapsed, until it is migrated.
+    expect(within(panel).queryByRole('region', { name: '自动积累经验' })).not.toBeInTheDocument()
+    expect(within(panel).getByTestId('legacy-memory')).not.toHaveAttribute('open')
     await waitFor(() => expect(api.listAgentMemoryLifecycle).toHaveBeenCalledWith({ localProjectId: localProject.id }))
-    expect(api.getAutomaticMemoryStatus).toHaveBeenCalledWith({ projectId: localProject.id })
+    expect(api.getAutomaticMemoryStatus).not.toHaveBeenCalled()
     expect(await screen.findByRole('region', { name: 'Hindsight 知识与记忆' })).toBeInTheDocument()
     expect(api.getHindsightStatus).toHaveBeenCalledWith({ projectId: localProject.id })
   })

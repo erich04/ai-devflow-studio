@@ -866,6 +866,9 @@ export type LocalStore = {
   settleProjectMemoryDocument(id: string, leaseToken: string, result: projectMemory.ProjectMemorySettlement, now: string, error?: string): Promise<void>
   forgetProjectMemoryDocument(projectId: string, id: string): Promise<ProjectMemoryDocument>
   recoverProjectMemoryDocuments(): Promise<void>
+  markProjectMemoryChanged(projectId: string, memoryId: string): Promise<ProjectMemoryConfiguration>
+  clearProjectMemory(projectId: string): Promise<ProjectMemoryConfiguration>
+  completeProjectMemoryBankDeletion(projectId: string, bankId: string): Promise<void>
   listHindsightConfigurations(): Promise<HindsightConfiguration[]>
   configureHindsight(input: HindsightConfigurationInput): Promise<HindsightConfiguration>
   disableHindsightProject(projectId: string, reason: string): Promise<void>
@@ -4695,6 +4698,20 @@ class SqlJsLocalStore implements LocalStore {
   }
   async recoverProjectMemoryDocuments() {
     projectMemory.recoverProjectMemoryDocuments(this.db)
+    await this.persist()
+  }
+  async markProjectMemoryChanged(projectId: string, memoryId: string) {
+    const config = projectMemory.markProjectMemoryChanged(this.db, projectId, memoryId, new Date().toISOString())
+    await this.persist()
+    return config
+  }
+  async clearProjectMemory(projectId: string) {
+    const config = projectMemory.clearProjectMemory(this.db, projectId, new Date().toISOString())
+    await this.persist()
+    return config
+  }
+  async completeProjectMemoryBankDeletion(projectId: string, bankId: string) {
+    projectMemory.completeProjectMemoryBankDeletion(this.db, projectId, bankId)
     await this.persist()
   }
   async getAutomaticMemoryConfiguration(projectId: string): Promise<ReturnType<typeof automaticMemory.getAutomaticMemoryConfiguration>> {
@@ -14687,6 +14704,9 @@ const LOCAL_STORE_METHOD_EXECUTION = {
   settleProjectMemoryDocument: 'durable',
   forgetProjectMemoryDocument: 'durable',
   recoverProjectMemoryDocuments: 'durable',
+  markProjectMemoryChanged: 'durable',
+  clearProjectMemory: 'durable',
+  completeProjectMemoryBankDeletion: 'durable',
   listHindsightConfigurations: 'direct',
   configureHindsight: 'durable',
   disableHindsightProject: 'durable',

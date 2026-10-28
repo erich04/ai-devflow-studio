@@ -32,6 +32,7 @@ async function fixture() {
     retainDocument: vi.fn(async () => undefined),
     operation: vi.fn(async () => operation),
     deleteDocument: vi.fn(async () => undefined),
+    deleteBank: vi.fn(async () => undefined),
   }
   let clock = Date.now()
   const service = new ProjectMemoryService({ store, client: async () => client as unknown as HindsightClient,
@@ -98,4 +99,20 @@ it('holds new sends while the relay is down and removes a forgotten document onl
   expect((await store.listProjectMemoryDocuments())[0]).toMatchObject({ status: 'deleted', payload: '' })
   await gated.shutdown()
   expect(await gated.process()).toBe(0)
+})
+
+it('deletes the banks of cleared generations and retries when Hindsight is unavailable', async () => {
+  const { store, config, client, service, advance } = await fixture()
+  await store.clearProjectMemory('project')
+  client.deleteBank.mockRejectedValueOnce(new HindsightError('transport'))
+  advance(1_000)
+  await service.process()
+  expect(client.deleteBank).toHaveBeenCalledWith(config.bankId)
+  expect((await store.getProjectMemoryConfiguration('project'))?.pendingBankDeletions).toEqual([config.bankId])
+  advance(1_000)
+  await service.process()
+  expect(client.deleteBank).toHaveBeenCalledTimes(2)
+  expect((await store.getProjectMemoryConfiguration('project'))?.pendingBankDeletions).toBeUndefined()
+  // The cleared document is never sent to the new bank.
+  expect(client.retainDocument).not.toHaveBeenCalled()
 })

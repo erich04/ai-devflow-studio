@@ -19,8 +19,11 @@ export type ProjectMemoryRecall = { items: ProjectMemoryRecallItem[]; degraded: 
 export type ProjectMemoryRecallPort = {
   /** Null when this project's memory is not on for this user; callers keep their previous behaviour. */
   recall(input: { projectId: string; userId: string; query: string; budget: MemoryRecallBudget; signal?: AbortSignal }): Promise<ProjectMemoryRecall | null>
-  /** Throws when memory sent earlier no longer belongs to the project's current memory. */
-  assertCurrent(input: { projectId: string; userId: string }): Promise<void>
+  /**
+   * Throws when memory recalled at `recalledAt` should no longer be used: the project's memory
+   * was turned off, changed owner or was cleared, or one of these memories was edited or deleted.
+   */
+  assertCurrent(input: { projectId: string; userId: string; ids: readonly string[]; recalledAt: string }): Promise<void>
 }
 
 function clipQuery(query: string): string {
@@ -85,7 +88,15 @@ export function createProjectMemoryRecall(deps: {
       return { degraded, items: rankProjectMemories(memories, input.query).map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
     },
     async assertCurrent(input: Parameters<ProjectMemoryRecallPort['assertCurrent']>[0]): Promise<void> {
-      if (!(await active(input.projectId, input.userId))) throw new Error('Project memory was turned off or changed owner')
+      const configuration = await active(input.projectId, input.userId)
+      if (!configuration) throw new Error('Project memory was turned off or changed owner')
+      const recalledAt = Date.parse(input.recalledAt)
+      if (!Number.isFinite(recalledAt)) throw new Error('Project memory recall time is unknown')
+      const changedSince = (time: string | undefined) => time !== undefined && Date.parse(time) >= recalledAt
+      if (changedSince(configuration.clearedAt)) throw new Error('Project memory was cleared')
+      if (input.ids.some((id) => changedSince(configuration.changedMemories?.[id.slice(PROJECT_MEMORY_IDENTITY_PREFIX.length)]))) {
+        throw new Error('A recalled memory was edited or deleted')
+      }
     },
     /** The discussion bar's `memory_search` tool. */
     async search(input: { projectId: string; query: string; limit: number; signal?: AbortSignal }) {

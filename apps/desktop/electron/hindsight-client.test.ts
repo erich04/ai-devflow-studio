@@ -196,3 +196,32 @@ it('recalls project memory text, preferring observations, and drops malformed re
   fetcher.mockResolvedValueOnce(Response.json({ results: 'not a list' }))
   await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 1_000 })).rejects.toThrow('protocol')
 })
+it('lists, edits, retires and deletes project memory with bounded requests', async () => {
+  const requests: Array<{ method: string; url: string; body: unknown }> = []
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    requests.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    if (String(url).includes('/memories/list')) return Response.json({ total: 3, limit: 50, offset: 0, items: [
+      { id: 'o1', fact_type: 'observation', text: '删除前确认。', date: '2026-10-28T00:00:00Z', document_id: null, edited_at: '2026-10-28T01:00:00Z' },
+      { id: 'w1', fact_type: 'world', text: '其他类型' },
+      { id: 'o2', fact_type: 'observation', text: '  ' },
+    ] })
+    if (init?.method === 'DELETE') return Response.json({ success: true })
+    return Response.json({ id: 'o1' })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  expect(await client.listMemories('df-memory-1', { type: 'observation', query: ' 删除 ', offset: 0, limit: 50 })).toEqual({ total: 3,
+    items: [{ id: 'o1', type: 'observation', text: '删除前确认。', occurredAt: '2026-10-28T00:00:00Z', editedAt: '2026-10-28T01:00:00Z' }] })
+  const listUrl = new URL(requests[0]!.url)
+  expect(Object.fromEntries(listUrl.searchParams)).toEqual({ type: 'observation', state: 'valid', limit: '50', offset: '0', q: '删除' })
+  await client.updateMemory('df-memory-1', 'o1', '删除前必须确认。')
+  await client.invalidateMemory('df-memory-1', 'o1', 'deleted by the user')
+  await client.deleteBank('df-memory-1')
+  expect(requests.slice(1).map((item) => [item.method, new URL(item.url).pathname, item.body])).toEqual([
+    ['PATCH', '/v1/default/banks/df-memory-1/memories/o1', { text: '删除前必须确认。' }],
+    ['PATCH', '/v1/default/banks/df-memory-1/memories/o1', { state: 'invalidated', reason: 'deleted by the user' }],
+    ['DELETE', '/v1/default/banks/df-memory-1', undefined],
+  ])
+  fetcher.mockResolvedValueOnce(new Response('missing', { status: 404 }))
+  await expect(client.deleteBank('df-memory-gone')).resolves.toBeUndefined()
+  await expect(client.listMemories('df-memory-1', { type: 'observation', offset: 0, limit: 101 })).rejects.toThrow('protocol')
+})

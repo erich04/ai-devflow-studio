@@ -16,6 +16,8 @@ type AgentMemoryPanelProps = {
   desktopApi: DevFlowDesktopApi | null
   runId: string | undefined
   localProjectId: string | undefined
+  /** Shown under project memory (ADR 0030): no automatic-learning queue or confirmation prompts. */
+  legacy?: boolean
 }
 
 function scopeLabel(scope: AgentMemoryRendererScope) {
@@ -72,7 +74,7 @@ function RecallSize({ statement }: { statement: string | null }) {
   return <p className="empty-note">{size.bytes} UTF-8 字节 · {omitted.length ? `超出${omitted.join('、')}入口预算；可修订缩短。` : '大小符合各入口预算。'} 编码 ≤ {MEMORY_RECALL_STATEMENT_LIMITS.coding}、阶段 ≤ {MEMORY_RECALL_STATEMENT_LIMITS.stage}、讨论 ≤ {MEMORY_RECALL_STATEMENT_LIMITS.conversation} 字节；实际召回还需满足范围、有效期、相关度和剩余预算。</p>
 }
 
-export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMemoryPanelProps) {
+export function AgentMemoryPanel({ desktopApi, runId, localProjectId, legacy = false }: AgentMemoryPanelProps) {
   const [snapshot, setSnapshot] = useState<AgentMemoryRendererSnapshot | null>(null)
   const [runtimeSelection, setRuntimeSelection] = useState<{
     runId?: string
@@ -324,7 +326,7 @@ export function AgentMemoryPanel({ desktopApi, runId, localProjectId }: AgentMem
         <strong><BrainCircuit size={15} /> 按作用域管理生命周期</strong>
       </div>
 
-      {desktopApi && localProjectId && <AutomaticMemoryPanel projectId={localProjectId} api={desktopApi} onMemoriesChanged={() => setRefreshVersion((version) => version + 1)} />}
+      {desktopApi && localProjectId && !legacy && <AutomaticMemoryPanel projectId={localProjectId} api={desktopApi} onMemoriesChanged={() => setRefreshVersion((version) => version + 1)} />}
 
       {!desktopApi || !localProjectId ? (
         <article className="agent-evidence-card">

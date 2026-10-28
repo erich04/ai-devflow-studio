@@ -52,11 +52,11 @@ it('stays out of the way when memory is off, belongs to someone else, or the tra
   const { recall, store, config, owner } = await fixture()
   const input = { projectId: 'project', userId: owner, query: '删除', budget: CODING_MEMORY_RECALL_BUDGET }
   expect(await recall.recall({ ...input, userId: 'someone-else' })).toBeNull()
-  await expect(recall.assertCurrent({ projectId: 'project', userId: owner })).resolves.toBeUndefined()
+  await expect(recall.assertCurrent({ projectId: 'project', userId: owner, ids: ['pm-o1'], recalledAt: new Date().toISOString() })).resolves.toBeUndefined()
   await store.configureProjectMemory({ ...config, enabled: false })
   expect(await recall.recall(input)).toBeNull()
   expect(await recall.search({ projectId: 'project', query: '删除', limit: 5 })).toBeNull()
-  await expect(recall.assertCurrent({ projectId: 'project', userId: owner })).rejects.toThrow('turned off')
+  await expect(recall.assertCurrent({ projectId: 'project', userId: owner, ids: ['pm-o1'], recalledAt: new Date().toISOString() })).rejects.toThrow('turned off')
   const closed = await fixture({ transport: false })
   expect(await closed.recall.recall({ ...input, userId: closed.owner })).toBeNull()
 })
@@ -90,4 +90,19 @@ it('puts memories that match a Chinese query first without dropping the rest', (
   expect(rankProjectMemories(memories, '怎么跑测试？').map((memory) => memory.id)).toEqual(['c', 'a', 'b', 'd'])
   expect(rankProjectMemories(memories, '用户希望用什么语言回答？')[0]?.id).toBe('d')
   expect(rankProjectMemories(memories, 'unrelated').map((memory) => memory.id)).toEqual(['a', 'b', 'c', 'd'])
+})
+
+it('treats memory recalled before an edit, a deletion or a clear as stale', async () => {
+  const { recall, store, owner } = await fixture()
+  const recalledAt = new Date(Date.now() - 1_000).toISOString()
+  const check = (ids: string[]) => recall.assertCurrent({ projectId: 'project', userId: owner, ids, recalledAt })
+  await expect(check(['pm-o1', 'pm-f1'])).resolves.toBeUndefined()
+  await store.markProjectMemoryChanged('project', 'f1')
+  await expect(check(['pm-o1'])).resolves.toBeUndefined()
+  await expect(check(['pm-o1', 'pm-f1'])).rejects.toThrow('edited or deleted')
+  // A later recall of the edited memory is current.
+  await expect(recall.assertCurrent({ projectId: 'project', userId: owner, ids: ['pm-f1'], recalledAt: new Date(Date.now() + 1_000).toISOString() }))
+    .resolves.toBeUndefined()
+  await store.clearProjectMemory('project')
+  await expect(check(['pm-o1'])).rejects.toThrow('cleared')
 })

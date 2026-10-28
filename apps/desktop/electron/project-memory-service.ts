@@ -3,6 +3,8 @@ import { HindsightError, type HindsightClient } from './hindsight-client'
 import type { ProjectMemoryClaim, ProjectMemorySettlement } from './project-memory-store'
 
 export type ProjectMemoryServiceStore = {
+  listProjectMemoryConfigurations(): Promise<ProjectMemoryConfiguration[]>
+  completeProjectMemoryBankDeletion(projectId: string, bankId: string): Promise<void>
   claimProjectMemoryDocument(now: string, options?: { submit?: boolean }): Promise<ProjectMemoryClaim | null>
   settleProjectMemoryDocument(id: string, leaseToken: string, result: ProjectMemorySettlement, now: string, error?: string): Promise<void>
   recoverProjectMemoryDocuments(): Promise<void>
@@ -37,7 +39,20 @@ export class ProjectMemoryService {
     this.running = this.run(limit).finally(() => { this.running = null })
     return this.running
   }
+  /** Banks of cleared generations. Until deleted they are never recalled; deletion is retried each cycle. */
+  private async deletePendingBanks(): Promise<void> {
+    for (const config of await this.deps.store.listProjectMemoryConfigurations()) {
+      for (const bankId of config.pendingBankDeletions ?? []) {
+        if (this.stopping) return
+        try {
+          await (await this.deps.client(config)).deleteBank(bankId)
+          await this.deps.store.completeProjectMemoryBankDeletion(config.projectId, bankId)
+        } catch { /* Hindsight unavailable: try again on the next cycle. */ }
+      }
+    }
+  }
   private async run(limit: number): Promise<number> {
+    await this.deletePendingBanks()
     let processed = 0
     for (; processed < limit && !this.stopping; processed++) {
       const claim = await this.deps.store.claimProjectMemoryDocument(this.now(), { submit: this.deps.canSubmit?.() ?? true })

@@ -36,13 +36,14 @@ export function registerProjectMemoryRecall(store: CodingMemoryStore, recall: Pr
  * returns the local Memory identities that still need their own check.
  */
 export async function assertProjectMemoryCurrent<T extends { id: string }>(store: CodingMemoryStore, input: {
-  projectId: string; userId: string; identities: readonly T[]
+  projectId: string; userId: string; identities: readonly T[]; recalledAt: string
 }): Promise<T[]> {
   const local = input.identities.filter((identity) => !isProjectMemoryIdentity(identity.id))
   if (local.length === input.identities.length) return local
   const port = projectMemoryRecall.get(store)
   if (!port) throw new Error('Project memory verification is unavailable')
-  await port.assertCurrent({ projectId: input.projectId, userId: input.userId })
+  await port.assertCurrent({ projectId: input.projectId, userId: input.userId, recalledAt: input.recalledAt,
+    ids: input.identities.filter((identity) => isProjectMemoryIdentity(identity.id)).map((identity) => identity.id) })
   return local
 }
 
@@ -80,6 +81,8 @@ export async function executionScope(input: {
 export type RecalledMemory = {
   scope: AgentRuntimeScope
   runtimeId: string
+  /** When the memory was recalled; later edits, deletions or a clear make it stale. */
+  recalledAt: string
   revisions: DurableAgentMemoryRevision[]
   /** What prompts render, in order: local revisions, or recalled project memory. */
   context: Array<{ id: string; revision: number; statement: string }>
@@ -113,7 +116,7 @@ export async function recallScopedMemory(input: {
     const selected = selectMemoryWithinBudget(projectMemory.items, (item) => item.statement, input.budget)
     const currentScope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
     if (JSON.stringify(currentScope) !== JSON.stringify(scope)) throw new Error('Coding Context pairing changed during recall')
-    return { scope, runtimeId: input.runtimeId, revisions: [],
+    return { scope, runtimeId: input.runtimeId, recalledAt: input.now, revisions: [],
       context: selected.map(({ id, statement }) => ({ id, revision: 1, statement })),
       memories: selected.map(({ id, contentDigest }) => ({ id, revision: 1, headVersion: 1, contentDigest })),
       communicationPreferences: [], omittedMemoryCount: projectMemory.items.length - selected.length,
@@ -198,7 +201,7 @@ export async function recallScopedMemory(input: {
     const preference = memoryCommunicationPreference(revision.statement)
     return preference ? [{ memoryId: revision.id, preference }] : []
   })
-  return { scope, runtimeId: input.runtimeId, revisions,
+  return { scope, runtimeId: input.runtimeId, recalledAt: input.now, revisions,
     context: revisions.map(({ id, revision, statement }) => ({ id, revision, statement })),
     memories, communicationPreferences, omittedMemoryCount: considered.size - revisions.length,
     ...(semanticRecall ? { semanticRecall } : {}) }
@@ -267,8 +270,9 @@ export async function assertCodingContextCurrent(input: {
   }
   let localMemories: CodingContextReceipt['memories']
   try {
+    // The brief and its recall are made when the run is created.
     localMemories = await assertProjectMemoryCurrent(input.store, { projectId: input.codingRun.projectId,
-      userId: input.codingRun.requestedBy, identities: receipt.memories })
+      userId: input.codingRun.requestedBy, identities: receipt.memories, recalledAt: input.codingRun.startedAt })
   } catch {
     throw new Error('Coding Memory changed, expired or was deleted; start a new run with current Context')
   }

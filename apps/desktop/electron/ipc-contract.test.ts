@@ -63,6 +63,11 @@ import {
   parseRememberConversationMemoryInput,
   parseConfigureProjectMemoryInput,
   parseProjectMemoryProjectInput,
+  parseClearProjectMemoryInput,
+  parseForgetProjectMemoryInput,
+  parseForgetProjectMemorySourceInput,
+  parseListProjectMemoriesInput,
+  parseUpdateProjectMemoryInput,
   parseValidateTestCommandInput,
 } from './ipc-contract'
 
@@ -1327,5 +1332,23 @@ describe('automatic Memory IPC boundaries', () => {
       expect(() => parseConfigureProjectMemoryInput({ ...input, ...extra })).toThrow()
     }
     expect(() => parseProjectMemoryProjectInput({ projectId: 'project-1', bankId: 'df-memory-x' })).toThrow()
+  })
+  it('bounds memory page requests and requires explicit confirmation to clear', () => {
+    expect(parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'observation', query: ' 撤销 ', offset: 50 }))
+      .toEqual({ projectId: 'project-1', kind: 'observation', query: '撤销', offset: 50 })
+    expect(parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'world', query: '  ' })).toEqual({ projectId: 'project-1', kind: 'world' })
+    for (const extra of [{ kind: 'candidate' }, { offset: -1 }, { offset: 1.5 }, { query: 'x'.repeat(201) }, { bankId: 'df-memory-x' }]) {
+      expect(() => parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'observation', ...extra })).toThrow()
+    }
+    expect(parseUpdateProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', text: ' 撤销窗口 10 秒。 ' }))
+      .toEqual({ projectId: 'project-1', memoryId: 'o1', text: '撤销窗口 10 秒。' })
+    for (const extra of [{ text: '   ' }, { text: '记'.repeat(1_400) }, { memoryId: '../o1' }, { memoryId: 'pm-o1 x' }]) {
+      expect(() => parseUpdateProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', text: 'x', ...extra })).toThrow()
+    }
+    expect(parseForgetProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1' })).toEqual({ projectId: 'project-1', memoryId: 'o1' })
+    expect(() => parseForgetProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', reason: 'x' })).toThrow()
+    expect(parseForgetProjectMemorySourceInput({ projectId: 'project-1', documentId: 'doc-1' })).toEqual({ projectId: 'project-1', documentId: 'doc-1' })
+    expect(parseClearProjectMemoryInput({ projectId: 'project-1', confirm: 'clear' })).toEqual({ projectId: 'project-1', confirm: 'clear' })
+    for (const confirm of [undefined, true, 'yes']) expect(() => parseClearProjectMemoryInput({ projectId: 'project-1', confirm })).toThrow()
   })
 })

@@ -232,6 +232,45 @@ export function createHindsightClient(input: {
           ...(occurredAt ? { occurredAt } : {}) }]
       })
     },
+    /** One page of valid memories of one type, for the memory page. */
+    async listMemories(bank: string, input: { type: HindsightMemory['type']; query?: string; offset: number; limit: number }) {
+      if (!Number.isSafeInteger(input.offset) || input.offset < 0 || !Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 100) {
+        throw new HindsightError('protocol')
+      }
+      const query = new URLSearchParams({ type: input.type, state: 'valid', limit: String(input.limit), offset: String(input.offset),
+        ...(input.query?.trim() ? { q: input.query.trim() } : {}) })
+      const page = await request('GET', `${bankPath(bank)}/memories/list?${query}`, undefined, undefined, 5_000)
+      if (!Array.isArray(page.items) || page.items.length > input.limit || !Number.isSafeInteger(page.total) || Number(page.total) < 0) {
+        throw new HindsightError('protocol')
+      }
+      const items = page.items.flatMap((value): Array<HindsightMemory & { editedAt?: string }> => {
+        const item = object(value)
+        if (typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/u.test(item.id) || typeof item.text !== 'string' ||
+            !item.text.trim() || Buffer.byteLength(item.text) > 16_384 || item.fact_type !== input.type) return []
+        const occurredAt = [item.occurred_start, item.mentioned_at, item.date].find((time): time is string =>
+          typeof time === 'string' && Number.isFinite(Date.parse(time)))
+        return [{ id: item.id, text: item.text, type: input.type,
+          ...(typeof item.document_id === 'string' && item.document_id.length <= 300 ? { documentId: item.document_id } : {}),
+          ...(occurredAt ? { occurredAt } : {}),
+          ...(typeof item.edited_at === 'string' && Number.isFinite(Date.parse(item.edited_at)) ? { editedAt: item.edited_at } : {}) }]
+      })
+      return { items, total: Number(page.total) }
+    },
+    /** Hindsight re-embeds the memory, drops what was derived from it and consolidates again. */
+    async updateMemory(bank: string, memoryId: string, text: string) {
+      await request('PATCH', `${bankPath(bank)}/memories/${encodeURIComponent(memoryId)}`, { text }, undefined, 10_000)
+    },
+    /** Soft-retires a memory: excluded from recall and consolidation, its derived observations pruned. */
+    async invalidateMemory(bank: string, memoryId: string, reason: string) {
+      await request('PATCH', `${bankPath(bank)}/memories/${encodeURIComponent(memoryId)}`, { state: 'invalidated', reason }, undefined, 10_000)
+    },
+    /** Removes a whole bank: documents, memories and configuration. A missing bank is already gone. */
+    async deleteBank(bank: string) {
+      try {
+        const result = await request('DELETE', bankPath(bank), undefined, undefined, 10_000)
+        if (result.success !== true) throw new HindsightError('protocol')
+      } catch (error) { if (!(error instanceof HindsightError && error.status === 404)) throw error }
+    },
     async recall(bank: string, query: string, signal?: AbortSignal): Promise<HindsightCandidate[]> {
       // Local CPU reranking of a stage summary can exceed the short control-request
       // deadline. Bound retrieval separately; cancellation still aborts immediately.
