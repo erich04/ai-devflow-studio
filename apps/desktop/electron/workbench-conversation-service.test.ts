@@ -918,6 +918,26 @@ describe('unified conversation execution and boundaries', () => {
     expect(result.toolEvents?.filter((event) => event.kind === 'tool_result')).toHaveLength(3)
   })
 
+  it('routes memory_search to project memory and explains when it is off', async () => {
+    const memorySearch = vi.fn(async () => ({ items: [{ id: 'pm-o1', kind: 'observation', text: 'PROJECT MEMORY: 删除前要确认。' }] }))
+    let step = 0
+    const outputs = [
+      { tool: { name: 'memory_search', args: { query: '删除确认', limit: 3 } } },
+      { text: '记忆里有删除确认的约定。' },
+    ]
+    const { service, calls } = harness(async () => ({ value: outputs[step++]! }), true, { memorySearch })
+    const result = await send(service, await create(service), '我们之前怎么定的删除确认？')
+    expect(result.status, result.error).toBe('idle')
+    expect(memorySearch).toHaveBeenCalledWith(projectId, { query: '删除确认', limit: 3 }, expect.any(AbortSignal))
+    expect(calls.at(-1)).toContain('PROJECT MEMORY: 删除前要确认。')
+
+    step = 0
+    const off = harness(async () => ({ value: outputs[step++]! }))
+    const unconfigured = await send(off.service, await create(off.service), '我们之前怎么定的删除确认？')
+    expect(unconfigured.status, unconfigured.error).toBe('idle')
+    expect(off.calls.at(-1)).toContain('本项目未开启项目记忆')
+  })
+
   it.each([
     { prompt: '草案是否按此保存？', purpose: undefined, resolved: true },
     { prompt: '将这份方案存到节点吗？', purpose: 'save_proposal', resolved: true },

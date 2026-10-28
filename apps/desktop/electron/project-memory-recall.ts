@@ -1,0 +1,94 @@
+import { createHash } from 'node:crypto'
+import { redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
+import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
+import type { LocalStore } from './local-store'
+import { activeProjectMemoryConfiguration } from './project-memory-capture'
+
+/**
+ * Recalled project memory is identified in receipts as `pm-<Hindsight id>`, revision 1, with a
+ * digest of the exact text sent (ADR 0030). Hindsight owns the memory; local Memory heads do not.
+ */
+export const PROJECT_MEMORY_IDENTITY_PREFIX = 'pm-'
+export const isProjectMemoryIdentity = (id: string) => id.startsWith(PROJECT_MEMORY_IDENTITY_PREFIX)
+const QUERY_MAX_BYTES = 1_500
+export const PROJECT_MEMORY_SEARCH_MAX_ITEMS = 8
+
+export type ProjectMemoryRecallItem = { id: string; statement: string; contentDigest: string }
+export type ProjectMemoryRecall = { items: ProjectMemoryRecallItem[]; degraded: boolean }
+/** Registered by Main for the coding brief, stage Agents, Gate review and the discussion bar. */
+export type ProjectMemoryRecallPort = {
+  /** Null when this project's memory is not on for this user; callers keep their previous behaviour. */
+  recall(input: { projectId: string; userId: string; query: string; budget: MemoryRecallBudget; signal?: AbortSignal }): Promise<ProjectMemoryRecall | null>
+  /** Throws when memory sent earlier no longer belongs to the project's current memory. */
+  assertCurrent(input: { projectId: string; userId: string }): Promise<void>
+}
+
+function clipQuery(query: string): string {
+  const encoder = new TextEncoder()
+  let text = query.trim()
+  while (encoder.encode(text).byteLength > QUERY_MAX_BYTES) text = text.slice(0, Math.floor(text.length * 0.9))
+  return text
+}
+/** One line with its kind and date, so a model can weigh consolidated beliefs against single facts. */
+export function projectMemoryStatement(memory: HindsightMemory): string {
+  const date = memory.occurredAt ? memory.occurredAt.slice(0, 10) : ''
+  const kind = memory.type === 'observation' ? 'observation' : `fact${date ? ` ${date}` : ''}`
+  return `[${kind}] ${redactSensitiveText(memory.text).value.replace(/\s+/gu, ' ').trim()}`
+}
+export function projectMemoryIdentity(memory: Pick<HindsightMemory, 'id'>, statement: string): ProjectMemoryRecallItem {
+  return { id: `${PROJECT_MEMORY_IDENTITY_PREFIX}${memory.id}`, statement,
+    contentDigest: `sha256:${createHash('sha256').update(statement, 'utf8').digest('hex')}` }
+}
+
+type RecallStore = Pick<LocalStore, 'getDesktopPairingCredential' | 'resolveLocalProjectMemoryPrincipal' | 'getProjectMemoryConfiguration'>
+export function createProjectMemoryRecall(deps: {
+  store: RecallStore
+  transportAvailable: boolean
+  client(configuration: ProjectMemoryConfiguration): Promise<HindsightClient>
+  onDegraded?(reason: string): void
+}) {
+  async function active(projectId: string, userId?: string) {
+    if (!deps.transportAvailable) return null
+    const configuration = await activeProjectMemoryConfiguration(deps.store, projectId)
+    return configuration && (userId === undefined || configuration.ownerUserId === userId) ? configuration : null
+  }
+  async function query(configuration: ProjectMemoryConfiguration, text: string, maxTokens: number, signal?: AbortSignal) {
+    try {
+      const client = await deps.client(configuration)
+      const memories = await client.recallMemories(configuration.bankId, { query: clipQuery(text), maxTokens, ...(signal ? { signal } : {}) })
+      return { memories, degraded: false }
+    } catch (error) {
+      signal?.throwIfAborted()
+      // Memory is background: an unavailable Hindsight never blocks the work that asked for it.
+      deps.onDegraded?.(error instanceof HindsightError ? error.message : 'recall_failed')
+      return { memories: [] as HindsightMemory[], degraded: true }
+    }
+  }
+  return {
+    async recall(input: Parameters<ProjectMemoryRecallPort['recall']>[0]): Promise<ProjectMemoryRecall | null> {
+      const configuration = await active(input.projectId, input.userId)
+      if (!configuration || !input.query.trim()) return configuration ? { items: [], degraded: false } : null
+      // Hindsight counts tokens; the caller's byte budget is applied to the returned text afterwards.
+      const maxTokens = Math.min(8_192, Math.max(256, Math.ceil(input.budget.maxBytes / 2)))
+      const { memories, degraded } = await query(configuration, input.query, maxTokens, input.signal)
+      return { degraded, items: memories.map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
+    },
+    async assertCurrent(input: Parameters<ProjectMemoryRecallPort['assertCurrent']>[0]): Promise<void> {
+      if (!(await active(input.projectId, input.userId))) throw new Error('Project memory was turned off or changed owner')
+    },
+    /** The discussion bar's `memory_search` tool. */
+    async search(input: { projectId: string; query: string; limit: number; signal?: AbortSignal }) {
+      const configuration = await active(input.projectId)
+      if (!configuration) return null
+      const { memories, degraded } = await query(configuration, input.query, 2_048, input.signal)
+      return {
+        items: memories.slice(0, Math.min(PROJECT_MEMORY_SEARCH_MAX_ITEMS, input.limit)).map((memory) => ({
+          id: `${PROJECT_MEMORY_IDENTITY_PREFIX}${memory.id}`, kind: memory.type === 'observation' ? 'observation' : 'fact',
+          text: redactSensitiveText(memory.text).value, ...(memory.occurredAt ? { date: memory.occurredAt.slice(0, 10) } : {}),
+        })),
+        ...(degraded ? { degraded: true } : {}),
+      }
+    },
+  }
+}
+export type ProjectMemoryRecallService = ReturnType<typeof createProjectMemoryRecall>

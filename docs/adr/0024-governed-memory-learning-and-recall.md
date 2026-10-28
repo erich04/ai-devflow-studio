@@ -2,7 +2,7 @@
 
 # ADR 0024：受治理的记忆学习、召回与缓存友好上下文
 
-状态：已接受（Accepted），2026-09-30。第 5 节的策略晋升可见性按本 ADR 的提议采用 `user_project` + `private` + `thirty_days`；第 2 节的常驻记忆不再单独实现，由 ADR 0025 的 L0 项目说明承担。
+状态：已接受（Accepted），2026-09-30；第 4、5 节已被 [ADR 0030](0030-hindsight-project-memory.md) 替代（2026-10-28）。第 5 节的策略晋升可见性按本 ADR 的提议采用 `user_project` + `private` + `thirty_days`；第 2 节的常驻记忆不再单独实现，由 ADR 0025 的 L0 项目说明承担。
 
 日期：2026-09-29
 

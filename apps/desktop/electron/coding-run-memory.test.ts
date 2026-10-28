@@ -295,7 +295,7 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(40)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listAgentMemoryCandidates(project.id)).resolves.toEqual([legacy])
     migrated.close()
     const inspected = new SQL.Database(await readFile(dbPath))
@@ -325,7 +325,7 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(40)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listAgentMemoryCandidates(project.id)).resolves.toEqual([candidate])
     await expect(migrated.dismissAgentMemoryCandidate({
       candidateId: candidate.id, expectedContentDigest: candidate.contentDigest,

@@ -23,6 +23,8 @@ import type {
   ConfigureAutomaticMemoryInput,
   ResolveAutomaticMemoryDecisionInput,
   RememberConversationMemoryInput,
+  ConfigureProjectMemoryInput,
+  ProjectMemoryStatus,
   Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
@@ -251,6 +253,8 @@ export const ipcChannels = {
   processAutomaticMemory: 'devflow:automatic-memory:process',
   resolveAutomaticMemoryDecision: 'devflow:automatic-memory:resolve',
   rememberConversationMemory: 'devflow:automatic-memory:remember',
+  getProjectMemoryStatus: 'devflow:project-memory:status',
+  configureProjectMemory: 'devflow:project-memory:configure',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   cancelWorkflowAgentNode: 'devflow:workflow-agent-node:cancel',
   requestClarificationChanges: 'devflow:clarification:changes:request',
@@ -766,6 +770,8 @@ export type DevFlowDesktopApi = {
   processAutomaticMemory?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
   resolveAutomaticMemoryDecision?: (input: ResolveAutomaticMemoryDecisionInput) => Promise<AutomaticMemoryStatus>
   rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
+  getProjectMemoryStatus?: (input: { projectId: string }) => Promise<ProjectMemoryStatus>
+  configureProjectMemory?: (input: ConfigureProjectMemoryInput) => Promise<ProjectMemoryStatus>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
@@ -1360,6 +1366,32 @@ export function parseRememberConversationMemoryInput(value: unknown): RememberCo
     messageId: readExactRequiredIdentifier(value, 'messageId'),
     ...(value.statement === undefined ? {} : { statement: readExactAgentMemoryStatement(value, 'statement') }),
     ...(value.pin === undefined ? {} : { pin: value.pin }),
+  }
+}
+
+export function parseProjectMemoryProjectInput(value: unknown): { projectId: string } {
+  if (!isRecord(value)) throw new Error('Invalid project Memory payload')
+  rejectUnexpectedFields(value, ['projectId'], 'project Memory payload')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId') }
+}
+
+/** The endpoint is normalized by Main; an omitted apiKey keeps the saved key and '' removes it. */
+export function parseConfigureProjectMemoryInput(value: unknown): ConfigureProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory configuration payload')
+  rejectUnexpectedFields(value, ['projectId', 'enabled', 'endpoint', 'providerId', 'apiKey'], 'project Memory configuration payload')
+  if (typeof value.enabled !== 'boolean') throw new Error('Invalid project Memory enabled flag')
+  if (typeof value.endpoint !== 'string' || !value.endpoint.trim() || value.endpoint.length > 2_000) {
+    throw new Error('Invalid project Memory endpoint')
+  }
+  if (value.apiKey !== undefined && (typeof value.apiKey !== 'string' || value.apiKey.length > 4_096 || /[\r\n\0]/u.test(value.apiKey))) {
+    throw new Error('Invalid project Memory API key')
+  }
+  return {
+    projectId: readExactRequiredIdentifier(value, 'projectId'),
+    enabled: value.enabled,
+    endpoint: value.endpoint.trim(),
+    providerId: readExactRequiredIdentifier(value, 'providerId'),
+    ...(value.apiKey === undefined ? {} : { apiKey: value.apiKey }),
   }
 }
 

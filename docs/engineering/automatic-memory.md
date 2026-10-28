@@ -1,5 +1,7 @@
 # 自动经验记忆
 
+> 已被 [ADR 0030](../adr/0030-hindsight-project-memory.md) 替代：新的[项目记忆](project-memory.md)由 Hindsight 自动抽取和归纳，没有候选和待确认队列。项目开启项目记忆后，本链路不再为该项目采集；本链路的代码和数据在 ADR 0030 第四期移除。
+
 实现日期：2026-10-22。对应[设计方案](../plans/memory-sharing-and-learning-2026-10-22.zh-CN.md)。这是单事件自动学习的首期实现，不代表多事件归纳和真实模型质量评测全部完成。
 
 ## 使用方式

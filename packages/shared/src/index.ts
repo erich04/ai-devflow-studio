@@ -62,6 +62,7 @@ export * from './model-call-budget'
 export * from './governed-provider'
 export * from './hindsight'
 export * from './automatic-memory'
+export * from './project-memory'
 
 export * from './provider-request-policy'
 export * from './provider-response'

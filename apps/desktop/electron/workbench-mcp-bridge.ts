@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type ServerResponse } from 'node:http'
-import { readOnlyToolFields, redactSensitiveText, parseKnowledgeSearchArgs, validateKnowledgeReadArgs } from '@ai-devflow/shared'
+import { readOnlyToolFields, readOnlyToolLimitMax, redactSensitiveText, parseKnowledgeSearchArgs, validateKnowledgeReadArgs } from '@ai-devflow/shared'
 import { normalizeInvestigationPolicy } from './investigation-policy.js'
 
 const fields = readOnlyToolFields
@@ -62,8 +62,8 @@ export async function createWorkbenchMcpBridge(input: {
           inputSchema: { type: 'object', additionalProperties: false, required: definition.required,
             ...(name === 'knowledge_read' ? { anyOf: [{ required: ['path'] }, { required: ['sourceRef', 'expectedDigest'] }] } : {}),
             properties: Object.fromEntries([...definition.required, ...definition.optional].map((key) => [key,
-              key === 'offset' ? { type: 'integer', minimum: 0 } : key === 'limit' ? { type: 'integer', minimum: 1, maximum: name === 'knowledge_search' ? 5 : 18000 } : { type: 'string', maxLength: name === 'knowledge_search' && key === 'query' ? 2048 : 500 }])) },
-          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: name === 'knowledge_search' },
+              key === 'offset' ? { type: 'integer', minimum: 0 } : key === 'limit' ? { type: 'integer', minimum: 1, maximum: readOnlyToolLimitMax(name) } : { type: 'string', maxLength: name === 'knowledge_search' && key === 'query' ? 2048 : 500 }])) },
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: name === 'knowledge_search' || name === 'memory_search' },
         })) }); return
       }
       if (payload.method !== 'tools/call') { error(-32601, 'Method not found'); return }
@@ -75,7 +75,7 @@ export async function createWorkbenchMcpBridge(input: {
         || definition.required.some((key) => typeof args[key] !== 'string' || !(args[key] as string).trim())
         || Object.entries(args).some(([key, value]) => key === 'offset'
           ? !Number.isSafeInteger(value) || Number(value) < 0
-          : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 18000
+          : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > readOnlyToolLimitMax(name)
           : typeof value !== 'string' || value.length > (name === 'knowledge_search' && key === 'query' ? 2048 : 500) || value.includes('\0'))) {
         error(-32602, 'Invalid tool arguments'); return
       }

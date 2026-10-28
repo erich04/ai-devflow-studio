@@ -61,6 +61,8 @@ import {
   parseConfigureAutomaticMemoryInput,
   parseResolveAutomaticMemoryDecisionInput,
   parseRememberConversationMemoryInput,
+  parseConfigureProjectMemoryInput,
+  parseProjectMemoryProjectInput,
   parseValidateTestCommandInput,
 } from './ipc-contract'
 
@@ -1314,5 +1316,16 @@ describe('automatic Memory IPC boundaries', () => {
     for (const extra of [{ messageId: '' }, { statement: ' padded ' }, { pin: 'yes' }, { evidence: 'verified' }, { sourceDigest: 'a'.repeat(64) }]) {
       expect(() => parseRememberConversationMemoryInput({ ...input, ...extra })).toThrow()
     }
+  })
+  it('accepts only the project memory switch, endpoint, Provider and optional key', () => {
+    const input = { projectId: 'project-1', enabled: true, endpoint: ' http://127.0.0.1:8890 ', providerId: 'deepseek' }
+    expect(parseConfigureProjectMemoryInput(input)).toEqual({ ...input, endpoint: 'http://127.0.0.1:8890' })
+    expect(parseConfigureProjectMemoryInput({ ...input, apiKey: '' })).toEqual({ ...input, endpoint: 'http://127.0.0.1:8890', apiKey: '' })
+    expect(parseProjectMemoryProjectInput({ projectId: 'project-1' })).toEqual({ projectId: 'project-1' })
+    for (const extra of [{ enabled: 'yes' }, { endpoint: '' }, { providerId: ' padded ' }, { apiKey: 'line\nbreak' }, { apiKey: 1 },
+      { ownerUserId: 'user-1' }, { bankId: 'df-memory-x' }]) {
+      expect(() => parseConfigureProjectMemoryInput({ ...input, ...extra })).toThrow()
+    }
+    expect(() => parseProjectMemoryProjectInput({ projectId: 'project-1', bankId: 'df-memory-x' })).toThrow()
   })
 })
