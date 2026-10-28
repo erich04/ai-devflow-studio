@@ -56,7 +56,7 @@ describe('Electron smoke V1.5 trusted workflow contract', () => {
 
   it('decides Gate Review and coding permissions in the task, not on the Agents page', () => {
     expect(smoke).toContain('await runKnowledgeReviewInTask(first.page, {')
-    expect(smoke).toContain("getByRole('button', { name: '运行门禁审查', exact: true })")
+    expect(smoke).toContain("getByRole('button', { name: '审查当前方案', exact: true })")
     expect(smoke).toContain("buildStatusRow.getByRole('button', { name: '批准本次', exact: true }).click()")
     expect(smoke).not.toContain("getByRole('button', { name: /仅批准本次/ }).click()")
   })
