@@ -2,7 +2,7 @@ import type { Database } from 'sql.js'
 import { createMemoryLearningTables } from './automatic-memory-store'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 40
+export const CURRENT_SCHEMA_VERSION = 41
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2954,6 +2954,28 @@ export const schemaMigrations: readonly SchemaMigration[] = [
       } finally {
         db.run('pragma legacy_alter_table = off')
       }
+    },
+  },
+  {
+    // ADR 0030: project memory lives in a Hindsight bank. These tables hold only the project's
+    // switch and the outbox of documents waiting to be sent or removed.
+    version: 41,
+    migrate(db) {
+      db.run(`
+    create table if not exists project_memory_configurations (
+      project_id text primary key references local_projects(id) on delete cascade,
+      json text not null
+    );
+    create table if not exists project_memory_documents (
+      id text primary key,
+      project_id text not null references local_projects(id) on delete cascade,
+      bank_id text not null,
+      document_id text not null,
+      json text not null,
+      unique (bank_id, document_id)
+    );
+    create index if not exists idx_project_memory_documents_project on project_memory_documents(project_id);
+      `)
     },
   },
 ]

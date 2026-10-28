@@ -18,9 +18,13 @@ async function docker(args: string[]) {
 const config = JSON.parse(await docker([...compose, 'config', '--format', 'json']))
 const service = config.services.hindsight
 assert.equal(config.name, 'devflow-hindsight')
-assert.ok(service.environment.HINDSIGHT_API_LLM_BASE_URL === 'http://127.0.0.1:9/v1', 'Requires infrastructure-only model endpoint')
-assert.ok(service.environment.HINDSIGHT_API_LLM_API_KEY === 'devflow-no-provider', 'Requires infrastructure-only credential placeholder')
-assert.ok(service.environment.HINDSIGHT_API_LLM_MODEL === 'devflow-unconfigured', 'Requires infrastructure-only model placeholder')
+// Either no reachable model, or DevFlow's memory relay without its token, which refuses every call.
+const llm = service.environment
+const unreachableModel = llm.HINDSIGHT_API_LLM_BASE_URL === 'http://127.0.0.1:9/v1' &&
+  llm.HINDSIGHT_API_LLM_API_KEY === 'devflow-no-provider' && llm.HINDSIGHT_API_LLM_MODEL === 'devflow-unconfigured'
+const relayWithoutToken = /^http:\/\/host\.docker\.internal:\d{4,5}\/v1$/u.test(llm.HINDSIGHT_API_LLM_BASE_URL) &&
+  llm.HINDSIGHT_API_LLM_API_KEY === 'devflow-relay-token-not-set'
+assert.ok(unreachableModel || relayWithoutToken, 'Requires an infrastructure-only model configuration (leave DEVFLOW_MEMORY_RELAY_TOKEN unset)')
 const published = service.ports.find((p: { target: number }) => p.target === 8888)
 assert.equal(published.host_ip, '127.0.0.1')
 const endpoint = `http://127.0.0.1:${published.published}`

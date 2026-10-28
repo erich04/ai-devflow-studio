@@ -135,3 +135,40 @@ it.each(['foreign_document', 'missing_source', 'observation', 'duplicate', 'unst
   const client = createHindsightClient({ endpoint: 'http://localhost:8888', fetcher })
   await expect(client.listDocumentFacts('bank', 'doc', count)).rejects.toThrow('protocol')
 })
+it('configures a project memory bank with its missions and verifies the saved configuration', async () => {
+  const requests: { method: string; url: string; body: unknown }[] = []
+  let saved: Record<string, unknown> = {}
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    requests.push({ method: init?.method ?? 'GET', url: String(url), body })
+    if (String(url).endsWith('/version')) return Response.json({ api_version: '1.0.0' })
+    if (init?.method === 'PATCH') { saved = body.updates; return Response.json({ bank_id: 'df-memory-1', config: saved }) }
+    return Response.json({ bank_id: 'df-memory-1' })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  const missions = { retain: 'Keep project decisions.', observations: 'Consolidate conventions.', reflect: 'Answer as a senior engineer.' }
+  await client.configureMemoryBank('df-memory-1', missions)
+  expect(requests.map((item) => `${item.method} ${new URL(item.url).pathname}`)).toEqual([
+    'GET /version', 'PUT /v1/default/banks/df-memory-1', 'PATCH /v1/default/banks/df-memory-1/config'])
+  expect(requests[2]!.body).toEqual({ updates: { enable_observations: true, enable_auto_consolidation: true, entities_allow_free_form: true,
+    retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations, reflect_mission: missions.reflect } })
+  fetcher.mockImplementation(async (url, init) => String(url).endsWith('/version') ? Response.json({ api_version: '1.0.0' })
+    : init?.method === 'PATCH' ? Response.json({ bank_id: 'df-memory-1', config: { ...saved, enable_observations: false } }) : Response.json({}))
+  await expect(client.configureMemoryBank('df-memory-1', missions)).rejects.toThrow('protocol')
+})
+it('retains a project memory document that replaces its earlier revision in one shared belief set', async () => {
+  const bodies: unknown[] = []
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return Response.json({ success: true, bank_id: 'df-memory-1', items_count: 1, async: true, operation_id: 'op-1', operation_ids: ['op-1'] })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  const item = { documentId: 'conversation:chat', operationId: 'op-1', content: '[{"role":"user"}]', context: 'A discussion.',
+    timestamp: '2026-10-28T00:00:00.000Z', tags: ['source:conversation'], metadata: { df_document: 'd1' } }
+  await client.retainDocument('df-memory-1', item)
+  expect(bodies).toEqual([{ async: true, operation_id: 'op-1', items: [{ document_id: 'conversation:chat', content: item.content,
+    context: 'A discussion.', timestamp: item.timestamp, tags: ['source:conversation'], metadata: { df_document: 'd1' },
+    update_mode: 'replace', observation_scopes: 'shared' }] }])
+  fetcher.mockResolvedValueOnce(Response.json({ success: true, bank_id: 'df-memory-1', items_count: 1, async: true, operation_id: 'op-2' }))
+  await expect(client.retainDocument('df-memory-1', item)).rejects.toThrow('protocol')
+})

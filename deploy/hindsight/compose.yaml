@@ -13,15 +13,29 @@ services:
     ports:
       - "127.0.0.1:${DEVFLOW_HINDSIGHT_API_PORT:-8890}:8888"
       - "127.0.0.1:${DEVFLOW_HINDSIGHT_UI_PORT:-9990}:9999"
+    # Docker Desktop provides this name already; the entry makes Linux Docker resolve it too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      # Default is infrastructure-only: no credentials and no reachable LLM.
-      HINDSIGHT_API_LLM_PROVIDER: ${DEVFLOW_HINDSIGHT_LLM_PROVIDER:-openai}
-      HINDSIGHT_API_LLM_MODEL: ${DEVFLOW_HINDSIGHT_LLM_MODEL:-devflow-unconfigured}
-      HINDSIGHT_API_LLM_BASE_URL: ${DEVFLOW_HINDSIGHT_LLM_BASE_URL:-http://127.0.0.1:9/v1}
-      HINDSIGHT_API_LLM_API_KEY: ${DEVFLOW_HINDSIGHT_LLM_API_KEY:-devflow-no-provider}
+      # Hindsight holds no Provider credential. Its extraction and consolidation calls go to
+      # DevFlow's memory relay on the host (ADR 0030), which admits each call against the paired
+      # project's model budget and forwards it with the project's saved Provider. Until
+      # DEVFLOW_MEMORY_RELAY_TOKEN matches the desktop's relay token, every call is refused
+      # and nothing is charged.
+      HINDSIGHT_API_LLM_PROVIDER: deepseek
+      HINDSIGHT_API_LLM_MODEL: deepseek-flash
+      HINDSIGHT_API_LLM_BASE_URL: http://host.docker.internal:${DEVFLOW_MEMORY_RELAY_PORT:-8891}/v1
+      HINDSIGHT_API_LLM_API_KEY: ${DEVFLOW_MEMORY_RELAY_TOKEN:-devflow-relay-token-not-set}
+      # The bank id tells the relay which project a call belongs to. The relay removes it
+      # before the request leaves the machine.
+      HINDSIGHT_API_LLM_SEND_BANK_AS_USER: "true"
+      # The startup probe has no bank, so the relay would refuse it; skip it.
+      HINDSIGHT_API_SKIP_LLM_VERIFICATION: "true"
       HINDSIGHT_API_ENABLE_BANK_CONFIG_API: "true"
-      HINDSIGHT_API_ENABLE_OBSERVATIONS: "false"
-      HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION: "false"
+      # Project memory banks consolidate observations. Repository knowledge banks turn both
+      # off in their own bank configuration.
+      HINDSIGHT_API_ENABLE_OBSERVATIONS: "true"
+      HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION: "true"
       HINDSIGHT_API_ENABLE_BANK_LLM_HEALTH: "false"
       HINDSIGHT_API_MCP_ENABLED: "false"
       HINDSIGHT_API_WORKER_ID: devflow-hindsight-local
@@ -30,7 +44,8 @@ services:
       HINDSIGHT_API_WORKER_MAX_RETRIES: "0"
       HINDSIGHT_API_LLM_MAX_CONCURRENT: "1"
       HINDSIGHT_API_LLM_MAX_RETRIES: "0"
-      HINDSIGHT_API_LLM_TIMEOUT: "60"
+      # Includes the relay's budget admission round trip.
+      HINDSIGHT_API_LLM_TIMEOUT: "120"
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: local
       HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: BAAI/bge-small-en-v1.5
       HINDSIGHT_API_RERANKER_PROVIDER: local

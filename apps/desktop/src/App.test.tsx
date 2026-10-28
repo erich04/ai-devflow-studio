@@ -3165,9 +3165,10 @@ describe('App', () => {
     const inspector = await screen.findByTestId('node-inspector')
     const codingAction = await within(inspector).findByRole('button', { name: '去设置执行工具' })
     expect(codingAction).toBeEnabled()
-    expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
+    // The settings action is already shown while readiness loads; wait for the loaded reason.
+    await waitFor(() => expect(within(inspector).getByTestId('workbench-coding-readiness')).toHaveTextContent(
       '请先选择 Coding Executor。',
-    )
+    ))
     expect(api.runCodingAgent).not.toHaveBeenCalled()
 
     // Configuration is the one thing that leaves the task; the banner leads back (plan W9).
