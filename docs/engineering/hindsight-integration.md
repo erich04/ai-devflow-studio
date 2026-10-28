@@ -30,7 +30,7 @@ corepack pnpm hindsight:up
 corepack pnpm hindsight:status
 ```
 
-已经配置过 `.env` 时不要再次复制覆盖。该文件被 Git 忽略，模型密钥只在本机填写。
+已经配置过 `.env` 时不要再次复制覆盖。该文件被 Git 忽略，只在本机填写中继令牌。
 
 - DevFlow 服务地址：`http://127.0.0.1:8890`；Hindsight 管理界面：`http://127.0.0.1:9990`。
 - Compose 项目名 `devflow-hindsight`，数据卷 `devflow-hindsight_data`，不挂载业务目录、不复用其他服务的数据库。
@@ -38,13 +38,11 @@ corepack pnpm hindsight:status
 - `corepack pnpm hindsight:stop` 停止服务并保留数据，再执行 `hindsight:up` 恢复。不要使用 `down -v`，除非确实要删除该服务的全部数据。
 - 此配置只绑定本机回环地址，适用于个人开发机；没有配置远程访问所需的认证和 TLS。
 
-默认配置只启动基础设施：真实 API、数据库、本地 embedding 与 reranker。文本抽取模型指向不可用的本机地址，因此不产生模型费用，**健康检查成功不代表记忆写入已可用**。
+Hindsight 不持有 Provider 密钥。抽取和归纳的模型调用发往桌面端的记忆模型中继（`http://host.docker.internal:8891/v1`），中继按调用计入已配对团队项目的预算，再用项目保存的 Provider 转发，见 [ADR 0030](../adr/0030-hindsight-project-memory.md) 和[项目记忆](project-memory.md)。`.env` 的 `DEVFLOW_MEMORY_RELAY_TOKEN` 留空时，所有模型调用都被中继拒绝，不产生费用，**健康检查成功不代表记忆写入已可用**。
 
-配置真实模型前可运行 `corepack pnpm test:hindsight-local`：它检查实际运行镜像与独立数据卷，通过正式 HTTP 适配器配置空测试 bank，停止/重新启动这个专用服务，验证配置持久化并删除测试 bank。这个测试不写记忆、不调用模型；为避免重启已配置的模型 worker 造成费用，它会拒绝非默认模型配置。
+配置令牌前可运行 `corepack pnpm test:hindsight-local`：它检查实际运行镜像与独立数据卷，通过正式 HTTP 适配器配置空测试 bank，停止/重新启动这个专用服务，验证配置持久化并删除测试 bank。这个测试不写记忆、不调用模型；为避免重启已配置的模型 worker 造成费用，它只接受未设置中继令牌（或旧的不可达模型地址）的配置。
 
-完成提供方、模型与费用范围确认后，在 `.env` 设置 `DEVFLOW_HINDSIGHT_LLM_PROVIDER`、`DEVFLOW_HINDSIGHT_LLM_MODEL`、`DEVFLOW_HINDSIGHT_LLM_BASE_URL` 与 `DEVFLOW_HINDSIGHT_LLM_API_KEY`，重新执行 `hindsight:up`，再运行下面的真实协议检查。模型地址是容器能够访问的地址；本机 Ollama 等服务通常通过 `host.docker.internal` 访问，不能把宿主机的 `127.0.0.1` 当成容器外部地址。
-
-此 Compose 的重试/并发限制不等于金额硬预算；收费验证需使用已授权且有预算约束的提供方入口。服务启动命令不自动开启 Electron 的网络闸门，也未实现由桌面程序自动安装和管理 Docker。
+要启用抽取，把桌面端的中继令牌写入 `.env` 并重新执行 `hindsight:up`。中继只放行已开启项目记忆的已配对项目，以及该项目当前的仓库知识 bank；其他 bank 的调用返回 403。服务启动命令不自动开启 Electron 的网络闸门，也未实现由桌面程序自动安装和管理 Docker。
 
 ## 协议基线
 
@@ -154,7 +152,7 @@ node --import tsx scripts/hindsight-fullchain-cleanup.mts
 
 ## 实现与后续边界
 
-- 已接入：持久任务及重启恢复、三次提交上限、取消选择/删除/到期/配对清理、精确来源回读、讨论搜索、全阶段宿主知识上下文、编码恢复当前性、本地回退、正式记忆影子候选。
+- 已接入：持久任务及重启恢复、三次提交上限、取消选择/删除/到期/配对清理、精确来源回读、讨论搜索、全阶段宿主知识上下文、编码恢复当前性、本地回退、正式记忆影子候选。项目记忆（讨论、编码、已批准产物自动写入独立 bank）见[项目记忆](project-memory.md)。
 - 正式记忆来源变化与任务同次保存；文件变化与数据库无法原子提交，发送、结算及每次引用都会重新核验。
 - 模型升级采用停用旧配置后重建；未实现并行双 bank 验收后无缝切换。
 - 未实现：ExperienceRecord、Reflect、自动确认业务关系、团队共享、博客发布、模型提取质量仪表盘及金额硬预算。这些不应通过打开一个开关宣称已完成。

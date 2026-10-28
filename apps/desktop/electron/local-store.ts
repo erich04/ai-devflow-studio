@@ -18,6 +18,8 @@ import type { CodingProviderCallTrace } from './coding-engine.js'
 import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
 import { existsSync } from 'node:fs'
 import * as hindsight from './hindsight-store'
+import * as projectMemory from './project-memory-store'
+import { captureApprovalProjectMemory, captureCodingRunProjectMemory, captureConversationProjectMemory, captureReviewResultProjectMemory } from './project-memory-capture'
 import * as automaticMemory from './automatic-memory-store'
 import type { AutomaticMemoryConfigurationInput, AutomaticMemoryEventInput, AutomaticMemoryFact, AutomaticMemoryDecision } from '@ai-devflow/shared'
 import type { HindsightConfiguration, HindsightConfigurationInput, HindsightProjection, HindsightSourceInput, HindsightClaim, HindsightSettlement } from './hindsight-store'
@@ -236,6 +238,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
+  type ProjectMemoryConfiguration, type ProjectMemoryDocument, type ProjectMemoryDocumentInput,
 } from '@ai-devflow/shared'
 const require = createRequire(import.meta.url)
 const sqlJsDist = path.dirname(require.resolve('sql.js/dist/sql-wasm.js'))
@@ -854,6 +857,15 @@ export type LocalStore = {
   recoverMemoryLearningJobs(): Promise<void>
   resolveLocalProjectMemoryPrincipal(projectId: string): Promise<LocalProjectMemoryPrincipalResult>
   getHindsightConfiguration(projectId: string): Promise<HindsightConfiguration | null>
+  getProjectMemoryConfiguration(projectId: string): Promise<ProjectMemoryConfiguration | null>
+  listProjectMemoryConfigurations(): Promise<ProjectMemoryConfiguration[]>
+  configureProjectMemory(input: projectMemory.ProjectMemoryConfigurationInput): Promise<ProjectMemoryConfiguration>
+  recordProjectMemoryDocument(config: ProjectMemoryConfiguration, input: ProjectMemoryDocumentInput): Promise<ProjectMemoryDocument | null>
+  listProjectMemoryDocuments(projectId?: string): Promise<ProjectMemoryDocument[]>
+  claimProjectMemoryDocument(now: string, options?: { submit?: boolean }): Promise<projectMemory.ProjectMemoryClaim | null>
+  settleProjectMemoryDocument(id: string, leaseToken: string, result: projectMemory.ProjectMemorySettlement, now: string, error?: string): Promise<void>
+  forgetProjectMemoryDocument(projectId: string, id: string): Promise<ProjectMemoryDocument>
+  recoverProjectMemoryDocuments(): Promise<void>
   listHindsightConfigurations(): Promise<HindsightConfiguration[]>
   configureHindsight(input: HindsightConfigurationInput): Promise<HindsightConfiguration>
   disableHindsightProject(projectId: string, reason: string): Promise<void>
@@ -4651,6 +4663,40 @@ class SqlJsLocalStore implements LocalStore {
     await this.persist()
   }
 
+  async getProjectMemoryConfiguration(projectId: string) { return projectMemory.getProjectMemoryConfiguration(this.db, projectId) }
+  async listProjectMemoryConfigurations() { return projectMemory.listProjectMemoryConfigurations(this.db) }
+  async configureProjectMemory(input: projectMemory.ProjectMemoryConfigurationInput) {
+    const config = projectMemory.configureProjectMemory(this.db, input, new Date().toISOString())
+    await this.persist()
+    return config
+  }
+  /** Re-checks that the configuration is current; captures call it inside their own mutation. */
+  async recordProjectMemoryDocument(config: ProjectMemoryConfiguration, input: ProjectMemoryDocumentInput) {
+    const current = projectMemory.getProjectMemoryConfiguration(this.db, config.projectId)
+    if (!current?.enabled || current.bankId !== config.bankId || current.updatedAt !== config.updatedAt) return null
+    const document = projectMemory.upsertProjectMemoryDocument(this.db, current, input, new Date().toISOString())
+    await this.persist()
+    return document
+  }
+  async listProjectMemoryDocuments(projectId?: string) { return projectMemory.listProjectMemoryDocuments(this.db, projectId) }
+  async claimProjectMemoryDocument(now: string, options?: { submit?: boolean }) {
+    const claim = projectMemory.claimProjectMemoryDocument(this.db, now, options)
+    if (claim) await this.persist()
+    return claim
+  }
+  async settleProjectMemoryDocument(id: string, leaseToken: string, result: projectMemory.ProjectMemorySettlement, now: string, error?: string) {
+    projectMemory.settleProjectMemoryDocument(this.db, id, leaseToken, result, now, error)
+    await this.persist()
+  }
+  async forgetProjectMemoryDocument(projectId: string, id: string) {
+    const document = projectMemory.forgetProjectMemoryDocument(this.db, projectId, id, new Date().toISOString())
+    await this.persist()
+    return document
+  }
+  async recoverProjectMemoryDocuments() {
+    projectMemory.recoverProjectMemoryDocuments(this.db)
+    await this.persist()
+  }
   async getAutomaticMemoryConfiguration(projectId: string): Promise<ReturnType<typeof automaticMemory.getAutomaticMemoryConfiguration>> {
     const result = automaticMemory.getAutomaticMemoryConfiguration(this.db, projectId)
     return result
@@ -4863,6 +4909,7 @@ class SqlJsLocalStore implements LocalStore {
       on conflict(id) do update set version = excluded.version, updated_at = excluded.updated_at, json = excluded.json`,
       [conversation.id, conversation.localProjectId, conversation.version, conversation.updatedAt, JSON.stringify(stored)])
     await captureConversationMemory(this, conversation, previous)
+    await captureConversationProjectMemory(this, conversation, previous)
     await this.persist()
     return true
   }
@@ -11718,6 +11765,7 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('commit')
       transactionOpen = false
       for (const artifact of approvedArtifacts) await captureArtifactMemory(this, artifact)
+      if (nextRun && approvalEvent) await captureApprovalProjectMemory(this, nextRun, [approvalEvent])
       await this.persist()
     } catch (error) {
       if (transactionOpen) {
@@ -12004,7 +12052,11 @@ class SqlJsLocalStore implements LocalStore {
       }
       this.db.run('commit')
       transactionOpen = false
-      for (const artifact of mutation.artifacts ?? []) await captureArtifactMemory(this, artifact)
+      for (const artifact of mutation.artifacts ?? []) {
+        await captureArtifactMemory(this, artifact)
+        await captureReviewResultProjectMemory(this, artifact)
+      }
+      await captureApprovalProjectMemory(this, nextRun, mutation.events ?? [])
       await this.persist()
       return { committed: true }
     } catch (error) {
@@ -13161,6 +13213,7 @@ class SqlJsLocalStore implements LocalStore {
     assertImmutableWorkflowArtifactWrite(this.db, artifact)
     writeArtifact(this.db, artifact)
     await captureArtifactMemory(this, artifact)
+    await captureReviewResultProjectMemory(this, artifact)
     await this.persist()
   }
 
@@ -13399,6 +13452,7 @@ class SqlJsLocalStore implements LocalStore {
       throw error
     }
     await captureCodingMemory(this, run, current)
+    await captureCodingRunProjectMemory(this, run, current)
     await this.persist()
   }
 
@@ -13772,6 +13826,7 @@ class SqlJsLocalStore implements LocalStore {
       throw error
     }
     await captureCodingMemory(this, nextRun, currentRun)
+    await captureCodingRunProjectMemory(this, nextRun, currentRun)
     await this.persist()
     return { committed: true, run: nextRun }
   }
@@ -14623,6 +14678,15 @@ const LOCAL_STORE_METHOD_EXECUTION = {
 
   resolveLocalProjectMemoryPrincipal: 'durable',
   getHindsightConfiguration: 'direct',
+  getProjectMemoryConfiguration: 'direct',
+  listProjectMemoryConfigurations: 'direct',
+  configureProjectMemory: 'durable',
+  recordProjectMemoryDocument: 'durable',
+  listProjectMemoryDocuments: 'direct',
+  claimProjectMemoryDocument: 'durable',
+  settleProjectMemoryDocument: 'durable',
+  forgetProjectMemoryDocument: 'durable',
+  recoverProjectMemoryDocuments: 'durable',
   listHindsightConfigurations: 'direct',
   configureHindsight: 'durable',
   disableHindsightProject: 'durable',

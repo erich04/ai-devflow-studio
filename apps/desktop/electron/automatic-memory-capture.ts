@@ -71,10 +71,12 @@ export async function resolveProjectMemoryScope(store: ScopeStore, projectId: st
   return principal.status === 'resolved' ? { kind: 'local', organizationId: null, projectId: null,
     userId: principal.userId, sessionId, localProjectId: projectId } : null
 }
-type CaptureStore = ScopeStore & Pick<LocalStore, 'getAutomaticMemoryConfiguration' | 'getHindsightConfiguration' | 'enqueueMemoryLearningEvent' | 'listProjects' | 'listTestEvidence' | 'getRun'>
+type CaptureStore = ScopeStore & Pick<LocalStore, 'getAutomaticMemoryConfiguration' | 'getHindsightConfiguration' | 'getProjectMemoryConfiguration' | 'enqueueMemoryLearningEvent' | 'listProjects' | 'listTestEvidence' | 'getRun'>
 async function captureScope(store: CaptureStore, projectId: string, sourceId: string) {
   const configuration = await store.getAutomaticMemoryConfiguration(projectId)
   if (!configuration?.enabled) return null
+  // Once Hindsight project memory is on (ADR 0030), the candidate pipeline stops capturing for that project.
+  if ((await store.getProjectMemoryConfiguration(projectId))?.enabled) return null
   const hindsight = await store.getHindsightConfiguration(projectId)
   if (!hindsight?.enabled || hindsight.generation !== configuration.hindsightGeneration ||
       hindsight.ownerUserId !== configuration.ownerUserId ||

@@ -115,6 +115,39 @@ export function createHindsightClient(input: {
         throw new HindsightError('protocol')
       }
     },
+    /**
+     * A project memory bank (ADR 0030): Hindsight extracts facts and consolidates observations
+     * itself. Additive to the knowledge banks above, which keep consolidation off.
+     */
+    async configureMemoryBank(bank: string, missions: { retain: string; observations: string; reflect: string }) {
+      const version = await request('GET', '/version')
+      if (version.api_version !== HINDSIGHT_PROTOCOL.version) throw new HindsightError('protocol')
+      await request('PUT', bankPath(bank), { name: bank })
+      const updates = { enable_observations: true, enable_auto_consolidation: true, entities_allow_free_form: true,
+        retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations,
+        reflect_mission: missions.reflect }
+      const response = await request('PATCH', `${bankPath(bank)}/config`, { updates })
+      const config = object(response.config)
+      if (response.bank_id !== bank || Object.entries(updates).some(([key, value]) => config[key] !== value)) throw new HindsightError('protocol')
+    },
+    /** One source document per call. The same document id replaces its earlier revision. */
+    async retainDocument(bank: string, item: {
+      documentId: string; operationId: string; content: string; context: string; timestamp: string
+      tags: readonly string[]; metadata: Record<string, string>
+    }) {
+      const response = await request('POST', `${bankPath(bank)}/memories`, {
+        async: true, operation_id: item.operationId,
+        items: [{ document_id: item.documentId, content: item.content, context: item.context, timestamp: item.timestamp,
+          tags: [...item.tags], metadata: item.metadata, update_mode: 'replace',
+          // One belief set per project: which source produced a fact does not split observations.
+          observation_scopes: 'shared' }],
+      })
+      if (response.success !== true || response.bank_id !== bank || response.async !== true ||
+          response.operation_id !== item.operationId || response.items_count !== 1 ||
+          (response.operation_ids != null && JSON.stringify(response.operation_ids) !== JSON.stringify([item.operationId]))) {
+        throw new HindsightError('protocol')
+      }
+    },
     async operation(bank: string, operationId: string): Promise<HindsightOperation> {
       let response: Record<string, unknown>
       try { response = await request('GET', `${bankPath(bank)}/operations/${encodeURIComponent(operationId)}`) }
