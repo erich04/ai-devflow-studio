@@ -2,7 +2,7 @@
 
 设计依据：[ADR 0030](../adr/0030-hindsight-project-memory.md)。本文说明第一期的实际行为、配置方法和验证入口。
 
-## 第一期做了什么
+## 当前行为
 
 开启后，DevFlow 自动把以下内容写入项目的 Hindsight bank，由 Hindsight 抽取事实并归纳观察：
 
@@ -13,7 +13,7 @@
 | 被批准的澄清、设计、验收包 | `artifact:<id>` | 审批通过时 |
 | Gate 评审结果 | `artifact:<id>` | 保存时 |
 
-第一期还没有召回：Agent 暂时读不到这些记忆，召回在第二期接入。也没有记忆页，只有状态和开关两个 IPC（`getProjectMemoryStatus`、`configureProjectMemory`）。
+第二期起，编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。还没有记忆页，只有状态和开关两个 IPC（`getProjectMemoryStatus`、`configureProjectMemory`）。
 
 代码位置：
 
@@ -22,6 +22,7 @@
 - `apps/desktop/electron/project-memory-store.ts`：开关和发件队列（schema 41）。
 - `apps/desktop/electron/project-memory-service.ts`：后台发送、查询、删除。
 - `apps/desktop/electron/memory-model-relay.ts`：Hindsight 抽取调用的预算中继。
+- `apps/desktop/electron/project-memory-recall.ts`：召回、`memory_search` 和回执检查；`coding-context.ts` 的 `recallScopedMemory` 在项目记忆开启时改用它。
 
 ## 配置
 
@@ -43,6 +44,8 @@ corepack pnpm exec vitest run \
   apps/desktop/electron/project-memory-local-store.test.ts \
   apps/desktop/electron/project-memory-service.test.ts \
   apps/desktop/electron/memory-model-relay.test.ts \
+  apps/desktop/electron/project-memory-recall.test.ts \
+  apps/desktop/electron/coding-context.test.ts \
   apps/desktop/electron/hindsight-client.test.ts
 corepack pnpm verify
 ```
@@ -58,5 +61,7 @@ corepack pnpm verify
 - retain operation 完成；之后删除测试 bank，停止服务。
 
 这只证明链路和请求形状，不证明抽取质量。
+
+召回（第二期）同样用固定版本 Hindsight 检查：测试 bank 用不调用模型的 `chunks` 模式写入一段中文约定，`recallMemories` 用中文问题取回该条（类型 `world`，带来源文档和日期，约 0.2 秒），之后删除测试 bank 并停止服务。这证明请求与响应解析，不证明抽取或观察归纳的质量。
 
 另用真实 Electron（隔离数据目录、打开 Hindsight 传输闸门、不启动 Hindsight、无模型流量）检查：中继在指定端口启动，令牌文件权限 0600；错误令牌返回 401，未知 bank 返回 403；未配对项目开启记忆被拒绝并提示先配对；退出后端口关闭。

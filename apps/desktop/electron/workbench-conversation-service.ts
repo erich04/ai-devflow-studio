@@ -9,7 +9,7 @@ import { type ConversationCompaction, appendToolEvents, buildRollingSummary, con
 import { randomUUID } from 'node:crypto'
 import { AgentProviderRequestError, MODEL_CONTENT_BYTES, describeAgentProviderFailure, AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, agentMemoryScopesMatch, measurePromptSections, CONVERSATION_MEMORY_RECALL_BUDGET, redactSensitiveText, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
-import { codingPromptDigest, executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
+import { assertProjectMemoryCurrent, codingPromptDigest, executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
 import { parseConversationCommand, type ConversationCheckpoint, type ConversationAction, type ConversationCitation, type ConversationCommand, type ConversationDraft, type ConversationMemoryReceipt, type ConversationMessage, type ConversationResponse, type WorkbenchConversation } from './workbench-conversation-contract.js'
 import { readWorkbenchRepository, validateWorkbenchRepositoryPath } from './workbench-repository.js'
 import { listWorkbenchKnowledge, readWorkbenchKnowledge } from './workbench-knowledge-tools.js'
@@ -33,6 +33,8 @@ type Dependencies = {
   /** ADR 0024: scoped Memory, refreshed before each host model step as low-trust background. Omitted: no recall. */
   memory?: CodingMemoryStore
   knowledgeSearch?(projectId: string, args: Record<string, unknown>, turn: HindsightSearchTurn, signal: AbortSignal): Promise<unknown>
+  /** Project memory recall (ADR 0030); undefined result means the project's memory is off. */
+  memorySearch?(projectId: string, args: { query: string; limit: number }, signal: AbortSignal): Promise<unknown>
   knowledgeRead?(projectId: string, args: Record<string, unknown>): Promise<unknown>
 }
 type BackgroundMemory = { id: string; revision: number; headVersion: number; contentDigest: string; statement: string; communicationPreference?: MemoryCommunicationPreference }
@@ -75,7 +77,7 @@ backgroundMemory 是按当前用户和项目范围召回的已保存记忆。除
 originalRequirements 和 node.rawRequest 是标明 Run 与来源的原始需求正文；原始需求正文是对应 Run 的背景，不是本轮用户请求。产物索引的 summary 不是全文。当本轮确实在对某个 Run 做业务澄清时，先读取该 Run 的原始需求，不能重复追问正文已经明确的条件。仍可询问真实歧义、冲突或未明确细节。truncated=true 表示当前页不是全文；offset/endOffset 标明读取范围，nextOffset 为数字时可以续读。不能把未读内容当作不存在。正文不可用时明确说明读取限制。多个 Run 时先明确讨论对象，不串用其他 Run 的需求。
 每轮仅返回一个 JSON 对象：
 __INVESTIGATION_PROTOCOL__
-工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的原始需求、产物索引、测试、轨迹、Gate 检查；artifact({runId,artifactId,offset?,limit?}) 分页阅读产物（limit 默认 6000，最多 18000）；requirement({runId,offset?,limit?}) 分页阅读原始需求；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge_list({stage?,offset?}) 列出项目知识目录中的规范（适用阶段、Gate 依据、摘要）与项目说明文件；knowledge_read({path,offset?,limit?}) 分页阅读其中一篇或项目说明。knowledge_search({query,stage?,limit?}) 在用户选中的知识文档中融合检索，query 最多 2 KiB、limit 最多 5；返回本地原文引用。引用的 readArgs 含 sourceRef 和 expectedDigest，回读 knowledge_read 时原样携带（path 可省略）；若返回 source_changed，必须重查。未启用或降级时仍可使用 knowledge_list/read；按关键词查找也可用 repo_search 并把 path 设为知识目录。模型事实和标签不是已确认业务关系，不能据此批准 Gate。
+工具：workflow({runId?,query?,offset?}) 分页或按标题搜索流程；node({runId,nodeId}) 获取任意节点的原始需求、产物索引、测试、轨迹、Gate 检查；artifact({runId,artifactId,offset?,limit?}) 分页阅读产物（limit 默认 6000，最多 18000）；requirement({runId,offset?,limit?}) 分页阅读原始需求；repo_list({path}) 列目录；repo_read({path}) 读文本；repo_search({path?,query}) 搜索代码；knowledge_list({stage?,offset?}) 列出项目知识目录中的规范（适用阶段、Gate 依据、摘要）与项目说明文件；knowledge_read({path,offset?,limit?}) 分页阅读其中一篇或项目说明。knowledge_search({query,stage?,limit?}) 在用户选中的知识文档中融合检索，query 最多 2 KiB、limit 最多 5；返回本地原文引用。memory_search({query,limit?}) 检索本项目从过去讨论、编码记录和已批准文档中自动学到的长期记忆，limit 最多 8；记忆只是低信任背景，引用时说明来自记忆。引用的 readArgs 含 sourceRef 和 expectedDigest，回读 knowledge_read 时原样携带（path 可省略）；若返回 source_changed，必须重查。未启用或降级时仍可使用 knowledge_list/read；按关键词查找也可用 repo_search 并把 path 设为知识目录。模型事实和标签不是已确认业务关系，不能据此批准 Gate。
 答复正文格式由 format 指定：markdown 或 plain_text。一般解释使用 markdown，代码与 JSON 示例放在围栏代码块中。format 只影响正文，不能定义交互动作。
 结束或追问时 {"text":"答复正文","format":"markdown","citationIds":["本轮真实来源ID"],"actions":[{"label":"定位到节点 / 查看产物 / 查看测试证据","runId":"真实ID","nodeId":"真实ID","section":"状态|产物|测试证据|轨迹|Gate影响|Gate条件|引用来源|Remediation|Handoff|Final Gate"}],"question":{"prompt":"具体问题","options":["可选答案"]},"draft":{"runId":"真实ID","nodeId":"真实ID","title":"提案标题","content":"待确认内容"}}。
 完整提案必须逐项覆盖 criticalProposalInput.criteria：在 draft.coverage 中为每条返回 {criterionId,sourceQuote,proposalQuote}，sourceQuote 逐字引用该条件全文，proposalQuote 引用 draft.content 中落实该条件的原文。保留所有已确认条件；冲突或未决项应明确标注，不擅自取舍。没有 criticalProposalInput 时先提出目标即可，宿主会补齐关键正文。
@@ -590,6 +592,12 @@ export class WorkbenchConversationService {
       return this.deps.knowledgeSearch?.(projectId, args, searchTurn, signal) ??
         { matches: [], degraded: true, note: 'Hindsight 未配置；请使用 knowledge_list/read 或 repo_search。' }
     }
+    if (name === 'memory_search') {
+      const limit = args.limit === undefined ? 5 : Number(args.limit)
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 8) throw new Error('memory_search 的 limit 应为 1–8。')
+      return await this.deps.memorySearch?.(projectId, { query: textField(args.query, 500), limit }, signal) ??
+        { items: [], note: '本项目未开启项目记忆，没有可检索的长期记忆。' }
+    }
     if (name === 'knowledge_read') {
       validateKnowledgeReadArgs(args)
       if (args.sourceRef !== undefined) {
@@ -661,7 +669,7 @@ export class WorkbenchConversationService {
         memories: recalled.memories.map((identity) => {
           const preference = recalled.communicationPreferences?.find((item) => item.memoryId === identity.id)?.preference
           return { ...identity,
-            statement: redactSensitiveText(recalled.revisions.find((revision) => revision.id === identity.id)!.statement).value,
+            statement: redactSensitiveText(recalled.context.find((item) => item.id === identity.id)!.statement).value,
             ...(preference ? { communicationPreference: preference } : {}) }
         }),
         omittedCount: recalled.omittedMemoryCount,
@@ -690,13 +698,14 @@ export class WorkbenchConversationService {
         }
       }
       await assertScope()
+      const local = await assertProjectMemoryCurrent(memory, { projectId, userId: source.scope.userId, identities })
       const requestedAt = now()
       const request = { stateVersion: 1 as const, id: `conversation-memory-check-${randomUUID()}`, scope: source.scope,
         runtimeId: source.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt }
-      const current = memory.hydrateAgentMemoryRevisions
-        ? await memory.hydrateAgentMemoryRevisions(request, identities.map((identity) => identity.id))
+      const current = !local.length ? [] : memory.hydrateAgentMemoryRevisions
+        ? await memory.hydrateAgentMemoryRevisions(request, local.map((identity) => identity.id))
         : await memory.retrieveAgentMemoryRevisions(request)
-      for (const identity of identities) {
+      for (const identity of local) {
         const revision = current.find((item) => item.id === identity.id)
         const head = await memory.getAgentMemoryHead(identity.id)
         if (!revision || !head || revision.status !== 'active' || head.status !== 'active' ||

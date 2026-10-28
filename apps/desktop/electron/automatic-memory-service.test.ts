@@ -35,6 +35,7 @@ async function fixture() {
     configureBank: vi.fn(async () => {}),
     configureMemoryBank: vi.fn(async () => {}),
     retainDocument: vi.fn(async () => {}),
+    recallMemories: vi.fn(async () => []),
     retain: vi.fn(async (_bank, item) => { remote.set(item.documentId, item) }),
     operation: vi.fn(async () => operation),
     deleteDocument: vi.fn(async (_bank, id) => { remote.delete(id) }),

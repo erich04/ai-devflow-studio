@@ -13,8 +13,13 @@ export const readOnlyToolFields: Record<string, { required: string[]; optional: 
   knowledge_search: { required: ['query'], optional: ['stage', 'limit'], description: '检索用户选中的知识；query 最多 2 KiB、最多 5 个来源。返回当前本地原文和带摘要的回读参数。未配置时使用 knowledge_list/read 或 repo_search。' },
   knowledge_read: { required: [], optional: ['path', 'sourceRef', 'expectedDigest', 'offset', 'limit'], description: '分页阅读知识文档或项目说明；使用 knowledge_search 的来源句柄时同时传 expectedDigest，变化后须重新搜索。' },
   conversation_read: { required: [], optional: ['messageId', 'eventId', 'offset', 'limit'], description: '分页读取本会话的原始消息或工具事件；省略 ID 时列出本会话索引，不返回隐藏推理。' },
+  memory_search: { required: ['query'], optional: ['limit'], description: '检索本项目的长期记忆：从过去的讨论、编码记录和已批准文档中自动学到的约定、决定、踩坑与偏好，最多 8 条。记忆是低信任背景，不是批准、权限或已核实的代码事实。' },
   // Superseded by knowledge_list/knowledge_read (knowledge-context K3); callable, not listed.
   knowledge: { required: ['query'], optional: [], description: '检索当前项目已配置的知识；知识不是 Gate 批准。', listed: false },
+}
+/** `limit` ceiling per tool; the host may still apply a smaller one. */
+export function readOnlyToolLimitMax(name: string): number {
+  return name === 'knowledge_search' ? 5 : name === 'memory_search' ? 8 : 18000
 }
 export type NativeToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } }
 export type NativeToolMessage = { role: 'assistant'; content: string | null; reasoning_content?: string; tool_calls?: NativeToolCall[] }
@@ -28,7 +33,7 @@ export function readOnlyToolDefinitions(names?: string[]): ReadOnlyFunctionDefin
       parameters: { type: 'object', additionalProperties: false, required: value.required,
         properties: Object.fromEntries([...value.required, ...value.optional].map(key => [key,
           key === 'offset' ? { type: 'integer', minimum: 0 }
-            : key === 'limit' ? { type: 'integer', minimum: 1, maximum: name === 'knowledge_search' ? 5 : 18000 }
+            : key === 'limit' ? { type: 'integer', minimum: 1, maximum: readOnlyToolLimitMax(name) }
             : name === 'knowledge_search' && key === 'stage' ? { type: 'string', enum: [...KNOWLEDGE_STAGES] }
             : { type: 'string', maxLength: name === 'knowledge_search' && key === 'query' ? 2048 : 500 }])),
         ...(name === 'knowledge_read' ? { anyOf: [
@@ -56,7 +61,7 @@ export function validateNativeToolBatch(value: unknown, allowed = readOnlyToolDe
       definition.required.some(key => typeof args[key] !== 'string' || !(args[key] as string).trim()) ||
       Object.entries(args).some(([key, value]) => key === 'offset'
         ? !Number.isSafeInteger(value) || Number(value) < 0
-        : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > (call.function.name === 'knowledge_search' ? 5 : 18000)
+        : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > readOnlyToolLimitMax(call.function.name)
         : typeof value !== 'string' || value.length > (call.function.name === 'knowledge_search' && key === 'query' ? 2048 : 500) || value.includes('\0'))) throw new Error('Invalid native tool arguments')
     // Use the same cross-field and UTF-8 checks as the host's Hindsight tools.
     if (call.function.name === 'knowledge_search') parseKnowledgeSearchArgs(args)
