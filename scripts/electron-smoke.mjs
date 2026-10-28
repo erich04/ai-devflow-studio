@@ -583,7 +583,7 @@ async function runKnowledgeReviewViaDesktopApi(
 async function runKnowledgeReviewInTask(page, { runId, nodeId, nodeTitle }) {
   await selectWorkflowNode(page, `flow-node-${nodeId}`, nodeTitle)
   const statusRow = page.getByTestId('node-inspector').getByTestId('task-status-row')
-  const runReview = statusRow.getByRole('button', { name: '运行门禁审查', exact: true })
+  const runReview = statusRow.getByRole('button', { name: '审查当前方案', exact: true })
   await expect(runReview).toBeEnabled({ timeout: 20_000 })
   await runReview.click()
   await expect(page.getByTestId('toast')).toContainText('门禁审查已完成', { timeout: 30_000 })
@@ -1216,7 +1216,7 @@ try {
   await expect(clarifyEvidence).toContainText('Reviewed 1 complete subject Artifact')
   await expect(clarifyEvidence).toContainText('provider_reported')
   const clarifyModels = await openSettingsSection(first.page, '模型与执行方式')
-  await expect(clarifyModels.getByRole('button', { name: /^(运行门禁审查|重新审查|停止门禁审查)$/ })).toHaveCount(0)
+  await expect(clarifyModels.getByRole('button', { name: /^(运行门禁审查|审查当前.+|重新审查|停止门禁审查)$/ })).toHaveCount(0)
   await clickPrimaryNav(first.page, '任务')
   await expect(first.page.getByTestId('settings-view')).toHaveCount(0)
   await selectWorkflowNode(first.page, `flow-node-${localNodes.clarifyGate.id}`, localNodes.clarifyGate.title)

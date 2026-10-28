@@ -1851,7 +1851,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     const models = await openSettingsSection(page, '模型与执行方式')
     await expect(models.getByTestId('settings-models')).toContainText('当前 Agent Provider：doubao-review')
     const settings = page.getByTestId('settings-view')
-    await expect(settings.getByRole('button', { name: /运行门禁审查/ })).toHaveCount(0)
+    await expect(settings.getByRole('button', { name: /运行门禁审查|审查当前/ })).toHaveCount(0)
     await expect(settings.getByRole('button', { name: /生成需求澄清/ })).toHaveCount(0)
     await resumeTask(page)
     await expectStaysOnWorkbench(page)
@@ -1861,7 +1861,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     await clickSubStep(page, 'flow-node-run-created-from-request-clarify-gate')
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
     // Gate Review runs in place from the task status row (plan W2).
-    const runReview = reviewedGateInspector.getByTestId('task-status-row').getByRole('button', { name: /运行门禁审查/ })
+    const runReview = reviewedGateInspector.getByTestId('task-status-row').getByRole('button', { name: '审查当前需求 v1', exact: true })
     await expect(runReview).toBeEnabled()
     await runReview.click()
     await expect(page.getByTestId('toast')).toContainText('门禁审查已完成，审查意见显示在「当前工作」中')

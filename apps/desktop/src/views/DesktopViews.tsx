@@ -56,6 +56,8 @@ import { buildGateRemediationViewModel, withoutStatusRowActions, hasRemediationC
 import type { TestRunReadiness } from '../app/test-run-readiness'
 import type { DiscussionMaterial } from '../app/discussion-reference'
 import { CodingRetryDialog, CodingWorkPanel, CodingWorkspaceRecords, GateReviewRunPanel, TestRunPanel } from './TaskWorkPanel'
+import { ReviewRerunDialog } from './ReviewRerunDialog'
+import { describeGateReviewScope } from '../app/gate-review-scope'
 import {
   buildWorkflowNodePresentation,
   buildWorkflowBoard,
@@ -76,6 +78,7 @@ import {
   RECORDS_TAB,
   buildNodeInspectorViewModel,
   formatStatusState,
+  gateApprovalSubject,
   getInspectorNodeType,
   inspectorTabPlansByNodeType,
   resolveInspectorTabName,
@@ -520,6 +523,8 @@ export function Inspector({
   const pendingNodeTab = useRef<{ nodeId: string; tab: string } | null>(null)
   // Action armed by a first click that needs a reminder before submitting (plan §6.1).
   const [armedActionKey, setArmedActionKey] = useState('')
+  // Confirmation of another paid Gate Review, bound to what was shown when it opened (#251).
+  const [reviewConfirmation, setReviewConfirmation] = useState<{ nodeId: string; key: string } | null>(null)
   const [revisionDrafts, setRevisionDrafts] = useState<Record<string, string>>(() => {
     try { const parsed: unknown = JSON.parse(localStorage.getItem('devflow-revision-drafts') ?? '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'string')) as Record<string, string> : {} } catch { return {} }
   })
@@ -528,7 +533,7 @@ export function Inspector({
     const target = pendingNodeTab.current
     setRequestedTab(target && target.nodeId === selectedNode?.id ? target.tab : CURRENT_WORK_TAB)
     pendingNodeTab.current = null
-    setDocumentId(''); setRevisionFormOpen(false); setArmedActionKey(''); setRetryDialog(null)
+    setDocumentId(''); setRevisionFormOpen(false); setArmedActionKey(''); setRetryDialog(null); setReviewConfirmation(null)
   }, [selectedNode?.id])
 
   useEffect(() => {
@@ -646,6 +651,10 @@ export function Inspector({
           ? { kind: 'design', determinable: true, title: designGateMaterial.artifact.title, generatedAt: designGateMaterial.artifact.updatedAt }
           : { kind: 'design', determinable: false, reason: designGateMaterial?.message ?? '无法读取待评审的方案。' }
         : { kind: 'other', determinable: true }
+  // Which version the saved review covered, so an older version's result never reads as current (#251).
+  const latestReviewScope = latestAgentReview
+    ? describeGateReviewScope({ review: latestAgentReview, run: selectedRun, node: selectedNode, artifacts: workflowArtifacts, formatTime: formatLocalTime })
+    : undefined
   const pendingMatchesSelectedNode = Boolean(
     pendingInspectorAction &&
       selectedRun &&
@@ -666,6 +675,7 @@ export function Inspector({
     ...(reviewProviderLabel ? { reviewProviderLabel } : {}),
     isRunningTests,
     ...(readingElsewhere ? { readingElsewhere } : {}),
+    latestReviewScope,
     knowledgeReferenceCount: scopedReferences.length,
     testEvidenceCount: testEvidence.length,
     testEvidence,
@@ -732,8 +742,26 @@ export function Inspector({
     setRequestedTab(CURRENT_WORK_TAB)
     setCodingFocusRequest((value) => value + 1)
   }
+  // Every review entry makes the same request (#251). The runtime refuses another paid review without
+  // the previous review's id, so a step with a saved review always confirms first. The confirmation
+  // lapses when the review record, the step's materials or the model change while it is open.
+  const reviewTargetLabel = gateApprovalSubject(selectedNode, approvalTarget)
+  const reviewConfirmationKey = JSON.stringify([
+    selectedRun?.id ?? '', selectedNode.id, latestAgentReview?.id ?? '', reviewProviderLabel ?? '',
+    ...selectedNode.artifactIds.map((id) => `${id}@${workflowArtifacts.find((artifact) => artifact.id === id)?.updatedAt ?? ''}`),
+  ])
+  const isReviewConfirmationOpen = Boolean(latestAgentReview && reviewConfirmation?.key === reviewConfirmationKey)
+  const isReviewConfirmationStale = Boolean(reviewConfirmation && reviewConfirmation.nodeId === selectedNode.id && !isReviewConfirmationOpen)
+  const requestKnowledgeReview = () => {
+    if (!latestAgentReview) {
+      setReviewConfirmation(null)
+      onRunKnowledgeReview()
+      return
+    }
+    setReviewConfirmation({ nodeId: selectedNode.id, key: reviewConfirmationKey })
+  }
   const actionHandlers: Record<InspectorActionId, () => void> = {
-    runKnowledgeReview: () => onRunKnowledgeReview(),
+    runKnowledgeReview: requestKnowledgeReview,
     cancelKnowledgeReview: () => onCancelKnowledgeReview?.(),
     runTests: onRunTests,
     openTestStep: () => { if (testStepNode) onSelectWorkflowNode(testStepNode.id) },
@@ -1543,7 +1571,7 @@ export function Inspector({
       onSyncTeam={onSyncTeam}
       onOpenTests={() => { if (testStepNode) onSelectWorkflowNode(testStepNode.id) }}
       onOpenOverride={() => setRequestedTab(CURRENT_WORK_TAB)}
-      onRunKnowledgeReview={() => onRunKnowledgeReview()}
+      onRunKnowledgeReview={requestKnowledgeReview}
       onStartRetry={onStartRemediationRetry}
     /></details>
   )
@@ -1612,13 +1640,15 @@ export function Inspector({
   const renderReviewRun = () => isSelectedCurrentNode && selectedNode.status !== 'success' ? (
     <GateReviewRunPanel
       latestReview={latestAgentReview}
+      reviewScope={latestReviewScope}
+      currentLabel={reviewTargetLabel}
       failure={latestReviewFailure}
       isRunning={isRunningKnowledgeReviewHere}
       providerLabel={reviewProviderLabel}
       blockedReason={reviewRunBlockedReason}
       isWriteLocked={hasInspectorWriteLock}
-      target={`${selectedRun?.title ?? ''} · ${viewModel.header.title}`}
-      onRun={onRunKnowledgeReview}
+      showRunButton={!statusRowActionIds.includes('runKnowledgeReview')}
+      onRequestRun={requestKnowledgeReview}
     />
   ) : null
 
@@ -1759,6 +1789,7 @@ export function Inspector({
           </details>
         </div>
         {armedConfirmation ? <p className="task-status-reminder" role="alert">{armedConfirmation}</p> : null}
+        {isReviewConfirmationStale ? <p className="task-status-reminder" role="alert">审查记录、待审材料或模型已更新，本次未开始审查；请核对后重新开始。</p> : null}
       </section>
       <div className="tabbar workspace-primary-tabs" role="tablist" aria-label={`${viewModel.visualKind} inspector tabs`} onKeyDown={(event) => {
         if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return
@@ -1774,6 +1805,21 @@ export function Inspector({
       {modelReadinessError && primaryNextAction && ['completeAgent','runCodingAgent'].includes(primaryNextAction.id) && <p role="status">{modelReadinessError}<button className="text-button" onClick={() => openSettings('models')}>打开模型与执行方式设置</button></p>}
       {viewModel.activeTab.sections.map((sectionId) => <Fragment key={sectionId}>{sectionRenderers[sectionId]()}</Fragment>)}
       </div>
+      {isReviewConfirmationOpen && latestAgentReview ? (
+        <ReviewRerunDialog
+          target={reviewTargetLabel}
+          context={`${selectedRun?.title ?? ''} · ${viewModel.header.title}`}
+          provider={reviewProviderLabel ?? '未选择模型'}
+          reviewedAt={formatLocalTime(latestAgentReview.createdAt)}
+          reviewedLabel={latestReviewScope?.reviewedLabel}
+          appliesToCurrent={latestReviewScope?.appliesToCurrent ?? true}
+          onCancel={() => setReviewConfirmation(null)}
+          onConfirm={() => {
+            setReviewConfirmation(null)
+            onRunKnowledgeReview(latestAgentReview.id)
+          }}
+        />
+      ) : null}
       {retryDialog && codingActionProjection?.action.id === 'retry' ? (
         <CodingRetryDialog
           additionalAttemptAfterCount={retryDialog.additionalAttemptAfterCount}

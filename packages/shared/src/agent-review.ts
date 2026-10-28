@@ -1432,6 +1432,39 @@ export async function buildGateReviewSubjectSnapshot(input: {
   })
 }
 
+/**
+ * Synchronous display check: does a saved Review still cover the step's current subjects (same
+ * stage, same subject Artifacts and recorded update times)? It skips content digests, so Gate
+ * enforcement and saving a Review keep using assessAgentReviewFreshness. A legacy Review without a
+ * subject manifest counts as covering, as it does for enforcement.
+ */
+export function agentReviewCoversCurrentSubjects(input: {
+  review: AgentReviewResult
+  run: WorkflowRun
+  node: WorkflowNode
+  artifacts: Artifact[]
+}): boolean {
+  const recorded = input.review.contextManifest
+  if (!recorded) return true
+  if (recorded.stage !== input.node.stage) return false
+  let current: Artifact[]
+  try {
+    current = selectReviewSubjectArtifacts(input.run, input.node, input.artifacts)
+  } catch {
+    return false
+  }
+  if (recorded.subjectArtifacts.length !== current.length) return false
+  const recordedById = new Map(recorded.subjectArtifacts.map((artifact) => [artifact.id, artifact]))
+  return current.every((artifact) => {
+    const previous = recordedById.get(artifact.id)
+    return Boolean(previous) &&
+      previous!.runId === artifact.runId &&
+      previous!.nodeId === artifact.nodeId &&
+      previous!.kind === artifact.kind &&
+      previous!.updatedAt === artifact.updatedAt
+  })
+}
+
 export async function assessAgentReviewFreshness(input: {
   review: AgentReviewResult
   run: WorkflowRun

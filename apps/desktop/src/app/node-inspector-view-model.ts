@@ -26,6 +26,7 @@ import {
   workflowNodeStatusLabels,
 } from './workflow-node-presentation'
 import type { CodingRuntimeActionProjection } from './coding-runtime-action-projection'
+import type { GateReviewScope } from './gate-review-scope'
 
 export type { BoardNodeKind, WorkflowNodePresentation } from './workflow-node-presentation'
 
@@ -525,6 +526,8 @@ export function buildStatusDescriptors(input: {
   artifacts: Artifact[]
   events: AgentEvent[]
   latestAgentReview?: Pick<AgentReviewResult, 'gateAdvisory'> | undefined
+  /** Set when the only saved review covered an older version, e.g. “需求 v1” (#251). */
+  outdatedReviewLabel?: string | undefined
   policySnapshot: PolicySnapshot | null
   gateEnforcementDecision: GateEnforcementDecision | null
   isLoadingGateEnforcement: boolean
@@ -648,6 +651,9 @@ export function buildStatusDescriptors(input: {
   const reviewStatus = (gateScoped: boolean): StatusDescriptor => {
     const missingReview = [...(decision?.blockingReasons ?? []), ...(decision?.warningReasons ?? [])]
       .find((reason) => reason.target === 'missing_agent_review' && reason.id !== 'policy-unavailable')
+    const outdatedNote = input.outdatedReviewLabel && !input.latestAgentReview
+      ? `已有的审查针对${input.outdatedReviewLabel}，不适用于当前版本。`
+      : ''
     if (gateScoped && missingReview) {
       return {
         id: 'missing-agent-review',
@@ -655,11 +661,23 @@ export function buildStatusDescriptors(input: {
         state: '缺少门禁审查',
         tone: missingReview.action === 'block' ? 'bad' : 'warn',
         readiness: 'missing',
-        summary: missingReview.action === 'block'
+        summary: `${outdatedNote}${missingReview.action === 'block'
           ? 'Gate 缺少基于知识的门禁审查结果，因此当前不能审批。'
-          : 'Gate 缺少基于知识的门禁审查结果；当前策略仅警告，不阻断审批。',
+          : 'Gate 缺少基于知识的门禁审查结果；当前策略仅警告，不阻断审批。'}`,
         nextAction: '在状态行运行门禁审查。',
         impact: '审查意见',
+      }
+    }
+    if (outdatedNote) {
+      return {
+        id: 'knowledge-review',
+        label: '门禁审查',
+        state: '仅有旧版本的审查',
+        tone: 'warn',
+        ...(gateScoped ? { readiness: 'missing' as const } : {}),
+        summary: `${outdatedNote}旧结果保留在「执行记录」中。`,
+        nextAction: '在状态行审查当前版本。',
+        impact: gateScoped ? '审批依据' : '审查与引用',
       }
     }
 
@@ -950,7 +968,10 @@ function buildActionCatalog(
   return {
     runKnowledgeReview: {
       id: 'runKnowledgeReview',
-      label: '运行门禁审查',
+      // Requirement and design Gates name the version the review covers (#251).
+      label: node.kind === 'gate' && (node.stage === 'clarify' || node.stage === 'design')
+        ? `审查当前${gateApprovalSubject(node, approvalTarget)}`
+        : '运行门禁审查',
       variant: 'ghost',
       disabledReasons: ['running_agent_review', 'review_unavailable'],
     },
@@ -1289,6 +1310,7 @@ function buildNextAction(input: {
   githubDeliveryIntent?: GitHubDeliveryIntent
   githubDeliveryOperatorOutcome?: GitHubDeliveryOperatorOutcome
   latestAgentReview: AgentReviewResult | undefined
+  outdatedReviewLabel?: string | undefined
   gateEnforcementDecision: GateEnforcementDecision | null
   isLoadingGateEnforcement: boolean
   canApprove: boolean
@@ -1346,6 +1368,9 @@ function buildNextAction(input: {
     const subject = gateApprovalSubject(node, target)
     const approveLabel = approveGateLabel(node, target)
     const missingReview = hasMissingReviewReason(decision)
+    // An older version's review stays in history and never counts for this version (#251).
+    const outdated = input.latestAgentReview ? undefined : input.outdatedReviewLabel
+    const outdatedNote = outdated ? `已有的审查针对${outdated}，不适用于当前版本。` : ''
     if (input.isRunningKnowledgeReview) return reviewRunning()
     if (input.isLoadingGateEnforcement) {
       return statusOf('loading', 'neutral', '正在读取审批条件', '策略、权限和证据正在加载；读取完成前不显示可以确认的结论。')
@@ -1365,8 +1390,8 @@ function buildNextAction(input: {
     }
     if (decision?.blocksApproval) {
       if (missingReview) {
-        return statusOf('blocked', 'blocked', `暂不能确认${subject}`, `${reviewCost}团队策略要求先完成本阶段的 AI 审查，完成后会重新评估。`, {
-          qualifier: '缺少 AI 审查',
+        return statusOf('blocked', 'blocked', `暂不能确认${subject}`, `${reviewCost}${outdatedNote}团队策略要求先完成本阶段的 AI 审查，完成后会重新评估。`, {
+          qualifier: outdated ? '当前版本尚未审查' : '缺少 AI 审查',
           primaryActionId: 'runKnowledgeReview',
         })
       }
@@ -1378,19 +1403,22 @@ function buildNextAction(input: {
       })
     }
     if (!input.canApprove) {
-      return statusOf('awaiting_role', 'neutral', `等待有权限的成员确认${subject}`, '当前身份没有审批权限；可以阅读材料和审查意见。', {
+      return statusOf('awaiting_role', 'neutral', `等待有权限的成员确认${subject}`, `${outdatedNote}当前身份没有审批权限；可以阅读材料和审查意见。`, {
         ...(missingReview || !input.latestAgentReview ? { secondaryActionIds: ['runKnowledgeReview'] as InspectorActionId[] } : {}),
       })
     }
     const title = `等待你确认${subject}`
     if (missingReview) {
-      return statusOf('approvable', 'warning', title, `${reviewCost}策略不阻断，也可直接确认。`, {
-        qualifier: '尚未运行 AI 审查',
+      // The model and cost stay first so they survive truncation (W2); the headline already names the version.
+      return statusOf('approvable', 'warning', title, `${reviewCost}${outdatedNote}策略不阻断，也可直接确认。`, {
+        qualifier: outdated ? '当前版本尚未审查' : '尚未运行 AI 审查',
         primaryActionId: 'runKnowledgeReview',
         secondaryActionIds: ['approveGate'],
         confirmBefore: {
           actionId: 'approveGate',
-          message: `尚未运行 AI 审查，本次确认针对${subject}。再次点击「${approveLabel}」提交。`,
+          message: outdated
+            ? `当前版本尚未审查（已有的审查针对${outdated}），本次确认针对${subject}。再次点击「${approveLabel}」提交。`
+            : `尚未运行 AI 审查，本次确认针对${subject}。再次点击「${approveLabel}」提交。`,
         },
       })
     }
@@ -1400,13 +1428,14 @@ function buildNextAction(input: {
       ...(shouldOfferLocalTestCtaForGate(node) && !hasTestArtifact(input.artifacts) ? ['openTestStep' as const] : []),
     ]
     if (suggestions > 0) {
-      return statusOf('approvable', 'neutral', title, '审查意见不阻断确认，逐条列在「当前工作」中。', {
+      return statusOf('approvable', 'neutral', title, `${outdatedNote}审查意见不阻断确认，逐条列在「当前工作」中。`, {
         qualifier: `有 ${suggestions} 条建议`,
         primaryActionId: 'approveGate',
         secondaryActionIds: testAction,
       })
     }
-    return statusOf('approvable', 'neutral', title, '策略、权限与所需证据均已满足。', {
+    return statusOf('approvable', 'neutral', title, outdated ? `${outdatedNote}策略不要求审查，也可直接确认。` : '策略、权限与所需证据均已满足。', {
+      ...(outdated ? { qualifier: '当前版本尚未审查' } : {}),
       primaryActionId: 'approveGate',
       secondaryActionIds: testAction,
     })
@@ -1551,6 +1580,8 @@ export function buildNodeInspectorViewModel(input: {
   isRunningTests?: boolean
   /** What the user reads when it is not the approval target, e.g. “历史版本 v1” (plan S4, Z6). */
   readingElsewhere?: string
+  /** Whether `latestAgentReview` covered the current version (#251); absent means it did. */
+  latestReviewScope?: GateReviewScope | undefined
 }): NodeInspectorViewModel {
   const presentation = buildWorkflowNodePresentation(input.node)
   const visualKind = presentation.nodeKind
@@ -1559,7 +1590,11 @@ export function buildNodeInspectorViewModel(input: {
   const requestedTab = resolveInspectorTabName(input.node, input.requestedTab)
   const activeTab = tabs.find((tab) => tab.tabId === requestedTab || tab.label === requestedTab) ?? tabs[0]!
   const actionCatalog = buildActionCatalog(input.node, input.hasTeamProjectBinding, input.codingActionProjection, input.approvalTarget, input.artifacts)
-  const baseNextAction = buildNextAction(input)
+  // A review of an older version is history: it neither satisfies nor suggests anything for this one (#251).
+  const isReviewOutdated = Boolean(input.latestAgentReview && input.latestReviewScope && !input.latestReviewScope.appliesToCurrent)
+  const currentReview = isReviewOutdated ? undefined : input.latestAgentReview
+  const outdatedReviewLabel = isReviewOutdated ? input.latestReviewScope?.reviewedLabel ?? '之前的版本' : undefined
+  const baseNextAction = buildNextAction({ ...input, latestAgentReview: currentReview, outdatedReviewLabel })
   // After a GitHub App binding is revoked, verifying that the old delivery credential no longer
   // works is the follow-up on a finished delivery; keep it on the first layer, not in “⋯”.
   const canOfferRevocationCheck = input.githubDeliveryIntent?.status === 'completed' &&
@@ -1627,7 +1662,8 @@ export function buildNodeInspectorViewModel(input: {
     visualKind,
     artifacts: input.artifacts,
     events: input.events,
-    latestAgentReview: input.latestAgentReview,
+    latestAgentReview: currentReview,
+    outdatedReviewLabel,
     policySnapshot: input.policySnapshot,
     gateEnforcementDecision: input.gateEnforcementDecision,
     isLoadingGateEnforcement: input.isLoadingGateEnforcement,
