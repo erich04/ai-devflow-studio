@@ -3,11 +3,11 @@ import { fromMarkdown } from 'mdast-util-from-markdown'
 import { sha256Text, type AgentReviewResult, type Artifact } from '@ai-devflow/shared'
 import { ArtifactBody, partitionArtifact } from './ArtifactBody'
 import { DetailPopover } from './DetailPopover'
-import { ReviewEvidenceDetails, type RecordReviewFeedback } from './ReviewEvidenceDetails'
+import { ReviewEvidenceDetails, type RecordReviewFeedback, type ReviewRevisionDrafts } from './ReviewEvidenceDetails'
 import type { DiscussionMaterial } from '../app/discussion-reference'
 import { formatLocalTime } from '../app/desktop-view-model'
 
-/** Match only blocks the Markdown renderer can annotate. Cross-block quotes use the report fallback. */
+/** Match only blocks the Markdown renderer can annotate. Cross-block quotes stay in the full report. */
 function readingBlocks(content: string) {
   const blocks: Array<{ start: number; end: number }> = []
   for (const section of partitionArtifact(content).filter((item) => !['evidence', 'records'].includes(item.group))) {
@@ -20,16 +20,22 @@ function readingBlocks(content: string) {
   return blocks
 }
 
-export function ArtifactReviewReader({ artifact, review, reports = [], onFeedback, onToggleRevision, revisionSelected = [], onDiscuss, requirement = false, readingTools }: {
+/**
+ * Reads a step's body with its review opinions beside the text they cite (#246, #252). The full
+ * report is not repeated here; it lives in 材料与版本, and opinions without a verifiable location
+ * stay reachable from the one-line summary below the body.
+ */
+export function ArtifactReviewReader({ artifact, review, onFeedback, revisionDrafts, onDiscuss, onOpenReport, requirement = false, readingTools }: {
   /** Passed to the body's 阅读工具 disclosure (plan Y6). */
   readingTools?: ReactNode
   artifact: Artifact
   review?: AgentReviewResult | null | undefined
-  reports?: Artifact[]
   onFeedback?: RecordReviewFeedback | undefined
-  onToggleRevision?: ((index: number) => void) | undefined
-  revisionSelected?: number[] | undefined
+  /** Per-opinion revision drafts; only for the requirement version that can be revised (#247). */
+  revisionDrafts?: ReviewRevisionDrafts | undefined
   onDiscuss?: ((material: DiscussionMaterial) => void) | undefined
+  /** Opens the full report in 材料与版本. */
+  onOpenReport?: (() => void) | undefined
   requirement?: boolean
 }) {
   const [digest, setDigest] = useState<{ id: string; content: string; value: string } | null>(null)
@@ -47,7 +53,8 @@ export function ArtifactReviewReader({ artifact, review, reports = [], onFeedbac
     bound && detail.index >= 0 && detail.index < (review?.missingEvidence.length ?? 0) && Number.isInteger(citation.start) && Number.isInteger(citation.end) && citation.start >= 0 && citation.end > citation.start && citation.end <= artifact.content.length &&
     citation.sourceId === artifact.id && citation.contentDigest === currentDigest && (!citation.updatedAt || citation.updatedAt === artifact.updatedAt) && artifact.content.slice(citation.start, citation.end) === citation.quote &&
     blocks.some((block) => citation.start >= block.start && citation.end <= block.end) ? [{ index: detail.index, citation }] : []))
-  const toggle = bound ? onToggleRevision : undefined
+  // Drafts belong to the version the review is bound to; a stale review offers none.
+  const drafts = bound ? revisionDrafts : undefined
   // A review opinion becomes a reference card in the discussion; nothing is sent yet (plan W7).
   const discuss = onDiscuss && review ? (index: number) => {
     const quotes = review.missingEvidenceDetails?.find((item) => item.index === index)?.citations ?? []
@@ -58,29 +65,40 @@ export function ArtifactReviewReader({ artifact, review, reports = [], onFeedbac
       excerpt: `意见：${review.missingEvidence[index]}\n审查时间：${review.createdAt}\n${quotes.map((item) => `原文：${item.quote}`).join('\n')}\n${bound ? '这份报告与当前正文绑定一致。' : '这份报告尚不能证明当前正文已审查，请先核对版本。'}`,
     })
   } : undefined
-  const report = review ? <section className="requirement-review-list" data-testid="review-evidence-results"><h3>{bound ? '本版本审查意见' : '历史或尚未核验绑定的审查'}</h3>
-    <p>{review.conclusion}</p><p className="meta">共 {review.missingEvidence.length} 条待核对意见 · {review.createdAt}。{bound ? '已绑定当前正文。' : '不能将这份报告当作当前版本已审查或问题已解决的证明。'}</p>
-    {review.missingEvidence.length === 0 && <p>本次审查未提出缺失项；人工审批与实际测试仍需分别核对。</p>}
-    {review.missingEvidence.map((_, index) => !valid.some((item) => item.index === index) && <p className="meta" key={index}>意见 {index + 1}：当前正文没有可核验的位置，保留在此处供核对。</p>)}
-    <p>{review.summary}</p>
-    {review.policyFindings.map((finding) => <p key={finding.id}>{finding.severity} · {finding.category} · {finding.summary}</p>)}
-    <details><summary>审查来源与版本快照</summary><p>{review.id} · {review.gateAdvisory.blocksApproval ? '审查提出阻断' : '建议性审查'} · 置信度 {Math.round(review.confidence * 100)}%</p>{review.contextManifest?.subjectArtifacts.map((subject) => <p key={subject.id}>{subject.id} · {subject.updatedAt} · {subject.contentDigest} · {subject.coverage}</p>)}</details>
-    <ReviewEvidenceDetails key={review.id} review={review} onFeedback={onFeedback} onToggleRevision={toggle} revisionSelected={revisionSelected} onDiscuss={discuss} />
-    {reports.length > 0 && <details><summary>历史报告原文 · {reports.length}</summary>{reports.map((item) => <article key={item.id}><h4>{item.title}</h4><ArtifactBody content={item.content} /></article>)}</details>}
-  </section> : <p>尚未保存 AI 审查报告。</p>
+  const reviewedAt = review ? `${artifact.title} · ${formatLocalTime(artifact.updatedAt)} · 审查于 ${formatLocalTime(review.createdAt)}` : ''
   const annotate = (start: number, end: number) => {
     const items = valid.filter((item) => item.citation.start >= start && item.citation.end <= end).filter((item, index, all) => all.findIndex((other) => other.index === item.index) === index)
     if (!items.length || !review) return null
     return <span className="review-inline-markers">{items.map((item) => <DetailPopover hoverPreview key={item.index} title={`审查意见 ${item.index + 1}`} className="review-inline-marker" label={<span>意见 {item.index + 1}</span>}>
-      <p>{artifact.title} · {artifact.updatedAt} · 审查 {review.createdAt}</p>
+      <p className="meta">{reviewedAt}</p>
       <strong>原文</strong><blockquote>{item.citation.quote}</blockquote>
-      <ReviewEvidenceDetails review={review} onlyIndex={item.index} onFeedback={onFeedback} onToggleRevision={toggle} revisionSelected={revisionSelected} onDiscuss={discuss} />
+      <ReviewEvidenceDetails review={review} onlyIndex={item.index} onFeedback={onFeedback} revisionDrafts={drafts} onDiscuss={discuss} />
     </DetailPopover>)}</span>
   }
+  const count = review?.missingEvidence.length ?? 0
+  const located = new Set(valid.map((item) => item.index))
+  const unlocated = bound ? Array.from({ length: count }, (_, index) => index).filter((index) => !located.has(index)) : []
+  const reportLink = review && onOpenReport
+    ? <button type="button" className="text-button" onClick={onOpenReport}>在「材料与版本」查看完整报告</button>
+    : null
+  // One line, not a list: the count is of opinions, never of cited places (#246).
+  const summary = !review ? '尚未保存 AI 审查报告。'
+    : !currentDigest ? '正在核对审查与当前正文的对应关系…'
+      : !bound ? '这份审查报告不能证明当前正文已审查：它审查的是其他版本，或正文之后有变化。'
+        : count === 0 ? '本次审查没有提出意见。'
+          : unlocated.length === 0 ? `审查意见 ${count} 条，均已在正文旁标出。`
+            : `审查意见 ${count} 条，正文旁标出 ${located.size} 条；另有 ${unlocated.length} 条没有可核验的原文位置：`
   return <>
-    <ArtifactBody key={artifact.id} content={artifact.content} kind={requirement ? 'clarification' : artifact.kind} section="content" annotateBlock={annotate} annotations={valid.map((item) => ({ index: item.index, start: item.citation.start, end: item.citation.end }))} pendingContent={requirement ? report : undefined} readingTools={readingTools} />
+    <ArtifactBody key={artifact.id} content={artifact.content} kind={requirement ? 'clarification' : artifact.kind} section="content" annotateBlock={annotate} annotations={valid.map((item) => ({ index: item.index, start: item.citation.start, end: item.citation.end }))} readingTools={readingTools} />
+    <p className="meta review-reference-summary" data-testid="review-reference-summary">
+      {summary}
+      {review ? unlocated.map((index) => <DetailPopover hoverPreview key={index} title={`审查意见 ${index + 1}`} triggerLabel={`审查意见 ${index + 1}（未定位）`} className="review-inline-marker" label={<span>意见 {index + 1}</span>}>
+        <p className="meta">{reviewedAt}</p>
+        <p className="meta">这条意见没有可核验的原文位置，因此没有在正文中标注。</p>
+        <ReviewEvidenceDetails review={review} onlyIndex={index} onFeedback={onFeedback} revisionDrafts={drafts} onDiscuss={discuss} />
+      </DetailPopover>) : null}
+      {reportLink}
+    </p>
     <details className="material-source"><summary>来源与版本</summary><p>{artifact.id}</p><p>版本更新时间：{artifact.updatedAt}</p><p>正文摘要：{currentDigest ?? '正在核验'}</p></details>
-    <p className="meta">审查意见 {review?.missingEvidence.length ?? 0} 条 · 可在当前正文定位 {new Set(valid.map((item) => item.index)).size} 条。{requirement ? '待确认事项中保留全部意见。' : '下方保留完整审查报告。'}</p>
-    {!requirement && report}
   </>
 }

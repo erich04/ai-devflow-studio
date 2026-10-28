@@ -1428,7 +1428,7 @@ function buildNextAction(input: {
       ...(shouldOfferLocalTestCtaForGate(node) && !hasTestArtifact(input.artifacts) ? ['openTestStep' as const] : []),
     ]
     if (suggestions > 0) {
-      return statusOf('approvable', 'neutral', title, `${outdatedNote}审查意见不阻断确认，逐条列在「当前工作」中。`, {
+      return statusOf('approvable', 'neutral', title, `${outdatedNote}审查意见不阻断确认，已在「当前工作」的正文旁标出。`, {
         qualifier: `有 ${suggestions} 条建议`,
         primaryActionId: 'approveGate',
         secondaryActionIds: testAction,

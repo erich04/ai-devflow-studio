@@ -1,7 +1,8 @@
 import { CodingQuestionPanel } from '../components/CodingQuestionPanel'
 import { CodingSessionPermissions } from '../components/CodingSessionPermissions'
 import { type Node, type NodeProps } from '@xyflow/react'
-import { ReviewEvidenceDetails, type RecordReviewFeedback } from '../components/ReviewEvidenceDetails'
+import { ReviewEvidenceDetails, type RecordReviewFeedback, type ReviewRevisionDrafts } from '../components/ReviewEvidenceDetails'
+import { ReviewReport } from '../components/ReviewReport'
 import {
   Bot,
   CheckCircle2,
@@ -58,6 +59,17 @@ import type { DiscussionMaterial } from '../app/discussion-reference'
 import { CodingRetryDialog, CodingWorkPanel, CodingWorkspaceRecords, GateReviewRunPanel, TestRunPanel } from './TaskWorkPanel'
 import { ReviewRerunDialog } from './ReviewRerunDialog'
 import { describeGateReviewScope } from '../app/gate-review-scope'
+import {
+  MAX_REVISION_REQUEST_CHARACTERS,
+  REVISION_SUGGESTIONS_STORAGE_KEY,
+  composeRevisionRequest,
+  findSuggestion,
+  parseRevisionSuggestionStore,
+  removeSuggestion,
+  upsertSuggestion,
+  type RevisionSuggestion,
+  type RevisionSuggestionStore,
+} from '../app/revision-suggestions'
 import {
   buildWorkflowNodePresentation,
   buildWorkflowBoard,
@@ -525,6 +537,10 @@ export function Inspector({
   const [armedActionKey, setArmedActionKey] = useState('')
   // Confirmation of another paid Gate Review, bound to what was shown when it opened (#251).
   const [reviewConfirmation, setReviewConfirmation] = useState<{ nodeId: string; key: string } | null>(null)
+  // Per-opinion drafts beside the free text, keyed by the requirement version they revise (#247).
+  const [revisionSuggestions, setRevisionSuggestions] = useState<RevisionSuggestionStore>(() => {
+    try { return parseRevisionSuggestionStore(localStorage.getItem(REVISION_SUGGESTIONS_STORAGE_KEY)) } catch { return {} }
+  })
   const [revisionDrafts, setRevisionDrafts] = useState<Record<string, string>>(() => {
     try { const parsed: unknown = JSON.parse(localStorage.getItem('devflow-revision-drafts') ?? '{}'); return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === 'string')) as Record<string, string> : {} } catch { return {} }
   })
@@ -706,9 +722,32 @@ export function Inspector({
     setRevisionDrafts(next)
     try { localStorage.setItem('devflow-revision-drafts', JSON.stringify(next)) } catch { setRevisionDraftError('本地草稿保存失败，当前页面仍保留文字；请复制后再关闭应用。') }
   }
-  const revisionLine = (index: number) => `审查意见 ${index + 1}（${latestAgentReview?.id}）：${latestAgentReview?.missingEvidence[index] ?? ''}`
-  const selectedReviewItems = latestAgentReview?.missingEvidence.flatMap((_, index) => clarificationFeedbackDraft.includes(revisionLine(index)) ? [index] : []) ?? []
-  const olderDrafts = clarificationReview?.revisions.filter((revision) => revision.id !== revisionDraftKey && revisionDrafts[revision.id]?.trim()) ?? []
+  const currentSuggestions = revisionSuggestions[revisionDraftKey] ?? []
+  const saveSuggestions = (list: RevisionSuggestion[]) => {
+    const next = { ...revisionSuggestions, [revisionDraftKey]: list }
+    if (!list.length) delete next[revisionDraftKey]
+    setRevisionSuggestions(next)
+    try { localStorage.setItem(REVISION_SUGGESTIONS_STORAGE_KEY, JSON.stringify(next)) } catch { setRevisionDraftError('本地草稿保存失败，当前页面仍保留内容；请复制后再关闭应用。') }
+  }
+  // Exactly what 「确认提交修订请求」 sends: the opinion drafts, then the free text (#247).
+  const revisionRequestText = composeRevisionRequest(currentSuggestions, clarificationFeedbackDraft)
+  const revisionRequestTooLong = revisionRequestText.length > MAX_REVISION_REQUEST_CHARACTERS
+  const draftReview = clarificationReview?.state === 'ready' && isSelectedCurrentNode ? latestAgentReview : undefined
+  const reviewRevisionDrafts: ReviewRevisionDrafts | undefined = draftReview ? {
+    get: (index) => findSuggestion(currentSuggestions, draftReview.id, index),
+    save: (index, draft) => {
+      const next = upsertSuggestion(currentSuggestions, { reviewId: draftReview.id, index, issue: draftReview.missingEvidence[index] ?? '', ...draft })
+      if (composeRevisionRequest(next, clarificationFeedbackDraft).length > MAX_REVISION_REQUEST_CHARACTERS) {
+        return `保存后修订请求将超过 ${MAX_REVISION_REQUEST_CHARACTERS} 字，请精简后再保存。`
+      }
+      saveSuggestions(next)
+      return undefined
+    },
+    remove: (index) => saveSuggestions(removeSuggestion(currentSuggestions, draftReview.id, index)),
+    openRequest: () => setRevisionFormOpen(true),
+  } : undefined
+  const olderDrafts = clarificationReview?.revisions.filter((revision) => revision.id !== revisionDraftKey &&
+    (revisionDrafts[revision.id]?.trim() || revisionSuggestions[revision.id]?.length)) ?? []
   // Discussion proposals are not the step's body; they are listed in 材料与版本 (plan W8).
   const contentArtifacts = (selectedNode.kind === 'gate'
     ? [...workflowArtifacts.filter((artifact) => selectedNode.artifactIds.includes(artifact.id)), ...nodeArtifacts]
@@ -1175,7 +1214,8 @@ export function Inspector({
           ))}
         </section>)
       )}
-      {latestAgentReview && <section aria-label="已归档的审查报告"><h3>审查报告</h3><p className="meta">{formatLocalTime(latestAgentReview.createdAt)} · {latestAgentReview.model}。结论与意见逐条列在「当前工作」中。</p><button className="text-button" onClick={() => setRequestedTab(CURRENT_WORK_TAB)}>在「当前工作」中查看审查意见</button></section>}
+      {/* The one full report; 当前工作 marks opinions beside the text they cite (#246, #252). */}
+      {latestAgentReview && <ReviewReport review={latestAgentReview} scope={latestReviewScope} onFeedback={onRecordAgentReviewFeedback} />}
     </div>
   )
 
@@ -1515,19 +1555,13 @@ export function Inspector({
         {clarificationReview.message}
       </p> : null}
       <GateMaterialReader key={`${selectedNode.id}:${requirementReader.activeRevision?.id}`} bundle={requirementReader}
-        review={clarificationReview ? latestAgentReview : undefined} reports={[]} onFeedback={onRecordAgentReviewFeedback}
+        review={clarificationReview ? latestAgentReview : undefined} onFeedback={onRecordAgentReviewFeedback}
         onDiscuss={onDiscussMaterial}
+        onOpenReport={() => setRequestedTab(MATERIALS_TAB)}
         readingId={documentId || undefined}
         onReadingChange={setDocumentId}
         materialContext={materialContext}
-        revisionSelected={selectedReviewItems}
-        onToggleRevision={clarificationReview && isSelectedCurrentNode && clarificationReview.state === 'ready' ? (index) => {
-          const line = revisionLine(index)
-          const removing = selectedReviewItems.includes(index)
-          const text = removing ? clarificationFeedbackDraft.replace(line, '').trim() : [clarificationFeedbackDraft, line].filter(Boolean).join('\n\n')
-          if (text.length > 4000) { setRevisionFormOpen(true); setRevisionDraftError('加入后将超过 4000 字，请先整理草稿再添加。原草稿已保留。'); return }
-          setClarificationFeedbackDraft(text)
-        } : undefined}
+        revisionDrafts={reviewRevisionDrafts}
         knowledge={<p className="meta" data-testid="knowledge-reference-pointer">
           团队规范引用 {scopedReferences.length} 条，完整列表与来源在「材料与版本」中；审查报告原文也在那里。
           <button className="text-button" type="button" onClick={() => setRequestedTab(MATERIALS_TAB)}>查看引用来源</button>
@@ -1677,7 +1711,7 @@ export function Inspector({
         {selectedEntry.statusLabel ? <span className={`pill ${selectedEntry.group === 'confirmed' ? 'good' : 'soft'}`}>{selectedEntry.statusLabel}</span> : null}
       </p>
       <p>{selectedDocument.summary}</p>
-      <ArtifactReviewReader key={selectedDocument.id} artifact={selectedDocument} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} onDiscuss={onDiscussMaterial} />
+      <ArtifactReviewReader key={selectedDocument.id} artifact={selectedDocument} review={latestAgentReview} onFeedback={onRecordAgentReviewFeedback} onDiscuss={onDiscussMaterial} onOpenReport={() => setRequestedTab(MATERIALS_TAB)} />
       {selectedDocument.designRevision && <p className="meta">本版基于旧方案与 {selectedDocument.designRevision.proposals.length} 份提案修订。
         <button className="text-button" onClick={() => {
           if (selectedDocument.nodeId === selectedNode.id) { setRequestedTab(MATERIALS_TAB); return }
@@ -1837,23 +1871,39 @@ export function Inspector({
       ) : null}
       <footer className="node-action-footer">
       {revisionDraftError && <p role="alert">{revisionDraftError}</p>}
-      {olderDrafts.length > 0 && <details><summary>其他版本有 {olderDrafts.length} 份未清除的修订草稿</summary><p>当前版本已改变；旧草稿不会自动提交到新版本，请核对后自行复制适用内容。</p>{olderDrafts.map((revision) => <div key={revision.id}><strong>需求澄清 v{revision.clarificationRevision?.revision ?? '—'}</strong><pre>{revisionDrafts[revision.id]}</pre></div>)}</details>}
+      {olderDrafts.length > 0 && <details><summary>其他版本有 {olderDrafts.length} 份未清除的修订草稿</summary><p>当前版本已改变；旧草稿不会自动提交到新版本，请核对后自行复制适用内容。</p>{olderDrafts.map((revision) => <div key={revision.id}><strong>需求澄清 v{revision.clarificationRevision?.revision ?? '—'}</strong><pre>{composeRevisionRequest(revisionSuggestions[revision.id] ?? [], revisionDrafts[revision.id] ?? '')}</pre></div>)}</details>}
       {revisionFormOpen && clarificationReview?.state === 'ready' && clarificationReview.activeRevision?.clarificationRevision ? (
         <section className="clarification-review__feedback" aria-label="请求修订当前版本"><div>
-          <p>修订对象：需求澄清 v{clarificationReview.activeRevision.clarificationRevision.revision}。草稿仅在明确提交后生效。</p><label htmlFor="clarification-feedback">结构化修订意见</label>
+          <p>修订对象：需求澄清 v{clarificationReview.activeRevision.clarificationRevision.revision}。草稿仅在明确提交后生效。</p>
+          {currentSuggestions.length > 0 ? <section className="revision-suggestion-list" aria-label="已整理的意见修订建议">
+            <p className="meta">已整理 {currentSuggestions.length} 条意见的修订建议，可在正文旁的意见中继续编辑。</p>
+            {currentSuggestions.map((item) => <article className="mini-card" key={`${item.reviewId}:${item.index}`}>
+              <strong>意见 {item.index + 1}：{item.issue}</strong>
+              {item.reviewId !== latestAgentReview?.id ? <span className="meta"> · 来自较早的审查</span> : null}
+              <p>核实结论：{item.finding.trim() || '未填写'}</p>
+              <p>拟修改内容：{item.change.trim() || '未填写'}</p>
+              <button className="text-button" type="button" aria-label={`移出意见 ${item.index + 1} 的修订建议`} onClick={() => saveSuggestions(removeSuggestion(currentSuggestions, item.reviewId, item.index))}>移出</button>
+            </article>)}
+          </section> : null}
+          <label htmlFor="clarification-feedback">{currentSuggestions.length ? '其他修订说明' : '结构化修订意见'}</label>
           <textarea
             id="clarification-feedback"
             value={clarificationFeedbackDraft}
-            maxLength={4000}
+            maxLength={MAX_REVISION_REQUEST_CHARACTERS}
             onChange={(event) => setClarificationFeedbackDraft(event.target.value)}
-            placeholder="说明需要修订的边界、验收条件或未解决问题"
+            placeholder={currentSuggestions.length ? '意见之外的其他修订要求（可选）' : '说明需要修订的边界、验收条件或未解决问题'}
           />
+          {currentSuggestions.length > 0 ? <details className="revision-request-preview" open>
+            <summary>将提交的内容 · {revisionRequestText.length}/{MAX_REVISION_REQUEST_CHARACTERS} 字</summary>
+            <pre data-testid="revision-request-preview">{revisionRequestText}</pre>
+          </details> : null}
+          {revisionRequestTooLong ? <p role="alert">修订请求超过 {MAX_REVISION_REQUEST_CHARACTERS} 字，请精简后再提交。</p> : null}
           <button
             className="ghost-button"
             type="button"
-            disabled={!clarificationFeedbackDraft.trim() || !isSelectedCurrentNode || !onRequestClarificationChanges || hasInspectorWriteLock}
+            disabled={!revisionRequestText.trim() || revisionRequestTooLong || !isSelectedCurrentNode || !onRequestClarificationChanges || hasInspectorWriteLock}
             onClick={() => {
-              onRequestClarificationChanges?.(clarificationFeedbackDraft)
+              onRequestClarificationChanges?.(revisionRequestText)
             }}
           >
             确认提交修订请求
