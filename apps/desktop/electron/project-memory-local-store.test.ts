@@ -8,7 +8,8 @@ import {
   type AgentEvent, type Artifact, type CodingAgentRun, type LocalProject,
 } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
-import { approvedWorkflowArtifacts } from './project-memory-capture'
+import { approvedWorkflowArtifacts, buildLegacyMemoryDocument, LEGACY_MEMORY_DOCUMENT_ID, migrateLegacyProjectMemory } from './project-memory-capture'
+import { createDesktopAgentRuntime } from './agent-runtime-runtime'
 import type { WorkbenchConversation } from './workbench-conversation-contract'
 
 const directories: string[] = []
@@ -20,7 +21,7 @@ afterEach(async () => {
 const now = new Date().toISOString()
 const later = (ms: number) => new Date(Date.now() + ms).toISOString()
 
-async function fixture(options: { memory?: boolean; legacyCandidates?: boolean } = {}) {
+async function fixture(options: { memory?: boolean } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'devflow-project-memory-')); directories.push(directory)
   const dbPath = path.join(directory, 'db.sqlite')
   const store = await createLocalStore({ dbPath }); stores.push(store)
@@ -29,12 +30,6 @@ async function fixture(options: { memory?: boolean; legacyCandidates?: boolean }
   await store.upsertProject(project)
   const owner = await store.resolveLocalProjectMemoryPrincipal(project.id)
   if (owner.status !== 'resolved') throw new Error('No principal')
-  if (options.legacyCandidates) {
-    const hindsight = await store.configureHindsight({ projectId: project.id, ownerUserId: owner.userId, projectPath: directory,
-      knowledgeRoot: 'docs', rootGeneration: 'fixture', endpoint: 'http://127.0.0.1:8888', encryptedApiKey: null,
-      enabled: true, includeMemories: false, selectedPaths: [], modelDigest: 'model', model: { version: 'v1', dimensions: [{ key: 'sem_kind', type: 'text' }] } })
-    await store.configureAutomaticMemory({ projectId: project.id, ownerUserId: owner.userId, hindsightGeneration: hindsight.generation, enabled: true, maxRetainsPerDay: 10 })
-  }
   const config = options.memory === false ? null : await store.configureProjectMemory({ projectId: project.id, ownerUserId: owner.userId,
     enabled: true, endpoint: 'http://127.0.0.1:8890', encryptedApiKey: null, providerId: 'deepseek' })
   const conversation: WorkbenchConversation = { id: 'chat', localProjectId: project.id, version: 1, title: '删除确认', isOpen: true,
@@ -47,7 +42,7 @@ const reply = (conversation: WorkbenchConversation, version: number, extra: Work
 
 describe('project memory capture', () => {
   it('keeps one document per conversation with only public messages, sent after the conversation is idle', async () => {
-    const { store, conversation, config } = await fixture({ legacyCandidates: true })
+    const { store, conversation, config } = await fixture()
     await store.saveWorkbenchConversation(conversation, 0)
     expect(await store.listProjectMemoryDocuments()).toEqual([])
     const first = reply(conversation, 2, [
@@ -64,8 +59,6 @@ describe('project memory capture', () => {
       { role: 'assistant', content: '好的，删除前会弹出确认框。', timestamp: now },
     ])
     expect(Date.parse(document!.notBefore) - Date.now()).toBeGreaterThan(PROJECT_MEMORY_CONVERSATION_IDLE_MS - 60_000)
-    // The candidate pipeline no longer captures a project whose memory lives in Hindsight.
-    expect(await store.listMemoryLearningJobs()).toEqual([])
 
     await store.saveWorkbenchConversation({ ...first, version: 3, status: 'running',
       messages: [...first.messages, { id: 'u2', role: 'user', text: '撤销保留 5 秒。', createdAt: now }] }, 2)
@@ -300,5 +293,83 @@ describe('project memory clearing and changes', () => {
     const input = { documentId: 'artifact:a1', sourceKind: 'artifact' as const, sourceId: 'a1', title: 'Doc', payload: 'x',
       context: 'A document.', tags: ['source:artifact'], occurredAt: now }
     await expect(store.recordProjectMemoryDocument(config!, input)).resolves.toMatchObject({ status: 'queued' })
+  })
+})
+
+describe('copying earlier local Memory (ADR 0030)', () => {
+  /** Saves one Memory the way earlier versions did: an Agent Runtime observation a person promoted. */
+  async function rememberLocally(store: LocalStore, projectId: string, ownerId: string, statement: string) {
+    const creation = createWorkflowRunFromRequest({ runId: 'legacy-run', title: 'Legacy', request: '旧版本地记忆的来源。', projectId,
+      creatorId: ownerId, branchName: 'devflow/legacy', now })
+    await store.saveRun(creation.run)
+    const runtime = createDesktopAgentRuntime({ store, clock: () => now, createId: () => 'legacy-runtime',
+      executeFakeAction: async () => ({ resultDigest: 'a'.repeat(64), evaluationSummary: statement }) })
+    let snapshot = await runtime.start({ runId: creation.run.id, nodeId: creation.run.currentNodeId, localProjectId: projectId })
+    for (let step = 0; step < 3; step += 1) {
+      snapshot = await runtime.advance({ runtimeId: snapshot.runtime.id, runId: creation.run.id, localProjectId: projectId,
+        expectedVersion: snapshot.runtime.version, expectedCheckpointVersion: snapshot.runtime.checkpointVersion })
+    }
+    const [candidate] = await store.listAgentMemoryCandidates(projectId)
+    const promotion = await store.authorizeAgentMemoryPromotion({ candidateId: candidate!.id, memoryId: 'legacy-memory', authority: {
+      stateVersion: 1, decisionId: 'promote-legacy-memory', candidateId: candidate!.id, candidateContentDigest: candidate!.contentDigest,
+      scope: candidate!.scope, actorKind: 'human', actorId: ownerId, policyId: 'test-memory-policy', policyVersion: 1,
+      visibility: 'user_project', sensitivity: 'internal', retentionClass: 'until_deleted', expiresAt: null,
+      authorityDigest: 'b'.repeat(64), decidedAt: now } })
+    if (!promotion.authorized) throw new Error(`fixture promotion rejected: ${promotion.reason}`)
+    await store.commitAgentMemoryPromotion({ revision: promotion.revision }, promotion.capability)
+  }
+  const statement = '删除任务前必须弹出二次确认。'
+
+  it('copies the owner\'s earlier Memory once, and never brings it back after it was forgotten or cleared', async () => {
+    const { store, owner, project, config } = await fixture()
+    await rememberLocally(store, project.id, owner.userId, statement)
+    const copied = (await migrateLegacyProjectMemory(store, project.id))!
+    expect(copied).toMatchObject({ documentId: LEGACY_MEMORY_DOCUMENT_ID, sourceKind: 'legacy', bankId: config!.bankId,
+      title: '旧版本地记忆', tags: ['source:legacy'], status: 'queued' })
+    expect(copied.payload).toContain(`- [${now.slice(0, 10)}] ${statement}`)
+    // Once per bank: a second start does not resend it, even if local Memory changes.
+    expect(await migrateLegacyProjectMemory(store, project.id)).toMatchObject({ id: copied.id, operationId: copied.operationId })
+    await store.forgetProjectMemoryDocument(project.id, copied.id)
+    expect(await migrateLegacyProjectMemory(store, project.id)).toMatchObject({ id: copied.id, status: 'delete_pending', payload: '' })
+    const cleared = await store.clearProjectMemory(project.id)
+    expect(await migrateLegacyProjectMemory(store, project.id)).toMatchObject({ bankId: cleared.bankId, status: 'deleted', payload: '' })
+    expect((await store.listProjectMemoryDocuments(project.id)).filter((row) => row.status === 'queued')).toEqual([])
+    // Local Memory itself is left in place.
+    expect((await store.getAgentMemoryHead('legacy-memory'))?.status).toBe('active')
+  })
+
+  it('copies nothing while memory is off, for another owner, or when there is no earlier Memory', async () => {
+    const off = await fixture({ memory: false })
+    await rememberLocally(off.store, off.project.id, off.owner.userId, statement)
+    expect(await migrateLegacyProjectMemory(off.store, off.project.id)).toBeNull()
+
+    const { store, owner, project, config } = await fixture()
+    expect(await migrateLegacyProjectMemory(store, project.id)).toBeNull()
+    await rememberLocally(store, project.id, owner.userId, statement)
+    await store.configureProjectMemory({ ...config!, ownerUserId: 'someone-else' })
+    expect(await migrateLegacyProjectMemory(store, project.id)).toBeNull()
+    expect(await store.listProjectMemoryDocuments(project.id)).toEqual([])
+  })
+
+  it('lists statements newest first, redacted, and leaves out the oldest when they do not fit', () => {
+    const revisions = [
+      { statement: 'Old fact.', createdAt: '2026-09-01T00:00:00.000Z' },
+      { statement: 'TOKEN=sk-supersecret123456789 rotates monthly.', createdAt: '2026-09-03T00:00:00.000Z' },
+      { statement: 'Newest fact.', createdAt: '2026-09-05T00:00:00.000Z' },
+    ]
+    const document = buildLegacyMemoryDocument(revisions)!
+    const lines = document.payload.split('\n').slice(1)
+    expect(lines[0]).toBe('- [2026-09-05] Newest fact.')
+    expect(lines[2]).toBe('- [2026-09-01] Old fact.')
+    expect(document.payload).not.toContain('sk-supersecret123456789')
+    expect(document.occurredAt).toBe('2026-09-05T00:00:00.000Z')
+    expect(buildLegacyMemoryDocument([])).toBeNull()
+    const many = Array.from({ length: 40 }, (_, index) => ({ statement: `事实 ${index} ${'很长的记录'.repeat(120)}`,
+      createdAt: new Date(Date.parse('2026-09-01T00:00:00.000Z') + index * 86_400_000).toISOString() }))
+    const bounded = buildLegacyMemoryDocument(many)!
+    expect(Buffer.byteLength(bounded.payload)).toBeLessThanOrEqual(48 * 1024)
+    expect(bounded.payload).toContain('事实 39 ')
+    expect(bounded.payload).not.toContain('事实 0 ')
+    expect(bounded.payload).toMatch(/- \[\d+ older statements omitted\]$/u)
   })
 })

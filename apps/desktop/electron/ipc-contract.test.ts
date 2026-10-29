@@ -57,10 +57,6 @@ import {
   parseSaveGateOverrideInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
-  parseAutomaticMemoryProjectInput,
-  parseConfigureAutomaticMemoryInput,
-  parseResolveAutomaticMemoryDecisionInput,
-  parseRememberConversationMemoryInput,
   parseConfigureProjectMemoryInput,
   parseProjectMemoryProjectInput,
   parseClearProjectMemoryInput,
@@ -1293,35 +1289,7 @@ describe('coding question IPC', () => {
   })
 })
 
-describe('automatic Memory IPC boundaries', () => {
-  it('keeps scope and processing authority in Main', () => {
-    expect(parseAutomaticMemoryProjectInput({ projectId: 'project-1' })).toEqual({ projectId: 'project-1' })
-    for (const extra of [{ ownerUserId: 'spoofed' }, { bankId: 'other-bank' }, { generation: 'old' }, { payload: 'upload' }]) {
-      expect(() => parseAutomaticMemoryProjectInput({ projectId: 'project-1', ...extra })).toThrow()
-    }
-  })
-  it('requires explicit source consent and a bounded integer invocation cap', () => {
-    const input = { projectId: 'project-1', enabled: true, consent: true, maxRetainsPerDay: 20 }
-    expect(parseConfigureAutomaticMemoryInput(input)).toEqual(input)
-    expect(parseConfigureAutomaticMemoryInput({ ...input, enabled: false, consent: false }).enabled).toBe(false)
-    for (const extra of [{ consent: false }, { consent: undefined }, { maxRetainsPerDay: 0 }, { maxRetainsPerDay: 101 }, { maxRetainsPerDay: 1.5 }, { ownerUserId: 'spoofed' }]) {
-      expect(() => parseConfigureAutomaticMemoryInput({ ...input, ...extra })).toThrow()
-    }
-  })
-  it('requires an exact conflict target pair and rejects renderer-provided dispositions', () => {
-    const input = { projectId: 'project-1', decisionId: 'decision-1', action: 'approve', targetMemoryId: 'memory-1', expectedRevision: 2 }
-    expect(parseResolveAutomaticMemoryDecisionInput(input)).toEqual(input)
-    for (const extra of [{ expectedRevision: undefined }, { targetMemoryId: undefined }, { expectedRevision: 0 }, { disposition: 'auto_save' }, { action: 'ignore' }]) {
-      expect(() => parseResolveAutomaticMemoryDecisionInput({ ...input, ...extra })).toThrow()
-    }
-  })
-  it('binds manual memory to real source identifiers without accepting evidence from the renderer', () => {
-    const input = { projectId: 'project-1', conversationId: 'chat-1', messageId: 'message-1', statement: 'Prefer concise explanations.', pin: true }
-    expect(parseRememberConversationMemoryInput(input)).toEqual(input)
-    for (const extra of [{ messageId: '' }, { statement: ' padded ' }, { pin: 'yes' }, { evidence: 'verified' }, { sourceDigest: 'a'.repeat(64) }]) {
-      expect(() => parseRememberConversationMemoryInput({ ...input, ...extra })).toThrow()
-    }
-  })
+describe('project memory IPC boundaries', () => {
   it('accepts only the project memory switch, endpoint, Provider and optional key', () => {
     const input = { projectId: 'project-1', enabled: true, endpoint: ' http://127.0.0.1:8890 ', providerId: 'deepseek' }
     expect(parseConfigureProjectMemoryInput(input)).toEqual({ ...input, endpoint: 'http://127.0.0.1:8890' })

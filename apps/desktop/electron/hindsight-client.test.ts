@@ -101,40 +101,6 @@ it('recognizes completed retries while refusing to settle a task with a live chi
   await expect(client.operation('bank', 'op')).resolves.toBe('processing')
 })
 
-it('exports every exact-document fact across bounded pages, with no recall request', async () => {
-  const metadata = { df_event: 'event', df_source: 'sha256:source' }
-  const fact = (i: number) => ({ id: `fact-${i}`, text: `Evidence ${i}`, fact_type: 'world',
-    document_id: 'doc', state: 'valid', updated_at: '2026-10-22T00:00:00Z', metadata, source_memory_ids: [] })
-  const fetcher = vi.fn<typeof fetch>(async (url) => {
-    const parsed = new URL(String(url))
-    if (parsed.pathname.endsWith('/documents/doc')) return Response.json({ id: 'doc', bank_id: 'bank',
-      original_text: 'source', content_hash: 'hash', updated_at: '2026-10-22T00:00:00Z', memory_unit_count: 35, document_metadata: metadata })
-    expect(parsed.pathname.endsWith('/memories/list')).toBe(true)
-    expect(parsed.searchParams.get('document_id')).toBe('doc')
-    expect(parsed.searchParams.get('state')).toBe('valid')
-    const offset = Number(parsed.searchParams.get('offset'))
-    return Response.json({ total: 35, limit: 32, offset, items: Array.from({ length: Math.min(32, 35 - offset) }, (_, i) => fact(i + offset)) })
-  })
-  const client = createHindsightClient({ endpoint: 'http://localhost:8888', fetcher })
-  const document = await client.getDocument('bank', 'doc')
-  expect(document).toMatchObject({ originalText: 'source', memoryUnitCount: 35, metadata })
-  const facts = await client.listDocumentFacts('bank', 'doc', document.memoryUnitCount)
-  expect(facts).toHaveLength(35)
-  expect(facts.at(-1)?.id).toBe('fact-34')
-  expect(fetcher).toHaveBeenCalledTimes(3)
-})
-
-it.each(['foreign_document', 'missing_source', 'observation', 'duplicate', 'unstable_total', 'missing_page'])('rejects incomplete or ungrounded fact exports: %s', async (scenario) => {
-  const good = { id: 'fact', text: 'supported text', fact_type: 'world', document_id: 'doc', state: 'valid',
-    updated_at: '2026-10-22T00:00:00Z', metadata: {}, source_memory_ids: [] }
-  const item = { ...good, ...(scenario === 'foreign_document' ? { document_id: 'other' } : {}),
-    ...(scenario === 'missing_source' ? { document_id: null } : {}), ...(scenario === 'observation' ? { fact_type: 'observation' } : {}) }
-  const count = scenario === 'duplicate' ? 2 : 1
-  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ total: scenario === 'unstable_total' ? 2 : count,
-    offset: 0, limit: 32, items: scenario === 'missing_page' ? [] : scenario === 'duplicate' ? [item, item] : [item] }))
-  const client = createHindsightClient({ endpoint: 'http://localhost:8888', fetcher })
-  await expect(client.listDocumentFacts('bank', 'doc', count)).rejects.toThrow('protocol')
-})
 it('configures a project memory bank with its missions and verifies the saved configuration', async () => {
   const requests: { method: string; url: string; body: unknown }[] = []
   let saved: Record<string, unknown> = {}

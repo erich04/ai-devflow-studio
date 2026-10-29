@@ -11,16 +11,8 @@ export const HINDSIGHT_PROTOCOL = {
 export type HindsightCandidate = { documentId: string; metadata: Record<string, string> }
 export type HindsightOperation = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'not_found'
 export type HindsightClient = ReturnType<typeof createHindsightClient>
-export type HindsightDocument = {
-  id: string; bankId: string; originalText: string; contentHash: string; memoryUnitCount: number
-  updatedAt: string; metadata: Record<string, string>
-}
 export type HindsightMemory = {
   id: string; text: string; type: 'observation' | 'world' | 'experience'; documentId?: string; occurredAt?: string
-}
-export type HindsightExtractedFact = {
-  id: string; text: string; documentId: string; factType: 'world' | 'experience'
-  metadata: Record<string, string>; updatedAt: string
 }
 
 export class HindsightError extends Error {
@@ -31,12 +23,6 @@ export class HindsightError extends Error {
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HindsightError('protocol')
   return value as Record<string, unknown>
-}
-function stringMetadata(value: unknown): Record<string, string> {
-  const parsed = object(value)
-  if (Object.keys(parsed).length > 64 || Object.entries(parsed).some(([key, item]) =>
-    key.length > 200 || typeof item !== 'string' || item.length > 2_000)) throw new HindsightError('protocol')
-  return parsed as Record<string, string>
 }
 export function normalizeHindsightEndpoint(value: string): string {
   const url = new URL(value)
@@ -169,43 +155,6 @@ export function createHindsightClient(input: {
         const result = await request('DELETE', `${bankPath(bank)}/documents/${encodeURIComponent(documentId)}`)
         if (result.success !== true || result.document_id !== documentId) throw new HindsightError('protocol')
       } catch (error) { if (!(error instanceof HindsightError && error.status === 404)) throw error }
-    },
-    async getDocument(bank: string, documentId: string): Promise<HindsightDocument> {
-      const item = await request('GET', `${bankPath(bank)}/documents/${encodeURIComponent(documentId)}`)
-      if (item.id !== documentId || item.bank_id !== bank || typeof item.original_text !== 'string' ||
-          typeof item.content_hash !== 'string' || !item.content_hash || typeof item.updated_at !== 'string' ||
-          !Number.isSafeInteger(item.memory_unit_count) || Number(item.memory_unit_count) < 0 || Number(item.memory_unit_count) > 128) {
-        throw new HindsightError('protocol')
-      }
-      return { id: documentId, bankId: bank, originalText: item.original_text, contentHash: item.content_hash,
-        memoryUnitCount: Number(item.memory_unit_count), updatedAt: item.updated_at, metadata: stringMetadata(item.document_metadata) }
-    },
-    /** Exact source export, never semantic recall. A complete, immutable document is required. */
-    async listDocumentFacts(bank: string, documentId: string, expectedCount: number): Promise<HindsightExtractedFact[]> {
-      if (!Number.isSafeInteger(expectedCount) || expectedCount < 0 || expectedCount > 128) throw new HindsightError('protocol')
-      const facts: HindsightExtractedFact[] = []; const ids = new Set<string>(); const limit = 32
-      let offset = 0
-      do {
-        const query = new URLSearchParams({ document_id: documentId, state: 'valid', limit: String(limit), offset: String(offset) })
-        const page = await request('GET', `${bankPath(bank)}/memories/list?${query}`)
-        if (page.total !== expectedCount || page.limit !== limit || page.offset !== offset || !Array.isArray(page.items) ||
-            page.items.length !== Math.min(limit, expectedCount - offset)) throw new HindsightError('protocol')
-        for (const raw of page.items) {
-          const fact = object(raw)
-          if (typeof fact.id !== 'string' || !fact.id || fact.id.length > 200 || ids.has(fact.id) ||
-              typeof fact.text !== 'string' || !fact.text.trim() || Buffer.byteLength(fact.text) > 8_192 ||
-              fact.document_id !== documentId || !['world', 'experience'].includes(String(fact.fact_type)) ||
-              fact.state !== 'valid' || typeof fact.updated_at !== 'string' ||
-              (fact.source_memory_ids != null && (!Array.isArray(fact.source_memory_ids) || fact.source_memory_ids.length > 0))) {
-            throw new HindsightError('protocol')
-          }
-          ids.add(fact.id)
-          facts.push({ id: fact.id, text: fact.text, documentId, factType: fact.fact_type as 'world' | 'experience',
-            updatedAt: fact.updated_at, metadata: stringMetadata(fact.metadata) })
-        }
-        offset += page.items.length
-      } while (offset < expectedCount)
-      return facts
     },
     /**
      * Project memory recall (ADR 0030): Hindsight is the memory's authority, so its text is used

@@ -1,10 +1,6 @@
 import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
-  AutomaticMemoryStatus,
-  ConfigureAutomaticMemoryInput,
-  ResolveAutomaticMemoryDecisionInput,
-  RememberConversationMemoryInput,
   ConfigureProjectMemoryInput,
   ProjectMemoryStatus,
   ClearProjectMemoryInput,
@@ -355,11 +351,6 @@ export type DevFlowDesktopApi = {
   deleteAgentMemory: (
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
-  getAutomaticMemoryStatus?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  configureAutomaticMemory?: (input: ConfigureAutomaticMemoryInput) => Promise<AutomaticMemoryStatus>
-  processAutomaticMemory?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  resolveAutomaticMemoryDecision?: (input: ResolveAutomaticMemoryDecisionInput) => Promise<AutomaticMemoryStatus>
-  rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
   getProjectMemoryStatus?: (input: { projectId: string }) => Promise<ProjectMemoryStatus>
   configureProjectMemory?: (input: ConfigureProjectMemoryInput) => Promise<ProjectMemoryStatus>
   listProjectMemories?: (input: ListProjectMemoriesInput) => Promise<ProjectMemoryPage>

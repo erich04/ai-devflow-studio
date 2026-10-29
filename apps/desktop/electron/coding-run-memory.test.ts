@@ -7,6 +7,7 @@ import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  codingRunTestCommandStatement,
   createCodingRunMemoryCandidate,
   sanitizeCodingDiffArtifact,
   type AgentMemoryCandidate,
@@ -21,13 +22,9 @@ import {
 } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { schemaMigrations } from './local-store-schema'
-import { learnFromCompletedCodingRun, type CodingRunMemoryLearningStore } from './coding-run-memory-learning'
 import { codingRunPolicyAuthorityDigest, createCodingRunPolicyAuthority } from './coding-run-memory-policy'
 import { AgentMemoryDuplicateError, createAgentMemoryHumanActions } from './agent-memory-human-actions'
 import { createAgentMemoryRendererAccess } from './agent-memory-renderer-access'
-import { buildCodingLearningEvent } from './automatic-memory-capture'
-import { automaticMemoryDigest } from './automatic-memory-store'
-import { classifyMemoryLearningFact } from './automatic-memory-policy'
 
 const sha256 = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex')
 
@@ -118,6 +115,47 @@ async function seed(store: LocalStore, codingRun: CodingAgentRun = completedCodi
   await store.saveCodingAgentRun(codingRun)
 }
 
+/**
+ * What the Coding Run learning removed by ADR 0030 left in a database: a change map awaiting
+ * review and the saved test command promoted by its bounded policy, unless already active.
+ */
+async function seedLearnedMemory(store: LocalStore, codingRun: CodingAgentRun, decidedAt: string) {
+  const workflow = (await store.getRun(codingRun.runId))!
+  const node = workflow.nodes.find((entry) => entry.id === codingRun.nodeId)!
+  const active = new Set<string>()
+  for (const head of await store.listAgentMemoryHeads(project.id)) {
+    const revision = (await store.listAgentMemoryRevisions(head.memoryId)).find((entry) => entry.revision === head.currentRevision)
+    if (head.status === 'active' && revision) active.add(revision.statement)
+  }
+  const statements = [
+    ['test_command', codingRunTestCommandStatement(project.testCommand)!],
+    ['change_map', `Change map: "${workflow.title}" (${node.title}) was implemented by changing ${codingRun.changedPaths.join(', ')}.`],
+  ] as const
+  const promoted: Array<{ candidateId: string; memoryId: string }> = []
+  for (const [kind, text] of statements) {
+    if (kind === 'test_command' && active.has(text)) continue
+    const candidateId = `agent-memory-candidate-coding-${sha256(`${codingRun.id}:${kind}`).slice(0, 32)}`
+    const candidate = await createCodingRunMemoryCandidate({
+      id: candidateId, statement: text, scope: codingRun.contextReceipt!.scope, createdAt: codingRun.completedAt!,
+      provenance: { kind: 'coding_run', runId: codingRun.runId, nodeId: codingRun.nodeId, codingRunId: codingRun.id,
+        testEvidenceId: codingRun.testEvidenceId!, diffArtifactId: codingRun.diffArtifactId!, statementKind: kind },
+    })
+    const saved = await store.saveAgentMemoryCandidate(candidate)
+    if (!saved.committed) throw new Error(`fixture candidate rejected: ${saved.reason}`)
+    if (kind !== 'test_command') continue
+    const key = sha256(candidateId).slice(0, 32)
+    const authorization = await store.authorizeAgentMemoryPromotion({
+      candidateId, memoryId: `agent-memory-coding-${key}`,
+      authority: createCodingRunPolicyAuthority({ candidate, decisionId: `agent-memory-policy-promotion-${key}`, decidedAt }),
+    })
+    if (!authorization.authorized) throw new Error(`fixture promotion rejected: ${authorization.reason}`)
+    const committed = await store.commitAgentMemoryPromotion({ revision: authorization.revision }, authorization.capability)
+    if (!committed.committed) throw new Error(`fixture promotion not committed: ${committed.reason}`)
+    promoted.push({ candidateId, memoryId: committed.revision.id })
+  }
+  return { promoted }
+}
+
 describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () => {
   it('durably projects opted-in formal memory and queues cleanup at expiry without exporting candidates', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-20T00:00:00.000Z'))
@@ -132,7 +170,7 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
       includeMemories: true, selectedPaths: [], modelDigest: 'fixture-model',
       model: { version: 'fixture-v1', dimensions: [{ key: 'sem_kind', type: 'text' }] },
     })
-    const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now: () => '2026-09-30T00:05:00.000Z' })
+    const learned = await seedLearnedMemory(store, codingRun, '2026-09-30T00:05:00.000Z')
     expect(learned.promoted).toHaveLength(1)
     const projected = await store.listHindsightProjections(project.id)
     expect(projected).toHaveLength(1)
@@ -337,190 +375,12 @@ describe('Coding Run Memory candidates in the local store (ADR 0024 §4)', () =>
   })
 })
 
-describe('learning Memory from a completed Coding Run (ADR 0024 §4–5)', () => {
-  const now = () => '2026-09-30T00:05:00.000Z'
-  it.each(['coding_first', 'hindsight_first', 'interleaved'] as const)('deduplicates verified commands across the old and Hindsight learning paths: %s', async (order) => {
-    vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(now())
-    const store = await createLocalStore({ dbPath: await tempDbPath() })
-    try {
-      const codingRun = completedCodingRun(); await seed(store, codingRun)
-      const hindsight = await store.configureHindsight({ projectId: project.id, ownerUserId: localScope.userId,
-        projectPath: project.path, knowledgeRoot: 'docs/knowledge', rootGeneration: 'fixture-root', endpoint: 'http://127.0.0.1:8888',
-        encryptedApiKey: null, enabled: true, includeMemories: true, selectedPaths: [], modelDigest: 'fixture-model',
-        model: { version: 'fixture-v1', dimensions: [{ key: 'sem_kind', type: 'text' }] } })
-      await store.configureAutomaticMemory({ projectId: project.id, ownerUserId: localScope.userId,
-        enabled: true, hindsightGeneration: hindsight.generation, maxRetainsPerDay: 10 })
-      const source = buildCodingLearningEvent(codingRun, evidence, project.testCommand, localScope)!
-      const event = (await store.enqueueMemoryLearningEvent(source))!
-      const claim = (await store.claimMemoryLearningJob(now()))!
-      const text = 'The command npm test passed. | Involving: assistant'
-      const fact = { id: `fact-${event.id}`, eventId: event.id, remoteFactId: 'remote-command', documentId: claim.job.documentId,
-        text, factType: 'experience' as const, sourceDigest: event.sourceDigest, contentDigest: automaticMemoryDigest(text), extractedAt: now() }
-      await store.recordMemoryLearningExtraction(claim.job.id, claim.leaseToken, [fact])
-      const decision = classifyMemoryLearningFact(event, fact, [], now())
-      expect(decision.disposition).toBe('auto_save')
-      await store.recordMemoryLearningDecisions(claim.job.id, claim.leaseToken, [decision])
-      if (order === 'coding_first') {
-        const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
-        expect(learned.promoted).toHaveLength(1)
-        const before = await store.listAgentMemoryRevisions(learned.promoted[0]!.memoryId)
-        expect(await store.commitMemoryLearningDecision({ decisionId: decision.id, mode: 'automatic' })).toEqual({ status: 'ignored' })
-        expect(await store.getMemoryLearningDecision(decision.id)).toMatchObject({ disposition: 'ignored', reason: 'duplicate' })
-        expect(await store.listAgentMemoryRevisions(learned.promoted[0]!.memoryId)).toEqual(before)
-      } else if (order === 'hindsight_first') {
-        const saved = await store.commitMemoryLearningDecision({ decisionId: decision.id, mode: 'automatic' })
-        expect(saved.status).toBe('saved')
-        const before = await store.listAgentMemoryRevisions(saved.memoryId!)
-        const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
-        expect(learned.promoted).toEqual([])
-        expect(learned.candidates.find(candidate => candidate.kind === 'test_command'))
-          .toMatchObject({ outcome: 'duplicate', duplicateOf: saved.memoryId })
-        expect(await store.listAgentMemoryRevisions(saved.memoryId!)).toEqual(before)
-      } else {
-        let automaticMemoryId: string | undefined
-        const interleaved = new Proxy(store, { get(target, property) {
-          if (property === 'commitAgentMemoryPromotion') return async (...args: Parameters<LocalStore['commitAgentMemoryPromotion']>) => {
-            automaticMemoryId = (await store.commitMemoryLearningDecision({ decisionId: decision.id, mode: 'automatic' })).memoryId
-            return target.commitAgentMemoryPromotion(...args)
-          }
-          return Reflect.get(target, property)
-        } })
-        const learned = await learnFromCompletedCodingRun({ store: interleaved, codingRun, evaluationPassed: true, now })
-        expect(automaticMemoryId).toBeDefined()
-        expect(learned.promoted).toEqual([])
-        expect(learned.notPromoted).toContainEqual(expect.objectContaining({ reason: 'duplicate', duplicateOf: automaticMemoryId }))
-      }
-      expect((await store.listAgentMemoryHeads(project.id)).filter(head => head.status === 'active')).toHaveLength(1)
-    } finally { store.close(); vi.useRealTimers() }
-  })
-  function withRepair(store: LocalStore, codingRun: CodingAgentRun): CodingRunMemoryLearningStore {
-    // A stored repair Change Set needs a real worktree digest; the learning step reads only these fields.
-    const repair = { id: 'coding-change-set-repair', phase: 'repair', changes: [{ path: 'src/filter.ts' }] }
-    return {
-      getRun: (id) => store.getRun(id), listProjects: () => store.listProjects(),
-      listTestEvidence: (runId) => store.listTestEvidence(runId),
-      saveAgentMemoryCandidate: (candidate) => store.saveAgentMemoryCandidate(candidate),
-      listAgentMemoryHeads: (projectId) => store.listAgentMemoryHeads(projectId),
-      listAgentMemoryRevisions: (memoryId) => store.listAgentMemoryRevisions(memoryId),
-      getAgentMemoryTombstone: (memoryId) => store.getAgentMemoryTombstone(memoryId),
-      authorizeAgentMemoryPromotion: (input) => store.authorizeAgentMemoryPromotion(input),
-      commitAgentMemoryPromotion: (input, capability) => store.commitAgentMemoryPromotion(input, capability),
-      listCodingChangeSets: async (codingRunId) => codingRunId === codingRun.id
-        ? [repair as unknown as Awaited<ReturnType<LocalStore['listCodingChangeSets']>>[number]] : [],
-    }
-  }
-
-  it('proposes fixed-template candidates, saves only the test command for 30 days and replays on retry', async () => {
-    const store = await createLocalStore({ dbPath: await tempDbPath() })
-    const codingRun = completedCodingRun()
-    await seed(store, codingRun)
-    const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
-    expect(learned.candidates.map(({ kind, outcome }) => [kind, outcome])).toEqual([
-      ['test_command', 'proposed'], ['change_map', 'proposed'],
-    ])
-    expect(learned.promoted).toHaveLength(1)
-    // The change map carries a task title and model-chosen paths, so it waits for a human.
-    expect(learned.notPromoted).toEqual([expect.objectContaining({ reason: 'human_review_required' })])
-    const revisions = await Promise.all(learned.promoted.map(async ({ memoryId }) => (await store.listAgentMemoryRevisions(memoryId))[0]!))
-    for (const revision of revisions) {
-      expect(revision).toMatchObject({
-        visibility: 'user_project', sensitivity: 'private', retentionClass: 'thirty_days',
-        expiresAt: '2026-10-30T00:05:00.000Z', promotionActorKind: 'policy',
-        promotionPolicyId: 'desktop-coding-run-memory-policy', promotionPolicyVersion: 1,
-      })
-    }
-    // A later Coding Run with its own local session recalls the learned facts.
-    const recalled = await store.retrieveAgentMemoryRevisions({
-      stateVersion: 1, id: 'later-coding-run-recall', runtimeId: 'agent-runtime-coding-later',
-      scope: { ...localScope, sessionId: 'coding-session-later' }, limit: 8, requestedAt: '2026-10-01T00:00:00.000Z',
-    })
-    expect(recalled.map((revision) => revision.id).sort()).toEqual(learned.promoted.map(({ memoryId }) => memoryId).sort())
-
-    const retried = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
-    expect(retried.candidates.map(({ outcome }) => outcome)).toEqual(['replayed', 'replayed'])
-    expect(retried.promoted).toEqual([])
-    expect(retried.notPromoted.map(({ reason }) => reason)).toEqual(['already_promoted', 'human_review_required'])
-    expect(await store.listAgentMemoryCandidates(project.id)).toHaveLength(2)
-    store.close()
-  })
-
-  it('keeps one test command Memory across tasks with different titles', async () => {
-    const store = await createLocalStore({ dbPath: await tempDbPath() })
-    const first = completedCodingRun()
-    await seed(store, first)
-    await learnFromCompletedCodingRun({ store, codingRun: first, evaluationPassed: true, now })
-    // A different task in the same project, run in its own local session.
-    const otherRun: WorkflowRun = {
-      ...run, id: 'coding-memory-run-csv', title: 'Add CSV export to reports page', currentNodeId: 'csv-test',
-      nodes: run.nodes.map((node) => ({ ...node, id: node.id.replace('coding-memory', 'csv') })),
-    }
-    const otherEvidence: TestEvidence = { ...evidence, id: 'coding-test-csv', runId: otherRun.id, nodeId: 'csv-build', createdAt: '2026-09-30T01:03:00.000Z' }
-    const otherDiff = sanitizeCodingDiffArtifact({
-      id: 'coding-diff-csv', runId: otherRun.id, nodeId: 'csv-build', projectId: project.id,
-      changedPaths: ['src/export.ts'], patch: '+export const csv = true\n', createdAt: '2026-09-30T01:03:30.000Z',
-    })
-    const base = completedCodingRun({ ...localScope, sessionId: 'coding-session-csv' })
-    const second: CodingAgentRun = {
-      ...base, id: 'coding-run-memory-csv', runId: otherRun.id, nodeId: 'csv-build', changedPaths: ['src/export.ts'],
-      testEvidenceId: otherEvidence.id, diffArtifactId: otherDiff.id,
-      startedAt: '2026-09-30T01:01:00.000Z', completedAt: '2026-09-30T01:04:00.000Z',
-      contextReceipt: { ...base.contextReceipt!, runId: otherRun.id, nodeId: 'csv-build' },
-    }
-    await store.saveRun(otherRun)
-    await store.saveTestEvidence(otherEvidence)
-    await store.saveCodingDiffArtifact(otherDiff)
-    await store.saveCodingAgentRun(second)
-    const learned = await learnFromCompletedCodingRun({ store, codingRun: second, evaluationPassed: true, now: () => '2026-09-30T01:05:00.000Z' })
-    // The same fact is recognized and not saved again; the new change map waits for review.
-    expect(learned.candidates.map(({ kind, outcome }) => [kind, outcome])).toEqual([
-      ['test_command', 'duplicate'], ['change_map', 'proposed'],
-    ])
-    expect(learned.promoted).toEqual([])
-    const heads = await store.listAgentMemoryHeads(project.id)
-    expect(heads.filter((head) => head.status === 'active')).toHaveLength(1)
-    store.close()
-  })
-
-  it('records a repair pattern for human review with the first failure location', async () => {
-    const store = await createLocalStore({ dbPath: await tempDbPath() })
-    const codingRun = { ...completedCodingRun(), changeSetId: 'coding-change-set-repair' }
-    await seed(store, codingRun)
-    await store.saveTestEvidence({
-      ...evidence, id: 'coding-test-failed', status: 'failed', exitCode: 1, createdAt: '2026-09-30T00:02:00.000Z',
-      summary: 'Coding worktree tests failed in <workspace>.',
-      stdout: 'FAIL src/filter.test.ts\n ❯ <workspace>/src/filter.test.ts:12:5\n ❯ [REDACTED:local_absolute_path]:3:1',
-    })
-    const learned = await learnFromCompletedCodingRun({ store: withRepair(store, codingRun), codingRun, evaluationPassed: true, now })
-    expect(learned.candidates.map(({ kind }) => kind)).toEqual(['test_command', 'change_map', 'repair_pattern'])
-    expect(learned.notPromoted.map(({ reason }) => reason)).toEqual(['human_review_required', 'human_review_required'])
-    const repair = (await store.listAgentMemoryCandidates(project.id)).find((candidate) =>
-      candidate.provenance.kind === 'coding_run' && candidate.provenance.statementKind === 'repair_pattern')!
-    expect(repair.statement).toContain('first reported at src/filter.test.ts:12')
-    expect(repair.statement).toContain('the accepted repair changed src/filter.ts')
-    expect(repair.statement).not.toContain('<workspace>')
-    store.close()
-  })
-
-  it('learns nothing when the evaluation failed or the run is not eligible', async () => {
-    const store = await createLocalStore({ dbPath: await tempDbPath() })
-    const codingRun = completedCodingRun()
-    await seed(store, codingRun)
-    await expect(learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: false, now }))
-      .resolves.toMatchObject({ skipped: 'not_eligible', candidates: [] })
-    const { contextReceipt: _receipt, ...withoutReceipt } = codingRun
-    await expect(learnFromCompletedCodingRun({ store, codingRun: withoutReceipt, evaluationPassed: true, now }))
-      .resolves.toMatchObject({ skipped: 'not_eligible', candidates: [] })
-    await expect(store.listAgentMemoryCandidates(project.id)).resolves.toEqual([])
-    store.close()
-  })
-})
-
 describe('project-wide Memory view and human actions without an Agent Runtime (ADR 0024 §4–5)', () => {
   it('lists learned Memory across Coding Run sessions, blocks exact duplicates and allows revise and delete', async () => {
     const store = await createLocalStore({ dbPath: await tempDbPath() })
     const first = completedCodingRun()
     await seed(store, first)
-    await learnFromCompletedCodingRun({ store, codingRun: first, evaluationPassed: true, now: () => '2026-09-30T00:05:00.000Z' })
+    await seedLearnedMemory(store, first, '2026-09-30T00:05:00.000Z')
 
     // A second run of the same task, in its own local session, repeats the same facts.
     const secondEvidence: TestEvidence = { ...evidence, id: 'coding-test-passed-2', createdAt: '2026-09-30T00:06:00.000Z' }
@@ -536,11 +396,8 @@ describe('project-wide Memory view and human actions without an Agent Runtime (A
     await store.saveTestEvidence(secondEvidence)
     await store.saveCodingDiffArtifact(secondDiff)
     await store.saveCodingAgentRun(second)
-    const learned = await learnFromCompletedCodingRun({ store, codingRun: second, evaluationPassed: true, now: () => '2026-09-30T00:07:30.000Z' })
-    expect(learned.promoted).toEqual([])
-    expect(learned.candidates.map(({ kind, outcome }) => [kind, outcome])).toEqual([
-      ['test_command', 'duplicate'], ['change_map', 'proposed'],
-    ])
+    // The test command is already active, so only the second change map is new.
+    expect((await seedLearnedMemory(store, second, '2026-09-30T00:07:30.000Z')).promoted).toEqual([])
 
     const selection = { runId: run.id, localProjectId: project.id }
     const access = createAgentMemoryRendererAccess(store, { clock: () => new Date('2026-09-30T00:08:00.000Z') })
@@ -603,7 +460,7 @@ describe('project-wide Memory view and human actions without an Agent Runtime (A
     const store = await createLocalStore({ dbPath: await tempDbPath() })
     const codingRun = completedCodingRun()
     await seed(store, codingRun)
-    await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now: () => '2026-09-30T00:05:00.000Z' })
+    await seedLearnedMemory(store, codingRun, '2026-09-30T00:05:00.000Z')
     const owned = await createAgentMemoryRendererAccess(store).list({ runId: run.id, localProjectId: project.id })
     const memory = owned.memories[0]!
     const candidate = owned.candidates.find((entry) => entry.lifecycleStatus === 'pending')!
@@ -632,7 +489,7 @@ describe('project-wide Memory view and human actions without an Agent Runtime (A
     const store = await createLocalStore({ dbPath: await tempDbPath() })
     const codingRun = completedCodingRun()
     await seed(store, codingRun)
-    await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now: () => '2026-09-30T00:05:00.000Z' })
+    await seedLearnedMemory(store, codingRun, '2026-09-30T00:05:00.000Z')
     const selection = { runId: run.id, localProjectId: project.id }
     expect((await createAgentMemoryRendererAccess(store).list(selection)).memories).toHaveLength(1)
     await store.saveDesktopPairingCredential({
@@ -655,7 +512,7 @@ describe('dismissing a pending Memory candidate (ADR 0024 §5)', () => {
     const store = await createLocalStore({ dbPath })
     const codingRun = completedCodingRun()
     await seed(store, codingRun)
-    await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+    await seedLearnedMemory(store, codingRun, now())
     const access = createAgentMemoryRendererAccess(store, { clock: () => new Date('2026-09-30T00:06:00.000Z') })
     const pending = (await access.list(selection)).candidates.find((entry) => entry.lifecycleStatus === 'pending')!
     const stored = (await store.listAgentMemoryCandidates(project.id)).find((entry) => entry.id === pending.id)!
@@ -674,11 +531,7 @@ describe('dismissing a pending Memory candidate (ADR 0024 §5)', () => {
     // The saved test command Memory is untouched.
     expect(after.memories.map((memory) => memory.lifecycleStatus)).toEqual(['active'])
 
-    // Learning again from the same run reports the dismissal and saves nothing new.
-    const retried = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
-    expect(retried.candidates.map(({ kind, outcome }) => [kind, outcome])).toEqual([
-      ['test_command', 'replayed'], ['change_map', 'dismissed'],
-    ])
+    // The same source cannot propose it again.
     await expect(store.saveAgentMemoryCandidate(stored)).resolves.toEqual({ committed: false, reason: 'dismissed' })
     // Replaying the same dismissal is idempotent.
     await expect(store.dismissAgentMemoryCandidate({
@@ -707,7 +560,7 @@ describe('dismissing a pending Memory candidate (ADR 0024 §5)', () => {
     const store = await createLocalStore({ dbPath: await tempDbPath() })
     const codingRun = completedCodingRun()
     await seed(store, codingRun)
-    const learned = await learnFromCompletedCodingRun({ store, codingRun, evaluationPassed: true, now })
+    const learned = await seedLearnedMemory(store, codingRun, now())
     const candidates = await store.listAgentMemoryCandidates(project.id)
     const promoted = candidates.find((entry) => entry.id === learned.promoted[0]!.candidateId)!
     const pending = candidates.find((entry) => entry.id !== promoted.id)!
