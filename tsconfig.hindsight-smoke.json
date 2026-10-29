@@ -21,6 +21,8 @@
     "scripts/hindsight-todo-fixture.ts",
     "scripts/hindsight-todo-evaluation.ts",
     "scripts/hindsight-todo-live-evaluation.mts",
-    "scripts/project-memory-live-validation.mts"
+    "scripts/project-memory-live-validation.mts",
+    "scripts/project-memory-full-fixtures.mts",
+    "scripts/project-memory-full-validation.mts"
   ]
 }
