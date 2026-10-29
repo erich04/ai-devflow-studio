@@ -1,17 +1,19 @@
 import {
   PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_MISSIONS, PROJECT_MEMORY_POLICY_VERSION,
-  type ProjectKnowledgePageId, type ProjectMemoryConfiguration,
+  type ProjectKnowledgePageId, type ProjectMemoryConfiguration, type ProjectMemoryDocument,
 } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMentalModelDefinition } from './hindsight-client'
 import type { ProjectMemoryClaim, ProjectMemorySettlement } from './project-memory-store'
 
 export const knowledgePageModelId = (id: ProjectKnowledgePageId) => `devflow-${id}`
-/** Rewritten after consolidation, at most hourly, editing only what changed; never reading other pages. */
+/** Rewritten after consolidation, at most every six hours, editing only what changed; never reading other pages. */
 export const KNOWLEDGE_PAGE_MODELS: readonly HindsightMentalModelDefinition[] = PROJECT_KNOWLEDGE_PAGES.map((page) => ({
   id: knowledgePageModelId(page.id), name: page.title, sourceQuery: page.query, maxTokens: 1_500,
   trigger: { mode: 'delta', refresh_after_consolidation: true, min_refresh_interval_seconds: PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS,
     exclude_mental_models: true, budget: 'low' },
 }))
+const PAGE_WRITE_SPACING_MS = 10 * 60_000
+const PAGE_FAILURE_PAUSE_MS = 60 * 60_000
 /** Empties every knowledge page of a bank, without a model call, so none shows memory that was just removed. */
 export async function clearKnowledgePages(client: HindsightClient, bankId: string): Promise<void> {
   for (const page of KNOWLEDGE_PAGE_MODELS) await client.clearMentalModel(bankId, page.id)
@@ -19,6 +21,7 @@ export async function clearKnowledgePages(client: HindsightClient, bankId: strin
 
 export type ProjectMemoryServiceStore = {
   listProjectMemoryConfigurations(): Promise<ProjectMemoryConfiguration[]>
+  listProjectMemoryDocuments(projectId?: string): Promise<ProjectMemoryDocument[]>
   completeProjectMemoryBankDeletion(projectId: string, bankId: string): Promise<void>
   claimProjectMemoryDocument(now: string, options?: { submit?: boolean }): Promise<ProjectMemoryClaim | null>
   settleProjectMemoryDocument(id: string, leaseToken: string, result: ProjectMemorySettlement, now: string, error?: string): Promise<void>
@@ -44,6 +47,8 @@ export class ProjectMemoryService {
   private stopping = false
   private readonly configuredBanks = new Set<string>()
   private readonly pagedBanks = new Set<string>()
+  /** When this run of the app last asked Hindsight to write each empty page (`bank:page`). */
+  private readonly pageWrites = new Map<string, number>()
   constructor(private readonly deps: ProjectMemoryServiceDependencies) {}
   private now(): string { return this.deps.now?.() ?? new Date().toISOString() }
   async recover(): Promise<void> { await this.deps.store.recoverProjectMemoryDocuments() }
@@ -89,9 +94,44 @@ export class ProjectMemoryService {
       } catch { /* Hindsight unavailable: try again on the next cycle. */ }
     }
   }
+  /**
+   * An empty page is written now, rather than at Hindsight's next scheduled rewrite hours later,
+   * when memory changed after the page was last written: new pages once something is learned, and
+   * pages that editing or forgetting memory emptied. Waits while a forgotten source is still being
+   * deleted; asks at most once per page every ten minutes, and waits an hour after a failed rewrite.
+   */
+  private async writeEmptyPages(): Promise<void> {
+    if (!(this.deps.canSubmit?.() ?? true)) return
+    const documents = await this.deps.store.listProjectMemoryDocuments()
+    for (const config of await this.deps.store.listProjectMemoryConfigurations()) {
+      if (this.stopping) return
+      const own = documents.filter((document) => document.bankId === config.bankId)
+      const changes = [...Object.values(config.changedMemories ?? {}), ...own.flatMap((document) =>
+        document.status === 'retained' && document.retainedAt ? [document.retainedAt]
+          : document.status === 'deleted' && document.attempts > 0 ? [document.updatedAt] : [])]
+      const changedAt = Math.max(...changes.map((time) => Date.parse(time)).filter(Number.isFinite))
+      if (!config.enabled || !this.pagedBanks.has(config.bankId) || !Number.isFinite(changedAt) ||
+          own.some((document) => document.status === 'delete_pending')) continue
+      try {
+        const client = await this.deps.client(config)
+        const pages = new Map((await client.listMentalModels(config.bankId)).map((page) => [page.id, page]))
+        const now = Date.parse(this.now())
+        for (const page of KNOWLEDGE_PAGE_MODELS) {
+          const current = pages.get(page.id)
+          const key = `${config.bankId}:${page.id}`
+          if (!current || current.content.trim() || (current.refreshedAt && Date.parse(current.refreshedAt) >= changedAt) ||
+              (current.failedAt && now - Date.parse(current.failedAt) < PAGE_FAILURE_PAUSE_MS) ||
+              now - (this.pageWrites.get(key) ?? Number.NEGATIVE_INFINITY) < PAGE_WRITE_SPACING_MS) continue
+          this.pageWrites.set(key, now)
+          await client.refreshMentalModel(config.bankId, page.id)
+        }
+      } catch { /* Hindsight unavailable: try again on the next cycle. */ }
+    }
+  }
   private async run(limit: number): Promise<number> {
     await this.deletePendingBanks()
     await this.ensurePages()
+    await this.writeEmptyPages()
     let processed = 0
     for (; processed < limit && !this.stopping; processed++) {
       const claim = await this.deps.store.claimProjectMemoryDocument(this.now(), { submit: this.deps.canSubmit?.() ?? true })

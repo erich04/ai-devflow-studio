@@ -142,9 +142,11 @@ describe('native conversation service with durable memory and investigation chec
     expect(first.nativeProtocolVersion).toBe(2)
     const request = h.completeNativeConversation.mock.calls[0]![0]
     const memory = JSON.parse(request.messages.at(-1)!.content!)
-    expect(memory).toEqual({ backgroundMemory: [{ id: item.id, revision: 1, headVersion: 1, contentDigest: item.contentDigest, statement: item.statement }] })
+    const sent = { id: item.id, revision: 1, headVersion: 1, contentDigest: item.contentDigest, statement: item.statement }
+    expect(memory).toEqual({ backgroundMemory: [sent], communicationPreferences: [sent] })
     expect(request.systemPrompt).not.toContain(item.statement)
-    expect(request.systemPrompt).toContain('用户沟通偏好只影响语言、详略与呈现顺序，可直接遵循，用户本轮明确要求优先')
+    expect(request.systemPrompt).toContain('communicationPreferences 是从记忆中召回的用户沟通偏好：按其中最新的偏好决定答复语言、详略与呈现顺序，直接遵循，用户本轮明确要求优先')
+    expect(request.systemPrompt).not.toContain('使用中文。')
     expect(JSON.stringify(first.nativeTranscript)).not.toContain(item.statement)
     expect(first.messages.find(message => message.memoryReceipt)?.memoryReceipt).toMatchObject({ state: 'response_received', memories: [{ id: item.id, revision: 1, contentDigest: item.contentDigest }] })
 

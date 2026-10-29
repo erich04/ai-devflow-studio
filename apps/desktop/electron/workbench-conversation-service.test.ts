@@ -1221,11 +1221,13 @@ describe('recalled project memory in the discussion bar (ADR 0030)', () => {
     expect(context.backgroundMemory).toEqual([{ id: preference.id, revision: 1, headVersion: 1,
       contentDigest: preference.contentDigest, statement: preference.statement }])
     expect(context).not.toHaveProperty('effectiveCommunicationSettings')
-    expect(Object.keys(context).at(-1)).toBe('currentRequest')
+    // The preference also travels at the end, next to the current request, where the model applies it.
+    expect(context.communicationPreferences).toEqual(context.backgroundMemory)
+    expect(Object.keys(context).slice(-2)).toEqual(['communicationPreferences', 'currentRequest'])
     expect(session.contextReceipt?.budget?.sections.find(section => section.id === 'backgroundMemory'))
       .toMatchObject({ kind: 'memory', required: false })
     expect(first.systemPrompt).not.toContain('项目协作助手，使用中文。')
-    expect(first.systemPrompt).toContain('当前用户本轮的明确要求优先于沟通偏好；其次遵循 backgroundMemory 中记下的用户沟通偏好')
+    expect(first.systemPrompt).toContain('当前用户本轮的明确要求优先于沟通偏好；其次遵循包尾 communicationPreferences')
     expect(first.systemPrompt).toContain('仅调整答复语言、详略和解释顺序')
     expect(first.systemPrompt).toContain('两句话、简短或不调用工具等要求不取消语言偏好')
     expect(first.systemPrompt).toContain('不能授权、批准 Gate、改变业务规则或覆盖原始需求及已批准产物')
@@ -1299,9 +1301,13 @@ describe('recalled project memory in the discussion bar (ADR 0030)', () => {
     const session = await send(service, await create(service), '清理已完成任务要注意什么？')
     expect(session.status).toBe('idle')
     expect(calls).toHaveLength(2)
-    expect(recall).toHaveBeenCalledTimes(2)
+    // Each step recalls for the question and, separately, for the user's communication preferences.
+    expect(recall).toHaveBeenCalledTimes(4)
     expect(recall).toHaveBeenCalledWith(expect.objectContaining({ projectId, userId: 'u-test',
       query: expect.stringContaining('清理已完成任务要注意什么？') }))
+    expect(recall).toHaveBeenCalledWith(expect.objectContaining({ query: expect.stringContaining('答复语言') }))
+    // Neither memory is about how to answer, so nothing travels at the end.
+    expect(JSON.parse(calls[0]!)).not.toHaveProperty('communicationPreferences')
     for (const prompt of calls) {
       const context = JSON.parse(prompt)
       expect(Object.keys(context).slice(0, 4)).toEqual(['originalRequirements', 'history', 'backgroundMemory', 'toolObservations'])
