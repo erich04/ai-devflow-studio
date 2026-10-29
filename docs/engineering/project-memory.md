@@ -19,7 +19,21 @@
 
 编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。
 
-召回不用 Hindsight 自带的交叉编码器重排：后台 worker 每次启动时给每个开启的 bank 写入 `enable_reranking: false`，这一步不调用模型，也不等中继。原因是镜像里的重排模型是英文的，在 2 个 CPU 上重排最多 300 个候选。2026-10-29 在一个约 300 条记忆（210 条事实、108 条观察）的验证 bank 上，开着重排时每次召回 p50 约 9–10 秒、p95 17–22 秒，1.5 KiB 的长查询约 29 秒，都超过桌面端 5 秒的召回超时，记忆会被静默降级为空。关掉后同一 bank 上 p50 约 40 毫秒、p95 约 50 毫秒，长查询约 0.2 秒。DevFlow 每次都要 8,192 tokens 的候选，再用自己的中文 BM25 与 Hindsight 的顺序融合（k = 20，BM25 权重 2）。在同一 bank 上另写的 20 个问题（调参后才写，含英文问题）里，预期记忆进入讨论栏预算（4 条、2,000 字节）的比例从原来的 55% 升到 85%，进入编码简报预算（8 条、4,000 字节）的比例从 65% 升到 100%。知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，还能阅读四个知识页（约定与命令、决策与原因、问题与解决办法、用户偏好），规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`、`listProjectKnowledgePages`、`refreshProjectKnowledgePage`。
+召回的排序由 Hindsight 决定，DevFlow 保持它的顺序，只按各入口的预算从前往后取。DevFlow 的 Hindsight 镜像带多语言 embedding 模型 `intfloat/multilingual-e5-small`（见 [Hindsight 接入](hindsight-integration.md)）。后台 worker 每次启动时给每个开启的 bank 写入 `enable_reranking: false` 和 `enable_graph_retrieval: false`，这一步不调用模型，也不等中继。召回顺序因此是向量检索、关键词检索和时间检索三路的倒数排名融合。
+
+2026-10-29 在一个约 300 条记忆（200 条事实、118 条观察）的验证 bank 上，只看 Hindsight 的顺序，用 25 个调参问题和 20 个留出问题（含英文问题）比较。命中指预期记忆进入该入口的预算：讨论栏 4 条、2,000 字节，编码简报 8 条、4,000 字节。
+
+| 配置 | 讨论栏命中（调参 / 留出） | 编码简报命中 | MRR | 召回 p50 / 1.4 KB 长查询 |
+|---|---|---|---|---|
+| 上游英文 embedding，无重排 | 36% / 45% | 60% / 65% | 0.32 / 0.42 | 30 ms / 0.2 s |
+| 上游英文 embedding，开重排（最多 300 个候选） | 24% / 40% | 48% / 80% | 0.24 / 0.32 | 8.5 s / 30 s |
+| 多语言 embedding，无重排 | 72% / 80% | 96% / 95% | 0.55 / 0.55 | 28 ms / 0.2 s |
+| **多语言 embedding，无重排，关图扩展（采用）** | **100% / 95%** | **100% / 95%** | **0.87 / 0.92** | **23 ms / 0.17 s** |
+| 同上，加多语言重排（前 40 个候选） | 96% / 100% | 96% / 100% | 0.96 / 0.98 | 1.8 s / 7.9 s |
+
+多语言重排略好，但在 2 个 CPU 上每次召回多 2–8 秒，长查询超过桌面端 5 秒的召回超时，记忆会被静默降级为空，所以不用。图扩展有害的原因见 ADR 0030「召回」。此前的做法（#270：英文 embedding，关重排后用 DevFlow 自己的中文 BM25 与 Hindsight 的顺序融合，讨论栏命中 88% / 90%）已移除。已知局限：一个请求里有两件事时（例如「改撤销窗口，注释按约定的语言写」），向量检索按整句的意思排序，次要那件的记忆可能排不进预算。Hindsight 默认的关键词检索不分中文词；换成上游推荐的 pgroonga 后关键词检索能匹配中文，但整体排序变差，也没有解决这个问题。数据与新配置的完整验证见[多语言召回验证](../validation/project-memory-multilingual-20261029.md)。
+
+知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，还能阅读四个知识页（约定与命令、决策与原因、问题与解决办法、用户偏好），规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`、`listProjectKnowledgePages`、`refreshProjectKnowledgePage`。
 
 知识页是 Hindsight 的 mental model，id 为 `devflow-<页面>`，由后台 worker 在中继运行时为每个开启的 bank 创建（每次启动检查一次）。阅读知识页不调用模型；Hindsight 归纳后改写（每页最多每 6 小时一次）和「立即整理」会调用模型并计入团队预算；2026-10-29 用 DeepSeek Flash 实测每页一次约 0.8 美分。
 

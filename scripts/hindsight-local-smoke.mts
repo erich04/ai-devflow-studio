@@ -42,8 +42,10 @@ for (const field of ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL']) {
 }
 const image = JSON.parse(await docker(['image', 'inspect', actual.Image]))[0]
 assert.equal(image.Config.Labels['org.opencontainers.image.revision'], HINDSIGHT_PROTOCOL.commit)
+// DevFlow's image adds the multilingual embedding model; its store is named after that model.
+assert.match(image.Config.Labels['dev.devflow.hindsight.embedding-model'] ?? '', /^intfloat\/multilingual-e5-small@[0-9a-f]{40}$/u)
 assert.ok(actual.Mounts.some((m: { Name?: string; Destination: string }) =>
-  m.Name === 'devflow-hindsight_data' && m.Destination === '/home/hindsight/.pg0'))
+  m.Name === 'devflow-hindsight_data-multilingual-e5-small' && m.Destination === '/home/hindsight/.pg0'))
 
 async function request(path: string, method = 'GET') {
   const response = await fetch(`${endpoint}${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(10_000) })
@@ -84,5 +86,5 @@ try {
   }
 }
 console.log(JSON.stringify({ status: 'passed', endpoint, protocol: HINDSIGHT_PROTOCOL,
-  checks: ['image-commit', 'isolated-volume', 'health', 'bank-config', 'stop-start-persistence', 'test-bank-cleanup'],
+  checks: ['image-commit', 'embedding-model', 'isolated-volume', 'health', 'bank-config', 'stop-start-persistence', 'test-bank-cleanup'],
   modelCalls: 0, notVerified: ['LLM extraction', 'semantic recall', 'desktop live integration'] }, null, 2))

@@ -34,7 +34,12 @@ Hindsight 官方的编码 Agent 接入（Claude Code、Codex 插件）和 Codex/
 ## 召回
 
 - 编码简报、阶段 Agent、Gate 评审和讨论栏在项目记忆开启时，从项目 bank 召回（`observation` 优先，同一事实不重复给出），不查询本地记忆；项目记忆未开启就没有记忆。召回只检索，不调用模型。
-- 查询沿用各入口原有的查询文本（截断到 1.5 KiB）。镜像自带的 embedding 和 reranker 是英文模型，对中文问题排序很弱，所以项目记忆 bank 关闭 Hindsight 的交叉编码器重排（`enable_reranking: false`；它在 CPU 上重排最多 300 个候选，约 300 条记忆时每次 9–20 秒，超过 5 秒召回超时）。DevFlow 每次要 8,192 tokens 的候选，用自己的中文 BM25 与 Hindsight 的顺序做倒数排名融合（k = 20，BM25 权重 2），最后按各入口原有的条数和字节预算选取，不拆分单条记忆。换成多语言模型需要下载模型、改变部署，暂未采用。每条写成一行，带类型和日期，例如 `[observation] …`、`[fact 2026-10-20] …`，作为低信任背景，规则与 ADR 0024 第 3 节相同。例外是沟通偏好：讨论栏每一步另做一次小召回，专门找答复语言、详略类的记忆（与固定查询至少共享一个词），最多 2 条、800 字节，放在请求末尾的 `communicationPreferences`，紧挨当前请求；模型按其中最新的偏好决定答复语言、详略和顺序，当前请求优先，没有偏好时默认中文。这些记忆和背景记忆一样计入回执并在发送前检查。混在背景记忆里时模型不会照做（[2026-10-29 验证](../validation/project-memory-live-20261029.md)），所以单独放在末尾。它取代了按旧候选来源核验的结构化设置（`effectiveCommunicationSettings`，第四期移除）。请求超出容量时，背景记忆和沟通偏好一起先于工具结果和历史被去掉；Native v2 压缩历史后，如果它们在摘要旁放得下，会重新附上（ADR 0028「容量与上下文」），回执按实际发送的记录。
+- 查询沿用各入口原有的查询文本（截断到 1.5 KiB）。排序由 Hindsight 决定，DevFlow 不再重排：
+  - DevFlow 的 Hindsight 镜像带多语言 embedding 模型 `intfloat/multilingual-e5-small`，中文和英文的问题与记忆在同一个向量空间里比较。上游镜像自带的 embedding 是英文模型，对中文问题几乎排不出顺序。
+  - 项目记忆 bank 关闭交叉编码器重排（`enable_reranking: false`）：镜像自带的是英文模型；多语言重排模型在 2 个 CPU 上每次 2–8 秒，长查询超过 5 秒召回超时。
+  - 同时关闭图扩展（`enable_graph_retrieval: false`）：同一项目的记忆几乎都连着相同的实体（用户、项目名），扩展会给每个问题加上同一批连接多的记忆，在融合里把向量命中挤到后面。
+  - 召回顺序就是 Hindsight 对向量检索、关键词检索和时间检索的倒数排名融合。DevFlow 按各入口的字节预算请求同样多的 tokens（至少 1,024），保持这个顺序，按原有的条数和字节预算从前往后选取，不拆分单条记忆。评估数据见[多语言召回验证](../validation/project-memory-multilingual-20261029.md)。
+- 每条写成一行，带类型和日期，例如 `[observation] …`、`[fact 2026-10-20] …`，作为低信任背景，规则与 ADR 0024 第 3 节相同。例外是沟通偏好：讨论栏每一步另做一次小召回，专门找答复语言、详略类的记忆（与固定查询至少共享一个词），最多 2 条、800 字节，放在请求末尾的 `communicationPreferences`，紧挨当前请求；模型按其中最新的偏好决定答复语言、详略和顺序，当前请求优先，没有偏好时默认中文。这些记忆和背景记忆一样计入回执并在发送前检查。混在背景记忆里时模型不会照做（[2026-10-29 验证](../validation/project-memory-live-20261029.md)），所以单独放在末尾。它取代了按旧候选来源核验的结构化设置（`effectiveCommunicationSettings`，第四期移除）。请求超出容量时，背景记忆和沟通偏好一起先于工具结果和历史被去掉；Native v2 压缩历史后，如果它们在摘要旁放得下，会重新附上（ADR 0028「容量与上下文」），回执按实际发送的记录。
 - 回执沿用原格式：`pm-<Hindsight id>`、revision 1、所发送文本的摘要。发送前（讨论、评审）和编码继续前都会检查项目记忆仍开启且归属未变，否则停止并要求用当前上下文重来。单条记忆被删除后的检查在第三期随删除功能加入。
 - Hindsight 不可用时按「没有记忆」继续，不阻断任务，并记录一次降级日志。
 - 讨论栏新增只读工具 `memory_search({query, limit≤8})`，Direct、OpenCode（MCP）和原生工具三种执行方式共用。没有加 `memory_save`：讨论工具保持只读，整段讨论本来就会自动写入记忆，用户说「记住……」的那句话会被 Hindsight 抽取。Native Coding v3 的 `memory_search` 在 v3 合并到 main 后接入。
@@ -91,3 +96,4 @@ Hindsight 官方的编码 Agent 接入（Claude Code、Codex 插件）和 Codex/
 - 抽取和归纳会产生模型费用，按调用计入团队项目预算。
 - 未配对的本地项目暂时没有项目记忆。
 - `deploy/hindsight/compose.yaml` 默认把模型地址指向中继；没有令牌时所有调用被拒绝，不产生费用。
+- DevFlow 的 Hindsight 镜像在本机构建一次，下载多语言 embedding 模型（约 490 MB）。数据卷按 embedding 模型命名：Hindsight 不记录向量出自哪个模型，换模型要用新卷，旧卷的数据用 `corepack pnpm hindsight:migrate` 复制过来（[Hindsight 接入](../engineering/hindsight-integration.md)）。

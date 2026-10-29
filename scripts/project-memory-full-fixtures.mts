@@ -256,6 +256,32 @@ export const RECALL_QUERIES: Array<{ query: string; expect: Array<string | RegEx
   { query: '任务列表的行高是多少？', expect: [/44/u] },
   { query: '项目的内部代号是什么？', expect: [MARKERS.forgotten] },
 ]
+/**
+ * Held-out questions: written after the recall settings had been tuned on the questions above,
+ * worded differently, some in English. Reported separately and never a pass condition.
+ */
+export const RECALL_HOLDOUT_QUERIES: Array<{ query: string; expect: Array<string | RegExp> }> = [
+  { query: '误删任务以后还能恢复吗，有多长时间？', expect: [/15/u] },
+  { query: 'How long is the undo window after deleting a task?', expect: [/15/u] },
+  { query: '提交前要跑哪个测试命令？', expect: ['test:regression'] },
+  { query: 'Which test command should I run before merging?', expect: ['test:regression'] },
+  { query: '为什么不能用 pnpm test？', expect: [/e2e|12\s*分钟/u] },
+  { query: 'IndexedDB 打不开时应用会怎么处理？', expect: [/内存|in-memory|memory/iu] },
+  { query: '列表里一次加载几条数据？', expect: [/50/u] },
+  { query: 'What is the retry policy for sync?', expect: [/5/u] },
+  { query: '同步接口的退避上限是多少？', expect: [/30/u] },
+  { query: '日期超过一周怎么显示？', expect: [/YYYY/u] },
+  { query: '确认弹窗的按钮文案应该写什么？', expect: [/删除/u] },
+  { query: 'dist 目录要提交到 git 吗？', expect: ['dist'] },
+  { query: 'API 地址可以写死在代码里吗？', expect: [/VITE_API_BASE/u] },
+  { query: '时间在数据库里用什么时区存？', expect: [/UTC/u] },
+  { query: '组件和业务逻辑分别放在哪个目录？', expect: [/src\/components|src\/tasks/u] },
+  { query: 'Node 用哪个版本？', expect: [/24/u] },
+  { query: '虚拟列表的容器高度设多少？', expect: [/600/u] },
+  { query: 'Why did we switch the list to virtual scrolling?', expect: ['500'] },
+  { query: '用户喜欢回答写多长？', expect: [/简短|short|concise/iu] },
+  { query: '撤销按钮放在哪里？', expect: [/toast/iu] },
+]
 
 /** Page content a correct knowledge page should contain, per page. */
 export const PAGE_EXPECTATIONS: Record<string, RegExp[]> = {

@@ -11,6 +11,7 @@
   "include": [
     "scripts/hindsight-protocol-smoke.mts",
     "scripts/hindsight-local-smoke.mts",
+    "scripts/hindsight-migrate-store.mts",
     "scripts/hindsight-live-synthetic.mts",
     "scripts/hindsight-fullchain-electron.mts",
     "scripts/hindsight-fullchain-correction.mts",

@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { CODING_MEMORY_RECALL_BUDGET, CONVERSATION_MEMORY_RECALL_BUDGET } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import { createLocalStore, type LocalStore } from './local-store'
-import { createProjectMemoryRecall, projectMemoryStatement, rankProjectMemories } from './project-memory-recall'
+import { createProjectMemoryRecall, projectMemoryStatement } from './project-memory-recall'
 
 const directories: string[] = []
 const stores: LocalStore[] = []
@@ -38,11 +38,12 @@ async function fixture(options: { transport?: boolean } = {}) {
 it('recalls the project bank with a bounded query and labels each memory', async () => {
   const { recall, client, config, owner } = await fixture()
   const result = await recall.recall({ projectId: 'project', userId: owner, query: `删除确认 ${'背景'.repeat(2_000)}`, budget: CODING_MEMORY_RECALL_BUDGET })
-  // Every caller gets the full candidate allowance; its own byte budget applies afterwards.
-  expect(client.recallMemories).toHaveBeenCalledWith(config.bankId, expect.objectContaining({ maxTokens: 8_192 }))
+  // As many tokens as the caller's budget has bytes: never less text than the budget takes.
+  expect(client.recallMemories).toHaveBeenCalledWith(config.bankId, expect.objectContaining({ maxTokens: 4_000 }))
   await recall.recall({ projectId: 'project', userId: owner, query: '删除', budget: CONVERSATION_MEMORY_RECALL_BUDGET })
+  await recall.recall({ projectId: 'project', userId: owner, query: '删除', budget: { maxItems: 2, maxBytes: 300 } })
   await recall.search({ projectId: 'project', query: '删除', limit: 3 })
-  expect(client.recallMemories.mock.calls.map((call) => (call as unknown as [string, { maxTokens: number }])[1].maxTokens)).toEqual([8_192, 8_192, 8_192])
+  expect(client.recallMemories.mock.calls.map((call) => (call as unknown as [string, { maxTokens: number }])[1].maxTokens)).toEqual([4_000, 2_000, 1_024, 4_096])
   const sent = (client.recallMemories.mock.calls[0] as unknown as [string, { query: string }])[1].query
   expect(new TextEncoder().encode(sent).byteLength).toBeLessThanOrEqual(1_500)
   expect(result).toEqual({ degraded: false, items: [
@@ -71,9 +72,12 @@ it('degrades to no memory when Hindsight fails, and searches with a limit', asyn
   expect(await recall.recall({ projectId: 'project', userId: owner, query: '删除', budget: CODING_MEMORY_RECALL_BUDGET }))
     .toEqual({ degraded: true, items: [] })
   expect(degraded).toEqual(['Hindsight timeout'])
-  const found = await recall.search({ projectId: 'project', query: '撤销', limit: 1 })
-  expect(found?.items).toEqual([{ id: 'pm-f1', kind: 'fact', date: '2026-10-20', text: expect.stringMatching(/^撤销窗口为 5 秒/u) }])
-  expect(found?.items[0]?.text).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
+  // The limit takes from the top of Hindsight's order.
+  expect((await recall.search({ projectId: 'project', query: '撤销', limit: 1 }))?.items).toEqual([{ id: 'pm-o1', kind: 'observation', text: '删除任务前\n要二次确认。' }])
+  const found = await recall.search({ projectId: 'project', query: '撤销', limit: 20 })
+  expect(found?.items).toEqual([expect.objectContaining({ id: 'pm-o1' }),
+    { id: 'pm-f1', kind: 'fact', date: '2026-10-20', text: expect.stringMatching(/^撤销窗口为 5 秒/u) }])
+  expect(found?.items[1]?.text).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
   const controller = new AbortController(); controller.abort()
   client.recallMemories.mockRejectedValueOnce(new HindsightError('transport'))
   await expect(recall.search({ projectId: 'project', query: '撤销', limit: 5, signal: controller.signal })).rejects.toThrow()
@@ -84,22 +88,14 @@ it('formats a statement on one line with its kind and date', () => {
     .toBe('[fact 2026-10-21] 用 pnpm 安装依赖')
 })
 
-it('puts memories that match a Chinese query first without dropping the rest', () => {
-  const memories: HindsightMemory[] = [
-    { id: 'a', type: 'observation', text: '项目交互约定：删除前要确认。' },
-    { id: 'b', type: 'observation', text: '删除使用 ConfirmDialog 组件。' },
-    { id: 'c', type: 'observation', text: '跑测试应使用 pnpm test:regression。' },
-    { id: 'd', type: 'observation', text: '用户要求以后都用中文回答。' },
-  ]
-  expect(rankProjectMemories(memories, '怎么跑测试？').map((memory) => memory.id)).toEqual(['c', 'a', 'b', 'd'])
-  expect(rankProjectMemories(memories, '用户希望用什么语言回答？')[0]?.id).toBe('d')
-  expect(rankProjectMemories(memories, 'unrelated').map((memory) => memory.id)).toEqual(['a', 'b', 'c', 'd'])
-  // DevFlow's lexical rank counts twice: a much better match just below a weak one comes first.
-  const shortcuts: HindsightMemory[] = [
-    { id: 'weak', type: 'observation', text: '删除前要确认。' },
-    { id: 'strong', type: 'observation', text: '快捷键：Delete 键删除，Ctrl+Z 撤销。' },
-  ]
-  expect(rankProjectMemories(shortcuts, '删除和撤销的快捷键是什么？').map((memory) => memory.id)).toEqual(['strong', 'weak'])
+it('keeps Hindsight order rather than re-ranking by shared words', async () => {
+  const { recall, client, owner } = await fixture()
+  client.recallMemories.mockResolvedValueOnce([
+    { id: 'meaning', type: 'observation', text: '回归测试用 pnpm test:regression。' },
+    { id: 'words', type: 'world', text: '怎么跑测试的问题以后再讨论。' },
+  ])
+  const result = await recall.recall({ projectId: 'project', userId: owner, query: '怎么跑测试？', budget: CONVERSATION_MEMORY_RECALL_BUDGET })
+  expect(result?.items.map((item) => item.id)).toEqual(['pm-meaning', 'pm-words'])
 })
 
 it('treats memory recalled before an edit, a deletion or a clear as stale', async () => {

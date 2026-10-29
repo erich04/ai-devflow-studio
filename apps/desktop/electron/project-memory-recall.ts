@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { rankMemoryByRelevance, redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
+import { redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import type { LocalStore } from './local-store'
 import { activeProjectMemoryConfiguration } from './project-memory-capture'
@@ -12,15 +12,13 @@ export const PROJECT_MEMORY_IDENTITY_PREFIX = 'pm-'
 export const isProjectMemoryIdentity = (id: string) => id.startsWith(PROJECT_MEMORY_IDENTITY_PREFIX)
 const QUERY_MAX_BYTES = 1_500
 export const PROJECT_MEMORY_SEARCH_MAX_ITEMS = 8
+const SEARCH_MAX_TOKENS = 4_096
 /**
- * Candidates asked of Hindsight for every recall, whatever the caller's budget: without its
- * cross-encoder, retrieval takes tens of milliseconds at any allowance, and DevFlow's own ranking
- * below chooses better from more candidates. The caller's byte budget applies afterwards.
+ * Hindsight ranks; DevFlow keeps its order and the caller's budget takes from the top. Every token
+ * is at least one byte of text, so an allowance of as many tokens as the budget has bytes returns
+ * at least as much text as the budget can take.
  */
-export const PROJECT_MEMORY_CANDIDATE_TOKENS = 8_192
-/** Reciprocal-rank fusion constant and the weight of DevFlow's lexical rank against Hindsight's order. */
-const FUSION_K = 20
-const LEXICAL_WEIGHT = 2
+const recallTokens = (budget: MemoryRecallBudget) => Math.min(8_192, Math.max(1_024, budget.maxBytes))
 
 export type ProjectMemoryRecallItem = { id: string; statement: string; contentDigest: string }
 export type ProjectMemoryRecall = { items: ProjectMemoryRecallItem[]; degraded: boolean }
@@ -40,20 +38,6 @@ function clipQuery(query: string): string {
   let text = query.trim()
   while (encoder.encode(text).byteLength > QUERY_MAX_BYTES) text = text.slice(0, Math.floor(text.length * 0.9))
   return text
-}
-/**
- * Hindsight's bundled embedder is an English model and its keyword search does not split Chinese,
- * so its order says little about a Chinese query. Fuse it (reciprocal rank) with DevFlow's own
- * BM25, which tokenizes Chinese, weighting BM25 twice, so the caller's budget keeps the memories
- * that actually match. Unmatched items stay, ranked lower. On the 2026-10-29 validation bank this
- * put the expected memory in the discussion budget for 85% of held-out questions, against 70%
- * with equal weights and k = 60 (docs/engineering/project-memory.md).
- */
-export function rankProjectMemories(memories: readonly HindsightMemory[], query: string): HindsightMemory[] {
-  const lexical = new Map(rankMemoryByRelevance(memories, query, (memory) => memory.text).map((entry, rank) => [entry.item.id, rank]))
-  return memories.map((memory, rank) => ({ memory, rank,
-    score: 1 / (FUSION_K + rank + 1) + (lexical.has(memory.id) ? LEXICAL_WEIGHT / (FUSION_K + lexical.get(memory.id)! + 1) : 0) }))
-    .sort((left, right) => right.score - left.score || left.rank - right.rank).map((entry) => entry.memory)
 }
 /** One line with its kind and date, so a model can weigh consolidated beliefs against single facts. */
 export function projectMemoryStatement(memory: HindsightMemory): string {
@@ -78,11 +62,10 @@ export function createProjectMemoryRecall(deps: {
     const configuration = await activeProjectMemoryConfiguration(deps.store, projectId)
     return configuration && (userId === undefined || configuration.ownerUserId === userId) ? configuration : null
   }
-  async function query(configuration: ProjectMemoryConfiguration, text: string, signal?: AbortSignal) {
+  async function query(configuration: ProjectMemoryConfiguration, text: string, maxTokens: number, signal?: AbortSignal) {
     try {
       const client = await deps.client(configuration)
-      const memories = await client.recallMemories(configuration.bankId, { query: clipQuery(text), maxTokens: PROJECT_MEMORY_CANDIDATE_TOKENS,
-        ...(signal ? { signal } : {}) })
+      const memories = await client.recallMemories(configuration.bankId, { query: clipQuery(text), maxTokens, ...(signal ? { signal } : {}) })
       return { memories, degraded: false }
     } catch (error) {
       signal?.throwIfAborted()
@@ -95,8 +78,8 @@ export function createProjectMemoryRecall(deps: {
     async recall(input: Parameters<ProjectMemoryRecallPort['recall']>[0]): Promise<ProjectMemoryRecall | null> {
       const configuration = await active(input.projectId, input.userId)
       if (!configuration || !input.query.trim()) return configuration ? { items: [], degraded: false } : null
-      const { memories, degraded } = await query(configuration, input.query, input.signal)
-      return { degraded, items: rankProjectMemories(memories, input.query).map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
+      const { memories, degraded } = await query(configuration, input.query, recallTokens(input.budget), input.signal)
+      return { degraded, items: memories.map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
     },
     async assertCurrent(input: Parameters<ProjectMemoryRecallPort['assertCurrent']>[0]): Promise<void> {
       const configuration = await active(input.projectId, input.userId)
@@ -113,9 +96,9 @@ export function createProjectMemoryRecall(deps: {
     async search(input: { projectId: string; query: string; limit: number; signal?: AbortSignal }) {
       const configuration = await active(input.projectId)
       if (!configuration) return null
-      const { memories, degraded } = await query(configuration, input.query, input.signal)
+      const { memories, degraded } = await query(configuration, input.query, SEARCH_MAX_TOKENS, input.signal)
       return {
-        items: rankProjectMemories(memories, input.query).slice(0, Math.min(PROJECT_MEMORY_SEARCH_MAX_ITEMS, input.limit)).map((memory) => ({
+        items: memories.slice(0, Math.min(PROJECT_MEMORY_SEARCH_MAX_ITEMS, input.limit)).map((memory) => ({
           id: `${PROJECT_MEMORY_IDENTITY_PREFIX}${memory.id}`, kind: memory.type === 'observation' ? 'observation' : 'fact',
           text: redactSensitiveText(memory.text).value, ...(memory.occurredAt ? { date: memory.occurredAt.slice(0, 10) } : {}),
         })),
