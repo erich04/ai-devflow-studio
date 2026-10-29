@@ -31,7 +31,7 @@
 | **多语言 embedding，无重排，关图扩展（采用）** | **100% / 95%** | **100% / 95%** | **0.87 / 0.92** | **23 ms / 0.17 s** |
 | 同上，加多语言重排（前 40 个候选） | 96% / 100% | 96% / 100% | 0.96 / 0.98 | 1.8 s / 7.9 s |
 
-多语言重排略好，但在 2 个 CPU 上每次召回多 2–8 秒，长查询超过桌面端 5 秒的召回超时，记忆会被静默降级为空，所以不用。图扩展有害的原因见 ADR 0030「召回」。此前的做法（#270：英文 embedding，关重排后用 DevFlow 自己的中文 BM25 与 Hindsight 的顺序融合，讨论栏命中 88% / 90%）已移除。已知局限：一个请求里有两件事时（例如「改撤销窗口，注释按约定的语言写」），向量检索按整句的意思排序，次要那件的记忆可能排不进预算。Hindsight 的关键词检索目前不分中文词，所以帮不上。数据与新配置的完整验证见[多语言召回验证](../validation/project-memory-multilingual-20261029.md)。
+多语言重排略好，但在 2 个 CPU 上每次召回多 2–8 秒，长查询超过桌面端 5 秒的召回超时，记忆会被静默降级为空，所以不用。图扩展有害的原因见 ADR 0030「召回」。此前的做法（#270：英文 embedding，关重排后用 DevFlow 自己的中文 BM25 与 Hindsight 的顺序融合，讨论栏命中 88% / 90%）已移除。已知局限：一个请求里有两件事时（例如「改撤销窗口，注释按约定的语言写」），向量检索按整句的意思排序，次要那件的记忆可能排不进预算。Hindsight 默认的关键词检索不分中文词；换成上游推荐的 pgroonga 后关键词检索能匹配中文，但整体排序变差，也没有解决这个问题。数据与新配置的完整验证见[多语言召回验证](../validation/project-memory-multilingual-20261029.md)。
 
 知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，还能阅读四个知识页（约定与命令、决策与原因、问题与解决办法、用户偏好），规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`、`listProjectKnowledgePages`、`refreshProjectKnowledgePage`。
 
