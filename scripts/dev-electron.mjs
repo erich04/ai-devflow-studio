@@ -54,6 +54,7 @@ async function waitForServer(url) {
   throw new Error(`Timed out waiting for ${url}`)
 }
 
+await run(process.execPath, [path.join(rootDir, 'scripts', 'ensure-electron-install.mjs')])
 await run(corepack, ['pnpm', '--filter', '@ai-devflow/desktop', 'build:electron'])
 
 const vite = spawnLogged(corepack, [

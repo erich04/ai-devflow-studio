@@ -308,6 +308,8 @@ corepack pnpm dev:electron
 
 这些开发标志启用确定性的流程/审查提供方和模拟编码引擎。本次演练在**设置 › 模型与执行方式**中选择 **Deterministic Fake Provider**，不会调用付费模型。选择仓库并新建任务后，桌面端会显示相应内容。对网络开放的部署应关闭演示身份认证。
 
+`corepack pnpm install` 不会下载 Electron 二进制。`dev:electron` 启动前会运行 `scripts/ensure-electron-install.mjs`，在本机缺少与当前平台匹配的二进制时再下载。
+
 1. 在顶栏的项目菜单中选择一个已提交的小型 Git 仓库，在**设置 › 本地项目**保存检测到的测试命令。
 2. 点击**新建任务**，填写具体请求和验收标准。
 3. 在任务页生成需求澄清与方案，阅读材料，按状态行确认需求与方案 Gate。
@@ -322,10 +324,23 @@ corepack pnpm dev:electron
 
 ### 无需 GitHub 登录，启动本地团队环境
 
-创建专用本地 PostgreSQL 数据库，API 和 Web 使用相同的回环主机名：
+先用 PostgreSQL 超级用户创建专用角色和数据库：角色 `devflow_local`（密码 `devflow`，只用于本机开发）和同名数据库。已存在时跳过，不修改已有角色和其他数据库。
 
 ```bash
-export DEVFLOW_DATABASE_URL='postgres://postgres:devflow@127.0.0.1:5432/devflow_local'
+sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+SELECT 'CREATE ROLE devflow_local LOGIN PASSWORD ''devflow'''
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'devflow_local')\gexec
+SELECT 'CREATE DATABASE devflow_local OWNER devflow_local'
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'devflow_local')\gexec
+SQL
+```
+
+Debian 与 Ubuntu 的默认集群通过操作系统用户 `postgres` 做本地认证。macOS Homebrew 的当前用户通常已是超级用户，把开头换成 `psql -d postgres -v ON_ERROR_STOP=1 <<'SQL'`。改用其他角色或密码时，同步修改下面的连接串。
+
+API 和 Web 使用相同的回环主机名：
+
+```bash
+export DEVFLOW_DATABASE_URL='postgres://devflow_local:devflow@127.0.0.1:5432/devflow_local'
 export DEVFLOW_ENABLE_DEMO_DATA=false
 export DEVFLOW_LOCAL_AUTH_ENABLED=true
 export DEVFLOW_REQUIRE_AUTH=true
