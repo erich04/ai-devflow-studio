@@ -22,7 +22,7 @@ async function directory(prefix: string) {
   return created
 }
 const git = (cwd: string, ...args: string[]) => exec('git', ['-C', cwd, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
-  '-c', 'commit.gpgsign=false', ...args], { env: { ...process.env, GIT_CONFIG_GLOBAL: os.devNull, GIT_CONFIG_NOSYSTEM: '1' } })
+  '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=', ...args])
 const sha = (seed: string) => seed.repeat(40).slice(0, 40)
 const commit = (seed: string, committedAt: string, subject: string, body = ''): CommitRecord => ({ sha: sha(seed), committedAt, subject, body })
 
