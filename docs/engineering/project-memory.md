@@ -82,6 +82,8 @@ corepack pnpm exec tsx scripts/project-memory-live-validation.mts
 
 脚本只在获得提供方、模型和预算授权后运行；每次运行受 `DEVFLOW_MEMORY_LIVE_MAX_USD` 和 3 美元累计账本双重限制，报告写在 `out/project-memory-validation/`，13 项检查全部通过才算通过。它覆盖抽取、召回、知识页和真实讨论（讨论用 `deepseek-flash`，可用 `DEVFLOW_MEMORY_LIVE_CONVERSATION_MODEL` 改），一次约 4 美分；讨论调用按 1M tokens 上下文预留，`DEVFLOW_MEMORY_LIVE_MAX_USD` 至少设为 0.4。结果见[2026-10-28 验证](../validation/project-memory-live-20261028.md)和[2026-10-29 全链路验证](../validation/project-memory-live-20261029.md)。
 
+更大规模的验证用 `scripts/project-memory-full-validation.mts`：53 份合成文档（含真实 Git 历史），覆盖采集裁剪、Hindsight 归纳、会话和编码简报压缩、知识页，以及编码简报和真实 Native v2 编码、阶段 Agent、Gate 评审、两种讨论协议和 `memory_search` 的召回，之后是自动采集、编辑、遗忘、遗忘来源和清空。它有单独的 2 美元账本（`ledger-full.json`），各阶段可以对同一个工作目录续跑；一次完整运行约 0.5 美元，其中编辑和遗忘之后重写知识页约 0.19 美元。`DEVFLOW_MEMORY_FULL_DRY=1` 只构造文档并做不花钱的检查。结果见[2026-10-29 完整验证](../validation/project-memory-full-20261029.md)。
+
 ### 2026-10-28 无费用链路检查
 
 用本仓库 Compose 启动固定版本 Hindsight 1.0.0（Docker Desktop，macOS），中继监听 `127.0.0.1:8899`，上游换成本机假模型（固定返回 `{"facts": []}`），预算为假实现。对一个合成 bank 调用 `configureMemoryBank` 和 `retainDocument` 后：

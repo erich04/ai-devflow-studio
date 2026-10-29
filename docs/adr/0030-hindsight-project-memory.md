@@ -83,7 +83,7 @@ Hindsight 官方的编码 Agent 接入（Claude Code、Codex 插件）和 Codex/
 | 2 | 召回注入编码简报、阶段 Agent、Gate 评审和讨论，替换本地 BM25；回执；讨论的 `memory_search` | 已实现（v3 工具待 v3 合并；不做 `memory_save`，见「召回」） |
 | 3 | 记忆页：查看、编辑、删除、清空、开关；移除候选界面；新项目默认开启 | 已实现 |
 | 4 | 迁移旧正式记忆（`source:legacy`），移除旧候选代码；数据表保留 | 已实现 |
-| 5 | 知识页面（mental models）、Git 提交信息采集、真实 DeepSeek 验证（预算 3 美元） | 已实现；[全链路验证](../validation/project-memory-live-20261029.md)累计花费 0.14 美元 |
+| 5 | 知识页面（mental models）、Git 提交信息采集、真实 DeepSeek 验证（预算 3 美元） | 已实现；[全链路验证](../validation/project-memory-live-20261029.md)累计花费 0.14 美元；[完整验证](../validation/project-memory-full-20261029.md)（另立 2 美元预算，花费 0.69 美元）发现并修复了召回超时和 Native 压缩后不带记忆 |
 
 ## 影响
 
