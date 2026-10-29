@@ -19,6 +19,7 @@ Hindsight 官方的编码 Agent 接入（Claude Code、Codex 插件）和 Codex/
    - 讨论：整段公开对话（用户和助手消息），一次一个文档 `conversation:<id>`。空闲 3 分钟后发送，之后每轮更新替换同一文档。不含推理内容、工具输出和注入的上下文。
    - 编码：每个结束的 Coding Run（成功、失败、取消都算，`fake` 引擎除外）一个文档 `coding-run:<id>`：用户请求、给 Agent 的说明、结果、改动文件、Agent 活动摘要。DevFlow 自己运行的测试标为 `HOST_VERIFIED`，Agent 的说法标为声明。不含 Brief（避免把召回内容再写回去）。
    - 阶段产物：审批通过时记录被批准的澄清版本、设计和验收包；Gate 评审结果在保存时记录，标为评审意见而非决定。草稿不记录。
+   - Git 提交信息（第五期）：当前分支最近 30 天、最多 150 个非合并提交，按提交日期每天一个文档 `commits:<日期>`，含短 SHA、时间、标题和正文（正文每条最多 1.5 KiB），不含作者和邮箱。每个开启记忆的项目最多每 10 分钟读一次；当天的文档在最后一个提交 30 分钟后才发送，内容不变的日期不重发，忘记过的日期不再写入。读取时不加载系统和全局 Git 配置、关闭 fsmonitor 和签名检查，非 Git 目录直接跳过。提交信息是作者的说法，不是 DevFlow 核验的事实。
    - 统一限制：每个文档最多 48 KiB，超出时丢弃最早的消息或活动；写入前脱敏；不发送完整文件。
 3. **Hindsight 负责抽取和归纳。** 发送使用 `update_mode: replace`、`observation_scopes: shared`。bank 配置开启观察归纳和自动 consolidation，抽取模式 `concise`，并写入 retain/observations/reflect 三段任务说明（`PROJECT_MEMORY_MISSIONS`）。DevFlow 不做逐条抽取、去重或冲突判断。
 4. **抽取模型调用经过 DevFlow 中继，计入项目预算。** 首次真实验证见[2026-10-28 记录](../validation/project-memory-live-20261028.md)：每个文档约 1.6 次调用、不到 0.1 美分。 Hindsight 只持有中继令牌，不持有 Provider 密钥：
@@ -82,7 +83,7 @@ Hindsight 官方的编码 Agent 接入（Claude Code、Codex 插件）和 Codex/
 | 2 | 召回注入编码简报、阶段 Agent、Gate 评审和讨论，替换本地 BM25；回执；讨论的 `memory_search` | 已实现（v3 工具待 v3 合并；不做 `memory_save`，见「召回」） |
 | 3 | 记忆页：查看、编辑、删除、清空、开关；移除候选界面；新项目默认开启 | 已实现 |
 | 4 | 迁移旧正式记忆（`source:legacy`），移除旧候选代码；数据表保留 | 已实现 |
-| 5 | 知识页面（mental models）、Git 提交信息采集、真实 DeepSeek 验证（预算 3 美元） | 知识页已实现；其余进行中 |
+| 5 | 知识页面（mental models）、Git 提交信息采集、真实 DeepSeek 验证（预算 3 美元） | 知识页、Git 提交信息已实现；真实验证进行中 |
 
 ## 影响
 

@@ -12,9 +12,9 @@ export const PROJECT_MEMORY_MAX_DOCUMENT_BYTES = 48 * 1024
 export const PROJECT_MEMORY_CONVERSATION_IDLE_MS = 3 * 60_000
 export const PROJECT_MEMORY_MAX_RETAIN_ATTEMPTS = 3
 
-/** `legacy`: the Memory an earlier DevFlow version kept locally, copied in once per bank. */
-export type ProjectMemorySourceKind = 'conversation' | 'coding_run' | 'artifact' | 'legacy'
-export const PROJECT_MEMORY_SOURCE_KINDS: readonly ProjectMemorySourceKind[] = ['conversation', 'coding_run', 'artifact', 'legacy']
+/** `legacy`: the Memory an earlier DevFlow version kept locally, copied in once per bank. `commit`: one day of Git commit messages. */
+export type ProjectMemorySourceKind = 'conversation' | 'coding_run' | 'artifact' | 'legacy' | 'commit'
+export const PROJECT_MEMORY_SOURCE_KINDS: readonly ProjectMemorySourceKind[] = ['conversation', 'coding_run', 'artifact', 'legacy', 'commit']
 export type ProjectMemoryDocumentStatus = 'queued' | 'submitted' | 'retained' | 'failed' | 'delete_pending' | 'deleted'
 
 export type ProjectMemoryPairingBinding = {
@@ -164,6 +164,7 @@ export const PROJECT_MEMORY_MISSIONS = {
     'When the user changes an earlier decision, record the new decision and that it replaces the old one.',
     'A coding agent saying it "fixed" something or that "tests pass" is a claim: record it as that agent\'s claim.',
     'Only results marked HOST_VERIFIED are facts verified by DevFlow.',
+    'Commit messages record what a change did and why, in its author\'s words; keep the reason and the date.',
     'Write each fact in the language of its source; keep Chinese text in Chinese.',
   ].join(' '),
   observations: [

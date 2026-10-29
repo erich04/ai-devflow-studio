@@ -311,6 +311,7 @@ import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint, 
 import { registerProjectMemoryRecall } from './coding-context'
 import { resolveProjectMemoryScope } from './project-memory-capture'
 import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
+import { captureCommitProjectMemory } from './project-memory-commits'
 import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
 import { activeProjectMemoryConfiguration, migrateLegacyProjectMemory, projectMemoryPairingBinding } from './project-memory-capture'
@@ -515,6 +516,7 @@ function wakeHindsight() {
       })(),
       (async () => {
         await startMemoryRelay()
+        if (!hindsightStopping) await scanCommitHistory()
         if (!hindsightStopping) await (await getProjectMemoryService()).process()
       })(),
     ])
@@ -632,6 +634,21 @@ function getProjectMemoryService() {
     return service
   })
   return projectMemoryService
+}
+// Commit history (ADR 0030, phase 5): read each project whose memory is on at most every 10 minutes.
+const commitScans = new Map<string, number>()
+const COMMIT_SCAN_INTERVAL_MS = 10 * 60_000
+async function scanCommitHistory(): Promise<void> {
+  const store = await getStore()
+  const projects = new Map((await store.listProjects()).map((project) => [project.id, project]))
+  for (const configuration of await store.listProjectMemoryConfigurations()) {
+    const project = projects.get(configuration.projectId)
+    if (!configuration.enabled || !project || Date.now() - (commitScans.get(project.id) ?? 0) < COMMIT_SCAN_INTERVAL_MS) continue
+    commitScans.set(project.id, Date.now())
+    await captureCommitProjectMemory(store, project).catch(() => {
+      console.warn('[project-memory] Commit history was not read; it is read again later.')
+    })
+  }
 }
 /** Best-effort copy of earlier local Memory (ADR 0030); retried at the next start if it fails. */
 async function migrateLegacyMemory(projectId: string): Promise<void> {
