@@ -118,7 +118,7 @@ it('configures a project memory bank with its missions and verifies the saved co
     'GET /version', 'PUT /v1/default/banks/df-memory-1', 'PATCH /v1/default/banks/df-memory-1/config'])
   expect(requests[2]!.body).toEqual({ updates: { enable_observations: true, enable_auto_consolidation: true, entities_allow_free_form: true,
     retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations, reflect_mission: missions.reflect,
-    enable_reranking: false } })
+    enable_reranking: false, enable_graph_retrieval: false } })
   fetcher.mockImplementation(async (url, init) => String(url).endsWith('/version') ? Response.json({ api_version: '1.0.0' })
     : init?.method === 'PATCH' ? Response.json({ bank_id: 'df-memory-1', config: { ...saved, enable_observations: false } }) : Response.json({}))
   await expect(client.configureMemoryBank('df-memory-1', missions)).rejects.toThrow('protocol')

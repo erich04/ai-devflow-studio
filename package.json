@@ -18,6 +18,7 @@
     "hindsight:up": "docker compose --env-file deploy/hindsight/.env -f deploy/hindsight/compose.yaml up -d --wait --wait-timeout 180",
     "hindsight:status": "docker compose --env-file deploy/hindsight/.env -f deploy/hindsight/compose.yaml ps",
     "hindsight:stop": "docker compose --env-file deploy/hindsight/.env -f deploy/hindsight/compose.yaml stop",
+    "hindsight:migrate": "tsx scripts/hindsight-migrate-store.mts",
     "test:hindsight-local": "tsx scripts/hindsight-local-smoke.mts",
     "test:hindsight-live": "tsx scripts/hindsight-live-synthetic.mts",
     "test:hindsight-protocol": "tsx scripts/hindsight-protocol-smoke.mts",

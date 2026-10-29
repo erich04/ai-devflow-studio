@@ -2,8 +2,14 @@ name: devflow-hindsight
 
 services:
   hindsight:
-    # v1.0.0 / 39c65ffe2f140d0c84cee58566cad8900c5b9908; multi-architecture digest.
-    image: ghcr.io/vectorize-io/hindsight:1.0.0@sha256:a88678c038b0e4340822b02a5efc566c56d8176b5bffa731bc433fd37f978e4c
+    # Upstream v1.0.0 / 39c65ffe2f140d0c84cee58566cad8900c5b9908 (multi-architecture digest in the
+    # Dockerfile) plus a multilingual embedding model. Built locally on the first `up`, which
+    # downloads the model (about 490 MB); DEVFLOW_HF_ENDPOINT may name a Hugging Face mirror.
+    image: devflow-hindsight:1.0.0-multilingual-e5-small
+    build:
+      context: .
+      args:
+        HF_ENDPOINT: ${DEVFLOW_HF_ENDPOINT:-https://huggingface.co}
     restart: unless-stopped
     init: true
     shm_size: 1gb
@@ -46,15 +52,20 @@ services:
       HINDSIGHT_API_LLM_MAX_RETRIES: "0"
       # Includes the relay's budget admission round trip.
       HINDSIGHT_API_LLM_TIMEOUT: "120"
+      # One vector space for Chinese and English. e5 models are trained with these prefixes.
       HINDSIGHT_API_EMBEDDINGS_PROVIDER: local
-      HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: BAAI/bge-small-en-v1.5
+      HINDSIGHT_API_EMBEDDINGS_LOCAL_MODEL: /home/hindsight/models/multilingual-e5-small
+      HINDSIGHT_API_EMBEDDINGS_QUERY_PREFIX: "query: "
+      HINDSIGHT_API_EMBEDDINGS_PASSAGE_PREFIX: "passage: "
+      # The upstream image's English cross-encoder. Repository knowledge banks rerank with it;
+      # project memory banks turn reranking off (ADR 0030).
       HINDSIGHT_API_RERANKER_PROVIDER: local
       HINDSIGHT_API_RERANKER_LOCAL_MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
-      # These two models are included in the full image; avoid runtime downloads.
+      # Both models are in the image; avoid runtime downloads.
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
     volumes:
-      - data:/home/hindsight/.pg0
+      - data-multilingual-e5-small:/home/hindsight/.pg0
     healthcheck:
       test:
         - CMD
@@ -72,4 +83,7 @@ services:
         max-file: "3"
 
 volumes:
-  data:
+  # Named after the embedding model: Hindsight keeps no record of which model made a vector, so
+  # one store holds one model's vectors. The English-model store (devflow-hindsight_data) is
+  # left as it was; `corepack pnpm hindsight:migrate` copies its banks here.
+  data-multilingual-e5-small:

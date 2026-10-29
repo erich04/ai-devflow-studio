@@ -33,8 +33,8 @@ corepack pnpm hindsight:status
 已经配置过 `.env` 时不要再次复制覆盖。该文件被 Git 忽略，只在本机填写中继令牌。
 
 - DevFlow 服务地址：`http://127.0.0.1:8890`；Hindsight 管理界面：`http://127.0.0.1:9990`。
-- Compose 项目名 `devflow-hindsight`，数据卷 `devflow-hindsight_data`，不挂载业务目录、不复用其他服务的数据库。
-- 镜像固定到 1.0.0 的多架构摘要 `sha256:a88678c038b0e4340822b02a5efc566c56d8176b5bffa731bc433fd37f978e4c`；包含本地 embedding/reranker。稳定 worker ID 支持重启时识别已有任务。
+- Compose 项目名 `devflow-hindsight`，数据卷 `devflow-hindsight_data-multilingual-e5-small`，不挂载业务目录、不复用其他服务的数据库。
+- 镜像 `devflow-hindsight:1.0.0-multilingual-e5-small` 在本机构建（`deploy/hindsight/Dockerfile`）：上游 1.0.0 的多架构摘要 `sha256:a88678c038b0e4340822b02a5efc566c56d8176b5bffa731bc433fd37f978e4c`，加多语言 embedding 模型 [`intfloat/multilingual-e5-small`](https://huggingface.co/intfloat/multilingual-e5-small)（修订 `614241f622f53c4eeff9890bdc4f31cfecc418b3`，每个文件按 `multilingual-e5-small.sha256` 校验）。首次 `hindsight:up` 构建镜像，下载约 490 MB；网络访问不了 Hugging Face 时，在 `.env` 设置 `DEVFLOW_HF_ENDPOINT` 为镜像站，文件仍要通过同一校验。运行时离线。重排模型仍是上游镜像自带的英文 `cross-encoder/ms-marco-MiniLM-L-6-v2`，只有仓库知识 bank 使用，项目记忆 bank 关闭重排（[项目记忆](project-memory.md)）。稳定 worker ID 支持重启时识别已有任务。
 - `corepack pnpm hindsight:stop` 停止服务并保留数据，再执行 `hindsight:up` 恢复。不要使用 `down -v`，除非确实要删除该服务的全部数据。
 - 此配置只绑定本机回环地址，适用于个人开发机；没有配置远程访问所需的认证和 TLS。
 
@@ -44,12 +44,23 @@ Hindsight 不持有 Provider 密钥。抽取和归纳的模型调用发往桌面
 
 要启用抽取，把桌面端的中继令牌写入 `.env` 并重新执行 `hindsight:up`。中继只放行已开启项目记忆的已配对项目，以及该项目当前的仓库知识 bank；其他 bank 的调用返回 403。服务启动命令不自动开启 Electron 的网络闸门，也未实现由桌面程序自动安装和管理 Docker。
 
+### 从英文模型的数据卷迁移
+
+此前的部署用上游镜像自带的英文 embedding（`BAAI/bge-small-en-v1.5`），数据在 `devflow-hindsight_data`。Hindsight 不记录向量出自哪个模型，两个模型的向量维度又相同（384），混在一个库里不会报错，召回会静默变差，所以多语言模型使用新的数据卷，旧卷原样保留、不再使用。要保留旧数据，先关闭桌面端，再执行：
+
+```sh
+corepack pnpm hindsight:up
+corepack pnpm hindsight:migrate
+```
+
+脚本用上游镜像在 `127.0.0.1:8896` 临时打开旧卷（不连接任何模型服务），用 Hindsight 的 bank 导出把每个 bank 存到 `out/hindsight-migration/<时间>/`，再以恢复模式导入当前服务。导出不含向量，导入时用当前模型重新计算，不调用模型。当前服务里已有记忆的同名 bank 不会被覆盖；桌面端启动时建的空 bank 会被替换。输出列出每个 bank 迁移前后的文档数和各类记忆数，不一致时退出码为 1。旧卷里仍在排队的抽取、归纳和知识页刷新不会迁移；记忆的 Hindsight id 会变，旧回执里的 `pm-<id>` 只作记录。桌面端重新启动后给项目记忆 bank 写入当前的召回设置。确认无误后可以用 `docker volume rm devflow-hindsight_data` 删除旧卷。
+
 ## 协议基线
 
 - 上游：`vectorize-io/hindsight`，发布标签 `v1.0.0`，提交 `39c65ffe2f140d0c84cee58566cad8900c5b9908`。
 - [固定 OpenAPI](https://github.com/vectorize-io/hindsight/blob/39c65ffe2f140d0c84cee58566cad8900c5b9908/hindsight-docs/static/openapi.json) 下载文件 SHA-256：`8ac3fbc2eb2796c32109fd1ad016cb8f8de43c0934d87a89910bd8478e42c55d`。
 - 手写最小 HTTP 适配器，未引入 SDK；写入前检查 `/version` 的 `api_version=1.0.0`。版本字符串不是镜像/提交真实性证明，部署仍须固定镜像 digest 或上述源码提交。
-- 首轮实现使用假响应/假提供方、真实 Git/文件和隔离 SQLite；后续已部署独立服务，通过 `chunks`、真实 DeepSeek `concise` / `verbatim` 基础协议及中文宿主链路检查，见[本地部署验证](../validation/hindsight-local-deployment-20261020.md)和[真实模型验证](../validation/hindsight-deepseek-validation-20261020.md)。跨语言排序与完整启用验收仍待完成。
+- 首轮实现使用假响应/假提供方、真实 Git/文件和隔离 SQLite；后续已部署独立服务，通过 `chunks`、真实 DeepSeek `concise` / `verbatim` 基础协议及中文宿主链路检查，见[本地部署验证](../validation/hindsight-local-deployment-20261020.md)和[真实模型验证](../validation/hindsight-deepseek-validation-20261020.md)。项目记忆的中英文召回排序见[多语言召回验证](../validation/project-memory-multilingual-20261029.md)；仓库知识的跨语言排序与完整启用验收仍待完成。
 
 部署者完成约定的固定版本协议验证、提供方/模型/范围/预算确认后，才设置 `DEVFLOW_HINDSIGHT_PROTOCOL_VERIFIED` 为上述提交 SHA，启动 Electron 并在项目中明确启用。此环境变量是人工部署确认，不能代替验证记录。
 

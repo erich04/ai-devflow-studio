@@ -116,11 +116,14 @@ export function createHindsightClient(input: {
       const version = await request('GET', '/version')
       if (version.api_version !== HINDSIGHT_PROTOCOL.version) throw new HindsightError('protocol')
       await request('PUT', bankPath(bank), { name: bank })
-      // No cross-encoder: the bundled one is an English model that reranks up to 300 candidates on
-      // the CPU, about 9 to 20 seconds per recall at 300 memories. DevFlow ranks the candidates itself.
+      // Recall order is Hindsight's fusion of its vector, keyword and time-based searches
+      // (docs/engineering/project-memory.md). No cross-encoder: the image's is an English model,
+      // and a multilingual one takes 2 to 8 seconds per recall on two CPUs. No graph expansion:
+      // nearly every memory of a project shares its entities, so the expansion adds the same
+      // well-linked memories to every answer and they push the vector matches down.
       const updates = { enable_observations: true, enable_auto_consolidation: true, entities_allow_free_form: true,
         retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations,
-        reflect_mission: missions.reflect, enable_reranking: false }
+        reflect_mission: missions.reflect, enable_reranking: false, enable_graph_retrieval: false }
       const response = await request('PATCH', `${bankPath(bank)}/config`, { updates })
       const config = object(response.config)
       if (response.bank_id !== bank || Object.entries(updates).some(([key, value]) => config[key] !== value)) throw new HindsightError('protocol')

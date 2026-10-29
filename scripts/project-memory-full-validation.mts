@@ -43,7 +43,7 @@ import { runLocalTestCommand } from '../apps/desktop/electron/test-runner.js'
 import { WorkbenchConversationService } from '../apps/desktop/electron/workbench-conversation-service.js'
 import type { WorkbenchConversation } from '../apps/desktop/electron/workbench-conversation-contract.js'
 import {
-  DAY_MS, LATE_DECISIONS, MARKERS, PAGE_EXPECTATIONS, RECALL_QUERIES, ciLog, timeline, todayCommits, type LatestValue,
+  DAY_MS, LATE_DECISIONS, MARKERS, PAGE_EXPECTATIONS, RECALL_HOLDOUT_QUERIES, RECALL_QUERIES, ciLog, timeline, todayCommits, type LatestValue,
 } from './project-memory-full-fixtures.mts'
 
 const exec = promisify(execFile)
@@ -525,9 +525,8 @@ async function measureConsolidation(bankId: string, smallTalkId: string, target:
 type RecallRow = { query: string; ms: number; degraded: boolean | null; returned: number; firstMatchRank: number | null
   found: Record<'coding' | 'stage' | 'discussion', boolean>; latest?: { passed: boolean; first: string | undefined }; observations: number; discussion: string[] }
 async function recallPhase() {
-  const rows: RecallRow[] = []
   const latencies: number[] = []
-  for (const item of RECALL_QUERIES) {
+  async function recallRow(item: (typeof RECALL_QUERIES)[number]): Promise<RecallRow> {
     // Each entry point asks Hindsight with its own budget, so each gets its own candidates.
     const coding = await recallSelection(item.query, CODING_MEMORY_RECALL_BUDGET)
     const stageRecall = await recallSelection(item.query, STAGE_AGENT_MEMORY_RECALL_BUDGET)
@@ -540,21 +539,34 @@ async function recallPhase() {
     const found = { coding: item.expect.every((term) => has(statements(coding.selected), term)), stage: item.expect.every((term) => has(statements(stageSelection), term)),
       discussion: item.expect.every((term) => has(statements(discussion), term)) }
     const latest = item.latest ? latestFirst(statements(discussion), item.latest) : undefined
-    rows.push({ query: item.query, ms: coding.ms, degraded: coding.degraded, returned: coding.items.length, firstMatchRank: firstMatch < 0 ? null : firstMatch + 1,
+    return { query: item.query, ms: coding.ms, degraded: coding.degraded, returned: coding.items.length, firstMatchRank: firstMatch < 0 ? null : firstMatch + 1,
       found, ...(latest ? { latest } : {}), observations: coding.items.filter((entry) => entry.statement.startsWith('[observation]')).length,
-      discussion: statements(discussion) })
-    check(`recall: ${item.query}`, found.coding && found.discussion && (latest?.passed ?? true), { found, ...(latest ? { latest } : {}) })
+      discussion: statements(discussion) }
   }
+  const quality = (list: RecallRow[]) => ({
+    queries: list.length,
+    hitRate: Object.fromEntries((['coding', 'stage', 'discussion'] as const).map((budget) => [budget, +(list.filter((row) => row.found[budget]).length / list.length).toFixed(3)])),
+    meanReciprocalRank: +(list.reduce((sum, row) => sum + (row.firstMatchRank ? 1 / row.firstMatchRank : 0), 0) / list.length).toFixed(3),
+  })
+  const rows: RecallRow[] = []
+  for (const item of RECALL_QUERIES) {
+    const row = await recallRow(item)
+    rows.push(row)
+    check(`recall: ${item.query}`, row.found.coding && row.found.discussion && (row.latest?.passed ?? true), { found: row.found, ...(row.latest ? { latest: row.latest } : {}) })
+  }
+  const holdout: RecallRow[] = []
+  for (const item of RECALL_HOLDOUT_QUERIES) holdout.push(await recallRow(item))
   const sorted = [...latencies].sort((left, right) => left - right)
   const metrics = {
-    queries: rows.length,
-    hitRate: Object.fromEntries((['coding', 'stage', 'discussion'] as const).map((budget) => [budget, +(rows.filter((row) => row.found[budget]).length / rows.length).toFixed(3)])),
-    meanReciprocalRank: +(rows.reduce((sum, row) => sum + (row.firstMatchRank ? 1 / row.firstMatchRank : 0), 0) / rows.length).toFixed(3),
+    ...quality(rows),
     latencyMs: { p50: sorted[Math.floor(sorted.length / 2)], p95: sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))], max: sorted.at(-1) },
     observationShare: +(rows.reduce((sum, row) => sum + row.observations, 0) / Math.max(1, rows.reduce((sum, row) => sum + row.returned, 0))).toFixed(3),
+    holdout: { ...quality(holdout), missedInDiscussion: holdout.filter((row) => !row.found.discussion).map((row) => `${row.query} (rank ${row.firstMatchRank ?? '-'})`) },
   }
   section('recall').queries = rows
+  section('recall').holdoutQueries = holdout
   section('recall').metrics = metrics
+  observe('held-out questions found within each budget', metrics.holdout.hitRate)
   check('recall stays fast enough for every step', (metrics.latencyMs.p95 ?? Infinity) < 3_000, metrics.latencyMs)
   // The discussion bar's memory_search tool, called directly.
   const search = await recall.search({ projectId, query: '为什么把任务数据从 localStorage 换成 IndexedDB', limit: 8 })
