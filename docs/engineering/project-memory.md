@@ -13,6 +13,7 @@
 | 被批准的澄清、设计、验收包 | `artifact:<id>` | 审批通过时 |
 | Gate 评审结果 | `artifact:<id>` | 保存时 |
 | 旧版本地 Agent 记忆 | `legacy:agent-memory` | 开启时或启动时，每个 bank 一次 |
+| Git 提交信息（当前分支最近 30 天） | `commits:<日期>` | 每 10 分钟检查；当天的在最后一个提交 30 分钟后 |
 
 旧版记忆的迁移规则见 ADR 0030「旧记忆迁移与移除」：只复制当前归属用户在本项目可见的有效记忆；忘记这个来源或清空后不会再写入；本地数据不删除。
 
@@ -24,6 +25,7 @@
 
 - `packages/shared/src/project-memory.ts`：类型、限制、bank 任务说明。
 - `apps/desktop/electron/project-memory-capture.ts`：文档构造和采集入口，在 LocalStore 的持久化变更里调用；`migrateLegacyProjectMemory` 复制旧版记忆。
+- `apps/desktop/electron/project-memory-commits.ts`：读取 Git 提交历史并按天组成文档。
 - `apps/desktop/electron/project-memory-store.ts`：开关和发件队列（schema 41）。
 - `apps/desktop/electron/project-memory-service.ts`：后台发送、查询、删除。
 - `apps/desktop/electron/memory-model-relay.ts`：Hindsight 抽取调用的预算中继。
