@@ -232,7 +232,9 @@ export async function runNativeConversation(host: Host): Promise<void> {
         operationKey: `conversation:${session.id}:${checkpoint.turnId}:${checkpoint.cycle}${draft ? `:review:${candidate!.id}` : ''}`,
         ...(checkpoint.maxOutputTokens === undefined ? {} : { maxOutputTokens: checkpoint.maxOutputTokens }), signal,
       }
-      if (memoryIncluded) request.messages = [...request.messages, { role: 'user', content: JSON.stringify(memory) }]
+      // Sent at the end of the request only, never saved in the protocol history.
+      const memoryMessage: NativeToolMessage | undefined = memoryIncluded ? { role: 'user', content: JSON.stringify(memory) } : undefined
+      if (memoryMessage) request.messages = [...request.messages, memoryMessage]
       let budget = nativeRequestBudget(provider, request)
       if (budget.overflow && memoryIncluded) {
         request = { ...request, messages: request.messages.slice(0, -1) }
@@ -247,9 +249,17 @@ export async function runNativeConversation(host: Host): Promise<void> {
         const boundary: NativeToolMessage = { role: 'user', content: JSON.stringify({ userRequest, ...await host.context(), rollingSummary: compaction?.summary, ...(checkpoint.criticalProposalInput ? { criticalProposalInput: checkpoint.criticalProposalInput } : {}) }) }
         request = { ...request, messages: [boundary] }
         budget = nativeRequestBudget(provider, request)
-        if (!budget.overflow) await update(current => ({ ...current, nativeContextStart: current.nativeTranscript?.length ?? 0, nativeTranscript: [...(current.nativeTranscript ?? []), { turnId: checkpoint.turnId, message: boundary }],
-          ...(compaction && !current.compactions?.some(c => c.id === compaction.id) ? { compactions: [...(current.compactions ?? []), compaction] } : {}),
-        }))
+        if (!budget.overflow) {
+          await update(current => ({ ...current, nativeContextStart: current.nativeTranscript?.length ?? 0, nativeTranscript: [...(current.nativeTranscript ?? []), { turnId: checkpoint.turnId, message: boundary }],
+            ...(compaction && !current.compactions?.some(c => c.id === compaction.id) ? { compactions: [...(current.compactions ?? []), compaction] } : {}),
+          }))
+          // ADR 0028: the compacted context reloads valid memory when it fits next to the summary.
+          if (memoryMessage) {
+            const withMemory = { ...request, messages: [...request.messages, memoryMessage] }
+            const measured = nativeRequestBudget(provider, withMemory)
+            if (!measured.overflow) { request = withMemory; budget = measured; memoryIncluded = true }
+          }
+        }
       }
       if (budget.overflow) throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'input_capacity_exceeded', deliveryState: 'not_sent', billingState: 'not_incurred', retryable: false })
       await update(current => ({ ...current, contextReceipt: { budget, includedMessages: request.messages.length, omittedMessages: Math.max(0, (current.nativeTranscript?.length ?? 0) - request.messages.length), limited: Boolean(current.nativeContextStart), observedAt: now() } }))

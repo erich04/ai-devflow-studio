@@ -132,6 +132,23 @@ it('keeps Memory omitted in the receipt when history compaction is also needed a
   expect(h.host.beforeModelRequest).toHaveBeenCalledWith(expect.any(Object), expect.any(String), false)
 })
 
+it('sends Memory again after compacting native history when it fits next to the summary (ADR 0028)', async () => {
+  const memory = { backgroundMemory: [{ id: 'm1', statement: 'COMPACT_MEMORY: answer in English' }], communicationPreferences: [{ id: 'm2', statement: 'Answer in English.' }] }
+  const h = isolatedNative(async input => {
+    expect(JSON.stringify(input.messages)).not.toContain('OLD_RAW_TEXT')
+    expect(JSON.parse(input.messages.at(-1)!.content!)).toEqual(memory)
+    expect(JSON.parse(input.messages[0]!.content!)).toMatchObject({ userRequest: '只读调查', rollingSummary: expect.any(Object) })
+    return answer('Done')
+  }, { memory, maxInputBytes: 14000 })
+  await h.host.update(current => ({ ...current, nativeTranscript: [{ turnId: 'old', message: { role: 'user', content: 'OLD_RAW_TEXT'.repeat(5000) } }] }))
+  await runNativeConversation(h.host)
+  expect(h.read().status).toBe('idle')
+  expect(h.read().nativeContextStart).toBeGreaterThan(0)
+  expect(h.host.beforeModelRequest).toHaveBeenCalledWith(expect.any(Object), expect.any(String), true)
+  // Memory travels with the request only; the saved protocol history holds the boundary and the answer.
+  expect(JSON.stringify(h.read().nativeTranscript)).not.toContain('COMPACT_MEMORY')
+})
+
 it('bounds native argument repairs and counts them as cumulative recovery attempts', async () => {
   let attempt = 0
   const h = isolatedNative(async () => call(`bad-${++attempt}`, 'repo_read', { wrong: 'app.js' }))
