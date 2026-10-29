@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentProviderConfig, ProjectMemoryPage, ProjectMemoryStatus } from '@ai-devflow/shared'
+import { PROJECT_KNOWLEDGE_PAGES, type AgentProviderConfig, type ProjectKnowledgePages, type ProjectMemoryPage, type ProjectMemoryStatus } from '@ai-devflow/shared'
 import { ProjectMemoryPanel } from './ProjectMemoryPanel'
 
 const status = (overrides: Partial<ProjectMemoryStatus> = {}): ProjectMemoryStatus => ({
@@ -83,6 +83,29 @@ describe('ProjectMemoryPanel', () => {
     await waitFor(() => expect(memory.forgetProjectMemorySource).toHaveBeenCalledWith({ projectId: 'project-1', documentId: 'doc-1' }))
     expect(within(panel).getByText('http://host.docker.internal:8891/v1')).toBeInTheDocument()
     expect(within(panel).getByText('/tmp/user-data/memory-relay-token')).toBeInTheDocument()
+  })
+
+  it('shows knowledge pages, starts a rewrite on request and reloads them after memory changes', async () => {
+    const pages = (content = ''): ProjectKnowledgePages => ({ projectId: 'project-1', pages: PROJECT_KNOWLEDGE_PAGES.map((item) => ({
+      id: item.id, title: item.title, stale: item.id === 'conventions', content: item.id === 'conventions' ? content : '',
+      ...(item.id === 'conventions' ? { refreshedAt: '2026-10-29T01:00:00.000Z' } : {}),
+    })) })
+    const memory = { ...api(status()), listProjectKnowledgePages: vi.fn(async () => pages('## 命令\n- 测试：`pnpm test`')),
+      refreshProjectKnowledgePage: vi.fn(async () => pages('## 命令\n- 测试：`pnpm test`')) }
+    render(<ProjectMemoryPanel projectId="project-1" api={memory} />)
+    const section = await screen.findByLabelText('知识页')
+    const conventions = await within(section).findByRole('article', { name: '约定与命令' })
+    expect(within(conventions).getByRole('heading', { name: '命令' })).toBeInTheDocument()
+    expect(conventions).toHaveTextContent('有新记忆，稍后更新')
+    fireEvent.click(within(conventions).getByRole('button', { name: '立即整理' }))
+    await waitFor(() => expect(memory.refreshProjectKnowledgePage).toHaveBeenCalledWith({ projectId: 'project-1', pageId: 'conventions' }))
+    expect(await within(section).findByRole('status')).toHaveTextContent('已开始整理')
+    fireEvent.click(within(section).getByRole('tab', { name: '用户偏好' }))
+    expect(within(await within(section).findByRole('article', { name: '用户偏好' })).getByText(/还没有内容/u)).toBeInTheDocument()
+    // Deleting memory empties the pages in Main; the panel reads them again.
+    const reads = memory.listProjectKnowledgePages.mock.calls.length
+    fireEvent.click(within(await screen.findByRole('list', { name: '记忆列表' })).getByRole('button', { name: '删除' }))
+    await waitFor(() => expect(memory.listProjectKnowledgePages.mock.calls.length).toBeGreaterThan(reads))
   })
 
   it('shows why memory is unavailable and keeps a list error visible', async () => {

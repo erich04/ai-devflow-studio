@@ -119,6 +119,39 @@ export type ConfigureProjectMemoryInput = {
   apiKey?: string
 }
 
+/**
+ * Knowledge pages: Hindsight mental models that summarize what the project's memory holds. Hindsight
+ * rewrites each page after consolidation (at most hourly, editing only what changed) or when the
+ * user refreshes it; each rewrite is a model call charged like extraction. Editing or forgetting
+ * memory empties the pages first, so they never show what was removed. Pages are for the user to
+ * read; prompts keep using recalled memories.
+ */
+export type ProjectKnowledgePageId = 'conventions' | 'decisions' | 'pitfalls' | 'preferences'
+export const PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS = 60 * 60
+export const PROJECT_KNOWLEDGE_PAGES: ReadonlyArray<{ id: ProjectKnowledgePageId; title: string; query: string }> = [
+  { id: 'conventions', title: '约定与命令',
+    query: '总结本项目的编码约定、目录与模块分工、构建/测试/运行命令和环境要求。按主题分节，用中文。只写记忆中有依据的内容，没有依据的不写。' },
+  { id: 'decisions', title: '决策与原因',
+    query: '列出本项目已经做出的技术和产品决策，每条写明原因。已被后来的决定取代的，写明新决定并标注旧决定已取代。用中文，只写记忆中有依据的内容。' },
+  { id: 'pitfalls', title: '问题与解决办法',
+    query: '总结本项目遇到过的问题、失败和陷阱，以及解决或避免的办法。区分 DevFlow 运行验证过的结果（HOST_VERIFIED）和 Agent 自己的说法。用中文，只写记忆中有依据的内容。' },
+  { id: 'preferences', title: '用户偏好',
+    query: '总结用户明确表达过的偏好：沟通方式（答复语言、详略、说明顺序）、工作方式和代码风格。只写用户自己说过的，用中文。' },
+]
+export type ProjectKnowledgePage = {
+  id: ProjectKnowledgePageId
+  title: string
+  /** Markdown written by Hindsight; empty until the first refresh that found memories. */
+  content: string
+  refreshedAt?: string
+  /** The latest refresh failed; the previous content is kept. */
+  failedAt?: string
+  /** New memories arrived after the last refresh. */
+  stale: boolean
+}
+export type ProjectKnowledgePages = { projectId: string; pages: ProjectKnowledgePage[]; unavailableReason?: string }
+export type RefreshProjectKnowledgePageInput = { projectId: string; pageId: ProjectKnowledgePageId }
+
 /** Instructions written into the project's memory bank (Hindsight best practice: specific missions). */
 export const PROJECT_MEMORY_MISSIONS = {
   retain: [

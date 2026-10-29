@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
-import type {
-  AgentProviderConfig, ProjectMemoryDocumentStatus, ProjectMemoryKind, ProjectMemoryPage, ProjectMemorySourceKind, ProjectMemoryStatus,
+import {
+  PROJECT_KNOWLEDGE_PAGES,
+  type AgentProviderConfig, type ProjectKnowledgePageId, type ProjectKnowledgePages, type ProjectMemoryDocumentStatus, type ProjectMemoryKind,
+  type ProjectMemoryPage, type ProjectMemorySourceKind, type ProjectMemoryStatus,
 } from '@ai-devflow/shared'
 import { getDesktopApi, type DevFlowDesktopApi } from '../desktop-api'
+import { ConversationBody } from '../ConversationBody'
 
 type Api = Pick<DevFlowDesktopApi, 'getProjectMemoryStatus' | 'configureProjectMemory' | 'listProjectMemories' | 'updateProjectMemory' |
-  'forgetProjectMemory' | 'forgetProjectMemorySource' | 'clearProjectMemory'> & Partial<Pick<DevFlowDesktopApi, 'listAgentProviders'>>
+  'forgetProjectMemory' | 'forgetProjectMemorySource' | 'clearProjectMemory'> &
+  Partial<Pick<DevFlowDesktopApi, 'listAgentProviders' | 'listProjectKnowledgePages' | 'refreshProjectKnowledgePage'>>
 
 const KINDS: Array<{ kind: ProjectMemoryKind; label: string; empty: string }> = [
   { kind: 'observation', label: '观察', empty: '还没有归纳出观察。写入几次讨论或编码记录后会出现。' },
@@ -17,6 +21,7 @@ const STATUS_LABEL: Record<ProjectMemoryDocumentStatus, string> = {
   queued: '等待写入', submitted: '写入中', retained: '已写入', failed: '写入失败', delete_pending: '正在忘记', deleted: '已忘记',
 }
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:8890'
+const time = (iso: string) => new Date(iso).toLocaleString('zh-CN', { hour12: false })
 const message = (reason: unknown, fallback: string) => reason instanceof Error && reason.message ? reason.message.replace(/^Error invoking remote method '[^']+': (Error: )?/u, '') : fallback
 
 /** ADR 0030: one place to switch project memory on or off and to see, edit, delete or clear what it learned. */
@@ -37,11 +42,16 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [listError, setListError] = useState('')
+  const [pages, setPages] = useState<ProjectKnowledgePages>()
+  const [pageId, setPageId] = useState<ProjectKnowledgePageId>('conventions')
+  const [pagesError, setPagesError] = useState('')
+  const [pageNotice, setPageNotice] = useState('')
 
   useEffect(() => {
     let cancelled = false
     setStatus(undefined); setPage(undefined); setError(''); setListError(''); setApiKey(''); setEditing(undefined); setConfirmClear(false)
     setKind('observation'); setSearch(''); setQuery(''); setOffset(0)
+    setPages(undefined); setPagesError(''); setPageNotice(''); setPageId('conventions')
     void api?.getProjectMemoryStatus?.({ projectId }).then((value) => {
       if (cancelled) return
       setStatus(value); setEndpoint(value.endpoint || DEFAULT_ENDPOINT)
@@ -65,6 +75,12 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
     } catch (reason) { setPage(undefined); setListError(message(reason, '无法读取记忆列表。')) }
   }, [api, configured, projectId, kind, query, offset])
   useEffect(() => { void loadPage() }, [loadPage])
+  const loadPages = useCallback(async () => {
+    if (!api?.listProjectKnowledgePages || !configured) return
+    try { setPagesError(''); setPages(await api.listProjectKnowledgePages({ projectId })) }
+    catch (reason) { setPages(undefined); setPagesError(message(reason, '无法读取知识页。')) }
+  }, [api, configured, projectId])
+  useEffect(() => { void loadPages() }, [loadPages])
 
   if (!api?.getProjectMemoryStatus || !api.configureProjectMemory) return null
 
@@ -74,7 +90,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
       const next = await operation()
       if (next) { setStatus(next); if (next.providerId) setProviderId(next.providerId) }
       setApiKey(''); setEditing(undefined); setConfirmClear(false)
-      if (reload) await loadPage()
+      if (reload) { await loadPage(); await loadPages() }
     } catch (reason) { setError(message(reason, '项目记忆操作未完成。')) }
     finally { setBusy(false) }
   }
@@ -83,6 +99,15 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
   const counts = status?.counts ?? {}
   const kindInfo = KINDS.find((item) => item.kind === kind)!
   const pageEnd = page ? page.offset + page.items.length : 0
+  const knowledge = pages?.pages.find((item) => item.id === pageId)
+  async function refreshKnowledgePage(id: ProjectKnowledgePageId) {
+    setBusy(true); setPagesError(''); setPageNotice('')
+    try {
+      setPages(await api!.refreshProjectKnowledgePage!({ projectId, pageId: id }))
+      setPageNotice('已开始整理，通常需要几十秒；完成后点「重新读取」查看。')
+    } catch (reason) { setPagesError(message(reason, '知识页没有开始整理。')) }
+    finally { setBusy(false) }
+  }
 
   return <section className="card stack project-memory-panel" aria-label="项目记忆">
     <div className="row">
@@ -126,6 +151,30 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
       </div>
     </div>}
     {configured && <p className="project-memory-meta">来源：已写入 {counts.retained ?? 0} · 等待 {(counts.queued ?? 0) + (counts.submitted ?? 0)} · 写入失败 {counts.failed ?? 0} · 已忘记 {(counts.deleted ?? 0) + (counts.delete_pending ?? 0)}</p>}
+
+    {configured && api.listProjectKnowledgePages && <div className="stack" aria-label="知识页">
+      <div className="row"><strong>知识页</strong><span className="project-memory-meta">Hindsight 根据记忆自动整理，有新记忆后最多每小时更新一次</span></div>
+      <div className="project-memory-actions" role="tablist" aria-label="知识页列表">
+        {PROJECT_KNOWLEDGE_PAGES.map((item) => <button key={item.id} type="button" role="tab" aria-selected={pageId === item.id}
+          className={pageId === item.id ? 'primary-button' : 'ghost-button'} onClick={() => { setPageId(item.id); setPageNotice('') }}>{item.title}</button>)}
+      </div>
+      {pagesError && <p className="error-note" role="alert">{pagesError}</p>}
+      {knowledge && <article className="agent-evidence-card" aria-label={knowledge.title}>
+        {knowledge.content.trim()
+          ? <ConversationBody message={{ id: `knowledge-${knowledge.id}`, role: 'assistant', text: knowledge.content, format: 'markdown', createdAt: knowledge.refreshedAt ?? '' }} showFormatToggle={false} />
+          : <p className="empty-note">还没有内容。积累了相关记忆后会自动整理；删除或修改记忆后会先清空，再重新整理。</p>}
+        <small className="project-memory-meta">{[knowledge.refreshedAt ? `整理于 ${time(knowledge.refreshedAt)}` : '', knowledge.stale ? '有新记忆，稍后更新' : '',
+          knowledge.failedAt ? '最近一次整理失败，保留上一版' : ''].filter(Boolean).join(' · ')}</small>
+        <div className="project-memory-actions">
+          {api.refreshProjectKnowledgePage && <button type="button" className="ghost-button" disabled={busy || !status?.enabled}
+            onClick={() => void refreshKnowledgePage(knowledge.id)}>立即整理</button>}
+          <button type="button" className="ghost-button" disabled={busy} onClick={() => { setPageNotice(''); void loadPages() }}>重新读取</button>
+          <span className="project-memory-meta">整理会调用模型，计入团队预算。</span>
+        </div>
+        {pageNotice && <p className="project-memory-meta" role="status">{pageNotice}</p>}
+      </article>}
+      {pages?.unavailableReason && <p className="project-memory-meta">{pages.unavailableReason}</p>}
+    </div>}
 
     {configured && <div className="stack" aria-label="已学到的记忆">
       <div className="project-memory-actions" role="tablist" aria-label="记忆类型">

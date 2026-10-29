@@ -6,6 +6,7 @@ import {
   requireAgentProviderName,
   resolveAgentProviderDisplayName,
   parseProviderThinking,
+  PROJECT_KNOWLEDGE_PAGES,
   PROJECT_MEMORY_KINDS,
   PROJECT_MEMORY_MAX_EDIT_BYTES,
   WORK_REQUEST_ID_MAX_LENGTH,
@@ -24,6 +25,8 @@ import type {
   ConfigureProjectMemoryInput,
   ProjectMemoryStatus,
   ClearProjectMemoryInput,
+  ProjectKnowledgePages,
+  RefreshProjectKnowledgePageInput,
   ForgetProjectMemoryInput,
   ForgetProjectMemorySourceInput,
   ListProjectMemoriesInput,
@@ -259,6 +262,8 @@ export const ipcChannels = {
   forgetProjectMemory: 'devflow:project-memory:forget',
   forgetProjectMemorySource: 'devflow:project-memory:forget-source',
   clearProjectMemory: 'devflow:project-memory:clear',
+  listProjectKnowledgePages: 'devflow:project-memory:pages',
+  refreshProjectKnowledgePage: 'devflow:project-memory:refresh-page',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   cancelWorkflowAgentNode: 'devflow:workflow-agent-node:cancel',
   requestClarificationChanges: 'devflow:clarification:changes:request',
@@ -776,6 +781,8 @@ export type DevFlowDesktopApi = {
   forgetProjectMemory?: (input: ForgetProjectMemoryInput) => Promise<ProjectMemoryStatus>
   forgetProjectMemorySource?: (input: ForgetProjectMemorySourceInput) => Promise<ProjectMemoryStatus>
   clearProjectMemory?: (input: ClearProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  listProjectKnowledgePages?: (input: { projectId: string }) => Promise<ProjectKnowledgePages>
+  refreshProjectKnowledgePage?: (input: RefreshProjectKnowledgePageInput) => Promise<ProjectKnowledgePages>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
@@ -1394,6 +1401,13 @@ export function parseClearProjectMemoryInput(value: unknown): ClearProjectMemory
   rejectUnexpectedFields(value, ['projectId', 'confirm'], 'project Memory clear payload')
   if (value.confirm !== 'clear') throw new Error('Clearing project Memory requires explicit confirmation')
   return { projectId: readExactRequiredIdentifier(value, 'projectId'), confirm: 'clear' }
+}
+export function parseRefreshProjectKnowledgePageInput(value: unknown): RefreshProjectKnowledgePageInput {
+  if (!isRecord(value)) throw new Error('Invalid knowledge page payload')
+  rejectUnexpectedFields(value, ['projectId', 'pageId'], 'knowledge page payload')
+  const page = PROJECT_KNOWLEDGE_PAGES.find((item) => item.id === value.pageId)
+  if (!page) throw new Error('Invalid knowledge page id')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), pageId: page.id }
 }
 
 /** `runtimeId` is optional: omitted selects the project-wide Memory view (ADR 0024). */

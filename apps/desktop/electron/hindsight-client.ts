@@ -14,6 +14,10 @@ export type HindsightClient = ReturnType<typeof createHindsightClient>
 export type HindsightMemory = {
   id: string; text: string; type: 'observation' | 'world' | 'experience'; documentId?: string; occurredAt?: string
 }
+export type HindsightMentalModelDefinition = {
+  id: string; name: string; sourceQuery: string; maxTokens: number; trigger: Record<string, unknown>
+}
+export type HindsightMentalModel = { id: string; content: string; stale: boolean; refreshedAt?: string; failedAt?: string }
 
 export class HindsightError extends Error {
   constructor(readonly code: 'timeout' | 'transport' | 'protocol' | 'http', readonly status?: number) {
@@ -219,6 +223,52 @@ export function createHindsightClient(input: {
         const result = await request('DELETE', bankPath(bank), undefined, undefined, 10_000)
         if (result.success !== true) throw new HindsightError('protocol')
       } catch (error) { if (!(error instanceof HindsightError && error.status === 404)) throw error }
+    },
+    /**
+     * Creates a knowledge page (mental model) or brings an existing one up to this definition.
+     * In a bank without memories the first refresh finds nothing and makes no model call.
+     */
+    async ensureMentalModel(bank: string, page: HindsightMentalModelDefinition) {
+      const path = `${bankPath(bank)}/mental-models/${encodeURIComponent(page.id)}`
+      const body = { name: page.name, source_query: page.sourceQuery, max_tokens: page.maxTokens, trigger: page.trigger }
+      let existing: Record<string, unknown> | undefined
+      try { existing = await request('GET', path) }
+      catch (error) { if (!(error instanceof HindsightError && error.status === 404)) throw error }
+      if (!existing) {
+        const created = await request('POST', `${bankPath(bank)}/mental-models`, { id: page.id, ...body, tags: [] }, undefined, 10_000)
+        if (created.mental_model_id !== page.id) throw new HindsightError('protocol')
+        return
+      }
+      const trigger = existing.trigger && typeof existing.trigger === 'object' ? existing.trigger as Record<string, unknown> : {}
+      if (existing.name !== page.name || existing.source_query !== page.sourceQuery || existing.max_tokens !== page.maxTokens ||
+          Object.entries(page.trigger).some(([key, value]) => !isDeepStrictEqual(trigger[key], value))) {
+        await request('PATCH', path, body, undefined, 10_000)
+      }
+    },
+    /** The bank's knowledge pages with their markdown content; reading them makes no model call. */
+    async listMentalModels(bank: string): Promise<HindsightMentalModel[]> {
+      const page = await request('GET', `${bankPath(bank)}/mental-models?detail=content&limit=100`, undefined, undefined, 5_000)
+      if (!Array.isArray(page.items) || page.items.length > 100) throw new HindsightError('protocol')
+      const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : undefined
+      return page.items.flatMap((value): HindsightMentalModel[] => {
+        const item = object(value)
+        if (typeof item.id !== 'string' || !/^[a-z0-9-]{1,100}$/u.test(item.id) || (item.content != null && typeof item.content !== 'string') ||
+            Buffer.byteLength(String(item.content ?? '')) > 64 * 1024) return []
+        const refreshedAt = time(item.last_refreshed_at); const failedAt = time(item.last_refresh_failed_at)
+        return [{ id: item.id, content: String(item.content ?? ''), stale: item.is_stale === true,
+          ...(refreshedAt ? { refreshedAt } : {}), ...(failedAt ? { failedAt } : {}) }]
+      })
+    },
+    /** Empties a page without a model call; the next refresh writes it again from scratch. A missing page is already empty. */
+    async clearMentalModel(bank: string, id: string) {
+      try { await request('POST', `${bankPath(bank)}/mental-models/${encodeURIComponent(id)}/clear`, {}, undefined, 5_000) }
+      catch (error) { if (!(error instanceof HindsightError && error.status === 404)) throw error }
+    },
+    /** Starts a refresh: a reflect run that rewrites the page, charged like any extraction call. */
+    async refreshMentalModel(bank: string, id: string): Promise<string> {
+      const result = await request('POST', `${bankPath(bank)}/mental-models/${encodeURIComponent(id)}/refresh`, {}, undefined, 10_000)
+      if (typeof result.operation_id !== 'string' || !result.operation_id) throw new HindsightError('protocol')
+      return result.operation_id
     },
     async recall(bank: string, query: string, signal?: AbortSignal): Promise<HindsightCandidate[]> {
       // Local CPU reranking of a stage summary can exceed the short control-request

@@ -60,6 +60,7 @@ import {
   parseConfigureProjectMemoryInput,
   parseProjectMemoryProjectInput,
   parseClearProjectMemoryInput,
+  parseRefreshProjectKnowledgePageInput,
   parseForgetProjectMemoryInput,
   parseForgetProjectMemorySourceInput,
   parseListProjectMemoriesInput,
@@ -1300,6 +1301,12 @@ describe('project memory IPC boundaries', () => {
       expect(() => parseConfigureProjectMemoryInput({ ...input, ...extra })).toThrow()
     }
     expect(() => parseProjectMemoryProjectInput({ projectId: 'project-1', bankId: 'df-memory-x' })).toThrow()
+  })
+  it('refreshes only a known knowledge page of the named project', () => {
+    expect(parseRefreshProjectKnowledgePageInput({ projectId: 'project-1', pageId: 'decisions' })).toEqual({ projectId: 'project-1', pageId: 'decisions' })
+    for (const extra of [{ pageId: 'devflow-decisions' }, { pageId: undefined }, { bankId: 'df-memory-x' }, { projectId: '' }]) {
+      expect(() => parseRefreshProjectKnowledgePageInput({ projectId: 'project-1', pageId: 'decisions', ...extra })).toThrow()
+    }
   })
   it('bounds memory page requests and requires explicit confirmation to clear', () => {
     expect(parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'observation', query: ' 撤销 ', offset: 50 }))
