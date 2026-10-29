@@ -21,6 +21,6 @@
     "scripts/hindsight-todo-fixture.ts",
     "scripts/hindsight-todo-evaluation.ts",
     "scripts/hindsight-todo-live-evaluation.mts",
-    "scripts/automatic-memory-electron-smoke.mts"
+    "scripts/project-memory-live-validation.mts"
   ]
 }

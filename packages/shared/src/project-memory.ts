@@ -12,7 +12,9 @@ export const PROJECT_MEMORY_MAX_DOCUMENT_BYTES = 48 * 1024
 export const PROJECT_MEMORY_CONVERSATION_IDLE_MS = 3 * 60_000
 export const PROJECT_MEMORY_MAX_RETAIN_ATTEMPTS = 3
 
-export type ProjectMemorySourceKind = 'conversation' | 'coding_run' | 'artifact'
+/** `legacy`: the Memory an earlier DevFlow version kept locally, copied in once per bank. */
+export type ProjectMemorySourceKind = 'conversation' | 'coding_run' | 'artifact' | 'legacy'
+export const PROJECT_MEMORY_SOURCE_KINDS: readonly ProjectMemorySourceKind[] = ['conversation', 'coding_run', 'artifact', 'legacy']
 export type ProjectMemoryDocumentStatus = 'queued' | 'submitted' | 'retained' | 'failed' | 'delete_pending' | 'deleted'
 
 export type ProjectMemoryPairingBinding = {
@@ -141,7 +143,7 @@ export const PROJECT_MEMORY_MISSIONS = {
 
 const DOCUMENT_ID = /^[a-z][a-z0-9_-]{0,40}:[A-Za-z0-9._:-]{1,200}$/u
 export function isValidProjectMemoryDocumentInput(input: ProjectMemoryDocumentInput): boolean {
-  return DOCUMENT_ID.test(input.documentId) && ['conversation', 'coding_run', 'artifact'].includes(input.sourceKind) &&
+  return DOCUMENT_ID.test(input.documentId) && PROJECT_MEMORY_SOURCE_KINDS.includes(input.sourceKind) &&
     Boolean(input.sourceId) && input.sourceId.length <= 200 && Boolean(input.title.trim()) && input.title.length <= 300 &&
     Boolean(input.payload.trim()) && utf8ByteLength(input.payload) <= PROJECT_MEMORY_MAX_DOCUMENT_BYTES &&
     Boolean(input.context.trim()) && input.context.length <= 1_000 && input.tags.length <= 8 &&

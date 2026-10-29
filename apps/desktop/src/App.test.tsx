@@ -1916,13 +1916,17 @@ describe('App', () => {
   it('keeps Runtime and Coordination in one default-collapsed 设置／高级 area and Memory on the knowledge page', async () => {
     const listAgentRuntimes = vi.fn().mockResolvedValue([])
     const listCoordinationSessions = vi.fn().mockResolvedValue([])
-    const api = installDesktopApi({ listAgentRuntimes, listCoordinationSessions })
+    const projectMemoryStatus = { projectId: localProject.id, configured: false, enabled: false, transportAvailable: true, pairedProject: false,
+      endpoint: '', providerId: null, bankId: null, counts: {}, recent: [],
+      relay: { port: 8891, running: true, tokenFile: '/tmp/memory-relay-token', hindsightBaseUrl: 'http://host.docker.internal:8891/v1' } }
+    const api = installDesktopApi({ listAgentRuntimes, listCoordinationSessions,
+      getProjectMemoryStatus: vi.fn().mockResolvedValue(projectMemoryStatus), configureProjectMemory: vi.fn().mockResolvedValue(projectMemoryStatus) })
     render(<App />)
 
     await waitForLocalStateLoaded(api.loadState)
-    // Memory management moved to 知识 (plan §4.1, Y3).
+    // Memory management moved to 知识 (plan §4.1, Y3); project memory is the only memory (ADR 0030).
     clickPrimaryNav('知识')
-    expect(within(screen.getByTestId('knowledge-memory-section')).getByRole('region', { name: 'Agent Memory 生命周期' }))
+    expect(await within(screen.getByTestId('knowledge-memory-section')).findByRole('region', { name: '项目记忆' }))
       .toBeInTheDocument()
 
     const workbench = openSettingsSection('高级')
@@ -1952,8 +1956,7 @@ describe('App', () => {
       .toBeInTheDocument()
   })
 
-  it('shows project memory on the knowledge page for a project without a Run, with local Memory collapsed', async () => {
-    const automaticStatus = { projectId: localProject.id, configuration: null, endpoint: 'http://127.0.0.1:8888', jobs: [], decisions: [] }
+  it('shows project memory on the knowledge page for a project without a Run, and no local Memory', async () => {
     const hindsightStatus = { configured: false, enabled: false, transportAvailable: true,
       endpoint: 'http://127.0.0.1:8888', selectedPaths: [], includeMemories: false, counts: {}, note: '未配置项目 Hindsight。' }
     const projectMemoryStatus = { projectId: localProject.id, configured: false, enabled: false, transportAvailable: true, pairedProject: false,
@@ -1963,10 +1966,6 @@ describe('App', () => {
       loadState: vi.fn().mockResolvedValue(desktopState({ projects: [localProject] })),
       getProjectMemoryStatus: vi.fn().mockResolvedValue(projectMemoryStatus),
       configureProjectMemory: vi.fn().mockResolvedValue(projectMemoryStatus),
-      getAutomaticMemoryStatus: vi.fn().mockResolvedValue(automaticStatus),
-      configureAutomaticMemory: vi.fn().mockResolvedValue(automaticStatus),
-      processAutomaticMemory: vi.fn().mockResolvedValue(automaticStatus),
-      resolveAutomaticMemoryDecision: vi.fn().mockResolvedValue(automaticStatus),
       getHindsightStatus: vi.fn().mockResolvedValue(hindsightStatus),
       configureHindsight: vi.fn().mockResolvedValue(hindsightStatus),
       refreshHindsight: vi.fn().mockResolvedValue(hindsightStatus),
@@ -1978,11 +1977,10 @@ describe('App', () => {
     const panel = screen.getByTestId('knowledge-memory-section')
     expect(await within(panel).findByRole('region', { name: '项目记忆' })).toBeInTheDocument()
     expect(api.getProjectMemoryStatus).toHaveBeenCalledWith({ projectId: localProject.id })
-    // ADR 0030: no candidate queue; local Memory stays readable, collapsed, until it is migrated.
+    // ADR 0030: project memory is the only memory; earlier local Memory is copied into it.
     expect(within(panel).queryByRole('region', { name: '自动积累经验' })).not.toBeInTheDocument()
-    expect(within(panel).getByTestId('legacy-memory')).not.toHaveAttribute('open')
-    await waitFor(() => expect(api.listAgentMemoryLifecycle).toHaveBeenCalledWith({ localProjectId: localProject.id }))
-    expect(api.getAutomaticMemoryStatus).not.toHaveBeenCalled()
+    expect(within(panel).queryByTestId('legacy-memory')).not.toBeInTheDocument()
+    expect(api.listAgentMemoryLifecycle).not.toHaveBeenCalled()
     expect(await screen.findByRole('region', { name: 'Hindsight 知识与记忆' })).toBeInTheDocument()
     expect(api.getHindsightStatus).toHaveBeenCalledWith({ projectId: localProject.id })
   })

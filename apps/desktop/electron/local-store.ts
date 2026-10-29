@@ -6,12 +6,9 @@ import { validateConversationContext } from './conversation-context.js'
 import { buildCriticalContext, buildNativeCriticalContext, receiptIsCurrent } from './conversation-critical-context.js'
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
-import { codingRunPolicyAuthorityDigest, isAllowedCodingRunPolicyPromotion } from './coding-run-memory-policy.js'
-import { classifyMemoryLearningFact, type AutomaticMemoryExistingMemory } from './automatic-memory-policy'
-import { applyMemoryLearningDecision, type CommitMemoryLearningDecisionInput, type CommitMemoryLearningDecisionResult } from './automatic-memory-host'
+import { isAllowedCodingRunPolicyPromotion } from './coding-run-memory-policy.js'
 import { listActiveAgentMemoryRevisions } from './agent-memory-authority'
 import { verifiedMemoryTestCommand } from './verified-memory-command'
-import { isMemoryLearningSourceCurrent, captureConversationMemory, captureCodingMemory, captureArtifactMemory, captureReviewMemory } from './automatic-memory-capture'
 import { resolveRemoteApprovalMaterial } from './gate-command-material.js'
 import type { RecordAgentReviewFeedbackInput } from '@ai-devflow/shared'
 import type { CodingProviderCallTrace } from './coding-engine.js'
@@ -21,7 +18,6 @@ import * as hindsight from './hindsight-store'
 import * as projectMemory from './project-memory-store'
 import { captureApprovalProjectMemory, captureCodingRunProjectMemory, captureConversationProjectMemory, captureReviewResultProjectMemory } from './project-memory-capture'
 import * as automaticMemory from './automatic-memory-store'
-import type { AutomaticMemoryConfigurationInput, AutomaticMemoryEventInput, AutomaticMemoryFact, AutomaticMemoryDecision } from '@ai-devflow/shared'
 import type { HindsightConfiguration, HindsightConfigurationInput, HindsightProjection, HindsightSourceInput, HindsightClaim, HindsightSettlement } from './hindsight-store'
 import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
 import { parseProviderThinking, resolveProviderThinking, type UpdateProviderThinkingInput } from '@ai-devflow/shared'
@@ -164,7 +160,6 @@ import {
   type AgentEvent,
   type AgentMemoryCandidate,
   type AgentMemoryCodingRunProvenance,
-  type AgentMemoryLearningEventProvenance,
   type AgentMemoryObservationProvenance,
   agentMemoryCandidateSourceRuntimeId,
   type AgentMemoryDeletionAuthority,
@@ -834,27 +829,6 @@ export type LocalProjectMemoryPrincipalResult =
   | { status: 'ambiguous' | 'project_not_found' }
 
 export type LocalStore = {
-  commitMemoryLearningDecision(input: CommitMemoryLearningDecisionInput): Promise<CommitMemoryLearningDecisionResult>
-  retireMemoryLearningConflict(input: { decisionId: string; replacementMemoryId: string; targetMemoryId: string; expectedRevision: number }): Promise<void>
-  getAutomaticMemoryConfiguration(projectId: string): Promise<ReturnType<typeof automaticMemory.getAutomaticMemoryConfiguration>>
-  listAutomaticMemoryConfigurations(): Promise<ReturnType<typeof automaticMemory.listAutomaticMemoryConfigurations>>
-  configureAutomaticMemory(input: AutomaticMemoryConfigurationInput): Promise<ReturnType<typeof automaticMemory.configureAutomaticMemory>>
-  enqueueMemoryLearningEvent(input: AutomaticMemoryEventInput): Promise<ReturnType<typeof automaticMemory.enqueueMemoryLearningEvent>>
-  recordManualMemoryLearningEvent(input: AutomaticMemoryEventInput, statement: string, pin: boolean): Promise<AutomaticMemoryDecision>
-  getMemoryLearningEvent(eventId: string): Promise<ReturnType<typeof automaticMemory.getMemoryLearningEvent>>
-  getMemoryLearningFact(eventId: string, factId: string): Promise<ReturnType<typeof automaticMemory.getMemoryLearningFact>>
-  getMemoryLearningDecision(decisionId: string): Promise<ReturnType<typeof automaticMemory.getMemoryLearningDecision>>
-  listMemoryLearningJobs(projectId?: string): Promise<ReturnType<typeof automaticMemory.listMemoryLearningJobs>>
-  listMemoryLearningFacts(eventId: string): Promise<ReturnType<typeof automaticMemory.listMemoryLearningFacts>>
-  listMemoryLearningDecisions(projectId?: string): Promise<ReturnType<typeof automaticMemory.listMemoryLearningDecisions>>
-  claimMemoryLearningJob(now: string): Promise<ReturnType<typeof automaticMemory.claimMemoryLearningJob>>
-  settleMemoryLearningJob(id: string, leaseToken: string, result: automaticMemory.MemoryLearningSettlement, now: string, error?: string): Promise<void>
-  recordMemoryLearningExtraction(id: string, leaseToken: string, facts: AutomaticMemoryFact[]): Promise<boolean>
-  recordMemoryLearningDecisions(id: string, leaseToken: string, decisions: AutomaticMemoryDecision[]): Promise<boolean>
-  refreshMemoryLearningDecision(decision: AutomaticMemoryDecision): Promise<boolean>
-  resolveMemoryLearningDecision(decisionId: string, resolution: 'saved' | 'dismissed', memoryId?: string): Promise<void>
-  revokeMemoryLearningEvent(eventId: string, reason: string): Promise<void>
-  recoverMemoryLearningJobs(): Promise<void>
   resolveLocalProjectMemoryPrincipal(projectId: string): Promise<LocalProjectMemoryPrincipalResult>
   getHindsightConfiguration(projectId: string): Promise<HindsightConfiguration | null>
   getProjectMemoryConfiguration(projectId: string): Promise<ProjectMemoryConfiguration | null>
@@ -4714,177 +4688,6 @@ class SqlJsLocalStore implements LocalStore {
     projectMemory.completeProjectMemoryBankDeletion(this.db, projectId, bankId)
     await this.persist()
   }
-  async getAutomaticMemoryConfiguration(projectId: string): Promise<ReturnType<typeof automaticMemory.getAutomaticMemoryConfiguration>> {
-    const result = automaticMemory.getAutomaticMemoryConfiguration(this.db, projectId)
-    return result
-  }
-
-  async commitMemoryLearningDecision(input: CommitMemoryLearningDecisionInput): Promise<CommitMemoryLearningDecisionResult> {
-    const result = await applyMemoryLearningDecision(this, input)
-    await this.persist()
-    return result
-  }
-
-  /** A confirmed replacement retires exactly one head. It is not a request to forget its source event. */
-  async retireMemoryLearningConflict(input: { decisionId: string; replacementMemoryId: string; targetMemoryId: string; expectedRevision: number }): Promise<void> {
-    const decision = automaticMemory.getMemoryLearningDecision(this.db, input.decisionId)
-    const event = decision && automaticMemory.getMemoryLearningEvent(this.db, decision.eventId)
-    const target = await this.getAgentMemoryHead(input.targetMemoryId)
-    const replacement = await this.getAgentMemoryHead(input.replacementMemoryId)
-    const revision = replacement && (await this.listAgentMemoryRevisions(replacement.memoryId)).find(item => item.revision === replacement.currentRevision)
-    const sourceValue = revision ? selectAgentMemoryCandidate(this.db, revision.sourceCandidateId) : undefined
-    const source = sourceValue === undefined ? null : await parseAgentMemoryCandidate(sourceValue)
-    const sameScope = (left: KnowledgeRetrievalScope, right: KnowledgeRetrievalScope) => left.kind === right.kind &&
-      left.localProjectId === right.localProjectId && left.userId === right.userId && left.organizationId === right.organizationId &&
-      left.projectId === right.projectId && (left.kind === 'local' || left.sessionId === right.sessionId)
-    if (!decision || decision.disposition !== 'conflict' || decision.resolution === 'dismissed' || !event || event.revoked ||
-        decision.conflictsWith?.length !== 1 || !decision.conflictsWith.some(item => item.memoryId === input.targetMemoryId && item.revision === input.expectedRevision) ||
-        input.targetMemoryId === input.replacementMemoryId || !target || target.status !== 'active' || target.currentRevision !== input.expectedRevision ||
-        !replacement || replacement.status !== 'active' || !revision || revision.status !== 'active' ||
-        revision.promotionActorKind !== 'human' || revision.promotionActorId !== event.scope.userId || revision.promotionDecisionId !== decision.id ||
-        revision.statement !== decision.statement || !sameScope(target.scope, event.scope) || !sameScope(replacement.scope, event.scope) ||
-        source?.provenance.kind !== 'learning_event' || source.provenance.eventId !== event.id || source.provenance.factId !== decision.factId ||
-        (await this.checkLearningEventMemoryCandidateSource(source, source.provenance)) !== 'ok' ||
-        await this.getAgentMemoryTombstone(input.replacementMemoryId)) throw new Error('Memory replacement is stale or unauthorized')
-    const retiredAt = new Date(Math.max(Date.now(), Date.parse(target.updatedAt), Date.parse(revision.createdAt))).toISOString()
-    this.db.run("update agent_memory_heads set status='expired', version=version+1, updated_at=? where memory_id=? and version=? and status='active'",
-      [retiredAt, target.memoryId, target.version])
-    if (this.db.getRowsModified() !== 1) throw new Error('Memory replacement CAS was lost')
-    const metadata = { reason: 'confirmed_replacement', decisionId: decision.id, replacementMemoryId: replacement.memoryId }
-    this.db.run(`insert into agent_memory_audits (
-      id, memory_id, revision, local_project_id, scope_kind, organization_id, team_project_id,
-      user_id, session_id, event_kind, actor_kind, actor_id, authority_digest, state_version, metadata_json, created_at
-    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'memory_expired', 'human', ?, ?, 1, ?, ?)`,
-    [`memory-replaced-${sha256Canonical([decision.id, target.memoryId])}`, target.memoryId, target.currentRevision,
-      target.scope.localProjectId, target.scope.kind, target.scope.organizationId, target.scope.projectId, target.scope.userId,
-      target.scope.sessionId, event.scope.userId, revision.promotionAuthorityDigest, JSON.stringify(metadata), retiredAt])
-    await this.enqueueCanonicalAgentMemoryProjection(target.memoryId, retiredAt)
-    await this.persist()
-  }
-
-  async listAutomaticMemoryConfigurations(): Promise<ReturnType<typeof automaticMemory.listAutomaticMemoryConfigurations>> {
-    const result = automaticMemory.listAutomaticMemoryConfigurations(this.db)
-    return result
-  }
-
-  async configureAutomaticMemory(input: AutomaticMemoryConfigurationInput): Promise<ReturnType<typeof automaticMemory.configureAutomaticMemory>> {
-    const pairing = await this.getDesktopPairingCredential()
-    const paired = pairing?.localProjectId === input.projectId
-    const principal = paired ? null : await this.resolveLocalProjectMemoryPrincipal(input.projectId)
-    const currentHindsight = hindsight.getHindsightConfiguration(this.db, input.projectId)
-    if ((paired ? pairing.userId !== input.ownerUserId : principal?.status !== 'resolved' || principal.userId !== input.ownerUserId) ||
-        !currentHindsight || currentHindsight.generation !== input.hindsightGeneration ||
-        currentHindsight.ownerUserId !== input.ownerUserId || !hindsight.hindsightPairingMatches(currentHindsight, pairing) ||
-        (input.enabled && !currentHindsight.enabled) ||
-        (input.pairingSessionId !== undefined && (!paired || input.pairingSessionId !== pairing.tokenId))) {
-      throw new Error('Automatic memory scope is not authorized')
-    }
-    const result = automaticMemory.configureAutomaticMemory(this.db, {
-      ...input, ...(paired ? { pairingSessionId: pairing.tokenId } : {}),
-    })
-    await this.persist()
-    return result
-  }
-
-  async enqueueMemoryLearningEvent(input: AutomaticMemoryEventInput): Promise<ReturnType<typeof automaticMemory.enqueueMemoryLearningEvent>> {
-    if (!(await isMemoryLearningSourceCurrent(this, input))) return null
-    const result = automaticMemory.enqueueMemoryLearningEvent(this.db, input)
-    await this.persist()
-    return result
-  }
-
-  async recordManualMemoryLearningEvent(input: AutomaticMemoryEventInput, statement: string, pin: boolean): Promise<AutomaticMemoryDecision> {
-    if (!(await isMemoryLearningSourceCurrent(this, input))) throw new Error('Manual memory source is stale')
-    const pairing = await this.getDesktopPairingCredential()
-    if (input.scope.kind === 'team') {
-      if (!agentMemoryScopeMatchesPairing(input.scope, pairing)) throw new Error('Manual memory scope is not authorized')
-    } else {
-      const principal = await this.resolveLocalProjectMemoryPrincipal(input.scope.localProjectId)
-      if (pairing?.localProjectId === input.scope.localProjectId || principal.status !== 'resolved' || principal.userId !== input.scope.userId) {
-        throw new Error('Manual memory scope is not authorized')
-      }
-    }
-    const result = automaticMemory.recordManualMemoryLearningEvent(this.db, input, statement, pin)
-    await this.persist()
-    return result
-  }
-
-  async getMemoryLearningEvent(eventId: string): Promise<ReturnType<typeof automaticMemory.getMemoryLearningEvent>> {
-    const result = automaticMemory.getMemoryLearningEvent(this.db, eventId)
-    return result
-  }
-
-  async getMemoryLearningFact(eventId: string, factId: string): Promise<ReturnType<typeof automaticMemory.getMemoryLearningFact>> {
-    const result = automaticMemory.getMemoryLearningFact(this.db, eventId, factId)
-    return result
-  }
-
-  async getMemoryLearningDecision(decisionId: string): Promise<ReturnType<typeof automaticMemory.getMemoryLearningDecision>> {
-    const result = automaticMemory.getMemoryLearningDecision(this.db, decisionId)
-    return result
-  }
-
-  async listMemoryLearningJobs(projectId?: string): Promise<ReturnType<typeof automaticMemory.listMemoryLearningJobs>> {
-    const result = automaticMemory.listMemoryLearningJobs(this.db, projectId)
-    return result
-  }
-
-  async listMemoryLearningFacts(eventId: string): Promise<ReturnType<typeof automaticMemory.listMemoryLearningFacts>> {
-    const result = automaticMemory.listMemoryLearningFacts(this.db, eventId)
-    return result
-  }
-
-  async listMemoryLearningDecisions(projectId?: string): Promise<ReturnType<typeof automaticMemory.listMemoryLearningDecisions>> {
-    const result = automaticMemory.listMemoryLearningDecisions(this.db, projectId)
-    return result
-  }
-
-  async claimMemoryLearningJob(now: string): Promise<ReturnType<typeof automaticMemory.claimMemoryLearningJob>> {
-    const result = automaticMemory.claimMemoryLearningJob(this.db, now)
-    await this.persist()
-    return result
-  }
-
-  async settleMemoryLearningJob(id: string, leaseToken: string, result: automaticMemory.MemoryLearningSettlement, now: string, error?: string): Promise<ReturnType<typeof automaticMemory.settleMemoryLearningJob>> {
-    automaticMemory.settleMemoryLearningJob(this.db, id, leaseToken, result, now, error)
-    await this.persist()
-  }
-
-  async recordMemoryLearningExtraction(id: string, leaseToken: string, facts: AutomaticMemoryFact[]): Promise<ReturnType<typeof automaticMemory.recordMemoryLearningExtraction>> {
-    const result = automaticMemory.recordMemoryLearningExtraction(this.db, id, leaseToken, facts)
-    await this.persist()
-    return result
-  }
-
-  async recordMemoryLearningDecisions(id: string, leaseToken: string, decisions: AutomaticMemoryDecision[]): Promise<ReturnType<typeof automaticMemory.recordMemoryLearningDecisions>> {
-    const result = automaticMemory.recordMemoryLearningDecisions(this.db, id, leaseToken, decisions)
-    await this.persist()
-    return result
-  }
-
-  async refreshMemoryLearningDecision(decision: AutomaticMemoryDecision): Promise<boolean> {
-    const result = automaticMemory.refreshMemoryLearningDecision(this.db, decision)
-    await this.persist()
-    return result
-  }
-
-  async resolveMemoryLearningDecision(decisionId: string, resolution: 'saved' | 'dismissed', memoryId?: string): Promise<ReturnType<typeof automaticMemory.resolveMemoryLearningDecision>> {
-    const result = automaticMemory.resolveMemoryLearningDecision(this.db, decisionId, resolution, memoryId)
-    await this.persist()
-    return result
-  }
-
-  async revokeMemoryLearningEvent(eventId: string, reason: string): Promise<ReturnType<typeof automaticMemory.revokeMemoryLearningEvent>> {
-    const result = automaticMemory.revokeMemoryLearningEvent(this.db, eventId, reason)
-    await this.persist()
-    return result
-  }
-
-  async recoverMemoryLearningJobs(): Promise<ReturnType<typeof automaticMemory.recoverMemoryLearningJobs>> {
-    const result = automaticMemory.recoverMemoryLearningJobs(this.db)
-    await this.persist()
-    return result
-  }
 
   private get conversationContent() { return new ConversationContentStore(`${this.dbPath}.contents`) }
 
@@ -4925,7 +4728,6 @@ class SqlJsLocalStore implements LocalStore {
     this.db.run(`insert into workbench_conversations (id, local_project_id, version, updated_at, json) values (?, ?, ?, ?, ?)
       on conflict(id) do update set version = excluded.version, updated_at = excluded.updated_at, json = excluded.json`,
       [conversation.id, conversation.localProjectId, conversation.version, conversation.updatedAt, JSON.stringify(stored)])
-    await captureConversationMemory(this, conversation, previous)
     await captureConversationProjectMemory(this, conversation, previous)
     await this.persist()
     return true
@@ -5023,11 +4825,12 @@ class SqlJsLocalStore implements LocalStore {
     if (!localProjectExists) {
       return { committed: false, reason: 'source_not_found' }
     }
+    // ADR 0030 removed the automatic learning pipeline; its candidates are no longer accepted.
     const sourceCheck = candidate.provenance.kind === 'agent_observation'
       ? this.checkObservationMemoryCandidateSource(candidate, candidate.provenance)
       : candidate.provenance.kind === 'coding_run'
         ? await this.checkCodingRunMemoryCandidateSource(candidate, candidate.provenance)
-        : await this.checkLearningEventMemoryCandidateSource(candidate, candidate.provenance)
+        : 'source_not_found'
     if (sourceCheck !== 'ok') {
       return { committed: false, reason: sourceCheck }
     }
@@ -5089,84 +4892,6 @@ class SqlJsLocalStore implements LocalStore {
       Date.parse(candidate.createdAt) < Date.parse(observation.createdAt)
     ) return 'source_not_found'
     return 'ok'
-  }
-
-  private async checkLearningEventMemoryCandidateSource(
-    candidate: AgentMemoryCandidate,
-    provenance: AgentMemoryLearningEventProvenance,
-  ): Promise<'ok' | 'source_not_found' | 'scope_mismatch'> {
-    const event = automaticMemory.getMemoryLearningEvent(this.db, provenance.eventId)
-    const fact = automaticMemory.getMemoryLearningFact(this.db, provenance.eventId, provenance.factId)
-    const decision = automaticMemory.listMemoryLearningDecisions(this.db, candidate.scope.localProjectId)
-      .find((item) => item.eventId === provenance.eventId && item.factId === provenance.factId &&
-        item.statementKind === provenance.statementKind && item.statement === candidate.statement &&
-        item.resolution !== 'dismissed')
-    if (!event || !fact || !decision || event.revoked || event.sourceDigest !== provenance.sourceDigest ||
-        fact.sourceDigest !== event.sourceDigest ||
-        fact.contentDigest !== automaticMemory.automaticMemoryDigest(fact.text) ||
-        Date.parse(candidate.createdAt) < Date.parse(fact.extractedAt)) return 'source_not_found'
-    if (!stableJsonMatches(event.scope, candidate.scope)) return 'scope_mismatch'
-    if (!(await isMemoryLearningSourceCurrent(this, event))) return 'source_not_found'
-    try {
-      if (automaticMemory.memoryLearningSourceDigest(event) !== event.sourceDigest) return 'source_not_found'
-    } catch { return 'source_not_found' }
-    const pairing = await this.getDesktopPairingCredential()
-    const principal = candidate.scope.kind === 'local'
-      ? await this.resolveLocalProjectMemoryPrincipal(candidate.scope.localProjectId) : null
-    if (event.sourceKind === 'manual_remember') {
-      if (event.generation !== 'manual-local' || !event.manualRequest || !decision.manual ||
-          event.manualRequest.statement !== candidate.statement || event.manualRequest.pin !== decision.pin ||
-          fact.remoteFactId !== `manual:${event.sourceId}` || fact.documentId !== `manual:${event.id}`) return 'source_not_found'
-      return candidate.scope.kind === 'local'
-        ? principal?.status === 'resolved' && principal.userId === candidate.scope.userId && pairing?.localProjectId !== candidate.scope.localProjectId ? 'ok' : 'scope_mismatch'
-        : agentMemoryScopeMatchesPairing(candidate.scope, pairing) ? 'ok' : 'scope_mismatch'
-    }
-    const config = automaticMemory.getAutomaticMemoryConfiguration(this.db, candidate.scope.localProjectId)
-    const hConfig = hindsight.getHindsightConfiguration(this.db, candidate.scope.localProjectId)
-    if (!config?.enabled || config.generation !== event.generation || config.ownerUserId !== candidate.scope.userId ||
-        !hConfig?.enabled || hConfig.generation !== config.hindsightGeneration ||
-        !hindsight.hindsightPairingMatches(hConfig, pairing) ||
-        (candidate.scope.kind === 'local'
-          ? principal?.status !== 'resolved' || principal.userId !== candidate.scope.userId || config.pairingSessionId !== undefined
-          : !agentMemoryScopeMatchesPairing(candidate.scope, pairing) || config.pairingSessionId !== candidate.scope.sessionId)) return 'scope_mismatch'
-    return 'ok'
-  }
-
-  /** Recompute the bounded policy from stored evidence, never from the caller's disposition. */
-  private async isAllowedLearningEventPolicyPromotion(
-    candidate: AgentMemoryCandidate, authority: AgentMemoryPromotionAuthority,
-  ): Promise<boolean> {
-    if (candidate.provenance.kind !== 'learning_event' || authority.actorKind !== 'policy' ||
-        authority.actorId !== 'automatic-memory-v1' || authority.policyId !== 'automatic-memory-v1' ||
-        authority.policyVersion !== 1 || authority.visibility !== 'user_project' || authority.sensitivity !== 'private' ||
-        authority.retentionClass !== 'thirty_days' ||
-        authority.expiresAt !== new Date(Date.parse(authority.decidedAt) + 30 * 86_400_000).toISOString() ||
-        (await this.checkLearningEventMemoryCandidateSource(candidate, candidate.provenance)) !== 'ok') return false
-    const { authorityDigest, ...unsigned } = authority
-    if (authorityDigest !== codingRunPolicyAuthorityDigest(unsigned)) return false
-    const decision = automaticMemory.getMemoryLearningDecision(this.db, authority.decisionId)
-    const event = automaticMemory.getMemoryLearningEvent(this.db, candidate.provenance.eventId)
-    const fact = automaticMemory.getMemoryLearningFact(this.db, candidate.provenance.eventId, candidate.provenance.factId)
-    if (!event || !fact || !decision || decision.resolution === 'dismissed' || decision.disposition !== 'auto_save' ||
-        decision.eventId !== event.id || decision.factId !== fact.id || decision.statement !== candidate.statement ||
-        decision.statementKind !== candidate.provenance.statementKind) return false
-    const existing: AutomaticMemoryExistingMemory[] = []
-    const decisions = automaticMemory.listMemoryLearningDecisions(this.db, candidate.scope.localProjectId)
-    for (const head of await this.listAgentMemoryHeads(candidate.scope.localProjectId)) {
-      if (head.status !== 'active' || head.scope.kind !== candidate.scope.kind || head.scope.userId !== candidate.scope.userId ||
-          head.scope.organizationId !== candidate.scope.organizationId || head.scope.projectId !== candidate.scope.projectId ||
-          (head.scope.kind === 'team' && head.scope.sessionId !== candidate.scope.sessionId)) continue
-      if (await this.getAgentMemoryTombstone(head.memoryId)) continue
-      const revision = (await this.listAgentMemoryRevisions(head.memoryId)).find((item) => item.revision === head.currentRevision)
-      if (!revision || revision.status !== 'active' || (revision.expiresAt && revision.expiresAt <= authority.decidedAt)) continue
-      const semanticKey = decisions.find((item) => item.memoryId === revision.id)?.semanticKey
-      existing.push({ memoryId: revision.id, revision: revision.revision, statement: revision.statement,
-        ...(semanticKey ? { semanticKey } : {}) })
-    }
-    const checked = classifyMemoryLearningFact(event, fact, existing, decision.createdAt)
-    return checked.id === decision.id && checked.disposition === 'auto_save' &&
-      checked.statement === decision.statement && checked.statementKind === decision.statementKind &&
-      checked.semanticKey === decision.semanticKey && stableJsonMatches(checked.evidenceMaterialIds, decision.evidenceMaterialIds)
   }
 
   /**
@@ -5380,9 +5105,8 @@ class SqlJsLocalStore implements LocalStore {
     } catch {
       return { authorized: false, reason: 'invalid_input' }
     }
-    if (candidate.provenance.kind === 'learning_event' &&
-        (candidate.provenance.statementKind === 'business_rule' ||
-          (await this.checkLearningEventMemoryCandidateSource(candidate, candidate.provenance)) !== 'ok')) {
+    // ADR 0030: candidates from the removed learning pipeline are never promoted.
+    if (candidate.provenance.kind === 'learning_event') {
       return { authorized: false, reason: 'invalid_input' }
     }
     // Policy authority requires independently verified, persisted evidence.
@@ -5392,7 +5116,7 @@ class SqlJsLocalStore implements LocalStore {
         candidate,
         authority: input.authority,
         project: (await this.listProjects()).find((project) => project.id === candidate.scope.localProjectId),
-      }) && !(await this.isAllowedLearningEventPolicyPromotion(candidate, input.authority))
+      })
     ) {
       return { authorized: false, reason: 'invalid_input' }
     }
@@ -5470,12 +5194,7 @@ class SqlJsLocalStore implements LocalStore {
     if (!stableJsonMatches(candidate, descriptor.candidate)) {
       return { committed: false, reason: 'source_stale' }
     }
-    if (candidate.provenance.kind === 'learning_event' &&
-        (await this.checkLearningEventMemoryCandidateSource(candidate, candidate.provenance)) !== 'ok') {
-      return { committed: false, reason: 'source_stale' }
-    }
-    if (candidate.provenance.kind === 'learning_event' && descriptor.authority.actorKind === 'policy' &&
-        !(await this.isAllowedLearningEventPolicyPromotion(candidate, descriptor.authority))) {
+    if (candidate.provenance.kind === 'learning_event') {
       return { committed: false, reason: 'source_stale' }
     }
     const pairing = candidate.scope.kind === 'team'
@@ -11781,7 +11500,6 @@ class SqlJsLocalStore implements LocalStore {
       }
       this.db.run('commit')
       transactionOpen = false
-      for (const artifact of approvedArtifacts) await captureArtifactMemory(this, artifact)
       if (nextRun && approvalEvent) await captureApprovalProjectMemory(this, nextRun, [approvalEvent])
       await this.persist()
     } catch (error) {
@@ -12070,7 +11788,6 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('commit')
       transactionOpen = false
       for (const artifact of mutation.artifacts ?? []) {
-        await captureArtifactMemory(this, artifact)
         await captureReviewResultProjectMemory(this, artifact)
       }
       await captureApprovalProjectMemory(this, nextRun, mutation.events ?? [])
@@ -13229,7 +12946,6 @@ class SqlJsLocalStore implements LocalStore {
   async saveArtifact(artifact: Artifact): Promise<void> {
     assertImmutableWorkflowArtifactWrite(this.db, artifact)
     writeArtifact(this.db, artifact)
-    await captureArtifactMemory(this, artifact)
     await captureReviewResultProjectMemory(this, artifact)
     await this.persist()
   }
@@ -13314,7 +13030,6 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('rollback')
       throw error
     }
-    await captureReviewMemory(this, review)
     await this.persist()
   }
 
@@ -13468,7 +13183,6 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('rollback')
       throw error
     }
-    await captureCodingMemory(this, run, current)
     await captureCodingRunProjectMemory(this, run, current)
     await this.persist()
   }
@@ -13842,7 +13556,6 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('rollback')
       throw error
     }
-    await captureCodingMemory(this, nextRun, currentRun)
     await captureCodingRunProjectMemory(this, nextRun, currentRun)
     await this.persist()
     return { committed: true, run: nextRun }
@@ -14671,27 +14384,6 @@ class SqlJsLocalStore implements LocalStore {
 // Direct methods access state or handle in-memory authority/lifecycle; Memory retrieval is
 // durable because it also records expiry and retrieval audit state.
 const LOCAL_STORE_METHOD_EXECUTION = {
-  refreshMemoryLearningDecision: 'durable',
-  recordManualMemoryLearningEvent: 'durable',
-  commitMemoryLearningDecision: 'durable',
-  retireMemoryLearningConflict: 'durable',
-  getAutomaticMemoryConfiguration: 'direct',
-  listAutomaticMemoryConfigurations: 'direct',
-  configureAutomaticMemory: 'durable',
-  enqueueMemoryLearningEvent: 'durable',
-  getMemoryLearningEvent: 'direct',
-  getMemoryLearningFact: 'direct',
-  getMemoryLearningDecision: 'direct',
-  listMemoryLearningJobs: 'direct',
-  listMemoryLearningFacts: 'direct',
-  listMemoryLearningDecisions: 'direct',
-  claimMemoryLearningJob: 'durable',
-  settleMemoryLearningJob: 'durable',
-  recordMemoryLearningExtraction: 'durable',
-  recordMemoryLearningDecisions: 'durable',
-  resolveMemoryLearningDecision: 'durable',
-  revokeMemoryLearningEvent: 'durable',
-  recoverMemoryLearningJobs: 'durable',
 
   resolveLocalProjectMemoryPrincipal: 'durable',
   getHindsightConfiguration: 'direct',

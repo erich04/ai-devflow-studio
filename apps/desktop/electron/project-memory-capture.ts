@@ -1,11 +1,13 @@
 import {
-  isActiveCodingAgentRunStatus, PROJECT_MEMORY_CONVERSATION_IDLE_MS, PROJECT_MEMORY_MAX_DOCUMENT_BYTES, redactSensitiveText,
-  type AgentEvent, type Artifact, type CodingAgentEvent, type CodingAgentRun, type DesktopPairingCredential, type ProjectMemoryConfiguration,
-  type ProjectMemoryDocumentInput, type ProjectMemoryPairingBinding, type TestEvidence, type WorkflowRun,
+  AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, isActiveCodingAgentRunStatus, PROJECT_MEMORY_CONVERSATION_IDLE_MS, PROJECT_MEMORY_MAX_DOCUMENT_BYTES,
+  redactSensitiveText,
+  type AgentEvent, type Artifact, type CodingAgentEvent, type CodingAgentRun, type DesktopPairingCredential, type DurableAgentMemoryRevision,
+  type ProjectMemoryConfiguration, type ProjectMemoryDocument, type ProjectMemoryDocumentInput, type ProjectMemoryPairingBinding,
+  type TestEvidence, type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { WorkbenchConversation } from './workbench-conversation-contract'
+import type { KnowledgeRetrievalScope } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
-import { resolveProjectMemoryScope } from './automatic-memory-capture'
 
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8')
 /** Cut at a character boundary, leaving an explicit marker rather than a silent partial sentence. */
@@ -15,6 +17,19 @@ function clip(text: string, max: number): string {
   let result = text.slice(0, Math.max(0, max))
   while (result && bytes(result) + bytes(marker) > max) result = result.slice(0, -Math.max(1, Math.ceil(result.length / 64)))
   return `${result}${marker}`
+}
+
+type ScopeStore = Pick<LocalStore, 'getDesktopPairingCredential' | 'resolveLocalProjectMemoryPrincipal'>
+/** The memory owner: the paired user of this project, or its single local principal. */
+export async function resolveProjectMemoryScope(store: ScopeStore, projectId: string, sessionId: string): Promise<KnowledgeRetrievalScope | null> {
+  const pairing = await store.getDesktopPairingCredential()
+  if (pairing?.localProjectId === projectId && pairing.expiresAt &&
+      (!Number.isFinite(Date.parse(pairing.expiresAt)) || Date.parse(pairing.expiresAt) <= Date.now())) return null
+  if (pairing?.localProjectId === projectId) return { kind: 'team', organizationId: pairing.organizationId,
+    projectId: pairing.projectId, userId: pairing.userId, sessionId: pairing.tokenId, localProjectId: projectId }
+  const principal = await store.resolveLocalProjectMemoryPrincipal(projectId)
+  return principal.status === 'resolved' ? { kind: 'local', organizationId: null, projectId: null,
+    userId: principal.userId, sessionId, localProjectId: projectId } : null
 }
 
 export function projectMemoryPairingBinding(pairing: DesktopPairingCredential): ProjectMemoryPairingBinding {
@@ -195,4 +210,51 @@ export async function captureApprovalProjectMemory(store: CaptureStore, run: Wor
     const document = buildArtifactMemoryDocument(artifact, run, true)
     if (document) await store.recordProjectMemoryDocument(config, document)
   }
+}
+
+export const LEGACY_MEMORY_DOCUMENT_ID = 'legacy:agent-memory'
+/**
+ * The Memory an earlier DevFlow version kept locally, as one document: each statement on its own
+ * line with the day it was saved, newest first. What does not fit is left out, oldest first.
+ */
+export function buildLegacyMemoryDocument(revisions: readonly Pick<DurableAgentMemoryRevision, 'statement' | 'createdAt'>[]): ProjectMemoryDocumentInput | null {
+  const newestFirst = [...revisions].filter((revision) => revision.statement.trim())
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+  const header = 'Memory that an earlier version of DevFlow kept for this project and user. One statement per line, with the day it was saved, newest first:'
+  const budget = PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 1_024
+  const lines: string[] = []
+  for (const revision of newestFirst) {
+    const line = `- [${revision.createdAt.slice(0, 10)}] ${clip(redactSensitiveText(revision.statement).value.replace(/\s+/gu, ' ').trim(), 2_000)}`
+    if (bytes([header, ...lines, line].join('\n')) > budget) break
+    lines.push(line)
+  }
+  if (!lines.length) return null
+  const omitted = newestFirst.length - lines.length
+  return {
+    documentId: LEGACY_MEMORY_DOCUMENT_ID, sourceKind: 'legacy', sourceId: 'agent-memory', title: '旧版本地记忆',
+    payload: [header, ...lines, ...(omitted ? [`- [${omitted} older statements omitted]`] : [])].join('\n'),
+    context: 'Statements an earlier DevFlow version remembered for this project; the user saved each one, or a narrow automatic rule did. A later decision may have replaced some of them.',
+    tags: ['source:legacy'], occurredAt: newestFirst[0]!.createdAt,
+  }
+}
+
+type LegacyStore = OwnerStore & Pick<LocalStore, 'listProjectMemoryDocuments' | 'recordProjectMemoryDocument' | 'retrieveAgentMemoryRevisions'>
+const LEGACY_RUNTIME_ID = 'project-memory-legacy-migration'
+/**
+ * ADR 0030: copy the Memory the old recall would have shown this owner in this project into the
+ * project's memory, once per bank. A copy the user forgot, or cleared with the rest, stays gone,
+ * and local Memory itself is left in place. Returns the recorded document, if any.
+ */
+export async function migrateLegacyProjectMemory(store: LegacyStore, projectId: string, now = new Date().toISOString()): Promise<ProjectMemoryDocument | null> {
+  const config = await activeProjectMemoryConfiguration(store, projectId)
+  if (!config) return null
+  const existing = (await store.listProjectMemoryDocuments(projectId))
+    .find((document) => document.bankId === config.bankId && document.documentId === LEGACY_MEMORY_DOCUMENT_ID)
+  if (existing) return existing
+  const scope = await resolveProjectMemoryScope(store, projectId, LEGACY_RUNTIME_ID)
+  if (scope?.userId !== config.ownerUserId) return null
+  const revisions = await store.retrieveAgentMemoryRevisions({ stateVersion: 1, id: LEGACY_RUNTIME_ID, scope,
+    runtimeId: LEGACY_RUNTIME_ID, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: now })
+  const document = buildLegacyMemoryDocument(revisions)
+  return document ? store.recordProjectMemoryDocument(config, document) : null
 }

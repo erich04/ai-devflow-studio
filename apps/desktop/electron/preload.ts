@@ -74,11 +74,6 @@ const desktopApi: DevFlowDesktopApi = {
     ipcRenderer.invoke(ipcChannels.reviseAgentMemory, input),
   deleteAgentMemory: (input) =>
     ipcRenderer.invoke(ipcChannels.deleteAgentMemory, input),
-  getAutomaticMemoryStatus: (input) => ipcRenderer.invoke(ipcChannels.getAutomaticMemoryStatus, input),
-  configureAutomaticMemory: (input) => ipcRenderer.invoke(ipcChannels.configureAutomaticMemory, input),
-  processAutomaticMemory: (input) => ipcRenderer.invoke(ipcChannels.processAutomaticMemory, input),
-  resolveAutomaticMemoryDecision: (input) => ipcRenderer.invoke(ipcChannels.resolveAutomaticMemoryDecision, input),
-  rememberConversationMemory: (input) => ipcRenderer.invoke(ipcChannels.rememberConversationMemory, input),
   getProjectMemoryStatus: (input) => ipcRenderer.invoke(ipcChannels.getProjectMemoryStatus, input),
   configureProjectMemory: (input) => ipcRenderer.invoke(ipcChannels.configureProjectMemory, input),
   listProjectMemories: (input) => ipcRenderer.invoke(ipcChannels.listProjectMemories, input),

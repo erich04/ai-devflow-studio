@@ -21,10 +21,6 @@ import type {
   AgentRuntimeRendererSnapshot,
   CoordinationRendererSnapshot,
   AgentMemoryRendererSnapshot,
-  AutomaticMemoryStatus,
-  ConfigureAutomaticMemoryInput,
-  ResolveAutomaticMemoryDecisionInput,
-  RememberConversationMemoryInput,
   ConfigureProjectMemoryInput,
   ProjectMemoryStatus,
   ClearProjectMemoryInput,
@@ -256,11 +252,6 @@ export const ipcChannels = {
   dismissAgentMemoryCandidate: 'devflow:agent-memory:candidate:dismiss',
   reviseAgentMemory: 'devflow:agent-memory:revise',
   deleteAgentMemory: 'devflow:agent-memory:delete',
-  getAutomaticMemoryStatus: 'devflow:automatic-memory:status',
-  configureAutomaticMemory: 'devflow:automatic-memory:configure',
-  processAutomaticMemory: 'devflow:automatic-memory:process',
-  resolveAutomaticMemoryDecision: 'devflow:automatic-memory:resolve',
-  rememberConversationMemory: 'devflow:automatic-memory:remember',
   getProjectMemoryStatus: 'devflow:project-memory:status',
   configureProjectMemory: 'devflow:project-memory:configure',
   listProjectMemories: 'devflow:project-memory:list',
@@ -778,11 +769,6 @@ export type DevFlowDesktopApi = {
   deleteAgentMemory: (
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
-  getAutomaticMemoryStatus?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  configureAutomaticMemory?: (input: ConfigureAutomaticMemoryInput) => Promise<AutomaticMemoryStatus>
-  processAutomaticMemory?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  resolveAutomaticMemoryDecision?: (input: ResolveAutomaticMemoryDecisionInput) => Promise<AutomaticMemoryStatus>
-  rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
   getProjectMemoryStatus?: (input: { projectId: string }) => Promise<ProjectMemoryStatus>
   configureProjectMemory?: (input: ConfigureProjectMemoryInput) => Promise<ProjectMemoryStatus>
   listProjectMemories?: (input: ListProjectMemoriesInput) => Promise<ProjectMemoryPage>
@@ -1337,54 +1323,6 @@ export function parseListAgentMemoryLifecycleInput(
     'list Agent Memory lifecycle payload',
   )
   return readAgentMemoryLifecycleSelection(value)
-}
-
-export function parseAutomaticMemoryProjectInput(value: unknown): { projectId: string } {
-  if (!isRecord(value)) throw new Error('Invalid automatic Memory project payload')
-  rejectUnexpectedFields(value, ['projectId'], 'automatic Memory project payload')
-  return { projectId: readExactRequiredIdentifier(value, 'projectId') }
-}
-
-export function parseConfigureAutomaticMemoryInput(value: unknown): ConfigureAutomaticMemoryInput {
-  if (!isRecord(value)) throw new Error('Invalid automatic Memory configuration payload')
-  rejectUnexpectedFields(value, ['projectId', 'enabled', 'consent', 'maxRetainsPerDay'], 'automatic Memory configuration payload')
-  if (typeof value.enabled !== 'boolean' || typeof value.consent !== 'boolean' || (value.enabled && !value.consent)) {
-    throw new Error('Automatic Memory requires explicit project consent')
-  }
-  const maxRetainsPerDay = readExactPositiveVersion(value, 'maxRetainsPerDay')
-  if (maxRetainsPerDay > 100) throw new Error('Invalid maxRetainsPerDay: maximum is 100')
-  return { projectId: readExactRequiredIdentifier(value, 'projectId'), enabled: value.enabled, consent: value.consent, maxRetainsPerDay }
-}
-
-export function parseResolveAutomaticMemoryDecisionInput(value: unknown): ResolveAutomaticMemoryDecisionInput {
-  if (!isRecord(value)) throw new Error('Invalid automatic Memory decision payload')
-  rejectUnexpectedFields(value, ['projectId', 'decisionId', 'action', 'targetMemoryId', 'expectedRevision'], 'automatic Memory decision payload')
-  if (value.action !== 'approve' && value.action !== 'ignore') throw new Error('Invalid automatic Memory decision action')
-  if ((value.targetMemoryId === undefined) !== (value.expectedRevision === undefined)) {
-    throw new Error('A conflict decision requires its exact target revision')
-  }
-  if (value.action === 'ignore' && value.targetMemoryId !== undefined) throw new Error('Ignoring cannot replace a Memory')
-  return {
-    projectId: readExactRequiredIdentifier(value, 'projectId'),
-    decisionId: readExactRequiredIdentifier(value, 'decisionId'), action: value.action,
-    ...(value.targetMemoryId === undefined ? {} : {
-      targetMemoryId: readExactRequiredIdentifier(value, 'targetMemoryId'),
-      expectedRevision: readExactPositiveVersion(value, 'expectedRevision'),
-    }),
-  }
-}
-
-export function parseRememberConversationMemoryInput(value: unknown): RememberConversationMemoryInput {
-  if (!isRecord(value)) throw new Error('Invalid remember conversation Memory payload')
-  rejectUnexpectedFields(value, ['projectId', 'conversationId', 'messageId', 'statement', 'pin'], 'remember conversation Memory payload')
-  if (value.pin !== undefined && typeof value.pin !== 'boolean') throw new Error('Invalid pin')
-  return {
-    projectId: readExactRequiredIdentifier(value, 'projectId'),
-    conversationId: readExactRequiredIdentifier(value, 'conversationId'),
-    messageId: readExactRequiredIdentifier(value, 'messageId'),
-    ...(value.statement === undefined ? {} : { statement: readExactAgentMemoryStatement(value, 'statement') }),
-    ...(value.pin === undefined ? {} : { pin: value.pin }),
-  }
 }
 
 export function parseProjectMemoryProjectInput(value: unknown): { projectId: string } {

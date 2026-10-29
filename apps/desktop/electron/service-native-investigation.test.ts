@@ -3,14 +3,11 @@ import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { AgentProviderRequestError, createFakeAgentProvider, createWorkflowRunFromRequest, resolveRequestPolicy, validateNativeHistory, type AgentProvider, type AutomaticMemoryFact, type KnowledgeRetrievalScope, type NativeToolCall } from '@ai-devflow/shared'
+import { AgentProviderRequestError, createFakeAgentProvider, createWorkflowRunFromRequest, resolveRequestPolicy, validateNativeHistory, type AgentProvider, type NativeToolCall } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { WorkbenchConversationService } from './workbench-conversation-service'
-import { buildConversationLearningEvent } from './automatic-memory-capture'
-import { automaticMemoryDigest } from './automatic-memory-store'
-import { classifyMemoryLearningFact } from './automatic-memory-policy'
-import { createAgentMemoryHumanActions } from './agent-memory-human-actions'
-import type { WorkbenchConversation } from './workbench-conversation-contract'
+import { registerProjectMemoryRecall } from './coding-context'
+import { projectMemoryIdentity } from './project-memory-recall'
 
 let directory: string, store: LocalStore
 const projectId = 'native-investigation-project'
@@ -84,27 +81,15 @@ it.each(['investigation', 'summary'])('retains a Native %s provider failure when
   expect(failed[0]?.attempt?.batchId).toBe(result.investigationProgress?.batch.id)
 })
 
-/** Synthetic extraction fixture, committed through the same local evidence and promotion APIs; no remote call. */
-async function savePreference() {
-  const now = new Date().toISOString()
-  const principal = await store.resolveLocalProjectMemoryPrincipal(projectId)
-  if (principal.status !== 'resolved') throw new Error('Missing fixture principal')
-  const hindsight = await store.configureHindsight({ projectId, ownerUserId: principal.userId, projectPath: path.join(directory, 'repo'), knowledgeRoot: 'docs/knowledge', rootGeneration: 'fixture-root', endpoint: 'http://127.0.0.1:9', encryptedApiKey: null, enabled: true, includeMemories: true, selectedPaths: [], modelDigest: 'fixture-model', model: { version: 'fixture-v1', dimensions: [{ key: 'sem_kind', type: 'text' }] } })
-  await store.configureAutomaticMemory({ projectId, ownerUserId: principal.userId, enabled: true, hindsightGeneration: hindsight.generation, maxRetainsPerDay: 10 })
-  const scope: KnowledgeRetrievalScope = { kind: 'local', organizationId: null, projectId: null, userId: principal.userId, sessionId: 'memory-source', localProjectId: projectId }
-  const source: WorkbenchConversation = { id: 'preference-source', localProjectId: projectId, version: 1, title: 'Fixture', isOpen: false, status: 'idle', inputDraft: '', messages: [{ id: 'preference-user', role: 'user', text: '请用英文回答。', createdAt: now }, { id: 'preference-answer', role: 'assistant', text: '已了解。', createdAt: now }], createdAt: now, updatedAt: now }
-  await store.saveWorkbenchConversation(source, 0)
-  const event = (await store.enqueueMemoryLearningEvent(buildConversationLearningEvent(source, { status: 'running', messages: source.messages.slice(0, -1) }, scope)!))!
-  const claim = (await store.claimMemoryLearningJob(now))!
-  const fact: AutomaticMemoryFact = { id: 'preference-fact', eventId: event.id, remoteFactId: 'synthetic-fact', documentId: claim.job.documentId, text: '请用英文回答。', factType: 'experience', sourceDigest: event.sourceDigest, contentDigest: automaticMemoryDigest('请用英文回答。'), extractedAt: now }
-  await store.recordMemoryLearningExtraction(claim.job.id, claim.leaseToken, [fact])
-  const decision = classifyMemoryLearningFact(event, fact, [], now)
-  await store.recordMemoryLearningDecisions(claim.job.id, claim.leaseToken, [decision])
-  const saved = await store.commitMemoryLearningDecision({ decisionId: decision.id, mode: 'automatic' })
-  if (saved.status !== 'saved' || !saved.memoryId) throw new Error(`Preference fixture was not saved: ${saved.status}`)
-  const revision = (await store.listAgentMemoryRevisions(saved.memoryId)).at(-1)
-  if (!revision) throw new Error('Preference fixture has no saved revision')
-  return revision
+/** Project memory (ADR 0030) recalled for this store from a fake Hindsight bank; no remote call. */
+function rememberPreference() {
+  const item = projectMemoryIdentity({ id: 'preference' }, '[observation] 用户要求以后用英文回答。')
+  let forgotten = false
+  registerProjectMemoryRecall(store, {
+    recall: async () => ({ items: forgotten ? [] : [item], degraded: false }),
+    assertCurrent: async ({ ids }) => { if (forgotten && ids.includes(item.id)) throw new Error('Project memory was edited or deleted') },
+  })
+  return { item, forget: () => { forgotten = true } }
 }
 
 describe('native conversation service with durable memory and investigation checkpoints', () => {
@@ -148,8 +133,8 @@ describe('native conversation service with durable memory and investigation chec
     validateNativeHistory(resumed.nativeTranscript!.map(entry => entry.message))
   })
 
-  it('attaches persisted preferences with audited identity, keeps user priority, and removes deleted memory from later native requests', async () => {
-    const revision = await savePreference()
+  it('attaches project memory as background, keeps user priority, and drops forgotten memory from later native requests', async () => {
+    const { item, forget } = rememberPreference()
     const h = setup(async () => text('普通说明'))
     const id = (await h.service.command({ type: 'create', projectId })).conversationId!
     const first = await send(h.service, id, '解释一下集成测试。')
@@ -157,11 +142,11 @@ describe('native conversation service with durable memory and investigation chec
     expect(first.nativeProtocolVersion).toBe(2)
     const request = h.completeNativeConversation.mock.calls[0]![0]
     const memory = JSON.parse(request.messages.at(-1)!.content!)
-    expect(memory).toMatchObject({ backgroundMemory: [{ id: revision.id, statement: revision.statement }], effectiveCommunicationSettings: { language: 'english', memoryIds: [revision.id] } })
-    expect(request.systemPrompt).not.toContain(revision.statement)
-    expect(request.systemPrompt).toContain('用户本轮明确要求优先')
-    expect(JSON.stringify(first.nativeTranscript)).not.toContain(revision.statement)
-    expect(first.messages.find(message => message.memoryReceipt)?.memoryReceipt).toMatchObject({ state: 'response_received', memories: [{ id: revision.id, revision: revision.revision, contentDigest: revision.contentDigest }] })
+    expect(memory).toEqual({ backgroundMemory: [{ id: item.id, revision: 1, headVersion: 1, contentDigest: item.contentDigest, statement: item.statement }] })
+    expect(request.systemPrompt).not.toContain(item.statement)
+    expect(request.systemPrompt).toContain('用户沟通偏好只影响语言、详略与呈现顺序，可直接遵循，用户本轮明确要求优先')
+    expect(JSON.stringify(first.nativeTranscript)).not.toContain(item.statement)
+    expect(first.messages.find(message => message.memoryReceipt)?.memoryReceipt).toMatchObject({ state: 'response_received', memories: [{ id: item.id, revision: 1, contentDigest: item.contentDigest }] })
 
     const second = await send(h.service, id, '这次请用中文回答，简述单元测试。')
     expect(second.status, second.error).toBe('idle')
@@ -169,13 +154,11 @@ describe('native conversation service with durable memory and investigation chec
     expect(JSON.stringify(override.messages)).toContain('这次请用中文回答')
     expect(override.systemPrompt).toContain('用户本轮明确要求优先')
 
-    const head = (await store.getAgentMemoryHead(revision.id))!
-    await createAgentMemoryHumanActions({ store }).delete({ localProjectId: projectId, memoryId: revision.id, expectedRevision: revision.revision, expectedHeadVersion: head.version, expectedContentDigest: revision.contentDigest, expectedProvenanceDigest: revision.provenanceDigest })
+    forget()
     const third = await send(h.service, id, '再简述端到端测试。')
     expect(third.status, third.error).toBe('idle')
     const deletedRequest = h.completeNativeConversation.mock.calls[2]![0]
-    expect(JSON.stringify(deletedRequest.messages)).not.toContain(revision.statement)
-    expect(JSON.stringify(deletedRequest.messages)).not.toContain('effectiveCommunicationSettings')
+    expect(JSON.stringify(deletedRequest.messages)).not.toContain(item.statement)
     expect(third.messages.filter(message => message.memoryReceipt).at(-1)?.memoryReceipt).toMatchObject({ state: 'response_received', memories: [] })
     expect(third.contextReceipt?.memory?.memories).toEqual([])
     validateNativeHistory(third.nativeTranscript!.map(entry => entry.message))

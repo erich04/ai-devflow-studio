@@ -12,7 +12,7 @@ const KINDS: Array<{ kind: ProjectMemoryKind; label: string; empty: string }> = 
   { kind: 'world', label: '事实', empty: '还没有抽取到项目事实。' },
   { kind: 'experience', label: '经历', empty: '还没有记录 Agent 的经历。' },
 ]
-const SOURCE_LABEL: Record<ProjectMemorySourceKind, string> = { conversation: '讨论', coding_run: '编码记录', artifact: '流程文档' }
+const SOURCE_LABEL: Record<ProjectMemorySourceKind, string> = { conversation: '讨论', coding_run: '编码记录', artifact: '流程文档', legacy: '旧版记忆' }
 const STATUS_LABEL: Record<ProjectMemoryDocumentStatus, string> = {
   queued: '等待写入', submitted: '写入中', retained: '已写入', failed: '写入失败', delete_pending: '正在忘记', deleted: '已忘记',
 }

@@ -37,8 +37,6 @@ async function fixture(includeMemories = false) {
     retain: vi.fn(async (_bank, item) => { docs.set(item.documentId, item) }),
     operation: vi.fn(async () => docs.size ? 'completed' : 'not_found'),
     deleteDocument: vi.fn(async (_bank, id) => { docs.delete(id) }),
-    getDocument: vi.fn(async () => { throw new Error('Projection recall never exports staging facts') }),
-    listDocumentFacts: vi.fn(async () => { throw new Error('Projection recall never exports staging facts') }),
     recall: vi.fn(async () => [...docs.values()]),
   }
   let now = Date.now()
@@ -112,13 +110,11 @@ it('bounds unknown retain replays to three attempts using the same immutable pay
 })
 
 it('classifies credential access failures as optional provider failures without hiding local integrity failures', async () => {
-  const { service, connect, store, scope } = await fixture(true)
-  const request = { scope: { kind: 'local' as const, organizationId: null, projectId: null, localProjectId: scope.projectId,
-    userId: scope.userId, sessionId: 'session' }, runtimeId: 'run', query: '退款' }
+  const { service, connect, store, scope } = await fixture()
   connect.mockRejectedValueOnce(new Error('OS credential store unavailable'))
-  await expect(service.recallMemoryCandidates(request)).rejects.toBeInstanceOf(HindsightError)
+  await expect(service.search(scope, { query: '退款' }, service.createSearchTurn())).resolves.toMatchObject({ degraded: true })
   vi.spyOn(store, 'getHindsightConfiguration').mockRejectedValueOnce(new Error('local integrity'))
-  await expect(service.recallMemoryCandidates(request)).rejects.toThrow('local integrity')
+  await expect(service.search(scope, { query: '退款' }, service.createSearchTurn())).rejects.toThrow('local integrity')
 })
 
 it('continues queued cleanup when refreshing an enabled project fails', async () => {

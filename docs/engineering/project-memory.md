@@ -1,6 +1,6 @@
 # 项目记忆（Hindsight）
 
-设计依据：[ADR 0030](../adr/0030-hindsight-project-memory.md)。本文说明第一期的实际行为、配置方法和验证入口。
+设计依据：[ADR 0030](../adr/0030-hindsight-project-memory.md)。本文说明当前行为、配置方法和验证入口。项目记忆是 DevFlow 唯一的记忆：未开启时没有记忆，不再使用本地 Agent 记忆。
 
 ## 当前行为
 
@@ -12,17 +12,20 @@
 | 结束的 Coding Run | `coding-run:<id>` | 运行结束时（任何结果，`fake` 除外） |
 | 被批准的澄清、设计、验收包 | `artifact:<id>` | 审批通过时 |
 | Gate 评审结果 | `artifact:<id>` | 保存时 |
+| 旧版本地 Agent 记忆 | `legacy:agent-memory` | 开启时或启动时，每个 bank 一次 |
+
+旧版记忆的迁移规则见 ADR 0030「旧记忆迁移与移除」：只复制当前归属用户在本项目可见的有效记忆；忘记这个来源或清空后不会再写入；本地数据不删除。
 
 编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`。
 
 代码位置：
 
 - `packages/shared/src/project-memory.ts`：类型、限制、bank 任务说明。
-- `apps/desktop/electron/project-memory-capture.ts`：文档构造和采集入口，在 LocalStore 的持久化变更里调用。
+- `apps/desktop/electron/project-memory-capture.ts`：文档构造和采集入口，在 LocalStore 的持久化变更里调用；`migrateLegacyProjectMemory` 复制旧版记忆。
 - `apps/desktop/electron/project-memory-store.ts`：开关和发件队列（schema 41）。
 - `apps/desktop/electron/project-memory-service.ts`：后台发送、查询、删除。
 - `apps/desktop/electron/memory-model-relay.ts`：Hindsight 抽取调用的预算中继。
-- `apps/desktop/electron/project-memory-recall.ts`：召回、`memory_search` 和回执检查；`coding-context.ts` 的 `recallScopedMemory` 在项目记忆开启时改用它。
+- `apps/desktop/electron/project-memory-recall.ts`：召回、`memory_search` 和回执检查；`coding-context.ts` 的 `recallScopedMemory` 只用它召回。
 
 ## 配置
 
