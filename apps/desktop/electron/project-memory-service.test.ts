@@ -96,10 +96,16 @@ it('holds new sends while the relay is down and removes a forgotten document onl
   let relay = false
   const gated = new ProjectMemoryService({ store, client: async () => client as unknown as HindsightClient, canSubmit: () => relay })
   expect(await gated.process()).toBe(0)
+  // The bank's settings decide recall speed and cost nothing, so they do not wait for the relay.
+  expect(client.configureMemoryBank).toHaveBeenCalledTimes(1)
+  await gated.process()
+  expect(client.configureMemoryBank).toHaveBeenCalledTimes(1)
   // Creating pages in a bank that has memories writes them at once, so that waits for the relay too.
   expect(client.ensureMentalModel).not.toHaveBeenCalled()
   relay = true
   expect(await gated.process()).toBe(1)
+  expect(client.configureMemoryBank).toHaveBeenCalledTimes(1)
+  expect(client.ensureMentalModel).toHaveBeenCalledTimes(KNOWLEDGE_PAGE_MODELS.length)
   await store.forgetProjectMemoryDocument('project', document.id)
   setOperation('processing'); advance(1_000)
   await service.process()

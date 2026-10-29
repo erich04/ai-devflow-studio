@@ -17,7 +17,9 @@
 
 旧版记忆的迁移规则见 ADR 0030「旧记忆迁移与移除」：只复制当前归属用户在本项目可见的有效记忆；忘记这个来源或清空后不会再写入；本地数据不删除。
 
-编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，还能阅读四个知识页（约定与命令、决策与原因、问题与解决办法、用户偏好），规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`、`listProjectKnowledgePages`、`refreshProjectKnowledgePage`。
+编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。
+
+召回不用 Hindsight 自带的交叉编码器重排：后台 worker 每次启动时给每个开启的 bank 写入 `enable_reranking: false`，这一步不调用模型，也不等中继。原因是镜像里的重排模型是英文的，在 2 个 CPU 上重排最多 300 个候选。2026-10-29 在一个约 300 条记忆（210 条事实、108 条观察）的验证 bank 上，开着重排时每次召回 p50 约 9–10 秒、p95 17–22 秒，1.5 KiB 的长查询约 29 秒，都超过桌面端 5 秒的召回超时，记忆会被静默降级为空。关掉后同一 bank 上 p50 约 40 毫秒、p95 约 50 毫秒，长查询约 0.2 秒。DevFlow 每次都要 8,192 tokens 的候选，再用自己的中文 BM25 与 Hindsight 的顺序融合（k = 20，BM25 权重 2）。在同一 bank 上另写的 20 个问题（调参后才写，含英文问题）里，预期记忆进入讨论栏预算（4 条、2,000 字节）的比例从原来的 55% 升到 85%，进入编码简报预算（8 条、4,000 字节）的比例从 65% 升到 100%。知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，还能阅读四个知识页（约定与命令、决策与原因、问题与解决办法、用户偏好），规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`、`listProjectKnowledgePages`、`refreshProjectKnowledgePage`。
 
 知识页是 Hindsight 的 mental model，id 为 `devflow-<页面>`，由后台 worker 在中继运行时为每个开启的 bank 创建（每次启动检查一次）。阅读知识页不调用模型；Hindsight 归纳后改写（每页最多每 6 小时一次）和「立即整理」会调用模型并计入团队预算；2026-10-29 用 DeepSeek Flash 实测每页一次约 0.8 美分。
 

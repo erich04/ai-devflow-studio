@@ -116,9 +116,11 @@ export function createHindsightClient(input: {
       const version = await request('GET', '/version')
       if (version.api_version !== HINDSIGHT_PROTOCOL.version) throw new HindsightError('protocol')
       await request('PUT', bankPath(bank), { name: bank })
+      // No cross-encoder: the bundled one is an English model that reranks up to 300 candidates on
+      // the CPU, about 9 to 20 seconds per recall at 300 memories. DevFlow ranks the candidates itself.
       const updates = { enable_observations: true, enable_auto_consolidation: true, entities_allow_free_form: true,
         retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations,
-        reflect_mission: missions.reflect }
+        reflect_mission: missions.reflect, enable_reranking: false }
       const response = await request('PATCH', `${bankPath(bank)}/config`, { updates })
       const config = object(response.config)
       if (response.bank_id !== bank || Object.entries(updates).some(([key, value]) => config[key] !== value)) throw new HindsightError('protocol')
@@ -170,7 +172,8 @@ export function createHindsightClient(input: {
         query: input.query, types: ['observation', 'world', 'experience'], prefer_observations: true,
         budget: 'low', max_tokens: input.maxTokens, include: { entities: null },
       }, input.signal, 5_000)
-      if (!Array.isArray(result.results) || result.results.length > 256) throw new HindsightError('protocol')
+      // max_tokens bounds the text; many short memories can still be several hundred results.
+      if (!Array.isArray(result.results) || result.results.length > 1_024) throw new HindsightError('protocol')
       const seen = new Set<string>()
       return result.results.flatMap((value): HindsightMemory[] => {
         const item = object(value)

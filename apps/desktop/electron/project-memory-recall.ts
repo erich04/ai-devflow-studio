@@ -12,6 +12,15 @@ export const PROJECT_MEMORY_IDENTITY_PREFIX = 'pm-'
 export const isProjectMemoryIdentity = (id: string) => id.startsWith(PROJECT_MEMORY_IDENTITY_PREFIX)
 const QUERY_MAX_BYTES = 1_500
 export const PROJECT_MEMORY_SEARCH_MAX_ITEMS = 8
+/**
+ * Candidates asked of Hindsight for every recall, whatever the caller's budget: without its
+ * cross-encoder, retrieval takes tens of milliseconds at any allowance, and DevFlow's own ranking
+ * below chooses better from more candidates. The caller's byte budget applies afterwards.
+ */
+export const PROJECT_MEMORY_CANDIDATE_TOKENS = 8_192
+/** Reciprocal-rank fusion constant and the weight of DevFlow's lexical rank against Hindsight's order. */
+const FUSION_K = 20
+const LEXICAL_WEIGHT = 2
 
 export type ProjectMemoryRecallItem = { id: string; statement: string; contentDigest: string }
 export type ProjectMemoryRecall = { items: ProjectMemoryRecallItem[]; degraded: boolean }
@@ -33,14 +42,17 @@ function clipQuery(query: string): string {
   return text
 }
 /**
- * Hindsight's bundled embedder and reranker are English models, so its order says little about
- * a Chinese query. Fuse it (reciprocal rank) with DevFlow's own BM25, which tokenizes Chinese,
- * so the caller's budget keeps the memories that actually match. Unmatched items stay, ranked lower.
+ * Hindsight's bundled embedder is an English model and its keyword search does not split Chinese,
+ * so its order says little about a Chinese query. Fuse it (reciprocal rank) with DevFlow's own
+ * BM25, which tokenizes Chinese, weighting BM25 twice, so the caller's budget keeps the memories
+ * that actually match. Unmatched items stay, ranked lower. On the 2026-10-29 validation bank this
+ * put the expected memory in the discussion budget for 85% of held-out questions, against 70%
+ * with equal weights and k = 60 (docs/engineering/project-memory.md).
  */
 export function rankProjectMemories(memories: readonly HindsightMemory[], query: string): HindsightMemory[] {
   const lexical = new Map(rankMemoryByRelevance(memories, query, (memory) => memory.text).map((entry, rank) => [entry.item.id, rank]))
   return memories.map((memory, rank) => ({ memory, rank,
-    score: 1 / (60 + rank + 1) + (lexical.has(memory.id) ? 1 / (60 + lexical.get(memory.id)! + 1) : 0) }))
+    score: 1 / (FUSION_K + rank + 1) + (lexical.has(memory.id) ? LEXICAL_WEIGHT / (FUSION_K + lexical.get(memory.id)! + 1) : 0) }))
     .sort((left, right) => right.score - left.score || left.rank - right.rank).map((entry) => entry.memory)
 }
 /** One line with its kind and date, so a model can weigh consolidated beliefs against single facts. */
@@ -66,10 +78,11 @@ export function createProjectMemoryRecall(deps: {
     const configuration = await activeProjectMemoryConfiguration(deps.store, projectId)
     return configuration && (userId === undefined || configuration.ownerUserId === userId) ? configuration : null
   }
-  async function query(configuration: ProjectMemoryConfiguration, text: string, maxTokens: number, signal?: AbortSignal) {
+  async function query(configuration: ProjectMemoryConfiguration, text: string, signal?: AbortSignal) {
     try {
       const client = await deps.client(configuration)
-      const memories = await client.recallMemories(configuration.bankId, { query: clipQuery(text), maxTokens, ...(signal ? { signal } : {}) })
+      const memories = await client.recallMemories(configuration.bankId, { query: clipQuery(text), maxTokens: PROJECT_MEMORY_CANDIDATE_TOKENS,
+        ...(signal ? { signal } : {}) })
       return { memories, degraded: false }
     } catch (error) {
       signal?.throwIfAborted()
@@ -82,9 +95,7 @@ export function createProjectMemoryRecall(deps: {
     async recall(input: Parameters<ProjectMemoryRecallPort['recall']>[0]): Promise<ProjectMemoryRecall | null> {
       const configuration = await active(input.projectId, input.userId)
       if (!configuration || !input.query.trim()) return configuration ? { items: [], degraded: false } : null
-      // Ask for more than the budget so re-ranking has candidates; the caller's byte budget applies after.
-      const maxTokens = Math.min(8_192, Math.max(1_024, input.budget.maxBytes))
-      const { memories, degraded } = await query(configuration, input.query, maxTokens, input.signal)
+      const { memories, degraded } = await query(configuration, input.query, input.signal)
       return { degraded, items: rankProjectMemories(memories, input.query).map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
     },
     async assertCurrent(input: Parameters<ProjectMemoryRecallPort['assertCurrent']>[0]): Promise<void> {
@@ -102,7 +113,7 @@ export function createProjectMemoryRecall(deps: {
     async search(input: { projectId: string; query: string; limit: number; signal?: AbortSignal }) {
       const configuration = await active(input.projectId)
       if (!configuration) return null
-      const { memories, degraded } = await query(configuration, input.query, 4_096, input.signal)
+      const { memories, degraded } = await query(configuration, input.query, input.signal)
       return {
         items: rankProjectMemories(memories, input.query).slice(0, Math.min(PROJECT_MEMORY_SEARCH_MAX_ITEMS, input.limit)).map((memory) => ({
           id: `${PROJECT_MEMORY_IDENTITY_PREFIX}${memory.id}`, kind: memory.type === 'observation' ? 'observation' : 'fact',
