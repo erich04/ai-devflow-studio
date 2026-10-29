@@ -1,6 +1,21 @@
-import { PROJECT_MEMORY_MISSIONS, PROJECT_MEMORY_POLICY_VERSION, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
-import { HindsightError, type HindsightClient } from './hindsight-client'
+import {
+  PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_MISSIONS, PROJECT_MEMORY_POLICY_VERSION,
+  type ProjectKnowledgePageId, type ProjectMemoryConfiguration,
+} from '@ai-devflow/shared'
+import { HindsightError, type HindsightClient, type HindsightMentalModelDefinition } from './hindsight-client'
 import type { ProjectMemoryClaim, ProjectMemorySettlement } from './project-memory-store'
+
+export const knowledgePageModelId = (id: ProjectKnowledgePageId) => `devflow-${id}`
+/** Rewritten after consolidation, at most hourly, editing only what changed; never reading other pages. */
+export const KNOWLEDGE_PAGE_MODELS: readonly HindsightMentalModelDefinition[] = PROJECT_KNOWLEDGE_PAGES.map((page) => ({
+  id: knowledgePageModelId(page.id), name: page.title, sourceQuery: page.query, maxTokens: 1_500,
+  trigger: { mode: 'delta', refresh_after_consolidation: true, min_refresh_interval_seconds: PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS,
+    exclude_mental_models: true, budget: 'low' },
+}))
+/** Empties every knowledge page of a bank, without a model call, so none shows memory that was just removed. */
+export async function clearKnowledgePages(client: HindsightClient, bankId: string): Promise<void> {
+  for (const page of KNOWLEDGE_PAGE_MODELS) await client.clearMentalModel(bankId, page.id)
+}
 
 export type ProjectMemoryServiceStore = {
   listProjectMemoryConfigurations(): Promise<ProjectMemoryConfiguration[]>
@@ -28,6 +43,7 @@ export class ProjectMemoryService {
   private running: Promise<number> | null = null
   private stopping = false
   private readonly configuredBanks = new Set<string>()
+  private readonly pagedBanks = new Set<string>()
   constructor(private readonly deps: ProjectMemoryServiceDependencies) {}
   private now(): string { return this.deps.now?.() ?? new Date().toISOString() }
   async recover(): Promise<void> { await this.deps.store.recoverProjectMemoryDocuments() }
@@ -51,8 +67,31 @@ export class ProjectMemoryService {
       }
     }
   }
+  private async configure(client: HindsightClient, bankId: string): Promise<void> {
+    if (this.configuredBanks.has(bankId)) return
+    await client.configureMemoryBank(bankId, PROJECT_MEMORY_MISSIONS)
+    this.configuredBanks.add(bankId)
+  }
+  /**
+   * Every enabled bank gets DevFlow's knowledge pages, checked once per app run. Creating a page in
+   * a bank that already has memories writes it at once (a model call), so this waits for the relay.
+   */
+  private async ensurePages(): Promise<void> {
+    if (!(this.deps.canSubmit?.() ?? true)) return
+    for (const config of await this.deps.store.listProjectMemoryConfigurations()) {
+      if (this.stopping) return
+      if (!config.enabled || this.pagedBanks.has(config.bankId)) continue
+      try {
+        const client = await this.deps.client(config)
+        await this.configure(client, config.bankId)
+        for (const page of KNOWLEDGE_PAGE_MODELS) await client.ensureMentalModel(config.bankId, page)
+        this.pagedBanks.add(config.bankId)
+      } catch { /* Hindsight unavailable: try again on the next cycle. */ }
+    }
+  }
   private async run(limit: number): Promise<number> {
     await this.deletePendingBanks()
+    await this.ensurePages()
     let processed = 0
     for (; processed < limit && !this.stopping; processed++) {
       const claim = await this.deps.store.claimProjectMemoryDocument(this.now(), { submit: this.deps.canSubmit?.() ?? true })
@@ -75,15 +114,15 @@ export class ProjectMemoryService {
       // A retain still running could recreate the document after this delete; keep polling until it ends.
       const operation = document.attempts > 0 ? await client.operation(document.bankId, document.operationId) : 'not_found'
       await client.deleteDocument(document.bankId, document.documentId)
-      await settle(['completed', 'failed', 'cancelled', 'not_found'].includes(operation) ? 'deleted' : 'unknown')
+      const deleted = ['completed', 'failed', 'cancelled', 'not_found'].includes(operation)
+      // A page rewritten before the document was gone may still contain it; empty the pages once more.
+      if (deleted && document.attempts > 0) await clearKnowledgePages(client, document.bankId)
+      await settle(deleted ? 'deleted' : 'unknown')
       return
     }
     if (claim.action === 'submit') {
       try {
-        if (!this.configuredBanks.has(document.bankId)) {
-          await client.configureMemoryBank(document.bankId, PROJECT_MEMORY_MISSIONS)
-          this.configuredBanks.add(document.bankId)
-        }
+        await this.configure(client, document.bankId)
         await client.retainDocument(document.bankId, {
           documentId: document.documentId, operationId: document.operationId, content: document.payload,
           context: document.context, timestamp: document.occurredAt, tags: document.tags,

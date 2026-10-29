@@ -191,3 +191,46 @@ it('lists, edits, retires and deletes project memory with bounded requests', asy
   await expect(client.deleteBank('df-memory-gone')).resolves.toBeUndefined()
   await expect(client.listMemories('df-memory-1', { type: 'observation', offset: 0, limit: 101 })).rejects.toThrow('protocol')
 })
+
+it('creates, updates, lists, empties and refreshes knowledge pages (mental models)', async () => {
+  const requests: { method: string; path: string; body: unknown }[] = []
+  let stored: Record<string, unknown> | undefined
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    const parsed = new URL(String(url)); const method = init?.method ?? 'GET'
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    requests.push({ method, path: `${parsed.pathname}${parsed.search}`, body })
+    if (parsed.pathname.endsWith('/mental-models') && method === 'POST') { stored = body; return Response.json({ mental_model_id: body.id, operation_id: 'op-create' }) }
+    if (parsed.pathname.endsWith('/mental-models') && method === 'GET') return Response.json({ items: [
+      { id: 'devflow-decisions', content: '## 决策\n- 删除前二次确认', is_stale: true, last_refreshed_at: '2026-10-29T01:00:00Z', last_refresh_failed_at: null },
+      { id: 'devflow-pitfalls', content: null, last_refreshed_at: 'not a time' },
+      { id: 'Bad Id', content: 'dropped' },
+    ], total: 3, limit: 100, offset: 0 })
+    if (parsed.pathname.endsWith('/refresh')) return Response.json({ operation_id: 'op-refresh', status: 'queued' })
+    if (parsed.pathname.endsWith('/clear')) return parsed.pathname.includes('missing') ? new Response('{}', { status: 404 }) : Response.json({ id: 'devflow-decisions' })
+    if (method === 'PATCH') { stored = { ...stored, ...body }; return Response.json({ id: 'devflow-decisions' }) }
+    return stored ? Response.json({ ...stored, trigger: { ...(stored.trigger as object), refresh_cron: null, keep_trace: false } }) : new Response('{}', { status: 404 })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  const page = { id: 'devflow-decisions', name: '决策与原因', sourceQuery: '列出决策', maxTokens: 1_500,
+    trigger: { mode: 'delta', refresh_after_consolidation: true, min_refresh_interval_seconds: 3_600, exclude_mental_models: true, budget: 'low' } }
+  await client.ensureMentalModel('df-memory-1', page)
+  expect(requests.map((item) => `${item.method} ${item.path}`)).toEqual([
+    'GET /v1/default/banks/df-memory-1/mental-models/devflow-decisions', 'POST /v1/default/banks/df-memory-1/mental-models'])
+  expect(requests[1]!.body).toEqual({ id: page.id, name: page.name, source_query: page.sourceQuery, max_tokens: 1_500, trigger: page.trigger, tags: [] })
+  // Unchanged: nothing is written. A changed definition is patched in place.
+  requests.length = 0
+  await client.ensureMentalModel('df-memory-1', page)
+  expect(requests.map((item) => item.method)).toEqual(['GET'])
+  await client.ensureMentalModel('df-memory-1', { ...page, sourceQuery: '列出决策和原因' })
+  expect(requests.at(-1)).toMatchObject({ method: 'PATCH', body: { source_query: '列出决策和原因' } })
+
+  expect(await client.listMentalModels('df-memory-1')).toEqual([
+    { id: 'devflow-decisions', content: '## 决策\n- 删除前二次确认', stale: true, refreshedAt: '2026-10-29T01:00:00Z' },
+    { id: 'devflow-pitfalls', content: '', stale: false },
+  ])
+  expect(requests.at(-1)!.path).toBe('/v1/default/banks/df-memory-1/mental-models?detail=content&limit=100')
+  await client.clearMentalModel('df-memory-1', 'devflow-decisions')
+  await expect(client.clearMentalModel('df-memory-1', 'missing')).resolves.toBeUndefined()
+  expect(await client.refreshMentalModel('df-memory-1', 'devflow-decisions')).toBe('op-refresh')
+  expect(requests.at(-1)).toMatchObject({ method: 'POST', path: '/v1/default/banks/df-memory-1/mental-models/devflow-decisions/refresh' })
+})

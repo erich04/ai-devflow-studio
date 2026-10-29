@@ -165,6 +165,7 @@ import {
   parseConfigureProjectMemoryInput,
   parseProjectMemoryProjectInput,
   parseClearProjectMemoryInput,
+  parseRefreshProjectKnowledgePageInput,
   parseForgetProjectMemoryInput,
   parseForgetProjectMemorySourceInput,
   parseListProjectMemoriesInput,
@@ -306,15 +307,15 @@ import { createRepositoryKnowledgeService } from './repository-knowledge.js'
 import { HindsightService, type HindsightScope } from './hindsight-service'
 import { createHindsightContextService } from './hindsight-context'
 import { createCodingModelContext } from './coding-model-context'
-import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint } from './hindsight-client'
+import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint, type HindsightClient } from './hindsight-client'
 import { registerProjectMemoryRecall } from './coding-context'
 import { resolveProjectMemoryScope } from './project-memory-capture'
-import { ProjectMemoryService } from './project-memory-service'
+import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
 import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
 import { activeProjectMemoryConfiguration, migrateLegacyProjectMemory, projectMemoryPairingBinding } from './project-memory-capture'
 import { createMemoryModelRelay, MEMORY_RELAY_DEFAULT_PORT, type MemoryModelRelay, type MemoryRelayRoute } from './memory-model-relay'
-import { parseHindsightSetup, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectMemoryConfiguration, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
+import { parseHindsightSetup, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectKnowledgePages, type ProjectMemoryConfiguration, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -647,6 +648,21 @@ async function ownedProjectMemory(projectId: string) {
   if (!scope || scope.userId !== configuration.ownerUserId) throw new Error('项目记忆属于另一位用户，不能查看或修改。')
   if (!hindsightTransportAvailable) throw new Error('当前构建未启用 Hindsight 传输。')
   return { store, configuration, client: await projectMemoryHindsightClient(configuration) }
+}
+/** The project's knowledge pages as Hindsight last wrote them; reading makes no model call. */
+async function projectKnowledgePages(projectId: string): Promise<ProjectKnowledgePages> {
+  const { configuration, client } = await ownedProjectMemory(projectId)
+  const models = new Map((await client.listMentalModels(configuration.bankId)).map((model) => [model.id, model]))
+  return { projectId, pages: PROJECT_KNOWLEDGE_PAGES.map((page) => {
+    const model = models.get(knowledgePageModelId(page.id))
+    return { id: page.id, title: page.title, content: redactProjectMemoryText(model?.content ?? '').value, stale: model?.stale ?? false,
+      ...(model?.refreshedAt ? { refreshedAt: model.refreshedAt } : {}), ...(model?.failedAt ? { failedAt: model.failedAt } : {}) }
+  }), ...(memoryRelay ? {} : { unavailableReason: '记忆模型中继未运行，知识页暂时不会更新。' }) }
+}
+/** Editing or forgetting memory empties the knowledge pages, so they never show what was removed. */
+async function emptyKnowledgePages(client: HindsightClient, bankId: string): Promise<void> {
+  try { await clearKnowledgePages(client, bankId) }
+  catch { console.warn('[project-memory] Knowledge pages were not emptied; they may show removed memory until refreshed.') }
 }
 async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
   const { store, configuration, client } = await ownedProjectMemory(input.projectId)
@@ -2812,6 +2828,7 @@ function registerIpcHandlers() {
     // Hindsight re-embeds the memory and consolidates again; that consolidation is a model call.
     await client.updateMemory(configuration.bankId, input.memoryId, redactProjectMemoryText(input.text).value)
     await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    await emptyKnowledgePages(client, configuration.bankId)
     return projectMemoryStatus(input.projectId)
   })
   ipcMain.handle(ipcChannels.forgetProjectMemory, async (_, payload: unknown) => {
@@ -2819,14 +2836,27 @@ function registerIpcHandlers() {
     const { store, configuration, client } = await ownedProjectMemory(input.projectId)
     await client.invalidateMemory(configuration.bankId, input.memoryId, 'deleted by the user in DevFlow')
     await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    await emptyKnowledgePages(client, configuration.bankId)
     return projectMemoryStatus(input.projectId)
   })
   ipcMain.handle(ipcChannels.forgetProjectMemorySource, async (_, payload: unknown) => {
     const input = parseForgetProjectMemorySourceInput(payload)
-    const { store } = await ownedProjectMemory(input.projectId)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
     await store.forgetProjectMemoryDocument(input.projectId, input.documentId)
+    // Emptied again once Hindsight has deleted the document (project-memory-service).
+    await emptyKnowledgePages(client, configuration.bankId)
     wakeHindsight()
     return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.listProjectKnowledgePages, async (_, payload: unknown) =>
+    projectKnowledgePages(parseProjectMemoryProjectInput(payload).projectId))
+  ipcMain.handle(ipcChannels.refreshProjectKnowledgePage, async (_, payload: unknown) => {
+    const input = parseRefreshProjectKnowledgePageInput(payload)
+    const { configuration, client } = await ownedProjectMemory(input.projectId)
+    // A refresh is a model call routed through the relay and charged to the Team budget.
+    if (!memoryRelay) throw new Error('记忆模型中继未运行，无法刷新知识页。')
+    await client.refreshMentalModel(configuration.bankId, knowledgePageModelId(input.pageId))
+    return projectKnowledgePages(input.projectId)
   })
   ipcMain.handle(ipcChannels.clearProjectMemory, async (_, payload: unknown) => {
     const input = parseClearProjectMemoryInput(payload)

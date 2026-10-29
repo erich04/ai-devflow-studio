@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { PROJECT_MEMORY_MISSIONS, PROJECT_MEMORY_POLICY_VERSION, type ProjectMemoryDocumentInput } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightOperation } from './hindsight-client'
 import { createLocalStore, type LocalStore } from './local-store'
-import { ProjectMemoryService } from './project-memory-service'
+import { KNOWLEDGE_PAGE_MODELS, ProjectMemoryService } from './project-memory-service'
 
 const directories: string[] = []
 const stores: LocalStore[] = []
@@ -33,6 +33,8 @@ async function fixture() {
     operation: vi.fn(async () => operation),
     deleteDocument: vi.fn(async () => undefined),
     deleteBank: vi.fn(async () => undefined),
+    ensureMentalModel: vi.fn(async (_bank: string, _page: { id: string }) => undefined),
+    clearMentalModel: vi.fn(async (_bank: string, _id: string) => undefined),
   }
   let clock = Date.now()
   const service = new ProjectMemoryService({ store, client: async () => client as unknown as HindsightClient,
@@ -62,6 +64,11 @@ it('configures the bank once and sends the document with its source metadata, th
   await service.process()
   expect(client.configureMemoryBank).toHaveBeenCalledTimes(1)
   expect(client.retainDocument).toHaveBeenCalledTimes(2)
+  // The knowledge pages are set up once per bank and app run.
+  expect(client.ensureMentalModel.mock.calls.map(([bank, page]) => [bank, page.id])).toEqual(
+    ['devflow-conventions', 'devflow-decisions', 'devflow-pitfalls', 'devflow-preferences'].map((id) => [config.bankId, id]))
+  expect(KNOWLEDGE_PAGE_MODELS[0]!.trigger).toEqual({ mode: 'delta', refresh_after_consolidation: true,
+    min_refresh_interval_seconds: 3_600, exclude_mental_models: true, budget: 'low' })
 })
 
 it('counts a rejected send, polls an uncertain one, and resends what Hindsight never received', async () => {
@@ -87,6 +94,8 @@ it('holds new sends while the relay is down and removes a forgotten document onl
   let relay = false
   const gated = new ProjectMemoryService({ store, client: async () => client as unknown as HindsightClient, canSubmit: () => relay })
   expect(await gated.process()).toBe(0)
+  // Creating pages in a bank that has memories writes them at once, so that waits for the relay too.
+  expect(client.ensureMentalModel).not.toHaveBeenCalled()
   relay = true
   expect(await gated.process()).toBe(1)
   await store.forgetProjectMemoryDocument('project', document.id)
@@ -94,9 +103,12 @@ it('holds new sends while the relay is down and removes a forgotten document onl
   await service.process()
   expect(client.deleteDocument).toHaveBeenCalledTimes(1)
   expect((await store.listProjectMemoryDocuments())[0]?.status).toBe('delete_pending')
+  expect(client.clearMentalModel).not.toHaveBeenCalled()
   setOperation('completed'); advance(61_000)
   await service.process()
   expect((await store.listProjectMemoryDocuments())[0]).toMatchObject({ status: 'deleted', payload: '' })
+  // Pages rewritten while the document still existed are emptied once it is gone.
+  expect(client.clearMentalModel.mock.calls.map(([, id]) => id)).toEqual(KNOWLEDGE_PAGE_MODELS.map((page) => page.id))
   await gated.shutdown()
   expect(await gated.process()).toBe(0)
 })

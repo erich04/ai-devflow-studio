@@ -81,6 +81,8 @@ const desktopApi: DevFlowDesktopApi = {
   forgetProjectMemory: (input) => ipcRenderer.invoke(ipcChannels.forgetProjectMemory, input),
   forgetProjectMemorySource: (input) => ipcRenderer.invoke(ipcChannels.forgetProjectMemorySource, input),
   clearProjectMemory: (input) => ipcRenderer.invoke(ipcChannels.clearProjectMemory, input),
+  listProjectKnowledgePages: (input) => ipcRenderer.invoke(ipcChannels.listProjectKnowledgePages, input),
+  refreshProjectKnowledgePage: (input) => ipcRenderer.invoke(ipcChannels.refreshProjectKnowledgePage, input),
   cancelWorkflowAgentNode: (input) => ipcRenderer.invoke(ipcChannels.cancelWorkflowAgentNode, input),
   completeWorkflowAgentNode: (input) =>
     ipcRenderer.invoke(ipcChannels.completeWorkflowAgentNode, input),
