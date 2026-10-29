@@ -153,7 +153,7 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
     {configured && <p className="project-memory-meta">来源：已写入 {counts.retained ?? 0} · 等待 {(counts.queued ?? 0) + (counts.submitted ?? 0)} · 写入失败 {counts.failed ?? 0} · 已忘记 {(counts.deleted ?? 0) + (counts.delete_pending ?? 0)}</p>}
 
     {configured && api.listProjectKnowledgePages && <div className="stack" aria-label="知识页">
-      <div className="row"><strong>知识页</strong><span className="project-memory-meta">Hindsight 根据记忆自动整理，有新记忆后最多每小时更新一次</span></div>
+      <div className="row"><strong>知识页</strong><span className="project-memory-meta">Hindsight 根据记忆自动整理，有新记忆后最多每 6 小时更新一次</span></div>
       <div className="project-memory-actions" role="tablist" aria-label="知识页列表">
         {PROJECT_KNOWLEDGE_PAGES.map((item) => <button key={item.id} type="button" role="tab" aria-selected={pageId === item.id}
           className={pageId === item.id ? 'primary-button' : 'ghost-button'} onClick={() => { setPageId(item.id); setPageNotice('') }}>{item.title}</button>)}

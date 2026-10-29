@@ -19,7 +19,7 @@
 
 编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。知识页的项目记忆面板可以开关、查看、编辑、删除、忘记来源和清空，还能阅读四个知识页（约定与命令、决策与原因、问题与解决办法、用户偏好），规则见 ADR 0030「记忆页」；对应 IPC 为 `getProjectMemoryStatus`、`configureProjectMemory`、`listProjectMemories`、`updateProjectMemory`、`forgetProjectMemory`、`forgetProjectMemorySource`、`clearProjectMemory`、`listProjectKnowledgePages`、`refreshProjectKnowledgePage`。
 
-知识页是 Hindsight 的 mental model，id 为 `devflow-<页面>`，由后台 worker 在中继运行时为每个开启的 bank 创建（每次启动检查一次）。阅读知识页不调用模型；Hindsight 归纳后改写（每页最多每小时一次）和「立即整理」会调用模型并计入团队预算。
+知识页是 Hindsight 的 mental model，id 为 `devflow-<页面>`，由后台 worker 在中继运行时为每个开启的 bank 创建（每次启动检查一次）。阅读知识页不调用模型；Hindsight 归纳后改写（每页最多每 6 小时一次）和「立即整理」会调用模型并计入团队预算；2026-10-29 用 DeepSeek Flash 实测每页一次约 0.8 美分。
 
 代码位置：
 
@@ -44,6 +44,13 @@ Compose 中 shell 里导出的同名变量优先于 `--env-file`；更换令牌�
 Linux Docker 的 `host.docker.internal` 指向网桥地址，访问不到只监听 `127.0.0.1` 的中继，需要设置 `DEVFLOW_MEMORY_RELAY_HOST` 为网桥地址（例如 `172.17.0.1`）。中继仍要求令牌。
 
 中继日志只记录未完成调用的状态和原因（`memory_not_enabled`、`budget_not_ready`、`budget_unavailable` 等），不记录 bank、提示或回答。
+
+## 与 Native Coding v3（#238）合并时
+
+- schema 41 已用于项目记忆表；v3 的 `native_coding_sessions` 迁移需要改为 42，并更新测试里的 schema 版本断言。
+- 第四期已删除旧自动学习链路、Coding Run 候选学习和本地记忆召回（`automatic-memory-local-store.test.ts`、`coding-run-memory-learning.ts` 等）；v3 分支对这些文件的改动以 main 为准。`recallScopedMemory` 只返回项目记忆。
+- `native-conversation.ts`：保留 main 的 `communicationPreferences` 和系统提示，同时保留 v3 抽出的 `nativeRequestBudget`。
+- 讨论栏的只读 `memory_search` 按同样的方式提供给 Native Coding v3；v3 简报已通过 `recallCodingMemory` 得到项目记忆。
 
 ## 验证
 
@@ -71,7 +78,7 @@ DEEPSEEK_API_KEY=<已授权的密钥，只在环境中> \
 corepack pnpm exec tsx scripts/project-memory-live-validation.mts
 ```
 
-脚本只在获得提供方、模型和预算授权后运行；每次运行受 `DEVFLOW_MEMORY_LIVE_MAX_USD` 和 3 美元累计账本双重限制，报告写在 `out/project-memory-validation/`。结果见[2026-10-28 验证](../validation/project-memory-live-20261028.md)。
+脚本只在获得提供方、模型和预算授权后运行；每次运行受 `DEVFLOW_MEMORY_LIVE_MAX_USD` 和 3 美元累计账本双重限制，报告写在 `out/project-memory-validation/`，13 项检查全部通过才算通过。它覆盖抽取、召回、知识页和真实讨论（讨论用 `deepseek-flash`，可用 `DEVFLOW_MEMORY_LIVE_CONVERSATION_MODEL` 改），一次约 4 美分；讨论调用按 1M tokens 上下文预留，`DEVFLOW_MEMORY_LIVE_MAX_USD` 至少设为 0.4。结果见[2026-10-28 验证](../validation/project-memory-live-20261028.md)和[2026-10-29 全链路验证](../validation/project-memory-live-20261029.md)。
 
 ### 2026-10-28 无费用链路检查
 

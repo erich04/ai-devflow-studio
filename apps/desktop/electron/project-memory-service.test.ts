@@ -4,7 +4,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { afterEach, expect, it, vi } from 'vitest'
 import { PROJECT_MEMORY_MISSIONS, PROJECT_MEMORY_POLICY_VERSION, type ProjectMemoryDocumentInput } from '@ai-devflow/shared'
-import { HindsightError, type HindsightClient, type HindsightOperation } from './hindsight-client'
+import { HindsightError, type HindsightClient, type HindsightMentalModel, type HindsightOperation } from './hindsight-client'
 import { createLocalStore, type LocalStore } from './local-store'
 import { KNOWLEDGE_PAGE_MODELS, ProjectMemoryService } from './project-memory-service'
 
@@ -35,6 +35,8 @@ async function fixture() {
     deleteBank: vi.fn(async () => undefined),
     ensureMentalModel: vi.fn(async (_bank: string, _page: { id: string }) => undefined),
     clearMentalModel: vi.fn(async (_bank: string, _id: string) => undefined),
+    listMentalModels: vi.fn(async (_bank: string): Promise<HindsightMentalModel[]> => []),
+    refreshMentalModel: vi.fn(async (_bank: string, _id: string) => 'operation'),
   }
   let clock = Date.now()
   const service = new ProjectMemoryService({ store, client: async () => client as unknown as HindsightClient,
@@ -68,7 +70,7 @@ it('configures the bank once and sends the document with its source metadata, th
   expect(client.ensureMentalModel.mock.calls.map(([bank, page]) => [bank, page.id])).toEqual(
     ['devflow-conventions', 'devflow-decisions', 'devflow-pitfalls', 'devflow-preferences'].map((id) => [config.bankId, id]))
   expect(KNOWLEDGE_PAGE_MODELS[0]!.trigger).toEqual({ mode: 'delta', refresh_after_consolidation: true,
-    min_refresh_interval_seconds: 3_600, exclude_mental_models: true, budget: 'low' })
+    min_refresh_interval_seconds: 21_600, exclude_mental_models: true, budget: 'low' })
 })
 
 it('counts a rejected send, polls an uncertain one, and resends what Hindsight never received', async () => {
@@ -127,4 +129,53 @@ it('deletes the banks of cleared generations and retries when Hindsight is unava
   expect((await store.getProjectMemoryConfiguration('project'))?.pendingBankDeletions).toBeUndefined()
   // The cleared document is never sent to the new bank.
   expect(client.retainDocument).not.toHaveBeenCalled()
+})
+
+it('writes empty pages of a bank that has memories, but not while a source is being forgotten, and not twice in ten minutes', async () => {
+  const { store, config, document, client, service, setOperation, advance } = await fixture()
+  const old = new Date(Date.now() - 3_600_000).toISOString()
+  let pages: HindsightMentalModel[] = KNOWLEDGE_PAGE_MODELS.map((page) => ({ id: page.id, content: '', stale: false, refreshedAt: old }))
+  client.listMentalModels.mockImplementation(async () => pages)
+  await service.process()
+  // Nothing is retained yet: an empty bank has nothing to write about.
+  expect(client.refreshMentalModel).not.toHaveBeenCalled()
+  setOperation('completed'); advance(6_000)
+  await service.process()
+  expect((await store.listProjectMemoryDocuments())[0]?.status).toBe('retained')
+  advance(1_000)
+  await service.process()
+  expect(client.refreshMentalModel.mock.calls.map(([bank, id]) => [bank, id])).toEqual(KNOWLEDGE_PAGE_MODELS.map((page) => [config.bankId, page.id]))
+  // Asked already: the next cycles wait, even though the pages are still empty.
+  advance(60_000)
+  await service.process()
+  expect(client.refreshMentalModel).toHaveBeenCalledTimes(4)
+  // A written page is left alone; a failed one waits an hour.
+  pages = pages.map((page, index) => index === 0 ? { ...page, content: '## 命令' } : index === 1 ? { ...page, failedAt: new Date(Date.now() + 61_000).toISOString() } : page)
+  advance(10 * 60_000)
+  await service.process()
+  expect(client.refreshMentalModel.mock.calls.slice(4).map(([, id]) => id)).toEqual(KNOWLEDGE_PAGE_MODELS.slice(2).map((page) => page.id))
+  // While a forgotten source is still being deleted, a rewrite could keep it; wait.
+  await store.forgetProjectMemoryDocument('project', document.id)
+  setOperation('processing'); advance(11 * 60_000)
+  await service.process()
+  expect(client.refreshMentalModel).toHaveBeenCalledTimes(6)
+})
+
+it('leaves an empty page written after the last change, and writes it again once memory was edited', async () => {
+  const { store, client, service, setOperation, advance } = await fixture()
+  setOperation('completed')
+  await service.process(); advance(6_000); await service.process()
+  expect((await store.listProjectMemoryDocuments())[0]?.status).toBe('retained')
+  // Hindsight already wrote these pages after everything was learned and found nothing to say.
+  const later = new Date(Date.now() + 3_600_000).toISOString()
+  client.listMentalModels.mockImplementation(async () => KNOWLEDGE_PAGE_MODELS.map((page) => ({ id: page.id, content: '', stale: false, refreshedAt: later })))
+  advance(1_000); await service.process()
+  expect(client.refreshMentalModel).not.toHaveBeenCalled()
+  // Editing a memory empties the pages; they are written again.
+  await store.markProjectMemoryChanged('project', 'o1')
+  const edited = (await store.getProjectMemoryConfiguration('project'))!.changedMemories!.o1!
+  client.listMentalModels.mockImplementation(async () => KNOWLEDGE_PAGE_MODELS.map((page) => ({ id: page.id, content: '', stale: false,
+    refreshedAt: new Date(Date.parse(edited) - 1_000).toISOString() })))
+  advance(1_000); await service.process()
+  expect(client.refreshMentalModel).toHaveBeenCalledTimes(KNOWLEDGE_PAGE_MODELS.length)
 })

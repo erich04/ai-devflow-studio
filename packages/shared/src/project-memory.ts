@@ -121,13 +121,14 @@ export type ConfigureProjectMemoryInput = {
 
 /**
  * Knowledge pages: Hindsight mental models that summarize what the project's memory holds. Hindsight
- * rewrites each page after consolidation (at most hourly, editing only what changed) or when the
- * user refreshes it; each rewrite is a model call charged like extraction. Editing or forgetting
+ * rewrites each page after consolidation (at most every six hours, editing only what changed) or when
+ * the user refreshes it; each rewrite is a model call charged like extraction (about 0.8 US cents per
+ * page with DeepSeek Flash, measured 2026-10-29). Editing or forgetting
  * memory empties the pages first, so they never show what was removed. Pages are for the user to
  * read; prompts keep using recalled memories.
  */
 export type ProjectKnowledgePageId = 'conventions' | 'decisions' | 'pitfalls' | 'preferences'
-export const PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS = 60 * 60
+export const PROJECT_KNOWLEDGE_PAGE_REFRESH_SECONDS = 6 * 60 * 60
 export const PROJECT_KNOWLEDGE_PAGES: ReadonlyArray<{ id: ProjectKnowledgePageId; title: string; query: string }> = [
   { id: 'conventions', title: '约定与命令',
     query: '总结本项目的编码约定、目录与模块分工、构建/测试/运行命令和环境要求。按主题分节，用中文。只写记忆中有依据的内容，没有依据的不写。' },
