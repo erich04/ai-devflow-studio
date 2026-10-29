@@ -117,7 +117,8 @@ it('configures a project memory bank with its missions and verifies the saved co
   expect(requests.map((item) => `${item.method} ${new URL(item.url).pathname}`)).toEqual([
     'GET /version', 'PUT /v1/default/banks/df-memory-1', 'PATCH /v1/default/banks/df-memory-1/config'])
   expect(requests[2]!.body).toEqual({ updates: { enable_observations: true, enable_auto_consolidation: true, entities_allow_free_form: true,
-    retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations, reflect_mission: missions.reflect } })
+    retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations, reflect_mission: missions.reflect,
+    enable_reranking: false } })
   fetcher.mockImplementation(async (url, init) => String(url).endsWith('/version') ? Response.json({ api_version: '1.0.0' })
     : init?.method === 'PATCH' ? Response.json({ bank_id: 'df-memory-1', config: { ...saved, enable_observations: false } }) : Response.json({}))
   await expect(client.configureMemoryBank('df-memory-1', missions)).rejects.toThrow('protocol')
@@ -161,6 +162,12 @@ it('recalls project memory text, preferring observations, and drops malformed re
   await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 10 })).rejects.toThrow('protocol')
   fetcher.mockResolvedValueOnce(Response.json({ results: 'not a list' }))
   await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 1_000 })).rejects.toThrow('protocol')
+  // A full allowance of short memories is several hundred results.
+  const many = (count: number) => Response.json({ results: Array.from({ length: count }, (_, index) => ({ id: `f${index}`, type: 'world', text: `事实 ${index}` })) })
+  fetcher.mockResolvedValueOnce(many(600))
+  expect(await client.recallMemories('df-memory-1', { query: '删除', maxTokens: 8_192 })).toHaveLength(600)
+  fetcher.mockResolvedValueOnce(many(1_025))
+  await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 8_192 })).rejects.toThrow('protocol')
 })
 it('lists, edits, retires and deletes project memory with bounded requests', async () => {
   const requests: Array<{ method: string; url: string; body: unknown }> = []

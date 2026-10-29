@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 import { afterEach, expect, it, vi } from 'vitest'
-import { CODING_MEMORY_RECALL_BUDGET } from '@ai-devflow/shared'
+import { CODING_MEMORY_RECALL_BUDGET, CONVERSATION_MEMORY_RECALL_BUDGET } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import { createLocalStore, type LocalStore } from './local-store'
 import { createProjectMemoryRecall, projectMemoryStatement, rankProjectMemories } from './project-memory-recall'
@@ -38,7 +38,11 @@ async function fixture(options: { transport?: boolean } = {}) {
 it('recalls the project bank with a bounded query and labels each memory', async () => {
   const { recall, client, config, owner } = await fixture()
   const result = await recall.recall({ projectId: 'project', userId: owner, query: `删除确认 ${'背景'.repeat(2_000)}`, budget: CODING_MEMORY_RECALL_BUDGET })
-  expect(client.recallMemories).toHaveBeenCalledWith(config.bankId, expect.objectContaining({ maxTokens: 4_000 }))
+  // Every caller gets the full candidate allowance; its own byte budget applies afterwards.
+  expect(client.recallMemories).toHaveBeenCalledWith(config.bankId, expect.objectContaining({ maxTokens: 8_192 }))
+  await recall.recall({ projectId: 'project', userId: owner, query: '删除', budget: CONVERSATION_MEMORY_RECALL_BUDGET })
+  await recall.search({ projectId: 'project', query: '删除', limit: 3 })
+  expect(client.recallMemories.mock.calls.map((call) => (call as unknown as [string, { maxTokens: number }])[1].maxTokens)).toEqual([8_192, 8_192, 8_192])
   const sent = (client.recallMemories.mock.calls[0] as unknown as [string, { query: string }])[1].query
   expect(new TextEncoder().encode(sent).byteLength).toBeLessThanOrEqual(1_500)
   expect(result).toEqual({ degraded: false, items: [
@@ -90,6 +94,12 @@ it('puts memories that match a Chinese query first without dropping the rest', (
   expect(rankProjectMemories(memories, '怎么跑测试？').map((memory) => memory.id)).toEqual(['c', 'a', 'b', 'd'])
   expect(rankProjectMemories(memories, '用户希望用什么语言回答？')[0]?.id).toBe('d')
   expect(rankProjectMemories(memories, 'unrelated').map((memory) => memory.id)).toEqual(['a', 'b', 'c', 'd'])
+  // DevFlow's lexical rank counts twice: a much better match just below a weak one comes first.
+  const shortcuts: HindsightMemory[] = [
+    { id: 'weak', type: 'observation', text: '删除前要确认。' },
+    { id: 'strong', type: 'observation', text: '快捷键：Delete 键删除，Ctrl+Z 撤销。' },
+  ]
+  expect(rankProjectMemories(shortcuts, '删除和撤销的快捷键是什么？').map((memory) => memory.id)).toEqual(['strong', 'weak'])
 })
 
 it('treats memory recalled before an edit, a deletion or a clear as stale', async () => {

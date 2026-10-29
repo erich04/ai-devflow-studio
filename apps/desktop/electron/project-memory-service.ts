@@ -78,17 +78,20 @@ export class ProjectMemoryService {
     this.configuredBanks.add(bankId)
   }
   /**
-   * Every enabled bank gets DevFlow's knowledge pages, checked once per app run. Creating a page in
-   * a bank that already has memories writes it at once (a model call), so this waits for the relay.
+   * Every enabled bank gets DevFlow's settings and knowledge pages, checked once per app run. The
+   * settings cost nothing and also decide how fast recall is, so they do not wait for the relay.
+   * Creating a page in a bank that already has memories writes it at once (a model call), so the
+   * pages wait for the relay.
    */
-  private async ensurePages(): Promise<void> {
-    if (!(this.deps.canSubmit?.() ?? true)) return
+  private async ensureBanks(): Promise<void> {
+    const submit = this.deps.canSubmit?.() ?? true
     for (const config of await this.deps.store.listProjectMemoryConfigurations()) {
       if (this.stopping) return
-      if (!config.enabled || this.pagedBanks.has(config.bankId)) continue
+      if (!config.enabled || this.pagedBanks.has(config.bankId) || (!submit && this.configuredBanks.has(config.bankId))) continue
       try {
         const client = await this.deps.client(config)
         await this.configure(client, config.bankId)
+        if (!submit) continue
         for (const page of KNOWLEDGE_PAGE_MODELS) await client.ensureMentalModel(config.bankId, page)
         this.pagedBanks.add(config.bankId)
       } catch { /* Hindsight unavailable: try again on the next cycle. */ }
@@ -130,7 +133,7 @@ export class ProjectMemoryService {
   }
   private async run(limit: number): Promise<number> {
     await this.deletePendingBanks()
-    await this.ensurePages()
+    await this.ensureBanks()
     await this.writeEmptyPages()
     let processed = 0
     for (; processed < limit && !this.stopping; processed++) {
