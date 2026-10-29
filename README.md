@@ -324,22 +324,23 @@ corepack pnpm dev:electron
 
 ### 无需 GitHub 登录，启动本地团队环境
 
-先准备一个专用的本地 PostgreSQL 数据库。示例使用角色 `postgres`、密码 `devflow`、数据库 `devflow_local`；角色或密码不同时，请改连接串。该密码只用于本机开发。若本机没有 `postgres` 角色，用超级用户创建后再执行下面的语句。
+先用 PostgreSQL 超级用户创建专用角色和数据库：角色 `devflow_local`（密码 `devflow`，只用于本机开发）和同名数据库。已存在时跳过，不修改已有角色和其他数据库。
 
 ```bash
 sudo -u postgres psql -d postgres -v ON_ERROR_STOP=1 <<'SQL'
-ALTER ROLE postgres WITH LOGIN PASSWORD 'devflow';
-SELECT 'CREATE DATABASE devflow_local OWNER postgres'
+SELECT 'CREATE ROLE devflow_local LOGIN PASSWORD ''devflow'''
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'devflow_local')\gexec
+SELECT 'CREATE DATABASE devflow_local OWNER devflow_local'
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'devflow_local')\gexec
 SQL
 ```
 
-Debian 与 Ubuntu 的默认集群通过操作系统用户 `postgres` 做本地认证。macOS Homebrew 在当前用户已是超级用户时，直接运行 `psql`。
+Debian 与 Ubuntu 的默认集群通过操作系统用户 `postgres` 做本地认证。macOS Homebrew 的当前用户通常已是超级用户，把开头换成 `psql -d postgres -v ON_ERROR_STOP=1 <<'SQL'`。改用其他角色或密码时，同步修改下面的连接串。
 
 API 和 Web 使用相同的回环主机名：
 
 ```bash
-export DEVFLOW_DATABASE_URL='postgres://postgres:devflow@127.0.0.1:5432/devflow_local'
+export DEVFLOW_DATABASE_URL='postgres://devflow_local:devflow@127.0.0.1:5432/devflow_local'
 export DEVFLOW_ENABLE_DEMO_DATA=false
 export DEVFLOW_LOCAL_AUTH_ENABLED=true
 export DEVFLOW_REQUIRE_AUTH=true
