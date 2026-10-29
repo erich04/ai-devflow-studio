@@ -45,6 +45,13 @@ Linux Docker 的 `host.docker.internal` 指向网桥地址，访问不到只监�
 
 中继日志只记录未完成调用的状态和原因（`memory_not_enabled`、`budget_not_ready`、`budget_unavailable` 等），不记录 bank、提示或回答。
 
+## 与 Native Coding v3（#238）合并时
+
+- schema 41 已用于项目记忆表；v3 的 `native_coding_sessions` 迁移需要改为 42，并更新测试里的 schema 版本断言。
+- 第四期已删除旧自动学习链路、Coding Run 候选学习和本地记忆召回（`automatic-memory-local-store.test.ts`、`coding-run-memory-learning.ts` 等）；v3 分支对这些文件的改动以 main 为准。`recallScopedMemory` 只返回项目记忆。
+- `native-conversation.ts`：保留 main 的 `communicationPreferences` 和系统提示，同时保留 v3 抽出的 `nativeRequestBudget`。
+- 讨论栏的只读 `memory_search` 按同样的方式提供给 Native Coding v3；v3 简报已通过 `recallCodingMemory` 得到项目记忆。
+
 ## 验证
 
 ```sh
