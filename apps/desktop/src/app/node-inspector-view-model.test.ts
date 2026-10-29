@@ -301,7 +301,7 @@ describe('node inspector view model', () => {
       secondaryActionIds: ['runKnowledgeReview'],
     })
     expect(viewModel.actionCatalog.approveGate.label).toBe('确认需求')
-    expect(viewModel.actionCatalog.runKnowledgeReview.label).toBe('运行门禁审查')
+    expect(viewModel.actionCatalog.runKnowledgeReview.label).toBe('审查当前需求')
     expect(viewModel.actions.map((action) => action.id)).toEqual([])
     expect(viewModel).not.toHaveProperty('gateRequirementRows')
   })
@@ -1041,7 +1041,8 @@ describe('task status row projection (S1, plan §6.1)', () => {
     expect(viewModel.nextAction.confirmBefore?.message).toContain('需求 v2')
     expect(viewModel.actionCatalog.approveGate.label).toBe('确认需求 v2')
     // Runs in the task (W2); the row names the model and the possible cost before the call.
-    expect(viewModel.actionCatalog.runKnowledgeReview).toMatchObject({ label: '运行门禁审查', disabledReasons: ['running_agent_review', 'review_unavailable'] })
+    // The action names the version it reviews (#251).
+    expect(viewModel.actionCatalog.runKnowledgeReview).toMatchObject({ label: '审查当前需求 v2', disabledReasons: ['running_agent_review', 'review_unavailable'] })
     expect(viewModel.nextAction.copy).toContain('运行门禁审查前需要先选择模型')
     const withModel = viewModelFor(clarifyGate, {
       canApprove: true,
@@ -1079,6 +1080,60 @@ describe('task status row projection (S1, plan §6.1)', () => {
       kind: 'approvable', title: '等待你确认需求 v2', qualifier: '有 4 条建议', primaryActionId: 'approveGate',
     })
     expect(viewModel.nextAction.confirmBefore).toBeUndefined()
+  })
+
+  it('says the current version is unreviewed when the only review covered an older version (#251)', () => {
+    const outdated = { appliesToCurrent: false, reviewedLabel: '需求 v1' }
+    const warnOnly = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      latestAgentReview: review({ risks: 3, tests: 1 }),
+      latestReviewScope: outdated,
+      gateEnforcementDecision: decision({ warningReasons: [missingReviewReason] }),
+    })
+    expect(warnOnly.nextAction).toMatchObject({
+      kind: 'approvable', title: '等待你确认需求 v2', qualifier: '当前版本尚未审查',
+      primaryActionId: 'runKnowledgeReview', secondaryActionIds: ['approveGate'],
+    })
+    expect(warnOnly.nextAction.copy).toContain('已有的审查针对需求 v1，不适用于当前版本。')
+    expect(warnOnly.nextAction.copy.startsWith('运行门禁审查前需要先选择模型。')).toBe(true)
+    expect(warnOnly.nextAction.confirmBefore?.message).toBe('当前版本尚未审查（已有的审查针对需求 v1），本次确认针对需求 v2。再次点击「确认需求 v2」提交。')
+    expect(warnOnly.actionCatalog.runKnowledgeReview.label).toBe('审查当前需求 v2')
+
+    // No policy requirement: the v1 suggestions are not counted for v2, and a review of v2 is offered.
+    const noPolicy = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      latestAgentReview: review({ risks: 3, tests: 1 }),
+      latestReviewScope: outdated,
+      gateEnforcementDecision: decision({ status: 'pass' }),
+    })
+    expect(noPolicy.nextAction).toMatchObject({
+      kind: 'approvable', qualifier: '当前版本尚未审查', primaryActionId: 'approveGate', secondaryActionIds: ['runKnowledgeReview'],
+    })
+    expect(noPolicy.nextAction.copy).toContain('已有的审查针对需求 v1')
+    expect(noPolicy.statusDescriptors.find((item) => item.id === 'knowledge-review')).toMatchObject({ state: '仅有旧版本的审查' })
+
+    const blocked = viewModelFor(clarifyGate, {
+      canApprove: false,
+      approvalTarget: requirementV2,
+      latestAgentReview: review({ risks: 0, tests: 0 }),
+      latestReviewScope: outdated,
+      gateEnforcementDecision: decision({ status: 'blocked', blocksApproval: true, blockingReasons: [{ ...missingReviewReason, action: 'block' }] }),
+    })
+    expect(blocked.nextAction).toMatchObject({ kind: 'blocked', qualifier: '当前版本尚未审查', primaryActionId: 'runKnowledgeReview' })
+    expect(blocked.nextAction.copy).toContain('已有的审查针对需求 v1')
+  })
+
+  it('keeps a review of the current version as the result (#251)', () => {
+    const viewModel = viewModelFor(clarifyGate, {
+      canApprove: true,
+      approvalTarget: requirementV2,
+      latestAgentReview: review({ risks: 3, tests: 1 }),
+      latestReviewScope: { appliesToCurrent: true, reviewedLabel: '需求 v2' },
+      gateEnforcementDecision: decision({ status: 'pass' }),
+    })
+    expect(viewModel.nextAction).toMatchObject({ qualifier: '有 4 条建议', primaryActionId: 'approveGate', secondaryActionIds: [] })
   })
 
   it('shows no qualifier when the review has no suggestions', () => {
@@ -1152,6 +1207,9 @@ describe('task status row projection (S1, plan §6.1)', () => {
     expect(running.nextAction).toMatchObject({ kind: 'running', persistentActionIds: ['stopCodingRun'], secondaryActionIds: ['viewCodingRecords'] })
     expect(running.nextAction.primaryActionId).toBeUndefined()
     expect(running.nextAction.copy).not.toContain('Agents')
+    const question = viewModelFor(buildNode, { codingActionProjection: projection({ id: 'view-progress' }, { phase: 'waiting_input', activeRun: { id: 'coding-1', status: 'waiting_input' } }) })
+    expect(question.nextAction).toMatchObject({ kind: 'waiting_input', title: '等待你回答编码问题', persistentActionIds: ['stopCodingRun'] })
+    expect(question.nextAction.primaryActionId).toBeUndefined()
     const permission = viewModelFor(buildNode, {
       codingActionProjection: projection({ id: 'review-permission' }, {
         phase: 'waiting_permission',

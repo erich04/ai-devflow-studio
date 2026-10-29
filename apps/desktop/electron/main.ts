@@ -1,6 +1,7 @@
 import { createNativeRepositoryReviewProvider } from './knowledge-review-native.js'
 import {legacyChatBudget} from './legacy-chat-budget'
 import { createGovernedOpencodeProxy } from './governed-opencode-proxy.js'
+import { createCodingRelayCallContext } from './coding-relay-accounting.js'
 import { withGovernedStageAgent } from './governed-stage-agent.js'
 import { withCleanupFailure } from './opencode-failure.js'
 import { governAgentProvider, type ModelCallGovernance } from './governed-provider.js'
@@ -19,7 +20,7 @@ import { createDiagnosticLog } from '@ai-devflow/shared/node/diagnostic-log'
 import { diagnosticFetch } from './remote-diagnostics.js'
 import { createCredentialAccess } from './credential-access.js'
 import { createProviderOperationGuard, guardProviderCalls } from './provider-operation-guard.js'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import {
   app,
@@ -32,6 +33,8 @@ import {
   shell,
 } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
+import { chmod, readFile, writeFile } from 'node:fs/promises'
+import { isIP } from 'node:net'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
@@ -159,7 +162,16 @@ import {
   parsePromoteAgentMemoryCandidateInput,
   parseDismissAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
+  parseConfigureProjectMemoryInput,
+  parseProjectMemoryProjectInput,
+  parseClearProjectMemoryInput,
+  parseRefreshProjectKnowledgePageInput,
+  parseForgetProjectMemoryInput,
+  parseForgetProjectMemorySourceInput,
+  parseListProjectMemoriesInput,
+  parseUpdateProjectMemoryInput,
   parseReplyCodingPermissionInput,
+  parseReplyCodingQuestionInput,
   parseRenewCodingPermissionInput,
   parseRemoteSnapshotInput,
   parseRetryRemoteSyncOperationInput,
@@ -216,7 +228,6 @@ import {
 import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import { codingPromptDigest, recallScopedMemory } from './coding-context.js'
-import { learnFromCompletedCodingRun } from './coding-run-memory-learning.js'
 import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
@@ -293,6 +304,19 @@ import { createReadOnlyLocalKnowledgeReviewProvider } from './knowledge-review-l
 import { createRepositoryKnowledgeCache } from './repository-knowledge-cache.js'
 import { createRepositoryKnowledgeResolver } from './repository-knowledge-resolver.js'
 import { createRepositoryKnowledgeService } from './repository-knowledge.js'
+import { HindsightService, type HindsightScope } from './hindsight-service'
+import { createHindsightContextService } from './hindsight-context'
+import { createCodingModelContext } from './coding-model-context'
+import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint, type HindsightClient } from './hindsight-client'
+import { registerProjectMemoryRecall } from './coding-context'
+import { resolveProjectMemoryScope } from './project-memory-capture'
+import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
+import { captureCommitProjectMemory } from './project-memory-commits'
+import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
+import { hindsightPairingMatches } from './hindsight-store'
+import { activeProjectMemoryConfiguration, migrateLegacyProjectMemory, projectMemoryPairingBinding } from './project-memory-capture'
+import { createMemoryModelRelay, MEMORY_RELAY_DEFAULT_PORT, type MemoryModelRelay, type MemoryRelayRoute } from './memory-model-relay'
+import { parseHindsightSetup, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectKnowledgePages, type ProjectMemoryConfiguration, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -430,9 +454,296 @@ function getStore() {
       profile: selectedDataProfile,
     })
     console.info('[desktop-data-profile]', safeDesktopDataProfileSummary(selectedDataProfile))
+    projectMemoryRecall = createProjectMemoryRecall({ store, transportAvailable: hindsightTransportAvailable,
+      client: projectMemoryHindsightClient,
+      onDegraded: (reason) => console.warn('[project-memory] Recall unavailable; continuing without project memory.', { reason }) })
+    registerProjectMemoryRecall(store, projectMemoryRecall)
     return store
   })
   return storePromise
+}
+
+let hindsightService: Promise<HindsightService> | undefined
+let hindsightTimer: ReturnType<typeof setInterval> | undefined
+let hindsightCycle: Promise<void> | undefined
+let hindsightStopping = false
+// Explicit deployment opt-in after the pinned protocol pilot; absent in default desktop builds.
+const hindsightTransportAvailable = process.env.DEVFLOW_HINDSIGHT_PROTOCOL_VERIFIED === HINDSIGHT_PROTOCOL.commit
+
+async function hindsightScope(projectId: string): Promise<HindsightScope> {
+  const store = await getStore()
+  if (!(await store.listProjects()).some((p) => p.id === projectId)) throw new Error('本地项目不存在。')
+  const pairing = await store.getDesktopPairingCredential()
+  if (pairing?.localProjectId === projectId) return { projectId, userId: pairing.userId }
+  const principal = await store.resolveLocalProjectMemoryPrincipal(projectId)
+  if (principal.status !== 'resolved') throw new Error('项目存在多个历史用户，无法自动确定记忆归属。')
+  return { projectId, userId: principal.userId }
+}
+function getHindsightService() {
+  hindsightService ??= getStore().then(async (store) => {
+    const service = new HindsightService({
+      store, transportAvailable: hindsightTransportAvailable,
+      loadKnowledge: (projectId) => loadTrustedRepositoryKnowledge(projectId),
+      client: async (config) => createHindsightClient({
+        endpoint: config.endpoint,
+        ...(config.encryptedApiKey ? { apiKey: await credentialAccess.decrypt(config.encryptedApiKey, 'provider', AbortSignal.timeout(2_000)) } : {}),
+      }),
+    })
+    await store.recoverHindsightProjections()
+    return service
+  })
+  return hindsightService
+}
+async function prepareRetrievedKnowledge(input: Parameters<ReturnType<typeof createHindsightContextService>['prepareRetrievedKnowledge']>[0]) {
+  const service = await getHindsightService()
+  input.signal?.throwIfAborted()
+  const configuration = await (await getStore()).getHindsightConfiguration(input.projectId)
+  if (!configuration?.enabled || configuration.ownerUserId !== input.userId) return undefined
+  await loadTrustedRepositoryKnowledge(input.projectId, { refresh: true })
+  return createHindsightContextService(service).prepareRetrievedKnowledge(input)
+}
+async function assertRetrievedKnowledgeCurrent(manifest: RetrievedKnowledgeManifest) {
+  await loadTrustedRepositoryKnowledge(manifest.scope.projectId, { refresh: true })
+  await (await getHindsightService()).assertContextCurrent(manifest)
+}
+function wakeHindsight() {
+  if (hindsightStopping || hindsightCycle || !hindsightTransportAvailable) return
+  hindsightCycle = (async () => {
+    const results = await Promise.allSettled([
+      (async () => {
+        const service = await getHindsightService()
+        if (!hindsightStopping && (await service.cycle()).refreshDeferred) console.warn('[hindsight] Source refresh deferred; cleanup processing continues.')
+      })(),
+      (async () => {
+        await startMemoryRelay()
+        if (!hindsightStopping) await scanCommitHistory()
+        if (!hindsightStopping) await (await getProjectMemoryService()).process()
+      })(),
+    ])
+    if (results.some((result) => result.status === 'rejected')) console.warn('[hindsight] A background worker is deferred; durable tasks retained.')
+  })().catch(() => {
+    console.warn('[hindsight] Synchronization deferred; durable tasks retained.')
+  }).finally(() => { hindsightCycle = undefined })
+}
+
+// Project memory (ADR 0030): captured documents go to the project's Hindsight bank, and
+// Hindsight's extraction calls come back through a loopback relay charged to the project budget.
+let projectMemoryService: Promise<ProjectMemoryService> | undefined
+let projectMemoryRecall: ProjectMemoryRecallService | undefined
+async function projectMemoryHindsightClient(config: ProjectMemoryConfiguration) {
+  return createHindsightClient({ endpoint: config.endpoint,
+    ...(config.encryptedApiKey ? { apiKey: await credentialAccess.decrypt(config.encryptedApiKey, 'provider', AbortSignal.timeout(2_000)) } : {}),
+  })
+}
+let memoryRelay: MemoryModelRelay | undefined
+let memoryRelayFailure: string | undefined
+const memoryRelayPort = (() => {
+  const raw = process.env.DEVFLOW_MEMORY_RELAY_PORT?.trim()
+  const port = raw ? Number(raw) : MEMORY_RELAY_DEFAULT_PORT
+  return Number.isSafeInteger(port) && port >= 1024 && port <= 65_535 ? port : MEMORY_RELAY_DEFAULT_PORT
+})()
+// Docker Desktop reaches 127.0.0.1 through host.docker.internal; Linux Docker needs the bridge address.
+const memoryRelayHost = isIP(process.env.DEVFLOW_MEMORY_RELAY_HOST?.trim() ?? '') ? process.env.DEVFLOW_MEMORY_RELAY_HOST!.trim() : '127.0.0.1'
+const MEMORY_RELAY_TOKEN = /^[A-Za-z0-9_-]{32,200}$/u
+function memoryRelayTokenFile(): string {
+  return path.join(app.getPath('userData'), 'memory-relay-token')
+}
+/** Hindsight's deployment must present this token; it is created once and kept owner-readable only. */
+async function memoryRelayToken(): Promise<string> {
+  const fromEnv = process.env.DEVFLOW_MEMORY_RELAY_TOKEN?.trim()
+  if (fromEnv) {
+    if (!MEMORY_RELAY_TOKEN.test(fromEnv)) throw new Error('DEVFLOW_MEMORY_RELAY_TOKEN must be 32-200 URL-safe characters')
+    return fromEnv
+  }
+  const file = memoryRelayTokenFile()
+  try {
+    const saved = (await readFile(file, 'utf8')).trim()
+    if (MEMORY_RELAY_TOKEN.test(saved)) return saved
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const token = randomBytes(32).toString('base64url')
+  await writeFile(file, `${token}\n`, { mode: 0o600 })
+  await chmod(file, 0o600)
+  return token
+}
+/**
+ * Only the paired project may spend, because its calls are charged to that Team budget, and only
+ * once its memory is on with a chosen Provider. The project's repository knowledge bank (ADR 0027)
+ * extracts through the same route.
+ */
+async function resolveMemoryRelayBank(bankId: string): Promise<MemoryRelayRoute | null> {
+  const store = await getStore()
+  const pairing = await store.getDesktopPairingCredential()
+  const memory = (await store.listProjectMemoryConfigurations()).find((item) => item.bankId === bankId)
+  const knowledge = memory ? undefined
+    : (await store.listHindsightConfigurations()).find((item) => item.enabled && item.knowledgeBank === bankId)
+  const projectId = memory?.projectId ?? knowledge?.projectId
+  if (!projectId || pairing?.localProjectId !== projectId) return null
+  if (knowledge && (!hindsightPairingMatches(knowledge, pairing) ||
+      (await store.getHindsightConfiguration(projectId))?.generation !== knowledge.generation)) return null
+  const active = await activeProjectMemoryConfiguration(store, projectId)
+  if (!active || (memory ? active.bankId !== bankId : active.ownerUserId !== knowledge?.ownerUserId)) return null
+  const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === active.providerId)
+  if (!metadata) return null
+  const binding = await resolveSavedOpencodeProviderBinding({
+    providerId: active.providerId, modelId: metadata.model, credentialSource: store, decryptCredential,
+  })
+  return binding ? { projectId: active.projectId, binding } : null
+}
+let memoryRelayStarting: Promise<void> | undefined
+let memoryRelayAttemptedAt = 0
+/** Retried from the background cycle at most once a minute, e.g. after the port is freed. */
+function startMemoryRelay(): Promise<void> {
+  if (memoryRelay || memoryRelayStarting || hindsightStopping || !hindsightTransportAvailable ||
+      Date.now() - memoryRelayAttemptedAt < 60_000) return memoryRelayStarting ?? Promise.resolve()
+  memoryRelayAttemptedAt = Date.now()
+  memoryRelayStarting = (async () => {
+    try {
+      memoryRelay = await createMemoryModelRelay({
+        port: memoryRelayPort, host: memoryRelayHost, token: await memoryRelayToken(),
+        resolveBank: resolveMemoryRelayBank,
+        governance: async () => modelCallGovernance(await getStore()),
+        onCall: (call) => {
+          if (call.status !== 'succeeded') console.warn('[project-memory] Memory model call not completed', { status: call.status, reason: call.reason })
+        },
+      })
+      memoryRelayFailure = undefined
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      const failure = code === 'EADDRINUSE' ? `端口 ${memoryRelayPort} 已被占用` : '中继无法启动'
+      if (failure !== memoryRelayFailure) console.warn('[project-memory] Memory model relay unavailable', { code: code ?? 'unknown' })
+      memoryRelayFailure = failure
+    }
+  })().finally(() => { memoryRelayStarting = undefined })
+  return memoryRelayStarting
+}
+function getProjectMemoryService() {
+  projectMemoryService ??= getStore().then(async (store) => {
+    const service = new ProjectMemoryService({
+      store,
+      client: projectMemoryHindsightClient,
+      // Without the relay, extraction would fail and spend a retain attempt; hold new retains.
+      canSubmit: () => Boolean(memoryRelay),
+    })
+    await service.recover()
+    // Projects whose memory was turned on before the copy of earlier local Memory existed.
+    for (const configuration of await store.listProjectMemoryConfigurations()) {
+      if (configuration.enabled) await migrateLegacyMemory(configuration.projectId)
+    }
+    return service
+  })
+  return projectMemoryService
+}
+// Commit history (ADR 0030, phase 5): read each project whose memory is on at most every 10 minutes.
+const commitScans = new Map<string, number>()
+const COMMIT_SCAN_INTERVAL_MS = 10 * 60_000
+async function scanCommitHistory(): Promise<void> {
+  const store = await getStore()
+  const projects = new Map((await store.listProjects()).map((project) => [project.id, project]))
+  for (const configuration of await store.listProjectMemoryConfigurations()) {
+    const project = projects.get(configuration.projectId)
+    if (!configuration.enabled || !project || Date.now() - (commitScans.get(project.id) ?? 0) < COMMIT_SCAN_INTERVAL_MS) continue
+    commitScans.set(project.id, Date.now())
+    await captureCommitProjectMemory(store, project).catch(() => {
+      console.warn('[project-memory] Commit history was not read; it is read again later.')
+    })
+  }
+}
+/** Best-effort copy of earlier local Memory (ADR 0030); retried at the next start if it fails. */
+async function migrateLegacyMemory(projectId: string): Promise<void> {
+  try { await migrateLegacyProjectMemory(await getStore(), projectId) }
+  catch { console.warn('[project-memory] Earlier local Memory was not copied yet; it will be retried.') }
+}
+/** The project's memory, only for the user who owns it (viewing included). */
+async function ownedProjectMemory(projectId: string) {
+  const store = await getStore()
+  if (!(await store.listProjects()).some((project) => project.id === projectId)) throw new Error('本地项目不存在。')
+  const configuration = await store.getProjectMemoryConfiguration(projectId)
+  if (!configuration) throw new Error('本项目尚未配置项目记忆。')
+  const scope = await resolveProjectMemoryScope(store, projectId, 'project-memory')
+  if (!scope || scope.userId !== configuration.ownerUserId) throw new Error('项目记忆属于另一位用户，不能查看或修改。')
+  if (!hindsightTransportAvailable) throw new Error('当前构建未启用 Hindsight 传输。')
+  return { store, configuration, client: await projectMemoryHindsightClient(configuration) }
+}
+/** The project's knowledge pages as Hindsight last wrote them; reading makes no model call. */
+async function projectKnowledgePages(projectId: string): Promise<ProjectKnowledgePages> {
+  const { configuration, client } = await ownedProjectMemory(projectId)
+  const models = new Map((await client.listMentalModels(configuration.bankId)).map((model) => [model.id, model]))
+  return { projectId, pages: PROJECT_KNOWLEDGE_PAGES.map((page) => {
+    const model = models.get(knowledgePageModelId(page.id))
+    return { id: page.id, title: page.title, content: redactProjectMemoryText(model?.content ?? '').value, stale: model?.stale ?? false,
+      ...(model?.refreshedAt ? { refreshedAt: model.refreshedAt } : {}), ...(model?.failedAt ? { failedAt: model.failedAt } : {}) }
+  }), ...(memoryRelay ? {} : { unavailableReason: '记忆模型中继未运行，知识页暂时不会更新。' }) }
+}
+/** Editing or forgetting memory empties the knowledge pages, so they never show what was removed. */
+async function emptyKnowledgePages(client: HindsightClient, bankId: string): Promise<void> {
+  try { await clearKnowledgePages(client, bankId) }
+  catch { console.warn('[project-memory] Knowledge pages were not emptied; they may show removed memory until refreshed.') }
+}
+async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
+  const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+  const offset = input.offset ?? 0
+  const page = await client.listMemories(configuration.bankId, { type: input.kind, ...(input.query ? { query: input.query } : {}),
+    offset, limit: PROJECT_MEMORY_PAGE_SIZE })
+  const sources = new Map((await store.listProjectMemoryDocuments(input.projectId))
+    .filter((document) => document.bankId === configuration.bankId).map((document) => [document.documentId, document]))
+  return { total: page.total, offset, limit: PROJECT_MEMORY_PAGE_SIZE, items: page.items.map((memory) => {
+    const source = memory.documentId ? sources.get(memory.documentId) : undefined
+    return { id: memory.id, kind: memory.type, text: redactProjectMemoryText(memory.text).value,
+      ...(memory.occurredAt ? { date: memory.occurredAt.slice(0, 10) } : {}), ...(memory.editedAt ? { editedAt: memory.editedAt } : {}),
+      ...(source ? { source: { documentId: source.id, sourceKind: source.sourceKind, title: source.title } } : {}) }
+  }) }
+}
+/**
+ * ADR 0030 decision 3: once memory is set up for one project, a newly paired project that has no
+ * memory configuration of its own starts with memory on, with the same Hindsight and Provider.
+ * A project that already has a configuration, on or off, is never changed.
+ */
+async function autoEnableProjectMemory(projectId: string): Promise<void> {
+  if (!hindsightTransportAvailable) return
+  const store = await getStore()
+  if (await store.getProjectMemoryConfiguration(projectId)) return
+  const template = (await store.listProjectMemoryConfigurations())
+    .filter((item) => item.enabled && item.projectId !== projectId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+  const pairing = await store.getDesktopPairingCredential()
+  if (!template || pairing?.localProjectId !== projectId) return
+  if (!(await store.listProviderCredentials()).some((item) => item.providerId === template.providerId)) return
+  const scope = await resolveProjectMemoryScope(store, projectId, 'project-memory')
+  if (!scope) return
+  await store.configureProjectMemory({ projectId, ownerUserId: scope.userId, pairingBinding: projectMemoryPairingBinding(pairing),
+    enabled: true, endpoint: template.endpoint, encryptedApiKey: template.encryptedApiKey, providerId: template.providerId })
+  await migrateLegacyMemory(projectId)
+  wakeHindsight()
+}
+async function projectMemoryStatus(projectId: string): Promise<ProjectMemoryStatus> {
+  const store = await getStore()
+  if (!(await store.listProjects()).some((project) => project.id === projectId)) throw new Error('本地项目不存在。')
+  const configuration = await store.getProjectMemoryConfiguration(projectId)
+  const active = await activeProjectMemoryConfiguration(store, projectId)
+  const pairedProject = (await store.getDesktopPairingCredential())?.localProjectId === projectId
+  const documents = configuration
+    ? (await store.listProjectMemoryDocuments(projectId)).filter((document) => document.bankId === configuration.bankId)
+    : []
+  const counts: ProjectMemoryStatus['counts'] = {}
+  for (const document of documents) counts[document.status] = (counts[document.status] ?? 0) + 1
+  const unavailableReason = !hindsightTransportAvailable ? '当前构建未启用 Hindsight 传输。'
+    : !memoryRelay ? `记忆模型中继未运行${memoryRelayFailure ? `：${memoryRelayFailure}` : ''}。`
+      : configuration?.enabled && !active ? '项目配对或记忆归属已变化，请重新开启项目记忆。'
+        : undefined
+  return {
+    projectId, configured: Boolean(configuration), enabled: Boolean(active),
+    transportAvailable: hindsightTransportAvailable, pairedProject,
+    endpoint: configuration?.endpoint ?? '', providerId: configuration?.providerId ?? null, bankId: configuration?.bankId ?? null,
+    relay: { port: memoryRelayPort, running: Boolean(memoryRelay),
+      tokenFile: process.env.DEVFLOW_MEMORY_RELAY_TOKEN?.trim() ? null : memoryRelayTokenFile(),
+      hindsightBaseUrl: `http://host.docker.internal:${memoryRelayPort}/v1` },
+    counts,
+    recent: [...documents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 20)
+      .map((document) => ({ id: document.id, sourceKind: document.sourceKind, title: document.title, status: document.status,
+        updatedAt: document.updatedAt, ...(document.lastError ? { lastError: document.lastError } : {}) })),
+    ...(unavailableReason ? { unavailableReason } : {}),
+  }
 }
 
 const codingBudgetProxies = new Set<Awaited<ReturnType<typeof createGovernedOpencodeProxy>>>()
@@ -470,13 +781,25 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
           throw new Error('Project Coding Runtime configuration does not match the selected executor')
         }
         if (!providerBinding) throw new Error('请先保存项目所选 OpenCode Provider；受预算治理的调用不能使用未绑定的外部凭据。')
-        const budgetProxy=await createGovernedOpencodeProxy({binding:providerBinding,projectId,governance:await modelCallGovernance(store), resolveOperation: async () => {
-          const active = (await store.listCodingAgentRuns()).find(run => run.projectId === projectId && isActiveCodingAgentRunStatus(run.status))
-          if (!active) throw new Error('开发操作已结束，尚未发出模型请求。')
-          return { id: `coding-${active.id}`, purpose: 'native-tool', version: createHash('sha256').update(JSON.stringify([active.id, active.configVersion, active.managedWorkspaceId, active.userInstruction])).digest('hex') }
-        }})
+        const modelContext = createCodingModelContext()
+        const codingSessionOwners = new Map<string, { workspaceId: string; sessionId: string }>()
+        const budgetProxy=await createGovernedOpencodeProxy({binding:providerBinding,projectId,governance:await modelCallGovernance(store),
+          assertContextCurrent: modelContext.assertCurrent,
+          resolveCodingCall: (session) => {
+            const owner = codingSessionOwners.get(session.codingRunId)
+            if (!owner || owner.workspaceId !== session.workspaceId || owner.sessionId !== session.rootSessionId) {
+              throw new Error('Coding relay session does not belong to this execution')
+            }
+            return createCodingRelayCallContext({
+            store, projectId, providerId: providerBinding.providerId, model: providerBinding.modelId, configVersion: selection.configVersion,
+            session,
+            publishEvent: (event) => broadcastToRenderers(ipcChannels.codingEventAppended, event),
+            publishRun: (run) => { broadcastToRenderers(ipcChannels.codingRunStatusUpdated, run); wakeRemoteSyncOutbox() },
+            })
+          },
+        })
         codingBudgetProxies.add(budgetProxy)
-        return createCodingExecutorCompatibilityAdapter(
+        const adapter = createCodingExecutorCompatibilityAdapter(
           createOpencodeHttpCodingEngineAdapter({
             binaryPath: configuration.binaryPath,
             providerID: configuration.providerId,
@@ -484,6 +807,15 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             processManager: opencodeProcessManager,
             configurationFingerprint: `coding-runtime-configuration:${configuration.version}`,
             requireExecutionAuthorization: true,
+            enableQuestions: true,
+            enableTasks: true,
+            onSessionCreated: ({ codingRunId, workspaceId, sessionId }) => {
+              const previous = codingSessionOwners.get(codingRunId)
+              if (previous && (previous.workspaceId !== workspaceId || previous.sessionId !== sessionId)) {
+                throw new Error('Coding relay session ownership cannot be replaced')
+              }
+              codingSessionOwners.set(codingRunId, { workspaceId, sessionId })
+            },
             runtimeEnv: {
               ...buildOpencodeRuntimeEnv({
                 baseEnv: process.env,
@@ -499,6 +831,15 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
             },
           }),
         )
+        return {
+          ...adapter,
+          start: (input) => modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.start(input)),
+          continuePermission: (input) => modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.continuePermission(input)),
+          ...(adapter.replyQuestion ? { replyQuestion: (input: Parameters<NonNullable<CodingExecutor['replyQuestion']>>[0]) =>
+            modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.replyQuestion!(input)) } : {}),
+          ...(adapter.refreshPermission ? { refreshPermission: (input: Parameters<NonNullable<CodingExecutor['refreshPermission']>>[0]) =>
+            modelContext.run(input.runtimeContext.assertContextCurrent, () => adapter.refreshPermission!(input)) } : {}),
+        } satisfies CodingExecutor
       }
       if (selection.executor === 'native-deterministic') {
         return createNativeCodingExecutor({
@@ -527,13 +868,14 @@ async function resolveCodingExecutorForProject(projectId: string): Promise<{
   }
 }
 
-async function getCodingExecutor(projectId?: string): Promise<CodingExecutor> {
-  if (!projectId) return compatibilityCodingExecutor
+async function getCodingExecutor(projectId?: string): Promise<{ executor: CodingExecutor; configVersion?: number }> {
+  if (!projectId) return { executor: compatibilityCodingExecutor }
   const resolved = await resolveCodingExecutorForProject(projectId)
   if (!resolved.executor) {
     throw new Error('Project Coding Executor is not configured; no fallback executor was started')
   }
-  return resolved.executor
+  return { executor: resolved.executor,
+    ...(resolved.selection.executor === 'opencode-http' ? { configVersion: resolved.selection.configVersion } : {}) }
 }
 
 function getGitHubDeliveryRuntime() {
@@ -1495,14 +1837,17 @@ async function createCodingRuntimeForRequest(
   knowledgeSnapshot?: RepositoryKnowledgeSnapshot,
   projectId?: string,
 ) {
-  const [remoteSync, store, executor] = await Promise.all([
+  const [remoteSync, store, selected] = await Promise.all([
     getProjectBoundRemoteSync(),
     getStore(),
     getCodingExecutor(projectId),
   ])
   return createCodingRuntime({
     store,
-    executor,
+    executor: selected.executor,
+    ...(selected.configVersion === undefined ? {} : { executorConfigVersion: selected.configVersion }),
+    prepareRetrievedKnowledge,
+    assertRetrievedKnowledgeCurrent,
     sessionAuthority: async (localProjectId) => {
       const pairing = await store.getDesktopPairingCredential()
       const trusted = resolveTrustedCodingPermissionReply({
@@ -1523,8 +1868,6 @@ async function createCodingRuntimeForRequest(
         }
       : {}),
     budgetGuard: createRuntimeBudgetGuard(remoteSync, true),
-    learnCodingRunMemory: ({ codingRun, evaluationPassed }) =>
-      learnFromCompletedCodingRun({ store, codingRun, evaluationPassed }),
     completeWorkflowBuild: async ({ runId, nodeId, codingRunId, diffId, now }) => {
       const existingEvents = await store.listEvents(runId)
       const event: AgentEvent = {
@@ -1686,10 +2029,16 @@ async function createKnowledgeReviewRuntimeForRequest(
     getProjectBoundRemoteSync(),
     getStore(),
   ])
+  let activeKnowledge: RetrievedKnowledgeManifest | undefined
   return createKnowledgeReviewRuntime({
     ...(signal ? { signal } : {}),
     ...(beforeCommit ? { beforeCommit } : {}),
     store,
+    prepareRetrievedKnowledge,
+    assertRetrievedKnowledgeCurrent: async (manifest) => {
+      await assertRetrievedKnowledgeCurrent(manifest)
+      activeKnowledge = manifest
+    },
     knowledgeDocuments: knowledgeSnapshot.documents,
     knowledgeChunks: knowledgeSnapshot.chunks,
     knowledgeRoot: knowledgeSnapshot.knowledgeRoot ?? null,
@@ -1715,7 +2064,8 @@ async function createKnowledgeReviewRuntimeForRequest(
     resolveProvider: async (providerId) => executor === 'native-agent'
       ? createNativeRepositoryReviewProvider({ provider: await resolveAgentProvider(store, providerId, projectId, approvalId), projectPath: (await findProject(projectId!)).path, knowledgeRoot: knowledgeSnapshot.knowledgeRoot ?? null })
       : executor === 'local-agent'
-      ? resolveLocalAgentReviewProvider(store, providerId, projectId, approvalId, knowledgeSnapshot.knowledgeRoot ?? null)
+      ? resolveLocalAgentReviewProvider(store, providerId, projectId, approvalId, knowledgeSnapshot.knowledgeRoot ?? null,
+        async () => { if (activeKnowledge) await assertRetrievedKnowledgeCurrent(activeKnowledge) })
       : resolveAgentProvider(store, providerId, projectId, approvalId),
     budgetGuard: createKnowledgeReviewRuntimeBudgetGuard(remoteSync, true),
   })
@@ -1744,6 +2094,7 @@ async function resolveLocalAgentReviewProvider(
   projectId: string | undefined,
   approvalId: string | undefined,
   knowledgeRoot: string | null,
+  assertContextCurrent?: () => Promise<void>,
 ): Promise<AgentProvider> {
   const { project, credential, binaryPath } = await resolveLocalAgentReviewTarget(store, providerId, projectId)
   const binding = await resolveSavedOpencodeProviderBinding({
@@ -1772,6 +2123,7 @@ async function resolveLocalAgentReviewProvider(
       binding,
       projectId: project.id,
       governance: await modelCallGovernance(store),
+      ...(assertContextCurrent ? { assertContextCurrent } : {}),
       ...(approvalId ? { approvalId } : {}),
     }),
   })
@@ -2317,7 +2669,7 @@ async function getWorkbenchConversationService() {
       store,
       memory: store,
       resolveProvider: (id, projectId) => resolveAgentProvider(store, id, projectId),
-      openHarness: async ({ project, providerId, signal, query }) => {
+      openHarness: async ({ project, providerId, signal, query, investigationBudget }) => {
         const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === providerId)
         if (!metadata) throw new Error('请先在 Agents 中保存所选模型的 Provider 配置。')
         const discovery = await detectCodingRuntimeEngines({ projectId: project.id })
@@ -2331,7 +2683,7 @@ async function getWorkbenchConversationService() {
         if ((await store.listProviderCredentials()).find((item) => item.providerId === providerId)?.updatedAt !== metadata.updatedAt) throw new Error('所选模型配置已变更，请重试。')
         const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store)})
         try {
-          const harness=await createWorkbenchOpencodeExecutor({binaryPath:candidate.binaryPath,binding:budgetProxy.binding,signal,query})
+          const harness=await createWorkbenchOpencodeExecutor({binaryPath:candidate.binaryPath,binding:budgetProxy.binding,signal,query,...(investigationBudget?{investigationBudget}:{})})
           return {...harness,completeStructuredJson:async(input)=>{
             const since=new Date().toISOString()
             const result=await harness.completeStructuredJson!(input)
@@ -2340,6 +2692,12 @@ async function getWorkbenchConversationService() {
         } catch(error){await budgetProxy.close();throw error}
       },
       loadKnowledge: (projectId) => loadTrustedRepositoryKnowledge(projectId, { refresh: true }),
+      knowledgeSearch: async (projectId, args, turn, signal) =>
+        (await getHindsightService()).search(await hindsightScope(projectId), args, turn, signal),
+      knowledgeRead: async (projectId, args) =>
+        (await getHindsightService()).read(await hindsightScope(projectId), args),
+      memorySearch: async (projectId, args, signal) =>
+        (await projectMemoryRecall?.search({ projectId, query: args.query, limit: args.limit, signal })) ?? undefined,
       inspectGate: async (target) => {
         const evaluated = await evaluateLocalGateEnforcement(target)
         return { decision: evaluated.decision, policyVersion: evaluated.policySnapshot.version, policySource: evaluated.policySnapshot.source }
@@ -2411,6 +2769,120 @@ function registerIpcHandlers() {
     return loadTrustedRepositoryKnowledge(input.projectId, { refresh: true })
   })
 
+  ipcMain.handle(ipcChannels.getHindsightStatus, async (_, payload: unknown) => {
+    const { projectId } = parseLoadRepositoryKnowledgeInput(payload)
+    return (await getHindsightService()).status(await hindsightScope(projectId))
+  })
+  ipcMain.handle(ipcChannels.configureHindsight, async (_, payload: unknown) => writeCredential('provider', async () => {
+    const input = parseHindsightSetup(payload)
+    const scope = await hindsightScope(input.projectId)
+    const previous = await (await getStore()).getHindsightConfiguration(input.projectId)
+    const endpoint = normalizeHindsightEndpoint(input.endpoint)
+    const encrypted = input.apiKey === undefined
+      ? previous?.endpoint === endpoint && previous.ownerUserId === scope.userId ? previous.encryptedApiKey : null
+      : input.apiKey ? await credentialAccess.encrypt(input.apiKey, 'provider') : null
+    const status = await (await getHindsightService()).configure(scope, input, encrypted)
+    wakeHindsight()
+    return status
+  }))
+  ipcMain.handle(ipcChannels.refreshHindsight, async (_, payload: unknown) => {
+    const { projectId } = parseLoadRepositoryKnowledgeInput(payload)
+    const status = await (await getHindsightService()).refresh(await hindsightScope(projectId))
+    wakeHindsight()
+    return status
+  })
+  ipcMain.handle(ipcChannels.disableHindsight, async (_, payload: unknown) => {
+    const { projectId } = parseLoadRepositoryKnowledgeInput(payload)
+    const status = await (await getHindsightService()).disable(await hindsightScope(projectId))
+    wakeHindsight()
+    return status
+  })
+
+  ipcMain.handle(ipcChannels.getProjectMemoryStatus, async (_, payload: unknown) =>
+    projectMemoryStatus(parseProjectMemoryProjectInput(payload).projectId))
+  ipcMain.handle(ipcChannels.configureProjectMemory, async (_, payload: unknown) => writeCredential('provider', async () => {
+    const input = parseConfigureProjectMemoryInput(payload)
+    const store = await getStore()
+    if (!(await store.listProjects()).some((project) => project.id === input.projectId)) throw new Error('本地项目不存在。')
+    const previous = await store.getProjectMemoryConfiguration(input.projectId)
+    const endpoint = normalizeHindsightEndpoint(input.endpoint)
+    const keepKey = (ownerUserId: string) => input.apiKey === undefined
+      ? Promise.resolve(previous?.endpoint === endpoint && previous.ownerUserId === ownerUserId ? previous.encryptedApiKey : null)
+      : input.apiKey ? credentialAccess.encrypt(input.apiKey, 'provider') : Promise.resolve(null)
+    if (!input.enabled && previous) {
+      // Turning memory off keeps its owner, pairing and bank, even after the pairing changed.
+      const { bankId: _bank, createdAt: _created, updatedAt: _updated, ...kept } = previous
+      await store.configureProjectMemory({ ...kept, enabled: false, endpoint, providerId: input.providerId,
+        encryptedApiKey: await keepKey(previous.ownerUserId) })
+      wakeHindsight()
+      return projectMemoryStatus(input.projectId)
+    }
+    const scope = await resolveProjectMemoryScope(store, input.projectId, 'project-memory')
+    if (!scope) throw new Error('无法确定项目记忆属于哪位用户，请先完成项目配对。')
+    const pairing = await store.getDesktopPairingCredential()
+    const paired = pairing?.localProjectId === input.projectId ? pairing : null
+    if (input.enabled) {
+      if (!hindsightTransportAvailable) throw new Error('当前构建未启用 Hindsight 传输，无法开启项目记忆。')
+      // Hindsight's extraction calls are charged to the paired Team project's model budget.
+      if (!paired) throw new Error('项目记忆的模型调用计入团队预算，请先将本地项目配对到团队项目。')
+      if (!(await store.listProviderCredentials()).some((item) => item.providerId === input.providerId)) {
+        throw new Error('请先在设置中保存所选 Provider 的凭据。')
+      }
+    }
+    await store.configureProjectMemory({
+      projectId: input.projectId, ownerUserId: scope.userId,
+      ...(paired ? { pairingBinding: projectMemoryPairingBinding(paired) } : {}),
+      enabled: input.enabled, endpoint, encryptedApiKey: await keepKey(scope.userId), providerId: input.providerId,
+    })
+    if (input.enabled) await migrateLegacyMemory(input.projectId)
+    wakeHindsight()
+    return projectMemoryStatus(input.projectId)
+  }))
+  ipcMain.handle(ipcChannels.listProjectMemories, async (_, payload: unknown) => listProjectMemories(parseListProjectMemoriesInput(payload)))
+  ipcMain.handle(ipcChannels.updateProjectMemory, async (_, payload: unknown) => {
+    const input = parseUpdateProjectMemoryInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    // Hindsight re-embeds the memory and consolidates again; that consolidation is a model call.
+    await client.updateMemory(configuration.bankId, input.memoryId, redactProjectMemoryText(input.text).value)
+    await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    await emptyKnowledgePages(client, configuration.bankId)
+    return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.forgetProjectMemory, async (_, payload: unknown) => {
+    const input = parseForgetProjectMemoryInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    await client.invalidateMemory(configuration.bankId, input.memoryId, 'deleted by the user in DevFlow')
+    await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    await emptyKnowledgePages(client, configuration.bankId)
+    return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.forgetProjectMemorySource, async (_, payload: unknown) => {
+    const input = parseForgetProjectMemorySourceInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    await store.forgetProjectMemoryDocument(input.projectId, input.documentId)
+    // Emptied again once Hindsight has deleted the document (project-memory-service).
+    await emptyKnowledgePages(client, configuration.bankId)
+    wakeHindsight()
+    return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.listProjectKnowledgePages, async (_, payload: unknown) =>
+    projectKnowledgePages(parseProjectMemoryProjectInput(payload).projectId))
+  ipcMain.handle(ipcChannels.refreshProjectKnowledgePage, async (_, payload: unknown) => {
+    const input = parseRefreshProjectKnowledgePageInput(payload)
+    const { configuration, client } = await ownedProjectMemory(input.projectId)
+    // A refresh is a model call routed through the relay and charged to the Team budget.
+    if (!memoryRelay) throw new Error('记忆模型中继未运行，无法刷新知识页。')
+    await client.refreshMentalModel(configuration.bankId, knowledgePageModelId(input.pageId))
+    return projectKnowledgePages(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.clearProjectMemory, async (_, payload: unknown) => {
+    const input = parseClearProjectMemoryInput(payload)
+    const { store } = await ownedProjectMemory(input.projectId)
+    await store.clearProjectMemory(input.projectId)
+    wakeHindsight()
+    return projectMemoryStatus(input.projectId)
+  })
+
   ipcMain.handle(ipcChannels.retryRemoteSyncOperation, async (_, payload: unknown) => {
     const input = parseRetryRemoteSyncOperationInput(payload)
     const store = await getStore()
@@ -2466,6 +2938,9 @@ function registerIpcHandlers() {
     wakeRemoteSyncOutbox()
     wakeGateCommandScheduler()
     wakeGitHubDeliveryScheduler()
+    void autoEnableProjectMemory(input.localProjectId).catch(() => {
+      console.warn('[project-memory] Could not turn on memory for the newly paired project.')
+    })
     return { credential: boundCredential }
   }))
 
@@ -2584,6 +3059,7 @@ function registerIpcHandlers() {
     if (!run) {
       throw new Error(`Run not found: ${input.runId}`)
     }
+    let testKnowledge: Awaited<ReturnType<typeof prepareRetrievedKnowledge>>
     return runWorkflowTestCommand({
       project,
       run,
@@ -2591,6 +3067,14 @@ function registerIpcHandlers() {
       store,
       workspaceCoordinator: workspaceOperationCoordinator,
       timeoutMs: DEFAULT_TEST_TIMEOUT_MS,
+      prepareKnowledge: async () => {
+        const actor = resolveTrustedWorkflowActor(run, await store.getDesktopPairingCredential())
+        testKnowledge = await prepareRetrievedKnowledge({
+          projectId: run.projectId, userId: actor.userId, stage: 'test',
+          query: [run.request, '测试 验收 边界条件', project.testCommand].join('\n'),
+        })
+      },
+      assertKnowledgeCurrent: async () => { if (testKnowledge) await assertRetrievedKnowledgeCurrent(testKnowledge.manifest) },
       complete: async ({ command, cwd, result, sourceTree }) => {
         const createdAt = new Date().toISOString()
         const evidence: TestEvidence = redactTestEvidenceForStorage({
@@ -2608,6 +3092,7 @@ function registerIpcHandlers() {
           summary: result.summary,
           redacted: result.redacted,
           ...(sourceTree ? { sourceTree } : {}),
+          ...(testKnowledge ? { knowledgeContext: { retrievedKnowledge: testKnowledge.manifest } } : {}),
           createdAt,
         })
         const artifact = createTestEvidenceArtifact(evidence)
@@ -2699,12 +3184,14 @@ function registerIpcHandlers() {
 
   ipcMain.handle(ipcChannels.createRun, async (_, payload: unknown) => {
     const input = parseCreateRunInput(payload)
+    const store = await getStore()
+    const trustedCreator = await hindsightScope(input.projectId)
     const created = createWorkflowRunFromRequest({
       ...input,
+      creatorId: trustedCreator.userId,
       runId: `run-${randomUUID()}`,
       now: new Date().toISOString(),
     })
-    const store = await getStore()
     const result = await store.createWorkflow({
       run: created.run,
       artifacts: created.artifacts,
@@ -2926,6 +3413,7 @@ function registerIpcHandlers() {
         let provider: Awaited<ReturnType<typeof resolveAgentProvider>> | undefined
         let executor: ReturnType<typeof createReadOnlyLocalStageAgentExecutor> | undefined
         let closeStageRelay: (() => Promise<void>) | undefined
+        let activeStageKnowledge: RetrievedKnowledgeManifest | undefined
         if (executorKind === 'direct-provider') {
           if (!input.providerId) {
             throw new Error('Agent provider is not configured. Save Provider Name, Base URL, Model, and API Key before running this agent.')
@@ -2960,7 +3448,8 @@ function registerIpcHandlers() {
               decryptCredential,
             })
           if (!binding) throw new Error('请先保存项目所选 OpenCode Provider。')
-          const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store)})
+          const budgetProxy=await createGovernedOpencodeProxy({binding,projectId:project.id,governance:await modelCallGovernance(store),
+            assertContextCurrent: async () => { if (activeStageKnowledge) await assertRetrievedKnowledgeCurrent(activeStageKnowledge) }})
           closeStageRelay = budgetProxy.close
           const stageExecutor = createReadOnlyLocalStageAgentExecutor({
             projectId: project.id,
@@ -2986,6 +3475,10 @@ function registerIpcHandlers() {
         // Resident project knowledge (ADR 0025). A failed index never blocks generation.
         const stageKnowledge = await loadTrustedRepositoryKnowledge(run.projectId).catch(() => undefined)
         try {
+          const retrievedKnowledge = await prepareRetrievedKnowledge({
+            projectId: run.projectId, userId: actor.userId, stage: node.stage,
+            query: [run.request, node.title, node.subtitle].join('\n'), signal,
+          })
           // ADR 0024: scoped Memory as low-trust background, recalled fresh for every call.
           // Memory is optional: a recall failure generates without it instead of failing the stage.
           const recalledAt = new Date().toISOString()
@@ -2998,12 +3491,18 @@ function registerIpcHandlers() {
             now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
           }).catch(() => {
             console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
-            return { revisions: [] as Array<{ id: string; revision: number; statement: string }> }
+            return { context: [] as Array<{ id: string; revision: number; statement: string }> }
           })
           generated = await runWorkflowStageAgent({
             run,
             node,
             artifacts,
+            ...(retrievedKnowledge ? { retrievedKnowledge,
+              assertRetrievedKnowledgeCurrent: async (manifest: RetrievedKnowledgeManifest) => {
+                await assertRetrievedKnowledgeCurrent(manifest)
+                activeStageKnowledge = manifest
+              },
+            } : {}),
             ...(input.designRevision ? { designRevision: input.designRevision } : {}),
             ...(stageKnowledge ? { knowledge: {
               documents: stageKnowledge.documents,
@@ -3015,11 +3514,11 @@ function registerIpcHandlers() {
             requestedBy: actor.userId,
             runtime: 'electron',
             signal,
-            ...(stageMemory.revisions.length
-              ? { memoryContext: stageMemory.revisions.map(({ id, revision, statement }) => ({ id, revision, statement })) }
-              : {}),
+            ...(stageMemory.context.length ? { memoryContext: stageMemory.context } : {}),
           })
           signal.throwIfAborted()
+          const usedKnowledge = generated.provenance.knowledgeContext?.retrievedKnowledge
+          if (usedKnowledge) await assertRetrievedKnowledgeCurrent(usedKnowledge)
           if (input.designRevision) {
             revised = await commitDesignRevision({ store, run, gateNodeId: input.nodeId,
               request: input.designRevision, generated, actor, beforeCommit: () => {
@@ -3895,6 +4394,19 @@ function registerIpcHandlers() {
     return runtime.cancelCodingAgentRun(input)
   })
 
+  ipcMain.handle(ipcChannels.replyCodingQuestion, async (_, payload: unknown) => {
+    const input = parseReplyCodingQuestionInput(payload)
+    const store = await getStore()
+    const run = (await store.listCodingAgentRuns()).find((candidate) => candidate.id === input.codingRunId)
+    if (!run) throw new Error('Coding Agent run is unavailable')
+    const trusted = resolveTrustedCodingPermissionReply({
+      input: { requestId: input.requestId, codingRunId: run.id, decidedBy: '', decision: 'approved', comment: '' },
+      projectId: run.projectId, pairing: await store.getDesktopPairingCredential(),
+    })
+    const runtime = await createCodingRuntimeForRequest(undefined, run.projectId)
+    return runtime.replyCodingQuestion({ ...input, answeredBy: trusted.decidedBy })
+  })
+
   ipcMain.handle(ipcChannels.replyCodingPermission, async (_, payload: unknown) => {
     const input = parseReplyCodingPermissionInput(payload)
     const store = await getStore()
@@ -4083,6 +4595,10 @@ if (hasSingleInstanceLock) {
     }
     registerIpcHandlers()
     createWindow()
+    void startMemoryRelay()
+    wakeHindsight()
+    hindsightTimer = setInterval(wakeHindsight, 15_000)
+    hindsightTimer.unref()
     void getRemoteSyncOutboxScheduler()
       .then((scheduler) => scheduler.start())
       .catch(() => {
@@ -4148,6 +4664,8 @@ app.on('before-quit', (event) => {
     return
   }
   event.preventDefault()
+  hindsightStopping = true
+  clearInterval(hindsightTimer)
   githubDeliveryStopping = true
   gateCommandCycleAbortController?.abort()
   gateCommandScheduler?.stop()
@@ -4158,6 +4676,13 @@ app.on('before-quit', (event) => {
   githubDeliveryScheduler?.stop()
   githubDeliveryOperationAbortController?.abort()
   quitCleanupPromise ??= Promise.all([
+    hindsightCycle ?? Promise.resolve(),
+    (projectMemoryService?.then((service) => service.shutdown()) ?? Promise.resolve()).catch(() => {
+      console.warn('[project-memory] Unable to stop the memory worker before quit.')
+    }),
+    (memoryRelay?.close() ?? Promise.resolve()).catch(() => {
+      console.warn('[project-memory] Unable to close the memory model relay before quit.')
+    }),
     reviewOperations.drain(),
     stageAgentOperations.drain(),
     ...[...codingBudgetProxies].map((proxy)=>proxy.close()),

@@ -6,6 +6,7 @@ import {
   createOpenAiCompatibleAgentProvider,
   createRecommendedEnforcementPreset,
   resolveEffectivePolicy,
+  assembleRetrievedKnowledgeContext,
   type AgentEvent,
   type AgentProvider,
   type AgentReviewResult,
@@ -13,17 +14,209 @@ import {
   type AgentTrace,
   type Artifact,
   type LocalExecutionState,
+  type NodeStage,
   type PolicySnapshot,
   type TestEvidence,
   type WorkflowRun,
+  type DesktopPairingCredential,
 } from '@ai-devflow/shared'
 import { artifacts, knowledgeChunks, knowledgeDocuments, runs } from '@ai-devflow/shared/fixtures'
 import {
   createKnowledgeReviewRuntime,
   type KnowledgeReviewRuntimeStore,
 } from './knowledge-review-runtime'
+import { registerProjectMemoryRecall } from './coding-context'
+import { projectMemoryIdentity } from './project-memory-recall'
 
 describe('KnowledgeReviewRuntime', () => {
+  it.each(['clarify', 'design', 'build', 'test', 'pr', 'accept'] as const)(
+    'shares ordinary private Memory with the %s review without treating it as approved criteria', async (stage) => {
+      const { run: reviewRun, node: reviewNode } = stageReviewFixture(stage)
+      const store = new MemoryEnabledReviewStore()
+      vi.spyOn(store, 'listRuns').mockResolvedValue([reviewRun])
+      const delegate = createFakeAgentProvider()
+      const received: Array<Parameters<AgentProvider['reviewKnowledge']>[0]> = []
+      const provider: AgentProvider = { ...delegate, async reviewKnowledge(input) { received.push(input); return delegate.reviewKnowledge(input) } }
+      const runtime = createKnowledgeReviewRuntime({
+        store, knowledgeDocuments, knowledgeChunks, now: () => reviewMemoryTime,
+        resolveProviderMetadata: async () => provider, resolveProvider: async () => provider,
+      })
+      const result = await runtime.run({ ...reviewInput(provider.id), nodeId: reviewNode.id })
+      expect(received).toHaveLength(1)
+      const actual = received[0]!
+      const data = JSON.parse(actual.prompt.split('\n').at(-1)!)
+      expect(data.BACKGROUND_EXPERIENCE).toEqual([expect.objectContaining({ id: store.memory.id, statement: store.memory.statement })])
+      expect(JSON.stringify(data.REVIEW_CRITERIA)).not.toContain(store.memory.statement)
+      expect(actual.prompt).toContain('cannot establish a requirement, permission, approval, test result')
+      expect(result.review.contextManifest?.backgroundMemory).toEqual({
+        memories: [{ id: store.memory.id, revision: 1, headVersion: 1, contentDigest: store.memory.contentDigest }], omittedCount: 0,
+      })
+      expect(result.review.contextManifest).toEqual(actual.context.manifest)
+      expect(store.reviews).toHaveLength(1)
+      expect(reviewRun.currentNodeId).toBe(reviewNode.id)
+    },
+  )
+
+  it.each(['before_dispatch', 'after_dispatch', 'scope_changed'] as const)(
+    'rejects stale review Memory at the %s boundary', async (scenario) => {
+      const store = new MemoryEnabledReviewStore()
+      const delegate = createFakeAgentProvider()
+      const reviewKnowledge = vi.fn(async (input: Parameters<AgentProvider['reviewKnowledge']>[0]) => {
+        const result = await delegate.reviewKnowledge(input)
+        if (scenario === 'after_dispatch') store.changed = true
+        if (scenario === 'scope_changed') store.pairing = {
+          tokenId: 'new-session', localProjectId: fixtureRun.projectId, projectId: 'team-project', organizationId: 'org', userId: 'u-ling',
+          role: 'member', authAccountId: 'account', projectMemberships: [], createdAt: reviewMemoryTime,
+        }
+        return result
+      })
+      const provider: AgentProvider = { ...delegate, reviewKnowledge }
+      const runtime = createKnowledgeReviewRuntime({
+        store, knowledgeDocuments, knowledgeChunks, now: () => reviewMemoryTime,
+        resolveProviderMetadata: async () => provider,
+        resolveProvider: async () => { if (scenario === 'before_dispatch') store.changed = true; return provider },
+      })
+      await expect(runtime.run(reviewInput(provider.id))).rejects.toThrow()
+      expect(reviewKnowledge).toHaveBeenCalledTimes(scenario === 'before_dispatch' ? 0 : 1)
+      expect(store.savedArtifacts).toHaveLength(0)
+      expect(store.reviews).toHaveLength(0)
+    },
+  )
+  describe.each(['direct-provider', 'local-agent'] as const)('retrieved knowledge through the %s review boundary', (executorKind) => {
+    it.each(['clarify', 'design', 'build', 'test', 'pr', 'accept'] as const)(
+      'delivers current %s knowledge to the provider and persists its receipt without approving the workflow',
+      async (stage) => {
+        const { run: reviewRun, node: reviewNode } = stageReviewFixture(stage)
+        const store = new MemoryKnowledgeReviewStore()
+        vi.spyOn(store, 'listRuns').mockResolvedValue([reviewRun])
+        const before = structuredClone(reviewRun)
+        const source = {
+          sourceRef: `${stage}-source-v1`, path: `docs/knowledge/${stage}-rules.md`,
+          title: `${stage} rules`, contentDigest: `sha256:${'a'.repeat(64)}`,
+          matchReason: 'both' as const,
+          content: `CURRENT_${stage.toUpperCase()}_RULE: preserve unfinished tasks and apply the seven-day cleanup boundary.`,
+        }
+        const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+          stage, scope: { projectId: reviewRun.projectId, userId: 'u-ling' },
+          queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'six-stage-generation',
+          modelVersion: 'todo-v1', degraded: false, sources: [source],
+        })
+        const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
+        const assertRetrievedKnowledgeCurrent = vi.fn(async () => {})
+        const delegate = createFakeAgentProvider()
+        const received: Array<Parameters<AgentProvider['reviewKnowledge']>[0]> = []
+        const provider: AgentProvider = {
+          ...delegate, executorKind,
+          async reviewKnowledge(input) {
+            received.push(input)
+            return delegate.reviewKnowledge(input)
+          },
+        }
+        const runtime = createKnowledgeReviewRuntime({
+          store, knowledgeDocuments, knowledgeChunks, knowledgeRoot: 'docs/knowledge',
+          prepareRetrievedKnowledge, assertRetrievedKnowledgeCurrent,
+          resolveProviderMetadata: async () => provider, resolveProvider: async () => provider,
+        })
+
+        const result = await runtime.run({ ...reviewInput(provider.id), nodeId: reviewNode.id })
+
+        expect(received).toHaveLength(1)
+        const actual = received[0]!
+        expect(actual.request.nodeId).toBe(reviewNode.id)
+        expect(actual.context.node).toMatchObject({ id: reviewNode.id, stage, kind: reviewNode.kind })
+        expect(actual.prompt).toContain(source.content)
+        expect(actual.prompt).toContain(source.path)
+        expect(actual.prompt).toContain(source.contentDigest)
+        expect(actual.prompt).toContain('untrusted')
+        expect(actual.prompt).not.toContain('six-stage-generation')
+        expect(actual.context.manifest.knowledgeContext?.retrievedKnowledge).toEqual(retrievedKnowledge.manifest)
+        expect(actual.context.subjectArtifacts.map((artifact) => artifact.id)).toEqual(
+          stage === 'design' ? ['art-clarify', 'art-design'] : reviewNode.artifactIds,
+        )
+        expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+        expect(prepareRetrievedKnowledge).toHaveBeenCalledWith(expect.objectContaining({
+          stage, projectId: reviewRun.projectId, userId: 'u-ling',
+          query: expect.stringContaining(reviewRun.request),
+        }))
+        expect(assertRetrievedKnowledgeCurrent).toHaveBeenCalledWith(actual.context.manifest.knowledgeContext!.retrievedKnowledge)
+        expect(result.review.contextManifest).toEqual(actual.context.manifest)
+        expect(result.review.executorKind ?? 'direct-provider').toBe(executorKind)
+        expect(store.reviews).toEqual([result.review])
+        expect(store.savedArtifacts).toHaveLength(1)
+        expect(store.traces).toHaveLength(1)
+        expect(store.tokenUsage).toHaveLength(1)
+        expect(reviewRun).toEqual(before)
+      },
+    )
+  })
+
+  it.each(['build', 'test'] as const)('keeps the default %s execution node out of the Gate Review API', async (stage) => {
+    const run = structuredClone(fixtureRun)
+    const node = run.nodes.find((candidate) => candidate.stage === stage)!
+    run.currentNodeId = node.id
+    node.status = 'running'
+    const store = new MemoryKnowledgeReviewStore()
+    vi.spyOn(store, 'listRuns').mockResolvedValue([run])
+    const provider = createFakeAgentProvider()
+    const reviewKnowledge = vi.spyOn(provider, 'reviewKnowledge')
+    const prepareRetrievedKnowledge = vi.fn(async () => undefined)
+    const runtime = createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks, prepareRetrievedKnowledge,
+      resolveProviderMetadata: async () => provider, resolveProvider: async () => provider,
+    })
+    await expect(runtime.run({ ...reviewInput(provider.id), nodeId: node.id })).rejects.toThrow('当前 Gate')
+    expect(prepareRetrievedKnowledge).not.toHaveBeenCalled()
+    expect(reviewKnowledge).not.toHaveBeenCalled()
+    expect(store.reviews).toHaveLength(0)
+  })
+
+  it.each(['current', 'before_dispatch', 'after_dispatch'] as const)('binds retrieved source checks around review dispatch: %s', async (scenario) => {
+    const store = new MemoryKnowledgeReviewStore()
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage: 'design', scope: { projectId: fixtureRun.projectId, userId: 'u-ling' },
+      queryDigest: `sha256:${'b'.repeat(64)}`, configGeneration: 'generation-1', degraded: false,
+      sources: [{ sourceRef: 'cleanup-v1', path: 'docs/knowledge/cleanup.md', title: 'Cleanup',
+        contentDigest: `sha256:${'a'.repeat(64)}`, matchReason: 'semantic',
+        content: 'Only completed tasks older than seven days can be removed.' }],
+    })
+    const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
+    let sent = false
+    const delegate = createFakeAgentProvider()
+    const reviewKnowledge = vi.fn(async (input: Parameters<AgentProvider['reviewKnowledge']>[0]) => {
+      sent = true
+      expect(input.prompt).toContain('Only completed tasks older than seven days can be removed.')
+      expect(input.context.manifest.knowledgeContext?.retrievedKnowledge).toEqual(retrievedKnowledge.manifest)
+      return delegate.reviewKnowledge(input)
+    })
+    const provider: AgentProvider = { ...delegate, reviewKnowledge }
+    const assertRetrievedKnowledgeCurrent = vi.fn(async () => {
+      if (scenario === 'before_dispatch' || scenario === 'after_dispatch' && sent) {
+        throw new Error('Retrieved knowledge source changed')
+      }
+    })
+    const runtime = createKnowledgeReviewRuntime({
+      store, knowledgeDocuments, knowledgeChunks, prepareRetrievedKnowledge, assertRetrievedKnowledgeCurrent,
+      resolveProviderMetadata: async () => provider, resolveProvider: async () => provider,
+    })
+    if (scenario === 'current') {
+      const result = await runtime.run(reviewInput(provider.id))
+      expect(result.review.contextManifest?.knowledgeContext?.retrievedKnowledge).toEqual(retrievedKnowledge.manifest)
+      expect(store.reviews).toHaveLength(1)
+    } else {
+      await expect(runtime.run(reviewInput(provider.id))).rejects.toThrow('Retrieved knowledge source changed')
+      expect(store.reviews).toHaveLength(0)
+      expect(store.savedArtifacts).toHaveLength(0)
+    }
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledOnce()
+    expect(prepareRetrievedKnowledge).toHaveBeenCalledWith(expect.objectContaining({
+      projectId: fixtureRun.projectId, userId: 'u-ling', stage: 'design',
+      query: expect.stringContaining(fixtureRun.request),
+    }))
+    expect(reviewKnowledge).toHaveBeenCalledTimes(scenario === 'before_dispatch' ? 0 : 1)
+    expect(store.tokenUsage).toHaveLength(scenario === 'before_dispatch' ? 0 : 1)
+    expect(assertRetrievedKnowledgeCurrent).toHaveBeenCalledWith(retrievedKnowledge.manifest)
+  })
+
   it('persists safe local-agent failure diagnostics without publishing a review or advancing the Gate', async () => {
     const store = new MemoryKnowledgeReviewStore()
     const details = stageAgentFailureDetails('provider_rate_limit', 'provider', { httpStatus: 429, cleanupFailures: ['process_stop'] })
@@ -617,6 +810,33 @@ describe('KnowledgeReviewRuntime', () => {
 
 const fixtureRun = structuredClone(runs[0]!)
 
+/**
+ * Clarify/design/PR/acceptance use their existing template review nodes. Build and test
+ * demonstrate an explicit Gate in those stages, not a disguised default task/test node.
+ */
+function stageReviewFixture(stage: NodeStage) {
+  const run = structuredClone(fixtureRun)
+  const existing = run.nodes.find((node) => node.stage === stage &&
+    (stage === 'clarify' || stage === 'design' ? node.kind === 'gate' : true))!
+  const node = stage === 'build' || stage === 'test'
+    ? { ...existing, id: `${existing.id}-review-gate`, title: `${stage} review Gate`,
+        kind: 'gate' as const, requiredRole: 'lead' as const, status: 'running' as const }
+    : existing
+  if (stage === 'build' || stage === 'test') {
+    existing.status = 'success'
+    run.nodes.push(node)
+    run.edges.push({ id: `edge-${stage}-review`, source: existing.id, target: node.id, kind: 'gate' })
+  }
+  run.currentNodeId = node.id
+  node.status = 'running'
+  run.status = 'paused_at_gate'
+  const stages: NodeStage[] = ['clarify', 'design', 'build', 'test', 'pr', 'accept']
+  for (const previous of run.nodes) {
+    if (stages.indexOf(previous.stage) < stages.indexOf(stage)) previous.status = 'success'
+  }
+  return { run, node }
+}
+
 function reviewInput(providerId: string) {
   return {
     runId: fixtureRun.id,
@@ -687,4 +907,21 @@ class MemoryKnowledgeReviewStore implements KnowledgeReviewRuntimeStore {
   async loadState(): Promise<LocalExecutionState> {
     return {} as LocalExecutionState
   }
+}
+
+const reviewMemoryTime = '2026-10-22T12:00:00.000Z'
+/** A review store whose project memory (ADR 0030) is on; editing or clearing it makes a recall stale. */
+class MemoryEnabledReviewStore extends MemoryKnowledgeReviewStore {
+  pairing: DesktopPairingCredential | null = null
+  changed = false
+  readonly memory = projectMemoryIdentity({ id: 'private-review-memory' },
+    `[observation] ${fixtureRun.request} · MEMORY_EXPERIENCE: check the known serialization issue before investigating a regression.`)
+  constructor() {
+    super()
+    registerProjectMemoryRecall(this, {
+      recall: async () => ({ items: [this.memory], degraded: false }),
+      assertCurrent: async () => { if (this.changed) throw new Error('Project memory was edited or deleted') },
+    })
+  }
+  async getDesktopPairingCredential() { return this.pairing }
 }

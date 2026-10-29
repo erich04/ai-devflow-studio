@@ -63,6 +63,18 @@ describe('local Agent Gate Review (knowledge-context K2)', () => {
     expect(readLocalAgentKnowledgeReviewOutput({ ...review, model: 'forged' }, { model: 'm', toolCalls: 0 }).model).toBe('m')
   })
 
+  it('gives native review a single-tool turn protocol without OpenCode-only tool names', () => {
+    const prompt = createLocalAgentKnowledgeReviewPrompt('REVIEW_SUBJECT', { toolProtocol: 'native-json' })
+    expect(prompt).toContain('exactly one JSON object per turn')
+    expect(prompt).toContain('Stop after this one object and wait for that observation')
+    expect(prompt).toContain('The only tools are repo_list')
+    expect(prompt).toContain('repo_read (args: required path)')
+    expect(prompt).toContain('repo_search (args: required query, optional path)')
+    expect(prompt).not.toContain('read, glob, grep and list tools')
+    expect(prompt).not.toContain('Omit repositoryFindings when')
+    expect(prompt).toContain('Final repositoryFindings must include at least one citation')
+  })
+
   it('rejects an invalid review, invalid findings and exceeded bounds', () => {
     expectProviderError(() => readLocalAgentKnowledgeReviewOutput({ ...review, confidence: '80%' }, { model: 'm', usage, toolCalls: 0 }), 'invalid_review_schema')
     expectProviderError(() => readLocalAgentKnowledgeReviewOutput({

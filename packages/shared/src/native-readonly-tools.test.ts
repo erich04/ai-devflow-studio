@@ -13,6 +13,14 @@ describe('native read-only protocol', () => {
       Array.from({ length: 17 }, (_, i) => call(String(i))),
     ]) expect(() => validateNativeToolBatch(batch)).toThrow()
   })
+  it('offers memory_search as a bounded read-only query', () => {
+    const definition = readOnlyToolDefinitions(['memory_search'])[0]!
+    expect(definition.function.parameters).toMatchObject({ required: ['query'], properties: { limit: { maximum: 8 } } })
+    expect(validateNativeToolBatch([call('a', 'memory_search', '{"query":"删除确认","limit":8}')])).toHaveLength(1)
+    for (const args of ['{"query":"删除确认","limit":9}', '{"limit":3}', '{"query":"删除确认","projectId":"foreign"}']) {
+      expect(() => validateNativeToolBatch([call('a', 'memory_search', args)])).toThrow()
+    }
+  })
   it('distinguishes tool turns from final JSON and replays complete private thinking history', async () => {
     const requests: Record<string, unknown>[] = []
     const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -40,4 +48,19 @@ it('assembles interleaved streaming tool arguments by index and preserves every 
   const provider = createOpenAiCompatibleAgentProvider({ id: 'deepseek', name: 'DeepSeek', model: 'deepseek-flash', baseUrl: 'https://api.deepseek.com', apiKey: 'fixture', fetcher: async () => new Response(parts.map(part => `data: ${JSON.stringify(part)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } }) })
   const result = await provider.completeStructuredJson!({ systemPrompt: 'read only', userPrompt: 'inspect', purpose: 'conversation', nativeTools: { definitions: readOnlyToolDefinitions(), messages: [] } })
   expect(result.toolCalls).toEqual([call('a', 'repo_read', '{"path":"中文.ts"}'), call('b', 'repo_list', '{"path":"src"}')])
+})
+
+it('declares and enforces the Hindsight search bounds and continuation alternatives consistently', () => {
+  const search = readOnlyToolDefinitions(['knowledge_search'])[0]!.function.parameters
+  expect(search).toMatchObject({ properties: { query: { maxLength: 2048 }, limit: { maximum: 5 }, stage: { enum: ['clarify', 'design', 'build', 'test', 'pr', 'accept'] } } })
+  expect(validateNativeToolBatch([call('search', 'knowledge_search', JSON.stringify({ query: 'q'.repeat(1500), limit: 5, stage: 'build' }))])).toHaveLength(1)
+  expect(validateNativeToolBatch([call('read', 'knowledge_read', JSON.stringify({ sourceRef: 'doc-1', expectedDigest: 'sha256:' + 'a'.repeat(64), limit: 18000 }))])).toHaveLength(1)
+  expect(validateNativeToolBatch([call('read', 'knowledge_read', '{"path":"docs/rules.md"}')])).toHaveLength(1)
+  for (const args of [{}, { sourceRef: 'doc-1' }, { path: 'docs/rules.md', expectedDigest: 'a' }, { sourceRef: '', expectedDigest: 'a' }]) {
+    expect(() => validateNativeToolBatch([call('bad', 'knowledge_read', JSON.stringify(args))])).toThrow()
+  }
+  for (const args of [{ query: 'q', limit: 6 }, { query: 'q', stage: 'foreign-stage' }, { query: '中'.repeat(700) }]) {
+    expect(() => validateNativeToolBatch([call('bad', 'knowledge_search', JSON.stringify(args))])).toThrow()
+  }
+  expect(readOnlyToolDefinitions(['knowledge_read'])[0]!.function.parameters).toHaveProperty('anyOf')
 })

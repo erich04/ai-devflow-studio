@@ -8,7 +8,7 @@ import { AgentEvidenceGroups, CodingRunRecords } from './views/CodingRunRecords'
 import { StageAgentFailureRecords } from './views/StageAgentFailureRecords'
 import { AgentRuntimePanel } from './AgentRuntimePanel'
 import { AgentCoordinationPanel } from './AgentCoordinationPanel'
-import { AgentMemoryPanel } from './AgentMemoryPanel'
+import { ProjectMemoryPanel } from './components/ProjectMemoryPanel'
 import { buildAgentEvidenceGroups } from './app/agent-evidence-view-model'
 import { buildTeamConnectionView, deliveryIntentsRevokedByRepair } from './app/team-connection-view-model'
 import { formatLocalTime, settingsSectionForTaskTarget, type InspectorReadingPosition, type SettingsSection } from './app/desktop-view-model'
@@ -890,6 +890,8 @@ export function App() {
     knowledgeReviewTarget,
     runCodingAgent: runCodingAgentAction,
     startRemediationRetry,
+    replyCodingQuestion,
+    isReplyingCodingQuestion,
     replyCodingPermission,
     renewCodingPermission,
     isReplyingCodingPermission,
@@ -1565,6 +1567,8 @@ export function App() {
                   upstreamCodingDiffReady={hasArchivedUpstreamCodingDiff({ run: selectedRun, node: selectedNode, codingRuns, diffs: codingDiffArtifacts })}
                   {...(codingActionProjection ? { codingActionProjection } : {})}
                   onCancelCodingRun={() => void cancelCodingRun()}
+                  onReplyCodingQuestion={(reply) => void replyCodingQuestion(reply)}
+                  isReplyingCodingQuestion={isReplyingCodingQuestion}
                   onReplyCodingPermission={(decision, scope) => void replyCodingPermission(decision, scope)}
                   onRenewCodingPermission={() => void renewCodingPermission()}
                   isReplyingCodingPermission={isReplyingCodingPermission}
@@ -1673,6 +1677,7 @@ export function App() {
             relations={projectKnowledgeRelations}
             references={knowledgeReferences}
             selectedRun={selectedRun}
+            selectedLocalProjectId={selectedLocalProject?.id}
             supportContext={supportContext}
             focusedDocumentId={
               supportContext?.focusTarget === 'knowledge-reference'
@@ -1693,8 +1698,10 @@ export function App() {
             onReturnToInspector={returnToInspector}
             artifacts={scopedArtifacts}
             directory={knowledgeDirectory}
-            // Memory management moved here from the Agents page (plan §4.1, Y3).
-            memoryPanel={<AgentMemoryPanel desktopApi={desktopApi} runId={selectedRun?.id} localProjectId={selectedLocalProject?.id} />}
+            // Project memory (ADR 0030) is the only memory; earlier local Memory is copied into it.
+            memoryPanel={selectedLocalProject
+              ? <ProjectMemoryPanel key={selectedLocalProject.id} projectId={selectedLocalProject.id} />
+              : undefined}
           />
         )}
 

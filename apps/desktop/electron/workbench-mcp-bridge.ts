@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { createServer, type ServerResponse } from 'node:http'
-import { readOnlyToolFields, redactSensitiveText } from '@ai-devflow/shared'
+import { readOnlyToolFields, readOnlyToolLimitMax, redactSensitiveText, parseKnowledgeSearchArgs, validateKnowledgeReadArgs } from '@ai-devflow/shared'
+import { normalizeInvestigationPolicy } from './investigation-policy.js'
 
 const fields = readOnlyToolFields
 
@@ -14,9 +15,12 @@ export async function createWorkbenchMcpBridge(input: {
   signal: AbortSignal
   maxQueries?: number
 }) {
+  const maxQueries = input.maxQueries ?? normalizeInvestigationPolicy().maxToolCalls
+  if (!Number.isSafeInteger(maxQueries) || maxQueries < 0 || maxQueries > normalizeInvestigationPolicy({ maxSteps: 60 }).maxToolCalls) {
+    throw new Error('无效的调查查询额度。')
+  }
   const token = randomBytes(32).toString('hex')
   const authorization = Buffer.from(`Bearer ${token}`)
-  const maxQueries = Math.max(1, Math.min(32, input.maxQueries ?? 32))
   let queries = 0
   let inFlight = 0
   let closing: Promise<void> | undefined
@@ -56,9 +60,10 @@ export async function createWorkbenchMcpBridge(input: {
       if (payload.method === 'tools/list') {
         result({ tools: Object.entries(fields).filter(([, definition]) => definition.listed !== false).map(([name, definition]) => ({ name, description: definition.description,
           inputSchema: { type: 'object', additionalProperties: false, required: definition.required,
+            ...(name === 'knowledge_read' ? { anyOf: [{ required: ['path'] }, { required: ['sourceRef', 'expectedDigest'] }] } : {}),
             properties: Object.fromEntries([...definition.required, ...definition.optional].map((key) => [key,
-              key === 'offset' ? { type: 'integer', minimum: 0 } : key === 'limit' ? { type: 'integer', minimum: 1, maximum: 18000 } : { type: 'string', maxLength: 500 }])) },
-          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+              key === 'offset' ? { type: 'integer', minimum: 0 } : key === 'limit' ? { type: 'integer', minimum: 1, maximum: readOnlyToolLimitMax(name) } : { type: 'string', maxLength: name === 'knowledge_search' && key === 'query' ? 2048 : 500 }])) },
+          annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: name === 'knowledge_search' || name === 'memory_search' },
         })) }); return
       }
       if (payload.method !== 'tools/call') { error(-32601, 'Method not found'); return }
@@ -70,10 +75,14 @@ export async function createWorkbenchMcpBridge(input: {
         || definition.required.some((key) => typeof args[key] !== 'string' || !(args[key] as string).trim())
         || Object.entries(args).some(([key, value]) => key === 'offset'
           ? !Number.isSafeInteger(value) || Number(value) < 0
-          : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > 18000
-          : typeof value !== 'string' || value.length > 500 || value.includes('\0'))) {
+          : key === 'limit' ? !Number.isSafeInteger(value) || Number(value) < 1 || Number(value) > readOnlyToolLimitMax(name)
+          : typeof value !== 'string' || value.length > (name === 'knowledge_search' && key === 'query' ? 2048 : 500) || value.includes('\0'))) {
         error(-32602, 'Invalid tool arguments'); return
       }
+      try {
+        if (name === 'knowledge_search') parseKnowledgeSearchArgs(args)
+        if (name === 'knowledge_read') validateKnowledgeReadArgs(args)
+      } catch { error(-32602, 'Invalid tool arguments'); return }
       const failed = () => result({ isError: true, content: [{ type: 'text', text: '本次查询未完成、已停止或达到本轮上限。请检查参数，必要时稍后重试。' }] })
       if (input.signal.aborted || queries >= maxQueries || inFlight >= 4) { failed(); return }
       queries++; inFlight++

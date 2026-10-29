@@ -13,6 +13,7 @@ import {
   validateAgentProviderName,
   validateTestCommandSafety,
   type CodingPermissionDecision,
+  type CodingQuestionReply,
   type GateEnforcementDecision,
   type GitHubDeliveryIntent,
   type ManagedCodingWorkspace,
@@ -229,6 +230,8 @@ export function useDesktopActions(input: {
   const permissionReplyInFlight = useRef(false)
   // The task shows “正在运行门禁审查” and its stop button only on the node being reviewed (W2).
   const [knowledgeReviewTarget, setKnowledgeReviewTarget] = useState<{ runId: string; nodeId: string } | null>(null)
+  const [isReplyingCodingQuestion, setIsReplyingCodingQuestion] = useState(false)
+  const questionReplyInFlight = useRef(false)
   const [isReplyingCodingPermission, setIsReplyingCodingPermission] = useState(false)
   const [teamSyncFeedback, setTeamSyncFeedback] = useState<{ status: 'success' | 'error'; message: string; at?: string } | null>(null)
   // Pairing failures stay in the form until the next attempt (plan §5.6).
@@ -974,6 +977,22 @@ export function useDesktopActions(input: {
     }
   }
 
+  async function replyCodingQuestion(reply: CodingQuestionReply) {
+    const question = latestCodingRun?.question
+    if (!desktopApi || !question || question.status !== 'pending' || questionReplyInFlight.current) return
+    questionReplyInFlight.current = true
+    setIsReplyingCodingQuestion(true)
+    try {
+      await desktopApi.replyCodingQuestion({ codingRunId: latestCodingRun!.id, requestId: question.id, revision: question.revision, reply })
+      setToast(reply.kind === 'answer' ? '回答已送达' : '已跳过问题')
+    } catch (error) {
+      setToast(ipcErrorMessage(error, '回答发送失败，请查看当前问题状态'))
+    } finally {
+      try { applyLocalExecutionState(await desktopApi.loadState()) }
+      finally { questionReplyInFlight.current = false; setIsReplyingCodingQuestion(false) }
+    }
+  }
+
   async function replyCodingPermission(decision: CodingPermissionDecision['decision'], scope?: 'once' | 'session') {
     if (!desktopApi || !pendingCodingPermission || !currentUser) {
       return
@@ -998,7 +1017,7 @@ export function useDesktopActions(input: {
         decision === 'approved'
           ? isBootstrapPermission
             ? '依赖安装已批准，Coding Agent 正在继续运行'
-            : 'Coding Agent 已完成 diff 归档'
+            : '审批已处理，编码状态已更新'
           : isBootstrapPermission
             ? '依赖安装已拒绝，Coding Agent 已安全停止'
             : 'Coding Agent 权限已拒绝',
@@ -1635,6 +1654,8 @@ export function useDesktopActions(input: {
     knowledgeReviewTarget,
     runCodingAgent,
     startRemediationRetry,
+    replyCodingQuestion,
+    isReplyingCodingQuestion,
     replyCodingPermission,
     renewCodingPermission,
     isReplyingCodingPermission,

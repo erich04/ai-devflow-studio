@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentReviewResult, TestEvidence, WorkflowRun } from './domain'
+import { assembleRetrievedKnowledgeContext } from './knowledge-retrieval-context'
+import { assembleKnowledgeStageContext } from './knowledge-context'
 import {
   createAuthenticatedTeamSessionHeaders,
   createDemoTeamSessionHeaders,
@@ -58,7 +60,22 @@ const evidence: TestEvidence = {
   createdAt: '2026-06-16T00:12:00.000Z',
 }
 
+const privateKnowledge = assembleRetrievedKnowledgeContext({
+  stage: 'design', scope: { projectId: 'project-1', userId: 'private-hindsight-owner' },
+  queryDigest: 'private-query-digest', configGeneration: 'private-hindsight-generation', degraded: false,
+  sources: [{ sourceRef: 'private-hindsight-reference', path: 'docs/knowledge/private-selected.md',
+    title: 'Private selected document', contentDigest: 'private-source-digest',
+    matchReason: 'semantic', content: 'Private selected source content' }],
+})
+
 describe('remote sync helpers', () => {
+  it('keeps test knowledge receipts local when projecting evidence', () => {
+    const summary = createRemoteTestEvidenceSummary({
+      ...evidence, knowledgeContext: { retrievedKnowledge: privateKnowledge.manifest },
+    })
+    expect(summary).not.toHaveProperty('knowledgeContext')
+    expect(JSON.stringify(summary)).not.toContain('private-hindsight')
+  })
   it('resolves the paired team project for the bound local project', () => {
     expect(resolveTeamProjectId({
       localProjectId: 'local-project-1',
@@ -323,6 +340,7 @@ describe('remote sync helpers', () => {
       suggestedTests: [],
       contextManifest: {
         version: 1,
+        backgroundMemory: { memories: [{ id: 'private-automatic-memory', revision: 1, headVersion: 1, contentDigest: 'f'.repeat(64) }], omittedCount: 0 },
         stage: 'design',
         coverage: 'complete',
         runRequest: {
@@ -364,6 +382,10 @@ describe('remote sync helpers', () => {
           gateEvidence: { status: 'retrieval_candidate' },
         }],
         criteriaCoverage: 'available',
+        knowledgeContext: assembleKnowledgeStageContext({
+          stage: 'design', documents: [], injectInstructions: false, canReadFiles: false,
+          retrievedKnowledge: privateKnowledge,
+        }).manifest,
       },
       knowledgeReferences: [],
       policyFindings: [
@@ -426,6 +448,12 @@ describe('remote sync helpers', () => {
     })
     expect(JSON.stringify(summary.contextManifest)).not.toContain('criteria-secret')
     expect(JSON.stringify(summary.contextManifest)).not.toContain('"content"')
+    expect(summary.contextManifest?.knowledgeContext).not.toHaveProperty('retrievedKnowledge')
+    expect(summary.contextManifest).not.toHaveProperty('backgroundMemory')
+    expect(JSON.stringify(summary)).not.toContain('private-automatic-memory')
+    expect(review.contextManifest?.knowledgeContext?.retrievedKnowledge?.references).toHaveLength(1)
+    expect(JSON.stringify(summary)).not.toContain('private-hindsight')
+    expect(JSON.stringify(summary)).not.toContain('private-selected.md')
     expect(parseRemoteAgentReviewSummary(summary)).toEqual(summary)
     expect(() => parseRemoteAgentReviewSummary({
       ...summary,

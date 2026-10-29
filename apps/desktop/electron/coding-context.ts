@@ -1,20 +1,43 @@
 import { createHash } from 'node:crypto'
 import {
-  AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, CODING_MEMORY_RECALL_BUDGET, rankMemoryByRelevance, redactSensitiveText,
-  selectMemoryWithinBudget,
+  AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, CODING_MEMORY_RECALL_BUDGET, selectMemoryWithinBudget,
   type AgentRuntimeScope, type Artifact, type CodingAgentRun, type CodingContextReceipt,
-  type DurableAgentMemoryRevision, type MemoryRecallBudget, type WorkflowNode, type WorkflowRun,
+  type MemoryRecallBudget, type WorkflowNode, type WorkflowRun,
+  type RetrievedKnowledgeManifest,
 } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
+import { isProjectMemoryIdentity, type ProjectMemoryRecallPort } from './project-memory-recall'
 
+/** Local Memory is only read to re-check receipts of runs created before ADR 0030. */
 export type CodingMemoryStore = Partial<Pick<LocalStore,
-  'retrieveAgentMemoryRevisions' | 'getAgentMemoryHead' | 'getDesktopPairingCredential'>>
+  'retrieveAgentMemoryRevisions' | 'hydrateAgentMemoryRevisions' | 'getAgentMemoryHead' | 'getDesktopPairingCredential' |
+  'resolveLocalProjectMemoryPrincipal'>>
+const projectMemoryRecall = new WeakMap<CodingMemoryStore, ProjectMemoryRecallPort>()
+/** Registered by Main (ADR 0030): recall comes only from the project's Hindsight bank. */
+export function registerProjectMemoryRecall(store: CodingMemoryStore, recall: ProjectMemoryRecallPort) {
+  projectMemoryRecall.set(store, recall)
+}
+/**
+ * Re-checks recalled project memory (`pm-` identities) before it is relied on again, and
+ * returns the local Memory identities that still need their own check.
+ */
+export async function assertProjectMemoryCurrent<T extends { id: string }>(store: CodingMemoryStore, input: {
+  projectId: string; userId: string; identities: readonly T[]; recalledAt: string
+}): Promise<T[]> {
+  const local = input.identities.filter((identity) => !isProjectMemoryIdentity(identity.id))
+  if (local.length === input.identities.length) return local
+  const port = projectMemoryRecall.get(store)
+  if (!port) throw new Error('Project memory verification is unavailable')
+  await port.assertCurrent({ projectId: input.projectId, userId: input.userId, recalledAt: input.recalledAt,
+    ids: input.identities.filter((identity) => isProjectMemoryIdentity(identity.id)).map((identity) => identity.id) })
+  return local
+}
 
 export function codingPromptDigest(prompt: string): string {
   return createHash('sha256').update(prompt, 'utf8').digest('hex')
 }
 
-async function executionScope(input: {
+export async function executionScope(input: {
   store: CodingMemoryStore; projectId: string; userId: string; runtimeId: string
 }): Promise<AgentRuntimeScope> {
   const pairing = await input.store.getDesktopPairingCredential?.()
@@ -35,46 +58,40 @@ async function executionScope(input: {
 export type RecalledMemory = {
   scope: AgentRuntimeScope
   runtimeId: string
-  revisions: DurableAgentMemoryRevision[]
+  /** When the memory was recalled; later edits, deletions or a clear make it stale. */
+  recalledAt: string
+  /** What prompts render, in order. */
+  context: Array<{ id: string; revision: number; statement: string }>
   memories: CodingContextReceipt['memories']
-  /** Retrievable but not attached: irrelevant, oversized or over budget. */
+  /** Recalled but not attached: over the item or byte budget. */
   omittedMemoryCount: number
+  /** Present when the project's memory is on (ADR 0030). */
+  projectMemory?: { degraded: boolean }
 }
 
 /**
- * Scoped, ranked Memory recall shared by the coding brief, the stage Agent and the
- * discussion bar (ADR 0024). Retrieval keeps every existing scope, expiry and tombstone
- * rule; ranking is BM25 with a minimum of one shared non-stop-word term, newest first on
- * ties; selection never truncates a statement.
+ * Project memory recall shared by the coding brief, stage Agents, Gate review and the discussion
+ * bar (ADR 0030). Memory lives only in the project's Hindsight bank: when the project's memory is
+ * off there is no memory, and local Memory is never consulted. Selection never splits a memory.
  */
 export async function recallScopedMemory(input: {
   store: CodingMemoryStore; projectId: string; userId: string; runtimeId: string; requestId: string
   query: string; now: string; budget: MemoryRecallBudget
 }): Promise<RecalledMemory> {
   const scope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
-  // Lightweight test adapters may have no Memory store. A partially configured adapter is invalid.
-  if (Boolean(input.store.retrieveAgentMemoryRevisions) !== Boolean(input.store.getAgentMemoryHead)) {
-    throw new Error('Coding Memory store is incomplete')
-  }
-  const available = await input.store.retrieveAgentMemoryRevisions?.({
-    stateVersion: 1, id: input.requestId,
-    scope, runtimeId: input.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: input.now,
-  }) ?? []
-  const newestFirst = available.filter((revision) => revision.status === 'active' && (!revision.expiresAt || Date.parse(revision.expiresAt) > Date.parse(input.now))).sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id))
-  const relevant = rankMemoryByRelevance(newestFirst, input.query, (revision) => revision.statement)
-    .map((entry) => entry.item)
-  const selected = selectMemoryWithinBudget(relevant, (revision) => redactSensitiveText(revision.statement).value, input.budget)
-  const revisions: DurableAgentMemoryRevision[] = []
-  const memories: CodingContextReceipt['memories'] = []
-  for (const revision of selected) {
-    const head = await input.store.getAgentMemoryHead!(revision.id)
-    if (!head || head.status !== 'active' || head.currentRevision !== revision.revision) {
-      throw new Error('Coding Memory source changed during Context preparation')
-    }
-    revisions.push(revision)
-    memories.push({ id: revision.id, revision: revision.revision, headVersion: head.version, contentDigest: revision.contentDigest })
-  }
-  return { scope, runtimeId: input.runtimeId, revisions, memories, omittedMemoryCount: available.length - revisions.length }
+  const projectMemory = await projectMemoryRecall.get(input.store)?.recall({
+    projectId: input.projectId, userId: input.userId, query: input.query, budget: input.budget,
+  })
+  if (!projectMemory) return { scope, runtimeId: input.runtimeId, recalledAt: input.now, context: [], memories: [], omittedMemoryCount: 0 }
+  // Hindsight and DevFlow's re-ranking already ordered the memory for this query.
+  const selected = selectMemoryWithinBudget(projectMemory.items, (item) => item.statement, input.budget)
+  const currentScope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
+  if (JSON.stringify(currentScope) !== JSON.stringify(scope)) throw new Error('Coding Context pairing changed during recall')
+  return { scope, runtimeId: input.runtimeId, recalledAt: input.now,
+    context: selected.map(({ id, statement }) => ({ id, revision: 1, statement })),
+    memories: selected.map(({ id, contentDigest }) => ({ id, revision: 1, headVersion: 1, contentDigest })),
+    omittedMemoryCount: projectMemory.items.length - selected.length,
+    projectMemory: { degraded: projectMemory.degraded } }
 }
 
 export async function recallCodingMemory(input: {
@@ -115,6 +132,7 @@ export function buildCodingMemoryQuery(input: {
 
 export async function assertCodingContextCurrent(input: {
   store: CodingMemoryStore; codingRun: CodingAgentRun; now: string
+  assertRetrievedKnowledgeCurrent?: (manifest: RetrievedKnowledgeManifest) => Promise<void>
 }): Promise<void> {
   const receipt = input.codingRun.contextReceipt
   // Historical runs never claimed Memory attachment. Their original recovery contract remains valid.
@@ -129,15 +147,34 @@ export async function assertCodingContextCurrent(input: {
     userId: input.codingRun.requestedBy, runtimeId: receipt.runtimeId,
   })
   if (JSON.stringify(scope) !== JSON.stringify(receipt.scope)) throw new Error('Coding Context pairing changed; start a new run')
-  if (receipt.memories.length === 0) return
+  const retrieved = receipt.knowledgeContext?.retrievedKnowledge
+  if (retrieved?.references.length) {
+    if (retrieved.scope.projectId !== input.codingRun.projectId || retrieved.scope.userId !== input.codingRun.requestedBy) {
+      throw new Error('Coding retrieved knowledge scope does not match the persisted brief')
+    }
+    if (!input.assertRetrievedKnowledgeCurrent) throw new Error('Coding retrieved knowledge verification is unavailable')
+    await input.assertRetrievedKnowledgeCurrent(retrieved)
+  }
+  let localMemories: CodingContextReceipt['memories']
+  try {
+    // The brief and its recall are made when the run is created.
+    localMemories = await assertProjectMemoryCurrent(input.store, { projectId: input.codingRun.projectId,
+      userId: input.codingRun.requestedBy, identities: receipt.memories, recalledAt: input.codingRun.startedAt })
+  } catch {
+    throw new Error('Coding Memory changed, expired or was deleted; start a new run with current Context')
+  }
+  if (localMemories.length === 0) return
   if (!input.store.retrieveAgentMemoryRevisions || !input.store.getAgentMemoryHead) {
     throw new Error('Coding Memory store is unavailable')
   }
-  const current = await input.store.retrieveAgentMemoryRevisions({
+  const request = {
     stateVersion: 1, id: `coding-memory-check-${codingPromptDigest(input.codingRun.id).slice(0, 32)}`,
     scope, runtimeId: receipt.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: input.now,
-  })
-  for (const identity of receipt.memories) {
+  } as const
+  const current = input.store.hydrateAgentMemoryRevisions
+    ? await input.store.hydrateAgentMemoryRevisions(request, localMemories.map((m) => m.id))
+    : await input.store.retrieveAgentMemoryRevisions(request)
+  for (const identity of localMemories) {
     const revision = current.find((item) => item.id === identity.id)
     const head = await input.store.getAgentMemoryHead(identity.id)
     if (!revision || !head || head.status !== 'active' || head.version !== identity.headVersion ||

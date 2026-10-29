@@ -26,6 +26,18 @@ await git(['add', '.']); await git(['-c', 'commit.gpgsign=false', 'commit', '-m'
 const before = (await git(['status', '--porcelain'])).stdout
 const requests = []
 const modelErrors = []
+const proposalMarkdown = [
+  '# 清理已完成任务', '', '## 目标', '',
+  '清理所有已完成任务，保留未完成任务；刷新保留清理结果；没有已完成任务时按钮禁用；本次不增加撤销功能。', '',
+  '## 已确认的交互规则', '', '- **保留状态**与*原始顺序*。', '- 使用 `task.done` 判断是否完成。', '',
+  '1. 点击清理按钮。', '2. 保存剩余任务并刷新验证。', '',
+  '## 实现示例', '', '```js',
+  'const nextTasks = tasks.filter(task => !task.done); // 保留所有未完成任务及其标题、创建时间、标签、完成状态与当前显示顺序',
+  'const title = "  Todo  ";', '```', '',
+  '| 操作 | 已完成任务 | 未完成任务 | 顺序 | 刷新结果 | 空列表 | 撤销 |',
+  '| --- | --- | --- | --- | --- | --- | --- |',
+  '| 清理 | 删除 | 保留 | 不改变 | 已持久化 | 禁用按钮 | 本次不增加 |',
+].join('\n')
 const { apiPort, apiUrl } = await resolveE2eRuntime()
 const sessionSecret = 'workbench-smoke-isolated-session-secret-32'
 let apiProcess
@@ -70,7 +82,7 @@ const server = createServer(async (request, response) => {
   const input = JSON.parse(body.messages.filter((message) => message.role === 'user').at(-1).content)
   expect(body.max_tokens).toBe(65536)
   if (!input.proposal) expect(input.originalRequirements).toContainEqual(expect.objectContaining({ runId: run.id, content: run.request, truncated: false }))
-  const user = input.userRequest ?? input.history?.filter((message) => message.role === 'user').at(-1)?.text ?? ''
+  const user = input.userRequest ?? input.currentRequest?.text ?? input.history?.filter((message) => message.role === 'user').at(-1)?.text ?? ''
   const observations = input.toolObservations
   let value
   if (user.includes('格式恢复') && malformedAttempts++ === 0) {
@@ -139,7 +151,7 @@ const server = createServer(async (request, response) => {
       : observations.length === 2 ? { tool: { name: 'knowledge_read', args: { path: 'docs/knowledge/cleanup.md' } } }
       : { text: '代码使用 filter 保留未完成任务；项目文档要求一致。还有一个产品行为需要确认。', question: { prompt: '清理之后需要支持撤销吗？', options: ['需要撤销', '不需要撤销'] }, citationIds: ['source-1', 'source-3'] }
   } else if (user.includes('不需要撤销')) {
-    value = { text: '已记录：不增加撤销操作。可以将这份提案保存到需求节点供后续流程使用。', question: { purpose: 'save_proposal', prompt: '将这份草稿保存到需求节点吗？', options: ['保存', '继续讨论'] }, draft: { runId: run.id, nodeId: run.nodes[0].id, title: '清理已完成任务', content: '清理所有已完成任务，保留未完成任务；刷新保留清理结果；没有已完成任务时按钮禁用；本次不增加撤销功能。' } }
+    value = { text: '已记录：不增加撤销操作。可以将这份提案保存到需求节点供后续流程使用。', question: { purpose: 'save_proposal', prompt: '将这份草稿保存到需求节点吗？', options: ['保存', '继续讨论'] }, draft: { runId: run.id, nodeId: run.nodes[0].id, title: '清理已完成任务', content: proposalMarkdown } }
   } else if (user.includes('查询共享提案')) {
     value = observations.length === 0 ? { tool: { name: 'node', args: { runId: run.id, nodeId: run.nodes[0].id } } }
       : { text: '已查到保存的讨论提案。它仍待确认，尚未批准需求 Gate。', actions: [{ label: '查看需求产物', runId: run.id, nodeId: run.nodes[0].id, section: '产物' }] }
@@ -282,6 +294,43 @@ try {
   await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '02-conversation-detail.png') })
   await page.getByRole('button', { name: '不需要撤销', exact: true }).click()
   await page.getByRole('button', { name: '发送消息', exact: true }).click()
+  await expect(page.getByRole('button', { name: '保存为节点提案', exact: true })).toBeVisible()
+  // #245: real Electron rendering of the existing synthetic proposal, with no new provider call.
+  const proposalBody = page.getByRole('region', { name: '提案正文', exact: true })
+  await expect(proposalBody.getByRole('heading', { name: '清理已完成任务', exact: true, level: 1 })).toHaveCount(1)
+  await expect(proposalBody.getByText('清理已完成任务', { exact: true })).toHaveCount(1)
+  await expect(proposalBody.getByRole('heading', { name: '目标', exact: true, level: 2 })).toBeVisible()
+  await expect(proposalBody.getByRole('list')).toHaveCount(2)
+  await expect(proposalBody.locator('strong')).toHaveText('保留状态')
+  await expect(proposalBody.locator('em')).toHaveText('原始顺序')
+  await expect(proposalBody.locator('code').first()).toHaveText('task.done')
+  await expect(proposalBody.getByRole('table')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: '发送消息', exact: true })).toBeVisible({ timeout: 30000 })
+  const callsBeforeFormatting = requests.length
+  const splitter = page.getByTestId('workbench-splitter')
+  await splitter.focus(); await page.keyboard.press('Home')
+  await expect(splitter).toHaveAttribute('aria-valuenow', '320')
+  const proposalScroll = proposalBody.locator('.proposal-body-content')
+  expect(await proposalScroll.evaluate(element => element.clientHeight <= 320 && element.scrollHeight > element.clientHeight)).toBe(true)
+  expect(await proposalScroll.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true)
+  expect(await proposalBody.locator('pre').evaluate(element => element.scrollWidth > element.clientWidth && getComputedStyle(element).whiteSpace === 'pre')).toBe(true)
+  expect((await proposalBody.getByRole('table').boundingBox()).width).toBeLessThanOrEqual((await proposalScroll.boundingBox()).width + 1)
+  const proposalCellWidths = await proposalBody.locator('th').evaluateAll(cells => cells.map(cell => ({ width: cell.getBoundingClientRect().width, minimum: parseFloat(getComputedStyle(cell).fontSize) * 6 })))
+  expect(proposalCellWidths.every(cell => cell.width + 1 >= cell.minimum), JSON.stringify(proposalCellWidths)).toBe(true)
+  await proposalScroll.evaluate(element => { element.scrollTop = 0 })
+  await proposalBody.scrollIntoViewIfNeeded()
+  await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '15-proposal-markdown-narrow.png') })
+  await proposalScroll.focus(); await page.keyboard.press('End')
+  await expect.poll(() => proposalScroll.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '16-proposal-code-table-narrow.png') })
+  await proposalBody.getByRole('button', { name: '查看原文', exact: true }).click()
+  expect(await proposalBody.locator('.message-plain').textContent()).toBe(proposalMarkdown)
+  await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '17-proposal-raw-narrow.png') })
+  await proposalBody.getByRole('button', { name: '返回排版', exact: true }).click()
+  await expect(proposalBody.getByRole('table')).toHaveCount(1)
+  expect(requests.length).toBe(callsBeforeFormatting)
+  await splitter.focus()
+  for (let step = 0; step < 7; step++) await page.keyboard.press('ArrowLeft')
   // Saving a proposal first previews the target and content; nothing is saved until confirmed (W8).
   await page.getByRole('button', { name: '保存为节点提案', exact: true }).click()
   const proposalPreview = page.getByTestId('proposal-publish-preview')
@@ -295,6 +344,17 @@ try {
   await readyText('提案已保存，尚未更新正式需求')
   expect(requests.length).toBe(callsBeforeProposal)
   await expect(page.getByText('已保存提案', { exact: true })).toBeVisible()
+  await expect(page.getByText('已保存 · 待确认', { exact: true })).toBeVisible()
+  await expect(proposalBody.getByRole('table')).toHaveCount(1)
+  await proposalBody.getByRole('button', { name: '查看原文', exact: true }).click()
+  expect(await proposalBody.locator('.message-plain').textContent()).toBe(proposalMarkdown)
+  await proposalBody.getByRole('button', { name: '返回排版', exact: true }).click()
+  const savedProposalState = await page.evaluate(() => window.aiDevFlowDesktop.loadState())
+  expect(savedProposalState.artifacts.find(artifact => artifact.title === '讨论提案（待确认）：清理已完成任务').content.endsWith(`\n\n${proposalMarkdown}`)).toBe(true)
+  const savedProposalChats = await page.evaluate(projectId => window.aiDevFlowDesktop.workbenchConversation({ type: 'list', projectId }), project.id)
+  expect(savedProposalChats.conversations.flatMap(conversation => conversation.messages).find(message => message.draft?.title === '清理已完成任务').draft.content).toBe(proposalMarkdown)
+  expect(savedProposalState.runs.find(item => item.id === run.id).currentNodeId).toBe(run.currentNodeId)
+  expect(requests.length).toBe(callsBeforeProposal)
   // 「讨论此材料」 adds a reference card to this conversation without sending or calling a model (W7).
   const callsBeforeReference = requests.length
   await page.getByTestId('node-inspector').getByRole('button', { name: '讨论此材料' }).first().click()
@@ -525,7 +585,7 @@ try {
   expect((await git(['status', '--porcelain'])).stdout).toBe(before)
   expect(errors).toEqual([])
   expect(modelErrors).toEqual([])
-  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, nativeReadOnlyPilot: true, nativeCandidateManualSave: true, budgetContinuationCheckbox: true, externalProviderCalled: false, generatedAt: new Date().toISOString() }
+  const report = { passed: true, checked, modelCalls: requests.length, model: 'controlled local SSE endpoint through the real DeepSeek Provider/IPC/SQLite implementation', reasoningEffort: 'low', liveReasoningBeforeAnswer: true, sourceFilesUnchanged: true, sessionIsolation: true, restartAndHistory: true, helpDialogKeyboardAndNarrowLayout: true, independentTabDetails: true, detailsPreserveLiveRequestAndScroll: true, tabMenuKeyboardAccess: true, noPermanentHeader: true, shortWindow: { width: 1280, height: 760 }, cancelledCreationHasNoEffects: true, executorChoiceSurvivesRestart: true, fullOriginalRequirement: true, boundedFormatRecovery: true, nativeReadOnlyPilot: true, nativeCandidateManualSave: true, budgetContinuationCheckbox: true, proposalMarkdownAndExactRaw: true, proposalNarrowWidth: 320, proposalSourcePreservedOnSave: true, proposalReadingModelCalls: 0, externalProviderCalled: false, generatedAt: new Date().toISOString() }
   await writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2))
   console.log(JSON.stringify(report, null, 2))
 } catch (error) {

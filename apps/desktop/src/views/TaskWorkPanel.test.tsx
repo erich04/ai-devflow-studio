@@ -1,42 +1,109 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentReviewResult, CodingAgentRun, ManagedCodingWorkspace } from '@ai-devflow/shared'
-import { CodingRetryDialog, CodingWorkspaceRecords, GateReviewRunPanel, TestRunPanel } from './TaskWorkPanel'
+import type { CodingRuntimeActionProjection } from '../app/coding-runtime-action-projection'
+import { CodingRetryDialog, CodingWorkPanel, CodingWorkspaceRecords, GateReviewRunPanel, TestRunPanel } from './TaskWorkPanel'
 
 const review = { id: 'review-1', model: 'model-a', createdAt: '2026-09-28T01:00:00.000Z' } as AgentReviewResult
 const workspace = {
   id: 'workspace-1', worktreePath: '/tmp/devflow-worktrees/run-1', cleanupStatus: 'active',
 } as ManagedCodingWorkspace
 
-describe('GateReviewRunPanel (plan W2)', () => {
-  it('re-runs only after the existing confirmation and passes the previous review', () => {
-    const onRun = vi.fn()
-    render(<GateReviewRunPanel latestReview={review} failure={undefined} isRunning={false} providerLabel="Review · model-a" blockedReason={undefined} isWriteLocked={false} target="清理任务 · 需求确认 Gate" onRun={onRun} />)
-    expect(screen.getByTestId('task-review-run')).toHaveTextContent('将使用 Review · model-a，可能产生费用。')
-    fireEvent.click(screen.getByRole('button', { name: '重新审查' }))
-    expect(onRun).not.toHaveBeenCalled()
-    const dialog = screen.getByRole('dialog', { name: '确认重新审查' })
-    expect(dialog).toHaveTextContent('本次 Provider：Review · model-a')
-    fireEvent.click(within(dialog).getByRole('button', { name: '继续并重新审查' }))
-    expect(onRun).toHaveBeenCalledWith('review-1')
+describe('CodingWorkPanel command permission details', () => {
+  const run: CodingAgentRun = {
+    id: 'coding-command', runId: 'run-command', nodeId: 'build', projectId: 'project-command', requestedBy: 'user-1',
+    providerId: 'provider-1', engine: 'opencode-http', status: 'waiting_permission', branchName: 'devflow/command',
+    userInstruction: 'Run saved tests', prompt: 'Run saved tests', summary: 'Waiting', changedPaths: [],
+    startedAt: '2026-10-23T12:00:00.000Z', redacted: true,
+  }
+  function projection(command?: string): CodingRuntimeActionProjection {
+    return {
+      scope: { runId: run.runId, nodeId: run.nodeId, projectId: run.projectId }, phase: 'waiting_permission',
+      action: { id: 'review-permission', target: 'agents-permission', label: '审批权限', summary: 'Waiting for permission', disabled: false, createsNewRun: false, mayInvokeProvider: false, requiresConfirmation: false },
+      history: [run], latestRun: run, activeRun: run,
+      permission: {
+        request: { id: 'permission-command', codingRunId: run.id, runId: run.runId, nodeId: run.nodeId,
+          origin: 'coding_executor', permission: 'bash', title: 'opencode requested bash permission', ...(command === undefined ? {} : { command }),
+          risk: 'warn', reasons: ['opencode requested a tool permission through the managed adapter.'],
+          status: 'pending', requestedAt: '2026-10-23T12:00:00.000Z', expiresAt: '2026-10-23T12:05:00.000Z' },
+        kind: 'legacy', remainingMs: 120_000, expired: false, canApprove: true, previewVerified: false, changedPaths: [],
+      },
+    }
+  }
+  const props = { readinessDisplay: null, readinessError: '', latestCodingRun: run, workspace: undefined, isReplying: false, focusRef: { current: null } }
+
+  it.each(['npm test', 'npm test -- --name="<b>x</b>"\nprintf \'%s\\n\' "$RESULT" > result.txt'])('shows the exact pending command without opening another disclosure: %s', (command) => {
+    const onDecision = vi.fn()
+    render(<CodingWorkPanel {...props} projection={projection(command)} onDecision={onDecision} />)
+    const panel = screen.getByTestId('workbench-coding-permission-summary')
+    const preview = within(panel).getByLabelText('待授权命令')
+    expect(preview).toBeVisible()
+    expect(preview.textContent).toBe(command)
+    expect(preview.closest('details')).toBeNull()
+    expect(preview.querySelector('b')).toBeNull()
+    expect(onDecision).not.toHaveBeenCalled()
   })
 
-  it('explains a failed review and retries without a previous review', () => {
-    const onRun = vi.fn()
-    render(<GateReviewRunPanel latestReview={undefined} failure={'门禁审查失败：Provider 超时 {"code":"timeout"}'} isRunning={false} providerLabel="Review · model-a" blockedReason={undefined} isWriteLocked={false} target="t" onRun={onRun} />)
+  it('updates to the new request command and does not invent a command when none is provided', () => {
+    const onDecision = vi.fn()
+    const view = render(<CodingWorkPanel {...props} projection={projection('npm test')} onDecision={onDecision} />)
+    view.rerender(<CodingWorkPanel {...props} projection={projection('npm run lint')} onDecision={onDecision} />)
+    expect(screen.getByLabelText('待授权命令').textContent).toBe('npm run lint')
+    expect(screen.queryByText('npm test')).not.toBeInTheDocument()
+    view.rerender(<CodingWorkPanel {...props} projection={projection()} onDecision={onDecision} />)
+    expect(screen.queryByLabelText('待授权命令')).not.toBeInTheDocument()
+    expect(screen.getByText('opencode requested bash permission')).toBeVisible()
+    expect(onDecision).not.toHaveBeenCalled()
+  })
+})
+
+describe('GateReviewRunPanel (plan W2, #251)', () => {
+  const base = {
+    reviewScope: undefined, currentLabel: '需求 v2', failure: undefined, isRunning: false,
+    providerLabel: 'Review · model-a', blockedReason: undefined, isWriteLocked: false, showRunButton: true,
+  }
+
+  it('requests a re-run through the shared confirmation instead of running it', () => {
+    const onRequestRun = vi.fn()
+    render(<GateReviewRunPanel {...base} latestReview={review} onRequestRun={onRequestRun} />)
+    expect(screen.getByTestId('task-review-run')).toHaveTextContent('将使用 Review · model-a，可能产生费用。')
+    fireEvent.click(screen.getByRole('button', { name: '重新审查' }))
+    expect(onRequestRun).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('names the older version a saved review covered and never presents it as current', () => {
+    render(<GateReviewRunPanel {...base} latestReview={review} reviewScope={{ appliesToCurrent: false, reviewedLabel: '需求 v1' }} onRequestRun={vi.fn()} />)
+    expect(screen.getByTestId('review-outdated')).toHaveTextContent('上次审查针对需求 v1，当前版本已更新')
+    expect(screen.getByTestId('review-outdated')).toHaveTextContent('不作为需求 v2的审查结果')
+    expect(screen.getByTestId('task-review-run')).not.toHaveTextContent('上次审查：')
+  })
+
+  it('leaves a plain re-run to the status row when it already offers the review, but keeps the retry beside a failure', () => {
+    const onRequestRun = vi.fn()
+    const view = render(<GateReviewRunPanel {...base} latestReview={review} showRunButton={false} onRequestRun={onRequestRun} />)
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    view.rerender(<GateReviewRunPanel {...base} latestReview={undefined} failure="门禁审查失败：Provider 超时" showRunButton={false} onRequestRun={onRequestRun} />)
+    fireEvent.click(screen.getByRole('button', { name: '重试门禁审查' }))
+    expect(onRequestRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('explains a failed review and offers a retry', () => {
+    const onRequestRun = vi.fn()
+    render(<GateReviewRunPanel {...base} latestReview={undefined} failure={'门禁审查失败：Provider 超时 {"code":"timeout"}'} onRequestRun={onRequestRun} />)
     expect(screen.getByRole('alert')).toHaveTextContent('上次门禁审查未完成：门禁审查失败：Provider 超时')
     fireEvent.click(screen.getByRole('button', { name: '重试门禁审查' }))
-    expect(onRun).toHaveBeenCalledWith()
+    expect(onRequestRun).toHaveBeenCalledTimes(1)
   })
 
   it('cannot run while the budget or model is unavailable, and says why', () => {
-    render(<GateReviewRunPanel latestReview={review} failure={undefined} isRunning={false} providerLabel={undefined} blockedReason="尚未配置当前项目的云端预算" isWriteLocked={false} target="t" onRun={vi.fn()} />)
+    render(<GateReviewRunPanel {...base} latestReview={review} providerLabel={undefined} blockedReason="尚未配置当前项目的云端预算" onRequestRun={vi.fn()} />)
     expect(screen.getByRole('button', { name: '重新审查' })).toBeDisabled()
     expect(screen.getByTestId('task-review-run')).toHaveTextContent('尚未配置当前项目的云端预算')
   })
 
   it.each(['local-agent', 'native-agent'] as const)('says how %s review was produced and keeps repository facts collapsed', (executorKind) => {
-    const props = { failure: undefined, isRunning: false, providerLabel: 'p', blockedReason: undefined, isWriteLocked: false, target: 't', onRun: vi.fn() }
+    const props = { ...base, providerLabel: 'p', onRequestRun: vi.fn() }
     const first = render(<GateReviewRunPanel {...props} latestReview={review} />)
     expect(screen.getByTestId('review-method')).toHaveTextContent('只依据材料与知识目录，未读取仓库')
     first.unmount()
@@ -69,7 +136,7 @@ describe('GateReviewRunPanel (plan W2)', () => {
   })
 
   it('renders nothing before any review, failure or run', () => {
-    const { container } = render(<GateReviewRunPanel latestReview={undefined} failure={undefined} isRunning={false} providerLabel="p" blockedReason={undefined} isWriteLocked={false} target="t" onRun={vi.fn()} />)
+    const { container } = render(<GateReviewRunPanel {...base} latestReview={undefined} onRequestRun={vi.fn()} />)
     expect(container).toBeEmptyDOMElement()
   })
 })

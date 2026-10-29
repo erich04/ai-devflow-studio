@@ -32,6 +32,17 @@ describe('Coding session grants', () => {
     expect(grants.match({ ...command, command: 'npm test && curl example.com' }, context, request.requestedAt)).toBeUndefined()
     expect(() => grants.create({ ...command, origin: 'execution_authorization' }, context, request.requestedAt)).toThrow()
   })
+  it('binds a package command to the scripts and configuration it was approved with', () => {
+    const grants = new CodingSessionGrants()
+    const command = { ...request, permission: 'bash' as const, command: 'pnpm test' }
+    const grant = grants.create(command, context, request.requestedAt, 'a'.repeat(64))
+    expect(grant.inputsDigest).toBe('a'.repeat(64))
+    expect(grants.match({ ...command, id: 'next' }, context, request.requestedAt, 'a'.repeat(64))?.id).toBe(grant.id)
+    expect(grants.match({ ...command, id: 'next' }, context, request.requestedAt, 'b'.repeat(64))).toBeUndefined()
+    expect(grants.match({ ...command, id: 'next' }, context, request.requestedAt)).toBeUndefined()
+    // File grants never carry a command digest.
+    expect(grants.create(request, context, request.requestedAt, 'a'.repeat(64)).inputsDigest).toBeUndefined()
+  })
   it('expires, revokes, ends with the run, and cannot survive an application restart', () => {
     const grants = new CodingSessionGrants()
     const grant = grants.create(request, context, request.requestedAt)

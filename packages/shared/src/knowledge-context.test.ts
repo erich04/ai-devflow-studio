@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { KnowledgeDocument, ProjectInstructionsSnapshot } from './domain'
 import { indexKnowledgeSources } from './knowledge'
+import { assembleRetrievedKnowledgeContext } from './knowledge-retrieval-context'
 import {
   assembleKnowledgeStageContext,
   describeKnowledgeContextManifest,
@@ -23,6 +24,23 @@ const instructions: ProjectInstructionsSnapshot = {
   contentDigest: `sha256:${'a'.repeat(64)}`,
   truncated: false,
 }
+
+it.each(['clarify', 'design', 'build', 'test', 'pr', 'accept'] as const)(
+  'keeps retrieved %s references separate from resident Gate standards',
+  (stage) => {
+    const retrievedKnowledge = assembleRetrievedKnowledgeContext({
+      stage, scope: { projectId: 'p1', userId: 'u1' }, queryDigest: 'query', degraded: false,
+      sources: [{ sourceRef: 'r1', path: 'docs/knowledge/extra.md', title: 'Extra',
+        contentDigest: 'digest', matchReason: 'semantic', content: 'RETRIEVED_EXCERPT' }],
+    })
+    const result = assembleKnowledgeStageContext({
+      stage, documents: [], injectInstructions: true, canReadFiles: false, retrievedKnowledge,
+    })
+    expect(result.retrievedKnowledgeSection).toContain('RETRIEVED_EXCERPT')
+    expect(result.knowledgeSection).toBe('')
+    expect(result.manifest).toMatchObject({ included: [], retrievedKnowledge: retrievedKnowledge.manifest })
+  },
+)
 
 describe('knowledge front matter stages and gate (ADR 0025)', () => {
   it('parses inline lists, block lists, booleans and inline comments', () => {

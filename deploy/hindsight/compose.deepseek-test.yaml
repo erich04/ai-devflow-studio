@@ -1,0 +1,50 @@
+# Opt-in, synthetic testing only. Initialize a separate ledger within the cumulative CNY 5 first.
+# A continuation uses only the remaining cap, never another CNY 5.
+services:
+  hindsight:
+    environment:
+      HINDSIGHT_API_LLM_PROVIDER: deepseek
+      HINDSIGHT_API_LLM_MODEL: deepseek-flash
+      HINDSIGHT_API_LLM_BASE_URL: http://budget-gateway:8787/v1
+      HINDSIGHT_API_LLM_API_KEY: devflow-budget-gateway
+      HINDSIGHT_API_LLM_TRACE_ENABLED: "true"
+      # Keep the synthetic run as it was before the memory relay defaults: the gateway forwards
+      # request fields to DeepSeek as-is, so bank ids stay local, and no consolidation calls.
+      HINDSIGHT_API_LLM_SEND_BANK_AS_USER: "false"
+      HINDSIGHT_API_SKIP_LLM_VERIFICATION: "false"
+      HINDSIGHT_API_ENABLE_OBSERVATIONS: "false"
+      HINDSIGHT_API_ENABLE_AUTO_CONSOLIDATION: "false"
+    depends_on:
+      budget-gateway:
+        condition: service_healthy
+
+  budget-gateway:
+    image: ghcr.io/vectorize-io/hindsight:1.0.0@sha256:a88678c038b0e4340822b02a5efc566c56d8176b5bffa731bc433fd37f978e4c
+    entrypoint: ["python", "/integration/budget_gateway.py"]
+    command: []
+    user: "${DEVFLOW_HINDSIGHT_GATEWAY_UID:?Set the local credential owner UID}:${DEVFLOW_HINDSIGHT_GATEWAY_GID:?Set the local credential owner GID}"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    cpus: 0.5
+    environment:
+      GATEWAY_STATE_DIR: /state
+      DEVFLOW_HINDSIGHT_TEST_BUDGET_MICROYUAN: "${DEVFLOW_HINDSIGHT_TEST_BUDGET_MICROYUAN:-5000000}"
+      DEEPSEEK_KEY_FILE: /run/secrets/deepseek_api_key
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./budget_gateway.py:/integration/budget_gateway.py:ro
+      - ${DEVFLOW_HINDSIGHT_TEST_STATE_DIR:?Set a dedicated authorized test ledger directory}:/state
+      - ${DEVFLOW_HINDSIGHT_DEEPSEEK_KEY_FILE:?Set the existing authorized key file path}:/run/secrets/deepseek_api_key:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health',timeout=3)"]
+      interval: 5s
+      timeout: 4s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: 1m
+        max-file: "2"

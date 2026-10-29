@@ -1,0 +1,52 @@
+{
+  "date": "2026-10-22",
+  "preexistingFileCount": 1597,
+  "changedPreexistingFiles": [],
+  "stagedDiffUnchanged": true,
+  "missingDocumentLinks": [],
+  "trailingWhitespace": [],
+  "unexpectedNewFiles": [],
+  "newFiles": [
+    "docs/plans/memory-sharing-and-learning-2026-10-22.zh-CN.md",
+    "docs/research/memory-sharing-review-2026-10-22/disposition.zh-CN.md",
+    "docs/research/memory-sharing-review-2026-10-22/input-manifest.json",
+    "docs/research/memory-sharing-review-2026-10-22/memory-sharing-and-learning-2026-10-22.zh-CN-20261022-104519.attempt1.raw.json",
+    "docs/research/memory-sharing-review-2026-10-22/memory-sharing-and-learning-2026-10-22.zh-CN-20261022-104632.attempt1.raw.json",
+    "docs/research/memory-sharing-review-2026-10-22/memory-sharing-and-learning-2026-10-22.zh-CN-20261022-105202.attempt1.raw.json",
+    "docs/research/memory-sharing-review-2026-10-22/review-input-v1.zh-CN.md",
+    "docs/research/memory-sharing-review-2026-10-22/review-input-v2.zh-CN.md"
+  ],
+  "productTestsRun": false,
+  "cursorReviewCompleted": false,
+  "cursorAttempts": [
+    {
+      "file": "memory-sharing-and-learning-2026-10-22.zh-CN-20261022-104519.attempt1.raw.json",
+      "returncode": 1,
+      "stopReason": "process_error",
+      "sessionId": null,
+      "streamEvents": 0,
+      "toolCounts": {},
+      "error": "Error: [aborted] Client network socket disconnected before secure TLS connection was established"
+    },
+    {
+      "file": "memory-sharing-and-learning-2026-10-22.zh-CN-20261022-104632.attempt1.raw.json",
+      "returncode": 1,
+      "stopReason": "process_error",
+      "sessionId": null,
+      "streamEvents": 0,
+      "toolCounts": {},
+      "error": "Error: [aborted] Client network socket disconnected before secure TLS connection was established"
+    },
+    {
+      "file": "memory-sharing-and-learning-2026-10-22.zh-CN-20261022-105202.attempt1.raw.json",
+      "returncode": 1,
+      "stopReason": "process_error",
+      "sessionId": null,
+      "streamEvents": 0,
+      "toolCounts": {},
+      "error": "Error: [aborted] Client network socket disconnected before secure TLS connection was established"
+    }
+  ],
+  "finalPlanSha256": "22143ea9ee1e104aaccd3241f6728dbb5256127093f1170955006662219696d5",
+  "documentChecksPassed": true
+}

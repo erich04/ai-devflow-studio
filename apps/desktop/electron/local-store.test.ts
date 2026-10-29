@@ -1194,7 +1194,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     const [sanitized] = await migrated.listCodingDiffArtifacts(legacyDiff.runId)
     expect(sanitized).toMatchObject({
       id: legacyDiff.id,
@@ -1277,11 +1277,11 @@ describe('createLocalStore', () => {
     const dbPath = await tempDbPath()
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(38)
+    expect(await first.getSchemaVersion()).toBe(41)
     first.close()
 
     const second = await createLocalStore({ dbPath })
-    expect(await second.getSchemaVersion()).toBe(38)
+    expect(await second.getSchemaVersion()).toBe(41)
     second.close()
   })
 
@@ -1339,7 +1339,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -1376,7 +1376,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -1412,7 +1412,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     migrated.close()
 
@@ -1463,7 +1463,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listAgentMemoryRevisions('memory-retained-schema-24')).resolves.toEqual([
       authorization.revision,
     ])
@@ -1545,7 +1545,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     await expect(migrated.getAgentRuntimeContextAttachment('missing-runtime')).resolves.toBeNull()
@@ -2358,6 +2358,15 @@ describe('createLocalStore', () => {
       durablePromotion.revision,
       expiringPromotion.revision,
     ])
+    // An exact reference must remain readable outside the normal result window.
+    await expect(store.hydrateAgentMemoryRevisions({ ...request, limit: 1 },
+      [expiringPromotion.revision.id])).resolves.toEqual([expiringPromotion.revision])
+    await expect(store.hydrateAgentMemoryRevisions({
+      ...request, scope: { ...request.scope, sessionId: 'another-session' },
+    }, [durablePromotion.revision.id, expiringPromotion.revision.id])).resolves.toEqual([durablePromotion.revision])
+    await expect(store.hydrateAgentMemoryRevisions({
+      ...request, scope: { ...request.scope, userId: 'foreign-user' },
+    }, [durablePromotion.revision.id])).resolves.toEqual([])
     await expect(store.retrieveAgentMemoryRevisions({
       ...request,
       id: 'memory-retrieval-later-session',
@@ -3304,7 +3313,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     expect(await migrated.listMcpServers()).toEqual([mcpServer])
     expect(await migrated.listLocalMcpInstallations()).toEqual([])
     migrated.close()
@@ -3341,7 +3350,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -3411,7 +3420,7 @@ describe('createLocalStore', () => {
     legacy.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     expect(await migrated.listAgentRuntimeCapabilityGrants()).toEqual([])
@@ -7284,10 +7293,10 @@ describe('createLocalStore', () => {
     expect(bytes).not.toContain('api-key-secret')
   })
 
-  it('settles each response once without weakening cancellation fences or overwriting expenses with stale snapshots', async () => {
+  it.each(['native', 'opencode-http'] as const)('settles each %s response once without weakening cancellation fences or overwriting expenses with stale snapshots', async (engine) => {
     const dbPath = await tempDbPath()
     const store = await createLocalStore({ dbPath })
-    const active: CodingAgentRun = { ...codingRun, engine: 'native', providerId: 'deepseek', status: 'running' }
+    const active: CodingAgentRun = { ...codingRun, engine, providerId: 'deepseek', status: 'running' }
     await store.saveCodingAgentRun(active)
     const event: CodingAgentEvent = {
       id: 'paid-response', codingRunId: active.id, runId: active.runId, nodeId: active.nodeId,
@@ -7317,7 +7326,7 @@ describe('createLocalStore', () => {
     expect(final.runtimeCostSummary).toMatchObject({ inputTokens: 200, outputTokens: 40, providerCallIds: ['call-one', 'call-two'] })
     expect(final.runtimeCostSummary!.costUsd).toBeCloseTo(expense.costUsd! * 2, 10)
     // An incomplete or malformed usage envelope must not erase the observation or earlier expenses.
-    for (const usage of [{ inputTokens: 1 }, { inputTokens: -1, outputTokens: 1 }]) {
+    for (const usage of (engine === 'native' ? [{ inputTokens: 1 }, { inputTokens: -1, outputTokens: 1 }] : [])) {
       const id = `unsettled-${JSON.stringify(usage)}`
       await store.saveCodingAgentEvent({ ...event, id, metadata: { providerCall: { ...call, requestId: id, usage } } })
       expect((await store.listCodingAgentEvents()).some((item) => item.id === id)).toBe(true)
@@ -8470,7 +8479,7 @@ describe('createLocalStore', () => {
 
     const store = await createLocalStore({ dbPath })
 
-    expect(await store.getSchemaVersion()).toBe(38)
+    expect(await store.getSchemaVersion()).toBe(41)
     expect(await store.listProjects()).toEqual([project])
     expect(await store.listRuns()).toEqual([run])
     expect(await store.getSettings()).toEqual({ themePreference: 'system' })
@@ -8481,7 +8490,7 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const db = new SQL.Database(await readFile(dbPath))
-    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('38')
+    expect(db.exec("select value from schema_meta where key = 'schema_version'")[0]?.values[0]?.[0]).toBe('41')
     expect(db.exec("select name from sqlite_master where type = 'table' and name = 'workflow_nodes'")[0]?.values[0]?.[0]).toBe('workflow_nodes')
     db.close()
   })
@@ -8512,7 +8521,7 @@ describe('createLocalStore', () => {
     retained.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listProjects()).resolves.toEqual([project])
     await expect(migrated.listRuns()).resolves.toEqual([run])
     migrated.close()
@@ -8561,7 +8570,7 @@ describe('createLocalStore', () => {
     v8Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     expect(await migrated.listProjects()).toEqual([project])
     expect(await migrated.listRuns()).toEqual([run])
     migrated.close()
@@ -8646,7 +8655,7 @@ describe('createLocalStore', () => {
     v20Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
     await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
       id: 'sync-runtime-v21',
@@ -8683,7 +8692,7 @@ describe('createLocalStore', () => {
     v26Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    await expect(migrated.getSchemaVersion()).resolves.toBe(38)
+    await expect(migrated.getSchemaVersion()).resolves.toBe(41)
     await expect(migrated.listRemoteSyncOperations()).resolves.toEqual([retainedOperation])
     await expect(migrated.enqueueRemoteSyncOperation(createRemoteSyncOperation({
       id: 'sync-memory-v27',
@@ -8720,7 +8729,7 @@ describe('createLocalStore', () => {
     v9Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -8759,7 +8768,7 @@ describe('createLocalStore', () => {
     v10Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
 
@@ -8830,7 +8839,7 @@ describe('createLocalStore', () => {
     v11Db.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     await expect(
       migrated.getGateCommandReceiptObservation(receipt.id),
     ).resolves.toMatchObject({
@@ -9107,19 +9116,19 @@ describe('createLocalStore', () => {
       locateFile: (fileName) => path.join(sqlJsDist, fileName),
     })
     const newerDb = new SQL.Database(await readFile(dbPath))
-    newerDb.run("update schema_meta set value = '39' where key = 'schema_version'")
+    newerDb.run("update schema_meta set value = '42' where key = 'schema_version'")
     await writeFile(dbPath, Buffer.from(newerDb.export()))
     newerDb.close()
 
     await expect(createLocalStore({ dbPath })).rejects.toThrow(
-      /schema version 39 is newer than supported version 38/,
+      /schema version 42 is newer than supported version 41/,
     )
 
     const unchangedDb = new SQL.Database(await readFile(dbPath))
     expect(
       unchangedDb.exec("select value from schema_meta where key = 'schema_version'")[0]
         ?.values[0]?.[0],
-    ).toBe('39')
+    ).toBe('42')
     unchangedDb.close()
   })
 
@@ -9163,7 +9172,7 @@ describe('createLocalStore', () => {
     unchangedDb.close()
 
     const migrated = await createLocalStore({ dbPath })
-    expect(await migrated.getSchemaVersion()).toBe(38)
+    expect(await migrated.getSchemaVersion()).toBe(41)
     expect(await migrated.listProjects()).toEqual([project])
     migrated.close()
   })
@@ -10811,7 +10820,7 @@ describe('createLocalStore', () => {
     }
 
     const first = await createLocalStore({ dbPath })
-    expect(await first.getSchemaVersion()).toBe(38)
+    expect(await first.getSchemaVersion()).toBe(41)
     await first.upsertProject(project)
     await expect(first.saveCodingRuntimeConfiguration(configuration)).resolves.toEqual(configuration)
     first.close()

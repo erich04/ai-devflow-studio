@@ -28,6 +28,7 @@ import {
   parseMcpServersInput,
   parseOpenManagedWorktreeInput,
   parseReplyCodingPermissionInput,
+  parseReplyCodingQuestionInput,
   parseRenewCodingPermissionInput,
   parseLoadRepositoryKnowledgeInput,
   parseGetAgentRuntimeInput,
@@ -56,6 +57,14 @@ import {
   parseSaveGateOverrideInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
+  parseConfigureProjectMemoryInput,
+  parseProjectMemoryProjectInput,
+  parseClearProjectMemoryInput,
+  parseRefreshProjectKnowledgePageInput,
+  parseForgetProjectMemoryInput,
+  parseForgetProjectMemorySourceInput,
+  parseListProjectMemoriesInput,
+  parseUpdateProjectMemoryInput,
   parseValidateTestCommandInput,
 } from './ipc-contract'
 
@@ -349,6 +358,8 @@ describe('IPC contract parsers', () => {
     // Without runtimeId Main resolves the project-wide view from the Run and pairing (ADR 0024).
     expect(parseListAgentMemoryLifecycleInput({ runId: 'run-1', localProjectId: 'project-1' }))
       .toEqual({ runId: 'run-1', localProjectId: 'project-1' })
+    expect(parseListAgentMemoryLifecycleInput({ localProjectId: 'project-1' }))
+      .toEqual({ localProjectId: 'project-1' })
 
     for (const payload of [
       undefined,
@@ -1261,5 +1272,58 @@ describe('IPC contract parsers', () => {
     })
     expect(() => parseDeleteRunInput({ runId: ' ' })).toThrow(/runId/)
     expect(() => parseDeleteRunInput({ runId: 'run-1', deleteRemote: 'yes' })).toThrow(/deleteRemote/)
+  })
+})
+describe('coding question IPC', () => {
+  const payload = { codingRunId: 'run', requestId: 'que-1', revision: 'a'.repeat(64), reply: { kind: 'answer', answers: [['Blue'], ['Web', 'App']] } }
+  it('accepts bounded business answers and no renderer-supplied authority', () => {
+    expect(parseReplyCodingQuestionInput(payload)).toEqual(payload)
+    for (const extra of [{ answeredBy: 'owner' }, { projectId: 'another' }, { sessionId: 'another' }, { permission: 'always' }, { directory: '/another' }]) {
+      expect(() => parseReplyCodingQuestionInput({ ...payload, ...extra })).toThrow()
+    }
+  })
+  it('rejects malformed or oversized payloads before reaching the runtime', () => {
+    for (const reply of [{ kind: 'approve' }, { kind: 'answer', answers: [['x'.repeat(4001)]] }, { kind: 'answer', answers: [['Blue']], scope: 'session' }, { kind: 'dismiss', answers: [] }]) {
+      expect(() => parseReplyCodingQuestionInput({ ...payload, reply })).toThrow()
+    }
+    expect(() => parseReplyCodingQuestionInput({ ...payload, revision: 'wrong' })).toThrow()
+  })
+})
+
+describe('project memory IPC boundaries', () => {
+  it('accepts only the project memory switch, endpoint, Provider and optional key', () => {
+    const input = { projectId: 'project-1', enabled: true, endpoint: ' http://127.0.0.1:8890 ', providerId: 'deepseek' }
+    expect(parseConfigureProjectMemoryInput(input)).toEqual({ ...input, endpoint: 'http://127.0.0.1:8890' })
+    expect(parseConfigureProjectMemoryInput({ ...input, apiKey: '' })).toEqual({ ...input, endpoint: 'http://127.0.0.1:8890', apiKey: '' })
+    expect(parseProjectMemoryProjectInput({ projectId: 'project-1' })).toEqual({ projectId: 'project-1' })
+    for (const extra of [{ enabled: 'yes' }, { endpoint: '' }, { providerId: ' padded ' }, { apiKey: 'line\nbreak' }, { apiKey: 1 },
+      { ownerUserId: 'user-1' }, { bankId: 'df-memory-x' }]) {
+      expect(() => parseConfigureProjectMemoryInput({ ...input, ...extra })).toThrow()
+    }
+    expect(() => parseProjectMemoryProjectInput({ projectId: 'project-1', bankId: 'df-memory-x' })).toThrow()
+  })
+  it('refreshes only a known knowledge page of the named project', () => {
+    expect(parseRefreshProjectKnowledgePageInput({ projectId: 'project-1', pageId: 'decisions' })).toEqual({ projectId: 'project-1', pageId: 'decisions' })
+    for (const extra of [{ pageId: 'devflow-decisions' }, { pageId: undefined }, { bankId: 'df-memory-x' }, { projectId: '' }]) {
+      expect(() => parseRefreshProjectKnowledgePageInput({ projectId: 'project-1', pageId: 'decisions', ...extra })).toThrow()
+    }
+  })
+  it('bounds memory page requests and requires explicit confirmation to clear', () => {
+    expect(parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'observation', query: ' 撤销 ', offset: 50 }))
+      .toEqual({ projectId: 'project-1', kind: 'observation', query: '撤销', offset: 50 })
+    expect(parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'world', query: '  ' })).toEqual({ projectId: 'project-1', kind: 'world' })
+    for (const extra of [{ kind: 'candidate' }, { offset: -1 }, { offset: 1.5 }, { query: 'x'.repeat(201) }, { bankId: 'df-memory-x' }]) {
+      expect(() => parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'observation', ...extra })).toThrow()
+    }
+    expect(parseUpdateProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', text: ' 撤销窗口 10 秒。 ' }))
+      .toEqual({ projectId: 'project-1', memoryId: 'o1', text: '撤销窗口 10 秒。' })
+    for (const extra of [{ text: '   ' }, { text: '记'.repeat(1_400) }, { memoryId: '../o1' }, { memoryId: 'pm-o1 x' }]) {
+      expect(() => parseUpdateProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', text: 'x', ...extra })).toThrow()
+    }
+    expect(parseForgetProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1' })).toEqual({ projectId: 'project-1', memoryId: 'o1' })
+    expect(() => parseForgetProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', reason: 'x' })).toThrow()
+    expect(parseForgetProjectMemorySourceInput({ projectId: 'project-1', documentId: 'doc-1' })).toEqual({ projectId: 'project-1', documentId: 'doc-1' })
+    expect(parseClearProjectMemoryInput({ projectId: 'project-1', confirm: 'clear' })).toEqual({ projectId: 'project-1', confirm: 'clear' })
+    for (const confirm of [undefined, true, 'yes']) expect(() => parseClearProjectMemoryInput({ projectId: 'project-1', confirm })).toThrow()
   })
 })

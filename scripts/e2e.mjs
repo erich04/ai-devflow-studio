@@ -3,9 +3,11 @@ import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:net'
 import { fileURLToPath } from 'node:url'
 import { resolveE2eRuntime } from './e2e-runtime.mjs'
+import { createIsolatedNextBuild } from './e2e-next-build.mjs'
 
 const corepack = process.platform === 'win32' ? 'corepack.cmd' : 'corepack'
 const rootDir = fileURLToPath(new URL('..', import.meta.url))
+const nextBuild = await createIsolatedNextBuild(fileURLToPath(new URL('../apps/web', import.meta.url)))
 const browserSessionSecret = randomBytes(32).toString('hex')
 const {
   apiPort,
@@ -20,10 +22,13 @@ function spawnService(name, args, env = {}) {
   const child = spawn(corepack, args, {
     cwd: rootDir,
     env: { ...process.env, ...env },
+    detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
 
   child.devflowStopping = false
+  child.devflowClosed = false
+  child.once('close', () => { child.devflowClosed = true })
   const writeServiceOutput = (stream, chunk) => {
     const text = chunk.toString()
     const expectedShutdownNoise =
@@ -65,7 +70,7 @@ function run(command, args, env = {}) {
 async function waitForServer(url) {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     try {
-      const response = await fetch(url)
+      const response = await fetch(url, { signal: AbortSignal.timeout(3000) })
       if (response.ok) {
         return
       }
@@ -101,17 +106,37 @@ async function ensureService({ name, url, port, args, env = {} }) {
   }
 
   const child = spawnService(name, args, env)
-  await waitForServer(url)
-  return child
+  try {
+    await waitForServer(url)
+    return child
+  } catch (error) {
+    await stop(child)
+    throw error
+  }
 }
 
-function stop(child) {
-  if (!child || child.killed) {
+async function stop(child) {
+  if (!child?.pid || child.devflowClosed) {
     return
   }
 
   child.devflowStopping = true
-  child.kill('SIGTERM')
+  const kill = (signal) => {
+    try {
+      if (process.platform !== 'win32') process.kill(-child.pid, signal)
+      else child.kill(signal)
+    } catch (error) { if (error?.code !== 'ESRCH') throw error }
+  }
+  kill('SIGTERM')
+  if (!child.devflowClosed) {
+    let timeout
+    await Promise.race([
+      new Promise(resolve => child.once('close', resolve)),
+      new Promise(resolve => { timeout = setTimeout(resolve, 3000) }),
+    ])
+    clearTimeout(timeout)
+  }
+  if (!child.devflowClosed) kill('SIGKILL')
 }
 
 let api
@@ -171,6 +196,7 @@ try {
       DEVFLOW_ENABLE_DEMO_DATA: 'true',
       DEVFLOW_API_BASE_URL: apiUrl,
       NEXT_PUBLIC_DEVFLOW_API_URL: apiUrl,
+      ...nextBuild.env,
     },
   })
 
@@ -185,7 +211,6 @@ try {
     DEVFLOW_E2E_SESSION_SECRET: browserSessionSecret,
   })
 } finally {
-  stop(desktop)
-  stop(web)
-  stop(api)
+  try { await Promise.all([stop(desktop), stop(web), stop(api)]) }
+  finally { await nextBuild.close() }
 }

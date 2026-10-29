@@ -7,11 +7,18 @@ import { buildCriticalContext, buildNativeCriticalContext, receiptIsCurrent } fr
 import { parseAgentReviewFeedbackInput } from './agent-review-feedback.js'
 import { resolveTrustedWorkflowActor } from './workflow-runtime.js'
 import { isAllowedCodingRunPolicyPromotion } from './coding-run-memory-policy.js'
+import { listActiveAgentMemoryRevisions } from './agent-memory-authority'
+import { verifiedMemoryTestCommand } from './verified-memory-command'
 import { resolveRemoteApprovalMaterial } from './gate-command-material.js'
 import type { RecordAgentReviewFeedbackInput } from '@ai-devflow/shared'
 import type { CodingProviderCallTrace } from './coding-engine.js'
 import { appendCodingCallCost, retainRecordedCodingCost } from './coding-call-cost.js'
 import { existsSync } from 'node:fs'
+import * as hindsight from './hindsight-store'
+import * as projectMemory from './project-memory-store'
+import { captureApprovalProjectMemory, captureCodingRunProjectMemory, captureConversationProjectMemory, captureReviewResultProjectMemory } from './project-memory-capture'
+import * as automaticMemory from './automatic-memory-store'
+import type { HindsightConfiguration, HindsightConfigurationInput, HindsightProjection, HindsightSourceInput, HindsightClaim, HindsightSettlement } from './hindsight-store'
 import { assertOpenCodeAttemptReservation } from '@ai-devflow/shared'
 import { parseProviderThinking, resolveProviderThinking, type UpdateProviderThinkingInput } from '@ai-devflow/shared'
 import { inspectStoredProviderRemoval } from './provider-credential-store'
@@ -226,6 +233,7 @@ import {
   type WorkflowRun,
   type WorkRequest,
   AGENT_MEMORY_ACTIVE_REVISIONS_MAX,
+  type ProjectMemoryConfiguration, type ProjectMemoryDocument, type ProjectMemoryDocumentInput,
 } from '@ai-devflow/shared'
 const require = createRequire(import.meta.url)
 const sqlJsDist = path.dirname(require.resolve('sql.js/dist/sql-wasm.js'))
@@ -816,7 +824,35 @@ export type {
   DeleteLocalMcpInstallationResult,
 } from './local-mcp-store'
 
+export type LocalProjectMemoryPrincipalResult =
+  | { status: 'resolved'; userId: string; basis: 'existing_run_creator' | 'generated' }
+  | { status: 'ambiguous' | 'project_not_found' }
+
 export type LocalStore = {
+  resolveLocalProjectMemoryPrincipal(projectId: string): Promise<LocalProjectMemoryPrincipalResult>
+  getHindsightConfiguration(projectId: string): Promise<HindsightConfiguration | null>
+  getProjectMemoryConfiguration(projectId: string): Promise<ProjectMemoryConfiguration | null>
+  listProjectMemoryConfigurations(): Promise<ProjectMemoryConfiguration[]>
+  configureProjectMemory(input: projectMemory.ProjectMemoryConfigurationInput): Promise<ProjectMemoryConfiguration>
+  recordProjectMemoryDocument(config: ProjectMemoryConfiguration, input: ProjectMemoryDocumentInput): Promise<ProjectMemoryDocument | null>
+  listProjectMemoryDocuments(projectId?: string): Promise<ProjectMemoryDocument[]>
+  claimProjectMemoryDocument(now: string, options?: { submit?: boolean }): Promise<projectMemory.ProjectMemoryClaim | null>
+  settleProjectMemoryDocument(id: string, leaseToken: string, result: projectMemory.ProjectMemorySettlement, now: string, error?: string): Promise<void>
+  forgetProjectMemoryDocument(projectId: string, id: string): Promise<ProjectMemoryDocument>
+  recoverProjectMemoryDocuments(): Promise<void>
+  markProjectMemoryChanged(projectId: string, memoryId: string): Promise<ProjectMemoryConfiguration>
+  clearProjectMemory(projectId: string): Promise<ProjectMemoryConfiguration>
+  completeProjectMemoryBankDeletion(projectId: string, bankId: string): Promise<void>
+  listHindsightConfigurations(): Promise<HindsightConfiguration[]>
+  configureHindsight(input: HindsightConfigurationInput): Promise<HindsightConfiguration>
+  disableHindsightProject(projectId: string, reason: string): Promise<void>
+  listHindsightProjections(projectId?: string): Promise<HindsightProjection[]>
+  reconcileHindsightSource(generation: string, source: HindsightSourceInput): Promise<void>
+  revokeHindsightSource(generation: string, sourceKey: string, reason: string): Promise<void>
+  claimHindsightProjection(now: string): Promise<HindsightClaim | null>
+  settleHindsightProjection(id: string, leaseToken: string, result: HindsightSettlement, now: string, error?: string): Promise<void>
+  recoverHindsightProjections(): Promise<void>
+  hydrateAgentMemoryRevisions(input: AgentMemoryRetrievalRequest, memoryIds: readonly string[]): Promise<DurableAgentMemoryRevision[]>
   appendWorkbenchResponseChunk?(conversationId: string, requestId: string, channel: 'content' | 'reasoning', text: string): Promise<void>
   readWorkbenchResponseReasoning?(conversationId: string, requestId: string): Promise<string | undefined>
   readWorkbenchResponseContent?(conversationId: string, requestId: string): Promise<string | undefined>
@@ -1435,6 +1471,7 @@ export type CommitAgentMemoryPromotionResult =
       committed: false
       reason: 'invalid_authority' | 'invalid_revision' | 'source_stale' | 'id_conflict'
     }
+  | { committed: false; reason: 'duplicate'; duplicateOf: string }
 
 export type AgentMemoryHeadRecord = {
   memoryId: string
@@ -1449,6 +1486,7 @@ type AgentMemoryPromotionCapabilityDescriptor = {
   owner: object
   candidate: AgentMemoryCandidate
   revision: DurableAgentMemoryRevision
+  authority: AgentMemoryPromotionAuthority
 }
 
 const agentMemoryPromotionCapabilities = new WeakMap<
@@ -2843,7 +2881,8 @@ function selectAgentMemoryCandidateDismissal(
   return {
     candidateId: candidateId!,
     scope,
-    provenanceKind: provenanceKind === 'coding_run' ? 'coding_run' : 'agent_observation',
+    provenanceKind: provenanceKind === 'coding_run' ? 'coding_run'
+      : provenanceKind === 'learning_event' ? 'learning_event' : 'agent_observation',
     contentDigest: contentDigest!,
     provenanceDigest: provenanceDigest!,
     actorId: actorId!,
@@ -4551,6 +4590,8 @@ class SqlJsLocalStore implements LocalStore {
   // Changes only after a successful disk write, never after a read or failed save.
   persistedRevision = 0
   private persistenceQueue: Promise<void> = Promise.resolve()
+  private durableMutationDepth = 0
+  private durableMutationDirty = false
   private readonly agentMemoryPromotionOwner = Object.freeze(Object.create(null)) as object
   private readonly specialistTaskAuthorityStoreIdentity = Object.freeze(Object.create(null)) as object
 
@@ -4559,6 +4600,94 @@ class SqlJsLocalStore implements LocalStore {
     private db: Database,
     private readonly dbPath: string,
   ) {}
+
+  async getHindsightConfiguration(projectId: string) { return hindsight.getHindsightConfiguration(this.db, projectId) }
+  async listHindsightConfigurations() { return hindsight.listHindsightConfigurations(this.db) }
+  async configureHindsight(input: HindsightConfigurationInput) {
+    const config = hindsight.configureHindsight(this.db, input)
+    if (config.enabled && config.includeMemories) {
+      for (const head of await this.listAgentMemoryHeads(config.projectId)) {
+        await this.enqueueHindsightMemory(head.memoryId)
+      }
+    }
+    await this.persist()
+    return config
+  }
+  async disableHindsightProject(projectId: string, reason: string) {
+    hindsight.disableHindsightProject(this.db, projectId, reason)
+    await this.persist()
+  }
+  async listHindsightProjections(projectId?: string) { return hindsight.listHindsightProjections(this.db, projectId) }
+  async reconcileHindsightSource(generation: string, source: HindsightSourceInput) {
+    hindsight.reconcileHindsightSource(this.db, generation, source)
+    await this.persist()
+  }
+  async revokeHindsightSource(generation: string, sourceKey: string, reason: string) {
+    hindsight.revokeHindsightSource(this.db, generation, sourceKey, reason)
+    await this.persist()
+  }
+  async claimHindsightProjection(now: string) {
+    const claim = hindsight.claimHindsightProjection(this.db, now)
+    if (claim) await this.persist()
+    return claim
+  }
+  async settleHindsightProjection(id: string, leaseToken: string, result: HindsightSettlement, now: string, error?: string) {
+    hindsight.settleHindsightProjection(this.db, id, leaseToken, result, now, error)
+    await this.persist()
+  }
+  async recoverHindsightProjections() {
+    hindsight.recoverHindsightProjections(this.db)
+    await this.persist()
+  }
+
+  async getProjectMemoryConfiguration(projectId: string) { return projectMemory.getProjectMemoryConfiguration(this.db, projectId) }
+  async listProjectMemoryConfigurations() { return projectMemory.listProjectMemoryConfigurations(this.db) }
+  async configureProjectMemory(input: projectMemory.ProjectMemoryConfigurationInput) {
+    const config = projectMemory.configureProjectMemory(this.db, input, new Date().toISOString())
+    await this.persist()
+    return config
+  }
+  /** Re-checks that the configuration is current; captures call it inside their own mutation. */
+  async recordProjectMemoryDocument(config: ProjectMemoryConfiguration, input: ProjectMemoryDocumentInput) {
+    const current = projectMemory.getProjectMemoryConfiguration(this.db, config.projectId)
+    if (!current?.enabled || current.bankId !== config.bankId || current.updatedAt !== config.updatedAt) return null
+    const document = projectMemory.upsertProjectMemoryDocument(this.db, current, input, new Date().toISOString())
+    await this.persist()
+    return document
+  }
+  async listProjectMemoryDocuments(projectId?: string) { return projectMemory.listProjectMemoryDocuments(this.db, projectId) }
+  async claimProjectMemoryDocument(now: string, options?: { submit?: boolean }) {
+    const claim = projectMemory.claimProjectMemoryDocument(this.db, now, options)
+    if (claim) await this.persist()
+    return claim
+  }
+  async settleProjectMemoryDocument(id: string, leaseToken: string, result: projectMemory.ProjectMemorySettlement, now: string, error?: string) {
+    projectMemory.settleProjectMemoryDocument(this.db, id, leaseToken, result, now, error)
+    await this.persist()
+  }
+  async forgetProjectMemoryDocument(projectId: string, id: string) {
+    const document = projectMemory.forgetProjectMemoryDocument(this.db, projectId, id, new Date().toISOString())
+    await this.persist()
+    return document
+  }
+  async recoverProjectMemoryDocuments() {
+    projectMemory.recoverProjectMemoryDocuments(this.db)
+    await this.persist()
+  }
+  async markProjectMemoryChanged(projectId: string, memoryId: string) {
+    const config = projectMemory.markProjectMemoryChanged(this.db, projectId, memoryId, new Date().toISOString())
+    await this.persist()
+    return config
+  }
+  async clearProjectMemory(projectId: string) {
+    const config = projectMemory.clearProjectMemory(this.db, projectId, new Date().toISOString())
+    await this.persist()
+    return config
+  }
+  async completeProjectMemoryBankDeletion(projectId: string, bankId: string) {
+    projectMemory.completeProjectMemoryBankDeletion(this.db, projectId, bankId)
+    await this.persist()
+  }
 
   private get conversationContent() { return new ConversationContentStore(`${this.dbPath}.contents`) }
 
@@ -4599,6 +4728,7 @@ class SqlJsLocalStore implements LocalStore {
     this.db.run(`insert into workbench_conversations (id, local_project_id, version, updated_at, json) values (?, ?, ?, ?, ?)
       on conflict(id) do update set version = excluded.version, updated_at = excluded.updated_at, json = excluded.json`,
       [conversation.id, conversation.localProjectId, conversation.version, conversation.updatedAt, JSON.stringify(stored)])
+    await captureConversationProjectMemory(this, conversation, previous)
     await this.persist()
     return true
   }
@@ -4624,6 +4754,29 @@ class SqlJsLocalStore implements LocalStore {
       this.db,
       'select json from local_projects order by updated_at desc, created_at desc',
     )
+  }
+
+  /** Resolve one project identity without merging unrelated legacy creators. */
+  async resolveLocalProjectMemoryPrincipal(projectId: string): Promise<LocalProjectMemoryPrincipalResult> {
+    if (!selectJson<LocalProject>(this.db, 'select json from local_projects where id = ?', [projectId])[0]) {
+      return { status: 'project_not_found' }
+    }
+    const creators = [...new Set(readWorkflowRuns(this.db)
+      .filter((run) => run.projectId === projectId).map((run) => run.creatorId))]
+    const saved = this.db.exec(
+      'select user_id, basis from local_project_memory_principals where project_id = ?', [projectId],
+    )[0]?.values[0]
+    if (creators.length > 1 || (saved && creators.some((id) => id !== saved[0]))) return { status: 'ambiguous' }
+    if (saved) return {
+      status: 'resolved', userId: String(saved[0]),
+      basis: saved[1] === 'existing_run_creator' ? 'existing_run_creator' : 'generated',
+    }
+    const userId = creators[0] ?? `local-memory-user-${randomUUID()}`
+    const basis = creators.length === 1 ? 'existing_run_creator' : 'generated'
+    this.db.run('insert into local_project_memory_principals (project_id, user_id, basis, created_at) values (?, ?, ?, ?)',
+      [projectId, userId, basis, new Date().toISOString()])
+    await this.persist()
+    return { status: 'resolved', userId, basis }
   }
 
   async activateKnowledgeIndexSnapshot(
@@ -4672,9 +4825,12 @@ class SqlJsLocalStore implements LocalStore {
     if (!localProjectExists) {
       return { committed: false, reason: 'source_not_found' }
     }
+    // ADR 0030 removed the automatic learning pipeline; its candidates are no longer accepted.
     const sourceCheck = candidate.provenance.kind === 'agent_observation'
       ? this.checkObservationMemoryCandidateSource(candidate, candidate.provenance)
-      : await this.checkCodingRunMemoryCandidateSource(candidate, candidate.provenance)
+      : candidate.provenance.kind === 'coding_run'
+        ? await this.checkCodingRunMemoryCandidateSource(candidate, candidate.provenance)
+        : 'source_not_found'
     if (sourceCheck !== 'ok') {
       return { committed: false, reason: sourceCheck }
     }
@@ -4949,7 +5105,11 @@ class SqlJsLocalStore implements LocalStore {
     } catch {
       return { authorized: false, reason: 'invalid_input' }
     }
-    // ADR 0024 §5: a non-human promotion must be exactly the bounded Coding Run policy.
+    // ADR 0030: candidates from the removed learning pipeline are never promoted.
+    if (candidate.provenance.kind === 'learning_event') {
+      return { authorized: false, reason: 'invalid_input' }
+    }
+    // Policy authority requires independently verified, persisted evidence.
     if (
       input.authority.actorKind === 'policy' &&
       !isAllowedCodingRunPolicyPromotion({
@@ -4990,6 +5150,7 @@ class SqlJsLocalStore implements LocalStore {
       owner: this.agentMemoryPromotionOwner,
       candidate,
       revision: internalRevision,
+      authority: structuredClone(input.authority),
     })
     return { authorized: true, capability, revision: structuredClone(internalRevision) }
   }
@@ -5033,6 +5194,9 @@ class SqlJsLocalStore implements LocalStore {
     if (!stableJsonMatches(candidate, descriptor.candidate)) {
       return { committed: false, reason: 'source_stale' }
     }
+    if (candidate.provenance.kind === 'learning_event') {
+      return { committed: false, reason: 'source_stale' }
+    }
     const pairing = candidate.scope.kind === 'team'
       ? await this.getDesktopPairingCredential()
       : null
@@ -5074,6 +5238,16 @@ class SqlJsLocalStore implements LocalStore {
       } catch {
         return { committed: false, reason: 'id_conflict' }
       }
+    }
+
+    // Both completion learners can read before the other commits. Recheck the
+    // bounded command inside this durable mutation, immediately before insertion.
+    const verifiedCommand = descriptor.authority.actorKind === 'policy' ? verifiedMemoryTestCommand(revision, candidate) : null
+    if (verifiedCommand) {
+      const active = await listActiveAgentMemoryRevisions(this, revision.scope, new Date().toISOString())
+      const candidates = new Map((await this.listAgentMemoryCandidates(revision.scope.localProjectId)).map(item => [item.id, item]))
+      const duplicate = active.find(item => verifiedMemoryTestCommand(item, candidates.get(item.sourceCandidateId)) === verifiedCommand)
+      if (duplicate) return { committed: false, reason: 'duplicate', duplicateOf: duplicate.id }
     }
 
     const scope = revision.scope
@@ -5388,6 +5562,19 @@ class SqlJsLocalStore implements LocalStore {
   async retrieveAgentMemoryRevisions(
     input: AgentMemoryRetrievalRequest,
   ): Promise<DurableAgentMemoryRevision[]> {
+    return this.readScopedAgentMemoryRevisions(input)
+  }
+
+  async hydrateAgentMemoryRevisions(input: AgentMemoryRetrievalRequest, memoryIds: readonly string[]): Promise<DurableAgentMemoryRevision[]> {
+    if (!Array.isArray(memoryIds) || memoryIds.length > 256 || memoryIds.some((id) => !isNonEmptyIdentifier(id) || id.length > 200)) {
+      throw new Error('Invalid exact Agent Memory lookup')
+    }
+    return this.readScopedAgentMemoryRevisions(input, [...new Set(memoryIds)])
+  }
+
+  private async readScopedAgentMemoryRevisions(
+    input: AgentMemoryRetrievalRequest, memoryIds?: readonly string[],
+  ): Promise<DurableAgentMemoryRevision[]> {
     let request: AgentMemoryRetrievalRequest
     try {
       request = parseAgentMemoryRetrievalRequest(input)
@@ -5400,6 +5587,7 @@ class SqlJsLocalStore implements LocalStore {
     if (!agentMemoryScopeMatchesPairing(request.scope, pairing)) {
       return []
     }
+    if (memoryIds?.length === 0) return []
 
     const values = selectJson<unknown>(
       this.db,
@@ -5421,6 +5609,7 @@ class SqlJsLocalStore implements LocalStore {
            (r.visibility = 'user_project' and h.user_id = ?) or
            (r.visibility = 'project_shared' and h.scope_kind = 'team')
          )
+       ${memoryIds ? `and h.memory_id in (${memoryIds.map(() => '?').join(',')})` : ''}
        order by r.created_at asc, r.memory_id asc
        limit ?`,
       [
@@ -5432,6 +5621,7 @@ class SqlJsLocalStore implements LocalStore {
         request.scope.sessionId,
         request.runtimeId,
         request.scope.userId,
+        ...(memoryIds ?? []),
         AGENT_MEMORY_ACTIVE_REVISIONS_MAX + 1,
       ],
     )
@@ -5504,7 +5694,7 @@ class SqlJsLocalStore implements LocalStore {
         expiredAny = true
         continue
       }
-      if (retrievable.length < request.limit) {
+      if (retrievable.length < (memoryIds?.length ?? request.limit)) {
         retrievable.push(revision)
       }
     }
@@ -6130,6 +6320,34 @@ class SqlJsLocalStore implements LocalStore {
       ],
     )
     await this.enqueueCanonicalAgentMemoryProjection(tombstone.memoryId, tombstone.deletedAt)
+    const deletedSourceValue = selectAgentMemoryCandidate(this.db, descriptor.currentRevision.sourceCandidateId)
+    const deletedSource = deletedSourceValue === undefined ? null : await parseAgentMemoryCandidate(deletedSourceValue)
+    if (deletedSource?.provenance.kind === 'learning_event') {
+      const eventId = deletedSource.provenance.eventId
+      automaticMemory.revokeMemoryLearningEvent(this.db, eventId, 'user_forgot_memory')
+      // A v1 event is the smallest deletable remote source. Expire its other derived
+      // heads together; the individual deletion tombstone remains specific to the item.
+      for (const head of await this.listAgentMemoryHeads(scope.localProjectId)) {
+        if (head.status !== 'active') continue
+        const revision = (await this.listAgentMemoryRevisions(head.memoryId)).find((item) => item.revision === head.currentRevision)
+        const value = revision ? selectAgentMemoryCandidate(this.db, revision.sourceCandidateId) : undefined
+        const source = value === undefined ? null : await parseAgentMemoryCandidate(value)
+        if (!revision || source?.provenance.kind !== 'learning_event' || source.provenance.eventId !== eventId) continue
+        const expiredAt = tombstone.deletedAt < head.updatedAt ? head.updatedAt : tombstone.deletedAt
+        this.db.run("update agent_memory_heads set status='expired', version=version+1, updated_at=? where memory_id=? and version=? and status='active'",
+          [expiredAt, head.memoryId, head.version])
+        if (this.db.getRowsModified() !== 1) throw new Error('Learning source revocation CAS was lost')
+        const metadata = { reason: 'learning_source_forgotten', eventId, triggeringMemoryId: tombstone.memoryId }
+        this.db.run(`insert into agent_memory_audits (
+          id, memory_id, revision, local_project_id, scope_kind, organization_id, team_project_id,
+          user_id, session_id, event_kind, actor_kind, actor_id, authority_digest, state_version, metadata_json, created_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, 'memory_expired', 'system', 'electron-main-memory-source', ?, 1, ?, ?)`,
+        [`memory-source-revocation-${sha256Canonical([tombstone.decisionId, head.memoryId])}`, head.memoryId, head.currentRevision,
+          head.scope.localProjectId, head.scope.kind, head.scope.organizationId, head.scope.projectId,
+          head.scope.userId, head.scope.sessionId, sha256Canonical(metadata), JSON.stringify(metadata), expiredAt])
+        await this.enqueueCanonicalAgentMemoryProjection(head.memoryId, expiredAt)
+      }
+    }
     await this.persist()
     return { committed: true, replayed: false, tombstone }
   }
@@ -6801,6 +7019,7 @@ class SqlJsLocalStore implements LocalStore {
         tombstone !== null ||
         storedRevision === undefined ||
         sourceCandidate === undefined ||
+        sourceCandidate.provenance.kind === 'learning_event' ||
         head.status !== 'active' ||
         head.currentRevision !== identity.revision ||
         head.version !== identity.headVersion ||
@@ -9641,6 +9860,7 @@ class SqlJsLocalStore implements LocalStore {
     memoryId: string,
     createdAt: string,
   ): Promise<void> {
+    await this.enqueueHindsightMemory(memoryId)
     const head = await this.getAgentMemoryHead(memoryId)
     if (head === null) {
       throw new Error('Canonical Agent Memory projection source is missing.')
@@ -9653,7 +9873,7 @@ class SqlJsLocalStore implements LocalStore {
        where r.memory_id = ? and r.revision = ? limit 1`,
       [head.memoryId, head.currentRevision],
     )[0]?.values[0]?.[0]
-    if (sourceKind === 'coding_run') return
+    if (sourceKind !== 'agent_observation') return
     const source = await this.getAgentMemoryTeamProjectionInput(memoryId)
     if (source === null) {
       throw new Error('Canonical Agent Memory projection source is invalid.')
@@ -9664,6 +9884,36 @@ class SqlJsLocalStore implements LocalStore {
       runId: source.runId,
       entityId: memoryId,
       createdAt,
+    })
+  }
+
+  /** Runs in the same durable mutation as promotion, revision, expiry and deletion. */
+  private async enqueueHindsightMemory(memoryId: string): Promise<void> {
+    const head = await this.getAgentMemoryHead(memoryId)
+    if (!head) return
+    const config = hindsight.getHindsightConfiguration(this.db, head.scope.localProjectId)
+    if (!config) return
+    const revision = (await this.listAgentMemoryRevisions(memoryId)).find((r) => r.revision === head.currentRevision)
+    const sourceKey = `memory:${memoryId}`
+    const candidateValue = revision ? selectAgentMemoryCandidate(this.db, revision.sourceCandidateId) : undefined
+    const candidate = candidateValue === undefined ? undefined : await parseAgentMemoryCandidate(candidateValue)
+    // Semantic extraction is already backed by its experience document. Never feed a
+    // derived statement (including human revisions of it) back as independent evidence.
+    if (candidate?.provenance.kind === 'learning_event') {
+      hindsight.revokeHindsightSource(this.db, config.generation, sourceKey, 'learning_event_no_feedback')
+      return
+    }
+    if (!config.enabled || !config.includeMemories || head.status !== 'active' || !revision ||
+        revision.status !== 'active' || revision.scope.kind !== 'local' ||
+        revision.scope.userId !== config.ownerUserId || revision.visibility !== 'user_project' ||
+        revision.sensitivity !== 'private' || (revision.expiresAt && Date.parse(revision.expiresAt) <= Date.now())) {
+      hindsight.revokeHindsightSource(this.db, config.generation, sourceKey, 'memory_lifecycle')
+      return
+    }
+    hindsight.reconcileHindsightSource(this.db, config.generation, {
+      kind: 'memory', sourceKey, sourceId: `memory-${memoryId}`, sourceRevision: String(revision.revision),
+      memoryId, memoryRevision: revision.revision, contentDigest: revision.contentDigest,
+      expiresAt: revision.expiresAt, payload: revision.statement,
     })
   }
 
@@ -11250,6 +11500,7 @@ class SqlJsLocalStore implements LocalStore {
       }
       this.db.run('commit')
       transactionOpen = false
+      if (nextRun && approvalEvent) await captureApprovalProjectMemory(this, nextRun, [approvalEvent])
       await this.persist()
     } catch (error) {
       if (transactionOpen) {
@@ -11536,6 +11787,10 @@ class SqlJsLocalStore implements LocalStore {
       }
       this.db.run('commit')
       transactionOpen = false
+      for (const artifact of mutation.artifacts ?? []) {
+        await captureReviewResultProjectMemory(this, artifact)
+      }
+      await captureApprovalProjectMemory(this, nextRun, mutation.events ?? [])
       await this.persist()
       return { committed: true }
     } catch (error) {
@@ -12691,6 +12946,7 @@ class SqlJsLocalStore implements LocalStore {
   async saveArtifact(artifact: Artifact): Promise<void> {
     assertImmutableWorkflowArtifactWrite(this.db, artifact)
     writeArtifact(this.db, artifact)
+    await captureReviewResultProjectMemory(this, artifact)
     await this.persist()
   }
 
@@ -12927,6 +13183,7 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('rollback')
       throw error
     }
+    await captureCodingRunProjectMemory(this, run, current)
     await this.persist()
   }
 
@@ -13299,6 +13556,7 @@ class SqlJsLocalStore implements LocalStore {
       this.db.run('rollback')
       throw error
     }
+    await captureCodingRunProjectMemory(this, nextRun, currentRun)
     await this.persist()
     return { committed: true, run: nextRun }
   }
@@ -13324,7 +13582,7 @@ class SqlJsLocalStore implements LocalStore {
     if (trace && current && (current.runId !== event.runId || current.nodeId !== event.nodeId)) {
       throw new Error('Provider call event scope mismatch')
     }
-    const settled = trace && current?.engine === 'native' ? appendCodingCallCost(current, trace) : current
+    const settled = trace && current && (current.engine === 'native' || current.engine === 'opencode-http') ? appendCodingCallCost(current, trace) : current
     this.db.run('begin transaction')
     try {
       writeCodingAgentEvent(this.db, event)
@@ -13712,6 +13970,13 @@ class SqlJsLocalStore implements LocalStore {
         this.db,
         "select json from desktop_pairing_credentials where id = 'default' limit 1",
       )[0]
+      if (!current || current.localProjectId !== credential.localProjectId ||
+          current.userId !== credential.userId || current.projectId !== credential.projectId ||
+          current.organizationId !== credential.organizationId || current.authAccountId !== credential.authAccountId) {
+        for (const id of new Set([current?.localProjectId, credential.localProjectId])) {
+          if (id) hindsight.disableHindsightProject(this.db, id, 'pairing_changed')
+        }
+      }
       if (current && JSON.stringify(current) !== JSON.stringify(credential)) {
         const activeIntents = selectJson<GitHubDeliveryIntent>(
           this.db,
@@ -14072,9 +14337,23 @@ class SqlJsLocalStore implements LocalStore {
 
   async runDurableMutation<T>(mutation: () => Promise<T>): Promise<T> {
     const snapshot = this.db.export()
+    const previousDepth = this.durableMutationDepth
+    const previousDirty = this.durableMutationDirty
+    this.durableMutationDepth++
     try {
-      return await mutation()
+      const result = await mutation()
+      this.durableMutationDepth = previousDepth
+      // Composite operations call existing methods which each request persistence.
+      // Publish only the complete outer snapshot, so a later failure cannot leave a
+      // partially promoted/replaced Memory (or a source without its job) on disk.
+      if (previousDepth === 0 && this.durableMutationDirty) {
+        this.durableMutationDirty = false
+        await this.persist()
+      }
+      return result
     } catch (error) {
+      this.durableMutationDepth = previousDepth
+      this.durableMutationDirty = previousDirty
       this.restore(snapshot)
       throw error
     }
@@ -14086,6 +14365,10 @@ class SqlJsLocalStore implements LocalStore {
   }
 
   private async persist(): Promise<void> {
+    if (this.durableMutationDepth > 0) {
+      this.durableMutationDirty = true
+      return
+    }
     const snapshot = this.db.export()
     const persistence = this.persistenceQueue.then(() =>
       persistDatabaseSnapshot(snapshot, this.dbPath),
@@ -14101,6 +14384,31 @@ class SqlJsLocalStore implements LocalStore {
 // Direct methods access state or handle in-memory authority/lifecycle; Memory retrieval is
 // durable because it also records expiry and retrieval audit state.
 const LOCAL_STORE_METHOD_EXECUTION = {
+
+  resolveLocalProjectMemoryPrincipal: 'durable',
+  getHindsightConfiguration: 'direct',
+  getProjectMemoryConfiguration: 'direct',
+  listProjectMemoryConfigurations: 'direct',
+  configureProjectMemory: 'durable',
+  recordProjectMemoryDocument: 'durable',
+  listProjectMemoryDocuments: 'direct',
+  claimProjectMemoryDocument: 'durable',
+  settleProjectMemoryDocument: 'durable',
+  forgetProjectMemoryDocument: 'durable',
+  recoverProjectMemoryDocuments: 'durable',
+  markProjectMemoryChanged: 'durable',
+  clearProjectMemory: 'durable',
+  completeProjectMemoryBankDeletion: 'durable',
+  listHindsightConfigurations: 'direct',
+  configureHindsight: 'durable',
+  disableHindsightProject: 'durable',
+  listHindsightProjections: 'direct',
+  reconcileHindsightSource: 'durable',
+  revokeHindsightSource: 'durable',
+  claimHindsightProjection: 'durable',
+  settleHindsightProjection: 'durable',
+  recoverHindsightProjections: 'durable',
+  hydrateAgentMemoryRevisions: 'durable',
   appendWorkbenchResponseChunk: 'direct',
   readWorkbenchResponseReasoning: 'direct',
   readWorkbenchResponseContent: 'direct',

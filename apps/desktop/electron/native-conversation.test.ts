@@ -6,6 +6,9 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { AgentProviderRequestError, createFakeAgentProvider, createWorkflowRunFromRequest, resolveRequestPolicy, type AgentProvider, type NativeConversationRequest, type NativeToolCall } from '@ai-devflow/shared'
 import { createLocalStore, type LocalStore } from './local-store'
 import { WorkbenchConversationService } from './workbench-conversation-service'
+import { runNativeConversation } from './native-conversation'
+import { beginInvestigationBatch } from './investigation-policy'
+import type { ConversationCheckpoint, WorkbenchConversation } from './workbench-conversation-contract'
 
 let directory: string, store: LocalStore
 const projectId = 'native-project'
@@ -36,11 +39,149 @@ async function send(service: WorkbenchConversationService, id: string, text = '�
   await service.command({ type: 'send', projectId, conversationId: id, providerId: 'deepseek', text }); await service.settled(id)
   return (await store.listWorkbenchConversations(projectId)).find(s => s.id === id)!
 }
+
+function isolatedNative(complete: NonNullable<AgentProvider['completeNativeConversation']>, options: { maxSteps?: number; memory?: unknown; maxInputBytes?: number } = {}) {
+  const checkpoint: ConversationCheckpoint = { version: 1, turnId: 'user', step: 1, cycle: 1, recoveries: 0, group: 'group', providerId: 'fixture', observations: [], citations: [], requirementRunIds: [], investigation: beginInvestigationBatch(undefined, { maxSteps: options.maxSteps ?? 12 }) }
+  let session: WorkbenchConversation = { id: 'isolated', localProjectId: projectId, version: 1, title: 'fixture', isOpen: true, status: 'running', inputDraft: '', createdAt: fixture.run.createdAt, updatedAt: fixture.run.createdAt, messages: [{ id: 'user', role: 'user', text: '只读调查', createdAt: fixture.run.createdAt }], checkpoint }
+  const completeNativeConversation = vi.fn(complete)
+  const host = {
+    provider: { ...createFakeAgentProvider(), supportsNativeTools: true, completeNativeConversation, ...(options.maxInputBytes ? { resolveRequestPolicy: () => ({ ...resolveRequestPolicy({ model: 'fixture' }), maxInputBytes: options.maxInputBytes! }) } : {}) },
+    checkpoint, signal: new AbortController().signal,
+    read: async () => session,
+    update: async (transform: (current: WorkbenchConversation) => WorkbenchConversation) => (session = transform(session)),
+    context: async () => ({}), memory: async () => options.memory,
+    critical: vi.fn(async () => { throw new Error('Unexpected critical read') }), validateReads: vi.fn(async () => {}),
+    query: vi.fn(async () => ({ result: { content: 'verified file' }, sourceId: 'source-1' })), append: vi.fn(async () => {}),
+    pauseInvestigation: vi.fn(async () => { session = { ...session, status: 'paused', checkpoint: structuredClone(checkpoint) } }),
+    beforeModelRequest: vi.fn(async () => {}), recordModelDelivery: vi.fn(async () => {}),
+  }
+  return { host, completeNativeConversation, read: () => session }
+}
+
+it('does not dispatch when cancellation arrives while the request counter is being saved', async () => {
+  const h = isolatedNative(async () => answer('不应调用'))
+  const controller = new AbortController()
+  h.host.signal = controller.signal
+  const update = h.host.update
+  h.host.update = async transform => {
+    const saved = await update(transform)
+    if (saved.checkpoint?.investigation?.totals.requests === 1) controller.abort(new Error('cancelled'))
+    return saved
+  }
+  await runNativeConversation(h.host)
+  expect(h.completeNativeConversation).not.toHaveBeenCalled()
+  expect(h.host.pauseInvestigation).not.toHaveBeenCalled()
+  expect(h.host.recordModelDelivery).toHaveBeenCalledWith(expect.any(String), 'not_sent')
+  expect(h.read().status).toBe('cancelled')
+})
+
+it('hands the native step boundary to the shared summary host instead of starting another request', async () => {
+  const h = isolatedNative(async () => call('read', 'repo_read', { path: 'app.js' }), { maxSteps: 1 })
+  await runNativeConversation(h.host)
+  expect(h.completeNativeConversation).toHaveBeenCalledTimes(1)
+  expect(h.host.query).toHaveBeenCalledTimes(1)
+  expect(h.host.pauseInvestigation).toHaveBeenCalledTimes(1)
+  expect(h.read().checkpoint?.investigation).toMatchObject({ batch: { steps: 1, requests: 1 }, stopReason: 'step_limit' })
+})
+
+it('keeps changing Memory out of the native system prefix and durable protocol while auditing delivery', async () => {
+  const memory = { backgroundMemory: [{ id: 'm1', statement: 'A private useful memory' }] }
+  const h = isolatedNative(async input => {
+    expect(input.systemPrompt).not.toContain('A private useful memory')
+    expect(input.systemPrompt).toContain('用户本轮明确要求优先')
+    expect(JSON.parse(input.messages.at(-1)!.content!)).toEqual(memory)
+    return answer('Completed')
+  }, { memory })
+  await runNativeConversation(h.host)
+  expect(h.read().status).toBe('idle')
+  expect(JSON.stringify(h.read().nativeTranscript)).not.toContain('A private useful memory')
+  expect(h.host.beforeModelRequest).toHaveBeenCalledWith(expect.any(Object), expect.any(String), true)
+  expect(h.host.recordModelDelivery).toHaveBeenCalledWith(expect.any(String), 'response_received')
+})
+
+it('drops optional Memory as a whole before compacting native history when the wire payload overflows', async () => {
+  const h = isolatedNative(async input => {
+    expect(JSON.stringify(input.messages)).not.toContain('MEMORY_OVERFLOW')
+    expect(input.messages[0]?.content).toContain('只读调查')
+    return answer('完成')
+  }, { memory: { backgroundMemory: [{ statement: 'MEMORY_OVERFLOW'.repeat(4000) }] }, maxInputBytes: 14000 })
+  await runNativeConversation(h.host)
+  expect(h.read().status).toBe('idle')
+  expect(h.host.beforeModelRequest).toHaveBeenCalledWith(expect.any(Object), expect.any(String), false)
+  expect(h.read().nativeContextStart).toBeUndefined()
+})
+
+it('does not start another native recovery when the whole-question recovery allowance is exhausted', async () => {
+  const h = isolatedNative(async () => { throw new AgentProviderRequestError({ code: 'invalid_model_output', sanitizedCause: 'invalid_json', retryable: true, deliveryState: 'response_received', billingState: 'unknown' }) })
+  h.host.checkpoint.investigation!.totals.recoveries = 24
+  await runNativeConversation(h.host)
+  expect(h.completeNativeConversation).toHaveBeenCalledTimes(1)
+  expect(h.host.pauseInvestigation).toHaveBeenCalledTimes(1)
+  expect(h.read().checkpoint?.investigation?.stopReason).toBe('recovery_limit')
+})
+
+it('keeps Memory omitted in the receipt when history compaction is also needed after dropping it', async () => {
+  const h = isolatedNative(async input => {
+    expect(JSON.stringify(input.messages)).not.toContain('MEMORY_OVERFLOW')
+    return answer('完成')
+  }, { memory: { backgroundMemory: [{ statement: 'MEMORY_OVERFLOW'.repeat(4000) }] }, maxInputBytes: 14000 })
+  await h.host.update(current => ({ ...current, nativeTranscript: [{ turnId: 'old', message: { role: 'user', content: 'OLD_RAW_TEXT'.repeat(5000) } }] }))
+  await runNativeConversation(h.host)
+  expect(h.read().status).toBe('idle')
+  expect(h.read().nativeContextStart).toBeGreaterThan(0)
+  expect(h.host.beforeModelRequest).toHaveBeenCalledWith(expect.any(Object), expect.any(String), false)
+})
+
+it('bounds native argument repairs and counts them as cumulative recovery attempts', async () => {
+  let attempt = 0
+  const h = isolatedNative(async () => call(`bad-${++attempt}`, 'repo_read', { wrong: 'app.js' }))
+  await runNativeConversation(h.host)
+  expect(h.completeNativeConversation).toHaveBeenCalledTimes(3)
+  expect(h.host.query).not.toHaveBeenCalled()
+  expect(h.host.pauseInvestigation).not.toHaveBeenCalled()
+  expect(h.read().status).toBe('failed')
+  expect(h.read().checkpoint?.investigation?.totals).toMatchObject({ requests: 3, recoveries: 2 })
+})
+
+it('does not summarize or retry after budget refusal, permission refusal, or pre-dispatch cancellation', async () => {
+  for (const reason of ['budget_exceeded', 'permission_denied']) {
+    const h = isolatedNative(async () => { throw new AgentProviderRequestError({ code: 'unknown_provider_failure', sanitizedCause: reason, retryable: false, deliveryState: 'not_sent', billingState: 'not_incurred' }) })
+    await runNativeConversation(h.host)
+    expect(h.completeNativeConversation).toHaveBeenCalledTimes(1)
+    expect(h.host.pauseInvestigation).not.toHaveBeenCalled()
+    expect(h.host.recordModelDelivery).toHaveBeenCalledWith(expect.any(String), 'not_sent')
+  }
+  const h = isolatedNative(async () => answer('不应调用'))
+  const controller = new AbortController()
+  h.host.signal = controller.signal
+  h.host.beforeModelRequest.mockImplementation(async () => { controller.abort(new Error('cancelled')) })
+  await runNativeConversation(h.host)
+  expect(h.completeNativeConversation).not.toHaveBeenCalled()
+  expect(h.host.pauseInvestigation).not.toHaveBeenCalled()
+  expect(h.read().status).toBe('cancelled')
+  expect(h.host.recordModelDelivery).toHaveBeenCalledWith(expect.any(String), 'not_sent')
+})
+
+it('pauses between native tools without running the remainder or losing completed pairs', async () => {
+  const first = call('read-a', 'repo_read', { path: 'app.js' })
+  first.toolCalls.push(...call('read-b', 'repo_read', { path: 'README.md' }).toolCalls)
+  const h = isolatedNative(async () => first)
+  h.host.query.mockImplementation(async () => {
+    h.host.checkpoint.investigation!.batch.noProgress = 4
+    return { result: { content: 'verified file' }, sourceId: 'source-1' }
+  })
+  await runNativeConversation(h.host)
+  expect(h.host.query).toHaveBeenCalledTimes(1)
+  expect(h.host.pauseInvestigation).toHaveBeenCalledTimes(1)
+  expect(h.read().nativeTranscript?.filter(entry => entry.message.role === 'tool')).toHaveLength(1)
+  expect(h.read().checkpoint?.nativePendingCalls?.map(entry => entry.id)).toEqual(['read-a', 'read-b'])
+})
 it('binds new supported Direct Provider conversations once and keeps them readable when rolled back', async () => {
   const h = setup(async () => answer('原生普通回答'), store, true)
   const id = (await h.service.command({ type: 'create', projectId })).conversationId!
   const result = await send(h.service, id, '说明项目')
   expect(result).toMatchObject({ executor: 'direct-provider', nativeProtocolSelection: 'selected', nativeProtocolVersion: 2, status: 'idle' })
+  expect(result.investigationProgress?.batch.steps).toBe(1)
   const disabled = setup(async () => answer('不应调用'))
   const paused = await send(disabled.service, id, '继续')
   expect(paused.status).toBe('failed')
@@ -98,10 +239,18 @@ it('saves a reviewed candidate without another model request and prevents stale-
   const id = await create(h.service), result = await send(h.service, id)
   const candidate = result.messages.find(m => m.draft)!
   expect(candidate?.draft?.review?.status).toBe('passed')
+  expect(result.investigationProgress?.batch.steps).toBe(3)
   await store.saveRun({ ...fixture.run, request: '需求已经改变', updatedAt: '2026-10-11T00:00:00.000Z', version: fixture.run.version + 1 })
   await store.saveArtifact({ id: 'conversation-proposal-new-source', ...target, kind: 'log', title: '新约定', summary: '变更', content: '新增已确认约定', redacted: true, updatedAt: '2026-10-11T00:00:00.000Z' })
   await expect(h.service.command({ type: 'publish', projectId, conversationId: id, messageId: candidate.id, acknowledgeUnverified: true })).rejects.toThrow('已更新')
   expect(h.fn).toHaveBeenCalledTimes(3)
+})
+
+it('counts a completed user question as one native work step', async () => {
+  const h = isolatedNative(async () => call('ask', 'request_user_input', { prompt: '请选择调查范围。', options: ['需求', '代码'] }))
+  await runNativeConversation(h.host)
+  expect(h.read().status).toBe('awaiting_answer')
+  expect(h.host.checkpoint.investigation?.batch.steps).toBe(1)
 })
 
 it('reviews the same persisted candidate after restart and keeps the original user request', async () => {

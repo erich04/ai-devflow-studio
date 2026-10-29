@@ -107,8 +107,12 @@
 .reasoning-status .conversation-running-dot { animation: reasoning-pulse 1.4s ease-in-out infinite; }
 @keyframes reasoning-pulse { 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .reasoning-status .conversation-running-dot { animation: none; } }
-.conversation-tool pre, .conversation-sources pre, .conversation-proposal pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-xs); line-height: 1.65; font-family: inherit; max-height: 240px; overflow-y: auto; }
+.conversation-tool pre, .conversation-sources pre, .conversation-content-pages pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-xs); line-height: 1.65; font-family: inherit; max-height: 240px; overflow-y: auto; }
 .conversation-question, .conversation-proposal { display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 13px; margin-top: 12px; background: var(--bg); }
+.conversation-proposal, .proposal-body { min-width: 0; }
+.proposal-body-title { display: block; margin-bottom: 8px; }
+.proposal-body-content { min-width: 0; max-height: 320px; overflow: auto; overscroll-behavior: contain; color: var(--text); }
+.proposal-body .message-markdown th, .proposal-body .message-markdown td { min-width: 6em; }
 .conversation-question { border-color: color-mix(in srgb, #e4b24a 40%, var(--border)); }
 .conversation-question > strong { font-size: var(--font-size-body); line-height: 1.6; }
 .conversation-question small { color: var(--text-muted); font-size: var(--font-size-xs); }

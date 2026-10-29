@@ -1,4 +1,5 @@
 import { SessionPermissionChoice } from '../components/CodingSessionPermissions'
+import { CodingPermissionCommand } from '../components/CodingPermissionCommand'
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { FolderOpen, RotateCcw, Trash2 } from 'lucide-react'
@@ -14,7 +15,7 @@ import type { CodingReadinessDisplay } from '../app/coding-runtime-readiness-vie
 import { formatLocalTime } from '../app/desktop-view-model'
 import type { TestRunReadiness } from '../app/test-run-readiness'
 import { CodingChangeSetReview, commandRiskLabels } from './CodingChangeSetReview'
-import { ReviewRerunDialog } from './ReviewRerunDialog'
+import type { GateReviewScope } from '../app/gate-review-scope'
 
 /*
  * In-task execution (plan §7.2 W2–W4). These panels call the existing write paths through the
@@ -28,6 +29,7 @@ const codingPhaseCopy: Partial<Record<CodingRuntimeActionProjection['phase'], st
   bootstrapping: '正在安装依赖',
   running: '正在编码',
   waiting_permission: '等待权限',
+  waiting_input: '等待回答',
   applying: '正在应用改动',
   testing: '正在运行检查',
   completed: '已完成',
@@ -91,32 +93,39 @@ function ReviewRepositoryCheck({ review }: { review: AgentReviewResult }) {
   )
 }
 
-/** Gate Review in the task: failure reason with retry, and a confirmed re-run (plan W2). */
+/**
+ * Gate Review in the task: the saved result and the version it covered, a failure reason, and a
+ * re-run (plan W2). Every entry goes through the same request, which confirms before another paid
+ * review (#251); the button is left out when the status row already offers it.
+ */
 export function GateReviewRunPanel({
   latestReview,
+  reviewScope,
+  currentLabel,
   failure,
   isRunning,
   providerLabel,
   blockedReason,
   isWriteLocked,
-  target,
-  onRun,
+  showRunButton,
+  onRequestRun,
 }: {
   latestReview: AgentReviewResult | undefined
+  /** Which version the saved review covered; absent means the current one. */
+  reviewScope: GateReviewScope | undefined
+  /** What a new review covers, e.g. “需求 v2”. */
+  currentLabel: string
   failure: string | undefined
   isRunning: boolean
   providerLabel: string | undefined
   blockedReason: string | undefined
   isWriteLocked: boolean
-  target: string
-  onRun: (previousReviewId?: string) => void
+  showRunButton: boolean
+  onRequestRun: () => void
 }) {
-  const [confirmingReviewId, setConfirmingReviewId] = useState<string | null>(null)
-  useEffect(() => setConfirmingReviewId(null), [latestReview?.id, providerLabel])
   if (!isRunning && !failure && !latestReview) return null
   const disabled = isRunning || isWriteLocked || Boolean(blockedReason)
-  // A retry after an earlier review is a re-run: it keeps the old result and needs confirmation.
-  const start = () => (latestReview ? setConfirmingReviewId(latestReview.id) : onRun())
+  const outdated = Boolean(latestReview && reviewScope && !reviewScope.appliesToCurrent)
   return (
     <section className="task-work-panel task-review-run" aria-label="门禁审查" data-testid="task-review-run">
       <span className="panel-label">门禁审查</span>
@@ -127,30 +136,21 @@ export function GateReviewRunPanel({
           <p>上次门禁审查未完成：{failure.split(' {')[0]}</p>
           <details><summary>诊断详情</summary><code>{failure}</code></details>
         </div>
+      ) : latestReview && outdated ? (
+        <p data-testid="review-outdated">上次审查针对{reviewScope?.reviewedLabel ?? '之前的版本'}，当前版本已更新（{formatLocalTime(latestReview.createdAt)} · {latestReview.model}）。结果保留在历史中，不作为{currentLabel}的审查结果。</p>
       ) : latestReview ? (
         <p>上次审查：{formatLocalTime(latestReview.createdAt)} · {latestReview.model}。内容变化后可以重新审查，旧结果保留在历史中。</p>
       ) : null}
       {latestReview && !isRunning ? <ReviewRepositoryCheck review={latestReview} /> : null}
-      {!isRunning ? (
+      {/* The retry stays beside its failure (#201); a plain re-run is left to the status row when it offers one. */}
+      {!isRunning && (failure || showRunButton) ? (
         <div className="inspector-actions">
-          <button className="ghost-button" type="button" disabled={disabled} title={blockedReason} onClick={start}>
+          <button className="ghost-button" type="button" disabled={disabled} title={blockedReason} onClick={onRequestRun}>
             <RotateCcw size={16} />
             {failure ? '重试门禁审查' : '重新审查'}
           </button>
           <span className="meta">{blockedReason ?? (providerLabel ? `将使用 ${providerLabel}，可能产生费用。` : '')}</span>
         </div>
-      ) : null}
-      {confirmingReviewId && latestReview?.id === confirmingReviewId ? (
-        <ReviewRerunDialog
-          target={target}
-          provider={providerLabel ?? '未选择模型'}
-          reviewedAt={latestReview.createdAt}
-          onCancel={() => setConfirmingReviewId(null)}
-          onConfirm={() => {
-            setConfirmingReviewId(null)
-            onRun(confirmingReviewId)
-          }}
-        />
       ) : null}
     </section>
   )
@@ -177,6 +177,7 @@ export function CodingWorkPanel({
   focusRef: RefObject<HTMLDivElement | null>
 }) {
   if (!projection) return null
+  if (projection.phase === 'waiting_input' && latestCodingRun?.question) return null
   const permission = projection.action.id === 'review-permission' ? projection.permission : undefined
   const phase = codingPhaseCopy[projection.phase]
   if (permission && (permission.kind === 'change-set' || permission.kind === 'change-acceptance') && latestCodingRun) {
@@ -198,6 +199,7 @@ export function CodingWorkPanel({
         <span className="panel-label">权限请求 · 批准与拒绝在状态行</span>
         <strong>{permission.request.title}</strong>
         <p>{permission.request.reasons.join(' ')}</p>
+        <CodingPermissionCommand request={permission.request} />
         <div className="knowledge-reference-meta">
           <span>{permission.request.permission}</span>
           <span>风险 {commandRiskLabels[permission.request.risk] ?? permission.request.risk}</span>
