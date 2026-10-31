@@ -52,8 +52,6 @@ it('shows a design opinion only beside its paragraph and never appends the repor
   expect(screen.queryByRole('dialog')).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: '在「材料与版本」查看完整报告' }))
   expect(openReport).toHaveBeenCalledTimes(1)
-  // A design Gate has no requirement drafts.
-  expect(screen.queryByRole('button', { name: '整理修订建议' })).toBeNull()
 })
 
 it('says when there is no saved review', () => {

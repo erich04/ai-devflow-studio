@@ -3,7 +3,7 @@ import { fromMarkdown } from 'mdast-util-from-markdown'
 import { sha256Text, type AgentReviewResult, type Artifact } from '@ai-devflow/shared'
 import { ArtifactBody, partitionArtifact } from './ArtifactBody'
 import { DetailPopover } from './DetailPopover'
-import { ReviewEvidenceDetails, type RecordReviewFeedback, type ReviewRevisionDrafts } from './ReviewEvidenceDetails'
+import { ReviewEvidenceDetails, type RecordReviewFeedback } from './ReviewEvidenceDetails'
 import type { DiscussionMaterial } from '../app/discussion-reference'
 import { formatLocalTime } from '../app/desktop-view-model'
 
@@ -25,14 +25,12 @@ function readingBlocks(content: string) {
  * report is not repeated here; it lives in 材料与版本, and opinions without a verifiable location
  * stay reachable from the one-line summary below the body.
  */
-export function ArtifactReviewReader({ artifact, review, onFeedback, revisionDrafts, onDiscuss, onOpenReport, requirement = false, readingTools }: {
+export function ArtifactReviewReader({ artifact, review, onFeedback, onDiscuss, onOpenReport, requirement = false, readingTools }: {
   /** Passed to the body's 阅读工具 disclosure (plan Y6). */
   readingTools?: ReactNode
   artifact: Artifact
   review?: AgentReviewResult | null | undefined
   onFeedback?: RecordReviewFeedback | undefined
-  /** Per-opinion revision drafts; only for the requirement version that can be revised (#247). */
-  revisionDrafts?: ReviewRevisionDrafts | undefined
   onDiscuss?: ((material: DiscussionMaterial) => void) | undefined
   /** Opens the full report in 材料与版本. */
   onOpenReport?: (() => void) | undefined
@@ -53,8 +51,6 @@ export function ArtifactReviewReader({ artifact, review, onFeedback, revisionDra
     bound && detail.index >= 0 && detail.index < (review?.missingEvidence.length ?? 0) && Number.isInteger(citation.start) && Number.isInteger(citation.end) && citation.start >= 0 && citation.end > citation.start && citation.end <= artifact.content.length &&
     citation.sourceId === artifact.id && citation.contentDigest === currentDigest && (!citation.updatedAt || citation.updatedAt === artifact.updatedAt) && artifact.content.slice(citation.start, citation.end) === citation.quote &&
     blocks.some((block) => citation.start >= block.start && citation.end <= block.end) ? [{ index: detail.index, citation }] : []))
-  // Drafts belong to the version the review is bound to; a stale review offers none.
-  const drafts = bound ? revisionDrafts : undefined
   // A review opinion becomes a reference card in the discussion; nothing is sent yet (plan W7).
   const discuss = onDiscuss && review ? (index: number) => {
     const quotes = review.missingEvidenceDetails?.find((item) => item.index === index)?.citations ?? []
@@ -72,7 +68,7 @@ export function ArtifactReviewReader({ artifact, review, onFeedback, revisionDra
     return <span className="review-inline-markers">{items.map((item) => <DetailPopover hoverPreview key={item.index} title={`审查意见 ${item.index + 1}`} className="review-inline-marker" label={<span>意见 {item.index + 1}</span>}>
       <p className="meta">{reviewedAt}</p>
       <strong>原文</strong><blockquote>{item.citation.quote}</blockquote>
-      <ReviewEvidenceDetails review={review} onlyIndex={item.index} onFeedback={onFeedback} revisionDrafts={drafts} onDiscuss={discuss} />
+      <ReviewEvidenceDetails review={review} onlyIndex={item.index} onFeedback={onFeedback} onDiscuss={discuss} />
     </DetailPopover>)}</span>
   }
   const count = review?.missingEvidence.length ?? 0
@@ -95,7 +91,7 @@ export function ArtifactReviewReader({ artifact, review, onFeedback, revisionDra
       {review ? unlocated.map((index) => <DetailPopover hoverPreview key={index} title={`审查意见 ${index + 1}`} triggerLabel={`审查意见 ${index + 1}（未定位）`} className="review-inline-marker" label={<span>意见 {index + 1}</span>}>
         <p className="meta">{reviewedAt}</p>
         <p className="meta">这条意见没有可核验的原文位置，因此没有在正文中标注。</p>
-        <ReviewEvidenceDetails review={review} onlyIndex={index} onFeedback={onFeedback} revisionDrafts={drafts} onDiscuss={discuss} />
+        <ReviewEvidenceDetails review={review} onlyIndex={index} onFeedback={onFeedback} onDiscuss={discuss} />
       </DetailPopover>) : null}
       {reportLink}
     </p>

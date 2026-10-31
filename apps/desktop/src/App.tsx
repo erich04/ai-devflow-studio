@@ -34,6 +34,10 @@ import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   isActiveCodingAgentRunStatus,
+  listClarificationRevisions,
+  sanitizeStageAgentFailureDetails,
+  type Artifact,
+  type StageAgentFailureDetails,
   type KnowledgeChunk,
   type KnowledgeDocument,
   type KnowledgeEntity,
@@ -68,6 +72,10 @@ import {
 } from './app/node-inspector-view-model'
 import { buildDiscussionReference, type DiscussionMaterial } from './app/discussion-reference'
 import { useDesktopActions } from './app/useDesktopActions'
+import { useRevisionLists } from './app/useRevisionLists'
+import { findStoredList } from './app/gate-decision/revision-list'
+import { stageVersions } from './app/gate-decision/page'
+import type { GateWriteContext } from './components/gate-page/GateDecisionScope'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
 import { useCodingRuntimeReadiness } from './app/useCodingRuntimeReadiness'
@@ -253,6 +261,8 @@ export function App() {
   const [codingChangeSetPreview, setCodingChangeSetPreview] = useState<CodingChangeSetPreview | null>(null)
   const [codingRuntimeNow, setCodingRuntimeNow] = useState(() => new Date().toISOString())
   const [stageChoices, setStageChoices] = useState<Record<string, { executor: StageAgentExecutorKind; providerId: string }>>({})
+  // Versioned local revision lists of the gate pages (design §3.3, §5.11).
+  const revisionLists = useRevisionLists()
   const [dataProfileDiagnostics, setDataProfileDiagnostics] =
     useState<DesktopDataProfileDiagnostics | null>(null)
 
@@ -418,8 +428,18 @@ export function App() {
   const selectedRun = scopedRuns.find((run) => run.id === selectedRunId) ?? scopedRuns[0]
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
-  const stageChoiceKey = `${selectedRun?.id ?? ''}:${selectedNode?.id ?? ''}`
-  const stageChoice = stageChoices[stageChoiceKey] ?? { executor: 'direct-provider' as const, providerId: selectedAgentProviderId }
+  // The clarify gate page generates vN+1 on the clarify agent: both nodes share one choice (§5.11).
+  const clarifyAgentNode = selectedRun?.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')
+  const stageChoiceNodeId = selectedNode?.stage === 'clarify' && (selectedNode.kind === 'gate' || selectedNode.kind === 'agent') && clarifyAgentNode
+    ? clarifyAgentNode.id : selectedNode?.id ?? ''
+  const stageChoiceKey = `${selectedRun?.id ?? ''}:${stageChoiceNodeId}`
+  // A revision-pending requirement regenerates with the choice it was submitted with.
+  const pendingRevision = selectedRun && clarifyAgentNode && stageChoiceNodeId === clarifyAgentNode.id
+    ? listClarificationRevisions(selectedRun.id, scopedArtifacts).at(-1) : undefined
+  const submittedGeneration = pendingRevision?.clarificationRevision?.status === 'revision_requested' && selectedRun
+    ? findStoredList(revisionLists.store, { kind: 'requirement', runId: selectedRun.id, reading: pendingRevision, revision: pendingRevision.clarificationRevision.revision })?.submitted?.generation
+    : undefined
+  const stageChoice = stageChoices[stageChoiceKey] ?? submittedGeneration ?? { executor: 'direct-provider' as const, providerId: selectedAgentProviderId }
   const stageAgentExecutorKind = stageChoice.executor
   const setStageAgentExecutorKind = (executor: StageAgentExecutorKind) => setStageChoices((current) => ({
     ...current, [stageChoiceKey]: { ...stageChoice, executor },
@@ -879,8 +899,10 @@ export function App() {
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
-    generateSelectedDesignRevision,
-    requestSelectedClarificationChanges,
+    submitRequirementRevision,
+    regenerateRequirementRevision,
+    generateDesignRevision,
+    gateWriteResult,
     selectLocalProject,
     saveTestCommand,
     executeTestPlan,
@@ -966,6 +988,53 @@ export function App() {
       : knowledgeReviewExecutor !== 'direct-provider' && reviewProvider?.kind === 'fake'
         ? '仓库门禁审查需要已保存的模型 Provider；请在设置中更换，或把审查方式改回只依据知识目录。'
         : modelReadinessError
+  // Gate page writes (design §5.11): exact identities, the list's proposals and the stage choice.
+  const generationChoice = { executor: stageAgentExecutorKind, providerId: stageChoice.providerId }
+  const submitGateRevision = (input: GateWriteContext & { text: string; proposals: Artifact[]; itemCount: number }) => {
+    const target = input.target
+    if (!target) return
+    if (target.kind === 'requirement') {
+      void submitRequirementRevision({ target, text: input.text, proposals: input.proposals, ...generationChoice,
+        onCommitted: ({ feedbackArtifactId, proposals }) => {
+          revisionLists.apply(target, { type: 'markSubmitted', text: input.text, proposals, itemCount: input.itemCount,
+            ...(feedbackArtifactId ? { feedbackArtifactId } : {}), generation: generationChoice })
+        } })
+      return
+    }
+    if (!input.designIdentity) return
+    const version = stageVersions('design', target.runId, scopedArtifacts).find((item) => item.artifact.id === input.current.id)?.number
+    void generateDesignRevision({ runId: target.runId, expectedPrevious: input.designIdentity, proposals: input.proposals, changeRequest: input.text,
+      ...generationChoice, ...(version !== undefined ? { version } : {}),
+      onGenerated: ({ proposals }) => {
+        revisionLists.apply(target, { type: 'markSubmitted', text: input.text, proposals, itemCount: input.itemCount, generation: generationChoice })
+      } })
+  }
+  const confirmGate = (input: GateWriteContext & { unsubmittedCount: number }) => {
+    const target = input.target
+    const label = target ? stageVersions(target.kind, target.runId, scopedArtifacts).find((item) => item.artifact.id === input.current.id)?.label : undefined
+    void approveSelectedGate({
+      ...(target?.kind === 'requirement' ? { expectedClarification: { artifactId: target.artifactId, revision: target.revision, revisionDigest: target.revisionDigest } } : {}),
+      ...(input.designIdentity ? { expectedDesign: input.designIdentity } : {}),
+      unsubmittedCount: input.unsubmittedCount,
+      ...(label ? { versionLabel: label } : {}),
+      ...(target ? { onConfirmedWithout: () => { revisionLists.apply(target, { type: 'markConfirmedWithout', count: input.unsubmittedCount }) } } : {}),
+    })
+  }
+  const regenerateGateRequirement = () => {
+    if (!selectedRun || !pendingRevision?.clarificationRevision) return
+    void regenerateRequirementRevision({ runId: selectedRun.id, version: pendingRevision.clarificationRevision.revision, ...generationChoice })
+  }
+  // The latest sanitized failure per node of the selected run (revision-pending bar, §5.3 row 4).
+  const stageFailures = useMemo(() => {
+    const result: Record<string, { details: StageAgentFailureDetails; at: string }> = {}
+    for (const trace of agentTraces) {
+      if (trace.runId !== selectedRun?.id || !trace.nodeId) continue
+      const details = sanitizeStageAgentFailureDetails(trace.failureDetails)
+      if (details && (!result[trace.nodeId] || result[trace.nodeId]!.at < trace.createdAt)) result[trace.nodeId] = { details, at: trace.createdAt }
+    }
+    return result
+  }, [agentTraces, selectedRun?.id])
+  const runAgentReviews = useMemo(() => agentReviews.filter((review) => review.runId === selectedRun?.id), [agentReviews, selectedRun?.id])
   const latestReviewFailure = selectedEvents
     .filter((event) => event.kind === 'error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp > latestAgentReview.createdAt))
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]?.message
@@ -1533,9 +1602,22 @@ export function App() {
                   canSaveOverride={gateEnforcement.canSaveOverride}
                   onApprove={approveSelectedGate}
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
-                  onGenerateDesignRevision={generateSelectedDesignRevision}
+                  onSubmitGateRevision={submitGateRevision}
+                  onConfirmGate={confirmGate}
+                  onRegenerateRequirementRevision={regenerateGateRequirement}
+                  runAgentReviews={runAgentReviews}
+                  revisionLists={revisionLists}
+                  gatePolicyLoadError={gateEnforcement.loadError || undefined}
+                  gatePolicyEnabled={dataOrigin !== 'seed'}
+                  onReloadPolicy={() => void gateEnforcement.refresh().catch(() => {})}
+                  roleCanApprove={gateEnforcement.roleCanApprove}
+                  currentUserRole={currentUser?.role}
+                  evaluatedAt={gateEnforcement.evaluatedAt}
+                  stageFailures={stageFailures}
+                  teamMembers={teamMembers}
+                  gateWriteResult={gateWriteResult}
+                  knowledgeReviewTarget={knowledgeReviewTarget}
                   onDiscussMaterial={(material) => discussMaterial(material)}
-                  {...(desktopApi?.requestClarificationChanges ? { onRequestClarificationChanges: requestSelectedClarificationChanges } : {})}
                   stageProviders={agentProviders}
                   stageProviderId={stageChoice.providerId}
                   onStageProviderChange={setStageProviderId}

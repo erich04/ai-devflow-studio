@@ -1,7 +1,6 @@
 /**
- * Per-opinion revision drafts for a requirement version (#247). A draft keeps the review's original
- * opinion apart from what the user verified and what they want changed. Drafts stay on this machine
- * until the user submits the revision request; saving one never changes the requirement or the Gate.
+ * Per-opinion revision drafts of #247, kept only so `useRevisionLists` can import them into the
+ * versioned revision lists once (design §3.3, §5.5). Nothing writes this format any more.
  */
 export type RevisionSuggestion = {
   reviewId: string
@@ -19,9 +18,6 @@ export type RevisionSuggestion = {
 export type RevisionSuggestionStore = Record<string, RevisionSuggestion[]>
 
 export const REVISION_SUGGESTIONS_STORAGE_KEY = 'devflow-revision-suggestions'
-/** Same limit the clarification revision path enforces on the submitted text. */
-export const MAX_REVISION_REQUEST_CHARACTERS = 4_000
-export const MAX_SUGGESTION_FIELD_CHARACTERS = 1_000
 
 function isSuggestion(value: unknown): value is RevisionSuggestion {
   if (!value || typeof value !== 'object') return false
@@ -40,39 +36,4 @@ export function parseRevisionSuggestionStore(raw: string | null): RevisionSugges
   } catch {
     return {}
   }
-}
-
-const sameOpinion = (item: RevisionSuggestion, reviewId: string, index: number) => item.reviewId === reviewId && item.index === index
-
-export function findSuggestion(list: readonly RevisionSuggestion[], reviewId: string, index: number): RevisionSuggestion | undefined {
-  return list.find((item) => sameOpinion(item, reviewId, index))
-}
-
-/** Adds or replaces the draft for one opinion; drafts stay in opinion order. */
-export function upsertSuggestion(list: readonly RevisionSuggestion[], suggestion: RevisionSuggestion): RevisionSuggestion[] {
-  const next = list.filter((item) => !sameOpinion(item, suggestion.reviewId, suggestion.index))
-  return [...next, {
-    ...suggestion,
-    finding: suggestion.finding.slice(0, MAX_SUGGESTION_FIELD_CHARACTERS),
-    change: suggestion.change.slice(0, MAX_SUGGESTION_FIELD_CHARACTERS),
-  }].sort((left, right) => left.reviewId === right.reviewId ? left.index - right.index : left.reviewId.localeCompare(right.reviewId))
-}
-
-export function removeSuggestion(list: readonly RevisionSuggestion[], reviewId: string, index: number): RevisionSuggestion[] {
-  return list.filter((item) => !sameOpinion(item, reviewId, index))
-}
-
-/**
- * The exact text a revision request submits. Without opinion drafts it is the free text unchanged;
- * with drafts each opinion lists the original problem, the verified finding and the proposed change.
- */
-export function composeRevisionRequest(suggestions: readonly RevisionSuggestion[], general: string): string {
-  const blocks = suggestions.map((item) => [
-    `审查意见 ${item.index + 1}（${item.reviewId}）：${item.issue}`,
-    ...(item.finding.trim() ? [`核实结论：${item.finding.trim()}`] : []),
-    ...(item.change.trim() ? [`拟修改内容：${item.change.trim()}`] : []),
-  ].join('\n'))
-  const other = general.trim()
-  if (!blocks.length) return general
-  return [...blocks, ...(other ? [`其他修订说明：\n${other}`] : [])].join('\n\n')
 }

@@ -37,6 +37,10 @@ export type GateEnforcementState = {
   isLoading: boolean
   refresh: () => Promise<PolicySnapshot | null>
   canApprove: boolean
+  /** The role check alone, without the policy decision (gate page permission modifier). */
+  roleCanApprove: boolean
+  /** When the visible decision was evaluated in this window. */
+  evaluatedAt?: string | undefined
   canSaveOverride: boolean
   saveOverride: (reason: string) => Promise<void>
 }
@@ -79,6 +83,7 @@ export function useGateEnforcement(input: {
   const [decision, setDecision] = useState<GateEnforcementDecision | null>(null)
   const [loadError, setLoadError] = useState('')
   const [decisionScope, setDecisionScope] = useState('')
+  const [evaluatedAt, setEvaluatedAt] = useState<string>()
   const scopeKey = `${input.projectId ?? selectedRun?.projectId}:${selectedRun?.id}:${selectedRun?.version}:${selectedNode?.id}`
   const [overrides, setOverrides] = useState<GateOverrideDecision[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -115,6 +120,7 @@ export function useGateEnforcement(input: {
         setOverrides(reconciledOverrides)
         setDecision(evaluated)
         setDecisionScope(scopeKey)
+        setEvaluatedAt(new Date().toISOString())
       }
       return snapshot
     } catch (error) {
@@ -182,6 +188,7 @@ export function useGateEnforcement(input: {
       })
       setDecision(evaluated)
       setDecisionScope(scopeKey)
+      setEvaluatedAt(new Date().toISOString())
       if (override.status === 'rejected') {
         onToast('Gate override 已被团队策略拒绝，请重新评估后处理')
       } else {
@@ -245,6 +252,8 @@ export function useGateEnforcement(input: {
     isLoading,
     refresh,
     canApprove,
+    roleCanApprove,
+    ...(visibleDecision && evaluatedAt ? { evaluatedAt } : {}),
     canSaveOverride,
     saveOverride,
   }

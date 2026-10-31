@@ -3,6 +3,12 @@ import { useEffect, useRef, useState, type FormEvent } from 'react'
 import {
   buildClarificationReviewBundle,
   buildDesignRevisionIdentity,
+  numberDesignVersions,
+  redactSensitiveText,
+  sameDesignRevision,
+  sha256Text,
+  type Artifact,
+  type DesignRevisionIdentity,
   resolveDesignGateMaterial,
   resolveDesignRevisionInput,
   canRunCodingAgentOnNode,
@@ -28,6 +34,7 @@ import {
 import type { DevFlowDesktopApi } from '../desktop-api'
 import {
   displayNodeTitle,
+  formatLocalTime,
   mergeById,
   mergeLocalAndRemoteSnapshot,
   reviewProviderFromMetadata,
@@ -36,6 +43,48 @@ import {
 import type { DesktopWorkspaceSetters, DesktopWorkspaceState } from './useDesktopWorkspace'
 import type { PendingInspectorAction, PendingInspectorActionId } from './node-inspector-view-model'
 import { ipcErrorMessage } from './ipc-error'
+import { gateCopy, nextVersionLabel, versionLabel } from './gate-decision/copy'
+import { describeApprovalError, describeGenerationFailure, describeRevisionRequestError } from './gate-decision/errors'
+
+/** A gate page write result shown in that page's bar until the next write on the node (design §5.11). */
+export type GateWriteResult = {
+  runId: string
+  nodeId: string
+  tone: 'block' | 'neutral' | 'warn' | 'error' | 'ok'
+  text: string
+  technical?: string
+  at: string
+}
+export type ApproveGateOptions = {
+  /** The requirement version the page showed. */
+  expectedClarification?: { artifactId: string; revision: number; revisionDigest: string } | undefined
+  /** The design identity the page showed. */
+  expectedDesign?: DesignRevisionIdentity | undefined
+  /** K: items of the current revision list that are confirmed without submitting. */
+  unsubmittedCount?: number | undefined
+  /** "方案 v2" for the receipt. */
+  versionLabel?: string | undefined
+  /** Marks the list confirmed-without (design §5.5); called only after the approval committed. */
+  onConfirmedWithout?: (() => void) | undefined
+}
+/** The current requirement version number of a run's clarify gate, if determinable. */
+function clarificationVersionOf(run: WorkflowRun, artifacts?: readonly Artifact[]): number | undefined {
+  const gate = run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'gate')
+  if (!gate || !artifacts) return undefined
+  return buildClarificationReviewBundle({ run, gateNode: gate, artifacts: [...artifacts] }).activeRevision?.clarificationRevision?.revision
+}
+/** "需求 v2" / "方案 v1" of the version a clarify or design gate shows; other nodes have none. */
+function gateVersionLabelOf(run: WorkflowRun, node: WorkflowNode, artifacts: readonly Artifact[]): string | undefined {
+  if (node.kind !== 'gate') return undefined
+  if (node.stage === 'clarify') {
+    const version = clarificationVersionOf(run, artifacts)
+    return version === undefined ? undefined : versionLabel('requirement', version)
+  }
+  if (node.stage !== 'design') return undefined
+  const material = resolveDesignGateMaterial({ run, gateNode: node, artifacts: [...artifacts] })
+  if (material.state !== 'ready') return undefined
+  return versionLabel('design', numberDesignVersions(run.id, [...artifacts]).get(material.artifact.id), formatLocalTime(material.artifact.updatedAt))
+}
 
 const prDraftBindingFailureMessage =
   '当前 Local Project 与 Team Project 的绑定已失效，请重新绑定后再生成 PR 交付包'
@@ -226,6 +275,11 @@ export function useDesktopActions(input: {
   const activeDesktopPairing = desktopPairingExpired ? undefined : desktopPairing
   const syncInFlight = useRef(false)
   const reviewInFlight = useRef(false)
+  const reviewStopRequested = useRef(false)
+  // The latest gate page write result, shown in that page's bar (design §5.11).
+  const [gateWriteResult, setGateWriteResult] = useState<GateWriteResult | null>(null)
+  const clearGateWriteResultFor = (runId: string, nodeId: string) =>
+    setGateWriteResult((current) => (current?.runId === runId && current.nodeId === nodeId ? null : current))
   const testsInFlight = useRef(false)
   const permissionReplyInFlight = useRef(false)
   // The task shows “正在运行门禁审查” and its stop button only on the node being reviewed (W2).
@@ -418,7 +472,12 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function approveSelectedGate() {
+  /**
+   * Confirms the selected Gate. The gate page passes the identity it showed; a different fresh
+   * identity aborts without a write (design §5.11). After a confirm with K unsubmitted list items
+   * the receipt says they were kept.
+   */
+  async function approveSelectedGate(options: ApproveGateOptions = {}) {
     if (!selectedRun || !selectedNode || !currentUser) {
       return
     }
@@ -438,6 +497,10 @@ export function useDesktopActions(input: {
     }
 
     const pending = startPendingInspectorAction('approveGate', selectedRun, selectedNode, '正在通过 Gate...')
+    const gateKind = selectedNode.stage === 'design' ? 'design' as const : 'requirement' as const
+    const writeResult = (tone: GateWriteResult['tone'], text: string, technical?: string) =>
+      setGateWriteResult({ runId: selectedRun.id, nodeId: selectedNode.id, tone, text, ...(technical ? { technical } : {}), at: new Date().toISOString() })
+    clearGateWriteResultFor(selectedRun.id, selectedNode.id)
     try {
       const clarificationBundle =
         selectedNode.kind === 'gate' && selectedNode.stage === 'clarify'
@@ -459,6 +522,19 @@ export function useDesktopActions(input: {
       const expectedDesignRevision = designMaterial?.state === 'ready'
         ? await buildDesignRevisionIdentity(designMaterial.artifact)
         : undefined
+      // The page confirms the version it showed; a different current version is never confirmed.
+      const shownRequirement = options.expectedClarification
+      if (shownRequirement && (!clarificationMetadata || clarificationBundle?.activeRevision?.id !== shownRequirement.artifactId ||
+        clarificationMetadata.revision !== shownRequirement.revision || clarificationMetadata.revisionDigest !== shownRequirement.revisionDigest)) {
+        writeResult('warn', gateCopy.approveRequirementChanged)
+        setToast(gateCopy.approveRequirementChanged)
+        return
+      }
+      if (options.expectedDesign && (!expectedDesignRevision || !sameDesignRevision(options.expectedDesign, expectedDesignRevision))) {
+        writeResult('warn', gateCopy.approveDesignChanged)
+        setToast(gateCopy.approveDesignChanged)
+        return
+      }
       const result = await desktopApi.approveGate({
         runId: selectedRun.id,
         nodeId: selectedNode.id,
@@ -474,6 +550,14 @@ export function useDesktopActions(input: {
         ...(expectedDesignRevision ? { expectedDesignRevision } : {}),
       })
       applyLocalExecutionState(result.state)
+      const unsubmitted = options.unsubmittedCount ?? 0
+      if (unsubmitted > 0) {
+        options.onConfirmedWithout?.()
+        const label = gateKind === 'requirement'
+          ? versionLabel('requirement', options.expectedClarification?.revision ?? clarificationMetadata?.revision)
+          : options.versionLabel ?? versionLabel('design', undefined)
+        writeResult('ok', gateCopy.confirmWithoutReceipt(label, unsubmitted))
+      }
       const nextNode = result.run.nodes.find((node) => node.id === result.run.currentNodeId)
       setToast(
         result.run.status === 'completed'
@@ -500,6 +584,11 @@ export function useDesktopActions(input: {
         stillPending = Boolean(observedNode && observedNode.status !== 'success')
       } catch { /* An unavailable database cannot establish whether the approval was saved. */ }
       const detail = ipcErrorMessage(error, '保存 Gate 审批失败')
+      if (selectedNode.stage === 'clarify' || selectedNode.stage === 'design') {
+        const version = gateKind === 'requirement' ? options.expectedClarification?.revision ?? clarificationVersionOf(selectedRun, artifacts) : undefined
+        const described = describeApprovalError(error, { kind: gateKind, ...(version !== undefined ? { version } : {}) })
+        writeResult('warn', described.text, described.technical)
+      }
       if (/memory access out of bounds/iu.test(detail)) {
         setToast(`本地数据库运行异常；${stillPending ? '审批未完成，当前节点仍待审批' : '尚无法确认审批是否已保存'}。请完全退出并重新打开应用，先核对当前节点与审批记录，再决定是否重试。无需重新生成需求或重复运行审查。`)
       } else if (/clarification revision is missing, stale, or no longer current/u.test(detail)) {
@@ -575,80 +664,196 @@ export function useDesktopActions(input: {
     }
   }
 
-  async function generateSelectedDesignRevision(proposalIds: string[]) {
-    if (!selectedRun || !selectedNode || !currentUser) return
+  /** The clarify agent and gate of a run (ids are passed explicitly; the selection may change meanwhile). */
+  function clarifyNodesOf(run: WorkflowRun) {
+    return {
+      agent: run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent'),
+      gate: run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'gate'),
+    }
+  }
+
+  /** Replaces the pending action in one synchronous step, so no other write can start in the gap. */
+  function replacePendingInspectorAction(previous: PendingInspectorAction, next: PendingInspectorAction): PendingInspectorAction {
+    pendingInspectorActionRef.current = next
+    setPendingInspectorAction((current) => (samePendingInspectorAction(current, previous) || current === null ? next : current))
+    return next
+  }
+
+  async function generateClarificationOnAgent(input: {
+    run: WorkflowRun
+    agent: WorkflowNode
+    pending: PendingInspectorAction
+    version: number
+    executor: StageAgentExecutorKind
+    providerId: string
+  }) {
+    if (!desktopApi || !currentUser) return
+    const startedAt = new Date().toISOString()
+    try {
+      const result = await desktopApi.completeWorkflowAgentNode({
+        runId: input.run.id, nodeId: input.agent.id, userId: currentUser.id, userName: currentUser.name,
+        executor: input.executor, providerId: input.providerId,
+      })
+      applyLocalExecutionState(result.state)
+      setSelectedRunId(result.run.id)
+      setSelectedNodeId(result.run.currentNodeId)
+      setToast(`${nextVersionLabel('requirement', input.version)} 已生成，请阅读后再确认。`)
+    } catch (error) {
+      // A recorded failure trace explains itself on the page; only an unrecorded one becomes a note.
+      let traced = false
+      try {
+        const refreshed = await desktopApi.loadState()
+        applyLocalExecutionState(refreshed)
+        traced = refreshed.agentTraces.some((trace) => trace.runId === input.run.id && trace.nodeId === input.agent.id &&
+          trace.createdAt >= startedAt && Boolean(trace.failureDetails))
+      } catch { /* Keep the original failure visible. */ }
+      if (!traced) {
+        const described = describeGenerationFailure({ kind: 'requirement', version: input.version, error })
+        setGateWriteResult({ runId: input.run.id, nodeId: input.agent.id, tone: 'error', text: described.text, technical: described.technical, at: new Date().toISOString() })
+      }
+      setToast(ipcErrorMessage(error, '生成阶段产物失败'))
+    } finally {
+      clearPendingInspectorAction(input.pending)
+    }
+  }
+
+  /**
+   * 「提交修订，生成 vN+1（K 项）」 (design §3.4, §5.11): the revision request, then the generation on
+   * the clarify agent node, under one continuous write lock. A lost response counts as committed
+   * only when the recorded feedback matches the submitted text.
+   */
+  async function submitRequirementRevision(input: {
+    target: { runId: string; artifactId: string; revision: number; revisionDigest: string }
+    text: string
+    proposals: readonly Artifact[]
+    executor: StageAgentExecutorKind
+    providerId: string
+    /** Called once the request is committed, before the generation starts. */
+    onCommitted?: (committed: { feedbackArtifactId?: string; proposals: DesignRevisionIdentity[] }) => void
+  }) {
+    const run = runs.find((item) => item.id === input.target.runId)
+    if (!desktopApi?.requestClarificationChanges || !run || !currentUser) return
+    const { agent, gate } = clarifyNodesOf(run)
+    if (!agent || !gate) return
+    if (!input.providerId) { setToast(gateCopy.noGenerationModel); return }
+    if (blockIfInspectorWriteInFlight()) return
+    clearGateWriteResultFor(run.id, gate.id)
+    clearGateWriteResultFor(run.id, agent.id)
+    let pending = startPendingInspectorAction('requestClarificationRevision', run, gate, `正在提交需求 v${input.target.revision} 的修订请求…`)
+    let generating = false
+    try {
+      const proposals = await Promise.all(input.proposals.map(buildDesignRevisionIdentity))
+      let feedbackArtifactId: string | undefined
+      try {
+        const result = await desktopApi.requestClarificationChanges({
+          runId: run.id, nodeId: gate.id, artifactId: input.target.artifactId,
+          revision: input.target.revision, revisionDigest: input.target.revisionDigest, reason: input.text, proposals,
+        })
+        applyLocalExecutionState(result.state)
+        feedbackArtifactId = result.feedback.id
+      } catch (error) {
+        // The request may have committed before its response was lost (§5.11): reconcile read-only.
+        let committed: Artifact | undefined
+        try {
+          const refreshed = await desktopApi.loadState()
+          applyLocalExecutionState(refreshed)
+          const revision = refreshed.artifacts.find((artifact) => artifact.id === input.target.artifactId)
+          const reasonDigest = await sha256Text(redactSensitiveText(input.text.trim()).value)
+          committed = revision?.clarificationRevision?.status === 'revision_requested'
+            ? refreshed.artifacts.find((artifact) => artifact.kind === 'clarification_feedback' &&
+              artifact.clarificationFeedback?.targetArtifactId === input.target.artifactId && artifact.clarificationFeedback.reasonDigest === reasonDigest)
+            : undefined
+        } catch { /* Without state the request cannot be shown as committed. */ }
+        if (!committed) {
+          const described = describeRevisionRequestError(error, input.target.revision)
+          setGateWriteResult({ runId: run.id, nodeId: gate.id, tone: 'warn', text: described.text, technical: described.technical, at: new Date().toISOString() })
+          setToast(described.text)
+          return
+        }
+        feedbackArtifactId = committed.id
+      }
+      input.onCommitted?.({ ...(feedbackArtifactId ? { feedbackArtifactId } : {}), proposals })
+      setSelectedRunId(run.id)
+      setSelectedNodeId(agent.id)
+      setActiveView('workbench')
+      pending = replacePendingInspectorAction(pending, { actionId: 'completeAgent', runId: run.id, nodeId: agent.id })
+      setToast(`正在生成${nextVersionLabel('requirement', input.target.revision)}…`)
+      generating = true
+      await generateClarificationOnAgent({ run, agent, pending, version: input.target.revision, executor: input.executor, providerId: input.providerId })
+    } finally {
+      if (!generating) clearPendingInspectorAction(pending)
+    }
+  }
+
+  /** 「重新生成需求 vN+1」: the generation only, on the clarify agent node of a revision-pending run. */
+  async function regenerateRequirementRevision(input: { runId: string; version: number; executor: StageAgentExecutorKind; providerId: string }) {
+    const run = runs.find((item) => item.id === input.runId)
+    if (!desktopApi || !run || !currentUser) return
+    const { agent } = clarifyNodesOf(run)
+    if (!agent || run.currentNodeId !== agent.id) { setToast('只能在需求澄清是当前步骤时重新生成。'); return }
+    if (!input.providerId) { setToast(gateCopy.noGenerationModel); return }
+    if (blockIfInspectorWriteInFlight()) return
+    clearGateWriteResultFor(run.id, agent.id)
+    const pending = startPendingInspectorAction('completeAgent', run, agent, `正在生成${nextVersionLabel('requirement', input.version)}…`)
+    await generateClarificationOnAgent({ run, agent, pending, version: input.version, executor: input.executor, providerId: input.providerId })
+  }
+
+  /**
+   * 「生成方案 vN+1（K 项）」 (design §3.6, §5.11): the old design, the listed proposals and the
+   * change list. The shown identity must still be the gate's design; main re-checks everything.
+   */
+  async function generateDesignRevision(input: {
+    runId: string
+    expectedPrevious: DesignRevisionIdentity
+    proposals: readonly Artifact[]
+    changeRequest?: string | undefined
+    executor: StageAgentExecutorKind
+    providerId: string
+    version?: number | undefined
+    onGenerated?: (submitted: { proposals: DesignRevisionIdentity[] }) => void
+  }) {
+    const run = runs.find((item) => item.id === input.runId)
+    if (!run || !currentUser) return
     if (!desktopApi) { setToast(browserPreviewWorkflowWriteMessage); return }
     if (blockIfInspectorWriteInFlight()) return
-    const providerId = input.stageProviderId ?? selectedAgentProviderId
-    if (!providerId) { setToast('请先选择本次修订使用的模型'); return }
-    const gate = selectedRun.nodes.find((node) => node.id === selectedRun.currentNodeId)
-    if (!gate || gate.id !== selectedNode.id) { setToast('请先返回当前方案评审步骤'); return }
-    const material = resolveDesignGateMaterial({ run: selectedRun, gateNode: gate, artifacts })
+    if (!input.providerId) { setToast('请先选择本次修订使用的模型'); return }
+    const gate = run.nodes.find((node) => node.id === run.currentNodeId)
+    if (!gate || gate.stage !== 'design' || gate.kind !== 'gate') { setToast('请先返回当前方案评审步骤'); return }
+    const material = resolveDesignGateMaterial({ run, gateNode: gate, artifacts })
     if (material.state !== 'ready') { setToast(material.message); return }
-    const pending = startPendingInspectorAction('generateDesignRevision', selectedRun, gate, '正在根据旧方案和提案生成新版…')
+    clearGateWriteResultFor(run.id, gate.id)
+    const writeFailure = (error: unknown) => {
+      const described = describeGenerationFailure({ kind: 'design', ...(input.version !== undefined ? { version: input.version } : {}), error })
+      setGateWriteResult({ runId: run.id, nodeId: gate.id, tone: 'error', text: described.text, technical: described.technical, at: new Date().toISOString() })
+    }
+    const pending = startPendingInspectorAction('generateDesignRevision', run, gate, '正在根据旧方案和修订清单生成新版…')
     try {
-      const proposals = proposalIds.map((id) => {
-        const proposal = artifacts.find((item) => item.id === id)
-        if (!proposal) throw new Error('提案已变化，请重新选择')
-        return proposal
-      })
-      const designRevision = { expectedRunVersion: selectedRun.version, previous: await buildDesignRevisionIdentity(material.artifact),
-        proposals: await Promise.all(proposals.map(buildDesignRevisionIdentity)) }
-      await resolveDesignRevisionInput({ run: selectedRun, gateNodeId: gate.id, artifacts, request: designRevision })
-      const result = await desktopApi.completeWorkflowAgentNode({ runId: selectedRun.id, nodeId: gate.id,
-        userId: currentUser.id, userName: currentUser.name, executor: stageAgentExecutorKind, providerId, designRevision })
+      const previous = await buildDesignRevisionIdentity(material.artifact)
+      if (!sameDesignRevision(previous, input.expectedPrevious)) {
+        writeResult(gateCopy.approveDesignChanged)
+        return
+      }
+      const proposals = await Promise.all(input.proposals.map(buildDesignRevisionIdentity))
+      const changeRequest = input.changeRequest?.trim()
+      const designRevision = { expectedRunVersion: run.version, previous, proposals, ...(changeRequest ? { changeRequest } : {}) }
+      await resolveDesignRevisionInput({ run, gateNodeId: gate.id, artifacts, request: designRevision })
+      const result = await desktopApi.completeWorkflowAgentNode({ runId: run.id, nodeId: gate.id,
+        userId: currentUser.id, userName: currentUser.name, executor: input.executor, providerId: input.providerId, designRevision })
       applyLocalExecutionState(result.state)
+      input.onGenerated?.({ proposals })
       setSelectedRunId(result.run.id)
       setSelectedNodeId(result.run.currentNodeId)
       setActiveView('workbench')
       setToast('新版方案已生成，旧版已保留。请核对新版后再确认方案评审。')
     } catch (error) {
       try { applyLocalExecutionState(await desktopApi.loadState()) } catch { /* Preserve the original error. */ }
+      writeFailure(error)
       setToast(ipcErrorMessage(error, '生成新版方案失败，原方案和进度保持不变'))
     } finally { clearPendingInspectorAction(pending) }
-  }
 
-  async function requestSelectedClarificationChanges(reason: string) {
-    if (
-      !desktopApi?.requestClarificationChanges || !selectedRun || !selectedNode ||
-      selectedNode.kind !== 'gate' || selectedNode.stage !== 'clarify'
-    ) {
-      return
-    }
-    const bundle = buildClarificationReviewBundle({
-      run: selectedRun,
-      gateNode: selectedNode,
-      artifacts,
-    })
-    const metadata = bundle.activeRevision?.clarificationRevision
-    if (bundle.state !== 'ready' || !bundle.activeRevision || !metadata) {
-      setToast(bundle.message)
-      return
-    }
-    if (blockIfInspectorWriteInFlight()) return
-    const pending = startPendingInspectorAction(
-      'approveGate',
-      selectedRun,
-      selectedNode,
-      '正在提交澄清修订意见...',
-    )
-    try {
-      const result = await desktopApi.requestClarificationChanges({
-        runId: selectedRun.id,
-        nodeId: selectedNode.id,
-        artifactId: bundle.activeRevision.id,
-        revision: metadata.revision,
-        revisionDigest: metadata.revisionDigest,
-        reason,
-      })
-      applyLocalExecutionState(result.state)
-      setSelectedRunId(result.run.id)
-      setSelectedNodeId(result.run.currentNodeId)
-      setToast(`已请求修订 Clarification v${metadata.revision}，流程返回需求澄清`)
-    } catch (error) {
-      setToast(ipcErrorMessage(error, '提交澄清修订意见失败'))
-    } finally {
-      clearPendingInspectorAction(pending)
+    function writeResult(text: string) {
+      setGateWriteResult({ runId: run!.id, nodeId: gate!.id, tone: 'warn', text, at: new Date().toISOString() })
+      setToast(text)
     }
   }
 
@@ -849,6 +1054,8 @@ export function useDesktopActions(input: {
     }
 
     reviewInFlight.current = true
+    reviewStopRequested.current = false
+    clearGateWriteResultFor(selectedRun.id, selectedNode.id)
     setKnowledgeReviewTarget({ runId: selectedRun.id, nodeId: selectedNode.id })
     setIsRunningAgentReview(true)
     setToast('基于知识的门禁审查正在生成审查意见...')
@@ -873,9 +1080,15 @@ export function useDesktopActions(input: {
       // Stay on the task (plan W2): the review opinions appear in 当前工作.
       setToast('门禁审查已完成，审查意见显示在「当前工作」中')
     } catch (error) {
-      setToast(ipcErrorMessage(error, '基于知识的门禁审查运行失败'))
+      const stopped = reviewStopRequested.current
+      const label = stopped ? gateVersionLabelOf(selectedRun, selectedNode, artifacts) : undefined
+      if (label) {
+        setGateWriteResult({ runId: selectedRun.id, nodeId: selectedNode.id, tone: 'neutral', text: gateCopy.reviewStopped(label), at: new Date().toISOString() })
+      }
+      setToast(label ? gateCopy.reviewStopped(label) : ipcErrorMessage(error, '基于知识的门禁审查运行失败'))
     } finally {
       reviewInFlight.current = false
+      reviewStopRequested.current = false
       setKnowledgeReviewTarget(null)
       setIsRunningAgentReview(false)
     }
@@ -885,10 +1098,12 @@ export function useDesktopActions(input: {
   async function cancelKnowledgeReview() {
     const target = knowledgeReviewTarget
     if (!desktopApi?.cancelKnowledgeReview || !target) return
+    reviewStopRequested.current = true
     try {
       await desktopApi.cancelKnowledgeReview(target)
       setToast('已请求停止门禁审查')
     } catch (error) {
+      reviewStopRequested.current = false
       setToast(ipcErrorMessage(error, '停止门禁审查失败，请重试'))
     }
   }
@@ -1643,8 +1858,10 @@ export function useDesktopActions(input: {
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
-    generateSelectedDesignRevision,
-    requestSelectedClarificationChanges,
+    submitRequirementRevision,
+    regenerateRequirementRevision,
+    generateDesignRevision,
+    gateWriteResult,
     selectLocalProject,
     saveTestCommand,
     executeTestPlan,

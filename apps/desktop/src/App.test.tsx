@@ -1,7 +1,7 @@
 import { modelCostRecoveryOverview, sha256Text } from '@ai-devflow/shared'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   advanceWorkflowAfterGateApproval,
   completeWorkflowAgentNode,
@@ -11,6 +11,7 @@ import {
   describeStageAgentFailure,
   createWorkflowRunFromRequest,
   createDesignRevisionDigest,
+  buildDesignRevisionIdentity,
   createWarnOnlyDefaultPolicy,
   indexKnowledgeSources,
   resolveEffectivePolicy,
@@ -37,6 +38,11 @@ import {
 } from '@ai-devflow/shared/fixtures'
 import { App, getToastDisplayDurationMs } from './App'
 import { designRevisionFixture } from './testing/design-revision'
+import {
+  buildF1, buildF1RevisionPending, buildF3, buildF4, buildF5, buildF6, F1_FINDINGS, F1_QUESTIONS, listFor, policyDecision, policyReason, type GateFixture,
+} from './testing/gate-fixtures'
+import { storeRevisionLists } from './testing/gate-page'
+import { clearContentDigestCacheForTests } from './app/useContentDigest'
 import { applyDesignRevision, createFakeAgentProvider, runWorkflowStageAgent } from '@ai-devflow/shared'
 import { buildWorkflowBoard, formatLocalTime } from './app/desktop-view-model'
 import { useDesktopActions } from './app/useDesktopActions'
@@ -487,6 +493,10 @@ function prDeliveryState(
     desktopPairingCredential: fixturePairingCredential,
   })
 }
+
+beforeEach(() => {
+  clearContentDigestCacheForTests()
+})
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -2559,7 +2569,11 @@ describe('App', () => {
   })
 
   it('generates a design revision only from selected saved proposals, keeps the Gate pending and cancels through that Gate', async () => {
-    const f = await designRevisionFixture()
+    const fixture = await designRevisionFixture()
+    // The fake generator stamps the real clock; date design v1 before the saved proposal, as in the app.
+    const datedDesign = { ...fixture.design, designEvidence: { ...fixture.design.designEvidence!,
+      executor: { ...fixture.design.designEvidence!.executor, startedAt: '2026-10-10T00:03:00.000Z' } } }
+    const f = { ...fixture, design: datedDesign, artifacts: fixture.artifacts.map((artifact) => (artifact.id === datedDesign.id ? datedDesign : artifact)) }
     let state = desktopState({ projects: [{ ...localProject, id: f.run.projectId }],
       runs: [f.run], artifacts: f.artifacts, desktopPairingCredential: { ...fixturePairingCredential, localProjectId: f.run.projectId } })
     let rejectGeneration!: (error: Error) => void
@@ -2576,26 +2590,28 @@ describe('App', () => {
       cancelWorkflowAgentNode: vi.fn(async () => { rejectGeneration(new Error('已取消阶段生成。')); return true }),
     })
     render(<App />)
-    const panel = await screen.findByRole('region', { name: '修订方案' })
+    // The saved proposal is a 来自答疑 item of design v1's revision list (design §3.6, §5.5).
+    const bar = await screen.findByTestId('gate-decision-bar')
+    const generateName = '生成方案 v2（1 项）'
+    await waitFor(() => expect(within(bar).getByRole('button', { name: generateName })).toBeEnabled())
     expect(api.completeWorkflowAgentNode).not.toHaveBeenCalled()
-    await waitFor(() => expect(within(panel).getByRole('checkbox', { name: f.proposal.title })).toBeEnabled())
-    fireEvent.click(within(panel).getByRole('checkbox', { name: f.proposal.title }))
-    const generate = within(panel).getByRole('button', { name: '根据提案生成新版方案' })
-    await waitFor(() => expect(generate).toBeEnabled())
-    fireEvent.click(generate)
+    fireEvent.click(within(bar).getByRole('button', { name: generateName }))
+    const changeRequest = expect.stringContaining(`来自答疑：采用已保存的答疑提案「${f.proposal.title}」`)
     await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
-      nodeId: f.run.currentNodeId, designRevision: f.selection,
+      nodeId: f.run.currentNodeId, designRevision: { ...f.selection, changeRequest },
     })))
-    fireEvent.click(await within(screen.getByTestId('task-status-row')).findByRole('button', { name: '取消生成' }))
+    // 「停止」 stays in the bar on every tab and cancels through the design Gate (plan §3).
+    fireEvent.click(await within(screen.getByTestId('gate-decision-bar')).findByRole('button', { name: '停止' }))
     await waitFor(() => expect(api.cancelWorkflowAgentNode).toHaveBeenCalledWith({ runId: f.run.id, nodeId: f.run.currentNodeId }))
-    await waitFor(() => expect(within(panel).getByRole('button', { name: '根据提案生成新版方案' })).toBeEnabled())
-    fireEvent.click(within(panel).getByRole('button', { name: '根据提案生成新版方案' }))
+    await waitFor(() => expect(within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: generateName })).toBeEnabled())
+    expect(screen.getByTestId('gate-decision-bar')).toHaveTextContent('方案 v2 没有生成：已取消阶段生成。修订清单保留，可以修改后重新生成。')
+    fireEvent.click(within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: generateName }))
     await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('新版方案已生成，旧版已保留'))
     expect(state.runs[0]).toMatchObject({ status: 'paused_at_gate', currentNodeId: f.run.currentNodeId })
     expect(state.artifacts).toContainEqual(f.design)
-    fireEvent.click(screen.getByRole('button', { name: '查看历史方案与提案' }))
-    expect(await screen.findByRole('tab', { name: '材料与版本', selected: true })).toBeInTheDocument()
-    expect(screen.getByRole('region', { name: '历史记录' })).toHaveTextContent(f.design.title)
+    // The new version is the page's version; the used proposal is no longer listed.
+    await waitFor(() => expect(screen.getByTestId('gate-decision-bar')).toHaveTextContent('方案 v2 · 你的决定'))
+    expect(screen.getByTestId('gate-decision-bar')).toHaveTextContent('修订清单 0 项')
     expect(api.approveGate).not.toHaveBeenCalled()
     expect(api.runCodingAgent).not.toHaveBeenCalled()
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
@@ -4615,11 +4631,11 @@ describe('App', () => {
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('团队策略')
     expect(screen.getByTestId('inspector-status-matrix')).not.toHaveTextContent('Policy snapshot')
     expect(screen.getByTestId('inspector-status-matrix')).toHaveTextContent('门禁审查')
-    // Headline and buttons come from one status projection (plan D1).
-    expect(within(inspector).getByTestId('task-status-row')).toHaveTextContent('确认方案')
+    // On the design Gate the decision bar replaces the status row (UX batch 1, design §3.2).
+    expect(within(inspector).getByTestId('gate-decision-bar')).toHaveTextContent('确认方案 v1')
   })
 
-  it('derives a Task Gate impact from workflow edges and navigates to the Gate read-only', async () => {
+  it('shows the finished requirement page on the clarify agent read-only and returns to the current step', async () => {
     const api = installDesktopApi({
       loadState: vi.fn().mockResolvedValue(desktopState({
         projects: [localProject],
@@ -4635,18 +4651,14 @@ describe('App', () => {
     await waitForLocalStateLoaded(api.loadState)
     fireEvent.click(screen.getByTestId('flow-node-n-clarify'))
     const inspector = clickInspectorTab('当前工作')
-    const impact = within(inspector).getByTestId('gate-impact-summary')
+    // The approved requirement replaces the generic gate-impact card (design §5.1 row 2, §5.11).
+    expect(within(inspector).queryByTestId('gate-impact-summary')).not.toBeInTheDocument()
+    expect(within(inspector).getByTestId('task-browsing-row')).toHaveTextContent('正在查看已完成的「需求澄清」· 实际进度：方案设计 · 方案评审 Gate')
+    expect(within(inspector).getByTestId('gate-decision-bar')).toHaveTextContent('已确认')
+    expect(within(within(inspector).getByTestId('gate-decision-bar')).queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
 
-    expect(impact).toHaveTextContent('对后续 Gate 的影响')
-    expect(impact).toHaveTextContent('紧接着的 Gate')
-    expect(impact).toHaveTextContent('需求确认 Gate')
-    expect(impact).toHaveTextContent('已完成')
-    expect(impact).toHaveTextContent('需求澄清结果')
-    expect(impact).toHaveTextContent('这里只说明对后续 Gate 的影响')
-    expect(within(impact).queryByRole('button', { name: /通过 Gate|确认方案|确认需求|Override/ })).not.toBeInTheDocument()
-
-    fireEvent.click(within(impact).getByRole('button', { name: '查看该 Gate' }))
-    await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求确认 Gate'))
+    fireEvent.click(within(inspector).getByRole('button', { name: '返回当前步骤' }))
+    await waitFor(() => expect(screen.getByTestId('gate-decision-bar')).toHaveTextContent('方案 v1 · 你的决定'))
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('Gate · Team Policy')
   })
 
@@ -4976,11 +4988,9 @@ describe('App', () => {
     fireEvent.click(within(card).getByRole('button', { name: /产物 1/ }))
     await waitFor(() => expect(within(inspector).getByRole('tab', { name: '材料与版本' })).toHaveAttribute('aria-selected', 'true'))
     expect(within(inspector).getByTestId('node-artifacts')).toHaveTextContent('已归档的方案审查报告')
-    // The body has one home: 当前工作 (plan W1).
-    fireEvent.click(within(within(inspector).getByTestId('node-artifacts')).getByRole('button', { name: '在「当前工作」中阅读' }))
-    expect(within(inspector).getByRole('tab', { name: '当前工作' })).toHaveAttribute('aria-selected', 'true')
-    expect(inspector).toHaveTextContent('Exact review result')
-    clickInspectorTab('材料与版本')
+    // On the design Gate page 当前工作 holds only the design versions, so the report is read here (design §5.1).
+    expect(within(within(inspector).getByTestId('node-artifacts')).queryByRole('button', { name: '在「当前工作」中阅读' })).not.toBeInTheDocument()
+    expect(within(inspector).getByTestId('node-artifacts')).toHaveTextContent('Exact review result')
     expect(within(inspector).getByTestId('node-artifacts').querySelectorAll('.artifact-card')).toHaveLength(1)
     fireEvent.click(within(card).getByRole('button', { name: /测试证据 0/ }))
     await waitFor(() => expect(within(inspector).getByTestId('node-test-evidence')).toHaveTextContent('当前节点尚未归档测试证据'))
@@ -5005,11 +5015,14 @@ describe('App', () => {
 
     const inspector = await screen.findByTestId('node-inspector')
     expect(inspector).toHaveTextContent('方案评审 Gate')
-    const readinessSummary = within(inspector).getByTestId('gate-readiness-summary')
-    // The "⋯" panel lists counts only; the status row is the one conclusion (plan W6).
+    // The bar's 技术详情 lists counts only; the bar is the one conclusion (plan W6, design §3.2).
+    const bar = within(inspector).getByTestId('gate-decision-bar')
+    const readinessSummary = bar.querySelector('.gate-technical')!
     await waitFor(() => expect(readinessSummary).toHaveTextContent(/审批核对已通过 \d+ · 警告 \d+ · 缺失 \d+ · 阻断 \d+/u))
     expect(readinessSummary).not.toHaveTextContent('可以通过')
-    expect(within(inspector).getByTestId('task-status-row')).toHaveTextContent('确认方案')
+    expect(bar).toHaveTextContent('确认方案 v1')
+    // The checklist sits in the collapsed 「审批条件与例外处理」.
+    expect(within(inspector).getByTestId('gate-approval-details')).not.toHaveAttribute('open')
     expect(within(inspector).queryByTestId('readiness-group-conclusion')).not.toBeInTheDocument()
     expect(within(inspector).getByTestId('readiness-group-policy-permission')).toHaveTextContent('团队策略')
     expect(inspector).toHaveTextContent('所需材料')
@@ -5027,11 +5040,11 @@ describe('App', () => {
     expect(within(screen.getByTestId('node-inspector')).queryByTestId('gate-enforcement-details')).not.toBeInTheDocument()
     expect(within(screen.getByTestId('node-inspector')).queryByTestId('inspector-status-matrix')).not.toBeInTheDocument()
 
-    // The only recovery step here (run the Gate Review) is already in the status row, so the
+    // The only recovery step here (run the Gate Review) is already in the bar, so the
     // recovery plan is omitted rather than repeated (plan W6).
     clickInspectorTab('当前工作')
     const currentInspector = screen.getByTestId('node-inspector')
-    expect(within(within(currentInspector).getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })).toBeInTheDocument()
+    expect(within(within(currentInspector).getByTestId('gate-decision-bar')).getByRole('button', { name: '审查方案 v1' })).toBeInTheDocument()
     expect(within(currentInspector).queryByText('查看恢复计划')).not.toBeInTheDocument()
     expect(within(currentInspector).queryByTestId('remediation-actions')).not.toBeInTheDocument()
   })
@@ -5059,14 +5072,13 @@ describe('App', () => {
     expect(sources).not.toHaveTextContent('审查时的记录时间')
     expect(sources).not.toHaveTextContent('Baseline tests passed before implementation.')
 
-    // 当前工作 keeps one summary line beside the body; the full report has one home (#252).
+    // 当前工作 shows no card for a review that does not match the text; the full report has one home (#252).
     clickInspectorTab('当前工作')
-    const summary = within(inspector).getByTestId('review-reference-summary')
     expect(inspector).toHaveTextContent('方案设计')
-    await waitFor(() => expect(summary).toHaveTextContent('这份审查报告不能证明当前正文已审查'))
+    await waitFor(() => expect(inspector).toHaveTextContent('审查方案 v1 后，意见会显示在这里'))
     expect(within(inspector).queryByTestId('review-report')).not.toBeInTheDocument()
     expect(inspector).not.toHaveTextContent('The complete design Artifact satisfies the API contract criteria.')
-    fireEvent.click(within(summary).getByRole('button', { name: '在「材料与版本」查看完整报告' }))
+    clickInspectorTab('材料与版本')
     const evidence = within(inspector).getByTestId('review-report')
     expect(evidence).toHaveTextContent('artifact-digest-design-1')
     expect(evidence).toHaveTextContent('The complete design Artifact satisfies the API contract criteria.')
@@ -5207,8 +5219,8 @@ describe('App', () => {
 
     await waitForLocalStateLoaded(api.loadState)
     const inspector = screen.getByTestId('node-inspector')
-    expect(within(inspector).getByTestId('task-status-row')).toBeInTheDocument()
-    const approveButton = await within(inspector).findByRole('button', { name: gateApprovalName })
+    expect(within(inspector).getByTestId('gate-decision-bar')).toBeInTheDocument()
+    const approveButton = await within(within(inspector).getByTestId('gate-decision-bar')).findByRole('button', { name: '确认方案 v1' })
     await waitFor(() => expect(approveButton).toBeEnabled())
     fireEvent.click(approveButton)
 
@@ -5227,283 +5239,418 @@ describe('App', () => {
     expect(sent.contentDigest).toBe(await createDesignRevisionDigest(design))
     expect(api).not.toHaveProperty('uploadRunSummary')
     // The approval event is part of the step's records (plan W1).
+    // The mocked response keeps no design material, so the step falls back to today's view.
     await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('人工审批已通过'))
     clickInspectorTab('执行记录')
     expect(within(screen.getByTestId('node-inspector')).getByTestId('node-trace')).toHaveTextContent('approval')
   })
 
-  describe('clarification Gate status row (plan §6.1, D1, D5)', () => {
-    function clarifyGateState() {
-      const created = createWorkflowRunFromRequest({
-        runId: 'run-clarify-gate', title: 'Clarify gate', request: '澄清 webhook 重试边界。', projectId: localProject.id,
-        creatorId: 'u-ling', branchName: 'ai/clarify-gate', now: '2026-06-21T16:00:00.000Z',
-      })
-      const clarifyNode = created.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')!
-      const now = '2026-06-21T16:05:00.000Z'
-      // Same shape as the shared clarification fixture: one Raw Request and one current revision.
-      const revision: Artifact = {
-        id: `artifact-${created.run.id}-clarification`, runId: created.run.id, nodeId: clarifyNode.id, kind: 'clarification',
-        title: '需求澄清 v1', summary: 'First revision.', content: '澄清正文。', redacted: true, updatedAt: now,
-        clarificationRevision: {
-          version: 1, revision: 1, status: 'review_requested', revisionDigest: 'a'.repeat(64),
-          rawRequestArtifactId: created.artifacts[0]!.id, feedbackArtifactIds: [],
-          goals: ['Goal'], acceptanceCriteria: ['Acceptance'], nonGoals: [], assumptions: [], risks: [], openQuestions: [],
-          executor: {
-            version: 1, kind: 'direct-provider', executorId: 'fake', executorVersion: '1',
-            capabilityProfile: 'repository-read-only-v1', model: 'fake', startedAt: now,
-            completedAt: now, durationMs: 1, terminalReason: 'success', contextDigest: 'b'.repeat(64),
-          },
-          generatedAt: now,
-        },
-      }
-      const completed = completeWorkflowAgentNode({
-        run: created.run, nodeId: clarifyNode.id, artifacts: created.artifacts, generatedArtifact: revision,
-        existingEvents: created.events, actorName: 'Ling', now,
-      })
+  describe('gate decision pages for 需求澄清 and 方案设计 (UX batch 1, design §11)', () => {
+    const gateBar = () => screen.getByTestId('gate-decision-bar')
+    const barButton = (name: string) => within(gateBar()).getByRole('button', { name })
+    const gateCard = (name: string) => screen.getByRole('article', { name })
+    const passDecision = () => policyDecision()
+    function gateState(fixture: GateFixture, extra: Partial<Awaited<ReturnType<DevFlowDesktopApi['loadState']>>> = {}) {
       return desktopState({
-        projects: [localProject], runs: [completed.run], artifacts: completed.artifacts,
-        events: [...created.events, completed.event], desktopPairingCredential: fixturePairingCredential,
+        projects: [{ ...localProject, id: fixture.run.projectId }], runs: [fixture.run], artifacts: fixture.artifacts, events: fixture.events,
+        agentReviews: fixture.reviews, desktopPairingCredential: { ...fixturePairingCredential, localProjectId: fixture.run.projectId }, ...extra,
       })
     }
-    const missingReviewReason = (action: 'warn' | 'block') => ({
-      id: `missing_agent_review:clarify:${action}`, target: 'missing_agent_review' as const,
-      ruleKey: `missing_agent_review:clarify:${action}`, action, summary: '尚未运行门禁审查。',
+    async function openGatePage(fixture: GateFixture, overrides: Partial<DevFlowDesktopApi> = {}, title = '需求 v1 · 你的决定') {
+      const api = installDesktopApi({ loadState: vi.fn().mockResolvedValue(gateState(fixture)), ...overrides })
+      const view = render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveTextContent(title))
+      return { api, view }
+    }
+    const openList = () => {
+      const toggle = within(gateBar()).getByRole('button', { name: /^修订清单/ })
+      if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle)
+    }
+    const addOwnItem = (text: string) => {
+      openList()
+      fireEvent.click(within(gateBar()).getByRole('button', { name: '＋ 添加其他修改' }))
+      fireEvent.change(within(gateBar()).getByRole('textbox', { name: '其他修改' }), { target: { value: text } })
+      fireEvent.click(within(gateBar()).getByRole('button', { name: '加入修订清单' }))
+    }
+    const OWN = '补一条多个关键词的验收标准。'
+    const OWN_TEXT = `修订清单（共 1 项，针对需求 v1）：\n1. 我添加的：${OWN}`
+
+    it('shows requirement v1 with its findings beside the text and the bar above the tabs (AC5, AC6, AC8)', async () => {
+      const f1 = await buildF1()
+      await openGatePage(f1)
+      const inspector = screen.getByTestId('node-inspector')
+      expect(inspector).toHaveClass('inspector--gate-page')
+      // The bar replaces the status row and sits above the tabs (design §3.2).
+      expect(within(inspector).queryByTestId('task-status-row')).not.toBeInTheDocument()
+      expect(gateBar().compareDocumentPosition(within(inspector).getByRole('tablist'))).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      expect(gateBar()).toHaveTextContent('还剩 4 条意见（1 条重要）· 2 个问题（1 个重要）')
+      expect(barButton('确认需求 v1')).toBeEnabled()
+      expect(inspector).toHaveTextContent('审查意见 4 条（1 条重要）')
+      expect(inspector).toHaveTextContent('意见 1 并入了问题 1')
+      expect(gateCard('意见 2 · 重要')).toHaveTextContent(F1_FINDINGS[1])
+      expect(gateCard('问题 2 · 需要你决定')).toHaveTextContent(F1_QUESTIONS[1])
+      expect(inspector).toHaveTextContent('需求 v1 · 根据原始需求生成')
+      // No second review entry, generation form or old revision form on the page (FR-1.2).
+      expect(screen.queryByRole('button', { name: '请求修订当前版本' })).not.toBeInTheDocument()
+      expect(screen.queryByTestId('task-review-run')).not.toBeInTheDocument()
+      expect(within(inspector).queryAllByRole('button', { name: /^审查需求 v1$/ })).toHaveLength(0)
     })
 
-    it('arms a reminder on the first click of a warn-only Gate and submits the exact revision on the second', async () => {
-      const state = clarifyGateState()
+    it('names the review model and cost beside 「审查需求 v1」 before it is clicked, then runs the first review without a dialog (amendment 33)', async () => {
+      const f1 = await buildF1()
+      const { api } = await openGatePage({ ...f1, reviews: [] })
+      await waitFor(() => expect(barButton('审查需求 v1')).toBeEnabled())
+      expect(gateBar()).toHaveTextContent(`将用 ${agentProvider.name} · ${agentProvider.model} 审查需求 v1，可能产生费用`)
+      expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+      fireEvent.click(barButton('审查需求 v1'))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
+      expect(vi.mocked(api.runKnowledgeReview).mock.calls[0]![0]).not.toHaveProperty('previousReviewId')
+    })
+
+    it('adopts, undoes and declines findings and answers questions into one numbered list (AC15–AC19)', async () => {
+      await openGatePage(await buildF1())
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      fireEvent.click(within(gateCard('意见 2 · 重要')).getByRole('button', { name: '采纳' }))
+      expect(gateCard('意见 2 · 重要')).toHaveTextContent('已采纳 · v2 里会处理：')
+      expect(gateCard('意见 2 · 重要')).toHaveTextContent('已加入修订清单（第 1 项）')
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单 1 项/ })).toBeInTheDocument()
+      fireEvent.click(within(gateCard('意见 2 · 重要')).getByRole('button', { name: '撤回' }))
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单 0 项/ })).toBeInTheDocument()
+      fireEvent.click(within(gateCard('意见 3 · 建议')).getByRole('button', { name: '不采纳' }))
+      expect(gateCard('意见 3 · 建议')).toHaveTextContent('不采纳')
+      // 问题 2: answer, change the answer, remove it from the list.
+      fireEvent.change(within(gateCard('问题 2 · 需要你决定')).getByRole('textbox', { name: '问题 2 的回答' }), { target: { value: '不允许。' } })
+      fireEvent.click(within(gateCard('问题 2 · 需要你决定')).getByRole('button', { name: '保存答案' }))
+      const answered = screen.getByRole('article', { name: /^问题 2 · 已回答/ })
+      expect(answered).toHaveTextContent('已加入修订清单（第 1 项）')
+      fireEvent.click(within(answered).getByRole('button', { name: '改答案' }))
+      fireEvent.change(within(answered).getByRole('textbox', { name: '问题 2 的回答' }), { target: { value: '允许，只搜索标题。' } })
+      fireEvent.click(within(answered).getByRole('button', { name: '保存答案' }))
+      expect(screen.getByRole('article', { name: '问题 2 · 已回答：允许，只搜索标题。' })).toBeInTheDocument()
+      // The merged 问题 1 also handles 意见 1 (AC19).
+      const merged = screen.getByRole('article', { name: /^问题 1/ })
+      expect(merged).toHaveTextContent(`AI 审查也指出（意见 1）：${F1_FINDINGS[0]}`)
+      fireEvent.change(within(merged).getByRole('textbox', { name: '问题 1 的回答' }), { target: { value: '不区分。' } })
+      fireEvent.click(within(merged).getByRole('button', { name: '保存答案' }))
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单 2 项/ })).toBeInTheDocument()
+      openList()
+      const list = within(gateBar()).getByRole('region', { name: /^对需求 v1 的修改/ })
+      expect(list).toHaveTextContent('来自问题 2')
+      expect(list).toHaveTextContent('来自问题 1')
+      fireEvent.click(within(list).getAllByRole('button', { name: '移出' })[0]!)
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单 1 项/ })).toBeInTheDocument()
+      expect(screen.getByRole('article', { name: /^问题 2 · 需要你决定/ })).toBeInTheDocument()
+    })
+
+    it('keeps the revision list on this machine across a remount (AC24)', async () => {
+      const { view } = await openGatePage(await buildF1())
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      addOwnItem(OWN)
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单 1 项/ })).toBeInTheDocument()
+      view.unmount()
+      render(<App />)
+      await waitFor(() => expect(within(gateBar()).getByRole('button', { name: /^修订清单 1 项/ })).toBeInTheDocument())
+      openList()
+      expect(gateBar()).toHaveTextContent(OWN)
+    })
+
+    it('submits exactly the request with its proposals, then generates on the clarify agent; the pending page keeps the submitted text (AC26, findings 8, 13)', async () => {
+      const f1 = await buildF1()
+      const pending = await buildF1RevisionPending(OWN_TEXT)
+      let current = gateState(f1)
+      let rejectGeneration!: (error: Error) => void
       const api = installDesktopApi({
-        loadState: vi.fn().mockResolvedValue(state),
-        evaluateGateEnforcement: vi.fn().mockResolvedValue({
-          status: 'warn', blocksApproval: false, blockingReasons: [], warningReasons: [missingReviewReason('warn')],
-          requiredActions: [], canOverride: false, overrideRoleRequired: 'lead', policySource: 'built_in_default', policyVersion: 1, provisional: false,
+        loadState: vi.fn(async () => current),
+        requestClarificationChanges: vi.fn(async () => {
+          current = gateState(pending)
+          return { run: pending.run, revision: pending.current, feedback: pending.feedback, event: fixtureEvents[0]!, state: current }
         }),
-        approveGate: vi.fn().mockRejectedValue(new Error('Stop after recording IPC')),
+        completeWorkflowAgentNode: vi.fn(() => new Promise<never>((_resolve, reject) => { rejectGeneration = reject })),
+        cancelWorkflowAgentNode: vi.fn(async () => { rejectGeneration(new Error('已取消阶段生成。')); return true }),
       })
+      const view = render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      addOwnItem(OWN)
+      expect(gateBar()).toHaveTextContent(`将用 Direct Provider · ${agentProvider.name} · ${agentProvider.model} 生成，可能产生费用`)
+      fireEvent.click(barButton('提交修订，生成 v2（1 项）'))
+      await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1))
+      expect(api.requestClarificationChanges).toHaveBeenCalledTimes(1)
+      expect(api.requestClarificationChanges).toHaveBeenCalledWith({
+        runId: f1.run.id, nodeId: f1.gateNode.id, artifactId: f1.current.id, revision: 1,
+        revisionDigest: f1.current.clarificationRevision!.revisionDigest, reason: OWN_TEXT, proposals: [],
+      })
+      expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith({
+        runId: f1.run.id, nodeId: f1.agentNode.id, userId: 'u-ling', userName: 'Ling', executor: 'direct-provider', providerId: agentProvider.id,
+      })
+      expect(vi.mocked(api.requestClarificationChanges!).mock.invocationCallOrder[0]!).toBeLessThan(vi.mocked(api.completeWorkflowAgentNode).mock.invocationCallOrder[0]!)
+      // The run sits at the clarify agent; the same page runs the generation with 「停止」 (design §3.4).
+      await waitFor(() => expect(gateBar()).toHaveTextContent('正在生成需求 v2'))
+      fireEvent.click(barButton('停止'))
+      await waitFor(() => expect(api.cancelWorkflowAgentNode).toHaveBeenCalledWith({ runId: f1.run.id, nodeId: f1.agentNode.id }))
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '4'))
+      expect(gateBar()).toHaveTextContent('需求 v1 的修订请求已记录')
+      expect(gateBar()).toHaveTextContent('需求 v2 没有生成：已取消阶段生成。修订请求已记录，可以重新生成。')
+      expect(barButton('重新生成需求 v2')).toBeEnabled()
+      expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求 v1 的修订请求已提交，这里只能查看。')
+      expect(gateCard('意见 2 · 重要')).toHaveTextContent('修订请求已提交')
+      // No readiness paragraph above the sections on gate pages (finding 11).
+      expect(screen.getByTestId('workspace-tabpanel').querySelector(':scope > p[role="status"]')).toBeNull()
+      openList()
+      expect(gateBar().querySelector('.gate-list-submitted')).toHaveTextContent(OWN)
+      // Regenerating sends the choice the request was submitted with (finding 13).
+      vi.mocked(api.completeWorkflowAgentNode).mockClear()
+      fireEvent.click(barButton('重新生成需求 v2'))
+      await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledWith(expect.objectContaining({
+        nodeId: f1.agentNode.id, executor: 'direct-provider', providerId: agentProvider.id })))
+      // Without the local list the submitted text comes from the feedback record (finding 8).
+      view.unmount()
+      localStorage.removeItem('devflow-revision-lists')
       render(<App />)
-
-      const row = await screen.findByTestId('task-status-row')
-      await waitFor(() => expect(row).toHaveTextContent('等待你确认需求 v1'))
-      // Enforcement resolves separately from the workflow that supplies the title.
-      await waitFor(() => expect(row).toHaveTextContent('尚未运行 AI 审查'))
-      // Warn-only is not shown as blocked (plan §3).
-      expect(row).toHaveAttribute('data-status-kind', 'approvable')
-      expect(row).not.toHaveTextContent(/不能|阻断审批/)
-      const approve = within(row).getByRole('button', { name: /确认需求 v1/ })
-      fireEvent.click(approve)
-      expect(api.approveGate).not.toHaveBeenCalled()
-      expect(within(row).getByRole('alert')).toHaveTextContent('尚未运行 AI 审查，本次确认针对需求 v1')
-      fireEvent.click(approve)
-
-      await waitFor(() => expect(api.approveGate).toHaveBeenCalledTimes(1))
-      const revision = state.artifacts.find((artifact) => artifact.clarificationRevision)!
-      expect(api.approveGate).toHaveBeenCalledWith({
-        runId: 'run-clarify-gate',
-        nodeId: state.runs[0]!.currentNodeId,
-        expectedClarificationRevision: {
-          artifactId: revision.id,
-          revision: revision.clarificationRevision!.revision,
-          revisionDigest: revision.clarificationRevision!.revisionDigest,
-        },
-      })
+      await waitFor(() => expect(gateBar()).toHaveTextContent('需求 v1 的修订请求已记录'))
+      openList()
+      expect(gateBar().querySelector('.gate-list-submitted')).toHaveTextContent(OWN)
     })
 
-    it('keeps typed revision feedback when the main process rejects a stale revision (plan V3)', async () => {
-      const state = clarifyGateState()
+    it('treats a lost request response as committed when the recorded feedback matches, without a second request', async () => {
+      const f1 = await buildF1()
+      const pending = await buildF1RevisionPending(OWN_TEXT)
+      let committed = false
       const api = installDesktopApi({
-        loadState: vi.fn().mockResolvedValue(state),
-        approveGate: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'approve-gate': Error: Gate approval rejected: clarification revision is missing, stale, or no longer current")),
-        requestClarificationChanges: vi.fn().mockRejectedValue(new Error('not expected in this test')),
+        loadState: vi.fn(async () => (committed ? gateState(pending) : gateState(f1))),
+        requestClarificationChanges: vi.fn(async () => { committed = true; throw new Error("Error invoking remote method 'request-clarification-changes': response lost") }),
+        completeWorkflowAgentNode: vi.fn(() => new Promise<never>(() => {})),
       })
       render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      addOwnItem(OWN)
+      fireEvent.click(barButton('提交修订，生成 v2（1 项）'))
+      await waitFor(() => expect(api.completeWorkflowAgentNode).toHaveBeenCalledTimes(1))
+      expect(api.requestClarificationChanges).toHaveBeenCalledTimes(1)
+      await waitFor(() => expect(gateBar()).toHaveTextContent('正在生成需求 v2'))
+    })
 
-      const row = await screen.findByTestId('task-status-row')
-      await waitFor(() => expect(within(row).getByRole('button', { name: /确认需求 v1/ })).toBeEnabled())
-      fireEvent.click(screen.getByRole('button', { name: '请求修订当前版本' }))
-      fireEvent.change(screen.getByLabelText('结构化修订意见'), { target: { value: '补充依赖超时 300 ms 的降级边界。' } })
-      fireEvent.click(within(row).getByRole('button', { name: /确认需求 v1/ }))
+    it('keeps the list unsubmitted and explains a stale request in Chinese (AC31)', async () => {
+      const f1 = await buildF1()
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(gateState(f1)),
+        requestClarificationChanges: vi.fn().mockRejectedValue(new Error('Clarification revision changed before the request was saved')),
+      })
+      render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      addOwnItem(OWN)
+      fireEvent.click(barButton('提交修订，生成 v2（1 项）'))
+      await waitFor(() => expect(gateBar()).toHaveTextContent('需求版本已变化，修订请求没有提交。修订清单保留在需求 v1 上；请阅读当前版本后重新决定。'))
+      expect(gateBar().querySelector('.gate-note')?.textContent ?? '').not.toMatch(/Clarification revision changed/u)
+      expect(api.completeWorkflowAgentNode).not.toHaveBeenCalled()
+      expect(barButton('提交修订，生成 v2（1 项）')).toBeEnabled()
+    })
 
-      await waitFor(() => expect(api.approveGate).toHaveBeenCalledTimes(1))
-      await waitFor(() => expect(screen.getByTestId('toast')).not.toHaveTextContent('已通过'))
-      expect(screen.getByLabelText('结构化修订意见')).toHaveValue('补充依赖超时 300 ms 的降级边界。')
+    it('offers no regeneration when the request names a proposal that changed (AC28, revision_input_changed)', async () => {
+      const pending = await buildF1RevisionPending(OWN_TEXT)
+      const trace = { id: 'failed-revision', runId: pending.run.id, nodeId: pending.agentNode.id, reviewId: 'stage-agent-failure-revision',
+        runtime: 'electron' as const, terminalReason: 'failed' as const, createdAt: '2026-10-30T09:30:00.000Z', steps: [],
+        failureDetails: stageAgentFailureDetails('revision_input_changed', 'stage_validation') }
+      installDesktopApi({ loadState: vi.fn().mockResolvedValue(gateState(pending, { agentTraces: [trace] })) })
+      render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '4'))
+      expect(gateBar()).toHaveTextContent('修订请求引用的答疑提案已不可用，无法重新生成；请到「材料与版本」核对提案。')
+      expect(within(gateBar()).queryByRole('button', { name: '重新生成需求 v2' })).not.toBeInTheDocument()
+    })
+
+    it('disables 「重新生成需求 v2」 with the readiness reason and a settings link on the revision-pending page (finding 23)', async () => {
+      const pending = await buildF1RevisionPending(OWN_TEXT)
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(gateState(pending)),
+        getCodingRuntimeBudgetPolicy: vi.fn().mockRejectedValue(new Error('budget unavailable')),
+      })
+      render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '4'))
+      await waitFor(() => expect(barButton('重新生成需求 v2')).toBeDisabled())
+      expect(screen.getByTestId('workspace-tabpanel').querySelector(':scope > p[role="status"]')).toBeNull()
+      const note = Array.from(gateBar().querySelectorAll('.gate-note')).find((element) => element.textContent?.includes('云端预算'))!
+      expect(note).toBeTruthy()
+      fireEvent.click(within(note as HTMLElement).getByRole('button', { name: '打开模型与执行方式设置' }))
+      expect(await screen.findByTestId('settings-models')).toBeInTheDocument()
+      expect(api.completeWorkflowAgentNode).not.toHaveBeenCalled()
+    })
+
+    it('confirms without submitting and says the K items were kept (AC30)', async () => {
+      const f1 = await buildF1()
+      const approved = { ...f1, run: { ...f1.run, status: 'designing' as const, currentNodeId: f1.run.nodes.find((node) => node.stage === 'design' && node.kind === 'agent')!.id,
+        nodes: f1.run.nodes.map((node) => node.id === f1.gateNode.id ? { ...node, status: 'success' as const } : node) },
+      artifacts: f1.artifacts.map((artifact) => artifact.id === f1.current.id ? { ...artifact, clarificationRevision: { ...artifact.clarificationRevision!, status: 'approved' as const } } : artifact) }
+      const event = { id: 'approval-f1', runId: f1.run.id, nodeId: f1.gateNode.id, sequence: 9, kind: 'approval' as const, message: 'approved', timestamp: '2026-10-30T09:40:00.000Z' }
+      const api = installDesktopApi({
+        loadState: vi.fn().mockResolvedValue(gateState(f1)),
+        approveGate: vi.fn(async () => ({ run: approved.run, event, state: gateState(approved, { events: [event] }) })),
+        requestClarificationChanges: vi.fn(),
+      })
+      render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      addOwnItem(OWN)
+      fireEvent.click(barButton('不修订，直接确认 v1'))
+      await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith({ runId: f1.run.id, nodeId: f1.gateNode.id,
+        expectedClarificationRevision: { artifactId: f1.current.id, revision: 1, revisionDigest: f1.current.clarificationRevision!.revisionDigest } }))
+      await waitFor(() => expect(gateBar()).toHaveTextContent('已确认需求 v1。修订清单里的 1 项没有提交，仍可在需求 v1 的页面查看。'))
+      expect(gateBar()).toHaveTextContent('需求 v1 已确认')
       expect(api.requestClarificationChanges).not.toHaveBeenCalled()
     })
 
-    it('keeps the approval on the pending version while an older version is being read (plan V1)', async () => {
-      const base = clarifyGateState()
-      const v1 = base.artifacts.find((artifact) => artifact.clarificationRevision)!
-      const v2: Artifact = {
-        ...v1, id: `${v1.id}-v2`, title: '需求澄清 v2', content: '第二版澄清正文。', updatedAt: '2026-06-21T16:10:00.000Z',
-        clarificationRevision: { ...v1.clarificationRevision!, revision: 2, revisionDigest: 'c'.repeat(64), previousRevisionArtifactId: v1.id },
-      }
-      const run = base.runs[0]!
-      const state = {
-        ...base,
-        runs: [{ ...run, nodes: run.nodes.map((node) => node.id === run.currentNodeId ? { ...node, artifactIds: [v2.id] } : node) }],
-        artifacts: [
-          ...base.artifacts.map((artifact) => artifact.id === v1.id
-            ? { ...artifact, clarificationRevision: { ...artifact.clarificationRevision!, status: 'superseded' as const } }
-            : artifact),
-          v2,
-        ],
-      }
+    it('explains a runtime rejection without raw codes and keeps the list (AC31)', async () => {
+      const f1 = await buildF1()
       const api = installDesktopApi({
-        loadState: vi.fn().mockResolvedValue(state),
-        approveGate: vi.fn().mockRejectedValue(new Error('Stop after recording IPC')),
+        loadState: vi.fn().mockResolvedValue(gateState(f1)),
+        approveGate: vi.fn().mockRejectedValue(new Error('Gate approval rejected: clarification_revision_stale: the latest review does not target the current clarification revision')),
       })
       render(<App />)
-
-      const row = await screen.findByTestId('task-status-row')
-      await waitFor(() => expect(within(row).getByRole('button', { name: /确认需求 v2/ })).toBeEnabled())
-      clickInspectorTab('当前工作')
-      fireEvent.change(screen.getByRole('combobox', { name: '阅读需求版本' }), { target: { value: v1.id } })
-      expect(screen.getByText(/正在阅读历史版本 v1；确认与修订仍针对需求 v2。/)).toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /确认需求 v2/ })).toBeInTheDocument()
-      // Reading v1 never confirms v2 silently: the first click only names both (plan S4, Z6).
-      fireEvent.click(within(row).getByRole('button', { name: /确认需求 v2/ }))
-      expect(api.approveGate).not.toHaveBeenCalled()
-      expect(within(row).getByRole('alert')).toHaveTextContent('你正在阅读历史版本 v1，本次确认针对需求 v2。')
-      fireEvent.click(within(row).getByRole('button', { name: /确认需求 v2/ }))
-      await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({
-        expectedClarificationRevision: { artifactId: v2.id, revision: 2, revisionDigest: 'c'.repeat(64) },
-      })))
-      fireEvent.click(screen.getByRole('button', { name: '返回待确认版本' }))
-      expect(screen.getByRole('combobox', { name: '阅读需求版本' })).toHaveValue(v2.id)
-      expect(screen.queryByText(/正在阅读历史版本/)).not.toBeInTheDocument()
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      fireEvent.click(barButton('确认需求 v1'))
+      await waitFor(() => expect(api.approveGate).toHaveBeenCalledTimes(1))
+      await waitFor(() => expect(gateBar()).toHaveTextContent('需要先审查需求 v1，确认没有提交。修订清单仍保留。'))
+      const notes = Array.from(gateBar().querySelectorAll('.gate-note')).map((note) => note.textContent).join('\n')
+      expect(notes).not.toMatch(/clarification_revision_stale/u)
     })
 
-    it('reviews the current version from the status row after v1 was reviewed and revised to v2 (#251)', async () => {
-      const base = clarifyGateState()
-      const v1 = base.artifacts.find((artifact) => artifact.clarificationRevision)!
-      const v2: Artifact = {
-        ...v1, id: `${v1.id}-v2`, title: '需求澄清 v2', content: '第二版澄清正文。', updatedAt: '2026-06-21T16:10:00.000Z',
-        clarificationRevision: { ...v1.clarificationRevision!, revision: 2, revisionDigest: 'c'.repeat(64), previousRevisionArtifactId: v1.id },
-      }
-      const run = base.runs[0]!
-      const designReview = reviewedDesignGateState().agentReviews[0]!
-      // The saved review covered v1, exactly as the runtime records its subject.
-      const v1Review: AgentReviewResult = {
-        ...designReview,
-        id: 'agent-review-clarify-v1', runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId,
-        model: 'review-model', createdAt: '2026-06-21T16:06:00.000Z',
-        contextManifest: {
-          ...designReview.contextManifest!,
-          stage: 'clarify',
-          subjectArtifacts: [{ ...designReview.contextManifest!.subjectArtifacts[0]!, id: v1.id, runId: v1.runId, nodeId: v1.nodeId, kind: 'clarification', updatedAt: v1.updatedAt }],
-        },
-        gateAdvisory: { ...designReview.gateAdvisory, runId: run.id, nodeId: run.currentNodeId },
-      }
-      const state = {
-        ...base,
-        runs: [{ ...run, nodes: run.nodes.map((node) => node.id === run.currentNodeId ? { ...node, artifactIds: [v2.id] } : node) }],
-        artifacts: [
-          ...base.artifacts.map((artifact) => artifact.id === v1.id
-            ? { ...artifact, clarificationRevision: { ...artifact.clarificationRevision!, status: 'superseded' as const } }
-            : artifact),
-          v2,
-        ],
-        agentReviews: [v1Review],
-      }
-      const api = installDesktopApi({
-        loadState: vi.fn().mockResolvedValue(state),
-        evaluateGateEnforcement: vi.fn().mockResolvedValue({
-          status: 'warn', blocksApproval: false, blockingReasons: [], warningReasons: [missingReviewReason('warn')],
-          requiredActions: [], canOverride: false, overrideRoleRequired: 'lead', policySource: 'built_in_default', policyVersion: 1, provisional: false,
-        }),
-      })
-      render(<App />)
-
-      const row = await screen.findByTestId('task-status-row')
-      await waitFor(() => expect(row).toHaveTextContent('等待你确认需求 v2'))
-      await waitFor(() => expect(row).toHaveTextContent('当前版本尚未审查'))
-      expect(row).toHaveTextContent('已有的审查针对需求 v1，不适用于当前版本。')
-      // The task names the v1 result as history and leaves the one review entry to the status row.
-      clickInspectorTab('当前工作')
-      const reviewRun = within(screen.getByTestId('node-inspector')).getByTestId('task-review-run')
-      expect(reviewRun).toHaveTextContent('上次审查针对需求 v1，当前版本已更新')
-      expect(within(reviewRun).queryByRole('button')).not.toBeInTheDocument()
-
-      const review = within(row).getByRole('button', { name: '审查当前需求 v2' })
-      await waitFor(() => expect(review).toBeEnabled())
-      fireEvent.click(review)
-      let dialog = screen.getByRole('dialog', { name: '确认审查需求 v2' })
-      expect(dialog).toHaveTextContent('将审查需求 v2')
+    it('blocks requirement v2 with only a v1 review and reviews it through the dialog with the v1 review id (AC32, finding 3)', async () => {
+      const f3 = await buildF3()
+      const { api } = await openGatePage(f3, {}, '需求 v2 · 你的决定')
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '10'))
+      expect(gateBar()).toHaveTextContent('✕ 需要先审查需求 v2：已有的审查针对需求 v1，确认前必须重新审查（工作流要求）')
+      expect(barButton('确认需求 v2')).toBeDisabled()
+      expect(within(gateBar()).queryByRole('button', { name: /^提交修订/ })).not.toBeInTheDocument()
+      // v2's header names its source and the new content (AC36).
+      expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求 v2 · 根据需求 v1 和 2 项修改生成，新加内容以绿色标出')
+      fireEvent.click(barButton('审查需求 v2'))
+      const dialog = screen.getByRole('dialog', { name: '确认审查需求 v2' })
       expect(dialog).toHaveTextContent('上次审查：需求 v1')
-      expect(dialog).toHaveTextContent('当前版本已更新')
-      expect(dialog).toHaveTextContent(`本次 Provider：${agentProvider.name} · ${agentProvider.model}`)
-      expect(dialog).toHaveTextContent('可能产生 Provider 费用')
-      expect(dialog).toHaveTextContent('需求 v1的审查结果保留在历史记录中，不作为需求 v2的结果。')
-      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-      expect(api.runKnowledgeReview).not.toHaveBeenCalled()
-
-      fireEvent.click(review)
-      dialog = screen.getByRole('dialog', { name: '确认审查需求 v2' })
       fireEvent.click(within(dialog).getByRole('button', { name: '开始审查需求 v2' }))
-      await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
-      expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
-        runId: run.id, nodeId: run.currentNodeId, previousReviewId: v1Review.id,
-      }))
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
+        runId: f3.run.id, nodeId: f3.gateNode.id, previousReviewId: 'review-f1' })))
       expect(api.approveGate).not.toHaveBeenCalled()
     })
 
-    it('drops an open review confirmation when the review record changes meanwhile (#251)', async () => {
-      const base = clarifyGateState()
-      const revision = base.artifacts.find((artifact) => artifact.clarificationRevision)!
-      const run = base.runs[0]!
-      const designReview = reviewedDesignGateState().agentReviews[0]!
-      const reviewOfRevision = (id: string, createdAt: string): AgentReviewResult => ({
-        ...designReview, id, runId: run.id, nodeId: run.currentNodeId, projectId: run.projectId, createdAt,
-        contextManifest: {
-          ...designReview.contextManifest!, stage: 'clarify',
-          subjectArtifacts: [{ ...designReview.contextManifest!.subjectArtifacts[0]!, id: revision.id, runId: revision.runId, nodeId: revision.nodeId, kind: 'clarification', updatedAt: revision.updatedAt }],
-        },
-        gateAdvisory: { ...designReview.gateAdvisory, runId: run.id, nodeId: run.currentNodeId },
-      })
-      const state = { ...base, agentReviews: [reviewOfRevision('review-a', '2026-06-21T16:06:00.000Z')] }
-      let listener: Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0] | undefined
-      const api = installDesktopApi({
-        loadState: vi.fn().mockResolvedValue(state),
-        onLocalStateUpdated: vi.fn((callback) => { listener = callback; return vi.fn() }),
-      })
-      render(<App />)
-
-      await waitForLocalStateLoaded(api.loadState)
-      await screen.findByTestId('task-status-row')
-      clickInspectorTab('当前工作')
-      const reviewRun = await within(screen.getByTestId('node-inspector')).findByTestId('task-review-run')
-      const rerun = within(reviewRun).getByRole('button', { name: '重新审查' })
-      await waitFor(() => expect(rerun).toBeEnabled())
-      fireEvent.click(rerun)
-      expect(screen.getByRole('dialog', { name: '确认重新审查' })).toBeInTheDocument()
-
-      // Another window saved a newer review while the dialog was open.
-      await act(async () => {
-        listener?.({ ...state, agentReviews: [...state.agentReviews, reviewOfRevision('review-b', '2026-06-21T16:07:00.000Z')] })
-      })
-      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-      expect(within(screen.getByTestId('task-status-row')).getByRole('alert')).toHaveTextContent('审查记录、待审材料或模型已更新，本次未开始审查')
+    it('reads requirement v1 while v2 is current: only 「返回需求 v2」, v1 review read-only, no IPC (AC40, findings 19, 26)', async () => {
+      const f3 = await buildF3()
+      storeRevisionLists([await listFor(f3.current, [{ type: 'addOwn', text: '第一项' }, { type: 'addOwn', text: '第二项' }])])
+      const { api } = await openGatePage(f3, { requestClarificationChanges: vi.fn() }, '需求 v2 · 你的决定')
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '10'))
+      fireEvent.change(screen.getByRole('combobox', { name: '阅读需求版本' }), { target: { value: f3.previous!.id } })
+      await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('这是需求 v1 的审查，只能查看。'))
+      expect(gateBar()).toHaveTextContent('需求 v2 · 你的决定')
+      expect(within(gateBar()).getAllByRole('button').filter((button) => button.classList.contains('primary-button')).map((button) => button.textContent)).toEqual(['返回需求 v2'])
+      expect(within(gateBar()).queryByRole('button', { name: /^确认|^审查|^提交/ })).not.toBeInTheDocument()
+      fireEvent.click(barButton('返回需求 v2'))
+      await waitFor(() => expect(screen.getByRole('combobox', { name: '阅读需求版本' })).toHaveValue(f3.current.id))
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单 2 项/ })).toBeInTheDocument()
+      expect(api.approveGate).not.toHaveBeenCalled()
       expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+      expect(api.requestClarificationChanges).not.toHaveBeenCalled()
     })
 
-    it('offers no approval while the policy blocks the Gate', async () => {
-      const api = installDesktopApi({
-        loadState: vi.fn().mockResolvedValue(clarifyGateState()),
-        evaluateGateEnforcement: vi.fn().mockResolvedValue({
-          status: 'blocked', blocksApproval: true, blockingReasons: [missingReviewReason('block')], warningReasons: [],
-          requiredActions: [], canOverride: false, overrideRoleRequired: 'lead', policySource: 'remote_cache', policyVersion: 2, provisional: false,
-        }),
-      })
-      render(<App />)
+    it('says when the version read has no review of its own (finding 19)', async () => {
+      const f3 = await buildF3()
+      await openGatePage({ ...f3, reviews: [] }, {}, '需求 v2 · 你的决定')
+      fireEvent.change(screen.getByRole('combobox', { name: '阅读需求版本' }), { target: { value: f3.previous!.id } })
+      await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('需求 v1 没有对应的审查记录。'))
+    })
 
-      const row = await screen.findByTestId('task-status-row')
-      await waitFor(() => expect(row).toHaveAttribute('data-status-kind', 'blocked'))
-      expect(row).toHaveTextContent('暂不能确认需求 v1')
-      expect(row).toHaveTextContent('缺少 AI 审查')
-      expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
-      expect(within(row).getByRole('button', { name: /审查当前需求 v1/ })).toBeEnabled()
+    it('lets design v2 with only a v1 review be confirmed, re-review optional (AC33)', async () => {
+      const f5 = await buildF5()
+      const { api } = await openGatePage(f5, {}, '方案 v2 · 你的决定')
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '13'))
+      expect(gateBar()).toHaveTextContent('重新审查是可选的：已有的审查针对方案 v1，不审查也能确认')
+      expect(barButton('确认方案 v2')).toBeEnabled()
+      expect(barButton('确认方案 v2')).toHaveClass('primary-button')
+      const identity = await buildDesignRevisionIdentity(f5.current)
+      fireEvent.click(barButton('确认方案 v2'))
+      await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({ nodeId: f5.gateNode.id, expectedDesignRevision: identity })))
+    })
+
+    it('shows the stored list of design v1 read-only with 「复制全部」 while v2 is current (finding 29)', async () => {
+      const f5 = await buildF5()
+      storeRevisionLists([await listFor(f5.previous!, [{ type: 'addOwn', text: '旧方案的一项' }])])
+      await openGatePage(f5, {}, '方案 v2 · 你的决定')
+      fireEvent.change(screen.getByRole('combobox', { name: '阅读方案版本' }), { target: { value: f5.previous!.id } })
+      await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('旧方案的一项'))
+      expect(within(screen.getByTestId('node-inspector')).getByRole('button', { name: '复制全部' })).toBeInTheDocument()
+    })
+
+    it('waits for the review check before any conclusion, then shows the only primary 「生成方案 v2（1 项）」 (finding 4)', async () => {
+      const f4 = await buildF4()
+      storeRevisionLists([await listFor(f4.current, [{ type: 'addOwn', text: '窄屏下单独一行。' }])])
+      let release!: () => void
+      const held = new Promise<void>((resolve) => { release = resolve })
+      const digest = globalThis.crypto.subtle.digest.bind(globalThis.crypto.subtle)
+      vi.spyOn(globalThis.crypto.subtle, 'digest').mockImplementation(async (...args: Parameters<SubtleCrypto['digest']>) => { await held; return digest(...args) })
+      installDesktopApi({ loadState: vi.fn().mockResolvedValue(gateState(f4)) })
+      render(<App />)
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '7a'))
+      expect(gateBar().querySelector('.gate-bar-buttons')).toBeNull()
+      expect(gateBar()).not.toHaveTextContent('还剩')
+      await act(async () => { release() })
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      expect(within(gateBar()).getAllByRole('button').filter((button) => button.classList.contains('primary-button')).map((button) => button.textContent)).toEqual(['生成方案 v2（1 项）'])
+    })
+
+    it('shows a failed policy read with 「重新读取」 and the normal row after it succeeds (finding 2)', async () => {
+      const f1 = await buildF1()
+      const evaluate = vi.fn().mockRejectedValueOnce(new Error('team data unreadable')).mockResolvedValue(passDecision())
+      await openGatePage(f1, { evaluateGateEnforcement: evaluate })
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '8a'))
+      expect(gateBar()).toHaveTextContent('状态待核实：读取审批条件失败，暂时无法判断能否确认。')
+      expect(within(gateBar()).queryByRole('button', { name: '确认需求 v1' })).not.toBeInTheDocument()
+      fireEvent.click(barButton('重新读取'))
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      expect(evaluate.mock.calls.length).toBeGreaterThanOrEqual(2)
+      expect(barButton('确认需求 v1')).toBeEnabled()
+    })
+
+    it('says findings may be left only after a non-blocking decision is read (finding 3, AC34)', async () => {
+      const f1 = await buildF1()
+      const findings = f1.review!.missingEvidenceDetails!
+      storeRevisionLists([await listFor(f1.current, [
+        { type: 'adopt', finding: { reviewId: f1.review!.id, index: 1, text: F1_FINDINGS[1], level: 'important' } },
+        { type: 'answer', answer: '不区分。', question: { index: 0, text: F1_QUESTIONS[0], merged: [{ reviewId: f1.review!.id, index: 0, text: F1_FINDINGS[0] }] } },
+        { type: 'answer', answer: '不允许。', question: { index: 1, text: F1_QUESTIONS[1], merged: [] } },
+      ])])
+      expect(findings).toHaveLength(5)
+      let resolveDecision!: (value: ReturnType<typeof policyDecision>) => void
+      await openGatePage(f1, { evaluateGateEnforcement: vi.fn(() => new Promise<ReturnType<typeof policyDecision>>((resolve) => { resolveDecision = resolve })) })
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '8'))
+      expect(gateBar()).toHaveTextContent('还剩 3 条意见')
+      expect(gateBar()).not.toHaveTextContent('可不处理')
+      await act(async () => { resolveDecision(passDecision()) })
+      await waitFor(() => expect(gateBar()).toHaveTextContent('还剩 3 条意见（都是建议，可不处理）'))
+    })
+
+    it('keeps one review button and no second 「更新团队数据」 when the recovery plan offers both (finding 11)', async () => {
+      const f1 = await buildF1()
+      await openGatePage({ ...f1, reviews: [] }, { evaluateGateEnforcement: vi.fn().mockResolvedValue(policyDecision({
+        status: 'blocked', blocksApproval: true, blockingReasons: [policyReason('missing_agent_review')], requiredActions: ['run_agent_review', 'sync_policy'] })) })
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '11'))
+      const inspector = screen.getByTestId('node-inspector')
+      expect(within(inspector).getAllByRole('button', { name: '审查需求 v1' })).toHaveLength(1)
+      expect(within(inspector).queryAllByRole('button', { name: '更新团队数据' }).length).toBeLessThanOrEqual(0)
+    })
+
+    it('moves to 当前工作 and focuses the first unhandled card from 「下一条 ↓」 on 材料与版本 (finding 6)', async () => {
+      const { api } = await openGatePage(await buildF1())
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      clickInspectorTab('材料与版本')
+      fireEvent.click(barButton('下一条 ↓'))
+      await waitFor(() => expect(screen.getByRole('tab', { name: '当前工作', selected: true })).toBeInTheDocument())
+      await waitFor(() => expect(document.activeElement?.closest('article')).toHaveAttribute('data-card-id'))
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单 0 项/ })).toBeInTheDocument()
       expect(api.approveGate).not.toHaveBeenCalled()
+    })
+
+    it('marks legacy data as not determinable and offers no decision (AC41)', async () => {
+      const { requirement } = await buildF6()
+      await openGatePage(requirement, {}, '状态待核实')
+      expect(within(gateBar()).queryByRole('button', { name: /^确认/ })).not.toBeInTheDocument()
+      expect(screen.getByTestId('node-inspector')).toHaveTextContent('旧版需求没有版本记录')
     })
   })
 
@@ -5556,20 +5703,17 @@ describe('App', () => {
       fireEvent.click(screen.getAllByTestId('stage-item')[0]!)
 
       const inspector = await screen.findByTestId('node-inspector')
-      await waitFor(() => expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('需求澄清 v2'))
-      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('已确认')
-      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('第 2 版澄清正文。')
+      // The finished requirement page shows the approved v2, read-only (design §5.1 row 2).
+      await waitFor(() => expect(within(inspector).getByTestId('gate-decision-bar')).toHaveTextContent('需求 v2 已确认'))
+      await waitFor(() => expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('第 2 版澄清正文。'))
       const options = within(within(inspector).getByRole('combobox', { name: '阅读需求版本' })).getAllByRole('option').map((option) => option.textContent)
-      expect(options).toEqual(expect.arrayContaining([
-        expect.stringContaining('需求澄清 v2 · 已确认'),
-        expect.stringContaining('需求澄清 v1 · 已被替代（历史）'),
-        expect.stringContaining('原始需求'),
-      ]))
+      expect(options).toEqual(['需求 v1', '需求 v2'])
       // Reading v1 says what it is and how to return; nothing is confirmed on this step.
       fireEvent.change(within(inspector).getByRole('combobox', { name: '阅读需求版本' }), { target: { value: 'artifact-run-181-clarification' } })
-      expect(within(inspector).getByText(/正在阅读需求 v1（已被替代（历史））；当前已确认的是需求 v2。/)).toBeInTheDocument()
-      fireEvent.click(within(inspector).getByRole('button', { name: '返回已确认版本' }))
-      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('需求澄清 v2')
+      await waitFor(() => expect(inspector).toHaveTextContent('这是历史版本 需求 v1；当前是需求 v2。这里只能查看。'))
+      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('第 1 版澄清正文。')
+      fireEvent.click(within(inspector).getByRole('button', { name: '返回需求 v2' }))
+      await waitFor(() => expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('第 2 版澄清正文。'))
 
       // 材料与版本 groups every material by role, with version, status and time (plan §9.1).
       clickInspectorTab('材料与版本')
@@ -5580,10 +5724,10 @@ describe('App', () => {
       expect(within(within(materials).getByRole('region', { name: '已确认依据' })).getByText('需求澄清 v2')).toBeInTheDocument()
       expect(within(within(materials).getByRole('region', { name: '历史记录' })).getByText('需求澄清 v1')).toBeInTheDocument()
       expect(within(within(materials).getByRole('region', { name: '讨论提案' })).getByText('讨论提案（待确认）')).toBeInTheDocument()
-      // The raw request is read in the same reader, with a clear role.
-      fireEvent.click(within(within(materials).getByRole('region', { name: '原始输入与参考' })).getByRole('button', { name: '在「当前工作」中阅读' }))
-      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('原始需求')
-      expect(within(inspector).getByTestId('clarification-current-revision')).toHaveTextContent('原始输入，不是审批对象')
+      // On the gate page 当前工作 holds the versions; the raw request is read here (design §5.1).
+      const raw = within(materials).getByRole('region', { name: '原始输入与参考' })
+      expect(within(raw).queryByRole('button', { name: '在「当前工作」中阅读' })).not.toBeInTheDocument()
+      expect(raw).toHaveTextContent('为任务清单增加按完成状态筛选的功能。')
       expect(api.approveGate).not.toHaveBeenCalled()
     })
 
@@ -5593,10 +5737,10 @@ describe('App', () => {
       })
       render(<App />)
       await waitForLocalStateLoaded(api.loadState)
-      const row = screen.getByTestId('task-status-row')
-      await waitFor(() => expect(row).toHaveTextContent('所审方案：'))
+      await waitFor(() => expect(screen.getByTestId('gate-decision-bar')).toHaveTextContent('方案 v1 · 你的决定'))
       await clickGateApproval()
       await waitFor(() => expect(screen.getByTestId('toast')).toHaveTextContent('方案内容已变化，本次确认没有提交'))
+      expect(screen.getByTestId('gate-decision-bar')).toHaveTextContent('方案内容已变化，本次确认没有提交。请阅读最新方案后再确认。')
       expect(screen.getByTestId('toast')).not.toHaveTextContent('已通过')
       expect(api.approveGate).toHaveBeenCalledTimes(1)
     })
@@ -5740,11 +5884,10 @@ describe('App', () => {
     )
 
     const inspector = openPolicyDetails()
-    // The status row is the one conclusion; the panel lists findings without its own verdict (plan W6).
-    const statusRow = within(inspector).getByTestId('task-status-row')
-    await waitFor(() => expect(statusRow).toHaveAttribute('data-status-kind', 'blocked'))
-    expect(statusRow).toHaveTextContent('暂不能确认方案')
-    expect(statusRow).toHaveTextContent('缺少 AI 审查')
+    // The decision bar is the one conclusion; the panel lists findings without its own verdict (plan W6).
+    const statusRow = within(inspector).getByTestId('gate-decision-bar')
+    await waitFor(() => expect(statusRow).toHaveAttribute('data-row', '11'))
+    expect(statusRow).toHaveTextContent('✕ 需要先审查方案 v1：团队策略要求先完成 AI 审查')
     expect(screen.getByTestId('gate-enforcement-details')).toHaveTextContent('策略评估详情')
     expect(screen.queryByTestId('gate-enforcement-summary')).not.toBeInTheDocument()
     expect(screen.getAllByTestId('enforcement-finding')).toHaveLength(1)
@@ -5755,14 +5898,14 @@ describe('App', () => {
     expect(inspector).toHaveTextContent('policy v1')
     expect(inspector).toHaveTextContent('此受保护 Gate 尚未运行基于知识的门禁审查。')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /审查当前方案/ })).toBeEnabled()
-    expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
+    expect(within(statusRow).getByRole('button', { name: '审查方案 v1' })).toBeEnabled()
+    expect(within(statusRow).getByRole('button', { name: '确认方案 v1' })).toBeDisabled()
     expect(screen.queryByRole('button', { name: /执行测试|运行检查/ })).not.toBeInTheDocument()
 
-    // The review step is offered once, in the status row; the recovery plan keeps the rest (plan W6).
+    // The review step is offered once, in the bar; the recovery plan keeps the rest (plan W6).
     openRecoveryDetails()
-    expect(within(screen.getByTestId('remediation-actions')).queryByRole('button', { name: /审查当前方案|运行门禁审查/ })).not.toBeInTheDocument()
-    expect(screen.getAllByRole('button', { name: /审查当前方案|运行门禁审查/ })).toHaveLength(1)
+    expect(within(screen.getByTestId('remediation-actions')).queryByRole('button', { name: /审查方案 v1|运行门禁审查/ })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /审查方案 v1|运行门禁审查/ })).toHaveLength(1)
     expect(screen.getAllByTestId('enforcement-finding')).toHaveLength(1)
     openPolicyDetails()
 
@@ -5818,8 +5961,8 @@ describe('App', () => {
 
     const inspector = await screen.findByTestId('node-inspector')
     // Unread policy is "unverified", not a block (plan X4): approval stays unavailable without saying blocked.
-    await waitFor(() => expect(within(inspector).getByTestId('task-status-row')).toHaveAttribute('data-status-kind', 'unverified'))
-    expect(within(inspector).getByTestId('task-status-row')).toHaveTextContent('状态待核实')
+    await waitFor(() => expect(within(inspector).getByTestId('gate-decision-bar')).toHaveAttribute('data-row', '9'))
+    expect(within(inspector).getByTestId('gate-decision-bar')).toHaveTextContent('状态待核实')
     // The checklist has no conclusion row any more (plan W6); its policy row says the policy is unread.
     const policyGroup = within(inspector).getByTestId('readiness-group-policy-permission')
     expect(policyGroup).toHaveTextContent('尚未读取')
@@ -5830,9 +5973,10 @@ describe('App', () => {
     expect(screen.queryByTestId('gate-enforcement-summary')).not.toBeInTheDocument()
     expect(screen.getByTestId('enforcement-finding')).toHaveTextContent('团队策略尚未同步')
     expect(screen.getByTestId('enforcement-finding')).toHaveTextContent('Team enforcement policy is unavailable.')
-    // Syncing the policy is offered once, as the status row primary action (plan W6).
-    expect(within(inspector).getByTestId('task-status-row')).toHaveTextContent('更新团队数据后会重新评估')
-    expect(within(within(inspector).getByTestId('task-status-row')).getByRole('button', { name: '更新团队数据' })).toBeEnabled()
+    // Syncing the policy is offered once, as the bar's primary action (plan W6).
+    expect(within(inspector).getByTestId('gate-decision-bar')).toHaveTextContent('更新团队数据后会重新评估')
+    expect(within(within(inspector).getByTestId('gate-decision-bar')).getByRole('button', { name: '更新团队数据' })).toBeEnabled()
+    expect(within(inspector).getAllByRole('button', { name: '更新团队数据' })).toHaveLength(1)
     expect(within(inspector).queryByRole('button', { name: '同步团队策略' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: gateApprovalName })).not.toBeInTheDocument()
   })
@@ -5883,14 +6027,15 @@ describe('App', () => {
     await waitFor(() => expect(api.listGateOverrides).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id }))
 
     const inspector = openPolicyDetails()
-    // An overridden block is not shown as blocked: the status row still allows approval (plan §3).
-    await waitFor(() => expect(within(inspector).getByTestId('task-status-row')).toHaveAttribute('data-status-kind', 'approvable'))
-    expect(within(inspector).getByTestId('task-status-row')).not.toHaveTextContent('暂不能')
+    // An overridden block is not shown as blocked: the bar still allows approval (plan §3).
+    await waitFor(() => expect(within(inspector).getByTestId('gate-decision-bar')).toHaveAttribute('data-row', '15'))
+    expect(within(inspector).getByTestId('gate-decision-bar')).not.toHaveTextContent('暂不能')
+    expect(within(within(inspector).getByTestId('gate-decision-bar')).getByRole('button', { name: '确认方案 v1' })).toBeEnabled()
     const details = within(inspector).getByTestId('gate-enforcement-details')
     expect(details).toHaveTextContent('Provisional override')
     expect(details).not.toHaveTextContent('Confirmed override')
     expect(details).toHaveTextContent('Offline lead override pending server confirmation.')
-    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /审查当前方案/ })).toBeEnabled()
+    expect(within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: '审查方案 v1' })).toBeEnabled()
   })
 
   it('shows rejected provisional overrides as blocked and actionable', async () => {
@@ -5940,11 +6085,11 @@ describe('App', () => {
     await waitFor(() => expect(api.listGateOverrides).toHaveBeenCalledWith({ runId: fixtureRuns[0]!.id }))
 
     const inspector = openPolicyDetails()
-    await waitFor(() => expect(within(inspector).getByTestId('task-status-row')).toHaveAttribute('data-status-kind', 'blocked'))
+    await waitFor(() => expect(within(inspector).getByTestId('gate-decision-bar')).toHaveAttribute('data-row', '11'))
     expect(inspector).toHaveTextContent('Rejected override')
     expect(inspector).toHaveTextContent('Rejected by team policy because version 1 is stale.')
     expect(inspector).toHaveTextContent('在审批此受保护 Gate 前运行基于知识的门禁审查。')
-    expect(within(screen.getByTestId('task-status-row')).getByRole('button', { name: /审查当前方案/ })).toBeEnabled()
+    expect(within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: '审查方案 v1' })).toBeEnabled()
   })
 
   it('persists theme and MCP local preferences through the desktop API', async () => {
@@ -6337,18 +6482,22 @@ describe('App', () => {
     clickPrimaryNav('任务')
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
     clickInspectorTab('当前工作')
-    const reviewRun = within(await screen.findByTestId('node-inspector')).getByTestId('task-review-run')
-    expect(reviewRun).toHaveTextContent(`上次审查：${formatLocalTime(state.agentReviews[0]!.createdAt)}`)
-    const rerun = within(reviewRun).getByRole('button', { name: '重新审查' })
+    // On the design Gate page the saved review is named in the bar's meta line (design §5.3).
+    const reviewRun = within(await screen.findByTestId('node-inspector')).getByTestId('gate-decision-bar')
+    expect(reviewRun).toHaveTextContent(`审查于 ${formatLocalTime(state.agentReviews[0]!.createdAt)}`)
+    // A review that does not match the text is not bound, so the bar offers 「审查方案 v1」 (rule R).
+    const rerun = within(reviewRun).getByRole('button', { name: '审查方案 v1' })
     await waitFor(() => expect(rerun).toBeEnabled())
     rerun.focus()
     fireEvent.click(rerun)
-    let dialog = screen.getByRole('dialog', { name: '确认重新审查' })
+    const dialogName = '确认重新审查'
+    const confirmName = '继续并重新审查'
+    let dialog = screen.getByRole('dialog', { name: dialogName })
     expect(dialog).toHaveTextContent('新增审查记录')
     expect(dialog).toHaveTextContent('Provider 费用')
     expect(within(dialog).getByRole('button', { name: '取消' })).toHaveFocus()
     fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
-    expect(within(dialog).getByRole('button', { name: '继续并重新审查' })).toHaveFocus()
+    expect(within(dialog).getByRole('button', { name: confirmName })).toHaveFocus()
     fireEvent.keyDown(dialog, { key: 'Tab' })
     expect(within(dialog).getByRole('button', { name: '取消' })).toHaveFocus()
     fireEvent.keyDown(dialog, { key: 'Escape' })
@@ -6356,12 +6505,12 @@ describe('App', () => {
     expect(rerun).toHaveFocus()
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
     fireEvent.click(rerun)
-    dialog = screen.getByRole('dialog', { name: '确认重新审查' })
+    dialog = screen.getByRole('dialog', { name: dialogName })
     fireEvent.click(within(dialog).getByRole('button', { name: '取消' }))
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
     fireEvent.click(rerun)
-    dialog = screen.getByRole('dialog', { name: '确认重新审查' })
-    fireEvent.click(within(dialog).getByRole('button', { name: '继续并重新审查' }))
+    dialog = screen.getByRole('dialog', { name: dialogName })
+    fireEvent.click(within(dialog).getByRole('button', { name: confirmName }))
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
     expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
       runId: fixtureRuns[0]!.id,
@@ -6388,7 +6537,7 @@ describe('App', () => {
     expect(within(models).getByTestId('review-executor-setting')).toHaveTextContent('不批准 Gate')
 
     clickPrimaryNav('任务')
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
+    const runReview = within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: '审查方案 v1' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({
@@ -6408,7 +6557,7 @@ describe('App', () => {
     expect(await within(models).findByLabelText('门禁审查方式')).toHaveValue('native-agent')
     expect(api.saveCodingRuntimeConfiguration).not.toHaveBeenCalled()
     clickPrimaryNav('任务')
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
+    const runReview = within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: '审查方案 v1' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledWith(expect.objectContaining({ executor: 'native-agent' })))
@@ -6425,11 +6574,12 @@ describe('App', () => {
     vi.mocked(api.runKnowledgeReview).mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectReview = reject }))
     render(<App />)
     await waitForLocalStateLoaded(api.loadState)
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
+    const runReview = within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: '审查方案 v1' })
     await waitFor(() => expect(runReview).toBeEnabled())
     fireEvent.click(runReview)
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1))
-    expect(screen.getByTestId('task-review-run')).toHaveTextContent('正在运行门禁审查')
+    // A running review is the bar's row with 「停止」 on every tab (design §5.3 row 5).
+    expect(screen.getByTestId('gate-decision-bar')).toHaveTextContent('正在审查方案 v1')
 
     const detail = '模型返回的正文格式有误，无法解析，未保存本次报告。'
     // The trusted IPC handler broadcasts the persisted failure state in finally.
@@ -6442,10 +6592,10 @@ describe('App', () => {
       rejectReview?.(new Error(`基于知识的门禁审查在产物保存前失败：${detail}`))
     })
     expect(screen.getByTestId('toast')).toHaveTextContent(detail)
-    const panel = screen.getByTestId('task-review-run')
-    expect(panel).toHaveTextContent('上次门禁审查未完成')
+    const panel = screen.getByTestId('gate-decision-bar')
+    expect(panel).toHaveTextContent('上次审查没有完成，没有保存审查结果。')
     expect(panel).toHaveTextContent('可能产生费用')
-    const retry = within(panel).getByRole('button', { name: '重试门禁审查' })
+    const retry = within(panel).getByRole('button', { name: '审查方案 v1' })
     await waitFor(() => expect(retry).toBeEnabled())
     expect(api.runKnowledgeReview).toHaveBeenCalledTimes(1)
     expect(api.approveGate).not.toHaveBeenCalled()
@@ -6455,7 +6605,7 @@ describe('App', () => {
     await waitFor(() => expect(api.runKnowledgeReview).toHaveBeenCalledTimes(2))
     expect(vi.mocked(api.runKnowledgeReview).mock.calls[1]![0]).toEqual(vi.mocked(api.runKnowledgeReview).mock.calls[0]![0])
     await waitFor(() => expect(screen.getByTestId('readiness-group-review-evidence')).toHaveTextContent('已完成'))
-    expect(screen.queryByRole('button', { name: '重试门禁审查' })).not.toBeInTheDocument()
+    expect(screen.getByTestId('node-inspector')).not.toHaveTextContent('上次审查没有完成')
     expect(api.approveGate).not.toHaveBeenCalled()
     expect(screen.getByTestId('node-inspector')).toHaveTextContent('方案评审')
   })
@@ -6465,10 +6615,10 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => expect(api.listAgentProviders).toHaveBeenCalled())
-    const readinessBeforeReview = screen.getByTestId('gate-readiness-summary')
+    const readinessBeforeReview = screen.getByTestId('gate-decision-bar').querySelector('.gate-technical')!
     await waitFor(() => expect(readinessBeforeReview).toHaveTextContent('缺失'))
-    // The review runs in place from the status row (plan W2); its accessible name is its visible text.
-    const runReview = within(screen.getByTestId('task-status-row')).getByRole('button', { name: '审查当前方案' })
+    // The review runs in place from the bar (plan W2); its accessible name is its visible text.
+    const runReview = within(screen.getByTestId('gate-decision-bar')).getByRole('button', { name: '审查方案 v1' })
     await waitFor(() => expect(runReview).toBeEnabled())
     expect(api.runKnowledgeReview).not.toHaveBeenCalled()
     fireEvent.click(runReview)
@@ -7927,97 +8077,33 @@ describe('App', () => {
   })
 })
 
-it('drafts a revision suggestion beside the cited text and submits exactly the previewed request (#247)', async () => {
-  const created = createWorkflowRunFromRequest({ runId: 'suggestion-drafts', title: '任务文本编辑', request: '支持编辑任务文本', projectId: localProject.id, creatorId: 'reviewer', branchName: 'codex/suggestion-test', now: '2026-10-18T00:00:00Z' })
-  const node = created.run.nodes.find((item) => item.kind === 'agent' && item.stage === 'clarify')!
-  const content = '# Goals\n\n支持编辑任务文本\n\n## Acceptance Criteria\n\n保存前校验任务文本。'
-  const artifact: Artifact = { id: 'suggestion-artifact-v1', runId: created.run.id, nodeId: node.id, kind: 'clarification', title: '需求 v1', summary: '编辑', content, redacted: true, updatedAt: created.run.updatedAt,
-    clarificationRevision: { version: 1, revision: 1, status: 'review_requested', revisionDigest: 'a'.repeat(64), rawRequestArtifactId: created.artifacts[0]!.id, feedbackArtifactIds: [], goals: ['支持编辑任务文本'], acceptanceCriteria: ['保存前校验任务文本。'], nonGoals: [], assumptions: [], risks: [], openQuestions: [], generatedAt: created.run.updatedAt, executor: { version: 1, kind: 'direct-provider', executorId: 'fixture', executorVersion: '1', capabilityProfile: 'repository-read-only-v1', model: 'fixture', startedAt: created.run.updatedAt, completedAt: created.run.updatedAt, durationMs: 1, terminalReason: 'success', contextDigest: 'b'.repeat(64) } } }
-  const completed = completeWorkflowAgentNode({ run: created.run, nodeId: node.id, artifacts: created.artifacts, generatedArtifact: artifact, existingEvents: created.events, actorName: 'Reviewer', now: created.run.updatedAt })
-  const gateId = completed.run.currentNodeId
-  const digest = await sha256Text(content)
-  const quote = '保存前校验任务文本。'
-  const start = content.indexOf(quote)
-  const base = reviewedDesignGateState().agentReviews[0]!
-  const review: AgentReviewResult = {
-    ...base, id: 'review-suggestions', runId: completed.run.id, nodeId: gateId, projectId: completed.run.projectId, feedback: [],
-    missingEvidence: ['现有文本输入校验规则未核实'],
-    missingEvidenceDetails: [{ index: 0, assessment: 'gap', requiresReview: true, citations: [{ sourceId: artifact.id, title: '需求 v1', quote, contentDigest: digest, start, end: start + quote.length, updatedAt: artifact.updatedAt }] }],
-    contextManifest: { ...base.contextManifest!, stage: 'clarify', subjectArtifacts: [{ ...base.contextManifest!.subjectArtifacts[0]!, id: artifact.id, runId: artifact.runId, nodeId: artifact.nodeId, kind: 'clarification', updatedAt: artifact.updatedAt, contentDigest: digest }] },
-    gateAdvisory: { ...base.gateAdvisory, runId: completed.run.id, nodeId: gateId },
-  }
+it('imports #247 drafts into the requirement revision list and submits them from the bar (design §3.3)', async () => {
+  const f1 = await buildF1()
+  localStorage.setItem('devflow-revision-suggestions', JSON.stringify({ [f1.current.id]: [{
+    reviewId: f1.review!.id, index: 1, issue: F1_FINDINGS[1], finding: '核实过。', change: '验收标准写明多个关键词取交集。' }] }))
+  localStorage.setItem('devflow-revision-drafts', JSON.stringify({ [f1.current.id]: '补充撤销范围。' }))
   const save = vi.fn().mockRejectedValue(new Error('提交已记录'))
   installDesktopApi({
-    loadState: vi.fn().mockResolvedValue(desktopState({ projects: [localProject], runs: [completed.run], artifacts: completed.artifacts, events: [...created.events, completed.event], agentReviews: [review] })),
+    loadState: vi.fn().mockResolvedValue(desktopState({ projects: [{ ...localProject, id: f1.run.projectId }], runs: [f1.run], artifacts: f1.artifacts,
+      events: f1.events, agentReviews: f1.reviews, desktopPairingCredential: { ...fixturePairingCredential, localProjectId: f1.run.projectId } })),
     requestClarificationChanges: save,
   })
-  const first = render(<App />)
-  const acceptance = await screen.findByRole('tab', { name: /验收标准/ })
-  await waitFor(() => expect(acceptance).toHaveTextContent('1 条定位意见'))
-  fireEvent.click(acceptance)
-  fireEvent.click(screen.getByRole('button', { name: '审查意见 1' }))
-  let popover = screen.getByRole('dialog', { name: '审查意见 1' })
-  fireEvent.click(within(popover).getByRole('button', { name: '整理修订建议' }))
-  fireEvent.change(within(popover).getByLabelText('意见 1 的核实结论'), { target: { value: '先 trim() 再判空，按 Unicode 码点计数。' } })
-  fireEvent.change(within(popover).getByLabelText('意见 1 的拟修改内容'), { target: { value: '验收标准写明上限 200 个码点。' } })
-  fireEvent.click(within(popover).getByRole('button', { name: '保存到修订草稿' }))
-  // Saving a draft changes nothing in the workflow.
-  expect(save).not.toHaveBeenCalled()
-  expect(screen.getByTestId('task-status-row')).toHaveTextContent('需求 v1')
-  popover = screen.getByRole('dialog', { name: '审查意见 1' })
-  fireEvent.click(within(popover).getByRole('button', { name: '查看并提交修订请求' }))
-  const form = screen.getByRole('region', { name: '请求修订当前版本' })
-  expect(within(form).getByRole('region', { name: '已整理的意见修订建议' })).toHaveTextContent('意见 1：现有文本输入校验规则未核实')
-  fireEvent.change(within(form).getByLabelText('其他修订说明'), { target: { value: '补充撤销范围。' } })
-  const expected = '审查意见 1（review-suggestions）：现有文本输入校验规则未核实\n核实结论：先 trim() 再判空，按 Unicode 码点计数。\n拟修改内容：验收标准写明上限 200 个码点。\n\n其他修订说明：\n补充撤销范围。'
-  expect(within(form).getByTestId('revision-request-preview').textContent).toBe(expected)
-  // Drafts survive a reload of the page.
-  first.unmount()
   render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: '请求修订当前版本' }))
-  const reloaded = screen.getByRole('region', { name: '请求修订当前版本' })
-  expect(within(reloaded).getByTestId('revision-request-preview').textContent).toBe(expected)
-  fireEvent.click(within(reloaded).getByRole('button', { name: '确认提交修订请求' }))
+  const bar = () => screen.getByTestId('gate-decision-bar')
+  await waitFor(() => expect(within(bar()).getByRole('button', { name: /^修订清单 2 项/ })).toBeInTheDocument())
+  fireEvent.click(within(bar()).getByRole('button', { name: /^修订清单 2 项/ }))
+  expect(bar()).toHaveTextContent('验收标准写明多个关键词取交集。')
+  expect(bar()).toHaveTextContent('补充撤销范围。')
+  // The old form, its footer and its popover drafts are gone (design §3.19).
+  expect(screen.queryByRole('button', { name: '请求修订当前版本' })).not.toBeInTheDocument()
+  expect(screen.queryByText(/份未清除的修订草稿/)).not.toBeInTheDocument()
+  await waitFor(() => expect(within(bar()).getByRole('button', { name: '提交修订，生成 v2（2 项）' })).toBeEnabled())
+  fireEvent.click(within(bar()).getByRole('button', { name: '提交修订，生成 v2（2 项）' }))
   await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
-  expect(save).toHaveBeenCalledWith(expect.objectContaining({ artifactId: artifact.id, revision: 1, reason: expected }))
-})
-
-it('keeps revision drafts through page changes, failed submission, reload and a new artifact revision', async () => {
-  const created = createWorkflowRunFromRequest({ runId: 'draft-retention', title: '筛选需求', request: '任务清单筛选', projectId: localProject.id, creatorId: 'reviewer', branchName: 'codex/draft-test', now: '2026-09-26T00:00:00Z' })
-  const node = created.run.nodes.find((item) => item.kind === 'agent' && item.stage === 'clarify')!
-  const artifact: Artifact = { id: 'draft-artifact-v1', runId: created.run.id, nodeId: node.id, kind: 'clarification', title: '需求 v1', summary: '筛选', content: '# Goals\n\n支持筛选\n\n## Acceptance Criteria\n\n中文提示', redacted: true, updatedAt: created.run.updatedAt,
-    clarificationRevision: { version: 1, revision: 1, status: 'review_requested', revisionDigest: 'a'.repeat(64), rawRequestArtifactId: created.artifacts[0]!.id, feedbackArtifactIds: [], goals: ['支持筛选'], acceptanceCriteria: ['中文提示'], nonGoals: [], assumptions: [], risks: [], openQuestions: [], generatedAt: created.run.updatedAt, executor: { version: 1, kind: 'direct-provider', executorId: 'fixture', executorVersion: '1', capabilityProfile: 'repository-read-only-v1', model: 'fixture', startedAt: created.run.updatedAt, completedAt: created.run.updatedAt, durationMs: 1, terminalReason: 'success', contextDigest: 'b'.repeat(64) } } }
-  const completed = completeWorkflowAgentNode({ run: created.run, nodeId: node.id, artifacts: created.artifacts, generatedArtifact: artifact, existingEvents: created.events, actorName: 'Reviewer', now: created.run.updatedAt })
-  let rejectSave: (error: Error) => void = () => undefined
-  const save = vi.fn(() => new Promise<never>((_, reject) => { rejectSave = reject }))
-  const loadState = vi.fn().mockResolvedValue(desktopState({ projects: [localProject], runs: [completed.run], artifacts: completed.artifacts, events: [...created.events, completed.event] }))
-  installDesktopApi({ loadState, requestClarificationChanges: save })
-  const first = render(<App />)
-  await screen.findByRole('button', { name: '请求修订当前版本' })
-  fireEvent.click(screen.getByRole('button', { name: '请求修订当前版本' }))
-  const submit = screen.getByRole('button', { name: '确认提交修订请求' })
-  expect(submit).toBeDisabled()
-  fireEvent.change(screen.getByLabelText('结构化修订意见'), { target: { value: '未完成筛选为空时显示“暂无未完成任务”。' } })
-  for (const tab of ['材料与版本', '执行记录', '当前工作']) clickInspectorTab(tab)
-  expect(screen.getByLabelText('结构化修订意见')).toHaveValue('未完成筛选为空时显示“暂无未完成任务”。')
-  fireEvent.click(submit)
-  await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
-  expect(submit).toBeDisabled()
-  fireEvent.click(submit)
-  expect(save).toHaveBeenCalledTimes(1)
-  await act(async () => rejectSave(new Error('保存失败，请重试')))
-  expect(await screen.findByText('保存失败，请重试')).toBeVisible()
-  expect(screen.getByLabelText('结构化修订意见')).toHaveValue('未完成筛选为空时显示“暂无未完成任务”。')
-  first.unmount()
-  const second = render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: '请求修订当前版本' }))
-  expect(screen.getByLabelText('结构化修订意见')).toHaveValue('未完成筛选为空时显示“暂无未完成任务”。')
-  second.unmount()
-  const next = { ...artifact, id: 'draft-artifact-v2', clarificationRevision: { ...artifact.clarificationRevision!, revision: 2 } }
-  loadState.mockResolvedValue(desktopState({ projects: [localProject], runs: [{ ...completed.run, version: completed.run.version + 1, nodes: completed.run.nodes.map((item) => item.id === completed.run.currentNodeId ? { ...item, artifactIds: [next.id] } : item) }], artifacts: [...completed.artifacts, next] }))
-  render(<App />)
-  fireEvent.click(await screen.findByRole('button', { name: '请求修订当前版本' }))
-  expect(screen.getByLabelText('结构化修订意见')).toHaveValue('')
-  expect(screen.getByText('其他版本有 1 份未清除的修订草稿')).toBeVisible()
-  expect(save).toHaveBeenCalledTimes(1)
+  const reason = vi.mocked(save).mock.calls[0]![0].reason as string
+  expect(reason).toMatch(/^修订清单（共 2 项，针对需求 v1）：/u)
+  expect(reason).toContain('验收标准写明多个关键词取交集。')
+  expect(reason).toContain('补充撤销范围。')
+  await waitFor(() => expect(bar()).toHaveTextContent('修订请求没有提交，修订清单保留。请稍后重试。'))
+  expect(within(bar()).getByRole('button', { name: /^修订清单 2 项/ })).toBeInTheDocument()
 })
