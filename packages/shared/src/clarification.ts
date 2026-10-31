@@ -1,5 +1,6 @@
 import type {
   AgentEvent,
+  AgentReviewResult,
   Artifact,
   ClarificationFeedbackMetadata,
   ClarificationRepositoryFindings,
@@ -164,6 +165,37 @@ export function buildClarificationReviewBundle(input: {
       ? 'Raw Request、Repository Findings 与当前 Clarification Revision 已绑定。'
       : '当前版本可供审查，但尚未进行代码核验。',
   }
+}
+
+export type ClarificationReviewTarget =
+  | { state: 'none' }
+  | { state: 'legacy'; review: AgentReviewResult }
+  | { state: 'current'; review: AgentReviewResult }
+  | { state: 'stale'; review: AgentReviewResult; reviewedArtifactId?: string }
+
+/** The one rule for whether the latest Gate review targets the active clarification revision. */
+export function assessClarificationReviewTarget(input: {
+  runId: string
+  gateNodeId: string
+  reviews: readonly AgentReviewResult[]
+  activeRevision: Artifact
+}): ClarificationReviewTarget {
+  const review = input.reviews
+    .filter((candidate) => candidate.runId === input.runId && candidate.nodeId === input.gateNodeId)
+    .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]
+  if (!review) return { state: 'none' }
+  if (!review.contextManifest) return { state: 'legacy', review }
+  const subject = review.contextManifest.subjectArtifacts.find(
+    (artifact) => artifact.kind === 'clarification',
+  )
+  if (
+    !subject ||
+    subject.id !== input.activeRevision.id ||
+    subject.updatedAt !== input.activeRevision.updatedAt
+  ) {
+    return { state: 'stale', review, ...(subject ? { reviewedArtifactId: subject.id } : {}) }
+  }
+  return { state: 'current', review }
 }
 
 export function requireCurrentClarificationRevision(input: {

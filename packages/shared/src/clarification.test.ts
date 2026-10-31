@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createWorkflowRunFromRequest, completeWorkflowAgentNode } from './workflow'
 import {
+  assessClarificationReviewTarget,
   buildClarificationReviewBundle,
   requestClarificationChanges,
 } from './clarification'
-import type { Artifact } from './domain'
+import type { AgentReviewContextManifest, AgentReviewResult, Artifact } from './domain'
 
 const now = '2026-08-30T12:00:00.000Z'
 
@@ -114,5 +115,78 @@ describe('clarification revision review', () => {
       artifacts: [...value.artifacts, v2],
     })
     expect(bundle.state).toBe('stale_revision')
+  })
+})
+
+describe('assessClarificationReviewTarget', () => {
+  function review(
+    value: ReturnType<typeof fixture>,
+    overrides: Partial<AgentReviewResult> & { subject?: { id: string; updatedAt: string } | null } = {},
+  ): AgentReviewResult {
+    const { subject, ...rest } = overrides
+    const gateNodeId = value.run.currentNodeId
+    const manifest = {
+      version: 1,
+      subjectArtifacts: subject === null
+        ? []
+        : [{
+            id: subject?.id ?? value.artifact.id,
+            runId: value.run.id,
+            nodeId: gateNodeId,
+            kind: 'clarification',
+            updatedAt: subject?.updatedAt ?? value.artifact.updatedAt,
+          }],
+    } as unknown as AgentReviewContextManifest
+    return {
+      id: 'review-1',
+      requestId: 'request-1',
+      runId: value.run.id,
+      nodeId: gateNodeId,
+      projectId: 'project-1',
+      createdAt: '2026-08-30T12:01:00.000Z',
+      contextManifest: manifest,
+      ...rest,
+    } as AgentReviewResult
+  }
+
+  function assess(value: ReturnType<typeof fixture>, reviews: AgentReviewResult[]) {
+    return assessClarificationReviewTarget({
+      runId: value.run.id,
+      gateNodeId: value.run.currentNodeId,
+      reviews,
+      activeRevision: value.artifact,
+    })
+  }
+
+  it('returns none when the Gate node has no review', () => {
+    const value = fixture()
+    expect(assess(value, [])).toEqual({ state: 'none' })
+    expect(assess(value, [review(value, { nodeId: 'other-node' }), review(value, { runId: 'other-run' })]))
+      .toEqual({ state: 'none' })
+  })
+
+  it('returns legacy when the latest review has no context manifest', () => {
+    const value = fixture()
+    const legacy = review(value, { id: 'review-legacy', createdAt: '2026-08-30T12:02:00.000Z' })
+    delete legacy.contextManifest
+    expect(assess(value, [review(value), legacy])).toMatchObject({ state: 'legacy', review: { id: 'review-legacy' } })
+  })
+
+  it('returns current when the latest review targets the active revision', () => {
+    const value = fixture()
+    const old = review(value, { id: 'review-old', subject: { id: 'artifact-old', updatedAt: now } })
+    const latest = review(value, { id: 'review-latest', createdAt: '2026-08-30T12:03:00.000Z' })
+    expect(assess(value, [old, latest])).toMatchObject({ state: 'current', review: { id: 'review-latest' } })
+  })
+
+  it('returns stale with the reviewed artifact when the subject differs or is missing', () => {
+    const value = fixture()
+    expect(assess(value, [review(value, { subject: { id: 'artifact-v0', updatedAt: now } })]))
+      .toMatchObject({ state: 'stale', reviewedArtifactId: 'artifact-v0' })
+    expect(assess(value, [review(value, { subject: { id: value.artifact.id, updatedAt: '2026-08-30T11:00:00.000Z' } })]))
+      .toMatchObject({ state: 'stale', reviewedArtifactId: value.artifact.id })
+    const missing = assess(value, [review(value, { subject: null })])
+    expect(missing.state).toBe('stale')
+    expect(missing).not.toHaveProperty('reviewedArtifactId')
   })
 })
