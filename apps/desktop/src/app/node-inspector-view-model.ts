@@ -81,7 +81,7 @@ export type InspectorActionId =
   | 'cancelStageAgent'
   | 'syncTeam'
 
-export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride' | 'generateDesignRevision'
+export type PendingInspectorActionId = InspectorActionId | 'saveGateOverride' | 'generateDesignRevision' | 'requestClarificationRevision'
 
 export type PendingInspectorAction = {
   actionId: PendingInspectorActionId
@@ -1188,7 +1188,8 @@ export function countGateSuggestions(
   return (decision?.warningReasons ?? []).filter((reason) => reason.target !== 'missing_agent_review').length
 }
 
-const blockingTargetLabels: Record<GateEnforcementReason['target'], string> = {
+/** Policy target labels; the gate decision bar reads the same ones (UX batch 1). */
+export const blockingTargetLabels: Record<GateEnforcementReason['target'], string> = {
   governance_check: '规范检查未满足',
   agent_finding: 'AI 审查发现需要处理的问题',
   missing_agent_review: '缺少本阶段要求的 AI 审查',

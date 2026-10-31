@@ -10,6 +10,7 @@ import type {
 } from '@ai-devflow/shared'
 import { artifacts as fixtureArtifacts, runs as fixtureRuns } from '@ai-devflow/shared/fixtures'
 import {
+  blockingTargetLabels,
   buildGateReadinessPresentation,
   buildNodeInspectorViewModel,
   formatStatusState,
@@ -1267,5 +1268,12 @@ describe('status value wording (plan §6.3, T1)', () => {
     expect(formatStatusState('3 events')).toBe('有 3 条执行记录')
     expect(formatStatusState('2 linked')).toBe('已关联 2 份材料')
     expect(formatStatusState('待核实')).toBe('待核实')
+  })
+  it('exports exactly the three policy target labels the gate decision bar reuses', () => {
+    expect(blockingTargetLabels).toEqual({
+      governance_check: '规范检查未满足',
+      agent_finding: 'AI 审查发现需要处理的问题',
+      missing_agent_review: '缺少本阶段要求的 AI 审查',
+    })
   })
 })
