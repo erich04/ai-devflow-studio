@@ -5496,6 +5496,8 @@ describe('App', () => {
         expectedClarificationRevision: { artifactId: f1.current.id, revision: 1, revisionDigest: f1.current.clarificationRevision!.revisionDigest } }))
       await waitFor(() => expect(gateBar()).toHaveTextContent('已确认需求 v1。修订清单里的 1 项没有提交，仍可在需求 v1 的页面查看。'))
       expect(gateBar()).toHaveTextContent('需求 v1 已确认')
+      // The finished page starts with the list collapsed (review finding 5).
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单/ })).toHaveAttribute('aria-expanded', 'false')
       expect(api.requestClarificationChanges).not.toHaveBeenCalled()
     })
 
@@ -5537,8 +5539,11 @@ describe('App', () => {
       storeRevisionLists([await listFor(f3.current, [{ type: 'addOwn', text: '第一项' }, { type: 'addOwn', text: '第二项' }])])
       const { api } = await openGatePage(f3, { requestClarificationChanges: vi.fn() }, '需求 v2 · 你的决定')
       await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '10'))
+      openList()
       fireEvent.change(screen.getByRole('combobox', { name: '阅读需求版本' }), { target: { value: f3.previous!.id } })
       await waitFor(() => expect(screen.getByTestId('node-inspector')).toHaveTextContent('这是需求 v1 的审查，只能查看。'))
+      // Entering history mode collapses the list (review finding 5).
+      expect(within(gateBar()).getByRole('button', { name: /^修订清单/ })).toHaveAttribute('aria-expanded', 'false')
       expect(gateBar()).toHaveTextContent('需求 v2 · 你的决定')
       expect(within(gateBar()).getAllByRole('button').filter((button) => button.classList.contains('primary-button')).map((button) => button.textContent)).toEqual(['返回需求 v2'])
       expect(within(gateBar()).queryByRole('button', { name: /^确认|^审查|^提交/ })).not.toBeInTheDocument()

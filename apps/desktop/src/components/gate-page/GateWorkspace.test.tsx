@@ -282,6 +282,9 @@ describe('GateWorkspace layout', () => {
     const marker = material().querySelector<HTMLElement>('.gate-marker[data-card-id="finding-1"]')!
     fireEvent.click(marker)
     expect(within(screen.getByRole('dialog', { name: '意见 2 · 重要' })).getByRole('button', { name: '采纳' })).toBeInTheDocument()
+    // The card starts with its title, so the popover header shows only the close button (review finding 3).
+    expect(within(screen.getByRole('dialog', { name: '意见 2 · 重要' })).getAllByText('意见 2 · 重要')).toHaveLength(1)
+    expect(within(screen.getByRole('dialog', { name: '意见 2 · 重要' })).getByRole('button', { name: '关闭意见 2 · 重要' })).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(marker).toHaveFocus()

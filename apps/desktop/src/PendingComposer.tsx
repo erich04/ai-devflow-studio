@@ -35,7 +35,7 @@ export function ReferenceChips({ references, disabled = false, onRemove }: {
   </div>
 }
 
-export function PendingComposer({ draft, providerId, providerName, nativeReadOnlyPilotEnabled, modelReadinessError, error, onChange, onSend, onConfigure }: {
+export function PendingComposer({ draft, providerId, providerName, nativeReadOnlyPilotEnabled, modelReadinessError, error, onChange, onSend, onConfigure, onCancel }: {
   draft: PendingDraft
   providerId: string
   providerName: string
@@ -45,6 +45,8 @@ export function PendingComposer({ draft, providerId, providerName, nativeReadOnl
   onChange: (next: Partial<Pick<PendingDraft, 'executor' | 'text' | 'references'>>) => void
   onSend: () => void
   onConfigure: () => void
+  /** Drops the chip and the text without creating anything; not offered while sending. */
+  onCancel: () => void
 }) {
   const { sending } = draft
   const canSend = Boolean(draft.text.trim()) && Boolean(providerId) && !sending && !modelReadinessError
@@ -63,6 +65,7 @@ export function PendingComposer({ draft, providerId, providerName, nativeReadOnl
       onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); if (canSend) onSend() } }} />
     <div className="conversation-composer-footer">
       <span role="status">{sending ? '正在发送…' : providerName || '未配置模型'}</span>
+      {sending ? null : <button className="text-button" type="button" onClick={onCancel}>取消</button>}
       <button className="primary-button" type="submit" aria-label="发送消息" disabled={!canSend}><ArrowUp size={18} /></button>
     </div>
   </form>

@@ -284,6 +284,15 @@ describe('modes', () => {
     expect(unknown.bar.notes[0]).toMatchObject({ tone: 'ok', technical: 'user-9' })
     expect(unknown.bar.notes[0]!.text).toMatch(/^✓ 已确认 · /u)
   })
+  it('offers FR-9.6\'s empty texts only while the list can be edited (review finding 5)', async () => {
+    const f1 = await buildF1()
+    const input = await gateProjectionInput(f1)
+    expect(project(input).bar.list.emptyText).toBe('还没有修改。采纳审查意见、回答待确认问题，或点「＋ 添加其他修改」；右侧答疑里的建议也可以加入。')
+    expect(project({ ...input, mode: 'finished', finished: { at: '2026-10-30T09:30:00.000Z', actorId: 'user-1' } }).bar.list.emptyText).toBe('这个版本没有修订清单。')
+    const f3 = await buildF3()
+    expect(project(await gateProjectionInput(f3, { readingArtifactId: f3.previous!.id })).bar.list.emptyText).toBe('这个版本没有修订清单。')
+    expect(project(await gateProjectionInput(f3)).bar.list.emptyText).toBe('还没有修改。')  // row 10: read-only until reviewed
+  })
   it('history mode uses the review of vM, or says there is none (finding 19)', async () => {
     const f3 = await buildF3()
     const history = project(await gateProjectionInput(f3, { readingArtifactId: f3.previous!.id }))
@@ -291,9 +300,17 @@ describe('modes', () => {
     expect(history.margin.cards.length).toBeGreaterThan(0)
     expect(history.margin.cards.every((card) => !card.actionable && card.readOnlyReason === '历史版本，只能查看')).toBe(true)
     expect(history.material.readOnlyBanner).toBe('这是历史版本 需求 v1；当前是需求 v2。这里只能查看。')
-    // An adopted card of v1 names v2, the version generated from it, not v3.
+    // v1's list was submitted (v2 came from it): the card says so, and 第 K 项 is plain text (review finding 4).
     const adopted = project(await gateProjectionInput(f3, { readingArtifactId: f3.previous!.id, readingList: await listFor(f3.previous!, [adopt(1)]) }))
-    expect(adopted.margin.cards.find((card) => card.id === 'finding-1')?.statusText).toBe(`已采纳 · v2 里会处理：${F1_FINDINGS[1]}`)
+    const adoptedCard = adopted.margin.cards.find((card) => card.id === 'finding-1')
+    expect(adoptedCard?.statusText).toBe(`已采纳 · 已随修订提交：${F1_FINDINGS[1]}`)
+    expect(adoptedCard?.itemRef).toEqual({ itemId: expect.any(String), number: 1, static: true })
+    expect(adoptedCard?.actionable).toBe(false)
+    expect(adopted.material.bars.map((bar) => bar.label)).toContain('意见 2：修订清单第 1 项')
+    // Without a record that it was submitted, the card says it was not.
+    const withoutFeedback = { ...f3, artifacts: f3.artifacts.filter((artifact) => artifact.kind !== 'clarification_feedback') }
+    const unsubmitted = project(await gateProjectionInput(withoutFeedback, { readingArtifactId: f3.previous!.id, readingList: await listFor(f3.previous!, [adopt(1)]) }))
+    expect(unsubmitted.margin.cards.find((card) => card.id === 'finding-1')?.statusText).toBe('已采纳 · 没有提交')
     const none = project(await gateProjectionInput({ ...f3, reviews: [] }, { readingArtifactId: f3.previous!.id }))
     expect(none.margin.note).toBe('需求 v1 没有对应的审查记录。')
     expect(none.margin.cards.map((card) => card.id)).toEqual(['question-1', 'question-2'])

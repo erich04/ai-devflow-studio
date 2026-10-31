@@ -376,7 +376,8 @@ export function WorkbenchWorkspace({ api, projectId, projectName, runs, provider
     {pendingDraft && !showHistory && <PendingComposer draft={pendingDraft} providerId={providerId} providerName={providerName} modelReadinessError={modelReadinessError}
       nativeReadOnlyPilotEnabled={nativeReadOnlyPilotEnabled && !nativeConversationsEnabled} error={error} onConfigure={onConfigure}
       onChange={(next) => { const current = pendingDraftRef.current; if (current && !current.sending) setPendingDraft({ ...current, ...next }) }}
-      onSend={() => void sendPending()} />}
+      onSend={() => void sendPending()}
+      onCancel={() => { if (pendingDraftRef.current && !pendingDraftRef.current.sending) { setPendingDraft(null); setError('') } }} />}
     {active !== 'details' && !session && !showHistory && !pendingDraft && <p className="conversation-loading" role="status">{creating ? '正在创建独立对话…' : '正在恢复会话…'}</p>}
     {session && <div id={`chat-panel-${session.id}`} role="tabpanel" aria-labelledby={`chat-tab-${session.id}`} hidden={showHistory} className="workspace-conversation">
       <ConversationView modelReadinessError={modelReadinessError} key={session.id} session={session} runs={runs} providerId={providerId} providerName={providerName} onConfigure={onConfigure} onNavigate={navigate} command={runCommand}

@@ -122,6 +122,10 @@ export const gateCopy = {
   questionMergedHandled: (finding: number) => `也处理了审查意见 ${finding}`,
   adoptedStatus: (next: string, text: string) => `已采纳 · ${next.replace(/^(需求|方案) /u, '')} 里会处理：${text}`,
   inListStatus: (number: number) => `已加入修订清单（第 ${number} 项）`,
+  // History mode: the read version's list is already submitted or was never submitted (FR-6.1).
+  adoptedSubmittedStatus: (text: string) => `已采纳 · 已随修订提交：${text}`,
+  adoptedNotSubmittedStatus: '已采纳 · 没有提交',
+  historyItemRef: (number: number) => `修订清单第 ${number} 项`,
   undoAdopt: '撤回',
   changeAnswer: '改答案',
   declinedStatus: '不采纳',
@@ -164,6 +168,7 @@ export const gateCopy = {
   marginHistoryNoReview: (version: string) => `${version} 没有对应的审查记录。`,
   // Bars, tags, markers (§5.7)
   barLabel: (card: string, item: number) => `${card}：已加入修订清单第 ${item} 项`,
+  historyBarLabel: (card: string, item: number) => `${card}：修订清单第 ${item} 项`,
   newContent: '新加内容',
   // Material (§5.8)
   headerRequirementV1: '需求 v1 · 根据原始需求生成',
@@ -183,6 +188,9 @@ export const gateCopy = {
   listHeader: (version: string, next: string) => `对${version} 的修改 · 提交后生成 ${next.replace(/^(需求|方案) /u, '')}`,
   listEmptyRequirement: '还没有修改。采纳审查意见、回答待确认问题，或点「＋ 添加其他修改」；右侧答疑里的建议也可以加入。',
   listEmptyDesign: '还没有修改。采纳审查意见，或点「＋ 添加其他修改」；右侧答疑里的建议也可以加入。',
+  // FR-9.6's texts invite actions, so they appear only while the list can be edited.
+  listEmptyNoList: '这个版本没有修订清单。',
+  listEmptyReadOnly: '还没有修改。',
   addOwnButton: '＋ 添加其他修改',
   addOwnPlaceholder: '例如：在验收标准里补一条失败时的提示',
   editButton: '编辑',

@@ -198,6 +198,10 @@ export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists
   const [flashItem, setFlashItem] = useState<{ itemId: string; serial: number }>()
   useEffect(() => { setArmed(undefined) }, [view.bar.row, view.bar.title])
   useEffect(() => { setDrafts({}); setLastVisitedCardId(undefined) }, [current.id])
+  // A new version, page mode or history version starts with the list collapsed and every card shown
+  // (review finding 5). Returning from history keeps them, so a source label clicked there still works.
+  useEffect(() => { setListExpanded(false); setOnlyUnhandled(false) }, [current.id, page.mode])
+  useEffect(() => { if (readingArtifact) { setListExpanded(false); setOnlyUnhandled(false) } }, [readingArtifact?.id])
   const history = Boolean(readingArtifact)
   const apply = useCallback((op: RevisionListOp): RevisionListOpResult => (listTarget ? revisionLists.apply(listTarget, op)
     : { ok: false, message: '这个版本的修订清单还不可用。' }), [listTarget, revisionLists])

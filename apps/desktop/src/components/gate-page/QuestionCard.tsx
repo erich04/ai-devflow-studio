@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { gateCopy } from '../../app/gate-decision/copy'
 import type { CardView } from '../../app/gate-decision/projection'
 import { checkItemText, MAX_REVISION_ITEM_CHARACTERS } from '../../app/gate-decision/revision-list'
-import { cardClass, type CardLinkProps } from './FindingCard'
+import { cardClass, ItemRef, type CardLinkProps } from './FindingCard'
 import { useGateScope } from './GateDecisionScope'
 
 /** An open question that needs the user's decision (design §5.4). Answers stay in the scope across layout switches. */
@@ -35,7 +35,7 @@ export function QuestionCard({ card, linked, flashing, style, onLink }: { card: 
     <p className="gate-card-text">{card.text}</p>
     {card.mergedLines.map((line) => <p key={line} className="gate-card-merged" title={line}>{line}</p>)}
     {card.status === 'answered' && card.itemRef ? <p className="gate-card-status">
-      <button type="button" className="text-button" onClick={() => scope.showItem(card.itemRef!.itemId)}>{gateCopy.inListStatus(card.itemRef.number)}</button>
+      <ItemRef card={card} />
       {card.actionable && draft === undefined ? <> · <button type="button" className="text-button" onClick={() => scope.setDraft(key, card.answer ?? '')}>{gateCopy.changeAnswer}</button></> : null}
     </p> : null}
     {editing ? <form className="gate-card-answer" onSubmit={(event) => { event.preventDefault(); save() }}>

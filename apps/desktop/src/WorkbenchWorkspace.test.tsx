@@ -840,6 +840,26 @@ describe('pending composer and display text (design §5.10, amendment 34)', () =
     expect(screen.getAllByTestId('conversation-reference-card').map((chip) => chip.textContent)).toEqual(['引用：需求 v1 · 问题 1'])
   })
 
+  it('cancels the pending composer without creating anything, and offers no 「取消」 while sending (review finding 10)', async () => {
+    const f = pendingFixture({ hold: true })
+    await openPending(f)
+    expect(screen.getByRole('button', { name: '新建对话' })).toBeDisabled()
+    fireEvent.change(screen.getByRole('textbox', { name: '待发送的对话内容' }), { target: { value: '不问了' } })
+    fireEvent.click(within(screen.getByTestId('pending-composer')).getByRole('button', { name: '取消' }))
+    expect(screen.queryByTestId('pending-composer')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '新建对话' })).toBeEnabled()
+    expect(f.commands.filter((command) => command.type === 'create' || command.type === 'send')).toHaveLength(0)
+  })
+
+  it('hides 「取消」 while the pending message is being sent', async () => {
+    const f = pendingFixture({ hold: true })
+    await openPending(f)
+    typeAndSend('这个意见要怎么改？')
+    await waitFor(() => expect(f.commands.some((command) => command.type === 'create')).toBe(true))
+    expect(within(screen.getByTestId('pending-composer')).queryByRole('button', { name: '取消' })).not.toBeInTheDocument()
+    await act(async () => { f.release() })
+  })
+
   it('opens and flashes the message behind a 来自答疑 item, or says it is not on this machine', async () => {
     const f = fixture()
     await f.api.workbenchConversation({ type: 'create', projectId: run.projectId, title: '旧答疑' })

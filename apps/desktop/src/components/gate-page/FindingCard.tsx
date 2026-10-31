@@ -15,6 +15,13 @@ export const cardClass = (card: CardView, linked: boolean | undefined, flashing?
   'gate-card', `gate-card--${card.kind}`, card.level ? `gate-card--${card.level}` : '', `is-${card.status}`, linked ? 'is-linked' : '', flashing ? 'is-flashing' : '',
 ].filter(Boolean).join(' ')
 
+/** "已加入修订清单（第 K 项）" opens the bar's list; in history mode that list is another version's, so it is plain text. */
+export function ItemRef({ card }: { card: CardView }) {
+  const scope = useGateScope()
+  const ref = card.itemRef!
+  if (ref.static) return <span>{gateCopy.historyItemRef(ref.number)}</span>
+  return <button type="button" className="text-button" onClick={() => scope.showItem(ref.itemId)}>{gateCopy.inListStatus(ref.number)}</button>
+}
 /** A review finding in the margin or a marker popover (design §5.4). */
 export function FindingCard({ card, linked, flashing, style, onLink }: { card: CardView } & CardLinkProps) {
   const scope = useGateScope()
@@ -37,7 +44,7 @@ export function FindingCard({ card, linked, flashing, style, onLink }: { card: C
     {card.status === 'adopted' ? <>
       {card.statusText ? <p className="gate-card-status">{card.statusText}</p> : null}
       <p className="gate-card-status">
-        {card.itemRef ? <button type="button" className="text-button" onClick={() => scope.showItem(card.itemRef!.itemId)}>{gateCopy.inListStatus(card.itemRef.number)}</button> : null}
+        {card.itemRef ? <ItemRef card={card} /> : null}
         {card.actionable ? <> · <button type="button" className="text-button" onClick={() => run(scope.apply({ type: 'unadopt', reviewId: finding.reviewId, index: finding.index }))}>{gateCopy.undoAdopt}</button></> : null}
       </p>
     </> : null}

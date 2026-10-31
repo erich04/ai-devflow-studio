@@ -112,7 +112,8 @@ export type CardView = {
   blocks: BlockKey[]
   status: 'open' | 'adopted' | 'declined' | 'answered'
   statusText?: string
-  itemRef?: { itemId: string; number: number }
+  /** `static`: plain text, not a link (history mode, where the bar's list is another version's). */
+  itemRef?: { itemId: string; number: number; static?: true }
   actionable: boolean
   readOnlyReason?: string
   mergedLines: string[]
@@ -533,6 +534,12 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   // An older version's adopted cards name the version that follows it, not the one after the current version.
   const shownNext = reading ? nextVersionLabel(kind, reading.number) : next
   const itemNumber = (id: string | undefined) => shownItems.find((item) => item.id === id)
+  // History mode: the read version's list is submitted or was never submitted; nothing waits in it (FR-6.1).
+  const readingSubmitted = reading && input.readingList ? isListSubmitted(input.readingList, input.artifacts) : false
+  const adoptedText = (text: string) => !reading ? gateCopy.adoptedStatus(shownNext, text)
+    : readingSubmitted ? gateCopy.adoptedSubmittedStatus(text) : gateCopy.adoptedNotSubmittedStatus
+  const refOf = (numbered: { id: string; number: number } | undefined) => numbered
+    ? { itemRef: { itemId: numbered.id, number: numbered.number, ...(reading ? { static: true as const } : {}) } } : {}
   const findingCardsVisible = shownBinding.state === 'bound'
   let marginNote: string | undefined
   if (reading) {
@@ -561,8 +568,8 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
         id: findingCardId(finding.index), kind: 'finding', number: finding.number, title: gateCopy.findingTitle(finding.number, finding.level), text: finding.text,
         ...(finding.level ? { level: finding.level } : {}), ...(finding.anchor ? { anchor: finding.anchor } : {}),
         ranges: finding.citations.map(({ start, end }) => ({ start, end })), blocks: blocksOf(finding.citations),
-        status, ...(status === 'adopted' && item ? { statusText: gateCopy.adoptedStatus(shownNext, item.text) } : status === 'declined' ? { statusText: gateCopy.declinedStatus } : {}),
-        ...(numbered ? { itemRef: { itemId: numbered.id, number: numbered.number } } : {}),
+        status, ...(status === 'adopted' && item ? { statusText: adoptedText(item.text) } : status === 'declined' ? { statusText: gateCopy.declinedStatus } : {}),
+        ...refOf(numbered),
         actionable, ...(!actionable && readOnlyReason ? { readOnlyReason } : {}), mergedLines: [],
         finding: { reviewId: shownBinding.review!.id, index: finding.index, text: finding.text, ...(finding.level ? { level: finding.level } : {}) },
       })
@@ -581,7 +588,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
         title: answered ? gateCopy.questionAnsweredTitle(question.number, answered.text) : gateCopy.questionOpenTitle(question.number, important),
         text: question.text, ...(important ? { level: 'important' as const } : {}), ...(anchorBlock ? { anchor: blockKey(anchorBlock) } : {}),
         ranges, blocks: blocksOf(ranges), status: answered ? 'answered' : 'open',
-        ...(numbered ? { itemRef: { itemId: numbered.id, number: numbered.number } } : {}),
+        ...refOf(numbered),
         actionable, ...(!actionable && readOnlyReason ? { readOnlyReason } : {}),
         mergedLines: question.merged.map((finding) => answered ? gateCopy.questionMergedHandled(finding.number) : gateCopy.questionMergedLine(finding.number, finding.text)),
         ...(answered ? { answer: answered.text } : {}),
@@ -619,7 +626,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   }
   const toneOf = (card: CardView): BarView['tone'] => (card.kind === 'question' ? 'question' : card.level === 'important' ? 'important' : 'suggestion')
   const cardName = (card: CardView) => (card.kind === 'finding' ? `意见 ${card.number}` : `问题 ${card.number}`)
-  const barLabel = (card: CardView) => gateCopy.barLabel(cardName(card), card.itemRef?.number ?? 0)
+  const barLabel = (card: CardView) => (reading ? gateCopy.historyBarLabel : gateCopy.barLabel)(cardName(card), card.itemRef?.number ?? 0)
   for (const [key, list] of perBlock) {
     const sorted = [...list].sort((a, b) => a.number - b.number || kindOrder(a) - kindOrder(b))
     sorted.slice(0, 2).forEach((card, slot) => bars.push({ cardIds: [card.id], block: key, slot: slot as 0 | 1, tone: toneOf(card), label: barLabel(card) }))
@@ -643,7 +650,9 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   const listReadOnly = reading ? gateCopy.listReadOnlyHistory(reading.label, N) : listActionable ? undefined : readOnlyReason
   const list: ListView = {
     toggleLabel: gateCopy.listToggle(listCount), toggleEnabled: rowNumber !== '7a', ...(listCount === undefined ? {} : { count: listCount }),
-    header: gateCopy.listHeader(N, next), emptyText: kind === 'requirement' ? gateCopy.listEmptyRequirement : gateCopy.listEmptyDesign,
+    header: gateCopy.listHeader(N, next),
+    emptyText: listActionable ? (kind === 'requirement' ? gateCopy.listEmptyRequirement : gateCopy.listEmptyDesign)
+      : reading || mode === 'finished' || mode === 'sub-step' ? gateCopy.listEmptyNoList : gateCopy.listEmptyReadOnly,
     items: listItems, actionable: listActionable, ...(listReadOnly ? { readOnlyReason: listReadOnly } : {}),
     ...(mode === 'revision-pending' && input.submittedText ? { submittedText: input.submittedText } : {}),
     addLabel: gateCopy.addOwnButton, addPlaceholder: gateCopy.addOwnPlaceholder, generationLine,

@@ -27,7 +27,7 @@ export function GateMarker({ cardId }: { cardId: string }) {
   if (!card) return null
   const { label, ariaLabel } = markerLabels(card)
   return <DetailPopover className={`gate-marker gate-marker--${markerTone(card)} is-${card.status}`} label={null} title={ariaLabel} triggerLabel={ariaLabel}
-    restoreFocusOnOutside triggerAttributes={{ 'data-label': label, 'data-card-id': card.id }}>
+    restoreFocusOnOutside hideTitle triggerAttributes={{ 'data-label': label, 'data-card-id': card.id }}>
     <GateCard card={card} />
   </DetailPopover>
 }

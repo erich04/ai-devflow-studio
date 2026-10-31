@@ -280,6 +280,13 @@ try {
   await expect(pendingChip).toHaveAttribute('title', /读取于/)
   expect(requests.length).toBe(callsBeforeChip)
   await page.getByTestId('workbench-workspace').screenshot({ scale: 'css', path: path.join(output, '18-pending-composer.png') })
+  // 「取消」 drops the chip without creating anything and gives ＋ back.
+  await pendingComposer.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(pendingComposer).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '新建对话', exact: true })).toBeEnabled()
+  expect(requests.length).toBe(callsBeforeChip)
+  await page.getByTestId('node-inspector').getByRole('button', { name: '讨论此材料' }).first().click()
+  await expect(pendingComposer).toBeVisible()
   await pendingComposer.getByRole('textbox', { name: '待发送的对话内容' }).fill('流式推理验证')
   await pendingComposer.getByRole('button', { name: '发送消息', exact: true }).click()
   await expect(page.getByRole('button', { name: /推理过程.*生成中/ })).toHaveAttribute('aria-expanded', 'true')
