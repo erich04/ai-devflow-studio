@@ -2,10 +2,13 @@
  * The answer panel's 「加入修订清单」 button (design §5.10). Pure: the rows are evaluated in order
  * and the first match wins. The draft type is structural, so this module needs no Electron import.
  */
-import { listClarificationRevisions, numberDesignVersions, type Artifact, type WorkflowRun } from '@ai-devflow/shared'
+import { assessClarificationReviewTarget, listClarificationRevisions, numberDesignVersions, type AgentEvent, type AgentReviewResult, type Artifact, type WorkflowRun } from '@ai-devflow/shared'
 import { gateCopy, nextVersionLabel, versionLabel, type GateKind } from './copy'
-import type { GatePageMode } from './page'
-import { coveredByUnrecordedGeneration, proposalUsedBy, type NumberedItem, type StoredRevisionList } from './revision-list'
+import { resolveGatePage, type GatePageMode } from './page'
+import {
+  coveredByUnrecordedGeneration, deriveChatItems, findStoredList, listKey, numberItems, otherListsOf, proposalUsedBy,
+  type ListTarget, type NumberedItem, type RevisionListStore, type StoredRevisionList,
+} from './revision-list'
 /** The fields of a conversation draft (`ConversationDraft`) this module reads. */
 export type ChatDraft = {
   runId: string
@@ -28,6 +31,54 @@ export type ChatPageFacts = {
   items: readonly NumberedItem[]
   /** The current list and the other lists of the same run and stage. */
   lists: readonly StoredRevisionList[]
+}
+/** What a shown gate page reports for the answer panel: its chat facts plus the context chip's facts. */
+export type GateChatFacts = ChatPageFacts & {
+  runId: string
+  kind: GateKind
+  gateNodeId: string
+  agentNodeId: string
+  /** The current version's list target (a 「加入修订清单」 re-add writes there). */
+  listTarget?: ListTarget | undefined
+  history: boolean
+  shownLabel: string
+  /** The shown version is the confirmed one. */
+  shownApproved: boolean
+}
+/**
+ * Chat facts of a run whose page is not shown: the workflow rule and the mode only, because policy
+ * decisions are evaluated for the selected node alone (design §5.10, `pageFacts`).
+ */
+export function chatPageFactsFromRecords(input: {
+  run: WorkflowRun
+  kind: GateKind
+  artifacts: readonly Artifact[]
+  reviews: readonly AgentReviewResult[]
+  events: readonly AgentEvent[]
+  store: RevisionListStore
+}): ChatPageFacts | undefined {
+  const { run, kind, artifacts, store } = input
+  const gate = run.nodes.find((node) => node.stage === (kind === 'requirement' ? 'clarify' : 'design') && node.kind === 'gate')
+  const page = gate ? resolveGatePage({ run, node: gate, artifacts, reviews: input.reviews, events: input.events }) : undefined
+  if (!page) return undefined
+  const current = page.current.artifact
+  const list = findStoredList(store, { kind, runId: run.id, reading: current, ...(current.clarificationRevision ? { revision: current.clarificationRevision.revision } : {}) })
+  const others = otherListsOf(store, { kind, runId: run.id, ...(list ? { exceptKey: listKey(list.target) } : {}) })
+  const chat = page.mode === 'current'
+    ? deriveChatItems({ kind, runId: run.id, agentNodeId: page.agentNode.id, gateNodeId: page.gateNode.id, artifacts, list, otherLists: others })
+    : []
+  const reviewRule = kind === 'requirement'
+    ? assessClarificationReviewTarget({ runId: run.id, gateNodeId: page.gateNode.id, reviews: input.reviews, activeRevision: current }).state !== 'stale'
+    : true
+  return {
+    mode: page.mode,
+    current: { artifactId: current.id, ...(page.current.number === undefined ? {} : { number: page.current.number }) },
+    generationRunning: page.agentNode.status === 'running',
+    listActionable: page.mode === 'current' && page.determinable && reviewRule,
+    ...(list ? { listKey: listKey(list.target) } : {}),
+    items: numberItems(list?.items ?? [], chat),
+    lists: list ? [list, ...others] : others,
+  }
 }
 export type RevisionLink =
   | { state: 'none' }

@@ -14,6 +14,8 @@ export type DiscussionMaterial = {
   version: string
   /** Optional quote or review opinion; bounded when stored. */
   excerpt?: string
+  /** Gate pages only: the chip line, e.g. “需求 v1 · 意见 2 · 重要” (1–120 characters). */
+  label?: string
 }
 
 export type DiscussionReference = DiscussionMaterial & {
@@ -28,6 +30,8 @@ export type DiscussionReference = DiscussionMaterial & {
 
 export const MAX_REFERENCES_PER_CONVERSATION = 3
 const MAX_EXCERPT_CHARS = 1500
+/** The bound of one `display.references` item, checked by the main process (design §7). */
+export const MAX_REFERENCE_LABEL = 120
 /** Same bound as the conversation contract's `text` field. */
 export const MAX_CONVERSATION_TEXT = 12000
 
@@ -44,6 +48,7 @@ export function buildDiscussionReference(input: DiscussionMaterial & {
     materialId: input.materialId,
     materialTitle: input.materialTitle,
     version: input.version,
+    ...(input.label ? { label: input.label } : {}),
     ...(excerpt ? { excerpt: excerpt.length > MAX_EXCERPT_CHARS ? `${excerpt.slice(0, MAX_EXCERPT_CHARS)}…` : excerpt } : {}),
     projectName: input.projectName,
     runTitle: input.runTitle,
@@ -51,6 +56,19 @@ export function buildDiscussionReference(input: DiscussionMaterial & {
     stepTitle: input.stepTitle,
     readAt: input.readAt,
   }
+}
+
+/**
+ * The one-line chip of a reference, used for the composer chip and `display.references`. Always
+ * one line of 1–120 characters without control characters, never splitting a surrogate pair.
+ */
+export function referenceChipLabel(ref: Pick<DiscussionReference, 'label' | 'materialTitle' | 'version'>): string {
+  const raw = ref.label ?? `${ref.materialTitle}（${ref.version}）`
+  const label = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu, '').replace(/\s+/gu, ' ').trim() || '引用材料'
+  if (label.length <= MAX_REFERENCE_LABEL) return label
+  let end = MAX_REFERENCE_LABEL - 1
+  if (/[\uD800-\uDBFF]/u.test(label[end - 1]!)) end--
+  return `${label.slice(0, end)}…`
 }
 
 /** Adds or refreshes a card; the same material and version is kept once, newest last. */
@@ -78,7 +96,8 @@ function isReference(value: unknown): value is DiscussionReference {
   if (!value || typeof value !== 'object') return false
   const item = value as Record<string, unknown>
   return ['id', 'materialId', 'materialTitle', 'version', 'projectName', 'runTitle', 'stageLabel', 'stepTitle', 'readAt']
-    .every((key) => typeof item[key] === 'string') && (item['excerpt'] === undefined || typeof item['excerpt'] === 'string')
+    .every((key) => typeof item[key] === 'string') && (item['excerpt'] === undefined || typeof item['excerpt'] === 'string') &&
+    (item['label'] === undefined || (typeof item['label'] === 'string' && item['label'].length >= 1 && item['label'].length <= MAX_REFERENCE_LABEL))
 }
 
 /** Local UI state only; invalid or unavailable storage yields no cards, never an error. */

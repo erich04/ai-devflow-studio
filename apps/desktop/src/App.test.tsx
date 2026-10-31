@@ -42,6 +42,7 @@ import {
   buildF1, buildF1RevisionPending, buildF3, buildF4, buildF5, buildF6, F1_FINDINGS, F1_QUESTIONS, listFor, policyDecision, policyReason, type GateFixture,
 } from './testing/gate-fixtures'
 import { storeRevisionLists } from './testing/gate-page'
+import type { ConversationCommand, WorkbenchConversation } from '../electron/workbench-conversation-contract'
 import { clearContentDigestCacheForTests } from './app/useContentDigest'
 import { applyDesignRevision, createFakeAgentProvider, runWorkflowStageAgent } from '@ai-devflow/shared'
 import { buildWorkflowBoard, formatLocalTime } from './app/desktop-view-model'
@@ -5643,6 +5644,92 @@ describe('App', () => {
       await waitFor(() => expect(screen.getByRole('tab', { name: '当前工作', selected: true })).toBeInTheDocument())
       await waitFor(() => expect(document.activeElement?.closest('article')).toHaveAttribute('data-card-id'))
       expect(within(gateBar()).getByRole('button', { name: /^修订清单 0 项/ })).toBeInTheDocument()
+      expect(api.approveGate).not.toHaveBeenCalled()
+    })
+
+    /** A conversation API stub; `publish` saves the draft and the test pushes the new state. */
+    function conversationApi(sessions: WorkbenchConversation[]) {
+      const commands: ConversationCommand[] = []
+      const workbenchConversation = vi.fn(async (input: ConversationCommand) => {
+        commands.push(input)
+        const session = 'conversationId' in input ? sessions.find((item) => item.id === input.conversationId) : undefined
+        if (input.type === 'publish' && session) {
+          session.messages = session.messages.map((message) => message.id === input.messageId && message.draft
+            ? { ...message, draft: { ...message.draft, publishedArtifactId: `conversation-proposal-${message.id}` } } : message)
+          session.version++
+        }
+        if (input.type === 'update' && session) { if (input.inputDraft !== undefined) session.inputDraft = input.inputDraft; session.version++ }
+        return { conversations: structuredClone(sessions) }
+      })
+      return { commands, workbenchConversation, onWorkbenchConversationUpdated: vi.fn(() => () => {}) }
+    }
+    const chatPane = () => screen.getByTestId('workbench-workspace')
+
+    it('puts the 「讨论」 chip of a finding into a pending composer without a dialog, a send or a model call (AC42, AC44)', async () => {
+      const f1 = await buildF1()
+      const chat = conversationApi([])
+      const { api } = await openGatePage(f1, { workbenchConversation: chat.workbenchConversation, onWorkbenchConversationUpdated: chat.onWorkbenchConversationUpdated })
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      fireEvent.click(within(gateCard('意见 2 · 重要')).getByRole('button', { name: '讨论' }))
+      const composer = await within(chatPane()).findByTestId('pending-composer')
+      expect(within(composer).getByTestId('conversation-reference-card')).toHaveTextContent('引用：需求 v1 · 意见 2 · 重要')
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(chat.commands.filter((command) => command.type === 'create' || command.type === 'send')).toHaveLength(0)
+      expect(api.runKnowledgeReview).not.toHaveBeenCalled()
+      // The pane is named 答疑 and says which version the page shows (AC44).
+      expect(screen.getByRole('complementary', { name: '答疑' })).toBeVisible()
+      expect(screen.getByTestId('conversation-context-chip')).toHaveTextContent(`当前：${f1.run.title} · 需求澄清 · 需求 v1`)
+    })
+
+    it('keeps both chips after 「讨论」 on 问题 1 and then on 问题 2 of the same version (amendment 34)', async () => {
+      const chat = conversationApi([])
+      await openGatePage(await buildF1(), { workbenchConversation: chat.workbenchConversation, onWorkbenchConversationUpdated: chat.onWorkbenchConversationUpdated })
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      fireEvent.click(within(screen.getByRole('article', { name: /^问题 1/ })).getByRole('button', { name: '讨论' }))
+      await within(chatPane()).findByTestId('pending-composer')
+      fireEvent.change(within(chatPane()).getByRole('textbox', { name: '待发送的对话内容' }), { target: { value: '这两个问题怎么定？' } })
+      fireEvent.click(within(screen.getByRole('article', { name: /^问题 2/ })).getByRole('button', { name: '讨论' }))
+      await waitFor(() => expect(within(chatPane()).getAllByTestId('conversation-reference-card').map((chip) => chip.textContent))
+        .toEqual(['引用：需求 v1 · 问题 1', '引用：需求 v1 · 问题 2']))
+      expect(within(chatPane()).getByRole('textbox', { name: '待发送的对话内容' })).toHaveValue('这两个问题怎么定？')
+      expect(chat.commands.filter((command) => command.type === 'create' || command.type === 'send')).toHaveLength(0)
+    })
+
+    it('adds a chat answer to the list through the proposal save, opens the list at it, and re-adds it locally after 「移出」 (AC45, AC46)', async () => {
+      const f1 = await buildF1()
+      const ids = f1.run.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')!
+      const sessions: WorkbenchConversation[] = [{ id: 'chat-1', localProjectId: f1.run.projectId, executor: 'direct-provider', version: 1, title: '答疑', isOpen: true, inputDraft: '', status: 'idle', createdAt: '2026-10-30T08:40:00.000Z', updatedAt: '2026-10-30T08:50:00.000Z', messages: [
+        { id: 'u1', role: 'user', text: '验收标准还缺什么？', createdAt: '2026-10-30T08:49:00.000Z' },
+        { id: 'a1', role: 'assistant', text: '建议补一条。', createdAt: '2026-10-30T08:50:00.000Z', draft: { runId: f1.run.id, nodeId: ids.id, title: '补充多关键词规则', content: '多个关键词时任务标题需包含全部关键词。' } },
+      ] }]
+      const chat = conversationApi(sessions)
+      let push: Parameters<DevFlowDesktopApi['onLocalStateUpdated']>[0] | undefined
+      const { api } = await openGatePage(f1, { workbenchConversation: chat.workbenchConversation, onWorkbenchConversationUpdated: chat.onWorkbenchConversationUpdated,
+        onLocalStateUpdated: vi.fn((callback) => { push = callback; return vi.fn() }) })
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '15'))
+      const pane = chatPane()
+      fireEvent.click(await within(pane).findByRole('button', { name: '加入修订清单' }))
+      expect(within(pane).getByTestId('proposal-publish-preview')).toHaveTextContent('将作为「来自答疑」加入需求 v1 的修订清单。会保存为讨论提案；不会修改需求，也不会推进流程。')
+      fireEvent.click(within(pane).getByRole('button', { name: '确认保存提案' }))
+      await waitFor(() => expect(chat.commands.filter((command) => command.type === 'publish')).toEqual([{ type: 'publish', projectId: f1.run.projectId, conversationId: 'chat-1', messageId: 'a1' }]))
+      // Main broadcasts the full state after a publish; the proposal becomes a 来自答疑 item.
+      const proposal: Artifact = { id: 'conversation-proposal-a1', runId: f1.run.id, nodeId: ids.id, kind: 'log', title: '讨论提案（待确认）：补充多关键词规则', summary: '用户从独立会话明确保存的提案；未批准，也不代替本阶段的正式产物。', content: '# 补充多关键词规则\n\n多个关键词时任务标题需包含全部关键词。', redacted: true, updatedAt: '2026-10-30T09:00:00.000Z' }
+      await act(async () => { push?.(gateState({ ...f1, artifacts: [...f1.artifacts, proposal] })) })
+      const toggle = within(gateBar()).getByRole('button', { name: /^修订清单/ })
+      await waitFor(() => expect(toggle).toHaveAccessibleName(/^修订清单 1 项/))
+      // Adding never expands the list (FR-9.1, AC45).
+      expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      fireEvent.click(await within(pane).findByRole('button', { name: '已加入修订清单（第 1 项）' }))
+      await waitFor(() => expect(toggle).toHaveAttribute('aria-expanded', 'true'))
+      const list = within(gateBar()).getByRole('region', { name: /^对需求 v1 的修改/ })
+      expect(list).toHaveTextContent('来自答疑')
+      // 「移出」 re-enables the chat button; re-adding is local only (AC46).
+      fireEvent.click(within(list).getByRole('button', { name: '移出' }))
+      await waitFor(() => expect(toggle).toHaveAccessibleName(/^修订清单 0 项/))
+      fireEvent.click(await within(pane).findByRole('button', { name: '加入修订清单' }))
+      await waitFor(() => expect(toggle).toHaveAccessibleName(/^修订清单 1 项/))
+      expect(within(pane).getByRole('button', { name: '已加入修订清单（第 1 项）' })).toBeInTheDocument()
+      expect(chat.commands.filter((command) => command.type === 'publish')).toHaveLength(1)
       expect(api.approveGate).not.toHaveBeenCalled()
     })
 

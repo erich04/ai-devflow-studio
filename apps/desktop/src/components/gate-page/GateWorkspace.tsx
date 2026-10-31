@@ -139,7 +139,7 @@ export function GateWorkspace({ referenceLinks, revisionHistory }: {
         <strong>{material.header}</strong>
         <span className="meta">{material.recordedAt}</span>
         {scope.actions.onDiscuss ? <button type="button" className="text-button" onClick={() => scope.actions.onDiscuss?.({
-          materialId: shown.artifact.id, materialTitle: shown.artifact.title, version: shown.label,
+          materialId: shown.artifact.id, materialTitle: shown.artifact.title, version: shown.label, label: shown.label,
         })}>讨论此材料</button> : null}
       </div>
       {material.rawRequest ? <p className="gate-raw-request">

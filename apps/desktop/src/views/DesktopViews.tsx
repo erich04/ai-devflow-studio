@@ -61,6 +61,7 @@ import { ReviewRerunDialog } from './ReviewRerunDialog'
 import { describeGateReviewScope } from '../app/gate-review-scope'
 import { gateCopy } from '../app/gate-decision/copy'
 import { resolveGatePage, type GatePage } from '../app/gate-decision/page'
+import type { GateChatFacts } from '../app/gate-decision/chat-link'
 import { deriveReviewTarget, deriveRunFacts } from '../app/gate-decision/projection'
 import type { RevisionListsApi } from '../app/useRevisionLists'
 import type { GateWriteResult } from '../app/useDesktopActions'
@@ -371,6 +372,9 @@ export function Inspector({
   onRegenerateRequirementRevision,
   runAgentReviews = NO_REVIEWS,
   revisionLists,
+  revisionFocus,
+  onGateChatFacts,
+  onFocusChatItem,
   gatePolicyLoadError,
   gatePolicyEnabled = true,
   onReloadPolicy,
@@ -486,6 +490,12 @@ export function Inspector({
   /** All reviews of the selected run; the gate page reads the gate node's from here (§5.1). */
   runAgentReviews?: AgentReviewResult[] | undefined
   revisionLists?: RevisionListsApi | undefined
+  /** The answer panel's 「已加入修订清单（第 K 项）」: expand the list at that item. */
+  revisionFocus?: { serial: number; listKey?: string | undefined; itemId: string } | undefined
+  /** The shown gate page's facts for the answer panel (chat button, context chip). */
+  onGateChatFacts?: ((facts: GateChatFacts | undefined) => void) | undefined
+  /** A 来自答疑 source label: show its message in the answer panel. */
+  onFocusChatItem?: ((proposalId: string) => void) | undefined
   gatePolicyLoadError?: string | undefined
   /** False for seed preview data, which never evaluates a policy. */
   gatePolicyEnabled?: boolean | undefined
@@ -1798,6 +1808,7 @@ export function Inspector({
       onOpenReport: () => setRequestedTab(MATERIALS_TAB),
       onDiscuss: onDiscussMaterial,
       onFeedback: onRecordAgentReviewFeedback,
+      onFocusChatItem,
       renderStageSettings,
     }
     const currentWork = viewModel.activeTab.tabId === CURRENT_WORK_TAB
@@ -1815,7 +1826,8 @@ export function Inspector({
         ) : null}
         <GateDecisionScope page={page} run={selectedRun} artifacts={workflowArtifacts} reviews={runAgentReviews} revisionLists={revisionLists}
           facts={facts} actions={actions} currentWorkVisible={currentWork}
-          showCurrentWork={() => setRequestedTab(CURRENT_WORK_TAB)} showCurrentVersion={() => setDocumentId('')}>
+          showCurrentWork={() => setRequestedTab(CURRENT_WORK_TAB)} showCurrentVersion={() => setDocumentId('')}
+          revisionFocus={revisionFocus} onChatFacts={onGateChatFacts}>
           <GateDecisionBar />
           {isReviewConfirmationStale ? <p className="gate-note gate-note--warn" role="alert">审查记录、待审材料或模型已更新，本次未开始审查；请核对后重新开始。</p> : null}
           {tabBar}

@@ -27,6 +27,7 @@ export function FindingCard({ card, linked, flashing, style, onLink }: { card: C
     materialId: `${artifact.id}#review-${finding.reviewId}-${finding.index}`,
     materialTitle: `${artifact.title} · ${gateCopy.findingTitle(card.number, card.level)}`,
     version: scope.shown.label,
+    label: `${scope.shown.label} · ${gateCopy.findingTitle(card.number, card.level)}`,
     excerpt: `意见：${card.text}\n${(review?.missingEvidenceDetails?.find((item) => item.index === finding.index)?.citations ?? []).map((item) => `原文：${item.quote}`).join('\n')}`,
   })
   return <article className={cardClass(card, linked, flashing)} data-card-id={card.id} tabIndex={-1} style={style} aria-label={card.title}

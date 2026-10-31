@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Artifact } from '@ai-devflow/shared'
 import { buildF1, buildF3, nodeIdsOf } from '../../testing/gate-fixtures'
-import { draftMaterialVersion, revisionLinkForDraft, type ChatDraft, type ChatPageFacts } from './chat-link'
+import { chatPageFactsFromRecords, draftMaterialVersion, revisionLinkForDraft, type ChatDraft, type ChatPageFacts } from './chat-link'
 import { applyRevisionListOp, deriveChatItems, emptyRevisionList, numberItems, type StoredRevisionList } from './revision-list'
 const ids = nodeIdsOf()
 const digest = 'a'.repeat(64)
@@ -84,5 +84,19 @@ describe('revisionLinkForDraft (rows in order)', () => {
     expect(link({ publishedArtifactId: saved.id }, { ...facts(), items: [] }, legacy)).toEqual({ state: 'saved', text: '提案已保存；旧版本没有记录它是否写进了需求。' })
     expect(revisionLinkForDraft({ draft: { runId: 'gate-run', nodeId: ids.clarify }, message: v1Message, runs: [f1.run], artifacts: f1.artifacts, pageFacts: () => facts() }))
       .toEqual({ state: 'add', label: '加入修订清单', preview: '将作为「来自答疑」加入需求 v1 的修订清单。会保存为讨论提案；不会修改需求，也不会推进流程。' })
+  })
+})
+describe('chatPageFactsFromRecords (runs whose page is not shown)', () => {
+  it('uses the mode and the workflow review rule only', async () => {
+    const f1 = await buildF1()
+    const saved = proposal('p', ids.clarify, '2026-10-30T09:00:00.000Z')
+    const facts = chatPageFactsFromRecords({ run: f1.run, kind: 'requirement', artifacts: [...f1.artifacts, saved], reviews: f1.reviews, events: f1.events, store: { version: 1, lists: {} } })
+    expect(facts).toMatchObject({ mode: 'current', current: { artifactId: f1.current.id, number: 1 }, generationRunning: false, listActionable: true })
+    expect(facts?.items.map((item) => item.id)).toEqual([`chat-${saved.id}`])
+    // Requirement v2 whose only review targets v1: the workflow rule asks for a new review first.
+    const f3 = await buildF3()
+    expect(chatPageFactsFromRecords({ run: f3.run, kind: 'requirement', artifacts: f3.artifacts, reviews: f3.reviews, events: f3.events, store: { version: 1, lists: {} } }))
+      .toMatchObject({ current: { artifactId: f3.current.id, number: 2 }, listActionable: false })
+    expect(chatPageFactsFromRecords({ run: f1.run, kind: 'design', artifacts: f1.artifacts, reviews: f1.reviews, events: f1.events, store: { version: 1, lists: {} } })).toBeUndefined()
   })
 })

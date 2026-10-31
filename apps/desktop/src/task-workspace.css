@@ -236,6 +236,17 @@ main :is(button, input, select, textarea) { font-size: inherit; }
 .conversation-reference-card small { grid-column: 1; color: var(--text-muted); overflow-wrap: anywhere; }
 .conversation-reference-card .workspace-icon { grid-column: 2; grid-row: 1 / span 2; }
 .conversation-reference-cards > .meta { margin: 0; font-size: var(--font-size-xs); color: var(--text-muted); }
+/* 答疑 pane linked to the gate page (UX batch 1, design §5.10): one-line chips and the context line. */
+.workspace-pane-heading { flex: none; margin: 0; padding: 6px 12px 0; font-size: var(--font-size-xs); font-weight: 600; color: var(--text-muted); }
+.conversation-context-chip { flex: none; margin: 6px 12px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--font-size-xs); color: var(--text-muted); }
+.conversation-reference-chip { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 4px 8px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--bg); font-size: var(--font-size-xs); }
+.conversation-reference-chip > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-reference-line { margin: 0 0 4px; font-size: var(--font-size-xs); color: var(--text-muted); overflow-wrap: anywhere; }
+.pending-composer { display: grid; gap: 6px; }
+.pending-composer > p { margin: 0; }
+.conversation-revision-link { display: grid; gap: 4px; justify-items: start; }
+.conversation-revision-link > p { margin: 0; }
+.conversation-message.is-flashing { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent); }
 .conversation-publish-preview { display: grid; gap: 8px; padding: 10px; border: 1px dashed var(--border); border-radius: 8px; font-size: var(--font-size-xs); }
 .conversation-publish-preview p { margin: 0; }
 .conversation-publish-preview .inspector-actions { display: flex; gap: 8px; align-items: center; }

@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { numberDesignVersions, type AgentReviewResult, type Artifact, type DesignRevisionIdentity, type WorkflowRun } from '@ai-devflow/shared'
 import type { DiscussionMaterial } from '../../app/discussion-reference'
+import type { GateChatFacts } from '../../app/gate-decision/chat-link'
 import { versionLabel, type GateKind } from '../../app/gate-decision/copy'
 import { gateReadingBlocks, indexReadingBlocks, locateOpenQuestions, newBlocks, type BlockIndex, type BlockKey, type LocatedQuestion } from '../../app/gate-decision/material'
 import type { GatePage } from '../../app/gate-decision/page'
@@ -8,7 +9,7 @@ import { nextCardTarget } from '../../app/gate-decision/placement'
 import { deriveReviewTarget, projectGateDecision, type GateDecisionView, type GateProjectionInput, type GateVersionFacts } from '../../app/gate-decision/projection'
 import { bindReview, reviewCheckOf } from '../../app/gate-decision/review-binding'
 import {
-  deriveChatItems, findStoredList, listKey, otherListsOf,
+  deriveChatItems, findStoredList, listKey, numberItems, otherListsOf,
   type ListTarget, type RevisionListOp, type RevisionListOpResult,
 } from '../../app/gate-decision/revision-list'
 import { useContentDigest, useDesignIdentity } from '../../app/useContentDigest'
@@ -103,7 +104,7 @@ const previousIdOf = (artifact: Artifact | undefined) => artifact?.clarification
  * digest hooks in a fixed order, the projection, the armed confirm and the view state that must
  * survive tab and layout switches (3.26).
  */
-export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists, facts, actions, currentWorkVisible, showCurrentWork, showCurrentVersion, children }: {
+export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists, facts, actions, currentWorkVisible, showCurrentWork, showCurrentVersion, revisionFocus, onChatFacts, children }: {
   page: GatePage
   run: WorkflowRun
   artifacts: readonly Artifact[]
@@ -116,6 +117,10 @@ export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists
   currentWorkVisible: boolean
   showCurrentWork(): void
   showCurrentVersion(): void
+  /** 「已加入修订清单（第 K 项）」 in the answer panel: expand the list and flash the item (view only). */
+  revisionFocus?: { serial: number; listKey?: string | undefined; itemId: string } | undefined
+  /** Reports this page's chat facts and context-chip facts to the answer panel; `undefined` on unmount. */
+  onChatFacts?: ((facts: GateChatFacts | undefined) => void) | undefined
   children: ReactNode
 }) {
   const kind = page.kind
@@ -222,6 +227,38 @@ export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists
     if (readingDigest.state === 'failed') readingDigest.retry()
     if (designDigest.state === 'failed') designDigest.retry()
   }, [currentDigest, readingDigest, designDigest])
+  // 「已加入修订清单（第 K 项）」 from the answer panel (design §5.10).
+  const handledFocus = useRef<number | undefined>(undefined)
+  const currentListKey = listTarget ? listKey(listTarget) : undefined
+  useEffect(() => {
+    if (!revisionFocus || handledFocus.current === revisionFocus.serial) return
+    if (revisionFocus.listKey !== undefined && revisionFocus.listKey !== currentListKey) return
+    handledFocus.current = revisionFocus.serial
+    showItem(revisionFocus.itemId)
+  }, [revisionFocus, currentListKey, showItem])
+  // The answer panel's chat button and context chip read these facts; report only when they change.
+  const shownFacts = input.reading ?? input.current
+  const chatFacts = useMemo((): GateChatFacts => {
+    const lists = [...(input.list ? [input.list] : []), ...(input.otherLists ?? []).map((other) => other.list)]
+    return {
+      runId: run.id, kind, gateNodeId: page.gateNode.id, agentNodeId: page.agentNode.id, mode: page.mode,
+      current: { artifactId: current.id, ...(page.current.number === undefined ? {} : { number: page.current.number }) },
+      generationRunning: input.runFacts.generationRunning, listActionable: view.listActionable,
+      ...(view.bar.list.readOnlyReason ? { listReadOnlyReason: view.bar.list.readOnlyReason } : {}),
+      ...(currentListKey ? { listKey: currentListKey } : {}), ...(listTarget ? { listTarget } : {}),
+      items: numberItems(input.list?.items ?? [], input.chatItems ?? []), lists,
+      history: Boolean(input.reading), shownLabel: shownFacts.label,
+      shownApproved: page.gateNode.status === 'success' && shownFacts.artifact.id === current.id,
+    }
+  }, [run.id, kind, page, current.id, input, view.listActionable, view.bar.list.readOnlyReason, currentListKey, listTarget, shownFacts])
+  const chatFactsKey = JSON.stringify({ ...chatFacts,
+    items: chatFacts.items.map((item) => [item.id, item.number, item.source, item.chat?.proposal.id, item.chat?.proposal.updatedAt]) })
+  const reportChatFacts = useRef(onChatFacts)
+  reportChatFacts.current = onChatFacts
+  const latestChatFacts = useRef(chatFacts)
+  latestChatFacts.current = chatFacts
+  useEffect(() => { reportChatFacts.current?.(latestChatFacts.current) }, [chatFactsKey])
+  useEffect(() => () => reportChatFacts.current?.(undefined), [])
   const storageNotes = [revisionLists.droppedNotice, revisionLists.saveError].filter((text): text is string => Boolean(text))
   const shown = input.reading ?? input.current
   const value: GateScopeValue = {

@@ -26,7 +26,8 @@ export function QuestionCard({ card, linked, flashing, style, onLink }: { card: 
     materialId: `${artifact.id}#question-${card.number}`,
     materialTitle: `${artifact.title} · 问题 ${card.number}`,
     version: scope.shown.label,
-    excerpt: `待确认问题：${card.text}`,
+    label: `${scope.shown.label} · 问题 ${card.number}`,
+    excerpt: [`问题：${card.text}`, ...(card.merged ?? []).map((item) => `AI 审查也指出（意见 ${item.number}）：${item.text}`)].join('\n'),
   })
   return <article className={cardClass(card, linked, flashing)} data-card-id={card.id} tabIndex={-1} style={style} aria-label={card.title}
     onMouseEnter={() => onLink?.(card.id)} onMouseLeave={() => onLink?.(undefined)} onFocus={() => onLink?.(card.id)} onBlur={() => onLink?.(undefined)}>

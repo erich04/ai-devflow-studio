@@ -1,4 +1,6 @@
-import { DiscussionToggle, WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
+import { DiscussionToggle, WorkbenchWorkspace, type AddedRevisionLink, type ReAddRevisionLink, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
+import type { ConversationMessage } from '../electron/workbench-conversation-contract'
+import { chatPageFactsFromRecords, revisionLinkForDraft, type GateChatFacts, type RevisionLink } from './app/gate-decision/chat-link'
 import { TeamConnectionMenu, TopbarProjectMenu } from './views/TaskShell'
 import { TeamConnectionSettings } from './views/TeamConnectionSettings'
 import { SettingsView } from './views/SettingsView'
@@ -1202,6 +1204,48 @@ export function App() {
     setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'reference', reference }))
   }
 
+  // 答疑 linked to the gate page (design §5.10): the shown page reports its facts here.
+  const [gateChatFacts, setGateChatFacts] = useState<GateChatFacts | undefined>()
+  const [revisionFocus, setRevisionFocus] = useState<{ serial: number; listKey?: string | undefined; itemId: string }>()
+  const [focusMessage, setFocusMessage] = useState<{ serial: number; messageId: string }>()
+  const shownGateFacts = gateChatFacts && selectedRun && selectedNode && gateChatFacts.runId === selectedRun.id &&
+    (gateChatFacts.gateNodeId === selectedNode.id || gateChatFacts.agentNodeId === selectedNode.id) ? gateChatFacts : undefined
+  const viewContext = selectedRun && selectedNode ? (() => {
+    const step = stageLabels[selectedNode.stage]
+    if (shownGateFacts) {
+      const browsing = shownGateFacts.mode === 'finished' || shownGateFacts.mode === 'sub-step' || shownGateFacts.history
+      return { label: `${browsing ? '正在查看' : '当前'}：${selectedRun.title} · ${step} · ${shownGateFacts.shownLabel}${browsing && shownGateFacts.shownApproved ? '（已确认）' : ''}` }
+    }
+    return { label: `${isSelectedCurrentNode ? '当前' : '正在查看'}：${selectedRun.title} · ${step} · ${displayNodeTitle(selectedNode)}` }
+  })() : undefined
+  const revisionLinkFor = (message: ConversationMessage): RevisionLink => message.draft ? revisionLinkForDraft({
+    draft: message.draft, message, runs: scopedRuns, artifacts: scopedArtifacts,
+    pageFacts: (runId, kind) => {
+      if (shownGateFacts && shownGateFacts.runId === runId && shownGateFacts.kind === kind) return shownGateFacts
+      const run = scopedRuns.find((candidate) => candidate.id === runId)
+      return run ? chatPageFactsFromRecords({ run, kind, artifacts: scopedArtifacts, reviews: agentReviews, events: scopedEvents, store: revisionLists.store }) : undefined
+    },
+  }) : { state: 'none' }
+  /** 「已加入修订清单（第 K 项）」: show the gate page and expand its list at that item (view only). */
+  function openRevisionItem(link: AddedRevisionLink, message: ConversationMessage) {
+    const run = scopedRuns.find((candidate) => candidate.id === message.draft?.runId)
+    const stage = run?.nodes.find((node) => node.id === message.draft?.nodeId)?.stage
+    const gate = run?.nodes.find((node) => node.stage === stage && node.kind === 'gate')
+    if (!run || !gate) return
+    const shown = shownGateFacts?.runId === run.id && shownGateFacts.kind === (stage === 'clarify' ? 'requirement' : 'design')
+    if (!shown) selectRunNode(run.id, gate.id)
+    setRevisionFocus((previous) => ({ serial: (previous?.serial ?? 0) + 1, ...(link.listKey ? { listKey: link.listKey } : {}), itemId: link.itemId }))
+  }
+  /** 「加入修订清单」 for a removed 来自答疑 proposal: local only, no IPC. */
+  function reAddChatItem(link: ReAddRevisionLink) {
+    const target = (link.listKey ? revisionLists.store.lists[link.listKey]?.target : undefined) ??
+      (shownGateFacts && shownGateFacts.listKey === link.listKey ? shownGateFacts.listTarget : undefined)
+    if (!target) return
+    const result = revisionLists.apply(target, { type: 'chatReAdd', proposalId: link.proposalId })
+    if (!result.ok) setToast(result.message)
+  }
+  const reportGateChatFacts = useCallback((facts: GateChatFacts | undefined) => setGateChatFacts(facts), [])
+
   /** 「在任务中处理」 in settings: back to the task's actual step, nothing runs (W5). */
   function handleInTask() {
     if (supportContext && (supportContext.focusTarget === 'coding-agent' || supportContext.focusTarget === 'local-tests')) {
@@ -1494,6 +1538,11 @@ export function App() {
                   providerId={selectedAgentProviderId}
                   providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
                   request={workbenchOpenRequest}
+                  viewContext={viewContext}
+                  revisionLinkFor={revisionLinkFor}
+                  onOpenRevisionItem={openRevisionItem}
+                  onReAddChatItem={reAddChatItem}
+                  focusMessage={focusMessage}
                   onConfigure={() => openSettingsFromTask('models')}
                   onNavigate={(action) => {
                     selectRunNode(action.runId, action.nodeId)
@@ -1607,6 +1656,9 @@ export function App() {
                   onRegenerateRequirementRevision={regenerateGateRequirement}
                   runAgentReviews={runAgentReviews}
                   revisionLists={revisionLists}
+                  revisionFocus={revisionFocus}
+                  onGateChatFacts={reportGateChatFacts}
+                  onFocusChatItem={(proposalId) => setFocusMessage((previous) => ({ serial: (previous?.serial ?? 0) + 1, messageId: proposalId.replace(/^conversation-proposal-/u, '') }))}
                   gatePolicyLoadError={gateEnforcement.loadError || undefined}
                   gatePolicyEnabled={dataOrigin !== 'seed'}
                   onReloadPolicy={() => void gateEnforcement.refresh().catch(() => {})}
