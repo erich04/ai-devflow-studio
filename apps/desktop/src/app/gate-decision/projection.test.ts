@@ -277,6 +277,9 @@ describe('modes', () => {
     expect(noteTexts(view)[1]).toBe('确认时修订清单里还有 1 项没有提交')
     expect(view.bar.meta.stepNote).toBe('这一步已完成；浏览这里不会改变实际进度。')
     expect(view.margin).toMatchObject({ note: '需求 v1 已确认。这里只能查看，意见不能再处理。', cards: [] })
+    // A team member's stored role is shown with the same label as the bar's permission line.
+    const owner = project({ ...input, mode: 'finished', finished: { at: '2026-10-30T09:30:00.000Z', confirmer: { name: 'Erich', role: 'owner' }, actorId: 'user-2' } })
+    expect(owner.bar.notes[0]!.text).toMatch(/^✓ 确认人 Erich（Owner）· /u)
     const unknown = project({ ...input, mode: 'finished', finished: { at: '2026-10-30T09:30:00.000Z', actorId: 'user-9' } })
     expect(unknown.bar.notes[0]).toMatchObject({ tone: 'ok', technical: 'user-9' })
     expect(unknown.bar.notes[0]!.text).toMatch(/^✓ 已确认 · /u)
@@ -288,6 +291,9 @@ describe('modes', () => {
     expect(history.margin.cards.length).toBeGreaterThan(0)
     expect(history.margin.cards.every((card) => !card.actionable && card.readOnlyReason === '历史版本，只能查看')).toBe(true)
     expect(history.material.readOnlyBanner).toBe('这是历史版本 需求 v1；当前是需求 v2。这里只能查看。')
+    // An adopted card of v1 names v2, the version generated from it, not v3.
+    const adopted = project(await gateProjectionInput(f3, { readingArtifactId: f3.previous!.id, readingList: await listFor(f3.previous!, [adopt(1)]) }))
+    expect(adopted.margin.cards.find((card) => card.id === 'finding-1')?.statusText).toBe(`已采纳 · v2 里会处理：${F1_FINDINGS[1]}`)
     const none = project(await gateProjectionInput({ ...f3, reviews: [] }, { readingArtifactId: f3.previous!.id }))
     expect(none.margin.note).toBe('需求 v1 没有对应的审查记录。')
     expect(none.margin.cards.map((card) => card.id)).toEqual(['question-1', 'question-2'])

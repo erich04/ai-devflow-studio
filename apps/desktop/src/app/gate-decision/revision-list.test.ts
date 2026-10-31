@@ -172,6 +172,10 @@ describe('composition (§5.6)', () => {
     // The 来自答疑 line without a note.
     expect(composeRevisionText(numberItems([], [{ ...chat[0]!, note: undefined } as never]), { kind: 'requirement', version: '需求 v1' }))
       .toContain('1. 来自答疑：采用已保存的答疑提案「搜索结果排序」（提交这份修订清单时随附全文）。')
+    // An answer that already ends a sentence gets no second 「。」.
+    const ended = apply(emptyRevisionList(target, t(0)), { type: 'answer', question: { index: 0, text: '搜索是否区分大小写？', merged: [] }, answer: '不区分。' })
+    expect(composeRevisionText(numberItems(ended.items), { kind: 'requirement', version: '需求 v1' }))
+      .toContain('的回答是：不区分。请把这个决定写进需求正文的相应位置')
   })
   it('reports an overflow with the exact counts and never truncates (AC27)', () => {
     expect(measureRevisionText('x'.repeat(4000))).toEqual({ length: 4000, limit: 4000, over: 0 })

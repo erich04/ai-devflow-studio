@@ -221,7 +221,7 @@ export const gateCopy = {
   composeFinding: (number: number, text: string) => `来自意见 ${number}：${text}`,
   composeFindingOriginal: (text: string) => `审查意见原文：${text}`,
   composeQuestion: (number: number, question: string, answer: string) =>
-    `来自问题 ${number}：待确认问题「${question}」的回答是：${answer}。请把这个决定写进需求正文的相应位置，并从待确认问题中删除这个问题。`,
+    `来自问题 ${number}：待确认问题「${question}」的回答是：${answer}${/[。！？.!?]$/u.test(answer) ? '' : '。'}请把这个决定写进需求正文的相应位置，并从待确认问题中删除这个问题。`,
   composeQuestionMerged: (finding: number, text: string) => `这个回答也处理了审查意见 ${finding}：${text}`,
   composeChat: (title: string, note?: string) => `来自答疑：采用已保存的答疑提案「${title}」（提交这份修订清单时随附全文）。${note ? `补充说明：${note}` : ''}`,
   composeOwn: (text: string) => `我添加的：${text}`,

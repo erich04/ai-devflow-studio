@@ -315,7 +315,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
     // 1, then 3 and 5 before 2 (amendment 35), 4, 6, 7, 7a, 7b.
     if (mode === 'finished') {
       const notes: GateNote[] = [{ tone: 'ok', text: input.finished?.confirmer
-        ? gateCopy.finishedBy(input.finished.confirmer.name, input.finished.confirmer.role, formatLocalTime(input.finished.at))
+        ? gateCopy.finishedBy(input.finished.confirmer.name, roleLabel(input.finished.confirmer.role), formatLocalTime(input.finished.at))
         : gateCopy.finishedAt(formatLocalTime(input.finished?.at ?? current.artifact.updatedAt)), ...(input.finished?.actorId && !input.finished.confirmer ? { technical: input.finished.actorId } : {}) }]
       const unsubmitted = input.list?.confirmedWithout?.count
       if (unsubmitted) notes.push({ tone: 'neutral', text: gateCopy.finishedUnsubmitted(unsubmitted) })
@@ -530,6 +530,8 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   const shownBinding = shown.binding
   const shownReviewId = shownBinding.state === 'bound' ? shownBinding.review?.id : undefined
   const shownItems = reading ? numberItems(input.readingList?.items ?? []) : items
+  // An older version's adopted cards name the version that follows it, not the one after the current version.
+  const shownNext = reading ? nextVersionLabel(kind, reading.number) : next
   const itemNumber = (id: string | undefined) => shownItems.find((item) => item.id === id)
   const findingCardsVisible = shownBinding.state === 'bound'
   let marginNote: string | undefined
@@ -559,7 +561,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
         id: findingCardId(finding.index), kind: 'finding', number: finding.number, title: gateCopy.findingTitle(finding.number, finding.level), text: finding.text,
         ...(finding.level ? { level: finding.level } : {}), ...(finding.anchor ? { anchor: finding.anchor } : {}),
         ranges: finding.citations.map(({ start, end }) => ({ start, end })), blocks: blocksOf(finding.citations),
-        status, ...(status === 'adopted' && item ? { statusText: gateCopy.adoptedStatus(next, item.text) } : status === 'declined' ? { statusText: gateCopy.declinedStatus } : {}),
+        status, ...(status === 'adopted' && item ? { statusText: gateCopy.adoptedStatus(shownNext, item.text) } : status === 'declined' ? { statusText: gateCopy.declinedStatus } : {}),
         ...(numbered ? { itemRef: { itemId: numbered.id, number: numbered.number } } : {}),
         actionable, ...(!actionable && readOnlyReason ? { readOnlyReason } : {}), mergedLines: [],
         finding: { reviewId: shownBinding.review!.id, index: finding.index, text: finding.text, ...(finding.level ? { level: finding.level } : {}) },
