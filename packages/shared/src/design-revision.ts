@@ -1,4 +1,8 @@
-import { sha256Text } from './clarification'
+import {
+  buildDesignRevisionIdentity,
+  isSavedDesignProposal,
+  sameDesignRevision,
+} from './artifact-identity'
 import type { AgentEvent, Artifact, DesignRevisionIdentity, WorkflowNode, WorkflowRun } from './domain'
 
 /**
@@ -7,9 +11,12 @@ import type { AgentEvent, Artifact, DesignRevisionIdentity, WorkflowNode, Workfl
  * what the reviewer reads (title, summary and body). Renderer and main process share this code.
  */
 
-export async function createDesignRevisionDigest(artifact: Pick<Artifact, 'title' | 'summary' | 'content'>): Promise<string> {
-  return sha256Text(JSON.stringify({ title: artifact.title, summary: artifact.summary, content: artifact.content }))
-}
+export {
+  buildDesignRevisionIdentity,
+  createDesignRevisionDigest,
+  isSavedDesignProposal,
+  sameDesignRevision,
+} from './artifact-identity'
 
 export type DesignGateMaterial =
   | { state: 'ready'; artifact: Artifact; message: string }
@@ -42,26 +49,10 @@ export function resolveDesignGateMaterial(input: {
   return { state: 'ready', artifact, message: '方案评审 Gate 关联了一份待评审的方案。' }
 }
 
-export async function buildDesignRevisionIdentity(artifact: Artifact): Promise<DesignRevisionIdentity> {
-  return {
-    artifactId: artifact.id,
-    updatedAt: artifact.updatedAt,
-    contentDigest: await createDesignRevisionDigest(artifact),
-  }
-}
-
-export function sameDesignRevision(left: DesignRevisionIdentity, right: DesignRevisionIdentity): boolean {
-  return left.artifactId === right.artifactId && left.updatedAt === right.updatedAt && left.contentDigest === right.contentDigest
-}
-
 export type DesignRevisionRequest = {
   expectedRunVersion: number
   previous: DesignRevisionIdentity
   proposals: DesignRevisionIdentity[]
-}
-
-export function isSavedDesignProposal(artifact: Artifact): boolean {
-  return artifact.kind === 'log' && artifact.id.startsWith('conversation-proposal-')
 }
 
 /** Used both before a model call and before committing it. Never reopens a completed step. */

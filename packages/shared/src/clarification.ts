@@ -8,7 +8,10 @@ import type {
   WorkflowNode,
   WorkflowRun,
 } from './domain'
+import { sha256Text } from './digest'
 import { redactSensitiveText } from './redaction'
+
+export { sha256Text } from './digest'
 
 const digestPattern = /^[a-f0-9]{64}$/u
 const maxFeedbackCharacters = 4_000
@@ -49,13 +52,6 @@ export type RequestClarificationChangesResult = {
   feedbackArtifact: Artifact
   event: AgentEvent
   clarificationNode: WorkflowNode
-}
-
-export async function sha256Text(value: string): Promise<string> {
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
 }
 
 export async function createClarificationRevisionDigest(input: {

@@ -37,6 +37,7 @@ import type {
   WorkflowRun,
 } from './domain'
 import { redactSensitiveText } from './redaction'
+import { isSavedDiscussionProposal } from './artifact-identity'
 import { resolveDesignClarificationInput } from './design-input'
 import { isSavedDesignProposal, resolveDesignRevisionInput, type DesignRevisionRequest } from './design-revision'
 import { assembleKnowledgeStageContext, describeKnowledgeContextManifest } from './knowledge-context'
@@ -222,10 +223,6 @@ function defaultSummaryForStage(input: {
   return input.stage === 'clarify'
     ? `Clarified scope for ${input.run.title}`
     : `Implementation and test strategy for ${input.run.title}`
-}
-
-function isSavedDiscussionProposal(artifact: Pick<Artifact, 'id' | 'kind'>): boolean {
-  return artifact.kind === 'log' && artifact.id.startsWith('conversation-proposal-')
 }
 
 function buildWorkflowArtifactContext(input: {
