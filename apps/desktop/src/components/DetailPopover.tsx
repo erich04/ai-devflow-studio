@@ -3,8 +3,12 @@ import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 
 /** Read-only details anchored to a toolbar or citation, outside clipped scroll panes. */
-export function DetailPopover({ label, children, title, triggerLabel, className = '', hoverPreview = false }: {
+export function DetailPopover({ label, children, title, triggerLabel, className = '', hoverPreview = false, restoreFocusOnOutside = false, triggerAttributes }: {
   label: ReactNode; title: string; className?: string; hoverPreview?: boolean
+  /** After an outside pointerdown, close and focus the trigger if focus fell to `body` (gate markers, AC38). */
+  restoreFocusOnOutside?: boolean
+  /** Extra `data-*` attributes of the trigger (e.g. a marker's visible label). */
+  triggerAttributes?: Record<`data-${string}`, string> | undefined
   /** A function receives `close`, so an action inside can close the popover before navigating. */
   children: ReactNode | ((close: () => void) => ReactNode)
   /** Accessible name of the trigger when its visible text carries state beyond the title (WCAG 2.5.3). */
@@ -14,13 +18,14 @@ export function DetailPopover({ label, children, title, triggerLabel, className 
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const restoreTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [mode, setMode] = useState<'closed' | 'preview' | 'pinned'>('closed')
   const open = mode !== 'closed'
   const [position, setPosition] = useState({ top: 0, left: 0, width: 420, maxHeight: window.innerHeight - 24 })
   const clearTimer = () => { clearTimeout(timer.current) }
   const close = () => { clearTimer(); setMode('closed'); trigger.current?.focus({ preventScroll: true }) }
   const leave = () => { clearTimer(); if (mode === 'preview') timer.current = setTimeout(() => setMode('closed'), 180) }
-  useEffect(() => () => clearTimeout(timer.current), [])
+  useEffect(() => () => { clearTimeout(timer.current); clearTimeout(restoreTimer.current) }, [])
   useLayoutEffect(() => {
     if (!open) return
     const place = () => {
@@ -50,16 +55,23 @@ export function DetailPopover({ label, children, title, triggerLabel, className 
     document.dispatchEvent(new CustomEvent('devflow:detail-open', { detail: id }))
     const anotherOpened = (event: Event) => { if ((event as CustomEvent<string>).detail !== id) setMode('closed') }
     const outside = (event: PointerEvent) => {
-      if (!panel.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setMode('closed')
+      if (panel.current?.contains(event.target as Node) || trigger.current?.contains(event.target as Node)) return
+      setMode('closed')
+      if (!restoreFocusOnOutside) return
+      // Focus moves after pointerdown; check once it has settled.
+      clearTimeout(restoreTimer.current)
+      restoreTimer.current = setTimeout(() => {
+        if (!document.activeElement || document.activeElement === document.body) trigger.current?.focus({ preventScroll: true })
+      }, 0)
     }
     const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); close() } }
     document.addEventListener('pointerdown', outside)
     document.addEventListener('keydown', escape)
     document.addEventListener('devflow:detail-open', anotherOpened)
     return () => { document.removeEventListener('pointerdown', outside); document.removeEventListener('keydown', escape); document.removeEventListener('devflow:detail-open', anotherOpened) }
-  }, [open, id])
+  }, [open, id, restoreFocusOnOutside])
   return <>
-    <button type="button" ref={trigger} className={className} aria-label={triggerLabel ?? title} aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? id : undefined}
+    <button type="button" ref={trigger} className={className} {...triggerAttributes} aria-label={triggerLabel ?? title} aria-expanded={open} aria-haspopup="dialog" aria-controls={open ? id : undefined}
       onMouseEnter={() => { clearTimer(); if (hoverPreview && mode === 'closed') timer.current = setTimeout(() => setMode('preview'), 200) }} onMouseLeave={leave}
       onClick={() => { clearTimer(); setMode(mode === 'pinned' ? 'closed' : 'pinned') }}>{label}</button>
     {open && createPortal(<div id={id} ref={panel} className="detail-popover" role="dialog" aria-label={title} tabIndex={-1} style={position}
