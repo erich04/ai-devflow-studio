@@ -650,6 +650,28 @@ describe('IPC contract parsers', () => {
     }
   })
 
+  it('accepts a bounded design change list with 0-20 proposals', () => {
+    const identity = { artifactId: 'design', updatedAt: '2026-10-10T00:00:00.000Z', contentDigest: 'a'.repeat(64) }
+    const proposal = (index: number) => ({ ...identity, artifactId: `conversation-proposal-${index}` })
+    const designRevision = { expectedRunVersion: 4, previous: identity, proposals: [], changeRequest: '1. 来自意见 2：补充失败重试。' }
+    const payload = { runId: 'run', nodeId: 'design-gate', userId: 'u', userName: 'User', designRevision }
+    expect(parseCompleteWorkflowAgentNodeInput(payload)).toEqual(payload)
+    const twenty = { ...designRevision, proposals: Array.from({ length: 20 }, (_item, index) => proposal(index)) }
+    expect(parseCompleteWorkflowAgentNodeInput({ ...payload, designRevision: twenty }).designRevision?.proposals).toHaveLength(20)
+    const limit = { ...designRevision, changeRequest: ` ${'改'.repeat(4000)} ` }
+    expect(parseCompleteWorkflowAgentNodeInput({ ...payload, designRevision: limit }).designRevision?.changeRequest).toBe(limit.changeRequest)
+    for (const changeRequest of ['', '   ', '改'.repeat(4001), 'a\u0000b', 12]) {
+      expect(() => parseCompleteWorkflowAgentNodeInput({ ...payload, designRevision: { ...designRevision, changeRequest } }))
+        .toThrow('Invalid design revision')
+    }
+    expect(() => parseCompleteWorkflowAgentNodeInput({ ...payload,
+      designRevision: { ...designRevision, proposals: Array.from({ length: 21 }, (_item, index) => proposal(index)) } }))
+      .toThrow('Invalid design proposal selection')
+    const { changeRequest: _omitted, ...proposalsOnly } = designRevision
+    expect(() => parseCompleteWorkflowAgentNodeInput({ ...payload, designRevision: proposalsOnly }))
+      .toThrow('Invalid design proposal selection')
+  })
+
   it('rejects create run payloads without a raw request', () => {
     expect(() =>
       parseCreateRunInput({

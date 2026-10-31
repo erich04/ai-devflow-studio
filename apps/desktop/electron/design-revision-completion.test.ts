@@ -12,8 +12,9 @@ import { requireCurrentDesignRevision } from './gate-approval-design'
 const dirs: string[] = []
 afterEach(async () => { await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))) })
 
-async function fixture(long = false) {
+async function fixture(long = false, changeRequest?: string) {
   const f = await designRevisionFixture()
+  if (changeRequest !== undefined) Object.assign(f.selection, { changeRequest })
   if (long) {
     f.design.content += '\n原有技术方案：保留全部任务。'.repeat(6_000)
     f.proposal.content += '\n新增阅读提示，不变更需求。'.repeat(2_000)
@@ -97,5 +98,35 @@ describe('design revision durable completion', () => {
       expectedArtifacts: [f.proposal], artifacts: [f.generated.artifact] })
     expect(result).toEqual({ committed: false, reason: 'stale_artifact' })
     expect(await f.store.getRun(f.run.id)).toEqual(f.run)
+  })
+  it('writes the old event text without a change list', async () => {
+    const f = await fixture()
+    const result = await commitDesignRevision(f)
+    expect(result.event.message).toContain('User 根据旧方案与 1 份已保存提案生成新版方案；仍待方案评审。')
+  })
+})
+
+describe('design revision from a change list (AC29)', () => {
+  const changeList = '1. 来自意见 1：补充空结果提示。'
+  it('commits a new design with its change list and keeps v1', async () => {
+    const f = await fixture(false, changeList)
+    const result = await commitDesignRevision(f)
+    expect(result.event.message).toContain('User 根据旧方案、修订清单与 1 份已保存提案生成新版方案；仍待方案评审。')
+    const artifacts = await f.store.listArtifacts(f.run.id)
+    expect(artifacts.find((a) => a.id === f.design.id)).toEqual(f.design)
+    expect(artifacts.find((a) => a.id === result.artifact.id)?.designRevision?.changeRequest).toBe(changeList)
+    expect(result.run.nodes.find((node) => node.id === f.gateNodeId)?.artifactIds).toContain(result.artifact.id)
+  })
+  it.each(['previous', 'proposal', 'run-version', 'over-limit'] as const)('rejects a changed %s and keeps v1', async (failure) => {
+    const f = await fixture(false, changeList)
+    if (failure === 'previous') await f.store.saveArtifact({ ...f.design, content: `${f.design.content}\nchanged` })
+    if (failure === 'proposal') await f.store.saveArtifact({ ...f.proposal, content: 'changed opinion' })
+    if (failure === 'run-version') await f.store.saveRun({ ...f.run, version: f.run.version + 1 })
+    const request = failure === 'over-limit' ? { ...f.request, changeRequest: '改'.repeat(4001) } : f.request
+    const before = await f.store.getRun(f.run.id)
+    await expect(commitDesignRevision({ ...f, request })).rejects.toThrow()
+    expect(await f.store.getRun(f.run.id)).toEqual(before)
+    const artifacts = await f.store.listArtifacts(f.run.id)
+    expect(artifacts.some((a) => a.id === f.generated.artifact.id)).toBe(false)
   })
 })

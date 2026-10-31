@@ -1557,14 +1557,21 @@ export function parseCompleteWorkflowAgentNodeInput(value: unknown): CompleteWor
   let designRevision: DesignRevisionRequest | undefined
   if (revision !== undefined) {
     if (!isRecord(revision)) throw new Error('Invalid design revision')
-    rejectUnexpectedFields(revision, ['expectedRunVersion', 'previous', 'proposals'], 'design revision')
-    if (!Array.isArray(revision['proposals']) || revision['proposals'].length < 1 || revision['proposals'].length > 20) {
+    rejectUnexpectedFields(revision, ['expectedRunVersion', 'previous', 'proposals', 'changeRequest'], 'design revision')
+    const changeRequest = revision['changeRequest']
+    if (changeRequest !== undefined && (typeof changeRequest !== 'string' || changeRequest.includes('\u0000') ||
+      !changeRequest.trim() || changeRequest.trim().length > 4000)) {
+      throw new Error('Invalid design revision')
+    }
+    if (!Array.isArray(revision['proposals']) || revision['proposals'].length < (changeRequest === undefined ? 1 : 0) ||
+      revision['proposals'].length > 20) {
       throw new Error('Invalid design proposal selection')
     }
     const proposals = revision['proposals'].map(readDesignInputIdentity)
     if (new Set(proposals.map((item) => item.artifactId)).size !== proposals.length) throw new Error('Duplicate design proposal')
     designRevision = { expectedRunVersion: readExactPositiveVersion(revision, 'expectedRunVersion'),
-      previous: readDesignInputIdentity(revision['previous']), proposals }
+      previous: readDesignInputIdentity(revision['previous']), proposals,
+      ...(changeRequest === undefined ? {} : { changeRequest }) }
   }
 
   return {
