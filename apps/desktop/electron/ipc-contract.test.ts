@@ -171,6 +171,28 @@ describe('IPC contract parsers', () => {
       revision: 1, revisionDigest: digest, reason: 'Clarify.', actorId: 'forged-owner',
     })).toThrow(/unexpected field/i)
   })
+  it('accepts 0-20 exact unique proposal identities on a clarification revision request', () => {
+    const digest = 'a'.repeat(64)
+    const base = { runId: 'run-1', nodeId: 'node-gate', artifactId: 'artifact-clarification-v1',
+      revision: 1, revisionDigest: digest, reason: 'Clarify the boundary.' }
+    const identity = (index: number) => ({ artifactId: `conversation-proposal-${index}`,
+      updatedAt: '2026-10-30T10:00:00.000Z', contentDigest: 'b'.repeat(64) })
+    expect(parseRequestClarificationChangesInput({ ...base, proposals: [] })).toEqual({ ...base, proposals: [] })
+    expect(parseRequestClarificationChangesInput({ ...base, proposals: [identity(1)] })).toEqual({ ...base, proposals: [identity(1)] })
+    expect(parseRequestClarificationChangesInput({ ...base, proposals: Array.from({ length: 20 }, (_item, index) => identity(index)) }).proposals).toHaveLength(20)
+    expect(parseRequestClarificationChangesInput(base)).not.toHaveProperty('proposals')
+    for (const proposals of [
+      'conversation-proposal-1',
+      [identity(1), identity(1)],
+      Array.from({ length: 21 }, (_item, index) => identity(index)),
+      [{ ...identity(1), contentDigest: 'not-a-digest' }],
+      [{ ...identity(1), extra: true }],
+      [null],
+    ]) {
+      expect(() => parseRequestClarificationChangesInput({ ...base, proposals }))
+        .toThrow('Invalid clarification proposal selection')
+    }
+  })
 
   it('binds Agent Runtime commands to the selected project, Run, and exact checkpoint', () => {
     expect(parseStartAgentRuntimeInput({

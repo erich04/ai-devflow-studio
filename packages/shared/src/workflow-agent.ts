@@ -37,7 +37,12 @@ import type {
   WorkflowRun,
 } from './domain'
 import { redactSensitiveText } from './redaction'
-import { isSavedDiscussionProposal } from './artifact-identity'
+import {
+  buildDesignRevisionIdentity,
+  isSavedDiscussionProposal,
+  resolveSavedProposals,
+  SavedProposalSelectionError,
+} from './artifact-identity'
 import { resolveDesignClarificationInput } from './design-input'
 import { isSavedDesignProposal, resolveDesignRevisionInput, type DesignRevisionRequest } from './design-revision'
 import { assembleKnowledgeStageContext, describeKnowledgeContextManifest } from './knowledge-context'
@@ -229,8 +234,11 @@ function buildWorkflowArtifactContext(input: {
   run: WorkflowRun
   node: WorkflowNode
   artifacts: Artifact[]
+  /** Which saved proposals reach the prompt. Default: the ones saved on this node. */
+  includeProposal?: (artifact: Artifact) => boolean
 }): WorkflowArtifactProviderContext {
   const sanitize = (value: string) => redactSensitiveText(value).value
+  const includeProposal = input.includeProposal ?? ((artifact: Artifact) => artifact.nodeId === input.node.id)
   return {
     run: {
       id: input.run.id,
@@ -250,7 +258,7 @@ function buildWorkflowArtifactContext(input: {
     },
     artifacts: input.artifacts
       .filter((artifact) => artifact.runId === input.run.id
-        && (!isSavedDiscussionProposal(artifact) || artifact.nodeId === input.node.id))
+        && (!isSavedDiscussionProposal(artifact) || includeProposal(artifact)))
       .map((artifact) => ({
         id: artifact.id,
         kind: artifact.kind,
@@ -594,6 +602,38 @@ function reportedFailureUsage(value: AgentProviderUsage | undefined): AgentProvi
   }
 }
 
+/**
+ * The saved proposals a requirement revision uses (ADR 0020, UX batch 1). When the feedback of
+ * the revised version names exact proposals (possibly none), only those are used and a changed
+ * one fails closed. Otherwise the run's proposals on the clarify agent node are used.
+ */
+async function resolveClarificationInputProposals(input: RunWorkflowStageAgentInput): Promise<Artifact[]> {
+  const previous = listClarificationRevisions(input.run.id, input.artifacts).at(-1)
+  const feedbackId = previous?.clarificationRevision?.feedbackArtifactIds.at(-1)
+  const feedback = feedbackId === undefined ? undefined : input.artifacts.find((artifact) =>
+    artifact.id === feedbackId && artifact.runId === input.run.id &&
+    artifact.kind === 'clarification_feedback' && artifact.clarificationFeedback?.targetArtifactId === previous!.id)
+  const identities = feedback?.clarificationFeedback?.proposals
+  if (!Array.isArray(identities)) {
+    return input.artifacts.filter((artifact) =>
+      artifact.runId === input.run.id && isSavedDiscussionProposal(artifact) && artifact.nodeId === input.node.id)
+  }
+  const gate = input.run.nodes.find((node) => node.kind === 'gate' && node.stage === 'clarify')
+  try {
+    return await resolveSavedProposals({
+      run: input.run,
+      artifacts: input.artifacts,
+      identities,
+      allowedNodeIds: [input.node.id, ...(gate ? [gate.id] : [])],
+      max: 20,
+    })
+  } catch (error) {
+    if (!(error instanceof SavedProposalSelectionError)) throw error
+    throw new StageAgentExecutionError('evidence_invalid', '修订请求引用的答疑提案已变化，未生成新版本。', undefined, undefined,
+      stageAgentFailureDetails('revision_input_changed', 'stage_validation'))
+  }
+}
+
 export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): Promise<RunWorkflowStageAgentResult> {
   if (input.provider && input.executor) {
     throw new Error('Choose exactly one workflow stage Agent executor')
@@ -621,7 +661,11 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
     providerId: executor.providerId ?? executor.id,
   }
   const approved = stage === 'design' ? await resolveDesignClarificationInput(input.run, input.artifacts) : undefined
-  const context = buildWorkflowArtifactContext({ ...input, artifacts: input.artifacts.filter((artifact) =>
+  const clarificationProposals = stage === 'clarify' ? await resolveClarificationInputProposals(input) : undefined
+  const context = buildWorkflowArtifactContext({ ...input,
+    ...(clarificationProposals ? { includeProposal: (artifact: Artifact) =>
+      clarificationProposals.some((proposal) => proposal.id === artifact.id) } : {}),
+    artifacts: input.artifacts.filter((artifact) =>
     (!approved || (artifact.kind !== 'clarification_feedback' &&
       (artifact.kind !== 'clarification' || artifact.id === approved.artifact.id))) &&
     (!revision || ((artifact.kind !== 'design' || artifact.id === revision.previous.id) &&
@@ -851,6 +895,7 @@ export async function runWorkflowStageAgent(input: RunWorkflowStageAgentInput): 
       rawRequestArtifactId: rawRequests[0]!.id,
       ...(previous ? { previousRevisionArtifactId: previous.id } : {}),
       feedbackArtifactIds,
+      inputProposals: await Promise.all((clarificationProposals ?? []).map(buildDesignRevisionIdentity)),
       goals: output.goals,
       acceptanceCriteria: output.acceptanceCriteria,
       nonGoals: output.nonGoals,

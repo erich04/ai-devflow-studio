@@ -13,6 +13,14 @@ describe('persisted failure diagnostics', () => {
     expect(error.failureDetails).toEqual({ ...details, cleanupFailures: ['process_stop'] })
     expect(JSON.stringify(error)).not.toMatch(/PRIVATE_|RAW_BODY|rawResponse|\/private/)
   })
+  it('describes a changed revision input with its own hint', () => {
+    expect(stageAgentFailureDetails('revision_input_changed', 'stage_validation')).toEqual({
+      version: 1, code: 'revision_input_changed', source: 'stage_validation',
+      hint: '修订请求引用的答疑提案已变化，未生成新版本。请到「材料与版本」核对提案。',
+    })
+    expect(sanitizeStageAgentFailureDetails({ version: 1, code: 'revision_input_changed', source: 'stage_validation', hint: 'other' })?.hint)
+      .toBe('修订请求引用的答疑提案已变化，未生成新版本。请到「材料与版本」核对提案。')
+  })
   it('keeps old traces and unknown future versions loadable without trusting their text', () => {
     for (const value of [undefined, {}, { version: 2, code: 'budget_denied', hint: 'secret' }, { version: 1, code: '__proto__', source: 'provider' }]) {
       expect(sanitizeStageAgentFailureDetails(value)).toBeUndefined()

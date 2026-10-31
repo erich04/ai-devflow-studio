@@ -6,6 +6,8 @@ import { completeWorkflowAgentNode, createWorkflowRunFromRequest } from './workf
 import { indexKnowledgeSources } from './knowledge'
 import { assembleRetrievedKnowledgeContext } from './knowledge-retrieval-context'
 import { stageAgentFailureDetails } from './stage-agent-failure'
+import { buildDesignRevisionIdentity } from './artifact-identity'
+import { requestClarificationChanges } from './clarification'
 import {
   DEFAULT_STAGE_AGENT_EXECUTION_BOUNDS,
   runWorkflowStageAgent,
@@ -660,6 +662,98 @@ describe('runWorkflowStageAgent', () => {
     expect(JSON.stringify(call)).not.toContain('sk-supersecret123456789')
     expect(JSON.stringify(call)).not.toContain('/Users/alice/private/repo')
     expect(JSON.stringify(call)).toContain('[REDACTED:')
+  })
+})
+
+describe('requirement revision proposals (ADR 0020, UX batch 1)', () => {
+  const gateId = 'run-live-stage-agent-clarify-gate'
+  function savedProposal(id: string, nodeId: string, content: string): Artifact {
+    return { id: `conversation-proposal-${id}`, runId: created.run.id, nodeId, kind: 'log', title: `Proposal ${id}`,
+      summary: 'Pending review.', content, redacted: true, updatedAt: '2026-09-17T06:00:00.000Z' }
+  }
+
+  async function revisionFixture(selected?: (proposals: { agent: Artifact; gate: Artifact }) => Artifact[]) {
+    const first = savedProposal('first', clarifyNode().id, 'FIRST_AGENT_PROPOSAL')
+    const v1 = await runWorkflowStageAgent({ run: created.run, node: clarifyNode(), provider: createFakeAgentProvider(),
+      artifacts: [...created.artifacts, first], requestedBy: 'u-ling', runtime: 'electron', now: () => '2026-09-17T06:01:00.000Z' })
+    const completed = completeWorkflowAgentNode({ run: created.run, nodeId: clarifyNode().id, artifacts: [...created.artifacts, first],
+      generatedArtifact: v1.artifact, existingEvents: created.events, actorName: 'User', now: '2026-09-17T06:01:00.000Z' })
+    const gate = completed.run.nodes.find((node) => node.id === gateId)!
+    expect(completed.run.currentNodeId).toBe(gate.id)
+    const proposals = {
+      agent: savedProposal('unlisted', clarifyNode().id, 'UNLISTED_AGENT_PROPOSAL'),
+      gate: savedProposal('gate', gate.id, 'SELECTED_GATE_PROPOSAL'),
+    }
+    const artifacts = [...completed.artifacts, proposals.agent, proposals.gate]
+    const metadata = v1.artifact.clarificationRevision!
+    const requested = await requestClarificationChanges({
+      run: completed.run, gateNodeId: gate.id, artifacts, existingEvents: created.events,
+      actor: { id: 'u-ling', name: 'Ling' }, reason: '1. 来自答疑：采用提案。',
+      expectedArtifactId: v1.artifact.id, expectedRevision: metadata.revision, expectedRevisionDigest: metadata.revisionDigest,
+      now: '2026-09-17T06:02:00.000Z',
+      ...(selected ? { proposals: await Promise.all(selected(proposals).map(buildDesignRevisionIdentity)) } : {}),
+    })
+    const revisedArtifacts = [
+      ...artifacts.map((artifact) => artifact.id === requested.updatedRevision.id ? requested.updatedRevision : artifact),
+      requested.feedbackArtifact,
+    ]
+    const node = requested.run.nodes.find((item) => item.id === clarifyNode().id)!
+    return { v1, proposals, run: requested.run, node, artifacts: revisedArtifacts, first }
+  }
+
+  it('records the proposals the first generation used', async () => {
+    const value = await revisionFixture(() => [])
+    expect(value.v1.artifact.clarificationRevision?.inputProposals).toEqual([await buildDesignRevisionIdentity(value.first)])
+    expect(value.v1.prompt).toContain('FIRST_AGENT_PROPOSAL')
+  })
+
+  it('uses exactly the proposals named by the revision request, also from the Gate node', async () => {
+    const value = await revisionFixture(({ gate }) => [gate])
+    const result = await runWorkflowStageAgent({ run: value.run, node: value.node, artifacts: value.artifacts,
+      provider: createFakeAgentProvider(), requestedBy: 'u-ling', runtime: 'electron' })
+    expect(result.prompt).toContain('SELECTED_GATE_PROPOSAL')
+    expect(result.prompt).not.toContain('UNLISTED_AGENT_PROPOSAL')
+    expect(result.prompt).not.toContain('FIRST_AGENT_PROPOSAL')
+    expect(result.artifact.clarificationRevision).toMatchObject({ revision: 2,
+      inputProposals: [await buildDesignRevisionIdentity(value.proposals.gate)] })
+  })
+
+  it('uses no proposal when the request carried an empty list', async () => {
+    const value = await revisionFixture(() => [])
+    const result = await runWorkflowStageAgent({ run: value.run, node: value.node, artifacts: value.artifacts,
+      provider: createFakeAgentProvider(), requestedBy: 'u-ling', runtime: 'electron' })
+    for (const excluded of ['SELECTED_GATE_PROPOSAL', 'UNLISTED_AGENT_PROPOSAL', 'FIRST_AGENT_PROPOSAL']) {
+      expect(result.prompt).not.toContain(excluded)
+    }
+    expect(result.artifact.clarificationRevision?.inputProposals).toEqual([])
+  })
+
+  it('keeps the old node rule when the request has no proposal field', async () => {
+    const value = await revisionFixture()
+    expect(value.artifacts.find((artifact) => artifact.kind === 'clarification_feedback')?.clarificationFeedback)
+      .not.toHaveProperty('proposals')
+    const result = await runWorkflowStageAgent({ run: value.run, node: value.node, artifacts: value.artifacts,
+      provider: createFakeAgentProvider(), requestedBy: 'u-ling', runtime: 'electron' })
+    expect(result.prompt).toContain('UNLISTED_AGENT_PROPOSAL')
+    expect(result.prompt).toContain('FIRST_AGENT_PROPOSAL')
+    expect(result.prompt).not.toContain('SELECTED_GATE_PROPOSAL')
+    expect(result.artifact.clarificationRevision?.inputProposals).toEqual(await Promise.all(
+      [value.first, value.proposals.agent].map(buildDesignRevisionIdentity)))
+  })
+
+  it('fails closed with revision_input_changed when a named proposal changed', async () => {
+    const value = await revisionFixture(({ gate }) => [gate])
+    const generateWorkflowArtifact = vi.fn()
+    const provider = { ...createFakeAgentProvider(), generateWorkflowArtifact }
+    const artifacts = value.artifacts.map((artifact) => artifact.id === value.proposals.gate.id
+      ? { ...artifact, content: 'EDITED_GATE_PROPOSAL' } : artifact)
+    await expect(runWorkflowStageAgent({ run: value.run, node: value.node, artifacts, provider,
+      requestedBy: 'u-ling', runtime: 'electron' })).rejects.toMatchObject({
+      terminalReason: 'evidence_invalid',
+      message: '修订请求引用的答疑提案已变化，未生成新版本。',
+      failureDetails: { code: 'revision_input_changed', source: 'stage_validation' },
+    })
+    expect(generateWorkflowArtifact).not.toHaveBeenCalled()
   })
 })
 

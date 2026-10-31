@@ -5,6 +5,7 @@ import {
   buildClarificationReviewBundle,
   requestClarificationChanges,
 } from './clarification'
+import { buildDesignRevisionIdentity, SavedProposalSelectionError } from './artifact-identity'
 import type { AgentReviewContextManifest, AgentReviewResult, Artifact } from './domain'
 
 const now = '2026-08-30T12:00:00.000Z'
@@ -188,5 +189,55 @@ describe('assessClarificationReviewTarget', () => {
     const missing = assess(value, [review(value, { subject: null })])
     expect(missing.state).toBe('stale')
     expect(missing).not.toHaveProperty('reviewedArtifactId')
+  })
+})
+
+describe('requestClarificationChanges with saved proposals', () => {
+  function proposal(id: string, nodeId: string, content = `正文 ${id}`): Artifact {
+    return { id: `conversation-proposal-${id}`, runId: 'run-clarification-revision', nodeId, kind: 'log',
+      title: `提案 ${id}`, summary: '待评审', content, redacted: true, updatedAt: '2026-08-30T12:02:00.000Z' }
+  }
+  function setup() {
+    const value = fixture()
+    const gate = value.run.nodes.find((node) => node.id === value.run.currentNodeId)!
+    const agentProposal = proposal('agent', 'run-clarification-revision-clarify')
+    const gateProposal = proposal('gate', gate.id)
+    const artifacts = [...value.artifacts, agentProposal, gateProposal]
+    const input = {
+      run: value.run, gateNodeId: gate.id, artifacts, existingEvents: [],
+      actor: { id: 'reviewer-1', name: 'Reviewer' }, reason: '1. 来自答疑：采用提案。',
+      expectedArtifactId: value.artifact.id, expectedRevision: 1, expectedRevisionDigest: 'a'.repeat(64),
+      now: '2026-08-30T12:05:00.000Z',
+    }
+    return { input, agentProposal, gateProposal }
+  }
+
+  it('stores identities re-derived from the clarify agent and Gate proposals in list order', async () => {
+    const { input, agentProposal, gateProposal } = setup()
+    const identities = await Promise.all([gateProposal, agentProposal].map(buildDesignRevisionIdentity))
+    const result = await requestClarificationChanges({ ...input, proposals: identities })
+    expect(result.feedbackArtifact.clarificationFeedback?.proposals).toEqual(identities)
+  })
+
+  it('stores an empty list as an empty list and an absent field as no key', async () => {
+    const { input } = setup()
+    expect((await requestClarificationChanges({ ...input, proposals: [] })).feedbackArtifact.clarificationFeedback?.proposals).toEqual([])
+    expect((await requestClarificationChanges(input)).feedbackArtifact.clarificationFeedback).not.toHaveProperty('proposals')
+  })
+
+  it('rejects changed, foreign-node, duplicate and too many proposals', async () => {
+    const { input, agentProposal } = setup()
+    const identity = await buildDesignRevisionIdentity(agentProposal)
+    const designProposal = proposal('design', 'run-clarification-revision-design')
+    const many = Array.from({ length: 21 }, (_item, index) => proposal(`many-${index}`, 'run-clarification-revision-clarify'))
+    const cases = [
+      { ...input, proposals: [{ ...identity, contentDigest: 'f'.repeat(64) }] },
+      { ...input, artifacts: [...input.artifacts, designProposal], proposals: [await buildDesignRevisionIdentity(designProposal)] },
+      { ...input, proposals: [identity, identity] },
+      { ...input, artifacts: [...input.artifacts, ...many], proposals: await Promise.all(many.map(buildDesignRevisionIdentity)) },
+    ]
+    for (const candidate of cases) {
+      await expect(requestClarificationChanges(candidate)).rejects.toBeInstanceOf(SavedProposalSelectionError)
+    }
   })
 })
