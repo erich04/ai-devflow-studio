@@ -255,5 +255,6 @@ export const gateCopy = {
   approveFailed: '确认没有完成，修订清单仍保留。请稍后重试。',
   generationFailedRequirement: (next: string, description: string) => `${next} 没有生成：${description}。修订请求已记录，可以重新生成。`,
   generationFailedDesign: (next: string, description: string) => `${next} 没有生成：${description}。修订清单保留，可以修改后重新生成。`,
+  generateDesignChanged: (next: string) => `${next} 没有生成：方案内容已变化。修订清单保留；请阅读最新方案后再决定。`,
   generationUnknownReason: '原因未知',
 } as const

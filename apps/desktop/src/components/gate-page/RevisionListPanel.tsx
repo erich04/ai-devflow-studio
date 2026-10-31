@@ -33,8 +33,9 @@ export function RevisionListPanel({ settingsOpen, onToggleSettings }: { settings
     const checked = checkItemText(drafts[OWN_DRAFT] ?? '')
     if (!checked.ok) return fail(OWN_DRAFT, checked.message)
     const result = apply({ type: 'addOwn', text: checked.text })
-    fail(OWN_DRAFT, result.ok ? undefined : result.message)
-    if (result.ok) setDraft(OWN_DRAFT, undefined)
+    // A failed save keeps the item in memory (the bar shows the alert); keeping the text would add it twice.
+    fail(OWN_DRAFT, result.ok || result.applied ? undefined : result.message)
+    if (result.ok || result.applied) setDraft(OWN_DRAFT, undefined)
   }
   const saveEdit = (item: ListItemView) => {
     const key = editKey(item.id)
@@ -67,7 +68,7 @@ export function RevisionListPanel({ settingsOpen, onToggleSettings }: { settings
     </header>
     {list.readOnlyReason ? <p className="meta">{list.readOnlyReason}</p> : null}
     {list.actionable && ownText !== undefined ? <form className="gate-list-own" onSubmit={(event) => { event.preventDefault(); addOwn() }}>
-      <textarea aria-label="其他修改" placeholder={list.addPlaceholder} value={ownText} onChange={(event) => setDraft(OWN_DRAFT, event.target.value)} />
+      <textarea aria-label="其他修改" placeholder={list.addPlaceholder} maxLength={MAX_REVISION_ITEM_CHARACTERS} value={ownText} onChange={(event) => setDraft(OWN_DRAFT, event.target.value)} />
       {errors[OWN_DRAFT] ? <p role="alert" className="gate-note gate-note--warn">{errors[OWN_DRAFT]}</p> : null}
       <button type="submit" className="ghost-button">加入修订清单</button>
       <button type="button" className="text-button" onClick={() => { setDraft(OWN_DRAFT, undefined); fail(OWN_DRAFT, undefined) }}>取消</button>
@@ -86,7 +87,7 @@ export function RevisionListPanel({ settingsOpen, onToggleSettings }: { settings
               {sourceButton}
               {item.tag ? <span className="gate-list-tag">{item.tag}</span> : null}
               {editing ? <form className="gate-list-edit" onSubmit={(event) => { event.preventDefault(); saveEdit(item) }}>
-                <textarea aria-label={`第 ${item.number} 项`} value={drafts[key]} onChange={(event) => setDraft(key, event.target.value)} />
+                <textarea aria-label={`第 ${item.number} 项`} maxLength={MAX_REVISION_ITEM_CHARACTERS} value={drafts[key]} onChange={(event) => setDraft(key, event.target.value)} />
                 {errors[key] ? <p role="alert" className="gate-note gate-note--warn">{errors[key]}</p> : null}
                 <button type="submit" className="ghost-button">保存</button>
                 <button type="button" className="text-button" onClick={() => { setDraft(key, undefined); fail(key, undefined) }}>取消</button>

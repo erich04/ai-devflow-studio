@@ -11,6 +11,8 @@ import type {} from '../apps/desktop/src/desktop-api.ts'
 import { createLocalStore } from '../apps/desktop/electron/local-store.ts'
 
 const sessionSecret = 'stage-design-smoke-isolated-session-secret-32'
+/** The own list item the revision must carry; the contract's model fixture checks for it. */
+const DESIGN_CHANGE_MARKER = 'DESIGN_CHANGE_LIST_MARKER'
 
 async function freePort(): Promise<number> {
   const server = createNetServer()
@@ -187,24 +189,32 @@ export async function verifyDesignInElectron(input: {
     await page.getByTestId('node-inspector').locator('details').last().scrollIntoViewIfNeeded()
     await expect(page.getByTestId('node-inspector')).toContainText('task.ts:1')
     await page.screenshot({ path: path.join(output, '02-design-evidence.png'), scale: 'css' })
-    // A saved proposal never replaces a design automatically. Exercise the new real renderer → Main path.
-    await page.getByRole('button', { name: '到方案评审生成新版', exact: true }).click()
-    const revisionPanel = page.getByRole('region', { name: '修订方案', exact: true })
-    await expect(revisionPanel).toBeVisible()
-    await revisionPanel.getByRole('combobox', { name: '设计执行器' }).selectOption('direct-provider')
-    await expect(revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true })).toBeDisabled()
-    await revisionPanel.getByRole('checkbox').check()
+    // A design is revised only from the gate page's revision list (UX batch 1, design §10):
+    // own item → 「生成方案 v2（1 项）」 → 「停止」 → generate again, through the real renderer → Main path.
+    const gateNodeId = completed.runs[0]!.currentNodeId
+    await page.getByTestId(`flow-node-${gateNodeId}`).click()
+    const bar = page.getByTestId('gate-decision-bar')
+    await expect(bar).toContainText('方案 v1 · 你的决定', { timeout: 15_000 })
+    await bar.getByRole('button', { name: /^修订清单/ }).click()
+    await bar.getByRole('button', { name: '＋ 添加其他修改', exact: true }).click()
+    await bar.getByRole('textbox', { name: '其他修改', exact: true }).fill(`${DESIGN_CHANGE_MARKER}: keep the reset filter.`)
+    await bar.getByRole('button', { name: '加入修订清单', exact: true }).click()
+    await bar.getByRole('region', { name: '对方案 v1 的修改 · 提交后生成 v2', exact: true }).getByRole('button', { name: '更改', exact: true }).click()
+    await page.getByRole('combobox', { name: '设计执行器' }).selectOption('direct-provider')
+    const generate = bar.getByRole('button', { name: '生成方案 v2（1 项）', exact: true })
+    await expect(generate).toBeEnabled()
     const beforeRevisionCalls = input.requestCount()
     input.setHold(true)
-    await revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true }).click()
+    await generate.click()
     await expect.poll(input.requestCount, { timeout: 30_000 }).toBeGreaterThan(beforeRevisionCalls)
-    await page.getByRole('button', { name: '取消生成', exact: true }).click()
-    await expect(revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true })).toBeEnabled({ timeout: 15_000 })
+    await expect(bar).toContainText('正在生成方案 v2')
+    await bar.getByRole('button', { name: '停止', exact: true }).click()
+    await expect(generate).toBeEnabled({ timeout: 15_000 })
     const cancelledRevision = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
     assert.deepEqual(cancelledRevision.runs, completed.runs)
     assert.deepEqual(cancelledRevision.artifacts, completed.artifacts)
     input.setHold(false)
-    await revisionPanel.getByRole('button', { name: '根据提案生成新版方案', exact: true }).click()
+    await generate.click()
     try {
       await expect.poll(async () => (await page.evaluate(() => window.aiDevFlowDesktop!.loadState())).artifacts
         .filter((item) => item.kind === 'design').length, { timeout: 30_000 }).toBe(2)
@@ -212,7 +222,7 @@ export async function verifyDesignInElectron(input: {
       const state = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
       await page.screenshot({ path: path.join(output, 'failure-revision.png'), scale: 'css' })
       console.error(JSON.stringify({ revisionFailure: true,
-        status: await page.getByTestId('task-status-row').innerText(),
+        bar: await page.getByTestId('gate-decision-bar').innerText().catch(() => null),
         toast: await page.getByTestId('toast').textContent().catch(() => null),
         traces: state.agentTraces.slice(-3).map((trace) => trace.steps.map((step) => step.summary)),
         events: state.events.slice(-3).map((event) => event.message), providerRequests: input.requestCount() }, null, 2))
@@ -221,15 +231,20 @@ export async function verifyDesignInElectron(input: {
     const revised = await page.evaluate(() => window.aiDevFlowDesktop!.loadState())
     const newDesign = revised.artifacts.find((item) => item.designRevision)!
     assert.equal(newDesign.designRevision!.previous.artifactId, artifact.id)
-    assert.equal(newDesign.designRevision!.proposals[0]!.artifactId, 'conversation-proposal-design-contract')
+    assert.deepEqual(newDesign.designRevision!.proposals, [])
+    assert.equal(newDesign.designRevision!.changeRequest, `修订清单（共 1 项，针对方案 v1）：\n1. 我添加的：${DESIGN_CHANGE_MARKER}: keep the reset filter.`)
     assert.deepEqual(revised.artifacts.find((item) => item.id === artifact.id), artifact)
     assert.equal(revised.runs[0]!.currentNodeId, completed.runs[0]!.currentNodeId)
     assert.equal(revised.runs[0]!.status, 'paused_at_gate')
     assert.deepEqual(revised.runs[0]!.nodes.map((item) => item.status), completed.runs[0]!.nodes.map((item) => item.status))
     assert.equal(revised.runs[0]!.nodes.find((item) => item.id === revised.runs[0]!.currentNodeId)!.artifactIds.includes(newDesign.id), true)
-    await expect(page.getByTestId('node-inspector')).toContainText('Revised task filter design')
+    await expect(bar).toContainText('方案 v2 · 你的决定', { timeout: 15_000 })
+    await expect(page.getByTestId('node-inspector')).toContainText('方案 v2 · 根据方案 v1 和 1 项修改生成')
     await page.screenshot({ path: path.join(output, '04-revised-design-awaiting-review.png'), scale: 'css' })
-    await page.getByRole('button', { name: '查看历史方案与提案', exact: true }).click()
+    // Both designs are stored on the design step; v1 is listed as history there.
+    await openSubSteps()
+    await page.getByTestId(`flow-node-${input.run.currentNodeId}`).click()
+    await page.getByTestId('node-inspector').getByRole('tab', { name: '材料与版本', exact: true }).click()
     await expect(page.getByRole('region', { name: '历史记录', exact: true })).toContainText('已被替代（历史）')
     await page.screenshot({ path: path.join(output, '05-design-history.png'), scale: 'css' })
     // The execution tool is configured in 设置／模型与执行方式 since S3 (plan Y2).

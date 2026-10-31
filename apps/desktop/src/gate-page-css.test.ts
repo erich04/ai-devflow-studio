@@ -14,6 +14,9 @@ describe('Gate page CSS', () => {
   it('defines its own question blue for both themes and never uses the brand tokens (3.27)', () => {
     expect(declares('.inspector--gate-page', /--gate-question:\s*#2563eb;/)).toBe(true)
     expect(declares(":root[data-theme='dark'] .inspector--gate-page", /--gate-question:\s*#7fb5ff;/)).toBe(true)
+    // Marker popovers render in document.body, outside the aside (review finding 2).
+    expect(styles).toMatch(/(?:^|\})\s*\.detail-popover, \.inspector--gate-page \{[^}]*--gate-question:\s*#2563eb;[^}]*--gate-important:\s*var\(--amber\);/m)
+    expect(styles).toMatch(/:root\[data-theme='dark'\] \.detail-popover, :root\[data-theme='dark'\] \.inspector--gate-page \{ --gate-question: #7fb5ff; \}/)
     expect(styles).not.toContain('var(--blue)')
     expect(styles).not.toContain('var(--accent)')
   })

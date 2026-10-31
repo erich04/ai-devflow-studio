@@ -64,7 +64,7 @@ describe('useRevisionLists', () => {
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('QuotaExceededError') })
     let outcome: ReturnType<typeof result.current.apply> | undefined
     act(() => { outcome = result.current.apply(target, { type: 'addOwn', text: '保存会失败' }) })
-    expect(outcome).toEqual({ ok: false, message: '本机修订清单保存失败，页面上的内容仍保留；请复制后再关闭应用。' })
+    expect(outcome).toEqual({ ok: false, message: '本机修订清单保存失败，页面上的内容仍保留；请复制后再关闭应用。', applied: true })
     expect(result.current.saveError).toBe('本机修订清单保存失败，页面上的内容仍保留；请复制后再关闭应用。')
     expect(result.current.listFor(target)?.items.map((item) => item.text)).toEqual(['自由文字', '保存会失败'])
     vi.restoreAllMocks()

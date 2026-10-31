@@ -1,15 +1,16 @@
 /* Gate decision pages: 需求确认 and 方案评审 (UX batch 1, design §3.13, §3.23, §3.25, §3.27, §5.7). */
 
 /* Own tones (3.27): the light skin sets --blue and --accent to the brand red. Tones colour rules,
-   borders, tints, bars and outlines only; text stays --text or --text-muted. */
-.inspector--gate-page {
+   borders, tints, bars and outlines only; text stays --text or --text-muted. Narrow-layout marker
+   popovers are portaled to document.body, outside the aside, so they declare the same tokens. */
+.detail-popover, .inspector--gate-page {
   --gate-question: #2563eb;
   --gate-important: var(--amber);
   --gate-new: var(--green);
   --gate-block: var(--status-blocked);
   --gate-warn: var(--status-warning);
 }
-:root[data-theme='dark'] .inspector--gate-page { --gate-question: #7fb5ff; }
+:root[data-theme='dark'] .detail-popover, :root[data-theme='dark'] .inspector--gate-page { --gate-question: #7fb5ff; }
 
 /* Gutters (3.13): the aside never scrolls, so it drops its gutter; the scroll container keeps a
    stable one, so a scrollbar that appears never changes the measured width. */

@@ -153,7 +153,8 @@ export type RevisionListOp =
   | { type: 'markSubmitted'; text: string; proposals: DesignRevisionIdentity[]; itemCount: number; feedbackArtifactId?: string
       generation?: { executor: StageAgentExecutorKind; providerId: string } }
   | { type: 'markConfirmedWithout'; count: number }
-export type RevisionListOpResult = { ok: true; list: StoredRevisionList } | { ok: false; message: string }
+/** `applied`: the change is in memory although saving it failed (design §6), so a retry must not repeat it. */
+export type RevisionListOpResult = { ok: true; list: StoredRevisionList } | { ok: false; message: string; applied?: true }
 /** Own items, answers and edits: 1–1,000 characters after trim. */
 export function checkItemText(text: string): { ok: true; text: string } | { ok: false; message: string } {
   const value = text.trim()

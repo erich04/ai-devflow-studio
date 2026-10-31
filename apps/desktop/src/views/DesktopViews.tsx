@@ -24,6 +24,7 @@ import {
   buildClarificationReviewBundle,
   resolveDesignGateMaterial,
   canRunCodingAgentOnNode,
+  numberDesignVersions,
   projectKnowledgeReferencesForNode,
   resolveKnowledgeReferenceSemantics,
   type AgentEvent,
@@ -1737,7 +1738,8 @@ export function Inspector({
   )
   // On gate pages the dialog names the versions from the page, not the generic "方案" (§5.11).
   const gateReviewTarget = gatePage && selectedRun
-    ? deriveReviewTarget({ kind: gatePage.kind, run: selectedRun, gateNode: gatePage.gateNode, reviews: runAgentReviews, current: gatePage.current.artifact, artifacts: workflowArtifacts })
+    ? deriveReviewTarget({ kind: gatePage.kind, run: selectedRun, gateNode: gatePage.gateNode, reviews: runAgentReviews, current: gatePage.current.artifact, artifacts: workflowArtifacts,
+      designNumbers: numberDesignVersions(selectedRun.id, workflowArtifacts) })
     : undefined
   const reviewDialog = isReviewConfirmationOpen && latestAgentReview ? (
   <ReviewRerunDialog

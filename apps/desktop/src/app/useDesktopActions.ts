@@ -830,7 +830,7 @@ export function useDesktopActions(input: {
     try {
       const previous = await buildDesignRevisionIdentity(material.artifact)
       if (!sameDesignRevision(previous, input.expectedPrevious)) {
-        writeResult(gateCopy.approveDesignChanged)
+        writeResult(gateCopy.generateDesignChanged(nextVersionLabel('design', input.version)))
         return
       }
       const proposals = await Promise.all(input.proposals.map(buildDesignRevisionIdentity))

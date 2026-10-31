@@ -5569,6 +5569,16 @@ describe('App', () => {
       await waitFor(() => expect(api.approveGate).toHaveBeenCalledWith(expect.objectContaining({ nodeId: f5.gateNode.id, expectedDesignRevision: identity })))
     })
 
+    it('names 方案 v1 in the re-review dialog of design v2 (§5.11, review finding 6)', async () => {
+      const f5 = await buildF5()
+      await openGatePage(f5, {}, '方案 v2 · 你的决定')
+      await waitFor(() => expect(gateBar()).toHaveAttribute('data-row', '13'))
+      fireEvent.click(barButton('审查方案 v2'))
+      const dialog = screen.getByRole('dialog', { name: '确认审查方案 v2' })
+      expect(dialog).toHaveTextContent('上次审查：方案 v1')
+      expect(dialog).not.toHaveTextContent('较早的方案版本')
+    })
+
     it('shows the stored list of design v1 read-only with 「复制全部」 while v2 is current (finding 29)', async () => {
       const f5 = await buildF5()
       storeRevisionLists([await listFor(f5.previous!, [{ type: 'addOwn', text: '旧方案的一项' }])])

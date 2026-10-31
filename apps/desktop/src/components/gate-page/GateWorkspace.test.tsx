@@ -116,6 +116,7 @@ describe('GateWorkspace material', () => {
     const before = material().textContent
     fireEvent.click(within(card('意见 2 · 重要')).getByRole('button', { name: '采纳' }))
     const question = card('问题 2 · 需要你决定')
+    expect(within(question).getByRole('textbox', { name: '问题 2 的回答' })).toHaveAttribute('maxLength', '1000')
     fireEvent.change(within(question).getByRole('textbox', { name: '问题 2 的回答' }), { target: { value: '允许，只读显示。' } })
     fireEvent.click(within(question).getByRole('button', { name: '保存答案' }))
     expect(card('问题 2 · 已回答：允许，只读显示。')).toBeInTheDocument()

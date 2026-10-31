@@ -34,6 +34,7 @@ describe('gate copy', () => {
     expect(gateCopy.reviewNoModel).toBe('运行审查前需要先选择模型。')
     expect(gateCopy.generationCost('Direct Provider', 'deepseek-flash')).toBe('将用 Direct Provider · deepseek-flash 生成，可能产生费用')
     expect(gateCopy.generatingDetail('requirement', '需求 v1', 2)).toBe('根据需求 v1 和 2 项修改生成；完成前不会确认任何版本。')
+    expect(gateCopy.generateDesignChanged('方案 v2')).toBe('方案 v2 没有生成：方案内容已变化。修订清单保留；请阅读最新方案后再决定。')
   })
   it('takes the three policy target labels from the Inspector view model', () => {
     for (const target of ['governance_check', 'agent_finding', 'missing_agent_review'] as const) expect(policyTargetLabel(target)).toBe(blockingTargetLabels[target])

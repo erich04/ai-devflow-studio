@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { gateCopy } from '../../app/gate-decision/copy'
 import type { CardView } from '../../app/gate-decision/projection'
-import { checkItemText } from '../../app/gate-decision/revision-list'
+import { checkItemText, MAX_REVISION_ITEM_CHARACTERS } from '../../app/gate-decision/revision-list'
 import { cardClass, type CardLinkProps } from './FindingCard'
 import { useGateScope } from './GateDecisionScope'
 
@@ -39,7 +39,7 @@ export function QuestionCard({ card, linked, flashing, style, onLink }: { card: 
       {card.actionable && draft === undefined ? <> · <button type="button" className="text-button" onClick={() => scope.setDraft(key, card.answer ?? '')}>{gateCopy.changeAnswer}</button></> : null}
     </p> : null}
     {editing ? <form className="gate-card-answer" onSubmit={(event) => { event.preventDefault(); save() }}>
-      <textarea aria-label={`问题 ${card.number} 的回答`} placeholder={gateCopy.answerPlaceholder} value={draft ?? ''}
+      <textarea aria-label={`问题 ${card.number} 的回答`} placeholder={gateCopy.answerPlaceholder} maxLength={MAX_REVISION_ITEM_CHARACTERS} value={draft ?? ''}
         onChange={(event) => scope.setDraft(key, event.target.value)} />
       {error ? <p role="alert" className="gate-note gate-note--warn">{error}</p> : null}
       <div className="gate-card-actions">

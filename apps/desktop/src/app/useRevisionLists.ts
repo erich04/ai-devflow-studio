@@ -86,7 +86,7 @@ export function useRevisionLists(): RevisionListsApi {
       localStorage.setItem(REVISION_LISTS_STORAGE_KEY, JSON.stringify(next))
     } catch {
       setSaveError(gateCopy.storageSaveFailed)
-      return { ok: false, message: gateCopy.storageSaveFailed }
+      return { ok: false, message: gateCopy.storageSaveFailed, applied: true }
     }
     setSaveError(undefined)
     const source = legacyRef.current
