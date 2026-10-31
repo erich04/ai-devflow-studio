@@ -1285,6 +1285,14 @@ export async function buildAgentReviewContext({
   return context
 }
 
+/** Clarify reviews only (UX batch 1, design §3.9). Exported so tests and the prompt comparison can find it exactly. */
+export const OPEN_QUESTION_CITATION_INSTRUCTION =
+  'When a missingEvidence entry is about an item listed under the Subject\'s "Open Questions" section, include a citation whose quote is that question item copied verbatim from the Subject. If the item is longer than 600 characters, quote a 4–600 character part of it that occurs only once in the Subject.'
+
+/** Clarify and design reviews (UX batch 1, design §4.4). Advisory only; policy never reads it. */
+export const FINDING_IMPORTANCE_INSTRUCTION =
+  'Also give each missingEvidenceDetails entry an importance: "important" when the gap must be resolved before this Gate can reasonably be approved because it changes scope, acceptance or correctness, otherwise "suggestion". Importance is advisory and never approves or blocks the Gate.'
+
 export function createKnowledgeReviewPrompt(context: AgentReviewContext): string {
   if (context.manifest.coverage === 'incomplete') {
     throw new Error(
@@ -1349,6 +1357,8 @@ export function createKnowledgeReviewPrompt(context: AgentReviewContext): string
     'missingEvidence is an actionable finding list: every entry must identify a concrete unmet requirement of the current Gate. Do not put neutral observations, statements that something is expected or not a gap, or work scheduled for a later stage in this list. Put contextual limitations in summary and future verification recommendations in suggestedTests. Return an empty missingEvidence array when there is no current evidence gap.',
     'Read the current Subject completely, including Non-goals and recorded business decisions, before claiming a decision is missing. Explicitly not doing confirmation, undo, or another feature is a decision, not an undecided question. If such a decision conflicts with a required criterion, report the conflict and cite both sides; do not describe it as absent. Never turn an optional enhancement into a requirement.',
     'For each missingEvidence entry provide missingEvidenceDetails with its zero-based index, assessment (gap, explicit_non_goal, conflicting_decision, or unverified), and 1-3 citations. A citation is {sourceId, quote}: use the exact current artifact ID, or run-request for the original request, and an exact 4-600 character excerpt. Cite the requirement and relevant existing decision; do not invent a quotation of an absence. If no source supports your claim, use unverified. Quotes locate evidence, not proof of semantic correctness.',
+    ...(context.node.stage === 'clarify' ? [OPEN_QUESTION_CITATION_INSTRUCTION] : []),
+    ...(context.node.stage === 'clarify' || context.node.stage === 'design' ? [FINDING_IMPORTANCE_INSTRUCTION] : []),
     'Use CONTEXT_APPLICABILITY to distinguish a missing required input from an empty optional or not-yet-expected field. Do not request the review you are currently generating as its own prerequisite. Preserve genuinely missing explicit baseline evidence and gaps in the proposed verification strategy; stage timing must not erase real requirements.',
     'risks, missingEvidence, and suggestedTests must be arrays of plain strings, not objects. Before returning, check that no missingEvidence entry contradicts your summary by calling the same item expected, optional, or not a gap.',
     JSON.stringify({

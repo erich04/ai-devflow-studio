@@ -12,6 +12,14 @@ function citesNonGoal(content: string, start: number): boolean {
   return heading !== undefined && /^(?:non[- ]?goals?|非目标)(?:\s*[:：])?$/iu.test(heading)
 }
 
+function readImportance(value: unknown): AgentReviewMissingEvidenceDetail['importance'] {
+  if (typeof value !== 'string') return undefined
+  const normalized = value.trim().toLowerCase()
+  if (normalized === 'important' || normalized === '重要') return 'important'
+  if (normalized === 'suggestion' || normalized === '建议') return 'suggestion'
+  return undefined
+}
+
 export function locateReviewMissingEvidence(context: AgentReviewContext, missing: readonly string[], raw: unknown): AgentReviewMissingEvidenceDetail[] {
   const details = Array.isArray(raw) ? raw.slice(0, 100) : []
   return missing.map((_summary, index) => {
@@ -48,6 +56,7 @@ export function locateReviewMissingEvidence(context: AgentReviewContext, missing
       : reported === 'conflicting_decision' ? 'conflicting_decision'
         : nonGoal ? 'explicit_non_goal'
           : reported === 'gap' ? 'gap' : 'unverified'
-    return { index, assessment, citations, requiresReview: assessment !== 'gap' }
+    const importance = readImportance(detail?.importance)
+    return { index, assessment, citations, requiresReview: assessment !== 'gap', ...(importance ? { importance } : {}) }
   })
 }
