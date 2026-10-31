@@ -31,6 +31,25 @@ describe('Gate review evidence grounding', () => {
       citations: [{ sourceId: source.id, quote: '不提供撤销功能' }] }])[0]?.assessment).toBe('unverified')
   })
 
+  it('reads an optional importance from the single matching detail (AC48)', async () => {
+    const run = runs[0]!
+    const node = run.nodes.find((item) => item.id === 'n-clarify-gate')!
+    const context = await buildAgentReviewContext({ run, node, artifacts, testEvidence: [], knowledgeDocuments: [], knowledgeChunks: [] })
+    const values: unknown[] = ['important', ' Important ', '重要', 'suggestion', 'SUGGESTION', ' 建议 ', 'high', '', 1, null, undefined]
+    const result = locateReviewMissingEvidence(context, values.map((_value, index) => `finding ${index}`),
+      values.map((importance, index) => ({ index, assessment: 'gap', citations: [], importance })))
+    expect(result.map((detail) => detail.importance)).toEqual([
+      'important', 'important', 'important', 'suggestion', 'suggestion', 'suggestion',
+      undefined, undefined, undefined, undefined, undefined,
+    ])
+    expect(result.slice(6).every((detail) => !('importance' in detail))).toBe(true)
+    const duplicate = locateReviewMissingEvidence(context, ['twice'], [
+      { index: 0, assessment: 'gap', citations: [], importance: 'important' },
+      { index: 0, assessment: 'gap', citations: [], importance: 'important' },
+    ])
+    expect(duplicate[0]).not.toHaveProperty('importance')
+  })
+
   it('marks a missing-decision claim citing an explicit non-goal for human review, with exact current-version evidence', async () => {
     // Public regression reported in #137. This is a controlled reproduction of
     // the observed contradiction, not a claim of a new live-model result.

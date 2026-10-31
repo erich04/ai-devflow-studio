@@ -60,10 +60,13 @@ export type ConversationMemoryReceipt = {
   omittedMemoryCount: number
   observedAt: string
 }
+export type ConversationDisplay = { text: string; references: string[] }
 export type ConversationMessage = {
   id: string
   role: 'user' | 'assistant' | 'tool' | 'notice'
   text: string
+  /** User messages only: what the user typed and the chip lines; `text` stays the model-facing input. */
+  display?: ConversationDisplay
   /** Missing on legacy messages; unsupported formats retain their complete text. */
   format?: 'markdown' | 'plain_text' | 'unsupported'
   createdAt: string
@@ -120,7 +123,7 @@ export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }
   | { type: 'create'; title?: string; inputDraft?: string; executor?: 'direct-provider' | 'opencode' | 'native-tools' }
   | { type: 'update'; conversationId: string; title?: string; isOpen?: boolean; inputDraft?: string }
-  | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string }
+  | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string; display?: ConversationDisplay }
   | { type: 'retry'; conversationId: string; providerId: string }
   | { type: 'read_content'; conversationId: string; messageId: string; field: 'text' | 'draft' | 'reasoning'; offset: number }
   | { type: 'configure_investigation'; conversationId: string; maxSteps: number; maxDurationMs: number }
@@ -141,13 +144,25 @@ export type ConversationResponse = {
 }
 export type WorkbenchConversationApi = (command: ConversationCommand) => Promise<ConversationResponse>
 
+function isConversationDisplay(value: unknown): value is ConversationDisplay {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  if (Object.keys(record).length !== 2 || !Object.hasOwn(record, 'text') || !Object.hasOwn(record, 'references')) return false
+  const { text, references } = record
+  if (typeof text !== 'string' || text.includes('\0')) return false
+  const trimmed = text.trim().length
+  if (trimmed < 1 || trimmed > 12000) return false
+  return Array.isArray(references) && references.length <= 3
+    && references.every((item) => typeof item === 'string' && item.length >= 1 && item.length <= 120 && !item.includes('\0'))
+}
+
 const limits = { projectId: 240, conversationId: 240, messageId: 240, answerToMessageId: 240, providerId: 240, title: 100, text: 12000, inputDraft: 12000 }
 export function parseConversationCommand(value: unknown): ConversationCommand {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的会话请求。')
   const record = value as Record<string, unknown>
   const fields: Record<string, string[]> = {
     list: [], create: ['title', 'inputDraft', 'executor'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
-    send: ['conversationId', 'text', 'providerId', 'answerToMessageId'], retry: ['conversationId', 'providerId'],
+    send: ['conversationId', 'text', 'providerId', 'answerToMessageId', 'display'], retry: ['conversationId', 'providerId'],
     configure_investigation: ['conversationId', 'maxSteps', 'maxDurationMs'], export_diagnostics: ['conversationId'],
     read_content: ['conversationId', 'messageId', 'field', 'offset'],
     cancel: ['conversationId'], publish: ['conversationId', 'messageId', 'acknowledgeUnverified'], retry_review: ['conversationId', 'messageId', 'providerId'],
@@ -160,6 +175,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   }
   if (type === 'configure_investigation' && (!Number.isSafeInteger(record.maxSteps) || Number(record.maxSteps)<1 || Number(record.maxSteps)>60 || !Number.isSafeInteger(record.maxDurationMs) || Number(record.maxDurationMs)<30000 || Number(record.maxDurationMs)>600000)) throw new Error('调查范围须为 1–60 步、30–600 秒。')
   if (type === 'read_content' && (!['text', 'draft', 'reasoning'].includes(String(record.field)) || !Number.isSafeInteger(record.offset) || Number(record.offset) < 0 || typeof record.messageId !== 'string')) throw new Error('无效的正文分页请求。')
+  if (record.display !== undefined && !isConversationDisplay(record.display)) throw new Error('会话输入过长或格式不正确。')
   if (record.isOpen !== undefined && typeof record.isOpen !== 'boolean') throw new Error('无效的 Tab 状态。')
   if (record.acknowledgeUnverified !== undefined && typeof record.acknowledgeUnverified !== 'boolean') throw new Error('无效的提案确认。')
   if (record.executor !== undefined && record.executor !== 'direct-provider' && record.executor !== 'opencode' && record.executor !== 'native-tools') throw new Error('不支持这个会话执行方式。')

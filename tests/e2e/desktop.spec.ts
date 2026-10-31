@@ -1341,6 +1341,201 @@ async function createFixtureRun(page: Page) {
   await expect(page.getByTestId('node-inspector')).toContainText('需求澄清')
 }
 
+/**
+ * Gate page scenarios on top of the `clarification-revision` mock (design §11): reviews are kept
+ * across state changes, and a review run on the clarify Gate reviews the version it shows.
+ */
+async function installGateReviews(page: Page) {
+  await page.addInitScript(() => {
+    type State = { runs: Array<{ id: string; projectId: string; nodes: Array<{ id: string; kind: string; stage: string; artifactIds: string[] }> }>
+      artifacts: Array<{ id: string; runId: string; nodeId: string; kind: string; updatedAt: string; content: string }>; agentReviews: unknown[] }
+    type Api = Record<string, (input?: unknown) => Promise<unknown>>
+    const api = window.aiDevFlowDesktop as unknown as Api
+    const hex = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+      .map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    const reviews: unknown[] = []
+    let latest: State | undefined
+    const reviewOf = async (state: State, id: string, createdAt: string) => {
+      const run = state.runs[0]!
+      const gate = run.nodes.find((node) => node.kind === 'gate' && node.stage === 'clarify')!
+      const artifact = state.artifacts.find((item) => item.id === gate.artifactIds[0])!
+      return { id, requestId: `${id}-request`, projectId: run.projectId, runId: run.id, nodeId: gate.id, runtime: 'electron',
+        providerId: 'doubao-review', model: 'ark-code-latest', conclusion: '没有需要补充的内容。', summary: '审查摘要', risks: [], missingEvidence: [],
+        suggestedTests: [], knowledgeReferences: [], policyFindings: [], confidence: 0.8,
+        gateAdvisory: { id: `${id}-advisory`, runId: run.id, nodeId: gate.id, level: 'info', blocksApproval: false, summary: '建议', missingEvidence: [], riskCount: 0, createdAt },
+        createdAt,
+        contextManifest: { version: 1, stage: 'clarify', coverage: 'complete', runRequest: { contentDigest: 'raw', sanitizerVersion: '1', coverage: 'complete' },
+          subjectArtifacts: [{ id: artifact.id, runId: artifact.runId, nodeId: artifact.nodeId, kind: artifact.kind, updatedAt: artifact.updatedAt,
+            contentDigest: await hex(artifact.content), sanitizerVersion: '1', coverage: 'complete', chunks: [] }],
+          knowledgeCriteria: [], criteriaCoverage: 'empty' } }
+    }
+    const withReviews = (state: State) => ({ ...state, agentReviews: [...reviews] })
+    const load = api.loadState!
+    api.loadState = async () => {
+      const state = latest ?? (await load()) as State
+      if (!reviews.length) reviews.push(await reviewOf(state, 'review-e2e-v1', '2026-08-30T12:02:00.000Z'))
+      return withReviews(state)
+    }
+    for (const name of ['requestClarificationChanges', 'completeWorkflowAgentNode'] as const) {
+      const original = api[name]!
+      api[name] = async (input) => {
+        const result = await original(input) as { state: State }
+        latest = result.state
+        return { ...result, state: withReviews(result.state) }
+      }
+    }
+    api.runKnowledgeReview = async () => {
+      const state = latest ?? (await load()) as State
+      const review = await reviewOf(state, `review-e2e-${reviews.length + 1}`, '2026-08-30T12:07:00.000Z') as { id: string; runId: string; nodeId: string; createdAt: string }
+      reviews.push(review)
+      return { review, trace: { id: `${review.id}-trace`, runId: review.runId, nodeId: review.nodeId, reviewId: review.id, runtime: 'electron', createdAt: review.createdAt, steps: [] },
+        tokenUsage: { id: `${review.id}-usage`, runId: review.runId, nodeId: review.nodeId, userId: 'u-ling', projectId: 'local-project-1', provider: 'local', model: 'fake',
+          inputTokens: 1, outputTokens: 1, cacheReadTokens: 0, costUsd: 0, timestamp: review.createdAt, source: 'estimated' },
+        state: withReviews(state) }
+    }
+  })
+}
+/**
+ * An F1-shaped requirement v1 at the current clarify Gate (design §11 geometry test): tight lists,
+ * an item with a nested list, a table and two open questions, with a bound review whose five
+ * findings are all located (first block, a table cell, the nested item's parent, two more items).
+ */
+async function installF1ShapedRequirement(page: Page) {
+  await page.addInitScript(() => {
+    type Artifact = { id: string; runId: string; nodeId: string; kind: string; title: string; updatedAt: string; content: string; clarificationRevision?: Record<string, unknown> }
+    type State = { runs: Array<{ id: string; projectId: string; nodes: Array<{ id: string; kind: string; stage: string; artifactIds: string[] }> }>; artifacts: Artifact[] }
+    const api = window.aiDevFlowDesktop as unknown as Record<string, () => Promise<unknown>>
+    const hex = async (text: string) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))]
+      .map((byte) => byte.toString(16).padStart(2, '0')).join('')
+    const questions = ['搜索是否区分大小写？', '是否允许搜索已归档的任务？']
+    const goals = ['用户可以按关键词搜索任务。', '搜索框放在任务列表上方。', '搜索只匹配任务标题。', '搜索不改变任务的排序。', '清空关键词后恢复完整列表。',
+      '关键词前后的空格会被忽略。', '搜索在输入后立即生效。', '搜索结果数量显示在列表上方。', '搜索框有可见的标签。', '键盘可以清空搜索框。', '搜索不发送网络请求。', '搜索不保存历史关键词。']
+    const rows = [['空关键词', '显示全部任务'], ['无匹配', '显示「暂无匹配任务」'], ['一个关键词', '标题包含它的任务'], ['两个关键词', '标题同时包含两者的任务'],
+      ['大写关键词', '按待确认问题 1 的结论处理'], ['只有空格', '显示全部任务']]
+    const filler = (prefix: string, count: number) => Array.from({ length: count }, (_, index) => `- ${prefix} ${index + 1}：保持现有行为，并在验证计划中覆盖这一点。`)
+    const content = [
+      '## Goals', ...goals.map((goal) => `- ${goal}`), '',
+      '## Acceptance Criteria', '| 输入 | 结果 |', '| --- | --- |', ...rows.map(([input, result]) => `| ${input} | ${result} |`), '',
+      '## Non-goals', '- 不做全文检索。', ...filler('非目标说明', 6), '',
+      '## Assumptions', '- 搜索结果保留状态筛选。', '  - 已完成的任务也能搜到。', '  - 已归档的任务不在结果里。', ...filler('假设', 8), '',
+      '## Risks', '- 中文分词可能影响匹配。', ...filler('风险', 8), '',
+      '## Open Questions', ...questions.map((question) => `- ${question}`), '',
+    ].join('\n')
+    const findings: Array<[string, string, 'important' | 'suggestion']> = [
+      ['目标里可以写明搜索入口的位置。', goals[0]!, 'important'],
+      ['没有匹配时的提示需要和现有空状态一致。', '显示「暂无匹配任务」', 'important'],
+      ['保留状态筛选需要说明与搜索的先后顺序。', '搜索结果保留状态筛选。', 'suggestion'],
+      ['非目标可以补充为什么不做全文检索。', '不做全文检索。', 'suggestion'],
+      ['风险可以补一条缓解办法。', '中文分词可能影响匹配。', 'suggestion'],
+    ]
+    const load = api.loadState!
+    api.loadState = async () => {
+      const state = await load() as State & { agentReviews: unknown[] }
+      const run = state.runs[0]!
+      const gate = run.nodes.find((node) => node.kind === 'gate' && node.stage === 'clarify')!
+      const original = state.artifacts.find((artifact) => artifact.kind === 'clarification')!
+      const artifact: Artifact = { ...original, content, clarificationRevision: { ...original.clarificationRevision, openQuestions: questions } }
+      const digest = await hex(content)
+      const createdAt = '2026-08-30T12:02:00.000Z'
+      const review = { id: 'review-e2e-f1', requestId: 'review-e2e-f1-request', projectId: run.projectId, runId: run.id, nodeId: gate.id, runtime: 'electron',
+        providerId: 'doubao-review', model: 'ark-code-latest', conclusion: '需要补充', summary: '审查摘要', risks: [], suggestedTests: [], knowledgeReferences: [],
+        policyFindings: [], confidence: 0.8, missingEvidence: findings.map(([text]) => text),
+        missingEvidenceDetails: findings.map(([, quote, importance], index) => {
+          const start = content.indexOf(quote)
+          return { index, assessment: 'gap', requiresReview: true, importance,
+            citations: [{ sourceId: artifact.id, title: artifact.title, quote, contentDigest: digest, start, end: start + quote.length, updatedAt: artifact.updatedAt }] }
+        }),
+        gateAdvisory: { id: 'review-e2e-f1-advisory', runId: run.id, nodeId: gate.id, level: 'warn', blocksApproval: false, summary: '建议', missingEvidence: [], riskCount: 0, createdAt },
+        createdAt,
+        contextManifest: { version: 1, stage: 'clarify', coverage: 'complete', runRequest: { contentDigest: 'raw', sanitizerVersion: '1', coverage: 'complete' },
+          subjectArtifacts: [{ id: artifact.id, runId: artifact.runId, nodeId: artifact.nodeId, kind: artifact.kind, updatedAt: artifact.updatedAt, contentDigest: digest,
+            sanitizerVersion: '1', coverage: 'complete', chunks: [] }], knowledgeCriteria: [], criteriaCoverage: 'empty' } }
+      return { ...state, artifacts: state.artifacts.map((item) => (item.id === artifact.id ? artifact : item)), agentReviews: [review] }
+    }
+  })
+}
+/** A 15 px classic scrollbar in headless Chromium (design §3.13). */
+async function injectClassicScrollbars(page: Page) {
+  await page.addInitScript(() => {
+    const add = () => {
+      const style = document.createElement('style')
+      style.textContent = '::-webkit-scrollbar { width: 15px; height: 15px; } ::-webkit-scrollbar-thumb { background: rgba(0,0,0,.35); } ::-webkit-scrollbar-track { background: transparent; }'
+      document.head.appendChild(style)
+    }
+    if (document.head) add(); else document.addEventListener('DOMContentLoaded', add)
+  })
+}
+async function openAnswerPanel(page: Page) {
+  const toggle = page.locator('button.discussion-toggle')
+  if (await toggle.getAttribute('aria-expanded') !== 'true') await toggle.click()
+  await expect(page.locator('#workbench-discussion')).toBeVisible()
+}
+/** Drags the splitter until the answer panel has `width` (the panel sits right of the splitter). */
+async function dragAnswerPanelTo(page: Page, width: number) {
+  const splitter = page.getByTestId('workbench-splitter')
+  const box = (await splitter.boundingBox())!
+  const current = await page.locator('#workbench-discussion').evaluate((element) => element.getBoundingClientRect().width)
+  const x = box.x + box.width / 2
+  const y = box.y + Math.min(200, box.height / 2)
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x - (width - current), y, { steps: 8 })
+  await page.mouse.up()
+  await expect.poll(() => page.locator('#workbench-discussion').evaluate((element) => Math.round(element.getBoundingClientRect().width))).toBe(width)
+}
+/** Boxes of the gate workspace, its columns, the cards and the cited blocks (viewport coordinates). */
+async function gateGeometry(page: Page) {
+  return page.evaluate(() => {
+    const rect = (element: Element | null | undefined) => {
+      if (!element) return null
+      const box = element.getBoundingClientRect()
+      return { top: box.top, bottom: box.bottom, height: box.height, width: box.width, left: box.left, right: box.right }
+    }
+    const material = document.querySelector('.gate-material')!
+    const decorated = Array.from(material.querySelectorAll('[data-block-start]'))
+    const block = (text: string) => decorated.find((element) => element.textContent?.includes(text) && !element.querySelector('[data-block-start]'))
+    const cards = Array.from(document.querySelectorAll('.gate-margin [data-card-id]')).map((card) => ({ name: card.getAttribute('aria-label') ?? '', ...rect(card)! }))
+    const tight = Array.from(material.querySelectorAll('[data-gate-tight] > li'))
+      .filter((item) => !item.querySelector(':scope > ul, :scope > ol'))
+      .map((item) => ({ li: rect(item)!, p: rect(item.querySelector(':scope > p'))! }))
+    const nestedParent = block('搜索结果保留状态筛选。')
+    return {
+      workspace: rect(document.querySelector('.gate-workspace'))!,
+      material: rect(material)!,
+      margin: rect(document.querySelector('.gate-margin'))!,
+      layout: document.querySelector('.gate-workspace')!.getAttribute('data-layout'),
+      bar: rect(document.querySelector('[data-testid="gate-decision-bar"]'))!,
+      cards,
+      firstBlock: rect(block('用户可以按关键词搜索任务。'))!,
+      table: rect(material.querySelector('.gate-block:has(table)'))!,
+      nestedParent: rect(nestedParent)!,
+      nestedChild: rect(nestedParent?.parentElement?.querySelector(':scope > ul > li'))!,
+      nestedBar: rect(material.querySelector(`.gate-change-bar[data-block="${nestedParent?.getAttribute('data-block-start')}:${nestedParent?.getAttribute('data-block-end')}"]`)),
+      tight,
+    }
+  })
+}
+type GateGeometry = Awaited<ReturnType<typeof gateGeometry>>
+const cardOf = (geometry: GateGeometry, name: string) => geometry.cards.find((card) => card.name === name)!
+/** AC1 and AC7 at 1440×900 with the 480 px answer panel (design §3.13, §11). */
+function expectWideGateGeometry(geometry: GateGeometry) {
+  expect(geometry.layout).toBe('wide')
+  expect(geometry.workspace.width).toBeGreaterThanOrEqual(776)
+  expect(geometry.material.width).toBeGreaterThanOrEqual(520)
+  expect(geometry.margin.width).toBeGreaterThanOrEqual(240)
+  expect(geometry.margin.width).toBeLessThanOrEqual(270)
+  expect(Math.abs(cardOf(geometry, '意见 1 · 重要').top - geometry.firstBlock.top)).toBeLessThanOrEqual(4)
+  expect(Math.abs(cardOf(geometry, '意见 2 · 重要').top - geometry.table.top)).toBeLessThanOrEqual(4)
+  expect(Math.abs(cardOf(geometry, '意见 3 · 建议').top - geometry.nestedParent.top)).toBeLessThanOrEqual(4)
+  const sorted = [...geometry.cards].sort((a, b) => a.top - b.top)
+  for (let index = 1; index < sorted.length; index += 1) expect(sorted[index]!.top).toBeGreaterThanOrEqual(sorted[index - 1]!.bottom - 0.5)
+  // Amendment 36: a tight item's paragraph is exactly its item's box (the margin reset of 3.25).
+  expect(geometry.tight.length).toBeGreaterThan(10)
+  for (const { li, p } of geometry.tight) {
+    expect(Math.abs(p.top - li.top)).toBeLessThanOrEqual(1)
+    expect(Math.abs(p.height - li.height)).toBeLessThanOrEqual(1)
+  }
+}
 test.describe('AI DevFlow desktop workbench', () => {
   for (const viewport of [{ width: 1440, height: 920 }, { width: 760, height: 600 }]) {
     for (const colorScheme of ['light', 'dark'] as const) {
@@ -1564,10 +1759,9 @@ test.describe('AI DevFlow desktop workbench', () => {
         await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
         const document = inspector.getByTestId('clarification-current-revision')
         await expect(document.locator('.artifact-reading-section')).toHaveCount(16)
-        // TOC, review basis and 查看原文 are folded into one 阅读工具 on the first screen (plan Y6).
-        await expect(document.locator('.artifact-toc')).not.toBeVisible()
-        await expect(document.locator('.material-reference-links')).not.toBeVisible()
-        const readingTools = await openReadingTools(document)
+        // TOC, review basis and 查看原文 are folded into one 阅读工具 above the material (plan Y6, design §5.8).
+        await expect(inspector.locator('.artifact-toc')).not.toBeVisible()
+        const readingTools = await openReadingTools(inspector)
         await expect(readingTools.locator('.artifact-toc a')).toHaveCount(16)
         const lastSection = document.locator('.artifact-reading-section').last()
         await readingTools.locator('.artifact-toc a').last().click()
@@ -1577,8 +1771,7 @@ test.describe('AI DevFlow desktop workbench', () => {
         await readingTools.getByRole('button', { name: '返回排版', exact: true }).click()
         await expect(document.locator('.artifact-reading-section')).toHaveCount(16)
         // 团队规范 in the reader only points to the reference list kept in 材料与版本.
-        await readingTools.locator('.material-reference-links').getByRole('button', { name: '团队规范', exact: true }).click()
-        const pointer = inspector.getByTestId('knowledge-reference-pointer')
+        const pointer = readingTools.getByTestId('knowledge-reference-pointer')
         await expect(pointer).toContainText('完整列表与来源在「材料与版本」中')
         await expect(inspector.getByTestId('knowledge-reference-sources')).toHaveCount(0)
         await pointer.getByRole('button', { name: '查看引用来源', exact: true }).click()
@@ -1708,43 +1901,38 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('settings-view').getByRole('button', { name: /生成设计方案|生成方案/u })).toHaveCount(0)
   })
 
-  test('compares requirement inputs, requests changes, generates v2, and approves only v2', async ({ page }) => {
+  test('revises requirement v1 through the list, reviews v2 through the dialog and approves only v2', async ({ page }) => {
     await installDesktopApi(page, 'clarification-revision')
+    await installGateReviews(page)
     await page.goto('/')
-
     const inspector = page.getByTestId('node-inspector')
+    const bar = inspector.getByTestId('gate-decision-bar')
     await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByTestId('clarification-review')).toBeVisible()
-    // The review basis links are folded into the body's 阅读工具 (plan Y6).
-    const readingTools = await openReadingTools(inspector.getByTestId('clarification-current-revision'))
-    await readingTools.getByRole('button', { name: /原始需求/ }).click()
-    await expect(page.getByTestId('clarification-raw-request')).toContainText('Clarify webhook retry boundaries')
-    await readingTools.getByRole('button', { name: /代码调查/ }).click()
-    await expect(page.getByTestId('clarification-repository-findings')).toContainText('Retry handler exists')
-    await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v1')
-    await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
-
-    await inspector.getByRole('button', { name: '请求修订当前版本', exact: true }).click()
-    await inspector.getByLabel('结构化修订意见').fill('State the retry boundary explicitly.')
-    await inspector.getByRole('button', { name: '确认提交修订请求', exact: true }).click()
-    await expect(page.getByTestId('toast')).toContainText('流程返回需求澄清')
-    await expect(inspector).toContainText('需求澄清')
-
-    await inspector.getByRole('button', { name: '生成修订', exact: true }).click()
-    await expect(page.getByTestId('toast')).toContainText('需求澄清已生成')
-    await inspectorTab(page, '当前工作').click()
-    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByTestId('clarification-current-revision')).toContainText('需求澄清 v2')
-    await expect(page.getByTestId('clarification-current-revision')).toContainText('待确认')
-    await page.getByTestId('clarification-revision-history').locator('summary').click()
-    await expect(page.getByTestId('clarification-revision-history')).toContainText('需求澄清 v1 · 已被替代（历史）')
-    await expect(page.getByTestId('clarification-revision-history')).toContainText('State the retry boundary explicitly.')
-
-    await inspector.getByTestId('task-status-row').getByRole('button', { name: '确认需求 v2', exact: true }).click()
+    await expect(bar).toContainText('需求 v1 · 你的决定')
+    await expect(inspector.getByTestId('clarification-current-revision')).toContainText('Retry boundaries and acceptance criteria.')
+    // 「＋ 添加其他修改」 → submit: the request and the generation of v2 under one write lock (design §3.4).
+    await bar.getByRole('button', { name: /^修订清单 0 项/ }).click()
+    await bar.getByRole('button', { name: '＋ 添加其他修改', exact: true }).click()
+    await bar.getByRole('textbox', { name: '其他修改' }).fill('State the retry boundary explicitly.')
+    await bar.getByRole('button', { name: '加入修订清单', exact: true }).click()
+    await bar.getByRole('button', { name: '提交修订，生成 v2（1 项）', exact: true }).click()
+    await expect(bar).toContainText('需求 v2 · 你的决定')
+    await expect(page.getByTestId('toast')).toContainText('需求 v2 已生成')
+    // v2 has only v1's review: the workflow requires reviewing v2; the paid re-review asks first (#251).
+    await expect(bar).toContainText('✕ 需要先审查需求 v2：已有的审查针对需求 v1')
+    await expect(bar.getByRole('button', { name: '确认需求 v2', exact: true })).toBeDisabled()
+    await bar.getByRole('button', { name: '审查需求 v2', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '确认审查需求 v2' })
+    await expect(dialog).toContainText('上次审查：需求 v1')
+    await dialog.getByRole('button', { name: '开始审查需求 v2', exact: true }).click()
+    await expect(bar.getByRole('button', { name: '确认需求 v2', exact: true })).toBeEnabled()
+    await bar.getByRole('button', { name: '确认需求 v2', exact: true }).click()
     await expect.poll(() => page.evaluate(() => (window as unknown as { __clarificationApprovals: unknown[] }).__clarificationApprovals.length)).toBe(1)
-    const requests = await page.evaluate(() => (window as unknown as { __clarificationRequests: unknown[] }).__clarificationRequests)
+    const requests = await page.evaluate(() => (window as unknown as { __clarificationRequests: Array<{ reason: string; proposals?: unknown[] }> }).__clarificationRequests)
     const approvals = await page.evaluate(() => (window as unknown as { __clarificationApprovals: unknown[] }).__clarificationApprovals)
     expect(requests).toHaveLength(1)
+    expect(requests[0]!.reason).toContain('我添加的：State the retry boundary explicitly.')
+    expect(requests[0]!.proposals).toEqual([])
     expect(approvals).toContainEqual(expect.objectContaining({
       expectedClarificationRevision: expect.objectContaining({
         artifactId: 'artifact-run-clarification-e2e-clarification-v2',
@@ -1752,6 +1940,64 @@ test.describe('AI DevFlow desktop workbench', () => {
         revisionDigest: 'f'.repeat(64),
       }),
     }))
+  })
+
+  test('places review cards beside their blocks at 1440×900 and switches to markers only by width (AC1, AC7, AC37)', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await installDesktopApi(page, 'clarification-revision')
+    await installF1ShapedRequirement(page)
+    await page.goto('/')
+    const bar = page.getByTestId('gate-decision-bar')
+    await expect(bar).toHaveAttribute('data-row', '15')
+    await openAnswerPanel(page)
+    await dragAnswerPanelTo(page, 480)
+    const workspace = page.locator('.gate-workspace')
+    await expect(workspace).toHaveAttribute('data-layout', 'wide')
+    await expect(page.locator('.gate-margin [data-card-id]')).toHaveCount(7)
+    await page.waitForTimeout(200)
+    expectWideGateGeometry(await gateGeometry(page))
+    // The bar stays put while the material scrolls (AC1).
+    const barTop = (await bar.boundingBox())!.y
+    const scroll = page.getByTestId('workspace-tabpanel')
+    await scroll.evaluate((element) => { element.scrollTop = 600 })
+    await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThanOrEqual(600)
+    expect((await bar.boundingBox())!.y).toBeCloseTo(barTop, 0)
+    await scroll.evaluate((element) => { element.scrollTop = 0 })
+    // 采纳 on the nested item's parent: its bar ends above the nested item.
+    await page.getByRole('article', { name: '意见 3 · 建议' }).getByRole('button', { name: '采纳', exact: true }).click()
+    await page.getByRole('article', { name: '意见 1 · 重要' }).getByRole('button', { name: '采纳', exact: true }).click()
+    await expect(bar.getByRole('button', { name: /^修订清单 2 项/ })).toBeVisible()
+    const adopted = await gateGeometry(page)
+    expect(adopted.nestedBar).not.toBeNull()
+    expect(adopted.nestedBar!.bottom).toBeLessThanOrEqual(adopted.nestedChild.top + 1)
+    const answer = page.getByRole('article', { name: '问题 2 · 需要你决定' }).getByRole('textbox', { name: '问题 2 的回答' })
+    await answer.fill('只搜索未归档')
+    // Widening the answer panel to 720 px switches to markers; back to 480 px restores the margin (AC37).
+    await dragAnswerPanelTo(page, 720)
+    await expect(workspace).toHaveAttribute('data-layout', 'narrow')
+    await expect(page.locator('.gate-marker')).toHaveCount(7)
+    await expect(page.locator('.gate-margin')).toHaveCount(0)
+    await dragAnswerPanelTo(page, 480)
+    await expect(workspace).toHaveAttribute('data-layout', 'wide')
+    await expect(page.locator('.gate-margin [data-card-id]')).toHaveCount(7)
+    await expect(bar.getByRole('button', { name: /^修订清单 2 项/ })).toBeVisible()
+    await expect(page.getByRole('article', { name: '问题 2 · 需要你决定' }).getByRole('textbox', { name: '问题 2 的回答' })).toHaveValue('只搜索未归档')
+    await expect(page.getByRole('article', { name: '意见 1 · 重要' })).toContainText('已采纳')
+  })
+
+  test('keeps the wide layout with 15 px classic scrollbars at 1440×900 (design §3.13)', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await injectClassicScrollbars(page)
+    await installDesktopApi(page, 'clarification-revision')
+    await installF1ShapedRequirement(page)
+    await page.goto('/')
+    await expect(page.getByTestId('gate-decision-bar')).toHaveAttribute('data-row', '15')
+    await openAnswerPanel(page)
+    await dragAnswerPanelTo(page, 480)
+    await expect(page.locator('.gate-workspace')).toHaveAttribute('data-layout', 'wide')
+    await expect(page.locator('.gate-margin [data-card-id]')).toHaveCount(7)
+    await page.waitForTimeout(200)
+    expectWideGateGeometry(await gateGeometry(page))
   })
 
   test('loads the workbench and supports core developer interactions', async ({ page }) => {
@@ -1860,8 +2106,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('toast')).toContainText('需求澄清已生成，进入需求确认 Gate')
     await clickSubStep(page, 'flow-node-run-created-from-request-clarify-gate')
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
-    // Gate Review runs in place from the task status row (plan W2).
-    const runReview = reviewedGateInspector.getByTestId('task-status-row').getByRole('button', { name: '审查当前需求 v1', exact: true })
+    // Gate Review runs in place from the decision bar (plan W2, design §3.21).
+    const runReview = reviewedGateInspector.getByTestId('gate-decision-bar').getByRole('button', { name: '审查需求 v1', exact: true })
     await expect(runReview).toBeEnabled()
     await runReview.click()
     await expect(page.getByTestId('toast')).toContainText('门禁审查已完成，审查意见显示在「当前工作」中')

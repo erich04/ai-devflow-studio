@@ -1,4 +1,6 @@
-import { DiscussionToggle, WorkbenchWorkspace, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
+import { DiscussionToggle, WorkbenchWorkspace, type AddedRevisionLink, type ReAddRevisionLink, type WorkbenchOpenRequest } from './WorkbenchWorkspace'
+import type { ConversationMessage } from '../electron/workbench-conversation-contract'
+import { chatPageFactsFromRecords, revisionLinkForDraft, type GateChatFacts, type RevisionLink } from './app/gate-decision/chat-link'
 import { TeamConnectionMenu, TopbarProjectMenu } from './views/TaskShell'
 import { TeamConnectionSettings } from './views/TeamConnectionSettings'
 import { SettingsView } from './views/SettingsView'
@@ -34,6 +36,10 @@ import {
   buildKnowledgeGovernanceChecks,
   buildKnowledgeReferences,
   isActiveCodingAgentRunStatus,
+  listClarificationRevisions,
+  sanitizeStageAgentFailureDetails,
+  type Artifact,
+  type StageAgentFailureDetails,
   type KnowledgeChunk,
   type KnowledgeDocument,
   type KnowledgeEntity,
@@ -68,6 +74,10 @@ import {
 } from './app/node-inspector-view-model'
 import { buildDiscussionReference, type DiscussionMaterial } from './app/discussion-reference'
 import { useDesktopActions } from './app/useDesktopActions'
+import { useRevisionLists } from './app/useRevisionLists'
+import { findStoredList } from './app/gate-decision/revision-list'
+import { stageVersions } from './app/gate-decision/page'
+import type { GateWriteContext } from './components/gate-page/GateDecisionScope'
 import { useDesktopWorkspace } from './app/useDesktopWorkspace'
 import { useWorkRequestInbox } from './app/useWorkRequestInbox'
 import { useCodingRuntimeReadiness } from './app/useCodingRuntimeReadiness'
@@ -253,6 +263,8 @@ export function App() {
   const [codingChangeSetPreview, setCodingChangeSetPreview] = useState<CodingChangeSetPreview | null>(null)
   const [codingRuntimeNow, setCodingRuntimeNow] = useState(() => new Date().toISOString())
   const [stageChoices, setStageChoices] = useState<Record<string, { executor: StageAgentExecutorKind; providerId: string }>>({})
+  // Versioned local revision lists of the gate pages (design §3.3, §5.11).
+  const revisionLists = useRevisionLists()
   const [dataProfileDiagnostics, setDataProfileDiagnostics] =
     useState<DesktopDataProfileDiagnostics | null>(null)
 
@@ -418,8 +430,18 @@ export function App() {
   const selectedRun = scopedRuns.find((run) => run.id === selectedRunId) ?? scopedRuns[0]
   const selectedNode =
     selectedRun?.nodes.find((node) => node.id === selectedNodeId) ?? selectedRun?.nodes[0]
-  const stageChoiceKey = `${selectedRun?.id ?? ''}:${selectedNode?.id ?? ''}`
-  const stageChoice = stageChoices[stageChoiceKey] ?? { executor: 'direct-provider' as const, providerId: selectedAgentProviderId }
+  // The clarify gate page generates vN+1 on the clarify agent: both nodes share one choice (§5.11).
+  const clarifyAgentNode = selectedRun?.nodes.find((node) => node.stage === 'clarify' && node.kind === 'agent')
+  const stageChoiceNodeId = selectedNode?.stage === 'clarify' && (selectedNode.kind === 'gate' || selectedNode.kind === 'agent') && clarifyAgentNode
+    ? clarifyAgentNode.id : selectedNode?.id ?? ''
+  const stageChoiceKey = `${selectedRun?.id ?? ''}:${stageChoiceNodeId}`
+  // A revision-pending requirement regenerates with the choice it was submitted with.
+  const pendingRevision = selectedRun && clarifyAgentNode && stageChoiceNodeId === clarifyAgentNode.id
+    ? listClarificationRevisions(selectedRun.id, scopedArtifacts).at(-1) : undefined
+  const submittedGeneration = pendingRevision?.clarificationRevision?.status === 'revision_requested' && selectedRun
+    ? findStoredList(revisionLists.store, { kind: 'requirement', runId: selectedRun.id, reading: pendingRevision, revision: pendingRevision.clarificationRevision.revision })?.submitted?.generation
+    : undefined
+  const stageChoice = stageChoices[stageChoiceKey] ?? submittedGeneration ?? { executor: 'direct-provider' as const, providerId: selectedAgentProviderId }
   const stageAgentExecutorKind = stageChoice.executor
   const setStageAgentExecutorKind = (executor: StageAgentExecutorKind) => setStageChoices((current) => ({
     ...current, [stageChoiceKey]: { ...stageChoice, executor },
@@ -879,8 +901,10 @@ export function App() {
     pairDesktopWithTeam,
     approveSelectedGate,
     completeSelectedWorkflowAgentNode,
-    generateSelectedDesignRevision,
-    requestSelectedClarificationChanges,
+    submitRequirementRevision,
+    regenerateRequirementRevision,
+    generateDesignRevision,
+    gateWriteResult,
     selectLocalProject,
     saveTestCommand,
     executeTestPlan,
@@ -966,6 +990,53 @@ export function App() {
       : knowledgeReviewExecutor !== 'direct-provider' && reviewProvider?.kind === 'fake'
         ? '仓库门禁审查需要已保存的模型 Provider；请在设置中更换，或把审查方式改回只依据知识目录。'
         : modelReadinessError
+  // Gate page writes (design §5.11): exact identities, the list's proposals and the stage choice.
+  const generationChoice = { executor: stageAgentExecutorKind, providerId: stageChoice.providerId }
+  const submitGateRevision = (input: GateWriteContext & { text: string; proposals: Artifact[]; itemCount: number }) => {
+    const target = input.target
+    if (!target) return
+    if (target.kind === 'requirement') {
+      void submitRequirementRevision({ target, text: input.text, proposals: input.proposals, ...generationChoice,
+        onCommitted: ({ feedbackArtifactId, proposals }) => {
+          revisionLists.apply(target, { type: 'markSubmitted', text: input.text, proposals, itemCount: input.itemCount,
+            ...(feedbackArtifactId ? { feedbackArtifactId } : {}), generation: generationChoice })
+        } })
+      return
+    }
+    if (!input.designIdentity) return
+    const version = stageVersions('design', target.runId, scopedArtifacts).find((item) => item.artifact.id === input.current.id)?.number
+    void generateDesignRevision({ runId: target.runId, expectedPrevious: input.designIdentity, proposals: input.proposals, changeRequest: input.text,
+      ...generationChoice, ...(version !== undefined ? { version } : {}),
+      onGenerated: ({ proposals }) => {
+        revisionLists.apply(target, { type: 'markSubmitted', text: input.text, proposals, itemCount: input.itemCount, generation: generationChoice })
+      } })
+  }
+  const confirmGate = (input: GateWriteContext & { unsubmittedCount: number }) => {
+    const target = input.target
+    const label = target ? stageVersions(target.kind, target.runId, scopedArtifacts).find((item) => item.artifact.id === input.current.id)?.label : undefined
+    void approveSelectedGate({
+      ...(target?.kind === 'requirement' ? { expectedClarification: { artifactId: target.artifactId, revision: target.revision, revisionDigest: target.revisionDigest } } : {}),
+      ...(input.designIdentity ? { expectedDesign: input.designIdentity } : {}),
+      unsubmittedCount: input.unsubmittedCount,
+      ...(label ? { versionLabel: label } : {}),
+      ...(target ? { onConfirmedWithout: () => { revisionLists.apply(target, { type: 'markConfirmedWithout', count: input.unsubmittedCount }) } } : {}),
+    })
+  }
+  const regenerateGateRequirement = () => {
+    if (!selectedRun || !pendingRevision?.clarificationRevision) return
+    void regenerateRequirementRevision({ runId: selectedRun.id, version: pendingRevision.clarificationRevision.revision, ...generationChoice })
+  }
+  // The latest sanitized failure per node of the selected run (revision-pending bar, §5.3 row 4).
+  const stageFailures = useMemo(() => {
+    const result: Record<string, { details: StageAgentFailureDetails; at: string }> = {}
+    for (const trace of agentTraces) {
+      if (trace.runId !== selectedRun?.id || !trace.nodeId) continue
+      const details = sanitizeStageAgentFailureDetails(trace.failureDetails)
+      if (details && (!result[trace.nodeId] || result[trace.nodeId]!.at < trace.createdAt)) result[trace.nodeId] = { details, at: trace.createdAt }
+    }
+    return result
+  }, [agentTraces, selectedRun?.id])
+  const runAgentReviews = useMemo(() => agentReviews.filter((review) => review.runId === selectedRun?.id), [agentReviews, selectedRun?.id])
   const latestReviewFailure = selectedEvents
     .filter((event) => event.kind === 'error' && event.message.includes('门禁审查') && (!latestAgentReview || event.timestamp > latestAgentReview.createdAt))
     .sort((a, b) => b.timestamp.localeCompare(a.timestamp))[0]?.message
@@ -1132,6 +1203,48 @@ export function App() {
     })
     setWorkbenchOpenRequest((previous) => ({ serial: previous.serial + 1, type: 'reference', reference }))
   }
+
+  // 答疑 linked to the gate page (design §5.10): the shown page reports its facts here.
+  const [gateChatFacts, setGateChatFacts] = useState<GateChatFacts | undefined>()
+  const [revisionFocus, setRevisionFocus] = useState<{ serial: number; listKey?: string | undefined; itemId: string }>()
+  const [focusMessage, setFocusMessage] = useState<{ serial: number; messageId: string }>()
+  const shownGateFacts = gateChatFacts && selectedRun && selectedNode && gateChatFacts.runId === selectedRun.id &&
+    (gateChatFacts.gateNodeId === selectedNode.id || gateChatFacts.agentNodeId === selectedNode.id) ? gateChatFacts : undefined
+  const viewContext = selectedRun && selectedNode ? (() => {
+    const step = stageLabels[selectedNode.stage]
+    if (shownGateFacts) {
+      const browsing = shownGateFacts.mode === 'finished' || shownGateFacts.mode === 'sub-step' || shownGateFacts.history
+      return { label: `${browsing ? '正在查看' : '当前'}：${selectedRun.title} · ${step} · ${shownGateFacts.shownLabel}${browsing && shownGateFacts.shownApproved ? '（已确认）' : ''}` }
+    }
+    return { label: `${isSelectedCurrentNode ? '当前' : '正在查看'}：${selectedRun.title} · ${step} · ${displayNodeTitle(selectedNode)}` }
+  })() : undefined
+  const revisionLinkFor = (message: ConversationMessage): RevisionLink => message.draft ? revisionLinkForDraft({
+    draft: message.draft, message, runs: scopedRuns, artifacts: scopedArtifacts,
+    pageFacts: (runId, kind) => {
+      if (shownGateFacts && shownGateFacts.runId === runId && shownGateFacts.kind === kind) return shownGateFacts
+      const run = scopedRuns.find((candidate) => candidate.id === runId)
+      return run ? chatPageFactsFromRecords({ run, kind, artifacts: scopedArtifacts, reviews: agentReviews, events: scopedEvents, store: revisionLists.store }) : undefined
+    },
+  }) : { state: 'none' }
+  /** 「已加入修订清单（第 K 项）」: show the gate page and expand its list at that item (view only). */
+  function openRevisionItem(link: AddedRevisionLink, message: ConversationMessage) {
+    const run = scopedRuns.find((candidate) => candidate.id === message.draft?.runId)
+    const stage = run?.nodes.find((node) => node.id === message.draft?.nodeId)?.stage
+    const gate = run?.nodes.find((node) => node.stage === stage && node.kind === 'gate')
+    if (!run || !gate) return
+    const shown = shownGateFacts?.runId === run.id && shownGateFacts.kind === (stage === 'clarify' ? 'requirement' : 'design')
+    if (!shown) selectRunNode(run.id, gate.id)
+    setRevisionFocus((previous) => ({ serial: (previous?.serial ?? 0) + 1, ...(link.listKey ? { listKey: link.listKey } : {}), itemId: link.itemId }))
+  }
+  /** 「加入修订清单」 for a removed 来自答疑 proposal: local only, no IPC. */
+  function reAddChatItem(link: ReAddRevisionLink) {
+    const target = (link.listKey ? revisionLists.store.lists[link.listKey]?.target : undefined) ??
+      (shownGateFacts && shownGateFacts.listKey === link.listKey ? shownGateFacts.listTarget : undefined)
+    if (!target) return
+    const result = revisionLists.apply(target, { type: 'chatReAdd', proposalId: link.proposalId })
+    if (!result.ok) setToast(result.message)
+  }
+  const reportGateChatFacts = useCallback((facts: GateChatFacts | undefined) => setGateChatFacts(facts), [])
 
   /** 「在任务中处理」 in settings: back to the task's actual step, nothing runs (W5). */
   function handleInTask() {
@@ -1425,6 +1538,11 @@ export function App() {
                   providerId={selectedAgentProviderId}
                   providerName={agentProviders.find((provider) => provider.id === selectedAgentProviderId)?.name ?? ''}
                   request={workbenchOpenRequest}
+                  viewContext={viewContext}
+                  revisionLinkFor={revisionLinkFor}
+                  onOpenRevisionItem={openRevisionItem}
+                  onReAddChatItem={reAddChatItem}
+                  focusMessage={focusMessage}
                   onConfigure={() => openSettingsFromTask('models')}
                   onNavigate={(action) => {
                     selectRunNode(action.runId, action.nodeId)
@@ -1533,9 +1651,25 @@ export function App() {
                   canSaveOverride={gateEnforcement.canSaveOverride}
                   onApprove={approveSelectedGate}
                   onCompleteAgentNode={completeSelectedWorkflowAgentNode}
-                  onGenerateDesignRevision={generateSelectedDesignRevision}
+                  onSubmitGateRevision={submitGateRevision}
+                  onConfirmGate={confirmGate}
+                  onRegenerateRequirementRevision={regenerateGateRequirement}
+                  runAgentReviews={runAgentReviews}
+                  revisionLists={revisionLists}
+                  revisionFocus={revisionFocus}
+                  onGateChatFacts={reportGateChatFacts}
+                  onFocusChatItem={(proposalId) => setFocusMessage((previous) => ({ serial: (previous?.serial ?? 0) + 1, messageId: proposalId.replace(/^conversation-proposal-/u, '') }))}
+                  gatePolicyLoadError={gateEnforcement.loadError || undefined}
+                  gatePolicyEnabled={dataOrigin !== 'seed'}
+                  onReloadPolicy={() => void gateEnforcement.refresh().catch(() => {})}
+                  roleCanApprove={gateEnforcement.roleCanApprove}
+                  currentUserRole={currentUser?.role}
+                  evaluatedAt={gateEnforcement.evaluatedAt}
+                  stageFailures={stageFailures}
+                  teamMembers={teamMembers}
+                  gateWriteResult={gateWriteResult}
+                  knowledgeReviewTarget={knowledgeReviewTarget}
                   onDiscussMaterial={(material) => discussMaterial(material)}
-                  {...(desktopApi?.requestClarificationChanges ? { onRequestClarificationChanges: requestSelectedClarificationChanges } : {})}
                   stageProviders={agentProviders}
                   stageProviderId={stageChoice.providerId}
                   onStageProviderChange={setStageProviderId}

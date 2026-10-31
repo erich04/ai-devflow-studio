@@ -1,7 +1,12 @@
 import type { AgentReviewResult } from '@ai-devflow/shared'
 import { formatLocalTime } from '../app/desktop-view-model'
 import type { GateReviewScope } from '../app/gate-review-scope'
+import { gateCopy } from '../app/gate-decision/copy'
+import { levelsKnown } from '../app/gate-decision/review-binding'
 import { ReviewEvidenceDetails, type RecordReviewFeedback } from './ReviewEvidenceDetails'
+
+const importanceOf = (review: AgentReviewResult, index: number) =>
+  review.missingEvidenceDetails?.find((detail) => detail.index === index)?.importance
 
 /**
  * The archived Gate Review report in 材料与版本 (#246, #252). 当前工作 marks opinions beside the
@@ -32,6 +37,7 @@ export function ReviewReport({ review, scope, onFeedback }: {
       <p>{review.id} · {review.gateAdvisory.blocksApproval ? '审查提出阻断' : '建议性审查'} · 置信度 {Math.round(review.confidence * 100)}%</p>
       {review.contextManifest?.subjectArtifacts.map((subject) => <p key={subject.id}>{subject.id} · {subject.updatedAt} · {subject.contentDigest} · {subject.coverage}</p>)}
     </details>
-    <ReviewEvidenceDetails key={review.id} review={review} onFeedback={onFeedback} />
+    <ReviewEvidenceDetails key={review.id} review={review} onFeedback={onFeedback}
+      {...(levelsKnown(review) ? { titleOf: (index: number) => gateCopy.findingTitle(index + 1, importanceOf(review, index)) } : {})} />
   </section>
 }

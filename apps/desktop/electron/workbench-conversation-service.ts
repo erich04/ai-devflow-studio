@@ -7,7 +7,7 @@ import { readOnlyToolDefinitions, validateNativeToolBatch } from '@ai-devflow/sh
 import { buildNativeCriticalContext, buildCriticalContext, criticalContextSent, criticalReceipt, receiptIsCurrent, proposalSemanticsPass, type CriticalContext } from './conversation-critical-context.js'
 import { type ConversationCompaction, appendToolEvents, buildRollingSummary, conversationMessageContext, interruptPendingTools } from './conversation-context.js'
 import { randomUUID } from 'node:crypto'
-import { AgentProviderRequestError, MODEL_CONTENT_BYTES, describeAgentProviderFailure, measurePromptSections, rankMemoryByRelevance, selectMemoryWithinBudget, CONVERSATION_MEMORY_RECALL_BUDGET, redactSensitiveText, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
+import { AgentProviderRequestError, MODEL_CONTENT_BYTES, describeAgentProviderFailure, measurePromptSections, rankMemoryByRelevance, selectMemoryWithinBudget, CONVERSATION_MEMORY_RECALL_BUDGET, redactSensitiveText, summarizeRunMaterialVersions, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 import { assertProjectMemoryCurrent, codingPromptDigest, executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
 import { parseConversationCommand, type ConversationCheckpoint, type ConversationAction, type ConversationCitation, type ConversationCommand, type ConversationDraft, type ConversationMemoryReceipt, type ConversationMessage, type ConversationResponse, type WorkbenchConversation } from './workbench-conversation-contract.js'
@@ -161,10 +161,10 @@ function visibleReasoning(text: string, complete: boolean): string {
   return redactSensitiveText(safe).value
 }
 
-/** Compact optional history to the resolved request context; stored originals are separate. */
-function packConversationContext(input: {
+/** Compact optional history to the resolved request context; stored originals are separate. Exported for tests. */
+export function packConversationContext(input: {
   history: Array<Pick<ConversationMessage, 'id' | 'role' | 'text' | 'question' | 'draft'>>
-  facts: { runs: Array<{ id: string; title: string; status: string; version: number; currentNodeId: string; updatedAt: string }>; totalRuns: number; observedAt: string }
+  facts: { runs: Array<{ id: string; title: string; status: string; version: number; currentNodeId: string; updatedAt: string }>; totalRuns: number; observedAt: string; materials?: MaterialFact[] }
   observations: unknown[]; remainingSteps: number; requirements: RequirementContext[]; criticalProposalInput?: CriticalContext; proposalVerification?: { content: string }
   session: WorkbenchConversation
   maxOutputTokens?: number
@@ -228,6 +228,8 @@ function packConversationContext(input: {
     context.latestWorkflow.contextSummaryOnly = true
     markLimited()
     while (JSON.stringify(context.latestWorkflow).length > 6000 && context.latestWorkflow.runs.length > 1) context.latestWorkflow.runs.pop()
+    // Material versions outlive the run list: drop them only if the reduced list is still over the cap.
+    if (JSON.stringify(context.latestWorkflow).length > 6000) delete context.latestWorkflow.materials
   }
   // Recalled Memory is optional low-trust background: drop it (for this step) before
   // degrading verified tool evidence for the rest of the turn.
@@ -260,6 +262,7 @@ function packConversationContext(input: {
     context.toolObservations = [{ truncated: true, excerpt: excerpt.slice(0, Math.floor(remaining / 2)) }]
   }
   while (tooLarge() && context.latestWorkflow.runs.length) { markLimited(); context.latestWorkflow.contextSummaryOnly = true; context.latestWorkflow.runs.pop() }
+  if (tooLarge() && context.latestWorkflow.materials) { markLimited(); delete context.latestWorkflow.materials }
   // Preserve the latest question and requirement provenance even for escape-heavy inputs.
   while (tooLarge() && context.originalRequirements.some((item) => item.content.length > 500)) {
     markLimited()
@@ -277,6 +280,9 @@ function packConversationContext(input: {
   return { prompt, limited, includedMessages: new Set([...context.history.map((message) => message.id), currentUser.id]).size, compaction, budget: measure(), memories,
     omittedMemoryCount: memoryIdentities(input.backgroundMemory ?? [], input.communicationPreferences ?? []).length - memories.length }
 }
+
+/** Current requirement and design versions of one run, for per-turn chat facts (no titles or content). */
+type MaterialFact = { runId: string; requirement?: { version: number; status: string }; design?: { version?: number; gateStatus: string } }
 
 /** IPC carries previews; original private content stays in the main process. */
 function conversationPreview(session: WorkbenchConversation): WorkbenchConversation {
@@ -474,14 +480,18 @@ export class WorkbenchConversationService {
     if (this.controllers.has(session.id)) throw new Error('这个会话正在调查，请等待完成或先停止。')
     if (session.messages.length > 1000) throw new Error('会话已达到消息上限，请新建会话。')
     if (input.type === 'retry' && !['failed', 'cancelled', 'interrupted', 'paused'].includes(session.status)) throw new Error('当前会话没有需要重试的调查。')
+    if (input.type === 'send' && input.display && !input.text.trim().endsWith(input.display.text.trim())) throw new Error('会话输入过长或格式不正确。')
     if (input.type === 'retry_review' && (session.nativeProtocolVersion !== 2 || !session.messages.some(m => m.id === input.messageId && m.draft?.review && !m.draft.publishedArtifactId))) throw new Error('没有可重新核对的原生提案。')
+    const display = input.type === 'send' && input.display
+      ? { text: redactSensitiveText(input.display.text.trim()).value, references: input.display.references.map((reference) => redactSensitiveText(reference).value) }
+      : undefined
     const controller = new AbortController()
     this.controllers.set(session.id, controller)
     try {
       await this.update(input.projectId, session.id, (current) => {
         if (input.type === 'retry_review' && !current.messages.some(message => message.id === input.messageId && message.draft?.review && !message.draft.publishedArtifactId)) throw new Error('提案已经保存或不存在，不能重新核对。')
         const messages = current.messages.map(message => input.type === 'retry_review' && message.id === input.messageId && message.draft ? { ...message, draft: { ...message.draft, review: { status: 'pending' as const } } } : message).map((message) => input.type === 'send' && input.answerToMessageId === message.id && message.question && !message.question.answeredAt ? { ...message, question: { ...message.question, answeredAt: now() } } : message)
-        if (input.type === 'send') messages.push({ id: randomUUID(), role: 'user', text: redactSensitiveText(input.text.trim()).value, createdAt: now() })
+        if (input.type === 'send') messages.push({ id: randomUUID(), role: 'user', text: redactSensitiveText(input.text.trim()).value, ...(display ? { display } : {}), createdAt: now() })
         if (input.type === 'send' && current.nativeTranscript) {
           const pending = new Set<string>()
           for (const entry of current.nativeTranscript) {
@@ -492,7 +502,7 @@ export class WorkbenchConversationService {
         }
 
         const { error: _error, failure: _failure, ...rest } = current
-        return { ...rest, checkpoint: input.type === 'retry_review' ? { version: 1, turnId: current.messages.find(m => m.id === input.messageId)?.draft?.requestedByMessageId ?? current.messages.slice().reverse().find(m => m.role === 'user')!.id, step: 1, cycle: (current.checkpoint?.cycle ?? 0) + 1, recoveries: 0, group: randomUUID(), providerId: input.providerId, observations: [], citations: [], requirementRunIds: [], nativeReviewMessageId: input.messageId } : input.type === 'send' ? undefined : current.checkpoint ? { ...current.checkpoint, ...(current.status === 'paused' ? {} : { cycle: current.checkpoint.cycle + 1, recoveries: 0 }) } : undefined, messages, toolEvents: interruptPendingTools(current.toolEvents ?? [], now()), inputDraft: '', isOpen: true, status: 'running', title: current.title === '新对话' && input.type === 'send' ? input.text.trim().slice(0, 28) : current.title }
+        return { ...rest, checkpoint: input.type === 'retry_review' ? { version: 1, turnId: current.messages.find(m => m.id === input.messageId)?.draft?.requestedByMessageId ?? current.messages.slice().reverse().find(m => m.role === 'user')!.id, step: 1, cycle: (current.checkpoint?.cycle ?? 0) + 1, recoveries: 0, group: randomUUID(), providerId: input.providerId, observations: [], citations: [], requirementRunIds: [], nativeReviewMessageId: input.messageId } : input.type === 'send' ? undefined : current.checkpoint ? { ...current.checkpoint, ...(current.status === 'paused' ? {} : { cycle: current.checkpoint.cycle + 1, recoveries: 0 }) } : undefined, messages, toolEvents: interruptPendingTools(current.toolEvents ?? [], now()), inputDraft: '', isOpen: true, status: 'running', title: current.title === '新对话' && input.type === 'send' ? (display ? display.text : input.text.trim()).slice(0, 28) : current.title }
       })
       const task = this.run(input.projectId, session.id, input.providerId, controller)
       this.tasks.set(session.id, task)
@@ -513,6 +523,23 @@ export class WorkbenchConversationService {
     const search = query === undefined ? '' : textField(query, 200).toLocaleLowerCase()
     const runs = (await this.readRuns()).filter((run) => run.projectId === projectId && (runId === undefined || run.id === runId) && (!search || run.title.toLocaleLowerCase().includes(search)))
     return { observedAt: now(), totalRuns: runs.length, offset, nextOffset: offset + 30 < runs.length ? offset + 30 : null, truncated: runs.length > offset + 30 || offset > 0, runs: runs.slice(offset, offset + 30).map((run) => ({ id: run.id, title: run.title, status: run.status, version: run.version, currentNodeId: run.currentNodeId, updatedAt: run.updatedAt, nodes: run.nodes.map((node) => ({ id: node.id, title: node.title, stage: node.stage, kind: node.kind, status: node.status, isCurrent: node.id === run.currentNodeId })) })) }
+  }
+
+  /** Per-turn material versions. Reads the store directly: a failure omits facts and never stops the turn. */
+  private async materialFacts(projectId: string): Promise<MaterialFact[] | undefined> {
+    let runs: WorkflowRun[]
+    try { runs = await this.deps.store.listRuns() } catch { return undefined }
+    const recent = runs.filter((run) => run.projectId === projectId)
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.id.localeCompare(b.id)).slice(0, 10)
+    const facts = await Promise.all(recent.map(async (run): Promise<MaterialFact | undefined> => {
+      try {
+        const { requirement, design } = summarizeRunMaterialVersions(run, await this.deps.store.listArtifacts(run.id))
+        return { runId: run.id,
+          ...(requirement ? { requirement: { version: requirement.version, status: requirement.status } } : {}),
+          ...(design ? { design: { ...(design.version === undefined ? {} : { version: design.version }), gateStatus: design.gateStatus } } : {}) }
+      } catch { return undefined }
+    }))
+    return facts.filter((fact): fact is MaterialFact => fact !== undefined)
   }
 
   private async readConversationSource(projectId: string, id: string, args: Record<string, unknown>) {
@@ -865,10 +892,11 @@ export class WorkbenchConversationService {
         await runNativeConversation({ provider, checkpoint, signal: controller.signal,
           read: () => this.conversation(projectId, id), update: transform => this.update(projectId, id, current => ({...transform(current), investigationProgress: investigationProgress(investigation)})), query, validateReads: validateBatch,
           critical: async (runId, nodeId) => { const { run } = await this.target(projectId, runId, nodeId); return buildNativeCriticalContext(run, nodeId, await this.readArtifacts(run.id)) },
-          context: async () => { const overview = await this.overview(projectId); const first = overview.totalRuns === 1 ? overview.runs[0] : undefined;
+          context: async (options) => { const overview = await this.overview(projectId); const first = overview.totalRuns === 1 ? overview.runs[0] : undefined;
             if (first) await attachRequirement(first.id)
             const knowledge = await this.deps.loadKnowledge(projectId).catch(() => undefined)
-            return { latestWorkflow: overview, originalRequirements: [...requirements.values()], projectInstructions: knowledge?.projectInstructions }
+            const materials = options?.compact ? undefined : await this.materialFacts(projectId)
+            return { latestWorkflow: materials ? { ...overview, materials } : overview, originalRequirements: [...requirements.values()], projectInstructions: knowledge?.projectInstructions }
           },
           memory: async () => {
             recalledMemory = await this.recallBackgroundMemory(projectId, await this.conversation(projectId, id), [...requirements.values()][0], controller.signal)
@@ -932,7 +960,8 @@ export class WorkbenchConversationService {
         const projectInstructions = (await this.deps.loadKnowledge(projectId).catch(() => undefined))?.projectInstructions
         const backgroundMemory = await this.recallBackgroundMemory(projectId, session, [...requirements.values()][0], controller.signal)
         for (const runId of [...requirements.keys()]) await attachRequirement(runId)
-        const facts = await this.overview(projectId)
+        const materials = await this.materialFacts(projectId)
+        const facts = { ...await this.overview(projectId), ...(materials ? { materials } : {}) }
         // The Map keeps the two most recently investigated Runs; serialize them in a stable
         // order so re-querying a Run does not reshuffle the prompt prefix.
         const orderedRequirements = [...requirements.values()].sort((left, right) => left.runId.localeCompare(right.runId))

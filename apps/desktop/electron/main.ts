@@ -3632,6 +3632,7 @@ function registerIpcHandlers() {
       expectedRevision: input.revision,
       expectedRevisionDigest: input.revisionDigest,
       now: new Date().toISOString(),
+      ...(input.proposals ? { proposals: input.proposals } : {}),
     })
     const committed = await store.commitWorkflowMutation({
       expectedRun: run,

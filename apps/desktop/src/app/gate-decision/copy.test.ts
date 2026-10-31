@@ -1,0 +1,42 @@
+import { describe, expect, it } from 'vitest'
+import { blockingTargetLabels } from '../node-inspector-view-model'
+import { gateCopy, nextVersionLabel, policyTargetLabel, roleLabel, versionLabel } from './copy'
+describe('gate copy', () => {
+  it('writes version labels and buttons exactly as the bar rows name them', () => {
+    expect(versionLabel('requirement', 2)).toBe('需求 v2')
+    expect(versionLabel('design', undefined, '2026-10-30 08:40')).toBe('方案（记录于 2026-10-30 08:40）')
+    expect(nextVersionLabel('design', 1)).toBe('方案 v2')
+    expect(gateCopy.decideTitle('需求 v1')).toBe('需求 v1 · 你的决定')
+    expect(gateCopy.submitButton('需求 v2', 3)).toBe('提交修订，生成 v2（3 项）')
+    expect(gateCopy.generateButton('方案 v2', 3)).toBe('生成方案 v2（3 项）')
+    expect(gateCopy.confirmWithoutButton('requirement', '需求 v1')).toBe('不修订，直接确认 v1')
+    expect(gateCopy.confirmWithoutButton('design', '方案 v1')).toBe('不修订，直接确认方案 v1')
+    expect(gateCopy.reviewButton('需求 v2')).toBe('审查需求 v2')
+    expect(gateCopy.regenerateButton('需求 v2')).toBe('重新生成需求 v2')
+    expect(gateCopy.returnButton('方案 v2')).toBe('返回方案 v2')
+    expect(roleLabel('lead')).toBe('Lead')
+  })
+  it('writes the AC texts verbatim', () => {
+    expect(gateCopy.workflowRequiresReview('需求 v2', '需求 v1')).toBe('✕ 需要先审查需求 v2：已有的审查针对需求 v1，确认前必须重新审查（工作流要求）')
+    expect(gateCopy.designOptionalReview('方案 v1')).toBe('重新审查是可选的：已有的审查针对方案 v1，不审查也能确认')
+    expect(gateCopy.marginNoReview('需求 v2')).toBe('审查需求 v2 后，意见会显示在这里')
+    expect(gateCopy.adoptedStatus('需求 v2', '补上')).toBe('已采纳 · v2 里会处理：补上')
+    expect(gateCopy.questionOpenTitle(1, true)).toBe('问题 1 · 重要 · 需要你决定')
+    expect(gateCopy.questionAnsweredTitle(2, '允许')).toBe('问题 2 · 已回答：允许')
+    expect(gateCopy.marginHeader(4, 1)).toBe('审查意见 4 条（1 条重要）')
+    expect(gateCopy.marginHeader(3, 0)).toBe('审查意见 3 条（都是建议）')
+    expect(gateCopy.marginHeader(3, undefined)).toBe('审查意见 3 条')
+    expect(gateCopy.listHeader('需求 v1', '需求 v2')).toBe('对需求 v1 的修改 · 提交后生成 v2')
+    expect(gateCopy.oldListNotice('requirement', '需求 v2', '需求 v1', 3)).toBe('需求已更新为 v2。你在需求 v1 上的修订清单（3 项）没有提交。')
+    expect(gateCopy.confirmWithoutReceipt('需求 v1', 2)).toBe('已确认需求 v1。修订清单里的 2 项没有提交，仍可在需求 v1 的页面查看。')
+    expect(gateCopy.chatAddPreview('需求 v1')).toBe('将作为「来自答疑」加入需求 v1 的修订清单。会保存为讨论提案；不会修改需求，也不会推进流程。')
+    expect(gateCopy.reviewCost('DeepSeek · deepseek-flash', '需求 v1')).toBe('将用 DeepSeek · deepseek-flash 审查需求 v1，可能产生费用')
+    expect(gateCopy.reviewNoModel).toBe('运行审查前需要先选择模型。')
+    expect(gateCopy.generationCost('Direct Provider', 'deepseek-flash')).toBe('将用 Direct Provider · deepseek-flash 生成，可能产生费用')
+    expect(gateCopy.generatingDetail('requirement', '需求 v1', 2)).toBe('根据需求 v1 和 2 项修改生成；完成前不会确认任何版本。')
+    expect(gateCopy.generateDesignChanged('方案 v2')).toBe('方案 v2 没有生成：方案内容已变化。修订清单保留；请阅读最新方案后再决定。')
+  })
+  it('takes the three policy target labels from the Inspector view model', () => {
+    for (const target of ['governance_check', 'agent_finding', 'missing_agent_review'] as const) expect(policyTargetLabel(target)).toBe(blockingTargetLabels[target])
+  })
+})

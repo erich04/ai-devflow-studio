@@ -346,6 +346,8 @@ export type ClarificationRevisionMetadata = {
   repositoryFindings?: ClarificationRepositoryFindings
   executor: StageAgentExecutorProvenance
   generatedAt: string
+  /** Saved proposals the generator actually used for this revision (UX batch 1). */
+  inputProposals?: DesignRevisionIdentity[]
 }
 
 export type ClarificationFeedbackMetadata = {
@@ -357,6 +359,8 @@ export type ClarificationFeedbackMetadata = {
   actorName: string
   reasonDigest: string
   createdAt: string
+  /** Present iff the request carried the field (possibly []): the exact proposals to use. */
+  proposals?: DesignRevisionIdentity[]
 }
 
 export type ClarificationAuditRecord = {
@@ -399,7 +403,13 @@ export type Artifact = {
   clarificationFeedback?: ClarificationFeedbackMetadata
   designEvidence?: DesignEvidence
   /** Exact inputs of an explicitly requested design revision; old materials remain immutable. */
-  designRevision?: { version: 1; previous: DesignRevisionIdentity; proposals: DesignRevisionIdentity[] }
+  designRevision?: {
+    version: 1
+    previous: DesignRevisionIdentity
+    proposals: DesignRevisionIdentity[]
+    /** Redacted revision list the user submitted with the request, when any. */
+    changeRequest?: string
+  }
   githubDeliverySource?: GitHubDeliveryPackageSource
 }
 
@@ -852,6 +862,8 @@ export type AgentReviewMissingEvidenceDetail = {
   /** Valid citations locate text; they do not prove a model's interpretation. */
   citations: AgentReviewEvidenceCitation[]
   requiresReview: boolean
+  /** Advisory level from clarify and design reviews; policy never reads it. */
+  importance?: 'important' | 'suggestion'
 }
 
 export type AgentReviewFeedback = {
