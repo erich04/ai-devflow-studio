@@ -4,6 +4,7 @@ import '@xyflow/react/dist/style.css'
 import './styles.css'
 import './workbench-workspace.css'
 import './task-workspace.css'
+import './gate-page.css'
 import { App } from './App'
 
 createRoot(document.getElementById('root') as HTMLElement).render(

@@ -1,0 +1,131 @@
+/* Gate decision pages: 需求确认 and 方案评审 (UX batch 1, design §3.13, §3.23, §3.25, §3.27, §5.7). */
+
+/* Own tones (3.27): the light skin sets --blue and --accent to the brand red. Tones colour rules,
+   borders, tints, bars and outlines only; text stays --text or --text-muted. */
+.inspector--gate-page {
+  --gate-question: #2563eb;
+  --gate-important: var(--amber);
+  --gate-new: var(--green);
+  --gate-block: var(--status-blocked);
+  --gate-warn: var(--status-warning);
+}
+:root[data-theme='dark'] .inspector--gate-page { --gate-question: #7fb5ff; }
+
+/* Gutters (3.13): the aside never scrolls, so it drops its gutter; the scroll container keeps a
+   stable one, so a scrollbar that appears never changes the measured width. */
+.node-reader > .inspector.inspector--gate-page { scrollbar-gutter: auto; }
+.inspector--gate-page .inspector-document-scroll { scrollbar-gutter: stable; }
+
+/* Decision bar (3.2, §5.3) */
+.gate-decision-bar {
+  flex: none; display: grid; gap: 4px; min-width: 0;
+  padding: 6px 10px; border: 1px solid var(--border); border-left-width: 3px; border-radius: 8px; background: var(--surface);
+  font-size: var(--font-size-body); line-height: 1.45;
+}
+.gate-decision-bar--finished { border-left-color: var(--gate-new); }
+.gate-decision-bar--unverified { border-left-color: var(--gate-warn); }
+.gate-decision-bar:has(.gate-note--block) { border-left-color: var(--gate-block); }
+.gate-bar-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
+.gate-bar-title { margin: 0; font-size: var(--font-size-body); font-weight: 600; }
+.gate-bar-progress { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0; color: var(--text-muted); font-size: var(--font-size-xs); }
+.gate-note { margin: 0; padding-inline-start: 8px; border-inline-start: 3px solid var(--border); color: var(--text); font-size: var(--font-size-xs); }
+.gate-note--block, .gate-note--error { border-inline-start-color: var(--gate-block); }
+.gate-note--warn { border-inline-start-color: var(--gate-warn); }
+.gate-note--ok { border-inline-start-color: var(--gate-new); }
+.gate-note .text-button { margin-inline-start: 8px; font-size: var(--font-size-xs); }
+.gate-bar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
+.gate-bar-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.gate-bar-costs { display: grid; gap: 2px; min-width: 0; }
+.gate-bar-costs p, .gate-list-generation { margin: 0; font-size: var(--font-size-xs); }
+.gate-bar-costs .text-button, .gate-list-generation .text-button { font-size: var(--font-size-xs); }
+.gate-bar-settings { padding: 6px 0; }
+.gate-spinner {
+  display: inline-block; width: 10px; height: 10px; margin-inline-end: 6px; vertical-align: baseline;
+  border: 2px solid var(--border); border-top-color: var(--text-muted); border-radius: 50%; animation: gate-spin 0.9s linear infinite;
+}
+@keyframes gate-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .gate-spinner { animation: none; } }
+.gate-list-toggle { font-size: var(--font-size-xs); border-radius: 6px; }
+.gate-list-toggle.is-bumped { outline: 2px solid color-mix(in srgb, var(--gate-new) 60%, transparent); outline-offset: 2px; }
+.gate-list-panel { max-height: 45vh; overflow: auto; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: var(--font-size-xs); }
+.gate-list-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.gate-list-items { display: grid; gap: 6px; margin: 6px 0; padding: 0; list-style: none; }
+.gate-list-items > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; border-radius: 6px; }
+.gate-list-items > li.is-flashing { background: color-mix(in srgb, var(--gate-new) 14%, var(--surface)); }
+.gate-list-number { color: var(--text-muted); }
+.gate-list-tag { padding: 0 4px; border: 1px solid var(--border); border-radius: 4px; color: var(--text-muted); }
+.gate-list-text { flex: 1 1 200px; min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gate-list-own, .gate-list-edit { display: grid; gap: 4px; width: 100%; }
+.gate-list-own textarea, .gate-list-edit textarea, .gate-card textarea { box-sizing: border-box; width: 100%; min-height: 56px; font: inherit; }
+.gate-list-submitted, .gate-list-proposal, .gate-history-list pre { margin: 4px 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: var(--font-size-xs); }
+.gate-bar-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; font-size: var(--font-size-xs); }
+.gate-bar-meta .text-button { font-size: var(--font-size-xs); }
+.gate-technical dl { display: grid; gap: 2px; margin: 4px 0; }
+.gate-technical dl > div { display: flex; gap: 8px; }
+.gate-technical dt { color: var(--text-muted); }
+.gate-technical dd { margin: 0; overflow-wrap: anywhere; }
+
+/* Workspace grid (§5.7): columns come from gateGridStyle() inline. */
+.gate-workspace { min-width: 0; }
+.gate-margin-head { grid-area: marginhead; min-width: 0; }
+.gate-material-head { grid-area: mhead; min-width: 0; }
+.gate-material { grid-area: material; position: relative; overflow: visible; min-width: 0; padding-inline-start: 16px; }
+.gate-workspace[data-layout='narrow'] .gate-material { padding-inline-end: 12px; }
+.gate-margin { grid-area: margin; position: relative; min-width: 0; }
+.gate-margin-header { display: grid; gap: 2px; font-size: var(--font-size-xs); }
+.gate-margin-header p { margin: 0; }
+.gate-margin-merges, .gate-margin-tools { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.gate-margin-header .text-button { font-size: var(--font-size-xs); }
+.gate-material-header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.gate-material-header .text-button { margin-inline-start: auto; font-size: var(--font-size-xs); }
+.gate-raw-request { display: flex; gap: 8px; margin: 2px 0; color: var(--text-muted); font-size: var(--font-size-xs); }
+.gate-raw-request-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gate-raw-request .text-button { flex: none; font-size: var(--font-size-xs); }
+.gate-history-banner { margin-bottom: 6px; padding-inline-start: 8px; border-inline-start: 3px solid var(--gate-warn); font-size: var(--font-size-xs); }
+.gate-history-banner p { margin: 0; }
+
+/* Material (3.23, 3.25): a tight list keeps its look although every item paragraph is a <p>. */
+.gate-material [data-gate-tight] > li > p { margin: 0; }
+.gate-material .is-new { background: color-mix(in srgb, var(--gate-new) 10%, transparent); box-shadow: inset 3px 0 0 0 var(--gate-new); }
+.gate-material .is-linked { outline: 2px solid color-mix(in srgb, var(--text) 25%, transparent); outline-offset: 2px; }
+
+/* Overlay: tags and thin bars outside the text flow, without DOM text. */
+.gate-overlay { position: absolute; inset: 0; pointer-events: none; }
+.gate-new-tag { position: absolute; inset-inline-start: 0; color: var(--text-muted); font-size: var(--font-size-xs); line-height: 1.6; user-select: none; }
+.gate-new-tag::before { content: '新'; }
+.gate-change-bar {
+  position: absolute; width: 3px; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 2px;
+  background: var(--text-muted); cursor: pointer; pointer-events: auto; user-select: none;
+}
+.gate-change-bar--question { background: var(--gate-question); }
+.gate-change-bar--important { background: var(--gate-important); }
+.gate-change-bar:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+
+/* Narrow markers: the label is drawn from data-label; the accessible name is aria-label. */
+.gate-markers { user-select: none; }
+.gate-marker {
+  display: inline-flex; align-items: center; min-height: 20px; margin-inline-start: 6px; padding: 0 6px; vertical-align: baseline;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text);
+  font-size: var(--font-size-xs); line-height: 1.4; cursor: pointer; user-select: none;
+}
+.gate-marker::before { content: attr(data-label); }
+.gate-marker--question { border-color: var(--gate-question); }
+.gate-marker--important { border-color: var(--gate-important); }
+.gate-marker.is-flashing, .gate-card.is-flashing { box-shadow: 0 0 0 3px color-mix(in srgb, var(--gate-new) 45%, transparent); }
+
+/* Cards (§5.4, §5.7) */
+.gate-card {
+  box-sizing: border-box; padding: 8px 10px; border: 1px solid var(--border); border-inline-start-width: 3px; border-radius: 8px;
+  background: var(--surface); color: var(--text); font-size: var(--font-size-xs); line-height: 1.6;
+}
+.gate-card--important { border-inline-start-color: var(--gate-important); background: color-mix(in srgb, var(--gate-important) 8%, var(--surface)); }
+.gate-card--suggestion { border-inline-start-color: var(--border); }
+.gate-card--question { border-inline-start-color: var(--gate-question); background: color-mix(in srgb, var(--gate-question) 8%, var(--surface)); }
+.gate-card.is-linked { outline: 2px solid color-mix(in srgb, var(--text) 25%, transparent); outline-offset: 2px; }
+.gate-card-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gate-card p { margin: 4px 0; }
+.gate-card-merged { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gate-card-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.gate-card .text-button { font-size: var(--font-size-xs); }
+.gate-card-evidence { margin-top: 6px; }
+.gate-card-evidence summary { cursor: pointer; color: var(--text-muted); }
