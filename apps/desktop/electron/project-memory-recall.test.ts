@@ -28,7 +28,7 @@ async function fixture(options: { transport?: boolean } = {}) {
   if (owner.status !== 'resolved') throw new Error('No principal')
   const config = await store.configureProjectMemory({ projectId: 'project', ownerUserId: owner.userId, enabled: true,
     endpoint: 'http://127.0.0.1:8890', encryptedApiKey: null, providerId: 'deepseek' })
-  const client = { recallMemories: vi.fn(async () => memories) }
+  const client = { recallMemories: vi.fn(async (_bank: string, _input: { query: string; maxTokens: number }) => memories) }
   const degraded: string[] = []
   const recall = createProjectMemoryRecall({ store, transportAvailable: options.transport ?? true,
     client: async () => client as unknown as HindsightClient, onDegraded: (reason) => degraded.push(reason) })
