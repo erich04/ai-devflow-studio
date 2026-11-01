@@ -148,11 +148,11 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       if (name === 'read_ranges') {
         const ranges = (input.ranges as Array<{ startLine: number; limit: number }>).map(range => ({ startLine: Math.max(1, range.startLine), content: lines.slice(Math.max(0, range.startLine - 1), Math.max(0, range.startLine - 1) + range.limit).join('\n') }))
         if (Buffer.byteLength(JSON.stringify(ranges)) > 120000) throw new Error('Read ranges exceed one page; request smaller ranges')
-        return { path: relative, hash: file.hash, mode: file.mode, ranges, revision: (await workspace.inspect()).digest }
+        return { path: relative, hash: file.hash, mode: file.mode, ranges, revision: (await workspace.inspectCached()).digest }
       }
       const content = lines.slice(start - 1, start - 1 + count).join('\n')
       if (Buffer.byteLength(content) > 120000) throw new Error('Read page too large; request fewer lines')
-      return { path: relative, hash: file.hash, mode: file.mode, startLine: start, content, nextLine: start - 1 + count < lines.length ? start + count : null, revision: (await workspace.inspect()).digest }
+      return { path: relative, hash: file.hash, mode: file.mode, startLine: start, content, nextLine: start - 1 + count < lines.length ? start + count : null, revision: (await workspace.inspectCached()).digest }
     }
     if (['write_file', 'apply_patch', 'delete_file', 'rename_file'].includes(name)) {
       const relative = String(input.path); readable(relative)
@@ -212,7 +212,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
       await change(draft => { if (!draft.revisions.some(item => item.id === revision.id)) draft.revisions.push(revision) })
       return { revisionId: revision.id, digest: revision.digest, summary: revision.summary, fileCount: revision.operations.length }
     }
-    const manifest = await workspace.inspect()
+    const manifest = await workspace.inspectCached()
     const files = manifest.files.filter(file => { try { readable(file.path); return true } catch { return false } })
     if (name === 'glob_files') {
       const selected = files.filter(file => path.matchesGlob(file.path, String(input.pattern)))

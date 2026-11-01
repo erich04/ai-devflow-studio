@@ -1,11 +1,11 @@
 // @vitest-environment node
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile, symlink } from 'node:fs/promises'
+import { chmod, lstat, mkdtemp, mkdir, readFile, rename, rm, utimes, writeFile, symlink } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { afterEach, expect, it } from 'vitest'
-import { CodingCandidateWorkspace, codingRelativePath } from './coding-candidate-workspace'
+import { CodingCandidateWorkspace, codingDigest, codingRelativePath } from './coding-candidate-workspace'
 import { applyAndVerifyCodingRevision, recoverCodingDelivery } from './coding-evidence-v3'
 
 const directories: string[] = []
@@ -112,3 +112,60 @@ it('materializes and verifies nested candidate paths beyond the Windows legacy p
   await promisify(execFile)('git', ['-C', relocated, 'fsck', '--full'])
   expect((await promisify(execFile)('git', ['-C', relocated, 'status', '--porcelain'])).stdout).toBe('')
 })
+
+// Hashes are trusted only 2 s after a file's last change; wait past that window, also on 1 s timestamps.
+const settle = () => new Promise(resolve => setTimeout(resolve, 3_100))
+const cachedHashes = (workspace: CodingCandidateWorkspace) => workspace['hashes'].files
+
+it('keeps the cached manifest equal to a full scan through edits, deletes, renames, mode changes and outside writes', async () => {
+  const { workspace } = await fixture()
+  const candidate = (relative: string) => path.join(workspace.candidatePath, relative)
+  const same = async () => expect(await workspace.inspectCached()).toEqual(await workspace.inspect())
+  await mkdir(candidate('src/deep'), { recursive: true })
+  for (const name of ['a', 'b', 'c']) await writeFile(candidate(`src/deep/${name}.ts`), `export const ${name} = 1\n`)
+  await utimes(candidate('old.ts'), 1_700_000_000, 1_700_000_000)
+  await same()
+  // Files changed within the window are hashed again next time, whatever their mtime says.
+  expect(['old.ts', 'src/deep/a.ts', 'src/deep/b.ts', 'src/deep/c.ts'].filter(file => cachedHashes(workspace).has(file))).toEqual([])
+  await settle(); await same()
+  expect([...cachedHashes(workspace).keys()].sort()).toEqual(['old.ts', 'remove.txt', 'src/deep/a.ts', 'src/deep/b.ts', 'src/deep/c.ts'])
+  // Same size, same inode and, as on a one-second filesystem, the same mtime: only ctime shows the edit.
+  const before = await lstat(candidate('old.ts'), { bigint: true })
+  await writeFile(candidate('old.ts'), 'export const value = 9\n'); await utimes(candidate('old.ts'), 1_700_000_000, 1_700_000_000)
+  const after = await lstat(candidate('old.ts'), { bigint: true })
+  expect([after.size, after.ino, after.mtimeNs]).toEqual([before.size, before.ino, before.mtimeNs])
+  await same()
+  await workspace.write('src/deep/a.ts', 'export const a = 2 // edited\n', (await workspace.read('src/deep/a.ts')).hash); await same()
+  await workspace.remove('remove.txt', (await workspace.read('remove.txt')).hash); await same()
+  await rename(candidate('src/deep/b.ts'), candidate('src/moved.ts')); await same()
+  await rename(candidate('src/deep/c.ts'), candidate('src/deep/a.ts')); await same()
+  await chmod(candidate('src/moved.ts'), 0o755); await same()
+  await writeFile(candidate('src/outside.ts'), 'created outside the harness\n'); await same()
+  await settle(); await same()
+  expect([...cachedHashes(workspace).keys()].sort()).toEqual(['old.ts', 'src/deep/a.ts', 'src/moved.ts', 'src/outside.ts'])
+}, 20_000)
+
+it('re-hashes only changed files, never freezes from the cache, starts cold after reopening and keeps the capacity error', async () => {
+  const { workspace } = await fixture()
+  await settle()
+  const truth = await workspace.inspect()
+  expect(await workspace.inspectCached()).toEqual(truth)
+  // Mark every cached hash: a reused entry keeps the mark, a re-hashed one gets its real digest.
+  const mark = 'f'.repeat(64)
+  for (const entry of cachedHashes(workspace).values()) entry.file.hash = mark
+  await writeFile(path.join(workspace.candidatePath, 'remove.txt'), 'new bytes')
+  expect((await workspace.inspectCached()).files.map(file => [file.path, file.hash])).toEqual([['old.ts', mark], ['remove.txt', codingDigest('new bytes')]])
+  const full = await workspace.inspect()
+  expect(full.files.map(file => [file.path, file.hash])).toEqual([['old.ts', truth.files[0]!.hash], ['remove.txt', codingDigest('new bytes')]])
+  const revision = await workspace.freeze({ sessionId: 's', codingRunId: 'c', objectiveVersion: 1, policyVersion: 1, testPlanDigest: 'b'.repeat(64), summary: 'Outside edit', now: new Date().toISOString() })
+  expect(revision.target).toEqual(full)
+  expect(await workspace.capture()).toEqual(full)
+  // Nothing is persisted: a reopened workspace ignores the (here deliberately wrong) earlier cache.
+  const reopened = await CodingCandidateWorkspace.open(workspace.root)
+  expect(cachedHashes(reopened).size).toBe(0)
+  expect(await reopened.inspectCached()).toEqual(full)
+  expect(cachedHashes(reopened).has('old.ts')).toBe(true)
+  // Limits are checked before any cache lookup and fail exactly as a full scan does.
+  await writeFile(path.join(reopened.candidatePath, 'zz-large.bin'), Buffer.alloc(32 * 1024 * 1024 + 1))
+  for (const observe of [() => reopened.inspect(), () => reopened.inspectCached()]) await expect(observe()).rejects.toThrow('Cannot establish complete coding manifest: capacity exceeded')
+}, 20_000)
