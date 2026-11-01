@@ -9,6 +9,7 @@ import {
   deriveWorkflowContextPolicyRequirements,
   redactSensitiveText,
   runBudgetedKnowledgeReviewAgent,
+  splitRecallIntents,
   STAGE_AGENT_MEMORY_RECALL_BUDGET,
   type AgentEvent,
   type AgentProvider,
@@ -182,7 +183,7 @@ export function createKnowledgeReviewRuntime(
       const recalled = await recallScopedMemory({
         store: deps.store, projectId: input.projectId, userId: input.requestedBy,
         runtimeId: `agent-runtime-review-${requestId}`, requestId: `review-memory-${requestId}`,
-        query, now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+        query, intents: splitRecallIntents(run.request), now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
       })
       if (recalled.projectMemory) recalledMemory = recalled
       context = await buildAgentReviewContext({

@@ -76,14 +76,16 @@ export type RecalledMemory = {
  */
 export async function recallScopedMemory(input: {
   store: CodingMemoryStore; projectId: string; userId: string; runtimeId: string; requestId: string
-  query: string; now: string; budget: MemoryRecallBudget
+  /** `intents`: the separate asks in the user's own words (`splitRecallIntents`), each recalled beside `query`. */
+  query: string; intents?: readonly string[]; now: string; budget: MemoryRecallBudget
 }): Promise<RecalledMemory> {
   const scope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
   const projectMemory = await projectMemoryRecall.get(input.store)?.recall({
     projectId: input.projectId, userId: input.userId, query: input.query, budget: input.budget,
+    ...(input.intents?.length ? { intents: input.intents } : {}),
   })
   if (!projectMemory) return { scope, runtimeId: input.runtimeId, recalledAt: input.now, context: [], memories: [], omittedMemoryCount: 0 }
-  // Hindsight and DevFlow's re-ranking already ordered the memory for this query.
+  // Hindsight ordered the memory for the query and each ask; the lists were merged in turn.
   const selected = selectMemoryWithinBudget(projectMemory.items, (item) => item.statement, input.budget)
   const currentScope = await executionScope({ store: input.store, projectId: input.projectId, userId: input.userId, runtimeId: input.runtimeId })
   if (JSON.stringify(currentScope) !== JSON.stringify(scope)) throw new Error('Coding Context pairing changed during recall')
@@ -95,13 +97,13 @@ export async function recallScopedMemory(input: {
 }
 
 export async function recallCodingMemory(input: {
-  store: CodingMemoryStore; run: WorkflowRun; codingRunId: string; userId: string; query: string; now: string
+  store: CodingMemoryStore; run: WorkflowRun; codingRunId: string; userId: string; query: string; intents?: readonly string[]; now: string
 }): Promise<RecalledMemory> {
   return recallScopedMemory({
     store: input.store, projectId: input.run.projectId, userId: input.userId,
     runtimeId: `agent-runtime-coding-${input.codingRunId}`,
     requestId: `coding-memory-${codingPromptDigest(input.codingRunId).slice(0, 32)}`,
-    query: input.query, now: input.now, budget: CODING_MEMORY_RECALL_BUDGET,
+    query: input.query, ...(input.intents ? { intents: input.intents } : {}), now: input.now, budget: CODING_MEMORY_RECALL_BUDGET,
   })
 }
 
