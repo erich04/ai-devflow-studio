@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { chmod, cp, link, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, rmdir, writeFile } from 'node:fs/promises'
+import type { BigIntStats } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 
@@ -78,9 +79,35 @@ export async function removeCodingFile(root: string, relative: string): Promise<
   }
 }
 
+/** In-memory hashes of one tree for read-only observations, keyed by path and lstat identity. Never persisted. */
+type CodingHashCache = { clockFile: string; files: Map<string, { key: string; file: CodingFileEntry }> }
+// A hash is reused only while dev, inode, mode, size, mtime and ctime (full precision) are all
+// unchanged. Every write, truncate, chmod or utimes sets ctime from the filesystem clock, which user
+// space cannot set, and a replaced file has another inode or a new ctime. A new hash is cached only
+// if mtime and ctime are 2 s older than a timestamp the same filesystem assigned before this scan
+// examined the file, so any later change, even within the timestamp granularity, alters the key.
+// Assumes that clock does not run backwards and that bytes do not change through a shared writable
+// mapping without a timestamp update. B, frozen revisions, capture, inspect, V and D hash every byte.
+const settledMarginNs = 2_000_000_000n
+const statKey = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+async function filesystemClock(file: string): Promise<{ dev: bigint; settledBefore: bigint } | null> {
+  try {
+    await writeFile(file, randomUUID())
+    const stat = await lstat(file, { bigint: true })
+    return { dev: stat.dev, settledBefore: (stat.mtimeNs < stat.ctimeNs ? stat.mtimeNs : stat.ctimeNs) - settledMarginNs }
+  } catch { return null }
+}
+
+/** Hashes every byte. Every guarantee (B, frozen revisions, capture, inspect, V, D) uses this. */
 export async function snapshotCodingTree(root: string, excludedPaths: string[], saveBlob?: (bytes: Buffer) => Promise<void>): Promise<CodingManifest> {
+  return scanCodingTree(root, excludedPaths, saveBlob)
+}
+
+async function scanCodingTree(root: string, excludedPaths: string[], saveBlob?: (bytes: Buffer) => Promise<void>, cache?: CodingHashCache): Promise<CodingManifest> {
   const files: CodingFileEntry[] = [], seen = new Set<string>()
-  let totalBytes = 0
+  let totalBytes = 0, rootChecked = false
+  const capacity = (size: number) => { if (size > 32 * 1024 * 1024 || files.length >= 200_000 || (totalBytes += size) > 2 * 1024 ** 3) throw new Error('Cannot establish complete coding manifest: capacity exceeded') }
+  const clock = cache ? await filesystemClock(cache.clockFile) : null, hashes: CodingHashCache['files'] = new Map()
   const excluded = (relative: string) => relative.toLowerCase() === '.git' || excludedPaths.some(item => item.includes('/') ? relative === item || relative.startsWith(`${item}/`) : relative.split('/').includes(item))
   const walk = async (directory: string, prefix: string): Promise<void> => {
     for (const entry of (await readdir(directory, { withFileTypes: true })).sort((a, b) => a.name < b.name ? -1 : 1)) {
@@ -92,9 +119,25 @@ export async function snapshotCodingTree(root: string, excludedPaths: string[], 
       seen.add(folded)
       if (entry.isDirectory()) { await walk(path.join(directory, entry.name), relative); continue }
       if (!entry.isFile() || entry.isSymbolicLink()) throw new Error(`Unsupported coding file: ${relative}`)
+      if (cache) {
+        // A hit reads no bytes, so only a miss repeats the per-component symlink checks before reading.
+        // The root check of codingFilePath still runs once, so a replaced root fails as in a full scan.
+        if (!rootChecked) { const stat = await lstat(root); if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe workspace root'); rootChecked = true }
+        const before = await lstat(path.join(directory, entry.name), { bigint: true })
+        capacity(Number(before.size))
+        const key = statKey(before), known = cache.files.get(relative)
+        if (known?.key === key) { hashes.set(relative, known); files.push({ ...known.file }); continue }
+        const fullPath = await codingFilePath(root, relative)
+        const bytes = await readFile(fullPath), after = await lstat(fullPath, { bigint: true })
+        if (before.size !== after.size || before.mtimeNs !== after.mtimeNs || before.ino !== after.ino || before.mode !== after.mode) throw new Error('Workspace changed during snapshot')
+        const file = { path: relative, hash: codingDigest(bytes), mode: Number(before.mode) & 0o111 ? 0o755 : 0o644, size: bytes.length }
+        if (clock && statKey(after) === key && after.dev === clock.dev && after.mtimeNs < clock.settledBefore && after.ctimeNs < clock.settledBefore) hashes.set(relative, { key, file: { ...file } })
+        files.push(file)
+        continue
+      }
       const fullPath = await codingFilePath(root, relative)
       const before = await lstat(fullPath)
-      if (before.size > 32 * 1024 * 1024 || files.length >= 200_000 || (totalBytes += before.size) > 2 * 1024 ** 3) throw new Error('Cannot establish complete coding manifest: capacity exceeded')
+      capacity(before.size)
       const bytes = await readFile(fullPath), after = await lstat(fullPath)
       if (before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ino !== after.ino || before.mode !== after.mode) throw new Error('Workspace changed during snapshot')
       if (saveBlob) await saveBlob(bytes)
@@ -102,6 +145,8 @@ export async function snapshotCodingTree(root: string, excludedPaths: string[], 
     }
   }
   await walk(root, '')
+  // Entries for files that disappeared are dropped; a failed scan keeps the previous, still key-checked map.
+  if (cache) cache.files = hashes
   files.sort((a, b) => a.path < b.path ? -1 : 1)
   const manifest = { schemaVersion: 1 as const, files, excludedPaths: [...excludedPaths].sort() }
   return { ...manifest, digest: codingDigest(JSON.stringify(manifest)) }
@@ -110,7 +155,12 @@ export async function snapshotCodingTree(root: string, excludedPaths: string[], 
 /** B and blobs are immutable; C/V each have independent Git metadata. D is host-only. */
 export class CodingCandidateWorkspace {
   readonly candidatePath: string
-  private constructor(readonly root: string, readonly identity: WorkspaceIdentity) { this.candidatePath = path.join(root, 'candidate') }
+  // Lives as long as this instance (one per session core); a restart starts cold.
+  private readonly hashes: CodingHashCache
+  private constructor(readonly root: string, readonly identity: WorkspaceIdentity) {
+    this.candidatePath = path.join(root, 'candidate')
+    this.hashes = { clockFile: path.join(root, 'manifest-clock'), files: new Map() }
+  }
 
   static async create(input: { root: string; delivery: string; baseCommitSha: string; excludedPaths: string[] }): Promise<CodingCandidateWorkspace> {
     if (!/^[a-f0-9]{40,64}$/u.test(input.baseCommitSha)) throw new Error('Invalid base commit')
@@ -156,6 +206,8 @@ export class CodingCandidateWorkspace {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; await atomicCodingFile(target, bytes) }
   }
   async inspect(): Promise<CodingManifest> { return snapshotCodingTree(this.candidatePath, this.identity.base.excludedPaths) }
+  /** Same manifest as inspect(), re-hashing only files whose lstat identity changed. For read-only tool results. */
+  async inspectCached(): Promise<CodingManifest> { return scanCodingTree(this.candidatePath, this.identity.base.excludedPaths, undefined, this.hashes) }
   async capture(): Promise<CodingManifest> { return snapshotCodingTree(this.candidatePath, this.identity.base.excludedPaths, bytes => this.storeBlob(bytes)) }
   async read(relative: string): Promise<{ hash: string; bytes: Buffer; mode: number }> {
     const full = await codingFilePath(this.candidatePath, relative)
