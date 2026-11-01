@@ -8,6 +8,15 @@ it('requires a supported enforced policy, not a UTF-8 estimate, to claim an uppe
   expect(bound().inputTokenBound).toBe(1048576)
   expect(bound().priceVersion).toBeTruthy()
 })
+it('gives deepseek-flash, the deepseek-v4-flash alias and deepseek-v4-pro a verified bound from the pricing catalog', () => {
+  // An off-peak quote is still bounded at peak cache-miss rates over the full 1M context.
+  const of = (model: string) => verifiedModelCallBound({ ...quote, model, createdAt: '2026-11-02T12:00:00.000Z', boundBasis: 'deepseek-context-v1' })
+  expect(of('deepseek-flash')).toMatchObject({ inputTokenBound: 1048576, maxOutputTokens: 65536, priceVersion: 'deepseek-pricing-snapshot-2026-09-10' })
+  expect(of('deepseek-flash')!.costUsd).toBeCloseTo((1048576 * 0.3 + 65536 * 1.2) / 1e6, 12)
+  expect(of('deepseek-v4-flash')).toEqual(of('deepseek-flash'))
+  expect(of('deepseek-v4-pro')).toMatchObject({ inputTokenBound: 1048576, maxOutputTokens: 65536, priceVersion: 'deepseek-pricing-snapshot-2026-11-01' })
+  expect(of('deepseek-v4-pro')!.costUsd).toBeCloseTo((1048576 * 1.32 + 65536 * 3.96) / 1e6, 12)
+})
 it('retains verified holds after ten minutes, interruption and across months without reporting them as actual spend', () => {
   const call: ModelCallAttempt = { ...quote, state: 'reserved', costUsd: null, projectedCostUsd: 0.01, verifiedBound: bound() }
   const now = '2026-11-01T00:15:00.000Z'

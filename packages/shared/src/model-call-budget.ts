@@ -29,7 +29,7 @@ export type VerifiedModelCallBound = { costUsd: number; inputTokenBound: number;
 /** Full supported context capacity is an upper bound; UTF-8(prompt)+overhead is only an estimate. */
 export function verifiedModelCallBound(quote: ModelCallQuote): VerifiedModelCallBound | null {
   if (quote.boundBasis !== 'deepseek-context-v1' || quote.billingProvider !== 'deepseek' ||
-    !['deepseek-flash', 'deepseek-pro'].includes(quote.model) || !quote.maxOutputTokens || quote.maxOutputTokens > 393216 || quote.inputTokens > 1048576) return null
+    !['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-pro'].includes(quote.model) || !quote.maxOutputTokens || quote.maxOutputTokens > 393216 || quote.inputTokens > 1048576) return null
   const price = resolveDeepSeekPricingSnapshot({ providerId: 'deepseek', model: quote.model, timestamp: quote.createdAt, worstCase: true })
   if (!price) return null
   return { basis: quote.boundBasis, inputTokenBound: 1048576, maxOutputTokens: quote.maxOutputTokens, priceVersion: price.sourceVersion,
