@@ -57,10 +57,14 @@ import {
   parseSaveGateOverrideInput,
   parseSaveProjectTestCommandInput,
   parseSettingsInput,
-  parseAutomaticMemoryProjectInput,
-  parseConfigureAutomaticMemoryInput,
-  parseResolveAutomaticMemoryDecisionInput,
-  parseRememberConversationMemoryInput,
+  parseConfigureProjectMemoryInput,
+  parseProjectMemoryProjectInput,
+  parseClearProjectMemoryInput,
+  parseRefreshProjectKnowledgePageInput,
+  parseForgetProjectMemoryInput,
+  parseForgetProjectMemorySourceInput,
+  parseListProjectMemoriesInput,
+  parseUpdateProjectMemoryInput,
   parseValidateTestCommandInput,
 } from './ipc-contract'
 
@@ -1286,33 +1290,40 @@ describe('coding question IPC', () => {
   })
 })
 
-describe('automatic Memory IPC boundaries', () => {
-  it('keeps scope and processing authority in Main', () => {
-    expect(parseAutomaticMemoryProjectInput({ projectId: 'project-1' })).toEqual({ projectId: 'project-1' })
-    for (const extra of [{ ownerUserId: 'spoofed' }, { bankId: 'other-bank' }, { generation: 'old' }, { payload: 'upload' }]) {
-      expect(() => parseAutomaticMemoryProjectInput({ projectId: 'project-1', ...extra })).toThrow()
+describe('project memory IPC boundaries', () => {
+  it('accepts only the project memory switch, endpoint, Provider and optional key', () => {
+    const input = { projectId: 'project-1', enabled: true, endpoint: ' http://127.0.0.1:8890 ', providerId: 'deepseek' }
+    expect(parseConfigureProjectMemoryInput(input)).toEqual({ ...input, endpoint: 'http://127.0.0.1:8890' })
+    expect(parseConfigureProjectMemoryInput({ ...input, apiKey: '' })).toEqual({ ...input, endpoint: 'http://127.0.0.1:8890', apiKey: '' })
+    expect(parseProjectMemoryProjectInput({ projectId: 'project-1' })).toEqual({ projectId: 'project-1' })
+    for (const extra of [{ enabled: 'yes' }, { endpoint: '' }, { providerId: ' padded ' }, { apiKey: 'line\nbreak' }, { apiKey: 1 },
+      { ownerUserId: 'user-1' }, { bankId: 'df-memory-x' }]) {
+      expect(() => parseConfigureProjectMemoryInput({ ...input, ...extra })).toThrow()
+    }
+    expect(() => parseProjectMemoryProjectInput({ projectId: 'project-1', bankId: 'df-memory-x' })).toThrow()
+  })
+  it('refreshes only a known knowledge page of the named project', () => {
+    expect(parseRefreshProjectKnowledgePageInput({ projectId: 'project-1', pageId: 'decisions' })).toEqual({ projectId: 'project-1', pageId: 'decisions' })
+    for (const extra of [{ pageId: 'devflow-decisions' }, { pageId: undefined }, { bankId: 'df-memory-x' }, { projectId: '' }]) {
+      expect(() => parseRefreshProjectKnowledgePageInput({ projectId: 'project-1', pageId: 'decisions', ...extra })).toThrow()
     }
   })
-  it('requires explicit source consent and a bounded integer invocation cap', () => {
-    const input = { projectId: 'project-1', enabled: true, consent: true, maxRetainsPerDay: 20 }
-    expect(parseConfigureAutomaticMemoryInput(input)).toEqual(input)
-    expect(parseConfigureAutomaticMemoryInput({ ...input, enabled: false, consent: false }).enabled).toBe(false)
-    for (const extra of [{ consent: false }, { consent: undefined }, { maxRetainsPerDay: 0 }, { maxRetainsPerDay: 101 }, { maxRetainsPerDay: 1.5 }, { ownerUserId: 'spoofed' }]) {
-      expect(() => parseConfigureAutomaticMemoryInput({ ...input, ...extra })).toThrow()
+  it('bounds memory page requests and requires explicit confirmation to clear', () => {
+    expect(parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'observation', query: ' 撤销 ', offset: 50 }))
+      .toEqual({ projectId: 'project-1', kind: 'observation', query: '撤销', offset: 50 })
+    expect(parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'world', query: '  ' })).toEqual({ projectId: 'project-1', kind: 'world' })
+    for (const extra of [{ kind: 'candidate' }, { offset: -1 }, { offset: 1.5 }, { query: 'x'.repeat(201) }, { bankId: 'df-memory-x' }]) {
+      expect(() => parseListProjectMemoriesInput({ projectId: 'project-1', kind: 'observation', ...extra })).toThrow()
     }
-  })
-  it('requires an exact conflict target pair and rejects renderer-provided dispositions', () => {
-    const input = { projectId: 'project-1', decisionId: 'decision-1', action: 'approve', targetMemoryId: 'memory-1', expectedRevision: 2 }
-    expect(parseResolveAutomaticMemoryDecisionInput(input)).toEqual(input)
-    for (const extra of [{ expectedRevision: undefined }, { targetMemoryId: undefined }, { expectedRevision: 0 }, { disposition: 'auto_save' }, { action: 'ignore' }]) {
-      expect(() => parseResolveAutomaticMemoryDecisionInput({ ...input, ...extra })).toThrow()
+    expect(parseUpdateProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', text: ' 撤销窗口 10 秒。 ' }))
+      .toEqual({ projectId: 'project-1', memoryId: 'o1', text: '撤销窗口 10 秒。' })
+    for (const extra of [{ text: '   ' }, { text: '记'.repeat(1_400) }, { memoryId: '../o1' }, { memoryId: 'pm-o1 x' }]) {
+      expect(() => parseUpdateProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', text: 'x', ...extra })).toThrow()
     }
-  })
-  it('binds manual memory to real source identifiers without accepting evidence from the renderer', () => {
-    const input = { projectId: 'project-1', conversationId: 'chat-1', messageId: 'message-1', statement: 'Prefer concise explanations.', pin: true }
-    expect(parseRememberConversationMemoryInput(input)).toEqual(input)
-    for (const extra of [{ messageId: '' }, { statement: ' padded ' }, { pin: 'yes' }, { evidence: 'verified' }, { sourceDigest: 'a'.repeat(64) }]) {
-      expect(() => parseRememberConversationMemoryInput({ ...input, ...extra })).toThrow()
-    }
+    expect(parseForgetProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1' })).toEqual({ projectId: 'project-1', memoryId: 'o1' })
+    expect(() => parseForgetProjectMemoryInput({ projectId: 'project-1', memoryId: 'o1', reason: 'x' })).toThrow()
+    expect(parseForgetProjectMemorySourceInput({ projectId: 'project-1', documentId: 'doc-1' })).toEqual({ projectId: 'project-1', documentId: 'doc-1' })
+    expect(parseClearProjectMemoryInput({ projectId: 'project-1', confirm: 'clear' })).toEqual({ projectId: 'project-1', confirm: 'clear' })
+    for (const confirm of [undefined, true, 'yes']) expect(() => parseClearProjectMemoryInput({ projectId: 'project-1', confirm })).toThrow()
   })
 })

@@ -6,6 +6,9 @@ import {
   requireAgentProviderName,
   resolveAgentProviderDisplayName,
   parseProviderThinking,
+  PROJECT_KNOWLEDGE_PAGES,
+  PROJECT_MEMORY_KINDS,
+  PROJECT_MEMORY_MAX_EDIT_BYTES,
   WORK_REQUEST_ID_MAX_LENGTH,
 } from '@ai-devflow/shared'
 import type { GitHubDeliveryProcessorResult } from './github-delivery-processor.js'
@@ -19,10 +22,16 @@ import type {
   AgentRuntimeRendererSnapshot,
   CoordinationRendererSnapshot,
   AgentMemoryRendererSnapshot,
-  AutomaticMemoryStatus,
-  ConfigureAutomaticMemoryInput,
-  ResolveAutomaticMemoryDecisionInput,
-  RememberConversationMemoryInput,
+  ConfigureProjectMemoryInput,
+  ProjectMemoryStatus,
+  ClearProjectMemoryInput,
+  ProjectKnowledgePages,
+  RefreshProjectKnowledgePageInput,
+  ForgetProjectMemoryInput,
+  ForgetProjectMemorySourceInput,
+  ListProjectMemoriesInput,
+  ProjectMemoryPage,
+  UpdateProjectMemoryInput,
   Artifact,
   CommandSafetyResult,
   CodingAgentEvent,
@@ -248,11 +257,15 @@ export const ipcChannels = {
   dismissAgentMemoryCandidate: 'devflow:agent-memory:candidate:dismiss',
   reviseAgentMemory: 'devflow:agent-memory:revise',
   deleteAgentMemory: 'devflow:agent-memory:delete',
-  getAutomaticMemoryStatus: 'devflow:automatic-memory:status',
-  configureAutomaticMemory: 'devflow:automatic-memory:configure',
-  processAutomaticMemory: 'devflow:automatic-memory:process',
-  resolveAutomaticMemoryDecision: 'devflow:automatic-memory:resolve',
-  rememberConversationMemory: 'devflow:automatic-memory:remember',
+  getProjectMemoryStatus: 'devflow:project-memory:status',
+  configureProjectMemory: 'devflow:project-memory:configure',
+  listProjectMemories: 'devflow:project-memory:list',
+  updateProjectMemory: 'devflow:project-memory:update',
+  forgetProjectMemory: 'devflow:project-memory:forget',
+  forgetProjectMemorySource: 'devflow:project-memory:forget-source',
+  clearProjectMemory: 'devflow:project-memory:clear',
+  listProjectKnowledgePages: 'devflow:project-memory:pages',
+  refreshProjectKnowledgePage: 'devflow:project-memory:refresh-page',
   completeWorkflowAgentNode: 'devflow:workflow-agent-node:complete',
   cancelWorkflowAgentNode: 'devflow:workflow-agent-node:cancel',
   requestClarificationChanges: 'devflow:clarification:changes:request',
@@ -766,11 +779,15 @@ export type DevFlowDesktopApi = {
   deleteAgentMemory: (
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
-  getAutomaticMemoryStatus?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  configureAutomaticMemory?: (input: ConfigureAutomaticMemoryInput) => Promise<AutomaticMemoryStatus>
-  processAutomaticMemory?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  resolveAutomaticMemoryDecision?: (input: ResolveAutomaticMemoryDecisionInput) => Promise<AutomaticMemoryStatus>
-  rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
+  getProjectMemoryStatus?: (input: { projectId: string }) => Promise<ProjectMemoryStatus>
+  configureProjectMemory?: (input: ConfigureProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  listProjectMemories?: (input: ListProjectMemoriesInput) => Promise<ProjectMemoryPage>
+  updateProjectMemory?: (input: UpdateProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemory?: (input: ForgetProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemorySource?: (input: ForgetProjectMemorySourceInput) => Promise<ProjectMemoryStatus>
+  clearProjectMemory?: (input: ClearProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  listProjectKnowledgePages?: (input: { projectId: string }) => Promise<ProjectKnowledgePages>
+  refreshProjectKnowledgePage?: (input: RefreshProjectKnowledgePageInput) => Promise<ProjectKnowledgePages>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>
@@ -1320,52 +1337,82 @@ export function parseListAgentMemoryLifecycleInput(
   return readAgentMemoryLifecycleSelection(value)
 }
 
-export function parseAutomaticMemoryProjectInput(value: unknown): { projectId: string } {
-  if (!isRecord(value)) throw new Error('Invalid automatic Memory project payload')
-  rejectUnexpectedFields(value, ['projectId'], 'automatic Memory project payload')
+export function parseProjectMemoryProjectInput(value: unknown): { projectId: string } {
+  if (!isRecord(value)) throw new Error('Invalid project Memory payload')
+  rejectUnexpectedFields(value, ['projectId'], 'project Memory payload')
   return { projectId: readExactRequiredIdentifier(value, 'projectId') }
 }
 
-export function parseConfigureAutomaticMemoryInput(value: unknown): ConfigureAutomaticMemoryInput {
-  if (!isRecord(value)) throw new Error('Invalid automatic Memory configuration payload')
-  rejectUnexpectedFields(value, ['projectId', 'enabled', 'consent', 'maxRetainsPerDay'], 'automatic Memory configuration payload')
-  if (typeof value.enabled !== 'boolean' || typeof value.consent !== 'boolean' || (value.enabled && !value.consent)) {
-    throw new Error('Automatic Memory requires explicit project consent')
+/** The endpoint is normalized by Main; an omitted apiKey keeps the saved key and '' removes it. */
+export function parseConfigureProjectMemoryInput(value: unknown): ConfigureProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory configuration payload')
+  rejectUnexpectedFields(value, ['projectId', 'enabled', 'endpoint', 'providerId', 'apiKey'], 'project Memory configuration payload')
+  if (typeof value.enabled !== 'boolean') throw new Error('Invalid project Memory enabled flag')
+  if (typeof value.endpoint !== 'string' || !value.endpoint.trim() || value.endpoint.length > 2_000) {
+    throw new Error('Invalid project Memory endpoint')
   }
-  const maxRetainsPerDay = readExactPositiveVersion(value, 'maxRetainsPerDay')
-  if (maxRetainsPerDay > 100) throw new Error('Invalid maxRetainsPerDay: maximum is 100')
-  return { projectId: readExactRequiredIdentifier(value, 'projectId'), enabled: value.enabled, consent: value.consent, maxRetainsPerDay }
-}
-
-export function parseResolveAutomaticMemoryDecisionInput(value: unknown): ResolveAutomaticMemoryDecisionInput {
-  if (!isRecord(value)) throw new Error('Invalid automatic Memory decision payload')
-  rejectUnexpectedFields(value, ['projectId', 'decisionId', 'action', 'targetMemoryId', 'expectedRevision'], 'automatic Memory decision payload')
-  if (value.action !== 'approve' && value.action !== 'ignore') throw new Error('Invalid automatic Memory decision action')
-  if ((value.targetMemoryId === undefined) !== (value.expectedRevision === undefined)) {
-    throw new Error('A conflict decision requires its exact target revision')
+  if (value.apiKey !== undefined && (typeof value.apiKey !== 'string' || value.apiKey.length > 4_096 || /[\r\n\0]/u.test(value.apiKey))) {
+    throw new Error('Invalid project Memory API key')
   }
-  if (value.action === 'ignore' && value.targetMemoryId !== undefined) throw new Error('Ignoring cannot replace a Memory')
   return {
     projectId: readExactRequiredIdentifier(value, 'projectId'),
-    decisionId: readExactRequiredIdentifier(value, 'decisionId'), action: value.action,
-    ...(value.targetMemoryId === undefined ? {} : {
-      targetMemoryId: readExactRequiredIdentifier(value, 'targetMemoryId'),
-      expectedRevision: readExactPositiveVersion(value, 'expectedRevision'),
-    }),
+    enabled: value.enabled,
+    endpoint: value.endpoint.trim(),
+    providerId: readExactRequiredIdentifier(value, 'providerId'),
+    ...(value.apiKey === undefined ? {} : { apiKey: value.apiKey }),
   }
 }
 
-export function parseRememberConversationMemoryInput(value: unknown): RememberConversationMemoryInput {
-  if (!isRecord(value)) throw new Error('Invalid remember conversation Memory payload')
-  rejectUnexpectedFields(value, ['projectId', 'conversationId', 'messageId', 'statement', 'pin'], 'remember conversation Memory payload')
-  if (value.pin !== undefined && typeof value.pin !== 'boolean') throw new Error('Invalid pin')
-  return {
-    projectId: readExactRequiredIdentifier(value, 'projectId'),
-    conversationId: readExactRequiredIdentifier(value, 'conversationId'),
-    messageId: readExactRequiredIdentifier(value, 'messageId'),
-    ...(value.statement === undefined ? {} : { statement: readExactAgentMemoryStatement(value, 'statement') }),
-    ...(value.pin === undefined ? {} : { pin: value.pin }),
+const PROJECT_MEMORY_ID = /^[A-Za-z0-9_-]{1,100}$/u
+function readProjectMemoryId(value: Record<string, unknown>): string {
+  if (typeof value.memoryId !== 'string' || !PROJECT_MEMORY_ID.test(value.memoryId)) throw new Error('Invalid project Memory id')
+  return value.memoryId
+}
+export function parseListProjectMemoriesInput(value: unknown): ListProjectMemoriesInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory list payload')
+  rejectUnexpectedFields(value, ['projectId', 'kind', 'query', 'offset'], 'project Memory list payload')
+  if (!PROJECT_MEMORY_KINDS.includes(value.kind as never)) throw new Error('Invalid project Memory kind')
+  if (value.query !== undefined && (typeof value.query !== 'string' || value.query.length > 200 || value.query.includes('\0'))) {
+    throw new Error('Invalid project Memory search')
   }
+  if (value.offset !== undefined && (!Number.isSafeInteger(value.offset) || Number(value.offset) < 0 || Number(value.offset) > 100_000)) {
+    throw new Error('Invalid project Memory offset')
+  }
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), kind: value.kind as ListProjectMemoriesInput['kind'],
+    ...(typeof value.query === 'string' && value.query.trim() ? { query: value.query.trim() } : {}),
+    ...(value.offset === undefined ? {} : { offset: Number(value.offset) }) }
+}
+export function parseUpdateProjectMemoryInput(value: unknown): UpdateProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory update payload')
+  rejectUnexpectedFields(value, ['projectId', 'memoryId', 'text'], 'project Memory update payload')
+  if (typeof value.text !== 'string' || !value.text.trim() || new TextEncoder().encode(value.text).byteLength > PROJECT_MEMORY_MAX_EDIT_BYTES ||
+      value.text.includes('\0')) {
+    throw new Error('记忆内容不能为空，且不能超过 4 KB。')
+  }
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), memoryId: readProjectMemoryId(value), text: value.text.trim() }
+}
+export function parseForgetProjectMemoryInput(value: unknown): ForgetProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory forget payload')
+  rejectUnexpectedFields(value, ['projectId', 'memoryId'], 'project Memory forget payload')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), memoryId: readProjectMemoryId(value) }
+}
+export function parseForgetProjectMemorySourceInput(value: unknown): ForgetProjectMemorySourceInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory source payload')
+  rejectUnexpectedFields(value, ['projectId', 'documentId'], 'project Memory source payload')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), documentId: readExactRequiredIdentifier(value, 'documentId') }
+}
+export function parseClearProjectMemoryInput(value: unknown): ClearProjectMemoryInput {
+  if (!isRecord(value)) throw new Error('Invalid project Memory clear payload')
+  rejectUnexpectedFields(value, ['projectId', 'confirm'], 'project Memory clear payload')
+  if (value.confirm !== 'clear') throw new Error('Clearing project Memory requires explicit confirmation')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), confirm: 'clear' }
+}
+export function parseRefreshProjectKnowledgePageInput(value: unknown): RefreshProjectKnowledgePageInput {
+  if (!isRecord(value)) throw new Error('Invalid knowledge page payload')
+  rejectUnexpectedFields(value, ['projectId', 'pageId'], 'knowledge page payload')
+  const page = PROJECT_KNOWLEDGE_PAGES.find((item) => item.id === value.pageId)
+  if (!page) throw new Error('Invalid knowledge page id')
+  return { projectId: readExactRequiredIdentifier(value, 'projectId'), pageId: page.id }
 }
 
 /** `runtimeId` is optional: omitted selects the project-wide Memory view (ADR 0024). */

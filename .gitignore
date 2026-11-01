@@ -14,5 +14,6 @@ outputs
 *.tsbuildinfo
 .env
 .env.local
+api-diagnostics.json
 *.sqlite
 *.sqlite-journal

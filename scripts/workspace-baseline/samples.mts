@@ -624,7 +624,7 @@ async function reviewSummary(ctx: SampleContext, runId: string, nodeId: string) 
 async function runGateReviewInTask(ctx: SampleContext, gate: any) {
   const { page } = ctx.desktop
   const inspector = page.getByTestId('node-inspector')
-  await inspector.getByTestId('task-status-row').getByRole('button', { name: '运行门禁审查', exact: true }).click()
+  await inspector.getByTestId('task-status-row').getByRole('button', { name: /^审查当前需求 v\d+$/ }).click()
   await pollUntil('Gate Review to finish', async () =>
     (await inspector.getByTestId('task-review-run').count()) > 0 &&
     (await inspector.getByTestId('task-review-run').innerText()).includes('上次审查'), 30_000)
@@ -1621,7 +1621,7 @@ const longContent: Sample = {
     ctx.observe('run', await runSummary(ctx, run.id))
     const statusRow = ctx.desktop.page.getByTestId('node-inspector').getByTestId('task-status-row')
     const reachable: Record<string, boolean> = {}
-    for (const name of ['运行门禁审查', '确认需求 v1', '请求修订当前版本']) {
+    for (const name of ['审查当前需求 v1', '确认需求 v1', '请求修订当前版本']) {
       const button = statusRow.getByRole('button', { name, exact: true })
       reachable[name] = (await button.count()) > 0 && (await button.isVisible())
     }

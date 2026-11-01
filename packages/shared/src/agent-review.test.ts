@@ -6,6 +6,7 @@ import {
   runs,
 } from './fixtures'
 import {
+  agentReviewCoversCurrentSubjects,
   assessAgentReviewFreshness,
   buildAgentReviewContext,
   createAgentReviewArtifacts,
@@ -997,6 +998,37 @@ describe('buildAgentReviewContext', () => {
     })).resolves.toMatchObject({ status: 'stale', reasons: expect.arrayContaining([
       expect.stringContaining('replaced'),
     ]) })
+  })
+
+  it('tells synchronously whether a Review still covers the current subjects, without content digests', async () => {
+    const context = await buildAgentReviewContext({ run, node, artifacts, testEvidence: [], knowledgeDocuments, knowledgeChunks })
+    const { review } = await runKnowledgeReviewAgent({
+      request: { id: 'review-request-covers', runId: run.id, nodeId: node.id, projectId: run.projectId, requestedBy: 'u-ling', runtime: 'electron' },
+      context,
+      provider: createFakeAgentProvider(),
+      now: () => '2026-06-16T12:05:00.000Z',
+    })
+    const design = artifacts.find((artifact) => artifact.id === 'art-design')!
+    expect(agentReviewCoversCurrentSubjects({ review, run, node, artifacts })).toBe(true)
+    // A new recorded time is a new revision of the same Artifact.
+    expect(agentReviewCoversCurrentSubjects({
+      review, run, node,
+      artifacts: artifacts.map((artifact) => artifact.id === design.id ? { ...artifact, updatedAt: '2026-06-16T12:06:00.000Z' } : artifact),
+    })).toBe(false)
+    // A replaced subject (a new design or requirement version) no longer matches.
+    const replacementNode = { ...node, artifactIds: ['art-design-v2'] }
+    expect(agentReviewCoversCurrentSubjects({
+      review,
+      run: { ...run, nodes: run.nodes.map((candidate) => candidate.id === node.id ? replacementNode : candidate) },
+      node: replacementNode,
+      artifacts: artifacts.filter((artifact) => artifact.id !== design.id).concat({ ...design, id: 'art-design-v2' }),
+    })).toBe(false)
+    // Unresolvable subjects fail closed, as they do for enforcement.
+    expect(agentReviewCoversCurrentSubjects({ review, run, node, artifacts: artifacts.filter((artifact) => artifact.id !== design.id) })).toBe(false)
+    expect(agentReviewCoversCurrentSubjects({ review, run, node: { ...node, stage: 'build' }, artifacts })).toBe(false)
+    // Legacy Reviews have no manifest; enforcement does not treat them as stale either.
+    const { contextManifest: _manifest, ...legacy } = review
+    expect(agentReviewCoversCurrentSubjects({ review: legacy, run, node, artifacts })).toBe(true)
   })
 
   it('lets the deterministic fake inspect risks present only in the Artifact body', async () => {

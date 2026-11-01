@@ -9,7 +9,7 @@ import {
   deriveWorkflowContextPolicyRequirements,
   redactSensitiveText,
   runBudgetedKnowledgeReviewAgent,
-  AGENT_MEMORY_RETRIEVAL_LIMIT_MAX,
+  splitRecallIntents,
   STAGE_AGENT_MEMORY_RECALL_BUDGET,
   type AgentEvent,
   type AgentProvider,
@@ -30,7 +30,7 @@ import {
   type WorkflowRun,
 } from '@ai-devflow/shared'
 import type { RunKnowledgeReviewInput, RunKnowledgeReviewResult } from './ipc-contract.js'
-import { executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
+import { assertProjectMemoryCurrent, executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
 
 export type KnowledgeReviewProviderMetadata = Pick<AgentProvider, 'id' | 'name' | 'model' | 'billingProvider' | 'defaultReviewOutputTokens' | 'effectiveThinking' | 'executorKind'>
 
@@ -179,13 +179,13 @@ export function createKnowledgeReviewRuntime(
         query,
         ...(deps.signal ? { signal: deps.signal } : {}),
       })
-      if (deps.store.retrieveAgentMemoryRevisions || deps.store.getAgentMemoryHead) {
-        recalledMemory = await recallScopedMemory({
-          store: deps.store, projectId: input.projectId, userId: input.requestedBy,
-          runtimeId: `agent-runtime-review-${requestId}`, requestId: `review-memory-${requestId}`,
-          query, now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
-        })
-      }
+      // Project memory (ADR 0030): none while the project's memory is off.
+      const recalled = await recallScopedMemory({
+        store: deps.store, projectId: input.projectId, userId: input.requestedBy,
+        runtimeId: `agent-runtime-review-${requestId}`, requestId: `review-memory-${requestId}`,
+        query, intents: splitRecallIntents(run.request), now: now(), budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
+      })
+      if (recalled.projectMemory) recalledMemory = recalled
       context = await buildAgentReviewContext({
         run,
         node,
@@ -199,7 +199,7 @@ export function createKnowledgeReviewRuntime(
         ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
         ...(recalledMemory ? {
           backgroundMemory: recalledMemory.memories.map((identity) => ({
-            ...identity, statement: recalledMemory!.revisions.find((revision) => revision.id === identity.id)!.statement,
+            ...identity, statement: recalledMemory!.context.find((item) => item.id === identity.id)!.statement,
           })),
           omittedMemoryCount: recalledMemory.omittedMemoryCount,
         } : {}),
@@ -228,24 +228,13 @@ export function createKnowledgeReviewRuntime(
       const scope = await executionScope({ store: deps.store, projectId: input.projectId,
         userId: input.requestedBy, runtimeId: recalledMemory.runtimeId })
       if (JSON.stringify(scope) !== JSON.stringify(recalledMemory.scope)) throw new Error('Review Memory scope changed')
-      const identities = context.manifest.backgroundMemory?.memories ?? []
-      if (!identities.length) return
-      if (!deps.store.retrieveAgentMemoryRevisions || !deps.store.getAgentMemoryHead) throw new Error('Review Memory store is unavailable')
-      const observedAt = now()
-      const retrieval = { stateVersion: 1, id: `review-memory-check-${requestId}`, scope,
-        runtimeId: recalledMemory.runtimeId, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: observedAt } as const
-      const current = deps.store.hydrateAgentMemoryRevisions
-        ? await deps.store.hydrateAgentMemoryRevisions(retrieval, identities.map((entry) => entry.id))
-        : await deps.store.retrieveAgentMemoryRevisions(retrieval)
-      for (const identity of identities) {
-        const revision = current.find((entry) => entry.id === identity.id)
-        const head = await deps.store.getAgentMemoryHead(identity.id)
-        if (!revision || !head || head.status !== 'active' || head.version !== identity.headVersion ||
-          head.currentRevision !== identity.revision || revision.status !== 'active' || revision.revision !== identity.revision ||
-          revision.contentDigest !== identity.contentDigest || (revision.expiresAt && Date.parse(revision.expiresAt) <= Date.parse(observedAt))) {
-          throw new Error('Review Memory changed, expired or was deleted')
-        }
-      }
+      let unchecked: readonly unknown[]
+      try {
+        unchecked = await assertProjectMemoryCurrent(deps.store, { projectId: input.projectId, userId: input.requestedBy,
+          identities: context.manifest.backgroundMemory?.memories ?? [], recalledAt: recalledMemory.recalledAt })
+      } catch { throw new Error('Review Memory changed, expired or was deleted') }
+      // Recall returns only project memory; anything it cannot re-check is not sent.
+      if (unchecked.length) throw new Error('Review Memory changed, expired or was deleted')
     }
 
     // Resolve once per review operation so repair attempts share one budget consent.

@@ -18,9 +18,13 @@ async function docker(args: string[]) {
 const config = JSON.parse(await docker([...compose, 'config', '--format', 'json']))
 const service = config.services.hindsight
 assert.equal(config.name, 'devflow-hindsight')
-assert.ok(service.environment.HINDSIGHT_API_LLM_BASE_URL === 'http://127.0.0.1:9/v1', 'Requires infrastructure-only model endpoint')
-assert.ok(service.environment.HINDSIGHT_API_LLM_API_KEY === 'devflow-no-provider', 'Requires infrastructure-only credential placeholder')
-assert.ok(service.environment.HINDSIGHT_API_LLM_MODEL === 'devflow-unconfigured', 'Requires infrastructure-only model placeholder')
+// Either no reachable model, or DevFlow's memory relay without its token, which refuses every call.
+const llm = service.environment
+const unreachableModel = llm.HINDSIGHT_API_LLM_BASE_URL === 'http://127.0.0.1:9/v1' &&
+  llm.HINDSIGHT_API_LLM_API_KEY === 'devflow-no-provider' && llm.HINDSIGHT_API_LLM_MODEL === 'devflow-unconfigured'
+const relayWithoutToken = /^http:\/\/host\.docker\.internal:\d{4,5}\/v1$/u.test(llm.HINDSIGHT_API_LLM_BASE_URL) &&
+  llm.HINDSIGHT_API_LLM_API_KEY === 'devflow-relay-token-not-set'
+assert.ok(unreachableModel || relayWithoutToken, 'Requires an infrastructure-only model configuration (leave DEVFLOW_MEMORY_RELAY_TOKEN unset)')
 const published = service.ports.find((p: { target: number }) => p.target === 8888)
 assert.equal(published.host_ip, '127.0.0.1')
 const endpoint = `http://127.0.0.1:${published.published}`
@@ -38,8 +42,10 @@ for (const field of ['LLM_BASE_URL', 'LLM_API_KEY', 'LLM_MODEL']) {
 }
 const image = JSON.parse(await docker(['image', 'inspect', actual.Image]))[0]
 assert.equal(image.Config.Labels['org.opencontainers.image.revision'], HINDSIGHT_PROTOCOL.commit)
+// DevFlow's image adds the multilingual embedding model; its store is named after that model.
+assert.match(image.Config.Labels['dev.devflow.hindsight.embedding-model'] ?? '', /^intfloat\/multilingual-e5-small@[0-9a-f]{40}$/u)
 assert.ok(actual.Mounts.some((m: { Name?: string; Destination: string }) =>
-  m.Name === 'devflow-hindsight_data' && m.Destination === '/home/hindsight/.pg0'))
+  m.Name === 'devflow-hindsight_data-multilingual-e5-small' && m.Destination === '/home/hindsight/.pg0'))
 
 async function request(path: string, method = 'GET') {
   const response = await fetch(`${endpoint}${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(10_000) })
@@ -80,5 +86,5 @@ try {
   }
 }
 console.log(JSON.stringify({ status: 'passed', endpoint, protocol: HINDSIGHT_PROTOCOL,
-  checks: ['image-commit', 'isolated-volume', 'health', 'bank-config', 'stop-start-persistence', 'test-bank-cleanup'],
+  checks: ['image-commit', 'embedding-model', 'isolated-volume', 'health', 'bank-config', 'stop-start-persistence', 'test-bank-cleanup'],
   modelCalls: 0, notVerified: ['LLM extraction', 'semantic recall', 'desktop live integration'] }, null, 2))

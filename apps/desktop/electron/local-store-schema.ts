@@ -2957,6 +2957,28 @@ export const schemaMigrations: readonly SchemaMigration[] = [
     },
   },
   {
+    // ADR 0030: project memory lives in a Hindsight bank. These tables hold only the project's
+    // switch and the outbox of documents waiting to be sent or removed.
+    version: 41,
+    migrate(db) {
+      db.run(`
+    create table if not exists project_memory_configurations (
+      project_id text primary key references local_projects(id) on delete cascade,
+      json text not null
+    );
+    create table if not exists project_memory_documents (
+      id text primary key,
+      project_id text not null references local_projects(id) on delete cascade,
+      bank_id text not null,
+      document_id text not null,
+      json text not null,
+      unique (bank_id, document_id)
+    );
+    create index if not exists idx_project_memory_documents_project on project_memory_documents(project_id);
+      `)
+    },
+  },
+  {
     version: 41,
     migrate(db) {
       // Native v3 sessions. Before merging main this table was the draft branch's schema 39, so a

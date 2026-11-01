@@ -26,7 +26,7 @@ import { createDiagnosticLog } from '@ai-devflow/shared/node/diagnostic-log'
 import { diagnosticFetch } from './remote-diagnostics.js'
 import { createCredentialAccess } from './credential-access.js'
 import { createProviderOperationGuard, guardProviderCalls } from './provider-operation-guard.js'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import {
   app,
@@ -39,6 +39,8 @@ import {
   shell,
 } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
+import { chmod, readFile, writeFile } from 'node:fs/promises'
+import { isIP } from 'node:net'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
@@ -86,6 +88,7 @@ import {
   resolveDevFlowCodingExecutorSelection,
   resolveDevFlowRuntimeFlags,
   STAGE_AGENT_MEMORY_RECALL_BUDGET,
+  splitRecallIntents,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
@@ -166,10 +169,14 @@ import {
   parsePromoteAgentMemoryCandidateInput,
   parseDismissAgentMemoryCandidateInput,
   parseReviseAgentMemoryInput,
-  parseAutomaticMemoryProjectInput,
-  parseConfigureAutomaticMemoryInput,
-  parseResolveAutomaticMemoryDecisionInput,
-  parseRememberConversationMemoryInput,
+  parseConfigureProjectMemoryInput,
+  parseProjectMemoryProjectInput,
+  parseClearProjectMemoryInput,
+  parseRefreshProjectKnowledgePageInput,
+  parseForgetProjectMemoryInput,
+  parseForgetProjectMemorySourceInput,
+  parseListProjectMemoriesInput,
+  parseUpdateProjectMemoryInput,
   parseReplyCodingPermissionInput,
   parseReplyCodingQuestionInput,
   parseRenewCodingPermissionInput,
@@ -228,7 +235,6 @@ import {
 import { verifyCodingChangeSetDigest } from './coding-change-set.js'
 import { createCodingRuntime } from './coding-runtime.js'
 import { codingPromptDigest, recallScopedMemory } from './coding-context.js'
-import { learnFromCompletedCodingRun } from './coding-run-memory-learning.js'
 import {
   createGitHubDeliveryRuntime,
   type GitHubDeliveryRuntime,
@@ -308,10 +314,18 @@ import { createRepositoryKnowledgeService } from './repository-knowledge.js'
 import { HindsightService, type HindsightScope } from './hindsight-service'
 import { createHindsightContextService } from './hindsight-context'
 import { createCodingModelContext } from './coding-model-context'
-import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint } from './hindsight-client'
-import { registerMemoryCandidateRecall } from './coding-context'
-import { createAutomaticMemoryRuntime, type AutomaticMemoryRuntime } from './automatic-memory-runtime'
-import { parseHindsightSetup, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
+import { createHindsightClient, HINDSIGHT_PROTOCOL, normalizeHindsightEndpoint, type HindsightClient } from './hindsight-client'
+import { registerProjectMemoryRecall } from './coding-context'
+import { resolveProjectMemoryScope } from './project-memory-capture'
+import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
+import { captureCommitProjectMemory } from './project-memory-commits'
+import { createProjectMemoryRecall, PROJECT_MEMORY_ESSENTIALS_ID, type ProjectMemoryRecallService } from './project-memory-recall'
+import { hindsightPairingMatches } from './hindsight-store'
+import {
+  activeProjectMemoryConfiguration, backfillConversationProjectMemory, conversationMemoryDocumentId, migrateLegacyProjectMemory, projectMemoryPairingBinding,
+} from './project-memory-capture'
+import { createMemoryModelRelay, MEMORY_RELAY_DEFAULT_PORT, type MemoryModelRelay, type MemoryRelayRoute } from './memory-model-relay'
+import { parseHindsightSetup, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectKnowledgePages, type ProjectMemoryConfiguration, type ProjectMemoryDocument, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -449,14 +463,16 @@ function getStore() {
       profile: selectedDataProfile,
     })
     console.info('[desktop-data-profile]', safeDesktopDataProfileSummary(selectedDataProfile))
-    registerMemoryCandidateRecall(store, async (input) => (await getHindsightService()).recallMemoryCandidates(input))
+    projectMemoryRecall = createProjectMemoryRecall({ store, transportAvailable: hindsightTransportAvailable,
+      client: projectMemoryHindsightClient,
+      onDegraded: (reason) => console.warn('[project-memory] Recall unavailable; continuing without project memory.', { reason }) })
+    registerProjectMemoryRecall(store, projectMemoryRecall)
     return store
   })
   return storePromise
 }
 
 let hindsightService: Promise<HindsightService> | undefined
-let automaticMemoryRuntime: Promise<AutomaticMemoryRuntime> | undefined
 let hindsightTimer: ReturnType<typeof setInterval> | undefined
 let hindsightCycle: Promise<void> | undefined
 let hindsightStopping = false
@@ -471,15 +487,6 @@ async function hindsightScope(projectId: string): Promise<HindsightScope> {
   const principal = await store.resolveLocalProjectMemoryPrincipal(projectId)
   if (principal.status !== 'resolved') throw new Error('项目存在多个历史用户，无法自动确定记忆归属。')
   return { projectId, userId: principal.userId }
-}
-function getAutomaticMemoryRuntime() {
-  automaticMemoryRuntime ??= getStore().then((store) => createAutomaticMemoryRuntime({
-    store, transportAvailable: hindsightTransportAvailable,
-    client: async (config) => createHindsightClient({ endpoint: config.endpoint,
-      ...(config.encryptedApiKey ? { apiKey: await credentialAccess.decrypt(config.encryptedApiKey, 'provider', AbortSignal.timeout(2_000)) } : {}),
-    }),
-  }))
-  return automaticMemoryRuntime
 }
 function getHindsightService() {
   hindsightService ??= getStore().then(async (store) => {
@@ -516,12 +523,282 @@ function wakeHindsight() {
         const service = await getHindsightService()
         if (!hindsightStopping && (await service.cycle()).refreshDeferred) console.warn('[hindsight] Source refresh deferred; cleanup processing continues.')
       })(),
-      (async () => { if (!hindsightStopping) await (await getAutomaticMemoryRuntime()).cycle() })(),
+      (async () => {
+        await startMemoryRelay()
+        if (!hindsightStopping) await scanCommitHistory()
+        if (!hindsightStopping) await backfillLongConversations()
+        if (!hindsightStopping) await (await getProjectMemoryService()).process()
+      })(),
     ])
     if (results.some((result) => result.status === 'rejected')) console.warn('[hindsight] A background worker is deferred; durable tasks retained.')
   })().catch(() => {
     console.warn('[hindsight] Synchronization deferred; durable tasks retained.')
   }).finally(() => { hindsightCycle = undefined })
+}
+
+// Project memory (ADR 0030): captured documents go to the project's Hindsight bank, and
+// Hindsight's extraction calls come back through a loopback relay charged to the project budget.
+let projectMemoryService: Promise<ProjectMemoryService> | undefined
+let projectMemoryRecall: ProjectMemoryRecallService | undefined
+async function projectMemoryHindsightClient(config: ProjectMemoryConfiguration) {
+  return createHindsightClient({ endpoint: config.endpoint,
+    ...(config.encryptedApiKey ? { apiKey: await credentialAccess.decrypt(config.encryptedApiKey, 'provider', AbortSignal.timeout(2_000)) } : {}),
+  })
+}
+let memoryRelay: MemoryModelRelay | undefined
+let memoryRelayFailure: string | undefined
+const memoryRelayPort = (() => {
+  const raw = process.env.DEVFLOW_MEMORY_RELAY_PORT?.trim()
+  const port = raw ? Number(raw) : MEMORY_RELAY_DEFAULT_PORT
+  return Number.isSafeInteger(port) && port >= 1024 && port <= 65_535 ? port : MEMORY_RELAY_DEFAULT_PORT
+})()
+// Docker Desktop reaches 127.0.0.1 through host.docker.internal; Linux Docker needs the bridge address.
+const memoryRelayHost = isIP(process.env.DEVFLOW_MEMORY_RELAY_HOST?.trim() ?? '') ? process.env.DEVFLOW_MEMORY_RELAY_HOST!.trim() : '127.0.0.1'
+const MEMORY_RELAY_TOKEN = /^[A-Za-z0-9_-]{32,200}$/u
+function memoryRelayTokenFile(): string {
+  return path.join(app.getPath('userData'), 'memory-relay-token')
+}
+/** Hindsight's deployment must present this token; it is created once and kept owner-readable only. */
+async function memoryRelayToken(): Promise<string> {
+  const fromEnv = process.env.DEVFLOW_MEMORY_RELAY_TOKEN?.trim()
+  if (fromEnv) {
+    if (!MEMORY_RELAY_TOKEN.test(fromEnv)) throw new Error('DEVFLOW_MEMORY_RELAY_TOKEN must be 32-200 URL-safe characters')
+    return fromEnv
+  }
+  const file = memoryRelayTokenFile()
+  try {
+    const saved = (await readFile(file, 'utf8')).trim()
+    if (MEMORY_RELAY_TOKEN.test(saved)) return saved
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const token = randomBytes(32).toString('base64url')
+  await writeFile(file, `${token}\n`, { mode: 0o600 })
+  await chmod(file, 0o600)
+  return token
+}
+/**
+ * Only the paired project may spend, because its calls are charged to that Team budget, and only
+ * once its memory is on with a chosen Provider. The project's repository knowledge bank (ADR 0027)
+ * extracts through the same route.
+ */
+async function resolveMemoryRelayBank(bankId: string): Promise<MemoryRelayRoute | null> {
+  const store = await getStore()
+  const pairing = await store.getDesktopPairingCredential()
+  const memory = (await store.listProjectMemoryConfigurations()).find((item) => item.bankId === bankId)
+  const knowledge = memory ? undefined
+    : (await store.listHindsightConfigurations()).find((item) => item.enabled && item.knowledgeBank === bankId)
+  const projectId = memory?.projectId ?? knowledge?.projectId
+  if (!projectId || pairing?.localProjectId !== projectId) return null
+  if (knowledge && (!hindsightPairingMatches(knowledge, pairing) ||
+      (await store.getHindsightConfiguration(projectId))?.generation !== knowledge.generation)) return null
+  const active = await activeProjectMemoryConfiguration(store, projectId)
+  if (!active || (memory ? active.bankId !== bankId : active.ownerUserId !== knowledge?.ownerUserId)) return null
+  const metadata = (await store.listProviderCredentials()).find((item) => item.providerId === active.providerId)
+  if (!metadata) return null
+  const binding = await resolveSavedOpencodeProviderBinding({
+    providerId: active.providerId, modelId: metadata.model, credentialSource: store, decryptCredential,
+  })
+  return binding ? { projectId: active.projectId, binding } : null
+}
+let memoryRelayStarting: Promise<void> | undefined
+let memoryRelayAttemptedAt = 0
+/** Retried from the background cycle at most once a minute, e.g. after the port is freed. */
+function startMemoryRelay(): Promise<void> {
+  if (memoryRelay || memoryRelayStarting || hindsightStopping || !hindsightTransportAvailable ||
+      Date.now() - memoryRelayAttemptedAt < 60_000) return memoryRelayStarting ?? Promise.resolve()
+  memoryRelayAttemptedAt = Date.now()
+  memoryRelayStarting = (async () => {
+    try {
+      memoryRelay = await createMemoryModelRelay({
+        port: memoryRelayPort, host: memoryRelayHost, token: await memoryRelayToken(),
+        resolveBank: resolveMemoryRelayBank,
+        governance: async () => modelCallGovernance(await getStore()),
+        onCall: (call) => {
+          if (call.status !== 'succeeded') console.warn('[project-memory] Memory model call not completed', { status: call.status, reason: call.reason })
+        },
+      })
+      memoryRelayFailure = undefined
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      const failure = code === 'EADDRINUSE' ? `端口 ${memoryRelayPort} 已被占用` : '中继无法启动'
+      if (failure !== memoryRelayFailure) console.warn('[project-memory] Memory model relay unavailable', { code: code ?? 'unknown' })
+      memoryRelayFailure = failure
+    }
+  })().finally(() => { memoryRelayStarting = undefined })
+  return memoryRelayStarting
+}
+function getProjectMemoryService() {
+  projectMemoryService ??= getStore().then(async (store) => {
+    const service = new ProjectMemoryService({
+      store,
+      client: projectMemoryHindsightClient,
+      // Without the relay, extraction would fail and spend a retain attempt; hold new retains.
+      canSubmit: () => Boolean(memoryRelay),
+    })
+    await service.recover()
+    // Projects whose memory was turned on before the copy of earlier local Memory existed.
+    for (const configuration of await store.listProjectMemoryConfigurations()) {
+      if (configuration.enabled) await migrateLegacyMemory(configuration.projectId)
+    }
+    return service
+  })
+  return projectMemoryService
+}
+// Commit history (ADR 0030, phase 5): read each project whose memory is on at most every 10 minutes.
+const commitScans = new Map<string, number>()
+const COMMIT_SCAN_INTERVAL_MS = 10 * 60_000
+async function scanCommitHistory(): Promise<void> {
+  const store = await getStore()
+  const projects = new Map((await store.listProjects()).map((project) => [project.id, project]))
+  for (const configuration of await store.listProjectMemoryConfigurations()) {
+    const project = projects.get(configuration.projectId)
+    if (!configuration.enabled || !project || Date.now() - (commitScans.get(project.id) ?? 0) < COMMIT_SCAN_INTERVAL_MS) continue
+    commitScans.set(project.id, Date.now())
+    await captureCommitProjectMemory(store, project).catch(() => {
+      console.warn('[project-memory] Commit history was not read; it is read again later.')
+    })
+  }
+}
+// Long conversations captured before segments existed (ADR 0030): send their segments again, at
+// most a few per project in each run of the app so the one-off extraction cost stays bounded.
+const CONVERSATION_BACKFILL_SEGMENTS_PER_RUN = 5
+const conversationBackfillScans = new Map<string, number>()
+const conversationBackfillSent = new Map<string, number>()
+const conversationBackfillRemaining = new Map<string, number>()
+async function backfillLongConversations(): Promise<void> {
+  const store = await getStore()
+  for (const configuration of await store.listProjectMemoryConfigurations()) {
+    const projectId = configuration.projectId
+    if (!configuration.enabled || Date.now() - (conversationBackfillScans.get(projectId) ?? 0) < COMMIT_SCAN_INTERVAL_MS) continue
+    conversationBackfillScans.set(projectId, Date.now())
+    const allowance = CONVERSATION_BACKFILL_SEGMENTS_PER_RUN - (conversationBackfillSent.get(projectId) ?? 0)
+    try {
+      const { queued, remaining } = await backfillConversationProjectMemory(store, projectId, Math.max(0, allowance))
+      conversationBackfillSent.set(projectId, (conversationBackfillSent.get(projectId) ?? 0) + queued)
+      conversationBackfillRemaining.set(projectId, remaining)
+      if (queued) console.info(`[project-memory] Resending ${queued} segment(s) of earlier long conversations; ${remaining} left for later runs.`)
+    } catch { console.warn('[project-memory] Earlier long conversations were not resent; they are tried again later.') }
+  }
+}
+/** Best-effort copy of earlier local Memory (ADR 0030); retried at the next start if it fails. */
+async function migrateLegacyMemory(projectId: string): Promise<void> {
+  try { await migrateLegacyProjectMemory(await getStore(), projectId) }
+  catch { console.warn('[project-memory] Earlier local Memory was not copied yet; it will be retried.') }
+}
+/** The project's memory, only for the user who owns it (viewing included). */
+async function ownedProjectMemory(projectId: string) {
+  const store = await getStore()
+  if (!(await store.listProjects()).some((project) => project.id === projectId)) throw new Error('本地项目不存在。')
+  const configuration = await store.getProjectMemoryConfiguration(projectId)
+  if (!configuration) throw new Error('本项目尚未配置项目记忆。')
+  const scope = await resolveProjectMemoryScope(store, projectId, 'project-memory')
+  if (!scope || scope.userId !== configuration.ownerUserId) throw new Error('项目记忆属于另一位用户，不能查看或修改。')
+  if (!hindsightTransportAvailable) throw new Error('当前构建未启用 Hindsight 传输。')
+  return { store, configuration, client: await projectMemoryHindsightClient(configuration) }
+}
+/** The project's knowledge pages as Hindsight last wrote them; reading makes no model call. */
+async function projectKnowledgePages(projectId: string): Promise<ProjectKnowledgePages> {
+  const { configuration, client } = await ownedProjectMemory(projectId)
+  const models = new Map((await client.listMentalModels(configuration.bankId)).map((model) => [model.id, model]))
+  return { projectId, pages: PROJECT_KNOWLEDGE_PAGES.map((page) => {
+    const model = models.get(knowledgePageModelId(page.id))
+    return { id: page.id, title: page.title, content: redactProjectMemoryText(model?.content ?? '').value, stale: model?.stale ?? false,
+      ...(model?.refreshedAt ? { refreshedAt: model.refreshedAt } : {}), ...(model?.failedAt ? { failedAt: model.failedAt } : {}) }
+  }), ...(memoryRelay ? {} : { unavailableReason: '记忆模型中继未运行，知识页暂时不会更新。' }) }
+}
+/**
+ * Editing or forgetting memory empties the knowledge pages, so they never show what was removed.
+ * Marked after the clear: a coding run that read the essentials page before it was emptied sees it
+ * as changed and stops at its next check.
+ */
+async function emptyKnowledgePages(store: LocalStore, projectId: string, client: HindsightClient, bankId: string): Promise<void> {
+  try { await clearKnowledgePages(client, bankId) }
+  catch { console.warn('[project-memory] Knowledge pages were not emptied; they may show removed memory until refreshed.') }
+  await store.markProjectMemoryChanged(projectId, PROJECT_MEMORY_ESSENTIALS_ID)
+}
+async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
+  const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+  const offset = input.offset ?? 0
+  const page = await client.listMemories(configuration.bankId, { type: input.kind, ...(input.query ? { query: input.query } : {}),
+    offset, limit: PROJECT_MEMORY_PAGE_SIZE })
+  const sources = new Map((await store.listProjectMemoryDocuments(input.projectId))
+    .filter((document) => document.bankId === configuration.bankId).map((document) => [document.documentId, document]))
+  return { total: page.total, offset, limit: PROJECT_MEMORY_PAGE_SIZE, items: page.items.map((memory) => {
+    const source = memory.documentId ? sources.get(memory.documentId) : undefined
+    return { id: memory.id, kind: memory.type, text: redactProjectMemoryText(memory.text).value,
+      ...(memory.occurredAt ? { date: memory.occurredAt.slice(0, 10) } : {}), ...(memory.editedAt ? { editedAt: memory.editedAt } : {}),
+      ...(source ? { source: { documentId: source.id, sourceKind: source.sourceKind, title: source.title } } : {}) }
+  }) }
+}
+/**
+ * ADR 0030 decision 3: once memory is set up for one project, a newly paired project that has no
+ * memory configuration of its own starts with memory on, with the same Hindsight and Provider.
+ * A project that already has a configuration, on or off, is never changed.
+ */
+async function autoEnableProjectMemory(projectId: string): Promise<void> {
+  if (!hindsightTransportAvailable) return
+  const store = await getStore()
+  if (await store.getProjectMemoryConfiguration(projectId)) return
+  const template = (await store.listProjectMemoryConfigurations())
+    .filter((item) => item.enabled && item.projectId !== projectId).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
+  const pairing = await store.getDesktopPairingCredential()
+  if (!template || pairing?.localProjectId !== projectId) return
+  if (!(await store.listProviderCredentials()).some((item) => item.providerId === template.providerId)) return
+  const scope = await resolveProjectMemoryScope(store, projectId, 'project-memory')
+  if (!scope) return
+  await store.configureProjectMemory({ projectId, ownerUserId: scope.userId, pairingBinding: projectMemoryPairingBinding(pairing),
+    enabled: true, endpoint: template.endpoint, encryptedApiKey: template.encryptedApiKey, providerId: template.providerId })
+  await migrateLegacyMemory(projectId)
+  wakeHindsight()
+}
+/** The latest sources, one entry per conversation however many segments it has, titled as the conversation. */
+function recentProjectMemorySources(documents: readonly ProjectMemoryDocument[]): ProjectMemoryStatus['recent'] {
+  const conversations = new Set<string>()
+  const latest: ProjectMemoryDocument[] = []
+  for (const document of [...documents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))) {
+    if (document.sourceKind === 'conversation') {
+      if (conversations.has(document.sourceId)) continue
+      conversations.add(document.sourceId)
+    }
+    latest.push(document)
+    if (latest.length === 20) break
+  }
+  return latest.map((document) => {
+      const title = document.sourceKind === 'conversation'
+        ? documents.find((item) => item.documentId === conversationMemoryDocumentId(document.sourceId, 1))?.title ?? document.title
+        : document.title
+      return { id: document.id, sourceKind: document.sourceKind, title, status: document.status,
+        updatedAt: document.updatedAt, ...(document.lastError ? { lastError: document.lastError } : {}) }
+    })
+}
+async function projectMemoryStatus(projectId: string): Promise<ProjectMemoryStatus> {
+  const store = await getStore()
+  if (!(await store.listProjects()).some((project) => project.id === projectId)) throw new Error('本地项目不存在。')
+  const configuration = await store.getProjectMemoryConfiguration(projectId)
+  const active = await activeProjectMemoryConfiguration(store, projectId)
+  const pairedProject = (await store.getDesktopPairingCredential())?.localProjectId === projectId
+  const documents = configuration
+    ? (await store.listProjectMemoryDocuments(projectId)).filter((document) => document.bankId === configuration.bankId)
+    : []
+  const counts: ProjectMemoryStatus['counts'] = {}
+  for (const document of documents) counts[document.status] = (counts[document.status] ?? 0) + 1
+  const unavailableReason = !hindsightTransportAvailable ? '当前构建未启用 Hindsight 传输。'
+    : !memoryRelay ? `记忆模型中继未运行${memoryRelayFailure ? `：${memoryRelayFailure}` : ''}。`
+      : configuration?.enabled && !active ? '项目配对或记忆归属已变化，请重新开启项目记忆。'
+        : undefined
+  return {
+    projectId, configured: Boolean(configuration), enabled: Boolean(active),
+    transportAvailable: hindsightTransportAvailable, pairedProject,
+    endpoint: configuration?.endpoint ?? '', providerId: configuration?.providerId ?? null, bankId: configuration?.bankId ?? null,
+    relay: { port: memoryRelayPort, running: Boolean(memoryRelay),
+      tokenFile: process.env.DEVFLOW_MEMORY_RELAY_TOKEN?.trim() ? null : memoryRelayTokenFile(),
+      hindsightBaseUrl: `http://host.docker.internal:${memoryRelayPort}/v1` },
+    counts,
+    recent: recentProjectMemorySources(documents),
+    ...(conversationBackfillRemaining.get(projectId) ? { conversationBackfill: { remainingSegments: conversationBackfillRemaining.get(projectId)! } } : {}),
+    ...(unavailableReason ? { unavailableReason } : {}),
+  }
 }
 
 const codingBudgetProxies = new Set<Awaited<ReturnType<typeof createGovernedOpencodeProxy>>>()
@@ -1655,8 +1932,6 @@ async function createCodingRuntimeForRequest(
         }
       : {}),
     budgetGuard: createRuntimeBudgetGuard(remoteSync, true),
-    learnCodingRunMemory: ({ codingRun, evaluationPassed }) =>
-      learnFromCompletedCodingRun({ store, codingRun, evaluationPassed }),
     completeWorkflowBuild: async ({ runId, nodeId, codingRunId, diffId, now }) => {
       const existingEvents = await store.listEvents(runId)
       const event: AgentEvent = {
@@ -2501,6 +2776,8 @@ async function getWorkbenchConversationService() {
         (await getHindsightService()).search(await hindsightScope(projectId), args, turn, signal),
       knowledgeRead: async (projectId, args) =>
         (await getHindsightService()).read(await hindsightScope(projectId), args),
+      memorySearch: async (projectId, args, signal) =>
+        (await projectMemoryRecall?.search({ projectId, query: args.query, limit: args.limit, signal })) ?? undefined,
       inspectGate: async (target) => {
         const evaluated = await evaluateLocalGateEnforcement(target)
         return { decision: evaluated.decision, policyVersion: evaluated.policySnapshot.version, policySource: evaluated.policySnapshot.source }
@@ -2585,7 +2862,6 @@ function registerIpcHandlers() {
       ? previous?.endpoint === endpoint && previous.ownerUserId === scope.userId ? previous.encryptedApiKey : null
       : input.apiKey ? await credentialAccess.encrypt(input.apiKey, 'provider') : null
     const status = await (await getHindsightService()).configure(scope, input, encrypted)
-    await (await getAutomaticMemoryRuntime()).reconcile()
     wakeHindsight()
     return status
   }))
@@ -2598,28 +2874,94 @@ function registerIpcHandlers() {
   ipcMain.handle(ipcChannels.disableHindsight, async (_, payload: unknown) => {
     const { projectId } = parseLoadRepositoryKnowledgeInput(payload)
     const status = await (await getHindsightService()).disable(await hindsightScope(projectId))
-    await (await getAutomaticMemoryRuntime()).reconcile()
     wakeHindsight()
     return status
   })
 
-  ipcMain.handle(ipcChannels.getAutomaticMemoryStatus, async (_, payload: unknown) => {
-    const { projectId } = parseAutomaticMemoryProjectInput(payload)
-    return (await getAutomaticMemoryRuntime()).status(projectId)
-  })
-  ipcMain.handle(ipcChannels.configureAutomaticMemory, async (_, payload: unknown) => {
-    const status = await (await getAutomaticMemoryRuntime()).configure(parseConfigureAutomaticMemoryInput(payload))
+  ipcMain.handle(ipcChannels.getProjectMemoryStatus, async (_, payload: unknown) =>
+    projectMemoryStatus(parseProjectMemoryProjectInput(payload).projectId))
+  ipcMain.handle(ipcChannels.configureProjectMemory, async (_, payload: unknown) => writeCredential('provider', async () => {
+    const input = parseConfigureProjectMemoryInput(payload)
+    const store = await getStore()
+    if (!(await store.listProjects()).some((project) => project.id === input.projectId)) throw new Error('本地项目不存在。')
+    const previous = await store.getProjectMemoryConfiguration(input.projectId)
+    const endpoint = normalizeHindsightEndpoint(input.endpoint)
+    const keepKey = (ownerUserId: string) => input.apiKey === undefined
+      ? Promise.resolve(previous?.endpoint === endpoint && previous.ownerUserId === ownerUserId ? previous.encryptedApiKey : null)
+      : input.apiKey ? credentialAccess.encrypt(input.apiKey, 'provider') : Promise.resolve(null)
+    if (!input.enabled && previous) {
+      // Turning memory off keeps its owner, pairing and bank, even after the pairing changed.
+      const { bankId: _bank, createdAt: _created, updatedAt: _updated, ...kept } = previous
+      await store.configureProjectMemory({ ...kept, enabled: false, endpoint, providerId: input.providerId,
+        encryptedApiKey: await keepKey(previous.ownerUserId) })
+      wakeHindsight()
+      return projectMemoryStatus(input.projectId)
+    }
+    const scope = await resolveProjectMemoryScope(store, input.projectId, 'project-memory')
+    if (!scope) throw new Error('无法确定项目记忆属于哪位用户，请先完成项目配对。')
+    const pairing = await store.getDesktopPairingCredential()
+    const paired = pairing?.localProjectId === input.projectId ? pairing : null
+    if (input.enabled) {
+      if (!hindsightTransportAvailable) throw new Error('当前构建未启用 Hindsight 传输，无法开启项目记忆。')
+      // Hindsight's extraction calls are charged to the paired Team project's model budget.
+      if (!paired) throw new Error('项目记忆的模型调用计入团队预算，请先将本地项目配对到团队项目。')
+      if (!(await store.listProviderCredentials()).some((item) => item.providerId === input.providerId)) {
+        throw new Error('请先在设置中保存所选 Provider 的凭据。')
+      }
+    }
+    await store.configureProjectMemory({
+      projectId: input.projectId, ownerUserId: scope.userId,
+      ...(paired ? { pairingBinding: projectMemoryPairingBinding(paired) } : {}),
+      enabled: input.enabled, endpoint, encryptedApiKey: await keepKey(scope.userId), providerId: input.providerId,
+    })
+    if (input.enabled) await migrateLegacyMemory(input.projectId)
     wakeHindsight()
-    return status
+    return projectMemoryStatus(input.projectId)
+  }))
+  ipcMain.handle(ipcChannels.listProjectMemories, async (_, payload: unknown) => listProjectMemories(parseListProjectMemoriesInput(payload)))
+  ipcMain.handle(ipcChannels.updateProjectMemory, async (_, payload: unknown) => {
+    const input = parseUpdateProjectMemoryInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    // Hindsight re-embeds the memory and consolidates again; that consolidation is a model call.
+    await client.updateMemory(configuration.bankId, input.memoryId, redactProjectMemoryText(input.text).value)
+    await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
+    return projectMemoryStatus(input.projectId)
   })
-  ipcMain.handle(ipcChannels.processAutomaticMemory, async (_, payload: unknown) => {
-    const { projectId } = parseAutomaticMemoryProjectInput(payload)
-    return (await getAutomaticMemoryRuntime()).process(projectId)
+  ipcMain.handle(ipcChannels.forgetProjectMemory, async (_, payload: unknown) => {
+    const input = parseForgetProjectMemoryInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    await client.invalidateMemory(configuration.bankId, input.memoryId, 'deleted by the user in DevFlow')
+    await store.markProjectMemoryChanged(input.projectId, input.memoryId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
+    return projectMemoryStatus(input.projectId)
   })
-  ipcMain.handle(ipcChannels.resolveAutomaticMemoryDecision, async (_, payload: unknown) =>
-    (await getAutomaticMemoryRuntime()).resolve(parseResolveAutomaticMemoryDecisionInput(payload)))
-  ipcMain.handle(ipcChannels.rememberConversationMemory, async (_, payload: unknown) =>
-    (await getAutomaticMemoryRuntime()).remember(parseRememberConversationMemoryInput(payload)))
+  ipcMain.handle(ipcChannels.forgetProjectMemorySource, async (_, payload: unknown) => {
+    const input = parseForgetProjectMemorySourceInput(payload)
+    const { store, configuration, client } = await ownedProjectMemory(input.projectId)
+    await store.forgetProjectMemoryDocument(input.projectId, input.documentId)
+    // Emptied again once Hindsight has deleted the document (project-memory-service).
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
+    wakeHindsight()
+    return projectMemoryStatus(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.listProjectKnowledgePages, async (_, payload: unknown) =>
+    projectKnowledgePages(parseProjectMemoryProjectInput(payload).projectId))
+  ipcMain.handle(ipcChannels.refreshProjectKnowledgePage, async (_, payload: unknown) => {
+    const input = parseRefreshProjectKnowledgePageInput(payload)
+    const { configuration, client } = await ownedProjectMemory(input.projectId)
+    // A refresh is a model call routed through the relay and charged to the Team budget.
+    if (!memoryRelay) throw new Error('记忆模型中继未运行，无法刷新知识页。')
+    await client.refreshMentalModel(configuration.bankId, knowledgePageModelId(input.pageId))
+    return projectKnowledgePages(input.projectId)
+  })
+  ipcMain.handle(ipcChannels.clearProjectMemory, async (_, payload: unknown) => {
+    const input = parseClearProjectMemoryInput(payload)
+    const { store } = await ownedProjectMemory(input.projectId)
+    await store.clearProjectMemory(input.projectId)
+    wakeHindsight()
+    return projectMemoryStatus(input.projectId)
+  })
 
   ipcMain.handle(ipcChannels.retryRemoteSyncOperation, async (_, payload: unknown) => {
     const input = parseRetryRemoteSyncOperationInput(payload)
@@ -2676,6 +3018,9 @@ function registerIpcHandlers() {
     wakeRemoteSyncOutbox()
     wakeGateCommandScheduler()
     wakeGitHubDeliveryScheduler()
+    void autoEnableProjectMemory(input.localProjectId).catch(() => {
+      console.warn('[project-memory] Could not turn on memory for the newly paired project.')
+    })
     return { credential: boundCredential }
   }))
 
@@ -3222,11 +3567,11 @@ function registerIpcHandlers() {
             store, projectId: run.projectId, userId: actor.userId,
             runtimeId: `agent-runtime-stage-${stageRuntimeKey}`,
             requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
-            query: [run.request, node.title, node.subtitle].join('\n'),
+            query: [run.request, node.title, node.subtitle].join('\n'), intents: splitRecallIntents(run.request),
             now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
           }).catch(() => {
             console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')
-            return { revisions: [] as Array<{ id: string; revision: number; statement: string }> }
+            return { context: [] as Array<{ id: string; revision: number; statement: string }> }
           })
           generated = await runWorkflowStageAgent({
             run,
@@ -3249,9 +3594,7 @@ function registerIpcHandlers() {
             requestedBy: actor.userId,
             runtime: 'electron',
             signal,
-            ...(stageMemory.revisions.length
-              ? { memoryContext: stageMemory.revisions.map(({ id, revision, statement }) => ({ id, revision, statement })) }
-              : {}),
+            ...(stageMemory.context.length ? { memoryContext: stageMemory.context } : {}),
           })
           signal.throwIfAborted()
           const usedKnowledge = generated.provenance.knowledgeContext?.retrievedKnowledge
@@ -4352,6 +4695,7 @@ if (hasSingleInstanceLock) {
     }
     registerIpcHandlers()
     createWindow()
+    void startMemoryRelay()
     wakeHindsight()
     hindsightTimer = setInterval(wakeHindsight, 15_000)
     hindsightTimer.unref()
@@ -4434,7 +4778,12 @@ app.on('before-quit', (event) => {
   quitCleanupPromise ??= Promise.all([
     getStore().then(store => shutdownNativeCodingHarnesses(store)),
     hindsightCycle ?? Promise.resolve(),
-    automaticMemoryRuntime?.then((runtime) => runtime.shutdown()) ?? Promise.resolve(),
+    (projectMemoryService?.then((service) => service.shutdown()) ?? Promise.resolve()).catch(() => {
+      console.warn('[project-memory] Unable to stop the memory worker before quit.')
+    }),
+    (memoryRelay?.close() ?? Promise.resolve()).catch(() => {
+      console.warn('[project-memory] Unable to close the memory model relay before quit.')
+    }),
     reviewOperations.drain(),
     stageAgentOperations.drain(),
     ...[...codingBudgetProxies].map((proxy)=>proxy.close()),

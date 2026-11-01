@@ -18,7 +18,6 @@ import {
   type PolicySnapshot,
   type TestEvidence,
   type WorkflowRun,
-  type DurableAgentMemoryRevision,
   type DesktopPairingCredential,
 } from '@ai-devflow/shared'
 import { artifacts, knowledgeChunks, knowledgeDocuments, runs } from '@ai-devflow/shared/fixtures'
@@ -26,6 +25,8 @@ import {
   createKnowledgeReviewRuntime,
   type KnowledgeReviewRuntimeStore,
 } from './knowledge-review-runtime'
+import { registerProjectMemoryRecall } from './coding-context'
+import { projectMemoryIdentity } from './project-memory-recall'
 
 describe('KnowledgeReviewRuntime', () => {
   it.each(['clarify', 'design', 'build', 'test', 'pr', 'accept'] as const)(
@@ -56,15 +57,13 @@ describe('KnowledgeReviewRuntime', () => {
     },
   )
 
-  it.each(['before_dispatch', 'after_dispatch', 'expired', 'scope_changed'] as const)(
+  it.each(['before_dispatch', 'after_dispatch', 'scope_changed'] as const)(
     'rejects stale review Memory at the %s boundary', async (scenario) => {
       const store = new MemoryEnabledReviewStore()
       const delegate = createFakeAgentProvider()
-      let currentTime = reviewMemoryTime
       const reviewKnowledge = vi.fn(async (input: Parameters<AgentProvider['reviewKnowledge']>[0]) => {
         const result = await delegate.reviewKnowledge(input)
-        if (scenario === 'after_dispatch') store.headVersion += 1
-        if (scenario === 'expired') currentTime = '2026-10-24T00:00:00.000Z'
+        if (scenario === 'after_dispatch') store.changed = true
         if (scenario === 'scope_changed') store.pairing = {
           tokenId: 'new-session', localProjectId: fixtureRun.projectId, projectId: 'team-project', organizationId: 'org', userId: 'u-ling',
           role: 'member', authAccountId: 'account', projectMemberships: [], createdAt: reviewMemoryTime,
@@ -73,9 +72,9 @@ describe('KnowledgeReviewRuntime', () => {
       })
       const provider: AgentProvider = { ...delegate, reviewKnowledge }
       const runtime = createKnowledgeReviewRuntime({
-        store, knowledgeDocuments, knowledgeChunks, now: () => currentTime,
+        store, knowledgeDocuments, knowledgeChunks, now: () => reviewMemoryTime,
         resolveProviderMetadata: async () => provider,
-        resolveProvider: async () => { if (scenario === 'before_dispatch') store.headVersion += 1; return provider },
+        resolveProvider: async () => { if (scenario === 'before_dispatch') store.changed = true; return provider },
       })
       await expect(runtime.run(reviewInput(provider.id))).rejects.toThrow()
       expect(reviewKnowledge).toHaveBeenCalledTimes(scenario === 'before_dispatch' ? 0 : 1)
@@ -911,21 +910,18 @@ class MemoryKnowledgeReviewStore implements KnowledgeReviewRuntimeStore {
 }
 
 const reviewMemoryTime = '2026-10-22T12:00:00.000Z'
+/** A review store whose project memory (ADR 0030) is on; editing or clearing it makes a recall stale. */
 class MemoryEnabledReviewStore extends MemoryKnowledgeReviewStore {
-  headVersion = 1
   pairing: DesktopPairingCredential | null = null
-  readonly memory: DurableAgentMemoryRevision = {
-    stateVersion: 1, id: 'private-review-memory', revision: 1, status: 'active',
-    scope: { kind: 'local', organizationId: null, projectId: null, userId: 'u-ling', sessionId: 'source-session', localProjectId: fixtureRun.projectId },
-    visibility: 'user_project', statement: `${fixtureRun.request} · MEMORY_EXPERIENCE: check the known serialization issue before investigating a regression.`,
-    contentDigest: 'a'.repeat(64), provenanceDigest: 'b'.repeat(64), sourceCandidateId: 'candidate-memory', supersedesRevision: null,
-    sensitivity: 'private', retentionClass: 'thirty_days', expiresAt: '2026-10-23T00:00:00.000Z', promotionDecisionId: 'decision-memory',
-    promotionActorKind: 'human', promotionActorId: 'u-ling', promotionPolicyId: 'memory-test', promotionPolicyVersion: 1,
-    promotionAuthorityDigest: 'c'.repeat(64), createdAt: '2026-10-01T00:00:00.000Z',
-  }
-  async retrieveAgentMemoryRevisions() { return [this.memory] }
-  async getAgentMemoryHead(memoryId: string) {
-    return { memoryId, currentRevision: 1, scope: this.memory.scope, status: 'active' as const, version: this.headVersion, updatedAt: reviewMemoryTime }
+  changed = false
+  readonly memory = projectMemoryIdentity({ id: 'private-review-memory' },
+    `[observation] ${fixtureRun.request} · MEMORY_EXPERIENCE: check the known serialization issue before investigating a regression.`)
+  constructor() {
+    super()
+    registerProjectMemoryRecall(this, {
+      recall: async () => ({ items: [this.memory], degraded: false }),
+      assertCurrent: async () => { if (this.changed) throw new Error('Project memory was edited or deleted') },
+    })
   }
   async getDesktopPairingCredential() { return this.pairing }
 }

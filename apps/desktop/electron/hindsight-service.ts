@@ -10,7 +10,6 @@ import { hindsightDigest, hindsightPairingBinding, hindsightPairingMatches, type
 import { type HindsightCandidate, type HindsightClient, HindsightError } from './hindsight-client'
 import { readSelectedKnowledgeModel, readSelectedKnowledgeSource } from './repository-knowledge'
 import { conversationContentPage } from './workbench-requirement-context'
-import type { MemoryCandidateRecall } from './coding-context'
 
 export type HindsightScope = { projectId: string; userId: string }
 export type HindsightSearchTurn = {
@@ -37,7 +36,6 @@ const sourceId = (config: HindsightConfiguration, sourcePath: string) =>
 export class HindsightService {
   private running = false
   private refreshCursor = 0
-  private readonly memoryTurns = new Map<string, { calls: number }>()
   private readonly now: () => string
   constructor(private readonly deps: Dependencies) { this.now = deps.now ?? (() => new Date().toISOString()) }
   createSearchTurn(): HindsightSearchTurn { return { calls: 0, candidates: new Map() } }
@@ -326,28 +324,4 @@ export class HindsightService {
       ...conversationContentPage(redactSensitiveText(file.markdown).value, args.offset, args.limit), note: NOTE }
   }
 
-  /** Shadow evaluation at the three existing recall sites; no automatic semantic injection. */
-  readonly recallMemoryCandidates: MemoryCandidateRecall = async ({ scope, runtimeId, query }) => {
-    const empty = { mode: 'shadow' as const, candidates: [] }
-    if (scope.kind !== 'local' || !this.deps.transportAvailable) return empty
-    const config = await this.current({ projectId: scope.localProjectId, userId: scope.userId })
-    if (!config?.includeMemories) return empty
-    const key = `${config.generation}:${runtimeId}`
-    // An overflow cannot reset existing counters and silently buy more calls.
-    if (!this.memoryTurns.has(key) && this.memoryTurns.size >= 256) return empty
-    const turn = this.memoryTurns.get(key) ?? { calls: 0 }
-    this.memoryTurns.set(key, turn)
-    if (turn.calls >= 2) return empty
-    turn.calls++
-    const client = await this.client(config)
-    const candidates = await client.recall(config.memoryBank, truncateUtf8(redactSensitiveText(query).value, 2048).value)
-    if (!await this.current({ projectId: scope.localProjectId, userId: scope.userId }, config.generation)) return empty
-    const rows = await this.deps.store.listHindsightProjections(config.projectId)
-    if (!await this.activeGeneration({ projectId: scope.localProjectId, userId: scope.userId }, config.generation)) return empty
-    return { mode: 'shadow', candidates: candidates.flatMap((candidate) => {
-      const row = rows.find((r) => !r.revoked && r.status === 'ready' && r.kind === 'memory' && r.configGeneration === config.generation &&
-        r.documentId === candidate.documentId && Object.entries(r.metadata).every(([k, v]) => candidate.metadata[k] === v))
-      return row?.memoryId && row.memoryRevision ? [{ id: row.memoryId, revision: row.memoryRevision, contentDigest: row.contentDigest }] : []
-    }) }
-  }
 }

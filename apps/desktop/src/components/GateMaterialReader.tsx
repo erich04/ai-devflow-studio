@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { buildClarificationReviewBundle, type AgentReviewResult, type Artifact } from '@ai-devflow/shared'
 import { ArtifactBody } from './ArtifactBody'
 import { ArtifactReviewReader } from './ArtifactReviewReader'
-import { type RecordReviewFeedback } from './ReviewEvidenceDetails'
+import { type RecordReviewFeedback, type ReviewRevisionDrafts } from './ReviewEvidenceDetails'
 import type { DiscussionMaterial } from '../app/discussion-reference'
 import { formatLocalTime } from '../app/desktop-view-model'
 import {
@@ -17,16 +17,17 @@ import {
  * The one requirement reader for the clarification step and the requirement Gate (plan S4, Z4,
  * Issue #181). Reading another version or the raw request never moves the approval target.
  */
-export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedback, onToggleRevision, revisionSelected = [], onDiscuss, readingId: controlledReadingId, onReadingChange, materialContext }: {
+export function GateMaterialReader({ bundle, review, knowledge, onFeedback, revisionDrafts, onDiscuss, onOpenReport, readingId: controlledReadingId, onReadingChange, materialContext }: {
   /** Adds a reference card to the discussion; never sends or calls a model (plan W7). */
   onDiscuss?: ((material: DiscussionMaterial) => void) | undefined
   bundle: ReturnType<typeof buildClarificationReviewBundle>
   review?: AgentReviewResult | null | undefined
-  reports: Artifact[]
   knowledge: ReactNode
   onFeedback?: RecordReviewFeedback | undefined
-  onToggleRevision?: ((index: number) => void) | undefined
-  revisionSelected?: number[] | undefined
+  /** Revision drafts for the version under review; offered only while reading that version (#247). */
+  revisionDrafts?: ReviewRevisionDrafts | undefined
+  /** Opens the full review report in 材料与版本 (#246). */
+  onOpenReport?: (() => void) | undefined
   /** Controlled by the task page so explicit links and the W9 return can open a version. */
   readingId?: string | undefined
   onReadingChange?: ((artifactId: string) => void) | undefined
@@ -43,7 +44,7 @@ export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedb
   const reading = selectRequirementReading(bundle, requestedId) ?? bundle.rawRequest
   const readingRaw = Boolean(reading && reading.kind === 'raw_request')
   const readingCurrent = !reading || reading.id === anchor?.id || (!anchor && readingRaw)
-  const toggleRevision = reading && reading.id === bundle.activeRevision?.id ? onToggleRevision : undefined
+  const drafts = reading && reading.id === bundle.activeRevision?.id ? revisionDrafts : undefined
   const entry = reading ? describeMaterial(reading, context) : undefined
   const anchorEntry = anchor ? describeMaterial(anchor, context) : undefined
   const versionOf = (artifact: Artifact | undefined) => artifact?.clarificationRevision ? `v${artifact.clarificationRevision.revision}` : artifact ? `（${describeMaterial(artifact, context).versionLabel}）` : '—'
@@ -99,7 +100,7 @@ export function GateMaterialReader({ bundle, review, reports, knowledge, onFeedb
       {readingRaw && reading
         ? <ArtifactBody content={reading.content} readingTools={reviewBasis} />
         : reading
-          ? <ArtifactReviewReader artifact={reading} review={review} reports={reports} requirement onFeedback={onFeedback} onToggleRevision={toggleRevision} revisionSelected={revisionSelected} onDiscuss={onDiscuss} readingTools={reviewBasis} />
+          ? <ArtifactReviewReader artifact={reading} review={review} requirement onFeedback={onFeedback} revisionDrafts={drafts} onDiscuss={onDiscuss} onOpenReport={onOpenReport} readingTools={reviewBasis} />
           : <>{reviewBasis}<p>正文不可用，请核对源产物。</p></>}
     </article>
   </div>

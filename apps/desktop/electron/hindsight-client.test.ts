@@ -101,37 +101,143 @@ it('recognizes completed retries while refusing to settle a task with a live chi
   await expect(client.operation('bank', 'op')).resolves.toBe('processing')
 })
 
-it('exports every exact-document fact across bounded pages, with no recall request', async () => {
-  const metadata = { df_event: 'event', df_source: 'sha256:source' }
-  const fact = (i: number) => ({ id: `fact-${i}`, text: `Evidence ${i}`, fact_type: 'world',
-    document_id: 'doc', state: 'valid', updated_at: '2026-10-22T00:00:00Z', metadata, source_memory_ids: [] })
-  const fetcher = vi.fn<typeof fetch>(async (url) => {
-    const parsed = new URL(String(url))
-    if (parsed.pathname.endsWith('/documents/doc')) return Response.json({ id: 'doc', bank_id: 'bank',
-      original_text: 'source', content_hash: 'hash', updated_at: '2026-10-22T00:00:00Z', memory_unit_count: 35, document_metadata: metadata })
-    expect(parsed.pathname.endsWith('/memories/list')).toBe(true)
-    expect(parsed.searchParams.get('document_id')).toBe('doc')
-    expect(parsed.searchParams.get('state')).toBe('valid')
-    const offset = Number(parsed.searchParams.get('offset'))
-    return Response.json({ total: 35, limit: 32, offset, items: Array.from({ length: Math.min(32, 35 - offset) }, (_, i) => fact(i + offset)) })
+it('configures a project memory bank with its missions and verifies the saved configuration', async () => {
+  const requests: { method: string; url: string; body: unknown }[] = []
+  let saved: Record<string, unknown> = {}
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    requests.push({ method: init?.method ?? 'GET', url: String(url), body })
+    if (String(url).endsWith('/version')) return Response.json({ api_version: '1.0.0' })
+    if (init?.method === 'PATCH') { saved = body.updates; return Response.json({ bank_id: 'df-memory-1', config: saved }) }
+    return Response.json({ bank_id: 'df-memory-1' })
   })
-  const client = createHindsightClient({ endpoint: 'http://localhost:8888', fetcher })
-  const document = await client.getDocument('bank', 'doc')
-  expect(document).toMatchObject({ originalText: 'source', memoryUnitCount: 35, metadata })
-  const facts = await client.listDocumentFacts('bank', 'doc', document.memoryUnitCount)
-  expect(facts).toHaveLength(35)
-  expect(facts.at(-1)?.id).toBe('fact-34')
-  expect(fetcher).toHaveBeenCalledTimes(3)
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  const missions = { retain: 'Keep project decisions.', observations: 'Consolidate conventions.', reflect: 'Answer as a senior engineer.' }
+  await client.configureMemoryBank('df-memory-1', missions)
+  expect(requests.map((item) => `${item.method} ${new URL(item.url).pathname}`)).toEqual([
+    'GET /version', 'PUT /v1/default/banks/df-memory-1', 'PATCH /v1/default/banks/df-memory-1/config'])
+  expect(requests[2]!.body).toEqual({ updates: { enable_observations: true, enable_auto_consolidation: true, entities_allow_free_form: true,
+    retain_extraction_mode: 'concise', retain_mission: missions.retain, observations_mission: missions.observations, reflect_mission: missions.reflect,
+    enable_reranking: false, enable_graph_retrieval: false } })
+  fetcher.mockImplementation(async (url, init) => String(url).endsWith('/version') ? Response.json({ api_version: '1.0.0' })
+    : init?.method === 'PATCH' ? Response.json({ bank_id: 'df-memory-1', config: { ...saved, enable_observations: false } }) : Response.json({}))
+  await expect(client.configureMemoryBank('df-memory-1', missions)).rejects.toThrow('protocol')
+})
+it('retains a project memory document that replaces its earlier revision in one shared belief set', async () => {
+  const bodies: unknown[] = []
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return Response.json({ success: true, bank_id: 'df-memory-1', items_count: 1, async: true, operation_id: 'op-1', operation_ids: ['op-1'] })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  const item = { documentId: 'conversation:chat', operationId: 'op-1', content: '[{"role":"user"}]', context: 'A discussion.',
+    timestamp: '2026-10-28T00:00:00.000Z', tags: ['source:conversation'], metadata: { df_document: 'd1' } }
+  await client.retainDocument('df-memory-1', item)
+  expect(bodies).toEqual([{ async: true, operation_id: 'op-1', items: [{ document_id: 'conversation:chat', content: item.content,
+    context: 'A discussion.', timestamp: item.timestamp, tags: ['source:conversation'], metadata: { df_document: 'd1' },
+    update_mode: 'replace', observation_scopes: 'shared' }] }])
+  fetcher.mockResolvedValueOnce(Response.json({ success: true, bank_id: 'df-memory-1', items_count: 1, async: true, operation_id: 'op-2' }))
+  await expect(client.retainDocument('df-memory-1', item)).rejects.toThrow('protocol')
+})
+it('recalls project memory text, preferring observations, and drops malformed results', async () => {
+  const bodies: unknown[] = []
+  const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)))
+    return Response.json({ results: [
+      { id: 'o1', type: 'observation', text: '删除前要确认。', source_fact_ids: ['f0'] },
+      { id: 'f1', type: 'world', text: '撤销窗口 5 秒。', document_id: 'conversation:c1', occurred_start: '2026-10-20T08:00:00Z' },
+      { id: 'f1', type: 'world', text: 'duplicate id' },
+      { id: 'bad id', type: 'world', text: 'invalid id' },
+      { id: 'e1', type: 'experience', text: '   ' },
+      { id: 'x1', type: 'unknown', text: 'unknown type' },
+    ] })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  expect(await client.recallMemories('df-memory-1', { query: '删除', maxTokens: 1_000 })).toEqual([
+    { id: 'o1', type: 'observation', text: '删除前要确认。' },
+    { id: 'f1', type: 'world', text: '撤销窗口 5 秒。', documentId: 'conversation:c1', occurredAt: '2026-10-20T08:00:00Z' },
+  ])
+  expect(bodies).toEqual([{ query: '删除', types: ['observation', 'world', 'experience'], prefer_observations: true,
+    budget: 'low', max_tokens: 1_000, include: { entities: null } }])
+  await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 10 })).rejects.toThrow('protocol')
+  fetcher.mockResolvedValueOnce(Response.json({ results: 'not a list' }))
+  await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 1_000 })).rejects.toThrow('protocol')
+  // A full allowance of short memories is several hundred results.
+  const many = (count: number) => Response.json({ results: Array.from({ length: count }, (_, index) => ({ id: `f${index}`, type: 'world', text: `事实 ${index}` })) })
+  fetcher.mockResolvedValueOnce(many(600))
+  expect(await client.recallMemories('df-memory-1', { query: '删除', maxTokens: 8_192 })).toHaveLength(600)
+  fetcher.mockResolvedValueOnce(many(1_025))
+  await expect(client.recallMemories('df-memory-1', { query: '删除', maxTokens: 8_192 })).rejects.toThrow('protocol')
+})
+it('lists, edits, retires and deletes project memory with bounded requests', async () => {
+  const requests: Array<{ method: string; url: string; body: unknown }> = []
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    requests.push({ method: init?.method ?? 'GET', url: String(url), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    if (String(url).includes('/memories/list')) return Response.json({ total: 3, limit: 50, offset: 0, items: [
+      { id: 'o1', fact_type: 'observation', text: '删除前确认。', date: '2026-10-28T00:00:00Z', document_id: null, edited_at: '2026-10-28T01:00:00Z' },
+      { id: 'w1', fact_type: 'world', text: '其他类型' },
+      { id: 'o2', fact_type: 'observation', text: '  ' },
+    ] })
+    if (init?.method === 'DELETE') return Response.json({ success: true })
+    return Response.json({ id: 'o1' })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  expect(await client.listMemories('df-memory-1', { type: 'observation', query: ' 删除 ', offset: 0, limit: 50 })).toEqual({ total: 3,
+    items: [{ id: 'o1', type: 'observation', text: '删除前确认。', occurredAt: '2026-10-28T00:00:00Z', editedAt: '2026-10-28T01:00:00Z' }] })
+  const listUrl = new URL(requests[0]!.url)
+  expect(Object.fromEntries(listUrl.searchParams)).toEqual({ type: 'observation', state: 'valid', limit: '50', offset: '0', q: '删除' })
+  await client.updateMemory('df-memory-1', 'o1', '删除前必须确认。')
+  await client.invalidateMemory('df-memory-1', 'o1', 'deleted by the user')
+  await client.deleteBank('df-memory-1')
+  expect(requests.slice(1).map((item) => [item.method, new URL(item.url).pathname, item.body])).toEqual([
+    ['PATCH', '/v1/default/banks/df-memory-1/memories/o1', { text: '删除前必须确认。' }],
+    ['PATCH', '/v1/default/banks/df-memory-1/memories/o1', { state: 'invalidated', reason: 'deleted by the user' }],
+    ['DELETE', '/v1/default/banks/df-memory-1', undefined],
+  ])
+  fetcher.mockResolvedValueOnce(new Response('missing', { status: 404 }))
+  await expect(client.deleteBank('df-memory-gone')).resolves.toBeUndefined()
+  await expect(client.listMemories('df-memory-1', { type: 'observation', offset: 0, limit: 101 })).rejects.toThrow('protocol')
 })
 
-it.each(['foreign_document', 'missing_source', 'observation', 'duplicate', 'unstable_total', 'missing_page'])('rejects incomplete or ungrounded fact exports: %s', async (scenario) => {
-  const good = { id: 'fact', text: 'supported text', fact_type: 'world', document_id: 'doc', state: 'valid',
-    updated_at: '2026-10-22T00:00:00Z', metadata: {}, source_memory_ids: [] }
-  const item = { ...good, ...(scenario === 'foreign_document' ? { document_id: 'other' } : {}),
-    ...(scenario === 'missing_source' ? { document_id: null } : {}), ...(scenario === 'observation' ? { fact_type: 'observation' } : {}) }
-  const count = scenario === 'duplicate' ? 2 : 1
-  const fetcher = vi.fn<typeof fetch>(async () => Response.json({ total: scenario === 'unstable_total' ? 2 : count,
-    offset: 0, limit: 32, items: scenario === 'missing_page' ? [] : scenario === 'duplicate' ? [item, item] : [item] }))
-  const client = createHindsightClient({ endpoint: 'http://localhost:8888', fetcher })
-  await expect(client.listDocumentFacts('bank', 'doc', count)).rejects.toThrow('protocol')
+it('creates, updates, lists, empties and refreshes knowledge pages (mental models)', async () => {
+  const requests: { method: string; path: string; body: unknown }[] = []
+  let stored: Record<string, unknown> | undefined
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    const parsed = new URL(String(url)); const method = init?.method ?? 'GET'
+    const body = init?.body ? JSON.parse(String(init.body)) : undefined
+    requests.push({ method, path: `${parsed.pathname}${parsed.search}`, body })
+    if (parsed.pathname.endsWith('/mental-models') && method === 'POST') { stored = body; return Response.json({ mental_model_id: body.id, operation_id: 'op-create' }) }
+    if (parsed.pathname.endsWith('/mental-models') && method === 'GET') return Response.json({ items: [
+      { id: 'devflow-decisions', content: '## 决策\n- 删除前二次确认', is_stale: true, last_refreshed_at: '2026-10-29T01:00:00Z', last_refresh_failed_at: null },
+      { id: 'devflow-pitfalls', content: null, last_refreshed_at: 'not a time' },
+      { id: 'Bad Id', content: 'dropped' },
+    ], total: 3, limit: 100, offset: 0 })
+    if (parsed.pathname.endsWith('/refresh')) return Response.json({ operation_id: 'op-refresh', status: 'queued' })
+    if (parsed.pathname.endsWith('/clear')) return parsed.pathname.includes('missing') ? new Response('{}', { status: 404 }) : Response.json({ id: 'devflow-decisions' })
+    if (method === 'PATCH') { stored = { ...stored, ...body }; return Response.json({ id: 'devflow-decisions' }) }
+    return stored ? Response.json({ ...stored, trigger: { ...(stored.trigger as object), refresh_cron: null, keep_trace: false } }) : new Response('{}', { status: 404 })
+  })
+  const client = createHindsightClient({ endpoint: 'http://127.0.0.1:8890', fetcher })
+  const page = { id: 'devflow-decisions', name: '决策与原因', sourceQuery: '列出决策', maxTokens: 1_500,
+    trigger: { mode: 'delta', refresh_after_consolidation: true, min_refresh_interval_seconds: 3_600, exclude_mental_models: true, budget: 'low' } }
+  await client.ensureMentalModel('df-memory-1', page)
+  expect(requests.map((item) => `${item.method} ${item.path}`)).toEqual([
+    'GET /v1/default/banks/df-memory-1/mental-models/devflow-decisions', 'POST /v1/default/banks/df-memory-1/mental-models'])
+  expect(requests[1]!.body).toEqual({ id: page.id, name: page.name, source_query: page.sourceQuery, max_tokens: 1_500, trigger: page.trigger, tags: [] })
+  // Unchanged: nothing is written. A changed definition is patched in place.
+  requests.length = 0
+  await client.ensureMentalModel('df-memory-1', page)
+  expect(requests.map((item) => item.method)).toEqual(['GET'])
+  await client.ensureMentalModel('df-memory-1', { ...page, sourceQuery: '列出决策和原因' })
+  expect(requests.at(-1)).toMatchObject({ method: 'PATCH', body: { source_query: '列出决策和原因' } })
+
+  expect(await client.listMentalModels('df-memory-1')).toEqual([
+    { id: 'devflow-decisions', content: '## 决策\n- 删除前二次确认', stale: true, refreshedAt: '2026-10-29T01:00:00Z' },
+    { id: 'devflow-pitfalls', content: '', stale: false },
+  ])
+  expect(requests.at(-1)!.path).toBe('/v1/default/banks/df-memory-1/mental-models?detail=content&limit=100')
+  await client.clearMentalModel('df-memory-1', 'devflow-decisions')
+  await expect(client.clearMentalModel('df-memory-1', 'missing')).resolves.toBeUndefined()
+  expect(await client.refreshMentalModel('df-memory-1', 'devflow-decisions')).toBe('op-refresh')
+  expect(requests.at(-1)).toMatchObject({ method: 'POST', path: '/v1/default/banks/df-memory-1/mental-models/devflow-decisions/refresh' })
 })

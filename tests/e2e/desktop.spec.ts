@@ -1851,7 +1851,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     const models = await openSettingsSection(page, '模型与执行方式')
     await expect(models.getByTestId('settings-models')).toContainText('当前 Agent Provider：doubao-review')
     const settings = page.getByTestId('settings-view')
-    await expect(settings.getByRole('button', { name: /运行门禁审查/ })).toHaveCount(0)
+    await expect(settings.getByRole('button', { name: /运行门禁审查|审查当前/ })).toHaveCount(0)
     await expect(settings.getByRole('button', { name: /生成需求澄清/ })).toHaveCount(0)
     await resumeTask(page)
     await expectStaysOnWorkbench(page)
@@ -1861,13 +1861,14 @@ test.describe('AI DevFlow desktop workbench', () => {
     await clickSubStep(page, 'flow-node-run-created-from-request-clarify-gate')
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
     // Gate Review runs in place from the task status row (plan W2).
-    const runReview = reviewedGateInspector.getByTestId('task-status-row').getByRole('button', { name: /运行门禁审查/ })
+    const runReview = reviewedGateInspector.getByTestId('task-status-row').getByRole('button', { name: '审查当前需求 v1', exact: true })
     await expect(runReview).toBeEnabled()
     await runReview.click()
     await expect(page.getByTestId('toast')).toContainText('门禁审查已完成，审查意见显示在「当前工作」中')
     await expectStaysOnWorkbench(page)
     await expect(reviewedGateInspector).toContainText('需求确认 Gate')
     await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
+    // This fixture has no readable body, so 当前工作 keeps the archived review beside the reviewed subjects.
     await expect(page.getByTestId('review-evidence-results')).toContainText('Knowledge review completed for this node.')
     await expect(page.getByTestId('review-evidence-results')).toContainText('warning-only')
     // A saved review is re-run only after the existing confirmation; cancelling sends nothing.
@@ -1887,15 +1888,13 @@ test.describe('AI DevFlow desktop workbench', () => {
     await expect(page.getByTestId('knowledge-reference-sources')).not.toContainText(
       'Knowledge review completed for this node.',
     )
-    // 材料与版本 lists the archived report; its conclusion and opinions are read in 当前工作.
+    // 材料与版本 holds the one full report: conclusion, summary and every opinion (#246, #252).
     const archivedReport = reviewedGateInspector.getByRole('region', { name: '已归档的审查报告' })
     await expect(archivedReport).toContainText('ark-code-latest')
-    await archivedReport.getByRole('button', { name: '在「当前工作」中查看审查意见', exact: true }).click()
-    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
-    await expect(page.getByTestId('review-evidence-results')).toContainText(
-      'Knowledge review completed for this node.',
-    )
-    await expect(page.getByTestId('review-evidence-results')).not.toContainText('Review Criteria')
+    await expect(archivedReport).toContainText('Knowledge review completed for this node.')
+    await expect(archivedReport).toContainText('warning-only')
+    await expect(archivedReport).toContainText('Attach passing local test evidence before final approval.')
+    await expect(archivedReport).not.toContainText('Review Criteria')
 
     await page.getByLabel('搜索当前项目').fill('missing knowledge node')
     await clickPrimaryNav(page, '团队')

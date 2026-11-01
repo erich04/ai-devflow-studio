@@ -61,6 +61,7 @@ import {
   type WorkflowRun,
   type CodingHarnessCommand,
   type CodingHarnessSnapshot,
+  splitRecallIntents,
 } from '@ai-devflow/shared'
 import {
   captureWorktreeDiff,
@@ -90,9 +91,8 @@ import {
 import { providerCallTraceMessage } from './provider-call-trace-message.js'
 import { OpencodeHttpRequestError, OpencodeMessageResponseError } from './opencode-http-adapter.js'
 import { CODING_BRIEF_MAX_BYTES, estimateNativeCodingWorstCaseCost } from './coding-runtime-configuration.js'
-import { assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
+import { assertCodingContextCurrent, buildCodingMemoryQuery, buildWithCodingMemory, codingPromptDigest, recallCodingMemory, type CodingMemoryStore } from './coding-context.js'
 import { evaluateCurrentWorkflowEvidence, type WorkflowEvidenceEvaluation } from './workflow-evaluation.js'
-import type { CodingRunMemoryLearningResult } from './coding-run-memory-learning.js'
 import type {
   CodingAgentMutation,
   CodingAgentMutationResult,
@@ -327,12 +327,6 @@ export type CodingRuntimeDeps = {
   scheduleRunTimeout?: CodingRuntimeRunTimeoutScheduler
   budgetGuard?: CodingRuntimeBudgetGuard
   completeWorkflowBuild?: CodingRuntimeCompleteWorkflowBuild
-  /**
-   * ADR 0024 §4: called once when a Coding Run completes and its recorded evidence
-   * evaluation passed. Best-effort; a failure never affects the run or the Workflow.
-   */
-  learnCodingRunMemory?: (input: { codingRun: CodingAgentRun; evaluationPassed: boolean }) =>
-    Promise<CodingRunMemoryLearningResult>
   testTimeoutMs?: number
   maxOpaqueOpenCodeRunsPerWorkflowNode?: number
   worktreeRoot?: string
@@ -585,45 +579,6 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   async function saveCodingRun(run: CodingAgentRun) {
     await deps.store.saveCodingAgentRun(run)
     runBestEffortNotification(() => deps.publisher?.publishRunStatus(run))
-  }
-
-  /** Best-effort Memory learning after completion (ADR 0024 §4); traced on the Coding Run. */
-  async function learnFromCompletedCodingRun(
-    codingRun: CodingAgentRun,
-    evaluation: WorkflowEvidenceEvaluation | null,
-  ): Promise<void> {
-    if (!deps.learnCodingRunMemory || !evaluation?.passed) return
-    let message: string
-    let metadata: Record<string, unknown>
-    try {
-      const learned = await deps.learnCodingRunMemory({ codingRun, evaluationPassed: evaluation.passed })
-      if (learned.candidates.length === 0) return
-      const saved = learned.candidates.filter((candidate) => candidate.outcome === 'proposed' || candidate.outcome === 'replayed')
-      const awaitingReview = learned.notPromoted.filter((entry) =>
-        entry.reason === 'human_review_required' || entry.reason === 'duplicate').length
-      const skipped = learned.candidates.filter((candidate) => candidate.outcome === 'duplicate').length
-      const dismissed = learned.candidates.filter((candidate) => candidate.outcome === 'dismissed').length
-      message = `Saved ${saved.length} Memory candidate(s) from this accepted Coding Run: ` +
-        `${learned.promoted.length} saved as Memory by the bounded Coding Run policy, ${awaitingReview} awaiting review` +
-        `${skipped ? `, ${skipped} already known and not saved again` : ''}` +
-        `${dismissed ? `, ${dismissed} previously dismissed and not proposed again` : ''}.`
-      metadata = { memoryLearning: {
-        candidates: learned.candidates, promoted: learned.promoted, notPromoted: learned.notPromoted,
-      } }
-    } catch {
-      message = 'Memory learning stopped early for this Coding Run; any candidates already saved stay listed under Memory. The run and its evidence are unaffected.'
-      metadata = { memoryLearning: { status: 'failed' } }
-    }
-    try {
-      await saveEvents([{
-        id: idGenerator('coding-event'), codingRunId: codingRun.id,
-        runId: codingRun.runId, nodeId: codingRun.nodeId,
-        sequence: await nextSequence(codingRun.id), kind: 'status', timestamp: now(),
-        message, metadata, redacted: true,
-      }])
-    } catch {
-      // The trace is informational; Memory state itself is already durable or unchanged.
-    }
   }
 
   async function recordCodingEvaluation(codingRun: CodingAgentRun): Promise<WorkflowEvidenceEvaluation | null> {
@@ -1891,7 +1846,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     if (!completionCommitted.committed) {
       return false
     }
-    await learnFromCompletedCodingRun(completedRun, await recordCodingEvaluation(completedRun))
+    await recordCodingEvaluation(completedRun)
     try {
       await deps.completeWorkflowBuild?.({
         runId: completedRun.runId,
@@ -2440,7 +2395,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         if (!completed.committed) {
           throw new Error('Accepted OpenCode run could not persist its terminal state safely.')
         }
-        await learnFromCompletedCodingRun(completedRun, await recordCodingEvaluation(completedRun))
+        await recordCodingEvaluation(completedRun)
         return updatedRequest
       }
 
@@ -3169,10 +3124,12 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const recalled = await recallCodingMemory({
         store: deps.store, run, codingRunId, userId: input.requestedBy,
         query: recallQuery,
+        // Only the user's own words are split; the node and approved titles stay in the whole query.
+        intents: splitRecallIntents([run.request, input.userInstruction].filter((text) => text.trim()).join('\n')),
         now: now(),
       })
       const model = executor.modelId ?? providerId
-      const canonicalBrief = buildCodingBrief({
+      const { brief: canonicalBrief, memory: briefMemory } = buildWithCodingMemory(recalled, (memoryContext) => buildCodingBrief({
         run,
         node,
         project,
@@ -3180,18 +3137,18 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         ...briefContext,
         ...(retrievedKnowledge ? { retrievedKnowledge } : {}),
         maxContextBytes: CODING_BRIEF_MAX_BYTES,
-        memoryContext: recalled.revisions,
+        memoryContext,
         userInstruction: input.userInstruction,
         worktreePath: '<managed-worktree-created-after-budget-approval>',
         branchName: '<managed-branch-created-after-budget-approval>',
         ...(input.remediationPlan ? { remediationPlan: input.remediationPlan } : {}),
         ...(input.retryAttempt ? { retryAttempt: input.retryAttempt } : {}),
-      })
+      }))
       const contextReceipt = {
         stateVersion: 1 as const, runId: run.id, nodeId: node.id, runVersion: run.version,
-        runtimeId: recalled.runtimeId, scope: recalled.scope,
-        promptDigest: codingPromptDigest(canonicalBrief.prompt), memories: recalled.memories,
-        omittedMemoryCount: recalled.omittedMemoryCount, compaction: canonicalBrief.compaction!,
+        runtimeId: briefMemory.runtimeId, scope: briefMemory.scope,
+        promptDigest: codingPromptDigest(canonicalBrief.prompt), memories: briefMemory.memories,
+        omittedMemoryCount: briefMemory.omittedMemoryCount, compaction: canonicalBrief.compaction!,
         ...(canonicalBrief.knowledgeContext ? { knowledgeContext: canonicalBrief.knowledgeContext } : {}),
       }
       const estimatedCost = metered && executor.descriptor.kind === 'native'
