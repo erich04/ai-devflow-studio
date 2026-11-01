@@ -5,10 +5,12 @@ import { buildModelCostRecords, canonicalFinancialValue, type ModelCostEvent, ty
 
 /** Financial metadata only: never prompts, responses, API keys or conversation text. */
 export type ModelTaskBudget = { rootId: string; taskId: string; parentTaskId?: string; maxTokens: number; maxCostUsd: number; rootMaxTokens: number; rootMaxCostUsd: number }
+/** context-v1: the full context window; request-bytes-v1: inputTokens is requestInputTokenBound() of the exact request. */
+export type ModelCallBoundBasis = 'deepseek-context-v1' | 'deepseek-request-bytes-v1'
 export type ModelCallQuote = {
   id: string; projectId: string; providerId: string; model: string; createdAt: string
   inputTokens: number; maxOutputTokens: number | null
-  boundBasis?: 'deepseek-context-v1'
+  boundBasis?: ModelCallBoundBasis
   operation?: { id: string; version: string; purpose: string }
   continuationId?: string
   task?: ModelTaskBudget
@@ -27,15 +29,27 @@ export type ModelCallAttempt = ModelCallQuote & {
   pendingSettlement?: ModelCallSettlement
   pendingSettlementFinal?: boolean
 }
-export type VerifiedModelCallBound = { costUsd: number; inputTokenBound: number; maxOutputTokens: number; priceVersion: string; basis: 'deepseek-context-v1' }
-/** Full supported context capacity is an upper bound; UTF-8(prompt)+overhead is only an estimate. */
+export type VerifiedModelCallBound = { costUsd: number; inputTokenBound: number; maxOutputTokens: number; priceVersion: string; basis: ModelCallBoundBasis }
+const DEEPSEEK_CONTEXT_TOKENS = 1048576
+/** Room for the chat-template tokens DeepSeek adds around the serialized messages and tools. */
+export const REQUEST_TEMPLATE_TOKEN_MARGIN = 8192
+/**
+ * Byte-level BPE emits at most one token per UTF-8 byte, so the exact serialized request plus the
+ * template margin bounds billed input; a request beyond the context window is refused unbilled.
+ * UTF-8(prompt)/4 or any other per-character estimate is not a bound.
+ */
+export function requestInputTokenBound(serializedRequest: string): number {
+  return Math.min(DEEPSEEK_CONTEXT_TOKENS, new TextEncoder().encode(serializedRequest).byteLength + REQUEST_TEMPLATE_TOKEN_MARGIN)
+}
+/** The full context capacity or the measured request bound, priced as cache misses at peak. */
 export function verifiedModelCallBound(quote: ModelCallQuote): VerifiedModelCallBound | null {
-  if (quote.boundBasis !== 'deepseek-context-v1' || quote.billingProvider !== 'deepseek' ||
-    !['deepseek-flash', 'deepseek-pro'].includes(quote.model) || !quote.maxOutputTokens || quote.maxOutputTokens > 393216 || quote.inputTokens > 1048576) return null
+  if (!quote.boundBasis || quote.billingProvider !== 'deepseek' ||
+    !['deepseek-flash', 'deepseek-pro'].includes(quote.model) || !quote.maxOutputTokens || quote.maxOutputTokens > 393216 || quote.inputTokens > DEEPSEEK_CONTEXT_TOKENS) return null
+  const inputTokenBound = quote.boundBasis === 'deepseek-context-v1' ? DEEPSEEK_CONTEXT_TOKENS : quote.inputTokens
   const price = resolveDeepSeekPricingSnapshot({ providerId: 'deepseek', model: quote.model, timestamp: quote.createdAt, worstCase: true })
   if (!price) return null
-  return { basis: quote.boundBasis, inputTokenBound: 1048576, maxOutputTokens: quote.maxOutputTokens, priceVersion: price.sourceVersion,
-    costUsd: (1048576 * price.cacheMissInputUsdPerMillion + quote.maxOutputTokens * price.outputUsdPerMillion) / 1_000_000 }
+  return { basis: quote.boundBasis, inputTokenBound, maxOutputTokens: quote.maxOutputTokens, priceVersion: price.sourceVersion,
+    costUsd: (inputTokenBound * price.cacheMissInputUsdPerMillion + quote.maxOutputTokens * price.outputUsdPerMillion) / 1_000_000 }
 }
 
 export type ModelCallAdmission = { accepted: boolean; decision: BudgetGuardDecision }
@@ -56,7 +70,8 @@ export function parseModelCallQuote(value: unknown): ModelCallQuote {
       !/^[a-zA-Z0-9_-]{1,160}$/u.test(v.id) || !Number.isFinite(Date.parse(v.createdAt)) || !Number.isSafeInteger(v.inputTokens) || v.inputTokens < 0 || v.inputTokens > 2_000_000 ||
       (v.maxOutputTokens !== null && (!Number.isSafeInteger(v.maxOutputTokens) || v.maxOutputTokens < 1 || v.maxOutputTokens > 1_000_000)) || !['deepseek','openai_compatible'].includes(v.billingProvider) ||
       (v.approvalId !== undefined && (typeof v.approvalId !== 'string' || v.approvalId.length > 512))) throw new Error('Invalid model call quote')
-  if (v.boundBasis !== undefined && v.boundBasis !== 'deepseek-context-v1') throw new Error('Invalid bound basis')
+  if (v.boundBasis !== undefined && v.boundBasis !== 'deepseek-context-v1' && v.boundBasis !== 'deepseek-request-bytes-v1') throw new Error('Invalid bound basis')
+  if (v.boundBasis === 'deepseek-request-bytes-v1' && (v.inputTokens < REQUEST_TEMPLATE_TOKEN_MARGIN || v.inputTokens > DEEPSEEK_CONTEXT_TOKENS)) throw new Error('Invalid bound basis')
   if (v.continuationId !== undefined) parseBudgetAttemptIds([v.continuationId])
   if (v.operation) {
     parseBudgetAttemptIds([v.operation.id])
@@ -86,8 +101,9 @@ export function modelTaskBudgetBlock(quote: ModelCallQuote, attempts: ModelCallA
     const actual = effectiveCosts.has(row.id) ? effectiveCosts.get(row.id) : row.costUsd
     return actual ?? row.verifiedBound?.costUsd ?? (row.state === 'reserved' ? row.projectedCostUsd ?? Infinity : Infinity)
   }
+  // Token caps count cache-miss input and output only; without a reported split all input counts. Money caps still price hits.
   const tokensOf = (row: ModelCallAttempt) => row.state === 'not_sent' ? 0 : row.usage?.usageCompleteness !== 'partial' && row.usage?.inputTokens !== undefined && row.usage?.outputTokens !== undefined
-    ? row.usage.inputTokens + row.usage.outputTokens : (row.verifiedBound?.inputTokenBound ?? row.inputTokens) + (row.maxOutputTokens ?? Infinity)
+    ? row.usage.inputTokens - (row.usage.cacheReadTokens ?? 0) + row.usage.outputTokens : (row.verifiedBound?.inputTokenBound ?? row.inputTokens) + (row.maxOutputTokens ?? Infinity)
   const nextTokens = (verifiedModelCallBound(quote)?.inputTokenBound ?? quote.inputTokens) + (quote.maxOutputTokens ?? Infinity)
   if (group.reduce((sum, row) => sum + costOf(row), 0) + (nextCost ?? Infinity) > task.rootMaxCostUsd + 1e-9 || group.reduce((sum, row) => sum + tokensOf(row), 0) + nextTokens > task.rootMaxTokens) return '总任务预算不足；子任务、压缩及未知费用仍计入总额度。'
   if (own.reduce((sum, row) => sum + costOf(row), 0) + (nextCost ?? Infinity) > task.maxCostUsd + 1e-9 || own.reduce((sum, row) => sum + tokensOf(row), 0) + nextTokens > task.maxTokens) return '当前子任务预算不足；不能重新命名请求来重置额度。'
