@@ -169,10 +169,12 @@ it('does not re-send a retry whose delivery became unknown when the process stop
   const { store, dbPath } = await sessionStore(), network = scripted([httpError(503), 'hang']), model = deepSeek(network.fetcher, 3000)
   const crashed = new NativeCodingLoop({ store, provider: model.provider, tools: noTools, sleep: async () => {} })
   void crashed.runBatch('session').catch(() => undefined)
-  await expect.poll(async () => (await store.getNativeCodingSession('session'))!.attempts.map(attempt => attempt.status)).toEqual(['completed', 'started'])
+  // The loop sends only after the started attempt reached disk; stop once the re-send is in flight.
+  await expect.poll(() => network.sent.length).toBe(2)
   await store.close()
   const reopened = await createLocalStore({ dbPath })
   try {
+    expect((await reopened.getNativeCodingSession('session'))!.attempts.map(attempt => attempt.status)).toEqual(['completed', 'started'])
     const restarted = new NativeCodingLoop({ store: reopened, provider: model.provider, tools: noTools, stopPreviousWorker: async () => true, sleep: async () => {} })
     expect(await restarted.runBatch('session')).toMatchObject({ status: 'reconciling', pauseReason: 'model_delivery_unknown' })
     expect(network.sent).toHaveLength(2)
