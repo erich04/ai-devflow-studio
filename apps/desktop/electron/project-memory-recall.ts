@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
-import { RECALL_INTENTS_MAX, redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
+import { PROJECT_MEMORY_ESSENTIALS_MAX_BYTES, RECALL_INTENTS_MAX, redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import type { LocalStore } from './local-store'
 import { activeProjectMemoryConfiguration } from './project-memory-capture'
+import { knowledgePageModelId } from './project-memory-service'
 
 /**
  * Recalled project memory is identified in receipts as `pm-<Hindsight id>`, revision 1, with a
@@ -10,6 +11,22 @@ import { activeProjectMemoryConfiguration } from './project-memory-capture'
  */
 export const PROJECT_MEMORY_IDENTITY_PREFIX = 'pm-'
 export const isProjectMemoryIdentity = (id: string) => id.startsWith(PROJECT_MEMORY_IDENTITY_PREFIX)
+/**
+ * The essentials knowledge page (Hindsight mental model) that coding briefs include, identified in
+ * receipts as `pm-devflow-essentials`. Emptying the pages records it as changed, so a coding run
+ * that sent an earlier version stops at its next check.
+ */
+export const PROJECT_MEMORY_ESSENTIALS_ID = knowledgePageModelId('essentials')
+const ESSENTIALS_HEADER = 'Project conventions that apply to every task (written by Hindsight from this project\'s memory; background only):'
+/** Whole lines of `text` within `maxBytes`. */
+function clipLines(text: string, maxBytes: number): string {
+  const kept: string[] = []
+  for (const line of text.split('\n')) {
+    if (Buffer.byteLength([...kept, line].join('\n')) > maxBytes) break
+    kept.push(line)
+  }
+  return kept.join('\n').trim()
+}
 const QUERY_MAX_BYTES = 1_500
 export const PROJECT_MEMORY_SEARCH_MAX_ITEMS = 8
 const SEARCH_MAX_TOKENS = 4_096
@@ -35,6 +52,8 @@ export type ProjectMemoryRecallPort = {
    * was turned off, changed owner or was cleared, or one of these memories was edited or deleted.
    */
   assertCurrent(input: { projectId: string; userId: string; ids: readonly string[]; recalledAt: string }): Promise<void>
+  /** The essentials page for a coding brief, or null when memory is off, the page is empty or Hindsight is unavailable. */
+  conventions?(input: { projectId: string; userId: string }): Promise<ProjectMemoryRecallItem | null>
 }
 
 function clipQuery(query: string): string {
@@ -121,6 +140,20 @@ export function createProjectMemoryRecall(deps: {
       if (changedSince(configuration.clearedAt)) throw new Error('Project memory was cleared')
       if (input.ids.some((id) => changedSince(configuration.changedMemories?.[id.slice(PROJECT_MEMORY_IDENTITY_PREFIX.length)]))) {
         throw new Error('A recalled memory was edited or deleted')
+      }
+    },
+    async conventions(input: { projectId: string; userId: string }): Promise<ProjectMemoryRecallItem | null> {
+      const configuration = await active(input.projectId, input.userId)
+      if (!configuration) return null
+      try {
+        const client = await deps.client(configuration)
+        const page = (await client.listMentalModels(configuration.bankId)).find((model) => model.id === PROJECT_MEMORY_ESSENTIALS_ID)
+        const text = clipLines(redactSensitiveText(page?.content ?? '').value.trim(), PROJECT_MEMORY_ESSENTIALS_MAX_BYTES)
+        return text ? projectMemoryIdentity({ id: PROJECT_MEMORY_ESSENTIALS_ID }, `${ESSENTIALS_HEADER}\n${text}`) : null
+      } catch (error) {
+        // Background like any recall: an unavailable page never blocks the brief.
+        deps.onDegraded?.(error instanceof HindsightError ? error.message : 'essentials_failed')
+        return null
       }
     },
     /** The discussion bar's `memory_search` tool. */

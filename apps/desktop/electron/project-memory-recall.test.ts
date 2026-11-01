@@ -6,7 +6,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { CODING_MEMORY_RECALL_BUDGET, CONVERSATION_MEMORY_RECALL_BUDGET } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import { createLocalStore, type LocalStore } from './local-store'
-import { createProjectMemoryRecall, projectMemoryStatement } from './project-memory-recall'
+import { createProjectMemoryRecall, PROJECT_MEMORY_ESSENTIALS_ID, projectMemoryStatement } from './project-memory-recall'
 
 const directories: string[] = []
 const stores: LocalStore[] = []
@@ -108,6 +108,10 @@ it('treats memory recalled before an edit, a deletion or a clear as stale', asyn
   await store.markProjectMemoryChanged('project', 'f1')
   await expect(check(['pm-o1'])).resolves.toBeUndefined()
   await expect(check(['pm-o1', 'pm-f1'])).rejects.toThrow('edited or deleted')
+  // Emptying the knowledge pages records the essentials page a coding brief sent as changed.
+  await expect(check(['pm-o1', 'pm-devflow-essentials'])).resolves.toBeUndefined()
+  await store.markProjectMemoryChanged('project', PROJECT_MEMORY_ESSENTIALS_ID)
+  await expect(check(['pm-o1', 'pm-devflow-essentials'])).rejects.toThrow('edited or deleted')
   // A later recall of the edited memory is current.
   await expect(recall.assertCurrent({ projectId: 'project', userId: owner, ids: ['pm-f1'], recalledAt: new Date(Date.now() + 1_000).toISOString() }))
     .resolves.toBeUndefined()
@@ -144,4 +148,26 @@ it('keeps the whole request\'s memory when an ask fails, and none when the whole
   expect(await recall.recall({ projectId: 'project', userId: owner, query: '撤销窗口', intents: ['撤销窗口要多久'], budget: CODING_MEMORY_RECALL_BUDGET }))
     .toEqual({ degraded: true, items: [] })
   expect(degraded.length).toBeGreaterThan(0)
+})
+
+it('gives the coding brief the essentials page, whole lines within its limit, and nothing when it is empty or unavailable', async () => {
+  const { recall, client, owner } = await fixture()
+  const listMentalModels = vi.fn(async () => [
+    { id: 'devflow-conventions', content: '## 约定\n- 很长的页面', stale: false },
+    { id: 'devflow-essentials', content: `- 代码注释统一用英文\n- 样式用 CSS Modules，密钥 sk-abcdefghijklmnopqrstuvwxyz0123456789 不入库\n${'- 很长的规则说明\n'.repeat(400)}`, stale: false },
+  ])
+  Object.assign(client, { listMentalModels })
+  const item = await recall.conventions({ projectId: 'project', userId: owner })
+  expect(item).toMatchObject({ id: 'pm-devflow-essentials', contentDigest: expect.stringMatching(/^sha256:/u) })
+  expect(item!.statement.split('\n')[0]).toMatch(/^Project conventions that apply to every task/u)
+  expect(item!.statement).toContain('- 代码注释统一用英文')
+  expect(item!.statement).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
+  expect(new TextEncoder().encode(item!.statement.slice(item!.statement.indexOf('\n') + 1)).byteLength).toBeLessThanOrEqual(2_500)
+  expect(item!.statement.endsWith('- 很长的规则说明')).toBe(true)
+
+  listMentalModels.mockImplementation(async () => [{ id: 'devflow-essentials', content: '  ', stale: false }])
+  expect(await recall.conventions({ projectId: 'project', userId: owner })).toBeNull()
+  listMentalModels.mockImplementation(async () => { throw new HindsightError('timeout') })
+  expect(await recall.conventions({ projectId: 'project', userId: owner })).toBeNull()
+  expect(await recall.conventions({ projectId: 'project', userId: 'someone-else' })).toBeNull()
 })

@@ -94,7 +94,11 @@ describe('ProjectMemoryPanel', () => {
       refreshProjectKnowledgePage: vi.fn(async () => pages('## 命令\n- 测试：`pnpm test`')) }
     render(<ProjectMemoryPanel projectId="project-1" api={memory} />)
     const section = await screen.findByLabelText('知识页')
+    // The page every coding brief includes opens first and says so.
+    expect(await within(section).findByRole('article', { name: '每个任务都适用的约定' })).toHaveTextContent('这一页会放进每次编码简报')
+    fireEvent.click(within(section).getByRole('tab', { name: '约定与命令' }))
     const conventions = await within(section).findByRole('article', { name: '约定与命令' })
+    expect(conventions).not.toHaveTextContent('这一页会放进每次编码简报')
     expect(within(conventions).getByRole('heading', { name: '命令' })).toBeInTheDocument()
     expect(conventions).toHaveTextContent('有新记忆，稍后更新')
     fireEvent.click(within(conventions).getByRole('button', { name: '立即整理' }))
