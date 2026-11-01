@@ -60,6 +60,12 @@ export function configureProjectMemory(db: Database, input: ProjectMemoryConfigu
   writeConfiguration(db, config)
   return config
 }
+const forgotten = (row: ProjectMemoryDocument) => row.status === 'delete_pending' || row.status === 'deleted'
+/** Every document of the same source in the bank: the segments of one conversation, or the one document of any other source. */
+function sourceDocuments(db: Database, row: Pick<ProjectMemoryDocument, 'bankId' | 'sourceKind' | 'sourceId'>): ProjectMemoryDocument[] {
+  return rows<ProjectMemoryDocument>(db, 'select json from project_memory_documents where bank_id = ?', [row.bankId])
+    .filter((item) => item.sourceKind === row.sourceKind && item.sourceId === row.sourceId)
+}
 const contentDigest = (input: ProjectMemoryDocumentInput) =>
   digest(JSON.stringify([input.title, input.payload, input.context, input.tags, input.occurredAt]))
 
@@ -75,9 +81,18 @@ export function upsertProjectMemoryDocument(db: Database, config: ProjectMemoryC
   if (!isValidProjectMemoryDocumentInput(input)) return null
   const existing = rows<ProjectMemoryDocument>(db, 'select json from project_memory_documents where bank_id = ? and document_id = ?',
     [config.bankId, input.documentId])[0]
-  if (existing && ['delete_pending', 'deleted'].includes(existing.status)) return existing
+  if (existing && forgotten(existing)) return existing
+  // A forgotten source stays forgotten: a later segment of a forgotten conversation is not recorded either.
+  if (!existing && sourceDocuments(db, { bankId: config.bankId, sourceKind: input.sourceKind, sourceId: input.sourceId }).some(forgotten)) return null
   const nextDigest = contentDigest(input)
   if (existing?.contentDigest === nextDigest) return existing
+  // Hindsight never sees the title: a new title alone is recorded without sending the document again.
+  if (existing && existing.payload === input.payload && existing.context === input.context && existing.occurredAt === input.occurredAt &&
+      JSON.stringify(existing.tags) === JSON.stringify(input.tags)) {
+    const renamed: ProjectMemoryDocument = { ...existing, title: input.title, contentDigest: nextDigest, updatedAt: now }
+    writeDocument(db, renamed)
+    return renamed
+  }
   const row: ProjectMemoryDocument = {
     id: existing?.id ?? randomUUID(), projectId: config.projectId, ownerUserId: config.ownerUserId, bankId: config.bankId,
     documentId: input.documentId, sourceKind: input.sourceKind, sourceId: input.sourceId, title: input.title,
@@ -147,15 +162,22 @@ export function settleProjectMemoryDocument(db: Database, id: string, leaseToken
   }
   writeDocument(db, next)
 }
-/** The user forgot a document: stop using it locally now and remove it from Hindsight next. */
+/**
+ * The user forgot a source: stop using it locally now and remove it from Hindsight next. A
+ * conversation is forgotten whole, every segment of it, whichever segment the user chose.
+ */
 export function forgetProjectMemoryDocument(db: Database, projectId: string, id: string, now: string): ProjectMemoryDocument {
   const row = rows<ProjectMemoryDocument>(db, 'select json from project_memory_documents where id = ? and project_id = ?', [id, projectId])[0]
   if (!row) throw new Error('Memory document not found')
-  if (row.status === 'deleted' || row.status === 'delete_pending') return row
-  const { leaseToken: _lease, leaseUntil: _until, ...rest } = row
-  const next: ProjectMemoryDocument = { ...rest, status: 'delete_pending', payload: '', notBefore: now, updatedAt: now }
-  writeDocument(db, next)
-  return next
+  let chosen = row
+  for (const item of sourceDocuments(db, row).filter((document) => document.projectId === projectId)) {
+    if (forgotten(item)) continue
+    const { leaseToken: _lease, leaseUntil: _until, ...rest } = item
+    const next: ProjectMemoryDocument = { ...rest, status: 'delete_pending', payload: '', notBefore: now, updatedAt: now }
+    writeDocument(db, next)
+    if (item.id === row.id) chosen = next
+  }
+  return chosen
 }
 const MAX_CHANGED_MEMORIES = 2_000
 /**

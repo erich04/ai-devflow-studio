@@ -57,30 +57,41 @@ export async function activeProjectMemoryConfiguration(store: OwnerStore, projec
 }
 
 type ConversationSource = Pick<WorkbenchConversation, 'id' | 'localProjectId' | 'title' | 'status' | 'messages' | 'updatedAt'>
+/** One conversation segment holds this much JSON; the next message starts a new segment. */
+export const CONVERSATION_SEGMENT_BYTES = PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048
+const CONVERSATION_CONTEXT = 'A discussion between the user and DevFlow\'s assistant about this software project. What the user says is their own statement; the assistant\'s statements are claims, not verified facts.'
+/** The first segment keeps the id a conversation has always had, so a short one is unchanged. */
+export function conversationMemoryDocumentId(conversationId: string, segment: number): string {
+  return segment === 1 ? `conversation:${conversationId}` : `conversation:${conversationId}:${segment}`
+}
 /**
- * The whole public conversation as one document: user and assistant messages only, never
- * reasoning, tool output or injected memory. The oldest messages are dropped first.
+ * The whole public conversation in segments: user and assistant messages only, never reasoning,
+ * tool output or injected memory. Segments are filled from the oldest message; a full segment
+ * never changes again, because messages are only appended, so it is sent once and stays in memory.
+ * Only the last segment is replaced as the conversation grows (ADR 0030).
  */
-export function buildConversationMemoryDocument(conversation: ConversationSource, now: string): ProjectMemoryDocumentInput | null {
+export function buildConversationMemoryDocuments(conversation: ConversationSource, now: string): ProjectMemoryDocumentInput[] {
   const messages = conversation.messages
     .filter((message) => (message.role === 'user' || message.role === 'assistant') && message.text.trim())
-    .map((message) => ({ role: message.role, content: redactSensitiveText(message.text).value, timestamp: message.createdAt }))
-  if (!messages.some((message) => message.role === 'user') || !messages.some((message) => message.role === 'assistant')) return null
-  const budget = PROJECT_MEMORY_MAX_DOCUMENT_BYTES - 2_048
-  const kept: typeof messages = []
-  for (const message of [...messages].reverse()) {
-    const candidate = [{ ...message, content: clip(message.content, Math.floor(budget / 2)) }, ...kept]
-    if (bytes(JSON.stringify(candidate)) > budget) break
-    kept.unshift(candidate[0]!)
+    .map((message) => ({ role: message.role, content: clip(redactSensitiveText(message.text).value, Math.floor(CONVERSATION_SEGMENT_BYTES / 2)),
+      timestamp: message.createdAt }))
+  if (!messages.some((message) => message.role === 'user') || !messages.some((message) => message.role === 'assistant')) return []
+  const segments: Array<typeof messages> = [[]]
+  for (const message of messages) {
+    if (segments.at(-1)!.length && bytes(JSON.stringify([...segments.at(-1)!, message])) > CONVERSATION_SEGMENT_BYTES) segments.push([])
+    segments.at(-1)!.push(message)
   }
-  if (!kept.length) return null
-  return {
-    documentId: `conversation:${conversation.id}`, sourceKind: 'conversation', sourceId: conversation.id,
-    title: clip(conversation.title.trim() || '项目讨论', 300), payload: JSON.stringify(kept),
-    context: 'A discussion between the user and DevFlow\'s assistant about this software project. What the user says is their own statement; the assistant\'s statements are claims, not verified facts.',
-    tags: ['source:conversation'], occurredAt: kept[0]!.timestamp,
-    notBefore: new Date(Date.parse(now) + PROJECT_MEMORY_CONVERSATION_IDLE_MS).toISOString(),
-  }
+  const title = conversation.title.trim() || '项目讨论'
+  const idle = new Date(Date.parse(now) + PROJECT_MEMORY_CONVERSATION_IDLE_MS).toISOString()
+  return segments.map((segment, index) => ({
+    documentId: conversationMemoryDocumentId(conversation.id, index + 1), sourceKind: 'conversation', sourceId: conversation.id,
+    // Later segments say which part they are; the first keeps its title and context as before.
+    title: clip(index ? `${title}（第 ${index + 1} 段）` : title, 300), payload: JSON.stringify(segment),
+    context: index ? `${CONVERSATION_CONTEXT} It continues earlier parts of the same discussion.` : CONVERSATION_CONTEXT,
+    tags: ['source:conversation'], occurredAt: segment[0]!.timestamp,
+    // The open segment waits until the conversation is quiet; a full one can go now.
+    notBefore: index === segments.length - 1 ? idle : now,
+  }))
 }
 
 const RECORDED_EVENT_KINDS = new Set(['tool_call', 'tool_result', 'test', 'error', 'status', 'diff'])
@@ -179,8 +190,9 @@ type CaptureStore = OwnerStore & Pick<LocalStore, 'recordProjectMemoryDocument' 
 export async function captureConversationProjectMemory(store: CaptureStore, conversation: ConversationSource, previous?: Pick<ConversationSource, 'status'>, now = new Date().toISOString()): Promise<void> {
   if (previous?.status !== 'running' || !['idle', 'awaiting_answer'].includes(conversation.status)) return
   const config = await activeProjectMemoryConfiguration(store, conversation.localProjectId)
-  const document = config && buildConversationMemoryDocument(conversation, now)
-  if (document) await store.recordProjectMemoryDocument(config, document)
+  if (!config) return
+  // Unchanged segments are left as they are by the store; only new or changed ones are queued.
+  for (const document of buildConversationMemoryDocuments(conversation, now)) await store.recordProjectMemoryDocument(config, document)
 }
 export async function captureCodingRunProjectMemory(store: CaptureStore, run: CodingAgentRun, previous?: Pick<CodingAgentRun, 'status'>, extraActivity?: readonly string[]): Promise<void> {
   if (isActiveCodingAgentRunStatus(run.status) || (previous && !isActiveCodingAgentRunStatus(previous.status))) return
@@ -257,4 +269,35 @@ export async function migrateLegacyProjectMemory(store: LegacyStore, projectId: 
     runtimeId: LEGACY_RUNTIME_ID, limit: AGENT_MEMORY_RETRIEVAL_LIMIT_MAX, requestedAt: now })
   const document = buildLegacyMemoryDocument(revisions)
   return document ? store.recordProjectMemoryDocument(config, document) : null
+}
+
+type BackfillStore = OwnerStore & Pick<LocalStore, 'listProjectMemoryDocuments' | 'recordProjectMemoryDocument' | 'listWorkbenchConversations'>
+/**
+ * Long conversations captured before segments existed kept only their newest part, and Hindsight
+ * deleted what it had extracted from the rest. Their segments are sent again a few at a time, so
+ * the one-off extraction cost stays bounded. Only conversations already in this bank are touched:
+ * turning memory on does not import older discussions, and a forgotten one stays forgotten.
+ */
+export async function backfillConversationProjectMemory(store: BackfillStore, projectId: string, limit: number, now = new Date().toISOString()): Promise<{ queued: number; remaining: number }> {
+  const config = await activeProjectMemoryConfiguration(store, projectId)
+  if (!config) return { queued: 0, remaining: 0 }
+  const existing = new Map((await store.listProjectMemoryDocuments(projectId))
+    .filter((document) => document.bankId === config.bankId).map((document) => [document.documentId, document]))
+  let queued = 0
+  let remaining = 0
+  for (const conversation of await store.listWorkbenchConversations(projectId)) {
+    const first = existing.get(conversationMemoryDocumentId(conversation.id, 1))
+    // A running turn is captured when it ends.
+    if (!first || first.status === 'deleted' || first.status === 'delete_pending' || conversation.status === 'running') continue
+    const documents = buildConversationMemoryDocuments(conversation, now)
+    if (documents.length < 2) continue
+    for (const document of documents) {
+      const current = existing.get(document.documentId)
+      if (current && current.payload === document.payload && current.context === document.context && current.occurredAt === document.occurredAt) continue
+      if (queued >= limit) { remaining++; continue }
+      const recorded = await store.recordProjectMemoryDocument(config, { ...document, notBefore: now })
+      if (recorded?.status === 'queued' && recorded.documentId === document.documentId) queued++
+    }
+  }
+  return { queued, remaining }
 }
