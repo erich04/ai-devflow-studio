@@ -97,6 +97,21 @@ Windows 的 `50f5a15` 真实 Electron 日志已确认 v3 全链路通过、应�
 - `native-coding-electron-smoke` 的 v2、v3 自动、v3 人工验收三种模式通过；`test:electron-smoke`、`test:workbench-conversation-electron-smoke`、`test:e2e`（46 项）通过。
 - `test:opencode-question-electron` 在合并后和 main 上都出现过“等待 opencode serve 超时”，各自也都通过过一次，属于本机 OpenCode 启动时间的波动，与本次合并无关。
 
+## 2026-11-01 合并 main
+
+把 `origin/main`（`26e7e3d`，#283）合入本分支，main 比本分支多 58 个提交。6 个文件有冲突，按 `docs/engineering/project-memory.md` 的「与 Native Coding v3（#238）合并时」处理。Native v3 的行为和评测规则不变。
+
+- **数据库版本**：main 的 41 用于项目记忆表，保持不变；本分支的持久会话表改为 **schema 42**。已经跑过本分支 41 的数据库会跳过 main 的 41，所以 42 也补建项目记忆表；39 号旧库缺的 Hindsight 表照旧补建。语句都是 `create ... if not exists`，重复执行不改变表和数据。`native-coding-schema-migration.test.ts` 和 `local-store-schema.test.ts` 覆盖从 40、main 的 41 和本分支的 41 升级。
+- **旧记忆链路**：main 删除了旧的自动学习、候选学习和本地记忆召回（含 `automatic-memory-local-store.test.ts`），本分支对这些文件的改动以 main 为准；`LocalStore` 保留本分支的 Native 会话方法。
+- **编码简报与讨论栏**：v3 简报用 main 的拆分召回（`splitRecallIntents`、`buildWithCodingMemory`），带 main 的记忆过时规则；`native-conversation.ts` 同时有 main 的 `communicationPreferences` 和本分支抽出的 `nativeRequestBudget`。讨论栏的 `memory_search` 暂未提供给 v3。
+- **设置页**：用 main 的一句话说明（#227），「Native 版本」选择框替换原来固定的“执行器版本：v2”。
+
+验证（模拟模型，未调用付费 API）：
+
+- 完整 `corepack pnpm verify` 通过：443 个测试文件、5,568 项通过，3 个文件、18 项跳过。
+- CI Linux 任务的 Native v3 测试加 `local-store-schema.test.ts`：24 个文件、136 项通过。
+- `native-coding-electron-smoke` 的 v2、v3 自动、v3 人工验收三种模式通过；`test:electron-smoke`、`test:workbench-conversation-electron-smoke` 通过。
+
 ## 尚未满足的发布条件
 
 1. **真实模型能力证明（用户要求暂缓付费）。** 2026-10-27 的 $3 小样本 r8 覆盖 10 道题：没有执行器通过独立验收，Native v3 报告完成的 5 次全部是错误成功，Native v2 在思考 high 下 10 次达到 4,096 输出上限，见[真实模型验收记录](../evaluation/native-coding-v3-live-20261011.md)。 端点兼容和 8 类交互/故障场景已通过，31 项公开计划已验证；r6 和 r7 的不完整观测保留。当前不启动新付费请求，也不因账户恢复而自动续跑。今后如用户重新选择付费验证，先确定小样本与共享总金额上限；少量冒烟检查不能证明整体效果优于 v2，既有错误成功不能抹掉。
