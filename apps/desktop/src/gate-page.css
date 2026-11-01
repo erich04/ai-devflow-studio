@@ -37,8 +37,8 @@
 .gate-bar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; }
 .gate-bar-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
 .gate-bar-costs { display: grid; gap: 2px; min-width: 0; }
-.gate-bar-costs p, .gate-list-generation { margin: 0; font-size: var(--font-size-xs); }
-.gate-bar-costs .text-button, .gate-list-generation .text-button { font-size: var(--font-size-xs); }
+.gate-bar-costs p { margin: 0; font-size: var(--font-size-xs); }
+.gate-bar-costs .text-button { font-size: var(--font-size-xs); }
 .gate-bar-settings { padding: 6px 0; }
 .gate-spinner {
   display: inline-block; width: 10px; height: 10px; margin-inline-end: 6px; vertical-align: baseline;

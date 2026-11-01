@@ -96,7 +96,13 @@ describe('GateDecisionBar', () => {
     expect(within(panel).getByText('我添加的')).toBeInTheDocument()
     expect(within(panel).getByText('补一条多个关键词的验收标准。')).toBeInTheDocument()
     expect(within(bar()).getByRole('button', { name: '提交修订，生成 v2（1 项）' })).toHaveClass('primary-button')
-    expect(within(panel).getByText('将用 Direct Provider · fake-model 生成，可能产生费用')).toBeInTheDocument()
+    // The model and cost line appears once, beside the button, with 「更改」 (screenshot 011, decision 75).
+    const cost = '将用 Direct Provider · fake-model 生成，可能产生费用'
+    expect(within(bar()).getAllByText(cost)).toHaveLength(1)
+    expect(within(panel).queryByText(cost)).toBeNull()
+    const line = within(bar().querySelector('.gate-bar-costs') as HTMLElement).getByText(cost).parentElement!
+    expect(within(line).getByRole('button', { name: '更改' })).toBeInTheDocument()
+    expect(within(bar()).getAllByRole('button', { name: '更改' })).toHaveLength(1)
   })
   it('limits the text fields to 1000 characters and adds an own item once when saving fails (review finding 9)', async () => {
     render(<GateHarness fixture={await buildF1()} spies={gateActionSpies()} facts={gateFacts()} />)

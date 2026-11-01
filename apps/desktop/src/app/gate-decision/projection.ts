@@ -77,7 +77,6 @@ export type ListView = {
   submittedText?: string
   addLabel: string
   addPlaceholder: string
-  generationLine?: string
   composedText: string
   composedLength: number
   overflowReason?: string
@@ -611,7 +610,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
       : !suggestions.length ? gateCopy.adoptAllNoneLeft
         : !cardActionable(true) ? readOnlyReason ?? gateCopy.readOnlyNeedsReview(N) : undefined
     header = {
-      text: gateCopy.marginHeader(findingCards.length, shownBinding.levelsKnown ? important : undefined),
+      text: gateCopy.marginHeader(findingCards.length, shownBinding.levelsKnown ? important : undefined, shownMerge.mergeNotes.length),
       merges: shownMerge.mergeNotes.map((note) => ({ text: gateCopy.mergeLink(note.finding, note.question), cardId: questionCardId(note.question) })),
       ...(shownMerge.mergeNotes.length > 2 ? { moreText: gateCopy.mergeMore(shownMerge.mergeNotes.length - 2) } : {}),
       adoptAll: { enabled: !adoptReason, ...(adoptReason ? { disabledReason: adoptReason } : {}), findingIndexes: suggestions.map((card) => card.finding!.index) },
@@ -655,7 +654,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
       : reading || mode === 'finished' || mode === 'sub-step' ? gateCopy.listEmptyNoList : gateCopy.listEmptyReadOnly,
     items: listItems, actionable: listActionable, ...(listReadOnly ? { readOnlyReason: listReadOnly } : {}),
     ...(mode === 'revision-pending' && input.submittedText ? { submittedText: input.submittedText } : {}),
-    addLabel: gateCopy.addOwnButton, addPlaceholder: gateCopy.addOwnPlaceholder, generationLine,
+    addLabel: gateCopy.addOwnButton, addPlaceholder: gateCopy.addOwnPlaceholder,
     composedText, composedLength: measured.length, ...(measured.reason ? { overflowReason: measured.reason } : {}), proposalIds,
   }
   // Meta line.

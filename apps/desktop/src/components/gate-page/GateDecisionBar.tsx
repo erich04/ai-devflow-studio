@@ -89,7 +89,7 @@ export function GateDecisionBar() {
         disabled={!bar.list.toggleEnabled} onClick={() => scope.setListExpanded(!scope.listExpanded)}>
         {bar.list.toggleLabel} {scope.listExpanded ? '▴' : '▾'}
       </button>
-      {scope.listExpanded && bar.list.toggleEnabled ? <RevisionListPanel settingsOpen={settingsOpen} onToggleSettings={() => setSettingsOpen((open) => !open)} /> : null}
+      {scope.listExpanded && bar.list.toggleEnabled ? <RevisionListPanel /> : null}
     </div>
     <div className="gate-bar-meta meta">
       {bar.meta.role ? <span>{bar.meta.role}</span> : null}

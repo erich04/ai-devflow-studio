@@ -388,6 +388,15 @@ describe('cards, margin header and bars', () => {
     expect(f2.margin.header?.text).toBe('审查意见 4 条')
     expect(f2.margin.header?.adoptAll).toEqual({ enabled: false, disabledReason: '这次审查没有给出全部意见的级别。', findingIndexes: [] })
   })
+  it('says every finding joined a question when no finding card is left (walkthrough screenshot 006, decision 76)', async () => {
+    const f1 = await buildF1()
+    const review = await reviewOf({ id: 'r-merged', artifact: f1.current, gateNodeId: ids.clarifyGate, findings: ['问题 1 没有结论。', '问题 2 没有结论。'], createdAt: '2026-10-30T08:11:00.000Z',
+      details: F1_QUESTIONS.map((question) => ({ quotes: [question], importance: 'important' as const })) })
+    const view = project(await gateProjectionInput({ ...f1, reviews: [review], review }))
+    expect(view.margin.cards.filter((card) => card.kind === 'finding')).toEqual([])
+    expect(view.margin.header?.text).toBe('审查意见都并入了待确认问题')
+    expect(view.margin.header?.merges.map((merge) => merge.text)).toEqual(['意见 1 并入了问题 1', '意见 2 并入了问题 2'])
+  })
   it('adopting 意见 2 shows the item text and number and bars both cited blocks (AC15)', async () => {
     const f1 = await buildF1()
     const view = project(await gateProjectionInput(f1, { list: await listFor(f1.current, [{ type: 'addOwn', text: '先加一条' }, adopt(1)]) }))

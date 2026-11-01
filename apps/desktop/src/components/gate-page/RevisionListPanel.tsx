@@ -8,8 +8,11 @@ const FLASH_MS = 1_200
 const OWN_DRAFT = 'list:own'
 const editKey = (itemId: string) => `list:edit:${itemId}`
 
-/** The revision list inside the bar (design §5.5, FR-9). Every change goes through the list reducer. */
-export function RevisionListPanel({ settingsOpen, onToggleSettings }: { settingsOpen: boolean; onToggleSettings(): void }) {
+/**
+ * The revision list inside the bar (design §5.5, FR-9). Every change goes through the list reducer.
+ * The model and cost line with 「更改」 stays beside the generate button only (decision 75).
+ */
+export function RevisionListPanel() {
   const scope = useGateScope()
   const { view, drafts, setDraft, apply, actions } = scope
   const list = view.bar.list
@@ -103,8 +106,5 @@ export function RevisionListPanel({ settingsOpen, onToggleSettings }: { settings
           })}
         </ol>}
     {list.overflowReason ? <p className="gate-note gate-note--warn">{list.overflowReason}</p> : null}
-    {list.actionable && list.generationLine ? <p className="meta gate-list-generation">
-      <span>{list.generationLine}</span> · <button type="button" className="text-button" aria-expanded={settingsOpen} onClick={onToggleSettings}>{gateCopy.changeStageSettings}</button>
-    </p> : null}
   </div>
 }

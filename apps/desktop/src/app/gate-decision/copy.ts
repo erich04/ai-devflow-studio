@@ -16,6 +16,7 @@ export const nextVersionLabel = (kind: GateKind, number: number | undefined) =>
 export const roleLabel = (role: RequiredGateRole | string | undefined) =>
   role === 'owner' ? 'Owner' : role === 'lead' ? 'Lead' : role === 'member' ? 'Member' : role ?? 'Member'
 export const policyTargetLabel = (target: GateEnforcementReason['target']) => blockingTargetLabels[target]
+const NO_FINDINGS = 'AI 审查没有意见'
 export const gateCopy = {
   // Bar titles (§5.3)
   decideTitle: (version: string) => `${version} · 你的决定`,
@@ -112,7 +113,7 @@ export const gateCopy = {
   progressAllDone: '✓ 意见和问题都处理完了',
   progressFindingsDone: '✓ 意见都处理完了',
   progressQuestionsDone: '✓ 问题都处理完了',
-  progressNoFindings: 'AI 审查没有意见',
+  progressNoFindings: NO_FINDINGS,
   nextButton: '下一条 ↓',
   // Cards (§5.4)
   findingTitle: (number: number, level?: 'important' | 'suggestion') => `意见 ${number}${level ? ` · ${level === 'important' ? '重要' : '建议'}` : ''}`,
@@ -146,9 +147,10 @@ export const gateCopy = {
   readOnlyCheckFailed: '无法核对审查与当前正文的对应关系',
   readOnlyNeedsReview: (version: string) => `需要先审查${version}，审查后才能处理`,
   listReadOnlyHistory: (reading: string, current: string) => `正在阅读历史版本${reading}；返回${current} 后可以修改修订清单。`,
-  // Margin (§5.9)
-  marginHeader: (count: number, important: number | undefined) =>
-    `审查意见 ${count} 条${important === undefined ? '' : important > 0 ? `（${important} 条重要）` : '（都是建议）'}`,
+  // Margin (§5.9); `merged`: findings that joined a question. 0 cards never says "都是建议" (decision 76).
+  marginHeader: (count: number, important: number | undefined, merged = 0) => count === 0
+    ? (merged > 0 ? '审查意见都并入了待确认问题' : NO_FINDINGS)
+    : `审查意见 ${count} 条${important === undefined ? '' : important > 0 ? `（${important} 条重要）` : '（都是建议）'}`,
   mergeLink: (finding: number, question: number) => `意见 ${finding} 并入了问题 ${question}`,
   mergeMore: (count: number) => `另有 ${count} 条意见并入了问题`,
   adoptAllButton: '全部采纳建议',
