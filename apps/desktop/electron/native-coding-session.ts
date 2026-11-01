@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util'
-import { validateNativeHistory, type NativeToolMessage, type AgentProviderUsage, type AgentRuntimeState } from '@ai-devflow/shared'
+import { validateNativeHistory, type NativeToolMessage, type AgentProviderUsage, type AgentRuntimeState, type CodingModelRetryReason } from '@ai-devflow/shared'
 import type { NativeToolCapabilityGrantRecord, NativeToolAuditRecord } from './native-tool-registry'
 import type { CodingExecutorStartInput } from './coding-executor'
 import type { CodingCommandPlan, CodingExecutionProfile } from './coding-command-runner'
@@ -11,7 +11,9 @@ import type { CodingCompaction } from './native-coding-context'
 
 export type NativeCodingStatus = 'ready' | 'running' | 'waiting_input' | 'waiting_task' | 'waiting_permission' | 'review' | 'paused' | 'reconciling' | 'applying' | 'verifying' | 'completed' | 'cancelled' | 'failed' | 'delivery_conflict'
 export type NativeCodingQuestion = { id: string; toolCallId: string; text: string; options: string[]; objectiveVersion: number }
-export type CodingModelAttempt = { id: string; operationKey: string; requestDigest: string; step: number; objectiveVersion: number; status: 'started' | 'completed' | 'not_sent' | 'unknown'; createdAt: string; completedAt?: string; usage?: AgentProviderUsage; error?: string; acknowledgedBy?: string }
+/** Saved on a failed attempt before the host waits; the next attempt with `retryOf` re-sends the same step. */
+export type CodingModelRetry = { reason: CodingModelRetryReason; number: number; limit: number; delayMs: number; notBefore: string; retryAfterMs?: number }
+export type CodingModelAttempt = { id: string; operationKey: string; requestDigest: string; step: number; objectiveVersion: number; status: 'started' | 'completed' | 'not_sent' | 'unknown'; createdAt: string; completedAt?: string; usage?: AgentProviderUsage; error?: string; acknowledgedBy?: string; retry?: CodingModelRetry; retryOf?: string }
 export type CodingToolReceipt = { id: string; name: string; input: Record<string, unknown>; inputDigest: string; objectiveVersion: number; effect: 'read' | 'write' | 'command'; status: 'started' | 'completed' | 'unknown'; result?: unknown; error?: string }
 /** Private host record. Never project raw transcript or credentials to the Team API. */
 export type NativeCodingSession = {
@@ -43,6 +45,10 @@ export type NativeCodingSession = {
   writer?: { owner: string; processId: number; epoch: number; expiresAt: string }
   writerEpoch: number
   progressFingerprints: string[]
+  /** Set when repeated fingerprints first trigger a warning to the model; the same fingerprint again pauses. */
+  progressNudge?: { fingerprint: string; delivered: boolean }
+  /** Consecutive model replies whose tool batch was rejected; the first gets an explanation, the second pauses. */
+  invalidToolBatches?: number
   binding?: {
     request: CodingExecutorStartInput['request']
     context: Omit<CodingExecutorStartInput['runtimeContext'], 'reportProviderCall' | 'reportPermissionPolicyDecision' | 'assertContextCurrent'>
@@ -115,7 +121,16 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   if (![session.steps, session.activeMilliseconds, session.writerEpoch].every(natural) || !session.limits || !Object.values(session.limits).every(item => natural(item) && item > 0) || session.limits.batchSteps > 12 || session.limits.maxSteps > 10000 || session.limits.maxActiveMilliseconds > 24 * 60 * 60_000) throw new Error('Invalid coding execution bounds')
   if (session.writer && (!identifier(session.writer.owner) || !natural(session.writer.processId) || session.writer.processId < 1 || session.writer.epoch !== session.writerEpoch || !timestamp(session.writer.expiresAt))) throw new Error('Invalid coding writer')
   for (const records of [session.attempts, session.toolReceipts, session.commands, session.pendingInput, session.revisions, session.permissions]) if (new Set(records.map(item => item.id)).size !== records.length || records.some(item => !identifier(item.id))) throw new Error('Duplicate coding operation identity')
-  for (const attempt of session.attempts) if (!identifier(attempt.operationKey) || !digest(attempt.requestDigest) || !natural(attempt.step) || attempt.step < 1 || !natural(attempt.objectiveVersion) || attempt.objectiveVersion < 1 || attempt.objectiveVersion > session.objectiveVersion || !['started', 'completed', 'not_sent', 'unknown'].includes(attempt.status) || !timestamp(attempt.createdAt)) throw new Error('Invalid coding model receipt')
+  const earlierAttempts = new Set<string>()
+  for (const attempt of session.attempts) {
+    if (!identifier(attempt.operationKey) || !digest(attempt.requestDigest) || !natural(attempt.step) || attempt.step < 1 || !natural(attempt.objectiveVersion) || attempt.objectiveVersion < 1 || attempt.objectiveVersion > session.objectiveVersion || !['started', 'completed', 'not_sent', 'unknown'].includes(attempt.status) || !timestamp(attempt.createdAt) ||
+      (attempt.retryOf !== undefined && !earlierAttempts.has(attempt.retryOf)) ||
+      (attempt.retry !== undefined && (!['rate_limited', 'overloaded', 'server_error', 'connection_not_sent'].includes(attempt.retry.reason) || !natural(attempt.retry.number) || attempt.retry.number < 1 || !natural(attempt.retry.limit) || attempt.retry.number > attempt.retry.limit ||
+        !natural(attempt.retry.delayMs) || !timestamp(attempt.retry.notBefore) || (attempt.retry.retryAfterMs !== undefined && !natural(attempt.retry.retryAfterMs))))) throw new Error('Invalid coding model receipt')
+    earlierAttempts.add(attempt.id)
+  }
+  if ((session.invalidToolBatches !== undefined && (!natural(session.invalidToolBatches) || session.invalidToolBatches < 1)) ||
+    (session.progressNudge !== undefined && (!digest(session.progressNudge.fingerprint) || typeof session.progressNudge.delivered !== 'boolean'))) throw new Error('Invalid coding progress state')
   for (const receipt of session.toolReceipts) if (!receipt.name || !digest(receipt.inputDigest) || !['read', 'write', 'command'].includes(receipt.effect) || !['started', 'completed', 'unknown'].includes(receipt.status) || !receipt.input || typeof receipt.input !== 'object' || !natural(receipt.objectiveVersion) || receipt.objectiveVersion > session.objectiveVersion) throw new Error('Invalid coding tool receipt')
   for (const command of session.commands) if (!digest(command.digest)) throw new Error('Invalid coding command receipt')
   for (const input of session.pendingInput) if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 32000) throw new Error('Invalid pending coding input')

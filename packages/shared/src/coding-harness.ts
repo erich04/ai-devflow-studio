@@ -17,6 +17,8 @@ export type CodingHarnessCommand =
   | (Mutation & { type: 'reject'; revisionDigest: string; objectiveVersion: number })
   | (Mutation & { type: 'extend_limits'; maxSteps: number; maxActiveMilliseconds: number })
   | (Mutation & { type: 'permission'; permissionId: string; decision: 'approved' | 'rejected' })
+/** Why the host re-sent a model step on its own: the earlier request was refused unbilled, failed on the server, or never left this machine. */
+export type CodingModelRetryReason = 'rate_limited' | 'overloaded' | 'server_error' | 'connection_not_sent'
 export type CodingHarnessSummary = { protocolVersion: 2; sessionId: string; status: CodingHarnessStatus; version: number }
 export type CodingHarnessSnapshot = CodingHarnessSummary & {
   codingRunId: string; objectiveVersion: number; pauseReason?: string; steps: number; activeMilliseconds: number
@@ -37,6 +39,7 @@ export type CodingHarnessSnapshot = CodingHarnessSummary & {
   limits?: { maxSteps: number; maxActiveMilliseconds: number }
   storage?: { cleanupAllowed: boolean; reason: string }
   diagnostics?: { checkpoint: number; objectiveVersion: number; writerActive: boolean; uncertainOperations: Array<{ id: string; kind: string; status: string }>; uncertainTotal: number; profile: string }
+  modelRetries?: { total: number; recent: Array<{ attemptId: string; step: number; number: number; limit: number; reason: CodingModelRetryReason; delayMs: number; retryAfterMs?: number; pending: boolean }> }
   manualValidationPlan?: string
 }
 

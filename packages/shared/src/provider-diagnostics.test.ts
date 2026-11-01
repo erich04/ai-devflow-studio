@@ -93,7 +93,8 @@ it('distinguishes invalid outer HTTP JSON and an HTTP rejection without retainin
   await expect(malformed.completeStructuredJson!(request)).rejects.toMatchObject({ responseMetadata: { parserCategory: 'response_json', parserPosition: 6, wireBytes: 11 } })
   const rejected = provider(async () => new Response('PRIVATE_ERROR_DETAIL', { status: 503, headers: { 'x-request-id': 'req-failed-1' } }))
   const error = await rejected.completeStructuredJson!(request).catch(error => error)
-  expect(error).toMatchObject({ billingState: 'unknown', requestMetadata: { maxOutputTokens: 512 }, responseMetadata: { httpStatus: 503, parserCategory: 'http', requestId: 'req-failed-1', endedAt: expect.any(String) } })
+  // DeepSeek documents 503 as an overload refusal, so this rejection is not billed.
+  expect(error).toMatchObject({ billingState: 'not_incurred', requestMetadata: { maxOutputTokens: 512 }, responseMetadata: { httpStatus: 503, parserCategory: 'http', requestId: 'req-failed-1', endedAt: expect.any(String) } })
   expect(JSON.stringify(error)).not.toContain('PRIVATE_ERROR_DETAIL')
 })
 

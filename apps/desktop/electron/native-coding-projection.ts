@@ -84,6 +84,10 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
     }
     const uncertain = [...session.attempts.filter(item => ['started', 'unknown'].includes(item.status)).map(item => ({ id: item.id, kind: '模型请求', status: item.status })), ...session.toolReceipts.filter(item => item.status !== 'completed').map(item => ({ id: item.id, kind: item.name, status: item.status }))]
     result.diagnostics = { checkpoint: session.version, objectiveVersion: session.objectiveVersion, writerActive: Boolean(session.writer), uncertainOperations: uncertain.slice(0, 50), uncertainTotal: uncertain.length, profile: binding.profile.kind }
+    // Every automatic re-send stays in the attempts; the panel shows the latest ones.
+    const retried = session.attempts.flatMap(attempt => attempt.retry ? [{ attempt, retry: attempt.retry }] : [])
+    if (retried.length) result.modelRetries = { total: retried.length, recent: retried.slice(-10).map(({ attempt, retry }) => ({ attemptId: attempt.id, step: attempt.step, number: retry.number, limit: retry.limit, reason: retry.reason, delayMs: retry.delayMs,
+      ...(retry.retryAfterMs !== undefined ? { retryAfterMs: retry.retryAfterMs } : {}), pending: attempt === session.attempts.at(-1) && ['ready', 'running'].includes(session.status) })) }
     result.storage = codingRetentionPolicy(session, childSessions, ledger)
     return result
 }

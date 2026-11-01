@@ -98,6 +98,38 @@ describe('Agent Provider structured request errors', () => {
     expect(JSON.stringify(failure)).not.toContain('FULL_RESPONSE_MUST_NOT_PERSIST')
   })
 
+  it.each([
+    [503, 'not_incurred'],
+    [500, 'unknown'],
+  ] as const)('treats only a DeepSeek 503 overload as unbilled (HTTP %i)', async (status, billingState) => {
+    const provider = createOpenAiCompatibleAgentProvider({
+      id: 'deepseek', model: 'deepseek-flash', apiKey: 'placeholder', baseUrl: 'https://api.deepseek.com',
+      fetcher: async () => new Response('{}', { status, headers: { 'content-type': 'application/json' } }),
+    })
+    const failure = await provider.completeStructuredJson!({
+      systemPrompt: 'Return JSON.', userPrompt: 'Task.', maxOutputTokens: 64,
+    }).catch((error: unknown) => error)
+    expect(failure).toMatchObject({ code: 'http_5xx', deliveryState: 'response_received', billingState, retryable: true, httpStatus: status })
+  })
+
+  it.each<[string, () => string, number | undefined]>([
+    ['delay-seconds', () => '7', 7000],
+    ['HTTP-date', () => new Date(Date.now() + 60_000).toUTCString(), 60_000],
+    ['invalid', () => 'soon', undefined],
+  ])('keeps a %s Retry-After as response metadata', async (_kind, header, expected) => {
+    const provider = createOpenAiCompatibleAgentProvider({
+      model: 'test-model', apiKey: 'placeholder',
+      fetcher: async () => new Response('', { status: 429, headers: { 'retry-after': header() } }),
+    })
+    const failure = await provider.completeStructuredJson!({
+      systemPrompt: 'Return JSON.', userPrompt: 'Task.', maxOutputTokens: 64,
+    }).catch((error: unknown) => error) as AgentProviderRequestError
+    expect(failure.code).toBe('http_429')
+    if (expected === undefined) expect(failure.responseMetadata?.retryAfterMs).toBeUndefined()
+    // An HTTP-date has one-second resolution and is measured from the time of parsing.
+    else expect(Math.abs(failure.responseMetadata!.retryAfterMs! - expected)).toBeLessThanOrEqual(1500)
+  })
+
   it('classifies an explicit proxy-authentication response', async () => {
     const provider = createOpenAiCompatibleAgentProvider({
       model: 'test-model', apiKey: 'placeholder',

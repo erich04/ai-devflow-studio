@@ -1,9 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { CodingHarnessCommand, CodingHarnessSnapshot, CodingHarnessStatus, CodingHarnessDetail } from '@ai-devflow/shared'
+import type { CodingHarnessCommand, CodingHarnessSnapshot, CodingHarnessStatus, CodingHarnessDetail, CodingModelRetryReason } from '@ai-devflow/shared'
 import type { DevFlowDesktopApi } from '../desktop-api'
 
 type Action<T> = T extends CodingHarnessCommand ? Omit<T, 'protocolVersion' | 'codingRunId' | 'commandId' | 'expectedVersion'> : never
 const labels: Record<CodingHarnessStatus, string> = { ready: '准备继续', running: '正在调查与实现', waiting_input: '等待你的回答', waiting_task: '等待子任务（可在下方回答其问题）', waiting_permission: '等待执行授权', review: '等待最终改动审查', paused: '已暂停', reconciling: '需要核对中断的操作', applying: '正在应用已批准修订', verifying: '正在独立验证', completed: '技术验证完成', cancelled: '已取消', failed: '执行失败', delivery_conflict: '交付内容有冲突' }
+const pauseReasons: Record<string, string> = {
+  provider_insufficient_balance: '模型服务账户余额不足（HTTP 402），任务已暂停。请到模型服务商充值后点“继续”。',
+  provider_authentication_failed: '模型服务拒绝了当前 API Key（HTTP 401），任务已暂停。请在「设置／模型与执行方式」中检查这个 Provider 的 API Key，更新后重启应用，再点“继续”。',
+  provider_unavailable: '模型服务暂时不可用（限流、过载或服务出错），自动重试已用完或服务端要求等待更久，任务已暂停。请稍后点“继续”。',
+  invalid_tool_batch: '模型连续两轮返回无效的工具调用，任务已暂停。可以补充说明后点“继续”。',
+  no_progress: '提醒过一次之后，模型仍在重复相同的操作且没有新结果，任务已暂停。可以补充说明后点“继续”。',
+}
+const retryReasons: Record<CodingModelRetryReason, string> = { rate_limited: '模型服务限流（HTTP 429）', overloaded: '模型服务过载（HTTP 503）', server_error: '模型服务出错（HTTP 5xx）', connection_not_sent: '未能连接模型服务，请求没有发出' }
 
 export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: string; api: Pick<DevFlowDesktopApi, 'codingHarness' | 'onCodingHarnessUpdated'> }) {
   const [snapshot, setSnapshot] = useState<CodingHarnessSnapshot | null>(null), [text, setText] = useState(''), [error, setError] = useState(''), [pending, setPending] = useState(0)
@@ -42,10 +50,12 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
   }
   if (!snapshot) return <div aria-live="polite">{error || '正在读取 Native 任务…'}</div>
   const finished = ['completed', 'cancelled', 'failed'].includes(snapshot.status)
+  const pendingRetry = snapshot.modelRetries?.recent.find(item => item.pending)
   return <section className="agent-evidence-card native-coding-harness" aria-label="Native 多轮任务">
     <div className="section-heading"><strong>Native v3 · {snapshot.status === 'completed' && snapshot.manualValidationPlan ? '人工验收完成（无自动测试）' : labels[snapshot.status]}</strong><span>{snapshot.steps} 轮 · 活跃 {Math.ceil(snapshot.activeMilliseconds / 1000)} 秒</span></div>
     {error ? <p role="alert">{error}</p> : null}
-    {snapshot.pauseReason ? <p>{snapshot.pauseReason}</p> : null}
+    {snapshot.pauseReason ? <p>{pauseReasons[snapshot.pauseReason] ?? snapshot.pauseReason}</p> : null}
+    {pendingRetry ? <p>{retryReasons[pendingRetry.reason]}。约 {Math.ceil(pendingRetry.delayMs / 1000)} 秒后自动重新发送（第 {pendingRetry.number}/{pendingRetry.limit} 次{pendingRetry.retryAfterMs !== undefined ? '，等待时间由模型服务指定' : ''}；重试不计入步数）。</p> : null}
     {snapshot.controlUnavailableReason ? <p role="status">{snapshot.controlUnavailableReason}</p> : null}
     <p className="meta">输入 {snapshot.cost.inputTokens ?? '未知'} / 输出 {snapshot.cost.outputTokens ?? '未知'} tokens · 费用 {snapshot.cost.costUsd === null ? '待权威账本核定' : `$${snapshot.cost.costUsd.toFixed(4)}`} · {snapshot.cost.pendingSettlements} 笔待结算 · {snapshot.cost.unknownAttempts} 笔用量待核对</p>
     {snapshot.cost.costUsd === null && snapshot.cost.knownCostUsd !== undefined ? <p>已确认费用小计 ${snapshot.cost.knownCostUsd.toFixed(4)}；另有 {snapshot.cost.unknownCostCount} 笔金额未确认。</p> : null}
@@ -83,6 +93,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     </div> : null}
     {snapshot.evidence.map(evidence => <p key={evidence.id}>{evidence.status} · {evidence.summary}</p>)}
     {snapshot.children.map(child => <details key={child.id}><summary>{child.title} · {child.status}</summary><NativeCodingHarnessPanel codingRunId={child.id} api={api} /></details>)}
+    {snapshot.modelRetries ? <details><summary>模型请求自动重试（{snapshot.modelRetries.total} 次）</summary>{snapshot.modelRetries.recent.map(item => <p key={item.attemptId}>第 {item.step} 步 · {retryReasons[item.reason]} · 第 {item.number}/{item.limit} 次 · 等待 {Math.ceil(item.delayMs / 1000)} 秒{item.retryAfterMs !== undefined ? '（模型服务指定）' : ''}</p>)}</details> : null}
     {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{!snapshot.controlUnavailableReason && snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
     <details><summary>任务对话与工具记录（{snapshot.historyPage?.total ?? snapshot.messages.length}）</summary>{snapshot.messages.map(message => <div key={message.id}><strong>{message.role === 'user' ? '你' : message.role === 'assistant' ? 'Native' : '工具结果'}</strong><pre>{message.text}</pre>{message.truncated ? <button onClick={() => void detail({ kind: 'message', id: message.id, offset: 0 })}>记录较长，逐页查看全文</button> : null}</div>)}
       {snapshot.historyPage ? <p><button disabled={snapshot.historyPage.previous === null} onClick={() => void page('historyOffset', snapshot.historyPage!.previous)}>更早记录</button><button disabled={snapshot.historyPage.next === null} onClick={() => void page('historyOffset', snapshot.historyPage!.next)}>后续记录</button></p> : null}
