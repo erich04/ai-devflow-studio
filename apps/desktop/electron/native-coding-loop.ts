@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
-import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, validateNativeToolValue, type NativeToolJsonSchema, type AgentProvider, type NativeConversationRequest, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
+import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, validateNativeToolValue, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
 import { codingDigest } from './coding-candidate-workspace'
-import { updateNativeCodingSession, type NativeCodingSession, type CodingToolReceipt } from './native-coding-session'
+import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
 import { codingContext } from './native-coding-context'
 
 export type CodingLoopTools = {
@@ -20,6 +20,65 @@ const controlTools: ReadOnlyFunctionDefinition[] = [
   { type: 'function', function: { name: 'report_blocked', description: '保存阻碍原因并暂停；不是成功。必须单独调用。', parameters: { type: 'object', additionalProperties: false, required: ['reason'], properties: { reason: { type: 'string' } } } } },
 ]
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
+const hostNotice = '[DevFlow 宿主状态通知，并非用户的新指令]\n'
+const invalidBatchNotice = (problem: string) => `${hostNotice}上一轮回复中的工具调用无效（${problem}），宿主没有执行其中任何调用。请重新发出这一步：只调用已声明的工具，每个调用使用新的 id，arguments 是符合参数定义的 JSON 对象字符串，一轮最多 16 个调用；request_user_input、report_blocked、propose_changeset、report_findings、await_task 必须单独调用。如果下一轮仍然无效，任务会暂停，等待人工处理。`
+const noProgressNotice = (steps: number) => `${hostNotice}最近 ${steps} 步的回复和得到的结果都没有变化，任务没有进展。请换一种做法，例如换检索条件或文件，或者直接修改并运行测试；确实无法推进时调用 report_blocked 说明原因。如果下一步仍然重复，任务会暂停，等待人工处理。`
+const envelopeProblems: Record<string, string> = {
+  'Invalid native call envelope': '一轮需要 1 到 16 个调用',
+  'Invalid native call identity': '工具必须是已声明的工具，调用 id 不能与之前的重复，arguments 必须是字符串',
+  'Native arguments exceed content capacity': '参数总量超过上限',
+}
+/** Only fixed envelope messages reach the model; anything else gets the generic description. */
+function envelopeProblem(error: unknown): string {
+  let current: unknown = error
+  for (let depth = 0; depth < 8 && current instanceof Error; depth++) {
+    const problem = envelopeProblems[current.message]
+    if (problem) return problem
+    current = current.cause
+  }
+  return '工具调用格式无效'
+}
+class InvalidToolBatch extends Error {
+  readonly usage: AgentProviderUsage | undefined
+  constructor(problem: string, usage?: AgentProviderUsage) { super(problem); this.usage = usage }
+}
+// Requests the Provider refused without billing, or that never left this machine, are re-sent
+// up to 5 times. Other 5xx may follow work already done; each re-send holds a new reservation,
+// so they get 2. One wait is at most 30 s and one step waits at most 2 minutes in total; the
+// waits happen inside the active interval, so they count toward the task's time limit.
+const retryLimits: Record<CodingModelRetryReason, number> = { rate_limited: 5, overloaded: 5, connection_not_sent: 5, server_error: 2 }
+const retryBaseDelayMs = 1_000, retryMaxDelayMs = 30_000, retryMaxTotalWaitMs = 120_000
+type ModelFailure = { kind: 'retry'; reason: CodingModelRetryReason; retryAfterMs?: number } | { kind: 'pause'; reason: string } | { kind: 'reconcile' } | { kind: 'invalid_batch'; problem: string }
+/** DeepSeek error codes: 401 authentication, 402 insufficient balance, 429 rate limit, 500 server error, 503 overloaded. */
+function classifyModelFailure(error: unknown, received: boolean): ModelFailure {
+  if (error instanceof InvalidToolBatch) return { kind: 'invalid_batch', problem: error.message }
+  if (received) return { kind: 'pause', reason: 'invalid_model_response' }
+  if (!(error instanceof AgentProviderRequestError)) return { kind: 'reconcile' }
+  if (error.deliveryState === 'not_sent') return error.retryable && ['connection_failed', 'dns_failure', 'proxy_failure'].includes(error.code) ? { kind: 'retry', reason: 'connection_not_sent' } : { kind: 'pause', reason: 'provider_not_sent' }
+  // A timeout or reset after sending may have been processed and billed: never re-send it automatically.
+  if (error.deliveryState !== 'response_received') return { kind: 'reconcile' }
+  if (error.sanitizedCause === 'invalid_tool_batch') return { kind: 'invalid_batch', problem: envelopeProblem(error) }
+  if (error.httpStatus === 402) return { kind: 'pause', reason: 'provider_insufficient_balance' }
+  if (error.httpStatus === 401) return { kind: 'pause', reason: 'provider_authentication_failed' }
+  const hint = error.responseMetadata?.retryAfterMs ? { retryAfterMs: error.responseMetadata.retryAfterMs } : {}
+  if (error.billingState === 'not_incurred' && error.httpStatus === 429) return { kind: 'retry', reason: 'rate_limited', ...hint }
+  if (error.billingState === 'not_incurred' && error.httpStatus === 503) return { kind: 'retry', reason: 'overloaded', ...hint }
+  if (error.code === 'http_5xx') return { kind: 'retry', reason: 'server_error', ...hint }
+  return { kind: 'pause', reason: 'invalid_model_response' }
+}
+/** The last attempt failed and its re-send is scheduled but not yet recorded. */
+function pendingModelRetry(session: NativeCodingSession): (CodingModelAttempt & { retry: CodingModelRetry }) | undefined {
+  const last = session.attempts.at(-1)
+  return last?.retry && ['completed', 'not_sent'].includes(last.status) ? { ...last, retry: last.retry } : undefined
+}
+function waitFor(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal.aborted) { resolve(); return }
+    const done = () => { clearTimeout(timer); signal.removeEventListener('abort', done); resolve() }
+    const timer = setTimeout(done, milliseconds)
+    signal.addEventListener('abort', done, { once: true })
+  })
+}
 
 /** Durable scheduling unit. The host requeues `ready`; waiting is never reported as success. */
 export class NativeCodingLoop {
@@ -28,7 +87,9 @@ export class NativeCodingLoop {
   private readonly acquiring = new Set<string>()
   constructor(private readonly host: { store: LoopStore; provider: AgentProvider; tools: CodingLoopTools; now?: () => string; changed?: (session: NativeCodingSession) => void;
     stopPreviousWorker?: (writer: NonNullable<NativeCodingSession['writer']>) => Promise<boolean>; reconcileWorkers?: () => Promise<boolean>;
-    activity?(unitId: string, active: boolean): Promise<void>; rootActiveMilliseconds?(): Promise<number>; rootStepsUsed?(): Promise<number>; reserveRootStep?(attemptId: string): Promise<boolean>; assertAuthority?(): Promise<void> }) {}
+    activity?(unitId: string, active: boolean): Promise<void>; rootActiveMilliseconds?(): Promise<number>; rootStepsUsed?(): Promise<number>; reserveRootStep?(attemptId: string): Promise<boolean>; assertAuthority?(): Promise<void>
+    /** Backoff before an automatic re-send; resolves early when the batch is interrupted. */
+    sleep?(milliseconds: number, signal: AbortSignal): Promise<void> }) {}
   private now() { return this.host.now?.() ?? new Date().toISOString() }
   private async read(id: string): Promise<NativeCodingSession> {
     const session = await this.host.store.getNativeCodingSession(id)
@@ -41,6 +102,19 @@ export class NativeCodingLoop {
       if (await this.host.store.saveNativeCodingSession(after, before.version)) { this.host.changed?.(after); return after }
     }
     throw new Error('Coding session changed concurrently')
+  }
+  /** Exponential backoff with jitter; a Provider's Retry-After is used as is, and a longer one is left to a human. */
+  private retrySchedule(session: NativeCodingSession, attemptId: string, failure: { reason: CodingModelRetryReason; retryAfterMs?: number }): CodingModelRetry | undefined {
+    let retries = 0, waited = 0
+    for (let current = session.attempts.find(item => item.id === attemptId); current?.retryOf;) {
+      const previousId = current.retryOf, previous = session.attempts.find(item => item.id === previousId)
+      if (!previous?.retry) break
+      retries++; waited += previous.retry.delayMs; current = previous
+    }
+    const limit = retryLimits[failure.reason]
+    const delayMs = failure.retryAfterMs ?? Math.round(Math.min(retryMaxDelayMs, retryBaseDelayMs * 2 ** retries) * (0.9 + Math.random() * 0.2))
+    if (retries >= limit || delayMs > retryMaxDelayMs || waited + delayMs > retryMaxTotalWaitMs) return undefined
+    return { reason: failure.reason, number: retries + 1, limit, delayMs, notBefore: new Date(Date.now() + delayMs).toISOString(), ...(failure.retryAfterMs ? { retryAfterMs: failure.retryAfterMs } : {}) }
   }
   async replyInput(id: string, command: { id: string; questionId: string; objectiveVersion: number; text: string }): Promise<NativeCodingSession> {
     const digest = codingDigest(JSON.stringify(command)), current = await this.read(id)
@@ -88,7 +162,7 @@ export class NativeCodingLoop {
     return this.change(id, session => {
       if (session.status !== 'paused' || session.attempts.some(item => item.status === 'started' || (item.status === 'unknown' && !item.acknowledgedBy))) throw new Error('Reconciliation required before resuming')
       session.status = session.question ? 'waiting_input' : session.permissions.some(permission => permission.objectiveVersion === session.objectiveVersion && permission.decision === 'pending') ? 'waiting_permission' : 'ready'
-      delete session.pauseReason; session.progressFingerprints = []
+      delete session.pauseReason; session.progressFingerprints = []; delete session.progressNudge; delete session.invalidToolBatches
     })
   }
   async runBatch(id: string): Promise<NativeCodingSession> {
@@ -122,20 +196,39 @@ export class NativeCodingLoop {
       if (session.attempts.some(attempt => attempt.status === 'started' || (attempt.status === 'unknown' && !attempt.acknowledgedBy))) {
         return await this.change(id, draft => { draft.status = 'reconciling'; draft.pauseReason = 'model_delivery_unknown' })
       }
+      let waitedFor: string | undefined
       for (let count = 0; count < session.limits.batchSteps; count++) {
         session = await this.read(id)
         if (session.writer?.owner !== this.owner || session.status !== 'running' || controller.signal.aborted) return session
         await this.host.assertAuthority?.()
         session = await this.executePending(session, controller.signal)
         if (session.status !== 'running') return session
-        if (session.pendingInput.length) session = await this.change(id, draft => {
-          for (const item of draft.pendingInput) draft.transcript.push({ role: 'user', content: item.text })
-          draft.objectiveVersion++; draft.pendingInput = []
+        if (session.pendingInput.length || session.progressNudge?.delivered === false) session = await this.change(id, draft => {
+          if (draft.pendingInput.length) {
+            for (const item of draft.pendingInput) draft.transcript.push({ role: 'user', content: item.text })
+            draft.objectiveVersion++; draft.pendingInput = []
+            delete draft.progressNudge // Human input replaces the host's warning.
+          } else if (draft.progressNudge && !draft.progressNudge.delivered) {
+            // Tool results close the repeated calls first; the warning follows them.
+            draft.transcript.push({ role: 'user', content: noProgressNotice(draft.limits.noProgressLimit) }); draft.progressNudge.delivered = true
+          }
         })
+        // A re-send repeats a step that already holds its step reservation, so it is not another step.
+        const retryOf = pendingModelRetry(session)
         const elapsed = this.host.rootActiveMilliseconds ? await this.host.rootActiveMilliseconds() : session.activeMilliseconds + Date.now() - started
-        const usedSteps = this.host.rootStepsUsed ? await this.host.rootStepsUsed() : session.steps
+        const usedSteps = (this.host.rootStepsUsed ? await this.host.rootStepsUsed() : session.steps) - (retryOf ? 1 : 0)
         if (usedSteps >= session.limits.maxSteps || elapsed >= session.limits.maxActiveMilliseconds) return await this.change(id, draft => { draft.status = 'paused'; draft.pauseReason = 'task_limit' })
-        const operationKey = `${session.id}:objective-${session.objectiveVersion}:step-${session.steps + 1}`
+        if (retryOf && waitedFor !== retryOf.id) {
+          // notBefore is durable, so a restarted writer waits only for the remainder.
+          const wait = Math.min(retryOf.retry.delayMs, Date.parse(retryOf.retry.notBefore) - Date.now())
+          if (wait > 0) {
+            waitedFor = retryOf.id
+            if (this.host.sleep) await this.host.sleep(wait, controller.signal)
+            else await waitFor(wait, controller.signal)
+            continue // Re-check interruption, steering and limits after the wait.
+          }
+        }
+        const operationKey = `${session.id}:objective-${session.objectiveVersion}:step-${retryOf?.step ?? session.steps + 1}`
         const attemptId = `model-call-${randomUUID()}`
         const runtimeState = { steps: { usedBeforeThisCall: usedSteps, remainingIncludingThisCall: Math.max(0, session.limits.maxSteps - usedSteps), maximum: session.limits.maxSteps },
           activeMilliseconds: { usedBeforeThisCall: elapsed, remaining: Math.max(0, session.limits.maxActiveMilliseconds - elapsed) },
@@ -152,9 +245,12 @@ export class NativeCodingLoop {
         provider.validateNativeRequest?.(request)
         const requestDigest = codingDigest(provider.serializeNativeRequest(request))
         request.nativeOperation = { id: `operation-${codingDigest(operationKey)}`, version: requestDigest, purpose: context.compact ? 'coding-compaction' : 'coding' }
-        if (this.host.reserveRootStep && !await this.host.reserveRootStep(attemptId)) return await this.change(id, draft => { draft.status = 'paused'; draft.pauseReason = 'task_limit' })
+        if (!retryOf && this.host.reserveRootStep && !await this.host.reserveRootStep(attemptId)) return await this.change(id, draft => { draft.status = 'paused'; draft.pauseReason = 'task_limit' })
+        // Every send, including a re-send, is a new durable attempt and a new governed reservation.
         session = await this.change(id, draft => {
-          draft.steps++; draft.attempts.push({ id: attemptId, operationKey, requestDigest, step: draft.steps, objectiveVersion: draft.objectiveVersion, status: 'started', createdAt: this.now() })
+          if (retryOf && draft.attempts.at(-1)?.id !== retryOf.id) throw new Error('A scheduled model retry was superseded')
+          if (!retryOf) draft.steps++
+          draft.attempts.push({ id: attemptId, operationKey, requestDigest, step: retryOf?.step ?? draft.steps, objectiveVersion: draft.objectiveVersion, status: 'started', createdAt: this.now(), ...(retryOf ? { retryOf: retryOf.id } : {}) })
         })
         let received = false
         try {
@@ -170,7 +266,8 @@ export class NativeCodingLoop {
           }
           if (response.kind === 'tools') {
             const used = current.transcript.flatMap(message => message.role === 'assistant' ? message.tool_calls?.map(call => call.id) ?? [] : [])
-            nativeCallEnvelope(response.toolCalls, request.tools.map(tool => tool.function.name), used)
+            try { nativeCallEnvelope(response.toolCalls, request.tools.map(tool => tool.function.name), used) }
+            catch (error) { throw context.compact ? error : new InvalidToolBatch(envelopeProblem(error), response.usage) }
             if (JSON.stringify(response.assistantMessage.tool_calls) !== JSON.stringify(response.toolCalls)) throw new Error('Mismatched provider tool envelope')
           }
           if (context.compact) {
@@ -191,23 +288,47 @@ export class NativeCodingLoop {
             attempt.status = 'completed'; attempt.completedAt = this.now(); if (response.usage) attempt.usage = response.usage
             if (draft.status !== 'running' || draft.writer?.owner !== this.owner || draft.writer.epoch !== epoch || controller.signal.aborted) { attempt.error = 'Late response received after interruption'; return }
             draft.transcript.push(response.assistantMessage)
+            if (response.kind === 'text') delete draft.invalidToolBatches
             // Source/result identity matters: repeated polling that produces new output is progress.
             const lastResults = draft.transcript.filter(message => message.role === 'tool').slice(-8)
             const fingerprint = codingDigest(JSON.stringify({ request: response.kind === 'tools' ? response.toolCalls.map(call => call.function) : 'text_without_tool_action',
               results: lastResults.map(message => message.content) }))
             draft.progressFingerprints.push(fingerprint)
-            if (draft.progressFingerprints.slice(-draft.limits.noProgressLimit).length === draft.limits.noProgressLimit && draft.progressFingerprints.slice(-draft.limits.noProgressLimit).every(item => item === fingerprint)) { draft.status = 'paused'; draft.pauseReason = 'no_progress' }
+            const recent = draft.progressFingerprints.slice(-draft.limits.noProgressLimit)
+            if (draft.progressNudge && draft.progressNudge.fingerprint !== fingerprint) delete draft.progressNudge
+            // Warn once first; only the same fingerprint after the warning pauses.
+            if (draft.progressNudge?.delivered) { draft.status = 'paused'; draft.pauseReason = 'no_progress' }
+            else if (!draft.progressNudge && recent.length === draft.limits.noProgressLimit && recent.every(item => item === fingerprint)) {
+              draft.progressNudge = { fingerprint, delivered: response.kind === 'text' }
+              if (response.kind === 'text') draft.transcript.push({ role: 'user', content: noProgressNotice(draft.limits.noProgressLimit) })
+            }
           })
         } catch (error) {
+          let failure = classifyModelFailure(error, received)
+          if (failure.kind === 'invalid_batch' && context.compact) failure = { kind: 'pause', reason: 'invalid_model_response' }
           const responseReceived = received || error instanceof AgentProviderRequestError && error.deliveryState === 'response_received'
+          const retry = failure.kind === 'retry' ? this.retrySchedule(session, attemptId, failure) : undefined
           session = await this.change(id, draft => {
             const attempt = draft.attempts.find(item => item.id === attemptId)!
             attempt.status = responseReceived ? 'completed' : error instanceof AgentProviderRequestError && error.deliveryState === 'not_sent' ? 'not_sent' : 'unknown'
             if (responseReceived) attempt.completedAt = this.now()
-            attempt.error = error instanceof Error ? error.message : 'Provider request failed'
-            if (error instanceof AgentProviderRequestError && error.usage) attempt.usage = error.usage
-            if (!terminal(draft) && (draft.status === 'running' || attempt.status === 'unknown')) { draft.status = attempt.status === 'unknown' ? 'reconciling' : 'paused'; draft.pauseReason = attempt.status === 'unknown' ? 'model_delivery_unknown' : responseReceived ? 'invalid_model_response' : 'provider_not_sent' }
-          }); return session
+            attempt.error = error instanceof InvalidToolBatch ? `Invalid tool batch: ${error.message}` : error instanceof Error ? error.message : 'Provider request failed'
+            if ((error instanceof AgentProviderRequestError || error instanceof InvalidToolBatch) && error.usage) attempt.usage = error.usage
+            if (terminal(draft) || (draft.status !== 'running' && attempt.status !== 'unknown')) return
+            if (attempt.status === 'unknown') { draft.status = 'reconciling'; draft.pauseReason = 'model_delivery_unknown'; return }
+            const writing = draft.writer?.owner === this.owner && draft.writer.epoch === epoch && !controller.signal.aborted
+            if (writing && retry) { attempt.retry = retry; return }
+            if (writing && failure.kind === 'invalid_batch') {
+              // The rejected reply is not history. Tell the model why once; a second invalid batch in a row pauses.
+              draft.invalidToolBatches = (draft.invalidToolBatches ?? 0) + 1
+              if (draft.invalidToolBatches >= 2) { draft.status = 'paused'; draft.pauseReason = 'invalid_tool_batch' }
+              else draft.transcript.push({ role: 'user', content: invalidBatchNotice(failure.problem) })
+              return
+            }
+            draft.status = 'paused'
+            draft.pauseReason = failure.kind === 'pause' ? failure.reason : failure.kind === 'retry' && failure.reason === 'connection_not_sent' ? 'provider_not_sent' : failure.kind === 'retry' ? 'provider_unavailable' : 'invalid_model_response'
+          })
+          if (session.status !== 'running') return session
         }
       }
       session = await this.executePending(await this.read(id), controller.signal)
@@ -232,8 +353,14 @@ export class NativeCodingLoop {
         if (!definition || !validateNativeToolValue(definition.function.parameters as NativeToolJsonSchema, args) || (controls.includes(call.function.name) && pending.length !== 1)) throw new Error('Invalid tool batch: validate declared schemas and call control tools alone')
       }
     } catch (error) {
-      return this.change(session.id, draft => { for (const call of pending) draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid tool batch', executed: false }) }) })
+      return this.change(session.id, draft => {
+        for (const call of pending) draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: error instanceof Error ? error.message : 'Invalid tool batch', executed: false }) })
+        // These error results are the explanation; a second invalid batch in a row pauses.
+        draft.invalidToolBatches = (draft.invalidToolBatches ?? 0) + 1
+        if (draft.invalidToolBatches >= 2 && draft.status === 'running') { draft.status = 'paused'; draft.pauseReason = 'invalid_tool_batch' }
+      })
     }
+    if (pending.length && session.invalidToolBatches) session = await this.change(session.id, draft => { delete draft.invalidToolBatches })
     let batchFailed = false
     for (const call of pending) {
       signal.throwIfAborted()

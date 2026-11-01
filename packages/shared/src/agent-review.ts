@@ -192,6 +192,8 @@ export type AgentProviderResponseMetadata = ResponseReadDiagnostics & {
   reasoningLength?: number
   outputLimitMode?: 'provider_default' | 'explicit'
   maxOutputTokens?: number
+  /** Delay the Provider asked for in its Retry-After header, in milliseconds. */
+  retryAfterMs?: number
 }
 
 export class AgentProviderRequestError extends Error {
@@ -2299,7 +2301,9 @@ export function createOpenAiCompatibleAgentProvider({
           ...(safeProviderDiagnosticIdentifier(response.headers.get('x-request-id') ?? response.headers.get('request-id')) ? { requestId: safeProviderDiagnosticIdentifier(response.headers.get('x-request-id') ?? response.headers.get('request-id'))! } : {}), maxOutputTokens: policy.maxOutputTokens, outputLimitMode: 'explicit', effectiveThinking }
         if (!response.ok) {
           transportMetadata.parserCategory = 'http'
-          throw providerHttpError(response.status)
+          const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'))
+          if (retryAfterMs !== undefined) transportMetadata.retryAfterMs = retryAfterMs
+          throw providerHttpError(response.status, deepSeek)
         }
         let body: Record<string, unknown>
         let readDiagnostics: ResponseReadDiagnostics
@@ -2546,7 +2550,16 @@ export function createOpenAiCompatibleAgentProvider({
   return provider
 }
 
-function providerHttpError(status: number): AgentProviderRequestError {
+/** Retry-After is either delay-seconds or an HTTP-date (RFC 9110 section 10.2.3). */
+function parseRetryAfterMs(value: string | null, now = Date.now()): number | undefined {
+  const text = value?.trim()
+  if (!text) return undefined
+  if (/^\d{1,9}$/u.test(text)) return Number(text) * 1000
+  const date = Date.parse(text)
+  return Number.isFinite(date) && /[a-z]/iu.test(text) ? Math.max(0, date - now) : undefined
+}
+
+function providerHttpError(status: number, deepSeek = false): AgentProviderRequestError {
   if (status === 407) {
     return new AgentProviderRequestError({
       code: 'proxy_failure',
@@ -2580,7 +2593,10 @@ function providerHttpError(status: number): AgentProviderRequestError {
   return new AgentProviderRequestError({
     code: 'http_5xx',
     deliveryState: 'response_received',
-    billingState: 'unknown',
+    // DeepSeek documents 503 as "Server Overloaded": the request is refused under load
+    // and should be retried later. Other 5xx (and other providers' 503) may follow work
+    // that was already done, so their billing stays unknown.
+    billingState: deepSeek && status === 503 ? 'not_incurred' : 'unknown',
     retryable: true,
     httpStatus: status,
     sanitizedCause: 'provider_server_failure',

@@ -53,7 +53,7 @@ export function sanitizeAgentProviderResponseMetadata(value: unknown): AgentProv
   for (const key of ['responseId', 'requestId', 'systemFingerprint'] as const) {
     const safe = safeProviderDiagnosticIdentifier(value[key]); if (safe) out[key] = safe
   }
-  for (const key of ['durationMs', 'contentLength', 'reasoningLength', 'maxOutputTokens', 'contentBytes', 'reasoningBytes', 'wireBytes', 'limitThreshold', 'observedBytes', 'parserPosition', 'parserLine', 'parserColumn', 'sseFrameCount', 'sseDataFrameCount'] as const) {
+  for (const key of ['durationMs', 'contentLength', 'reasoningLength', 'maxOutputTokens', 'retryAfterMs', 'contentBytes', 'reasoningBytes', 'wireBytes', 'limitThreshold', 'observedBytes', 'parserPosition', 'parserLine', 'parserColumn', 'sseFrameCount', 'sseDataFrameCount'] as const) {
     if (positive(value[key])) out[key] = value[key]
   }
   for (const key of ['startedAt', 'endedAt'] as const) if (timestamp(value[key])) out[key] = value[key]

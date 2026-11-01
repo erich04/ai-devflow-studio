@@ -51,7 +51,10 @@ it('stops varying text-only completions without treating rewording as execution 
   try {
     await fixture.authorize(); await fixture.executor.settled('coding')
     const view = (await fixture.get()).snapshot
-    expect(view.status).toBe('paused'); expect(view.pauseReason).toBe('no_progress'); expect(count).toBe(3)
+    // The third identical step gets one host warning; repeating after it pauses.
+    expect(view.status).toBe('paused'); expect(view.pauseReason).toBe('no_progress'); expect(count).toBe(4)
+    expect(view.messages.map(message => message.role)).toEqual(['user', 'assistant', 'assistant', 'assistant', 'user', 'assistant'])
+    expect(view.messages[4]!.text.startsWith('[DevFlow 宿主状态通知，并非用户的新指令]')).toBe(true)
     expect(view.revision).toBeUndefined(); expect(view.evidence).toEqual([])
   } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
 })
