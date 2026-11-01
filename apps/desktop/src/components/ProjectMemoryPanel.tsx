@@ -213,6 +213,10 @@ export function ProjectMemoryPanel({ projectId, api: injected }: { projectId: st
       </div>}
     </div>}
 
+    {status?.conversationBackfill && <p className="project-memory-meta">
+      正在补回较早长讨论的完整内容：还有 {status.conversationBackfill.remainingSegments} 段，每次启动补发一部分。
+    </p>}
+
     {status && status.recent.length > 0 && <details>
       <summary>最近的来源（{status.recent.length}）</summary>
       <ul className="project-memory-list" aria-label="最近的记忆来源">

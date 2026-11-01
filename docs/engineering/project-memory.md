@@ -8,7 +8,7 @@
 
 | 来源 | 文档 id | 何时写入 |
 |---|---|---|
-| 讨论的公开消息 | `conversation:<id>` | 对话空闲 3 分钟后；之后每轮替换 |
+| 讨论的公开消息 | `conversation:<id>`；长讨论的后续段为 `conversation:<id>:<n>` | 最后一段在对话空闲 3 分钟后发送，之后每轮替换；写满的段只发一次 |
 | 结束的 Coding Run | `coding-run:<id>` | 运行结束时（任何结果，`fake` 除外） |
 | 被批准的澄清、设计、验收包 | `artifact:<id>` | 审批通过时 |
 | Gate 评审结果 | `artifact:<id>` | 保存时 |
@@ -16,6 +16,8 @@
 | Git 提交信息（当前分支最近 30 天） | `commits:<日期>` | 每 10 分钟检查；当天的在最后一个提交 30 分钟后 |
 
 旧版记忆的迁移规则见 ADR 0030「旧记忆迁移与移除」：只复制当前归属用户在本项目可见的有效记忆；忘记这个来源或清空后不会再写入；本地数据不删除。
+
+讨论按段写入（ADR 0030「长讨论分段」）：每段不超过 46 KiB，从最早的消息开始装入，写满后不再变化。在任意一段上「忘记此来源」都会忘记整段讨论，之后新增的段也不写入。分段之前采集的长讨论只留下了最新部分，后台会把它们的分段重新排队，每个项目每次启动最多 5 段，记忆页显示还剩多少段。
 
 编码简报、阶段 Agent、Gate 评审和讨论栏会从这个 bank 召回记忆，讨论栏还可以用 `memory_search` 主动检索，规则见 ADR 0030「召回」。
 
@@ -40,7 +42,7 @@
 代码位置：
 
 - `packages/shared/src/project-memory.ts`：类型、限制、bank 任务说明。
-- `apps/desktop/electron/project-memory-capture.ts`：文档构造和采集入口，在 LocalStore 的持久化变更里调用；`migrateLegacyProjectMemory` 复制旧版记忆。
+- `apps/desktop/electron/project-memory-capture.ts`：文档构造和采集入口，在 LocalStore 的持久化变更里调用；`buildConversationMemoryDocuments` 分段，`backfillConversationProjectMemory` 补发分段之前的长讨论，`migrateLegacyProjectMemory` 复制旧版记忆。
 - `apps/desktop/electron/project-memory-commits.ts`：读取 Git 提交历史并按天组成文档。
 - `apps/desktop/electron/project-memory-store.ts`：开关和发件队列（schema 41）。
 - `apps/desktop/electron/project-memory-service.ts`：后台发送、查询、删除。
@@ -95,6 +97,13 @@ corepack pnpm exec tsx scripts/project-memory-live-validation.mts
 ```
 
 脚本只在获得提供方、模型和预算授权后运行；每次运行受 `DEVFLOW_MEMORY_LIVE_MAX_USD` 和 3 美元累计账本双重限制，报告写在 `out/project-memory-validation/`，13 项检查全部通过才算通过。它覆盖抽取、召回、知识页和真实讨论（讨论用 `deepseek-flash`，可用 `DEVFLOW_MEMORY_LIVE_CONVERSATION_MODEL` 改），一次约 4 美分；讨论调用按 1M tokens 上下文预留，`DEVFLOW_MEMORY_LIVE_MAX_USD` 至少设为 0.4。结果见[2026-10-28 验证](../validation/project-memory-live-20261028.md)和[2026-10-29 全链路验证](../validation/project-memory-live-20261029.md)。
+
+长讨论分段依赖 Hindsight `replace` 的行为：替换后旧版本里已不存在的内容被删除，从不重发的文档保持不变。升级 Hindsight 后用下面的命令确认，它在 `chunks` 模式的临时 bank 里运行，不调用模型，结束时删除 bank：
+
+```sh
+HINDSIGHT_SMOKE_AUTHORIZED=1 HINDSIGHT_SMOKE_ENDPOINT=http://127.0.0.1:8890 \
+corepack pnpm exec tsx scripts/project-memory-segments-smoke.mts
+```
 
 更大规模的验证用 `scripts/project-memory-full-validation.mts`：53 份合成文档（含真实 Git 历史），覆盖采集裁剪、Hindsight 归纳、会话和编码简报压缩、知识页，以及编码简报和真实 Native v2 编码、阶段 Agent、Gate 评审、两种讨论协议和 `memory_search` 的召回，之后是自动采集、编辑、遗忘、遗忘来源和清空。它有单独的 2 美元账本（`ledger-full.json`），各阶段可以对同一个工作目录续跑；一次完整运行约 0.5 美元，其中编辑和遗忘之后重写知识页约 0.19 美元。`DEVFLOW_MEMORY_FULL_DRY=1` 只构造文档并做不花钱的检查。结果见[2026-10-29 完整验证](../validation/project-memory-full-20261029.md)。
 

@@ -315,9 +315,11 @@ import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from 
 import { captureCommitProjectMemory } from './project-memory-commits'
 import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
-import { activeProjectMemoryConfiguration, migrateLegacyProjectMemory, projectMemoryPairingBinding } from './project-memory-capture'
+import {
+  activeProjectMemoryConfiguration, backfillConversationProjectMemory, conversationMemoryDocumentId, migrateLegacyProjectMemory, projectMemoryPairingBinding,
+} from './project-memory-capture'
 import { createMemoryModelRelay, MEMORY_RELAY_DEFAULT_PORT, type MemoryModelRelay, type MemoryRelayRoute } from './memory-model-relay'
-import { parseHindsightSetup, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectKnowledgePages, type ProjectMemoryConfiguration, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
+import { parseHindsightSetup, PROJECT_KNOWLEDGE_PAGES, PROJECT_MEMORY_PAGE_SIZE, redactSensitiveText as redactProjectMemoryText, type ProjectKnowledgePages, type ProjectMemoryConfiguration, type ProjectMemoryDocument, type ProjectMemoryPage, type ProjectMemoryStatus, type RetrievedKnowledgeManifest } from '@ai-devflow/shared'
 import {
   loadPolicySnapshotForProject as loadStoredPolicySnapshotForProject,
   resolveLocalGateOverrideSettlement,
@@ -518,6 +520,7 @@ function wakeHindsight() {
       (async () => {
         await startMemoryRelay()
         if (!hindsightStopping) await scanCommitHistory()
+        if (!hindsightStopping) await backfillLongConversations()
         if (!hindsightStopping) await (await getProjectMemoryService()).process()
       })(),
     ])
@@ -651,6 +654,27 @@ async function scanCommitHistory(): Promise<void> {
     })
   }
 }
+// Long conversations captured before segments existed (ADR 0030): send their segments again, at
+// most a few per project in each run of the app so the one-off extraction cost stays bounded.
+const CONVERSATION_BACKFILL_SEGMENTS_PER_RUN = 5
+const conversationBackfillScans = new Map<string, number>()
+const conversationBackfillSent = new Map<string, number>()
+const conversationBackfillRemaining = new Map<string, number>()
+async function backfillLongConversations(): Promise<void> {
+  const store = await getStore()
+  for (const configuration of await store.listProjectMemoryConfigurations()) {
+    const projectId = configuration.projectId
+    if (!configuration.enabled || Date.now() - (conversationBackfillScans.get(projectId) ?? 0) < COMMIT_SCAN_INTERVAL_MS) continue
+    conversationBackfillScans.set(projectId, Date.now())
+    const allowance = CONVERSATION_BACKFILL_SEGMENTS_PER_RUN - (conversationBackfillSent.get(projectId) ?? 0)
+    try {
+      const { queued, remaining } = await backfillConversationProjectMemory(store, projectId, Math.max(0, allowance))
+      conversationBackfillSent.set(projectId, (conversationBackfillSent.get(projectId) ?? 0) + queued)
+      conversationBackfillRemaining.set(projectId, remaining)
+      if (queued) console.info(`[project-memory] Resending ${queued} segment(s) of earlier long conversations; ${remaining} left for later runs.`)
+    } catch { console.warn('[project-memory] Earlier long conversations were not resent; they are tried again later.') }
+  }
+}
 /** Best-effort copy of earlier local Memory (ADR 0030); retried at the next start if it fails. */
 async function migrateLegacyMemory(projectId: string): Promise<void> {
   try { await migrateLegacyProjectMemory(await getStore(), projectId) }
@@ -717,6 +741,26 @@ async function autoEnableProjectMemory(projectId: string): Promise<void> {
   await migrateLegacyMemory(projectId)
   wakeHindsight()
 }
+/** The latest sources, one entry per conversation however many segments it has, titled as the conversation. */
+function recentProjectMemorySources(documents: readonly ProjectMemoryDocument[]): ProjectMemoryStatus['recent'] {
+  const conversations = new Set<string>()
+  const latest: ProjectMemoryDocument[] = []
+  for (const document of [...documents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))) {
+    if (document.sourceKind === 'conversation') {
+      if (conversations.has(document.sourceId)) continue
+      conversations.add(document.sourceId)
+    }
+    latest.push(document)
+    if (latest.length === 20) break
+  }
+  return latest.map((document) => {
+      const title = document.sourceKind === 'conversation'
+        ? documents.find((item) => item.documentId === conversationMemoryDocumentId(document.sourceId, 1))?.title ?? document.title
+        : document.title
+      return { id: document.id, sourceKind: document.sourceKind, title, status: document.status,
+        updatedAt: document.updatedAt, ...(document.lastError ? { lastError: document.lastError } : {}) }
+    })
+}
 async function projectMemoryStatus(projectId: string): Promise<ProjectMemoryStatus> {
   const store = await getStore()
   if (!(await store.listProjects()).some((project) => project.id === projectId)) throw new Error('本地项目不存在。')
@@ -740,9 +784,8 @@ async function projectMemoryStatus(projectId: string): Promise<ProjectMemoryStat
       tokenFile: process.env.DEVFLOW_MEMORY_RELAY_TOKEN?.trim() ? null : memoryRelayTokenFile(),
       hindsightBaseUrl: `http://host.docker.internal:${memoryRelayPort}/v1` },
     counts,
-    recent: [...documents].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 20)
-      .map((document) => ({ id: document.id, sourceKind: document.sourceKind, title: document.title, status: document.status,
-        updatedAt: document.updatedAt, ...(document.lastError ? { lastError: document.lastError } : {}) })),
+    recent: recentProjectMemorySources(documents),
+    ...(conversationBackfillRemaining.get(projectId) ? { conversationBackfill: { remainingSegments: conversationBackfillRemaining.get(projectId)! } } : {}),
     ...(unavailableReason ? { unavailableReason } : {}),
   }
 }
