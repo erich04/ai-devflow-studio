@@ -22,7 +22,9 @@ import type { PendingInspectorAction } from '../node-inspector-view-model'
 import { gateCopy, nextVersionLabel, policyTargetLabel, roleLabel, versionLabel, type GateKind } from './copy'
 import { mergeFindings, type GateQuestion, type MergeResult } from './merge'
 import { blockKey, materialHeader, rawRequestLine, recordedAtLine, type BlockIndex, type BlockKey, type LocatedQuestion, type Range } from './material'
+import { findingNumber, reviewFindingNumbers, type FindingNumberOf } from './numbering'
 import type { GatePageMode } from './page'
+import { compareMarginOrder } from './placement'
 import { derivePolicyFacts } from './policy'
 import type { Level, ReviewBinding } from './review-binding'
 import {
@@ -168,6 +170,8 @@ export type GateProjectionInput = {
   /** The version read; history mode when it differs from `current`. */
   reading?: GateVersionFacts | undefined
   artifacts: readonly Artifact[]
+  /** All reviews of the run: "意见 N" of list items from an earlier review (#276). */
+  reviews?: readonly AgentReviewResult[] | undefined
   designNumbers?: ReadonlyMap<string, number> | undefined
   rawRequest?: string | undefined
   reviewTarget: GateReviewTarget
@@ -296,8 +300,11 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   // The current version's merge, list and numbering.
   const currentMerge = mergeFindings({ kind, binding: binding.state, findings: binding.findings, questions: current.questions })
   const boundReviewId = binding.state === 'bound' ? binding.review?.id : undefined
+  // "意见 N" of stored references (#276): the bound review's from its merge, an earlier review's from the version it reviewed.
+  const numberingOf = (merge: MergeResult, reviewId: string | undefined): FindingNumberOf => (id, index) => findingNumber(id === reviewId
+    ? merge.numbers : reviewFindingNumbers(input.reviews?.find((review) => review.id === id), input.artifacts), index)
   const chatItems = mode === 'current' ? input.chatItems ?? [] : []
-  const items = numberItems(input.list?.items ?? [], chatItems, boundReviewId)
+  const items = numberItems(input.list?.items ?? [], chatItems, boundReviewId, numberingOf(currentMerge, boundReviewId))
   const K = items.length
   const composedText = composeRevisionText(items, { kind, version: N })
   const measured = measureRevisionText(composedText)
@@ -542,7 +549,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   const shownMerge: MergeResult = reading ? mergeFindings({ kind, binding: reading.binding.state, findings: reading.binding.findings, questions: reading.questions }) : currentMerge
   const shownBinding = shown.binding
   const shownReviewId = shownBinding.state === 'bound' ? shownBinding.review?.id : undefined
-  const shownItems = reading ? numberItems(input.readingList?.items ?? []) : items
+  const shownItems = reading ? numberItems(input.readingList?.items ?? [], [], undefined, numberingOf(shownMerge, shownReviewId)) : items
   // An older version's adopted cards name the version that follows it, not the one after the current version.
   const shownNext = reading ? nextVersionLabel(kind, reading.number) : next
   const itemNumber = (id: string | undefined) => shownItems.find((item) => item.id === id)
@@ -613,10 +620,9 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   }
   const startOf = (card: CardView) => (card.anchor ? Number(card.anchor.split(':')[0]) : undefined)
   const kindOrder = (card: CardView) => (card.kind === 'finding' ? 0 : 1)
-  const navigationOrder = [
-    ...cards.filter((card) => !card.anchor).sort((a, b) => kindOrder(a) - kindOrder(b) || a.number - b.number),
-    ...cards.filter((card) => card.anchor).sort((a, b) => startOf(a)! - startOf(b)! || kindOrder(b) - kindOrder(a) || a.number - b.number),
-  ].map((card) => card.id)
+  // The margin's order, which also gives "意见 N" (#276).
+  const orderKey = (card: CardView) => ({ kind: card.kind, number: card.number, position: startOf(card) })
+  const navigationOrder = [...cards].sort((a, b) => compareMarginOrder(orderKey(a), orderKey(b))).map((card) => card.id)
   let header: MarginHeaderView | undefined
   if (showCards && findingCardsVisible && (shownMerge.findingCards.length > 0 || shownMerge.mergeNotes.length > 0)) {
     const findingCards = cards.filter((card) => card.kind === 'finding')
@@ -653,7 +659,7 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   const listItems: ListItemView[] = (mode === 'revision-pending' ? [] : items).map((item) => {
     const detail = item.source === 'finding' && item.item?.finding ? gateCopy.sourceDetailFinding(item.item.finding.text, item.item.finding.level)
       : item.source === 'question' && item.item?.question ? [gateCopy.sourceDetailQuestion(item.item.question.text, item.text),
-        ...item.item.question.merged.map((merged) => gateCopy.sourceDetailMerged(merged.index + 1, merged.text))].join('\n')
+        ...item.item.question.merged.map((merged, position) => gateCopy.sourceDetailMerged(item.mergedNumbers?.[position] ?? merged.index + 1, merged.text))].join('\n')
         : item.source === 'chat' && item.chat ? item.chat.proposal.title : item.text
     const cardId = item.source === 'finding' && item.item?.finding ? findingCardId(item.item.finding.index)
       : item.source === 'question' && item.item?.question ? questionCardId(item.item.question.index + 1) : undefined
@@ -702,11 +708,10 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   // Material.
   let historyList: HistoryListView | undefined
   if (reading && input.readingList && (input.readingList.items.length || input.readingList.submitted)) {
-    const readingItems = numberItems(input.readingList.items)
-    const count = input.readingList.submitted?.itemCount ?? readingItems.length
-    const title = isListSubmitted(input.readingList, input.artifacts) ? gateCopy.historyListSubmitted(count)
+    const count = input.readingList.submitted?.itemCount ?? shownItems.length
+    const title = readingSubmitted ? gateCopy.historyListSubmitted(count)
       : input.readingList.confirmedWithout ? gateCopy.historyListConfirmedWithout(reading.label, count) : gateCopy.historyListUnsubmitted(reading.label, count)
-    historyList = { title, text: input.readingList.submitted?.text ?? composeRevisionText(readingItems, { kind, version: reading.label }), count }
+    historyList = { title, text: input.readingList.submitted?.text ?? composeRevisionText(shownItems, { kind, version: reading.label }), count }
   }
   const material: GateDecisionView['material'] = {
     header: materialHeader({ kind, artifact: shown.artifact, artifacts: input.artifacts, ...(shown.number === undefined ? {} : { number: shown.number }), ...(input.designNumbers ? { designNumbers: input.designNumbers } : {}) }),

@@ -285,7 +285,7 @@ export async function gateProjectionInput(fixture: GateFixture, options: {
     kind: page.kind, mode: page.mode,
     current: { ...current, determinable: page.determinable, ...(page.determinableMessage ? { determinableMessage: page.determinableMessage } : {}) },
     ...(reading ? { reading } : {}),
-    artifacts: fixture.artifacts, designNumbers, rawRequest: fixture.run.request,
+    artifacts: fixture.artifacts, reviews: fixture.reviews, designNumbers, rawRequest: fixture.run.request,
     reviewTarget: deriveReviewTarget({ kind: page.kind, run: fixture.run, gateNode: page.gateNode, reviews: fixture.reviews, current: page.current.artifact, artifacts: fixture.artifacts, designNumbers }),
     ...(options.list ? { list: options.list } : {}),
     ...(options.readingList ? { readingList: options.readingList } : {}),

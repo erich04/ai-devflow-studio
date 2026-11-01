@@ -2,6 +2,7 @@ import type { AgentReviewResult } from '@ai-devflow/shared'
 import { formatLocalTime } from '../app/desktop-view-model'
 import type { GateReviewScope } from '../app/gate-review-scope'
 import { gateCopy } from '../app/gate-decision/copy'
+import { findingNumber, type FindingNumbers } from '../app/gate-decision/numbering'
 import { levelsKnown } from '../app/gate-decision/review-binding'
 import { ReviewEvidenceDetails, type RecordReviewFeedback } from './ReviewEvidenceDetails'
 
@@ -13,11 +14,15 @@ const importanceOf = (review: AgentReviewResult, index: number) =>
  * text they cite; this is the one place that lists every opinion, including those that cannot be
  * located in the current text.
  */
-export function ReviewReport({ review, scope, onFeedback }: {
+export function ReviewReport({ review, scope, onFeedback, findingNumbers }: {
   review: AgentReviewResult
   scope?: GateReviewScope | undefined
   onFeedback?: RecordReviewFeedback | undefined
+  /** Gate pages: "意见 N" as the margin numbers them (#276); the opinions are listed in that order. */
+  findingNumbers?: FindingNumbers | undefined
 }) {
+  const numberOf = (index: number) => findingNumber(findingNumbers, index)
+  const order = findingNumbers ? review.missingEvidence.map((_, index) => index).sort((a, b) => numberOf(a) - numberOf(b)) : undefined
   const covered = scope
     ? scope.appliesToCurrent
       ? `针对${scope.reviewedLabel ?? '当前版本'}`
@@ -37,7 +42,7 @@ export function ReviewReport({ review, scope, onFeedback }: {
       <p>{review.id} · {review.gateAdvisory.blocksApproval ? '审查提出阻断' : '建议性审查'} · 置信度 {Math.round(review.confidence * 100)}%</p>
       {review.contextManifest?.subjectArtifacts.map((subject) => <p key={subject.id}>{subject.id} · {subject.updatedAt} · {subject.contentDigest} · {subject.coverage}</p>)}
     </details>
-    <ReviewEvidenceDetails key={review.id} review={review} onFeedback={onFeedback}
-      {...(levelsKnown(review) ? { titleOf: (index: number) => gateCopy.findingTitle(index + 1, importanceOf(review, index)) } : {})} />
+    <ReviewEvidenceDetails key={review.id} review={review} onFeedback={onFeedback} order={order}
+      {...(levelsKnown(review) ? { titleOf: (index: number) => gateCopy.findingTitle(numberOf(index), importanceOf(review, index)) } : {})} />
   </section>
 }

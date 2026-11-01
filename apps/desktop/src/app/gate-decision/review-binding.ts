@@ -10,7 +10,7 @@ export type DigestState = { state: 'pending' | 'done' | 'failed'; value?: string
 export type Level = 'important' | 'suggestion'
 export type VerifiedCitation = Range & { quote: string; block: BlockKey }
 export type GateFinding = {
-  /** "意见 N": the finding's position in the review, 1-based. */
+  /** "意见 N": review order (index + 1) here; `mergeFindings` replaces it with the margin order (#276). */
   number: number
   index: number
   text: string

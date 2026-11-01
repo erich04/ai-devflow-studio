@@ -304,11 +304,21 @@ export type NumberedItem = {
   addedAt: string
   /** "较早的审查" when a finding item comes from another review than the bound one. */
   tag?: string
+  /** "意见 N" of a finding item. */
+  findingNumber?: number
+  /** "意见 N" of each finding a question item's answer also handles, in `item.question.merged` order. */
+  mergedNumbers?: number[]
   item?: StoredRevisionItem
   chat?: ChatItem
 }
-/** The one numbering of "第 K 项": items sorted by `addedAt`, then id (AC23). */
-export function numberItems(items: readonly StoredRevisionItem[], chatItems: readonly ChatItem[] = [], boundReviewId?: string): NumberedItem[] {
+/** Review order: the caller passes the margin's numbering (`numbering.ts`, #276) wherever numbers are shown. */
+const reviewOrder = (_reviewId: string, index: number) => index + 1
+/**
+ * The one numbering of "第 K 项": items sorted by `addedAt`, then id (AC23). Stored items keep the
+ * review's index; `findingNumber` gives the "意见 N" every label and the composed text show.
+ */
+export function numberItems(items: readonly StoredRevisionItem[], chatItems: readonly ChatItem[] = [], boundReviewId?: string,
+  findingNumber: (reviewId: string, index: number) => number = reviewOrder): NumberedItem[] {
   const all = [
     ...items.map((item) => ({ id: item.id, addedAt: item.addedAt, item })),
     ...chatItems.map((chat) => ({ id: `chat-${chat.proposal.id}`, addedAt: chat.addedAt, chat })),
@@ -319,10 +329,13 @@ export function numberItems(items: readonly StoredRevisionItem[], chatItems: rea
       return { id: entry.id, number, source: 'chat', label: gateCopy.sourceChat, text: entry.chat.note ?? '', addedAt: entry.addedAt, chat: entry.chat }
     }
     const item = (entry as { item: StoredRevisionItem }).item
-    const label = item.source === 'finding' ? gateCopy.sourceFinding(item.finding!.index + 1)
+    const shown = item.source === 'finding' ? findingNumber(item.finding!.reviewId, item.finding!.index) : undefined
+    const label = shown !== undefined ? gateCopy.sourceFinding(shown)
       : item.source === 'question' ? gateCopy.sourceQuestion(item.question!.index + 1) : gateCopy.sourceOwn
     const earlier = item.source === 'finding' && boundReviewId !== undefined && item.finding!.reviewId !== boundReviewId
-    return { id: item.id, number, source: item.source, label, text: item.text, addedAt: item.addedAt, item, ...(earlier ? { tag: gateCopy.earlierReviewTag } : {}) }
+    return { id: item.id, number, source: item.source, label, text: item.text, addedAt: item.addedAt, item,
+      ...(earlier ? { tag: gateCopy.earlierReviewTag } : {}), ...(shown !== undefined ? { findingNumber: shown } : {}),
+      ...(item.source === 'question' ? { mergedNumbers: item.question!.merged.map((merged) => findingNumber(merged.reviewId, merged.index)) } : {}) }
   })
 }
 const indent = (text: string) => text.split('\n').join('\n   ')
@@ -334,12 +347,14 @@ export function composeRevisionText(items: readonly NumberedItem[], target: { ki
     if (entry.source === 'chat' && entry.chat) {
       lines.push(prefix + indent(gateCopy.composeChat(entry.chat.proposal.title, entry.chat.note)))
     } else if (entry.source === 'finding' && entry.item?.finding) {
-      lines.push(prefix + indent(gateCopy.composeFinding(entry.item.finding.index + 1, entry.item.text)))
-      if (entry.item.text !== entry.item.finding.text) lines.push(`   ${indent(gateCopy.composeFindingOriginal(entry.item.finding.text))}`)
+      const finding = entry.item.finding
+      lines.push(prefix + indent(gateCopy.composeFinding(entry.findingNumber ?? reviewOrder(finding.reviewId, finding.index), entry.item.text)))
+      if (entry.item.text !== finding.text) lines.push(`   ${indent(gateCopy.composeFindingOriginal(finding.text))}`)
     } else if (entry.source === 'question' && entry.item?.question) {
       const question = entry.item.question
       lines.push(prefix + indent(gateCopy.composeQuestion(question.index + 1, question.text, entry.item.text)))
-      for (const merged of question.merged) lines.push(`   ${indent(gateCopy.composeQuestionMerged(merged.index + 1, merged.text))}`)
+      question.merged.forEach((merged, position) => lines.push(`   ${indent(gateCopy.composeQuestionMerged(
+        entry.mergedNumbers?.[position] ?? reviewOrder(merged.reviewId, merged.index), merged.text))}`))
     } else {
       lines.push(prefix + indent(gateCopy.composeOwn(entry.text)))
     }

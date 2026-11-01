@@ -1526,9 +1526,11 @@ function expectWideGateGeometry(geometry: GateGeometry) {
   expect(geometry.margin.width).toBeLessThanOrEqual(270)
   expect(Math.abs(cardOf(geometry, '意见 1 · 重要').top - geometry.firstBlock.top)).toBeLessThanOrEqual(4)
   expect(Math.abs(cardOf(geometry, '意见 2 · 重要').top - geometry.table.top)).toBeLessThanOrEqual(4)
-  expect(Math.abs(cardOf(geometry, '意见 3 · 建议').top - geometry.nestedParent.top)).toBeLessThanOrEqual(4)
+  expect(Math.abs(cardOf(geometry, '意见 4 · 建议').top - geometry.nestedParent.top)).toBeLessThanOrEqual(4)
   const sorted = [...geometry.cards].sort((a, b) => a.top - b.top)
   for (let index = 1; index < sorted.length; index += 1) expect(sorted[index]!.top).toBeGreaterThanOrEqual(sorted[index - 1]!.bottom - 0.5)
+  // The review lists the nested item's finding 3rd and the non-goal's 4th; the margin numbers them top to bottom (#276).
+  expect(sorted.map((card) => card.name)).toEqual(['意见 1 · 重要', '意见 2 · 重要', '意见 3 · 建议', '意见 4 · 建议', '意见 5 · 建议', '问题 1 · 需要你决定', '问题 2 · 需要你决定'])
   // Amendment 36: a tight item's paragraph is exactly its item's box (the margin reset of 3.25).
   expect(geometry.tight.length).toBeGreaterThan(10)
   for (const { li, p } of geometry.tight) {
@@ -1964,7 +1966,7 @@ test.describe('AI DevFlow desktop workbench', () => {
     expect((await bar.boundingBox())!.y).toBeCloseTo(barTop, 0)
     await scroll.evaluate((element) => { element.scrollTop = 0 })
     // 采纳 on the nested item's parent: its bar ends above the nested item.
-    await page.getByRole('article', { name: '意见 3 · 建议' }).getByRole('button', { name: '采纳', exact: true }).click()
+    await page.getByRole('article', { name: '意见 4 · 建议' }).getByRole('button', { name: '采纳', exact: true }).click()
     await page.getByRole('article', { name: '意见 1 · 重要' }).getByRole('button', { name: '采纳', exact: true }).click()
     await expect(bar.getByRole('button', { name: /^修订清单 2 项/ })).toBeVisible()
     const adopted = await gateGeometry(page)

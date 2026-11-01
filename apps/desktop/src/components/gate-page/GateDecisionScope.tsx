@@ -177,7 +177,7 @@ export function GateDecisionScope({ page, run, artifacts, reviews, revisionLists
         binding: currentBinding, ...currentStatic, determinable: page.determinable, ...(page.determinableMessage ? { determinableMessage: page.determinableMessage } : {}) },
       ...(readingArtifact && readingStatic && readingBinding ? { reading: { artifact: readingArtifact, ...(page.reading.number === undefined ? {} : { number: page.reading.number }),
         label: page.reading.label, binding: readingBinding, ...readingStatic } } : {}),
-      artifacts, designNumbers, ...(rawRequest !== undefined ? { rawRequest } : {}),
+      artifacts, reviews, designNumbers, ...(rawRequest !== undefined ? { rawRequest } : {}),
       reviewTarget: deriveReviewTarget({ kind, run, gateNode: page.gateNode, reviews, current, artifacts, designNumbers }),
       ...(list ? { list } : {}), chatItems, ...(readingList ? { readingList } : {}),
       otherLists: others.map((other) => ({ list: other, label: labelOf(other.target.artifactId) })),

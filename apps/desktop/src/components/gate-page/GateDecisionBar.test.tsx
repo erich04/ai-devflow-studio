@@ -62,7 +62,7 @@ describe('GateDecisionBar', () => {
   })
   it('bumps the toggle without expanding when an item is added, and 「第 K 项」 opens the list', async () => {
     render(<GateHarness fixture={await buildF1()} spies={gateActionSpies()} facts={gateFacts()} />)
-    const card = await screen.findByRole('article', { name: '意见 2 · 重要' })
+    const card = await screen.findByRole('article', { name: '意见 3 · 重要' })
     vi.useFakeTimers()
     fireEvent.click(within(card).getByRole('button', { name: '采纳' }))
     const toggle = within(bar()).getByRole('button', { name: /修订清单 1 项/ })
@@ -75,7 +75,7 @@ describe('GateDecisionBar', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     const item = bar().querySelector('[data-item-id]')!
     expect(item).toHaveClass('is-flashing')
-    expect(item).toHaveTextContent('来自意见 2')
+    expect(item).toHaveTextContent('来自意见 3')
   })
   it('shows the panel texts and validates an own item', async () => {
     render(<GateHarness fixture={await buildF1()} spies={gateActionSpies()} facts={gateFacts()} />)

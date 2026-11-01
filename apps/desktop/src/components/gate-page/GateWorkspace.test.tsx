@@ -114,7 +114,7 @@ describe('GateWorkspace material', () => {
     render(<GateHarness fixture={await buildF1()} spies={gateActionSpies()} facts={gateFacts()} />)
     await settled()
     const before = material().textContent
-    fireEvent.click(within(card('意见 2 · 重要')).getByRole('button', { name: '采纳' }))
+    fireEvent.click(within(card('意见 3 · 重要')).getByRole('button', { name: '采纳' }))
     const question = card('问题 2 · 需要你决定')
     expect(within(question).getByRole('textbox', { name: '问题 2 的回答' })).toHaveAttribute('maxLength', '1000')
     fireEvent.change(within(question).getByRole('textbox', { name: '问题 2 的回答' }), { target: { value: '允许，只读显示。' } })
@@ -124,7 +124,7 @@ describe('GateWorkspace material', () => {
     expect(material().textContent).not.toContain('修订清单第')
     expect(document.querySelectorAll('.gate-change-bar').length).toBeGreaterThan(0)
   })
-  it('adds neither 「新」 from a tag nor 「意见 2」 from a marker to the material text', async () => {
+  it('adds neither 「新」 from a tag nor 「意见 3」 from a marker to the material text', async () => {
     const { unmount } = render(<GateHarness fixture={await buildF3()} spies={gateActionSpies()} facts={gateFacts()} />)
     await settled('10')
     expect(material().querySelectorAll('.gate-new-tag').length).toBeGreaterThan(0)
@@ -133,8 +133,11 @@ describe('GateWorkspace material', () => {
     mockWorkspaceWidth(700)
     render(<GateHarness fixture={await buildF1()} spies={gateActionSpies()} facts={gateFacts()} />)
     await settled()
-    expect(material().querySelector('.gate-marker[data-label="意见 2"]')).toHaveAttribute('aria-label', '意见 2 · 重要')
-    expect(material().textContent).not.toContain('意见 2')
+    expect(material().querySelector('.gate-marker[data-label="意见 3"]')).toHaveAttribute('aria-label', '意见 3 · 重要')
+    expect(material().textContent).not.toContain('意见 3')
+    // Overview row first, then the material from top to bottom: the narrow markers count up like the margin (#276).
+    expect(Array.from(document.querySelectorAll('.gate-workspace .gate-marker')).map((marker) => marker.getAttribute('data-label')))
+      .toEqual(['意见 1', '意见 2', '意见 3', '意见 4', '问题 1', '问题 2'])
   })
   it.each(['light', 'dark'])('marks only new blocks with is-new, the description and one overlay tag each (%s theme)', async (theme) => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -189,15 +192,15 @@ describe('GateWorkspace hover and performance', () => {
     observeGateMaterialCommitsForTests(commits)
     const item = paragraph('输入关键词后，列表只显示标题包含关键词的任务。')
     expect(item.parentElement?.tagName).toBe('LI')
-    fireEvent.mouseEnter(card('意见 2 · 重要'))
+    fireEvent.mouseEnter(card('意见 3 · 重要'))
     expect(item).toHaveClass('is-linked')
-    fireEvent.mouseLeave(card('意见 2 · 重要'))
+    fireEvent.mouseLeave(card('意见 3 · 重要'))
     expect(item).not.toHaveClass('is-linked')
     fireEvent.mouseOver(item)
-    expect(card('意见 2 · 重要')).toHaveClass('is-linked')
-    expect(card('意见 3 · 建议')).not.toHaveClass('is-linked')
+    expect(card('意见 3 · 重要')).toHaveClass('is-linked')
+    expect(card('意见 2 · 建议')).not.toHaveClass('is-linked')
     fireEvent.mouseLeave(material())
-    expect(card('意见 2 · 重要')).not.toHaveClass('is-linked')
+    expect(card('意见 3 · 重要')).not.toHaveClass('is-linked')
     expect(commits).not.toHaveBeenCalled()
   })
   it('adopting a finding in the wide layout commits no material section and bars both cited blocks (AC15)', async () => {
@@ -205,14 +208,14 @@ describe('GateWorkspace hover and performance', () => {
     await settled()
     const commits = vi.fn<ProfilerOnRenderCallback>()
     observeGateMaterialCommitsForTests(commits)
-    fireEvent.click(within(card('意见 2 · 重要')).getByRole('button', { name: '采纳' }))
+    fireEvent.click(within(card('意见 3 · 重要')).getByRole('button', { name: '采纳' }))
     await act(async () => {})
     expect(commits.mock.calls.map((call) => call[0])).not.toContain('gate-material-section')
     const keys = ['输入关键词后，列表只显示标题包含关键词的任务。', '没有匹配时显示「暂无匹配任务」。']
       .map((text) => paragraph(text)).map((p) => `${p.dataset.blockStart}:${p.dataset.blockEnd}`)
     const bars = Array.from(material().querySelectorAll('.gate-change-bar'))
     expect(bars.map((element) => element.getAttribute('data-block'))).toEqual(keys)
-    for (const element of bars) expect(element).toHaveAttribute('aria-label', '意见 2：已加入修订清单第 1 项')
+    for (const element of bars) expect(element).toHaveAttribute('aria-label', '意见 3：已加入修订清单第 1 项')
   })
 })
 
@@ -224,9 +227,13 @@ describe('GateWorkspace cards', () => {
     await settled()
     fireEvent.click(within(card('问题 1 · 重要 · 需要你决定')).getByRole('button', { name: '讨论' }))
     fireEvent.click(within(card('问题 2 · 需要你决定')).getByRole('button', { name: '讨论' }))
-    fireEvent.click(within(card('意见 2 · 重要')).getByRole('button', { name: '讨论' }))
+    fireEvent.click(within(card('意见 3 · 重要')).getByRole('button', { name: '讨论' }))
     expect(spies.onDiscuss.mock.calls.map((call) => call[0].materialId)).toEqual([
       `${fixture.current.id}#question-1`, `${fixture.current.id}#question-2`, `${fixture.current.id}#review-review-f1-1`])
+    // The answer panel's reference and material title carry the card's number (#276).
+    const [question1, , finding] = spies.onDiscuss.mock.calls.map((call) => call[0])
+    expect(question1.excerpt).toContain('AI 审查也指出（意见 5）：')
+    expect([finding.label, finding.materialTitle]).toEqual(['需求 v1 · 意见 3 · 重要', `${fixture.current.title} · 意见 3 · 重要`])
   })
   it('shows a history version with its read-only list and 「复制全部」', async () => {
     const fixture = await buildF3()
@@ -240,7 +247,7 @@ describe('GateWorkspace cards', () => {
     fireEvent.click(within(history).getByRole('button', { name: '复制全部' }))
     await waitFor(() => expect(spies.onCopy).toHaveBeenCalledWith('修订清单（共 1 项，针对需求 v1）：\n1. 我添加的：旧版本上的修改。'))
     expect(screen.getByText('这是需求 v1 的审查，只能查看。')).toBeInTheDocument()
-    expect(within(card('意见 2 · 重要')).queryByRole('button', { name: '采纳' })).toBeNull()
+    expect(within(card('意见 3 · 重要')).queryByRole('button', { name: '采纳' })).toBeNull()
   })
 })
 
@@ -281,10 +288,10 @@ describe('GateWorkspace layout', () => {
     await settled()
     const marker = material().querySelector<HTMLElement>('.gate-marker[data-card-id="finding-1"]')!
     fireEvent.click(marker)
-    expect(within(screen.getByRole('dialog', { name: '意见 2 · 重要' })).getByRole('button', { name: '采纳' })).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog', { name: '意见 3 · 重要' })).getByRole('button', { name: '采纳' })).toBeInTheDocument()
     // The card starts with its title, so the popover header shows only the close button (review finding 3).
-    expect(within(screen.getByRole('dialog', { name: '意见 2 · 重要' })).getAllByText('意见 2 · 重要')).toHaveLength(1)
-    expect(within(screen.getByRole('dialog', { name: '意见 2 · 重要' })).getByRole('button', { name: '关闭意见 2 · 重要' })).toBeInTheDocument()
+    expect(within(screen.getByRole('dialog', { name: '意见 3 · 重要' })).getAllByText('意见 3 · 重要')).toHaveLength(1)
+    expect(within(screen.getByRole('dialog', { name: '意见 3 · 重要' })).getByRole('button', { name: '关闭意见 3 · 重要' })).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(marker).toHaveFocus()
@@ -309,7 +316,7 @@ describe('GateWorkspace layout', () => {
     render(<GateHarness fixture={await buildF1()} spies={gateActionSpies()} facts={gateFacts()} />)
     await settled()
     fireEvent.click(within(bar()).getByRole('button', { name: '下一条 ↓' }))
-    // 意见 5 has no located citation, so it comes first, in the overview row above the material.
+    // 意见 1 (the review's fifth finding) has no located citation, so it comes first, in the overview row above the material.
     await waitFor(() => expect(document.activeElement).toHaveAttribute('data-card-id', 'finding-4'))
     expect(document.activeElement).toHaveClass('gate-marker', 'is-flashing')
     expect(document.activeElement!.closest('.gate-margin-head')).not.toBeNull()

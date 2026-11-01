@@ -306,7 +306,7 @@ describe('modes', () => {
     expect(adoptedCard?.statusText).toBe(`已采纳 · 已写进需求 v2：${F1_FINDINGS[1]}`)
     expect(adoptedCard?.itemRef).toEqual({ itemId: expect.any(String), number: 1, static: true })
     expect(adoptedCard?.actionable).toBe(false)
-    expect(adopted.material.bars.map((bar) => bar.label)).toContain('意见 2：修订清单第 1 项')
+    expect(adopted.material.bars.map((bar) => bar.label)).toContain('意见 3：修订清单第 1 项')
     // Without a record that it was submitted, the card says it was not.
     const withoutFeedback = { ...f3, artifacts: f3.artifacts.filter((artifact) => artifact.kind !== 'clarification_feedback') }
     const unsubmitted = project(await gateProjectionInput(withoutFeedback, { readingArtifactId: f3.previous!.id, readingList: await listFor(f3.previous!, [adopt(1)]) }))
@@ -379,15 +379,15 @@ describe('modes', () => {
   })
 })
 describe('cards, margin header and bars', () => {
-  it('F1: four finding cards, two question cards, nothing for 意见 1 (AC6, AC8)', async () => {
+  it('F1: four finding cards, two question cards, no card for the finding merged into 问题 1 (AC6, AC8)', async () => {
     const f1 = await buildF1()
     const view = project(await gateProjectionInput(f1))
-    expect(view.margin.cards.filter((card) => card.kind === 'finding').map((card) => card.title)).toEqual(['意见 2 · 重要', '意见 3 · 建议', '意见 4 · 建议', '意见 5 · 建议'])
+    expect(view.margin.cards.filter((card) => card.kind === 'finding').map((card) => card.title)).toEqual(['意见 1 · 建议', '意见 2 · 建议', '意见 3 · 重要', '意见 4 · 建议'])
     const [q1, q2] = view.margin.cards.filter((card) => card.kind === 'question')
-    expect([q1!.title, q1!.mergedLines]).toEqual(['问题 1 · 重要 · 需要你决定', [`AI 审查也指出（意见 1）：${F1_FINDINGS[0]}`]])
+    expect([q1!.title, q1!.mergedLines]).toEqual(['问题 1 · 重要 · 需要你决定', [`AI 审查也指出（意见 5）：${F1_FINDINGS[0]}`]])
     expect([q2!.title, q2!.mergedLines, q2!.level]).toEqual(['问题 2 · 需要你决定', [], undefined])
-    expect(view.margin.header).toMatchObject({ text: '审查意见 4 条（1 条重要）', merges: [{ text: '意见 1 并入了问题 1', cardId: 'question-1' }] })
-    expect(view.margin.header?.adoptAll).toEqual({ enabled: true, findingIndexes: [2, 3, 4] })
+    expect(view.margin.header).toMatchObject({ text: '审查意见 4 条（1 条重要）', merges: [{ text: '意见 5 并入了问题 1', cardId: 'question-1' }] })
+    expect(view.margin.header?.adoptAll).toEqual({ enabled: true, findingIndexes: [4, 2, 3] })
     // Unlocated cards first, then located ones in reading order.
     expect(view.margin.navigationOrder[0]).toBe('finding-4')
     expect(view.margin.cards.find((card) => card.id === 'finding-4')?.anchor).toBeUndefined()
@@ -405,23 +405,23 @@ describe('cards, margin header and bars', () => {
     expect(view.margin.header?.text).toBe('审查意见都并入了待确认问题')
     expect(view.margin.header?.merges.map((merge) => merge.text)).toEqual(['意见 1 并入了问题 1', '意见 2 并入了问题 2'])
   })
-  it('adopting 意见 2 shows the item text and number and bars both cited blocks (AC15)', async () => {
+  it('adopting 意见 3 shows the item text and number and bars both cited blocks (AC15)', async () => {
     const f1 = await buildF1()
     const view = project(await gateProjectionInput(f1, { list: await listFor(f1.current, [{ type: 'addOwn', text: '先加一条' }, adopt(1)]) }))
     const card = view.margin.cards.find((item) => item.id === 'finding-1')!
     expect([card.status, card.statusText, card.itemRef]).toEqual(['adopted', `已采纳 · v2 里会处理：${F1_FINDINGS[1]}`, { itemId: 'f-review-f1-1', number: 2 }])
     expect(view.material.bars.filter((bar) => bar.cardIds.includes('finding-1')).map((bar) => [bar.block, bar.slot, bar.tone, bar.label])).toEqual(
-      card.blocks.map((block) => [block, 0, 'important', '意见 2：已加入修订清单第 2 项']))
+      card.blocks.map((block) => [block, 0, 'important', '意见 3：已加入修订清单第 2 项']))
     expect(card.blocks).toHaveLength(2)
-    expect(view.bar.list.items.map((item) => [item.number, item.label])).toEqual([[1, '我添加的'], [2, '来自意见 2']])
+    expect(view.bar.list.items.map((item) => [item.number, item.label])).toEqual([[1, '我添加的'], [2, '来自意见 3']])
     const declined = project(await gateProjectionInput(f1, { list: await listFor(f1.current, [decline(2)]) }))
     expect(declined.margin.cards.find((item) => item.id === 'finding-2')).toMatchObject({ status: 'declined', statusText: '不采纳' })
   })
-  it('answering 问题 1 handles 意见 1 and bars the question and the block 意见 1 also cites', async () => {
+  it('answering 问题 1 handles 意见 5 and bars the question and the block 意见 5 also cites', async () => {
     const f1 = await buildF1()
     const view = project(await gateProjectionInput(f1, { list: await listFor(f1.current, [answer(0, '不区分'), adopt(2)]) }))
     const q1 = view.margin.cards.find((card) => card.id === 'question-1')!
-    expect([q1.title, q1.mergedLines, q1.answer]).toEqual(['问题 1 · 已回答：不区分', ['也处理了审查意见 1'], '不区分'])
+    expect([q1.title, q1.mergedLines, q1.answer]).toEqual(['问题 1 · 已回答：不区分', ['也处理了审查意见 5'], '不区分'])
     const goal = f1.current.content.indexOf('用户可以按关键词搜索任务。')
     const goalBars = view.material.bars.filter((bar) => bar.block.startsWith(`${goal}:`))
     expect(goalBars.map((bar) => [bar.cardIds, bar.slot, bar.tone])).toEqual([[['question-1'], 0, 'question'], [['finding-2'], 1, 'suggestion']])
@@ -448,6 +448,44 @@ describe('cards, margin header and bars', () => {
     // v1's list counts as submitted (a feedback targets v1); only the other one is announced.
     expect(view.bar.notes.filter((note) => note.link?.action === 'openVersion')).toEqual([
       { tone: 'neutral', text: '需求已更新为 v2。你在需求 v0 上的修订清单（1 项）没有提交。', link: { label: '查看需求 v0 的清单', action: 'openVersion', artifactId: 'gate-run-clarification-v0' } }])
+  })
+})
+describe('意见 N follows the margin from top to bottom (#276, decision 73)', () => {
+  // F1's review order is not the text order: 意见 1–5 are review findings 5, 3, 2, 4 and 1 (merged into 问题 1).
+  it('numbers the cards top to bottom and uses the same numbers in merges, list labels, details, bars and the submitted text', async () => {
+    const f1 = await buildF1()
+    const view = project(await gateProjectionInput(f1, { list: await listFor(f1.current, [adopt(1), adopt(3), answer(0, '不区分'), adopt(4), adopt(2)]) }))
+    const byId = new Map(view.margin.cards.map((card) => [card.id, card]))
+    const name = (id: string) => byId.get(id)!.title.split(' · ')[0]
+    expect(view.margin.navigationOrder.map(name)).toEqual(['意见 1', '意见 2', '意见 3', '意见 4', '问题 1', '问题 2'])
+    expect(view.margin.navigationOrder.flatMap((id) => { const card = byId.get(id)!; return card.kind === 'finding' ? [card.number] : (card.merged ?? []).map((item) => item.number) }))
+      .toEqual([1, 2, 3, 4, 5])
+    expect(view.margin.navigationOrder.map((id) => byId.get(id)!.finding?.index)).toEqual([4, 2, 1, 3, undefined, undefined])
+    expect(view.margin.header?.merges.map((merge) => merge.text)).toEqual(['意见 5 并入了问题 1'])
+    expect(byId.get('question-1')!.mergedLines).toEqual(['也处理了审查意见 5'])
+    expect(view.bar.list.items.map((item) => item.label)).toEqual(['来自意见 3', '来自意见 4', '来自问题 1', '来自意见 1', '来自意见 2'])
+    for (const item of view.bar.list.items.filter((entry) => entry.source === 'finding')) expect(item.label).toBe(`来自${name(item.cardId!)}`)
+    expect(view.bar.list.items.find((item) => item.source === 'question')!.detail).toContain(`也处理了审查意见 5：${F1_FINDINGS[0]}`)
+    expect(view.material.bars.filter((bar) => bar.cardIds.includes('finding-1')).map((bar) => bar.label)).toEqual(['意见 3：已加入修订清单第 1 项', '意见 3：已加入修订清单第 1 项'])
+    expect(view.bar.list.composedText.split('\n').filter((line) => /意见 \d/u.test(line))).toEqual([
+      `1. 来自意见 3：${F1_FINDINGS[1]}`, `2. 来自意见 4：${F1_FINDINGS[3]}`, `   这个回答也处理了审查意见 5：${F1_FINDINGS[0]}`,
+      `4. 来自意见 1：${F1_FINDINGS[4]}`, `5. 来自意见 2：${F1_FINDINGS[2]}`])
+  })
+  it('keeps the numbers on that version\'s history page and for list items of an earlier review of the version', async () => {
+    const f3 = await buildF3()
+    const history = project(await gateProjectionInput(f3, { readingArtifactId: f3.previous!.id, readingList: await listFor(f3.previous!, [adopt(1), answer(0, '不区分')]) }))
+    expect(history.margin.cards.filter((card) => card.kind === 'finding').map((card) => [card.id, card.title])).toEqual([
+      ['finding-4', '意见 1 · 建议'], ['finding-2', '意见 2 · 建议'], ['finding-1', '意见 3 · 重要'], ['finding-3', '意见 4 · 建议']])
+    expect(history.material.historyList?.text).toContain(`1. 来自意见 3：${F1_FINDINGS[1]}`)
+    expect(history.material.historyList?.text).toContain(`   这个回答也处理了审查意见 5：${F1_FINDINGS[0]}`)
+    // A second review of v1 is bound now; items adopted from the first keep that review's numbers.
+    const f1 = await buildF1()
+    const rerun = await reviewOf({ id: 'review-f1b', artifact: f1.current, gateNodeId: ids.clarifyGate, findings: ['新的意见'], createdAt: '2026-10-30T08:15:00.000Z',
+      details: [{ quotes: [], importance: 'suggestion' }] })
+    const view = project(await gateProjectionInput({ ...f1, reviews: [...f1.reviews, rerun], review: rerun }, { list: await listFor(f1.current, [adopt(1), answer(0, '不区分')]) }))
+    expect(view.bar.list.items.map((item) => [item.label, item.tag])).toEqual([['来自意见 3', '较早的审查'], ['来自问题 1', undefined]])
+    expect(view.bar.list.composedText).toContain(`1. 来自意见 3：${F1_FINDINGS[1]}`)
+    expect(view.bar.list.composedText).toContain(`   这个回答也处理了审查意见 5：${F1_FINDINGS[0]}`)
   })
 })
 describe('cost lines (amendment 33)', () => {

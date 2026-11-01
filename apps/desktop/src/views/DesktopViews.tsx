@@ -61,6 +61,7 @@ import { CodingRetryDialog, CodingWorkPanel, CodingWorkspaceRecords, GateReviewR
 import { ReviewRerunDialog } from './ReviewRerunDialog'
 import { describeGateReviewScope } from '../app/gate-review-scope'
 import { gateCopy } from '../app/gate-decision/copy'
+import { reviewFindingNumbers } from '../app/gate-decision/numbering'
 import { resolveGatePage, type GatePage } from '../app/gate-decision/page'
 import type { GateChatFacts } from '../app/gate-decision/chat-link'
 import { deriveReviewTarget, deriveRunFacts } from '../app/gate-decision/projection'
@@ -1218,8 +1219,9 @@ export function Inspector({
           ))}
         </section>)
       )}
-      {/* The one full report; 当前工作 marks opinions beside the text they cite (#246, #252). */}
-      {latestAgentReview && <ReviewReport review={latestAgentReview} scope={latestReviewScope} onFeedback={onRecordAgentReviewFeedback} />}
+      {/* The one full report; 当前工作 marks opinions beside the text they cite (#246, #252). Gate pages number them as the margin does (#276). */}
+      {latestAgentReview && <ReviewReport review={latestAgentReview} scope={latestReviewScope} onFeedback={onRecordAgentReviewFeedback}
+        findingNumbers={gatePage ? reviewFindingNumbers(latestAgentReview, workflowArtifacts) : undefined} />}
     </div>
   )
 

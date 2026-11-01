@@ -11,22 +11,28 @@ export type PlaceableCard = {
   height: number
 }
 export type PlacedCard = { id: string; top: number }
+/** A card's place in the margin: `position` is its anchor (block start or block top); undefined when unlocated. */
+export type MarginOrderKey = { kind: 'finding' | 'question'; number: number; position?: number | undefined }
+/**
+ * The one margin order (§5.7), shared by the placement, 「下一条 ↓」 and the finding numbers (#276):
+ * unlocated cards first, findings before questions; then located cards by position, a question
+ * before a finding at the same position; then number.
+ */
+export function compareMarginOrder(a: MarginOrderKey, b: MarginOrderKey): number {
+  const kindOrder = (key: MarginOrderKey) => (key.kind === 'finding' ? 0 : 1)
+  if (a.position === undefined || b.position === undefined) {
+    if (a.position !== b.position) return a.position === undefined ? -1 : 1
+    return kindOrder(a) - kindOrder(b) || a.number - b.number
+  }
+  return a.position - b.position || kindOrder(b) - kindOrder(a) || a.number - b.number
+}
 export function placeMarginCards(cards: readonly PlaceableCard[], gap = 8): PlacedCard[] {
-  const kindOrder = (card: PlaceableCard) => (card.kind === 'finding' ? 0 : 1)
-  const unlocated = cards.filter((card) => card.anchorTop === undefined)
-    .sort((a, b) => kindOrder(a) - kindOrder(b) || a.number - b.number)
-  // Ties: question before finding, then number.
-  const located = cards.filter((card) => card.anchorTop !== undefined)
-    .sort((a, b) => a.anchorTop! - b.anchorTop! || kindOrder(b) - kindOrder(a) || a.number - b.number)
+  const ordered = [...cards].sort((a, b) => compareMarginOrder({ ...a, position: a.anchorTop }, { ...b, position: b.anchorTop }))
   const placed: PlacedCard[] = []
   let bottom: number | undefined
-  for (const card of unlocated) {
-    const top = bottom === undefined ? 0 : bottom + gap
-    placed.push({ id: card.id, top })
-    bottom = top + card.height
-  }
-  for (const card of located) {
-    const top = Math.max(card.anchorTop!, bottom === undefined ? 0 : bottom + gap)
+  for (const card of ordered) {
+    const below = bottom === undefined ? 0 : bottom + gap
+    const top = card.anchorTop === undefined ? below : Math.max(card.anchorTop, below)
     placed.push({ id: card.id, top })
     bottom = top + card.height
   }
