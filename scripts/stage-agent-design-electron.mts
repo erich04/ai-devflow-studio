@@ -199,7 +199,8 @@ export async function verifyDesignInElectron(input: {
     await bar.getByRole('button', { name: '＋ 添加其他修改', exact: true }).click()
     await bar.getByRole('textbox', { name: '其他修改', exact: true }).fill(`${DESIGN_CHANGE_MARKER}: keep the reset filter.`)
     await bar.getByRole('button', { name: '加入修订清单', exact: true }).click()
-    await bar.getByRole('region', { name: '对方案 v1 的修改 · 提交后生成 v2', exact: true }).getByRole('button', { name: '更改', exact: true }).click()
+    // The model and cost line with 「更改」 sits beside the generate button only (decision 75).
+    await bar.locator('.gate-bar-costs').getByRole('button', { name: '更改', exact: true }).click()
     await page.getByRole('combobox', { name: '设计执行器' }).selectOption('direct-provider')
     const generate = bar.getByRole('button', { name: '生成方案 v2（1 项）', exact: true })
     await expect(generate).toBeEnabled()
