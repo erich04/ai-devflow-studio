@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
 import ts from 'typescript'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -48,7 +48,7 @@ const jsxText = (node: ts.JsxText) => (/\n/u.test(/^\s*/u.exec(node.text)![0]) ?
 /** User-visible text with a version number right before Chinese: literals, and version labels interpolated right before Chinese. */
 function missingSpaces(file: string, code = readFileSync(file, 'utf8')): string[] {
   const source = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
-  const name = file.split('/').at(-1)!
+  const name = basename(file)                                  // `join` uses backslashes on Windows
   const found: string[] = []
   const report = (node: ts.Node, text: string) => found.push(`${file}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1} ${text}`)
   const interpolated = (node: ts.Node, expression: ts.Expression, next: string) => {
