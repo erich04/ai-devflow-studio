@@ -2,7 +2,7 @@ import type { Database } from 'sql.js'
 import { createMemoryLearningTables } from './automatic-memory-store'
 import type { LocalSettings } from '@ai-devflow/shared'
 
-export const CURRENT_SCHEMA_VERSION = 41
+export const CURRENT_SCHEMA_VERSION = 42
 export const DEFAULT_LOCAL_SETTINGS: LocalSettings = { themePreference: 'system' }
 
 export type SchemaMigration = {
@@ -2979,11 +2979,14 @@ export const schemaMigrations: readonly SchemaMigration[] = [
     },
   },
   {
-    version: 41,
+    version: 42,
     migrate(db) {
-      // Native v3 sessions. Before merging main this table was the draft branch's schema 39, so a
-      // database written by that branch skipped main's schema 39; its Hindsight tables are created
-      // here as well. Both statements are no-ops on databases that followed main.
+      // Native v3 sessions (ADR 0029). The draft branch wrote this table as its schema 39 and later
+      // as its schema 41, while main used 39 for Hindsight, 40 for memory candidates and 41 for
+      // project memory. A database from the draft 39 lacks main's Hindsight tables; one from the
+      // draft 41 already has this table but skipped main's 41, so it lacks the project memory
+      // tables. Both sets are created here as well. Every statement is create-if-not-exists: on a
+      // database that followed main only the session table is new, and a second run is a no-op.
       db.run(`
         create table if not exists hindsight_configurations (
           generation text primary key, project_id text not null, json text not null
@@ -2993,6 +2996,19 @@ export const schemaMigrations: readonly SchemaMigration[] = [
           id text primary key, project_id text not null, json text not null
         );
         create index if not exists hindsight_projection_project on hindsight_projections(project_id);
+        create table if not exists project_memory_configurations (
+          project_id text primary key references local_projects(id) on delete cascade,
+          json text not null
+        );
+        create table if not exists project_memory_documents (
+          id text primary key,
+          project_id text not null references local_projects(id) on delete cascade,
+          bank_id text not null,
+          document_id text not null,
+          json text not null,
+          unique (bank_id, document_id)
+        );
+        create index if not exists idx_project_memory_documents_project on project_memory_documents(project_id);
         create table if not exists native_coding_sessions (
           id text primary key,
           local_project_id text not null references local_projects(id) on delete cascade,
