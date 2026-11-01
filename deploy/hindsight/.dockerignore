@@ -1,0 +1,3 @@
+# The image needs only the model checksums; keep .env (relay token) and the rest out of the build.
+*
+!multilingual-e5-small.sha256

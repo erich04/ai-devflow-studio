@@ -57,35 +57,53 @@ describe('CodingWorkPanel command permission details', () => {
   })
 })
 
-describe('GateReviewRunPanel (plan W2)', () => {
-  it('re-runs only after the existing confirmation and passes the previous review', () => {
-    const onRun = vi.fn()
-    render(<GateReviewRunPanel latestReview={review} failure={undefined} isRunning={false} providerLabel="Review · model-a" blockedReason={undefined} isWriteLocked={false} target="清理任务 · 需求确认 Gate" onRun={onRun} />)
+describe('GateReviewRunPanel (plan W2, #251)', () => {
+  const base = {
+    reviewScope: undefined, currentLabel: '需求 v2', failure: undefined, isRunning: false,
+    providerLabel: 'Review · model-a', blockedReason: undefined, isWriteLocked: false, showRunButton: true,
+  }
+
+  it('requests a re-run through the shared confirmation instead of running it', () => {
+    const onRequestRun = vi.fn()
+    render(<GateReviewRunPanel {...base} latestReview={review} onRequestRun={onRequestRun} />)
     expect(screen.getByTestId('task-review-run')).toHaveTextContent('将使用 Review · model-a，可能产生费用。')
     fireEvent.click(screen.getByRole('button', { name: '重新审查' }))
-    expect(onRun).not.toHaveBeenCalled()
-    const dialog = screen.getByRole('dialog', { name: '确认重新审查' })
-    expect(dialog).toHaveTextContent('本次 Provider：Review · model-a')
-    fireEvent.click(within(dialog).getByRole('button', { name: '继续并重新审查' }))
-    expect(onRun).toHaveBeenCalledWith('review-1')
+    expect(onRequestRun).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('explains a failed review and retries without a previous review', () => {
-    const onRun = vi.fn()
-    render(<GateReviewRunPanel latestReview={undefined} failure={'门禁审查失败：Provider 超时 {"code":"timeout"}'} isRunning={false} providerLabel="Review · model-a" blockedReason={undefined} isWriteLocked={false} target="t" onRun={onRun} />)
+  it('names the older version a saved review covered and never presents it as current', () => {
+    render(<GateReviewRunPanel {...base} latestReview={review} reviewScope={{ appliesToCurrent: false, reviewedLabel: '需求 v1' }} onRequestRun={vi.fn()} />)
+    expect(screen.getByTestId('review-outdated')).toHaveTextContent('上次审查针对需求 v1，当前版本已更新')
+    expect(screen.getByTestId('review-outdated')).toHaveTextContent('不作为需求 v2的审查结果')
+    expect(screen.getByTestId('task-review-run')).not.toHaveTextContent('上次审查：')
+  })
+
+  it('leaves a plain re-run to the status row when it already offers the review, but keeps the retry beside a failure', () => {
+    const onRequestRun = vi.fn()
+    const view = render(<GateReviewRunPanel {...base} latestReview={review} showRunButton={false} onRequestRun={onRequestRun} />)
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    view.rerender(<GateReviewRunPanel {...base} latestReview={undefined} failure="门禁审查失败：Provider 超时" showRunButton={false} onRequestRun={onRequestRun} />)
+    fireEvent.click(screen.getByRole('button', { name: '重试门禁审查' }))
+    expect(onRequestRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('explains a failed review and offers a retry', () => {
+    const onRequestRun = vi.fn()
+    render(<GateReviewRunPanel {...base} latestReview={undefined} failure={'门禁审查失败：Provider 超时 {"code":"timeout"}'} onRequestRun={onRequestRun} />)
     expect(screen.getByRole('alert')).toHaveTextContent('上次门禁审查未完成：门禁审查失败：Provider 超时')
     fireEvent.click(screen.getByRole('button', { name: '重试门禁审查' }))
-    expect(onRun).toHaveBeenCalledWith()
+    expect(onRequestRun).toHaveBeenCalledTimes(1)
   })
 
   it('cannot run while the budget or model is unavailable, and says why', () => {
-    render(<GateReviewRunPanel latestReview={review} failure={undefined} isRunning={false} providerLabel={undefined} blockedReason="尚未配置当前项目的云端预算" isWriteLocked={false} target="t" onRun={vi.fn()} />)
+    render(<GateReviewRunPanel {...base} latestReview={review} providerLabel={undefined} blockedReason="尚未配置当前项目的云端预算" onRequestRun={vi.fn()} />)
     expect(screen.getByRole('button', { name: '重新审查' })).toBeDisabled()
     expect(screen.getByTestId('task-review-run')).toHaveTextContent('尚未配置当前项目的云端预算')
   })
 
   it.each(['local-agent', 'native-agent'] as const)('says how %s review was produced and keeps repository facts collapsed', (executorKind) => {
-    const props = { failure: undefined, isRunning: false, providerLabel: 'p', blockedReason: undefined, isWriteLocked: false, target: 't', onRun: vi.fn() }
+    const props = { ...base, providerLabel: 'p', onRequestRun: vi.fn() }
     const first = render(<GateReviewRunPanel {...props} latestReview={review} />)
     expect(screen.getByTestId('review-method')).toHaveTextContent('只依据材料与知识目录，未读取仓库')
     first.unmount()
@@ -118,7 +136,7 @@ describe('GateReviewRunPanel (plan W2)', () => {
   })
 
   it('renders nothing before any review, failure or run', () => {
-    const { container } = render(<GateReviewRunPanel latestReview={undefined} failure={undefined} isRunning={false} providerLabel="p" blockedReason={undefined} isWriteLocked={false} target="t" onRun={vi.fn()} />)
+    const { container } = render(<GateReviewRunPanel {...base} latestReview={undefined} onRequestRun={vi.fn()} />)
     expect(container).toBeEmptyDOMElement()
   })
 })

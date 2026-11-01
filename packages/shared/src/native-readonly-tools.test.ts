@@ -13,6 +13,14 @@ describe('native read-only protocol', () => {
       Array.from({ length: 17 }, (_, i) => call(String(i))),
     ]) expect(() => validateNativeToolBatch(batch)).toThrow()
   })
+  it('offers memory_search as a bounded read-only query', () => {
+    const definition = readOnlyToolDefinitions(['memory_search'])[0]!
+    expect(definition.function.parameters).toMatchObject({ required: ['query'], properties: { limit: { maximum: 8 } } })
+    expect(validateNativeToolBatch([call('a', 'memory_search', '{"query":"删除确认","limit":8}')])).toHaveLength(1)
+    for (const args of ['{"query":"删除确认","limit":9}', '{"limit":3}', '{"query":"删除确认","projectId":"foreign"}']) {
+      expect(() => validateNativeToolBatch([call('a', 'memory_search', args)])).toThrow()
+    }
+  })
   it('distinguishes tool turns from final JSON and replays complete private thinking history', async () => {
     const requests: Record<string, unknown>[] = []
     const fetcher = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {

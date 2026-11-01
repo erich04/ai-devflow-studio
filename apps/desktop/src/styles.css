@@ -4768,6 +4768,17 @@ body { min-width: 0; }
 .review-evidence-details blockquote { margin: 0.6rem 0; padding-left: 0.7rem; border-left: 3px solid var(--accent); white-space: pre-wrap; }
 .review-evidence-details code { display: block; overflow-wrap: anywhere; font-size: var(--font-size-xs); }
 .review-evidence-details textarea { display: block; width: 100%; min-height: 5rem; resize: vertical; }
+/* Per-opinion revision drafts beside the cited text (#247): fields stack, actions wrap. */
+.revision-suggestion-form { margin-top: 0.4rem; }
+.revision-suggestion-form label { display: grid; gap: 0.25rem; margin-bottom: 0.5rem; }
+.revision-suggestion-form button, .revision-suggestion-saved button { margin-right: 0.4rem; }
+.revision-suggestion-saved { margin-top: 0.4rem; padding: 0.5rem 0.65rem; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 6px; }
+.revision-suggestion-saved p { margin: 0 0 0.3rem; white-space: pre-wrap; }
+.revision-suggestion-list { display: grid; gap: 0.5rem; }
+.revision-suggestion-list .mini-card p { margin: 0.2rem 0; white-space: pre-wrap; }
+.revision-request-preview pre { margin: 0.4rem 0 0; max-height: 14rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--font-size-xs); }
+/* One summary line below the body; unlocated opinions open as the same popovers (#246, #252). */
+.review-reference-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.5rem; }
 
 /* Native details retains keyboard behavior; an explicit marker survives layout resets. */
 .provider-thinking-settings > summary {
@@ -4797,3 +4808,41 @@ body { min-width: 0; }
 .budget-continuation label { display: flex; align-items: center; gap: 8px; min-height: 44px; font-weight: 600; }
 .budget-continuation input { width: 18px; height: 18px; flex-shrink: 0; }
 .budget-continuation code { overflow-wrap: anywhere; }
+
+/* Project memory panel (ADR 0030) */
+.project-memory-panel details > summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+.project-memory-panel details > .stack {
+  margin-top: 10px;
+}
+.project-memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.project-memory-search {
+  display: flex;
+  gap: 8px;
+}
+.project-memory-search input {
+  flex: 1;
+  min-width: 0;
+}
+.project-memory-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.project-memory-meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+.project-memory-panel textarea.input {
+  width: 100%;
+  resize: vertical;
+}

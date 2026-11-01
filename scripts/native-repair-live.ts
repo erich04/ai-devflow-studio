@@ -14,7 +14,7 @@ async function main() {
     process.exitCode = 1
     return
   }
-  const { createOpenAiCompatibleAgentProvider, runNativeRepairLiveSmoke } = await import('./memory-context-live-smoke.ts')
+  const { createOpenAiCompatibleAgentProvider, runNativeRepairLiveSmoke } = await import('./native-repair-live-smoke.ts')
   const outputDirectory = process.env.DEVFLOW_NATIVE_REPAIR_LIVE_OUTPUT ??
     path.resolve('out', `native-repair-live-${new Date().toISOString().replace(/[:.]/g, '-')}`)
   await runNativeRepairLiveSmoke({

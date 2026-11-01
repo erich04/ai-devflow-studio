@@ -9,6 +9,7 @@ import {
   CURRENT_SCHEMA_VERSION,
   migrateLocalStoreSchema,
   readLocalStoreSchemaVersion,
+  schemaMigrations,
   schemaMigrationVersions,
 } from './local-store-schema'
 
@@ -47,7 +48,7 @@ function readMigrationSourceDigests(): string[] {
 
 describe('LocalStore schema boundary', () => {
   it('keeps every historical migration contiguous and hash-locked', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe(41)
+    expect(CURRENT_SCHEMA_VERSION).toBe(42)
     expect(schemaMigrationVersions).toEqual(
       Array.from({ length: CURRENT_SCHEMA_VERSION }, (_, index) => index + 1),
     )
@@ -92,7 +93,8 @@ describe('LocalStore schema boundary', () => {
       '37dfb01ac74181ed4a549e8354e882a5920fa4de201a681ec69cb87699a60374',
       '96092574fc3eb3022438d1cf581736e92e1f6caf7878e2fe13cf074a4bdb789e',
       '573cfc7b90030e1b5baf915832e7af2854fc3b3b2fe4b022993492d420f1a61b',
-      '4b3e565904b9a207f709e6acde16e7f8083b4c0e5f015a32cfa765cfd69e1be1',
+      '960d83abfb3defbaf07372ccf7b7db053e0f2f4085cfadac5b2af86d4118473b',
+      'bdd392488c5b70b585ef56cad30bf95e03ce3d2aa3cec5e99a940fac54780b3b',
     ])
   })
 
@@ -115,6 +117,66 @@ describe('LocalStore schema boundary', () => {
     })
 
     expect(afterMigrations).toHaveBeenCalledOnce()
+    db.close()
+  })
+
+  // The Native v3 branch's own schema 41, written before main took 41 for project memory.
+  const nativeV3Draft41 = `
+    create table if not exists hindsight_configurations (
+      generation text primary key, project_id text not null, json text not null
+    );
+    create index if not exists hindsight_config_project on hindsight_configurations(project_id);
+    create table if not exists hindsight_projections (
+      id text primary key, project_id text not null, json text not null
+    );
+    create index if not exists hindsight_projection_project on hindsight_projections(project_id);
+    create table if not exists native_coding_sessions (
+      id text primary key,
+      local_project_id text not null references local_projects(id) on delete cascade,
+      coding_run_id text not null unique,
+      version integer not null check (version > 0),
+      status text not null,
+      updated_at text not null,
+      json text not null
+    );
+    create index if not exists native_coding_sessions_project on native_coding_sessions(local_project_id, updated_at);
+  `
+  const rowInserts: Record<string, string> = {
+    local_projects: "insert into local_projects (id, json, created_at, updated_at) values ('project', '{}', 'now', 'now')",
+    project_memory_configurations: "insert into project_memory_configurations (project_id, json) values ('project', '{}')",
+    native_coding_sessions: "insert into native_coding_sessions (id, local_project_id, coding_run_id, version, status, updated_at, json) values ('session', 'project', 'coding', 1, 'ready', 'now', '{}')",
+  }
+
+  it.each([
+    { from: 'schema 40', migrated: 40, draft: false, rows: ['local_projects'] },
+    { from: "main's schema 41", migrated: 41, draft: false, rows: ['local_projects', 'project_memory_configurations'] },
+    { from: "the Native v3 draft's schema 41", migrated: 40, draft: true, rows: ['local_projects', 'native_coding_sessions'] },
+  ])('brings a database at $from to the schema of a new database and keeps its rows', async ({ migrated, draft, rows }) => {
+    const SQL = await initSqlJs({ locateFile: (fileName) => path.join(sqlJsDist, fileName) })
+    const hooks = { migrateWorkflowRunsIntoRelationalTables: () => undefined, afterMigrations: () => undefined }
+    const objects = (db: import('sql.js').Database) =>
+      db.exec('select type, name, tbl_name from sqlite_master order by type, name')[0]?.values
+    const count = (db: import('sql.js').Database, table: string) =>
+      Number(db.exec(`select count(*) from ${table}`)[0]?.values[0]?.[0])
+    const fresh = new SQL.Database()
+    migrateLocalStoreSchema(fresh, hooks)
+
+    const db = new SQL.Database()
+    for (const migration of schemaMigrations.filter((item) => item.version <= migrated)) migration.migrate(db, hooks)
+    if (draft) db.run(nativeV3Draft41)
+    db.run(
+      "insert into schema_meta (key, value) values ('schema_version', ?) on conflict(key) do update set value = excluded.value",
+      [draft ? '41' : String(migrated)],
+    )
+    for (const table of rows) db.run(rowInserts[table]!)
+    migrateLocalStoreSchema(db, hooks)
+
+    expect(readLocalStoreSchemaVersion(db)).toBe(42)
+    expect(objects(db)).toEqual(objects(fresh))
+    expect(Object.keys(rowInserts).map((table) => count(db, table)))
+      .toEqual(Object.keys(rowInserts).map((table) => (rows.includes(table) ? 1 : 0)))
+    expect(db.exec('pragma foreign_key_check')).toEqual([])
+    fresh.close()
     db.close()
   })
 })

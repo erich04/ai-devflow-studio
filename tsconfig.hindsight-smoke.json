@@ -11,6 +11,7 @@
   "include": [
     "scripts/hindsight-protocol-smoke.mts",
     "scripts/hindsight-local-smoke.mts",
+    "scripts/hindsight-migrate-store.mts",
     "scripts/hindsight-live-synthetic.mts",
     "scripts/hindsight-fullchain-electron.mts",
     "scripts/hindsight-fullchain-correction.mts",
@@ -21,6 +22,9 @@
     "scripts/hindsight-todo-fixture.ts",
     "scripts/hindsight-todo-evaluation.ts",
     "scripts/hindsight-todo-live-evaluation.mts",
-    "scripts/automatic-memory-electron-smoke.mts"
+    "scripts/project-memory-live-validation.mts",
+    "scripts/project-memory-full-fixtures.mts",
+    "scripts/project-memory-full-validation.mts",
+    "scripts/project-memory-segments-smoke.mts"
   ]
 }

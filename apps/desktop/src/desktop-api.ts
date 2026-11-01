@@ -1,10 +1,16 @@
 import type { WorkbenchConversationApi } from '../electron/workbench-conversation-contract.js'
 import type {
   AgentEvent,
-  AutomaticMemoryStatus,
-  ConfigureAutomaticMemoryInput,
-  ResolveAutomaticMemoryDecisionInput,
-  RememberConversationMemoryInput,
+  ConfigureProjectMemoryInput,
+  ProjectMemoryStatus,
+  ClearProjectMemoryInput,
+  ProjectKnowledgePages,
+  RefreshProjectKnowledgePageInput,
+  ForgetProjectMemoryInput,
+  ForgetProjectMemorySourceInput,
+  ListProjectMemoriesInput,
+  ProjectMemoryPage,
+  UpdateProjectMemoryInput,
   DesignRevisionIdentity,
   DesignRevisionRequest,
   AgentProviderConfig,
@@ -349,11 +355,15 @@ export type DevFlowDesktopApi = {
   deleteAgentMemory: (
     input: DeleteAgentMemoryInput,
   ) => Promise<AgentMemoryLifecycleSnapshot>
-  getAutomaticMemoryStatus?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  configureAutomaticMemory?: (input: ConfigureAutomaticMemoryInput) => Promise<AutomaticMemoryStatus>
-  processAutomaticMemory?: (input: { projectId: string }) => Promise<AutomaticMemoryStatus>
-  resolveAutomaticMemoryDecision?: (input: ResolveAutomaticMemoryDecisionInput) => Promise<AutomaticMemoryStatus>
-  rememberConversationMemory?: (input: RememberConversationMemoryInput) => Promise<AutomaticMemoryStatus>
+  getProjectMemoryStatus?: (input: { projectId: string }) => Promise<ProjectMemoryStatus>
+  configureProjectMemory?: (input: ConfigureProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  listProjectMemories?: (input: ListProjectMemoriesInput) => Promise<ProjectMemoryPage>
+  updateProjectMemory?: (input: UpdateProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemory?: (input: ForgetProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  forgetProjectMemorySource?: (input: ForgetProjectMemorySourceInput) => Promise<ProjectMemoryStatus>
+  clearProjectMemory?: (input: ClearProjectMemoryInput) => Promise<ProjectMemoryStatus>
+  listProjectKnowledgePages?: (input: { projectId: string }) => Promise<ProjectKnowledgePages>
+  refreshProjectKnowledgePage?: (input: RefreshProjectKnowledgePageInput) => Promise<ProjectKnowledgePages>
   cancelWorkflowAgentNode?: (input: { runId: string; nodeId: string }) => Promise<boolean>
   completeWorkflowAgentNode: (input: CompleteWorkflowAgentNodeInput) => Promise<CompleteWorkflowAgentNodeResult>
   requestClarificationChanges?: (input: RequestClarificationChangesInput) => Promise<RequestClarificationChangesResult>

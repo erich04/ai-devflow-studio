@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalProject, WorkflowRun } from '@ai-devflow/shared'
 import { assembleRetrievedKnowledgeContext } from '@ai-devflow/shared'
 import { createCodingRuntime } from './coding-runtime.js'
-import { createDesktopAgentRuntime } from './agent-runtime-runtime.js'
 import { runDependencyBootstrap } from './dependency-bootstrap-runner.js'
 import { createLocalStore } from './local-store.js'
 import {
@@ -16,8 +15,8 @@ import {
   type NativeCodingV2DecisionProvider,
 } from './native-coding-executor-v2.js'
 import { runLocalTestCommand } from './test-runner.js'
-import { learnFromCompletedCodingRun } from './coding-run-memory-learning.js'
-import { assertCodingContextCurrent } from './coding-context.js'
+import { assertCodingContextCurrent, registerProjectMemoryRecall } from './coding-context.js'
+import { projectMemoryIdentity, type ProjectMemoryRecallPort } from './project-memory-recall.js'
 import { evaluateCurrentWorkflowEvidence } from './workflow-evaluation.js'
 
 const execFileAsync = promisify(execFile)
@@ -92,7 +91,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
     expect(prompt.length).toBeLessThanOrEqual(8_000)
   })
 
-  it.each(['success', 'unrepairable', 'invalid_repair', 'memory_deleted', 'memory_expired', 'memory_changes_during_provider',
+  it.each(['success', 'unrepairable', 'invalid_repair', 'memory_deleted', 'memory_cleared', 'memory_changes_during_provider',
     'knowledge_changes_during_provider', 'knowledge_revoked_before_repair'] as const)(
     'preserves exact changes and executed evidence for %s', async (scenario) => {
     const repositoryPath = await temporaryDirectory('devflow-native-v2-repository')
@@ -158,6 +157,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
         content: 'The new message must retain the public export and double quotes.' }],
     })
     let knowledgeCurrent = true
+    let memoryChanged = false
     const prepareRetrievedKnowledge = vi.fn(async () => retrievedKnowledge)
     const assertRetrievedKnowledgeCurrent = async () => {
       if (!knowledgeCurrent) throw new Error('Retrieved knowledge source changed')
@@ -168,23 +168,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
         providerPrompts.push(input.userPrompt)
         providerCalls.push({ phase: input.phase, systemPrompt: input.systemPrompt, userPrompt: input.userPrompt })
         if (scenario === 'knowledge_changes_during_provider' && input.phase === 'analysis') knowledgeCurrent = false
-        if (scenario === 'memory_changes_during_provider' && input.phase === 'analysis') {
-          if (!promotion.authorized) throw new Error('Expected authorized Memory promotion')
-          currentTime = '2026-08-31T00:30:00.001Z'
-          const revised = await store.authorizeAgentMemoryRevision({
-            memoryId: promotion.revision.id, expectedHeadVersion: 1,
-            statement: 'Revised rule: preserve all existing wording.',
-            authority: {
-              stateVersion: 1, decisionId: 'revise-during-provider', memoryId: promotion.revision.id,
-              expectedRevision: 1, expectedContentDigest: promotion.revision.contentDigest,
-              scope: promotion.revision.scope, actorKind: 'human', actorId: run.creatorId,
-              policyId: 'test-memory-policy', policyVersion: 1, visibility: 'user_project', sensitivity: 'internal',
-              retentionClass: 'until_deleted', expiresAt: null, authorityDigest: 'd'.repeat(64), decidedAt: clock(),
-            },
-          })
-          if (!revised.authorized) throw new Error('Expected revision authority')
-          await store.commitAgentMemoryRevision({ revision: revised.revision, recordedAt: clock() }, revised.capability)
-        }
+        if (scenario === 'memory_changes_during_provider' && input.phase === 'analysis') memoryChanged = true
         if (input.phase === 'repair') {
           const repair = JSON.parse(input.userPrompt)
           expect(repair.observableSummaries).toMatchObject({
@@ -245,45 +229,18 @@ describe('DevFlow Native Executor v2 runtime', () => {
     const store = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
     await store.upsertProject(project)
     await store.saveRun(run)
-    let currentTime = '2026-08-31T00:30:00.000Z'
+    const currentTime = '2026-08-31T00:30:00.000Z'
     const clock = () => currentTime
+    // Project memory (ADR 0030) from a fake Hindsight bank; edits, deletes and clears make it stale.
     const rememberedRule = 'For message changes, preserve the existing export name and double quotes.'
-    const memoryRuntime = createDesktopAgentRuntime({
-      store, clock,
-      createId: () => 'memory-source-runtime',
-      executeFakeAction: async () => ({
-        resultDigest: 'a'.repeat(64), evaluationSummary: rememberedRule,
-      }),
-    })
-    let memorySnapshot = await memoryRuntime.start({
-      runId: run.id, nodeId: run.currentNodeId, localProjectId: project.id,
-    })
-    for (let step = 0; step < 3; step += 1) {
-      memorySnapshot = await memoryRuntime.advance({
-        runtimeId: memorySnapshot.runtime.id,
-        runId: run.id, localProjectId: project.id,
-        expectedVersion: memorySnapshot.runtime.version,
-        expectedCheckpointVersion: memorySnapshot.runtime.checkpointVersion,
-      })
-    }
-    const [candidate] = await store.listAgentMemoryCandidates(project.id)
-    if (!candidate) throw new Error('Expected accepted observation Memory candidate')
-    const promotion = await store.authorizeAgentMemoryPromotion({
-      candidateId: candidate.id,
-      memoryId: 'coding-project-memory',
-      authority: {
-        stateVersion: 1, decisionId: 'promote-coding-project-memory',
-        candidateId: candidate.id, candidateContentDigest: candidate.contentDigest,
-        scope: candidate.scope, actorKind: 'human', actorId: run.creatorId,
-        policyId: 'test-memory-policy', policyVersion: 1,
-        visibility: 'user_project', sensitivity: 'internal',
-        retentionClass: scenario === 'memory_expired' ? 'session' : 'until_deleted',
-        expiresAt: scenario === 'memory_expired' ? '2026-08-31T00:30:01.000Z' : null,
-        authorityDigest: 'b'.repeat(64), decidedAt: clock(),
+    const remembered = projectMemoryIdentity({ id: 'message-rule' }, `[observation] ${rememberedRule}`)
+    const memoryPort: ProjectMemoryRecallPort = {
+      recall: async () => ({ items: [remembered], degraded: false }),
+      assertCurrent: async ({ ids }) => {
+        if (memoryChanged && ids.includes(remembered.id)) throw new Error('Project memory was edited or deleted')
       },
-    })
-    if (!promotion.authorized) throw new Error('Expected authorized Memory promotion')
-    await store.commitAgentMemoryPromotion({ revision: promotion.revision }, promotion.capability)
+    }
+    registerProjectMemoryRecall(store, memoryPort)
     let statusDuringSavedTest: string | undefined
     const executor = createNativeCodingExecutorV2({
       store,
@@ -310,8 +267,6 @@ describe('DevFlow Native Executor v2 runtime', () => {
       worktreeRoot,
       now: clock,
       runTestCommand: runLocalTestCommand,
-      learnCodingRunMemory: ({ codingRun, evaluationPassed }) =>
-        learnFromCompletedCodingRun({ store, codingRun, evaluationPassed, now: clock }),
       budgetGuard: async () => ({
         status: 'allowed', blocksRun: false, currentSpendUsd: 0,
         projectedCostUsd: 0.01, limitUsd: 0.20, reason: 'Within the saved project budget.',
@@ -381,20 +336,10 @@ describe('DevFlow Native Executor v2 runtime', () => {
     expect(permission).not.toHaveProperty('filePath')
     expect(changeSet!.unifiedDiff).toContain('diff --git a/src/message.ts b/src/message.ts')
 
-    if (scenario === 'memory_deleted') {
-      currentTime = '2026-08-31T00:30:00.001Z'
-      const deletion = await store.authorizeAgentMemoryDeletion({ authority: {
-        stateVersion: 1, decisionId: 'delete-coding-memory', memoryId: promotion.revision.id,
-        expectedRevision: 1, expectedHeadVersion: 1, expectedContentDigest: promotion.revision.contentDigest,
-        scope: promotion.revision.scope, actorKind: 'human', actorId: run.creatorId,
-        policyId: 'test-memory-policy', policyVersion: 1, authorityDigest: 'c'.repeat(64), decidedAt: clock(),
-      } })
-      if (!deletion.authorized) throw new Error(`Expected deletion authority: ${deletion.reason}`)
-      await store.commitAgentMemoryDeletion({ tombstone: deletion.tombstone }, deletion.capability)
-    }
-    if (scenario === 'memory_expired') currentTime = '2026-08-31T00:30:02.000Z'
-    if (scenario === 'memory_deleted' || scenario === 'memory_expired') {
+    if (scenario === 'memory_deleted' || scenario === 'memory_cleared') memoryChanged = true
+    if (scenario === 'memory_deleted' || scenario === 'memory_cleared') {
       const reopened = await createLocalStore({ dbPath: path.join(storeDirectory, 'devflow.sqlite') })
+      registerProjectMemoryRecall(reopened, memoryPort)
       try {
         const [persisted] = await reopened.listCodingAgentRuns(run.id)
         await expect(assertCodingContextCurrent({ store: reopened, codingRun: persisted!, now: clock(), assertRetrievedKnowledgeCurrent }))
@@ -410,7 +355,7 @@ describe('DevFlow Native Executor v2 runtime', () => {
       comment: 'Approve the exact persisted Change Set once.',
     })
 
-    if (scenario === 'memory_deleted' || scenario === 'memory_expired') {
+    if (scenario === 'memory_deleted' || scenario === 'memory_cleared') {
       await expect(approval).rejects.toThrow('Coding Memory changed, expired or was deleted')
       expect(providerPrompts).toHaveLength(2)
       expect(await store.listTestEvidence(run.id)).toHaveLength(0)
@@ -480,19 +425,8 @@ describe('DevFlow Native Executor v2 runtime', () => {
     expect((await store.listCodingAgentEvents(completed!.id))
       .find((event) => event.metadata?.workflowEvaluation)?.metadata?.workflowEvaluation)
       .toMatchObject({ passed: true, failures: [], evidenceDigest: expect.any(String) })
-    // ADR 0024 §4–5: the accepted, test-passing run proposes fixed-template candidates and
-    // the bounded policy saves the test command, traced on the Coding Run.
-    const learnedCandidates = (await store.listAgentMemoryCandidates(project.id))
-      .filter((entry) => entry.provenance.kind === 'coding_run')
-    expect(learnedCandidates.map((entry) => entry.provenance.kind === 'coding_run' && entry.provenance.statementKind).sort())
-      .toEqual(['change_map', 'test_command'])
-    expect(learnedCandidates.every((entry) => JSON.stringify(entry.scope) === JSON.stringify(completed!.contextReceipt!.scope))).toBe(true)
-    expect(learnedCandidates.find((entry) => entry.provenance.kind === 'coding_run' && entry.provenance.statementKind === 'change_map')!.statement)
-      .toBe('Change map: "Native v2 execution" (Implement locally) was implemented by changing src/message.ts.')
-    const learningTrace = (await store.listCodingAgentEvents(completed!.id))
-      .find((event) => event.metadata?.memoryLearning)?.metadata?.memoryLearning as { promoted: unknown[] } | undefined
-    // Only the saved test command is saved without review (ADR 0024 §5).
-    expect(learningTrace?.promoted).toHaveLength(1)
+    // ADR 0030: a finished run is learned by project memory, never as local Memory candidates.
+    expect(await store.listAgentMemoryCandidates(project.id)).toEqual([])
     expect(completed).toMatchObject({
       status: 'completed', changedPaths: ['src/message.ts'],
       runtimeCostSummary: {
