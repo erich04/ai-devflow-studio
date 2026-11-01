@@ -300,10 +300,10 @@ describe('modes', () => {
     expect(history.margin.cards.length).toBeGreaterThan(0)
     expect(history.margin.cards.every((card) => !card.actionable && card.readOnlyReason === '历史版本，只能查看')).toBe(true)
     expect(history.material.readOnlyBanner).toBe('这是历史版本 需求 v1；当前是需求 v2。这里只能查看。')
-    // v1's list was submitted (v2 came from it): the card says so, and 第 K 项 is plain text (review finding 4).
+    // v1's list was submitted and v2 came from it: the card names v2, and 第 K 项 is plain text (review finding 4, decision 74).
     const adopted = project(await gateProjectionInput(f3, { readingArtifactId: f3.previous!.id, readingList: await listFor(f3.previous!, [adopt(1)]) }))
     const adoptedCard = adopted.margin.cards.find((card) => card.id === 'finding-1')
-    expect(adoptedCard?.statusText).toBe(`已采纳 · 已随修订提交：${F1_FINDINGS[1]}`)
+    expect(adoptedCard?.statusText).toBe(`已采纳 · 已写进需求 v2：${F1_FINDINGS[1]}`)
     expect(adoptedCard?.itemRef).toEqual({ itemId: expect.any(String), number: 1, static: true })
     expect(adoptedCard?.actionable).toBe(false)
     expect(adopted.material.bars.map((bar) => bar.label)).toContain('意见 2：修订清单第 1 项')
@@ -314,6 +314,14 @@ describe('modes', () => {
     const none = project(await gateProjectionInput({ ...f3, reviews: [] }, { readingArtifactId: f3.previous!.id }))
     expect(none.margin.note).toBe('需求 v1 没有对应的审查记录。')
     expect(none.margin.cards.map((card) => card.id)).toEqual(['question-1', 'question-2'])
+  })
+  it('a submitted design list names 方案 v2 generated from it, and keeps 已随修订提交 when that version has no number (decision 74)', async () => {
+    const f5 = await buildF5()
+    const readingList = await listFor(f5.previous!, [{ type: 'adopt', finding: { reviewId: 'review-f4', index: 1, text: F4_FINDINGS[1] } }])
+    const input = await gateProjectionInput(f5, { readingArtifactId: f5.previous!.id, readingList })
+    const statusOf = (view: GateDecisionView) => view.margin.cards.find((card) => card.id === 'finding-1')?.statusText
+    expect(statusOf(project(input))).toBe(`已采纳 · 已写进方案 v2：${F4_FINDINGS[1]}`)
+    expect(statusOf(project({ ...input, designNumbers: new Map() }))).toBe(`已采纳 · 已随修订提交：${F4_FINDINGS[1]}`)
   })
   it('history mode in rows 8–15 keeps the current version\'s state and offers only 返回 (decision 53, amendment 37)', async () => {
     const f3 = await buildF3()

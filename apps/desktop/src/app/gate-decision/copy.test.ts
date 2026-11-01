@@ -33,6 +33,8 @@ describe('gate copy', () => {
       expect(gateCopy.marginHeader(0, important, 0)).toBe(gateCopy.progressNoFindings)
     }
     expect(gateCopy.progressNoFindings).toBe('AI 审查没有意见')
+    expect(gateCopy.adoptedWrittenStatus('需求 v2', '补上')).toBe('已采纳 · 已写进需求 v2：补上')
+    expect(gateCopy.adoptedWrittenStatus('方案 v3', '补上')).toBe(`已采纳 · ${gateCopy.chatWritten('方案 v3')}：补上`)
     expect(gateCopy.listHeader('需求 v1', '需求 v2')).toBe('对需求 v1 的修改 · 提交后生成 v2')
     expect(gateCopy.oldListNotice('requirement', '需求 v2', '需求 v1', 3)).toBe('需求已更新为 v2。你在需求 v1 上的修订清单（3 项）没有提交。')
     expect(gateCopy.confirmWithoutReceipt('需求 v1', 2)).toBe('已确认需求 v1。修订清单里的 2 项没有提交，仍可在需求 v1 的页面查看。')

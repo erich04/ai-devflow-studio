@@ -263,6 +263,19 @@ function statusOf(list: StoredRevisionList | undefined, reviewId: string | undef
 }
 const answerOf = (list: StoredRevisionList | undefined, number: number) =>
   list?.items.find((item) => item.source === 'question' && item.question?.index === number - 1)
+/** The label of the version generated from a list's version: its successor in the records; `undefined` when none is recorded or numbered. */
+function generatedFrom(list: StoredRevisionList, artifacts: readonly Artifact[], designNumbers: ReadonlyMap<string, number> | undefined): string | undefined {
+  const target = list.target
+  const next = artifacts.filter((artifact) => artifact.runId === target.runId && (target.kind === 'requirement'
+    ? artifact.kind === 'clarification' && artifact.clarificationRevision?.previousRevisionArtifactId === target.artifactId
+    : artifact.kind === 'design' && artifact.designRevision?.previous.artifactId === target.artifactId &&
+      artifact.designRevision.previous.updatedAt === target.updatedAt && artifact.designRevision.previous.contentDigest === target.contentDigest))
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt))[0]
+  if (!next) return undefined
+  if (target.kind === 'requirement') return versionLabel('requirement', clarificationRevisionNumber(next))
+  const number = designNumbers?.get(next.id)
+  return number === undefined ? undefined : versionLabel('design', number)
+}
 export function projectGateDecision(input: GateProjectionInput): GateDecisionView {
   const { kind, mode } = input
   const policy = derivePolicyFacts(input.policy)
@@ -535,8 +548,11 @@ export function projectGateDecision(input: GateProjectionInput): GateDecisionVie
   const itemNumber = (id: string | undefined) => shownItems.find((item) => item.id === id)
   // History mode: the read version's list is submitted or was never submitted; nothing waits in it (FR-6.1).
   const readingSubmitted = reading && input.readingList ? isListSubmitted(input.readingList, input.artifacts) : false
+  // A submitted list names the version generated from it, as the answer panel's "已写进需求 vN" does (decision 74).
+  const generatedVersion = readingSubmitted && input.readingList ? generatedFrom(input.readingList, input.artifacts, input.designNumbers) : undefined
   const adoptedText = (text: string) => !reading ? gateCopy.adoptedStatus(shownNext, text)
-    : readingSubmitted ? gateCopy.adoptedSubmittedStatus(text) : gateCopy.adoptedNotSubmittedStatus
+    : generatedVersion ? gateCopy.adoptedWrittenStatus(generatedVersion, text)
+      : readingSubmitted ? gateCopy.adoptedSubmittedStatus(text) : gateCopy.adoptedNotSubmittedStatus
   const refOf = (numbered: { id: string; number: number } | undefined) => numbered
     ? { itemRef: { itemId: numbered.id, number: numbered.number, ...(reading ? { static: true as const } : {}) } } : {}
   const findingCardsVisible = shownBinding.state === 'bound'

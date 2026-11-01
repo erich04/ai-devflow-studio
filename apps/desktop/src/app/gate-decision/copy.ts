@@ -17,6 +17,8 @@ export const roleLabel = (role: RequiredGateRole | string | undefined) =>
   role === 'owner' ? 'Owner' : role === 'lead' ? 'Lead' : role === 'member' ? 'Member' : role ?? 'Member'
 export const policyTargetLabel = (target: GateEnforcementReason['target']) => blockingTargetLabels[target]
 const NO_FINDINGS = 'AI 审查没有意见'
+/** "已写进需求 v2": a proposal or an adopted finding is in the version generated from its list (decision 74). */
+const writtenInto = (version: string) => `已写进${version}`
 export const gateCopy = {
   // Bar titles (§5.3)
   decideTitle: (version: string) => `${version} · 你的决定`,
@@ -124,6 +126,8 @@ export const gateCopy = {
   adoptedStatus: (next: string, text: string) => `已采纳 · ${next.replace(/^(需求|方案) /u, '')} 里会处理：${text}`,
   inListStatus: (number: number) => `已加入修订清单（第 ${number} 项）`,
   // History mode: the read version's list is already submitted or was never submitted (FR-6.1).
+  adoptedWrittenStatus: (version: string, text: string) => `已采纳 · ${writtenInto(version)}：${text}`,
+  /** Submitted, but no version generated from the list is recorded (decision 74). */
   adoptedSubmittedStatus: (text: string) => `已采纳 · 已随修订提交：${text}`,
   adoptedNotSubmittedStatus: '已采纳 · 没有提交',
   historyItemRef: (number: number) => `修订清单第 ${number} 项`,
@@ -236,7 +240,7 @@ export const gateCopy = {
   composeChat: (title: string, note?: string) => `来自答疑：采用已保存的答疑提案「${title}」（提交这份修订清单时随附全文）。${note ? `补充说明：${note}` : ''}`,
   composeOwn: (text: string) => `我添加的：${text}`,
   // Conversation link (§5.10)
-  chatWritten: (version: string) => `已写进${version}`,
+  chatWritten: writtenInto,
   chatSubmitted: (version: string, next: string) => `已随${version} 的修订请求提交，生成${next} 后会写进新版本。`,
   chatFinished: (version: string) => `${version} 已确认，答疑建议不能再加入修订清单。`,
   chatGenerating: (next: string) => `正在生成${next}，完成后可以加入新版本的修订清单。`,
