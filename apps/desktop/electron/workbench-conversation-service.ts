@@ -7,7 +7,7 @@ import { readOnlyToolDefinitions, validateNativeToolBatch } from '@ai-devflow/sh
 import { buildNativeCriticalContext, buildCriticalContext, criticalContextSent, criticalReceipt, receiptIsCurrent, proposalSemanticsPass, type CriticalContext } from './conversation-critical-context.js'
 import { type ConversationCompaction, appendToolEvents, buildRollingSummary, conversationMessageContext, interruptPendingTools } from './conversation-context.js'
 import { randomUUID } from 'node:crypto'
-import { AgentProviderRequestError, MODEL_CONTENT_BYTES, describeAgentProviderFailure, measurePromptSections, rankMemoryByRelevance, selectMemoryWithinBudget, CONVERSATION_MEMORY_RECALL_BUDGET, redactSensitiveText, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
+import { AgentProviderRequestError, MODEL_CONTENT_BYTES, describeAgentProviderFailure, measurePromptSections, rankMemoryByRelevance, selectMemoryWithinBudget, CONVERSATION_MEMORY_RECALL_BUDGET, isTrivialReply, redactSensitiveText, splitRecallIntents, type AgentProvider, type Artifact, type LocalProject, type RepositoryKnowledgeSnapshot, type WorkflowRun } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store.js'
 import { assertProjectMemoryCurrent, codingPromptDigest, executionScope, recallScopedMemory, type CodingMemoryStore, type RecalledMemory } from './coding-context.js'
 import { parseConversationCommand, type ConversationCheckpoint, type ConversationAction, type ConversationCitation, type ConversationCommand, type ConversationDraft, type ConversationMemoryReceipt, type ConversationMessage, type ConversationResponse, type WorkbenchConversation } from './workbench-conversation-contract.js'
@@ -648,10 +648,11 @@ export class WorkbenchConversationService {
       const query = [latestUserText, run?.title ?? ''].join('\n')
       const recalledAt = now()
       const key = codingPromptDigest(`${projectId}\n${session.id}`).slice(0, 32)
-      const recalled = await recallScopedMemory({
+      // A short acknowledgement ("好的", "谢谢") gets no background memory; preferences still apply.
+      const recalled = isTrivialReply(latestUserText) ? undefined : await recallScopedMemory({
         store: memory, projectId, userId, runtimeId: `agent-runtime-conversation-${key}`,
         requestId: `conversation-memory-${codingPromptDigest(`${key}\n${recalledAt}`).slice(0, 32)}`,
-        query, now: recalledAt, budget: CONVERSATION_MEMORY_RECALL_BUDGET,
+        query, intents: splitRecallIntents(latestUserText), now: recalledAt, budget: CONVERSATION_MEMORY_RECALL_BUDGET,
       })
       const preferenceRecall = await recallScopedMemory({
         store: memory, projectId, userId, runtimeId: `agent-runtime-conversation-${key}`,
@@ -662,10 +663,11 @@ export class WorkbenchConversationService {
         statement: redactSensitiveText(result.context.find((item) => item.id === identity.id)!.statement).value }))
       const preferences = selectMemoryWithinBudget(rankMemoryByRelevance(statements(preferenceRecall), COMMUNICATION_PREFERENCE_QUERY,
         (item) => item.statement).map((entry) => entry.item), (item) => item.statement, COMMUNICATION_PREFERENCE_SEND)
+      const source = recalled ?? preferenceRecall
       return {
-        memories: statements(recalled), preferences,
-        omittedCount: recalled.omittedMemoryCount,
-        source: { scope: recalled.scope, runtimeId: recalled.runtimeId, recalledAt: recalled.recalledAt },
+        memories: recalled ? statements(recalled) : [], preferences,
+        omittedCount: recalled?.omittedMemoryCount ?? 0,
+        source: { scope: source.scope, runtimeId: source.runtimeId, recalledAt: source.recalledAt },
       }
     } catch {
       signal.throwIfAborted()

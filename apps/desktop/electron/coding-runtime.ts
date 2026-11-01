@@ -57,6 +57,7 @@ import {
   type TestEvidenceStatus,
   type WorkflowNode,
   type WorkflowRun,
+  splitRecallIntents,
 } from '@ai-devflow/shared'
 import {
   captureWorktreeDiff,
@@ -3050,6 +3051,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const recalled = await recallCodingMemory({
         store: deps.store, run, codingRunId, userId: input.requestedBy,
         query: recallQuery,
+        // Only the user's own words are split; the node and approved titles stay in the whole query.
+        intents: splitRecallIntents([run.request, input.userInstruction].filter((text) => text.trim()).join('\n')),
         now: now(),
       })
       const model = executor.modelId ?? providerId

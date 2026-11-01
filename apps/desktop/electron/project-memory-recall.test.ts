@@ -28,7 +28,7 @@ async function fixture(options: { transport?: boolean } = {}) {
   if (owner.status !== 'resolved') throw new Error('No principal')
   const config = await store.configureProjectMemory({ projectId: 'project', ownerUserId: owner.userId, enabled: true,
     endpoint: 'http://127.0.0.1:8890', encryptedApiKey: null, providerId: 'deepseek' })
-  const client = { recallMemories: vi.fn(async () => memories) }
+  const client = { recallMemories: vi.fn(async (_bank: string, _input: { query: string; maxTokens: number }) => memories) }
   const degraded: string[] = []
   const recall = createProjectMemoryRecall({ store, transportAvailable: options.transport ?? true,
     client: async () => client as unknown as HindsightClient, onDegraded: (reason) => degraded.push(reason) })
@@ -111,4 +111,35 @@ it('treats memory recalled before an edit, a deletion or a clear as stale', asyn
     .resolves.toBeUndefined()
   await store.clearProjectMemory('project')
   await expect(check(['pm-o1'])).rejects.toThrow('cleared')
+})
+
+it('recalls each ask of a request beside the whole of it and takes their results in turn', async () => {
+  const { recall, client, owner } = await fixture()
+  const lists: Record<string, HindsightMemory[]> = {
+    '撤销窗口和删除一样，注释按约定的语言写': [{ id: 'undo1', type: 'observation', text: '撤销窗口 15 秒。' }, { id: 'undo2', type: 'world', text: '撤销提示用 toast。' }],
+    '撤销窗口和删除一样': [{ id: 'undo1', type: 'observation', text: '撤销窗口 15 秒。' }, { id: 'undo3', type: 'world', text: '撤销按钮在右侧。' }],
+    '注释按约定的语言写': [{ id: 'comments', type: 'observation', text: '代码注释统一用英文。' }],
+  }
+  client.recallMemories.mockImplementation(async (_bank: string, input: { query: string }) => lists[input.query] ?? [])
+  const result = await recall.recall({ projectId: 'project', userId: owner, query: '撤销窗口和删除一样，注释按约定的语言写',
+    intents: ['撤销窗口和删除一样', '注释按约定的语言写', '撤销窗口和删除一样'], budget: CONVERSATION_MEMORY_RECALL_BUDGET })
+  // The whole request once, each distinct ask once; the second ask's memory comes second, not last.
+  expect(client.recallMemories.mock.calls.map((call) => (call as unknown as [string, { query: string }])[1].query)).toEqual([
+    '撤销窗口和删除一样，注释按约定的语言写', '撤销窗口和删除一样', '注释按约定的语言写'])
+  expect(result!.items.map((item) => item.id)).toEqual(['pm-undo1', 'pm-comments', 'pm-undo2', 'pm-undo3'])
+})
+
+it('keeps the whole request\'s memory when an ask fails, and none when the whole request fails', async () => {
+  const { recall, client, owner, degraded } = await fixture()
+  client.recallMemories.mockImplementation(async (_bank: string, input: { query: string }) => {
+    if (input.query === '注释按约定的语言写') throw new HindsightError('timeout')
+    return memories
+  })
+  const partial = await recall.recall({ projectId: 'project', userId: owner, query: '撤销窗口，注释按约定的语言写',
+    intents: ['撤销窗口要多久', '注释按约定的语言写'], budget: CODING_MEMORY_RECALL_BUDGET })
+  expect(partial).toMatchObject({ degraded: false, items: [{ id: 'pm-o1' }, { id: 'pm-f1' }] })
+  client.recallMemories.mockImplementation(async () => { throw new HindsightError('timeout') })
+  expect(await recall.recall({ projectId: 'project', userId: owner, query: '撤销窗口', intents: ['撤销窗口要多久'], budget: CODING_MEMORY_RECALL_BUDGET }))
+    .toEqual({ degraded: true, items: [] })
+  expect(degraded.length).toBeGreaterThan(0)
 })

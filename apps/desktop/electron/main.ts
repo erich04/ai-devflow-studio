@@ -82,6 +82,7 @@ import {
   resolveDevFlowCodingExecutorSelection,
   resolveDevFlowRuntimeFlags,
   STAGE_AGENT_MEMORY_RECALL_BUDGET,
+  splitRecallIntents,
   validateTestCommandSafety,
 } from '@ai-devflow/shared'
 import {
@@ -3530,7 +3531,7 @@ function registerIpcHandlers() {
             store, projectId: run.projectId, userId: actor.userId,
             runtimeId: `agent-runtime-stage-${stageRuntimeKey}`,
             requestId: `stage-memory-${codingPromptDigest(`${stageRuntimeKey}\n${recalledAt}`).slice(0, 32)}`,
-            query: [run.request, node.title, node.subtitle].join('\n'),
+            query: [run.request, node.title, node.subtitle].join('\n'), intents: splitRecallIntents(run.request),
             now: recalledAt, budget: STAGE_AGENT_MEMORY_RECALL_BUDGET,
           }).catch(() => {
             console.warn('[stage-agent] Memory recall failed; generating without recalled Memory.')

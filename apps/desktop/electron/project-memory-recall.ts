@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
+import { RECALL_INTENTS_MAX, redactSensitiveText, type MemoryRecallBudget, type ProjectMemoryConfiguration } from '@ai-devflow/shared'
 import { HindsightError, type HindsightClient, type HindsightMemory } from './hindsight-client'
 import type { LocalStore } from './local-store'
 import { activeProjectMemoryConfiguration } from './project-memory-capture'
@@ -24,8 +24,12 @@ export type ProjectMemoryRecallItem = { id: string; statement: string; contentDi
 export type ProjectMemoryRecall = { items: ProjectMemoryRecallItem[]; degraded: boolean }
 /** Registered by Main for the coding brief, stage Agents, Gate review and the discussion bar. */
 export type ProjectMemoryRecallPort = {
-  /** Null when this project's memory is not on for this user; callers keep their previous behaviour. */
-  recall(input: { projectId: string; userId: string; query: string; budget: MemoryRecallBudget; signal?: AbortSignal }): Promise<ProjectMemoryRecall | null>
+  /**
+   * Null when this project's memory is not on for this user; callers keep their previous behaviour.
+   * `intents` are the separate asks of the request (`splitRecallIntents`): each is recalled beside
+   * the whole query and the results are merged in turn, so every ask keeps a place in the budget.
+   */
+  recall(input: { projectId: string; userId: string; query: string; intents?: readonly string[]; budget: MemoryRecallBudget; signal?: AbortSignal }): Promise<ProjectMemoryRecall | null>
   /**
    * Throws when memory recalled at `recalledAt` should no longer be used: the project's memory
    * was turned off, changed owner or was cleared, or one of these memories was edited or deleted.
@@ -44,6 +48,18 @@ export function projectMemoryStatement(memory: HindsightMemory): string {
   const date = memory.occurredAt ? memory.occurredAt.slice(0, 10) : ''
   const kind = memory.type === 'observation' ? 'observation' : `fact${date ? ` ${date}` : ''}`
   return `[${kind}] ${redactSensitiveText(memory.text).value.replace(/\s+/gu, ' ').trim()}`
+}
+/** Hindsight's lists merged rank by rank: each list's first, then each list's second, without repeats. */
+export function mergeRecalledMemories(lists: readonly (readonly HindsightMemory[])[]): HindsightMemory[] {
+  const seen = new Set<string>()
+  const merged: HindsightMemory[] = []
+  for (let rank = 0; lists.some((list) => rank < list.length); rank++) {
+    for (const list of lists) {
+      const memory = list[rank]
+      if (memory && !seen.has(memory.id)) { seen.add(memory.id); merged.push(memory) }
+    }
+  }
+  return merged
 }
 export function projectMemoryIdentity(memory: Pick<HindsightMemory, 'id'>, statement: string): ProjectMemoryRecallItem {
   return { id: `${PROJECT_MEMORY_IDENTITY_PREFIX}${memory.id}`, statement,
@@ -78,8 +94,14 @@ export function createProjectMemoryRecall(deps: {
     async recall(input: Parameters<ProjectMemoryRecallPort['recall']>[0]): Promise<ProjectMemoryRecall | null> {
       const configuration = await active(input.projectId, input.userId)
       if (!configuration || !input.query.trim()) return configuration ? { items: [], degraded: false } : null
-      const { memories, degraded } = await query(configuration, input.query, recallTokens(input.budget), input.signal)
-      return { degraded, items: memories.map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
+      const tokens = recallTokens(input.budget)
+      const intents = [...new Set((input.intents ?? []).map((intent) => intent.trim()))]
+        .filter((intent) => intent && intent !== input.query.trim()).slice(0, RECALL_INTENTS_MAX)
+      const [whole, ...asks] = await Promise.all([input.query, ...intents].map((text) => query(configuration, text, tokens, input.signal)))
+      // Hindsight unavailable for the request itself: no memory, as before. A failed clause only loses its own list.
+      if (whole!.degraded) return { degraded: true, items: [] }
+      const memories = mergeRecalledMemories([whole!.memories, ...asks.map((ask) => ask.memories)])
+      return { degraded: false, items: memories.map((memory) => projectMemoryIdentity(memory, projectMemoryStatement(memory))) }
     },
     async assertCurrent(input: Parameters<ProjectMemoryRecallPort['assertCurrent']>[0]): Promise<void> {
       const configuration = await active(input.projectId, input.userId)
