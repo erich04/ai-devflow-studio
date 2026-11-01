@@ -48,7 +48,7 @@ it('recalls the project bank with a bounded query and labels each memory', async
   expect(new TextEncoder().encode(sent).byteLength).toBeLessThanOrEqual(1_500)
   expect(result).toEqual({ degraded: false, items: [
     { id: 'pm-o1', statement: '[observation] 删除任务前 要二次确认。', contentDigest: expect.stringMatching(/^sha256:/u) },
-    { id: 'pm-f1', statement: expect.stringMatching(/^\[fact 2026-10-20\] 撤销窗口为 5 秒/u), contentDigest: expect.stringMatching(/^sha256:/u) },
+    { id: 'pm-f1', statement: expect.stringMatching(/^\[fact 2026-10-20，(\d+ 天前|今天)\] 撤销窗口为 5 秒/u), contentDigest: expect.stringMatching(/^sha256:/u) },
   ] })
   expect(result!.items[1]!.statement).not.toContain('sk-abcdefghijklmnopqrstuvwxyz0123456789')
 })
@@ -83,9 +83,11 @@ it('degrades to no memory when Hindsight fails, and searches with a limit', asyn
   await expect(recall.search({ projectId: 'project', query: '撤销', limit: 5, signal: controller.signal })).rejects.toThrow()
 })
 
-it('formats a statement on one line with its kind and date', () => {
-  expect(projectMemoryStatement({ id: 'x', type: 'experience', text: ' 用 pnpm\n安装依赖 ', occurredAt: '2026-10-21T00:00:00Z' }))
-    .toBe('[fact 2026-10-21] 用 pnpm 安装依赖')
+it('formats a statement on one line with its kind, its day and how long ago that was', () => {
+  const fact = { id: 'x', type: 'experience' as const, text: ' 用 pnpm\n安装依赖 ', occurredAt: '2026-10-21T00:00:00Z' }
+  expect(projectMemoryStatement(fact, new Date('2026-10-31T23:30:00Z'))).toBe('[fact 2026-10-21，10 天前] 用 pnpm 安装依赖')
+  expect(projectMemoryStatement(fact, new Date('2026-10-21T08:00:00Z'))).toBe('[fact 2026-10-21，今天] 用 pnpm 安装依赖')
+  expect(projectMemoryStatement({ id: 'o', type: 'observation', text: '撤销窗口 15 秒。' }, new Date('2026-10-31T00:00:00Z'))).toBe('[observation] 撤销窗口 15 秒。')
 })
 
 it('keeps Hindsight order rather than re-ranking by shared words', async () => {

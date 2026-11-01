@@ -43,10 +43,19 @@ function clipQuery(query: string): string {
   while (encoder.encode(text).byteLength > QUERY_MAX_BYTES) text = text.slice(0, Math.floor(text.length * 0.9))
   return text
 }
-/** One line with its kind and date, so a model can weigh consolidated beliefs against single facts. */
-export function projectMemoryStatement(memory: HindsightMemory): string {
+const DAY_MS = 86_400_000
+/** How long ago a recorded day was, in whole days by UTC calendar: "今天" or "N 天前". */
+export function memoryAge(date: string, now: Date = new Date()): string {
+  const days = Math.floor((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - Date.parse(`${date}T00:00:00Z`)) / DAY_MS)
+  return !Number.isFinite(days) || days <= 0 ? '今天' : `${days} 天前`
+}
+/**
+ * One line with its kind, the day it was recorded and how long ago that was, so a model can weigh
+ * consolidated beliefs against single facts and treat an old fact as a record, not current state.
+ */
+export function projectMemoryStatement(memory: HindsightMemory, now: Date = new Date()): string {
   const date = memory.occurredAt ? memory.occurredAt.slice(0, 10) : ''
-  const kind = memory.type === 'observation' ? 'observation' : `fact${date ? ` ${date}` : ''}`
+  const kind = memory.type === 'observation' ? 'observation' : `fact${date ? ` ${date}，${memoryAge(date, now)}` : ''}`
   return `[${kind}] ${redactSensitiveText(memory.text).value.replace(/\s+/gu, ' ').trim()}`
 }
 /** Hindsight's lists merged rank by rank: each list's first, then each list's second, without repeats. */
