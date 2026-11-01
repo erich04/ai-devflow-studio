@@ -241,7 +241,7 @@ try {
     await delay(15_000)
     await service.process(1)
   }
-  const expected: Record<string, RegExp> = { conventions: /test:regression/u, decisions: /ConfirmDialog|10\s*秒|10 seconds/iu,
+  const expected: Record<string, RegExp> = { essentials: /英文|English/iu, conventions: /test:regression/u, decisions: /ConfirmDialog|10\s*秒|10 seconds/iu,
     pitfalls: /refreshTasks/u, preferences: /英文|English/iu }
   report.pages = PROJECT_KNOWLEDGE_PAGES.map((page) => {
     const value = pages.get(knowledgePageModelId(page.id))

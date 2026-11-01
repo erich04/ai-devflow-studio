@@ -313,7 +313,7 @@ import { registerProjectMemoryRecall } from './coding-context'
 import { resolveProjectMemoryScope } from './project-memory-capture'
 import { clearKnowledgePages, knowledgePageModelId, ProjectMemoryService } from './project-memory-service'
 import { captureCommitProjectMemory } from './project-memory-commits'
-import { createProjectMemoryRecall, type ProjectMemoryRecallService } from './project-memory-recall'
+import { createProjectMemoryRecall, PROJECT_MEMORY_ESSENTIALS_ID, type ProjectMemoryRecallService } from './project-memory-recall'
 import { hindsightPairingMatches } from './hindsight-store'
 import {
   activeProjectMemoryConfiguration, backfillConversationProjectMemory, conversationMemoryDocumentId, migrateLegacyProjectMemory, projectMemoryPairingBinding,
@@ -701,10 +701,15 @@ async function projectKnowledgePages(projectId: string): Promise<ProjectKnowledg
       ...(model?.refreshedAt ? { refreshedAt: model.refreshedAt } : {}), ...(model?.failedAt ? { failedAt: model.failedAt } : {}) }
   }), ...(memoryRelay ? {} : { unavailableReason: '记忆模型中继未运行，知识页暂时不会更新。' }) }
 }
-/** Editing or forgetting memory empties the knowledge pages, so they never show what was removed. */
-async function emptyKnowledgePages(client: HindsightClient, bankId: string): Promise<void> {
+/**
+ * Editing or forgetting memory empties the knowledge pages, so they never show what was removed.
+ * Marked after the clear: a coding run that read the essentials page before it was emptied sees it
+ * as changed and stops at its next check.
+ */
+async function emptyKnowledgePages(store: LocalStore, projectId: string, client: HindsightClient, bankId: string): Promise<void> {
   try { await clearKnowledgePages(client, bankId) }
   catch { console.warn('[project-memory] Knowledge pages were not emptied; they may show removed memory until refreshed.') }
+  await store.markProjectMemoryChanged(projectId, PROJECT_MEMORY_ESSENTIALS_ID)
 }
 async function listProjectMemories(input: ReturnType<typeof parseListProjectMemoriesInput>): Promise<ProjectMemoryPage> {
   const { store, configuration, client } = await ownedProjectMemory(input.projectId)
@@ -2889,7 +2894,7 @@ function registerIpcHandlers() {
     // Hindsight re-embeds the memory and consolidates again; that consolidation is a model call.
     await client.updateMemory(configuration.bankId, input.memoryId, redactProjectMemoryText(input.text).value)
     await store.markProjectMemoryChanged(input.projectId, input.memoryId)
-    await emptyKnowledgePages(client, configuration.bankId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
     return projectMemoryStatus(input.projectId)
   })
   ipcMain.handle(ipcChannels.forgetProjectMemory, async (_, payload: unknown) => {
@@ -2897,7 +2902,7 @@ function registerIpcHandlers() {
     const { store, configuration, client } = await ownedProjectMemory(input.projectId)
     await client.invalidateMemory(configuration.bankId, input.memoryId, 'deleted by the user in DevFlow')
     await store.markProjectMemoryChanged(input.projectId, input.memoryId)
-    await emptyKnowledgePages(client, configuration.bankId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
     return projectMemoryStatus(input.projectId)
   })
   ipcMain.handle(ipcChannels.forgetProjectMemorySource, async (_, payload: unknown) => {
@@ -2905,7 +2910,7 @@ function registerIpcHandlers() {
     const { store, configuration, client } = await ownedProjectMemory(input.projectId)
     await store.forgetProjectMemoryDocument(input.projectId, input.documentId)
     // Emptied again once Hindsight has deleted the document (project-memory-service).
-    await emptyKnowledgePages(client, configuration.bankId)
+    await emptyKnowledgePages(store, input.projectId, client, configuration.bankId)
     wakeHindsight()
     return projectMemoryStatus(input.projectId)
   })

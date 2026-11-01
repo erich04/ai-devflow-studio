@@ -285,6 +285,7 @@ export const RECALL_HOLDOUT_QUERIES: Array<{ query: string; expect: Array<string
 
 /** Page content a correct knowledge page should contain, per page. */
 export const PAGE_EXPECTATIONS: Record<string, RegExp[]> = {
+  essentials: [/英文|English/iu, /CSS Modules/iu],
   conventions: [/test:regression/u],
   decisions: [/15\s*秒|15 ?s\b|15 seconds/iu, /IndexedDB/iu],
   pitfalls: [/Safari|IndexedDB/iu, /refreshTasks|fake ?timers|useFakeTimers/iu],

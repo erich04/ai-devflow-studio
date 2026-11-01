@@ -5,8 +5,8 @@ import {
 } from '@ai-devflow/shared'
 import { runs } from '@ai-devflow/shared/fixtures'
 import {
-  assertCodingContextCurrent, buildCodingMemoryQuery, codingPromptDigest, recallCodingMemory,
-  registerProjectMemoryRecall, type CodingMemoryStore,
+  assertCodingContextCurrent, buildCodingMemoryQuery, buildWithCodingMemory, codingPromptDigest, recallCodingMemory,
+  registerProjectMemoryRecall, type CodingMemoryStore, type RecalledMemory,
 } from './coding-context'
 import { projectMemoryIdentity } from './project-memory-recall'
 
@@ -80,6 +80,31 @@ describe('Coding Context authority', () => {
 })
 
 describe('Project memory recall (ADR 0030)', () => {
+  it('builds the coding brief without the essentials page when the brief cannot keep it', () => {
+    const essentials = { id: 'pm-devflow-essentials', revision: 1, statement: `Project conventions that apply to every task:\n${'- 规则\n'.repeat(200)}` }
+    const fact = { id: 'pm-h1', revision: 1, statement: '[observation] 回归测试命令是 pnpm test:regression' }
+    const recalled: RecalledMemory = {
+      scope: { kind: 'local', organizationId: null, projectId: null, userId: run.creatorId, sessionId: 'coding-session-1', localProjectId: run.projectId },
+      runtimeId: 'agent-runtime-coding-1', recalledAt: now, context: [essentials, fact],
+      memories: [essentials, fact].map(({ id }) => ({ id, revision: 1, headVersion: 1, contentDigest: `sha256:${id}` })), omittedMemoryCount: 0,
+    }
+    // Recalled memory is kept whole, as in the coding brief.
+    const build = (maxBytes: number) => (memoryContext: RecalledMemory['context']) => compactExecutionContext({ pinned: 'Current request', maxBytes,
+      sources: memoryContext.map((memory) => ({ id: `memory:${memory.id}`, title: 'Recalled Memory', content: memory.statement, summary: '', priority: 100, required: true })) })
+    const roomy = buildWithCodingMemory(recalled, build(24_000))
+    expect(roomy.memory).toBe(recalled)
+    expect(roomy.brief.prompt).toContain('- 规则')
+    const tight = buildWithCodingMemory(recalled, build(400))
+    expect(tight.brief.prompt).toContain('pnpm test:regression')
+    expect(tight.brief.prompt).not.toContain('- 规则')
+    // The receipt lists only what the brief sent.
+    expect(tight.memory.context.map((item) => item.id)).toEqual(['pm-h1'])
+    expect(tight.memory.memories.map((item) => item.id)).toEqual(['pm-h1'])
+    expect(tight.memory.omittedMemoryCount).toBe(1)
+    // Without the page there is nothing to give up: the brief's own error stands.
+    expect(() => buildWithCodingMemory({ ...recalled, context: [fact], memories: recalled.memories.slice(1) }, build(10))).toThrow('narrow the task')
+  })
+
   it('recalls only the project\'s Hindsight memory, never local Memory, and re-checks it on resume', async () => {
     const retrieve = vi.fn(async () => [])
     const store: CodingMemoryStore = { getDesktopPairingCredential: async () => pairing, retrieveAgentMemoryRevisions: retrieve,
@@ -89,11 +114,18 @@ describe('Project memory recall (ADR 0030)', () => {
       projectMemoryIdentity({ id: 'h1' }, '[observation] 回归测试命令是 pnpm test:regression'),
       projectMemoryIdentity({ id: 'h2' }, `[fact 2026-10-20] ${'很长的记录'.repeat(400)}`),
     ] } : null)
-    registerProjectMemoryRecall(store, { recall, assertCurrent: async () => { if (!enabled) throw new Error('off') } })
+    const essentials = projectMemoryIdentity({ id: 'devflow-essentials' }, 'Project conventions that apply to every task (background only):\n- 代码注释统一用英文')
+    const conventions = vi.fn(async () => enabled ? essentials : null)
+    registerProjectMemoryRecall(store, { recall, conventions, assertCurrent: async () => { if (!enabled) throw new Error('off') } })
     const recalled = await recallCodingMemory({ store, run, codingRunId: 'pm-1', userId: run.creatorId, query: 'regression tests', now })
     expect(recall).toHaveBeenCalledWith(expect.objectContaining({ projectId: run.projectId, userId: run.creatorId, query: 'regression tests' }))
-    expect(recalled.context).toEqual([{ id: 'pm-h1', revision: 1, statement: '[observation] 回归测试命令是 pnpm test:regression' }])
-    expect(recalled.memories).toEqual([{ id: 'pm-h1', revision: 1, headVersion: 1, contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) }])
+    // The essentials page comes first, outside the recall budget; recalled memory follows in Hindsight's order.
+    expect(recalled.context).toEqual([
+      { id: 'pm-devflow-essentials', revision: 1, statement: essentials.statement },
+      { id: 'pm-h1', revision: 1, statement: '[observation] 回归测试命令是 pnpm test:regression' }])
+    expect(recalled.memories).toEqual([
+      { id: 'pm-devflow-essentials', revision: 1, headVersion: 1, contentDigest: essentials.contentDigest },
+      { id: 'pm-h1', revision: 1, headVersion: 1, contentDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u) }])
     expect(recalled).toMatchObject({ omittedMemoryCount: 1, projectMemory: { degraded: false } })
     expect(retrieve).not.toHaveBeenCalled()
 
