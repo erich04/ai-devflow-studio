@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveProviderThinking, parseProviderThinking } from './provider-thinking'
+import { resolveProviderThinking, parseProviderThinking, supportsProviderThinking } from './provider-thinking'
 import { buildAgentReviewContext, createOpenAiCompatibleAgentProvider } from './agent-review'
 import { runs, artifacts } from './fixtures'
 
@@ -45,6 +45,14 @@ describe('Provider thinking configuration', () => {
     for (const body of bodies) {
       expect(body.thinking).toEqual({ type: thinking.mode })
       expect(body.reasoning_effort).toBe(thinking.mode === 'enabled' ? 'high' : undefined)
+    }
+  })
+  it('treats deepseek-flash as the main model name and still accepts the deepseek-v4-flash alias', () => {
+    for (const model of ['deepseek-flash', 'deepseek-v4-flash']) {
+      const input = { baseUrl: 'https://api.deepseek.com', model }
+      expect(supportsProviderThinking(input)).toBe(true)
+      expect(resolveProviderThinking(input)).toEqual({ mode: 'enabled', effort: 'low', source: 'application_default' })
+      expect(resolveProviderThinking({ ...input, thinking: { mode: 'enabled', effort: 'high' } })).toEqual({ mode: 'enabled', effort: 'high', source: 'provider_configuration' })
     }
   })
   it('gives old official DeepSeek configurations the agreed enabled/low default', () => {
