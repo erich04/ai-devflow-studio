@@ -1,5 +1,5 @@
 import {afterEach,describe,expect,it,vi} from 'vitest'
-import {projectedModelCallCost,verifiedModelCallBound,type ModelCallQuote,modelCallBudgetRollup,parseModelCallSettlement} from '@ai-devflow/shared'
+import {governAgentProvider,projectedModelCallCost,requestInputTokenBound,resolveRequestPolicy,verifiedModelCallBound,type AgentProvider,type ModelCallAdmission,type ModelCallGovernance,type ModelCallQuote,type ModelTaskBudget,modelCallBudgetRollup,parseModelCallSettlement} from '@ai-devflow/shared'
 import {createSeedTeamRepository} from './team-repository'
 const context={organizationId:'org-demo',userId:'u-ling'}
 const now='2026-09-23T18:00:00.000Z'
@@ -38,5 +38,42 @@ describe('atomic per-call model budget',()=>{
  it('treats cancellation without usage as unknown and enforces a fresh cloud policy',async()=>{const repo=await setup();await repo.reserveModelCall(quote('one'),context);await repo.settleModelCall({id:'one',projectId:'p-payments',state:'cancelled'},context);expect(await repo.reserveModelCall(quote('two'),context)).toMatchObject({accepted:false,decision:{status:'unavailable'}});await repo.saveRuntimeBudgetPolicy({projectId:'p-payments',enabled:false,monthlyLimitUsd:50,warningThresholdUsd:40,currency:'USD',updatedAt:now},context);expect(await repo.reserveModelCall(quote('three'),context)).toMatchObject({accepted:true,decision:{status:'disabled'}})})
  it('counts historical chat metadata once without requiring a workflow Run',async()=>{const repo=await setup();const input={quote:quote('legacy-chat-one'),settlement:{id:'legacy-chat-one',projectId:'p-payments',state:'completed' as const,usage:{inputTokens:200,outputTokens:50,cacheReadTokens:0,cacheMissTokens:200}}};await repo.importHistoricalModelCall(input,context);await repo.importHistoricalModelCall(input,context);expect((await repo.getTeamOverview(context)).budgetProjectCost?.find(r=>r.key==='p-payments')?.totalTokens).toBe(250);await expect(repo.importHistoricalModelCall({...input,settlement:{...input.settlement,usage:{inputTokens:300,outputTokens:0}}},context)).resolves.toMatchObject({status:'conflict_recorded'});await expect(repo.importHistoricalModelCall(input,{...context,userId:'other'})).rejects.toThrow('scope')})
  it('consumes an exact scoped approval across multiple rounds instead of reusing its full allowance',async()=>{const cost=projectedModelCallCost(quote('x'))!;const repo=await setup(0);await repo.saveRuntimeBudgetApproval({id:'approval',projectId:'p-payments',providerId:'deepseek',requestedBy:context.userId,approvedBy:'u-erich',role:'owner',maxAdditionalCostUsd:cost*1.5,reason:'bounded fixture',status:'approved',createdAt:now,expiresAt:'2026-09-24T00:00:00Z'},context);expect(await repo.reserveModelCall({...quote('one'),approvalId:'approval'},context)).toMatchObject({accepted:true});expect(await repo.reserveModelCall({...quote('two'),approvalId:'approval'},context)).toMatchObject({accepted:false});await expect(repo.settleModelCall({id:'one',projectId:'p-payments',state:'not_sent'},{...context,userId:'other'})).rejects.toThrow('scope')})
+ it('sizes Native v3 reservations from the measured request: r8’s refused first calls fit, a large request still reserves the full bound, one above the remainder is never sent',async()=>{
+  const repo=await setup(), admissions:ModelCallAdmission[]=[]
+  const governance:ModelCallGovernance={pending:projectId=>repo.listPendingModelCallSettlements(projectId,context),persist:(settlement,metadata)=>repo.persistModelCallSettlement(settlement,context,metadata?.final),
+   reserve:async q=>{const admission=await repo.reserveModelCall(q,context);admissions.push(admission);return admission},settle:async settlement=>{await repo.settleModelCall(settlement,context)}}
+  let wire=''
+  const send=vi.fn(async()=>({kind:'text' as const,text:'ok',assistantMessage:{role:'assistant' as const,content:'ok'},usage:{inputTokens:5200,outputTokens:300,cacheReadTokens:5000,cacheMissTokens:200,cacheStatus:'complete' as const,usageCompleteness:'final' as const}}))
+  const raw:AgentProvider={id:'deepseek',name:'DeepSeek fixture',model:'deepseek-flash',billingProvider:'deepseek',reviewKnowledge:vi.fn(),serializeNativeRequest:()=>wire,
+   resolveRequestPolicy:input=>resolveRequestPolicy({model:'deepseek-flash',baseUrl:'https://api.deepseek.com',...input}),completeNativeConversation:send}
+  const provider=governAgentProvider(raw,'p-payments',governance)
+  const budget=(id:string,remaining:number):ModelTaskBudget=>({rootId:id,taskId:id,maxTokens:10_000_000,rootMaxTokens:10_000_000,maxCostUsd:remaining,rootMaxCostUsd:remaining})
+  const step=(id:string,requestBytes:number,remaining:number)=>{wire='x'.repeat(requestBytes);return provider.completeNativeConversation!({systemPrompt:'work',messages:[{role:'user',content:'fix'}],tools:[],budgetAttemptId:`model-call-${id}`,taskBudget:budget(id,remaining)})}
+  // r8 tasks 10 and 11: the exact first-request sizes and the remainders that were below one full-context reservation.
+  for(const [id,requestBytes,remaining] of [['r8-task-10',19399,0.38168931],['r8-task-11',19689,0.352173198]] as const){
+   expect((await repo.reserveModelCall({...quote(`full-${id}`),boundBasis:'deepseek-context-v1',inputTokens:1048576,maxOutputTokens:65536,task:budget(`full-${id}`,remaining)},context)).accepted).toBe(false)
+   await step(id,requestBytes,remaining)
+  }
+  await step('large',1_100_000,0.4)
+  expect(send).toHaveBeenCalledTimes(3)
+  expect(admissions.map(row=>row.decision.projectedCostUsd)).toEqual([expect.closeTo(0.0869205,9),expect.closeTo(0.0870075,9),expect.closeTo(0.393216,9)])
+  // 600,000 bytes reserve USD 0.2611 against USD 0.2 left: refused before the provider is called.
+  await expect(step('over',600_000,0.2)).rejects.toThrow('尚未调用模型')
+  expect(send).toHaveBeenCalledTimes(3)
+  expect(requestInputTokenBound(wire)).toBe(608_192)
+ })
+ it('leaves cache hits out of the shared root token cap',async()=>{
+  const repo=await setup(), task={rootId:'cached-root',taskId:'cached-root',maxTokens:120_000,rootMaxTokens:120_000,maxCostUsd:10,rootMaxCostUsd:10}
+  const step=(id:string):ModelCallQuote=>({...quote(id),boundBasis:'deepseek-request-bytes-v1',inputTokens:requestInputTokenBound('x'.repeat(19399)),maxOutputTokens:65536,task})
+  // Each step reserves 93,127 tokens and uses 5,200 input (5,000 hits) and 300 output. Counting hits would refuse the sixth step.
+  for(let index=1;index<=8;index++){
+   expect((await repo.reserveModelCall(step(`cached-${index}`),context)).accepted).toBe(true)
+   await repo.settleModelCall({id:`cached-${index}`,projectId:'p-payments',state:'completed',usage:{inputTokens:5200,cacheReadTokens:5000,cacheMissTokens:200,outputTokens:300,cacheStatus:'complete',usageCompleteness:'final'}},context)
+  }
+  // 4,000 counted tokens plus one 93,127-token reservation fit; a second concurrent one does not.
+  const results=await Promise.all([repo.reserveModelCall(step('parallel-a'),context),repo.reserveModelCall(step('parallel-b'),context)])
+  expect(results.filter(row=>row.accepted)).toHaveLength(1)
+  expect(results.find(row=>!row.accepted)!.decision.reason).toContain('总任务预算不足')
+ })
  it('does not confuse another project’s evidence markers with the same consumption',()=>{const call={...quote('one'),userId:'u',state:'completed' as const,costUsd:1,projectedCostUsd:1};const row={id:'evidence',runId:'r',nodeId:'n',userId:'u',projectId:'other',provider:'openai' as const,model:'m',inputTokens:1,outputTokens:1,cacheReadTokens:0,costUsd:2,timestamp:now,budgetAttemptIds:['one']};expect(modelCallBudgetRollup([row],[call],now).find(r=>r.key==='other')?.costUsd).toBe(2);expect(()=>parseModelCallSettlement({id:'bad',projectId:'p',state:'completed',usage:{inputTokens:-1}})).toThrow()})
 })

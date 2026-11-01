@@ -62,7 +62,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     {!snapshot.controlUnavailableReason && snapshot.status === 'waiting_permission' && !snapshot.permission ? <div className="coding-permission-card">
       <h4>允许这次任务在候选目录中工作</h4>
       <p>基线：{snapshot.execution?.baseline}。授权搜索、读取、编辑候选文件，以及运行下面保存的测试；可委派最多 3 个并行子任务，子任务费用计入总额度，编码子任务使用独立候选目录。最终改动另行批准。</p>
-      <p>本任务总上限：{snapshot.execution?.maxTokens ?? '未知'} tokens / ${snapshot.execution?.maxCostUsd ?? '未知'}；子任务和上下文压缩共用此额度。</p>
+      <p>本任务总上限：{snapshot.execution?.maxTokens ?? '未知'} tokens / ${snapshot.execution?.maxCostUsd ?? '未知'}；子任务和上下文压缩共用此额度，命中缓存的输入不计入 token 上限。</p>
       <p>输入快照包含当前目录中的源文件与新增文件，依赖和缓存目录排除。摘要：{snapshot.execution?.inputDigest}</p>
       {snapshot.execution?.dirtyPaths?.length ? <details open><summary>这次一并纳入的现有改动（授权即确认此输入）</summary><pre>{snapshot.execution.dirtyPaths.join('\n')}</pre></details> : null}
       <label><input type="checkbox" checked={manualMode} onChange={event => setManualMode(event.target.checked)} />本任务没有适用的自动测试，事先选择人工验收</label>
