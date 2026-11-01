@@ -75,7 +75,7 @@ describe('GateReviewRunPanel (plan W2, #251)', () => {
   it('names the older version a saved review covered and never presents it as current', () => {
     render(<GateReviewRunPanel {...base} latestReview={review} reviewScope={{ appliesToCurrent: false, reviewedLabel: '需求 v1' }} onRequestRun={vi.fn()} />)
     expect(screen.getByTestId('review-outdated')).toHaveTextContent('上次审查针对需求 v1，当前版本已更新')
-    expect(screen.getByTestId('review-outdated')).toHaveTextContent('不作为需求 v2的审查结果')
+    expect(screen.getByTestId('review-outdated')).toHaveTextContent('不作为需求 v2 的审查结果')
     expect(screen.getByTestId('task-review-run')).not.toHaveTextContent('上次审查：')
   })
 
