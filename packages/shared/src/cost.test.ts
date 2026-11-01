@@ -657,6 +657,13 @@ describe('DeepSeek runtime settlement', () => {
     ])
   })
 
+  it('prices the deepseek-flash name and its deepseek-v4-flash alias identically at the current Flash rates', () => {
+    for (const [timestamp, rates] of [['2026-10-28T07:00:00.000Z', [0.006, 0.3, 1.2]], ['2026-10-28T12:00:00.000Z', [0.003, 0.15, 0.6]]] as const) {
+      const [official, alias] = ['deepseek-flash', 'deepseek-v4-flash'].map(model => resolveDeepSeekPricingSnapshot({ providerId: scope.providerId, model, timestamp })!)
+      expect([official!.cacheHitInputUsdPerMillion, official!.cacheMissInputUsdPerMillion, official!.outputUsdPerMillion]).toEqual(rates)
+      expect({ ...alias, model: 'deepseek-flash' }).toEqual(official)
+    }
+  })
   it('does not apply the catalog before its official 2026-08-16 16:00 UTC effective boundary', () => {
     expect(
       resolveDeepSeekPricingSnapshot({
