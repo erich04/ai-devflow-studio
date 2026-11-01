@@ -89,7 +89,10 @@ export type ProjectMemoryStatus = {
    */
   relay: { port: number; running: boolean; tokenFile: string | null; hindsightBaseUrl: string }
   counts: Partial<Record<ProjectMemoryDocumentStatus, number>>
+  /** One entry per source: a conversation is listed once, however many segments it has. */
   recent: Array<Pick<ProjectMemoryDocument, 'id' | 'sourceKind' | 'title' | 'status' | 'updatedAt' | 'lastError'>>
+  /** Segments of earlier long conversations still waiting to be sent again, a few per run. */
+  conversationBackfill?: { remainingSegments: number }
   unavailableReason?: string
 }
 /** Hindsight's memory types: consolidated observations, facts about the project, and what agents did. */

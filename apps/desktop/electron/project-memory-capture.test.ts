@@ -5,7 +5,7 @@ import {
   type Artifact, type CodingAgentEvent, type CodingAgentRun, type DesktopPairingCredential,
 } from '@ai-devflow/shared'
 import {
-  buildArtifactMemoryDocument, buildCodingRunMemoryDocument, buildConversationMemoryDocument,
+  buildArtifactMemoryDocument, buildCodingRunMemoryDocument, buildConversationMemoryDocuments, CONVERSATION_SEGMENT_BYTES,
   projectMemoryPairingBinding, projectMemoryPairingMatches,
 } from './project-memory-capture'
 
@@ -13,19 +13,43 @@ const now = '2026-10-28T08:00:00.000Z'
 const bytes = (text: string) => Buffer.byteLength(text, 'utf8')
 
 describe('project memory documents', () => {
-  it('keeps the newest conversation messages within the document limit', () => {
-    const messages = Array.from({ length: 80 }, (_, index) => ({ id: `m${index}`, role: index % 2 ? 'assistant' as const : 'user' as const,
-      text: `第 ${index} 条：${'讨论内容'.repeat(400)}`, createdAt: new Date(Date.parse(now) + index * 1_000).toISOString() }))
-    const document = buildConversationMemoryDocument({ id: 'chat', localProjectId: 'p', title: '', status: 'idle', messages, updatedAt: now }, now)!
-    const kept = JSON.parse(document.payload) as Array<{ content: string; timestamp: string }>
-    expect(bytes(document.payload)).toBeLessThanOrEqual(PROJECT_MEMORY_MAX_DOCUMENT_BYTES)
-    expect(kept.at(-1)!.content).toContain('第 79 条')
-    expect(kept[0]!.content).not.toContain('第 0 条')
-    expect(document).toMatchObject({ title: '项目讨论', occurredAt: kept[0]!.timestamp })
-    expect(() => validateProjectMemoryDocumentInput(document)).not.toThrow()
+  const message = (index: number) => ({ id: `m${index}`, role: index % 2 ? 'assistant' as const : 'user' as const,
+    text: `第 ${index} 条：${'讨论内容'.repeat(400)}`, createdAt: new Date(Date.parse(now) + index * 1_000).toISOString() })
+  const conversation = (count: number, title = '') => ({ id: 'chat', localProjectId: 'p', title, status: 'idle' as const, updatedAt: now,
+    messages: Array.from({ length: count }, (_, index) => message(index)) })
+
+  it('keeps a long conversation whole, in segments that never change once full', () => {
+    const documents = buildConversationMemoryDocuments(conversation(80), now)
+    expect(documents.length).toBeGreaterThan(2)
+    expect(documents.map((document) => document.documentId)).toEqual(documents.map((_, index) => index ? `conversation:chat:${index + 1}` : 'conversation:chat'))
+    const contents = documents.flatMap((document) => (JSON.parse(document.payload) as Array<{ content: string }>).map((item) => item.content))
+    expect(contents).toHaveLength(80)
+    expect(contents[0]).toContain('第 0 条')
+    expect(contents.at(-1)).toContain('第 79 条')
+    for (const document of documents) {
+      expect(bytes(document.payload)).toBeLessThanOrEqual(CONVERSATION_SEGMENT_BYTES)
+      expect(bytes(document.payload)).toBeLessThanOrEqual(PROJECT_MEMORY_MAX_DOCUMENT_BYTES)
+      expect(() => validateProjectMemoryDocumentInput(document)).not.toThrow()
+      expect(document).toMatchObject({ sourceKind: 'conversation', sourceId: 'chat', occurredAt: (JSON.parse(document.payload) as Array<{ timestamp: string }>)[0]!.timestamp })
+    }
+    expect(documents[0]).toMatchObject({ title: '项目讨论', notBefore: now })
+    expect(documents[0]!.context).not.toContain('continues')
+    expect(documents[1]).toMatchObject({ title: '项目讨论（第 2 段）', context: expect.stringContaining('continues earlier parts') })
+    // Only the open segment waits for the conversation to go quiet.
+    expect(Date.parse(documents.at(-1)!.notBefore!)).toBeGreaterThan(Date.parse(now))
+    // Later messages only change the last segment; the full ones stay exactly as they were sent.
+    const grown = buildConversationMemoryDocuments(conversation(84), now)
+    expect(grown.slice(0, documents.length - 1)).toEqual(documents.slice(0, -1))
+  })
+
+  it('keeps a short conversation as the single document it has always been', () => {
+    const [document, ...rest] = buildConversationMemoryDocuments(conversation(4, '删除确认'), now)
+    expect(rest).toEqual([])
+    expect(document).toMatchObject({ documentId: 'conversation:chat', title: '删除确认', tags: ['source:conversation'] })
+    expect(JSON.parse(document!.payload)).toHaveLength(4)
     // A conversation without an answer, or without the user's own words, has nothing to learn from.
-    expect(buildConversationMemoryDocument({ id: 'chat', localProjectId: 'p', title: 'x', status: 'idle', updatedAt: now,
-      messages: [{ id: 'u', role: 'user', text: '你好', createdAt: now }] }, now)).toBeNull()
+    expect(buildConversationMemoryDocuments({ id: 'chat', localProjectId: 'p', title: 'x', status: 'idle', updatedAt: now,
+      messages: [{ id: 'u', role: 'user', text: '你好', createdAt: now }] }, now)).toEqual([])
   })
 
   it('redacts secrets and keeps the end of a long coding run', () => {
