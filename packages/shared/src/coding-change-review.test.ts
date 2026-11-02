@@ -36,4 +36,10 @@ describe('change review boundary', () => {
     expect(splitBacktickSegments('检查 `run()` 的返回值')).toEqual([{ text: '检查 ' }, { text: 'run()', raw: true }, { text: ' 的返回值' }])
     expect(splitBacktickSegments('检查 `run()')).toEqual([{ text: '检查 `run()' }])
   })
+  it('keeps a JSDoc opener intact in the review payload', () => {
+    const comments = buildChangeSetDiffView([{ path: 'todos.js', before: '', after: '/**\n * Returns the newly completed count.\n */\nfunction markAllDone(store) {}\n' }])
+    const payload = buildChangeReviewPayload({ brief: { purpose: 'review' }, view: comments })
+    expect(JSON.stringify(payload)).toContain('/**')
+    expect(JSON.stringify(payload)).not.toContain('[REDACTED:local_absolute_path]')
+  })
 })
