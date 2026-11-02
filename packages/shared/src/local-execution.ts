@@ -180,7 +180,9 @@ export function redactTestEvidenceForStorage(evidence: TestEvidence): TestEviden
 
 export function createTestEvidenceArtifact(evidence: TestEvidence): Artifact {
   const safeEvidence = redactTestEvidenceForStorage(evidence)
+  const reuseSummary = safeEvidence.reusedFrom ? `Reused: passing build test evidence ${safeEvidence.reusedFrom.evidenceId}; source fingerprint verified at ${safeEvidence.reusedFrom.verifiedAt}.` : undefined
   const content = [
+    ...(reuseSummary ? [reuseSummary, ''] : []),
     `Command: ${safeEvidence.command}`,
     `CWD: ${safeEvidence.cwd}`,
     `Status: ${statusLabel(safeEvidence)}`,
@@ -199,7 +201,7 @@ export function createTestEvidenceArtifact(evidence: TestEvidence): Artifact {
     nodeId: safeEvidence.nodeId,
     kind: 'test_report',
     title: 'Local test evidence',
-    summary: safeEvidence.summary,
+    summary: reuseSummary ?? safeEvidence.summary,
     content,
     redacted: safeEvidence.redacted,
     updatedAt: safeEvidence.createdAt,

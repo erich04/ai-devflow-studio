@@ -515,7 +515,7 @@ export type RuntimeCostBreakdown = {
   totalUsd: number
 }
 
-export type RuntimeProviderRequestPhase = 'analysis' | 'initial' | 'repair'
+export type RuntimeProviderRequestPhase = 'analysis' | 'initial' | 'repair' | 'revision' | 'change_review'
 
 export type RuntimeProviderCallSettlement = {
   budgetAttemptIds?: string[]
@@ -1298,6 +1298,7 @@ export type ProjectGitStatus =
 export type TestEvidenceStatus = 'running' | 'passed' | 'failed' | 'timed_out'
 
 export type TestEvidence = {
+  reusedFrom?: { evidenceId: string; codingRunId: string; verifiedAt: string }
   id: string
   runId: string
   nodeId: string
@@ -1425,6 +1426,7 @@ export type CodingChangeSetChange = {
 }
 
 export type CodingChangeSet = {
+  revision?: { index: number; previous: { id: string; digest: string }; changeRequest: string; itemCount: number }
   id: string
   stateVersion: 2
   codingRunId: string
@@ -1469,6 +1471,8 @@ export type CodingAgentRunStatus =
   | 'cancelled'
 
 export type CodingAgentRun = {
+  revisionInFlight?: { previousChangeSetId: string; previousChangeSetDigest: string; previousRequestId: string; requestedAt: string; itemCount: number; previousExpired?: true; stopRequestedAt?: string }
+  retryOf?: { kind: 'redevelop' | 'refix'; codingRunId: string; changeSetId?: string; failedTestEvidenceId?: string; hasReason: boolean }
   question?: import('./coding-question').CodingQuestionRequest
   questionReceipts?: import('./coding-question').CodingQuestionReceipt[]
   id: string
@@ -1529,7 +1533,7 @@ export type CodingAgentEvent = {
   redacted: boolean
 }
 
-export type CodingPermissionRequestStatus = 'pending' | 'approved' | 'rejected' | 'expired'
+export type CodingPermissionRequestStatus = 'pending' | 'approved' | 'rejected' | 'expired' | 'superseded'
 
 export type CodingPermissionRequest = {
   id: string
@@ -1564,11 +1568,12 @@ export type CodingPermissionRequest = {
 }
 
 export type CodingPermissionDecision = {
+  supersededBy?: { changeSetId: string }
   id: string
   requestId: string
   codingRunId: string
   decidedBy: string
-  decision: 'approved' | 'rejected' | 'expired'
+  decision: 'approved' | 'rejected' | 'expired' | 'superseded'
   comment: string
   decidedAt: string
   scope?: 'once' | 'session'

@@ -1,3 +1,4 @@
+import { assertPermissionExpected, type PermissionExpected } from './build-test-contract.js'
 import { CodingQuestionError } from './coding-question-error.js'
 import { validateCodingQuestionReply, type CodingQuestionRequest, type CodingQuestionReply, type CodingQuestionReceipt } from '@ai-devflow/shared'
 import type { CodingExecutorQuestionResult, CodingExecutorWaitingPermissionResult } from './coding-executor.js'
@@ -120,7 +121,7 @@ const baseCodingExecutorCapabilities: CodingExecutorCapability[] = [
 ]
 const pendingBootstrapPermissions = new Map<
   string,
-  (decision: CodingPermissionDecision['decision']) => void
+  (decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>) => void
 >()
 
 function requiredCapabilitiesForExecutor(executor: CodingExecutor): CodingExecutorCapability[] {
@@ -272,10 +273,11 @@ export type RunCodingAgentRuntimeResult = {
 }
 
 export type ReplyCodingPermissionRuntimeInput = {
+  expected?: PermissionExpected
   requestId: string
   codingRunId: string
   decidedBy: string
-  decision: CodingPermissionDecision['decision']
+  decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>
   comment: string
   scope?: 'once' | 'session'
 }
@@ -1282,7 +1284,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
 
   function resolveBootstrapPermission(
     requestId: string,
-    decision: CodingPermissionDecision['decision'],
+    decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>,
   ): void {
     const resolve = pendingBootstrapPermissions.get(requestId)
     if (!resolve) return
@@ -1903,7 +1905,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         codingRun: claimedRun, request: sending, reply, workspace, project, now: now(), assertContextCurrent: () => assertExecutionContext(run),
         onDelivered: async (status) => {
           const receipt: CodingQuestionReceipt = { id: request.id, revision: request.revision, status, replyDigest, answeredBy: input.answeredBy, settledAt: now() }
-          const delivered: CodingAgentRun = { ...claimedRun, question: { ...sending, ...receipt },
+          const delivered: CodingAgentRun = { ...claimedRun, question: { ...sending, ...receipt, questions: sending.questions },
             questionReceipts: [...(claimedRun.questionReceipts ?? []), receipt].slice(-24), summary: '回答已送达，OpenCode 正在继续执行。' }
           const committed = await commitCodingAgentMutation({ expectedRun: claimedRun, expectedPendingPermissionRequestIds: [], run: delivered })
           if (!committed.committed) throw new Error('Question delivery receipt could not be persisted')
@@ -1947,6 +1949,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     matchedSessionGrantId?: string,
   ): Promise<CodingPermissionRequest> {
     const request = await findPermissionRequest(input)
+    if (input.expected) assertPermissionExpected(request, input.expected)
     const timestamp = recoveryDecisionAt ?? now()
     const requestExpiry = Date.parse(request.expiresAt)
     const decisionTime = Date.parse(timestamp)

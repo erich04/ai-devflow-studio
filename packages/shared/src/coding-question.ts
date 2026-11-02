@@ -68,4 +68,7 @@ export function validateCodingQuestionReply(questions: CodingQuestionInfo[], val
   return { kind: 'answer', answers }
 }
 
-export type CodingQuestionReceipt = Pick<CodingQuestionRequest, 'id' | 'revision' | 'status' | 'replyDigest' | 'answeredBy' | 'settledAt'>
+export type CodingQuestionReceipt = Pick<CodingQuestionRequest, 'id' | 'revision' | 'status' | 'replyDigest' | 'answeredBy' | 'settledAt'> & {
+  questions?: Array<{ header: string; question: string }>
+  answers?: string[][]
+}

@@ -457,7 +457,8 @@ export type DevFlowDesktopApi = {
     requestId: string
     codingRunId: string
     decidedBy: string
-    decision: CodingPermissionDecision['decision']
+    expected?: import('../electron/build-test-contract').PermissionExpected
+    decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>
     comment: string
     scope?: 'once' | 'session'
   }) => Promise<CodingPermissionRequest>

@@ -174,7 +174,7 @@ export function CodingWorkPanel({
   latestCodingRun: CodingAgentRun | undefined
   workspace: ManagedCodingWorkspace | undefined
   isReplying: boolean
-  onDecision: (decision: CodingPermissionDecision['decision'], scope?: 'once' | 'session') => void
+  onDecision: (decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>, scope?: 'once' | 'session') => void
   focusRef: RefObject<HTMLDivElement | null>
 }) {
   if (!projection) return null

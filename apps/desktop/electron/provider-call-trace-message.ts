@@ -5,6 +5,8 @@ const phaseLabels: Record<CodingProviderCallTrace['phase'], string> = {
   analysis: '分析',
   initial: '生成改动',
   repair: '修正改动',
+  revision: '按清单修改',
+  change_review: 'AI 自检',
 }
 
 // The cause is more specific than the code (for example `output_length` under

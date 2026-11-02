@@ -636,7 +636,7 @@ function redactRemoteCodingCostSummaryForSync(
     ...(summary.providerCallSettlements !== undefined
       ? {
           providerCallSettlements: summary.providerCallSettlements.map((settlement) => ({
-            requestPhase: settlement.requestPhase,
+            requestPhase: settlement.requestPhase === 'revision' ? 'initial' : settlement.requestPhase === 'change_review' ? 'analysis' : settlement.requestPhase,
             ...(settlement.budgetAttemptIds ? {budgetAttemptIds:parseBudgetAttemptIds(settlement.budgetAttemptIds)} : {}),
             providerId: redactSensitiveText(settlement.providerId).value,
             model: redactSensitiveText(settlement.model).value,

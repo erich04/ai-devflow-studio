@@ -31,7 +31,7 @@ export function CodingChangeSetReview({
   run: CodingAgentRun
   workspace: ManagedCodingWorkspace | undefined
   isReplying: boolean
-  onDecision: (decision: CodingPermissionDecision['decision'], scope?: 'once' | 'session') => void
+  onDecision: (decision: Exclude<CodingPermissionDecision['decision'], 'superseded'>, scope?: 'once' | 'session') => void
 }) {
   const isAcceptance = permission.kind === 'change-acceptance'
   const preview = permission.previewVerified ? permission.preview : undefined

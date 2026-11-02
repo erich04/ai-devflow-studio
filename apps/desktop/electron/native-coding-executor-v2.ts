@@ -103,7 +103,7 @@ export type NativeCodingV2DecisionProvider = {
   complete(input: {
     operationKey?: string
     signal?: AbortSignal
-    phase: 'analysis' | 'initial' | 'repair'
+    phase: 'analysis' | 'initial' | 'repair' | 'revision' | 'change_review'
     systemPrompt: string
     userPrompt: string
     maxOutputTokens: number

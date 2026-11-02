@@ -74,11 +74,11 @@ export async function governedModelCall<T extends CallResult>(input: {
 }
 export function governAgentProvider(provider: AgentProvider, projectId: string, governance: ModelCallGovernance, approvalId?: string): AgentProvider {
   const operations = new Map<string, Promise<NonNullable<ModelCallQuote['operation']>>>()
-  const operationFor = (prompt: string, purpose: string, key = 'current') => {
+  const operationFor = (prompt: string, purpose: string, key = 'current', explicitKey = false) => {
     const scope = key === 'current' ? `${purpose}:${key}` : key
     let operation = operations.get(scope)
     if (!operation) {
-      operation = globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(prompt)).then(digest => ({ id: `operation-${randomUUID()}`, version: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join(''), purpose }))
+      operation = globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(prompt)).then(digest => ({ id: purpose === 'native-tool' && explicitKey ? `coding-${key}` : `operation-${randomUUID()}`, version: [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join(''), purpose }))
       operations.set(scope, operation)
     }
     return operation
@@ -95,14 +95,14 @@ export function governAgentProvider(provider: AgentProvider, projectId: string, 
       provider.validateNativeRequest?.(input)
       const prompt = JSON.stringify({ system: input.systemPrompt, messages: input.messages, tools: input.tools })
       const maxOutputTokens = provider.resolveRequestPolicy?.(input).maxOutputTokens ?? input.maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192
-      return governedModelCall({ ...base, operation: await operationFor(prompt, input.purpose ?? 'conversation', input.operationKey), prompt, maxOutputTokens,
+      return governedModelCall({ ...base, operation: await operationFor(prompt, input.purpose ?? 'conversation', input.operationKey, input.operationKey !== undefined), prompt, maxOutputTokens,
         ...(input.signal ? { signal: input.signal } : {}), action: observe => provider.completeNativeConversation!({ ...input, maxOutputTokens,
           onUsage: async usage => { await observe(usage); await input.onUsage?.(usage) } }) })
     } } : {}),
     ...(provider.completeStructuredJson ? { completeStructuredJson: async (input: Parameters<NonNullable<AgentProvider['completeStructuredJson']>>[0]) => {
       provider.validateStructuredRequest?.(input)
       const maxOutputTokens = provider.resolveRequestPolicy?.(input).maxOutputTokens ?? input.maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192
-      return governedModelCall({ ...base, operation: await operationFor(input.systemPrompt + '\n' + input.userPrompt, input.purpose ?? 'native-tool', input.operationKey ?? (input.purpose ? 'current' : randomUUID())), prompt: input.systemPrompt + '\n' + input.userPrompt + (input.nativeTools ? JSON.stringify(input.nativeTools) : ''), maxOutputTokens,
+      return governedModelCall({ ...base, operation: await operationFor(input.systemPrompt + '\n' + input.userPrompt, input.purpose ?? 'native-tool', input.operationKey ?? (input.purpose ? 'current' : randomUUID()), input.operationKey !== undefined), prompt: input.systemPrompt + '\n' + input.userPrompt + (input.nativeTools ? JSON.stringify(input.nativeTools) : ''), maxOutputTokens,
         ...(input.signal ? { signal: input.signal } : {}), action: observe => provider.completeStructuredJson!({ ...input, maxOutputTokens,
           onUsage: async usage => { await observe(usage); await input.onUsage?.(usage) } }) })
     } } : {}),
