@@ -51,6 +51,7 @@ describe('build/test decision lifecycle', () => {
     const changed = applyRevisionListOp(list, { type: 'addOwn', text: '保留现有标题' }, f.now); if (!changed.ok) throw new Error(changed.message); f.list = changed.list
     f.costs!.budget.revise = { blocks: true, status: 'requires_lead_approval' }
     const v = project({ facts: f, stage: 'build' }); expect(button(v, 'reviseChange')?.enabled).toBe(false); expect(button(v, 'approveWithout')?.enabled).toBe(true); expect(v.bar.list.actionable).toBe(true)
+    expect(v.bar.notes.find(n => n.tone === 'block')?.link?.action).toBe('openModelSettings')
   })
   it('does not confuse conversation budget continuation with the current coding run', () => {
     const f = buildTestFacts(), r = addCoding(f); f.budgetContinuations = [{ operation: { id: 'opencode-other' } }]
@@ -60,6 +61,7 @@ describe('build/test decision lifecycle', () => {
     const f = buildTestFacts(), r = addCoding(f), p = addChange(f, r); p.status = 'rejected'; r.status = 'interrupted'
     addCoding(f, { status: 'cancelled', retryOf: { kind: 'redevelop', codingRunId: r.id, hasReason: false }, startedAt: '2026-11-02T12:01:00.000Z' })
     expect(effectiveCodingRun(f)?.id).toBe(r.id); const v = project({ facts: f, stage: 'build' }); expect(v.bar.title).toContain('已拒绝'); expect(button(v, 'approveChange')).toBeUndefined()
+    expect(v.bar.notes.map(n => n.text).join()).toContain('重新开发已停止')
   })
   it('history and completed steps expose no mutation even if another request is pending', () => {
     const f = buildTestFacts(), r = addCoding(f), p = addChange(f, r)

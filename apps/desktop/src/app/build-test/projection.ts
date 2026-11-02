@@ -70,7 +70,7 @@ export function projectBuildTestDecision(input: { facts: BuildTestFacts; stage: 
     if (!repair && pending?.changeSetId) {
       if (review?.status === 'running') bar.notes.push({ ...note(`AI 正在自检${label}，意见会显示在右侧；你可以不等它直接决定。`), link: { action: 'stopSelfCheck', label: f.stopping ? '正在停止…' : '停止自检', busy: Boolean(f.stopping) } })
       else if (review?.status === 'failed' || review?.status === 'cancelled' || !review) {
-        bar.notes.push(note(review?.status === 'cancelled' ? 'AI 自检已停止。' : 'AI 自检没有完成。', 'warn'))
+        bar.notes.push(note(review?.status === 'cancelled' ? 'AI 自检已停止。' : review?.failure?.code === 'invalid_model_output' ? 'AI 自检没有完成：模型返回的意见格式不符合要求。' : review?.failure?.code === 'interrupted' ? 'AI 自检被中断，请重新自检。' : 'AI 自检没有完成。', 'warn'))
         if ((f.history?.reviews.filter(r => r.changeSetId === current?.id && r.trigger === 'manual').length ?? 0) < 2) add('rerunSelfCheck', '重新自检', false, `${exec} · ${costText(f.costs, 'selfCheck')}`)
         else bar.notes.push(note('这份改动不能再重新自检。'))
       }
@@ -78,7 +78,7 @@ export function projectBuildTestDecision(input: { facts: BuildTestFacts; stage: 
     for (const button of bar.buttons) {
       const action = button.id === 'reviseChange' ? 'revise' : button.id === 'reviseRepair' ? 'repairRevise' : button.id === 'rerunSelfCheck' ? 'selfCheck' : undefined
       const budget = action && f.costs?.budget[action]
-      if (budget?.blocks) { button.enabled = false; button.disabledReason = '先处理上面标 ✕ 的问题。'; bar.notes.push({ ...note(`✕ ${budget.status === 'unavailable' ? '现在核对不了预算' : '预算不够'}，不能${button.id === 'rerunSelfCheck' ? '重新自检' : '按清单修改'}。`, 'block'), link: { action: 'openTeamSettings', label: '打开团队连接设置' } }) }
+      if (budget?.blocks) { button.enabled = false; button.disabledReason = '先处理上面标 ✕ 的问题。'; bar.notes.push({ ...note(`✕ ${budget.status === 'unavailable' ? '现在核对不了预算' : '预算不够'}，不能${button.id === 'rerunSelfCheck' ? '重新自检' : '按清单修改'}。`, 'block'), link: budget.status === 'unavailable' ? { action: 'openTeamSettings', label: '打开团队连接设置' } : { action: 'openModelSettings', label: '打开模型与执行方式设置' } }) }
     }
   }
   if (history) { bar.row = stage === 'build' ? 'B2' : 'T2'; bar.mode = 'read-only'; bar.title = material.header; add('returnToCurrent', `返回${current?.label ?? '当前测试报告'}`, true); list.actionable = false }
@@ -160,7 +160,7 @@ export function projectBuildTestDecision(input: { facts: BuildTestFacts; stage: 
   if (latest?.report.evidence.sourceTree?.workspaceId && !f.managedCodingWorkspaces.some(w => w.id === latest.report.evidence.sourceTree?.workspaceId && w.cleanupStatus === 'active' && !w.deletedAt)) for (const b of bar.buttons.filter(b => ['rerunTests', 'runTests'].includes(b.id))) { b.enabled = false; b.disabledReason = '受管工作区已不存在，这里不能重新测试。' }
   if (run?.status === 'cancelled' && stage === 'build' && !current) { bar.notes.push(note('没有生成改动。')); view.margin.note = '开发已停止，没有生成改动。' }
   const latestRun = taskCodingRuns(f).at(-1)
-  if (latestRun && run && latestRun.id !== run.id) bar.notes.push(note('重新修复已停止，没有生成新的修复。'))
+  if (latestRun && run && latestRun.id !== run.id) bar.notes.push(note(latestRun.retryOf?.kind === 'refix' ? '重新修复已停止，没有生成新的修复。' : '重新开发已停止，没有生成新的改动。'))
   if (latestRun && f.budgetContinuations.some(c => c.operation.id === `coding-${latestRun.id}`) && (['B4', 'B9', 'T4'].includes(bar.row) || bar.row === 'B8' && review?.status === 'running')) {
     if (bar.row !== 'B8') bar.title = `等你确认预算 · ${bar.title}`
     bar.notes.unshift(note('在窗口顶部的「继续本次模型操作」卡片上确认后才会调用模型；不确认不会花钱。'))

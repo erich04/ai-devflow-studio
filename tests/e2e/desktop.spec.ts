@@ -992,6 +992,14 @@ async function installDesktopApi(
         ],
         evaluatedAt: '2026-06-15T00:03:30.000Z',
       }),
+      getCodingChangeHistory: async ({ runId }: { runId: string }) => ({ runId, observedAt: new Date().toISOString(), reviews: [], changeSets: codingLifecycleStarted && (initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle') ? [{
+        id: 'change-set-review', codingRunId: 'coding-run-review', phase: 'initial', digest: 'c'.repeat(64), verified: true,
+        changedPaths: ['src/a.ts', 'src/b.ts'], createdAt: '2026-08-30T12:00:00.000Z', expiresAt: '2099-08-30T12:05:00.000Z',
+        view: { additions: 120, deletions: 120, files: ['a', 'b'].map(file => ({ path: `src/${file}.ts`, additions: 60, deletions: 60,
+          rows: Array.from({ length: 60 }, (_, index) => [{ kind: 'del', oldLine: index + 1, text: `old ${file} ${index}` }, { kind: 'add', newLine: index + 1, text: `new ${file} ${index}` }]).flat() })) },
+      }] : [] }),
+      getCodingActionCosts: async () => ({ executor: 'native', executorLabel: 'DevFlow Native', modelLabel: 'review-model', billing: 'metered', start: .04, revise: .02, selfCheck: .01, repair: .01, repairRevise: .01, budget: { revise: null, selfCheck: null, repairRevise: null } }),
+      onCodingChangeHistoryUpdated: () => () => undefined,
       getCodingChangeSetPreview: async ({ changeSetId, codingRunId }: { changeSetId: string; codingRunId: string }) => ({
         stateVersion: 2,
         id: changeSetId,
@@ -1003,7 +1011,7 @@ async function installDesktopApi(
           : 'diff --git a/devflow-fake-change.txt b/devflow-fake-change.txt\n+fake change',
         changeSetDigest: 'c'.repeat(64),
         createdAt: '2026-06-15T00:05:00.000Z',
-        expiresAt: '2099-06-15T00:20:00.000Z',
+        expiresAt: '2099-08-30T12:05:00.000Z',
       }),
       getCodingRuntimeBudgetPolicy: async () => governedFixture ? {
         projectId: localProject.id, enabled: true, monthlyLimitUsd: 50, warningThresholdUsd: 40,
@@ -1110,12 +1118,14 @@ async function installDesktopApi(
         requestId,
         codingRunId,
         decision,
+        expected,
       }: {
         requestId: string
         codingRunId: string
         decision: string
+        expected?: unknown
       }) => {
-        codingPermissionReplies.push({ requestId, codingRunId, decision })
+        codingPermissionReplies.push({ requestId, codingRunId, decision, expected })
         if (
           (initialScenario === 'coding-permission' || initialScenario === 'coding-lifecycle') &&
           decision === 'approved'
@@ -2251,56 +2261,91 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.waitForTimeout(250)
     expect(pageErrors).toEqual([])
 
-    // The exact diff review is rendered in 当前工作 (plan W3); approval exists only there.
     const inspector = page.getByTestId('node-inspector')
-    const statusRow = inspector.getByTestId('task-status-row')
-    const changeSetPanel = inspector.getByTestId('task-coding-change-set')
-    await expect(changeSetPanel.getByTestId('coding-change-set-review')).toBeVisible()
-    await expect(statusRow.getByRole('button', { name: /批准这些改动/ })).toHaveCount(0)
-    await expect(page.getByRole('button', { name: '批准这些改动' })).toHaveCount(1)
+    const bar = inspector.getByTestId('gate-decision-bar')
+    const review = inspector.getByTestId('build-test-material')
+    const approval = bar.getByRole('button', { name: '批准改动 v1，进入测试', exact: true })
+    await expect(approval).toBeEnabled()
+    await expect(page.getByRole('button', { name: '批准改动 v1，进入测试', exact: true })).toHaveCount(1)
     await inspector.getByRole('tab', { name: '执行记录', exact: true }).click()
-    await statusRow.getByRole('button', { name: '审查并批准修改', exact: true }).click()
-    await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
-    await expect(changeSetPanel).toBeFocused()
-    await expectStaysOnWorkbench(page)
-
-    const review = changeSetPanel.getByTestId('coding-change-set-review')
-    await expect(review).toBeVisible()
-    await expect(review.getByLabel('src/a.ts 的改动')).toBeVisible()
-    await expect(review.getByLabel('src/b.ts 的改动')).toBeVisible()
-    await expect(review).toContainText('c'.repeat(64))
-    const diffStyle = await review.getByLabel('src/a.ts 的改动').evaluate((element) => ({
-      whiteSpace: getComputedStyle(element).whiteSpace,
+    await expect(approval).toBeVisible()
+    await inspector.getByRole('tab', { name: '当前工作', exact: true }).click()
+    await expect(review).toContainText('new a 59')
+    await expect(review).toContainText('new b 59')
+    await expect(review).not.toContainText('c'.repeat(64))
+    const diffStyle = await review.locator('.change-file-lines').first().evaluate((element) => ({
+      whiteSpace: getComputedStyle(element.querySelector('code')!).whiteSpace,
       overflowX: getComputedStyle(element).overflowX,
     }))
     expect(diffStyle.whiteSpace).toBe('pre')
     expect(['auto', 'scroll']).toContain(diffStyle.overflowX)
-    const reviewBox = await review.boundingBox()
-    expect(reviewBox?.width ?? 0).toBeGreaterThan(900)
-    await page.evaluate(() => {
-      document.documentElement.style.zoom = '1.25'
-    })
-    await review.getByRole('button', { name: '批准这些改动' }).scrollIntoViewIfNeeded()
-    await expect(review.getByRole('button', { name: '批准这些改动' })).toBeVisible()
-    await expect(review.getByRole('button', { name: '拒绝改动' })).toBeVisible()
-    await page.emulateMedia({ colorScheme: 'dark' })
-    await expect(review).toBeVisible()
-    await page.emulateMedia({ colorScheme: 'light' })
-    await expect(review).toBeVisible()
-
-    await review.getByRole('button', { name: '批准这些改动' }).click()
-    await expect.poll(() => page.evaluate(() => (
-      window as unknown as { __codingPermissionReplies: unknown[] }
-    ).__codingPermissionReplies)).toEqual([{
-      requestId: 'permission-review',
-      codingRunId: 'coding-run-review',
-      decision: 'approved',
+    await page.evaluate(() => { document.documentElement.style.zoom = '1.25' })
+    await expect(approval).toBeVisible()
+    await expect(bar.getByRole('button', { name: '拒绝改动', exact: true })).toBeVisible()
+    await page.emulateMedia({ colorScheme: 'dark' }); await expect(review).toBeVisible()
+    await page.emulateMedia({ colorScheme: 'light' }); await expect(review).toBeVisible()
+    await approval.click()
+    await expect.poll(() => page.evaluate(() => (window as unknown as { __codingPermissionReplies: unknown[] }).__codingPermissionReplies)).toEqual([{
+      requestId: 'permission-review', codingRunId: 'coding-run-review', decision: 'approved',
+      expected: expect.objectContaining({ changeSetId: 'change-set-review', changeSetDigest: 'c'.repeat(64) }),
     }])
-    await expect(review).toHaveCount(0)
+    await expect(approval).toHaveCount(0)
     await expectStaysOnWorkbench(page)
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /测试证据/ }).click()
     await expect(page.getByTestId('flow-node-node-test-review')).toContainText('当前步骤')
     expect(pageErrors).toEqual([])
+  })
+
+  test('aligns build findings to distinct code rows, keeps decisions fixed, and preserves narrow focus', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await installDesktopApi(page, 'coding-permission')
+    await page.addInitScript(() => {
+      const api = window.aiDevFlowDesktop!
+      const read = api.getCodingChangeHistory!
+      api.getCodingChangeHistory = async input => {
+        const history = await read(input)
+        return { ...history, reviews: [{
+          id: 'review-geometry', stateVersion: 1, codingRunId: 'coding-run-review', runId: input.runId,
+          nodeId: 'node-build-review', projectId: 'project-1', changeSetId: 'change-set-review', changeSetDigest: 'c'.repeat(64),
+          status: 'completed', trigger: 'automatic', providerId: 'fixture', model: 'review-model',
+          startedAt: '2026-08-30T12:00:00Z', completedAt: '2026-08-30T12:01:00Z', levelsKnown: true, redacted: true,
+          findings: [20, 40, 99].map((line, index) => ({ index, path: 'src/a.ts', line, lineText: `new a ${line - 1}`,
+            importance: 'suggestion', consequence: `需要核对第 ${line} 行`, reason: '保留现有语义', item: `核对第 ${line} 行`,
+            ...(line < 99 ? { anchor: { path: 'src/a.ts', side: 'new', line } } : {}),
+          })),
+        }] }
+      }
+    })
+    await page.goto('/')
+    await openAnswerPanel(page); await dragAnswerPanelTo(page, 480)
+    const workspace = page.locator('.build-test-workspace'), bar = page.getByTestId('gate-decision-bar')
+    await expect(workspace).toHaveAttribute('data-layout', 'wide')
+    await expect(page.locator('.gate-margin [data-card-id]')).toHaveCount(3)
+    const gap = async (index: number, line: number) => page.evaluate(({ index, line }) => {
+      const row = Array.from(document.querySelectorAll('.change-row--add')).find(el => el.querySelector('code')?.textContent === `new a ${line - 1}`)!
+      const card = document.querySelector(`[data-card-id="finding:review-geometry:${index}"]`)!
+      return Math.abs(card.getBoundingClientRect().top - row.getBoundingClientRect().top)
+    }, { index, line })
+    await expect.poll(() => gap(0, 20)).toBeLessThanOrEqual(2)
+    await expect.poll(() => gap(1, 40)).toBeLessThanOrEqual(2)
+    const order = await page.locator('.gate-margin [data-card-id]').evaluateAll(els => els.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top).map(el => el.getAttribute('data-card-id')))
+    expect(order).toEqual(['finding:review-geometry:2', 'finding:review-geometry:0', 'finding:review-geometry:1'])
+    const top = (await bar.boundingBox())!.y, tabTop = (await inspectorTab(page, '当前工作').boundingBox())!.y
+    const scroll = page.getByTestId('workspace-tabpanel')
+    await scroll.evaluate(el => { el.scrollTop = 600 })
+    await expect.poll(() => scroll.evaluate(el => el.scrollTop)).toBeGreaterThanOrEqual(600)
+    expect((await bar.boundingBox())!.y).toBeCloseTo(top, 0)
+    expect((await inspectorTab(page, '当前工作').boundingBox())!.y).toBeCloseTo(tabTop, 0)
+    await scroll.evaluate(el => { el.scrollTop = 0 })
+    await page.setViewportSize({ width: 1200, height: 900 })
+    await expect(workspace).toHaveAttribute('data-layout', 'narrow')
+    const marker = page.getByRole('button', { name: /意见 1/ }).first()
+    await marker.click()
+    for (const name of ['采纳', '不采纳', '讨论']) await expect(page.getByRole('button', { name, exact: true }).last()).toBeEnabled()
+    await page.getByRole('button', { name: '采纳', exact: true }).click()
+    await page.keyboard.press('Escape'); await expect(marker).toBeFocused()
+    await expect(bar.getByRole('button', { name: /按清单修改/ })).toContainText('1 项')
+    expect(await page.getByRole('navigation', { name: '六阶段导航' }).evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1)
   })
 
   test('runs Coding from idle through approval, persisted evidence, and the next workflow node', async ({ page }) => {
@@ -2308,14 +2353,14 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.goto('/')
 
     const inspector = page.getByTestId('node-inspector')
-    await inspector.getByRole('button', { name: '启动 Coding Agent' }).click()
-    // The exact diff is reviewed and approved in the task's 当前工作 (plan W3).
-    const review = inspector.getByTestId('task-coding-change-set').getByTestId('coding-change-set-review')
-    await expect(review.getByLabel('src/a.ts 的改动')).toContainText('new a 59')
-    await expect(review.getByLabel('src/b.ts 的改动')).toContainText('new b 59')
+    const bar = inspector.getByTestId('gate-decision-bar')
+    await bar.getByRole('button', { name: '开始开发', exact: true }).click()
+    const review = inspector.getByTestId('build-test-material')
+    await expect(review).toContainText('new a 59')
+    await expect(review).toContainText('new b 59')
     await expectStaysOnWorkbench(page)
-    await review.getByRole('button', { name: '批准这些改动' }).click()
-    await expect(review).toHaveCount(0)
+    await bar.getByRole('button', { name: '批准改动 v1，进入测试', exact: true }).click()
+    await expect(bar.getByRole('button', { name: /批准改动/ })).toHaveCount(0)
     await expectStaysOnWorkbench(page)
 
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /测试证据/ }).click()
@@ -2323,12 +2368,8 @@ test.describe('AI DevFlow desktop workbench', () => {
     await page.getByRole('navigation', { name: '六阶段导航' }).getByRole('button', { name: /开发实现/ }).click()
     await clickSubStep(page, 'flow-node-node-build-review')
     await expect(inspectorTab(page, '当前工作')).toHaveAttribute('aria-selected', 'true')
-    const terminal = page.getByTestId('workbench-coding-terminal')
-    await expect(terminal).toContainText('已完成')
-    // Changes and the diff are part of 当前工作 once the run is terminal.
-    const changes = inspector.getByRole('region', { name: '开发变更与检查' })
-    await expect(changes).toContainText('Saved worktree test passed.')
-    await expect(changes).toContainText('+new')
+    await expect(bar).toContainText('改动 v1 已批准')
+    await expect(inspector.getByTestId('build-test-material')).toContainText('new a 59')
     await inspectorTab(page, '执行记录').click()
     // Coding evidence from the Agents page replaces the old 开发执行详情 table (plan Y3).
     await expect(inspector.getByText('开发执行详情', { exact: true })).toHaveCount(0)

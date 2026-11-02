@@ -1797,7 +1797,7 @@ export function Inspector({
             {currentWork ? <BuildTestWorkspace material={view.material} reading={documentId || undefined} openVersion={openVersion} showCurrent={showCurrent} /> : viewModel.activeTab.tabId === MATERIALS_TAB ? <>
               <section><h3>改动与测试报告</h3><ul>{view.material.list.map(item => <li key={item.id}><button type="button" className="text-button" onClick={() => openVersion(item.id)}>{item.text}</button></li>)}</ul></section>
               {renderArtifacts()}
-            </> : <>{renderTrace()}{latestCodingRun ? <CodingSessionPermissions codingRunId={latestCodingRun.id} status={latestCodingRun.status} /> : null}{executionEvidence}</>}
+            </> : <>{renderTrace()}{latestCodingRun ? <CodingSessionPermissions codingRunId={latestCodingRun.id} status={latestCodingRun.status} /> : null}{renderCodingWorkspace()}</>}
           </div>
         </>}
       </BuildTestDecisionScope>
