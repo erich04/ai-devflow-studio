@@ -75,7 +75,7 @@ export function parseModelCallQuote(value: unknown): ModelCallQuote {
   if (v.continuationId !== undefined) parseBudgetAttemptIds([v.continuationId])
   if (v.operation) {
     parseBudgetAttemptIds([v.operation.id])
-    if (!/^[a-f0-9]{64}$/u.test(v.operation.version) || !['conversation','proposal','review','workflow','native-tool','coding','coding-compaction'].includes(v.operation.purpose)) throw new Error('Invalid operation scope')
+    if (!/^[a-f0-9]{64}$/u.test(v.operation.version) || !['conversation','proposal','review','workflow','native-tool','coding','coding-compaction','coding-acceptance-plan'].includes(v.operation.purpose)) throw new Error('Invalid operation scope')
   }
   if (v.task) {
     parseBudgetAttemptIds([...new Set([v.task.rootId, v.task.taskId, ...(v.task.parentTaskId ? [v.task.parentTaskId] : [])])])

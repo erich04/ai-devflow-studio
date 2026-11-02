@@ -10,6 +10,8 @@ const pauseReasons: Record<string, string> = {
   provider_unavailable: '模型服务暂时不可用（限流、过载或服务出错），自动重试已用完或服务端要求等待更久，任务已暂停。请稍后点“继续”。',
   invalid_tool_batch: '模型连续两轮返回无效的工具调用，任务已暂停。可以补充说明后点“继续”。',
   no_progress: '提醒过一次之后，模型仍在重复相同的操作且没有新结果，任务已暂停。可以补充说明后点“继续”。',
+  independent_verification_plan_invalid: '未能生成有效的独立验收检查，编码尚未继续。请核对需求是否明确、能否自动验证，再补充说明或继续尝试。',
+  independent_verification_repair_limit: '独立验收仍未通过，两轮自动返修已用完。请检查未通过的验收条目后再决定是否继续。',
 }
 const retryReasons: Record<CodingModelRetryReason, string> = { rate_limited: '模型服务限流（HTTP 429）', overloaded: '模型服务过载（HTTP 503）', server_error: '模型服务出错（HTTP 5xx）', connection_not_sent: '未能连接模型服务，请求没有发出' }
 
@@ -57,12 +59,14 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     {snapshot.pauseReason ? <p>{pauseReasons[snapshot.pauseReason] ?? snapshot.pauseReason}</p> : null}
     {pendingRetry ? <p>{retryReasons[pendingRetry.reason]}。约 {Math.ceil(pendingRetry.delayMs / 1000)} 秒后自动重新发送（第 {pendingRetry.number}/{pendingRetry.limit} 次{pendingRetry.retryAfterMs !== undefined ? '，等待时间由模型服务指定' : ''}；重试不计入步数）。</p> : null}
     {snapshot.controlUnavailableReason ? <p role="status">{snapshot.controlUnavailableReason}</p> : null}
+    {snapshot.independentVerification ? <p>{snapshot.independentVerification.status === 'preparing' ? '编码前将先生成并冻结独立验收检查。' : `已冻结 ${snapshot.independentVerification.criteriaCount} 条独立验收检查；自动返修 ${snapshot.independentVerification.repairRounds}/2 轮。`}{snapshot.independentVerification.lastResult === 'passed' ? '独立验收已通过。' : snapshot.independentVerification.lastResult === 'failed' ? '独立验收未通过。' : ''}</p> : null}
     <p className="meta">输入 {snapshot.cost.inputTokens ?? '未知'} / 输出 {snapshot.cost.outputTokens ?? '未知'} tokens · 费用 {snapshot.cost.costUsd === null ? '待权威账本核定' : `$${snapshot.cost.costUsd.toFixed(4)}`} · {snapshot.cost.pendingSettlements} 笔待结算 · {snapshot.cost.unknownAttempts} 笔用量待核对</p>
     {snapshot.cost.costUsd === null && snapshot.cost.knownCostUsd !== undefined ? <p>已确认费用小计 ${snapshot.cost.knownCostUsd.toFixed(4)}；另有 {snapshot.cost.unknownCostCount} 笔金额未确认。</p> : null}
     {!snapshot.controlUnavailableReason && snapshot.status === 'waiting_permission' && !snapshot.permission ? <div className="coding-permission-card">
       <h4>允许这次任务在候选目录中工作</h4>
       <p>基线：{snapshot.execution?.baseline}。授权搜索、读取、编辑候选文件，以及运行下面保存的测试；可委派最多 3 个并行子任务，子任务费用计入总额度，编码子任务使用独立候选目录。最终改动另行批准。</p>
       <p>本任务总上限：{snapshot.execution?.maxTokens ?? '未知'} tokens / ${snapshot.execution?.maxCostUsd ?? '未知'}；子任务和上下文压缩共用此额度，命中缓存的输入不计入 token 上限。</p>
+      {snapshot.independentVerification && !manualMode ? <p>自动验收会先根据任务生成独立检查，并在批准修订后执行；检查生成也计入上述总额度。</p> : null}
       <p>输入快照包含当前目录中的源文件与新增文件，依赖和缓存目录排除。摘要：{snapshot.execution?.inputDigest}</p>
       {snapshot.execution?.dirtyPaths?.length ? <details open><summary>这次一并纳入的现有改动（授权即确认此输入）</summary><pre>{snapshot.execution.dirtyPaths.join('\n')}</pre></details> : null}
       <label><input type="checkbox" checked={manualMode} onChange={event => setManualMode(event.target.checked)} />本任务没有适用的自动测试，事先选择人工验收</label>
