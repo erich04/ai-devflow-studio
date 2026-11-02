@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   parseNativeToolDefinition,
   validateNativeToolValue,
+  nativeToolValueProblem,
   type NativeToolDefinition,
 } from './native-tool'
 
@@ -97,5 +98,23 @@ describe('Native Tool contract', () => {
     ]) {
       expect(validateNativeToolValue(definition.inputSchema, value)).toBe(false)
     }
+  })
+
+  it('explains bounded input errors without echoing values or accepting a coercion', () => {
+    expect(nativeToolValueProblem(definition.inputSchema, { path: 'secret-value', maxBytes: 120000 })).toBe('$.maxBytes must be <= 65536')
+    expect(nativeToolValueProblem(definition.inputSchema, { path: 'secret-value', maxBytes: '1024' })).toBe('$.maxBytes must be a finite integer')
+    expect(nativeToolValueProblem(definition.inputSchema, { path: 'secret-value' })).toBe('$.maxBytes is required')
+    const unknown = nativeToolValueProblem(definition.inputSchema, { path: 'secret-value', maxBytes: 1, PRIVATE_FIELD: 'PRIVATE_VALUE' })
+    expect(unknown).toContain('undeclared properties')
+    expect(unknown).not.toMatch(/PRIVATE|secret-value/u)
+    expect(nativeToolValueProblem(definition.inputSchema, { path: 'src/index.ts', maxBytes: 1024 })).toBeUndefined()
+    expect(nativeToolValueProblem({ ...definition.inputSchema, additionalProperties: true } as never, {})).toBe('Tool schema is invalid')
+  })
+
+  it('identifies the offending field inside a bounded array', () => {
+    const schema = { type: 'array' as const, maxItems: 2, items: definition.inputSchema }
+    expect(nativeToolValueProblem(schema, [{ path: 'src/a.ts', maxBytes: 1 }, { path: 'src/b.ts', maxBytes: 0 }])).toBe('$[1].maxBytes must be >= 1')
+    expect(nativeToolValueProblem(schema, [null])).toBe('$[0] must be a plain object')
+    expect(nativeToolValueProblem(schema, [{}, {}, {}])).toBe('$ must contain at most 2 items')
   })
 })

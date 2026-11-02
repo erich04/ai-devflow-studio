@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, validateNativeToolValue, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type NativeToolCall, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
+import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, nativeToolValueProblem, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type NativeToolCall, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
 import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
@@ -382,8 +382,12 @@ export class NativeCodingLoop {
     try {
       for (const call of pending) {
         const definition = [...this.host.tools.definitions, ...controlTools].find(item => item.function.name === call.function.name)
-        const args: unknown = JSON.parse(call.function.arguments)
-        if (!definition || !validateNativeToolValue(definition.function.parameters as NativeToolJsonSchema, args) || (controls.includes(call.function.name) && pending.length !== 1)) throw new Error('Invalid tool batch: validate declared schemas and call control tools alone')
+        if (!definition) throw new Error('Invalid tool batch: use only declared tools')
+        let args: unknown
+        try { args = JSON.parse(call.function.arguments) } catch { throw new Error(`Invalid tool batch: ${call.function.name} arguments must be valid JSON`) }
+        const problem = nativeToolValueProblem(definition.function.parameters as NativeToolJsonSchema, args)
+        if (problem) throw new Error(`Invalid tool batch: ${call.function.name} ${problem}`)
+        if (controls.includes(call.function.name) && pending.length !== 1) throw new Error(`Invalid tool batch: ${call.function.name} must be called alone`)
       }
     } catch (error) {
       return this.change(session.id, draft => {

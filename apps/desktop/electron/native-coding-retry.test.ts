@@ -249,6 +249,36 @@ it('pauses when the batch after the explanation is invalid too', async () => {
   } finally { await store.close() }
 })
 
+it.each([
+  ['search_text', 'contextLines', 5, 10],
+  ['read_command', 'waitMs', 30000, 120000],
+] as const)('repairs the observed %s bound violation without running any call in the invalid batch', async (name, field, maximum, invalid) => {
+  const { store } = await sessionStore(), executed: Array<{ name: string; args: Record<string, unknown> }> = []
+  const tools: CodingLoopTools = { ...discover, definitions: [...discover.definitions, { type: 'function', function: { name, description: '', parameters: { type: 'object', properties: { [field]: { type: 'integer', minimum: 0, maximum } }, required: [field], additionalProperties: false } } }],
+    effects: { ...discover.effects, [name]: 'read' }, execute: async (tool, args) => { executed.push({ name: tool, args }); return { passed: true } } }
+  const model = scriptedModel([
+    () => {
+      const first = call('safe', 'discover', {}), second = call('invalid', name, { [field]: invalid })
+      const toolCalls = [...first.toolCalls, ...second.toolCalls]
+      return { ...first, toolCalls, assistantMessage: { ...first.assistantMessage, tool_calls: toolCalls } }
+    },
+    request => {
+      expect(executed).toEqual([])
+      const errors = request.messages.filter(message => message.role === 'tool').map(message => JSON.parse(String(message.content)))
+      expect(errors).toHaveLength(2)
+      errors.forEach(error => expect(error).toMatchObject({ executed: false, error: `Invalid tool batch: ${name} $.${field} must be <= ${maximum}` }))
+      return call('corrected', name, { [field]: maximum })
+    },
+    () => call('stop', 'report_blocked', { reason: 'scripted stop' }),
+  ])
+  try {
+    const loop = new NativeCodingLoop({ store, provider: model.provider, tools })
+    expect(await loop.runBatch('session')).toMatchObject({ status: 'paused', pauseReason: 'scripted stop' })
+    expect(executed).toEqual([{ name, args: { [field]: maximum } }])
+    expect((await store.getNativeCodingSession('session'))!.invalidToolBatches).toBeUndefined()
+  } finally { await store.close() }
+})
+
 it('nudges once after repeated identical steps and pauses only when the step repeats again', async () => {
   const { store } = await sessionStore()
   let sequence = 0
