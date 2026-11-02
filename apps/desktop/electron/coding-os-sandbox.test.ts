@@ -18,7 +18,8 @@ async function fixture() {
   return { root, cwd, temporaryDirectory, secret }
 }
 const supported = process.platform === 'darwin' || process.platform === 'linux'
-describe.each(process.platform === 'linux' ? [undefined, 'landlock' as const] : [undefined])('sandbox backend %s', linuxBackend => {
+const backends = process.platform === 'linux' ? [undefined, 'landlock' as const, ...(process.env.DEVFLOW_REQUIRE_BUBBLEWRAP === '1' ? ['bubblewrap' as const] : [])] : [undefined]
+describe.each(backends)('sandbox backend %s', linuxBackend => {
 it.runIf(supported)('allows workspace edits while rejecting outside writes, symlink escapes and private host reads', async () => {
   const f = await fixture(); await symlink(f.root, path.join(f.cwd, 'escape'))
   const command = await prepareCodingSandbox({ ...f, executable: process.execPath, args: ['-e', `
