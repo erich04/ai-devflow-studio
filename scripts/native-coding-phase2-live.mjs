@@ -34,6 +34,10 @@ export function phase2Score(tasks, rows) {
     invalidObservations, qualityGatePassed: rows.length === tasks.length && invalidObservations === 0 && independentPassed >= 1 && falseCompleted === 0,
     releaseGatePassed: false, interpretation: 'Only the original r8 ten-task phase2 gate. OS platform checks and PR CI are separate evidence; this does not complete the 31-task release evaluation.' }
 }
+export function validIndependentObservation(result) {
+  return !result.failure && !result.process?.timedOut && typeof result.total === 'number' && result.total > 0 &&
+    (result.passed === true || result.failedAssertions > 0)
+}
 /** The host copies the report out only after the sandboxed process has stopped. */
 export async function sandboxOracleCommand(root, executable, args, cwd, log, timeoutMs = 300000) {
   const { CodingCommandRunner } = await import('../apps/desktop/electron/coding-command-runner.ts')
@@ -60,6 +64,8 @@ async function assertCandidate(plan) {
 }
 export async function freezePhase2(output, source, maxCostUsd = 3) {
   if (git(['status', '--porcelain'])) throw new Error('Commit implementation and evaluation runner before freezing')
+  const relative = path.relative(repository, output)
+  if (!relative || !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) throw new Error('Use an output directory outside the source repository so sandboxed tooling cannot discover its parent workspace')
   if (!Number.isFinite(maxCostUsd) || maxCostUsd <= 0 || maxCostUsd > 3) throw new Error('This phase2 round has a maximum $3 operational ceiling')
   const original = await readJson(path.join(source, 'experiment.json')), observations = await readJson(path.join(source, 'runs.json'))
   const tasks = selectR8Tasks(original, observations)
@@ -127,7 +133,7 @@ async function runPhase2(output, keyFile) {
       if (workspace) await writeFile(path.join(directory, 'candidate.patch'), execFileSync('git', ['diff', '--binary', 'HEAD'], { cwd: workspace, maxBuffer: 64 * 1024 * 1024 }), { mode: 0o600 })
       const independent = await independentCheck(task, baseline, workspace, directory, (...args) => sandboxOracleCommand(path.join(directory, 'oracle-commands'), ...args))
       await json(path.join(directory, 'independent.json'), independent, true)
-      const qualityObservationValid = !independent.failure && typeof independent.total === 'number' && independent.total > 0
+      const qualityObservationValid = validIndependentObservation(independent)
       const row = { taskId: task.id, engine: 'native-v3', claimedCompleted: trial.claimedCompleted, independentPassed: independent.passed, qualityObservationValid, costUsd: trial.costUsd, durationMs: trial.durationMs, metrics: trial.metrics, status: trial.status, failure: trial.failure ?? null, execution, independent }
       await json(path.join(directory, 'row.json'), row, true); rows.push(row)
       await json(path.join(output, 'runs.json'), rows); await json(path.join(output, 'score.json'), phase2Score(plan.tasks, rows))

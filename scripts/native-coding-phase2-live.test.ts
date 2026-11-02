@@ -4,9 +4,17 @@ import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import os from 'node:os'
 // @ts-expect-error Standalone evaluation CLI uses native modules, not a declaration package.
-import { selectR8Tasks, phase2Score, sandboxOracleCommand } from './native-coding-phase2-live.mjs'
+import { selectR8Tasks, phase2Score, sandboxOracleCommand, validIndependentObservation } from './native-coding-phase2-live.mjs'
 
 const tasks = Array.from({ length: 10 }, (_, i) => ({ id: `devflow-history-${String(i + 2).padStart(2, '0')}`, testCommand: 'saved baseline suite', acceptanceTests: ['unchanged-private.test.ts'] }))
+it('separates actual failed assertions from an oracle infrastructure failure', () => {
+  expect(validIndependentObservation({ passed: true, total: 81, failedAssertions: 0, process: { code: 0 } })).toBe(true)
+  expect(validIndependentObservation({ passed: false, total: 81, failedAssertions: 1, process: { code: 1 } })).toBe(true)
+  expect(validIndependentObservation({ passed: false, total: 81, failedAssertions: 0, process: { code: 1 } })).toBe(false)
+  expect(validIndependentObservation({ passed: false, failure: 'independent_install' })).toBe(false)
+  expect(validIndependentObservation({ passed: false, total: 0, failedAssertions: 0 })).toBe(false)
+  expect(validIndependentObservation({ passed: false, total: 81, failedAssertions: 1, process: { timedOut: true } })).toBe(false)
+})
 it('keeps exactly the original ten observations, refusing cherry-picked or missing tasks', () => {
   const plan = { id: 'comparison-20261027-r8', tasks }, rows = tasks.map(task => ({ taskId: task.id, engine: 'native-v3' }))
   expect(selectR8Tasks(plan, rows)).toEqual(tasks)
