@@ -65,13 +65,15 @@ export async function prepareCodingSandbox(input: CodingSandboxInput): Promise<C
   }
   if (input.linuxBackend !== 'landlock') {
     const bwrap = await runnable('/usr/bin/bwrap') ? '/usr/bin/bwrap' : '/bin/bwrap'
-    const prefix = ['--die-with-parent', '--new-session', '--unshare-all', ...(input.network === 'enabled' ? ['--share-net'] : []), '--cap-drop', 'ALL', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
+    const prefix = ['--die-with-parent', '--new-session', '--unshare-all', '--unshare-user', '--disable-userns', ...(input.network === 'enabled' ? ['--share-net'] : []), '--cap-drop', 'ALL', '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp']
     for (const root of readonly) prefix.push('--ro-bind', root, root)
     for (const root of writable) prefix.push('--bind', root, root)
     // Sharing the network namespace also exposes host abstract Unix sockets.
     // Keep the same socket-family and syscall restrictions as the fallback.
     if (input.network === 'enabled') prefix.push('--ro-bind', helperPath(), helperPath())
-    prefix.push('--chdir', cwd, '--')
+    // Parent directories are synthetic namespace storage, but still outside the
+    // task's two writable roots. Remounting a parent leaves child bind mounts RW.
+    prefix.push('--remount-ro', '/tmp', '--remount-ro', '/', '--chdir', cwd, '--')
     if (input.network === 'enabled') prefix.push(helperPath(), '--network=enabled', ...readonly.flatMap(root => ['--ro', root]), ...writable.flatMap(root => ['--rw', root]), '--')
     try { await probe({ executable: bwrap, args: [...prefix, '/usr/bin/true'] }); return wrap('bubblewrap', bwrap, prefix) }
     catch { if (input.linuxBackend === 'bubblewrap') throw new Error('OS sandbox unavailable: bubblewrap could not enforce the policy') }
