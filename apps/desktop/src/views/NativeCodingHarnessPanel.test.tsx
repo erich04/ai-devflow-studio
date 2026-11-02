@@ -15,6 +15,18 @@ it('surfaces a child permission on the parent and sends a task grant to that exa
   await waitFor(() => expect(api).toHaveBeenCalledWith(expect.objectContaining({ type: 'permission', codingRunId: 'child', expectedVersion: 7, permissionId: 'child-permission', decision: 'approved', scope: 'task' })))
 })
 
+it('selects the system sandbox by default without implicitly enabling networking', async () => {
+  const snapshot: CodingHarnessSnapshot = { protocolVersion: 2, codingRunId: 'coding', sessionId: 'session', status: 'waiting_permission', version: 1, objectiveVersion: 1,
+    steps: 0, activeMilliseconds: 0, messages: [], evidence: [], children: [], cost: { inputTokens: 0, outputTokens: 0, costUsd: 0, unknownAttempts: 0, pendingSettlements: 0 },
+    execution: { testCommand: 'node test.js', baseline: 'base', profiles: [{ kind: 'os_sandbox', available: true, reason: '默认断网' }, { kind: 'trusted_local', available: true, reason: '没有隔离' }] } }
+  const command = vi.fn(async () => snapshot)
+  render(<NativeCodingHarnessPanel codingRunId="coding" api={{ codingHarness: command }} />)
+  expect(await screen.findByLabelText('命令执行方式')).toHaveValue('os_sandbox')
+  expect(screen.getByRole('checkbox', { name: /允许本任务沙箱命令联网/ })).not.toBeChecked()
+  fireEvent.click(screen.getByRole('button', { name: '授权并开始' }))
+  await waitFor(() => expect(command).toHaveBeenCalledWith(expect.objectContaining({ type: 'authorize', profile: 'os_sandbox', network: 'none' })))
+})
+
 it('shows an unavailable executor reason with readable history and no actionable approval controls', async () => {
   const snapshot: CodingHarnessSnapshot = { protocolVersion: 2, codingRunId: 'coding', sessionId: 'session', status: 'waiting_permission', version: 1, objectiveVersion: 1,
     steps: 0, activeMilliseconds: 0, messages: [{ id: 'm', role: 'user', text: 'Keep my task', truncated: false }], evidence: [], children: [],

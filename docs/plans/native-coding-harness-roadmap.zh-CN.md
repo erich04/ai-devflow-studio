@@ -1,6 +1,6 @@
 # Native Coding v3 harness 路线图
 
-日期：2026-11-01；阶段 1 收尾更新：2026-11-02。阶段 1 的实现已完成，本轮定价同步与只读并行分别由 #291、#292 交付，合入前须通过本地验证与全部 CI。阶段 2、3 未开始，#238 继续保持草稿。
+日期：2026-11-01；进度更新：2026-11-02。阶段 1 已由 #291、#292 合入 V3。阶段 2 已启动，先实施第 7 条独立验收，详见[实施记录](native-coding-harness-phase2.zh-CN.md)；阶段 3 未开始，#238 继续保持草稿。
 
 ## 背景
 
@@ -112,12 +112,12 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 | --- | --- | --- | --- |
 | 1 | 合入 main | [#285](https://github.com/erich04/ai-devflow-studio/pull/285) | 已合入 v3 |
 | 2 | 自动重试 | [#288](https://github.com/erich04/ai-devflow-studio/pull/288) | 已合入 v3 |
-| 3 | 只读工具并行 | [#292](https://github.com/erich04/ai-devflow-studio/pull/292) | 已实现；随本轮收尾 PR 合入 |
+| 3 | 只读工具并行 | [#292](https://github.com/erich04/ai-devflow-studio/pull/292) | 已合入 v3 |
 | 4 | 读文件提速 | [#287](https://github.com/erich04/ai-devflow-studio/pull/287) | 已合入 v3 |
 | 5 | 预算预留 | [#286](https://github.com/erich04/ai-devflow-studio/pull/286) | 已合入 v3 |
 | 6 | DeepSeek 适配 | [#289](https://github.com/erich04/ai-devflow-studio/pull/289) | 回归测试已合入；记忆脚本改名另行交接 |
-| 7 | 独立验证者 | — | 未开始 |
-| 8 | 系统沙箱设为默认 | — | 未开始 |
+| 7 | 独立验证者 | [#293](https://github.com/erich04/ai-devflow-studio/pull/293) | 已实现；验证与 CI 通过后合入 |
+| 8 | 系统沙箱设为默认 | `codex/native-v3-default-sandbox` | 已实现，组合验证与 CI 中 |
 | 9 | 权限规则 | — | 未开始 |
 | 10 | 计划和任务图 | — | 未开始 |
 | 11 | 委派挂到计划节点上 | — | 未开始 |

@@ -10,6 +10,8 @@ const pauseReasons: Record<string, string> = {
   provider_unavailable: '模型服务暂时不可用（限流、过载或服务出错），自动重试已用完或服务端要求等待更久，任务已暂停。请稍后点“继续”。',
   invalid_tool_batch: '模型连续两轮返回无效的工具调用，任务已暂停。可以补充说明后点“继续”。',
   no_progress: '提醒过一次之后，模型仍在重复相同的操作且没有新结果，任务已暂停。可以补充说明后点“继续”。',
+  independent_verification_plan_invalid: '未能生成有效的独立验收检查，编码尚未继续。请核对需求是否明确、能否自动验证，再补充说明或继续尝试。',
+  independent_verification_repair_limit: '独立验收仍未通过，两轮自动返修已用完。请检查未通过的验收条目后再决定是否继续。',
 }
 const retryReasons: Record<CodingModelRetryReason, string> = { rate_limited: '模型服务限流（HTTP 429）', overloaded: '模型服务过载（HTTP 503）', server_error: '模型服务出错（HTTP 5xx）', connection_not_sent: '未能连接模型服务，请求没有发出' }
 
@@ -20,7 +22,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
   const busy = pending > 0
   const [permissionMode, setPermissionMode] = useState<CodingPermissionMode>('ask')
   useEffect(() => { setConfirmedCriteria([]); setManualEvidence('') }, [snapshot?.revision?.digest])
-  const [profile, setProfile] = useState<'trusted_local' | 'container'>('trusted_local')
+  const [profile, setProfile] = useState<'os_sandbox' | 'trusted_local' | 'container'>('os_sandbox'), [allowNetwork, setAllowNetwork] = useState(false)
   const accept = useCallback((next: CodingHarnessSnapshot) => setSnapshot(previous => previous?.codingRunId === next.codingRunId && previous.version > next.version ? previous : next), [])
   const refresh = useCallback(async () => {
     if (!api.codingHarness) return
@@ -58,24 +60,27 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     {snapshot.pauseReason ? <p>{pauseReasons[snapshot.pauseReason] ?? snapshot.pauseReason}</p> : null}
     {pendingRetry ? <p>{retryReasons[pendingRetry.reason]}。约 {Math.ceil(pendingRetry.delayMs / 1000)} 秒后自动重新发送（第 {pendingRetry.number}/{pendingRetry.limit} 次{pendingRetry.retryAfterMs !== undefined ? '，等待时间由模型服务指定' : ''}；重试不计入步数）。</p> : null}
     {snapshot.controlUnavailableReason ? <p role="status">{snapshot.controlUnavailableReason}</p> : null}
+    {snapshot.independentVerification ? <p>{snapshot.independentVerification.status === 'preparing' ? '编码前将先生成并冻结独立验收检查。' : `已冻结 ${snapshot.independentVerification.criteriaCount} 条独立验收检查；自动返修 ${snapshot.independentVerification.repairRounds}/2 轮。`}{snapshot.independentVerification.lastResult === 'passed' ? '独立验收已通过。' : snapshot.independentVerification.lastResult === 'failed' ? '独立验收未通过。' : ''}</p> : null}
     <p className="meta">输入 {snapshot.cost.inputTokens ?? '未知'} / 输出 {snapshot.cost.outputTokens ?? '未知'} tokens · 费用 {snapshot.cost.costUsd === null ? '待权威账本核定' : `$${snapshot.cost.costUsd.toFixed(4)}`} · {snapshot.cost.pendingSettlements} 笔待结算 · {snapshot.cost.unknownAttempts} 笔用量待核对</p>
     {snapshot.cost.costUsd === null && snapshot.cost.knownCostUsd !== undefined ? <p>已确认费用小计 ${snapshot.cost.knownCostUsd.toFixed(4)}；另有 {snapshot.cost.unknownCostCount} 笔金额未确认。</p> : null}
     {!snapshot.controlUnavailableReason && snapshot.status === 'waiting_permission' && !snapshot.permission ? <div className="coding-permission-card">
       <h4>允许这次任务在候选目录中工作</h4>
       <p>基线：{snapshot.execution?.baseline}。授权搜索、读取、编辑候选文件，以及运行下面保存的测试；可委派最多 3 个并行子任务，子任务费用计入总额度，编码子任务使用独立候选目录。最终改动另行批准。</p>
       <p>本任务总上限：{snapshot.execution?.maxTokens ?? '未知'} tokens / ${snapshot.execution?.maxCostUsd ?? '未知'}；子任务和上下文压缩共用此额度，命中缓存的输入不计入 token 上限。</p>
+      {snapshot.independentVerification && !manualMode ? <p>自动验收会先根据任务生成独立检查，并在批准修订后执行；检查生成也计入上述总额度。</p> : null}
       <p>输入快照包含当前目录中的源文件与新增文件，依赖和缓存目录排除。摘要：{snapshot.execution?.inputDigest}</p>
       {snapshot.execution?.dirtyPaths?.length ? <details open><summary>这次一并纳入的现有改动（授权即确认此输入）</summary><pre>{snapshot.execution.dirtyPaths.join('\n')}</pre></details> : null}
       <label><input type="checkbox" checked={manualMode} onChange={event => setManualMode(event.target.checked)} />本任务没有适用的自动测试，事先选择人工验收</label>
       {manualMode ? <label>人工验收计划<textarea aria-label="人工验收计划" value={manualPlan} onChange={event => setManualPlan(event.target.value)} /><small>写明检查步骤与预期结果。最终需填写实际检查依据；不会产生自动测试通过记录，工作流的测试门禁仍保留。</small></label> : <pre>{snapshot.execution?.testCommand || '尚无自动测试命令；请选择明确的人工验收计划。'}</pre>}
       {snapshot.execution?.dependencyCommand ? <p>依赖准备（可能联网并运行安装脚本）：<code>{snapshot.execution.dependencyCommand}</code>。候选和最终验证各自安装。</p> : null}
       <label>命令执行方式 <select value={profile} onChange={event => setProfile(event.target.value as typeof profile)}>
-        {snapshot.execution?.profiles.map(item => <option key={item.kind} value={item.kind} disabled={!item.available}>{item.kind === 'trusted_local' ? '本机可信执行' : '受管容器'}</option>)}
+        {snapshot.execution?.profiles.map(item => <option key={item.kind} value={item.kind} disabled={!item.available}>{item.kind === 'os_sandbox' ? '系统沙箱（默认）' : item.kind === 'trusted_local' ? '本机可信执行' : '受管容器'}</option>)}
       </select></label>
       <p>{snapshot.execution?.profiles.find(item => item.kind === profile)?.reason}</p>
       <label>额外操作权限 <select value={permissionMode} onChange={event => setPermissionMode(event.target.value as CodingPermissionMode)}><option value="ask">逐条确认</option><option value="sandbox_rules">沙箱内按规则放行</option><option value="unattended">无人值守（需要确认时拒绝）</option></select></label>
       <p>规则按命令和参数逐项匹配；复合命令需确认。上面已展示的测试和安装计划属于本次开工授权。</p>
-      <button disabled={busy || (manualMode ? !manualPlan.trim() : !snapshot.execution?.testCommand.trim())} onClick={() => void command({ type: 'authorize', profile, permissionMode, ...(manualMode ? { manualValidationPlan: manualPlan } : {}) })}>授权并开始</button>
+      {profile === 'os_sandbox' ? <label><input type="checkbox" checked={allowNetwork} onChange={event => setAllowNetwork(event.target.checked)} />允许本任务沙箱命令联网（默认关闭，含安装脚本和子任务）</label> : null}
+      <button disabled={busy || !snapshot.execution?.profiles.find(item => item.kind === profile)?.available || (manualMode ? !manualPlan.trim() : !snapshot.execution?.testCommand.trim())} onClick={() => void command({ type: 'authorize', profile, permissionMode, ...(profile === 'os_sandbox' ? { network: allowNetwork ? 'enabled' : 'none' } : {}), ...(manualMode ? { manualValidationPlan: manualPlan } : {}) })}>授权并开始</button>
     </div> : null}
     {!snapshot.controlUnavailableReason && snapshot.permission ? <div className="coding-permission-card"><h4>{snapshot.permission.title}</h4><pre>{snapshot.permission.details}</pre>
       <button disabled={busy} onClick={() => void command({ type: 'permission', permissionId: snapshot.permission!.id, decision: 'approved' })}>允许这次操作</button>
@@ -100,7 +105,7 @@ export function NativeCodingHarnessPanel({ codingRunId, api }: { codingRunId: st
     {snapshot.children.map(child => <details key={child.id} open={child.status === 'waiting_permission' || child.status === 'waiting_input'}><summary>{child.title} · {child.status}</summary><NativeCodingHarnessPanel codingRunId={child.id} api={api} /></details>)}
     {snapshot.permissionPolicy ? <details><summary>权限规则与记录 · 已询问 {snapshot.permissionPolicy.humanPrompts} 次，自动判定 {snapshot.permissionPolicy.automaticDecisions} 次</summary><p>{snapshot.permissionPolicy.mode === 'ask' ? '逐条确认' : snapshot.permissionPolicy.mode === 'sandbox_rules' ? '沙箱内按规则放行' : '无人值守'}。拒绝优先于询问，询问优先于允许。任务授权在修改目标或到期后失效。</p>{snapshot.permissionPolicy.rules.length ? snapshot.permissionPolicy.rules.map((rule, index) => <p key={index}>{rule.decision} · <code>{JSON.stringify(rule.prefix)}</code></p>) : <p>尚未配置命令规则，额外操作默认需要确认。</p>}</details> : null}
     {snapshot.modelRetries ? <details><summary>模型请求自动重试（{snapshot.modelRetries.total} 次）</summary>{snapshot.modelRetries.recent.map(item => <p key={item.attemptId}>第 {item.step} 步 · {retryReasons[item.reason]} · 第 {item.number}/{item.limit} 次 · 等待 {Math.ceil(item.delayMs / 1000)} 秒{item.retryAfterMs !== undefined ? '（模型服务指定）' : ''}</p>)}</details> : null}
-    {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{!snapshot.controlUnavailableReason && snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
+    {snapshot.diagnostics ? <details><summary>恢复诊断与资料保留</summary><p>检查点 {snapshot.diagnostics.checkpoint} · 目标版本 {snapshot.diagnostics.objectiveVersion} · {snapshot.diagnostics.profile === 'os_sandbox' ? '系统沙箱' : snapshot.diagnostics.profile === 'container' ? '受管容器' : '本机可信执行'} · {snapshot.diagnostics.writerActive ? '执行单元尚未退出' : '当前无执行单元'}</p><p>未确定操作：{snapshot.diagnostics.uncertainTotal}。未知请求不会自动重发，未知工具效果须先对账。</p>{snapshot.diagnostics.uncertainOperations.map(item => <p key={item.id}>{item.kind} · {item.id} · {item.status}</p>)}<p>{snapshot.storage?.reason}</p>{!snapshot.controlUnavailableReason && snapshot.storage?.cleanupAllowed ? <button disabled={busy} onClick={() => void command({ type: 'cleanup_scratch' })}>清理可重建工作副本，保留全部证据</button> : null}</details> : null}
     <details><summary>任务对话与工具记录（{snapshot.historyPage?.total ?? snapshot.messages.length}）</summary>{snapshot.messages.map(message => <div key={message.id}><strong>{message.role === 'user' ? '你' : message.role === 'assistant' ? 'Native' : '工具结果'}</strong><pre>{message.text}</pre>{message.truncated ? <button onClick={() => void detail({ kind: 'message', id: message.id, offset: 0 })}>记录较长，逐页查看全文</button> : null}</div>)}
       {snapshot.historyPage ? <p><button disabled={snapshot.historyPage.previous === null} onClick={() => void page('historyOffset', snapshot.historyPage!.previous)}>更早记录</button><button disabled={snapshot.historyPage.next === null} onClick={() => void page('historyOffset', snapshot.historyPage!.next)}>后续记录</button></p> : null}
     </details>

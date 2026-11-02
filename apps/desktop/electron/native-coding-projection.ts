@@ -6,6 +6,8 @@ import { codingActiveMilliseconds } from './coding-activity-clock'
 import { pendingCodingPermission } from './native-coding-permissions'
 import type { CodingExecutionProfile } from './coding-command-runner'
 import { codingRetentionPolicy } from './native-coding-retention'
+import { codingSandboxAvailability } from './coding-os-sandbox'
+import { currentIndependentChecks } from './native-coding-independent-verification'
 
 export function markCodingDeliveryConflict(view: CodingHarnessSnapshot): void {
   view.status = 'delivery_conflict'
@@ -23,6 +25,9 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
   costRecords?(projectId: string): Promise<ModelCostRecord[]>
 }, page?: CodingHarnessPage): Promise<CodingHarnessSnapshot> {
     const binding = session.binding!
+    const independentPlan = currentIndependentChecks(session)
+    const objectiveRevisions = new Set(session.revisions.filter(item => item.objectiveVersion === session.objectiveVersion).map(item => item.digest))
+    const objectiveEvidence = session.deliveryEvidence.filter(item => objectiveRevisions.has(item.revisionDigest))
     const childSessions = await Promise.all(session.children.map(async child => { const found = await host.store.getNativeCodingSession(child.sessionId); if (!found) throw new Error('Missing delegated session'); return found }))
     const attempts = [...session.attempts, ...childSessions.flatMap(child => child.attempts)].filter(attempt => attempt.status !== 'not_sent')
     const sum = (field: 'inputTokens' | 'outputTokens') => attempts.every(attempt => typeof attempt.usage?.[field] === 'number') ? attempts.reduce((total, attempt) => total + attempt.usage![field]!, 0) : null
@@ -39,9 +44,15 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       acceptance: session.acceptance.map(({ id, text, sourceRef, resolution }) => ({ id, text, sourceRef, resolution })),
       ...(binding.manualValidationPlan ? { manualValidationPlan: binding.manualValidationPlan } : {}),
       ...(binding.permissionPolicy ? { permissionPolicy: { mode: binding.permissionPolicy.mode, rules: binding.permissionPolicy.rules, humanPrompts: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source !== 'rule').length, 0), automaticDecisions: [session, ...childSessions].reduce((sum, s) => sum + s.permissions.filter(p => p.source === 'rule').length, 0) } } : {}),
+      ...(binding.independentVerificationRequired && !binding.manualValidationPlan && !session.parent ? { independentVerification: {
+        status: independentPlan ? 'frozen' as const : 'preparing' as const, criteriaCount: independentPlan?.criteria.length ?? session.acceptance.length,
+        repairRounds: Math.min(2, objectiveEvidence.filter(item => item.status === 'test_failed' && item.result?.status !== 'cancelled').length),
+        ...(objectiveEvidence.at(-1)?.result?.independentVerification ? { lastResult: objectiveEvidence.at(-1)!.result!.independentVerification!.status } : {}),
+      } } : {}),
       ...(session.question ? { question: { id: session.question.id, text: session.question.text, options: session.question.options } } : {}),
       ...(pendingCodingPermission(session) ? { permission: { id: pendingCodingPermission(session)!.id, title: '需要额外执行授权', details: pendingCodingPermission(session)!.details } } : {}),
       execution: { testCommand: binding.context.project.testCommand, dependencyCommand: binding.dependencyPlan?.command ?? '', baseline: binding.context.workspace.baseCommitSha ?? 'unknown', ...(binding.input ? { inputDigest: binding.input.digest, dirtyPaths: binding.input.dirtyPaths } : {}), ...(session.taskBudget ? { maxTokens: session.taskBudget.maxTokens, maxCostUsd: session.taskBudget.maxCostUsd } : {}), profiles: [
+        { kind: 'os_sandbox', ...await codingSandboxAvailability() },
         { kind: 'trusted_local', available: true, reason: '在独立候选/验证目录中以当前用户权限执行，非操作系统沙箱。' },
         { kind: 'container', available: Boolean(host.containerProfile), reason: host.containerProfile ? '使用已配置且固定镜像摘要的容器，启动前检查镜像。' : '尚未配置受管容器镜像。' },
       ] },

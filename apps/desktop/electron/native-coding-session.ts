@@ -8,6 +8,7 @@ import type { CodingRevision } from './coding-candidate-workspace'
 import type { CodingDependencyPlan } from './coding-dependency-preparation'
 import type { CodingOperationPermission } from './native-coding-permissions'
 import type { CodingCompaction } from './native-coding-context'
+import { validateIndependentVerification, type IndependentVerificationState } from './native-coding-independent-verification'
 
 export type NativeCodingStatus = 'ready' | 'running' | 'waiting_input' | 'waiting_task' | 'waiting_permission' | 'review' | 'paused' | 'reconciling' | 'applying' | 'verifying' | 'completed' | 'cancelled' | 'failed' | 'delivery_conflict'
 export type NativeCodingQuestion = { id: string; toolCallId: string; text: string; options: string[]; objectiveVersion: number }
@@ -62,6 +63,8 @@ export type NativeCodingSession = {
     input?: Awaited<ReturnType<typeof import('./coding-input').inspectCodingInput>>
     manualValidationPlan?: string
     permissionPolicy?: import('@ai-devflow/shared').CodingPermissionPolicy
+    /** Required for newly authorized automatic V3 tasks; old records retain their historical semantics. */
+    independentVerificationRequired?: boolean
   }
   deliveryEvidence: CodingDeliveryEvidence[]
   revisions: CodingRevision[]
@@ -72,6 +75,8 @@ export type NativeCodingSession = {
   children: Array<{ sessionId: string; codingRunId: string; title: string; state: 'active' | 'included' | 'excluded'; mergedChangeSetId?: string }>
   activity: import('./coding-activity-clock').CodingActivity[]
   acceptance: Array<{ id: string; objectiveVersion: number; sourceRef: string; text: string; confirmation: 'approved_source'; resolution: 'unresolved' | 'human_confirmed'; revisionDigest?: string }>
+  /** Host-only acceptance code. Never part of implementer or child transcripts. */
+  independentVerification?: IndependentVerificationState
   createdAt: string
   updatedAt: string
 }
@@ -112,6 +117,9 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
     !['ready', 'running', 'waiting_input', 'waiting_task', 'waiting_permission', 'review', 'paused', 'reconciling', 'applying', 'verifying', 'completed', 'cancelled', 'failed', 'delivery_conflict'].includes(session.status) ||
     !timestamp(session.createdAt) || !timestamp(session.updatedAt) || session.updatedAt < session.createdAt) throw new Error('Invalid native coding session')
   validateNativeHistory(session.transcript, true)
+  if (session.independentVerification) validateIndependentVerification(session.independentVerification, previous?.independentVerification)
+  else if (previous?.independentVerification) throw new Error('Independent verification history cannot be removed')
+  if (session.binding?.independentVerificationRequired !== undefined && typeof session.binding.independentVerificationRequired !== 'boolean') throw new Error('Invalid independent verification requirement')
   if (session.binding?.manualValidationPlan !== undefined && (typeof session.binding.manualValidationPlan !== 'string' || !session.binding.manualValidationPlan.trim() || session.binding.manualValidationPlan.length > 8000)) throw new Error('Invalid manual validation plan')
   if (session.rootStepAttempts && (new Set(session.rootStepAttempts).size !== session.rootStepAttempts.length || !session.rootStepAttempts.every(identifier))) throw new Error('Invalid root step reservations')
   const digest = (item: unknown) => typeof item === 'string' && /^[a-f0-9]{64}$/u.test(item)
@@ -147,6 +155,7 @@ export function parseNativeCodingSession(value: unknown, previous?: NativeCoding
   }
   if (previous) {
     if (previous.binding?.executionGranted && !isDeepStrictEqual(previous.binding.permissionPolicy, session.binding?.permissionPolicy)) throw new Error('Granted coding permission policy is immutable')
+    if (previous.binding?.independentVerificationRequired !== undefined && session.binding?.independentVerificationRequired !== previous.binding.independentVerificationRequired) throw new Error('Independent verification requirement cannot change')
     for (const key of ['schemaVersion', 'executorVersion', 'id', 'localProjectId', 'codingRunId', 'workflowRunId', 'nodeId', 'providerId', 'model', 'createdAt'] as const) {
       if (session[key] !== previous[key]) throw new Error('Coding session identity is immutable')
     }

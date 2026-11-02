@@ -159,9 +159,15 @@ const modelServer = createServer(async (request, response) => {
       return
     }
     modelRequests.push(body)
-    if (liveRelay && body.tools?.some(tool => ['propose_changeset', 'compact_context'].includes(tool.function.name))) {
+    if (liveRelay && body.tools?.some(tool => ['propose_changeset', 'compact_context', 'submit_independent_checks'].includes(tool.function.name))) {
       const real = await liveRelay.complete(body)
       response.writeHead(real.status, { 'content-type': real.type }).end(real.body)
+      return
+    }
+    if (nativeV3 && body.tools?.some(tool => tool.function.name === 'submit_independent_checks')) {
+      const input = JSON.parse(body.messages.find(message => message.role === 'user').content)
+      const tool_calls = [{ id: `acceptance-${modelRequests.length}`, type: 'function', function: { name: 'submit_independent_checks', arguments: JSON.stringify({ checks: input.source.criteria.map(criterion => ({ criterionId: criterion.id, body: 'const { message } = await import("./src/message.js"); check(message === "new");' })) }) } }]
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: null, reasoning_content: 'Freeze behavioral acceptance before implementation.', tool_calls }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 120, completion_tokens: 30, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 120 } }))
       return
     }
     if (nativeV3 && body.tools?.some(tool => tool.function.name === 'propose_changeset')) {
@@ -530,6 +536,9 @@ try {
     const initial = await get()
     expect(initial.status).toBe('waiting_permission')
     await page.reload()
+    // Windows has no OS backend in this phase. Exercise its explicitly selected
+    // legacy profile, never an automatic fallback from a failed sandbox.
+    if (process.platform === 'win32') await page.getByLabel('命令执行方式').selectOption('trusted_local')
     if (manualAcceptance) {
       await page.getByRole('checkbox', { name: '本任务没有适用的自动测试，事先选择人工验收' }).check()
       await page.getByRole('textbox', { name: '人工验收计划', exact: true }).fill('Inspect src/message.js in the frozen diff and confirm the export changed from old to new.')

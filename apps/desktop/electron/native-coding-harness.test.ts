@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { buildCodingBrief, createFakeAgentProvider, createWorkflowRunFromRequest, parseCodingExecutorDescriptor } from '@ai-devflow/shared'
 import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
+import { withFixtureAcceptance } from './native-coding-test-fixture'
 
 const directories: string[] = []
 it('requires a real human execution grant and then exposes a frozen revision through the versioned executor', async () => {
@@ -27,7 +28,7 @@ it('requires a real human execution grant and then exposes a frozen revision thr
     return { kind: 'tools' as const, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, tool_calls: toolCalls } }
   })
   const executor = createNativeCodingExecutorV3({ store, root: path.join(root, 'harness'), configVersion: 1,
-    provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: input => JSON.stringify(input), completeNativeConversation: model } })
+    provider: { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: input => JSON.stringify(input), completeNativeConversation: withFixtureAcceptance(model) } })
   expect(parseCodingExecutorDescriptor(executor.descriptor)).toEqual(executor.descriptor)
   const workspace = { id: 'workspace', projectId: project.id, codingRunId: 'coding', sourcePath: delivery, worktreePath: delivery, branchName: 'test', baseBranch: 'main', baseCommitSha: (await git(['rev-parse', 'HEAD'])).stdout.trim(), createdAt: now }
   const context = { id: 'coding', run: fixture.run, node, project, workspace, requestedBy: 'user', providerId: 'fake', userInstruction: 'Inspect value', now, upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [], brief: buildCodingBrief({ project, worktreePath: delivery, branchName: workspace.branchName, run: fixture.run, node, userInstruction: 'Inspect value', upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [] }) }

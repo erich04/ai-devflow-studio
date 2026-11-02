@@ -6,8 +6,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { atomicCodingFile, codingDigest } from './coding-candidate-workspace'
 import { terminateProcessTree } from './opencode-process'
+import { prepareCodingSandbox } from './coding-os-sandbox'
 
-export type CodingExecutionProfile = { kind: 'trusted_local' } | { kind: 'container'; image: string; network: 'none' | 'bridge' }
+export type CodingExecutionProfile = { kind: 'trusted_local' } | { kind: 'container'; image: string; network: 'none' | 'bridge' } | { kind: 'os_sandbox'; network: 'none' | 'enabled' }
 export type CodingCommandPlan = { executable: string; args: string[]; timeoutMs: number; profile: CodingExecutionProfile; preparation?: { executable: string; args: string[]; timeoutMs: number } }
 export type CodingCommandReceipt = {
   schemaVersion: 1; id: string; plan: CodingCommandPlan; planDigest: string; cwd: string; pid?: number; workerToken?: string
@@ -18,6 +19,7 @@ export type CodingCommandReceipt = {
   temporaryDirectory?: string
   temporaryCleanupStatus?: 'completed' | 'failed'
   temporaryCleanupError?: string
+  sandbox?: { backend: 'seatbelt' | 'bubblewrap' | 'landlock'; policyDigest: string }
 }
 const exec = promisify(execFile)
 // Socket-based tools (including tsx) cannot use the arbitrarily deep receipt
@@ -141,9 +143,10 @@ export class CodingCommandRunner {
     try { return await pending } finally { this.starting.delete(id) }
   }
   /** The installed MCP authority supplies argv/env; model text cannot access this transport. */
-  async startStdio(id: string, executable: string, args: string[], cwd: string, environment: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<ChildProcessWithoutNullStreams> {
+  async startStdio(id: string, executable: string, args: string[], cwd: string, environment: NodeJS.ProcessEnv, signal?: AbortSignal, profile: CodingExecutionProfile = { kind: 'trusted_local' }): Promise<ChildProcessWithoutNullStreams> {
     if (this.starting.has(id) || this.active.has(id)) throw new Error('MCP transport already owns this operation')
-    const pending = this.launch(id, { executable, args, timeoutMs: 300000, profile: { kind: 'trusted_local' } }, cwd, signal, { streamInput: true, environment })
+    if (profile.kind === 'container') throw new Error('Managed container MCP transport is unavailable; no local fallback')
+    const pending = this.launch(id, { executable, args, timeoutMs: 300000, profile }, cwd, signal, { streamInput: true, environment })
     this.starting.set(id, pending)
     try {
       await pending
@@ -163,6 +166,9 @@ export class CodingCommandRunner {
       return previous
     }
     signal?.throwIfAborted()
+    if (!['trusted_local', 'container', 'os_sandbox'].includes(plan.profile?.kind) ||
+      (plan.profile.kind === 'os_sandbox' && !['none', 'enabled'].includes(plan.profile.network)) ||
+      (plan.profile.kind === 'container' && !['none', 'bridge'].includes(plan.profile.network))) throw new Error('Invalid command execution profile')
     if (!plan.executable || plan.executable.includes('\0') || !Array.isArray(plan.args) || plan.args.some(arg => typeof arg !== 'string' || arg.includes('\0')) ||
       !Number.isSafeInteger(plan.timeoutMs) || plan.timeoutMs < 1 || plan.timeoutMs > 60 * 60_000 || !path.isAbsolute(cwd)) throw new Error('Invalid command plan')
     await mkdir(this.root, { recursive: true, mode: 0o700 })
@@ -179,12 +185,29 @@ export class CodingCommandRunner {
         '--mount', `type=bind,source=${cwd},target=/workspace`, '--workdir', '/workspace', '--env', 'HOME=/tmp', ...(process.getuid ? ['--user', `${process.getuid()}:${process.getgid!()}`] : []), profile.image, command.executable, ...command.args] }))
     }
     const receipt: CodingCommandReceipt = { schemaVersion: 1, id, plan, planDigest, cwd, status: 'starting', exitCode: null, outputBytes: 0, startedAt: new Date().toISOString(), workerToken: randomUUID() }
-    if (!transport) receipt.temporaryDirectory = await createCommandTemporaryDirectory(receipt)
+    if (!transport || plan.profile.kind === 'os_sandbox') receipt.temporaryDirectory = await createCommandTemporaryDirectory(receipt)
+    if (plan.profile.kind === 'os_sandbox') {
+      const profile = plan.profile
+      try {
+        const wrapped = []
+        for (const command of commands) {
+          const sandbox = await prepareCodingSandbox({ ...command, cwd, temporaryDirectory: receipt.temporaryDirectory!, network: profile.network })
+          receipt.sandbox = { backend: sandbox.backend, policyDigest: sandbox.policyDigest }
+          wrapped.push({ executable: sandbox.executable, args: sandbox.args })
+        }
+        commands = wrapped
+      } catch (error) { await this.cleanupTemporary(receipt); throw error }
+    }
     try { await this.save(receipt) } catch (error) { await this.cleanupTemporary(receipt); throw error }
-    const environment = transport?.environment ?? {
+    const environment = transport ? { ...transport.environment } : {
       PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, WINDIR: process.env.WINDIR,
       TEMP: receipt.temporaryDirectory, TMP: receipt.temporaryDirectory, TMPDIR: receipt.temporaryDirectory,
       HOME: privateHome, USERPROFILE: privateHome, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: emptyConfig, GIT_TERMINAL_PROMPT: '0', CI: '1',
+    }
+    if (plan.profile.kind === 'os_sandbox') {
+      const confinedHome = path.join(receipt.temporaryDirectory!, 'home'); await mkdir(confinedHome)
+      const confinedConfig = path.join(receipt.temporaryDirectory!, 'gitconfig'); await writeFile(confinedConfig, '')
+      Object.assign(environment, { HOME: confinedHome, USERPROFILE: confinedHome, TEMP: receipt.temporaryDirectory, TMP: receipt.temporaryDirectory, TMPDIR: receipt.temporaryDirectory, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: confinedConfig })
     }
     const workerFile = path.join(this.root, 'command-worker.cjs'); await atomicCodingFile(workerFile, Buffer.from(workerSource))
     const child = fork(workerFile, [receipt.workerToken!], { execPath: process.execPath, execArgv: [], cwd, detached: process.platform !== 'win32', stdio: [transport ? 'pipe' : 'ignore', 'pipe', 'pipe', 'ipc'], env: { ...environment, ELECTRON_RUN_AS_NODE: '1' } })

@@ -197,10 +197,12 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     }
     if (name === 'read_command') {
       if (!String(input.id).startsWith(`${host.sessionId}:`)) throw new Error('Command is outside this task')
+      if (String(input.id).startsWith(`${host.sessionId}:independent:`)) throw new Error('Independent acceptance logs are private to the host')
       return host.commands.read(String(input.id), offset, Math.min(limit, 16000), { waitMs: Number(input.waitMs ?? 10000), signal: ctx.signal })
     }
     if (name === 'cancel_command') {
       if (!String(input.id).startsWith(`${host.sessionId}:`)) throw new Error('Command is outside this task')
+      if (String(input.id).startsWith(`${host.sessionId}:independent:`)) throw new Error('Independent acceptance is controlled by the host')
       return host.commands.cancel(String(input.id))
     }
     if (name === 'propose_changeset') {
@@ -211,7 +213,7 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         if (changed.some(file => !host.child!.paths.some(scope => file.path === scope || file.path.startsWith(`${scope}/`)))) throw new Error('Child command changed a file outside delegated scope')
       }
       const dependencies = await codingDependencyPlan(workspace.candidatePath, ctx.session.binding?.profile ?? { kind: 'trusted_local' }, workspace.identity.base.excludedPaths)
-      const revision = await workspace.freeze({ id: `changeset-${codingDigest(`${host.sessionId}:${ctx.operationId}`)}`, sessionId: host.sessionId, codingRunId: ctx.session.codingRunId, objectiveVersion: ctx.session.objectiveVersion, policyVersion: host.authority.policyVersion, testPlanDigest: codingDigest(JSON.stringify({ testPlan: host.testPlanDigest, dependencies: dependencies.digest })), summary: String(input.summary), now: new Date().toISOString() })
+      const revision = await workspace.freeze({ id: `changeset-${codingDigest(`${host.sessionId}:${ctx.operationId}`)}`, sessionId: host.sessionId, codingRunId: ctx.session.codingRunId, objectiveVersion: ctx.session.objectiveVersion, policyVersion: host.authority.policyVersion, testPlanDigest: codingDigest(JSON.stringify({ testPlan: ctx.session.binding?.testPlanDigest ?? host.testPlanDigest, dependencies: dependencies.digest })), summary: String(input.summary), now: new Date().toISOString() })
       await change(draft => { if (!draft.revisions.some(item => item.id === revision.id)) draft.revisions.push(revision) })
       return { revisionId: revision.id, digest: revision.digest, summary: revision.summary, fileCount: revision.operations.length }
     }

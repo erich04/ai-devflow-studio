@@ -25,3 +25,11 @@ it('allows explicit bounded content pages without accepting a host file path', (
   expect(() => parseCodingHarnessCommand({ ...command, detail: { ...command.detail, file: '/etc/passwd' } })).toThrow()
   expect(() => parseCodingHarnessCommand({ ...command, detail: { ...command.detail, offset: -1 } })).toThrow()
 })
+
+it('requires an explicit sandbox network choice and rejects network flags on other profiles', () => {
+  const command = { protocolVersion: 2, type: 'authorize', codingRunId: 'coding', commandId: 'grant', expectedVersion: 1, profile: 'os_sandbox', network: 'none' }
+  expect(parseCodingHarnessCommand(command)).toEqual(command)
+  expect(parseCodingHarnessCommand({ ...command, network: 'enabled' })).toMatchObject({ network: 'enabled' })
+  expect(() => parseCodingHarnessCommand({ ...command, network: 'anything' })).toThrow()
+  expect(() => parseCodingHarnessCommand({ ...command, profile: 'trusted_local' })).toThrow()
+})
