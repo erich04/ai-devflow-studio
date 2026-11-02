@@ -27,7 +27,7 @@ it.runIf(process.platform === 'darwin' && process.env.DEVFLOW_REQUIRE_PUBLIC_DNS
   }
 })
 const backends = process.platform === 'linux' ? [undefined, 'landlock' as const, ...(process.env.DEVFLOW_REQUIRE_BUBBLEWRAP === '1' ? ['bubblewrap' as const] : [])] : [undefined]
-it.runIf(supported)('runs a shell package-manager child from a private Node installation without exposing adjacent private files', async () => {
+it.runIf(supported).each(backends)('runs a private Node package-manager through backend %s without exposing adjacent private files', async linuxBackend => {
   const f = await fixture(), bin = path.join(f.root, 'host-toolchain', 'bin')
   await mkdir(bin, { recursive: true }); await copyFile(process.execPath, path.join(bin, 'node'))
   // Homebrew Node uses a sibling libnode; keep that existing system runtime
@@ -43,7 +43,7 @@ it.runIf(supported)('runs a shell package-manager child from a private Node inst
   const previous = process.env.PATH
   try {
     process.env.PATH = `${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`
-    const command = await prepareCodingSandbox({ ...f, executable: '/bin/sh', args: ['-c', 'exec npm'], network: 'none' })
+    const command = await prepareCodingSandbox({ ...f, executable: '/bin/sh', args: ['-c', 'exec npm'], network: 'none', linuxBackend })
     expect((await exec(command.executable, command.args, { cwd: f.cwd, env: { PATH: process.env.PATH }, timeout: 10000 })).stdout).toContain('private runtime works')
   } finally { process.env.PATH = previous }
 })
