@@ -44,7 +44,7 @@ export function requestInputTokenBound(serializedRequest: string): number {
 /** The full context capacity or the measured request bound, priced as cache misses at peak. */
 export function verifiedModelCallBound(quote: ModelCallQuote): VerifiedModelCallBound | null {
   if (!quote.boundBasis || quote.billingProvider !== 'deepseek' ||
-    !['deepseek-flash', 'deepseek-pro'].includes(quote.model) || !quote.maxOutputTokens || quote.maxOutputTokens > 393216 || quote.inputTokens > DEEPSEEK_CONTEXT_TOKENS) return null
+    !['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro', 'deepseek-pro'].includes(quote.model) || !quote.maxOutputTokens || quote.maxOutputTokens > 393216 || quote.inputTokens > DEEPSEEK_CONTEXT_TOKENS) return null
   const inputTokenBound = quote.boundBasis === 'deepseek-context-v1' ? DEEPSEEK_CONTEXT_TOKENS : quote.inputTokens
   const price = resolveDeepSeekPricingSnapshot({ providerId: 'deepseek', model: quote.model, timestamp: quote.createdAt, worstCase: true })
   if (!price) return null
