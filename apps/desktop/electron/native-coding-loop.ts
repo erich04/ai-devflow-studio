@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, validateNativeToolValue, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
+import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, validateNativeToolValue, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type NativeToolCall, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
 import { codingDigest } from './coding-candidate-workspace'
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
@@ -8,7 +8,11 @@ import { codingContext } from './native-coding-context'
 export type CodingLoopTools = {
   definitions: ReadOnlyFunctionDefinition[]
   effects: Record<string, CodingToolReceipt['effect']>
+  /** Read-only tools whose consecutive calls may run together. Any other call runs alone; without this list every call does. */
+  parallel?: string[]
   execute(name: string, input: Record<string, unknown>, context: { session: NativeCodingSession; operationId: string; signal: AbortSignal }): Promise<unknown>
+  /** Checks a call and records its one-time authorization; the returned function runs it. Read groups need it. */
+  authorize?(name: string, input: Record<string, unknown>, context: { session: NativeCodingSession; operationId: string; signal: AbortSignal }): Promise<() => Promise<unknown>>
   reconcile?(receipt: CodingToolReceipt, session: NativeCodingSession): Promise<{ state: 'completed'; result: unknown } | { state: 'not_executed' } | { state: 'unknown' }>
   drain?(): Promise<void>
 }
@@ -47,6 +51,7 @@ class InvalidToolBatch extends Error {
 // so they get 2. One wait is at most 30 s and one step waits at most 2 minutes in total; the
 // waits happen inside the active interval, so they count toward the task's time limit.
 const retryLimits: Record<CodingModelRetryReason, number> = { rate_limited: 5, overloaded: 5, connection_not_sent: 5, server_error: 2 }
+const maxParallelReads = 4
 const retryBaseDelayMs = 1_000, retryMaxDelayMs = 30_000, retryMaxTotalWaitMs = 120_000
 type ModelFailure = { kind: 'retry'; reason: CodingModelRetryReason; retryAfterMs?: number } | { kind: 'pause'; reason: string } | { kind: 'reconcile' } | { kind: 'invalid_batch'; problem: string }
 /** DeepSeek error codes: 401 authentication, 402 insufficient balance, 429 rate limit, 500 server error, 503 overloaded. */
@@ -362,9 +367,21 @@ export class NativeCodingLoop {
     }
     if (pending.length && session.invalidToolBatches) session = await this.change(session.id, draft => { delete draft.invalidToolBatches })
     let batchFailed = false
-    for (const call of pending) {
+    // Only declared read-only tools join a group; writes, commands, state changes and control tools are barriers.
+    const parallel = new Set(this.host.tools.parallel ?? [])
+    const groupable = (call: NativeToolCall) => parallel.has(call.function.name) && this.host.tools.effects[call.function.name] === 'read' && !controls.includes(call.function.name)
+    for (let index = 0; index < pending.length; index++) {
+      const call = pending[index]!
       signal.throwIfAborted()
       const latest = await this.read(session.id)
+      let end = index
+      while (this.host.tools.authorize && !batchFailed && !latest.pendingInput.length && end < pending.length && groupable(pending[end]!)) end++
+      if (end - index > 1) {
+        const group = await this.executeReadGroup(latest, pending.slice(index, end), signal)
+        if (!group) return this.read(session.id)
+        session = group.session; batchFailed = group.failed; index = end - 1
+        continue
+      }
       if (latest.pendingInput.length && !latest.toolReceipts.some(receipt => receipt.id === call.id)) {
         session = await this.change(session.id, draft => { draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: '{"supersededByHumanSteering":true,"executed":false}' }) }); continue
       }
@@ -437,6 +454,54 @@ export class NativeCodingLoop {
       }
     }
     return session
+  }
+  /**
+   * Consecutive read-only calls. Started receipts and then one-time authorizations are written first, in call
+   * order; at most four calls run at once; results are recorded in call order however they finish. If the
+   * process stops inside the group, every call keeps a started read receipt, which recovery runs again.
+   */
+  private async executeReadGroup(session: NativeCodingSession, calls: NativeToolCall[], signal: AbortSignal): Promise<{ session: NativeCodingSession; failed: boolean } | undefined> {
+    const inputs = calls.map(call => JSON.parse(call.function.arguments) as Record<string, unknown>)
+    if (calls.some(call => !session.toolReceipts.some(receipt => receipt.id === call.id))) session = await this.change(session.id, draft => {
+      for (const [index, call] of calls.entries()) if (!draft.toolReceipts.some(receipt => receipt.id === call.id)) {
+        draft.toolReceipts.push({ id: call.id, name: call.function.name, input: inputs[index]!, inputDigest: codingDigest(JSON.stringify(inputs[index])), objectiveVersion: draft.objectiveVersion, effect: 'read', status: 'started' })
+      }
+    })
+    const failure = (error: unknown) => ({ result: { error: error instanceof Error ? error.message : 'Tool failed' }, failed: true })
+    // A receipt completed before an interruption keeps its result; the read is not repeated.
+    const outcomes: Array<{ result: unknown; failed: boolean } | undefined> = calls.map(call => {
+      const receipt = session.toolReceipts.find(item => item.id === call.id)
+      return receipt?.status === 'completed' ? { result: receipt.result, failed: false } : undefined
+    })
+    const runs: Array<(() => Promise<unknown>) | undefined> = []
+    for (const [index, call] of calls.entries()) {
+      if (outcomes[index]) continue
+      try { runs[index] = await this.host.tools.authorize!(call.function.name, inputs[index]!, { session, operationId: call.id, signal }) }
+      catch (error) { if (signal.aborted) return undefined; outcomes[index] = failure(error) }
+    }
+    let next = 0
+    const worker = async () => {
+      for (let index = next++; index < calls.length; index = next++) {
+        const run = runs[index]
+        if (!run || signal.aborted) continue
+        const current = await this.read(session.id)
+        if (current.status !== 'running' || current.writer?.owner !== this.owner || signal.aborted) return
+        if (current.pendingInput.length) {
+          outcomes[index] = { result: { supersededByHumanSteering: true, executed: false }, failed: false }
+          continue
+        }
+        try { outcomes[index] = { result: await run(), failed: false } } catch (error) { outcomes[index] = failure(error) }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(maxParallelReads, calls.length) }, worker))
+    const current = await this.read(session.id)
+    if (current.status !== 'running' || current.writer?.owner !== this.owner || signal.aborted) return undefined
+    session = await this.change(session.id, draft => {
+      if (draft.status !== 'running' || draft.writer?.owner !== this.owner || signal.aborted) return
+      for (const [index, call] of calls.entries()) { const receipt = draft.toolReceipts.find(item => item.id === call.id)!; receipt.status = 'completed'; receipt.result = outcomes[index]!.result }
+      for (const [index, call] of calls.entries()) draft.transcript.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(outcomes[index]!.result) })
+    })
+    return { session, failed: outcomes.some(outcome => outcome?.failed) }
   }
   private recordToolResult(id: string, callId: string, result: unknown): Promise<NativeCodingSession> {
     return this.change(id, draft => {
