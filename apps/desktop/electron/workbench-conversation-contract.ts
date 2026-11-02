@@ -1,7 +1,9 @@
 import type { AgentProviderUsage } from '@ai-devflow/shared'
+import { parsePermissionExpected } from './build-test-contract'
 
 // Local-only records. Never add these to LocalExecutionState or team projections.
 export type ConversationTarget = { runId: string; nodeId: string }
+export type ConversationFocus = ConversationTarget & { changeSetId?: string; changeSetDigest?: string; diffArtifactId?: string; diffSourceDigest?: string }
 export type ConversationAction = ConversationTarget & {
   label: string
   section: '状态' | '产物' | '测试证据' | '轨迹' | 'Gate影响' | 'Gate条件' | '引用来源' | 'Remediation' | 'Handoff' | 'Final Gate'
@@ -62,6 +64,7 @@ export type ConversationMemoryReceipt = {
 }
 export type ConversationDisplay = { text: string; references: string[] }
 export type ConversationMessage = {
+  focus?: ConversationFocus
   id: string
   role: 'user' | 'assistant' | 'tool' | 'notice'
   text: string
@@ -123,7 +126,7 @@ export type ConversationCommand = { projectId: string } & (
   | { type: 'list' }
   | { type: 'create'; title?: string; inputDraft?: string; executor?: 'direct-provider' | 'opencode' | 'native-tools' }
   | { type: 'update'; conversationId: string; title?: string; isOpen?: boolean; inputDraft?: string }
-  | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string; display?: ConversationDisplay }
+  | { type: 'send'; conversationId: string; text: string; providerId: string; answerToMessageId?: string; display?: ConversationDisplay; focus?: ConversationFocus }
   | { type: 'retry'; conversationId: string; providerId: string }
   | { type: 'read_content'; conversationId: string; messageId: string; field: 'text' | 'draft' | 'reasoning'; offset: number }
   | { type: 'configure_investigation'; conversationId: string; maxSteps: number; maxDurationMs: number }
@@ -162,7 +165,7 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   const record = value as Record<string, unknown>
   const fields: Record<string, string[]> = {
     list: [], create: ['title', 'inputDraft', 'executor'], update: ['conversationId', 'title', 'isOpen', 'inputDraft'],
-    send: ['conversationId', 'text', 'providerId', 'answerToMessageId', 'display'], retry: ['conversationId', 'providerId'],
+    send: ['conversationId', 'text', 'providerId', 'answerToMessageId', 'display', 'focus'], retry: ['conversationId', 'providerId'],
     configure_investigation: ['conversationId', 'maxSteps', 'maxDurationMs'], export_diagnostics: ['conversationId'],
     read_content: ['conversationId', 'messageId', 'field', 'offset'],
     cancel: ['conversationId'], publish: ['conversationId', 'messageId', 'acknowledgeUnverified'], retry_review: ['conversationId', 'messageId', 'providerId'],
@@ -182,5 +185,12 @@ export function parseConversationCommand(value: unknown): ConversationCommand {
   const required = ['projectId', ...(['list', 'create'].includes(type) ? [] : ['conversationId']), ...(['send', 'retry', 'retry_review'].includes(type) ? ['providerId'] : []), ...(type === 'send' ? ['text'] : []), ...(['publish', 'retry_review'].includes(type) ? ['messageId'] : [])]
   if (required.some((key) => typeof record[key] !== 'string' || !(record[key] as string).trim())) throw new Error('会话请求缺少必要信息。')
   if (record.title !== undefined && !(record.title as string).trim()) throw new Error('请输入会话名称。')
-  return record as ConversationCommand
+  const clean = { ...record }
+  if (record.focus !== undefined) {
+    try {
+      const { expiresAt: _, ...focus } = parsePermissionExpected({ ...(record.focus as object), expiresAt: '2000-01-01T00:00:00.000Z' })
+      clean.focus = focus
+    } catch { delete clean.focus }
+  }
+  return clean as ConversationCommand
 }

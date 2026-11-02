@@ -2,6 +2,10 @@ import { parseKnowledgeSearchArgs, validateKnowledgeReadArgs } from './hindsight
 import { KNOWLEDGE_STAGES } from './knowledge-context'
 
 export const readOnlyToolFields: Record<string, { required: string[]; optional: string[]; description: string; listed?: false }> = {
+  change_read: { required: ['runId'], optional: ['changeSetId', 'changeSetDigest', 'diffArtifactId', 'diffSourceDigest', 'path', 'offset', 'limit'], description: '读取本任务指定版本的精确改动；必须提供一组改动编号和摘要，默认分页 6000 字。' },
+  workspace_list: { required: ['runId'], optional: ['path'], description: '列出本任务最近一次开发的受管工作区目录。' },
+  workspace_read: { required: ['runId', 'path'], optional: [], description: '读取本任务受管工作区的普通文本，沿用仓库读取的路径和秘密保护。' },
+  workspace_search: { required: ['runId', 'query'], optional: ['path'], description: '在本任务受管工作区中搜索文本。' },
   workflow: { required: [], optional: ['runId', 'query', 'offset'], description: '查询当前项目的真实流程与节点；支持分页。' },
   node: { required: ['runId', 'nodeId'], optional: [], description: '查询节点的执行状态、产物、测试、交付回执与 Gate 条件。' },
   artifact: { required: ['runId', 'artifactId'], optional: ['offset', 'limit'], description: '分页读取当前项目某个 Run 的产物正文；摘要不代表全文。' },
@@ -40,6 +44,10 @@ export function readOnlyToolDefinitions(names?: string[]): ReadOnlyFunctionDefin
           { required: ['path'], not: { anyOf: [{ required: ['sourceRef'] }, { required: ['expectedDigest'] }] } },
           { required: ['sourceRef', 'expectedDigest'] },
         ] } : {}),
+        ...(name === 'change_read' ? { anyOf: [
+          { required: ['changeSetId', 'changeSetDigest'], not: { anyOf: [{ required: ['diffArtifactId'] }, { required: ['diffSourceDigest'] }] } },
+          { required: ['diffArtifactId', 'diffSourceDigest'], not: { anyOf: [{ required: ['changeSetId'] }, { required: ['changeSetDigest'] }] } },
+        ] } : {}),
       },
     } }))
 }
@@ -66,6 +74,11 @@ export function validateNativeToolBatch(value: unknown, allowed = readOnlyToolDe
     // Use the same cross-field and UTF-8 checks as the host's Hindsight tools.
     if (call.function.name === 'knowledge_search') parseKnowledgeSearchArgs(args)
     if (call.function.name === 'knowledge_read') validateKnowledgeReadArgs(args)
+    if (call.function.name === 'change_read') {
+      const native = args.changeSetId !== undefined || args.changeSetDigest !== undefined
+      const diff = args.diffArtifactId !== undefined || args.diffSourceDigest !== undefined
+      if (native === diff || !(native ? args.changeSetId && /^[a-f0-9]{64}$/u.test(String(args.changeSetDigest)) : args.diffArtifactId && /^[a-f0-9]{64}$/u.test(String(args.diffSourceDigest)))) throw new Error('Invalid change identity')
+    }
     const path = args.path
     if (typeof path === 'string' && (path.startsWith('/') || /^[a-z]:/iu.test(path) || path.includes('\\') || path.split('/').includes('..'))) throw new Error('Tool path must stay inside the project')
     return { call, name: call.function.name, args }

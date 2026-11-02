@@ -1,3 +1,7 @@
+import { resolveCodingRetryContext } from './coding-retry-context.js'
+import type { CodingRetryContext } from './build-test-contract.js'
+import { createCodingChangeControl } from './coding-change-control.js'
+import type { LocalStore } from './local-store.js'
 import { assertPermissionExpected, type PermissionExpected } from './build-test-contract.js'
 import { CodingQuestionError } from './coding-question-error.js'
 import { validateCodingQuestionReply, type CodingQuestionRequest, type CodingQuestionReply, type CodingQuestionReceipt } from '@ai-devflow/shared'
@@ -151,7 +155,7 @@ function preserveCodingRunContext(run: CodingAgentRun, previous: CodingAgentRun)
   }
 }
 
-export type CodingRuntimeStore = CodingMemoryStore & {
+export type CodingRuntimeStore = CodingMemoryStore & Partial<Pick<LocalStore, 'getCodingChangeSet' | 'listCodingChangeSets' | 'saveCodingChangeReview' | 'listCodingChangeReviews'>> & {
   listProjects(): Promise<LocalProject[]>
   getPolicySnapshot?(projectId: string): Promise<{ version: number } | null>
   listRuns(): Promise<WorkflowRun[]>
@@ -186,6 +190,7 @@ export type CodingRuntimeStore = CodingMemoryStore & {
 }
 
 export type CodingRuntimePublisher = {
+  publishChangeHistory?(runId: string): void
   publishRunStatus(run: CodingAgentRun): void
   publishEvent(event: CodingAgentEvent): void
   publishPermission(request: CodingPermissionRequest): void
@@ -255,6 +260,7 @@ export type CodingRuntimeDependencyBootstrapRunner = (input: {
 }) => Promise<DependencyBootstrapEvidence>
 
 export type RunCodingAgentRuntimeInput = {
+  context?: CodingRetryContext
   runId: string
   nodeId: string
   projectId: string
@@ -308,6 +314,7 @@ export type OpenManagedWorktreeRuntimeInput = {
 export type DeleteManagedWorktreeRuntimeInput = OpenManagedWorktreeRuntimeInput
 
 export type CodingRuntimeDeps = {
+  autoChangeReview?: boolean
   store: CodingRuntimeStore
   sessionAuthority?: (projectId: string) => Promise<{ actorId: string; key: string }>
   engine?: CodingEngineAdapter
@@ -349,7 +356,7 @@ export type ReplyCodingQuestionRuntimeInput = {
 }
 const questionTimeouts = new WeakMap<CodingRuntimeStore, Map<string, ReturnType<typeof setTimeout>>>()
 
-export type CodingRuntime = {
+export type CodingRuntime = Pick<ReturnType<typeof createCodingChangeControl>, 'reviseCodingChangeSet' | 'cancelCodingRevision' | 'startCodingChangeReview' | 'cancelCodingChangeReview'> & {
   ensureCodingEngine(input: { projectId: string }): Promise<{
     projectId: string
     engine: CodingAgentRun['engine']
@@ -622,6 +629,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       mutation = { ...mutation, run: { ...mutation.run, question: { ...mutation.run.question,
         status: mutation.run.status === 'timed_out' ? 'expired' : mutation.run.question.status === 'sending' ? 'delivery_unknown' : 'invalidated', settledAt: now() } } }
     }
+    if (mutation.run?.revisionInFlight && !activeCodingStatuses.has(mutation.run.status)) {
+      const { revisionInFlight: _, ...terminal } = mutation.run
+      mutation = { ...mutation, run: terminal }
+    }
     const safeEvents = mutation.events?.map((event) => redactCodingAgentEventForStorage(event))
     const result = await deps.store.commitCodingAgentMutation({
       ...mutation,
@@ -651,6 +662,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     for (const request of mutation.permissionRequests ?? []) {
       publishPermissionRequest(request)
     }
+    runBestEffortNotification(() => deps.publisher?.publishChangeHistory?.(result.run.runId))
     return result
   }
 
@@ -1479,6 +1491,11 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       return
     }
     const timestamp = now()
+    if (executor.descriptor.id === 'coding-executor-native' && executor.descriptor.version === 2) {
+      const pending = (await deps.store.listCodingPermissionRequests(codingRunId)).filter(r => r.status === 'pending')
+      if (expectedRun.status === 'waiting_input' || (expectedRun.status === 'waiting_permission' && pending.length === 1 && Date.parse(pending[0]!.expiresAt) > Date.parse(timestamp))) return
+    }
+    await changeControl.cancelReviews(codingRunId)
     await executor.cancel({ codingRun: expectedRun })
     for (let attempt = 0; attempt < 8; attempt += 1) {
       if (!activeCodingStatuses.has(expectedRun.status)) {
@@ -1904,7 +1921,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       const result = await executor.replyQuestion({ requestId: run.id, ...await loadExecutorContinuationState(run.id), runtimeContext: {
         codingRun: claimedRun, request: sending, reply, workspace, project, now: now(), assertContextCurrent: () => assertExecutionContext(run),
         onDelivered: async (status) => {
-          const receipt: CodingQuestionReceipt = { id: request.id, revision: request.revision, status, replyDigest, answeredBy: input.answeredBy, settledAt: now() }
+          const receipt: CodingQuestionReceipt = { id: request.id, revision: request.revision, status, replyDigest, answeredBy: input.answeredBy, settledAt: now(), questions: request.questions.map(q => ({ header: redactSensitiveText(q.header).value, question: redactSensitiveText(q.question).value })), ...(reply.kind === 'answer' ? { answers: reply.answers.map(a => a.map(text => redactSensitiveText(text).value)) } : {}) }
           const delivered: CodingAgentRun = { ...claimedRun, question: { ...sending, ...receipt, questions: sending.questions },
             questionReceipts: [...(claimedRun.questionReceipts ?? []), receipt].slice(-24), summary: '回答已送达，OpenCode 正在继续执行。' }
           const committed = await commitCodingAgentMutation({ expectedRun: claimedRun, expectedPendingPermissionRequestIds: [], run: delivered })
@@ -1950,6 +1967,24 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
   ): Promise<CodingPermissionRequest> {
     const request = await findPermissionRequest(input)
     if (input.expected) assertPermissionExpected(request, input.expected)
+    const sourceRun = await findCodingRun(input.codingRunId)
+    if (request.status === 'superseded') throw new Error('[coding_permission_stale] 这份改动已经被新版本替代。')
+    if (sourceRun.revisionInFlight) {
+      if (input.decision !== 'expired') throw new Error('[revision_in_flight] 正在生成新版本，暂时不能批准或拒绝原改动。')
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const current = await findCodingRun(input.codingRunId)
+        const previous = await findPermissionRequest(input)
+        if (previous.status !== 'pending') return previous
+        if (!current.revisionInFlight || current.revisionInFlight.previousRequestId !== previous.id) throw new Error('[revise_state_changed] 记录已经更新。')
+        const timestamp = now()
+        const expired = { ...previous, status: 'expired' as const }
+        const result = await commitCodingAgentMutation({ expectedRun: current, expectedPendingPermissionRequestIds: (await deps.store.listCodingPermissionRequests(current.id)).filter(r => r.status === 'pending').map(r => r.id), expectedPermissionRequests: [previous],
+          run: { ...current, revisionInFlight: { ...current.revisionInFlight, previousExpired: true } }, permissionRequests: [expired],
+          permissionDecisions: [{ id: idGenerator('coding-permission-decision'), requestId: previous.id, codingRunId: current.id, decidedBy: input.decidedBy, decision: 'expired', comment: '生成期间原改动的批准期限已过。', decidedAt: timestamp }] })
+        if (result.committed) return expired
+      }
+      throw new Error('[revise_state_changed] 记录在保存时一直在变化。')
+    }
     const timestamp = recoveryDecisionAt ?? now()
     const requestExpiry = Date.parse(request.expiresAt)
     const decisionTime = Date.parse(timestamp)
@@ -1999,6 +2034,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         throw new Error('Session permission expired, changed or was revoked.')
       }
     }
+    if (request.status === 'pending' && request.changeSetId) await changeControl.cancelReviews(codingRun.id)
     let renewedWorkflow: WorkflowRun | undefined
     if (request.replacesRequestId && input.decision === 'approved' && request.status === 'pending') {
       renewedWorkflow = await findRun(codingRun.runId)
@@ -2453,6 +2489,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       const workspace = await findWorkspace(codingRun.managedWorkspaceId, codingRun.projectId)
       const project = await findProject(codingRun.projectId)
+      if (executor.descriptor.id === 'coding-executor-native' && executor.descriptor.version === 2) deps.scheduleRunTimeout?.(codingRun, () => timeOutCodingRun(codingRun.id, 'Coding Agent run timed out.'))
       const continuationState = await loadExecutorContinuationState(codingRun.id)
       const authorizedStart = request.origin === 'execution_authorization'
         ? await buildAuthorizedOpenCodeStart({
@@ -2840,7 +2877,30 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     })
   }
 
+  const changeControl = createCodingChangeControl({
+    store: deps.store, executor, now, id: idGenerator, autoReview: deps.autoChangeReview === true,
+    findRun: findCodingRun, findWorkflow: findRun, findProject, findWorkspace, assertContext: assertExecutionContext,
+    continuation: loadExecutorContinuationState, commit: commitCodingAgentMutation, mapEvents: mapObservableExecutorEvents,
+    report: run => trace => persistProviderCallTrace(run, trace),
+    publish: runId => runBestEffortNotification(() => deps.publisher?.publishChangeHistory?.(runId)),
+    expire: id => timeOutCodingRun(id, '原改动的批准期限已过，这次开发已结束。'),
+    schedule: run => deps.scheduleRunTimeout?.(run, () => timeOutCodingRun(run.id, 'Coding Agent run timed out.')),
+    budget: async (codingRun, calls, requestedBy) => {
+      const project = await findProject(codingRun.projectId), run = await findRun(codingRun.runId)
+      const node = validateCodingWorkflowContext(run, codingRun)
+      if (!deps.budgetGuard) throw new Error('[revise_budget_blocked] 现在核对不了预算。')
+      const model = executor.modelId ?? executor.providerId
+      const decision = await deps.budgetGuard({ codingRunId: codingRun.id, engine: 'native', providerId: executor.providerId, model, project, run, node, requestedBy, metered: true,
+        estimatedCost: estimateNativeCodingWorstCaseCost({ runId: run.id, nodeId: node.id, projectId: project.id, requestedBy, providerId: executor.providerId, model, timestamp: now(), providerCallLimit: calls, ...(executor.billingProvider ? { billingProvider: executor.billingProvider } : {}) }) })
+      if (decision.blocksRun) throw new Error(`[revise_budget_blocked] ${decision.reason}`)
+    },
+  })
+
   return {
+    reviseCodingChangeSet: changeControl.reviseCodingChangeSet,
+    cancelCodingRevision: changeControl.cancelCodingRevision,
+    startCodingChangeReview: changeControl.startCodingChangeReview,
+    cancelCodingChangeReview: changeControl.cancelCodingChangeReview,
     async ensureCodingEngine(input) {
       const project = await findProject(input.projectId)
       return executor.ensure({ project })
@@ -2865,6 +2925,10 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         const isOpenCodeRun = recoverOpenCode && codingRun.engine === 'opencode-http'
         const isNativeRun = recoverNative && codingRun.engine !== 'opencode-http'
         if (!isOpenCodeRun && !isNativeRun) continue
+        if (isNativeRun) {
+          try { const restored = await changeControl.recover(codingRun); if (restored) { recovered.push(restored); continue } }
+          catch { recovered.push(await findCodingRun(codingRun.id)); continue }
+        }
 
         if (
           codingRun.status === 'waiting_input' ||
@@ -3004,6 +3068,8 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     async runCodingAgent(input) {
       const run = await findRun(input.runId)
       const node = validateCodingWorkflowContext(run, input)
+      const retry = input.context ? await resolveCodingRetryContext({ run, nodeId: node.id, context: input.context, userInstruction: input.userInstruction }, deps.store) : undefined
+      if (retry) input = { ...input, userInstruction: retry.userInstruction }
       const project = await findProject(input.projectId)
       const requiredCapabilities = requiredCapabilitiesForExecutor(executor)
       selectCodingExecutor({
@@ -3214,6 +3280,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
       }
       const reservationTimestamp = now()
       const reservationRun: CodingAgentRun = {
+        ...(retry ? { retryOf: retry.retryOf } : {}),
         contextReceipt,
         id: codingRunId,
         runId: run.id,
@@ -3933,6 +4000,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
         })
       })
 
+      changeControl.autoReview(bundleCommitted.run)
       return {
         codingRun: bundleCommitted.run,
         state: await deps.store.loadState(),
@@ -4012,6 +4080,7 @@ export function createCodingRuntime(deps: CodingRuntimeDeps): CodingRuntime {
     },
 
     async cancelCodingAgentRun(input) {
+      await changeControl.cancelReviews(input.codingRunId)
       let expectedRun = await findCodingRun(input.codingRunId)
       if (!activeCodingStatuses.has(expectedRun.status)) {
         return expectedRun

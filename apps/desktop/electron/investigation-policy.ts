@@ -121,7 +121,7 @@ export function investigationResultsEqual(left: unknown, right: unknown, hostObs
 
 /** Only these local reads are safe to repeat for freshness. Remote search has its own source receipts. */
 export function investigationCanRevalidate(name: string): boolean {
-  return ['repo_list', 'repo_read', 'repo_search', 'artifact', 'requirement', 'node', 'workflow', 'knowledge_read', 'knowledge_list', 'knowledge', 'conversation_read'].includes(name)
+  return ['change_read', 'workspace_list', 'workspace_read', 'workspace_search', 'repo_list', 'repo_read', 'repo_search', 'artifact', 'requirement', 'node', 'workflow', 'knowledge_read', 'knowledge_list', 'knowledge', 'conversation_read'].includes(name)
 }
 
 export function boundInvestigationResult(value: unknown): unknown {
@@ -149,8 +149,8 @@ export function investigationQueryKey(name: string, args: Record<string, unknown
   if (!fields || Object.keys(args).some(key => ![...fields.required, ...fields.optional].includes(key)) || fields.required.some(key => typeof args[key] !== 'string' || !String(args[key]).trim())) return undefined
   const normalized = { ...args }
   if (fields.optional.includes('offset')) normalized.offset ??= 0
-  if (['artifact', 'requirement', 'knowledge_read', 'conversation_read'].includes(name)) normalized.limit ??= 6000
-  if (['repo_list', 'repo_search'].includes(name)) normalized.path ??= '.'
+  if (['change_read', 'artifact', 'requirement', 'knowledge_read', 'conversation_read'].includes(name)) normalized.limit ??= 6000
+  if (['workspace_list', 'workspace_search', 'repo_list', 'repo_search'].includes(name)) normalized.path ??= '.'
   if (typeof normalized.path === 'string') {
     if (normalized.path.includes('\\') || normalized.path.startsWith('/') || normalized.path.split('/').includes('..')) return undefined
     normalized.path = normalized.path.split('/').filter(part => part && part !== '.').join('/') || '.'

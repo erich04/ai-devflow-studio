@@ -1,3 +1,5 @@
+import type { BuildTestDesktopApi, CodingRetryContext } from './build-test-contract.js'
+import { parseCodingRetryContext } from './build-test-contract.js'
 import { boundedText, optionalBoolean, parsePermissionExpected, type PermissionExpected } from './build-test-contract.js'
 import type { CodingQuestionReceipt, CodingQuestionReply } from '@ai-devflow/shared'
 import type { WorkbenchConversationApi } from './workbench-conversation-contract.js'
@@ -314,6 +316,14 @@ export const ipcChannels = {
   retryModelCostSettlements: 'devflow:model-costs:retry',
   saveCodingRuntimeBudgetPolicy: 'devflow:coding:runtime-budget-policy:save',
   createCodingRuntimeBudgetApproval: 'devflow:coding:runtime-budget-approval:create',
+  getCodingChangeHistory: 'devflow:coding:change-history:get',
+  reviseCodingChangeSet: 'devflow:coding:change-set:revise',
+  cancelCodingRevision: 'devflow:coding:change-set:revise-cancel',
+  startCodingChangeReview: 'devflow:coding:change-review:start',
+  cancelCodingChangeReview: 'devflow:coding:change-review:cancel',
+  getCodingActionCosts: 'devflow:coding:action-costs:get',
+  confirmTestEvidence: 'devflow:test-evidence:confirm',
+  codingChangeHistoryUpdated: 'devflow:coding:push:change-history',
   runCodingAgent: 'devflow:coding:agent:run',
   startRetryAttempt: 'devflow:remediation:retry:start',
   cancelCodingAgentRun: 'devflow:coding:agent:cancel',
@@ -608,6 +618,7 @@ export type CreateCodingRuntimeBudgetApprovalInput = {
 }
 
 export type RunCodingAgentInput = {
+  context?: CodingRetryContext
   runId: string
   nodeId: string
   projectId: string
@@ -698,7 +709,7 @@ export type PairDesktopResult = {
   credential: DesktopPairingCredential
 }
 
-export type DevFlowDesktopApi = {
+export type DevFlowDesktopApi = BuildTestDesktopApi & {
   getModelCostRecovery: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   retryModelCostSettlements: (input: GetCodingRuntimeConfigurationInput) => Promise<import('@ai-devflow/shared').DesktopModelCostRecovery>
   listDiagnosticRecords?: () => Promise<import('@ai-devflow/shared').DiagnosticRecord[]>
@@ -2168,7 +2179,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   }
   rejectUnexpectedFields(
     value,
-    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId', 'additionalAttemptAfterCount'],
+    ['runId', 'nodeId', 'projectId', 'requestedBy', 'userInstruction', 'runtimeBudgetApprovalId', 'additionalAttemptAfterCount', 'context'],
     'coding agent run payload',
   )
   const runtimeBudgetApprovalId = value['runtimeBudgetApprovalId']
@@ -2178,6 +2189,7 @@ export function parseRunCodingAgentInput(value: unknown): RunCodingAgentInput {
   )) throw new Error('Invalid additional OpenCode attempt count')
 
   return {
+    ...(value['context'] === undefined ? {} : { context: parseCodingRetryContext(value['context']) }),
     runId: readRequiredString(value, 'runId'),
     nodeId: readRequiredString(value, 'nodeId'),
     projectId: readRequiredString(value, 'projectId'),

@@ -59,11 +59,12 @@ export function validateCodingQuestionReply(questions: CodingQuestionInfo[], val
     Object.keys(value).some((key) => key !== 'kind' && key !== 'answers')) throw new Error('Answer every question in order')
   const answers = value.answers.map((answer: unknown, index) => {
     const question = questions[index]!
-    if (!Array.isArray(answer) || !answer.length || answer.length > (question.multiple ? 17 : 1)) throw new Error('Invalid answer count')
+    if (!Array.isArray(answer) || answer.length > (question.multiple ? 17 : 1)) throw new Error('Invalid answer count')
     const labels = answer.map((label: unknown) => text(label, 4000))
     if (new Set(labels).size !== labels.length || (question.custom === false && labels.some((label) => !question.options.some((option) => option.label === label)))) throw new Error('Invalid answer option')
     return labels
   })
+  if (answers.every(answer => answer.length === 0)) throw new Error('Use dismiss to skip all questions')
   if (JSON.stringify(answers).length > 32_000) throw new Error('Answers are too large')
   return { kind: 'answer', answers }
 }

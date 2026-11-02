@@ -67,3 +67,15 @@ export function parseCodingRetryContext(value: unknown): CodingRetryContext {
   if (v.kind !== 'redevelop' && v.kind !== 'refix') return invalid('kind')
   return { kind: v.kind, previousCodingRunId: boundedId(v.previousCodingRunId, 'previousCodingRunId'), ...(v.changeSetId === undefined ? {} : { changeSetId: boundedId(v.changeSetId, 'changeSetId') }), ...(v.failedTestEvidenceId === undefined ? {} : { failedTestEvidenceId: boundedId(v.failedTestEvidenceId, 'failedTestEvidenceId') }), ...(v.reason === undefined ? {} : { reason: boundedText(v.reason, 'reason', 1000, true) }) }
 }
+export function parseChangeReviewStart(value: unknown) {
+  const v = strictFields(value, ['codingRunId', 'changeSetId', 'changeSetDigest'])
+  return { codingRunId: boundedId(v.codingRunId, 'codingRunId'), changeSetId: boundedId(v.changeSetId, 'changeSetId'), changeSetDigest: digest(v.changeSetDigest, 'changeSetDigest') }
+}
+export function parseChangeReviewCancel(value: unknown) {
+  const v = strictFields(value, ['codingRunId', 'reviewId'])
+  return { codingRunId: boundedId(v.codingRunId, 'codingRunId'), reviewId: boundedId(v.reviewId, 'reviewId') }
+}
+export function parseSingleId<K extends string>(value: unknown, key: K): Record<K, string> {
+  const v = strictFields(value, [key])
+  return { [key]: boundedId(v[key], key) } as Record<K, string>
+}

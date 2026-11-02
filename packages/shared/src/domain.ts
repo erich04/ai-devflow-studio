@@ -424,6 +424,8 @@ export type GitHubDeliveryPackageSource = {
 }
 
 export type AgentEvent = {
+  /** Local test confirmation audit; no prompt, source, or credentials. */
+  metadata?: { confirmedBy?: string }
   id: string
   runId: string
   nodeId?: string

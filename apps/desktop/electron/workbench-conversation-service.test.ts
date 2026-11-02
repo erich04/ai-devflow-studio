@@ -1775,7 +1775,7 @@ describe('display text and per-turn material versions (FR-13.2, FR-13.6)', () =>
     const result = await send(service, await create(service), '需求现在是第几版？')
     expect(result.status, result.error).toBe('idle')
     const context = JSON.parse(calls[0]!)
-    expect(context.latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' } }])
+    expect(context.latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' }, build: { workspace: 'none' } }])
     const keys = Object.keys(context)
     expect(keys.indexOf('latestWorkflow')).toBeGreaterThan(keys.indexOf('toolObservations'))
   })
@@ -1834,7 +1834,7 @@ describe('display text and per-turn material versions (FR-13.2, FR-13.6)', () =>
     const result = await send(service, await create(service), '两个任务的版本？')
     expect(result.status, result.error).toBe('idle')
     expect(result.failure).toBeUndefined()
-    expect(JSON.parse(calls[0]!).latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' } }])
+    expect(JSON.parse(calls[0]!).latestWorkflow.materials).toEqual([{ runId: created.run.id, requirement: { version: 1, status: 'legacy' }, build: { workspace: 'none' } }])
   })
 
   it('leaves the workflow tool output without material versions and in today’s shape', async () => {

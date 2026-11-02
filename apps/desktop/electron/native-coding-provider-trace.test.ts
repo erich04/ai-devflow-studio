@@ -1,12 +1,12 @@
 // @vitest-environment node
 
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, type RequestListener, type Server } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createOpenAiCompatibleAgentProvider,
   governAgentProvider,
@@ -134,6 +134,7 @@ async function createFixture(
   governance?: ModelCallGovernance,
   /** Overrides the Provider's resolved thinking, as a DeepSeek Provider reports it. */
   thinking?: EffectiveProviderThinking,
+  options?: { now?: () => string; autoChangeReview?: boolean },
 ): Promise<{
   dbPath: string
   project: LocalProject
@@ -219,12 +220,15 @@ async function createFixture(
           governance ? governAgentProvider(provider, project.id, governance) : provider,
         ),
         configVersion: 1,
+        ...(options?.now ? { clock: options.now } : {}),
         ...(runSavedTest ? { runSavedTest } : {}),
       })
       const runtime = createCodingRuntime({
         store,
         executor,
         worktreeRoot,
+        ...(options?.now ? { now: options.now } : {}),
+        ...(options?.autoChangeReview === undefined ? {} : { autoChangeReview: options.autoChangeReview }),
         budgetGuard: async () => ({
           status: 'allowed',
           blocksRun: false,
@@ -254,6 +258,70 @@ function runInput(fixture: Awaited<ReturnType<typeof createFixture>>) {
     userInstruction: 'Change the message from old to new.',
   }
 }
+
+describe('Native revision and self-check lifecycle', () => {
+  it('reviews and revises an exact proposal without applying it, then fences the old approval', async () => {
+    const phases: string[] = []
+    const server = await startCompatibleServer(async (req, res) => {
+      let body = ''; for await (const chunk of req) body += String(chunk)
+      const payload = JSON.parse(JSON.parse(body).messages.at(-1).content)
+      phases.push(payload.phase)
+      sendStructuredResponse(res, payload.phase === 'analysis' ? analysisValue : payload.phase === 'change_review' ? { stateVersion: 2, findings: [{ path: 'src/message.ts', line: 1, lineText: 'export const message = "new"', importance: 'suggestion', consequence: '文字不明确', reason: '需要完整表达', item: '改成完整文字' }] }
+        : payload.phase === 'revision' ? { ...initialValue, changes: [{ path: 'src/message.ts', replacements: [{ oldText: '"old"', newText: '"revised"' }] }] } : initialValue, phases.length)
+    })
+    const fixture = await createFixture(server)
+    const { store, runtime } = await fixture.openRuntime()
+    const started = await runtime.runCodingAgent(runInput(fixture))
+    const original = (await store.listCodingPermissionRequests(started.codingRun.id))[0]!
+    const review = await runtime.startCodingChangeReview({ codingRunId: started.codingRun.id, changeSetId: original.changeSetId!, changeSetDigest: original.changeSetDigest! })
+    await vi.waitFor(async () => expect((await store.listCodingChangeReviews(started.codingRun.id)).find(r => r.id === review.id)?.status).toBe('completed'))
+    expect((await store.listCodingChangeReviews(started.codingRun.id))[0]?.findings[0]?.anchor).toMatchObject({ side: 'new', line: 1 })
+    const revised = await runtime.reviseCodingChangeSet({ codingRunId: started.codingRun.id, requestId: original.id, changeSetId: original.changeSetId!, changeSetDigest: original.changeSetDigest!, changeRequest: '改成完整文字', itemCount: 1, requestedBy: fixture.run.creatorId })
+    expect(revised.codingRun.changeSetId).not.toBe(original.changeSetId)
+    expect((await store.listCodingPermissionRequests(started.codingRun.id)).find(p => p.id === original.id)?.status).toBe('superseded')
+    expect((await store.listCodingChangeSets(started.codingRun.id))).toHaveLength(2)
+    const workspace = (await store.listManagedCodingWorkspaces(fixture.project.id))[0]!
+    expect(await readFile(path.join(workspace.worktreePath, 'src/message.ts'), 'utf8')).toContain('"old"')
+    await expect(runtime.replyCodingPermission({ codingRunId: started.codingRun.id, requestId: original.id, decidedBy: fixture.run.creatorId, decision: 'approved', comment: '' })).rejects.toThrow()
+    expect(phases).toEqual(['analysis', 'initial', 'change_review', 'revision'])
+  }, 20_000)
+
+  it.each(['stop', 'expire'] as const)('handles %s while a revision is still in flight', async action => {
+    let time = '2026-10-31T00:00:00.000Z'
+    let release: (() => void) | undefined
+    const server = await startCompatibleServer(async (req, res) => {
+      let body = ''; for await (const chunk of req) body += String(chunk)
+      const payload = JSON.parse(JSON.parse(body).messages.at(-1).content)
+      if (payload.phase === 'revision') await new Promise<void>(resolve => { release = resolve })
+      sendStructuredResponse(res, payload.phase === 'analysis' ? analysisValue : initialValue, 1)
+    })
+    const fixture = await createFixture(server, undefined, undefined, undefined, { now: () => time })
+    const { store, runtime } = await fixture.openRuntime()
+    const started = await runtime.runCodingAgent(runInput(fixture))
+    const original = (await store.listCodingPermissionRequests(started.codingRun.id))[0]!
+    const pending = runtime.reviseCodingChangeSet({ codingRunId: started.codingRun.id, requestId: original.id, changeSetId: original.changeSetId!, changeSetDigest: original.changeSetDigest!, changeRequest: '补充检查', itemCount: 1, requestedBy: fixture.run.creatorId })
+    const observed = pending.then(value => ({ value }), error => ({ error }))
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    await expect(runtime.replyCodingPermission({ codingRunId: started.codingRun.id, requestId: original.id, decidedBy: fixture.run.creatorId, decision: 'approved', comment: '' })).rejects.toThrow('revision_in_flight')
+    if (action === 'stop') await runtime.cancelCodingRevision({ codingRunId: started.codingRun.id })
+    else {
+      time = '2026-10-31T00:20:00.000Z'
+      await runtime.replyCodingPermission({ codingRunId: started.codingRun.id, requestId: original.id, decidedBy: 'devflow-timeout', decision: 'expired', comment: '' })
+    }
+    release!()
+    const result = await observed
+    if (action === 'stop') {
+      expect(result).toHaveProperty('error')
+      expect((await store.listCodingChangeSets(started.codingRun.id))).toHaveLength(1)
+      expect((await store.listCodingAgentRuns())[0]).toMatchObject({ status: 'waiting_permission', changeSetId: original.changeSetId })
+    } else {
+      expect(result).toHaveProperty('value')
+      const next = (await store.listCodingPermissionRequests(started.codingRun.id)).find(p => p.status === 'pending')!
+      expect(next.expiresAt).toBe('2026-10-31T00:35:00.000Z')
+      expect((await store.listCodingPermissionRequests(started.codingRun.id)).find(p => p.id === original.id)?.status).toBe('expired')
+    }
+  }, 20_000)
+})
 
 describe('DevFlow Native v2 persistent Provider call Trace', () => {
   it('recovers previously unaccounted failed responses once without calling the model or advancing the workflow', async () => {
