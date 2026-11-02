@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, expect, it, vi } from 'vitest'
 import { AgentProviderRequestError, type NativeConversationRequest, type NativeConversationResponse } from '@ai-devflow/shared'
@@ -13,6 +13,23 @@ const fixtures: Awaited<ReturnType<typeof codingHarnessFixture>>[] = []
 afterEach(async () => { for (const fixture of fixtures.splice(0)) { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) } })
 const privateBody = "const fs = await import('node:fs/promises'); check((await fs.readFile('value.ts', 'utf8')).trim() === 'export const value = 2');"
 const planReply = () => codingToolReply('private-plan', 'submit_independent_checks', { checks: [{ criterionId: 'objective', body: privateBody }] })
+it('keeps the saved test target and its full source ahead of unrelated alphabetically earlier suites', async () => {
+  let observed: { files: Array<{ path: string; content: string; truncated: boolean }> } | undefined
+  const fixture = await codingHarnessFixture(async () => codingToolReply('propose-focused', 'propose_changeset', { summary: 'Review' }), 'corepack pnpm exec vitest run z-target/service.test.ts', {}, async request => {
+    observed = JSON.parse(request.messages[0]!.content!); return planReply()
+  }); fixtures.push(fixture)
+  await mkdir(path.join(fixture.delivery, 'a-unrelated')); await mkdir(path.join(fixture.delivery, 'z-target'))
+  for (let i = 0; i < 24; i++) await writeFile(path.join(fixture.delivery, 'a-unrelated', `${i}.test.ts`), '// irrelevant\n'.repeat(1500))
+  const source = '// legitimate source\n'.repeat(4000) + 'export const targetBehavior = 2\n'
+  await writeFile(path.join(fixture.delivery, 'z-target/service.ts'), source)
+  await writeFile(path.join(fixture.delivery, 'z-target/service.test.ts'), '// existing fixture examples\n')
+  const input = await inspectCodingInput(fixture.delivery, fixture.context.workspace.baseCommitSha)
+  await mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.binding!.input = input })
+  await fixture.authorize(); await fixture.executor.settled('coding')
+  expect((await fixture.get()).snapshot.status).toBe('review')
+  expect(observed!.files.find(file => file.path === 'z-target/service.ts')).toMatchObject({ content: source, truncated: false })
+  expect(observed!.files.findIndex(file => file.path === 'z-target/service.test.ts')).toBeLessThan(observed!.files.findIndex(file => file.path.startsWith('a-unrelated/')))
+}, 15000)
 async function approve(fixture: Awaited<ReturnType<typeof codingHarnessFixture>>, index: number) {
   const view = (await fixture.get()).snapshot
   return fixture.executor.harness!.command({ protocolVersion: 2, type: 'approve', codingRunId: 'coding', commandId: `approval-${index}`, expectedVersion: view.version,
