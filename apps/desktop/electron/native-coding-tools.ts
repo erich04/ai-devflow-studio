@@ -102,9 +102,12 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     effect.result = { changedPaths: effect.edits.map(edit => edit.path), revision: (await workspace.inspect()).digest }
     await saveEffect(effect); return effect.result
   }
-  let activeContext: Parameters<CodingLoopTools['execute']>[2] | undefined
-  const run = async (name: string, input: Record<string, unknown>, signal: AbortSignal): Promise<unknown> => {
-    const ctx = { ...activeContext!, signal }
+  // Reads of one group run at the same time, so each handler finds its own call by the action id.
+  const contexts = new Map<string, Parameters<CodingLoopTools['execute']>[2]>()
+  const run = async (name: string, input: Record<string, unknown>, signal: AbortSignal, operationId: string | undefined): Promise<unknown> => {
+    const context = operationId === undefined ? undefined : contexts.get(operationId)
+    if (!context) throw new Error('Coding tool call has no active context')
+    const ctx = { ...context, signal }
     if (codingExtensionNames.includes(name)) return host.extensions!.execute(name, input, ctx)
     if (delegationNames.includes(name)) return host.delegation!.execute(name, input, ctx)
     if (name === 'report_findings') {
@@ -259,8 +262,8 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     return { revision: manifest.digest, changed: changed.slice(offset, offset + limit), removed: removed.slice(offset, offset + limit), nextOffset: offset + limit < Math.max(changed.length, removed.length) ? offset + limit : null }
   }
   const handlers = new Set<Promise<unknown>>()
-  const registrations: NativeToolRegistration[] = definitions.map(item => ({ definition: item, resourceKinds: ['managed_workspace'], handler: async ({ input, signal }) => {
-    const invocation = run(item.id, input as Record<string, unknown>, signal); handlers.add(invocation)
+  const registrations: NativeToolRegistration[] = definitions.map(item => ({ definition: item, resourceKinds: ['managed_workspace'], handler: async ({ input, signal, runtime }) => {
+    const invocation = run(item.id, input as Record<string, unknown>, signal, runtime.activeAction?.id); handlers.add(invocation)
     try { return { data: JSON.stringify(await invocation) } } finally { handlers.delete(invocation) }
   } }))
   const registry = createNativeToolRegistry({ tools: registrations,
@@ -287,13 +290,9 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
     appendAudit: async audit => { await change(draft => { const record = draft.toolAuthorities.find(item => item.runtime.id === audit.runtimeId); if (!record) throw new Error('Missing tool authority'); record.audit.push(audit) }) },
   } })
   let queue: Promise<unknown> = Promise.resolve()
-  const tools: CodingLoopTools = {
-    definitions: definitions.map(item => ({ type: 'function', function: { name: item.id, description: item.description, parameters: item.inputSchema } })),
-    effects: Object.fromEntries(definitions.map(item => [item.id, item.permissionClass === 'read' ? 'read' : item.permissionClass === 'edit' ? 'write' : 'command'])),
-    async drain() { await queue.catch(() => undefined); await Promise.allSettled([...handlers]) },
-    execute(name, input, context) {
-      // Serial writes and authority commits; the loop may fan out separate read-only sessions.
-      const invocation = queue.then(async () => {
+  // Checks and the one-time authorization commit on one queue in call order; the returned function runs the tool.
+  const authorize: NonNullable<CodingLoopTools['authorize']> = (name, input, context) => {
+    const prepared = queue.then(async () => {
         await host.assertAuthority(); context.signal.throwIfAborted()
         const item = definitions.find(value => value.id === name)
         if (!item || !validateNativeToolValue(item.inputSchema, input)) throw new Error('Invalid tool arguments')
@@ -313,7 +312,6 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
           if (dependencies.command && session?.binding?.dependencyPlan?.digest !== dependencies.digest) await requireCodingPermission(host.store, host.sessionId, { id: context.operationId, kind: 'dependencies', value: dependencies, details: `为当前依赖输入准备候选及独立验证目录：\n${dependencies.command}\n输入摘要：${dependencies.inputDigest}\n可能下载依赖并执行安装脚本，使用已选执行方式。` })
           if (name === 'propose_changeset' && !dependencies.frozen) throw new Error('Generate a lockfile in the candidate before freezing final verification')
         }
-        activeContext = context
         const current = await host.store.getNativeCodingSession(host.sessionId)
         // Long commands run in the durable worker; the registry only authorizes and starts them.
         const duration = 120000
@@ -326,9 +324,27 @@ export function createNativeCodingTools(host: { store: Pick<LocalStore, 'getNati
         const requested = requestAgentAction({ runtime: running.runtime, expectedCheckpointVersion: running.checkpoint.version, now, action: { id: context.operationId, kind: 'tool', capabilityId: name, capabilityVersion: 1, requestDigest: digestNativeToolValue(input), requiresPermission: false } })
         await change(draft => { draft.toolAuthorities.push({ runtime: requested.runtime, consumed: false, audit: [] }) })
         const grant = await registry.issueGrant({ runtime: requested.runtime, toolId: name, toolVersion: 1, permission: { decision: 'approved', permissionClass: item.permissionClass, decidedAt: now, expiresAt: deadline }, resourceScope: { kind: 'managed_workspace', localProjectId: context.session.localProjectId, workspaceId: host.sessionId }, callLimit: 1 })
-        const output = await registry.execute({ grant, runtime: requested.runtime, actionId: context.operationId, input, signal: context.signal })
-        return JSON.parse((output.value as { data: string }).data) as unknown
-      })
+        return async () => {
+          await host.assertAuthority(); context.signal.throwIfAborted()
+          contexts.set(context.operationId, context)
+          try {
+            const output = await registry.execute({ grant, runtime: requested.runtime, actionId: context.operationId, input, signal: context.signal })
+            return JSON.parse((output.value as { data: string }).data) as unknown
+          } finally { contexts.delete(context.operationId) }
+        }
+    })
+    queue = prepared.catch(() => undefined); return prepared
+  }
+  const tools: CodingLoopTools = {
+    definitions: definitions.map(item => ({ type: 'function', function: { name: item.id, description: item.description, parameters: item.inputSchema } })),
+    effects: Object.fromEntries(definitions.map(item => [item.id, item.permissionClass === 'read' ? 'read' : item.permissionClass === 'edit' ? 'write' : 'command'])),
+    // Declared reads may share a group, except those that can pause for a network permission.
+    parallel: definitions.filter(item => item.permissionClass === 'read' && !['web_search', 'fetch_document'].includes(item.id)).map(item => item.id),
+    async drain() { await queue.catch(() => undefined); await Promise.allSettled([...handlers]) },
+    authorize,
+    execute(name, input, context) {
+      // Outside a read group a call keeps the queue through its execution, so writes and commands run alone.
+      const invocation = authorize(name, input, context).then(execute => execute())
       queue = invocation.catch(() => undefined); return invocation
     },
     async reconcile(receipt, session) {
