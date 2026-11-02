@@ -54,6 +54,9 @@ export function buildMaterial(f: BuildTestFacts, stage: 'build' | 'test', readin
     const status = shown ? `${shown.status}${failed ? `，${failed.report.label.replace('测试报告', '测试没通过')}` : ''}` : readReport?.report.evidence.status === 'passed' ? '通过' : '没通过'
     material.banner = `这是${shown?.label ?? readReport?.report.label ?? '历史材料'}（${status}）。现在${current?.request.status === 'pending' ? `要处理的是${current.label}` : '没有待批准的改动'}。这里只能查看。`
   }
+  const mainShown = shownChangeVersion(f, stage)
+  const mainMaterialId = stage === 'build' || mainShown?.repair && mainShown.request.status === 'pending' ? mainShown?.id : reports.at(-1)?.id
+  material.list = material.list.map(item => ({ ...item, current: item.id === mainMaterialId }))
   material.header = versionSpacing(material.header)
   if (material.banner) material.banner = versionSpacing(material.banner)
   material.signature = `${material.kind}:${shown?.id ?? ''}:${material.reports.map(r => r.id).join(',')}:${serial}`

@@ -144,6 +144,9 @@ export function projectBuildTestDecision(input: { facts: BuildTestFacts; stage: 
     const confirm = add('confirmEvidence', '确认测试证据，进入 PR 交付', bar.row === 'T8', '不调用模型')
     if (!freshnessRule || freshnessRule.blocks) { confirm.enabled = false; confirm.disabledReason = freshness ? '先重新运行测试' : f.freshness.status === 'failed' ? '现在核对不了测试证据，请稍后再试。' : '正在核对测试证据是否对应当前代码…'; if (!freshness && f.freshness.status === 'failed') bar.notes.push({ ...note(confirm.disabledReason, 'warn'), link: { action: 'reload', label: '重新读取' } }) }
   }
+  if (stage === 'test' && !history && !['T5', 'B9'].includes(bar.row)) {
+    list.toggleEnabled = false; list.toggleLabel = ''; list.actionable = false
+  }
   if (f.testBlockedReason) for (const b of bar.buttons.filter(b => b.id === 'runTests' || b.id === 'rerunTests')) {
     b.enabled = false; b.disabledReason = f.testBlockedReason
     bar.notes.push({ ...note(f.testBlockedReason, 'warn'), link: { action: 'openProjectSettings', label: '打开本地项目设置' } })

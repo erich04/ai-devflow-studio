@@ -79,7 +79,10 @@ describe('build/test decision lifecycle', () => {
   })
   it('does not expose a revision list for passed evidence or claim a deleted workspace is retained', () => {
     const f = buildTestFacts(), r = addCoding(f), p = addChange(f, r); approve(f, p); r.status = 'completed'; const e = addReport(f, r); f.freshness.states = { [e.id]: 'current' }
+    f.list = emptyRevisionList({ kind: 'change', runId: f.run.id, codingRunId: r.id, changeSetId: p.changeSetId!, changeSetDigest: p.changeSetDigest! }, f.now)
     const passed = project({ facts: f, stage: 'test' })
+    expect(passed.material.list.find(item => item.id === p.changeSetId)?.current).toBe(false)
+    expect(passed.material.list.find(item => item.id === e.id)?.current).toBe(true)
     expect(passed.bar.list.toggleEnabled).toBe(false); expect(passed.bar.list.toggleLabel).toBe('')
     e.stdout = '# tests 2\n# pass 1\n# fail 0\n# skipped 1'
     expect(project({ facts: f, stage: 'test' }).material.reports[0]!.result).toBe('1 条测试通过，另 1 条未计为通过')
