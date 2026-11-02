@@ -63,6 +63,12 @@ describe('Native v3 reservations sized from the measured request', () => {
   const attempt = (quote: ModelCallQuote, fields: Partial<ModelCallAttempt>): ModelCallAttempt => ({
     ...quote, userId: 'u', state: 'completed', projectedCostUsd: cost(quote), costUsd: null, verifiedBound: verifiedModelCallBound(quote)!, ...fields,
   })
+  it('admits independent acceptance generation through the same bounded coding task budget', () => {
+    const quote = { ...measured('acceptance-call', 30000), operation: { id: 'acceptance-operation', version: 'a'.repeat(64), purpose: 'coding-acceptance-plan' } }
+    expect(parseModelCallQuote(quote)).toEqual(quote)
+    expect(modelTaskBudgetBlock(quote, [], 'u', cost(quote))).toBeNull()
+    expect(() => parseModelCallQuote({ ...quote, operation: { ...quote.operation, purpose: 'invented-bypass' } })).toThrow('Invalid operation scope')
+  })
   it('bounds input by the UTF-8 bytes of the exact request plus the template margin, up to the context window', () => {
     expect(requestInputTokenBound('中'.repeat(1000))).toBe(3000 + 8192)
     expect(verifiedModelCallBound(measured('first', 19399))).toMatchObject({ basis: 'deepseek-request-bytes-v1', inputTokenBound: 27591, maxOutputTokens: 65536 })

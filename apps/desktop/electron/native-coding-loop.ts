@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { AgentProviderRequestError, nativeCallEnvelope, validateNativeHistory, validateNativeToolValue, type NativeToolJsonSchema, type AgentProvider, type AgentProviderUsage, type CodingModelRetryReason, type NativeConversationRequest, type NativeToolCall, type ReadOnlyFunctionDefinition } from '@ai-devflow/shared'
 import type { LocalStore } from './local-store'
-import { codingDigest } from './coding-candidate-workspace'
+import { codingDigest, type CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { updateNativeCodingSession, type NativeCodingSession, type CodingModelAttempt, type CodingModelRetry, type CodingToolReceipt } from './native-coding-session'
 import { codingContext } from './native-coding-context'
+import { independentCheckRequest, independentCheckSourceDigest, independentChecksFromResponse, needsIndependentChecks } from './native-coding-independent-verification'
 
 export type CodingLoopTools = {
   definitions: ReadOnlyFunctionDefinition[]
@@ -91,6 +92,7 @@ export class NativeCodingLoop {
   private readonly active = new Map<string, AbortController>()
   private readonly acquiring = new Set<string>()
   constructor(private readonly host: { store: LoopStore; provider: AgentProvider; tools: CodingLoopTools; now?: () => string; changed?: (session: NativeCodingSession) => void;
+    verificationWorkspace?: CodingCandidateWorkspace;
     stopPreviousWorker?: (writer: NonNullable<NativeCodingSession['writer']>) => Promise<boolean>; reconcileWorkers?: () => Promise<boolean>;
     activity?(unitId: string, active: boolean): Promise<void>; rootActiveMilliseconds?(): Promise<number>; rootStepsUsed?(): Promise<number>; reserveRootStep?(attemptId: string): Promise<boolean>; assertAuthority?(): Promise<void>
     /** Backoff before an automatic re-send; resolves early when the batch is interrupted. */
@@ -130,6 +132,10 @@ export class NativeCodingLoop {
       if (saved) { if (saved.digest !== digest) throw new Error('Conflicting coding command'); return }
       if (session.question?.id !== command.questionId || session.objectiveVersion !== command.objectiveVersion || session.status !== 'waiting_input' || !command.text.trim()) throw new Error('Stale coding answer')
       session.transcript.push({ role: 'tool', tool_call_id: session.question.toolCallId, content: JSON.stringify({ answer: command.text, source: 'human' }) })
+      if (session.binding?.independentVerificationRequired && !session.parent) {
+        session.independentVerification ??= { plans: [], humanInputs: [] }
+        session.independentVerification.humanInputs.push({ id: command.id, text: `澄清问题：${session.question.text}\n用户回答：${command.text}`, objectiveVersion: session.objectiveVersion })
+      }
       session.commands.push({ id: command.id, digest }); delete session.question; session.status = 'ready'
     })
   }
@@ -210,7 +216,13 @@ export class NativeCodingLoop {
         if (session.status !== 'running') return session
         if (session.pendingInput.length || session.progressNudge?.delivered === false) session = await this.change(id, draft => {
           if (draft.pendingInput.length) {
-            for (const item of draft.pendingInput) draft.transcript.push({ role: 'user', content: item.text })
+            for (const item of draft.pendingInput) {
+              draft.transcript.push({ role: 'user', content: item.text })
+              if (draft.binding?.independentVerificationRequired && !draft.parent) {
+                draft.independentVerification ??= { plans: [], humanInputs: [] }
+                draft.independentVerification.humanInputs.push({ ...item, objectiveVersion: draft.objectiveVersion + 1 })
+              }
+            }
             draft.objectiveVersion++; draft.pendingInput = []
             delete draft.progressNudge // Human input replaces the host's warning.
           } else if (draft.progressNudge && !draft.progressNudge.delivered) {
@@ -240,16 +252,19 @@ export class NativeCodingLoop {
           objectiveVersion: session.objectiveVersion, role: session.parent?.mode ?? 'root',
           candidateEditingGranted: Boolean(session.binding?.executionGranted && session.parent?.mode !== 'read_only'),
           finalVerification: 'Host independently verifies the approved frozen revision; neither a model statement nor human approval alone proves completion.' }
-        const context = codingContext(session, provider, { systemPrompt: session.parent?.mode === 'read_only' ? readOnlySystemPrompt : systemPrompt, messages: session.transcript, tools: [...this.host.tools.definitions, ...controlTools], operationKey, budgetAttemptId: attemptId,
+        const planning = needsIndependentChecks(session) ? await independentCheckRequest(session, this.host.verificationWorkspace ?? (() => { throw new Error('Independent verification workspace is required') })()) : undefined
+        const requestOptions = { operationKey, budgetAttemptId: attemptId,
           ...(session.taskBudget ? { taskBudget: session.taskBudget } : {}),
-          onUsage: async usage => { await this.change(id, draft => { const attempt = draft.attempts.find(item => item.id === attemptId); if (attempt) attempt.usage = usage }) },
-          maxOutputTokens: provider.resolveRequestPolicy?.({}).maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192, signal: controller.signal }, JSON.stringify(runtimeState))
-        const request = context.request
+          onUsage: async (usage: AgentProviderUsage) => { await this.change(id, draft => { const attempt = draft.attempts.find(item => item.id === attemptId); if (attempt) attempt.usage = usage }) },
+          maxOutputTokens: provider.resolveRequestPolicy?.({}).maxOutputTokens ?? provider.defaultReviewOutputTokens ?? 8192, signal: controller.signal }
+        const context = planning ? { request: { ...planning.request, ...requestOptions }, compact: undefined }
+          : codingContext(session, provider, { systemPrompt: session.parent?.mode === 'read_only' ? readOnlySystemPrompt : systemPrompt, messages: session.transcript, tools: [...this.host.tools.definitions, ...controlTools], ...requestOptions }, JSON.stringify(runtimeState))
+        const request: NativeConversationRequest = context.request
         request.maxOutputTokens = provider.resolveRequestPolicy?.(request).maxOutputTokens ?? request.maxOutputTokens ?? 8192
         validateNativeHistory(request.messages)
         provider.validateNativeRequest?.(request)
         const requestDigest = codingDigest(provider.serializeNativeRequest(request))
-        request.nativeOperation = { id: `operation-${codingDigest(operationKey)}`, version: requestDigest, purpose: context.compact ? 'coding-compaction' : 'coding' }
+        request.nativeOperation = { id: `operation-${codingDigest(operationKey)}`, version: requestDigest, purpose: planning ? 'coding-acceptance-plan' : context.compact ? 'coding-compaction' : 'coding' }
         if (!retryOf && this.host.reserveRootStep && !await this.host.reserveRootStep(attemptId)) return await this.change(id, draft => { draft.status = 'paused'; draft.pauseReason = 'task_limit' })
         // Every send, including a re-send, is a new durable attempt and a new governed reservation.
         session = await this.change(id, draft => {
@@ -257,10 +272,10 @@ export class NativeCodingLoop {
           if (!retryOf) draft.steps++
           draft.attempts.push({ id: attemptId, operationKey, requestDigest, step: retryOf?.step ?? draft.steps, objectiveVersion: draft.objectiveVersion, status: 'started', createdAt: this.now(), ...(retryOf ? { retryOf: retryOf.id } : {}) })
         })
-        let received = false
+        let received = false, receivedUsage: AgentProviderUsage | undefined
         try {
           const response = await provider.completeNativeConversation(request)
-          received = true
+          received = true; receivedUsage = response.usage
           const current = await this.read(id)
           if (current.status !== 'running' || current.writer?.owner !== this.owner || controller.signal.aborted) {
             return await this.change(id, draft => {
@@ -274,6 +289,18 @@ export class NativeCodingLoop {
             try { nativeCallEnvelope(response.toolCalls, request.tools.map(tool => tool.function.name), used) }
             catch (error) { throw context.compact ? error : new InvalidToolBatch(envelopeProblem(error), response.usage) }
             if (JSON.stringify(response.assistantMessage.tool_calls) !== JSON.stringify(response.toolCalls)) throw new Error('Mismatched provider tool envelope')
+          }
+          if (planning) {
+            const plan = independentChecksFromResponse(planning.source, response, this.now())
+            session = await this.change(id, draft => {
+              const attempt = draft.attempts.find(item => item.id === attemptId)!
+              attempt.status = 'completed'; attempt.completedAt = this.now(); if (response.usage) attempt.usage = response.usage
+              if (draft.status !== 'running' || draft.writer?.owner !== this.owner || draft.writer.epoch !== epoch || controller.signal.aborted || draft.pendingInput.length || draft.objectiveVersion !== plan.objectiveVersion || independentCheckSourceDigest(draft) !== plan.sourceDigest) { attempt.error = 'Acceptance plan superseded by interruption or human input'; return }
+              draft.independentVerification ??= { plans: [], humanInputs: [] }
+              draft.independentVerification.plans.push(plan)
+              draft.binding!.testPlanDigest = codingDigest(JSON.stringify({ testPlan: draft.binding!.testPlan, independentChecks: plan.digest }))
+            })
+            continue
           }
           if (context.compact) {
             if (response.kind !== 'tools' || response.toolCalls.length !== 1 || response.toolCalls[0]!.function.name !== 'compact_context') throw new Error('Compaction must return a bounded context summary')
@@ -309,7 +336,7 @@ export class NativeCodingLoop {
             }
           })
         } catch (error) {
-          let failure = classifyModelFailure(error, received)
+          let failure = planning && received ? { kind: 'pause' as const, reason: 'independent_verification_plan_invalid' } : classifyModelFailure(error, received)
           if (failure.kind === 'invalid_batch' && context.compact) failure = { kind: 'pause', reason: 'invalid_model_response' }
           const responseReceived = received || error instanceof AgentProviderRequestError && error.deliveryState === 'response_received'
           const retry = failure.kind === 'retry' ? this.retrySchedule(session, attemptId, failure) : undefined
@@ -317,8 +344,9 @@ export class NativeCodingLoop {
             const attempt = draft.attempts.find(item => item.id === attemptId)!
             attempt.status = responseReceived ? 'completed' : error instanceof AgentProviderRequestError && error.deliveryState === 'not_sent' ? 'not_sent' : 'unknown'
             if (responseReceived) attempt.completedAt = this.now()
-            attempt.error = error instanceof InvalidToolBatch ? `Invalid tool batch: ${error.message}` : error instanceof Error ? error.message : 'Provider request failed'
+            attempt.error = planning && received ? 'Independent acceptance response was invalid' : error instanceof InvalidToolBatch ? `Invalid tool batch: ${error.message}` : error instanceof Error ? error.message : 'Provider request failed'
             if ((error instanceof AgentProviderRequestError || error instanceof InvalidToolBatch) && error.usage) attempt.usage = error.usage
+            else if (receivedUsage) attempt.usage = receivedUsage
             if (terminal(draft) || (draft.status !== 'running' && attempt.status !== 'unknown')) return
             if (attempt.status === 'unknown') { draft.status = 'reconciling'; draft.pauseReason = 'model_delivery_unknown'; return }
             const writing = draft.writer?.owner === this.owner && draft.writer.epoch === epoch && !controller.signal.aborted

@@ -41,6 +41,7 @@ export type CodingHarnessSnapshot = CodingHarnessSummary & {
   diagnostics?: { checkpoint: number; objectiveVersion: number; writerActive: boolean; uncertainOperations: Array<{ id: string; kind: string; status: string }>; uncertainTotal: number; profile: string }
   modelRetries?: { total: number; recent: Array<{ attemptId: string; step: number; number: number; limit: number; reason: CodingModelRetryReason; delayMs: number; retryAfterMs?: number; pending: boolean }> }
   manualValidationPlan?: string
+  independentVerification?: { status: 'preparing' | 'frozen'; criteriaCount: number; repairRounds: number; lastResult?: 'passed' | 'failed' | 'timed_out' | 'cancelled' }
 }
 
 export function parseCodingHarnessCommand(value: unknown): CodingHarnessCommand {

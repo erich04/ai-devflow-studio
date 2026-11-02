@@ -8,7 +8,7 @@ import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
 
 /** Only the model endpoint is replaced. Git, SQLite, tools, processes and approval are real. */
-export async function codingHarnessFixture(model: NonNullable<AgentProvider['completeNativeConversation']>, testCommand = 'node -e "process.exit(0)"', providerOverrides: Partial<AgentProvider> = {}) {
+export async function codingHarnessFixture(model: NonNullable<AgentProvider['completeNativeConversation']>, testCommand = 'node -e "process.exit(0)"', providerOverrides: Partial<AgentProvider> = {}, acceptanceModel?: NonNullable<AgentProvider['completeNativeConversation']>) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'devflow-harness-lifecycle-'))
   const delivery = path.join(root, 'delivery'); await mkdir(delivery)
   await writeFile(path.join(delivery, 'value.ts'), 'export const value = 1\n')
@@ -21,7 +21,7 @@ export async function codingHarnessFixture(model: NonNullable<AgentProvider['com
   const { run } = createWorkflowRunFromRequest({ runId: 'workflow', title: 'Review', request: 'Inspect value', projectId: project.id, creatorId: 'user', branchName: 'test', now })
   await store.saveRun(run)
   const node = run.nodes.find(item => item.stage === 'build' && item.kind === 'task')!
-  const provider = { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: (input: unknown) => JSON.stringify(input), ...providerOverrides, completeNativeConversation: model }
+  const provider = { ...createFakeAgentProvider(), supportsNativeTools: true, serializeNativeRequest: (input: unknown) => JSON.stringify(input), ...providerOverrides, completeNativeConversation: withFixtureAcceptance(model, acceptanceModel) }
   const executor = createNativeCodingExecutorV3({ store, root: path.join(root, 'harness'), configVersion: 1, provider })
   const workspace = { id: 'workspace', projectId: project.id, codingRunId: 'coding', sourcePath: delivery, worktreePath: delivery, branchName: 'test', baseBranch: 'main', baseCommitSha: (await git(['rev-parse', 'HEAD'])).stdout.trim(), createdAt: now }
   const context = { id: 'coding', run, node, project, workspace, requestedBy: 'user', providerId: provider.id, userInstruction: 'Inspect value', now, upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [], brief: buildCodingBrief({ project, worktreePath: delivery, branchName: workspace.branchName, run, node, userInstruction: 'Inspect value', upstreamArtifacts: [], knowledgeReferences: [], governanceChecks: [], gateDecisions: [], testEvidence: [] }) }
@@ -36,4 +36,15 @@ export async function codingHarnessFixture(model: NonNullable<AgentProvider['com
 export function codingToolReply(id: string, name: string, args: unknown) {
   const toolCalls: NativeToolCall[] = [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }]
   return { kind: 'tools' as const, toolCalls, assistantMessage: { role: 'assistant' as const, content: null, tool_calls: toolCalls }, usage: { inputTokens: 10, outputTokens: 5 } }
+}
+
+/** Existing lifecycle tests use a separate deterministic acceptance-author double.
+ * Acceptance behavior tests pass their own author to exercise real failure/repair contracts. */
+export function withFixtureAcceptance(model: NonNullable<AgentProvider['completeNativeConversation']>, author?: NonNullable<AgentProvider['completeNativeConversation']>): NonNullable<AgentProvider['completeNativeConversation']> {
+  return async request => {
+    if (request.nativeOperation?.purpose !== 'coding-acceptance-plan') return model(request)
+    if (author) return author(request)
+    const input = JSON.parse(request.messages[0]!.content ?? '{}') as { source: { criteria: Array<{ id: string }> } }
+    return codingToolReply('fixture-acceptance', 'submit_independent_checks', { checks: input.source.criteria.map(item => ({ criterionId: item.id, body: "const fs = await import('node:fs/promises'); check((await fs.readFile('value.ts', 'utf8')).includes('export const value'));" })) })
+  }
 }

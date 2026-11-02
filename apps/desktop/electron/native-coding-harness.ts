@@ -21,6 +21,7 @@ import { createCodingExtensions } from './native-coding-extensions'
 import type { NativeCodingProfile } from './native-coding-profile'
 import type { CodingTaskAuthority } from './native-coding-tools'
 import { inspectCodingInput } from './coding-input'
+import { currentIndependentChecks, runIndependentChecks } from './native-coding-independent-verification'
 
 type Core = { loop: NativeCodingLoop; workspace: CodingCandidateWorkspace; commands: CodingCommandRunner }
 const terminal = (session: NativeCodingSession) => ['completed', 'cancelled', 'failed'].includes(session.status)
@@ -156,7 +157,7 @@ function createHarnessService(host: HarnessHost): Harness {
         },
       } }),
       authority })
-    const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, changed: () => { host.changed?.(session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
+    const loop = new NativeCodingLoop({ store: host.store, provider: host.provider, tools, verificationWorkspace: workspace, changed: () => { host.changed?.(session.codingRunId); if (session.parent) host.changed?.(session.parent.codingRunId) },
       assertAuthority: checkedAuthority,
       reconcileWorkers: () => commands.reconcile(),
       activity: (unitId, active) => activity(`${session.id}:${unitId}`, active),
@@ -450,6 +451,7 @@ function createHarnessService(host: HarnessHost): Harness {
         if (session.status !== 'review' || session.pendingInput.length || !revision || revision.digest !== command.revisionDigest || session.objectiveVersion !== command.objectiveVersion) throw new Error('Stale coding approval')
         if (core.commands.hasActiveCommands) throw new Error('Candidate writers are still active')
         if (session.binding!.manualValidationPlan ? !command.manualValidationEvidence : command.manualValidationEvidence !== undefined) throw new Error('人工验收必须事先选择计划，并在批准确切修订时填写人工检查依据。')
+        if (session.binding!.independentVerificationRequired && !session.binding!.manualValidationPlan && !currentIndependentChecks(session)) throw new Error('Independent acceptance must be frozen before revision approval')
         await mutate(id, draft => {
           if (draft.status !== 'review' || draft.pendingInput.length || draft.objectiveVersion !== command.objectiveVersion || revisionFor(draft)?.digest !== command.revisionDigest) throw new Error('Stale coding approval')
           const confirmed = new Set(command.confirmedCriteria ?? [])
@@ -471,12 +473,23 @@ function createHarnessService(host: HarnessHost): Harness {
             const logId = `${session.id}:verify:${command.commandId}`
             await core.commands.start(logId, session.binding!.testPlan, directory, verificationController.signal)
             const tested = await core.commands.wait(logId)
+            if (tested.status === 'passed' && session.binding!.independentVerificationRequired) {
+              const plan = currentIndependentChecks(session)
+              if (!plan || plan.baselineDigest !== revision.base.digest || session.binding!.testPlanDigest !== codingDigest(JSON.stringify({ testPlan: session.binding!.testPlan, independentChecks: plan.digest }))) throw new Error('Frozen independent acceptance changed')
+              const independentVerification = await runIndependentChecks({ plan, runner: core.commands, directory, profile: session.binding!.profile, operationId: `${session.id}:independent:${command.commandId}`, signal: verificationController.signal })
+              return { exitCode: independentVerification.status === 'passed' ? 0 : 1, status: independentVerification.status, logId, independentVerification }
+            }
             return { exitCode: tested.exitCode, status: tested.status === 'passed' ? 'passed' : tested.status === 'timed_out' ? 'timed_out' : tested.status === 'cancelled' ? 'cancelled' : 'failed', logId }
           } }).catch(async error => { await mutate(id, draft => { if (draft.status === 'applying') { draft.status = 'paused'; draft.pauseReason = error instanceof Error ? error.message : 'Application did not start' } }); throw error }).finally(() => { verifications.delete(id) })
         await mutate(id, draft => {
           draft.deliveryEvidence.push(evidence)
           draft.status = ['technical_completed', 'verified_no_change', 'manual_accepted'].includes(evidence.status) ? 'completed' : evidence.status === 'delivery_conflict' ? 'delivery_conflict' : evidence.status === 'test_failed' && evidence.result?.status !== 'cancelled' ? 'ready' : 'paused'
           if (draft.status === 'paused' || draft.status === 'ready') { draft.pauseReason = evidence.status === 'evidence_invalid' ? 'invalid_test_plan' : 'final_test_failed'; draft.transcript.push({ role: 'user', content: JSON.stringify({ finalVerification: evidence, deliveryRestored: true, instruction: 'Investigate the recorded final failure, repair the candidate, and submit a NEW revision for human approval.' }) }) }
+          if (draft.status === 'ready' && draft.binding!.independentVerificationRequired) {
+            const revisions = new Set(draft.revisions.filter(item => item.objectiveVersion === draft.objectiveVersion).map(item => item.digest))
+            const failures = draft.deliveryEvidence.filter(item => revisions.has(item.revisionDigest) && item.status === 'test_failed' && item.result?.status !== 'cancelled').length
+            if (failures >= 3) { draft.status = 'paused'; draft.pauseReason = 'independent_verification_repair_limit' }
+          }
         })
         if ((await read(id)).status === 'ready') schedule(id, assertAuthority)
       } else throw new Error('This coding permission is not pending')
@@ -502,6 +515,8 @@ function createHarnessService(host: HarnessHost): Harness {
       const profile = { kind: 'trusted_local' as const }, testPlan = shellPlan(context.project.testCommand, profile)
       session.binding = { request: input.request, context, workspaceRoot: path.join(host.root, codingDigest(session.id)), profile, testPlan, testPlanDigest: codingDigest(JSON.stringify(testPlan)), executionGranted: false, dependencyPlan: await codingDependencyPlan(context.workspace.worktreePath, profile, ['node_modules', '.cache', 'coverage']) }
       session.binding.input = await inspectCodingInput(context.workspace.worktreePath, context.workspace.baseCommitSha)
+      session.binding.independentVerificationRequired = true
+      session.independentVerification = { plans: [], humanInputs: [] }
       session.acceptance = context.upstreamArtifacts.flatMap(artifact => artifact.clarificationRevision?.status === 'approved' ? artifact.clarificationRevision.acceptanceCriteria.map((text, index) => ({ id: `criterion-${codingDigest(`${artifact.id}:${index}:${text}`)}`, objectiveVersion: 1, sourceRef: `${artifact.id}@${artifact.clarificationRevision!.revisionDigest}`, text, confirmation: 'approved_source' as const, resolution: 'unresolved' as const })) : [])
       if (session.acceptance.length > 100) throw new Error('More than 100 confirmed acceptance criteria; split the approved workflow scope first')
       const taskId = `coding-task-${codingDigest(session.id)}`

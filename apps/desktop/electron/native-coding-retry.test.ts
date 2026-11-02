@@ -190,7 +190,7 @@ it('shows each automatic re-send in the harness snapshot without counting it as 
   try {
     await fixture.authorize(); await fixture.executor.settled('coding')
     const view = (await fixture.get()).snapshot
-    expect(view.status, JSON.stringify(view)).toBe('review'); expect(view.steps).toBe(1); expect(calls).toBe(2)
+    expect(view.status, JSON.stringify(view)).toBe('review'); expect(view.steps).toBe(2); expect(calls).toBe(2) // One acceptance-author step plus one retried coding step.
     expect(view.modelRetries).toEqual({ total: 1, recent: [expect.objectContaining({ reason: 'rate_limited', number: 1, limit: 5, delayMs: 20, retryAfterMs: 20, pending: false })] })
   } finally { await fixture.executor.shutdown(); await fixture.store.close(); await rm(fixture.root, { recursive: true, force: true }) }
 })
