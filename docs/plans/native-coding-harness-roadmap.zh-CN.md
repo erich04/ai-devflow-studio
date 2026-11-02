@@ -117,7 +117,7 @@ Native Coding v3 是 DevFlow 自己写的编码 Agent harness，没有使用 Ope
 | 5 | 预算预留 | [#286](https://github.com/erich04/ai-devflow-studio/pull/286) | 已合入 v3 |
 | 6 | DeepSeek 适配 | [#289](https://github.com/erich04/ai-devflow-studio/pull/289) | 回归测试已合入；记忆脚本改名另行交接 |
 | 7 | 独立验证者 | [#293](https://github.com/erich04/ai-devflow-studio/pull/293) | 已实现；验证与 CI 通过后合入 |
-| 8 | 系统沙箱设为默认 | — | 未开始 |
+| 8 | 系统沙箱设为默认 | `codex/native-v3-default-sandbox` | 已实现，组合验证与 CI 中 |
 | 9 | 权限规则 | — | 未开始 |
 | 10 | 计划和任务图 | — | 未开始 |
 | 11 | 委派挂到计划节点上 | — | 未开始 |

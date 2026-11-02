@@ -35,6 +35,8 @@ jobs:
       - run: node scripts/ensure-electron-install.mjs
       - run: corepack pnpm exec playwright install chromium
       - run: corepack pnpm verify
+        env:
+          DEVFLOW_REQUIRE_PUBLIC_DNS: '1'
       - name: V2.0 candidate-bound evaluator
         run: corepack pnpm test:v20-agent-runtime-evaluator -- --candidate-sha "${GITHUB_SHA}" --output "out/v20-evaluation/${GITHUB_SHA}.json"
       - name: V2.1 candidate-bound evaluator
@@ -110,10 +112,20 @@ jobs:
           cache: pnpm
       - run: corepack enable
       - run: corepack pnpm install --frozen-lockfile
+      - name: Build the fail-closed Linux sandbox fallback
+        run: node scripts/build-coding-sandbox.mjs
+      - name: Install Linux namespace sandbox
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Permit unprivileged namespaces in this ephemeral sandbox test VM
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Real Linux sandbox confinement and network authority
+        run: corepack pnpm exec vitest run apps/desktop/electron/coding-os-sandbox.test.ts apps/desktop/electron/coding-command-sandbox.test.ts
+        env:
+          DEVFLOW_REQUIRE_BUBBLEWRAP: '1'
       - name: Real files, recovery, child sessions and process cancellation
         run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-command-environment.test.ts apps/desktop/electron/coding-child-merge.test.ts apps/desktop/electron/coding-runner.test.ts apps/desktop/electron/coding-atomic-file.test.ts scripts/native-smoke-process.test.ts
       - run: node scripts/ensure-electron-install.mjs
-      - run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11 gnome-keyring libsecret-1-0
+      - run: sudo apt-get update && sudo apt-get install -y xvfb dbus-x11 gnome-keyring libsecret-1-0 bubblewrap
       - name: Isolated CI Electron session (local synthetic model only)
         run: xvfb-run -a dbus-run-session -- node scripts/native-coding-electron-smoke.mjs --harness-v3
         env:

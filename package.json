@@ -30,7 +30,7 @@
     "test:organization-postgres": "node scripts/organization-postgres-smoke.mjs",
     "typecheck:opencode-smoke": "tsc --noEmit -p tsconfig.opencode-smoke.json",
     "typecheck:memory-context-smoke": "tsc --noEmit -p tsconfig.memory-context-smoke.json",
-    "test": "vitest run",
+    "test": "node scripts/build-coding-sandbox.mjs && vitest run",
     "test:watch": "vitest",
     "test:v15-github-delivery": "vitest run scripts/v15-github-delivery-deterministic-gate.test.ts",
     "test:v20-agent-runtime-evaluator": "node scripts/v20-agent-runtime-evaluation-runner.mjs",

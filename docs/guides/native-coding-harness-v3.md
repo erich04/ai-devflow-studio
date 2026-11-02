@@ -52,6 +52,12 @@
 
 ## 命令与网络配置
 
+新任务默认选择系统沙箱，默认断网。macOS 使用 Seatbelt；Linux 优先 bubblewrap，在其无法建立隔离时使用打包的 Landlock/seccomp helper。只允许写入当前 C 或 V 和该命令的私有临时目录，系统工具只读，用户目录中的宿主资料与凭据不开放。子任务、依赖安装、最终测试和 MCP stdio 使用同一执行配置。开始前可显式勾选本任务命令联网；它允许 IP 网络，macOS 仅额外开放系统 DNS 解析器的固定 socket，其他宿主 Unix socket 仍拒绝。资料搜索仍走独立的文档访问授权。
+
+安装在 nvm、CI toolcache 等用户路径的 Node 工具链，只开放从宿主 PATH 解析出的运行文件及已核对名称的 npm/corepack/pnpm 包目录；同级用户资料和整个 toolcache 不因此开放。命令运行时 HOME 和配置仍在私有临时目录。
+
+每次启动前实际核验隔离；失败就停止，不自动改成可信执行。Windows 当前没有默认系统沙箱后端，需明确选择已配置的受管容器或本机可信执行。旧会话保留原来的执行配置。Linux 开发及测试需要 `cc` 和 Linux UAPI headers，构建时生成 helper，运行时不下载或编译。Landlock 至少需要 ABI 3；其严格回退配置禁止 chmod/chown/时间戳修改、命名 Unix socket 和跨进程控制，一些依赖这些能力的构建工具会失败，可选受管容器。bubblewrap 开启网络时也叠加这组限制，避免访问宿主抽象 Unix socket。
+
 主进程从当前资料目录下的 `native-coding-profile.json` 读取配置；模型和渲染进程不能传入宿主路径或凭据。资料目录可在设置的数据档案信息中确认，开发版和打包版可能不同。
 
 ```json
