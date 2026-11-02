@@ -114,8 +114,12 @@ jobs:
         run: node scripts/build-coding-sandbox.mjs
       - name: Install Linux namespace sandbox
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Permit unprivileged namespaces in this ephemeral sandbox test VM
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Real Linux sandbox confinement and network authority
         run: corepack pnpm exec vitest run apps/desktop/electron/coding-os-sandbox.test.ts apps/desktop/electron/coding-command-sandbox.test.ts
+        env:
+          DEVFLOW_REQUIRE_BUBBLEWRAP: '1'
       - name: Real files, recovery, child sessions and process cancellation
         run: corepack pnpm exec vitest run apps/desktop/electron/native-coding apps/desktop/electron/coding-candidate-workspace.test.ts apps/desktop/electron/coding-command-runner.test.ts apps/desktop/electron/coding-command-environment.test.ts apps/desktop/electron/coding-child-merge.test.ts apps/desktop/electron/coding-runner.test.ts apps/desktop/electron/coding-atomic-file.test.ts scripts/native-smoke-process.test.ts
       - run: node scripts/ensure-electron-install.mjs

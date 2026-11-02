@@ -46,7 +46,7 @@ it.runIf(process.platform === 'darwin' || process.platform === 'linux')('runs th
     const receipt = await runner.wait('confined')
     expect(receipt.status).toBe('passed')
     expect(receipt.sandbox?.policyDigest).toMatch(/^[a-f0-9]{64}$/)
-    expect(receipt.sandbox?.backend).toBe(process.platform === 'darwin' ? 'seatbelt' : expect.stringMatching(/bubblewrap|landlock/))
+    expect(receipt.sandbox?.backend).toMatch(process.platform === 'darwin' ? /^seatbelt$/u : /^(bubblewrap|landlock)$/u)
     expect(receipt.temporaryCleanupStatus).toBe('completed')
     expect(await readFile(path.join(cwd, 'result'), 'utf8')).toBe('ok')
     expect(await readFile(secret, 'utf8')).toBe('private')
