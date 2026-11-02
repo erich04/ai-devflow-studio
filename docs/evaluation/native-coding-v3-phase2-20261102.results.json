@@ -1,0 +1,1335 @@
+{
+  "version": 1,
+  "interpretation": "Engineering implementation merged into V3. Phase 2 is not accepted: original quality score and check validity must both be reported; targeted probes cannot replace the ten-task round.",
+  "sourceRoots": {
+    "r1": "/Users/erich/.codex/worktrees/v3-independent-verification/ai-devflow-studio/out/native-v3-evaluation/phase2-20261102-r1",
+    "r2": "/Users/erich/.codex/evaluations/native-v3-phase2-20261102-r2",
+    "calibration": "/Users/erich/.codex/evaluations/native-v3-phase2-check-calibration-20261102",
+    "targetedProbe": "/Users/erich/.codex/evaluations/native-v3-phase2-feedback-probe-20261102"
+  },
+  "r1": {
+    "qualityObservationValid": false,
+    "reason": "External oracle dependency installation blocked by the original DNS policy",
+    "budget": {
+      "at": "2026-11-02T18:15:53.149Z",
+      "maxCostUsd": 3,
+      "accountedUsd": 0.258324961,
+      "observations": 2
+    },
+    "evidenceSha256": {
+      "experiment.json": "2fb3e880f1edfb36487c48363e2bcef413938c2d4c2c6c80d73f93890d1a6653",
+      "runs.json": "8b343269f8413cf011c93e7925e010baf9b67543ead654d42716536c29709217",
+      "budget-summary.json": "785ab0fa96d24712e4079042eb189ddce4407124561d7ca1265d81cbd602d320"
+    }
+  },
+  "r2": {
+    "candidateCommit": "8c52cc8722bdbcbc6a4df0e824c67bf4e07b16a9",
+    "frozenAt": "2026-11-02T18:42:26.875Z",
+    "provider": {
+      "id": "deepseek",
+      "model": "deepseek-flash",
+      "thinking": "enabled",
+      "effort": "high",
+      "baseUrl": "https://api.deepseek.com",
+      "pricingSource": "https://api-docs.deepseek.com/quick_start/pricing/"
+    },
+    "limits": {
+      "maxCalls": 192,
+      "maxCostUsd": 2.7,
+      "maxSteps": 80,
+      "maxActiveMilliseconds": 900000,
+      "maxOutputTokens": 65536
+    },
+    "execution": {
+      "profile": "os_sandbox",
+      "network": "enabled",
+      "permissionMode": "sandbox_rules",
+      "commandRules": [
+        {
+          "prefix": [
+            "git",
+            "status"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "git",
+            "diff"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "git",
+            "log"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "git",
+            "show"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "git",
+            "ls-files"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "rg"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "ls"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "cat"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "head"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "tail"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "wc"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "node",
+            "--version"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "corepack",
+            "pnpm",
+            "exec",
+            "vitest"
+          ],
+          "decision": "allow"
+        },
+        {
+          "prefix": [
+            "git",
+            "push"
+          ],
+          "decision": "deny"
+        }
+      ]
+    },
+    "score": {
+      "planned": 10,
+      "observed": 10,
+      "independentPassed": 0,
+      "falseCompleted": 0,
+      "invalidObservations": 0,
+      "qualityGatePassed": false,
+      "releaseGatePassed": false,
+      "interpretation": "Only the original r8 ten-task phase2 gate. OS platform checks and PR CI are separate evidence; this does not complete the 31-task release evaluation."
+    },
+    "budget": {
+      "at": "2026-11-02T20:23:34.211Z",
+      "maxCostUsd": 2.7,
+      "accountedUsd": 1.56747458,
+      "observations": 10
+    },
+    "observations": [
+      {
+        "taskId": "devflow-history-02",
+        "status": "paused",
+        "pauseReasonCategory": "invalid_tool_batch",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "e5a1fda635e68aabe42467e84e33fdac625b131fd564568fe5b9ac2909601c29"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 81,
+          "passedAssertions": 80,
+          "failedAssertions": 1,
+          "reportDigest": "f984a38a1162a6978d11db903a5c97d8d181b3c2977fcbea44007838a05cafe3"
+        },
+        "costUsd": 0.14655929999999998,
+        "durationMs": 421161,
+        "modelCalls": 15,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 0,
+          "statusCounts": {},
+          "backendCounts": {},
+          "receiptsWithError": 0
+        },
+        "privateChecks": [],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "e9e186b91382727389471ba0f33c8e2a172f499f94970200a0af14f01b04727e",
+          "input.json": "8728bb463eb8676dc8b79b5aa7fdd38f4cc3fd5c9f33271b3d3536872b4c29a7",
+          "execution/input.json": "8728bb463eb8676dc8b79b5aa7fdd38f4cc3fd5c9f33271b3d3536872b4c29a7",
+          "execution/trial.json": "ee45a00aae360c2cceed7e6bad4d670412611b37b5d4e3b4dd4c99ffc06b7ff2",
+          "execution/session.json": "07d4edfeed602ed0c4df49f3576babdb8aee7e3945ae1d4c9ccfecffd1c965f0",
+          "execution/ledger.json": "5589646827edcec00cc28bbc1aa546e1d3f4c8253e92cfe4a1dd3f65a15619f5",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "f984a38a1162a6978d11db903a5c97d8d181b3c2977fcbea44007838a05cafe3"
+        }
+      },
+      {
+        "taskId": "devflow-history-03",
+        "status": "paused",
+        "pauseReasonCategory": "private_check_failed_then_paused",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "e1e80a3d0281cb98c09a148a600448ee89642816a9c6a1a03e32af9bb90e4a2d"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 339,
+          "passedAssertions": 323,
+          "failedAssertions": 16,
+          "reportDigest": "fbd666e064e430e7b165acc1b3879c82b5d9f6bf779b100bef143ec414d7ca00"
+        },
+        "costUsd": 0.23584934399999996,
+        "durationMs": 823499,
+        "modelCalls": 78,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 1,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 7,
+          "statusCounts": {
+            "passed": 5,
+            "failed": 2
+          },
+          "backendCounts": {
+            "seatbelt": 7
+          },
+          "receiptsWithError": 0
+        },
+        "privateChecks": [
+          {
+            "planDigest": "f970bdca6ec1b596c77af428ad889ff034cc94aa31e3eb1cc2feaa28d9c7154c",
+            "status": "failed",
+            "checkedCriteria": [
+              "objective"
+            ],
+            "failedCriteria": [
+              "objective"
+            ]
+          }
+        ],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "1245f81d6f206c5cbf1891aef27fc012898ffcbae3c0d00309ed225d336952bf",
+          "input.json": "ae42049cd297f724939507d37c92192e0852576c036ccbe6fe31a19a91cb09db",
+          "execution/input.json": "ae42049cd297f724939507d37c92192e0852576c036ccbe6fe31a19a91cb09db",
+          "execution/trial.json": "058e28960fc69031c09b1c64ffe361824570ea3a579da2ae75b3399ea289026c",
+          "execution/session.json": "a27436957341922ae58ffbf793ffd4678bd226875bcbac2779b25602057391ee",
+          "execution/ledger.json": "195fe5df788178cec2c70f34ff375dd15f1983e208d8451d827d05ae9197531e",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "fbd666e064e430e7b165acc1b3879c82b5d9f6bf779b100bef143ec414d7ca00"
+        }
+      },
+      {
+        "taskId": "devflow-history-04",
+        "status": "paused",
+        "pauseReasonCategory": "invalid_model_response",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "c922124bb61ef12ab254b7af2fa7192a87c1c27981ace75e82c4a1eb7bd8819c"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 111,
+          "passedAssertions": 102,
+          "failedAssertions": 9,
+          "reportDigest": "0afefec03fccc11dba5d757a05be92b449e65c08b7f8f5caa9608a2133b1683e"
+        },
+        "costUsd": 0.10893204,
+        "durationMs": 335080,
+        "modelCalls": 1,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 0,
+          "statusCounts": {},
+          "backendCounts": {},
+          "receiptsWithError": 0
+        },
+        "privateChecks": [],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "22a33f784b2de0fa3a01920fc658e8c764857f4e31cdcc02daab0f01919349db",
+          "input.json": "2b62e69c61e44f943e8e15cd0ce1b4de7f6ba91f8d2ebcea4daf91da848f99df",
+          "execution/input.json": "2b62e69c61e44f943e8e15cd0ce1b4de7f6ba91f8d2ebcea4daf91da848f99df",
+          "execution/trial.json": "71c316f31c515ec4c519a035de69f415351e660c630fbc2e64c5faa339ffd73d",
+          "execution/session.json": "2415f85ee652a2aec6d7fe2117064df5642d7cdbe728ef156d7c9f07a31d8f68",
+          "execution/ledger.json": "9f14648ad39a85d3c6280e4aca3566a8649f08aae8ef03027bc525b1c5e44179",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "0afefec03fccc11dba5d757a05be92b449e65c08b7f8f5caa9608a2133b1683e"
+        }
+      },
+      {
+        "taskId": "devflow-history-05",
+        "status": "paused",
+        "pauseReasonCategory": "private_check_failed_then_paused",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "23dcbaab9305eb47de92d0b4717b2ed0df8a5e969c3ebcf95b5cfa4d3bc1ac73"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 46,
+          "passedAssertions": 41,
+          "failedAssertions": 5,
+          "reportDigest": "296922a911ef74ea34d9e13e0656e70a081ac5e0c6d2aae8f7ece639c4828fd9"
+        },
+        "costUsd": 0.21704437199999999,
+        "durationMs": 761080,
+        "modelCalls": 80,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 6,
+          "statusCounts": {
+            "passed": 3,
+            "failed": 3
+          },
+          "backendCounts": {
+            "seatbelt": 6
+          },
+          "receiptsWithError": 0
+        },
+        "privateChecks": [
+          {
+            "planDigest": "f562edf2ee63dc2a8183ce64f9ae956092d84682f136a0811d56cededaad4b46",
+            "status": "failed",
+            "checkedCriteria": [
+              "objective"
+            ],
+            "failedCriteria": [
+              "objective"
+            ]
+          }
+        ],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "d2b2aa71625870a3473366723ebeccbe80be598806b54aee2894cd1cc013c3b6",
+          "input.json": "9b84544d0ea2a43e751c7b1554821546c76bcf20f5933e4925b32a61e2f0a048",
+          "execution/input.json": "9b84544d0ea2a43e751c7b1554821546c76bcf20f5933e4925b32a61e2f0a048",
+          "execution/trial.json": "748321bb6eb11f6978f386246984ee88596099bda36ef45fb8c938ed4242a127",
+          "execution/session.json": "ad4280d3a94d08d64f1cf88aad423e364f7531a83e752b6895b24767e6f1d27a",
+          "execution/ledger.json": "d72f9a03531f4bdbf1dad26cf6f1c171af307d3dc75c802d671dcf168b1556d7",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "296922a911ef74ea34d9e13e0656e70a081ac5e0c6d2aae8f7ece639c4828fd9"
+        }
+      },
+      {
+        "taskId": "devflow-history-06",
+        "status": "paused",
+        "pauseReasonCategory": "invalid_tool_batch",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "25485680bfb665ef652a80bb273e38b740b30a800f3a77a70c9936fb835f4abc"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 215,
+          "passedAssertions": 202,
+          "failedAssertions": 13,
+          "reportDigest": "cbcf73d51d0ec0d2520ab497611456c43b56db0355208cf0ae3ce02288ab62a1"
+        },
+        "costUsd": 0.18313078800000002,
+        "durationMs": 438446,
+        "modelCalls": 59,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 1,
+          "statusCounts": {
+            "cancelled": 1
+          },
+          "backendCounts": {
+            "seatbelt": 1
+          },
+          "receiptsWithError": 0
+        },
+        "privateChecks": [],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "86ace58066dc02b6613d6792c894571987edb042074a4713d165b140bbdd0a83",
+          "input.json": "b70487140fafaaf68a4913633356afdd53080a318dcc96161c0809e6c1ab0e2c",
+          "execution/input.json": "b70487140fafaaf68a4913633356afdd53080a318dcc96161c0809e6c1ab0e2c",
+          "execution/trial.json": "92e6be6b5891207f59957b7889a1571d3b19a5c27df6ae8d4caa8ecc599dc2d2",
+          "execution/session.json": "f52726ca6a657307a08d7c69af6d79c90f48bbb9c0bb5eaf8a12eb18b74d0f49",
+          "execution/ledger.json": "9e5739e1e563373f1135406f377d265cc3939292a3ac2bba1dbd99c00653dbfb",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "cbcf73d51d0ec0d2520ab497611456c43b56db0355208cf0ae3ce02288ab62a1"
+        }
+      },
+      {
+        "taskId": "devflow-history-07",
+        "status": "paused",
+        "pauseReasonCategory": "evaluation_wall_time_limit",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "bd7dfe480dacadfed4f8bd7bccf4c63e2a45db5673dc98fa7a36586f488ab782"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 3,
+          "passedAssertions": 0,
+          "failedAssertions": 3,
+          "reportDigest": "742c22d2b2c7478cf2f318d7df2ed38290428a9a8456e9ed9c649475ab978bbc"
+        },
+        "costUsd": 0.211077108,
+        "durationMs": 901240,
+        "modelCalls": 67,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 1,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 1,
+        "childSessions": 0,
+        "commands": {
+          "count": 6,
+          "statusCounts": {
+            "cancelled": 1,
+            "failed": 1,
+            "passed": 4
+          },
+          "backendCounts": {
+            "seatbelt": 6
+          },
+          "receiptsWithError": 0
+        },
+        "privateChecks": [
+          {
+            "planDigest": "0a1dd8d9eff99e171497ca38427f325be0081d62cb5172d44c4d299c352618b7",
+            "status": "failed",
+            "checkedCriteria": [
+              "objective"
+            ],
+            "failedCriteria": [
+              "objective"
+            ]
+          }
+        ],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "efb526477be45a4df8afbe2c9ed7b2dcca821e3292bd8b86f148e8f067ed50d3",
+          "input.json": "c4e12cacd0615d8080281e84661463ab659291409db3698ce98598231af93ea7",
+          "execution/input.json": "c4e12cacd0615d8080281e84661463ab659291409db3698ce98598231af93ea7",
+          "execution/trial.json": "4ef019ec54ef22818a35af48651115bc85d922f80378b103dbdc84c7f0442581",
+          "execution/session.json": "bbb388944c5ab7e6442adb968b91f80e16ec71f8cb801649928ae1b501542e57",
+          "execution/ledger.json": "6e7e36e46ba61d7542c770d3f1d908049d34409894e87b088441f252cefab116",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "742c22d2b2c7478cf2f318d7df2ed38290428a9a8456e9ed9c649475ab978bbc"
+        }
+      },
+      {
+        "taskId": "devflow-history-08",
+        "status": "paused",
+        "pauseReasonCategory": "invalid_tool_batch",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "59946dfb71c6f78c5d724515fe39805b6d486d427150202f3c7817115a045635"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 51,
+          "passedAssertions": 41,
+          "failedAssertions": 10,
+          "reportDigest": "6a7e588e33e818b5d314eeb589282097a762ee652196361801c3abeeb67e6d84"
+        },
+        "costUsd": 0.081393852,
+        "durationMs": 205300,
+        "modelCalls": 8,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 0,
+          "statusCounts": {},
+          "backendCounts": {},
+          "receiptsWithError": 0
+        },
+        "privateChecks": [],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "f898af67cc6609fda504c79e7e7f424756ff2ee71eeff8072e07b304aceca941",
+          "input.json": "b63b8bb9f536304c21753599619c5222b1e33d2aa60bed8f44072b1687d4b245",
+          "execution/input.json": "b63b8bb9f536304c21753599619c5222b1e33d2aa60bed8f44072b1687d4b245",
+          "execution/trial.json": "55ee0a03ade2458c6e43b70d86ff92b0ac417e6a07fb67838ce8a2550dc6d1f8",
+          "execution/session.json": "a5ae9df89af83b02ca560afadf3408c301059a6e0ac05681841662f7e8b16e0d",
+          "execution/ledger.json": "d4264c0c0f95f49b61e96a6ede3a76add4189841f784de6d68bddf33834e4ab5",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "6a7e588e33e818b5d314eeb589282097a762ee652196361801c3abeeb67e6d84"
+        }
+      },
+      {
+        "taskId": "devflow-history-09",
+        "status": "paused",
+        "pauseReasonCategory": "invalid_tool_batch",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "ed9274e4bbd40894d0f2aadad2e76ce4d29cfb41fd34e49e857e19cd8b77244e"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 320,
+          "passedAssertions": 319,
+          "failedAssertions": 1,
+          "reportDigest": "37c5378119ebffd02fd080e10f4421a14479bab87984f89fe61b754d4ea6837d"
+        },
+        "costUsd": 0.095479092,
+        "durationMs": 234306,
+        "modelCalls": 17,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 0,
+          "statusCounts": {},
+          "backendCounts": {},
+          "receiptsWithError": 0
+        },
+        "privateChecks": [],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "e9dd009a83c846c8b468f8c3dfbb8baa0ffef9e084c9a7c90575dee8fd9930de",
+          "input.json": "c0da30bacbf6ac4740a7725e71aec1f9c305e89131a730f2c62e7502fa7c0a79",
+          "execution/input.json": "c0da30bacbf6ac4740a7725e71aec1f9c305e89131a730f2c62e7502fa7c0a79",
+          "execution/trial.json": "164c10451f9d411b5c0f69e194f9cc1efb9f026accdc822edf689713d5b1dd7a",
+          "execution/session.json": "240cb097de47c2d5e8988fcd0e0a5c3473366f800e8c5c15e53d03d1872c450c",
+          "execution/ledger.json": "3160510af2dd70ac418bd56a32ab8dfd0880f5e2f5febc3672be82fb0671bc64",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "37c5378119ebffd02fd080e10f4421a14479bab87984f89fe61b754d4ea6837d"
+        }
+      },
+      {
+        "taskId": "devflow-history-10",
+        "status": "paused",
+        "pauseReasonCategory": "invalid_tool_batch",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "b29869bea2810b6743c9feacd18c7fe63f0fbef3476d970820c0a90a0dc9533e"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 7,
+          "passedAssertions": 6,
+          "failedAssertions": 1,
+          "reportDigest": "c2a74dbe341ca0316cbd90cd34efb5b820b5962544c0bf4066901e51734d7456"
+        },
+        "costUsd": 0.08549187599999997,
+        "durationMs": 212509,
+        "modelCalls": 11,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 0,
+          "statusCounts": {},
+          "backendCounts": {},
+          "receiptsWithError": 0
+        },
+        "privateChecks": [],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "c0f7dabd99d2a796840831e2fa29266713b11920094cb6d59c371c7bad3ed72a",
+          "input.json": "d1762b6ea7b6e9293ac1d44352d3247f6bd464c1e0a0f22d2b38b50e2c328133",
+          "execution/input.json": "d1762b6ea7b6e9293ac1d44352d3247f6bd464c1e0a0f22d2b38b50e2c328133",
+          "execution/trial.json": "c316bbcc5aa1b4396065b69b3224bbd0ccbce6b38c06c79b143a9b43234950e6",
+          "execution/session.json": "94eaa9088270e51f619122e06a9343f8f787cb6f2d206846ba0692d0720b1c6f",
+          "execution/ledger.json": "14f5bf835a38f369c071f6f6e2cf3336f79a37d9a6ff61651d1f44a9088b2242",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "c2a74dbe341ca0316cbd90cd34efb5b820b5962544c0bf4066901e51734d7456"
+        }
+      },
+      {
+        "taskId": "devflow-history-11",
+        "status": "paused",
+        "pauseReasonCategory": "task_limit",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "fe65648f154357c04b235ed109e247380a998eca68439dda235625419e4b0096"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 17,
+          "passedAssertions": 16,
+          "failedAssertions": 1,
+          "reportDigest": "0ad85aa6f1272189786523e03f9a6414195f3e0ff3cda996113fd90b744e2063"
+        },
+        "costUsd": 0.2025168,
+        "durationMs": 757862,
+        "modelCalls": 80,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 1,
+          "automaticPermissionAllows": 2,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 1,
+        "childSessions": 0,
+        "commands": {
+          "count": 8,
+          "statusCounts": {
+            "passed": 6,
+            "failed": 1,
+            "cancelled": 1
+          },
+          "backendCounts": {
+            "seatbelt": 8
+          },
+          "receiptsWithError": 0
+        },
+        "privateChecks": [
+          {
+            "planDigest": "a0a0ff6bfb34f7e68481a76eea99b12fa9410dfcbb952e7efc2f13b4872d994c",
+            "status": "failed",
+            "checkedCriteria": [
+              "objective"
+            ],
+            "failedCriteria": [
+              "objective"
+            ]
+          }
+        ],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "ecc0a9f312eb074c631983e39fc67dbc9ec13f5b3404aaa883bfcb5e61f4ba78",
+          "input.json": "31249bfca85faf087ee77edb32daf792c192938b40f8eb0a3f9421aa3b236c8e",
+          "execution/input.json": "31249bfca85faf087ee77edb32daf792c192938b40f8eb0a3f9421aa3b236c8e",
+          "execution/trial.json": "be4eaec1b804af1b75c7092c397250ffb510005570cf185b5e1f472e9025a1db",
+          "execution/session.json": "3ad68b73286335d1d9cf37b1b7b8e1a374e108abedc85ef78588b25e702e51e6",
+          "execution/ledger.json": "6bbb3dff5b6aa4c9ca17512bc7abc93a0e0a40eeee90d2c249a3b47c9a28c3c3",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "0ad85aa6f1272189786523e03f9a6414195f3e0ff3cda996113fd90b744e2063"
+        }
+      }
+    ],
+    "evidenceSha256": {
+      "experiment.json": "5856d8d6e7af54290492ae8bb9eb3fc4fbc0ea63ae043f30108466c7e6da1f6f",
+      "runs.json": "398d338a6ff0bdc02df0d92dcb1e500e59cdb730fd595ec338f4c42d5d7c5ecf",
+      "score.json": "ee777f81a841cb957810d52c0671925a4165e453617bd1f5f282c3ae9eb86a2b",
+      "budget-summary.json": "4d251bc2048d89ac572d5fa344ef6721aad3bfbdfd782cfe061dd327cb1e2108"
+    }
+  },
+  "checkCalibration": [
+    {
+      "task": "devflow-history-03",
+      "purpose": "Frozen generated-check calibration against the original reference implementation; not an agent success and no feedback to the live agent.",
+      "referenceSha": "ed26bc9aeee11fd79a774789ec654aec2927b295",
+      "candidateCommit": "8c52cc8722bdbcbc6a4df0e824c67bf4e07b16a9",
+      "referenceResult": {
+        "passed": true,
+        "process": {
+          "code": 0,
+          "timedOut": false,
+          "status": "passed",
+          "sandbox": {
+            "backend": "seatbelt",
+            "policyDigest": "2fadc86e7b3c5278e2783af076a07b3d79b64eb8a0e640a87e3caa015c0e7d4a"
+          },
+          "receiptId": "independent-tests.log"
+        },
+        "total": 339,
+        "passedAssertions": 339,
+        "failedAssertions": 0,
+        "reportDigest": "0c65e0041bcd12186068cee9cd3627d98a5ff7dcac3a30e7c22454602532fe97"
+      },
+      "generatedCheckResult": {
+        "planDigest": "f970bdca6ec1b596c77af428ad889ff034cc94aa31e3eb1cc2feaa28d9c7154c",
+        "status": "failed",
+        "checkedCriteria": [
+          "objective"
+        ],
+        "failedCriteria": [
+          "objective"
+        ]
+      },
+      "paidRequests": 0,
+      "evidenceSha256": {
+        "result.json": "734bce903d91fa5dd57ddc6f01d93a7b85b677c5163c91b8751ee3ce059f958a",
+        "reference-result.json": "333756dae1be515920d03039fbf1440515ca35f7cd1341cf0408ab2c005ec8f9",
+        "generated-check.log": "e2af95ce9b5052f701ff5c9422698c68bd4e2fce754b095b33503ad27153f27e",
+        "diagnostic-result.json": "9af47b86f70123fcf6a21152d8028317d6f8fac82631b09f4e0e3fbe8e21e8f2",
+        "diagnostic-tests.json": "acc08dc358ebf4e5a725145a09bba501ad3fc451bfdc5b2a693c2b989f31d63a"
+      },
+      "diagnostic": {
+        "numTotalTests": 8,
+        "numPassedTests": 2,
+        "numFailedTests": 6
+      },
+      "finding": "The unchanged generated tests misuse fixture data: a pre-existing PR artifact is duplicated, and a supposed no-PR case still contains it. Other assertions cannot find the rendered inspector in the incomplete UI fixture."
+    },
+    {
+      "task": "devflow-history-05",
+      "purpose": "Frozen generated-check calibration against the original reference implementation; not an agent success and no feedback to the live agent.",
+      "referenceSha": "953ddf61dcf7a8469b189dbed8c1989a40efcb76",
+      "candidateCommit": "8c52cc8722bdbcbc6a4df0e824c67bf4e07b16a9",
+      "referenceResult": {
+        "passed": true,
+        "process": {
+          "code": 0,
+          "timedOut": false,
+          "status": "passed",
+          "sandbox": {
+            "backend": "seatbelt",
+            "policyDigest": "6c89787dc24d33967da4ba73f6b17f28a2454ff9416466e57d5beb6ead4f3030"
+          },
+          "receiptId": "independent-tests.log"
+        },
+        "total": 46,
+        "passedAssertions": 46,
+        "failedAssertions": 0,
+        "reportDigest": "b0a6b2eefbec8aeb7925a0f37ec40b87ad75f7b6a89bda5f7ca30aad9b00adad"
+      },
+      "generatedCheckResult": {
+        "planDigest": "f562edf2ee63dc2a8183ce64f9ae956092d84682f136a0811d56cededaad4b46",
+        "status": "failed",
+        "checkedCriteria": [
+          "objective"
+        ],
+        "failedCriteria": [
+          "objective"
+        ]
+      },
+      "paidRequests": 0,
+      "evidenceSha256": {
+        "result.json": "daca60faa1c5e107a0c186e89ebfb5914c38df2aa05fe5d409b6a2f547d2dcbf",
+        "reference-result.json": "a723ac312dfb2188abc202f6bbb53303d919e35cfe818e0d1ab2dcd409590069",
+        "generated-check.log": "c20a80ae88a94ce1b78eeefe003fe21ec06e7701891f2907ff88cd0f6764dce6",
+        "diagnostic-syntax.json": "5f58cc9517c0121e46e4f6d8097f6d5495dafe991d1a2bd0f00c37c5d188487c",
+        "diagnostic-generated.test.ts": "25ef9957a60bb1771b19ecf1d804dea1de45430d35e0ba7802cf632a16dc6e0d"
+      },
+      "diagnostic": {
+        "purpose": "Parse-only validation of the exact generated source, including its original path substitution.",
+        "diagnostics": [
+          {
+            "code": 1109,
+            "message": "Expression expected.",
+            "line": 12
+          },
+          {
+            "code": 1121,
+            "message": "Octal literals are not allowed. Use the syntax '-0o5'.",
+            "line": 12
+          },
+          {
+            "code": 1005,
+            "message": "',' expected.",
+            "line": 12
+          }
+        ]
+      },
+      "finding": "The generated source surrounds __REPORT__ with quotes, then substitutes JSON.stringify(reportPath), producing doubled quotes and invalid TypeScript before business assertions can run."
+    }
+  ],
+  "engineeringPullRequests": [
+    {
+      "number": 293,
+      "url": "https://github.com/erich04/ai-devflow-studio/pull/293",
+      "headRefOid": "884db4d555a640d6999163bc8afdd4840b9cb7cc",
+      "mergeCommit": {
+        "oid": "3314c7b589eca841df112f575734530e6937d125"
+      },
+      "mergedAt": "2026-11-02T17:42:09Z",
+      "checks": [
+        {
+          "name": "macOS verify",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41488904419/job/125426402438"
+        },
+        {
+          "name": "Windows compatibility",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41488904419/job/125426402612"
+        },
+        {
+          "name": "Native v3 Linux lifecycle and Electron",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41488904419/job/125426402119"
+        },
+        {
+          "name": "Postgres integration",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41488904419/job/125426402523"
+        },
+        {
+          "name": "Docker smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41488904419/job/125426402294"
+        },
+        {
+          "name": "Docker lifecycle smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41488904419/job/125426402404"
+        }
+      ],
+      "evidenceFile": "/Users/erich/.codex/evaluations/native-v3-phase2-20261102-r2/pr-293-evidence.json",
+      "evidenceSha256": "4d8b5a4ac4900e447de48d2858e4edeb8e49847e13ad3f5d3f001a0159a3e1b7"
+    },
+    {
+      "number": 294,
+      "url": "https://github.com/erich04/ai-devflow-studio/pull/294",
+      "headRefOid": "e1b48d8249e12568e55373cc7674dcd129d8b9d4",
+      "mergeCommit": {
+        "oid": "443e442748fd90544843d94dc6240113d2427059"
+      },
+      "mergedAt": "2026-11-02T18:49:06Z",
+      "checks": [
+        {
+          "name": "macOS verify",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41500725437/job/125467192799"
+        },
+        {
+          "name": "Windows compatibility",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41500725437/job/125467192852"
+        },
+        {
+          "name": "Native v3 Linux lifecycle and Electron",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41500725437/job/125467192460"
+        },
+        {
+          "name": "Postgres integration",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41500725437/job/125467193298"
+        },
+        {
+          "name": "Docker smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41500725437/job/125467192560"
+        },
+        {
+          "name": "Docker lifecycle smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41500725437/job/125467192698"
+        }
+      ],
+      "evidenceFile": "/Users/erich/.codex/evaluations/native-v3-phase2-20261102-r2/pr-294-evidence.json",
+      "evidenceSha256": "44de63b4399c7d2238c4ec43e0ae6cb604797ad7398a7dff8620e5d0c1cabcb6"
+    },
+    {
+      "number": 295,
+      "url": "https://github.com/erich04/ai-devflow-studio/pull/295",
+      "headRefOid": "487b349910e0a5159f1e08a66bd383c27e11c778",
+      "mergeCommit": {
+        "oid": "1a45955a44d60b6f18da0aaf92f3f69887adf225"
+      },
+      "mergedAt": "2026-11-02T18:53:10Z",
+      "checks": [
+        {
+          "name": "macOS verify",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41501509819/job/125469880860"
+        },
+        {
+          "name": "Windows compatibility",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41501509819/job/125469880875"
+        },
+        {
+          "name": "Native v3 Linux lifecycle and Electron",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41501509819/job/125469880861"
+        },
+        {
+          "name": "Postgres integration",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41501509819/job/125469880935"
+        },
+        {
+          "name": "Docker smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41501509819/job/125469880294"
+        },
+        {
+          "name": "Docker lifecycle smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41501509819/job/125469880823"
+        }
+      ],
+      "evidenceFile": "/Users/erich/.codex/evaluations/native-v3-phase2-20261102-r2/pr-295-evidence.json",
+      "evidenceSha256": "4beaffcdaee8e6088cb19e88f97cc52c1861d1efb0f71fd2f069ebfa69bd1d58"
+    },
+    {
+      "number": 297,
+      "url": "https://github.com/erich04/ai-devflow-studio/pull/297",
+      "headRefOid": "8c52cc8722bdbcbc6a4df0e824c67bf4e07b16a9",
+      "mergeCommit": {
+        "oid": "267c9594dac1b7a00ce54ae29748a912c24cea6b"
+      },
+      "mergedAt": "2026-11-02T19:06:30Z",
+      "checks": [
+        {
+          "name": "macOS verify",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41503103604/job/125475373656"
+        },
+        {
+          "name": "Windows compatibility",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41503103604/job/125475373920"
+        },
+        {
+          "name": "Native v3 Linux lifecycle and Electron",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41503103604/job/125475373416"
+        },
+        {
+          "name": "Postgres integration",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41503103604/job/125475373570"
+        },
+        {
+          "name": "Docker smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41503103604/job/125475374018"
+        },
+        {
+          "name": "Docker lifecycle smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41503103604/job/125475373991"
+        }
+      ],
+      "evidenceFile": "/Users/erich/.codex/evaluations/native-v3-phase2-20261102-r2/pr-297-evidence.json",
+      "evidenceSha256": "752ee2cbfbac7cdb1c6b477cd161cbb56f30d84a82a46108eb39feb87ef5163d"
+    },
+    {
+      "number": 298,
+      "url": "https://github.com/erich04/ai-devflow-studio/pull/298",
+      "headRefOid": "7c99c55823aab56c912a10fed9456a3b87a9c98c",
+      "mergeCommit": {
+        "oid": "f4280f72378b26ceef52b8dfe13d87b8932e66a9"
+      },
+      "mergedAt": "2026-11-02T20:32:54Z",
+      "checks": [
+        {
+          "name": "macOS verify",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41512394355/job/125518545638"
+        },
+        {
+          "name": "Windows compatibility",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41512394355/job/125518604713"
+        },
+        {
+          "name": "Native v3 Linux lifecycle and Electron",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41512394355/job/125518548785"
+        },
+        {
+          "name": "Postgres integration",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41512394355/job/125518548557"
+        },
+        {
+          "name": "Docker smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41512394355/job/125518596043"
+        },
+        {
+          "name": "Docker lifecycle smoke",
+          "status": "COMPLETED",
+          "conclusion": "SUCCESS",
+          "detailsUrl": "https://github.com/erich04/ai-devflow-studio/actions/runs/41512394355/job/125518625531"
+        }
+      ],
+      "evidenceFile": "/Users/erich/.codex/worktrees/v3-default-sandbox/ai-devflow-studio/out/phase2-validation/pr-298-merged.json",
+      "evidenceSha256": "f6f8f0d46f8db07dc71bd70a7807ddf6b0e9a7fe91736a7bf9e52d1676bb0359"
+    }
+  ],
+  "targetedProbe": {
+    "candidateCommit": "7c99c55823aab56c912a10fed9456a3b87a9c98c",
+    "selection": "The two observed parameter-bound failures selected before completion of the original round: contextLines and waitMs. This is a targeted regression, not a replacement ten-task round.",
+    "budget": {
+      "priorAccountedUsd": 1.825799541,
+      "accountedUsd": 0.24920171000000002,
+      "cumulativeAccountedUsd": 2.075001251,
+      "cumulativeCeilingUsd": 3,
+      "observations": 2,
+      "fullPhase2Gate": "Not evaluated by this targeted probe"
+    },
+    "observations": [
+      {
+        "taskId": "devflow-history-02",
+        "status": "completed",
+        "pauseReasonCategory": null,
+        "claimedCompleted": true,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "cc278c6d7a03f317c59eb32137709c9eff98109a03b8b2041f135282efe625f3"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 81,
+          "passedAssertions": 80,
+          "failedAssertions": 1,
+          "reportDigest": "b4d3069848d6d4e1272eb1387f88f7eea209da07ed9abe871978644c316b88fd"
+        },
+        "costUsd": 0.19966363200000004,
+        "durationMs": 771603,
+        "modelCalls": 65,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 1,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 5,
+          "statusCounts": {
+            "passed": 4,
+            "failed": 1
+          },
+          "backendCounts": {
+            "seatbelt": 5
+          },
+          "receiptsWithError": 0
+        },
+        "privateChecks": [
+          {
+            "planDigest": "3130908d5f299bc87789ab4d4453a0a21d8d7b915640a6c6f4cee32aac852ba2",
+            "status": "passed",
+            "checkedCriteria": [
+              "objective"
+            ],
+            "failedCriteria": []
+          }
+        ],
+        "schemaFeedback": [
+          {
+            "id": "call_00_ET_yrGnQ8zkNQXEokAMrFMA2569",
+            "error": "Invalid tool batch: read_command $.waitMs must be <= 30000"
+          }
+        ],
+        "evidenceSha256": {
+          "row.json": "04cfa3942d28ce44e8a5cbd1f2a7378c5ebf3cd842f5b0ccc252eb12fd807dce",
+          "input.json": "0f14af5e7ce7ff009bf335405fe5455f4990661335c85732a1216210ce32f951",
+          "execution/input.json": "0f14af5e7ce7ff009bf335405fe5455f4990661335c85732a1216210ce32f951",
+          "execution/trial.json": "93add026420bf0aab74cc093741f06c17a2da30abdee5e3b5c9685d3a68f6062",
+          "execution/session.json": "42a9a3283a727de2cedb50974c3b946029b202896b8202058eabb9d4869419d5",
+          "execution/ledger.json": "793840197e400e8fbb6ff54d660d9922acee19262b4533c6dd054b6d2d58d0b4",
+          "candidate.patch": "ac64bcc88d6fd93074f185ca7c1868f3ec97cfa33ac1bf27d2ab9b19a28c65f5",
+          "independent-tests.json": "b4d3069848d6d4e1272eb1387f88f7eea209da07ed9abe871978644c316b88fd"
+        }
+      },
+      {
+        "taskId": "devflow-history-06",
+        "status": "paused",
+        "pauseReasonCategory": "independent_verification_plan_invalid",
+        "claimedCompleted": false,
+        "qualityObservationValid": true,
+        "externalOracle": {
+          "passed": false,
+          "process": {
+            "code": 1,
+            "timedOut": false,
+            "status": "failed",
+            "sandbox": {
+              "backend": "seatbelt",
+              "policyDigest": "b4927b2f49e0a03aab6e5662f90eb95622e1575db9d2132b68860c581c05217f"
+            },
+            "receiptId": "independent-tests.log"
+          },
+          "total": 215,
+          "passedAssertions": 202,
+          "failedAssertions": 13,
+          "reportDigest": "70106217a986453a9c4d7eb09dac6cae08a6983dc9e2a08a085f284639e1df70"
+        },
+        "costUsd": 0.049538076,
+        "durationMs": 214433,
+        "modelCalls": 1,
+        "unsettledCalls": 0,
+        "permissions": {
+          "humanPermissionPrompts": 0,
+          "automaticPermissionAllows": 0,
+          "automaticPermissionDenials": 0
+        },
+        "permissionCardsRejectedByFrozenOperator": 0,
+        "childSessions": 0,
+        "commands": {
+          "count": 0,
+          "statusCounts": {},
+          "backendCounts": {},
+          "receiptsWithError": 0
+        },
+        "privateChecks": [],
+        "schemaFeedback": [],
+        "evidenceSha256": {
+          "row.json": "d583cb0c82bf512fd67986090fb5c74b468a85ee104fe8dfa03a0d7f75072c89",
+          "input.json": "f6052dfd23e1ee014000c4f58dc4a03f6426dbe7a33ef878cee91fd7eef3a07a",
+          "execution/input.json": "f6052dfd23e1ee014000c4f58dc4a03f6426dbe7a33ef878cee91fd7eef3a07a",
+          "execution/trial.json": "5e94c24577ef694bc20df50690a740f61177155f348ee44db23e40d4c698ee3d",
+          "execution/session.json": "e85ce6f72df91f782b38a04188cc7956492ed062076d5aa25b7694d9491849ae",
+          "execution/ledger.json": "6a5ace47e3cfef2f00dc9ccb0e4d6fed2ddd924a140223b13782ce7287cc40cf",
+          "candidate.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "independent-tests.json": "70106217a986453a9c4d7eb09dac6cae08a6983dc9e2a08a085f284639e1df70"
+        }
+      }
+    ],
+    "evidenceSha256": {
+      "experiment.json": "804cf246e462469f179d86d9f310d9f98b80794f4ac7b52c0736741d0ef7004a",
+      "runs.json": "3fd5e41ca7aa018237be83771aceeb41e6f43c3fa190ac0a5800d539e3bf4587",
+      "budget-summary.json": "322eb64ed64b5b19d34c20051d6d5479494d198b52d3717c5ac77748a0370ac0",
+      "launcher.mts": "963d85a8478ad0d801eb91d29548004be846cc129901153acaac73c06227ff02"
+    },
+    "score": {
+      "observed": 2,
+      "independentPassed": 0,
+      "claimedCompleted": 1,
+      "falseCompleted": 1,
+      "invalidObservations": 0
+    },
+    "task06PlanParseFailure": {
+      "tool": "submit_independent_checks",
+      "message": "Invalid \\escape",
+      "position": 16829,
+      "line": 1,
+      "column": 16830,
+      "invalidSequence": "\\'",
+      "argumentsSha256": "e9325d07d48ba808cb4d51fa85b2352d3c364b50591a113fad76e374b32a2f6e"
+    }
+  },
+  "falseCompletionCalibration": {
+    "taskId": "devflow-history-02",
+    "purpose": "Frozen generated check on the unchanged original baseline after an observed false completion; no feedback to either model trial and no check modification.",
+    "baseSha": "d8e25fcc085c840f812c2616cd8779c10eadbc6c",
+    "referenceSha": "d2190170337b904b88b3df5f7cbbedc7f1897c0b",
+    "candidateCommit": "7c99c55823aab56c912a10fed9456a3b87a9c98c",
+    "planDigest": "3130908d5f299bc87789ab4d4453a0a21d8d7b915640a6c6f4cee32aac852ba2",
+    "generatedCheckResult": {
+      "planDigest": "3130908d5f299bc87789ab4d4453a0a21d8d7b915640a6c6f4cee32aac852ba2",
+      "status": "failed",
+      "checkedCriteria": [
+        "objective"
+      ],
+      "failedCriteria": [
+        "objective"
+      ]
+    },
+    "externalBaselineResult": {
+      "passed": false,
+      "process": {
+        "code": 1,
+        "timedOut": false,
+        "status": "failed",
+        "sandbox": {
+          "backend": "seatbelt",
+          "policyDigest": "c560df487981a859dc1cbf84c6783e78c3b194c40ff29173d8b7cf8765fb763c"
+        },
+        "receiptId": "independent-tests.log"
+      },
+      "total": 81,
+      "passedAssertions": 80,
+      "failedAssertions": 1,
+      "reportDigest": "45888823f82ba9513fb1bfaff938318897e10323de0024c329f8752e8b8d977a"
+    },
+    "baselineUnchanged": true,
+    "paidRequests": 0,
+    "evidenceSha256": {
+      "result.json": "ba7fd3810b1ea983ae9825d3552b5bfd3364f2abd4922f6640c55138ddb61210",
+      "generated-check.log": "7e72c7cd2f480351ff18a1be43941c940885d6dabb27e892c6024e4d7636cb16",
+      "negative-oracle/independent-tests.json": "45888823f82ba9513fb1bfaff938318897e10323de0024c329f8752e8b8d977a"
+    }
+  },
+  "cumulativeAccountedUsd": 2.075001251,
+  "credentialCleanup": {
+    "temporaryCopyRemoved": true,
+    "savedProjectProviderModified": false
+  }
+}
