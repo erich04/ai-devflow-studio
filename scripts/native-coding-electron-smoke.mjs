@@ -159,9 +159,15 @@ const modelServer = createServer(async (request, response) => {
       return
     }
     modelRequests.push(body)
-    if (liveRelay && body.tools?.some(tool => ['propose_changeset', 'compact_context'].includes(tool.function.name))) {
+    if (liveRelay && body.tools?.some(tool => ['propose_changeset', 'compact_context', 'submit_independent_checks'].includes(tool.function.name))) {
       const real = await liveRelay.complete(body)
       response.writeHead(real.status, { 'content-type': real.type }).end(real.body)
+      return
+    }
+    if (nativeV3 && body.tools?.some(tool => tool.function.name === 'submit_independent_checks')) {
+      const input = JSON.parse(body.messages.find(message => message.role === 'user').content)
+      const tool_calls = [{ id: `acceptance-${modelRequests.length}`, type: 'function', function: { name: 'submit_independent_checks', arguments: JSON.stringify({ checks: input.source.criteria.map(criterion => ({ criterionId: criterion.id, body: 'const { message } = await import("./src/message.js"); check(message === "new");' })) }) } }]
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: null, reasoning_content: 'Freeze behavioral acceptance before implementation.', tool_calls }, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 120, completion_tokens: 30, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 120 } }))
       return
     }
     if (nativeV3 && body.tools?.some(tool => tool.function.name === 'propose_changeset')) {

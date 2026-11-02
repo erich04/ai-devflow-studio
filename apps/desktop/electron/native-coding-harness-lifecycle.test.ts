@@ -8,13 +8,14 @@ import { createLocalStore } from './local-store'
 import { createNativeCodingExecutorV3 } from './native-coding-harness'
 import { CodingCandidateWorkspace } from './coding-candidate-workspace'
 import { CodingCommandRunner } from './coding-command-runner'
-import { AgentProviderRequestError } from '@ai-devflow/shared'
+import { AgentProviderRequestError, type NativeConversationRequest, type NativeConversationResponse } from '@ai-devflow/shared'
 
 it('enforces active time while a model request is in flight, without waiting for another step', async () => {
   let aborted = false
-  const fixture = await codingHarnessFixture(async request => new Promise((_resolve, reject) => {
+  const stalled = async (request: NativeConversationRequest) => new Promise<NativeConversationResponse>((_resolve, reject) => {
     request.signal!.addEventListener('abort', () => { aborted = true; reject(new Error('Endpoint request interrupted')) }, { once: true })
-  }))
+  })
+  const fixture = await codingHarnessFixture(stalled, undefined, {}, stalled)
   try {
     await mutateNativeCodingSession(fixture.store, 'native-coding', draft => { draft.limits.maxActiveMilliseconds = 150 })
     await fixture.authorize()

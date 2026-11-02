@@ -7,6 +7,7 @@ import { pendingCodingPermission } from './native-coding-permissions'
 import type { CodingExecutionProfile } from './coding-command-runner'
 import { codingRetentionPolicy } from './native-coding-retention'
 import { codingSandboxAvailability } from './coding-os-sandbox'
+import { currentIndependentChecks } from './native-coding-independent-verification'
 
 export function markCodingDeliveryConflict(view: CodingHarnessSnapshot): void {
   view.status = 'delivery_conflict'
@@ -24,6 +25,9 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
   costRecords?(projectId: string): Promise<ModelCostRecord[]>
 }, page?: CodingHarnessPage): Promise<CodingHarnessSnapshot> {
     const binding = session.binding!
+    const independentPlan = currentIndependentChecks(session)
+    const objectiveRevisions = new Set(session.revisions.filter(item => item.objectiveVersion === session.objectiveVersion).map(item => item.digest))
+    const objectiveEvidence = session.deliveryEvidence.filter(item => objectiveRevisions.has(item.revisionDigest))
     const childSessions = await Promise.all(session.children.map(async child => { const found = await host.store.getNativeCodingSession(child.sessionId); if (!found) throw new Error('Missing delegated session'); return found }))
     const attempts = [...session.attempts, ...childSessions.flatMap(child => child.attempts)].filter(attempt => attempt.status !== 'not_sent')
     const sum = (field: 'inputTokens' | 'outputTokens') => attempts.every(attempt => typeof attempt.usage?.[field] === 'number') ? attempts.reduce((total, attempt) => total + attempt.usage![field]!, 0) : null
@@ -39,6 +43,11 @@ export async function codingHarnessSnapshot(session: NativeCodingSession, host: 
       limits: { maxSteps: session.limits.maxSteps, maxActiveMilliseconds: session.limits.maxActiveMilliseconds },
       acceptance: session.acceptance.map(({ id, text, sourceRef, resolution }) => ({ id, text, sourceRef, resolution })),
       ...(binding.manualValidationPlan ? { manualValidationPlan: binding.manualValidationPlan } : {}),
+      ...(binding.independentVerificationRequired && !binding.manualValidationPlan && !session.parent ? { independentVerification: {
+        status: independentPlan ? 'frozen' as const : 'preparing' as const, criteriaCount: independentPlan?.criteria.length ?? session.acceptance.length,
+        repairRounds: Math.min(2, objectiveEvidence.filter(item => item.status === 'test_failed' && item.result?.status !== 'cancelled').length),
+        ...(objectiveEvidence.at(-1)?.result?.independentVerification ? { lastResult: objectiveEvidence.at(-1)!.result!.independentVerification!.status } : {}),
+      } } : {}),
       ...(session.question ? { question: { id: session.question.id, text: session.question.text, options: session.question.options } } : {}),
       ...(pendingCodingPermission(session) ? { permission: { id: pendingCodingPermission(session)!.id, title: '需要额外执行授权', details: pendingCodingPermission(session)!.details } } : {}),
       execution: { testCommand: binding.context.project.testCommand, dependencyCommand: binding.dependencyPlan?.command ?? '', baseline: binding.context.workspace.baseCommitSha ?? 'unknown', ...(binding.input ? { inputDigest: binding.input.digest, dirtyPaths: binding.input.dirtyPaths } : {}), ...(session.taskBudget ? { maxTokens: session.taskBudget.maxTokens, maxCostUsd: session.taskBudget.maxCostUsd } : {}), profiles: [
